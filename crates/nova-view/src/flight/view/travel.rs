@@ -232,15 +232,7 @@ impl<
     /// While Find is open every input goes to the map, which gives it to
     /// Find: a key with [`MAP_KEY`] held types, and closes nothing.
     pub(super) fn map_input(&mut self, input: &Input) {
-        let selected = self.map.selected();
-        let input = self.map_frame_input(input);
-        if self.map_input_taken(&input) {
-            self.close_map();
-        }
-        // After an input that closed the map the panels are taken for
-        // nothing: the map isn't drawn until it opens again, which takes
-        // them.
-        self.follow_map_selection(selected);
+        self.map_input_then(input, Self::close_map);
     }
 
     /// Begins a jump, or shows why not when the player is told
@@ -1496,12 +1488,22 @@ impl<C, S: FlightSim> FlightView<C, S> {
         input.translated(Point::new(-offset.x, 0.0))
     }
 
-    /// A click, a Tab cycle or a gate pick that changed the selection from
-    /// `before` takes the panels again ([`FlightView::retake_map_panel`]),
+    /// [`FlightView::map_input`]'s work, with `close` the map's close
+    /// ([`FlightView::close_map`] for a session's flight), run at once
+    /// when the input closes the map ([`FlightView::map_input_taken`]).
+    /// Then a click, a Tab cycle or a gate pick that changed the
+    /// selection takes the panels again ([`FlightView::retake_map_panel`]),
     /// as the original's next `_MapDialogUpdate` draws them for its
-    /// `_selSystem`.
-    pub(super) fn follow_map_selection(&mut self, before: Option<SystemId>) {
-        if self.map.selected() != before {
+    /// `_selSystem`. After an input that closed the map the panels are
+    /// taken for nothing: the map isn't drawn until it opens again, which
+    /// takes them.
+    pub(super) fn map_input_then(&mut self, input: &Input, close: impl FnOnce(&mut Self)) {
+        let selected = self.map.selected();
+        let input = self.map_frame_input(input);
+        if self.map_input_taken(&input) {
+            close(self);
+        }
+        if self.map.selected() != selected {
             self.retake_map_panel();
         }
     }

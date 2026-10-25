@@ -244,87 +244,23 @@ impl<
         // that read the catalog read the one the view draws from.
         let catalog = Rc::new(catalog);
         sim.share_catalog(Rc::clone(&catalog) as Rc<dyn PilotCatalog>);
-        Self {
+        Self::assembled(
             catalog,
-            map,
-            map_open: false,
-            map_key_held: false,
-            map_opened: None,
-            map_missions: Vec::new(),
-            map_borders_save: None,
-            map_seen: None,
-            floating_picture: None,
-            jump: None,
-            fade_in: None,
-            death_fade: None,
-            hyperspace_effects: true,
-            smoke_trails: true,
-            parallax_starfield: true,
-            weapon_effects: true,
-            sound_prefs: SoundPrefs::default(),
-            alert_width,
-            view: VIEW_SIZE,
-            double_time: false,
             sim,
-            scene,
-            sheet,
-            sheet_ship,
-            bar_government,
-            status_bar,
-            clock: FixedStep::new(),
-            previous,
-            alpha: 0.0,
-            elapsed: Duration::ZERO,
-            held: HashSet::new(),
-            nav_latch: false,
-            select_latch: false,
-            slot_block: super::slot_block::SlotBlock::default(),
-            jump_latch: false,
-            board_latch: false,
-            pending_landing: None,
-            message: None,
-            overlays: FlightOverlays::default(),
-            pending_boarding: false,
-            pending_hail: None,
-            pending_escort_dialog: None,
-            pending_mission_info: None,
-            pending_player_info: false,
-            pending_offer: None,
-            pending_leads: Vec::new(),
-            hail_options: HailOptions::default(),
-            glow_rolls: HashedRolls::new(1),
-            npc_sheets: BTreeMap::new(),
-            npc_previous: BTreeMap::new(),
-            unread_looks,
-            looks,
-            cards: BTreeMap::new(),
-            codes: BTreeMap::new(),
-            effects: Effects::default(),
-            effects_chance: SharedChance::default(),
-            stars: crate::flight::stars::Starfield::new(),
-            stars_due: true,
-            flashes: BTreeMap::new(),
-            held_alts: std::cell::RefCell::default(),
-            glows: crate::flight::weapon_glow::WeaponGlows::default(),
-            shot_looks: super::shots::ShotLooks::default(),
-            metrics: None,
-            escort_menu: EscortMenu::default(),
-            ui_sounds: Vec::new(),
-            floating: FloatingMap::new(),
-            escort_colors,
-            hud_cadence: HudCadence::default(),
-            radar_scene: None,
-            nav_scene: None,
-            nav_flash: None,
-            nav_marked: false,
-            nav_texts: 0,
-            target_scene: None,
-            reserves_scene: None,
-            bar_steps: VecDeque::new(),
-            bars_staged: 0,
-            radar_static: None,
-            cursor: HoverCursor::default(),
-        }
+            Opening {
+                map,
+                scene,
+                sheet,
+                sheet_ship,
+                status_bar,
+                bar_government,
+                previous,
+                looks,
+                unread_looks,
+                escort_colors,
+                alert_width,
+            },
+        )
     }
 
     /// The flight with every disputed rule reading as `rules` says
@@ -1049,5 +985,154 @@ impl<
     #[must_use]
     pub fn catalog(&self) -> &C {
         &self.catalog
+    }
+}
+
+/// What reading a flight gives the view as it opens, besides the catalog
+/// and the flight: the course map, the scene, the player's sheet and bar,
+/// the ship's last state, the looks and what of them could not be read,
+/// the escort menu's colours and the alert icon's width.
+struct Opening {
+    map: GalaxyMap,
+    scene: Option<crate::system::SystemScene>,
+    sheet: Result<crate::flight::ShipSheet, String>,
+    sheet_ship: Option<nova_sim::ShipId>,
+    status_bar: Result<hud::StatusBar, String>,
+    bar_government: Option<BarFor>,
+    previous: nova_sim::ShipState,
+    looks: Looks,
+    unread_looks: Vec<Diagnostic>,
+    escort_colors: crate::flight::escorts::EscortMenuColors,
+    alert_width: Option<u32>,
+}
+
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// The view of `sim` over `catalog`, as `opening` read them, every
+    /// other field as a view starts.
+    #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
+    fn assembled(catalog: Rc<C>, sim: S, opening: Opening) -> Self {
+        Self {
+            catalog,
+            map: opening.map,
+            map_open: false,
+            map_key_held: false,
+            map_opened: None,
+            map_missions: Vec::new(),
+            map_borders_save: None,
+            map_seen: None,
+            floating_picture: None,
+            jump: None,
+            fade_in: None,
+            death_fade: None,
+            hyperspace_effects: true,
+            smoke_trails: true,
+            parallax_starfield: true,
+            weapon_effects: true,
+            sound_prefs: SoundPrefs::default(),
+            alert_width: opening.alert_width,
+            view: VIEW_SIZE,
+            double_time: false,
+            sim,
+            scene: opening.scene,
+            sheet: opening.sheet,
+            sheet_ship: opening.sheet_ship,
+            bar_government: opening.bar_government,
+            status_bar: opening.status_bar,
+            clock: FixedStep::new(),
+            previous: opening.previous,
+            alpha: 0.0,
+            elapsed: Duration::ZERO,
+            held: HashSet::new(),
+            nav_latch: false,
+            select_latch: false,
+            slot_block: super::slot_block::SlotBlock::default(),
+            jump_latch: false,
+            board_latch: false,
+            pending_landing: None,
+            message: None,
+            overlays: FlightOverlays::default(),
+            pending_boarding: false,
+            pending_hail: None,
+            pending_escort_dialog: None,
+            pending_mission_info: None,
+            pending_player_info: false,
+            pending_offer: None,
+            pending_leads: Vec::new(),
+            hail_options: HailOptions::default(),
+            glow_rolls: HashedRolls::new(1),
+            npc_sheets: BTreeMap::new(),
+            npc_previous: BTreeMap::new(),
+            unread_looks: opening.unread_looks,
+            looks: opening.looks,
+            cards: BTreeMap::new(),
+            codes: BTreeMap::new(),
+            effects: Effects::default(),
+            effects_chance: SharedChance::default(),
+            stars: crate::flight::stars::Starfield::new(),
+            stars_due: true,
+            flashes: BTreeMap::new(),
+            held_alts: std::cell::RefCell::default(),
+            glows: crate::flight::weapon_glow::WeaponGlows::default(),
+            shot_looks: super::shots::ShotLooks::default(),
+            metrics: None,
+            escort_menu: EscortMenu::default(),
+            ui_sounds: Vec::new(),
+            floating: FloatingMap::new(),
+            escort_colors: opening.escort_colors,
+            hud_cadence: HudCadence::default(),
+            radar_scene: None,
+            nav_scene: None,
+            nav_flash: None,
+            nav_marked: false,
+            nav_texts: 0,
+            target_scene: None,
+            reserves_scene: None,
+            bar_steps: VecDeque::new(),
+            bars_staged: 0,
+            radar_static: None,
+            cursor: HoverCursor::default(),
+        }
+    }
+
+    /// A view of `sim`, a scripted flight, over `catalog`, for a component
+    /// test: the course map read from the catalog, its nebulae and borders
+    /// as `rules` say, showing the frame's course; with no scene, sheet or
+    /// status bar, as a flight that failed to start has none, since the
+    /// port gives none yet.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn scripted(catalog: C, sim: S, rules: &Rulebook) -> Self
+    where
+        C: GalaxyCatalog + EscortMenuLooks,
+    {
+        const NO_FLIGHT: &str = "a scripted flight has none";
+        let mut map = GalaxyMap::course(&catalog);
+        map.set_nebula_pick(rules.source_for(nova_sim::RuleKey::NebulaPicture));
+        map.set_border_rules(
+            rules.source_for(nova_sim::RuleKey::MapBorderPace),
+            rules.source_for(nova_sim::RuleKey::MapFindBorders),
+        );
+        let mut frame = nova_sim::flight_frame::FlightFrame::default();
+        sim.frame(&mut frame);
+        map.show_course(frame.system, &frame.course_shown);
+        map.recentre();
+        let escort_colors = catalog.escort_menu_colors();
+        Self::assembled(
+            Rc::new(catalog),
+            sim,
+            Opening {
+                map,
+                scene: None,
+                sheet: Err(NO_FLIGHT.to_owned()),
+                sheet_ship: None,
+                status_bar: Err(NO_FLIGHT.to_owned()),
+                bar_government: None,
+                previous: nova_sim::ShipState::default(),
+                looks: Looks::default(),
+                unread_looks: Vec::new(),
+                escort_colors,
+                alert_width: None,
+            },
+        )
     }
 }

@@ -26,6 +26,7 @@ use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
 use crate::flight::jump::JumpPhase;
 use crate::flight::radar::RadarStellar;
 use crate::flight::radar::{self, IRect, RadarColor, RadarMark};
+use crate::flight::sim_port::fixture::FakeFlight;
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::Tag;
 use crate::flight::weapons;
@@ -44,6 +45,7 @@ use crate::{DrawList, ImageKey, Input, MouseButton, Screen, ScreenAction};
 use nova_sim::CommCatalog;
 use nova_sim::ShipIff;
 use nova_sim::fixture::SessionBuilder;
+use nova_sim::flight_frame::{FlightCommand, FlightFrame};
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
@@ -2067,6 +2069,71 @@ fn in_the_bar_of(mut catalog: FakeCatalog, course: Option<i16>) -> View {
     assert_eq!(port_nav(&view), naming("Earth"));
     assert!(view.open_bar());
     view
+}
+
+/// A view over a scripted flight ([`FakeFlight`]), for the component
+/// tests of the code on the port.
+type Faked = FlightView<FakeCatalog, FakeFlight>;
+
+/// The frame of a flight in Sol (130), nav off, nothing plotted.
+fn in_sol() -> FlightFrame {
+    FlightFrame {
+        system: SystemId(130),
+        ..FlightFrame::default()
+    }
+}
+
+/// A view over a flight scripted to show `frame`, read from [`catalog`].
+fn faked(frame: FlightFrame) -> Faked {
+    faked_in(catalog(), frame)
+}
+
+/// A view over a flight scripted to show `frame`, read from `catalog`.
+fn faked_in(catalog: FakeCatalog, frame: FlightFrame) -> Faked {
+    let mut fake = FakeFlight::new();
+    fake.set_frame(frame);
+    FlightView::scripted(catalog, fake, &Rulebook::default())
+}
+
+/// The commands `view` sent its flight, in order.
+fn sent(view: &Faked) -> &[FlightCommand] {
+    view.sim.applied()
+}
+
+/// Gives `view`'s course map `input` as flight's map input does, and
+/// says whether it closed the map: the close is the session's, so a
+/// scripted flight only notes it.
+fn faked_map_input(view: &mut Faked, input: &Input) -> bool {
+    let closed = std::cell::Cell::new(false);
+    view.map_input_then(input, |_| closed.set(true));
+    closed.get()
+}
+
+#[test]
+fn a_view_over_a_scripted_flight_shows_its_frame() {
+    let mut view = faked(FlightFrame {
+        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
+        jump_readiness: nova_sim::JumpReadiness::Clear,
+        ..in_sol()
+    });
+    view.sim.map_mut().explored = vec![SystemId(131)];
+    assert!(view.scene.is_none(), "the port gives no scene yet");
+    assert_eq!(
+        view.nav_now(),
+        NavDisplay::Hyperspace {
+            destination: hud::NavDestination::Named("Alpha Centauri".to_owned()),
+            readiness: nova_sim::JumpReadiness::Clear,
+        }
+    );
+}
+
+#[test]
+fn a_scripted_flights_map_sends_its_cycle_and_reports_its_close() {
+    let mut view = faked(in_sol());
+    view.open_map();
+    assert!(!faked_map_input(&mut view, &key(Key::Tab, true)));
+    assert_eq!(sent(&view), [FlightCommand::CycleMapSelection]);
+    assert!(faked_map_input(&mut view, &key(Key::Enter, true)));
 }
 
 /// Clicks system `id` on the map open in port.
