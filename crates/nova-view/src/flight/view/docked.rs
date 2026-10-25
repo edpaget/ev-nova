@@ -2,6 +2,7 @@
 //! and plunder, trade, the outfitter, bar, hiring, news, the mission
 //! computer and offers, and the shipyard.
 
+use crate::flight::sim_port::MapSource;
 use std::time::Duration;
 
 use nova_sim::mission::offer_gap;
@@ -906,12 +907,11 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
                 .map(Session::take_mission_texts)
                 .unwrap_or_default();
         }
+        let queued = self.frame_now().texts_queued;
+        let noted = self.sim.text_nav().filter(|_| queued > self.nav_texts);
         let Ok(session) = &mut self.sim.session else {
             return Vec::new();
         };
-        let noted = session
-            .text_nav()
-            .filter(|_| session.texts_queued() > self.nav_texts);
         let bars = session.text_bars();
         let staged = !bars.is_empty() && bars.iter().all(|bar| bar.texts <= self.bars_staged);
         let texts = session.take_mission_texts();

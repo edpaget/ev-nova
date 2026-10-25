@@ -1041,33 +1041,6 @@ impl NavFlash {
     }
 }
 
-/// What the course map's drawing is taken from
-/// ([`Session::map_drawing`]): while the map is open, a change to any of
-/// it takes the drawing again (see `FlightView::catch_up`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct MapSeen {
-    system: SystemId,
-    explored: Vec<SystemId>,
-    charted: Vec<SystemId>,
-    known: BTreeSet<SystemId>,
-    course: Vec<SystemId>,
-    nav: NavMode,
-}
-
-impl MapSeen {
-    /// What `session` would draw the map from now.
-    fn of(session: &Session) -> Self {
-        Self {
-            system: session.system(),
-            explored: session.pilot().explored().collect(),
-            charted: session.pilot().charted().collect(),
-            known: session.known().clone(),
-            course: session.course().to_vec(),
-            nav: session.nav_mode(),
-        }
-    }
-}
-
 impl<C, S: FlightSim> FlightView<C, S> {
     /// The flight's frame as it stands now ([`FlightSim::frame`]), filled
     /// afresh on each read. The view keeps no frame buffer yet: while the
@@ -1199,8 +1172,8 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     map_missions: Vec<SystemId>,
     /// What the course map's drawing was last taken from
     /// ([`FlightView::redraw_map`]): while the map is open, a change to
-    /// any of it takes the drawing again.
-    map_seen: Option<MapSeen>,
+    /// any of it takes the drawing again (see `FlightView::catch_up`).
+    map_seen: Option<nova_sim::flight_frame::MapKey>,
     /// What the floating map draws, taken at its last show
     /// ([`FlightView::show_floating_map`]).
     floating_picture: Option<MapPicture>,

@@ -8,11 +8,13 @@ use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 use nova_sim::{
     Assigned, Assignment, AsteroidCatalog, CombatCatalog, CommCatalog, Condition, Departure,
-    FighterNote, GateKind, GateRefusal, LandOutcome, LandPress, LandingRefusal, MapPress,
-    OutfitOrder, OutfitRefusal, OutfitRun, PilotCatalog, RuleKey, RuleSource, Rules, Session,
-    Settled, ShipId, ShipPurchase, ShipRefusal, SimMessage, StellarId, SystemId, TrafficCatalog,
+    FighterNote, GateKind, GateRefusal, LandOutcome, LandPress, LandingRefusal, OutfitOrder,
+    OutfitRefusal, OutfitRun, PilotCatalog, RuleKey, RuleSource, Rules, Session, Settled, ShipId,
+    ShipPurchase, ShipRefusal, SimMessage, StellarId, SystemId, TrafficCatalog,
 };
 use nova_sim::{PlayerCommand, PlayerFate};
+
+use nova_sim::flight_frame::{Answer, FlightCommand, MapClick};
 
 use crate::devtools::SessionDesk;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade};
@@ -20,15 +22,17 @@ use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::effects::{LoopedSounds, Scene};
 use crate::flight::escorts::{EscortMenuLooks, fighters_abandoned_message};
 use crate::flight::jump::JumpEffect;
+use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, MapCycle, MapMode, PendingPress, PressAnswer};
 use crate::system::catalog::SystemCatalog;
+use crate::view_shape::classic_offset;
 use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
 use super::stars;
 use super::{
     BOARD_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView,
-    GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, LAND_KEY, MAP_KEY, MESSAGE_TICKS, MapSeen,
+    GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, LAND_KEY, MAP_KEY, MESSAGE_TICKS,
     NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY, SELF_DESTRUCT_KEY,
     Said, TOO_CLOSE, TRACTORED, Then, arrival_lead, arrival_message_with, assigned_message,
     assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
@@ -184,103 +188,6 @@ impl<
         }
     }
 
-    /// Lets go of the flight keys and shows the course map, with the
-    /// system the original's `_DoSystemMap` selects as it opens
-    /// ([`Session::map_preselection`]) selected, and the system selected
-    /// in nav mode 3 drawn as its link. The hypergate map opens this way
-    /// too, its pick still only an offered system.
-    ///
-    /// Clear Route is enabled off the hypergate map with a course
-    /// (`showClearRouteButton`, @0x12396-0x123c3), and never on it.
-    pub(super) fn open_map(&mut self) {
-        self.open_map_as(MapOpening::Plain);
-    }
-
-    /// [`FlightView::open_map`], opened `by` whoever opens it (flight, the
-    /// bar, a port screen or a mission dialog), which gives the map its
-    /// marks ([`FlightView::open_dialog_map`]) and its close's restore, and
-    /// the nav noted as it opens (`_DoSystemMap` @0x12349).
-    pub(super) fn open_map_as(&mut self, by: MapOpening) {
-        self.map_opened = Some(MapOpened {
-            by,
-            nav: self.opening_nav(),
-        });
-        self.held.clear();
-        self.map_open = true;
-        if let Ok(session) = &self.sim.session {
-            self.map.show_border_sources(session.map_border_sources());
-        }
-        self.map.opened();
-        if let Ok(session) = &self.sim.session {
-            self.map.preselect(session.map_preselection());
-            self.map_missions = session.map_mission_systems();
-            self.map.set_clear_route(
-                self.map.mode() != MapMode::Hypergate && !session.course().is_empty(),
-            );
-        }
-        self.redraw_map();
-    }
-
-    /// Takes the session's drawing onto the course map
-    /// ([`Session::map_drawing`]), as `_MapDialogUpdate` runs `_DrawMap`:
-    /// on the hypergate map with the gate's offers arrowed, each of which
-    /// that draw marks known ([`Session::mark_known`], `_DrawMap`
-    /// @0xf457-0xf45f). So the first draw of the hypergate map shows an
-    /// offer the player knew nothing of without its oval, and the next one,
-    /// at a Tab, a click or the course map opened again before the next
-    /// rebuild point, shows it, as the original's next `_MapDialogUpdate`
-    /// does. What the drawing was taken from is noted after the mark
-    /// ([`MapSeen`]), so the mark itself doesn't take it again. The
-    /// panels are taken with it ([`FlightView::retake_map_panel`]).
-    fn redraw_map(&mut self) {
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
-        let marks = MapOpened::marks(self.map_opened.as_ref());
-        let drawing = session.map_drawing(offered.as_deref(), &self.map_missions, marks);
-        self.map.show_drawing(&drawing);
-        if offered.is_some() {
-            session.mark_known(drawing.gate_arrows.iter().copied());
-        }
-        self.map.show_border_sources(session.map_border_sources());
-        self.map_seen = Some(MapSeen::of(session));
-        self.retake_map_panel();
-    }
-
-    /// Takes the session's info panels onto the course map
-    /// ([`Session::map_panel`]) for the system it selects, as
-    /// `_MapDialogUpdate` draws them after `_DrawMap`: on the hypergate
-    /// map with the gate's offers, which title a destination.
-    fn retake_map_panel(&mut self) {
-        let Ok(session) = &self.sim.session else {
-            return;
-        };
-        let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered());
-        let panel = session.map_panel(&*self.catalog, self.map.selected(), offered);
-        self.map.show_panel(panel);
-    }
-
-    /// Opens the course map on a press of [`MAP_KEY`] in flight, held from
-    /// then on. `_HandlePlayer`'s `_beepSnd[2]` (@0x6a809) is the key's,
-    /// not the map's: the hypergate's map opens without it.
-    pub(super) fn open_map_by_key(&mut self) {
-        self.ui_sounds.push(UiSound::MapOpened);
-        self.open_map();
-        self.map_key_held = true;
-    }
-
-    /// Opens the course map from the bar, as `_DoBarDialog`'s item 8 does
-    /// (@0x492a3-0x492b2), over the spaceport: in
-    /// [`MapMode::Course`](crate::galaxy::MapMode::Course), as the bar
-    /// clears the hypergate flag first (@0x492aa-0x492af). Ours' map is
-    /// in that mode whenever it is closed, as the hypergate map's close
-    /// takes its pick ([`GalaxyMap::take_gate_choice`](crate::galaxy::GalaxyMap::take_gate_choice)). Its close is
-    /// [`FlightView::close_map`]'s in port.
-    pub fn open_bar_map(&mut self) {
-        self.open_map_as(MapOpening::Bar);
-    }
-
     /// The input to the map opened over a screen: in port
     /// ([`FlightView::open_bar_map`], [`FlightView::open_port_screen_map`]),
     /// or by a mission dialog docked or in flight
@@ -326,200 +233,14 @@ impl<
     /// Find: a key with [`MAP_KEY`] held types, and closes nothing.
     pub(super) fn map_input(&mut self, input: &Input) {
         let selected = self.map.selected();
-        // The map takes the pointer in its own 1024 x 768 frame, which a
-        // widened view over flight draws centred, moved only across.
-        let offset = self.map_offset();
-        let input = input.translated(Point::new(-offset.x, 0.0));
-        self.map_input_taken(&input);
-        // A click, a Tab cycle or a gate pick that changed the selection
-        // takes the panels again, as the original's next
-        // `_MapDialogUpdate` draws them for its `_selSystem`. After an
-        // input that closed the map the panels are taken for nothing:
-        // the map isn't drawn until it opens again, which takes them.
-        if self.map.selected() != selected {
-            self.retake_map_panel();
-        }
-    }
-
-    /// [`FlightView::map_input`]'s input, before the panels follow the
-    /// selection.
-    fn map_input_taken(&mut self, input: &Input) {
-        if let Input::Key {
-            key: MAP_KEY,
-            pressed,
-            ..
-        } = *input
-        {
-            self.map_key_held = pressed;
-        }
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        } = *input
-            && self.map_key_held
-            && !self.map.finding()
-            && !self.map_filter_takes(key)
-        {
-            self.close_map();
-            return;
-        }
-        self.map.input(input);
-        self.ui_sounds.extend(self.map.take_ui_sounds());
-        if let Some(query) = self.map.take_find()
-            && let Ok(session) = &self.sim.session
-        {
-            let found = session.find_map_system(&query);
-            self.map.show_search(found);
-            self.ui_sounds.extend(self.map.take_ui_sounds());
-        }
-        if let Some(press) = self.map.take_press() {
-            self.answer_map_press(&press);
-        }
-        if self.map.take_clear_route() {
-            self.clear_route();
-        }
-        if let Some(cycle) = self.map.take_cycle() {
-            self.cycle_map(cycle);
-        }
-        if self.map.take_close() {
+        let input = self.map_frame_input(input);
+        if self.map_input_taken(&input) {
             self.close_map();
         }
-    }
-
-    /// Answers a press on the map that hit systems
-    /// ([`GalaxyMap::take_press`](crate::galaxy::GalaxyMap::take_press)) as
-    /// `_DoSystemMap` takes item 3 ([`Session::map_click`]): the hypergate
-    /// map passes the systems the gate offers, and every map the mission
-    /// systems taken as it opened. With no session, or no hit accepted,
-    /// the map drags. An accepted press draws the map again, as the
-    /// original invalidates its items 2, 3 and 6 (@0x1315c-0x13259), so the
-    /// hypergate map's offers show known; the course changed is shown, and
-    /// the nav area is redrawn at once when the click wrote it
-    /// (`_DrawStatus`), as [`FlightView::cycle_map`] does.
-    fn answer_map_press(&mut self, press: &PendingPress) {
-        let Ok(session) = &mut self.sim.session else {
-            self.map.answer_press(None);
-            return;
-        };
-        let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
-        let clicked = session.map_click(&MapPress {
-            hits: &press.hits,
-            shift: press.shift,
-            hypergate: offered.as_deref(),
-            missions: &self.map_missions,
-            green: MapOpened::marks(self.map_opened.as_ref()).green,
-        });
-        self.map.answer_press(clicked.map(|clicked| PressAnswer {
-            selected: clicked.selected,
-            gate_pick: clicked.gate_pick,
-            clear_route: clicked.clear_route,
-        }));
-        let Some(clicked) = clicked else {
-            return;
-        };
-        if clicked.course_changed {
-            self.map
-                .show_course(session.system(), &session.course_shown());
-        }
-        self.redraw_map();
-        if clicked.nav_redraw {
-            self.retake_nav();
-        }
-    }
-
-    /// Clear Route, from its button or C (`_DoSystemMap` item 8,
-    /// @0x12c69-0x12dbf): the session's course cleared and its selection
-    /// let go ([`Session::clear_route`]), Clear Route disabled and the
-    /// hypergate map's pick dropped
-    /// ([`GalaxyMap::route_cleared`](crate::galaxy::GalaxyMap::route_cleared)),
-    /// the map drawn again and the nav area redrawn at once (`_DrawStatus`
-    /// @0x12dba).
-    fn clear_route(&mut self) {
-        self.map.route_cleared();
-        if let Ok(session) = &mut self.sim.session {
-            session.clear_route();
-            self.map
-                .show_course(session.system(), &session.course_shown());
-        }
-        self.redraw_map();
-        self.retake_nav();
-    }
-
-    /// Whether `_MapFilter` takes `key` before its map-key close, which a
-    /// key it takes never reaches (@0x13cdd-0x144d6): Return, Enter,
-    /// Escape, Tab and `\` (off a planet, @0x13d20), Space, B, C, `-`,
-    /// `=` and `+` (the keypad's too), the arrows, and F and S. The keys
-    /// later phases port are taken already, so none of them closes the
-    /// map. A modifier is taken too: a Mac sends no key-down for one
-    /// alone, so the filter never sees it.
-    fn map_filter_takes(&self, key: Key) -> bool {
-        let docked = self
-            .sim
-            .session
-            .as_ref()
-            .is_ok_and(|session| session.landed().is_some());
-        match key {
-            Key::Shift
-            | Key::Control
-            | Key::Alt
-            | Key::Command
-            | Key::CapsLock
-            | Key::Enter
-            | Key::Escape
-            | Key::Space
-            | Key::Left
-            | Key::Right
-            | Key::Up
-            | Key::Down => true,
-            Key::Tab => !docked,
-            Key::Char(c) => match c.to_ascii_lowercase() {
-                '\\' => !docked,
-                'b' | 'c' | '-' | '=' | '+' | 'f' | 's' => true,
-                _ => false,
-            },
-            _ => false,
-        }
-    }
-
-    /// A Tab or `\` on the map ([`MapCycle`]), as `_MapFilter` takes it
-    /// off a planet (@0x13d0c-0x140d8). On the hypergate map, the map's
-    /// selection steps to the next of the pending hypergate's
-    /// destinations ([`Session::hypergate_cycle`],
-    /// [`next_gate_pick`](nova_sim::gate::next_gate_pick)), back with
-    /// Shift, held as it is so a hidden one steps on too; no nav mode is
-    /// written and the nav area isn't redrawn, as the original's mode 4 is
-    /// never drawn (@0x13dd8-0x13ebd). A pick redraws the map's item 3
-    /// ([`GalaxyMap::redraw`](crate::galaxy::GalaxyMap::redraw),
-    /// @0x13e6f); with no destination to pick nothing is invalidated
-    /// (`jle` @0x13daf). On the course map, the session cycles the
-    /// hyperspace selection ([`Session::cycle_map_selection`]); the map
-    /// then draws the new selected link and selects the system the
-    /// original's `_selSystem` names (@0x1408c-0x140d8,
-    /// [`Session::map_preselection`]), item 3 is redrawn whether a link
-    /// was picked or none (@0x14032), and the nav area is redrawn at
-    /// once, as the filter runs `_DrawStatus` with nav marked
-    /// (`_statusRedraw[0]`, @0x13fb2-0x1406e). Docked, as on the bar's
-    /// map, nothing changes.
-    fn cycle_map(&mut self, cycle: MapCycle) {
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        if self.map.mode() == MapMode::Hypergate {
-            let destinations = session.hypergate_cycle(&*self.catalog);
-            if let Some(pick) = next_gate_pick(&destinations, self.map.selected(), cycle.back) {
-                self.map.select_gate(pick);
-                self.map.redraw();
-            }
-            self.redraw_map();
-            return;
-        }
-        if session.cycle_map_selection() {
-            self.map.preselect(session.map_preselection());
-            self.map.redraw();
-            self.redraw_map();
-            self.retake_nav();
-        }
+        // After an input that closed the map the panels are taken for
+        // nothing: the map isn't drawn until it opens again, which takes
+        // them.
+        self.follow_map_selection(selected);
     }
 
     /// Begins a jump, or shows why not when the player is told
@@ -948,8 +669,6 @@ impl<
         }
         if redrawn.galaxy {
             self.map.show_galaxy(session.galaxy());
-            self.map
-                .show_course(session.system(), &session.course_shown());
         }
         let system = session.system();
         let reshown = redrawn.rebuilt
@@ -961,6 +680,11 @@ impl<
                     .map(|stellar| stellar.id)
                     .eq(session.stellars_shown())
             });
+        if redrawn.galaxy {
+            // With the galaxy, before anything else is drawn: only reads
+            // came between.
+            self.show_course();
+        }
         if redrawn.ship {
             self.follow_ship();
         }
@@ -986,8 +710,8 @@ impl<
         // sets, the course and the nav. The flight is paused while it is
         // open, so this is rare: a set expression or the developer tools.
         if self.map_open
-            && let Ok(session) = &self.sim.session
-            && (redrawn.galaxy || self.map_seen.as_ref() != Some(&MapSeen::of(session)))
+            && self.sim.session.is_ok()
+            && (redrawn.galaxy || self.map_seen.as_ref() != Some(&self.frame_now().map_key))
         {
             self.redraw_map();
         }
@@ -1033,7 +757,8 @@ impl<
             show_gate_frames(&mut scene, session);
             scene
         });
-        self.map.show_course(system, &session.course_shown());
+        let course = self.frame_now().course_shown;
+        self.map.show_course(system, &course);
         self.previous = *session.player();
         self.alpha = 0.0;
         self.npc_previous.clear();
@@ -1084,9 +809,8 @@ impl<
         let Ok(session) = &self.sim.session else {
             return;
         };
-        self.map
-            .show_course(session.system(), &session.course_shown());
         self.previous = *session.player();
+        self.show_course();
         self.alpha = 0.0;
     }
 
@@ -1497,11 +1221,7 @@ impl<
     pub fn close_map(&mut self) {
         // `_SaveMapBordersState` for a change, whatever the map's mode,
         // unless docked (@0x13c21-0x13c3f).
-        let docked = self
-            .sim
-            .session
-            .as_ref()
-            .is_ok_and(|session| session.landed().is_some());
+        let docked = self.frame_now().docked;
         if !docked && self.map.borders_changed_since_open() {
             self.map_borders_save = Some(self.map.borders_shown());
         }
@@ -1512,14 +1232,10 @@ impl<
         self.map_key_held = false;
         let opened = self.map_opened.take();
         if self.map.mode() != MapMode::Hypergate {
-            if let Ok(session) = &mut self.sim.session
-                && session.landed().is_some()
-            {
+            if docked {
                 self.redraw_status();
-                if let (Ok(session), Some(nav)) =
-                    (&mut self.sim.session, opened.and_then(|opened| opened.nav))
-                {
-                    session.restore_map_selection(nav);
+                if let Some(nav) = opened.and_then(|opened| opened.nav) {
+                    self.sim.apply(FlightCommand::RestoreMapSelection(nav));
                 }
                 self.restore_opener_nav(opened);
                 return;
@@ -1529,9 +1245,7 @@ impl<
             if !by_dialog {
                 self.ui_sounds.push(UiSound::MapClosed);
             }
-            if let Ok(session) = &mut self.sim.session {
-                session.cue_course();
-            }
+            self.sim.apply(FlightCommand::CueCourse);
             self.redraw_status();
             self.restore_opener_nav(opened);
             return;
@@ -1757,5 +1471,333 @@ fn effects_scene(session: &Session) -> Scene {
             RuleSource::Engine => LoopedSounds::Anywhere,
             RuleSource::Bible => LoopedSounds::PerFirer,
         },
+    }
+}
+
+/// The course map, over the [`FlightSim`] port: its opening, drawing,
+/// panels, input and Clear Route read the flight through its frame
+/// ([`FlightView::frame_now`]) and [`MapSource`](crate::flight::sim_port::MapSource),
+/// and send their commands through it. Its close stays concrete
+/// ([`FlightView::close_map`]), as the hypergate entry it may run is still
+/// the session's: [`FlightView::map_input_taken`] says when it is due.
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// Shows the course as it is flown on the course map, from the
+    /// current system ([`FlightFrame::course_shown`](nova_sim::flight_frame::FlightFrame::course_shown)).
+    pub(super) fn show_course(&mut self) {
+        let frame = self.frame_now();
+        self.map.show_course(frame.system, &frame.course_shown);
+    }
+
+    /// The input `input` as the course map takes it: in its own
+    /// 1024 x 768 frame, which a widened view over flight draws centred,
+    /// moved only across ([`FlightView::map_offset`]).
+    pub(super) fn map_frame_input(&self, input: &Input) -> Input {
+        let offset = self.map_offset();
+        input.translated(Point::new(-offset.x, 0.0))
+    }
+
+    /// A click, a Tab cycle or a gate pick that changed the selection from
+    /// `before` takes the panels again ([`FlightView::retake_map_panel`]),
+    /// as the original's next `_MapDialogUpdate` draws them for its
+    /// `_selSystem`.
+    pub(super) fn follow_map_selection(&mut self, before: Option<SystemId>) {
+        if self.map.selected() != before {
+            self.retake_map_panel();
+        }
+    }
+
+    /// The open course map, drawn into `list`: its 1024 x 768 frame moved
+    /// right by [`FlightView::map_offset`].
+    pub(super) fn draw_open_map(&self, list: &mut DrawList) {
+        let mut map = DrawList::new();
+        self.map.draw(&mut map);
+        list.extend_translated(&map, self.map_offset());
+    }
+
+    /// How far right the course map's 1024 x 768 frame is drawn, and its
+    /// clicks taken: centred in the widened view over flight
+    /// ([`classic_offset`]), and at 0 over the spaceport, which is
+    /// classic, where the bar and the docked mission dialogs open it.
+    pub(super) fn map_offset(&self) -> Point {
+        let in_port = self.frame_now().docked;
+        let x = if in_port {
+            0.0
+        } else {
+            classic_offset(self.view.0)
+        };
+        Point::new(x, 0.0)
+    }
+
+    /// Lets go of the flight keys and shows the course map, with the
+    /// system the original's `_DoSystemMap` selects as it opens
+    /// ([`Session::map_preselection`]) selected, and the system selected
+    /// in nav mode 3 drawn as its link. The hypergate map opens this way
+    /// too, its pick still only an offered system.
+    ///
+    /// Clear Route is enabled off the hypergate map with a course
+    /// (`showClearRouteButton`, @0x12396-0x123c3), and never on it.
+    pub(super) fn open_map(&mut self) {
+        self.open_map_as(MapOpening::Plain);
+    }
+
+    /// [`FlightView::open_map`], opened `by` whoever opens it (flight, the
+    /// bar, a port screen or a mission dialog), which gives the map its
+    /// marks ([`FlightView::open_dialog_map`]) and its close's restore, and
+    /// the nav noted as it opens (`_DoSystemMap` @0x12349).
+    pub(super) fn open_map_as(&mut self, by: MapOpening) {
+        self.map_opened = Some(MapOpened {
+            by,
+            nav: self.opening_nav(),
+        });
+        self.held.clear();
+        self.map_open = true;
+        if let Some(sources) = self.sim.map_border_sources() {
+            self.map.show_border_sources(sources);
+        }
+        self.map.opened();
+        self.map.preselect(self.sim.map_preselection());
+        self.map_missions = self.sim.map_mission_systems();
+        self.map.set_clear_route(
+            self.map.mode() != MapMode::Hypergate && self.frame_now().course_plotted,
+        );
+        self.redraw_map();
+    }
+
+    /// Takes the session's drawing onto the course map
+    /// ([`Session::map_drawing`]), as `_MapDialogUpdate` runs `_DrawMap`:
+    /// on the hypergate map with the gate's offers arrowed, each of which
+    /// that draw marks known ([`Session::mark_known`], `_DrawMap`
+    /// @0xf457-0xf45f). So the first draw of the hypergate map shows an
+    /// offer the player knew nothing of without its oval, and the next one,
+    /// at a Tab, a click or the course map opened again before the next
+    /// rebuild point, shows it, as the original's next `_MapDialogUpdate`
+    /// does. What the drawing was taken from is noted after the mark
+    /// ([`MapKey`](nova_sim::flight_frame::MapKey)), so the mark itself
+    /// doesn't take it again. The
+    /// panels are taken with it ([`FlightView::retake_map_panel`]).
+    pub(super) fn redraw_map(&mut self) {
+        let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
+        let marks = MapOpened::marks(self.map_opened.as_ref());
+        let Some(drawing) = self
+            .sim
+            .map_drawing(offered.as_deref(), &self.map_missions, marks)
+        else {
+            return;
+        };
+        self.map.show_drawing(&drawing);
+        if offered.is_some() {
+            self.sim
+                .apply(FlightCommand::MarkKnown(drawing.gate_arrows.clone()));
+        }
+        if let Some(sources) = self.sim.map_border_sources() {
+            self.map.show_border_sources(sources);
+        }
+        self.map_seen = Some(self.frame_now().map_key);
+        self.retake_map_panel();
+    }
+
+    /// Takes the session's info panels onto the course map
+    /// ([`Session::map_panel`]) for the system it selects, as
+    /// `_MapDialogUpdate` draws them after `_DrawMap`: on the hypergate
+    /// map with the gate's offers, which title a destination.
+    pub(super) fn retake_map_panel(&mut self) {
+        let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered());
+        if let Some(panel) = self.sim.map_panel(self.map.selected(), offered) {
+            self.map.show_panel(panel);
+        }
+    }
+
+    /// Opens the course map on a press of [`MAP_KEY`] in flight, held from
+    /// then on. `_HandlePlayer`'s `_beepSnd[2]` (@0x6a809) is the key's,
+    /// not the map's: the hypergate's map opens without it.
+    pub(super) fn open_map_by_key(&mut self) {
+        self.ui_sounds.push(UiSound::MapOpened);
+        self.open_map();
+        self.map_key_held = true;
+    }
+
+    /// Opens the course map from the bar, as `_DoBarDialog`'s item 8 does
+    /// (@0x492a3-0x492b2), over the spaceport: in
+    /// [`MapMode::Course`](crate::galaxy::MapMode::Course), as the bar
+    /// clears the hypergate flag first (@0x492aa-0x492af). Ours' map is
+    /// in that mode whenever it is closed, as the hypergate map's close
+    /// takes its pick ([`GalaxyMap::take_gate_choice`](crate::galaxy::GalaxyMap::take_gate_choice)). Its close is
+    /// [`FlightView::close_map`]'s in port.
+    pub fn open_bar_map(&mut self) {
+        self.open_map_as(MapOpening::Bar);
+    }
+
+    /// [`FlightView::map_input`]'s input, translated into the map's frame,
+    /// before the panels follow the selection: whether it closes the map,
+    /// which the caller then does ([`FlightView::close_map`]), at once.
+    /// A key-down the filter doesn't take with [`MAP_KEY`] held closes it
+    /// before anything else; Return or Done after the rest.
+    pub(super) fn map_input_taken(&mut self, input: &Input) -> bool {
+        if let Input::Key {
+            key: MAP_KEY,
+            pressed,
+            ..
+        } = *input
+        {
+            self.map_key_held = pressed;
+        }
+        if let Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        } = *input
+            && self.map_key_held
+            && !self.map.finding()
+            && !self.map_filter_takes(key)
+        {
+            return true;
+        }
+        self.map.input(input);
+        self.ui_sounds.extend(self.map.take_ui_sounds());
+        if let Some(query) = self.map.take_find()
+            && let Some(found) = self.sim.find_map_system(&query)
+        {
+            self.map.show_search(found);
+            self.ui_sounds.extend(self.map.take_ui_sounds());
+        }
+        if let Some(press) = self.map.take_press() {
+            self.answer_map_press(&press);
+        }
+        if self.map.take_clear_route() {
+            self.clear_route();
+        }
+        if let Some(cycle) = self.map.take_cycle() {
+            self.cycle_map(cycle);
+        }
+        self.map.take_close()
+    }
+
+    /// Answers a press on the map that hit systems
+    /// ([`GalaxyMap::take_press`](crate::galaxy::GalaxyMap::take_press)) as
+    /// `_DoSystemMap` takes item 3 ([`Session::map_click`]): the hypergate
+    /// map passes the systems the gate offers, and every map the mission
+    /// systems taken as it opened. With no session, or no hit accepted,
+    /// the map drags. An accepted press draws the map again, as the
+    /// original invalidates its items 2, 3 and 6 (@0x1315c-0x13259), so the
+    /// hypergate map's offers show known; the course changed is shown, and
+    /// the nav area is redrawn at once when the click wrote it
+    /// (`_DrawStatus`), as [`FlightView::cycle_map`] does.
+    fn answer_map_press(&mut self, press: &PendingPress) {
+        let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
+        let answer = self.sim.apply(FlightCommand::MapClick(MapClick {
+            hits: press.hits.clone(),
+            shift: press.shift,
+            hypergate: offered,
+            missions: self.map_missions.clone(),
+            green: MapOpened::marks(self.map_opened.as_ref()).green,
+        }));
+        let clicked = match answer {
+            Answer::Clicked(clicked) => Some(clicked),
+            _ => None,
+        };
+        self.map.answer_press(clicked.map(|clicked| PressAnswer {
+            selected: clicked.selected,
+            gate_pick: clicked.gate_pick,
+            clear_route: clicked.clear_route,
+        }));
+        let Some(clicked) = clicked else {
+            return;
+        };
+        if clicked.course_changed {
+            self.show_course();
+        }
+        self.redraw_map();
+        if clicked.nav_redraw {
+            self.retake_nav();
+        }
+    }
+
+    /// Clear Route, from its button or C (`_DoSystemMap` item 8,
+    /// @0x12c69-0x12dbf): the session's course cleared and its selection
+    /// let go ([`Session::clear_route`]), Clear Route disabled and the
+    /// hypergate map's pick dropped
+    /// ([`GalaxyMap::route_cleared`](crate::galaxy::GalaxyMap::route_cleared)),
+    /// the map drawn again and the nav area redrawn at once (`_DrawStatus`
+    /// @0x12dba).
+    fn clear_route(&mut self) {
+        self.map.route_cleared();
+        if !self.sim.apply(FlightCommand::ClearRoute).is_refused() {
+            self.show_course();
+        }
+        self.redraw_map();
+        self.retake_nav();
+    }
+
+    /// Whether `_MapFilter` takes `key` before its map-key close, which a
+    /// key it takes never reaches (@0x13cdd-0x144d6): Return, Enter,
+    /// Escape, Tab and `\` (off a planet, @0x13d20), Space, B, C, `-`,
+    /// `=` and `+` (the keypad's too), the arrows, and F and S. The keys
+    /// later phases port are taken already, so none of them closes the
+    /// map. A modifier is taken too: a Mac sends no key-down for one
+    /// alone, so the filter never sees it.
+    fn map_filter_takes(&self, key: Key) -> bool {
+        let docked = self.frame_now().docked;
+        match key {
+            Key::Shift
+            | Key::Control
+            | Key::Alt
+            | Key::Command
+            | Key::CapsLock
+            | Key::Enter
+            | Key::Escape
+            | Key::Space
+            | Key::Left
+            | Key::Right
+            | Key::Up
+            | Key::Down => true,
+            Key::Tab => !docked,
+            Key::Char(c) => match c.to_ascii_lowercase() {
+                '\\' => !docked,
+                'b' | 'c' | '-' | '=' | '+' | 'f' | 's' => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// A Tab or `\` on the map ([`MapCycle`]), as `_MapFilter` takes it
+    /// off a planet (@0x13d0c-0x140d8). On the hypergate map, the map's
+    /// selection steps to the next of the pending hypergate's
+    /// destinations ([`Session::hypergate_cycle`],
+    /// [`next_gate_pick`](nova_sim::gate::next_gate_pick)), back with
+    /// Shift, held as it is so a hidden one steps on too; no nav mode is
+    /// written and the nav area isn't redrawn, as the original's mode 4 is
+    /// never drawn (@0x13dd8-0x13ebd). A pick redraws the map's item 3
+    /// ([`GalaxyMap::redraw`](crate::galaxy::GalaxyMap::redraw),
+    /// @0x13e6f); with no destination to pick nothing is invalidated
+    /// (`jle` @0x13daf). On the course map, the session cycles the
+    /// hyperspace selection ([`Session::cycle_map_selection`]); the map
+    /// then draws the new selected link and selects the system the
+    /// original's `_selSystem` names (@0x1408c-0x140d8,
+    /// [`Session::map_preselection`]), item 3 is redrawn whether a link
+    /// was picked or none (@0x14032), and the nav area is redrawn at
+    /// once, as the filter runs `_DrawStatus` with nav marked
+    /// (`_statusRedraw[0]`, @0x13fb2-0x1406e). Docked, as on the bar's
+    /// map, nothing changes.
+    fn cycle_map(&mut self, cycle: MapCycle) {
+        if self.map.mode() == MapMode::Hypergate {
+            let destinations = self.sim.hypergate_cycle();
+            if let Some(pick) = next_gate_pick(&destinations, self.map.selected(), cycle.back) {
+                self.map.select_gate(pick);
+                self.map.redraw();
+            }
+            self.redraw_map();
+            return;
+        }
+        if !self
+            .sim
+            .apply(FlightCommand::CycleMapSelection)
+            .is_refused()
+        {
+            self.map.preselect(self.sim.map_preselection());
+            self.map.redraw();
+            self.redraw_map();
+            self.retake_nav();
+        }
     }
 }

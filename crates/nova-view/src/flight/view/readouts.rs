@@ -120,9 +120,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     ///   only when it goes through, or any nav redraw.
     pub fn close_port_dialog(&mut self, dialog: PortDialog) {
         self.refresh_status();
-        if let Ok(session) = &mut self.sim.session {
-            session.restore_port_nav();
-        }
+        self.sim.apply(FlightCommand::RestorePortNav);
         if matches!(dialog, PortDialog::Shipyard | PortDialog::Hire) {
             self.nav_marked = true;
         } else {

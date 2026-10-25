@@ -34,10 +34,11 @@
 //! `_mapDialog` guards (@0x4f17a, @0x58103, @0x608fd, @0x51118), which
 //! nothing can trip while the map's own filter runs.
 
-use nova_sim::Session;
+use nova_sim::flight_frame::FlightCommand;
 
 use super::FlightView;
 use super::dialog_map::{MapOpened, MapOpening};
+use crate::flight::sim_port::FlightSim;
 
 /// The port screen that asks for the map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,35 +67,26 @@ pub enum PortScreen {
     ShipDescription,
 }
 
-/// The restore of a port screen's map, after its close: the exchange's
-/// and the outfitter's put back their open-time save
-/// ([`Session::put_back_port_nav`]), and the others the nav as the map
-/// opened ([`Session::restore_map_nav`]).
-pub(super) fn restore_nav(session: &mut Session, screen: PortScreen, opened: &MapOpened) {
+/// The restore of a port screen's map, after its close, through `sim`:
+/// the exchange's and the outfitter's put back their open-time save
+/// ([`FlightCommand::PutBackPortNav`], [`Session::put_back_port_nav`](nova_sim::Session::put_back_port_nav)),
+/// and the others the nav as the map opened
+/// ([`FlightCommand::RestoreMapNav`], [`Session::restore_map_nav`](nova_sim::Session::restore_map_nav)).
+pub(super) fn restore_nav(sim: &mut impl FlightSim, screen: PortScreen, opened: &MapOpened) {
     match screen {
-        PortScreen::Exchange | PortScreen::Outfitter => session.put_back_port_nav(),
+        PortScreen::Exchange | PortScreen::Outfitter => {
+            sim.apply(FlightCommand::PutBackPortNav);
+        }
         PortScreen::Spaceport | PortScreen::Shipyard | PortScreen::ShipDescription => {
             if let Some(nav) = opened.nav {
-                session.restore_map_nav(nav);
+                sim.apply(FlightCommand::RestoreMapNav(nav));
             }
         }
     }
 }
 
-impl<
-    C: nova_sim::PilotCatalog
-        + nova_sim::TrafficCatalog
-        + nova_sim::CombatCatalog
-        + nova_sim::AsteroidCatalog
-        + nova_sim::CommCatalog
-        + crate::flight::catalog::CombatLooks
-        + crate::system::catalog::SystemCatalog
-        + crate::flight::catalog::ShipSprites
-        + crate::flight::catalog::StatusBars
-        + crate::galaxy::GalaxyCatalog
-        + crate::flight::escorts::EscortMenuLooks,
-> FlightView<C, crate::flight::SessionFlight<C>>
-{
+/// The port screens' maps, over the [`FlightSim`] port.
+impl<C, S: FlightSim> FlightView<C, S> {
     /// Opens the course map from `screen` over the spaceport, as its
     /// filter's map key does: in
     /// [`MapMode::Course`](crate::galaxy::MapMode::Course), as each caller

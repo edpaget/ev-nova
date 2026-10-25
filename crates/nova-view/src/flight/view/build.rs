@@ -27,6 +27,7 @@ use crate::flight::escorts::{EscortMenu, EscortMenuLooks};
 use crate::flight::floating::FloatingMap;
 use crate::flight::hud::{self};
 use crate::flight::sim_adapter::SessionFlight;
+use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::camera::VIEW_SIZE;
 use crate::system::catalog::SystemCatalog;
@@ -214,7 +215,9 @@ impl<
                     .source_for(nova_sim::RuleKey::MapFindBorders),
             );
             map.show_galaxy(session.galaxy());
-            map.show_course(session.system(), &session.course_shown());
+            let mut frame = nova_sim::flight_frame::FlightFrame::default();
+            sim.frame(&mut frame);
+            map.show_course(frame.system, &frame.course_shown);
             // Entering the game draws the floating map, and a new or
             // loaded pilot sets `_mapScroll`, to the current system
             // (`_EnterGameFromMainScreen` @0x19faa, `_DoNewPilot`

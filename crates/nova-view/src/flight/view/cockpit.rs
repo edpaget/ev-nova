@@ -41,7 +41,6 @@ use crate::system::scene::{PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::time::{sixtieths, ticks};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::view_shape::classic_offset;
 use crate::{Color, DrawList, Input, Key, Point, UiSound};
 use nova_sim::RuleSource;
 use nova_sim::flight_frame::FlightCommand;
@@ -410,24 +409,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         if let Ok(session) = &mut self.sim.session {
             session.set_window_width(window_width(view));
         }
-    }
-
-    /// How far right the course map's 1024 x 768 frame is drawn, and its
-    /// clicks taken: centred in the widened view over flight
-    /// ([`classic_offset`]), and at 0 over the spaceport, which is
-    /// classic, where the bar and the docked mission dialogs open it.
-    pub(super) fn map_offset(&self) -> Point {
-        let in_port = self
-            .sim
-            .session
-            .as_ref()
-            .is_ok_and(|session| session.landed().is_some());
-        let x = if in_port {
-            0.0
-        } else {
-            classic_offset(self.view.0)
-        };
-        Point::new(x, 0.0)
     }
 
     /// The frame of the ship's sheet drawn, or `None` without a sheet: its

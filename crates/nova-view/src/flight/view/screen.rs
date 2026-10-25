@@ -250,17 +250,10 @@ impl<
     /// spaceport has it, for the app to draw over the spaceport.
     fn draw(&self, list: &mut DrawList) {
         if self.map_open {
-            let in_port = self
-                .sim
-                .session
-                .as_ref()
-                .is_ok_and(|session| session.landed().is_some());
-            if !in_port {
+            if !self.frame_now().docked {
                 self.draw_scene(list);
             }
-            let mut map = DrawList::new();
-            self.map.draw(&mut map);
-            list.extend_translated(&map, self.map_offset());
+            self.draw_open_map(list);
             self.draw_fades(list);
             return;
         }
