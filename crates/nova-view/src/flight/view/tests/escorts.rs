@@ -404,8 +404,7 @@ fn a_click_in_the_open_escort_menu_over_a_ship_does_nothing() {
 #[test]
 fn e_with_no_escorts_beeps_no_escorts() {
     let catalog = boardable();
-    let pilot = Pilot::new(&catalog, "Alone").expect("starts");
-    let mut view = FlightView::with_pilot(catalog, pilot).with_behaviour(Rc::new(Still));
+    let mut view = flying_as(catalog, "Alone").with_behaviour(Rc::new(Still));
     view.tick(TICK);
     view.take_sounds();
     tap(&mut view, MENU_KEY);

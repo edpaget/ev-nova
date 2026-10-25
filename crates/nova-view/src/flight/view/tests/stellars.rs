@@ -238,9 +238,9 @@ fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
         }],
         ..catalog()
     };
-    let session = Session::start(&catalog).expect("starts");
+    let session = SessionBuilder::flying(&catalog).build();
     assert!(!session.galaxy().visible(SystemId(132)));
-    let view = FlightView::with_pilot(catalog, session.pilot().clone());
+    let view = FlightView::from_session(catalog, session);
     assert!(!on_the_course_map(&view, 132));
     assert!(on_the_course_map(&view, 131));
 }

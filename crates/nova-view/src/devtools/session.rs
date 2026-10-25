@@ -150,7 +150,8 @@ mod tests {
         GovtRecord, HullRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord, ShipId,
         ShipRecord, StarSystem, StartDate, StartError, WeaponRecord,
     };
-    use nova_sim::{Bit, GameDate, Gauge, Pilot, Reserve, ShipFields, Vec2};
+    use nova_sim::fixture::SessionBuilder;
+    use nova_sim::{Bit, GameDate, Gauge, Reserve, ShipFields, Vec2};
 
     use super::*;
     use crate::galaxy::catalog::{Galaxy, StellarEntry, SystemEntry};
@@ -385,7 +386,7 @@ mod tests {
     }
 
     fn session() -> Session {
-        Session::fly(&Catalog, Pilot::new(&Catalog, "Ada").expect("starts")).expect("flies")
+        SessionBuilder::flying(&Catalog).named("Ada").build()
     }
 
     fn landed() -> Session {

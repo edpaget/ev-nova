@@ -15,8 +15,9 @@ use crate::common;
 use std::time::Duration;
 
 use nova_data::GameData;
+use nova_sim::fixture::SessionBuilder;
 use nova_sim::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
-use nova_sim::{CombatCatalog, Governments, GovtId, Pilot, Session};
+use nova_sim::{CombatCatalog, Governments, GovtId};
 use nova_view::flight::FlightView;
 use nova_view::flight::radar::IRect;
 use nova_view::galaxy::borders::{draw_cells, shade};
@@ -62,8 +63,7 @@ fn a_new_pilots_sources_hold_no_government_of_no_influence() {
     let Some(data) = open() else {
         return;
     };
-    let pilot = Pilot::new(&data, "").expect("the stock first chär starts");
-    let session = Session::fly(&data, pilot).expect("flies");
+    let session = SessionBuilder::flying(&data).build();
     let sources = session.map_border_sources();
     assert!(!sources.coarse.is_empty());
     let govts = Governments::read(&data);

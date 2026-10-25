@@ -203,7 +203,8 @@ fn a_loaded_flight_keeps_the_saved_course_as_the_rules_it_is_given_read() {
     let mut pilot = docked_pilot("Ada");
     pilot.course = vec![SystemId(131)];
     pilot.course_start = Some(pilot.system);
-    let cleared = FlightView::loaded(catalog(), pilot.clone(), Rulebook::default());
+    let engine = Rulebook::default().with_override(RuleKey::LoadedCourse, RuleSource::Engine);
+    let cleared = FlightView::loaded(catalog(), pilot.clone(), engine);
     assert_eq!(
         cleared.session().map(|session| session.course().to_vec()),
         Ok(vec![])

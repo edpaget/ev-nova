@@ -835,8 +835,7 @@ fn a_stellar_of_a_landing_blessed_government_is_yellow_on_the_radar() {
             sites,
             ..base
         };
-        let pilot = Pilot::new(&catalog, "Ada").expect("starts");
-        let mut view = FlightView::with_pilot(catalog, pilot);
+        let mut view = flying_as(catalog, "Ada");
         // Begun, the ship sits at (50, 50), so Earth is drawn up and
         // to the left of the radar's centre.
         view.begin();

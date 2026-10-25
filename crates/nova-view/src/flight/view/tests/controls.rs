@@ -608,8 +608,7 @@ fn a_flight_hands_its_kept_berths_to_its_session_and_back() {
 /// whether it explored Alpha Centauri (131), Sol's neighbour.
 fn begun_explores_131(carried: Option<nova_sim::LastRefresh>) -> bool {
     let catalog = catalog();
-    let pilot = Pilot::new(&catalog, "Ada").expect("starts");
-    let view = FlightView::with_pilot(catalog, pilot);
+    let view = flying_as(catalog, "Ada");
     let mut view = match carried {
         Some(carried) => view.with_last_refresh(carried),
         None => view,
@@ -634,8 +633,7 @@ fn a_flight_hands_the_last_refresh_to_its_new_pilots_neighbour_pass_and_back() {
             id: SystemId(131),
             visibility: nova_sim::control::Test::parse("b50"),
         });
-    let pilot = Pilot::new(&shown_on_start, "Ada").expect("starts");
-    let mut view = FlightView::with_pilot(shown_on_start, pilot);
+    let mut view = flying_as(shown_on_start, "Ada");
     view.begin();
     assert_eq!(view.last_refresh(), Some(hiding.clone()), "before OnStart");
     view.enter_game();

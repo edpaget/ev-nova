@@ -1630,8 +1630,7 @@ fn in_flight_the_gauges_stay_live_by_the_engine() {
 #[test]
 fn beginning_runs_on_start_once_and_explores_what_it_sets() {
     let catalog = starting_with("R(b5 b6) ^b7 X131");
-    let pilot = Pilot::new(&catalog, "Ada").expect("starts");
-    let mut view = FlightView::with_pilot(catalog, pilot).with_chance(rolling_one());
+    let mut view = flying_as(catalog, "Ada").with_chance(rolling_one());
     assert!(!bit_set(&view, 7), "flying runs nothing");
     view.begin();
     assert!(bit_set(&view, 5), "on the flight's chance");
@@ -1667,8 +1666,7 @@ fn resuming_faces_the_heading_drawn_on_the_flights_chance() {
 fn beginning_draws_the_offer_roll_table_on_the_flights_chance() {
     let (script, chance) = scripted(&[]);
     let catalog = catalog();
-    let pilot = Pilot::new(&catalog, "Ada").expect("starts");
-    let mut view = FlightView::with_pilot(catalog, pilot).with_chance(chance);
+    let mut view = flying_as(catalog, "Ada").with_chance(chance);
     view.begin();
     let asked = &script.borrow().asked;
     assert!(asked.len() >= nova_sim::mission::ROLLED);
@@ -1682,8 +1680,7 @@ fn beginning_draws_the_offer_roll_table_on_the_flights_chance() {
 fn beginning_a_new_pilot_leaves_it_facing_up() {
     let (_, chance) = scripted(&[123]);
     let catalog = catalog();
-    let pilot = Pilot::new(&catalog, "Ada").expect("starts");
-    let mut view = FlightView::with_pilot(catalog, pilot).with_chance(chance);
+    let mut view = flying_as(catalog, "Ada").with_chance(chance);
     view.begin();
     assert_eq!(player(&view).heading, 0.0);
 }

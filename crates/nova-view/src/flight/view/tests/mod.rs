@@ -1741,6 +1741,13 @@ fn docked_pilot(name: &str) -> Pilot {
     view.pilot().expect("flying").clone()
 }
 
+/// A flight of a new pilot of `catalog` named `name`, flying at the
+/// centre.
+fn flying_as(catalog: FakeCatalog, name: &str) -> View {
+    let session = SessionBuilder::flying(&catalog).named(name).build();
+    FlightView::from_session(catalog, session)
+}
+
 /// A flight of `catalog`'s pilot Ada resumed over Earth (128), as a load
 /// resumes one last landed there: in flight at its centre, at rest.
 fn over_earth(catalog: FakeCatalog) -> View {
