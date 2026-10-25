@@ -4,8 +4,9 @@
 //! line of a failed mission's ship and the assist path's hold.
 //!
 //! **The checks** ([`check_board`](crate::board::check_board)) see the
-//! target with its class's `Crew` and whether it carries a mission's mark,
-//! and read
+//! target with its class's `Crew`, whether it carries a mission's mark,
+//! whether it remembers being the player's escort and whether the
+//! [`NAG_SHIP`] flies it, and read
 //! [`RuleKey::CrewlessMissionShip`](crate::RuleKey::CrewlessMissionShip):
 //! by the engine a mission's special ship is boarded whatever its crew.
 //!
@@ -24,9 +25,10 @@
 //! ship, which takes the first. A person with a `LinkMission` never calls
 //! it, whatever its `Flags`: with 0x0200 its offer (@0x65907) or, its
 //! mission unavailable, its plunder (@0x65991); without, the plunder past
-//! it (@0x65a21 → @0x65ede). The fighter and escort cases that skip it are
-//! the boarding and fighter-bay follow-ups' (rdm:task/boarding-follow-up,
-//! rdm:task/fighter-bays-follow-up). The call is a strike that is answered
+//! it (@0x65a21 → @0x65ede). The own-ship paths never call it (see the
+//! `board_repair` module), and a ship the [`BOUNTY_HUNTER`](crate::board::BOUNTY_HUNTER) or the
+//! [`NAG_SHIP`] flies always does, whatever its `LinkMission`, as its board
+//! skips the person test (@0x657e9-0x657fe → @0x65ed9). The call is a strike that is answered
 //! but not direct ([`Strike::direct`]): `_DoGoodSamaritan` writes only goal
 //! 4 and the target on the ships its gates pass (@0x82891-0x82ba8), so the
 //! ship boarded and its lead draw no hit's reaction, cut no wait and ask
@@ -138,11 +140,18 @@ impl Space {
     /// pilot can't be saved in it, so the lag crosses no boundary the
     /// player sees or keeps.
     pub(super) fn call_good_samaritans(&mut self, npc: &Npc) {
-        if !calls_good_samaritan(npc) {
-            return;
+        if calls_good_samaritan(npc) {
+            self.call_samaritans_to(npc.id);
         }
+    }
+
+    /// Calls the NPCs to NPC `id`'s help as
+    /// [`Space::call_good_samaritans`] does, whoever flies it: the call
+    /// a ship the [`BOUNTY_HUNTER`](crate::board::BOUNTY_HUNTER) or the [`NAG_SHIP`] flies makes
+    /// whatever its `LinkMission` (@0x65ed9, see the module docs).
+    pub(super) fn call_samaritans_to(&mut self, id: NpcId) {
         self.strikes.push(Strike {
-            ship: ShipRef::Npc(npc.id),
+            ship: ShipRef::Npc(id),
             by: Some(ShipRef::Player),
             damage: 0.0,
             downed: None,

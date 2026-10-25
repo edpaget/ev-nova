@@ -283,11 +283,7 @@ impl Session {
         };
         match carrier {
             ShipRef::Player => {
-                let mut rounds = OutfitRounds {
-                    owned: &mut self.pilot.outfits,
-                    sources: &self.statics.ammo_outfits,
-                };
-                let stowed = self.ship.fit.armament.stow(ship, &mut rounds);
+                let stowed = self.stow_player_fighter(ship);
                 self.unfleet(id);
                 if !stowed {
                     self.out.save_due = true;
@@ -344,11 +340,7 @@ impl Session {
     /// @0x5df3); one no bay launches is lost, which makes a save due.
     fn recall_fighters(&mut self) {
         for fighter in self.drop_fighters(|_, _, _| false) {
-            let mut rounds = OutfitRounds {
-                owned: &mut self.pilot.outfits,
-                sources: &self.statics.ammo_outfits,
-            };
-            if !self.ship.fit.armament.stow(fighter.ship, &mut rounds) {
+            if !self.stow_player_fighter(fighter.ship) {
                 self.out.save_due = true;
             }
         }
@@ -421,6 +413,27 @@ impl Session {
             );
         }
         room
+    }
+
+    /// Whether a bay of the player's that carries ship type `ship` has
+    /// room for one more ([`Session::fighter_room`]), as
+    /// `_CanBuyFighter(type, -1, -1)` asks for a ship boarded
+    /// (@0x5a82-0x5cb2; see the `board_repair` module). The original
+    /// reads the first bay whose `AmmoType` names `ship` and that bay's
+    /// last fighter outfit, in outfit order, for its `Max`; this reads any
+    /// such bay with room, which is the same for every stock bay (one bay
+    /// to a type, one fighter outfit to a bay). A bay whose carried type
+    /// only shares `ship`'s sprites (`_CanBuyFighter` @0x5b0d-0x5b84) is
+    /// rdm:task/fighter-bays-follow-up's variant docking.
+    pub(super) fn can_take_fighter(&self, ship: ShipId) -> bool {
+        let room = self.fighter_room();
+        self.statics.ammo_outfits.iter().any(|&(ammo, outfit)| {
+            self.statics
+                .arsenal
+                .weapon(ammo)
+                .is_some_and(|spec| spec.carried == Some(ship))
+                && room.get(&outfit).is_some_and(|&left| left > 0)
+        })
     }
 
     /// The player's fighters out of type `carried`: none for `None`.
@@ -1626,6 +1639,31 @@ pub(super) mod tests {
         launch(&mut session);
         assert_eq!(session.pilot().owned(VIPERS), 2, "the round put back");
         assert_eq!(session.npcs().len(), 54, "no fighter");
+    }
+
+    // Room for a fighter boarded.
+
+    #[test]
+    fn can_take_fighter_is_true_while_the_bay_carrying_the_type_has_room() {
+        // `_CanBuyFighter(type, -1, -1)` (@0x5a82-0x5cb2): the bay holds 4.
+        let catalog = carrying();
+        let room = |vipers: u16, escorts: Vec<Escort>| {
+            fleet(&catalog, vipers, escorts).can_take_fighter(VIPER)
+        };
+        assert!(room(3, Vec::new()), "3 of 4 aboard");
+        assert!(!room(4, Vec::new()), "full");
+        assert!(!room(3, vec![out()]), "3 aboard and 1 out");
+        assert!(room(2, vec![out()]));
+        assert!(
+            !fleet(&catalog, 0, Vec::new()).can_take_fighter(WARSHIP),
+            "no bay carries it"
+        );
+        let mut bare = carrying();
+        bare.hulls[0].weapons.clear();
+        assert!(
+            !fleet(&bare, 0, Vec::new()).can_take_fighter(VIPER),
+            "no bay"
+        );
     }
 
     // Return to Hangar and docking.

@@ -33,7 +33,9 @@
 //! `*0xdee18` @0x6504c). Once the boarding's
 //! crime is convicted (never for a ship the [`BOUNTY_HUNTER`] or the
 //! [`NAG_SHIP`] flies, which goes straight to the Good Samaritans and the
-//! plunder, [`boards_uncharged`]), a person of `Flags` 0x0200 whose `LinkMission` is
+//! plunder, [`boards_uncharged`]), the player's own disabled escorts and
+//! fighters come back in place of the plunder ([`Boarding::Recovered`],
+//! see [`board_repair`](crate::board_repair)), and a person of `Flags` 0x0200 whose `LinkMission` is
 //! available from a ship offers it in place of the plunder
 //! ([`Boarding::Offered`], @0x65867-0x65936): nothing is rolled or
 //! granted, and the ship is marked boarded only once the mission is
@@ -139,6 +141,7 @@
 
 use std::fmt::Debug;
 
+use crate::board_repair::Recovery;
 use crate::catalog::{OutfitId, PersonId, ShipId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
@@ -561,6 +564,10 @@ pub enum Boarding {
     /// and no person's offer (@0x657bf-0x657e3 → @0x65f43), saying the
     /// pickup path's or the assist path's comm line when it took one.
     MissionShip(Option<MissionBoardLine>),
+    /// The player's own disabled escort or fighter, or a ship of a type
+    /// its bays carry, came back into the fleet or a bay in place of the
+    /// plunder (see [`board_repair`](crate::board_repair)).
+    Recovered(Recovery),
 }
 
 /// What the comm line says as a mission's special ship is boarded on the

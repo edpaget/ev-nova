@@ -214,6 +214,8 @@ impl<C> FlightView<C> {
                     self.say_for(said, BOARD_LINE_TICKS);
                 }
             }
+            // Its line is the session's message ([`Session::take_messages`]).
+            Ok(Boarding::Recovered(_)) => {}
             Err(refusal) => {
                 if let Some(text) = board_refusal_message(refusal) {
                     self.say_for(text, BOARD_REFUSAL_TICKS);

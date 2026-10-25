@@ -5152,7 +5152,14 @@ impl Session {
     /// available from a ship offers it instead, once the crime is
     /// convicted ([`Boarding::Offered`], see the `person_offers` module):
     /// nothing is rolled or granted, and the ship is marked boarded, and
-    /// [`Fate::Boarded`] raised, only once the mission is accepted. A
+    /// [`Fate::Boarded`] raised, only once the mission is accepted. The
+    /// player's own disabled former escort, or former fighter, or a
+    /// disabled ship of a type its bays carry with room, comes back into
+    /// the fleet or the bay in place of the plunder, once the crime is
+    /// convicted ([`Boarding::Recovered`], see the `board_repair` module).
+    /// A ship `përs` 1150 or 1151 flies is boarded with no crime, offer or
+    /// own-ship path, its plunder calling the Good Samaritans whatever its
+    /// `LinkMission` ([`board::boards_uncharged`](crate::board::boards_uncharged)). A
     /// mission's special ship of a mission standing is only marked
     /// boarded, its velocity matched, and maybe counted, a `PickupMode` 2
     /// mission's cargo picked up ([`Boarding::MissionShip`], see the
@@ -5221,7 +5228,12 @@ impl Session {
             return Ok(boarding);
         }
         self.ship.player.velocity = npc.state.velocity;
-        if npc.mission.is_none() {
+        // `përs` 1150 and 1151 skip the slap, the person test and the
+        // own-ship paths (@0x657e9-0x657fe → @0x65ece).
+        let uncharged = npc
+            .person
+            .is_some_and(|person| crate::board::boards_uncharged(person.id));
+        if npc.mission.is_none() && !uncharged {
             self.chart
                 .convict_of(&mut self.pilot, &self.statics, law, Crime::Board, npc.govt);
             self.run.lose_ranks_to(
@@ -5232,19 +5244,25 @@ impl Session {
                 npc.govt,
             );
         }
-        self.space.call_good_samaritans(&npc);
-        let linked = self
-            .space
-            .linked_ship(&npc, person_offers::OfferedBy::Boarding);
-        let named = linked.is_some();
-        self.reach_linked(linked);
-        if let Some(offering) = self.person_offering(&npc, person_offers::OfferedBy::Boarding) {
-            return Ok(Boarding::Offered(self.offer_from_ship(offering, chance)));
-        }
-        if named {
-            // Named and put back to none around the plunder
-            // (@0x65882, @0x65a11).
-            self.run.offering_ship = None;
+        if uncharged {
+            self.space.call_samaritans_to(npc.id);
+        } else {
+            let linked = self
+                .space
+                .linked_ship(&npc, person_offers::OfferedBy::Boarding);
+            let named = linked.is_some();
+            self.reach_linked(linked);
+            if let Some(offering) = self.person_offering(&npc, person_offers::OfferedBy::Boarding) {
+                return Ok(Boarding::Offered(self.offer_from_ship(offering, chance)));
+            }
+            if named {
+                // Named and put back to none around the plunder
+                // (@0x65882, @0x65a11).
+                self.run.offering_ship = None;
+            } else if let Some(recovered) = self.recover(&npc) {
+                return Ok(Boarding::Recovered(recovered));
+            }
+            self.space.call_good_samaritans(&npc);
         }
         self.mark_boarded(npc.id);
         self.out.sounds.push(SimSound::Boarded);
@@ -5756,7 +5774,7 @@ impl Session {
 
     /// NPC `id` leaves the system: every other NPC after it lets it go,
     /// and so does the player.
-    fn leave(&mut self, id: NpcId) {
+    pub(super) fn leave(&mut self, id: NpcId) {
         self.space.drop_quarry(id);
         self.space.traffic.remove(id);
         self.let_go_of_gone_target();
