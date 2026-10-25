@@ -1396,3 +1396,44 @@ fn retaking_the_nav_area_notes_the_frames_text_count() {
         Some((NavMode::Stellar(None), NavDisplay::Stellar(None)))
     );
 }
+
+/// The commands a frame of held keys sends: `keys` held, `refused` the
+/// one gate the flight refuses.
+fn held_frame_sends(keys: &[Key], refused: PlayerCommand) -> Vec<FlightCommand> {
+    let mut view = faked(in_sol());
+    view.sim.refuse(refused);
+    for &k in keys {
+        view.track_held(&key(k, true));
+    }
+    view.nav_held_frame();
+    sent(&view).to_vec()
+}
+
+#[test]
+fn a_held_nav_block_acts_only_while_the_flight_takes_the_nav_keys() {
+    let block = [NAV_OFF_KEY, HYPERSPACE_MODE_KEY];
+    assert_eq!(held_frame_sends(&block, PlayerCommand::Nav), []);
+    assert_eq!(
+        held_frame_sends(&block, PlayerCommand::SelectSystem),
+        [FlightCommand::NavModeKeys {
+            nav_off: true,
+            h: true
+        }]
+    );
+    let option_backquote = [Key::Alt, NAV_OFF_KEY];
+    assert_eq!(held_frame_sends(&option_backquote, PlayerCommand::Nav), []);
+    assert_eq!(
+        held_frame_sends(&option_backquote, PlayerCommand::SelectSystem),
+        [FlightCommand::ClearTarget]
+    );
+}
+
+#[test]
+fn a_held_hyper_select_acts_only_while_the_flight_takes_it() {
+    let select = [HYPER_SELECT_KEY];
+    assert_eq!(held_frame_sends(&select, PlayerCommand::SelectSystem), []);
+    assert_eq!(
+        held_frame_sends(&select, PlayerCommand::Nav),
+        [FlightCommand::SelectNextSystem]
+    );
+}
