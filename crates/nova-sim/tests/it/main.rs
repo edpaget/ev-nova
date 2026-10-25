@@ -21,6 +21,7 @@ mod stock;
 mod stock_afterburner;
 mod stock_answer_flag;
 mod stock_asteroids;
+mod stock_auto_refuel;
 mod stock_board_reach;
 mod stock_christening;
 mod stock_cloak_conditions;

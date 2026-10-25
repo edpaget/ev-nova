@@ -2,18 +2,17 @@
 //! beep, and `_LoadPilotData`'s matching fill.
 //!
 //! `_PlayerLandOnStellar` runs the whole stay: the landing's setup, the
-//! port dialog (`_DoPortDialog` @0x63381), then the take-off. After the
-//! port dialog returns:
+//! port dialog (`_DoPortDialog` @0x63381), then the take-off.
 //!
-//! - At an uninhabited stellar (`spöb` `Flags` 0x0020, tested on the
-//!   runtime +0x30 @0x632be) it beeps once, `PlaySound(_beepSnd[1], 1, …)`
-//!   @0x632ef, `snd ` 151: [`SimSound::Landed`](crate::sound::SimSound::Landed),
+//! - In the landing's setup, before the port dialog: at an uninhabited
+//!   stellar (`spöb` `Flags` 0x0020, tested on the runtime +0x30
+//!   @0x632be) it beeps once, `PlaySound(_beepSnd[1], 1, …)` @0x632ef,
+//!   `snd ` 151: [`SimSound::Landed`](crate::sound::SimSound::Landed),
 //!   which [`landing_beeps`] decides. At an inhabited one it runs
-//!   `_DoAutoRefuel` instead (@0x632c5), which is silent and is left out
-//!   here (filed as play-feel-2 phase 20, `landing-auto-refuel`). The
-//!   touchdown path makes no other sound: the clearance beeps are on
-//!   earlier presses and frames (see the `clearance` module). The engine
-//!   raises the beep as it docks, as the stay itself is silent.
+//!   `_DoAutoRefuel` instead (@0x632c5), which is silent (see the
+//!   `auto_refuel` module). The touchdown path makes no other sound: the
+//!   clearance beeps are on earlier presses and frames (see the
+//!   `clearance` module). The engine raises the beep as it docks.
 //! - After the take-off's placement (@0x633a5-0x63417) it sets the shield
 //!   (+0x54) to `_ShipShieldCapacity` and the armour (+0x58) to
 //!   `_ShipArmorCapacity` (@0x6341e-0x6343d), before the take-off's day

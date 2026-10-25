@@ -434,6 +434,7 @@ mod asteroid_hits;
 #[cfg(test)]
 mod asteroid_seekers;
 mod asteroids;
+mod auto_refuel;
 mod aux_ships;
 mod board_attempt;
 mod board_repair;
@@ -3944,13 +3945,15 @@ impl Session {
     /// Docks the ship at `stellar`, one of the system's, takes the ranks'
     /// price multipliers as the spaceport opens (see the `ranks` module),
     /// and last raises [`StoryEvent::Landed`]. It beeps
-    /// ([`SimSound::Landed`]) only at an uninhabited stellar, and fills
-    /// nothing: the shield and armour stay as landed until the take-off
-    /// (see the `land_on_stellar` module).
+    /// ([`SimSound::Landed`]) only at an uninhabited stellar; at an
+    /// inhabited one it tops up the fuel with an auto-refueller (see the
+    /// `auto_refuel` module). The shield and armour stay as landed until
+    /// the take-off (see the `land_on_stellar` module).
     fn dock(&mut self, stellar: StellarId) {
         self.port.touchdown = self.ship.player.position;
         let site = self.chart.sites.iter().find(|site| site.id == stellar);
         let beeps = land_on_stellar::landing_beeps(site);
+        let refuels = site.is_some_and(|site| crate::recharge::sells_fuel(site.flags));
         if let Some(site) = site {
             self.ship.player.position = site.position;
         }
@@ -3996,6 +3999,12 @@ impl Session {
         // `_PlayerLandOnStellar`'s reset (@0x63211; see the `precalced`
         // module), before the port opens.
         self.reset_precalced();
+        // An inhabited stellar runs `_DoAutoRefuel` instead of the beep
+        // (`_PlayerLandOnStellar` @0x632c5), before the port dialog (see
+        // the `auto_refuel` module).
+        if refuels {
+            auto_refuel::auto_refuel(&mut self.pilot, &self.statics, &self.setup);
+        }
         // `_DoPortDialog` takes the price multipliers before its mission
         // land check (@0x5fbeb) and its rebuild point (see the `ranks`
         // module).

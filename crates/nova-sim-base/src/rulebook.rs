@@ -161,7 +161,7 @@
 //! | [`FlightStarfield`](RuleKey::FlightStarfield) | `flight_starfield` | flight draws the original's sprite starfield: min(trunc(play height / 600 × 20), 20) stars of `spïn` 700 (`_RandomizeStars` @0x0b145-0x0b324), wrapped at twice their size outside the play area and dimmed by the system's murk (`_HandleStars` @0x2f87d-0x2fcae), moved by their parallax factor of the ship's last move (`_ScrollStarfield` @0x8171-0x81d5), none in a system of negative `Murk`; scattered afresh at a jump's arrival, a gate's exit and the rescue (see `nova_view`'s `flight::stars`) | three layers of procedural dots at fixed parallax covering the view: the port's earlier reading\* |
 //! | [`EmptySecondary`](RuleKey::EmptySecondary) | `empty_secondary` | a selected secondary of `Flags` 0x0800 (more persistent smoke) that `_WeaponHasAmmo` fails is let go, silently, on every `_HandlePlayer` pass, fire key held or not, disabled or in a jump too (@0x6abcc-0x6ac08; see `nova_sim::session`'s `secondary_select`) | one of `Flags2` 0x0800, hidden when empty, as the select key tests (@0x6ad72)\* |
 //! | [`NewPilotNameTaken`](RuleKey::NewPilotNameTaken) | `new_pilot_name_taken` | a New Pilot named as a saved pilot (ignoring case, as `_DoesPilotExist` @0x72def-0x72e6a matches) asks `STR#` 140 #9 in the Yes/No dialog: Yes goes on to the christening and replaces the saved pilot when the new one is first saved, No returns to the main menu with nothing changed (`_DoNewPilot` @0x18c08-0x18c63; see `nova::app`'s menu) | the name is refused under its field and the New Pilot dialog stays open\* |
-//! | [`RechargeDebt`](RuleKey::RechargeDebt) | `recharge_debt` | R or F pressed with the cash below 0 at a stellar that isn't dominated clears the debt and takes as many units of fuel, possibly leaving the tank below empty, as `_DoPortDialog` clamps the missing units to the cash (@0x5fdbf-0x5fdcf; see `nova_sim::recharge`) | the cash counts as 0: nothing fills and the debt stands\* |
+//! | [`RechargeDebt`](RuleKey::RechargeDebt) | `recharge_debt` | R or F pressed with the cash below 0 at a stellar that isn't dominated, or an auto-refueller's top-up on landing at an inhabited stellar, clears the debt and takes as many units of fuel, possibly leaving the tank below empty, as `_DoPortDialog` (@0x5fdbf-0x5fdcf; see `nova_sim::recharge`) and `_DoAutoRefuel` (@0x41c48-0x41c62; see `nova_sim::auto_refuel`) clamp the missing units to the cash | the cash counts as 0: nothing fills and the debt stands\* |
 //! | [`EscortArrival`](RuleKey::EscortArrival) | `escort_arrival` | the hired escorts and fighters kept are snapped onto a formation counted without the mission escorts; on a jump's arrival each is pushed 891.7344 back along its heading, gains 50 along it and glides in as a ship arriving by hyperspace does; a take-off, load or new pilot re-snaps every led ship onto its final slot, a mission escort by position only (`_SetupShipsInSystem` @0x42c8e-0x42d9e, @0x4319a-0x431b2; see `nova_sim::escort_arrival`) | every led ship is snapped onto its final slot with the player's state, the port's earlier placement\* |
 //! | [`DialogTextWheel`](RuleKey::DialogTextWheel) | `dialog_text_wheel` | the wheel and trackpad do nothing: the original reads its events through `_WaitNextEvent` and installs no mouse Carbon handler (@0xcc748, @0xccb83) | a wheel or trackpad scroll over a dialog's scrolling text scrolls it, as Up and Down do (see `nova_view::ui::ScrollText`)\* |
 //! | [`LoadedCourse`](RuleKey::LoadedCourse) | `loaded_course` | a pilot opened from a save flies with no course: `_OpenPilotFile`'s and `_OpenLastPilotFile`'s `_ResetPlayer` clears `_hyperRoute` (@0x1d6bb-0x1d6cd), and `_LoadPilotData` never restores it | the saved course and its start are kept, the port's earlier behaviour (see `nova_sim::Session::load`)\* |
@@ -3955,14 +3955,16 @@ rule_keys! {
     /// and the New Pilot dialog stays open. The Bible says nothing of it.
     NewPilotNameTaken => "new_pilot_name_taken",
     /// What Recharge (R or F, which skip the button's cash test) does
-    /// with the cash below 0 at a stellar that isn't dominated. By the
-    /// engine, `_DoPortDialog` clamps the missing units to the cash
-    /// (@0x5fdbf-0x5fdcf), so the debt is cleared and the tank drained by
-    /// as many units, possibly below empty. By the other reading the cash
-    /// counts as 0, so nothing fills and the debt stands. The Bible says
-    /// nothing of fuel prices, so the other reading is the intended
-    /// behaviour, not anything the Bible says (see
-    /// `nova_sim::recharge::fill`).
+    /// with the cash below 0 at a stellar that isn't dominated, and what
+    /// an auto-refueller's top-up on landing at an inhabited stellar does
+    /// with it. By the engine, `_DoPortDialog` (@0x5fdbf-0x5fdcf) and
+    /// `_DoAutoRefuel` (@0x41c48-0x41c62) clamp the missing units to the
+    /// cash, so the debt is cleared and the tank drained by as many units,
+    /// possibly below empty. By the other reading the cash counts as 0, so
+    /// nothing fills and the debt stands. The Bible says nothing of fuel
+    /// prices, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see `nova_sim::recharge::fill` and
+    /// `nova_sim::auto_refuel::fill`).
     RechargeDebt => "recharge_debt",
     /// Where the player's escorts are placed as it enters a system. By the
     /// engine, as `_SetupShipsInSystem` places them: the hired escorts and
