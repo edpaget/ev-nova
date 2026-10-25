@@ -82,6 +82,7 @@ mod maps;
 mod missions;
 mod nav;
 mod pilot;
+mod port_resets;
 mod port_screen_map;
 mod self_destruct;
 mod ship_drawing;
