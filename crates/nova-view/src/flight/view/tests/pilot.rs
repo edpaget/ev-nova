@@ -199,6 +199,24 @@ fn a_loaded_flight_reads_the_rules_it_is_given() {
 }
 
 #[test]
+fn a_loaded_flight_keeps_the_saved_course_as_the_rules_it_is_given_read() {
+    let mut pilot = docked_pilot("Ada");
+    pilot.course = vec![SystemId(131)];
+    pilot.course_start = Some(pilot.system);
+    let cleared = FlightView::loaded(catalog(), pilot.clone(), Rulebook::default());
+    assert_eq!(
+        cleared.session().map(|session| session.course().to_vec()),
+        Ok(vec![])
+    );
+    let other = Rulebook::default().with_override(RuleKey::LoadedCourse, RuleSource::Bible);
+    let kept = FlightView::loaded(catalog(), pilot, other);
+    assert_eq!(
+        kept.session().map(|session| session.course().to_vec()),
+        Ok(vec![SystemId(131)])
+    );
+}
+
+#[test]
 fn landing_taking_off_and_transactions_make_a_save_due() {
     let centred = FakeCatalog {
         sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
