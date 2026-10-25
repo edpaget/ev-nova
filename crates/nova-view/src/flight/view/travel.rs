@@ -89,20 +89,6 @@ impl<
         self.sim.session.as_ref().is_ok_and(Session::hold_expired)
     }
 
-    /// Whether the hold after the player's explosion ran out since this
-    /// was last asked, as [`Session::take_hold_expired`] says: the seam
-    /// where the router may show its dialogs over the stopped flight
-    /// before it begins the fade. True once.
-    pub fn take_hold_expired(&mut self) -> bool {
-        self.drain().take_hold_expired()
-    }
-
-    /// The escape pod's rescue's `dësc`, once, after the rescue
-    /// ([`Session::take_rescue_desc`]): the router shows it over flight.
-    pub fn take_rescue_desc(&mut self) -> Option<i16> {
-        self.drain().take_rescue_desc()
-    }
-
     /// Whether any flight key is held down.
     #[must_use]
     pub fn holds_keys(&self) -> bool {

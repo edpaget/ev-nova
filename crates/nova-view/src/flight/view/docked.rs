@@ -1108,12 +1108,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             session.decline_ship(ship);
         }
     }
-
-    /// Whether the pilot should be saved, as [`Session::take_save_due`]
-    /// says; taking it clears it.
-    pub fn take_save_due(&mut self) -> bool {
-        self.drain().take_save_due()
-    }
 }
 
 /// The mission computer's cut offer names are filled by the session, as

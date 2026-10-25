@@ -286,15 +286,7 @@ impl<
     /// the player info refused, the course map's beeps), then the fight's.
     /// The course map has no buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
-        let mut sounds: Vec<Sound> = self
-            .drain()
-            .take_sounds()
-            .into_iter()
-            .map(Sound::Sim)
-            .collect();
-        sounds.extend(self.ui_sounds.drain(..).map(Sound::Ui));
-        sounds.extend(self.effects.take_sounds().into_iter().map(Sound::Combat));
-        sounds
+        self.drained_sounds()
     }
 
     /// Flight hides the system's pointer over the window for its cursor
@@ -308,10 +300,7 @@ impl<
     /// What could not be read of the looks, then the session's
     /// diagnostics, each once.
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
-        let mut diagnostics = std::mem::take(&mut self.unread_looks);
-        let sim = self.drain().take_diagnostics().into_iter();
-        diagnostics.extend(sim.map(Diagnostic::Sim));
-        diagnostics
+        self.drained_diagnostics()
     }
 
     /// Flight widens to the window's aspect ratio

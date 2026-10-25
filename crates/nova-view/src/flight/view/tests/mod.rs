@@ -84,6 +84,7 @@ mod map_find;
 mod maps;
 mod missions;
 mod nav;
+mod outputs;
 mod pilot;
 mod port_resets;
 mod port_screen_map;
