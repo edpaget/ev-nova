@@ -4,8 +4,9 @@
 //!
 //! **What belongs here.** Wiring through a real `SessionFlight`: that a
 //! command the view sends reaches the session and its answer and frame
-//! come back. One to three tests per area the port carries (the
-//! contract, the nav keys, and each area later work moves across). A
+//! come back, and that what it raises comes back drained. One to three
+//! tests per area the port carries (the contract, the nav keys, the
+//! one-shot outputs, and each area later work moves across). A
 //! test of what the view does with a frame, an answer or an event is a
 //! component test, and runs on a `FakeFlight` in the view's own tests
 //! instead.
@@ -33,12 +34,13 @@ use nova_sim::{
     StarSystem, StartDate, StartError, StellarId, StellarPick, SystemId, Vec2, WeaponRecord,
 };
 use nova_sim::{MissionId, TICK};
+use nova_view::devtools::{PilotDesk, PilotEdit};
 use nova_view::flight::FlightView;
 use nova_view::flight::MapOpener;
 use nova_view::flight::sim_port::fixture::check_contract;
 use nova_view::flight::{FlightSim, SessionFlight};
 use nova_view::galaxy::SystemId as MapSystemId;
-use nova_view::{Input, Key, MouseButton, Point, Screen};
+use nova_view::{Input, Key, MouseButton, Point, Screen, Sound};
 
 /// One `chär` flying from system 130, whose one stellar, 128, is in the
 /// nav defaults' first slot.
@@ -228,6 +230,16 @@ fn a_real_session_meets_the_contract() {
 }
 
 #[test]
+fn a_real_session_with_outputs_pending_meets_the_contract() {
+    let mut flight = flight();
+    assert_eq!(
+        flight.apply(FlightCommand::SelectStellar(StellarPick::Slot(0))),
+        Answer::Stellar(StellarId(128))
+    );
+    assert_eq!(check_contract(&mut flight), Ok(()));
+}
+
+#[test]
 fn a_stellar_key_reaches_the_session_and_its_frame_shows_the_selection() {
     let mut flight = flight();
     let mut frame = FlightFrame::default();
@@ -294,6 +306,14 @@ fn system(x: i16, links: &[i16], nav_defs: &[i16]) -> Vec<u8> {
     bytes
 }
 
+/// [`system`] with no `NavDefs`, visible only while `visibility` (a
+/// control-bit test) holds.
+fn hidden_system(x: i16, links: &[i16], visibility: &str) -> Vec<u8> {
+    let mut bytes = system(x, links, &[]);
+    bytes[0x96..0x96 + visibility.len()].copy_from_slice(visibility.as_bytes());
+    bytes
+}
+
 /// A still planet anyone may land on, at the centre.
 fn planet() -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
@@ -304,8 +324,9 @@ fn planet() -> Vec<u8> {
 }
 
 /// Alpha (128), at the map's centre, holding Alpha Prime (128), linked
-/// both ways to Beta (129), at (100, 0). The first `chär` flies ship 128
-/// from Alpha. Nothing is drawn but what the course map needs.
+/// both ways to Beta (129), at (100, 0), and to Gamma (130), at
+/// (-100, 0), visible only with bit 1 set. The first `chär` flies ship 128 from
+/// Alpha. Nothing is drawn but what the course map needs.
 fn data() -> Rc<GameData> {
     let fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
@@ -316,7 +337,12 @@ fn data() -> Rc<GameData> {
             Some(b"Alpha"),
             &system(0, &[129], &[128]),
         )
-        .resource(System::TYPE, 129, Some(b"Beta"), &system(100, &[128], &[]))
+        .resource(
+            System::TYPE,
+            129,
+            Some(b"Beta"),
+            &hidden_system(100, &[128], "!b1"),
+        )
         .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &planet())
         .build()
         .bytes;
@@ -411,4 +437,67 @@ fn a_mission_dialogs_map_puts_back_the_nav_it_opened_with_as_it_closes() {
     view.port_map_input(&key(Key::Char('m'), true));
     assert!(!view.map_open());
     assert_eq!(nav_mode(&view), opened, "put back as the map closed");
+}
+
+// The one-shot outputs, drained through a whole `FlightView` over a real
+// session.
+
+/// Presses L until the ship lands, as the view's own tests do: the
+/// request, a frame, then the landing.
+fn land(view: &mut FlightView<Rc<GameData>>) {
+    tap(view, Key::Char('l'));
+    view.tick(TICK);
+    tap(view, Key::Char('l'));
+}
+
+#[test]
+fn a_real_landing_plays_its_sound_and_shows_its_line_through_the_drain() {
+    let mut view = view();
+    tap(&mut view, Key::Char('l'));
+    view.tick(TICK);
+    assert_eq!(
+        view.message(),
+        Some("Cleared to land, Courier. Commence final approach."),
+        "the request's line, from the session"
+    );
+    assert_eq!(
+        view.take_sounds(),
+        [Sound::Sim(nova_sim::SimSound::TrafficControl)]
+    );
+    tap(&mut view, Key::Char('l'));
+    assert_eq!(view.take_landing(), Some(StellarId(128)));
+    assert!(view.take_save_due(), "the landing's save");
+    assert!(!view.take_save_due(), "once");
+}
+
+/// The systems the open course map draws.
+fn drawn(view: &FlightView<Rc<GameData>>) -> Vec<SystemId> {
+    view.course_map()
+        .picture()
+        .map(|picture| picture.systems.iter().map(|system| system.id).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_galaxy_change_redraws_the_open_map_through_the_event_and_the_galaxy() {
+    let mut view = view();
+    land(&mut view);
+    assert_eq!(view.take_landing(), Some(StellarId(128)));
+    view.open_bar_map();
+    assert!(drawn(&view).contains(&SystemId(129)), "Beta shown");
+    let mut desk = view.pilot_desk().expect("flying");
+    desk.edit(PilotEdit::Bit(nova_sim::Bit::new(1).expect("a bit"), true))
+        .expect("set");
+    assert!(drawn(&view).contains(&SystemId(129)), "until a refresh");
+    // The take-off's refresh hides Beta, and tells the galaxy changed.
+    assert_eq!(view.take_off(), Some(StellarId(128)));
+    assert!(view.map_open(), "still open");
+    assert!(
+        view.course_map().model().system(MapSystemId(129)).is_none(),
+        "the galaxy the flight answered"
+    );
+    assert!(
+        !drawn(&view).contains(&SystemId(129)),
+        "the open map redrawn"
+    );
 }
