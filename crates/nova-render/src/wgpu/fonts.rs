@@ -4,8 +4,9 @@
 
 use std::sync::Arc;
 
+use glyphon::cosmic_text::CacheKeyFlags;
 use glyphon::fontdb::{Database, Source};
-use glyphon::{Family, FontSystem};
+use glyphon::{Attrs, Family, FontSystem};
 use nova_view::Font;
 
 use crate::fonts::{Face, FontFaces, Loaded, face_for};
@@ -38,6 +39,22 @@ impl Families {
     pub(super) fn charcoal_loaded(&self) -> bool {
         self.charcoal.is_some()
     }
+}
+
+/// The attributes both text users shape `family` with, so text is measured
+/// exactly as it is drawn.
+///
+/// Each glyph is rasterised starting on a whole physical pixel, as
+/// QuickDraw draws every glyph from a whole-pixel pen. Left to the
+/// shaper's fractional advances, consecutive glyphs of one run fall in
+/// different quarter-pixel bins and the same stem smears over a different
+/// split of columns each time. The flag is read only when a glyph is
+/// rasterised: advances, line widths and wrapping are unchanged, and a
+/// glyph moves by at most half a pixel, never cumulatively.
+pub(super) fn attrs(family: Family<'_>) -> Attrs<'_> {
+    Attrs::new()
+        .family(family)
+        .cache_key_flags(CacheKeyFlags::PIXEL_FONT)
 }
 
 /// A font system holding only `faces`, with the fallback as its

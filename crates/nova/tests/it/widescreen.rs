@@ -65,14 +65,15 @@ fn a_hail_opens_the_comm_dialog_centred_over_widened_flight() {
             _ => None,
         })
         .expect("the dialog's text");
-    // 170 right of its 1024 x 768 place, in window pixels.
+    // 170 right of its 1024 x 768 place, in window pixels, rounded to
+    // whole ones.
     let across = 1920.0 / 1365.0;
     let down = 1080.0 / 768.0;
     let at = ((origin.x + 170.0) * across, origin.y * down);
     assert!(
         runs(&frame).iter().any(|(drawn, px)| *drawn == text
-            && (px.0 - at.0).abs() < 0.01
-            && (px.1 - at.1).abs() < 0.01),
+            && (px.0 - at.0).abs() <= 0.5
+            && (px.1 - at.1).abs() <= 0.5),
         "{text} at {at:?}: {:?}",
         runs(&frame)
     );

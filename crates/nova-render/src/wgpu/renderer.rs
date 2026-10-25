@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use glyphon::{
-    Attrs, Buffer, Cache, ColorMode, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
+    Buffer, Cache, ColorMode, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
     TextArea, TextAtlas, TextBounds, TextRenderer,
 };
 use nova_data::graphics::Image;
@@ -13,7 +13,7 @@ use wgpu::util::DeviceExt;
 use super::data::{SolidVertex, SpriteInstance, globals, solid_vertices};
 use nova_view::{Blend, Color, DrawLayer};
 
-use super::fonts::{Families, font_system};
+use super::fonts::{Families, attrs, font_system};
 use super::frame_commands::{DeviceEncoders, WgpuCommands};
 use super::upscale::{Upscale, abilities, upscale_for};
 use crate::fonts::FontFaces;
@@ -678,12 +678,7 @@ impl WgpuRenderer {
                         Metrics::new(run.size_px, run.line_height_px),
                     );
                     buffer.set_size(run.wrap_px, None);
-                    buffer.set_text(
-                        &run.text,
-                        &Attrs::new().family(family),
-                        Shaping::Advanced,
-                        None,
-                    );
+                    buffer.set_text(&run.text, &attrs(family), Shaping::Advanced, None);
                     buffer.shape_until_scroll(&mut self.font_system, false);
                     buffer
                 })

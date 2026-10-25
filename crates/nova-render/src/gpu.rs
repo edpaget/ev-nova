@@ -96,7 +96,9 @@ pub struct TextRun {
     pub text: String,
     /// The font it is drawn in.
     pub font: Font,
-    /// The top-left corner of its first line, in window pixels.
+    /// The top-left corner of its first line, in whole window pixels:
+    /// across rounded as a clip's edges are, down to the first row a quad's
+    /// top edge there fills.
     pub origin_px: (f32, f32),
     /// The font size in pixels.
     pub size_px: f32,

@@ -263,9 +263,15 @@ impl<S: ImageSource> Renderer<S> {
                 let run = TextRun {
                     text: text.clone(),
                     font,
+                    // Whole pixels, as QuickDraw's pen is. Across rounds
+                    // as `pixel_clip` rounds the clip's edges, so a run
+                    // and its clip meet on the same column in a widened
+                    // view. Down rounds halves down, to the first row a
+                    // quad's top edge there fills, so text keeps its place
+                    // against the boxes and rules drawn with it.
                     origin_px: (
-                        rect.x as f32 + origin.x * across,
-                        rect.y as f32 + origin.y * down,
+                        (rect.x as f32 + origin.x * across).round(),
+                        (rect.y as f32 + origin.y * down - 0.5).ceil(),
                     ),
                     size_px,
                     line_height_px,
@@ -1884,7 +1890,8 @@ mod tests {
         let Batch::Text(runs) = &frame.batches[0] else {
             panic!("{frame:?}");
         };
-        assert_eq!(runs[0].origin_px, (x * across, 100.0 * 1.406_25));
+        // Whole window pixels: 1905.9 and 140.6 round to the nearer.
+        assert_eq!(runs[0].origin_px, (1906.0, 141.0));
         assert_eq!(runs[0].size_px, 12.0 * 1.406_25, "sized by the height");
         assert_eq!(runs[0].wrap_px, Some(100.0 * across));
         // The GPU projects quads from the logical space onto the content.
@@ -1894,11 +1901,30 @@ mod tests {
         let Batch::Text(cut) = &frame.batches[2] else {
             panic!("{frame:?}");
         };
-        let column = runs[0].origin_px.0.round();
+        let column = runs[0].origin_px.0;
         assert_eq!(projected.round(), column);
         assert_eq!(cut[0].clip.x as f32, column);
         assert_eq!(cut[0].clip.x + cut[0].clip.w, 1920, "to the window's edge");
         assert_eq!(cut[0].clip.h, 1080);
+    }
+
+    #[test]
+    fn a_text_runs_origin_lands_on_whole_window_pixels() {
+        let mut list = DrawList::new();
+        list.text("Hi", at(1.3, 2.7), 10.0, None, Color::WHITE)
+            .text("Lo", at(1.2, 2.2), 10.0, None, Color::WHITE)
+            .text("Tie", at(1.25, 2.25), 10.0, None, Color::WHITE);
+        let frame = render_one(&list, &viewport());
+        let Batch::Text(runs) = &frame.batches[0] else {
+            panic!("{frame:?}");
+        };
+        // 2.6 and 5.4 pixels round to the nearer pixel; 2.4 and 4.4 too.
+        assert_eq!(runs[0].origin_px, (3.0, 5.0));
+        assert_eq!(runs[1].origin_px, (2.0, 4.0));
+        // Halfway, across rounds up, to the column its clip's left edge
+        // rounds to; down rounds down, to the row a quad's top edge there
+        // fills first, so text keeps its place in its box.
+        assert_eq!(runs[2].origin_px, (3.0, 4.0));
     }
 
     #[test]

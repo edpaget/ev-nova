@@ -1092,11 +1092,25 @@ const TEXT_AT: (f32, f32) = (2.0, 4.0);
 /// [`LINE`]-sized window at `scale` physical pixels per unit, as RGBA8
 /// pixels; `None` with no GPU adapter.
 fn draw_sample(faces: &FontFaces, font: Font, size: f32, scale: u32) -> Option<Picture> {
+    let at = Point::new(TEXT_AT.0, TEXT_AT.1);
+    draw_text(faces, font, SAMPLE, at, size, scale)
+}
+
+/// `text` in `font` at `size` points from `at`, drawn white on black with
+/// `faces` into a [`LINE`]-sized window at `scale` physical pixels per
+/// unit; `None` with no GPU adapter.
+pub(crate) fn draw_text(
+    faces: &FontFaces,
+    font: Font,
+    text: &str,
+    at: Point,
+    size: f32,
+    scale: u32,
+) -> Option<Picture> {
     let (w, h) = (LINE.w * scale, LINE.h * scale);
     let mut gpu = gpu_with(w, h, faces)?;
     let mut list = DrawList::new();
-    let at = Point::new(TEXT_AT.0, TEXT_AT.1);
-    list.text_in(font, SAMPLE, at, size, None, Color::WHITE);
+    list.text_in(font, text, at, size, None, Color::WHITE);
     let report = Renderer::new(Images).render(
         &list,
         &Viewport::new(LINE, (w, h), f64::from(scale)),
@@ -1111,7 +1125,7 @@ fn draw_sample(faces: &FontFaces, font: Font, size: f32, scale: u32) -> Option<P
 
 /// Read-back pixels and their width.
 #[derive(PartialEq)]
-struct Picture {
+pub(crate) struct Picture {
     width: u32,
     pixels: Vec<u8>,
 }
@@ -1161,6 +1175,88 @@ impl Picture {
             longest = longest.max(run);
         }
         longest
+    }
+
+    /// The coverage of each run of lit pixels along the row with the most
+    /// ink, left to right: one run per stem in a row of `l`s.
+    pub(crate) fn stems(&self) -> Vec<Vec<u8>> {
+        let mut rows: Vec<Vec<u8>> = Vec::new();
+        for ((x, _), c) in self.coverage() {
+            if x == 0 {
+                rows.push(Vec::new());
+            }
+            rows.last_mut().expect("a row").push(c);
+        }
+        let inkiest = rows
+            .into_iter()
+            .max_by_key(|row| row.iter().filter(|&&c| c > 0).count())
+            .unwrap_or_default();
+        inkiest
+            .split(|&c| c == 0)
+            .filter(|stem| !stem.is_empty())
+            .map(<[u8]>::to_vec)
+            .collect()
+    }
+}
+
+/// Twelve `l`s: twelve identical stems in one row.
+pub(crate) const STEMS: &str = "llllllllllll";
+
+/// Every stem of [`STEMS`] in `picture` has the same coverage profile, as
+/// it does when each glyph starts on a whole pixel.
+pub(crate) fn assert_stems_alike(picture: &Picture, case: &str) {
+    let stems = picture.stems();
+    assert_eq!(stems.len(), STEMS.len(), "{case}: {stems:?}");
+    let mut profiles = stems;
+    profiles.sort();
+    profiles.dedup();
+    assert_eq!(profiles.len(), 1, "{case}: {profiles:?}");
+}
+
+#[test]
+fn every_stem_in_a_row_of_ls_draws_the_same_at_1x_and_2x() {
+    let faces = FontFaces::bundled();
+    // At 9pt and 1x an `l` is narrower than its advance leaves room for a
+    // gap beside, so its stems run together: that case has no stems to
+    // tell apart.
+    for (size, scale) in [(12.0, 1), (9.0, 2), (12.0, 2)] {
+        let at = Point::new(TEXT_AT.0, TEXT_AT.1);
+        let Some(picture) = draw_text(&faces, Font::Geneva, STEMS, at, size, scale) else {
+            return;
+        };
+        assert_stems_alike(&picture, &format!("{size}pt at {scale}x"));
+    }
+}
+
+#[test]
+fn text_keeps_its_place_against_a_box_at_any_fraction_of_a_pixel() {
+    let faces = FontFaces::bundled();
+    let red = Color::rgba(255, 0, 0, 255);
+    let green = Color::rgba(0, 255, 0, 255);
+    // 1x, 2x and a fractional 1.40625x.
+    for (w, h, factor) in [(128, 32, 1.0), (256, 64, 2.0), (180, 45, 1.0)] {
+        let mut gaps = Vec::new();
+        for y in [4.0, 4.25, 4.4, 4.5, 4.6, 4.75] {
+            let Some(mut gpu) = gpu_with(w, h, &faces) else {
+                return;
+            };
+            let mut list = DrawList::new();
+            fill_rect(&mut list, bounds(60.0, y, 100.0, y + 10.0), green);
+            list.text_in(Font::Geneva, "llll", Point::new(2.0, y), 12.0, None, red);
+            Renderer::new(Images).render(&list, &Viewport::new(LINE, (w, h), factor), &mut gpu);
+            let pixels = gpu.read_pixels().expect("read back");
+            let top = |channel: usize| {
+                let pixels = pixels.as_chunks::<4>().0;
+                let at = pixels.iter().position(|p| p[channel] > 0);
+                at.map(|at| at as u32 / w).expect("drawn")
+            };
+            gaps.push((y, top(0) - top(1)));
+        }
+        let first = gaps[0].1;
+        assert!(
+            gaps.iter().all(|&(_, gap)| gap == first),
+            "{w}x{h}: rows from the box's top to the ink's: {gaps:?}"
+        );
     }
 }
 

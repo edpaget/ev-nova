@@ -3,6 +3,7 @@
 //! it, or with no GPU adapter.
 
 use crate::common;
+use crate::wgpu_offscreen::{STEMS, assert_stems_alike, draw_text};
 
 use nova_data::fonts::{charcoal_path, open_charcoal};
 use nova_render::fonts::FontFaces;
@@ -83,5 +84,24 @@ fn the_games_charcoal_draws_at_the_original_sizes_at_1x_and_2x() {
                 "Charcoal {size}pt at {scale}x draws like the fallback"
             );
         }
+    }
+}
+
+#[test]
+fn the_games_charcoal_draws_every_stem_alike_at_2x() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    if !charcoal_path(&dir).is_file() {
+        eprintln!("skipping: no {}", charcoal_path(&dir).display());
+        return;
+    }
+    let faces = FontFaces::bundled().with_charcoal(open_charcoal(&dir).expect("Charcoal loads"));
+    for size in [9.0, 12.0] {
+        let at = Point::new(2.0, 4.0);
+        let Some(picture) = draw_text(&faces, Font::Charcoal, STEMS, at, size, 2) else {
+            return;
+        };
+        assert_stems_alike(&picture, &format!("Charcoal {size}pt at 2x"));
     }
 }

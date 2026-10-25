@@ -4,11 +4,11 @@
 use std::cell::RefCell;
 use std::fmt;
 
-use glyphon::{Attrs, Buffer, FontSystem, Metrics, Shaping};
+use glyphon::{Buffer, FontSystem, Metrics, Shaping};
 use nova_view::Font;
 use nova_view::text::{LINE_HEIGHT, TextMetrics};
 
-use super::fonts::{Families, font_system};
+use super::fonts::{Families, attrs, font_system};
 use crate::fonts::FontFaces;
 
 /// Measures text in the faces the renderer draws it in: the same font
@@ -59,7 +59,7 @@ impl TextMetrics for GlyphonMetrics {
         let mut font_system = self.font_system.borrow_mut();
         let mut buffer = Buffer::new(&mut font_system, Metrics::new(size, line_height));
         buffer.set_size(None, None);
-        buffer.set_text(text, &Attrs::new().family(family), Shaping::Advanced, None);
+        buffer.set_text(text, &attrs(family), Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut font_system, false);
         buffer
             .layout_runs()
