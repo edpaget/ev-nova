@@ -28,6 +28,9 @@
 //!   ([`Asteroids`](asteroid::Asteroids)), how an asteroid spawns at the
 //!   field's edge or in place, how it drifts and spins, and when it is
 //!   culled.
+//! - [`auto_refuel`]: the auto-refueller's top-up on landing at an
+//!   inhabited stellar, as `_DoAutoRefuel` makes it
+//!   ([`auto_refuel::fill`]).
 //! - [`bay`]: fighter bays: the fighters a bay holds ([`capacity`]), how
 //!   one is launched, the window it docks in ([`dock_window`]) with its
 //!   [`Carrier`], and what the flight is told of fighters abandoned
@@ -390,6 +393,7 @@ pub use nova_sim_combat::bay;
 pub use nova_sim_combat::cloak;
 pub use nova_sim_combat::combat;
 pub use nova_sim_combat::comm_line;
+pub use nova_sim_port::auto_refuel;
 pub use nova_sim_port::board;
 pub use nova_sim_port::board_repair;
 pub use nova_sim_port::christening;

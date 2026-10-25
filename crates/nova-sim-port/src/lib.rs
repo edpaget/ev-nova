@@ -11,6 +11,10 @@
 //! (`nova_sim::shipyard`, `nova_sim::Shipyard`, …), so the rest of the
 //! workspace reaches them through it.
 //!
+//! - [`auto_refuel`]: the auto-refueller's top-up on landing at an
+//!   inhabited stellar: which outfits are one
+//!   ([`carries_auto_refueller`](auto_refuel::carries_auto_refueller))
+//!   and the top-up ([`fill`](auto_refuel::fill)).
 //! - [`board`]: boarding a disabled ship: whether the player can
 //!   ([`BoardRefusal`](board::BoardRefusal)), the
 //!   [`Plunder`](board::Plunder) rolled for it, the plunder dialog's
@@ -119,6 +123,7 @@ use nova_sim_state::{clearance, cron, landing, market, outfit_effects, stats};
 #[allow(unused_imports)]
 use nova_sim_story::{exploration, mission, person, pilot, rank, story, text_tags};
 
+pub mod auto_refuel;
 pub mod board;
 pub mod board_repair;
 pub mod christening;
