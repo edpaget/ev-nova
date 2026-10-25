@@ -562,7 +562,7 @@ impl AppScreen {
                 Some(Point::new(at.x - offset.x, at.y))
             }
             Input::PointerLeft => None,
-            Input::Key { .. } | Input::Text(_) => return,
+            Input::Key { .. } | Input::Text(_) | Input::Scroll { .. } => return,
         };
     }
 }

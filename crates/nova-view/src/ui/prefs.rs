@@ -805,7 +805,7 @@ impl Screen for PrefsDialog {
                 pressed: true,
                 repeat,
             } => self.key(key, repeat, input),
-            Input::Key { .. } | Input::Text(_) | Input::PointerLeft => {}
+            Input::Key { .. } | Input::Text(_) | Input::PointerLeft | Input::Scroll { .. } => {}
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
         ScreenAction::None

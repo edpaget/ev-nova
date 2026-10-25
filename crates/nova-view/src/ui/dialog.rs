@@ -485,7 +485,10 @@ impl Dialog {
     /// - Return activates the default item, and Escape the cancel item.
     /// - Tab moves the focus to the next enabled button, and Space
     ///   activates the focused one.
-    /// - Up and Down, repeats included, scroll the scrolling text.
+    /// - Up and Down, repeats included, scroll the first scrolling text.
+    /// - A wheel or trackpad scroll inside the dialog scrolls the scrolling
+    ///   text under the pointer, if any; static text ignores it, and a
+    ///   click in progress stays armed.
     ///
     /// Key repeats never activate anything.
     pub fn input(&mut self, input: &Input) -> Option<DialogEvent> {
@@ -495,6 +498,19 @@ impl Dialog {
                 pressed: true,
                 repeat,
             } => self.key(key, repeat),
+            Input::Scroll { at, .. } => {
+                if self.bounds.contains(at) {
+                    self.items.iter_mut().any(|item| match &mut item.widget {
+                        Widget::Text {
+                            text,
+                            scrolls: true,
+                            ..
+                        } => text.input(input),
+                        _ => false,
+                    });
+                }
+                None
+            }
             Input::Key { .. } | Input::Text(_) | Input::PointerLeft => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
@@ -707,7 +723,7 @@ pub(crate) fn outline(list: &mut DrawList, rect: Bounds, color: Color) {
 mod tests {
     use super::*;
     use crate::draw::{DrawCommand, fill_command};
-    use crate::input::MouseButton;
+    use crate::input::{MouseButton, ScrollDelta};
     use crate::text::fixture::MonoMetrics;
 
     fn at(x: f32, y: f32) -> Point {
@@ -1367,6 +1383,98 @@ mod tests {
         };
         dialog.input(&release);
         assert_eq!(dialog.scroll_text().expect("text").first(), 1);
+    }
+
+    fn wheel(at: Point) -> Input {
+        Input::Scroll {
+            delta: ScrollDelta::Lines(1.0),
+            at,
+        }
+    }
+
+    /// `desc_like` with item 4 a second scrolling text, at `x`.
+    fn two_texts(x: f32) -> Dialog {
+        let mut template = desc_like();
+        template.items[3].bounds = rect(x, 10.0, 23.0, 23.0);
+        let mut roles = desc_roles("l0\rl1\rl2\rl3\rl4");
+        roles.push((
+            4,
+            Role::ScrollText {
+                text: "m0\rm1\rm2".into(),
+                font: Font::Geneva,
+                size: 10.0,
+                color: Color::WHITE,
+                backing: None,
+            },
+        ));
+        dialog(&template, &roles)
+    }
+
+    fn first(dialog: &Dialog, item: usize) -> usize {
+        dialog.text(item).expect("text").first()
+    }
+
+    #[test]
+    fn a_wheel_over_the_scrolling_text_scrolls_it() {
+        let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
+        assert_eq!(dialog.input(&wheel(at(20.0, 20.0))), None);
+        assert_eq!(first(&dialog, 3), 1);
+    }
+
+    #[test]
+    fn a_wheel_over_a_button_or_outside_the_dialog_does_nothing() {
+        let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
+        for point in [at(150.0, 80.0), at(300.0, 300.0)] {
+            assert_eq!(dialog.input(&wheel(point)), None, "{point:?}");
+        }
+        assert_eq!(first(&dialog, 3), 0);
+    }
+
+    #[test]
+    fn a_wheel_over_static_text_does_nothing() {
+        let mut template = yes_no();
+        template.items[2].kind = ItemSpec::StaticText("a b c d e f g h i j k l m".repeat(20));
+        let mut dialog = dialog(&template, &[]);
+        let before = drawn(&dialog);
+        let over = at(YES_NO.x + 60.0, YES_NO.y + 10.0);
+        assert_eq!(dialog.input(&wheel(over)), None);
+        assert_eq!(drawn(&dialog), before);
+    }
+
+    #[test]
+    fn a_wheel_scrolls_only_the_text_under_the_pointer() {
+        let mut dialog = two_texts(150.0);
+        dialog.input(&wheel(at(160.0, 20.0)));
+        assert_eq!((first(&dialog, 3), first(&dialog, 4)), (0, 1));
+        dialog.input(&wheel(at(20.0, 20.0)));
+        assert_eq!((first(&dialog, 3), first(&dialog, 4)), (1, 1));
+        dialog.input(&key(Key::Down));
+        assert_eq!(
+            (first(&dialog, 3), first(&dialog, 4)),
+            (2, 1),
+            "the arrow keys drive the first"
+        );
+    }
+
+    #[test]
+    fn a_wheel_over_a_text_but_outside_the_dialog_does_nothing() {
+        // Item 4 straddles the dialog's right edge, at 200.
+        let mut dialog = two_texts(190.0);
+        assert!(dialog.item_shown(4));
+        dialog.input(&wheel(at(205.0, 20.0)));
+        assert_eq!(first(&dialog, 4), 0);
+        dialog.input(&wheel(at(195.0, 20.0)));
+        assert_eq!(first(&dialog, 4), 1);
+    }
+
+    #[test]
+    fn a_wheel_during_a_click_leaves_it_armed() {
+        let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
+        let button = at(150.0, 80.0);
+        assert_eq!(dialog.input(&press(button)), None);
+        dialog.input(&wheel(at(20.0, 20.0)));
+        assert_eq!(first(&dialog, 3), 1);
+        assert_eq!(dialog.input(&release(button)), Some(DialogEvent::Item(1)));
     }
 
     #[test]

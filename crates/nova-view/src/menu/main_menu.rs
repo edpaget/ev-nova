@@ -552,7 +552,7 @@ impl Screen for MainMenu {
             // Other keys do nothing. `_MainScreenMouse` runs only on the
             // primary button's mouseDown, so the other mouse buttons
             // neither press nor let go.
-            Input::Key { .. } | Input::PointerButton { .. } => {}
+            Input::Key { .. } | Input::PointerButton { .. } | Input::Scroll { .. } => {}
             Input::PointerMoved(at) => {
                 self.pointer = Some(at);
                 let hit = self.hit(at);

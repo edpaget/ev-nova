@@ -4,12 +4,14 @@ use crate::color::Color;
 use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
+use crate::input::{Input, Key, ScrollDelta};
 use crate::text::{TextMetrics, wrap};
 
 /// Text wrapped to a box's width once, when it is made, and shown as many
 /// whole lines as fit the box's height (at least one in a box as tall as
-/// the text's size), from a first line the arrow keys move. Nothing is drawn outside the box, so the renderer needs no clip.
+/// the text's size), from a first line the arrow keys move, or a wheel or
+/// trackpad over the box. Nothing is drawn outside the box, so the
+/// renderer needs no clip.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollText {
     lines: Vec<String>,
@@ -20,6 +22,9 @@ pub struct ScrollText {
     line_height: f32,
     visible: usize,
     first: usize,
+    /// What wheel and trackpad scrolls have moved short of a whole line,
+    /// in logical units, toward the end for positive.
+    pending: f32,
 }
 
 impl ScrollText {
@@ -53,6 +58,7 @@ impl ScrollText {
             line_height,
             visible,
             first: 0,
+            pending: 0.0,
         }
     }
 
@@ -101,19 +107,46 @@ impl ScrollText {
         self.first = self.first.saturating_add_signed(lines).min(last);
     }
 
-    /// Scrolls one line on each Up or Down press, key repeats included.
-    /// Returns whether it used `input`.
+    /// Scrolls one line on each Up or Down press, key repeats included,
+    /// and by a wheel or trackpad scroll over the box, a whole line for
+    /// each line height it builds up to. Returns whether it used `input`:
+    /// a scroll over the box is used even where it can't move.
     pub fn input(&mut self, input: &Input) -> bool {
-        let Input::Key {
-            key, pressed: true, ..
-        } = *input
-        else {
-            return false;
+        let key = match *input {
+            Input::Key {
+                key, pressed: true, ..
+            } => key,
+            Input::Scroll { delta, at } => return self.wheel(delta, at),
+            _ => return false,
         };
         match key {
             Key::Up => self.scroll_by(-1),
             Key::Down => self.scroll_by(1),
             _ => return false,
+        }
+        true
+    }
+
+    /// Scrolls by `delta` when `at` is over the box, keeping what falls
+    /// short of a whole line for the next scroll, unless it points past the
+    /// end the first line already sits at. That drops what a move cut
+    /// short at an end had left over, so a scroll back moves at once.
+    fn wheel(&mut self, delta: ScrollDelta, at: Point) -> bool {
+        if !self.rect.contains(at) {
+            return false;
+        }
+        self.pending += match delta {
+            ScrollDelta::Lines(lines) => lines * self.line_height,
+            ScrollDelta::Units(units) => units,
+        };
+        let whole = (self.pending / self.line_height).trunc();
+        self.pending -= whole * self.line_height;
+        self.scroll_by(whole as isize);
+        // The leftover has the sign of the move, so a move cut short at an
+        // end leaves it pointing past that end too.
+        let last = self.lines.len().saturating_sub(self.visible);
+        if (self.pending < 0.0 && self.first == 0) || (self.pending > 0.0 && self.first == last) {
+            self.pending = 0.0;
         }
         true
     }
@@ -195,6 +228,152 @@ mod tests {
             pressed: true,
             repeat,
         }
+    }
+
+    /// A point inside [`ten_lines`]'s box.
+    const INSIDE: Point = Point::new(110.0, 60.0);
+
+    fn wheel(delta: ScrollDelta) -> Input {
+        Input::Scroll { delta, at: INSIDE }
+    }
+
+    fn lines(n: f32) -> Input {
+        wheel(ScrollDelta::Lines(n))
+    }
+
+    fn units(n: f32) -> Input {
+        wheel(ScrollDelta::Units(n))
+    }
+
+    #[test]
+    fn wheel_lines_scroll_and_clamp_like_down_and_up() {
+        let mut text = ten_lines();
+        assert!(text.input(&lines(1.0)));
+        assert_eq!(text.first(), 1);
+        assert!(text.input(&lines(3.0)));
+        assert_eq!(text.first(), 4);
+        assert!(text.input(&lines(100.0)), "used even at the end");
+        assert_eq!(text.first(), 7);
+        assert!(text.input(&lines(-2.0)));
+        assert_eq!(text.first(), 5);
+        assert!(text.input(&lines(-100.0)));
+        assert_eq!(text.first(), 0);
+    }
+
+    #[test]
+    fn a_wheel_outside_the_box_is_not_used() {
+        let mut text = ten_lines();
+        for at in [Point::new(120.5, 60.0), Point::new(110.0, 86.5)] {
+            let input = Input::Scroll {
+                delta: ScrollDelta::Lines(1.0),
+                at,
+            };
+            assert!(!text.input(&input), "{at:?}");
+        }
+        assert_eq!(text.first(), 0);
+    }
+
+    #[test]
+    fn a_wheel_over_text_shorter_than_the_box_is_used_but_never_moves() {
+        let mut text = scroll("ab\rcd", 36.0);
+        assert!(text.input(&lines(1.0)));
+        assert_eq!(text.first(), 0);
+        for _ in 0..3 {
+            assert!(text.input(&units(5.0)));
+        }
+        assert_eq!(text.first(), 0);
+    }
+
+    #[test]
+    fn sub_line_units_build_up_into_lines_from_the_top() {
+        let mut text = ten_lines();
+        text.input(&units(5.0));
+        text.input(&units(5.0));
+        assert_eq!(text.first(), 0);
+        text.input(&units(5.0));
+        assert_eq!(text.first(), 1, "15 units are a line, 3 over");
+        text.input(&units(9.0));
+        assert_eq!(text.first(), 2, "3 kept and 9 more are a line");
+    }
+
+    #[test]
+    fn half_lines_build_up_into_a_line() {
+        let mut text = ten_lines();
+        text.input(&lines(0.5));
+        assert_eq!(text.first(), 0);
+        text.input(&lines(0.5));
+        assert_eq!(text.first(), 1);
+    }
+
+    #[test]
+    fn negative_units_build_up_from_the_end() {
+        let mut text = ten_lines();
+        text.scroll_by(7);
+        for _ in 0..3 {
+            text.input(&units(-5.0));
+        }
+        assert_eq!(text.first(), 6);
+    }
+
+    #[test]
+    fn a_leftover_pointing_past_the_top_is_dropped() {
+        let mut text = ten_lines();
+        text.input(&units(-5.0));
+        text.input(&units(12.0));
+        assert_eq!(text.first(), 1, "exactly one line, not 7 units");
+    }
+
+    #[test]
+    fn a_move_cut_short_at_the_end_drops_its_leftover() {
+        let mut text = ten_lines();
+        text.input(&units(1205.0));
+        assert_eq!(text.first(), 7);
+        text.input(&units(-12.0));
+        assert_eq!(text.first(), 6, "the 5 over swallow no line");
+    }
+
+    #[test]
+    fn a_move_that_reaches_the_end_drops_a_leftover_past_it() {
+        let mut text = ten_lines();
+        text.scroll_by(6);
+        text.input(&units(17.0));
+        assert_eq!(text.first(), 7);
+        text.input(&units(-12.0));
+        assert_eq!(text.first(), 6, "the 5 over swallow no line");
+    }
+
+    #[test]
+    fn rewrapped_text_starts_with_nothing_left_over() {
+        let mut text = ten_lines();
+        text.input(&units(11.0));
+        let mut new = text.rewrapped(
+            &(0..10)
+                .map(|n| format!("m{n}"))
+                .collect::<Vec<_>>()
+                .join("\r"),
+            &MonoMetrics,
+        );
+        new.input(&units(11.0));
+        assert_eq!(new.first(), 0);
+        new.input(&units(1.0));
+        assert_eq!(new.first(), 1);
+    }
+
+    #[test]
+    fn no_line_height_scrolls_nothing() {
+        let rect = Bounds::at(Point::new(100.0, 50.0), 20.0, 36.0);
+        let text: Vec<String> = (0..10).map(|n| format!("l{n}")).collect();
+        let mut text = ScrollText::new(
+            &text.join("\r"),
+            Font::Geneva,
+            0.0,
+            GREEN,
+            rect,
+            &MonoMetrics,
+        );
+        text.input(&lines(3.0));
+        text.input(&units(30.0));
+        assert_eq!(text.first(), 0);
     }
 
     #[test]

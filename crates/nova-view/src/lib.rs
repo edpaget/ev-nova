@@ -111,7 +111,7 @@ pub use draw::{Blend, DrawCommand, DrawLayer, DrawList};
 pub use font::Font;
 pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
-pub use input::{Input, Key, MouseButton};
+pub use input::{Input, Key, MouseButton, ScrollDelta};
 pub use menu_command::MenuCommand;
 pub use navigator::Navigator;
 pub use preferences::Prefs;
