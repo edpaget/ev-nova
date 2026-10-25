@@ -35,6 +35,10 @@
 //! disabled again, as [`Session::lose_escorts`] loses an escort only at
 //! the hit or the tick that downs it (`_DamageShip` @0x3af8f-0x3afdd).
 //!
+//! A former escort can also be boarded back into the fleet (see the
+//! `board_repair` module): that repair runs `_AISetup`, which clears its
+//! order word and so its standing order, where this rejoin keeps it.
+//!
 //! A repaired ship that remembers nothing (traffic carrying the gear, or
 //! a disabled mission escort, which never left its formation) only gets
 //! its armour back; a mission escort resumes as one.
