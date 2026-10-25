@@ -129,7 +129,7 @@ use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_F
 use crate::flight::{self, Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
-use crate::traffic::autopilot::{self, Beside};
+use crate::traffic::autopilot::Beside;
 use crate::traffic::held_burst::{self, Word};
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::leave_flight;
@@ -315,10 +315,10 @@ pub(crate) fn fly(
     inertia: Inertia,
 ) {
     let (Some(leader), Some(place)) = (leader, npc.formation_slot()) else {
-        // `autopilot::brake` stands in for sub 1, which keeps +0x34.
-        let controls = autopilot::brake(&mut npc.state, handling, inertia);
-        let word = Word::stop(controls, handling, inertia);
-        held_burst::step(npc, handling, controls, flight, inertia, word);
+        // Sub 1, a stop, which keeps +0x34.
+        let (controls, flown) = leave_flight::stop(&mut npc.state, handling, inertia, false);
+        let word = Word::stop(controls, &flown, inertia);
+        held_burst::step(npc, &flown, controls, flight, inertia, word);
         return;
     };
     let slot = place.position(leader);
@@ -355,7 +355,7 @@ mod tests {
     use crate::flight::Turn;
     use crate::handling::ShipFields;
     use crate::stats::{INERTIALESS_HULL, ShipStats};
-    use crate::traffic::autopilot::{Outcome, Readings, TopSpeeds};
+    use crate::traffic::autopilot::{self, Outcome, Readings, TopSpeeds};
     use nova_sim_base::fixture::{Draws, FAST};
     use std::collections::BTreeMap;
 
@@ -1067,5 +1067,27 @@ mod tests {
         dutiless.escort = None;
         flown(&mut dutiless, Some(&leader), Beside::default());
         assert_ne!(dutiless.state.heading, 180.0, "{:?}", dutiless.state);
+    }
+
+    #[test]
+    fn an_escort_with_no_leader_flies_sub_1_settling_below_0_35() {
+        // Moving 0.2 a tick, facing back: sub 1 settles it × 0.95 with no
+        // thrust (@0x855e3-0x85624), with no cutoff short of 0.35 above.
+        let mut lost = escort(at(0.0, 100.0, 0.0, -0.2, 180.0));
+        flown(&mut lost, None, Beside::default());
+        #[allow(clippy::cast_possible_truncation)]
+        let settled = (f64::from(-0.2_f32) * 0.95) as f32;
+        assert_eq!(lost.state.velocity, Vec2::new(0.0, settled));
+        // Moving 1.0, it thrusts half its thrust, its velocity × 0.94.
+        let mut soft = escort(at(0.0, 100.0, 0.0, -1.0, 180.0));
+        let accel = soft.stats.handling.accel;
+        flown(&mut soft, None, Beside::default());
+        #[allow(clippy::cast_possible_truncation)]
+        let cut = (f64::from(-1.0_f32) * 0.94) as f32;
+        assert!(
+            (soft.state.velocity.y - (cut + accel * 0.5)).abs() < 1e-5,
+            "{:?}",
+            soft.state
+        );
     }
 }

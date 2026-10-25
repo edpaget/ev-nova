@@ -630,12 +630,19 @@ fn the_routers_behaviour_decides_for_a_flight_entered_with_f() {
 }
 
 /// The trader, idling, has braked to rest from the top speed setup
-/// started it at, heading up from (100, -100): 501 pixels on, a half turn
-/// at its top speed of 6 and 50 ticks of its 0.12 thrust.
+/// started it at, heading up from (100, -100): about 501 pixels on, a half
+/// turn at its top speed of 6 and its 0.12 thrust down to sub 1's 0.35 a
+/// tick on each axis, then settling by 0.95 a tick (@0x855e3-0x85624),
+/// still creeping under 0.35 a tick.
 fn assert_idle_braked_to_rest(trader: &Npc) {
-    assert!(trader.state.velocity.length() < 1e-5, "{:?}", trader.state);
+    let velocity = trader.state.velocity;
+    assert!(
+        velocity.x.abs() < 0.35 && velocity.y.abs() < 0.35,
+        "{:?}",
+        trader.state
+    );
     let off = trader.state.position - Vec2::new(100.0, -601.0);
-    assert!(off.length() < 1e-3, "{:?}", trader.state);
+    assert!(off.length() < 5.0, "{:?}", trader.state);
 }
 
 #[test]

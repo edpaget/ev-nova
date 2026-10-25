@@ -256,8 +256,8 @@ fn a_ship_holding_or_assisting_with_no_docking_has_its_heading_truncated() {
     }
 }
 
-// The engine's stand-ins: `autopilot::brake`, sub 1 for every goal the
-// autopilot stops, and the velocity match its approach, rejoin and follow
+// Sub 1 (`leave_flight::stop`), which every goal the autopilot stops
+// flies, and the engine's velocity match its approach, rejoin and follow
 // fly by. Each wants a whole-degree heading and `_HandleShip` turns it.
 
 /// A ship of `fields` idling at the centre, moving at `velocity` and
@@ -297,12 +297,20 @@ fn a_ship_braking_at_rest_or_inertialess_has_its_heading_truncated() {
 #[test]
 fn a_ship_braking_from_3_comes_to_rest_on_a_whole_degree() {
     let mut idle = ship(FAST, Goal::Idle, at(0.0, 0.0, 0.0, -3.0, 0.0), 0.0);
-    let accel = idle.stats.handling.accel;
+    for _ in 0..200 {
+        fly(&mut idle, None);
+    }
+    // Sub 1's rest test, then its settle down to the engine's rest.
+    assert!(
+        !super::inertialess::moving(idle.state.velocity),
+        "{:?}",
+        idle.state
+    );
     for _ in 0..200 {
         fly(&mut idle, None);
     }
     assert!(
-        idle.state.velocity.length() <= accel / 2.0,
+        idle.state.velocity.length() <= AT_REST_SPEED,
         "{:?}",
         idle.state
     );

@@ -241,6 +241,8 @@ pub mod skill;
 mod skill_rolls;
 pub mod snipe;
 pub mod spawn;
+#[cfg(test)]
+mod stop_tests;
 pub mod strength;
 pub mod succession;
 pub mod table;

@@ -112,13 +112,18 @@ pub(crate) fn writes_thrust(controls: Controls, inertia: Inertia) -> bool {
     controls.thrust || (matches!(inertia, Inertia::Inertialess { .. }) && controls.reverse)
 }
 
-/// What a flight flies this tick: its controls, and its [`Word`].
+/// What a flight flies this tick: its controls, its [`Word`], and the
+/// handling it flies by when that isn't its goal's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Flight {
     /// The controls.
     pub controls: Controls,
     /// What it does to +0x34.
     pub word: Word,
+    /// The handling it flies by, sub 1's (half thrust on its soft brake,
+    /// [`leave_flight::stop`](crate::traffic::leave_flight::stop)); none
+    /// flies by the goal's.
+    pub flown: Option<Handling>,
 }
 
 impl Flight {
@@ -128,6 +133,7 @@ impl Flight {
         Self {
             controls,
             word: Word::stop(controls, flown, inertia),
+            flown: Some(*flown),
         }
     }
 }
@@ -138,6 +144,7 @@ impl From<Controls> for Flight {
         Self {
             controls,
             word: Word::Writes,
+            flown: None,
         }
     }
 }
@@ -477,14 +484,16 @@ mod tests {
             Flight::from(thrust),
             Flight {
                 controls: thrust,
-                word: Word::Writes
+                word: Word::Writes,
+                flown: None,
             }
         );
         assert_eq!(
             Flight::stop(thrust, &soft, Inertia::Inertial),
             Flight {
                 controls: thrust,
-                word: keeps(0.2)
+                word: keeps(0.2),
+                flown: Some(soft),
             }
         );
     }

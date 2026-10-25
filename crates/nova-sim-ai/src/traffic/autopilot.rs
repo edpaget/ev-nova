@@ -168,7 +168,9 @@
 //!   [`Goal::CountWait`] (sub 1, a stop, @0x8d48c, its AI wait running),
 //!   or a
 //!   goal it cannot fly (a stellar, lead, player or carrier that is not
-//!   there): it brakes to a stop.
+//!   there): it flies sub 1, a stop ([`leave_flight::stop`]), braking
+//!   while it moves 0.35 or more on an axis and settling × 0.95 a tick
+//!   below that, so it comes to rest from any speed.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
 //!   [`glide_speed`] a tick, with no steering, and flies on at that speed
 //!   once the next tick's would be at or below its cap
@@ -516,7 +518,7 @@ fn fly_mobile(
         position_step(npc, &handling, inertia);
         return Outcome::Flying;
     }
-    let Flight { controls, word } = match npc.goal {
+    let chosen = match npc.goal {
         Goal::Land(stellar) => match sites.iter().find(|site| site.id == stellar) {
             Some(site) if over(&npc.state, site) => return Outcome::Landed(stellar),
             Some(site) => land_approach(npc, site, &handling, inertia).into(),
@@ -614,7 +616,8 @@ fn fly_mobile(
             Controls::default().into()
         }
     };
-    held_burst::step(npc, &handling, controls, flight, inertia, word);
+    let flown = chosen.flown.unwrap_or(handling);
+    held_burst::step(npc, &flown, chosen.controls, flight, inertia, chosen.word);
     Outcome::Flying
 }
 
@@ -1299,7 +1302,7 @@ fn approach(
     let to = target - state.position;
     let distance = to.length();
     if distance <= stopping_distance(state, handling, inertia) {
-        return brake(state, handling, inertia);
+        return approach_brake(state, handling, inertia);
     }
     match_velocity(
         state,
@@ -1333,17 +1336,22 @@ fn stopping_distance(state: &ShipState, handling: &Handling, inertia: Inertia) -
     speed * (turning.ceil() + 1.0) + speed * speed / (2.0 * handling.accel)
 }
 
-/// Turns to face against the ship at `state`'s motion and thrusts once
-/// it does, until thrust would only push it the other way; nothing at or
-/// below [`AT_REST_SPEED`] (see [`stopping_distance`]). It stands in for
-/// sub 1 for every goal the autopilot stops, so it wants sub 1's
-/// whole-degree retro heading ([`snipe::retro`], @0x85440-0x8546e) and
-/// turns to it as `_HandleShip` turns it ([`flight::turn_to`]); it thrusts
-/// once that turn puts it on the heading, this tick. At rest it wants
-/// none, its heading truncated ([`flight::turn_to_own`]). An inertialess
-/// ship brakes as substate 1 does ([`inertialess::brake`]), turned to
-/// the heading it hands back, its own truncated.
-pub(crate) fn brake(state: &mut ShipState, handling: &Handling, inertia: Inertia) -> Controls {
+/// The approach's brake ([`approach`]), the engine's own planner for the
+/// landing (`_HighLevelAIHandler` state 1's, which
+/// stellar-fidelity phase-5-npc-landing-reach ports with its own × 0.98)
+/// and the gate approach, not sub 1: it turns to face against the ship at
+/// `state`'s motion and thrusts once it does, until thrust would only push
+/// it the other way; nothing at or below [`AT_REST_SPEED`] (see
+/// [`stopping_distance`]). Between the two it creeps, which is harmless
+/// here: the landing ends at `LANDING_SPEED` (1.0, above any stock
+/// `accel / 2`), and the gate box zeroes the velocity. It wants sub 1's
+/// whole-degree retro heading ([`snipe::retro`]) and turns to it as
+/// `_HandleShip` turns it ([`flight::turn_to`]), thrusting once that turn
+/// puts it on the heading, this tick. At rest it wants none, its heading
+/// truncated ([`flight::turn_to_own`]). An inertialess ship brakes as
+/// substate 1 does ([`inertialess::brake`]), turned to the heading it
+/// hands back, its own truncated.
+fn approach_brake(state: &mut ShipState, handling: &Handling, inertia: Inertia) -> Controls {
     if let Inertia::Inertialess { .. } = inertia {
         let (controls, wanted) = inertialess::brake(state);
         let turn = flight::turn_to(state, wanted, handling.turn_rate);
@@ -1364,11 +1372,23 @@ pub(crate) fn brake(state: &mut ShipState, handling: &Handling, inertia: Inertia
     }
 }
 
-/// [`brake`] as sub 1's flight ([`held_burst::Flight::stop`]), which
-/// keeps an owed burst: `brake` stands in for sub 1 for every goal the
-/// autopilot flies.
+/// Sub 1 (`_LowLevelAIHandler` @0x8536d-0x85633,
+/// [`leave_flight::stop`]) as its flight ([`held_burst::Flight::stop`]),
+/// flown by the handling it hands back (half thrust on the soft brake),
+/// keeping an owed burst: every goal the autopilot stops flies it. Moving
+/// ([`inertialess::moving`], 0.35 or more on an axis) it brakes, with no
+/// cutoff short of that; otherwise it settles, its velocity × 0.95 a tick,
+/// so it comes to rest from any speed. The settle's +0x48 × 0.95
+/// (@0x8560d-0x8561f) is left to
+/// ship-handling-fidelity-followups phase-2-ai-drags-scale-the-npc-speed:
+/// until then an inertialess ship stops at not moving and keeps its speed,
+/// `adjust_velocity` pulling its cut velocity back to heading × speed. The
+/// sub-goal +0xc8ca = 0 after the settle (@0x85624) isn't modelled: the
+/// high level writes sub 1 again each pass for every stop goal, as this
+/// flies it every tick, so nothing differs.
 fn braking(state: &mut ShipState, handling: &Handling, inertia: Inertia) -> Flight {
-    Flight::stop(brake(state, handling, inertia), handling, inertia)
+    let (controls, flown) = leave_flight::stop(state, handling, inertia, false);
+    Flight::stop(controls, &flown, inertia)
 }
 
 /// [`follow`]s a lead at `lead`, or brakes with none there
@@ -1533,8 +1553,8 @@ mod tests {
         super::braking_speed(distance, handling, Inertia::Inertial)
     }
 
-    fn brake(state: &ShipState, handling: &Handling) -> Controls {
-        super::brake(&mut state.clone(), handling, Inertia::Inertial)
+    fn braking(state: &ShipState, handling: &Handling) -> Flight {
+        super::braking(&mut state.clone(), handling, Inertia::Inertial)
     }
 
     fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Controls {
@@ -3566,25 +3586,70 @@ mod tests {
     }
 
     #[test]
-    fn braking_turns_back_then_thrusts_while_thrust_slows_the_ship() {
+    fn braking_flies_sub_1_thrusting_by_its_heading_before_the_turn_down_to_rest() {
         let handling = fast();
         let a = handling.accel;
-        let brake_at =
-            |speed: f32, heading: f32| brake(&at(0.0, 0.0, 0.0, -speed, heading), &handling);
+        let brake_at = |speed: f32, heading: f32| {
+            let mut state = at(0.0, 0.0, 0.0, -speed, heading);
+            let flight = braking(&state, &handling);
+            super::braking(&mut state, &handling, Inertia::Inertial);
+            (flight, state)
+        };
         // It turns to its retro heading itself, by `_HandleShip`'s turn.
-        let turning = brake_at(3.0, 0.0);
+        let (turning, _) = brake_at(3.0, 0.0);
+        let turning = turning.controls;
         assert_eq!(
             (turning.reverse, turning.thrust, turning.turn),
             (false, false, Turn::Right)
         );
-        assert!(
-            brake_at(3.0, 177.0).thrust,
-            "within one turn of facing back"
+        // Within turn + 1.0 whole degrees of facing back, before the turn
+        // (@0x85408-0x8546e).
+        assert!(brake_at(3.0, 177.0).0.controls.thrust, "3 off, under 4");
+        assert!(!brake_at(3.0, 176.9).0.controls.thrust, "176 is 4 off");
+        // Full thrust while an axis is at 1.75 or more.
+        let (full, kept) = brake_at(3.0, 180.0);
+        assert_eq!(full.flown, Some(handling));
+        assert_eq!(kept.velocity, Vec2::new(0.0, -3.0));
+        // No cutoff: still moving at 0.5 it thrusts, on the soft brake,
+        // half thrust with its velocity × 0.94 (@0x85540-0x855e1).
+        let (soft, cut) = brake_at(0.5, 180.0);
+        assert!(soft.controls.thrust);
+        let half = Handling {
+            accel: a * 0.5,
+            ..handling
+        };
+        assert_eq!(soft.flown, Some(half));
+        #[allow(clippy::cast_possible_truncation)]
+        let cut_by = (f64::from(-0.5_f32) * 0.94) as f32;
+        assert_eq!(cut.velocity, Vec2::new(0.0, cut_by));
+        // Below 0.35 on both axes, even at a * 0.5, it settles: × 0.95,
+        // no thrust (@0x855e3-0x85624).
+        let (settling, settled) = brake_at(a * 0.5, 180.0);
+        assert_eq!(settling.controls, Controls::default(), "{a}");
+        #[allow(clippy::cast_possible_truncation)]
+        let settled_by = (f64::from(-a * 0.5) * 0.95) as f32;
+        assert_eq!(settled.velocity, Vec2::new(0.0, settled_by));
+        assert_eq!(
+            brake_at(0.0, 90.0).0.controls,
+            Controls::default(),
+            "at rest"
         );
-        assert!(!brake_at(3.0, 176.9).thrust);
-        assert!(brake_at(a * 0.6, 180.0).thrust);
-        assert!(!brake_at(a * 0.5, 180.0).thrust, "would only push it back");
-        assert_eq!(brake_at(0.0, 90.0), Controls::default(), "at rest");
+    }
+
+    #[test]
+    fn an_idle_ship_on_sub_1s_soft_brake_thrusts_half_its_thrust() {
+        let handling = fast();
+        let mut idle = npc(FAST, Goal::Idle, at(0.0, 0.0, 0.0, -1.0, 180.0));
+        fly(&mut idle, &[], None);
+        // × 0.94, then half a tick's thrust down, facing 180.
+        #[allow(clippy::cast_possible_truncation)]
+        let cut = (f64::from(-1.0_f32) * 0.94) as f32;
+        let expected = cut + handling.accel * 0.5;
+        assert!(
+            (idle.state.velocity.y - expected).abs() < 1e-5,
+            "{:?} {expected}",
+            idle.state
+        );
     }
 
     #[test]
@@ -3797,8 +3862,9 @@ mod tests {
     fn sniping_it_brakes_to_a_stop_then_faces_its_target() {
         let target = at(-300.0, 0.0, 0.0, 0.0, 0.0);
         let mut moving = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, 0.0, -3.0, 0.0));
-        // It turns to its retro heading and thrusts down to 0.35 a tick on
-        // each axis, then slows by 0.95 a tick.
+        // Sub 0xe, not sub 1 (see `stop_tests` for awkward speeds): it
+        // turns to its retro heading and thrusts down to 0.35 a tick on
+        // each axis (`snipe::moving`), then slows by 0.95 a tick.
         for _ in 0..400 {
             fly(&mut moving, &[], Some(&target));
         }
