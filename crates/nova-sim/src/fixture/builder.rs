@@ -14,9 +14,11 @@
 //! setters. None goes through a pilot that is then loaded, and none takes
 //! off.
 
-use crate::catalog::{AsteroidCatalog, CombatCatalog, PilotCatalog, StellarId, SystemId};
+use crate::catalog::{AsteroidCatalog, CombatCatalog, PilotCatalog, ShipId, StellarId, SystemId};
 use crate::fleet::Escort;
+use crate::mission::ActiveMission;
 use crate::pilot::Pilot;
+use crate::reserves::Reserve;
 use crate::rulebook::Rulebook;
 use crate::session::Session;
 
@@ -124,6 +126,59 @@ impl<'c, C: PilotCatalog + CombatCatalog + AsteroidCatalog> SessionBuilder<'c, C
         self.then(move |session, _| session.set_credits(credits))
     }
 
+    /// `mission` active in `slot`, its hooks registered as a load
+    /// registers them.
+    ///
+    /// # Panics
+    ///
+    /// At [`SessionBuilder::build`], when `slot` is taken or past the
+    /// last.
+    #[must_use]
+    pub fn with_mission(self, slot: u8, mission: ActiveMission) -> Self {
+        self.then(move |session, _| {
+            assert!(
+                session.put_mission(slot, mission),
+                "slot {slot} is not free"
+            );
+        })
+    }
+
+    /// The ship named `name`.
+    #[must_use]
+    pub fn with_ship_name(self, name: &str) -> Self {
+        let name = name.to_owned();
+        self.then(move |session, _| session.set_ship_name(name))
+    }
+
+    /// The pilot playing Strict Play.
+    #[must_use]
+    pub fn strict_play(self) -> Self {
+        self.then(|session, _| session.set_strict_play(true))
+    }
+
+    /// The ship's `reserve` at `amount`, held within its gauge
+    /// ([`Session::set_reserve`]).
+    #[must_use]
+    pub fn with_reserve(self, reserve: Reserve, amount: f32) -> Self {
+        self.then(move |session, _| {
+            session.set_reserve(reserve, amount);
+        })
+    }
+
+    /// The ship of class `ship`, as `C` changes it: the outfits kept, none
+    /// clamped.
+    ///
+    /// # Panics
+    ///
+    /// At [`SessionBuilder::build`], when the catalog has no record of
+    /// `ship`.
+    #[must_use]
+    pub fn in_ship(self, ship: ShipId) -> Self {
+        self.then(move |session, _| {
+            assert!(session.become_ship(ship), "no record of {ship:?}");
+        })
+    }
+
     /// Adds `step`, applied to the built session after those before it.
     fn then(mut self, step: impl FnOnce(&mut Session, &'c C) + 'c) -> Self {
         self.steps.push(Box::new(step));
@@ -155,6 +210,7 @@ impl<'c, C: PilotCatalog + CombatCatalog + AsteroidCatalog> SessionBuilder<'c, C
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)] // the reserves set are whole values
 mod tests {
     use super::*;
     use crate::navigation::NavMode;
@@ -314,6 +370,73 @@ mod tests {
         let catalog = catalog();
         let session = SessionBuilder::flying(&catalog).with_credits(-7).build();
         assert_eq!(session.pilot().cash(), -7);
+    }
+
+    #[test]
+    fn with_mission_holds_it_in_its_slot() {
+        let mission = crate::testkit::carrying(200, 3);
+        let catalog = catalog();
+        let session = SessionBuilder::flying(&catalog)
+            .with_mission(4, mission.clone())
+            .build();
+        assert_eq!(session.pilot().missions().get(4), Some(&mission));
+        assert_eq!(session.pilot().missions().iter().count(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "slot 0 is not free")]
+    fn a_mission_into_a_taken_slot_panics() {
+        let catalog = catalog();
+        let _ = SessionBuilder::flying(&catalog)
+            .with_mission(0, crate::testkit::carrying(200, 3))
+            .with_mission(0, crate::testkit::carrying(201, 3))
+            .build();
+    }
+
+    #[test]
+    fn with_ship_name_and_strict_play_set_the_pilot() {
+        let catalog = catalog();
+        let session = SessionBuilder::flying(&catalog)
+            .with_ship_name("Kestrel")
+            .strict_play()
+            .build();
+        assert_eq!(session.pilot().ship_name(), Some("Kestrel"));
+        assert!(session.pilot().strict_play());
+        let plain = SessionBuilder::flying(&catalog).build();
+        assert!(!plain.pilot().strict_play());
+    }
+
+    #[test]
+    fn with_reserve_sets_it_within_its_gauge() {
+        let catalog = catalog();
+        let session = SessionBuilder::flying(&catalog)
+            .with_reserve(Reserve::Fuel, 95.0)
+            .with_reserve(Reserve::Shield, 1000.0)
+            .build();
+        assert_eq!(session.reserves().fuel.now, 95.0);
+        assert_eq!(session.reserves().shield.now, 30.0, "held to its most");
+    }
+
+    #[test]
+    fn in_ship_flies_the_class() {
+        use crate::testkit::{FAST, FakePilotCatalog, ship};
+        let catalog = FakePilotCatalog {
+            ship_records: vec![ship(129, FAST)],
+            ..catalog()
+        };
+        let session = SessionBuilder::flying(&catalog)
+            .in_ship(ShipId(129))
+            .build();
+        assert_eq!(session.ship(), ShipId(129));
+    }
+
+    #[test]
+    #[should_panic(expected = "no record of")]
+    fn in_a_ship_with_no_record_panics() {
+        let catalog = catalog();
+        let _ = SessionBuilder::flying(&catalog)
+            .in_ship(ShipId(999))
+            .build();
     }
 
     #[test]

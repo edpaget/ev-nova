@@ -1987,9 +1987,14 @@ fn scroll_of(view: &View, id: i16) -> (i32, i32) {
 
 #[test]
 fn a_fresh_flights_map_opens_on_the_current_system_at_0_5625() {
-    let mut pilot = nova_sim::Pilot::new(&catalog(), "Ada").expect("starts");
-    pilot.system = SystemId(131);
-    let mut view = FlightView::with_pilot(catalog(), pilot);
+    let in_alpha = FakeCatalog {
+        character: Ok(CharacterStart {
+            systems: [Some(SystemId(131)), None, None, None],
+            ..catalog().character.expect("a chär")
+        }),
+        ..catalog()
+    };
+    let mut view = FlightView::new(in_alpha);
     tap(&mut view, MAP);
     assert!(view.map_open());
     assert_eq!(map_place(&view), (0.5625, (600, 0)));

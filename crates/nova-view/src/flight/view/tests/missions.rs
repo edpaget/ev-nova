@@ -820,32 +820,32 @@ fn smuggling(flags: u16, fine: i16) -> View {
         flags,
         ..errand(130)
     }];
-    let pilot = Pilot::new(&catalog, "Ada").expect("a pilot");
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
-    save["ship_name"] = serde_json::json!("Kestrel");
-    save["missions"] = serde_json::json!([{
-        "slot": 0,
-        "mission": 130,
-        "destination": null,
-        "return": null,
-        "cargo_type": 0,
-        "cargo_tons": 4,
-        "pay": 0,
-        "days_left": null,
-        "deadline": null,
-        "reached": false,
-        "goals_met": true,
-        "aboard": true,
-        "failed": null,
-        "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": "", "destroyed": 0, "boarded": 0, "disabled": 0, "chased_off": 0, "uniform_type": null, "ship_done": false},
-        "aux": {"countdown": 0, "arrived": 0, "left": 0},
-    }]);
-    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    // Mission 130 active in slot 0, its 4 tons of food aboard.
+    let smuggled = nova_sim::mission::ActiveMission {
+        mission: MissionId(130),
+        destination: None,
+        return_to: None,
+        cargo_type: Some(0),
+        cargo_tons: 4,
+        pay: 0,
+        days_left: None,
+        deadline: None,
+        reached: false,
+        goals_met: true,
+        aboard: true,
+        failed: None,
+        ships: nova_sim::mission::ships::SpecialShips::default(),
+        aux: nova_sim::mission::aux_ships::AuxShips::default(),
+    };
+    let session = SessionBuilder::flying(&catalog)
+        .named("Ada")
+        .with_ship_name("Kestrel")
+        .with_mission(0, smuggled)
+        .build();
     let mut draws = placed(750, 750, 0).to_vec();
     draws.push(0);
     let (_, chance) = scripted(&draws);
-    FlightView::with_pilot(catalog, pilot)
+    FlightView::from_session(catalog, session)
         .with_chance(chance)
         .with_behaviour(Rc::new(Inspector::default()))
 }

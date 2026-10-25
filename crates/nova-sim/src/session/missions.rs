@@ -1576,7 +1576,7 @@ impl MissionRun {
 
     /// Registers `slot`'s hooks: its landing hooks, and, with a deadline,
     /// its deadline checks, each with a blank guard and no script.
-    fn register_slot(&mut self, pilot: &Pilot, slot: u8) {
+    pub(super) fn register_slot(&mut self, pilot: &Pilot, slot: u8) {
         let Some(active) = pilot.missions.get(slot) else {
             return;
         };

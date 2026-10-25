@@ -6,9 +6,11 @@
 //! derives from it at once.
 
 use super::Session;
-use crate::catalog::{StellarId, SystemId};
+use crate::catalog::{ShipId, StellarId, SystemId};
 use crate::fleet::Escort;
 use crate::geometry::Vec2;
+use crate::mission::ActiveMission;
+use crate::ship_change::OutfitCarry;
 
 impl Session {
     /// Makes `hops` the course, started at the system the ship is in, or
@@ -47,6 +49,35 @@ impl Session {
         self.pilot.escorts = escorts;
         self.space
             .restock_fleet(&mut self.pilot, &self.statics, &self.setup);
+    }
+
+    /// Puts `mission` into the free `slot` and registers its hooks, as a
+    /// load registers each slot it reads. Gives whether it was put;
+    /// nothing changes for a slot taken or past the last.
+    pub(crate) fn put_mission(&mut self, slot: u8, mission: ActiveMission) -> bool {
+        if self.pilot.missions.get(slot).is_some() || !self.pilot.missions.put(slot, mission) {
+            return false;
+        }
+        self.run.register_slot(&self.pilot, slot);
+        true
+    }
+
+    /// Names the ship `name`.
+    pub(crate) fn set_ship_name(&mut self, name: String) {
+        self.pilot.ship_name = Some(name);
+    }
+
+    /// Makes the pilot play Strict Play when `strict`, or not.
+    pub(crate) fn set_strict_play(&mut self, strict: bool) {
+        self.pilot.strict_play = strict;
+    }
+
+    /// Makes the ship class `ship`, as `C` changes it: the outfits kept,
+    /// none clamped. Gives whether the ship is now `ship`; nothing changes
+    /// when the session has no record of it.
+    pub(crate) fn become_ship(&mut self, ship: ShipId) -> bool {
+        self.change_ship(ship, OutfitCarry::Keep, false);
+        self.pilot.ship == ship
     }
 }
 
@@ -142,5 +173,53 @@ mod tests {
             "{:?}",
             session.npcs()
         );
+    }
+
+    #[test]
+    fn a_mission_put_into_a_free_slot_is_registered_as_a_load_registers_it() {
+        use crate::testkit::carrying;
+        let catalog = catalog();
+        let mission = ActiveMission {
+            days_left: Some(5),
+            ..carrying(200, 3)
+        };
+        let mut session =
+            Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies");
+        assert!(session.put_mission(2, mission.clone()));
+        assert_eq!(session.pilot().missions().get(2), Some(&mission));
+        let mut saved = Pilot::new(&catalog, "Ada").expect("starts");
+        assert!(saved.missions.put(2, mission.clone()));
+        let loaded = Session::fly(&catalog, saved).expect("flies");
+        // As in the resume's test: compared as they print.
+        assert_eq!(format!("{session:?}"), format!("{loaded:?}"));
+        let before = format!("{session:?}");
+        assert!(!session.put_mission(2, carrying(201, 1)), "taken");
+        assert!(!session.put_mission(16, carrying(201, 1)), "past the last");
+        assert_eq!(format!("{session:?}"), before, "nothing changes");
+    }
+
+    #[test]
+    fn the_ship_name_and_strict_play_are_set_as_given() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.set_ship_name("Kestrel".to_owned());
+        assert_eq!(session.pilot().ship_name(), Some("Kestrel"));
+        session.set_strict_play(true);
+        assert!(session.pilot().strict_play());
+        session.set_strict_play(false);
+        assert!(!session.pilot().strict_play());
+    }
+
+    #[test]
+    fn becoming_a_ship_flies_its_class() {
+        use crate::testkit::{FAST, FakePilotCatalog, ship};
+        let catalog = FakePilotCatalog {
+            ship_records: vec![ship(129, FAST)],
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        assert!(session.become_ship(ShipId(129)));
+        assert_eq!(session.ship(), ShipId(129));
+        assert!(!session.become_ship(ShipId(999)), "no record");
+        assert_eq!(session.ship(), ShipId(129));
     }
 }

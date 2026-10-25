@@ -1701,9 +1701,9 @@ fn a_failed_flight_resumes_nothing() {
     assert!(script.borrow().asked.is_empty(), "nothing drawn");
 }
 
-/// A catalog of mission 130 with two auxiliary ships, and a pilot that
-/// has accepted it.
-fn aux_errand() -> (impl Fn() -> FakeCatalog, Pilot) {
+/// A catalog of mission 130 with two auxiliary ships, and the mission
+/// as its accept leaves it.
+fn aux_errand() -> (impl Fn() -> FakeCatalog, nova_sim::mission::ActiveMission) {
     let errands = || {
         let mut errands = catalog();
         errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
@@ -1717,14 +1717,27 @@ fn aux_errand() -> (impl Fn() -> FakeCatalog, Pilot) {
         }];
         errands
     };
-    let pilot = {
+    let accepted = {
         let mut view = FlightView::new(errands());
         land_now(&mut view);
         view.settle_script();
         assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-        view.pilot().expect("flying").clone()
+        let pilot = view.pilot().expect("flying");
+        pilot.missions().get(0).expect("held").clone()
     };
-    (errands, pilot)
+    (errands, accepted)
+}
+
+/// A flight over Earth holding [`aux_errand`]'s mission in slot 0, on
+/// `chance`.
+fn aux_flight(chance: SharedChance) -> View {
+    let (errands, accepted) = aux_errand();
+    let catalog = errands();
+    let session = SessionBuilder::flying(&catalog)
+        .over(StellarId(128))
+        .with_mission(0, accepted)
+        .build();
+    FlightView::from_session(catalog, session).with_chance(chance)
 }
 
 /// Mission 130's auxiliary ships in `view`.
@@ -1748,9 +1761,8 @@ fn broken_flight(chance: SharedChance) -> View {
 
 #[test]
 fn opening_on_the_main_screen_restarts_the_aux_countdown_on_the_flights_chance() {
-    let (errands, pilot) = aux_errand();
     let (script, chance) = scripted(&[9]);
-    let mut view = FlightView::with_pilot(errands(), pilot).with_chance(chance);
+    let mut view = aux_flight(chance);
     assert_eq!(aux_of(&view).countdown, 139, "the accept's draw");
     view.open_on_main_screen();
     assert_eq!(
@@ -1772,9 +1784,8 @@ fn opening_on_the_main_screen_restarts_the_aux_countdown_on_the_flights_chance()
 
 #[test]
 fn opening_at_launch_restarts_the_aux_countdown_on_the_flights_chance() {
-    let (errands, pilot) = aux_errand();
     let (script, chance) = scripted(&[4]);
-    let mut view = FlightView::with_pilot(errands(), pilot).with_chance(chance);
+    let mut view = aux_flight(chance);
     view.open_at_launch();
     assert_eq!(
         aux_of(&view),

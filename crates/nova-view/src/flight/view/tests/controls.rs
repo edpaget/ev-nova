@@ -93,13 +93,12 @@ fn double_time_survives_the_events_that_let_go_of_the_flight_keys() {
 /// refuelling it, hailed and hung up.
 fn refuelling() -> View {
     let catalog = boardable();
-    let pilot = Pilot::new(&catalog, "Low").expect("starts");
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
-    save["reserves"]["fuel"]["now"] = serde_json::json!(95.0);
-    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let session = SessionBuilder::flying(&catalog)
+        .named("Low")
+        .with_reserve(nova_sim::Reserve::Fuel, 95.0)
+        .build();
     let (_, chance) = scripted(&placed(750, 750, 0));
-    let mut view = FlightView::with_pilot(catalog, pilot)
+    let mut view = FlightView::from_session(catalog, session)
         .with_chance(chance)
         .with_behaviour(Rc::new(Still))
         .with_hail_options(HailOptions::empty().with(Rc::new(Refuel)));

@@ -2194,11 +2194,12 @@ fn only_a_living_pilot_may_be_saved() {
 #[test]
 fn only_a_strict_pilot_ending_play_dying_is_deleted() {
     let strict = |catalog: FakeCatalog| {
-        let pilot = Pilot::new(&catalog, "Ada")
-            .expect("starts")
-            .with_strict_play(true);
+        let session = SessionBuilder::flying(&catalog)
+            .named("Ada")
+            .strict_play()
+            .build();
         let (_, chance) = scripted(&placed(750, 650, 180));
-        let mut view = FlightView::with_pilot(catalog, pilot)
+        let mut view = FlightView::from_session(catalog, session)
             .with_chance(chance)
             .with_behaviour(Rc::new(Firing));
         view.tick(TICK);
