@@ -18,6 +18,8 @@ use crate::hyperspace::JumpReadiness;
 use crate::navigation::NavMode;
 use crate::session::StellarPick;
 use crate::sound::SimSound;
+use crate::targeting::TargetPick;
+use crate::traffic::npc::NpcId;
 
 /// What the flight view draws from, filled by
 /// [`Session::fill_frame`](crate::Session::fill_frame): every field is
@@ -117,6 +119,24 @@ pub enum FlightCommand {
     /// A stellar key: make the stellar `pick` finds the nav target
     /// ([`Session::select_stellar`](crate::Session::select_stellar)).
     SelectStellar(StellarPick),
+    /// Hyper Select: select the next system in mode 3
+    /// ([`Session::select_next_system`](crate::Session::select_next_system)).
+    SelectNextSystem,
+    /// Option-backquote: let go of the ship target
+    /// ([`Session::clear_target`](crate::Session::clear_target)).
+    ClearTarget,
+    /// A target key: pick the ship target as `pick` says
+    /// ([`Session::select_target`](crate::Session::select_target)).
+    SelectTarget(TargetPick),
+    /// One press of the Nav Off / Hyperspace Mode block, with the
+    /// backquote (`nav_off`) and H (`h`) down or not
+    /// ([`Session::nav_mode_keys`](crate::Session::nav_mode_keys)).
+    NavModeKeys {
+        /// The backquote, without Option.
+        nav_off: bool,
+        /// H.
+        h: bool,
+    },
 }
 
 /// What [`Session::apply`](crate::Session::apply) answered a
@@ -125,8 +145,16 @@ pub enum FlightCommand {
 pub enum Answer {
     /// The command did nothing: nothing changed, and no sound was raised.
     Refused,
+    /// The command ran, with nothing more to say.
+    Done,
     /// The stellar a [`FlightCommand::SelectStellar`] selected.
     Stellar(StellarId),
+    /// The system a [`FlightCommand::SelectNextSystem`] selected, or
+    /// `None` when there was none to offer and the selection was let go.
+    System(Option<SystemId>),
+    /// The ship target a [`FlightCommand::SelectTarget`] left, `None` for
+    /// none.
+    Target(Option<NpcId>),
 }
 
 impl Answer {
