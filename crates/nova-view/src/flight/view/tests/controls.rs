@@ -743,6 +743,26 @@ fn z_held_fades_the_cursor_as_a_flight_key_with_no_afterburner_carried() {
 }
 
 #[test]
+fn b_held_fades_the_cursor_as_a_flight_key() {
+    // `_HandlePlayer` sets the cursor's fade every frame B is down
+    // (@0x6a98b-0x6a999), a target or not.
+    let tint_after_two = |k: Key| {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        view.input(&key(k, true));
+        ticks(&mut view, 2);
+        drawn(&view)
+            .iter()
+            .find_map(|command| match *unclipped(command) {
+                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+                _ => None,
+            })
+    };
+    assert_eq!(tint_after_two(BOARD_KEY), Some(239), "held: 30 of 32");
+    assert_ne!(tint_after_two(Key::Char('q')), Some(239), "a key not held");
+}
+
+#[test]
 fn the_cursor_is_clipped_to_the_play_area_short_of_the_status_bar() {
     let mut view = flight();
     view.input(&Input::PointerMoved(NOWHERE));

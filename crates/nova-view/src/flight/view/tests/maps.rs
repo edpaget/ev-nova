@@ -1422,6 +1422,22 @@ fn a_zoom_key_does_nothing_while_another_key_is_held() {
 }
 
 #[test]
+fn a_zoom_key_does_nothing_while_b_is_held() {
+    // B's `_QuickKeyCheck` (@0x6a98b) sets `_quickKeyCheckResult`, which
+    // the zoom reads (@0x70f5d).
+    let mut view = near();
+    tap(&mut view, HYPERSPACE_MODE_KEY);
+    view.input(&key(BOARD_KEY, true));
+    view.take_sounds();
+    tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0));
+    assert_eq!(view.take_sounds(), []);
+    view.input(&key(BOARD_KEY, false));
+    tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(floating_dots(&view)[1], near_at(4.0 / 3.0), "let go");
+}
+
+#[test]
 fn a_zoom_key_does_nothing_with_the_map_down() {
     let mut view = near();
     tap(&mut view, ZOOM_OUT_KEY);
