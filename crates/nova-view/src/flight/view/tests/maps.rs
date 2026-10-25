@@ -1,79 +1,108 @@
 use super::*;
+use crate::flight::sim_port::fixture::MapAsk;
 use crate::galaxy::update::MapUpdate;
+use nova_sim::MapClicked;
+use nova_sim::galaxy_map::MapDrawing;
+use nova_sim::iff::SystemColorCode;
+use nova_sim::map_panel::{
+    Column, ColumnBody, Listing, MapPanel, PanelWords, Ports, Services, Strip,
+};
 
 // Tab, `\`, Return and the map key on the in-flight maps (`_MapFilter`).
 
+/// The course map's drawing in Sol after a cycle selected `to` in mode
+/// 3: [`sol_drawing`] with Barnard (132) drawn too, and the link to `to`
+/// drawn again.
+fn cycled_to(to: i16) -> MapDrawing {
+    let mut drawing = sol_drawing();
+    drawing
+        .systems
+        .push(drawn_system(132, SystemColorCode::Unexplored));
+    drawing.mode3_link = Some((SystemId(130), SystemId(to)));
+    drawing
+}
+
 #[test]
-fn tab_on_the_course_map_draws_the_next_link_and_selects_it() {
-    let mut view = FlightView::new(FakeCatalog {
-        fan: true,
-        ..catalog()
-    });
-    tap(&mut view, MAP);
+fn tab_on_the_course_map_sends_the_cycle_and_shows_what_the_flight_selects_and_draws() {
+    let mut view = faked_sol(in_sol());
+    view.open_map();
     for (k, expected) in [(Key::Tab, 131), (Key::Char('\\'), 132), (Key::Tab, 131)] {
-        view.input(&key(k, true));
-        assert!(view.map_open(), "{k:?}");
+        view.sim.queue_answer(Answer::Done);
+        let map = view.sim.map_mut();
+        map.map_preselection = Some(SystemId(expected));
+        map.drawing = Some(cycled_to(expected));
+        assert!(!faked_map_input(&mut view, &key(k, true)), "{k:?}");
         assert_eq!(
-            nav_mode(&view),
-            NavMode::Hyperspace(Some(SystemId(expected))),
+            sent(&view).last(),
+            Some(&FlightCommand::CycleMapSelection),
             "{k:?}"
         );
-        let map = view.course_map();
-        assert_eq!(map.selected(), Some(SystemId(expected)));
-        assert_eq!(map.hyper_selection(), Some(SystemId(expected)));
+        assert_eq!(view.map.selected(), Some(SystemId(expected)), "{k:?}");
         assert_eq!(
-            hyper_selected_links(&view),
-            [(on_map_now(&view, 130), on_map_now(&view, expected))]
+            view.map.hyper_selection(),
+            Some(SystemId(expected)),
+            "{k:?}"
         );
-        view.input(&key(k, false));
+        faked_map_input(&mut view, &key(k, false));
     }
-    view.input(&held(Key::Tab));
+    faked_map_input(&mut view, &held(Key::Tab));
     assert_eq!(
-        nav_mode(&view),
-        NavMode::Hyperspace(Some(SystemId(132))),
+        sent(&view),
+        vec![FlightCommand::CycleMapSelection; 4],
         "a repeat cycles too"
     );
 }
 
 #[test]
-fn tab_on_the_course_map_with_no_links_selects_none_and_the_map_selects_the_current_system() {
-    let mut view = FlightView::new(FakeCatalog {
-        onward: true,
-        ..catalog()
+fn tab_on_the_course_map_with_no_link_drawn_selects_what_the_flight_preselects() {
+    let mut view = faked_sol(FlightFrame {
+        system: SystemId(132),
+        ..in_sol()
     });
-    run_set(&mut view, "M132");
-    view.settle_script();
-    assert_eq!(system_of(&view), SystemId(132), "Barnard lists no links");
-    tap(&mut view, MAP);
-    tap(&mut view, Key::Tab);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
-    assert_eq!(view.course_map().selected(), Some(SystemId(132)));
-    assert_eq!(view.course_map().hyper_selection(), None);
-    assert_eq!(hyper_selected_links(&view), []);
+    view.open_map();
+    view.sim.queue_answer(Answer::Done);
+    view.sim.map_mut().map_preselection = Some(SystemId(132));
+    faked_map_tap(&mut view, Key::Tab);
+    assert_eq!(sent(&view), [FlightCommand::CycleMapSelection]);
+    assert_eq!(view.map.selected(), Some(SystemId(132)));
+    assert_eq!(view.map.hyper_selection(), None);
 }
 
 #[test]
-fn tab_on_the_course_map_plays_no_sound() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    view.take_sounds();
-    tap(&mut view, Key::Tab);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
-    assert_eq!(view.take_sounds(), []);
+fn tab_on_the_course_map_plays_no_sound_of_its_own() {
+    let mut view = faked_sol(in_sol());
+    view.open_map();
+    view.sim.queue_answer(Answer::Done);
+    faked_map_tap(&mut view, Key::Tab);
+    assert_eq!(sent(&view), [FlightCommand::CycleMapSelection]);
+    assert_eq!(view.ui_sounds, []);
 }
 
 #[test]
-fn tab_on_the_course_map_redraws_the_nav_area_at_once() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    let stale = NavDisplay::Stellar(Some("Stale".to_owned()));
+fn tab_on_the_course_map_retakes_the_nav_area_at_once() {
+    let mut view = faked_sol(in_sol());
+    view.open_map();
     let alpha = NavMode::Hyperspace(Some(SystemId(131)));
+    let stale = NavDisplay::Stellar(Some("Stale".to_owned()));
     view.nav_scene = Some((alpha, stale.clone()));
-    tap(&mut view, Key::Tab);
-    assert_eq!(nav_mode(&view), alpha);
-    assert_eq!(view.nav_shown(), view.nav_now(), "redrawn");
-    assert_ne!(view.nav_shown(), stale);
+    view.sim.set_frame(FlightFrame {
+        nav_mode: alpha,
+        ..in_sol()
+    });
+    view.sim.queue_answer(Answer::Done);
+    faked_map_tap(&mut view, Key::Tab);
+    let retaken = Some((alpha, view.nav_now()));
+    assert_eq!(view.nav_scene, retaken);
+    assert_ne!(view.nav_now(), stale);
+}
+
+#[test]
+fn closing_the_map_after_a_tab_shows_its_selection_in_the_nav_area() {
+    let mut view = flight();
     tap(&mut view, MAP);
+    tap(&mut view, Key::Tab);
+    tap(&mut view, MAP);
+    let alpha = NavMode::Hyperspace(Some(SystemId(131)));
     assert_eq!(nav_mode(&view), alpha, "no course to cue");
     assert_eq!(nav(&view), cueing_alpha(), "shown once the map closes");
 }
@@ -123,34 +152,41 @@ fn at_a_shadowed_gate() -> View {
     view
 }
 
+/// A view over a scripted flight in Sol with the hypergate map open,
+/// offering Alpha Reborn (133) and Barnard (132), its flight's cycle
+/// stepping through hidden Alpha Centauri (131) and Barnard.
+fn at_a_faked_gate() -> Faked {
+    let mut view = faked(in_sol());
+    view.sim.map_mut().map_preselection = Some(SystemId(130));
+    view.sim.map_mut().hypergate_cycle = vec![Some(SystemId(131)), Some(SystemId(132))];
+    view.map.offer_gates(vec![SystemId(132), SystemId(133)]);
+    view.open_map();
+    assert_eq!(view.map.mode(), MapMode::Hypergate);
+    assert_eq!(view.map.selected(), Some(SystemId(130)));
+    view
+}
+
 #[test]
-fn tab_on_the_hypergate_map_cycles_the_gates_destinations_shift_reversing_through_a_shadowed_system()
- {
-    let mut view = at_a_shadowed_gate();
-    let nav = nav_mode(&view);
-    view.take_sounds();
-    // `_FindSystemFromStellar` gives hidden 131 for 310, its only
-    // lister, unresolved by place.
+fn tab_on_the_hypergate_map_steps_through_the_flights_cycle_shift_reversing_and_writes_no_nav() {
+    let mut view = at_a_faked_gate();
     for expected in [131, 132, 131] {
-        tap(&mut view, Key::Tab);
-        assert_eq!(view.course_map().selected(), Some(SystemId(expected)));
+        faked_map_tap(&mut view, Key::Tab);
+        assert_eq!(view.map.selected(), Some(SystemId(expected)));
     }
-    view.input(&key(Key::Shift, true));
+    faked_map_input(&mut view, &key(Key::Shift, true));
     for expected in [132, 131] {
-        tap(&mut view, Key::Char('\\'));
-        assert_eq!(view.course_map().selected(), Some(SystemId(expected)));
+        faked_map_tap(&mut view, Key::Char('\\'));
+        assert_eq!(view.map.selected(), Some(SystemId(expected)));
     }
-    view.input(&key(Key::Shift, false));
-    assert_eq!(nav_mode(&view), nav, "no nav mode written");
-    assert_eq!(view.course_map().hyper_selection(), None);
-    assert_eq!(view.take_sounds(), []);
-    tap(&mut view, MAP);
+    faked_map_input(&mut view, &key(Key::Shift, false));
+    assert_eq!(sent(&view), [], "no nav mode written");
+    assert_eq!(view.map.hyper_selection(), None);
+    assert_eq!(view.ui_sounds, []);
     assert_eq!(
-        view.message(),
-        Some(HYPERGATE_CANCELLED),
-        "no link resolves to hidden 131 (@0x638cd-0x638ff)"
+        view.map.take_gate_choice(),
+        None,
+        "hidden 131 is no offer (@0x638cd-0x638ff)"
     );
-    assert_eq!(system_of(&view), SystemId(130));
 }
 
 #[test]
@@ -175,21 +211,20 @@ fn closing_the_hypergate_map_saves_a_borders_change_too() {
 }
 
 #[test]
-fn tab_on_the_bars_map_changes_nothing() {
-    let mut view = in_the_bar(None);
+fn tab_on_the_bars_map_is_refused_and_changes_nothing() {
+    let mut view = faked_sol(FlightFrame {
+        docked: true,
+        ..in_sol()
+    });
     view.open_bar_map();
-    let selected = view.course_map().selected();
+    let selected = view.map.selected();
+    let nav = view.nav_scene.clone();
     for k in [Key::Tab, Key::Char('\\')] {
-        view.port_map_input(&key(k, true));
-        view.port_map_input(&key(k, false));
-        assert!(view.map_open(), "{k:?}");
-        assert_eq!(
-            view.session().map(Session::nav_mode),
-            Ok(NavMode::Stellar(Some(StellarId(128)))),
-            "{k:?}"
-        );
-        assert_eq!(view.course_map().selected(), selected, "{k:?}");
-        assert_eq!(view.course_map().hyper_selection(), None, "{k:?}");
+        assert!(!faked_map_tap(&mut view, k), "{k:?}");
+        assert_eq!(sent(&view).last(), Some(&FlightCommand::CycleMapSelection));
+        assert_eq!(view.map.selected(), selected, "{k:?}");
+        assert_eq!(view.map.hyper_selection(), None, "{k:?}");
+        assert_eq!(view.nav_scene, nav, "{k:?}");
     }
 }
 
@@ -198,65 +233,49 @@ fn tab_on_the_bars_map_changes_nothing() {
 
 /// Drags the open map from empty space a pixel left, too little for the
 /// scroll to follow, and releases: the partial update kept.
-fn jiggle_map(view: &mut View) {
+fn jiggle_map(view: &mut Faked) {
     let (from, to) = (at(300.0, 200.0), at(299.0, 200.0));
     let button = |pressed, at| Input::PointerButton {
         button: MouseButton::Left,
         pressed,
         at,
     };
-    view.input(&button(true, from));
-    view.input(&Input::PointerMoved(to));
-    view.input(&button(false, to));
-    assert_eq!(view.course_map().update(), Some(MapUpdate::Partial));
+    faked_map_input(view, &button(true, from));
+    faked_map_input(view, &Input::PointerMoved(to));
+    faked_map_input(view, &button(false, to));
+    assert_eq!(view.map.update(), Some(MapUpdate::Partial));
 }
 
 #[test]
-fn tab_on_the_course_map_redraws_item_3_with_a_link_or_none() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    jiggle_map(&mut view);
-    tap(&mut view, Key::Tab);
-    assert_eq!(view.course_map().update(), Some(MapUpdate::Full), "a link");
-    let mut view = FlightView::new(FakeCatalog {
-        onward: true,
-        ..catalog()
-    });
-    run_set(&mut view, "M132");
-    view.settle_script();
-    tap(&mut view, MAP);
-    jiggle_map(&mut view);
-    tap(&mut view, Key::Char('\\'));
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
-    assert_eq!(
-        view.course_map().update(),
-        Some(MapUpdate::Full),
-        "no link: the course cycle redraws anyway (@0x14032)"
-    );
+fn a_course_cycle_the_flight_takes_redraws_item_3_with_a_link_or_none() {
+    // The flight takes the cycle with no link too, selecting none: the
+    // course cycle redraws anyway (@0x14032).
+    for k in [Key::Tab, Key::Char('\\')] {
+        let mut view = faked_sol(in_sol());
+        view.open_map();
+        jiggle_map(&mut view);
+        view.sim.queue_answer(Answer::Done);
+        faked_map_tap(&mut view, k);
+        assert_eq!(view.map.update(), Some(MapUpdate::Full), "{k:?}");
+    }
 }
 
 #[test]
 fn tab_on_the_hypergate_map_redraws_item_3_as_it_picks() {
-    let mut view = at_a_shadowed_gate();
+    let mut view = at_a_faked_gate();
     jiggle_map(&mut view);
-    tap(&mut view, Key::Tab);
-    assert_eq!(view.course_map().update(), Some(MapUpdate::Full));
+    faked_map_tap(&mut view, Key::Tab);
+    assert_eq!(view.map.update(), Some(MapUpdate::Full));
 }
 
-/// The map opens only for a gate with a link that counts, and the cycle
-/// counts the same links (a link no system lists, as 999, still counts, as
-/// a `None` destination), so the gate's links are dropped behind the open
-/// map to leave the cycle empty.
 #[test]
 fn tab_on_a_hypergate_map_with_nothing_to_pick_redraws_nothing() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    view.catalog().gates.borrow_mut()[0].links = [None; 8];
+    let mut view = at_a_faked_gate();
+    view.sim.map_mut().hypergate_cycle.clear();
     jiggle_map(&mut view);
-    tap(&mut view, Key::Tab);
+    faked_map_tap(&mut view, Key::Tab);
     assert_eq!(
-        view.course_map().update(),
+        view.map.update(),
         Some(MapUpdate::Partial),
         "no destination: nothing invalidated (`jle` @0x13daf)"
     );
@@ -264,44 +283,41 @@ fn tab_on_a_hypergate_map_with_nothing_to_pick_redraws_nothing() {
 
 #[test]
 fn tab_on_the_bars_map_redraws_nothing() {
-    let mut view = in_the_bar(None);
+    let mut view = faked_sol(FlightFrame {
+        docked: true,
+        ..in_sol()
+    });
     view.open_bar_map();
-    let (from, to) = (at(300.0, 200.0), at(299.0, 200.0));
-    let button = |pressed, at| Input::PointerButton {
-        button: MouseButton::Left,
-        pressed,
-        at,
-    };
-    view.port_map_input(&button(true, from));
-    view.port_map_input(&Input::PointerMoved(to));
-    view.port_map_input(&button(false, to));
-    assert_eq!(view.course_map().update(), Some(MapUpdate::Partial));
-    view.port_map_input(&key(Key::Tab, true));
+    jiggle_map(&mut view);
+    faked_map_input(&mut view, &key(Key::Tab, true));
+    assert_eq!(sent(&view), [FlightCommand::CycleMapSelection]);
     assert_eq!(
-        view.course_map().update(),
+        view.map.update(),
         Some(MapUpdate::Partial),
-        "_onPlanet: the key falls through"
+        "_onPlanet: the key falls through, the flight refusing it"
     );
 }
 
 #[test]
 fn clear_route_redraws_item_3_by_c_or_its_button() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    tap(&mut view, MAP);
-    jiggle_map(&mut view);
-    tap(&mut view, Key::Char('c'));
-    assert_eq!(view.session().map(|session| session.course().len()), Ok(0));
-    assert_eq!(view.course_map().update(), Some(MapUpdate::Full), "C");
-    let mut view = flight();
-    tap(&mut view, MAP);
-    jiggle_map(&mut view);
-    tap(&mut view, Key::Char('C'));
-    assert_eq!(
-        view.course_map().update(),
-        Some(MapUpdate::Full),
-        "with no course, whatever the button"
-    );
+    let plotted = FlightFrame {
+        course_shown: vec![SystemId(131)],
+        course_plotted: true,
+        ..in_sol()
+    };
+    for (frame, k) in [(plotted, Key::Char('c')), (in_sol(), Key::Char('C'))] {
+        let mut view = faked_sol(frame);
+        view.open_map();
+        jiggle_map(&mut view);
+        view.sim.queue_answer(Answer::Done);
+        faked_map_tap(&mut view, k);
+        assert_eq!(sent(&view), [FlightCommand::ClearRoute], "{k:?}");
+        assert_eq!(
+            view.map.update(),
+            Some(MapUpdate::Full),
+            "{k:?}: with a course or none, whatever the button"
+        );
+    }
 }
 
 // The course map's nebulae by `RuleKey::NebulaPicture`.
@@ -380,12 +396,18 @@ fn return_closes_the_course_map_with_the_close_beep_and_the_cue() {
     tap(&mut view, NAV_OFF_KEY);
     tap(&mut view, MAP);
     view.take_sounds();
-    view.input(&held(Key::Enter));
-    assert!(view.map_open(), "a repeat doesn't close it");
     tap(&mut view, Key::Enter);
     assert!(!view.map_open());
     assert_eq!(map_sounds(&mut view), [UiSound::MapClosed]);
     assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+}
+
+#[test]
+fn return_closes_the_course_map_and_a_repeat_does_not() {
+    let mut view = faked_sol(in_sol());
+    view.open_map();
+    assert!(!faked_map_input(&mut view, &held(Key::Enter)), "a repeat");
+    assert!(faked_map_input(&mut view, &key(Key::Enter, true)));
 }
 
 #[test]
@@ -427,9 +449,8 @@ fn return_closes_the_bars_map_and_puts_back_the_bars_nav() {
 
 #[test]
 fn a_key_down_the_map_doesnt_take_closes_it_while_the_map_key_is_held() {
-    let mut view = flight();
-    view.input(&key(MAP, true));
-    assert!(view.map_open());
+    let mut view = faked_sol(in_sol());
+    view.open_map_by_key();
     // Every key `_MapFilter` tests before the map key's close.
     for k in [
         Key::Tab,
@@ -447,21 +468,20 @@ fn a_key_down_the_map_doesnt_take_closes_it_while_the_map_key_is_held() {
         Key::Char('f'),
         Key::Char('s'),
     ] {
-        tap(&mut view, k);
-        assert!(view.map_open(), "{k:?}");
+        assert!(!faked_map_tap(&mut view, k), "{k:?}");
     }
-    view.take_sounds();
-    view.input(&held(LAND));
-    assert!(view.map_open(), "a repeat never closes it");
-    view.input(&key(LAND, true));
-    assert!(!view.map_open(), "L with M held");
-    assert_eq!(map_sounds(&mut view), [UiSound::MapClosed]);
-    view.input(&key(LAND, false));
-    view.input(&key(MAP, false));
-    tap(&mut view, MAP);
-    assert!(view.map_open());
-    tap(&mut view, LAND);
-    assert!(view.map_open(), "M let go");
+    assert!(
+        !faked_map_input(&mut view, &held(LAND)),
+        "a repeat never closes it"
+    );
+    assert!(
+        faked_map_input(&mut view, &key(LAND, true)),
+        "L with M held"
+    );
+    faked_map_input(&mut view, &key(LAND, false));
+    view.open_map_by_key();
+    faked_map_input(&mut view, &key(MAP, false));
+    assert!(!faked_map_tap(&mut view, LAND), "M let go");
 }
 
 #[test]
@@ -486,8 +506,8 @@ fn letting_go_of_the_keys_lets_go_of_the_map_key() {
 fn a_modifier_is_no_key_down_and_never_closes_the_map() {
     // A Mac sends no key-down for a modifier alone, so `_MapFilter`
     // never sees one.
-    let mut view = flight();
-    view.input(&key(MAP, true));
+    let mut view = faked_sol(in_sol());
+    view.open_map_by_key();
     for k in [
         Key::Shift,
         Key::Control,
@@ -495,9 +515,7 @@ fn a_modifier_is_no_key_down_and_never_closes_the_map() {
         Key::Command,
         Key::CapsLock,
     ] {
-        view.input(&key(k, true));
-        assert!(view.map_open(), "{k:?}");
-        view.input(&key(k, false));
+        assert!(!faked_map_tap(&mut view, k), "{k:?}");
     }
 }
 
@@ -505,11 +523,13 @@ fn a_modifier_is_no_key_down_and_never_closes_the_map() {
 fn in_port_tab_or_backslash_with_the_map_key_held_closes_the_map() {
     // Both fall through on a planet (@0x13d20).
     for k in [Key::Tab, Key::Char('\\')] {
-        let mut view = in_the_bar(None);
+        let mut view = faked_sol(FlightFrame {
+            docked: true,
+            ..in_sol()
+        });
         view.open_bar_map();
-        view.port_map_input(&held(MAP));
-        view.port_map_input(&key(k, true));
-        assert!(!view.map_open(), "{k:?}");
+        faked_map_input(&mut view, &held(MAP));
+        assert!(faked_map_input(&mut view, &key(k, true)), "{k:?}");
     }
 }
 
@@ -1649,79 +1669,150 @@ fn the_floating_map_takes_its_mission_arrows_as_it_shows() {
     assert!(red(&view), "Alpha Centauri, 140's system, arrowed");
 }
 
+/// The systems the course map draws ovals for, by ascending ID.
+fn drawn_ids(map: &GalaxyMap) -> Vec<SystemId> {
+    map.picture()
+        .expect("drawn")
+        .systems
+        .iter()
+        .map(|system| system.id)
+        .collect()
+}
+
+/// [`sol_drawing`] on the hypergate map, its arrow pointing to Barnard
+/// (132).
+fn gate_drawing() -> MapDrawing {
+    MapDrawing {
+        hypergate: true,
+        gate_arrows: vec![SystemId(132)],
+        ..sol_drawing()
+    }
+}
+
+/// [`gate_drawing`] once Barnard is known: drawn, unexplored.
+fn gate_drawing_known() -> MapDrawing {
+    let mut drawing = gate_drawing();
+    drawing
+        .systems
+        .push(drawn_system(132, SystemColorCode::Unexplored));
+    drawing
+}
+
+/// A view over a scripted flight in Sol with the hypergate map open,
+/// offering Barnard (132), drawn as [`gate_drawing`].
+fn at_a_faked_gate_to_barnard() -> Faked {
+    let mut view = faked(in_sol());
+    let map = view.sim.map_mut();
+    map.drawing = Some(gate_drawing());
+    map.map_preselection = Some(SystemId(130));
+    map.hypergate_cycle = vec![Some(SystemId(132))];
+    view.map.offer_gates(vec![SystemId(132)]);
+    view.open_map();
+    view
+}
+
 #[test]
-fn the_hypergate_maps_offers_get_their_ovals_from_its_second_draw() {
+fn the_hypergate_map_marks_its_arrows_known_and_its_next_draw_shows_them() {
+    let mut view = at_a_faked_gate_to_barnard();
+    assert_eq!(
+        view.sim.asked().first(),
+        Some(&MapAsk::Drawing {
+            hypergate: Some(vec![SystemId(132)]),
+            missions: Vec::new(),
+            marks: nova_sim::MapMarks::NONE,
+        })
+    );
+    let marked = FlightCommand::MarkKnown(vec![SystemId(132)]);
+    assert_eq!(
+        sent(&view),
+        std::slice::from_ref(&marked),
+        "marked known as its arrow was drawn"
+    );
+    assert!(!drawn_ids(&view.map).contains(&SystemId(132)), "first draw");
+    view.sim.map_mut().drawing = Some(gate_drawing_known());
+    faked_map_tap(&mut view, Key::Tab);
+    assert!(drawn_ids(&view.map).contains(&SystemId(132)), "after Tab");
+    assert_eq!(sent(&view), [marked.clone(), marked]);
+}
+
+#[test]
+fn the_hypergate_maps_own_mark_takes_no_redraw_a_frame_on() {
     // The gate leads to Barnard (132), which nothing has made known.
     let mut view = FlightView::new(FakeCatalog {
         gate_listers: vec![(SystemId(132), StellarId(310))],
         ..gated()
     });
     land_now(&mut view);
-    let drawn_systems = |view: &View| -> Vec<SystemId> {
-        view.course_map()
-            .picture()
-            .expect("drawn")
-            .systems
-            .iter()
-            .map(|system| system.id)
-            .collect()
-    };
-    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    assert_eq!(
-        view.course_map().picture().expect("drawn").gate_arrows,
-        [SystemId(132)]
-    );
-    assert!(!drawn_systems(&view).contains(&SystemId(132)), "first draw");
-    assert!(
-        view.session().expect("flying").is_known(SystemId(132)),
-        "marked known as its arrow was drawn"
-    );
+    let drawn = |view: &View| drawn_ids(view.course_map());
+    assert!(!drawn(&view).contains(&SystemId(132)), "first draw");
     view.tick(TICK);
-    assert!(!drawn_systems(&view).contains(&SystemId(132)), "a frame on");
-    tap(&mut view, Key::Tab);
-    assert!(drawn_systems(&view).contains(&SystemId(132)), "after Tab");
+    assert!(!drawn(&view).contains(&SystemId(132)), "a frame on");
+}
+
+/// What the flight answers a press on the hypergate map that selects
+/// `selected` and picks `pick` (`None` for no pick).
+fn gate_picked(selected: i16, pick: Option<i16>) -> Answer {
+    Answer::Clicked(MapClicked {
+        selected: Some(SystemId(selected)),
+        gate_pick: Some(pick.map(SystemId)),
+        clear_route: None,
+        course_changed: false,
+        nav_redraw: false,
+    })
 }
 
 #[test]
-fn a_click_on_the_hypergate_map_draws_it_again() {
-    let mut view = FlightView::new(FakeCatalog {
-        gate_listers: vec![(SystemId(132), StellarId(310))],
-        ..gated()
-    });
-    land_now(&mut view);
-    let sol = on_map(&mut view, 130);
-    click(&mut view, sol);
-    let drawn: Vec<SystemId> = view
-        .course_map()
-        .picture()
-        .expect("drawn")
-        .systems
-        .iter()
-        .map(|system| system.id)
-        .collect();
-    assert!(drawn.contains(&SystemId(132)));
+fn a_click_on_the_hypergate_map_sends_the_press_and_draws_it_again() {
+    let mut view = at_a_faked_gate_to_barnard();
+    let sol = faked_on_map(&mut view, 130);
+    view.sim.queue_answer(gate_picked(130, None));
+    view.sim.map_mut().drawing = Some(gate_drawing_known());
+    faked_map_click(&mut view, sol);
+    assert_eq!(
+        sent(&view)[1],
+        FlightCommand::MapClick(MapClick {
+            hits: vec![SystemId(130)],
+            shift: false,
+            hypergate: Some(vec![SystemId(132)]),
+            missions: Vec::new(),
+            green: None,
+        })
+    );
+    assert!(drawn_ids(&view.map).contains(&SystemId(132)));
 }
 
 #[test]
-fn the_course_map_draws_the_sessions_known_and_explored_systems() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    let picture = view.course_map().picture().expect("drawn").clone();
-    let ids: Vec<i16> = picture.systems.iter().map(|system| system.id.0).collect();
-    assert_eq!(ids, [130, 131], "Sol and its known link, not Barnard");
+fn the_course_map_draws_the_flights_drawing() {
+    let mut view = faked_sol(in_sol());
+    view.open_map();
+    assert_eq!(
+        view.sim.asked().first(),
+        Some(&MapAsk::Drawing {
+            hypergate: None,
+            missions: Vec::new(),
+            marks: nova_sim::MapMarks::NONE,
+        })
+    );
+    let picture = view.map.picture().expect("drawn");
+    assert_eq!(drawn_ids(&view.map), [SystemId(130), SystemId(131)]);
     assert_eq!(picture.named, [SystemId(130)]);
     assert_eq!(picture.current, Some(SystemId(130)));
+    assert_eq!(sent(&view), [], "the course map marks nothing known");
+}
+
+#[test]
+fn exploring_a_system_while_the_course_map_is_open_redraws_it() {
+    let mut view = flight();
+    tap(&mut view, MAP);
+    let ids = |view: &View| drawn_ids(view.course_map());
+    assert_eq!(ids(&view), [SystemId(130), SystemId(131)]);
     run_set(&mut view, "X132");
     view.tick(TICK);
-    let ids: Vec<i16> = view
-        .course_map()
-        .picture()
-        .expect("drawn")
-        .systems
-        .iter()
-        .map(|system| system.id.0)
-        .collect();
-    assert_eq!(ids, [130, 131, 132], "explored while the map is open");
+    assert_eq!(
+        ids(&view),
+        [SystemId(130), SystemId(131), SystemId(132)],
+        "explored while the map is open"
+    );
 }
 
 // The map panel (`_MapDialogUpdate`): the session's panels, drawn from
@@ -1779,154 +1870,201 @@ const GOODS_AT: (f32, f32) = (701.0, 304.0);
 const SERVICES_AT: (f32, f32) = (701.0, 399.0);
 const SECOND_SERVICE_AT: (f32, f32) = (701.0, 411.0);
 
-fn title(view: &View) -> Option<String> {
-    panel_text(&drawn(view), TITLE_AT)
+/// The open course map drawn, as flight draws it over the scene.
+fn map_drawn(view: &Faked) -> DrawList {
+    let mut list = DrawList::new();
+    view.draw_open_map(&mut list);
+    list
+}
+
+/// The column's title the open course map draws.
+fn faked_title(view: &Faked) -> Option<String> {
+    panel_text(&map_drawn(view), TITLE_AT)
+}
+
+/// A panel with the panels' words ([`panel_strings`]): the strip
+/// listing `ports` with no hazards or date, the column titled `title`
+/// over `body`.
+fn info_panel(ports: Ports, title: &str, body: ColumnBody) -> MapPanel {
+    MapPanel {
+        strip: Strip::Info {
+            ports,
+            hazards: String::new(),
+            date: String::new(),
+        },
+        column: Column {
+            title: title.to_owned(),
+            body,
+        },
+        words: PanelWords::from_list(&panel_strings().1),
+    }
+}
+
+/// A view over a scripted flight in Sol with the course map open, its
+/// flight giving `panel` whatever is selected.
+fn faked_panel(panel: MapPanel) -> Faked {
+    let mut view = faked_sol(in_sol());
+    view.sim.map_mut().panel = Some(panel);
+    view.open_map();
+    view
+}
+
+/// The panels `view`'s flight was asked for, in order.
+fn panels_asked(view: &Faked) -> Vec<MapAsk> {
+    view.sim
+        .asked()
+        .into_iter()
+        .filter(|ask| matches!(ask, MapAsk::Panel { .. }))
+        .collect()
+}
+
+/// The panel question for `selected` on the course map.
+fn panel_for(selected: i16) -> MapAsk {
+    MapAsk::Panel {
+        selected: Some(SystemId(selected)),
+        hypergate: None,
+    }
 }
 
 #[test]
-fn the_course_maps_panel_lists_a_landable_stellar_and_leaves_out_an_uninhabited_and_an_unlandable_one()
- {
+fn the_course_maps_panel_is_the_flights_for_the_system_selected_and_lists_its_ports() {
     // Phase 15: `_MapDialogUpdate` @0x10373-0x10504.
-    let mut place_names = nova_sim::catalog::PlaceNames::default();
-    for (id, name) in [(128, "Earth"), (129, "Jupiter"), (150, "Rock")] {
-        place_names.stellars.insert(StellarId(id), name.to_owned());
-    }
-    let mut view = worded(FlightView::new(FakeCatalog {
-        sites: vec![
-            site(128, (0.0, -600.0), StellarFlags::CAN_LAND),
-            site(
-                129,
-                (300.0, -200.0),
-                StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
-            ),
-            site(150, (-300.0, 0.0), 0),
-        ],
-        place_names,
-        ..catalog()
-    }));
-    tap(&mut view, MAP);
-    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
-    let list = drawn(&view);
+    let ports = Ports::Listed(vec!["Earth".to_owned()]);
+    let view = faked_panel(info_panel(ports, "Current System:", ColumnBody::Unknown));
+    assert_eq!(view.map.selected(), Some(SystemId(130)));
+    assert_eq!(panels_asked(&view), [panel_for(130)]);
+    let list = map_drawn(&view);
     assert_eq!(panel_text(&list, (230.0, 576.0)).as_deref(), Some("Ports:"));
     assert_eq!(panel_text(&list, PORTS_AT).as_deref(), Some("Earth"));
-    let texts = texts(&list);
-    assert!(
-        !texts
-            .iter()
-            .any(|text| text.contains("Jupiter") || text.contains("Rock")),
-        "{texts:?}"
-    );
 }
 
 #[test]
-fn the_course_maps_panel_titles_the_current_destination_and_selected_systems_and_follows_a_click() {
+fn the_course_maps_panel_follows_a_click_to_the_flights_panel_for_it() {
     // Phase 16: `_MapDialogUpdate` @0x10b3f-0x10c76.
-    let mut view = worded(FlightView::new(FakeCatalog { ..catalog() }));
-    tap(&mut view, MAP);
-    assert_eq!(nav_mode(&view), NavMode::Off);
-    assert_eq!(title(&view).as_deref(), Some("Current System:"));
+    let sols_ports = Ports::Listed(vec![String::new(), String::new()]);
+    let mut view = faked_panel(info_panel(
+        sols_ports,
+        "Current System:",
+        ColumnBody::Unknown,
+    ));
+    assert_eq!(faked_title(&view).as_deref(), Some("Current System:"));
     assert_eq!(
-        panel_text(&drawn(&view), PORTS_AT).as_deref(),
+        panel_text(&map_drawn(&view), PORTS_AT).as_deref(),
         Some(", "),
         "Sol's two unnamed ports"
     );
-    // A click on a linked system selects it in mode 3.
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    assert_eq!(view.course_map().selected(), Some(SystemId(131)));
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
-    assert_eq!(title(&view).as_deref(), Some("Destination System:"));
+    let alpha = faked_on_map(&mut view, 131);
+    view.sim.queue_answer(Answer::Clicked(MapClicked {
+        selected: Some(SystemId(131)),
+        gate_pick: None,
+        clear_route: None,
+        course_changed: false,
+        nav_redraw: true,
+    }));
+    view.sim.map_mut().panel = Some(info_panel(
+        Ports::Unknown,
+        "Destination System:",
+        ColumnBody::Unknown,
+    ));
+    faked_map_click(&mut view, alpha);
+    assert_eq!(view.map.selected(), Some(SystemId(131)));
+    assert_eq!(panels_asked(&view).last(), Some(&panel_for(131)));
+    assert_eq!(faked_title(&view).as_deref(), Some("Destination System:"));
     assert_eq!(
-        panel_text(&drawn(&view), PORTS_AT).as_deref(),
+        panel_text(&map_drawn(&view), PORTS_AT).as_deref(),
         Some("<Unknown>"),
         "the panel follows the click to unexplored Alpha Centauri"
     );
-    // Off mode 3, any other system is the selected one.
-    tap(&mut view, MAP);
-    tap(&mut view, NAV_OFF_KEY);
-    tap(&mut view, MAP);
-    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
-    assert_eq!(title(&view).as_deref(), Some("Current System:"));
-    know(&mut view, 132);
-    let barnard = on_map(&mut view, 132);
-    click(&mut view, barnard);
-    assert_eq!(view.course_map().selected(), Some(SystemId(132)));
-    assert_eq!(nav_mode(&view), NavMode::Off, "no link to Barnard");
-    assert_eq!(title(&view).as_deref(), Some("Selected System:"));
 }
 
 #[test]
-fn the_hypergate_maps_panel_prompts_then_titles_a_destination_its_owner_offers() {
+fn the_hypergate_maps_panel_is_asked_with_its_offers_and_draws_the_prompt_then_the_title() {
     // Phase 16: `_MapDialogUpdate` @0x10213-0x102cd and @0x10ba2-0x10c34.
-    // Gate 300 links to 310, listed by Alpha Reborn (133), shadowed at
-    // Alpha Centauri's place, and by Proxima Near (134): its owner is 134,
-    // not its lowest lister, 133.
-    let mut view = worded(FlightView::new(FakeCatalog {
-        reborn: true,
-        near: true,
-        gates: RefCell::new(vec![
-            gate_site(300, (0.0, 0.0), 0x1200, &[310], 120),
-            gate_site(310, (100.0, 200.0), 0x1000, &[300], 90),
-        ]),
-        gate_listers: vec![
-            (SystemId(133), StellarId(310)),
-            (SystemId(134), StellarId(310)),
-        ],
-        ..gated()
-    }));
-    land_now(&mut view);
-    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    assert_eq!(view.course_map().offered(), [SystemId(134)]);
-    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
+    let mut view = faked_in(
+        FakeCatalog {
+            near: true,
+            ..catalog()
+        },
+        in_sol(),
+    );
+    let prompt = MapPanel {
+        strip: Strip::HypergatePrompt {
+            prompt: "Pick a destination".to_owned(),
+            date: String::new(),
+        },
+        ..info_panel(Ports::None, "Current System:", ColumnBody::Unknown)
+    };
+    let map = view.sim.map_mut();
+    map.drawing = Some(gate_drawing());
+    map.map_preselection = Some(SystemId(130));
+    map.panel = Some(prompt);
+    view.map.offer_gates(vec![SystemId(134)]);
+    view.open_map();
+    let offered = Some(vec![SystemId(134)]);
+    assert_eq!(
+        panels_asked(&view),
+        [MapAsk::Panel {
+            selected: Some(SystemId(130)),
+            hypergate: offered.clone(),
+        }]
+    );
     // The prompt at 430 + 594 / 2, unmeasured, on the strip's top + 24.
-    let list = drawn(&view);
+    let list = map_drawn(&view);
     assert_eq!(
         panel_text(&list, (517.0, 588.0)).as_deref(),
         Some("Pick a destination")
     );
     assert_eq!(panel_text(&list, PORTS_AT), None, "the prompt alone");
-    assert_eq!(title(&view).as_deref(), Some("Current System:"));
-    let near = on_map(&mut view, 134);
-    click(&mut view, near);
-    assert_eq!(view.course_map().selected(), Some(SystemId(134)));
-    assert_eq!(title(&view).as_deref(), Some("Hypergate Destination:"));
+    assert_eq!(faked_title(&view).as_deref(), Some("Current System:"));
+    let near = faked_on_map(&mut view, 134);
+    view.sim.queue_answer(gate_picked(134, Some(134)));
+    view.sim.map_mut().panel = Some(info_panel(
+        Ports::Unknown,
+        "Hypergate Destination:",
+        ColumnBody::Unknown,
+    ));
+    faked_map_click(&mut view, near);
+    assert_eq!(view.map.selected(), Some(SystemId(134)));
+    assert_eq!(
+        panels_asked(&view).last(),
+        Some(&MapAsk::Panel {
+            selected: Some(SystemId(134)),
+            hypergate: offered,
+        })
+    );
+    assert_eq!(
+        faked_title(&view).as_deref(),
+        Some("Hypergate Destination:")
+    );
 }
 
 #[test]
-fn the_course_maps_panel_shows_a_level_1_systems_goods_and_services_unknown_and_a_level_2_systems_listed()
- {
+fn the_course_maps_panel_draws_goods_and_services_unknown_or_listed_as_the_flight_says() {
     // Phase 21: `_MapDialogUpdate` @0x10f34, @0x1107d.
-    let earth = StellarFlags::CAN_LAND | 0x0002 | 0x0004 | 0x1000_0000;
-    let mut view = worded(FlightView::new(FakeCatalog {
-        sites: vec![site(128, (0.0, 0.0), earth)],
-        sol_navs: vec![Some((earth, 0))],
-        commodities: CommodityStrings {
-            names: [
-                "Food",
-                "Industrial",
-                "Medical",
-                "Luxury",
-                "Metal",
-                "Equipment",
-            ]
-            .map(str::to_owned)
-            .to_vec(),
-            ..CommodityStrings::default()
-        },
-        ..catalog()
-    }));
-    tap(&mut view, MAP);
-    let list = drawn(&view);
+    let inhabited = |goods, services| ColumnBody::Inhabited {
+        name: "Sol".to_owned(),
+        government: String::new(),
+        legal: String::new(),
+        goods,
+        services,
+    };
+    let level_1 = inhabited(Listing::Unknown, Services::Unknown { any: true });
+    let list = map_drawn(&faked_panel(info_panel(
+        Ports::None,
+        "Current System:",
+        level_1,
+    )));
     assert_eq!(panel_text(&list, GOODS_AT).as_deref(), Some("<Unknown>"));
     assert_eq!(panel_text(&list, SERVICES_AT).as_deref(), Some("<Unknown>"));
-    tap(&mut view, MAP);
-    land_now(&mut view);
-    assert_eq!(view.take_off(), Some(StellarId(128)));
-    // Past the take-off's grace, which refuses the map key.
-    ticks(&mut view, 60);
-    tap(&mut view, MAP);
-    assert!(view.map_open());
-    let list = drawn(&view);
+    let level_2 = inhabited(
+        Listing::Items(vec!["Food".to_owned()]),
+        Services::Items(vec!["Trading".to_owned(), "Outfitting".to_owned()]),
+    );
+    let list = map_drawn(&faked_panel(info_panel(
+        Ports::None,
+        "Current System:",
+        level_2,
+    )));
     assert_eq!(panel_text(&list, GOODS_AT).as_deref(), Some("Food"));
     assert_eq!(panel_text(&list, SERVICES_AT).as_deref(), Some("Trading"));
     assert_eq!(
@@ -1953,14 +2091,19 @@ fn the_flights_metrics_measure_the_course_maps_panel() {
 fn a_click_on_empty_space_drags_and_keeps_the_selection_and_its_panel() {
     // A press that selects nothing drags (`_DoSystemMap` @0x137e9),
     // leaving `_selSystem` as it was.
-    let mut view = worded(flight());
-    tap(&mut view, MAP);
-    assert_eq!(title(&view).as_deref(), Some("Current System:"));
-    click(&mut view, Point::new(250.0, 150.0));
-    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
-    assert_eq!(title(&view).as_deref(), Some("Current System:"));
+    let sols_ports = Ports::Listed(vec![String::new(), String::new()]);
+    let mut view = faked_panel(info_panel(
+        sols_ports,
+        "Current System:",
+        ColumnBody::Unknown,
+    ));
+    faked_map_click(&mut view, Point::new(250.0, 150.0));
+    assert_eq!(sent(&view), [], "no system hit: nothing sent");
+    assert_eq!(view.map.selected(), Some(SystemId(130)));
+    assert_eq!(panels_asked(&view), [panel_for(130)], "not asked again");
+    assert_eq!(faked_title(&view).as_deref(), Some("Current System:"));
     assert_eq!(
-        panel_text(&drawn(&view), PORTS_AT).as_deref(),
+        panel_text(&map_drawn(&view), PORTS_AT).as_deref(),
         Some(", "),
         "Sol's two unnamed ports"
     );
@@ -1971,7 +2114,12 @@ fn a_click_on_empty_space_drags_and_keeps_the_selection_and_its_panel() {
 
 /// The course map's zoom and scroll.
 fn map_place(view: &View) -> (f64, (i32, i32)) {
-    let place = view.course_map().place().expect("an in-flight map");
+    place_of(view.course_map())
+}
+
+/// `map`'s zoom and scroll.
+fn place_of(map: &GalaxyMap) -> (f64, (i32, i32)) {
+    let place = map.place().expect("an in-flight map");
     (place.zoom(), place.scroll())
 }
 
@@ -2004,17 +2152,19 @@ fn a_fresh_flights_map_opens_on_the_current_system_at_0_5625() {
 
 #[test]
 fn the_maps_zoom_and_scroll_are_kept_between_opens() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    tap(&mut view, Key::Char('='));
-    tap(&mut view, Key::Right);
-    view.input(&held(Key::Right));
-    assert_eq!(map_place(&view), (0.421_875, (20, 0)));
-    tap(&mut view, MAP);
-    assert!(!view.map_open());
-    ticks(&mut view, 5);
-    tap(&mut view, MAP);
-    assert_eq!(map_place(&view), (0.421_875, (20, 0)), "where it was left");
+    let mut view = faked_sol(in_sol());
+    view.open_map();
+    faked_map_tap(&mut view, Key::Char('='));
+    faked_map_tap(&mut view, Key::Right);
+    faked_map_input(&mut view, &held(Key::Right));
+    assert_eq!(place_of(&view.map), (0.421_875, (20, 0)));
+    assert!(faked_map_tap(&mut view, Key::Enter), "closed");
+    view.open_map();
+    assert_eq!(
+        place_of(&view.map),
+        (0.421_875, (20, 0)),
+        "where it was left"
+    );
 }
 
 #[test]
@@ -2026,9 +2176,10 @@ fn a_zoom_given_to_the_flight_is_the_maps() {
 
 #[test]
 fn opening_the_map_guards_a_zoom_of_0_or_less() {
-    let mut view = flight().with_course_map_zoom(0.0);
-    tap(&mut view, MAP);
-    assert_eq!(map_place(&view).0, 1.0);
+    let mut view = faked_sol(in_sol());
+    view.map = view.map.clone().with_zoom(0.0);
+    view.open_map();
+    assert_eq!(place_of(&view.map).0, 1.0);
 }
 
 #[test]
@@ -2089,19 +2240,24 @@ fn a_floating_map_show_puts_the_scroll_back_on_the_current_system() {
 
 #[test]
 fn the_bars_map_shows_the_scroll_the_flight_left() {
-    let mut view = in_the_bar(None);
+    let mut view = faked_sol(FlightFrame {
+        docked: true,
+        ..in_sol()
+    });
     view.map.centre_on_system(SystemId(132));
     view.open_bar_map();
-    assert_eq!(map_place(&view).1, (0, 600));
+    assert_eq!(place_of(&view.map).1, (0, 600));
 }
 
 #[test]
 fn the_hypergate_map_draws_the_dialog_with_clear_route_disabled() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    let list = drawn(&view);
-    let clear_route = list.iter().find_map(|command| match command {
+    let mut view = faked_sol(FlightFrame {
+        course_plotted: true,
+        ..in_sol()
+    });
+    view.map.offer_gates(vec![SystemId(131)]);
+    view.open_map();
+    let clear_route = map_drawn(&view).iter().find_map(|command| match command {
         DrawCommand::Text { text, color, .. } if text == "Clear Route" => Some(*color),
         _ => None,
     });
@@ -2155,116 +2311,173 @@ fn clear_route_button() -> Point {
         .center()
 }
 
-#[test]
-fn the_map_opens_with_clear_route_enabled_by_a_course_and_never_on_the_hypergate_map() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    assert!(!clear_route_enabled(&view), "no course");
-    tap(&mut view, MAP);
-    plot(&mut view, 131);
-    tap(&mut view, MAP);
-    assert!(clear_route_enabled(&view), "a course");
-    let mut view = FlightView::new(gated());
-    view.sim
-        .session
-        .as_mut()
-        .expect("flying")
-        .plot_course(SystemId(131))
-        .expect("a route");
-    land_now(&mut view);
-    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    assert!(!clear_route_enabled(&view), "the hypergate map");
+/// A flight in Sol with a course to Alpha Centauri (131) plotted, its
+/// first hop selected.
+fn plotted_to_alpha() -> FlightFrame {
+    FlightFrame {
+        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
+        course_shown: vec![SystemId(131)],
+        course_plotted: true,
+        ..in_sol()
+    }
+}
+
+/// What the flight answers a plain click on the course map that selects
+/// `selected` and writes the nav.
+fn selected_by_click(selected: i16) -> Answer {
+    Answer::Clicked(MapClicked {
+        selected: Some(SystemId(selected)),
+        gate_pick: None,
+        clear_route: None,
+        course_changed: false,
+        nav_redraw: true,
+    })
 }
 
 #[test]
-fn clear_route_by_its_button_clears_the_course_lets_go_and_redraws_the_nav() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    tap(&mut view, MAP);
-    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
-    click(&mut view, clear_route_button());
-    assert!(view.map_open());
-    assert_eq!(course(&view), []);
-    assert_eq!(view.course_map().route(), []);
+fn the_map_opens_with_clear_route_enabled_by_a_course_and_never_on_the_hypergate_map() {
+    for (frame, enabled) in [(in_sol(), false), (plotted_to_alpha(), true)] {
+        let mut view = faked_sol(frame);
+        view.open_map();
+        assert_eq!(view.map.clear_route_enabled(), enabled);
+    }
+    let mut view = faked_sol(plotted_to_alpha());
+    view.map.offer_gates(vec![SystemId(131)]);
+    view.open_map();
+    assert_eq!(view.map.mode(), MapMode::Hypergate);
+    assert!(!view.map.clear_route_enabled(), "the hypergate map");
+}
+
+#[test]
+fn clear_route_by_its_button_sends_the_clear_shows_the_course_left_and_retakes_the_nav() {
+    let mut view = faked_sol(plotted_to_alpha());
+    view.open_map();
+    assert_eq!(view.map.route(), [SystemId(131)]);
+    let let_go = NavMode::Hyperspace(None);
+    view.sim.set_frame(FlightFrame {
+        nav_mode: let_go,
+        ..in_sol()
+    });
+    view.sim.queue_answer(Answer::Done);
+    assert!(!faked_map_click(&mut view, clear_route_button()), "open");
+    assert_eq!(sent(&view), [FlightCommand::ClearRoute]);
+    assert_eq!(view.map.route(), [], "the flight's course shown");
     assert_eq!(
-        nav_mode(&view),
-        NavMode::Hyperspace(None),
-        "let go, mode kept"
+        view.nav_scene,
+        Some((
+            let_go,
+            NavDisplay::Hyperspace {
+                destination: hud::NavDestination::None,
+                readiness: nova_sim::JumpReadiness::Blocked,
+            }
+        )),
+        "the nav area retaken at once"
     );
-    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_NO_DESTINATION]);
-    assert!(!clear_route_enabled(&view), "disabled after");
-    tap(&mut view, MAP);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None), "nothing to cue");
+    assert!(!view.map.clear_route_enabled(), "disabled after");
 }
 
 #[test]
 fn c_clears_the_route_whether_clear_route_is_enabled_or_not() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    tap(&mut view, MAP);
-    tap(&mut view, Key::Char('c'));
-    assert_eq!(course(&view), []);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
-    assert!(!clear_route_enabled(&view));
+    let mut view = faked_sol(plotted_to_alpha());
+    view.open_map();
+    view.sim.queue_answer(Answer::Done);
+    faked_map_tap(&mut view, Key::Char('c'));
+    assert_eq!(sent(&view), [FlightCommand::ClearRoute]);
+    assert!(!view.map.clear_route_enabled());
     // Clear Route is disabled now, and C still clears.
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
-    tap(&mut view, Key::Char('c'));
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None), "C again");
-    assert!(view.map_open(), "C doesn't close the map");
+    let alpha = faked_on_map(&mut view, 131);
+    view.sim.queue_answer(selected_by_click(131));
+    faked_map_click(&mut view, alpha);
+    view.sim.queue_answer(Answer::Done);
+    assert!(
+        !faked_map_tap(&mut view, Key::Char('c')),
+        "C doesn't close the map"
+    );
+    assert_eq!(sent(&view).len(), 3);
+    assert_eq!(sent(&view)[2], FlightCommand::ClearRoute, "C again");
 }
 
 #[test]
-fn c_on_the_hypergate_map_drops_the_pick_so_the_close_cancels() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    assert_eq!(view.course_map().selected(), Some(SystemId(131)));
-    tap(&mut view, Key::Char('c'));
-    tap(&mut view, Key::Enter);
-    assert!(!view.map_open());
-    assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
-    assert_eq!(system_of(&view), SystemId(130));
+fn c_on_the_hypergate_map_sends_the_clear_and_drops_the_pick_so_the_close_cancels() {
+    let mut view = faked_sol(in_sol());
+    view.map.offer_gates(vec![SystemId(131)]);
+    view.open_map();
+    let alpha = faked_on_map(&mut view, 131);
+    view.sim.queue_answer(gate_picked(131, Some(131)));
+    faked_map_click(&mut view, alpha);
+    assert_eq!(view.map.selected(), Some(SystemId(131)));
+    assert_eq!(view.map.clone().take_gate_choice(), Some(SystemId(131)));
+    faked_map_tap(&mut view, Key::Char('c'));
+    assert!(sent(&view).contains(&FlightCommand::ClearRoute));
+    assert_eq!(view.map.take_gate_choice(), None, "no pick to enter");
 }
 
 #[test]
 fn a_click_on_the_hypergate_maps_current_system_drops_the_pick_so_the_close_cancels() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    let sol = on_map(&mut view, 130);
-    click(&mut view, sol);
-    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
-    tap(&mut view, Key::Enter);
-    assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
-    assert_eq!(system_of(&view), SystemId(130));
+    let mut view = faked_sol(in_sol());
+    view.map.offer_gates(vec![SystemId(131)]);
+    view.open_map();
+    let alpha = faked_on_map(&mut view, 131);
+    view.sim.queue_answer(gate_picked(131, Some(131)));
+    faked_map_click(&mut view, alpha);
+    let sol = faked_on_map(&mut view, 130);
+    view.sim.queue_answer(gate_picked(130, None));
+    faked_map_click(&mut view, sol);
+    assert_eq!(view.map.selected(), Some(SystemId(130)));
+    assert_eq!(view.map.take_gate_choice(), None, "no pick to enter");
 }
 
 #[test]
-fn shift_on_the_hypergate_map_is_a_plain_click() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    let alpha = on_map(&mut view, 131);
-    shift_click(&mut view, alpha);
-    assert_eq!(course(&view), [], "no hop written");
-    tap(&mut view, Key::Enter);
-    assert_eq!(system_of(&view), SystemId(131), "entered");
+fn shift_on_the_hypergate_map_sends_a_shifted_press_the_flight_picks_from() {
+    let mut view = faked_sol(in_sol());
+    view.map.offer_gates(vec![SystemId(131)]);
+    view.open_map();
+    let alpha = faked_on_map(&mut view, 131);
+    view.sim.queue_answer(gate_picked(131, Some(131)));
+    faked_map_shift_click(&mut view, alpha);
+    assert!(sent(&view).contains(&FlightCommand::MapClick(MapClick {
+        hits: vec![SystemId(131)],
+        shift: true,
+        hypergate: Some(vec![SystemId(131)]),
+        missions: Vec::new(),
+        green: None,
+    })));
+    assert_eq!(view.map.take_gate_choice(), Some(SystemId(131)), "entered");
 }
 
 #[test]
-fn a_shift_click_writing_a_hop_enables_clear_route() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    assert!(!clear_route_enabled(&view));
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    assert!(!clear_route_enabled(&view), "a plain click writes no hop");
-    shift_click(&mut view, alpha);
-    assert!(clear_route_enabled(&view));
-    assert_eq!(view.course_map().route(), [SystemId(131)], "shown");
+fn a_press_the_flight_says_wrote_a_hop_enables_clear_route_and_shows_the_course() {
+    let mut view = faked_sol(in_sol());
+    view.open_map();
+    assert!(!view.map.clear_route_enabled());
+    let alpha = faked_on_map(&mut view, 131);
+    view.sim.queue_answer(selected_by_click(131));
+    faked_map_click(&mut view, alpha);
+    assert!(
+        !view.map.clear_route_enabled(),
+        "a plain click writes no hop"
+    );
+    view.sim.set_frame(plotted_to_alpha());
+    view.sim.queue_answer(Answer::Clicked(MapClicked {
+        selected: Some(SystemId(131)),
+        gate_pick: None,
+        clear_route: Some(true),
+        course_changed: true,
+        nav_redraw: false,
+    }));
+    faked_map_shift_click(&mut view, alpha);
+    assert_eq!(
+        sent(&view)[1],
+        FlightCommand::MapClick(MapClick {
+            hits: vec![SystemId(131)],
+            shift: true,
+            hypergate: None,
+            missions: Vec::new(),
+            green: None,
+        })
+    );
+    assert!(view.map.clear_route_enabled());
+    assert_eq!(view.map.route(), [SystemId(131)], "shown");
 }
 
 /// Whether a zoom key's press zooms the floating map, shown by H, with

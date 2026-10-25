@@ -45,7 +45,7 @@ use crate::{DrawList, ImageKey, Input, MouseButton, Screen, ScreenAction};
 use nova_sim::CommCatalog;
 use nova_sim::ShipIff;
 use nova_sim::fixture::SessionBuilder;
-use nova_sim::flight_frame::{FlightCommand, FlightFrame};
+use nova_sim::flight_frame::{Answer, FlightCommand, FlightFrame, MapClick};
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
@@ -2107,6 +2107,92 @@ fn faked_map_input(view: &mut Faked, input: &Input) -> bool {
     let closed = std::cell::Cell::new(false);
     view.map_input_then(input, |_| closed.set(true));
     closed.get()
+}
+
+/// Presses and releases `k` on `view`'s open course map, as flight's map
+/// input gives them, and says whether the press closed it.
+fn faked_map_tap(view: &mut Faked, k: Key) -> bool {
+    let closed = faked_map_input(view, &key(k, true));
+    faked_map_input(view, &key(k, false));
+    closed
+}
+
+/// Clicks the left button at `at` on `view`'s open course map, and says
+/// whether the click closed it.
+fn faked_map_click(view: &mut Faked, at: Point) -> bool {
+    let button = |pressed| Input::PointerButton {
+        button: crate::MouseButton::Left,
+        pressed,
+        at,
+    };
+    let by_press = faked_map_input(view, &button(true));
+    let by_release = faked_map_input(view, &button(false));
+    by_press || by_release
+}
+
+/// Shift-clicks at `at` on `view`'s open course map.
+fn faked_map_shift_click(view: &mut Faked, at: Point) {
+    faked_map_input(view, &key(Key::Shift, true));
+    faked_map_click(view, at);
+    faked_map_input(view, &key(Key::Shift, false));
+}
+
+/// Where system `id` is on `view`'s course map, brought into item 3
+/// first, as [`on_map`] finds it on a session's.
+fn faked_on_map(view: &mut Faked, id: i16) -> Point {
+    view.map.centre_on_system(SystemId(id));
+    let system = view.map.model().system(SystemId(id)).expect("on the map");
+    view.map.transform().world_to_screen(system.position())
+}
+
+/// System `id` as a flight's drawing frames it in `code`, with no
+/// mission arrows.
+fn drawn_system(
+    id: i16,
+    code: nova_sim::iff::SystemColorCode,
+) -> nova_sim::galaxy_map::DrawnSystem {
+    nova_sim::galaxy_map::DrawnSystem {
+        id: SystemId(id),
+        code,
+        red_arrow: false,
+        green_arrow: false,
+    }
+}
+
+/// The course map's drawing in Sol (130) with the nav off, as a session
+/// over [`catalog`] draws it: Sol, uninhabited and the one system named,
+/// and its link to Alpha Centauri (131), unexplored.
+fn sol_drawing() -> nova_sim::galaxy_map::MapDrawing {
+    use nova_sim::iff::SystemColorCode;
+    let (sol, alpha) = (SystemId(130), SystemId(131));
+    nova_sim::galaxy_map::MapDrawing {
+        hypergate: false,
+        course: Vec::new(),
+        current_links: vec![(sol, alpha)],
+        links: vec![nova_sim::galaxy_map::MapLink {
+            from: sol,
+            to: alpha,
+            selected: false,
+        }],
+        mode3_link: None,
+        systems: vec![
+            drawn_system(130, SystemColorCode::Uninhabited),
+            drawn_system(131, SystemColorCode::Unexplored),
+        ],
+        current: sol,
+        gate_arrows: Vec::new(),
+        named: vec![sol],
+    }
+}
+
+/// [`faked`] in `frame`, its flight drawing the course map as
+/// [`sol_drawing`] and preselecting Sol on it.
+fn faked_sol(frame: FlightFrame) -> Faked {
+    let mut view = faked(frame);
+    let map = view.sim.map_mut();
+    map.drawing = Some(sol_drawing());
+    map.map_preselection = Some(SystemId(130));
+    view
 }
 
 #[test]
