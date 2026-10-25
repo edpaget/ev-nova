@@ -152,9 +152,11 @@ mod fullscreen;
 mod menu;
 mod scaling;
 pub mod screen;
+mod wheel;
 
 pub use menu::{MenuPort, MenuSync};
 pub use screen::{AppScreen, Showing, start_screen};
+pub use wheel::WheelDelta;
 
 use crate::config::Os;
 use crate::settings::{FullscreenSetting, GameKeeper, GameSettings, ScalingSetting};
@@ -249,6 +251,12 @@ pub enum WindowEvent {
         button: MouseButton,
         /// Down (`true`) or up.
         pressed: bool,
+    },
+    /// The mouse wheel turned, or a trackpad scrolled, at the last pointer
+    /// position. Only the vertical axis is kept.
+    Scroll {
+        /// How far, toward the text's end for positive.
+        delta: WheelDelta,
     },
     /// Time to draw. The clock is read at the edge and passed in.
     Redraw {
@@ -611,7 +619,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// screen the widened size (see the module docs). Keys go to the screen, Escape
     /// included: what it does is the screen's to decide. So does the text
     /// a key press types. Losing focus tells the screen to let go of
-    /// the keys it holds down, since their releases will not arrive. Pointer events go to the screen in logical
+    /// the keys it holds down, since their releases will not arrive. Pointer and scroll events go to the screen in logical
     /// units, and are dropped in the bars. A redraw ticks the screen by the
     /// time since the last redraw, renders its draw list through `gpu` and
     /// asks the window for the next redraw. Closing the window asks the
@@ -648,7 +656,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// With a developer overlay, keys go through it first: its toggle key
     /// shows or hides it and goes nowhere else, and opening it makes the
     /// screen abandon its pointer gesture and let go of its keys. While it
-    /// shows, every other key and pointer event goes to it alone, wherever
+    /// shows, every other key, pointer and scroll event goes to it alone, wherever
     /// the pointer is, though the pointer's position is still recorded. Every
     /// redraw also gives the overlay its time.
     ///
@@ -765,6 +773,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 }
                 game(self.route(Input::PointerLeft))
             }
+            WindowEvent::Scroll { delta } => self.scroll(delta),
             WindowEvent::PointerButton { button, pressed } => {
                 if self.pointer_routing() == Routing::Overlay {
                     return overlay;
@@ -964,6 +973,25 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     fn pointer_at(&self) -> Option<Point> {
         self.pointer
             .and_then(|px| self.viewport.window_to_logical(px))
+    }
+
+    /// A wheel or trackpad scroll by `delta`: the overlay's alone while it
+    /// takes the pointer, else the screen's at the pointer. One over a
+    /// letterbox bar or off the window is dropped, as a click there is.
+    fn scroll(&mut self, delta: WheelDelta) -> Handled {
+        if self.pointer_routing() == Routing::Overlay {
+            return Handled {
+                control: Control::Continue,
+                routing: Routing::Overlay,
+            };
+        }
+        let input = self
+            .pointer_at()
+            .and_then(|at| wheel::wheel_input(delta, &self.viewport, at));
+        Handled {
+            control: input.map_or(Control::Continue, |input| self.route(input)),
+            routing: Routing::Game,
+        }
     }
 
     fn pointer_routing(&self) -> Routing {
@@ -1237,6 +1265,7 @@ mod tests {
     mod display_shapes;
     mod menu;
     mod pointer_release;
+    mod wheel;
 
     /// Bytes written, kept where the test can read them.
     #[derive(Clone, Default)]

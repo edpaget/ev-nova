@@ -105,6 +105,7 @@ mod new_pilot;
 mod overlays;
 mod port;
 mod quit_question;
+mod wheel;
 mod widescreen;
 
 /// One data file, `/data/Nova Data`, holding a fork.

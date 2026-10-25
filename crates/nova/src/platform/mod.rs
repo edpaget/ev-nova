@@ -24,10 +24,10 @@ pub use window::WinitWindow;
 
 use std::time::Duration;
 
-use winit::event::{ElementState, WindowEvent as WinitEvent};
+use winit::event::{ElementState, MouseScrollDelta, WindowEvent as WinitEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
-use crate::app::{WindowEvent, WindowPort};
+use crate::app::{WheelDelta, WindowEvent, WindowPort};
 use nova_view::{Key, MouseButton};
 
 /// The app's event for winit's `event`, or `None` for events the app does
@@ -55,11 +55,25 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
             button: map_button(*button),
             pressed: state.is_pressed(),
         },
+        WinitEvent::MouseWheel { delta, .. } => WindowEvent::Scroll {
+            delta: wheel_delta(*delta)?,
+        },
         WinitEvent::Focused(false) => WindowEvent::FocusLost,
         WinitEvent::Focused(true) => WindowEvent::FocusGained,
         WinitEvent::CloseRequested => WindowEvent::CloseRequested,
         _ => return None,
     })
+}
+
+/// The vertical part of winit's wheel `delta`, toward the text's end for
+/// positive, or `None` for one only across. winit's positive y scrolls
+/// toward the top (the wheel turned away from the user, or a trackpad
+/// swiped down with natural scrolling), so the sign flips.
+fn wheel_delta(delta: MouseScrollDelta) -> Option<WheelDelta> {
+    match delta {
+        MouseScrollDelta::LineDelta(_, y) => (y != 0.0).then(|| WheelDelta::Lines(-y)),
+        MouseScrollDelta::PixelDelta(at) => (at.y != 0.0).then(|| WheelDelta::Px(-at.y)),
+    }
 }
 
 /// The app's events for winit's `event`, in the order the app takes them,
@@ -253,7 +267,7 @@ mod tests {
     use std::time::Duration;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
 
-    use winit::event::{DeviceId, MouseButton as WinitButton};
+    use winit::event::{DeviceId, MouseButton as WinitButton, TouchPhase};
 
     use super::*;
 
@@ -634,6 +648,55 @@ mod tests {
         );
     }
 
+    fn wheel(delta: MouseScrollDelta) -> WinitEvent {
+        WinitEvent::MouseWheel {
+            device_id: DeviceId::dummy(),
+            delta,
+            phase: TouchPhase::Moved,
+        }
+    }
+
+    #[test]
+    fn a_wheel_is_a_scroll_toward_the_end_for_a_turn_toward_the_user() {
+        for (y, lines) in [(1.0, -1.0), (-2.5, 2.5)] {
+            assert_eq!(
+                translate(&wheel(MouseScrollDelta::LineDelta(0.0, y)), &WINDOWED),
+                Some(WindowEvent::Scroll {
+                    delta: WheelDelta::Lines(lines)
+                }),
+                "{y}"
+            );
+        }
+        assert_eq!(
+            translate(
+                &wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+                    0.0, 24.0
+                ))),
+                &WINDOWED
+            ),
+            Some(WindowEvent::Scroll {
+                delta: WheelDelta::Px(-24.0)
+            })
+        );
+    }
+
+    #[test]
+    fn a_scroll_only_across_is_not_translated() {
+        assert_eq!(
+            translate(&wheel(MouseScrollDelta::LineDelta(3.0, 0.0)), &WINDOWED),
+            None
+        );
+        assert_eq!(
+            translate(
+                &wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+                    5.0, 0.0
+                ))),
+                &WINDOWED
+            ),
+            None
+        );
+    }
+
     #[test]
     fn closing_is_close_requested() {
         assert_eq!(
@@ -729,6 +792,12 @@ mod tests {
         assert_eq!(
             events(&WinitEvent::CloseRequested, true),
             [WindowEvent::CloseRequested]
+        );
+        assert_eq!(
+            events(&wheel(MouseScrollDelta::LineDelta(0.0, 1.0)), true),
+            [WindowEvent::Scroll {
+                delta: WheelDelta::Lines(-1.0)
+            }]
         );
     }
 }

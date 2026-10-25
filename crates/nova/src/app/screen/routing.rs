@@ -1,7 +1,7 @@
 //! [`AppScreen`]'s input routing: the spaceport's input, the `serve_*`
 //! methods and the router itself.
 
-use nova_sim::VenueOffer;
+use nova_sim::{RuleKey, RuleSource, VenueOffer};
 use nova_view::flight::FlightView;
 use nova_view::spaceport::offer::OfferChoice;
 use nova_view::{Input, Key, MenuCommand, MouseButton, Point, Screen, ScreenAction, Showing};
@@ -463,7 +463,17 @@ impl AppScreen {
 
     /// Routes one input, as [`Screen::input`] describes, first noting
     /// where a pointer input puts the pointer.
+    ///
+    /// A wheel or trackpad scroll reaches no screen by the engine's
+    /// reading of [`RuleKey::DialogTextWheel`], as the original takes no
+    /// wheel; by the other it goes where a pointer input goes, and only a
+    /// dialog's scrolling text acts on it.
     pub(super) fn route(&mut self, input: &Input) -> ScreenAction {
+        if matches!(input, Input::Scroll { .. })
+            && self.rules.source_for(RuleKey::DialogTextWheel) == RuleSource::Engine
+        {
+            return ScreenAction::None;
+        }
         self.note_pointer(input);
         self.note_keys(input);
         // Command-Q quits at once, silently, wherever it is pressed (the
