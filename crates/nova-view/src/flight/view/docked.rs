@@ -185,7 +185,8 @@ impl<C> FlightView<C> {
     /// go of the flight keys. A failed mission's ship boarded for plunder
     /// says its pickup or assist line first ([`Session::take_board_line`]).
     /// Whether the attempt sets the board latch
-    /// ([`BoardRefusal::latches`]; every board that passes does).
+    /// ([`BoardRefusal::latches`](nova_sim::board::BoardRefusal::latches);
+    /// every board that passes does).
     pub(super) fn board(&mut self) -> bool {
         let Ok(session) = &mut self.session else {
             return false;
