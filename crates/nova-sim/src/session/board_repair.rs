@@ -17,8 +17,9 @@
 //! where it is, as the record it left with
 //! ([`FormerEscort::rejoined`](crate::self_repair::FormerEscort::rejoined)),
 //! hired with its wage or captured, led by the player (+0x88 6, +0x9a 0).
-//! Its armour goes to [`repaired_armor`] (@0x65bf2-0x65c66) and its
-//! condition is decided again, as a self-repair decides it; its shield
+//! Its armour goes to [`repaired_armor`](crate::self_repair::repaired_armor)
+//! (@0x65bf2-0x65c66) and its condition is decided again, by the
+//! self-repair's own [`Session::repair_hull`]; its shield
 //! stays as it is. `_AISetup` (@0x65c76) clears its order word (+0xc90a),
 //! which is also its standing order, so it keeps formation
 //! ([`Npc::order_word`] [`OrderWord::NONE`], the record's order none),
@@ -53,12 +54,11 @@ use super::Session;
 use crate::board_repair::{FlownBy, Recovery, recovery};
 use crate::catalog::ShipId;
 use crate::combat::armament::OutfitRounds;
-use crate::combat::hull::Condition;
 use crate::fleet::OrderWord;
 use crate::market::Good;
 use crate::person::MISSION_ON_BOARD;
 use crate::pilot::Escort;
-use crate::self_repair::{FormerEscort, repaired_armor};
+use crate::self_repair::FormerEscort;
 use crate::sound::SimSound;
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -93,19 +93,10 @@ impl Session {
     /// says, repaired, its hold added to the player's cargo (see the
     /// module docs).
     fn repair_escort(&mut self, id: NpcId, former: FormerEscort) {
-        let held_down = self
-            .space
-            .npc(id)
-            .is_some_and(|npc| self.held_disabled(npc));
         let rule = std::rc::Rc::clone(&self.setup.disable_rule.0);
+        self.repair_hull(id, &*rule);
         let Some(npc) = self.space.npc_mut(id) else {
             return;
-        };
-        npc.reserves.armor.now = repaired_armor(npc.reserves.armor.max, npc.hull.tough);
-        npc.condition = if held_down || rule.disabled(npc.reserves.armor, &npc.hull) {
-            Condition::Disabled
-        } else {
-            Condition::Intact
         };
         npc.order_word = OrderWord::NONE;
         let hold: Vec<(Good, u32)> = npc.cargo.held().collect();
@@ -151,11 +142,13 @@ mod tests {
     use crate::board::{Boarding, MAX_ESCORTS, Take, Taken};
     use crate::catalog::GovtId;
     use crate::chance::NeverFires;
+    use crate::combat::hull::Condition;
     use crate::combat::{Rules, ShipRef};
     use crate::escort::EscortOrder;
     use crate::legal::NovaLaw;
     use crate::message::SimMessage;
     use crate::reserves::Gauge;
+    use crate::self_repair::repaired_armor;
     use crate::session::fighters::tests::{VIPER, VIPERS, carrying, fleet, launch};
     use crate::session::tests::{alongside, board_by, boardable, flown_by, take, trader_escort};
     use crate::traffic::npc::NpcHold;
