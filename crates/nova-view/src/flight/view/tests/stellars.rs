@@ -254,18 +254,13 @@ fn a_change_to_the_galaxy_is_drawn_on_the_next_frame_and_not_before() {
     assert!(!on_the_course_map(&view, 132));
 }
 
-/// The rules that keep a loaded pilot's course, so a flight can start
-/// on one.
-fn course_kept() -> Rulebook {
-    Rulebook::default().with_override(RuleKey::LoadedCourse, RuleSource::Bible)
-}
-
 #[test]
 fn the_course_map_shows_the_course_as_it_is_flown() {
     let catalog = catalog();
-    let mut session = Session::start(&catalog).expect("starts");
-    session.plot_course(SystemId(131)).expect("a route");
-    let mut view = FlightView::loaded(catalog, session.pilot().clone(), course_kept());
+    let session = SessionBuilder::flying(&catalog)
+        .with_course([SystemId(131)])
+        .build();
+    let mut view = FlightView::from_session(catalog, session);
     assert_eq!(view.course_map().route(), [SystemId(131)]);
     change_galaxy(&mut view, hiding(131));
     view.tick(TICK);
@@ -281,11 +276,12 @@ fn bound_for_alpha_with_reborn_explored() -> View {
         reborn: true,
         ..catalog()
     };
-    let mut session = Session::start(&catalog).expect("starts");
-    session.plot_course(SystemId(131)).expect("a route");
+    let mut session = SessionBuilder::flying(&catalog)
+        .with_course([SystemId(131)])
+        .build();
     let explore = nova_sim::SetExpr::parse("X133").expect("parses");
     session.run_set(&explore, &mut NeverFires);
-    let mut view = FlightView::loaded(catalog, session.pilot().clone(), course_kept());
+    let mut view = FlightView::from_session(catalog, session);
     // A pilot flies with the nav system off: H cues the course.
     tap(&mut view, HYPERSPACE_MODE_KEY);
     view
