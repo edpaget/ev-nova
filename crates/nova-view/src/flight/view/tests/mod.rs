@@ -73,6 +73,7 @@ mod controls;
 mod dates;
 mod dialog_map;
 mod docked;
+mod drain;
 mod escorts;
 mod flying;
 mod hyperspace;

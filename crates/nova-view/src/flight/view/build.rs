@@ -1089,6 +1089,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             reserves_scene: None,
             bar_steps: VecDeque::new(),
             bars_staged: 0,
+            inbox: super::inbox::Inbox::default(),
             radar_static: None,
             cursor: HoverCursor::default(),
         }

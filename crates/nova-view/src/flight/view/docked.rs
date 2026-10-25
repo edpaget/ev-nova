@@ -2,7 +2,6 @@
 //! and plunder, trade, the outfitter, bar, hiring, news, the mission
 //! computer and offers, and the shipyard.
 
-use crate::flight::sim_port::MapSource;
 use std::time::Duration;
 
 use nova_sim::mission::offer_gap;
@@ -197,7 +196,8 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             &*self.sim.boarding_rule,
             &mut self.sim.chance,
         );
-        if let Some(line) = session.take_board_line() {
+        self.inbox.drain_session(session);
+        if let Some(line) = self.inbox.take_board_line() {
             let said = mission_board_message(line, session);
             self.say_for(said, BOARD_LINE_TICKS);
         }
@@ -211,7 +211,8 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             Ok(Boarding::Opened(_)) => {
                 self.pending_boarding = true;
                 self.held.clear();
-                if let Some(granted) = session.take_grant() {
+                self.inbox.drain_session(session);
+                if let Some(granted) = self.inbox.take_grant() {
                     let (name, plural) = session.outfit_names(granted.outfit).unwrap_or_default();
                     let said = grant_message(granted.count, name, plural);
                     self.say_for(said, GRANT_TICKS);
@@ -378,12 +379,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
 
     /// The session's messages since they were last taken, worded.
     fn worded_messages(&mut self) -> Vec<(String, u16)> {
-        let messages = self
-            .sim
-            .session
-            .as_mut()
-            .map(Session::take_messages)
-            .unwrap_or_default();
+        let messages = self.drain().take_messages();
         self.word(messages)
     }
 
@@ -900,21 +896,17 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     {
         if self.docked() {
             self.stage_bar(Vec::new(), Then::Nothing);
-            return self
-                .sim
-                .session
-                .as_mut()
-                .map(Session::take_mission_texts)
-                .unwrap_or_default();
+            return self.drain().take_mission_texts();
         }
         let queued = self.frame_now().texts_queued;
-        let noted = self.sim.text_nav().filter(|_| queued > self.nav_texts);
-        let Ok(session) = &mut self.sim.session else {
+        let nav_texts = self.nav_texts;
+        let noted = self.drain().text_nav().filter(|_| queued > nav_texts);
+        if self.sim.session.is_err() {
             return Vec::new();
-        };
-        let bars = session.text_bars();
+        }
+        let bars = self.inbox.text_bars();
         let staged = !bars.is_empty() && bars.iter().all(|bar| bar.texts <= self.bars_staged);
-        let texts = session.take_mission_texts();
+        let texts = self.inbox.take_mission_texts();
         if !texts.is_empty() && !staged {
             self.redraw_status();
             if let Some(noted) = noted {
@@ -992,17 +984,13 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     where
         C: StatusBars,
     {
-        let bars: Vec<TextBar> = self.sim.session.as_ref().map_or_else(
-            |_| Vec::new(),
-            |session| {
-                session
-                    .text_bars()
-                    .iter()
-                    .filter(|bar| bar.texts > self.bars_staged)
-                    .copied()
-                    .collect()
-            },
-        );
+        let staged = self.bars_staged;
+        let bars: Vec<TextBar> = self
+            .drain()
+            .text_bars()
+            .into_iter()
+            .filter(|bar| bar.texts > staged)
+            .collect();
         let first = bars.first().map_or(u64::MAX, |bar| bar.texts);
         let (now, later): (Vec<_>, Vec<_>) =
             changes.into_iter().partition(|load| load.texts < first);
@@ -1124,7 +1112,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// Whether the pilot should be saved, as [`Session::take_save_due`]
     /// says; taking it clears it.
     pub fn take_save_due(&mut self) -> bool {
-        self.sim.session.as_mut().is_ok_and(Session::take_save_due)
+        self.drain().take_save_due()
     }
 }
 

@@ -1,7 +1,7 @@
 //! [`FlightView`]'s status bar and description reads.
 
+use nova_sim::GovtId;
 use nova_sim::InterfaceLoad;
-use nova_sim::{GovtId, Session};
 
 use crate::flight::catalog::StatusBars;
 use crate::flight::hud::{self};
@@ -75,12 +75,7 @@ impl<C: StatusBars> FlightView<C, crate::flight::SessionFlight<C>> {
         &mut self,
         before: Option<&Result<i16, String>>,
     ) -> (Vec<InterfaceLoad>, Option<Result<i16, String>>) {
-        let loads = self
-            .sim
-            .session
-            .as_mut()
-            .map(Session::take_interface_loads)
-            .unwrap_or_default();
+        let loads = self.drain().take_interface_loads();
         let mut loaded = before.cloned();
         let mut changes = Vec::new();
         for load in loads {

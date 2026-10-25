@@ -287,11 +287,11 @@ impl<
     /// The course map has no buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
         let mut sounds: Vec<Sound> = self
-            .sim
-            .session
-            .as_mut()
-            .map(|session| session.take_sounds().into_iter().map(Sound::Sim).collect())
-            .unwrap_or_default();
+            .drain()
+            .take_sounds()
+            .into_iter()
+            .map(Sound::Sim)
+            .collect();
         sounds.extend(self.ui_sounds.drain(..).map(Sound::Ui));
         sounds.extend(self.effects.take_sounds().into_iter().map(Sound::Combat));
         sounds
@@ -309,10 +309,8 @@ impl<
     /// diagnostics, each once.
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         let mut diagnostics = std::mem::take(&mut self.unread_looks);
-        if let Ok(session) = &mut self.sim.session {
-            let sim = session.take_diagnostics().into_iter();
-            diagnostics.extend(sim.map(Diagnostic::Sim));
-        }
+        let sim = self.drain().take_diagnostics().into_iter();
+        diagnostics.extend(sim.map(Diagnostic::Sim));
         diagnostics
     }
 

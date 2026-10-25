@@ -31,7 +31,7 @@ use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
-use nova_sim::{MapMarks, MissionId, NavMode, PlayerCommand, SavedNav, StellarId, SystemId};
+use nova_sim::{MapMarks, MissionId, PlayerCommand, SavedNav, StellarId, SystemId};
 
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
@@ -159,12 +159,6 @@ pub trait MapSource {
         None
     }
 
-    /// The nav mode as the last mission text queued was
-    /// (`nova_sim::Session::text_nav`).
-    fn text_nav(&self) -> Option<NavMode> {
-        None
-    }
-
     /// The floating map's places: the current system's and each link's
     /// its clicks test (`nova_sim::Session::floating_map_places`).
     fn floating_map_places(&self) -> FloatingLinks {
@@ -219,7 +213,6 @@ mod tests {
         assert_eq!(source.computer_map_marks(None), MapMarks::NONE);
         assert_eq!(source.mission_info_map_marks(Some(0)), MapMarks::NONE);
         assert_eq!(source.map_nav(), None);
-        assert_eq!(source.text_nav(), None);
         assert_eq!(source.floating_map_places(), FloatingLinks::default());
         assert_eq!(source.stellar_name(StellarId(128)), None);
         assert!(!source.has_explored(none));

@@ -75,8 +75,6 @@ pub struct FakeMap {
     pub marks: Option<MapMarks>,
     /// [`MapSource::map_nav`]'s answer.
     pub map_nav: Option<SavedNav>,
-    /// [`MapSource::text_nav`]'s answer.
-    pub text_nav: Option<NavMode>,
     /// [`MapSource::floating_map_places`]'s answer.
     pub floating: FloatingLinks,
     /// The stellars [`MapSource::stellar_name`] names, with their names.
@@ -276,10 +274,6 @@ impl MapSource for FakeFlight {
 
     fn map_nav(&self) -> Option<SavedNav> {
         self.map.map_nav
-    }
-
-    fn text_nav(&self) -> Option<NavMode> {
-        self.map.text_nav
     }
 
     fn floating_map_places(&self) -> FloatingLinks {
@@ -527,7 +521,6 @@ mod tests {
         assert_eq!(fake.find_map_system("sol"), None);
         assert_eq!(fake.offer_map_marks(MissionId(128)), MapMarks::NONE);
         assert_eq!(fake.map_nav(), None);
-        assert_eq!(fake.text_nav(), None);
         assert_eq!(fake.stellar_name(StellarId(128)), None);
         assert!(!fake.has_explored(SystemId(130)));
     }
@@ -553,7 +546,6 @@ mod tests {
         map.hypergate_cycle = vec![None, Some(SystemId(131))];
         map.marks = Some(marks);
         map.map_nav = Some(saved);
-        map.text_nav = Some(NavMode::Off);
         map.floating = floating.clone();
         map.stellar_names = vec![(StellarId(128), "Earth".to_owned())];
         map.explored = vec![SystemId(130)];
@@ -570,7 +562,6 @@ mod tests {
         assert_eq!(fake.computer_map_marks(None), marks);
         assert_eq!(fake.mission_info_map_marks(Some(0)), marks);
         assert_eq!(fake.map_nav(), Some(saved));
-        assert_eq!(fake.text_nav(), Some(NavMode::Off));
         assert_eq!(fake.floating_map_places(), floating);
         assert_eq!(fake.stellar_name(StellarId(128)).as_deref(), Some("Earth"));
         assert_eq!(fake.stellar_name(StellarId(129)), None);

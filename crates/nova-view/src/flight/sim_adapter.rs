@@ -3,10 +3,11 @@
 //! handed: the chance, the NPCs' behaviour and the fight's, the law's and
 //! the boardings' rules.
 //!
-//! It forwards: [`FlightSim::frame`] to `Session::fill_frame` and
+//! It forwards: [`FlightSim::frame`] to `Session::fill_frame`,
 //! [`FlightSim::apply`] to `Session::apply`, whose match over the
-//! commands lives on the session's side. A session that failed to start
-//! fills the default frame and refuses every command.
+//! commands lives on the session's side, and [`FlightSim::drain`] to
+//! `Session::drain_events`. A session that failed to start fills the
+//! default frame, refuses every command and drains nothing.
 //!
 //! **For the strangler's length**, the view's
 //! `FlightView<C, SessionFlight<C>>` blocks reach the session and the
@@ -28,9 +29,9 @@ use nova_sim::map_borders::BorderSources;
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::{
-    Allegiance, Behaviour, BoardingRule, DisableRule, LegalCode, MapMarks, MissionId, NavMode,
-    NovaAi, NovaBoarding, NovaDisable, NovaLaw, PilotCatalog, PlayerCommand, PointDefenceRule,
-    SavedNav, Session, StellarId, SystemId, TagNames,
+    Allegiance, Behaviour, BoardingRule, DisableRule, LegalCode, MapMarks, MissionId, NovaAi,
+    NovaBoarding, NovaDisable, NovaLaw, PilotCatalog, PlayerCommand, PointDefenceRule, SavedNav,
+    Session, StellarId, SystemId, TagNames,
 };
 
 use super::SharedChance;
@@ -174,6 +175,13 @@ impl<C> SessionFlight<C> {
     }
 }
 
+/// [`FlightSim::drain`] over a session borrowed apart from its adapter:
+/// for the view's concrete blocks that hold the session through the
+/// adapter's fields across a drain point (see the module docs).
+pub(in crate::flight) fn drain_session(session: &mut Session, into: &mut Vec<FlightEvent>) {
+    session.drain_events(into);
+}
+
 impl<C> From<Session> for SessionFlight<C> {
     /// The flight of `session`, with Nova's collaborators
     /// ([`SessionFlight::new`]).
@@ -203,9 +211,13 @@ impl<C> FlightSim for SessionFlight<C> {
         }
     }
 
-    /// Nothing yet: the view still takes the session's one-shot outputs
-    /// itself, until they are drained as one stream of events.
-    fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
+    /// Forwards to `Session::drain_events` ([`drain_session`]); a failed
+    /// session drains nothing.
+    fn drain(&mut self, into: &mut Vec<FlightEvent>) {
+        if let Ok(session) = &mut self.session {
+            drain_session(session, into);
+        }
+    }
 
     fn takes(&self, gate: PlayerCommand) -> bool {
         self.session().map_or(true, |session| session.takes(gate))
@@ -286,10 +298,6 @@ impl<C> MapSource for SessionFlight<C> {
         self.session().ok().map(Session::map_nav)
     }
 
-    fn text_nav(&self) -> Option<NavMode> {
-        self.session().ok()?.text_nav()
-    }
-
     fn floating_map_places(&self) -> FloatingLinks {
         self.session()
             .map_or_else(|_| FloatingLinks::default(), Session::floating_map_places)
@@ -353,10 +361,16 @@ mod tests {
         assert_eq!(flight.computer_map_marks(None), MapMarks::NONE);
         assert_eq!(flight.mission_info_map_marks(None), MapMarks::NONE);
         assert_eq!(flight.map_nav(), None);
-        assert_eq!(flight.text_nav(), None);
         assert_eq!(flight.floating_map_places(), FloatingLinks::default());
         assert_eq!(flight.stellar_name(StellarId(128)), None);
         assert!(!flight.has_explored(none));
+    }
+
+    #[test]
+    fn a_failed_flight_drains_nothing() {
+        let mut into = vec![FlightEvent::SaveDue];
+        failed().drain(&mut into);
+        assert_eq!(into, [FlightEvent::SaveDue]);
     }
 
     #[test]

@@ -595,9 +595,8 @@ fn fighters_abandoned_are_told_only_with_the_layout_of_the_move_settled() {
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
     view.settle_script();
     assert_eq!(view.message(), None, "no layout from this settling");
-    let session = view.sim.session.as_mut().expect("flying");
     assert_eq!(
-        session.take_fighter_notes(),
+        view.drain().take_fighter_notes(),
         [FighterNote::Abandoned(2)],
         "left for the next arrival"
     );

@@ -94,20 +94,13 @@ impl<
     /// where the router may show its dialogs over the stopped flight
     /// before it begins the fade. True once.
     pub fn take_hold_expired(&mut self) -> bool {
-        self.sim
-            .session
-            .as_mut()
-            .is_ok_and(Session::take_hold_expired)
+        self.drain().take_hold_expired()
     }
 
     /// The escape pod's rescue's `dësc`, once, after the rescue
     /// ([`Session::take_rescue_desc`]): the router shows it over flight.
     pub fn take_rescue_desc(&mut self) -> Option<i16> {
-        self.sim
-            .session
-            .as_mut()
-            .ok()
-            .and_then(Session::take_rescue_desc)
+        self.drain().take_rescue_desc()
     }
 
     /// Whether any flight key is held down.
@@ -371,7 +364,8 @@ impl<
                             rules,
                             &mut self.sim.chance,
                         );
-                        notes.extend(session.take_comm());
+                        self.inbox.drain_session(session);
+                        notes.extend(self.inbox.take_comm());
                         rescued_now
                     };
                     if rescued_now {
@@ -393,7 +387,8 @@ impl<
                     } else {
                         session.tick_quotes(&*self.catalog, &mut self.sim.chance);
                     }
-                    quotes.extend(session.take_quotes());
+                    self.inbox.drain_session(session);
+                    quotes.extend(self.inbox.take_quotes());
                     let dying = dying(session, &self.sheet, &self.npc_sheets);
                     let chance = &mut self.effects_chance;
                     let scene = effects_scene(session);
@@ -582,11 +577,12 @@ impl<
         let Ok(session) = &mut self.sim.session else {
             return;
         };
-        let notes = session.take_fighter_notes();
-        let pay = session.take_pay_notes();
+        self.inbox.drain_session(session);
+        let notes = self.inbox.take_fighter_notes();
+        let pay = self.inbox.take_pay_notes();
         let date = session.long_date_text();
         let mut messages = std::mem::take(&mut self.pending_leads);
-        messages.extend(session.take_messages());
+        messages.extend(self.inbox.take_messages());
         let scene = self.scene.as_ref();
         let chance = &mut self.sim.chance;
         let worded: Vec<(String, u16)> = messages
@@ -649,7 +645,8 @@ impl<
             return Redrawn::default();
         };
         let mut redrawn = Redrawn::default();
-        for event in session.take_events() {
+        self.inbox.drain_session(session);
+        for event in self.inbox.take_events() {
             match event {
                 SessionEvent::ShipChanged => redrawn.ship = true,
                 SessionEvent::SystemChanged => redrawn.system = true,
@@ -866,11 +863,8 @@ impl<
     fn departed(&mut self, departure: Departure) -> StellarId {
         let Departure { stellar, settled } = departure;
         let mut said: Vec<(String, u16)> = self
-            .sim
-            .session
-            .as_mut()
-            .ok()
-            .and_then(Session::take_leave_message)
+            .drain()
+            .take_leave_message()
             .into_iter()
             .map(|text| (text, SCRIPT_MESSAGE_TICKS))
             .collect();
@@ -966,18 +960,12 @@ impl<
     ///
     /// It gives, last, whether the system was laid out afresh.
     fn took_off(&mut self) -> (Said, Said, bool) {
-        let (pay, messages, held) = self
-            .sim
-            .session
-            .as_mut()
-            .map(|session| {
-                (
-                    session.take_pay_notes(),
-                    session.take_messages(),
-                    session.take_takeoff_nav(),
-                )
-            })
-            .unwrap_or_default();
+        let inbox = self.drain();
+        let (pay, messages, held) = (
+            inbox.take_pay_notes(),
+            inbox.take_messages(),
+            inbox.take_takeoff_nav(),
+        );
         let nav_texts = self.nav_texts;
         let system = self.catch_up().system;
         self.place_ship();
@@ -1074,12 +1062,7 @@ impl<
             .map(|text| (text, SCRIPT_MESSAGE_TICKS))
             .collect();
         if (self.catch_up().system || laid_out) && flying {
-            let notes = self
-                .sim
-                .session
-                .as_mut()
-                .map(Session::take_fighter_notes)
-                .unwrap_or_default();
+            let notes = self.drain().take_fighter_notes();
             said.extend(notes.into_iter().map(|FighterNote::Abandoned(count)| {
                 (fighters_abandoned_message(count), MESSAGE_TICKS)
             }));

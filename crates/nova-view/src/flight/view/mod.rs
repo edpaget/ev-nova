@@ -671,6 +671,7 @@ mod build;
 mod cockpit;
 mod dialog_map;
 mod docked;
+mod inbox;
 mod interface;
 mod messages;
 mod port_screen_map;
@@ -1057,6 +1058,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.sim.frame(&mut frame);
         frame
     }
+
+    /// Drains the flight into the inbox ([`FlightSim::drain`]) and gives
+    /// it, for the caller to take its own kind from at its own place (see
+    /// the `inbox` module).
+    fn drain(&mut self) -> &mut inbox::Inbox {
+        self.inbox.drain(&mut self.sim);
+        &mut self.inbox
+    }
 }
 
 /// The player's ship in flight, reading the game data from `C`, the
@@ -1071,6 +1080,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     catalog: Rc<C>,
     /// The flight, with the collaborators its calls are handed.
     sim: S,
+    /// What was drained from the flight and not yet taken, by kind (see
+    /// the `inbox` module).
+    inbox: inbox::Inbox,
     /// The session's system, laid out; `None` when the session failed.
     scene: Option<SystemScene>,
     /// The player ship's sheet, or why it cannot be shown.
