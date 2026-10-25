@@ -481,6 +481,7 @@ mod fighter_capacity;
 mod fighters;
 #[cfg(test)]
 mod fire_gates;
+mod free_cargo;
 mod game_work;
 mod gate_escorts;
 mod gate_follow;
@@ -5496,11 +5497,12 @@ impl Session {
                 let Some((good, tons)) = plunder.cargo.take() else {
                     return self.space.refuse_take(&mut self.out, aboard);
                 };
-                // The ship's own space, less `_TotalCargo` with the
-                // mission cargo aboard, not the fleet's: plunder into
-                // pooled holds waits for rdm task `boarding-follow-up`.
-                let room =
-                    (i64::from(self.ship.fit.stats.capacity) - self.pilot.total_cargo()).max(0);
+                // The fleet's space, less `_TotalCargo` with the mission
+                // cargo aboard (see the `free_cargo` module).
+                let room = self
+                    .ship
+                    .fleet_free_cargo(&self.pilot, &self.statics)
+                    .max(0);
                 let stored = tons.min(u32::try_from(room).unwrap_or(u32::MAX));
                 if stored > 0 {
                     *self.pilot.cargo.entry(good).or_default() += stored;
@@ -6401,9 +6403,9 @@ impl PlayerShip {
     /// and the mission cargo aboard, below zero when it holds more than
     /// that (`_CanBuyOutfitItem` @0x4e980-0x4e9a8 subtracts
     /// `_TotalCargo(player)` from `_ShipTotalHolds()`). The escorts' holds
-    /// add nothing.
+    /// add nothing (see the `free_cargo` module).
     fn free_cargo(&self, pilot: &Pilot) -> i64 {
-        i64::from(self.fit.stats.capacity) - pilot.total_cargo()
+        free_cargo::free_cargo_in(self.fit.stats.capacity, pilot)
     }
 
     /// The fleet's cargo space, in tons (`_TotalFleetHolds`): the ship's
