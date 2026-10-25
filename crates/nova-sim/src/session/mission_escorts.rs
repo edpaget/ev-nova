@@ -203,7 +203,7 @@ impl Session {
                     npc.ai_type = ai_type;
                 }
             }
-            self.lose_cargo_share(ship);
+            self.lose_cargo_share(ship, id);
         }
         if !dying.is_empty() {
             self.reform();
@@ -736,6 +736,20 @@ mod tests {
             session.pilot.cargo,
             BTreeMap::from([(FOOD, 6), (OPALS, 2)]),
             "its 10 of the player's 20 and its own 10"
+        );
+    }
+
+    #[test]
+    fn a_dying_trader_mission_escort_holds_the_share_it_destroyed() {
+        // `_DestroyPartialFleetCargo` writes the six commodity counts it
+        // took into the ship (@0xcf76), from `_HandleShip` @0x350e6.
+        let mut session = laden(1, RuleSource::Engine);
+        session.space.traffic.npcs_mut()[0].cargo =
+            crate::traffic::npc::NpcHold::from_words([1, 2, 3, 4, 5, 6]);
+        let id = break_up(&mut session);
+        assert_eq!(
+            session.space.npc(id).map(|npc| npc.cargo),
+            Some(crate::traffic::npc::NpcHold::from_words([4, 0, 0, 0, 0, 0]))
         );
     }
 

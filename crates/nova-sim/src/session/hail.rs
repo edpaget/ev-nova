@@ -3062,6 +3062,23 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_released_trader_holds_the_share_it_destroyed_as_it_leaves() {
+        // `_DoCommDialog` @0x96864 → `_DestroyPartialFleetCargo` @0xcf76.
+        let catalog = hailable();
+        let session = released(&catalog, RuleSource::Engine);
+        let leaving = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.boarded && npc.escort.is_none())
+            .expect("leaving");
+        assert_eq!(
+            leaving.cargo,
+            crate::traffic::npc::NpcHold::from_words([15, 0, 0, 0, 0, 0]),
+            "15 of the 30 food"
+        );
+    }
+
+    #[test]
     fn a_released_warship_takes_a_share_by_the_engine_and_none_by_the_other_reading() {
         use crate::market::Good;
         use crate::scan::Latches;

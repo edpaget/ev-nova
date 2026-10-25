@@ -149,9 +149,11 @@ impl Session {
                 }
                 // A trader takes its share of the cargo, and the session
                 // resets, while it is still in the fleet, its own holds
-                // among the fleet's (@0x40225-0x40240).
+                // among the fleet's (@0x40225-0x40240). The share written
+                // into its hold goes with it, as it leaves the system at
+                // once.
                 if let Some(holds) = self.statics.trader_holds(escort.ship) {
-                    self.destroy_cargo_share(holds, false);
+                    self.destroy_cargo_share(holds, false, None);
                 }
                 self.drop_fleet_escort(index);
                 defected = defected.saturating_add(1);

@@ -590,13 +590,25 @@ pub fn lost_share(lost: i16, own: u32, escorts: i64, counted: bool) -> f64 {
 
 /// Takes `share` of every good in `cargo`, commodity or `jünk`: each loses
 /// the truncated part of what it holds (@0xcf3b-0xcfe4), and a good left
-/// at none is gone. `share` is in 0..=1 ([`lost_share`]).
-pub fn destroy_share(cargo: &mut BTreeMap<Good, u32>, share: f64) {
-    for tons in cargo.values_mut() {
+/// at none is gone. `share` is in 0..=1 ([`lost_share`]). Gives the tons
+/// each standard commodity lost, by number, none for one not held: what
+/// the original then writes into the lost ship's own hold
+/// (`movw %dx, 0x7a(ship)` @0xcf76); a `jünk` lost goes nowhere
+/// (@0xcf94-0xcfe4).
+pub fn destroy_share(cargo: &mut BTreeMap<Good, u32>, share: f64) -> [u32; COMMODITIES as usize] {
+    let mut destroyed = [0; COMMODITIES as usize];
+    for (good, tons) in cargo.iter_mut() {
         // The share is in 0..=1, so the part is in 0..=held.
-        *tons -= (f64::from(*tons) * share) as u32;
+        let part = (f64::from(*tons) * share) as u32;
+        *tons -= part;
+        if let Good::Commodity(commodity) = good
+            && let Some(slot) = destroyed.get_mut(usize::from(*commodity))
+        {
+            *slot = part;
+        }
     }
     cargo.retain(|_, tons| *tons > 0);
+    destroyed
 }
 
 /// Cuts each commodity in `cargo` by `holds` over the `total` the fleet
@@ -6700,6 +6712,29 @@ mod tests {
         let mut cargo = BTreeMap::from([(LOST_FOOD, 9), (LOST_OPALS, 3)]);
         destroy_share(&mut cargo, 0.5);
         assert_eq!(cargo, BTreeMap::from([(LOST_FOOD, 5), (LOST_OPALS, 2)]));
+    }
+
+    #[test]
+    fn destroy_share_gives_the_tons_it_destroyed() {
+        // Each commodity's d, zeros included, as `movw %dx, 0x7a(ship)`
+        // writes them (@0xcf76); a `jünk` lost gives none.
+        let mut cargo = BTreeMap::from([
+            (Good::Commodity(0), 9),
+            (Good::Commodity(4), 3),
+            (Good::Junk(JunkId(128)), 8),
+        ]);
+        assert_eq!(destroy_share(&mut cargo, 0.5), [4, 0, 0, 0, 1, 0]);
+        assert_eq!(
+            cargo,
+            BTreeMap::from([
+                (Good::Commodity(0), 5),
+                (Good::Commodity(4), 2),
+                (Good::Junk(JunkId(128)), 4),
+            ])
+        );
+        let mut cargo = BTreeMap::from([(Good::Commodity(5), 7)]);
+        assert_eq!(destroy_share(&mut cargo, 1.0), [0, 0, 0, 0, 0, 7]);
+        assert_eq!(destroy_share(&mut BTreeMap::new(), 1.0), [0; 6]);
     }
 
     #[test]

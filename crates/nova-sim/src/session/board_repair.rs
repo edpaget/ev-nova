@@ -382,6 +382,27 @@ mod tests {
         assert_eq!(session.npcs()[0].former, Some(former_trader()));
     }
 
+    #[test]
+    fn repairing_a_lost_trader_gives_its_share_back() {
+        // Its share was written into its hold as it was lost (@0xcf76) and
+        // comes back with the repair (@0x65c7b-0x65ca2).
+        use crate::rulebook::RuleSource;
+        use crate::session::escorts::tests::{FOOD, fleeted, hit, laden, trader_fleet};
+        let catalog = fleeted();
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        let id = session.space.escorts.fleet[1].expect("placed");
+        hit(&mut session, 1, 10.0);
+        assert!(!session.is_escort(id));
+        assert_eq!(session.pilot().held(FOOD), 5, "4 of 9 destroyed");
+        crate::fixture::put_player_over(&mut session, id);
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Recovered(Recovery::EscortRepaired))
+        );
+        assert_eq!(session.pilot().held(FOOD), 9, "given back");
+        assert!(session.is_escort(id));
+    }
+
     // Fighters.
 
     /// [`carrying`] with `vipers` Vipers aboard and one launched, then

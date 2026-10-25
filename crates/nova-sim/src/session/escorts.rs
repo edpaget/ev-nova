@@ -106,7 +106,10 @@
 //! left by the reset its tail runs (`_DamageShip` @0x3b013,
 //! `_DestroyPartialFleetCargo` @0xcd32-0xcff6; [`Session::lose_cargo_share`],
 //! see the `precalced` module). A warship escort lost takes nothing and
-//! runs no reset, and the mission cargo is never touched. A mission
+//! runs no reset, and the mission cargo is never touched. The tons of
+//! each commodity it took become its own hold, overwriting what it held
+//! (`_DestroyPartialFleetCargo` @0xcf76), and boarding it to repair it
+//! gives them back (see [`board_repair`](super::board_repair)). A mission
 //! escort breaking up takes its share too (see
 //! [`mission_escorts`](super::mission_escorts)). A ship captured joins
 //! the fleet where it is, intact, its armour at half its most; a
@@ -572,7 +575,7 @@ impl Session {
             }
             self.dismiss(id);
             if let Some(ship) = takes.filter(|_| here) {
-                self.lose_cargo_share(ship);
+                self.lose_cargo_share(ship, id);
             }
         }
     }
@@ -584,13 +587,14 @@ impl Session {
     /// each caller tests (@0x3affd, @0x350d1); a warship or interceptor
     /// takes nothing, and no reset runs. The ship's own `Holds` are not in
     /// the fleet's holds it takes its share of; by the other reading of
-    /// [`RuleKey::LostCargoShare`] they count too.
-    pub(super) fn lose_cargo_share(&mut self, ship: ShipId) {
+    /// [`RuleKey::LostCargoShare`] they count too. The share destroyed is
+    /// NPC `lost`'s hold.
+    pub(super) fn lose_cargo_share(&mut self, ship: ShipId, lost: NpcId) {
         let Some(holds) = self.statics.trader_holds(ship) else {
             return;
         };
         let counted = self.setup.rules.source_for(RuleKey::LostCargoShare) == RuleSource::Bible;
-        self.destroy_cargo_share(holds, counted);
+        self.destroy_cargo_share(holds, counted, Some(lost));
     }
 
     /// `_DestroyPartialFleetCargo` (@0xcd32-0xcff6) for a ship other than
@@ -601,17 +605,22 @@ impl Session {
     /// (@0xcff6; [`Session::reset_precalced`]), its trim cutting the
     /// commodities to the fleet's holds against everything carried, the
     /// mission cargo aboard included. The mission cargo is never touched.
-    /// The tons destroyed go nowhere: the original writes them into the
-    /// lost ship's own slots (@0xcf76), which nothing the engine models
-    /// reads.
-    pub(super) fn destroy_cargo_share(&mut self, holds: i16, counted: bool) {
+    /// The tons of each commodity destroyed become the `lost` ship's own
+    /// hold, every one of the six, so whatever it held is overwritten
+    /// (`movw %dx, 0x7a(ship)` @0xcf76); a `jünk` destroyed goes nowhere
+    /// (@0xcf94-0xcfe4). Boarding the ship to repair it gives them back
+    /// (see the `board_repair` module).
+    pub(super) fn destroy_cargo_share(&mut self, holds: i16, counted: bool, lost: Option<NpcId>) {
         let share = market::lost_share(
             holds,
             self.ship.fit.stats.capacity,
             market::escort_tons(self.escort_holds()),
             counted,
         );
-        market::destroy_share(&mut self.pilot.cargo, share);
+        let destroyed = market::destroy_share(&mut self.pilot.cargo, share);
+        if let Some(npc) = lost.and_then(|id| self.space.npc_mut(id)) {
+            npc.cargo = NpcHold::from_words(destroyed);
+        }
         self.reset_precalced();
     }
 
@@ -687,7 +696,7 @@ impl Session {
             .space
             .released_holds(&self.pilot, &self.statics, &self.setup, id)
         {
-            self.destroy_cargo_share(holds, false);
+            self.destroy_cargo_share(holds, false, Some(id));
         }
         self.dismiss(id);
         if let Some(npc) = self.space.npc_mut(id) {
@@ -1148,7 +1157,7 @@ fn restock(reserves: &mut Reserves, kind: &ShipKind) {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
@@ -1302,7 +1311,7 @@ mod tests {
     /// ship) with the escort ship types, in neither system's traffic: the
     /// player's ship 128 is 40 pixels across, the warship 50 and the
     /// freighter 30, all flying as fast as the player.
-    fn fleeted() -> FakePilotCatalog {
+    pub(in crate::session) fn fleeted() -> FakePilotCatalog {
         FakePilotCatalog {
             ship_records: vec![
                 ship(128, FAST),
@@ -2405,13 +2414,17 @@ mod tests {
     // The cargo a lost escort takes.
 
     /// Food, a commodity.
-    const FOOD: Good = Good::Commodity(0);
+    pub(in crate::session) const FOOD: Good = Good::Commodity(0);
     /// Opals, a `jünk`.
     const OPALS: Good = Good::Junk(JunkId(146));
 
     /// A session of `fleet` by `source` of `LostCargoShare`, its first
     /// traffic tick done, holding 9 food and 3 opals.
-    fn laden(catalog: &FakePilotCatalog, fleet: Vec<Escort>, source: RuleSource) -> Session {
+    pub(in crate::session) fn laden(
+        catalog: &FakePilotCatalog,
+        fleet: Vec<Escort>,
+        source: RuleSource,
+    ) -> Session {
         let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
         pilot.escorts = fleet;
         let mut session = Session::fly(catalog, pilot)
@@ -2423,7 +2436,7 @@ mod tests {
     }
 
     /// The warship and two freighters, all full.
-    fn trader_fleet() -> Vec<Escort> {
+    pub(in crate::session) fn trader_fleet() -> Vec<Escort> {
         let full = Reserves::full(30.0, 45.0, 300.0);
         vec![
             escort(WARSHIP, full, None),
@@ -2433,7 +2446,7 @@ mod tests {
     }
 
     /// Escort `index`'s armour goes to `armor`, and the fight ticks.
-    fn hit(session: &mut Session, index: usize, armor: f32) {
+    pub(in crate::session) fn hit(session: &mut Session, index: usize, armor: f32) {
         let id = session.space.escorts.fleet[index].expect("placed");
         session.space.npc_mut(id).expect("there").reserves.armor.now = armor;
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -2496,6 +2509,32 @@ mod tests {
             .find(|npc| npc.ship == FREIGHTER && npc.escort.is_none());
         assert_eq!(lost.map(|npc| npc.condition), Some(Condition::Disabled));
         assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 5), (OPALS, 2)]));
+    }
+
+    #[test]
+    fn a_lost_trader_escort_holds_the_share_it_destroyed_overwriting_its_hold() {
+        // `movw %dx, 0x7a(ship)` @0xcf76 writes all six, zeros included;
+        // the opals, a `jünk`, go nowhere (@0xcf94-0xcfe4).
+        let catalog = fleeted();
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        let id = session.space.escorts.fleet[1].expect("placed");
+        session.space.npc_mut(id).expect("there").cargo = NpcHold::from_words([1, 2, 3, 4, 5, 6]);
+        hit(&mut session, 1, 10.0);
+        assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 5), (OPALS, 2)]));
+        assert_eq!(
+            session.space.npc(id).map(|npc| npc.cargo),
+            Some(NpcHold::from_words([4, 0, 0, 0, 0, 0]))
+        );
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        let warship = session.space.escorts.fleet[0].expect("placed");
+        let hold = NpcHold::from_words([1, 2, 3, 4, 5, 6]);
+        session.space.npc_mut(warship).expect("there").cargo = hold;
+        hit(&mut session, 0, 10.0);
+        assert_eq!(
+            session.space.npc(warship).map(|npc| npc.cargo),
+            Some(hold),
+            "a warship takes no share"
+        );
     }
 
     #[test]
