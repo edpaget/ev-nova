@@ -1387,8 +1387,7 @@ fn approach_brake(state: &mut ShipState, handling: &Handling, inertia: Inertia) 
 /// high level writes sub 1 again each pass for every stop goal, as this
 /// flies it every tick, so nothing differs.
 fn braking(state: &mut ShipState, handling: &Handling, inertia: Inertia) -> Flight {
-    let (controls, flown) = leave_flight::stop(state, handling, inertia, false);
-    Flight::stop(controls, &flown, inertia)
+    leave_flight::stop_flight(state, handling, inertia)
 }
 
 /// [`follow`]s a lead at `lead`, or brakes with none there

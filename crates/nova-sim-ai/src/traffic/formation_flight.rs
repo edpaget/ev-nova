@@ -314,22 +314,22 @@ pub(crate) fn fly(
     flight: FlightRules,
     inertia: Inertia,
 ) {
-    let (Some(leader), Some(place)) = (leader, npc.formation_slot()) else {
-        // Sub 1, a stop, which keeps +0x34.
-        let (controls, flown) = leave_flight::stop(&mut npc.state, handling, inertia, false);
-        let word = Word::stop(controls, &flown, inertia);
-        held_burst::step(npc, &flown, controls, flight, inertia, word);
+    let flying = match (leader, npc.formation_slot()) {
+        (Some(leader), Some(place)) => {
+            let sub = sub(npc.state.position, leader.position, beside.leader_seen);
+            (sub != Sub::Stop).then_some((leader, place, sub))
+        }
+        _ => None,
+    };
+    // With no leader or slot, or in sub 1: a stop, which keeps +0x34.
+    let Some((leader, place, sub)) = flying else {
+        let stop = leave_flight::stop_flight(&mut npc.state, handling, inertia);
+        let flown = stop.flown.unwrap_or(*handling);
+        held_burst::step(npc, &flown, stop.controls, flight, inertia, stop.word);
         return;
     };
     let slot = place.position(leader);
-    let (controls, flown) = match sub(npc.state.position, leader.position, beside.leader_seen) {
-        Sub::Stop => {
-            // Sub 1 leaves +0x34 alone: its brake bursts an owed burst out.
-            let (controls, flown) = leave_flight::stop(&mut npc.state, handling, inertia, false);
-            let word = Word::stop(controls, &flown, inertia);
-            held_burst::step(npc, &flown, controls, flight, inertia, word);
-            return;
-        }
+    let (controls, flown) = match sub {
         Sub::Keep => keep(npc, leader, slot, handling, flight),
         sub => {
             let close = sub == Sub::Close;

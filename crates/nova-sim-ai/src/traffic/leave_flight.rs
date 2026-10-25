@@ -109,8 +109,8 @@ pub fn fly(
         Leg::RunOut => (*handling, Flight::from(run_out(&mut npc.state, handling))),
         // Sub 1 leaves +0x34 alone: its brake bursts an owed burst out.
         Leg::Brake => {
-            let (controls, flown) = stop(&mut npc.state, handling, inertia, false);
-            (flown, Flight::stop(controls, &flown, inertia))
+            let chosen = stop_flight(&mut npc.state, handling, inertia);
+            (chosen.flown.unwrap_or(*handling), chosen)
         }
     };
     held_burst::step(npc, &flown, chosen.controls, flight, inertia, chosen.word);
@@ -162,6 +162,15 @@ pub(crate) fn stop(
     let (controls, flown, wanted) = stop_wanting(state, handling, inertia, refuelling);
     let turn = flight::turn_to(state, wanted, handling.turn_rate);
     (Controls { turn, ..controls }, flown)
+}
+
+/// Substate 1 (a stop that isn't a refuel) for a ship at `state` on
+/// `handling`, as `inertia` says ([`stop`]), as its flight
+/// ([`Flight::stop`]): flown by the handling it hands back, and leaving
+/// +0x34 alone, so its brake bursts an owed burst out.
+pub(crate) fn stop_flight(state: &mut ShipState, handling: &Handling, inertia: Inertia) -> Flight {
+    let (controls, flown) = stop(state, handling, inertia, false);
+    Flight::stop(controls, &flown, inertia)
 }
 
 /// Substate 1 for a ship at `state` on `handling`, as `inertia` says,
