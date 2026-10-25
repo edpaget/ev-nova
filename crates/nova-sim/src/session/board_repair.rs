@@ -53,7 +53,6 @@
 use super::Session;
 use crate::board_repair::{FlownBy, Recovery, recovery};
 use crate::catalog::ShipId;
-use crate::combat::armament::OutfitRounds;
 use crate::fleet::OrderWord;
 use crate::market::Good;
 use crate::person::MISSION_ON_BOARD;
@@ -116,19 +115,8 @@ impl Session {
     /// carrying its type and leaves the system (see the module docs).
     fn dock_boarded(&mut self, id: NpcId, ship: ShipId) {
         self.mark_boarded(id);
-        self.stow_player_fighter(ship);
+        self.ship.stow_fighter(&mut self.pilot, &self.statics, ship);
         self.leave(id);
-    }
-
-    /// A fighter of ship type `ship` goes back aboard the player, a round
-    /// to the bay launching its type ([`Armament::stow`](crate::Armament::stow)):
-    /// whether a bay took it.
-    pub(super) fn stow_player_fighter(&mut self, ship: ShipId) -> bool {
-        let mut rounds = OutfitRounds {
-            owned: &mut self.pilot.outfits,
-            sources: &self.statics.ammo_outfits,
-        };
-        self.ship.fit.armament.stow(ship, &mut rounds)
     }
 }
 

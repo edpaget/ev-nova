@@ -283,7 +283,7 @@ impl Session {
         };
         match carrier {
             ShipRef::Player => {
-                let stowed = self.stow_player_fighter(ship);
+                let stowed = self.ship.stow_fighter(&mut self.pilot, &self.statics, ship);
                 self.unfleet(id);
                 if !stowed {
                     self.out.save_due = true;
@@ -340,7 +340,10 @@ impl Session {
     /// @0x5df3); one no bay launches is lost, which makes a save due.
     fn recall_fighters(&mut self) {
         for fighter in self.drop_fighters(|_, _, _| false) {
-            if !self.stow_player_fighter(fighter.ship) {
+            if !self
+                .ship
+                .stow_fighter(&mut self.pilot, &self.statics, fighter.ship)
+            {
                 self.out.save_due = true;
             }
         }
@@ -493,6 +496,24 @@ impl Outbox {
 }
 
 impl PlayerShip {
+    /// A fighter of ship type `ship` goes back aboard, a round to the bay
+    /// launching its type among `pilot`'s outfits, sourced from
+    /// `statics`' ammunition outfits ([`Armament::stow`](crate::Armament::stow)):
+    /// whether a bay took it. A fighter that docks, one recalled and one
+    /// boarded back (see the `board_repair` module) all go aboard so.
+    pub(super) fn stow_fighter(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        ship: ShipId,
+    ) -> bool {
+        let mut rounds = OutfitRounds {
+            owned: &mut pilot.outfits,
+            sources: &statics.ammo_outfits,
+        };
+        self.fit.armament.stow(ship, &mut rounds)
+    }
+
     /// For every outfit whose first mod is [`MOD_AMMO`] naming a weapon of
     /// `MaxAmmo` above 0, the most of it the player may own: that
     /// `MaxAmmo` times the player's launchers of the weapon, stock weapons
