@@ -18,54 +18,6 @@ fn a_and_b() -> View {
 }
 
 #[test]
-fn a_slot_key_retargets_and_l_lands_on_the_new_target() {
-    for slot_key in STELLAR_SLOT_KEYS[1] {
-        let mut view = a_and_b();
-        tap(&mut view, LAND);
-        assert_eq!(nav_target(&view), Some(StellarId(128)), "{slot_key:?}");
-        tap_slot(&mut view, slot_key);
-        assert_eq!(nav_target(&view), Some(StellarId(129)), "{slot_key:?}");
-        land_now(&mut view);
-        assert_eq!(view.take_landing(), Some(StellarId(129)), "{slot_key:?}");
-    }
-}
-
-#[test]
-fn the_slot_keys_are_1_to_4_and_f1_to_f4_in_nav_order() {
-    assert_eq!(
-        STELLAR_SLOT_KEYS,
-        [
-            [Key::Char('1'), Key::Function(1)],
-            [Key::Char('2'), Key::Function(2)],
-            [Key::Char('3'), Key::Function(3)],
-            [Key::Char('4'), Key::Function(4)],
-        ]
-    );
-    for (slot, keys) in STELLAR_SLOT_KEYS.iter().enumerate().take(3) {
-        for &slot_key in keys {
-            let mut view = a_and_b();
-            tap_slot(&mut view, slot_key);
-            let expected = [128, 129, 130][slot];
-            assert_eq!(nav_target(&view), Some(StellarId(expected)), "{slot_key:?}");
-        }
-    }
-    let mut view = a_and_b();
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
-    for &empty in &STELLAR_SLOT_KEYS[3] {
-        tap_slot(&mut view, empty);
-        assert_eq!(nav_target(&view), Some(StellarId(129)), "empty slot keeps");
-    }
-}
-
-#[test]
-fn a_slot_key_repeat_or_release_does_nothing() {
-    let mut view = a_and_b();
-    view.input(&held(Key::Char('2')));
-    view.input(&key(Key::Char('2'), false));
-    assert_eq!(nav_target(&view), None);
-}
-
-#[test]
 fn a_click_on_a_stellar_retargets_and_l_lands_there() {
     let mut view = a_and_b();
     tap(&mut view, LAND);
@@ -141,44 +93,6 @@ fn a_click_on_the_status_panel_keeps_the_target_even_over_a_stellar() {
 }
 
 #[test]
-fn f5_selects_the_nearest_stellar() {
-    let mut view = a_and_b();
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
-    tap_slot(&mut view, NEAREST_STELLAR_KEY);
-    assert_eq!(nav_target(&view), Some(StellarId(128)));
-    assert_eq!(NEAREST_STELLAR_KEY, Key::Function(5));
-}
-
-#[test]
-fn nav_off_clears_the_target_and_the_next_l_selects_the_nearest() {
-    let mut view = a_and_b();
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
-    tap(&mut view, NAV_OFF_KEY);
-    assert_eq!(nav_target(&view), None);
-    tap(&mut view, LAND);
-    assert_eq!(view.take_landing(), None, "selects, not lands");
-    assert_eq!(nav_target(&view), Some(StellarId(128)));
-    assert_eq!(NAV_OFF_KEY, Key::Char('`'));
-}
-
-#[test]
-fn nav_off_with_a_course_draws_nav_system_off_keeps_the_course_and_refuses_j() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
-    view.take_sounds();
-    tap(&mut view, NAV_OFF_KEY);
-    assert_eq!(nav(&view), [hud::NAV_OFF]);
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::NavSelected)]);
-    assert!(!view.radar_now().hyperspace_mode);
-    assert_eq!(course(&view), [SystemId(131)], "kept");
-    fly_out(&mut view);
-    tap(&mut view, JUMP);
-    assert!(!view.preparing_jump(), "refused");
-    assert_eq!(view.message(), None, "a seasoned pilot is not told");
-}
-
-#[test]
 fn far_from_the_centre_nav_off_with_a_course_lets_the_arrow_show() {
     let mut view = flight();
     plot(&mut view, 131);
@@ -194,34 +108,6 @@ fn far_from_the_centre_nav_off_with_a_course_lets_the_arrow_show() {
     assert_eq!(most_lines(&mut view), Some(0), "mode 3 hides it");
     tap(&mut view, NAV_OFF_KEY);
     assert_eq!(most_lines(&mut view), Some(3), "mode -1 shows it");
-}
-
-#[test]
-fn hyperspace_mode_with_no_course_draws_hyperspace_over_no_destination() {
-    let mut view = flight();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
-    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_NO_DESTINATION]);
-    assert!(view.radar_now().hyperspace_mode, "the arrow hidden");
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::NavSelected)]);
-    assert_eq!(HYPERSPACE_MODE_KEY, Key::Char('h'));
-}
-
-#[test]
-fn hyper_select_with_no_links_in_mode_3_draws_hyperspace_over_no_destination() {
-    let mut view = FlightView::new(FakeCatalog {
-        onward: true,
-        ..catalog()
-    });
-    run_set(&mut view, "M132");
-    view.settle_script();
-    assert_eq!(system_of(&view), SystemId(132), "Barnard lists no links");
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    view.take_sounds();
-    tap(&mut view, HYPER_SELECT_KEY);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
-    assert_eq!(view.take_sounds(), [], "in silence");
-    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_NO_DESTINATION]);
 }
 
 #[test]
@@ -258,21 +144,6 @@ fn closing_the_hypergate_map_turns_the_nav_off_and_cues_nothing() {
     assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
     assert_eq!(course(&view), [SystemId(131)], "the course kept");
     assert_eq!(nav_mode(&view), NavMode::Off);
-}
-
-#[test]
-fn alt_backquote_lets_go_of_the_ship_target_and_leaves_the_nav_mode() {
-    let mut view = fighting(armed(2, &[]), &two_npcs());
-    tap(&mut view, LAND);
-    tap(&mut view, Key::Tab);
-    assert_eq!(target_of(&view), Some(NpcId(0)));
-    view.take_sounds();
-    alt_tap(&mut view, NAV_OFF_KEY);
-    assert_eq!(target_of(&view), None);
-    assert!(nav_target(&view).is_some(), "the nav system stays on");
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetCleared)]);
-    alt_tap(&mut view, NAV_OFF_KEY);
-    assert_eq!(view.take_sounds(), [], "no target: silent");
 }
 
 // The nav target's brackets.
@@ -478,12 +349,6 @@ fn a_cargo_area_with_room_below_the_credits_draws_no_date() {
 }
 
 #[test]
-fn with_nothing_selected_and_no_course_the_hud_says_nav_system_off() {
-    assert_eq!(nav(&flight()), [hud::NAV_OFF]);
-    assert_eq!(nav(&every_frame(flight())), [hud::NAV_OFF]);
-}
-
-#[test]
 fn the_nav_area_is_centred_by_the_metrics_given() {
     use crate::text::TextMetrics as _;
     use crate::text::fixture::MonoMetrics;
@@ -507,33 +372,6 @@ fn the_nav_area_is_centred_by_the_metrics_given() {
             area.min.y + hud::NAV_OFF_BASELINE - layout.font_size
         )
     );
-}
-
-#[test]
-fn a_stellar_target_not_in_the_scene_is_stellar_navigation_over_no_destination() {
-    let mut view = flight();
-    tap(&mut view, LAND);
-    assert!(nav_target(&view).is_some());
-    view.scene = None;
-    assert_eq!(view.nav_now(), NavDisplay::Stellar(None));
-}
-
-#[test]
-fn the_hud_shows_the_selected_stellar_by_name() {
-    let mut view = flight();
-    tap(&mut view, LAND);
-    assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"], "the nearest");
-}
-
-#[test]
-fn a_plotted_jump_shows_hyperspace_and_the_next_system_if_explored() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
-    jump_to_alpha(&mut view);
-    assert_eq!(nav(&view), [hud::NAV_OFF], "arrived");
-    plot(&mut view, 130);
-    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Sol"]);
 }
 
 #[test]
@@ -723,19 +561,6 @@ fn once_j_is_accepted_the_label_turns_bright_at_the_next_refresh() {
     }
     view.tick(TICK);
     assert_eq!(label(&view), Color::WHITE, "tick {}", now_tick(&view));
-}
-
-#[test]
-fn with_a_target_and_a_course_the_hud_shows_the_target() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    tap(&mut view, LAND);
-    assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"]);
-    assert_eq!(
-        view.session().expect("flying").course(),
-        [SystemId(131)],
-        "the course is kept"
-    );
 }
 
 #[test]
@@ -1220,99 +1045,354 @@ fn a_missing_alert_icon_draws_nothing_and_says_so_once() {
     assert_eq!(told(&mut flight()), 0, "the default catalog has it");
 }
 
-/// Holds Command, taps `k`, lets Command go, and runs the next frame.
-fn command_tap_slot(view: &mut View, k: Key) {
-    command_tap(view, k, false);
-    ticks(view, 1);
+// On a scripted flight: what the nav keys send, and what the nav area
+// shows of the frame.
+
+/// The nav mode in Sol `mode`.
+fn sol_in(mode: NavMode) -> FlightFrame {
+    FlightFrame {
+        nav_mode: mode,
+        ..in_sol()
+    }
+}
+
+/// Presses `k` as flight's input does for a key with no arm of its own
+/// ([`FlightView::nav_key`]), then lets it go.
+fn faked_tap(view: &mut Faked, k: Key) {
+    view.nav_key(k);
+    view.track_held(&key(k, true));
+    view.track_held(&key(k, false));
+}
+
+/// [`faked_tap`], then the frame whose slot block takes it.
+fn faked_tap_slot(view: &mut Faked, k: Key) {
+    faked_tap(view, k);
+    view.nav_held_frame();
+}
+
+/// Presses `k` and holds it, as flight's input does for a key with no arm
+/// of its own.
+fn faked_hold(view: &mut Faked, k: Key) {
+    view.nav_key(k);
+    view.track_held(&key(k, true));
+}
+
+/// The stellar picks `view` sent.
+fn picks(view: &Faked) -> Vec<StellarPick> {
+    sent(view)
+        .iter()
+        .filter_map(|command| match command {
+            FlightCommand::SelectStellar(pick) => Some(*pick),
+            _ => None,
+        })
+        .collect()
 }
 
 #[test]
-fn command_5_selects_the_stellar_f5_does_with_the_nav_sound() {
-    let mut view = a_and_b();
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
-    view.take_sounds();
-    command_tap_slot(&mut view, NEAREST_STELLAR_COMMAND_KEY);
-    assert_eq!(nav_target(&view), Some(StellarId(128)), "the nearest");
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::NavSelected)]);
+fn the_slot_keys_are_1_to_4_and_f1_to_f4_in_nav_order() {
+    assert_eq!(
+        STELLAR_SLOT_KEYS,
+        [
+            [Key::Char('1'), Key::Function(1)],
+            [Key::Char('2'), Key::Function(2)],
+            [Key::Char('3'), Key::Function(3)],
+            [Key::Char('4'), Key::Function(4)],
+        ]
+    );
+    for (slot, keys) in STELLAR_SLOT_KEYS.iter().enumerate() {
+        for &slot_key in keys {
+            let mut view = faked(in_sol());
+            faked_tap_slot(&mut view, slot_key);
+            assert_eq!(picks(&view), [StellarPick::Slot(slot)], "{slot_key:?}");
+        }
+    }
+}
+
+#[test]
+fn a_slot_key_picks_on_the_slot_blocks_next_frame() {
+    let mut view = faked(in_sol());
+    faked_tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    assert_eq!(sent(&view), [], "the press waits for the frame");
+    view.nav_held_frame();
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::SelectStellar(StellarPick::Slot(1))]
+    );
+}
+
+#[test]
+fn a_slot_key_repeat_or_release_sends_nothing() {
+    let mut view = faked(in_sol());
+    view.track_held(&held(Key::Char('2')));
+    view.track_held(&key(Key::Char('2'), false));
+    view.nav_held_frame();
+    assert_eq!(sent(&view), []);
+}
+
+#[test]
+fn f5_picks_the_nearest_stellar() {
+    let mut view = faked(in_sol());
+    faked_tap_slot(&mut view, NEAREST_STELLAR_KEY);
+    assert_eq!(picks(&view), [StellarPick::Nearest]);
+    assert_eq!(NEAREST_STELLAR_KEY, Key::Function(5));
+}
+
+#[test]
+fn no_slot_key_picks_while_the_flight_refuses_the_nav_keys_or_during_a_jump() {
+    let mut view = faked(in_sol());
+    view.sim.refuse(PlayerCommand::Nav);
+    faked_tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    assert_eq!(sent(&view), [], "refused");
+    let mut view = faked(FlightFrame {
+        jump_under_way: true,
+        ..in_sol()
+    });
+    faked_tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    assert_eq!(sent(&view), [], "during a jump");
+}
+
+/// Presses `k` with Command held, as [`command_tap`] does, then runs the
+/// slot block's frame.
+fn faked_command_tap_slot(view: &mut Faked, k: Key) {
+    view.track_held(&key(Key::Command, true));
+    faked_tap(view, k);
+    view.track_held(&key(Key::Command, false));
+    view.nav_held_frame();
+}
+
+#[test]
+fn command_5_picks_the_nearest_as_f5_does() {
+    let mut view = faked(in_sol());
+    faked_command_tap_slot(&mut view, NEAREST_STELLAR_COMMAND_KEY);
+    assert_eq!(picks(&view), [StellarPick::Nearest]);
     assert_eq!(NEAREST_STELLAR_COMMAND_KEY, Key::Char('5'));
 }
 
 #[test]
-fn five_without_command_selects_nothing() {
-    let mut view = a_and_b();
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
-    view.take_sounds();
-    tap_slot(&mut view, NEAREST_STELLAR_COMMAND_KEY);
-    assert_eq!(nav_target(&view), Some(StellarId(129)), "kept");
-    assert_eq!(view.take_sounds(), [], "silent");
+fn five_without_command_picks_nothing() {
+    let mut view = faked(in_sol());
+    faked_tap_slot(&mut view, NEAREST_STELLAR_COMMAND_KEY);
+    assert_eq!(sent(&view), []);
 }
 
 #[test]
-fn command_5_held_then_let_go_of_with_5_still_down_selects_once() {
-    let mut view = a_and_b();
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
-    view.input(&key(Key::Command, true));
-    view.input(&key(NEAREST_STELLAR_COMMAND_KEY, true));
-    ticks(&mut view, 3);
-    assert_eq!(nav_target(&view), Some(StellarId(128)));
-    view.input(&key(Key::Command, false));
-    ticks(&mut view, 1);
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][1]);
+fn command_5_held_then_let_go_of_with_5_still_down_picks_once() {
+    let mut view = faked(in_sol());
+    view.track_held(&key(Key::Command, true));
+    faked_hold(&mut view, NEAREST_STELLAR_COMMAND_KEY);
+    for _ in 0..3 {
+        view.nav_held_frame();
+    }
+    assert_eq!(picks(&view), [StellarPick::Nearest]);
+    view.track_held(&key(Key::Command, false));
+    view.nav_held_frame();
+    faked_tap_slot(&mut view, STELLAR_SLOT_KEYS[1][1]);
     assert_eq!(
-        nav_target(&view),
-        Some(StellarId(129)),
+        picks(&view),
+        [StellarPick::Nearest, StellarPick::Slot(1)],
         "5 alone holds nothing"
     );
 }
 
 #[test]
-fn a_slot_key_pressed_while_another_is_held_does_nothing() {
-    let mut view = a_and_b();
-    view.input(&key(Key::Function(1), true));
-    ticks(&mut view, 1);
-    assert_eq!(nav_target(&view), Some(StellarId(128)));
-    view.take_sounds();
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
-    tap_slot(&mut view, NEAREST_STELLAR_KEY);
+fn a_slot_key_pressed_while_another_is_held_picks_nothing() {
+    let mut view = faked(in_sol());
+    faked_hold(&mut view, Key::Function(1));
+    view.nav_held_frame();
+    faked_tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    faked_tap_slot(&mut view, NEAREST_STELLAR_KEY);
+    assert_eq!(picks(&view), [StellarPick::Slot(0)], "F1 holds the latch");
+    view.track_held(&key(Key::Function(1), false));
+    faked_tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
     assert_eq!(
-        nav_target(&view),
-        Some(StellarId(128)),
-        "F1 holds the latch"
+        picks(&view),
+        [StellarPick::Slot(0), StellarPick::Slot(1)],
+        "let go, 2 acts"
     );
-    assert_eq!(view.take_sounds(), [], "silent");
-    view.input(&key(Key::Function(1), false));
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
-    assert_eq!(nav_target(&view), Some(StellarId(129)), "let go, 2 acts");
 }
 
 #[test]
-fn a_slot_key_held_selects_once() {
-    let mut view = a_and_b();
-    view.input(&key(STELLAR_SLOT_KEYS[1][0], true));
-    ticks(&mut view, 1);
-    view.take_sounds();
-    ticks(&mut view, 5);
-    assert_eq!(nav_target(&view), Some(StellarId(129)));
-    assert_eq!(view.take_sounds(), [], "one beep a hold");
+fn a_slot_key_held_picks_once() {
+    let mut view = faked(in_sol());
+    faked_hold(&mut view, STELLAR_SLOT_KEYS[1][0]);
+    for _ in 0..6 {
+        view.nav_held_frame();
+    }
+    assert_eq!(picks(&view), [StellarPick::Slot(1)], "one pick a hold");
 }
 
 #[test]
-fn slot_keys_pressed_in_one_frame_make_one_pick_and_one_beep() {
-    let mut view = a_and_b();
-    view.take_sounds();
-    tap(&mut view, STELLAR_SLOT_KEYS[1][1]);
-    tap(&mut view, STELLAR_SLOT_KEYS[2][0]);
-    ticks(&mut view, 1);
-    assert_eq!(nav_target(&view), Some(StellarId(129)), "F2 over 3");
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::NavSelected)]);
-    tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
-    tap(&mut view, STELLAR_SLOT_KEYS[2][0]);
-    ticks(&mut view, 1);
-    assert_eq!(nav_target(&view), Some(StellarId(130)), "3 over 1");
-    view.take_sounds();
-    tap(&mut view, STELLAR_SLOT_KEYS[2][1]);
-    tap(&mut view, NEAREST_STELLAR_KEY);
-    ticks(&mut view, 1);
-    assert_eq!(nav_target(&view), Some(StellarId(128)), "F5 over F3");
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::NavSelected)]);
+fn slot_keys_pressed_in_one_frame_make_one_pick() {
+    let mut view = faked(in_sol());
+    faked_tap(&mut view, STELLAR_SLOT_KEYS[1][1]);
+    faked_tap(&mut view, STELLAR_SLOT_KEYS[2][0]);
+    view.nav_held_frame();
+    assert_eq!(picks(&view), [StellarPick::Slot(1)], "F2 over 3");
+    faked_tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    faked_tap(&mut view, STELLAR_SLOT_KEYS[2][0]);
+    view.nav_held_frame();
+    faked_tap(&mut view, STELLAR_SLOT_KEYS[2][1]);
+    faked_tap(&mut view, NEAREST_STELLAR_KEY);
+    view.nav_held_frame();
+    assert_eq!(
+        picks(&view),
+        [
+            StellarPick::Slot(1),
+            StellarPick::Slot(2),
+            StellarPick::Nearest
+        ],
+        "3 over 1, then F5 over F3"
+    );
+}
+
+#[test]
+fn nav_off_sends_the_blocks_nav_off_press() {
+    let mut view = faked(sol_in(NavMode::Stellar(Some(StellarId(129)))));
+    faked_tap(&mut view, NAV_OFF_KEY);
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::NavModeKeys {
+            nav_off: true,
+            h: false
+        }]
+    );
+    assert_eq!(NAV_OFF_KEY, Key::Char('`'));
+}
+
+#[test]
+fn hyperspace_mode_sends_the_blocks_h_press_and_shows_the_floating_map() {
+    let mut view = faked(in_sol());
+    view.hyperspace_key(HYPERSPACE_MODE_KEY);
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::NavModeKeys {
+            nav_off: false,
+            h: true
+        }]
+    );
+    assert!(view.floating.is_up());
+    assert_eq!(HYPERSPACE_MODE_KEY, Key::Char('h'));
+}
+
+#[test]
+fn hyper_select_sends_the_next_system_and_shows_the_floating_map_only_in_mode_3() {
+    let mut view = faked(in_sol());
+    view.hyperspace_key(HYPER_SELECT_KEY);
+    assert_eq!(sent(&view), [FlightCommand::SelectNextSystem]);
+    assert!(!view.floating.is_up(), "the frame's nav is off");
+    let mut view = faked(sol_in(NavMode::Hyperspace(None)));
+    view.hyperspace_key(HYPER_SELECT_KEY);
+    assert!(view.floating.is_up(), "mode 3");
+}
+
+#[test]
+fn option_backquote_lets_go_of_the_target_and_sends_no_block_press() {
+    let mut view = faked(sol_in(NavMode::Stellar(Some(StellarId(129)))));
+    view.track_held(&key(Key::Alt, true));
+    faked_tap(&mut view, NAV_OFF_KEY);
+    assert_eq!(sent(&view), [FlightCommand::ClearTarget]);
+}
+
+#[test]
+fn option_backquote_lets_go_of_the_target_during_a_jump_too() {
+    let mut view = faked(FlightFrame {
+        jump_under_way: true,
+        ..in_sol()
+    });
+    view.track_held(&key(Key::Alt, true));
+    faked_tap(&mut view, NAV_OFF_KEY);
+    view.track_held(&key(Key::Alt, false));
+    faked_tap(&mut view, NAV_OFF_KEY);
+    assert_eq!(sent(&view), [FlightCommand::ClearTarget], "no block press");
+}
+
+#[test]
+fn with_the_nav_off_the_nav_area_says_nav_system_off() {
+    assert_eq!(faked(in_sol()).nav_now(), NavDisplay::Off);
+}
+
+#[test]
+fn a_stellar_the_scene_doesnt_hold_is_named_as_the_flight_names_it_or_not_at_all() {
+    let mut view = faked(sol_in(NavMode::Stellar(Some(StellarId(150)))));
+    assert_eq!(view.nav_now(), NavDisplay::Stellar(None), "no name");
+    view.sim.map_mut().stellar_names = vec![(StellarId(150), "Vega Prime".to_owned())];
+    assert_eq!(
+        view.nav_now(),
+        NavDisplay::Stellar(Some("Vega Prime".to_owned()))
+    );
+}
+
+#[test]
+fn the_nav_area_names_a_stellar_by_its_name_in_the_scene() {
+    let mut view = faked(sol_in(NavMode::Stellar(Some(StellarId(129)))));
+    let shown = [StellarId(128), StellarId(129)].into_iter().collect();
+    view.scene = Some(SystemScene::load_shown(
+        &*view.catalog,
+        SystemId(130),
+        &shown,
+    ));
+    view.sim.map_mut().stellar_names = vec![(StellarId(129), "Luna".to_owned())];
+    assert_eq!(
+        view.nav_now(),
+        NavDisplay::Stellar(Some("Moon".to_owned())),
+        "the scene's name first"
+    );
+}
+
+#[test]
+fn a_hyperspace_selection_is_named_once_explored_with_the_frames_readiness() {
+    let mut view = faked(FlightFrame {
+        jump_readiness: nova_sim::JumpReadiness::Blocked,
+        ..sol_in(NavMode::Hyperspace(Some(SystemId(131))))
+    });
+    assert_eq!(
+        view.nav_now(),
+        NavDisplay::Hyperspace {
+            destination: hud::NavDestination::Unexplored,
+            readiness: nova_sim::JumpReadiness::Blocked,
+        }
+    );
+    view.sim.map_mut().explored = vec![SystemId(131)];
+    view.sim.set_frame(FlightFrame {
+        jump_readiness: nova_sim::JumpReadiness::Underway,
+        ..sol_in(NavMode::Hyperspace(Some(SystemId(131))))
+    });
+    assert_eq!(
+        view.nav_now(),
+        NavDisplay::Hyperspace {
+            destination: hud::NavDestination::Named("Alpha Centauri".to_owned()),
+            readiness: nova_sim::JumpReadiness::Underway,
+        }
+    );
+}
+
+#[test]
+fn hyperspace_with_nothing_selected_is_no_destination() {
+    let view = faked(FlightFrame {
+        jump_readiness: nova_sim::JumpReadiness::Blocked,
+        ..sol_in(NavMode::Hyperspace(None))
+    });
+    assert_eq!(
+        view.nav_now(),
+        NavDisplay::Hyperspace {
+            destination: hud::NavDestination::None,
+            readiness: nova_sim::JumpReadiness::Blocked,
+        }
+    );
+}
+
+#[test]
+fn retaking_the_nav_area_notes_the_frames_text_count() {
+    let mut view = faked(FlightFrame {
+        texts_queued: 3,
+        ..sol_in(NavMode::Stellar(None))
+    });
+    view.nav_marked = true;
+    view.retake_nav();
+    assert_eq!(view.nav_texts, 3);
+    assert!(!view.nav_marked);
+    assert_eq!(
+        view.nav_scene,
+        Some((NavMode::Stellar(None), NavDisplay::Stellar(None)))
+    );
 }

@@ -140,19 +140,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         }
     }
 
-    /// Tracks a flight key `input` presses or lets go of as held.
-    pub(super) fn track_held(&mut self, input: &Input) {
-        if let Input::Key { key, pressed, .. } = *input
-            && FLIGHT_KEYS.contains(&key)
-        {
-            if pressed {
-                self.held.insert(key);
-            } else {
-                self.held.remove(&key);
-            }
-        }
-    }
-
     /// What `input` tells the cursor: a pointer move or button press shows
     /// it where the pointer is, and the pointer leaving the window hides
     /// it; a key pressed fades it at the next flight step (none runs while
@@ -1032,6 +1019,19 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
 /// ([`FlightView::frame_now`]) and send their commands through it, so any
 /// flight drives them, a scripted one in the component tests.
 impl<C, S: FlightSim> FlightView<C, S> {
+    /// Tracks a flight key `input` presses or lets go of as held.
+    pub(super) fn track_held(&mut self, input: &Input) {
+        if let Input::Key { key, pressed, .. } = *input
+            && FLIGHT_KEYS.contains(&key)
+        {
+            if pressed {
+                self.held.insert(key);
+            } else {
+                self.held.remove(&key);
+            }
+        }
+    }
+
     /// One frame of the keys `_HandlePlayer` polls with a latch before the
     /// Board and jump keys, with those held down, in its order: Option-\`
     /// and the Nav Off / Hyperspace Mode block
