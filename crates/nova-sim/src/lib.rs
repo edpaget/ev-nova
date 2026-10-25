@@ -8,7 +8,7 @@
 //! `nova-sim-port`. Each of their modules is re-exported here at its old
 //! path, so a `nova_sim::…` path doesn't depend on which crate holds the
 //! code. The crate's own modules are the session layer's: [`session`],
-//! [`save`], [`saves`], [`course`], [`galaxy_map`], [`glow`],
+//! [`save`], [`saves`], [`course`], [`flight_frame`], [`galaxy_map`], [`glow`],
 //! [`map_borders`], [`map_panel`], [`map_route`], [`map_search`], [`pre_jump`], [`rating`],
 //! [`red_alert`], [`status_cargo`], [`target_panel`] and [`top_speed`],
 //! with the test support in `fixture`.
@@ -140,6 +140,12 @@
 //!   [`Escort`], and the [`EscortOrder`] it follows.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
 //!   the player's [`Controls`].
+//! - [`flight_frame`]: the values the flight view's `FlightSim` port
+//!   carries: the [`FlightFrame`](flight_frame::FlightFrame) a session
+//!   fills, the [`FlightCommand`](flight_frame::FlightCommand) it answers
+//!   with an [`Answer`](flight_frame::Answer), the
+//!   [`FlightEvent`](flight_frame::FlightEvent)s it raises, and a step's
+//!   input and report.
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
 //!   `shïp` and its outfits' fuel scoops.
 //! - [`galaxy_map`]: what the galaxy map draws, as `_DrawMap` decides
@@ -414,6 +420,7 @@ pub use nova_sim_story::map_walk;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub use nova_sim_base::flight;
+pub mod flight_frame;
 pub use nova_sim_base::fuel;
 pub use nova_sim_combat::fleet;
 pub mod galaxy_map;

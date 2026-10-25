@@ -428,6 +428,7 @@
 mod afterburner;
 mod afterburner_roll;
 mod answer_flag;
+mod apply;
 mod arrival_system;
 mod asteroid_beams;
 mod asteroid_hits;
@@ -484,6 +485,7 @@ mod fighters;
 mod fire_gates;
 #[cfg(any(test, feature = "fixture"))]
 mod fixture_setters;
+mod frame;
 mod free_cargo;
 mod game_work;
 mod gate_escorts;
