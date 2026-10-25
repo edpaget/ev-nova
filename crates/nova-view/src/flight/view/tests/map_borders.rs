@@ -1,8 +1,10 @@
 use super::*;
 
+use crate::galaxy::GalaxyMap;
 use crate::galaxy::buttons::{HIDE_BORDERS_LABEL, SHOW_BORDERS_LABEL};
 use crate::text::fixture::MonoMetrics;
-use nova_sim::map_borders::Next;
+use nova_sim::GovtId;
+use nova_sim::map_borders::{BorderSources, Next};
 use nova_sim::{RuleKey, RuleSource, Rulebook};
 
 // The course map's borders in flight: the session's sources, the map's
@@ -62,13 +64,53 @@ fn labelled(view: &View, label: &str) -> bool {
         .any(|command| matches!(command, DrawCommand::Text { text, .. } if text == label))
 }
 
+/// The sources a flight in Sol paints the borders from: Sol (130, at the
+/// origin) the Federation's (128), and with `near`, Proxima Near (134,
+/// at (40, 30)) government 129's.
+fn sources(near: bool) -> BorderSources {
+    let mut systems = vec![(SystemId(130), (0, 0), Some(GovtId(128)))];
+    if near {
+        systems.push((SystemId(134), (40, 30), Some(GovtId(129))));
+    }
+    BorderSources::unfiltered(systems, nova_sim::govt::Governments::empty())
+}
+
+/// A view over a scripted flight in Sol over [`FakeCatalog::near`]'s
+/// galaxy, drawing the map as [`sol_drawing`], painting the borders from
+/// `sources`.
+fn faked_bordered(sources: BorderSources) -> Faked {
+    let catalog = FakeCatalog {
+        near: true,
+        ..catalog()
+    };
+    let mut view = faked_in(catalog, in_sol());
+    let map = view.sim.map_mut();
+    map.drawing = Some(sol_drawing());
+    map.border_sources = Some(sources);
+    view
+}
+
+/// The governments of the cells `map` shows, once each.
+fn govts_on(map: &GalaxyMap) -> Vec<i16> {
+    let mut govts: Vec<i16> = map.border_cells().iter().map(|cell| cell.govt.0).collect();
+    govts.sort_unstable();
+    govts.dedup();
+    govts
+}
+
 #[test]
-fn the_course_map_opens_on_the_sessions_sources_and_runs_its_pass_on_the_ticks() {
+fn the_course_map_opens_on_the_flights_sources_with_the_coarse_pass() {
+    let mut view = faked_bordered(sources(true));
+    view.open_map();
+    assert_eq!(govts_on(&view.map), [128, 129], "the coarse blocks");
+    assert_eq!(view.map.border_passes().step(), 8);
+    assert_eq!(view.map.border_passes().next(), Next::Unstarted);
+}
+
+#[test]
+fn the_course_map_runs_its_pass_on_flights_ticks() {
     let mut view = known(FlightView::new(bordered()));
     tap(&mut view, MAP);
-    assert_eq!(govts_shown(&view), [128, 129], "the coarse blocks");
-    assert_eq!(passes(&view).step(), 8);
-    assert_eq!(passes(&view).next(), Next::Unstarted);
     ticks(&mut view, 1);
     assert!(view.map_open());
     assert_eq!(passes(&view).next(), Next::Idle, "the map ticked");
@@ -77,33 +119,23 @@ fn the_course_map_opens_on_the_sessions_sources_and_runs_its_pass_on_the_ticks()
 }
 
 #[test]
-fn the_maps_next_drawing_takes_the_sources_again() {
-    // Barnard (132, at (0, 600)), government 129's and lived in, is
-    // explored but unknown as the map opens; it becomes known while the
-    // map is open, as the hypergate map's arrows mark its offers known.
-    // The map's next drawing takes the sources again, so the next pass
-    // adds it.
-    let mut view = FlightView::new(FakeCatalog {
-        governed: vec![(130, 128), (132, 129)],
-        lived: vec![132],
-        sol_navs: vec![Some((StellarFlags::CAN_LAND, 0))],
-        ..catalog()
-    });
-    run_set(&mut view, "X132");
-    tap(&mut view, MAP);
+fn the_maps_next_drawing_takes_the_flights_sources_again() {
+    // Proxima Near is unknown as the map opens; it becomes known while
+    // the map is open, as the hypergate map's arrows mark its offers
+    // known. The map's next drawing takes the sources again, so the
+    // next pass adds it.
+    let mut view = faked_bordered(sources(false));
+    view.open_map();
     for _ in 0..5 {
-        tap(&mut view, Key::Char('-'));
+        faked_map_tap(&mut view, Key::Char('-'));
     }
-    assert!(!view.course_map().place().expect("open").can_zoom_out());
-    assert_eq!(govts_shown(&view), [128], "Barnard unknown");
-    view.sim
-        .session
-        .as_mut()
-        .expect("flying")
-        .mark_known([SystemId(132)]);
-    tap(&mut view, Key::Tab);
-    tap(&mut view, Key::Left);
-    assert_eq!(govts_shown(&view), [128, 129], "Barnard's blocks too");
+    assert!(!view.map.place().expect("open").can_zoom_out());
+    assert_eq!(govts_on(&view.map), [128], "Proxima Near unknown");
+    view.sim.map_mut().border_sources = Some(sources(true));
+    view.sim.queue_answer(Answer::Done);
+    faked_map_tap(&mut view, Key::Tab);
+    faked_map_tap(&mut view, Key::Left);
+    assert_eq!(govts_on(&view.map), [128, 129], "Proxima Near's blocks too");
 }
 
 #[test]
