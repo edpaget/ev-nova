@@ -123,7 +123,7 @@ impl Session {
     /// A press on an in-flight map (see the module docs): `None` when no
     /// hit is accepted, and the map drags; otherwise what the first
     /// accepted hit did.
-    pub fn map_click(&mut self, press: &MapPress<'_>) -> Option<MapClicked> {
+    pub(crate) fn map_click(&mut self, press: &MapPress<'_>) -> Option<MapClicked> {
         self.chart
             .map_click(&mut self.pilot, &self.setup, self.mode.landed(), press)
     }
@@ -134,7 +134,7 @@ impl Session {
     /// port and on the hypergate map alike. The caller turns
     /// `showClearRouteButton` off and redraws the nav area at once
     /// (`_DrawStatus` @0x12dba).
-    pub fn clear_route(&mut self) {
+    pub(crate) fn clear_route(&mut self) {
         self.chart.clear_route(&mut self.pilot);
     }
 }

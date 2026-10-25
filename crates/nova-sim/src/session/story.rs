@@ -751,7 +751,7 @@ impl Session {
     /// [`RuleKey::RouteRewrite`]'s other reading it keeps them for good
     /// (see the session's `course` module).
     #[must_use]
-    pub fn course_shown(&self) -> Vec<SystemId> {
+    pub(crate) fn course_shown(&self) -> Vec<SystemId> {
         self.chart.course_shown(&self.pilot)
     }
 

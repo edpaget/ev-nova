@@ -317,7 +317,7 @@ impl Session {
     /// Saves the nav mode and its selection as a port dialog opens, as the
     /// original saves +0x6a and +0x6c (see the module's **Setters**). The
     /// raw selection is saved, not the one resolved by place.
-    pub fn save_port_nav(&mut self) {
+    pub(crate) fn save_port_nav(&mut self) {
         self.chart.save_port_nav();
     }
 
@@ -325,7 +325,7 @@ impl Session {
     /// ([`Session::save_port_nav`]), mode and selection exactly as saved,
     /// as the dialog closes. With nothing saved it changes nothing, and a
     /// save is restored once.
-    pub fn restore_port_nav(&mut self) {
+    pub(crate) fn restore_port_nav(&mut self) {
         self.chart.restore_port_nav();
     }
 
@@ -335,7 +335,7 @@ impl Session {
     /// and +0x6c back from it after a map opened from them
     /// (@0x5e004-0x5e01a, @0x5be9e-0x5beba): the dialog's own close still
     /// restores it once. With nothing saved it changes nothing.
-    pub fn put_back_port_nav(&mut self) {
+    pub(crate) fn put_back_port_nav(&mut self) {
         self.chart.put_back_port_nav();
     }
 
@@ -354,7 +354,7 @@ impl Session {
     /// write +0x6a and +0x6c back after `_DoSystemMap` returns (see the
     /// module's **Setters**). The course is never saved, so a Shift-click's
     /// course stays.
-    pub fn restore_map_nav(&mut self, saved: SavedNav) {
+    pub(crate) fn restore_map_nav(&mut self, saved: SavedNav) {
         self.chart.restore_map_nav(saved);
     }
 
@@ -366,7 +366,7 @@ impl Session {
     /// [`RuleKey::MapPlotting`]'s other reading, which has no original;
     /// there the selection saved belongs to another mode and nothing
     /// changes.
-    pub fn restore_map_selection(&mut self, saved: SavedNav) {
+    pub(crate) fn restore_map_selection(&mut self, saved: SavedNav) {
         self.chart.restore_map_selection(saved);
     }
 
@@ -375,7 +375,7 @@ impl Session {
     /// closes (see the module's **Setters**). The save is kept, as the
     /// bar's locals outlive each map, so every map is put back to the
     /// same nav. With nothing saved it changes nothing.
-    pub fn restore_bar_nav(&mut self) {
+    pub(crate) fn restore_bar_nav(&mut self) {
         self.chart.restore_bar_nav();
     }
 
@@ -386,7 +386,7 @@ impl Session {
     /// no sound. The original writes the first Con slot whose system
     /// stands at the hop's place (@0xe30f-0xe344), which a later map
     /// cycle steps on from ([`Session::cycle_map_selection`]).
-    pub fn cue_course(&mut self) {
+    pub(crate) fn cue_course(&mut self) {
         self.chart.cue_course(&self.pilot, &self.setup);
     }
 
@@ -402,7 +402,7 @@ impl Session {
     /// a jump (pre-jump stage too) nothing changes and it says so. The
     /// flight view keeps the block's latch (0xdee04), which says when a
     /// held key presses again.
-    pub fn nav_mode_keys(&mut self, nav_off: bool, hyperspace: bool) -> bool {
+    pub(crate) fn nav_mode_keys(&mut self, nav_off: bool, hyperspace: bool) -> bool {
         if self.mode.jump().is_some() {
             return false;
         }
@@ -439,7 +439,7 @@ impl Session {
     /// [`SimSound::TargetCleared`], and says whether there was one. With
     /// none it is silent. The nav mode is untouched, and the original
     /// takes it during a jump too.
-    pub fn clear_target(&mut self) -> bool {
+    pub(crate) fn clear_target(&mut self) -> bool {
         self.chart.clear_target(&mut self.out)
     }
 
@@ -494,7 +494,7 @@ impl Session {
     /// [`HyperSelectRule::OneJumpCourse`](crate::HyperSelectRule::OneJumpCourse)
     /// the press plots a one-jump course to the system selected, the
     /// course that reading's cycle starts from.
-    pub fn select_next_system(&mut self) -> Option<SystemId> {
+    pub(crate) fn select_next_system(&mut self) -> Option<SystemId> {
         self.chart.select_next_system(
             &mut self.pilot,
             &self.setup,
@@ -511,7 +511,7 @@ impl Session {
     /// the system standing for it: its box is at the slot's own position
     /// (@0x6a25c-0x6a2af), and mode 3 selects it raw (@0x6a719-0x6a727).
     #[must_use]
-    pub fn floating_map_links(&self) -> Vec<SystemId> {
+    pub(crate) fn floating_map_links(&self) -> Vec<SystemId> {
         self.chart.floating_map_links(&self.pilot)
     }
 
@@ -560,7 +560,7 @@ impl Session {
     /// original redraws the nav area (@0x13fb2-0x1406e), which the flight
     /// view does, and selects [`Session::map_preselection`] on the map
     /// (@0x1408c-0x140d8).
-    pub fn cycle_map_selection(&mut self) -> bool {
+    pub(crate) fn cycle_map_selection(&mut self) -> bool {
         self.chart
             .cycle_map_selection(&self.pilot, &self.setup, self.mode.landed())
     }
@@ -572,7 +572,7 @@ impl Session {
     /// @0x6a73a-0x6a75d). The course is kept. During a jump (pre-jump
     /// stage too) nothing changes and it says so, as the click is gated
     /// on the jump state (@0x6a145).
-    pub fn select_on_floating_map(&mut self, link: Option<SystemId>) -> bool {
+    pub(crate) fn select_on_floating_map(&mut self, link: Option<SystemId>) -> bool {
         self.chart
             .select_on_floating_map(&mut self.out, self.mode.jump(), link)
     }
