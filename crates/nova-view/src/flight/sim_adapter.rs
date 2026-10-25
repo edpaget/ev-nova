@@ -28,6 +28,7 @@ use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
+use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, DisableRule, LegalCode, MapMarks, MissionId, NovaAi,
     NovaBoarding, NovaDisable, NovaLaw, PilotCatalog, PlayerCommand, PointDefenceRule, SavedNav,
@@ -311,6 +312,10 @@ impl<C> MapSource for SessionFlight<C> {
         self.session()
             .is_ok_and(|session| session.pilot().has_explored(system))
     }
+
+    fn galaxy(&self) -> Option<&OverlaidGalaxy> {
+        self.session().ok().map(Session::galaxy)
+    }
 }
 
 impl<C> CommSource for SessionFlight<C> {}
@@ -364,6 +369,7 @@ mod tests {
         assert_eq!(flight.floating_map_places(), FloatingLinks::default());
         assert_eq!(flight.stellar_name(StellarId(128)), None);
         assert!(!flight.has_explored(none));
+        assert_eq!(flight.galaxy(), None);
     }
 
     #[test]

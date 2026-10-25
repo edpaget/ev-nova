@@ -608,43 +608,42 @@ impl<
     }
 
     /// Catches the screen up with what the session has told since this
-    /// was last called ([`Session::take_events`]), and gives what it
+    /// was last called ([`FlightEvent::Session`]), and gives what it
     /// redrew. Several events of a kind ask for one reaction, decided by
     /// the events alone and never by what the session was last asked to
-    /// do: a change of ship reads the player's sprite sheet afresh
+    /// do: a change to the galaxy draws the flight's galaxy on the course
+    /// map with the course as it is flown ([`FlightView::catch_up_then`]);
+    /// a change of ship reads the player's sprite sheet afresh
     /// ([`FlightView::follow_ship`]); a system entered afresh is laid out
     /// ([`FlightView::lay_out`]); otherwise a move to another stellar of
     /// the system shown draws the ship there ([`FlightView::place_ship`]);
-    /// a rebuild point that changed which stellars are shown, with no
-    /// system entered, reads the scene again with them ([`shown_scene`]);
-    /// and a change to the galaxy draws the session's galaxy on the course
-    /// map ([`GalaxyMap::show_galaxy`](crate::galaxy::GalaxyMap::show_galaxy)) with the course as it is flown.
+    /// and a rebuild point that changed which stellars are shown, with no
+    /// system entered, reads the scene again with them ([`shown_scene`])
+    /// ([`FlightView::redraw_scene`]).
     ///
-    /// The only caller of [`Session::take_events`]: each frame calls it
+    /// The only place the session events are taken: each frame calls it
     /// first, so a change made outside the view's own methods (a
     /// developer tools' edit, a set expression a control bit runs) is
     /// drawn by the next frame; and each of the view's methods that drives
     /// the session between frames calls it last, so its caller sees the
     /// screen caught up at once. Taking the events again finds none.
+    ///
+    /// [`FlightEvent::Session`]: nova_sim::flight_frame::FlightEvent::Session
     pub(super) fn catch_up(&mut self) -> Redrawn {
-        let Ok(session) = &mut self.sim.session else {
+        if self.sim.session.is_err() {
             return Redrawn::default();
+        }
+        self.catch_up_then(Self::redraw_scene)
+    }
+
+    /// [`FlightView::catch_up`]'s session-side redraws, given what the
+    /// events asked for, in their order: the ship's sheet, the bar, the
+    /// layout or the ship's place, the scene read again, the stellars'
+    /// looks, the status bar and the stars.
+    fn redraw_scene(&mut self, redrawn: Redrawn) {
+        let Ok(session) = &self.sim.session else {
+            return;
         };
-        let mut redrawn = Redrawn::default();
-        self.inbox.drain_session(session);
-        for event in self.inbox.take_events() {
-            match event {
-                SessionEvent::ShipChanged => redrawn.ship = true,
-                SessionEvent::SystemChanged => redrawn.system = true,
-                SessionEvent::StellarChanged => redrawn.stellar = true,
-                SessionEvent::GalaxyChanged => redrawn.galaxy = true,
-                SessionEvent::StellarsRebuilt => redrawn.rebuilt = true,
-                SessionEvent::StarfieldReset => redrawn.stars = true,
-            }
-        }
-        if redrawn.galaxy {
-            self.map.show_galaxy(session.galaxy());
-        }
         let system = session.system();
         let reshown = redrawn.rebuilt
             && !redrawn.system
@@ -655,11 +654,6 @@ impl<
                     .map(|stellar| stellar.id)
                     .eq(session.stellars_shown())
             });
-        if redrawn.galaxy {
-            // With the galaxy, before anything else is drawn: only reads
-            // came between.
-            self.show_course();
-        }
         if redrawn.ship {
             self.follow_ship();
         }
@@ -681,16 +675,6 @@ impl<
         if std::mem::take(&mut self.stars_due) || redrawn.stars {
             self.reset_stars();
         }
-        // The open map's drawing follows the galaxy, the explored and known
-        // sets, the course and the nav. The flight is paused while it is
-        // open, so this is rare: a set expression or the developer tools.
-        if self.map_open
-            && self.sim.session.is_ok()
-            && (redrawn.galaxy || self.map_seen.as_ref() != Some(&self.frame_now().map_key))
-        {
-            self.redraw_map();
-        }
-        redrawn
     }
 
     /// Scatters the stars afresh about the ship and places them once, on
@@ -1442,6 +1426,49 @@ fn effects_scene(session: &Session) -> Scene {
 /// ([`FlightView::close_map`]), as the hypergate entry it may run is still
 /// the session's: [`FlightView::map_input_taken`] says when it is due.
 impl<C, S: FlightSim> FlightView<C, S> {
+    /// [`FlightView::catch_up`]'s work over the port, with `redraw` the
+    /// redraws that still read the session ([`FlightView::redraw_scene`]
+    /// for a session's flight): drains the flight's session events
+    /// ([`FlightEvent::Session`]) and folds them into what they ask for,
+    /// several of a kind asking for one reaction. A change to the galaxy
+    /// draws the flight's galaxy on the course map
+    /// ([`MapSource::galaxy`](crate::flight::sim_port::MapSource::galaxy),
+    /// [`GalaxyMap::show_galaxy`](crate::galaxy::GalaxyMap::show_galaxy))
+    /// with the course as it is flown, before anything else is drawn, only
+    /// reads coming between. Then `redraw` runs, and last the open map's
+    /// drawing follows the galaxy, the explored and known sets, the course
+    /// and the nav ([`FlightView::redraw_map`]): the flight is paused while
+    /// it is open, so this is rare, a set expression or the developer
+    /// tools. Gives what was redrawn.
+    ///
+    /// [`FlightEvent::Session`]: nova_sim::flight_frame::FlightEvent::Session
+    pub(super) fn catch_up_then(&mut self, redraw: impl FnOnce(&mut Self, Redrawn)) -> Redrawn {
+        let mut redrawn = Redrawn::default();
+        for event in self.drain().take_events() {
+            match event {
+                SessionEvent::ShipChanged => redrawn.ship = true,
+                SessionEvent::SystemChanged => redrawn.system = true,
+                SessionEvent::StellarChanged => redrawn.stellar = true,
+                SessionEvent::GalaxyChanged => redrawn.galaxy = true,
+                SessionEvent::StellarsRebuilt => redrawn.rebuilt = true,
+                SessionEvent::StarfieldReset => redrawn.stars = true,
+            }
+        }
+        if redrawn.galaxy {
+            if let Some(galaxy) = self.sim.galaxy() {
+                self.map.show_galaxy(galaxy);
+            }
+            self.show_course();
+        }
+        redraw(self, redrawn);
+        if self.map_open
+            && (redrawn.galaxy || self.map_seen.as_ref() != Some(&self.frame_now().map_key))
+        {
+            self.redraw_map();
+        }
+        redrawn
+    }
+
     /// Shows the course as it is flown on the course map, from the
     /// current system ([`FlightFrame::course_shown`](nova_sim::flight_frame::FlightFrame::course_shown)).
     pub(super) fn show_course(&mut self) {

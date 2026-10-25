@@ -20,6 +20,7 @@ use nova_sim::map_borders::BorderSources;
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::navigation::NavMode;
+use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{MapMarks, MissionId, PlayerCommand, SavedNav, StellarId, StellarPick};
 
 use super::{CommSource, FlightSim, MapSource, PortSource};
@@ -81,6 +82,8 @@ pub struct FakeMap {
     pub stellar_names: Vec<(StellarId, String)>,
     /// The systems [`MapSource::has_explored`] says are explored.
     pub explored: Vec<SystemId>,
+    /// [`MapSource::galaxy`]'s answer.
+    pub galaxy: Option<OverlaidGalaxy>,
 }
 
 /// A [`MapSource`] question a [`FakeFlight`] was asked whose arguments a
@@ -290,6 +293,10 @@ impl MapSource for FakeFlight {
 
     fn has_explored(&self, system: SystemId) -> bool {
         self.map.explored.contains(&system)
+    }
+
+    fn galaxy(&self) -> Option<&OverlaidGalaxy> {
+        self.map.galaxy.as_ref()
     }
 }
 
@@ -523,6 +530,7 @@ mod tests {
         assert_eq!(fake.map_nav(), None);
         assert_eq!(fake.stellar_name(StellarId(128)), None);
         assert!(!fake.has_explored(SystemId(130)));
+        assert_eq!(fake.galaxy(), None);
     }
 
     #[test]
@@ -549,6 +557,8 @@ mod tests {
         map.floating = floating.clone();
         map.stellar_names = vec![(StellarId(128), "Earth".to_owned())];
         map.explored = vec![SystemId(130)];
+        let galaxy = OverlaidGalaxy::new(Vec::new(), nova_sim::story::GalaxyOverlay::default());
+        map.galaxy = Some(galaxy.clone());
         assert_eq!(
             fake.find_map_system("x"),
             Some(SearchOutcome::Found(SystemId(131)))
@@ -567,6 +577,7 @@ mod tests {
         assert_eq!(fake.stellar_name(StellarId(129)), None);
         assert!(fake.has_explored(SystemId(130)));
         assert!(!fake.has_explored(SystemId(131)));
+        assert_eq!(fake.galaxy(), Some(&galaxy));
     }
 
     #[test]

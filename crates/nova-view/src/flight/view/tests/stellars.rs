@@ -1,4 +1,7 @@
 use super::*;
+use crate::flight::sim_port::FlightSim;
+use nova_sim::SessionEvent;
+use nova_sim::flight_frame::FlightEvent;
 
 // Session events.
 
@@ -224,8 +227,8 @@ fn a_rebuild_that_changes_the_stellars_shown_lays_out_the_scene_again() {
 // The galaxy overlay.
 
 /// Whether `view`'s course map draws system `id`.
-fn on_the_course_map(view: &View, id: i16) -> bool {
-    view.course_map().model().system(SystemId(id)).is_some()
+fn on_the_course_map<S: FlightSim>(view: &FlightView<FakeCatalog, S>, id: i16) -> bool {
+    view.map.model().system(SystemId(id)).is_some()
 }
 
 #[test]
@@ -322,6 +325,83 @@ fn the_nav_area_shows_no_destination_for_a_hop_with_no_system_visible_at_its_pla
     assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_NO_DESTINATION]);
     let session = view.session().expect("flying");
     assert_eq!(session.course(), [SystemId(131)], "kept");
+}
+
+/// The galaxy of a flight of [`catalog`] with `change` made: what a
+/// scripted flight's galaxy answers after its `GalaxyChanged`.
+fn galaxy_with(
+    change: impl FnOnce(&mut nova_sim::story::GalaxyOverlay),
+) -> nova_sim::story::OverlaidGalaxy {
+    let catalog = catalog();
+    let mut session = SessionBuilder::flying(&catalog).build();
+    assert!(session.change_galaxy(&catalog, change));
+    session.galaxy().clone()
+}
+
+#[test]
+fn a_galaxy_event_draws_the_flights_galaxy_and_the_course_as_flown_before_the_redraws() {
+    let mut view = faked(FlightFrame {
+        course_shown: vec![SystemId(131)],
+        course_plotted: true,
+        ..in_sol()
+    });
+    view.sim.map_mut().galaxy = Some(galaxy_with(hiding(132)));
+    view.sim.set_frame(FlightFrame {
+        course_plotted: true,
+        ..in_sol()
+    });
+    assert!(on_the_course_map(&view, 132), "not before the event");
+    let redrawn = view.catch_up_then(|view, redrawn| {
+        assert_eq!(redrawn, Redrawn::default(), "nothing asked");
+        assert!(on_the_course_map(view, 132), "nothing told");
+    });
+    assert_eq!(redrawn, Redrawn::default());
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::GalaxyChanged));
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::GalaxyChanged));
+    let mut told = Vec::new();
+    let redrawn = view.catch_up_then(|view, redrawn| {
+        told.push(redrawn);
+        assert!(!on_the_course_map(view, 132), "drawn first");
+        assert_eq!(view.map.route(), [], "with the course as flown");
+    });
+    assert_eq!(
+        told,
+        [Redrawn {
+            galaxy: true,
+            ..Redrawn::default()
+        }],
+        "two events, one reaction"
+    );
+    assert_eq!(told[0], redrawn);
+}
+
+#[test]
+fn each_event_asks_for_its_own_redraw() {
+    let mut view = faked(in_sol());
+    for event in [
+        SessionEvent::ShipChanged,
+        SessionEvent::SystemChanged,
+        SessionEvent::StellarChanged,
+        SessionEvent::StellarsRebuilt,
+        SessionEvent::StarfieldReset,
+    ] {
+        view.sim.queue_event(FlightEvent::Session(event));
+    }
+    let redrawn = view.catch_up_then(|_, _| {});
+    assert_eq!(
+        redrawn,
+        Redrawn {
+            ship: true,
+            system: true,
+            stellar: true,
+            galaxy: false,
+            rebuilt: true,
+            stars: true,
+        }
+    );
+    assert_eq!(view.catch_up_then(|_, _| {}), Redrawn::default(), "taken");
 }
 
 #[test]

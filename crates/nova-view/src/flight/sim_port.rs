@@ -31,6 +31,7 @@ use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
+use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{MapMarks, MissionId, PlayerCommand, SavedNav, StellarId, SystemId};
 
 #[cfg(any(test, feature = "fixture"))]
@@ -178,6 +179,13 @@ pub trait MapSource {
         let _ = system;
         false
     }
+
+    /// The galaxy the course map is built from: the catalog's star map
+    /// with the overlay applied (`nova_sim::Session::galaxy`), read as a
+    /// `GalaxyChanged` event is caught up with.
+    fn galaxy(&self) -> Option<&OverlaidGalaxy> {
+        None
+    }
 }
 
 /// The comm's questions of the flight: hails and their answers. None yet:
@@ -216,5 +224,6 @@ mod tests {
         assert_eq!(source.floating_map_places(), FloatingLinks::default());
         assert_eq!(source.stellar_name(StellarId(128)), None);
         assert!(!source.has_explored(none));
+        assert_eq!(source.galaxy(), None);
     }
 }
