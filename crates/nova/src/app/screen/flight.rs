@@ -248,8 +248,11 @@ impl AppScreen {
     /// ([`AppScreen::at_hold_expiry`]); once the death's fade is over, the
     /// return to the main menu as it appears
     /// ([`AppScreen::return_to_main_screen`]), or, without one, to the side
-    /// flight was entered from, which fades in from black.
+    /// flight was entered from, which fades in from black. A board the
+    /// tick made, the Board key held, opens as a press's does
+    /// ([`AppScreen::open_frame_boarding`]).
     pub(super) fn after_flight_tick(&mut self) {
+        self.open_frame_boarding();
         if self
             .flight
             .as_mut()

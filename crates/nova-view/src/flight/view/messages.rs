@@ -1121,16 +1121,25 @@ pub const RETAINED_OLD_SHIP: &str = "You retained your old ship as an escort.";
 /// `STR#` 2002 #305: no slot was free for the old ship.
 pub const LOST_OLD_SHIP: &str = "You were unable to retain your old ship as an escort.";
 
+/// The credits take's line: `STR#` 2002 #116 ("You stole all the"), a
+/// space, `*0x3b557c` (#33, "credits", the plural whatever the amount), a
+/// space and #108 ("from this ship."), with no amount
+/// (`_DoPlunderDialog` @0x93b40-0x93bec).
+pub const STOLE_CREDITS: &str = "You stole all the credits from this ship.";
+
 /// What the player is told when `refusal` stops a boarding: the
-/// original's words for it, or nothing.
+/// original's words for it, or nothing for a silent one
+/// ([`BoardRefusal::silent`]).
 #[must_use]
 pub fn board_refusal_message(refusal: BoardRefusal) -> Option<&'static str> {
-    match refusal {
-        BoardRefusal::CantBoard => Some(CANT_BOARD),
-        BoardRefusal::TooFar => Some(NOT_CLOSE_ENOUGH),
-        BoardRefusal::TooFast => Some(TOO_FAST_TO_BOARD),
-        BoardRefusal::NoTarget | BoardRefusal::Misaligned | BoardRefusal::Cloaked => None,
+    if refusal.silent() {
+        return None;
     }
+    Some(match refusal {
+        BoardRefusal::TooFar => NOT_CLOSE_ENOUGH,
+        BoardRefusal::TooFast => TOO_FAST_TO_BOARD,
+        _ => CANT_BOARD,
+    })
 }
 
 /// What the player is told of a press in the plunder dialog that did
@@ -1147,7 +1156,7 @@ pub fn plunder_message(taken: Taken, good: Option<&str>, outfit: Option<&str>) -
             let good = good.unwrap_or("cargo");
             format!("You salvaged {stored} {tons} of {good} from this ship.")
         }
-        Taken::Credits(credits) => format!("You stole all the {credits} credits from this ship."),
+        Taken::Credits(_) => STOLE_CREDITS.to_owned(),
         Taken::Ammo { count: 0, .. } => NO_AMMO_STORED.to_owned(),
         Taken::Ammo { count, .. } => {
             let outfit = outfit.unwrap_or("rounds");

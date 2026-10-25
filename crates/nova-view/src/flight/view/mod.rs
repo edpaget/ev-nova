@@ -717,16 +717,19 @@ pub struct FlightOverlays {
 /// eject key and the self-destruct key, which work only held with Command,
 /// the cloak key, which toggles once a hold, the land key, which holds the dock
 /// approach back while it is down, H and `\`, which show the floating map
-/// while they are down, and \` and J. H, `\`, \` and J act again when
-/// held across a jump's end, a release of Option or a repair, as the
-/// original polls them with a latch each ([`FlightView::held_keys_frame`]);
-/// the original's `_quickKeyCheckResult` counts \` and J as held too
-/// (@0x69aa1, @0x6b0e6), which the floating map's zoom keys read. The
+/// while they are down, \` and J, and B, which `_HandlePlayer` polls every
+/// frame, setting the cursor's fade while it is down (@0x6a98b-0x6a999).
+/// H, `\`, \` and J act again when held across a jump's end, a release
+/// of Option or a repair, and B once a target is taken or the cloak drops,
+/// as the original polls them with a latch each
+/// ([`FlightView::held_keys_frame`]); the original's
+/// `_quickKeyCheckResult` counts \`, J and B as held too (@0x69aa1,
+/// @0x6b0e6, @0x6a98b), which the floating map's zoom keys read. The
 /// stellar slot keys 1-4, F1-F4, F5 and the 5 are held for their block's
 /// latch and frame (see the `slot_block` module); they fade the cursor and
 /// hold the zoom back only while `_HandlePlayer` polls them
 /// ([`FlightView::slot_key_polled`]).
-const FLIGHT_KEYS: [Key; 31] = [
+const FLIGHT_KEYS: [Key; 32] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -748,6 +751,7 @@ const FLIGHT_KEYS: [Key; 31] = [
     HYPER_SELECT_KEY,
     NAV_OFF_KEY,
     JUMP_KEY,
+    BOARD_KEY,
     STELLAR_SLOT_KEYS[0][0],
     STELLAR_SLOT_KEYS[1][0],
     STELLAR_SLOT_KEYS[2][0],
@@ -1110,6 +1114,10 @@ pub struct FlightView<C> {
     /// block, a jump's included; cleared on a frame J is up, or down while
     /// the player is not intact ([`FlightView::jump_frame`]).
     jump_latch: bool,
+    /// The Board key's latch (0xdee18): set by a board attempt past its
+    /// no-target and cloak returns, cleared on a frame B is up
+    /// ([`FlightView::board_frame`]).
+    board_latch: bool,
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
     /// The message line's one slot (`_DisplayComm`'s 0x3b565c): a new

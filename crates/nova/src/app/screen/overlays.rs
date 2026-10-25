@@ -499,6 +499,19 @@ impl AppScreen {
         ScreenAction::None
     }
 
+    /// Opens what a board made in flight's tick, the Board key held
+    /// (`nova_view::flight::FlightView`'s `board_frame`): the plunder
+    /// dialog, or a person's mission offered in its place, as the press's
+    /// board opens them (the flight branch of the router's input).
+    pub(super) fn open_frame_boarding(&mut self) {
+        if let Some(shown) = self.flight.as_mut().and_then(FlightView::take_boarding) {
+            self.open_plunder(&shown);
+        }
+        if let Some(prompt) = self.flight.as_mut().and_then(FlightView::take_offer) {
+            self.open_offer(prompt);
+        }
+    }
+
     /// Opens the offer dialog on `prompt`, a person's mission offered on
     /// its hail or boarding, over flight, which pauses: the interface
     /// file's, in the variant its graphic picks

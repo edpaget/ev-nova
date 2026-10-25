@@ -104,7 +104,9 @@ impl<
         match press {
             Some(LAND_KEY) => self.land(),
             Some(BOARD_KEY) => {
-                self.board();
+                // A fresh press follows a release, which clears the latch.
+                self.board_latch = false;
+                self.board_frame(true);
                 if self.pending_boarding {
                     return ScreenAction::None;
                 }

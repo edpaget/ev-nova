@@ -306,6 +306,24 @@ fn b_on_a_disabled_target_opens_the_plunder_dialog_over_paused_flight() {
 }
 
 #[test]
+fn b_held_before_a_target_is_taken_opens_the_plunder_dialog_on_the_next_frame() {
+    // `_HandlePlayer` boards every frame B is down until the attempt
+    // passes the no-target return (@0x6a98b, @0x65031): the frame's
+    // board opens the dialog as a press's does.
+    let mut screen = boardable(with_dialogs(boarding_data()));
+    fly(&mut screen);
+    screen.tick(TICK);
+    screen.input(&key(Key::Char('b'), true));
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::Flight, "no target");
+    screen.input(&key(Key::Tab, true));
+    screen.input(&key(Key::Tab, false));
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::Plunder, "with no input after it");
+}
+
+#[test]
 fn each_take_goes_through_the_flight_and_refreshes_the_dialog() {
     let mut screen = boarded();
     let cash = flight(&screen).pilot().expect("a pilot").cash();
@@ -321,7 +339,7 @@ fn each_take_goes_through_the_flight_and_refreshes_the_dialog() {
     );
     assert_eq!(
         flight(&screen).message(),
-        Some("You stole all the 5750 credits from this ship.")
+        Some("You stole all the credits from this ship.")
     );
     assert_eq!(screen.showing(), Showing::Plunder, "still open");
     let sounds = plunder_click(&mut screen, 3);

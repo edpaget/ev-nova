@@ -184,17 +184,22 @@ impl<C> FlightView<C> {
     /// offered in its place too ([`FlightView::take_offer`]), each letting
     /// go of the flight keys. A failed mission's ship boarded for plunder
     /// says its pickup or assist line first ([`Session::take_board_line`]).
-    pub(super) fn board(&mut self) {
+    /// Whether the attempt sets the board latch
+    /// ([`BoardRefusal::latches`]; every board that passes does).
+    pub(super) fn board(&mut self) -> bool {
         let Ok(session) = &mut self.session else {
-            return;
+            return false;
         };
         let boarded = session.board(&*self.law, &*self.boarding_rule, &mut self.chance);
         if let Some(line) = session.take_board_line() {
             let said = mission_board_message(line, session);
             self.say_for(said, BOARD_LINE_TICKS);
         }
+        let latches = boarded
+            .as_ref()
+            .map_or_else(|refusal| refusal.latches(), |_| true);
         let Ok(session) = &mut self.session else {
-            return;
+            return latches;
         };
         match boarded {
             Ok(Boarding::Opened(_)) => {
@@ -221,6 +226,24 @@ impl<C> FlightView<C> {
                     self.say_for(text, BOARD_REFUSAL_TICKS);
                 }
             }
+        }
+        latches
+    }
+
+    /// One frame of the Board key, with B down or not, as `_HandlePlayer`
+    /// runs it (@0x6a98b-0x6a9a8) on [`FlightView::board_latch`]: with B
+    /// down and the latch clear, a board attempt
+    /// ([`FlightView::board`]), which sets the latch unless it found no
+    /// target or the player cloaked (`*0xdee18` @0x6504c, after
+    /// @0x65031 and @0x6503f); with B up, the latch cleared. So B held
+    /// with no target, or cloaked, boards on the first frame a target is
+    /// taken or the cloak drops, and any other outcome waits for B's
+    /// release.
+    pub(super) fn board_frame(&mut self, down: bool) {
+        if !down {
+            self.board_latch = false;
+        } else if !self.board_latch {
+            self.board_latch = self.board();
         }
     }
 

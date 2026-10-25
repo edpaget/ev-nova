@@ -103,6 +103,108 @@ fn a_cloaked_board_says_nothing() {
 }
 
 #[test]
+fn the_credits_message_says_no_amount() {
+    // #116, " ", `*0x3b557c` (#33, always the plural), " ", #108
+    // (`_DoPlunderDialog` @0x93b40-0x93bec).
+    assert_eq!(STOLE_CREDITS, "You stole all the credits from this ship.");
+    for credits in [1, 5750, 1_000_000] {
+        assert_eq!(
+            plunder_message(Taken::Credits(credits), None, None).as_deref(),
+            Some(STOLE_CREDITS),
+            "{credits}"
+        );
+    }
+}
+
+// The Board key's latch (`*0xdee18`).
+
+/// [`beside`]'s disabled trader under the player, before the player
+/// targets it.
+fn beside_untargeted() -> View {
+    let (_, chance) = scripted(&placed(750, 750, 0));
+    let mut view = FlightView::new(boardable())
+        .with_chance(chance)
+        .with_behaviour(Rc::new(Still))
+        .with_disable_rule(Rc::new(DisablesTheStrong));
+    view.tick(TICK);
+    view
+}
+
+/// How many refusal beeps `view` raised since its sounds were last
+/// taken.
+fn refusals(view: &mut View) -> usize {
+    view.take_sounds()
+        .into_iter()
+        .filter(|sound| *sound == Sound::Sim(SimSound::Refused))
+        .count()
+}
+
+#[test]
+fn holding_b_with_no_target_boards_once_a_target_is_taken() {
+    // No target returns before the latch is set (@0x65031 → @0x6504c),
+    // and `_HandlePlayer` tries again every frame B is down
+    // (@0x6a98b-0x6a99c).
+    let mut view = beside_untargeted();
+    view.input(&key(BOARD_KEY, true));
+    ticks(&mut view, 3);
+    assert_eq!(view.take_boarding(), None, "no target");
+    tap(&mut view, TARGET_KEY);
+    assert_eq!(view.take_boarding(), None, "not yet");
+    ticks(&mut view, 1);
+    assert!(view.take_boarding().is_some(), "the next frame boards");
+}
+
+#[test]
+fn holding_b_after_a_refusal_says_it_once_until_released() {
+    let mut view = beside(800, 750, 0, false);
+    view.take_sounds();
+    view.input(&key(BOARD_KEY, true));
+    assert_eq!(view.message(), Some(NOT_CLOSE_ENOUGH));
+    ticks(&mut view, 5);
+    assert_eq!(refusals(&mut view), 1, "latched (@0x6504c)");
+    view.input(&key(BOARD_KEY, false));
+    ticks(&mut view, 1);
+    view.input(&key(BOARD_KEY, true));
+    assert_eq!(refusals(&mut view), 1, "a fresh press");
+    view.input(&key(BOARD_KEY, false));
+    ticks(&mut view, 1);
+    assert_eq!(refusals(&mut view), 0);
+}
+
+#[test]
+fn a_tap_of_b_still_boards() {
+    // Pressed and released before the next frame, through the press.
+    let mut view = beside(750, 750, 0, false);
+    tap(&mut view, BOARD_KEY);
+    assert!(view.take_boarding().is_some());
+}
+
+#[test]
+fn a_held_b_while_cloaked_boards_when_the_cloak_drops() {
+    // The cloak returns before the latch is set (@0x6503f → @0x6504c).
+    let mut view = beside(750, 750, 0, false);
+    let cloak = |view: &mut View, to| {
+        let Ok(session) = &mut view.session else {
+            panic!("flying");
+        };
+        nova_sim::fixture::set_player_cloak(session, to);
+    };
+    cloak(
+        &mut view,
+        nova_sim::cloak::Cloak {
+            fade: nova_sim::cloak::FADE_FULL,
+            direction: 0,
+        },
+    );
+    view.input(&key(BOARD_KEY, true));
+    ticks(&mut view, 2);
+    assert_eq!(view.take_boarding(), None, "cloaked");
+    cloak(&mut view, nova_sim::cloak::Cloak::default());
+    ticks(&mut view, 1);
+    assert!(view.take_boarding().is_some(), "the cloak dropped");
+}
+
+#[test]
 fn boarding_keeps_the_message() {
     let mut view = beside(750, 750, 0, false);
     view.say_for(MISSION_FAILED, 240);
@@ -127,12 +229,8 @@ fn plundering_goes_through_the_session_and_says_what_it_took() {
         view.pilot().expect("a pilot").cash(),
         cash + boarding.credits
     );
-    let said = format!(
-        "You stole all the {} credits from this ship.",
-        boarding.credits
-    );
     assert_eq!(view.boarding().map(|now| now.credits), Some(0));
-    assert_lasts(&mut view, &said, 239);
+    assert_lasts(&mut view, STOLE_CREDITS, 239);
     assert_eq!(view.plunder(Take::Abort), Taken::Aborted);
     assert_eq!(view.boarding(), None);
 }
@@ -233,7 +331,7 @@ fn the_plunder_messages_are_the_originals() {
     );
     assert_eq!(
         message(Taken::Credits(5750)).as_deref(),
-        Some("You stole all the 5750 credits from this ship.")
+        Some(STOLE_CREDITS)
     );
     let ammo = |count| Taken::Ammo {
         outfit: OutfitId(310),

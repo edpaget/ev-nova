@@ -27,11 +27,11 @@ use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 use super::dialog_map::{MapOpened, MapOpening};
 use super::stars;
 use super::{
-    CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS,
-    HYPER_SELECT_KEY, HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
-    MESSAGE_TICKS, MapSeen, NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS,
-    SECONDARY_KEY, SELF_DESTRUCT_KEY, Said, TOO_CLOSE, TRACTORED, Then, arrival_lead,
-    arrival_message_with, assigned_message, assigned_ticks, comm_message, dying,
+    BOARD_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView,
+    GATE_REFUSAL_TICKS, HYPER_SELECT_KEY, HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY,
+    LAND_KEY, MAP_KEY, MESSAGE_TICKS, MapSeen, NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn,
+    SCRIPT_MESSAGE_TICKS, SECONDARY_KEY, SELF_DESTRUCT_KEY, Said, TOO_CLOSE, TRACTORED, Then,
+    arrival_lead, arrival_message_with, assigned_message, assigned_ticks, comm_message, dying,
     gate_refusal_message, glow_decay, jump_refusal_message, jump_refusal_ticks,
     landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area, point, refusal_message,
     show_combat, show_destroyed, show_gate_frames, shown_scene, stellar_name, window_width,
@@ -765,7 +765,8 @@ impl<
     /// those held down, in its order: Option-\` and the Nav Off /
     /// Hyperspace Mode block ([`FlightView::nav_keys_frame`]), Hyper
     /// Select ([`FlightView::select_frame`]), the stellar slot keys
-    /// ([`FlightView::slot_keys_frame`]), then the jump key
+    /// ([`FlightView::slot_keys_frame`]), the Board key
+    /// ([`FlightView::board_frame`]), then the jump key
     /// ([`FlightView::jump_frame`]), each while the session takes its
     /// command. A key held across a jump's end, a release of Option or a
     /// repair acts here, as a press would, on the first frame its latch
@@ -782,6 +783,7 @@ impl<
         let down = |key: Key| self.held.contains(&key);
         let (nav_off, option, h) = (down(NAV_OFF_KEY), down(Key::Alt), down(HYPERSPACE_MODE_KEY));
         let (select, jump) = (down(HYPER_SELECT_KEY), down(JUMP_KEY));
+        let board = down(BOARD_KEY);
         if self.takes(PlayerCommand::Nav) {
             self.nav_keys_frame(nav_off, option, h);
         }
@@ -789,6 +791,9 @@ impl<
             self.select_frame(select);
         }
         self.slot_keys_frame();
+        if self.takes(PlayerCommand::Board) {
+            self.board_frame(board);
+        }
         if self.takes(PlayerCommand::Jump) {
             self.jump_frame(jump);
         }
