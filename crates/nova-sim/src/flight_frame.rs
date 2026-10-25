@@ -14,6 +14,7 @@
 use std::collections::BTreeSet;
 
 use crate::catalog::{StellarId, SystemId};
+use crate::geometry::Vec2;
 use crate::hyperspace::JumpReadiness;
 use crate::navigation::NavMode;
 use crate::session::{MapClicked, MapPress, SavedNav, StellarPick};
@@ -110,6 +111,19 @@ impl Default for MapKey {
             nav: NavMode::Off,
         }
     }
+}
+
+/// The floating map's places, as its clicks and its draw read them
+/// ([`Session::floating_map_places`](crate::Session::floating_map_places)):
+/// the current system's map position, and each link its clicks test
+/// ([`Session::floating_map_links`](crate::Session::floating_map_links))
+/// with its own.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FloatingLinks {
+    /// The current system's map position.
+    pub current: Vec2,
+    /// Each link the clicks test, in their order, with its map position.
+    pub links: Vec<(SystemId, Vec2)>,
 }
 
 /// Something the player asks of the flight, which

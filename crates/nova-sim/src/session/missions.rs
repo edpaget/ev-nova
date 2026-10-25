@@ -4747,6 +4747,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_session_names_a_stellar_by_the_names_it_read() {
+        let catalog = FakePilotCatalog {
+            place_names: place_names(),
+            ..catalog()
+        };
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            TagNames::stellar_name(&session, StellarId(140)).as_deref(),
+            Some("Mars")
+        );
+        assert_eq!(TagNames::stellar_name(&session, StellarId(141)), None);
+    }
+
     /// Stock's session of `catalog`, told [`Told`]'s strings, landed on
     /// 128 and settled, every roll the first.
     fn stocks(catalog: &FakePilotCatalog) -> Session {

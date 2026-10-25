@@ -32,7 +32,9 @@ nova-view = { workspace = true, features = ["fixture"] }
 # Exposes the text-metrics mock, the port's contract, the flight-sim fake
 # and its contract, and the main screen's fixture art (built with
 # nova-data's and nova-rsrc's fixture builders) to other crates' tests.
-fixture = ["nova-data/fixture", "nova-rsrc/fixture"]
+# The fake's scripted map nav is built with nova-sim's fixture
+# (`SavedNav::of`).
+fixture = ["nova-data/fixture", "nova-rsrc/fixture", "nova-sim/fixture"]
 
 [lints]
 workspace = true

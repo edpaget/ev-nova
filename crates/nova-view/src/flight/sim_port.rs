@@ -14,17 +14,24 @@
 //! values as it goes.
 //!
 //! The three supertraits, [`MapSource`], [`CommSource`] and
-//! [`PortSource`], are empty for now: the course map's, the comm's and
-//! the spaceport's questions will go there, each method defaulting to
-//! "nothing open", so a sim that has none of them open needs no code.
+//! [`PortSource`], hold the course map's, the comm's and the spaceport's
+//! questions, each method defaulting to "nothing open", so a sim that has
+//! none of them open needs no code. [`MapSource`] has the course map's,
+//! the floating map's and the nav area's; the other two are empty for
+//! now.
 //!
 //! The `fixture` feature (and this crate's tests) exposes `fixture`:
 //! `FakeFlight`, a scripted sim for the view's component tests, and
 //! `check_contract`, what every sim must honour.
 
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightEvent, FlightFrame, StepInput, StepReport,
+    Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, StepInput, StepReport,
 };
+use nova_sim::galaxy_map::MapDrawing;
+use nova_sim::map_borders::BorderSources;
+use nova_sim::map_panel::MapPanel;
+use nova_sim::map_search::SearchOutcome;
+use nova_sim::{MapMarks, MissionId, NavMode, PlayerCommand, SavedNav, StellarId, SystemId};
 
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
@@ -47,11 +54,137 @@ pub trait FlightSim: MapSource + CommSource + PortSource {
     /// Moves what the flight raised since the last drain onto the end of
     /// `into`, leaving none to drain again.
     fn drain(&mut self, into: &mut Vec<FlightEvent>);
+
+    /// Whether the flight takes the player's command `gate` now
+    /// (`nova_sim::Session::takes`): the view asks before it acts on a
+    /// key, mid-input, after the commands it has sent, and does nothing
+    /// when it is refused. A flight that failed to start takes every one,
+    /// as it has nothing to refuse them with.
+    fn takes(&self, gate: PlayerCommand) -> bool;
 }
 
-/// The course map's questions of the flight. None yet: each method will
-/// default to "nothing open".
-pub trait MapSource {}
+/// The course map's questions of the flight, and the floating map's and
+/// the nav area's. Each defaults to "nothing open": `None` where the view
+/// does nothing without an answer, otherwise nothing found, marked or
+/// listed.
+pub trait MapSource {
+    /// What the course map draws now (`nova_sim::Session::map_drawing`):
+    /// on the hypergate map when `hypergate` holds the systems its gate
+    /// offers, with `missions` the mission systems taken as it opened and
+    /// `marks` its opener's.
+    fn map_drawing(
+        &self,
+        hypergate: Option<&[SystemId]>,
+        missions: &[SystemId],
+        marks: MapMarks,
+    ) -> Option<MapDrawing> {
+        let _ = (hypergate, missions, marks);
+        None
+    }
+
+    /// The course map's info panels for the system `selected` on it
+    /// (`nova_sim::Session::map_panel`), on the hypergate map with the
+    /// systems its gate offers.
+    fn map_panel(
+        &self,
+        selected: Option<SystemId>,
+        hypergate: Option<&[SystemId]>,
+    ) -> Option<MapPanel> {
+        let _ = (selected, hypergate);
+        None
+    }
+
+    /// What the course map's borders are painted from
+    /// (`nova_sim::Session::map_border_sources`).
+    fn map_border_sources(&self) -> Option<BorderSources> {
+        None
+    }
+
+    /// What the map's Find finds for `query`
+    /// (`nova_sim::Session::find_map_system`).
+    fn find_map_system(&self, query: &str) -> Option<SearchOutcome> {
+        let _ = query;
+        None
+    }
+
+    /// The mission systems the course map arrows as it opens
+    /// (`nova_sim::Session::map_mission_systems`).
+    fn map_mission_systems(&self) -> Vec<SystemId> {
+        Vec::new()
+    }
+
+    /// The system the course map selects as it opens, and after its
+    /// cycle (`nova_sim::Session::map_preselection`).
+    fn map_preselection(&self) -> Option<SystemId> {
+        None
+    }
+
+    /// The system the floating map selects as it shows
+    /// (`nova_sim::Session::floating_preselection`).
+    fn floating_preselection(&self) -> Option<SystemId> {
+        None
+    }
+
+    /// The destinations the hypergate map's Tab cycles through
+    /// (`nova_sim::Session::hypergate_cycle`): none with no hypergate
+    /// entry pending.
+    fn hypergate_cycle(&self) -> Vec<Option<SystemId>> {
+        Vec::new()
+    }
+
+    /// The marks an offer of `mission` gives its map
+    /// (`nova_sim::Session::offer_map_marks`).
+    fn offer_map_marks(&self, mission: MissionId) -> MapMarks {
+        let _ = mission;
+        MapMarks::NONE
+    }
+
+    /// The marks the mission computer gives its map for its row
+    /// `selected` (`nova_sim::Session::computer_map_marks`).
+    fn computer_map_marks(&self, selected: Option<MissionId>) -> MapMarks {
+        let _ = selected;
+        MapMarks::NONE
+    }
+
+    /// The marks mission info gives its map for its slot `slot`
+    /// (`nova_sim::Session::mission_info_map_marks`).
+    fn mission_info_map_marks(&self, slot: Option<u8>) -> MapMarks {
+        let _ = slot;
+        MapMarks::NONE
+    }
+
+    /// The nav as it stands, for a map's close or its opener to put back
+    /// (`nova_sim::Session::map_nav`).
+    fn map_nav(&self) -> Option<SavedNav> {
+        None
+    }
+
+    /// The nav mode as the last mission text queued was
+    /// (`nova_sim::Session::text_nav`).
+    fn text_nav(&self) -> Option<NavMode> {
+        None
+    }
+
+    /// The floating map's places: the current system's and each link's
+    /// its clicks test (`nova_sim::Session::floating_map_places`).
+    fn floating_map_places(&self) -> FloatingLinks {
+        FloatingLinks::default()
+    }
+
+    /// Stellar `stellar`'s name as the session read it, for the nav area
+    /// to name one its scene doesn't hold (`nova_sim::TagNames`).
+    fn stellar_name(&self, stellar: StellarId) -> Option<String> {
+        let _ = stellar;
+        None
+    }
+
+    /// Whether the pilot has explored `system`, which the nav area names
+    /// only then (`nova_sim::Pilot::has_explored`).
+    fn has_explored(&self, system: SystemId) -> bool {
+        let _ = system;
+        false
+    }
+}
 
 /// The comm's questions of the flight: hails and their answers. None yet:
 /// each method will default to "nothing open".

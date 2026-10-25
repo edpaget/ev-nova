@@ -219,6 +219,7 @@
 
 use super::{Chart, Jump, Outbox, Session, Setup, Statics};
 use crate::catalog::{StellarId, SystemId};
+use crate::flight_frame::FloatingLinks;
 use crate::hyperspace::{HyperSelectRule, next_hyper_destination};
 use crate::landing::nearest_stellar;
 use crate::navigation::NavMode;
@@ -259,6 +260,16 @@ pub(super) struct NavSlot {
 pub struct SavedNav {
     nav: NavMode,
     slot: Option<NavSlot>,
+}
+
+impl SavedNav {
+    /// `nav` saved with no Con slot noted: for another crate's test that
+    /// needs a saved nav without a session to take it from.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn of(nav: NavMode) -> Self {
+        Self { nav, slot: None }
+    }
 }
 
 impl Session {
@@ -502,6 +513,25 @@ impl Session {
     #[must_use]
     pub fn floating_map_links(&self) -> Vec<SystemId> {
         self.chart.floating_map_links(&self.pilot)
+    }
+
+    /// The floating map's places: the current system's map position, and
+    /// each of [`Session::floating_map_links`] with its own, the origin
+    /// for a system with none, as the floating map's clicks box each link
+    /// at its slot's position (@0x6a25c-0x6a2af) and its draw centres on
+    /// the current system.
+    #[must_use]
+    pub fn floating_map_places(&self) -> FloatingLinks {
+        let galaxy = self.galaxy();
+        let at = |system| galaxy.position(system).unwrap_or_default();
+        FloatingLinks {
+            current: at(self.system()),
+            links: self
+                .floating_map_links()
+                .into_iter()
+                .map(|link| (link, at(link)))
+                .collect(),
+        }
     }
 
     /// The galaxy map's Tab or `\`, as `_MapFilter` cycles the hyperspace
@@ -2043,6 +2073,25 @@ mod tests {
             session.floating_map_links(),
             ids(&[134, 131, 131, 130, 135]),
             "repeats and itself kept, 999 left out"
+        );
+    }
+
+    #[test]
+    fn the_floating_maps_places_are_the_current_system_and_each_link_on_the_map() {
+        let session = Session::start(&hub()).expect("starts");
+        let at = |x, y| crate::geometry::Vec2::new(x, y);
+        assert_eq!(
+            session.floating_map_places(),
+            crate::flight_frame::FloatingLinks {
+                current: at(0.0, 0.0),
+                links: vec![
+                    (SystemId(134), at(0.0, -600.0)),
+                    (SystemId(131), at(600.0, 0.0)),
+                    (SystemId(131), at(600.0, 0.0)),
+                    (SystemId(130), at(0.0, 0.0)),
+                    (SystemId(135), at(0.0, 600.0)),
+                ],
+            }
         );
     }
 

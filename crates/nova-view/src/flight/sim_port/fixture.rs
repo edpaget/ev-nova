@@ -7,15 +7,20 @@
 //! [`FakeFlight`]; `tests/it/flight_seam.rs` runs [`check_contract`] on a
 //! real [`SessionFlight`](crate::flight::SessionFlight).
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use nova_sim::JumpReadiness;
-use nova_sim::StellarPick;
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightEvent, FlightFrame, MapKey, StepInput, StepReport,
+    Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, MapKey, StepInput, StepReport,
 };
+use nova_sim::galaxy_map::MapDrawing;
+use nova_sim::map_borders::BorderSources;
+use nova_sim::map_panel::MapPanel;
+use nova_sim::map_search::SearchOutcome;
 use nova_sim::navigation::NavMode;
+use nova_sim::{MapMarks, MissionId, PlayerCommand, SavedNav, StellarId, StellarPick};
 
 use super::{CommSource, FlightSim, MapSource, PortSource};
 
@@ -23,8 +28,12 @@ use super::{CommSource, FlightSim, MapSource, PortSource};
 /// each command in the order sent, answers each from a queue
 /// ([`Answer::Refused`] once the queue is empty), hands out the events
 /// queued for it on [`FlightSim::drain`], and reports each step from a
-/// queue (the default once the queue is empty), counting the steps. One
-/// with nothing scripted meets [`check_contract`].
+/// queue (the default once the queue is empty), counting the steps. It
+/// takes every gate but those it is told to refuse
+/// ([`FakeFlight::refuse`]), answers [`MapSource`] from [`FakeMap`]
+/// ([`FakeFlight::map_mut`]), and records the map's questions whose
+/// arguments matter ([`FakeFlight::asked`]). One with nothing scripted
+/// meets [`check_contract`].
 #[derive(Clone, Debug, Default)]
 pub struct FakeFlight {
     frame: FlightFrame,
@@ -33,6 +42,77 @@ pub struct FakeFlight {
     events: Vec<FlightEvent>,
     reports: VecDeque<StepReport>,
     steps: usize,
+    refused: Vec<PlayerCommand>,
+    map: FakeMap,
+    asked: RefCell<Vec<MapAsk>>,
+}
+
+/// What a [`FakeFlight`] answers the [`MapSource`] questions with, each
+/// field the answer to the question of its name. The default answers
+/// nothing, as a [`MapSource`]'s defaults do.
+#[derive(Clone, Debug, Default)]
+pub struct FakeMap {
+    /// [`MapSource::map_drawing`]'s answer, whatever it is asked.
+    pub drawing: Option<MapDrawing>,
+    /// [`MapSource::map_panel`]'s answer, whatever it is asked.
+    pub panel: Option<MapPanel>,
+    /// [`MapSource::map_border_sources`]'s answer.
+    pub border_sources: Option<BorderSources>,
+    /// [`MapSource::find_map_system`]'s answer, whatever the query.
+    pub search: Option<SearchOutcome>,
+    /// [`MapSource::map_mission_systems`]'s answer.
+    pub mission_systems: Vec<SystemId>,
+    /// [`MapSource::map_preselection`]'s answer.
+    pub map_preselection: Option<SystemId>,
+    /// [`MapSource::floating_preselection`]'s answer.
+    pub floating_preselection: Option<SystemId>,
+    /// [`MapSource::hypergate_cycle`]'s answer.
+    pub hypergate_cycle: Vec<Option<SystemId>>,
+    /// The marks each of [`MapSource::offer_map_marks`],
+    /// [`MapSource::computer_map_marks`] and
+    /// [`MapSource::mission_info_map_marks`] answers, whatever it is
+    /// asked; [`MapMarks::NONE`] when `None`.
+    pub marks: Option<MapMarks>,
+    /// [`MapSource::map_nav`]'s answer.
+    pub map_nav: Option<SavedNav>,
+    /// [`MapSource::text_nav`]'s answer.
+    pub text_nav: Option<NavMode>,
+    /// [`MapSource::floating_map_places`]'s answer.
+    pub floating: FloatingLinks,
+    /// The stellars [`MapSource::stellar_name`] names, with their names.
+    pub stellar_names: Vec<(StellarId, String)>,
+    /// The systems [`MapSource::has_explored`] says are explored.
+    pub explored: Vec<SystemId>,
+}
+
+/// A [`MapSource`] question a [`FakeFlight`] was asked whose arguments a
+/// test may check, in the order asked ([`FakeFlight::asked`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapAsk {
+    /// [`MapSource::map_drawing`], with its arguments.
+    Drawing {
+        /// The hypergate map's offers, or `None` on the course map.
+        hypergate: Option<Vec<SystemId>>,
+        /// The mission systems.
+        missions: Vec<SystemId>,
+        /// The opener's marks.
+        marks: MapMarks,
+    },
+    /// [`MapSource::map_panel`], with its arguments.
+    Panel {
+        /// The system selected.
+        selected: Option<SystemId>,
+        /// The hypergate map's offers, or `None` on the course map.
+        hypergate: Option<Vec<SystemId>>,
+    },
+    /// [`MapSource::find_map_system`], with its query.
+    Find(String),
+    /// [`MapSource::offer_map_marks`], for its mission.
+    OfferMarks(MissionId),
+    /// [`MapSource::computer_map_marks`], for its row.
+    ComputerMarks(Option<MissionId>),
+    /// [`MapSource::mission_info_map_marks`], for its slot.
+    MissionInfoMarks(Option<u8>),
 }
 
 impl FakeFlight {
@@ -74,6 +154,33 @@ impl FakeFlight {
     pub fn steps(&self) -> usize {
         self.steps
     }
+
+    /// Refuses the gate `gate` from now on ([`FlightSim::takes`]).
+    pub fn refuse(&mut self, gate: PlayerCommand) {
+        self.refused.push(gate);
+    }
+
+    /// Takes the gate `gate` again ([`FlightSim::takes`]).
+    pub fn take(&mut self, gate: PlayerCommand) {
+        self.refused.retain(|&refused| refused != gate);
+    }
+
+    /// What the map's questions are answered with, to script.
+    pub fn map_mut(&mut self) -> &mut FakeMap {
+        &mut self.map
+    }
+
+    /// The map's questions asked whose arguments matter, in the order
+    /// asked ([`MapAsk`]).
+    #[must_use]
+    pub fn asked(&self) -> Vec<MapAsk> {
+        self.asked.borrow().clone()
+    }
+
+    /// Notes `ask`.
+    fn ask(&self, ask: MapAsk) {
+        self.asked.borrow_mut().push(ask);
+    }
 }
 
 impl FlightSim for FakeFlight {
@@ -94,9 +201,103 @@ impl FlightSim for FakeFlight {
     fn drain(&mut self, into: &mut Vec<FlightEvent>) {
         into.append(&mut self.events);
     }
+
+    fn takes(&self, gate: PlayerCommand) -> bool {
+        !self.refused.contains(&gate)
+    }
 }
 
-impl MapSource for FakeFlight {}
+impl MapSource for FakeFlight {
+    fn map_drawing(
+        &self,
+        hypergate: Option<&[SystemId]>,
+        missions: &[SystemId],
+        marks: MapMarks,
+    ) -> Option<MapDrawing> {
+        self.ask(MapAsk::Drawing {
+            hypergate: hypergate.map(<[SystemId]>::to_vec),
+            missions: missions.to_vec(),
+            marks,
+        });
+        self.map.drawing.clone()
+    }
+
+    fn map_panel(
+        &self,
+        selected: Option<SystemId>,
+        hypergate: Option<&[SystemId]>,
+    ) -> Option<MapPanel> {
+        self.ask(MapAsk::Panel {
+            selected,
+            hypergate: hypergate.map(<[SystemId]>::to_vec),
+        });
+        self.map.panel.clone()
+    }
+
+    fn map_border_sources(&self) -> Option<BorderSources> {
+        self.map.border_sources.clone()
+    }
+
+    fn find_map_system(&self, query: &str) -> Option<SearchOutcome> {
+        self.ask(MapAsk::Find(query.to_owned()));
+        self.map.search
+    }
+
+    fn map_mission_systems(&self) -> Vec<SystemId> {
+        self.map.mission_systems.clone()
+    }
+
+    fn map_preselection(&self) -> Option<SystemId> {
+        self.map.map_preselection
+    }
+
+    fn floating_preselection(&self) -> Option<SystemId> {
+        self.map.floating_preselection
+    }
+
+    fn hypergate_cycle(&self) -> Vec<Option<SystemId>> {
+        self.map.hypergate_cycle.clone()
+    }
+
+    fn offer_map_marks(&self, mission: MissionId) -> MapMarks {
+        self.ask(MapAsk::OfferMarks(mission));
+        self.map.marks.unwrap_or(MapMarks::NONE)
+    }
+
+    fn computer_map_marks(&self, selected: Option<MissionId>) -> MapMarks {
+        self.ask(MapAsk::ComputerMarks(selected));
+        self.map.marks.unwrap_or(MapMarks::NONE)
+    }
+
+    fn mission_info_map_marks(&self, slot: Option<u8>) -> MapMarks {
+        self.ask(MapAsk::MissionInfoMarks(slot));
+        self.map.marks.unwrap_or(MapMarks::NONE)
+    }
+
+    fn map_nav(&self) -> Option<SavedNav> {
+        self.map.map_nav
+    }
+
+    fn text_nav(&self) -> Option<NavMode> {
+        self.map.text_nav
+    }
+
+    fn floating_map_places(&self) -> FloatingLinks {
+        self.map.floating.clone()
+    }
+
+    fn stellar_name(&self, stellar: StellarId) -> Option<String> {
+        self.map
+            .stellar_names
+            .iter()
+            .find(|(id, _)| *id == stellar)
+            .map(|(_, name)| name.clone())
+    }
+
+    fn has_explored(&self, system: SystemId) -> bool {
+        self.map.explored.contains(&system)
+    }
+}
 
 impl CommSource for FakeFlight {}
 
@@ -215,7 +416,6 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use nova_sim::SimSound;
-    use nova_sim::catalog::StellarId;
 
     use super::*;
 
@@ -307,6 +507,110 @@ mod tests {
         assert_eq!(fake.steps(), 3);
     }
 
+    #[test]
+    fn the_fake_takes_every_gate_but_those_refused() {
+        let mut fake = FakeFlight::new();
+        assert!(fake.takes(PlayerCommand::Nav));
+        fake.refuse(PlayerCommand::Nav);
+        assert!(!fake.takes(PlayerCommand::Nav));
+        assert!(fake.takes(PlayerCommand::SelectSystem));
+        fake.take(PlayerCommand::Nav);
+        assert!(fake.takes(PlayerCommand::Nav));
+    }
+
+    #[test]
+    fn the_fake_answers_nothing_on_the_map_until_scripted() {
+        let fake = FakeFlight::new();
+        assert_eq!(fake.map_drawing(None, &[], MapMarks::NONE), None);
+        assert_eq!(fake.map_panel(None, None), None);
+        assert_eq!(fake.map_border_sources(), None);
+        assert_eq!(fake.find_map_system("sol"), None);
+        assert_eq!(fake.offer_map_marks(MissionId(128)), MapMarks::NONE);
+        assert_eq!(fake.map_nav(), None);
+        assert_eq!(fake.stellar_name(StellarId(128)), None);
+        assert!(!fake.has_explored(SystemId(130)));
+    }
+
+    #[test]
+    fn the_fake_answers_the_map_as_scripted() {
+        let mut fake = FakeFlight::new();
+        let marks = MapMarks {
+            green: Some(SystemId(131)),
+            multi_arrows: false,
+        };
+        let saved = SavedNav::of(NavMode::Off);
+        let floating = FloatingLinks {
+            current: nova_sim::Vec2::new(1.0, 2.0),
+            links: vec![(SystemId(131), nova_sim::Vec2::new(3.0, 4.0))],
+        };
+        let map = fake.map_mut();
+        map.search = Some(SearchOutcome::Found(SystemId(131)));
+        map.border_sources = Some(BorderSources::default());
+        map.mission_systems = vec![SystemId(132)];
+        map.map_preselection = Some(SystemId(131));
+        map.floating_preselection = Some(SystemId(132));
+        map.hypergate_cycle = vec![None, Some(SystemId(131))];
+        map.marks = Some(marks);
+        map.map_nav = Some(saved);
+        map.text_nav = Some(NavMode::Off);
+        map.floating = floating.clone();
+        map.stellar_names = vec![(StellarId(128), "Earth".to_owned())];
+        map.explored = vec![SystemId(130)];
+        assert_eq!(
+            fake.find_map_system("x"),
+            Some(SearchOutcome::Found(SystemId(131)))
+        );
+        assert_eq!(fake.map_border_sources(), Some(BorderSources::default()));
+        assert_eq!(fake.map_mission_systems(), [SystemId(132)]);
+        assert_eq!(fake.map_preselection(), Some(SystemId(131)));
+        assert_eq!(fake.floating_preselection(), Some(SystemId(132)));
+        assert_eq!(fake.hypergate_cycle(), [None, Some(SystemId(131))]);
+        assert_eq!(fake.offer_map_marks(MissionId(1)), marks);
+        assert_eq!(fake.computer_map_marks(None), marks);
+        assert_eq!(fake.mission_info_map_marks(Some(0)), marks);
+        assert_eq!(fake.map_nav(), Some(saved));
+        assert_eq!(fake.text_nav(), Some(NavMode::Off));
+        assert_eq!(fake.floating_map_places(), floating);
+        assert_eq!(fake.stellar_name(StellarId(128)).as_deref(), Some("Earth"));
+        assert_eq!(fake.stellar_name(StellarId(129)), None);
+        assert!(fake.has_explored(SystemId(130)));
+        assert!(!fake.has_explored(SystemId(131)));
+    }
+
+    #[test]
+    fn the_fake_records_the_maps_questions_whose_arguments_matter() {
+        let fake = FakeFlight::new();
+        let marks = MapMarks {
+            green: Some(SystemId(131)),
+            multi_arrows: true,
+        };
+        fake.map_drawing(Some(&[SystemId(131)]), &[SystemId(132)], marks);
+        fake.map_panel(Some(SystemId(130)), None);
+        fake.find_map_system("alpha");
+        fake.offer_map_marks(MissionId(128));
+        fake.computer_map_marks(Some(MissionId(129)));
+        fake.mission_info_map_marks(Some(2));
+        fake.map_preselection();
+        assert_eq!(
+            fake.asked(),
+            [
+                MapAsk::Drawing {
+                    hypergate: Some(vec![SystemId(131)]),
+                    missions: vec![SystemId(132)],
+                    marks,
+                },
+                MapAsk::Panel {
+                    selected: Some(SystemId(130)),
+                    hypergate: None,
+                },
+                MapAsk::Find("alpha".to_owned()),
+                MapAsk::OfferMarks(MissionId(128)),
+                MapAsk::ComputerMarks(Some(MissionId(129))),
+                MapAsk::MissionInfoMarks(Some(2)),
+            ]
+        );
+    }
+
     /// What a broken sim gets wrong.
     #[derive(Clone, Copy, Debug)]
     enum Fault {
@@ -354,6 +658,10 @@ mod tests {
                 }
                 _ => self.fake.apply(command),
             }
+        }
+
+        fn takes(&self, gate: PlayerCommand) -> bool {
+            self.fake.takes(gate)
         }
 
         fn drain(&mut self, into: &mut Vec<FlightEvent>) {
