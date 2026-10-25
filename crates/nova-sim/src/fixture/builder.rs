@@ -15,6 +15,7 @@
 //! off.
 
 use crate::catalog::{AsteroidCatalog, CombatCatalog, PilotCatalog, StellarId, SystemId};
+use crate::fleet::Escort;
 use crate::pilot::Pilot;
 use crate::rulebook::Rulebook;
 use crate::session::Session;
@@ -107,6 +108,20 @@ impl<'c, C: PilotCatalog + CombatCatalog + AsteroidCatalog> SessionBuilder<'c, C
                 panic!("landing at {stellar:?} in {system:?}: {refusal}");
             }
         })
+    }
+
+    /// `escorts` the fleet, each restocked as a load restocks it; the
+    /// traffic places them in the system as it is next populated (a
+    /// view's first tick).
+    #[must_use]
+    pub fn with_escorts(self, escorts: Vec<Escort>) -> Self {
+        self.then(move |session, _| session.set_escorts(escorts))
+    }
+
+    /// The pilot's cash `credits` ([`Session::set_credits`]).
+    #[must_use]
+    pub fn with_credits(self, credits: i64) -> Self {
+        self.then(move |session, _| session.set_credits(credits))
     }
 
     /// Adds `step`, applied to the built session after those before it.
@@ -260,6 +275,45 @@ mod tests {
         let _ = SessionBuilder::flying(&catalog)
             .landed_at(SystemId(131), StellarId(128))
             .build();
+    }
+
+    #[test]
+    fn with_escorts_holds_the_fleet_on_the_pilot_and_a_populating_places_it() {
+        use crate::catalog::ShipId;
+        use crate::chance::NeverFires;
+        use crate::reserves::Reserves;
+        use crate::testkit::{FAST, FakePilotCatalog, ship};
+        let catalog = FakePilotCatalog {
+            ship_records: vec![ship(129, FAST)],
+            ..catalog()
+        };
+        let escort = |carried| Escort {
+            ship: ShipId(129),
+            reserves: Reserves::full(30.0, 45.0, 300.0),
+            order: None,
+            carried,
+            wage: None,
+            person: None,
+            mark: None,
+        };
+        let mut session = SessionBuilder::flying(&catalog)
+            .with_escorts(vec![escort(false), escort(false)])
+            .build();
+        assert_eq!(session.pilot().escorts(), [escort(false), escort(false)]);
+        session.populate(&catalog, &mut NeverFires);
+        let placed = session
+            .npcs()
+            .iter()
+            .filter(|npc| session.is_escort(npc.id))
+            .count();
+        assert_eq!(placed, 2);
+    }
+
+    #[test]
+    fn with_credits_sets_the_cash() {
+        let catalog = catalog();
+        let session = SessionBuilder::flying(&catalog).with_credits(-7).build();
+        assert_eq!(session.pilot().cash(), -7);
     }
 
     #[test]

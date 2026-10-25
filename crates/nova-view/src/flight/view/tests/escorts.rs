@@ -431,9 +431,8 @@ fn a_command_is_acknowledged_in_the_escorts_voice_at_the_next_pass() {
         }
     }
     catalog.voices = nova_sim::voice::Voices::read(&[(clip, Some(second))], &[]);
-    let pilot = with_escorts(&Pilot::new(&catalog, "Escorted").expect("starts"), &[130]);
     let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = FlightView::with_pilot(catalog, pilot)
+    let mut view = escorted_flight(catalog, "Escorted", fleet(&[130], false))
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
     view.tick(TICK);
@@ -503,9 +502,8 @@ fn with_the_escort_menu_open_command_5_picks_freighters_not_a_stellar() {
             record.inherent_ai = 3;
         }
     }
-    let pilot = with_escorts(&Pilot::new(&catalog, "Freighted").expect("starts"), &[130]);
     let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = FlightView::with_pilot(catalog, pilot)
+    let mut view = escorted_flight(catalog, "Freighted", fleet(&[130], false))
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
     view.tick(TICK);
@@ -774,14 +772,10 @@ fn shift_tab_targets_back_through_the_ships_and_with_alt_back_through_the_escort
         }
     }
     catalog.traffic[0].1.avg_ships = 2;
-    let pilot = with_escorts(
-        &Pilot::new(&catalog, "Escorted").expect("starts"),
-        &[130, 130],
-    );
     let mut draws = placed(750, 650, 0).to_vec();
     draws.extend(placed(850, 650, 0));
     let (_, chance) = scripted(&draws);
-    let mut view = FlightView::with_pilot(catalog, pilot)
+    let mut view = escorted_flight(catalog, "Escorted", fleet(&[130, 130], false))
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
     view.tick(TICK);
@@ -983,12 +977,11 @@ fn y_on_a_fleet_escort_opens_the_escort_dialog_once_and_its_presses_go_to_the_se
 #[test]
 fn leaving_a_shipyard_settles_the_marks_through_the_session() {
     let catalog = shipbuying();
-    let pilot = with_escorts(&Pilot::new(&catalog, "Seller").expect("starts"), &[129]);
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
-    save["escorts"][0]["mark"] = serde_json::json!("sell");
-    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut view = FlightView::with_pilot(catalog, pilot).with_behaviour(Rc::new(Still));
+    let marked = nova_sim::fleet::Escort {
+        mark: Some(nova_sim::fleet::EscortMark::Sell),
+        ..escort(129, false, None)
+    };
+    let mut view = escorted_flight(catalog, "Seller", vec![marked]).with_behaviour(Rc::new(Still));
     view.tick(TICK);
     assert_eq!(view.land_escorts(), None, "in flight");
     land_now(&mut view);

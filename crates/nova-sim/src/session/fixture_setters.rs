@@ -7,6 +7,7 @@
 
 use super::Session;
 use crate::catalog::{StellarId, SystemId};
+use crate::fleet::Escort;
 use crate::geometry::Vec2;
 
 impl Session {
@@ -36,6 +37,16 @@ impl Session {
         // ship resumes.
         self.place_stellar_sprites();
         true
+    }
+
+    /// Makes `escorts` the fleet, each restocked as a load restocks the
+    /// fleet it reads: its shield and armour full, its fuel held to its
+    /// class's most. The traffic places them as the system is next
+    /// populated.
+    pub(crate) fn set_escorts(&mut self, escorts: Vec<Escort>) {
+        self.pilot.escorts = escorts;
+        self.space
+            .restock_fleet(&mut self.pilot, &self.statics, &self.setup);
     }
 }
 
@@ -97,5 +108,39 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         assert!(session.resume_over(StellarId(128)));
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+    }
+
+    #[test]
+    fn setting_the_escorts_restocks_them_and_the_traffic_places_them() {
+        use crate::catalog::ShipId;
+        use crate::chance::NeverFires;
+        use crate::reserves::Reserves;
+        use crate::testkit::{FAST, FakePilotCatalog, ship};
+        let catalog = FakePilotCatalog {
+            ship_records: vec![ship(129, FAST)],
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        let escort = Escort {
+            ship: ShipId(129),
+            reserves: Reserves::full(1.0, 2.0, 5000.0),
+            order: None,
+            carried: false,
+            wage: Some(100),
+            person: None,
+            mark: None,
+        };
+        session.set_escorts(vec![escort]);
+        let held = session.pilot().escorts();
+        assert_eq!(held.len(), 1);
+        assert_eq!((held[0].ship, held[0].wage), (ShipId(129), Some(100)));
+        let full = Reserves::full(30.0, 45.0, 300.0);
+        assert_eq!(held[0].reserves, full, "restocked to its class");
+        session.populate(&catalog, &mut NeverFires);
+        assert!(
+            session.npcs().iter().any(|npc| session.is_escort(npc.id)),
+            "{:?}",
+            session.npcs()
+        );
     }
 }

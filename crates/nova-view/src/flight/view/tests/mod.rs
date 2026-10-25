@@ -3041,32 +3041,41 @@ impl nova_sim::HailOption for Refuel {
 use super::super::escorts::{ABSENT_ROW, MENU_AT, MENU_HEIGHT, MENU_WIDTH};
 use nova_sim::{EscortClass, EscortGroup, EscortOrder};
 
-/// `pilot`, saved and read back with a fleet of `ships`, each full.
-fn with_escorts(pilot: &Pilot, ships: &[i16]) -> Pilot {
-    with_fleet(pilot, ships, false)
+/// An escort of ship `ship`, full, a fighter out of a bay when
+/// `carried`, hired at `wage` if any.
+fn escort(ship: i16, carried: bool, wage: Option<i64>) -> nova_sim::fleet::Escort {
+    nova_sim::fleet::Escort {
+        ship: ShipId(ship),
+        reserves: Reserves::full(40.0, 60.0, 250.0),
+        order: None,
+        carried,
+        wage,
+        person: None,
+        mark: None,
+    }
 }
 
-/// `pilot`, saved and read back with a fleet of `ships`, each full,
-/// and fighters out of a bay when `carried`.
-fn with_fleet(pilot: &Pilot, ships: &[i16], carried: bool) -> Pilot {
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(pilot)).expect("JSON");
-    let gauge = |max: f32| serde_json::json!({"now": max, "max": max});
-    save["escorts"] = ships
+/// A fleet of `ships`, each full, and fighters out of a bay when
+/// `carried`.
+fn fleet(ships: &[i16], carried: bool) -> Vec<nova_sim::fleet::Escort> {
+    ships
         .iter()
-        .map(|ship| {
-            serde_json::json!({
-                "ship": ship,
-                "reserves": {"shield": gauge(40.0), "armor": gauge(60.0), "fuel": gauge(250.0)},
-                "order": null,
-                "carried": carried,
-                "wage": null,
-                "person": null,
-                "mark": null
-            })
-        })
-        .collect();
-    nova_sim::save::decode(&save.to_string()).expect("a pilot")
+        .map(|&ship| escort(ship, carried, None))
+        .collect()
+}
+
+/// A flight of `catalog`'s pilot `name`, its fleet `escorts`, which its
+/// first tick places.
+fn escorted_flight(
+    catalog: FakeCatalog,
+    name: &str,
+    escorts: Vec<nova_sim::fleet::Escort>,
+) -> View {
+    let session = SessionBuilder::flying(&catalog)
+        .named(name)
+        .with_escorts(escorts)
+        .build();
+    FlightView::from_session(catalog, session)
 }
 
 /// [`boardable`] with ship 130 a fighter (`EscortType` 0) holding
@@ -3085,13 +3094,8 @@ fn fighters_out_of(mut catalog: FakeCatalog) -> View {
             record.fields.fuel = 0;
         }
     }
-    let pilot = with_fleet(
-        &Pilot::new(&catalog, "Carrier").expect("starts"),
-        &[130, 130],
-        true,
-    );
     let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = FlightView::with_pilot(catalog, pilot)
+    let mut view = escorted_flight(catalog, "Carrier", fleet(&[130, 130], true))
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
     view.tick(TICK);
@@ -3126,9 +3130,8 @@ fn escorted_with_traffic(x: u32, y: u32) -> View {
             record.inherent_ai = 3;
         }
     }
-    let pilot = with_escorts(&Pilot::new(&catalog, "Escorted").expect("starts"), &[130]);
     let (_, chance) = scripted(&placed(x, y, 0));
-    let mut view = FlightView::with_pilot(catalog, pilot)
+    let mut view = escorted_flight(catalog, "Escorted", fleet(&[130], false))
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
     view.tick(TICK);

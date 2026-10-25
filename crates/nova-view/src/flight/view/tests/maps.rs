@@ -825,9 +825,8 @@ fn escorted_on_a_mission() -> (View, Ships) {
         },
         ..errand(140)
     }];
-    let pilot = with_escorts(&Pilot::new(&catalog, "Escorted").expect("starts"), &[130]);
     let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = FlightView::with_pilot(catalog, pilot)
+    let mut view = escorted_flight(catalog, "Escorted", fleet(&[130], false))
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
     run_set(&mut view, "S140");

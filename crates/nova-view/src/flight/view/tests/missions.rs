@@ -1069,32 +1069,9 @@ fn the_bars_offers_go_through_the_session_on_the_flights_chance() {
     assert_eq!(broken.next_offer(1), None);
 }
 
-/// `pilot`, saved and read back with `escorts`, each a ship, whether
-/// it is carried and its wage, each full.
-fn with_paid_fleet(pilot: &Pilot, escorts: &[(i16, bool, Option<i64>)]) -> Pilot {
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(pilot)).expect("JSON");
-    let gauge = |max: f32| serde_json::json!({"now": max, "max": max});
-    save["escorts"] = escorts
-        .iter()
-        .map(|&(ship, carried, wage)| {
-            serde_json::json!({
-                "ship": ship,
-                "reserves": {"shield": gauge(40.0), "armor": gauge(60.0), "fuel": gauge(250.0)},
-                "order": null,
-                "carried": carried,
-                "wage": wage,
-                "person": null,
-                "mark": null
-            })
-        })
-        .collect();
-    nova_sim::save::decode(&save.to_string()).expect("a pilot")
-}
-
 /// [`boardable`] with ship 130 of `Cost` 10,000 (a wage of 100), and
-/// a pilot holding `cash` whose fleet is one hired ship 130, saved at
-/// stellar 128 and landed there after its flight's first tick when
+/// a pilot holding `cash` whose fleet is one hired ship 130, resumed
+/// over stellar 128 and landed there after its flight's first tick when
 /// `docked`, the landing not yet taken; else its flight, its first
 /// tick done.
 fn paying(cash: i64, docked: bool) -> View {
@@ -1104,17 +1081,16 @@ fn paying(cash: i64, docked: bool) -> View {
             record.cost = 10_000;
         }
     }
-    let mut pilot = with_paid_fleet(
-        &Pilot::new(&catalog, "Payer").expect("starts"),
-        &[(130, false, Some(100))],
-    );
-    pilot.set_cash(cash);
+    let mut builder = SessionBuilder::flying(&catalog)
+        .named("Payer")
+        .with_credits(cash)
+        .with_escorts(vec![escort(130, false, Some(100))]);
     if docked {
-        let text = nova_sim::save::encode(&pilot).replace("\"stellar\": null", "\"stellar\": 128");
-        pilot = nova_sim::save::decode(&text).expect("a pilot");
+        builder = builder.over(StellarId(128));
     }
+    let session = builder.build();
     let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = FlightView::with_pilot(catalog, pilot)
+    let mut view = FlightView::from_session(catalog, session)
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
     view.tick(TICK);
@@ -1173,16 +1149,13 @@ fn fighters_abandoned_and_escorts_defected_on_one_arrival_are_said_together() {
             record.fields.fuel = 0;
         }
     }
-    let pilot = with_paid_fleet(
-        &Pilot::new(&catalog, "Carrier").expect("starts"),
-        &[
-            (130, true, None),
-            (130, true, None),
-            (129, false, Some(1500)),
-        ],
-    );
+    let fleet = vec![
+        escort(130, true, None),
+        escort(130, true, None),
+        escort(129, false, Some(1500)),
+    ];
     let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = FlightView::with_pilot(catalog, pilot)
+    let mut view = escorted_flight(catalog, "Carrier", fleet)
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
     view.tick(TICK);
