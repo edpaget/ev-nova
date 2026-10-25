@@ -1068,6 +1068,24 @@ impl MapSeen {
     }
 }
 
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// The flight's frame as it stands now ([`FlightSim::frame`]), filled
+    /// afresh on each read. The view keeps no frame buffer yet: while the
+    /// strangler lasts the concrete blocks still change the session
+    /// directly (a landing, a jump, a boarding) between any two points
+    /// where a kept frame could be refreshed, so a kept one could be
+    /// stale. A fill is cheap (phase 1 measured a full one at about
+    /// 3.6 µs, and this frame is smaller). Once every change goes through
+    /// [`FlightSim::apply`] and [`FlightSim::step`], the view can keep one
+    /// buffer filled once a step and after each command, which the world's
+    /// larger frame needs (rdm:phase/view-sim-seam/phase-7-world-frame).
+    pub(super) fn frame_now(&self) -> nova_sim::flight_frame::FlightFrame {
+        let mut frame = nova_sim::flight_frame::FlightFrame::default();
+        self.sim.frame(&mut frame);
+        frame
+    }
+}
+
 /// The player's ship in flight, reading the game data from `C`, the
 /// flight itself through the [`FlightSim`] port `S`: by default the
 /// [`SessionFlight`] adapter over a real session.

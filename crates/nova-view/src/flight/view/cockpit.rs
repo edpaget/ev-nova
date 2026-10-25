@@ -33,6 +33,7 @@ use nova_sim::combat::ship_frames::{Drawn, FrameSpec};
 use nova_sim::sprite_layer::SpriteLayer;
 
 use super::sprites::{Sprite, sprite_stack};
+use crate::flight::sim_port::FlightSim;
 use crate::galaxy::MapMarks;
 use crate::galaxy::map::MapPicture;
 use crate::system::camera::{Anchor, Camera, VIEW_SIZE};
@@ -43,6 +44,7 @@ use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::view_shape::classic_offset;
 use crate::{Color, DrawList, Input, Key, Point, UiSound};
 use nova_sim::RuleSource;
+use nova_sim::flight_frame::FlightCommand;
 
 use super::slot_block;
 use super::{
@@ -506,16 +508,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         }
     }
 
-    /// Whether the session takes `command` now ([`Session::takes`]); a
-    /// screen whose session failed to start takes every one, as it has
-    /// nothing to refuse them with.
-    pub(super) fn takes(&self, command: PlayerCommand) -> bool {
-        self.sim
-            .session
-            .as_ref()
-            .map_or(true, |session| session.takes(command))
-    }
-
     /// The [`PlayerCommand`] a press of `key` sends, as [`Screen::input`](crate::Screen::input)
     /// dispatches it; `None` for a key that is no command.
     pub(super) fn command_of(&self, key: Key) -> Option<PlayerCommand> {
@@ -547,162 +539,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         Some(command)
     }
 
-    /// A press of `key`, if it works the stellar navigation target. 1-4,
-    /// like F1-F4, select the stellar in their slot
-    /// ([`STELLAR_SLOT_KEYS`]); while the escort menu is open, 1-5 pick
-    /// its groups instead and never reach here ([`FlightView::escort_key`]).
-    /// F5 and Command-5 select the nearest ([`NEAREST_STELLAR_KEY`],
-    /// [`NEAREST_STELLAR_COMMAND_KEY`]); each of these goes to the slot
-    /// block's next frame ([`FlightView::slot_keys_frame`]). Nav Off turns
-    /// the nav system off, or with Option held lets go of the ship target
-    /// ([`NAV_OFF_KEY`]).
-    pub(super) fn nav_key(&mut self, key: Key) {
-        // The 5 alone goes too: the block picks nothing with it.
-        if slot_block::is_block_key(key) {
-            let menu_open = self.escort_menu.is_open();
-            self.slot_block.press(key, &self.held, menu_open);
-        } else if key == NAV_OFF_KEY {
-            self.press_nav_block(key);
-        }
-    }
-
-    /// One frame of the stellar slot keys' block, with the keys held and
-    /// pressed since the last ([`slot_block`]): skipped
-    /// while a jump is under way (@0x69d2b-0x69d32) or the session refuses
-    /// the nav keys, otherwise at most one stellar picked
-    /// ([`FlightView::select_stellar`]).
-    pub(super) fn slot_keys_frame(&mut self) {
-        let polled = !self.jump_under_way() && self.takes(PlayerCommand::Nav);
-        let menu_open = self.escort_menu.is_open();
-        if let Some(pick) = self.slot_block.frame(&self.held, menu_open, polled) {
-            self.select_stellar(pick);
-        }
-    }
-
-    /// A press of Hyper Select ([`HYPER_SELECT_KEY`]) or Hyperspace Mode
-    /// ([`HYPERSPACE_MODE_KEY`]). The press's own frame shows the floating
-    /// map: H's always (presses are taken only outside a jump), and
-    /// `\`'s when it leaves the mode at 3, unless it found no system. A tap released before the next tick
-    /// still shows it, as the frame's key poll would see it down.
-    ///
-    /// Each runs its key's routine with the key counted as down, its latch
-    /// first cleared as the release before the press clears it: `\`'s
-    /// always, H's unless \` without Option is still down, when the
-    /// latch holds and H only shows the map (@0x69b8e-0x69ba3).
-    pub(super) fn hyperspace_key(&mut self, key: Key) {
-        if self.sim.session.is_err() {
-            return;
-        }
-        if key == HYPER_SELECT_KEY {
-            self.select_latch = false;
-            self.select_frame(true);
-            if self
-                .sim
-                .session
-                .as_ref()
-                .is_ok_and(|session| matches!(session.nav_mode(), NavMode::Hyperspace(_)))
-            {
-                self.show_floating_map();
-            }
-        } else {
-            self.press_nav_block(key);
-            self.show_floating_map();
-        }
-    }
-
-    /// A fresh press of \` or H ([`NAV_OFF_KEY`], [`HYPERSPACE_MODE_KEY`]):
-    /// the OS sends one only after a release, which clears the block's
-    /// latch unless the block's other keys still hold it (H for \`; \`
-    /// without Option for H). Then the block runs with the key down
-    /// ([`FlightView::nav_keys_frame`]).
-    fn press_nav_block(&mut self, key: Key) {
-        let down = |held: Key| key == held || self.held.contains(&held);
-        let option = self.held.contains(&Key::Alt);
-        let others = if key == NAV_OFF_KEY {
-            self.held.contains(&HYPERSPACE_MODE_KEY)
-        } else {
-            self.held.contains(&NAV_OFF_KEY) && !option
-        };
-        let (nav_off, h) = (down(NAV_OFF_KEY), down(HYPERSPACE_MODE_KEY));
-        if !others {
-            self.nav_latch = false;
-        }
-        self.nav_keys_frame(nav_off, option, h);
-    }
-
-    /// Whether the session has a jump under way, the pre-jump stage
-    /// included: the original's +0x50 > 0, which its key blocks test live.
-    /// A jump given up is over at once, whatever its effect still shows.
-    pub(super) fn jump_under_way(&self) -> bool {
-        self.sim
-            .session
-            .as_ref()
-            .is_ok_and(|session| session.jumping().is_some() || session.preparing_jump().is_some())
-    }
-
-    /// One frame of Option-\` and the Nav Off / Hyperspace Mode block,
-    /// with \` (`nav_off`), Option and H down or not, as `_HandlePlayer`
-    /// runs them (@0x69a17-0x69baa) on [`FlightView::nav_latch`]:
-    ///
-    /// - With \` and Option down and the latch clear, the latch set and
-    ///   the ship target let go ([`Session::clear_target`], @0x69a17-0x69a90),
-    ///   during a jump too.
-    /// - Then, with \` without Option or H down outside a jump
-    ///   (@0x69aa1-0x69ad4), and the latch clear, the latch set and the
-    ///   block run ([`Session::nav_mode_keys`]); otherwise, the latch
-    ///   cleared (@0x69baa).
-    ///
-    /// So Option-\` held lets go of a target picked meanwhile on the next
-    /// frame, unless H is down; Option let go with \` still down is a
-    /// fresh Nav Off; H and \` block each other while one is held; and
-    /// either held through a jump's end acts after it.
-    pub(super) fn nav_keys_frame(&mut self, nav_off: bool, option: bool, h: bool) {
-        let jumping = self.jump_under_way();
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        if nav_off && option && !self.nav_latch {
-            self.nav_latch = true;
-            session.clear_target();
-        }
-        if ((nav_off && !option) || h) && !jumping {
-            if !self.nav_latch {
-                self.nav_latch = true;
-                session.nav_mode_keys(nav_off, h);
-            }
-        } else {
-            self.nav_latch = false;
-        }
-    }
-
-    /// One frame of Hyper Select, with `\` down or not, as `_HandlePlayer`
-    /// runs it (@0x69bb2-0x69cee) on [`FlightView::select_latch`]: up, the
-    /// latch cleared (@0x69cee); down with the latch clear outside a jump,
-    /// the latch set (@0x69bf1) and the next linked system selected
-    /// ([`Session::select_next_system`]). During a jump the latch is left
-    /// as it is (@0x69be7): a `\` held from before stays latched, and one
-    /// first pressed during the jump acts after it.
-    pub(super) fn select_frame(&mut self, down: bool) {
-        if !down {
-            self.select_latch = false;
-            return;
-        }
-        if self.select_latch || self.jump_under_way() {
-            return;
-        }
-        self.select_latch = true;
-        if let Ok(session) = &mut self.sim.session {
-            session.select_next_system();
-        }
-    }
-
-    /// Makes the stellar `pick` finds the navigation target, if any.
-    pub(super) fn select_stellar(&mut self, pick: StellarPick) {
-        if let Ok(session) = &mut self.sim.session {
-            session.select_stellar(pick);
-        }
-    }
-
     /// A click at screen point `at`, as the original's in space
     /// (`_HandlePlayer` @0x6a000-0x6a764): one in the status panel, the
     /// right [`STATUS_BAR_WIDTH`] (0xc2) of the view at any width, x ≥
@@ -730,189 +566,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         if let Ok(session) = &mut self.sim.session {
             session.click_in_space(Vec2::new(world.x, world.y), &drawn);
         }
-    }
-
-    /// The floating map's clock: the flight's elapsed time in Mac ticks
-    /// (see the [`floating`](crate::flight::floating) module's trade-offs).
-    fn mac_now(&self) -> u128 {
-        sixtieths(self.elapsed)
-    }
-
-    /// Shows the floating map, restarting its clock, as
-    /// `_ShowFloatingMap` does.
-    ///
-    /// Each show takes the map's drawing afresh, as `_ShowFloatingMap`
-    /// draws it into the frame then (`_DrawMapInFloatingFrame`): the
-    /// session's drawing off the hypergate map (`_hypergateMapMode` = 0,
-    /// @0x114cb) with the mission systems taken now (@0x114ea), and the
-    /// system selected now ([`Session::floating_preselection`],
-    /// @0x1147b-0x114c8), whose name alone is drawn above a zoom of 1.1.
-    /// It marks no green system, with multiple arrows allowed
-    /// ([`MapMarks::NONE`](nova_sim::MapMarks::NONE)): it shows only from
-    /// `_HandlePlayer`, never under a mission dialog's map.
-    /// The frame shows that drawing until the next show: its course and
-    /// mode-3 link are those of the last show, not live, as the
-    /// original's frame image is drawn only then (at a show, Hyper Select,
-    /// a click and a zoom, each of which shows it again here).
-    fn show_floating_map(&mut self) {
-        self.floating.show(self.mac_now());
-        // `_DrawMapInFloatingFrame` sets `_mapScroll` to the current
-        // system as it draws (@0x11338-0x1136d), so the course map opens
-        // there next.
-        self.map.recentre();
-        if let Ok(session) = &self.sim.session {
-            self.floating.preselect(session.floating_preselection());
-            let missions = session.map_mission_systems();
-            let drawing = session.map_drawing(None, &missions, nova_sim::MapMarks::NONE);
-            self.floating_picture = Some(MapPicture::of(&drawing));
-        }
-    }
-
-    /// The floating map's work each frame, as `_HandlePlayer` does it
-    /// before `_HandleComm`: shown while H is held outside a jump
-    /// (@0x69b8e-0x69ba8; its jump gate skips it, @0x69ad4), and while `\`
-    /// is held in nav mode 3, jumping or not (@0x69cdd-0x69ce7; its jump
-    /// gate jumps straight to the show, @0x69be7), each while the session
-    /// takes its command; then hidden once more than 500 ticks have
-    /// passed since it was last shown (@0x30262-0x30285). It runs once a
-    /// frame, not once a pass: double time's second pass would only show
-    /// it again at the same tick.
-    pub(super) fn floating_frame(&mut self) {
-        let jumping = self.jump_under_way();
-        let session = self.sim.session.as_ref();
-        let mode_3 =
-            session.is_ok_and(|session| matches!(session.nav_mode(), NavMode::Hyperspace(_)));
-        let h =
-            self.held.contains(&HYPERSPACE_MODE_KEY) && !jumping && self.takes(PlayerCommand::Nav);
-        let backslash = self.held.contains(&HYPER_SELECT_KEY)
-            && mode_3
-            && self.takes(PlayerCommand::SelectSystem);
-        if h || backslash {
-            self.show_floating_map();
-        }
-        self.floating.expire(self.mac_now());
-    }
-
-    /// A left click at `at`, if the floating map takes it, as
-    /// `_HandlePlayer` does (@0x6a130-0x6a762): while the map is up, faded
-    /// out or not, inside its frame. A hit on the current system's centre
-    /// or a link's box selects through the session
-    /// ([`Session::select_on_floating_map`]) and shows the map again
-    /// (@0x6a735); a miss is swallowed (@0x6a342). Whether it took it.
-    /// During a jump the original passes the click on (@0x6a145), where a
-    /// click in space selects nothing either; here the session refuses the
-    /// hit, so the click does nothing and the map isn't shown again.
-    pub(super) fn click_floating_map(&mut self, at: Point) -> bool {
-        let frame = floating::frame(self.view);
-        if !self.floating.is_up() || !floating::contains(frame, at) {
-            return false;
-        }
-        let Ok(session) = &mut self.sim.session else {
-            return true;
-        };
-        let galaxy = session.galaxy();
-        let point = |id| {
-            galaxy
-                .position(id)
-                .map_or_else(Point::default, |at| Point::new(at.x, at.y))
-        };
-        let links: Vec<(SystemId, Point)> = session
-            .floating_map_links()
-            .into_iter()
-            .map(|link| (link, point(link)))
-            .collect();
-        let current = point(session.system());
-        let picked = match floating::hit(&self.floating, frame, at, current, &links) {
-            Hit::Centre => Some(None),
-            Hit::Link(link) => Some(Some(link)),
-            Hit::Miss | Hit::Outside => None,
-        };
-        if let Some(link) = picked
-            && session.select_on_floating_map(link)
-        {
-            self.show_floating_map();
-        }
-        true
-    }
-
-    /// A zoom key's press: while the floating map is up and no key the
-    /// flight holds is down (`_quickKeyCheckResult` and the modifiers,
-    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. A `-`
-    /// held alone doesn't count: `_HandlePlayer` checks it only with
-    /// Command down (@0x6fdc8), so alone it never sets
-    /// `_quickKeyCheckResult`. One
-    /// that changes the scale shows the map again and raises
-    /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
-    /// one at a limit does nothing.
-    pub(super) fn zoom_floating_map(&mut self, key: Key) {
-        let holds = self.held.iter().any(|&held| {
-            self.slot_key_polled(held, true)
-                .unwrap_or(held != SELF_DESTRUCT_KEY)
-        });
-        if !self.floating.is_up() || holds {
-            return;
-        }
-        let moved = if key == ZOOM_OUT_KEY {
-            self.floating.zoom_out()
-        } else {
-            self.floating.zoom_in()
-        };
-        if moved {
-            self.show_floating_map();
-            self.ui_sounds.push(UiSound::FloatingMapZoomed);
-        }
-    }
-
-    /// For a held stellar slot key `key` (1-4, F1-F5 or the 5), whether
-    /// `_HandlePlayer` polls it this frame and so finds it down; `None` for
-    /// any other key. The slot block polls F1-F5 always, 1-4 with the
-    /// escort menu shut and the 5 with the menu shut, Command down and F5
-    /// up (@0x69d38-0x69dda, the menu's mask @0xa106-0xa124), and none of
-    /// them during a jump (@0x69d2b-0x69d32). With `escort_loop`, the
-    /// escort menu's loop counts too: it polls 1-5 while the menu shows,
-    /// during a jump too (@0x6df4a-0x6e186), setting
-    /// `_quickKeyCheckResult` (@0xa18a-0xa191) but not the cursor's fade.
-    fn slot_key_polled(&self, key: Key, escort_loop: bool) -> Option<bool> {
-        if !slot_block::is_block_key(key) {
-            return None;
-        }
-        let menu_open = self.escort_menu.is_open();
-        let block = !self.jump_under_way()
-            && slot_block::block_polls(key, |down| self.held.contains(&down), menu_open);
-        Some(block || (escort_loop && slot_block::escort_loop_polls(key, menu_open)))
-    }
-
-    /// Draws the floating map while it is up: centred on the current
-    /// system at its zoom, the drawing its last show took
-    /// ([`FlightView::show_floating_map`]) through the course map's
-    /// [`GalaxyMap::draw_marks`](crate::galaxy::GalaxyMap::draw_marks), with no brackets or second names, as
-    /// `_DrawMapInFloatingFrame` runs `_DrawMap` alone, in its frame
-    /// bordered in `cölr` `FloatingMap`, clipped and faded to its level
-    /// ([`floating::draw`]).
-    pub(super) fn draw_floating_map(&self, list: &mut DrawList) {
-        let Some(level) = self.floating.level(self.mac_now()) else {
-            return;
-        };
-        let Ok(session) = &self.sim.session else {
-            return;
-        };
-        let current = session.system();
-        let at = session
-            .galaxy()
-            .position(current)
-            .map_or_else(Point::default, |at| Point::new(at.x, at.y));
-        let frame = floating::frame(self.view);
-        let transform = floating::transform(frame, at, self.floating.zoom());
-        let Some(picture) = &self.floating_picture else {
-            return;
-        };
-        let marks = MapMarks {
-            picture,
-            selected: self.floating.preselection(),
-        };
-        floating::draw(list, frame, level, self.escort_colors.border, |raw| {
-            self.map.draw_marks(raw, &transform, &marks);
-        });
     }
 
     /// The escort menu's class rows ([`Session::escort_menu`]); none for
@@ -1073,13 +726,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// (`escortMenuOnscreen` = 0, `_EnterGameFromMainScreen` @0x1a39e).
     pub fn shut_escort_menu(&mut self) {
         self.escort_menu.close();
-    }
-
-    /// Picks the target as `pick` says.
-    pub(super) fn select_target(&mut self, pick: TargetPick) {
-        if let Ok(session) = &mut self.sim.session {
-            session.select_target(pick);
-        }
     }
 
     /// The fight's explosions, debris and sounds.
@@ -1397,5 +1043,361 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         if self.overlays.help {
             list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
         }
+    }
+}
+
+/// The nav keys, the stellar slot keys and the floating map, over the
+/// [`FlightSim`] port: they read the flight's frame
+/// ([`FlightView::frame_now`]) and send their commands through it, so any
+/// flight drives them, a scripted one in the component tests.
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// One frame of the keys `_HandlePlayer` polls with a latch before the
+    /// Board and jump keys, with those held down, in its order: Option-\`
+    /// and the Nav Off / Hyperspace Mode block
+    /// ([`FlightView::nav_keys_frame`]), Hyper Select
+    /// ([`FlightView::select_frame`]), then the stellar slot keys
+    /// ([`FlightView::slot_keys_frame`]), the first two while the flight
+    /// takes their command: the head of
+    /// [`FlightView::held_keys_frame`]'s frame.
+    pub(super) fn nav_held_frame(&mut self) {
+        let down = |key: Key| self.held.contains(&key);
+        let (nav_off, option, h) = (down(NAV_OFF_KEY), down(Key::Alt), down(HYPERSPACE_MODE_KEY));
+        let select = down(HYPER_SELECT_KEY);
+        if self.takes(PlayerCommand::Nav) {
+            self.nav_keys_frame(nav_off, option, h);
+        }
+        if self.takes(PlayerCommand::SelectSystem) {
+            self.select_frame(select);
+        }
+        self.slot_keys_frame();
+    }
+
+    /// Whether the flight takes `command` now ([`FlightSim::takes`],
+    /// [`Session::takes`]); a flight that failed to start takes every
+    /// one, as it has nothing to refuse them with.
+    pub(super) fn takes(&self, command: PlayerCommand) -> bool {
+        self.sim.takes(command)
+    }
+
+    /// A press of `key`, if it works the stellar navigation target. 1-4,
+    /// like F1-F4, select the stellar in their slot
+    /// ([`STELLAR_SLOT_KEYS`]); while the escort menu is open, 1-5 pick
+    /// its groups instead and never reach here ([`FlightView::escort_key`]).
+    /// F5 and Command-5 select the nearest ([`NEAREST_STELLAR_KEY`],
+    /// [`NEAREST_STELLAR_COMMAND_KEY`]); each of these goes to the slot
+    /// block's next frame ([`FlightView::slot_keys_frame`]). Nav Off turns
+    /// the nav system off, or with Option held lets go of the ship target
+    /// ([`NAV_OFF_KEY`]).
+    pub(super) fn nav_key(&mut self, key: Key) {
+        // The 5 alone goes too: the block picks nothing with it.
+        if slot_block::is_block_key(key) {
+            let menu_open = self.escort_menu.is_open();
+            self.slot_block.press(key, &self.held, menu_open);
+        } else if key == NAV_OFF_KEY {
+            self.press_nav_block(key);
+        }
+    }
+
+    /// One frame of the stellar slot keys' block, with the keys held and
+    /// pressed since the last ([`slot_block`]): skipped
+    /// while a jump is under way (@0x69d2b-0x69d32) or the session refuses
+    /// the nav keys, otherwise at most one stellar picked
+    /// ([`FlightView::select_stellar`]).
+    pub(super) fn slot_keys_frame(&mut self) {
+        let polled = !self.jump_under_way() && self.takes(PlayerCommand::Nav);
+        let menu_open = self.escort_menu.is_open();
+        if let Some(pick) = self.slot_block.frame(&self.held, menu_open, polled) {
+            self.select_stellar(pick);
+        }
+    }
+
+    /// A press of Hyper Select ([`HYPER_SELECT_KEY`]) or Hyperspace Mode
+    /// ([`HYPERSPACE_MODE_KEY`]). The press's own frame shows the floating
+    /// map: H's always (presses are taken only outside a jump), and
+    /// `\`'s when it leaves the mode at 3, unless it found no system. A tap released before the next tick
+    /// still shows it, as the frame's key poll would see it down.
+    ///
+    /// Each runs its key's routine with the key counted as down, its latch
+    /// first cleared as the release before the press clears it: `\`'s
+    /// always, H's unless \` without Option is still down, when the
+    /// latch holds and H only shows the map (@0x69b8e-0x69ba3).
+    ///
+    /// A flight that failed to start shows nothing here: its frame's nav is
+    /// off, and its floating map has no drawing.
+    pub(super) fn hyperspace_key(&mut self, key: Key) {
+        if key == HYPER_SELECT_KEY {
+            self.select_latch = false;
+            self.select_frame(true);
+            if matches!(self.frame_now().nav_mode, NavMode::Hyperspace(_)) {
+                self.show_floating_map();
+            }
+        } else {
+            self.press_nav_block(key);
+            self.show_floating_map();
+        }
+    }
+
+    /// A fresh press of \` or H ([`NAV_OFF_KEY`], [`HYPERSPACE_MODE_KEY`]):
+    /// the OS sends one only after a release, which clears the block's
+    /// latch unless the block's other keys still hold it (H for \`; \`
+    /// without Option for H). Then the block runs with the key down
+    /// ([`FlightView::nav_keys_frame`]).
+    fn press_nav_block(&mut self, key: Key) {
+        let down = |held: Key| key == held || self.held.contains(&held);
+        let option = self.held.contains(&Key::Alt);
+        let others = if key == NAV_OFF_KEY {
+            self.held.contains(&HYPERSPACE_MODE_KEY)
+        } else {
+            self.held.contains(&NAV_OFF_KEY) && !option
+        };
+        let (nav_off, h) = (down(NAV_OFF_KEY), down(HYPERSPACE_MODE_KEY));
+        if !others {
+            self.nav_latch = false;
+        }
+        self.nav_keys_frame(nav_off, option, h);
+    }
+
+    /// Whether the session has a jump under way, the pre-jump stage
+    /// included: the original's +0x50 > 0, which its key blocks test live.
+    /// A jump given up is over at once, whatever its effect still shows.
+    pub(super) fn jump_under_way(&self) -> bool {
+        self.frame_now().jump_under_way
+    }
+
+    /// One frame of Option-\` and the Nav Off / Hyperspace Mode block,
+    /// with \` (`nav_off`), Option and H down or not, as `_HandlePlayer`
+    /// runs them (@0x69a17-0x69baa) on [`FlightView::nav_latch`]:
+    ///
+    /// - With \` and Option down and the latch clear, the latch set and
+    ///   the ship target let go ([`FlightCommand::ClearTarget`],
+    ///   [`Session::clear_target`], @0x69a17-0x69a90), during a jump too.
+    /// - Then, with \` without Option or H down outside a jump
+    ///   (@0x69aa1-0x69ad4), and the latch clear, the latch set and the
+    ///   block run ([`FlightCommand::NavModeKeys`],
+    ///   [`Session::nav_mode_keys`]); otherwise, the latch cleared
+    ///   (@0x69baa).
+    ///
+    /// So Option-\` held lets go of a target picked meanwhile on the next
+    /// frame, unless H is down; Option let go with \` still down is a
+    /// fresh Nav Off; H and \` block each other while one is held; and
+    /// either held through a jump's end acts after it.
+    pub(super) fn nav_keys_frame(&mut self, nav_off: bool, option: bool, h: bool) {
+        let jumping = self.jump_under_way();
+        if nav_off && option && !self.nav_latch {
+            self.nav_latch = true;
+            self.sim.apply(FlightCommand::ClearTarget);
+        }
+        if ((nav_off && !option) || h) && !jumping {
+            if !self.nav_latch {
+                self.nav_latch = true;
+                self.sim.apply(FlightCommand::NavModeKeys { nav_off, h });
+            }
+        } else {
+            self.nav_latch = false;
+        }
+    }
+
+    /// One frame of Hyper Select, with `\` down or not, as `_HandlePlayer`
+    /// runs it (@0x69bb2-0x69cee) on [`FlightView::select_latch`]: up, the
+    /// latch cleared (@0x69cee); down with the latch clear outside a jump,
+    /// the latch set (@0x69bf1) and the next linked system selected
+    /// ([`Session::select_next_system`]). During a jump the latch is left
+    /// as it is (@0x69be7): a `\` held from before stays latched, and one
+    /// first pressed during the jump acts after it.
+    pub(super) fn select_frame(&mut self, down: bool) {
+        if !down {
+            self.select_latch = false;
+            return;
+        }
+        if self.select_latch || self.jump_under_way() {
+            return;
+        }
+        self.select_latch = true;
+        self.sim.apply(FlightCommand::SelectNextSystem);
+    }
+
+    /// Makes the stellar `pick` finds the navigation target, if any
+    /// ([`FlightCommand::SelectStellar`]).
+    pub(super) fn select_stellar(&mut self, pick: StellarPick) {
+        self.sim.apply(FlightCommand::SelectStellar(pick));
+    }
+
+    /// The floating map's clock: the flight's elapsed time in Mac ticks
+    /// (see the [`floating`](crate::flight::floating) module's trade-offs).
+    fn mac_now(&self) -> u128 {
+        sixtieths(self.elapsed)
+    }
+
+    /// Shows the floating map, restarting its clock, as
+    /// `_ShowFloatingMap` does.
+    ///
+    /// Each show takes the map's drawing afresh, as `_ShowFloatingMap`
+    /// draws it into the frame then (`_DrawMapInFloatingFrame`): the
+    /// session's drawing off the hypergate map (`_hypergateMapMode` = 0,
+    /// @0x114cb) with the mission systems taken now (@0x114ea), and the
+    /// system selected now ([`Session::floating_preselection`],
+    /// @0x1147b-0x114c8), whose name alone is drawn above a zoom of 1.1.
+    /// It marks no green system, with multiple arrows allowed
+    /// ([`MapMarks::NONE`](nova_sim::MapMarks::NONE)): it shows only from
+    /// `_HandlePlayer`, never under a mission dialog's map.
+    /// The frame shows that drawing until the next show: its course and
+    /// mode-3 link are those of the last show, not live, as the
+    /// original's frame image is drawn only then (at a show, Hyper Select,
+    /// a click and a zoom, each of which shows it again here).
+    fn show_floating_map(&mut self) {
+        self.floating.show(self.mac_now());
+        // `_DrawMapInFloatingFrame` sets `_mapScroll` to the current
+        // system as it draws (@0x11338-0x1136d), so the course map opens
+        // there next.
+        self.map.recentre();
+        let missions = self.sim.map_mission_systems();
+        if let Some(drawing) = self
+            .sim
+            .map_drawing(None, &missions, nova_sim::MapMarks::NONE)
+        {
+            self.floating.preselect(self.sim.floating_preselection());
+            self.floating_picture = Some(MapPicture::of(&drawing));
+        }
+    }
+
+    /// The floating map's work each frame, as `_HandlePlayer` does it
+    /// before `_HandleComm`: shown while H is held outside a jump
+    /// (@0x69b8e-0x69ba8; its jump gate skips it, @0x69ad4), and while `\`
+    /// is held in nav mode 3, jumping or not (@0x69cdd-0x69ce7; its jump
+    /// gate jumps straight to the show, @0x69be7), each while the session
+    /// takes its command; then hidden once more than 500 ticks have
+    /// passed since it was last shown (@0x30262-0x30285). It runs once a
+    /// frame, not once a pass: double time's second pass would only show
+    /// it again at the same tick.
+    pub(super) fn floating_frame(&mut self) {
+        let jumping = self.jump_under_way();
+        let mode_3 = matches!(self.frame_now().nav_mode, NavMode::Hyperspace(_));
+        let h =
+            self.held.contains(&HYPERSPACE_MODE_KEY) && !jumping && self.takes(PlayerCommand::Nav);
+        let backslash = self.held.contains(&HYPER_SELECT_KEY)
+            && mode_3
+            && self.takes(PlayerCommand::SelectSystem);
+        if h || backslash {
+            self.show_floating_map();
+        }
+        self.floating.expire(self.mac_now());
+    }
+
+    /// A left click at `at`, if the floating map takes it, as
+    /// `_HandlePlayer` does (@0x6a130-0x6a762): while the map is up, faded
+    /// out or not, inside its frame. A hit on the current system's centre
+    /// or a link's box, each at its place on the map
+    /// ([`MapSource::floating_map_places`](crate::flight::sim_port::MapSource::floating_map_places)), selects through the flight
+    /// ([`FlightCommand::SelectOnFloatingMap`],
+    /// [`Session::select_on_floating_map`]) and shows the map again
+    /// (@0x6a735); a miss is swallowed (@0x6a342). Whether it took it.
+    /// During a jump the original passes the click on (@0x6a145), where a
+    /// click in space selects nothing either; here the session refuses the
+    /// hit, so the click does nothing and the map isn't shown again.
+    pub(super) fn click_floating_map(&mut self, at: Point) -> bool {
+        let frame = floating::frame(self.view);
+        if !self.floating.is_up() || !floating::contains(frame, at) {
+            return false;
+        }
+        let places = self.sim.floating_map_places();
+        let links: Vec<(SystemId, Point)> = places
+            .links
+            .iter()
+            .map(|&(link, at)| (link, Point::new(at.x, at.y)))
+            .collect();
+        let current = Point::new(places.current.x, places.current.y);
+        let picked = match floating::hit(&self.floating, frame, at, current, &links) {
+            Hit::Centre => Some(None),
+            Hit::Link(link) => Some(Some(link)),
+            Hit::Miss | Hit::Outside => None,
+        };
+        if let Some(link) = picked
+            && !self
+                .sim
+                .apply(FlightCommand::SelectOnFloatingMap(link))
+                .is_refused()
+        {
+            self.show_floating_map();
+        }
+        true
+    }
+
+    /// A zoom key's press: while the floating map is up and no key the
+    /// flight holds is down (`_quickKeyCheckResult` and the modifiers,
+    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. A `-`
+    /// held alone doesn't count: `_HandlePlayer` checks it only with
+    /// Command down (@0x6fdc8), so alone it never sets
+    /// `_quickKeyCheckResult`. One
+    /// that changes the scale shows the map again and raises
+    /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
+    /// one at a limit does nothing.
+    pub(super) fn zoom_floating_map(&mut self, key: Key) {
+        let holds = self.held.iter().any(|&held| {
+            self.slot_key_polled(held, true)
+                .unwrap_or(held != SELF_DESTRUCT_KEY)
+        });
+        if !self.floating.is_up() || holds {
+            return;
+        }
+        let moved = if key == ZOOM_OUT_KEY {
+            self.floating.zoom_out()
+        } else {
+            self.floating.zoom_in()
+        };
+        if moved {
+            self.show_floating_map();
+            self.ui_sounds.push(UiSound::FloatingMapZoomed);
+        }
+    }
+
+    /// For a held stellar slot key `key` (1-4, F1-F5 or the 5), whether
+    /// `_HandlePlayer` polls it this frame and so finds it down; `None` for
+    /// any other key. The slot block polls F1-F5 always, 1-4 with the
+    /// escort menu shut and the 5 with the menu shut, Command down and F5
+    /// up (@0x69d38-0x69dda, the menu's mask @0xa106-0xa124), and none of
+    /// them during a jump (@0x69d2b-0x69d32). With `escort_loop`, the
+    /// escort menu's loop counts too: it polls 1-5 while the menu shows,
+    /// during a jump too (@0x6df4a-0x6e186), setting
+    /// `_quickKeyCheckResult` (@0xa18a-0xa191) but not the cursor's fade.
+    fn slot_key_polled(&self, key: Key, escort_loop: bool) -> Option<bool> {
+        if !slot_block::is_block_key(key) {
+            return None;
+        }
+        let menu_open = self.escort_menu.is_open();
+        let block = !self.jump_under_way()
+            && slot_block::block_polls(key, |down| self.held.contains(&down), menu_open);
+        Some(block || (escort_loop && slot_block::escort_loop_polls(key, menu_open)))
+    }
+
+    /// Draws the floating map while it is up: centred on the current
+    /// system at its zoom, the drawing its last show took
+    /// ([`FlightView::show_floating_map`]) through the course map's
+    /// [`GalaxyMap::draw_marks`](crate::galaxy::GalaxyMap::draw_marks), with no brackets or second names, as
+    /// `_DrawMapInFloatingFrame` runs `_DrawMap` alone, in its frame
+    /// bordered in `cölr` `FloatingMap`, clipped and faded to its level
+    /// ([`floating::draw`]).
+    pub(super) fn draw_floating_map(&self, list: &mut DrawList) {
+        let Some(level) = self.floating.level(self.mac_now()) else {
+            return;
+        };
+        let Some(picture) = &self.floating_picture else {
+            return;
+        };
+        let current = self.sim.floating_map_places().current;
+        let at = Point::new(current.x, current.y);
+        let frame = floating::frame(self.view);
+        let transform = floating::transform(frame, at, self.floating.zoom());
+        let marks = MapMarks {
+            picture,
+            selected: self.floating.preselection(),
+        };
+        floating::draw(list, frame, level, self.escort_colors.border, |raw| {
+            self.map.draw_marks(raw, &transform, &marks);
+        });
+    }
+
+    /// Picks the target as `pick` says ([`FlightCommand::SelectTarget`]).
+    pub(super) fn select_target(&mut self, pick: TargetPick) {
+        self.sim.apply(FlightCommand::SelectTarget(pick));
     }
 }

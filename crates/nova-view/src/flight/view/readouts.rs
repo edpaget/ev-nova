@@ -3,8 +3,9 @@
 
 use std::borrow::Cow;
 
-use nova_sim::{NavMode, RuleKey, RuleSource, Session, TargetTag};
-use nova_sim::{StellarIff, TagNames};
+use nova_sim::StellarIff;
+use nova_sim::flight_frame::FlightCommand;
+use nova_sim::{NavMode, RuleKey, RuleSource, TargetTag};
 
 use crate::flight::cadence::{Drawn, retake_target};
 use crate::flight::hud::{NavDestination, NavDisplay};
@@ -14,6 +15,7 @@ use crate::spaceport::PortDialog;
 use crate::time::ticks;
 
 use super::{FlightView, radar_ships};
+use crate::flight::sim_port::FlightSim;
 
 impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// What the radar shows now ([`RadarScene`]): the player's ship and
@@ -22,7 +24,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// while the ship is landed (`_playerIsLanded`); each with its IFF
     /// code, the player's IFF and density scanner, this tick's static
     /// ([`FlightView::advance_hud`]), and whether the nav mode is
-    /// hyperspace ([`Session::nav_mode`]).
+    /// hyperspace ([`Session::nav_mode`](nova_sim::Session::nav_mode)).
     pub(super) fn radar_now(&self) -> RadarScene {
         // Without a session flight shows only why, never the radar.
         let Ok(session) = &self.sim.session else {
@@ -51,7 +53,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             iff: gear.iff,
             density_scanner: gear.density_scanner,
             static_pattern: self.radar_static,
-            hyperspace_mode: matches!(session.nav_mode(), NavMode::Hyperspace(_)),
+            hyperspace_mode: matches!(self.nav_mode(), NavMode::Hyperspace(_)),
         }
     }
 
@@ -87,23 +89,10 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         self.redraw_status();
     }
 
-    /// A port dialog (the outfitter, exchange, shipyard, the bar's hire
-    /// screen or the mission computer) opens: the nav is saved
-    /// ([`Session::save_port_nav`]), as each of the original's saves +0x6a
-    /// and +0x6c as it opens (the outfitter @0x5bafc-0x5bb12, the exchange
-    /// @0x5dbed-0x5dc08, the shipyard and the hire screen
-    /// @0x5e70f-0x5e71e, the computer @0x5ffc0-0x5ffd0). A
-    /// session that failed has no nav to save.
-    pub fn open_port_dialog(&mut self) {
-        if let Ok(session) = &mut self.sim.session {
-            session.save_port_nav();
-        }
-    }
-
     /// `dialog` closes, as `_DoPortDialog` closes each: its close
     /// redraws the whole bar first ([`FlightView::refresh_status`],
     /// `_RefreshSAT`), then the nav saved as it opened is restored
-    /// ([`Session::restore_port_nav`]; the outfitter @0x5dbb8-0x5dbc5,
+    /// ([`Session::restore_port_nav`](nova_sim::Session::restore_port_nav); the outfitter @0x5dbb8-0x5dbc5,
     /// the exchange @0x5e64d-0x5e65d, the shipyard @0x5f8e8-0x5f8f5, the
     /// computer @0x60084-0x60096), undoing a landed `M` or `N` run inside
     /// it. When the restored nav shows:
@@ -283,67 +272,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         }
     }
 
-    /// Takes the nav area's snapshot afresh, noting how many mission texts
-    /// the session had queued then.
-    pub(super) fn retake_nav(&mut self) {
-        self.nav_marked = false;
-        self.nav_scene = Some((self.nav_mode(), self.nav_now()));
-        self.nav_texts = self.sim.session.as_ref().map_or(0, Session::texts_queued);
-    }
-
-    /// The player's nav mode ([`Session::nav_mode`]); off without a
-    /// session.
-    pub(super) fn nav_mode(&self) -> NavMode {
-        self.sim
-            .session
-            .as_ref()
-            .map_or(NavMode::Off, Session::nav_mode)
-    }
-
-    /// What the HUD's nav area shows now, for the session's nav mode
-    /// ([`FlightView::nav_display`]).
-    pub(super) fn nav_now(&self) -> NavDisplay {
-        self.nav_display(self.nav_mode())
-    }
-
-    /// What the HUD's nav area shows for nav mode `mode` (see
-    /// [`NavDisplay`]): in mode 2 the stellar selected, by its name in the
-    /// scene, or, for one the scene doesn't hold, such as a landed `M`'s
-    /// in another system, by its `spöb` name, as `_DrawStatusNav` reads it
-    /// with no check of the system (@0x4a0fd-0x4a149) ("No Destination"
-    /// for none, or one with no name); in mode 3 the system selected, by
-    /// its name on the map if the pilot has explored it ("No Destination"
-    /// for none), with whether the ship can jump there now; with the nav
-    /// system off, "Nav System Off". Off without a session.
-    pub(super) fn nav_display(&self, mode: NavMode) -> NavDisplay {
-        let Ok(session) = &self.sim.session else {
-            return NavDisplay::Off;
-        };
-        match mode {
-            NavMode::Off => NavDisplay::Off,
-            NavMode::Stellar(target) => NavDisplay::Stellar(target.and_then(|target| {
-                self.scene
-                    .as_ref()
-                    .and_then(|scene| scene.stellars().iter().find(|s| s.id == target))
-                    .map(|stellar| stellar.name.clone())
-                    .or_else(|| session.stellar_name(target))
-            })),
-            NavMode::Hyperspace(next) => NavDisplay::Hyperspace {
-                destination: next.map_or(NavDestination::None, |next| {
-                    session
-                        .pilot()
-                        .has_explored(next)
-                        .then(|| self.map.model().system(next))
-                        .flatten()
-                        .map_or(NavDestination::Unexplored, |system| {
-                            NavDestination::Named(system.entry.name.clone())
-                        })
-                }),
-                readiness: session.jump_readiness(),
-            },
-        }
-    }
-
     /// Rolls this tick's radar static against the interference in the
     /// player's system ([`radar::static_frame`], on the effects' chance,
     /// never the simulation's), as `_HandleStatus` (@0x494d7) does every
@@ -391,15 +319,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         {
             self.retake_target();
         }
-    }
-
-    /// Whether the nav area's snapshot was taken for the nav mode the
-    /// player is in now.
-    fn nav_mode_shown(&self) -> bool {
-        let mode = self.nav_mode();
-        self.nav_scene
-            .as_ref()
-            .is_some_and(|(shown, _)| *shown == mode)
     }
 
     /// What the nav area shows this frame: by [`RuleKey::HudCadence`]'s
@@ -490,5 +409,86 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             Some(shown) if self.hud_waits() => Cow::Borrowed(shown),
             _ => Cow::Owned(self.radar_now()),
         }
+    }
+}
+
+/// The nav area and the port dialogs' nav save, over the [`FlightSim`]
+/// port.
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// A port dialog (the outfitter, exchange, shipyard, the bar's hire
+    /// screen or the mission computer) opens: the nav is saved
+    /// ([`FlightCommand::SavePortNav`], [`Session::save_port_nav`](nova_sim::Session::save_port_nav)), as
+    /// each of the original's saves +0x6a
+    /// and +0x6c as it opens (the outfitter @0x5bafc-0x5bb12, the exchange
+    /// @0x5dbed-0x5dc08, the shipyard and the hire screen
+    /// @0x5e70f-0x5e71e, the computer @0x5ffc0-0x5ffd0). A
+    /// session that failed has no nav to save.
+    pub fn open_port_dialog(&mut self) {
+        self.sim.apply(FlightCommand::SavePortNav);
+    }
+
+    /// Takes the nav area's snapshot afresh, noting how many mission texts
+    /// the session had queued then.
+    pub(super) fn retake_nav(&mut self) {
+        self.nav_marked = false;
+        self.nav_scene = Some((self.nav_mode(), self.nav_now()));
+        self.nav_texts = self.frame_now().texts_queued;
+    }
+
+    /// The player's nav mode ([`FlightFrame::nav_mode`](nova_sim::flight_frame::FlightFrame::nav_mode));
+    /// off without a session.
+    pub(super) fn nav_mode(&self) -> NavMode {
+        self.frame_now().nav_mode
+    }
+
+    /// What the HUD's nav area shows now, for the session's nav mode
+    /// ([`FlightView::nav_display`]).
+    pub(super) fn nav_now(&self) -> NavDisplay {
+        self.nav_display(self.nav_mode())
+    }
+
+    /// What the HUD's nav area shows for nav mode `mode` (see
+    /// [`NavDisplay`]): in mode 2 the stellar selected, by its name in the
+    /// scene, or, for one the scene doesn't hold, such as a landed `M`'s
+    /// in another system, by its `spöb` name, as `_DrawStatusNav` reads it
+    /// with no check of the system (@0x4a0fd-0x4a149) ("No Destination"
+    /// for none, or one with no name); in mode 3 the system selected, by
+    /// its name on the map if the pilot has explored it ("No Destination"
+    /// for none), with whether the ship can jump there now; with the nav
+    /// system off, "Nav System Off". Each read through the flight
+    /// ([`MapSource::stellar_name`](crate::flight::sim_port::MapSource::stellar_name), [`MapSource::has_explored`](crate::flight::sim_port::MapSource::has_explored),
+    /// [`FlightFrame::jump_readiness`](nova_sim::flight_frame::FlightFrame::jump_readiness)).
+    pub(super) fn nav_display(&self, mode: NavMode) -> NavDisplay {
+        match mode {
+            NavMode::Off => NavDisplay::Off,
+            NavMode::Stellar(target) => NavDisplay::Stellar(target.and_then(|target| {
+                self.scene
+                    .as_ref()
+                    .and_then(|scene| scene.stellars().iter().find(|s| s.id == target))
+                    .map(|stellar| stellar.name.clone())
+                    .or_else(|| self.sim.stellar_name(target))
+            })),
+            NavMode::Hyperspace(next) => NavDisplay::Hyperspace {
+                destination: next.map_or(NavDestination::None, |next| {
+                    self.sim
+                        .has_explored(next)
+                        .then(|| self.map.model().system(next))
+                        .flatten()
+                        .map_or(NavDestination::Unexplored, |system| {
+                            NavDestination::Named(system.entry.name.clone())
+                        })
+                }),
+                readiness: self.frame_now().jump_readiness,
+            },
+        }
+    }
+
+    /// Whether the nav area's snapshot was taken for the nav mode the
+    /// player is in now.
+    fn nav_mode_shown(&self) -> bool {
+        let mode = self.nav_mode();
+        self.nav_scene
+            .as_ref()
+            .is_some_and(|(shown, _)| *shown == mode)
     }
 }

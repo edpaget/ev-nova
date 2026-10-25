@@ -28,13 +28,13 @@ use super::dialog_map::{MapOpened, MapOpening};
 use super::stars;
 use super::{
     BOARD_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView,
-    GATE_REFUSAL_TICKS, HYPER_SELECT_KEY, HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY,
-    LAND_KEY, MAP_KEY, MESSAGE_TICKS, MapSeen, NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn,
-    SCRIPT_MESSAGE_TICKS, SECONDARY_KEY, SELF_DESTRUCT_KEY, Said, TOO_CLOSE, TRACTORED, Then,
-    arrival_lead, arrival_message_with, assigned_message, assigned_ticks, comm_message, dying,
-    gate_refusal_message, glow_decay, jump_refusal_message, jump_refusal_ticks,
-    landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area, point, refusal_message,
-    show_combat, show_destroyed, show_gate_frames, shown_scene, stellar_name, window_width,
+    GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, LAND_KEY, MAP_KEY, MESSAGE_TICKS, MapSeen,
+    NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY, SELF_DESTRUCT_KEY,
+    Said, TOO_CLOSE, TRACTORED, Then, arrival_lead, arrival_message_with, assigned_message,
+    assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
+    jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area,
+    point, refusal_message, show_combat, show_destroyed, show_gate_frames, shown_scene,
+    stellar_name, window_width,
 };
 
 /// What [`FlightView::held_triggers`] holds for the steps.
@@ -795,16 +795,8 @@ impl<
     /// it is the original's first frame to act (@0x6c625).
     pub(super) fn held_keys_frame(&mut self) {
         let down = |key: Key| self.held.contains(&key);
-        let (nav_off, option, h) = (down(NAV_OFF_KEY), down(Key::Alt), down(HYPERSPACE_MODE_KEY));
-        let (select, jump) = (down(HYPER_SELECT_KEY), down(JUMP_KEY));
-        let board = down(BOARD_KEY);
-        if self.takes(PlayerCommand::Nav) {
-            self.nav_keys_frame(nav_off, option, h);
-        }
-        if self.takes(PlayerCommand::SelectSystem) {
-            self.select_frame(select);
-        }
-        self.slot_keys_frame();
+        let (jump, board) = (down(JUMP_KEY), down(BOARD_KEY));
+        self.nav_held_frame();
         if self.takes(PlayerCommand::Board) {
             self.board_frame(board);
         }
