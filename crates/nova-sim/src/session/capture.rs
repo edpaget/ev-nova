@@ -433,6 +433,35 @@ mod tests {
     }
 
     #[test]
+    fn an_escorts_strength_tips_the_strength_bonus() {
+        // The player's strength, 100, is at and not above five times the
+        // trader's 20 until a tenth of a warship escort's strength, from
+        // its class's hull, lifts it (`_SetPlunderValues` @0x92653-0x926c9).
+        let odds_with = |strength: i16| {
+            let mut catalog = interceptors();
+            for record in &mut catalog.ship_records {
+                if record.id == ShipId(130) {
+                    record.crew = 0;
+                }
+            }
+            for hull in &mut catalog.hulls {
+                if hull.id == ShipId(130) {
+                    hull.strength = strength;
+                }
+            }
+            let mut session = alongside(&catalog);
+            session.space.traffic.npcs_mut()[0].hull.strength = 20.0;
+            with_fleet(&mut session, vec![escort(130, false)], &[]);
+            i32::from(odds(&mut session))
+        };
+        assert_eq!(
+            odds_with(10) - odds_with(9),
+            crate::board::STRENGTH_BONUS,
+            "trunc(100 + 1.0) is above 100, trunc(100 + 0.9) is not"
+        );
+    }
+
+    #[test]
     fn the_fleet_full_check_counts_the_escorts_in_the_system() {
         let catalog = boardable();
         let mut session = aboard(&catalog);
