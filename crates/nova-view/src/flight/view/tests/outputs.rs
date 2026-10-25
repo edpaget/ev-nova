@@ -129,3 +129,32 @@ fn a_take_off_says_its_held_q_message_for_a_scripts_slot_and_takes_its_nav() {
         "once"
     );
 }
+
+#[test]
+fn the_steps_comm_then_quotes_are_relayed_the_last_staying_and_nothing_sent() {
+    let mut view = faked(in_sol());
+    let note = nova_sim::CommNote {
+        from: nova_sim::NpcId(3),
+        comm_name: "Shuttle".to_owned(),
+        ship_name: "Kestrel".to_owned(),
+        done: nova_sim::Help::Refuel,
+    };
+    view.relay_comm_and_quotes(std::slice::from_ref(&note), Vec::new());
+    let shown = view.message.clone().expect("relayed");
+    assert_eq!(
+        (shown.text, shown.ticks),
+        (comm_message(&note), note.ticks())
+    );
+    let quote = nova_sim::PersonQuote {
+        npc: nova_sim::NpcId(4),
+        text: "Prepare to die.".to_owned(),
+    };
+    let ticks = quote.ticks();
+    view.relay_comm_and_quotes(&[note], vec![quote]);
+    let shown = view.message.clone().expect("relayed");
+    assert_eq!(
+        (shown.text.as_str(), shown.ticks),
+        ("Prepare to die.", ticks)
+    );
+    assert_eq!(sent(&view), [], "the session's line left alone");
+}

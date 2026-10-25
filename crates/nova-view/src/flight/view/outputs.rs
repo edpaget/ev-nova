@@ -3,13 +3,15 @@
 //! the router asks after, each drained from the flight into the inbox
 //! (see the `inbox` module) and taken from it.
 
-use nova_sim::{FighterNote, NavMode, SimMessage};
+use nova_sim::{CommNote, FighterNote, NavMode, PersonQuote, SimMessage};
 
 use crate::flight::escorts::fighters_abandoned_message;
 use crate::flight::sim_port::FlightSim;
 use crate::{Diagnostic, Sound};
 
-use super::{FlightView, MESSAGE_TICKS, SCRIPT_MESSAGE_TICKS, Said, pay_said};
+use super::{
+    FlightView, MESSAGE_TICKS, Message, SCRIPT_MESSAGE_TICKS, Said, comm_message, pay_said,
+};
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Whether the hold after the player's explosion ran out since this
@@ -36,6 +38,33 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightEvent::SaveDue`]: nova_sim::flight_frame::FlightEvent::SaveDue
     pub fn take_save_due(&mut self) -> bool {
         self.drain().take_save_due()
+    }
+
+    /// Shows `text`, a line the session raised and has already set its
+    /// message line to, for `ticks`, leaving the session's line alone: a
+    /// relay comes after the frame's steps have counted it down, and in a
+    /// fixed order (the comm notes, the quotes, the messages), so setting
+    /// it again would undo the session's count.
+    pub(super) fn relay(&mut self, text: impl Into<String>, ticks: u16) {
+        self.message = Some(Message {
+            text: text.into(),
+            said_at: crate::time::ticks(self.elapsed),
+            ticks,
+        });
+    }
+
+    /// Relays the comm notes, then the quotes, that a frame's steps took
+    /// ([`FlightView::relay`]): the session set its line as it raised
+    /// each, and the steps have counted it down since, so they are
+    /// relayed, not set again; the last stays.
+    pub(super) fn relay_comm_and_quotes(&mut self, notes: &[CommNote], quotes: Vec<PersonQuote>) {
+        for note in notes {
+            self.relay(comm_message(note), note.ticks());
+        }
+        for quote in quotes {
+            let ticks = quote.ticks();
+            self.relay(quote.text, ticks);
+        }
     }
 
     /// How many fighters the player abandoned leaving systems, said for

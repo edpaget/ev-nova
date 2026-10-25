@@ -25,7 +25,7 @@ use crate::{Key, Point};
 
 use super::{
     BOARD_LINE_TICKS, BOARD_REFUSAL_TICKS, BarStep, FlightView, GRANT_TICKS, MESSAGE_TICKS,
-    Message, NavFlash, REPELLED, Then, board_refusal_message, grant_message, message_text,
+    NavFlash, REPELLED, Then, board_refusal_message, grant_message, message_text,
     mission_board_message, names, plunder_message,
 };
 
@@ -117,19 +117,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         if let Ok(session) = &mut self.sim.session {
             session.comm_shown(ticks);
         }
-    }
-
-    /// Shows `text`, a line the session raised and has already set its
-    /// message line to, for `ticks`, leaving the session's line alone: a
-    /// relay comes after the frame's steps have counted it down, and in a
-    /// fixed order (the comm notes, the quotes, the messages), so setting
-    /// it again would undo the session's count.
-    pub(super) fn relay(&mut self, text: impl Into<String>, ticks: u16) {
-        self.message = Some(Message {
-            text: text.into(),
-            said_at: crate::time::ticks(self.elapsed),
-            ticks,
-        });
     }
 
     /// Clears the message line when it holds `text`, as the original

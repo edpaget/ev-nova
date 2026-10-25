@@ -34,11 +34,10 @@ use super::{
     BOARD_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView,
     GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, LAND_KEY, MAP_KEY, NOTHING_OUT_HERE,
     NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY, SELF_DESTRUCT_KEY, Said, TOO_CLOSE,
-    TRACTORED, Then, arrival_lead, arrival_message_with, assigned_message, assigned_ticks,
-    comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
-    jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter, play_area, point,
-    refusal_message, show_combat, show_destroyed, show_gate_frames, shown_scene, stellar_name,
-    window_width,
+    TRACTORED, Then, arrival_lead, arrival_message_with, assigned_message, assigned_ticks, dying,
+    gate_refusal_message, glow_decay, jump_refusal_message, jump_refusal_ticks,
+    landing_refusal_ticks, message_text, no_outfitter, play_area, point, refusal_message,
+    show_combat, show_destroyed, show_gate_frames, shown_scene, stellar_name, window_width,
 };
 
 /// What [`FlightView::held_triggers`] holds for the steps.
@@ -399,15 +398,7 @@ impl<
                 show_gate_frames(scene, session);
             }
         }
-        // The session set its line as it raised each of these, and the
-        // steps have counted it down since: relayed, not set again.
-        for note in &notes {
-            self.relay(comm_message(note), note.ticks());
-        }
-        for quote in quotes {
-            let ticks = quote.ticks();
-            self.relay(quote.text, ticks);
-        }
+        self.relay_comm_and_quotes(&notes, quotes);
         if rescued {
             // Laid out in the system the rescue took the pod to, from where
             // it put the ship, before the frame is drawn; the course map
