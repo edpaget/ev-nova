@@ -249,15 +249,6 @@ fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
 }
 
 #[test]
-fn a_change_to_the_galaxy_is_drawn_on_the_next_frame_and_not_before() {
-    let mut view = flight();
-    change_galaxy(&mut view, hiding(132));
-    assert!(on_the_course_map(&view, 132), "not before the frame");
-    view.tick(TICK);
-    assert!(!on_the_course_map(&view, 132));
-}
-
-#[test]
 fn the_course_map_shows_the_course_the_flight_flies() {
     let mut view = faked(FlightFrame {
         course_shown: vec![SystemId(131)],
@@ -273,69 +264,30 @@ fn the_course_map_shows_the_course_the_flight_flies() {
     assert_eq!(view.map.route(), [], "none flown, one plotted");
 }
 
-#[test]
-fn a_change_to_the_galaxy_shows_the_course_as_it_is_flown_on_the_next_frame() {
-    let catalog = catalog();
-    let session = SessionBuilder::flying(&catalog)
-        .with_course([SystemId(131)])
-        .build();
-    let mut view = FlightView::from_session(catalog, session.into());
-    assert_eq!(view.course_map().route(), [SystemId(131)]);
-    change_galaxy(&mut view, hiding(131));
-    view.tick(TICK);
-    assert_eq!(view.course_map().route(), [], "no system at its place");
-    let session = view.sim.session.as_ref().expect("flying");
-    assert_eq!(session.course(), [SystemId(131)], "kept");
-}
-
-/// A flight of `reborn` Sol, bound for Alpha Centauri, Alpha Reborn
-/// explored.
-fn bound_for_alpha_with_reborn_explored() -> View {
-    let catalog = FakeCatalog {
-        reborn: true,
-        ..catalog()
-    };
-    let mut session = SessionBuilder::flying(&catalog)
-        .with_course([SystemId(131)])
-        .build();
-    let explore = nova_sim::SetExpr::parse("X133").expect("parses");
-    session.run_set(&explore, &mut NeverFires);
-    let mut view = FlightView::from_session(catalog, session.into());
-    // A pilot flies with the nav system off: H cues the course.
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    view
-}
-
-#[test]
-fn the_nav_area_shows_the_system_standing_for_a_hidden_next_hop() {
-    let mut view = bound_for_alpha_with_reborn_explored();
-    change_galaxy(&mut view, hiding(131));
-    view.tick(TICK);
-    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Alpha Reborn"]);
-}
-
-#[test]
-fn the_nav_area_shows_no_destination_for_a_hop_with_no_system_visible_at_its_place() {
-    let mut view = bound_for_alpha_with_reborn_explored();
-    change_galaxy(&mut view, |overlay| {
-        overlay.set_visible(SystemId(131), Some(false));
-        overlay.set_visible(SystemId(133), Some(false));
-    });
-    view.tick(TICK);
-    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_NO_DESTINATION]);
-    let session = view.session().expect("flying");
-    assert_eq!(session.course(), [SystemId(131)], "kept");
-}
-
 /// The galaxy of a flight of [`catalog`] with `change` made: what a
 /// scripted flight's galaxy answers after its `GalaxyChanged`.
 fn galaxy_with(
     change: impl FnOnce(&mut nova_sim::story::GalaxyOverlay),
 ) -> nova_sim::story::OverlaidGalaxy {
-    let catalog = catalog();
-    let mut session = SessionBuilder::flying(&catalog).build();
-    assert!(session.change_galaxy(&catalog, change));
+    galaxy_of(&catalog(), change)
+}
+
+/// The galaxy of a flight of `catalog` with `change` made.
+fn galaxy_of(
+    catalog: &FakeCatalog,
+    change: impl FnOnce(&mut nova_sim::story::GalaxyOverlay),
+) -> nova_sim::story::OverlaidGalaxy {
+    let mut session = SessionBuilder::flying(catalog).build();
+    assert!(session.change_galaxy(catalog, change));
     session.galaxy().clone()
+}
+
+/// The galaxy event, queued on `view`'s flight with its galaxy as
+/// `galaxy`.
+fn galaxy_changed(view: &mut Faked, galaxy: nova_sim::story::OverlaidGalaxy) {
+    view.sim.map_mut().galaxy = Some(galaxy);
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::GalaxyChanged));
 }
 
 #[test]
@@ -350,14 +302,12 @@ fn a_galaxy_event_draws_the_flights_galaxy_and_the_course_as_flown_before_the_re
         course_plotted: true,
         ..in_sol()
     });
-    assert!(on_the_course_map(&view, 132), "not before the event");
     let redrawn = view.catch_up_then(|view, redrawn| {
         assert_eq!(redrawn, Redrawn::default(), "nothing asked");
         assert!(on_the_course_map(view, 132), "nothing told");
     });
     assert_eq!(redrawn, Redrawn::default());
-    view.sim
-        .queue_event(FlightEvent::Session(SessionEvent::GalaxyChanged));
+    assert_eq!(view.map.route(), [SystemId(131)], "not before the event");
     view.sim
         .queue_event(FlightEvent::Session(SessionEvent::GalaxyChanged));
     let mut told = Vec::new();
@@ -366,15 +316,113 @@ fn a_galaxy_event_draws_the_flights_galaxy_and_the_course_as_flown_before_the_re
         assert!(!on_the_course_map(view, 132), "drawn first");
         assert_eq!(view.map.route(), [], "with the course as flown");
     });
+    let galaxy = Redrawn {
+        galaxy: true,
+        ..Redrawn::default()
+    };
+    assert_eq!((told, redrawn), (vec![galaxy], galaxy));
+}
+
+#[test]
+fn several_galaxy_changes_before_a_catch_up_draw_the_galaxy_as_it_is_then_once() {
+    let mut view = faked(in_sol());
+    galaxy_changed(&mut view, galaxy_with(hiding(132)));
+    galaxy_changed(
+        &mut view,
+        galaxy_with(|overlay| {
+            overlay.set_visible(SystemId(131), Some(false));
+        }),
+    );
+    let mut told = 0;
+    let redrawn = view.catch_up_then(|_, _| told += 1);
+    assert!(redrawn.galaxy);
+    assert_eq!(told, 1, "one reaction");
+    assert!(on_the_course_map(&view, 132), "the galaxy as it is now");
+    assert!(!on_the_course_map(&view, 131));
+    assert!(!view.catch_up_then(|_, _| {}).galaxy, "once");
+}
+
+/// A scripted flight of `reborn` Sol, Alpha Reborn (133), at Alpha
+/// Centauri's (131) place, explored, its nav as `nav`.
+fn reborn_sol(nav: NavMode) -> Faked {
+    let catalog = FakeCatalog {
+        reborn: true,
+        ..catalog()
+    };
+    let mut view = faked_in(
+        catalog,
+        FlightFrame {
+            nav_mode: nav,
+            ..in_sol()
+        },
+    );
+    view.sim.map_mut().explored = vec![SystemId(130), SystemId(133)];
+    view
+}
+
+#[test]
+fn after_a_galaxy_event_the_nav_area_names_the_system_standing_for_a_hidden_next_hop() {
+    let catalog = FakeCatalog {
+        reborn: true,
+        ..catalog()
+    };
+    let mut view = reborn_sol(NavMode::Hyperspace(Some(SystemId(133))));
+    galaxy_changed(&mut view, galaxy_of(&catalog, hiding(131)));
+    view.catch_up_then(|_, _| {});
+    assert!(!on_the_course_map(&view, 131), "the galaxy drawn");
+    assert_eq!(
+        view.nav_now(),
+        NavDisplay::Hyperspace {
+            destination: hud::NavDestination::Named("Alpha Reborn".to_owned()),
+            readiness: nova_sim::JumpReadiness::Blocked,
+        }
+    );
+}
+
+#[test]
+fn after_a_galaxy_event_a_hop_with_no_system_at_its_place_shows_no_destination() {
+    let catalog = FakeCatalog {
+        reborn: true,
+        ..catalog()
+    };
+    let mut view = reborn_sol(NavMode::Hyperspace(None));
+    galaxy_changed(
+        &mut view,
+        galaxy_of(&catalog, |overlay| {
+            overlay.set_visible(SystemId(131), Some(false));
+            overlay.set_visible(SystemId(133), Some(false));
+        }),
+    );
+    view.catch_up_then(|_, _| {});
+    assert_eq!(
+        view.nav_now(),
+        NavDisplay::Hyperspace {
+            destination: hud::NavDestination::None,
+            readiness: nova_sim::JumpReadiness::Blocked,
+        }
+    );
+}
+
+#[test]
+fn with_the_map_open_the_events_still_ask_for_their_redraws() {
+    let mut view = faked_sol(in_sol());
+    view.open_map();
+    assert!(view.map_open);
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::SystemChanged));
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::ShipChanged));
+    let mut told = Vec::new();
+    view.catch_up_then(|_, redrawn| told.push(redrawn));
     assert_eq!(
         told,
         [Redrawn {
-            galaxy: true,
+            ship: true,
+            system: true,
             ..Redrawn::default()
-        }],
-        "two events, one reaction"
+        }]
     );
-    assert_eq!(told[0], redrawn);
+    assert!(view.map_open, "still open");
 }
 
 #[test]
@@ -402,21 +450,6 @@ fn each_event_asks_for_its_own_redraw() {
         }
     );
     assert_eq!(view.catch_up_then(|_, _| {}), Redrawn::default(), "taken");
-}
-
-#[test]
-fn several_galaxy_changes_before_a_frame_rebuild_the_map_once() {
-    let mut view = flight();
-    change_galaxy(&mut view, hiding(132));
-    change_galaxy(&mut view, |overlay| {
-        overlay.set_visible(SystemId(132), None);
-        overlay.set_visible(SystemId(131), Some(false));
-    });
-    let redrawn = view.catch_up();
-    assert!(redrawn.galaxy);
-    assert!(on_the_course_map(&view, 132), "the last galaxy");
-    assert!(!on_the_course_map(&view, 131));
-    assert!(!view.catch_up().galaxy, "once");
 }
 
 // Destroyed stellars (story-runtime phase 7).

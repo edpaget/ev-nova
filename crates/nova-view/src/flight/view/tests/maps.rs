@@ -2,7 +2,7 @@ use super::*;
 use crate::flight::sim_port::fixture::MapAsk;
 use crate::galaxy::update::MapUpdate;
 use nova_sim::MapClicked;
-use nova_sim::flight_frame::FloatingLinks;
+use nova_sim::flight_frame::{FlightEvent, FloatingLinks};
 use nova_sim::galaxy_map::{MapDrawing, MapLink};
 use nova_sim::iff::SystemColorCode;
 use nova_sim::map_panel::{
@@ -1972,19 +1972,58 @@ fn the_course_map_draws_the_flights_drawing() {
     assert_eq!(sent(&view), [], "the course map marks nothing known");
 }
 
+/// How many drawings `view`'s flight was asked for.
+fn drawings_asked(view: &Faked) -> usize {
+    view.sim
+        .asked()
+        .iter()
+        .filter(|ask| matches!(ask, MapAsk::Drawing { .. }))
+        .count()
+}
+
 #[test]
-fn exploring_a_system_while_the_course_map_is_open_redraws_it() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    let ids = |view: &View| drawn_ids(view.course_map());
-    assert_eq!(ids(&view), [SystemId(130), SystemId(131)]);
-    run_set(&mut view, "X132");
-    view.tick(TICK);
-    assert_eq!(
-        ids(&view),
-        [SystemId(130), SystemId(131), SystemId(132)],
-        "explored while the map is open"
-    );
+fn a_change_to_what_the_open_map_is_drawn_from_redraws_it_at_the_catch_up() {
+    let mut view = faked_sol(in_sol());
+    view.open_map();
+    assert_eq!(drawings_asked(&view), 1, "as it opened");
+    view.catch_up_then(|_, _| {});
+    assert_eq!(drawings_asked(&view), 1, "nothing changed");
+    let mut explored = sol_drawing();
+    explored.systems.push(drawn_system(
+        132,
+        nova_sim::iff::SystemColorCode::Uninhabited,
+    ));
+    view.sim.map_mut().drawing = Some(explored);
+    let mut frame = in_sol();
+    frame.map_key.explored = vec![SystemId(132)];
+    view.sim.set_frame(frame);
+    view.catch_up_then(|_, _| {});
+    assert_eq!(drawings_asked(&view), 2, "explored while the map is open");
+    assert!(drawn_ids(&view.map).contains(&SystemId(132)));
+    view.catch_up_then(|_, _| {});
+    assert_eq!(drawings_asked(&view), 2, "noted");
+}
+
+#[test]
+fn a_galaxy_event_redraws_the_open_map_though_its_key_is_the_same() {
+    let mut view = faked_sol(in_sol());
+    view.open_map();
+    view.sim
+        .queue_event(FlightEvent::Session(nova_sim::SessionEvent::GalaxyChanged));
+    view.catch_up_then(|_, _| {});
+    assert_eq!(drawings_asked(&view), 2);
+}
+
+#[test]
+fn a_shut_map_is_not_redrawn_at_the_catch_up() {
+    let mut view = faked_sol(in_sol());
+    view.sim
+        .queue_event(FlightEvent::Session(nova_sim::SessionEvent::GalaxyChanged));
+    let mut frame = in_sol();
+    frame.map_key.explored = vec![SystemId(132)];
+    view.sim.set_frame(frame);
+    view.catch_up_then(|_, _| {});
+    assert_eq!(drawings_asked(&view), 0);
 }
 
 // The map panel (`_MapDialogUpdate`): the session's panels, drawn from
