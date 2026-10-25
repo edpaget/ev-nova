@@ -13,7 +13,7 @@
 //! [`RuleKey::FormationFlight`](crate::RuleKey::FormationFlight)
 //! ([`FormationFlight::Original`](crate::flight::FormationFlight::Original));
 //! the other reading is the port's earlier formation, which the
-//! [`autopilot`] keeps.
+//! [`autopilot`](crate::traffic::autopilot) keeps.
 //!
 //! - **The substate** ([`sub`], goal 0xa @0x8ed15-0x8ef37): measured from
 //!   the escort's **leader**, never its slot, inclusive on each axis.

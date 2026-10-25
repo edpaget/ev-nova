@@ -22,7 +22,7 @@
 //!
 //! - [`Goal::Land`]: it heads for the stellar at full speed, steering out
 //!   any sideways drift, and brakes (turning to its retro heading and
-//!   thrusting, [`brake`]) once its stopping
+//!   thrusting, [`approach_brake`]) once its stopping
 //!   distance reaches the distance left. It lands within the stellar's
 //!   [`landing_radius`] at or below [`LANDING_SPEED`]. That circle is not
 //!   the player's landing distance
