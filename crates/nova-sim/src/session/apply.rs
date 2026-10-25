@@ -25,6 +25,21 @@ impl Session {
     ///   where the keys change nothing and are silent.
     /// - [`FlightCommand::NavModeKeys`] runs [`Session::nav_mode_keys`],
     ///   refused during a jump.
+    /// - [`FlightCommand::MapClick`] runs [`Session::map_click`], answered
+    ///   with what it did, or refused when no hit is accepted and the map
+    ///   drags.
+    /// - [`FlightCommand::CycleMapSelection`] runs
+    ///   [`Session::cycle_map_selection`], refused docked.
+    /// - [`FlightCommand::SelectOnFloatingMap`] runs
+    ///   [`Session::select_on_floating_map`], refused during a jump.
+    /// - The rest are never refused, and answer [`Answer::Done`]:
+    ///   [`FlightCommand::ClearRoute`] ([`Session::clear_route`]),
+    ///   [`FlightCommand::MarkKnown`] ([`Session::mark_known`]),
+    ///   [`FlightCommand::CueCourse`] ([`Session::cue_course`]), and the
+    ///   nav's saves and restores: [`Session::save_port_nav`],
+    ///   [`Session::restore_port_nav`], [`Session::restore_bar_nav`],
+    ///   [`Session::put_back_port_nav`], [`Session::restore_map_nav`] and
+    ///   [`Session::restore_map_selection`].
     #[allow(clippy::needless_pass_by_value)] // the port sends commands by value, and later ones carry owned data
     pub fn apply(&mut self, command: FlightCommand) -> Answer {
         match command {
@@ -47,6 +62,47 @@ impl Session {
                 }
             }
             FlightCommand::NavModeKeys { nav_off, h } => done_if(self.nav_mode_keys(nav_off, h)),
+            FlightCommand::MapClick(click) => self
+                .map_click(&click.press())
+                .map_or(Answer::Refused, Answer::Clicked),
+            FlightCommand::CycleMapSelection => done_if(self.cycle_map_selection()),
+            FlightCommand::ClearRoute => {
+                self.clear_route();
+                Answer::Done
+            }
+            FlightCommand::SelectOnFloatingMap(link) => done_if(self.select_on_floating_map(link)),
+            FlightCommand::MarkKnown(systems) => {
+                self.mark_known(systems);
+                Answer::Done
+            }
+            FlightCommand::CueCourse => {
+                self.cue_course();
+                Answer::Done
+            }
+            FlightCommand::SavePortNav => {
+                self.save_port_nav();
+                Answer::Done
+            }
+            FlightCommand::RestorePortNav => {
+                self.restore_port_nav();
+                Answer::Done
+            }
+            FlightCommand::RestoreBarNav => {
+                self.restore_bar_nav();
+                Answer::Done
+            }
+            FlightCommand::PutBackPortNav => {
+                self.put_back_port_nav();
+                Answer::Done
+            }
+            FlightCommand::RestoreMapNav(saved) => {
+                self.restore_map_nav(saved);
+                Answer::Done
+            }
+            FlightCommand::RestoreMapSelection(saved) => {
+                self.restore_map_selection(saved);
+                Answer::Done
+            }
         }
     }
 }
@@ -61,7 +117,9 @@ fn done_if(ran: bool) -> Answer {
 mod tests {
     use super::*;
     use crate::catalog::{StellarId, SystemId};
+    use crate::flight_frame::MapClick;
     use crate::navigation::NavMode;
+    use crate::session::MapPress;
     use crate::session::StellarPick;
     use crate::session::tests::three_stellars;
     use crate::sound::SimSound;
@@ -257,5 +315,211 @@ mod tests {
         );
         assert_eq!(session.nav_mode(), before);
         assert_eq!(session.take_sounds(), []);
+    }
+
+    /// A plain click on the course map hitting `hits`.
+    fn click(hits: &[i16]) -> FlightCommand {
+        FlightCommand::MapClick(MapClick {
+            hits: hits.iter().map(|&id| SystemId(id)).collect(),
+            shift: false,
+            hypergate: None,
+            missions: Vec::new(),
+            green: None,
+        })
+    }
+
+    #[test]
+    fn an_accepted_map_click_answers_what_it_did() {
+        let mut session = quiet(&catalog());
+        let answer = session.apply(click(&[131]));
+        let Answer::Clicked(clicked) = answer else {
+            panic!("accepted: {answer:?}");
+        };
+        assert_eq!(clicked.selected, Some(SystemId(131)));
+        assert!(clicked.nav_redraw);
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
+    }
+
+    #[test]
+    fn a_map_click_hitting_nothing_it_accepts_is_refused_and_changes_nothing() {
+        let mut session = quiet(&catalog());
+        let before = (session.nav_mode(), session.course().to_vec());
+        for hits in [&[][..], &[133]] {
+            assert_eq!(session.apply(click(hits)), Answer::Refused, "{hits:?}");
+        }
+        assert_eq!((session.nav_mode(), session.course().to_vec()), before);
+        assert_eq!(session.take_sounds(), []);
+    }
+
+    #[test]
+    fn a_map_click_reads_the_press_it_carries() {
+        let missions = vec![SystemId(133)];
+        let click = MapClick {
+            hits: vec![SystemId(133)],
+            shift: true,
+            hypergate: Some(vec![SystemId(131)]),
+            missions: missions.clone(),
+            green: Some(SystemId(132)),
+        };
+        assert_eq!(
+            click.press(),
+            MapPress {
+                hits: &[SystemId(133)],
+                shift: true,
+                hypergate: Some(&[SystemId(131)]),
+                missions: &missions,
+                green: Some(SystemId(132)),
+            }
+        );
+    }
+
+    #[test]
+    fn the_maps_cycle_selects_the_next_link_in_mode_3() {
+        let mut session = quiet(&catalog());
+        assert_eq!(
+            session.apply(FlightCommand::CycleMapSelection),
+            Answer::Done
+        );
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
+        assert_eq!(session.take_sounds(), []);
+    }
+
+    #[test]
+    fn the_maps_cycle_is_refused_docked_and_changes_nothing() {
+        let mut session = landed();
+        let before = session.nav_mode();
+        assert_eq!(
+            session.apply(FlightCommand::CycleMapSelection),
+            Answer::Refused
+        );
+        assert_eq!(session.nav_mode(), before);
+        assert_eq!(session.take_sounds(), []);
+    }
+
+    /// Never refused: clearing a route with none still lets go of the
+    /// selection.
+    #[test]
+    fn clear_route_clears_the_course_and_lets_go_of_the_selection() {
+        let mut session = quiet(&catalog());
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.apply(FlightCommand::ClearRoute), Answer::Done);
+        assert_eq!(session.course(), []);
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
+    }
+
+    #[test]
+    fn a_floating_map_hit_selects_its_link_in_mode_3() {
+        let mut session = quiet(&catalog());
+        assert_eq!(
+            session.apply(FlightCommand::SelectOnFloatingMap(Some(SystemId(131)))),
+            Answer::Done
+        );
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
+        assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
+    }
+
+    #[test]
+    fn a_floating_map_hit_is_refused_during_a_jump_and_changes_nothing() {
+        let mut session = jumping();
+        let before = session.nav_mode();
+        assert_eq!(
+            session.apply(FlightCommand::SelectOnFloatingMap(None)),
+            Answer::Refused
+        );
+        assert_eq!(session.nav_mode(), before);
+        assert_eq!(session.take_sounds(), []);
+    }
+
+    /// Never refused.
+    #[test]
+    fn marking_known_marks_the_systems() {
+        let mut session = quiet(&catalog());
+        assert!(!session.is_known(SystemId(133)));
+        assert_eq!(
+            session.apply(FlightCommand::MarkKnown(vec![SystemId(133)])),
+            Answer::Done
+        );
+        assert!(session.is_known(SystemId(133)));
+    }
+
+    /// Never refused: with nothing to cue it changes nothing.
+    #[test]
+    fn the_cue_selects_the_courses_next_hop() {
+        let mut session = quiet(&catalog());
+        session.plot_course(SystemId(132)).expect("a route");
+        session.apply(FlightCommand::NavModeKeys {
+            nav_off: true,
+            h: false,
+        });
+        assert_eq!(session.apply(FlightCommand::CueCourse), Answer::Done);
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
+    }
+
+    /// Never refused: with nothing saved the restore changes nothing.
+    #[test]
+    fn a_port_dialog_saves_the_nav_and_restores_it_once() {
+        let mut session = landed();
+        let saved = session.nav_mode();
+        assert_eq!(session.apply(FlightCommand::SavePortNav), Answer::Done);
+        session.chart.nav = NavMode::Off;
+        assert_eq!(session.apply(FlightCommand::RestorePortNav), Answer::Done);
+        assert_eq!(session.nav_mode(), saved);
+        session.chart.nav = NavMode::Off;
+        session.apply(FlightCommand::RestorePortNav);
+        assert_eq!(session.nav_mode(), NavMode::Off, "restored once");
+    }
+
+    /// Never refused.
+    #[test]
+    fn the_exchanges_map_puts_back_the_port_nav_and_keeps_the_save() {
+        let mut session = landed();
+        let saved = session.nav_mode();
+        session.apply(FlightCommand::SavePortNav);
+        session.chart.nav = NavMode::Off;
+        assert_eq!(session.apply(FlightCommand::PutBackPortNav), Answer::Done);
+        assert_eq!(session.nav_mode(), saved);
+        session.chart.nav = NavMode::Off;
+        session.apply(FlightCommand::RestorePortNav);
+        assert_eq!(session.nav_mode(), saved, "still saved");
+    }
+
+    /// Never refused.
+    #[test]
+    fn the_bars_map_puts_back_the_nav_the_bar_opened_with() {
+        let mut session = landed();
+        let saved = session.nav_mode();
+        session.chart.bar_nav = Some(saved);
+        session.chart.nav = NavMode::Off;
+        assert_eq!(session.apply(FlightCommand::RestoreBarNav), Answer::Done);
+        assert_eq!(session.nav_mode(), saved);
+    }
+
+    /// Never refused.
+    #[test]
+    fn a_dialogs_map_puts_back_the_nav_saved_before_it() {
+        let mut session = quiet(&three_stellars());
+        session.select_stellar(StellarPick::Slot(0));
+        let saved = session.map_nav();
+        session.chart.nav = NavMode::Off;
+        assert_eq!(
+            session.apply(FlightCommand::RestoreMapNav(saved)),
+            Answer::Done
+        );
+        assert_eq!(session.map_nav(), saved);
+    }
+
+    /// Never refused.
+    #[test]
+    fn the_maps_close_in_port_puts_back_the_selection_keeping_the_mode() {
+        let mut session = quiet(&catalog());
+        session.apply(FlightCommand::SelectNextSystem);
+        let saved = session.map_nav();
+        session.clear_route();
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
+        assert_eq!(
+            session.apply(FlightCommand::RestoreMapSelection(saved)),
+            Answer::Done
+        );
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
     }
 }

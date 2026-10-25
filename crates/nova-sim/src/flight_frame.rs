@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use crate::catalog::{StellarId, SystemId};
 use crate::hyperspace::JumpReadiness;
 use crate::navigation::NavMode;
-use crate::session::StellarPick;
+use crate::session::{MapClicked, MapPress, SavedNav, StellarPick};
 use crate::sound::SimSound;
 use crate::targeting::TargetPick;
 use crate::traffic::npc::NpcId;
@@ -137,6 +137,77 @@ pub enum FlightCommand {
         /// H.
         h: bool,
     },
+    /// A press on the course or hypergate map that hit systems
+    /// ([`Session::map_click`](crate::Session::map_click)).
+    MapClick(MapClick),
+    /// The course map's Tab or `\`: cycle the hyperspace selection
+    /// ([`Session::cycle_map_selection`](crate::Session::cycle_map_selection)).
+    CycleMapSelection,
+    /// Clear Route, from its button or C
+    /// ([`Session::clear_route`](crate::Session::clear_route)).
+    ClearRoute,
+    /// A click hit on the floating map: the link, or `None` for the
+    /// current system's centre
+    /// ([`Session::select_on_floating_map`](crate::Session::select_on_floating_map)).
+    SelectOnFloatingMap(Option<SystemId>),
+    /// Mark the systems known, as the hypergate map's draw marks the
+    /// offers it arrows ([`Session::mark_known`](crate::Session::mark_known)).
+    MarkKnown(Vec<SystemId>),
+    /// Cue the course's next hop, as the course map's close in flight
+    /// does ([`Session::cue_course`](crate::Session::cue_course)).
+    CueCourse,
+    /// A port dialog opens: save the nav
+    /// ([`Session::save_port_nav`](crate::Session::save_port_nav)).
+    SavePortNav,
+    /// A port dialog closes: restore the nav it saved
+    /// ([`Session::restore_port_nav`](crate::Session::restore_port_nav)).
+    RestorePortNav,
+    /// The bar's map closes: put back the nav the bar opened with
+    /// ([`Session::restore_bar_nav`](crate::Session::restore_bar_nav)).
+    RestoreBarNav,
+    /// The exchange's or the outfitter's map closes: put back the nav the
+    /// dialog saved, keeping the save
+    /// ([`Session::put_back_port_nav`](crate::Session::put_back_port_nav)).
+    PutBackPortNav,
+    /// A mission dialog's or port screen's map closes: put back the nav
+    /// saved before it ([`Session::restore_map_nav`](crate::Session::restore_map_nav)).
+    RestoreMapNav(SavedNav),
+    /// The map closes in port: put back the selection it opened with,
+    /// keeping the mode
+    /// ([`Session::restore_map_selection`](crate::Session::restore_map_selection)).
+    RestoreMapSelection(SavedNav),
+}
+
+/// A press on an in-flight map, as [`FlightCommand::MapClick`] carries it:
+/// [`MapPress`]'s fields, owned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapClick {
+    /// The visible systems whose hit box holds the press, by ascending ID.
+    pub hits: Vec<SystemId>,
+    /// Whether Shift was held at the press.
+    pub shift: bool,
+    /// On the hypergate map, the systems the gate offers; `None` on the
+    /// course map.
+    pub hypergate: Option<Vec<SystemId>>,
+    /// The mission systems taken as the map opened.
+    pub missions: Vec<SystemId>,
+    /// The green mission system the map's opener marked.
+    pub green: Option<SystemId>,
+}
+
+impl MapClick {
+    /// The press as [`Session::map_click`](crate::Session::map_click)
+    /// reads it.
+    #[must_use]
+    pub fn press(&self) -> MapPress<'_> {
+        MapPress {
+            hits: &self.hits,
+            shift: self.shift,
+            hypergate: self.hypergate.as_deref(),
+            missions: &self.missions,
+            green: self.green,
+        }
+    }
 }
 
 /// What [`Session::apply`](crate::Session::apply) answered a
@@ -155,6 +226,8 @@ pub enum Answer {
     /// The ship target a [`FlightCommand::SelectTarget`] left, `None` for
     /// none.
     Target(Option<NpcId>),
+    /// What an accepted [`FlightCommand::MapClick`] did.
+    Clicked(MapClicked),
 }
 
 impl Answer {
