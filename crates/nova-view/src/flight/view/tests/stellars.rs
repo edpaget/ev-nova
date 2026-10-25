@@ -255,7 +255,23 @@ fn a_change_to_the_galaxy_is_drawn_on_the_next_frame_and_not_before() {
 }
 
 #[test]
-fn the_course_map_shows_the_course_as_it_is_flown() {
+fn the_course_map_shows_the_course_the_flight_flies() {
+    let mut view = faked(FlightFrame {
+        course_shown: vec![SystemId(131)],
+        course_plotted: true,
+        ..in_sol()
+    });
+    assert_eq!(view.map.route(), [SystemId(131)], "as the view starts");
+    view.sim.set_frame(FlightFrame {
+        course_plotted: true,
+        ..in_sol()
+    });
+    view.show_course();
+    assert_eq!(view.map.route(), [], "none flown, one plotted");
+}
+
+#[test]
+fn a_change_to_the_galaxy_shows_the_course_as_it_is_flown_on_the_next_frame() {
     let catalog = catalog();
     let session = SessionBuilder::flying(&catalog)
         .with_course([SystemId(131)])
