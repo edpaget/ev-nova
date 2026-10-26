@@ -3,7 +3,10 @@
 //! the router asks after, each drained from the flight into the inbox
 //! (see the `inbox` module) and taken from it.
 
-use nova_sim::{CommNote, FighterNote, MissionShown, NavMode, PersonQuote, SimMessage, TextBar};
+use nova_sim::{
+    CommNote, FighterNote, Granted, MissionBoardLine, MissionShown, NavMode, PersonQuote,
+    SimMessage, TextBar,
+};
 
 use crate::flight::escorts::fighters_abandoned_message;
 use crate::flight::sim_port::FlightSim;
@@ -123,6 +126,24 @@ impl<C, S: FlightSim> FlightView<C, S> {
             let ticks = quote.ticks();
             self.relay(quote.text, ticks);
         }
+    }
+
+    /// The comm line a failed mission's ship said as the last board
+    /// plundered it ([`FlightEvent::BoardLine`]), once: what
+    /// [`FlightView::board`] says first, worded with the session's names.
+    ///
+    /// [`FlightEvent::BoardLine`]: nova_sim::flight_frame::FlightEvent::BoardLine
+    pub(super) fn board_line_drained(&mut self) -> Option<MissionBoardLine> {
+        self.drain().take_board_line()
+    }
+
+    /// What the last boarding granted ([`FlightEvent::Grant`]), once:
+    /// what [`FlightView::board`] says as the plunder opens, worded with
+    /// the outfit's names.
+    ///
+    /// [`FlightEvent::Grant`]: nova_sim::flight_frame::FlightEvent::Grant
+    pub(super) fn grant_drained(&mut self) -> Option<Granted> {
+        self.drain().take_grant()
     }
 
     /// How many fighters the player abandoned leaving systems, said for

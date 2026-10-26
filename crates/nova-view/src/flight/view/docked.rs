@@ -184,7 +184,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             &*self.sim.boarding_rule,
             &mut self.sim.chance,
         );
-        if let Some(line) = self.drain().take_board_line()
+        if let Some(line) = self.board_line_drained()
             && let Ok(session) = &self.sim.session
         {
             let said = mission_board_message(line, session);
@@ -200,7 +200,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             Ok(Boarding::Opened(_)) => {
                 self.pending_boarding = true;
                 self.held.clear();
-                if let Some(granted) = self.drain().take_grant()
+                if let Some(granted) = self.grant_drained()
                     && let Ok(session) = &self.sim.session
                 {
                     let (name, plural) = session.outfit_names(granted.outfit).unwrap_or_default();

@@ -130,35 +130,6 @@ fn a_take_off_says_its_held_q_message_for_a_scripts_slot_and_takes_its_nav() {
     );
 }
 
-#[test]
-fn the_steps_comm_then_quotes_are_relayed_the_last_staying_and_nothing_sent() {
-    let mut view = faked(in_sol());
-    let note = nova_sim::CommNote {
-        from: nova_sim::NpcId(3),
-        comm_name: "Shuttle".to_owned(),
-        ship_name: "Kestrel".to_owned(),
-        done: nova_sim::Help::Refuel,
-    };
-    view.relay_comm_and_quotes(std::slice::from_ref(&note), Vec::new());
-    let shown = view.message.clone().expect("relayed");
-    assert_eq!(
-        (shown.text, shown.ticks),
-        (comm_message(&note), note.ticks())
-    );
-    let quote = nova_sim::PersonQuote {
-        npc: nova_sim::NpcId(4),
-        text: "Prepare to die.".to_owned(),
-    };
-    let ticks = quote.ticks();
-    view.relay_comm_and_quotes(&[note], vec![quote]);
-    let shown = view.message.clone().expect("relayed");
-    assert_eq!(
-        (shown.text.as_str(), shown.ticks),
-        ("Prepare to die.", ticks)
-    );
-    assert_eq!(sent(&view), [], "the session's line left alone");
-}
-
 /// A mission text of `mission`, its bar noted at the `texts`th queued
 /// with the nav `nav`.
 fn queued_text(mission: i16, texts: u64, nav: NavMode) -> FlightEvent {
@@ -259,4 +230,88 @@ fn the_interface_changes_are_the_loads_since_the_last_run_that_each_load_another
         Some(hud::interface_for(&*view.catalog, Some(GovtId(150))))
     );
     assert_eq!(view.interface_changes(None), (Vec::new(), None), "taken");
+}
+
+#[test]
+fn a_drained_board_line_and_grant_are_each_taken_once_and_leave_the_rest() {
+    let mut view = faked(in_sol());
+    assert_eq!(view.board_line_drained(), None);
+    assert_eq!(view.grant_drained(), None);
+    let granted = nova_sim::Granted {
+        outfit: nova_sim::OutfitId(128),
+        count: 2,
+    };
+    let refuelled = MissionBoardLine::Refuelled { ship: ShipId(129) };
+    for event in [
+        FlightEvent::BoardLine(MissionBoardLine::Boarded),
+        FlightEvent::Grant(granted),
+        FlightEvent::BoardLine(refuelled),
+        FlightEvent::SaveDue,
+    ] {
+        view.sim.queue_event(event);
+    }
+    assert_eq!(
+        view.board_line_drained(),
+        Some(refuelled),
+        "the last board's"
+    );
+    assert_eq!(view.grant_drained(), Some(granted));
+    assert_eq!(view.board_line_drained(), None, "once");
+    assert_eq!(view.grant_drained(), None, "once");
+    assert!(view.take_save_due(), "another kind, kept for its take");
+}
+
+/// Drains `view`'s flight as a frame's steps take from it: the comm
+/// notes on the advance pass, then the quotes, then relays them.
+fn relay_the_steps(view: &mut Faked) {
+    let notes = view.drain().take_comm();
+    let quotes = view.drain().take_quotes();
+    view.relay_comm_and_quotes(&notes, quotes);
+}
+
+#[test]
+fn a_drained_comm_note_is_relayed_in_its_words_for_its_ticks() {
+    let mut view = faked(in_sol());
+    let note = nova_sim::CommNote {
+        from: nova_sim::NpcId(3),
+        comm_name: "Shuttle".to_owned(),
+        ship_name: "Kestrel".to_owned(),
+        done: nova_sim::Help::Refuel,
+    };
+    view.sim.queue_event(FlightEvent::Comm(note.clone()));
+    relay_the_steps(&mut view);
+    let shown = view.message.clone().expect("relayed");
+    assert_eq!(
+        (shown.text, shown.ticks),
+        (comm_message(&note), note.ticks())
+    );
+    assert_eq!(sent(&view), [], "the session's line left alone");
+    view.message = None;
+    relay_the_steps(&mut view);
+    assert_eq!(view.message, None, "relayed once");
+}
+
+#[test]
+fn a_drained_quote_is_relayed_after_the_comm_and_stays() {
+    let mut view = faked(in_sol());
+    let note = nova_sim::CommNote {
+        from: nova_sim::NpcId(3),
+        comm_name: "Shuttle".to_owned(),
+        ship_name: "Kestrel".to_owned(),
+        done: nova_sim::Help::Repair,
+    };
+    let quote = nova_sim::PersonQuote {
+        npc: nova_sim::NpcId(4),
+        text: "Prepare to die.".to_owned(),
+    };
+    let ticks = quote.ticks();
+    view.sim.queue_event(FlightEvent::Quote(quote));
+    view.sim.queue_event(FlightEvent::Comm(note));
+    relay_the_steps(&mut view);
+    let shown = view.message.clone().expect("relayed");
+    assert_eq!(
+        (shown.text.as_str(), shown.ticks),
+        ("Prepare to die.", ticks),
+        "the quote over the comm, whatever the drain's order"
+    );
 }

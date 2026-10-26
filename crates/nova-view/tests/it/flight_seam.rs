@@ -324,9 +324,9 @@ fn planet() -> Vec<u8> {
 }
 
 /// Alpha (128), at the map's centre, holding Alpha Prime (128), linked
-/// both ways to Beta (129), at (100, 0), and to Gamma (130), at
-/// (-100, 0), visible only with bit 1 set. The first `chär` flies ship 128 from
-/// Alpha. Nothing is drawn but what the course map needs.
+/// both ways to Beta (129), at (100, 0), visible only while bit 1 is
+/// clear (`!b1`). The first `chär` flies ship 128 from Alpha. Nothing is
+/// drawn but what the course map needs.
 fn data() -> Rc<GameData> {
     let fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
