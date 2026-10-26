@@ -4,10 +4,12 @@
 //! the boardings' rules.
 //!
 //! It forwards: [`FlightSim::frame`] to `Session::fill_frame`,
+//! [`FlightSim::step`] to `Session::step`, with its collaborators and
+//! the catalog the view shared,
 //! [`FlightSim::apply`] to `Session::apply`, whose match over the
 //! commands lives on the session's side, and [`FlightSim::drain`] to
 //! `Session::drain_events`. A session that failed to start fills the
-//! default frame, refuses every command and drains nothing.
+//! default frame, runs no step, refuses every command and drains nothing.
 //!
 //! **For the strangler's length**, the view's
 //! `FlightView<C, SessionFlight<C>>` blocks reach the session and the
@@ -31,8 +33,8 @@ use nova_sim::map_search::SearchOutcome;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, DisableRule, LegalCode, MapMarks, MissionId, NovaAi,
-    NovaBoarding, NovaDisable, NovaLaw, PilotCatalog, PlayerCommand, PointDefenceRule, SavedNav,
-    Session, StellarId, SystemId, TagNames,
+    NovaBoarding, NovaDisable, NovaLaw, PlayerCommand, PointDefenceRule, Rules, SavedNav, Session,
+    SimCatalog, StellarId, StepCollaborators, SystemId, TagNames,
 };
 
 use super::SharedChance;
@@ -68,10 +70,10 @@ pub struct SessionFlight<C> {
     view_catalog: PhantomData<C>,
 }
 
-/// The view's catalog, as the flight reads it: as a `PilotCatalog` only,
+/// The view's catalog, as the flight reads it: as a `SimCatalog` only,
 /// so the adapter's `FlightSim` asks nothing of `C`.
 #[derive(Clone)]
-struct SharedCatalog(Rc<dyn PilotCatalog>);
+struct SharedCatalog(Rc<dyn SimCatalog>);
 
 impl std::fmt::Debug for SharedCatalog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -101,14 +103,14 @@ impl<C> SessionFlight<C> {
     /// Shares the view's catalog with the flight: the view's own handle,
     /// so the flight's answers read the catalog the view draws from, and
     /// a test that records a read on it sees the flight's too.
-    pub(in crate::flight) fn share_catalog(&mut self, catalog: Rc<dyn PilotCatalog>) {
+    pub(in crate::flight) fn share_catalog(&mut self, catalog: Rc<dyn SimCatalog>) {
         self.catalog = Some(SharedCatalog(catalog));
     }
 
     /// The catalog the view shared, if it has
     /// ([`SessionFlight::share_catalog`]).
     #[cfg(test)]
-    pub(in crate::flight) fn shared_catalog(&self) -> Option<&Rc<dyn PilotCatalog>> {
+    pub(in crate::flight) fn shared_catalog(&self) -> Option<&Rc<dyn SimCatalog>> {
         self.catalog.as_ref().map(|shared| &shared.0)
     }
 
@@ -199,10 +201,27 @@ impl<C> FlightSim for SessionFlight<C> {
         }
     }
 
-    /// Nothing yet: the view still runs the fixed step's passes itself,
-    /// until they move into the session's own step.
-    fn step(&mut self, _input: &StepInput) -> StepReport {
-        StepReport::default()
+    /// Forwards to `Session::step`, handing it the chance, the behaviour,
+    /// the fight's rules and the catalog the view shared
+    /// ([`SessionFlight::share_catalog`]). A failed session, or one whose
+    /// catalog was never shared, runs no step and holds nothing.
+    fn step(&mut self, input: &StepInput, steps: u32, into: &mut StepReport) {
+        let (Ok(session), Some(catalog)) = (&mut self.session, &self.catalog) else {
+            into.clear();
+            return;
+        };
+        let rules = Rules {
+            disable: &*self.disable_rule,
+            defence: &*self.defence_rule,
+            law: &*self.law,
+        };
+        let mut collab = StepCollaborators {
+            catalog: &*catalog.0,
+            behaviour: &*self.behaviour,
+            rules,
+            chance: &mut self.chance,
+        };
+        session.step(input, steps, &mut collab, into);
     }
 
     fn apply(&mut self, command: FlightCommand) -> Answer {
@@ -370,6 +389,16 @@ mod tests {
         assert_eq!(flight.stellar_name(StellarId(128)), None);
         assert!(!flight.has_explored(none));
         assert_eq!(flight.galaxy(), None);
+    }
+
+    #[test]
+    fn a_failed_flight_runs_no_step() {
+        let mut report = StepReport {
+            steps: vec![nova_sim::flight_frame::StepRun::default()],
+            stopped: true,
+        };
+        failed().step(&StepInput::default(), 3, &mut report);
+        assert_eq!(report, StepReport::default());
     }
 
     #[test]

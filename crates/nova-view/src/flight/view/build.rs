@@ -243,7 +243,7 @@ impl<
         // One handle, the view's and the flight's: the flight's answers
         // that read the catalog read the one the view draws from.
         let catalog = Rc::new(catalog);
-        sim.share_catalog(Rc::clone(&catalog) as Rc<dyn PilotCatalog>);
+        sim.share_catalog(Rc::clone(&catalog) as Rc<dyn nova_sim::SimCatalog>);
         Self::assembled(
             catalog,
             sim,

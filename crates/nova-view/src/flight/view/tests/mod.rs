@@ -1039,6 +1039,36 @@ fn a_shared_catalog_shows_in_its_flights_debug() {
     assert!(format!("{flight:?}").contains("catalog: Some(SharedCatalog)"));
 }
 
+/// The flight's steps are its session's, handed the catalog the view
+/// shared: one without it runs none.
+#[test]
+fn the_flights_steps_are_its_sessions_once_its_catalog_is_shared() {
+    use nova_sim::flight_frame::{StepInput, StepReport};
+    let session = Session::start(&catalog()).expect("starts");
+    let mut flight: SessionFlight<()> = SessionFlight::from(session.clone());
+    let mut report = StepReport::default();
+    flight.step(&StepInput::default(), 2, &mut report);
+    assert_eq!(report, StepReport::default(), "no catalog shared");
+    assert_eq!(flight.session().expect("flying"), &session, "untouched");
+    flight.share_catalog(Rc::new(catalog()));
+    flight.step(&StepInput::default(), 2, &mut report);
+    assert_eq!(report.steps.len(), 2);
+    assert!(report.steps.iter().all(|run| run.passes.len() == 1));
+    let mut by_hand = session;
+    let behaviour = nova_sim::NovaAi::default();
+    let mut chance = SharedChance::default();
+    let mut collab = nova_sim::StepCollaborators {
+        catalog: &catalog(),
+        behaviour: &behaviour,
+        rules: Rules::default(),
+        chance: &mut chance,
+    };
+    let mut expected = StepReport::default();
+    by_hand.step(&StepInput::default(), 2, &mut collab, &mut expected);
+    assert_eq!(report, expected);
+    assert_eq!(flight.session().expect("flying"), &by_hand);
+}
+
 /// The flight's floating-map and mission-system answers are its
 /// session's, through the adapter.
 #[test]

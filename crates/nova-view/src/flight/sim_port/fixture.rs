@@ -14,6 +14,7 @@ use nova_sim::JumpReadiness;
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
     Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, MapKey, StepInput, StepReport,
+    StepRun,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
@@ -28,8 +29,9 @@ use super::{CommSource, FlightSim, MapSource, PortSource};
 /// A scripted [`FlightSim`]: it shows the frame it was given, records
 /// each command in the order sent, answers each from a queue
 /// ([`Answer::Refused`] once the queue is empty), hands out the events
-/// queued for it on [`FlightSim::drain`], and reports each step from a
-/// queue (the default once the queue is empty), counting the steps. It
+/// queued for it on [`FlightSim::drain`], and reports each frame's steps
+/// from a queue (no step run once the queue is empty), recording each
+/// call's input and step count. It
 /// takes every gate but those it is told to refuse
 /// ([`FakeFlight::refuse`]), answers [`MapSource`] from [`FakeMap`]
 /// ([`FakeFlight::map_mut`]), and records the map's questions whose
@@ -42,7 +44,7 @@ pub struct FakeFlight {
     answers: VecDeque<Answer>,
     events: Vec<FlightEvent>,
     reports: VecDeque<StepReport>,
-    steps: usize,
+    stepped: Vec<(StepInput, u32)>,
     refused: Vec<PlayerCommand>,
     map: FakeMap,
     asked: RefCell<Vec<MapAsk>>,
@@ -139,7 +141,8 @@ impl FakeFlight {
         self.events.push(event);
     }
 
-    /// Reports `report` for the next step not yet reported.
+    /// Reports `report` for the next call of [`FlightSim::step`] not yet
+    /// reported, whatever its step count.
     pub fn queue_report(&mut self, report: StepReport) {
         self.reports.push_back(report);
     }
@@ -150,10 +153,23 @@ impl FakeFlight {
         &self.applied
     }
 
-    /// How many steps were taken.
+    /// How many times [`FlightSim::step`] was called: once a frame.
     #[must_use]
     pub fn steps(&self) -> usize {
-        self.steps
+        self.stepped.len()
+    }
+
+    /// How many steps the calls of [`FlightSim::step`] asked for, all
+    /// told.
+    #[must_use]
+    pub fn steps_asked(&self) -> u32 {
+        self.stepped.iter().map(|&(_, steps)| steps).sum()
+    }
+
+    /// Each call's input to [`FlightSim::step`], in order.
+    #[must_use]
+    pub fn inputs(&self) -> Vec<StepInput> {
+        self.stepped.iter().map(|&(input, _)| input).collect()
     }
 
     /// Refuses the gate `gate` from now on ([`FlightSim::takes`]).
@@ -189,9 +205,12 @@ impl FlightSim for FakeFlight {
         into.clone_from(&self.frame);
     }
 
-    fn step(&mut self, _input: &StepInput) -> StepReport {
-        self.steps += 1;
-        self.reports.pop_front().unwrap_or_default()
+    fn step(&mut self, input: &StepInput, steps: u32, into: &mut StepReport) {
+        self.stepped.push((*input, steps));
+        match self.reports.pop_front() {
+            Some(report) => into.clone_from(&report),
+            None => into.clear(),
+        }
     }
 
     fn apply(&mut self, command: FlightCommand) -> Answer {
@@ -372,7 +391,9 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///   the second over a frame unlike the first in every field, give equal
 ///   frames, so a fill that skips a field fails;
 /// - **a refusal changes nothing**: [`refused_command`] answers a
-///   refusal, and the frame after it equals the frame before.
+///   refusal, and the frame after it equals the frame before;
+/// - **no step asked, none run**: a frame's steps asked for none fill the
+///   report, over one holding a step, with no step and no stop.
 ///
 /// The error says which clause failed.
 pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
@@ -409,6 +430,17 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
     if after != once {
         return Err(format!(
             "a refusal changes nothing: the frame was {once:?}, then {after:?}"
+        ));
+    }
+
+    let mut report = StepReport {
+        steps: vec![StepRun::default()],
+        stopped: true,
+    };
+    sim.step(&StepInput::default(), 0, &mut report);
+    if report != StepReport::default() {
+        return Err(format!(
+            "no step asked, none run: the report was {report:?}"
         ));
     }
     Ok(())
@@ -500,12 +532,29 @@ mod tests {
     #[test]
     fn the_fake_reports_steps_from_its_queue_and_counts_them() {
         let mut fake = FakeFlight::new();
-        fake.queue_report(StepReport::default());
+        let scripted = StepReport {
+            steps: vec![StepRun::default(); 2],
+            stopped: true,
+        };
+        fake.queue_report(scripted.clone());
         assert_eq!(fake.steps(), 0);
-        for _ in 0..3 {
-            assert_eq!(fake.step(&StepInput::default()), StepReport::default());
+        let held = StepInput {
+            cloak: true,
+            ..StepInput::default()
+        };
+        let mut report = StepReport::default();
+        fake.step(&held, 2, &mut report);
+        assert_eq!(report, scripted, "copied into the caller's report");
+        for steps in [3, 0] {
+            fake.step(&StepInput::default(), steps, &mut report);
+            assert_eq!(report, StepReport::default(), "none run once empty");
         }
-        assert_eq!(fake.steps(), 3);
+        assert_eq!(fake.steps(), 3, "the calls");
+        assert_eq!(fake.steps_asked(), 5, "the steps asked");
+        assert_eq!(
+            fake.inputs(),
+            [held, StepInput::default(), StepInput::default()]
+        );
     }
 
     #[test]
@@ -625,6 +674,8 @@ mod tests {
         AnswersTheRefusal,
         /// The refused command changes the frame.
         RefusalChangesTheFrame,
+        /// A frame asked for no step reports one.
+        StepsUnasked,
     }
 
     /// A [`FakeFlight`] with one [`Fault`].
@@ -648,8 +699,11 @@ mod tests {
             }
         }
 
-        fn step(&mut self, input: &StepInput) -> StepReport {
-            self.fake.step(input)
+        fn step(&mut self, input: &StepInput, steps: u32, into: &mut StepReport) {
+            self.fake.step(input, steps, into);
+            if matches!(self.fault, Fault::StepsUnasked) {
+                into.steps.push(StepRun::default());
+            }
         }
 
         fn apply(&mut self, command: FlightCommand) -> Answer {
@@ -709,6 +763,11 @@ mod tests {
         let clause = clause(Fault::RefusalChangesTheFrame);
         assert!(clause.starts_with("a refusal changes nothing"), "{clause}");
         assert!(clause.contains("the frame was"), "{clause}");
+    }
+
+    #[test]
+    fn a_step_unasked_breaks_the_contract() {
+        assert!(clause(Fault::StepsUnasked).starts_with("no step asked, none run"));
     }
 
     #[test]

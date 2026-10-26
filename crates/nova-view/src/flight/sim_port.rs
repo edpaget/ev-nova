@@ -1,6 +1,6 @@
 //! The [`FlightSim`] port: what the flight view needs of the flight it
 //! shows, in the view's own terms. A frame to draw from
-//! ([`FlightSim::frame`]), a fixed step ([`FlightSim::step`]), the
+//! ([`FlightSim::frame`]), a frame's fixed steps ([`FlightSim::step`]), the
 //! player's commands ([`FlightSim::apply`]) and what the flight raised
 //! for the view to act on once ([`FlightSim::drain`]). The values it
 //! carries are `nova_sim`'s ([`flight_frame`](nova_sim::flight_frame)),
@@ -44,9 +44,12 @@ pub trait FlightSim: MapSource + CommSource + PortSource {
     /// a frame kept from an earlier fill shows nothing stale.
     fn frame(&self, into: &mut FlightFrame);
 
-    /// Advances the flight one fixed step, given `input`, and reports what
-    /// the view needs of it.
-    fn step(&mut self, input: &StepInput) -> StepReport;
+    /// Runs up to `steps` of the flight's fixed steps for a frame, given
+    /// `input`, and fills `into` afresh with what each step reported
+    /// ([`StepReport`]): the steps run, each pass's records, and whether
+    /// the stepping stopped short. The view calls it once a frame, its
+    /// steps or none, as the flight holds the input then.
+    fn step(&mut self, input: &StepInput, steps: u32, into: &mut StepReport);
 
     /// Runs the player's `command` and answers it:
     /// [`Answer::Refused`] when it did nothing, and then no frame changes.
