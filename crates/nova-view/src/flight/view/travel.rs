@@ -706,7 +706,7 @@ impl<
     /// further from what the player sees than none.
     ///
     /// The whole bar is redrawn once the take-off has let go of the nav
-    /// selection. Under [`RuleKey::HudCadence`]'s engine reading, the nav
+    /// selection. Under [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine reading, the nav
     /// area then shows the nav as the take-off began
     /// ([`FlightEvent::TakeoffNav`](nova_sim::flight_frame::FlightEvent::TakeoffNav)) in the first frame drawn after it
     /// and to the end of that frame's tick ([`NavFlash`],
