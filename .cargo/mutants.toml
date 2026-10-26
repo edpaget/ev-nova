@@ -610,12 +610,4 @@ exclude_re = [
     # A good-price stellar may land or trade, `Flags` 0x1 | 0x2 (@0x9148a):
     # the two bits are disjoint, so `^` makes the same 0x3.
     "nova-sim-ai/src/hail/advice\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in AdvicePort::qualifies$",
-    # `SessionFlight`'s step does nothing until the fixed step moves into
-    # the session (view-sim-seam phase 6): its body is already
-    # `StepReport::default()`. Drop this once the step forwards.
-    "nova-view/src/flight/sim_adapter\\.rs:[0-9]+:[0-9]+: replace <impl FlightSim for SessionFlight<C>>::step -> StepReport with Default::default\\(\\)$",
-    # `StepReport` has no field yet, so a queued report is the default a
-    # fake with none queued gives: no test can tell a dropped one. Drop
-    # this once `StepReport` gains a field (view-sim-seam phase 6).
-    "nova-view/src/flight/sim_port/fixture\\.rs:[0-9]+:[0-9]+: replace FakeFlight::queue_report with \\(\\)$",
 ]
