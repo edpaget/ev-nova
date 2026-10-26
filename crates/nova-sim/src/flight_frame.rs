@@ -2,8 +2,9 @@
 //! `flight::sim_port`) carries across the seam between the view and the
 //! session: what a frame shows ([`FlightFrame`]), what the player asks
 //! ([`FlightCommand`]) and what the session answers ([`Answer`]), what it
-//! raised on the way ([`FlightEvent`]), and a fixed step's input and
-//! report ([`StepInput`], [`StepReport`]).
+//! raised on the way ([`FlightEvent`]), and a frame's fixed steps' input and
+//! report ([`StepInput`], [`StepReport`], its [`StepRun`]s and
+//! [`PassReport`]s).
 //!
 //! They live here, not in the view, so the session can build them:
 //! [`Session::fill_frame`](crate::Session::fill_frame) fills a frame and
@@ -15,8 +16,13 @@ use std::collections::BTreeSet;
 
 use crate::bay::FighterNote;
 use crate::board::MissionBoardLine;
-use crate::catalog::{StellarId, SystemId};
+use crate::catalog::{Explosion, ShipId, StellarId, SystemId, WeaponId};
+use crate::cloak::Area;
+use crate::combat::hull::Condition;
+use crate::combat::projectile::ShotId;
 use crate::combat::report::SimDiagnostic;
+use crate::combat::{CombatEvent, ShipRef};
+use crate::flight::{Controls, ShipState};
 use crate::geometry::Vec2;
 use crate::grant::Granted;
 use crate::hail::CommNote;
@@ -24,6 +30,7 @@ use crate::hire::PayNote;
 use crate::hyperspace::JumpReadiness;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
+use crate::reserves::Gauge;
 use crate::session::{
     InterfaceLoad, MapClicked, MapPress, MissionShown, PersonQuote, SavedNav, SessionEvent,
     StellarPick, TextBar,
@@ -315,15 +322,148 @@ pub enum FlightEvent {
     LeaveMessage(String),
 }
 
-/// What one fixed step of the flight is given. Empty until the step moves
-/// across the seam.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct StepInput {}
+/// What a frame's fixed steps are given
+/// ([`Session::step`](crate::Session::step)): the player's controls, and
+/// the holds and settings the view takes from its keys, preferences and
+/// window, which the session holds before the frame's first step, steps
+/// or none.
+// Each is its own key, chord or preference, held on its own.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StepInput {
+    /// The player's steering, thrust and afterburner.
+    pub controls: Controls,
+    /// The play area about the ship, in world units
+    /// ([`Session::set_play_area`](crate::Session::set_play_area)).
+    pub play_area: Area,
+    /// The game window's width
+    /// ([`Session::set_window_width`](crate::Session::set_window_width)).
+    pub window_width: u32,
+    /// The primary and secondary fire keys
+    /// ([`Session::hold_fire`](crate::Session::hold_fire)).
+    pub fire: (bool, bool),
+    /// The eject chord
+    /// ([`Session::hold_eject`](crate::Session::hold_eject)).
+    pub eject: bool,
+    /// The self-destruct chord
+    /// ([`Session::hold_self_destruct`](crate::Session::hold_self_destruct)).
+    pub self_destruct: bool,
+    /// The cloak key
+    /// ([`Session::hold_cloak`](crate::Session::hold_cloak)).
+    pub cloak: bool,
+    /// The weapon safety key
+    /// ([`Session::hold_weapon_safety`](crate::Session::hold_weapon_safety)).
+    pub weapon_safety: bool,
+    /// The double-time key
+    /// ([`Session::set_double_time_key`](crate::Session::set_double_time_key)).
+    pub double_time_key: bool,
+    /// The Hyperspace Effects preference
+    /// ([`Session::set_hyperspace_effects`](crate::Session::set_hyperspace_effects)).
+    pub hyperspace_effects: bool,
+    /// The land key
+    /// ([`Session::set_land_key`](crate::Session::set_land_key)).
+    pub land_key: bool,
+}
 
-/// What one fixed step of the flight reports. Empty until the step moves
-/// across the seam.
+/// What a frame's fixed steps reported
+/// ([`Session::step`](crate::Session::step)): each step that ran, in
+/// order, and whether the stepping stopped short. Filled into a report
+/// the view keeps, as a frame is: each fill writes it afresh.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct StepReport {}
+pub struct StepReport {
+    /// Each step that ran, in order.
+    pub steps: Vec<StepRun>,
+    /// Whether the stepping stopped before a step it was asked for: the
+    /// warp's end or the hold's expiry before it, or the escape pod's
+    /// rescue on the step before.
+    pub stopped: bool,
+}
+
+impl StepReport {
+    /// Empties it for the next fill, keeping its room.
+    pub fn clear(&mut self) {
+        self.steps.clear();
+        self.stopped = false;
+    }
+}
+
+/// One fixed step that ran, as [`StepReport`] reports it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StepRun {
+    /// Each ship's state before the step: the player's first, then each
+    /// NPC's in the system's order.
+    pub before: Vec<(ShipRef, ShipState)>,
+    /// The comm notes taken at the advance pass's end: what the step
+    /// before raised after its own take, then this step's.
+    pub comm: Vec<CommNote>,
+    /// Each pass that ran to its end: the advance pass, then double
+    /// time's second; none when the rescue settled on the advance pass.
+    pub passes: Vec<PassReport>,
+    /// The player's ship where the escape pod's rescue put it, when the
+    /// rescue settled on this step and ended the stepping.
+    pub rescued: Option<ShipState>,
+}
+
+/// One pass of a step as it stood at the pass's end, after the NPCs
+/// answered its strikes and the persons said their quotes: what the view
+/// steps its effects, flashes, glows, shot looks and stars from.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PassReport {
+    /// Each ship in the system: the player's first, then each NPC's.
+    pub ships: Vec<FrameShip>,
+    /// Each shot in flight, in the fight's order.
+    pub shots: Vec<FrameShot>,
+    /// Each beam's weapon, in the fight's order.
+    pub beam_weapons: Vec<WeaponId>,
+    /// What happened in the fight since the last pass's take, in order.
+    pub combat: Vec<CombatEvent>,
+    /// Whether the pass ran on a smoke frame
+    /// ([`Session::smoke_frame`](crate::Session::smoke_frame)).
+    pub smoke_frame: bool,
+    /// The system's murk as loaded
+    /// ([`Session::system_murk`](crate::Session::system_murk)).
+    pub system_murk: i16,
+    /// Where the player's ship is.
+    pub player_position: Vec2,
+    /// Whether double time is on
+    /// ([`Session::double_time`](crate::Session::double_time)).
+    pub double_time: bool,
+    /// The quotes the pass said, in order.
+    pub quotes: Vec<PersonQuote>,
+}
+
+/// A ship as a [`PassReport`] carries it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameShip {
+    /// Which ship.
+    pub ship: ShipRef,
+    /// Its class.
+    pub class: ShipId,
+    /// Where it is.
+    pub position: Vec2,
+    /// How it is holding up.
+    pub condition: Condition,
+    /// The explosion its breakup plays, if any (its class's hull's).
+    pub breakup: Option<Explosion>,
+    /// Its shield, now and at most.
+    pub shield: Gauge,
+    /// Its class's own loaded `Shield`
+    /// ([`Session::class_shield`](crate::Session::class_shield)).
+    pub class_shield: Option<f32>,
+}
+
+/// A shot in flight as a [`PassReport`] carries it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameShot {
+    /// Its number in the fight.
+    pub id: ShotId,
+    /// Its weapon.
+    pub weapon: WeaponId,
+    /// Where it is.
+    pub position: Vec2,
+    /// Which way it faces, in degrees.
+    pub heading: f32,
+}
 
 #[cfg(test)]
 mod tests {

@@ -588,6 +588,7 @@ mod statics;
 mod status_cargo;
 mod steering;
 mod stellars;
+mod step;
 mod story;
 mod stray_words;
 mod swarm_formation;
@@ -628,6 +629,7 @@ pub use person_offers::Hailed;
 pub use persons::PersonQuote;
 pub use script_effects::{Departure, ScriptEffectRules, Settled};
 pub use slot_visibility::HoverPlace;
+pub use step::{SimCatalog, StepCollaborators};
 pub use takeoff_grace::TAKEOFF_GRACE_TICKS;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -17171,7 +17173,7 @@ pub(super) mod tests {
     }
 
     /// [`armed`], `STR#` 7101 #1 "Prepare to die!".
-    fn quoting_armed() -> FakePilotCatalog {
+    pub(super) fn quoting_armed() -> FakePilotCatalog {
         FakePilotCatalog {
             strings: vec![(7101, vec!["Prepare to die!".to_owned()])],
             ..armed()
@@ -17180,7 +17182,7 @@ pub(super) mod tests {
 
     /// NPC 0 of `session` becomes a warship flown by a person of `Flags`
     /// 0x0010, saying `STR#` 7101 #1.
-    fn make_quoting_warship(session: &mut Session) {
+    pub(super) fn make_quoting_warship(session: &mut Session) {
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.ai_type = crate::traffic::npc::AiType::Warship;
         npc.person = Some(crate::traffic::npc::NpcPerson {
