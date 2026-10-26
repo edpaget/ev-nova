@@ -6,7 +6,8 @@
 //! command the view sends reaches the session and its answer and frame
 //! come back, and that what it raises comes back drained. One to three
 //! tests per area the port carries (the contract, the nav keys, the
-//! one-shot outputs, and each area later work moves across). A
+//! one-shot outputs, the fixed steps, and each area later work moves
+//! across). A
 //! test of what the view does with a frame, an answer or an event is a
 //! component test, and runs on a `FakeFlight` in the view's own tests
 //! instead.
@@ -499,5 +500,222 @@ fn a_galaxy_change_redraws_the_open_map_through_the_event_and_the_galaxy() {
     assert!(
         !drawn(&view).contains(&SystemId(129)),
         "the open map redrawn"
+    );
+}
+
+// The fixed steps, through a whole `FlightView` over a real session.
+
+/// Draws its script, then the last outcome, so no roll fires.
+struct Script(std::collections::VecDeque<u32>);
+
+impl nova_sim::Chance for Script {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        self.0.pop_front().unwrap_or(n - 1)
+    }
+}
+
+/// A shared chance drawing `draws`, then each last outcome.
+fn drawing(draws: &[u32]) -> nova_view::flight::SharedChance {
+    let script: Rc<std::cell::RefCell<dyn nova_sim::Chance>> = Rc::new(std::cell::RefCell::new(
+        Script(draws.iter().copied().collect()),
+    ));
+    nova_view::flight::SharedChance::new(script)
+}
+
+/// Every NPC idles.
+#[derive(Debug)]
+struct Idle;
+
+impl nova_sim::Behaviour for Idle {
+    fn decide(
+        &self,
+        _npc: &nova_sim::Npc,
+        _around: &nova_sim::Surroundings,
+        _chance: &mut dyn nova_sim::Chance,
+    ) -> nova_sim::Goal {
+        nova_sim::Goal::Idle
+    }
+}
+
+/// A `shïp` of this `Shield` and `Armor`, carrying `weapons` (one of
+/// each) and `items` (each with its count), destroyed at once in
+/// explosion type 0, `bööm` 128.
+fn armed_ship(shield: i16, armor: i16, weapons: &[i16], items: &[(i16, i16)]) -> Vec<u8> {
+    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x02, &[shield, 300, 300, 30, 300]);
+    put_i16s(&mut bytes, 0x0E, &[armor]);
+    put_i16s(&mut bytes, 0x12, &[-1; 4]);
+    put_i16s(&mut bytes, 0x12, weapons);
+    put_i16s(&mut bytes, 0x1A, &[1; 4]);
+    put_i16s(&mut bytes, 0x38, &[-1, 0]);
+    put_i16s(&mut bytes, 0x42, &[1]);
+    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
+    put_i16s(&mut bytes, 0x370, &[-1; 4]);
+    put_i16s(&mut bytes, 0x6CE, &[-1; 4]);
+    for (slot, &(item, count)) in items.iter().enumerate() {
+        put_i16s(&mut bytes, 0x4E + 2 * slot, &[item]);
+        put_i16s(&mut bytes, 0x56 + 2 * slot, &[count]);
+    }
+    bytes
+}
+
+/// The blaster, `wëap` 128: unguided, firing every tick, 20 pixels a
+/// tick for 30 ticks, doing 5 mass damage.
+fn blaster() -> Vec<u8> {
+    let mut bytes = vec![0; nova_data::records::weapon::Weapon::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[0, 30, 5, 0, -1, 2000, -1, 0, 0, -1]);
+    put_i16s(&mut bytes, 0x16, &[-1]);
+    bytes
+}
+
+/// An `oütf` of `ModType` `mod_type` and `ModVal` `value`, one at most.
+fn fitting(mod_type: i16, value: i16) -> Vec<u8> {
+    let mut bytes = vec![0; nova_data::records::outfit::Outfit::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x06, &[mod_type, value, 1]);
+    bytes
+}
+
+/// An independent `sÿst` with no stellars, with `düde` 128 at 100 % and
+/// one ship on average.
+fn trafficked_system() -> Vec<u8> {
+    let mut bytes = vec![0; System::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x04, &[-1; 32]);
+    put_i16s(&mut bytes, 0x24, &[-1; 16]);
+    put_i16s(&mut bytes, 0x44, &[128, -1, -1, -1, -1, -1, -1, -1]);
+    put_i16s(&mut bytes, 0x54, &[100]);
+    put_i16s(&mut bytes, 0x64, &[1, -1]);
+    bytes
+}
+
+/// A `düde` of wimpy traders flying ship 129, independent.
+fn traders() -> Vec<u8> {
+    let mut bytes = vec![0; nova_data::records::dude::Dude::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[1, -1]);
+    put_i16s(&mut bytes, 0x08, &[-1; 16]);
+    put_i16s(&mut bytes, 0x08, &[129]);
+    put_i16s(&mut bytes, 0x28, &[100]);
+    bytes
+}
+
+/// The first `chär` flies the "Gunship" (ship 128, 30 shield, 45 armour,
+/// carrying the [`blaster`], held by `oütf` 228, and `items`) from Alpha
+/// (128), whose one `düde` flies the "Trader" (ship 129: no shield, 10
+/// armour, no speed). The escape pod is ship 895; `oütf` 188 is an
+/// escape pod (`ModType` 11) and 187 an auto-eject (20).
+fn fighting_data(items: &[(i16, i16)]) -> Rc<GameData> {
+    let mut trader = armed_ship(0, 10, &[], &[]);
+    put_i16s(&mut trader, 0x06, &[0]);
+    let mut holder = fitting(1, 128);
+    put_i16s(&mut holder, 0x0A, &[10]);
+    let fork = ForkBuilder::new()
+        .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
+        .resource(
+            Ship::TYPE,
+            128,
+            Some(b"Gunship"),
+            &armed_ship(30, 45, &[128], items),
+        )
+        .resource(Ship::TYPE, 129, Some(b"Trader;merchant"), &trader)
+        .resource(Ship::TYPE, 895, Some(b"Escape Pod"), &ship())
+        .resource(
+            nova_data::records::weapon::Weapon::TYPE,
+            128,
+            Some(b"Blaster"),
+            &blaster(),
+        )
+        .resource(nova_data::records::outfit::Outfit::TYPE, 228, None, &holder)
+        .resource(
+            nova_data::records::outfit::Outfit::TYPE,
+            188,
+            Some(b"Escape Pod"),
+            &fitting(11, 0),
+        )
+        .resource(
+            nova_data::records::outfit::Outfit::TYPE,
+            187,
+            Some(b"Auto-Eject"),
+            &fitting(20, 0),
+        )
+        .resource(System::TYPE, 128, Some(b"Alpha"), &trafficked_system())
+        .resource(
+            nova_data::records::dude::Dude::TYPE,
+            128,
+            Some(b"Traders"),
+            &traders(),
+        )
+        .build()
+        .bytes;
+    let file = OneFile(fork);
+    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+}
+
+/// A whole flight view over a real session of `data`, its chance
+/// placing the trader 100 pixels above the player, idling.
+fn fighting(data: Rc<GameData>, session: nova_sim::Session) -> FlightView<Rc<GameData>> {
+    let mut view = FlightView::from_session(data, session.into())
+        .with_chance(drawing(&[6, 6, 0, 0, 750, 650, 180, 2]))
+        .with_behaviour(Rc::new(Idle));
+    // The first step sets the system up.
+    view.tick(TICK);
+    assert_eq!(view.session().expect("flying").npcs().len(), 1);
+    view
+}
+
+#[test]
+fn a_real_fights_hit_shows_its_effect() {
+    let data = fighting_data(&[]);
+    let session = SessionBuilder::flying(&data).build();
+    let mut view = fighting(data, session);
+    view.input(&key(Key::Space, true));
+    for _ in 0..30 {
+        view.tick(TICK);
+        if !view.effects().particles().is_empty() {
+            assert!(
+                view.session().expect("flying").npcs().is_empty(),
+                "the trader destroyed"
+            );
+            return;
+        }
+    }
+    panic!(
+        "no debris shown: {:?}",
+        view.session().expect("flying").npcs()[0].reserves
+    );
+}
+
+#[test]
+fn a_rescue_in_the_pod_stops_the_step_and_opens_its_desc() {
+    let data = fighting_data(&[(188, 1), (187, 1)]);
+    let mut session = SessionBuilder::flying(&data).build();
+    nova_sim::fixture::set_player_condition(
+        &mut session,
+        nova_sim::Condition::Dying {
+            ticks_left: 0,
+            starting: false,
+        },
+    );
+    let mut view = fighting(data, session);
+    let mut frames = 0;
+    let desc = loop {
+        // A long frame, many steps: the rescue's ends them.
+        view.tick(TICK * 30);
+        if let Some(desc) = view.take_rescue_desc() {
+            break desc;
+        }
+        frames += 1;
+        assert!(frames <= 20, "no rescue");
+    };
+    assert_eq!(desc, 13999);
+    let session = view.session().expect("flying");
+    assert_eq!(session.ship(), ShipId(128), "out of the pod");
+    assert_eq!(session.player().position, Vec2::new(50.0, 50.0), "rescued");
+    assert_eq!(
+        view.camera().center(),
+        Point::new(50.0, 50.0),
+        "drawn where the rescue put it: nothing stepped after it"
     );
 }
