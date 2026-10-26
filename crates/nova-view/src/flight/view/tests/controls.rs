@@ -46,16 +46,6 @@ fn double_time_shows_its_icon_at_the_top_left_over_the_red_alert() {
 }
 
 #[test]
-fn double_time_runs_a_second_pass_each_tick() {
-    for (on, steps) in [(false, 3), (true, 6)] {
-        let mut view = flight().with_double_time(on);
-        view.input(&key(Key::Up, true));
-        ticks(&mut view, 3);
-        assert_eq!(player(&view), launched(THRUST, steps), "{on}");
-    }
-}
-
-#[test]
 fn double_time_reaches_the_session_on_the_next_tick_and_when_set() {
     let mut view = flight();
     view.set_double_time(true);
@@ -133,37 +123,6 @@ fn double_times_second_pass_gives_no_help_and_tells_no_comm() {
         let note = view.message().expect("refuelled").to_owned();
         assert!(note.contains(":  Energy transfer complete, "), "{note}");
     }
-}
-
-#[test]
-fn double_time_ages_the_effects_on_both_passes() {
-    let detonated = || {
-        let mut view = fighting(detonating(), &[]);
-        detonate(&mut view);
-        view
-    };
-    let mut twice = detonated();
-    ticks(&mut twice, 2);
-    let mut doubled = detonated().with_double_time(true);
-    doubled.tick(TICK);
-    assert_eq!(doubled.effects().explosions()[0].frame, 2.0);
-    assert_eq!(doubled.effects(), twice.effects());
-}
-
-#[test]
-fn a_shot_detonating_on_the_second_pass_is_drawn_that_tick() {
-    // Its one move, on the advance pass, spends it; its end of life
-    // comes in the next pass's hit pass.
-    let lasting_one = || fighting(detonating(), &[]);
-    let mut single = lasting_one();
-    single.input(&key(FIRE_KEY, true));
-    single.tick(TICK);
-    assert!(single.effects().explosions().is_empty(), "not yet");
-    let mut view = lasting_one().with_double_time(true);
-    view.input(&key(FIRE_KEY, true));
-    view.tick(TICK);
-    assert_eq!(view.effects().explosions().len(), 1);
-    first(&drawn(&view), sprite_of(400));
 }
 
 #[test]

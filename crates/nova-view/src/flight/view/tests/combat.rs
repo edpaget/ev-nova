@@ -359,9 +359,8 @@ fn gate_110_ahead(with: impl FnOnce(&mut FakeCatalog)) -> FakeCatalog {
 
 /// `catalog`'s flight in double time, `draws` bringing an arrival out
 /// of gate 141, which answers a hit by taking its attacker; fired at
-/// until the frame on which the first hit lands, which, as a copy of
-/// the session run through each frame's passes shows, is that frame's
-/// second pass. Until then the arrival is hidden in the gate.
+/// until the frame on which the first hit lands, that frame's second
+/// pass at this distance. Until then the arrival is hidden in the gate.
 fn hit_on_the_second_pass(catalog: FakeCatalog, draws: &[u32]) -> View {
     let (_, chance) = scripted(draws);
     let mut view = FlightView::new(catalog)
@@ -373,32 +372,10 @@ fn hit_on_the_second_pass(catalog: FakeCatalog, draws: &[u32]) -> View {
     assert!(matches!(npc(&view).mode, Mode::Emerging { .. }));
     let left = |npc: &nova_sim::Npc| npc.reserves.shield.now + npc.reserves.armor.now;
     let shield = left(&npc(&view));
-    // Whether a frame from `session`, run on a copy, hits the NPC on
-    // its advance pass, and by the end of its second.
-    let passes = |session: &Session, catalog: &FakeCatalog| {
-        let mut copy = session.clone();
-        copy.game_work(
-            Controls::default(),
-            catalog,
-            &Answering,
-            Rules::default(),
-            &mut NeverFires,
-        );
-        let advance = left(&copy.npcs()[0]) < shield;
-        copy.tick_again(
-            Controls::default(),
-            &Answering,
-            Rules::default(),
-            &mut NeverFires,
-        );
-        (advance, left(&copy.npcs()[0]) < shield)
-    };
     view.input(&key(FIRE_KEY, true));
-    for frame in 0..60 {
-        let ahead = passes(view.session().expect("flying"), view.catalog());
+    for _ in 0..60 {
         view.tick(TICK);
         if left(&npc(&view)) < shield {
-            assert_eq!(ahead, (false, true), "frame {frame}: the second pass's hit");
             return view;
         }
         let mode = npc(&view).mode;
@@ -1297,22 +1274,6 @@ fn combat_sounds(view: &mut View) -> Vec<CombatSound> {
 }
 
 #[test]
-fn every_steps_fight_reaches_the_effects() {
-    let mut view = fighting(armed(0, &[BLASTER]), &[]);
-    view.input(&key(FIRE_KEY, true));
-    view.tick(TICK * 3);
-    assert_eq!(shots_of(&view, BLASTER), 3, "three steps");
-    let fired = CombatSound {
-        sound: nova_sim::SoundId(208),
-        offset: (0, 0),
-        priority: u16::from(nova_sim::combat::PLAYER_FIRE_PRIORITY),
-        until_stopped: false,
-    };
-    assert_eq!(combat_sounds(&mut view), [fired; 3]);
-    assert_eq!(combat_sounds(&mut view), [], "taken");
-}
-
-#[test]
 fn the_sounds_are_the_sessions_then_the_fights() {
     let mut view = fighting(armed(0, &[BLASTER]), &[]);
     view.input(&key(Key::Up, true));
@@ -1582,81 +1543,6 @@ fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
             .all(|start| (start.x - expected.x).abs() < 1e-3
                 && (start.y - expected.y).abs() < 1e-3),
         "the NPC's, from the NPC as drawn: {under:?} {expected:?}"
-    );
-}
-
-#[test]
-fn a_ship_breaking_up_goes_off_about_where_it_is() {
-    let mut catalog = armed(1, &[BLASTER]);
-    catalog.weapons[0].mass_dmg = 1000;
-    catalog.weapons[0].flags = 0x0020;
-    catalog.weapons[0].explod_type = -1;
-    catalog.hulls[1].death_delay = 30;
-    catalog.hulls[1].explode1 = 0;
-    // 100 above, facing away: it flies on up the line of fire.
-    let mut view = fighting(catalog, &placed(750, 650, 0));
-    view.input(&key(FIRE_KEY, true));
-    view.tick(TICK);
-    view.input(&key(FIRE_KEY, false));
-    let mut breaking = None;
-    for _ in 0..40 {
-        view.tick(TICK);
-        let session = view.session().expect("flying");
-        if let Some(npc) = session.npcs().first()
-            && let Condition::Dying { ticks_left, .. } = npc.condition
-            && ticks_left < 19
-            && !view.effects().explosions().is_empty()
-        {
-            breaking = Some(npc.state.position - npc.state.velocity);
-            break;
-        }
-    }
-    // Where it was before the tick's flight step moved it on.
-    let at = breaking.expect("an explosion as it breaks up");
-    // Never firing, the effects' chance draws the last outcome: a
-    // quarter of its 40-pixel sprite less one out, each way.
-    assert_eq!(
-        view.effects().explosions()[0].at,
-        Point::new(at.x + 9.0, at.y + 9.0)
-    );
-}
-
-#[test]
-fn the_players_ship_breaking_up_goes_off_about_where_it_is() {
-    // The NPC, straight above the player and facing it, fires a
-    // blaster that kills at a hit; the player's ship, 80 pixels wide
-    // (the NPC's 40), of DeathDelay 30, breaks up for 88 ticks: three
-    // times it, less 2.
-    let mut catalog = armed(1, &[]);
-    catalog.sheet = Ok(ShipSheet {
-        frame_width: 80,
-        ..sheet()
-    });
-    catalog.weapons[0].mass_dmg = 1000;
-    catalog.weapons[0].flags = 0x0020;
-    catalog.weapons[0].explod_type = -1;
-    catalog.hulls[0].death_delay = 30;
-    catalog.hulls[0].explode1 = 0;
-    catalog.hulls[1] = hull_of(129, &[BLASTER]);
-    let mut view = fighting(catalog, &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
-    let mut breaking = None;
-    for _ in 0..120 {
-        view.tick(TICK);
-        let session = view.session().expect("flying");
-        if let Condition::Dying { ticks_left, .. } = session.player_condition()
-            && ticks_left < 19
-            && !view.effects().explosions().is_empty()
-        {
-            breaking = Some(session.player().position);
-            break;
-        }
-    }
-    let at = breaking.expect("an explosion as the player's ship breaks up");
-    // Never firing, the effects' chance draws the last outcome: a
-    // quarter of the player's 80-pixel sprite less one out, each way.
-    assert_eq!(
-        view.effects().explosions()[0].at,
-        Point::new(at.x + 19.0, at.y + 19.0)
     );
 }
 
@@ -2345,148 +2231,6 @@ fn a_destroyed_npc_explodes_and_scatters_debris_on_the_frames_after() {
 }
 
 #[test]
-fn an_npc_destroyed_under_the_originals_debris_reading_scatters_none() {
-    let mut catalog = armed(1, &[BLASTER]);
-    catalog.weapons[0].mass_dmg = 1000;
-    catalog.weapons[0].flags = 0x0020;
-    catalog.weapons[0].explod_type = -1;
-    let rules = Rulebook::default().with_override(RuleKey::ShipDebris, RuleSource::Engine);
-    let mut view = fighting(catalog, &placed(750, 650, 180)).with_rules(rules);
-    tap(&mut view, Key::Tab);
-    view.input(&key(FIRE_KEY, true));
-    for _ in 0..10 {
-        view.tick(TICK);
-        if view.session().expect("flying").npcs().is_empty() {
-            break;
-        }
-    }
-    assert!(view.session().expect("flying").npcs().is_empty());
-    let effects = view.effects();
-    assert_eq!(effects.explosions().len(), 1, "its Explode2 still");
-    assert_eq!(effects.explosions()[0].boom, BoomId(128));
-    assert_eq!(effects.particles(), [], "no debris");
-}
-
-/// [`armed`] with a blaster whose hits throw off 5 orange particles
-/// of `HitPartLife` 30, flown once at NPC 0 ahead: the flight on the
-/// tick its shot hits, and the NPC.
-fn hit_once() -> (View, ShipRef) {
-    hit_once_by(5, Rulebook::default())
-}
-
-/// [`hit_once`] with `particles` thrown off, by `rules`.
-fn hit_once_by(particles: i16, rules: Rulebook) -> (View, ShipRef) {
-    let mut catalog = armed(1, &[BLASTER]);
-    catalog.weapons[0].energy_dmg = 1;
-    catalog.weapons[0].explod_type = -1;
-    catalog.weapons[0].hit_particles = particles;
-    catalog.weapons[0].hit_part_vel = 100;
-    catalog.weapons[0].hit_part_life = 30;
-    catalog.weapons[0].hit_part_color = 0x00FF_8000;
-    let mut view = fighting(catalog, &placed(750, 650, 180)).with_rules(rules);
-    tap(&mut view, Key::Tab);
-    let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
-    view.input(&key(FIRE_KEY, true));
-    view.tick(TICK);
-    view.input(&key(FIRE_KEY, false));
-    for _ in 0..20 {
-        if view.shield_flash(npc).is_some() {
-            return (view, npc);
-        }
-        view.tick(TICK);
-    }
-    panic!("never hit: {:?}", view.session().expect("flying").npcs());
-}
-
-#[test]
-fn an_npc_hit_flashes_its_shield_32_on_the_tick_of_the_hit_then_31() {
-    let (mut view, npc) = hit_once();
-    assert_eq!(view.shield_flash(npc), Some(32.0));
-    view.tick(TICK);
-    assert_eq!(view.shield_flash(npc), Some(31.0));
-    assert_eq!(view.shield_flash(ShipRef::Player), None, "not hit");
-}
-
-#[test]
-fn a_hit_with_hit_particles_sprays_them_on_the_npc_in_its_colour() {
-    let (view, _) = hit_once();
-    let orange = crate::Color::rgba(0xFF, 0x80, 0x00, 255);
-    let particles = view.effects().particles();
-    assert_eq!(particles.len(), 5, "{particles:?}");
-    assert!(particles.iter().all(|piece| piece.color == orange));
-}
-
-#[test]
-fn under_the_combat_caps_a_hit_keeps_at_most_1024_particles() {
-    let (view, _) = hit_once_by(1100, Rulebook::default());
-    assert_eq!(
-        view.effects().particles().len(),
-        1100,
-        "uncapped by default"
-    );
-    let caps = Rulebook::default().with_override(RuleKey::CombatCaps, RuleSource::Engine);
-    let (view, _) = hit_once_by(1100, caps);
-    assert_eq!(view.effects().particles().len(), 1024);
-}
-
-#[test]
-fn a_beams_hit_flashes_the_npcs_shield_from_the_frame_after() {
-    let mut catalog = armed(1, &[UNDER]);
-    catalog.weapons[4].beam_length = 400;
-    catalog.weapons[4].energy_dmg = 1;
-    let mut view = fighting(catalog, &placed(750, 650, 180));
-    tap(&mut view, Key::Tab);
-    let shield = |view: &View| {
-        view.session().expect("flying").npcs()[0]
-            .reserves
-            .shield
-            .now
-    };
-    let full = shield(&view);
-    let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
-    view.input(&key(FIRE_KEY, true));
-    view.tick(TICK);
-    view.input(&key(FIRE_KEY, false));
-    let mut ticks = 0;
-    while shield(&view) == full {
-        assert!(ticks < 20, "never hit");
-        view.tick(TICK);
-        ticks += 1;
-    }
-    assert_eq!(view.shield_flash(npc), None, "shown the frame after");
-    view.tick(TICK);
-    assert_eq!(view.shield_flash(npc), Some(32.0));
-}
-
-#[test]
-fn a_destroyed_npcs_shield_flash_is_dropped() {
-    let mut catalog = armed(1, &[BLASTER]);
-    catalog.weapons[0].energy_dmg = 20;
-    catalog.weapons[0].mass_dmg = 20;
-    catalog.weapons[0].explod_type = -1;
-    let mut view = fighting(catalog, &placed(750, 650, 180));
-    tap(&mut view, Key::Tab);
-    let npc = ShipRef::Npc(view.session().expect("flying").npcs()[0].id);
-    view.input(&key(FIRE_KEY, true));
-    let mut flashed = false;
-    for _ in 0..20 {
-        view.tick(TICK);
-        if view.session().expect("flying").npcs().is_empty() {
-            break;
-        }
-        flashed |= view.shield_flash(npc) == Some(32.0);
-    }
-    assert!(
-        view.session().expect("flying").npcs().is_empty(),
-        "destroyed"
-    );
-    assert!(flashed, "hit before it was destroyed");
-    assert_eq!(view.shield_flash(npc), None);
-    view.tick(TICK);
-    assert_eq!(view.shield_flash(npc), None, "nor on the next tick");
-}
-
-#[test]
 fn landing_clears_the_effects() {
     let mut catalog = detonating();
     catalog.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
@@ -3035,80 +2779,6 @@ fn the_panel_is_laid_out_by_the_metrics_given() {
 }
 
 #[test]
-fn the_effects_roll_on_their_own_chance() {
-    let mut catalog = armed(1, &[BLASTER]);
-    catalog.weapons[0].mass_dmg = 1000;
-    catalog.weapons[0].flags = 0x0020;
-    catalog.weapons[0].explod_type = -1;
-    let (_, chance) = scripted(&placed(750, 650, 180));
-    let (effects, effects_chance) = scripted(&[]);
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still))
-        .with_effects_chance(effects_chance);
-    view.tick(TICK);
-    view.input(&key(FIRE_KEY, true));
-    ticks(&mut view, 10);
-    assert!(view.session().expect("flying").npcs().is_empty());
-    assert_eq!(
-        effects.borrow().asked,
-        [360, 101, 31].repeat(16),
-        "the debris, drawn on the effects' own chance"
-    );
-}
-
-/// A view firing the player's looped beam, of a 3-tick sound, each step,
-/// by `rules`.
-fn firing_a_looped_beam(rules: Rulebook) -> View {
-    let mut catalog = armed(0, &[UNDER]);
-    catalog.weapons[4].reload = 0;
-    catalog.weapons[4].count = 5;
-    catalog.looks[4].1 = Ok(WeaponLook {
-        flags: weapons::LOOPED_SOUND,
-        sound: Some(nova_sim::SoundId(220)),
-        sound_ticks: Some(3),
-        ..WeaponLook::default()
-    });
-    let mut view = fighting(catalog, &[]).with_rules(rules);
-    view.input(&key(FIRE_KEY, true));
-    view
-}
-
-#[test]
-fn by_default_a_looped_weapon_is_heard_every_shot_waiting_on_any_voice() {
-    let mut view = firing_a_looped_beam(Rulebook::default());
-    ticks(&mut view, 4);
-    assert_eq!(
-        view.session().expect("flying").beams().len(),
-        4,
-        "a beam fired each step"
-    );
-    let heard = combat_sounds(&mut view);
-    assert_eq!(heard.len(), 4, "the audio side decides: {heard:?}");
-    assert!(heard.iter().all(|sound| sound.until_stopped), "{heard:?}");
-}
-
-#[test]
-fn by_the_other_reading_a_looped_weapon_is_heard_again_once_its_sound_has_played_out() {
-    let rules = Rulebook::default().with_override(RuleKey::LoopedSoundWait, RuleSource::Bible);
-    let mut view = firing_a_looped_beam(rules);
-    ticks(&mut view, 4);
-    let heard = combat_sounds(&mut view);
-    assert_eq!(heard.len(), 2, "on the first and fourth");
-    assert!(heard.iter().all(|sound| !sound.until_stopped), "{heard:?}");
-    view.input(&key(FIRE_KEY, false));
-    ticks(&mut view, 1);
-    view.input(&key(FIRE_KEY, true));
-    ticks(&mut view, 1);
-    assert_eq!(combat_sounds(&mut view), [], "still playing");
-    view.input(&key(FIRE_KEY, false));
-    ticks(&mut view, 3);
-    view.input(&key(FIRE_KEY, true));
-    ticks(&mut view, 1);
-    assert_eq!(combat_sounds(&mut view).len(), 1, "played out");
-}
-
-#[test]
 fn the_metrics_debug_as_their_name() {
     let metrics = Metrics(Rc::new(crate::text::fixture::MonoMetrics));
     assert_eq!(format!("{metrics:?}"), "Metrics");
@@ -3368,9 +3038,9 @@ fn the_flight_convicts_by_the_law_it_is_given() {
 fn a_ship_the_player_shoves_is_drawn_moved_on_the_frame_of_the_hit() {
     // The push lands in the ship's velocity (`_DamageShip`
     // @0x3a9b8-0x3ab84) before `_HandleShip` moves it (@0x34274-0x342aa),
-    // and the frame drawn after the pass shows it moved: the view steps
-    // the advance pass in `_DoPlayGameWork`'s order, as a copy run through
-    // `Session::game_work` does, not as the separate parts do.
+    // and the frame drawn after the pass shows it moved
+    // (`nova_sim::Session::step` runs the advance pass in
+    // `_DoPlayGameWork`'s order).
     let mut catalog = armed(1, &[BLASTER]);
     for weapon in &mut catalog.weapons {
         weapon.energy_dmg = 5;
@@ -3382,27 +3052,10 @@ fn a_ship_the_player_shoves_is_drawn_moved_on_the_frame_of_the_hit() {
     let npc = |session: &Session| session.npcs()[0].clone();
     let shield = npc(view.session().expect("flying")).reserves.shield.now;
     for _ in 0..60 {
-        let session = view.session().expect("flying");
-        let mut in_order = session.clone();
-        in_order.hold_fire(true, false);
-        in_order.game_work(
-            Controls::default(),
-            view.catalog(),
-            &Still,
-            Rules::default(),
-            &mut NeverFires,
-        );
-        let mut by_parts = session.clone();
-        by_parts.hold_fire(true, false);
-        by_parts.tick(Controls::default());
-        by_parts.tick_traffic(view.catalog(), &Still, &mut NeverFires);
-        by_parts.tick_combat(Rules::default(), &mut NeverFires);
         let drawn_before = sprites(&drawn(&view));
         view.tick(TICK);
         let now = npc(view.session().expect("flying"));
         if now.reserves.shield.now < shield {
-            assert_eq!(now.state, npc(&in_order).state, "in the original's order");
-            assert_ne!(now.state.position, npc(&by_parts).state.position, "pushed");
             assert_ne!(sprites(&drawn(&view)), drawn_before, "drawn moved");
             return;
         }

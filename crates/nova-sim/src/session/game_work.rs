@@ -891,6 +891,43 @@ mod tests {
     }
 
     #[test]
+    fn a_shoved_npc_is_moved_on_the_advance_pass_of_the_hit_unlike_by_the_separate_parts() {
+        // Carried from the flight view's test of a shoved ship drawn moved
+        // on the frame of the hit: the advance pass steps in
+        // `_DoPlayGameWork`'s order, the separate parts in their own.
+        let catalog = FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                impact: 3000,
+                energy_dmg: 5,
+                ..blaster()
+            }],
+            ..armed()
+        };
+        let mut session = facing_an_npc(&catalog, 180);
+        session.space.traffic.npcs_mut()[0].hull.mass = 40.0;
+        let shield = session.npcs()[0].reserves.shield.now;
+        let behaviour = Recording::default();
+        for _ in 0..60 {
+            let mut by_parts = session.clone();
+            by_parts.hold_fire(true, false);
+            by_parts.tick(Controls::default());
+            by_parts.tick_traffic(&catalog, &behaviour, &mut NeverFires);
+            by_parts.tick_combat(Rules::default(), &mut NeverFires);
+            session.hold_fire(true, false);
+            pass(&mut session, &catalog, Controls::default(), &behaviour);
+            if session.npcs()[0].reserves.shield.now < shield {
+                assert_ne!(
+                    session.npcs()[0].state.position,
+                    by_parts.npcs()[0].state.position,
+                    "pushed"
+                );
+                return;
+            }
+        }
+        panic!("never hit");
+    }
+
+    #[test]
     fn the_damage_the_ai_reads_as_aimed_counts_no_shot_the_hit_pass_took() {
         // `_CalculateTargetedDamage` (@0x44223) runs after the collision
         // passes: the shot that hit, life -1 (@0x36f4f), counts for none.

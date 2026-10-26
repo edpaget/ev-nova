@@ -68,7 +68,7 @@ pub(super) fn surroundings(
 /// drawn about `anchor`, the player's ship at `ship.0` in a system of
 /// murk `ship.1` as loaded, the stars' look from `looks`
 /// ([`surroundings`]).
-fn surroundings_at(
+pub(super) fn surroundings_at(
     (ship, murk): (Vec2, i16),
     view: (f32, f32),
     anchor: Anchor,

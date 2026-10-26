@@ -188,88 +188,10 @@ fn a_step_scrolls_the_stars_by_the_ships_move_twice_over_in_double_time() {
     }
 }
 
-/// Draws in the middle of each range, as [`Counting`] does, but rolls 0
-/// every time: every star scattered onto the ship at frame 0 with a
-/// parallax factor of 0.
-struct Still;
-
-impl Chance for Still {
-    fn fires(&mut self, _percent: u8) -> bool {
-        false
-    }
-
-    fn below(&mut self, n: u32) -> u32 {
-        n / 2
-    }
-
-    fn roll(&mut self, _sides: u16) -> u16 {
-        0
-    }
-}
-
 /// Close enough for a sum of f32 moves: the test flies the ship a few
 /// units a pass.
 fn near(a: f32, b: f32) -> bool {
     (a - b).abs() < 1e-3
-}
-
-#[test]
-fn a_tick_scrolls_the_stars_by_the_first_passs_move_twice_over_in_double_time() {
-    for double in [false, true] {
-        let mut view = counted(starry()).with_double_time(double);
-        // Turned off the vertical, so the ship moves on both axes.
-        view.input(&key(Key::Left, true));
-        ticks(&mut view, 10);
-        view.input(&key(Key::Left, false));
-        view.input(&key(Key::Up, true));
-        // Up to speed, then coasting: each pass moves the ship as far.
-        ticks(&mut view, 40);
-        view.input(&key(Key::Up, false));
-        ticks(&mut view, 2);
-        let times = if double { 2.0 } else { 1.0 };
-        let mut scrolled = 0;
-        for _ in 0..3 {
-            let before = stars_of(&view);
-            let from = player(&view).position;
-            view.tick(TICK);
-            let to = player(&view).position;
-            // The first pass's move: half the tick's in double time, the
-            // ship coasting.
-            let (mx, my) = ((to.x - from.x) / times, (to.y - from.y) / times);
-            assert!(mx.abs() > 0.5 && my.abs() > 0.5, "{double}: {mx}, {my}");
-            for (star, was) in stars_of(&view).iter().zip(before) {
-                assert!(was.shown, "{was:?}");
-                if was.factor > 0.0 {
-                    scrolled += 1;
-                }
-                let (x, y) = (
-                    was.x + was.factor * mx * times,
-                    was.y + was.factor * my * times,
-                );
-                assert!(near(star.x, x), "{double}: {star:?} from {was:?}, {x}");
-                assert!(near(star.y, y), "{double}: {star:?} from {was:?}, {y}");
-            }
-        }
-        assert!(scrolled > 0, "{double}: some star has a factor");
-    }
-}
-
-#[test]
-fn a_star_of_factor_0_stays_fixed_in_world_units() {
-    for double in [false, true] {
-        let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Still));
-        let mut view = FlightView::new(starry())
-            .with_effects_chance(SharedChance::new(chance))
-            .with_double_time(double);
-        view.tick(Duration::ZERO);
-        let before = stars_of(&view);
-        assert!(before.iter().all(|star| star.shown && star.factor == 0.0));
-        let from = player(&view).position;
-        view.input(&key(Key::Up, true));
-        ticks(&mut view, 10);
-        assert_ne!(player(&view).position, from, "{double}: the ship moves");
-        assert_eq!(stars_of(&view), before, "{double}");
-    }
 }
 
 #[test]

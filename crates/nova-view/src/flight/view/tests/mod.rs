@@ -88,11 +88,11 @@ mod outputs;
 mod pilot;
 mod port_resets;
 mod port_screen_map;
-mod self_destruct;
 mod ship_drawing;
 mod shots;
 mod stars;
 mod stellars;
+mod stepping;
 mod widescreen;
 mod world_layers;
 

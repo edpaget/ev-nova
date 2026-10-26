@@ -1209,14 +1209,31 @@ fn a_tap_of_h_shows_it_before_the_next_frame() {
 
 #[test]
 fn in_double_time_the_fade_keeps_its_ticks() {
-    let mut view = flight().with_double_time(true);
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    view.tick(mac_ticks(118));
-    assert_eq!(floating_alpha(&view), Some(255));
-    view.tick(mac_ticks(1));
-    assert_eq!(floating_alpha(&view), Some(247));
-    view.tick(mac_ticks(31));
-    assert_eq!(floating_alpha(&view), None);
+    // Each frame's floating map, then its step of two passes.
+    let frame = |view: &mut Faked, dt| {
+        floating_frame_of(view, dt);
+        let passes = vec![nova_sim::flight_frame::PassReport::default(); 2];
+        view.sim.queue_report(nova_sim::flight_frame::StepReport {
+            steps: vec![nova_sim::flight_frame::StepRun {
+                passes,
+                ..nova_sim::flight_frame::StepRun::default()
+            }],
+            stopped: false,
+        });
+        view.step_frame(
+            1,
+            crate::system::camera::Anchor::in_flight(RuleSource::Engine),
+        );
+    };
+    let mut view = floating_in(in_sol());
+    view.double_time = true;
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    frame(&mut view, mac_ticks(118));
+    assert_eq!(alpha_of(&view), Some(255));
+    frame(&mut view, mac_ticks(1));
+    assert_eq!(alpha_of(&view), Some(247));
+    frame(&mut view, mac_ticks(31));
+    assert_eq!(alpha_of(&view), None);
 }
 
 /// A flight in Sol with a jump under way, Alpha Centauri (131)

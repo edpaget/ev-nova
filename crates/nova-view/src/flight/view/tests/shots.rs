@@ -197,39 +197,6 @@ fn a_shot_far_from_the_player_in_a_murky_system_is_darkened() {
     assert_eq!(draws[0], Some((Color::WHITE, false)), "beside the player");
 }
 
-#[test]
-fn a_flying_shot_leaves_a_trail_of_particles_at_its_tail() {
-    let catalog = with_blaster(|look| {
-        look.particles = 3;
-        look.part_vel = 100;
-        look.part_life = (20, 20);
-        look.part_color = 0x0010_40FF;
-    });
-    let (effects, effects_chance) = scripted(&[]);
-    let mut view = fighting(catalog, &[]).with_effects_chance(effects_chance);
-    view.input(&key(FIRE_KEY, true));
-    view.tick(TICK);
-    view.input(&key(FIRE_KEY, false));
-    assert_eq!(view.effects().particles().len(), 3, "a burst of 3");
-    let asked = effects.borrow().asked.clone();
-    assert_eq!(
-        &asked[..10],
-        [81, 81, 81, 81, 81, 81, 81, 81, 8, 8],
-        "the table, then the picks"
-    );
-    view.tick(TICK);
-    assert_eq!(view.effects().particles().len(), 6, "a burst a tick");
-    let session = view.session().expect("flying");
-    let shot = session.shots()[0];
-    let newest = view.effects().particles()[5];
-    // The blaster's sheet is no pixels wide here: the trail leaves from
-    // the shot's whole pixel, where it moved this tick, and flies from
-    // the next.
-    let start = crate::flight::trails::trail_start(shot.position, shot.heading, 0);
-    assert_eq!(newest.at, Point::new(start.x, start.y));
-    assert_eq!(newest.life, 20);
-}
-
 /// The puffs drawn from smoke set 1's `cicn`s.
 fn set_1_puffs(view: &View) -> usize {
     sprites(&drawn(view))
@@ -283,22 +250,6 @@ fn a_smoking_shot_leaves_a_puff_only_on_a_smoke_frame_and_trails_every_tick() {
         "a puff on each smoke frame and on no other: {seen:?}"
     );
     assert_eq!(set_1_puffs(&view), 2, "drawn from set 1's cicns");
-}
-
-#[test]
-fn with_smoke_trails_off_a_shot_sprays_no_trail_and_leaves_no_smoke() {
-    let mut view = fighting(smoking_trailing_blaster(), &[]).with_smoke_trails(false);
-    assert!(!view.smoke_trails());
-    view.input(&key(FIRE_KEY, true));
-    for tick in 0..4 {
-        view.tick(TICK);
-        if tick == 0 {
-            view.input(&key(FIRE_KEY, false));
-        }
-        assert_eq!(view.session().expect("flying").shots().len(), 1);
-        assert_eq!(view.effects().particles().len(), 0, "tick {tick}");
-        assert_eq!(view.shot_looks.smoke().puffs(), [], "tick {tick}");
-    }
 }
 
 #[test]
