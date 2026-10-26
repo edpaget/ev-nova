@@ -1031,6 +1031,51 @@ fn flight() -> View {
     FlightView::new(catalog())
 }
 
+/// `session`'s ships, shots and beams, its smoke frame, murk, player and
+/// double time as a pass's report holds them
+/// (`nova_sim::Session::step`), with no fight events or quotes: for a
+/// test of a step of the view's own that reads a pass.
+fn pass_of(session: &Session) -> nova_sim::flight_frame::PassReport {
+    use nova_sim::flight_frame::{FrameShip, FrameShot, PassReport};
+    let mut ships = vec![FrameShip {
+        ship: ShipRef::Player,
+        class: session.ship(),
+        position: session.player().position,
+        condition: session.player_condition(),
+        breakup: session.hull().breakup,
+        shield: session.reserves().shield,
+        class_shield: session.class_shield(session.ship()),
+    }];
+    ships.extend(session.npcs().iter().map(|npc| FrameShip {
+        ship: ShipRef::Npc(npc.id),
+        class: npc.ship,
+        position: npc.state.position,
+        condition: npc.condition,
+        breakup: npc.hull.breakup,
+        shield: npc.reserves.shield,
+        class_shield: session.class_shield(npc.ship),
+    }));
+    PassReport {
+        ships,
+        shots: session
+            .shots()
+            .iter()
+            .map(|shot| FrameShot {
+                id: shot.id,
+                weapon: shot.weapon.id,
+                position: shot.position,
+                heading: shot.heading,
+            })
+            .collect(),
+        beam_weapons: session.beams().iter().map(|beam| beam.weapon.id).collect(),
+        smoke_frame: session.smoke_frame(),
+        system_murk: session.system_murk(),
+        player_position: session.player().position,
+        double_time: session.double_time(),
+        ..PassReport::default()
+    }
+}
+
 #[test]
 fn a_shared_catalog_shows_in_its_flights_debug() {
     let mut flight: SessionFlight<()> = SessionFlight::new(Err("no chär".to_owned()));

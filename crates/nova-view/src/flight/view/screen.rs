@@ -166,11 +166,12 @@ impl<
         ScreenAction::None
     }
 
-    /// First settles the asteroid field of a session started or loaded in
-    /// flight ([`Session::settle_asteroid_field`]), so the first frame
-    /// drawn shows it, and catches the screen up with what the session
-    /// has told since (see the module docs), map open or not. Then runs the simulation's
-    /// steps for `dt` with the keys held ([`FlightView::run_steps`]), and
+    /// First catches the screen up with what the session has told since
+    /// (see the module docs), map open or not. Then runs the simulation's
+    /// steps for `dt` with the keys held ([`FlightView::run_steps`]),
+    /// whose first act, steps or none, settles the asteroid field of a
+    /// session started or loaded in flight, so the first frame drawn shows
+    /// it (see `nova_sim::Session::step`), and
     /// advances the stellars' animations, each hypergate drawing the frame
     /// the session stepped it to ([`show_gate_frames`](super::show_gate_frames)). While the map is
     /// open nothing moves. The session flies on through the whole jump, its
@@ -185,18 +186,14 @@ impl<
     /// the top of the next tick ([`FlightView::settle_given_up_jump`]). The
     /// escort menu times out on every step the map is shut.
     ///
-    /// Each step runs the session's tick, the traffic's (the assistance's
-    /// within it) and the fight's, then has the NPCs answer the fight's hits
-    /// ([`Session::answer_strikes`]) and the persons say their quotes, so
-    /// a ship hit in its gate is drawn on the frame of the hit.
+    /// Each step runs the session's advance pass, then has the NPCs answer
+    /// the fight's hits and the persons say their quotes, so a ship hit in
+    /// its gate is drawn on the frame of the hit.
     ///
     /// Then, unless the map is open, the HUD's timer moves on, refreshing
     /// the radar when it is due ([`FlightView::advance_hud`]), still
     /// before the frame is drawn.
     fn tick(&mut self, dt: Duration) {
-        if let Ok(session) = &mut self.sim.session {
-            session.settle_asteroid_field(&mut self.sim.chance);
-        }
         self.catch_up();
         if let Some(effect) = &mut self.fade_in {
             effect.advance(dt);
@@ -218,9 +215,7 @@ impl<
         self.held_keys_frame();
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
-        self.run_steps(steps, |session| {
-            !session.warp_end_due() && !session.hold_expired()
-        });
+        self.run_steps(steps);
         self.update_escort_menu();
         self.alpha = alpha;
         self.step_cursor(steps);

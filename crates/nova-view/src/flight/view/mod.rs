@@ -629,6 +629,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::flight_frame::{FrameShip, StepReport};
 use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::gate_entry::enter_level;
@@ -682,6 +683,7 @@ mod shots;
 mod slot_block;
 mod sprites;
 mod stars;
+mod stepping;
 mod travel;
 mod world;
 
@@ -1084,6 +1086,12 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// What was drained from the flight and not yet taken, by kind (see
     /// the `inbox` module).
     inbox: inbox::Inbox,
+    /// What the flight's steps reported on the last frame, kept to fill
+    /// again ([`FlightSim::step`]).
+    step_report: StepReport,
+    /// The rules the steps' effects and stars are shown by, held from the
+    /// flight's rulebook ([`stepping::Presentation`]).
+    presentation: stepping::Presentation,
     /// The session's system, laid out; `None` when the session failed.
     scene: Option<SystemScene>,
     /// The player ship's sheet, or why it cannot be shown.
@@ -1575,16 +1583,16 @@ fn point(v: Vec2) -> Point {
     Point::new(v.x, v.y)
 }
 
-/// Shows the fight's events `session` raised this pass in `scene`: each on
+/// Shows the fight's events a pass raised, `combat`, in `scene`: each on
 /// `effects`, as `looks` says, drawing on `chance`, and each hit on its
-/// ship's flash among `flashes`, which then step a frame
-/// ([`step_flashes`]). An NPC's shot hits land before its
+/// ship's flash among `flashes`, which then step a frame by the pass's
+/// `ships` ([`step_flashes`]). An NPC's shot hits land before its
 /// `_HandleShipDisplay`, so they show this frame; a hit the original lands
 /// after its ship's display ([`CombatEvent::Hit`]'s `late`) is shown on the
 /// next. Gives the weapon glows the fight lit, each ship's and whether it
 /// is late ([`CombatEvent::WeaponGlow`]), for [`WeaponGlows::step`].
 fn show_combat(
-    session: &mut Session,
+    (combat, ships): (&[CombatEvent], &[FrameShip]),
     scene: &Scene,
     (effects, flashes): (&mut Effects, &mut BTreeMap<ShipRef, ShieldFlash>),
     (looks, sheets): (&Looks, Sheets<'_>),
@@ -1592,8 +1600,8 @@ fn show_combat(
 ) -> Vec<(ShipRef, bool)> {
     let mut late = Vec::new();
     let mut glows = Vec::new();
-    for event in session.take_combat_events() {
-        if let CombatEvent::WeaponGlow { ship, late } = event {
+    for event in combat {
+        if let CombatEvent::WeaponGlow { ship, late } = *event {
             glows.push((ship, late));
         }
         if let CombatEvent::Hit {
@@ -1601,7 +1609,7 @@ fn show_combat(
             passes_shields,
             late: shown_late,
             ..
-        } = event
+        } = *event
         {
             if shown_late {
                 late.push((ship, passes_shields));
@@ -1609,30 +1617,30 @@ fn show_combat(
                 flashes.entry(ship).or_default().hit(passes_shields);
             }
         }
-        effects.apply(&event, scene, looks, chance);
+        effects.apply(event, scene, looks, chance);
     }
-    step_flashes(flashes, session, sheets);
+    step_flashes(flashes, ships, sheets);
     for (ship, passes_shields) in late {
         flashes.entry(ship).or_default().hit(passes_shields);
     }
     glows
 }
 
-/// How fast `ship`'s weapon glow falls a frame in `session`, out of 32
-/// ([`ShipSheet::weapon_decay`]): its class's, from `player`'s sheet or
-/// the NPCs' `sheets`, none for a sheet not read; `None` for a ship no
-/// longer in the system.
+/// How fast `ship`'s weapon glow falls a frame, out of 32
+/// ([`ShipSheet::weapon_decay`]): its class's, from `player`'s sheet or,
+/// for an NPC among a pass's `ships`, the NPCs' `sheets`, none for a sheet
+/// not read; `None` for an NPC no longer in the system.
 fn glow_decay(
-    session: &Session,
+    ships: &[FrameShip],
     player: &Result<ShipSheet, String>,
     sheets: &BTreeMap<ShipId, Result<ShipSheet, String>>,
     ship: ShipRef,
 ) -> Option<f32> {
     let sheet = match ship {
         ShipRef::Player => player.as_ref().ok(),
-        ShipRef::Npc(id) => {
-            let npc = session.npcs().iter().find(|npc| npc.id == id)?;
-            sheets.get(&npc.ship).and_then(|sheet| sheet.as_ref().ok())
+        ShipRef::Npc(_) => {
+            let npc = ships.iter().find(|shown| shown.ship == ship)?;
+            sheets.get(&npc.class).and_then(|sheet| sheet.as_ref().ok())
         }
     };
     Some(sheet.map_or(0.0, ShipSheet::weapon_decay))
@@ -1646,41 +1654,37 @@ type Sheets<'a> = (
 );
 
 /// Steps each ship's shield flash among `flashes` a frame by its shield
-/// in `session` ([`ShieldFlash::step`]), whether its class's sheet among
-/// `sheets` has a shield layer, and its class's own loaded `Shield`
-/// (class +0x5c @0x2c8aa, [`Session::class_shield`]), dropping the
-/// flashes of ships no longer in the system and those run out.
+/// among a pass's `ships` ([`ShieldFlash::step`]), whether its class's
+/// sheet among `sheets` has a shield layer, and its class's own loaded
+/// `Shield` (class +0x5c @0x2c8aa, [`FrameShip::class_shield`]), dropping
+/// the flashes of ships no longer in the system and those run out.
 fn step_flashes(
     flashes: &mut BTreeMap<ShipRef, ShieldFlash>,
-    session: &Session,
+    ships: &[FrameShip],
     (player, sheets): Sheets<'_>,
 ) {
-    let of = |ship: ShipRef| match ship {
-        ShipRef::Player => Some((
-            session.reserves().shield,
-            session.ship(),
-            player.as_ref().ok(),
-        )),
-        ShipRef::Npc(id) => session.npcs().iter().find(|npc| npc.id == id).map(|npc| {
-            let sheet = sheets.get(&npc.ship).and_then(|sheet| sheet.as_ref().ok());
-            (npc.reserves.shield, npc.ship, sheet)
-        }),
-    };
     flashes.retain(|&ship, flash| {
-        let Some((gauge, class, sheet)) = of(ship) else {
+        let Some(shown) = ships.iter().find(|shown| shown.ship == ship) else {
             return false;
         };
+        let sheet = match ship {
+            ShipRef::Player => player.as_ref().ok(),
+            ShipRef::Npc(_) => sheets
+                .get(&shown.class)
+                .and_then(|sheet| sheet.as_ref().ok()),
+        };
         let has_layer = sheet.is_some_and(|sheet| sheet.shield.is_some());
-        let base = session.class_shield(class).unwrap_or(gauge.max);
-        flash.step(gauge.now, base, has_layer);
+        let base = shown.class_shield.unwrap_or(shown.shield.max);
+        flash.step(shown.shield.now, base, has_layer);
         flash.shown() > 0.0
     });
 }
 
-/// The ships in `session` breaking up, each with its sprite's width from
-/// `player`'s sheet or the NPCs' `sheets` (a placeholder's without one).
+/// The ships among a pass's `ships` breaking up, each with its sprite's
+/// width from `player`'s sheet or the NPCs' `sheets` (a placeholder's
+/// without one).
 fn dying(
-    session: &Session,
+    ships: &[FrameShip],
     player: &Result<ShipSheet, String>,
     sheets: &BTreeMap<ShipId, Result<ShipSheet, String>>,
 ) -> Vec<Dying> {
@@ -1688,34 +1692,25 @@ fn dying(
         Some(Ok(sheet)) => sheet.frame_width as f32,
         _ => PLACEHOLDER_SIZE,
     };
-    let breaking = |condition, at: Vec2, sprite_width, explosion| match condition {
-        Condition::Dying {
-            ticks_left,
-            starting,
-        } => Some(Dying {
-            at: point(at),
-            sprite_width,
-            explosion,
-            ticks_left,
-            starting,
-        }),
-        _ => None,
-    };
-    let me = breaking(
-        session.player_condition(),
-        session.player().position,
-        width(Some(player)),
-        session.hull().breakup,
-    );
-    let npcs = session.npcs().iter().filter_map(|npc| {
-        breaking(
-            npc.condition,
-            npc.state.position,
-            width(sheets.get(&npc.ship)),
-            npc.hull.breakup,
-        )
-    });
-    me.into_iter().chain(npcs).collect()
+    ships
+        .iter()
+        .filter_map(|ship| match ship.condition {
+            Condition::Dying {
+                ticks_left,
+                starting,
+            } => Some(Dying {
+                at: point(ship.position),
+                sprite_width: width(match ship.ship {
+                    ShipRef::Player => Some(player),
+                    ShipRef::Npc(_) => sheets.get(&ship.class),
+                }),
+                explosion: ship.breakup,
+                ticks_left,
+                starting,
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Each of `shown` the radar shows, where it is drawn, whether it is the

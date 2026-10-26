@@ -22,10 +22,9 @@
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::{
     CommNote, FighterNote, Granted, InterfaceLoad, MissionBoardLine, MissionShown, NavMode,
-    PayNote, PersonQuote, Session, SessionEvent, SimDiagnostic, SimMessage, SimSound, TextBar,
+    PayNote, PersonQuote, SessionEvent, SimDiagnostic, SimMessage, SimSound, TextBar,
 };
 
-use crate::flight::sim_adapter::drain_session;
 use crate::flight::sim_port::FlightSim;
 
 /// What the view drained from its flight and has not taken yet (see the
@@ -73,15 +72,6 @@ impl Inbox {
     pub(super) fn drain(&mut self, sim: &mut impl FlightSim) {
         let mut events = Vec::new();
         sim.drain(&mut events);
-        self.receive(events);
-    }
-
-    /// Drains `session` into the inbox, as its adapter's
-    /// [`FlightSim::drain`] does: for a concrete block that holds the
-    /// session through the adapter's fields across its drain point.
-    pub(super) fn drain_session(&mut self, session: &mut Session) {
-        let mut events = Vec::new();
-        drain_session(session, &mut events);
         self.receive(events);
     }
 

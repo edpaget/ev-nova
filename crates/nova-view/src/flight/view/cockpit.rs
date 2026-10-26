@@ -5,8 +5,8 @@
 use nova_sim::Drawn as ShipDrawn;
 use nova_sim::PlayerCommand;
 use nova_sim::{
-    ClassRow, Condition, Controls, EscortCommand, Face, NavMode, Npc, Reserves, Session, ShipRef,
-    ShipState, StellarPick, SystemId, TargetPick, Turn, Vec2, glow_level,
+    ClassRow, Condition, EscortCommand, NavMode, Npc, Reserves, Session, ShipRef, ShipState,
+    StellarPick, SystemId, TargetPick, Vec2, glow_level,
 };
 
 use crate::draw::crossed_box;
@@ -47,13 +47,13 @@ use nova_sim::flight_frame::FlightCommand;
 
 use super::slot_block;
 use super::{
-    AFTERBURNER_KEY, BOARD_KEY, DESELECT_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY,
-    ESCORT_DEFEND_KEY, ESCORT_HOLD_KEY, ESCORT_RECALL_KEY, ESCORT_TICKS, FACE_TARGET_KEY,
-    FLIGHT_KEYS, FlightView, HAIL_KEY, HELP, HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY,
-    JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY,
-    NEAREST_KEY, NEAREST_STELLAR_COMMAND_KEY, NEAREST_STELLAR_KEY, OVERLAY_SIZE, SELECT_KEY,
-    SELF_DESTRUCT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY,
-    ZOOM_OUT_KEY, drawn_size, npc_tint, shown_heading, shown_position, window_width,
+    BOARD_KEY, DESELECT_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY,
+    ESCORT_HOLD_KEY, ESCORT_RECALL_KEY, ESCORT_TICKS, FLIGHT_KEYS, FlightView, HAIL_KEY, HELP,
+    HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
+    MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_COMMAND_KEY,
+    NEAREST_STELLAR_KEY, OVERLAY_SIZE, SELECT_KEY, SELF_DESTRUCT_KEY, STELLAR_SLOT_KEYS,
+    TARGET_KEY, ViewShips, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, drawn_size, npc_tint,
+    shown_heading, shown_position, window_width,
 };
 
 impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
@@ -452,28 +452,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             .session
             .as_ref()
             .map_or(self.previous, |session| *session.player())
-    }
-
-    /// The controls for the keys held.
-    pub(super) fn controls(&self) -> Controls {
-        let holding = |key| self.held.contains(&key);
-        let turn = match (holding(Key::Left), holding(Key::Right)) {
-            (true, false) => Turn::Left,
-            (false, true) => Turn::Right,
-            _ => Turn::None,
-        };
-        let face = match (holding(FACE_TARGET_KEY), holding(Key::Alt)) {
-            (false, _) => Face::Off,
-            (true, false) => Face::Target,
-            (true, true) => Face::Stellar,
-        };
-        Controls {
-            thrust: holding(Key::Up),
-            turn,
-            reverse: holding(Key::Down),
-            face,
-            afterburner: holding(AFTERBURNER_KEY),
-        }
     }
 
     /// The [`PlayerCommand`] a press of `key` sends, as [`Screen::input`](crate::Screen::input)

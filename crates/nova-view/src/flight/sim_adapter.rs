@@ -178,13 +178,6 @@ impl<C> SessionFlight<C> {
     }
 }
 
-/// [`FlightSim::drain`] over a session borrowed apart from its adapter:
-/// for the view's concrete blocks that hold the session through the
-/// adapter's fields across a drain point (see the module docs).
-pub(in crate::flight) fn drain_session(session: &mut Session, into: &mut Vec<FlightEvent>) {
-    session.drain_events(into);
-}
-
 impl<C> From<Session> for SessionFlight<C> {
     /// The flight of `session`, with Nova's collaborators
     /// ([`SessionFlight::new`]).
@@ -231,11 +224,11 @@ impl<C> FlightSim for SessionFlight<C> {
         }
     }
 
-    /// Forwards to `Session::drain_events` ([`drain_session`]); a failed
-    /// session drains nothing.
+    /// Forwards to `Session::drain_events`; a failed session drains
+    /// nothing.
     fn drain(&mut self, into: &mut Vec<FlightEvent>) {
         if let Ok(session) = &mut self.session {
-            drain_session(session, into);
+            session.drain_events(into);
         }
     }
 

@@ -240,6 +240,11 @@ impl<
                 "no cïcn {ALERT_CICN}: the Red Alert icon is not drawn"
             )));
         }
+        let presentation = super::stepping::Presentation::of(
+            session
+                .as_ref()
+                .map_or(&nova_sim::Rulebook::default(), Session::rules),
+        );
         // One handle, the view's and the flight's: the flight's answers
         // that read the catalog read the one the view draws from.
         let catalog = Rc::new(catalog);
@@ -259,6 +264,7 @@ impl<
                 unread_looks,
                 escort_colors,
                 alert_width,
+                presentation,
             },
         )
     }
@@ -271,12 +277,15 @@ impl<
     /// [`RuleKey::NebulaPicture`](nova_sim::RuleKey::NebulaPicture), and
     /// its borders their pace and Find's pass by
     /// [`RuleKey::MapBorderPace`](nova_sim::RuleKey::MapBorderPace) and
-    /// [`RuleKey::MapFindBorders`](nova_sim::RuleKey::MapFindBorders).
+    /// [`RuleKey::MapFindBorders`](nova_sim::RuleKey::MapFindBorders); the
+    /// steps' effects and stars are shown by them too
+    /// ([`Presentation`](super::stepping::Presentation)).
     #[must_use]
     pub fn with_rules(mut self, rules: Rulebook) -> Self {
         let pick = rules.source_for(nova_sim::RuleKey::NebulaPicture);
         let pace = rules.source_for(nova_sim::RuleKey::MapBorderPace);
         let find = rules.source_for(nova_sim::RuleKey::MapFindBorders);
+        self.presentation = super::stepping::Presentation::of(&rules);
         self.sim.session = self.sim.session.map(|session| session.with_rules(rules));
         self.map.set_nebula_pick(pick);
         self.map.set_border_rules(pace, find);
@@ -1004,6 +1013,7 @@ struct Opening {
     unread_looks: Vec<Diagnostic>,
     escort_colors: crate::flight::escorts::EscortMenuColors,
     alert_width: Option<u32>,
+    presentation: super::stepping::Presentation,
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -1090,6 +1100,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             bar_steps: VecDeque::new(),
             bars_staged: 0,
             inbox: super::inbox::Inbox::default(),
+            step_report: nova_sim::flight_frame::StepReport::default(),
+            presentation: opening.presentation,
             radar_static: None,
             cursor: HoverCursor::default(),
         }
@@ -1133,6 +1145,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 unread_looks: Vec::new(),
                 escort_colors,
                 alert_width: None,
+                presentation: super::stepping::Presentation::of(rules),
             },
         )
     }

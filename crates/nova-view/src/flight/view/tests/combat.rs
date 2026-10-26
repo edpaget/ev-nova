@@ -1769,7 +1769,7 @@ fn a_first_tick_eject_rolls_no_puff_for_the_player() {
     let mut view = ejecting_view(ejecting_in(100, &[188, 187]), &[]);
     assert_eq!(until_ejected(&mut view), (true, false));
     let session = view.session().expect("flying");
-    let breaking = super::super::dying(session, &view.sheet, &view.npc_sheets);
+    let breaking = super::super::dying(&pass_of(session).ships, &view.sheet, &view.npc_sheets);
     assert_eq!(breaking.len(), 1, "the hulk alone");
     assert_eq!((breaking[0].ticks_left, breaking[0].starting), (100, true));
 }

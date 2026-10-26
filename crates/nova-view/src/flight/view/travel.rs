@@ -9,8 +9,8 @@ use nova_sim::gate::next_gate_pick;
 use nova_sim::{
     Assigned, Assignment, AsteroidCatalog, CombatCatalog, CommCatalog, Condition, Departure,
     GateKind, GateRefusal, LandOutcome, LandPress, LandingRefusal, OutfitOrder, OutfitRefusal,
-    OutfitRun, PilotCatalog, RuleKey, RuleSource, Rules, Session, Settled, ShipId, ShipPurchase,
-    ShipRefusal, SimMessage, StellarId, SystemId, TrafficCatalog,
+    OutfitRun, PilotCatalog, Session, Settled, ShipId, ShipPurchase, ShipRefusal, SimMessage,
+    StellarId, SystemId, TrafficCatalog,
 };
 use nova_sim::{PlayerCommand, PlayerFate};
 
@@ -19,7 +19,6 @@ use nova_sim::flight_frame::{Answer, FlightCommand, MapClick};
 use crate::devtools::SessionDesk;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
-use crate::flight::effects::{LoopedSounds, Scene};
 use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::jump::JumpEffect;
 use crate::flight::sim_port::FlightSim;
@@ -31,30 +30,12 @@ use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 use super::dialog_map::{MapOpened, MapOpening};
 use super::stars;
 use super::{
-    BOARD_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView,
-    GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, LAND_KEY, MAP_KEY, NOTHING_OUT_HERE,
-    NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY, SELF_DESTRUCT_KEY, Said, TOO_CLOSE,
-    TRACTORED, Then, arrival_lead, arrival_message_with, assigned_message, assigned_ticks, dying,
-    gate_refusal_message, glow_decay, jump_refusal_message, jump_refusal_ticks,
-    landing_refusal_ticks, message_text, no_outfitter, play_area, point, refusal_message,
-    show_combat, show_destroyed, show_gate_frames, shown_scene, stellar_name, window_width,
+    BOARD_KEY, FAR_ENOUGH, FlightView, GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, MAP_KEY,
+    NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, Said, TOO_CLOSE, TRACTORED, Then,
+    arrival_lead, arrival_message_with, assigned_message, assigned_ticks, gate_refusal_message,
+    jump_refusal_message, jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter,
+    refusal_message, show_destroyed, show_gate_frames, shown_scene, stellar_name,
 };
-
-/// What [`FlightView::held_triggers`] holds for the steps.
-// Each is its own key or chord, held on its own.
-#[allow(clippy::struct_excessive_bools)]
-struct HeldTriggers {
-    /// The primary and secondary fire keys.
-    fire: (bool, bool),
-    /// The eject chord.
-    eject: bool,
-    /// The self-destruct chord.
-    self_destruct: bool,
-    /// The cloak key.
-    cloak: bool,
-    /// The weapon safety key.
-    safety: bool,
-}
 
 impl<
     C: PilotCatalog
@@ -247,158 +228,28 @@ impl<
         }
     }
 
-    /// The triggers held as the steps run: the primary and secondary
-    /// fire keys, the eject chord, the self-destruct chord, the cloak key
-    /// and the weapon safety key, each chord, the cloak and the safety
-    /// only while the player's fate takes its command. The cloak key needs no Command (`_QuickKeyCheck`
-    /// @0x705b7).
-    fn held_triggers(&self) -> HeldTriggers {
-        let fire = (
-            self.held.contains(&FIRE_KEY),
-            self.held.contains(&SECONDARY_KEY),
-        );
-        let chord = |command, key| {
-            self.takes(command) && self.held.contains(&Key::Command) && self.held.contains(&key)
-        };
-        HeldTriggers {
-            fire,
-            eject: chord(PlayerCommand::Eject, EJECT_KEY),
-            self_destruct: chord(PlayerCommand::SelfDestruct, SELF_DESTRUCT_KEY),
-            cloak: self.takes(PlayerCommand::Cloak) && self.held.contains(&CLOAK_KEY),
-            safety: self.takes(PlayerCommand::DeselectWeapon) && self.held.contains(&DESELECT_KEY),
+    /// Runs up to `steps` of the flight's steps for the frame, under the
+    /// keys held ([`FlightView::step_frame`]): each stopped before it
+    /// once the warp has ended or the hold run out, each the advance pass
+    /// in the original's order, the answers to what its close struck and
+    /// the quotes, then in double time the second pass with the same
+    /// (`nova_sim::Session::step`), the view's effects stepped after each
+    /// pass and the comm notes and quotes said. Then each hypergate draws
+    /// the frame the steps left it on, and a pass whose ship tick brought
+    /// the escape pod's rescue, which ends the stepping there, has the
+    /// view laid out afresh where the rescue put the ship. Then the
+    /// messages the steps raised are said, and the sheets of a system the
+    /// session populated afresh are read. Flight and the jump's warp both
+    /// step this way.
+    ///
+    /// The comm notes and quotes are said before the gates' frames are
+    /// shown, where the view once showed the frames first: the two touch
+    /// nothing in common, and both are set before the frame is drawn.
+    pub(super) fn run_steps(&mut self, steps: u32) {
+        let rescued = self.step_frame(steps, self.anchor());
+        if let (Ok(session), Some(scene)) = (&self.sim.session, &mut self.scene) {
+            show_gate_frames(scene, session);
         }
-    }
-
-    /// Runs up to `steps` of the session's steps, each only while
-    /// `go_on` holds of the session before it: the advance pass under the
-    /// keys held, in the original's order ([`Session::game_work`]: the
-    /// player, the fight's collision passes, the traffic's AI, the shots,
-    /// the traffic's motion, the NPCs' fire, the beams), the answers to
-    /// what its close struck and the quotes, then the effects; in double
-    /// time, the second pass ([`Session::tick_again`]) with the same, and
-    /// the effects again. Then says the comm
-    /// notes, quotes and messages they raised, and reads the sheets of a
-    /// system the session populated afresh. Flight and the jump's warp
-    /// both step this way. The eject and self-destruct chords, the land key
-    /// and double time are held as the keys say, and a pass whose ship
-    /// tick brings the escape pod's rescue ends the stepping there, the
-    /// view laid out afresh where the rescue put the ship.
-    #[allow(clippy::too_many_lines)] // each pass's steps, in the original's order
-    pub(super) fn run_steps(&mut self, steps: u32, go_on: fn(&Session) -> bool) {
-        let controls = self.controls();
-        let HeldTriggers {
-            fire,
-            eject,
-            self_destruct,
-            cloak,
-            safety,
-        } = self.held_triggers();
-        let mut notes = Vec::new();
-        let mut quotes = Vec::new();
-        let mut rescued = false;
-        let anchor = self.anchor();
-        if let Ok(session) = &mut self.sim.session {
-            session.set_play_area(play_area(self.view, anchor));
-            session.set_window_width(window_width(self.view));
-            session.hold_fire(fire.0, fire.1);
-            session.hold_eject(eject);
-            session.hold_self_destruct(self_destruct);
-            session.hold_cloak(cloak);
-            session.hold_weapon_safety(safety);
-            session.set_double_time_key(self.double_time);
-            session.set_hyperspace_effects(self.hyperspace_effects);
-            session.set_land_key(self.held.contains(&LAND_KEY));
-            'steps: for _ in 0..steps {
-                if !go_on(session) {
-                    break;
-                }
-                self.previous = *session.player();
-                self.npc_previous = session
-                    .npcs()
-                    .iter()
-                    .map(|npc| (npc.id, npc.state))
-                    .collect();
-                let rules = Rules {
-                    disable: &*self.sim.disable_rule,
-                    defence: &*self.sim.defence_rule,
-                    law: &*self.sim.law,
-                };
-                for again in [false, true] {
-                    if again && !session.double_time() {
-                        break;
-                    }
-                    // The rescue settles on the pass the pod's countdown
-                    // runs out, and stops the stepping so its dësc opens
-                    // before the next: the original's `_HandlePlayer` runs
-                    // it in place of the rest of that pass's player
-                    // handling (@0x68ddd).
-                    let rescued_now = if again {
-                        session.tick_again(
-                            controls,
-                            &*self.sim.behaviour,
-                            rules,
-                            &mut self.sim.chance,
-                        );
-                        session.rescue_if_due(&*self.catalog, &mut self.sim.chance)
-                    } else {
-                        let behaviour = &*self.sim.behaviour;
-                        let rescued_now = session.game_work(
-                            controls,
-                            &*self.catalog,
-                            behaviour,
-                            rules,
-                            &mut self.sim.chance,
-                        );
-                        self.inbox.drain_session(session);
-                        notes.extend(self.inbox.take_comm());
-                        rescued_now
-                    };
-                    if rescued_now {
-                        self.previous = *session.player();
-                        rescued = true;
-                        break 'steps;
-                    }
-                    // The pass answers its collision passes' and shots'
-                    // hits as they land, as `_HandleShot` does (@0x44385);
-                    // what its close struck (the beams, the shockwaves)
-                    // is answered here, before the frame is drawn. Each
-                    // pass then says the attack quotes its answers raise
-                    // (`_ShowPersonHailQuote` @0x89ce1) and runs
-                    // `_HandleShip`'s quote roll (@0x33f0f-0x33fba), the
-                    // quote clock moving on the advance pass alone.
-                    session.answer_strikes(&*self.sim.behaviour);
-                    if again {
-                        session.tick_quotes_again(&*self.catalog, &mut self.sim.chance);
-                    } else {
-                        session.tick_quotes(&*self.catalog, &mut self.sim.chance);
-                    }
-                    self.inbox.drain_session(session);
-                    quotes.extend(self.inbox.take_quotes());
-                    let dying = dying(session, &self.sheet, &self.npc_sheets);
-                    let chance = &mut self.effects_chance;
-                    let scene = effects_scene(session);
-                    self.effects.step(&dying, &scene, &self.looks, chance);
-                    let shown = (&mut self.effects, &mut self.flashes);
-                    let sheets = (&self.sheet, &self.npc_sheets);
-                    let lit = show_combat(session, &scene, shown, (&self.looks, sheets), chance);
-                    let (player, sheets) = (&self.sheet, &self.npc_sheets);
-                    let session_now: &Session = session;
-                    self.glows
-                        .step(&lit, |ship| glow_decay(session_now, player, sheets, ship));
-                    let effects = (&mut self.effects, scene.caps);
-                    let trails = self.smoke_trails;
-                    self.shot_looks
-                        .step(session, &self.looks, effects, trails, chance);
-                    let first = (!again).then_some(self.previous.position);
-                    let place = (self.view, anchor, &self.looks);
-                    stars::step(&mut self.stars, session, place, first, chance);
-                }
-            }
-            if let Some(scene) = &mut self.scene {
-                show_gate_frames(scene, session);
-            }
-        }
-        self.relay_comm_and_quotes(&notes, quotes);
         if rescued {
             // Laid out in the system the rescue took the pod to, from where
             // it put the ship, before the frame is drawn; the course map
@@ -674,7 +525,7 @@ impl<
         let Ok(session) = &self.sim.session else {
             return;
         };
-        if stars::original(session, &self.looks) {
+        if stars::original(self.presentation.starfield, &self.looks) {
             let at = stars::surroundings(session, self.view, self.anchor(), &self.looks);
             stars::reset(
                 &mut self.stars,
@@ -731,7 +582,7 @@ impl<
         let Ok(session) = &mut self.sim.session else {
             return;
         };
-        let scene = effects_scene(session);
+        let scene = self.presentation.scene(session.player().position);
         let chance = &mut self.effects_chance;
         let events = session.take_combat_events();
         for event in &events {
@@ -1377,22 +1228,6 @@ impl<
             self.sheet = self.catalog.ship_sheet(ship);
             self.sheet_ship = Some(ship);
         }
-    }
-}
-
-/// The scene a pass's effects play in: around the player in `session`,
-/// as its rulebook reads [`RuleKey::ShipDebris`], [`RuleKey::CombatCaps`]
-/// and [`RuleKey::LoopedSoundWait`].
-fn effects_scene(session: &Session) -> Scene {
-    let rules = session.rules();
-    Scene {
-        player: point(session.player().position),
-        debris: rules.source_for(RuleKey::ShipDebris) == RuleSource::Bible,
-        caps: rules.source_for(RuleKey::CombatCaps) == RuleSource::Engine,
-        looped: match rules.source_for(RuleKey::LoopedSoundWait) {
-            RuleSource::Engine => LoopedSounds::Anywhere,
-            RuleSource::Bible => LoopedSounds::PerFirer,
-        },
     }
 }
 

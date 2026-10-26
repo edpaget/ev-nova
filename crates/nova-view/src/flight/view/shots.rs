@@ -5,7 +5,8 @@
 //! ([`StepRolls`]). The simulation keeps none of it: it
 //! is the view's, drawn on the effects' chance, never the simulation's.
 
-use nova_sim::{Chance, Session, Vec2};
+use nova_sim::flight_frame::PassReport;
+use nova_sim::{Chance, Vec2};
 
 use crate::DrawList;
 use crate::flight::catalog::Looks;
@@ -30,13 +31,13 @@ pub(super) struct ShotLooks {
 }
 
 impl ShotLooks {
-    /// Steps it after a pass of `session`'s fight, the shots' looks read
+    /// Steps it after a `pass` of the fight, the shots' looks read
     /// from `looks`, drawing on `chance`, as `_HandleShot` then
     /// `_HandleSmoke` do each frame: each shot new in flight draws its
     /// spin start, and each gone is forgotten; with `smoke_trails` on,
     /// each shot in flight leaves its trail's burst in `effects`, under
     /// the `caps` or not, and, on a smoke frame
-    /// ([`Session::smoke_frame`]), its puff of smoke; then the smoke ages,
+    /// ([`PassReport::smoke_frame`]), its puff of smoke; then the smoke ages,
     /// whether or not the preference is on.
     ///
     /// The Smoke Trails preference is the original's inverted
@@ -45,25 +46,22 @@ impl ShotLooks {
     /// `_HandleSmoke`.
     pub(super) fn step(
         &mut self,
-        session: &Session,
+        pass: &PassReport,
         looks: &Looks,
         (effects, caps): (&mut Effects, bool),
         smoke_trails: bool,
         chance: &mut dyn Chance,
     ) {
         let flags = |id| looks.weapon(id).map_or(0, |look| look.flags);
-        let shots = session
-            .shots()
-            .iter()
-            .map(|shot| (shot.id, flags(shot.weapon.id)));
+        let shots = pass.shots.iter().map(|shot| (shot.id, flags(shot.weapon)));
         self.spin_starts.step(shots, chance);
-        let smoke_frame = session.smoke_frame();
-        for shot in session.shots().iter().filter(|_| smoke_trails) {
-            let Some(look) = looks.weapon(shot.weapon.id) else {
+        let smoke_frame = pass.smoke_frame;
+        for shot in pass.shots.iter().filter(|_| smoke_trails) {
+            let Some(look) = looks.weapon(shot.weapon) else {
                 continue;
             };
             let at = (shot.position, shot.heading);
-            if let Some(burst) = self.trails.burst(shot.weapon.id, look, at, chance) {
+            if let Some(burst) = self.trails.burst(shot.weapon, look, at, chance) {
                 effects.spray(&burst, caps, chance);
             }
             if let Some(kind) = smoke_kind(look.flags).filter(|_| smoke_frame) {
@@ -73,7 +71,7 @@ impl ShotLooks {
         }
         self.smoke.step();
         let lightning = |id| looks.weapon(id).is_some_and(|look| look.li_density > 0);
-        if session.beams().iter().any(|beam| lightning(beam.weapon.id)) {
+        if pass.beam_weapons.iter().any(|&weapon| lightning(weapon)) {
             self.lightning = StepRolls::draw(chance);
         }
     }

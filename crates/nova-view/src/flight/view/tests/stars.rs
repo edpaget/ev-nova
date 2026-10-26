@@ -171,8 +171,10 @@ fn a_step_scrolls_the_stars_by_the_ships_move_twice_over_in_double_time() {
         let before = field.stars();
         let ship = session.player().position;
         let from = Vec2::new(ship.x + 8.0, ship.y - 4.0);
-        let place = (VIEW_SIZE, Anchor::PlayAreaCentre, &looks);
-        super::super::stars::step(&mut field, &session, place, Some(from), &mut chance);
+        let place = (VIEW_SIZE, Anchor::PlayAreaCentre);
+        let starfield = (RuleSource::Engine, &looks);
+        let pass = pass_of(&session);
+        super::super::stars::step(&mut field, &pass, starfield, place, Some(from), &mut chance);
         let times = if double { 2.0 } else { 1.0 };
         for (star, was) in field.stars().iter().zip(before) {
             assert!(was.factor > 0.0, "{was:?}");
@@ -181,7 +183,7 @@ fn a_step_scrolls_the_stars_by_the_ships_move_twice_over_in_double_time() {
         }
         // The second pass wraps and places, and scrolls nothing.
         let placed = field.stars();
-        super::super::stars::step(&mut field, &session, place, None, &mut chance);
+        super::super::stars::step(&mut field, &pass, starfield, place, None, &mut chance);
         assert_eq!(field.stars(), placed, "{double}");
     }
 }
