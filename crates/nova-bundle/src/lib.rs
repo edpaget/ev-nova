@@ -49,6 +49,7 @@ pub mod bundle;
 pub mod host;
 pub mod icon;
 pub mod info_plist;
+pub mod installer;
 pub mod layout;
 pub mod notary;
 pub mod ports;

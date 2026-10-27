@@ -1520,7 +1520,9 @@ name = "nova-bundle"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "nova-winres",
  "plist",
+ "roxmltree",
  "serde",
  "serde_json",
  "tempfile",

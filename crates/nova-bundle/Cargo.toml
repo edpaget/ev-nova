@@ -16,8 +16,13 @@ plist.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# The Windows installer's icon and version, as nova.exe's resources have
+# them.
+nova-winres.workspace = true
 
 [dev-dependencies]
+# Reads the generated WiX source back as XML in the tests.
+roxmltree.workspace = true
 # Real folders for the std adapters' tests.
 tempfile.workspace = true
 
