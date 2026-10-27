@@ -607,11 +607,48 @@ fn traders() -> Vec<u8> {
     bytes
 }
 
+/// `ïntf` 128, the status bar: the stock bar's areas, in plain colours,
+/// in Geneva 12, over `PICT` 700, which the data doesn't hold.
+fn interface() -> Vec<u8> {
+    let mut bytes = vec![0; nova_data::records::interface::Interface::SIZE.expect("fixed")];
+    let colour = |bytes: &mut [u8], at: usize, rgb: u32| {
+        bytes[at..at + 4].copy_from_slice(&rgb.to_be_bytes());
+    };
+    for (at, rgb) in [
+        (0x00, 0x00FF_FFFF),
+        (0x04, 0x0080_8080),
+        (0x10, 0x0000_FF00),
+        (0x14, 0x0000_8000),
+        (0x20, 0x0000_00FF),
+        (0x2C, 0x00FF_0000),
+        (0x38, 0x00FF_FF00),
+        (0x3C, 0x0080_8000),
+    ] {
+        colour(&mut bytes, at, rgb);
+    }
+    for (at, rect) in [
+        (0x08, [8, 8, 184, 184]),
+        (0x18, [199, 35, 206, 184]),
+        (0x24, [216, 35, 223, 184]),
+        (0x30, [234, 35, 241, 184]),
+        (0x40, [250, 8, 330, 184]),
+        (0x48, [340, 8, 360, 184]),
+        (0x50, [370, 8, 450, 184]),
+        (0x58, [458, 8, 552, 184]),
+    ] {
+        put_i16s(&mut bytes, at, &rect);
+    }
+    bytes[0x60..0x67].copy_from_slice(b"Geneva\0");
+    put_i16s(&mut bytes, 0xA0, &[12, 10, 700]);
+    bytes
+}
+
 /// The first `chär` flies the "Gunship" (ship 128, 30 shield, 45 armour,
 /// carrying the [`blaster`], held by `oütf` 228, and `items`) from Alpha
 /// (128), whose one `düde` flies the "Trader" (ship 129: no shield, 10
 /// armour, no speed). The escape pod is ship 895; `oütf` 188 is an
-/// escape pod (`ModType` 11) and 187 an auto-eject (20).
+/// escape pod (`ModType` 11) and 187 an auto-eject (20). The status bar
+/// is [`interface`]'s.
 fn fighting_data(items: &[(i16, i16)]) -> Rc<GameData> {
     let mut trader = armed_ship(0, 10, &[], &[]);
     put_i16s(&mut trader, 0x06, &[0]);
@@ -647,6 +684,12 @@ fn fighting_data(items: &[(i16, i16)]) -> Rc<GameData> {
             &fitting(20, 0),
         )
         .resource(System::TYPE, 128, Some(b"Alpha"), &trafficked_system())
+        .resource(
+            nova_data::records::interface::Interface::TYPE,
+            128,
+            None,
+            &interface(),
+        )
         .resource(
             nova_data::records::dude::Dude::TYPE,
             128,
@@ -813,4 +856,91 @@ fn a_real_click_in_space_targets_the_ship_drawn_under_it() {
         Some(trader.ship),
         "targeted through the frame's box"
     );
+}
+
+// The HUD and the target panel drawn from the frame
+// (rdm:phase/view-sim-seam/phase-8-hud-and-target-frame).
+
+/// The lines `view`'s status bar draws in `color`, alone, as the port's
+/// bar draws it.
+fn bar_lines(view: &FlightView<Rc<GameData>>, color: nova_view::Color) -> Vec<(f32, f32)> {
+    let mut list = nova_view::DrawList::new();
+    view.draw_status_bar(&mut list);
+    list.iter()
+        .filter_map(|command| match *command {
+            nova_view::DrawCommand::Line {
+                from, to, color: c, ..
+            } if c == color => Some((from.x, to.x)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The texts `list` draws.
+fn texts(list: &nova_view::DrawList) -> Vec<String> {
+    list.iter()
+        .filter_map(|command| match command {
+            nova_view::DrawCommand::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_real_sessions_status_bar_shows_its_reserves_and_cargo() {
+    let data = fighting_data(&[]);
+    let full = SessionBuilder::flying(&data).with_credits(12_345).build();
+    let view = FlightView::from_session(Rc::clone(&data), full.into());
+    let layout = view.status_bar().expect("ïntf 128").layout.clone();
+    for color in [layout.shield_color, layout.armor_color, layout.fuel_full] {
+        assert_eq!(bar_lines(&view, color).len(), 1, "a gauge in {color:?}");
+    }
+    let full_fuel = bar_lines(&view, layout.fuel_full)[0];
+    let mut bar = nova_view::DrawList::new();
+    view.draw_status_bar(&mut bar);
+    assert!(
+        texts(&bar).contains(&"12,345".to_owned()),
+        "the cargo area's credits: {:?}",
+        texts(&bar)
+    );
+    let low = SessionBuilder::flying(&data)
+        .with_reserve(nova_sim::Reserve::Fuel, 50.0)
+        .build();
+    let view = FlightView::from_session(data, low.into());
+    let low_fuel = bar_lines(&view, layout.fuel_full);
+    assert!(
+        low_fuel.len() == 1 && low_fuel[0].1 < full_fuel.1,
+        "less fuel drawn: {low_fuel:?} of {full_fuel:?}"
+    );
+}
+
+#[test]
+fn a_real_target_shows_in_the_panel_and_brackets() {
+    let data = fighting_data(&[]);
+    let session = SessionBuilder::flying(&data).build();
+    let mut view = fighting(data, session);
+    tap(&mut view, Key::Tab);
+    let mut frame = FlightFrame::default();
+    view.session().expect("flying").fill_frame(&mut frame);
+    let target = frame.target.expect("Tab targets the trader");
+    assert_eq!(nova_sim::ShipRef::Npc(target.npc), frame.ships[1].ship);
+    assert_eq!(target.status, nova_sim::TargetStatus::NoShields);
+    assert_eq!(
+        frame.hud.target_brackets.map(|brackets| brackets.npc),
+        Some(target.npc)
+    );
+    let mut list = nova_view::DrawList::new();
+    view.draw(&mut list);
+    let drawn = texts(&list);
+    assert!(drawn.contains(&target.name), "{} in {drawn:?}", target.name);
+    assert!(drawn.contains(&"No Shields".to_owned()), "{drawn:?}");
+    let brackets = list
+        .iter()
+        .filter(|command| {
+            matches!(command, nova_view::DrawCommand::Picture { image, .. }
+                if image.kind == nova_view::ImageKind::Icon
+                    && (10008..=10023).contains(&image.id))
+        })
+        .count();
+    assert_eq!(brackets, 4, "its four corners");
 }
