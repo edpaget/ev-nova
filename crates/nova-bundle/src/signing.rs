@@ -841,6 +841,14 @@ mod tests {
     }
 
     #[test]
+    fn secret_bytes_show_only_their_length() {
+        assert_eq!(
+            format!("{:?}", SecretBytes(P12.to_vec())),
+            format!("<{} secret bytes>", P12.len())
+        );
+    }
+
+    #[test]
     fn a_secret_write_step_hides_its_bytes() {
         let spec = BundleSpec::from_metadata(&sample_metadata()).expect("spec");
         let layout = Layout::new(&spec.target_dir, None).expect("layout");
