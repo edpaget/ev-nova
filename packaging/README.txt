@@ -16,7 +16,9 @@ The downloads are:
   ev-nova-aarch64-apple-darwin.dmg      macOS (Apple silicon), a disk image
   ev-nova-x86_64-pc-windows-msvc.msi    Windows, an installer
   ev-nova-x86_64-pc-windows-msvc.zip    Windows, a portable copy
-  ev-nova-x86_64-unknown-linux-gnu.tar.gz  Linux
+  ev-nova-x86_64-unknown-linux-gnu.tar.gz   Linux, a folder to copy
+  ev-nova-x86_64-unknown-linux-gnu.AppImage Linux, one file to run
+  ev-nova-x86_64-unknown-linux-gnu.flatpak  Linux, a Flatpak to install
 
 EV Nova's data files are copyrighted and are not included. Supply your own
 copy of the game's `Nova Files` directory.
@@ -81,8 +83,19 @@ anyway".
 Linux
 -----
 
-The Linux download is a tarball (.tar.gz) holding one folder with nova,
-nova-dump, README.txt, LICENSE and a share/ folder:
+Every Linux download is for x86-64 (64-bit Intel or AMD). There are
+three: the tarball, the AppImage and the Flatpak.
+
+The tarball and the AppImage need glibc 2.35 or newer: Ubuntu 22.04 or
+later, Debian 12 or later, or a current Fedora or openSUSE. They are
+built on Ubuntu 22.04, and the build checks that the game needs no newer
+glibc. They play sound through your system's ALSA, which PipeWire or
+PulseAudio serves on current desktops, and share one set of settings and
+pilots. The Flatpak brings its own runtime, so any distribution with
+Flatpak runs it, and keeps its own settings and pilots (see below).
+
+The tarball (.tar.gz) holds one folder with nova, nova-dump, README.txt,
+LICENSE and a share/ folder:
 
   share/applications/io.github.edpaget.ev-nova.desktop
       the menu entry: what launchers, docks and app grids show
@@ -124,6 +137,53 @@ and logs its startup to ~/.local/state/nova/nova.log
 ~/.config/nova/Pilots: the first launch of this one moves them, every
 file, and says so in its startup log. A pilot whose name is already taken
 in the new folder is left where it was, with a warning.
+
+The AppImage
+------------
+
+The AppImage is the game in one file, with nothing to install:
+
+  chmod +x ev-nova-x86_64-unknown-linux-gnu.AppImage
+  ./ev-nova-x86_64-unknown-linux-gnu.AppImage
+
+It needs FUSE to run (fusermount3, which most desktops have; it doesn't
+need the older libfuse2). Without it, run it with
+--appimage-extract-and-run. It installs nothing itself: to add it to your
+applications, use an AppImage integration tool such as Gear Lever or
+AppImageLauncher, which installs its desktop entry and icon. Without
+one, some docks (GNOME on Wayland among them) show a generic icon for its
+window. It finds the `Nova Files` and keeps its settings, pilots and log
+in the same places as the tarball above, and shares them with it.
+nova-dump is in the tarball only.
+
+The Flatpak
+-----------
+
+The Flatpak runs the game in a sandbox on the freedesktop runtime. To
+install it for you alone:
+
+  flatpak install --user ev-nova-x86_64-unknown-linux-gnu.flatpak
+
+It offers to fetch the runtime from Flathub if you don't have it. Then
+start "EV Nova" from your applications, or run
+`flatpak run io.github.edpaget.ev-nova`. Uninstall it with
+`flatpak uninstall --user io.github.edpaget.ev-nova`.
+
+The sandbox lets it show its window (Wayland, or X11 where there is no
+Wayland) and use your GPU and sound. It can read, and not change, three
+folders where the game data may be: ~/.wine, ~/Games/ev-nova (Lutris)
+and ~/Games/EV Nova. It can't see the rest of your files, has no network,
+and can't talk to other programs. If your EV Nova folder is anywhere
+else (another Wine prefix, Bottles, Proton), the game asks for it through
+your desktop's file chooser, which gives it that folder alone, and it
+remembers the pick across launches and reboots. Its startup error and
+warning boxes use the runtime's zenity.
+
+The Flatpak keeps everything in ~/.var/app/io.github.edpaget.ev-nova/:
+settings in config/nova, pilots in data/nova/Pilots and the startup log
+in .local/state/nova/nova.log. These are separate from the tarball's and
+the AppImage's: pilots are neither shared nor moved between them. To use
+the same pilots, copy their files from one Pilots folder to the other.
 
 Checking the icon (by hand)
 ---------------------------
