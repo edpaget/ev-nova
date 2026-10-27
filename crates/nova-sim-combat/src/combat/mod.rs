@@ -9929,10 +9929,9 @@ mod tests {
     // Knockback and tractor beams (`_DamageShip` @0x3a9b8-0x3ab84,
     // `_HandleBeams` @0x311d0-0x31450; see the `impact` module).
 
-    /// A tick among `ships`, each pushed ship's velocity then set from the
-    /// fight's shoves as the session sets them; gives the shoves.
-    fn tick_shoving(combat: &mut Combat, ships: &mut [Ship]) -> Vec<Shove> {
-        tick(combat, ships, &NovaDisable);
+    /// The fight's shoves, each pushed ship's velocity then set from them
+    /// as the session sets them.
+    fn shoved(combat: &mut Combat, ships: &mut [Ship]) -> Vec<Shove> {
         let shoves = combat.take_shoves();
         for shove in &shoves {
             if let Some(ship) = ships.iter_mut().find(|ship| ship.id == shove.ship) {
@@ -9940,6 +9939,14 @@ mod tests {
             }
         }
         shoves
+    }
+
+    /// The place of the first explosion among the fight's events.
+    fn exploded(combat: &mut Combat) -> Option<Vec2> {
+        combat.take_events().iter().find_map(|event| match *event {
+            CombatEvent::Exploded { at, .. } => Some(at),
+            _ => None,
+        })
     }
 
     /// `ship` of `mass`, with a class and top speed of 100.
@@ -9970,24 +9977,33 @@ mod tests {
         (a - b).length() < 1e-4
     }
 
-    /// Ticks `ships` until `ships[0]`'s one shot or beam is gone, at most
-    /// `ticks`, its trigger let go after the first: every shove and the
-    /// first explosion's place.
-    fn shoves_after_one(ships: &mut [Ship], ticks: u32) -> (Vec<Shove>, Option<Vec2>) {
-        let mut combat = Combat::default();
-        let mut shoves = Vec::new();
-        let mut at = None;
-        for _ in 0..ticks {
-            shoves.extend(tick_shoving(&mut combat, ships));
-            ships[0].trigger = QUIET;
-            at = at.or_else(|| {
-                combat.take_events().iter().find_map(|event| match *event {
-                    CombatEvent::Exploded { at, .. } => Some(at),
-                    _ => None,
-                })
-            });
+    /// The ship loop fires the NPCs' shots ([`phase::handle_npcs`]), then
+    /// `_HandleShot` flies them `moves` times ([`phase::fly_shots`]): every
+    /// shove and the first explosion's place.
+    fn flown(combat: &mut Combat, ships: &mut [Ship], moves: u32) -> (Vec<Shove>, Option<Vec2>) {
+        phase::handle_npcs(combat, ships, &NovaDisable);
+        let mut shoves = shoved(combat, ships);
+        let mut at = exploded(combat);
+        for _ in 0..moves {
+            phase::fly_shots(combat, ships, &NovaDisable);
+            shoves.extend(shoved(combat, ships));
+            at = at.or_else(|| exploded(combat));
         }
         (shoves, at)
+    }
+
+    /// The shots [`flown`] `moves` times, the last the move that meets
+    /// their target, then that move tested ([`phase::test_hits`]): every
+    /// shove and the first explosion's place.
+    fn hit_on_move(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        moves: u32,
+    ) -> (Vec<Shove>, Option<Vec2>) {
+        let (mut shoves, at) = flown(combat, ships, moves);
+        phase::test_hits(combat, ships, &NovaDisable);
+        shoves.extend(shoved(combat, ships));
+        (shoves, at.or_else(|| exploded(combat)))
     }
 
     /// The blaster with `impact` and an explosion.
@@ -10003,7 +10019,8 @@ mod tests {
     fn a_direct_hit_pushes_its_ship_by_impact_over_mass_from_where_it_met() {
         let target = of_mass(Ship::at(2, 100.0, 10.0), 10.0);
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(pushing(50)), target];
-        let (shoves, at) = shoves_after_one(&mut ships, 12);
+        // The bolt's sixth move meets B.
+        let (shoves, at) = hit_on_move(&mut Combat::default(), &mut ships, 6);
         let at = at.expect("it hit");
         let pushed = shoves_on(&shoves, B);
         let expected = push_of(at, Vec2::new(100.0, 10.0), 50.0, 10.0);
@@ -10028,11 +10045,9 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(slug),
             of_mass(Ship::at(2, 95.0, 0.0), 10.0),
         ];
-        let mut shoves = tick_shoving(&mut combat, &mut ships);
-        ships[0].trigger = QUIET;
-        while !combat.shots().is_empty() {
-            shoves.extend(tick_shoving(&mut combat, &mut ships));
-        }
+        // The slug's eighth move, to 80, meets B.
+        let (shoves, _) = hit_on_move(&mut combat, &mut ships, 8);
+        assert!(combat.shots().is_empty(), "spent on B");
         assert_eq!(ships[1].reserves.armor.now, 24.0, "the damage decayed");
         let pushed = shoves_on(&shoves, B);
         assert_eq!(pushed.len(), 1, "{shoves:?}");
@@ -10050,7 +10065,8 @@ mod tests {
             of_mass(Ship::at(2, 100.0, 0.0), 10.0),
             of_mass(Ship::at(3, 100.0, 25.0), 10.0),
         ];
-        let (shoves, at) = shoves_after_one(&mut ships, 12);
+        // The shell's sixth move meets B.
+        let (shoves, at) = hit_on_move(&mut Combat::default(), &mut ships, 6);
         let at = at.expect("it hit");
         let hit = shoves_on(&shoves, B);
         assert_eq!(hit.len(), 1, "the direct hit alone: {shoves:?}");
@@ -10080,7 +10096,8 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(flak),
             of_mass(Ship::at(3, 30.0, 35.0), 10.0),
         ];
-        let (shoves, at) = shoves_after_one(&mut ships, 6);
+        // Its three moves spent, `_HandleShot`'s fourth run ends it.
+        let (shoves, at) = flown(&mut Combat::default(), &mut ships, 4);
         let at = at.expect("it detonated");
         let pushed = shoves_on(&shoves, C);
         assert_eq!(pushed.len(), 1, "{shoves:?}");
@@ -10104,9 +10121,10 @@ mod tests {
         let step = push_of(Vec2::ZERO, at, 50.0, 100.0);
         let mut ends = Vec::new();
         let mut velocities = Vec::new();
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         for _ in 0..5 {
-            let shoves = tick_shoving(&mut combat, &mut ships);
-            ships[0].trigger = QUIET;
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
+            let shoves = shoved(&mut combat, &mut ships);
             ends.extend(combat.beams().iter().map(|beam| beam.end));
             velocities.extend(shoves_on(&shoves, B));
         }
@@ -10134,8 +10152,14 @@ mod tests {
         target.top_speed = 10.0;
         target.afterburner = shots;
         target.afterburner_beam = beams;
+        let beam = weapon.beam_length > 0;
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(weapon), target];
-        let (shoves, _) = shoves_after_one(&mut ships, 12);
+        let shoves = if beam {
+            tractored(&mut ships)
+        } else {
+            // The bolt's sixth move meets B.
+            hit_on_move(&mut Combat::default(), &mut ships, 6).0
+        };
         let pushed = shoves_on(&shoves, B);
         assert!(!pushed.is_empty(), "it hit");
         pushed[0].x
@@ -10152,25 +10176,34 @@ mod tests {
         assert_eq!(knocked_with_caps(shot(), false, true), 10.0, "plain");
     }
 
-    #[test]
-    fn a_missile_lock_pushes_nothing() {
-        let heavy = WeaponRecord {
-            impact: 500,
-            ..missile()
-        };
+    /// The player fires its missile ([`phase::fire_player`]) and
+    /// `_HandleShot` flies it 40 times ([`phase::fly_shots`]), its lock
+    /// landing on the 31st: the locks struck and every shove.
+    fn locked(ships: &mut [Ship]) -> (usize, Vec<Shove>) {
         let mut combat = Combat::default();
-        let mut ships = [player_with(heavy), of_mass(far_b(), 10.0)];
-        let mut shoves = Vec::new();
+        phase::fire_player(&mut combat, ships, &NovaDisable);
+        let mut shoves = shoved(&mut combat, ships);
         let mut locks = 0;
         for _ in 0..40 {
-            shoves.extend(tick_shoving(&mut combat, &mut ships));
-            ships[0].trigger = QUIET;
+            phase::fly_shots(&mut combat, ships, &NovaDisable);
+            shoves.extend(shoved(&mut combat, ships));
             locks += combat
                 .take_strikes()
                 .iter()
                 .filter(|strike| strike.lock)
                 .count();
         }
+        (locks, shoves)
+    }
+
+    #[test]
+    fn a_missile_lock_pushes_nothing() {
+        let heavy = WeaponRecord {
+            impact: 500,
+            ..missile()
+        };
+        let mut ships = [player_with(heavy), of_mass(far_b(), 10.0)];
+        let (locks, shoves) = locked(&mut ships);
         assert_eq!(locks, 1);
         assert_eq!(shoves, []);
     }
@@ -10184,7 +10217,7 @@ mod tests {
             starting: false,
         };
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(pushing(50)), dying];
-        let (shoves, _) = shoves_after_one(&mut ships, 12);
+        let (shoves, _) = hit_on_move(&mut Combat::default(), &mut ships, 6);
         let pushed = shoves_on(&shoves, B);
         assert_eq!(pushed.len(), 1, "{shoves:?}");
         assert!(close_by(pushed[0], Vec2::new(5.0, 0.0)), "{pushed:?}");
@@ -10201,7 +10234,7 @@ mod tests {
             of_mass(Ship::at(4, 100.0, 0.0), 10.0),
             pod(of_mass(Ship::at(3, 100.0, 25.0), 10.0), ESCAPE_POD_SHIP),
         ];
-        let (shoves, _) = shoves_after_one(&mut ships, 12);
+        let (shoves, _) = hit_on_move(&mut Combat::default(), &mut ships, 6);
         assert_eq!(shoves_on(&shoves, ShipRef::Npc(NpcId(4))).len(), 1);
         assert_eq!(shoves_on(&shoves, C), [], "the pod");
     }
@@ -10211,15 +10244,15 @@ mod tests {
         let mut jumping = of_mass(Ship::at(2, 100.0, 0.0), 10.0);
         jumping.jumping = true;
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(pushing(50)), jumping];
-        let (shoves, _) = shoves_after_one(&mut ships, 12);
+        let (shoves, _) = hit_on_move(&mut Combat::default(), &mut ships, 6);
         assert!(ships[1].reserves.shield.now < 10.0, "hit");
         assert_eq!(shoves, []);
     }
 
     #[test]
     fn two_hits_on_a_ship_in_a_tick_compound_in_order() {
-        let mut combat = Combat::default();
-        // Two shots, 20 above and below B's centre, meet it on one tick.
+        // Two shots, 20 above and below B's centre, meet it on one hit
+        // pass, their fourth moves'.
         let mut wide = of_mass(Ship::at(2, 100.0, 0.0), 10.0);
         wide.hull.hit_radius = 50.0;
         let mut ships = [
@@ -10227,12 +10260,7 @@ mod tests {
             Ship::at(3, 0.0, 20.0).armed(pushing(50)),
             wide,
         ];
-        let mut shoves = Vec::new();
-        for _ in 0..12 {
-            shoves.extend(tick_shoving(&mut combat, &mut ships));
-            ships[0].trigger = QUIET;
-            ships[1].trigger = QUIET;
-        }
+        let (shoves, _) = hit_on_move(&mut Combat::default(), &mut ships, 4);
         let pushed = shoves_on(&shoves, B);
         assert_eq!(pushed.len(), 2, "{shoves:?}");
         assert!(pushed[0].y > 0.0, "down, from above: {pushed:?}");
@@ -10252,7 +10280,8 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(pushing(-50)).facing(135.0),
             diagonal,
         ];
-        let (shoves, at) = shoves_after_one(&mut ships, 12);
+        // Its ninth move meets B.
+        let (shoves, at) = hit_on_move(&mut Combat::default(), &mut ships, 9);
         let pulled = shoves_on(&shoves, B);
         assert_eq!(pulled.len(), 1, "{shoves:?}");
         let at = at.expect("it hit");
@@ -10280,7 +10309,7 @@ mod tests {
             of_mass(Ship::at(2, 100.0, 0.0), 10.0),
             of_mass(Ship::at(3, 100.0, 25.0), 10.0),
         ];
-        let (shoves, _) = shoves_after_one(&mut ships, 12);
+        let (shoves, _) = hit_on_move(&mut Combat::default(), &mut ships, 6);
         assert_eq!(shoves_on(&shoves, B), [], "gated");
         let blasted = shoves_on(&shoves, C);
         assert_eq!(blasted.len(), 1, "{shoves:?}");
@@ -10292,11 +10321,19 @@ mod tests {
         beam_of(-5)
     }
 
-    /// A tick of A, of `firer_mass` at the centre facing `heading`, firing a
-    /// tractor beam at B of `target_mass` at `at`: the shoves.
+    /// A fires its beam at B in the ship loop ([`phase::handle_npcs`]) and
+    /// `_HandleBeams` lets it hit ([`phase::close_tick`]): the shoves.
     fn tractored(ships: &mut [Ship; 2]) -> Vec<Shove> {
-        let mut combat = Combat::default();
-        tick_shoving(&mut combat, ships)
+        beam_shoves(&mut Combat::default(), ships)
+    }
+
+    /// The NPCs fire their beams in the ship loop ([`phase::handle_npcs`])
+    /// and `_HandleBeams` lets them hit ([`phase::close_tick`]): the
+    /// shoves.
+    fn beam_shoves(combat: &mut Combat, ships: &mut [Ship]) -> Vec<Shove> {
+        phase::handle_npcs(combat, ships, &NovaDisable);
+        phase::close_tick(combat, ships, &NovaDisable);
+        shoved(combat, ships)
     }
 
     /// A, of `mass`, at the centre facing `heading`, its tractor beam
@@ -10512,13 +10549,15 @@ mod tests {
             tractor_firer(200.0, 135.0),
             of_mass(Ship::at(2, 100.0, 100.0), 100.0),
         ];
-        tick_shoving(&mut combat, &mut ships);
+        beam_shoves(&mut combat, &mut ships);
         let mut target = ships.remove(1);
         target.tractor = None;
         target.state.velocity = Vec2::ZERO;
         let mut ships = [target];
         let shield = ships[0].reserves.shield.now;
-        assert_eq!(tick_shoving(&mut combat, &mut ships), []);
+        // The beam's next tick, its firer gone.
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(shoved(&mut combat, &mut ships), []);
         assert_eq!(ships[0].tractor, None);
         assert_eq!(
             ships[0].reserves.shield.now,
@@ -10564,7 +10603,8 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(ionizing(blaster(), 30, GREEN)),
             Ship::at(2, 100.0, 0.0),
         ];
-        let (_, at) = shoves_after_one(&mut ships, 12);
+        // The bolt's sixth move meets B.
+        let (_, at) = hit_on_move(&mut Combat::default(), &mut ships, 6);
         assert!(at.is_none(), "no blast, no explosion");
         assert_eq!(
             ships[1].ion,
@@ -10588,12 +10628,8 @@ mod tests {
         };
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(fused), Ship::at(2, 100.0, 25.0)];
-        let mut strikes = Vec::new();
-        for _ in 0..12 {
-            tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = QUIET;
-            strikes.extend(combat.take_strikes());
-        }
+        hit_on_move(&mut combat, &mut ships, 6);
+        let strikes = combat.take_strikes();
         assert_eq!(strikes.len(), 1, "{strikes:?}");
         const { assert!(DEFAULT_HIT_RADIUS < 25.0, "not by contact") };
         assert_eq!(ships[1].ion.charge, 30.0);
@@ -10607,11 +10643,9 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(ionizing(slug(0x0020), 50, GREEN)),
             Ship::at(2, 95.0, 0.0),
         ];
-        tick(&mut combat, &mut ships, &NovaDisable);
-        ships[0].trigger = QUIET;
-        while !combat.shots().is_empty() {
-            tick(&mut combat, &mut ships, &NovaDisable);
-        }
+        // The slug's eighth move meets B.
+        hit_on_move(&mut combat, &mut ships, 8);
+        assert!(combat.shots().is_empty(), "spent on B");
         assert_eq!(ships[1].reserves.armor.now, 24.0, "the damage decayed");
         assert_eq!(ships[1].ion.charge, 50.0);
     }
@@ -10628,7 +10662,8 @@ mod tests {
             Ship::at(3, 100.0, 25.0),
             Ship::at(4, 100.0, -28.0),
         ];
-        let (_, at) = shoves_after_one(&mut ships, 12);
+        // The shell's sixth move meets B.
+        let (_, at) = hit_on_move(&mut Combat::default(), &mut ships, 6);
         let at = at.expect("it hit");
         assert_eq!(ships[1].ion.charge, 100.0, "the direct hit alone");
         let near = Vec2::new(100.0, 25.0) - at;
@@ -10662,7 +10697,8 @@ mod tests {
             ..ionizing(blaster(), 80, GREEN)
         };
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(flak), Ship::at(3, 30.0, 35.0)];
-        let (_, at) = shoves_after_one(&mut ships, 6);
+        // Its three moves spent, `_HandleShot`'s fourth run ends it.
+        let (_, at) = flown(&mut Combat::default(), &mut ships, 4);
         let at = at.expect("it detonated");
         let expected = share(80, 40.0, Vec2::new(30.0, 35.0) - at);
         assert!(expected > 0.0 && expected < 80.0, "{at:?}: {expected}");
@@ -10678,9 +10714,9 @@ mod tests {
         ];
         ships[1].reserves.shield = Gauge::full(100.0);
         let mut charges = Vec::new();
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         for _ in 0..5 {
-            tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = QUIET;
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
             charges.push(ships[1].ion.charge);
         }
         assert_eq!(charges, [4.0, 8.0, 12.0, 12.0, 12.0]);
@@ -10703,18 +10739,8 @@ mod tests {
 
     #[test]
     fn a_missile_lock_ionizes_nothing() {
-        let mut combat = Combat::default();
         let mut ships = [player_with(ionizing(missile(), 100, GREEN)), far_b()];
-        let mut locks = 0;
-        for _ in 0..40 {
-            tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = QUIET;
-            locks += combat
-                .take_strikes()
-                .iter()
-                .filter(|strike| strike.lock)
-                .count();
-        }
+        let (locks, _) = locked(&mut ships);
         assert_eq!(locks, 1);
         assert_eq!(ships[1].ion, Ion::default());
     }
@@ -10730,7 +10756,8 @@ mod tests {
             Ship::at(4, 100.0, 0.0),
             pod(Ship::at(3, 100.0, 10.0), ESCAPE_POD_SHIP),
         ];
-        let (_, at) = shoves_after_one(&mut ships, 12);
+        // The shell's sixth move meets the ship at (100, 0).
+        let (_, at) = hit_on_move(&mut Combat::default(), &mut ships, 6);
         let at = at.expect("it hit");
         assert_eq!(ships[2].reserves.shield.now, 10.0, "unhurt");
         let expected = share(100, 30.0, Vec2::new(100.0, 10.0) - at);
@@ -10749,7 +10776,8 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(ionizing(blaster(), 30, GREEN)),
             player,
         ];
-        shoves_after_one(&mut ships, 12);
+        // The bolt's sixth move meets the player.
+        hit_on_move(&mut Combat::default(), &mut ships, 6);
         assert_eq!(ships[1].ion.charge, 30.0);
     }
 
