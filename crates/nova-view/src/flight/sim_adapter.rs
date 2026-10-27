@@ -49,7 +49,7 @@ use nova_sim::{
 };
 
 use super::SharedChance;
-use super::sim_port::{CommSource, FlightSim, MapSource, PortSource, fresh_description};
+use super::sim_port::{CommSource, FlightSim, MapSource, PortSource};
 
 /// The flight of a real `nova_sim::Session`, or why it could not start,
 /// with the collaborators its calls are handed (see the module docs).
@@ -324,11 +324,11 @@ impl<C> FlightSim for SessionFlight<C> {
 
     /// Forwards to `Session::load_description`, drawing on the flight's
     /// chance; a failed session resolves only the conditional text, for a
-    /// new pilot ([`fresh_description`]).
+    /// new pilot (`Session::fresh_description`).
     fn load_description(&mut self, raw: Option<&str>, movie: Option<&DescMovie>) -> String {
         match &mut self.session {
             Ok(session) => session.load_description(raw, movie, &mut self.chance),
-            Err(_) => fresh_description(raw),
+            Err(_) => Session::fresh_description(raw),
         }
     }
 }
@@ -466,13 +466,8 @@ impl<C> PortSource for SessionFlight<C> {
     }
 
     fn mission_info(&self) -> MissionInfo {
-        match self.session() {
-            Ok(session) => session.mission_info(),
-            Err(_) => MissionInfo {
-                rows: Vec::new(),
-                today: String::new(),
-            },
-        }
+        self.session()
+            .map_or_else(|_| MissionInfo::default(), Session::mission_info)
     }
 
     fn seen_intro(&self) -> bool {
@@ -623,8 +618,7 @@ mod tests {
         assert!(!flight.recharge_enabled());
         assert_eq!(flight.news(), None);
         assert_eq!(flight.news_picture(), None);
-        assert_eq!(flight.mission_info().rows, []);
-        assert_eq!(flight.mission_info().today, "");
+        assert_eq!(flight.mission_info(), MissionInfo::default());
         assert!(!flight.seen_intro());
         assert!(!flight.refusable_offer_dialog(MissionId(130)));
         assert_eq!(flight.outfitter(), None);
@@ -718,7 +712,11 @@ mod tests {
     #[test]
     fn a_failed_flight_loads_a_description_for_a_new_pilot() {
         let mut flight = failed();
-        assert_eq!(flight.load_description(Some("plain"), None), "plain");
+        assert_eq!(
+            flight.load_description(Some("{b5 \"set\" \"clear\"}, sir."), None),
+            "clear, sir.",
+            "resolved by nova-sim"
+        );
         assert_eq!(flight.load_description(None, None), "");
     }
 

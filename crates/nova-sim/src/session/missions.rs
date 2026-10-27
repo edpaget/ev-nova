@@ -1317,6 +1317,8 @@ impl Session {
     /// (@0x71926-0x71930), the parse (@0x71936) or the `l33t` letters, so
     /// the governments the last text left are kept. The `Flags` it leaves
     /// stale are never read, as every movie check tests the name first.
+    /// A flight with no session loads one as [`Session::fresh_description`]
+    /// resolves it.
     pub fn load_description(
         &mut self,
         raw: Option<&str>,

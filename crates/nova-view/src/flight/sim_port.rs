@@ -99,30 +99,14 @@ pub trait FlightSim: MapSource + CommSource + PortSource {
     /// (`nova_sim::Session::load_description`): taken in for the pilot,
     /// its `l33t` letters drawn on the flight's chance, its movie the last
     /// loaded. A port method rather than a command, as it draws on the
-    /// flight's chance. By default only its conditional text is resolved,
-    /// for a new pilot ([`fresh_description`]), as a flight that failed
-    /// to start does; a missing one is empty.
+    /// flight's chance. By default the raw text unchanged, and a missing
+    /// one empty: how a flight resolves the text is its own
+    /// (`nova_sim::Session::fresh_description` for one that failed to
+    /// start).
     fn load_description(&mut self, raw: Option<&str>, movie: Option<&DescMovie>) -> String {
         let _ = movie;
-        fresh_description(raw)
+        raw.map(str::to_owned).unwrap_or_default()
     }
-}
-
-/// `raw`, a `dësc` that may be missing, with its conditional text
-/// resolved for a new pilot
-/// ([`Gate::FRESH`](nova_sim::control::Gate::FRESH)): what a flight that
-/// failed to start loads ([`FlightSim::load_description`]'s default).
-/// A missing one is empty.
-#[must_use]
-pub fn fresh_description(raw: Option<&str>) -> String {
-    raw.map(|raw| {
-        nova_sim::text_parse::conditional_text(
-            raw,
-            nova_sim::control::Gate::FRESH.pilot,
-            nova_sim::text_parse::ParseRules::default(),
-        )
-    })
-    .unwrap_or_default()
 }
 
 /// The course map's questions of the flight, and the floating map's and
@@ -301,12 +285,10 @@ pub trait PortSource {
     }
 
     /// What the mission info screen lists
-    /// (`nova_sim::Session::mission_info`): nothing by default.
+    /// (`nova_sim::Session::mission_info`): nothing by default
+    /// ([`MissionInfo::default`]).
     fn mission_info(&self) -> MissionInfo {
-        MissionInfo {
-            rows: Vec::new(),
-            today: String::new(),
-        }
+        MissionInfo::default()
     }
 
     /// Whether the pilot flying has seen the intro screen
@@ -409,12 +391,10 @@ mod tests {
     impl PortSource for Defaults {}
 
     #[test]
-    fn by_default_a_description_is_resolved_for_a_new_pilot_and_a_missing_one_is_empty() {
+    fn by_default_a_description_loads_as_its_raw_text_and_a_missing_one_is_empty() {
         let mut flight = Defaults;
-        assert_eq!(
-            flight.load_description(Some("{b5 \"set\" \"clear\"}, sir."), None),
-            "clear, sir."
-        );
+        let raw = "{b5 \"set\" \"clear\"}, sir.";
+        assert_eq!(flight.load_description(Some(raw), None), raw, "unchanged");
         assert_eq!(flight.load_description(None, None), "");
         assert_eq!(flight.coming_traffic(), []);
         assert_eq!(flight.death_descs(), Vec::<i16>::new());
@@ -456,8 +436,7 @@ mod tests {
         assert!(!source.recharge_enabled());
         assert_eq!(source.news(), None);
         assert_eq!(source.news_picture(), None);
-        assert_eq!(source.mission_info().rows, []);
-        assert_eq!(source.mission_info().today, "");
+        assert_eq!(source.mission_info(), MissionInfo::default());
         assert!(!source.seen_intro());
         assert!(!source.refusable_offer_dialog(MissionId(130)));
         assert_eq!(source.outfitter(), None);

@@ -461,6 +461,7 @@ mod course;
 mod crons;
 mod deadly_stellars;
 mod derelicts;
+mod description;
 mod display_step;
 mod double_time;
 #[cfg(test)]

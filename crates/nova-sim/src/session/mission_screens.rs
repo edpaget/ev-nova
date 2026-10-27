@@ -257,8 +257,10 @@ pub struct InfoRow {
     pub abortable: bool,
 }
 
-/// The mission info screen, as the player sees it (`DLOG` 1012).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The mission info screen, as the player sees it (`DLOG` 1012). The
+/// default lists nothing and names no day: what a flight with nothing to
+/// list shows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MissionInfo {
     /// The active missions shown, in slot order.
     pub rows: Vec<InfoRow>,

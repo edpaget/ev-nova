@@ -36,7 +36,7 @@ use nova_sim::{
     ShipRefusal, Shipyard,
 };
 
-use super::{CommSource, FlightSim, MapSource, PortSource, fresh_description};
+use super::{CommSource, FlightSim, MapSource, PortSource};
 
 /// A scripted [`FlightSim`]: it shows the frame it was given, records
 /// each command in the order sent, answers each from a queue
@@ -51,9 +51,9 @@ use super::{CommSource, FlightSim, MapSource, PortSource, fresh_description};
 /// ([`FakeFlight::set_hover`]), recording each ask
 /// ([`FakeFlight::hovers`]), and the coming traffic from its list
 /// ([`FakeFlight::set_coming_traffic`]). It loads each description with
-/// the next text queued ([`FakeFlight::queue_description`]), or as a new
-/// pilot's once the queue is empty ([`fresh_description`]), recording
-/// each load ([`FakeFlight::descriptions_loaded`]). It gives the death
+/// the next text queued ([`FakeFlight::queue_description`]), or, once
+/// the queue is empty, as its raw text unchanged, resolving nothing; it
+/// records each load ([`FakeFlight::descriptions_loaded`]). It gives the death
 /// `dësc`s it is given ([`FakeFlight::set_death_descs`]), and answers
 /// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]) and
 /// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]). It
@@ -395,7 +395,7 @@ impl FlightSim for FakeFlight {
         self.loaded.push((raw.map(str::to_owned), movie.cloned()));
         self.descriptions
             .pop_front()
-            .unwrap_or_else(|| fresh_description(raw))
+            .unwrap_or_else(|| raw.map(str::to_owned).unwrap_or_default())
     }
 }
 
@@ -519,10 +519,7 @@ impl PortSource for FakeFlight {
     }
 
     fn mission_info(&self) -> MissionInfo {
-        self.port.mission_info.clone().unwrap_or(MissionInfo {
-            rows: Vec::new(),
-            today: String::new(),
-        })
+        self.port.mission_info.clone().unwrap_or_default()
     }
 
     fn seen_intro(&self) -> bool {
@@ -1899,7 +1896,7 @@ mod tests {
     fn the_fake_answers_nothing_of_the_port_until_scripted_then_as_scripted() {
         let mut fake = FakeFlight::new();
         assert_eq!(fake.market(), None);
-        assert_eq!(fake.mission_info().rows, []);
+        assert_eq!(fake.mission_info(), MissionInfo::default());
         assert_eq!(fake.ship_naming(ShipId(129)), Err(ShipRefusal::NoShipyard));
         assert_eq!(fake.offer_gap(), OFFER_GAP_TICKS);
         assert!(!fake.refusable_offer_dialog(MissionId(130)));
@@ -2169,7 +2166,7 @@ mod tests {
     }
 
     #[test]
-    fn the_fake_loads_descriptions_as_queued_then_for_a_new_pilot_recording_each() {
+    fn the_fake_loads_descriptions_as_queued_then_as_their_raw_text_recording_each() {
         let mut fake = FakeFlight::new();
         fake.queue_description("scripted");
         let movie = DescMovie {
@@ -2179,13 +2176,14 @@ mod tests {
             cinematic: false,
         };
         assert_eq!(fake.load_description(Some("raw"), Some(&movie)), "scripted");
-        assert_eq!(fake.load_description(Some("plain"), None), "plain");
+        let plain = "{b5 \"set\" \"clear\"}";
+        assert_eq!(fake.load_description(Some(plain), None), plain, "unchanged");
         assert_eq!(fake.load_description(None, None), "");
         assert_eq!(
             fake.descriptions_loaded(),
             [
                 (Some("raw".to_owned()), Some(movie)),
-                (Some("plain".to_owned()), None),
+                (Some(plain.to_owned()), None),
                 (None, None),
             ]
         );
