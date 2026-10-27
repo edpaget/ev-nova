@@ -28,14 +28,12 @@ use crate::view_shape::classic_offset;
 use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
-use super::stars;
 use super::{
     BOARD_KEY, FAR_ENOUGH, FlightView, GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, MAP_KEY,
     NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, Said, TOO_CLOSE, TRACTORED, Then,
     arrival_lead, arrival_message_with, assigned_message, assigned_ticks, gate_refusal_message,
-    jump_refusal_message, jump_refusal_ticks, landing_refusal_ticks, look, message_text,
-    no_outfitter, refusal_message, show_destroyed, show_frozen_frames, show_gate_frames,
-    shown_scene, stellar_name,
+    jump_refusal_message, jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter,
+    refusal_message, show_frozen_frames, show_gate_frames, stellar_name,
 };
 
 impl<
@@ -248,9 +246,9 @@ impl<
     /// nothing in common, and both are set before the frame is drawn.
     pub(super) fn run_steps(&mut self, steps: u32) {
         let rescued = self.step_frame(steps, self.anchor());
-        if let (Ok(session), Some(scene)) = (&self.sim.session, &mut self.scene) {
-            show_frozen_frames(scene, session);
-            show_gate_frames(scene, session);
+        if let Some(scene) = &mut self.scene {
+            show_frozen_frames(scene, &self.frame);
+            show_gate_frames(scene, &self.frame);
         }
         if rescued {
             // Laid out in the system the rescue took the pod to, from where
@@ -266,16 +264,18 @@ impl<
 
     /// Starts the jump's effect once the session says the jump has begun,
     /// or lights the screen, unless it is playing already; and starts its
-    /// fade to white once the session's `_hyperGamma` is above 0
-    /// ([`Session::hyper_gamma`]).
+    /// fade to white once the frame's `_hyperGamma` is above 0
+    /// ([`FlightFrame::hyper_gamma`](nova_sim::flight_frame::FlightFrame::hyper_gamma)),
+    /// read afresh, as it follows a jump just begun.
     pub(super) fn start_jump_effect(&mut self) {
+        self.refresh_frame();
         let Ok(session) = &self.sim.session else {
             return;
         };
         // `_hyperGamma` goes back to -1 on the first pass after the
         // arrival, so it lights only a jump still under way.
         let under_way = session.jumping().is_some() || session.preparing_jump().is_some();
-        let lit = under_way && session.hyper_gamma() > 0.0;
+        let lit = under_way && self.frame.hyper_gamma > 0.0;
         if self.jump.is_none() && (session.jumping().is_some() || lit) {
             self.jump = Some(JumpEffect::warp(self.hyperspace_effects));
         }
@@ -461,7 +461,7 @@ impl<
     /// ([`FlightView::lay_out`]); otherwise a move to another stellar of
     /// the system shown draws the ship there ([`FlightView::place_ship`]);
     /// and a rebuild point that changed which stellars are shown, with no
-    /// system entered, reads the scene again with them ([`shown_scene`])
+    /// system entered, reads the scene again with them ([`shown_scene`](super::shown_scene))
     /// ([`FlightView::redraw_scene`]).
     ///
     /// The only place the session events are taken: each frame calls it
@@ -473,6 +473,9 @@ impl<
     ///
     /// [`FlightEvent::Session`]: nova_sim::flight_frame::FlightEvent::Session
     pub(super) fn catch_up(&mut self) -> Redrawn {
+        // Refreshed before the early return too: a session that failed
+        // draws the default frame.
+        self.refresh_frame();
         if self.sim.session.is_err() {
             return Redrawn::default();
         }
@@ -482,12 +485,14 @@ impl<
     /// [`FlightView::catch_up`]'s session-side redraws, given what the
     /// events asked for, in their order: the ship's sheet, the bar, the
     /// layout or the ship's place, the scene read again, the stellars'
-    /// looks, the status bar and the stars.
+    /// looks, the status bar and the stars. The kept frame was filled
+    /// afresh as the events were drained ([`FlightView::catch_up_then`]),
+    /// so each reads the flight as the events left it.
     fn redraw_scene(&mut self, redrawn: Redrawn) {
-        let Ok(session) = &self.sim.session else {
+        if self.sim.session.is_err() {
             return;
-        };
-        let system = session.system();
+        }
+        let system = self.frame.system;
         let reshown = redrawn.rebuilt
             && !redrawn.system
             && self.scene.as_ref().is_some_and(|scene| {
@@ -495,7 +500,7 @@ impl<
                     .stellars()
                     .iter()
                     .map(|stellar| stellar.id)
-                    .eq(session.stellars_shown())
+                    .eq(self.frame.stellars_shown())
             });
         if redrawn.ship {
             self.follow_ship();
@@ -522,96 +527,18 @@ impl<
         }
     }
 
-    /// Draws each stellar of the scene shown as the session holds it after
-    /// a rebuild point
-    /// ([`SystemScene::rebuild`](crate::system::scene::SystemScene::rebuild)):
-    /// one whose look changed
-    /// shows its current frame. The scene is not laid out again.
-    fn rebuild_stellars(&mut self) {
-        if let (Ok(session), Some(scene)) = (&self.sim.session, &mut self.scene) {
-            scene.rebuild(|id| look(session, id));
-        }
-    }
-
-    /// Moves the clock on by `dt` and steps the stellars' animations by
-    /// the whole ticks of 1/30 s it crossed, as the original's sprite tick
-    /// runs every play frame, the jump's included. A random next frame
-    /// (`Flags2` 0x0002) is drawn on the effects' chance, never the
-    /// session's: the frame a stellar shows is drawn state only.
-    pub(super) fn step_stellars(&mut self, dt: Duration) {
-        let before = crate::time::ticks(self.elapsed);
-        self.elapsed += dt;
-        if let Some(scene) = &mut self.scene {
-            scene.step(
-                crate::time::ticks(self.elapsed) - before,
-                &mut self.effects_chance,
-            );
-        }
-    }
-
-    /// Scatters the stars afresh about the ship and places them once, on
-    /// the effects' chance, when the session draws the original's
-    /// starfield (see the `stars` module).
-    fn reset_stars(&mut self) {
-        let Ok(session) = &self.sim.session else {
-            return;
-        };
-        if stars::original(self.presentation.starfield, &self.looks) {
-            let at = stars::surroundings(session, self.view, self.anchor(), &self.looks);
-            stars::reset(
-                &mut self.stars,
-                &at,
-                self.parallax_starfield,
-                &mut self.effects_chance,
-            );
-        }
-    }
-
-    /// Draws each stellar of the scene shown as the session holds it
-    /// ([`show_destroyed`]). The scene is not laid out again.
-    pub(super) fn show_destroyed(&mut self) {
-        if let (Ok(session), Some(scene)) = (&self.sim.session, &mut self.scene) {
-            show_destroyed(scene, session);
-        }
-    }
-
-    /// Lets go of the scene shown, keeping each of its stellars'
-    /// animation state
-    /// ([`KeptFrames::keep`](crate::system::kept_frames::KeptFrames::keep)),
-    /// and shows the session's in its place, read from the catalog with the stellars the session
-    /// shows ([`shown_scene`]): each stellar looking as the session holds
-    /// it ([`show_destroyed`]), then each the flight has shown before
-    /// resumed where it was left, on the sheet it now draws
-    /// ([`SystemScene::resume`](crate::system::scene::SystemScene::resume)),
-    /// and each hypergate on its session's frame. The look is set before
-    /// the frames resume, so the rebuild or redraw that follows finds it
-    /// unchanged and leaves them alone.
-    fn show_scene(&mut self) {
-        let Ok(session) = &self.sim.session else {
-            return;
-        };
-        if let Some(left) = &self.scene {
-            self.kept_frames.keep(left);
-        }
-        let mut scene = shown_scene(&*self.catalog, session);
-        show_destroyed(&mut scene, session);
-        scene.resume(&self.kept_frames);
-        show_gate_frames(&mut scene, session);
-        self.scene = Some(scene);
-    }
-
     /// Lays out `system`, the session's: its scene ([`FlightView::show_scene`]),
     /// each stellar shown before resuming its animation where it was left,
-    /// the course map's course, and the ship drawn from where it is, the
-    /// last system's NPCs and effects let go.
+    /// the course map's course, and the ship drawn from where the frame,
+    /// filled afresh, has it, the last system's NPCs and effects let go.
     fn lay_out(&mut self, system: SystemId) {
         self.show_scene();
-        let Ok(session) = &self.sim.session else {
+        if self.sim.session.is_err() {
             return;
-        };
+        }
         let course = self.frame_now().course_shown;
         self.map.show_course(system, &course);
-        self.previous = *session.player();
+        self.previous = self.player_place_now();
         self.alpha = 0.0;
         self.npc_previous.clear();
         self.effects.clear();
@@ -631,10 +558,11 @@ impl<
     /// spawn to draw stands for. A `Y`'s carries no sound of its own (see
     /// [`Effects::apply`](crate::flight::effects::Effects::apply)).
     fn show_arrival_explosions(&mut self) {
+        let player = self.player_place_now().position;
         let Ok(session) = &mut self.sim.session else {
             return;
         };
-        let scene = self.presentation.scene(session.player().position);
+        let scene = self.presentation.scene(player);
         let chance = &mut self.effects_chance;
         let events = session.take_combat_events();
         for event in &events {
@@ -655,13 +583,14 @@ impl<
 
     /// Draws the ship where the session has it, not on its way from where
     /// it was, and shows the session's course again on the course map:
-    /// after a move to another stellar of the system shown, and a
-    /// take-off.
+    /// after a move to another stellar of the system shown, a take-off and
+    /// a new pilot's beginning. Its place is read from the frame filled
+    /// afresh ([`FlightView::player_place_now`]).
     pub(super) fn place_ship(&mut self) {
-        let Ok(session) = &self.sim.session else {
+        if self.sim.session.is_err() {
             return;
-        };
-        self.previous = *session.player();
+        }
+        self.previous = self.player_place_now();
         self.show_course();
         self.alpha = 0.0;
     }
@@ -1071,7 +1000,7 @@ impl<
             if docked {
                 self.redraw_status();
                 if let Some(nav) = opened.and_then(|opened| opened.nav) {
-                    self.sim.apply(FlightCommand::RestoreMapSelection(nav));
+                    self.send(FlightCommand::RestoreMapSelection(nav));
                 }
                 self.restore_opener_nav(opened);
                 return;
@@ -1081,7 +1010,7 @@ impl<
             if !by_dialog {
                 self.ui_sounds.push(UiSound::MapClosed);
             }
-            self.sim.apply(FlightCommand::CueCourse);
+            self.send(FlightCommand::CueCourse);
             self.redraw_status();
             self.restore_opener_nav(opened);
             return;
@@ -1266,7 +1195,9 @@ impl<
         let session = self.sim.session.as_mut().ok()?;
         let assigned = session.assign(choice, &mut self.sim.chance)?;
         if assigned == Assigned::MyShip {
-            self.previous = *session.player();
+            // Where the new ship is, read from the frame filled afresh
+            // after the assignment, before the catch-up that follows it.
+            self.previous = self.player_place_now();
             self.alpha = 0.0;
         }
         self.catch_up();
@@ -1283,10 +1214,10 @@ impl<
     /// not tried again. The status bar follows on its own
     /// ([`FlightView::follow_bar`]).
     fn follow_ship(&mut self) {
-        let Ok(session) = &self.sim.session else {
+        if self.sim.session.is_err() {
             return;
-        };
-        let ship = session.ship();
+        }
+        let ship = self.frame.player().class;
         if self.sheet_ship != Some(ship) {
             self.sheet = self.catalog.ship_sheet(ship);
             self.sheet_ship = Some(ship);
@@ -1319,7 +1250,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightEvent::Session`]: nova_sim::flight_frame::FlightEvent::Session
     pub(super) fn catch_up_then(&mut self, redraw: impl FnOnce(&mut Self, Redrawn)) -> Redrawn {
         let mut redrawn = Redrawn::default();
-        for event in self.drain().take_events() {
+        let events = self.drain().take_events();
+        // The kept frame afresh before anything redraws from it.
+        self.refresh_frame();
+        for event in events {
             match event {
                 SessionEvent::ShipChanged => redrawn.ship = true,
                 SessionEvent::SystemChanged => redrawn.system = true,
@@ -1336,8 +1270,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.show_course();
         }
         redraw(self, redrawn);
-        if self.map_open
-            && (redrawn.galaxy || self.map_seen.as_ref() != Some(&self.frame_now().map_key))
+        // And again after the redraws, which may have changed it.
+        self.refresh_frame();
+        if self.map_open && (redrawn.galaxy || self.map_seen.as_ref() != Some(&self.frame.map_key))
         {
             self.redraw_map();
         }
@@ -1459,8 +1394,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         };
         self.map.show_drawing(&drawing);
         if offered.is_some() {
-            self.sim
-                .apply(FlightCommand::MarkKnown(drawing.gate_arrows.clone()));
+            self.send(FlightCommand::MarkKnown(drawing.gate_arrows.clone()));
         }
         if let Some(sources) = self.sim.map_border_sources() {
             self.map.show_border_sources(sources);
@@ -1557,7 +1491,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// (`_DrawStatus`), as [`FlightView::cycle_map`] does.
     fn answer_map_press(&mut self, press: &PendingPress) {
         let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
-        let answer = self.sim.apply(FlightCommand::MapClick(MapClick {
+        let answer = self.send(FlightCommand::MapClick(MapClick {
             hits: press.hits.clone(),
             shift: press.shift,
             hypergate: offered,
@@ -1594,7 +1528,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// @0x12dba).
     fn clear_route(&mut self) {
         self.map.route_cleared();
-        if !self.sim.apply(FlightCommand::ClearRoute).is_refused() {
+        if !self.send(FlightCommand::ClearRoute).is_refused() {
             self.show_course();
         }
         self.redraw_map();
@@ -1662,11 +1596,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.redraw_map();
             return;
         }
-        if !self
-            .sim
-            .apply(FlightCommand::CycleMapSelection)
-            .is_refused()
-        {
+        if !self.send(FlightCommand::CycleMapSelection).is_refused() {
             self.map.preselect(self.sim.map_preselection());
             self.map.redraw();
             self.redraw_map();

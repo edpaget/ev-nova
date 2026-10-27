@@ -25,14 +25,17 @@
 //! `check_contract`, what every sim must honour.
 
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, StepInput, StepReport,
+    Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, StepInput,
+    StepReport,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::story::OverlaidGalaxy;
-use nova_sim::{MapMarks, MissionId, PlayerCommand, SavedNav, StellarId, SystemId};
+use nova_sim::{
+    Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, StellarId, SystemId, Vec2,
+};
 
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
@@ -65,6 +68,19 @@ pub trait FlightSim: MapSource + CommSource + PortSource {
     /// when it is refused. A flight that failed to start takes every one,
     /// as it has nothing to refuse them with.
     fn takes(&self, gate: PlayerCommand) -> bool;
+
+    /// What the pointer at `at`, in system coordinates, is over among the
+    /// things the player can target, the ships boxed as `drawn` says they
+    /// are drawn (`nova_sim::Session::hover`): the cursor asks it each
+    /// step it shows. `None` with no box and no stellar under it.
+    fn hover(&self, at: Vec2, drawn: &DrawnBoxes) -> Option<Hover>;
+
+    /// The ship types the system's traffic will bring
+    /// (`nova_sim::Session::coming_traffic_ships`), whose sheets the view
+    /// reads as play is entered. None by default: a sim with no traffic.
+    fn coming_traffic(&self) -> Vec<ShipId> {
+        Vec::new()
+    }
 }
 
 /// The course map's questions of the flight, and the floating map's and

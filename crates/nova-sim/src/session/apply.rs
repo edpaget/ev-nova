@@ -32,6 +32,9 @@ impl Session {
     ///   [`Session::cycle_map_selection`], refused docked.
     /// - [`FlightCommand::SelectOnFloatingMap`] runs
     ///   [`Session::select_on_floating_map`], refused during a jump.
+    /// - [`FlightCommand::ClickInSpace`] runs [`Session::click_in_space`],
+    ///   answered with what it took, or refused when it changed nothing:
+    ///   landed, or a click on nothing it takes.
     /// - The rest are never refused, and answer [`Answer::Done`]:
     ///   [`FlightCommand::ClearRoute`] ([`Session::clear_route`]),
     ///   [`FlightCommand::MarkKnown`] ([`Session::mark_known`]),
@@ -103,6 +106,9 @@ impl Session {
                 self.restore_map_selection(saved);
                 Answer::Done
             }
+            FlightCommand::ClickInSpace { at, drawn } => self
+                .click_in_space(at, &drawn)
+                .map_or(Answer::Refused, Answer::InSpace),
         }
     }
 }
@@ -523,5 +529,77 @@ mod tests {
             Answer::Done
         );
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
+    }
+
+    /// The boxes of a click's ships: NPC `id` drawn in a 40-pixel square
+    /// at (50, 0), and the player at the centre when `player` says.
+    fn boxes(id: NpcId, player: bool) -> crate::flight_frame::DrawnBoxes {
+        let square = |centre| crate::hover::DrawnBox {
+            centre,
+            width: 40,
+            height: 40,
+        };
+        crate::flight_frame::DrawnBoxes {
+            player: player.then(|| square(crate::geometry::Vec2::ZERO)),
+            npcs: vec![(id, square(crate::geometry::Vec2::new(50.0, 0.0)))],
+        }
+    }
+
+    #[test]
+    fn a_click_in_space_on_a_ship_drawn_answers_the_ship_it_targets() {
+        let mut session = quiet(&catalog());
+        let id = ship(&mut session);
+        let click = FlightCommand::ClickInSpace {
+            at: crate::geometry::Vec2::new(55.0, 5.0),
+            drawn: boxes(id, false),
+        };
+        assert_eq!(
+            session.apply(click),
+            Answer::InSpace(crate::hover::Hover::Ship(id))
+        );
+        assert_eq!(session.target().map(|npc| npc.id), Some(id));
+        assert_eq!(session.take_sounds(), [SimSound::TargetSelected]);
+    }
+
+    #[test]
+    fn a_click_in_space_on_the_players_ship_lets_go_of_the_target() {
+        let mut session = quiet(&catalog());
+        let id = ship(&mut session);
+        session.select_target(TargetPick::Next);
+        session.take_sounds();
+        let click = FlightCommand::ClickInSpace {
+            at: crate::geometry::Vec2::ZERO,
+            drawn: boxes(id, true),
+        };
+        assert_eq!(
+            session.apply(click),
+            Answer::InSpace(crate::hover::Hover::Player)
+        );
+        assert_eq!(session.target(), None);
+    }
+
+    #[test]
+    fn a_click_in_space_on_nothing_is_refused_and_changes_nothing() {
+        let mut session = quiet(&catalog());
+        let id = ship(&mut session);
+        let before = session.clone();
+        let click = FlightCommand::ClickInSpace {
+            at: crate::geometry::Vec2::new(-3000.0, 3000.0),
+            drawn: boxes(id, true),
+        };
+        assert_eq!(session.apply(click), Answer::Refused);
+        assert_eq!(session, before);
+    }
+
+    #[test]
+    fn a_click_in_space_is_refused_landed() {
+        let mut session = landed();
+        let before = session.clone();
+        let click = FlightCommand::ClickInSpace {
+            at: crate::geometry::Vec2::ZERO,
+            drawn: boxes(NpcId(1), true),
+        };
+        assert_eq!(session.apply(click), Answer::Refused);
+        assert_eq!(session, before);
     }
 }

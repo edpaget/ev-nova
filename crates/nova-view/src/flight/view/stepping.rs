@@ -22,9 +22,14 @@
 //! then relayed together after the steps
 //! ([`FlightView::relay_comm_and_quotes`]).
 //!
-//! **The presentation rules** the effects and stars read
+//! **The presentation rules** the effects, stars and world read
 //! ([`Presentation`]) are the view's own, held from the flight's rulebook
 //! as the view is read and as its rules change.
+//!
+//! **The frame after the steps.** Once the report is replayed the kept
+//! frame is filled afresh ([`FlightView::refresh_frame`]), so the frame's
+//! ships are where the steps left them, the places each step began from
+//! ([`StepRun::before`]) being where the drawing moves them from.
 
 use nova_sim::flight_frame::{PassReport, StepInput, StepRun};
 use nova_sim::{Controls, Face, PlayerCommand, RuleKey, RuleSource, Rulebook, ShipRef, Turn, Vec2};
@@ -40,9 +45,14 @@ use super::{
     stars, window_width,
 };
 
-/// The rules the view shows the steps' effects and stars by, held from
-/// the flight's rulebook: [`RuleKey::ShipDebris`], [`RuleKey::CombatCaps`],
-/// [`RuleKey::LoopedSoundWait`] and [`RuleKey::FlightStarfield`].
+/// The rules the view shows the steps' effects, the stars and the world
+/// by, held from the flight's rulebook: [`RuleKey::ShipDebris`],
+/// [`RuleKey::CombatCaps`], [`RuleKey::LoopedSoundWait`],
+/// [`RuleKey::FlightStarfield`], and the world's
+/// [`RuleKey::TranslucentShotFade`], [`RuleKey::FlightAnchor`],
+/// [`RuleKey::LightningZigZag`] and [`RuleKey::IonTintMurkColour`]
+/// (rdm:phase/view-sim-seam/phase-7-world-frame, which pulled these four
+/// forward from rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Presentation {
     /// [`RuleKey::ShipDebris`]'s reading.
@@ -53,16 +63,28 @@ pub(super) struct Presentation {
     pub(super) looped: RuleSource,
     /// [`RuleKey::FlightStarfield`]'s reading.
     pub(super) starfield: RuleSource,
+    /// [`RuleKey::TranslucentShotFade`]'s reading.
+    pub(super) shot_fade: RuleSource,
+    /// [`RuleKey::FlightAnchor`]'s reading.
+    pub(super) anchor: RuleSource,
+    /// [`RuleKey::LightningZigZag`]'s reading.
+    pub(super) zig_zag: RuleSource,
+    /// [`RuleKey::IonTintMurkColour`]'s reading.
+    pub(super) ion_tint_murk: RuleSource,
 }
 
 impl Presentation {
-    /// The four as `rules` read them.
+    /// The eight as `rules` read them.
     pub(super) fn of(rules: &Rulebook) -> Self {
         Self {
             debris: rules.source_for(RuleKey::ShipDebris),
             caps: rules.source_for(RuleKey::CombatCaps),
             looped: rules.source_for(RuleKey::LoopedSoundWait),
             starfield: rules.source_for(RuleKey::FlightStarfield),
+            shot_fade: rules.source_for(RuleKey::TranslucentShotFade),
+            anchor: rules.source_for(RuleKey::FlightAnchor),
+            zig_zag: rules.source_for(RuleKey::LightningZigZag),
+            ion_tint_murk: rules.source_for(RuleKey::IonTintMurkColour),
         }
     }
 
@@ -133,8 +155,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Runs the frame's `steps` through the flight, the ship drawn at
     /// `anchor` (see the module docs), steps the view's effects after each
-    /// pass reported and relays the comm and quotes they raised. Whether
-    /// the escape pod's rescue ended the stepping.
+    /// pass reported, relays the comm and quotes they raised and fills the
+    /// kept frame afresh. Whether the escape pod's rescue ended the
+    /// stepping.
     pub(super) fn step_frame(&mut self, steps: u32, anchor: Anchor) -> bool {
         let input = self.step_input(anchor);
         let mut report = std::mem::take(&mut self.step_report);
@@ -163,19 +186,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
         self.step_report = report;
         self.relay_comm_and_quotes(&notes, quotes);
+        self.refresh_frame();
         rescued
     }
 
-    /// Keeps each ship as it was before `run`, for the drawing to move
-    /// from.
+    /// Keeps each ship's place before `run`, for the drawing to move
+    /// from, in its buffer.
     fn keep_before(&mut self, run: &StepRun) {
         self.npc_previous.clear();
-        for &(ship, state) in &run.before {
+        for &(ship, place) in &run.before {
             match ship {
-                ShipRef::Player => self.previous = state,
-                ShipRef::Npc(id) => {
-                    self.npc_previous.insert(id, state);
-                }
+                ShipRef::Player => self.previous = place,
+                ShipRef::Npc(id) => self.npc_previous.push((id, place)),
             }
         }
     }

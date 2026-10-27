@@ -4,6 +4,8 @@
 //! the boardings' rules.
 //!
 //! It forwards: [`FlightSim::frame`] to `Session::fill_frame`,
+//! [`FlightSim::hover`] to `Session::hover`, [`FlightSim::coming_traffic`]
+//! to `Session::coming_traffic_ships`,
 //! [`FlightSim::step`] to `Session::step`, with its collaborators and
 //! the catalog the view shared,
 //! [`FlightSim::apply`] to `Session::apply`, whose match over the
@@ -24,7 +26,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, StepInput, StepReport,
+    Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, StepInput,
+    StepReport,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
@@ -32,9 +35,9 @@ use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    Allegiance, Behaviour, BoardingRule, DisableRule, LegalCode, MapMarks, MissionId, NovaAi,
-    NovaBoarding, NovaDisable, NovaLaw, PlayerCommand, PointDefenceRule, Rules, SavedNav, Session,
-    SimCatalog, StellarId, StepCollaborators, SystemId, TagNames,
+    Allegiance, Behaviour, BoardingRule, DisableRule, Hover, LegalCode, MapMarks, MissionId,
+    NovaAi, NovaBoarding, NovaDisable, NovaLaw, PlayerCommand, PointDefenceRule, Rules, SavedNav,
+    Session, ShipId, SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, Vec2,
 };
 
 use super::SharedChance;
@@ -234,6 +237,21 @@ impl<C> FlightSim for SessionFlight<C> {
 
     fn takes(&self, gate: PlayerCommand) -> bool {
         self.session().map_or(true, |session| session.takes(gate))
+    }
+
+    /// Forwards to `Session::hover`; a failed session hovers nothing.
+    fn hover(&self, at: Vec2, drawn: &DrawnBoxes) -> Option<Hover> {
+        self.session().ok()?.hover(at, drawn)
+    }
+
+    /// Forwards to `Session::coming_traffic_ships`, reading the catalog the
+    /// view shared ([`SessionFlight::share_catalog`]); a failed session, or
+    /// one never shared a catalog, brings none.
+    fn coming_traffic(&self) -> Vec<ShipId> {
+        match (self.session(), &self.catalog) {
+            (Ok(session), Some(catalog)) => session.coming_traffic_ships(&*catalog.0),
+            _ => Vec::new(),
+        }
     }
 }
 

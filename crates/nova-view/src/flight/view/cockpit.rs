@@ -1,386 +1,44 @@
-//! [`FlightView`]'s cockpit: shown positions, the cursor, drawing ships,
-//! controls and keys, the floating map, escorts, the combat display and the
-//! status bar.
+//! [`FlightView`]'s cockpit: controls and keys, the floating map, escorts,
+//! the world's brackets and icon as the session holds them, the combat
+//! display and the status bar. The world itself is drawn from the kept
+//! frame (the `drawing` and `world` modules).
 
-use nova_sim::Drawn as ShipDrawn;
 use nova_sim::PlayerCommand;
 use nova_sim::{
-    ClassRow, Condition, EscortCommand, NavMode, Npc, Reserves, Session, ShipRef, ShipState,
-    StellarPick, SystemId, TargetPick, Vec2, glow_level,
+    ClassRow, Condition, EscortCommand, NavMode, Reserves, Session, StellarPick, SystemId,
+    TargetPick,
 };
 
-use crate::draw::crossed_box;
-use crate::flight::alert;
-use crate::flight::asteroids::AsteroidShown;
-use crate::flight::boxes::BoxShown;
-use crate::flight::brackets;
-use crate::flight::cloak_fade::{CloakDraw, cloak_rolls, player_cloak_rolls};
-use crate::flight::effects::Effects;
 use crate::flight::escorts::{
     EscortMenu, GROUP_KEYS, MENU_KEY, NO_ESCORTS, Toggled, escort_command_message,
 };
-use crate::flight::flash::ShieldFlash;
 use crate::flight::floating::{self, Hit};
-use crate::flight::gate_colorize::gate_colorize;
-use crate::flight::hud::{self, HudState, STATUS_BAR_WIDTH, StatusBar};
-use crate::flight::ion_tint::hull_colorize;
-use crate::flight::murk::{self, sprite_murk};
-use crate::flight::ship_layers::{ShipDraw, base_alpha, npc_glow_rolls, turning};
-use crate::flight::sprite::rotation_frame;
+use crate::flight::hud::{self, HudState, StatusBar};
 use crate::flight::target::{self};
-use crate::flight::weapons::{self, BeamShown, ShotShown};
-use nova_sim::combat::ship_frames::{Drawn, FrameSpec};
-use nova_sim::sprite_layer::SpriteLayer;
 
-use super::sprites::{Sprite, sprite_stack};
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::MapMarks;
 use crate::galaxy::map::MapPicture;
-use crate::system::camera::{Anchor, Camera, VIEW_SIZE};
-use crate::system::scene::{PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
-use crate::time::{sixtieths, ticks};
+use crate::system::camera::VIEW_SIZE;
+use crate::time::sixtieths;
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{Color, DrawList, Input, Key, Point, UiSound};
-use nova_sim::RuleSource;
+use crate::{DrawList, Input, Key, Point, UiSound};
 use nova_sim::flight_frame::FlightCommand;
 
 use super::slot_block;
 use super::{
-    BOARD_KEY, DESELECT_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY,
-    ESCORT_HOLD_KEY, ESCORT_RECALL_KEY, ESCORT_TICKS, FLIGHT_KEYS, FlightView, HAIL_KEY, HELP,
-    HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
-    MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_COMMAND_KEY,
-    NEAREST_STELLAR_KEY, OVERLAY_SIZE, SELECT_KEY, SELF_DESTRUCT_KEY, STELLAR_SLOT_KEYS,
-    TARGET_KEY, ViewShips, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, drawn_size, npc_tint,
-    shown_heading, shown_position, window_width,
+    BOARD_KEY, DESELECT_KEY, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY, ESCORT_HOLD_KEY,
+    ESCORT_RECALL_KEY, ESCORT_TICKS, FLIGHT_KEYS, FlightView, HAIL_KEY, HYPER_SELECT_KEY,
+    HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, NAV_OFF_KEY,
+    NEAREST_KEY, NEAREST_STELLAR_COMMAND_KEY, NEAREST_STELLAR_KEY, SELECT_KEY, SELF_DESTRUCT_KEY,
+    STELLAR_SLOT_KEYS, TARGET_KEY, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, window_width,
 };
 
 impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
-    /// The session's system, as laid out, if the session started.
-    #[must_use]
-    pub fn scene(&self) -> Option<&SystemScene> {
-        self.scene.as_ref()
-    }
-
     /// The HUD's status bar, or why it cannot be shown.
     pub fn status_bar(&self) -> Result<&StatusBar, &str> {
         self.status_bar.as_ref().map_err(String::as_str)
-    }
-
-    /// How far the display is between the last two steps, in `[0, 1)`.
-    #[must_use]
-    pub fn alpha(&self) -> f32 {
-        self.alpha
-    }
-
-    /// Where the ship is drawn: `alpha` of the way from where it was a step
-    /// ago to where it is.
-    #[must_use]
-    pub fn shown_position(&self) -> Point {
-        shown_position(&self.previous, &self.current(), self.alpha)
-    }
-
-    /// Which way the ship is drawn facing: `alpha` of the way, the short way
-    /// round, from its heading a step ago to its heading now.
-    #[must_use]
-    pub fn shown_heading(&self) -> f32 {
-        shown_heading(&self.previous, &self.current(), self.alpha)
-    }
-
-    /// Where `npc` is drawn and which way it faces: `alpha` of the way from
-    /// how it was a step ago, as the player's ship; where it is, when it
-    /// was not there a step ago.
-    pub(super) fn shown_npc(&self, npc: &Npc) -> (Point, f32) {
-        let from = self.npc_previous.get(&npc.id).unwrap_or(&npc.state);
-        (
-            shown_position(from, &npc.state, self.alpha),
-            shown_heading(from, &npc.state, self.alpha),
-        )
-    }
-
-    /// The NPCs, each with where it is drawn and which way it faces.
-    pub(super) fn shown_npcs(&self) -> Vec<(&Npc, Point, f32)> {
-        let Ok(session) = &self.sim.session else {
-            return Vec::new();
-        };
-        session
-            .npcs()
-            .iter()
-            .map(|npc| {
-                let (at, heading) = self.shown_npc(npc);
-                (npc, at, heading)
-            })
-            .collect()
-    }
-
-    /// Runs the cursor's `steps` flight steps (see the `cursor` module),
-    /// hovering as the pointer is over something targetable now
-    /// ([`FlightView::hovering`]), once the session's steps have run and
-    /// the ships are where the frame draws them. A key pressed since the
-    /// last step, or a flight key held, fades it; the weapon safety key
-    /// ([`DESELECT_KEY`]) only by its press, as `_HandlePlayer` sets
-    /// *0x3b5550 for it only on the pass it lets go of a secondary
-    /// (@0x6ade1), which its press has faded already; a stellar slot key
-    /// only while the slot block polls it, as the block sets *0x3b5550 on
-    /// every frame it finds one down (@0x69e0d-0x69e12), and the escort
-    /// menu's loop never does ([`FlightView::slot_key_polled`]).
-    pub(super) fn step_cursor(&mut self, steps: u32) {
-        if steps == 0 {
-            return;
-        }
-        let frames = self.looks.cursor_sheet().map(|sheet| sheet.frames);
-        let hovering = self.hovering();
-        let held = self.held.iter().any(|&key| {
-            self.slot_key_polled(key, false)
-                .unwrap_or(key != DESELECT_KEY)
-        });
-        for _ in 0..steps {
-            self.cursor.step(hovering, frames, held);
-        }
-    }
-
-    /// What `input` tells the cursor: a pointer move or button press shows
-    /// it where the pointer is, and the pointer leaving the window hides
-    /// it; a key pressed fades it at the next flight step (none runs while
-    /// the map is open, and the M that opened it has faded it already).
-    pub(super) fn cursor_input(&mut self, input: &Input) {
-        match *input {
-            Input::PointerMoved(at)
-            | Input::PointerButton {
-                pressed: true, at, ..
-            } => {
-                self.cursor.pointer(at);
-            }
-            Input::PointerLeft => self.cursor.left(),
-            Input::Key { pressed: true, .. } => self.cursor.key(),
-            _ => {}
-        }
-    }
-
-    /// Whether the pointer, while the cursor shows, is over something the
-    /// player can target ([`Session::hover`]), the ships boxed where they
-    /// are drawn ([`ViewShips`]).
-    fn hovering(&self) -> bool {
-        let (Ok(session), Some(at)) = (&self.sim.session, self.cursor.shown_at()) else {
-            return false;
-        };
-        let world = self.camera().screen_to_world(at);
-        let ships = ViewShips {
-            view: self,
-            session,
-        };
-        session.hover(Vec2::new(world.x, world.y), &ships).is_some()
-    }
-
-    /// The ships and the shots, bottom first, each in its layer as the
-    /// session stacks them ([`sprites`](super::sprites)): the ships as
-    /// [`Session::draw_layers`] gives them (see [`nova_sim::ship_layer`]),
-    /// each layer in the order the session's rules overlap them, and the
-    /// shots among them by their layers ([`nova_sim::sprite_layer`]).
-    /// Without a session, the player alone, in the ships' layer. The order
-    /// is read from the session as the frame is drawn, so nothing waits
-    /// past it.
-    pub(super) fn sprites_stacked(&self, camera: &Camera) -> Vec<(SpriteLayer, Sprite)> {
-        let Ok(session) = &self.sim.session else {
-            return vec![(SpriteLayer::Ships, Sprite::Ship(ShipRef::Player))];
-        };
-        sprite_stack(session.draw_layers(), self.shown_shots(camera))
-    }
-
-    /// Draws the sprites of `stacked` in `layer`, in their order: the
-    /// player, the NPCs among `npcs` (as [`FlightView::shown_npcs`] places
-    /// them) and the shots. Each cloak's level is read from the session as
-    /// the frame is drawn. Without a session only the player is drawn,
-    /// in full.
-    pub(super) fn draw_sprite_layer(
-        &self,
-        list: &mut DrawList,
-        camera: &Camera,
-        stacked: &[(SpriteLayer, Sprite)],
-        npcs: &[(&Npc, Point, f32)],
-        layer: SpriteLayer,
-    ) {
-        let player = camera.world_to_screen(self.shown_position());
-        let sprites = stacked.iter().filter(|(on, _)| *on == layer);
-        for (_, sprite) in sprites {
-            match (sprite, &self.sim.session) {
-                (Sprite::Ship(ShipRef::Player), Ok(session)) => {
-                    self.draw_ship(list, player, session.player_fate().row().drawn);
-                }
-                (Sprite::Ship(ShipRef::Player), Err(_)) => {
-                    self.draw_ship(list, player, ShipDrawn::Full);
-                }
-                (Sprite::Ship(ShipRef::Npc(id)), Ok(session)) => {
-                    if let Some(&(npc, at, heading)) = npcs.iter().find(|(npc, ..)| npc.id == *id) {
-                        self.draw_npc(list, session, npc, camera.world_to_screen(at), heading);
-                    }
-                }
-                (Sprite::Shot(shot), Ok(session)) => {
-                    let fade = session
-                        .rules()
-                        .source_for(nova_sim::RuleKey::TranslucentShotFade);
-                    weapons::draw_shot(list, shot, &self.looks, fade);
-                }
-                // Without a session there are no NPCs or shots.
-                (Sprite::Ship(ShipRef::Npc(_)) | Sprite::Shot(_), Err(_)) => {}
-            }
-        }
-    }
-
-    /// Draws `npc` at `at` facing `heading` with its own ship's sheet, or
-    /// a crossed box when its sheet cannot be read, as its cloak leaves it
-    /// ([`CloakDraw`], see [`cloak_fade`](crate::flight::cloak_fade)):
-    /// jittered and faint while fading, faint or, but for a lit weapon
-    /// glow, not at all at a full fade. One
-    /// waiting at the gate it comes out of is hidden, then fades in over
-    /// its last ticks there ([`npc_tint`]), washed white by the gate, as
-    /// one entering a gate is ([`gate_colorize`]); with neither, its hull is as
-    /// translucent as its `BaseTransp` ([`base_alpha`]). Its hull and
-    /// layers are drawn on the frames its display picked and murked (see
-    /// the [`ship_layers`](crate::flight::ship_layers) module): its engine
-    /// glow from its glow base, rolled on its own, its running lights at
-    /// the level its display drew them, its weapon glow while lit
-    /// ([`weapon_glow`](crate::flight::weapon_glow)), its alt layer, and
-    /// its shield layer while it flashes.
-    pub(super) fn draw_npc(
-        &self,
-        list: &mut DrawList,
-        session: &Session,
-        npc: &Npc,
-        at: Point,
-        heading: f32,
-    ) {
-        let ship_ref = ShipRef::Npc(npc.id);
-        let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
-        let cloak = CloakDraw::of(session.cloak_shown(npc), tick, &cloak_rolls(npc.id));
-        let hull = cloak.is_none_or(|cloak| cloak.hull.is_some());
-        // Fully faded, a cloak's or a gate's: its held alt is forgotten.
-        let Some(tint) = npc_tint(npc).filter(|_| hull) else {
-            self.held_alts.borrow_mut().forget(ship_ref);
-            // A cloak's full fade still draws the weapon glow (@0x2d287).
-            // Its glow, lights and shield are hidden with it.
-            if !hull && let Some(Ok(sheet)) = self.npc_sheets.get(&npc.ship) {
-                let ship = self.npc_ship(session, npc, sheet, heading, (Color::WHITE, cloak));
-                ShipDraw {
-                    hull: false,
-                    ..ship
-                }
-                .draw(list, at, None);
-            }
-            return;
-        };
-        let gating = matches!(
-            npc.mode,
-            nova_sim::traffic::npc::Mode::Emerging { .. }
-                | nova_sim::traffic::npc::Mode::EnteringGate { .. }
-        );
-        match self.npc_sheets.get(&npc.ship) {
-            Some(Ok(sheet)) => {
-                let alpha = if gating {
-                    tint.a
-                } else {
-                    base_alpha(sheet.base_transp)
-                };
-                let ship = self.npc_ship(
-                    session,
-                    npc,
-                    sheet,
-                    heading,
-                    (Color { a: alpha, ..tint }, cloak),
-                );
-                let live = ship.live_alt(at);
-                let alt =
-                    self.held_alts
-                        .borrow_mut()
-                        .shown(ship_ref, ship.drawn.alt, live, ship.hull);
-                ship.draw(list, at, alt);
-            }
-            _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
-        }
-    }
-
-    /// NPC `npc` as drawn with `sheet` facing `heading`, its hull at
-    /// `tint` changed by `cloak` (see [`FlightView::draw_npc`]).
-    fn npc_ship<'a>(
-        &self,
-        session: &Session,
-        npc: &'a Npc,
-        sheet: &'a crate::flight::catalog::ShipSheet,
-        heading: f32,
-        (tint, cloak): (Color, Option<CloakDraw>),
-    ) -> ShipDraw<'a> {
-        let viewer = session.player().position;
-        let murk = sprite_murk(npc.state.position, viewer, session.effective_murk());
-        let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
-        let gating = matches!(
-            npc.mode,
-            nova_sim::traffic::npc::Mode::Emerging { .. }
-                | nova_sim::traffic::npc::Mode::EnteringGate { .. }
-        );
-        let glow_rolls = npc_glow_rolls(npc.id);
-        // A gate writes the hull's colorize after the ion tint, so while
-        // it fades the gate's white shows in place of the tint and the
-        // murk ([`gate_colorize`], `_HandleShipDisplay` @0x2bfa5-0x2c17b).
-        let colorize = if gating {
-            gate_colorize(&npc.mode)
-        } else {
-            hull_colorize(murk, npc.display.ion_tint, session.ion_tint_murk_colour())
-        };
-        let base = nova_sim::glow::drawn_base(npc.display.glow);
-        ShipDraw {
-            sheet,
-            spec: &npc.hull.frames,
-            drawn: npc.display.drawn,
-            heading,
-            tint,
-            cloak,
-            hull: true,
-            murk,
-            held: true,
-            glow: glow_level(base, tick, &glow_rolls),
-            lights: npc.display.drawn.lights,
-            weapon: self
-                .glows
-                .drawn(ShipRef::Npc(npc.id))
-                .filter(|_| self.weapon_effects),
-            shield: self.shield_drawn(ShipRef::Npc(npc.id)),
-            colorize,
-        }
-    }
-
-    /// The level `ship`'s shield layer was last drawn at, while it
-    /// flashes ([`ShieldFlash::drawn`]).
-    fn shield_drawn(&self, ship: ShipRef) -> Option<u8> {
-        self.flashes.get(&ship).and_then(ShieldFlash::drawn)
-    }
-
-    /// The camera, on the ship as drawn, in the view's size, drawing it at
-    /// the flight's [`anchor`](FlightView::anchor).
-    #[must_use]
-    pub fn camera(&self) -> Camera {
-        Camera::centred_on_in(self.shown_position(), self.view).with_anchor(self.anchor())
-    }
-
-    /// Where flight draws the player's ship, as the session's rules read
-    /// [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor), the
-    /// original's play area centre with no session.
-    pub(super) fn anchor(&self) -> Anchor {
-        let source = self
-            .sim
-            .session
-            .as_ref()
-            .map_or(RuleSource::Engine, |session| {
-                session.rules().source_for(nova_sim::RuleKey::FlightAnchor)
-            });
-        Anchor::in_flight(source)
-    }
-
-    /// The view's size in logical units: Nova's 1024 x 768 until
-    /// [`FlightView::set_view_size`] widens it.
-    #[must_use]
-    pub fn view_size(&self) -> (f32, f32) {
-        self.view
     }
 
     /// Sets the view's size, `view` logical units: the app's widened size
@@ -396,19 +54,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         if let Ok(session) = &mut self.sim.session {
             session.set_window_width(window_width(view));
         }
-    }
-
-    /// The frame of the ship's sheet drawn, or `None` without a sheet: its
-    /// set's, as its display picked it, at the heading it is drawn at
-    /// (see the [`ship_layers`](crate::flight::ship_layers) module).
-    #[must_use]
-    pub fn frame(&self) -> Option<u16> {
-        let sheet = self.sheet.as_ref().ok()?;
-        let Ok(session) = &self.sim.session else {
-            return Some(rotation_frame(self.shown_heading(), sheet.rotations));
-        };
-        let spec = turning(&session.hull().frames, sheet);
-        Some(spec.index(session.player_drawn().set, self.shown_heading()))
     }
 
     /// What the shield, armour and fuel gauges show this frame: while
@@ -445,15 +90,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             .unwrap_or_default()
     }
 
-    /// The player's ship now, or where it was for a session that never
-    /// started.
-    fn current(&self) -> ShipState {
-        self.sim
-            .session
-            .as_ref()
-            .map_or(self.previous, |session| *session.player())
-    }
-
     /// The [`PlayerCommand`] a press of `key` sends, as [`Screen::input`](crate::Screen::input)
     /// dispatches it; `None` for a key that is no command.
     pub(super) fn command_of(&self, key: Key) -> Option<PlayerCommand> {
@@ -483,35 +119,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             _ => return None,
         };
         Some(command)
-    }
-
-    /// A click at screen point `at`, as the original's in space
-    /// (`_HandlePlayer` @0x6a000-0x6a764): one in the status panel, the
-    /// right [`STATUS_BAR_WIDTH`] (0xc2) of the view at any width, x ≥
-    /// width − 194 (@0x6a046-0x6a065), radar included, is
-    /// no click in space and does nothing (@0x6a065, @0x6a36d); nor does
-    /// one in the open escort menu's frame, which the original's menu
-    /// branch takes and ends (@0x6a060-0x6a12b; its row selection is left
-    /// out, task escorts-follow-up). Any other goes to
-    /// [`Session::click_in_space`], the ships boxed where they are drawn
-    /// ([`ViewShips`]): a ship under it is targeted, during a jump too, and
-    /// otherwise the stellar under it selected.
-    pub(super) fn click_in_space(&mut self, at: Point) {
-        if at.x >= self.view.0 - STATUS_BAR_WIDTH || self.escort_menu.holds_click(at) {
-            return;
-        }
-        let world = self.camera().screen_to_world(at);
-        let Ok(session) = &self.sim.session else {
-            return;
-        };
-        let ships = ViewShips {
-            view: self,
-            session,
-        };
-        let drawn = DrawnNow::of(&ships);
-        if let Ok(session) = &mut self.sim.session {
-            session.click_in_space(Vec2::new(world.x, world.y), &drawn);
-        }
     }
 
     /// The escort menu's class rows ([`Session::escort_menu`]); none for
@@ -674,186 +281,22 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         self.escort_menu.close();
     }
 
-    /// The fight's explosions, debris and sounds.
-    #[must_use]
-    pub fn effects(&self) -> &Effects {
-        &self.effects
-    }
-
-    /// `ship`'s shield-flash timer as the last frame showed it
-    /// ([`ShieldFlash::shown`]): 32 on the frame of a hit, then a frame
-    /// less each frame; none once it has run out, or with no hit. A class
-    /// with a shän shield layer shows it at [`ShieldFlash::step`]'s level.
-    #[must_use]
-    pub fn shield_flash(&self, ship: ShipRef) -> Option<f32> {
-        self.flashes
-            .get(&ship)
-            .map(ShieldFlash::shown)
-            .filter(|&shown| shown > 0.0)
-    }
-
-    /// The shots in flight in the order they are drawn
-    /// ([`Session::shots_drawn`]), each where it is drawn: `alpha` of the way
-    /// from where it was a step ago, as the ships are; each with the
-    /// index its spin started on ([`SpinStarts`](crate::flight::spin::SpinStarts))
-    /// and its murk where the session holds it, seen from the player's
-    /// ship as the session holds it, in the player's effective murk
-    /// ([`murk::sprite_murk`], [`Session::effective_murk`]), as
-    /// `_HandleShot` murks it once a pass after it moves (@0x35c48).
-    pub(super) fn shown_shots(&self, camera: &Camera) -> Vec<ShotShown> {
-        let Ok(session) = &self.sim.session else {
-            return Vec::new();
-        };
-        let behind = 1.0 - self.alpha;
-        let viewer = session.player().position;
-        let murk = session.effective_murk();
-        session
-            .shots_drawn()
-            .into_iter()
-            .map(|shot| ShotShown {
-                id: shot.id,
-                spin_start: self.shot_looks.spin_starts.start(shot.id),
-                spin_timer: shot.spin_timer,
-                murk: murk::sprite_murk(shot.position, viewer, murk),
-                at: camera.world_to_screen(Point::new(
-                    shot.velocity.x.mul_add(-behind, shot.position.x),
-                    shot.velocity.y.mul_add(-behind, shot.position.y),
-                )),
-                heading: shot.heading,
-                age: shot.age,
-                weapon: shot.weapon.id,
-                layer: SpriteLayer::from(shot.layer),
-            })
-            .collect()
-    }
-
-    /// The cargo boxes in space, each where it is drawn: `alpha` of the
-    /// way from where it was a step ago, as the shots are.
-    pub(super) fn shown_boxes(&self, camera: &Camera) -> Vec<BoxShown> {
-        let Ok(session) = &self.sim.session else {
-            return Vec::new();
-        };
-        let behind = 1.0 - self.alpha;
-        session
-            .cargo_boxes()
-            .iter()
-            .map(|cargo_box| BoxShown {
-                at: camera.world_to_screen(Point::new(
-                    cargo_box.velocity.x.mul_add(-behind, cargo_box.position.x),
-                    cargo_box.velocity.y.mul_add(-behind, cargo_box.position.y),
-                )),
-                frame: cargo_box.frame,
-                fade: cargo_box.fade(),
-                graphic: cargo_box.graphic,
-            })
-            .collect()
-    }
-
-    /// The asteroids in the field, each where it is drawn: `alpha` of the
-    /// way from where it was a step ago, as the cargo boxes are, at its
-    /// whole frame.
-    pub(super) fn shown_asteroids(&self, camera: &Camera) -> Vec<AsteroidShown> {
-        let Ok(session) = &self.sim.session else {
-            return Vec::new();
-        };
-        let behind = 1.0 - self.alpha;
-        session
-            .asteroids()
-            .map(|asteroid| AsteroidShown {
-                at: camera.world_to_screen(Point::new(
-                    asteroid.velocity.x.mul_add(-behind, asteroid.position.x),
-                    asteroid.velocity.y.mul_add(-behind, asteroid.position.y),
-                )),
-                // Its whole part; a frame below 0, which the single wrap
-                // can leave, shows the first.
-                frame: asteroid.frame as u16,
-                kind: asteroid.kind,
-            })
-            .collect()
-    }
-
-    /// The beams being fired, each moved with its firer as it is drawn.
-    pub(super) fn shown_beams(&self, camera: &Camera) -> Vec<BeamShown> {
-        let Ok(session) = &self.sim.session else {
-            return Vec::new();
-        };
-        session
-            .beams()
-            .iter()
-            .map(|beam| {
-                let (dx, dy) = self.drawn_off(session, beam.firer);
-                let shown = |at: Vec2| camera.world_to_screen(Point::new(at.x + dx, at.y + dy));
-                BeamShown {
-                    start: shown(beam.start),
-                    end: shown(beam.end),
-                    weapon: beam.weapon.id,
-                    fade: beam.fade,
-                }
-            })
-            .collect()
-    }
-
-    /// How far `ship` is drawn from where it is.
-    fn drawn_off(&self, session: &Session, ship: ShipRef) -> (f32, f32) {
-        let (shown, now) = match ship {
-            ShipRef::Player => (self.shown_position(), session.player().position),
-            ShipRef::Npc(id) => match session.npcs().iter().find(|npc| npc.id == id) {
-                Some(npc) => (self.shown_npc(npc).0, npc.state.position),
-                None => return (0.0, 0.0),
-            },
-        };
-        (shown.x - now.x, shown.y - now.y)
-    }
-
-    /// Draws the brackets round the nav target, then those round the
-    /// ship target, the session's ([`Session::nav_brackets`],
-    /// [`Session::target_brackets`]), each centred where its sprite is
-    /// drawn (see the `brackets` module). A stellar whose sheet can't be
-    /// read is bracketed as one with no sprite; a ship's as its crossed
-    /// box.
-    pub(super) fn draw_brackets(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
-        let Ok(session) = &self.sim.session else {
-            return;
-        };
-        if let Some(nav) = session.nav_brackets() {
-            // A selection the scene doesn't hold, such as a stellar
-            // another system owns, is bracketed at its spöb position with
-            // no sprite (`_HandleNavTargetSprites` @0x2fd9f-0x2fe41).
-            let (position, sprite) = scene
-                .stellars()
-                .iter()
-                .find(|s| s.id == nav.stellar)
-                .map_or((super::point(nav.position), None), |stellar| {
-                    let sprite = stellar.drawn().and_then(|sheet| sheet.as_ref().ok());
-                    let sprite = sprite.map(|sheet| (sheet.frame_width, sheet.frame_height));
-                    (stellar.position, sprite)
-                });
-            let at = camera.world_to_screen(position);
-            brackets::draw_nav(list, at, sprite, nav.expand, nav.dominated);
+    /// What the world draws that its frame doesn't hold yet, as the
+    /// session holds it ([`WorldHud`](super::world::WorldHud)): the nav
+    /// and target brackets ([`Session::nav_brackets`],
+    /// [`Session::target_brackets`]), the Red Alert icon the session shows
+    /// ([`Session::red_alert_icon`]; see the `alert` module) and the escort
+    /// menu's rows ([`FlightView::escort_rows`]); none of them for a session
+    /// that failed.
+    pub(super) fn world_hud(&self) -> super::world::WorldHud {
+        let mut hud = super::world::WorldHud::none();
+        if let Ok(session) = &self.sim.session {
+            hud.nav_brackets = session.nav_brackets();
+            hud.target_brackets = session.target_brackets();
+            hud.red_alert = session.red_alert_icon();
+            hud.escort_rows = self.escort_rows();
         }
-        if let Some(target) = session.target_brackets()
-            && let Some(npc) = session.target()
-        {
-            let (at, _) = self.shown_npc(npc);
-            let sprite = drawn_size(self.npc_sheets.get(&npc.ship));
-            let at = camera.world_to_screen(at);
-            brackets::draw_ship(list, at, Some(sprite), target.expand, target.standing);
-        }
-    }
-
-    /// Draws the Red Alert icon the session shows, if any, over the
-    /// brackets and the cursor in the target layer, in the world (see the
-    /// `alert` module).
-    pub(super) fn draw_red_alert(&self, list: &mut DrawList) {
-        let icon = self
-            .sim
-            .session
-            .as_ref()
-            .ok()
-            .and_then(Session::red_alert_icon);
-        if let (Some(icon), Some(width)) = (icon, self.alert_width) {
-            alert::draw_red_alert(list, icon, width, self.view.0);
-        }
+        hud
     }
 
     /// Draws the status bar's target panel ([`FlightView::target_shown`])
@@ -874,83 +317,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             target::secondary_text(&name, session.secondary_line_count())
         });
         target::draw_secondary(list, &bar.layout, origin, line.as_deref(), metrics);
-    }
-
-    /// Draws the player's ship at `at`, as much of it as `drawn` says
-    /// (see [`nova_sim::player_fate`]): its hull, as translucent as its
-    /// `BaseTransp`, its engine glow, running lights at the level its
-    /// display drew them (`nova_sim::combat::ship_lights`), weapon glow
-    /// ([`weapon_glow`](crate::flight::weapon_glow)), alt layer and shield
-    /// flash, never murked, on the frames its display picked (see the
-    /// [`ship_layers`](crate::flight::ship_layers) module); or, when its
-    /// sheet cannot be read, a crossed box and the reason. The box stands
-    /// in for the sprite and a missing sheet has no layers, so only a ship
-    /// drawn in full has one.
-    fn draw_ship(&self, list: &mut DrawList, at: Point, drawn: ShipDrawn) {
-        if drawn == ShipDrawn::Hidden {
-            self.held_alts.borrow_mut().forget(ShipRef::Player);
-            return;
-        }
-        match &self.sheet {
-            Ok(sheet) => {
-                let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
-                let session = self.sim.session.as_ref().ok();
-                let base = session.map_or(0, Session::engine_glow);
-                let sets = session.map_or(Drawn::default(), Session::player_drawn);
-                let spec = session.map_or(FrameSpec::NONE, |session| session.hull().frames);
-                let ship = ShipDraw {
-                    sheet,
-                    spec: &spec,
-                    drawn: sets,
-                    heading: self.shown_heading(),
-                    tint: Color {
-                        a: base_alpha(sheet.base_transp),
-                        ..Color::WHITE
-                    },
-                    // Its cloak drawn as an NPC's, its full fade always
-                    // faint (see `Session::player_cloak_shown`).
-                    cloak: session.and_then(|session| {
-                        CloakDraw::of(session.player_cloak_shown(), tick, &player_cloak_rolls())
-                    }),
-                    hull: drawn == ShipDrawn::Full,
-                    murk: 0,
-                    held: false,
-                    glow: glow_level(base, tick, &self.glow_rolls),
-                    lights: sets.lights,
-                    weapon: self
-                        .glows
-                        .drawn(ShipRef::Player)
-                        .filter(|_| self.weapon_effects),
-                    shield: self.shield_drawn(ShipRef::Player),
-                    colorize: session.and_then(|session| {
-                        hull_colorize(0, session.player_ion_tint(), session.ion_tint_murk_colour())
-                    }),
-                };
-                let live = ship.live_alt(at);
-                let alt = self.held_alts.borrow_mut().shown(
-                    ShipRef::Player,
-                    ship.drawn.alt,
-                    live,
-                    ship.hull,
-                );
-                ship.draw(list, at, alt);
-            }
-            Err(_) if drawn != ShipDrawn::Full => {}
-            Err(reason) => {
-                crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER);
-                let below = Point::new(
-                    at.x - PLACEHOLDER_SIZE / 2.0,
-                    at.y + PLACEHOLDER_SIZE / 2.0 + MESSAGE_GAP,
-                );
-                list.text(
-                    format!("Sprite unavailable: {reason}"),
-                    below,
-                    OVERLAY_SIZE,
-                    None,
-                    Color::ERROR,
-                );
-            }
-        }
     }
 
     /// Draws the HUD's status bar alone, as flight draws it: in port, the
@@ -990,13 +356,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         };
         hud::draw(list, bar, &state, metrics, view_width);
         self.draw_combat_hud(list, bar, view_width);
-    }
-
-    /// Draws the [`HELP`] line when its overlay is on.
-    pub(super) fn draw_help(&self, list: &mut DrawList) {
-        if self.overlays.help {
-            list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
-        }
     }
 }
 
@@ -1152,12 +511,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let jumping = self.jump_under_way();
         if nav_off && option && !self.nav_latch {
             self.nav_latch = true;
-            self.sim.apply(FlightCommand::ClearTarget);
+            self.send(FlightCommand::ClearTarget);
         }
         if ((nav_off && !option) || h) && !jumping {
             if !self.nav_latch {
                 self.nav_latch = true;
-                self.sim.apply(FlightCommand::NavModeKeys { nav_off, h });
+                self.send(FlightCommand::NavModeKeys { nav_off, h });
             }
         } else {
             self.nav_latch = false;
@@ -1180,13 +539,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
             return;
         }
         self.select_latch = true;
-        self.sim.apply(FlightCommand::SelectNextSystem);
+        self.send(FlightCommand::SelectNextSystem);
     }
 
     /// Makes the stellar `pick` finds the navigation target, if any
     /// ([`FlightCommand::SelectStellar`]).
     pub(super) fn select_stellar(&mut self, pick: StellarPick) {
-        self.sim.apply(FlightCommand::SelectStellar(pick));
+        self.send(FlightCommand::SelectStellar(pick));
     }
 
     /// The floating map's clock: the flight's elapsed time in Mac ticks
@@ -1280,8 +639,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         };
         if let Some(link) = picked
             && !self
-                .sim
-                .apply(FlightCommand::SelectOnFloatingMap(link))
+                .send(FlightCommand::SelectOnFloatingMap(link))
                 .is_refused()
         {
             self.show_floating_map();
@@ -1326,7 +684,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// escort menu's loop counts too: it polls 1-5 while the menu shows,
     /// during a jump too (@0x6df4a-0x6e186), setting
     /// `_quickKeyCheckResult` (@0xa18a-0xa191) but not the cursor's fade.
-    fn slot_key_polled(&self, key: Key, escort_loop: bool) -> Option<bool> {
+    pub(super) fn slot_key_polled(&self, key: Key, escort_loop: bool) -> Option<bool> {
         if !slot_block::is_block_key(key) {
             return None;
         }
@@ -1365,6 +723,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Picks the target as `pick` says ([`FlightCommand::SelectTarget`]).
     pub(super) fn select_target(&mut self, pick: TargetPick) {
-        self.sim.apply(FlightCommand::SelectTarget(pick));
+        self.send(FlightCommand::SelectTarget(pick));
     }
 }

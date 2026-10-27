@@ -33,8 +33,8 @@
 //!
 //! [`SessionEvent::StarfieldReset`]: nova_sim::SessionEvent::StarfieldReset
 
-use nova_sim::flight_frame::PassReport;
-use nova_sim::{Chance, RuleSource, Session, Vec2};
+use nova_sim::flight_frame::{FlightFrame, PassReport};
+use nova_sim::{Chance, RuleSource, Vec2};
 
 use crate::DrawList;
 use crate::flight::catalog::Looks;
@@ -50,17 +50,17 @@ pub(super) fn original(source: RuleSource, looks: &Looks) -> bool {
     source == RuleSource::Engine && looks.star_sheet().is_some()
 }
 
-/// Where `session`'s stars are handled in a view `view` logical units in
-/// size drawn about `anchor`: the play area left of the status bar, the
-/// player's ship, the anchor in whole pixels, the system's murk as loaded
-/// and the stars' look from `looks`.
+/// Where the stars are handled about `frame`'s ship in a view `view`
+/// logical units in size drawn about `anchor`: the play area left of the
+/// status bar, the player's ship, the anchor in whole pixels, the system's
+/// murk as loaded and the stars' look from `looks`.
 pub(super) fn surroundings(
-    session: &Session,
+    frame: &FlightFrame,
     view: (f32, f32),
     anchor: Anchor,
     looks: &Looks,
 ) -> Surroundings {
-    let ship = (session.player().position, session.system_murk());
+    let ship = (frame.player().position, frame.system_murk);
     surroundings_at(ship, view, anchor, looks)
 }
 

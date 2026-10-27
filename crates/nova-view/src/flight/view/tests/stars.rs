@@ -151,7 +151,9 @@ fn a_murky_systems_stars_are_dimmed_to_its_level() {
 fn scattered(session: &Session, looks: &Looks) -> (Starfield, Counting) {
     let mut chance = Counting::default();
     let mut field = Starfield::new();
-    let at = super::super::stars::surroundings(session, VIEW_SIZE, Anchor::PlayAreaCentre, looks);
+    let mut frame = FlightFrame::default();
+    session.fill_frame(&mut frame);
+    let at = super::super::stars::surroundings(&frame, VIEW_SIZE, Anchor::PlayAreaCentre, looks);
     super::super::stars::reset(&mut field, &at, true, &mut chance);
     (field, chance)
 }

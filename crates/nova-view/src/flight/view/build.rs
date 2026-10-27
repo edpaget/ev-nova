@@ -188,12 +188,14 @@ impl<
             // Sized as the view starts, before anything reads its field.
             session.set_window_width(window_width(VIEW_SIZE));
         }
+        let mut frame = nova_sim::flight_frame::FlightFrame::default();
+        sim.frame(&mut frame);
         let session = &sim.session;
         let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
-                Some(opening_scene(&catalog, session)),
-                catalog.ship_sheet(session.ship()),
-                Some(session.ship()),
+                Some(opening_scene(&catalog, &frame)),
+                catalog.ship_sheet(frame.player().class),
+                Some(frame.player().class),
                 hud::choose_status_bar(&catalog, session.interface_government()),
             ),
             Err(reason) => (None, Err(reason.clone()), None, Err(reason.clone())),
@@ -202,10 +204,6 @@ impl<
             .as_ref()
             .ok()
             .map(|session| BarFor(session.interface_government()));
-        let previous = session
-            .as_ref()
-            .map(|session| *session.player())
-            .unwrap_or_default();
         let mut map = GalaxyMap::course(&catalog);
         if let Ok(session) = &session {
             map.set_nebula_pick(session.rules().source_for(nova_sim::RuleKey::NebulaPicture));
@@ -216,8 +214,6 @@ impl<
                     .source_for(nova_sim::RuleKey::MapFindBorders),
             );
             map.show_galaxy(session.galaxy());
-            let mut frame = nova_sim::flight_frame::FlightFrame::default();
-            sim.frame(&mut frame);
             map.show_course(frame.system, &frame.course_shown);
             // Entering the game draws the floating map, and a new or
             // loaded pilot sets `_mapScroll`, to the current system
@@ -260,7 +256,7 @@ impl<
                 sheet_ship,
                 status_bar,
                 bar_government,
-                previous,
+                frame,
                 looks,
                 unread_looks,
                 escort_colors,
@@ -775,73 +771,6 @@ impl<
         session.haggle(choice, &*self.catalog, &self.hail_options)
     }
 
-    /// Reads the sheet of each ship type the traffic can spawn that has
-    /// not been read yet, and of each type a ship here is boxed by
-    /// ([`Session::framed_types`]), such as the stale frames of a hidden
-    /// ship's slot.
-    ///
-    /// The traffic types' target cards not read yet are asked for in one
-    /// batch ([`CombatLooks::target_cards`]), and none when all are read.
-    pub(super) fn read_npc_sheets(&mut self) {
-        let Ok(session) = &self.sim.session else {
-            return;
-        };
-        let traffic = session.traffic_ships();
-        let framed: Vec<_> = session.framed_types().collect();
-        let govts: Vec<_> = session.npcs().iter().filter_map(|npc| npc.govt).collect();
-        self.read_traffic_sheets(traffic);
-        for ship in framed {
-            self.npc_sheets
-                .entry(ship)
-                .or_insert_with(|| self.catalog.ship_sheet(ship));
-        }
-        for govt in govts {
-            self.codes
-                .entry(govt)
-                .or_insert_with(|| self.catalog.target_code(govt));
-        }
-    }
-
-    /// Reads, in the warm-up frame of entering play, the sheets and target
-    /// cards of the ship types the system's traffic will bring
-    /// ([`Session::coming_traffic_ships`]), so the first step, which fills
-    /// the system, reads none: their reading is the one-time cost of a
-    /// run's first stepped frame, and the warm-up frame is drawn under
-    /// black. A session that failed reads nothing.
-    pub fn warm_up_traffic(&mut self) {
-        let Ok(session) = &self.sim.session else {
-            return;
-        };
-        let coming = session.coming_traffic_ships(&*self.catalog);
-        self.read_traffic_sheets(coming);
-    }
-
-    /// Whether the sheet and the target card of ship type `ship` are read
-    /// already, so a step that brings one reads neither.
-    #[must_use]
-    pub fn has_read_traffic(&self, ship: nova_sim::ShipId) -> bool {
-        self.npc_sheets.contains_key(&ship) && self.cards.contains_key(&ship)
-    }
-
-    /// Reads the sheet of each of `traffic` not read yet, and their target
-    /// cards not read yet in one batch ([`CombatLooks::target_cards`]),
-    /// none when all are read.
-    fn read_traffic_sheets(&mut self, traffic: Vec<nova_sim::ShipId>) {
-        for &ship in &traffic {
-            self.npc_sheets
-                .entry(ship)
-                .or_insert_with(|| self.catalog.ship_sheet(ship));
-        }
-        let unread: Vec<_> = traffic
-            .into_iter()
-            .filter(|ship| !self.cards.contains_key(ship))
-            .collect();
-        if !unread.is_empty() {
-            let cards = self.catalog.target_cards(&unread);
-            self.cards.extend(unread.into_iter().zip(cards));
-        }
-    }
-
     /// The flight with each day's events and the traffic rolled on
     /// `chance`.
     #[must_use]
@@ -976,6 +905,7 @@ impl<
         if let Ok(session) = &mut self.sim.session {
             session.set_double_time_key(on);
         }
+        self.refresh_frame();
     }
 
     /// Whether double time is on, as the screen was last told.
@@ -1000,7 +930,7 @@ impl<
 
 /// What reading a flight gives the view as it opens, besides the catalog
 /// and the flight: the course map, the scene, the player's sheet and bar,
-/// the ship's last state, the looks and what of them could not be read,
+/// the flight's first frame, the looks and what of them could not be read,
 /// the escort menu's colours and the alert icon's width.
 struct Opening {
     map: GalaxyMap,
@@ -1009,7 +939,7 @@ struct Opening {
     sheet_ship: Option<nova_sim::ShipId>,
     status_bar: Result<hud::StatusBar, String>,
     bar_government: Option<BarFor>,
-    previous: nova_sim::ShipState,
+    frame: nova_sim::flight_frame::FlightFrame,
     looks: Looks,
     unread_looks: Vec<Diagnostic>,
     escort_colors: crate::flight::escorts::EscortMenuColors,
@@ -1051,7 +981,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             bar_government: opening.bar_government,
             status_bar: opening.status_bar,
             clock: FixedStep::new(),
-            previous: opening.previous,
+            previous: opening.frame.player().place(),
             alpha: 0.0,
             elapsed: Duration::ZERO,
             held: HashSet::new(),
@@ -1073,7 +1003,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             hail_options: HailOptions::default(),
             glow_rolls: HashedRolls::new(1),
             npc_sheets: BTreeMap::new(),
-            npc_previous: BTreeMap::new(),
+            npc_previous: Vec::new(),
             unread_looks: opening.unread_looks,
             looks: opening.looks,
             cards: BTreeMap::new(),
@@ -1104,6 +1034,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             inbox: super::inbox::Inbox::default(),
             step_report: nova_sim::flight_frame::StepReport::default(),
             presentation: opening.presentation,
+            frame: opening.frame,
             radar_static: None,
             cursor: HoverCursor::default(),
         }
@@ -1111,14 +1042,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// A view of `sim`, a scripted flight, over `catalog`, for a component
     /// test: the course map read from the catalog, its nebulae and borders
-    /// as `rules` say, showing the frame's course; with no scene, sheet or
-    /// status bar, as a flight that failed to start has none, since the
-    /// port gives none yet.
+    /// as `rules` say, showing the frame's course; the scene the frame
+    /// opens on, read from the catalog with the stellars it shows, each as
+    /// it holds it ([`opening_scene`]); with no sheet or status bar, as the
+    /// port gives none yet, nor looks.
     #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     pub fn scripted(catalog: C, sim: S, rules: &Rulebook) -> Self
     where
-        C: GalaxyCatalog + EscortMenuLooks,
+        C: GalaxyCatalog + EscortMenuLooks + SystemCatalog,
     {
         const NO_FLIGHT: &str = "a scripted flight has none";
         let mut map = GalaxyMap::course(&catalog);
@@ -1132,17 +1064,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
         map.show_course(frame.system, &frame.course_shown);
         map.recentre();
         let escort_colors = catalog.escort_menu_colors();
+        let scene = Some(opening_scene(&catalog, &frame));
         Self::assembled(
             Rc::new(catalog),
             sim,
             Opening {
                 map,
-                scene: None,
+                scene,
                 sheet: Err(NO_FLIGHT.to_owned()),
                 sheet_ship: None,
                 status_bar: Err(NO_FLIGHT.to_owned()),
                 bar_government: None,
-                previous: nova_sim::ShipState::default(),
+                frame,
                 looks: Looks::default(),
                 unread_looks: Vec::new(),
                 escort_colors,
@@ -1150,5 +1083,81 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 presentation: super::stepping::Presentation::of(rules),
             },
         )
+    }
+}
+
+/// The NPCs' sheets, over the [`FlightSim`] port: read from the catalog as
+/// the frame's ships and traffic ask for them, so any flight drives them,
+/// a scripted one in the component tests.
+impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
+    /// Reads the sheet of each ship type the traffic can spawn
+    /// ([`FlightFrame::traffic_ships`](nova_sim::flight_frame::FlightFrame::traffic_ships))
+    /// that has not been read yet, of each type a ship here is boxed by
+    /// ([`FrameShip::framed`](nova_sim::flight_frame::FrameShip::framed),
+    /// `nova_sim::Session::framed_types`), such as the stale frames of a
+    /// hidden ship's slot, and each NPC's government's target code, from the
+    /// frame filled afresh. The player's own type is read with its ship, so
+    /// it is left out while its slot holds its own frames.
+    ///
+    /// The traffic types' target cards not read yet are asked for in one
+    /// batch ([`CombatLooks::target_cards`]), and none when all are read.
+    pub(super) fn read_npc_sheets(&mut self) {
+        self.refresh_frame();
+        let traffic = self.frame.traffic_ships.clone();
+        let player = self.frame.player();
+        let own = player.framed.filter(|&ship| ship != player.class);
+        let framed: Vec<_> = own
+            .into_iter()
+            .chain(self.frame.npcs().filter_map(|npc| npc.framed))
+            .collect();
+        let govts: Vec<_> = self.frame.npcs().filter_map(|npc| npc.govt).collect();
+        self.read_traffic_sheets(traffic);
+        for ship in framed {
+            self.npc_sheets
+                .entry(ship)
+                .or_insert_with(|| self.catalog.ship_sheet(ship));
+        }
+        for govt in govts {
+            self.codes
+                .entry(govt)
+                .or_insert_with(|| self.catalog.target_code(govt));
+        }
+    }
+
+    /// Reads, in the warm-up frame of entering play, the sheets and target
+    /// cards of the ship types the system's traffic will bring
+    /// ([`FlightSim::coming_traffic`], `nova_sim::Session::coming_traffic_ships`),
+    /// so the first step, which fills the system, reads none: their reading
+    /// is the one-time cost of a run's first stepped frame, and the warm-up
+    /// frame is drawn under black. A flight that failed reads nothing.
+    pub fn warm_up_traffic(&mut self) {
+        let coming = self.sim.coming_traffic();
+        self.read_traffic_sheets(coming);
+    }
+
+    /// Whether the sheet and the target card of ship type `ship` are read
+    /// already, so a step that brings one reads neither.
+    #[must_use]
+    pub fn has_read_traffic(&self, ship: nova_sim::ShipId) -> bool {
+        self.npc_sheets.contains_key(&ship) && self.cards.contains_key(&ship)
+    }
+
+    /// Reads the sheet of each of `traffic` not read yet, and their target
+    /// cards not read yet in one batch ([`CombatLooks::target_cards`]),
+    /// none when all are read.
+    fn read_traffic_sheets(&mut self, traffic: Vec<nova_sim::ShipId>) {
+        for &ship in &traffic {
+            self.npc_sheets
+                .entry(ship)
+                .or_insert_with(|| self.catalog.ship_sheet(ship));
+        }
+        let unread: Vec<_> = traffic
+            .into_iter()
+            .filter(|ship| !self.cards.contains_key(ship))
+            .collect();
+        if !unread.is_empty() {
+            let cards = self.catalog.target_cards(&unread);
+            self.cards.extend(unread.into_iter().zip(cards));
+        }
     }
 }

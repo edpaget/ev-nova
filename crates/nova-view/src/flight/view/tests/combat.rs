@@ -72,11 +72,19 @@ fn a_ship_waiting_at_its_gate_is_drawn_by_its_tint_and_any_ship_by_its_cloak() {
     assert_eq!(session.cloak_shown(&npc), opaque, "fading in at its gate");
     npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 30 };
     assert_eq!(session.cloak_shown(&npc), opaque);
-    assert_eq!(npc_tint(&npc), None, "hidden at its gate");
+    assert_eq!(
+        npc_tint(GateFade::of(&npc.mode)),
+        None,
+        "hidden at its gate"
+    );
     // Held there by the player's hit, its goal is 4, not 0x15, so
     // `_HandleShipDisplay`'s fade (@0x2c090) passes it by.
     npc.mode = nova_sim::traffic::npc::Mode::HeldAtGate { ticks_left: 3 };
-    assert_eq!(npc_tint(&npc), Some(Color::WHITE), "held: drawn plain");
+    assert_eq!(
+        npc_tint(GateFade::of(&npc.mode)),
+        Some(Color::WHITE),
+        "held: drawn plain"
+    );
     assert_eq!(session.cloak_shown(&npc), opaque, "held");
     npc.cloak = CLOAKED;
     npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
@@ -108,27 +116,45 @@ fn a_fully_cloaked_ship_is_hidden_and_one_fading_out_drawn_fading() {
 }
 
 #[test]
-fn a_cloaked_ship_is_on_the_radar_only_when_the_session_says() {
-    let (_, chance) = scripted(&placed(850, 650, 90));
-    let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    view.tick(TICK);
-    let session = view.session().expect("flying");
-    let npc = session.npcs()[0].clone();
+fn a_ship_its_record_puts_on_the_radar_is_a_blip_and_one_it_keeps_off_is_not() {
+    // Whether a cloaked ship shows there is the session's: pinned by
+    // nova-sim's
+    // `a_cloaked_ship_is_on_the_radar_only_when_its_cloak_shows_there_or_the_player_scans_for_it`
+    // and the frame's `a_fill_writes_every_ship_the_player_first_then_each_npc_in_the_systems_order`.
+    let npc = record::npc(0, 129, Vec2::new(100.0, -100.0), 0.0);
+    let at_blip = at(100.0, -100.0);
     let blip = RadarShip {
-        position: at(100.0, -100.0),
+        position: at_blip,
         targeted: false,
         iff: ShipIff::Other,
         heavy: false,
     };
-    let at_blip = at(100.0, -100.0);
-    assert_eq!(radar_ships(session, &[(&npc, at_blip, 0.0)]), [blip]);
-    let mut cloaked = npc.clone();
-    cloaked.cloak = CLOAKED;
-    assert_eq!(radar_ships(session, &[(&cloaked, at_blip, 0.0)]), []);
-    cloaked.cloak_gear.on_radar = true;
-    assert_eq!(radar_ships(session, &[(&cloaked, at_blip, 0.0)]), [blip]);
+    assert_eq!(radar_ships(None, &[(&npc, at_blip, 0.0)]), [blip]);
+    let off = nova_sim::flight_frame::FrameShip {
+        on_radar: false,
+        ..npc
+    };
+    assert_eq!(radar_ships(None, &[(&off, at_blip, 0.0)]), []);
+    let threat = nova_sim::flight_frame::FrameShip {
+        iff: ShipIff::Threat,
+        mass: 100.0,
+        ..npc
+    };
+    assert_eq!(
+        radar_ships(Some(NpcId(0)), &[(&threat, at_blip, 0.0)]),
+        [RadarShip {
+            targeted: true,
+            iff: ShipIff::Threat,
+            heavy: true,
+            ..blip
+        }]
+    );
+    let light = nova_sim::flight_frame::FrameShip { mass: 99.0, ..npc };
+    assert_eq!(
+        radar_ships(Some(NpcId(1)), &[(&light, at_blip, 0.0)]),
+        [blip],
+        "not the target, and not above 99"
+    );
 }
 
 #[test]
@@ -474,20 +500,24 @@ fn a_ship_entering_a_gate_fades_out_by_two_32nds_a_tick() {
     let entering = |ticks_left| Mode::EnteringGate { gate, ticks_left };
     npc.mode = entering(15);
     assert_eq!(
-        npc_tint(&npc),
+        npc_tint(GateFade::of(&npc.mode)),
         Some(Color::rgba(255, 255, 255, 239)),
         "30/32"
     );
     npc.mode = entering(8);
     assert_eq!(
-        npc_tint(&npc),
+        npc_tint(GateFade::of(&npc.mode)),
         Some(Color::rgba(255, 255, 255, 128)),
         "half"
     );
     npc.mode = entering(1);
-    assert_eq!(npc_tint(&npc), Some(Color::rgba(255, 255, 255, 16)), "2/32");
+    assert_eq!(
+        npc_tint(GateFade::of(&npc.mode)),
+        Some(Color::rgba(255, 255, 255, 16)),
+        "2/32"
+    );
     npc.mode = entering(16);
-    assert_eq!(npc_tint(&npc), Some(Color::WHITE));
+    assert_eq!(npc_tint(GateFade::of(&npc.mode)), Some(Color::WHITE));
 }
 
 #[test]
@@ -1520,7 +1550,13 @@ fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
     let session = view.session().expect("flying");
     let npc = &session.npcs()[0];
     assert_ne!(
-        view.npc_previous[&npc.id].position, npc.state.position,
+        view.npc_previous
+            .iter()
+            .find(|&&(id, _)| id == npc.id)
+            .expect("kept")
+            .1
+            .position,
+        npc.state.position,
         "moving"
     );
     assert_ne!(view.previous.position, session.player().position, "moving");
@@ -1533,7 +1569,7 @@ fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
         over.iter().all(|&start| start == player),
         "the player's, from the player as drawn: {over:?}"
     );
-    let (npc_shown, _) = view.shown_npc(npc);
+    let (npc_shown, _) = view.shown_npc(&npc_record(&view, npc.id));
     let under = beam_starts(&list, Color::rgba(0, 0, 255, 255));
     assert!(!under.is_empty());
     let expected = camera.world_to_screen(npc_shown);
@@ -2480,7 +2516,7 @@ fn the_target_is_bracketed_and_its_panel_shows_it() {
     let session = view.session().expect("flying");
     let npc = &session.npcs()[0];
     let list = drawn(&view);
-    let (shown, _) = view.shown_npc(npc);
+    let (shown, _) = view.shown_npc(&npc_record(&view, npc.id));
     let Some(Ok(sheet)) = view.npc_sheets.get(&npc.ship) else {
         panic!("a sheet");
     };
@@ -2565,7 +2601,8 @@ fn ship_bracket_corners(view: &View) -> Vec<(i16, Point)> {
 fn target_on_screen(view: &View) -> Point {
     let session = view.session().expect("flying");
     let npc = session.target().expect("a target");
-    view.camera().world_to_screen(view.shown_npc(npc).0)
+    view.camera()
+        .world_to_screen(view.shown_npc(&npc_record(view, npc.id)).0)
 }
 
 #[test]

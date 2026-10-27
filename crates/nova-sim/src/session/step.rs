@@ -55,7 +55,7 @@ use crate::ai::Behaviour;
 use crate::catalog::{CommCatalog, PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::{Rules, ShipRef};
-use crate::flight_frame::{FrameShip, FrameShot, PassReport, StepInput, StepReport, StepRun};
+use crate::flight_frame::{FrameShot, PassReport, ShipPlace, StepInput, StepReport, StepRun};
 
 use super::Session;
 
@@ -135,7 +135,7 @@ impl Session {
         );
         run.comm = self.take_comm();
         if rescued {
-            run.rescued = Some(*self.player());
+            run.rescued = Some(ShipPlace::from(*self.player()));
             return run;
         }
         self.answer_strikes(collab.behaviour);
@@ -156,7 +156,7 @@ impl Session {
             self.out.comm.extend(raised);
         }
         if self.rescue_if_due(catalog, &mut *collab.chance) {
-            run.rescued = Some(*self.player());
+            run.rescued = Some(ShipPlace::from(*self.player()));
             return run;
         }
         self.answer_strikes(collab.behaviour);
@@ -165,49 +165,24 @@ impl Session {
         run
     }
 
-    /// Each ship's state: the player's, then each NPC's.
-    fn ships_before(&self) -> Vec<(ShipRef, crate::flight::ShipState)> {
+    /// Each ship's place: the player's, then each NPC's.
+    fn ships_before(&self) -> Vec<(ShipRef, ShipPlace)> {
         let npcs = self
             .npcs()
             .iter()
-            .map(|npc| (ShipRef::Npc(npc.id), npc.state));
-        std::iter::once((ShipRef::Player, *self.player()))
+            .map(|npc| (ShipRef::Npc(npc.id), ShipPlace::from(npc.state)));
+        std::iter::once((ShipRef::Player, ShipPlace::from(*self.player())))
             .chain(npcs)
             .collect()
     }
 
     /// The pass just run, as it stands, its quotes and fight events
-    /// taken.
+    /// taken: each ship's record as the frame builds it
+    /// (`Session::fill_ships`), and each shot's in the fight's order.
     fn pass_report(&mut self) -> PassReport {
-        let player = FrameShip {
-            ship: ShipRef::Player,
-            class: self.ship(),
-            position: self.player().position,
-            condition: self.player_condition(),
-            breakup: self.hull().breakup,
-            shield: self.reserves().shield,
-            class_shield: self.class_shield(self.ship()),
-        };
-        let npcs = self.npcs().iter().map(|npc| FrameShip {
-            ship: ShipRef::Npc(npc.id),
-            class: npc.ship,
-            position: npc.state.position,
-            condition: npc.condition,
-            breakup: npc.hull.breakup,
-            shield: npc.reserves.shield,
-            class_shield: self.class_shield(npc.ship),
-        });
-        let ships = std::iter::once(player).chain(npcs).collect();
-        let shots = self
-            .shots()
-            .iter()
-            .map(|shot| FrameShot {
-                id: shot.id,
-                weapon: shot.weapon.id,
-                position: shot.position,
-                heading: shot.heading,
-            })
-            .collect();
+        let mut ships = Vec::new();
+        self.fill_ships(&mut ships);
+        let shots = self.shots().iter().map(FrameShot::of).collect();
         PassReport {
             ships,
             shots,
@@ -429,11 +404,15 @@ mod tests {
         };
         let report = steps(&mut session, &catalog, &input, 3);
         for run in &report.steps {
-            let mut before = vec![(ShipRef::Player, *hand.player())];
+            let place = |state: &crate::flight::ShipState| ShipPlace {
+                position: state.position,
+                heading: state.heading,
+            };
+            let mut before = vec![(ShipRef::Player, place(hand.player()))];
             before.extend(
                 hand.npcs()
                     .iter()
-                    .map(|npc| (ShipRef::Npc(npc.id), npc.state)),
+                    .map(|npc| (ShipRef::Npc(npc.id), place(&npc.state))),
             );
             assert_eq!(run.before, before);
             by_hand(&mut hand, &catalog, &input, 1);
@@ -622,7 +601,14 @@ mod tests {
         let run = &report.steps[0];
         assert_eq!(run.passes, [], "the pass is not reported");
         assert_eq!(run.comm, [note], "its comm taken");
-        assert_eq!(run.rescued, Some(*session.player()));
+        let player = session.player();
+        assert_eq!(
+            run.rescued,
+            Some(ShipPlace {
+                position: player.position,
+                heading: player.heading,
+            })
+        );
         assert_eq!(session.take_quotes(), [quote], "its quotes not taken");
         assert_eq!(session.take_rescue_desc(), Some(13999), "rescued");
     }
@@ -644,7 +630,14 @@ mod tests {
         assert!(report.stopped);
         let run = &report.steps[0];
         assert_eq!(run.passes.len(), 1, "the advance pass alone");
-        assert_eq!(run.rescued, Some(*session.player()));
+        let player = session.player();
+        assert_eq!(
+            run.rescued,
+            Some(ShipPlace {
+                position: player.position,
+                heading: player.heading,
+            })
+        );
         let mut session = in_the_pod(&catalog, 2);
         steps(&mut session, &catalog, &input, 0);
         session.ship.fate.rescue_due = false;
@@ -731,24 +724,13 @@ mod tests {
     /// `session`'s records after a pass, its quotes and fight events
     /// taken, as [`PassReport`] has them.
     fn records(session: &mut Session) -> PassReport {
-        let mut ships = vec![FrameShip {
-            ship: ShipRef::Player,
-            class: session.ship(),
-            position: session.player().position,
-            condition: session.player_condition(),
-            breakup: session.hull().breakup,
-            shield: session.reserves().shield,
-            class_shield: session.class_shield(session.ship()),
-        }];
-        ships.extend(session.npcs().iter().map(|npc| FrameShip {
-            ship: ShipRef::Npc(npc.id),
-            class: npc.ship,
-            position: npc.state.position,
-            condition: npc.condition,
-            breakup: npc.hull.breakup,
-            shield: npc.reserves.shield,
-            class_shield: session.class_shield(npc.ship),
-        }));
+        let mut ships = vec![super::super::frame::tests::player_record(session)];
+        ships.extend(
+            session
+                .npcs()
+                .iter()
+                .map(|npc| super::super::frame::tests::npc_record(session, npc)),
+        );
         let shots = session
             .shots()
             .iter()
@@ -756,7 +738,11 @@ mod tests {
                 id: shot.id,
                 weapon: shot.weapon.id,
                 position: shot.position,
+                velocity: shot.velocity,
                 heading: shot.heading,
+                age: shot.age,
+                spin_timer: shot.spin_timer,
+                layer: shot.layer,
             })
             .collect();
         PassReport {

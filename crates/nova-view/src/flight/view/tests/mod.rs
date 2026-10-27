@@ -3,13 +3,16 @@ use std::num::NonZeroU16;
 
 use crate::system::camera::{VIEW_CENTER, VIEW_SIZE};
 use nova_sim::flight::player_step;
+use nova_sim::flight_frame::GateFade;
 use nova_sim::landing::StellarFlags;
+use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     Behaviour, BoardingRule, CharacterStart, CommodityStrings, DateAffixes, DisableRule,
     DisasterRecord, FlightRules, GateSite, Handling, JunkRecord, LandingSite, OutfitId,
     OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats, SimDiagnostic, SimSound,
     StarSystem, StartDate, StartError, SystemId, TICK, Vec2,
 };
+use nova_sim::{Npc, Session, ShipState};
 
 use super::*;
 use crate::devtools::{PilotDesk, PilotEdit};
@@ -26,7 +29,7 @@ use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
 use crate::flight::jump::JumpPhase;
 use crate::flight::radar::RadarStellar;
 use crate::flight::radar::{self, IRect, RadarColor, RadarMark};
-use crate::flight::sim_port::fixture::FakeFlight;
+use crate::flight::sim_port::fixture::{FakeFlight, record};
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::Tag;
 use crate::flight::weapons;
@@ -849,13 +852,17 @@ impl SystemCatalog for FakeCatalog {
                 "Alpha Centauri",
                 vec![dying(140, "Proxima", (0, 0), self.proxima_frames)],
             ),
-            132 if self.onward => ("Barnard", Vec::new()),
+            // Read without `onward` too: a scripted flight's frame lays
+            // Barnard out whatever its links.
+            132 => ("Barnard", Vec::new()),
             133 if self.reborn => (
                 "Alpha Reborn",
                 vec![stellar(141, "Proxima Reborn", (0, 0), 1)],
             ),
             128 if self.home => ("Home", Vec::new()),
             134 if self.near => ("Proxima Near", Vec::new()),
+            // A scripted flight's default frame's: no system, nothing in it.
+            0 => ("", Vec::new()),
             other => panic!("asked for sÿst {other}"),
         };
         let mut stellars: Vec<StellarContents> = stellars;
@@ -1129,37 +1136,12 @@ fn flight() -> View {
 /// (`nova_sim::Session::step`), with no fight events or quotes: for a
 /// test of a step of the view's own that reads a pass.
 fn pass_of(session: &Session) -> nova_sim::flight_frame::PassReport {
-    use nova_sim::flight_frame::{FrameShip, FrameShot, PassReport};
-    let mut ships = vec![FrameShip {
-        ship: ShipRef::Player,
-        class: session.ship(),
-        position: session.player().position,
-        condition: session.player_condition(),
-        breakup: session.hull().breakup,
-        shield: session.reserves().shield,
-        class_shield: session.class_shield(session.ship()),
-    }];
-    ships.extend(session.npcs().iter().map(|npc| FrameShip {
-        ship: ShipRef::Npc(npc.id),
-        class: npc.ship,
-        position: npc.state.position,
-        condition: npc.condition,
-        breakup: npc.hull.breakup,
-        shield: npc.reserves.shield,
-        class_shield: session.class_shield(npc.ship),
-    }));
+    use nova_sim::flight_frame::{FrameShot, PassReport};
+    let mut frame = FlightFrame::default();
+    session.fill_frame(&mut frame);
     PassReport {
-        ships,
-        shots: session
-            .shots()
-            .iter()
-            .map(|shot| FrameShot {
-                id: shot.id,
-                weapon: shot.weapon.id,
-                position: shot.position,
-                heading: shot.heading,
-            })
-            .collect(),
+        ships: frame.ships,
+        shots: session.shots().iter().map(FrameShot::of).collect(),
         beam_weapons: session.beams().iter().map(|beam| beam.weapon.id).collect(),
         smoke_frame: session.smoke_frame(),
         system_murk: session.system_murk(),
@@ -2434,7 +2416,8 @@ fn a_view_over_a_scripted_flight_shows_its_frame() {
         ..in_sol()
     });
     view.sim.map_mut().explored = vec![SystemId(131)];
-    assert!(view.scene.is_none(), "the port gives no scene yet");
+    let scene = view.scene.as_ref().expect("the frame's scene");
+    assert_eq!(scene.name(), "Sol", "the frame's system");
     assert_eq!(
         view.nav_now(),
         NavDisplay::Hyperspace {
@@ -3722,6 +3705,9 @@ fn run_set(view: &mut View, text: &str) {
     let expr = nova_sim::SetExpr::parse(text).expect("parses");
     let session = view.sim.session.as_mut().expect("flying");
     session.run_set(&expr, &mut NeverFires);
+    // Run behind the view's back: its kept frame follows, as the draw
+    // read the session live before the frame was kept.
+    view.refresh_frame();
 }
 
 /// `view` with `STR#` 25048 holding one message.
@@ -4090,13 +4076,13 @@ fn map_sounds(view: &mut View) -> Vec<UiSound> {
 
 /// Where on screen `view` draws NPC `id`.
 fn npc_on_screen(view: &View, id: NpcId) -> Point {
-    let session = view.session().expect("flying");
-    let npc = session
-        .npcs()
-        .iter()
-        .find(|npc| npc.id == id)
-        .expect("in the system");
-    view.camera().world_to_screen(view.shown_npc(npc).0)
+    view.camera()
+        .world_to_screen(view.shown_npc(&npc_record(view, id)).0)
+}
+
+/// NPC `id`'s record in `view`'s kept frame.
+fn npc_record(view: &View, id: NpcId) -> nova_sim::flight_frame::FrameShip {
+    *view.frame.ship(ShipRef::Npc(id)).expect("in the frame")
 }
 
 /// The index in `list` of the first sprite centred on `at`, or of a

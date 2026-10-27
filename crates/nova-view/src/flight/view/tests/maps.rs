@@ -944,6 +944,7 @@ fn a_fully_cloaked_escort_is_drawn_at_its_full_fades_translucency() {
     let (mut view, ships) = escorted_on_a_mission();
     let session = view.sim.session.as_mut().expect("flying");
     nova_sim::fixture::cloak(session, ships.mission, CLOAKED);
+    view.refresh_frame();
     let list = drawn(&view);
     let at = npc_on_screen(&view, ships.mission);
     let hull = list.iter().find_map(|command| match *command {

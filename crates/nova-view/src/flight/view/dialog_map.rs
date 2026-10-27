@@ -134,14 +134,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
         match opened.by {
             MapOpening::Plain | MapOpening::Dialog(MapOpener::MissionInfo(_), _) => {}
             MapOpening::Bar => {
-                self.sim.apply(FlightCommand::RestoreBarNav);
+                self.send(FlightCommand::RestoreBarNav);
             }
             MapOpening::Port(screen) => {
                 port_screen_map::restore_nav(&mut self.sim, screen, &opened);
+                self.refresh_frame();
             }
             MapOpening::Dialog(dialog, _) => {
                 if let Some(nav) = opened.nav {
-                    self.sim.apply(FlightCommand::RestoreMapNav(nav));
+                    self.send(FlightCommand::RestoreMapNav(nav));
                 }
                 if matches!(dialog, MapOpener::Computer(_)) {
                     self.retake_nav();

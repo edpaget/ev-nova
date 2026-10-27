@@ -630,18 +630,18 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::flight_frame::{FrameShip, StepReport};
+use nova_sim::DrawnBox;
+#[cfg(doc)]
+use nova_sim::Session;
+use nova_sim::flight_frame::{FlightFrame, FrameShip, GateFade, ShipPlace, StepReport};
 use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::gate_entry::enter_level;
-use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     Chance, CombatEvent, Condition, FixedStep, GovtId, HailOptions, HailView, HashedRolls, NavMode,
-    NeverFires, Npc, NpcId, OutfitRefusal, OutfitRun, Reselection, Reserves, Session, ShipId,
-    ShipRef, ShipState, SimMessage, StellarId, SystemId, Vec2, flight::normalized,
-    flight::shortest_turn,
+    NeverFires, NpcId, OutfitRefusal, OutfitRun, Reselection, Reserves, ShipId, ShipRef,
+    SimMessage, StellarId, SystemId, Vec2, flight::normalized, flight::shortest_turn,
 };
-use nova_sim::{DrawnBox, DrawnShips, HoverPlace};
 use nova_sim::{InterfaceLoad, MissionInfo, OfferPrompt, TextBar};
 
 use super::cadence::{Drawn, HudCadence};
@@ -674,6 +674,7 @@ mod build;
 mod cockpit;
 mod dialog_map;
 mod docked;
+mod drawing;
 mod inbox;
 mod interface;
 mod messages;
@@ -685,6 +686,7 @@ mod shots;
 mod slot_block;
 mod sprites;
 mod stars;
+mod stellar_looks;
 mod stepping;
 mod travel;
 mod world;
@@ -936,7 +938,7 @@ pub const ZOOM_IN_KEY: Key = Key::Char('=');
 pub const ZOOM_IN_KEYPAD_KEY: Key = Key::Char('+');
 
 /// Where a ship is drawn `alpha` of the way from `from` to `to`.
-fn shown_position(from: &ShipState, to: &ShipState, alpha: f32) -> Point {
+fn shown_position(from: ShipPlace, to: ShipPlace, alpha: f32) -> Point {
     let (from, to) = (from.position, to.position);
     Point::new(
         (to.x - from.x).mul_add(alpha, from.x),
@@ -946,11 +948,11 @@ fn shown_position(from: &ShipState, to: &ShipState, alpha: f32) -> Point {
 
 /// Which way a ship is drawn facing `alpha` of the way, the short way
 /// round, from `from` to `to`.
-fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
+fn shown_heading(from: ShipPlace, to: ShipPlace, alpha: f32) -> f32 {
     normalized(shortest_turn(from.heading, to.heading).mul_add(alpha, from.heading))
 }
 
-/// How `npc`'s sprite is tinted: `None` while it waits hidden at the gate
+/// How an NPC at `gate` is tinted: `None` while it waits hidden at the gate
 /// it comes out of; white with the alpha of its [`emerge_level`] over
 /// its last [`FADE_TICKS`](nova_sim::traffic::emerge::FADE_TICKS) there;
 /// white with the alpha of its [`enter_level`] while it enters a gate to
@@ -965,11 +967,11 @@ fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
 /// crossfaded at (32 − t)/32, which this alpha draws. An NPC gets no
 /// screen flash, as the player's own gate arrival does (see
 /// [`jump`](super::jump)).
-fn npc_tint(npc: &Npc) -> Option<Color> {
-    let level = match npc.mode {
-        Mode::Emerging { ticks_left } => emerge_level(ticks_left)?,
-        Mode::EnteringGate { ticks_left, .. } => enter_level(ticks_left),
-        _ => return Some(Color::WHITE),
+fn npc_tint(gate: GateFade) -> Option<Color> {
+    let level = match gate {
+        GateFade::Emerging { ticks_left } => emerge_level(ticks_left)?,
+        GateFade::Entering { ticks_left } => enter_level(ticks_left),
+        GateFade::None => return Some(Color::WHITE),
     };
     let level = u16::from(level);
     let full = u16::from(FULL_LEVEL);
@@ -1049,19 +1051,65 @@ impl NavFlash {
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// The flight's frame as it stands now ([`FlightSim::frame`]), filled
-    /// afresh on each read. The view keeps no frame buffer yet: while the
-    /// strangler lasts the concrete blocks still change the session
-    /// directly (a landing, a jump, a boarding) between any two points
-    /// where a kept frame could be refreshed, so a kept one could be
-    /// stale. A fill is cheap (phase 1 measured a full one at about
-    /// 3.6 µs, and this frame is smaller). Once every change goes through
-    /// [`FlightSim::apply`] and [`FlightSim::step`], the view can keep one
-    /// buffer filled once a step and after each command, which the world's
-    /// larger frame needs (rdm:phase/view-sim-seam/phase-7-world-frame).
-    pub(super) fn frame_now(&self) -> nova_sim::flight_frame::FlightFrame {
-        let mut frame = nova_sim::flight_frame::FlightFrame::default();
+    /// afresh on each read, for the nav keys', the map's and the jump
+    /// key's reads mid-input. The world reads the frame the view keeps
+    /// ([`FlightView::frame`](FlightView#structfield.frame)) instead, but
+    /// these stay fresh: while the strangler lasts the concrete blocks still
+    /// change the session directly between two of their reads in one input
+    /// or tick (a jump begun, a landing, a boarding) without refreshing
+    /// the kept frame, which a read here would then find stale. Once every
+    /// change goes through [`FlightSim::apply`] and [`FlightSim::step`]
+    /// (rdm:phase/view-sim-seam/phase-9-travel-on-port and
+    /// rdm:phase/view-sim-seam/phase-11-spaceport-on-port), these can read
+    /// the kept frame too.
+    pub(super) fn frame_now(&self) -> FlightFrame {
+        let mut frame = FlightFrame::default();
         self.sim.frame(&mut frame);
         frame
+    }
+
+    /// Fills the frame the view keeps afresh from the flight
+    /// ([`FlightSim::frame`]), into its own buffers: after each step,
+    /// after each command ([`FlightView::send`]), as the flight is caught
+    /// up with, and at the end of each input and tick, so whatever is drawn
+    /// next draws the flight as it stands.
+    pub(super) fn refresh_frame(&mut self) {
+        self.sim.frame(&mut self.frame);
+    }
+
+    /// Checks, in this crate's tests, that the kept frame is the flight's
+    /// as it stands: every point that changes the flight before a draw
+    /// refreshes it ([`FlightView::refresh_frame`]). A test that changes
+    /// the session behind the view's back resyncs it first
+    /// ([`FlightView::resync`]).
+    #[cfg(test)]
+    pub(super) fn check_frame_kept(&self) {
+        let fresh = self.frame_now();
+        if self.frame != fresh {
+            let differs = frame_fields_differing(&self.frame, &fresh);
+            panic!("the kept frame is stale in {differs:?}");
+        }
+    }
+
+    /// The player's ship's place in the frame, filled afresh first: for
+    /// the concrete code that changes the session and then draws the ship
+    /// where it is ([`FlightView::place_ship`], `FlightView::lay_out`,
+    /// `FlightView::assign`), which reads it before or without a catch-up.
+    pub(super) fn player_place_now(&mut self) -> ShipPlace {
+        self.refresh_frame();
+        self.frame.player().place()
+    }
+
+    /// Sends `command` to the flight ([`FlightSim::apply`]) and gives its
+    /// answer, the kept frame filled afresh after it
+    /// ([`FlightView::refresh_frame`]).
+    pub(super) fn send(
+        &mut self,
+        command: nova_sim::flight_frame::FlightCommand,
+    ) -> nova_sim::flight_frame::Answer {
+        let answer = self.sim.apply(command);
+        self.refresh_frame();
+        answer
     }
 
     /// Drains the flight into the inbox ([`FlightSim::drain`]) and gives
@@ -1094,6 +1142,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// The rules the steps' effects and stars are shown by, held from the
     /// flight's rulebook ([`stepping::Presentation`]).
     presentation: stepping::Presentation,
+    /// The flight's frame as last filled ([`FlightView::refresh_frame`]):
+    /// what the world is drawn from, its ships, shots, beams, boxes,
+    /// asteroids, stellars, murk and flags.
+    frame: FlightFrame,
     /// The session's system, laid out; `None` when the session failed.
     scene: Option<SystemScene>,
     /// Each stellar's animation state as the scene that last showed it
@@ -1115,8 +1167,8 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     bar_government: Option<BarFor>,
     /// Turns frame times into simulation steps.
     clock: FixedStep,
-    /// The player's ship as it was a step before the session's.
-    previous: ShipState,
+    /// The player's ship's place a step before the frame's.
+    previous: ShipPlace,
     /// How far the display is from `previous` to the session's ship.
     alpha: f32,
     /// Time since the view opened, which drives the stellars' animations
@@ -1246,8 +1298,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     glow_rolls: HashedRolls,
     /// Each NPC ship type's sheet, or why it cannot be shown, read once.
     npc_sheets: BTreeMap<ShipId, Result<ShipSheet, String>>,
-    /// Each NPC as it was a step before the session's.
-    npc_previous: BTreeMap<NpcId, ShipState>,
+    /// Each NPC's place a step before the frame's, in the system's order
+    /// as the step reported them ([`StepRun::before`](nova_sim::flight_frame::StepRun::before)).
+    npc_previous: Vec<(NpcId, ShipPlace)>,
     /// The weapons' and explosions' looks, read once.
     looks: Looks,
     /// What could not be read of the looks, until it is taken.
@@ -1428,60 +1481,129 @@ struct Redrawn {
     stars: bool,
 }
 
-/// How `session` holds stellar `id`: destroyed as its galaxy holds it,
-/// with the sheet the session says it draws ([`Session::drawn_sheet`]:
-/// its `DeadType` sheet, graphic type 0's or its `Type` sheet,
-/// story-runtime phases 7 and 9, stellar-fidelity phase 1), which the
-/// click box reads too, and animating over the frame count the session
-/// says ([`Session::counted_sheet`], stellar-fidelity phase 1), or over
-/// none ([`Session::counts_no_frames`]), its frame frozen when the session
-/// says ([`Session::frame_frozen`], stellar-fidelity phase 8).
-fn look(session: &Session, id: StellarId) -> StellarLook {
-    StellarLook {
-        destroyed: session.galaxy().destroyed(id),
-        drawn: session.drawn_sheet(id),
-        counted: session.counted_sheet(id),
-        frozen: session.frame_frozen(id),
-        counts_none: session.counts_no_frames(id),
-    }
+/// How the flight holds stellar `id` as `frame` records it
+/// ([`FrameStellar`](nova_sim::flight_frame::FrameStellar)): destroyed as
+/// its galaxy holds it, with the sheet the session says it draws
+/// (`nova_sim::Session::drawn_sheet`: its `DeadType` sheet, graphic type
+/// 0's or its `Type` sheet, story-runtime phases 7 and 9, stellar-fidelity
+/// phase 1), which the click box reads too, and animating over the frame
+/// count the session says (`nova_sim::Session::counted_sheet`,
+/// stellar-fidelity phase 1), or over none
+/// (`nova_sim::Session::counts_no_frames`), its frame frozen when the
+/// session says (`nova_sim::Session::frame_frozen`, stellar-fidelity phase
+/// 8). A stellar the frame doesn't record, one its system doesn't list,
+/// looks whole, on its `Type` sheet, never frozen, as the session holds a
+/// stellar it doesn't show.
+fn look(frame: &FlightFrame, id: StellarId) -> StellarLook {
+    frame.stellar(id).map_or(
+        StellarLook {
+            destroyed: false,
+            drawn: nova_sim::DrawnSheet::Type,
+            counted: nova_sim::DrawnSheet::Type,
+            frozen: false,
+            counts_none: false,
+        },
+        |stellar| StellarLook {
+            destroyed: stellar.destroyed,
+            drawn: stellar.drawn,
+            counted: stellar.counted,
+            frozen: stellar.frozen,
+            counts_none: stellar.counts_none,
+        },
+    )
 }
 
-/// Draws each stellar of `scene` as `session` holds it ([`look`]), as the
+/// Draws each stellar of `scene` as `frame` holds it ([`look`]), as the
 /// original's per-frame sprite tick swaps its sheet.
-fn show_destroyed(scene: &mut SystemScene, session: &Session) {
-    scene.set_destroyed(|id| look(session, id));
+fn show_destroyed(scene: &mut SystemScene, frame: &FlightFrame) {
+    scene.set_destroyed(|id| look(frame, id));
 }
 
-/// Marks each stellar of `scene` frozen as `session` holds it
-/// ([`Session::frame_frozen`]): after the steps of each tick, as a flight
-/// frame freezes or thaws a slot with no event (stellar-fidelity phase 8).
-fn show_frozen_frames(scene: &mut SystemScene, session: &Session) {
-    scene.set_frozen(|id| session.frame_frozen(id));
+/// Marks each stellar of `scene` frozen as `frame` holds it
+/// ([`FrameStellar::frozen`](nova_sim::flight_frame::FrameStellar::frozen)):
+/// after the steps of each tick, as a flight frame freezes or thaws a slot
+/// with no event (stellar-fidelity phase 8).
+fn show_frozen_frames(scene: &mut SystemScene, frame: &FlightFrame) {
+    scene.set_frozen(|id| look(frame, id).frozen);
 }
 
-/// Draws each hypergate of `scene` on the frame `session` gives it
-/// (`Session::gate_frame`), opening while an NPC comes out of it: after
-/// each tick of the traffic, and as the system is laid out.
-fn show_gate_frames(scene: &mut SystemScene, session: &Session) {
-    scene.set_gate_frames(|id| session.gate_frame(id));
+/// Draws each hypergate of `scene` on the frame `frame` gives it
+/// ([`FrameStellar::gate_frame`](nova_sim::flight_frame::FrameStellar::gate_frame)),
+/// opening while an NPC comes out of it: after each tick of the traffic,
+/// and as the system is laid out.
+fn show_gate_frames(scene: &mut SystemScene, frame: &FlightFrame) {
+    scene.set_gate_frames(|id| frame.stellar(id).and_then(|stellar| stellar.gate_frame));
 }
 
-/// The system `session`'s player is in, read from `catalog`, with only the
-/// stellars the session shows ([`Session::stellars_shown`]), in navigation
-/// order.
-fn shown_scene(catalog: &impl SystemCatalog, session: &Session) -> SystemScene {
-    let shown: BTreeSet<StellarId> = session.stellars_shown().collect();
-    SystemScene::load_shown(catalog, session.system(), &shown)
+/// The system `frame`'s player is in, read from `catalog`, with only the
+/// stellars the frame shows
+/// ([`FlightFrame::stellars_shown`](nova_sim::flight_frame::FlightFrame::stellars_shown)),
+/// in navigation order.
+fn shown_scene(catalog: &impl SystemCatalog, frame: &FlightFrame) -> SystemScene {
+    let shown: BTreeSet<StellarId> = frame.stellars_shown().collect();
+    SystemScene::load_shown(catalog, frame.system, &shown)
 }
 
-/// The scene a flight opens on: the stellars `session` shows, each
+/// The scene a flight opens on: the stellars `frame` shows, each
 /// destroyed one as it looks destroyed and each hypergate on the frame
 /// the session stepped it to.
-fn opening_scene(catalog: &impl SystemCatalog, session: &Session) -> SystemScene {
-    let mut scene = shown_scene(catalog, session);
-    show_destroyed(&mut scene, session);
-    show_gate_frames(&mut scene, session);
+fn opening_scene(catalog: &impl SystemCatalog, frame: &FlightFrame) -> SystemScene {
+    let mut scene = shown_scene(catalog, frame);
+    show_destroyed(&mut scene, frame);
+    show_gate_frames(&mut scene, frame);
     scene
+}
+
+/// The names of the fields `kept` and `fresh` differ in.
+#[cfg(test)]
+fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'static str> {
+    let mut differs = Vec::new();
+    let mut check = |name, same: bool| {
+        if !same {
+            differs.push(name);
+        }
+    };
+    check("nav_mode", kept.nav_mode == fresh.nav_mode);
+    check("system", kept.system == fresh.system);
+    check("course_shown", kept.course_shown == fresh.course_shown);
+    check(
+        "course_plotted",
+        kept.course_plotted == fresh.course_plotted,
+    );
+    check("docked", kept.docked == fresh.docked);
+    check(
+        "jump_under_way",
+        kept.jump_under_way == fresh.jump_under_way,
+    );
+    check(
+        "jump_readiness",
+        kept.jump_readiness == fresh.jump_readiness,
+    );
+    check("texts_queued", kept.texts_queued == fresh.texts_queued);
+    check("map_key", kept.map_key == fresh.map_key);
+    check("ships", kept.ships == fresh.ships);
+    check("drawn", kept.drawn == fresh.drawn);
+    check("shots", kept.shots == fresh.shots);
+    check("beams", kept.beams == fresh.beams);
+    check("cargo_boxes", kept.cargo_boxes == fresh.cargo_boxes);
+    check("asteroids", kept.asteroids == fresh.asteroids);
+    check("stellars", kept.stellars == fresh.stellars);
+    check(
+        "effective_murk",
+        kept.effective_murk == fresh.effective_murk,
+    );
+    check("system_murk", kept.system_murk == fresh.system_murk);
+    check(
+        "system_background",
+        kept.system_background == fresh.system_background,
+    );
+    check("double_time", kept.double_time == fresh.double_time);
+    check(
+        "hyper_gamma",
+        kept.hyper_gamma.to_bits() == fresh.hyper_gamma.to_bits(),
+    );
+    check("traffic_ships", kept.traffic_ships == fresh.traffic_ships);
+    differs
 }
 
 /// Text metrics, shared.
@@ -1491,94 +1613,6 @@ struct Metrics(Rc<dyn TextMetrics>);
 impl std::fmt::Debug for Metrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Metrics")
-    }
-}
-
-/// The ships where the flight draws them, for the hover test: the
-/// session's [`DrawnShips`] port. Every NPC is drawn, by its sheet or as
-/// its crossed box, so each has a box, even one its cloak hides from the
-/// player: [`Session::hover`] asks the cloak itself. Each box is the size
-/// of a frame of the sheet its slot's sprite holds
-/// ([`Session::framed_by`]): a shown ship's own type's. A hidden ship
-/// ([`Session::is_hidden`]: its type's `Cost` is -1) is boxed where it
-/// would be drawn, as the original still positions its hidden sprite
-/// (`_HandleShipDisplay` @0x2cd17) and `_HandleMouse` skips only a slot
-/// with no sprite (@0x38171), by the frames its slot last cloned, as
-/// `_SWCloneFramesFromMaster` (@0x2b824) is skipped for it: often the
-/// previous ship's at that slot ([`nova_sim::RuleKey::HiddenShipHoverBox`]
-/// chooses). A ship its slot has not displayed yet is boxed where its
-/// slot was last laid out, at that offset from where the player is drawn,
-/// in its slot's last frames, or has no box in a slot never laid out
-/// ([`Session::hover_place`]; [`nova_sim::RuleKey::UndisplayedShips`]
-/// chooses).
-struct ViewShips<'a, C> {
-    /// The flight, which says where each ship is drawn.
-    view: &'a FlightView<C>,
-    /// The flight's session.
-    session: &'a Session,
-}
-
-impl<C> DrawnShips for ViewShips<'_, C> {
-    fn npc(&self, id: NpcId) -> Option<DrawnBox> {
-        let npc = self.session.npcs().iter().find(|npc| npc.id == id)?;
-        let at = match self.session.hover_place(ShipRef::Npc(id)) {
-            HoverPlace::Own => self.view.shown_npc(npc).0,
-            HoverPlace::Stale(offset) => {
-                let player = self.view.shown_position();
-                Point::new(player.x + offset.x, player.y + offset.y)
-            }
-            HoverPlace::Unplaced => return None,
-        };
-        let framed = self.session.framed_by(ShipRef::Npc(id))?;
-        let sheet = self.view.npc_sheets.get(&framed);
-        Some(drawn_box(at, drawn_size(sheet)))
-    }
-
-    fn player(&self) -> Option<DrawnBox> {
-        let framed = self.session.framed_by(ShipRef::Player);
-        let size = if framed == Some(self.session.ship()) {
-            match &self.view.sheet {
-                Ok(sheet) => (sheet.frame_width, sheet.frame_height),
-                Err(_) => placeholder_size(),
-            }
-        } else {
-            drawn_size(framed.and_then(|ship| self.view.npc_sheets.get(&ship)))
-        };
-        Some(drawn_box(self.view.shown_position(), size))
-    }
-}
-
-/// [`ViewShips`]' boxes as they stand, taken so the session can be
-/// changed by what they decide: a click in space.
-struct DrawnNow {
-    /// Each NPC's box, by id.
-    npcs: BTreeMap<NpcId, DrawnBox>,
-    /// The player's box.
-    player: Option<DrawnBox>,
-}
-
-impl DrawnNow {
-    /// The boxes `ships` gives now, for every NPC of its session.
-    fn of<C>(ships: &ViewShips<'_, C>) -> Self {
-        Self {
-            npcs: ships
-                .session
-                .npcs()
-                .iter()
-                .filter_map(|npc| Some((npc.id, ships.npc(npc.id)?)))
-                .collect(),
-            player: ships.player(),
-        }
-    }
-}
-
-impl DrawnShips for DrawnNow {
-    fn npc(&self, id: NpcId) -> Option<DrawnBox> {
-        self.npcs.get(&id).copied()
-    }
-
-    fn player(&self) -> Option<DrawnBox> {
-        self.player
     }
 }
 
@@ -1743,19 +1777,20 @@ fn dying(
 }
 
 /// Each of `shown` the radar shows, where it is drawn, whether it is the
-/// player's target, its IFF code and whether it is heavy: those
-/// [`Session::on_radar`] says, a cloaked ship only when its cloak shows
-/// there or the player scans for cloaked ships.
-fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<RadarShip> {
-    let target = session.target().map(|npc| npc.id);
+/// player's `target`, its IFF code and whether it is heavy: those its
+/// record says are on the radar
+/// ([`FrameShip::on_radar`], `nova_sim::Session::on_radar`), a cloaked
+/// ship only when its cloak shows there or the player scans for cloaked
+/// ships.
+fn radar_ships(target: Option<NpcId>, shown: &[(&FrameShip, Point, f32)]) -> Vec<RadarShip> {
     shown
         .iter()
-        .filter(|(npc, _, _)| session.on_radar(npc))
+        .filter(|(npc, _, _)| npc.on_radar)
         .map(|&(npc, at, _)| RadarShip {
             position: at,
-            targeted: target == Some(npc.id),
-            iff: session.ship_iff(npc),
-            heavy: npc.hull.mass > HEAVY_MASS,
+            targeted: target.is_some_and(|id| npc.ship == ShipRef::Npc(id)),
+            iff: npc.iff,
+            heavy: npc.mass > HEAVY_MASS,
         })
         .collect()
 }

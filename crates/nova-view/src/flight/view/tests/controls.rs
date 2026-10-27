@@ -355,6 +355,7 @@ fn an_npc_of_a_cost_minus_one_type_is_not_drawn_but_is_still_hovered() {
     };
     assert!(near(&drawn(&view)), "drawn while shown");
     nova_sim::fixture::hide(view.sim.session.as_mut().expect("flying"), id);
+    view.refresh_frame();
     assert!(view.session().expect("flying").is_hidden(ShipRef::Npc(id)));
     assert!(!near(&drawn(&view)), "not drawn hidden");
     view.input(&Input::PointerMoved(over));
@@ -471,6 +472,7 @@ fn refilled(rules: Rulebook) -> (View, NpcId, Point, Point) {
         .position
         + Vec2::new(200.0, 0.0);
     let copy = nova_sim::fixture::refill(session, id, at).expect("refilled");
+    view.refresh_frame();
     let now = npc_on_screen(&view, copy);
     (view, copy, was, now)
 }
@@ -482,11 +484,8 @@ fn targeted(view: &View) -> Option<NpcId> {
 
 /// Where `view` boxes NPC `id` for the hover and the click, on screen.
 fn boxed_at(view: &View, id: NpcId) -> Option<Point> {
-    let ships = ViewShips {
-        view,
-        session: view.session().expect("flying"),
-    };
-    let drawn = ships.npc(id)?;
+    use nova_sim::DrawnShips;
+    let drawn = view.drawn_boxes().npc(id)?;
     Some(
         view.camera()
             .world_to_screen(Point::new(drawn.centre.x, drawn.centre.y)),

@@ -13,8 +13,8 @@ use std::collections::VecDeque;
 use nova_sim::JumpReadiness;
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, MapKey, StepInput, StepReport,
-    StepRun,
+    Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, FrameAsteroid,
+    FrameBeam, FrameBox, FrameShip, MapKey, StepInput, StepReport, StepRun,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
@@ -22,7 +22,10 @@ use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::navigation::NavMode;
 use nova_sim::story::OverlaidGalaxy;
-use nova_sim::{MapMarks, MissionId, PlayerCommand, SavedNav, StellarId, StellarPick};
+use nova_sim::{
+    Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, ShipRef, StellarId, StellarPick,
+    Vec2,
+};
 
 use super::{CommSource, FlightSim, MapSource, PortSource};
 
@@ -35,8 +38,11 @@ use super::{CommSource, FlightSim, MapSource, PortSource};
 /// takes every gate but those it is told to refuse
 /// ([`FakeFlight::refuse`]), answers [`MapSource`] from [`FakeMap`]
 /// ([`FakeFlight::map_mut`]), and records the map's questions whose
-/// arguments matter ([`FakeFlight::asked`]). One with nothing scripted
-/// meets [`check_contract`].
+/// arguments matter ([`FakeFlight::asked`]). It answers the hover as told
+/// ([`FakeFlight::set_hover`]), recording each ask
+/// ([`FakeFlight::hovers`]), and the coming traffic from its list
+/// ([`FakeFlight::set_coming_traffic`]). One with nothing scripted meets
+/// [`check_contract`].
 #[derive(Clone, Debug, Default)]
 pub struct FakeFlight {
     frame: FlightFrame,
@@ -48,6 +54,9 @@ pub struct FakeFlight {
     refused: Vec<PlayerCommand>,
     map: FakeMap,
     asked: RefCell<Vec<MapAsk>>,
+    hover: Option<Hover>,
+    hovers: RefCell<Vec<(Vec2, DrawnBoxes)>>,
+    coming: Vec<ShipId>,
 }
 
 /// What a [`FakeFlight`] answers the [`MapSource`] questions with, each
@@ -129,6 +138,27 @@ impl FakeFlight {
     /// Shows `frame` from now on.
     pub fn set_frame(&mut self, frame: FlightFrame) {
         self.frame = frame;
+    }
+
+    /// The frame it shows, to change in place.
+    pub fn frame_mut(&mut self) -> &mut FlightFrame {
+        &mut self.frame
+    }
+
+    /// Answers every hover ask with `hover` from now on.
+    pub fn set_hover(&mut self, hover: Option<Hover>) {
+        self.hover = hover;
+    }
+
+    /// Each hover ask's point and boxes, in the order asked.
+    #[must_use]
+    pub fn hovers(&self) -> Vec<(Vec2, DrawnBoxes)> {
+        self.hovers.borrow().clone()
+    }
+
+    /// Answers the coming traffic with `ships` from now on.
+    pub fn set_coming_traffic(&mut self, ships: Vec<ShipId>) {
+        self.coming = ships;
     }
 
     /// Answers the next command not yet answered with `answer`.
@@ -224,6 +254,15 @@ impl FlightSim for FakeFlight {
 
     fn takes(&self, gate: PlayerCommand) -> bool {
         !self.refused.contains(&gate)
+    }
+
+    fn hover(&self, at: Vec2, drawn: &DrawnBoxes) -> Option<Hover> {
+        self.hovers.borrow_mut().push((at, drawn.clone()));
+        self.hover
+    }
+
+    fn coming_traffic(&self) -> Vec<ShipId> {
+        self.coming.clone()
     }
 }
 
@@ -344,6 +383,19 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         jump_readiness,
         texts_queued,
         map_key,
+        ships,
+        drawn,
+        shots,
+        beams,
+        cargo_boxes,
+        asteroids,
+        stellars,
+        effective_murk,
+        system_murk,
+        system_background,
+        double_time,
+        hyper_gamma,
+        traffic_ships,
     } = frame;
     let other_system = SystemId(if system.0 == i16::MAX { 0 } else { i16::MAX });
     FlightFrame {
@@ -372,6 +424,115 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             nav: unlike_nav(map_key.nav),
             ..map_key.clone()
         },
+        ships: one_or_none(ships, FrameShip::default),
+        drawn: one_or_none(drawn, || (ShipRef::Player, nova_sim::ShipLayer::Ships)),
+        shots: one_or_none(shots, record::shot),
+        beams: one_or_none(beams, || FrameBeam {
+            firer: ShipRef::Player,
+            start: Vec2::ZERO,
+            end: Vec2::ZERO,
+            weapon: nova_sim::WeaponId(128),
+            fade: 0,
+        }),
+        cargo_boxes: one_or_none(cargo_boxes, || FrameBox {
+            position: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            frame: 0,
+            fade: 0,
+            graphic: 0,
+        }),
+        asteroids: one_or_none(asteroids, || FrameAsteroid {
+            position: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            frame: 0.0,
+            kind: 0,
+        }),
+        stellars: one_or_none(stellars, || record::stellar(StellarId(128))),
+        effective_murk: effective_murk.wrapping_add(1),
+        system_murk: system_murk.wrapping_add(1),
+        system_background: if system_background.is_some() {
+            None
+        } else {
+            Some(0)
+        },
+        double_time: !double_time,
+        hyper_gamma: hyper_gamma + 1.0,
+        traffic_ships: one_or_none(traffic_ships, || ShipId(128)),
+    }
+}
+
+/// None when `records` holds any, else one of `record`'s.
+fn one_or_none<T>(records: &[T], record: impl FnOnce() -> T) -> Vec<T> {
+    if records.is_empty() {
+        vec![record()]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Small record builders for frames a test scripts: a ship, a shot, a
+/// stellar.
+pub mod record {
+    use nova_sim::combat::projectile::ShotId;
+    use nova_sim::flight_frame::{FrameShip, FrameShot, FrameStellar};
+    use nova_sim::{DrawnSheet, NpcId, ShipId, ShipRef, StellarId, Vec2, WeaponId};
+
+    /// The player's ship, of class `class`, at `at` facing `heading`,
+    /// drawn in full and boxed by its own frames.
+    #[must_use]
+    pub fn player(class: i16, at: Vec2, heading: f32) -> FrameShip {
+        FrameShip {
+            class: ShipId(class),
+            position: at,
+            heading,
+            framed: Some(ShipId(class)),
+            ..FrameShip::default()
+        }
+    }
+
+    /// NPC `id`, of class `class`, at `at` facing `heading`, drawn in
+    /// full, boxed by its own frames, on the radar.
+    #[must_use]
+    pub fn npc(id: u32, class: i16, at: Vec2, heading: f32) -> FrameShip {
+        FrameShip {
+            ship: ShipRef::Npc(NpcId(id)),
+            class: ShipId(class),
+            position: at,
+            heading,
+            framed: Some(ShipId(class)),
+            on_radar: true,
+            ..FrameShip::default()
+        }
+    }
+
+    /// A shot of weapon 128 at the system's centre, at rest.
+    #[must_use]
+    pub fn shot() -> FrameShot {
+        FrameShot {
+            id: ShotId(0),
+            weapon: WeaponId(128),
+            position: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            heading: 0.0,
+            age: 0,
+            spin_timer: 0,
+            layer: nova_sim::combat::shot_layer::ShotLayer::Shots,
+        }
+    }
+
+    /// Stellar `id`, shown, whole, on its `Type` sheet, no hypergate.
+    #[must_use]
+    pub fn stellar(id: StellarId) -> FrameStellar {
+        FrameStellar {
+            id,
+            shown: true,
+            destroyed: false,
+            drawn: DrawnSheet::Type,
+            counted: DrawnSheet::Type,
+            frozen: false,
+            counts_none: false,
+            gate_frame: None,
+        }
     }
 }
 
@@ -393,7 +554,16 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 /// - **a refusal changes nothing**: [`refused_command`] answers a
 ///   refusal, and the frame after it equals the frame before;
 /// - **no step asked, none run**: a frame's steps asked for none fill the
-///   report, over one holding a step, with no step and no stop.
+///   report, over one holding a step, with no step and no stop;
+/// - **the player's record first, once**: a frame's ships begin with the
+///   player's, and hold no other;
+/// - **every ship drawn has a record**: each of a frame's ships drawn is
+///   among its ships;
+/// - **no ship hovered without boxes**: a hover with no ship's box finds
+///   no ship and not the player's;
+/// - **a click on nothing is refused**: a click in space far from
+///   anything, with no boxes, is refused, and the frame after it equals
+///   the frame before.
 ///
 /// The error says which clause failed.
 pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
@@ -441,6 +611,61 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
     if report != StepReport::default() {
         return Err(format!(
             "no step asked, none run: the report was {report:?}"
+        ));
+    }
+    check_world(sim, &once)
+}
+
+/// [`check_contract`]'s clauses on the world: the ships' records and
+/// those drawn, the hover and a click in space, `once` the frame filled
+/// before.
+fn check_world(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String> {
+    let players = once
+        .ships
+        .iter()
+        .filter(|record| record.ship == ShipRef::Player)
+        .count();
+    let first = once.ships.first().map(|record| record.ship);
+    if players != 1 || first != Some(ShipRef::Player) {
+        return Err(format!(
+            "the player's record first, once: the ships were {:?}",
+            once.ships
+                .iter()
+                .map(|record| record.ship)
+                .collect::<Vec<_>>()
+        ));
+    }
+    if let Some((stray, _)) = once
+        .drawn
+        .iter()
+        .find(|(ship, _)| once.ship(*ship).is_none())
+    {
+        return Err(format!(
+            "every ship drawn has a record: {stray:?} is drawn with none"
+        ));
+    }
+    let at = once.player().position;
+    if let Some(hover @ (Hover::Ship(_) | Hover::Player)) = sim.hover(at, &DrawnBoxes::default()) {
+        return Err(format!(
+            "no ship hovered without boxes: {hover:?} at {at:?}"
+        ));
+    }
+    let far = Vec2::new(1.0e9, 1.0e9);
+    let click = FlightCommand::ClickInSpace {
+        at: far,
+        drawn: DrawnBoxes::default(),
+    };
+    let answer = sim.apply(click);
+    if !answer.is_refused() {
+        return Err(format!(
+            "a click on nothing is refused: a click at {far:?} answered {answer:?}"
+        ));
+    }
+    let mut after = unlike(once);
+    sim.frame(&mut after);
+    if after != *once {
+        return Err(format!(
+            "a click on nothing is refused: the frame was {once:?}, then {after:?}"
         ));
     }
     Ok(())
@@ -676,6 +901,16 @@ mod tests {
         RefusalChangesTheFrame,
         /// A frame asked for no step reports one.
         StepsUnasked,
+        /// The frame's ships begin with an NPC's.
+        NpcFirst,
+        /// The frame draws a ship it has no record of.
+        DrawsAStray,
+        /// The hover finds the player's ship with no boxes.
+        HoversWithoutBoxes,
+        /// The click on nothing is answered.
+        AnswersTheClick,
+        /// The click on nothing changes the frame.
+        ClickChangesTheFrame,
     }
 
     /// A [`FakeFlight`] with one [`Fault`].
@@ -697,6 +932,19 @@ mod tests {
             if !matches!(self.fault, Fault::SkipsAField) {
                 self.fake.frame(into);
             }
+            let npc = ShipRef::Npc(nova_sim::NpcId(7));
+            match self.fault {
+                Fault::NpcFirst => into.ships.insert(0, record::npc(7, 129, Vec2::ZERO, 0.0)),
+                Fault::DrawsAStray => into.drawn.push((npc, nova_sim::ShipLayer::Ships)),
+                _ => {}
+            }
+        }
+
+        fn hover(&self, at: Vec2, drawn: &DrawnBoxes) -> Option<Hover> {
+            if matches!(self.fault, Fault::HoversWithoutBoxes) {
+                return Some(Hover::Player);
+            }
+            self.fake.hover(at, drawn)
         }
 
         fn step(&mut self, input: &StepInput, steps: u32, into: &mut StepReport) {
@@ -707,9 +955,15 @@ mod tests {
         }
 
         fn apply(&mut self, command: FlightCommand) -> Answer {
+            let click = matches!(command, FlightCommand::ClickInSpace { .. });
             match self.fault {
                 Fault::AnswersTheRefusal => Answer::Stellar(StellarId(128)),
                 Fault::RefusalChangesTheFrame => {
+                    self.fake.set_frame(stellar(129));
+                    self.fake.apply(command)
+                }
+                Fault::AnswersTheClick if click => Answer::InSpace(Hover::Player),
+                Fault::ClickChangesTheFrame if click => {
                     self.fake.set_frame(stellar(129));
                     self.fake.apply(command)
                 }
@@ -771,8 +1025,96 @@ mod tests {
     }
 
     #[test]
+    fn an_npc_first_breaks_the_contract() {
+        assert!(clause(Fault::NpcFirst).starts_with("the player's record first, once"));
+    }
+
+    #[test]
+    fn a_second_player_record_breaks_the_contract() {
+        let mut fake = FakeFlight::new();
+        fake.frame_mut().ships.push(FrameShip::default());
+        let clause = check_contract(&mut fake).expect_err("broken");
+        assert!(
+            clause.starts_with("the player's record first, once"),
+            "{clause}"
+        );
+    }
+
+    #[test]
+    fn a_ship_drawn_with_no_record_breaks_the_contract() {
+        assert!(clause(Fault::DrawsAStray).starts_with("every ship drawn has a record"));
+    }
+
+    #[test]
+    fn a_hover_without_boxes_breaks_the_contract() {
+        assert!(clause(Fault::HoversWithoutBoxes).starts_with("no ship hovered without boxes"));
+    }
+
+    #[test]
+    fn an_answered_click_on_nothing_breaks_the_contract() {
+        let clause = clause(Fault::AnswersTheClick);
+        assert!(
+            clause.starts_with("a click on nothing is refused"),
+            "{clause}"
+        );
+        assert!(clause.contains("answered"), "{clause}");
+    }
+
+    #[test]
+    fn a_click_on_nothing_that_changes_the_frame_breaks_the_contract() {
+        let clause = clause(Fault::ClickChangesTheFrame);
+        assert!(
+            clause.starts_with("a click on nothing is refused"),
+            "{clause}"
+        );
+        assert!(clause.contains("the frame was"), "{clause}");
+    }
+
+    #[test]
+    fn the_fake_answers_the_hover_as_told_and_records_each_ask() {
+        let mut fake = FakeFlight::new();
+        let boxes = DrawnBoxes {
+            player: Some(nova_sim::DrawnBox {
+                centre: Vec2::ZERO,
+                width: 10,
+                height: 10,
+            }),
+            npcs: Vec::new(),
+        };
+        assert_eq!(fake.hover(Vec2::new(1.0, 2.0), &boxes), None);
+        fake.set_hover(Some(Hover::Stellar(StellarId(128))));
+        assert_eq!(
+            fake.hover(Vec2::ZERO, &DrawnBoxes::default()),
+            Some(Hover::Stellar(StellarId(128)))
+        );
+        assert_eq!(
+            fake.hovers(),
+            [
+                (Vec2::new(1.0, 2.0), boxes),
+                (Vec2::ZERO, DrawnBoxes::default())
+            ]
+        );
+    }
+
+    #[test]
+    fn the_fake_brings_the_coming_traffic_it_is_given() {
+        let mut fake = FakeFlight::new();
+        assert_eq!(fake.coming_traffic(), []);
+        fake.set_coming_traffic(vec![ShipId(129)]);
+        assert_eq!(fake.coming_traffic(), [ShipId(129)]);
+    }
+
+    #[test]
     fn a_fill_over_an_unlike_frame_changes_every_field() {
         let busy = FlightFrame {
+            ships: Vec::new(),
+            drawn: Vec::new(),
+            shots: vec![record::shot()],
+            stellars: vec![record::stellar(StellarId(130))],
+            effective_murk: u8::MAX,
+            system_background: Some(0x10),
+            double_time: true,
+            traffic_ships: vec![ShipId(130)],
             system: SystemId(i16::MAX),
             course_shown: vec![SystemId(131)],
             course_plotted: true,
@@ -799,7 +1141,33 @@ mod tests {
                 jump_readiness,
                 texts_queued,
                 map_key,
+                ships,
+                drawn,
+                shots,
+                beams,
+                cargo_boxes,
+                asteroids,
+                stellars,
+                effective_murk,
+                system_murk,
+                system_background,
+                double_time,
+                hyper_gamma,
+                traffic_ships,
             } = &frame;
+            assert_ne!(other.ships, *ships);
+            assert_ne!(other.drawn, *drawn);
+            assert_ne!(other.shots, *shots);
+            assert_ne!(other.beams, *beams);
+            assert_ne!(other.cargo_boxes, *cargo_boxes);
+            assert_ne!(other.asteroids, *asteroids);
+            assert_ne!(other.stellars, *stellars);
+            assert_ne!(other.effective_murk, *effective_murk);
+            assert_ne!(other.system_murk, *system_murk);
+            assert_ne!(other.system_background, *system_background);
+            assert_ne!(other.double_time, *double_time);
+            assert_ne!(other.hyper_gamma.to_bits(), hyper_gamma.to_bits());
+            assert_ne!(other.traffic_ships, *traffic_ships);
             assert_ne!(other.nav_mode, *nav_mode);
             assert_ne!(other.system, *system);
             assert_ne!(other.course_shown, *course_shown);

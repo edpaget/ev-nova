@@ -7,10 +7,11 @@
 
 use nova_sim::catalog::Explosion;
 use nova_sim::combat::projectile::ShotId;
+use nova_sim::flight_frame::ShipPlace;
 use nova_sim::flight_frame::{
     FlightEvent, FrameShip, FrameShot, PassReport, StepInput, StepReport, StepRun,
 };
-use nova_sim::{CommNote, FireSound, Gauge, PersonQuote, ShipState};
+use nova_sim::{CommNote, FireSound, Gauge, PersonQuote};
 
 use crate::flight::stars::Star;
 use crate::system::camera::Anchor;
@@ -65,7 +66,7 @@ fn one_step(passes: Vec<PassReport>) -> StepReport {
 /// A step of `passes`, the player before it at the origin.
 fn step(passes: Vec<PassReport>) -> StepRun {
     StepRun {
-        before: vec![(ShipRef::Player, ShipState::default())],
+        before: vec![(ShipRef::Player, ShipPlace::default())],
         passes,
         ..StepRun::default()
     }
@@ -81,6 +82,7 @@ fn the_player(at: Vec2) -> FrameShip {
         breakup: None,
         shield: Gauge::full(30.0),
         class_shield: Some(30.0),
+        ..FrameShip::default()
     }
 }
 
@@ -574,7 +576,7 @@ fn shooting(id: u32, smoke_frame: bool) -> PassReport {
             id: ShotId(id),
             weapon: BLASTER,
             position: Vec2::new(0.0, -50.0),
-            heading: 0.0,
+            ..record::shot()
         }],
         smoke_frame,
         ..fight(vec![])
@@ -696,9 +698,9 @@ fn a_frame_scrolls_the_stars_by_its_first_passs_move_twice_over_in_double_time()
         let run = StepRun {
             before: vec![(
                 ShipRef::Player,
-                ShipState {
+                ShipPlace {
                     position: Vec2::new(8.0, -4.0),
-                    ..ShipState::default()
+                    ..ShipPlace::default()
                 },
             )],
             passes: vec![
@@ -739,9 +741,9 @@ fn by_the_other_starfield_reading_no_pass_steps_the_stars() {
     let run = StepRun {
         before: vec![(
             ShipRef::Player,
-            ShipState {
+            ShipPlace {
                 position: Vec2::new(8.0, -4.0),
-                ..ShipState::default()
+                ..ShipPlace::default()
             },
         )],
         passes: vec![PassReport::default()],
@@ -775,9 +777,9 @@ fn a_star_of_factor_0_stays_fixed_in_world_units() {
         let run = StepRun {
             before: vec![(
                 ShipRef::Player,
-                ShipState {
+                ShipPlace {
                     position: Vec2::new(8.0, -4.0),
-                    ..ShipState::default()
+                    ..ShipPlace::default()
                 },
             )],
             passes: vec![
@@ -874,7 +876,7 @@ fn the_inbox_comm_and_quotes_go_with_the_first_step_and_pass_that_ran() {
     let mut view = stepping(catalog());
     view.inbox.receive(held.clone());
     let rescued = StepRun {
-        rescued: Some(ShipState::default()),
+        rescued: Some(ShipPlace::default()),
         ..step(vec![])
     };
     frame(
@@ -900,9 +902,9 @@ fn the_inbox_comm_and_quotes_go_with_the_first_step_and_pass_that_ran() {
 #[test]
 fn each_step_keeps_its_ships_as_they_were_before_it() {
     let mut view = stepping(catalog());
-    let state = |x: f32| ShipState {
+    let state = |x: f32| ShipPlace {
         position: Vec2::new(x, 0.0),
-        ..ShipState::default()
+        ..ShipPlace::default()
     };
     let run = |x: f32| StepRun {
         before: vec![(ShipRef::Player, state(x)), (NPC, state(x + 1.0))],
@@ -918,18 +920,15 @@ fn each_step_keeps_its_ships_as_they_were_before_it() {
     );
     assert!(!rescued);
     assert_eq!(view.previous, state(5.0), "the last step's");
-    assert_eq!(
-        view.npc_previous.into_iter().collect::<Vec<_>>(),
-        [(NpcId(0), state(6.0))]
-    );
+    assert_eq!(view.npc_previous, [(NpcId(0), state(6.0))]);
 }
 
 #[test]
 fn a_rescue_keeps_the_ship_where_it_put_it_and_says_so() {
     let mut view = stepping(catalog());
-    let there = ShipState {
+    let there = ShipPlace {
         position: Vec2::new(50.0, 50.0),
-        ..ShipState::default()
+        ..ShipPlace::default()
     };
     let run = StepRun {
         rescued: Some(there),

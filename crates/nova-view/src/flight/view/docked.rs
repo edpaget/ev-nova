@@ -19,7 +19,7 @@ use nova_sim::{
 use crate::flight::catalog::StatusBars;
 use crate::flight::jump::JumpEffect;
 use crate::galaxy::GalaxyMap;
-use crate::time::{sixtieths, ticks};
+use crate::time::sixtieths;
 use crate::ui::PlunderShown;
 use crate::{Key, Point};
 
@@ -89,15 +89,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// to show the spaceport.
     pub fn take_landing(&mut self) -> Option<StellarId> {
         self.pending_landing.take()
-    }
-
-    /// The message on screen, if any: the slot's until its ticks have
-    /// passed.
-    #[must_use]
-    pub fn message(&self) -> Option<&str> {
-        let message = self.message.as_ref()?;
-        let shown = ticks(self.elapsed) - message.said_at;
-        (shown < u128::from(message.ticks)).then_some(message.text.as_str())
     }
 
     /// Shows `text` as the message, from now, for `ticks` of flight,

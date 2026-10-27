@@ -51,7 +51,9 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         RadarScene {
             player: self.shown_position(),
             stellars,
-            ships: radar_ships(session, &self.shown_npcs()),
+            // The target's id is the target panel's read, phase 8's
+            // (rdm:phase/view-sim-seam/phase-8-hud-and-target-frame).
+            ships: radar_ships(session.target().map(|npc| npc.id), &self.shown_npcs()),
             blank: session.landed().is_some(),
             iff: gear.iff,
             density_scanner: gear.density_scanner,
@@ -123,7 +125,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     ///   only when it goes through, or any nav redraw.
     pub fn close_port_dialog(&mut self, dialog: PortDialog) {
         self.refresh_status();
-        self.sim.apply(FlightCommand::RestorePortNav);
+        self.send(FlightCommand::RestorePortNav);
         if matches!(dialog, PortDialog::Shipyard | PortDialog::Hire) {
             self.nav_marked = true;
         } else {
@@ -425,7 +427,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// @0x5e70f-0x5e71e, the computer @0x5ffc0-0x5ffd0). A
     /// session that failed has no nav to save.
     pub fn open_port_dialog(&mut self) {
-        self.sim.apply(FlightCommand::SavePortNav);
+        self.send(FlightCommand::SavePortNav);
     }
 
     /// Takes the nav area's snapshot afresh, noting how many mission texts
