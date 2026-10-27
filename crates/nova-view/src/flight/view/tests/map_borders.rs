@@ -138,6 +138,10 @@ fn the_maps_next_drawing_takes_the_flights_sources_again() {
     assert_eq!(govts_on(&view.map), [128, 129], "Proxima Near's blocks too");
 }
 
+/// This phase's real check of `with_rules`' hand-off to the course map's
+/// borders (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks): both
+/// readings on `FakeFlight` are [`by_default_the_rules_run_the_pass_in_a_tick_and_find_runs_none`]
+/// and [`by_the_other_readings_the_pass_walks_a_tick_at_a_time_and_finds_centring_runs_the_coarse_one`].
 #[test]
 fn the_rules_reach_the_course_map() {
     let rules = Rulebook::default()
@@ -171,20 +175,57 @@ fn the_rules_reach_the_course_map() {
     assert_eq!(passes(&view).next(), Next::Unstarted);
 }
 
+/// [`faked_bordered`] by `rules`, measured, its course map open, its
+/// flight's Find finding Sol.
+fn faked_bordered_by(rules: &Rulebook) -> Faked {
+    let catalog = FakeCatalog {
+        near: true,
+        ..catalog()
+    };
+    let mut fake = FakeFlight::new();
+    fake.set_frame(in_sol());
+    let map = fake.map_mut();
+    map.drawing = Some(sol_drawing());
+    map.border_sources = Some(sources(true));
+    map.search = Some(nova_sim::map_search::SearchOutcome::Found(SystemId(130)));
+    let mut view = FlightView::scripted(catalog, fake, rules);
+    view.map = view.map.clone().with_metrics(Rc::new(MonoMetrics));
+    view.open_map();
+    view
+}
+
 #[test]
 fn by_default_the_rules_run_the_pass_in_a_tick_and_find_runs_none() {
-    let mut view = known(FlightView::new(bordered())).with_metrics(Rc::new(MonoMetrics));
-    tap(&mut view, MAP);
-    ticks(&mut view, 1);
-    assert_eq!(passes(&view).next(), Next::Idle);
-    view.input(&key(Key::Char('f'), true));
-    view.input(&Input::Text('f'));
-    view.input(&key(Key::Char('f'), false));
-    for c in "Sol".chars() {
-        view.input(&Input::Text(c));
+    let mut view = faked_bordered_by(&Rulebook::default());
+    view.map.tick(TICK);
+    assert_eq!(view.map.border_passes().next(), Next::Idle);
+    super::map_find::faked_find(&mut view, "Sol");
+    assert_eq!(view.map.border_passes().next(), Next::Idle, "no pass");
+}
+
+#[test]
+fn by_the_other_readings_the_pass_walks_a_tick_at_a_time_and_finds_centring_runs_the_coarse_one() {
+    let rules = Rulebook::default()
+        .with_override(RuleKey::MapBorderPace, RuleSource::Bible)
+        .with_override(RuleKey::MapFindBorders, RuleSource::Bible);
+    let mut view = faked_bordered_by(&rules);
+    view.map.tick(TICK);
+    assert_eq!(
+        view.map.border_passes().next(),
+        Next::Walking { after: None },
+        "one null event a tick: the clear"
+    );
+    for _ in 0..3 {
+        view.map.tick(TICK);
     }
-    tap(&mut view, Key::Enter);
-    assert_eq!(passes(&view).next(), Next::Idle, "no pass");
+    assert_eq!(view.map.border_passes().next(), Next::Idle);
+    super::map_find::faked_find(&mut view, "Sol");
+    assert_eq!(
+        view.map.border_passes().step(),
+        8,
+        "Find's centring ran the coarse pass"
+    );
+    assert_eq!(view.map.border_passes().next(), Next::Unstarted);
 }
 
 // The setting and its save.

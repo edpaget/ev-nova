@@ -108,7 +108,7 @@ fn last_panel_asked(view: &Faked) -> Option<MapAsk> {
 }
 
 /// Types `text` into `view`'s open map as the platform sends it.
-fn faked_type_in(view: &mut Faked, text: &str) {
+pub(super) fn faked_type_in(view: &mut Faked, text: &str) {
     for c in text.chars() {
         let k = if c == ' ' {
             Key::Space
@@ -122,7 +122,7 @@ fn faked_type_in(view: &mut Faked, text: &str) {
 }
 
 /// F, `text` and Return on `view`'s open map.
-fn faked_find(view: &mut Faked, text: &str) {
+pub(super) fn faked_find(view: &mut Faked, text: &str) {
     faked_type_in(view, "f");
     assert!(view.map.finding(), "Find opened");
     faked_type_in(view, text);

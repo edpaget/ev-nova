@@ -40,7 +40,6 @@ use crate::spaceport::PortDialog;
 use crate::system::scene::PLACEHOLDER;
 use crate::system::{scene, starfield};
 use crate::time::sixtieths;
-use crate::ui::PlunderShown;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;

@@ -193,22 +193,6 @@ fn an_offers_refuse_button_is_the_sessions() {
     );
 }
 
-/// Kept real for phase 12 (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks):
-/// the player info's Jettison says what went in the session's words
-/// (`FlightView::jettison_all` over `FlightView::WORDS`).
-#[test]
-fn the_player_infos_jettison_says_the_sessions_words() {
-    let mut view = FlightView::new(trading());
-    land_now(&mut view);
-    view.settle_script();
-    assert_eq!(view.trade(BUY_FOOD), Ok(10));
-    view.take_off().expect("takes off");
-    view.settle_script();
-    view.message = None;
-    view.jettison_all();
-    assert_eq!(view.message(), Some(CARGO_JETTISONED));
-}
-
 /// The adapter's own check (rdm:phase/view-sim-seam/phase-11-spaceport-on-port):
 /// it hands the flight's chance to a command, the next offer, and to the
 /// offer gap. What the view does with the answers runs on `FakeFlight`

@@ -266,11 +266,10 @@ fn clear_route_redraws_item_3_by_c_or_its_button() {
 
 // The course map's nebulae by `RuleKey::NebulaPicture`.
 
-/// The `PICT` each nebula the open course map draws is drawn from, and
-/// whether it is drawn with `addMax`.
-fn map_nebulae(view: &View) -> Vec<(i16, bool)> {
-    drawn(view)
-        .iter()
+/// The `PICT` each nebula `list`'s open course map draws is drawn from,
+/// and whether it is drawn with `addMax`.
+fn nebulae_in(list: &DrawList) -> Vec<(i16, bool)> {
+    list.iter()
         .filter_map(|command| match command {
             DrawCommand::Clipped { command, .. } => match **command {
                 DrawCommand::BlendedPicture { image, blend, .. } => {
@@ -283,38 +282,56 @@ fn map_nebulae(view: &View) -> Vec<(i16, bool)> {
         .collect()
 }
 
-/// A flight over Sol's nebula, explored, with the course map open: at
-/// 0.5625 its rect is 106 pixels a side.
-fn over_the_nebula(rules: Option<Rulebook>) -> View {
-    let view = FlightView::new(FakeCatalog {
+/// The nebulae `view`'s open course map draws ([`nebulae_in`]).
+fn map_nebulae(view: &View) -> Vec<(i16, bool)> {
+    nebulae_in(&drawn(view))
+}
+
+/// A view over a scripted flight in Sol by `rules`, over Sol's nebula,
+/// the flight's galaxy holding it explored, with the course map open: at
+/// 0.5625 its rect is 106 pixels a side. The nebulae its map draws.
+fn faked_nebulae_by(rules: &Rulebook) -> Vec<(i16, bool)> {
+    let catalog = FakeCatalog {
         nebula: true,
         ..catalog()
-    });
-    let mut view = match rules {
-        Some(rules) => view.with_rules(rules),
-        None => view,
     };
-    change_galaxy(&mut view, |overlay| {
+    let mut session = SessionBuilder::flying(&catalog).build();
+    assert!(session.change_galaxy(&catalog, |overlay| {
         overlay.set_nebula_explored(nova_sim::NebulaId(128), true);
-    });
-    view.tick(TICK);
-    tap(&mut view, MAP);
-    view
+    }));
+    let mut fake = FakeFlight::new();
+    fake.set_frame(in_sol());
+    fake.map_mut().drawing = Some(sol_drawing());
+    fake.map_mut().galaxy = Some(session.galaxy().clone());
+    fake.queue_event(FlightEvent::Session(nova_sim::SessionEvent::GalaxyChanged));
+    let mut view = FlightView::scripted(catalog, fake, rules);
+    view.catch_up_then(|_, _| {});
+    view.open_map();
+    let mut list = DrawList::new();
+    view.map.draw(&mut list);
+    nebulae_in(&list)
 }
 
 #[test]
 fn the_course_map_draws_a_nebula_from_the_largest_picture_that_fits() {
-    let view = over_the_nebula(None);
-    assert_eq!(map_nebulae(&view), [(9500, true)], "30 fits, 120 doesn't");
+    assert_eq!(
+        faked_nebulae_by(&Rulebook::default()),
+        [(9500, true)],
+        "30 fits, 120 doesn't"
+    );
 }
 
 #[test]
 fn by_the_other_reading_the_course_map_draws_the_smallest_picture_that_covers() {
     let rules = Rulebook::default().with_override(RuleKey::NebulaPicture, RuleSource::Bible);
-    let view = over_the_nebula(Some(rules));
-    assert_eq!(map_nebulae(&view), [(9502, true)]);
+    assert_eq!(faked_nebulae_by(&rules), [(9502, true)]);
 }
 
+/// This phase's real check of `with_rules`' hand-off to the course map's
+/// nebulae (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks): both
+/// readings on `FakeFlight` are
+/// [`the_course_map_draws_a_nebula_from_the_largest_picture_that_fits`]
+/// and [`by_the_other_reading_the_course_map_draws_the_smallest_picture_that_covers`].
 #[test]
 fn with_rules_switches_the_nebula_picture_back() {
     let bible = Rulebook::default().with_override(RuleKey::NebulaPicture, RuleSource::Bible);
