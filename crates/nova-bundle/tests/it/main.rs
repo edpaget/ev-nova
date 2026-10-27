@@ -6,6 +6,7 @@
 
 mod env;
 mod files;
+mod flatpak_metadata;
 #[cfg(target_os = "linux")]
 mod linux_appimage;
 mod linux_desktop;

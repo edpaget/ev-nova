@@ -11,13 +11,13 @@
 //! Every `flatpak` it runs has `HOME` and the `XDG_*` directories pointed
 //! into a temporary directory, so the user's own installation, remotes
 //! and app data are never touched. It checks that the installed app has
-//! exactly the recorded permissions ([`FINISH_ARGS`]), that zenity runs in
+//! exactly the recorded permissions ([`FINISH_ARGS`], as the host's
+//! flatpak stores them: see `flatpak_metadata`), that zenity runs in
 //! its sandbox, and that it exports `applications/<id>.desktop` (passing
 //! `desktop-file-validate`, named for the app id the window sets) and the
 //! hicolor icons under the app id. Whatever happens, a guard uninstalls
 //! it.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -31,6 +31,8 @@ use nova_bundle::linux::icons::ICONS;
 use nova_bundle::ports::Process;
 use nova_bundle::spec::BundleSpec;
 use nova_bundle::system::StdProcess;
+
+use crate::flatpak_metadata::{expected_permissions, flatpak_version, permissions};
 
 const VARIABLE: &str = "NOVA_FLATPAK";
 
@@ -142,55 +144,6 @@ impl Drop for Guard<'_> {
     }
 }
 
-/// The permissions [`FINISH_ARGS`] grant, as `flatpak info
-/// --show-permissions` lists them: each `[Context]` key with its values.
-fn expected_permissions() -> BTreeMap<String, BTreeSet<String>> {
-    let mut expected: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for arg in FINISH_ARGS {
-        let (option, value) = arg
-            .strip_prefix("--")
-            .and_then(|a| a.split_once('='))
-            .unwrap_or_else(|| panic!("{arg} is --option=value"));
-        let key = match option {
-            "socket" => "sockets",
-            "share" => "shared",
-            "device" => "devices",
-            "filesystem" => "filesystems",
-            "persist" => "persistent",
-            other => panic!("no [Context] key for --{other}"),
-        };
-        expected
-            .entry(key.to_owned())
-            .or_default()
-            .insert(value.to_owned());
-    }
-    expected
-}
-
-/// `flatpak info --show-permissions`'s key file, read as each group's
-/// keys with their `;`-separated values.
-fn permissions(text: &str) -> BTreeMap<String, BTreeMap<String, BTreeSet<String>>> {
-    let mut groups: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
-    let mut group = String::new();
-    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            name.clone_into(&mut group);
-            groups.entry(group.clone()).or_default();
-        } else if let Some((key, values)) = line.split_once('=') {
-            let values = values
-                .split(';')
-                .filter(|v| !v.is_empty())
-                .map(str::to_owned)
-                .collect();
-            groups
-                .entry(group.clone())
-                .or_default()
-                .insert(key.to_owned(), values);
-        }
-    }
-    groups
-}
-
 #[test]
 fn installs_with_exactly_the_recorded_permissions_zenity_and_the_exports() {
     let Some(bundle) = env::var_os(VARIABLE)
@@ -218,13 +171,15 @@ fn installs_with_exactly_the_recorded_permissions_zenity_and_the_exports() {
     install.push(bundle.into_os_string());
     home.flatpak(&refs(&install));
 
-    // Exactly the recorded permissions, and nothing beyond [Context].
+    // Exactly the recorded permissions, as this flatpak (which finished
+    // the build) stores them, and nothing beyond [Context].
+    let flatpak = flatpak_version(&home.flatpak(&refs(&os(&["--version"]))));
     let shown = home.flatpak(&refs(&os(&["info", "--show-permissions", &id])));
     let groups = permissions(&shown);
     assert_eq!(
         groups.get("Context"),
-        Some(&expected_permissions()),
-        "{shown}"
+        Some(&expected_permissions(&FINISH_ARGS, flatpak)),
+        "flatpak {flatpak:?}:\n{shown}"
     );
     for (group, keys) in &groups {
         assert!(
