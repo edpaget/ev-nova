@@ -4083,7 +4083,10 @@ fn npc_on_screen(view: &View, id: NpcId) -> Point {
 }
 
 /// NPC `id`'s record in `view`'s kept frame.
-fn npc_record(view: &View, id: NpcId) -> nova_sim::flight_frame::FrameShip {
+fn npc_record<C, S: crate::flight::sim_port::FlightSim>(
+    view: &FlightView<C, S>,
+    id: NpcId,
+) -> nova_sim::flight_frame::FrameShip {
     *view.frame.ship(ShipRef::Npc(id)).expect("in the frame")
 }
 
