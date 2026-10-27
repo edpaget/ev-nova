@@ -8682,7 +8682,7 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = carrier();
         let from = ships[0].state;
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.shots(), [], "no shot");
         assert_eq!(combat.beams(), []);
         assert_eq!(
@@ -8720,7 +8720,7 @@ mod tests {
         let mut combat = Combat::default();
         let [mut carrier, _] = carrier();
         carrier.target = None;
-        tick(&mut combat, &mut [carrier], &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut [carrier], &NovaDisable);
         let sorties = combat.take_sorties();
         assert_eq!(sorties.len(), 1);
         assert_eq!(sorties[0].target, None);
@@ -8739,7 +8739,7 @@ mod tests {
             (WeaponSpec::new(&other), 1),
         ]);
         let mut ships = [firer, Ship::at(2, -150.0, 0.0)];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let heard = Some(FireSound::at(AI_FIRE_PRIORITY));
         assert_eq!(
             sounds(&combat.take_events()),
@@ -8763,7 +8763,7 @@ mod tests {
             (WeaponSpec::new(&other), 1),
         ]);
         let mut ships = [firer, Ship::at(2, -150.0, 0.0)];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(
             sounds(&combat.take_events()),
             [(WeaponId(130), Some(FireSound::at(AI_FIRE_PRIORITY)))],
@@ -8819,7 +8819,7 @@ mod tests {
             let mut combat = Combat::default();
             let mut ships = missile_attack(defence);
             missile_in_flight(&mut combat, &mut ships);
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
             let heard: Vec<_> = sounds(&combat.take_events())
                 .into_iter()
                 .filter(|&(weapon, _)| weapon == id)
@@ -8840,7 +8840,7 @@ mod tests {
         ship.hull.mass = 50.0;
         let mut combat = Combat::default();
         let mut ships = [ship];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let shoves = combat.take_shoves();
         assert_eq!(shoves.len(), 1, "{shoves:?}");
         assert_eq!(shoves[0].ship, A);
@@ -8852,7 +8852,7 @@ mod tests {
         let mut still = Ship::at(1, 0.0, 0.0).armed(blaster()).picking(128);
         still.hull.mass = 50.0;
         let mut combat = Combat::default();
-        tick(&mut combat, &mut [still], &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut [still], &NovaDisable);
         assert_eq!(combat.take_shoves(), []);
         // A recoiling turret, its target ahead or astern in its blind
         // spot: a call that spawns nothing pushes nothing (@0x88dc0).
@@ -8869,7 +8869,7 @@ mod tests {
             shooter.hull.mass = 50.0;
             let mut combat = Combat::default();
             let mut ships = [shooter, Ship::at(2, x, 0.0)];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
             combat.take_shoves()
         };
         assert_eq!(pushes(100.0).len(), 1, "ahead");
@@ -8888,16 +8888,19 @@ mod tests {
             only: Some(WeaponId(149)),
             ..QUIET
         };
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.take_sorties().len(), 1, "one sortie");
         assert_eq!(ships[0].rounds.slot(WeaponId(149)), 1, "one round spent");
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.take_sorties(), [], "the pick launches nothing");
+        assert_eq!(ships[0].rounds.slot(WeaponId(149)), 1, "nor drains one");
         // Kept and ready with no launch, it drains a fighter.
         let mut ships = carrier();
         ships[0].trigger = Trigger {
             only: Some(WeaponId(149)),
             ..QUIET
         };
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.take_sorties(), []);
         assert_eq!(ships[0].rounds.slot(WeaponId(149)), 1, "drained");
     }
@@ -8911,7 +8914,7 @@ mod tests {
         let mut ship = Ship::at(1, 0.0, 0.0).picking(128);
         ship.armament = Armament::new([(WeaponSpec::new(&together), 3)]);
         let mut combat = Combat::default();
-        tick(&mut combat, &mut [ship], &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut [ship], &NovaDisable);
         let npc = Some(FireSound::at(AI_FIRE_PRIORITY));
         assert_eq!(
             sounds(&combat.take_events()),
@@ -8928,7 +8931,7 @@ mod tests {
             ..Ship::at(1, 0.0, 0.0).armed(blaster())
         };
         let mut combat = Combat::default();
-        tick(&mut combat, &mut [player], &NovaDisable);
+        phase::fire_player(&mut combat, &mut [player], &NovaDisable);
         assert_eq!(
             sounds(&combat.take_events()),
             [(WeaponId(128), Some(FireSound::at(PLAYER_FIRE_PRIORITY)))]
@@ -8953,7 +8956,7 @@ mod tests {
                     .targeting(B),
                 Ship::at(2, x, 0.0),
             ];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
             fired(&combat.take_events(), A)
         };
         assert_eq!(fired_at(100.0), 1, "ahead");
@@ -8974,7 +8977,7 @@ mod tests {
             let mut shooter = Ship::at(1, 0.0, 0.0).armed(blind).picking(130).targeting(B);
             shooter.rounds = LauncherRounds::from([(WeaponId(130), 5)]);
             let mut ships = [shooter, Ship::at(2, -100.0, 0.0)];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
             ships[0].rounds.slot(WeaponId(130))
         };
         assert_eq!(spent(RuleSource::Engine), 4);
@@ -8992,7 +8995,7 @@ mod tests {
                     .targeting(B),
                 Ship::at(2, -17.632_7, -100.0),
             ];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
             fired(&combat.take_events(), A)
         };
         assert_eq!(fires(RuleSource::Engine), 0, "across the seam");
