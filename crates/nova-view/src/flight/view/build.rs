@@ -920,12 +920,6 @@ impl<
     pub fn alert_quiet(&self) -> bool {
         self.sound_prefs.alert_quiet()
     }
-
-    /// The catalog the screen reads.
-    #[must_use]
-    pub fn catalog(&self) -> &C {
-        &self.catalog
-    }
 }
 
 /// What reading a flight gives the view as it opens, besides the catalog
@@ -948,6 +942,12 @@ struct Opening {
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
+    /// The catalog the screen reads.
+    #[must_use]
+    pub fn catalog(&self) -> &C {
+        &self.catalog
+    }
+
     /// The view of `sim` over `catalog`, as `opening` read them, every
     /// other field as a view starts.
     #[allow(clippy::too_many_lines)] // one line for each of the screen's fields

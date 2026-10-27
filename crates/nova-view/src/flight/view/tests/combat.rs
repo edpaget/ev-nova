@@ -1,5 +1,6 @@
+use super::faked_world::{in_sol_with, npc_129, shows, the_player_at, world, world_list};
 use super::*;
-use nova_sim::cloak::CloakShown;
+use nova_sim::flight_frame::{PassReport, ShipPlace, StepReport, StepRun};
 
 // Traffic.
 
@@ -34,12 +35,13 @@ fn the_traffic_is_populated_when_the_flight_starts() {
 
 #[test]
 fn an_npc_is_drawn_with_its_own_sprite_where_it_is_facing_its_heading() {
-    let (_, chance) = scripted(&placed(850, 650, 90));
-    let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    view.tick(TICK);
-    let list = drawn(&view);
+    let mut view = world(
+        trafficked(&[130], 1, 129, 3),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(90.0)]),
+    );
+    // A tick in, the Moon a frame on.
+    view.step_stellars(TICK);
+    let list = world_list(&view);
     let frame = rotation_frame(90.0, NonZeroU16::new(72).expect("non-zero"));
     assert_eq!(
         sprites(&list),
@@ -55,63 +57,43 @@ fn an_npc_is_drawn_with_its_own_sprite_where_it_is_facing_its_heading() {
     );
 }
 
+/// NPC 0 of ship 129 at (100, -100) facing `heading`, 72 frames a turn,
+/// its glow at 32 and its steady lights at 32, as [`trafficked`]'s
+/// arrivals are drawn.
+fn lit_npc(heading: f32) -> nova_sim::flight_frame::FrameShip {
+    nova_sim::flight_frame::FrameShip {
+        frames: nova_sim::combat::ship_frames::FrameSpec {
+            frames: NonZeroU16::new(72).expect("non-zero"),
+            lights: true,
+            ..nova_sim::combat::ship_frames::FrameSpec::NONE
+        },
+        drawn: nova_sim::combat::ship_frames::Drawn {
+            lights: Some(32),
+            ..nova_sim::combat::ship_frames::Drawn::default()
+        },
+        glow: 32,
+        ..npc_129(0, Vec2::new(100.0, -100.0), heading)
+    }
+}
+
 #[test]
-fn a_ship_waiting_at_its_gate_is_drawn_by_its_tint_and_any_ship_by_its_cloak() {
-    let (_, chance) = scripted(&placed(850, 650, 90));
-    let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    view.tick(TICK);
-    let session = view.session().expect("flying");
-    let mut npc = session.npcs()[0].clone();
-    let opaque = CloakShown::Opaque;
-    assert_eq!(session.cloak_shown(&npc), opaque, "flying");
-    npc.mode = nova_sim::traffic::npc::Mode::JumpingIn { tick: 0 };
-    assert_eq!(session.cloak_shown(&npc), opaque, "jumping in");
-    npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
-    assert_eq!(session.cloak_shown(&npc), opaque, "fading in at its gate");
-    npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 30 };
-    assert_eq!(session.cloak_shown(&npc), opaque);
+fn a_ship_waiting_at_its_gate_is_drawn_by_its_tint() {
+    // How a waiting, held or cloaked ship's cloak shows is the session's
+    // (nova-sim's `a_fully_cloaked_ship_is_faint_when_led_or_scanned_at_any_range_and_hidden_otherwise`
+    // and `every_ship_still_fading_is_drawn_fading_led_or_not_and_no_fade_is_opaque`);
+    // a held ship is at no gate (`GateFade::of`, nova-sim's
+    // `an_npcs_gate_fade_follows_its_mode`).
     assert_eq!(
-        npc_tint(GateFade::of(&npc.mode)),
+        npc_tint(GateFade::Emerging { ticks_left: 30 }),
         None,
         "hidden at its gate"
     );
     // Held there by the player's hit, its goal is 4, not 0x15, so
     // `_HandleShipDisplay`'s fade (@0x2c090) passes it by.
-    npc.mode = nova_sim::traffic::npc::Mode::HeldAtGate { ticks_left: 3 };
     assert_eq!(
-        npc_tint(GateFade::of(&npc.mode)),
+        npc_tint(GateFade::None),
         Some(Color::WHITE),
         "held: drawn plain"
-    );
-    assert_eq!(session.cloak_shown(&npc), opaque, "held");
-    npc.cloak = CLOAKED;
-    npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
-    assert_eq!(
-        session.cloak_shown(&npc),
-        CloakShown::Hidden,
-        "cloaked at its gate"
-    );
-}
-
-#[test]
-fn a_fully_cloaked_ship_is_hidden_and_one_fading_out_drawn_fading() {
-    let (_, chance) = scripted(&placed(850, 650, 90));
-    let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    view.tick(TICK);
-    let session = view.session().expect("flying");
-    let mut npc = session.npcs()[0].clone();
-    npc.cloak = CLOAKED;
-    assert_eq!(session.cloak_shown(&npc), CloakShown::Hidden, "cloaked");
-    npc.cloak.direction = -1;
-    npc.cloak.fade = 8.0;
-    assert_eq!(
-        session.cloak_shown(&npc),
-        CloakShown::Fading(8.0),
-        "still fading"
     );
 }
 
@@ -178,12 +160,12 @@ fn the_play_area_is_the_screen_left_of_the_status_bar_about_the_ship() {
             bottom: 384.0,
         }
     );
-    let (_, chance) = scripted(&placed(850, 650, 90));
-    let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    view.tick(TICK);
-    assert_eq!(view.session().expect("flying").play_area(), area, "told");
+    let mut view = world(
+        trafficked(&[130], 1, 129, 3),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    view.step_frame(1, view.anchor());
+    assert_eq!(view.sim.inputs()[0].play_area, area, "told");
 }
 
 #[test]
@@ -241,72 +223,52 @@ fn npc_tints(list: &DrawList) -> Vec<Color> {
 }
 
 #[test]
-fn an_npc_coming_out_of_a_gate_is_hidden_then_fades_in_but_always_on_the_radar() {
+fn an_npc_coming_out_of_a_gate_is_hidden_then_fades_in() {
+    // When it comes out and how long it waits is the session's
+    // (nova-sim's emerge tests); it is on the radar all along, by its
+    // record (`a_fill_writes_every_ship_the_player_first_then_each_npc_in_the_systems_order`,
+    // the radar's `a_ship_its_record_puts_on_the_radar_is_a_blip_and_one_it_keeps_off_is_not`).
+    let mut view = world(
+        trafficked(&[130], 1, 129, 3),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]),
+    );
+    let at_gate = |view: &mut Faked, gate| {
+        let mut frame = view.frame.clone();
+        frame.ships[1].gate = gate;
+        shows(view, frame);
+        npc_tints(&world_list(view))
+    };
+    assert_eq!(
+        at_gate(&mut view, GateFade::Emerging { ticks_left: 40 }),
+        [],
+        "hidden"
+    );
+    assert_eq!(
+        at_gate(&mut view, GateFade::Emerging { ticks_left: 8 }),
+        [Color::rgba(255, 255, 255, 128)],
+        "half in"
+    );
+    assert_eq!(at_gate(&mut view, GateFade::None), [Color::WHITE]);
+}
+
+#[test]
+fn an_npc_coming_out_of_a_gate_is_on_the_radar_all_along() {
+    // The radar's half, on a real session (rdm:phase/view-sim-seam/phase-8-hud-and-target-frame).
     let mut catalog = trafficked(&[130], 1, 129, 3);
     catalog.sites.push(LandingSite {
         flags2: nova_sim::gate::HYPERGATE,
         exit_angle: 90,
         ..site(141, (200.0, 100.0), StellarFlags::CAN_LAND)
     });
-    // Setup brings nobody (an empty person roll); then an arrival
-    // comes out of the gate, the third of the stellars.
-    let (script, chance) = scripted(&[0, 0, 6, 6, 0, 0, 0, 2]);
+    let (_, chance) = scripted(&[0, 0, 6, 6, 0, 0, 0, 2]);
     let mut view = FlightView::new(catalog)
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
-    ticks(&mut view, 2);
-    assert_eq!(&script.borrow().asked[1..9], [500, 7, 7, 100, 1, 360, 3, 3]);
-    let mode = |view: &View| view.session().expect("flying").npcs()[0].mode;
-    assert_eq!(mode(&view), Mode::Emerging { ticks_left: 59 });
-    ticks(&mut view, 19);
-    assert_eq!(mode(&view), Mode::Emerging { ticks_left: 40 });
-    let list = drawn(&view);
-    assert_eq!(npc_tints(&list), [], "hidden");
+    ticks(&mut view, 21);
+    let mode = view.session().expect("flying").npcs()[0].mode;
+    assert_eq!(mode, Mode::Emerging { ticks_left: 40 });
+    assert_eq!(npc_tints(&drawn(&view)), [], "hidden");
     assert_eq!(blips(&view).len(), 1, "on the radar all the same");
-    ticks(&mut view, 32);
-    assert_eq!(mode(&view), Mode::Emerging { ticks_left: 8 });
-    let list = drawn(&view);
-    assert_eq!(
-        npc_tints(&list),
-        [Color::rgba(255, 255, 255, 128)],
-        "half in"
-    );
-    assert_eq!(blips(&view).len(), 1);
-    ticks(&mut view, 8);
-    assert_eq!(mode(&view), Mode::LeavingGate { tick: 0 });
-    assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE]);
-}
-
-/// Idles, and answers a hit on itself by taking its attacker.
-#[derive(Debug)]
-struct Answering;
-
-impl Behaviour for Answering {
-    fn decide(
-        &self,
-        _npc: &nova_sim::Npc,
-        _around: &nova_sim::Surroundings,
-        _chance: &mut dyn Chance,
-    ) -> Goal {
-        Goal::Idle
-    }
-
-    fn react(
-        &self,
-        npc: &nova_sim::Npc,
-        strike: &nova_sim::Strike,
-        _around: &nova_sim::Surroundings,
-    ) -> nova_sim::Reaction {
-        if strike.ship == nova_sim::ShipRef::Npc(npc.id) {
-            nova_sim::Reaction {
-                target: strike.by,
-                provoked: strike.damage,
-                goal: None,
-            }
-        } else {
-            nova_sim::Reaction::default()
-        }
-    }
 }
 
 /// [`armed`] with a volley the answer flag answers at a ship the player
@@ -329,121 +291,86 @@ fn volleying() -> FakeCatalog {
 }
 
 #[test]
-fn a_ship_the_player_hits_in_its_gate_is_drawn_on_the_frame_of_the_hit() {
-    // The original answers the hit inside `_HandleShot` (@0x44385),
-    // before the display pass draws the frame.
-    let mut catalog = volleying();
-    catalog.sites.push(LandingSite {
-        flags2: nova_sim::gate::HYPERGATE,
-        exit_angle: 90,
-        ..site(141, (0.0, -100.0), StellarFlags::CAN_LAND)
-    });
-    // Setup brings nobody; then an arrival comes out of the gate, the
-    // third of the stellars, straight ahead of the player.
-    let (_, chance) = scripted(&[0, 0, 6, 6, 0, 0, 0, 2]);
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Answering));
-    ticks(&mut view, 2);
-    let npc = |view: &View| view.session().expect("flying").npcs()[0].clone();
-    assert!(matches!(npc(&view).mode, Mode::Emerging { .. }));
-    let left = |npc: &nova_sim::Npc| npc.reserves.shield.now + npc.reserves.armor.now;
-    let mut shield = left(&npc(&view));
-    view.input(&key(FIRE_KEY, true));
-    for _ in 0..60 {
-        view.tick(TICK);
-        let hit = npc(&view);
-        if left(&hit) < shield {
-            assert!(
-                matches!(hit.mode, Mode::HeldAtGate { .. }),
-                "{:?}",
-                hit.mode
-            );
-            assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE], "seen");
-            return;
-        }
-        assert!(matches!(hit.mode, Mode::Emerging { .. }), "{:?}", hit.mode);
-        shield = left(&hit);
-    }
-    panic!("never hit");
-}
-
-/// [`volleying`] with hypergate 141 at (0, -110), straight ahead of the
-/// player, `with` changes made. A shot hits on the pass after the one it
-/// moves into its target on, and at this distance that move falls on a
-/// frame's advance pass, so the hit falls on its second.
-fn gate_110_ahead(with: impl FnOnce(&mut FakeCatalog)) -> FakeCatalog {
-    let mut catalog = volleying();
-    catalog.sites.push(LandingSite {
-        flags2: nova_sim::gate::HYPERGATE,
-        exit_angle: 90,
-        ..site(141, (0.0, -110.0), StellarFlags::CAN_LAND)
-    });
-    with(&mut catalog);
-    catalog
-}
-
-/// `catalog`'s flight in double time, `draws` bringing an arrival out
-/// of gate 141, which answers a hit by taking its attacker; fired at
-/// until the frame on which the first hit lands, that frame's second
-/// pass at this distance. Until then the arrival is hidden in the gate.
-fn hit_on_the_second_pass(catalog: FakeCatalog, draws: &[u32]) -> View {
-    let (_, chance) = scripted(draws);
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Answering))
-        .with_double_time(true);
-    ticks(&mut view, 2);
-    let npc = |view: &View| view.session().expect("flying").npcs()[0].clone();
-    assert!(matches!(npc(&view).mode, Mode::Emerging { .. }));
-    let left = |npc: &nova_sim::Npc| npc.reserves.shield.now + npc.reserves.armor.now;
-    let shield = left(&npc(&view));
-    view.input(&key(FIRE_KEY, true));
-    for _ in 0..60 {
-        view.tick(TICK);
-        if left(&npc(&view)) < shield {
-            return view;
-        }
-        let mode = npc(&view).mode;
-        assert!(matches!(mode, Mode::Emerging { .. }), "{mode:?}");
-        assert_eq!(npc_tints(&drawn(&view)), [], "hidden");
-    }
-    panic!("never hit");
+fn a_ship_held_at_its_gate_is_drawn_plain_on_the_frame_it_is_held() {
+    // The hit is answered inside the pass, before the frame is drawn,
+    // holding it at its gate: the session's (nova-sim's
+    // `session::step::tests::each_pass_reports_the_session_as_it_stood_after_it`
+    // and the gate-follow tests); the frame after the pass holds it at no
+    // gate, and it is drawn plain on that frame.
+    let mut view = world(
+        volleying(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]),
+    );
+    let mut frame = view.frame.clone();
+    frame.ships[1].gate = GateFade::Emerging { ticks_left: 40 };
+    shows(&mut view, frame.clone());
+    assert_eq!(npc_tints(&world_list(&view)), [], "hidden");
+    frame.ships[1].gate = GateFade::None;
+    view.sim.set_frame(frame);
+    view.step_frame(1, view.anchor());
+    assert_eq!(npc_tints(&world_list(&view)), [Color::WHITE], "seen");
 }
 
 #[test]
-fn a_ship_the_player_hits_in_its_gate_on_the_second_pass_is_drawn_on_the_frame_of_the_hit() {
-    // `_HandleShot` (@0x44385) runs on double time's second pass too,
-    // with `_DamageShip`'s reaction, so the hit is answered there,
-    // before the next frame is drawn. Setup brings nobody; then an
-    // arrival comes out of the gate, the third of the stellars.
-    let view = hit_on_the_second_pass(gate_110_ahead(|_| ()), &[0, 0, 6, 6, 0, 0, 0, 2]);
-    let mode = view.session().expect("flying").npcs()[0].mode;
-    assert!(matches!(mode, Mode::HeldAtGate { .. }), "{mode:?}");
-    assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE], "seen");
+fn a_ship_held_at_its_gate_on_the_second_pass_is_drawn_on_that_frame() {
+    // Double time's second pass answers the hit too (`_HandleShot`
+    // @0x44385 runs on both): the session's (nova-sim's
+    // `session::step::tests::a_step_runs_a_second_pass_only_in_double_time`).
+    // The frame after the step's two passes is drawn.
+    let mut view = world(
+        volleying(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]),
+    );
+    let mut held = view.frame.clone();
+    held.ships[1].gate = GateFade::None;
+    let pass = |frame: &FlightFrame| PassReport {
+        ships: frame.ships.clone(),
+        double_time: true,
+        ..PassReport::default()
+    };
+    let mut waiting = held.clone();
+    waiting.ships[1].gate = GateFade::Emerging { ticks_left: 40 };
+    view.sim.set_frame(held.clone());
+    view.sim.queue_report(StepReport {
+        steps: vec![StepRun {
+            passes: vec![pass(&waiting), pass(&held)],
+            ..StepRun::default()
+        }],
+        stopped: false,
+    });
+    view.step_frame(1, view.anchor());
+    assert_eq!(npc_tints(&world_list(&view)), [Color::WHITE], "seen");
 }
 
 #[test]
-fn a_person_the_player_hits_in_its_gate_on_the_second_pass_says_its_quote_on_that_frame() {
+fn a_quote_said_on_a_second_pass_is_on_the_message_line_that_frame() {
     // `_DamageShip`'s reaction on the second pass turns it on the
     // player, and `_AIMakeShipAttackPlayer` says its quote there
-    // (`_ShowPersonHailQuote` @0x89ce1), before the next frame.
-    let catalog = gate_110_ahead(|catalog| {
-        let ace = peopled();
-        catalog.persons = ace.persons;
-        catalog.persons[0].link_syst = -1;
-        catalog.persons[0].flags = nova_sim::person::QUOTE_ON_ATTACK;
-        catalog.strings = ace.strings;
-    });
-    // Setup's person roll comes up empty (`përs` 128); then Ace,
-    // `përs` 600, comes out of the gate, the third of the stellars.
-    let view = hit_on_the_second_pass(catalog, &[0, 0, 0, 0, 472, 0, 2]);
-    let npc = &view.session().expect("flying").npcs()[0];
-    assert!(
-        matches!(npc.mode, Mode::HeldAtGate { .. }),
-        "{:?}",
-        npc.mode
+    // (`_ShowPersonHailQuote` @0x89ce1), before the next frame: the
+    // session's (nova-sim's `the_quotes_said_before_a_pass_come_with_that_pass`).
+    let mut view = world(
+        volleying(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]),
     );
+    let quote = nova_sim::PersonQuote {
+        npc: NpcId(0),
+        text: "Ace: Prepare to die, !".to_owned(),
+    };
+    let frame = view.frame.clone();
+    let pass = |quotes| PassReport {
+        ships: frame.ships.clone(),
+        double_time: true,
+        quotes,
+        ..PassReport::default()
+    };
+    view.sim.queue_report(StepReport {
+        steps: vec![StepRun {
+            passes: vec![pass(Vec::new()), pass(vec![quote])],
+            ..StepRun::default()
+        }],
+        stopped: false,
+    });
+    view.step_frame(1, view.anchor());
     assert_eq!(view.message(), Some("Ace: Prepare to die, !"));
 }
 
@@ -473,144 +400,98 @@ fn gate_frames(list: &DrawList) -> Vec<u16> {
         .collect()
 }
 
-/// Sends every NPC into hypergate 141.
-#[derive(Debug)]
-struct Entering;
-
-impl Behaviour for Entering {
-    fn decide(
-        &self,
-        _npc: &nova_sim::Npc,
-        _around: &nova_sim::Surroundings,
-        _chance: &mut dyn Chance,
-    ) -> Goal {
-        Goal::EnterGate(nova_sim::catalog::StellarId(141))
-    }
-}
-
 #[test]
 fn a_ship_entering_a_gate_fades_out_by_two_32nds_a_tick() {
-    let (_, chance) = scripted(&placed(850, 650, 90));
-    let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    view.tick(TICK);
-    let mut npc = view.session().expect("flying").npcs()[0].clone();
-    let gate = nova_sim::catalog::StellarId(141);
-    let entering = |ticks_left| Mode::EnteringGate { gate, ticks_left };
-    npc.mode = entering(15);
+    let entering = |ticks_left| GateFade::Entering { ticks_left };
     assert_eq!(
-        npc_tint(GateFade::of(&npc.mode)),
+        npc_tint(entering(15)),
         Some(Color::rgba(255, 255, 255, 239)),
         "30/32"
     );
-    npc.mode = entering(8);
     assert_eq!(
-        npc_tint(GateFade::of(&npc.mode)),
+        npc_tint(entering(8)),
         Some(Color::rgba(255, 255, 255, 128)),
         "half"
     );
-    npc.mode = entering(1);
     assert_eq!(
-        npc_tint(GateFade::of(&npc.mode)),
+        npc_tint(entering(1)),
         Some(Color::rgba(255, 255, 255, 16)),
         "2/32"
     );
-    npc.mode = entering(16);
-    assert_eq!(npc_tint(GateFade::of(&npc.mode)), Some(Color::WHITE));
+    assert_eq!(npc_tint(entering(16)), Some(Color::WHITE));
 }
 
 #[test]
-fn a_hypergate_animates_while_an_npc_heads_in_to_enter_it_and_the_npc_fades_into_it() {
+fn a_hypergate_is_drawn_on_the_frame_its_record_gives_and_an_npc_entering_it_fading() {
+    // When the gate opens, as an NPC heads in or waits in it, is the
+    // session's (nova-sim's gate sprite tests, `gate_sprite`); the view
+    // draws the frame each record gives, laid out and after each step.
     let busy = with_hypergate(trafficked(&[130], 1, 129, 3));
-    // Setup places the ship at (700, 700), far from the gate.
-    let (_, chance) = scripted(&placed(1450, 1450, 90));
-    let mut view = FlightView::new(busy)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Entering));
-    assert_eq!(gate_frames(&drawn(&view)), [0], "closed at first");
-    let mut heading_in = Vec::new();
+    let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]);
+    let mut gate = record::stellar(StellarId(141));
+    gate.gate_frame = Some(0);
+    frame.stellars.push(gate);
+    let mut view = world(busy, frame);
+    assert_eq!(gate_frames(&world_list(&view)), [0], "closed at first");
+    let mut shown = Vec::new();
     let mut tints = Vec::new();
-    let mut after = Vec::new();
-    for _ in 0..2000 {
-        ticks(&mut view, 1);
-        let list = drawn(&view);
-        let frames = gate_frames(&list);
-        match view
-            .session()
-            .expect("flying")
-            .npcs()
-            .first()
-            .map(|npc| npc.mode)
-        {
-            Some(Mode::Flying) => heading_in.extend(frames),
-            Some(Mode::EnteringGate { .. }) => tints.extend(npc_tints(&list)),
-            Some(_) => {}
-            None => after.extend(frames),
+    for (open, ticks_left) in [(1, 15), (2, 8), (3, 1)] {
+        let mut frame = view.frame.clone();
+        frame.stellars[2].gate_frame = Some(open);
+        frame.ships[1].gate = GateFade::Entering { ticks_left };
+        view.sim.set_frame(frame);
+        view.step_frame(1, view.anchor());
+        if let Some(scene) = &mut view.scene {
+            super::super::show_gate_frames(scene, &view.frame);
         }
+        let list = world_list(&view);
+        shown.extend(gate_frames(&list));
+        tints.extend(npc_tints(&list));
     }
-    assert_eq!(heading_in.first(), Some(&0), "closed while it is far");
-    assert!(heading_in.iter().any(|&frame| frame > 0), "{heading_in:?}");
-    assert_eq!(tints.len(), 15, "drawn for 15 frames: {tints:?}");
-    assert_eq!(tints.first(), Some(&Color::rgba(255, 255, 255, 239)));
-    assert_eq!(tints.last(), Some(&Color::rgba(255, 255, 255, 16)));
-    assert_eq!(after.last(), Some(&0), "closed once it is gone");
-}
-
-#[test]
-fn a_hypergate_animates_while_an_npc_waits_in_it_and_rests_otherwise() {
-    let busy = with_hypergate(trafficked(&[130], 1, 129, 3));
-    // As in the test above: an arrival comes out of the gate.
-    let (_, chance) = scripted(&[0, 0, 6, 6, 0, 0, 0, 2]);
-    let mut view = FlightView::new(busy)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    assert_eq!(gate_frames(&drawn(&view)), [0], "closed at first");
-    ticks(&mut view, 2);
-    let mode = |view: &View| view.session().expect("flying").npcs()[0].mode;
-    assert_eq!(mode(&view), Mode::Emerging { ticks_left: 59 });
-    let mut frames = Vec::new();
-    while matches!(mode(&view), Mode::Emerging { .. }) {
-        frames.extend(gate_frames(&drawn(&view)));
-        ticks(&mut view, 1);
-    }
-    assert_eq!(frames[..3], [1, 2, 3], "opening a frame a tick");
-    assert!(frames.iter().all(|&frame| frame > 0), "{frames:?}");
-    assert!(frames[3..].iter().all(|&frame| frame >= 3), "{frames:?}");
-    assert!(frames.contains(&5), "its loop plays: {frames:?}");
-
-    let mut quiet = FlightView::new(with_hypergate(catalog()));
-    for _ in 0..60 {
-        ticks(&mut quiet, 1);
-        assert_eq!(gate_frames(&drawn(&quiet)), [0], "no ship in it");
-    }
+    assert_eq!(shown, [1, 2, 3], "the frames the records gave");
+    assert_eq!(
+        tints,
+        [
+            Color::rgba(255, 255, 255, 239),
+            Color::rgba(255, 255, 255, 128),
+            Color::rgba(255, 255, 255, 16)
+        ]
+    );
 }
 
 #[test]
 fn an_npc_is_drawn_between_its_last_two_steps() {
-    // At (0, 100) facing up, it heads for Earth, straight up.
-    let mut draws = placed(750, 850, 0).to_vec();
-    draws.push(0);
-    let (_, chance) = scripted(&draws);
-    let mut view = FlightView::new(trafficked(&[130], 1, 129, 1)).with_chance(chance);
-    // The first step sets the system up; the NPC moves from the next.
-    view.tick(TICK);
-    assert_eq!(npc_states(&view)[0].position, Vec2::new(0.0, 100.0));
-    view.tick(TICK + TICK / 2);
-    let npc = &view.session().expect("flying").npcs()[0];
-    assert_eq!(
-        npc.goal,
-        Goal::Land(StellarId(128)),
-        "Nova's AI, by default: a trader's business"
+    // Where it heads, Nova's AI's business, is the session's.
+    let mut view = world(
+        trafficked(&[130], 1, 129, 1),
+        in_sol_with(vec![
+            the_player_at(Vec2::ZERO, 0.0),
+            npc_129(0, Vec2::new(0.0, 100.0), 0.0),
+        ]),
     );
-    let moved = npc.state.position.y - 100.0;
-    assert!(moved < 0.0, "{npc:?}");
-    let alpha = view.alpha();
-    assert!(alpha > 0.4, "{alpha}");
-    let shown = sprites(&drawn(&view))[2].1;
-    let expected = view
-        .camera()
-        .world_to_screen(at(0.0, moved.mul_add(alpha, 100.0)));
+    let mut moved = view.frame.clone();
+    moved.ships[1].position = Vec2::new(0.0, 94.0);
+    view.sim.set_frame(moved);
+    view.sim.queue_report(StepReport {
+        steps: vec![StepRun {
+            before: vec![
+                (ShipRef::Player, ShipPlace::default()),
+                (
+                    ShipRef::Npc(NpcId(0)),
+                    ShipPlace {
+                        position: Vec2::new(0.0, 100.0),
+                        heading: 0.0,
+                    },
+                ),
+            ],
+            ..StepRun::default()
+        }],
+        stopped: false,
+    });
+    view.step_frame(1, view.anchor());
+    view.alpha = 0.5;
+    let shown = sprites(&world_list(&view))[2].1;
+    let expected = view.camera().world_to_screen(at(0.0, 97.0));
     assert!(
         (shown.y - expected.y).abs() < 1e-3,
         "{shown:?} {expected:?}"
@@ -620,12 +501,14 @@ fn an_npc_is_drawn_between_its_last_two_steps() {
 
 #[test]
 fn an_npc_whose_sheet_cannot_be_read_is_a_crossed_box() {
-    let (_, chance) = scripted(&placed(850, 650, 90));
-    let mut view = FlightView::new(trafficked(&[130], 1, 130, 3))
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    view.tick(TICK);
-    let list = drawn(&view);
+    let mut npc = lit_npc(90.0);
+    npc.class = ShipId(130);
+    npc.framed = Some(ShipId(130));
+    let view = world(
+        trafficked(&[130], 1, 130, 3),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), npc]),
+    );
+    let list = world_list(&view);
     let mut boxed = DrawList::new();
     crossed_box(&mut boxed, at(515.0, 284.0), PLACEHOLDER_SIZE, PLACEHOLDER);
     let commands: Vec<_> = list.iter().cloned().collect();
@@ -639,16 +522,26 @@ fn an_npc_whose_sheet_cannot_be_read_is_a_crossed_box() {
 
 #[test]
 fn each_ship_types_sheet_is_read_once() {
-    let mut view = FlightView::new(trafficked(&[130, 131], 3, 129, 1));
+    // Which types the traffic brings is the session's.
+    let mut view = world(
+        trafficked(&[130, 131], 3, 129, 1),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
     assert_eq!(*view.catalog().sheets_asked.borrow(), [ShipId(128)]);
-    ticks(&mut view, 5);
-    assert_eq!(npc_ids(&view).len(), 3);
+    let mut frame = in_sol_with(vec![
+        the_player_at(Vec2::ZERO, 0.0),
+        npc_129(0, Vec2::ZERO, 0.0),
+        npc_129(1, Vec2::ZERO, 0.0),
+        npc_129(2, Vec2::ZERO, 0.0),
+    ]);
+    frame.traffic_ships = vec![ShipId(129)];
+    shows(&mut view, frame.clone());
     assert_eq!(
         *view.catalog().sheets_asked.borrow(),
         [ShipId(128), ShipId(129)]
     );
-    jump_to_alpha(&mut view);
-    assert!(!npc_ids(&view).is_empty());
+    frame.system = SystemId(131);
+    shows(&mut view, frame);
     assert_eq!(
         *view.catalog().sheets_asked.borrow(),
         [ShipId(128), ShipId(129)],
@@ -677,12 +570,17 @@ fn trafficked_with_new_types_in_131() -> FakeCatalog {
 }
 
 #[test]
-fn the_first_step_reads_its_traffic_types_cards_in_one_batch() {
-    let mut view = FlightView::new(trafficked_with_new_types_in_131());
-    ticks(&mut view, 5);
-    assert!(!npc_ids(&view).is_empty());
+fn the_traffics_types_cards_are_read_in_one_batch_each_new_type_once() {
+    let mut view = world(
+        trafficked_with_new_types_in_131(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
+    frame.traffic_ships = vec![ShipId(129)];
+    shows(&mut view, frame.clone());
     assert_eq!(*view.catalog().cards_asked.borrow(), [vec![ShipId(129)]]);
-    jump_to_alpha(&mut view);
+    frame.traffic_ships = vec![ShipId(129), ShipId(130)];
+    shows(&mut view, frame);
     assert_eq!(
         *view.catalog().cards_asked.borrow(),
         [vec![ShipId(129)], vec![ShipId(130)]],
@@ -692,18 +590,27 @@ fn the_first_step_reads_its_traffic_types_cards_in_one_batch() {
 
 #[test]
 fn the_warm_up_reads_the_coming_traffics_sheets_and_cards_so_the_first_step_reads_none() {
-    let mut view = FlightView::new(trafficked(&[130, 131], 3, 129, 1));
+    // Which types are coming is the session's
+    // (`Session::coming_traffic_ships`).
+    let mut view = world(
+        trafficked(&[130, 131], 3, 129, 1),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    view.sim.set_coming_traffic(vec![ShipId(129)]);
     assert!(!view.has_read_traffic(ShipId(129)), "nothing read yet");
     view.warm_up_traffic();
     assert!(view.has_read_traffic(ShipId(129)), "its sheet and card");
     assert!(!view.has_read_traffic(ShipId(130)), "not coming");
-    assert_eq!(npc_ids(&view), [], "nothing populated");
     let sheets = view.catalog().sheets_asked.borrow().clone();
     let cards = view.catalog().cards_asked.borrow().clone();
     assert_eq!(sheets, [ShipId(128), ShipId(129)]);
     assert_eq!(cards, [vec![ShipId(129)]]);
-    ticks(&mut view, 5);
-    assert_eq!(npc_ids(&view).len(), 3, "populated by the first step");
+    let mut frame = in_sol_with(vec![
+        the_player_at(Vec2::ZERO, 0.0),
+        npc_129(0, Vec2::ZERO, 0.0),
+    ]);
+    frame.traffic_ships = vec![ShipId(129)];
+    shows(&mut view, frame);
     assert_eq!(*view.catalog().sheets_asked.borrow(), sheets);
     assert_eq!(*view.catalog().cards_asked.borrow(), cards);
 }
@@ -1344,10 +1251,57 @@ pub(super) fn firing_at_an_npc_in(catalog: FakeCatalog) -> View {
     view
 }
 
+/// A scripted fight: the player at the centre and NPC 0 100 above it,
+/// the player's blaster shot between them, its beam drawn under the
+/// ships and its beam over them at the NPC, and `bööm` 128 going off at
+/// the NPC, in a system of effective murk `murk`.
+fn firing_at_an_npc_with_murk(catalog: FakeCatalog, murk: u8) -> Faked {
+    let npc = Vec2::new(0.0, -100.0);
+    let mut frame = FlightFrame {
+        shots: vec![super::faked_world::shot_of(
+            0,
+            BLASTER,
+            Vec2::new(0.0, -50.0),
+            0.0,
+        )],
+        beams: vec![
+            super::faked_world::beam(ShipRef::Player, UNDER, Vec2::ZERO, npc),
+            super::faked_world::beam(ShipRef::Player, OVER, Vec2::new(5.0, 0.0), npc),
+        ],
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc_at(npc, 180.0)])
+    };
+    frame.effective_murk = murk;
+    let mut view = world(catalog, frame);
+    super::faked_world::raise(&mut view, &[exploding_at(npc)]);
+    view
+}
+
+/// `bööm` 128 going off at `at`.
+fn exploding_at(at: Vec2) -> CombatEvent {
+    CombatEvent::Exploded {
+        at,
+        explosion: nova_sim::catalog::Explosion {
+            boom: BoomId(128),
+            extra: false,
+        },
+        size: 0.0,
+    }
+}
+
+/// [`lit_npc`] at `at`.
+fn lit_npc_at(at: Vec2, heading: f32) -> nova_sim::flight_frame::FrameShip {
+    nova_sim::flight_frame::FrameShip {
+        position: at,
+        ..lit_npc(heading)
+    }
+}
+
 #[test]
-fn the_fight_is_drawn_between_the_stellars_and_the_hud_in_order() {
-    let view = firing_at_an_npc().with_overlays(TITLED);
-    let list = drawn(&view);
+fn the_fight_is_drawn_between_the_stellars_in_order() {
+    // The world under the title and the HUD: layers.rs's
+    // `a_fights_scene_and_its_target_layer_are_the_world_and_its_hud_and_every_text_overlay`.
+    let view = firing_at_an_npc_with_murk(armed(1, &[BLASTER, UNDER, OVER]), 0);
+    let list = super::faked_world::world_list_with(&view, &super::faked_world::targeting(0));
     let stellar = first(&list, sprite_of(1128));
     let under = first(&list, line_in(Color::rgba(0, 0, 255, 255)));
     let npc = first(&list, sprite_of(2001));
@@ -1356,45 +1310,30 @@ fn the_fight_is_drawn_between_the_stellars_and_the_hud_in_order() {
     let over = first(&list, line_in(Color::rgba(0, 255, 0, 255)));
     let explosion = first(&list, sprite_of(400));
     let brackets = first(&list, icon_in(10008..=10023));
-    let title = first(
-        &list,
-        |c| matches!(c, DrawCommand::Text { origin, .. } if *origin == TITLE),
-    );
-    let hud = hud_at(&list);
     // An unguided shot is in the shot layer 0x3b52f0, under the intact
     // ships, and the explosion in `_explodLayer` 0x3b52b8, under the target
     // layer's brackets and then its beams (`_SetupSpriteWorld`
     // @0x21d0c-0x21e24).
-    let order = [
-        stellar, under, shot, npc, ship, explosion, brackets, over, title, hud,
-    ];
+    let order = [stellar, under, shot, npc, ship, explosion, brackets, over];
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
     let DrawCommand::Sprite { tint, blend, .. } =
         list.iter().nth(explosion).cloned().expect("drawn")
     else {
         panic!("a sprite")
     };
-    // The default catalog's system is clear (`sol_murk` 0): added at full,
-    // unmurked (`_HandleExplods` @0x2f7b0-0x2f7e2).
+    // A clear system: added at full, unmurked (`_HandleExplods`
+    // @0x2f7b0-0x2f7e2).
     assert_eq!((blend, tint), (Blend::Or, lights_tint(32)));
 }
 
 #[test]
 fn an_explosion_in_a_murky_system_is_murked_as_the_player_sees_it() {
-    let mut catalog = armed(1, &[BLASTER, UNDER, OVER]);
-    catalog.sol_murk = 100;
-    let view = firing_at_an_npc_in(catalog);
-    let session = view.session().expect("flying");
-    let murk = session.effective_murk();
-    assert_eq!(murk, 100);
+    let view = firing_at_an_npc_with_murk(armed(1, &[BLASTER, UNDER, OVER]), 100);
     let boom = view.effects().explosions()[0].at;
-    let level = crate::flight::murk::sprite_murk(
-        nova_sim::Vec2::new(boom.x, boom.y),
-        session.player().position,
-        murk,
-    );
+    let level =
+        crate::flight::murk::sprite_murk(nova_sim::Vec2::new(boom.x, boom.y), Vec2::ZERO, 100);
     assert!(level > 0, "murked where it went off: {boom:?}");
-    let list = drawn(&view);
+    let list = world_list(&view);
     let explosion = first(&list, sprite_of(400));
     let DrawCommand::Sprite { tint, blend, .. } =
         list.iter().nth(explosion).cloned().expect("drawn")
@@ -1412,23 +1351,24 @@ fn an_explosion_in_a_murky_system_is_murked_as_the_player_sees_it() {
 
 #[test]
 fn a_shot_is_drawn_with_its_frame_where_it_flies() {
-    let mut view = fighting(armed(0, &[BLASTER]), &[]);
     // Turned 45 degrees right, so the shot flies across and up.
-    view.input(&key(Key::Right, true));
-    ticks(&mut view, 15);
-    view.input(&key(Key::Right, false));
-    view.input(&key(FIRE_KEY, true));
-    view.tick(TICK);
-    view.input(&key(FIRE_KEY, false));
-    view.tick(TICK / 2);
-    let session = view.session().expect("flying");
-    let shot = session.shots()[0];
-    let alpha = view.alpha();
-    let shown = at(
-        shot.position.x - shot.velocity.x * (1.0 - alpha),
-        shot.position.y - shot.velocity.y * (1.0 - alpha),
+    let shot = nova_sim::flight_frame::FrameShot {
+        velocity: Vec2::new(14.0, -14.0),
+        ..super::faked_world::shot_of(0, BLASTER, Vec2::new(28.0, -28.0), 45.0)
+    };
+    let mut view = world(
+        armed(0, &[BLASTER]),
+        FlightFrame {
+            shots: vec![shot],
+            ..in_sol_with(vec![the_player_at(Vec2::ZERO, 45.0)])
+        },
     );
-    let list = drawn(&view);
+    view.alpha = 0.5;
+    let shown = at(
+        shot.position.x - shot.velocity.x * 0.5,
+        shot.position.y - shot.velocity.y * 0.5,
+    );
+    let list = world_list(&view);
     let drawn_at = sprites(&list)
         .into_iter()
         .find(|(image, _)| image.id == 3500)
@@ -1443,12 +1383,19 @@ fn a_shot_is_drawn_with_its_frame_where_it_flies() {
 
 #[test]
 fn a_shot_is_drawn_under_the_intact_player_in_the_shot_layer() {
-    let mut view = fighting(armed(0, &[BLASTER]), &[]);
-    view.input(&key(FIRE_KEY, true));
-    view.tick(TICK);
-    view.input(&key(FIRE_KEY, false));
-    view.tick(TICK / 2);
-    let list = drawn(&view);
+    let view = world(
+        armed(0, &[BLASTER]),
+        FlightFrame {
+            shots: vec![super::faked_world::shot_of(
+                0,
+                BLASTER,
+                Vec2::new(0.0, -20.0),
+                0.0,
+            )],
+            ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+        },
+    );
+    let list = world_list(&view);
     let shot = list
         .iter()
         .position(
@@ -1460,33 +1407,6 @@ fn a_shot_is_drawn_under_the_intact_player_in_the_shot_layer() {
         shot < drawn_at(&list, centre),
         "under the player (0x3b52f0)"
     );
-}
-
-/// Every NPC heads for planet 128 and holds its trigger.
-#[derive(Debug)]
-struct LandingFiring;
-
-impl Behaviour for LandingFiring {
-    fn decide(
-        &self,
-        _npc: &nova_sim::Npc,
-        _around: &nova_sim::Surroundings,
-        _chance: &mut dyn Chance,
-    ) -> Goal {
-        Goal::Land(StellarId(128))
-    }
-
-    fn trigger(&self, _npc: &nova_sim::Npc, _around: &nova_sim::Surroundings) -> nova_sim::Trigger {
-        nova_sim::Trigger {
-            primary: true,
-            secondary: None,
-            only: None,
-            bays: false,
-            bays_after: false,
-            point_defence: false,
-            keep: None,
-        }
-    }
 }
 
 /// Where the beams in `color` start, on screen: the lines a pixel wide,
@@ -1506,61 +1426,54 @@ fn beam_starts(list: &DrawList, color: Color) -> Vec<Point> {
 }
 
 #[test]
-fn a_beams_fade_is_shown_as_the_session_counts_it() {
-    let mut catalog = armed(0, &[OVER]);
-    for weapon in &mut catalog.weapons {
-        if weapon.id == OVER {
-            *weapon = nova_sim::WeaponRecord {
-                count: 1,
-                reload: 100,
-                decay: 1,
-                falloff: 10,
-                ..*weapon
-            };
-        }
-    }
-    let mut view = fighting(catalog, &[]);
-    view.input(&key(FIRE_KEY, true));
-    view.tick(TICK);
-    view.input(&key(FIRE_KEY, false));
-    ticks(&mut view, 2);
-    let fade = view.session().expect("flying").beams()[0].fade;
-    assert!(fade > 0, "fading");
+fn a_beams_fade_is_shown_as_its_record_counts_it() {
+    // How the session counts it down is nova-sim-combat's beam tests.
+    let mut beam =
+        super::faked_world::beam(ShipRef::Player, OVER, Vec2::ZERO, Vec2::new(0.0, -200.0));
+    beam.fade = 7;
+    let view = world(
+        armed(0, &[OVER]),
+        FlightFrame {
+            beams: vec![beam],
+            ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+        },
+    );
     let shown: Vec<u32> = view
         .shown_beams(&view.camera())
         .iter()
         .map(|beam| beam.fade)
         .collect();
-    assert_eq!(shown, [fade]);
+    assert_eq!(shown, [7]);
 }
 
 #[test]
 fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
     let mut catalog = armed(1, &[OVER]);
     catalog.hulls[1] = hull_of(129, &[UNDER]);
-    let (_, chance) = scripted(&placed(850, 650, 0));
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(LandingFiring));
-    view.tick(TICK);
-    view.input(&key(Key::Up, true));
-    view.input(&key(FIRE_KEY, true));
-    ticks(&mut view, 5);
-    view.tick(TICK / 2);
-    let session = view.session().expect("flying");
-    let npc = &session.npcs()[0];
-    assert_ne!(
-        view.npc_previous
-            .iter()
-            .find(|&&(id, _)| id == npc.id)
-            .expect("kept")
-            .1
-            .position,
-        npc.state.position,
-        "moving"
-    );
-    assert_ne!(view.previous.position, session.player().position, "moving");
-    let list = drawn(&view);
+    let player = Vec2::new(0.0, -40.0);
+    let npc = Vec2::new(20.0, -150.0);
+    let frame = FlightFrame {
+        beams: vec![
+            super::faked_world::beam(ShipRef::Player, OVER, player, npc),
+            super::faked_world::beam(ShipRef::Npc(NpcId(0)), UNDER, npc, player),
+        ],
+        ..in_sol_with(vec![the_player_at(player, 0.0), lit_npc_at(npc, 180.0)])
+    };
+    let mut view = world(catalog, frame);
+    // Both moving: a step ago each was 10 behind.
+    view.previous = ShipPlace {
+        position: player + Vec2::new(0.0, 10.0),
+        heading: 0.0,
+    };
+    view.npc_previous = vec![(
+        NpcId(0),
+        ShipPlace {
+            position: npc + Vec2::new(0.0, 10.0),
+            heading: 180.0,
+        },
+    )];
+    view.alpha = 0.5;
+    let list = world_list(&view);
     let camera = view.camera();
     let player = camera.world_to_screen(view.shown_position());
     let over = beam_starts(&list, Color::rgba(0, 255, 0, 255));
@@ -1569,7 +1482,7 @@ fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
         over.iter().all(|&start| start == player),
         "the player's, from the player as drawn: {over:?}"
     );
-    let (npc_shown, _) = view.shown_npc(&npc_record(&view, npc.id));
+    let (npc_shown, _) = view.shown_npc(&npc_record(&view, NpcId(0)));
     let under = beam_starts(&list, Color::rgba(0, 0, 255, 255));
     assert!(!under.is_empty());
     let expected = camera.world_to_screen(npc_shown);
@@ -1706,52 +1619,54 @@ fn player_layers(view: &View) -> Vec<i16> {
         .collect()
 }
 
+/// The player's layers drawn in `view`: its ship, its glow and its
+/// lights.
+fn faked_player_layers(view: &Faked) -> Vec<i16> {
+    super::faked_world::faked_ship_sprites(view)
+        .iter()
+        .map(|(image, _)| image.id)
+        .filter(|id| [2000, 2100, 2200].contains(id))
+        .collect()
+}
+
 #[test]
-fn the_players_ship_is_drawn_whole_while_breaking_up_then_loses_its_sprite_then_vanishes() {
-    // A breakup of one tick, so the engine glow built up by the
-    // thrust held from the start has not faded by the explosion: a
-    // breaking-up ship takes no controls.
+fn the_players_ship_is_drawn_whole_while_breaking_up_then_without_its_sprite_then_not_at_all() {
+    // When its fate draws it so is the session's (nova-sim-combat's
+    // player_fate tests, `the_explosion_tick_sounds_the_klaxon_then_halts_it_before_the_explosion`
+    // stays real for phase 9).
     let mut catalog = killed_in(1);
     catalog.sheet = blinking(Blink::STEADY).sheet;
-    let mut view = fighting(catalog, &placed(750, 650, 180));
-    // Thrusting with the NPC holding fire, so the glow builds up.
-    view.input(&key(Key::Up, true));
-    for _ in 0..10 {
-        view.tick(TICK);
-    }
-    let mut view = view.with_behaviour(Rc::new(Firing));
-    until_the_player_explodes(&mut view, |view| {
-        let ids = player_layers(view);
-        assert!(ids.contains(&2000), "the ship: {ids:?}");
-        assert!(ids.contains(&2200), "its lights: {ids:?}");
-    });
-    // At a base of 6 or more the flicker (`glow_level`'s roll of 6,
-    // less 4) cannot hide the glow.
-    let glow = view.session().expect("flying").engine_glow();
-    assert!(glow >= 6, "the glow is still lit as it explodes: {glow}");
+    let breaking = nova_sim::flight_frame::FrameShip {
+        glow: 12,
+        drawn: nova_sim::combat::ship_frames::Drawn {
+            lights: Some(32),
+            ..nova_sim::combat::ship_frames::Drawn::default()
+        },
+        frames: nova_sim::combat::ship_frames::FrameSpec {
+            lights: true,
+            ..nova_sim::combat::ship_frames::FrameSpec::NONE
+        },
+        ..the_player_at(Vec2::ZERO, 0.0)
+    };
+    let mut view = world(catalog, in_sol_with(vec![breaking]));
+    let ids = faked_player_layers(&view);
+    assert!(ids.contains(&2000), "the ship: {ids:?}");
+    assert!(ids.contains(&2200), "its lights: {ids:?}");
+    let mut frame = view.frame.clone();
+    frame.ships[0].shown = nova_sim::Drawn::SpriteHidden;
+    shows(&mut view, frame.clone());
     assert_eq!(
-        player_layers(&view),
+        faked_player_layers(&view),
         [2100, 2200],
         "its glow and lights, but no ship, on the explosion's tick"
     );
-    // The explosion, `bööm` 128's 3 frames, draws over its 3 ticks.
-    for after in 0..5 {
-        if after < 3 {
-            assert!(!view.effects().explosions().is_empty(), "tick {after}");
-            let list = drawn(&view);
-            assert!(
-                list.iter().any(sprite_of(400)),
-                "the explosion is drawn on tick {after}: {list:?}"
-            );
-        }
-        view.tick(TICK);
-        assert!(
-            matches!(fate_of(&view), PlayerFate::Holding { .. }),
-            "{:?}",
-            fate_of(&view)
-        );
-        assert_eq!(player_layers(&view), [0_i16; 0], "nothing of it after");
-    }
+    frame.ships[0].shown = nova_sim::Drawn::Hidden;
+    shows(&mut view, frame);
+    assert_eq!(
+        faked_player_layers(&view),
+        [0_i16; 0],
+        "nothing of it after"
+    );
 }
 
 #[test]
@@ -2164,34 +2079,41 @@ fn sprite_unavailable(list: &DrawList) -> bool {
 fn an_exploded_player_without_a_sheet_draws_no_placeholder() {
     let mut catalog = killed_in(5);
     catalog.sheet = Err("no shän 128 for shïp 128".to_owned());
-    let mut view = fighting(catalog, &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
-    let placeholder = |view: &View| {
+    let mut view = world(catalog, in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
+    let placeholder = |view: &Faked| {
         let mut boxed = DrawList::new();
         let at = view.camera().world_to_screen(view.shown_position());
         crossed_box(&mut boxed, at, PLACEHOLDER_SIZE, PLACEHOLDER);
         boxed
     };
-    until_the_player_explodes(&mut view, |view| {
-        let list = drawn(view);
-        assert!(sprite_unavailable(&list), "while breaking up");
-        assert!(draws_run(&list, &placeholder(view)), "{list:?}");
-    });
+    let list = world_list(&view);
+    assert!(sprite_unavailable(&list), "while breaking up");
+    assert!(draws_run(&list, &placeholder(&view)), "{list:?}");
     // The explosion's tick, then the ones after.
-    for _ in 0..3 {
-        let list = drawn(&view);
+    for shown in [nova_sim::Drawn::SpriteHidden, nova_sim::Drawn::Hidden] {
+        let mut frame = view.frame.clone();
+        frame.ships[0].shown = shown;
+        shows(&mut view, frame);
+        let list = world_list(&view);
         assert!(!sprite_unavailable(&list), "{list:?}");
         assert!(!draws_run(&list, &placeholder(&view)), "{list:?}");
-        view.tick(TICK);
     }
 }
 
 #[test]
 fn a_shot_whose_look_cannot_be_read_is_a_crossed_box() {
-    let mut view = fighting(armed(0, &[UNSEEN]), &[]);
-    view.input(&key(FIRE_KEY, true));
-    view.tick(TICK);
-    let list = drawn(&view);
-    let shot = view.session().expect("flying").shots()[0];
+    let shot = nova_sim::flight_frame::FrameShot {
+        velocity: Vec2::new(0.0, -20.0),
+        ..super::faked_world::shot_of(0, UNSEEN, Vec2::new(0.0, -20.0), 0.0)
+    };
+    let view = world(
+        armed(0, &[UNSEEN]),
+        FlightFrame {
+            shots: vec![shot],
+            ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+        },
+    );
+    let list = world_list(&view);
     let mut boxed = DrawList::new();
     // A whole step on, it is drawn a step behind, where it left.
     assert_eq!(view.alpha(), 0.0);
@@ -2212,33 +2134,33 @@ fn a_shot_whose_look_cannot_be_read_is_a_crossed_box() {
 }
 
 #[test]
-fn a_destroyed_npc_explodes_and_scatters_debris_on_the_frames_after() {
-    let mut catalog = armed(1, &[BLASTER]);
-    catalog.weapons[0].mass_dmg = 1000;
-    catalog.weapons[0].flags = 0x0020;
-    catalog.weapons[0].explod_type = -1;
-    let mut view = fighting(catalog, &placed(750, 650, 180));
-    tap(&mut view, Key::Tab);
-    // Drifting up, so the explosion is heard from where the player is.
-    view.input(&key(Key::Up, true));
-    view.tick(TICK);
-    view.input(&key(Key::Up, false));
-    view.input(&key(FIRE_KEY, true));
-    let mut destroyed = false;
-    for _ in 0..10 {
-        view.tick(TICK);
-        if view.session().expect("flying").npcs().is_empty() {
-            destroyed = true;
-            break;
-        }
-    }
-    assert!(destroyed, "{:?}", view.session().expect("flying").npcs());
-    assert_eq!(target_of(&view), None);
+fn a_destroyed_npcs_debris_is_drawn_after_its_explosion() {
+    // Its explosion, its debris and the sound heard from the player are
+    // stepping.rs's `a_destroyed_ship_explodes_heard_from_the_player_and_scatters_debris`;
+    // what destroys it is the session's.
+    let mut view = world(
+        armed(1, &[BLASTER]),
+        in_sol_with(vec![the_player_at(Vec2::new(0.0, -6.0), 0.0)]),
+    );
+    super::faked_world::raise(
+        &mut view,
+        &[CombatEvent::Destroyed {
+            ship: ShipRef::Npc(NpcId(0)),
+            ship_type: ShipId(129),
+            at: Vec2::new(0.0, -100.0),
+            velocity: Vec2::ZERO,
+            explosion: Some(nova_sim::catalog::Explosion {
+                boom: BoomId(128),
+                extra: false,
+            }),
+            size: 32.0,
+        }],
+    );
     let effects = view.effects();
     assert_eq!(effects.explosions().len(), 1);
     assert_eq!(effects.explosions()[0].boom, BoomId(128));
     assert_eq!(effects.particles().len(), 16);
-    let list = drawn(&view);
+    let list = world_list(&view);
     let explosion = first(&list, sprite_of(400));
     assert_eq!(
         list.iter()
@@ -2247,22 +2169,6 @@ fn a_destroyed_npc_explodes_and_scatters_debris_on_the_frames_after() {
             .count(),
         16,
         "drawn after the explosion"
-    );
-    let player = view.session().expect("flying").player().position;
-    assert!(player.y < 0.0, "{player:?}");
-    let boom = view.effects().explosions()[0].at;
-    let heard = CombatSound {
-        sound: nova_sim::SoundId(302),
-        offset: (
-            (boom.x - player.x).round() as i32,
-            (boom.y - player.y).round() as i32,
-        ),
-        priority: crate::flight::effects::EXPLOSION_PRIORITY,
-        until_stopped: false,
-    };
-    assert!(
-        combat_sounds(&mut view).contains(&heard),
-        "the explosion is heard: {heard:?}"
     );
 }
 
@@ -2558,9 +2464,18 @@ fn the_target_is_bracketed_and_its_panel_shows_it() {
 
 #[test]
 fn the_nav_brackets_draw_under_the_ship_brackets() {
-    let mut view = firing_at_an_npc();
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
-    let list = drawn(&view);
+    // Which stellar a slot key selects is the session's.
+    let view = firing_at_an_npc_with_murk(armed(1, &[BLASTER, UNDER, OVER]), 0);
+    let hud = super::super::world::WorldHud {
+        nav_brackets: Some(nova_sim::brackets::NavBrackets {
+            stellar: StellarId(128),
+            position: Vec2::new(0.0, -600.0),
+            expand: 0.0,
+            dominated: false,
+        }),
+        ..super::faked_world::targeting(0)
+    };
+    let list = super::faked_world::world_list_with(&view, &hud);
     let nav = first(&list, icon_in(10000..=10007));
     let ship = first(&list, icon_in(10008..=10023));
     let npc = first(&list, sprite_of(2001));
@@ -2628,14 +2543,28 @@ fn targeting_a_ship_on_screen_flies_its_brackets_in_then_settles_them() {
 
 #[test]
 fn a_target_whose_sheet_cannot_be_read_is_bracketed_round_its_crossed_box() {
-    let mut view = fighting(trafficked(&[130], 1, 130, 3), &placed(850, 650, 90));
-    tap(&mut view, Key::Tab);
-    ticks(&mut view, 5);
-    // Its 64 x 64 box: half 32.
-    assert_eq!(
-        ship_bracket_corners(&view),
-        corners_at(10012, target_on_screen(&view), PLACEHOLDER_SIZE / 2.0)
+    let mut npc = lit_npc(90.0);
+    npc.class = ShipId(130);
+    npc.framed = Some(ShipId(130));
+    let view = world(
+        trafficked(&[130], 1, 130, 3),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), npc]),
     );
+    let list = super::faked_world::world_list_with(&view, &super::faked_world::targeting(0));
+    let corners: Vec<(i16, Point)> = list
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Picture { image, top_left } if icon_in(10008..=10023)(command) => {
+                Some((image.id, *top_left))
+            }
+            _ => None,
+        })
+        .collect();
+    let target = view
+        .camera()
+        .world_to_screen(view.shown_npc(&npc_record(&view, NpcId(0))).0);
+    // Its 64 x 64 box: half 32.
+    assert_eq!(corners, corners_at(10012, target, PLACEHOLDER_SIZE / 2.0));
 }
 
 /// An unarmed flight targeting its one NPC, intact, its panel drawn
@@ -2919,22 +2848,29 @@ fn the_fight_asks_the_point_defence_rule_given_each_step_in_flight() {
 
 #[test]
 fn a_missile_shot_down_is_drawn_exploding_and_unheard() {
-    let mut view = attacked(defending());
-    let mut sounds = Vec::new();
-    let mut exploded = false;
-    for _ in 0..12 {
-        view.tick(TICK);
-        sounds.extend(combat_sounds(&mut view));
-        let explosion = drawn(&view)
-            .iter()
-            .any(|command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 400));
-        if explosion {
-            exploded = true;
-            break;
-        }
-    }
-    assert!(exploded, "bööm 128 drawn");
-    assert_eq!(shots_of(&view, IR), 0, "shot down");
+    // What point defence shoots down is the session's.
+    let mut view = world(
+        defending(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    super::faked_world::raise(
+        &mut view,
+        &[CombatEvent::ShotDown {
+            at: Vec2::new(0.0, -50.0),
+        }],
+    );
+    let explosion = world_list(&view)
+        .iter()
+        .any(|command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 400));
+    assert!(explosion, "bööm 128 drawn");
+    let sounds: Vec<CombatSound> = view
+        .drained_sounds()
+        .into_iter()
+        .filter_map(|sound| match sound {
+            Sound::Combat(sound) => Some(sound),
+            _ => None,
+        })
+        .collect();
     assert!(
         sounds
             .iter()
@@ -3073,29 +3009,39 @@ fn the_flight_convicts_by_the_law_it_is_given() {
 
 #[test]
 fn a_ship_the_player_shoves_is_drawn_moved_on_the_frame_of_the_hit() {
-    // The push lands in the ship's velocity (`_DamageShip`
-    // @0x3a9b8-0x3ab84) before `_HandleShip` moves it (@0x34274-0x342aa),
-    // and the frame drawn after the pass shows it moved
-    // (`nova_sim::Session::step` runs the advance pass in
-    // `_DoPlayGameWork`'s order).
-    let mut catalog = armed(1, &[BLASTER]);
-    for weapon in &mut catalog.weapons {
-        weapon.energy_dmg = 5;
-        weapon.impact = 3000;
-    }
-    catalog.hulls[1].mass = 40;
-    let mut view = fighting(catalog, &placed(750, 650, 180));
-    view.input(&key(FIRE_KEY, true));
-    let npc = |session: &Session| session.npcs()[0].clone();
-    let shield = npc(view.session().expect("flying")).reserves.shield.now;
-    for _ in 0..60 {
-        let drawn_before = sprites(&drawn(&view));
-        view.tick(TICK);
-        let now = npc(view.session().expect("flying"));
-        if now.reserves.shield.now < shield {
-            assert_ne!(sprites(&drawn(&view)), drawn_before, "drawn moved");
-            return;
-        }
-    }
-    panic!("never hit");
+    // The push lands in the ship's velocity before `_HandleShip` moves it,
+    // so the frame after the pass has it moved: the session's (nova-sim's
+    // `game_work::tests::a_shoved_npc_is_moved_on_the_advance_pass_of_the_hit_unlike_by_the_separate_parts`).
+    // The view draws it on its way from where it was to where the frame
+    // has it.
+    let mut view = world(
+        armed(1, &[BLASTER]),
+        in_sol_with(vec![
+            the_player_at(Vec2::ZERO, 0.0),
+            lit_npc_at(Vec2::new(0.0, -100.0), 180.0),
+        ]),
+    );
+    let before = sprites(&world_list(&view));
+    let mut shoved = view.frame.clone();
+    shoved.ships[1].position = Vec2::new(0.0, -130.0);
+    view.sim.set_frame(shoved);
+    view.sim.queue_report(StepReport {
+        steps: vec![StepRun {
+            before: vec![
+                (ShipRef::Player, ShipPlace::default()),
+                (
+                    ShipRef::Npc(NpcId(0)),
+                    ShipPlace {
+                        position: Vec2::new(0.0, -100.0),
+                        heading: 180.0,
+                    },
+                ),
+            ],
+            ..StepRun::default()
+        }],
+        stopped: false,
+    });
+    view.step_frame(1, view.anchor());
+    view.alpha = 0.5;
+    assert_ne!(sprites(&world_list(&view)), before, "drawn moved");
 }
