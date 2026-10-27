@@ -3021,7 +3021,7 @@ fn the_flight_convicts_by_the_law_it_is_given() {
 fn a_ship_the_player_shoves_is_drawn_moved_on_the_frame_of_the_hit() {
     // The push lands in the ship's velocity before `_HandleShip` moves it,
     // so the frame after the pass has it moved: the session's (nova-sim's
-    // `game_work::tests::a_shoved_npc_is_moved_on_the_advance_pass_of_the_hit_unlike_by_the_separate_parts`).
+    // `session::game_work::tests::an_npc_pushed_by_a_shot_moves_by_the_push_in_the_tick_it_lands`).
     // The view draws it on its way from where it was to where the frame
     // has it.
     let mut view = world(
