@@ -241,6 +241,7 @@ mod tests {
     use crate::rulebook::Rulebook;
     use crate::sound::SimSound;
     use crate::stats::ShipStats;
+    use crate::testkit::work_with;
     use crate::testkit::{FAST, FakePilotCatalog, Ranged, hull, jump, ship};
     use crate::traffic::npc::{AiType, Npc};
     use crate::voice::Voices;
@@ -928,22 +929,33 @@ mod tests {
 
     #[test]
     fn no_target_is_called_while_a_message_waits() {
-        // The separate parts play no clip, so the command's message
-        // still waits as the escort takes the raider.
+        // The pass's `_HandleVoiceSound` (@0x44219) plays the command's
+        // waiting message before `_AIDispatch` (@0x4429d), so the escort
+        // takes the raider with its clip loaded, and calls no target.
         let catalog = voiced();
         let (mut session, raider) = raided(&catalog, &[MEDIUM]);
         order(&mut session, 0, None);
         assert!(command(&mut session, EscortCommand::Defend).is_some());
-        session.tick_traffic(&catalog, &sitting_ai(), &mut Ranged::of(&[(3, 0)]));
+        session.take_sounds();
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &sitting_ai(),
+            Rules::default(),
+            &mut Ranged::of(&[(3, 0)]),
+        );
         assert_eq!(
             escort_npc(&mut session, 0).goal,
             Goal::Attack(crate::combat::ShipRef::Npc(raider)),
             "it took the raider"
         );
         assert_eq!(
-            session.space.voice.pending().map(|speech| speech.message),
-            Some(VoiceMessage::Acknowledge)
+            voiced_only(session.take_sounds()),
+            [voice(1304)],
+            "the acknowledgement alone"
         );
+        assert_eq!(session.space.voice.pending(), None, "no target called");
     }
 
     #[test]
@@ -952,7 +964,14 @@ mod tests {
         // a later pass to answer on its own draws.
         let catalog = voiced();
         let (mut session, _) = raided(&catalog, &[MEDIUM]);
-        session.tick_traffic(&catalog, &sitting_ai(), &mut Ranged::of(&[(2, 0), (3, 1)]));
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &sitting_ai(),
+            Rules::default(),
+            &mut Ranged::of(&[(2, 0), (3, 1)]),
+        );
         assert_eq!(escort_npc(&mut session, 0).voice, Some(VoiceVariant::Even));
     }
 

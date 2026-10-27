@@ -205,6 +205,7 @@ mod tests {
     use crate::catalog::{HullRecord, ShipId, ShipRecord, StellarId, SystemId};
     use crate::catalog::{JunkId, OutfitId};
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::combat::hull::Condition;
     use crate::control::SetExpr;
     use crate::flight::Controls;
@@ -221,6 +222,7 @@ mod tests {
         FAST, FakePilotCatalog, Scripted, begin_jump_now, carrying, catalog, fly_out, hull,
         land_now, mission, npc, outfit, ship,
     };
+    use crate::testkit::{work, work_with};
     use crate::traffic::npc::{Npc, NpcHold};
 
     /// The warship escort's ship type: `InherentAI` 3, 60 tons of holds.
@@ -267,6 +269,8 @@ mod tests {
     fn flying(catalog: &FakePilotCatalog, tons: u32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         assert_eq!(session.landed(), None);
+        // Set up, so a pass keeps the NPCs a test adds.
+        session.populate(catalog, &mut NeverFires);
         session.pilot.cargo.insert(Good::Commodity(0), tons);
         session
     }
@@ -348,7 +352,14 @@ mod tests {
             escort(FREIGHTER, true),
         ];
         let mut session = Session::fly(catalog, pilot).expect("flies");
-        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         session.pilot.cargo.insert(Good::Commodity(0), tons);
         session
     }
@@ -435,15 +446,15 @@ mod tests {
         let catalog = boxed();
         let mut session = flying(&catalog, 5);
         session.jettison_cargo(true, &mut NeverFires);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         let made = session.cargo_boxes()[0];
         assert!((made.position - Vec2::new(0.0, 20.3)).length() < 1e-5);
         assert_eq!((made.life, made.frame), (179.0, 35));
         for _ in 0..180 {
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
         }
         assert_eq!(session.cargo_boxes().len(), 1);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert!(session.cargo_boxes().is_empty());
     }
 
@@ -453,7 +464,7 @@ mod tests {
         let mut session = flying(&catalog, 5);
         session.jettison_cargo(true, &mut NeverFires);
         session.ship.condition = Condition::Destroyed;
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.cargo_boxes()[0].life, 179.0);
     }
 
@@ -553,7 +564,7 @@ mod tests {
         let catalog = scoopable();
         let mut session = scooper(&catalog, 0);
         drop_on_ship(&mut session, Some(2));
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(held(&session), [(Good::Commodity(2), 1)]);
         assert!(session.cargo_boxes().is_empty());
     }
@@ -563,7 +574,7 @@ mod tests {
         let catalog = scoopable();
         let mut session = scooper(&catalog, 0);
         drop_on_ship(&mut session, Some(1018));
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(held(&session), [(Good::Junk(JunkId(146)), 1)]);
         assert!(session.cargo_boxes().is_empty());
     }
@@ -588,7 +599,7 @@ mod tests {
             .space
             .boxes
             .spawn_scoopable(far, Some(3), 1, &mut NeverFires);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(held(&session), [(Good::Commodity(2), 1)]);
         assert_eq!(session.cargo_boxes().len(), 1, "the far box is left");
         assert_eq!(session.cargo_boxes()[0].contents, Some(3));
@@ -599,7 +610,11 @@ mod tests {
     fn assert_no_scoop(mut session: Session) {
         let before = held(&session);
         drop_on_ship(&mut session, Some(2));
-        session.tick(Controls::default());
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(held(&session), before);
         assert_eq!(session.cargo_boxes().len(), 1, "the box is left");
     }
@@ -634,7 +649,7 @@ mod tests {
             .boxes
             .spawn(&on_ship, Some(0.0), &mut NeverFires);
         assert_eq!(session.cargo_boxes()[0].position, on_ship.position);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(held(&session), []);
         assert_eq!(session.cargo_boxes().len(), 1, "the box is left");
     }
@@ -645,7 +660,7 @@ mod tests {
         let mut session = escorted(&catalog, 20);
         session.pilot.outfits.insert(SCOOP, 1);
         drop_on_ship(&mut session, Some(2));
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.pilot().held(Good::Commodity(2)), 1);
         assert!(session.cargo_boxes().is_empty());
     }
@@ -656,7 +671,7 @@ mod tests {
         let mut session = scooper(&catalog, 19);
         drop_on_ship(&mut session, Some(2));
         drop_on_ship(&mut session, Some(3));
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(
             held(&session),
             [(Good::Commodity(0), 19), (Good::Commodity(2), 1)]
@@ -680,7 +695,7 @@ mod tests {
             let catalog = scoopable();
             let mut session = scooper(&catalog, 0);
             drop_on_ship(&mut session, contents);
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
             assert_eq!(held(&session), [], "{contents:?}");
             assert!(session.cargo_boxes().is_empty(), "{contents:?}");
         }
@@ -694,8 +709,8 @@ mod tests {
         let _ = session.take_sounds();
         let _ = twin.take_sounds();
         drop_on_ship(&mut session, Some(2));
-        session.tick(Controls::default());
-        twin.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
+        work(&mut twin, &catalog, Controls::default());
         assert_eq!(held(&session), [(Good::Commodity(2), 1)]);
         assert_eq!(session.take_sounds(), twin.take_sounds());
     }
@@ -710,7 +725,7 @@ mod tests {
                 outfits: false,
             };
             drop_on_ship(&mut session, contents);
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
             assert!(session.cargo_boxes().is_empty(), "{contents:?}");
             assert_eq!(
                 session.ship.latches.scan_latches,
@@ -730,7 +745,7 @@ mod tests {
         };
         session.ship.latches.scan_latches = unarmed;
         drop_on_ship(&mut session, Some(2));
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.ship.latches.scan_latches, unarmed);
     }
 
@@ -751,7 +766,7 @@ mod tests {
             .space
             .boxes
             .spawn_scoopable(at, Some(2), 1, &mut NeverFires);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.cargo_boxes().len(), 1);
         assert_eq!(
             session.space.npc(id).expect("here").cargo,
@@ -790,7 +805,7 @@ mod tests {
         boxes.spawn_scoopable(at - Vec2::new(35.0, 0.0), Some(3), 1, &mut NeverFires);
         // On the player, which owns no scoop: no NPC's.
         boxes.spawn_scoopable(Vec2::ZERO, Some(4), 1, &mut NeverFires);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         let hold = session.space.npc(id).expect("here").cargo;
         assert_eq!((hold.tons(2), hold.total()), (1, 1));
         let left: Vec<_> = session
@@ -840,7 +855,7 @@ mod tests {
                 .space
                 .boxes
                 .spawn_scoopable(at, Some(2), 1, &mut NeverFires);
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
             assert_eq!(session.cargo_boxes().len(), 1, "the box is left: {who}");
             assert_eq!(
                 session.space.npc(id).expect("here").cargo,
@@ -856,7 +871,7 @@ mod tests {
         let mut session = scooper(&catalog, 0);
         let id = session.space.traffic.add_npc(scooping_npc(Vec2::ZERO));
         drop_on_ship(&mut session, Some(2));
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(held(&session), [(Good::Commodity(2), 1)]);
         assert_eq!(
             session.space.npc(id).expect("here").cargo,

@@ -539,6 +539,8 @@ fn grown(stage: f32) -> f32 {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::testkit::work;
+
     use super::*;
     use crate::catalog::{ShipId, SystemId};
     use crate::chance::NeverFires;
@@ -570,7 +572,7 @@ mod tests {
     }
 
     fn tick(session: &mut Session) {
-        session.tick(Controls::default());
+        work(session, &crate::testkit::catalog(), Controls::default());
     }
 
     // The stage.

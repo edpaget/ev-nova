@@ -250,6 +250,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::landing::StellarFlags;
     use crate::session::LandPress;
+    use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, catalog, jump, land_now, planet};
 
     /// Planet 128 at (30, −40), under the ship, and planet 129 far off at
@@ -266,7 +267,7 @@ mod tests {
     }
 
     fn tick(session: &mut Session) {
-        session.tick(Controls::default());
+        work(session, &crate::testkit::catalog(), Controls::default());
     }
 
     // Wrapped to compare with what a press gives.
@@ -497,7 +498,11 @@ mod tests {
         let mut session = session();
         session.land().expect("requests");
         session.set_double_time_key(true);
-        session.tick(Controls::default());
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.dock_request(), request(128, CLEARED));
         session.tick_again(
             Controls::default(),
@@ -512,7 +517,11 @@ mod tests {
             "greeted once"
         );
         for _ in 0..648 {
-            session.tick(Controls::default());
+            work(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+            );
             session.tick_again(
                 Controls::default(),
                 &crate::ai::NovaAi::default(),
@@ -521,7 +530,11 @@ mod tests {
             );
         }
         assert_eq!(session.dock_request(), request(128, 0x7ff));
-        session.tick(Controls::default());
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.dock_request(), None, "half the frames");
     }
 

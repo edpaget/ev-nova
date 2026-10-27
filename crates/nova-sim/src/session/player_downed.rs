@@ -129,10 +129,12 @@ mod tests {
     use crate::combat::hull::{DisableRule, HullSpec};
     use crate::combat::{CombatEvent, Rules, ShipRef};
     use crate::control::{Bit, Script};
+    use crate::flight::Controls;
     use crate::mission::FailedBy;
     use crate::reserves::Gauge;
     use crate::session::tests::{DISABLING, FIRE, Firing, armed, facing_an_npc};
     use crate::testkit::{FakePilotCatalog, carrying, mission};
+    use crate::testkit::{Passive, work_with};
     use crate::traffic::npc::NpcId;
 
     fn bit(n: u16) -> Bit {
@@ -205,8 +207,11 @@ mod tests {
         below: f32,
     ) -> (Vec<SimSound>, Vec<SimMessage>) {
         let below = Below(below);
-        session.tick_traffic(catalog, &Firing, &mut NeverFires);
-        session.tick_combat(
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Firing,
             Rules {
                 disable: &below,
                 ..Rules::default()
@@ -440,17 +445,38 @@ mod tests {
         let full = session.npcs()[0].reserves.armor.now;
         let ticks = (1..30)
             .find(|_| {
-                session.tick_combat(rules, &mut NeverFires);
+                work_with(
+                    &mut session,
+                    &catalog,
+                    Controls::default(),
+                    &Passive,
+                    rules,
+                    &mut NeverFires,
+                );
                 session.npcs()[0].reserves.armor.now != full
             })
             .expect("the NPC is hit");
         let mut session = firing_at_the_npc(&catalog);
         hold(&mut session, 0, 140, false);
         for _ in 1..ticks {
-            session.tick_combat(rules, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                rules,
+                &mut NeverFires,
+            );
         }
         session.pilot.reserves.armor.now = 4.6;
-        session.tick_combat(rules, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            rules,
+            &mut NeverFires,
+        );
         assert_ne!(session.npcs()[0].reserves.armor.now, full, "hit then");
         assert_eq!(session.ship.condition, Condition::Disabled);
         assert_eq!(
@@ -472,10 +498,24 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         hold(&mut session, 0, 140, false);
         session.pilot.reserves.armor.now = 7.6;
-        session.tick_combat(DISABLING, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            DISABLING,
+            &mut NeverFires,
+        );
         assert_eq!(session.ship.condition, Condition::Disabled);
         session.pilot.reserves.armor.now = 0.0;
-        session.tick_combat(DISABLING, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            DISABLING,
+            &mut NeverFires,
+        );
         assert!(matches!(session.ship.condition, Condition::Dying { .. }));
         assert_eq!(
             (session.take_sounds(), session.take_messages()),
@@ -484,7 +524,14 @@ mod tests {
         assert_eq!(failed_in(&session, 0), None);
         let mut session = Session::start(&catalog).expect("starts");
         session.pilot.reserves.armor.now = 7.6;
-        session.tick_combat(DISABLING, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            DISABLING,
+            &mut NeverFires,
+        );
         assert_eq!(armor(&session), 7.6, "not truncated");
     }
 
@@ -507,7 +554,14 @@ mod tests {
             };
             let mut heard = (Vec::new(), Vec::new());
             for _ in 0..30 {
-                session.tick_combat(rules, &mut NeverFires);
+                work_with(
+                    &mut session,
+                    &catalog,
+                    Controls::default(),
+                    &Passive,
+                    rules,
+                    &mut NeverFires,
+                );
                 heard.0.extend(session.take_sounds());
                 heard.1.extend(session.take_messages());
                 if session.npcs()[0].condition != Condition::Intact {

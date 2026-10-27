@@ -87,6 +87,8 @@ impl Space {
 
 #[cfg(test)]
 mod tests {
+    use crate::testkit::work;
+
     use super::*;
     use crate::ai::Goal;
     use crate::chance::NeverFires;
@@ -100,7 +102,10 @@ mod tests {
     use crate::{AlertIcon, catalog::SystemId};
 
     fn session(catalog: &FakePilotCatalog) -> Session {
-        Session::start(catalog).expect("starts")
+        let mut session = Session::start(catalog).expect("starts");
+        // Set up, so a pass keeps the NPCs a test adds.
+        session.populate(catalog, &mut NeverFires);
+        session
     }
 
     /// Adds an NPC attacking the player and gives its number.
@@ -123,7 +128,7 @@ mod tests {
 
     /// Ticks once, giving the Red Alerts it sounded.
     fn alerts(session: &mut Session) -> usize {
-        session.tick(Controls::default());
+        work(session, &crate::testkit::catalog(), Controls::default());
         session
             .take_sounds()
             .iter()
@@ -140,7 +145,7 @@ mod tests {
     fn icons(session: &mut Session, ticks: usize) -> Vec<Option<AlertIcon>> {
         (0..ticks)
             .map(|_| {
-                session.tick(Controls::default());
+                work(session, &crate::testkit::catalog(), Controls::default());
                 session.red_alert_icon()
             })
             .collect()
@@ -209,10 +214,11 @@ mod tests {
 
     #[test]
     fn a_threat_sounds_the_red_alert_on_the_next_check_frame_only() {
-        let mut session = threatened(&catalog());
+        let catalog = catalog();
+        let mut session = threatened(&catalog);
         session.take_sounds();
         assert_eq!(alerts_over(&mut session, 59), 0, "frames 1 to 59");
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.take_sounds(), [SimSound::RedAlert], "frame 60");
         assert_eq!(alerts_over(&mut session, 60), 0, "frames 61 to 120");
     }
@@ -329,7 +335,7 @@ mod tests {
     fn doubled_icons(session: &mut Session, ticks: usize) -> Vec<Option<AlertIcon>> {
         (0..ticks)
             .map(|_| {
-                session.tick(Controls::default());
+                work(session, &crate::testkit::catalog(), Controls::default());
                 again(session);
                 session.red_alert_icon()
             })
@@ -390,9 +396,10 @@ mod tests {
 
     #[test]
     fn the_second_pass_never_steps_the_blink() {
-        let mut session = threatened(&catalog());
+        let catalog = catalog();
+        let mut session = threatened(&catalog);
         assert_eq!(alerts_over(&mut session, 64), 1, "to frame 64");
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.space.pass_frame, 65, "a step frame");
         let blink = session.red_alert;
         again(&mut session);

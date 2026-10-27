@@ -630,6 +630,8 @@ mod tests {
         DudeId, DudeRecord, GovtId, HullRecord, LandingSite, ShipId, SoundId, StellarId,
         StockWeapon, SystemTraffic, WeaponId, WeaponRecord,
     };
+    use crate::flight::Controls;
+    use crate::testkit::{work, work_with};
     use std::rc::Rc;
 
     use crate::catalog::CommCatalog;
@@ -1047,7 +1049,7 @@ mod tests {
         for text in ["M131", "N130"] {
             let mut session = flying(&catalog);
             session.hold_fire(true, false);
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             assert_eq!(session.shots().len(), 1, "{text}");
             session.select_stellar(crate::session::StellarPick::Slot(0));
             session.chart.target = Some(NpcId(0));
@@ -1071,7 +1073,7 @@ mod tests {
         session.ship.player.velocity = Vec2::new(0.0, 5.0);
         session.begin_jump().expect("accepted");
         assert!(session.preparing_jump().is_some());
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert!(session.thrusting(), "braking");
         moved(&mut session, &catalog, "N133");
         assert_eq!(session.preparing_jump(), None);
@@ -1087,7 +1089,7 @@ mod tests {
             thrust: true,
             ..crate::flight::Controls::default()
         };
-        session.tick(thrust);
+        work(&mut session, &catalog, thrust);
         session.take_sounds();
         moved(&mut session, &catalog, "N131");
         assert!(session.thrusting());
@@ -1121,7 +1123,14 @@ mod tests {
             "131's table"
         );
         for _ in 0..3 {
-            session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &crate::ai::Peaceful,
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         assert!(
             session.npcs().iter().all(|npc| fleet.contains(&npc.id)),
@@ -1148,7 +1157,14 @@ mod tests {
             moved(&mut session, &catalog, "M131");
             assert_eq!(session.npcs(), [], "{reading:?}");
             let mut chance = crate::testkit::Draws::of(&[0, 6, 6, 0, 0, 0]);
-            session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut chance);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &crate::ai::Peaceful,
+                Rules::default(),
+                &mut chance,
+            );
             assert_eq!(berths(&session), [berth], "{reading:?}");
             assert_eq!(
                 session.space.traffic.berths_taken(),
@@ -1187,7 +1203,14 @@ mod tests {
         let catalog = moving();
         let mut session = flying(&catalog);
         moved(&mut session, &catalog, "M131");
-        session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &crate::ai::Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         moved(&mut session, &catalog, "M130");
         assert_eq!(session.npcs(), []);
     }
@@ -1313,7 +1336,7 @@ mod tests {
                 moved(&mut session, &catalog, text);
                 assert_eq!(session.take_sounds(), [], "in flight: {case}");
                 assert_eq!(session.take_messages(), [], "in flight: {case}");
-                session.tick(crate::flight::Controls::default());
+                work(&mut session, &catalog, crate::flight::Controls::default());
                 assert_eq!(
                     session.take_sounds(),
                     [mission_sound(300, true)],
@@ -1327,7 +1350,7 @@ mod tests {
                 assert_eq!(session.take_messages(), [], "landed: {case}");
                 session.take_off(&catalog, &mut NeverFires);
                 assert_eq!(session.take_sounds(), [SimSound::TookOff], "{case}");
-                session.tick(crate::flight::Controls::default());
+                work(&mut session, &catalog, crate::flight::Controls::default());
                 assert_eq!(
                     session.take_sounds(),
                     [mission_sound(300, true)],
@@ -1434,7 +1457,14 @@ mod tests {
         assert_eq!(ids(&session.chart.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
         assert!(session.pilot().has_explored(SystemId(131)), "explored");
-        session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &crate::ai::Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.npcs().len(), 3, "131 populated");
         let mut session = landed(&catalog);
         moved(&mut session, &catalog, "M132");
@@ -1603,9 +1633,9 @@ mod tests {
         run(&mut session, "P300");
         assert_eq!(session.take_sounds(), [], "held");
         assert!(!session.take_save_due());
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [mission_sound(300, true)]);
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [], "once");
     }
 
@@ -1613,7 +1643,7 @@ mod tests {
     fn by_the_engine_p_waits_for_the_advance_pass_in_double_time() {
         let catalog = moving();
         let mut session = flying(&catalog);
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         session.take_sounds();
         run(&mut session, "P300");
         session.tick_again(
@@ -1623,7 +1653,7 @@ mod tests {
             &mut NeverFires,
         );
         assert_eq!(session.take_sounds(), [], "the second pass plays none");
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [mission_sound(300, true)]);
     }
 
@@ -1634,7 +1664,7 @@ mod tests {
         session.take_sounds();
         run(&mut session, "P300 P301");
         run(&mut session, "P302");
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [mission_sound(302, true)]);
     }
 
@@ -1643,11 +1673,11 @@ mod tests {
         let catalog = moving();
         let mut session = landed(&catalog);
         run(&mut session, "P300");
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [], "landed");
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.take_sounds(), [SimSound::TookOff]);
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [mission_sound(300, true)]);
     }
 
@@ -1661,7 +1691,7 @@ mod tests {
         run(&mut session, "P300");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         session.take_sounds();
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), []);
     }
 
@@ -1677,7 +1707,7 @@ mod tests {
         );
         session.take_off(&catalog, &mut NeverFires);
         session.take_sounds();
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [], "nothing held");
     }
 
@@ -1687,7 +1717,7 @@ mod tests {
         let mut session = flying(&catalog);
         session.take_sounds();
         run(&mut session, "P200 P40000");
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [], "names no sound");
         let rules = Rulebook::default().with_override(RuleKey::ScriptSound, RuleSource::Bible);
         let mut session = flying(&catalog).with_rules(rules);
@@ -1695,7 +1725,7 @@ mod tests {
         run(&mut session, "P200 P40000");
         assert_eq!(session.take_sounds(), [mission_sound(200, false)]);
         run(&mut session, "P40000");
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [], "the Bible: nothing to sound");
     }
 
@@ -2073,7 +2103,7 @@ mod tests {
         let mut session = flying(&catalog);
         session.pilot.stellar = Some(StellarId(129));
         session.hold_fire(true, false);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.shots().len(), 1);
         session.ship.player.position = Vec2::new(10.0, 10.0);
         session.ship.player.velocity = Vec2::new(5.0, -1.0);
@@ -2111,7 +2141,7 @@ mod tests {
             let mut session = flying(&catalog);
             session.pilot.stellar = Some(StellarId(129));
             session.hold_fire(true, false);
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             assert_eq!(session.shots().len(), 1, "{text}");
             session.ship.player.position = Vec2::new(10.0, 10.0);
             session.ship.player.velocity = Vec2::new(5.0, -1.0);

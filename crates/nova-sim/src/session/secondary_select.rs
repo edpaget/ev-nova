@@ -273,6 +273,7 @@ mod tests {
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::tests::{MISSILE, ROCKET, TORCH, fired_by_the_player, with_secondaries};
     use crate::session::{Jump, Mode};
+    use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, catalog};
     use nova_sim_catalog::fixture::outfit;
 
@@ -311,7 +312,7 @@ mod tests {
 
     /// A fight tick: what the player fired.
     fn tick(session: &mut Session) -> Vec<WeaponId> {
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &crate::testkit::catalog(), Controls::default());
         fired_by_the_player(&session.take_combat_events())
     }
 

@@ -341,9 +341,11 @@ mod tests {
     use crate::board::MAX_ESCORTS;
     use crate::catalog::{LandingSite, ShipRecord, StellarId, SystemId};
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::combat::ShipRef;
     use crate::control::{PilotFacts, Test, TestExpr};
     use crate::escort::{EscortCommand, EscortDuty, EscortGroup, slot_position};
+    use crate::flight::Controls;
     use crate::hail::{CreditUnit, HailOptions, ShownWage};
     use crate::hire::{HireRow, NovaHire, PayNote};
     use crate::reserves::Reserves;
@@ -355,6 +357,7 @@ mod tests {
     use crate::testkit::{
         Draws, FAST, FakePilotCatalog, Scripted, bar, catalog, jump, land_now, planet, ship,
     };
+    use crate::testkit::{Passive, work_with};
     use crate::traffic::npc::AiType;
 
     /// The bar's stellar, 128, at the centre, under the ship as it
@@ -1247,7 +1250,14 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot)
             .expect("flies")
             .with_rules(Rulebook::default().with_override(RuleKey::TakeOffPay, rule));
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.stats().jump_days, u32::from(days));
         session.take_save_due();
         session
@@ -1307,7 +1317,14 @@ mod tests {
             ..crate::testkit::planet(160, at.x, at.y)
         }];
         session.chart.listed = session.chart.sites.clone();
-        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        work_with(
+            session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
         assert!(session.space.npc(id).is_none(), "killed");
         // Gone again, so the passes after strike no other escort.
         session.chart.sites = sites;
@@ -1573,7 +1590,14 @@ mod tests {
         assert_eq!(session.pilot().cash(), 250);
         assert_eq!(session.pilot().escorts().len(), 3);
         assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
-        session.tick_traffic(&paying(), &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &paying(),
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(placed_ships(&session), [129, 129, 129]);
     }
 
@@ -1588,7 +1612,14 @@ mod tests {
             .take_off(&catalog(), &mut NeverFires)
             .expect("takes off");
         assert_eq!(session.pilot().cash(), 1000);
-        session.tick_traffic(&paying(), &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &paying(),
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         jump(&mut session, &paying(), 131).expect("arrives");
         assert_eq!(session.pilot().cash(), 600);
     }
@@ -1609,7 +1640,14 @@ mod tests {
             .expect("flies")
             .with_rules(Rulebook::default().with_override(RuleKey::EscortWage, rule));
         assert_eq!(session.rules().source_for(RuleKey::EscortWage), rule);
-        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let id = session.space.escorts.fleet[0];
         (session, id)
     }

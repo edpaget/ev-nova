@@ -525,11 +525,13 @@ mod tests {
     use crate::catalog::{StellarLife, SystemId};
     use crate::chance::NeverFires;
     use crate::control::{Bit, Script, SetExpr, SetOp};
+    use crate::flight::Controls;
     use crate::landing::{LandingRefusal, StellarFlags};
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::{SessionEvent, StellarPick};
     use crate::story::Countdown;
     use crate::testkit::{FakePilotCatalog, Scripted, catalog, land_now, life};
+    use crate::testkit::{Passive, work, work_with};
 
     /// [`catalog`] with 128 back after 2 days, 129 after 5, and 140
     /// never.
@@ -1048,7 +1050,14 @@ mod tests {
         for npc in session.space.traffic.npcs_mut() {
             npc.goal = Goal::Land(StellarId(128));
         }
-        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         session.npcs().iter().map(|npc| npc.goal).collect()
     }
 
@@ -1056,7 +1065,14 @@ mod tests {
     fn an_npc_never_heads_for_a_stellar_y_destroyed() {
         let catalog = trafficked();
         let mut session = quiet(&catalog);
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert!(!session.npcs().is_empty(), "populated");
         assert!(
             goals_bound_for_128(&mut session, &catalog)
@@ -1318,7 +1334,14 @@ mod tests {
                 law,
                 ..Rules::default()
             };
-            session.tick_combat(rules, &mut NeverFires);
+            work_with(
+                session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &Passive,
+                rules,
+                &mut NeverFires,
+            );
             events.extend(session.take_combat_events());
         }
         events
@@ -1651,12 +1674,26 @@ mod tests {
             law: &fine,
             ..Rules::default()
         };
-        session.tick_combat(rules, &mut NeverFires);
+        work_with(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            rules,
+            &mut NeverFires,
+        );
         session.hold_trigger(Trigger::default());
         // The player moves off, and the hit pass meets it where it stood a
         // tick later, before the shot can turn on it.
         session.ship.player.position.y += 1000.0;
-        session.tick_combat(rules, &mut NeverFires);
+        work_with(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            rules,
+            &mut NeverFires,
+        );
         assert_eq!(destroyed(&session, 128), None, "still in flight");
         if turned {
             for shot in session.space.combat.shots_mut() {
@@ -1670,7 +1707,14 @@ mod tests {
                 law: &fine,
                 ..Rules::default()
             };
-            session.tick_combat(rules, &mut NeverFires);
+            work_with(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &Passive,
+                rules,
+                &mut NeverFires,
+            );
         }
         assert_eq!(destroyed(&session, 128), Some(left(2)), "shot down");
         session
@@ -1758,7 +1802,7 @@ mod tests {
         };
         let mut events = fire(&mut session, 1);
         for _ in 0..20 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             events.extend(session.take_combat_events());
         }
         events
@@ -2242,10 +2286,10 @@ mod tests {
         settle(&mut session, &catalog, "M130");
         run(&mut session, "U128");
         assert_eq!(rebuilt(&session, &[128, 129]), [true, true], "no frame yet");
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(rebuilt(&session, &[128, 129]), [false, true]);
         run(&mut session, "Y128");
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(rebuilt(&session, &[128, 129]), [false, true], "not back");
     }
 
@@ -2256,7 +2300,7 @@ mod tests {
         run(&mut session, "Y129");
         land_now(&mut session).expect("lands");
         run(&mut session, "U129");
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert!(session.dead_since_rebuild(StellarId(129)));
     }
 
@@ -2290,14 +2334,14 @@ mod tests {
         settle(&mut session, &catalog, "M130");
         // A shot fired while it lies dead, which a frame samples dead.
         session.hold_trigger(FIRE);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         session.hold_trigger(Trigger::default());
         assert!(session.dead_since_rebuild(StellarId(128)));
         run(&mut session, "U128");
         session.space.strength.insert(StellarId(128), 0);
         // The next frame's hit pass shoots it down before the frame
         // samples it.
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(destroyed(&session, 128), Some(left(2)), "shot down");
         assert!(session.dead_since_rebuild(StellarId(128)));
     }
@@ -2359,7 +2403,7 @@ mod tests {
 
     /// A flight frame.
     fn frame(session: &mut Session) {
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &crate::testkit::catalog(), Controls::default());
     }
 
     /// The land key pressed in a session of `catalog` with `rules`, after
@@ -2535,13 +2579,27 @@ mod tests {
             if rebuilt {
                 rebuild(&mut session, &catalog);
             }
-            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Peaceful,
+                Rules::default(),
+                &mut NeverFires,
+            );
             let mut npc =
                 crate::testkit::npc(0, crate::stats::ShipStats::new(crate::testkit::FAST, &[]));
             npc.goal = Goal::EnterGate(StellarId(128));
             npc.state.position = Vec2::new(30.0, 0.0);
             let id = session.space.traffic.add_npc(npc);
-            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Peaceful,
+                Rules::default(),
+                &mut NeverFires,
+            );
             session.space.npc(id).expect("there").entering_gate()
         };
         assert!(!entering(false), "30 out of 25");
