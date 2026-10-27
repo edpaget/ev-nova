@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use crate::icon::ICON;
 use crate::info_plist::{EXECUTABLE, info_plist};
-use crate::layout::{DUMP, Layout, StagingInOutput, VOLUME};
+use crate::layout::{DUMP, Layout, LayoutError, VOLUME};
 use crate::ports::{Files, Invocation, Process, RunError};
 use crate::spec::{BundleSpec, GAME_PACKAGE, SpecError};
 
@@ -83,7 +83,7 @@ pub enum BundleError {
     Spec(#[from] SpecError),
     /// The output directory can't be used.
     #[error(transparent)]
-    Layout(#[from] StagingInOutput),
+    Layout(#[from] LayoutError),
     /// A file step failed.
     #[error("could not {action} {}: {source}", path.display())]
     File {
@@ -272,6 +272,7 @@ mod tests {
         RemoveDir(PathBuf),
         CreateDir(PathBuf),
         Write(PathBuf, Vec<u8>),
+        WriteSecret(PathBuf, Vec<u8>),
         Copy(PathBuf, PathBuf),
         Symlink(PathBuf, PathBuf),
     }
@@ -334,6 +335,9 @@ mod tests {
         }
         fn symlink(&mut self, target: &Path, link: &Path) -> io::Result<()> {
             self.record(Event::Symlink(target.to_owned(), link.to_owned()))
+        }
+        fn write_secret(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+            self.record(Event::WriteSecret(path.to_owned(), bytes.to_vec()))
         }
     }
 

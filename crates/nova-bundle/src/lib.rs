@@ -29,5 +29,6 @@ pub mod icon;
 pub mod info_plist;
 pub mod layout;
 pub mod ports;
+pub mod signing;
 pub mod spec;
 pub mod system;
