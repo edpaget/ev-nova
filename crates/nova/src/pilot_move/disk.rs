@@ -76,6 +76,17 @@ fn move_with(
 /// when it fails it leaves the file at `from` only: a part-written copy
 /// is removed, and so is a whole one when `from` can't be.
 fn copy_then_remove(from: &Path, to: &Path) -> io::Result<()> {
+    copy_then_remove_with(|from| fs::remove_file(from), from, to)
+}
+
+/// [`copy_then_remove`], removing `from` with `remove`. The removal is a
+/// parameter so the tests can fail it, as a read-only old directory
+/// would, after the copy is whole.
+fn copy_then_remove_with(
+    remove: impl FnOnce(&Path) -> io::Result<()>,
+    from: &Path,
+    to: &Path,
+) -> io::Result<()> {
     let mut source = File::open(from)?;
     if !source.metadata()?.is_file() {
         return Err(io::Error::new(
@@ -88,7 +99,7 @@ fn copy_then_remove(from: &Path, to: &Path) -> io::Result<()> {
         .and_then(|_| target.sync_all())
         .and_then(|()| {
             drop(source);
-            fs::remove_file(from)
+            remove(from)
         });
     if copied.is_err() {
         drop(target);
@@ -268,6 +279,20 @@ mod tests {
         copy_then_remove(&from, &to).expect("moves");
         assert_eq!(fs::read(&to).expect("reads"), bytes);
         assert!(!from.exists());
+    }
+
+    #[test]
+    fn when_the_original_cannot_be_removed_the_copy_is_and_the_original_stays() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        let from = tmp.path().join("Ada.json");
+        let to = tmp.path().join("moved.json");
+        let bytes: Vec<u8> = (0..=255).collect();
+        fs::write(&from, &bytes).expect("writes");
+        let denied = |_: &Path| Err(io::ErrorKind::PermissionDenied.into());
+        let error = copy_then_remove_with(denied, &from, &to).expect_err("fails");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!to.exists(), "the whole copy is removed");
+        assert_eq!(fs::read(&from).expect("kept"), bytes);
     }
 
     #[test]
