@@ -53,7 +53,7 @@ impl Session {
     /// nothing changed, away from a shipyard or when nothing was sold or
     /// upgraded. A second call settles only what a first left: marks the
     /// cash didn't cover, which it still doesn't.
-    pub fn land_escorts(&mut self, chance: &mut dyn Chance) -> Option<String> {
+    pub(crate) fn land_escorts(&mut self, chance: &mut dyn Chance) -> Option<String> {
         let stellar = self.mode.landed()?;
         let shipyard = self
             .chart

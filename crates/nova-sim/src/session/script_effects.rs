@@ -411,7 +411,7 @@ impl Session {
     /// and nothing changes, when no leave is due. Whoever shows the
     /// spaceport calls it once nothing shown over the port holds the
     /// leave; a driver with nothing shown, after each settling.
-    pub fn leave_if_due(
+    pub(crate) fn leave_if_due(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
@@ -430,7 +430,7 @@ impl Session {
     /// take-off's save and its first frame, as `_PlayerLandOnStellar` runs
     /// them inside the take-off. `None`, and nothing changes, when the
     /// ship has not landed.
-    pub fn leave_port(
+    pub(crate) fn leave_port(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),

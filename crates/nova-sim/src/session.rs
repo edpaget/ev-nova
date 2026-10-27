@@ -1776,7 +1776,7 @@ impl Session {
     /// Begins the fade to black after an expired hold: `_PlayGame`'s exit
     /// (0x465eb) and `_FadeScreenOut` (0x465f7). Nothing happens at any
     /// other stage.
-    pub fn begin_fade(&mut self) {
+    pub(crate) fn begin_fade(&mut self) {
         if self.ship.condition == Condition::Destroyed && self.player_end == Some(Ending::Expired) {
             self.player_end = Some(Ending::Fading);
         }
@@ -1785,7 +1785,7 @@ impl Session {
     /// Ends play once the fade is over, for the main screen to return
     /// (0x4664a, `_EnterGameFromMainScreen` 0x1a471). Nothing happens at
     /// any other stage.
-    pub fn end_play(&mut self) {
+    pub(crate) fn end_play(&mut self) {
         if self.ship.condition == Condition::Destroyed && self.player_end == Some(Ending::Fading) {
             self.player_end = Some(Ending::GameOver);
         }
@@ -2815,7 +2815,7 @@ impl Session {
         // A jump under way carries on whatever holds the ship (@0x6b21d).
         let held = self.mode.jump().is_none() && self.held_by_other();
         let next = hold_jump(self.check_next_jump(), held).inspect_err(|refusal| {
-            if self.jump_refusal_told(refusal) {
+            if self.jump_refusal_told(*refusal) {
                 self.out.sounds.push(SimSound::Refused);
             }
         })?;
@@ -3473,7 +3473,7 @@ impl Session {
     /// What `stellar`, one the system lists, shown or not, leads through,
     /// if it is a hypergate or wormhole.
     #[must_use]
-    pub fn gate_kind(&self, stellar: StellarId) -> Option<GateKind> {
+    pub(crate) fn gate_kind(&self, stellar: StellarId) -> Option<GateKind> {
         self.chart.gate_kind(stellar)
     }
 
@@ -3650,7 +3650,7 @@ impl Session {
     /// [`RuleKey::GateEscorts`] says (see the `gate_escorts` module). The
     /// exit then starts the take-off grace, as the take-off's path ends
     /// (see the `takeoff_grace` module).
-    pub fn enter_wormhole(
+    pub(crate) fn enter_wormhole(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),

@@ -55,7 +55,7 @@ impl Session {
             FlightCommand::Jump => match self.begin_jump() {
                 Ok(to) => Answer::Jumped(to),
                 Err(refusal) => Answer::JumpRefused {
-                    told: self.jump_refusal_told(&refusal),
+                    told: self.jump_refusal_told(refusal),
                     refusal,
                 },
             },

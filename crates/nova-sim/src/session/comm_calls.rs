@@ -138,7 +138,7 @@ impl Session {
     /// The flight shows a line of its own for `ticks`: one the view
     /// raises and words itself, or composes from the session's (see the
     /// module docs). A line the session raised is not shown again here.
-    pub fn comm_shown(&mut self, ticks: u16) {
+    pub(crate) fn comm_shown(&mut self, ticks: u16) {
         self.space.comm_shown(ticks);
     }
 
