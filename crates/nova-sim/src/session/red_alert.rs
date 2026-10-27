@@ -23,7 +23,7 @@
 
 use super::{Session, Space};
 use crate::combat::hull::Condition;
-use crate::red_alert::{AlertIcon, alert_check_due};
+use crate::red_alert::alert_check_due;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
 
@@ -46,7 +46,7 @@ impl Session {
     /// (`Session::fill_hud`).
     #[cfg(any(test, feature = "fixture"))]
     #[must_use]
-    pub fn red_alert_icon(&self) -> Option<AlertIcon> {
+    pub fn red_alert_icon(&self) -> Option<crate::red_alert::AlertIcon> {
         self.red_alert.icon()
     }
 
