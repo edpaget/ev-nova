@@ -116,12 +116,12 @@ run "secret_scanning_declared" {
   command = plan
 
   assert {
-    condition     = github_repository.ev_nova.security_and_analysis[0].secret_scanning[0].status == "disabled"
-    error_message = "Secret scanning must be disabled."
+    condition     = github_repository.ev_nova.security_and_analysis[0].secret_scanning[0].status == "enabled"
+    error_message = "Secret scanning must be enabled."
   }
 
   assert {
-    condition     = github_repository.ev_nova.security_and_analysis[0].secret_scanning_push_protection[0].status == "disabled"
-    error_message = "Push protection must be disabled."
+    condition     = github_repository.ev_nova.security_and_analysis[0].secret_scanning_push_protection[0].status == "enabled"
+    error_message = "Push protection must be enabled: it refuses a pushed credential."
   }
 }

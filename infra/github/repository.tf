@@ -37,12 +37,14 @@ resource "github_repository" "ev_nova" {
   # Only these two are sent by provider 6.13.0; the other secret-scanning
   # settings are manual (README.md, "Actions and security settings").
   # No advanced_security: the provider refuses it on a public repository.
+  # Enabled on purpose, not today's value: a credential pushed to a public
+  # repository is exposed at once, and push protection refuses the push.
   security_and_analysis {
     secret_scanning {
-      status = "disabled"
+      status = "enabled"
     }
     secret_scanning_push_protection {
-      status = "disabled"
+      status = "enabled"
     }
   }
 
