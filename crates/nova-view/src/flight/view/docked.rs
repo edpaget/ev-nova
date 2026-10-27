@@ -11,9 +11,7 @@ use nova_sim::{
     InterfaceLoad, MissionComputer, MissionId, MissionInfo, MissionShown, News, NotOffered,
     RefuseShown, VenueOffer,
 };
-use nova_sim::{
-    Outfitter, Pilot, Session, ShipId, ShipNaming, ShipRefusal, Shipyard, StellarId, Take, Taken,
-};
+use nova_sim::{Pilot, Session, ShipId, StellarId, Take, Taken};
 
 use crate::flight::catalog::StatusBars;
 use crate::flight::sim_port::FlightSim;
@@ -386,33 +384,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             .is_ok_and(|session| session.transact(change))
     }
 
-    /// The outfitter of the stellar landed on, as [`Session::outfitter`]
-    /// gives it, the day's rolls drawn on the flight's chance; none for a
-    /// session that failed.
-    pub fn outfitter(&mut self) -> Option<Outfitter> {
-        self.sim
-            .session
-            .as_mut()
-            .ok()?
-            .outfitter(&mut self.sim.chance)
-    }
-
-    /// The outfitter opens, as [`Session::open_outfitter`] has it; a
-    /// session that failed has none.
-    pub fn open_outfitter(&mut self) {
-        if let Ok(session) = &mut self.sim.session {
-            session.open_outfitter();
-        }
-    }
-
-    /// The outfitter closes, as [`Session::close_outfitter`] has it; a
-    /// session that failed has none.
-    pub fn close_outfitter(&mut self) {
-        if let Ok(session) = &mut self.sim.session {
-            session.close_outfitter();
-        }
-    }
-
     /// The bar's hire screen closes, as [`Session::close_hire`] has it; a
     /// session that failed has no bar.
     pub fn close_hire(&mut self) {
@@ -732,27 +703,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     pub fn offer_gap(&mut self) -> Duration {
         mac_ticks(offer_gap(&mut self.sim.chance))
     }
-
-    /// The shipyard of the stellar landed on, as [`Session::shipyard`]
-    /// gives it, the day's rolls drawn on the flight's chance; none for a
-    /// session that failed.
-    pub fn shipyard(&mut self) -> Option<Shipyard> {
-        self.sim
-            .session
-            .as_mut()
-            .ok()?
-            .shipyard(&mut self.sim.chance)
-    }
-
-    /// Declines to buy a ship of class `ship`, as [`Session::decline_ship`]
-    /// does; nothing for a session that failed. The whole bar is redrawn
-    /// as the name prompt closes on Cancel (`_RefreshSAT` @0x5eb73).
-    pub fn decline_ship(&mut self, ship: ShipId) {
-        self.redraw_status();
-        if let Ok(session) = &mut self.sim.session {
-            session.decline_ship(ship);
-        }
-    }
 }
 
 /// The mission computer's cut offer names are filled by the session, as
@@ -760,20 +710,5 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
 impl<C> crate::spaceport::OfferNames for FlightView<C, crate::flight::SessionFlight<C>> {
     fn munged(&self, mission: MissionId, raw: &str) -> Option<String> {
         self.sim.session.as_ref().ok()?.offer_text(mission, raw)
-    }
-}
-
-impl<C: nova_sim::CommCatalog> FlightView<C, crate::flight::SessionFlight<C>> {
-    /// The prompt for naming a ship of class `ship` before it is bought,
-    /// as [`Session::ship_naming`] gives it, its words read from the
-    /// flight's catalog, on the flight's chance; a session that failed
-    /// has no shipyard.
-    pub fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
-        let session = self
-            .sim
-            .session
-            .as_mut()
-            .map_err(|_| ShipRefusal::NoShipyard)?;
-        session.ship_naming(ship, &*self.catalog, &mut self.sim.chance)
     }
 }

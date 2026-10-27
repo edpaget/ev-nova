@@ -632,55 +632,6 @@ fn a_stellar_of_a_landing_blessed_government_is_yellow_on_the_radar() {
     );
 }
 
-/// [`outfitting`] selling [`radar_outfits`] too, landed.
-fn landed_radar_outfitter() -> View {
-    let mut catalog = outfitting();
-    catalog.outfits.extend(radar_outfits());
-    let mut view = FlightView::new(catalog);
-    land_now(&mut view);
-    view
-}
-
-#[test]
-fn an_outfitter_order_redraws_the_radar_at_once_while_docked() {
-    type Place = fn(&mut View, OutfitOrder);
-    let order = |direction| OutfitOrder {
-        outfit: OutfitId(300),
-        direction,
-    };
-    let entries: [(&str, Place); 3] = [
-        ("outfit", |view, order| {
-            assert_eq!(view.outfit(order), Ok(()));
-        }),
-        ("counted", |view, order| {
-            assert_eq!(view.outfit_counted(order, 1), Ok(1));
-        }),
-        ("order", |view, order| {
-            assert_eq!(view.outfit_order(order, 1).run.done, 1);
-        }),
-    ];
-    for (name, place) in entries {
-        let mut view = landed_radar_outfitter();
-        assert!(view.hud_waits(), "the engine's reading");
-        assert!(
-            !view.radar_shown(&view.frame_now()).iff,
-            "{name}: landing's"
-        );
-        place(&mut view, order(Direction::Buy));
-        assert!(view.radar_shown(&view.frame_now()).iff, "{name}: bought");
-        assert!(radar_filled(&view), "{name}: bought");
-        assert!(radar_marks(&view).contains(&RadarMark::Pixel {
-            x: 926,
-            y: 96,
-            color: RadarColor::Cyan
-        }));
-        place(&mut view, order(Direction::Sell));
-        assert!(!view.radar_shown(&view.frame_now()).iff, "{name}: sold");
-        assert!(!radar_filled(&view), "{name}: sold");
-        assert_eq!(radar_marks(&view).last(), Some(&PLAYER_PIXEL), "{name}");
-    }
-}
-
 #[test]
 fn a_heavy_npc_shows_as_a_square_only_with_a_density_scanner() {
     // A ship's mass is its class's (`a_fill_writes_every_ship_the_player_first_then_each_npc_in_the_systems_order`).

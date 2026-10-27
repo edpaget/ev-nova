@@ -3642,8 +3642,11 @@ fn settle_session(view: &mut View) {
 }
 
 /// The background of the status bar `view` shows.
-fn bar_shown(view: &View) -> Option<i16> {
-    view.status_bar().ok().map(|bar| bar.layout.status_bkgnd)
+fn bar_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<i16> {
+    view.status_bar
+        .as_ref()
+        .ok()
+        .map(|bar| bar.layout.status_bkgnd)
 }
 /// Changes `view`'s galaxy by itself, not through the view.
 fn change_galaxy(view: &mut View, change: impl FnOnce(&mut nova_sim::story::GalaxyOverlay)) {
