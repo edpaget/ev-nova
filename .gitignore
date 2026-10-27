@@ -11,3 +11,13 @@ mutants.out*/
 /run-nova.sh
 # `mise run bundle -- dist`'s .dmg, the nightly workflow's macOS Package step.
 /dist
+# infra/github's OpenTofu working files. The state is encrypted but still
+# never committed; .terraform.lock.hcl is committed.
+infra/github/.terraform/
+infra/github/*.tfstate
+infra/github/*.tfstate.*
+infra/github/*.tfplan
+infra/github/.terraform.tfstate.lock.info
+infra/github/crash*.log
+# Per-machine mise settings, e.g. OP_ACCOUNT for the infra-* tasks.
+mise.local.toml

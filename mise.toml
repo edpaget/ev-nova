@@ -6,6 +6,8 @@ rust = { version = "1.98.1", components = "rustfmt,clippy" }
 "cargo:cargo-deny" = "0.19.9"
 hk = "2.4.0"
 pkl = "0.32.1"
+# infra/github's config (the infra-* tasks); CI installs it only in the infra job.
+opentofu = "1.13.2"
 
 [env]
 RDM_ROOT = "{{env.HOME | default(value=env.USERPROFILE | default(value=''))}}/Projects/rdm-atlas-repo"
@@ -77,3 +79,33 @@ run = "cargo mutants --workspace"
 [tasks.ci]
 description = "Everything CI would run; `hk check` runs this, and it gates review and landing"
 depends = ["fmt", "lint", "lint-lib", "deny", "doc", "test", "lint-dev-tools", "test-dev-tools"]
+
+# OpenTofu over infra/github, the repository's GitHub settings (README.md
+# there). infra-plan and infra-apply act on the live repository with the
+# operator's `gh` token and 1Password, so they are never part of `ci` or the
+# hk hooks. infra-check needs no credentials and is the one exception to
+# "verification runs through cargo": cargo can't test HCL, and a Rust wrapper
+# would need tofu and the network, which would break hermetic tests. It runs
+# only here and in CI's `infra` job, never in `ci` or hk.
+# Even `tofu init` evaluates the encryption block, so it needs the passphrase
+# and runs inside the same `op run` as plan/apply: one 1Password approval for
+# the passphrase per run, not two.
+[tasks.infra-plan]
+description = "Plan infra/github against the LIVE repository (gh token, 1Password approvals); kept out of ci and hk on purpose"
+run = "GITHUB_TOKEN=$(gh auth token) op run --env-file=infra/github/op.env -- sh -c 'tofu -chdir=infra/github init -input=false -lockfile=readonly && tofu -chdir=infra/github plan'"
+
+[tasks.infra-apply]
+description = "Apply infra/github to the LIVE repository, interactively (gh token, 1Password approvals); kept out of ci and hk on purpose"
+run = "GITHUB_TOKEN=$(gh auth token) op run --env-file=infra/github/op.env -- sh -c 'tofu -chdir=infra/github init -input=false -lockfile=readonly && tofu -chdir=infra/github apply'"
+
+[tasks.infra-check]
+description = "fmt, validate and mocked-provider tests for infra/github, with no credentials. The one non-cargo check: cargo can't test HCL, and a Rust wrapper would need tofu and the network (not hermetic). Runs only here and in CI's infra job, never in ci or hk"
+# Evaluating the encryption block needs some passphrase. No state exists
+# where this runs, so the value protects nothing.
+env = { TF_VAR_state_passphrase = "check-only-not-a-secret" }
+run = [
+  "tofu -chdir=infra/github fmt -check -recursive",
+  "tofu -chdir=infra/github init -backend=false -input=false -lockfile=readonly",
+  "tofu -chdir=infra/github validate",
+  "tofu -chdir=infra/github test",
+]
