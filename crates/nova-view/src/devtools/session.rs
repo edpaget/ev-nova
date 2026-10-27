@@ -187,6 +187,25 @@ mod tests {
         }
     }
 
+    /// No traffic: the systems are empty.
+    impl nova_sim::TrafficCatalog for Catalog {
+        fn system_traffic(&self, _id: SystemId) -> Option<nova_sim::SystemTraffic> {
+            None
+        }
+
+        fn dude(&self, _id: nova_sim::DudeId) -> Option<nova_sim::DudeRecord> {
+            None
+        }
+
+        fn fleets(&self) -> Vec<nova_sim::FleetRecord> {
+            Vec::new()
+        }
+
+        fn persons(&self) -> Vec<nova_sim::PersonRecord> {
+            Vec::new()
+        }
+    }
+
     impl PilotCatalog for Catalog {
         fn first_character(&self) -> Result<CharacterStart, StartError> {
             Ok(CharacterStart {
@@ -394,7 +413,14 @@ mod tests {
         let mut session = session();
         while session.landed().is_none() {
             session.land().expect("lands");
-            session.tick(nova_sim::Controls::default());
+            let rescued = session.game_work(
+                nova_sim::Controls::default(),
+                &Catalog,
+                &nova_sim::ai::Peaceful,
+                nova_sim::Rules::default(),
+                &mut nova_sim::NeverFires,
+            );
+            assert!(!rescued);
         }
         session.drain_events(&mut Vec::new());
         session
