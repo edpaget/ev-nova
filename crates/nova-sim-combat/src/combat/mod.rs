@@ -12534,6 +12534,73 @@ mod tests {
         (ships, events)
     }
 
+    /// The collision passes among `ships` and `rocks`, with `arsenal`, by
+    /// `rules` ([`Combat::test_hits`]).
+    fn test_hits_amid(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        arsenal: &Arsenal,
+        rules: Rules,
+        rocks: &mut Rocks,
+    ) {
+        let govts = Governments::default();
+        let arena = phase::arena(arsenal, &govts, rules);
+        phase::run_in(combat, ships, arena, &mut NeverFires, |c, f, a, ch| {
+            let scenery = Scenery {
+                asteroids: Some(rocks.lend()),
+                ..Scenery::default()
+            };
+            c.test_hits(f, a, scenery, ch);
+        });
+    }
+
+    /// `firer` at the centre fires `record` once to the right, among
+    /// `others` (the player's trigger, or an NPC's in the ship loop); its
+    /// shot takes `moves` moves (`_HandleShot` @0x44385), and the
+    /// collision passes test the last among `rocks`, with `record` and its
+    /// sub-munition, weapon 148, in the arsenal. The ships and the events,
+    /// in order.
+    fn shot_at_rocks(
+        combat: &mut Combat,
+        firer: ShipRef,
+        record: WeaponRecord,
+        others: Vec<Ship>,
+        rocks: &mut Rocks,
+        moves: u32,
+    ) -> (Vec<Ship>, Vec<CombatEvent>) {
+        let sub = WeaponRecord {
+            count: 50,
+            speed: 500,
+            ..weapon(148)
+        };
+        let (arsenal, govts) = (
+            Arsenal::new(&[record, sub], Vec::new()),
+            Governments::default(),
+        );
+        let arena = phase::arena(&arsenal, &govts, Rules::default());
+        let mut gun = Ship::at(1, 0.0, 0.0).armed(record);
+        gun.id = firer;
+        gun.fleet = firer;
+        let mut ships = vec![gun];
+        ships.extend(others);
+        phase::run_in(combat, &mut ships, arena, &mut NeverFires, |c, f, a, ch| {
+            if firer == ShipRef::Player {
+                c.fire_player(f, a, ch);
+            } else {
+                c.handle_npcs(f, a, ch);
+            }
+        });
+        ships[0].trigger = QUIET;
+        for _ in 0..moves {
+            phase::run_in(combat, &mut ships, arena, &mut NeverFires, |c, f, a, ch| {
+                c.fly_shots(f, a, ch);
+            });
+        }
+        test_hits_amid(combat, &mut ships, &arsenal, Rules::default(), rocks);
+        let events = combat.take_events();
+        (ships, events)
+    }
+
     /// The events but the firing.
     fn unfired(events: &[CombatEvent]) -> Vec<CombatEvent> {
         events
@@ -12552,7 +12619,7 @@ mod tests {
             sub_type: Some(WeaponId(148)),
             ..rock_gun()
         };
-        let (_, events) = shoot_rocks(&mut combat, A, shell, Vec::new(), &mut rocks, 8);
+        let (_, events) = shot_at_rocks(&mut combat, A, shell, Vec::new(), &mut rocks, 6);
         let left = rocks.at(3);
         assert_eq!(left.strength, 6, "its 4 mass damage, none of its 10 energy");
         assert!(
@@ -12592,7 +12659,7 @@ mod tests {
     fn a_hit_without_hit_particles_or_an_explosion_raises_neither() {
         let mut combat = Combat::default();
         let mut rocks = Rocks::of([rock(0, 100.0, 0.0)]);
-        let (_, events) = shoot_rocks(&mut combat, A, blaster(), Vec::new(), &mut rocks, 8);
+        let (_, events) = shot_at_rocks(&mut combat, A, blaster(), Vec::new(), &mut rocks, 6);
         assert_eq!(rocks.at(0).strength, 6);
         assert_eq!(unfired(&events), []);
     }
@@ -12614,7 +12681,7 @@ mod tests {
                 impact,
                 ..blaster()
             };
-            shoot_rocks(&mut combat, A, gun, Vec::new(), &mut rocks, 8);
+            shot_at_rocks(&mut combat, A, gun, Vec::new(), &mut rocks, 6);
             assert_eq!(rocks.at(0).strength, 6, "{impact} {mass}");
             assert_eq!(
                 rocks.at(0).velocity,
@@ -12637,13 +12704,13 @@ mod tests {
     fn a_ship_the_shot_touches_is_hit_before_an_asteroid_nearer_along_its_path() {
         let mut combat = Combat::default();
         let mut rocks = Rocks::of([rock(0, 40.0, 0.0)]);
-        let (ships, _) = shoot_rocks(
+        let (ships, _) = shot_at_rocks(
             &mut combat,
             A,
             fast_gun(0),
             vec![Ship::at(2, 90.0, 0.0)],
             &mut rocks,
-            2,
+            1,
         );
         assert_eq!(rocks.at(0).strength, 10, "untouched");
         assert!(ships[1].reserves.shield.now < 10.0, "the ship took it");
@@ -12655,13 +12722,13 @@ mod tests {
         let mut rocks = Rocks::of([rock(0, 80.0, 0.0)]);
         // The move ends 30 from B: within its fuse's reach of
         // trunc(30 + 32 x 0.333) = 40, beyond its 16-pixel radius.
-        let (ships, _) = shoot_rocks(
+        let (ships, _) = shot_at_rocks(
             &mut combat,
             A,
             fast_gun(30),
             vec![Ship::at(2, 100.0, 30.0)],
             &mut rocks,
-            2,
+            1,
         );
         assert_eq!(rocks.at(0).strength, 6);
         assert_eq!(ships[1].reserves, Reserves::full(10.0, 30.0, 100.0));
@@ -12672,13 +12739,13 @@ mod tests {
         let mut combat = Combat::default();
         // Off the path, but 25 from where the shot ends.
         let mut rocks = Rocks::of([rock(0, 100.0, 25.0)]);
-        let (ships, _) = shoot_rocks(
+        let (ships, _) = shot_at_rocks(
             &mut combat,
             A,
             fast_gun(30),
             vec![Ship::at(2, 100.0, 30.0)],
             &mut rocks,
-            2,
+            1,
         );
         assert_eq!(rocks.at(0).strength, 10);
         assert!(ships[1].reserves.shield.now < 10.0);
@@ -12692,7 +12759,7 @@ mod tests {
             explod_type: 2,
             ..fast_gun(30)
         };
-        let (_, events) = shoot_rocks(&mut combat, A, gun, Vec::new(), &mut rocks, 2);
+        let (_, events) = shot_at_rocks(&mut combat, A, gun, Vec::new(), &mut rocks, 1);
         assert_eq!(rocks.at(4).strength, 6);
         let seen = unfired(&events);
         assert_eq!(seen.len(), 1, "{seen:?}");
@@ -12714,7 +12781,7 @@ mod tests {
                 flags2: 0x0004,
                 ..fast_gun(30)
             };
-            shoot_rocks(&mut combat, A, gun, Vec::new(), &mut rocks, 2);
+            shot_at_rocks(&mut combat, A, gun, Vec::new(), &mut rocks, 1);
             assert_eq!(rocks.at(0).strength < 10, hit, "{fuse:?}");
             assert_eq!(combat.shots().is_empty(), hit, "{fuse:?}");
         }
@@ -12735,26 +12802,16 @@ mod tests {
         escort.fleet = A;
         escort.leader = Some(A);
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(fast_gun(0)), escort];
-        // Both meet it on their first move, the tick after they are fired.
-        tick_amid(
+        // Both meet it on their first move.
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+        test_hits_amid(
             &mut combat,
             &mut ships,
             &arsenal,
             Rules::default(),
             &mut rocks,
         );
-        for ship in &mut ships {
-            ship.trigger = QUIET;
-        }
-        for _ in 0..2 {
-            tick_amid(
-                &mut combat,
-                &mut ships,
-                &arsenal,
-                Rules::default(),
-                &mut rocks,
-            );
-        }
         assert_eq!(rocks.get(5), None, "destroyed");
         assert_eq!(combat.shots(), [], "both spent on it");
         let at = Vec2::new(100.0, 0.0);
@@ -12770,18 +12827,16 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(fast_gun(0)),
             Ship::at(3, 0.0, 50.0).armed(fast_gun(0)),
         ];
-        for _ in 0..3 {
-            tick_amid(
-                &mut combat,
-                &mut ships,
-                &Arsenal::default(),
-                Rules::default(),
-                &mut rocks,
-            );
-            for ship in &mut ships {
-                ship.trigger = QUIET;
-            }
-        }
+        // Both shots' first moves, tested in one collision pass.
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+        test_hits_amid(
+            &mut combat,
+            &mut ships,
+            &Arsenal::default(),
+            Rules::default(),
+            &mut rocks,
+        );
         // The asteroids are walked in slot order, slot 2's first, though
         // A's shot comes first in the shots layer.
         assert_eq!(
@@ -12815,9 +12870,25 @@ mod tests {
         combat.take_strikes()
     }
 
+    /// The ships struck when `firer` shoots `weapon` at an asteroid at
+    /// (100, 0), with NPCs B in the blast's square, C outside it and D,
+    /// planet-type, in it, as the collision passes test the shot's 6th
+    /// move, from 75 to 90 pixels out, which meets it: the strikes, in
+    /// order.
+    fn blasted_at_a_rock(firer: ShipRef, weapon: WeaponRecord) -> Vec<Strike> {
+        let mut combat = Combat::default();
+        let mut rocks = Rocks::of([rock(0, 100.0, 0.0)]);
+        let mut planet = Ship::at(4, 100.0, -25.0);
+        planet.hull.planet_type = true;
+        let others = vec![Ship::at(2, 110.0, 20.0), Ship::at(3, 100.0, 60.0), planet];
+        shot_at_rocks(&mut combat, firer, weapon, others, &mut rocks, 6);
+        assert_eq!(rocks.at(0).strength, 6, "met");
+        combat.take_strikes()
+    }
+
     #[test]
     fn a_players_shot_at_an_asteroid_blasts_the_ships_in_its_square_but_a_planet_type_one() {
-        let strikes = blasted(ShipRef::Player, blasting(0, 0));
+        let strikes = blasted_at_a_rock(ShipRef::Player, blasting(0, 0));
         assert_eq!(
             strikes,
             [Strike {
@@ -12844,13 +12915,13 @@ mod tests {
         let mut combat = Combat::default();
         let mut rocks = Rocks::of([rock(0, 100.0, 0.0)]);
         let frail = holding(2, 110.0, 20.0, 0.0, 2.0, 30.0);
-        let (ships, _) = shoot_rocks(
+        let (ships, _) = shot_at_rocks(
             &mut combat,
             ShipRef::Player,
             blasting(0, DISABLE_ONLY),
             vec![frail],
             &mut rocks,
-            8,
+            6,
         );
         assert_eq!(combat.take_strikes().len(), 1);
         assert_eq!(ships[1].reserves.armor.now, damage::SPARED_ARMOR);
@@ -12858,8 +12929,11 @@ mod tests {
 
     #[test]
     fn an_npcs_shot_or_a_planet_type_weapons_blasts_nobody_through_an_asteroid() {
-        assert_eq!(blasted(A, blasting(0, 0)), []);
-        assert_eq!(blasted(ShipRef::Player, blasting(0, PLANET_TYPE)), []);
+        assert_eq!(blasted_at_a_rock(A, blasting(0, 0)), []);
+        assert_eq!(
+            blasted_at_a_rock(ShipRef::Player, blasting(0, PLANET_TYPE)),
+            []
+        );
     }
 
     #[test]
@@ -12868,13 +12942,13 @@ mod tests {
             let mut combat = Combat::default();
             // Met at (10, 0): the player in the square.
             let mut rocks = Rocks::of([rock(0, 20.0, 0.0)]);
-            shoot_rocks(
+            shot_at_rocks(
                 &mut combat,
                 ShipRef::Player,
                 blasting(flags, 0),
                 Vec::new(),
                 &mut rocks,
-                2,
+                1,
             );
             let strikes = combat.take_strikes();
             assert_eq!(
@@ -12898,17 +12972,24 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = missile_attack(quad());
         let mut rocks = Rocks::of([rock(0, 0.0, -40.0)]);
-        for _ in 0..12 {
-            tick_amid(
-                &mut combat,
-                &mut ships,
-                &Arsenal::default(),
-                rules,
-                &mut rocks,
-            );
-            ships[1].trigger = QUIET;
+        missile_in_flight(&mut combat, &mut ships);
+        phase::run_by(&mut combat, &mut ships, rules, |c, f, a, ch| {
+            c.defend_npcs(f, a, None, false, ch);
+        });
+        assert_eq!(pd_shots(&combat).len(), 1, "fired at the missile");
+        // Its second move, from 20 to 40 pixels out, meets the asteroid.
+        for _ in 0..2 {
+            phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
         }
+        test_hits_amid(
+            &mut combat,
+            &mut ships,
+            &Arsenal::default(),
+            rules,
+            &mut rocks,
+        );
         assert!(rocks.at(0).strength < 10, "{rocks:?}");
+        assert_eq!(pd_shots(&combat), [], "spent on it");
         let downed = combat
             .take_events()
             .iter()
