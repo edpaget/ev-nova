@@ -176,6 +176,29 @@ mod tests {
     }
 
     #[test]
+    fn a_cloaked_ship_that_cannot_pay_is_refused_for_the_fee_not_the_cloak() {
+        // The fee (@0x669b4) comes before `_ShipIsCloaked` (@0x66a8e).
+        use crate::cloak::{Cloak, FADE_FULL};
+        let catalog = charging(catalog(), FEE);
+        let mut session = over(&catalog, 99);
+        session.ship.cloak.cloak = Cloak {
+            fade: FADE_FULL,
+            direction: 0,
+        };
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::CannotPayFee {
+                stellar: StellarId(128),
+                station: false,
+            })
+        );
+        assert_eq!(session.dock_request(), None, "dropped");
+        assert_eq!(session.take_sounds(), [], "silent: no cloak beep");
+        assert_eq!(session.pilot.cash, 99);
+        assert_eq!(session.landed(), None);
+    }
+
+    #[test]
     fn the_first_press_is_refused_before_traffic_control_hears_it() {
         let catalog = charging(catalog(), FEE);
         let mut session = over(&catalog, 0);

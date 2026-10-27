@@ -3609,9 +3609,10 @@ impl Session {
     /// system.
     ///
     /// A cloaked ship's press goes as far as a disabled ship's, and the
-    /// dock request's `_ShipIsCloaked` (@0x66a8e), before its
-    /// `_IsDisabled`, refuses it [`LandingRefusal::Cloaked`] with a beep,
-    /// disabled or not; a cloak still fading in lands as before.
+    /// dock request's `_ShipIsCloaked` (@0x66a8e), after the fee
+    /// (@0x669b4) and before its `_IsDisabled`, refuses it
+    /// [`LandingRefusal::Cloaked`] with a beep, disabled or not, unless
+    /// the fee refused it first; a cloak still fading in lands as before.
     ///
     /// A refusal from the dock request that [`LandingRefusal::beeps`]
     /// pushes [`SimSound::Refused`], `_beepSnd[3]` (@0x67e8f, @0x676aa,
@@ -3671,15 +3672,16 @@ impl Session {
             self.setup.rules.source_for(RuleKey::LandingSpeed),
             self.setup.rules.source_for(RuleKey::GatePickRange),
         );
-        // The cloak's refusal (@0x66a8e) comes before the disabled one
-        // (@0x66aee), each after the landability (@0x66977-0x669ae).
+        // The fee's refusal (@0x669b4) comes before the cloak's
+        // (`_ShipIsCloaked` @0x66a8e), which comes before the disabled one
+        // (@0x66aee), all after the landability (@0x66977-0x669ae).
         let cloaked = self.ship.cloak.cloak.is_cloaked();
         if cloaked || disabled {
             self.chart.select_pressed(press.selected);
             return match press.outcome {
-                Err(refusal @ LandingRefusal::CannotPayFee { .. }) if !cloaked => {
+                Err(refusal @ LandingRefusal::CannotPayFee { .. }) => {
                     // The original drops the request (@0x67cc1-0x67cd0)
-                    // before reaching `_IsDisabled`.
+                    // before reaching `_ShipIsCloaked` or `_IsDisabled`.
                     self.port.dock = press.dock;
                     Err(refusal)
                 }
