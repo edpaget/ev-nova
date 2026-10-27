@@ -78,6 +78,7 @@ mod dialog_map;
 mod docked;
 mod drain;
 mod escorts;
+mod faked_escorts;
 mod faked_flight;
 mod faked_hud;
 mod faked_landing;
@@ -3374,7 +3375,6 @@ impl nova_sim::HailOption for Refuel {
         }
     }
 }
-use super::super::escorts::{ABSENT_ROW, MENU_AT, MENU_HEIGHT, MENU_WIDTH};
 use nova_sim::{EscortClass, EscortGroup, EscortOrder};
 
 /// An escort of ship `ship`, full, a fighter out of a bay when

@@ -4,10 +4,11 @@
 //! frame (the `drawing` and `world` modules).
 
 use nova_sim::PlayerCommand;
-use nova_sim::flight_frame::FlightFrame;
+#[cfg(doc)]
+use nova_sim::Session;
+use nova_sim::flight_frame::{Answer, FlightFrame};
 use nova_sim::{
-    ClassRow, Condition, EscortCommand, NavMode, Reserves, Session, StellarPick, SystemId,
-    TargetPick,
+    ClassRow, Condition, EscortCommand, NavMode, Reserves, StellarPick, SystemId, TargetPick,
 };
 
 use crate::flight::escorts::{
@@ -88,39 +89,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         Some(command)
     }
 
-    /// Selects the escort menu's group `n` (keys 1-5), if the player has
-    /// an escort of it.
-    fn select_escort_group(&mut self, n: usize) {
-        let rows = self.escort_rows();
-        if self.escort_menu.select(n, self.elapsed, &rows) {
-            self.ui_sounds.push(UiSound::EscortGroupSelected);
-        }
-    }
-
-    /// A press of `key`, if it is one of the escort menu's: E, Return,
-    /// 1-5 while the menu is open, and F, D, V and C (Option-C Return to
-    /// Hangar). Whether it was one.
-    pub(super) fn escort_key(&mut self, key: Key) -> bool {
-        let group = GROUP_KEYS.iter().position(|&group| group == key);
-        match key {
-            MENU_KEY => self.toggle_escort_menu(),
-            MENU_CLOSE_KEY => self.acknowledge(),
-            ESCORT_ATTACK_KEY => self.command_escorts(EscortCommand::Attack),
-            ESCORT_DEFEND_KEY => self.command_escorts(EscortCommand::Defend),
-            ESCORT_HOLD_KEY => self.command_escorts(EscortCommand::Hold),
-            ESCORT_RECALL_KEY => self.command_escorts(if self.held.contains(&Key::Alt) {
-                EscortCommand::Dock
-            } else {
-                EscortCommand::Recall
-            }),
-            _ => match group {
-                Some(n) if self.escort_menu.is_open() => self.select_escort_group(n),
-                _ => return false,
-            },
-        }
-        true
-    }
-
     /// Whether a press of `key` is taken while a jump is under way, the
     /// pre-jump stage included, with Option held (`option`) and the escort
     /// menu open (`menu_open`) or not. `_HandlePlayer` runs its key
@@ -168,6 +136,45 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             _ => menu_open && GROUP_KEYS.contains(&key),
         }
     }
+}
+
+/// The escort menu, over the [`FlightSim`] port: its keys read the fleet
+/// from the kept frame
+/// ([`FrameHud::escort_rows`](nova_sim::flight_frame::FrameHud::escort_rows)) and
+/// send their commands through it.
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// Selects the escort menu's group `n` (keys 1-5), if the player has
+    /// an escort of it.
+    fn select_escort_group(&mut self, n: usize) {
+        let rows = self.escort_rows();
+        if self.escort_menu.select(n, self.elapsed, &rows) {
+            self.ui_sounds.push(UiSound::EscortGroupSelected);
+        }
+    }
+
+    /// A press of `key`, if it is one of the escort menu's: E, Return,
+    /// 1-5 while the menu is open, and F, D, V and C (Option-C Return to
+    /// Hangar). Whether it was one.
+    pub(super) fn escort_key(&mut self, key: Key) -> bool {
+        let group = GROUP_KEYS.iter().position(|&group| group == key);
+        match key {
+            MENU_KEY => self.toggle_escort_menu(),
+            MENU_CLOSE_KEY => self.acknowledge(),
+            ESCORT_ATTACK_KEY => self.command_escorts(EscortCommand::Attack),
+            ESCORT_DEFEND_KEY => self.command_escorts(EscortCommand::Defend),
+            ESCORT_HOLD_KEY => self.command_escorts(EscortCommand::Hold),
+            ESCORT_RECALL_KEY => self.command_escorts(if self.held.contains(&Key::Alt) {
+                EscortCommand::Dock
+            } else {
+                EscortCommand::Recall
+            }),
+            _ => match group {
+                Some(n) if self.escort_menu.is_open() => self.select_escort_group(n),
+                _ => return false,
+            },
+        }
+        true
+    }
 
     /// E: opens or closes the escort menu, or says the player has no
     /// escorts. Opening it clears [`NO_ESCORTS`] from the message line,
@@ -197,27 +204,33 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         self.floating.hide();
     }
 
-    /// Gives the escorts `command`, through the session, as the menu says
-    /// which, drawing its speaker on the flight's chance; says what it
-    /// changed, and keeps the menu open for it.
+    /// Gives the escorts `command`, as the menu says which
+    /// ([`FlightCommand::CommandEscorts`], `nova_sim::Session::command_escorts`,
+    /// its speaker drawn on the flight's chance), once the flight takes the
+    /// escort keys ([`FlightView::send_gated`]); says what it changed, and
+    /// keeps the menu open for it. A command that changed no escort says
+    /// nothing.
     fn command_escorts(&mut self, command: EscortCommand) {
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        let commanded =
-            session.command_escorts(self.escort_menu.group(), command, &mut self.sim.chance);
-        if let Some(commanded) = commanded {
+        let group = self.escort_menu.group();
+        if let Answer::Commanded(commanded) =
+            self.send_gated(FlightCommand::CommandEscorts { group, command })
+        {
             self.escort_menu.touch(self.elapsed);
             self.say_for(escort_command_message(&commanded), ESCORT_TICKS);
         }
     }
 
-    /// Closes the escort menu once it has timed out or the fleet is empty
-    /// ([`EscortMenu::update`]), every frame, the warp's included, as
-    /// the original checks it on every frame of a jump (@0x6df59).
+    /// Closes the escort menu once it has timed out, the fleet is empty
+    /// or no escort is flying ([`EscortMenu::update`]), every frame, the
+    /// warp's included, as the original checks it on every frame of a
+    /// jump (@0x6df59), as the kept frame shows the fleet
+    /// ([`FrameHud::escort_rows`](nova_sim::flight_frame::FrameHud::escort_rows),
+    /// [`FrameHud::escorts_flying`](nova_sim::flight_frame::FrameHud::escorts_flying)):
+    /// `Screen::tick` calls it right after the frame's steps, which fill
+    /// the kept frame afresh.
     pub(super) fn update_escort_menu(&mut self) {
         let rows = self.escort_rows();
-        let flying = self.sim.session.as_ref().is_ok_and(Session::escorts_flying);
+        let flying = self.frame.hud.escorts_flying;
         self.escort_menu.update(self.elapsed, &rows, flying);
     }
 

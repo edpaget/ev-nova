@@ -449,45 +449,6 @@ fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
     assert_eq!(*view.radar_shown(&view.frame), view.radar_now(&view.frame));
 }
 
-#[test]
-fn the_escort_menu_closes_once_its_only_mission_escort_is_disabled() {
-    let mut catalog = trafficked(&[130], 0, 129, 3);
-    // One ship of düde 128 escorting the player (`ShipBehav` 1).
-    catalog.missions = vec![MissionRecord {
-        ships: MissionShip {
-            count: 1,
-            syst: -1,
-            dude: Some(nova_sim::DudeId(128)),
-            behav: 1,
-            start: 0,
-            ..MissionShip::NONE
-        },
-        ..errand(140)
-    }];
-    let mut view = FlightView::new(catalog).with_behaviour(Rc::new(Still));
-    run_set(&mut view, "S140");
-    settle_session(&mut view);
-    view.tick(TICK);
-    let escort = view
-        .session()
-        .expect("flying")
-        .npcs()
-        .iter()
-        .find(|npc| npc.mission_escort())
-        .map(|npc| npc.id)
-        .expect("a mission escort");
-    tap(&mut view, MENU_KEY);
-    assert!(view.escort_menu().is_open(), "a mission escort opens it");
-    nova_sim::fixture::disable(view.sim.session.as_mut().expect("flying"), escort);
-    view.tick(TICK);
-    let session = view.session().expect("flying");
-    assert!(
-        session.escort_menu().iter().any(|row| row.present),
-        "its row stays"
-    );
-    assert!(!view.escort_menu().is_open(), "no escort is flying");
-}
-
 // The floating map.
 
 /// The floating map's frame's centre, where the current system is drawn.
@@ -2189,20 +2150,6 @@ fn a_press_the_flight_says_wrote_a_hop_enables_clear_route_and_shows_the_course(
     assert_eq!(view.map.route(), [SystemId(131)], "shown");
 }
 
-/// Whether a zoom key's press zooms the floating map, shown by H, with
-/// `k` held and the escort menu opened first when `menu`.
-fn zooms_holding(mut view: View, k: Key, menu: bool) -> bool {
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    if menu {
-        tap(&mut view, MENU_KEY);
-        assert!(view.escort_menu().is_open());
-    }
-    view.input(&key(k, true));
-    let zoom = view.floating.zoom();
-    tap(&mut view, ZOOM_OUT_KEY);
-    view.floating.zoom() != zoom
-}
-
 /// Whether a zoom key's press zooms `view`'s floating map, shown by H,
 /// with `k` held.
 fn faked_zooms_holding(mut view: Faked, k: Key) -> bool {
@@ -2230,16 +2177,28 @@ fn a_slot_key_held_holds_the_zoom_back_while_the_original_polls_it() {
 
 #[test]
 fn a_slot_key_held_holds_the_zoom_back_while_the_escort_menus_loop_polls_it() {
+    let menu_holding = |k: Key, menu: bool| {
+        let mut frame = in_sol();
+        frame.hud.escort_rows[2].present = true;
+        frame.hud.escorts_flying = true;
+        let mut view = floating_near(frame);
+        floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+        if menu {
+            view.escort_key(MENU_KEY);
+            assert!(view.escort_menu().is_open());
+        }
+        hold(&mut view, k);
+        let zoom = view.floating.zoom();
+        floating_tap(&mut view, ZOOM_OUT_KEY);
+        view.floating.zoom() != zoom
+    };
     assert!(
-        !zooms_holding(escorted(), STELLAR_SLOT_KEYS[1][0], true),
+        !menu_holding(STELLAR_SLOT_KEYS[1][0], true),
         "the escort loop polls 2 with the menu open"
     );
+    assert!(!menu_holding(NEAREST_STELLAR_COMMAND_KEY, true), "and 5");
     assert!(
-        !zooms_holding(escorted(), NEAREST_STELLAR_COMMAND_KEY, true),
-        "and 5"
-    );
-    assert!(
-        zooms_holding(escorted(), NEAREST_STELLAR_COMMAND_KEY, false),
+        menu_holding(NEAREST_STELLAR_COMMAND_KEY, false),
         "5 with the menu shut"
     );
 }
