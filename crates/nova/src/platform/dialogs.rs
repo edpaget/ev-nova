@@ -19,11 +19,12 @@
 //! desktop portal's file chooser picking a folder (its `FileChooser`
 //! `OpenFile`, reached over a `dlopen`ed libdbus), so, as on Windows, the
 //! `EV Nova` folder or its `Nova Files` is picked; without libdbus or a
-//! portal service, rfd runs `zenity` for it instead. The alerts have no
-//! portal: rfd always runs `zenity --error` or `--warning`, so where
-//! zenity isn't installed (many KDE desktops, the freedesktop Flatpak
-//! runtime) nothing is shown and rfd only logs it. stderr and the startup
-//! log still have every line. The warnings box runs on a thread of its
+//! portal service, rfd runs `zenity` for it instead, whose folder picker
+//! shows no title, so a re-ask first shows its prompt in a warning box.
+//! The alerts (and that box) have no portal: rfd always runs
+//! `zenity --error` or `--warning`, so where zenity isn't installed (many
+//! KDE desktops, the freedesktop Flatpak runtime) nothing is shown and rfd
+//! only logs it. stderr and the startup log still have every line. The warnings box runs on a thread of its
 //! own, as on Windows.
 //!
 //! No first-party `unsafe` is added for them. On any other system nothing
@@ -39,10 +40,15 @@ use std::path::PathBuf;
 
 use winit::window::Window;
 
+use crate::startup::locate::PROMPT;
 use crate::startup::{FatalAlert, NovaFilesDialog};
 
 /// The fatal alert's title.
 pub const FATAL_TITLE: &str = "EV Nova could not start";
+
+/// The title of the box that, on Linux, says why the folder picker is
+/// asking again.
+pub const PICK_TITLE: &str = "No EV Nova data there";
 
 /// The warnings sheet's title.
 pub const WARNINGS_TITLE: &str = "EV Nova started with warnings";
@@ -83,11 +89,24 @@ impl NovaFilesDialog for Dialogs {
 #[cfg(target_os = "linux")]
 impl NovaFilesDialog for Dialogs {
     /// The file-chooser portal picking a folder, titled `prompt`; zenity's
-    /// when there is no portal.
+    /// when there is no portal, which shows no title (rfd 0.17's zenity
+    /// `pick_folder` passes none).
+    ///
+    /// So that a re-ask after a pick that held no data says why the picker
+    /// is back, its prompt ([`retry_notice`]) is shown first in a warning
+    /// box. rfd can't say which path it will take, so the portal's picker
+    /// gets the box too, ahead of its own title.
     ///
     /// It runs on the calling thread before the event loop and any window,
     /// as on the other platforms, so it has no parent window.
     fn pick(&mut self, prompt: &str) -> Option<PathBuf> {
+        if let Some(notice) = retry_notice(prompt) {
+            let _ = rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title(PICK_TITLE)
+                .set_description(notice)
+                .show();
+        }
         rfd::FileDialog::new().set_title(prompt).pick_folder()
     }
 }
@@ -171,3 +190,31 @@ impl FatalAlert for Dialogs {
 /// No sheet: stderr and the log have the warnings.
 #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 pub fn show_warnings(_window: &Window, _body: &str) {}
+
+/// The notice to show before the folder picker asks with `prompt`: the
+/// prompt itself when it re-asks after a pick that held no data, `None`
+/// when it is the first ask ([`PROMPT`]).
+///
+/// Linux shows it in a warning box because zenity's folder picker, rfd's
+/// fallback where there is no portal, shows no title, so the re-ask would
+/// otherwise reopen the picker without saying why.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn retry_notice(prompt: &str) -> Option<&str> {
+    (prompt != PROMPT).then_some(prompt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_ask_has_no_notice() {
+        assert_eq!(retry_notice(PROMPT), None);
+    }
+
+    #[test]
+    fn a_re_ask_shows_its_prompt_as_the_notice() {
+        let prompt = format!("/home/p/Games holds no EV Nova data. {PROMPT}");
+        assert_eq!(retry_notice(&prompt), Some(prompt.as_str()));
+    }
+}
