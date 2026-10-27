@@ -71,14 +71,15 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// `message`'s words, as the session's messages are worded
     /// (`message_text`); none with no session.
     fn session_text(&mut self, message: &SimMessage) -> Option<String> {
-        let Ok(session) = &self.sim.session else {
+        if self.sim.session.is_err() {
             return None;
-        };
+        }
+        let mut chance = self.sim.chance.clone();
         message_text(
             message,
-            session,
+            &self.sim,
             self.scene.as_ref(),
-            &mut self.sim.chance,
+            &mut chance,
             self.presentation.millions,
         )
     }
@@ -95,10 +96,10 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// `line`'s words over the session (`mission_board_message`); none
     /// with no session.
     fn session_board_line(&self, line: MissionBoardLine) -> String {
-        self.sim.session.as_ref().map_or_else(
-            |_| String::new(),
-            |session| mission_board_message(line, session),
-        )
+        if self.sim.session.is_err() {
+            return String::new();
+        }
+        mission_board_message(line, &self.sim)
     }
 
     /// `outfit`'s names as the session reads them
@@ -118,10 +119,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// `good`'s and `outfit`'s names as the session reads them (`names`);
     /// none with no session.
     fn session_plunder_names(&self, good: Option<Good>, outfit: Option<OutfitId>) -> PlunderNames {
-        let Ok(session) = &self.sim.session else {
-            return (None, None);
-        };
-        let (good, outfit) = names(session, good, outfit);
+        let (good, outfit) = names(&self.sim, good, outfit);
         (good.map(str::to_owned), outfit.map(str::to_owned))
     }
 }

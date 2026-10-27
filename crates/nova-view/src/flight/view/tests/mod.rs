@@ -88,6 +88,7 @@ mod faked_landing;
 mod faked_missions;
 mod faked_shops;
 mod faked_travel;
+mod faked_wording;
 mod faked_world;
 mod flying;
 mod hyperspace;

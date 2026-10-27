@@ -448,6 +448,8 @@ mod capture;
 mod captured_mission_ship;
 mod cargo_boxes;
 #[cfg(test)]
+mod cargo_names;
+#[cfg(test)]
 mod carrier_lead;
 mod chart;
 mod chart_ownership;
