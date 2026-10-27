@@ -184,9 +184,10 @@ pub fn cargo_stolen_message(tons: u32, credits: i64, millions: RuleSource) -> St
 }
 
 /// What the message line says of a plunder's `message`, the numbers'
-/// millions as `session`'s rules read them; none for any other message.
-fn stolen_text(message: &SimMessage, session: &Session) -> Option<String> {
-    let millions = session.rules().source_for(nova_sim::RuleKey::PayMillions);
+/// millions as `millions` reads
+/// ([`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)); none for
+/// any other message.
+fn stolen_text(message: &SimMessage, millions: RuleSource) -> Option<String> {
     match message {
         SimMessage::CargoStolen { tons, credits } => {
             Some(cargo_stolen_message(*tons, *credits, millions))
@@ -360,12 +361,18 @@ fn self_destruct_text(line: SelfDestructLine) -> String {
 }
 
 /// What the message line says of `message`, a session's message other
-/// than an arrival's, the names read from `session`: none for an
+/// than an arrival's, the names read from `session` and the numbers'
+/// millions as `millions` reads
+/// ([`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)): none for an
 /// arrival's, which [`arrival_lead`] leads the arrival message with, and
 /// for the take-off greeting, the land hint, the dock request's line and
 /// the dock approach's greeting, which [`message_text`] words with the
 /// stellar's name.
-pub(super) fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
+pub(super) fn sim_message_text(
+    message: &SimMessage,
+    session: &Session,
+    millions: RuleSource,
+) -> Option<String> {
     let text = match message {
         SimMessage::Arrived(_)
         | SimMessage::Buoy(_)
@@ -401,7 +408,7 @@ pub(super) fn sim_message_text(message: &SimMessage, session: &Session) -> Optio
         SimMessage::FighterCaptured => FIGHTER_CAPTURED,
         SimMessage::PropulsionRepaired => PROPULSION_REPAIRED,
         SimMessage::CargoStolen { .. } | SimMessage::ShipStolen { .. } => {
-            return stolen_text(message, session);
+            return stolen_text(message, millions);
         }
         SimMessage::FleetArrivalQuote(text)
         | SimMessage::CallForHelp(text)
@@ -678,13 +685,14 @@ pub(super) fn stellar_name(
 /// `session` and the stellars' from `scene`: as [`sim_message_text`]
 /// says, and the take-off greeting, the land hint, the dock request's
 /// line and the dock approach's greeting, which name a stellar, the
-/// line's and the greeting's picks rolled on `chance`. None only for an
-/// arrival's.
+/// line's and the greeting's picks rolled on `chance`, the numbers'
+/// millions as `millions` reads. None only for an arrival's.
 pub(super) fn message_text(
     message: &SimMessage,
     session: &Session,
     scene: Option<&SystemScene>,
     chance: &mut dyn Chance,
+    millions: RuleSource,
 ) -> Option<String> {
     let ship = || session.pilot().ship_name().unwrap_or_default();
     let named =
@@ -702,7 +710,7 @@ pub(super) fn message_text(
             ship(),
             GreetingPicks::roll(*kind, chance),
             *fee,
-            session.rules().source_for(nova_sim::RuleKey::PayMillions),
+            millions,
         )),
         SimMessage::TookOff { stellar, lead } => Some(take_off_greeting(
             *lead,
@@ -714,7 +722,7 @@ pub(super) fn message_text(
             &named(*stellar),
             &key_label(LAND_KEY).unwrap_or_default(),
         )),
-        _ => sim_message_text(message, session),
+        _ => sim_message_text(message, session, millions),
     }
 }
 

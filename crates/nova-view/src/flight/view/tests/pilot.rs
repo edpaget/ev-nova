@@ -855,6 +855,30 @@ fn every_rule_reaches_the_session_through_the_flight() {
     }
 }
 
+/// This phase's real check of the app's path
+/// (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks): `with_rules`
+/// hands the view's wording the millions reading it holds, which the
+/// session's own rules no longer decide.
+#[test]
+fn with_rules_hands_the_wording_its_millions_reading() {
+    let stolen = SimMessage::CargoStolen {
+        tons: 2,
+        credits: 1_234_567,
+    };
+    let mut view = flight();
+    let said = view.word(vec![stolen.clone()], View::WORDS);
+    assert_eq!(said[0].0, "2 tons of cargo and 1.23M credits stolen!");
+    let bible = Rulebook::default().with_override(RuleKey::PayMillions, RuleSource::Bible);
+    let mut view = flight().with_rules(bible);
+    // The session's own rules put back: the wording reads the view's.
+    view.sim.session = view
+        .sim
+        .session
+        .map(|session| session.with_rules(Rulebook::default()));
+    let said = view.word(vec![stolen], View::WORDS);
+    assert_eq!(said[0].0, "2 tons of cargo and 1,234,567 credits stolen!");
+}
+
 // The set-expression hooks.
 
 #[test]

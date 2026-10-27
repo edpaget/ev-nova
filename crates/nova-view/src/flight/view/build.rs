@@ -25,7 +25,7 @@ use crate::flight::escorts::{EscortMenu, EscortMenuLooks};
 use crate::flight::floating::FloatingMap;
 use crate::flight::hud::{self};
 use crate::flight::sim_adapter::SessionFlight;
-use crate::flight::sim_port::FlightSim;
+use crate::flight::sim_port::{FlightSim, MapSource};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::camera::VIEW_SIZE;
 use crate::system::catalog::SystemCatalog;
@@ -60,7 +60,7 @@ impl<
         C: 'static,
     {
         let session = Session::start(&catalog);
-        Self::flying(catalog, session)
+        Self::flying(catalog, session, &Rulebook::default())
     }
 
     /// `pilot`'s flight, read from `catalog`, which the screen keeps. A
@@ -72,18 +72,21 @@ impl<
         C: 'static,
     {
         let session = Session::fly(&catalog, pilot);
-        Self::flying(catalog, session)
+        Self::flying(catalog, session, &Rulebook::default())
     }
 
     /// `pilot`'s flight as [`FlightView::with_pilot`] builds it, its load's
     /// fallbacks reading `rules` ([`Session::load`]): for a pilot opened
     /// from a save, whose repair [`FlightView::load_repaired`] reports.
+    /// The rules are the load's alone: the view, like the session, reads
+    /// the default rulebook until [`FlightView::with_rules`] gives it
+    /// another.
     pub fn loaded(catalog: C, pilot: Pilot, rules: Rulebook) -> Self
     where
         C: 'static,
     {
         let session = Session::load(&catalog, pilot, &rules);
-        Self::flying(catalog, session)
+        Self::flying(catalog, session, &Rulebook::default())
     }
 
     /// The flight of `sim`, read from `catalog` as a loaded session is
@@ -91,13 +94,14 @@ impl<
     /// builder put into the state it needs
     /// (`nova_sim::fixture::SessionBuilder`), passed as
     /// `builder.build().into()` for Nova's collaborators
-    /// ([`SessionFlight::new`]).
+    /// ([`SessionFlight::new`]). The view reads the default rulebook, as
+    /// the session's constructors do, until [`FlightView::with_rules`].
     #[cfg(any(test, feature = "fixture"))]
     pub fn from_session(catalog: C, sim: SessionFlight<C>) -> Self
     where
         C: 'static,
     {
-        Self::read(catalog, sim)
+        Self::read(catalog, sim, &Rulebook::default())
     }
 
     /// Begins a new pilot's game as [`Session::begin`] does, on the
@@ -162,22 +166,26 @@ impl<
         }
     }
 
-    /// The flight of `session`, or why it could not start. No session
-    /// starts landed, so flight's first frame redraws the bar, as
-    /// `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
-    fn flying(catalog: C, session: Result<Session, StartError>) -> Self
+    /// The flight of `session`, or why it could not start, shown by
+    /// `rules`. No session starts landed, so flight's first frame redraws
+    /// the bar, as `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
+    fn flying(catalog: C, session: Result<Session, StartError>, rules: &Rulebook) -> Self
     where
         C: 'static,
     {
         Self::read(
             catalog,
             SessionFlight::new(session.map_err(|err| err.to_string())),
+            rules,
         )
     }
 
-    /// The flight of `sim` as [`FlightView::flying`] reads it.
+    /// The flight of `sim` as [`FlightView::flying`] reads it, shown by
+    /// `rules`: the course map's nebulae and borders, and the presentation
+    /// rules the view holds ([`Presentation`](super::stepping::Presentation)),
+    /// as [`FlightView::scripted`] reads them.
     #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
-    fn read(catalog: C, mut sim: SessionFlight<C>) -> Self
+    fn read(catalog: C, mut sim: SessionFlight<C>, rules: &Rulebook) -> Self
     where
         C: 'static,
     {
@@ -202,15 +210,15 @@ impl<
             .ok()
             .map(|_| BarFor(frame.hud.interface_government));
         let mut map = GalaxyMap::course(&catalog);
-        if let Ok(session) = &session {
-            map.set_nebula_pick(session.rules().source_for(nova_sim::RuleKey::NebulaPicture));
+        // A flight that failed to start shows no galaxy, and its map keeps
+        // the readings it was made with.
+        if let Some(galaxy) = sim.galaxy() {
+            map.set_nebula_pick(rules.source_for(nova_sim::RuleKey::NebulaPicture));
             map.set_border_rules(
-                session.rules().source_for(nova_sim::RuleKey::MapBorderPace),
-                session
-                    .rules()
-                    .source_for(nova_sim::RuleKey::MapFindBorders),
+                rules.source_for(nova_sim::RuleKey::MapBorderPace),
+                rules.source_for(nova_sim::RuleKey::MapFindBorders),
             );
-            map.show_galaxy(session.galaxy());
+            map.show_galaxy(galaxy);
             map.show_course(frame.system, &frame.course_shown);
             // Entering the game draws the floating map, and a new or
             // loaded pilot sets `_mapScroll`, to the current system
@@ -234,11 +242,7 @@ impl<
                 "no cïcn {ALERT_CICN}: the Red Alert icon is not drawn"
             )));
         }
-        let presentation = super::stepping::Presentation::of(
-            session
-                .as_ref()
-                .map_or(&nova_sim::Rulebook::default(), Session::rules),
-        );
+        let presentation = super::stepping::Presentation::of(rules);
         // One handle, the view's and the flight's: the flight's answers
         // that read the catalog read the one the view draws from.
         let catalog = Rc::new(catalog);

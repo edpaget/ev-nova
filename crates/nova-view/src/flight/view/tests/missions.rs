@@ -61,7 +61,7 @@ pub(super) fn rocky(base: FakeCatalog) -> FakeCatalog {
 fn each_jettison_message_is_worded_and_the_arrivals_are_not_among_them() {
     let view = flight();
     let session = view.session().expect("flying");
-    let text = |message| sim_message_text(&message, session);
+    let text = |message| sim_message_text(&message, session, RuleSource::Engine);
     assert_eq!(
         text(SimMessage::MissionFailed).as_deref(),
         Some(MISSION_FAILED)
@@ -99,7 +99,7 @@ fn a_former_escort_rejoining_says_escort_or_fighter_repaired() {
     assert_eq!(FIGHTER_REPAIRED, "Fighter repaired.");
     let view = flight();
     let session = view.session().expect("flying");
-    let text = |message| sim_message_text(&message, session);
+    let text = |message| sim_message_text(&message, session, RuleSource::Engine);
     assert_eq!(
         text(SimMessage::EscortRepaired).as_deref(),
         Some(ESCORT_REPAIRED)
@@ -120,7 +120,7 @@ fn fighter_captured_says_the_originals_words() {
     let view = flight();
     let session = view.session().expect("flying");
     assert_eq!(
-        sim_message_text(&SimMessage::FighterCaptured, session).as_deref(),
+        sim_message_text(&SimMessage::FighterCaptured, session, RuleSource::Engine).as_deref(),
         Some(FIGHTER_CAPTURED)
     );
     assert_eq!(arrival_lead(&SimMessage::FighterCaptured), None);
@@ -150,11 +150,11 @@ fn a_sabotage_notice_names_the_outfit_for_its_count() {
         outfit: Some((OutfitId(275), one)),
     };
     assert_eq!(
-        sim_message_text(&sabotaged(true), session).as_deref(),
+        sim_message_text(&sabotaged(true), session, RuleSource::Engine).as_deref(),
         Some("Your bomb has exploded!")
     );
     assert_eq!(
-        sim_message_text(&sabotaged(false), session).as_deref(),
+        sim_message_text(&sabotaged(false), session, RuleSource::Engine).as_deref(),
         Some("Your bombs have exploded!")
     );
     assert_eq!(arrival_lead(&sabotaged(true)), None);
@@ -169,15 +169,15 @@ fn a_bomb_notice_names_the_outfit_with_no_empty_name_check() {
         one,
     };
     assert_eq!(
-        sim_message_text(&exploded(275, true), session).as_deref(),
+        sim_message_text(&exploded(275, true), session, RuleSource::Engine).as_deref(),
         Some("Your bomb has exploded!")
     );
     assert_eq!(
-        sim_message_text(&exploded(275, false), session).as_deref(),
+        sim_message_text(&exploded(275, false), session, RuleSource::Engine).as_deref(),
         Some("Your bombs have exploded!")
     );
     assert_eq!(
-        sim_message_text(&exploded(999, true), session).as_deref(),
+        sim_message_text(&exploded(999, true), session, RuleSource::Engine).as_deref(),
         Some("Your  has exploded!"),
         "an empty name is spelled out as it is"
     );
@@ -189,7 +189,7 @@ fn the_leet_sabotage_notice_says_someone_set_up_the_bomb() {
     let view = flight();
     let session = view.session().expect("flying");
     assert_eq!(
-        sim_message_text(&SimMessage::BombSetUp, session).as_deref(),
+        sim_message_text(&SimMessage::BombSetUp, session, RuleSource::Engine).as_deref(),
         Some("Someone set up us the bomb!")
     );
     assert_eq!(arrival_lead(&SimMessage::BombSetUp), None);
@@ -201,7 +201,7 @@ fn a_sabotage_notice_without_an_outfit_says_a_bomb_exploded() {
     let session = view.session().expect("flying");
     let message = SimMessage::Sabotaged { outfit: None };
     assert_eq!(
-        sim_message_text(&message, session).as_deref(),
+        sim_message_text(&message, session, RuleSource::Engine).as_deref(),
         Some("A bomb has exploded onboard your ship!")
     );
     assert_eq!(
@@ -215,7 +215,7 @@ fn a_collapsed_jump_says_the_hyperspace_field_collapsed() {
     let view = flight();
     let session = view.session().expect("flying");
     assert_eq!(
-        sim_message_text(&SimMessage::JumpCollapsed, session).as_deref(),
+        sim_message_text(&SimMessage::JumpCollapsed, session, RuleSource::Engine).as_deref(),
         Some("Ship disabled - hyperspace field collapsed.")
     );
     assert_eq!(
@@ -230,7 +230,7 @@ fn the_players_repair_droids_say_propulsion_systems_repaired() {
     let view = flight();
     let session = view.session().expect("flying");
     assert_eq!(
-        sim_message_text(&SimMessage::PropulsionRepaired, session).as_deref(),
+        sim_message_text(&SimMessage::PropulsionRepaired, session, RuleSource::Engine).as_deref(),
         Some("Propulsion systems repaired.")
     );
     assert_eq!(PROPULSION_REPAIRED, "Propulsion systems repaired.");
@@ -246,11 +246,11 @@ fn the_escape_ship_says_escaping_in_its_long_name() {
     let session = view.session().expect("flying");
     let escaping = |ship| SimMessage::EscapingIn { ship: ShipId(ship) };
     assert_eq!(
-        sim_message_text(&escaping(129), session).as_deref(),
+        sim_message_text(&escaping(129), session, RuleSource::Engine).as_deref(),
         Some("Escaping in Federation Viper.")
     );
     assert_eq!(
-        sim_message_text(&escaping(999), session).as_deref(),
+        sim_message_text(&escaping(999), session, RuleSource::Engine).as_deref(),
         Some("Escaping in ."),
         "a class with no record has no long name"
     );
@@ -293,7 +293,7 @@ fn a_mission_ship_lost_says_str_2002_284() {
     let view = flight();
     let session = view.session().expect("flying");
     assert_eq!(
-        sim_message_text(&SimMessage::MissionShipLost, session).as_deref(),
+        sim_message_text(&SimMessage::MissionShipLost, session, RuleSource::Engine).as_deref(),
         Some(MISSION_FAILED)
     );
     assert_eq!(arrival_lead(&SimMessage::MissionShipLost), None);
@@ -304,7 +304,10 @@ fn a_fleets_arrival_quote_says_its_line() {
     let view = flight();
     let session = view.session().expect("flying");
     let quote = SimMessage::FleetArrivalQuote("Hail 9".to_owned());
-    assert_eq!(sim_message_text(&quote, session).as_deref(), Some("Hail 9"));
+    assert_eq!(
+        sim_message_text(&quote, session, RuleSource::Engine).as_deref(),
+        Some("Hail 9")
+    );
     assert_eq!(arrival_lead(&quote), None);
 }
 
@@ -325,7 +328,10 @@ fn a_distress_call_a_pre_scan_hail_reinforcements_and_wait_for_me_say_their_text
             coming,
         ),
     ] {
-        assert_eq!(sim_message_text(&message, session).as_deref(), Some(text));
+        assert_eq!(
+            sim_message_text(&message, session, RuleSource::Engine).as_deref(),
+            Some(text)
+        );
         assert_eq!(arrival_lead(&message), None);
     }
 }
@@ -340,7 +346,7 @@ fn the_players_downed_lines_are_str_2002_287_288_and_284() {
         (SimMessage::DownedMissionFailed, "Mission failed."),
     ] {
         assert_eq!(
-            sim_message_text(&message, session).as_deref(),
+            sim_message_text(&message, session, RuleSource::Engine).as_deref(),
             Some(text),
             "{message:?}"
         );
@@ -353,7 +359,7 @@ fn the_no_active_missions_message_is_str_2002_354() {
     let view = flight();
     let session = view.session().expect("flying");
     assert_eq!(
-        sim_message_text(&SimMessage::NoActiveMissions, session).as_deref(),
+        sim_message_text(&SimMessage::NoActiveMissions, session, RuleSource::Engine).as_deref(),
         Some(NO_ACTIVE_MISSIONS)
     );
     assert_eq!(arrival_lead(&SimMessage::NoActiveMissions), None);
@@ -364,7 +370,7 @@ fn the_deadline_message_is_str_2002_285() {
     let view = flight();
     let session = view.session().expect("flying");
     assert_eq!(
-        sim_message_text(&SimMessage::DeadlineMissed, session).as_deref(),
+        sim_message_text(&SimMessage::DeadlineMissed, session, RuleSource::Engine).as_deref(),
         Some(TIME_LIMIT_EXCEEDED)
     );
     assert_eq!(arrival_lead(&SimMessage::DeadlineMissed), None);
@@ -559,13 +565,13 @@ fn a_contraband_notice_reads_its_names_from_the_session() {
         fine: 500,
     };
     assert_eq!(
-        sim_message_text(&outfit(Some("Ace")), session),
+        sim_message_text(&outfit(Some("Ace")), session, RuleSource::Engine),
         Some(illegal_outfit_message(
             "Ace", ship, true, "blaster", "blasters", 500
         ))
     );
     assert_eq!(
-        sim_message_text(&outfit(None), session),
+        sim_message_text(&outfit(None), session, RuleSource::Engine),
         Some(illegal_outfit_message(
             class, ship, true, "blaster", "blasters", 500
         ))
@@ -577,11 +583,11 @@ fn a_contraband_notice_reads_its_names_from_the_session() {
         fine: 0,
     };
     assert_eq!(
-        sim_message_text(&junk(150), session),
+        sim_message_text(&junk(150), session, RuleSource::Engine),
         Some(illegal_junk_message("Ace", ship, "bio-weapons", 0))
     );
     assert_eq!(
-        sim_message_text(&junk(151), session),
+        sim_message_text(&junk(151), session, RuleSource::Engine),
         Some(illegal_junk_message("Ace", ship, "", 0)),
         "no record, no name"
     );
@@ -604,6 +610,7 @@ fn the_smuggling_notice_names_the_scanner_by_the_found_missions_ship_name() {
                 fine: 500,
             },
             session,
+            RuleSource::Engine,
         )
     };
     assert_eq!(
@@ -1093,11 +1100,15 @@ fn a_plunders_lines_are_its_cargo_and_its_stolen_ship() {
         credits: 1_234_567,
     };
     assert_eq!(
-        sim_message_text(&stolen, session),
+        sim_message_text(&stolen, session, RuleSource::Engine),
         Some("2 tons of cargo and 1.23M credits stolen!".to_owned())
     );
     assert_eq!(
-        sim_message_text(&SimMessage::ShipStolen { fighter: true }, session),
+        sim_message_text(
+            &SimMessage::ShipStolen { fighter: true },
+            session,
+            RuleSource::Engine
+        ),
         Some("Fighter stolen!".to_owned())
     );
     assert_eq!(arrival_lead(&stolen), None);
@@ -1108,7 +1119,7 @@ fn the_self_destructs_lines_say_its_stock_words() {
     use nova_sim::SelfDestructLine;
     let view = flight();
     let session = view.session().expect("flying");
-    let text = |message: SimMessage| sim_message_text(&message, session);
+    let text = |message: SimMessage| sim_message_text(&message, session, RuleSource::Engine);
     assert_eq!(
         text(SimMessage::SelfDestruct(SelfDestructLine::Initiated)).as_deref(),
         Some("Self-destruct sequence initiated.")

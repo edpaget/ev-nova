@@ -195,15 +195,27 @@ fn a_dock_request_and_a_land_hint_name_an_unseen_stellar_by_its_spob_name() {
         stellar: StellarId(150),
         kind: DockKind::Planet,
     };
-    let text = message_text(&request, session, view.scene.as_ref(), &mut chance)
-        .expect("a dock request is worded");
+    let text = message_text(
+        &request,
+        session,
+        view.scene.as_ref(),
+        &mut chance,
+        RuleSource::Engine,
+    )
+    .expect("a dock request is worded");
     assert!(text.contains("Hole"), "{text}");
     let hint = SimMessage::Tutorial(nova_sim::TutorialHint::Land {
         stellar: StellarId(150),
         station: false,
     });
     assert_eq!(
-        message_text(&hint, session, view.scene.as_ref(), &mut chance),
+        message_text(
+            &hint,
+            session,
+            view.scene.as_ref(),
+            &mut chance,
+            RuleSource::Engine
+        ),
         Some(land_hint(false, "Hole", "L"))
     );
 }

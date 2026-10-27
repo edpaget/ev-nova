@@ -22,9 +22,9 @@
 //! then relayed together after the steps
 //! ([`FlightView::relay_comm_and_quotes`]).
 //!
-//! **The presentation rules** the effects, stars and world read
-//! ([`Presentation`]) are the view's own, held from the flight's rulebook
-//! as the view is read and as its rules change.
+//! **The presentation rules** the effects, stars, world, HUD and wording
+//! read ([`Presentation`]) are the view's own, held from the rulebook the
+//! view is built with and as its rules change.
 //!
 //! **The frame after the steps.** Once the report is replayed the kept
 //! frame is filled afresh ([`FlightView::refresh_frame`]), so the frame's
@@ -48,8 +48,10 @@ use super::{
     show_frozen_frames, show_gate_frames, stars, window_width,
 };
 
-/// The rules the view shows the steps' effects, the stars and the world
-/// by, held from the flight's rulebook: [`RuleKey::ShipDebris`],
+/// The rules the view shows the steps' effects, the stars, the world, the
+/// HUD and its messages' numbers by, held from the rulebook the view is
+/// built with (`FlightView::scripted`, `FlightView::with_rules` and the
+/// concrete constructors): [`RuleKey::ShipDebris`],
 /// [`RuleKey::CombatCaps`], [`RuleKey::LoopedSoundWait`],
 /// [`RuleKey::FlightStarfield`], and the world's
 /// [`RuleKey::TranslucentShotFade`], [`RuleKey::FlightAnchor`],
@@ -58,7 +60,8 @@ use super::{
 /// forward from rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks),
 /// and the HUD's [`RuleKey::HudCadence`]
 /// (rdm:phase/view-sim-seam/phase-8-hud-and-target-frame, which pulled it
-/// forward from phase 12 too).
+/// forward from phase 12 too), and the wording's [`RuleKey::PayMillions`]
+/// (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Presentation {
     /// [`RuleKey::ShipDebris`]'s reading.
@@ -79,10 +82,13 @@ pub(super) struct Presentation {
     pub(super) ion_tint_murk: RuleSource,
     /// [`RuleKey::HudCadence`]'s reading.
     pub(super) hud_cadence: RuleSource,
+    /// [`RuleKey::PayMillions`]'s reading: how the messages write a
+    /// number from a million.
+    pub(super) millions: RuleSource,
 }
 
 impl Presentation {
-    /// The nine as `rules` read them.
+    /// The ten as `rules` read them.
     pub(super) fn of(rules: &Rulebook) -> Self {
         Self {
             debris: rules.source_for(RuleKey::ShipDebris),
@@ -94,6 +100,7 @@ impl Presentation {
             zig_zag: rules.source_for(RuleKey::LightningZigZag),
             ion_tint_murk: rules.source_for(RuleKey::IonTintMurkColour),
             hud_cadence: rules.source_for(RuleKey::HudCadence),
+            millions: rules.source_for(RuleKey::PayMillions),
         }
     }
 

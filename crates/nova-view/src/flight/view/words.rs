@@ -74,7 +74,13 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         let Ok(session) = &self.sim.session else {
             return None;
         };
-        message_text(message, session, self.scene.as_ref(), &mut self.sim.chance)
+        message_text(
+            message,
+            session,
+            self.scene.as_ref(),
+            &mut self.sim.chance,
+            self.presentation.millions,
+        )
     }
 
     /// The session's long date ([`Session::long_date_text`]); none with
