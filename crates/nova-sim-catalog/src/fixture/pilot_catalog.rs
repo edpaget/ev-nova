@@ -14,7 +14,7 @@ use crate::catalog::{
     ListedStellar, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonRecord,
     PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
     StartError, StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemReinforcements,
-    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponRecord,
+    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::handling::ShipFields;
 use crate::voice::Voices;
@@ -48,6 +48,8 @@ pub struct FakePilotCatalog {
     pub disasters: Vec<DisasterRecord>,
     /// Every `spöb`'s `Flags`, read with the goods.
     pub stellars: Vec<(StellarId, u32)>,
+    /// Every `spöb`'s gun: none, by default.
+    pub stellar_weapons: Vec<(StellarId, WeaponId)>,
     /// How many times the goods (commodities, `jünk`, `öops` and the
     /// stellars' flags) were read.
     pub goods_reads: RefCell<usize>,
@@ -90,6 +92,8 @@ pub struct FakePilotCatalog {
     /// Graphic type 0's sheet's frame size, or `None` when it does not
     /// read: 100 square, by default.
     pub fallback_frame: Option<(u32, u32)>,
+    /// Whether graphic type 0's `spïn` counts frames: true, by default.
+    pub fallback_counts: bool,
     /// Every `mïsn`: none, by default.
     pub missions: Vec<MissionRecord>,
     /// What the screens show of each `mïsn`: none, by default.
@@ -188,6 +192,7 @@ pub fn catalog() -> FakePilotCatalog {
         junk: Vec::new(),
         disasters: Vec::new(),
         stellars: Vec::new(),
+        stellar_weapons: Vec::new(),
         goods_reads: RefCell::default(),
         traffic: Vec::new(),
         reinforcements: Vec::new(),
@@ -210,6 +215,7 @@ pub fn catalog() -> FakePilotCatalog {
         lives: Vec::new(),
         life_reads: RefCell::default(),
         fallback_frame: Some((100, 100)),
+        fallback_counts: true,
         missions: Vec::new(),
         mission_texts: Vec::new(),
         place_names: PlaceNames::default(),
@@ -333,6 +339,10 @@ impl PilotCatalog for FakePilotCatalog {
         self.stellars.clone()
     }
 
+    fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
+        self.stellar_weapons.clone()
+    }
+
     fn date_affixes(&self) -> DateAffixes {
         *self.date_affix_reads.borrow_mut() += 1;
         self.date_affixes.clone()
@@ -350,6 +360,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         self.fallback_frame
+    }
+
+    fn fallback_counts_frames(&self) -> bool {
+        self.fallback_counts
     }
 
     fn missions(&self) -> Vec<MissionRecord> {
@@ -560,6 +574,16 @@ mod tests {
     }
 
     #[test]
+    fn the_fake_arms_the_stellars_it_is_given() {
+        let fake = FakePilotCatalog {
+            stellar_weapons: vec![(StellarId(128), WeaponId(196))],
+            ..catalog()
+        };
+        assert_eq!(fake.stellar_weapons(), [(StellarId(128), WeaponId(196))]);
+        assert_eq!(catalog().stellar_weapons(), [], "none by default");
+    }
+
+    #[test]
     fn the_fake_lists_no_stellar_whose_every_lister_is_gone() {
         let fake = FakePilotCatalog {
             systems: vec![SystemId(131)],
@@ -761,6 +785,12 @@ mod tests {
             ..catalog()
         };
         assert_eq!(unread.fallback_frame_size(), None);
+        assert!(fake.fallback_counts_frames());
+        let uncounted = FakePilotCatalog {
+            fallback_counts: false,
+            ..catalog()
+        };
+        assert!(!uncounted.fallback_counts_frames());
     }
 
     #[test]

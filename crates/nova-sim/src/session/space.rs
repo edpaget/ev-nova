@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{GovtId, StellarId};
+use crate::combat::stellar_guns::GunTimer;
 use crate::combat::{Combat, ShipRef, Strike};
 use crate::comm_line::CommLine;
 use crate::gate_sprite::GateSprite;
@@ -24,8 +25,9 @@ use super::{Aboard, hail, persons, reinforcements};
 /// order, then its part.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Space {
-    /// The sprite of each hypergate shown, as it opens and closes (see
-    /// the `gate_sprites` module).
+    /// The sprite of each hypergate the flight has shown, as it opens and
+    /// closes, kept while it is not shown (see the `gate_sprites`
+    /// module).
     pub(super) gate_sprites: BTreeMap<StellarId, GateSprite>,
     /// The message line's countdown, `_commCount`: set by every line
     /// shown, counted down each frame (see the `comm_calls` module).
@@ -115,6 +117,11 @@ pub(super) struct Space {
     /// ID; one not here has its full `Strength` (see the `stellars`
     /// module). Never saved, as the original saves none.
     pub(super) strength: BTreeMap<StellarId, i64>,
+    /// Each stellar gun's reload and burst count, by ID, where it is not
+    /// ready with no burst under way (the original's spöb +0x494 and
+    /// +0x2e): kept across systems, zeroed for every active stellar by the
+    /// daily step, never saved (see the `stellar_guns` module).
+    pub(super) gun_timers: BTreeMap<StellarId, GunTimer>,
     /// The stellars whose `OnDestroy` is running, so that none runs again
     /// inside itself (see the `stellars` module); never saved.
     pub(super) destroying: BTreeSet<StellarId>,
@@ -196,6 +203,7 @@ impl Space {
             slot_shown: BTreeMap::new(),
             slot_placed: BTreeMap::new(),
             strength: BTreeMap::new(),
+            gun_timers: BTreeMap::new(),
             destroying: BTreeSet::new(),
             rebuilt: Rebuilt::default(),
             stellar_sprites: StellarSpritePool::default(),

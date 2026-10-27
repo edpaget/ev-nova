@@ -1435,6 +1435,7 @@ impl Combatant {
             plundering: false,
             mining: false,
             emerging: false,
+            jumping_in: false,
             cloak_scanner: false,
             has_cloak: false,
             jamming: nova_sim::combat::jamming::Jamming::NONE,
@@ -4072,6 +4073,11 @@ fn attacking_a_stock_trader_then_boarding_and_capturing_it() {
     );
     assert!(fight.disabled, "the trader was disabled");
     let session = &mut fight.session;
+    // The Federation's answer is the scenario's, asserted above. The
+    // passes flying in run the fight, so its shots at the player may
+    // strike the trader alongside and destroy it, as the run's draws fall:
+    // held disabled from here, it fires no more.
+    nova_sim::fixture::disable(session, fight.police);
     session.select_target(nova_sim::TargetPick::Nearest);
     while session.target().is_some_and(|npc| npc.id != fight.trader) {
         session.select_target(nova_sim::TargetPick::Next);

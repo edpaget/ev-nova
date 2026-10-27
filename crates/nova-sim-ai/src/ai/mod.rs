@@ -44,6 +44,7 @@ pub mod brave;
 pub mod call_for_help;
 pub mod candidates;
 pub mod carried;
+pub mod death_star;
 pub mod dispatch_gate;
 pub mod escort;
 pub mod escort_orders;
@@ -396,6 +397,18 @@ pub enum Goal {
         /// The substate it keeps flying.
         kept: regroup::Kept,
     },
+    /// Shoot this stellar down: the original's goal 0x12, which only
+    /// `_DeathStarAI` sets (@0x8c25a-0x8c280, see [`death_star`]), with
+    /// +0x6c and +0x70 both the stellar. The high level flies it by its
+    /// distance from the stellar (@0x8f906-0x8faeb, see
+    /// [`stellar_attack`](crate::traffic::stellar_attack)), and it fires
+    /// its planet gun while it faces the stellar
+    /// ([`death_star::trigger`]). Its quarry is none, so it fights
+    /// nothing; it is spared as a threat to the player, as goal 0x12 is in
+    /// the threat tests' list (@0x7f567, @0x81c24), a hail finds it busy
+    /// (`_AIIsShipBusy` @0x82fac-0x82fe4), it is not in form and it
+    /// scoops nothing.
+    AttackStellar(StellarId),
 }
 
 impl Goal {
@@ -475,7 +488,8 @@ impl Goal {
             | Self::Plunder { .. }
             | Self::CountWait
             | Self::Drift
-            | Self::Regroup { .. } => false,
+            | Self::Regroup { .. }
+            | Self::AttackStellar(_) => false,
         }
     }
 
@@ -505,7 +519,7 @@ impl Goal {
     /// | 0xa (escort fly in form) | `_AIMakeEscortFlyInForm` @0x89bb2, `_EscortAI` @0x83da3, @0x83e40, @0x83f00 | [`Goal::Follow`], [`Goal::Formation`], [`Goal::Hold`] |
     /// | 0xb (jump with parent) | `_AIMakeShipJumpWithParent` @0x82bc7 | none: an escort follows its lead out |
     /// | 0xc (a `ShipBehav` 1 mission ship with no target) | @0x89fe0, `_LowLevelAIHandler` @0x886f9 | none |
-    /// | 0x12 | `_DeathStarAI` @0x8c26f | none |
+    /// | 0x12 | `_DeathStarAI` @0x8c26f | [`Goal::AttackStellar`] |
     ///
     /// A plunder (goal 0xd), a drift (0xe), a count wait (0x16), a mine
     /// (0x10) and a scoop (0x11) are none of them.
@@ -517,7 +531,8 @@ impl Goal {
             | Self::Dock(_)
             | Self::Follow { .. }
             | Self::Formation { .. }
-            | Self::Hold => true,
+            | Self::Hold
+            | Self::AttackStellar(_) => true,
             Self::Idle
             | Self::Wait
             | Self::Land(_)
@@ -713,10 +728,17 @@ pub struct Surroundings<'a> {
     /// on, when every ship it leads takes its jump (`_EscortAI`
     /// @0x83a41-0x83a5f, [`EscortAi`]).
     pub player_warp_stage: f32,
+    /// The stellars shots can shoot down, those of `Strength` above 0
+    /// (`nova_sim::story::wreck::destroyable`), among which a stellar
+    /// attacker picks its quarry ([`death_star`]).
+    pub destroyable: &'a BTreeSet<StellarId>,
 }
 
 /// No government marked by an IFF scrambler.
 pub static NO_IFF_MARKS: BTreeSet<GovtId> = BTreeSet::new();
+
+/// No stellar that shots can shoot down.
+pub static NO_DESTROYABLE: BTreeSet<StellarId> = BTreeSet::new();
 
 /// No weapon records: a placeholder for surroundings in which nothing
 /// pursues, as every lead then takes the table bearing.
@@ -729,8 +751,9 @@ impl<'a> Surroundings<'a> {
     /// cloak scanner, no government marked by an IFF scrambler, room for
     /// a fighter, the engine's [`hit_focus`](Surroundings::hit_focus), no
     /// pass's [`wanted`](Surroundings::wanted) headings, the engine's jump
-    /// fuel and cached odds, a led speed of 1 and no weapon records
-    /// ([`NO_WEAPONS`]).
+    /// fuel and cached odds, a led speed of 1, no weapon records
+    /// ([`NO_WEAPONS`]) and no stellar shots can shoot down
+    /// ([`NO_DESTROYABLE`]).
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -756,6 +779,7 @@ impl<'a> Surroundings<'a> {
             weapons: &NO_WEAPONS,
             gone: &[],
             player_warp_stage: 0.0,
+            destroyable: &NO_DESTROYABLE,
         }
     }
 
@@ -1353,6 +1377,29 @@ mod tests {
         assert_eq!(Goal::Mine.quarry(), None);
         assert!(!Goal::Mine.fights());
         assert!(!Goal::Mine.spares_player_threat(), "16 isn't in the list");
+    }
+
+    #[test]
+    fn a_stellar_attacker_fights_nothing_and_is_spared_as_a_threat() {
+        let goal = Goal::AttackStellar(StellarId(131));
+        assert_eq!(goal.quarry(), None);
+        assert_eq!(goal.attacking(), None);
+        assert!(!goal.fights());
+        assert!(!goal.flies_in_form());
+        assert!(!goal.scooping());
+        assert!(goal.spares_player_threat(), "0x12, @0x7f567, @0x81c24");
+        let mut attacker = npc(1, AiType::Warship);
+        attacker.goal = goal;
+        attacker.target = Some(ShipRef::Player);
+        assert!(!attacker.threatens_player());
+        let ships = [attacker.clone()];
+        assert!(!attacker.threatens_player_extended(&ships, true));
+        let mut fighting = attacker.clone();
+        fighting.goal = Goal::Attack(ShipRef::Player);
+        assert!(
+            fighting.threatens_player_extended(&[fighting.clone()], true),
+            "the same ship attacking"
+        );
     }
 
     #[test]

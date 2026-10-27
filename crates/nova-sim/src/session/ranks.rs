@@ -1400,6 +1400,7 @@ pub(super) mod tests {
                         .contains(&crate::message::SimMessage::DockCleared {
                             stellar: crate::catalog::StellarId(128),
                             kind: crate::clearance::DockKind::Planet,
+                            fee: None,
                         }),
                     greets,
                     "{source:?} {ranks:?}"
@@ -1420,6 +1421,7 @@ pub(super) mod tests {
             [crate::message::SimMessage::DockCleared {
                 stellar: crate::catalog::StellarId(128),
                 kind: crate::clearance::DockKind::Planet,
+                fee: None,
             }]
         );
         assert_eq!(engine.land(), LANDED);

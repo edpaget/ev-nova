@@ -12,7 +12,7 @@ use nova_sim::{
     OutfitRun, PilotCatalog, Session, Settled, ShipId, ShipPurchase, ShipRefusal, SimMessage,
     StellarId, SystemId, TrafficCatalog,
 };
-use nova_sim::{PlayerCommand, PlayerFate};
+use nova_sim::{PlayerCommand, PlayerFate, TagNames};
 
 use nova_sim::flight_frame::{Answer, FlightCommand, MapClick};
 
@@ -33,8 +33,9 @@ use super::{
     BOARD_KEY, FAR_ENOUGH, FlightView, GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, MAP_KEY,
     NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, Said, TOO_CLOSE, TRACTORED, Then,
     arrival_lead, arrival_message_with, assigned_message, assigned_ticks, gate_refusal_message,
-    jump_refusal_message, jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter,
-    refusal_message, show_destroyed, show_gate_frames, shown_scene, stellar_name,
+    jump_refusal_message, jump_refusal_ticks, landing_refusal_ticks, look, message_text,
+    no_outfitter, refusal_message, show_destroyed, show_frozen_frames, show_gate_frames,
+    shown_scene, stellar_name,
 };
 
 impl<
@@ -248,6 +249,7 @@ impl<
     pub(super) fn run_steps(&mut self, steps: u32) {
         let rescued = self.step_frame(steps, self.anchor());
         if let (Ok(session), Some(scene)) = (&self.sim.session, &mut self.scene) {
+            show_frozen_frames(scene, session);
             show_gate_frames(scene, session);
         }
         if rescued {
@@ -504,10 +506,12 @@ impl<
         } else if redrawn.stellar {
             self.place_ship();
         }
-        if reshown && let Ok(session) = &self.sim.session {
-            self.scene = Some(shown_scene(&*self.catalog, session));
+        if reshown {
+            self.show_scene();
         }
-        if redrawn.galaxy || redrawn.system || redrawn.rebuilt {
+        if redrawn.rebuilt {
+            self.rebuild_stellars();
+        } else if redrawn.galaxy || redrawn.system {
             self.show_destroyed();
         }
         if redrawn.system {
@@ -515,6 +519,33 @@ impl<
         }
         if std::mem::take(&mut self.stars_due) || redrawn.stars {
             self.reset_stars();
+        }
+    }
+
+    /// Draws each stellar of the scene shown as the session holds it after
+    /// a rebuild point
+    /// ([`SystemScene::rebuild`](crate::system::scene::SystemScene::rebuild)):
+    /// one whose look changed
+    /// shows its current frame. The scene is not laid out again.
+    fn rebuild_stellars(&mut self) {
+        if let (Ok(session), Some(scene)) = (&self.sim.session, &mut self.scene) {
+            scene.rebuild(|id| look(session, id));
+        }
+    }
+
+    /// Moves the clock on by `dt` and steps the stellars' animations by
+    /// the whole ticks of 1/30 s it crossed, as the original's sprite tick
+    /// runs every play frame, the jump's included. A random next frame
+    /// (`Flags2` 0x0002) is drawn on the effects' chance, never the
+    /// session's: the frame a stellar shows is drawn state only.
+    pub(super) fn step_stellars(&mut self, dt: Duration) {
+        let before = crate::time::ticks(self.elapsed);
+        self.elapsed += dt;
+        if let Some(scene) = &mut self.scene {
+            scene.step(
+                crate::time::ticks(self.elapsed) - before,
+                &mut self.effects_chance,
+            );
         }
     }
 
@@ -544,19 +575,40 @@ impl<
         }
     }
 
-    /// Lays out `system`, the session's: its scene, read from the catalog
-    /// with the stellars the session shows ([`shown_scene`]), the course
-    /// map's course, and the ship drawn
-    /// from where it is, the last system's NPCs and effects let go.
-    fn lay_out(&mut self, system: SystemId) {
+    /// Lets go of the scene shown, keeping each of its stellars'
+    /// animation state
+    /// ([`KeptFrames::keep`](crate::system::kept_frames::KeptFrames::keep)),
+    /// and shows the session's in its place, read from the catalog with the stellars the session
+    /// shows ([`shown_scene`]): each stellar looking as the session holds
+    /// it ([`show_destroyed`]), then each the flight has shown before
+    /// resumed where it was left, on the sheet it now draws
+    /// ([`SystemScene::resume`](crate::system::scene::SystemScene::resume)),
+    /// and each hypergate on its session's frame. The look is set before
+    /// the frames resume, so the rebuild or redraw that follows finds it
+    /// unchanged and leaves them alone.
+    fn show_scene(&mut self) {
         let Ok(session) = &self.sim.session else {
             return;
         };
-        self.scene = Some({
-            let mut scene = shown_scene(&*self.catalog, session);
-            show_gate_frames(&mut scene, session);
-            scene
-        });
+        if let Some(left) = &self.scene {
+            self.kept_frames.keep(left);
+        }
+        let mut scene = shown_scene(&*self.catalog, session);
+        show_destroyed(&mut scene, session);
+        scene.resume(&self.kept_frames);
+        show_gate_frames(&mut scene, session);
+        self.scene = Some(scene);
+    }
+
+    /// Lays out `system`, the session's: its scene ([`FlightView::show_scene`]),
+    /// each stellar shown before resuming its animation where it was left,
+    /// the course map's course, and the ship drawn from where it is, the
+    /// last system's NPCs and effects let go.
+    fn lay_out(&mut self, system: SystemId) {
+        self.show_scene();
+        let Ok(session) = &self.sim.session else {
+            return;
+        };
         let course = self.frame_now().course_shown;
         self.map.show_course(system, &course);
         self.previous = *session.player();
@@ -925,7 +977,8 @@ impl<
                     LandingRefusal::TooFar { stellar, .. }
                     | LandingRefusal::TooFast { stellar, .. }
                     | LandingRefusal::NotLandable { stellar, .. }
-                    | LandingRefusal::Denied { stellar, .. } => Some(stellar),
+                    | LandingRefusal::Denied { stellar, .. }
+                    | LandingRefusal::CannotPayFee { stellar, .. } => Some(stellar),
                     LandingRefusal::Jumping
                     | LandingRefusal::NoStellars
                     | LandingRefusal::NothingLandable
@@ -933,8 +986,18 @@ impl<
                     | LandingRefusal::Cloaked => None,
                 };
                 let gate = stellar.and_then(|stellar| session.gate_kind(stellar));
-                let name = stellar.map_or("", |stellar| stellar_name(self.scene.as_ref(), stellar));
-                let text = refusal_message(&refusal, gate, name);
+                // A stellar the scene doesn't hold, such as one another
+                // system owns, by its spöb name (`stellar_name`).
+                let name = stellar
+                    .and_then(|stellar| {
+                        stellar_name(
+                            self.scene.as_ref(),
+                            |id| TagNames::stellar_name(session, id),
+                            stellar,
+                        )
+                    })
+                    .unwrap_or_default();
+                let text = refusal_message(&refusal, gate, &name);
                 if let Some(text) = text {
                     self.say_for(text, landing_refusal_ticks(&refusal));
                 }

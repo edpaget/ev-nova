@@ -14,7 +14,7 @@ use crate::flight::target::{Tag, TargetPanel};
 use crate::spaceport::PortDialog;
 use crate::time::ticks;
 
-use super::{FlightView, radar_ships};
+use super::{FlightView, radar_ships, stellar_name};
 use crate::flight::sim_port::FlightSim;
 
 impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
@@ -37,7 +37,10 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
                 .map(|stellar| RadarStellar {
                     position: stellar.position,
                     square: stellar.radar_square,
-                    sprite_width: stellar.drawn().as_ref().ok().map(|sheet| sheet.frame_width),
+                    sprite_width: stellar
+                        .drawn()
+                        .and_then(|sheet| sheet.as_ref().ok())
+                        .map(|sheet| sheet.frame_width),
                     iff: session
                         .stellar_iff(stellar.id)
                         .unwrap_or(StellarIff::Unlandable),
@@ -460,11 +463,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         match mode {
             NavMode::Off => NavDisplay::Off,
             NavMode::Stellar(target) => NavDisplay::Stellar(target.and_then(|target| {
-                self.scene
-                    .as_ref()
-                    .and_then(|scene| scene.stellars().iter().find(|s| s.id == target))
-                    .map(|stellar| stellar.name.clone())
-                    .or_else(|| self.sim.stellar_name(target))
+                stellar_name(self.scene.as_ref(), |id| self.sim.stellar_name(id), target)
             })),
             NavMode::Hyperspace(next) => NavDisplay::Hyperspace {
                 destination: next.map_or(NavDestination::None, |next| {

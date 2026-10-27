@@ -1,6 +1,6 @@
 //! Resolving a stellar object to its sprite sheet.
 
-use super::spin_sprite::SpinSpriteError;
+use super::spin_sprite::{SheetKind, SpinSpriteError, mask_label};
 use super::{GameData, SourceFile, StoreEntry};
 use crate::error::DecodeError;
 use crate::graphics::{GraphicsError, SpriteSheet};
@@ -28,8 +28,11 @@ pub const fn stellar_spin_id(graphic_type: i16) -> Option<i16> {
 pub struct StellarSprite<'a> {
     /// The `spïn`'s ID (1000 + the `spöb`'s graphic type).
     pub spin_id: i16,
-    /// The sheet's `rlëD` ID (the `spïn`'s `SpritesID`).
+    /// The `spïn`'s `SpritesID`: the sheet's `rlëD`, or its sprites `PICT`
+    /// ([`SheetKind`] says which).
     pub image_id: i16,
+    /// What the sheet was read from.
+    pub kind: SheetKind,
     /// The decoded sheet, laid out with the `spïn`'s `xTiles` as its
     /// columns.
     pub sheet: SpriteSheet,
@@ -37,7 +40,7 @@ pub struct StellarSprite<'a> {
     pub stellar: &'a SourceFile,
     /// The file the `spïn` came from.
     pub spin: &'a SourceFile,
-    /// The file the `rlëD` came from.
+    /// The file the `rlëD`, or the sprites `PICT`, came from.
     pub sheet_source: &'a SourceFile,
 }
 
@@ -69,20 +72,37 @@ pub enum StellarSpriteError {
         /// The `spïn` ID that type names.
         spin: i16,
     },
-    /// The `spïn`'s sprites have no `rlëD` (a `PICT` sprite grid is not
-    /// supported by this lookup).
-    #[error("spïn {spin}: no rlëD {image_id} for its sprites")]
+    /// The `spïn`'s sprites have neither an `rlëD` nor a `PICT`.
+    #[error("spïn {spin}: no rlëD or PICT {image_id} for its sprites")]
     NoSheet {
         /// The `spïn`'s ID.
         spin: i16,
         /// Its `SpritesID`.
         image_id: i16,
     },
+    /// The `spïn`'s sprites are a `PICT` with no mask `PICT`: its
+    /// `MasksID` is -1 or names no `PICT`.
+    #[error("spïn {spin}: no mask PICT {} for its sprites", mask_label(*mask_id))]
+    NoMask {
+        /// The `spïn`'s ID.
+        spin: i16,
+        /// Its `MasksID`, `None` for -1.
+        mask_id: Option<i16>,
+    },
     /// The `rlëD` failed to decode.
     #[error("rlëD {image_id}: {source}")]
     Graphics {
         /// The `rlëD`'s ID.
         image_id: i16,
+        /// What went wrong.
+        source: GraphicsError,
+    },
+    /// The sprites or mask `PICT` failed to decode, or the pair could not
+    /// be cut into frames.
+    #[error("PICT {pict_id}: {source}")]
+    Picture {
+        /// The `PICT`'s ID.
+        pict_id: i16,
         /// What went wrong.
         source: GraphicsError,
     },
@@ -160,13 +180,20 @@ impl GameData {
             SpinSpriteError::NoSheet { spin, image_id } => {
                 StellarSpriteError::NoSheet { spin, image_id }
             }
+            SpinSpriteError::NoMask { spin, mask_id } => {
+                StellarSpriteError::NoMask { spin, mask_id }
+            }
             SpinSpriteError::Graphics { image_id, source } => {
                 StellarSpriteError::Graphics { image_id, source }
+            }
+            SpinSpriteError::Picture { pict_id, source } => {
+                StellarSpriteError::Picture { pict_id, source }
             }
         })?;
         Ok(StellarSprite {
             spin_id,
             image_id: spin.image_id,
+            kind: spin.kind,
             sheet: spin.sheet,
             stellar: source,
             spin: spin.spin,
@@ -184,7 +211,7 @@ mod tests {
 
     use super::*;
     use crate::decode::Record;
-    use crate::graphics::fixture::RledBuilder;
+    use crate::graphics::fixture::{RledBuilder, rgb888_pict};
     use crate::graphics::{PICT, RLED};
     use crate::records::spin::Spin;
     use crate::store::fake::{FakeForks, FakeTree};
@@ -393,14 +420,10 @@ mod tests {
 
     #[test]
     fn sprites_with_no_sheet_are_no_sheet() {
-        // The spïn names a PICT grid, which this lookup does not support.
-        let pict_grid = fork(&[
-            (Spin::TYPE, 1003, spin(2001, 2, 1, 4, 2)),
-            (PICT, 2001, vec![0; 16]),
-        ]);
-        let err = store(&[("Grid", pict_grid)])
+        let nothing = fork(&[(Spin::TYPE, 1003, spin(2001, 2, 1, 4, 2))]);
+        let err = store(&[("Grid", nothing)])
             .stellar_sprite(StellarId(128))
-            .expect_err("no rlëD 2001");
+            .expect_err("no rlëD or PICT 2001");
         assert_eq!(
             err,
             StellarSpriteError::NoSheet {
@@ -408,7 +431,102 @@ mod tests {
                 image_id: 2001
             }
         );
-        assert_eq!(err.to_string(), "spïn 1003: no rlëD 2001 for its sprites");
+        assert_eq!(
+            err.to_string(),
+            "spïn 1003: no rlëD or PICT 2001 for its sprites"
+        );
+    }
+
+    /// A `spïn` naming sprites `image` and masks `mask`, `width` x
+    /// `height` each, in a 1 x 1 grid.
+    fn masked_spin(image: i16, mask: i16, width: i16, height: i16) -> Vec<u8> {
+        buf::<Spin>()
+            .i16(0x00, image)
+            .i16(0x02, mask)
+            .i16(0x04, width)
+            .i16(0x06, height)
+            .i16(0x08, 1)
+            .i16(0x0A, 1)
+            .0
+    }
+
+    #[test]
+    fn a_dead_type_pict_pair_resolves_to_its_sheet() {
+        let red = [0xFF, 0, 0];
+        let data = store(&[(
+            "Dead",
+            fork(&[
+                (Stellar::TYPE, 128, dead(5)),
+                (Spin::TYPE, 1005, masked_spin(2005, 2105, 2, 1)),
+                (PICT, 2005, rgb888_pict(4, 1, &[red; 4])),
+                (PICT, 2105, rgb888_pict(4, 1, &[[0xFF; 3]; 4])),
+            ]),
+        )]);
+        let sprite = data
+            .stellar_dead_sprite(StellarId(128))
+            .expect("resolves")
+            .expect("a dead type");
+        assert_eq!((sprite.spin_id, sprite.image_id), (1005, 2005));
+        assert_eq!(sprite.kind, SheetKind::PictPair { mask_id: 2105 });
+        assert_eq!(sprite.sheet.frames().len(), 2);
+        assert_eq!(sprite.sheet.frames()[1].pixel(1, 0), Some([255, 0, 0, 255]));
+        assert_eq!(sprite.sheet_source.path, Path::new("/p/Dead"));
+        let alive = data.stellar_sprite(StellarId(128)).expect("type 3");
+        assert_eq!(alive.kind, SheetKind::Rled);
+    }
+
+    #[test]
+    fn a_pict_pairs_mask_and_picture_errors_are_kept() {
+        let no_mask = fork(&[
+            (Spin::TYPE, 1003, masked_spin(2001, 2101, 2, 1)),
+            (PICT, 2001, rgb888_pict(2, 1, &[[0; 3]; 2])),
+        ]);
+        let err = store(&[("Grid", no_mask)])
+            .stellar_sprite(StellarId(128))
+            .expect_err("no mask");
+        assert_eq!(
+            err,
+            StellarSpriteError::NoMask {
+                spin: 1003,
+                mask_id: Some(2101)
+            }
+        );
+        assert_eq!(
+            err.to_string(),
+            "spïn 1003: no mask PICT 2101 for its sprites"
+        );
+        let none = fork(&[
+            (Spin::TYPE, 1003, masked_spin(2001, -1, 2, 1)),
+            (PICT, 2001, rgb888_pict(2, 1, &[[0; 3]; 2])),
+        ]);
+        let err = store(&[("Grid", none)])
+            .stellar_sprite(StellarId(128))
+            .expect_err("no mask");
+        assert_eq!(
+            err.to_string(),
+            "spïn 1003: no mask PICT none for its sprites"
+        );
+        let partial = fork(&[
+            (Spin::TYPE, 1003, masked_spin(2001, 2001, 2, 1)),
+            (PICT, 2001, rgb888_pict(3, 1, &[[0; 3]; 3])),
+        ]);
+        let err = store(&[("Grid", partial)])
+            .stellar_sprite(StellarId(128))
+            .expect_err("a partial grid");
+        let source = GraphicsError::PartialGrid {
+            width: 3,
+            height: 1,
+            frame_width: 2,
+            frame_height: 1,
+        };
+        assert_eq!(err.to_string(), format!("PICT 2001: {source}"));
+        assert_eq!(
+            err,
+            StellarSpriteError::Picture {
+                pict_id: 2001,
+                source
+            }
+        );
     }
 
     /// A `spöb` of graphic type 3 whose `DeadType` is `dead_type`.
@@ -488,16 +606,16 @@ mod tests {
 
     #[test]
     fn a_corrupt_sheet_is_a_graphics_error() {
-        let eight_bit = RledBuilder::new(2, 1).depth(8).build();
-        let data = store(&[("Bad Paint", fork(&[(RLED, 2000, eight_bit)]))]);
-        let err = data.stellar_sprite(StellarId(128)).expect_err("8-bit");
+        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let data = store(&[("Bad Paint", fork(&[(RLED, 2000, deep)]))]);
+        let err = data.stellar_sprite(StellarId(128)).expect_err("32-bit");
         assert_eq!(
             err,
             StellarSpriteError::Graphics {
                 image_id: 2000,
-                source: GraphicsError::UnsupportedDepth { depth: 8 },
+                source: GraphicsError::UnsupportedDepth { depth: 32 },
             }
         );
-        assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 8");
+        assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 32");
     }
 }

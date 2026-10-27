@@ -242,9 +242,11 @@
 //!   brought in again; a ship of any other goal that leaves counts
 //!   nothing and comes back at the next setup
 //!   ([`left_respawn`](crate::RuleKey::LeftRespawn) has the other
-//!   reading). An AI ship that lands stays in the system, waiting at the
-//!   stellar, so a landing counts nothing
-//!   ([`landed_leaves`](crate::RuleKey::LandedLeaves)). One that leaves
+//!   reading). An AI ship that lands stays in the system, stopped at the
+//!   stellar for its wait (`_HighLevelAIHandler` @0x8dadc-0x8db5a), then
+//!   takes a new goal, so a landing counts nothing and only its later jump
+//!   out may count ([`landed_leaves`](crate::RuleKey::LandedLeaves) has
+//!   the other reading, which takes it out as it lands). One that leaves
 //!   through a hypergate or wormhole is gone, but counts nothing either
 //!   ([`gate_exit_counts`](crate::RuleKey::GateExitCounts)). Here the
 //!   traffic's tick raises [`Fate::Departed`] for such a ship and counts
@@ -1176,11 +1178,12 @@
 //! type when destroyed" and the original's reading between rebuilds
 //! (after one it draws graphic type 0; see "Built by phase 9"). Its
 //! animation follows the live state: one whose `Flags2` has 0x0080
-//! animates only while destroyed, any other only while not. Every
-//! stellar's frame comes from the view's one clock, so a swapped sheet
-//! shows the frame that clock gives it, over its own frame count; the
-//! original keeps the slot's frame index while it is in range, over the
-//! frame count from the last rebuild (story-runtime phase 12).
+//! animates only while destroyed, any other only while not. Since
+//! stellar-fidelity phase 1 each stellar steps its own frame tick by
+//! tick, keeps the frame it shows across a swap while it is in range, and
+//! animates over the frame count of the sheet its slot held at the last
+//! rebuild point (see "Built by stellar-fidelity phase 1"); before, every
+//! stellar's frame came from the view's one clock.
 //!
 //! No Rulebook key is added. The original's other readings are filed as
 //! their own phases, each to add a key with the original's reading as
@@ -1188,8 +1191,9 @@
 //! `spïn` 1000 after a rebuild; built, see "Built by phase 9"), phase 10
 //! (the original's landing distance and its 150 fallback; built, see
 //! "Built by phase 10"), phase 11 (clicking a destroyed
-//! stellar by its `DeadType` sheet) and phase 12 (the frame count kept
-//! from the last rebuild).
+//! stellar by its `DeadType` sheet) and stellar-fidelity phase 1 (the
+//! frame count kept from the last rebuild; built, see "Built by
+//! stellar-fidelity phase 1").
 //!
 //! ## Checked for phase 7
 //!
@@ -1214,7 +1218,9 @@
 //!   stellar animates only when `Flags2` (+0x34) has 0x0080, one not
 //!   destroyed only when it lacks it, as the Bible says. One that does
 //!   not animate shows frame 0 (@0x2ee20). The frame count it animates
-//!   over (+0x474) is copied from the slot only at a rebuild (@0x331c9).
+//!   over (+0x474) is copied from the slot only at a rebuild (@0x331c9),
+//!   so the animation follows the live state but not the live sheet's
+//!   frame count (see "Checked for stellar-fidelity phase 1").
 //! - **The rebuild** (`_HandleStellarSystemVisibility` @0x32aa5) makes
 //!   the same choice for each stellar of the player's system
 //!   (@0x32f0f-0x32f2f), frees each master no stellar there uses
@@ -1275,10 +1281,13 @@
 //!   collides, and explodes the shot at its own position, where the
 //!   engine takes the point its path entered the disc.
 //! - **When.** In a pass after the ship hits and the expiries
-//!   (combat's step 7b), so a shot that would meet a ship and a stellar
-//!   the same tick hits the ship, and one at the end of its life hits
-//!   nothing. Only past its `ProxSafety`: its age above it. Any ship's
-//!   shot, the player's or an NPC's. Beams never hit a stellar.
+//!   (combat's step 7b), so a shot that would meet a planet-type ship and
+//!   a stellar the same tick hits the ship (it passes through an ordinary
+//!   one, see "Built by stellar-fidelity phase 2"), and one at the end of
+//!   its life hits nothing. Only past its `ProxSafety`: its age above it.
+//!   Any ship's shot, the player's or an NPC's. Beams never hit a stellar
+//!   by the engine's reading of
+//!   [`beam_stellars`](crate::RuleKey::BeamStellars).
 //! - **The hit.** It takes `MassDmg` + `EnergyDmg` off the current
 //!   strength, explodes where it hit with its `ExplodType`, and is gone,
 //!   with no blast and no sub-munitions.
@@ -1321,10 +1330,10 @@
 //! stellar or shots passing through one, which the Bible's `Strength`
 //! ("0 or -1 for an invincible stellar") agrees with, nor for the
 //! countdown. The Bible's planet-type weapon "can only hit planet-type
-//! ships or destroyable stellars", but its ship side, a planet-type blast
-//! sparing ships, the AI firing at stellars and whether beams hit
-//! stellars are story-runtime phase 13 "planet-type-weapons-and-ships";
-//! `Flags2` 0x0400 is still reported as unimplemented for them.
+//! ships or destroyable stellars"; its ship side, the blasts, the AI
+//! firing at stellars and whether beams hit stellars are stellar-fidelity
+//! phase 2's (see "Built by stellar-fidelity phase 2"), and `Flags2`
+//! 0x0400 is no longer reported as unimplemented.
 //!
 //! ## Checked for phase 8
 //!
@@ -1360,14 +1369,17 @@
 //!   (`_ShotCanHitShip` tests a ship's +0x86 against 0, @0x448db). An
 //!   escort's or a fighter's shot has its own slot, so only the player's
 //!   own shots are punished.
-//! - **Planet-type shots and ships.** `_ShotCanHitShip`
-//!   (@0x4477e-0x44b6f), `_HandleShipHit` (@0x36a45) and
-//!   `_ShipCollisionHandler` (@0x36f87) never test `Flags2` 0x0400, so a
-//!   planet-type shot hits ordinary ships as any shot does. The bit's
-//!   other readers are a detonation blasting no ships (`_HandleShot`
+//! - **Planet-type shots and ships.** This bullet once said
+//!   `_ShotCanHitShip` never tests `Flags2` 0x0400. That was wrong:
+//!   its rule 8 (@0x44a8e-0x44acc) matches the bit against the ship
+//!   class's `Flags` 0x0400, so a planet-type shot hits only planet-type
+//!   ships (corrected by stellar-fidelity phase 2; see "Checked for
+//!   stellar-fidelity phase 2"). `_HandleShipHit` (@0x36a45) and
+//!   `_ShipCollisionHandler` (@0x36f87) do not test it. The bit's other
+//!   readers are a detonation blasting no ships (`_HandleShot`
 //!   @0x35fb9), an asteroid hit's blast sparing ships (`_HandleAsteroidHit`
-//!   @0x36734) and the AI (@0x804a9, @0x8c1f2, @0x8f94d): story-runtime
-//!   phase 13's.
+//!   @0x36734) and the AI (@0x804a9, @0x8c1f2, @0x8f94d): stellar-fidelity
+//!   phase 2's.
 //! - **No blast and no sub-munitions.** The `movb $0x1, 0x16` after the
 //!   hit (@0x373fe) writes the shot's sprite (its first field), not the
 //!   shot: the byte `_SWSetSpriteVisible` itself sets on hiding
@@ -1410,10 +1422,15 @@
 //! ## Built by phase 9
 //!
 //! A destroyed stellar whose `DeadType` has no sheet that can be read (-1,
-//! outside 0 to 255, no `spïn`, or an `rlëD` the engine cannot read) draws
+//! outside 0 to 255, no `spïn`, an `rlëD` the engine cannot read, or a
+//! `PICT` pair the engine cannot read) draws
 //! graphic type 0, `spïn` 1000, from the next rebuild point until a
-//! flight frame finds it whole, as the original's rebuild fills the sprite
-//! slot it left empty; before that rebuild point it draws its `Type`.
+//! flight frame finds it whole, as the original's rebuild means to fill
+//! the sprite slot it left empty (its own code faults first; see
+//! "Checked for phase 9", as corrected by stellar-fidelity phase 3);
+//! before that rebuild point it draws its `Type`. A whole stellar whose
+//! `Type` cannot be read does the same (see "Built by stellar-fidelity
+//! phase 3").
 //!
 //! - **The state** is the sim's, kept for the stellars shown: `Rebuilt`
 //!   (the `rebuild` submodule) holds those a rebuild point found destroyed
@@ -1438,12 +1455,12 @@
 //!   stellar shot down in a frame is destroyed at that frame's look. So
 //!   `Y`, `U`, `Y` with no frame between keeps graphic type 0, and with a
 //!   frame while whole draws `Type` until the next rebuild point.
-//! - **The sheet rule** stays nova-view's system scene's, where phase 7
-//!   put it: a destroyed stellar draws its `DeadType` sheet when that can
-//!   be read; otherwise graphic type 0's while dead since the last
-//!   rebuild, by the engine's reading; otherwise its `Type` sheet. The
-//!   sim decides when the state changes, the view only which sheet it
-//!   picks.
+//! - **The sheet rule** is the session's since stellar-fidelity phase 1
+//!   (`Session::drawn_sheet`, a [`DrawnSheet`]): a destroyed stellar
+//!   draws its `DeadType` sheet when that can be read; otherwise graphic
+//!   type 0's while dead since the last rebuild, by the engine's reading;
+//!   otherwise its `Type` sheet. The view draws the sheet it names, and
+//!   the click box reads the same answer (see "Built by phase 11").
 //! - **Problems.** A `DeadType` sheet that exists but cannot be read is in
 //!   the scene's problems (`spöb <id> DeadType: <reason>`), as a broken
 //!   `Type` sheet is, and so is `spïn` 1000 when it cannot be read and a
@@ -1463,12 +1480,25 @@
 //!   (@0x33256-0x3329c), then given graphic type 0's master, loaded first
 //!   if missing (`_LoadMasterStellarSprite(0)` @0x332ae, `spïn` 1000),
 //!   cloned in (`_SWCloneFramesFromMaster` @0x332be), and frame 0
-//!   (`_SWSetCurrentFrameIndex` @0x332d0; the frame index is phase 12's).
-//!   This is any empty slot, whether its `Type` or its `DeadType` is the
-//!   missing one; a whole stellar with an unreadable `Type` is
-//!   story-runtime phase 14. When `spïn` 1000 cannot be loaded either,
-//!   the clone has no master and the slot stays empty, drawing nothing;
-//!   the engine draws its placeholder box and the reason.
+//!   (`_SWSetCurrentFrameIndex` @0x332d0; the frame index is
+//!   stellar-fidelity phase 1's).
+//!   Corrected by stellar-fidelity phase 3: the pass reaches only the
+//!   slots no stellar uses this time (the rebuild's clear set their +0xd0
+//!   to -1, @0x32e8f, and hid them, @0x32ea6). A slot in use whose
+//!   stellar's graphic has no master faults first, at the unconditional
+//!   `_SWSetCurrentFrameIndex` (@0x33096): a divide by zero in a newly
+//!   made slot (@0xa90e7), a read through a null frame table in a reused
+//!   one (@0xa90f7). So graphic type 0 for an empty slot of a stellar,
+//!   whether its `Type` or its `DeadType` is the missing one, is the
+//!   original's intent (the "had no data" log), not its behaviour; the
+//!   engine follows the intent (see "Checked for stellar-fidelity phase
+//!   3"). When `spïn` 1000 cannot be loaded either, the slot stays empty,
+//!   drawing nothing; the engine draws its placeholder box and the reason.
+//!   Corrected by stellar-fidelity phase 8: a visible slot with no frame
+//!   faults at `_SWSetSpriteLocation`'s hot-spot read (@0xab665, from
+//!   @0x331aa and @0x2ef1a), so the engine's empty slot is the code's
+//!   continuation, not a state the original survives. The engine's
+//!   behaviour there is unchanged.
 //! - **Index -1** of `_masterStellarSprite` is an unwritten word of
 //!   `_masterStarSprite` (see "Checked for phase 7"), and other
 //!   out-of-range indexes read neighbouring statics. That is a
@@ -1513,18 +1543,19 @@
 //!   without the `spïn` (`_GetSpriteInfo` @0x1ebb9). At 16 bits it reads
 //!   the `rlëD` (@0x1ebd7-0x1ebee); with no `rlëD` it builds the sprite
 //!   from the `spïn`'s `PICT` pair instead (`_SWCreateSpriteFromSinglePictXY`
-//!   @0x1ece3), which the engine does not read (story-runtime phase 15).
-//!   `_SWCreateSpriteFromRLEResource` (@0xa9990) clears the master first
-//!   (@0xa99e3) and writes it only on success (@0xa9be7), so a failure
-//!   leaves the slot empty, and graphic type 0 after a rebuild; each
-//!   failure is reported in a stop alert (`_ReportSpriteLoadError`
+//!   @0x1ece3), which the engine reads as the original cuts it since
+//!   stellar-fidelity phase 4 (see "Checked for stellar-fidelity phase
+//!   4"). `_SWCreateSpriteFromRLEResource` (@0xa9990) clears the master
+//!   first (@0xa99e3) and writes it only on success (@0xa9be7), so a
+//!   failure leaves the slot empty, and graphic type 0 after a rebuild;
+//!   each failure is reported in a stop alert (`_ReportSpriteLoadError`
 //!   @0x1eb62) and play goes on. It reads only the `rlëD`'s header (the
 //!   frame size, the depth at +4, the frame count at +8) and makes each
-//!   frame at the header's depth (`_SWCreateFrame`, `NewGWorld`
-//!   @0xad6b7), decoding no token at load: an `rlëD` whose tokens are
-//!   corrupt loads, and one whose header says 8 bits loads as 8-bit
-//!   frames. The engine reads either as no sheet (it cannot draw them)
-//!   and reports it; story-runtime phase 15 owns the 8-bit sheet.
+//!   frame at the header's depth with no pixel buffer (`_SWCreateFrame`
+//!   @0xad62c → @0xad6f2), decoding no token at load: an `rlëD` whose
+//!   tokens are corrupt loads, and one whose header says 8 bits loads and
+//!   draws garbled (see "Checked for stellar-fidelity phase 4"). Only a
+//!   corrupt `rlëD` reads as no sheet in the engine, which reports it.
 //! - **Stock data**: no stock `spöb` has a `DeadType` in 0 to 255 whose
 //!   sheet cannot be read, and `spïn` 1000 reads, so the stock scenes
 //!   report no new problem (`stock_system_view`).
@@ -1569,8 +1600,9 @@
 //! - **`_GetStellarSpriteXSize`** (@0xac91-0xad37) gives, in order: 150
 //!   for a stellar index above 0x7ff (@0xac9c); 150 when the stellar's
 //!   +0x14 is not the player's system (+0x74 of the first ship,
-//!   @0xacb9-0xacc1; a stellar in two visible systems, story-runtime
-//!   phase 18, stellar-in-a-second-system-reach); 150 when `Type` (+0x0e)
+//!   @0xacb9-0xacc1; for a stellar another system owns, read by NPC gate
+//!   entry, as the dock request refuses such a stellar before the reach:
+//!   see "Checked for stellar-fidelity phase 7"); 150 when `Type` (+0x0e)
 //!   is outside 0 to 255 (@0xacc3-0xacd0), its `_masterStellarSprite`
 //!   entry is null (@0xacdf) or that master has no current frame (+0x50,
 //!   @0xace6); 32 when the master's frame index (+0x68) is below 0 or
@@ -1594,21 +1626,22 @@
 //!   as `TypeWidth::OutOfRange` from `LandingSite::type_counts_frames`.
 //!   Stock `xTiles` × `yTiles` always equals the frame count, so stock
 //!   never reaches it.
-//! - **Such a `spïn` shown in a slot** has more effects the engine does
-//!   not copy, filed as story-runtime phase 19
-//!   (no-frame-count-spin-in-a-slot): a clone copies the count
-//!   into the slot (@0xac4ec) and sets its frame through
+//! - **Such a `spïn` shown in a slot**: a clone copies the count into
+//!   the slot (@0xac4ec) and sets its frame through
 //!   `_SWSetCurrentFrameIndex`, which divides by it (`idivl` @0xa90e7),
 //!   so a product of 0 divides by zero, and with a negative one it
 //!   returns before setting the frame (@0xa90ee), leaving the slot's
 //!   frame as it was: none after a rebuild, which empties it (@0x32e7a)
 //!   without filling it with graphic type 0, as its frames are not null
-//!   (@0x33241-0x33250).
+//!   (@0x33241-0x33250). Built by stellar-fidelity phase 8, which found
+//!   that the rebuild itself faults on such a slot (see "Checked for
+//!   stellar-fidelity phase 8"); the engine follows the state its code
+//!   leaves.
 //! - **The dock request** (`_HandlePlayerDockRequest`): after the
 //!   clearance state 0x3b544c above 0x2ed (@0x66c18), the ship's +0x4c at
 //!   most 0 (@0x66c32) and each velocity axis at most 0.75 (the float at
-//!   0xdd658, @0x66c3c-0x66c66; story-runtime phase 17,
-//!   per-axis-landing-speed), it takes |trunc(dx)| and |trunc(dy)|
+//!   0xdd658, @0x66c3c-0x66c66; built by stellar-fidelity phase 6), it
+//!   takes |trunc(dx)| and |trunc(dy)|
 //!   (@0x66c78-0x66cc3), sets the reach to 75 (@0x66cc7), and when the
 //!   slot (the stellar's +0x00) has a current frame (+0x50, @0x66ccf)
 //!   replaces it with cvttsd2si(width × 1.75), 0xdd6e8 being the double
@@ -1651,24 +1684,30 @@
 //!
 //! - **The rule** is `navigation::stellar_under`, which now takes the
 //!   frame size drawn for each site from its caller; `None` still gives
-//!   the 64-pixel placeholder.
-//! - **The sheet drawn** is `Space::drawn_frame_size` (the session's
-//!   `stellars` module), the sim's copy of the view's
-//!   `SceneStellar::drawn` and `SystemScene::set_destroyed`: the
-//!   `DeadType` sheet's frame while destroyed, when there is one
-//!   (`LandingSite::dead_frame_size`); graphic type 0's
-//!   (`PilotCatalog::fallback_frame_size`, read as the session starts)
-//!   while destroyed and dead since the last rebuild point, by
+//!   the 64-pixel placeholder. Since stellar-fidelity phase 9 the caller
+//!   gives the slot's rect (`navigation::SpriteRect`, `Space::click_rect`)
+//!   and `None` is no rect.
+//! - **The sheet drawn** is decided once, by `Session::drawn_sheet` (the
+//!   session's `stellars` module; one owner since stellar-fidelity
+//!   phase 1): the
+//!   `DeadType` sheet while destroyed, when there is one
+//!   (`LandingSite::dead_frame_size`); graphic type 0's while destroyed
+//!   and dead since the last rebuild point, by
 //!   [`dead_type_fallback`](crate::RuleKey::DeadTypeFallback)'s engine
-//!   reading; the `Type` sheet's otherwise. With graphic type 0's sheet
-//!   unreadable no sheet is drawn, and the placeholder is clicked.
+//!   reading; the `Type` sheet otherwise. `Space::drawn_frame_size`
+//!   gives that sheet's frame (graphic type 0's from
+//!   `PilotCatalog::fallback_frame_size`, read as the session starts),
+//!   and the flight view's `SceneStellar::drawn` draws the sheet the
+//!   same answer names. With graphic type 0's sheet unreadable no sheet
+//!   is drawn, and the placeholder is clicked.
 //! - **Readings.** No new key: the Bible says nothing of the click's
 //!   target, and the click follows whichever sheet is drawn, so
 //!   `dead_type_fallback` decides it under both readings. By the Bible's
 //!   no graphic type 0 is drawn, so none is clicked.
 //! - **Not switched**: the margin's width test, the half-open edges and
-//!   the order among overlapping stellars (below) are story-runtime phase
-//!   20 (click-target-shape), as is the stellar's +0x44 skip flag.
+//!   the order among overlapping stellars (below) are stellar-fidelity
+//!   phase 9, as is the stellar's +0x44 skip flag. Built there: the margin
+//!   reads the width.
 //!
 //! ## Checked for phase 11
 //!
@@ -1693,13 +1732,1761 @@
 //! - **The margin's test reads the width**: `movswl -0x36(%ebp)` (left)
 //!   and `movswl -0x32(%ebp)` (right), `subl`, then `cmpl $0x2f` and
 //!   `jg` past the `_InsetRect(r, -16, -16)` (@0x6a649-0x6a671). The
-//!   engine's `SMALL_SPRITE_HEIGHT` compares the height: story-runtime
-//!   phase 20.
+//!   engine compared the height until stellar-fidelity phase 9 built the
+//!   width test (`SMALL_SPRITE_WIDTH`).
 //! - **A rectangle, not a mask**: `_PtInRect` (@0x6a686), half-open on
 //!   the right and bottom, where the engine includes every edge; and the
 //!   first slot holding the point wins, the slots filled by ascending
-//!   `spöb` index (@0x32eda-0x32f06), not `NavDef` order. Both are phase
-//!   20.
+//!   `spöb` index (@0x32eda-0x32f06), not `NavDef` order. Both are built
+//!   by stellar-fidelity phase 9.
+//!
+//! ## Built by stellar-fidelity phase 1
+//!
+//! The sheet a stellar draws is decided once, in the session, and a
+//! stellar animates over the frame count of the sheet its sprite slot
+//! held at the last rebuild point, as the original's does.
+//!
+//! - **One owner for the sheet drawn.** `Session::drawn_sheet` gives a
+//!   [`DrawnSheet`] (`Type`, `Dead` or `TypeZero`) for each stellar shown,
+//!   by the rule of "Built by phase 9". The click box
+//!   (`Space::drawn_frame_size`) is built on it, and the flight view's
+//!   `SystemScene::set_destroyed` takes it, so the view no longer reads
+//!   the rulebook or works out graphic type 0 itself.
+//! - **The counted sheet** is the sim's, kept in `Rebuilt` beside the dead
+//!   set (the `rebuild` submodule), in the original's terms: the sheet
+//!   the slot held at the last rebuild point. A whole stellar counts its
+//!   `Type`; a destroyed one its `DeadType` when that can be read; a
+//!   destroyed one with none, graphic type 0's when it was dead since the
+//!   previous rebuild point (its slot filled with graphic type 0 then) and
+//!   graphic type 0's sheet reads, its `Type` otherwise; and every stellar
+//!   its `Type` before any rebuild point. `Session::counted_sheet` reads
+//!   it. A rebuild point that changes a counted sheet tells
+//!   `SessionEvent::StellarsRebuilt` even with the dead set unchanged: a
+//!   stellar with no `DeadType` still destroyed at a second rebuild point
+//!   goes from `Type` to `TypeZero`.
+//! - **The frame state** is the view's: each `SceneStellar` holds its
+//!   current frame, next frame, timer and the frame shown
+//!   (`system::animation::Frames` in nova-view), stepped once a tick of
+//!   1/30 s, as the original's sprite tick steps the stellar every play
+//!   frame. The timer gains a tick; at `AnimDelay`, or `AnimDelay` ×
+//!   `Frame0Bias` while the current frame is 0 and the bias is above 1,
+//!   the current frame takes the next, the next becomes the one after it
+//!   modulo the counted sheet's frame count, and the sheet drawn shows the
+//!   current frame modulo its own count, so an index past the end of a
+//!   shorter sheet wraps. A stellar that does not animate shows frame 0
+//!   with its timer and frames frozen. A swap of the sheet drawn keeps the
+//!   frame shown while it is in range, and shows frame 0 otherwise. A
+//!   rebuild point that tells `StellarsRebuilt` shows each stellar whose
+//!   look changed at its current frame, or frame 0 on graphic type 0's
+//!   sheet. A rebuild point that changes nothing tells nothing, so its
+//!   reshow is skipped: at most one `AnimDelay` of difference.
+//! - **Kept across systems** (since stellar-fidelity phase 12): the
+//!   original keeps each `spöb`'s animation state across systems, and so
+//!   does the flight, which resumes a stellar shown again where it was
+//!   left; see "Built by stellar-fidelity phase 12". The original's stale
+//!   slot count after a jump (another stellar's) and the 0 count of a
+//!   fresh slot are memory-layout accidents the engine does not copy: a
+//!   stellar newly shown counts its `Type` until a rebuild point says
+//!   otherwise.
+//! - **Since built**: `Flags2` 0x0001 and 0x0002 and an `AnimDelay` of 0
+//!   or less, which the original advances every frame: see "Built by
+//!   stellar-fidelity phase 10". A hypergate draws the frame its session
+//!   steps it to instead (`Session::gate_frame`, system-traffic-fidelity
+//!   phase 7).
+//!
+//! **Readings.** The Rulebook key
+//! [`stellar_frame_count`](crate::RuleKey::StellarFrameCount) defaults to
+//! the engine: the frame count of the sheet the slot held at the last
+//! rebuild point, so between a `Y` (or `U`) and the next rebuild point a
+//! 0x0080 stellar whose `Type` sheet has 1 frame stays still, 4 counted
+//! frames over a 3-frame sheet show 0, 1, 2, 0, 0, 1, 2, 0, and fewer
+//! counted frames than drawn leave the rest unshown. By the Bible's
+//! 0x0080, "the stellar's graphic is animated after it's been destroyed",
+//! the frame count of the sheet drawn, from the moment it is swapped.
+//! Graphic type 0's count is read as `Type`'s under
+//! [`dead_type_fallback`](crate::RuleKey::DeadTypeFallback)'s Bible
+//! reading, which never draws graphic type 0. How an index past the end
+//! shows needs no key: the original wraps it modulo the drawn sheet's
+//! count, and no other source gives a reading.
+//!
+//! ## Checked for stellar-fidelity phase 1
+//!
+//! - **The state is the stellar's.** The `spöb` record (0x498 bytes,
+//!   behind 0x3b5010) holds the frame count (+0x474), the current frame
+//!   (+0x476), the next frame (+0x478), `AnimDelay` (+0x470),
+//!   `Frame0Bias` (+0x472) and a float timer (+0x490). `_InitObjects`
+//!   sets the count to 1, the current frame and the timer to 0 and the
+//!   bias to 1 (@0x1c8b9-0x1c8f6); the `spöb` loader then copies
+//!   `AnimDelay` and `Frame0Bias` raw (@0x7761b, @0x77631), clamping
+//!   neither.
+//! - **The count is written only at a rebuild.** The one write besides
+//!   `_InitObjects` is `_HandleStellarSystemVisibility`'s @0x331c9, which
+//!   copies the slot's frame count (+0x54) after cloning the master of
+//!   the graphic the stellar shows (@0x32ff6). Every other access reads
+//!   it (@0x2e802-0x2ede3, @0x67616). A slot the rebuild had to make
+//!   (`_SWCreateEmptySprite` @0x32f80, flag -0x121) resets the timer, the
+//!   current and the next frame to 0, 0 and 1 (@0x331da-0x331fb), and
+//!   `_SWCreateEmptySprite` clears +0x54 (@0xa8eb6), so such a slot left
+//!   empty counts 0 and its stellar stays still. The rebuild's clear
+//!   (@0x32e68-0x32e83) leaves +0x54, so an empty slot keeps its count,
+//!   and graphic type 0's fill (@0x33229-0x332d0) comes after @0x331c9,
+//!   so it does not refresh it. Slots are filled in `spöb` index order
+//!   (@0x32eda-0x32f06), so within a system a slot held the same
+//!   stellar's frames before.
+//! - **The sprite tick** (`_HandleStellarSprites`) clones the shown
+//!   master into the slot every play frame (@0x2e7e5), then animates only
+//!   when `Flags2` 0x0080 matches the live destroyed state
+//!   (@0x2e784-0x2e7bb) and the count is above 1 (`cmpw $1, 0x474`
+//!   @0x2e802); otherwise the slot shows frame 0 (@0x2ee20) and the
+//!   stellar's state is untouched. An animating stellar's timer gains
+//!   `_gSpeedMult` (the double behind 0x3b511c, at 0x188b48,
+//!   @0x2e810-0x2e825), which `_HandleTimeAdjustment` keeps at the
+//!   milliseconds since the last frame × 0.03, smoothed as (3 × old +
+//!   new) / 4 (@0x333b7-0x33424; 1.0 at the start, @0x513ec): about one
+//!   1/30 s tick a frame, so the engine's one step a tick is the
+//!   original's. A stellar that is not a hypergate (`Flags2` 0x1000
+//!   clear, @0x2e832) compares the timer with `AnimDelay` × `Frame0Bias`
+//!   while the current frame is 0 and the bias is above 1, `AnimDelay`
+//!   otherwise (@0x2ec4b-0x2ec83). Below it, the tick skips
+//!   `_SWSetCurrentFrameIndex` (@0x2ee35) and the slot keeps the index the
+//!   clone left. At or above it, the timer is reset, the current frame
+//!   takes the next (@0x2ed7f) and the next becomes (next + 1) mod +0x474
+//!   (@0x2eddc-0x2edf4), then `_SWSetCurrentFrameIndex(slot, current)`
+//!   (@0x2ee05-0x2ee30). A delay of 0 or less advances every frame: see
+//!   "Checked for stellar-fidelity phase 10", which reads the whole
+//!   sequential branch.
+//! - **The index wraps.** `_SWSetCurrentFrameIndex` reads a negative index
+//!   as 0 and takes it modulo the slot's own count (@0xa90d4-0xa90e9).
+//!   The clone keeps the slot's index while it is below the new count and
+//!   sets 0 otherwise (@0xac504-0xac532). The rebuild sets each slot to
+//!   the current frame (@0x33096), and a slot it fills with graphic type
+//!   0 to frame 0 (@0x332d0).
+//!
+//! ## Built by stellar-fidelity phase 2
+//!
+//! The ship side of planet-type weapons (`nova_sim::combat::planet_type`),
+//! beams on stellars by the Bible, and the stellar-attacking AI
+//! (`nova_sim::ai::death_star`), by the findings of "Checked for
+//! stellar-fidelity phase 2".
+//!
+//! - **Shots** (rule 8). A shot hits a ship only when its weapon's
+//!   `Flags2` 0x0400 matches the ship class's `Flags` 0x0400: in the
+//!   contact passes, the proximity fuse, a seeking sub-munition's pick and
+//!   point defence's shots at ships, a shot no ship fired included
+//!   (`nova_sim::combat::sides`). So a planet-type shot passes through
+//!   ordinary ships to the stellars behind them.
+//! - **Blasts.** By the engine's reading of
+//!   [`planet_blasts`](crate::RuleKey::PlanetBlasts), an expiry's and an
+//!   asteroid hit's blast from a planet-type weapon reach no ship, neither
+//!   reaches a planet-type ship, and a shot's on-hit blast reaches every
+//!   ship. By the Bible's every blast reaches only the ships of its
+//!   weapon's planet type.
+//! - **Beams.** By the engine's reading of
+//!   [`beam_planet_flag`](crate::RuleKey::BeamPlanetFlag) a beam is
+//!   planet-type by its weapon's `Flags` 0x0400, by the Bible's by its
+//!   `Flags2` 0x0400, and hits only ships of its planet type. By the
+//!   engine's reading of [`beam_stellars`](crate::RuleKey::BeamStellars) a
+//!   beam never hits a stellar; by the Bible's a planet-type beam is
+//!   stopped by a stellar nearer along it than the ship it hits, takes its
+//!   `MassDmg` + `EnergyDmg` times the pass's beam factor off it each
+//!   tick, explodes there, and shoots it down below 0 as a shot does, the
+//!   session running its `OnDestroy` after the beams' hits settle.
+//! - **Sub-munitions** on their release tick are not tested against the
+//!   stellars: one a fuse releases strikes on the next tick, one an end of
+//!   life seats in a slot `_HandleShot` has passed a tick later still.
+//! - **The stellar attacker.** `nova_sim::ai::Goal::AttackStellar` is
+//!   goal 0x12: spared as a threat, busy to a hail, fighting nothing.
+//!   `_DeathStarAI` (`DeathStar`) takes the first enemy stellar shots can
+//!   shoot down and, with a planet gun of its class's stock, attacks it;
+//!   otherwise the warship's think runs, a kept landing or gate entry
+//!   going to the enemy stellar. It flies by its band from the stellar
+//!   (`nova_sim::traffic::stellar_attack`: sub 2 by
+//!   `nova_sim::traffic::approach_flight`, the run out from the centre,
+//!   the brake, or the aim, the in-band 0.98 drag on its velocity and its
+//!   speed along its heading) and, aiming within its turn and 15 degrees,
+//!   fires `_AIFirePlanetGun`'s pick, the highest ready weapon, planet-type
+//!   or not.
+//! - **Routing.** A ship of a `ShipBehav` 2 mission, by its mark alone,
+//!   thinks as `DeathStar` before the miners and every type, the escorts'
+//!   included, so a captured one kept as a mission escort attacks too; its
+//!   gate wait and reactions stay its own behaviour's.
+//! - **Sounds.** None of these plays one, and no `SimSound` is added: a
+//!   planet gun's shot sounds as any NPC's fire does.
+//! - **Recorded, not built**: the readers of +0x70 as a ship slot in goal
+//!   0x12 and a sub-munition of negative `ProxSafety` (see "Checked for
+//!   stellar-fidelity phase 2").
+//!
+//! ## Checked for stellar-fidelity phase 2
+//!
+//! Planet-type weapons (`wëap` `Flags2` 0x0400) and planet-type ships
+//! (`shïp` `Flags` 0x0400, the class's +0x9e8), and the AI that shoots
+//! stellars.
+//!
+//! - **Who a shot may hit.** `_ShotCanHitShip`'s rule 8
+//!   (@0x44a8e-0x44acc) returns false when `(class Flags & 0x0400) !=
+//!   (wëap Flags2 (+0x22) & 0x0400)`: a planet-type shot hits only
+//!   planet-type ships, and an ordinary shot never hits a planet-type
+//!   ship, the player's included. A shot no ship fired (+0x2c above 63,
+//!   @0x44a71-0x44a88) jumps to rule 8 too, and rules 9 (@0x44ad2-0x44b2f)
+//!   and 10 (@0x44b35-0x44b60) then pass for it (firer -1 is above 0x3e
+//!   and 0x3f). Rule 8 covers every caller: the contact passes, the
+//!   proximity fuse, `_FindNearestValidShotTarget`'s seeking sub-munitions
+//!   and point defence's shots at ships.
+//! - **Who a beam may hit.** `_HandleBeams`' candidate filter
+//!   (@0x30d34-0x30d82) reads the beam's weapon at +0x20, which
+//!   `_LoadObjectData` fills from the resource's +0x1c (@0x793ca-0x793ce):
+//!   `Flags`, not `Flags2` (+0x22 from +0x48, @0x793d9-0x793dd). So a beam
+//!   matches its `Flags` 0x0400 (the "big smoke" bit) against the ship's
+//!   `Flags` 0x0400 (@0x30d6c), and `Flags2` 0x0400 does nothing for it.
+//!   No stock beam has `Flags` 0x0400 (the 16 stock beams' are
+//!   0x10-0x6010), no stock `wëap` has `Flags2` 0x0400 and no stock `shïp`
+//!   has `Flags` 0x0400, so the bug changes nothing in stock play.
+//! - **Beams never touch stellars.** `_HandleBeams` (@0x30295-0x31e1f)
+//!   reads neither the stellar table (0x3b5010) nor `_StellarIsDestroyed`,
+//!   nor any sprite-slot array. Its calls are `_Accel`,
+//!   `_XYFloatSquaredDist`, `_CalcInterceptAngle`, `_FloatAbs`,
+//!   `_SpeedLimit`, `_AlliedWithPlayer`, `_AdjustedAccel`,
+//!   `_SpawnParticles`, `_ShipMaxSpeed`, `_GetSpriteYSize`,
+//!   `_GetMasterShipSpriteXSize`, `_CreateExplosion`, `_SWSetSpriteVisible`,
+//!   `_SpawnExplod`, `_Rand`, `_IonizeShip`, `_DestroyAsteroid`,
+//!   `_DamageShip`, `_AIShipIsAttackingAsteroid` and `_TickCount`, none of
+//!   which plays a sound.
+//! - **The expiry blast** (`_HandleShot` @0x35f97-0x36106).
+//!   `_CreateExplosion` (@0x35f97) comes first, for every weapon. The
+//!   blast pass is skipped when `BlastRadius` (+0x18) is 0 or less
+//!   (@0x35fae) or the weapon is planet-type (@0x35fb9), and inside it each
+//!   ship whose class is planet-type is skipped (@0x3602e). So a
+//!   planet-type detonation blasts no ship, and no detonation blasts a
+//!   planet-type ship. The ionization is inside the per-ship pass, so a
+//!   skipped ship is not ionized.
+//! - **The on-hit blast** (`_HandleShipHit` @0x36d4b-0x36efb) tests
+//!   neither bit: a planet-type shot hitting a planet-type ship blasts the
+//!   ordinary ships around it, and an ordinary shot's on-hit blast reaches
+//!   a planet-type ship near its victim.
+//! - **The asteroid-hit blast** (`_HandleAsteroidHit` @0x36734, @0x367a8)
+//!   makes the expiry blast's two skips.
+//! - **Every reader of the class's `Flags` 0x0400** (every `0x9e8(` read
+//!   and every `testb $0x4, 0x9e9`): `_ShipAccelRate` @0x3601 and
+//!   `_ShipMaxSpeed` @0x37b5 (still hull), `_AIHasAfterburner` @0x654c,
+//!   `_HandleShipDisplay` @0x2d90d (no shockwave), `_HandleBeams` @0x31210,
+//!   @0x31385, @0x31b12, @0x31bc7 (tractor), `_DamageShip` @0x3aacb
+//!   (push), the expiry blast @0x3602e, the asteroid blast @0x367a8, the
+//!   beam match @0x30d6c, the shot match @0x44aa8, and `_AIFireGun`
+//!   @0x7ffc6-0x7ffdf, `_AIFireTurret` @0x80c04-0x80c23 and
+//!   `_AIFireMissile` @0x812df-0x812fb.
+//! - **Every reader of `Flags2` 0x0400**: `_HandleShot` @0x35fb9,
+//!   `_HandleAsteroidHit` @0x36734, `_CheckShotProximities` @0x37224,
+//!   `_AIFireGunUntargeted` @0x804a9 (the miner's untargeted gun skips
+//!   planet-type weapons; asteroids phase 5's), `_DeathStarAI` @0x8c1f2 and
+//!   `_HighLevelAIHandler` @0x8f94d.
+//! - **`_DeathStarAI`** (@0x8c125-0x8c2d1).
+//!   1. If `_IsDisabled`, `_IsDying` or goal 0x16 (count wait), it returns
+//!      at once, writing nothing and calling no `_WarshipAI`
+//!      (@0x8c12e-0x8c159).
+//!   2. It walks the 16 stellar slots of the ship's system (sÿst +0x2a +
+//!      2i, stride 0x1fc, from ship +0x74) in order, skipping -1, the
+//!      destroyed (`_StellarIsDestroyed` @0x8c19e) and `Strength` (+0x40)
+//!      0 or less (@0x8c1b1-0x8c1b6), and takes the first for which
+//!      `_GovtEnemies(ship +0x98, stellar Govt +0x0a)` holds
+//!      (@0x8c15f-0x8c1de). It writes +0x6c = that stellar at once
+//!      (@0x8c286), before any weapon test.
+//!   3. Whether or not a stellar was found, it walks weapon indices 0-255
+//!      and takes the lowest with `Flags2` 0x0400 (@0x8c1f2), the
+//!      **class's** stock count above 0 (class `+0x5e8[i]`, @0x8c20e), ammo
+//!      (`_WeaponHasAmmo` @0x8c21f) and guidance not 0, not 3 and at most
+//!      7 signed (-1, 1, 2, 4, 5, 6, 7; @0x8c230-0x8c244).
+//!   4. With both: goal (+0xc8c8) 0x12 and +0x6c = +0x70 = the stellar
+//!      (@0x8c25a-0x8c280), and it returns without `_WarshipAI`.
+//!   5. Otherwise, when the goal is 0x12, it clears +0x70 and +0x6c to -1
+//!      and the goal and sub (+0xc8ca) to 0; in every case it then
+//!      tail-calls `_WarshipAI` (@0x8c293-0x8c2c5), never the ship's own
+//!      type. `_WarshipAI` writes +0x6c but never reads it (@0x8b8ed,
+//!      @0x8b90b, @0x8ba31, @0x8ba4f, @0x8c00c, @0x8c02a, @0x8c117), and
+//!      the high level reads it for goal 1, landing (@0x8d8c9, @0x8daea;
+//!      the gate hand-off @0x8d8b8-0x8d8fe), and goal 0x14, gate entry
+//!      (@0x8db70). So a landing or gate entry the warship keeps is
+//!      redirected to the enemy stellar.
+//!   6. No sound and no `_Rand`.
+//! - **Routing.** `_AIDispatch` sets a local flag (edi) on every think
+//!   from the mark (+0xc8d2) when its mission slot is active and its
+//!   `ShipBehav` (+0xc) is 2 (@0x8fbcd-0x8fc38), writing nothing on the
+//!   ship. With it, `_DeathStarAI` runs in place of the whole type
+//!   dispatch (@0x8ff3a-0x8ff43): `_DefenseShipAI`, `_MinerAI` and every AI
+//!   type, `_EscortAI` included (@0x90016), after the disabled reset
+//!   (@0x8fece-0x8ff13) and the goal-0x15 skip (@0x8ff18). No AI type
+//!   reaches `_DeathStarAI`. Goal 0x12 is in the always-think set
+//!   (@0x8fe30), which changes nothing at a think interval of 1.
+//! - **The high level's goal 0x12** (`_HighLevelAIHandler`
+//!   @0x8f906-0x8faeb) aims at +0x6c's spöb x and y (+0x4, +0x6). The
+//!   weapon is `_DeathStarAI`'s scan (lowest index, class count, ammo,
+//!   guidance, no reload test), and r its range (+0x5c); with none, r² is
+//!   1.0 (0xdd068). With d² the squared distance: above 0.5625 r² (0xddaa0)
+//!   sub 2, approach; else below 0.0625 r² (0xddaa8) sub 3, run out; else
+//!   sub 1, brake, when |vx| or |vy| is at least 0.35 (0xdda68), and sub
+//!   0x16, aim, otherwise. In those last two, vx, vy and the speed along
+//!   the heading (+0x48) are each multiplied by 0.98 (0xdd988,
+//!   @0x8faaf-0x8faeb).
+//! - **The low level** zeroes +0x30 and the fire flag +0xba in its
+//!   preamble (@0x851e6-0x851f6). Sub 1 (@0x8536d-0x85633) is the brake.
+//!   Sub 2 (@0x8563b-0x857bd), gated on +0x6c != -1 and not disabled,
+//!   turns to `_CalcInterceptAngle(ship, stellar)` and, within turn + 5.0
+//!   (0xdd67c) strictly, thrusts at its full `_ShipAccelRate`: capped at
+//!   +0x34 = `_ShipMaxSpeed` × 0.25 (0xdd684) within 500 on both axes
+//!   (0xdd080, strictly), uncapped (+0x34 = 0) beyond; it writes +0x34
+//!   with +0x30. Sub 3 (@0x857bd-0x8585b) runs out from the system centre
+//!   (0,0), not the stellar, within turn + 3.0. Sub 0x16
+//!   (@0x88645-0x886f4) turns to the intercept angle and, within turn +
+//!   15.0 (0xdda30) strictly, calls `_AIFirePlanetGun`; it does not
+//!   thrust and is not gated on disabled.
+//! - **`_AIFirePlanetGun`** (@0x80536-0x805c9) walks 0-255 and keeps the
+//!   **highest** index with the ship's **own** count (+0xc8 + i·0xc8)
+//!   above 0, guidance -1, 1, 2, 4, 5, 6 or 7, ammo and reload (+0xf8 +
+//!   i·0xc8) 0 or less, then sets +0x72 to it and +0xba to 1. It does not
+//!   test `Flags2` 0x0400, so a ready ordinary gun above the planet gun
+//!   fires instead, and its shots pass through ordinary ships. No range
+//!   or damage ranking.
+//! - **Goal 0x12 to other readers.** It is spared as a threat with goals
+//!   7, 9, 0xf, 0xa, 0xb, 5 and 0xc (`_IsThreatToPlayer` @0x7f567,
+//!   `_ExtendedIsThreatToShip` @0x81aff, @0x81b49,
+//!   `_ExtendedIsThreatToPlayer` @0x81c24, @0x81c86, @0x81cce, @0x81d69,
+//!   @0x81da8, `_IsThreatToShip` @0x82055), and `_AIIsShipBusy`
+//!   (@0x82fac-0x82fe4) finds it busy, as every goal but 0, 1, 2, 7 and
+//!   0x14.
+//! - **Sub-munitions on their release tick.** `_CheckShotProximities`
+//!   tests a shot against stellars only when `Count - ProxSafety > life`
+//!   strictly (@0x371fc-0x3721e), and a fresh shot's life is `Count`
+//!   (`_SpawnShot` @0x3e801-0x3e808). So a sub-munition of `ProxSafety` 0
+//!   or more is never tested on the frame it is released, whether a fuse
+//!   in `_CheckShotProximities`' loop or an end of life in the later
+//!   `_HandleShot` released it.
+//! - **Sounds.** None of `_DeathStarAI`, `_AIFirePlanetGun`, the goal-0x12
+//!   block, subs 2 and 0x16, `_ShotCanHitShip`, the expiry blast's skip or
+//!   `_HandleBeams`' filter plays one. The planet gun's shot sounds as any
+//!   NPC fire does, through `_FireAIShipWeapon`.
+//! - **Recorded, not built** (memory-layout accidents). In goal 0x12,
+//!   +0x70 holds a stellar index (@0x8c278), and readers that take it for
+//!   a ship slot are not copied: `_HighLevelAIHandler`'s target check reads
+//!   the active byte of the ship slot numbered by the stellar index, past
+//!   the 64-slot table for an index of 64 or more, and may clear it
+//!   (@0x8d4e4-0x8d50d); `_FireAIShipWeapon` aims a turret (4) or homing
+//!   (1) pick at the ship slot numbered by the stellar index; and stellar
+//!   index 0 reads as "targeting the player"
+//!   wherever +0x70 == 0 is tested without the goal. A sub-munition of
+//!   negative `ProxSafety` released by a fuse into a later slot would be
+//!   tested against stellars in the same loop by a stale sprite rectangle
+//!   (`_SpawnShot` places no sprite; `_SWRLECollision` reads the slot's
+//!   rectangle, +0x1a, +0x1c, @0xabfbd-0xac049); no stock weapon has one.
+//!
+//! ## Built by stellar-fidelity phase 3
+//!
+//! A whole stellar whose `Type` has no sheet that can be read (no `spïn`,
+//! a sheet the engine cannot read, or a `Type` outside 0 to 255; the
+//! catalog's `LandingSite::frame_size` is `None`) draws, is clicked by
+//! and is shot by what its sprite slot holds, from the first rebuild point
+//! that shows it: graphic type 0, as the rebuild means an empty slot to
+//! get, or a `DeadType` sheet a flight frame cloned in since.
+//!
+//! - **The state** is `Rebuilt::held` (the `rebuild` submodule): the sheet
+//!   whose frames each shown stellar's slot holds. A rebuild point sets it
+//!   to the clone's sheet when the stellar shows a graphic that can be
+//!   read, to graphic type 0 when it shows none and `spïn` 1000 reads, and
+//!   leaves it when neither reads (the slot shows no frame, its count
+//!   +0x54 kept). A flight frame sets it only for a stellar showing a
+//!   graphic that can be read. The counted sheet at a rebuild point is the
+//!   clone's, or what the slot held before (stellar-fidelity phase 1's
+//!   rule, generalised).
+//! - **The sheet rule** (`Session::drawn_sheet`, `Space::site_sheet`): a
+//!   destroyed stellar with a `DeadType` sheet draws it, a whole one with a
+//!   `Type` sheet draws that; any other draws, by the engine's reading of
+//!   [`dead_type_fallback`](crate::RuleKey::DeadTypeFallback) while
+//!   destroyed or [`type_sheet_fallback`](crate::RuleKey::TypeSheetFallback)
+//!   while whole, graphic type 0 when its slot shows no frame (the view's
+//!   placeholder with `spïn` 1000's reason) and what its slot holds
+//!   otherwise; its `Type` by the other reading. For a destroyed stellar
+//!   with a readable `Type`, "holds graphic type 0, or shows no frame" is
+//!   exactly "dead since the last rebuild point", so phase 9's rule is
+//!   unchanged.
+//! - **The click box, the landing reach and the shots** read the same
+//!   answer: the click box and the shots' disc are the drawn sheet's frame
+//!   (`Space::drawn_frame_size`; `Session::stellar_targets`), and the
+//!   landing reach reads 150 for the `Type` master that is never loaded
+//!   (F3, already phase 10's model).
+//! - **The counted sheet** (`Session::counted_sheet`) reads a counted
+//!   graphic type 0 as `Type` only where the rules never let the stellar
+//!   draw graphic type 0.
+//! - **Problems.** The scene lists a `Type` sheet that cannot be read
+//!   (`spöb <id> Type: <reason>`), so the reason is reported though the
+//!   engine's reading draws graphic type 0 over the placeholder, and
+//!   `spïn` 1000 when it cannot be read and some stellar has no `DeadType`
+//!   sheet or no `Type` sheet, whatever the readings.
+//!
+//! **Readings.** The Rulebook key
+//! [`type_sheet_fallback`](crate::RuleKey::TypeSheetFallback) defaults to
+//! the engine: what the slot holds. The other reading, the intended
+//! alternative since the Bible says nothing of an unreadable sheet, keeps
+//! the placeholder box and the reason, which shows the broken data. No
+//! sound: none of these routines calls `PlaySound` or `_beepSnd`.
+//!
+//! ## Checked for stellar-fidelity phase 3
+//!
+//! - **F1. The rebuild faults before its fill for a slot in use.**
+//!   `_HandleStellarSystemVisibility` (@0x32aa5), for each stellar of the
+//!   player's system, picks `DeadType` (+0x10) when it is destroyed and
+//!   `Type` (+0x0e) otherwise (@0x32f0f-0x32f2f), loads that master if it
+//!   is missing (@0x32f37-0x32f46), makes the stellar's slot if there is
+//!   none (`_SWCreateEmptySprite` @0x32f80, which nulls the frames +0x4c
+//!   and the count +0x54, @0xa8e0f, @0xa8eb6), skips the clone when the
+//!   master is null (@0x32fe0-0x32fea), then calls
+//!   `_SWSetCurrentFrameIndex(slot, current frame)` with no condition
+//!   (@0x33096). That divides the index by the slot's count (`idivl`
+//!   @0xa90e7) and reads the frame table through +0x4c (@0xa90f4-0xa90f7).
+//!   Each clone sets +0xda (@0xac4c7), and the rebuild's clear nulls +0x4c,
+//!   +0x50 and +0xd4 of every slot with +0xda set while keeping +0x54
+//!   (@0x32e68-0x32e83). So a stellar whose shown graphic has no master
+//!   divides by zero in a newly made slot (#DE @0xa90e7), and in a reused
+//!   one reads through a null +0x4c below 4 × count, inside the 4 KB
+//!   `__PAGEZERO` (@0xa90f7). The fill pass (@0x33231-0x332d0) tests +0x4c
+//!   and +0xd4 (@0x33241-0x33250) but fills only the 16 slots no stellar
+//!   uses this time: the clear set their +0xd0 to -1 (@0x32e8f), so the
+//!   `ja` at @0x33260 skips the "had no data" log, and hid them
+//!   (@0x32ea6). The log for a stellar's index (+0xd0 ≤ 0x7ff,
+//!   @0x33256-0x3329c) shows the authors meant an empty slot of a stellar
+//!   to get `spïn` 1000. The fault is the original's bug (the game ends at
+//!   the rebuild point that shows such a stellar); the engine defaults to
+//!   the intent, as phase 9 does for `DeadType`. Stock never reaches it:
+//!   every stock `Type` sheet reads, no stock script uses `Y`, no stock
+//!   `spöb` has `Flags2` 0x0040, and no stock weapon is planet-type.
+//! - **F2. The per-frame sprite tick** (`_HandleStellarSprites`, as it
+//!   would run if the rebuild survived; it also runs mid-system) loads the
+//!   null `Type` master again each frame (@0x2e7c7-0x2e7d1). With no
+//!   `spïn`, `_GetSpriteInfo` fails and `_LoadMasterStellarSprite` returns
+//!   silently (@0x1ebb9-0x1ebc0); with an `rlëD` that
+//!   `_SWCreateSpriteFromRLEResource` fails on, it raises
+//!   `_ReportSpriteLoadError` (@0x1ec71), a stop alert through the import
+//!   at 0x3b6257 (@0x1eb62) whenever the error code is non-zero
+//!   (@0x1ea8a). The clone then gets a null master and returns -1 without
+//!   touching the slot (@0xac448-0xac462). So the slot keeps its frames:
+//!   graphic type 0's from the rebuild's intent, or a `DeadType`'s that a
+//!   frame finding the stellar destroyed cloned in (@0x2e79b, @0x2e7e5),
+//!   kept after a `U` until the next rebuild point. Animation is
+//!   unchanged (stellar-fidelity phase 1's +0x474 rule).
+//! - **F3. Landing radius.** `_GetStellarSpriteXSize` (@0xac91) gives 150
+//!   for a null `Type` master (@0xacdf, returned @0xad2d). The dock
+//!   request lands within trunc(150 × 1.75) = 262 when the slot shows a
+//!   frame, and within 75 when it does not (@0x66cc7-0x66cfd). `Rebuilt`
+//!   already models this (a `Type` with no sheet is never loaded, so its
+//!   width is `Unloaded`), and this phase pins it with tests.
+//! - **F4. Clicking.** `_HandlePlayer` (@0x6a5f9-0x6a686) uses the slot's
+//!   rect (+0x1a), so such a stellar is clicked by the frame its slot
+//!   holds.
+//! - **F5. Shots.** `_CheckShotProximities` collides a planet-type shot
+//!   with the stellar's slot sprite (stellar +0x00, `_SWRLECollision`
+//!   @0x37288-0x372a8) after skipping the destroyed (@0x3727b), so a whole
+//!   stellar with no `Type` sheet is hit by the frame its slot holds.
+//! - **Sounds.** None of these routines calls `PlaySound` or `_beepSnd`;
+//!   the stop alert's sound belongs to the alert, left out below.
+//! - **Left out.**
+//!   - The fault at the rebuild (@0x33096 → `_SWSetCurrentFrameIndex`
+//!     @0xa90e7 in a newly made slot, @0xa90f7 in a reused one): the
+//!     original's bug, which ends the game. Not copied, and no key, as a
+//!     crash is not a reading; the engine follows the fill pass's intent
+//!     (@0x33241-0x332d0), as stellar-fidelity phase 8 does for its divide
+//!     by zero.
+//!   - The stop alert for an unreadable `rlëD` (`_ReportSpriteLoadError`
+//!     @0x1ea6c, alert through 0x3b6257 @0x1eb62), raised at the rebuild's
+//!     load (@0x32f46 → @0x1ec71) and, if the slot survived, every frame
+//!     (@0x2e7d1). For a `Type` sheet the original faults straight after
+//!     the rebuild's alert, so the per-frame alert is unreachable. The
+//!     engine reports the broken sheet once in the scene's problems.
+//!   - The crash log lines ("had no data" @0x33256-0x3329c; @0x332de and
+//!     @0x33304 in the check after the fill): diagnostics with no effect on
+//!     play.
+//!   - NPC landing's width for such a stellar (150, read as a quarter by
+//!     `_HighLevelAIHandler` @0x8dbdf-0x8dbfa): stellar-fidelity phase 5.
+//!   - The click rectangle's shape (width margin, half-open edges, first
+//!     slot wins; `_HandlePlayer` @0x6a649-0x6a686): stellar-fidelity
+//!     phase 9.
+//!   - A `Type` outside 0 to 255 indexing neighbouring statics
+//!     (`_masterStellarSprite` @0x2e7c7): a memory-layout accident; the
+//!     engine reads it as no sheet, so it draws graphic type 0.
+//! - **Left out, depending on unlanded work.**
+//!   - `Type` sheets the original loads that the engine could not read: a
+//!     `spïn` with no `rlëD` (the `PICT` pair,
+//!     `_SWCreateSpriteFromSinglePictXY` @0x1ece3) and an 8-bit `rlëD`.
+//!     Read since stellar-fidelity phase 4: such a `Type` draws its own
+//!     sheet.
+//!   - A `spïn` whose tiles multiply to 0 or less: built by
+//!     stellar-fidelity phase 8. Such a `Type` reads, so it is outside
+//!     this phase's rule.
+//!
+//! ## Built by stellar-fidelity phase 4
+//!
+//! A `spïn` with no `rlëD` reads from its `PICT` pair, and an `rlëD` whose
+//! header says 8 bits reads, both as the original loads and draws them.
+//! Stellars, shots and explosions share the lookup
+//! (`nova_data::GameData::spin_sheet`), so all of them draw such sheets;
+//! a stellar whose `Type` or `DeadType` is one now draws it, not graphic
+//! type 0 or its `Type`.
+//!
+//! - **The `PICT` pair** (`nova_data::graphics::cut_pict_sheet`): the
+//!   sprites `PICT` is cut into `xSize` x `ySize` frames, as many columns
+//!   as its width holds, row by row, each colour kept to its top five bits;
+//!   the mask shows the sprite only where it is white at five bits, or,
+//!   when `MasksID` is `SpritesID`, the sprite hides its own white. The
+//!   sheet's kind (`nova_data::SheetKind::PictPair`) has the views key its
+//!   frames by the `spïn` (`nova_view::ImageKind::SpinSheet`), since there
+//!   is no `rlëD` ID to key them by.
+//! - **The 8-bit `rlëD`** (`nova_data::graphics::decode_rled_as`): by the
+//!   engine's reading, its bytes as they fall into the 16-bit world; by the
+//!   other, each byte a colour of the Mac's standard 256-colour table.
+//! - **16-bit runs** now fill as `_BlitPixieMemSet` does: the run word's
+//!   low half on the run's even pixels, its high half on the odd ones,
+//!   where the engine took the high half everywhere. Stock runs are all
+//!   `0x7FFF7FFF`, so stock draws the same.
+//! - **Problems.** A `spïn` with neither an `rlëD` nor a `PICT`, a `PICT`
+//!   pair with no mask, and a pair that does not decode or cut are each
+//!   reported with their reason, and the fallbacks of phases 9 and 3 apply
+//!   as to any sheet that cannot be read.
+//!
+//! **Readings.** The Rulebook key
+//! [`eight_bit_sheet`](crate::RuleKey::EightBitSheet) defaults to the
+//! engine: an 8-bit sheet drawn garbled, as the original draws it. The
+//! other reading, the intended alternative since the Bible says only
+//! "rleD/rle8 resources", draws each byte through the standard palette.
+//! The `PICT` cut gets no key: it is a well-defined cut, not garbled, and
+//! the Bible gives no rule for it. The 16-bit runs get no key either: the
+//! high-half reading was a stand-in taken from an editor, not a reading of
+//! the Bible or a choice the engine made for a reason, and stock cannot
+//! tell the two apart. No sound: none of these routines calls `PlaySound`
+//! or `_beepSnd`; the stop alerts and `_SWAssertFail`'s `SysBeep` belong to
+//! the quit paths left out.
+//!
+//! ## Checked for stellar-fidelity phase 4
+//!
+//! - **The world is 16-bit.** `_main` clears `_useLegacyRenderingPipeline`
+//!   (0x30faa0, through 0x3b5030) at @0xccab8-0xccabe, setting it only when
+//!   `_meetsMinimumRequirements` fails (@0xccac1-0xccaca). With it clear,
+//!   `_SWCreateSpriteWorld` makes the world 16-bit (@0xb6be2), as
+//!   `_SWCreateFrame` and `_SWCreateGWorldFromPict` make their `GWorld`s
+//!   (@0xad68d-0xad6a9, @0xa7e81-0xa7e9d). So `_LoadMasterStellarSprite`'s
+//!   depth test (@0x1ebd7-0x1ebe8) always picks `rlëD`, never `rlë8`, as
+//!   `_LoadSprites` does for every other `spïn` (@0x205bf-0x205d5).
+//! - **F1. Loading a `spïn`** (`_LoadMasterStellarSprite` @0x1eb72;
+//!   `_LoadSprites` repeats it, e.g. @0x20659-0x20752). `_GetSpriteInfo`
+//!   (@0x1bf80) reads `SpritesID`, `MasksID`, `xSize`, `ySize`, `xTiles`
+//!   and `yTiles` (+0 to +0xa). If `ResourceExists('rlëD', SpritesID)`
+//!   (@0x1ebee), the sheet comes from the `rlëD`
+//!   (`_SWCreateSpriteFromRLEResource` @0x1ec30); an `rlëD` that exists
+//!   but fails is not followed by the `PICT`. Otherwise the game calls
+//!   `_SWCreateSpriteFromSinglePictXY(world, &master, NULL, SpritesID,
+//!   MasksID, xSize, ySize, border 0, 0, maxFrames 0, maskType 1)`
+//!   (@0x1ece3), then `_SWLockSprite` (@0x1ed2f) and `_ConvertSpriteToRLE`
+//!   (@0x1ed3a). On either path the master's count (+0x54) is then
+//!   overwritten with `xTiles` × `yTiles` (@0x1ed8c-0x1ed97), phases 1 and
+//!   8's count, unchanged here. `xTiles` and `yTiles` play no part in
+//!   cutting a `PICT`.
+//! - **F2. Cutting the `PICT` pair** (`_SWCreateSpriteFromSinglePictXY`
+//!   @0xa9bee).
+//!   - Each `PICT` is drawn into its own `GWorld` (`_SWCreateGWorldFromPict`
+//!     @0xa7dc7) of its `picFrame` moved to (0, 0) (@0xa7e16-0xa7e34),
+//!     erased to white first (`EraseRect` @0xa7ee5), then drawn
+//!     (`_DrawPicHandle` @0xa7ef4, through `AmbrosiaTools`' `DT_ImageFileLoad`
+//!     and `DT_DrawImage`, which ends in `CopyBits`, `AmbrosiaTools`
+//!     @0x4780c, or `DrawPicture` @0x8637 if that load fails). Pixels the
+//!     picture does not cover stay white, and colours land as RGB555, each
+//!     channel's top five bits.
+//!   - The mask `PICT` (`maskType` 1) gets a `GWorld` the same way
+//!     (@0xa9e00-0xa9e15), which is inverted (`_SWInvertGWorld` @0xa9c9c →
+//!     `InvertRect` @0xa6ff8).
+//!   - With maxFrames 0 the frame count is (width / `xSize`) × (height /
+//!     `ySize`), integer divisions over the port rect (@0xa9ce7-0xa9d25).
+//!     Frames are cut row by row, left to right (@0xa9f3c-0xaa045), each an
+//!     `xSize` x `ySize` rect (`_SWCreateFrameFromGWorldAndRectPartial`
+//!     @0xa9fb5) whose pixel mask is the inverted mask `GWorld` at the same
+//!     rect (+0x40/+0x48, @0xad8c2-0xad908); the cut moves down a row when
+//!     the next rect passes the picture's width, so the columns are width /
+//!     `xSize`, not `xTiles`.
+//!   - When `MasksID == SpritesID` the mask comes from the sprite itself
+//!     (@0xa9cd0 → @0xa9e30 `_SWCreatePixelMaskFromGWorld`): with the
+//!     transparent colour white (`_gSWTransparentColor` @0xdf020 =
+//!     ffff ffff ffff), `_SWCreateMaskAndFixImage` (@0xa8848) makes a pixel
+//!     whose `& 0x7FFF` is `0x7FFF` transparent and zeroes it, every other
+//!     pixel opaque (@0xa8671-0xa86b4).
+//!   - The extra mask inversions for a world of 8 bits or fewer
+//!     (@0xa9e54-0xa9e7b, @0xa9ece-0xa9edf) are not reached at 16 bits.
+//! - **F3. Turning the cut into RLE** (`_ConvertSpriteToRLE` @0x1e489;
+//!   `_SWCreateRLEData` @0xaec89; `_BlitPixieRLEParsePixels` @0xc2875).
+//!   - The picture's area must equal frame width × height × frames
+//!     (@0x1e4a0-0x1e4e4), true only for a whole grid. Otherwise it logs
+//!     (@0x1e4e6), returns -1, and the loader raises
+//!     `_ReportSpriteLoadError` kind 4 (@0x1ed7b); the master keeps frames
+//!     with no RLE data (+0xd4 null, each frame's +0x68 null).
+//!   - `_SWCreateRLEData(sprite, 0)` takes frame 0's depth (16), needs each
+//!     frame's mask (@0xaee0d → error 0x6a), and calls
+//!     `_BlitPixieRLEParsePixels`, which keeps a pixel exactly where its
+//!     mask pixel is 0 (@0xc2958-0xc297e). After the inversion that is
+//!     where the mask `PICT` was white at RGB555: white in the mask shows
+//!     the sprite, black, grey and every other colour hide it, and the
+//!     mask's uncovered pixels, erased white, show. Shown pixels keep their
+//!     RGB555 value, black included. The mask is stepped by the sprites'
+//!     rowBytes (@0xc2b88-0xc2b8e). No fill token (op 4) is emitted: state
+//!     3 is never entered. The `GWorld`s are disposed (@0x1e518-0x1e5ba).
+//! - **F4. An `rlëD` of depth 8** (`_SWCreateSpriteFromRLEResource`
+//!   @0xa9990; `_SWCreateFrame` @0xad556; `_BlitPixieRLETranslucentDrawProc`
+//!   @0xbb3fc; `_BlitPixieRLE` @0xbddd0).
+//!   - The loader reads the header (@0xa99e9-0xa99fb) and makes min(count,
+//!     `xTiles` × `yTiles` when that is above 0) frames at the header's
+//!     depth (@0xa9a28-0xa9a41, @0xa9ac7). The frame-making flag is
+//!     `maskType & 7` = 0, so `_SWCreateFrame` makes no `GWorld` (@0xad62c →
+//!     @0xad6f2): each frame holds only its depth (+0x20 = 8) and shift
+//!     (+0x5e = 0). `GetPixDepth` (@0xad64b) is in the `GWorld` branch,
+//!     reached only by the legacy pipeline. No CLUT is read on this path.
+//!   - The resource flipper `_FlipRle8` (@0xa5cd6, installed for `rlë8`
+//!     and `rlëD`, @0xa58a7, @0xa58cf) swaps the header words;
+//!     `_BlitPixieRLESwap` (@0xbe3a8) byte-swaps each token and run word
+//!     (@0xbe440), 16-bit pixels (@0xbe44d) and 32-bit pixels (@0xbe46e),
+//!     and leaves 8-bit pixel bytes as they are (@0xbe3f0-0xbe3f7).
+//!   - Every stellar slot's draw proc is `_BlitPixieRLETranslucentDrawProc`
+//!     (`_HandleStellarSystemVisibility` @0x33052 sets it from 0x3b532c).
+//!     For a depth-8 frame with no translucency (+0xa8 ≤ 0) and no bias
+//!     (+0xb0 ≤ 0) it calls plain `_BlitPixieRLE` (@0xbb792 → @0xbb8b6 →
+//!     @0xbb9fb → @0xbb9c3; clipped, `_BlitPixieRLEClipped` @0xbb89f →
+//!     @0xbb751), with the destination addressed by the 16-bit world's
+//!     shift (@0xbb53c-0xbb555).
+//!   - `_BlitPixieRLE` works in bytes: op 1 moves to the next row, op 2
+//!     copies *count* bytes (`_BlitPixieMemCopy`) and aligns the stream to
+//!     4, op 3 skips *count* bytes, and op 4 calls
+//!     `_BlitPixieMemSet(dst, run word, count)` (@0xc0452), which stores
+//!     the swapped word in 4-byte chunks, then a 2-byte tail of its low
+//!     half and a 1-byte tail of its low byte (@0xc0452-0xc049a): the file
+//!     word `b0 b1 b2 b3` lands as `b3 b2 b1 b0` repeating.
+//!   - So row *y*'s bytes land at the frame's left edge in the 16-bit
+//!     little-endian world: pixel *k* is `byte[2k] | byte[2k + 1] << 8`,
+//!     RGB555 with its top bit ignored. The picture fills the left half of
+//!     its frame box, each pair of colour indexes one meaningless colour,
+//!     and a pixel only one of whose bytes is written keeps the
+//!     background's other byte.
+//!   - The same store makes a 16-bit run's pixel *k*, counted from the
+//!     run's start, the word's low half when *k* is even and its high half
+//!     when *k* is odd. The game's own encoder never emits a run (its dead
+//!     run code would repeat the pixel into both halves, @0xc29d7-0xc29f4),
+//!     so only a sheet from another encoder can tell the readings apart.
+//!   - The frame rect (+0x22), used for clicks, collision and the slot
+//!     rect, is the header's width × height whatever the depth, so the
+//!     catalog's frame sizes are unchanged by the reading.
+//! - **F5. What happens when loading fails.** Every `SpriteWorld` assert on
+//!   these paths quits the game: `_SWAssertFail` (@0xa7a50) shows a stop
+//!   alert (@0xa7b04), beeps (`SysBeep` @0xa7b15) and calls `ExitToShell`
+//!   (@0xa7b2d).
+//!   - A missing `PICT` or mask fails `_SWCreateSpriteFromSinglePictXY`
+//!     (@0xa9c5a; mask @0xa9c83-0xa9c90), leaving the master null; the
+//!     loader raises alert kind 3, then `_SWLockSprite(NULL)` asserts
+//!     (@0xaa96e-0xaa973 → @0xaaaad-0xaaabc). (`_LoadSprites` would also
+//!     write +0x54 through null, @0x2074d.)
+//!   - An `xSize` or `ySize` of 0 divides by zero (@0xa9cff, @0xa9d1d); a
+//!     negative one fails the rect assert in `…Partial` (@0xad818-0xad844).
+//!   - A picture smaller than one frame cuts no frames, and
+//!     `_SWSetCurrentFrameIndex(0)` (@0xa9f12) divides by a count of 0
+//!     (@0xa90e7).
+//!   - A picture that is not a whole grid raises alert kind 4 (F3), and the
+//!     first draw asserts on the frame's null RLE pointer (@0xbb43c-0xbb441
+//!     → @0xbb66d).
+//!   - A mask of another width is read sheared, and a shorter one past its
+//!     end, as it is stepped by the sprites' rowBytes.
+//!   - `_SWLockSprite`'s frame walk (@0xaaa10-0xaaa5b) asserts when an
+//!     `rlëD`'s line-start counts do not chain to another line start or
+//!     the end.
+//! - **Sounds.** None of these routines calls `PlaySound` or `_beepSnd`.
+//! - **Left out.**
+//!   - The quit and crash paths of a `PICT` pair (F5): the original's bugs,
+//!     each ending the game, and a crash is not a reading. The engine reads
+//!     each as no sheet with a reason (`NoSheet`, `NoMask`, `Picture` with
+//!     `BadDimensions`, `NoFrames` or `PartialGrid`), so phase 9's and
+//!     phase 3's fallbacks apply. No key.
+//!   - The stop alerts of `_ReportSpriteLoadError` (kinds 3 and 4, @0x1ed24,
+//!     @0x1ed7b; alert through 0x3b6257 @0x1eb62): each precedes a quit,
+//!     and the engine lists the reason among the scene's problems.
+//!   - A mask of another width than its sprites, or shorter
+//!     (@0xc2b88-0xc2b8e): a memory-layout accident, read by the engine as
+//!     `MaskSizeMismatch`.
+//!   - An `rlëD` whose line-start counts do not chain (@0xaaa1f-0xaaa2e,
+//!     @0xaaa4c-0xaaa5b): the original's bug; the engine ignores the
+//!     counts, as it always has.
+//!   - A 16-bit pixel of an 8-bit sheet only one of whose bytes is written
+//!     keeps the background's other byte (F4): a straight-alpha texture
+//!     cannot replicate it, so it is drawn clear.
+//!   - The legacy pipeline: a world at the device's depth, `rlë8`
+//!     (`0x726c9138`, @0x1ebd7-0x1ebe8, @0xa99b4-0xa99bd), `_SWCreateFrame`'s
+//!     `GWorld` branch with `GetPixDepth` @0xad64b, and the 8-bit-world mask
+//!     inversions (@0xa9e54-0xa9e7b, @0xa9ece-0xa9edf). It runs only when
+//!     `_meetsMinimumRequirements` fails (@0xccac1-0xccaca); the engine
+//!     models the 16-bit world every supported machine runs.
+//!   - An `rlëD` of depth 32, or of any depth other than 8 or 16, loads
+//!     (@0xa9a28-0xa9ac7). At 32 bits `_BlitPixieRLESwap` swaps each pixel
+//!     (@0xbe46e) and `_BlitPixieRLE`'s byte copy draws it at twice its
+//!     width, past its frame box; other depths misparse in the swap
+//!     (@0xbe3f0-0xbe401), and the draw proc asserts on a depth of 7 or
+//!     less (@0xbb612). The engine keeps `UnsupportedDepth`, so such a
+//!     sheet falls back to graphic type 0.
+//!   - Ship sprites from a `PICT` pair: `_LoadExtendedShipSprites`
+//!     (@0x2298b-0x23917) calls the same cutter for `shän` images, and the
+//!     engine's ship sprites still read `rlëD`s only. (An 8-bit ship `rlëD`
+//!     now decodes as drawn through the shared decoder, matching the plain
+//!     blit.)
+//!   - Main-screen `spïn`s 600 to 610 from a `PICT` pair: `_LoadSprites`
+//!     reads them the same way (@0x206b0); the main screen reads their
+//!     `rlëD` only.
+//!   - An 8-bit sheet drawn translucent: `_BlitPixieRLETranslucentDrawProc`'s
+//!     depth-8 branches, `_BlitPixieRLETranslucent8`,
+//!     `_BlitPixieRLETranslucentClipped8`, `_BlitPixieRLEAddOver8` and
+//!     `_BlitPixieRLEAddOverClipped8` (@0xbb7ed-0xbb890, @0xbb8b6-0xbb9ec),
+//!     where levels 0x20 and up that are not the plain add-over case draw
+//!     nothing (@0xbb80a-0xbb83a, @0xbb8d7-0xbb907). A stellar reaches them
+//!     only when murk gives it translucency (+0xa8 > 0), which the engine
+//!     does not model yet; a ship reaches them under cloak or fade.
+//!
+//! ## Built by stellar-fidelity phase 5
+//!
+//! NPCs land as `_HighLevelAIHandler` state 1 (@0x8d8b8-0x8db5a) lands
+//! them (`nova_sim::traffic::land_flight`, `nova_sim::landing::npc_over`):
+//!
+//! - **When it runs.** Only once the AI wait is out: the handler's wait
+//!   gate returns while +0x4c > 0, for every goal but 0xa and 0xe
+//!   (@0x8d4b9-0x8d4d2). So a landing goal on a hypergate or wormhole
+//!   (`Flags2` & 0x3000, @0x8d8d7-0x8d8fe) becomes a gate entry, state 20
+//!   in the same pass (@0x8db5f-0x8db62), only after the wait. With a
+//!   travel stellar of -1 the block does nothing (@0x8d8c9-0x8d8d1), which
+//!   the engine's landing goal, always naming its stellar, can't reach.
+//!   The jump stage +0x50 is zeroed each pass (@0x8d903), as the engine's
+//!   `warp_out::hold_stage` already zeroes it for a ship not jumping.
+//! - **The box.** The offset from the stellar's centre, truncated to whole
+//!   pixels (@0x8d90d-0x8d950), at most 40 on each axis (@0x8d90f), or
+//!   trunc((9 − turn) × 8 + 32) in doubles below a `_ShipTurnRate` of 8
+//!   (@0xdd044, @0xdda90, @0xdda98, @0xdd578, @0x8d90f-0x8d9a8),
+//!   inclusive (@0x8d9d7, @0x8d9f9). The 16-bit `cwde` and `movsx`
+//!   (@0x8d929, @0x8d94b, @0x8d9b7) are not replicated.
+//! - **Outside**, sub 2, the stellar attacker's approach (@0x8d9b2-0x8da07;
+//!   `_LowLevelAIHandler` @0x8563b-0x857bd).
+//! - **Inside**, a folding `shän` (0x02) above fold set 0 unfolds
+//!   (@0x8da0c-0x8da38), then the per-axis speed gate: 0.35 or more on
+//!   either axis (the double @0xdda68, @0x8da41-0x8da8b) brakes by sub 1,
+//!   its velocity and speed (+0x48) × 0.98 in doubles each pass (@0xdd988,
+//!   @0x8da8d-0x8dad7); below it on both it lands (@0x8dadc).
+//! - **Sounds.** None: state 1 calls no `PlaySound` or `_beepSnd`.
+//!
+//! - **The landing's end** (@0x8dadc-0x8db5a,
+//!   `nova_sim::traffic::land_flight::stay`): its velocity and speed none,
+//!   goal and sub-goal 0, +0x92 = +0x6c (@0x8db00, the stellar visited);
+//!   +0x6c, its target and its provocation are not written; and its wait
+//!   +0x4c is `Rand(75)` + 100 for a class of `shïp` `Flags3` 0x0002
+//!   (class +0x9ec, copied from the record's +0x726 @0x7a204-0x7a20b;
+//!   @0x8db19-0x8db3a), else `Rand(200)` + 300 (@0x8db41-0x8db5a). Its
+//!   slot stays active (+0xb8 is not cleared), so it still counts toward
+//!   the system's ships and `AvgShips` and keeps its berth.
+//! - **The wait.** `_HandleShip` counts +0x4c down by `_gSpeedMult` (1.0
+//!   a frame) for any class but the escape pod (@0x35025-0x35048), and
+//!   skips the ship's turn, thrust and fire meanwhile (@0x34a54-0x34a72):
+//!   the engine's AI wait, counted down at the end of the fly half,
+//!   holding its flight and its guns. `_AIDispatch` runs its type's think
+//!   every frame whatever the wait (@0x8ff26-0x90016), in goal 0, so the
+//!   idle block finds the stellar visited and sends a trader or warship
+//!   away by hyperspace, or stops it when it can't jump; the high level,
+//!   skipped while the wait runs (@0x8d4b9-0x8d4d2), flies that once it is
+//!   out. A miner's shuttle stays idle through its wait, then picks the
+//!   nearest other stellar.
+//! - **Mission ships.** By the engine's reading of
+//!   [`landed_leaves`](crate::RuleKey::LandedLeaves) a mission ship stays
+//!   too, and its landing counts nothing; by the other it leaves the system
+//!   as it lands, counted as one that jumped out.
+//!
+//! **Readings.** The Rulebook key
+//! [`npc_landing`](crate::RuleKey::NpcLanding) defaults to the engine's
+//! box. The other reading, the port's earlier landing, lands within the
+//! stellar's landing radius at or below 1.0 a tick, flying its own
+//! approach; the Bible says nothing of how an NPC lands. The landing's end
+//! and its wait are the original's under either reading.
+//!
+//! ## Built by stellar-fidelity phase 6
+//!
+//! - **The player's landing speed.** `nova_sim_state::landing::check_landing`
+//!   reads the speed by [`landing_speed`](crate::RuleKey::LandingSpeed):
+//!   by the engine a ship is too fast unless |vx| and |vy| are each at
+//!   most `PER_AXIS_LANDING_SPEED`, 0.75, compared in single precision,
+//!   inclusive, a NaN on either axis refused. So a ship at 0.7 on each
+//!   axis (about 0.99 overall) lands, and one at 0.8 on one axis is too
+//!   fast. `Session::land_press` passes the session's reading to
+//!   `land_or_select`. The refusal, its wording and its beep are as
+//!   before.
+//!
+//! **Readings.** The Rulebook key
+//! [`landing_speed`](crate::RuleKey::LandingSpeed) defaults to the
+//! engine's per-axis gate. The other reading is the port's earlier check,
+//! the overall speed at most 1.0 a tick. The Bible says nothing of a
+//! landing speed (the manual says only "moving too fast").
+//!
+//! ## Checked for stellar-fidelity phase 6
+//!
+//! `_HandlePlayerDockRequest` (@0x66691-0x67ef9), after the request's
+//! earlier steps (landability @0x6695c-0x669ae, the fee @0x669b4-0x66a80,
+//! the cloak @0x66a85-0x66ae9, disabled and dying silently to the
+//! epilogue @0x66aee-0x66b14, the station byte @0x66b1a-0x66b3f, and
+//! uninhabited "No response." @0x66b51-0x66bcd), gates the landing in
+//! this order:
+//!
+//! 1. The target is the request's (@0x66bd2-0x66be5), else the request
+//!    branch at 0x6788f.
+//! 2. `_FloatAbs` of vx (+0x20) and vy (+0x24), each stored as a float
+//!    (@0x66beb-0x66c1d).
+//! 3. The counter `_dockPermission` (0x3b544c) above 0x2ed
+//!    (@0x66c13-0x66c23; a 16-bit `cmpw`, not replicated), else 0x676db.
+//! 4. The AI wait: the ship's +0x4c above 0 refuses (@0x66c29-0x66c36).
+//!    The player's +0x4c is never above 0 (zeroed @0x66b6d; see
+//!    ship-handling-fidelity phase 2), so this always passes.
+//! 5. |vx| against the **single-precision float** 0.75 at 0xdd658 (bytes
+//!    `0000403f`; the phase plan said a double, which it is not):
+//!    `ucomiss`, `ja` refusing above and `jp` on NaN (@0x66c3c-0x66c51).
+//! 6. |vy| against it, `jb` refusing above and, the compare unordered, on
+//!    NaN (@0x66c57-0x66c66). So the gate is per axis and inclusive.
+//! 7. The reach box (@0x66c6c-0x66cfd, built by phase 10), else "too far"
+//!    at 0x67687.
+//!
+//! The refusal (@0x676db-0x67838) beeps `_beepSnd[3]`, `snd ` 153
+//! (@0x676fe; silent for a `_dockTarget` above 0x7ff, @0x67711),
+//! recomputes the reach (@0x67720-0x677b2) and says "too fast" (`STR#`
+//! 2002 #69-#72) only when the ship is inside it on both axes and the
+//! counter is above 0x2ed (@0x677b2-0x677c0), else "too far" (#65-#68),
+//! for 360 ticks (@0x6787f). The engine's refusal order already matched;
+//! only the speed compare changed. The fee's branches (@0x669b4-0x66a80,
+//! @0x66db9-0x66df5) are built by stellar-fidelity phase 15; the cloak refusal
+//! is cloaking-fidelity phase 8's; every other branch was already built.
+//!
+//! ## Built by stellar-fidelity phase 7
+//!
+//! - **The owner test** is `Chart::held_here` (`nova_sim`'s
+//!   `session::chart_ownership`): the stellar's holder
+//!   ([`OverlaidGalaxy::holder`], its owner, else the rescue to the
+//!   player's system) is the player's system.
+//! - **The width.** The player's landing reach and the NPCs' gate entry
+//!   box read `TypeWidth::Unloaded`, 150, for a stellar not held, ahead of
+//!   phase 3's master rule, as `_GetStellarSpriteXSize`'s owner test runs
+//!   ahead of its master tests. So such a stellar reaches trunc(150 ×
+//!   1.75) = 262 and a gate a quarter of 150, 37.
+//! - **The press.** `land_or_select` refuses a stellar not held as not
+//!   landable, after `is_landable` and before the uninhabited, request,
+//!   speed and reach tests, with the not-landable line and its beep.
+//!
+//! Every stellar shown is held ([`OverlaidGalaxy::shows`]), so these
+//! bite only on a stellar kept among the sites after the player's system
+//! changed without a rebuild point. By the other reading of
+//! [`landing_distance`](crate::RuleKey::LandingDistance), the circle, the
+//! owner counts for nothing, as the master doesn't. The Bible says nothing
+//! of ownership and the landing width, so there is no new key.
+//!
+//! ## Checked for stellar-fidelity phase 7
+//!
+//! - **The width's owner test.** `_GetStellarSpriteXSize`
+//!   (@0xac91-0xad37) gives 150 when the stellar's owner word (+0x14) is
+//!   not the player's system, the first ship's +0x74 through 0x3b5138
+//!   (@0xacb2-0xacc1). It comes after the index test (@0xac9c) and before
+//!   the `Type` range and master tests (@0xacc3-0xace6). The master table
+//!   `_masterStellarSprite` (0x3b5040) is indexed by `Type`
+//!   (@0xacd2-0xacda), not by system: a shared stellar's 150 elsewhere is
+//!   the owner test, not a master loaded for one system only. The
+//!   function plays no sound.
+//! - **Who owns, and when.** Unchanged: see "Visibility and governments"
+//!   and the ownership checks of crons-news-ranks phase 5, missions-fidelity
+//!   phase 11 and crons-news-ranks-fidelity phases 18 and 38. The owner is
+//!   the lowest-ID visible lister no lower visible system at its place
+//!   shadows, recomputed only at a galaxy refresh; a rebuild only rescues
+//!   an unowned stellar to the player's system.
+//! - **The slot rule.** `_HandleStellarSystemVisibility` keeps a master
+//!   and gives a sprite slot only to a stellar active and owned by the
+//!   player's system (@0x32cf9-0x32d4c, @0x32ee4-0x33229). In another
+//!   system that lists it, the stellar is not drawn, not clicked (the
+//!   click walks the slots at 0x3b53d0, `_HandlePlayer`
+//!   @0x6a5f9-0x6a686) and not hit (`_SWRLECollision` @0x372a8).
+//!   [`OverlaidGalaxy::shows`] already gives this.
+//! - **The dock request refuses first.** `_HandlePlayerDockRequest`
+//!   tests the held stellar (+0x6c): `_StellarIsLandable` (@0x66977), its
+//!   owner the player's +0x74 (@0x6699a-0x669a4), and active (@0x669aa).
+//!   Any failure goes to 0x67cda, the not-landable line (`STR#` 2002
+//!   #84-#90) and `_beepSnd[3]`, `snd ` 153 (@0x67e8f). Both its width
+//!   calls come later (@0x66cd9, @0x6773a), so the player is never landed
+//!   on a stellar another system owns at 150 × 1.75.
+//! - **NPC gate entry reads the 150.** `_HighLevelAIHandler` state 20
+//!   (@0x8dbdf) takes `_GetStellarSpriteXSize(gate) / 4`, inclusive: 37
+//!   for a gate the player's system doesn't own. An NPC holds one as its
+//!   destination: `_SelectRandomStellarDest` picks from its system's
+//!   `NavDefs` (@0x806bd-0x8087c), testing only `_StellarIsLandable`
+//!   (@0x8074e) and `Flags`/`Flags2`, never the owner or active. A ship an
+//!   in-flight `M` or `N` leaves behind can hold one on its last tick, but
+//!   is freed before it is drawn (`_HandleShipDisplay` @0x2ded6-0x2dee7).
+//! - **Readers with no owner test.** `_FindNearestStellar`
+//!   (@0x276c-0x2888) walks the ship's system's 16 `NavDefs`, requiring
+//!   active (@0x27c3) and `Flags` 0x01 (@0x27cd), a gate only within the
+//!   squared distance at 0xdd050 (@0x2841-0x2853). The land key with
+//!   nothing held (@0x6a8ed-0x6a932) requests its pick, which the dock
+//!   request then refuses when unowned; the tutorial's land hints name it
+//!   (@0x709e8, @0x70bdc). The slot keys and F5 (`_HandlePlayer`
+//!   @0x69e28-0x69e94) take `NavDefs[slot]` (@0x69e2e-0x69e46) or the
+//!   nearest pick (@0x69e59) and act only on an owned one (@0x69e88), with
+//!   no sound: slot N is `NavDefs` index N, gaps included. The status
+//!   radar (`_DrawStatusRadar` @0x498ad-0x49a8a) draws every non-empty
+//!   `NavDefs` entry, with no active or owner test, sizing the blip by
+//!   whether the `Type` master is loaded (@0x499ef-0x49a27). The land
+//!   key's and F5's nearest pick, with the gate limit and the owner drop,
+//!   are built by stellar-fidelity phase 14 (below). The slot keys, the
+//!   tutorial hints' and `_DoNewPilot`'s candidates, NPC destinations and
+//!   the radar still read only the stellars shown:
+//!   rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs,
+//!   rdm:phase/stellar-fidelity-followups/phase-6-npc-destinations-over-navdefs
+//!   and rdm:task/radar-blips-every-listed-stellar.
+//!
+//! ## Built by stellar-fidelity phase 8
+//!
+//! A sprite slot cloning a graphic whose `spïn`'s `xTiles` × `yTiles` is
+//! 0 or less keeps the frame it showed, as the original's code leaves it
+//! with its faults stepped over (see "Checked for stellar-fidelity phase
+//! 8"):
+//!
+//! - **from a rebuild point**, which empties every slot, it shows no
+//!   frame: nothing is drawn, the dock request's reach is 75, the click
+//!   falls back to the 64-pixel placeholder, and shots and deadly discs
+//!   read nothing (`DrawnSheet::NoFrame`);
+//! - **between rebuild points**, a flight frame's clone of such a master
+//!   into a slot showing a frame keeps that frame, frozen at its index and
+//!   placed as a 32-pixel sprite, its top left at the stellar's centre
+//!   less 16 on each axis (`nova_sim::Session::frame_frozen`). The dock
+//!   request then reads the loaded `Type`'s 32, a reach of 56;
+//! - **a stellar whose last rebuild point copied such a count** never
+//!   animates until the next (`nova_sim::Session::counts_no_frames`), even
+//!   when a later clone brings counting frames into its slot.
+//!
+//! A product of exactly 0, which divides by zero in the original, is read
+//! as the negative case. The state is `Rebuilt`'s (see the `rebuild`
+//! submodule): whether each slot's frames count none, the sheet whose
+//! frame a slot kept through such a clone, and the stellars that count
+//! none, shown through `Rebuilt::showing`, `Rebuilt::frozen` and
+//! `Rebuilt::still`. The catalog says whether each `DeadType` counts
+//! (`LandingSite::dead_counts_frames`) and whether graphic type 0 does
+//! (`PilotCatalog::fallback_counts_frames`), and graphic type 0's fill is
+//! the three-way `rebuild::Fallback`. The slot's size as
+//! `_GetSpriteXSize`/`_GetSpriteYSize` read it
+//! (`nova_sim`'s `Space::slot_sprite_size`) places the slot and sizes a
+//! hypergate's approach. The view draws a frozen frame shifted and keeps
+//! its frame shown while its count steps on, a hypergate's included
+//! whatever its session steps it to, reading the frozen state after each
+//! tick's steps, since a flight frame changes it with no event.
+//!
+//! **Readings.** The Rulebook key
+//! [`uncounted_sheet`](crate::RuleKey::UncountedSheet) defaults to the
+//! engine's reading above. Its other reading is the behaviour before this
+//! phase: the sheet's own decoded frames are drawn and animated and the
+//! slot shows a frame, so a loaded `Type` reaches 56. That is also what the
+//! rebuild's repair (@0x332f7) means a frameless slot to get. The Bible
+//! says nothing of `xTiles` × `yTiles`.
+//!
+//! ## Checked for stellar-fidelity phase 8
+//!
+//! - **F1. `_SWSetCurrentFrameIndex`** (@0xa90b6) reads a negative index
+//!   as 0 (@0xa90d4-0xa90df) and divides it by the slot's count +0x54
+//!   (`idivl` @0xa90e7). It returns at @0xa919c when the count is not
+//!   above the remainder (`jle` @0xa90ec-0xa90ee), before it writes the
+//!   current frame +0x50 (@0xa9136 or @0xa91d2), the rect +0x1a..+0x20
+//!   (@0xa913f-0xa9191), the index +0x68 (@0xa9195) or the moved byte
+//!   +0x15 (@0xa9198). A count of 0 divides by zero (#DE @0xa90e7); a
+//!   negative count gives a remainder in [0, |count|), never below the
+//!   count, so it returns with nothing written.
+//! - **F2. `_SWCloneFramesFromMaster`** (@0xac436) returns -1 with the
+//!   slot untouched for a null master or slot (@0xac448-0xac462), a master
+//!   with no frames (@0xac463-0xac468) or a slot owning its frames (+0xd9,
+//!   @0xac46a). Otherwise it copies +0x4c, +0x98, +0x9c, the count +0x54
+//!   (@0xac4ec-0xac4ef), +0x58 and +0xd4 (@0xac4ce-0xac4fe); keeps the
+//!   slot's index +0x68 while below the new count, else 0
+//!   (@0xac504-0xac50a, @0xac532); calls `_SWSetCurrentFrameIndex`
+//!   (@0xac514); then reads the slot's current frame's lock byte (+0x50 →
+//!   +0x1c) with no null test (@0xac519-0xac51c), locking the slot when it
+//!   is clear (@0xac53f), and sets +0xb0 to 0 (@0xac524). A negative-count
+//!   master replaces the slot's frames and count but leaves its frame,
+//!   index and rect; with no current frame, the read at @0xac51c is
+//!   through null, a fault.
+//! - **F3. The rebuild point** (`_HandleStellarSystemVisibility`
+//!   @0x32aa5). The clear nulls +0x4c (@0x32e71), +0x50 (@0x32e7a) and
+//!   +0xd4 (@0x32e83) of every cloned slot (+0xda), keeping +0x54, sets
+//!   +0xd0 to -1 (@0x32e8f) and hides it (@0x32ea6). For each stellar
+//!   shown the rebuild loads the master if missing (@0x32f37-0x32f46),
+//!   makes the slot if none (`_SWCreateEmptySprite` @0x32f80, which nulls
+//!   +0x50 and +0x54, @0xa8eaf-0xa8eb6), clones only a master that is not
+//!   null (@0x32fe0-0x32ff6), locks (@0x3300d), sets the draw proc
+//!   (@0x33052) and shows the slot (@0x3306b), calls
+//!   `_SWSetCurrentFrameIndex(slot, +0x476)` (@0x33096), places it
+//!   (`_GetSpriteYSize` @0x330f3, `_GetSpriteXSize` @0x33143,
+//!   `_SWSetSpriteLocation` @0x331aa), copies the count, +0x474 = slot
+//!   +0x54 (@0x331c6-0x331c9), and resets a new slot's animation
+//!   (@0x331da-0x331fb). The clone always meets a slot with no current
+//!   frame, so a rebuild point showing a stellar whose shown graphic's
+//!   tiles multiply to 0 or less faults in the original: #DE @0xa90e7 from
+//!   @0xac514 for 0; the null read @0xac51c for a negative product, and
+//!   past it `_SWSetSpriteLocation` (@0xab640) reads the null frame's hot
+//!   spot (+0x2a/+0x2c, @0xab65e-0xab669, fault @0xab665, from @0x331aa).
+//!   The phase body's "the slot shows no frame, so the reach is 75" is
+//!   the state the code leaves with those faults stepped over: +0x50 stays
+//!   null, as every `_SWSetCurrentFrameIndex` refuses the count.
+//!   - **The check @0x33231-0x33321.** A slot in use whose +0x4c and
+//!     +0xd4 are not null skips graphic type 0's fill (@0x33241-0x33250)
+//!     and goes to @0x332d7: with +0x50 null it logs "warning: stellar
+//!     sprite had invalid frame pointer" (0xd8f04, @0x332de-0x332e5) and
+//!     calls `_SWSetCurrentFrameIndex(slot, 0)` (@0x332f7), which refuses
+//!     (or faults on) the same count; with a frame whose lock byte +0x1c
+//!     is clear it logs "warning: stellar sprite frame was not locked"
+//!     (0xd8f38, @0x33304-0x3330b); then it locks the slot (@0x33315). Its
+//!     repair cannot fill such a slot.
+//!   - **Graphic type 0's fill** (@0x332a1-0x332d0): when `spïn` 1000
+//!     itself counts no frames, the fill clones it (master 0 loaded) and
+//!     its `_SWSetCurrentFrameIndex(slot, 0)` (@0x332d0) refuses or faults:
+//!     the slot holds type 0's frames and shows none.
+//!   - `_SWLockSprite` (@0xaa965) locks no frame for a count of 0 or less
+//!     (@0xaa97c-0xaa981, @0xaa9c7-0xaa9cc), so it does not fault.
+//! - **F4. The sprite tick** (`_HandleStellarSprites` @0x2e6f1), the whole
+//!   function as it touches this. For each visible, owned slot
+//!   (@0x2e713-0x2e73e) it clones the shown master (@0x2e7e5). It animates
+//!   only when the stellar's own count +0x474 is above 1 (@0x2e802); its
+//!   `idivl`s by +0x474 (@0x2ed44, @0x2edf2) and `_Rand(+0x474)` calls
+//!   (@0x2ecf7, @0x2edb3) are behind that test, so never divide by 0. It
+//!   calls `_SWSetCurrentFrameIndex(slot, frame 0 or current)`
+//!   (@0x2ee20-0x2ee30), sizes the slot (`_GetSpriteXSize` @0x2ee3d,
+//!   `_GetSpriteYSize` @0x2ee4e) and places it (`_SWSetSpriteLocation`
+//!   @0x2ef1a). A hypergate's approach reads the slot's `_GetSpriteXSize`
+//!   doubled (@0x2e906-0x2e90e). A clone of a negative-count master into a
+//!   slot showing a frame replaces its frames and count; each
+//!   `_SWSetCurrentFrameIndex` refuses, so the slot keeps showing its
+//!   frame, frozen; `_GetSpriteXSize`/`_GetSpriteYSize` (@0x26d4-0x2701,
+//!   @0x2703-0x2731) give 32 when +0x50 is null or +0x68 is not in [0,
+//!   +0x54) (@0x26e5-0x26ef, @0x2714-0x271e), so the slot is placed as a
+//!   32-pixel sprite, and the stale frame keeps its own size
+//!   (`_SWSetSpriteLocation` moves the rect without resizing it,
+//!   @0xab66d-0xab6a0). A product of 0 faults there (#DE @0xa90e7 via
+//!   @0xac514); a clone into a slot with no frame faults at
+//!   @0xac519-0xac51c; a clone of a counting master into a frameless slot
+//!   sets its frame normally. No routine here calls `PlaySound` or
+//!   `_beepSnd`, so there is no `SimSound`.
+//! - **F5. Drawing.** The draw proc draws the slot's +0x50. The sprite
+//!   library's own frame advance (`_SWProcessSpriteLayer`
+//!   @0xb8110-0xb8118) skips a sprite whose frame time +0x5c is negative; `_SWCreateEmptySprite`
+//!   sets it to -1 (@0xa8ec4), the clone leaves it, and nothing calls
+//!   `_SWSetSpriteFrameTime` (@0xab5c3). So a frozen slot stays frozen.
+//! - **F6. Who else reads the count.** The stellar's +0x474:
+//!   `_InitObjects` (@0x1c8b9); the tick (@0x2e802-0x2ede3); the rebuild's
+//!   copy (@0x331c6-0x331c9), so a count of 0 or less keeps the stellar
+//!   still until the next rebuild point; and the dock request's take-off
+//!   (@0x67616-0x67646), which sets the current frame to count − 1, the
+//!   next to the current and the timer to −`AnimDelay`, with no effect for
+//!   a count of 1 or less. The slot's +0x54, through
+//!   `_GetSpriteXSize`/`_GetSpriteYSize`: the rebuild (@0x330f3,
+//!   @0x33143), the tick (@0x2e906, @0x2ee3d, @0x2ee4e), the nav target
+//!   brackets (`_HandleNavTargetSprites` @0x2fd6a, @0x2fe00, @0x2fe10) and
+//!   the hail dialog's picture (`_PlanetCommDialogUpdate`
+//!   @0x90f97-0x90faa). The `Type` master's count:
+//!   `_GetStellarSpriteXSize` (@0xaced-0xacff, phase 10's 32), read by the
+//!   dock request (@0x66cd9, @0x6773a) and NPC landing and gate entry
+//!   (@0x8dbdf), and the status radar (`_DrawStatusRadar`
+//!   @0x499e8-0x49a3f). The dock request tests the slot's +0x50
+//!   (@0x66ccf) and uses 75 when it is null (@0x66cc7).
+//! - **F7. Decisions.** The faults are the original's bug: not copied and
+//!   no key, as a crash is not a reading (as in stellar-fidelity phases 3
+//!   and 4). The stale frame is not a memory-layout accident, so it is
+//!   ported: between rebuild points a slot belongs to one stellar (+0xd0 is
+//!   set at the rebuild, slots handed out in `spöb` order), the rebuild
+//!   nulls +0x50 before any slot changes hands (@0x32e7a), and masters are
+//!   freed only at a rebuild point (@0x32d18-0x32e4e). So the stale frame
+//!   is always a live frame of a sheet the same stellar's slot held since
+//!   the last rebuild point: its `Type`, its `DeadType` or graphic type 0.
+//! - **Left out.**
+//!   - The faults: #DE @0xa90e7 for a product of 0 (from the clone
+//!     @0xac514, the rebuild @0x33096, @0x332d0 and @0x332f7, and the tick
+//!     @0x2ee30); the null read @0xac519-0xac51c; and
+//!     `_SWSetSpriteLocation`'s null hot-spot read @0xab665 (from @0x331aa
+//!     and @0x2ef1a).
+//!   - The crash-log lines "invalid frame pointer" (@0x332de) and "frame
+//!     was not locked" (@0x33304): diagnostics with no effect on play.
+//!   - Shots and deadly stellars against a frozen slot, the nav target
+//!     brackets and the hail dialog's picture sized by the slot, and the
+//!     scene's problems for an uncounted `spïn` (the original reports
+//!     nothing; none is added):
+//!     rdm:phase/stellar-fidelity-followups/phase-7-uncounted-slot-readers.
+//!   - A positive `xTiles` × `yTiles` below the `rlëD`'s frame count: the
+//!     loader makes min(count, tiles) frames (@0xa9a28-0xa9a41) and the
+//!     count is the tiles (@0x1ed8c-0x1ed97), so the original animates
+//!     over the tiles; the view counts the decoded frames:
+//!     rdm:phase/stellar-fidelity-followups/phase-8-tiles-below-frame-count.
+//!   - Memory-layout accidents, not copied: a slot reused across a system
+//!     change that keeps another stellar's +0x54 through a failed clone
+//!     (@0x32fe0-0x32fea, @0x331c6), the engine keeping the state per
+//!     stellar as phase 1 does; and tiles above the frame count, which
+//!     read past the frame table (@0xa90f7).
+//!   - The take-off's +0x474 write (@0x67616-0x67646) for a count of 1 or
+//!     less: it has no effect.
+//! - **Left out, depending on unlanded work.**
+//!   - Clicking a frozen or frameless slot (`_HandlePlayer`
+//!     @0x6a5f9-0x6a686 reads the slot's rect +0x1a): a frozen slot's rect
+//!     is the stale frame's, its top left at the centre less 16, and a
+//!     frameless one has none. Built by stellar-fidelity phase 9 (below).
+//!   - The status radar's blip for a `Type` master that counts none (32,
+//!     the smallest): it depends on rdm:task/radar-blips-every-listed-stellar;
+//!     rdm:phase/stellar-fidelity-cross-roadmap/phase-2-radar-blip-uncounted-type.
+//!
+//! ## Built by stellar-fidelity phase 9
+//!
+//! A click in space and the hover pick a stellar by its sprite slot's
+//! rect, as `_HandlePlayer` (@0x6a5e9-0x6a717) and `_HandleMouse`
+//! (@0x3823f-0x38276) test it.
+//!
+//! - **The rule** is one type, `navigation::SpriteRect` (the slot's +0x1a,
+//!   in system coordinates): `SpriteRect::holds` grows the rect by 16 on
+//!   every side when its width is 47 or less (`SMALL_SPRITE_WIDTH`,
+//!   whatever its height), then tests it half-open, left and top in,
+//!   right and bottom out. `SpriteRect::centred` places a frame around a
+//!   centre with its top left at half the size, halved as integers, so an
+//!   odd size's extra pixel is on the right or the bottom. The ship click
+//!   and hover box (`hover::in_box`) is the same rule around the view's
+//!   drawn centre.
+//! - **The order**: `navigation::stellar_under` and `stellar_under_past`
+//!   give the lowest `StellarId` among the stellars whose rect holds the
+//!   click, the one selected in mode 2 passed over.
+//! - **The slot's rect** is `Space::click_rect` (the session's `stellars`
+//!   module): none for a slot showing no frame (`DrawnSheet::NoFrame`);
+//!   else the frame drawn (the 64-pixel placeholder when no sheet is),
+//!   its top left at `sprite_pool::offset(position, player, slot size)`
+//!   from the player, the slot size `Space::slot_sprite_size` gives: 32
+//!   square for a frame frozen, so a frozen slot's stale frame sits with
+//!   its top left at the centre less 16, and the frame's own size
+//!   otherwise. `nova_sim::Session::click_in_space` and
+//!   `nova_sim::Session::hover` read it.
+//! - **Readings.** No key: the Nova Bible says nothing of a click's box,
+//!   margin, edges or order (as story-runtime phase 11 found).
+//! - **Left out**: whole-pixel placement of the drawn sprites and of the
+//!   ship box (`_HandleStellarSprites` @0x2eeab-0x2ef1a,
+//!   `_HandleShipDisplay` @0x2cd1c-0x2ce31): the view draws at float
+//!   positions, centred, at most a pixel off:
+//!   rdm:phase/stellar-fidelity-followups/phase-9-whole-pixel-sprite-placement.
+//!   One `PtInRect` rule shared with the view
+//!   (`Bounds::contains_half_open`, roadmap play-feel, not yet on main)
+//!   cannot be: the sim crates sit below the view.
+//!
+//! ## Checked for stellar-fidelity phase 9
+//!
+//! Read with `otool -tV -arch i386` on `EV Nova.app/Contents/MacOS/EV Nova`.
+//!
+//! - **The jump gate** (@0x6a5e9-0x6a5f3): the click goes no further
+//!   while the player's +0x50 > 0; built (`click_in_space` returns during
+//!   a jump).
+//! - **The walk** (@0x6a5f9-0x6a611, @0x6a70c-0x6a711) over the 16 slot
+//!   pointers at `*0x3b53d0`, in slot order, skipping a null slot
+//!   (@0x6a603) and one whose visible byte +0x14 is clear (@0x6a60b).
+//!   The visible byte is set for each owned slot at a rebuild point
+//!   (`_SWSetSpriteVisible(1)` @0x3306b); `_HandleStellarSprites` re-shows
+//!   only visible slots (@0x2e720-0x2e74f); `_SWHideAllSprites` runs at
+//!   @0x6c592, followed at once by HSSV (@0x6c597), and at @0x68e04 in
+//!   the pod's fade-out. So no click falls where an owned slot is hidden.
+//! - **The owner and +0x44** (@0x6a615-0x6a637): the owner is the slot's
+//!   +0xd0, and a stellar whose record byte +0x44 is clear is skipped.
+//!   +0x44 is "active this visit": `_HandleStellarSystemVisibility`
+//!   clears it for every spöb (@0x32c42) and sets it (@0x32cdf) for one
+//!   with +0x45 set in a system whose sÿst +0x1eb is set, and hands slots
+//!   out only to active stellars (@0x32ee4). The other writes are
+//!   load-time (`_InitObjects` @0x1c880, `_LoadObjectData` @0x77244,
+//!   @0x77584, @0x779bf, @0x789c0) or to shot records
+//!   (`_HandleStellarWeapons` @0x2f1f1, `_SpawnShot`). So every owned
+//!   slot's stellar is active, which the engine's `sites` (the stellars
+//!   shown) already match: no code.
+//! - **The rect** (@0x6a63d-0x6a646): +0x1a, a QuickDraw `Rect` (`top,
+//!   left, bottom, right`), copied to -0x38(%ebp); -0x36 is left, -0x32
+//!   right.
+//! - **The margin reads the width** (@0x6a649-0x6a671): right less left,
+//!   `cmpl $0x2f` / `jg` past `_InsetRect(r, -16, -16)`. The same test
+//!   guards the player's own sprite (@0x6a3b3-0x6a3db), each NPC
+//!   (@0x6a4b7-0x6a4df) and the hover (`_HandleMouse` ships
+//!   @0x38183-0x381a8, stellars @0x3823f-0x38264).
+//! - **`_PtInRect`** (@0x6a676-0x6a68d, and @0x6a3f0, @0x6a4f4, @0x381ba,
+//!   @0x38276): left ≤ h < right and top ≤ v < bottom.
+//! - **The selected stellar is passed over** (@0x6a68f-0x6a69d) when the
+//!   owner is +0x6c and +0x6a is 2; built (`stellar_under_past`).
+//! - **A pick** (@0x6a69f-0x6a701): `PlaySound(_beepSnd[0], 1,
+//!   _gSoundVolume, _gSoundVolume)` @0x6a6c1 (`snd ` 150,
+//!   `SimSound::NavSelected`); +0x6c := owner (@0x6a6d5), +0x6a := 2
+//!   (@0x6a6ec); `_navTargetExpand` := 256.0 (@0x6a6d9, the brackets'
+//!   fly-in); `_statusRedraw` := 1 (@0x6a6e4, no model: the status panel
+//!   is drawn every frame); `_dockTarget` and `_dockPermission` := −1
+//!   (@0x6a6f2, @0x6a6fc, `port.dock = None`). All built before this
+//!   phase. A miss walks on (@0x6a703-0x6a717); the walk's end is silent.
+//! - **The order is lowest spöb ID first**: HSSV walks the spöbs in index
+//!   order (@0x33216-0x3321d), and each active one the player's system
+//!   owns (@0x32ee4-0x32f06) takes the next slot (@0x32f4b-0x32f6b), up
+//!   to 16 (@0x33205-0x33214), its owner set (@0x32fda). The 16 cap never
+//!   bites: a system's 16 `NavDefs` bound what it shows.
+//! - **Where the rect sits** (`_HandleStellarSprites` @0x2ee3d-0x2ef1a,
+//!   `_SWSetSpriteLocation` @0xab640-0xab6a0): the top left is
+//!   `trunc(spöb − player) + centre − (size / 2)` on each axis
+//!   (`cvttss2si` @0x2eed3, @0x2ef01; the halving `shrw`/`sarw` pair
+//!   @0x2eec3-0x2eecb, @0x2eef0-0x2ef08), the size from
+//!   `_GetSpriteXSize`/`_GetSpriteYSize` (@0x2ee3d, @0x2ee4e), less the
+//!   frame's hot spot (+0x2a/+0x2c, @0xab665-0xab669), which is always 0
+//!   (`_SWCreateFrame` allocates with `_NewPtrClear` @0xad5d9 and
+//!   `_SWSetFrameHotSpot` @0xadf1a has no caller); the rect is moved, not
+//!   resized (@0xab66d-0xab693). A frozen slot is sized 32 by
+//!   `_GetSpriteXSize`/`_GetSpriteYSize` (@0x26e5-0x26ef, @0x2714-0x271e),
+//!   so its stale frame's rect sits at the centre less 16. A frameless
+//!   slot's rebuild faults first (`_SWSetSpriteLocation` @0xab665 from
+//!   @0x331aa), so it has no rect. Ships are placed the same way
+//!   (`_HandleShipDisplay` @0x2cd1c-0x2cd9d, @0x2cdb5-0x2ce31).
+//! - **Integer widths**: the rect is shorts; the engine keeps `f32` and
+//!   `u32`.
+//!
+//! ## Built by stellar-fidelity phase 10
+//!
+//! A stellar's frames advance by the whole of `_HandleStellarSprites`'
+//! sequential branch (@0x2ec4b-0x2ee35): `Flags2` 0x0001 and 0x0002, and
+//! an `AnimDelay` of 0 or less. The view builds it
+//! (`nova_view::system::animation`'s `Frames`), as the frame a non-gate
+//! stellar shows is drawn state the session never reads.
+//!
+//! - **The gate.** A stellar animates when its counted frames are above 1,
+//!   its destroyed state is the one 0x0080 names, and it is not a
+//!   hypergate (0x1000). No delay gate: a threshold of 0 or less is met
+//!   every tick. A hypergate takes its own branch, ported by
+//!   `nova_sim::gate_sprite`; where no session steps it (the galaxy
+//!   viewer) it stays on frame 0, as a released, closed gate does
+//!   (@0x2ec33-0x2ec36).
+//! - **0x0001** shows frame 0 between every other frame: 0, 1, 0, 2, 0,
+//!   3, 0, 1, ...; with 2 frames, 0, 1, 0, 1. Every visit to frame 0 lasts
+//!   `Frame0Bias` × `AnimDelay` when the bias is above 1.
+//! - **0x0002** picks each next frame uniformly among the counted frames
+//!   but the one just made current; under 0x0001 as well, among 1 to
+//!   count − 1 but the current. The pick is one draw over the frames
+//!   allowed, on the view's own chance: flight's effects chance (never the
+//!   session's), and in the galaxy viewer the one
+//!   `AppScreen::with_effects_chance` gives its navigator.
+//! - **Frozen** (stellar-fidelity phase 8): a frozen slot's timer, current
+//!   and next frames step, its 0x0002 draws included, while the frame
+//!   shown stays. An uncounted slot (counted 1) does not animate and draws
+//!   nothing.
+//! - **Stock**: spöb 514 "Link" (sÿst 472, graphic 59, 32 frames,
+//!   `AnimDelay` 0, `Flags2` 0x2000) now plays a frame a tick, as in the
+//!   original; 24 stock stellars animate, all on the Wormhole graphic. No
+//!   stock `spöb` sets 0x0001 or 0x0002.
+//! - **Readings.** No key. The Bible's `AnimDelay` ("frame delay in 30ths
+//!   of a second") and `Frame0Bias` ("display-time multiplier for the
+//!   first frame") give no reading for a delay of 0 or less, and its
+//!   0x0001 ("shows frame 0 after each frame") and 0x0002 ("picks a random
+//!   next frame") agree with the original. The engine's old `AnimDelay > 0`
+//!   gate was a gap ("Not switched" under phase 1), not a reading.
+//! - **Left out**:
+//!   - the hypergate branch (@0x2e83c-0x2ec46), already built whole by
+//!     system-traffic-fidelity phase 7 (`nova_sim::gate_sprite`);
+//!   - the sprite-slot plumbing (@0x2e713-0x2e7e5, @0x2ee35-0x2ef1a),
+//!     the view's drawing from phases 1 and 8: `_HandleSpriteMurkiness`
+//!     (@0x2eea4) is rdm:task/murk-other-sprites, and whole-pixel
+//!     placement (@0x2eeab-0x2ef1a) is
+//!     rdm:phase/stellar-fidelity-followups/phase-9-whole-pixel-sprite-placement;
+//!   - the hang under 0x0001 | 0x0002 over 2 counted frames
+//!     (@0x2ece5-0x2ed1e), an original bug: the next frame stays, as
+//!     `nova_sim::gate_sprite` keeps a gate's;
+//!   - the integer widths: the 16-bit `Frame0Bias` × `AnimDelay` (`imul ax`
+//!     @0x2ec62, so 200 × 200 wraps to −25536), `_Rand`'s 16-bit count
+//!     sign-extended from +0x474 (@0x2eced), and the 16-bit wraps of
+//!     next + 1 (@0x2ed2e, @0x2eddc);
+//!   - the order of `_Rand`'s draws and its generator;
+//!   - the dock request's take-off reset, outside this function
+//!     (`_HandlePlayerDockRequest` @0x675ce-0x67653):
+//!     rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset.
+//!
+//! ## Checked for stellar-fidelity phase 10
+//!
+//! Read with `objdump --x86-asm-syntax=intel -d` on
+//! `EV Nova.app/Contents/MacOS/EV Nova`. The per-stellar fields are as "Checked for stellar-fidelity phase 1"
+//! records: `Flags2` +0x34, `AnimDelay` +0x470, `Frame0Bias` +0x472, the
+//! counted count +0x474, the current frame +0x476, the next +0x478 and
+//! the float timer +0x490.
+//!
+//! - **Before the branch** nothing tests `AnimDelay`: the 0x0080 test
+//!   (@0x2e77b-0x2e7bb), the count above 1 (@0x2e802), the timer gaining
+//!   `_gSpeedMult` (@0x2e810-0x2e825) and the hypergate test, the byte
+//!   +0x35 & 0x10 (@0x2e832), whose branch runs @0x2e83c-0x2ec46. Every
+//!   other stellar, a wormhole included, takes @0x2ec4b.
+//! - **The threshold** (@0x2ec4b-0x2ec83): `Frame0Bias` × `AnimDelay`
+//!   when the current frame is 0 and the bias above 1 (`imul ax`
+//!   @0x2ec62), else `AnimDelay`; then `timer >= threshold` as floats.
+//!   Below it the tick jumps to @0x2ee35, skipping
+//!   `_SWSetCurrentFrameIndex`.
+//! - **`AnimDelay` ≤ 0.** The loader copies it raw (@0x7761b) and
+//!   `Frame0Bias` too (@0x77631). The timer is at least 0 before the add
+//!   and `_gSpeedMult` is positive, so a threshold of 0 or less is met
+//!   every frame, the product of a bias with such a delay included.
+//! - **At the threshold** the timer is set to 0 (@0x2ec89). With 0x0001
+//!   (@0x2ec9b-0x2ec9f): a current frame other than 0 becomes 0, the next
+//!   untouched (@0x2eca5-0x2ecad, @0x2ed71); frame 0 takes the next
+//!   (@0x2ecb3-0x2ecba), and the next is drawn under 0x0002, `_Rand(count)`
+//!   again while it is 0 or the new current (@0x2ece5-0x2ed1e), or else
+//!   is (next + 1) mod count, 1 when that gives 0 (@0x2ed2e-0x2ed63).
+//!   Without 0x0001 the current takes the next (@0x2ed7f-0x2ed86), and
+//!   the next is drawn under 0x0002, again while it is the new current
+//!   (@0x2ed95-0x2edda), or else is (next + 1) mod count
+//!   (@0x2eddc-0x2edf4). Then `_SWSetCurrentFrameIndex(slot, current)`
+//!   (@0x2ee05-0x2ee30). `count` is always +0x474.
+//! - **The draw**: `_Rand` (@0xa4c76), uniform over 0 to n − 1 (as
+//!   `nova_sim::glow` records), with the counted count. Under both flags
+//!   with 2 counted frames no frame can be picked, and the loop never
+//!   ends: the game hangs. With 3 or more there is always one.
+//! - **Frozen**: `_SWSetCurrentFrameIndex` refuses a slot whose frames
+//!   count none (@0xa90e7-0xa90ee), but the branch runs anyway.
+//! - **Sound**: none. The function's calls (0x2e6f1-0x2ef40) are
+//!   `_StellarIsDestroyed`, `_LoadMasterStellarSprite`,
+//!   `_SWCloneFramesFromMaster`, `_SWSetSpriteVisible`, `_IsDisabled`,
+//!   `_AIShipIsEmergingFromHypergate`, `_AIShipIsShipGoingToStellar`,
+//!   `_GetSpriteXSize`/`YSize`, `_FloatAbs`, `_Rand` ×4,
+//!   `_SWSetCurrentFrameIndex`, `_HandleSpriteMurkiness` and
+//!   `_SWSetSpriteLocation`: no `PlaySound` or `_beepSnd`.
+//! - **The take-off reset** (`_HandlePlayerDockRequest`): @0x675ce-0x675fa
+//!   zeroes every `spöb`'s current and next frame (all 2048 records, 0x498
+//!   apart, to 0x24c000); when the byte at ebp−0x2a3 is set, likely the
+//!   gate exit whose escort loop runs @0x674ef-0x675c8, @0x675fc-0x67646
+//!   sets the stellar at ebp−0x298's current and next frames to count − 1
+//!   and its timer to −`AnimDelay`; then `_HandleStellarSystemVisibility`
+//!   rebuilds (@0x67653). Filed as
+//!   rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset.
+//!
+//! ## Built by stellar-fidelity phase 12
+//!
+//! A stellar's animation state (its current frame, next frame and timer)
+//! outlives the system it is shown in, as the original keeps it on the
+//! `spöb` record (+0x476, +0x478, +0x490), not on the sprite slot.
+//!
+//! - **Ordinary stellars, in the view.** The flight keeps each stellar's
+//!   frames as its scene is let go, on a jump, a move or a rebuild that
+//!   changes the stellars shown (`nova_view::system::KeptFrames`), and the
+//!   next scene to show it resumes them on the sheet it now draws: the
+//!   current frame modulo that sheet's count, or frame 0 on graphic type
+//!   0's (`SystemScene::resume`, as the rebuild sets the slot @0x33096,
+//!   @0x332d0). A stellar not shown stands still. One the flight has never
+//!   shown starts at current 0, next 1, timer 0. The frame a non-gate
+//!   stellar shows is drawn state the session never reads, and the state
+//!   is not saved, so the view owns it: it settles as the scene is laid
+//!   out, before the first frame drawn there.
+//! - **Hypergates, in the session.** A gate keeps its sprite (the same
+//!   three fields) in `Space`'s gate sprites while it is not shown, and
+//!   stands still there; it starts closed only the first time a flight
+//!   shows it (see the `nova_sim` `gate_sprites` module).
+//! - **Load and new pilot.** Each is a new flight with a new `Space`, so
+//!   every stellar and gate starts afresh, as the original does for a load
+//!   right after launch.
+//! - **Readings.** No key. The Bible says nothing of the animation's
+//!   lifetime, and no other reading exists.
+//! - **Left out**:
+//!   - the new-slot reset (`_HandleStellarSystemVisibility`
+//!     @0x331da-0x331fb, gated by ebp−0x121 from `_SWCreateEmptySprite`
+//!     @0x32f80): whether it fires depends on how many sprite slots
+//!     earlier systems in the process made, a memory-layout accident. The
+//!     visible case, a stellar first shown in a flight, starts at
+//!     current 0, next 1, timer 0, as the new slot gives the run's first
+//!     system;
+//!   - carrying the state over a load or a new pilot in the same run
+//!     (`_DoNewPilot` @0x18de5, @0x190f0, @0x1937f; `_LoadPilotData`
+//!     @0x751cf, @0x75324): process state leaking from another pilot's
+//!     game through the static `spöb` array, not saved and not
+//!     reproducible from the save;
+//!   - the next frame's first value at launch, a read of uninitialised
+//!     memory (+0x478 is never set by `_InitObjects` @0x1c8b9-0x1c902, and
+//!     the array comes from an uncleared `_NewPtr` @0x1b7d4): the engine
+//!     uses 1, as the new-slot reset gives;
+//!   - the dock request's take-off reset (`_HandlePlayerDockRequest`
+//!     @0x675ce-0x67646), already
+//!     rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset;
+//!   - the integer widths: +0x476/+0x478 are 16-bit and the timer a 32-bit
+//!     float;
+//!   - the galaxy viewer (`nova_view::system::SystemView`), which still
+//!     lays each system out afresh: it has no counterpart in the original.
+//!
+//! ## Checked for stellar-fidelity phase 12
+//!
+//! Read with `objdump --x86-asm-syntax=att -d` on
+//! `EV Nova.app/Contents/MacOS/EV Nova`. Every instruction writing +0x476
+//! (current frame), +0x478 (next frame) or +0x490 (float timer):
+//!
+//! - **`_InitObjects`** (@0x1c2e5): +0x476 = 0 (@0x1c8c5) and +0x490 = 0
+//!   (@0x1c8d1), beside +0x474 = 1 (@0x1c8b9) and +0x472 = 1 (@0x1c8f6);
+//!   +0x478 is not written. Its only caller is `_InitEVNova` (@0x47252),
+//!   once per launch, before `_LoadObjectData` (@0x47280). The `spöb`
+//!   array comes from `_NewPtr(0x24c000)` in `_InitArrays`
+//!   (@0x1b7cd-0x1b7e1), which does not clear it.
+//! - **`_HandleStellarSprites`** (@0x2e6f1): the timer gains
+//!   `_gSpeedMult` (@0x2e825); the hypergate branch writes all three
+//!   (@0x2ea3d-0x2ec3f); the sequential branch too (@0x2ec89-0x2edf4).
+//! - **`_HandleStellarSystemVisibility`** (@0x32aa5), the new-slot reset:
+//!   +0x490 = 0, +0x476 = 0, +0x478 = 1 (@0x331e2, @0x331ef, @0x331fb),
+//!   only when the byte at ebp−0x121 is set, which happens only when slot
+//!   k's pointer in the array behind 0x3b53d0 was null and
+//!   `_SWCreateEmptySprite` ran (@0x32f6b-0x32f85, and @0x32faa when the
+//!   create failed). Slot pointers are written only by `_InitSprites`
+//!   (once, from `_InitEVNova` @0x47382), by this create, and at quit
+//!   (`_DestroySpriteWorld`, `_Bye`). The rebuild's clear keeps the slot
+//!   (it nulls +0x4c/+0x50/+0xd4 and sets +0xd0 to −1, @0x32e68-0x32e8f),
+//!   so each slot index is made once per run: the reset hits every
+//!   stellar of the first system after launch, and later only the
+//!   stellars past the largest count seen so far, in `spöb` index order.
+//! - **`_HandlePlayerDockRequest`** (@0x66691): the take-off reset, every
+//!   record's +0x476/+0x478 = 0 (@0x675d8, @0x675e4, looping to 0x24c000
+//!   @0x675f4), and the exit gate's three fields (@0x6761e, @0x67630,
+//!   @0x67646).
+//! - **Nothing else** writes them. The one other match, `-0x490(%ebp)`
+//!   @0x9c324, is a local in `_MungeBriefing`. Reads come only from the
+//!   four functions above (54 in `_HandleStellarSprites`, 6 in the dock
+//!   request, 4 in the rebuild, 2 in `_InitObjects`).
+//! - **New pilot: no reset.** `_DoNewPilot` (@0x18b0a) calls
+//!   `_ResetGameData` (@0x18de5; its `spöb` loop @0x1de4e-0x1dea8 writes
+//!   only +0x46, +0x3c and +0x47c), `_LoadObjectData` (@0x190f0; none of
+//!   the three, and no memset or block copy) and the rebuild (@0x1937f).
+//! - **Load: no reset.** `_LoadPilotData` (@0x750b5) rebuilds (@0x751cf,
+//!   @0x75324). Its one `memcpy` (@0x757c8, 0x8ec bytes) fills the array
+//!   behind 0x3b50f4, not `spöb`.
+//! - **Not saved.** No save or load routine reads or writes the three
+//!   fields (the reader list above is complete): the state lives for the
+//!   process, not the pilot.
+//! - **Still while elsewhere.** `_HandleStellarSprites` walks only the 16
+//!   sprite slots (@0x2e713-0x2e73e), skipping a null slot, one not in
+//!   use (+0x14) and one whose stellar index +0xd0 is outside 0-0x7ff. The
+//!   rebuild sets every cleared slot's +0xd0 to −1 (@0x32e8f) and refills
+//!   only the stellars shown (+0xd0 = index @0x32fda).
+//!   `_DoStellarTimePassage` (@0x40867, the daily walk) touches none of
+//!   the three. Shown again, the rebuild sets its slot to +0x476 modulo
+//!   the slot's count (@0x33096), and its timer carries on.
+//! - **Hypergates**: the gate branch's state is these same three fields,
+//!   so a gate keeps its sprite across systems and does not step while
+//!   not shown.
+//!
+//! ## Built by stellar-fidelity phase 13
+//!
+//! A stellar with a `Weapon` defends itself: each pass, after the ship
+//! loop and before the beams, it fires at the nearest ship threatening it,
+//! leading it (`nova_sim_combat::combat::stellar_guns`, the session's
+//! `stellar_guns` module).
+//!
+//! - **Which stellars.** Each the player's system lists, in `NavDefs`
+//!   order, that is active (its holder visible), not destroyed and armed
+//!   with a `wëap` the session holds. A stellar another visible system
+//!   holds still fires, unshown, as the original tests no owner.
+//! - **Who is a threat.** Nobody, to a dominated stellar. An NPC jumping
+//!   in is none. A `Flags2` 0x0200 stellar waits for a defence ship of its
+//!   own, which the engine never spawns, so the four stock ones never
+//!   fire. Any other NPC is a threat when it is an enemy of the stellar's
+//!   own government. The player and the ships it leads directly are
+//!   judged by the player's record in the system (by `LegalRecords`),
+//!   against the `CrimeTol` and xenophobia of the stellar's government or
+//!   else its system's, and by whether the player's class government is
+//!   an enemy of the stellar's own; the stellar's own government's peace
+//!   blessing, the effective government's IFF mark and the player's dock
+//!   request at it spare them.
+//! - **The shot.** The nearest threat in range, not cloaked, and not
+//!   disabled for a disable-only or massless weapon, is fired at from the
+//!   stellar's centre at the lead angle, plus the inaccuracy; the shot is
+//!   no ship's (source -1), so it hits only its target and its hits are
+//!   no one's crime. Its reload is the weapon's, or its burst reload at a
+//!   burst's end. Each shot is heard from the stellar at priority 5,
+//!   looped or not.
+//! - **The timers** outlive the system, are zeroed for every active
+//!   stellar each day and are never saved.
+//! - **Readings.** No key. The routine's oddities (escorts weighed by the
+//!   player's standing, the blessing read from the stellar's own
+//!   government alone, the class test against the stellar's own
+//!   government) are the original's, and no Bible text gives another
+//!   reading. The record goes through `LegalRecords` and the full shot
+//!   table through `CombatCaps`, as everywhere else. `PdHostility`'s other
+//!   reading now calls a shot no ship launched hostile unasked, as its
+//!   firer is only a placeholder.
+//!
+//! ## Checked for stellar-fidelity phase 13
+//!
+//! Read in `EV Nova.app/Contents/MacOS/EV Nova` (i386). Layouts: spöb
+//! stride 0x498 (`*0x3b5010`), ship 0xc940 (`*0x3b5138`, slot 0 the
+//! player), wëap 0xc8, gövt 0x88, sÿst 0x1fc, shot 0x48 × 128
+//! (`*0x3b5474`).
+//!
+//! - **Where it runs.** `_DoPlayGameWork` calls `_HandleStellarWeapons`
+//!   once, @0x444d7, after `_HandleStellarSprites` @0x444d2 and before
+//!   `_HandleAsteroids` @0x444f5, `_HandleGravity` @0x44509 and
+//!   `_HandleBeams` @0x4453d, on both passes. Landed, nothing calls it.
+//! - **`_HandleStellarWeapons`** (@0x2ef3a-0x2f5d1):
+//!   - returns at once when `*0x3b523c` is set (@0x2ef46), which only
+//!     `_PrepareAllSprites` sets, never around this call;
+//!   - walks the player's system's 16 `NavDefs` (@0x2ef7e-0x2efdb),
+//!     skipping -1, a stellar not active (+0x44, set @0x32c42/@0x32cdf),
+//!     one with no weapon (+0x2c = -1; `_LoadObjectData`
+//!     @0x773f3-0x777b2 makes a `Weapon` of 127 or less -1, and any other
+//!     the index ID − 128 with no upper bound) and a destroyed one
+//!     (`_StellarIsDestroyed` @0x2efd4);
+//!   - counts the float reload +0x494 down by `_gSpeedMult` while it is
+//!     above 0, doing nothing else (@0x2efee-0x2eff9, @0x2f5a1-0x2f5b2);
+//!   - picks the nearest ship of slots 0-63 that is active, not cloaked
+//!     (@0x2f074), a threat (@0x2f096), within the weapon's range +0x5c
+//!     squared in f32 (@0x2f0b3-0x2f0c4) and, for a disable-only
+//!     (`Flags2` 0x1000) or massless (`MassDmg` 0) weapon
+//!     (@0x2f01e-0x2f033), not disabled (@0x2f0d6); a new best needs a
+//!     strictly smaller distance (@0x2f003-0x2f11a);
+//!   - takes the first shot slot of life below -1.0 (@0x2f120-0x2f151),
+//!     or skips the stellar with none;
+//!   - builds the shot (@0x2f157-0x2f2ed): at the stellar's whole-pixel
+//!     place, at rest, source -1 (+0x2c), aimed at the target (+0x2a),
+//!     disable-only by the weapon (+0x44, @0x2f1f1), life `Count`, the
+//!     jam +0x30 and +0x24/+0x32/+0x36 zeroed, the spin timer +0x1c zeroed
+//!     (@0x2f26d), the spin start by `Flags` 0x0004, the decay seed, the
+//!     system and durability max(`Durability`, 0); no miss roll (+0x42)
+//!     and no sensor-interference roll;
+//!   - aims it at `_CalcSpobLeadAngle` plus `Rand(2i) − i` for an
+//!     `Inaccuracy` above 0, wrapped once (@0x2f2f1-0x2f3c9), and sends it
+//!     at `_Accel(trunc(heading), Speed)` from rest (@0x2f3ce-0x2f3fe);
+//!   - rolls `Rand(JamVuln + 1)` per type above 0 (@0x2f40c-0x2f454);
+//!   - puts it in the shot layer whatever its guidance (@0x2f46f);
+//!   - sets the reload to `trunc(Reload)`, or, once a bursting weapon's
+//!     count +0x2e reaches `_WeaponBurstInterval(weapon, 1)` (@0x831c), to
+//!     `BurstReload`, the count back to 0 (@0x2f4be-0x2f545);
+//!   - plays `_PlaySoundDistance(-1, snd, 5, stellar, player)`
+//!     (@0x2f553-0x2f59a), with no looped test.
+//!   - +0x494 and +0x2e are zeroed for every active stellar by the daily
+//!     step (`_IncrementGameTime` @0xb5df, @0xb5ed) and `_InitObjects`
+//!     (@0x1c902, @0x1c90f), and never saved.
+//! - **`_IsThreatToStellar(ship, stellar)`** (@0x9ef7-0xa0ae), in order:
+//!   a dominated stellar (+0x46) sees no threat (@0x9f0c); an NPC jumping
+//!   in (`_AIIsShipJumpingIn` @0x82f12, goal 8) is none (@0x9f16-0x9f2a);
+//!   for `Flags2` 0x0200 (@0x9f30) only the player and the ships it leads
+//!   directly are threats, and only while +0x47 is set (@0x9f36-0x9f5c),
+//!   which `_DoPlayGameWork` sets each frame for the stellar an active NPC
+//!   defends (ship +0x8c, @0x443d4-0x4444f); any other NPC is a threat by
+//!   `_GovtEnemies(stellar Govt, ship govt)` (@0x9f61-0x9f73 → @0xa080);
+//!   the player's side by `G` = the stellar's government or else the
+//!   system's (none: no threat), `_playerRecord[system]` (@0x9fb8) below
+//!   −`CrimeTol(G)` (@0x9fe3-0x9feb), else for a xenophobic `G` below 0
+//!   (@0x9fed-0x9ff8), else `_GovtEnemies(class +0x9f4, stellar Govt)`
+//!   (@0x9ffa-0xa028); spared by the inlined `_PlayerBlessedByGovt(own,
+//!   0)` (@0xa02e-0xa04a, 0 for -1, so a system government's blessing
+//!   never spares), `G`'s +0x83 (@0xa05f-0xa06a) or `_dockTarget` being
+//!   the stellar (@0xa06e-0xa07a). No sound, no `_Rand`.
+//! - **`_CalcSpobLeadAngle(stellar, ship)`** (@0x2b2f0-0x2b42e): the
+//!   bearing for a stellar with no weapon, else the table angle to where
+//!   the ship will be after d / speed in f32, a rocket's timing by
+//!   `_CalcLeadAngle`'s doubles (0xdd540-0xdd558), with no firer velocity
+//!   and no guidance gate. No sound, no `_Rand`.
+//! - **Stock.** 95 `spöb` carry a `Weapon` of 128 or more (196 ×15, 197
+//!   ×27, 159 ×22, 199 ×21, 198 ×9, 131 ×1); 7 more carry 0, none. Earth
+//!   128, Port Kane 137, Pyrogenesis I 161 and New Ireland 508 have
+//!   `Flags2` 0x0200. None is disable-only, planet-type or bursting; the
+//!   Enormous Ion Turret (198) is massless.
+//! - **Left out**, each with its owner:
+//!   - +0x47, the defence ship in the system (@0x9f30-0x9f5c; set
+//!     @0x44411-0x4444f, @0x3d4a8): the engine spawns no stellar defence
+//!     ships, so it is always clear and the four stock 0x0200 stellars
+//!     never fire; the gate is built and fed false. Task
+//!     `planet-domination`.
+//!   - +0x46, domination by a hail (@0x9f0c): the engine has only
+//!     `Flags2` 0x0020, which is fed. Task `planet-domination`.
+//!   - a `Weapon` past the last `wëap` (@0x777a9): a read past the table,
+//!     a memory-layout accident; the engine gives that stellar no gun.
+//!   - the frozen-flag test `*0x3b523c` (@0x2ef46): never set when the
+//!     routine runs.
+//!   - the player's own cloak: none until task `cloaking-device`, then it
+//!     applies with no change here.
+//!   - shot fields with no engine state: the decay seed +0x18, the system
+//!     +0x2e, the zeroed +0x24/+0x32/+0x36, the collide proc and frame
+//!     clone (@0x2f487, @0x2f4b9); the spin start +0x34 is the view's.
+//!
+//! ## Built by stellar-fidelity phase 14
+//!
+//! The nearest-stellar pick is `_FindNearestStellar` whole
+//! (`nova_sim_state::landing::nearest_stellar`; the session's
+//! `stellar_picks` module).
+//!
+//! - **The gate limit.** By the engine's reading of
+//!   [`gate_pick_range`](crate::RuleKey::GatePickRange), a hypergate or
+//!   wormhole counts only when its squared distance from the ship is
+//!   strictly below 250000.0, 500 pixels; by the other reading, the
+//!   port's earlier pick, at any distance. Ordinary stellars count at any
+//!   distance. Distances are compared squared. Every caller reads the key:
+//!   the land key, F5, the tutorial's land hint and a new pilot's saved
+//!   stellar.
+//! - **The candidates.** The land key and F5 pick among every stellar
+//!   the system lists that is active (`nova_sim::Session`'s
+//!   `Chart::pick_candidates`), shown there or not: a stellar another
+//!   visible system owns is one. The land key selects it, starting its
+//!   fly-in, and its dock request refuses it as not landable with its
+//!   line and `snd ` 153; held, a second L is refused again. F5 drops it:
+//!   nothing written, no sound, no fall back to the next nearest.
+//! - **The selection.** A stellar selected is one of those candidates,
+//!   not only one the system shows. The gate kind
+//!   (`nova_sim::Session::gate_kind`) and the nav brackets read it from
+//!   the stellars listed; the brackets carry its spöb position.
+//! - **The view.** The brackets of a selection the scene doesn't hold are
+//!   drawn at its spöb position at half 64, and the not-landable line
+//!   names it by its spöb name, as the nav area already does.
+//!
+//! ## Checked for stellar-fidelity phase 14
+//!
+//! Read in `EV Nova.app/Contents/MacOS/EV Nova` (i386). Floats in
+//! `__TEXT,__const`: 0xdd04c = -1.0, 0xdd050 = 250000.0, 0xdd054 = 0.0.
+//!
+//! - **`_FindNearestStellar(ship)`** (@0x276c-0x2888), whole. It plays no
+//!   sound and writes only its locals.
+//!   - F1: the best distance starts at -1.0 and the best ID at -1
+//!     (@0x2777-0x2785).
+//!   - F2: it walks i = 0..15 over the ship's system's `NavDefs`
+//!     (`sÿst` +0x2a + 2i, @0x278a-0x27a2, loop @0x2873-0x2877), passing
+//!     over an empty slot (@0x27a6-0x27aa).
+//!   - F3: a stellar whose +0x44 is clear is passed over
+//!     (@0x27c3-0x27c7).
+//!   - F4: so is one without `Flags` 0x01 (@0x27cd-0x27d1). Destroyed and
+//!     `Flags` 0x80 are not read.
+//!   - F5: nothing reads the owner +0x14.
+//!   - F6: dx and dy are `_FloatAbs` of the ship's float position less
+//!     the spöb's 16-bit one (@0x27d7-0x281a), and d² = dx·dx + dy·dy in
+//!     single precision (@0x2825-0x2844).
+//!   - F7: `Flags2` & 0x3000 (`movzwl 0x34`, `testb $0x30,%ah`,
+//!     @0x2838-0x2841) counts only when `ucomiss 0xdd050` finds d²
+//!     strictly below 250000.0 (`jae` and `jp` pass it over,
+//!     @0x284a-0x2853); any other stellar counts (`je 0x2855` @0x2848).
+//!   - F8: it becomes the best when the best is strictly above d² (`ja`
+//!     @0x285a-0x285d), or still below 0.0 (@0x285f-0x2868): equally
+//!     near ones go to the earlier slot.
+//!   - F9: it returns the best ID, or -1 (@0x287d).
+//!   - A first counted stellar at a NaN distance would stick as the best
+//!     (@0x285a-0x2868); positions are never NaN, so it is not modelled.
+//!   - The spöb coordinates are 16-bit and the ID is returned as a short;
+//!     the engine keeps `f32` positions and `i16` IDs.
+//! - **Its callers**: `_DoNewPilot` @0x1926e, F5 @0x69e59, the land key
+//!   @0x6a901, the tutorial hints @0x709e8 and @0x70bdc.
+//! - **The land key** (@0x6a8ed-0x6a932): with mode +0x6a ≠ 2 or no
+//!   selection it picks for the player; a pick writes mode 2, +0x6c,
+//!   `_statusRedraw` and `_navTargetExpand` := 256.0, with no sound and no
+//!   owner test. Then `_HandlePlayerDockRequest` (@0x6a938-0x6a956)
+//!   refuses an unowned pick (@0x6699a-0x669a4) with the not-landable
+//!   line (0x67cda) and `snd ` 153 (@0x67e8f).
+//! - **F5 and the slot keys' shared tail** (@0x69e1f-0x69f12): F5 is key
+//!   index 0x10 and picks for the player (@0x69e4f-0x69e5e); -1 does
+//!   nothing (@0x69e65-0x69e6d); a pick whose +0x14 isn't the player's
+//!   +0x74 leaves with nothing written and no sound (`jne 0x69dea`,
+//!   @0x69e73-0x69e94); otherwise `snd ` 150, then, unless already
+//!   selected in mode 2, the fly-in, +0x6c, `_statusRedraw`, mode 2 and
+//!   the dock request dropped (@0x69e9a-0x69f12).
+//! - **What a selection outside the stellars shown meets.**
+//!   `_HandleNavTargetSprites` (@0x2fcaf-0x2fe41) brackets it at the spöb
+//!   position (@0x2fd9f-0x2fdda) at half 64 when no visible slot holds it
+//!   (@0x2fde7-0x2fe41). `_DrawStatusNav` names any selected stellar by
+//!   its spöb name (@0x4a0fd-0x4a149). The not-landable line is `STR#`
+//!   2002 #84 then #86 (wormhole) or #85 (hypergate) with no name, else
+//!   #87/#88 and the name (@0x67cda-0x67dc4). Hailing
+//!   (`_HandlePlayerCommunication` @0x61fac-0x62009) has no owner test;
+//!   ours gives "No response.", unreachable in stock (wormhole 466 never
+//!   answers): rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs.
+//! - **The other readers of the selection**, audited: the hail looks it
+//!   up among the stellars shown (the divergence above); the person
+//!   offers and the map cycle read its ID only; the face key falls back
+//!   to the stellar's spöb place (`StellarMarks`); the dock request's
+//!   wording and the landing read it only once it is owned, which the
+//!   refusal stops first; the nav area names it by its spöb name. None
+//!   panics or misbehaves.
+//! - **Wormholes stay shown**: `_DrawStatusRadar` @0x498a0-0x49a8e,
+//!   `_HandleStellarSprites` @0x2e713-0x2e74f and `_DrawStatusNav`
+//!   @0x4a09c-0x4a18c have no gate test.
+//! - **Stock**: only wormhole 466 (`Flags` 0x21, `Flags2` 0x2200) is
+//!   listed by a system that doesn't own it: Spica (144) owns it, and
+//!   K-005 (436, visible while `!b330`) lists it at (9500, 2600), its only
+//!   stellar.
+//! - **Left out**, in
+//!   rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs:
+//!   the slot keys by `NavDefs` index (@0x69e28-0x69e46); the tutorial
+//!   hints' candidates (@0x709e8, @0x70bdc) and `_DoNewPilot`'s
+//!   (@0x1926e), which get the gate limit but still read the stellars
+//!   shown; hailing an unowned selection.
+//!
+//! ## Built by stellar-fidelity phase 15
+//!
+//! A stellar's landing `Fee` (`nova_sim::LandingSite::fee`, raw from its
+//! `spöb`):
+//!
+//! - **When it is due.** `nova_sim_state::landing::fee_due`: a `Fee`
+//!   above 0 at a stellar not dominated. A `Fee` of 0 or below is no fee.
+//! - **The refusal.** The land key refuses a pilot whose cash is below
+//!   the fee due with `nova_sim::LandingRefusal::CannotPayFee`, right
+//!   after the not-landable check and before the disabled ship's press,
+//!   the uninhabited stellar's "No response." and the clearance, so on
+//!   the first press too. It is silent and drops the dock request. The
+//!   view says "You don't have enough credits to pay the landing fee."
+//!   (or the docking or hypergate fee) for 250 ticks.
+//! - **The charge.** A press that lands, or enters a hypergate or
+//!   wormhole, pays the fee (`nova_sim_state::landing::pay_fee`, never
+//!   below 0) before the gate branch; a cancelled hypergate map does not
+//!   refund it (the session's `landing_fee` module).
+//! - **The greeting.** `nova_sim::SimMessage::DockCleared` carries the fee
+//!   due, and the dock approach's greeting ends with "  [Landing fee is
+//!   1,000 credits.]" (or "[Docking fee is"), its millions by
+//!   [`pay_millions`](crate::RuleKey::PayMillions); a hypergate's greeting
+//!   has none.
+//!
+//! No new Rulebook key: the Bible's `Fee` ("The fee that is deducted
+//! from the player's credits when landing on this stellar") says nothing
+//! of a refusal, of domination or of gates, so it gives no other reading.
+//!
+//! ## Checked for stellar-fidelity phase 15
+//!
+//! Read in `EV Nova.app/Contents/MacOS/EV Nova` (i386),
+//! `_HandlePlayerDockRequest` (@0x66691-0x67ef9) and
+//! `_HandlePlayerDockApproach`. The runtime `spöb` record: `Flags` +0x30,
+//! `Flags2` +0x34 (hypergate 0x1000), `Fee` +0x38 (i32), the domination
+//! byte +0x46; the pilot's cash +0xa0 of `*0x3b5138`; `_creditsCString`
+//! at 0x184560 ("credits").
+//!
+//! - **The refusal** (@0x669b4-0x66a80), after the landability tests
+//!   (@0x66977-0x669aa) and before the cloak (`_ShipIsCloaked` @0x66a8e),
+//!   the disabled epilogue (@0x66aee-0x66b14), the uninhabited reply
+//!   (@0x66b51), the request match (@0x66bd2), the speed and reach gates
+//!   and the clearance (@0x67903). `Fee > 0` (@0x669b7-0x669b9), not
+//!   dominated (@0x669bf-0x669c3) and `Fee > cash`, signed
+//!   (@0x669d0-0x669d6): cash equal to the fee pays. Text: #61, " ",
+//!   `_creditsCString` (always plural, @0x66a0f-0x66a1b), " ", then #62
+//!   at a hypergate (@0x66a40-0x66a46), else #63 at a station
+//!   (@0x66a50-0x66a56), else #64 (@0x66a60). `_DisplayComm(text, 0xfa,
+//!   …)` @0x67c88-0x67cbc, 250 ticks, no sound. `_dockTarget` and
+//!   `_dockPermission` := -1 (@0x67cc1-0x67cd0), then the epilogue
+//!   (0x67eef); the selection is untouched.
+//! - **The charge** (@0x66db9-0x66df5), on the success path only, after
+//!   the speed and reach gates and before the branch to
+//!   `_PlayerEnterHypergate` (@0x66ed6-0x66edb), `_PlayerEnterWormhole`
+//!   (@0x66f0d-0x66f12) or the landing: one charge serves all three
+//!   (@0x66dce is its `Fee` read). `Fee > 0` (@0x66dd1), not dominated
+//!   (@0x66dd5), cash − `Fee` (@0x66de3), a negative result set to 0
+//!   (@0x66deb-0x66df5), unreachable from the press but ported. A
+//!   hypergate map cancelled after (@0x66ee0-0x66f08) refunds nothing.
+//! - **The greeting** (@0x64d70-0x64e58): after the second sentence,
+//!   when `Fee > 0` (@0x64d87-0x64d8c) and not dominated
+//!   (@0x64d92-0x64d96): "  " (@0x64da6), #103 at a station
+//!   (@0x64dca-0x64dd0) or #104 (@0x64dda), " " (@0x64e00),
+//!   `_StrcatCommaNumber(Fee)` (@0x64e21), " " (@0x64e2e),
+//!   `_creditsCString` (@0x64e34-0x64e40), #105 (@0x64e45-0x64e58), still
+//!   shown 250 ticks (@0x64e8e). A hypergate's greeting jumps past it
+//!   (@0x64a59 → 0x64e5d), so #102 "[Hypergate fee is" (@0x64dba-0x64dc0)
+//!   is unreachable and not built; a wormhole gets #103/#104.
+//! - **Left out**: domination by Demand Tribute (+0x46 written by
+//!   `_DoPlanetCommDialog` @0x978fa, cleared @0x9740f), which waives the
+//!   refusal, the charge and the greeting line, is
+//!   rdm:task/planet-domination's (`fee_due` is the one reader to switch);
+//!   the 32-bit cash width and signed compare are not replicated; the
+//!   `crashlog_print` calls after the charge (@0x66dff-0x66e56) are debug
+//!   logging.
+//! - **Merge note** (cloaking-fidelity phase 8, on `main` but not on this
+//!   branch's base): `main`'s `land_press` returns
+//!   `LandingRefusal::Cloaked` for any outcome but `NotLandable`,
+//!   `NoStellars` and `NothingLandable` while cloaked. The fee refusal
+//!   (@0x669b4) comes before the cloak (@0x66a8e), so when `main` is
+//!   merged in, `CannotPayFee` must join that pass-through arm, with the
+//!   dock request dropped for it, and a test that a cloaked ship which
+//!   can't pay hears the fee refusal, silently
+//!   (rdm:phase/stellar-fidelity-followups/phase-12-cannot-pay-fee-before-cloak).
 
 //! # Mission lifecycle
 //!
@@ -1966,6 +3753,7 @@ pub use galaxy::{
     Countdown, GalaxyOverlay, HiddenMove, NebulaOverride, OverlaidGalaxy, StellarOverride,
     SystemOverride, Whereabouts, listers_of,
 };
+pub use rebuild::DrawnSheet;
 
 use crate::catalog::{StellarId, SystemId};
 use crate::control::{Script, Test};

@@ -2843,6 +2843,9 @@ mod tests {
         fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
             self.0.clone()
         }
+        fn stellar_weapons(&self) -> Vec<(StellarId, crate::catalog::WeaponId)> {
+            Vec::new()
+        }
         fn date_affixes(&self) -> crate::catalog::DateAffixes {
             unreachable!("Goods::read reads no date")
         }

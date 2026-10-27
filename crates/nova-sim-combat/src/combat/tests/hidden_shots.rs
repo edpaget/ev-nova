@@ -293,7 +293,7 @@ fn a_missile_a_beam_downs_before_its_first_move_is_still_tested() {
     ];
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     combat.defend_npcs(&mut fighters, arena, None, false, &mut NeverFires);
-    combat.close_tick(&mut fighters, arena, &mut NeverFires);
+    combat.close_tick(&mut fighters, arena, &mut [], &mut NeverFires);
     drop(fighters);
     assert_eq!(shot_down(&combat.take_events()).len(), 1);
     assert!(!drawn_shot(&combat, missile));
@@ -362,7 +362,7 @@ fn hidden_shots_are_neither_drawn_nor_counted_nor_chosen_by_point_defence() {
     ships[2].trigger.point_defence = false;
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     combat.defend_npcs(&mut fighters, arena, None, false, &mut NeverFires);
-    combat.close_tick(&mut fighters, arena, &mut NeverFires);
+    combat.close_tick(&mut fighters, arena, &mut [], &mut NeverFires);
     drop(fighters);
     assert_eq!(combat.hidden.len(), 1, "kept hidden");
     assert!(!drawn_shot(&combat, missile));
@@ -397,7 +397,7 @@ fn clearing_the_fight_lets_go_of_the_hidden_shots() {
     ];
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     combat.defend_npcs(&mut fighters, arena, None, false, &mut NeverFires);
-    combat.close_tick(&mut fighters, arena, &mut NeverFires);
+    combat.close_tick(&mut fighters, arena, &mut [], &mut NeverFires);
     drop(fighters);
     assert_eq!(combat.hidden.len(), 1, "kept hidden");
     combat.clear();

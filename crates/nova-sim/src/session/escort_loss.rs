@@ -312,6 +312,7 @@ pub(super) fn an_escorts_shot_into_the_bystander(
         leader: Some(ShipRef::Player),
         govt: None,
         booty: None,
+        planet_type: false,
         mining: false,
     });
     shot.aimed_at = Some(ShipRef::Npc(NpcId(1)));

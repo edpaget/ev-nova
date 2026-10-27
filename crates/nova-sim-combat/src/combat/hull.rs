@@ -40,7 +40,12 @@
 //!   a shockwave (`_DamageShip` @0x3aacb), nor holds it in a tractor beam
 //!   (`_HandleBeams` @0x31210). The original's explosion size for one is a stale stack
 //!   value (copied @0x2d900 from a local only 0x2d968 writes); the engine
-//!   reads it as none.
+//!   reads it as none. Only a planet-type weapon's shots hit it, and a
+//!   planet-type weapon's hit only it (`_ShotCanHitShip` rule 8,
+//!   @0x44a8e-0x44acc); only a beam of the matching bit hits it
+//!   (`_HandleBeams` @0x30d34-0x30d82); and no expiry or asteroid-hit
+//!   blast reaches it (`_HandleShot` @0x3602e, `_HandleAsteroidHit`
+//!   @0x367a8). See [`planet_type`](super::planet_type).
 //! - Its turret miss class ([`HullSpec::miss_class`], [`miss_class`]) is
 //!   80 for a Fighter-class ship, 90 for a Medium one and 100 for any
 //!   other, from its escort class: its turret and point-defence shots roll
@@ -249,7 +254,8 @@ pub struct HullSpec {
     pub sprite_height: Option<f32>,
     /// Whether it is a planet-type ship, its `Flags` [`PLANET_TYPE`]: it
     /// dies with no shockwave, and no hit, shockwave or tractor beam
-    /// pushes or holds it.
+    /// pushes or holds it; only shots and beams of its planet type hit it,
+    /// and no expiry blast reaches it ([`planet_type`](super::planet_type)).
     pub planet_type: bool,
     /// Whether point defence fires on it, its `Flags2` [`PD_TARGET`],
     /// when it fights the defender or its leader (see

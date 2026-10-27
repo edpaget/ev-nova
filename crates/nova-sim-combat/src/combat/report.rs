@@ -167,7 +167,7 @@ mod tests {
     fn a_weapon_firing_reports_each_unimplemented_flag_it_sets() {
         let mining = WeaponSpec::new(&WeaponRecord {
             flags: 0x0140,
-            flags2: 0x0400,
+            flags3: 0x0020,
             ..weapon(181)
         });
         let mut reports = Reports::default();
@@ -177,7 +177,7 @@ mod tests {
             reports.take(),
             [
                 flag(181, FlagField::Flags, 0x0040),
-                flag(181, FlagField::Flags2, 0x0400)
+                flag(181, FlagField::Flags3, 0x0020)
             ]
         );
         reports.fired(&WeaponSpec::new(&weapon(128)));

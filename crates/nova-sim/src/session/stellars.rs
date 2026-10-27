@@ -31,7 +31,8 @@
 //!
 //! **Shots.** Each pass's fight (see the `game_work` module) hands the
 //! combat the stellars shown that shots can hit (whole, of `Strength`
-//! above 0, with a sprite, as big as their disc), each with its current
+//! above 0, drawing a sheet that can be read, as big as the disc of its
+//! frame, see [`Session::drawn_sheet`]), each with its current
 //! strength, and keeps what the shots leave of it: the session holds the
 //! current strength only of a whole stellar that has taken damage, never
 //! saved, as the original saves none (@0x72ad0-0x72aff). `Y` and `U`
@@ -60,11 +61,22 @@
 //! phase 9" and `story::rebuild`), with the stellar masters loaded and
 //! the sprite slots left with no frame, which the player's landing
 //! distance reads ([`Session::land`], by
-//! [`RuleKey::LandingDistance`]; "Built by phase 10"). Each point
-//! rebuilds after the
-//! transition's own writes, and tells
+//! [`RuleKey::LandingDistance`]; "Built by phase 10"), and the sheet whose
+//! frame count each stellar shown animates over
+//! ([`Session::counted_sheet`], by [`RuleKey::StellarFrameCount`];
+//! "Built by stellar-fidelity phase 1"), and the sheet each slot holds,
+//! which a stellar showing no sheet that can be read draws
+//! ([`Session::drawn_sheet`], by [`RuleKey::DeadTypeFallback`] and
+//! [`RuleKey::TypeSheetFallback`]; "Built by stellar-fidelity phase 3"),
+//! and, for a shown graphic whose `spïn` counts no frames, the slot left
+//! with no frame or the frame it kept, frozen, and the stellars that count
+//! none ([`Session::drawn_sheet`], [`Session::frame_frozen`],
+//! [`Session::counts_no_frames`], by [`RuleKey::UncountedSheet`]; "Built
+//! by stellar-fidelity phase 8").
+//! Each point rebuilds after the transition's own writes, and tells
 //! [`SessionEvent::StellarsRebuilt`](super::SessionEvent::StellarsRebuilt)
-//! when the set changed:
+//! when the set, a counted sheet, a held sheet, a slot's frame or a count
+//! changed:
 //!
 //! - every way into a system but a landed `M` or `N`, as the last step of
 //!   `Session::enter_system`: an in-flight `M` or `N` (@0x159a3), even
@@ -124,17 +136,26 @@ use crate::combat::ShipRef;
 use crate::combat::stellar::StellarTarget;
 use crate::control::{Script, ScriptNote};
 use crate::gate::GateKind;
-use crate::landing::{LandingReach, StellarShown, TypeWidth, landing_radius, landing_reach};
+use crate::geometry::Vec2;
+use crate::landing::{LandingReach, StellarShown, TypeWidth, frame_radius, landing_reach};
 use crate::legal::{Crime, LegalCode};
+use crate::navigation::SpriteRect;
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
-use crate::story::Countdown;
+use crate::story::rebuild::Fallback;
+use crate::story::sprite_pool;
 use crate::story::wreck::{self, Tick};
+use crate::story::{Countdown, DrawnSheet};
 use std::collections::BTreeMap;
 
 /// How many killings the player is convicted of for shooting a stellar
 /// down: `_SlapWithPenalty` runs ten times (@0x374e1-0x3751f).
 const STELLAR_KILLINGS: usize = 10;
+
+/// The side `_GetSpriteXSize` and `_GetSpriteYSize` give a sprite slot
+/// with no frame, or whose frame index is not below its count
+/// (@0x26e5-0x26ef, @0x2714-0x271e).
+pub(super) const NO_SPRITE_SIDE: u32 = 32;
 
 impl Session {
     /// Whether `stellar` has been dead since the last rebuild point: it
@@ -149,8 +170,8 @@ impl Session {
     }
 
     /// A rebuild point (see the module docs): in flight the stellars shown
-    /// are derived afresh, and those destroyed now are the ones dead since
-    /// it, telling
+    /// are derived afresh, those destroyed now are the ones dead since it,
+    /// and each counts the frames of the sheet its slot now holds, telling
     /// [`SessionEvent::StellarsRebuilt`](super::SessionEvent::StellarsRebuilt)
     /// when that changed either.
     pub(super) fn rebuild_stellars(&mut self) {
@@ -169,8 +190,9 @@ impl Session {
     /// (`Chart::keep_rescues`, @0x32c58-0x32ca1), before its stellars;
     /// then, in flight, the
     /// stellars shown derived afresh (`Session::reshow`), then which of
-    /// them are dead since it, then the sprite pool handed out (see the
-    /// `stale_sprites` module). Whether it changed the stellars.
+    /// them are dead since it and the sheet each counts the frames of,
+    /// then the sprite pool handed out (see the `stale_sprites` module).
+    /// Whether it changed the stellars or a counted sheet.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
         self.chart
             .rebuild_chart(&mut self.pilot, &self.statics, &self.setup);
@@ -179,10 +201,89 @@ impl Session {
         let rebuilt = self.space.rebuilt.rebuild(
             &self.chart.sites,
             |id| galaxy.destroyed(id),
-            self.statics.fallback_frame.is_some(),
+            Fallback::new(
+                self.statics.fallback_frame.is_some(),
+                self.statics.fallback_counts,
+            ),
+            self.setup.rules.source_for(RuleKey::UncountedSheet),
         );
         self.rebuild_sprite_pool();
         reshown | rebuilt
+    }
+
+    /// Which sheet `stellar` draws (see the module docs): its `DeadType`
+    /// sheet while destroyed and its `Type` sheet while whole, when that
+    /// can be read. A stellar showing no sheet that can be read draws what
+    /// its sprite slot holds, by the engine's reading of
+    /// [`RuleKey::DeadTypeFallback`] while destroyed and of
+    /// [`RuleKey::TypeSheetFallback`] while whole: graphic type 0's from
+    /// the rebuild point that filled its slot (for a destroyed stellar
+    /// with a `Type` sheet, exactly while it is dead since the last
+    /// rebuild point), a `DeadType` sheet a flight frame cloned in since,
+    /// or graphic type 0's whenever its slot shows no frame and that sheet
+    /// cannot be read; its `Type` sheet by the other reading. By
+    /// [`RuleKey::UncountedSheet`]'s engine reading, a stellar whose shown
+    /// sheet reads but whose `spïn` counts no frames draws the frame its
+    /// slot shows, and [`DrawnSheet::NoFrame`] when it shows none, as does
+    /// one whose slot graphic type 0 filled with frames that count none.
+    /// Its `Type` sheet for a stellar that is not among those shown. The
+    /// click box ([`Session::select_stellar`]), the shots and the views
+    /// read this one answer.
+    #[must_use]
+    pub fn drawn_sheet(&self, stellar: StellarId) -> DrawnSheet {
+        self.chart
+            .sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .map_or(DrawnSheet::Type, |site| {
+                self.space.site_sheet(&self.statics, &self.setup, site)
+            })
+    }
+
+    /// Whether `stellar`'s sprite slot shows a frame frozen, by
+    /// [`RuleKey::UncountedSheet`]'s engine reading: a flight frame cloned
+    /// into it a sheet whose `spïn` counts no frames, so it keeps the
+    /// frame it showed ([`Session::drawn_sheet`]), never stepping it, and
+    /// is placed as a 32-pixel sprite, its top left at the stellar's
+    /// centre less 16 on each axis (see the `story` module's "Built by
+    /// stellar-fidelity phase 8").
+    #[must_use]
+    pub fn frame_frozen(&self, stellar: StellarId) -> bool {
+        self.space.frame_frozen(&self.setup, stellar)
+    }
+
+    /// Whether `stellar` animates over no frames until the next rebuild
+    /// point, by the engine readings of [`RuleKey::UncountedSheet`] and
+    /// [`RuleKey::StellarFrameCount`]: the last rebuild point copied a
+    /// count of none from its slot (@0x331c6-0x331c9), so it never
+    /// animates (`_HandleStellarSprites` @0x2e802), even when a later
+    /// clone brings counting frames into the slot.
+    #[must_use]
+    pub fn counts_no_frames(&self, stellar: StellarId) -> bool {
+        self.space.counts_no_frames(&self.setup, stellar)
+    }
+
+    /// The sheet whose frame count `stellar` animates over, by
+    /// [`RuleKey::StellarFrameCount`] (see the module docs): by the
+    /// engine, the one its sprite slot held at the last rebuild point
+    /// (graphic type 0's read as its `Type` when the rules never let it
+    /// draw graphic type 0: by [`RuleKey::DeadTypeFallback`]'s Bible
+    /// reading or with a `DeadType` sheet, and by
+    /// [`RuleKey::TypeSheetFallback`]'s other reading or with a `Type`
+    /// sheet); by the Bible, the sheet it draws
+    /// ([`Session::drawn_sheet`]). Its `Type` for a stellar not shown.
+    #[must_use]
+    pub fn counted_sheet(&self, stellar: StellarId) -> DrawnSheet {
+        if self.setup.rules.source_for(RuleKey::StellarFrameCount) == RuleSource::Bible {
+            return self.drawn_sheet(stellar);
+        }
+        self.chart
+            .sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .map_or(DrawnSheet::Type, |site| {
+                self.space.counted_sheet(&self.setup, site)
+            })
     }
 
     /// A flight frame's sprite tick (see the module docs): every stellar
@@ -190,21 +291,28 @@ impl Session {
     /// each owned sprite slot is placed (see the `stale_sprites` module).
     pub(super) fn see_stellars(&mut self) {
         let galaxy = &self.chart.galaxy;
-        self.space
-            .rebuilt
-            .frame(&self.chart.sites, |id| galaxy.destroyed(id));
+        self.space.rebuilt.frame(
+            &self.chart.sites,
+            |id| galaxy.destroyed(id),
+            self.setup.rules.source_for(RuleKey::UncountedSheet),
+        );
         self.place_stellar_sprites();
     }
 
     /// The width each hypergate and wormhole shown takes its entry box
     /// by: the one `_GetStellarSpriteXSize` reads of its `Type` master
-    /// (see [`gate_entry`](crate::traffic::gate_entry)).
+    /// (see [`gate_entry`](crate::traffic::gate_entry)). A gate the
+    /// player's system does not hold ([`Chart::held_here`]) reads the
+    /// unloaded width, 150, as the owner test comes first (@0xacb9-0xacc1).
     pub(super) fn gate_type_widths(&self) -> BTreeMap<StellarId, TypeWidth> {
         self.chart
             .sites
             .iter()
             .filter(|site| GateKind::of(site.flags2).is_some())
-            .map(|site| (site.id, self.space.rebuilt.type_width(site)))
+            .map(|site| {
+                let held = self.chart.held_here(&self.pilot, &self.statics, site.id);
+                (site.id, self.space.type_width(site, held))
+            })
             .collect()
     }
 
@@ -268,19 +376,27 @@ impl Session {
     }
 
     /// The stellars shown that shots can hit this tick: each whole one of
-    /// `Strength` above 0 with a sprite, as big as its disc
-    /// ([`landing_radius`]), with its current strength.
+    /// `Strength` above 0 drawing a sheet that can be read, as big as the
+    /// disc of that sheet's frame ([`frame_radius`], which for a `Type`
+    /// sheet is [`landing_radius`](crate::landing::landing_radius)), with
+    /// its current strength. A whole
+    /// stellar with no `Type` sheet is hit by the frame its sprite slot
+    /// holds (`_CheckShotProximities` @0x37288-0x372a8 collides with the
+    /// slot's sprite), by [`RuleKey::TypeSheetFallback`]'s engine reading.
     pub(super) fn stellar_targets(&self) -> Vec<StellarTarget> {
         self.chart
             .sites
             .iter()
-            .filter(|site| !site.destroyed && site.frame_size.is_some())
+            .filter(|site| !site.destroyed)
             .filter_map(|site| {
+                let frame = self
+                    .space
+                    .drawn_frame_size(&self.statics, &self.setup, site)?;
                 let life = self.statics.lives.get(&site.id)?;
                 wreck::destroyable(life).then(|| StellarTarget {
                     stellar: site.id,
                     position: site.position,
-                    radius: landing_radius(site),
+                    radius: frame_radius(frame),
                     strength: self
                         .space
                         .strength
@@ -374,7 +490,9 @@ impl Session {
         }
     }
 
-    /// The daily step's stellars (see the module docs): each destroyed
+    /// The daily step's stellars (see the module docs): every damaged
+    /// stellar's strength restored, every active stellar's gun timer
+    /// zeroed (see the `stellar_guns` module), then each destroyed
     /// stellar in turn, by ascending ID, counts a day down, or regenerates
     /// and runs its `OnRegen` at once, through [`Session::run_set`],
     /// drawing on `chance`. The overlay is read again after each, so a
@@ -383,6 +501,7 @@ impl Session {
     /// with no record is left as it is.
     pub(super) fn stellars_day(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.space.strength.clear();
+        self.reset_gun_timers();
         let mut after = None;
         while let Some((stellar, countdown)) = self.next_destroyed(after) {
             after = Some(stellar);
@@ -430,46 +549,207 @@ impl Space {
         self.rebuilt.dead(stellar)
     }
 
+    /// [`Session::drawn_sheet`] for `site`, one of the stellars shown: its
+    /// `DeadType` sheet while destroyed and its `Type` sheet while whole,
+    /// each when it can be read and, by [`RuleKey::UncountedSheet`]'s
+    /// engine reading, counts frames. One that reads but counts none
+    /// draws the frame its sprite slot shows (`Rebuilt::showing`), or
+    /// [`DrawnSheet::NoFrame`] when it shows none. A stellar showing no
+    /// sheet that can be read draws, by the engine's reading of the key
+    /// that governs it ([`RuleKey::DeadTypeFallback`] while destroyed,
+    /// [`RuleKey::TypeSheetFallback`] while whole), the frame its slot
+    /// shows; when it shows none, graphic type 0 when that cannot be read,
+    /// the view then drawing the placeholder with that sheet's reason,
+    /// and otherwise no frame; and its `Type` by the other reading.
+    fn site_sheet(&self, statics: &Statics, setup: &Setup, site: &LandingSite) -> DrawnSheet {
+        let honours_counts = setup.rules.source_for(RuleKey::UncountedSheet) == RuleSource::Engine;
+        let showing = self.rebuilt.showing(site.id);
+        let readable = if site.destroyed {
+            site.dead_frame_size
+                .map(|_| (DrawnSheet::Dead, site.dead_counts_frames))
+        } else {
+            site.frame_size
+                .map(|_| (DrawnSheet::Type, site.type_counts_frames))
+        };
+        if let Some((sheet, counts)) = readable {
+            return if counts || !honours_counts {
+                sheet
+            } else {
+                showing.unwrap_or(DrawnSheet::NoFrame)
+            };
+        }
+        let key = if site.destroyed {
+            RuleKey::DeadTypeFallback
+        } else {
+            RuleKey::TypeSheetFallback
+        };
+        if setup.rules.source_for(key) == RuleSource::Bible {
+            DrawnSheet::Type
+        } else if let Some(showing) = showing {
+            showing
+        } else if statics.fallback_frame.is_none() {
+            DrawnSheet::TypeZero
+        } else {
+            DrawnSheet::NoFrame
+        }
+    }
+
+    /// [`Session::frame_frozen`].
+    fn frame_frozen(&self, setup: &Setup, stellar: StellarId) -> bool {
+        setup.rules.source_for(RuleKey::UncountedSheet) == RuleSource::Engine
+            && self.rebuilt.frozen(stellar)
+    }
+
+    /// [`Session::counts_no_frames`].
+    fn counts_no_frames(&self, setup: &Setup, stellar: StellarId) -> bool {
+        let engine = |key| setup.rules.source_for(key) == RuleSource::Engine;
+        engine(RuleKey::UncountedSheet)
+            && engine(RuleKey::StellarFrameCount)
+            && self.rebuilt.still(stellar)
+    }
+
+    /// [`Session::counted_sheet`] by [`RuleKey::StellarFrameCount`]'s
+    /// engine reading: the sheet `site`'s sprite slot held at the last
+    /// rebuild point, graphic type 0's read as its `Type` unless `site`
+    /// may draw graphic type 0 under the current rules (by the engine's
+    /// reading of [`RuleKey::DeadTypeFallback`] with no `DeadType` sheet,
+    /// or of [`RuleKey::TypeSheetFallback`] with no `Type` sheet).
+    fn counted_sheet(&self, setup: &Setup, site: &LandingSite) -> DrawnSheet {
+        let engine = |key| setup.rules.source_for(key) == RuleSource::Engine;
+        let may_draw_type_zero = (site.dead_frame_size.is_none()
+            && engine(RuleKey::DeadTypeFallback))
+            || (site.frame_size.is_none() && engine(RuleKey::TypeSheetFallback));
+        match self.rebuilt.counted(site.id) {
+            DrawnSheet::TypeZero if !may_draw_type_zero => DrawnSheet::Type,
+            sheet => sheet,
+        }
+    }
+
     /// The frame size of the sheet drawn for `site`, one of the stellars
-    /// shown, or `None` when no sheet is: the box a click on it reads (see
-    /// the module docs). It must match the view's `SceneStellar::drawn`
-    /// with `SystemScene::set_destroyed`'s graphic type 0: the `DeadType`
-    /// sheet while destroyed, when there is one; graphic type 0's while
-    /// destroyed and dead since the last rebuild point, by
-    /// [`RuleKey::DeadTypeFallback`]'s engine reading; the `Type` sheet
-    /// otherwise.
+    /// shown ([`Session::drawn_sheet`]), or `None` when no sheet is.
     pub(super) fn drawn_frame_size(
         &self,
         statics: &Statics,
         setup: &Setup,
         site: &LandingSite,
     ) -> Option<(u32, u32)> {
-        match site.dead_frame_size {
-            Some(dead) if site.destroyed => Some(dead),
-            _ if site.destroyed
-                && self.rebuilt.dead(site.id)
-                && setup.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Engine =>
-            {
-                statics.fallback_frame
-            }
-            _ => site.frame_size,
+        sheet_frame_size(self.site_sheet(statics, setup, site), statics, site)
+    }
+
+    /// The rect a click and the hover read of `site`'s sprite slot (+0x1a,
+    /// `_HandlePlayer` @0x6a63d, `_HandleMouse` @0x38233) with the player at
+    /// `player`: none for a slot showing no frame ([`DrawnSheet::NoFrame`],
+    /// a state the original never survives, its rebuild faulting first,
+    /// `_SWSetSpriteLocation` @0xab665 from @0x331aa); else the frame drawn
+    /// ([`Space::drawn_frame_size`], the [`PLACEHOLDER_FRAME`] when no
+    /// sheet is) placed where the slot is: its top left at
+    /// `sprite_pool::offset(site.position, player, slot size)` from the
+    /// player (`_HandleStellarSprites` @0x2ee3d-0x2ef1a), the slot size
+    /// [`Space::slot_sprite_size`] gives. A frame frozen is so placed as a
+    /// 32-pixel sprite, its top left at the centre less 16, and keeps its
+    /// stale frame's size (`_SWSetSpriteLocation` @0xab66d-0xab693 moves
+    /// the rect without resizing it).
+    pub(super) fn click_rect(
+        &self,
+        statics: &Statics,
+        setup: &Setup,
+        site: &LandingSite,
+        player: Vec2,
+    ) -> Option<SpriteRect> {
+        let sheet = self.site_sheet(statics, setup, site);
+        if sheet == DrawnSheet::NoFrame {
+            return None;
+        }
+        let frame = sheet_frame_size(sheet, statics, site).unwrap_or(PLACEHOLDER_FRAME);
+        let placed_as = self.slot_sprite_size(statics, setup, site).unwrap_or(frame);
+        let (dx, dy) = sprite_pool::offset(site.position, player, placed_as);
+        // A screen offset is far within an `f32`'s whole numbers.
+        #[allow(clippy::cast_precision_loss)]
+        let (dx, dy) = (dx as f32, dy as f32);
+        Some(SpriteRect {
+            left: player.x + dx,
+            top: player.y + dy,
+            width: frame.0,
+            height: frame.1,
+        })
+    }
+
+    /// The size `_GetSpriteXSize` and `_GetSpriteYSize` give `site`'s
+    /// sprite slot (@0x26d4-0x2731): `None` when it shows no frame,
+    /// [`NO_SPRITE_SIDE`] square when the frames it holds count none (a
+    /// frame frozen, [`Session::frame_frozen`]), and otherwise the frame
+    /// drawn's ([`Space::drawn_frame_size`]).
+    pub(super) fn slot_sprite_size(
+        &self,
+        statics: &Statics,
+        setup: &Setup,
+        site: &LandingSite,
+    ) -> Option<(u32, u32)> {
+        if !self.rebuilt.shows_frame(site.id) {
+            None
+        } else if self.frame_frozen(setup, site.id) {
+            Some((NO_SPRITE_SIDE, NO_SPRITE_SIDE))
+        } else {
+            self.drawn_frame_size(statics, setup, site)
+        }
+    }
+
+    /// The width `_GetStellarSpriteXSize` reads of `site`'s `Type` master:
+    /// the unloaded width, 150, when the player's system does not hold it
+    /// (`held_here` false, [`Chart::held_here`]), as its owner test
+    /// (@0xacb9-0xacc1) comes before its master tests (@0xacc3); else what
+    /// the last rebuild point left of the master.
+    fn type_width(&self, site: &LandingSite, held_here: bool) -> TypeWidth {
+        if held_here {
+            self.rebuilt.type_width(site)
+        } else {
+            TypeWidth::Unloaded
         }
     }
 
     /// How close the ship must be to `site`, one of the stellars shown, to
     /// land on it, by [`RuleKey::LandingDistance`]: the original's box
     /// reads what the last rebuild point and the flight frames since left
-    /// of its sprite slot and its `Type` master (see the module docs).
-    pub(super) fn landing_reach(&self, setup: &Setup, site: &LandingSite) -> LandingReach {
+    /// of its sprite slot and its `Type` master (see the module docs). A
+    /// stellar not `held_here` ([`Chart::held_here`]) reads the unloaded
+    /// width, 150, whatever its master, as `_GetStellarSpriteXSize`'s owner
+    /// test comes before its master tests (@0xacb9-0xacc1, @0xacc3).
+    pub(super) fn landing_reach(
+        &self,
+        setup: &Setup,
+        site: &LandingSite,
+        held_here: bool,
+    ) -> LandingReach {
         let shown = StellarShown {
             frame: self.rebuilt.shows_frame(site.id),
-            type_width: self.rebuilt.type_width(site),
+            type_width: self.type_width(site, held_here),
         };
         landing_reach(
             site,
             shown,
             setup.rules.source_for(RuleKey::LandingDistance),
         )
+    }
+}
+
+/// The 64-pixel placeholder the views draw for a stellar with no sheet to
+/// read (twice
+/// [`UNKNOWN_STELLAR_RADIUS`](crate::landing::UNKNOWN_STELLAR_RADIUS)), and the frame a click reads of
+/// it.
+const PLACEHOLDER_FRAME: (u32, u32) = (64, 64);
+
+/// The frame size of `sheet` as `site` draws it, or `None` when it has no
+/// frame to read.
+fn sheet_frame_size(
+    sheet: DrawnSheet,
+    statics: &Statics,
+    site: &LandingSite,
+) -> Option<(u32, u32)> {
+    match sheet {
+        DrawnSheet::Type => site.frame_size,
+        DrawnSheet::Dead => site.dead_frame_size,
+        DrawnSheet::TypeZero => statics.fallback_frame,
+        DrawnSheet::NoFrame => None,
     }
 }
 
@@ -1833,8 +2113,10 @@ mod tests {
         let events = fire(&mut session, 5);
         assert_eq!(booms(&events, 2), [], "no hit");
         assert_eq!(destroyed(&session, 128), None);
+        // No `Type` sheet, and no graphic type 0 to fill its slot.
         let mut catalog = shooting([life(128, 2)]);
         catalog.sites[0].1[0].frame_size = None;
+        catalog.fallback_frame = None;
         let mut session = quiet(&catalog);
         let events = fire(&mut session, 5);
         assert_eq!(booms(&events, 2), [], "no hit");
@@ -2273,6 +2555,12 @@ mod tests {
         settle(&mut session, &catalog, "M130");
         assert_eq!(
             session.take_events(),
+            [SessionEvent::SystemChanged, SessionEvent::StellarsRebuilt],
+            "the same set, but 129 now counts graphic type 0's frames"
+        );
+        settle(&mut session, &catalog, "M130");
+        assert_eq!(
+            session.take_events(),
             [SessionEvent::SystemChanged],
             "the same again"
         );
@@ -2458,6 +2746,64 @@ mod tests {
         Rulebook::default().with_override(RuleKey::LandingDistance, RuleSource::Bible)
     }
 
+    /// The land key pressed in a session of `catalog` with `rules`, 128
+    /// targeted and cleared, the ship over its centre moving at
+    /// `velocity`: the stellar landed on, or the refusal, and the sounds
+    /// the press raised.
+    fn land_moving(
+        catalog: &FakePilotCatalog,
+        rules: &Rulebook,
+        velocity: Vec2,
+    ) -> (Result<StellarId, LandingRefusal>, Vec<crate::SimSound>) {
+        let mut session = quiet(catalog).with_rules(*rules);
+        session.ship.player = ShipState {
+            velocity,
+            ..ShipState::default()
+        };
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
+        session.port.dock = Some(crate::clearance::DockRequest {
+            stellar: StellarId(128),
+            permission: crate::clearance::CLEARED,
+        });
+        let _ = session.take_sounds();
+        let landed = session.land().map(|press| match press {
+            LandPress::Outcome(LandOutcome::Landed(stellar)) => stellar,
+            other => panic!("not a landing: {other:?}"),
+        });
+        (landed, session.take_sounds())
+    }
+
+    #[test]
+    fn the_player_lands_by_the_per_axis_speed_by_default_and_by_the_overall_speed_by_the_other_reading()
+     {
+        let catalog = landing_at(100, StellarFlags::CAN_LAND, None, 12);
+        let too_fast = |velocity: Vec2| {
+            Err(LandingRefusal::TooFast {
+                stellar: StellarId(128),
+                station: false,
+                speed: velocity.length(),
+            })
+        };
+        let engine = Rulebook::default();
+        assert_eq!(
+            land_moving(&catalog, &engine, Vec2::new(0.7, 0.7)).0,
+            Ok(StellarId(128))
+        );
+        let (refused, sounds) = land_moving(&catalog, &engine, Vec2::new(0.8, 0.0));
+        assert_eq!(refused, too_fast(Vec2::new(0.8, 0.0)));
+        assert_eq!(sounds, [crate::SimSound::Refused], "@0x676fe");
+
+        let overall = Rulebook::default().with_override(RuleKey::LandingSpeed, RuleSource::Bible);
+        assert_eq!(
+            land_moving(&catalog, &overall, Vec2::new(0.8, 0.0)).0,
+            Ok(StellarId(128))
+        );
+        assert_eq!(
+            land_moving(&catalog, &overall, Vec2::new(0.74, 0.74)).0,
+            too_fast(Vec2::new(0.74, 0.74))
+        );
+    }
+
     #[test]
     fn a_destroyed_stellar_lands_within_its_type_width_until_a_rebuild_point_then_150() {
         for station in [false, true] {
@@ -2557,14 +2903,54 @@ mod tests {
         assert!(reaches(&filled, &engine(), &rebuilt, 261.0, 262.0));
     }
 
-    #[test]
-    fn a_loaded_type_whose_spin_counts_no_frames_reaches_56() {
+    /// Stellar 128, whole and landable, 100 square, whose `Type`'s `spïn`
+    /// counts no frames, with a `DeadType` that counts.
+    fn uncounted_type() -> FakePilotCatalog {
         let mut catalog = ruin(100, false);
         catalog.sites[0].1[0].flags = StellarFlags::CAN_LAND;
         catalog.sites[0].1[0].type_counts_frames = false;
-        let whole = |_: &mut Session| {};
-        assert!(reaches(&catalog, &engine(), &whole, 55.0, 56.0));
-        assert!(reaches(&catalog, &other_reading(), &whole, 50.0, 50.5));
+        catalog
+    }
+
+    /// `Y128`, a frame, `U128` and a frame: the slot keeps the `DeadType`
+    /// frame through the `Type` clone that counts none.
+    fn keeps_a_dead_frame(session: &mut Session) {
+        run(session, "Y128");
+        frame(session);
+        run(session, "U128");
+        frame(session);
+    }
+
+    fn uncounted_sheet(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::UncountedSheet, reading)
+    }
+
+    #[test]
+    fn a_whole_stellar_whose_type_counts_no_frames_reaches_75_after_a_rebuild_point_and_56_keeping_an_earlier_frame()
+     {
+        let catalog = uncounted_type();
+        let flown = |_: &mut Session| {};
+        assert!(
+            reaches(&catalog, &engine(), &flown, 74.0, 75.0),
+            "a session flown is a rebuild point: no frame"
+        );
+        assert!(
+            reaches(&catalog, &engine(), &keeps_a_dead_frame, 55.0, 56.0),
+            "a frame kept, and the loaded `Type` reads 32"
+        );
+        let rebuilt = |session: &mut Session| rebuild(session, &catalog);
+        assert!(reaches(&catalog, &engine(), &rebuilt, 74.0, 75.0));
+        // The rules apply from the next rebuild point: the session was
+        // flown under the default ones.
+        let counted = uncounted_sheet(RuleSource::Bible);
+        let kept_then_rebuilt = |session: &mut Session| {
+            rebuild(session, &catalog);
+            keeps_a_dead_frame(session);
+        };
+        for setup in [&rebuilt as &dyn Fn(&mut Session), &kept_then_rebuilt] {
+            assert!(reaches(&catalog, &counted, setup, 55.0, 56.0));
+        }
+        assert!(reaches(&catalog, &other_reading(), &flown, 50.0, 50.5));
     }
 
     #[test]
@@ -2613,7 +2999,7 @@ mod tests {
         let site = session.chart.sites[0];
         assert_eq!(session.space.rebuilt.type_width(&site), TypeWidth::Frame);
         assert_eq!(
-            session.space.landing_reach(&session.setup, &site),
+            session.space.landing_reach(&session.setup, &site, true),
             crate::landing::LandingReach::Box(175.0)
         );
     }
@@ -2697,6 +3083,420 @@ mod tests {
         assert_eq!(click(&mut session, 34.0, 0.0), Some(StellarId(128)));
     }
 
+    // The sheet drawn (stellar-fidelity phase 1's one owner).
+
+    /// The sheet stellar 128 draws.
+    fn sheet_128(session: &Session) -> DrawnSheet {
+        session.drawn_sheet(StellarId(128))
+    }
+
+    #[test]
+    fn a_stellar_with_a_dead_type_sheet_draws_it_while_destroyed() {
+        let catalog = clicking(Some((200, 200)), Some((100, 100)));
+        let mut session = quiet(&catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::Type, "whole");
+        run(&mut session, "Y128");
+        assert_eq!(sheet_128(&session), DrawnSheet::Dead);
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::Dead, "a rebuild point");
+        run(&mut session, "U128");
+        assert_eq!(sheet_128(&session), DrawnSheet::Type, "regenerated");
+    }
+
+    #[test]
+    fn by_the_engine_a_stellar_with_no_dead_type_sheet_draws_type_zero_while_dead_since_a_rebuild()
+    {
+        for fallback in [Some((200, 200)), None] {
+            let catalog = clicking(None, fallback);
+            let mut session = quiet(&catalog);
+            run(&mut session, "Y128");
+            assert_eq!(sheet_128(&session), DrawnSheet::Type, "{fallback:?}");
+            rebuild(&mut session, &catalog);
+            assert_eq!(sheet_128(&session), DrawnSheet::TypeZero, "{fallback:?}");
+            frame(&mut session);
+            assert_eq!(sheet_128(&session), DrawnSheet::TypeZero, "{fallback:?}");
+            // `U`, then `Y` before a frame sees it whole.
+            run(&mut session, "U128");
+            assert_eq!(sheet_128(&session), DrawnSheet::Type, "{fallback:?}");
+            run(&mut session, "Y128");
+            assert_eq!(sheet_128(&session), DrawnSheet::TypeZero, "{fallback:?}");
+            // `U`, a frame while whole, then `Y`.
+            run(&mut session, "U128");
+            frame(&mut session);
+            run(&mut session, "Y128");
+            assert_eq!(sheet_128(&session), DrawnSheet::Type, "{fallback:?}");
+        }
+    }
+
+    #[test]
+    fn by_the_bible_a_stellar_with_no_dead_type_sheet_draws_its_type() {
+        let catalog = clicking(None, Some((200, 200)));
+        let mut session = quiet(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::DeadTypeFallback, RuleSource::Bible),
+        );
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::Type);
+        // The Bible's reading changes nothing for a `DeadType` sheet.
+        let catalog = clicking(Some((200, 200)), Some((100, 100)));
+        let mut session = quiet(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::DeadTypeFallback, RuleSource::Bible),
+        );
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::Dead);
+    }
+
+    /// The sheet stellar 128 counts the frames of.
+    fn counted_128(session: &Session) -> DrawnSheet {
+        session.counted_sheet(StellarId(128))
+    }
+
+    /// Stellar 128's counted sheet whole, after `Y128`, after a rebuild
+    /// point, after `U128`, and after another rebuild point, in a session
+    /// of `catalog` with `rules`.
+    fn counted_walk(catalog: &FakePilotCatalog, rules: Rulebook) -> [DrawnSheet; 5] {
+        let mut session = quiet(catalog).with_rules(rules);
+        let whole = counted_128(&session);
+        run(&mut session, "Y128");
+        let destroyed = counted_128(&session);
+        rebuild(&mut session, catalog);
+        let rebuilt = counted_128(&session);
+        run(&mut session, "U128");
+        let regenerated = counted_128(&session);
+        rebuild(&mut session, catalog);
+        [
+            whole,
+            destroyed,
+            rebuilt,
+            regenerated,
+            counted_128(&session),
+        ]
+    }
+
+    fn frame_count(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::StellarFrameCount, reading)
+    }
+
+    use DrawnSheet::{Dead, Type, TypeZero};
+
+    #[test]
+    fn by_the_engine_a_stellar_counts_the_sheet_of_its_last_rebuild_point() {
+        let catalog = clicking(Some((200, 200)), Some((100, 100)));
+        assert_eq!(
+            counted_walk(&catalog, Rulebook::default()),
+            [Type, Type, Dead, Dead, Type]
+        );
+        assert_eq!(
+            counted_walk(&catalog, frame_count(RuleSource::Engine)),
+            [Type, Type, Dead, Dead, Type]
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_stellar_counts_the_sheet_it_draws() {
+        let catalog = clicking(Some((200, 200)), Some((100, 100)));
+        assert_eq!(
+            counted_walk(&catalog, frame_count(RuleSource::Bible)),
+            [Type, Dead, Dead, Type, Type]
+        );
+    }
+
+    #[test]
+    fn a_stellar_with_no_dead_type_counts_graphic_type_0_from_its_second_rebuild_point() {
+        let catalog = clicking(None, Some((100, 100)));
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(counted_128(&session), Type, "its slot held Type");
+        assert_eq!(sheet_128(&session), TypeZero, "drawing graphic type 0");
+        rebuild(&mut session, &catalog);
+        assert_eq!(counted_128(&session), TypeZero);
+        // By the Bible's `dead_type_fallback` graphic type 0 is never
+        // drawn, so never counted.
+        let bible = Rulebook::default().with_override(RuleKey::DeadTypeFallback, RuleSource::Bible);
+        assert_eq!(counted_128(&session.with_rules(bible)), Type);
+        // By the Bible's `stellar_frame_count`, the sheet drawn at once.
+        let mut session = quiet(&catalog).with_rules(frame_count(RuleSource::Bible));
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(counted_128(&session), TypeZero);
+        let both = frame_count(RuleSource::Bible)
+            .with_override(RuleKey::DeadTypeFallback, RuleSource::Bible);
+        assert_eq!(counted_128(&session.with_rules(both)), Type);
+    }
+
+    // A `spïn` that counts no frames (stellar-fidelity phase 8).
+
+    /// [`clicking`]'s stellar 128, 40 square, with a `DeadType` sheet 200
+    /// square that counts, whose `Type` counts no frames.
+    fn frozen_on_dead() -> FakePilotCatalog {
+        let mut catalog = clicking(Some((200, 200)), Some((100, 100)));
+        catalog.sites[0].1[0].type_counts_frames = false;
+        catalog
+    }
+
+    #[test]
+    fn a_whole_stellar_whose_type_counts_no_frames_draws_no_frame_then_keeps_its_dead_frame_frozen()
+    {
+        let catalog = frozen_on_dead();
+        let mut session = quiet(&catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame, "flown");
+        assert!(!session.frame_frozen(StellarId(128)));
+        frame(&mut session);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame, "a frame");
+        run(&mut session, "Y128");
+        assert_eq!(sheet_128(&session), DrawnSheet::Dead);
+        frame(&mut session);
+        assert!(!session.frame_frozen(StellarId(128)));
+        run(&mut session, "U128");
+        frame(&mut session);
+        assert_eq!(sheet_128(&session), DrawnSheet::Dead, "kept");
+        assert!(session.frame_frozen(StellarId(128)));
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame, "a rebuild point");
+        assert!(!session.frame_frozen(StellarId(128)));
+    }
+
+    #[test]
+    fn by_the_other_reading_a_type_that_counts_no_frames_draws_its_type() {
+        let catalog = frozen_on_dead();
+        let mut session = quiet(&catalog).with_rules(uncounted_sheet(RuleSource::Bible));
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::Type);
+        keeps_a_dead_frame(&mut session);
+        assert_eq!(sheet_128(&session), DrawnSheet::Type);
+        assert!(!session.frame_frozen(StellarId(128)));
+        assert!(!session.counts_no_frames(StellarId(128)));
+    }
+
+    #[test]
+    fn a_destroyed_stellar_whose_dead_type_counts_no_frames_draws_no_frame_from_a_rebuild_point() {
+        let mut catalog = frozen_on_dead();
+        catalog.sites[0].1[0].type_counts_frames = true;
+        catalog.sites[0].1[0].dead_counts_frames = false;
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        frame(&mut session);
+        assert_eq!(
+            sheet_128(&session),
+            DrawnSheet::Type,
+            "its `Type` frame kept"
+        );
+        assert!(session.frame_frozen(StellarId(128)));
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame);
+    }
+
+    #[test]
+    fn a_whole_stellar_with_no_type_sheet_keeps_graphic_type_0s_frame_through_an_uncounted_dead_type()
+     {
+        let mut catalog = no_type_sheet(Some((300, 300)), Some((200, 200)));
+        catalog.sites[0].1[0].dead_counts_frames = false;
+        let mut session = quiet(&catalog);
+        assert_eq!(sheet_128(&session), TypeZero, "flown: a rebuild point");
+        run(&mut session, "Y128");
+        frame(&mut session);
+        assert_eq!(
+            sheet_128(&session),
+            TypeZero,
+            "its `DeadType` clone kept it"
+        );
+        assert!(session.frame_frozen(StellarId(128)));
+        run(&mut session, "U128");
+        frame(&mut session);
+        assert_eq!(
+            sheet_128(&session),
+            TypeZero,
+            "its `Type` clone fails, and the kept frame stays"
+        );
+        assert!(session.frame_frozen(StellarId(128)));
+    }
+
+    #[test]
+    fn graphic_type_0_that_counts_no_frames_leaves_a_slot_it_fills_with_no_frame() {
+        let mut catalog = clicking(None, Some((100, 100)));
+        catalog.fallback_counts = false;
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame);
+        // Phase 3's placeholder, with no graphic type 0 to read.
+        let catalog = clicking(None, None);
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::TypeZero);
+    }
+
+    #[test]
+    fn a_stellar_counts_no_frames_from_a_rebuild_point_showing_an_uncounted_type_until_one_clones_a_counting_sheet()
+     {
+        let catalog = frozen_on_dead();
+        let me = StellarId(128);
+        let mut session = quiet(&catalog);
+        assert!(session.counts_no_frames(me), "flown");
+        keeps_a_dead_frame(&mut session);
+        assert!(session.counts_no_frames(me), "until a rebuild point");
+        run(&mut session, "Y128");
+        frame(&mut session);
+        assert!(session.counts_no_frames(me));
+        rebuild(&mut session, &catalog);
+        assert!(!session.counts_no_frames(me), "its `DeadType` counts");
+        // By the other reading of either key, it counts.
+        for rules in [
+            uncounted_sheet(RuleSource::Bible),
+            frame_count(RuleSource::Bible),
+        ] {
+            let mut session = quiet(&catalog).with_rules(rules);
+            rebuild(&mut session, &catalog);
+            assert!(!session.counts_no_frames(me), "{rules:?}");
+        }
+    }
+
+    /// `session` with the player at (`x`, `y`).
+    fn player_at(session: &mut Session, x: f32, y: f32) {
+        session.ship.player.position = Vec2::new(x, y);
+    }
+
+    #[test]
+    fn a_slot_showing_no_frame_has_no_frame_size_and_a_frozen_one_its_kept_sheets() {
+        let catalog = frozen_on_dead();
+        let mut session = quiet(&catalog);
+        player_at(&mut session, 0.0, 0.0);
+        let site = session.chart.sites[0];
+        let frame_size = |session: &Session| {
+            session
+                .space
+                .drawn_frame_size(&session.statics, &session.setup, &site)
+        };
+        assert_eq!(frame_size(&session), None);
+        // No rect: never clicked.
+        assert_eq!(click(&mut session, 0.0, 0.0), None);
+        assert_eq!(click(&mut session, 31.0, 0.0), None);
+        keeps_a_dead_frame(&mut session);
+        assert_eq!(frame_size(&session), Some((200, 200)));
+        // Clicked by its `DeadType` rect from the centre less 16.
+        assert_eq!(click(&mut session, 90.0, 0.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, -90.0, 0.0), None);
+        assert_eq!(
+            session
+                .stellar_targets()
+                .iter()
+                .map(|target| target.radius)
+                .collect::<Vec<_>>(),
+            [100.0]
+        );
+    }
+
+    #[test]
+    fn a_frozen_slot_is_clicked_by_its_stale_frame_from_the_centre_less_16() {
+        let catalog = frozen_on_dead();
+        let mut session = quiet(&catalog);
+        player_at(&mut session, 0.0, 0.0);
+        keeps_a_dead_frame(&mut session);
+        assert!(session.frame_frozen(StellarId(128)));
+        // [-16, 184) on each axis, 200 wide so with no margin.
+        for (x, y) in [(-16.0, -16.0), (90.0, 0.0), (183.5, 183.5)] {
+            assert_eq!(
+                click(&mut session, x, y),
+                Some(StellarId(128)),
+                "({x}, {y})"
+            );
+        }
+        for (x, y) in [(-17.0, 0.0), (-90.0, 0.0), (184.0, 0.0), (0.0, 184.0)] {
+            assert_eq!(click(&mut session, x, y), None, "({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn a_frozen_small_frame_gets_the_margin_by_its_own_width() {
+        let mut catalog = frozen_on_dead();
+        catalog.sites[0].1[0].type_counts_frames = true;
+        catalog.sites[0].1[0].dead_counts_frames = false;
+        let mut session = quiet(&catalog);
+        player_at(&mut session, 0.0, 0.0);
+        run(&mut session, "Y128");
+        frame(&mut session);
+        assert!(session.frame_frozen(StellarId(128)));
+        // Its 40-pixel `Type` frame at [-16, 24), grown to [-32, 40).
+        for x in [-32.0, 39.5] {
+            assert_eq!(click(&mut session, x, 0.0), Some(StellarId(128)), "{x}");
+        }
+        for x in [-32.5, 40.0] {
+            assert_eq!(click(&mut session, x, 0.0), None, "{x}");
+        }
+    }
+
+    #[test]
+    fn a_frameless_slot_is_never_clicked_or_hovered() {
+        let catalog = frozen_on_dead();
+        let mut session = quiet(&catalog);
+        player_at(&mut session, 0.0, 0.0);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame);
+        for x in [0.0, 31.0] {
+            assert_eq!(click(&mut session, x, 0.0), None, "{x}");
+            assert_eq!(
+                session.hover(Vec2::new(x, 0.0), &crate::testkit::NoShips),
+                None,
+                "{x}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_frozen_type_is_clicked_by_its_type_centred() {
+        let catalog = frozen_on_dead();
+        let mut session = quiet(&catalog).with_rules(uncounted_sheet(RuleSource::Bible));
+        player_at(&mut session, 0.0, 0.0);
+        rebuild(&mut session, &catalog);
+        keeps_a_dead_frame(&mut session);
+        assert_eq!(sheet_128(&session), DrawnSheet::Type);
+        // 40 square centred, [-20, 20), grown to [-36, 36).
+        for x in [-36.0, 35.5] {
+            assert_eq!(click(&mut session, x, 0.0), Some(StellarId(128)), "{x}");
+        }
+        for x in [-36.5, 36.0] {
+            assert_eq!(click(&mut session, x, 0.0), None, "{x}");
+        }
+    }
+
+    #[test]
+    fn a_slot_rect_sits_at_whole_pixels_from_the_player() {
+        let catalog = clicking(Some((200, 200)), Some((100, 100)));
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        player_at(&mut session, 0.75, 0.25);
+        assert_eq!(sheet_128(&session), DrawnSheet::Dead);
+        // 0.75 + trunc(-0.75) - 100: its left at -99.25, its right at
+        // 100.75.
+        assert_eq!(click(&mut session, -99.25, 0.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, -99.5, 0.0), None);
+        assert_eq!(click(&mut session, 100.5, 0.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, 100.75, 0.0), None);
+    }
+
+    #[test]
+    fn shots_pass_through_a_stellar_whose_slot_shows_no_frame() {
+        let mut catalog = shooting([life(128, 2)]);
+        catalog.sites[0].1[0].type_counts_frames = false;
+        let mut session = quiet(&catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::NoFrame);
+        let events = fire(&mut session, 5);
+        assert_eq!(booms(&events, 2), [], "no hit");
+        assert_eq!(destroyed(&session, 128), None);
+    }
+
+    #[test]
+    fn a_stellar_not_shown_draws_its_type() {
+        let catalog = clicking(Some((200, 200)), Some((100, 100))).living([life(140, 5)]);
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y140");
+        rebuild(&mut session, &catalog);
+        assert!(session.galaxy().destroyed(StellarId(140)));
+        assert_eq!(session.drawn_sheet(StellarId(140)), DrawnSheet::Type);
+    }
+
     #[test]
     fn a_slot_left_with_no_frame_is_clicked_on_the_64_pixel_placeholder() {
         let catalog = clicking(None, None);
@@ -2707,6 +3507,194 @@ mod tests {
         assert_eq!(click(&mut session, 31.0, 0.0), Some(StellarId(128)));
         assert_eq!(click(&mut session, 34.0, 0.0), None);
         assert_eq!(click(&mut session, 90.0, 0.0), None);
+    }
+
+    // A whole stellar whose `Type` sheet cannot be read (stellar-fidelity
+    // phase 3).
+
+    /// [`clicking`]'s catalog with 128's `Type` sheet unreadable.
+    fn no_type_sheet(
+        dead_frame_size: Option<(u32, u32)>,
+        fallback_frame: Option<(u32, u32)>,
+    ) -> FakePilotCatalog {
+        let mut catalog = clicking(dead_frame_size, fallback_frame);
+        catalog.sites[0].1[0].frame_size = None;
+        catalog
+    }
+
+    fn type_sheet(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::TypeSheetFallback, reading)
+    }
+
+    #[test]
+    fn by_the_engine_a_whole_stellar_with_no_type_sheet_draws_type_zero_from_a_rebuild_point() {
+        for fallback in [Some((200, 200)), None] {
+            for rules in [Rulebook::default(), type_sheet(RuleSource::Engine)] {
+                let catalog = no_type_sheet(None, fallback);
+                let mut session = Session::start(&catalog).expect("starts");
+                session.space.rebuilt = crate::story::rebuild::Rebuilt::default();
+                let mut session = session.with_rules(rules);
+                assert_eq!(sheet_128(&session), Type, "before any rebuild point");
+                rebuild(&mut session, &catalog);
+                assert_eq!(sheet_128(&session), TypeZero, "{fallback:?}");
+                frame(&mut session);
+                assert_eq!(sheet_128(&session), TypeZero, "{fallback:?}");
+                // A session flown has rebuilt at once.
+                assert_eq!(sheet_128(&quiet(&catalog)), TypeZero, "{fallback:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_whole_stellar_with_no_type_sheet_draws_its_type() {
+        for fallback in [Some((200, 200)), None] {
+            let catalog = no_type_sheet(Some((300, 300)), fallback);
+            let mut session = quiet(&catalog).with_rules(type_sheet(RuleSource::Bible));
+            assert_eq!(sheet_128(&session), Type, "{fallback:?}");
+            run(&mut session, "Y128");
+            frame(&mut session);
+            assert_eq!(sheet_128(&session), Dead, "{fallback:?}");
+            run(&mut session, "U128");
+            frame(&mut session);
+            assert_eq!(sheet_128(&session), Type, "{fallback:?}");
+            rebuild(&mut session, &catalog);
+            assert_eq!(sheet_128(&session), Type, "{fallback:?}");
+        }
+    }
+
+    #[test]
+    fn y_and_a_frame_then_u_keeps_its_dead_type_sheet_until_a_rebuild_point() {
+        let catalog = no_type_sheet(Some((300, 300)), Some((200, 200)));
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        assert_eq!(sheet_128(&session), Dead);
+        frame(&mut session);
+        run(&mut session, "U128");
+        assert_eq!(sheet_128(&session), Dead, "its `Type` clone fails");
+        frame(&mut session);
+        assert_eq!(sheet_128(&session), Dead);
+        assert_eq!(click(&mut session, 140.0, 0.0), Some(StellarId(128)));
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), TypeZero);
+        assert_eq!(click(&mut session, 140.0, 0.0), None);
+    }
+
+    #[test]
+    fn y_u_with_no_frame_between_keeps_type_zero() {
+        let catalog = no_type_sheet(Some((300, 300)), Some((200, 200)));
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        run(&mut session, "U128");
+        assert_eq!(sheet_128(&session), TypeZero);
+        frame(&mut session);
+        assert_eq!(sheet_128(&session), TypeZero);
+    }
+
+    #[test]
+    fn with_graphic_type_0_unreadable_a_whole_stellar_with_no_type_sheet_draws_its_dead_type_held()
+    {
+        let catalog = no_type_sheet(Some((300, 300)), None);
+        let mut session = quiet(&catalog);
+        assert_eq!(sheet_128(&session), TypeZero, "its slot shows no frame");
+        run(&mut session, "Y128");
+        frame(&mut session);
+        run(&mut session, "U128");
+        assert_eq!(sheet_128(&session), Dead, "the frame filled its slot");
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), TypeZero, "emptied again");
+    }
+
+    #[test]
+    fn it_is_clicked_by_graphic_type_0s_frame() {
+        let catalog = no_type_sheet(None, Some((200, 200)));
+        let mut session = quiet(&catalog);
+        assert_eq!(click(&mut session, 90.0, 0.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, 110.0, 0.0), None);
+        // By the other reading, the 64-pixel placeholder.
+        let mut session = quiet(&catalog).with_rules(type_sheet(RuleSource::Bible));
+        assert_eq!(click(&mut session, 31.0, 0.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, 34.0, 0.0), None);
+        assert_eq!(click(&mut session, 90.0, 0.0), None);
+    }
+
+    #[test]
+    fn it_lands_within_262_and_within_75_when_graphic_type_0_cannot_be_read() {
+        let mut catalog = landing_at(100, StellarFlags::CAN_LAND, None, 12);
+        catalog.sites[0].1[0].frame_size = None;
+        let whole = |_: &mut Session| {};
+        assert!(reaches(&catalog, &engine(), &whole, 261.0, 262.0));
+        catalog.fallback_frame = None;
+        assert!(reaches(&catalog, &engine(), &whole, 74.0, 75.0));
+    }
+
+    #[test]
+    fn a_whole_stellar_with_no_type_sheet_counts_graphic_type_0_from_its_second_rebuild_point() {
+        let catalog = no_type_sheet(Some((300, 300)), Some((100, 100)));
+        let mut session = quiet(&catalog);
+        assert_eq!(counted_128(&session), Type, "its slot held Type");
+        rebuild(&mut session, &catalog);
+        assert_eq!(counted_128(&session), TypeZero);
+        assert_eq!(
+            counted_128(&session.with_rules(type_sheet(RuleSource::Bible))),
+            Type,
+            "never drawn by the other reading, so never counted"
+        );
+        // A destroyed one with no `DeadType` may still draw graphic type 0
+        // by its whole reading's key.
+        let catalog = no_type_sheet(None, Some((100, 100)));
+        let mut session = quiet(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::DeadTypeFallback, RuleSource::Bible),
+        );
+        rebuild(&mut session, &catalog);
+        run(&mut session, "Y128");
+        assert_eq!(counted_128(&session), TypeZero);
+        assert_eq!(
+            sheet_128(&session),
+            Type,
+            "by the Bible's dead_type_fallback"
+        );
+    }
+
+    /// The explosions of a planet-type shot fired at 128 from 300 pixels
+    /// to its left, in a session of `catalog` with `rules`.
+    fn shot_at(catalog: &FakePilotCatalog, rules: Rulebook) -> Vec<Vec2> {
+        let mut session = quiet(catalog).with_rules(rules);
+        session.ship.player = crate::flight::ShipState {
+            position: Vec2::new(30.0 - 300.0, -40.0),
+            velocity: Vec2::ZERO,
+            heading: 90.0,
+        };
+        let mut events = fire(&mut session, 1);
+        for _ in 0..30 {
+            work_with(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut NeverFires,
+            );
+            events.extend(session.take_combat_events());
+        }
+        booms(&events, 2)
+    }
+
+    #[test]
+    fn a_planet_type_shot_hits_it_by_graphic_type_0s_disc() {
+        let mut catalog = shooting([life(128, 2)]);
+        catalog.sites[0].1[0].frame_size = None;
+        catalog.fallback_frame = Some((200, 200));
+        let seen = shot_at(&catalog, Rulebook::default());
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!(
+            (seen[0] - Vec2::new(30.0 - 100.0, -40.0)).length() < 1e-3,
+            "half graphic type 0's 200-pixel frame from its centre: {seen:?}"
+        );
+        assert_eq!(
+            shot_at(&catalog, type_sheet(RuleSource::Bible)),
+            [],
+            "no target by the other reading"
+        );
     }
 
     // The stellars shown.
@@ -2994,5 +3982,145 @@ mod tests {
         catalog.sites[0].1.reverse();
         let session = quiet(&catalog);
         assert_eq!(shown(&session), [200, 129, 128]);
+    }
+
+    // A stellar shown outside the system that holds it.
+
+    /// [`twice_listed`] with 200's `Type` frame 60 wide: a reach of
+    /// trunc(60 × 1.75) = 105 where it is held.
+    fn twice_listed_60() -> FakePilotCatalog {
+        let mut catalog = twice_listed();
+        for (_, sites) in &mut catalog.sites {
+            for site in sites.iter_mut().filter(|site| site.id == StellarId(200)) {
+                site.frame_size = Some((60, 60));
+            }
+        }
+        catalog
+    }
+
+    /// A session of `catalog` with `rules`, started in 130, which owns
+    /// 200, with the player's system then set to `system` and 200 kept
+    /// among the sites: the original's state for a slot between a galaxy
+    /// refresh and the next rebuild point.
+    fn kept_200(catalog: &FakePilotCatalog, rules: &Rulebook, system: i16) -> Session {
+        let mut session = quiet(catalog).with_rules(*rules);
+        session.pilot.system = SystemId(system);
+        session
+    }
+
+    /// 200 as the session keeps it among the sites.
+    fn site_200(session: &Session) -> LandingSite {
+        *session
+            .chart
+            .sites
+            .iter()
+            .find(|site| site.id == StellarId(200))
+            .expect("kept")
+    }
+
+    /// 200's landing reach in `session`, held where the session reads it.
+    fn reach_of_200(session: &Session) -> crate::landing::LandingReach {
+        let site = site_200(session);
+        let held = session
+            .chart
+            .held_here(&session.pilot, &session.statics, site.id);
+        session.space.landing_reach(&session.setup, &site, held)
+    }
+
+    /// The land key pressed in [`kept_200`], with 200 targeted and
+    /// cleared and the ship at rest at `offset` from its centre: the
+    /// stellar landed on, or the refusal, and the sounds the press raised.
+    fn land_on_200(
+        catalog: &FakePilotCatalog,
+        system: i16,
+        offset: Vec2,
+    ) -> (Result<StellarId, LandingRefusal>, Vec<crate::SimSound>) {
+        let mut session = kept_200(catalog, &engine(), system);
+        session.ship.player = ShipState {
+            position: site_200(&session).position + offset,
+            ..ShipState::default()
+        };
+        session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(200)));
+        session.port.dock = Some(crate::clearance::DockRequest {
+            stellar: StellarId(200),
+            permission: crate::clearance::CLEARED,
+        });
+        let _ = session.take_sounds();
+        let landed = session.land().map(|press| match press {
+            LandPress::Outcome(LandOutcome::Landed(stellar)) => stellar,
+            other => panic!("not a landing: {other:?}"),
+        });
+        (landed, session.take_sounds())
+    }
+
+    #[test]
+    fn a_stellar_two_visible_systems_list_reaches_by_its_frame_in_its_owner_and_150_elsewhere() {
+        use crate::landing::LandingReach;
+        let catalog = twice_listed_60();
+        assert_eq!(
+            land_on_200(&catalog, 130, Vec2::new(104.0, 0.0)).0,
+            Ok(StellarId(200))
+        );
+        assert!(matches!(
+            land_on_200(&catalog, 130, Vec2::new(105.0, 0.0)).0,
+            Err(LandingRefusal::TooFar { .. })
+        ));
+        assert_eq!(
+            reach_of_200(&kept_200(&catalog, &engine(), 130)),
+            LandingReach::Box(105.0),
+            "130 owns 200: its frame"
+        );
+        assert_eq!(
+            reach_of_200(&kept_200(&catalog, &engine(), 131)),
+            LandingReach::Box(262.0),
+            "131 lists 200 but 130 owns it: trunc(150 × 1.75) (@0xacb2-0xacc1)"
+        );
+        for system in [130, 131] {
+            let session = kept_200(&catalog, &other_reading(), system);
+            assert_eq!(
+                reach_of_200(&session),
+                LandingReach::Circle(crate::landing::landing_radius(&site_200(&session))),
+                "{system}: the other reading ignores the owner"
+            );
+        }
+    }
+
+    #[test]
+    fn the_land_press_refuses_a_stellar_another_system_owns_as_not_landable_before_any_reach() {
+        let catalog = twice_listed_60();
+        let (refused, sounds) = land_on_200(&catalog, 131, Vec2::ZERO);
+        assert_eq!(
+            refused,
+            Err(LandingRefusal::NotLandable {
+                stellar: StellarId(200),
+                station: false,
+            }),
+            "@0x6699a-0x669a4, though cleared, over it and at rest"
+        );
+        assert_eq!(sounds, [crate::SimSound::Refused], "snd 153 @0x67e8f");
+    }
+
+    #[test]
+    fn a_gate_another_system_holds_reads_150_for_its_entry_box() {
+        use crate::traffic::gate_entry::gate_reach;
+        let mut catalog = twice_listed();
+        for (_, sites) in &mut catalog.sites {
+            for site in sites.iter_mut().filter(|site| site.id == StellarId(200)) {
+                site.frame_size = Some((80, 80));
+                site.flags2 = crate::gate::HYPERGATE;
+            }
+        }
+        let entry = |system| {
+            let session = kept_200(&catalog, &engine(), system);
+            let widths = session.gate_type_widths();
+            let width = widths[&StellarId(200)];
+            (width, gate_reach(&site_200(&session), &widths))
+        };
+        assert_eq!(entry(130), (TypeWidth::Frame, 20), "130 owns it: 80 / 4");
+        assert_eq!(
+            entry(131),
+            (TypeWidth::Unloaded, 37),
+            "130 owns it, not 131: 150 / 4 (@0xacb9, @0x8dbdf)"
+        );
     }
 }

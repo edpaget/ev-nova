@@ -40,7 +40,7 @@ use std::num::NonZeroU16;
 use super::boxes::{FADE_LEVELS, fade_tint};
 use super::catalog::Looks;
 use crate::geometry::Bounds;
-use crate::{Blend, DrawCommand, DrawList, ImageKey, Point};
+use crate::{Blend, DrawCommand, DrawList, Point};
 
 /// `_TickCount`s, sixtieths of a second, in one flight step.
 pub const SIXTIETHS_PER_STEP: u64 = 2;
@@ -151,7 +151,7 @@ impl HoverCursor {
         list.clipped(
             play_area,
             DrawCommand::Sprite {
-                image: ImageKey::sprite(sheet.image_id, frame),
+                image: sheet.image.frame(frame),
                 center: at,
                 tint: fade_tint(FADE_LEVELS - self.fade.min(FADE_LEVELS)),
                 blend: Blend::Normal,
@@ -164,6 +164,7 @@ impl HoverCursor {
 mod tests {
     use super::*;
     use crate::Color;
+    use crate::ImageKey;
     use crate::flight::catalog::EffectSheet;
 
     const FOUR: Option<NonZeroU16> = NonZeroU16::new(4);
@@ -199,7 +200,7 @@ mod tests {
     fn sheet() -> EffectSheet {
         EffectSheet {
             frame_width: 0,
-            image_id: 651,
+            image: crate::SheetImage::Rled(651),
             frames: NonZeroU16::new(4).expect("non-zero"),
         }
     }
@@ -343,7 +344,7 @@ mod tests {
         assert_eq!(cursor.frame(), 3);
         let two = Some(Ok(EffectSheet {
             frame_width: 0,
-            image_id: 651,
+            image: crate::SheetImage::Rled(651),
             frames: NonZeroU16::new(2).expect("non-zero"),
         }));
         let [DrawCommand::Sprite { image, .. }] = drawn(&cursor, &looks(two))[..] else {

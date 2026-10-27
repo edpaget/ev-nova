@@ -146,7 +146,7 @@ fn a_beams_killing_tick_finishes_nothing() {
         field: Field::default(),
     };
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.close_tick(&mut fighters, arena, &mut NeverFires);
+    combat.close_tick(&mut fighters, arena, &mut [], &mut NeverFires);
     drop(fighters);
     assert!(ships[1].condition.is_dying(ships[1].reserves.armor));
     let (strikes, _, finished) = combat.take_landed();

@@ -224,6 +224,10 @@ impl PilotCatalog for Pilot {
         Vec::new()
     }
 
+    fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
+        Vec::new()
+    }
+
     fn date_affixes(&self) -> DateAffixes {
         DateAffixes::default()
     }

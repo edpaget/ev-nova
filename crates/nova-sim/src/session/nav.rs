@@ -450,6 +450,12 @@ impl Session {
     /// jumping) or when `pick` finds nothing: an empty slot or no
     /// stellar with the can-land flag.
     ///
+    /// F5 ([`StellarPick::Nearest`]) picks as `_FindNearestStellar` does
+    /// over [`Chart::pick_candidates`], the gate limit read by
+    /// [`RuleKey::GatePickRange`]. A pick another system owns is dropped:
+    /// `None`, no sound and nothing written (@0x69e73-0x69e94), with no
+    /// fall back to the next nearest (see the `stellar_picks` module).
+    ///
     /// A key that finds a stellar raises [`SimSound::NavSelected`], even
     /// for the one selected (@0x69ebc). Selecting changes the mode to 2
     /// and starts the brackets' fly-in ([`Session::nav_brackets`]), and
@@ -464,7 +470,13 @@ impl Session {
         }
         let picked = match pick {
             StellarPick::Slot(slot) => self.chart.sites.get(slot).map(|site| site.id),
-            StellarPick::Nearest => nearest_stellar(self.ship.player.position, &self.chart.sites),
+            StellarPick::Nearest => nearest_stellar(
+                self.ship.player.position,
+                &self.chart.pick_candidates(&self.pilot, &self.statics),
+                self.setup.rules.source_for(RuleKey::GatePickRange),
+            )
+            // F5 drops a pick another system owns (@0x69e73-0x69e94).
+            .filter(|&stellar| self.chart.held_here(&self.pilot, &self.statics, stellar)),
         }?;
         let selected = self.chart.nav == NavMode::Stellar(Some(picked));
         self.out.sounds.push(SimSound::NavSelected);

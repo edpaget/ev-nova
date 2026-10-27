@@ -19,6 +19,7 @@ use super::camera::{CAMERA_SPEED, Camera};
 use super::catalog::{SystemCatalog, SystemId};
 use super::scene::{self, SystemScene};
 use super::starfield;
+use crate::flight::SharedChance;
 use crate::time::ticks;
 use crate::{Color, DrawList, Input, Key, Point, Screen, ScreenAction};
 
@@ -46,11 +47,15 @@ pub struct SystemView {
     elapsed: Duration,
     /// The movement keys held down.
     held: HashSet<Key>,
+    /// What a stellar's random next frame (`Flags2` 0x0002) is drawn on.
+    chance: SharedChance,
 }
 
 impl SystemView {
     /// The view of system `id`, read from `catalog`, with the camera on the
-    /// system's centre.
+    /// system's centre. Its random frames draw on the default chance,
+    /// which takes the last frame allowed, until
+    /// [`SystemView::with_chance`] gives it one.
     pub fn new(catalog: &impl SystemCatalog, id: SystemId) -> Self {
         let scene = SystemScene::load(catalog, id);
         let camera = Camera::new(scene.bounds());
@@ -59,7 +64,14 @@ impl SystemView {
             camera,
             elapsed: Duration::ZERO,
             held: HashSet::new(),
+            chance: SharedChance::default(),
         }
+    }
+
+    /// The view with its stellars' random next frames drawn on `chance`.
+    #[must_use]
+    pub fn with_chance(self, chance: SharedChance) -> Self {
+        Self { chance, ..self }
     }
 
     /// The system, as laid out.
@@ -79,11 +91,7 @@ impl SystemView {
     #[must_use]
     pub fn frame(&self, index: usize) -> Option<u16> {
         let stellar = self.scene.stellars().get(index)?;
-        stellar
-            .sprite
-            .as_ref()
-            .ok()
-            .map(|_| stellar.animation.frame(ticks(self.elapsed)))
+        stellar.sprite.as_ref().ok().map(|_| stellar.frames.shown())
     }
 
     /// Whether either key for one way is held.
@@ -164,7 +172,10 @@ impl Screen for SystemView {
 
     /// Advances the animations and moves the camera for the keys held.
     fn tick(&mut self, dt: Duration) {
+        let before = ticks(self.elapsed);
         self.elapsed += dt;
+        self.scene
+            .step(ticks(self.elapsed) - before, &mut self.chance);
         let seconds = dt.as_secs_f32();
         let (vx, vy) = (self.velocity(LEFT, RIGHT), self.velocity(UP, DOWN));
         self.camera.move_by(vx * seconds, vy * seconds);
@@ -172,7 +183,7 @@ impl Screen for SystemView {
 
     fn draw(&self, list: &mut DrawList) {
         starfield::draw(list, &self.camera);
-        scene::draw_stellars(list, &self.scene, &self.camera, self.elapsed);
+        scene::draw_stellars(list, &self.scene, &self.camera);
         self.draw_overlay(list);
     }
 
@@ -212,7 +223,7 @@ mod tests {
 
     fn sheet(image_id: i16, frames: u16, size: u32) -> StellarSheet {
         StellarSheet {
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: size,
             frame_height: size,
@@ -236,7 +247,7 @@ mod tests {
             animation: AnimationData {
                 delay,
                 frame0_bias: 0,
-                only_when_destroyed: false,
+                flags2: 0,
             },
             radar_square: false,
         }
@@ -694,9 +705,9 @@ mod tests {
     fn problems_are_counted_with_the_first_one_in_red() {
         let list = drawn(&SystemView::new(&catalog(), SystemId(132)));
         assert_eq!(
-            text(&list, "2 problem"),
+            text(&list, "3 problem"),
             DrawCommand::Text {
-                text: "2 problem(s) reading the system: sÿst 132: no spöb 150".to_owned(),
+                text: "3 problem(s) reading the system: sÿst 132: no spöb 150".to_owned(),
                 font: Font::Geneva,
                 origin: at(16.0, 98.0),
                 size: 14.0,
@@ -713,18 +724,32 @@ mod tests {
     fn an_animated_stellar_follows_its_animation_and_a_static_one_stays_put() {
         let mut view = sol();
         let tick = Duration::from_secs(1) / 30;
-        let wormhole = view.scene().stellars()[2].animation;
         let mut shown = Vec::new();
-        for t in 0..10 {
+        for _ in 0..10 {
             let list = drawn(&view);
             let keys = sprites(&list);
             assert_eq!(keys[0].0.frame, 0, "Earth stays on frame 0");
             assert_eq!(view.frame(0), Some(0));
-            assert_eq!(keys[2].0.frame, wormhole.frame(t));
-            assert_eq!(view.frame(2), Some(wormhole.frame(t)));
+            assert_eq!(view.frame(2), Some(keys[2].0.frame));
             shown.push(keys[2].0.frame);
             view.tick(tick);
         }
         assert_eq!(shown, [0, 0, 1, 1, 2, 2, 3, 3, 0, 0]);
+    }
+
+    /// At 60 fps each frame is half a tick: the halves add up, so the
+    /// Wormhole, a frame every 2 ticks, steps every 4 frames.
+    #[test]
+    fn half_tick_frames_add_up_to_the_animations_ticks() {
+        let tick = Duration::from_secs(1) / 30;
+        // `tick / 2` rounds down, so the second half is a nanosecond longer.
+        let halves = [tick / 2, Duration::from_nanos(16_666_667)];
+        let mut view = sol();
+        let mut shown = Vec::new();
+        for half in halves.iter().cycle().take(12) {
+            shown.push(view.frame(2).expect("a sheet"));
+            view.tick(*half);
+        }
+        assert_eq!(shown, [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]);
     }
 }

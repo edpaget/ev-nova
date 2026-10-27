@@ -197,7 +197,7 @@ mod tests {
     fn trailing(width: u32) -> WeaponLook {
         WeaponLook {
             sheet: Some(Ok(EffectSheet {
-                image_id: 3500,
+                image: crate::SheetImage::Rled(3500),
                 frames: NonZeroU16::MIN,
                 frame_width: width,
             })),

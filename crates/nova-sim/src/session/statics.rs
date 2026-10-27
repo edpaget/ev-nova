@@ -1,7 +1,7 @@
 //! The catalog data [`Session::load`](super::Session::load) reads once and
 //! nothing writes again, shared by every clone of the session.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::catalog::{
@@ -66,11 +66,21 @@ pub(super) struct Statics {
     /// and the daily step read of a stellar's destruction and
     /// regeneration (see the `stellars` module).
     pub(super) lives: BTreeMap<StellarId, StellarLife>,
+    /// The stellars shots can shoot down, those of [`lives`](Self::lives)
+    /// of `Strength` above 0
+    /// ([`wreck::destroyable`](crate::story::wreck::destroyable)), among
+    /// which a stellar attacker picks its quarry
+    /// ([`death_star`](crate::ai::death_star)).
+    pub(super) destroyable: BTreeSet<StellarId>,
     /// Graphic type 0's sheet's frame size, or `None` when it cannot be
     /// read, read from the catalog as the session starts: what a rebuild
     /// point fills an empty sprite slot with, and the box a click on that
     /// slot reads (see the `stellars` module).
     pub(super) fallback_frame: Option<(u32, u32)>,
+    /// Whether graphic type 0's `spïn` counts frames, read from the
+    /// catalog as the session starts: a slot the rebuild fills with it
+    /// shows no frame when it does not (see the `stellars` module).
+    pub(super) fallback_counts: bool,
     /// Every `mïsn`, read when the session starts.
     pub(super) missions: Vec<MissionRecord>,
     /// The `düde`s of every `mïsn` of `Flags` 0x0800 with a `ShipDude`
@@ -106,6 +116,10 @@ pub(super) struct Statics {
     /// Every stellar's place and name, read when the session starts: what
     /// a mission's stop is matched by (see the `missions` module).
     pub(super) stellar_marks: StellarMarks,
+    /// Each stellar's gun, by ID, read when the session starts: the
+    /// `wëap` its `Weapon` names, which `_HandleStellarWeapons` fires (see
+    /// the `stellar_guns` module). A stellar not here has none.
+    pub(super) stellar_weapons: BTreeMap<StellarId, WeaponId>,
     /// Each `bööm` with a sound, and the `snd ` its explosion plays, read
     /// when the session starts: what a `Y`'s explosion sounds (see the
     /// `y_explosion` module).
@@ -156,5 +170,22 @@ mod tests {
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(session.statics.class_speed(ShipId(200)), 3.5);
         assert_eq!(session.statics.class_speed(ShipId(999)), 0.0, "no record");
+    }
+
+    #[test]
+    fn a_session_reads_each_stellars_gun_by_id() {
+        let mut catalog = crate::testkit::catalog();
+        catalog.stellar_weapons = vec![
+            (StellarId(130), WeaponId(199)),
+            (StellarId(128), WeaponId(196)),
+        ];
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            session.statics.stellar_weapons,
+            BTreeMap::from([
+                (StellarId(128), WeaponId(196)),
+                (StellarId(130), WeaponId(199)),
+            ])
+        );
     }
 }

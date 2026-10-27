@@ -106,6 +106,7 @@ use nova::config::{Os, log_path, pilots_dir, settings_path};
 use nova::fonts::game_fonts;
 use nova::load::data_warnings;
 use nova::platform::{Dialogs, Runner, event_loop};
+use nova::rulebook::eight_bit_reading;
 use nova::saves::FilePilots;
 use nova::startup::{
     DiskData, Fatal, FileLog, Launch, Report, Started, StartupLog, StdTerminal, usual_places,
@@ -114,6 +115,7 @@ use nova_audio::{Audio, AudioCore, FileSettings, KiraAudio, SettingsStore};
 use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
+use nova_render::GameImages;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_sim::{Chance, PilotKeeper, PilotStore, Rulebook};
 use nova_view::MenuCommand;
@@ -159,10 +161,10 @@ fn run_seed() -> u64 {
 /// Runs `runner` on `event_loop` until it exits, the menu bar's picks sent
 /// back through the loop on macOS; gives the runner back.
 fn run(
-    mut runner: Runner<Rc<GameData>>,
+    mut runner: Runner<GameImages<Rc<GameData>>>,
     event_loop: EventLoop<MenuCommand>,
 ) -> (
-    Runner<Rc<GameData>>,
+    Runner<GameImages<Rc<GameData>>>,
     Result<(), winit::error::EventLoopError>,
 ) {
     #[cfg(target_os = "macos")]
@@ -248,7 +250,9 @@ fn main() -> ExitCode {
     let audio = open_audio(&data, &dir, &rulebook, &mut report);
     let report = Rc::new(RefCell::new(report));
     // The simulation's diagnostics are the running game's, not startup's.
-    let runner = Runner::new(Rc::clone(&data), screen, fonts)
+    // The game's images, 8-bit sheets read as the rulebook says.
+    let images = GameImages::new(Rc::clone(&data), eight_bit_reading(&rulebook));
+    let runner = Runner::new(images, screen, fonts)
         .with_diagnostics(Box::new(std::io::stderr()))
         .with_report(Rc::clone(&report));
     let runner = match audio {

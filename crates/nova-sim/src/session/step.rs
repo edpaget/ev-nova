@@ -516,6 +516,9 @@ mod tests {
         let mut catalog = armed();
         catalog.weapons[0].speed = 9000;
         let mut session = facing_an_npc(&catalog, 180);
+        // By the engine's landing box the NPC, idling near planet 128,
+        // would land on the first pass, before any shot reached it.
+        crate::session::tests::landing_by_circle(&mut session);
         let report = steps(&mut session, &catalog, &firing(true), 60);
         let shots =
             |pass: &PassReport| -> Vec<_> { pass.shots.iter().map(|shot| shot.id).collect() };

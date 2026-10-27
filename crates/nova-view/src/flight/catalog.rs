@@ -13,6 +13,7 @@ pub use nova_sim::{Blink, BoomId, GovtId, ShipId, SoundId, WeaponId};
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::Bounds;
+use crate::sheet_image::SheetImage;
 
 /// One of a ship's `shän` layers drawn over its base sprite: the layer's
 /// `rlëD` and how many frames it holds.
@@ -212,12 +213,13 @@ impl<T: StatusBars + ?Sized> StatusBars for Rc<T> {
     }
 }
 
-/// An effect's sprite sheet: its `rlëD`, how many frames it holds and
-/// how wide each is.
+/// An effect's sprite sheet: the image its frames come from, how many
+/// frames it holds and how wide each is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EffectSheet {
-    /// The `rlëD`'s ID.
-    pub image_id: i16,
+    /// The image its frames come from: its `rlëD`, or its `spïn`'s `PICT`
+    /// pair.
+    pub image: SheetImage,
     /// How many frames the sheet holds.
     pub frames: NonZeroU16,
     /// Each frame's width in pixels (`_GetSpriteXSize`): a shot's trail
@@ -768,7 +770,7 @@ mod tests {
             (id.0 <= 150).then_some(Ok(BoomLook {
                 sheet: Ok(EffectSheet {
                     frame_width: 0,
-                    image_id: id.0,
+                    image: crate::SheetImage::Rled(id.0),
                     frames: NonZeroU16::MIN,
                 }),
                 advance: 1.0,
@@ -790,7 +792,7 @@ mod tests {
         fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
             Ok(EffectSheet {
                 frame_width: 0,
-                image_id: 500 + graphic.cast_signed(),
+                image: crate::SheetImage::Rled(500 + graphic.cast_signed()),
                 frames: NonZeroU16::MIN,
             })
         }
@@ -798,7 +800,7 @@ mod tests {
         fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
             Ok(EffectSheet {
                 frame_width: 0,
-                image_id: 800 + i16::from(kind),
+                image: crate::SheetImage::Rled(800 + i16::from(kind)),
                 frames: NonZeroU16::MIN,
             })
         }
@@ -806,14 +808,14 @@ mod tests {
         fn cursor_sheet(&self) -> Result<EffectSheet, String> {
             Ok(EffectSheet {
                 frame_width: 0,
-                image_id: 650,
+                image: crate::SheetImage::Rled(650),
                 frames: NonZeroU16::MIN,
             })
         }
 
         fn pod_sheet(&self) -> Result<EffectSheet, String> {
             Ok(EffectSheet {
-                image_id: 895,
+                image: crate::SheetImage::Rled(895),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
             })
@@ -848,11 +850,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             catalog
                 .boom_look(BoomId(129))
-                .map(|look| look.map(|look| look.sheet.map(|sheet| sheet.image_id))),
+                .map(|look| look.map(|look| look.sheet.map(|sheet| sheet.image))),
             catalog.target_card(ShipId(130)).subtitle,
             catalog.target_code(GovtId(131)),
-            catalog.box_sheet(2).map(|sheet| sheet.image_id),
-            catalog.asteroid_sheet(3).map(|sheet| sheet.image_id),
+            catalog.box_sheet(2).map(|sheet| sheet.image),
+            catalog.asteroid_sheet(3).map(|sheet| sheet.image),
             catalog.smoke_sheet(1).map(|sheet| sheet.first_icon),
             catalog.star_sheet().map(|sheet| sheet.image_id),
         )
@@ -874,7 +876,7 @@ mod tests {
             looks.boom(BoomId(150)).map(|look| look.sheet.clone()),
             Some(Ok(EffectSheet {
                 frame_width: 0,
-                image_id: 150,
+                image: crate::SheetImage::Rled(150),
                 frames: NonZeroU16::MIN
             }))
         );
@@ -883,7 +885,7 @@ mod tests {
             looks.box_sheet(0),
             Some(&EffectSheet {
                 frame_width: 0,
-                image_id: 500,
+                image: crate::SheetImage::Rled(500),
                 frames: NonZeroU16::MIN
             }),
             "a jettisoned box's"
@@ -894,7 +896,7 @@ mod tests {
             looks.box_sheet(4),
             Some(&EffectSheet {
                 frame_width: 0,
-                image_id: 504,
+                image: crate::SheetImage::Rled(504),
                 frames: NonZeroU16::MIN
             })
         );
@@ -903,7 +905,7 @@ mod tests {
             looks.cursor_sheet(),
             Some(&EffectSheet {
                 frame_width: 0,
-                image_id: 650,
+                image: crate::SheetImage::Rled(650),
                 frames: NonZeroU16::MIN
             }),
             "the cursor's"
@@ -914,7 +916,7 @@ mod tests {
             looks.asteroid_sheet(15),
             Some(&EffectSheet {
                 frame_width: 0,
-                image_id: 815,
+                image: crate::SheetImage::Rled(815),
                 frames: NonZeroU16::MIN
             })
         );
@@ -922,7 +924,7 @@ mod tests {
         assert_eq!(
             looks.pod_sheet(),
             Some(&EffectSheet {
-                image_id: 895,
+                image: crate::SheetImage::Rled(895),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
             }),
@@ -976,7 +978,7 @@ mod tests {
 
     #[test]
     fn borrowed_and_shared_combat_looks_are_combat_looks() {
-        let direct = r#"Ok("w128") ["s132", "s133"] Some(Ok(Ok(129))) "s130" Some("g131") Ok(502) Ok(803) Some(1008) Ok(700)"#;
+        let direct = r#"Ok("w128") ["s132", "s133"] Some(Ok(Ok(Rled(129)))) "s130" Some("g131") Ok(Rled(502)) Ok(Rled(803)) Some(1008) Ok(700)"#;
         assert_eq!(looks(Named), direct);
         assert_eq!(looks(&Named), direct);
         assert_eq!(looks(Rc::new(Named)), direct);

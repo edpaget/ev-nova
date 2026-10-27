@@ -16,7 +16,8 @@
 //!   truncated to whole pixels (`cvttss2si`, @0x8db9e-0x8dbda). Its reach
 //!   is `_GetStellarSpriteXSize(gate)` / 4, rounded toward zero
 //!   (@0x8dbdf-0x8dbfa, [`reach`]): the `Type` frame's width, 150 with the
-//!   master not loaded, and 32 with its frame index out of range
+//!   master not loaded or the gate's owner not the player's system
+//!   (@0xacb9-0xacc1), and 32 with its frame index out of range
 //!   ([`stellar_width`](crate::landing::stellar_width)).
 //! - **Outside**, |dx| > reach or |dy| > reach (@0x8dc1b-0x8dc55): it
 //!   approaches (sub-goal 2), and its wait (+0x4c) is -1.0 (@0x8dc4e): it

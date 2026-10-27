@@ -97,6 +97,7 @@ pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
 pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
 pub use images::{ImageError, ImageSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
+pub use source::GameImages;
 pub use super_xbr::SuperXbr;
 pub use upscale::{
     Abilities, RejectedSizes, Upscaler, UpscalerProbe, WorldResolution, effective, listed,

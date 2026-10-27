@@ -35,7 +35,7 @@ use super::murk::murk_tint;
 use super::shot_fade::{ShotShade, shot_shade};
 use crate::draw::{crossed_box, lights_tint};
 use crate::system::scene::PLACEHOLDER;
-use crate::{Color, DrawList, ImageKey, Point};
+use crate::{Color, DrawList, Point};
 use nova_sim::combat::projectile::ShotId;
 use nova_sim::combat::spin_timer;
 use nova_sim::sprite_layer::SpriteLayer;
@@ -258,7 +258,7 @@ pub fn draw_shot(list: &mut DrawList, shot: &ShotShown, looks: &Looks, fade: Rul
         Some(Ok(sheet)) => {
             let spin = (shot.spin_start, shot.spin_timer);
             let frame = shot_frame(shot.heading, shot.age, sheet.frames, look, spin.0, spin.1);
-            let image = ImageKey::sprite(sheet.image_id, frame);
+            let image = sheet.image.frame(frame);
             match shot_shade(look, shot.age, fade) {
                 ShotShade::Opaque => {
                     list.sprite(image, shot.at, murk_tint(Color::WHITE, shot.murk));
@@ -346,6 +346,7 @@ mod tests {
 
     use super::*;
     use crate::DrawCommand;
+    use crate::ImageKey;
     use crate::draw::Blend;
     use crate::flight::catalog::EffectSheet;
 
@@ -781,7 +782,7 @@ mod tests {
     fn sheet(image_id: i16, frames: u16) -> EffectSheet {
         EffectSheet {
             frame_width: 0,
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: n(frames),
         }
     }

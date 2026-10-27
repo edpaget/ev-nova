@@ -213,7 +213,6 @@ mod tests {
     use crate::flight::{FlightRules, Turn, facing};
     use crate::handling::ShipFields;
     use crate::inertialess::InertialDampener;
-    use crate::landing::LANDING_SPEED;
     use crate::rulebook::RuleSource;
     use crate::stats::{INERTIAL_DAMPENER, INERTIALESS_HULL, ShipStats};
     use crate::traffic::autopilot::{Outcome, TopSpeeds};
@@ -649,7 +648,7 @@ mod tests {
             let (outcome, ticks) = landed.expect("lands");
             assert_eq!(outcome, Outcome::Landed(StellarId(140)), "{heading}");
             assert!(ticks < 1200, "{ticks} ticks");
-            assert!(ship.state.velocity.length() <= LANDING_SPEED);
+            assert!(!moving(ship.state.velocity), "{:?}", ship.state);
         }
     }
 

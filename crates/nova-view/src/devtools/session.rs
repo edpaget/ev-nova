@@ -180,9 +180,11 @@ mod tests {
             dead_graphic: None,
             dead_frame_size: None,
             type_counts_frames: true,
+            dead_counts_frames: true,
             exit_angle: -1,
             tribute: 0,
             gravity: 0,
+            fee: 0,
             animation: nova_sim::catalog::SiteAnimation::default(),
         }
     }
@@ -284,6 +286,10 @@ mod tests {
         }
 
         fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+            Vec::new()
+        }
+
+        fn stellar_weapons(&self) -> Vec<(StellarId, nova_sim::WeaponId)> {
             Vec::new()
         }
 

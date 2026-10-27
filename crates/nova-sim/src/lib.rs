@@ -617,6 +617,7 @@ pub use shipyard::{
 pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound};
 pub use stats::ShipStats;
 pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCargo};
+pub use story::DrawnSheet;
 pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};

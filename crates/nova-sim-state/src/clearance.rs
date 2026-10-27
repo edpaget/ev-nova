@@ -246,9 +246,11 @@ mod tests {
             dead_graphic: None,
             dead_frame_size: None,
             type_counts_frames: true,
+            dead_counts_frames: true,
             exit_angle: -1,
             tribute: 0,
             gravity: 0,
+            fee: 0,
             animation: crate::catalog::SiteAnimation::default(),
         }
     }

@@ -130,6 +130,10 @@ impl PilotCatalog for Pilot {
         Vec::new()
     }
 
+    fn stellar_weapons(&self) -> Vec<(nova_sim::StellarId, nova_sim::WeaponId)> {
+        Vec::new()
+    }
+
     fn date_affixes(&self) -> DateAffixes {
         DateAffixes::default()
     }

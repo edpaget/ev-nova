@@ -404,9 +404,9 @@ pub struct Npc {
     /// ([`Npc::emerge_from_gate`], @0x8955e-0x89574) and a miner's shuttle
     /// as it sets off (@0x8b3ae, [`Decision::visits`](crate::ai::Decision::visits),
     /// see [`miner`](crate::ai::miner)), which also reads it to leave that
-    /// stellar out of its pick (@0x8b373). The landing's end
-    /// (`_HighLevelAIHandler` @0x8db00) is
-    /// rdm:phase/stellar-fidelity/phase-5-npc-landing-reach's.
+    /// stellar out of its pick (@0x8b373), and the landing's end, which
+    /// marks the stellar it landed on (`_HighLevelAIHandler` @0x8db00,
+    /// [`land_flight::stay`](crate::traffic::land_flight::stay)).
     pub visited: Option<StellarId>,
     /// Whether its travel stellar, the original's +0x6c, is set: what a
     /// pirate's idle block reads to skip its pick (@0x8c472-0x8c477, read
@@ -541,9 +541,11 @@ pub struct Npc {
     /// (`Rand(80)` + 100), its hold after a plunder (100), a ship a pirate
     /// took into its fleet (150, which its first think as an escort ends,
     /// [`Decision::ends_wait`](crate::ai::Decision::ends_wait)) (see
-    /// [`plunder`](crate::traffic::plunder))
-    /// and a pirate's count wait (120, see
-    /// [`board_wait`](crate::traffic::board_wait)). While it runs it counts
+    /// [`plunder`](crate::traffic::plunder)),
+    /// a pirate's count wait (120, see
+    /// [`board_wait`](crate::traffic::board_wait)) and a landed ship's stay
+    /// at its stellar (`Rand(75)` + 100 or `Rand(200)` + 300, see
+    /// [`land_flight::stay`](crate::traffic::land_flight::stay)). While it runs it counts
     /// in [`Npc::wait_running`], the traffic counts it down as the ship
     /// flies, its high level is skipped but for a drift, a hold or a count
     /// wait, and the ship moves on at its velocity with no turn or thrust
@@ -820,6 +822,18 @@ impl Npc {
     #[must_use]
     pub fn mission_escort(&self) -> bool {
         self.mission.is_some_and(|mark| mark.formation.is_some())
+    }
+
+    /// Whether it attacks stellars: a mission's special ship of `ShipBehav`
+    /// 2, which `_AIDispatch` flags on every think from its mark (+0xc8d2,
+    /// @0x8fbcd-0x8fc38) and sends to `_DeathStarAI` in place of its type's
+    /// think (@0x8ff3a-0x8ff43; see
+    /// [`death_star`](crate::ai::death_star)). It is keyed on the mark
+    /// alone, so a captured one kept as a mission escort attacks too.
+    #[must_use]
+    pub fn attacks_stellars(&self) -> bool {
+        self.mission
+            .is_some_and(|mark| mark.behav == ShipBehav::AttackStellars)
     }
 
     /// Its standing order as one of the player's escorts: a hired
@@ -1198,12 +1212,13 @@ impl Npc {
     /// fighter bays and point defence, its pick kept
     /// ([`fire::gated`](crate::ai::fire::gated)). So does its AI wait
     /// while it flies ([`Npc::ai_wait`]): a pirate's dock and hold after a
-    /// plunder, a ship a pirate took into its fleet, and the wait of a
-    /// ship following its leader's warp out while the leader still turns
-    /// (`_LowLevelAIHandler` @0x85bc3, see
-    /// [`warp_out`](crate::traffic::warp_out)). The waits the engine
-    /// doesn't fly yet (a landed ship's stay, a launched fighter's) will
-    /// count here once built (rdm weapons-fidelity phase 17's findings).
+    /// plunder, a ship a pirate took into its fleet, a landed ship's stay
+    /// at its stellar ([`land_flight::stay`](crate::traffic::land_flight::stay)),
+    /// and the wait of a ship following its leader's warp out while the
+    /// leader still turns (`_LowLevelAIHandler` @0x85bc3, see
+    /// [`warp_out`](crate::traffic::warp_out)). The wait the engine
+    /// doesn't fly yet (a launched fighter's) will count here once built
+    /// (rdm weapons-fidelity phase 17's findings).
     ///
     /// A pirate's count wait ([`Goal::CountWait`]) is this AI wait too, as
     /// the original keeps it in +0x4c, read so by
@@ -1229,6 +1244,20 @@ impl Npc {
     #[must_use]
     pub fn count_wait(&self) -> bool {
         self.goal == Goal::CountWait
+    }
+
+    /// Cuts its velocity and its speed along its heading (+0x48,
+    /// [`Npc::speed`]) each to `by` of themselves, in doubles, back to
+    /// floats: the high level's drags, a stellar attacker's in band
+    /// (@0x8faaf-0x8faeb) and a landing ship's inside its box
+    /// (@0x8da8d-0x8dad7).
+    pub fn drag_in_doubles(&mut self, by: f64) {
+        self.state.velocity = crate::flight::drag_by(self.state.velocity, by);
+        // Doubles, back to a float.
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            self.speed = (f64::from(self.speed) * by) as f32;
+        }
     }
 
     /// Sets its AI wait (+0x4c) to `ticks_left`, as boarding a mission's
@@ -1309,6 +1338,21 @@ impl Npc {
             Mode::JumpingIn { .. } => true,
             Mode::LeavingGate { tick } => tick > 0,
             _ => self.warp.under_way(),
+        }
+    }
+
+    /// Whether it is jumping in, goal 8 (`_AIIsShipJumpingIn` @0x82f12):
+    /// gliding in ([`Mode::JumpingIn`]) or bursting out of its gate
+    /// ([`Mode::LeavingGate`]) from its first moving tick (@0x8dd8a). Unlike
+    /// [`in_hyperspace`](Self::in_hyperspace), a ship whose warp out is
+    /// under way is not jumping in. A stellar's gun holds fire at such a
+    /// ship (`_IsThreatToStellar` @0x9f16-0x9f2a).
+    #[must_use]
+    pub fn jumping_in(&self) -> bool {
+        match self.mode {
+            Mode::JumpingIn { .. } => true,
+            Mode::LeavingGate { tick } => tick > 0,
+            _ => false,
         }
     }
 
@@ -2390,6 +2434,35 @@ mod tests {
         assert!(npc.in_hyperspace(), "warping out");
         npc.warp.stage = 0.0;
         assert!(!npc.in_hyperspace(), "its warp over");
+    }
+
+    #[test]
+    fn a_ship_is_jumping_in_gliding_in_or_bursting_out_of_its_gate_but_not_warping_out() {
+        let gate = StellarId(129);
+        for (mode, jumping) in [
+            (Mode::JumpingIn { tick: 0 }, true),
+            (Mode::JumpingIn { tick: 7 }, true),
+            (Mode::LeavingGate { tick: 1 }, true),
+            (Mode::LeavingGate { tick: 0 }, false),
+            (Mode::Emerging { ticks_left: 5 }, false),
+            (Mode::HeldAtGate { ticks_left: 5 }, false),
+            (
+                Mode::EnteringGate {
+                    gate,
+                    ticks_left: 5,
+                },
+                false,
+            ),
+            (Mode::Coasting { ticks_left: 5 }, false),
+            (Mode::Flying, false),
+        ] {
+            let npc = Npc { mode, ..plain(1) };
+            assert_eq!(npc.jumping_in(), jumping, "{mode:?}");
+        }
+        let mut warping = plain(1);
+        warping.warp.stage = 2.0;
+        assert!(warping.in_hyperspace(), "warping out");
+        assert!(!warping.jumping_in(), "goal 8 is the arrival alone");
     }
 
     /// The player's hired escort, NPC `id`.

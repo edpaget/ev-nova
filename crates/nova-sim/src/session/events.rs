@@ -61,7 +61,9 @@ pub enum SessionEvent {
     /// The galaxy overlay changed.
     GalaxyChanged,
     /// A rebuild point changed which stellars shown are dead since the
-    /// last rebuild.
+    /// last rebuild, or the sheet whose frame count one of them animates
+    /// over (`Session::counted_sheet`): the view draws the stellars again
+    /// and shows each changed one's current frame.
     StellarsRebuilt,
     /// The flight's starfield is drawn afresh about the ship.
     StarfieldReset,

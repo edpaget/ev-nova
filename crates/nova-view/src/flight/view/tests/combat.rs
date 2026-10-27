@@ -893,7 +893,7 @@ fn the_fight_asks_the_disable_rule_given_each_step_in_flight() {
 
 #[test]
 fn the_sessions_diagnostics_come_through_the_screen() {
-    let planet_type = nova_sim::WeaponRecord {
+    let exclusive = nova_sim::WeaponRecord {
         id: nova_sim::WeaponId(181),
         reload: 20,
         count: 12,
@@ -910,8 +910,8 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         blast_radius: 6,
         flags: 0,
         seeker: 0,
-        flags2: 0x0400,
-        flags3: 0,
+        flags2: 0,
+        flags3: 0x0020,
         decay: 0,
         beam_length: 0,
         beam_width: 0,
@@ -965,7 +965,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
     };
     let (_, chance) = scripted(&placed(850, 650, 90));
     let catalog = FakeCatalog {
-        weapons: vec![planet_type],
+        weapons: vec![exclusive],
         hulls: vec![hull],
         looks: vec![(181, Ok(WeaponLook::default()))],
         star_sheet: Ok(star_sheet()),
@@ -980,8 +980,8 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         view.take_diagnostics(),
         [Diagnostic::Sim(SimDiagnostic::UnimplementedWeaponFlag {
             weapon: nova_sim::WeaponId(181),
-            field: nova_sim::combat::flags::FlagField::Flags2,
-            bit: 0x0400
+            field: nova_sim::combat::flags::FlagField::Flags3,
+            bit: 0x0020
         })]
     );
     ticks(&mut view, 30);

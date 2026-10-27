@@ -28,6 +28,13 @@ impl Vec2 {
     pub fn length(self) -> f32 {
         self.x.hypot(self.y)
     }
+
+    /// Its squared length, `x·x + y·y` in single precision, as the
+    /// original compares distances without taking the root.
+    #[must_use]
+    pub fn length_squared(self) -> f32 {
+        self.x * self.x + self.y * self.y
+    }
 }
 
 impl Add for Vec2 {
@@ -74,5 +81,14 @@ mod tests {
         assert_eq!(Vec2::new(3.0, -4.0).length(), 5.0);
         assert_eq!(Vec2::ZERO.length(), 0.0);
         assert_eq!(Vec2::new(0.0, -2.5).length(), 2.5);
+    }
+
+    #[test]
+    fn the_squared_length_is_x_times_x_plus_y_times_y_in_single_precision() {
+        assert_eq!(Vec2::new(3.0, -4.0).length_squared(), 25.0);
+        assert_eq!(Vec2::new(300.0, 400.0).length_squared(), 250_000.0);
+        assert_eq!(Vec2::ZERO.length_squared(), 0.0);
+        let (x, y) = (0.1_f32, 0.7_f32);
+        assert_eq!(Vec2::new(x, y).length_squared(), x * x + y * y);
     }
 }

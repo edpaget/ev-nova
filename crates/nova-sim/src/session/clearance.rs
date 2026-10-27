@@ -23,7 +23,8 @@
 //! original's `_dockTryFlag`, @0x6a965-0x6a97a). A request whose stellar
 //! is no longer among the system's is dropped (@0x647c5-0x647e3);
 //! otherwise [`approach`] counts it, and its
-//! greeting raises [`SimMessage::DockCleared`] and
+//! greeting raises [`SimMessage::DockCleared`], with the fee due there
+//! ([`fee_due`](crate::landing::fee_due), @0x64d87-0x64d96), and
 //! [`SimSound::TrafficControl`] (@0x649a9), and its expiry drops it
 //! (@0x64fd3-0x64ff0).
 //!
@@ -68,7 +69,7 @@
 
 use super::{Chart, Outbox, Port, Session};
 use crate::clearance::{DockKind, approach, approach_clears};
-use crate::landing::{DockPress, DockSaid, LandOutcome, LandingRefusal};
+use crate::landing::{DockPress, DockSaid, LandOutcome, LandingRefusal, fee_due};
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
 use crate::sound::SimSound;
@@ -132,6 +133,7 @@ impl Session {
                     let offset = self.ship.player.position - site.position;
                     let done = approach(&mut request, site, offset, clears);
                     let kind = DockKind::of_site(site);
+                    let fee = fee_due(site);
                     self.port.dock = (!done.expired).then_some(request);
                     if done.greet {
                         self.out.sounds.push(SimSound::TrafficControl);
@@ -140,6 +142,7 @@ impl Session {
                             SimMessage::DockCleared {
                                 stellar: request.stellar,
                                 kind,
+                                fee,
                             },
                         );
                     }
@@ -299,6 +302,34 @@ mod tests {
         SimMessage::DockCleared {
             stellar: StellarId(stellar),
             kind,
+            fee: None,
+        }
+    }
+
+    #[test]
+    fn the_greeting_carries_the_fee_due() {
+        // `Fee > 0` (@0x64d87-0x64d8c) and not dominated (@0x64d92-0x64d96).
+        for (fee, flags2, due) in [
+            (100, 0, Some(100)),
+            (100, crate::market::DOMINATED, None),
+            (0, 0, None),
+        ] {
+            let mut catalog = catalog();
+            catalog.sites[0].1[0].fee = fee;
+            catalog.sites[0].1[0].flags2 = flags2;
+            let mut session = quiet(Session::start(&catalog).expect("starts"));
+            session.pilot.cash = 1000;
+            assert_eq!(session.land(), requested(128));
+            tick(&mut session);
+            assert_eq!(
+                session.take_messages(),
+                [SimMessage::DockCleared {
+                    stellar: StellarId(128),
+                    kind: DockKind::Planet,
+                    fee: due,
+                }],
+                "{fee} {flags2:#x}"
+            );
         }
     }
 

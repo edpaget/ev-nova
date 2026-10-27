@@ -31,6 +31,7 @@ use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::camera::VIEW_SIZE;
 use crate::system::catalog::SystemCatalog;
+use crate::system::kept_frames::KeptFrames;
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::DialogTemplate;
@@ -1044,6 +1045,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             double_time: false,
             sim,
             scene: opening.scene,
+            kept_frames: KeptFrames::new(),
             sheet: opening.sheet,
             sheet_ship: opening.sheet_ship,
             bar_government: opening.bar_government,

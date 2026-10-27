@@ -26,6 +26,7 @@
 
 use super::{Chart, Session};
 use crate::brackets::{self, NavBrackets, TargetBrackets};
+use crate::geometry::Vec2;
 use crate::traffic::npc::{Npc, NpcId};
 
 impl Session {
@@ -92,15 +93,12 @@ impl Chart {
     #[must_use]
     fn nav_brackets(&self) -> Option<NavBrackets> {
         let stellar = self.nav_target()?;
-        let dominated = self
-            .sites
-            .iter()
-            .find(|site| site.id == stellar)
-            .is_some_and(Session::iff_dominated);
+        let site = self.listed.iter().find(|site| site.id == stellar);
         Some(NavBrackets {
             stellar,
+            position: site.map_or(Vec2::ZERO, |site| site.position),
             expand: self.nav_fly_in.expand(),
-            dominated,
+            dominated: site.is_some_and(Session::iff_dominated),
         })
     }
 
@@ -188,6 +186,7 @@ mod tests {
             session.nav_brackets(),
             Some(NavBrackets {
                 stellar: StellarId(131),
+                position: Vec2::new(900.0, 0.0),
                 expand: 196.0,
                 dominated: false,
             }),

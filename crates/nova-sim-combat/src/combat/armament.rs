@@ -1468,7 +1468,7 @@ fn secondaries(mounts: &[Mount]) -> impl Iterator<Item = &WeaponSpec> {
 /// The shots in a burst of `spec` carried `count` times
 /// (`_WeaponBurstInterval` @0x831c): its `BurstCount` for copies that
 /// fire together (`Flags` 0x0040), and `BurstCount` × `count` otherwise.
-fn burst_interval(spec: &WeaponSpec, count: u32) -> u32 {
+pub(super) fn burst_interval(spec: &WeaponSpec, count: u32) -> u32 {
     if spec.flags & SIMULTANEOUS == 0 {
         spec.burst_count * count
     } else {
@@ -2872,11 +2872,11 @@ mod tests {
 
     #[test]
     fn each_unimplemented_flag_is_reported_once_however_often_it_fires() {
-        let planet_type = WeaponRecord {
-            flags2: 0x0400,
+        let exclusive = WeaponRecord {
+            flags3: 0x0020,
             ..blaster(181, 0)
         };
-        let mut armament = mounted(planet_type, 1);
+        let mut armament = mounted(exclusive, 1);
         let mut supplies = Supplies::none();
         assert_eq!(supplies.reports.take(), [], "not before it fires");
         assert_eq!(supplies.firing(&mut armament, PRIMARY, 5).len(), 5);
@@ -2884,8 +2884,8 @@ mod tests {
             supplies.reports.take(),
             [SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: WeaponId(181),
-                field: FlagField::Flags2,
-                bit: 0x0400
+                field: FlagField::Flags3,
+                bit: 0x0020
             }]
         );
     }
@@ -3666,7 +3666,7 @@ mod tests {
     fn point_defence_reports_its_flags_as_it_fires() {
         let mut armament = mounted(
             WeaponRecord {
-                flags2: 0x0400,
+                flags3: 0x0020,
                 ..defence(133, 9, 5, 0)
             },
             1,

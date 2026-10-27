@@ -23,7 +23,7 @@ use super::catalog::Looks;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
 use crate::draw::crossed_box;
 use crate::system::scene::PLACEHOLDER;
-use crate::{Color, DrawList, ImageKey, Point};
+use crate::{Color, DrawList, Point};
 
 /// The levels of a box's fade: a level of 32 would be fully transparent.
 pub const FADE_LEVELS: u8 = 32;
@@ -48,11 +48,7 @@ pub fn draw_boxes(list: &mut DrawList, boxes: &[BoxShown], looks: &Looks) {
         match looks.box_sheet(shown.graphic) {
             Some(sheet) => {
                 let frame = shown.frame % sheet.frames.get();
-                list.sprite(
-                    ImageKey::sprite(sheet.image_id, frame),
-                    shown.at,
-                    fade_tint(shown.fade),
-                );
+                list.sprite(sheet.image.frame(frame), shown.at, fade_tint(shown.fade));
             }
             None => crossed_box(list, shown.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
         }
@@ -74,6 +70,7 @@ mod tests {
     use std::num::NonZeroU16;
 
     use super::*;
+    use crate::ImageKey;
     use crate::flight::catalog::EffectSheet;
 
     fn at(x: f32, y: f32) -> Point {
@@ -90,7 +87,7 @@ mod tests {
     fn sheet(frames: u16) -> EffectSheet {
         EffectSheet {
             frame_width: 0,
-            image_id: 600,
+            image: crate::SheetImage::Rled(600),
             frames: NonZeroU16::new(frames).expect("non-zero"),
         }
     }
@@ -125,7 +122,7 @@ mod tests {
                 .map(|graphic: u16| {
                     let sheet = EffectSheet {
                         frame_width: 0,
-                        image_id: 500 + graphic.cast_signed(),
+                        image: crate::SheetImage::Rled(500 + graphic.cast_signed()),
                         frames: NonZeroU16::new(36).expect("non-zero"),
                     };
                     (graphic, Ok(sheet))

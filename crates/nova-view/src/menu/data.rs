@@ -409,7 +409,7 @@ mod tests {
         let broken = replacing(RLED, 8050, &empty);
         assert_eq!(
             broken.main_screen_art(),
-            Err("rlëD 8050: the rlëD sheet has no frames".to_owned())
+            Err("rlëD 8050: the sprite sheet has no frames".to_owned())
         );
     }
 

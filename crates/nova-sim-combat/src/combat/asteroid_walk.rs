@@ -60,6 +60,7 @@
 use super::asteroid_hit::{self, Rock};
 use super::damage::Hit;
 use super::ion::{Burst, Dose};
+use super::planet_type::{self, BlastKind};
 use super::projectile::Shot;
 use super::{Combat, CombatEvent, Fighter, Landed, Push};
 use crate::asteroid::{Asteroid, AsteroidType, Asteroids, KINDS, Remains, SLOTS};
@@ -169,7 +170,8 @@ impl Combat {
     /// `shot`'s hit on what it `struck` at `at` (`_HandleAsteroidHit`
     /// @0x36637-0x369c7, see [`asteroid_hit`]): its explosion and its hit
     /// particles go off there; a player's shot blasts the active ships
-    /// among `fighters` in its square, but planet-type ones, into `hits`;
+    /// among `fighters` in its square whose planet type its blast reaches
+    /// ([`planet_type::blast_reaches`]), into `hits`;
     /// the asteroid takes its damage and, below 0, is destroyed at once
     /// in `field`, drawing on `chance` ([`Combat::destroy_asteroid`]), or
     /// else is pushed. A walk's turn destroyed already takes the hit on
@@ -197,10 +199,20 @@ impl Combat {
             });
         }
         self.spray(weapon, at, asteroid_hit::HIT_PART_VARIATION);
-        if let Some(blast) = asteroid_hit::blast(shot, at) {
+        if let Some(blast) = asteroid_hit::blast(shot, at, self.planet_blasts) {
+            let reaches = |fighter: &&Fighter| {
+                let (kind, reading) = (BlastKind::AsteroidHit, self.planet_blasts);
+                planet_type::blast_reaches(
+                    kind,
+                    reading,
+                    weapon.planet_type(),
+                    fighter.hull.planet_type,
+                )
+            };
             let ships = fighters
                 .iter()
-                .filter(|fighter| fighter.condition.active() && !fighter.hull.planet_type)
+                .filter(|fighter| fighter.condition.active())
+                .filter(reaches)
                 .map(|fighter| (fighter.ship, fighter.state.position));
             let hit = Hit {
                 cant_kill: shot.disable_only,

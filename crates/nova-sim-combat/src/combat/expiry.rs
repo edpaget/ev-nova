@@ -32,6 +32,7 @@
 //! blast and each lock at its visit.
 
 use super::lineup::Lineup;
+use super::planet_type::BlastKind;
 use super::projectile::{Guide, Target};
 use super::{Combat, Fighter, Landed, ShipRef, Sides, blasted, lock};
 use crate::chance::Chance;
@@ -105,7 +106,7 @@ impl Combat {
         // life meet as the collision passes do, and each ship where it is
         // now, which the moves and the locks meet.
         let now_at = self.stand_where_they_stood(fighters);
-        let mut lineup = Lineup::new(fighters, &now_at, govts, self.pass_through);
+        let mut lineup = Lineup::new(fighters, &now_at, govts, self.hit_readings());
         place(fighters, &lineup.seen);
         let mut visit = 0;
         while visit < self.slot_bound() {
@@ -213,7 +214,8 @@ impl Combat {
             let blast = shot.blast(None);
             self.explode_shot(shot, &blast);
             let weight = shot.weapon.reload;
-            return blasted(shot, &blast, hit, weight, sides.targets);
+            let planet = (BlastKind::Expiry, self.planet_blasts);
+            return blasted(shot, &blast, (hit, weight), sides.targets, planet);
         }
         if shot.weapon.fizzles {
             self.events.push(CombatEvent::Fizzled { at: shot.position });
