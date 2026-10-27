@@ -35,10 +35,11 @@ fn arena<'a>(arsenal: &'a Arsenal, govts: &'a Governments) -> Arena<'a> {
 
 #[test]
 fn a_breakup_a_beam_begins_starts_its_countdown_at_the_next_display() {
-    // `_HandleBeams` (@0x4453d) runs after B's display (@0x444ad): the
-    // breakup it begins on tick 1 is unset until B's display on tick 2
-    // sets it (@0x2d834), and B explodes at 2 (@0x2d85a), 5 - 2 ticks of
-    // its own later.
+    // `_HandleBeams` (@0x4453d) runs after B's display (@0x444ad), the
+    // session's order (`nova_sim::Session::pass_after_move`): the breakup
+    // the beam A fires begins is unset until B's next display sets it
+    // (@0x2d834), and B explodes at 2 (@0x2d85a), 5 - 2 of its own steps
+    // later.
     let mut b = Ship::at(2, 100.0, 0.0);
     b.reserves = Reserves::full(0.0, 30.0, 100.0);
     b.reserves.armor.now = 1.0;
@@ -49,12 +50,13 @@ fn a_breakup_a_beam_begins_starts_its_countdown_at_the_next_display() {
     };
     let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser), b];
     let mut combat = Combat::default();
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     ships[0].trigger = QUIET;
-    assert_eq!(ships[1].condition, starting(0), "tick 1: unset");
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(ships[1].condition, starting(0), "unset by the beam");
     let mut seen = Vec::new();
     for _ in 2..=6 {
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         seen.push(ships[1].condition);
     }
     assert_eq!(
@@ -73,21 +75,16 @@ fn a_breakup_a_beam_begins_starts_its_countdown_at_the_next_display() {
 fn a_breakup_the_collision_passes_begin_starts_at_that_ticks_display() {
     // The collision passes (@0x43e70) leave the breakup unset; B's own
     // display that frame (@0x444ad) sets it.
-    let (arsenal, govts) = (Arsenal::default(), Governments::default());
-    let arena = arena(&arsenal, &govts);
     let mut hulk = Ship::at(2, 0.0, 0.0);
     hulk.reserves = Reserves::full(0.0, 1.0, 100.0);
     hulk.hull.death_delay = 5;
     let mut ships = [hulk];
     let mut combat = Combat::default();
     combat.put_in_flight(flown_by_c(blaster(), Vec2::new(5.0, 0.0)));
-    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.test_hits(&mut fighters, arena, Scenery::default(), &mut NeverFires);
-    assert_eq!(*fighters[0].condition, starting(0), "unset by the passes");
-    combat.defend_npcs(&mut fighters, arena, None, false, &mut NeverFires);
-    combat.fly_shots(&mut fighters, arena, &mut NeverFires);
-    combat.handle_npcs(&mut fighters, arena, &mut NeverFires);
-    assert_eq!(*fighters[0].condition, starting(5), "set at its display");
+    phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(ships[0].condition, starting(0), "unset by the passes");
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(ships[0].condition, starting(5), "set at its display");
 }
 
 #[test]
@@ -125,7 +122,7 @@ fn a_final_explosions_shockwave_lands_at_the_wrecks_display_before_a_later_slots
     let mut near = holding(2, 40.0, 0.0, 100.0, 300.0, 300.0);
     near.shield_regen = 1.0;
     let mut ships = [wreck, near];
-    tick(&mut Combat::default(), &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut Combat::default(), &mut ships, &NovaDisable);
     assert_eq!(ships[0].condition, Condition::Destroyed);
     assert_eq!(ships[1].reserves.shield.now, 69.0);
 }
@@ -151,7 +148,7 @@ fn a_shockwave_is_late_on_a_ship_displayed_before_its_wreck_by_slot() {
     for wreck_first in [true, false] {
         let mut ships = ships(wreck_first);
         let mut combat = Combat::default();
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let mut late = lateness(&combat.take_events());
         late.sort();
         assert_eq!(late, [(A, true), (seven, false)], "{wreck_first}");
@@ -160,22 +157,25 @@ fn a_shockwave_is_late_on_a_ship_displayed_before_its_wreck_by_slot() {
 
 #[test]
 fn the_players_wreck_strikes_the_npcs_not_yet_shown_and_spares_the_player() {
-    // The player's display (@0x43e29) comes before every NPC's: its
-    // shockwave flashes on each that frame.
+    // The player's display (@0x43e29) comes before every NPC's (the
+    // session's order, `nova_sim::Session::pass_after_move`), so its
+    // shockwave meets none shown yet: each one's flash shows that frame.
     let mut player = wreck(ShipRef::Player, 200.0, 0.0, 0.0);
     player.slot = Slot::Player;
     let mut ships = [player, holding(1, 40.0, 0.0, 100.0, 300.0, 300.0)];
     let mut combat = Combat::default();
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::display_player(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(ships[0].condition, Condition::Destroyed);
     assert_eq!(lateness(&combat.take_events()), [(A, false)]);
 }
 
 #[test]
 fn each_display_is_recorded_in_display_order_with_its_disabled_read() {
-    // The player's display first (@0x43e29), then each NPC's by slot
-    // (@0x444ad), each with the `_IsDisabled` its layer block reads
-    // (@0x2b61f).
+    // The player's display (@0x43e29), then, in the ship loop, each NPC's
+    // by slot (@0x444ad), each with the `_IsDisabled` its layer block
+    // reads (@0x2b61f). The session runs the player's before the ship
+    // loop (`nova_sim::Session::pass_after_move`) and takes each step's
+    // records as it ends (`nova_sim::Session::lay_out_displayed`).
     let player = Ship {
         id: ShipRef::Player,
         fleet: ShipRef::Player,
@@ -186,16 +186,20 @@ fn each_display_is_recorded_in_display_order_with_its_disabled_read() {
     downed.reserves.armor.now = 1.0;
     let mut ships = [Ship::at(4, -500.0, 0.0), downed, player];
     let mut combat = Combat::default();
-    tick(&mut combat, &mut ships, &NovaDisable);
-    let displays = combat.take_displays();
+    phase::display_player(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(
-        displays,
+        combat.take_displays(),
+        [Displayed {
+            ship: ShipRef::Player,
+            slot: Slot::Player,
+            disabled: false
+        }],
+        "the player's"
+    );
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(
+        combat.take_displays(),
         [
-            Displayed {
-                ship: ShipRef::Player,
-                slot: Slot::Player,
-                disabled: false
-            },
             Displayed {
                 ship: C,
                 slot: Slot::Berth(3),
@@ -206,7 +210,8 @@ fn each_display_is_recorded_in_display_order_with_its_disabled_read() {
                 slot: Slot::Berth(4),
                 disabled: false
             },
-        ]
+        ],
+        "the ship loop's, by slot"
     );
     assert_eq!(combat.take_displays(), [], "taken");
 }
