@@ -698,7 +698,6 @@ mod stars;
 mod stellar_looks;
 mod stepping;
 mod travel;
-mod words;
 mod world;
 
 pub use dialog_map::MapOpener;
@@ -1354,6 +1353,15 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     effects: Effects,
     /// What the effects are rolled on.
     effects_chance: SharedChance,
+    /// What the wording's picks are rolled on (the dock request's line
+    /// and the approach greeting, [`FlightView::text_of`]): the flight's
+    /// own chance, the same handle, shared as the view is built
+    /// ([`FlightView::with_chance`] gives both), as the catalog is. It is a
+    /// collaborator handed in at construction, like the catalog, so the
+    /// picks draw on the flight's chance in the order they always have,
+    /// with no pick type of the view's on the port. The view's own
+    /// effects keep their own chance ([`FlightView::with_effects_chance`]).
+    words_chance: SharedChance,
     /// The original's starfield (see the `stars` module), rolled on the
     /// effects' chance.
     stars: Starfield,

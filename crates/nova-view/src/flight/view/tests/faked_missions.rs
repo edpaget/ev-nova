@@ -11,7 +11,7 @@ use super::faked_shops::{
     EARTH, PROXIMA, UNDER_129, WHOLE_BAR, brief, docked, docked_on, docked_upgrading, fuelled,
     full, leaves, load, purchase, stale, writes_nav,
 };
-use super::faked_travel::{faked_lasts, faked_words, sent_but_lines};
+use super::faked_travel::{faked_lasts, sent_but_lines};
 use super::faked_world::{in_sol_with, the_player_at};
 use super::*;
 use crate::flight::radar::RadarScene;
@@ -510,7 +510,7 @@ fn i_with_no_mission_says_what_the_flight_said_after_its_beep() {
         .queue_event(FlightEvent::Message(SimMessage::NoActiveMissions));
     view.sim
         .queue_answer(Answer::MissionInfo(MissionInfoPress::NoActiveMissions));
-    view.ask_mission_info(faked_words());
+    view.ask_mission_info();
     assert_eq!(sent_but_lines(&view), [FlightCommand::PressMissionInfo]);
     assert_eq!(view.take_mission_info_request(), None);
     assert_eq!(
@@ -520,7 +520,7 @@ fn i_with_no_mission_says_what_the_flight_said_after_its_beep() {
     );
     faked_lasts(
         &mut view,
-        &format!("{:?}", SimMessage::NoActiveMissions),
+        NO_ACTIVE_MISSIONS,
         SimMessage::NoActiveMissions.ticks(),
     );
 }
@@ -531,7 +531,7 @@ fn i_with_no_mission_says_what_the_flight_said_after_its_beep() {
 #[test]
 fn i_in_a_flight_that_never_started_says_no_active_missions_without_a_beep() {
     let mut view = faked(FlightFrame::default());
-    view.ask_mission_info(faked_words());
+    view.ask_mission_info();
     assert_eq!(view.take_mission_info_request(), None);
     assert_eq!(view.drained_sounds(), []);
     faked_lasts(&mut view, NO_ACTIVE_MISSIONS, MESSAGE_TICKS);
@@ -543,7 +543,7 @@ fn i_the_flight_refuses_itself_does_nothing_and_says_nothing() {
     view.sim
         .queue_answer(Answer::MissionInfo(MissionInfoPress::Refused));
     view.held.insert(Key::Up);
-    view.ask_mission_info(faked_words());
+    view.ask_mission_info();
     assert_eq!(view.take_mission_info_request(), None);
     assert_eq!(view.message(), None);
     assert!(view.held.contains(&Key::Up), "the flight keys kept");
@@ -555,7 +555,7 @@ fn i_with_an_active_mission_asks_for_the_info_screen_once_letting_go_of_the_keys
     view.sim
         .queue_answer(Answer::MissionInfo(MissionInfoPress::Opens(info())));
     view.held.insert(Key::Up);
-    view.ask_mission_info(faked_words());
+    view.ask_mission_info();
     assert_eq!(view.take_mission_info_request(), Some(info()));
     assert_eq!(view.take_mission_info_request(), None, "once");
     assert_eq!(view.message(), None);
@@ -713,7 +713,7 @@ fn a_docked_jettisons_on_failure_intf_change_redraws_the_whole_bar_at_the_operat
     for changes in [true, false] {
         let (mut view, after) = scripted_docked(changes);
         view.sim.queue_answer_showing(Answer::Done, after);
-        view.jettison_all_with(faked_words());
+        view.jettison_all();
         assert_eq!(
             sent_but_lines(&view),
             [FlightCommand::Jettison { all: true }]

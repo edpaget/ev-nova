@@ -5,7 +5,7 @@
 use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 use nova_sim::{
-    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Session, StellarId, TrafficCatalog,
+    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Session, TrafficCatalog,
 };
 
 use nova_sim::flight_frame::{Answer, FlightCommand, MapClick};
@@ -20,7 +20,6 @@ use crate::view_shape::classic_offset;
 use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
-use super::words::Words;
 use super::{BOARD_KEY, FlightView, JUMP_KEY, MAP_KEY, Redrawn};
 
 impl<
@@ -63,19 +62,6 @@ impl<
             .is_ok_and(Session::deletes_pilot_on_ending_play)
     }
 
-    /// The input to the map opened over a screen
-    /// ([`FlightView::port_map_input_with`]), the flight's messages worded
-    /// by the session ([`FlightView::WORDS`]).
-    pub fn port_map_input(&mut self, input: &Input) {
-        self.port_map_input_with(input, Self::WORDS);
-    }
-
-    /// Closes the course map ([`FlightView::close_map_with`]), the
-    /// flight's messages worded by the session ([`FlightView::WORDS`]).
-    pub fn close_map(&mut self) {
-        self.close_map_with(Self::WORDS);
-    }
-
     /// The pilot flying, as the developer tools' desk: its edits reach
     /// the session, moves read the catalog, and the course map's galaxy
     /// names the places. `None` when the session failed.
@@ -83,39 +69,15 @@ impl<
         let session = self.sim.session.as_mut().ok()?;
         Some(SessionDesk::new(session, &*self.catalog, self.map.model()))
     }
-
-    /// Takes off from the stellar landed on ([`FlightView::take_off_with`]),
-    /// the flight's messages worded by the session
-    /// ([`FlightView::WORDS`]), and gives it; `None` when the ship has not
-    /// landed.
-    pub fn take_off(&mut self) -> Option<StellarId> {
-        self.take_off_with(Self::WORDS)
-    }
-
-    /// Takes off for a held `Q`'s leave, if due
-    /// ([`FlightView::leave_if_due_with`]), the flight's messages worded by
-    /// the session ([`FlightView::WORDS`]).
-    pub fn leave_if_due(&mut self) -> Option<StellarId> {
-        self.leave_if_due_with(Self::WORDS)
-    }
-
-    /// Settles what the set expressions run since queued
-    /// ([`FlightView::settle_script_with`]), the flight's messages worded
-    /// by the session ([`FlightView::WORDS`]).
-    pub fn settle_script(&mut self) {
-        self.settle_script_with(Self::WORDS);
-    }
 }
 
 /// The course map, over the [`FlightSim`] port: its opening, drawing,
 /// panels, input and Clear Route read the flight through its frame
 /// ([`FlightView::frame_now`]) and [`MapSource`](crate::flight::sim_port::MapSource),
 /// and send their commands through it. Its close is generic too
-/// ([`FlightView::close_map_with`], in the `gates` module), the hypergate
-/// entry it may run a command ([`FlightCommand::EnterHypergate`]); the
-/// concrete [`FlightView::close_map`] only hands it the session's words
-/// ([`FlightView::WORDS`]). [`FlightView::map_input_taken`] says when a
-/// close is due.
+/// ([`FlightView::close_map`], in the `gates` module), the hypergate
+/// entry it may run a command ([`FlightCommand::EnterHypergate`]).
+/// [`FlightView::map_input_taken`] says when a close is due.
 impl<C, S: FlightSim> FlightView<C, S> {
     /// The keys `_HandlePlayer` polls with a latch, once a frame, with
     /// those held down, in its order: Option-\` and the Nav Off /
@@ -124,7 +86,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::slot_keys_frame`]), the Board key
     /// ([`FlightView::board_frame`]), then the jump key
     /// ([`FlightView::jump_frame`]), each while the flight takes its
-    /// command, the Board key's worded in `words`. A key held across a jump's end, a release of Option or a
+    /// command. A key held across a jump's end, a release of Option or a
     /// repair acts here, as a press would, on the first frame its latch
     /// lets it.
     ///
@@ -135,19 +97,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the original's arrival frame runs its keys (+0x50 still above 0):
     /// the arrival tick still counts as jumping, and the first tick after
     /// it is the original's first frame to act (@0x6c625).
-    pub(super) fn held_keys_frame(&mut self, words: Words<Self>) {
+    pub(super) fn held_keys_frame(&mut self) {
         let down = |key: Key| self.held.contains(&key);
         let (jump, board) = (down(JUMP_KEY), down(BOARD_KEY));
         self.nav_held_frame();
         // The Board key's and the jump's frames ask their own gates
         // (`FlightCommand::gate`).
-        self.board_frame(board, words);
+        self.board_frame(board);
         self.jump_frame(jump);
     }
 
     /// The course map's close, the hypergate's entry left to
     /// `enter_gate`, handed the system picked on the hypergate map
-    /// ([`FlightView::close_map_with`]): the borders' save, the map shut,
+    /// ([`FlightView::close_map`]): the borders' save, the map shut,
     /// then the course map's close, docked or in flight, or the hypergate
     /// map's redraw before `enter_gate` runs.
     ///

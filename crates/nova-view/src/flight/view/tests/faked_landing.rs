@@ -5,7 +5,7 @@
 //! what the view lets go of. Kept apart from `tests/mod.rs`, which is
 //! large.
 
-use super::faked_travel::{faked_lasts, faked_words, sent_but_lines, shown_to_flight};
+use super::faked_travel::{faked_lasts, sent_but_lines, shown_to_flight};
 use super::faked_world::{in_sol_with, raise, the_player_at, world};
 use super::*;
 use crate::flight::flash::ShieldFlash;
@@ -49,7 +49,7 @@ fn refused(refusal: LandingRefusal, gate: Option<GateKind>) -> Answer {
 /// Presses L on `view`'s flight, which answers `answer`.
 fn press_l(view: &mut Faked, answer: Answer) {
     view.sim.queue_answer(answer);
-    view.land(faked_words());
+    view.land();
 }
 
 /// The frame of the flight come out in Alpha Centauri (131), and the
@@ -334,7 +334,7 @@ fn landing_lets_go_of_the_line_the_effects_the_flashes_and_the_glows() {
 #[test]
 fn landing_in_a_flight_that_never_started_does_nothing() {
     let mut view = faked(FlightFrame::default());
-    view.land(faked_words());
+    view.land();
     assert_eq!(sent(&view), [FlightCommand::Land], "refused");
     assert_eq!(view.take_landing(), None);
     assert_eq!(view.message(), None);
@@ -350,7 +350,7 @@ fn at_the_hypergate() -> Faked {
     view.sim.queue_answer(at_gate(GateKind::Hypergate));
     view.sim
         .queue_answer(Answer::Offered(vec![SystemId(131), SystemId(132)]));
-    view.land(faked_words());
+    view.land();
     view
 }
 
@@ -384,7 +384,7 @@ fn a_hypergate_without_links_says_nothing_and_opens_no_map() {
     view.sim.queue_answer(at_gate(GateKind::Hypergate));
     view.sim
         .queue_answer(Answer::GateRefused(GateRefusal::NoLinks));
-    view.land(faked_words());
+    view.land();
     assert!(!view.map_open());
     assert_eq!(view.message(), Some("cleared"), "nothing said");
 }
@@ -396,7 +396,7 @@ fn close_on(view: &mut Faked, pick: Option<SystemId>, answer: Answer) {
         view.map.select_gate(pick);
     }
     view.sim.queue_answer(answer);
-    view.close_map_with(faked_words());
+    view.close_map();
 }
 
 #[test]
@@ -514,7 +514,7 @@ fn l_at_a_wormhole_passes_through_it_with_a_flash_whatever_the_preference() {
         view.sim.queue_answer(at_gate(GateKind::Wormhole));
         came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
         view.sim.queue_answer(arrived());
-        view.land(faked_words());
+        view.land();
         assert_eq!(
             sent_but_lines(&view),
             [FlightCommand::Land, FlightCommand::EnterWormhole]
@@ -538,7 +538,7 @@ fn a_wormhole_with_no_exit_says_why() {
     view.sim.queue_answer(at_gate(GateKind::Wormhole));
     view.sim
         .queue_answer(Answer::GateRefused(GateRefusal::NoExit));
-    view.land(faked_words());
+    view.land();
     assert_eq!(view.jump_effect(), None);
     let why = "Your ship is unable to enter this wormhole - the radiation levels are too extreme.";
     faked_lasts(&mut view, why, GATE_REFUSAL_TICKS);
@@ -553,7 +553,7 @@ fn passing_through_a_wormhole_lets_go_of_the_shield_flashes_and_the_effects() {
     view.sim.queue_answer(at_gate(GateKind::Wormhole));
     came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
     view.sim.queue_answer(arrived());
-    view.land(faked_words());
+    view.land();
     assert!(view.flashes.is_empty());
     assert_eq!(*view.effects(), Effects::default());
 }
@@ -567,7 +567,7 @@ fn m_beeps_as_it_opens_and_the_close_beeps_and_cues_the_course() {
     assert!(view.map_open());
     assert_eq!(view.ui_sounds, [UiSound::MapOpened], "opened");
     view.ui_sounds.clear();
-    view.close_map_with(faked_words());
+    view.close_map();
     assert!(!view.map_open());
     assert_eq!(view.ui_sounds, [UiSound::MapClosed], "closed");
     assert_eq!(
@@ -581,7 +581,7 @@ fn m_beeps_as_it_opens_and_the_close_beeps_and_cues_the_course() {
 fn return_closes_the_course_map_with_the_close_beep_and_the_cue() {
     let mut view = faked(sol());
     view.open_map();
-    view.map_input(&key(Key::Enter, true), faked_words());
+    view.map_input(&key(Key::Enter, true));
     assert!(!view.map_open());
     assert_eq!(view.ui_sounds, [UiSound::MapClosed]);
     assert_eq!(sent(&view), [FlightCommand::CueCourse]);
@@ -593,7 +593,7 @@ fn return_or_escape_on_the_hypergate_map_enters_the_pick_in_silence() {
     view.map.select_gate(Some(SystemId(131)));
     came_out_in_alpha(&mut view, SimMessage::ExitedHypergate(SystemId(131)));
     view.sim.queue_answer(arrived());
-    view.map_input(&key(Key::Enter, true), faked_words());
+    view.map_input(&key(Key::Enter, true));
     assert_eq!(
         sent_but_lines(&view).last(),
         Some(&FlightCommand::EnterHypergate(Some(SystemId(131))))
@@ -606,30 +606,21 @@ fn closing_the_map_abandons_its_drag() {
     let mut view = faked_sol(sol());
     view.open_map();
     let empty = Point::new(250.0, 150.0);
-    view.map_input(
-        &Input::PointerButton {
-            button: MouseButton::Left,
-            pressed: true,
-            at: empty,
-        },
-        faked_words(),
-    );
-    view.close_map_with(faked_words());
+    view.map_input(&Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: true,
+        at: empty,
+    });
+    view.close_map();
     assert!(!view.map_open());
     view.open_map();
     let place = view.course_map().place().expect("in flight").scroll();
-    view.map_input(
-        &Input::PointerMoved(Point::new(300.0, 150.0)),
-        faked_words(),
-    );
-    view.map_input(
-        &Input::PointerButton {
-            button: MouseButton::Left,
-            pressed: false,
-            at: empty,
-        },
-        faked_words(),
-    );
+    view.map_input(&Input::PointerMoved(Point::new(300.0, 150.0)));
+    view.map_input(&Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: false,
+        at: empty,
+    });
     assert_eq!(
         view.course_map().place().expect("in flight").scroll(),
         place,
@@ -642,24 +633,24 @@ fn b_then_a_close_in_flight_saves_the_borders_off_once_and_twice_saves_nothing()
     let mut view = faked(sol());
     view.open_map();
     assert!(view.map_borders_shown());
-    view.map_input(&key(Key::Char('b'), true), faked_words());
+    view.map_input(&key(Key::Char('b'), true));
     assert!(!view.map_borders_shown());
     assert_eq!(view.take_map_borders_save(), None, "not until the close");
-    view.close_map_with(faked_words());
+    view.close_map();
     assert_eq!(view.take_map_borders_save(), Some(false));
     assert_eq!(view.take_map_borders_save(), None, "taken");
     view.open_map();
     assert!(!view.course_map().borders_shown(), "the next open keeps it");
-    view.map_input(&key(Key::Char('b'), true), faked_words());
-    view.map_input(&key(Key::Char('b'), true), faked_words());
-    view.close_map_with(faked_words());
+    view.map_input(&key(Key::Char('b'), true));
+    view.map_input(&key(Key::Char('b'), true));
+    view.close_map();
     assert_eq!(view.take_map_borders_save(), None, "b twice");
 }
 
 #[test]
 fn a_borders_change_on_the_hypergate_map_saves_but_one_docked_is_kept_unsaved() {
     let mut view = at_the_hypergate();
-    view.map_input(&key(Key::Char('b'), true), faked_words());
+    view.map_input(&key(Key::Char('b'), true));
     close_on(&mut view, None, Answer::GateRefused(GateRefusal::Cancelled));
     assert_eq!(
         view.take_map_borders_save(),
@@ -671,8 +662,8 @@ fn a_borders_change_on_the_hypergate_map_saves_but_one_docked_is_kept_unsaved() 
         ..sol()
     });
     docked.open_bar_map();
-    docked.port_map_input_with(&key(Key::Char('b'), true), faked_words());
-    docked.close_map_with(faked_words());
+    docked.port_map_input(&key(Key::Char('b'), true));
+    docked.close_map();
     assert_eq!(docked.take_map_borders_save(), None, "docked");
     assert!(!docked.map_borders_shown(), "kept for the run");
     docked.open_bar_map();
@@ -710,16 +701,12 @@ fn taking_off_gives_the_stellar_and_draws_the_ship_there_on_the_next_frame() {
         ..docked_at(140, Vec2::new(6.0, -8.0))
     };
     view.sim.queue_answer_showing(departed(140), flying);
-    assert_eq!(view.take_off_with(faked_words()), Some(StellarId(140)));
+    assert_eq!(view.take_off(), Some(StellarId(140)));
     assert_eq!(sent_but_lines(&view), [FlightCommand::TakeOff]);
     assert_eq!(view.alpha(), 0.0);
     assert_eq!(view.shown_position(), at(6.0, -8.0));
     assert_eq!(view.camera().center(), at(6.0, -8.0));
-    assert_eq!(
-        view.take_off_with(faked_words()),
-        None,
-        "not landed: refused"
-    );
+    assert_eq!(view.take_off(), None, "not landed: refused");
 }
 
 #[test]
@@ -732,8 +719,9 @@ fn a_take_off_greets_in_the_flights_words_and_lets_no_line_from_before_stay() {
     };
     view.sim.queue_event(FlightEvent::Message(greeting.clone()));
     view.sim.queue_answer_showing(departed(128), sol());
-    view.take_off_with(faked_words());
-    faked_lasts(&mut view, &format!("{greeting:?}"), greeting.ticks());
+    view.take_off();
+    let said = take_off_greeting(0, "Earth", DATE);
+    faked_lasts(&mut view, &said, greeting.ticks());
 }
 
 #[test]
@@ -746,11 +734,11 @@ fn a_held_leave_takes_off_saying_its_message_and_none_due_does_nothing() {
     view.sim
         .queue_event(FlightEvent::LeaveMessage("Leave now.".to_owned()));
     view.sim.queue_answer_showing(departed(128), sol());
-    assert_eq!(view.leave_if_due_with(faked_words()), Some(StellarId(128)));
+    assert_eq!(view.leave_if_due(), Some(StellarId(128)));
     assert_eq!(sent_but_lines(&view), [FlightCommand::LeaveIfDue]);
     faked_lasts(&mut view, "Leave now.", SCRIPT_MESSAGE_TICKS);
     assert!(!view.leave_due());
-    assert_eq!(view.leave_if_due_with(faked_words()), None, "none due");
+    assert_eq!(view.leave_if_due(), None, "none due");
 }
 
 #[test]
@@ -769,8 +757,8 @@ fn the_escorts_landing_reports_what_the_flight_reports() {
 #[test]
 fn taking_off_in_a_flight_that_never_started_does_nothing() {
     let mut view = faked(FlightFrame::default());
-    assert_eq!(view.take_off_with(faked_words()), None);
-    assert_eq!(view.leave_if_due_with(faked_words()), None);
+    assert_eq!(view.take_off(), None);
+    assert_eq!(view.leave_if_due(), None);
     assert_eq!(view.land_escorts(), None);
     assert!(!view.leave_due());
 }
@@ -780,7 +768,7 @@ fn while_docked_the_radar_shows_only_the_player_until_the_take_off() {
     let mut view = faked(docked_at(128, Vec2::ZERO));
     assert!(view.radar_shown(&view.frame_now()).blank, "docked");
     view.sim.queue_answer_showing(departed(128), sol());
-    view.take_off_with(faked_words());
+    view.take_off();
     assert!(
         !view.radar_shown(&view.frame_now()).blank,
         "at once on take-off"
@@ -805,7 +793,7 @@ fn a_take_off_draws_its_new_traffic_with_its_sprites_and_none_from_before_the_la
             ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), after])
         },
     );
-    view.take_off_with(faked_words());
+    view.take_off();
     let sprites = super::faked_world::faked_ship_sprites(&view);
     let at_screen = |place: Vec2| view.camera().world_to_screen(point(place));
     assert!(
@@ -831,7 +819,7 @@ fn landing_and_taking_off_keep_the_stars() {
     press_l(&mut view, landed(128));
     let before = view.stars.stars();
     view.sim.queue_answer_showing(departed(128), sol());
-    view.take_off_with(faked_words());
+    view.take_off();
     view.catch_up();
     assert_eq!(view.stars.stars(), before);
 }
@@ -843,7 +831,7 @@ fn the_settling_sends_its_command_and_says_what_it_settled() {
         message: Some("Hello.".to_owned()),
         ..nova_sim::Settled::default()
     }));
-    view.settle_script_with(faked_words());
+    view.settle_script();
     assert_eq!(sent_but_lines(&view), [FlightCommand::SettleScript]);
     faked_lasts(&mut view, "Hello.", SCRIPT_MESSAGE_TICKS);
 }
@@ -857,7 +845,7 @@ fn fighters_abandoned_are_told_only_with_the_layout_of_the_move_settled() {
         )));
     view.sim
         .queue_answer(Answer::Settled(nova_sim::Settled::default()));
-    view.settle_script_with(faked_words());
+    view.settle_script();
     assert_eq!(view.message(), None, "no layout from this settling");
     assert_eq!(
         view.drain().take_fighter_notes(),
@@ -872,7 +860,7 @@ fn docked_the_settling_stages_the_bar_as_its_scripts_ran() {
     assert!(view.docked());
     view.sim
         .queue_answer(Answer::Settled(nova_sim::Settled::default()));
-    view.settle_script_with(faked_words());
+    view.settle_script();
     assert!(view.bar_steps.is_empty(), "no text, nothing staged");
     assert_eq!(sent_but_lines(&view), [FlightCommand::SettleScript]);
 }
@@ -883,7 +871,7 @@ fn docked_the_settling_stages_the_bar_as_its_scripts_ran() {
 fn a_refused_gate_sends_no_travel_command() {
     let mut view = faked(sol());
     view.sim.refuse(nova_sim::PlayerCommand::Land);
-    view.land(faked_words());
+    view.land();
     assert_eq!(sent(&view), [], "L under a refused Land gate");
     view.sim.refuse(nova_sim::PlayerCommand::Jump);
     view.jump_latch = false;

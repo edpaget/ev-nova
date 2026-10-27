@@ -584,7 +584,7 @@ fn landing_and_arriving_free_the_smoke() {
         .queue_answer(Answer::LandPress(nova_sim::LandPress::Outcome(
             LandOutcome::Landed(StellarId(128)),
         )));
-    view.land(super::faked_travel::faked_words());
+    view.land();
     assert_eq!(view.shot_looks.smoke().puffs(), [], "landed");
 
     let mut view = smoked();
@@ -597,6 +597,6 @@ fn landing_and_arriving_free_the_smoke() {
         .queue_event(nova_sim::flight_frame::FlightEvent::Session(
             nova_sim::SessionEvent::SystemChanged,
         ));
-    view.arrive(super::faked_travel::faked_words());
+    view.arrive();
     assert_eq!(view.shot_looks.smoke().puffs(), [], "arrived");
 }

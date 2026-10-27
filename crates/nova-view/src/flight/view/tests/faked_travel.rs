@@ -7,35 +7,8 @@
 use super::faked_world::{in_sol_with, the_player_at, world};
 use super::*;
 use crate::flight::jump::{FADE_IN_FOR, FADE_OUT_FOR, JumpEffect, JumpPhase};
-use crate::flight::view::words::Words;
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::{SessionEvent, SimSound};
-
-/// How a test words the flight's messages: each by its `Debug` text, but
-/// an arrival's lead, which waits for its arrival, and the long date as
-/// [`DATE`]; a board line by its `Debug` text, an outfit as "rocket" and
-/// "rockets <id>", and the plunder's good and outfit by their `Debug`
-/// text and as "Rockets <id>".
-pub(super) fn faked_words() -> Words<Faked> {
-    Words {
-        text: |_, message| match message {
-            SimMessage::Arrived(_)
-            | SimMessage::Buoy(_)
-            | SimMessage::ExitedHypergate(_)
-            | SimMessage::PassedWormhole(_) => None,
-            _ => Some(format!("{message:?}")),
-        },
-        date: |_| DATE.to_owned(),
-        board_line: |_, line| format!("{line:?}"),
-        outfit_names: |_, outfit| ("rocket".to_owned(), format!("rockets {}", outfit.0)),
-        plunder_names: |_, good, outfit| {
-            (
-                good.map(|good| format!("{good:?}")),
-                outfit.map(|outfit| format!("Rockets {}", outfit.0)),
-            )
-        },
-    }
-}
 
 /// One tick of flight time on `view`'s clock, as a frame's tick moves it
 /// ([`FlightView::step_stellars`]): the message line counts it.
@@ -131,9 +104,8 @@ fn the_flights_messages_said_after_a_press_are_worded_each_in_turn_setting_its_l
     for message in [SimMessage::NoResponse, SimMessage::MissionFailed] {
         view.sim.queue_event(FlightEvent::Message(message));
     }
-    view.say_messages(faked_words());
-    let last = format!("{:?}", SimMessage::MissionFailed);
-    assert_eq!(view.message(), Some(last.as_str()), "the last replaces");
+    view.say_messages();
+    assert_eq!(view.message(), Some(MISSION_FAILED), "the last replaces");
     assert_eq!(
         shown_to_flight(&view),
         [
@@ -148,25 +120,21 @@ fn the_steps_messages_are_relayed_leaving_the_flights_line() {
     let mut view = faked(in_sol());
     view.sim
         .queue_event(FlightEvent::Message(SimMessage::ShipDestroyed));
-    view.relay_messages(faked_words());
-    let said = format!("{:?}", SimMessage::ShipDestroyed);
-    assert_eq!(view.message(), Some(said.as_str()));
+    view.relay_messages();
+    assert_eq!(view.message(), Some(SHIP_DESTROYED));
     assert_eq!(shown_to_flight(&view), [0_u16; 0], "the session set it");
 }
 
 #[test]
 fn an_arrivals_lead_waits_for_its_arrival() {
     let mut view = faked(in_sol());
-    let said = view.word(
-        vec![SimMessage::Arrived(SystemId(131)), SimMessage::NoResponse],
-        faked_words(),
-    );
+    let said = view.word(vec![
+        SimMessage::Arrived(SystemId(131)),
+        SimMessage::NoResponse,
+    ]);
     assert_eq!(
         said,
-        [(
-            format!("{:?}", SimMessage::NoResponse),
-            SimMessage::NoResponse.ticks()
-        )]
+        [(NO_RESPONSE.to_owned(), SimMessage::NoResponse.ticks())]
     );
     assert_eq!(view.pending_leads, [SimMessage::Arrived(SystemId(131))]);
 }
@@ -174,7 +142,7 @@ fn an_arrivals_lead_waits_for_its_arrival() {
 #[test]
 fn a_flight_that_never_started_makes_no_sounds() {
     let mut view = faked(FlightFrame::default());
-    view.say_messages(faked_words());
+    view.say_messages();
     assert_eq!(view.drained_sounds(), []);
     assert_eq!(view.message(), None);
 }
@@ -576,7 +544,7 @@ fn the_fade_to_white_starts_as_the_frame_lights_the_screen_and_the_arrival_waits
         view.jump_effect().map(JumpEffect::phase),
         Some(JumpPhase::Warp)
     );
-    view.arrival_frame(faked_words());
+    view.arrival_frame();
     assert_eq!(
         sent_but_lines(&view),
         [FlightCommand::Jump],
@@ -595,13 +563,13 @@ fn the_fade_to_white_starts_as_the_frame_lights_the_screen_and_the_arrival_waits
     let mut list = DrawList::new();
     view.draw_fades(&mut list);
     assert!(fade(&list).is_some(), "fading to white");
-    view.arrival_frame(faked_words());
+    view.arrival_frame();
     assert!(matches!(
         view.jump_effect().map(JumpEffect::phase),
         Some(JumpPhase::FadeOut(_))
     ));
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(faked_words());
+    view.arrival_frame();
     assert_eq!(
         sent_but_lines(&view),
         [FlightCommand::Jump, FlightCommand::Arrive]
@@ -660,7 +628,7 @@ fn with_effects_off_the_arrival_flashes_white_once() {
     assert!(!view.hyperspace_effects());
     jump_now(&mut view);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(faked_words());
+    view.arrival_frame();
     let mut list = DrawList::new();
     view.draw_fades(&mut list);
     assert_eq!(
@@ -689,7 +657,7 @@ fn arriving_shows_the_arrival_line_with_the_date_and_lets_a_refusal_go() {
     let mut view = warping();
     view.say_for(NO_DESTINATION, 360);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(faked_words());
+    view.arrival_frame();
     let text = arrival_message("Alpha Centauri", DATE, false);
     faked_lasts(&mut view, &text, 240);
 }
@@ -698,7 +666,7 @@ fn arriving_shows_the_arrival_line_with_the_date_and_lets_a_refusal_go() {
 fn j_during_the_arrival_fade_in_begins_the_next_jump_and_the_fade_plays_on() {
     let mut view = warping();
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(faked_words());
+    view.arrival_frame();
     let arrival = view.message().expect("the arrival line").to_owned();
     view.sim.queue_answer_showing(
         Answer::Jumped(SystemId(132)),
@@ -838,7 +806,7 @@ fn an_arrivals_pending_explosions_are_drawn_on_its_first_frame_and_unheard_from_
         }],
     );
     view.drained_sounds();
-    view.arrival_frame(faked_words());
+    view.arrival_frame();
     let explosions = view.effects().explosions();
     assert_eq!(explosions.len(), 1, "{explosions:?}");
     assert_eq!(explosions[0].boom, boom.boom);
@@ -870,7 +838,7 @@ fn arriving_lays_out_the_new_system_letting_go_of_the_effects_pods_and_smoke() {
     assert_ne!(*view.effects(), Effects::default());
     jump_now(&mut view);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(faked_words());
+    view.arrival_frame();
     assert_eq!(*view.effects(), Effects::default());
     assert!(view.effects().pods().is_empty());
     assert_eq!(view.shot_looks.smoke().puffs(), []);
@@ -883,7 +851,7 @@ fn arriving_reads_the_new_systems_traffic_sheets() {
     let read = view.catalog().sheets_asked.borrow().clone();
     at_the_warps_end(&mut view, Vec::new());
     view.sim.frame_mut().traffic_ships = vec![ShipId(129)];
-    view.arrival_frame(faked_words());
+    view.arrival_frame();
     let asked = view.catalog().sheets_asked.borrow().clone();
     assert_eq!(asked[read.len()..], [ShipId(129)], "read on arrival");
 }
@@ -893,7 +861,7 @@ fn a_jumps_arrival_puts_the_maps_scroll_back_on_the_current_system() {
     let mut view = warping();
     view.map.centre_on_system(SystemId(132));
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame(faked_words());
+    view.arrival_frame();
     let mut recentred = faked(FlightFrame {
         system: SystemId(131),
         ..FlightFrame::default()
@@ -916,7 +884,7 @@ fn an_arrival_shows_the_new_systems_stellars_on_the_radar_at_once_leaving_the_ca
     let cadence = view.hud_cadence;
     at_the_warps_end(&mut view, Vec::new());
     view.sim.frame_mut().stellars = vec![record::stellar(StellarId(140))];
-    view.arrival_frame(faked_words());
+    view.arrival_frame();
     assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
     let stellars: Vec<Point> = view
         .radar_shown(&view.frame_now())
@@ -951,7 +919,7 @@ fn the_escape_pods_rescue_lays_the_view_out_where_it_put_the_ship_and_gives_its_
         ships: vec![the_player_at(Vec2::new(50.0, 50.0), 90.0)],
         ..sol()
     });
-    view.run_steps(1, faked_words());
+    view.run_steps(1);
     assert_eq!(
         view.previous.position,
         Vec2::new(50.0, 50.0),

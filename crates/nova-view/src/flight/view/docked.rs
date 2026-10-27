@@ -2,16 +2,13 @@
 //! and plunder, trade, the outfitter, bar, hiring, news, the mission
 //! computer and offers, and the shipyard.
 
-use std::time::Duration;
-
 use nova_sim::{InterfaceLoad, MissionId, MissionShown};
-use nova_sim::{Pilot, Session, StellarId, Take, Taken};
+use nova_sim::{Pilot, Session, StellarId};
 
 use crate::Point;
 use crate::flight::catalog::StatusBars;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyMap;
-use crate::ui::PlunderShown;
 
 use super::outputs::FlightTexts;
 use super::{BarStep, FlightView, NavFlash, Then};
@@ -290,36 +287,6 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
 }
 
 impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
-    /// What is on board the ship just boarded, named, once
-    /// ([`FlightView::take_boarding_with`]), named by the session
-    /// ([`FlightView::WORDS`]): the router takes it to open the plunder
-    /// dialog.
-    pub fn take_boarding(&mut self) -> Option<PlunderShown> {
-        self.take_boarding_with(Self::WORDS)
-    }
-
-    /// What the plunder dialog shows while it is open
-    /// ([`FlightView::plunder_shown_with`]), named by the session
-    /// ([`FlightView::WORDS`]), as [`Self::plunder`]'s messages name them.
-    #[must_use]
-    pub fn plunder_shown(&self) -> Option<PlunderShown> {
-        self.plunder_shown_with(Self::WORDS)
-    }
-
-    /// Presses `take` in the plunder dialog
-    /// ([`FlightView::plunder_held_with`]) and says what it did, named by
-    /// the session ([`FlightView::WORDS`]). A press made as the dialog
-    /// opens: see [`FlightView::plunder_held`].
-    pub fn plunder(&mut self, take: Take) -> Taken {
-        self.plunder_held_with(take, Duration::ZERO, Self::WORDS)
-    }
-
-    /// [`FlightView::plunder`] with the dialog open for `held`, real time
-    /// ([`FlightView::plunder_held_with`]).
-    pub fn plunder_held(&mut self, take: Take, held: Duration) -> Taken {
-        self.plunder_held_with(take, held, Self::WORDS)
-    }
-
     /// The flight, or why it could not start.
     pub fn session(&self) -> Result<&Session, &str> {
         self.sim.session.as_ref().map_err(String::as_str)

@@ -8,7 +8,7 @@
 //! large.
 
 use super::faked_hud::barred_by;
-use super::faked_travel::{faked_lasts, faked_words, sent_but_lines};
+use super::faked_travel::{faked_lasts, sent_but_lines};
 use super::faked_world::{in_sol_with, the_player_at};
 use super::*;
 use crate::flight::radar::RadarScene;
@@ -1077,7 +1077,7 @@ fn jettison_key(view: &mut Faked, option: bool) {
     if option {
         view.held.insert(Key::Alt);
     }
-    view.jettison(faked_words());
+    view.jettison();
     view.held.clear();
 }
 
@@ -1092,11 +1092,7 @@ fn command_k_jettisons_everything_and_says_what_the_flight_said() {
         sent_but_lines(&view),
         [FlightCommand::Jettison { all: true }]
     );
-    faked_lasts(
-        &mut view,
-        &format!("{:?}", SimMessage::MissionFailed),
-        SimMessage::MissionFailed.ticks(),
-    );
+    faked_lasts(&mut view, MISSION_FAILED, SimMessage::MissionFailed.ticks());
     assert_eq!(JETTISON_KEY, Key::Char('k'));
     assert_eq!(MISSION_FAILED, "Mission failed.");
     assert!(HELP.contains("Cmd-K: jettison"), "{HELP}");
@@ -1121,9 +1117,9 @@ fn command_option_k_keeps_the_mission_cargo() {
 #[test]
 fn k_without_command_jettisons_nothing() {
     let mut view = faked(in_sol());
-    view.jettison(faked_words());
+    view.jettison();
     view.held.insert(Key::Alt);
-    view.jettison(faked_words());
+    view.jettison();
     assert_eq!(sent(&view), [], "K alone, then Option-K");
 }
 
@@ -1133,15 +1129,12 @@ fn the_player_infos_jettison_sends_everything_and_says_what_the_flight_said() {
     view.sim
         .queue_event(FlightEvent::Message(SimMessage::CargoJettisoned));
     view.sim.queue_answer(Answer::Done);
-    view.jettison_all_with(faked_words());
+    view.jettison_all();
     assert_eq!(
         sent_but_lines(&view),
         [FlightCommand::Jettison { all: true }]
     );
-    assert_eq!(
-        view.message(),
-        Some(format!("{:?}", SimMessage::CargoJettisoned).as_str())
-    );
+    assert_eq!(view.message(), Some(CARGO_JETTISONED));
     assert_eq!(CARGO_JETTISONED, "Cargo jettisoned.");
 }
 
@@ -1163,7 +1156,7 @@ fn a_jettisons_boxes_are_drawn_back_along_their_drift_under_the_ship_and_it_soun
     });
     view.sim.queue_answer_showing(Answer::Done, dropped);
     view.held.insert(Key::Command);
-    view.jettison(faked_words());
+    view.jettison();
     assert_eq!(
         view.drained_sounds(),
         [Sound::Sim(nova_sim::SimSound::CargoJettisoned)],

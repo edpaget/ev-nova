@@ -10,7 +10,6 @@ use super::faked_shops::{
     EARTH, PROXIMA, UNDER_129, WHOLE_BAR, at_earth, brief, docked, docked_on, docked_upgrading,
     fuelled, full, leaves, load, marked_by_the_shipyard, upgrading, writes_nav,
 };
-use super::faked_travel::faked_words;
 use super::faked_world::{in_sol_with, the_player_at};
 use super::*;
 use crate::system::SystemScene;
@@ -188,7 +187,7 @@ fn landing_settles(queue: impl FnOnce(&mut Faked), after: impl FnOnce(&mut Fligh
     let settled = leaves(&view, after);
     view.sim
         .queue_answer_showing(Answer::Settled(Settled::default()), settled);
-    view.settle_script_with(faked_words());
+    view.settle_script();
     view
 }
 
@@ -383,7 +382,7 @@ fn texts_before_an_h(cadence: RuleSource) -> Vec<(&'static str, Faked)> {
     landing
         .sim
         .queue_answer_showing(Answer::Settled(Settled::default()), settled);
-    landing.settle_script_with(faked_words());
+    landing.settle_script();
     let mut refusal = docked_on(upgrading(), at_earth(), cadence);
     queue(&mut refusal);
     let refused = after(&refusal);
@@ -440,7 +439,7 @@ fn leaving_the_dock_drops_the_texts_pending_redraws() {
         }),
         flying,
     );
-    view.take_off_with(faked_words()).expect("takes off");
+    view.take_off().expect("takes off");
     assert!(view.bar_steps.is_empty(), "the take-off's redraw");
 }
 
@@ -514,7 +513,7 @@ fn landing_redraws_the_held_gauges() {
         Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(StellarId(128)))),
         landed,
     );
-    view.land(faked_words());
+    view.land();
     assert_eq!(view.take_landing(), Some(StellarId(128)));
     assert_eq!(
         view.reserves_shown(&view.frame_now()),
@@ -585,8 +584,8 @@ fn take_off_from(
 /// The port's Leave and a held `Q`'s.
 type Leave = fn(&mut Faked) -> Option<StellarId>;
 const LEAVES: [(&str, Leave); 2] = [
-    ("the take-off", |view| view.take_off_with(faked_words())),
-    ("a Q", |view| view.leave_if_due_with(faked_words())),
+    ("the take-off", |view| view.take_off()),
+    ("a Q", |view| view.leave_if_due()),
 ];
 
 /// Mode 2 with nothing selected: what the take-off's deselect leaves.
@@ -728,7 +727,7 @@ fn a_text_queued_in_the_take_offs_days_shows_over_its_held_nav() {
         }),
         flying,
     );
-    assert_eq!(view.take_off_with(faked_words()), Some(StellarId(128)));
+    assert_eq!(view.take_off(), Some(StellarId(128)));
     assert_eq!(view.take_mission_texts().len(), 1, "the crön's mission");
     assert_eq!(
         view.nav_shown(&view.frame_now()),
@@ -777,20 +776,17 @@ fn mapped() -> Faked {
 fn faked_port_click(view: &mut Faked, id: i16, shift: bool) {
     let at = faked_on_map(view, id);
     if shift {
-        view.port_map_input_with(&key(Key::Shift, true), faked_words());
+        view.port_map_input(&key(Key::Shift, true));
     }
     for pressed in [true, false] {
-        view.port_map_input_with(
-            &Input::PointerButton {
-                button: crate::MouseButton::Left,
-                pressed,
-                at,
-            },
-            faked_words(),
-        );
+        view.port_map_input(&Input::PointerButton {
+            button: crate::MouseButton::Left,
+            pressed,
+            at,
+        });
     }
     if shift {
-        view.port_map_input_with(&key(Key::Shift, false), faked_words());
+        view.port_map_input(&key(Key::Shift, false));
     }
 }
 
@@ -821,7 +817,7 @@ fn the_bars_map_closing_shows_the_maps_selection_and_puts_back_the_bars_nav() {
     view.sim.queue_answer(Answer::Done);
     let put_back = leaves(&view, |frame| frame.nav_mode = EARTH);
     view.sim.queue_answer_showing(Answer::Done, put_back);
-    view.port_map_input_with(&key(MAP, true), faked_words());
+    view.port_map_input(&key(MAP, true));
     assert!(!view.map_open(), "M closes it");
     assert_eq!(port_nav(&view), cueing_alpha(), "the map's selection drawn");
     assert_eq!(
@@ -840,14 +836,14 @@ fn the_bars_map_closing_shows_the_maps_selection_and_puts_back_the_bars_nav() {
 fn a_map_in_port_the_bar_did_not_open_leaves_the_bars_nav_saved() {
     let mut view = mapped();
     view.open_bar_map();
-    view.port_map_input_with(&key(MAP, true), faked_words());
+    view.port_map_input(&key(MAP, true));
     assert!(
         sent(&view).contains(&FlightCommand::RestoreBarNav),
         "the bar's map"
     );
     let before = sent(&view).len();
     view.open_map();
-    view.port_map_input_with(&key(MAP, true), faked_words());
+    view.port_map_input(&key(MAP, true));
     assert!(!view.map_open());
     assert!(
         !sent(&view)[before..].contains(&FlightCommand::RestoreBarNav),
@@ -859,15 +855,12 @@ fn a_map_in_port_the_bar_did_not_open_leaves_the_bars_nav_saved() {
 fn the_bars_map_key_repeat_or_release_leaves_it_open() {
     let mut view = mapped();
     view.open_bar_map();
-    view.port_map_input_with(
-        &Input::Key {
-            key: MAP,
-            pressed: true,
-            repeat: true,
-        },
-        faked_words(),
-    );
-    view.port_map_input_with(&key(MAP, false), faked_words());
+    view.port_map_input(&Input::Key {
+        key: MAP,
+        pressed: true,
+        repeat: true,
+    });
+    view.port_map_input(&key(MAP, false));
     assert!(view.map_open());
 }
 
@@ -878,11 +871,11 @@ fn the_map_in_port_beeps_neither_as_it_opens_nor_as_it_closes() {
     let mut view = mapped();
     view.open_bar_map();
     assert_eq!(view.ui_sounds, [], "the bar's map opened");
-    view.port_map_input_with(&key(MAP, true), faked_words());
+    view.port_map_input(&key(MAP, true));
     assert!(!view.map_open());
     assert_eq!(view.ui_sounds, [], "the bar's map closed");
     view.open_map();
-    view.close_map_with(faked_words());
+    view.close_map();
     assert_eq!(view.ui_sounds, [], "another map in port");
 }
 
@@ -916,7 +909,7 @@ fn in_port_a_shift_click_builds_the_course_and_the_close_cues_nothing() {
     };
     assert!(click.shift, "the Shift-click never tests _onPlanet");
     assert!(view.course_map().clear_route_enabled());
-    view.port_map_input_with(&key(MAP, true), faked_words());
+    view.port_map_input(&key(MAP, true));
     assert!(!view.map_open());
     assert!(
         !sent(&view).contains(&FlightCommand::CueCourse),
@@ -946,7 +939,7 @@ fn settles_to(view: &mut Faked, events: &[SessionEvent], after: FlightFrame) {
     }
     view.sim
         .queue_answer_showing(Answer::Settled(Settled::default()), after);
-    view.settle_script_with(faked_words());
+    view.settle_script();
 }
 
 #[test]
@@ -999,7 +992,7 @@ fn a_move_while_landed_is_laid_out_once_the_ship_takes_off() {
         }),
         in_system(131, 128, false),
     );
-    assert_eq!(view.take_off_with(faked_words()), Some(StellarId(128)));
+    assert_eq!(view.take_off(), Some(StellarId(128)));
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
     assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
 }
@@ -1054,7 +1047,7 @@ fn an_outfits_on_purchase_h_redraws_the_new_hull_once_settled_and_at_the_take_of
         }),
         in_system(130, 129, false),
     );
-    view.take_off_with(faked_words()).expect("took off");
+    view.take_off().expect("took off");
     let ids: Vec<_> = super::faked_world::faked_ship_sprites(&view)
         .iter()
         .map(|(image, _)| image.id)

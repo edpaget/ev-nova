@@ -194,10 +194,10 @@ impl<
             return;
         }
         self.step_stellars(dt);
-        self.held_keys_frame(Self::WORDS);
+        self.held_keys_frame();
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
-        self.run_steps(steps, Self::WORDS);
+        self.run_steps(steps);
         self.update_escort_menu();
         self.alpha = alpha;
         self.step_cursor(steps);
@@ -205,7 +205,7 @@ impl<
         if let Some(effect) = &mut self.jump {
             effect.advance(dt);
         }
-        self.arrival_frame(Self::WORDS);
+        self.arrival_frame();
         self.advance_hud();
     }
 
@@ -230,7 +230,7 @@ impl<
             if press == Some(MAP_KEY) && !self.map.finding() {
                 self.close_map();
             } else {
-                self.map_input(input, Self::WORDS);
+                self.map_input(input);
             }
             return ScreenAction::None;
         }
@@ -256,11 +256,11 @@ impl<
                 .is_none_or(|command| self.takes(command))
         });
         match press {
-            Some(LAND_KEY) => self.land(Self::WORDS),
+            Some(LAND_KEY) => self.land(),
             Some(BOARD_KEY) => {
                 // A fresh press follows a release, which clears the latch.
                 self.board_latch = false;
-                self.board_frame(true, Self::WORDS);
+                self.board_frame(true);
                 if self.pending_boarding {
                     return ScreenAction::None;
                 }
@@ -280,8 +280,8 @@ impl<
                 self.jump_latch = false;
                 self.jump_frame(true);
             }
-            Some(JETTISON_KEY) => self.jettison(Self::WORDS),
-            Some(MISSION_INFO_KEY) => self.ask_mission_info(Self::WORDS),
+            Some(JETTISON_KEY) => self.jettison(),
+            Some(MISSION_INFO_KEY) => self.ask_mission_info(),
             Some(PLAYER_INFO_KEY) => return self.ask_player_info(),
             Some(key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY)) => self.hyperspace_key(key),
             Some(key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY)) => {

@@ -183,7 +183,7 @@ impl<
     /// The flight of `sim` as [`FlightView::flying`] reads it, shown by
     /// `rules`: the course map's nebulae and borders, and the presentation
     /// rules the view holds ([`Presentation`](super::stepping::Presentation)),
-    /// as [`FlightView::scripted`] reads them.
+    /// as `FlightView::scripted` reads them.
     #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
     fn read(catalog: C, mut sim: SessionFlight<C>, rules: &Rulebook) -> Self
     where
@@ -243,6 +243,8 @@ impl<
             )));
         }
         let presentation = super::stepping::Presentation::of(rules);
+        // The wording's picks draw on the flight's own chance.
+        let words_chance = sim.chance.clone();
         // One handle, the view's and the flight's: the flight's answers
         // that read the catalog read the one the view draws from.
         let catalog = Rc::new(catalog);
@@ -263,6 +265,7 @@ impl<
                 escort_colors,
                 alert_width,
                 presentation,
+                words_chance,
             },
         )
     }
@@ -603,18 +606,13 @@ impl<
         ScreenAction::None
     }
 
-    /// Jettisons everything, mission cargo included, as the player info's
-    /// Jettison does ([`FlightView::jettison_all_with`]), the flight's
-    /// messages worded by the session ([`FlightView::WORDS`]).
-    pub fn jettison_all(&mut self) {
-        self.jettison_all_with(Self::WORDS);
-    }
-
     /// The flight with each day's events and the traffic rolled on
-    /// `chance`.
+    /// `chance`, and the wording's picks with them
+    /// ([`FlightView::text_of`]).
     #[must_use]
     pub fn with_chance(self, chance: SharedChance) -> Self {
         Self {
+            words_chance: chance.clone(),
             sim: self.sim.with_chance(chance),
             ..self
         }
@@ -718,7 +716,8 @@ impl<
 /// What reading a flight gives the view as it opens, besides the catalog
 /// and the flight: the course map, the scene, the player's sheet and bar,
 /// the flight's first frame, the looks and what of them could not be read,
-/// the escort menu's colours and the alert icon's width.
+/// the escort menu's colours, the alert icon's width, the presentation
+/// rules and the wording's chance.
 struct Opening {
     map: GalaxyMap,
     scene: Option<crate::system::SystemScene>,
@@ -732,6 +731,7 @@ struct Opening {
     escort_colors: crate::flight::escorts::EscortMenuColors,
     alert_width: Option<u32>,
     presentation: super::stepping::Presentation,
+    words_chance: SharedChance,
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -871,6 +871,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             codes: BTreeMap::new(),
             effects: Effects::default(),
             effects_chance: SharedChance::default(),
+            words_chance: opening.words_chance,
             stars: crate::flight::stars::Starfield::new(),
             stars_due: true,
             flashes: BTreeMap::new(),
@@ -906,7 +907,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// as `rules` say, showing the frame's course; the scene the frame
     /// opens on, read from the catalog with the stellars it shows, each as
     /// it holds it ([`opening_scene`]); with no sheet or status bar, as the
-    /// port gives none yet, nor looks.
+    /// port gives none yet, nor looks; the wording's picks rolled on a
+    /// chance that never fires.
     #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     pub fn scripted(catalog: C, sim: S, rules: &Rulebook) -> Self
@@ -942,6 +944,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 escort_colors,
                 alert_width: None,
                 presentation: super::stepping::Presentation::of(rules),
+                words_chance: SharedChance::default(),
             },
         )
     }

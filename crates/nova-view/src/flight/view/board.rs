@@ -3,8 +3,7 @@
 //! the plunder dialog's presses. What boarding does and what a press takes
 //! are the flight's (`nova_sim::Session::board`,
 //! `nova_sim::Session::plunder`). The board's and the plunder's names are
-//! worded by [`Words`], which the concrete callers hand in
-//! ([`FlightView::WORDS`]).
+//! the flight's ([`NameSource`](crate::flight::sim_port::NameSource)).
 
 use std::time::Duration;
 
@@ -15,10 +14,9 @@ use crate::flight::sim_port::FlightSim;
 use crate::time::sixtieths;
 use crate::ui::PlunderShown;
 
-use super::words::Words;
 use super::{
     BOARD_LINE_TICKS, BOARD_REFUSAL_TICKS, FlightView, GRANT_TICKS, MESSAGE_TICKS, REPELLED,
-    board_refusal_message, grant_message, plunder_message,
+    board_refusal_message, grant_message, mission_board_message, names, plunder_message,
 };
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -31,18 +29,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightEvent::BoardLine`](nova_sim::flight_frame::FlightEvent::BoardLine)),
     /// and a grant its retrieval
     /// ([`FlightEvent::Grant`](nova_sim::flight_frame::FlightEvent::Grant)),
-    /// each in `words`. Whether the attempt sets the board latch
+    /// each named by the flight ([`NameSource`](crate::flight::sim_port::NameSource)). Whether the attempt sets
+    /// the board latch
     /// ([`BoardRefusal::latches`](nova_sim::board::BoardRefusal::latches);
     /// every board that passes does, and one the flight refused does not).
-    pub(super) fn board(&mut self, words: Words<Self>) -> bool {
+    pub(super) fn board(&mut self) -> bool {
         let answer = self.send(FlightCommand::Board);
         if let Some(line) = self.board_line_drained() {
-            let said = (words.board_line)(self, line);
+            let said = mission_board_message(line, &self.sim);
             self.say_for(said, BOARD_LINE_TICKS);
         }
         match answer {
             Answer::Boarded(boarding) => {
-                self.boarded(boarding, words);
+                self.boarded(boarding);
                 true
             }
             Answer::BoardRefused(refusal) => {
@@ -55,22 +54,22 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// What a board that passed the checks shows, in `words`.
-    fn boarded(&mut self, boarding: Boarding, words: Words<Self>) {
+    /// What a board that passed the checks shows, named by the flight.
+    fn boarded(&mut self, boarding: Boarding) {
         match boarding {
             Boarding::Opened(_) => {
                 self.pending_boarding = true;
                 self.held.clear();
                 if let Some(granted) = self.grant_drained() {
-                    let (name, plural) = (words.outfit_names)(self, granted.outfit);
-                    let said = grant_message(granted.count, &name, &plural);
+                    let (name, plural) = self.sim.outfit_names(granted.outfit).unwrap_or_default();
+                    let said = grant_message(granted.count, name, plural);
                     self.say_for(said, GRANT_TICKS);
                 }
             }
             Boarding::Repelled => self.say_for(REPELLED, MESSAGE_TICKS),
             Boarding::Offered(offer) => self.hold_offer(offer),
             Boarding::MissionShip(Some(line)) => {
-                let said = (words.board_line)(self, line);
+                let said = mission_board_message(line, &self.sim);
                 self.say_for(said, BOARD_LINE_TICKS);
             }
             // Its line is the flight's message (`FlightEvent::Message`).
@@ -95,24 +94,25 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// gate of its own.
     ///
     /// [`FlightCommand::gate`]: nova_sim::flight_frame::FlightCommand::gate
-    pub(super) fn board_frame(&mut self, down: bool, words: Words<Self>) {
+    pub(super) fn board_frame(&mut self, down: bool) {
         if !self.takes_command(&FlightCommand::Board) {
             return;
         }
         if !down {
             self.board_latch = false;
         } else if !self.board_latch {
-            self.board_latch = self.board(words);
+            self.board_latch = self.board();
         }
     }
 
-    /// What is on board the ship just boarded, named in `words`, once:
-    /// the router takes it to open the plunder dialog.
-    pub(super) fn take_boarding_with(&mut self, words: Words<Self>) -> Option<PlunderShown> {
+    /// What is on board the ship just boarded, named
+    /// ([`FlightView::plunder_shown`]), once: the router takes it to open
+    /// the plunder dialog.
+    pub fn take_boarding(&mut self) -> Option<PlunderShown> {
         if !std::mem::take(&mut self.pending_boarding) {
             return None;
         }
-        self.plunder_shown_with(words)
+        self.plunder_shown()
     }
 
     /// What is on board the ship being boarded, while the plunder dialog
@@ -124,20 +124,34 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// What the plunder dialog shows while it is open:
     /// [`FlightView::boarding`] with its cargo's good and its ammunition's
-    /// outfit named in `words`, as the plunder's messages name them.
-    pub(super) fn plunder_shown_with(&self, words: Words<Self>) -> Option<PlunderShown> {
+    /// outfit named by the flight ([`NameSource`](crate::flight::sim_port::NameSource)), as
+    /// [`FlightView::plunder`]'s messages name them.
+    #[must_use]
+    pub fn plunder_shown(&self) -> Option<PlunderShown> {
         let view = self.boarding()?;
-        let (good, outfit) = (words.plunder_names)(
-            self,
+        let (good, outfit) = names(
+            &self.sim,
             view.cargo.map(|(good, _)| good),
             view.ammo.map(|(outfit, _)| outfit),
         );
-        Some(PlunderShown { view, good, outfit })
+        Some(PlunderShown {
+            view,
+            good: good.map(str::to_owned),
+            outfit: outfit.map(str::to_owned),
+        })
+    }
+
+    /// Presses `take` in the plunder dialog
+    /// ([`FlightView::plunder_held`]) and says what it did, named by the
+    /// flight. A press made as the dialog opens: see
+    /// [`FlightView::plunder_held`].
+    pub fn plunder(&mut self, take: Take) -> Taken {
+        self.plunder_held(take, Duration::ZERO)
     }
 
     /// Presses `take` in the plunder dialog with the dialog open for
     /// `held`, real time ([`FlightCommand::Plunder`]), and says what it did
-    /// in `words`. The target panel is taken afresh, as `_HandlePlayer`
+    /// named by the flight. The target panel is taken afresh, as `_HandlePlayer`
     /// redraws it once the dialog closes (@0x6eb97, @0x6eda6). A press
     /// that leaves the dialog open ends the loop's pass with `_HandleComm`
     /// (@0x949a1): the message line counts down one tick, a take's own
@@ -147,22 +161,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// passed since it was shown, `TickCount` moving on under the dialog
     /// (@0x30262-0x30285). A press the flight refused, with no boarding
     /// under way, takes nothing.
-    pub(super) fn plunder_held_with(
-        &mut self,
-        take: Take,
-        held: Duration,
-        words: Words<Self>,
-    ) -> Taken {
+    pub fn plunder_held(&mut self, take: Take, held: Duration) -> Taken {
         let (taken, open) = match self.send(FlightCommand::Plunder(take)) {
             Answer::Plundered { taken, open } => (taken, open),
             _ => (Taken::Nothing, false),
         };
         let (good, outfit) = match taken {
-            Taken::Cargo { good, .. } => (words.plunder_names)(self, Some(good), None),
-            Taken::Ammo { outfit, .. } => (words.plunder_names)(self, None, Some(outfit)),
+            Taken::Cargo { good, .. } => names(&self.sim, Some(good), None),
+            Taken::Ammo { outfit, .. } => names(&self.sim, None, Some(outfit)),
             _ => (None, None),
         };
-        if let Some(text) = plunder_message(taken, good.as_deref(), outfit.as_deref()) {
+        if let Some(text) = plunder_message(taken, good, outfit) {
             self.say_for(text, MESSAGE_TICKS);
             // The flight's pass counted the line it had; the take's own
             // comes first in the original (`_DisplayComm`, then

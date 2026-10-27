@@ -866,7 +866,7 @@ fn with_rules_hands_the_wording_its_millions_reading() {
         credits: 1_234_567,
     };
     let mut view = flight();
-    let said = view.word(vec![stolen.clone()], View::WORDS);
+    let said = view.word(vec![stolen.clone()]);
     assert_eq!(said[0].0, "2 tons of cargo and 1.23M credits stolen!");
     let bible = Rulebook::default().with_override(RuleKey::PayMillions, RuleSource::Bible);
     let mut view = flight().with_rules(bible);
@@ -875,7 +875,7 @@ fn with_rules_hands_the_wording_its_millions_reading() {
         .sim
         .session
         .map(|session| session.with_rules(Rulebook::default()));
-    let said = view.word(vec![stolen], View::WORDS);
+    let said = view.word(vec![stolen]);
     assert_eq!(said[0].0, "2 tons of cargo and 1,234,567 credits stolen!");
 }
 

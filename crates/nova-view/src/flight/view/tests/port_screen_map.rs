@@ -25,9 +25,8 @@ const SAVING_BEFORE: [PortScreen; 3] = [
 
 /// Closes `view`'s map as M does on it, over the port.
 fn faked_press_map(view: &mut Faked) {
-    let words = super::faked_travel::faked_words();
-    view.port_map_input_with(&key(MAP, true), words);
-    view.port_map_input_with(&key(MAP, false), words);
+    view.port_map_input(&key(MAP, true));
+    view.port_map_input(&key(MAP, false));
     assert!(!view.map_open, "closed");
 }
 
@@ -99,7 +98,7 @@ fn each_port_screens_map_closing_cues_no_course() {
         for close in [key(MAP, true), key(Key::Enter, true)] {
             let mut view = faked_docked();
             view.open_port_screen_map(screen);
-            view.port_map_input_with(&close, super::faked_travel::faked_words());
+            view.port_map_input(&close);
             assert!(!view.map_open, "{screen:?}: {close:?} closes it");
             assert!(
                 !sent(&view).contains(&FlightCommand::CueCourse),
@@ -196,10 +195,7 @@ fn a_clear_route_on_a_port_screens_map_is_undone() {
     for screen in SCREENS {
         let mut view = faked_docked();
         view.open_port_screen_map(screen);
-        view.port_map_input_with(
-            &key(Key::Char('c'), true),
-            super::faked_travel::faked_words(),
-        );
+        view.port_map_input(&key(Key::Char('c'), true));
         assert_eq!(sent(&view), [FlightCommand::ClearRoute], "{screen:?}");
         faked_press_map(&mut view);
         assert_eq!(

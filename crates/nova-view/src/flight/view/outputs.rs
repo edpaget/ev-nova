@@ -12,9 +12,9 @@ use crate::flight::escorts::fighters_abandoned_message;
 use crate::flight::sim_port::FlightSim;
 use crate::{Diagnostic, Sound};
 
-use super::words::Words;
 use super::{
-    FlightView, MESSAGE_TICKS, Message, SCRIPT_MESSAGE_TICKS, Said, comm_message, pay_said,
+    FlightView, MESSAGE_TICKS, Message, SCRIPT_MESSAGE_TICKS, Said, comm_message, message_text,
+    pay_said,
 };
 use nova_sim::flight_frame::FlightCommand;
 
@@ -156,14 +156,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Shows the flight's messages since they were last taken, each in
-    /// turn, in the words `words` gives; an arrival's waits for its
+    /// turn, worded ([`FlightView::word`]); an arrival's waits for its
     /// arrival to be caught up with (`FlightView::arrived`). Called right
     /// after a press or a settling raised them, with nothing counted down
     /// since, it sets the flight's line to the last shown
     /// ([`FlightView::say_for`]); after a frame's steps,
     /// [`FlightView::relay_messages`] leaves the line alone.
-    pub(super) fn say_messages(&mut self, words: Words<Self>) {
-        for (text, ticks) in self.worded_messages(words) {
+    pub(super) fn say_messages(&mut self) {
+        for (text, ticks) in self.worded_messages() {
             self.say_for(text, ticks);
         }
     }
@@ -172,8 +172,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::say_messages`] does, but relayed
     /// ([`FlightView::relay`]): the flight set its line as it raised
     /// each, and the steps have counted it down since.
-    pub(super) fn relay_messages(&mut self, words: Words<Self>) {
-        for (text, ticks) in self.worded_messages(words) {
+    pub(super) fn relay_messages(&mut self) {
+        for (text, ticks) in self.worded_messages() {
             self.relay(text, ticks);
         }
     }
@@ -182,23 +182,46 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightEvent::Message`]), worded.
     ///
     /// [`FlightEvent::Message`]: nova_sim::flight_frame::FlightEvent::Message
-    fn worded_messages(&mut self, words: Words<Self>) -> Said {
+    fn worded_messages(&mut self) -> Said {
         let messages = self.drain().take_messages();
-        self.word(messages, words)
+        self.word(messages)
     }
 
-    /// The words `words` gives each of `messages`, in order, with its
-    /// ticks; an arrival's has none here, and waits for its arrival to be
-    /// caught up with (`FlightView::arrived`), which leads with it.
-    pub(super) fn word(&mut self, messages: Vec<SimMessage>, words: Words<Self>) -> Said {
+    /// The words of each of `messages`, in order, with its ticks
+    /// ([`FlightView::text_of`]); an arrival's has none here, and waits
+    /// for its arrival to be caught up with (`FlightView::arrived`), which
+    /// leads with it.
+    pub(super) fn word(&mut self, messages: Vec<SimMessage>) -> Said {
         let mut said = Vec::new();
         for message in messages {
-            match (words.text)(self, &message) {
+            match self.text_of(&message) {
                 Some(text) => said.push((text, message.ticks())),
                 None => self.pending_leads.push(message),
             }
         }
         said
+    }
+
+    /// The words of `message`, as the original words it
+    /// ([`message_text`]): the names the flight's ([`NameSource`]), the
+    /// stellars named from the scene or by the flight for one it doesn't
+    /// hold ([`MapSource::stellar_name`]), the dock request's and the
+    /// approach greeting's picks rolled on the flight's chance
+    /// ([`FlightView::words_chance`](FlightView#structfield.words_chance)),
+    /// and the numbers' millions by the view's held reading
+    /// ([`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)). None
+    /// only for an arrival's lead.
+    ///
+    /// [`NameSource`]: crate::flight::sim_port::NameSource
+    /// [`MapSource::stellar_name`]: crate::flight::sim_port::MapSource::stellar_name
+    pub(super) fn text_of(&mut self, message: &SimMessage) -> Option<String> {
+        message_text(
+            message,
+            &self.sim,
+            self.scene.as_ref(),
+            &mut self.words_chance,
+            self.presentation.millions,
+        )
     }
 
     /// Says `line` as [`FlightView::say_all`] does, then each of `rest` in

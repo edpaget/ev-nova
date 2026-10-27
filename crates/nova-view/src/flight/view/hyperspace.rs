@@ -3,10 +3,9 @@
 //! effect read from the frame (the jump under way, the warp, the
 //! `_hyperGamma` and the warp's end), and the arrival it sends
 //! ([`FlightCommand::Arrive`]) and catches up with, its pending
-//! explosions from the answer ([`Answer::Arrived`]).
-//!
-//! The arrival's words ride a [`Words`] callback the concrete callee
-//! hands in (see the `words` module).
+//! explosions from the answer ([`Answer::Arrived`]). The arrival's words
+//! name what the flight names ([`FlightView::word`], the date
+//! [`NameSource::long_date`](crate::flight::sim_port::NameSource::long_date)).
 
 use nova_sim::flight_frame::{Answer, FlightCommand};
 use nova_sim::{CombatEvent, Condition, SimMessage};
@@ -16,7 +15,6 @@ use crate::flight::jump::JumpEffect;
 use crate::flight::sim_port::FlightSim;
 use crate::system::catalog::SystemCatalog;
 
-use super::words::Words;
 use super::{
     FAR_ENOUGH, FlightView, NOTHING_OUT_HERE, TOO_CLOSE, TRACTORED, arrival_lead,
     arrival_message_with, jump_refusal_message, jump_refusal_ticks,
@@ -192,11 +190,11 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// have just filled), the ship arrives ([`FlightView::arrive`]), and
     /// the rest of the effect, the fade-in or the white flash, plays over
     /// the new system as the arrival's fade-in.
-    pub(super) fn arrival_frame(&mut self, words: Words<Self>) {
+    pub(super) fn arrival_frame(&mut self) {
         if !self.frame.warp_end_due {
             return;
         }
-        self.arrive(words);
+        self.arrive();
         self.fade_in = self
             .jump
             .take()
@@ -208,11 +206,10 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     }
 
     /// Ends the jump ([`FlightCommand::Arrive`]): the ship arrives in the
-    /// next system, caught up with as [`FlightView::arrived`] says, in
-    /// `words`.
-    pub(super) fn arrive(&mut self, words: Words<Self>) {
+    /// next system, caught up with as [`FlightView::arrived`] says.
+    pub(super) fn arrive(&mut self) {
         if let Answer::Arrived { combat, .. } = self.send(FlightCommand::Arrive) {
-            self.arrived(&combat, words);
+            self.arrived(&combat);
         }
     }
 
@@ -221,14 +218,16 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// ([`FlightView::catch_up`], which lays it out from the flight's
     /// event, drawn from where the ship arrives), and shows the flight's
     /// arrival message, led as the original leads it, naming the scene
-    /// laid out and the date `words` gives, or the system's message buoy
-    /// in its place ([`SimMessage::Buoy`], its text as the flight gives
-    /// it), followed by the flight's other messages in `words`, then how
+    /// laid out and the flight's date
+    /// ([`NameSource::long_date`](crate::flight::sim_port::NameSource::long_date)),
+    /// or the system's message buoy in its place ([`SimMessage::Buoy`],
+    /// its text as the flight gives it), followed by the flight's other
+    /// messages ([`FlightView::word`]), then how
     /// many fighters were abandoned and how many hired escorts defected
     /// unpaid, if any, the fighters first. A buoy's arrival carries no
     /// fighter notes: the flight drops them, as the buoy replaces the
     /// arrival line's suffix too.
-    pub(super) fn arrived(&mut self, combat: &[CombatEvent], words: Words<Self>) {
+    pub(super) fn arrived(&mut self, combat: &[CombatEvent]) {
         self.catch_up();
         self.show_arrival_explosions(combat);
         // Every arrival sets `_mapScroll` to the system arrived in: a
@@ -237,12 +236,12 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
         // (`_PlayerEnterWormhole` @0x64307).
         self.map.recentre();
         let (fighters, pay, drained) = self.arrival_outputs();
-        let date = (words.date)(self);
+        let date = self.sim.long_date();
         let mut messages = std::mem::take(&mut self.pending_leads);
         messages.extend(drained);
         let worded: Vec<(String, u16)> = messages
             .iter()
-            .filter_map(|message| Some(((words.text)(self, message)?, message.ticks())))
+            .filter_map(|message| Some((self.text_of(message)?, message.ticks())))
             .collect();
         self.blank_message();
         let Some(scene) = &self.scene else {

@@ -8,6 +8,7 @@
 
 use super::*;
 use nova_sim::SelfDestructLine;
+use nova_sim::flight_frame::FlightEvent;
 
 /// The words `message` says over `names`, millions by the engine.
 fn text(message: &SimMessage, names: &FakeFlight) -> Option<String> {
@@ -492,4 +493,95 @@ fn a_dock_request_and_a_land_hint_name_an_unseen_stellar_by_its_spob_name() {
         message_text(&hint, &names, None, &mut chance, RuleSource::Engine),
         Some(land_hint(false, "Hole", "L"))
     );
+}
+
+// The view's own wording: its held millions reading and its chance.
+
+/// A view over a flight in Sol by `millions`'s reading of
+/// [`RuleKey::PayMillions`], the flight naming the player's ship Kestrel
+/// and stellar 128 Earth.
+fn worded_by(millions: RuleSource) -> Faked {
+    let rules = Rulebook::default().with_override(RuleKey::PayMillions, millions);
+    let mut fake = FakeFlight::new();
+    fake.set_frame(in_sol());
+    fake.names_mut().player_ship_name = Some("Kestrel".to_owned());
+    fake.map_mut().stellar_names = vec![(StellarId(128), "Earth".to_owned())];
+    FlightView::scripted(catalog(), fake, &rules)
+}
+
+#[test]
+fn a_stolen_cargos_line_says_its_numbers_by_the_views_millions_reading() {
+    let stolen = SimMessage::CargoStolen {
+        tons: 2,
+        credits: 1_234_567,
+    };
+    for (millions, said) in [
+        (
+            RuleSource::Engine,
+            "2 tons of cargo and 1.23M credits stolen!",
+        ),
+        (
+            RuleSource::Bible,
+            "2 tons of cargo and 1,234,567 credits stolen!",
+        ),
+    ] {
+        let mut view = worded_by(millions);
+        view.sim.queue_event(FlightEvent::Message(stolen.clone()));
+        view.say_messages();
+        assert_eq!(view.message(), Some(said), "{millions:?}");
+    }
+}
+
+#[test]
+fn an_approach_greetings_fee_is_said_by_the_views_millions_reading() {
+    let cleared = SimMessage::DockCleared {
+        stellar: StellarId(128),
+        kind: DockKind::Planet,
+        fee: Some(2_500_000),
+    };
+    for (millions, fee) in [
+        (RuleSource::Engine, "[Landing fee is 2.50M credits.]"),
+        (RuleSource::Bible, "[Landing fee is 2,500,000 credits.]"),
+    ] {
+        let mut view = worded_by(millions);
+        let said = view.word(vec![cleared.clone()]);
+        let expected = approach_greeting(
+            DockKind::Planet,
+            "Earth",
+            "Kestrel",
+            GreetingPicks {
+                opening: 0,
+                welcome: 0,
+            },
+            Some(2_500_000),
+            millions,
+        );
+        assert_eq!(said, [(expected.clone(), cleared.ticks())], "{millions:?}");
+        assert!(expected.ends_with(fee), "{expected}");
+    }
+}
+
+#[test]
+fn the_wordings_picks_draw_on_the_views_chance() {
+    let mut view = worded_by(RuleSource::Engine);
+    let (script, chance) = scripted(&[2, 1]);
+    view.words_chance = chance;
+    let request = SimMessage::DockRequested {
+        stellar: StellarId(128),
+        kind: DockKind::Planet,
+    };
+    let said = view.word(vec![request]);
+    assert_eq!(
+        said[0].0,
+        request_line(
+            DockKind::Planet,
+            "Earth",
+            "Kestrel",
+            RequestPicks {
+                opening: 2,
+                named: 1
+            }
+        )
+    );
+    assert_eq!(script.borrow().asked, [3, 2], "Rand(3), then Rand(2)");
 }

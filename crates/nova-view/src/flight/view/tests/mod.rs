@@ -2262,10 +2262,12 @@ fn faked(frame: FlightFrame) -> Faked {
     faked_in(catalog(), frame)
 }
 
-/// A view over a flight scripted to show `frame`, read from `catalog`.
+/// A view over a flight scripted to show `frame`, read from `catalog`,
+/// the flight saying the date as [`DATE`] and naming nothing else.
 fn faked_in(catalog: FakeCatalog, frame: FlightFrame) -> Faked {
     let mut fake = FakeFlight::new();
     fake.set_frame(frame);
+    fake.names_mut().long_date = DATE.to_owned();
     FlightView::scripted(catalog, fake, &Rulebook::default())
 }
 

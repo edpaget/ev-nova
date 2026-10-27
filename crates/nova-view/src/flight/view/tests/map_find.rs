@@ -342,13 +342,12 @@ fn with_find_open_on_the_bars_map_m_types_into_it() {
         landed: Some(StellarId(128)),
         ..in_sol()
     });
-    let words = super::faked_travel::faked_words();
     let mut port_type = |text: &str| {
         for c in text.chars() {
             let k = Key::Char(c);
-            view.port_map_input_with(&key(k, true), words);
-            view.port_map_input_with(&Input::Text(c), words);
-            view.port_map_input_with(&key(k, false), words);
+            view.port_map_input(&key(k, true));
+            view.port_map_input(&Input::Text(c));
+            view.port_map_input(&key(k, false));
         }
     };
     port_type("f");
@@ -369,7 +368,7 @@ fn closing_the_map_with_find_open_drops_it() {
     let mut view = faked_on_the_map(in_sol());
     faked_type_in(&mut view, "f");
     assert!(view.map.finding(), "Find opened");
-    view.close_map_with(super::faked_travel::faked_words());
+    view.close_map();
     view.open_map();
     assert!(view.map_open);
     assert!(!view.map.finding(), "dropped by the close");

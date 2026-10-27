@@ -3,10 +3,8 @@
 //! [`FlightCommand::LeaveIfDue`]), the escorts' landing
 //! ([`FlightCommand::LandEscorts`]), the settling
 //! ([`FlightCommand::SettleScript`]) and what each shows, the leave read
-//! from the frame ([`FlightFrame::leave_due`]).
-//!
-//! The words of the flight's messages ride a [`Words`] callback the
-//! concrete callee hands in (see the `words` module).
+//! from the frame ([`FlightFrame::leave_due`]). The flight's messages are
+//! worded by the flight's names ([`FlightView::word`]).
 //!
 //! [`FlightFrame::leave_due`]: nova_sim::flight_frame::FlightFrame::leave_due
 
@@ -17,16 +15,14 @@ use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::sim_port::FlightSim;
 use crate::system::catalog::SystemCatalog;
 
-use super::words::Words;
 use super::{FlightView, NavFlash, SCRIPT_MESSAGE_TICKS, Said, Then};
 
 impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> FlightView<C, S> {
     /// Takes off from the stellar landed on ([`FlightCommand::TakeOff`]),
     /// and gives it; `None` when the ship has not landed. The flight leaves
     /// the port as its Leave does (`nova_sim::Session::leave_port`),
-    /// settling the take-off's events at once, its messages worded in
-    /// `words`.
-    /// The next frame draws the ship where it is, at
+    /// settling the take-off's events at once. The next frame draws the
+    /// ship where it is, at
     /// the stellar, not on its way from where it was, in the system a move
     /// made while landed went to, laid out afresh as the session tells
     /// ([`SessionEvent`](nova_sim::SessionEvent)); it shows no message
@@ -41,22 +37,22 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// the landing. Leaving passes the stay's days, their
     /// events rolled on the flight's chance, and what settling them did
     /// shows as [`FlightView::settle_script`] shows it.
-    pub(super) fn take_off_with(&mut self, words: Words<Self>) -> Option<StellarId> {
+    pub fn take_off(&mut self) -> Option<StellarId> {
         match self.send(FlightCommand::TakeOff) {
-            Answer::Departed(departure) => Some(self.departed(departure, words)),
+            Answer::Departed(departure) => Some(self.departed(departure)),
             _ => None,
         }
     }
 
     /// Takes off for a `Q` run while landed, if its leave is due
     /// ([`FlightCommand::LeaveIfDue`], `nova_sim::Session::leave_if_due`), as
-    /// [`FlightView::take_off_with`] does for
+    /// [`FlightView::take_off`] does for
     /// the port's Leave, and gives the stellar left; `None`, and nothing
     /// changes, when no leave is due. The router calls it once nothing
     /// shown over the spaceport holds the leave.
-    pub(super) fn leave_if_due_with(&mut self, words: Words<Self>) -> Option<StellarId> {
+    pub fn leave_if_due(&mut self) -> Option<StellarId> {
         match self.send(FlightCommand::LeaveIfDue) {
-            Answer::Departed(departure) => Some(self.departed(departure, words)),
+            Answer::Departed(departure) => Some(self.departed(departure)),
             _ => None,
         }
     }
@@ -76,13 +72,13 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
 
     /// Catches the screen up with `departure`: the take-off's line, then
     /// what settling it did; gives the stellar left.
-    fn departed(&mut self, departure: Departure, words: Words<Self>) -> StellarId {
+    fn departed(&mut self, departure: Departure) -> StellarId {
         let Departure { stellar, settled } = departure;
         let mut said = self.leave_said();
-        let (line, rest, system) = self.took_off(words);
+        let (line, rest, system) = self.took_off();
         said.extend(line);
         self.say_after(&said, rest);
-        self.show_settled(settled, system, words);
+        self.show_settled(settled, system);
         stellar
     }
 
@@ -171,7 +167,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// before the deselect, while the flash lasts.
     ///
     /// It gives, last, whether the system was laid out afresh.
-    fn took_off(&mut self, words: Words<Self>) -> (Said, Said, bool) {
+    fn took_off(&mut self) -> (Said, Said, bool) {
         let (pay, messages, held) = self.takeoff_outputs();
         let nav_texts = self.nav_texts;
         let system = self.catch_up().system;
@@ -190,9 +186,9 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
         let (greeting, rest): (Vec<_>, Vec<_>) = messages
             .into_iter()
             .partition(|message| matches!(message, SimMessage::TookOff { .. }));
-        let mut line = self.word(greeting, words);
+        let mut line = self.word(greeting);
         line.extend(pay);
-        (line, self.word(rest, words), system)
+        (line, self.word(rest), system)
     }
 
     /// Settles what the set expressions run since queued, as
@@ -219,20 +215,20 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// `S`'s `OnAccept` and the crons of a success's days run redraw at
     /// their operators, ordered against those texts. With no dialog of
     /// its own, nothing redraws after the last text.
-    pub(super) fn settle_script_with(&mut self, words: Words<Self>) {
+    pub fn settle_script(&mut self) {
         let settled = self.run_docked(Then::Nothing, |view| {
             match view.send(FlightCommand::SettleScript) {
                 Answer::Settled(settled) => settled,
                 _ => Settled::default(),
             }
         });
-        self.show_settled(settled, false, words);
+        self.show_settled(settled, false);
     }
 
     /// Shows what a settling did ([`FlightView::settle_script`]), the
     /// screen caught up first; `laid_out` says the system was laid out
     /// afresh since the settling, before this catches up.
-    fn show_settled(&mut self, settled: Settled, laid_out: bool, words: Words<Self>) {
+    fn show_settled(&mut self, settled: Settled, laid_out: bool) {
         let flying = !self.frame_now().docked();
         let mut said: Vec<(String, u16)> = settled
             .message
@@ -243,6 +239,6 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             said.extend(self.fighters_said());
         }
         self.say_all(&said);
-        self.say_messages(words);
+        self.say_messages();
     }
 }

@@ -41,7 +41,6 @@ use crate::flight::sim_port::FlightSim;
 use crate::system::camera::Anchor;
 use crate::system::catalog::SystemCatalog;
 
-use super::words::Words;
 use super::{
     AFTERBURNER_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FlightView,
     LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY, dying, glow_decay, play_area, point, show_combat,
@@ -263,14 +262,14 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// the frame the steps left it on, and a pass whose ship tick brought
     /// the escape pod's rescue, which ends the stepping there, has the
     /// view laid out afresh where the rescue put the ship. Then the
-    /// messages the steps raised are said, in `words`, and the sheets of a system the
+    /// messages the steps raised are said, and the sheets of a system the
     /// session populated afresh are read. Flight and the jump's warp both
     /// step this way.
     ///
     /// The comm notes and quotes are said before the gates' frames are
     /// shown, where the view once showed the frames first: the two touch
     /// nothing in common, and both are set before the frame is drawn.
-    pub(super) fn run_steps(&mut self, steps: u32, words: Words<Self>) {
+    pub(super) fn run_steps(&mut self, steps: u32) {
         let rescued = self.step_frame(steps, self.anchor());
         if let Some(scene) = &mut self.scene {
             show_frozen_frames(scene, &self.frame);
@@ -283,7 +282,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             self.catch_up();
             self.map.recentre();
         }
-        self.relay_messages(words);
+        self.relay_messages();
         // The session may have populated its system afresh.
         self.read_npc_sheets();
     }

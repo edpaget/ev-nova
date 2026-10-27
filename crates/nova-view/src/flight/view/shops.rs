@@ -20,7 +20,6 @@ use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::sim_port::FlightSim;
 use crate::system::catalog::SystemCatalog;
 
-use super::words::Words;
 use super::{FlightView, Then, assigned_message, assigned_ticks, no_outfitter};
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -189,16 +188,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Presses the jettison key: with Command held, jettisons the cargo,
     /// and with Option (Alt) too, all but the mission cargo
     /// ([`FlightCommand::Jettison`], `nova_sim::Session::jettison_cargo`),
-    /// saying what the flight says went, worded by `words`. Its key's
+    /// saying what the flight says went. Its key's
     /// gate is asked by the key, before the press reaches it
     /// (`Screen::input`'s filter).
-    pub(super) fn jettison(&mut self, words: Words<Self>) {
+    pub(super) fn jettison(&mut self) {
         if !self.held.contains(&Key::Command) {
             return;
         }
         let all = !self.held.contains(&Key::Alt);
         self.send(FlightCommand::Jettison { all });
-        self.say_messages(words);
+        self.say_messages();
     }
 
     /// Whether the pilot flying has seen the intro screen
@@ -395,16 +394,16 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
 
     /// Jettisons everything, mission cargo included, as the player info's
     /// Jettison does (`_JettisonCargo(1)` @0x5a66d,
-    /// [`FlightCommand::Jettison`]), saying what the flight says went,
-    /// worded by `words`. Docked, an `OnFailure` `C`, `E` or `H` of a
+    /// [`FlightCommand::Jettison`]), saying what the flight says went.
+    /// Docked, an `OnFailure` `C`, `E` or `H` of a
     /// mission it fails (`_QuickMissionFailure` @0x99d83) that changes the
     /// `ïntf` redraws the whole bar at its operator; the player info's
     /// close redraws after it (@0x5a725). No gate guards it.
-    pub(super) fn jettison_all_with(&mut self, words: Words<Self>) {
+    pub fn jettison_all(&mut self) {
         self.run_docked(Then::Nothing, |view| {
             view.send(FlightCommand::Jettison { all: true });
         });
-        self.say_messages(words);
+        self.say_messages();
     }
 
     /// Assigns the ship captured ([`FlightCommand::Assign`],

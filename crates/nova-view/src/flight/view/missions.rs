@@ -21,7 +21,6 @@ use nova_sim::{
 use crate::flight::catalog::StatusBars;
 use crate::flight::sim_port::FlightSim;
 
-use super::words::Words;
 use super::{FlightView, MESSAGE_TICKS, Then};
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -111,18 +110,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `nova_sim::Session::press_mission_info`): with an active mission
     /// shown, asks the router for the mission info screen, letting go of
     /// the flight keys; with none, says the flight's #354 on the message
-    /// line, worded by `words`, after its refusal beep; refused by the
+    /// line, after its refusal beep; refused by the
     /// flight itself, nothing. A flight that refuses the command, one
     /// that never started, says #354 alone, with no session to beep, as
     /// a failed session always has: the decision is the view's, not the
     /// adapter's.
-    pub(super) fn ask_mission_info(&mut self, words: Words<Self>) {
+    pub(super) fn ask_mission_info(&mut self) {
         match self.send(FlightCommand::PressMissionInfo) {
             Answer::MissionInfo(MissionInfoPress::Opens(info)) => {
                 self.pending_mission_info = Some(info);
                 self.held.clear();
             }
-            Answer::MissionInfo(MissionInfoPress::NoActiveMissions) => self.say_messages(words),
+            Answer::MissionInfo(MissionInfoPress::NoActiveMissions) => self.say_messages(),
             Answer::Refused => self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS),
             _ => {}
         }
