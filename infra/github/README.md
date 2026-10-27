@@ -72,9 +72,87 @@ There is no `fallback` block, so an unencrypted state is refused, not read.
 - **Lost state:** run `mise run infra-apply`. The `import` blocks adopt the
   existing resources again, with no change to GitHub.
 - **Lost passphrase:** delete `terraform.tfstate` and re-apply, as above.
-- **Rotating the passphrase:** add a temporary `fallback` block holding the
-  old key provider, change the item's password, apply once (which rewrites the
-  state under the new key), then remove the `fallback` block.
+- **Rotating the passphrase:** see below.
+
+### Rotating the passphrase
+
+`pbkdf2` stores its salt in the state under the key provider's label
+(`jq '.meta | keys' terraform.tfstate` shows `key_provider.pbkdf2.main`; the
+salt isn't secret). A `fallback` can read the old state only through a key
+provider with that same label, and OpenTofu accepts only static references
+in the encryption block, so the committed config can't rotate by itself. A
+rotation takes two applies under temporary edits: the first moves the state
+from `main` (old key) to a `next` provider (new key), and the second moves it
+back to `main` (new key). Each apply plans no changes and rewrites the state
+anyway. Follow the steps in this order:
+
+1. **Keep the old passphrase.** In 1Password, duplicate the
+   `opentofu-state-encryption` item and title the copy
+   `opentofu-state-encryption-previous`. Do this before changing anything:
+   once the item's password changes, the old passphrase is gone.
+2. **Change the passphrase.** Generate a new password (at least 16
+   characters) on `opentofu-state-encryption`.
+3. **Run 1: old key to `next`.** Add this line to `op.env`:
+
+   ```sh
+   TF_VAR_old_state_passphrase=op://ev-nova-ci/opentofu-state-encryption-previous/password
+   ```
+
+   and replace the `encryption` block in `versions.tf` with:
+
+   ```hcl
+   encryption {
+     key_provider "pbkdf2" "main" {
+       passphrase = var.old_state_passphrase
+     }
+     key_provider "pbkdf2" "next" {
+       passphrase = var.state_passphrase
+     }
+
+     method "aes_gcm" "main" {
+       keys = key_provider.pbkdf2.main
+     }
+     method "aes_gcm" "next" {
+       keys = key_provider.pbkdf2.next
+     }
+
+     state {
+       method   = method.aes_gcm.next
+       enforced = true
+       fallback {
+         method = method.aes_gcm.main
+       }
+     }
+
+     plan {
+       method   = method.aes_gcm.next
+       enforced = true
+       fallback {
+         method = method.aes_gcm.main
+       }
+     }
+   }
+   ```
+
+   Run `mise run infra-apply`. It must report no changes (if it plans any,
+   answer anything but `yes`). The state's meta now names
+   `key_provider.pbkdf2.next`.
+4. **Run 2: `next` back to `main`.** Remove the `op.env` line. In the block
+   above, set the `main` provider's passphrase to `var.state_passphrase`,
+   point `state` and `plan` at `method.aes_gcm.main`, and point both
+   fallbacks at `method.aes_gcm.next`. Run `mise run infra-apply` again (no
+   changes). The meta names `key_provider.pbkdf2.main` again.
+5. **Restore and check.** `git checkout infra/github/versions.tf
+   infra/github/op.env`, then `mise run infra-plan`: it must read the state
+   and report `No changes.` Then delete the `opentofu-state-encryption-previous`
+   item. `terraform.tfstate.backup` is encrypted under a key from the
+   rotation, so keep it or delete it.
+
+If a run fails, the state is still whole under whichever label its meta
+names: `main` with the old key before run 1 completes, and `next` with the
+new key after it. Resume from the matching step. `mise run infra-check`
+fails while the temporary block is in place (its guard expects
+`method.aes_gcm.main`), so don't commit the edits.
 
 ## Checks
 
