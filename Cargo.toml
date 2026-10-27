@@ -32,6 +32,9 @@ png = "0.18"
 # plist back. Its default `serde` feature is not needed.
 plist = { version = "1.10.1", default-features = false }
 tempfile = "3"
+# nova-bundle decodes the Developer ID certificate and the notary API key
+# from base64 signing variables; the version plist already locks.
+base64 = "0.23"
 binrw = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
