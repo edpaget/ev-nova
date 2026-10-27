@@ -17,37 +17,50 @@ fn a_and_b() -> View {
     ])
 }
 
-#[test]
-fn a_click_on_a_stellar_retargets_and_l_lands_there() {
-    let mut view = a_and_b();
-    tap(&mut view, LAND);
-    let b = on_screen(&view, (40.0, 0.0));
-    click(&mut view, b);
-    assert_eq!(nav_target(&view), Some(StellarId(129)));
-    land_now(&mut view);
-    assert_eq!(view.take_landing(), Some(StellarId(129)));
+/// A scripted flight in Sol showing Earth and the Moon, the player at the
+/// centre.
+fn faked_sol_scene() -> Faked {
+    let mut frame =
+        super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]);
+    frame.nav_mode = NavMode::Stellar(None);
+    super::faked_world::world(catalog(), frame)
+}
+
+/// Where `view` puts world point (`x`, `y`) on screen.
+fn faked_on_screen(view: &Faked, (x, y): (f32, f32)) -> Point {
+    view.camera().world_to_screen(at(x, y))
+}
+
+/// The world points the clicks `view` sent in space hit.
+fn clicked(view: &Faked) -> Vec<Vec2> {
+    sent(view)
+        .iter()
+        .filter_map(|command| match command {
+            FlightCommand::ClickInSpace { at, .. } => Some(*at),
+            _ => None,
+        })
+        .collect()
 }
 
 #[test]
-fn a_click_picks_the_stellar_above_or_below_the_ship_where_it_is_drawn() {
-    let mut view = flight_among(vec![
-        site(128, (0.0, 150.0), StellarFlags::CAN_LAND),
-        site(129, (0.0, -150.0), StellarFlags::CAN_LAND),
-    ]);
-    for (id, y) in [(129, -150.0), (128, 150.0), (129, -150.0)] {
-        let drawn = on_screen(&view, (0.0, y));
-        click(&mut view, drawn);
-        assert_eq!(nav_target(&view), Some(StellarId(id)), "{y}");
+fn a_click_in_space_sends_the_world_point_drawn_under_it() {
+    // What it then picks (the stellar under it, or nothing, keeping the
+    // target) is the session's (nova-sim's `session::hover` click tests,
+    // `session::apply::tests::a_click_in_space_on_nothing_is_refused_and_changes_nothing`).
+    let mut view = faked_sol_scene();
+    for (x, y) in [(0.0, -150.0), (0.0, 150.0), (40.0, 0.0), (-300.0, -300.0)] {
+        let drawn = faked_on_screen(&view, (x, y));
+        view.click_in_space(drawn);
     }
-}
-
-#[test]
-fn a_click_on_empty_space_keeps_the_target() {
-    let mut view = a_and_b();
-    tap(&mut view, LAND);
-    let empty = on_screen(&view, (-300.0, -300.0));
-    click(&mut view, empty);
-    assert_eq!(nav_target(&view), Some(StellarId(128)));
+    assert_eq!(
+        clicked(&view),
+        [
+            Vec2::new(0.0, -150.0),
+            Vec2::new(0.0, 150.0),
+            Vec2::new(40.0, 0.0),
+            Vec2::new(-300.0, -300.0)
+        ]
+    );
 }
 
 #[test]
@@ -68,28 +81,16 @@ fn a_right_click_or_a_release_selects_nothing() {
 }
 
 #[test]
-fn a_click_on_the_status_panel_keeps_the_target_even_over_a_stellar() {
-    let mut view = a_and_b();
-    tap(&mut view, LAND);
-    let c = on_screen(&view, (427.0, 0.0));
+fn a_click_on_the_status_panel_is_no_click_in_space() {
+    let mut view = faked_sol_scene();
     let edge = VIEW_SIZE.0 - STATUS_BAR_WIDTH;
+    let c = faked_on_screen(&view, (427.0, 0.0));
     assert!(c.x > edge, "{c:?} is under the panel");
-    click(&mut view, c);
-    assert_eq!(nav_target(&view), Some(StellarId(128)), "over C");
-    // C's box reaches 26 pixels either side of it, across the panel's
-    // edge, which decides.
-    let left_of_c = on_screen(&view, (427.0 - 26.0, 0.0)).x;
-    assert!(left_of_c < edge && edge < c.x);
-    view.take_sounds();
-    click(&mut view, at(edge, c.y));
-    assert_eq!(nav_target(&view), Some(StellarId(128)), "the edge is panel");
-    assert_eq!(view.take_sounds(), [], "the panel is silent");
-    click(&mut view, at(edge - 0.5, c.y));
-    assert_eq!(
-        nav_target(&view),
-        Some(StellarId(130)),
-        "left of it is space"
-    );
+    view.click_in_space(c);
+    view.click_in_space(at(edge, c.y));
+    assert_eq!(clicked(&view), [], "the edge is panel, and silent");
+    view.click_in_space(at(edge - 0.5, c.y));
+    assert_eq!(clicked(&view).len(), 1, "left of it is space");
 }
 
 #[test]
@@ -184,25 +185,49 @@ fn selecting_a_stellar_draws_cicn_10000_to_10003_flying_in_then_settled() {
     }
 }
 
+/// The nav bracket `cïcn`s `view` draws (10000-10007) with `nav`, and
+/// where.
+fn faked_nav_icons(
+    view: &Faked,
+    nav: Option<nova_sim::brackets::NavBrackets>,
+) -> Vec<(i16, Point)> {
+    let hud = super::super::world::WorldHud {
+        nav_brackets: nav,
+        ..super::super::world::WorldHud::none()
+    };
+    super::faked_world::world_list_with(view, &hud)
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Picture { image, top_left } if icon_in(10000..=10007)(command) => {
+                Some((image.id, *top_left))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The brackets round stellar `id` at `at`, settled or `expand` out.
+fn nav_at(id: i16, (x, y): (f32, f32), expand: f32) -> nova_sim::brackets::NavBrackets {
+    nova_sim::brackets::NavBrackets {
+        stellar: StellarId(id),
+        position: Vec2::new(x, y),
+        expand,
+        dominated: false,
+    }
+}
+
 #[test]
-fn no_nav_brackets_without_a_nav_target_or_after_hyper_select() {
-    let mut view = flight();
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
-    assert_eq!(nav_icons(&view).len(), 4);
-    tap(&mut view, NAV_OFF_KEY);
-    assert_eq!(nav_icons(&view), [], "Nav Off");
-    view.tick(TICK);
-    assert_eq!(nav_icons(&view), []);
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
-    let moon = on_screen(&view, (300.0, -200.0));
+fn no_nav_brackets_are_drawn_without_the_flights_and_its_are_drawn_round_the_stellar() {
+    // When the session has none (Nav Off, Hyper Select) and how they fly
+    // in: nova-sim's brackets tests.
+    let view = faked_sol_scene();
+    assert_eq!(faked_nav_icons(&view, None), []);
+    let moon = faked_on_screen(&view, (300.0, -200.0));
     assert_eq!(
-        nav_icons(&view),
+        faked_nav_icons(&view, Some(nav_at(129, (300.0, -200.0), 196.0))),
         corners_at(10000, moon, 10.0 + 196.0),
-        "flies in again"
+        "flying in"
     );
-    tap(&mut view, HYPER_SELECT_KEY);
-    assert_eq!(view.session().expect("flying").nav_target(), None);
-    assert_eq!(nav_icons(&view), [], "Hyper Select");
 }
 
 #[test]
@@ -211,35 +236,40 @@ fn a_stellar_whose_sprite_cannot_be_read_is_bracketed_at_half_64() {
         sprite: Err("no rlëD".to_owned()),
         ..stellar(131, "Broken", (100, 0), 1)
     };
-    let mut sites = catalog().sites;
-    sites.push(site(131, (100.0, 0.0), StellarFlags::CAN_LAND));
-    let mut view = FlightView::new(FakeCatalog {
-        sites,
-        sol_more: vec![unreadable],
-        ..catalog()
-    });
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[2][0]);
-    ticks(&mut view, 5);
-    let broken = on_screen(&view, (100.0, 0.0));
-    assert_eq!(nav_icons(&view), corners_at(10000, broken, 64.0));
+    let mut frame =
+        super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]);
+    frame.stellars.push(record::stellar(StellarId(131)));
+    let view = super::faked_world::world(
+        FakeCatalog {
+            sol_more: vec![unreadable],
+            ..catalog()
+        },
+        frame,
+    );
+    let broken = faked_on_screen(&view, (100.0, 0.0));
+    assert_eq!(
+        faked_nav_icons(&view, Some(nav_at(131, (100.0, 0.0), 0.0))),
+        corners_at(10000, broken, 64.0)
+    );
 }
 
 /// A selection the scene doesn't hold is bracketed at its spöb position
 /// at half 64 (`_HandleNavTargetSprites` @0x2fd9f-0x2fdda, @0x2fe41).
+/// A selection the scene doesn't hold is bracketed at its spöb position
+/// at half 64 (`_HandleNavTargetSprites` @0x2fd9f-0x2fdda, @0x2fe41).
 #[test]
 fn an_unseen_selection_is_bracketed_at_its_spot_at_half_64() {
-    let mut view = flight_with_unseen(unseen_wormhole());
-    tap(&mut view, LAND);
-    assert_eq!(nav_target(&view), Some(StellarId(150)));
-    let hole = on_screen(&view, (0.0, 300.0));
+    let view = faked_sol_scene();
+    let hole = faked_on_screen(&view, (0.0, 300.0));
     assert_eq!(
-        nav_icons(&view),
+        faked_nav_icons(&view, Some(nav_at(150, (0.0, 300.0), 196.0))),
         corners_at(10000, hole, 64.0 + 196.0),
         "flying in"
     );
-    ticks(&mut view, 5);
-    let hole = on_screen(&view, (0.0, 300.0));
-    assert_eq!(nav_icons(&view), corners_at(10000, hole, 64.0));
+    assert_eq!(
+        faked_nav_icons(&view, Some(nav_at(150, (0.0, 300.0), 0.0))),
+        corners_at(10000, hole, 64.0)
+    );
 }
 
 /// `_DrawStatusNav` names any selected stellar by its spöb name
@@ -252,14 +282,18 @@ fn the_hud_names_an_unseen_selection() {
 }
 
 #[test]
-fn an_always_dominated_stellar_is_bracketed_green() {
-    let mut sites = catalog().sites;
-    sites[0].flags2 = nova_sim::market::DOMINATED;
-    let mut view = flight_among(sites);
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
-    ticks(&mut view, 5);
-    let earth = on_screen(&view, (0.0, -600.0));
-    assert_eq!(nav_icons(&view), corners_at(10004, earth, 10.0));
+fn a_dominated_stellar_is_bracketed_green() {
+    // Whether it is: the session's (its `Flags2` DOMINATED).
+    let view = faked_sol_scene();
+    let earth = faked_on_screen(&view, (0.0, -600.0));
+    let dominated = Some(nova_sim::brackets::NavBrackets {
+        dominated: true,
+        ..nav_at(128, (0.0, -600.0), 0.0)
+    });
+    assert_eq!(
+        faked_nav_icons(&view, dominated),
+        corners_at(10004, earth, 10.0)
+    );
 }
 
 #[test]
