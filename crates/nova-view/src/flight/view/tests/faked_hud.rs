@@ -309,3 +309,51 @@ fn the_hud_waits_for_its_refreshes_by_the_presentations_cadence() {
     let view = world_by(catalog(), among(Vec::new()), &rules);
     assert!(!view.hud_waits(), "the Bible's");
 }
+
+/// The texts `list` draws in the stock bar's nav area, the bar at
+/// (830, 0), each with its colour.
+pub(super) fn nav_texts(list: &DrawList) -> Vec<(String, Color)> {
+    let area = layout().nav.offset(at(830.0, 0.0));
+    list.iter()
+        .filter_map(|command| match command {
+            DrawCommand::Text {
+                text,
+                origin,
+                color,
+                ..
+            } if area.contains(*origin) => Some((text.clone(), *color)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The texts `view` draws in its nav area ([`nav_texts`]), without
+/// their colours.
+pub(super) fn nav_of(view: &Faked) -> Vec<String> {
+    nav_texts(&flown(view))
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect()
+}
+
+/// The texts `list` draws in the stock bar's cargo area, the bar at
+/// (830, 0), with where each starts.
+pub(super) fn cargo_texts(list: &DrawList) -> Vec<(String, Point)> {
+    let area = layout().cargo.offset(at(830.0, 0.0));
+    list.iter()
+        .filter_map(|command| match command {
+            DrawCommand::Text { text, origin, .. } if area.contains(*origin) => {
+                Some((text.clone(), *origin))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The frame `view` shows, changed by `change`, shown from now on
+/// ([`shows`]).
+pub(super) fn changes(view: &mut Faked, change: impl FnOnce(&mut FlightFrame)) {
+    let mut frame = view.frame.clone();
+    change(&mut frame);
+    shows(view, frame);
+}

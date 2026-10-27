@@ -3932,21 +3932,6 @@ fn nav(view: &View) -> Vec<String> {
         .collect()
 }
 
-/// The texts drawn in the cargo area, at the stock bar's (830, 0),
-/// with where each starts.
-fn cargo(view: &View) -> Vec<(String, Point)> {
-    let area = layout().cargo.offset(at(830.0, 0.0));
-    drawn(view)
-        .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Text { text, origin, .. } if area.contains(*origin) => {
-                Some((text.clone(), *origin))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// The engine tick `view` has reached.
 fn now_tick(view: &FlightView<FakeCatalog, impl FlightSim>) -> u64 {
     u64::try_from(crate::time::ticks(view.elapsed)).expect("in range")
