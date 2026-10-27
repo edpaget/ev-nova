@@ -80,6 +80,7 @@ mod drain;
 mod escorts;
 mod flying;
 mod hyperspace;
+mod kept_frame;
 mod landing;
 mod layers;
 mod map_borders;
