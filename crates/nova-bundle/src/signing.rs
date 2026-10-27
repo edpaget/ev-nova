@@ -824,6 +824,34 @@ mod tests {
     }
 
     #[test]
+    fn the_first_cleanup_failure_wins_over_a_later_one() {
+        let p = paths();
+        let signing = p.signing.clone();
+        // Fail only the second removal of the signing dir: the cleanup's.
+        let removals = std::cell::Cell::new(0);
+        let run = test_support::run(
+            &developer_id_host(),
+            b"arm64",
+            failing(is("security", "delete-keychain")),
+            move |e| {
+                if *e != Event::RemoveDir(signing.clone()) {
+                    return false;
+                }
+                removals.set(removals.get() + 1);
+                removals.get() == 2
+            },
+        );
+        let Err(BundleError::Run { command, .. }) = &run.result else {
+            panic!("{:?}", run.result);
+        };
+        assert_eq!(
+            command,
+            &security("delete-keychain").arg(&p.keychain).to_string()
+        );
+        assert!(ends_with_cleanup(&run), "both cleanup steps ran");
+    }
+
+    #[test]
     fn the_cleanup_is_the_keychain_then_the_signing_dir() {
         let spec = BundleSpec::from_metadata(&sample_metadata()).expect("spec");
         let layout = Layout::new(&spec.target_dir, None).expect("layout");
