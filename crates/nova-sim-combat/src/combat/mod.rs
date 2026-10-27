@@ -11547,7 +11547,7 @@ mod tests {
         let defender = defender.of(exits_at(1, [(10, 0), (20, 0), (30, 0), (40, 0)]));
         let mut ships = [defender, attacker.moving(Vec2::new(15.0, 0.0))];
         let target = led_target(&mut ships[1]);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let shot = pd_shots(&combat)[0];
         let at = start(&shot);
         assert!(
@@ -11580,23 +11580,25 @@ mod tests {
         }
     }
 
-    /// The strikes until one lands, at most 20 ticks of `ships`.
-    fn strikes_until_a_hit(combat: &mut Combat, ships: &mut [Ship]) -> Vec<Strike> {
-        for _ in 0..20 {
-            tick(combat, ships, &NovaDisable);
-            let strikes = combat.take_strikes();
-            if !strikes.is_empty() {
-                return strikes;
-            }
+    /// The strikes as the collision passes test the move of A's
+    /// point-defence shot that reaches B, 100 pixels off: A fires at B
+    /// ([`phase::defend_npcs`]), the shot takes its moves
+    /// ([`phase::fly_shots`]), and the passes test the 8th, from 84 to 96
+    /// pixels out ([`phase::test_hits`]).
+    fn pd_strikes_on_b(combat: &mut Combat, ships: &mut [Ship]) -> Vec<Strike> {
+        phase::defend_npcs(combat, ships, &NovaDisable);
+        for _ in 0..8 {
+            phase::fly_shots(combat, ships, &NovaDisable);
         }
-        Vec::new()
+        phase::test_hits(combat, ships, &NovaDisable);
+        combat.take_strikes()
     }
 
     #[test]
     fn a_point_defence_shot_at_a_ship_hits_it_by_contact_directly_and_unintended() {
         let mut combat = Combat::default();
         let mut ships = fighter_attack(chaingun(), 0.0, -100.0);
-        let strikes = strikes_until_a_hit(&mut combat, &mut ships);
+        let strikes = pd_strikes_on_b(&mut combat, &mut ships);
         assert_eq!(strikes.len(), 1, "no proximity fuse: by contact");
         let strike = strikes[0];
         assert_eq!((strike.ship, strike.by), (B, Some(A)));
@@ -11611,14 +11613,15 @@ mod tests {
         let [defender, attacker] = fighter_attack(chaingun(), 0.0, -100.0);
         // The defender's class rolls 100 here; a fighter's is 80.
         let mut ships = [defender, attacker.of(of_class(80)).attacking(A)];
-        assert_eq!(strikes_until_a_hit(&mut combat, &mut ships), []);
+        assert_eq!(pd_strikes_on_b(&mut combat, &mut ships), []);
     }
 
     #[test]
     fn a_point_defence_shot_at_a_ship_meets_no_missile() {
         let mut combat = Combat::default();
         let mut ships = fighter_attack(quad(), 0.0, -100.0);
-        // Still, where the shot ends the tick: aimed at C, so no candidate.
+        // Still, where the shot's first move ends: aimed at C, so no
+        // candidate.
         let missile = put(
             &mut combat,
             still_missile(),
@@ -11628,7 +11631,12 @@ mod tests {
         );
         combat.shots[0].aimed_at = Some(C);
         combat.shots[0].target = Some(C);
-        let events = met(&mut combat, &mut ships);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
+        phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+        let pd = pd_shots(&combat)[0];
+        assert!(close_to(pd.position, Vec2::new(0.0, -20.0)), "{pd:?}");
+        phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+        let events = combat.take_events();
         assert_eq!(pd_shots(&combat).len(), 1, "fired at B, not spent");
         assert_eq!(shot_down(&events), []);
         assert!(flying(&combat, missile).is_some());
@@ -11638,7 +11646,8 @@ mod tests {
     fn a_point_defence_beam_held_on_a_fighter_attacking_its_ship_hits_it() {
         let mut combat = Combat::default();
         let mut ships = fighter_attack(pd_beam(), 0.0, -100.0);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         let beam = combat.beams()[0];
         assert_eq!((beam.aiming, beam.aimed_at), (Aiming::Ship(B), Some(B)));
         let strikes = combat.take_strikes();
@@ -11658,7 +11667,26 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = fighter_attack(wild, 100.0, -100.0);
         let mut chance = nova_sim_base::fixture::Draws::of(&[0, 0, 0]);
-        tick_drawing(&mut combat, &mut ships, &mut chance);
+        let (arsenal, govts) = (Arsenal::default(), Governments::default());
+        let arena = phase::arena(&arsenal, &govts, Rules::default());
+        phase::run_in(
+            &mut combat,
+            &mut ships,
+            arena,
+            &mut chance,
+            |c, f, a, ch| {
+                c.defend_npcs(f, a, None, false, ch);
+            },
+        );
+        phase::run_in(
+            &mut combat,
+            &mut ships,
+            arena,
+            &mut chance,
+            |c, f, a, ch| {
+                c.close_tick(f, a, &mut [], ch);
+            },
+        );
         let beam = combat.beams()[0];
         let bearing = crate::trig::intercept_angle(beam.start, Vec2::new(100.0, -100.0));
         assert_eq!(beam.heading, f32::from(bearing), "the bearing exactly");
@@ -11668,10 +11696,11 @@ mod tests {
     fn a_point_defence_beam_on_a_ship_ends_when_the_ship_is_destroyed() {
         let mut combat = Combat::default();
         let mut ships = fighter_attack(pd_beam(), 0.0, -100.0);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.beams().len(), 1);
         ships[1].condition = Condition::Destroyed;
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.beams(), []);
     }
 
@@ -11686,7 +11715,7 @@ mod tests {
             let mut combat = Combat::default();
             let [defender, attacker] = fighter_attack(beam, x, 0.0);
             let mut ships = [defender.of(manticore()), attacker];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(combat.beams()[0].exit, Some(exit), "{x}");
         }
     }
@@ -11731,7 +11760,7 @@ mod tests {
             let mut combat = Combat::default();
             let mut ships = fighter_attack(quad(), 0.0, -100.0);
             make(&mut ships);
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(fired(&combat.take_events(), A), shots, "{name}");
         }
     }
@@ -11746,7 +11775,7 @@ mod tests {
             player.id = ShipRef::Player;
             player.fleet = ShipRef::Player;
             let mut ships = [player, defender];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(
                 fired(&combat.take_events(), A),
                 usize::from(threatens_player),
@@ -11766,7 +11795,9 @@ mod tests {
             let mut combat = Combat::default();
             combat.set_pd_hostility(source);
             let mut ships = fighter_attack(quad(), 0.0, -100.0);
-            tick_with(&mut combat, &mut ships, &Arsenal::default(), rules);
+            phase::run_by(&mut combat, &mut ships, rules, |c, f, a, ch| {
+                c.defend_npcs(f, a, None, false, ch);
+            });
             assert_eq!(fired(&combat.take_events(), A), 1, "{source:?}");
         }
         assert_eq!(*rule.asked.borrow(), [], "never asked");
