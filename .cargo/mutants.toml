@@ -626,4 +626,7 @@ exclude_re = [
     # as `+ 1.0` does, and `check_contract` and the fake's tests compare
     # nothing else of it.
     "nova-view/src/flight/sim_port/fixture\\.rs:[0-9]+:[0-9]+: replace \\+ with - in unlike$",
+    # `unlike_hud` likewise only needs gauges other than the HUD's: one
+    # less than the given differs as one more does.
+    "nova-view/src/flight/sim_port/fixture\\.rs:[0-9]+:[0-9]+: replace \\+ with - in unlike_hud$",
 ]
