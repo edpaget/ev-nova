@@ -28,6 +28,8 @@
 //! game's eject chord, Command-X, before the window; Register EV Nova and
 //! Check for Updates, the Ambrosia shareware's; and Arrange in Front.
 
+// Off macOS the crate is empty, so the links above have nothing to name.
+#![cfg_attr(not(target_os = "macos"), allow(rustdoc::broken_intra_doc_links))]
 #![cfg(target_os = "macos")]
 
 mod bar;

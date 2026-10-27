@@ -40,6 +40,8 @@
 //! still asks the GPU: a macOS 13 machine can have one MetalFX doesn't
 //! support, such as a VM's paravirtual Metal device.
 
+// Off macOS the crate is empty, so the links above have nothing to name.
+#![cfg_attr(not(target_os = "macos"), allow(rustdoc::broken_intra_doc_links))]
 #![cfg(target_os = "macos")]
 
 mod scaler;
