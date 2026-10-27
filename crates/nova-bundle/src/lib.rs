@@ -28,7 +28,10 @@ pub mod host;
 pub mod icon;
 pub mod info_plist;
 pub mod layout;
+pub mod notary;
 pub mod ports;
 pub mod signing;
 pub mod spec;
 pub mod system;
+#[cfg(test)]
+mod test_support;
