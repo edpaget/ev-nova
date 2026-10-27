@@ -452,8 +452,8 @@ mod tests {
         let catalog = catalog();
         let mut session = session(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         let mut session = alerted(session);
         assert!(session.red_alert_icon().is_some(), "in hyperspace");
         assert_eq!(

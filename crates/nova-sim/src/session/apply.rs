@@ -137,10 +137,11 @@ mod tests {
 
     /// A session flying a jump to Alpha Centauri, its sounds so far taken.
     fn jumping() -> Session {
-        let mut session = Session::start(&catalog()).expect("starts");
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.take_sounds();
         session
     }
@@ -303,10 +304,11 @@ mod tests {
 
     #[test]
     fn a_stellar_key_is_refused_during_a_jump_and_changes_nothing() {
-        let mut session = Session::start(&catalog()).expect("starts");
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.take_sounds();
         let before = session.nav_mode();
         assert_eq!(

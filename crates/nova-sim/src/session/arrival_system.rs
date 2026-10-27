@@ -358,8 +358,8 @@ mod tests {
     /// arrives.
     fn jump_as_131_shows(session: &mut Session, catalog: &FakePilotCatalog) -> Option<SystemId> {
         session.plot_course(SystemId(134)).expect("a route");
-        fly_out(session);
-        assert_eq!(begin_jump_now(session), Ok(SystemId(134)));
+        fly_out(session, &catalog);
+        assert_eq!(begin_jump_now(session, &catalog), Ok(SystemId(134)));
         session.pilot.bits_mut().clear(hiding_bit(131));
         session.arrive(catalog, &mut NeverFires)
     }
@@ -427,8 +427,8 @@ mod tests {
                 Some(SystemId(134)),
                 "standing in 130's one slot, which names 131"
             );
-            fly_out(&mut session);
-            assert_eq!(begin_jump_now(&mut session), Ok(SystemId(134)));
+            fly_out(&mut session, &catalog);
+            assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(134)));
             session.pilot.bits_mut().clear(hiding_bit(131));
             // By the other reading, 134 resolved by place once 131 shows.
             assert_eq!(

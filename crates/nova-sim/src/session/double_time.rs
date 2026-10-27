@@ -709,8 +709,9 @@ mod tests {
 
     #[test]
     fn the_brake_aims_against_the_velocity_and_the_turn_at_the_bearing() {
-        let mut session = bound_for_131(&catalog(), Vec2::ZERO, Vec2::ZERO, 0.0);
-        fly_out(&mut session);
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, Vec2::ZERO, Vec2::ZERO, 0.0);
+        fly_out(&mut session, &catalog);
         session.begin_jump().expect("jumps");
         let velocity = session.player().velocity;
         session.tick(Controls::default());
@@ -735,9 +736,7 @@ mod tests {
             bearing_aim(&session),
             "on through the warp"
         );
-        session
-            .arrive(&catalog(), &mut NeverFires)
-            .expect("arrives");
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
         let kept = session.ship.aim;
         session.tick(Controls::default());
         assert_eq!(session.ship.aim, kept, "kept after the jump");
@@ -1040,8 +1039,8 @@ mod tests {
         jumping
             .plot_course(crate::catalog::SystemId(131))
             .expect("a route");
-        fly_out(&mut jumping);
-        begin_jump_now(&mut jumping).expect("jumps");
+        fly_out(&mut jumping, &catalog);
+        begin_jump_now(&mut jumping, &catalog).expect("jumps");
         let (stage, clock) = (
             jumping.ship.warp_stage(jumping.mode.jump()),
             jumping.warp_clock(),
@@ -1063,7 +1062,9 @@ mod tests {
         session
             .plot_course(crate::catalog::SystemId(131))
             .expect("a route");
-        fly_out(&mut session);
+        // Past the jump distance with no pass flown, so the NPC is still
+        // there.
+        session.ship.player.position = Vec2::new(0.0, crate::hyperspace::MIN_JUMP_DISTANCE);
         session.begin_jump().expect("jumps");
         session.space.traffic.npcs_mut()[0].state.velocity = Vec2::new(2.0, 0.0);
         session.hold_trigger(Trigger {

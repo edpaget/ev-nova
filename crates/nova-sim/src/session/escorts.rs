@@ -1181,7 +1181,7 @@ pub(super) mod tests {
     use crate::targeting::TargetPick;
     use crate::testkit::{
         Draws, FAST, FakePilotCatalog, begin_jump_now, catalog, hull, jump, land_now, outfit, ship,
-        weapon,
+        weapon, work_with,
     };
 
     /// A pilot whose fleet is two escorts, both defending the player.
@@ -1848,6 +1848,21 @@ pub(super) mod tests {
         warship
     }
 
+    /// Flies `session` out and into its jump to 131, gives its first
+    /// escort `cloak` as the jump ends, after the passes on the way have
+    /// thought and displayed it, and arrives: the escort as it left.
+    fn jump_cloaked(session: &mut Session, catalog: &FakePilotCatalog, cloak: Cloak) -> NpcId {
+        session.plot_course(SystemId(131)).expect("a route");
+        crate::testkit::fly_out(session, catalog);
+        crate::testkit::begin_jump_now(session, catalog).expect("jumps");
+        let before = cloak_first_escort(session, cloak);
+        assert_eq!(
+            session.arrive(catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        before
+    }
+
     const FULLY_CLOAKED: Cloak = Cloak {
         fade: crate::cloak::FADE_FULL,
         direction: 0,
@@ -1857,8 +1872,7 @@ pub(super) mod tests {
     fn a_cloaked_escort_arrives_after_a_jump_cloaked() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
-        let before = cloak_first_escort(&mut session, FULLY_CLOAKED);
-        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        let before = jump_cloaked(&mut session, &catalog, FULLY_CLOAKED);
         assert_cloak_kept(&session, before, FULLY_CLOAKED);
         let first = session.space.escorts.fleet[0].expect("placed");
         assert!(session.space.npc(first).expect("there").cloak.is_cloaked());
@@ -1914,8 +1928,7 @@ pub(super) mod tests {
             fade: 10.0,
             direction: 1,
         };
-        let before = cloak_first_escort(&mut session, fading);
-        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        let before = jump_cloaked(&mut session, &catalog, fading);
         let stepped = Cloak {
             fade: 10.0 + crate::cloak::FADE_RATE,
             direction: 1,
@@ -1932,12 +1945,17 @@ pub(super) mod tests {
     fn a_cloaked_escort_uncloaks_on_its_first_think_in_the_new_system() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
-        cloak_first_escort(&mut session, FULLY_CLOAKED);
-        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        jump_cloaked(&mut session, &catalog, FULLY_CLOAKED);
         let first = session.space.escorts.fleet[0].expect("placed");
-        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
-        // Its display steps the fade (@0x2d088), in the fight's NPC step.
-        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        // Its display steps the fade (@0x2d088), in the ship loop.
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(
             session.space.escorts.fleet[0],
             Some(first),
@@ -1997,8 +2015,8 @@ pub(super) mod tests {
             ..crate::cloak::CloakGear::default()
         };
         session.plot_course(SystemId(131)).expect("a route");
-        crate::testkit::fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        crate::testkit::fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         let mut passes = 0;
         while session.in_warp_lead_in() {
             warp_pass(&mut session, catalog);
@@ -2929,8 +2947,8 @@ pub(super) mod tests {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Bible);
         session.plot_course(SystemId(131)).expect("a route");
-        crate::testkit::fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        crate::testkit::fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.take_sounds();
         assert_eq!(
             session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires),
@@ -2964,7 +2982,7 @@ pub(super) mod tests {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Bible);
         session.plot_course(SystemId(131)).expect("a route");
-        crate::testkit::fly_out(&mut session);
+        crate::testkit::fly_out(&mut session, &catalog);
         session.begin_jump().expect("pre-jump");
         assert_eq!(session.preparing_jump(), Some(SystemId(131)), "braking");
         assert_eq!(
@@ -2988,8 +3006,8 @@ pub(super) mod tests {
             let catalog = fleeted();
             let mut session = flying(&catalog, source);
             session.plot_course(SystemId(131)).expect("a route");
-            crate::testkit::fly_out(&mut session);
-            begin_jump_now(&mut session).expect("jumps");
+            crate::testkit::fly_out(&mut session, &catalog);
+            begin_jump_now(&mut session, &catalog).expect("jumps");
             session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires);
             assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
             session.arrive(&catalog, &mut NeverFires).expect("arrives");
@@ -3022,9 +3040,9 @@ pub(super) mod tests {
                 .all(|npc| npc.target == Some(ShipRef::Npc(quarry)))
         );
         session.plot_course(SystemId(131)).expect("a route");
-        crate::testkit::fly_out(&mut session);
+        crate::testkit::fly_out(&mut session, &catalog);
         session.chart.target = Some(quarry);
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         (session, quarry)
     }
 

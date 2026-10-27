@@ -236,8 +236,8 @@ pub(super) mod tests {
         for source in RuleSource::ALL {
             let mut session = rescued_in_130(&catalog, source);
             session.plot_course(SystemId(131)).expect("a route");
-            fly_out(&mut session);
-            assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+            fly_out(&mut session, &catalog);
+            assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),
                 Some(SystemId(131)),

@@ -1254,9 +1254,14 @@ mod tests {
     }
 
     fn ships(session: &Session) -> Vec<(i16, Option<i64>, bool)> {
-        session
-            .pilot()
-            .escorts()
+        kinds(session.pilot().escorts())
+    }
+
+    /// Each of `escorts`' ship, wage and whether it is carried: what a
+    /// jump's pay keeps of them, as the passes on the way give a carried
+    /// fighter in flight its fighter's capacities (see the `bay` module).
+    fn kinds(escorts: &[Escort]) -> Vec<(i16, Option<i64>, bool)> {
+        escorts
             .iter()
             .map(|escort| (escort.ship.0, escort.wage, escort.carried))
             .collect()
@@ -1280,7 +1285,7 @@ mod tests {
         let mut session = payer(1000, payroll(), 1, RuleSource::Engine);
         jump(&mut session, &paying(), 131).expect("arrives");
         assert_eq!(session.pilot().cash(), 600);
-        assert_eq!(session.pilot().escorts(), payroll(), "all stay");
+        assert_eq!(ships(&session), kinds(&payroll()), "all stay");
         assert_eq!(session.take_pay_notes(), []);
         assert!(!session.take_save_due(), "paying alone makes none");
 
@@ -1294,6 +1299,8 @@ mod tests {
     fn kill_by_a_deadly_stellar(session: &mut Session, index: usize) -> crate::traffic::npc::NpcId {
         let id = session.space.escorts.fleet[index].expect("placed");
         let at = session.space.npc(id).expect("there").state.position;
+        let sites = session.chart.sites.clone();
+        let listed = session.chart.listed.clone();
         session.chart.sites = vec![LandingSite {
             flags2: crate::deadly_stellar::DEADLY_STELLAR,
             frame_size: Some((2, 2)),
@@ -1302,6 +1309,9 @@ mod tests {
         session.chart.listed = session.chart.sites.clone();
         session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
         assert!(session.space.npc(id).is_none(), "killed");
+        // Gone again, so the passes after strike no other escort.
+        session.chart.sites = sites;
+        session.chart.listed = listed;
         id
     }
 
@@ -1503,7 +1513,7 @@ mod tests {
         let mut session = payer(10, unpaid.clone(), 1, RuleSource::Engine);
         jump(&mut session, &paying(), 131).expect("arrives");
         assert_eq!(session.pilot().cash(), 10);
-        assert_eq!(session.pilot().escorts(), unpaid);
+        assert_eq!(ships(&session), kinds(&unpaid));
         assert_eq!(session.take_pay_notes(), []);
         assert!(!session.take_save_due());
     }

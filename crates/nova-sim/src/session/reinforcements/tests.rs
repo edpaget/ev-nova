@@ -663,17 +663,30 @@ fn leaving_the_system_freezes_its_timer_and_returning_resumes_it() {
     session.call_for_reinforcements(warship, false, None);
     heard(&mut session, &catalog, 5);
     assert_eq!(timer(&session), i32::from(TIME) - 5);
-    jump(&mut session, &catalog, 131);
+    let left = into_jump(&mut session, &catalog);
+    assert!(left > 0, "still counting as the jump began");
+    session.arrive(&catalog, &mut NeverFires).expect("arrives");
     heard(&mut session, &catalog, 50);
     assert_eq!(timer(&session), 0, "no fleet called here");
     assert_eq!(
         session.space.reinforcements.timers.get(&SystemId(130)),
-        Some(&(i32::from(TIME) - 5)),
+        Some(&left),
         "frozen"
     );
     jump(&mut session, &catalog, 130);
     ticked(&mut session, &catalog);
-    assert_eq!(timer(&session), i32::from(TIME) - 6, "resumed");
+    assert_eq!(timer(&session), left - 1, "resumed");
+}
+
+/// Plots a course to 131 from past the jump distance, so no flight out
+/// counts the clock down, and works passes until the jump begins: the
+/// clock here as it began.
+fn into_jump(session: &mut Session, catalog: &FakePilotCatalog) -> i32 {
+    session.plot_course(SystemId(131)).expect("a route");
+    session.ship.player.position =
+        crate::geometry::Vec2::new(0.0, -crate::hyperspace::MIN_JUMP_DISTANCE);
+    crate::testkit::begin_jump_now(session, catalog).expect("jumps");
+    timer(session)
 }
 
 #[test]
@@ -682,12 +695,11 @@ fn the_clock_counts_down_through_a_jumps_frames_too() {
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
     session.call_for_reinforcements(warship, false, None);
-    session.plot_course(SystemId(131)).expect("a route");
-    crate::testkit::fly_out(&mut session);
-    crate::testkit::begin_jump_now(&mut session).expect("jumps");
+    let left = into_jump(&mut session, &catalog);
     assert!(session.jumping().is_some());
+    assert!(left > 1, "still counting as the jump began");
     ticked(&mut session, &catalog);
-    assert_eq!(timer(&session), i32::from(TIME) - 1);
+    assert_eq!(timer(&session), left - 1);
 }
 
 #[test]

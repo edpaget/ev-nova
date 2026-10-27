@@ -179,7 +179,7 @@ mod tests {
         session
             .plot_course(crate::catalog::SystemId(131))
             .expect("a route");
-        crate::testkit::fly_out(&mut session);
+        crate::testkit::fly_out(&mut session, &catalog);
         let _ = (session.take_messages(), session.take_sounds());
         session
     }

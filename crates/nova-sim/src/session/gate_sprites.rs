@@ -495,8 +495,8 @@ mod tests {
         session
             .plot_course(crate::catalog::SystemId(131))
             .expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         let before = session.gate_frame(StellarId(300));
         tick(&mut session, &catalog);
         assert!(session.jumping().is_some());

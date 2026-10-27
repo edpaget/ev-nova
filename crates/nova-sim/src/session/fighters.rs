@@ -3179,7 +3179,9 @@ pub(super) mod tests {
         }
     }
 
-    /// A Viper and a Dart out, by `recall`, the Viper's shield at 10.
+    /// A Viper and a Dart out, by `recall`, the Viper's shield at 10, the
+    /// Dart 5000 off, too far to turn back and dock before a jump begins
+    /// (see the `wait_for_me` module).
     fn both_out(catalog: &FakePilotCatalog, recall: RuleSource) -> Session {
         let mut session = fleet(catalog, 0, vec![out(), dart_out()])
             .with_rules(kept_orders().with_override(RuleKey::FighterRecall, recall));
@@ -3191,6 +3193,8 @@ pub(super) mod tests {
             .reserves
             .shield
             .now = 10.0;
+        let dart = session.space.escorts.fleet[1].expect("placed");
+        session.space.npc_mut(dart).expect("out").state.position = Vec2::new(-5000.0, 0.0);
         session.tick_combat(Rules::default(), &mut NeverFires);
         session.take_save_due();
         session
@@ -3238,10 +3242,32 @@ pub(super) mod tests {
         assert!(session.take_save_due());
     }
 
-    /// The ships of the player's escorts after a jump to 131.
-    fn jumped_with(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<ShipId> {
+    /// Plots a course to 131, flies out and into the jump, runs `then` on
+    /// the session as the jump ends, after the passes on the way, and
+    /// arrives.
+    fn jump_to_131_then(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        then: impl FnOnce(&mut Session),
+    ) -> Option<crate::catalog::SystemId> {
+        session
+            .plot_course(crate::catalog::SystemId(131))
+            .expect("a route");
+        crate::testkit::fly_out(session, catalog);
+        crate::testkit::begin_jump_now(session, catalog).expect("jumps");
+        then(session);
+        session.arrive(catalog, &mut NeverFires)
+    }
+
+    /// The ships of the player's escorts after a jump to 131, `then` run
+    /// as the jump ends ([`jump_to_131_then`]).
+    fn jumped_with(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        then: impl FnOnce(&mut Session),
+    ) -> Vec<ShipId> {
         assert_eq!(
-            crate::testkit::jump(session, catalog, 131),
+            jump_to_131_then(session, catalog, then),
             Some(crate::catalog::SystemId(131))
         );
         session
@@ -3258,24 +3284,30 @@ pub(super) mod tests {
         let mut session = both_out(&catalog, RuleSource::Engine);
         let viper = session.space.escorts.fleet[0].expect("placed");
         session.space.npc_mut(viper).expect("out").reserves.fuel.now = 0.0;
-        assert_eq!(jumped_with(&mut session, &catalog), [VIPER]);
+        assert_eq!(jumped_with(&mut session, &catalog, |_| {}), [VIPER]);
     }
 
     #[test]
     fn by_the_engine_a_fighter_another_ship_tractors_is_abandoned_and_one_holding_itself_follows() {
         let catalog = two_bays();
         let mut session = both_out(&catalog, RuleSource::Engine);
+        // Locked as the jump ends: the passes on the way let go of a lock
+        // no ship holds.
         let viper = session.space.escorts.fleet[0].expect("placed");
-        session.space.npc_mut(viper).expect("out").tractor = Some(
-            crate::combat::impact::TractorLock::by(ShipRef::Npc(NpcId(99))),
-        );
-        assert_eq!(jumped_with(&mut session, &catalog), []);
+        let held = |session: &mut Session| {
+            session.space.npc_mut(viper).expect("out").tractor = Some(
+                crate::combat::impact::TractorLock::by(ShipRef::Npc(NpcId(99))),
+            );
+        };
+        assert_eq!(jumped_with(&mut session, &catalog, held), []);
         assert_eq!(session.take_fighter_notes(), [FighterNote::Abandoned(2)]);
         let mut session = both_out(&catalog, RuleSource::Engine);
         let viper = session.space.escorts.fleet[0].expect("placed");
-        session.space.npc_mut(viper).expect("out").tractor =
-            Some(crate::combat::impact::TractorLock::by(ShipRef::Npc(viper)));
-        assert_eq!(jumped_with(&mut session, &catalog), [VIPER]);
+        let holding = |session: &mut Session| {
+            session.space.npc_mut(viper).expect("out").tractor =
+                Some(crate::combat::impact::TractorLock::by(ShipRef::Npc(viper)));
+        };
+        assert_eq!(jumped_with(&mut session, &catalog, holding), [VIPER]);
     }
 
     #[test]
@@ -3287,7 +3319,7 @@ pub(super) mod tests {
             session.space.traffic.remove(id);
         }
         assert_eq!(
-            jumped_with(&mut session, &catalog),
+            jumped_with(&mut session, &catalog, |_| {}),
             [VIPER],
             "the Viper's type holds a jump's fuel, the Dart's none"
         );
@@ -3303,7 +3335,7 @@ pub(super) mod tests {
             .with_override(RuleKey::NpcJumpFuel, RuleSource::Bible);
         let viper = session.space.escorts.fleet[0].expect("placed");
         session.space.npc_mut(viper).expect("out").reserves.fuel.now = 99.0;
-        assert_eq!(jumped_with(&mut session, &catalog), []);
+        assert_eq!(jumped_with(&mut session, &catalog, |_| {}), []);
     }
 
     /// [`two_bays`] with `STR#` 1000 "one", "two", and system 131's
@@ -3335,8 +3367,12 @@ pub(super) mod tests {
             .setup
             .rules
             .with_override(RuleKey::MissingBuoyString, buoy);
-        session.take_messages();
-        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        // The Dart's "wait for me" on the way is the `wait_for_me`
+        // module's.
+        jump_to_131_then(&mut session, &catalog, |session| {
+            session.take_messages();
+        })
+        .expect("arrives");
         (
             session.take_fighter_notes(),
             session.take_messages(),

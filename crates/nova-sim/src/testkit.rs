@@ -16,8 +16,13 @@ pub(crate) use nova_sim_catalog::fixture::{
     outfit, person, planet, rank, ship, star, starting, weapon,
 };
 
-use crate::catalog::{ShipId, StellarId, StellarLife, StellarMark, SystemId, SystemVisibility};
+use crate::ai::{Behaviour, Goal, Surroundings};
+use crate::catalog::{
+    PilotCatalog, ShipId, StellarId, StellarLife, StellarMark, SystemId, SystemVisibility,
+    TrafficCatalog,
+};
 use crate::chance::{Chance, NeverFires};
+use crate::combat::{Rules, ShipRef};
 use crate::control::Test;
 use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
@@ -26,7 +31,7 @@ use crate::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE};
 use crate::landing::{LandOutcome, LandingRefusal};
 use crate::session::LandPress;
 use crate::session::Session;
-use crate::traffic::npc::NpcId;
+use crate::traffic::npc::{Npc, NpcId};
 
 /// A bar, stellar 128, of tech level 7 (above 5, so no low-tech
 /// discount), at the centre, so a ship taking off flies out as one
@@ -157,11 +162,77 @@ pub(crate) fn hideable(catalog: &mut FakePilotCatalog) {
     }
 }
 
+/// Every NPC keeps its goal and its target, firing nothing: the traffic
+/// of a pass whose test is about something else.
+#[derive(Debug)]
+pub(crate) struct Passive;
+
+impl Behaviour for Passive {
+    fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+        npc.goal
+    }
+
+    fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+        npc.target
+    }
+}
+
+/// One advance pass under `controls` ([`Session::game_work`]), the traffic
+/// drawn from `catalog` keeping its goals ([`Passive`]), the fight by the
+/// default rules, no chance firing. Asserts no rescue ended it.
+pub(crate) fn work(
+    session: &mut Session,
+    catalog: &(impl PilotCatalog + TrafficCatalog),
+    controls: Controls,
+) {
+    work_with(
+        session,
+        catalog,
+        controls,
+        &Passive,
+        Rules::default(),
+        &mut NeverFires,
+    );
+}
+
+/// One advance pass under `controls` ([`Session::game_work`]), the traffic
+/// drawn from `catalog` deciding as `behaviour` says, the fight by
+/// `rules`, drawing on `chance`. Asserts no rescue ended it.
+pub(crate) fn work_with(
+    session: &mut Session,
+    catalog: &(impl PilotCatalog + TrafficCatalog),
+    controls: Controls,
+    behaviour: &(impl Behaviour + ?Sized),
+    rules: Rules<'_>,
+    chance: &mut (impl Chance + ?Sized),
+) {
+    let rescued = session.game_work(controls, catalog, behaviour, rules, chance);
+    assert!(!rescued, "no rescue ends the pass");
+}
+
+/// One advance pass of the way to a jump under `controls`, the traffic
+/// drawn from `catalog` deciding as Nova's does ([`NovaAi`]), so the
+/// ships the player leads follow it, the fight by the default rules, no
+/// chance firing.
+///
+/// [`NovaAi`]: crate::ai::NovaAi
+fn fly(session: &mut Session, catalog: &(impl PilotCatalog + TrafficCatalog), controls: Controls) {
+    work_with(
+        session,
+        catalog,
+        controls,
+        &crate::ai::NovaAi::default(),
+        Rules::default(),
+        &mut NeverFires,
+    );
+}
+
 /// Flies the ship out from the centre until it is at least
-/// [`MIN_JUMP_DISTANCE`] away: it first turns to face away from the
-/// centre (Down faces against its motion), then thrusts once within a
-/// turn of it.
-pub(crate) fn fly_out(session: &mut Session) {
+/// [`MIN_JUMP_DISTANCE`] away, a pass at a time ([`fly`], the traffic
+/// drawn from `catalog`): it first turns to face away from the centre
+/// (Down faces against its motion), then thrusts once within a turn of
+/// it.
+pub(crate) fn fly_out(session: &mut Session, catalog: &(impl PilotCatalog + TrafficCatalog)) {
     const THRUST: Controls = Controls {
         thrust: true,
         turn: Turn::None,
@@ -196,7 +267,7 @@ pub(crate) fn fly_out(session: &mut Session) {
                 ..Controls::default()
             }
         };
-        session.tick(controls);
+        fly(session, catalog, controls);
     }
     panic!("never got out: {:?}", session.player());
 }
@@ -255,20 +326,24 @@ pub(crate) fn jump_with(
     if session.course().last() != Some(&SystemId(to)) {
         session.plot_course(SystemId(to)).expect("a route");
     }
-    fly_out(session);
-    begin_jump_now(session).expect("jumps");
+    fly_out(session, catalog);
+    begin_jump_now(session, catalog).expect("jumps");
     session.arrive(catalog, chance)
 }
 
-/// Presses J, and if the jump is accepted, ticks with no keys held through
-/// the pre-jump stage until the jump has begun. Gives what J gave.
-pub(crate) fn begin_jump_now(session: &mut Session) -> Result<SystemId, JumpRefusal> {
+/// Presses J, and if the jump is accepted, works passes with no keys held
+/// through the pre-jump stage until the jump has begun ([`fly`], the
+/// traffic drawn from `catalog`). Gives what J gave.
+pub(crate) fn begin_jump_now(
+    session: &mut Session,
+    catalog: &(impl PilotCatalog + TrafficCatalog),
+) -> Result<SystemId, JumpRefusal> {
     let next = session.begin_jump()?;
     for _ in 0..1000 {
         if session.jumping().is_some() {
             return Ok(next);
         }
-        session.tick(Controls::default());
+        fly(session, catalog, Controls::default());
     }
     panic!("the jump never began: {:?}", session.player());
 }

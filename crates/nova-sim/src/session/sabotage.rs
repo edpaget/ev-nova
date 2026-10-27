@@ -197,7 +197,7 @@ mod tests {
     use crate::sabotage::FUSE;
     use crate::sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL};
     use crate::session::tests::{armed, facing_an_npc};
-    use crate::testkit::{Draws, FakePilotCatalog, fly_out, land_now, outfit};
+    use crate::testkit::{Draws, FakePilotCatalog, land_now, outfit};
 
     /// A kill outfit and a bomb outfit.
     const KILL: i16 = 261;
@@ -415,12 +415,19 @@ mod tests {
         assert!(!sounds.contains(&SimSound::Klaxon), "{sounds:?}");
     }
 
+    /// Puts the player past the jump distance with no pass flown, as a
+    /// pass would set the kill off before the jump.
+    fn out_past_the_jump_distance(session: &mut Session) {
+        session.ship.player.position =
+            crate::geometry::Vec2::new(0.0, -crate::hyperspace::MIN_JUMP_DISTANCE);
+    }
+
     #[test]
     fn a_kill_outfit_cancels_a_pre_jump() {
         let catalog = sabotaged();
         let mut session = lit(&catalog, &[(KILL, 1)]);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        out_past_the_jump_distance(&mut session);
         session.begin_jump().expect("jumps");
         assert!(matches!(
             session.mode.jump(),
@@ -437,7 +444,7 @@ mod tests {
         let catalog = sabotaged();
         let mut session = lit(&catalog, &[(KILL, 1)]);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        out_past_the_jump_distance(&mut session);
         session.ship.player.velocity = crate::geometry::Vec2::ZERO;
         session.ship.player.heading = 90.0;
         session.begin_jump().expect("jumps");

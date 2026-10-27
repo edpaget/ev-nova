@@ -133,8 +133,8 @@ mod tests {
     fn jumping(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
         let mut session = Session::start(catalog).expect("starts").with_rules(rules);
         session.plot_course(SystemId(132)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session
     }
 
@@ -214,7 +214,7 @@ mod tests {
     fn a_multi_jump_arrives_on_the_first_hops_side() {
         let catalog = chained(catalog(), 2);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(132))
@@ -243,7 +243,7 @@ mod tests {
         }
         let catalog = chained(catalog(), 2);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default()).with_rules(at_rest());
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(
             session.player().position,

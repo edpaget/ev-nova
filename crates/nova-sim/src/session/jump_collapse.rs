@@ -209,8 +209,9 @@ mod tests {
     /// A session flown out and braking for its jump to 131, with a warp
     /// sound of `duration` Mac ticks.
     fn braking(duration: u32) -> Session {
-        let mut session = bound_for_131(&catalog(), Vec2::ZERO, Vec2::ZERO, 0.0);
-        fly_out(&mut session);
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, Vec2::ZERO, Vec2::ZERO, 0.0);
+        fly_out(&mut session, &catalog);
         session.begin_jump().expect("jumps");
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         assert_eq!(session.warp_clock(), None, "braking");

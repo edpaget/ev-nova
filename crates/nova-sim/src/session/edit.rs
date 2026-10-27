@@ -303,7 +303,7 @@ mod tests {
     fn the_fuel_set_decides_whether_the_ship_can_jump() {
         let mut session = session();
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog());
         session.set_reserve(Reserve::Fuel, 0.0);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoFuel { fuel: 0.0 }));
         session.set_reserve(Reserve::Fuel, JUMP_FUEL);
@@ -462,15 +462,15 @@ mod tests {
         );
         let mut preparing = session.clone();
         preparing.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut preparing);
+        fly_out(&mut preparing, &catalog);
         preparing.ship.player.velocity = Vec2::new(5.0, 0.0);
         preparing.begin_jump().expect("accepted");
         assert!(preparing.preparing_jump().is_some());
         assert_refused(preparing, &catalog, (131, 140), RelocateRefusal::InFlight);
         let mut jumping = session;
         jumping.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut jumping);
-        begin_jump_now(&mut jumping).expect("jumps");
+        fly_out(&mut jumping, &catalog);
+        begin_jump_now(&mut jumping, &catalog).expect("jumps");
         assert_refused(jumping, &catalog, (131, 140), RelocateRefusal::InFlight);
     }
 
@@ -1077,15 +1077,15 @@ mod tests {
             Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies");
         let mut preparing = session.clone();
         preparing.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut preparing);
+        fly_out(&mut preparing, &catalog);
         preparing.ship.player.velocity = Vec2::new(5.0, 0.0);
         preparing.begin_jump().expect("accepted");
         assert!(preparing.preparing_jump().is_some());
         assert_landing_refused(preparing, &catalog, (131, 140), RelocateRefusal::InFlight);
         let mut jumping = session;
         jumping.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut jumping);
-        begin_jump_now(&mut jumping).expect("jumps");
+        fly_out(&mut jumping, &catalog);
+        begin_jump_now(&mut jumping, &catalog).expect("jumps");
         assert_landing_refused(jumping, &catalog, (131, 140), RelocateRefusal::InFlight);
     }
 

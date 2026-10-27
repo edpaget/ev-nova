@@ -1067,7 +1067,7 @@ mod tests {
         let catalog = moving();
         let mut session = flying(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         session.ship.player.velocity = Vec2::new(0.0, 5.0);
         session.begin_jump().expect("accepted");
         assert!(session.preparing_jump().is_some());
@@ -1227,11 +1227,11 @@ mod tests {
         let mut session = flying(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
         moved(&mut session, &catalog, "M133");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
         session.plot_course(SystemId(131)).expect("a route by 130");
         assert_eq!(session.course(), [SystemId(130), SystemId(131)]);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(130)));
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(130)));
     }
 
     #[test]
@@ -1656,8 +1656,8 @@ mod tests {
         let catalog = moving();
         let mut session = flying(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         run(&mut session, "P300");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         session.take_sounds();

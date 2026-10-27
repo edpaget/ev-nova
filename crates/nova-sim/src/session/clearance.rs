@@ -605,8 +605,8 @@ mod tests {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        crate::testkit::fly_out(&mut session);
-        crate::testkit::begin_jump_now(&mut session).expect("jumps");
+        crate::testkit::fly_out(&mut session, &catalog);
+        crate::testkit::begin_jump_now(&mut session, &catalog).expect("jumps");
         session.port.dock = request(140, CLEARED);
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),

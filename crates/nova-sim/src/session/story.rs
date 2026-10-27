@@ -1579,7 +1579,7 @@ mod tests {
         {
             let catalog = chained(testkit::catalog(), mod_val);
             let mut session = bound_for_134(&catalog, rule);
-            testkit::begin_jump_now(&mut session).expect("jumps");
+            testkit::begin_jump_now(&mut session, &catalog).expect("jumps");
             let (session, seen) = watching_explored(quiet(session), &[131, 132]);
             let mut session = watching_entered(session, 132);
             let left = session.date();
@@ -1603,7 +1603,7 @@ mod tests {
         use crate::session::tests::{bound_for_134, chained};
         let catalog = chained(testkit::catalog(), 10);
         let mut session = bound_for_134(&catalog, MultiJumpRule::Engine);
-        testkit::begin_jump_now(&mut session).expect("jumps");
+        testkit::begin_jump_now(&mut session, &catalog).expect("jumps");
         session.plot_course(SystemId(133)).expect("a route");
         let (session, seen) = watching_explored(quiet(session), &[131, 133]);
         let mut session = watching_entered(session, 131);

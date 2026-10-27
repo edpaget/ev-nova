@@ -897,8 +897,13 @@ mod tests {
         land_now(&mut session).expect("lands");
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.ship.ship_display.frames.lights, lights, "a landing");
+        // The passes flying out step the lights on; the arrival keeps them.
+        session.plot_course(SystemId(131)).expect("a route");
+        crate::testkit::fly_out(&mut session, &catalog);
+        crate::testkit::begin_jump_now(&mut session, &catalog).expect("jumps");
+        let lights = session.ship.ship_display.frames.lights;
         assert_eq!(
-            crate::testkit::jump(&mut session, &catalog, 131),
+            session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
         );
         assert_eq!(session.ship.ship_display.frames.lights, lights, "a jump");

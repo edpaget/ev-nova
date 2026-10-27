@@ -632,8 +632,8 @@ mod tests {
         let catalog = rocky(catalog());
         let mut session = flying(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         grown(&mut session, 3);
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
@@ -746,8 +746,8 @@ mod tests {
         let mut session = flying(catalog).with_rules(rules);
         session.settle_asteroid_field(&mut NeverFires);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.space.asteroids.clear();
         grown(&mut session, 4);
         assert_eq!(kinds(&session), [0; 4]);
@@ -1506,11 +1506,14 @@ mod tests {
         let catalog = rocky(catalog());
         let mut session = flying(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert!(session.jumping().is_some());
+        // The passes flying out filled the field; the lead-in's spawns
+        // count from none.
+        session.space.asteroids.clear();
         for count in 1..=3 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            crate::testkit::work(&mut session, &catalog, Controls::default());
             assert_eq!(session.asteroids().count(), count);
         }
     }

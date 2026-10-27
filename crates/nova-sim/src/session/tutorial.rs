@@ -246,9 +246,9 @@ mod tests {
         let catalog = catalog();
         let mut session = new_pilot(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         assert!(session.tutorial().is_newbie(), "until the jump begins");
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(session.tutorial(), Tutorial::SEASONED);
         assert!(!session.jump_refusal_told(&JumpRefusal::NoDestination));
     }
@@ -258,8 +258,8 @@ mod tests {
         let catalog = catalog();
         let mut session = seasoned(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.tutorial = Tutorial::NEW_PILOT;
         session.arrive(&catalog, &mut NeverFires);
         assert_eq!(session.tutorial(), Tutorial::SEASONED);

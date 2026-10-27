@@ -1126,7 +1126,7 @@ mod tests {
         assert_ne!(session.nav_mode(), hyperspace(131), "no course hop cued");
         let mut session =
             Session::load(&catalog, coursed_pilot(&catalog), &Rulebook::default()).expect("flies");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
     }
 
@@ -1144,7 +1144,7 @@ mod tests {
         let mut pressed = Session::load(&catalog, coursed_pilot(&catalog), &rules).expect("flies");
         pressed.hyperspace_mode();
         assert_eq!(pressed.nav_mode(), hyperspace(131), "the course hop cued");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
     }
 
@@ -1152,7 +1152,8 @@ mod tests {
 
     #[test]
     fn nav_off_with_a_course_turns_the_nav_off_keeps_the_course_and_refuses_the_jump() {
-        let mut session = Session::start(&hub()).expect("starts");
+        let catalog = hub();
+        let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         assert_eq!(session.nav_mode(), hyperspace(131));
         let mut session = quiet(session);
@@ -1160,7 +1161,7 @@ mod tests {
         assert_eq!(session.nav_mode(), NavMode::Off);
         assert_eq!(session.course(), ids(&[131, 132]), "the course kept");
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
     }
@@ -1177,9 +1178,10 @@ mod tests {
 
     #[test]
     fn nav_off_and_hyperspace_mode_are_refused_during_a_jump() {
-        let mut session = Session::start(&hub()).expect("starts");
+        let catalog = hub();
+        let mut session = Session::start(&catalog).expect("starts");
         session.select_next_system();
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         session.ship.player.heading = 90.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(134)));
         let mut session = quiet(session);
@@ -1189,7 +1191,7 @@ mod tests {
             assert_eq!(session.nav_mode(), hyperspace(134), "{stage}");
             assert_eq!(session.take_sounds(), [], "{stage}");
             if session.jumping().is_none() {
-                begin_jump_now(&mut session).expect("jumps");
+                begin_jump_now(&mut session, &catalog).expect("jumps");
                 session.take_sounds();
             }
         }
@@ -1199,25 +1201,27 @@ mod tests {
 
     #[test]
     fn hyperspace_mode_with_no_course_selects_no_destination_and_the_jump_is_refused() {
-        let mut session = quiet(Session::start(&three_stellars()).expect("starts"));
+        let catalog = three_stellars();
+        let mut session = quiet(Session::start(&catalog).expect("starts"));
         session.select_stellar(StellarPick::Slot(0));
         session.take_sounds();
         assert!(session.hyperspace_mode());
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
     }
 
     #[test]
     fn hyperspace_mode_cues_an_adjacent_first_hop_and_the_jump_goes_there() {
-        let mut session = Session::start(&catalog()).expect("starts");
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         session.nav_off();
         assert!(session.hyperspace_mode());
         assert_eq!(session.nav_mode(), hyperspace(131));
-        fly_out(&mut session);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        fly_out(&mut session, &catalog);
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
     }
 
     #[test]
@@ -1277,10 +1281,11 @@ mod tests {
 
     #[test]
     fn the_block_is_refused_in_silence_during_a_jump() {
-        let mut session = Session::start(&catalog()).expect("starts");
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         let mut session = quiet(session);
         assert!(!session.nav_mode_keys(true, true));
         assert_eq!(session.take_sounds(), []);
@@ -1452,21 +1457,23 @@ mod tests {
 
     #[test]
     fn the_jump_goes_to_the_system_selected_rather_than_the_courses_first_hop() {
-        let mut session = Session::start(&hub()).expect("starts");
+        let catalog = hub();
+        let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         session.chart.nav = hyperspace(134);
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(134)));
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(134)));
     }
 
     #[test]
     fn a_selection_the_ship_cannot_jump_to_is_no_destination() {
-        let mut session = Session::start(&hub()).expect("starts");
+        let catalog = hub();
+        let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
         for mode in [hyperspace(132), hyperspace(136), stellar(128), NavMode::Off] {
             session.chart.nav = mode;
-            fly_out(&mut session);
+            fly_out(&mut session, &catalog);
             assert_eq!(
                 session.begin_jump(),
                 Err(JumpRefusal::NoDestination),
@@ -1482,16 +1489,16 @@ mod tests {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(session.course(), ids(&[132]));
         assert_eq!(session.nav_mode(), hyperspace(132), "cued");
 
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(session.course(), []);
         assert_eq!(session.nav_mode(), NavMode::Off, "the course is done");
@@ -1926,7 +1933,7 @@ mod tests {
             "no link drawn"
         );
         assert_eq!(session.take_sounds(), [], "silent");
-        fly_out(&mut session);
+        fly_out(&mut session, &hub());
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
         assert!(session.cycle_map_selection());
         assert_eq!(session.chart.nav, hyperspace(135), "after the slot noted");
@@ -2346,8 +2353,8 @@ mod tests {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         let mode = session.nav_mode();
         session.take_sounds();
         assert!(!session.select_on_floating_map(None));

@@ -126,14 +126,15 @@ mod tests {
 
     #[test]
     fn a_fill_writes_whether_a_jump_is_under_way_and_the_ships_readiness() {
-        let mut session = Session::start(&catalog()).expect("starts");
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
         let frame = filled(&session);
         assert_eq!(
             (frame.jump_under_way, frame.jump_readiness),
             (false, JumpReadiness::Blocked)
         );
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         let mut frame = FlightFrame::default();
         session.fill_frame(&mut frame);
         assert_eq!(
@@ -150,10 +151,11 @@ mod tests {
 
     #[test]
     fn a_fill_counts_the_jump_itself_under_way() {
-        let mut session = Session::start(&catalog()).expect("starts");
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert!(session.jumping().is_some());
         let mut frame = FlightFrame::default();
         session.fill_frame(&mut frame);

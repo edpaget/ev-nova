@@ -471,8 +471,8 @@ mod tests {
         let catalog = boxed();
         let mut session = flying(&catalog, 5);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.jettison_cargo(true, &mut NeverFires);
         assert_eq!(session.cargo_boxes().len(), 1, "dropped in hyperspace");
         assert_eq!(

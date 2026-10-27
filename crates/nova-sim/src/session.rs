@@ -8293,7 +8293,8 @@ pub(super) mod tests {
 
     #[test]
     fn a_jump_is_refused_without_a_destination_too_close_or_without_fuel() {
-        let mut session = Session::start(&catalog()).expect("starts");
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
         session.plot_course(SystemId(131)).expect("a route");
         assert_eq!(
@@ -8304,11 +8305,11 @@ pub(super) mod tests {
 
         let empty = FakePilotCatalog {
             ships: vec![(ShipId(128), Ok(ShipFields { fuel: 99, ..FAST }))],
-            ..catalog()
+            ..crate::testkit::catalog()
         };
         let mut session = Session::start(&empty).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         assert_eq!(
             session.begin_jump(),
             Err(JumpRefusal::NoFuel { fuel: 99.0 })
@@ -8342,7 +8343,7 @@ pub(super) mod tests {
         };
         let mut session = Session::start(&empty).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &empty);
         assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
     }
 
@@ -8351,11 +8352,11 @@ pub(super) mod tests {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         session.begin_jump().expect("pre-jump");
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         assert_eq!(session.jump_readiness(), JumpReadiness::Underway);
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.ship.player.position = Vec2::ZERO;
         assert_eq!(session.jump_readiness(), JumpReadiness::Underway, "jumping");
         assert_eq!(
@@ -8474,16 +8475,16 @@ pub(super) mod tests {
             let mut session = at_the_centre(&catalog, rule);
             assert_eq!(session.jump_readiness(), JumpReadiness::Blocked, "130");
             session.plot_course(SystemId(132)).expect("a route");
-            fly_out(&mut session);
-            begin_jump_now(&mut session).expect("jumps");
+            fly_out(&mut session, &catalog);
+            begin_jump_now(&mut session, &catalog).expect("jumps");
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),
                 Some(SystemId(131))
             );
             session.ship.player.position = Vec2::ZERO;
             assert_eq!(session.jump_readiness(), empty, "131 under {rule:?}");
-            fly_out(&mut session);
-            begin_jump_now(&mut session).expect("jumps");
+            fly_out(&mut session, &catalog);
+            begin_jump_now(&mut session, &catalog).expect("jumps");
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),
                 Some(SystemId(132))
@@ -8499,8 +8500,8 @@ pub(super) mod tests {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        fly_out(&mut session, &catalog);
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
         assert_eq!(session.jumping(), Some(SystemId(131)));
         for _ in 0..10 {
             let speed = session.player().velocity.length();
@@ -8539,8 +8540,8 @@ pub(super) mod tests {
             .expect("starts")
             .with_rules(at_rest_arrival());
         session.plot_course(SystemId(132)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
@@ -8626,8 +8627,8 @@ pub(super) mod tests {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.stage_scene(NpcId(0));
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         session.assert_scene_left("a jump");
@@ -8640,12 +8641,12 @@ pub(super) mod tests {
         session.plot_course(SystemId(131)).expect("a route");
         assert_eq!(session.arrive(&catalog, &mut NeverFires), None);
         assert_eq!(session.take_messages(), [], "no jump, no message");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         session.begin_jump().expect("pre-jump");
         session.tick(Controls::default());
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         assert_eq!(session.take_messages(), [], "pre-jump");
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(session.take_messages(), [], "jumping");
     }
 
@@ -8745,8 +8746,9 @@ pub(super) mod tests {
     fn the_warp_clock_starts_on_the_turns_first_tick_and_not_while_braking() {
         // fly_out leaves the ship racing north: it brakes facing south,
         // then turns east.
-        let mut session = bound_for_131(&catalog(), Vec2::ZERO, Vec2::ZERO, 0.0);
-        fly_out(&mut session);
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, Vec2::ZERO, Vec2::ZERO, 0.0);
+        fly_out(&mut session, &catalog);
         session.take_sounds();
         session.begin_jump().expect("jumps");
         let mut braked = 0;
@@ -8776,9 +8778,7 @@ pub(super) mod tests {
         session.tick(Controls::default());
         assert_eq!(session.warp_clock(), Some(ticks + 1), "on through the warp");
         assert_eq!(warp_ups(&session.take_sounds()), 0, "not again at the warp");
-        session
-            .arrive(&catalog(), &mut NeverFires)
-            .expect("arrives");
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(session.warp_clock(), None, "it ends with the jump");
     }
 
@@ -8844,7 +8844,7 @@ pub(super) mod tests {
     /// turns to the bearing and jumps without ever slowing down.
     fn assert_fast_jumps(catalog: &FakePilotCatalog) {
         let mut session = bound_for_131(catalog, Vec2::ZERO, Vec2::ZERO, 0.0);
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         let racing = session.player().velocity.length();
         assert!(racing > 5.0, "{:?}", session.player());
         session.begin_jump().expect("jumps");
@@ -8889,8 +8889,9 @@ pub(super) mod tests {
     fn a_jump_begun_while_moving_slows_the_ship_before_it_begins() {
         // AC2: fly_out leaves the ship racing north, facing it. A ship with
         // neither a fast-jump outfit nor a fast-jumping hull slows first.
-        let mut session = bound_for_131(&catalog(), Vec2::ZERO, Vec2::ZERO, 0.0);
-        fly_out(&mut session);
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, Vec2::ZERO, Vec2::ZERO, 0.0);
+        fly_out(&mut session, &catalog);
         let racing = session.player().velocity.length();
         assert!(racing > 5.0, "{:?}", session.player());
         session.begin_jump().expect("jumps");
@@ -8940,8 +8941,9 @@ pub(super) mod tests {
 
     #[test]
     fn the_players_controls_are_ignored_during_the_pre_jump_stage() {
-        let mut session = bound_for_131(&catalog(), Vec2::ZERO, Vec2::ZERO, 0.0);
-        fly_out(&mut session);
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, Vec2::ZERO, Vec2::ZERO, 0.0);
+        fly_out(&mut session, &catalog);
         session.begin_jump().expect("jumps");
         let mut steered = session.clone();
         let fighting = Controls {
@@ -8959,8 +8961,9 @@ pub(super) mod tests {
 
     #[test]
     fn braking_sounds_its_thrust_and_glows_and_the_jump_puts_both_out() {
-        let mut session = bound_for_131(&catalog(), Vec2::ZERO, Vec2::ZERO, 0.0);
-        fly_out(&mut session);
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, Vec2::ZERO, Vec2::ZERO, 0.0);
+        fly_out(&mut session, &catalog);
         session.tick(Controls::default());
         session.take_sounds();
         session.begin_jump().expect("jumps");
@@ -9032,7 +9035,8 @@ pub(super) mod tests {
         // Just outside the zone, racing inward and facing along its motion:
         // it coasts a long way in while it turns to brake.
         let edge = Vec2::new(0.0, -ARRIVAL_DISTANCE);
-        let mut session = bound_for_131(&catalog(), edge, Vec2::new(0.0, 6.0), 180.0);
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, edge, Vec2::new(0.0, 6.0), 180.0);
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         for _ in 0..30 {
             session.tick(Controls::default());
@@ -9044,7 +9048,7 @@ pub(super) mod tests {
         let braking = session.clone();
         assert_eq!(session.begin_jump(), Ok(SystemId(131)), "J again");
         assert_eq!(session, braking, "no restart, no sound, not refused");
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(session.jumping(), Some(SystemId(131)), "still goes ahead");
     }
 
@@ -9067,7 +9071,7 @@ pub(super) mod tests {
         let turning = session.clone();
         assert_eq!(session.arrive(&catalog, &mut NeverFires), None);
         assert_eq!(session, turning);
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
@@ -9086,7 +9090,7 @@ pub(super) mod tests {
         assert_eq!(session.course(), [], "the course is gone");
         session.tick(Controls::default());
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(session.jumping(), Some(SystemId(131)));
         assert!(facing_131(session.player()), "the bearing to 131");
         assert_eq!(
@@ -9192,7 +9196,11 @@ pub(super) mod tests {
         assert_eq!(session.begin_jump(), Err(JumpRefusal::Landed));
         assert_eq!(session, docked, "nothing changes");
         session.take_off(&catalog, &mut NeverFires);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(132)), "once off");
+        assert_eq!(
+            begin_jump_now(&mut session, &catalog),
+            Ok(SystemId(132)),
+            "once off"
+        );
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(132))
@@ -9205,7 +9213,7 @@ pub(super) mod tests {
         let catalog = edge_lander();
         let mut session = landed_at_the_edge(&catalog);
         session.take_off(&catalog, &mut NeverFires);
-        begin_jump_now(&mut session).expect("jumps from over planet 140");
+        begin_jump_now(&mut session, &catalog).expect("jumps from over planet 140");
         let jumping = session.clone();
         assert_eq!(land_now(&mut session), Err(LandingRefusal::Jumping));
         assert_eq!(session, jumping, "nothing changes");
@@ -9242,7 +9250,7 @@ pub(super) mod tests {
         session.plot_course(SystemId(132)).expect("a route");
         jump(&mut session, &catalog, 132);
         session.take_off(&catalog, &mut NeverFires);
-        begin_jump_now(&mut session).expect("jumps from the edge");
+        begin_jump_now(&mut session, &catalog).expect("jumps from the edge");
         assert!(
             matches!(session.mode.jump(), Some(Jump::Hyperspace { .. })),
             "{:?}",
@@ -9331,7 +9339,7 @@ pub(super) mod tests {
         );
         session.take_off(&catalog, &mut NeverFires);
         session.take_save_due();
-        begin_jump_now(&mut session).expect("jumps from the edge");
+        begin_jump_now(&mut session, &catalog).expect("jumps from the edge");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         let pilot = session.pilot();
         assert_eq!(pilot.system(), SystemId(132));
@@ -9350,7 +9358,7 @@ pub(super) mod tests {
         session.pilot = session.pilot.clone().with_strict_play(true);
         session.take_off(&catalog, &mut NeverFires);
         session.take_save_due();
-        begin_jump_now(&mut session).expect("jumps from the edge");
+        begin_jump_now(&mut session, &catalog).expect("jumps from the edge");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(session.pilot().system(), SystemId(132));
         assert!(
@@ -9924,14 +9932,14 @@ pub(super) mod tests {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         for _ in 0..5 {
             session.tick(THRUST);
         }
         session.tick(Controls::default());
         assert!(!session.thrusting());
         assert!(session.engine_glow() > 0, "glowing as it coasts");
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(session.engine_glow(), 0, "jumping");
         session.tick(THRUST);
         assert_eq!(session.engine_glow(), 0, "jumping, nothing glows");
@@ -10006,7 +10014,8 @@ pub(super) mod tests {
 
     #[test]
     fn a_refused_landing_beeps_only_from_the_dock_request() {
-        let mut session = Session::start(&catalog()).expect("starts");
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
         for _ in 0..20 {
             session.tick(THRUST);
         }
@@ -10015,7 +10024,7 @@ pub(super) mod tests {
         assert_eq!(session.take_sounds(), [SimSound::Refused], "@0x676aa");
         let mut jumping = Session::start(&edge_lander()).expect("starts");
         jumping.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut jumping);
+        fly_out(&mut jumping, &catalog);
         jumping.begin_jump().expect("jumps");
         jumping.take_sounds();
         assert_eq!(jumping.land(), Err(LandingRefusal::Jumping));
@@ -10291,10 +10300,11 @@ pub(super) mod tests {
     #[test]
     fn a_jump_without_thrust_emits_only_jump_began() {
         // Turning at rest to the bearing, it never thrusts.
-        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
         session.tick(Controls::default());
         session.take_sounds();
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(session.take_sounds(), [jump_began(&session)]);
     }
 
@@ -11497,8 +11507,8 @@ pub(super) mod tests {
         let catalog = breeding();
         let mut session = taken_off_with(&[(FURBALLS, 1), (FRUIT, 15)]);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         let held = furballs_and_fruit(&session);
         session.space.frame = market::JUNK_STEP_FRAMES - 1;
         assert_eq!(steps_in(&mut session, 2), [2]);
@@ -11853,7 +11863,7 @@ pub(super) mod tests {
             .with_rules(at_rest_arrival());
         session.plot_course(SystemId(131)).expect("a route");
         session.ship.player.position = Vec2::new(0.0, 600.0);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        assert_eq!(begin_jump_now(&mut session, &booster), Ok(SystemId(131)));
         assert_eq!(
             session.arrive(&booster, &mut NeverFires),
             Some(SystemId(131))
@@ -11897,7 +11907,7 @@ pub(super) mod tests {
             .with_rules(at_rest_arrival());
         session.plot_course(SystemId(132)).expect("a route");
         session.ship.player.position = Vec2::new(0.0, 1300.0);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        assert_eq!(begin_jump_now(&mut session, &raised), Ok(SystemId(131)));
         assert_eq!(
             session.arrive(&raised, &mut NeverFires),
             Some(SystemId(131))
@@ -11990,7 +12000,7 @@ pub(super) mod tests {
             .with_multi_jump(rule);
         session.plot_course(SystemId(134)).expect("a route");
         assert_eq!(session.course(), ids(&[131, 132, 134]));
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         session
     }
 
@@ -12007,7 +12017,7 @@ pub(super) mod tests {
         let catalog = chained(catalog(), 2);
         let mut session =
             bound_for_134(&catalog, MultiJumpRule::default()).with_rules(at_rest_arrival());
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
         assert_eq!(session.jumping(), Some(SystemId(131)), "the first hop");
         session.take_sounds();
         assert_eq!(
@@ -12045,7 +12055,7 @@ pub(super) mod tests {
     fn a_multi_jump_emits_one_arrived_message_for_the_final_system() {
         let catalog = chained(catalog(), 10);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.arrive(&catalog, &mut NeverFires);
         assert_eq!(
             session.take_messages(),
@@ -12057,7 +12067,7 @@ pub(super) mod tests {
     fn a_multi_jump_halts_the_warp_ups_once() {
         let catalog = chained(catalog(), 10);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.take_sounds();
         session.arrive(&catalog, &mut NeverFires);
         let halts = session
@@ -12072,7 +12082,7 @@ pub(super) mod tests {
     fn a_multi_jump_rolls_the_events_for_one_jumps_days() {
         let catalog = chained(surplus(), 2);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         let mut chance = Scripted::default();
         assert_eq!(session.arrive(&catalog, &mut chance), Some(SystemId(132)));
         assert_eq!(chance.asked, [35], "one roll for the one day");
@@ -12083,7 +12093,7 @@ pub(super) mod tests {
         // The stock Multi-Jumping Organ: 10.
         let catalog = chained(catalog(), 10);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(134))
@@ -12104,7 +12114,7 @@ pub(super) mod tests {
         let catalog = chained(catalog(), 10);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
         session.pilot.reserves.fuel.now = 100.0;
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(134))
@@ -12118,7 +12128,7 @@ pub(super) mod tests {
     fn a_multi_jump_modval_of_one_makes_a_single_hop() {
         let catalog = chained(catalog(), 1);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
@@ -12132,7 +12142,7 @@ pub(super) mod tests {
         for source in RuleSource::ALL {
             let mut session = bound_for_134(&catalog, MultiJumpRule::default())
                 .with_rules(Rulebook::default().with_override(RuleKey::RouteRewrite, source));
-            begin_jump_now(&mut session).expect("jumps");
+            begin_jump_now(&mut session, &catalog).expect("jumps");
             session.plot_course(SystemId(133)).expect("a route");
             assert_eq!(session.course(), ids(&[133]));
             assert_eq!(
@@ -12154,7 +12164,7 @@ pub(super) mod tests {
     fn per_hop_makes_one_plus_modval_hops_each_taking_fuel_and_days() {
         let catalog = chained(catalog(), 1);
         let mut session = bound_for_134(&catalog, MultiJumpRule::PerHop);
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(132))
@@ -12165,7 +12175,7 @@ pub(super) mod tests {
 
         let catalog = chained(surplus(), 1);
         let mut session = bound_for_134(&catalog, MultiJumpRule::PerHop);
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         let mut chance = Scripted::default();
         session.arrive(&catalog, &mut chance);
         assert_eq!(chance.asked, [35, 35], "one roll for each hop's day");
@@ -12176,7 +12186,7 @@ pub(super) mod tests {
         let catalog = chained(catalog(), 10);
         let mut session = bound_for_134(&catalog, MultiJumpRule::PerHop);
         session.pilot.reserves.fuel.now = 250.0;
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.take_sounds();
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
@@ -12197,7 +12207,7 @@ pub(super) mod tests {
         let catalog = chained(catalog(), 10);
         let mut session = bound_for_134(&catalog, MultiJumpRule::PerHop);
         session.pilot.reserves.fuel.now = 200.0;
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(132))
@@ -12209,7 +12219,7 @@ pub(super) mod tests {
     fn per_hop_stops_where_the_course_ends() {
         let catalog = chained(catalog(), 10);
         let mut session = bound_for_134(&catalog, MultiJumpRule::PerHop);
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(134))
@@ -16502,13 +16512,16 @@ pub(super) mod tests {
         session.tick_traffic(&catalog, &Peaceful, &mut Draws::of(&[0]));
         assert_eq!(session.npcs(), before, "landed");
         let mut session = Session::start(&catalog).expect("starts");
-        session.populate(&catalog, &mut NeverFires);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         while session.in_warp_lead_in() {
             session.tick(Controls::default());
         }
+        // The traffic the passes flying out brought in has landed by now;
+        // another comes in.
+        assert_eq!(session.npcs(), [], "landed");
+        session.populate(&catalog, &mut NeverFires);
         let before = session.npcs().to_vec();
         let mut chance = Draws::of(&[]);
         session.tick_traffic(&catalog, &Peaceful, &mut chance);
@@ -16783,7 +16796,10 @@ pub(super) mod tests {
         seeded.extend(std::iter::repeat_n(99, crate::mission::ROLLED));
         seeded.extend([1, 0, 3, 0, 2]);
         jump_with(&mut session, &catalog, 131, &mut Draws::of(&seeded));
-        assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+        // Led by the first NPC 131 brings in, numbered after those the
+        // passes flying out of 130 brought in there.
+        let lead = session.npcs()[0].id;
+        assert_eq!(fleet_of(&session), a_fleet_led_by(lead.0));
         session.populate(&catalog, &mut linked_fleet_draws(2));
         assert_eq!(fleet_of(&session), [], "linked to another government");
     }
@@ -18256,11 +18272,11 @@ pub(super) mod tests {
         assert_eq!(session.shots(), []);
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         session.hold_trigger(FIRE);
         session.tick_combat(Rules::default(), &mut chance);
         assert_eq!(session.shots().len(), 1);
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.take_combat_events();
         for _ in 0..3 {
             session.tick_combat(Rules::default(), &mut chance);
@@ -20245,7 +20261,7 @@ pub(super) mod tests {
         let mut session = landed_at_the_edge(&catalog);
         session.take_off(&catalog, &mut NeverFires);
         session.ship.ion = IONIZED;
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(132)));
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(132)));
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(132))
@@ -20718,7 +20734,7 @@ pub(super) mod tests {
         assert!(!session.take_save_due(), "nothing to save");
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         session.take_sounds();
         session.tick_combat(DISABLING, &mut NeverFires);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::Disabled));
@@ -22027,16 +22043,23 @@ pub(super) mod tests {
     fn the_target_keys_pick_during_a_jump_and_arrival_clears_the_target() {
         let mut catalog = trafficked(130, 2, 3);
         catalog.traffic.push((SystemId(131), catalog.traffic[0].1));
-        let mut session = two_npcs(&catalog);
-        session.select_target(TargetPick::Next);
+        let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
-        assert_eq!(target_id(&session), Some(NpcId(0)));
-        assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(1)));
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
+        // The traffic the passes flying out brought in has landed by now;
+        // two more come in, as `two_npcs` brings them.
+        assert_eq!(session.npcs(), [], "landed");
+        let draws = [6, 6, 0, 0, 850, 650, 0, 2, 6, 6, 0, 0, 700, 750, 0, 2];
+        session.populate(&catalog, &mut Draws::of(&draws));
+        let ids = npc_ids(&session);
+        assert_eq!(ids.len(), 2);
+        session.select_target(TargetPick::Next);
+        assert_eq!(target_id(&session), Some(ids[0]));
+        assert_eq!(session.select_target(TargetPick::Next), Some(ids[1]));
         session.tick_traffic(&catalog, &Idling, &mut NeverFires);
         session.tick_combat(Rules::default(), &mut NeverFires);
-        assert_eq!(target_id(&session), Some(NpcId(1)), "kept while jumping");
+        assert_eq!(target_id(&session), Some(ids[1]), "kept while jumping");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert!(!session.npcs().is_empty());
         assert_eq!(target_id(&session), None, "cleared on arrival");
@@ -22783,7 +22806,7 @@ pub(super) mod tests {
         let catalog = armed();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         session.hold_fire(true, false);
         session.begin_jump().expect("accepted");
         assert_eq!(session.preparing_jump(), Some(SystemId(131)), "braking");
@@ -22791,7 +22814,7 @@ pub(super) mod tests {
             session.tick_combat(Rules::default(), &mut NeverFires);
         }
         assert_eq!(session.shots(), [], "nothing fired while braking");
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
@@ -27016,8 +27039,8 @@ pub(super) mod tests {
         let catalog = three_stellars();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(
             session.nav_mode(),
             NavMode::Hyperspace(Some(SystemId(131))),
@@ -27139,9 +27162,10 @@ pub(super) mod tests {
 
     #[test]
     fn no_stellar_is_picked_or_cleared_during_a_jump() {
-        let mut session = Session::start(&hub()).expect("starts");
+        let catalog = hub();
+        let mut session = Session::start(&catalog).expect("starts");
         session.select_next_system();
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         session.ship.player.heading = 90.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(134)));
         for stage in ["pre-jump", "in hyperspace"] {
@@ -27160,7 +27184,7 @@ pub(super) mod tests {
                 "{stage}"
             );
             if session.jumping().is_none() {
-                begin_jump_now(&mut session).expect("jumps");
+                begin_jump_now(&mut session, &catalog).expect("jumps");
             }
         }
         assert_eq!(session.jumping(), Some(SystemId(134)));
@@ -27210,8 +27234,8 @@ pub(super) mod tests {
             assert_eq!(session.select_next_system(), Some(SystemId(expected)));
             assert_eq!(session.course(), ids(&[131, 132]), "after {expected}");
         }
-        fly_out(&mut session);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        fly_out(&mut session, &catalog);
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
@@ -27230,8 +27254,8 @@ pub(super) mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         assert_eq!(session.select_next_system(), Some(SystemId(135)));
-        fly_out(&mut session);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(135)));
+        fly_out(&mut session, &catalog);
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(135)));
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(135))
@@ -27277,8 +27301,8 @@ pub(super) mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(session.select_next_system(), Some(SystemId(134)));
         assert_eq!(session.select_next_system(), Some(SystemId(131)));
-        fly_out(&mut session);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        fly_out(&mut session, &catalog);
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
@@ -27289,16 +27313,17 @@ pub(super) mod tests {
 
     #[test]
     fn no_hyper_select_during_a_jump() {
-        let mut session = Session::start(&hub()).expect("starts");
+        let catalog = hub();
+        let mut session = Session::start(&catalog).expect("starts");
         session.select_next_system();
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         session.ship.player.heading = 90.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(134)));
         assert_eq!(session.preparing_jump(), Some(SystemId(134)));
         assert_eq!(session.select_next_system(), None, "pre-jump");
         assert_eq!(session.course(), []);
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(134))));
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(session.jumping(), Some(SystemId(134)));
         assert_eq!(session.select_next_system(), None, "in hyperspace");
         assert_eq!(session.course(), []);
@@ -28717,8 +28742,8 @@ pub(super) mod tests {
         hide(&mut session, &catalog, &[131]);
         assert_eq!(session.course(), ids(&[131, 132]), "kept as saved");
         assert_eq!(session.course_shown(), ids(&[134, 132]));
-        fly_out(&mut session);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(134)));
+        fly_out(&mut session, &catalog);
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(134)));
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(134))
@@ -28733,12 +28758,12 @@ pub(super) mod tests {
         session.plot_course(SystemId(132)).expect("a route");
         hide(&mut session, &catalog, &[131, 134]);
         assert_eq!(session.course_shown(), [], "cut at the first hop");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
         assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
         unhide(&mut session, &catalog, &[131]);
         assert_eq!(session.course_shown(), ids(&[131, 132]), "followed again");
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
     }
 
     /// [`alternates`] with two ships of düde 128 flying in 131, and none
@@ -29263,8 +29288,8 @@ pub(super) mod tests {
         let catalog = alternates();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        fly_out(&mut session, &catalog);
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
         hide(&mut session, &catalog, &[131]);
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
@@ -29284,8 +29309,8 @@ pub(super) mod tests {
                 .expect("starts")
                 .with_rules(Rulebook::default().with_override(RuleKey::ArrivalSystem, source));
             session.plot_course(SystemId(131)).expect("a route");
-            fly_out(&mut session);
-            begin_jump_now(&mut session).expect("jumps");
+            fly_out(&mut session, &catalog);
+            begin_jump_now(&mut session, &catalog).expect("jumps");
             hide(&mut session, &catalog, &[131]);
             let (mut session, seen) = watching_explored(session, &[131, 134]);
             session.arrive(&catalog, &mut NeverFires);
@@ -29321,7 +29346,7 @@ pub(super) mod tests {
         let catalog = chained_alternates(2);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
         hide(&mut session, &catalog, &[131]);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(135)));
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(135)));
         let (mut session, seen) = watching_explored(session, &[131, 132, 135]);
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
@@ -29339,7 +29364,7 @@ pub(super) mod tests {
             let mut session = bound_for_134(&catalog, MultiJumpRule::default())
                 .with_rules(Rulebook::default().with_override(RuleKey::RouteRewrite, source));
             hide(&mut session, &catalog, &[132]);
-            assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+            assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
             let (mut session, seen) = watching_explored(session, &[131, 132]);
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),

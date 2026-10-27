@@ -532,8 +532,8 @@ mod tests {
         let catalog = moving(Vec::new(), Vec::new());
         let mut session = flown(&catalog, Rulebook::default());
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        fly_out(&mut session, &catalog);
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
         run(&mut session, "N133");
         assert_eq!(session.arrive(&catalog, &mut NeverFires), None);
         assert_eq!(session.chart.pending_move, None);
