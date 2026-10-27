@@ -644,16 +644,49 @@ mod tests {
 
     // Knockback.
 
+    /// The phases a pass takes its hits in, alone: the collision passes
+    /// (@0x43e70-0x44015), `_HandleShot` (@0x44385), then the stellars'
+    /// and the beams' (@0x44509-0x4453d).
+    /// So a knock reads `_abOn` as a test sets it, where a pass's move
+    /// would set it from the key (see the module docs).
+    fn hit_phases(session: &mut Session) {
+        let pass = crate::combat::GamePass::Advance { double_time: false };
+        let rules = crate::combat::Rules::default();
+        let chance: &mut dyn crate::chance::Chance = &mut crate::chance::NeverFires;
+        session.collision_passes(pass, rules, chance);
+        let spots = session.space.asteroid_spots();
+        session.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.fly_shots_in(fighters, arena, &spots, chance);
+        });
+        session.beams_phase(pass, rules, chance);
+    }
+
+    /// Works `catalog`'s `session` a pass at a time until its NPC's fire
+    /// would land on the player, then lands it in [`hit_phases`], the
+    /// player as `ready` leaves it.
+    fn knocked_as(session: &mut Session, catalog: &FakePilotCatalog, ready: impl Fn(&mut Session)) {
+        for _ in 0..20 {
+            let mut trial = session.clone();
+            ready(&mut trial);
+            hit_phases(&mut trial);
+            if trial.reserves().shield.now < session.reserves().shield.now {
+                *session = trial;
+                return;
+            }
+            work(session, catalog, Controls::default());
+        }
+        panic!("never hit");
+    }
+
     #[test]
     fn a_hit_on_the_afterburning_player_keeps_it_past_its_top_speed() {
-        use super::super::tests::{armed, fight_until, knocker, knocking};
+        use super::super::tests::{armed, knocker, knocking};
         let catalog = armed();
         let hit = |burning: bool| {
             let mut session = knocking(&catalog, (None, 100.0), (Some(knocker()), 100.0));
-            session.ship.player.velocity = Vec2::new(20.0, 0.0);
-            session.ship.afterburner_on = burning;
-            fight_until(&mut session, |session| {
-                session.reserves().shield.now < 1000.0
+            knocked_as(&mut session, &catalog, |session| {
+                session.ship.player.velocity = Vec2::new(20.0, 0.0);
+                session.ship.afterburner_on = burning;
             });
             (session.top_speed(), session.ship.player.velocity)
         };
@@ -762,17 +795,16 @@ mod tests {
         gravity: bool,
         rules: Rulebook,
     ) -> (f32, Vec2) {
-        use super::super::tests::{armed, fight_until, knocking};
+        use super::super::tests::{armed, knocking};
         let catalog = armed();
         let mut session =
             knocking(&catalog, (None, 100.0), (Some(weapon), 100.0)).with_rules(rules);
         if gravity {
             gravity_listed(&mut session);
         }
-        session.ship.player.velocity = Vec2::new(20.0, 0.0);
-        session.ship.afterburner_on = burning;
-        fight_until(&mut session, |session| {
-            session.reserves().shield.now < 1000.0
+        knocked_as(&mut session, &catalog, |session| {
+            session.ship.player.velocity = Vec2::new(20.0, 0.0);
+            session.ship.afterburner_on = burning;
         });
         (session.top_speed(), session.ship.player.velocity)
     }
