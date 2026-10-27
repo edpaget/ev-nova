@@ -1,6 +1,6 @@
 # The dedicated vault this config reads. onepassword_item takes a vault UUID,
-# so the vault is looked up by name. This phase reads no item through the
-# provider; it only proves the provider's auth.
+# so the vault is looked up by name. signing.tf reads the two signing items
+# from it.
 data "onepassword_vault" "ci" {
   name = "ev-nova-ci"
 }

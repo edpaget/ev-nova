@@ -17,6 +17,25 @@ mock_provider "onepassword" {
   }
 }
 
+# signing.tf looks fields up by label and attachments by name, which a mock
+# provider can't satisfy, so the lookup modules' outputs are overridden with
+# every label and name. These runs don't check the values.
+override_module {
+  target = module.developer_id_item
+  outputs = {
+    fields = { password = "mock", identity = "mock" }
+    files  = { "nova-certs.p12" = "bW9jaw==" }
+  }
+}
+
+override_module {
+  target = module.api_key_item
+  outputs = {
+    fields = { "key id" = "MOCK", "issuer id" = "mock" }
+    files  = { "AuthKey_MOCK.p8" = "bW9jaw==" }
+  }
+}
+
 run "repository_keeps_its_identity_and_visibility" {
   command = plan
 
