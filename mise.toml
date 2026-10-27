@@ -89,6 +89,14 @@ run = "cargo run -p nova-bundle --locked --bin nova-installer --"
 description = "Any host: write the Linux desktop file, AppStream metainfo and hicolor icons as a share/ tree to install into ~/.local/share; pass an output dir after -- (default target/linux)"
 run = "cargo run -p nova-bundle --locked --bin nova-linux --"
 
+[tasks.appimage]
+description = "Linux x86_64 only, needs appimagetool (or NOVA_APPIMAGETOOL) and NOVA_APPIMAGE_RUNTIME naming a downloaded AppImage type2 runtime: build nova and pack it into ev-nova-x86_64-unknown-linux-gnu.AppImage; pass an output dir after -- (default target/appimage/out)"
+run = "cargo run -p nova-bundle --locked --bin nova-appimage --"
+
+[tasks.flatpak]
+description = "Linux x86_64 only, needs flatpak, flatpak-builder and the flathub remote added with --user: build the game from vendored sources on the freedesktop runtime into ev-nova-x86_64-unknown-linux-gnu.flatpak; pass an output dir after -- (default target/flatpak/out)"
+run = "cargo run -p nova-bundle --locked --bin nova-flatpak --"
+
 [tasks.mutants]
 description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g. -- --file <path>"
 run = "cargo mutants --workspace"

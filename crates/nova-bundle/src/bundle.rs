@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use crate::icon::ICON;
 use crate::info_plist::{EXECUTABLE, info_plist};
 use crate::layout::{DUMP, Layout, LayoutError, VOLUME};
+use crate::linux::appimage::links::{Problems, check_links};
 use crate::notary::{Notarization, notarize};
 use crate::ports::{Files, Invocation, Process, RunError};
 use crate::signing::{self, SecretBytes, Signing, add_to_search_list};
@@ -82,6 +83,10 @@ pub enum Step {
     AddToSearchList(PathBuf),
     /// Notarizes a file: see [`notarize`].
     Notarize(Notarization),
+    /// Fails unless the Linux binary needs no glibc above the floor and
+    /// links only the allowed libraries: see
+    /// [`check_links`](crate::linux::appimage::links::check_links).
+    CheckLinks(PathBuf),
 }
 
 /// Why bundling stopped.
@@ -118,6 +123,17 @@ pub enum BundleError {
         command: String,
         /// What it listed.
         found: String,
+    },
+    /// A Linux binary needs a glibc above the floor or links a library
+    /// outside the allowed list.
+    #[error(
+        "`{command}` shows a binary that won't run on every Linux the AppImage is for: {problems}"
+    )]
+    NotPortable {
+        /// The `objdump -p` command line.
+        command: String,
+        /// What it showed that the floor or the list refuses.
+        problems: Problems,
     },
     /// `notarytool` printed output the core can't read.
     #[error("`{command}` printed no {reason}")]
@@ -354,6 +370,7 @@ pub(crate) fn execute(
         Step::CheckArchs(binary) => check_archs(process, binary),
         Step::AddToSearchList(keychain) => add_to_search_list(process, keychain),
         Step::Notarize(notarization) => notarize(process, notarization),
+        Step::CheckLinks(binary) => check_links(process, binary),
     }
 }
 

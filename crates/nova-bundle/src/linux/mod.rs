@@ -20,12 +20,20 @@
 //! the tree out and writes it through the [`Files`](crate::ports::Files)
 //! port. Nothing here needs a Linux host: the `nova-linux` binary runs
 //! anywhere.
+//!
+//! [`appimage`] and [`flatpak`] pack the game with that tree into the
+//! nightly's two other Linux downloads. Their tools run on x86-64 Linux
+//! alone.
 
+pub mod appimage;
 pub mod desktop;
+pub mod flatpak;
 pub mod host;
 pub mod icons;
 pub mod metainfo;
 pub mod share;
+
+use std::path::{Path, PathBuf};
 
 use crate::spec::GAME_PACKAGE;
 
@@ -37,3 +45,76 @@ pub const EXECUTABLE: &str = GAME_PACKAGE;
 /// role-playing one. Not the Apple category in the spec, which is a
 /// different vocabulary.
 pub const CATEGORIES: &str = "Game;RolePlaying;";
+
+/// An output directory that is, holds or lies in one of a package's work
+/// directories: CI uploads everything in the output directory, and the
+/// work directories are removed or rebuilt on each run.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error(
+    "the output directory {} overlaps the work directory {}: choose another",
+    out.display(),
+    work.display()
+)]
+pub struct OutputOverlapsWork {
+    /// The work directory it overlaps.
+    pub work: PathBuf,
+    /// The output directory asked for.
+    pub out: PathBuf,
+}
+
+impl OutputOverlapsWork {
+    /// Fails on the first of `work` that `out` is, holds or lies in.
+    pub fn check(out: &Path, work: &[&Path]) -> Result<(), Self> {
+        match work
+            .iter()
+            .find(|work| work.starts_with(out) || out.starts_with(work))
+        {
+            Some(work) => Err(Self {
+                work: work.to_path_buf(),
+                out: out.to_path_buf(),
+            }),
+            None => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_output_beside_the_work_directories_is_fine() {
+        let root = Path::new("/t").join("pkg");
+        let (a, b) = (root.join("a"), root.join("b"));
+        assert_eq!(
+            OutputOverlapsWork::check(&root.join("out"), &[&a, &b]),
+            Ok(())
+        );
+        assert_eq!(
+            OutputOverlapsWork::check(&root.join("ab"), &[&a, &b]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn the_first_work_directory_overlapped_is_named() {
+        let root = Path::new("/t").join("pkg");
+        let (a, b) = (root.join("a"), root.join("b"));
+        for (out, work) in [
+            (b.clone(), &b),
+            (b.join("x"), &b),
+            (root.clone(), &a),
+            (a.clone(), &a),
+        ] {
+            assert_eq!(
+                OutputOverlapsWork::check(&out, &[&a, &b]),
+                Err(OutputOverlapsWork {
+                    work: work.clone(),
+                    out: out.clone(),
+                }),
+                "{}",
+                out.display()
+            );
+        }
+    }
+}

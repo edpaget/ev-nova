@@ -1,9 +1,11 @@
 //! `nova-bundle`: packs the nightly's installers. Its `nova-bundle`
 //! binary builds `Nova.app`, the macOS bundle of the game, and packs it
 //! into a `.dmg`; its `nova-installer` binary packs the built Windows
-//! executables into a per-user MSI ([`installer`]); and its `nova-linux`
+//! executables into a per-user MSI ([`installer`]); its `nova-linux`
 //! binary writes the Linux desktop file, AppStream metainfo and icons
-//! ([`linux`]).
+//! ([`linux`]); and its `nova-appimage` and `nova-flatpak` binaries pack
+//! the game into the Linux AppImage and Flatpak ([`linux::appimage`],
+//! [`linux::flatpak`]).
 //!
 //! # Usage
 //!
@@ -78,6 +80,27 @@
 //! in `OUT_DIR` (by default `target/linux`), which the player copies into
 //! `~/.local/share`. The nightly's Linux tarball carries it. See
 //! [`linux`].
+//!
+//! # The AppImage and the Flatpak
+//!
+//! ```text
+//! mise run appimage -- [OUT_DIR]
+//! mise run flatpak -- [OUT_DIR]
+//! ```
+//!
+//! On x86-64 Linux only. `nova-appimage` builds `nova` in release for
+//! `x86_64-unknown-linux-gnu`, lays out an AppDir with the desktop file,
+//! the icons and the metainfo, checks with `objdump -p` that the binary
+//! needs no glibc above [`linux::appimage::GLIBC_FLOOR`] and links only
+//! [`linux::appimage::ALLOWED_LIBRARIES`], and packs it with
+//! `appimagetool` (`$NOVA_APPIMAGETOOL`, else the one on `PATH`) and the
+//! type2 runtime `$NOVA_APPIMAGE_RUNTIME` names into
+//! `ev-nova-x86_64-unknown-linux-gnu.AppImage` in `OUT_DIR` (by default
+//! `target/appimage/out`). `nova-flatpak` vendors the crates, renders the
+//! `flatpak-builder` manifest, builds it offline on the freedesktop
+//! runtime and packs `ev-nova-x86_64-unknown-linux-gnu.flatpak` in
+//! `OUT_DIR` (by default `target/flatpak/out`); it needs `flatpak`,
+//! `flatpak-builder` and the Flathub remote added with `--user`.
 
 pub mod bundle;
 pub mod host;
