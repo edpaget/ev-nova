@@ -41,9 +41,17 @@ nova-appkit.workspace = true
 rfd.workspace = true
 
 # The console calls behind nova-win32's safe API: attaching to the
-# terminal's console, as `nova.exe` is a Windows-subsystem program.
+# terminal's console, as `nova.exe` is a Windows-subsystem program; and
+# the icon's resource id, which the window loads its icon by.
 [target.'cfg(windows)'.dependencies]
 nova-win32.workspace = true
+nova-winres.workspace = true
+
+# `build.rs`: nova.exe's icon, version information and manifest, made by
+# nova-winres and compiled by embed-resource, for Windows targets only.
+[build-dependencies]
+embed-resource.workspace = true
+nova-winres.workspace = true
 
 [dev-dependencies]
 # The app and integration tests record Audio commands with the `recording`

@@ -203,6 +203,8 @@ fn open(
         .with_title("EV Nova")
         .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0))
         .with_resizable(true);
+    #[cfg(windows)]
+    let attributes = super::window::with_exe_icon(attributes);
     let window = event_loop
         .create_window(attributes)
         .map_err(|error| OpenFailure::Window(error.to_string()))?;
