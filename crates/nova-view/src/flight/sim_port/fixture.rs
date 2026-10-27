@@ -37,7 +37,10 @@ use nova_sim::{
     PlayerInfo, ShipNaming, ShipRefusal, Shipyard,
 };
 
+use nova_sim::DeskReading;
+
 use super::{CommSource, FlightSim, MapSource, NameSource, PilotSource, PortSource};
+use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 
 /// A scripted [`FlightSim`]: it shows the frame it was given, records
 /// each command in the order sent, answers each from a queue
@@ -62,8 +65,14 @@ use super::{CommSource, FlightSim, MapSource, NameSource, PilotSource, PortSourc
 /// [`PilotSource`] from [`FakePilot`] ([`FakeFlight::pilot_mut`]). It
 /// answers the message line's commands ([`FlightCommand::CommShown`],
 /// [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`])
-/// done without taking an answer from the queue, as the message line's
-/// follow-ups ride along with the commands a test is about. One with
+/// and the settings ([`FlightCommand::SetWindowWidth`],
+/// [`FlightCommand::SetDoubleTimeKey`], [`FlightCommand::SetSoundQuiet`])
+/// done without taking an answer from the queue, as these follow-ups
+/// ride along with the commands a test is about. Told to fail
+/// ([`FakeFlight::fail`]), it reports why ([`FlightSim::failure`]) and
+/// refuses every command, still recording each. It is the developer
+/// tools' desk too ([`DevDesk`]), reading as scripted and recording each
+/// edit ([`FakeFlight::desk_mut`], [`FakeFlight::edits`]). One with
 /// nothing scripted meets [`check_contract`].
 #[derive(Clone, Debug, Default)]
 pub struct FakeFlight {
@@ -86,6 +95,19 @@ pub struct FakeFlight {
     port: FakePort,
     names: FakeNames,
     pilot: FakePilot,
+    failure: Option<String>,
+    desk: FakeDesk,
+    edits: Vec<PilotEdit>,
+}
+
+/// What a [`FakeFlight`] answers as the developer tools' desk
+/// ([`DevDesk`]). The default has no reading and takes every edit.
+#[derive(Clone, Debug, Default)]
+pub struct FakeDesk {
+    /// [`DevDesk::reading`]'s answer.
+    pub reading: Option<DeskReading>,
+    /// What every edit is refused with while set; taken otherwise.
+    pub refusal: Option<EditRefusal>,
 }
 
 /// What a [`FakeFlight`] answers the [`CommSource`] questions with, each
@@ -134,6 +156,8 @@ pub struct FakePort {
     /// The offers [`PortSource::offer_text`] fills, each with the text it
     /// gives whatever the raw text; none for a mission not listed.
     pub offer_texts: Vec<(MissionId, String)>,
+    /// [`PortSource::can_hire_escorts`]'s answer.
+    pub can_hire_escorts: bool,
 }
 
 /// What a [`FakeFlight`] answers the [`NameSource`] questions with, each
@@ -163,6 +187,9 @@ pub struct FakeNames {
     pub player_ship_name: Option<String>,
     /// [`NameSource::long_date`]'s answer.
     pub long_date: String,
+    /// The texts [`NameSource::plain_text`] fills, each with what it
+    /// gives; any other comes back unchanged.
+    pub plain_texts: Vec<(String, String)>,
 }
 
 /// What a [`FakeFlight`] answers the [`PilotSource`] questions with, each
@@ -397,6 +424,25 @@ impl FakeFlight {
         self.asked.borrow().clone()
     }
 
+    /// Fails for `reason` from now on, as a flight that could not start:
+    /// [`FlightSim::failure`] gives it and every command is refused. The
+    /// frame, the events and the answers stay as scripted, for a test of
+    /// [`check_contract`]'s clause on a failed flight.
+    pub fn fail(&mut self, reason: &str) {
+        self.failure = Some(reason.to_owned());
+    }
+
+    /// What the desk answers, to script.
+    pub fn desk_mut(&mut self) -> &mut FakeDesk {
+        &mut self.desk
+    }
+
+    /// The desk's edits, in the order made, taken or refused.
+    #[must_use]
+    pub fn edits(&self) -> &[PilotEdit] {
+        &self.edits
+    }
+
     /// Notes `ask`.
     fn ask(&self, ask: MapAsk) {
         self.asked.borrow_mut().push(ask);
@@ -417,14 +463,20 @@ impl FlightSim for FakeFlight {
     }
 
     fn apply(&mut self, command: FlightCommand) -> Answer {
-        let line = matches!(
+        let rides_along = matches!(
             command,
             FlightCommand::CommShown(_)
                 | FlightCommand::CommAcknowledged
                 | FlightCommand::CommTicked
+                | FlightCommand::SetWindowWidth(_)
+                | FlightCommand::SetDoubleTimeKey(_)
+                | FlightCommand::SetSoundQuiet(_)
         );
         self.applied.push(command);
-        if line {
+        if self.failure.is_some() {
+            return Answer::Refused;
+        }
+        if rides_along {
             return Answer::Done;
         }
         let Some((answer, frame)) = self.answers.pop_front() else {
@@ -462,6 +514,21 @@ impl FlightSim for FakeFlight {
         self.descriptions
             .pop_front()
             .unwrap_or_else(|| raw.map(str::to_owned).unwrap_or_default())
+    }
+
+    fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+}
+
+impl DevDesk for FakeFlight {
+    fn reading(&self) -> Option<DeskReading> {
+        self.desk.reading.clone()
+    }
+
+    fn edit(&mut self, edit: PilotEdit) -> Result<(), EditRefusal> {
+        self.edits.push(edit);
+        self.desk.refusal.map_or(Ok(()), Err)
     }
 }
 
@@ -624,6 +691,10 @@ impl PortSource for FakeFlight {
     fn offer_gap(&mut self) -> u32 {
         self.port.offer_gap.unwrap_or(OFFER_GAP_TICKS)
     }
+
+    fn can_hire_escorts(&self) -> bool {
+        self.port.can_hire_escorts
+    }
 }
 
 impl NameSource for FakeFlight {
@@ -661,6 +732,14 @@ impl NameSource for FakeFlight {
 
     fn long_date(&self) -> String {
         self.names.long_date.clone()
+    }
+
+    fn plain_text(&self, text: &str) -> String {
+        self.names
+            .plain_texts
+            .iter()
+            .find(|(raw, _)| raw == text)
+            .map_or_else(|| text.to_owned(), |(_, filled)| filled.clone())
     }
 }
 
@@ -1034,6 +1113,10 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///   answered [`Answer::Traded`]`(Ok(_))`, and the frame after it equals
 ///   the frame before. Checked before the jump.
 ///
+/// - **a failed flight shows nothing**: a flight that reports why it
+///   could not start ([`FlightSim::failure`]) fills the default frame,
+///   refuses every command and drains nothing. Checked first.
+///
 /// The error says which clause failed.
 pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
     let mut drained = Vec::new();
@@ -1046,6 +1129,7 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
             &drained[first..]
         ));
     }
+    check_failed(sim, &drained)?;
 
     let mut once = FlightFrame::default();
     sim.frame(&mut once);
@@ -1089,6 +1173,34 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
     check_plunder(sim, &once)?;
     check_port(sim, &once)?;
     check_jump(sim, &once)
+}
+
+/// [`check_contract`]'s clause on a flight that could not start, `drained`
+/// what its first drain gave: it fills the default frame, refuses every
+/// command (a setting, which a flight that started always takes, among
+/// them) and drains nothing.
+fn check_failed(sim: &mut impl FlightSim, drained: &[FlightEvent]) -> Result<(), String> {
+    let Some(reason) = sim.failure().map(str::to_owned) else {
+        return Ok(());
+    };
+    let clause = "a failed flight shows nothing";
+    if !drained.is_empty() {
+        return Err(format!(
+            "{clause}: failed ({reason}), it drained {drained:?}"
+        ));
+    }
+    let mut frame = unlike(&FlightFrame::default());
+    sim.frame(&mut frame);
+    if frame != FlightFrame::default() {
+        return Err(format!("{clause}: failed ({reason}), it filled {frame:?}"));
+    }
+    let answer = sim.apply(FlightCommand::SetWindowWidth(1024));
+    if !answer.is_refused() {
+        return Err(format!(
+            "{clause}: failed ({reason}), a setting was answered {answer:?}"
+        ));
+    }
+    Ok(())
 }
 
 /// The trade [`check_contract`]'s market clause sends: a ton of the first
@@ -1385,6 +1497,165 @@ mod tests {
     #[test]
     fn a_fake_with_nothing_scripted_meets_the_contract() {
         assert_eq!(check_contract(&mut FakeFlight::new()), Ok(()));
+    }
+
+    #[test]
+    fn a_failed_fake_with_nothing_else_scripted_meets_the_contract() {
+        let mut fake = FakeFlight::new();
+        fake.fail("no chär");
+        assert_eq!(check_contract(&mut fake), Ok(()));
+    }
+
+    #[test]
+    fn a_failed_flight_that_shows_a_frame_or_drains_breaks_the_contract() {
+        let mut showing = FakeFlight::new();
+        showing.fail("no chär");
+        showing.set_frame(stellar(128));
+        let clause = check_contract(&mut showing).expect_err("broken");
+        assert!(
+            clause.starts_with("a failed flight shows nothing"),
+            "{clause}"
+        );
+        assert!(clause.contains("filled"), "{clause}");
+        let mut draining = FakeFlight::new();
+        draining.fail("no chär");
+        draining.queue_event(FlightEvent::Sound(SimSound::NavSelected));
+        let clause = check_contract(&mut draining).expect_err("broken");
+        assert!(
+            clause.starts_with("a failed flight shows nothing"),
+            "{clause}"
+        );
+        assert!(clause.contains("drained"), "{clause}");
+    }
+
+    /// A flight that failed but takes the settings.
+    struct TakesSettings;
+
+    impl FlightSim for TakesSettings {
+        fn frame(&self, into: &mut FlightFrame) {
+            *into = FlightFrame::default();
+        }
+
+        fn step(&mut self, _input: &StepInput, _steps: u32, into: &mut StepReport) {
+            into.clear();
+        }
+
+        fn apply(&mut self, command: FlightCommand) -> Answer {
+            if matches!(command, FlightCommand::SetWindowWidth(_)) {
+                Answer::Done
+            } else {
+                Answer::Refused
+            }
+        }
+
+        fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
+
+        fn takes(&self, _gate: PlayerCommand) -> bool {
+            true
+        }
+
+        fn hover(&self, _at: Vec2, _drawn: &DrawnBoxes) -> Option<Hover> {
+            None
+        }
+
+        fn failure(&self) -> Option<&str> {
+            Some("no chär")
+        }
+    }
+
+    impl MapSource for TakesSettings {}
+
+    impl CommSource for TakesSettings {}
+
+    impl PortSource for TakesSettings {}
+
+    impl NameSource for TakesSettings {}
+
+    impl PilotSource for TakesSettings {}
+
+    #[test]
+    fn a_failed_flight_that_takes_a_command_breaks_the_contract() {
+        let clause = check_contract(&mut TakesSettings).expect_err("broken");
+        assert!(
+            clause.starts_with("a failed flight shows nothing"),
+            "{clause}"
+        );
+        assert!(clause.contains("answered Done"), "{clause}");
+    }
+
+    #[test]
+    fn a_failed_fake_says_why_and_refuses_every_command_recording_it() {
+        let mut fake = FakeFlight::new();
+        assert_eq!(fake.failure(), None);
+        fake.queue_answer(Answer::Done);
+        fake.fail("no chär");
+        assert_eq!(fake.failure(), Some("no chär"));
+        for command in [
+            FlightCommand::CueCourse,
+            FlightCommand::CommTicked,
+            FlightCommand::SetSoundQuiet(true),
+        ] {
+            assert_eq!(fake.apply(command.clone()), Answer::Refused, "{command:?}");
+        }
+        assert_eq!(fake.applied().len(), 3);
+    }
+
+    #[test]
+    fn the_fake_answers_the_settings_done_without_taking_an_answer() {
+        let mut fake = FakeFlight::new();
+        fake.queue_answer(Answer::Stellar(StellarId(130)));
+        for command in [
+            FlightCommand::SetWindowWidth(1430),
+            FlightCommand::SetDoubleTimeKey(true),
+            FlightCommand::SetSoundQuiet(false),
+        ] {
+            assert_eq!(fake.apply(command.clone()), Answer::Done, "{command:?}");
+        }
+        assert_eq!(
+            fake.apply(FlightCommand::SelectStellar(StellarPick::Nearest)),
+            Answer::Stellar(StellarId(130)),
+            "the answer queued is the next command's"
+        );
+    }
+
+    #[test]
+    fn the_fake_desk_reads_as_scripted_and_records_each_edit() {
+        let mut fake = FakeFlight::new();
+        assert_eq!(fake.reading(), None);
+        assert_eq!(fake.edit(PilotEdit::Credits(5)), Ok(()));
+        let reading = DeskReading {
+            name: "Ada".to_owned(),
+            credits: 1000,
+            reserves: Reserves::default(),
+            date: nova_sim::GameDate::new(1177, 6, 23).expect("a date"),
+            date_text: "June 23, 1177".to_owned(),
+            system: SystemId(130),
+            landed: None,
+            bits: Vec::new(),
+        };
+        fake.desk_mut().reading = Some(reading.clone());
+        fake.desk_mut().refusal = Some(EditRefusal::InFlight);
+        assert_eq!(fake.reading(), Some(reading));
+        let to = PilotEdit::MoveTo {
+            system: SystemId(131),
+            stellar: StellarId(140),
+        };
+        assert_eq!(fake.edit(to), Err(EditRefusal::InFlight));
+        assert_eq!(fake.edits(), [PilotEdit::Credits(5), to]);
+    }
+
+    #[test]
+    fn the_fake_fills_the_plain_texts_and_answers_the_hire_as_scripted() {
+        let mut fake = FakeFlight::new();
+        assert_eq!(fake.plain_text("Hi <PN>."), "Hi <PN>.");
+        assert!(!fake.can_hire_escorts());
+        fake.names_mut()
+            .plain_texts
+            .push(("Hi <PN>.".to_owned(), "Hi Ada.".to_owned()));
+        fake.port_mut().can_hire_escorts = true;
+        assert_eq!(fake.plain_text("Hi <PN>."), "Hi Ada.");
+        assert_eq!(fake.plain_text("Bye."), "Bye.");
+        assert!(fake.can_hire_escorts());
     }
 
     #[test]

@@ -46,7 +46,7 @@ pub use catalog::{
 pub use editor::{Draft, NO_PILOT, PilotEditor, bit_label};
 pub use frame_time::{FRAME_WINDOW, FrameTimes};
 pub use overlay::{DevOverlay, Routing, TOGGLE_KEY};
-pub use pilot::{EditRefusal, PilotDesk, PilotEdit, PilotSheet, Place};
+pub use pilot::{DevDesk, EditRefusal, PilotDesk, PilotEdit, PilotSheet, Place};
 pub use preview::{MAX_PREVIEW_SIDE, Preview, preview};
 pub use search::{Query, fold};
 pub use session::SessionDesk;

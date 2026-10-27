@@ -52,8 +52,14 @@ use nova_sim::{
     TagNames, Vec2,
 };
 
+use nova_sim::{
+    AsteroidCatalog, CarryOver, CombatCatalog, DeskReading, RelocateRefusal, Rulebook,
+    SessionSetup, StartError,
+};
+
 use super::SharedChance;
 use super::sim_port::{CommSource, FlightSim, MapSource, NameSource, PilotSource, PortSource};
+use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 
 /// The flight of a real `nova_sim::Session`, or why it could not start,
 /// with the collaborators its calls are handed (see the module docs).
@@ -115,6 +121,44 @@ struct SharedCatalog(Rc<dyn SimCatalog>);
 impl std::fmt::Debug for SharedCatalog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("SharedCatalog")
+    }
+}
+
+/// The edge's constructors: each builds the session from `catalog` and
+/// shares the catalog with the flight at once, the handle the view will
+/// hold ([`SessionFlight::share_catalog`]), so the flight's answers that
+/// read the catalog read the one the view draws from. The flight has
+/// Nova's collaborators ([`SessionFlight::new`]), which the edge replaces
+/// with the `with_*` builders, and the session is set up afterwards
+/// ([`SessionFlight::set_up`]), once the view has read it as it opens.
+impl<C: SimCatalog + CombatCatalog + AsteroidCatalog + 'static> SessionFlight<C> {
+    /// A new, unnamed pilot's flight (`nova_sim::Session::start`), or why
+    /// it could not start.
+    #[must_use]
+    pub fn start(catalog: &Rc<C>) -> Self {
+        Self::opened(catalog, Session::start(&**catalog))
+    }
+
+    /// `pilot`'s flight, as `nova_sim::Session::fly` builds it: for a
+    /// pilot just made, or one opened with no load's fallbacks.
+    #[must_use]
+    pub fn fly(catalog: &Rc<C>, pilot: Pilot) -> Self {
+        Self::opened(catalog, Session::fly(&**catalog, pilot))
+    }
+
+    /// `pilot`'s flight as `nova_sim::Session::load` builds it, its load's
+    /// fallbacks reading `rules`: for a pilot opened from a save, whose
+    /// repair [`SessionFlight::load_repaired`] reports.
+    #[must_use]
+    pub fn load(catalog: &Rc<C>, pilot: Pilot, rules: &Rulebook) -> Self {
+        Self::opened(catalog, Session::load(&**catalog, pilot, rules))
+    }
+
+    /// The flight of `session` over `catalog`, shared.
+    fn opened(catalog: &Rc<C>, session: Result<Session, StartError>) -> Self {
+        let mut flight = Self::new(session.map_err(|err| err.to_string()));
+        flight.share_catalog(Rc::clone(catalog) as Rc<dyn SimCatalog>);
+        flight
     }
 }
 
@@ -224,9 +268,114 @@ impl<C> SessionFlight<C> {
         }
     }
 
+    /// Sets the session up with `setup` (`nova_sim::Session::set_up`),
+    /// after the view has read it as it opens: its rules, its strategy
+    /// ports and what the run carried over. The fight's disable rule is the
+    /// setup's too, so the session's changes of ship and the fight read
+    /// one. A failed session sets nothing up.
+    pub fn set_up(&mut self, setup: SessionSetup) {
+        self.disable_rule = Rc::clone(&setup.disable_rule);
+        let session = std::mem::replace(&mut self.session, Err(String::new()));
+        self.session = session.map(|session| session.set_up(setup));
+    }
+
+    /// What the flight hands on to the next flight of the run
+    /// (`nova_sim::Session::carry_over`), or `None` when its session never
+    /// started.
+    #[must_use]
+    pub fn carry_over(&self) -> Option<CarryOver> {
+        self.session().ok().map(Session::carry_over)
+    }
+
+    /// Begins a new pilot's game (`nova_sim::Session::begin`) over the
+    /// catalog shared, on the flight's chance, and says whether it did: a
+    /// failed session, or one never shared a catalog, begins nothing.
+    pub fn begin(&mut self) -> bool {
+        let (Ok(session), Some(catalog)) = (&mut self.session, &self.catalog) else {
+            return false;
+        };
+        session.begin(&&*catalog.0, &mut self.chance);
+        true
+    }
+
+    /// Enters play from the main screen (`nova_sim::Session::enter_game`),
+    /// and says whether it did: a failed session enters nothing.
+    pub fn enter_game(&mut self) -> bool {
+        let Ok(session) = &mut self.session else {
+            return false;
+        };
+        session.enter_game();
+        true
+    }
+
+    /// Resumes a pilot opened from a save (`nova_sim::Session::resume`)
+    /// on the flight's chance; a failed session resumes nothing.
+    pub fn resume(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.resume(&mut self.chance);
+        }
+    }
+
+    /// Opens a pilot just loaded on the main screen: every active
+    /// mission's auxiliary ships restart
+    /// (`nova_sim::Session::restart_aux_from_main_screen`) on the flight's
+    /// chance. A failed session opens nothing.
+    pub fn open_on_main_screen(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.restart_aux_from_main_screen(&mut self.chance);
+        }
+    }
+
+    /// Opens the last pilot at launch (`nova_sim::Session::open_at_launch`)
+    /// on the flight's chance. A failed session opens nothing.
+    pub fn open_at_launch(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.open_at_launch(&mut self.chance);
+        }
+    }
+
+    /// Whether the pilot may be saved now (`nova_sim::Session::may_save`):
+    /// not while the player is dying or dead, nor without a session.
+    #[must_use]
+    pub fn may_save(&self) -> bool {
+        self.session().is_ok_and(Session::may_save)
+    }
+
+    /// Whether the pilot is dying, as `_IsDying` (@0x253d) says: its ship
+    /// breaking up or destroyed, which [`SessionFlight::may_save`]
+    /// answers. Never without a session.
+    #[must_use]
+    pub fn is_dying(&self) -> bool {
+        self.session().is_ok() && !self.may_save()
+    }
+
+    /// Whether ending play now deletes the pilot
+    /// (`nova_sim::Session::deletes_pilot_on_ending_play`): a strict-play
+    /// pilot dying outside the escape pod. Never without a session.
+    #[must_use]
+    pub fn deletes_pilot_on_ending_play(&self) -> bool {
+        self.session()
+            .is_ok_and(Session::deletes_pilot_on_ending_play)
+    }
+
+    /// Whether the pilot's load had to fall back for data the save
+    /// references and the catalog lacks (`nova_sim::Session::load_repaired`):
+    /// false for a session that failed.
+    #[must_use]
+    pub fn load_repaired(&self) -> bool {
+        self.session().is_ok_and(Session::load_repaired)
+    }
+
+    /// The after-movie a `STR#` text shown now plays
+    /// (`nova_sim::Session::loaded_after_movie`); none for a session that
+    /// failed.
+    #[must_use]
+    pub fn loaded_after_movie(&self) -> Option<nova_sim::DescMovie> {
+        self.session().ok().and_then(Session::loaded_after_movie)
+    }
+
     /// The pilot flying, if the flight started: the adapter's own API, not
-    /// the port's, for the app's save and the name it shows, as
-    /// [`SessionFlight::transact`] is.
+    /// the port's, for the app's save and the name it shows.
     #[must_use]
     pub fn pilot(&self) -> Option<&Pilot> {
         self.session().ok().map(Session::pilot)
@@ -342,6 +491,11 @@ impl<C> FlightSim for SessionFlight<C> {
             Ok(session) => session.load_description(raw, movie, &mut self.chance),
             Err(_) => Session::fresh_description(raw),
         }
+    }
+
+    /// Why the session could not start, if it could not.
+    fn failure(&self) -> Option<&str> {
+        self.session().err()
     }
 }
 
@@ -520,6 +674,10 @@ impl<C> PortSource for SessionFlight<C> {
     fn offer_gap(&mut self) -> u32 {
         nova_sim::mission::offer_gap(&mut self.chance)
     }
+
+    fn can_hire_escorts(&self) -> bool {
+        self.session().is_ok_and(Session::can_hire_escorts)
+    }
 }
 
 /// Each forwards to the session's method of its name, the player's ship
@@ -562,6 +720,12 @@ impl<C> NameSource for SessionFlight<C> {
         self.session()
             .map_or_else(|_| String::new(), Session::long_date_text)
     }
+
+    /// A failed session fills nothing: the text comes back unchanged.
+    fn plain_text(&self, text: &str) -> String {
+        self.session()
+            .map_or_else(|_| text.to_owned(), |session| session.plain_text(text))
+    }
 }
 
 /// Each forwards to the session's method of its name, over the catalog
@@ -578,6 +742,54 @@ impl<C> PilotSource for SessionFlight<C> {
         let session = self.session().ok()?;
         let catalog = &self.catalog.as_ref()?.0;
         Some(session.pilot_panel(&**catalog))
+    }
+}
+
+/// The developer tools' desk: the reading is
+/// `nova_sim::Session::desk_reading`, and each [`PilotEdit`] goes to the
+/// one session method that makes it (`set_credits`, `set_reserve`,
+/// `set_date`, `relocate` and `set_control_bit`); the session decides, and
+/// the adapter only maps a move's refusal. A move reads the catalog the
+/// view shared ([`SessionFlight::share_catalog`]), and is refused as
+/// [`EditRefusal::NoSystem`] before it is shared, as no system can be
+/// found. A failed session has no reading and refuses every edit as a
+/// move with no catalog is.
+impl<C> DevDesk for SessionFlight<C> {
+    fn reading(&self) -> Option<DeskReading> {
+        Some(self.session().ok()?.desk_reading())
+    }
+
+    fn edit(&mut self, edit: PilotEdit) -> Result<(), EditRefusal> {
+        let Ok(session) = &mut self.session else {
+            return Err(EditRefusal::NoSystem);
+        };
+        match edit {
+            PilotEdit::Credits(credits) => session.set_credits(credits),
+            PilotEdit::Reserve(reserve, amount) => {
+                session.set_reserve(reserve, amount);
+            }
+            PilotEdit::Date(date) => session.set_date(date),
+            PilotEdit::MoveTo { system, stellar } => {
+                let Some(catalog) = &self.catalog else {
+                    return Err(EditRefusal::NoSystem);
+                };
+                session
+                    .relocate(&*catalog.0, system, stellar)
+                    .map_err(refusal)?;
+            }
+            PilotEdit::Bit(bit, on) => session.set_control_bit(bit, on),
+        }
+        Ok(())
+    }
+}
+
+/// The desk's refusal for the session's.
+fn refusal(refusal: RelocateRefusal) -> EditRefusal {
+    match refusal {
+        RelocateRefusal::InFlight => EditRefusal::InFlight,
+        RelocateRefusal::NoSystem => EditRefusal::NoSystem,
+        RelocateRefusal::NoStellar => EditRefusal::NoStellar,
+        RelocateRefusal::NotLandable => EditRefusal::NotLandable,
     }
 }
 
@@ -831,5 +1043,242 @@ mod tests {
         let mut flight = failed();
         assert_eq!(flight.session().err(), Some("no chär"));
         assert_eq!(flight.session_mut().err(), Some("no chär"));
+        assert_eq!(flight.failure(), Some("no chär"));
+    }
+
+    #[test]
+    fn a_failed_flight_meets_the_contract() {
+        crate::flight::sim_port::fixture::check_contract(&mut failed()).expect("meets it");
+    }
+
+    #[test]
+    fn a_failed_flight_sets_up_begins_enters_and_saves_nothing() {
+        let mut flight = failed();
+        flight.set_up(SessionSetup::default());
+        assert_eq!(flight.carry_over(), None);
+        assert!(!flight.begin());
+        assert!(!flight.enter_game());
+        flight.resume();
+        flight.open_on_main_screen();
+        flight.open_at_launch();
+        assert_eq!(flight.session().err(), Some("no chär"), "still failed");
+        assert!(!flight.may_save());
+        assert!(!flight.is_dying());
+        assert!(!flight.deletes_pilot_on_ending_play());
+        assert!(!flight.load_repaired());
+        assert_eq!(flight.loaded_after_movie(), None);
+        assert!(!flight.can_hire_escorts());
+        assert_eq!(flight.plain_text("Hi <PSN>."), "Hi <PSN>.", "unchanged");
+    }
+
+    #[test]
+    fn a_failed_flight_has_no_desk_reading_and_refuses_every_edit() {
+        let mut flight = failed();
+        assert_eq!(flight.reading(), None);
+        assert_eq!(
+            flight.edit(PilotEdit::Credits(77)),
+            Err(EditRefusal::NoSystem)
+        );
+    }
+
+    /// The catalog crate's canned catalog, shared as the edge shares it.
+    fn shared() -> Rc<nova_sim::fixture::FakePilotCatalog> {
+        Rc::new(nova_sim::fixture::pilot_catalog())
+    }
+
+    #[test]
+    fn the_edge_shares_its_catalog_with_the_flight_it_builds() {
+        let catalog = shared();
+        let pilot = || Pilot::new(&*catalog, "Ada").expect("a pilot");
+        let built: [fn(&Rc<_>, Pilot) -> SessionFlight<_>; 3] = [
+            |catalog, _| SessionFlight::start(catalog),
+            SessionFlight::fly,
+            |catalog, pilot| SessionFlight::load(catalog, pilot, &Rulebook::default()),
+        ];
+        for build in built {
+            let flight = build(&catalog, pilot());
+            assert!(flight.session().is_ok(), "started");
+            let held = flight.shared_catalog().expect("shared");
+            assert!(std::ptr::addr_eq(Rc::as_ptr(held), Rc::as_ptr(&catalog)));
+        }
+    }
+
+    #[test]
+    fn the_edge_says_why_a_flight_could_not_start() {
+        let catalog = Rc::new(nova_sim::fixture::FakePilotCatalog {
+            character: Err(nova_sim::StartError::NoCharacter),
+            ..nova_sim::fixture::pilot_catalog()
+        });
+        let flight = SessionFlight::start(&catalog);
+        assert_eq!(
+            flight.failure(),
+            Some(nova_sim::StartError::NoCharacter.to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn a_flight_never_shared_a_catalog_shows_no_player_info_or_pilot_panel() {
+        let session = Session::start(&nova_sim::fixture::pilot_catalog()).expect("starts");
+        let flight: SessionFlight<()> = session.into();
+        assert_eq!(flight.player_info(), None);
+        assert_eq!(flight.pilot_panel(), None);
+    }
+
+    #[test]
+    fn a_flight_never_shared_a_catalog_begins_nothing() {
+        let session = Session::start(&nova_sim::fixture::pilot_catalog()).expect("starts");
+        let mut flight: SessionFlight<()> = session.clone().into();
+        assert!(!flight.begin());
+        assert_eq!(flight.session().ok(), Some(&session), "unchanged");
+    }
+
+    #[test]
+    fn the_setup_reaches_the_session_and_the_fights_disable_rule() {
+        let catalog = shared();
+        let mut flight = SessionFlight::start(&catalog);
+        let setup = SessionSetup {
+            rules: Rulebook::default()
+                .with_override(nova_sim::RuleKey::BreakupStall, nova_sim::RuleSource::Bible),
+            disable_rule: Rc::new(nova_sim::NovaDisable),
+            carry: CarryOver {
+                last_refresh: Some(nova_sim::LastRefresh::hiding([SystemId(131)])),
+                ..CarryOver::default()
+            },
+            ..SessionSetup::default()
+        };
+        let expected = flight
+            .session()
+            .expect("started")
+            .clone()
+            .set_up(setup.clone());
+        flight.set_up(setup.clone());
+        let session = flight.session().expect("started");
+        assert_eq!(session.rules(), expected.rules());
+        assert_eq!(session.carry_over(), expected.carry_over());
+        assert!(Rc::ptr_eq(&flight.disable_rule, &setup.disable_rule));
+        assert!(std::ptr::addr_eq(
+            std::ptr::from_ref(session.disable_rule()),
+            Rc::as_ptr(&setup.disable_rule)
+        ));
+        assert_eq!(flight.carry_over(), Some(session.carry_over()));
+    }
+
+    #[test]
+    fn beginning_begins_the_session_on_the_catalog_shared() {
+        let catalog = shared();
+        let mut flight = SessionFlight::start(&catalog);
+        let mut expected = flight.session().expect("started").clone();
+        expected.begin(&*catalog, &mut nova_sim::NeverFires);
+        assert!(flight.begin());
+        assert_eq!(flight.session().expect("started").pilot(), expected.pilot());
+        assert_eq!(
+            flight.session().expect("started").player().position,
+            Vec2::new(50.0, 50.0)
+        );
+        assert!(flight.enter_game());
+    }
+
+    #[test]
+    fn the_saving_queries_are_the_sessions() {
+        let catalog = shared();
+        let flight = SessionFlight::start(&catalog);
+        let session = flight.session().expect("started");
+        assert!(flight.may_save());
+        assert_eq!(flight.may_save(), session.may_save());
+        assert!(!flight.is_dying());
+        assert_eq!(
+            flight.deletes_pilot_on_ending_play(),
+            session.deletes_pilot_on_ending_play()
+        );
+        assert_eq!(flight.load_repaired(), session.load_repaired());
+        assert_eq!(flight.loaded_after_movie(), session.loaded_after_movie());
+        assert_eq!(flight.can_hire_escorts(), session.can_hire_escorts());
+        assert_eq!(
+            flight.plain_text("Hello, <PN>."),
+            session.plain_text("Hello, <PN>.")
+        );
+    }
+
+    #[test]
+    fn a_dying_pilot_may_not_be_saved() {
+        let catalog = nova_sim::fixture::pilot_catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        nova_sim::fixture::set_player_condition(&mut session, nova_sim::Condition::Destroyed);
+        let flight: SessionFlight<()> = session.into();
+        assert!(!flight.may_save());
+        assert!(flight.is_dying());
+    }
+
+    #[test]
+    fn the_desks_reading_is_the_sessions() {
+        let catalog = shared();
+        let flight = SessionFlight::start(&catalog);
+        assert_eq!(
+            flight.reading(),
+            Some(flight.session().expect("started").desk_reading())
+        );
+    }
+
+    #[test]
+    fn each_desk_edit_goes_to_the_session() {
+        let catalog = shared();
+        let mut flight = SessionFlight::start(&catalog);
+        let date = nova_sim::GameDate::new(1180, 1, 2).expect("a date");
+        let bit = nova_sim::Bit::new(9).expect("in range");
+        for edit in [
+            PilotEdit::Credits(77),
+            PilotEdit::Reserve(nova_sim::Reserve::Armor, 5.0),
+            PilotEdit::Date(date),
+            PilotEdit::Bit(bit, true),
+        ] {
+            assert_eq!(flight.edit(edit), Ok(()), "{edit:?}");
+        }
+        let session = flight.session().expect("started");
+        assert_eq!(session.pilot().cash(), 77);
+        assert!((session.reserves().armor.now - 5.0).abs() < f32::EPSILON);
+        assert_eq!(session.date(), date);
+        assert!(session.control_bit(bit));
+    }
+
+    #[test]
+    fn a_move_is_the_sessions_relocation_with_its_refusal_mapped() {
+        let catalog = shared();
+        let mut flight = SessionFlight::start(&catalog);
+        let before = flight.session().expect("started").clone();
+        assert_eq!(
+            flight.edit(PilotEdit::MoveTo {
+                system: SystemId(131),
+                stellar: StellarId(140)
+            }),
+            Err(EditRefusal::InFlight),
+            "in flight"
+        );
+        assert_eq!(flight.session().ok(), Some(&before), "unchanged");
+    }
+
+    #[test]
+    fn a_move_without_a_catalog_is_refused_as_no_system() {
+        let catalog = nova_sim::fixture::pilot_catalog();
+        let session = Session::start(&catalog).expect("starts");
+        let mut flight: SessionFlight<()> = session.into();
+        assert_eq!(
+            flight.edit(PilotEdit::MoveTo {
+                system: SystemId(131),
+                stellar: StellarId(140)
+            }),
+            Err(EditRefusal::NoSystem)
+        );
+    }
+
+    #[test]
+    fn each_refusal_maps_to_its_own() {
+        for (from, to) in [
+            (RelocateRefusal::InFlight, EditRefusal::InFlight),
+            (RelocateRefusal::NoSystem, EditRefusal::NoSystem),
+            (RelocateRefusal::NoStellar, EditRefusal::NoStellar),
+            (RelocateRefusal::NotLandable, EditRefusal::NotLandable),
+        ] {
+            assert_eq!(refusal(from), to);
+        }
     }
 }

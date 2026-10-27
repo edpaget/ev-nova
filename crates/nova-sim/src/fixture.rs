@@ -22,6 +22,9 @@ mod walker;
 
 pub use builder::SessionBuilder;
 
+/// The catalog crate's canned pilot catalog, for a test above that needs a
+/// session started on a catalog it doesn't build itself.
+pub use nova_sim_catalog::fixture::{FakePilotCatalog, catalog as pilot_catalog};
 /// The control bits that make a test hold, and the listed stellars a fake
 /// catalog gives, from the catalog crate's test support.
 pub use nova_sim_catalog::fixture::{bits_allowing, list_also, listed_stellars};

@@ -9,7 +9,7 @@
 use std::fmt;
 
 use nova_sim::catalog::{StellarId, SystemId};
-use nova_sim::{Bit, GameDate, Gauge, Reserve};
+use nova_sim::{Bit, DeskReading, GameDate, Gauge, Reserve};
 
 /// The pilot flying, as the editor shows it.
 #[derive(Clone, Debug, PartialEq)]
@@ -115,6 +115,24 @@ impl fmt::Display for EditRefusal {
             Self::NotLandable => "that stellar cannot be landed on",
         })
     }
+}
+
+/// The developer tools' port onto the flight, in the flight's own terms:
+/// one raw reading of the pilot ([`DeskReading`]), and one entry for an
+/// edit, which the flight carries out or refuses. The desk the editor uses
+/// ([`PilotDesk`]) names the places itself, from the galaxy the course map
+/// read (`super::session`).
+pub trait DevDesk {
+    /// The pilot flying, read raw; `None` when there is none, as for a
+    /// flight that could not start.
+    fn reading(&self) -> Option<DeskReading>;
+
+    /// Carries out `edit`.
+    ///
+    /// # Errors
+    ///
+    /// Why the edit was refused, when it was; then nothing changed.
+    fn edit(&mut self, edit: PilotEdit) -> Result<(), EditRefusal>;
 }
 
 /// The pilot flying, to read and edit.

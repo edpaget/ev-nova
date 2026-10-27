@@ -111,6 +111,15 @@ pub trait FlightSim: MapSource + CommSource + PortSource + NameSource + PilotSou
         let _ = movie;
         raw.map(str::to_owned).unwrap_or_default()
     }
+
+    /// Why the flight could not start, if it could not: the view then
+    /// draws only the reason, and the router opens no game on it. Such a
+    /// flight fills the default frame, refuses every command and drains
+    /// nothing ([`check_contract`](fixture::check_contract)). `None` by
+    /// default: a flight that started.
+    fn failure(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// The course map's questions of the flight, and the floating map's and
@@ -354,6 +363,13 @@ pub trait PortSource {
     fn offer_gap(&mut self) -> u32 {
         OFFER_GAP_TICKS
     }
+
+    /// Whether the bar's hire screen may hire escorts now
+    /// (`nova_sim::Session::can_hire_escorts`, `_CanHireEscorts`): false
+    /// by default, a flight with no fleet to add to.
+    fn can_hire_escorts(&self) -> bool {
+        false
+    }
 }
 
 /// The names and the date the view words the flight's messages with, as
@@ -416,6 +432,13 @@ pub trait NameSource {
     /// (`nova_sim::Session::long_date_text`): empty by default.
     fn long_date(&self) -> String {
         String::new()
+    }
+
+    /// `text` with its tags filled for the pilot with no mission, as the
+    /// main screen's descriptions are (`nova_sim::Session::plain_text`):
+    /// unchanged by default, a flight with no pilot to fill them for.
+    fn plain_text(&self, text: &str) -> String {
+        text.to_owned()
     }
 }
 
@@ -501,6 +524,7 @@ mod tests {
         assert_eq!(flight.load_description(None, None), "");
         assert_eq!(flight.coming_traffic(), []);
         assert_eq!(flight.death_descs(), Vec::<i16>::new());
+        assert_eq!(flight.failure(), None, "started");
     }
 
     #[test]
@@ -537,6 +561,11 @@ mod tests {
         assert_eq!(source.cargo_name(0), None);
         assert_eq!(source.player_ship_name(), None);
         assert_eq!(source.long_date(), "");
+        assert_eq!(
+            source.plain_text("Hello <PSN>."),
+            "Hello <PSN>.",
+            "unchanged"
+        );
     }
 
     #[test]
@@ -572,5 +601,6 @@ mod tests {
         );
         assert_eq!(source.offer_gap(), OFFER_GAP_TICKS);
         assert_eq!(source.offer_text(MissionId(130), "Run <PAY>"), None);
+        assert!(!source.can_hire_escorts());
     }
 }
