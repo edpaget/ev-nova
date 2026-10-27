@@ -225,25 +225,29 @@ fn a_lock_lands_in_the_shot_step() {
 
 #[test]
 fn a_breakup_an_expiry_begins_takes_no_tick_off_on_its_first() {
-    // Fired on tick 1, the shell is spent on tick 4 and its blast takes
-    // B's last armour on tick 5, in `_HandleShot`; the countdown starts
-    // there, set and marked starting (@0x2d834-0x2d850).
+    // A fires the shell, its three moves spend it, and its blast at its
+    // next visit takes B's last armour in `_HandleShot`; the countdown
+    // starts at B's display, set and marked starting (@0x2d834-0x2d850),
+    // and its next step counts it down.
     let mut b = Ship::at(2, 30.0, 35.0);
     b.reserves.shield.now = 0.0;
     b.reserves.armor.now = 1.0;
     b.hull.death_delay = 5;
     let mut ships = [Ship::at(1, 0.0, 0.0).armed(flak()), b];
     let mut combat = Combat::default();
-    for _ in 1..=5 {
-        tick(&mut combat, &mut ships, &NovaDisable);
-        ships[0].trigger = QUIET;
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    ships[0].trigger = QUIET;
+    for _ in 1..=4 {
+        phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
     }
+    assert!(ships[1].reserves.armor.now < 1.0, "blasted");
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     let starting = Condition::Dying {
         ticks_left: 5,
         starting: true,
     };
     assert_eq!(ships[1].condition, starting);
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     let counting = Condition::Dying {
         ticks_left: 4,
         starting: false,
@@ -279,8 +283,9 @@ fn under_the_caps_an_npcs_point_defence_finds_the_slots_the_hit_pass_ended_still
         let (mut combat, mut ships) = last_slot_left(A, capped);
         combat.put_in_flight(ending_on_b());
         ships[0].trigger = QUIET;
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::test_hits(&mut combat, &mut ships, &NovaDisable);
         assert!(ships[1].reserves.shield.now < 10.0, "{capped}: B struck");
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let (pd, _) = in_flight_by(&combat, A);
         assert_eq!(pd, usize::from(!capped), "{capped}");
     }
@@ -433,22 +438,39 @@ fn double_times_second_pass_runs_the_players_point_defence_and_no_npcs() {
         attacker(3, 400.0, A),
     ];
     let mut combat = Combat::default();
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     for ship in &mut ships {
         ship.trigger = QUIET;
     }
     combat.take_events();
-    tick_on(&mut combat, &mut ships, GamePass::Again);
-    assert_eq!(quad_firers(&combat.take_events()), [ShipRef::Player]);
-    tick_on(
-        &mut combat,
-        &mut ships,
-        GamePass::Advance { double_time: true },
+    let player_defends = |combat: &mut Combat, ships: &mut [Ship], pass: GamePass| {
+        phase::run_on(combat, ships, pass, |combat, fighters, arena, chance| {
+            combat.defend_player(fighters, arena, chance);
+        });
+        quad_firers(&combat.take_events())
+    };
+    let npcs_defend = |combat: &mut Combat, ships: &mut [Ship], pass: GamePass| {
+        phase::run_on(combat, ships, pass, |combat, fighters, arena, chance| {
+            combat.defend_npcs(fighters, arena, None, false, chance);
+        });
+        quad_firers(&combat.take_events())
+    };
+    let again = GamePass::Again;
+    let advance = GamePass::Advance { double_time: true };
+    assert_eq!(
+        player_defends(&mut combat, &mut ships, again),
+        [ShipRef::Player]
+    );
+    assert_eq!(npcs_defend(&mut combat, &mut ships, again), []);
+    assert_eq!(
+        player_defends(&mut combat, &mut ships, advance),
+        [],
+        "the player's reloading"
     );
     assert_eq!(
-        quad_firers(&combat.take_events()),
+        npcs_defend(&mut combat, &mut ships, advance),
         [A],
-        "the advance pass's, the player's reloading"
+        "the advance pass's"
     );
 }
 
@@ -505,31 +527,18 @@ fn beamed(struck: ShipRef, laser_mass: i16, shield: f32, armor: f32) -> [Ship; 2
 }
 
 #[test]
-fn an_npc_regenerates_before_the_ticks_beam_hits() {
-    // `_HandleShip` regenerates B's shield (@0x34424-0x34605) before
-    // `_HandleBeams` (@0x4453d) lands A's beam: 99.5 + 1 up to 100, less
-    // 5. Regenerating after the hit would leave 94.5 + 1.
-    let mut ships = beamed(B, 0, 99.5, 30.0);
-    tick(&mut Combat::default(), &mut ships, &NovaDisable);
-    assert_eq!(ships[1].reserves.shield.now, 95.0);
-}
-
-#[test]
-fn the_player_regenerates_before_the_ticks_beam_hits() {
-    // `_HandlePlayer` regenerates the player's shield (@0x6cf86-0x6cff3)
-    // before `_HandleBeams` (@0x4453d).
-    let mut ships = beamed(ShipRef::Player, 0, 99.5, 30.0);
-    tick(&mut Combat::default(), &mut ships, &NovaDisable);
-    assert_eq!(ships[1].reserves.shield.now, 95.0);
-}
-
-#[test]
 fn an_npc_intact_at_its_step_regenerates_though_a_beam_disables_it_after() {
     // B is intact at its `_HandleShip` (the frame-start `_IsDisabled`
-    // @0x34424), so its armour regenerates, 25 + 1, before the beam takes
-    // 20 and disables it.
+    // @0x34424), so its armour regenerates, 25 + 1; the beam A fires there
+    // takes 20 at `_HandleBeams` and disables it. That the regeneration
+    // comes first is the session's order
+    // (`nova_sim::Session::pass_after_move`).
     let mut ships = beamed(B, 20, 0.0, 25.0);
-    tick(&mut Combat::default(), &mut ships, &NovaDisable);
+    let mut combat = Combat::default();
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(ships[1].condition, Condition::Intact);
+    assert_eq!(ships[1].reserves.armor.now, 26.0, "regenerated");
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(ships[1].condition, Condition::Disabled);
     assert_eq!(ships[1].reserves.armor.now, 6.0);
 }
@@ -543,7 +552,7 @@ fn a_player_whose_armour_is_gone_before_its_regeneration_regenerates_its_shield_
     // up.
     let mut ships = beamed(ShipRef::Player, 0, 50.0, 0.0);
     ships[0].trigger = QUIET;
-    tick(&mut Combat::default(), &mut ships, &NovaDisable);
+    phase::regenerate_player(&mut Combat::default(), &mut ships, &NovaDisable);
     assert_eq!(ships[1].reserves.shield.now, 51.0, "its shield");
     assert_eq!(ships[1].reserves.armor.now, 0.0, "no armour");
 }
@@ -555,7 +564,7 @@ fn a_player_disabled_as_its_frame_began_regenerates_no_shield() {
     let mut ships = beamed(ShipRef::Player, 0, 50.0, 5.0);
     ships[0].trigger = QUIET;
     ships[1].condition = Condition::Disabled;
-    tick(&mut Combat::default(), &mut ships, &NovaDisable);
+    phase::regenerate_player(&mut Combat::default(), &mut ships, &NovaDisable);
     assert_eq!(ships[1].reserves.shield.now, 50.0);
     assert_eq!(ships[1].reserves.armor.now, 5.0);
 }

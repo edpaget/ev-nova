@@ -3765,6 +3765,7 @@ mod tests {
     mod idle_bays;
     mod ion_lockout_tick;
     mod lineup;
+    mod phase;
     mod planet_hits;
     mod plunder_fire;
     mod proximity_slots;
@@ -4069,23 +4070,23 @@ mod tests {
     /// among `others`.
     fn launched_by(ship: Ship, record: WeaponRecord, others: Vec<Ship>) -> Combat {
         let mut combat = Combat::default();
+        let firer = ship.id;
         let mut ships = vec![ship.armed(record)];
         ships.extend(others);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::fire(&mut combat, &mut ships, firer, &NovaDisable);
         combat
     }
 
-    /// The shots in flight after `ship`, firing `record`, fires a tick
-    /// among `others` and then, its trigger let go, lets them take their
-    /// first move, as an NPC's shot first moves in the tick after its pick
-    /// (`_HandleShot` @0x44385 before `_HandleShip` @0x44483).
+    /// The shots in flight after `ship`, firing `record`, fires among
+    /// `others` and then lets them take their first move
+    /// ([`phase::fly_shots`]).
     fn launched_and_flown(ship: Ship, record: WeaponRecord, others: Vec<Ship>) -> Combat {
         let mut combat = Combat::default();
+        let firer = ship.id;
         let mut ships = vec![ship.armed(record)];
         ships.extend(others);
-        tick(&mut combat, &mut ships, &NovaDisable);
-        ships[0].trigger = QUIET;
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::fire(&mut combat, &mut ships, firer, &NovaDisable);
+        phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
         combat
     }
 
@@ -4233,7 +4234,7 @@ mod tests {
         let mut combat = Combat::default();
         let id = ship.id;
         let mut ships = [ship.armed(record)];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::fire(&mut combat, &mut ships, id, &NovaDisable);
         fired(&combat.take_events(), id)
     }
 
@@ -6959,16 +6960,13 @@ mod tests {
         ]
     }
 
-    /// Ticks once with `ships[0]`'s point defence off, so the missile
-    /// `ships[1]` fires is in flight before a test's first defended tick,
-    /// as an NPC's point defence (`_AIDispatch` @0x4429d) first meets a
-    /// missile an NPC fires (`_HandleShip` @0x44483) on the next tick.
-    /// `ships[1]` fires no more.
+    /// Runs the ship loop once, so the missile `ships[1]` fires is in
+    /// flight before a test's first defended tick, as an NPC's point
+    /// defence (`_AIDispatch` @0x4429d) first meets a missile an NPC fires
+    /// (`_HandleShip` @0x44483) on the next tick. `ships[1]` fires no
+    /// more.
     fn missile_in_flight(combat: &mut Combat, ships: &mut [Ship]) {
-        let defending = ships[0].trigger;
-        ships[0].trigger.point_defence = false;
-        tick(combat, ships, &NovaDisable);
-        ships[0].trigger = defending;
+        phase::handle_npcs(combat, ships, &NovaDisable);
         ships[1].trigger = QUIET;
     }
 
@@ -14114,9 +14112,9 @@ mod tests {
     }
 
     /// [`missile_attack`] of `quad()`, its defender `defender` armed with
-    /// a [`slow_blaster`] as well, after the tick B's missile takes the
-    /// 127th slot among [`crowded`]'s `MAX_SHOTS - 2`, the defender quiet
-    /// and its point defence off; B fires no more.
+    /// a [`slow_blaster`] as well, after the ship loop in which B's missile
+    /// takes the 127th slot among [`crowded`]'s `MAX_SHOTS - 2`, the
+    /// defender quiet and its point defence off; B fires no more.
     fn last_slot_left(defender: ShipRef, capped: bool) -> (Combat, [Ship; 2]) {
         let mut combat = crowded(MAX_SHOTS - 2, capped);
         let mut ships = missile_attack(quad());
@@ -14131,7 +14129,7 @@ mod tests {
             point_defence: false,
             ..QUIET
         };
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.shots().len(), MAX_SHOTS - 1, "the missile's 127th");
         ships[1].trigger = QUIET;
         combat.take_events();

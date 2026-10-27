@@ -92,11 +92,10 @@ fn a_breakup_the_collision_passes_begin_starts_at_that_ticks_display() {
 
 #[test]
 fn the_players_breakup_starts_at_its_next_display_before_the_collision_passes() {
-    // The player's display (@0x43e29) comes before the collision passes,
-    // so a breakup they begin on tick 1 is set on tick 2, before that
-    // tick's passes, at three times its `DeathDelay` (@0x2d842-0x2d850).
-    let (arsenal, govts) = (Arsenal::default(), Governments::default());
-    let arena = arena(&arsenal, &govts);
+    // The player's display (@0x43e29) comes before the collision passes
+    // (the session's order, `nova_sim::Session::pass_after_move`), so a
+    // breakup they begin is unset until its next display sets it, at
+    // three times its `DeathDelay` (@0x2d842-0x2d850).
     let mut player = Ship {
         id: ShipRef::Player,
         fleet: ShipRef::Player,
@@ -108,15 +107,10 @@ fn the_players_breakup_starts_at_its_next_display_before_the_collision_passes() 
     let mut ships = [player];
     let mut combat = Combat::default();
     combat.put_in_flight(flown_by_c(blaster(), Vec2::new(5.0, 0.0)));
-    tick(&mut combat, &mut ships, &NovaDisable);
-    assert_eq!(ships[0].condition, starting(0), "tick 1: unset");
-    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.defend_player(&mut fighters, arena, &mut NeverFires);
-    combat.fire_player(&mut fighters, arena, &mut NeverFires);
-    combat.regenerate_player(&mut fighters, arena);
-    fighters[0].condition.count_down();
-    combat.display_player(&mut fighters, arena);
-    assert_eq!(*fighters[0].condition, starting(12), "set at its display");
+    phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(ships[0].condition, starting(0), "unset by the passes");
+    phase::display_player(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(ships[0].condition, starting(12), "set at its display");
 }
 
 #[test]
