@@ -1,4 +1,5 @@
 use super::*;
+use nova_sim::DrawnShips as _;
 
 // Double time.
 
@@ -16,10 +17,15 @@ fn double_time_drawn(view: &View) -> bool {
 
 #[test]
 fn double_time_shows_its_icon_at_the_top_left_over_the_red_alert() {
-    let mut view = threatened(QUIET).with_double_time(true);
-    assert!(view.double_time());
-    ticks(&mut view, 60);
-    let list = drawn(&view);
+    // Whether double time is on, and the alert, are the frame's
+    // (`a_fill_writes_the_murk_the_background_double_time_the_gamma_and_the_traffic`,
+    // `a_fill_writes_the_red_alert_icon_shown`).
+    let mut frame = super::faked_hud::among(Vec::new());
+    frame.double_time = true;
+    frame.hud.red_alert = Some(nova_sim::AlertIcon::Red);
+    let mut view = super::faked_world::world(catalog(), frame);
+    view.alert_width = Some(24);
+    let list = super::faked_world::world_list(&view);
     let commands: Vec<_> = list.iter().collect();
     let icon = commands
         .iter()
@@ -37,12 +43,8 @@ fn double_time_shows_its_icon_at_the_top_left_over_the_red_alert() {
         "just after the Red Alert's: {:?}",
         commands[icon - 1]
     );
-    view.set_double_time(false);
-    assert!(!view.double_time());
-    assert!(!double_time_drawn(&view), "off at once");
-    view.tick(TICK);
-    assert!(!double_time_drawn(&view));
-    assert!(!double_time_drawn(&flight()), "off to begin with");
+    super::faked_hud::changes(&mut view, |frame| frame.double_time = false);
+    assert!(!faked_double_time_drawn(&view), "off at once");
 }
 
 #[test]
@@ -127,12 +129,15 @@ fn double_times_second_pass_gives_no_help_and_tells_no_comm() {
 
 #[test]
 fn caps_lock_is_no_flight_key() {
-    let mut view = flight();
-    view.input(&key(Key::CapsLock, true));
+    let mut view = super::faked_flight::at_rest(catalog());
+    super::faked_flight::hold(&mut view, Key::CapsLock, true);
     assert!(view.held.is_empty());
-    ticks(&mut view, 3);
-    assert_eq!(player(&view), start());
-    assert!(!view.double_time(), "the app toggles it, not flight");
+    super::faked_flight::ticked(&mut view, 1);
+    assert_eq!(
+        super::faked_flight::last_controls(&view),
+        Controls::default()
+    );
+    assert!(!view.double_time, "the app toggles it, not flight");
 }
 
 // The hover cursor (`_HandleMouse`).
@@ -146,58 +151,48 @@ fn cursor_sprites(list: &DrawList) -> Vec<(u16, Point)> {
         .collect()
 }
 
-/// A flight with one still NPC, drawn after a tick, and its id.
-fn flight_with_npc(catalog: FakeCatalog) -> (View, NpcId) {
-    let (_, chance) = scripted(&placed(850, 650, 90));
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    view.tick(TICK);
-    let id = npc_ids(&view)[0];
-    (view, id)
-}
-
 /// A point on screen over nothing at all.
 const NOWHERE: Point = Point::new(40.0, 400.0);
 
 #[test]
 fn a_left_click_on_a_drawn_ship_targets_it_with_the_target_beep() {
-    let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+    // What the click targets, and its beep, are nova-sim's
+    // (`a_click_in_space_on_a_ship_drawn_answers_the_ship_it_targets`).
+    let (mut view, id) = faked_with_npc();
     let over = npc_on_screen(&view, id);
     assert!(over.x < VIEW_SIZE.0 - STATUS_BAR_WIDTH, "{over:?} in space");
-    view.take_sounds();
-    click(&mut view, over);
-    assert_eq!(
-        view.session().expect("flying").target().map(|npc| npc.id),
-        Some(id)
-    );
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetSelected)]);
+    view.click_in_space(over);
+    let [FlightCommand::ClickInSpace { at, drawn }] = sent(&view) else {
+        panic!("{:?}", sent(&view));
+    };
+    let world = view.camera().screen_to_world(over);
+    assert_eq!(*at, Vec2::new(world.x, world.y));
+    assert!(drawn.npcs.iter().any(|&(npc, _)| npc == id), "{drawn:?}");
 }
 
 #[test]
 fn a_click_on_the_players_own_ship_lets_go_of_the_target_with_the_clear_beep() {
-    let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
-    let over = npc_on_screen(&view, id);
-    assert!(
-        (over.x - PLAYER_AT.x).abs() > 64.0 || (over.y - PLAYER_AT.y).abs() > 64.0,
-        "the NPC at {over:?} sits clear of the player's ship"
-    );
-    tap(&mut view, TARGET_KEY);
-    assert_eq!(target_of(&view), Some(id));
-    view.take_sounds();
+    // What a click on the player's ship does is nova-sim's
+    // (`a_click_in_space_on_the_players_ship_lets_go_of_the_target`).
+    let (mut view, _) = faked_with_npc();
     // The camera centres on the player, so its ship is drawn at the centre.
-    click(&mut view, PLAYER_AT);
-    assert_eq!(target_of(&view), None);
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetCleared)]);
+    view.click_in_space(PLAYER_AT);
+    let [FlightCommand::ClickInSpace { at, drawn }] = sent(&view) else {
+        panic!("{:?}", sent(&view));
+    };
+    assert_eq!(*at, Vec2::ZERO, "the player's ship's centre");
+    assert!(drawn.player.is_some(), "boxed");
 }
 
 #[test]
 fn a_click_on_the_players_own_ship_with_no_target_is_silent() {
-    let (mut view, _) = flight_with_npc(trafficked(&[130], 1, 129, 3));
-    view.take_sounds();
-    click(&mut view, PLAYER_AT);
-    assert_eq!(target_of(&view), None);
-    assert_eq!(view.take_sounds(), []);
+    // A click that changes nothing is refused (`check_contract`'s click
+    // clause; `a_click_in_space_on_nothing_is_refused_and_changes_nothing`):
+    // no sound is drained for it.
+    let (mut view, _) = faked_with_npc();
+    view.click_in_space(PLAYER_AT);
+    assert_eq!(sent(&view).len(), 1);
+    assert_eq!(view.drained_sounds(), []);
 }
 
 #[test]
@@ -236,29 +231,52 @@ fn a_click_on_a_ship_targets_it_during_a_jump() {
 
 #[test]
 fn the_cursor_animates_over_an_npc_and_rests_off_it() {
-    let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+    // What the pointer is over is the flight's answer (`FlightSim::hover`).
+    let (mut view, id) = faked_with_npc();
     let over = npc_on_screen(&view, id);
-    view.input(&Input::PointerMoved(over));
-    assert_eq!(cursor_sprites(&drawn(&view)), [(0, over)]);
-    ticks(&mut view, 2);
-    assert_eq!(cursor_sprites(&drawn(&view)), [(1, over)]);
-    view.input(&Input::PointerMoved(NOWHERE));
-    ticks(&mut view, 1);
-    assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
-    ticks(&mut view, 4);
-    assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)], "rests");
+    view.sim.set_hover(Some(nova_sim::Hover::Ship(id)));
+    view.cursor_input(&Input::PointerMoved(over));
+    assert_eq!(
+        cursor_sprites(&super::faked_world::world_list(&view)),
+        [(0, over)]
+    );
+    super::faked_flight::ticked(&mut view, 2);
+    assert_eq!(
+        cursor_sprites(&super::faked_world::world_list(&view)),
+        [(1, over)]
+    );
+    view.sim.set_hover(None);
+    view.cursor_input(&Input::PointerMoved(NOWHERE));
+    super::faked_flight::ticked(&mut view, 1);
+    assert_eq!(
+        cursor_sprites(&super::faked_world::world_list(&view)),
+        [(0, NOWHERE)]
+    );
+    super::faked_flight::ticked(&mut view, 4);
+    assert_eq!(
+        cursor_sprites(&super::faked_world::world_list(&view)),
+        [(0, NOWHERE)],
+        "rests"
+    );
 }
 
 #[test]
 fn a_button_press_shows_the_cursor_where_it_is() {
-    let mut view = flight();
-    assert_eq!(cursor_sprites(&drawn(&view)), [], "no pointer yet");
-    view.input(&Input::PointerButton {
+    let mut view = super::faked_flight::at_rest(catalog());
+    assert_eq!(
+        cursor_sprites(&super::faked_world::world_list(&view)),
+        [],
+        "no pointer yet"
+    );
+    view.cursor_input(&Input::PointerButton {
         button: MouseButton::Right,
         pressed: true,
         at: NOWHERE,
     });
-    assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+    assert_eq!(
+        cursor_sprites(&super::faked_world::world_list(&view)),
+        [(0, NOWHERE)]
+    );
 }
 
 #[test]
@@ -287,61 +305,54 @@ fn the_cursor_draws_in_the_world_under_the_hud_and_the_jump_fade() {
 
 #[test]
 fn a_cloaked_npc_is_hovered_only_with_a_scanner_that_targets_cloaked_ships() {
-    let cloaking = |scanned: bool| {
-        let mut scanner = radar_outfits();
-        let mut mods = [(0, 0); 4];
-        mods[1] = (nova_sim::cloak::MOD_SCANNER, nova_sim::cloak::SCAN_TARGET);
-        scanner[0].mods = mods;
-        let catalog = FakeCatalog {
-            outfits: scanner,
-            defaults: if scanned {
-                vec![(OutfitId(300), 1)]
-            } else {
-                Vec::new()
-            },
-            ..trafficked(&[130], 1, 129, 3)
-        };
-        let (mut view, id) = flight_with_npc(catalog);
-        let session = view.sim.session.as_mut().expect("flying");
-        nova_sim::fixture::cloak(session, id, CLOAKED);
-        let session = view.session().expect("flying");
-        assert!(!session.scanner().on_screen, "cannot see it");
-        assert_eq!(session.scanner().targets, scanned);
+    // Whether a cloaked ship is hovered is nova-sim's
+    // (`hover_skips_a_cloaked_ship_without_the_cloak_bit_and_takes_it_with_it`,
+    // `hover_skips_an_untargetable_ship_without_the_scanner_and_takes_it_with_it`);
+    // the cursor animates as the flight answers.
+    for (hovered, frame) in [(false, 0), (true, 1)] {
+        let (mut view, id) = faked_with_npc();
         let over = npc_on_screen(&view, id);
-        view.input(&Input::PointerMoved(over));
-        ticks(&mut view, 2);
-        let frames: Vec<u16> = cursor_sprites(&drawn(&view))
+        view.sim
+            .set_hover(hovered.then_some(nova_sim::Hover::Ship(id)));
+        view.cursor_input(&Input::PointerMoved(over));
+        super::faked_flight::ticked(&mut view, 2);
+        let frames: Vec<u16> = cursor_sprites(&super::faked_world::world_list(&view))
             .into_iter()
             .map(|(frame, _)| frame)
             .collect();
-        frames
-    };
-    assert_eq!(cloaking(false), [0], "rests");
-    assert_eq!(
-        cloaking(true),
-        [1],
-        "animates over the ship it does not draw"
-    );
+        assert_eq!(frames, [frame], "hovered: {hovered}");
+    }
 }
 
 #[test]
 fn the_players_own_ship_is_hovered_only_while_it_holds_a_target() {
-    let (mut view, _) = flight_with_npc(trafficked(&[130], 1, 129, 3));
-    let frame = |view: &mut View| {
-        view.input(&Input::PointerMoved(PLAYER_AT));
-        ticks(view, 2);
-        cursor_sprites(&drawn(view))
-    };
-    assert_eq!(frame(&mut view), [(0, PLAYER_AT)], "no target");
-    view.input(&key(TARGET_KEY, true));
-    view.input(&key(TARGET_KEY, false));
-    assert!(view.session().expect("flying").target().is_some());
-    assert_eq!(frame(&mut view), [(1, PLAYER_AT)], "a target");
+    // When the player's own ship is hovered is nova-sim's
+    // (`nova_sim_ai`'s `the_players_own_ship_is_hovered_only_while_it_holds_a_target`).
+    let (mut view, _) = faked_with_npc();
+    view.cursor_input(&Input::PointerMoved(PLAYER_AT));
+    super::faked_flight::ticked(&mut view, 2);
+    let (at, boxes) = view.sim.hovers().pop().expect("asked");
+    assert_eq!(at, Vec2::ZERO, "asked at the player's ship");
+    assert!(boxes.player.is_some());
+    assert_eq!(
+        cursor_sprites(&super::faked_world::world_list(&view)),
+        [(0, PLAYER_AT)],
+        "no target"
+    );
+    view.sim.set_hover(Some(nova_sim::Hover::Player));
+    super::faked_flight::ticked(&mut view, 2);
+    assert_eq!(
+        cursor_sprites(&super::faked_world::world_list(&view)),
+        [(1, PLAYER_AT)],
+        "a target"
+    );
 }
 
 #[test]
 fn an_npc_of_a_cost_minus_one_type_is_not_drawn_but_is_still_hovered() {
-    let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+    // That a ship of a cost -1 type is hidden is nova-sim's
+    // (`a_hidden_ship_is_framed_by_its_berths_last_shown_type`).
+    let (mut view, id) = faked_with_npc();
     let over = npc_on_screen(&view, id);
     let near = |list: &DrawList| {
         list.iter().any(|command| match *unclipped(command) {
@@ -353,174 +364,108 @@ fn an_npc_of_a_cost_minus_one_type_is_not_drawn_but_is_still_hovered() {
             _ => false,
         })
     };
-    assert!(near(&drawn(&view)), "drawn while shown");
-    nova_sim::fixture::hide(view.sim.session.as_mut().expect("flying"), id);
-    view.refresh_frame();
-    assert!(view.session().expect("flying").is_hidden(ShipRef::Npc(id)));
-    assert!(!near(&drawn(&view)), "not drawn hidden");
-    view.input(&Input::PointerMoved(over));
-    ticks(&mut view, 2);
+    assert!(
+        near(&super::faked_world::world_list(&view)),
+        "drawn while shown"
+    );
+    // A hidden ship's slot draws nothing: the frame draws it in no layer.
+    super::faked_hud::changes(&mut view, |frame| {
+        frame.drawn.retain(|&(ship, _)| ship != ShipRef::Npc(id));
+    });
+    assert!(
+        !near(&super::faked_world::world_list(&view)),
+        "not drawn hidden"
+    );
+    view.sim.set_hover(Some(nova_sim::Hover::Ship(id)));
+    view.cursor_input(&Input::PointerMoved(over));
+    super::faked_flight::ticked(&mut view, 2);
     assert_eq!(
-        cursor_sprites(&drawn(&view)),
+        cursor_sprites(&super::faked_world::world_list(&view)),
         [(1, over)],
         "animates over where it would be drawn"
     );
-}
-
-/// [`SlotSprites`] whose `slot` last cloned `shïp` 131's 100-pixel
-/// frames, as a flight that showed one there leaves it.
-fn cloned_131(slot: nova_sim::ship_layer::Slot) -> SlotSprites {
-    let mut sprites = SlotSprites::default();
-    sprites.frames.clone_frames(slot, ShipId(131));
-    sprites
-}
-
-/// Whether the pointer at `over` hovers a ship in `view`, after the
-/// two ticks the cursor takes to animate.
-fn hovers(view: &mut View, over: Point) -> bool {
-    view.input(&Input::PointerMoved(over));
-    ticks(view, 2);
-    cursor_sprites(&drawn(view))
-        .first()
-        .is_some_and(|&(frame, _)| frame == 1)
+    let (_, boxes) = view.sim.hovers().pop().expect("asked");
+    assert!(boxes.npcs.iter().any(|&(npc, _)| npc == id), "boxed");
 }
 
 #[test]
 fn a_hidden_ship_is_hovered_by_the_box_its_berth_last_drew() {
-    let engine = Rulebook::default;
-    let hover = |rules: Rulebook, off: f32| {
-        let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
-        let session = view.sim.session.as_mut().expect("flying");
-        nova_sim::fixture::hide(session, id);
-        let berth = session
-            .npcs()
-            .iter()
-            .find(|npc| npc.id == id)
-            .expect("there")
-            .berth;
-        let mut view = view
-            .with_rules(rules)
-            .with_slot_sprites(cloned_131(nova_sim::ship_layer::Slot::Berth(berth)));
-        let carried = sheets(&view).contains(&ShipId(131));
-        assert_eq!(
-            carried,
-            rules == engine(),
-            "read as the history is carried in"
-        );
-        let over = npc_on_screen(&view, id);
-        hovers(&mut view, Point::new(over.x, over.y + off))
-    };
-    assert!(hover(engine(), 40.0), "inside shïp 131's 100-pixel frame");
-    assert!(!hover(engine(), 60.0), "outside it");
-    let own = || {
-        Rulebook::default().with_override(
-            nova_sim::RuleKey::HiddenShipHoverBox,
-            nova_sim::RuleSource::Bible,
-        )
-    };
-    assert!(hover(own(), 30.0), "inside its own 40-pixel frame's margin");
-    assert!(!hover(own(), 40.0), "boxed by its own 40-pixel frame");
+    // Which frames box a hidden ship is nova-sim's, by its rule
+    // (`a_hidden_ship_is_framed_by_its_berths_last_shown_type`,
+    // `the_other_hover_box_reading_frames_a_hidden_ship_by_its_own_type`):
+    // the view boxes it by the frames its record names.
+    for (framed, width) in [(131, 100), (129, 40)] {
+        let (mut view, id) = faked_with_npc();
+        let mut frame = view.frame.clone();
+        frame.drawn.retain(|&(ship, _)| ship != ShipRef::Npc(id));
+        frame.ships[1].framed = Some(ShipId(framed));
+        super::faked_hud::shows(&mut view, frame);
+        let boxed = view.drawn_boxes().npc(id).expect("boxed");
+        assert_eq!((boxed.width, boxed.height), (width, width), "{framed}");
+    }
 }
 
 #[test]
 fn a_hidden_player_is_hovered_by_the_box_its_slot_last_drew() {
-    let hover = |rules: Rulebook, off: f32| {
-        let catalog = FakeCatalog {
-            hulls: vec![nova_sim::HullRecord {
-                cost: -1,
-                ..hull_of(128, &[])
-            }],
-            ..trafficked(&[130], 1, 129, 3)
-        };
-        let (view, _) = flight_with_npc(catalog);
-        let mut view = view
-            .with_rules(rules)
-            .with_slot_sprites(cloned_131(nova_sim::ship_layer::Slot::Player));
-        assert!(view.session().expect("flying").is_hidden(ShipRef::Player));
-        view.input(&key(TARGET_KEY, true));
-        view.input(&key(TARGET_KEY, false));
-        assert!(view.session().expect("flying").target().is_some());
-        hovers(&mut view, Point::new(PLAYER_AT.x, PLAYER_AT.y + off))
-    };
-    let engine = Rulebook::default;
-    assert!(hover(engine(), 40.0), "inside shïp 131's 100-pixel frame");
-    assert!(!hover(engine(), 60.0));
-    let own = || {
-        Rulebook::default().with_override(
-            nova_sim::RuleKey::HiddenShipHoverBox,
-            nova_sim::RuleSource::Bible,
-        )
-    };
-    assert!(hover(own(), 30.0));
-    assert!(!hover(own(), 40.0), "boxed by its own sheet");
-}
-
-/// [`flight_with_npc`] by `rules`, its NPC gone once drawn and a copy come
-/// into its berth 200 pixels to the right, not yet displayed there: the
-/// view, the copy, where the first was drawn and where the copy is.
-fn refilled(rules: Rulebook) -> (View, NpcId, Point, Point) {
-    let (view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
-    let mut view = view.with_rules(rules);
-    let was = npc_on_screen(&view, id);
-    let session = view.sim.session.as_mut().expect("flying");
-    let at = session
-        .npcs()
-        .iter()
-        .find(|npc| npc.id == id)
-        .expect("there")
-        .state
-        .position
-        + Vec2::new(200.0, 0.0);
-    let copy = nova_sim::fixture::refill(session, id, at).expect("refilled");
-    view.refresh_frame();
-    let now = npc_on_screen(&view, copy);
-    (view, copy, was, now)
-}
-
-/// The id of `view`'s target.
-fn targeted(view: &View) -> Option<NpcId> {
-    view.session().expect("flying").target().map(|npc| npc.id)
-}
-
-/// Where `view` boxes NPC `id` for the hover and the click, on screen.
-fn boxed_at(view: &View, id: NpcId) -> Option<Point> {
-    use nova_sim::DrawnShips;
-    let drawn = view.drawn_boxes().npc(id)?;
-    Some(
-        view.camera()
-            .world_to_screen(Point::new(drawn.centre.x, drawn.centre.y)),
-    )
+    // Which frames box a hidden player is nova-sim's
+    // (`a_hidden_player_is_framed_by_its_last_shown_ship`,
+    // `the_other_hover_box_reading_frames_a_hidden_ship_by_its_own_type`).
+    for (framed, width) in [(131, 100), (128, 40)] {
+        let (mut view, _) = faked_with_npc();
+        let mut frame = view.frame.clone();
+        frame.ships[0].shown = nova_sim::player_fate::Drawn::Hidden;
+        frame.ships[0].framed = Some(ShipId(framed));
+        super::faked_hud::shows(&mut view, frame);
+        let boxed = view.drawn_boxes().player.expect("boxed");
+        assert_eq!((boxed.width, boxed.height), (width, width), "{framed}");
+    }
 }
 
 #[test]
 fn an_undisplayed_ship_is_hovered_and_clicked_at_its_slots_last_place_not_its_own() {
     // `_HandleMouse` and the click block box a slot's hull sprite rect
     // (@0x38177, `_HandlePlayer` @0x6a4ab-0x6a4f4), which only a display
-    // places (@0x2cd9d): where its last ship was last laid out.
-    let (mut view, copy, was, now) = refilled(Rulebook::default());
-    let boxed = boxed_at(&view, copy).expect("boxed");
+    // places (@0x2cd9d): where its last ship was last laid out. Where
+    // that is, by the rule, is nova-sim's
+    // (`a_ship_its_slot_has_not_displayed_is_hovered_where_the_slot_last_was`).
+    let (mut view, id) = faked_with_npc();
+    let was = npc_on_screen(&view, id);
+    let place = view.frame.ships[1].position;
+    super::faked_hud::changes(&mut view, |frame| {
+        frame.ships[1].position = place + Vec2::new(200.0, 0.0);
+        frame.ships[1].hover = nova_sim::HoverPlace::Stale(place);
+    });
+    let boxed = view.drawn_boxes().npc(id).expect("boxed");
+    let boxed = view
+        .camera()
+        .world_to_screen(Point::new(boxed.centre.x, boxed.centre.y));
     assert!(
         (boxed.x - was.x).abs() <= 1.0 && (boxed.y - was.y).abs() <= 1.0,
         "{boxed:?} at {was:?}"
     );
-    click(&mut view, now);
-    assert_eq!(targeted(&view), None, "not where it is");
-    click(&mut view, was);
-    assert_eq!(targeted(&view), Some(copy), "where its slot was laid out");
+    view.click_in_space(was);
+    let [FlightCommand::ClickInSpace { drawn, .. }] = sent(&view) else {
+        panic!("{:?}", sent(&view));
+    };
+    assert!(drawn.npcs.iter().any(|&(npc, _)| npc == id), "the box sent");
 }
 
 #[test]
 fn by_the_other_reading_an_undisplayed_ship_is_hovered_and_clicked_where_it_is() {
-    let rules = Rulebook::default().with_override(
-        nova_sim::RuleKey::UndisplayedShips,
-        nova_sim::RuleSource::Bible,
+    // (`by_the_other_reading_an_undisplayed_ship_is_hovered_where_it_is`.)
+    let (mut view, id) = faked_with_npc();
+    let place = view.frame.ships[1].position;
+    super::faked_hud::changes(&mut view, |frame| {
+        frame.ships[1].position = place + Vec2::new(200.0, 0.0);
+        frame.ships[1].hover = nova_sim::HoverPlace::Own;
+    });
+    let now = npc_on_screen(&view, id);
+    let boxed = view.drawn_boxes().npc(id).expect("boxed");
+    assert_eq!(
+        view.camera()
+            .world_to_screen(Point::new(boxed.centre.x, boxed.centre.y)),
+        now
     );
-    let (mut view, copy, was, now) = refilled(rules);
-    assert_eq!(boxed_at(&view, copy), Some(now));
-    click(&mut view, was);
-    assert_eq!(targeted(&view), None, "not where its slot was laid out");
-    click(&mut view, now);
-    assert_eq!(targeted(&view), Some(copy), "where it is");
 }
 
 #[test]
@@ -646,56 +591,44 @@ fn cancelling_the_pointer_forgets_the_cursor_until_the_next_move() {
 
 #[test]
 fn the_cursor_is_hidden_once_the_pointer_leaves_the_window() {
-    let mut view = flight();
-    view.input(&Input::PointerMoved(NOWHERE));
-    view.input(&Input::PointerLeft);
-    assert_eq!(cursor_sprites(&drawn(&view)), []);
+    let mut view = super::faked_flight::at_rest(catalog());
+    view.cursor_input(&Input::PointerMoved(NOWHERE));
+    view.cursor_input(&Input::PointerLeft);
+    assert_eq!(cursor_sprites(&super::faked_world::world_list(&view)), []);
 }
 
 #[test]
 fn a_key_pressed_in_flight_fades_the_cursor_at_the_next_step() {
-    let mut view = flight();
-    view.input(&Input::PointerMoved(NOWHERE));
-    view.input(&key(Key::Char('q'), true));
-    ticks(&mut view, 1);
-    let tint = |view: &View| {
-        drawn(view)
-            .iter()
-            .find_map(|command| match *unclipped(command) {
-                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
-                _ => None,
-            })
-    };
-    assert_eq!(tint(&view), Some(247), "31 of 32");
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 2);
-    assert_eq!(tint(&view), Some(231), "held: 29 of 32");
+    let mut view = super::faked_flight::at_rest(catalog());
+    view.cursor_input(&Input::PointerMoved(NOWHERE));
+    super::faked_flight::hold(&mut view, Key::Char('q'), true);
+    super::faked_flight::ticked(&mut view, 1);
+    assert_eq!(faked_cursor_alpha(&view), Some(247), "31 of 32");
+    super::faked_flight::hold(&mut view, Key::Up, true);
+    super::faked_flight::ticked(&mut view, 2);
+    assert_eq!(faked_cursor_alpha(&view), Some(231), "held: 29 of 32");
 }
 
 #[test]
 fn z_held_fades_the_cursor_as_a_flight_key_with_no_afterburner_carried() {
-    let tint_after_two = |k: Key| {
-        let mut view = flight();
-        view.input(&Input::PointerMoved(NOWHERE));
-        view.input(&key(k, true));
-        ticks(&mut view, 2);
-        drawn(&view)
-            .iter()
-            .find_map(|command| match *unclipped(command) {
-                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
-                _ => None,
-            })
-    };
-    assert_eq!(tint_after_two(AFTERBURNER_KEY), Some(239), "held: 30 of 32");
-    assert_ne!(tint_after_two(Key::Char('q')), Some(239), "a key not held");
     assert_eq!(
-        tint_after_two(SELECT_KEY),
+        faked_alpha_holding(AFTERBURNER_KEY),
+        Some(239),
+        "held: 30 of 32"
+    );
+    assert_ne!(
+        faked_alpha_holding(Key::Char('q')),
+        Some(239),
+        "a key not held"
+    );
+    assert_eq!(
+        faked_alpha_holding(SELECT_KEY),
         Some(239),
         "W: every pass, @0x6ac2a"
     );
     assert_eq!(
-        tint_after_two(DESELECT_KEY),
-        tint_after_two(Key::Char('q')),
+        faked_alpha_holding(DESELECT_KEY),
+        faked_alpha_holding(Key::Char('q')),
         "S with none selected: only its press, @0x6ade1"
     );
 }
@@ -704,27 +637,19 @@ fn z_held_fades_the_cursor_as_a_flight_key_with_no_afterburner_carried() {
 fn b_held_fades_the_cursor_as_a_flight_key() {
     // `_HandlePlayer` sets the cursor's fade every frame B is down
     // (@0x6a98b-0x6a999), a target or not.
-    let tint_after_two = |k: Key| {
-        let mut view = flight();
-        view.input(&Input::PointerMoved(NOWHERE));
-        view.input(&key(k, true));
-        ticks(&mut view, 2);
-        drawn(&view)
-            .iter()
-            .find_map(|command| match *unclipped(command) {
-                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
-                _ => None,
-            })
-    };
-    assert_eq!(tint_after_two(BOARD_KEY), Some(239), "held: 30 of 32");
-    assert_ne!(tint_after_two(Key::Char('q')), Some(239), "a key not held");
+    assert_eq!(faked_alpha_holding(BOARD_KEY), Some(239), "held: 30 of 32");
+    assert_ne!(
+        faked_alpha_holding(Key::Char('q')),
+        Some(239),
+        "a key not held"
+    );
 }
 
 #[test]
 fn the_cursor_is_clipped_to_the_play_area_short_of_the_status_bar() {
-    let mut view = flight();
-    view.input(&Input::PointerMoved(NOWHERE));
-    let list = drawn(&view);
+    let mut view = super::faked_flight::at_rest(catalog());
+    view.cursor_input(&Input::PointerMoved(NOWHERE));
+    let list = super::faked_world::world_list(&view);
     let clips: Vec<Bounds> = list
         .iter()
         .filter_map(|command| match command {
@@ -745,11 +670,12 @@ fn the_cursor_is_clipped_to_the_play_area_short_of_the_status_bar() {
 
 #[test]
 fn the_cursor_is_not_drawn_while_the_map_is_open() {
-    let mut view = flight();
-    view.input(&Input::PointerMoved(NOWHERE));
-    view.input(&key(MAP_KEY, true));
-    assert!(view.map_open());
-    assert_eq!(cursor_sprites(&drawn(&view)), []);
+    let mut view = super::faked_flight::at_rest(catalog());
+    view.sim.map_mut().drawing = Some(sol_drawing());
+    view.cursor_input(&Input::PointerMoved(NOWHERE));
+    view.open_map();
+    assert!(view.map_open);
+    assert_eq!(cursor_sprites(&super::faked_world::world_list(&view)), []);
 }
 
 #[test]
@@ -864,76 +790,79 @@ fn nav_off_held_through_the_jump_turns_the_nav_off_after_arrival() {
 
 #[test]
 fn option_backquote_turns_into_nav_off_when_option_is_let_go() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    view.input(&key(Key::Alt, true));
-    view.input(&key(NAV_OFF_KEY, true));
-    ticks(&mut view, 3);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
-    assert_eq!(count(&mut view, SimSound::NavSelected), 0, "Option held");
-    view.input(&key(Key::Alt, false));
+    // That the nav block's press turns the nav off is nova-sim's
+    // (`the_nav_block_turns_the_nav_off_or_to_hyperspace`).
+    let mut view = faked(FlightFrame {
+        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
+        ..in_sol()
+    });
+    view.track_held(&key(Key::Alt, true));
+    faked_press(&mut view, NAV_OFF_KEY);
+    for _ in 0..3 {
+        view.nav_held_frame();
+    }
+    assert_eq!(block_presses(&view), 0, "Option held");
+    view.track_held(&key(Key::Alt, false));
+    assert_eq!(block_presses(&view), 0, "at the next frame");
+    view.nav_held_frame();
     assert_eq!(
-        count(&mut view, SimSound::NavSelected),
-        0,
-        "at the next frame"
+        sent(&view).last(),
+        Some(&FlightCommand::NavModeKeys {
+            nav_off: true,
+            h: false
+        })
     );
-    view.tick(TICK);
-    assert_eq!(count(&mut view, SimSound::NavSelected), 1);
-    assert_eq!(nav_mode(&view), NavMode::Off);
-    ticks(&mut view, 2);
-    assert_eq!(count(&mut view, SimSound::NavSelected), 0, "once");
+    view.nav_held_frame();
+    view.nav_held_frame();
+    assert_eq!(block_presses(&view), 1, "once");
 }
 
 #[test]
 fn h_held_blocks_a_press_of_nav_off() {
-    let mut view = flight();
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    view.tick(TICK);
-    view.take_sounds();
-    view.input(&key(NAV_OFF_KEY, true));
-    view.tick(TICK);
-    assert_eq!(sims(&mut view), []);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+    let mut view = faked(in_sol());
+    faked_press(&mut view, HYPERSPACE_MODE_KEY);
+    view.nav_held_frame();
+    assert_eq!(block_presses(&view), 1, "H's");
+    faked_press(&mut view, NAV_OFF_KEY);
+    view.nav_held_frame();
+    assert_eq!(block_presses(&view), 1, "` blocked");
 }
 
 #[test]
 fn nav_off_held_blocks_a_press_of_h_which_still_shows_the_map() {
-    let mut view = flight();
-    view.input(&key(NAV_OFF_KEY, true));
-    view.tick(TICK);
-    view.take_sounds();
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    assert_eq!(floating_alpha(&view), Some(255), "on the press's own frame");
-    view.tick(TICK);
-    assert_eq!(sims(&mut view), []);
-    assert_eq!(nav_mode(&view), NavMode::Off);
+    let mut view = faked_sol(in_sol());
+    faked_press(&mut view, NAV_OFF_KEY);
+    view.nav_held_frame();
+    assert_eq!(block_presses(&view), 1, "`'s");
+    faked_press(&mut view, HYPERSPACE_MODE_KEY);
+    assert!(view.floating.is_up(), "on the press's own frame");
+    view.nav_held_frame();
+    assert_eq!(block_presses(&view), 1, "H blocked");
 }
 
 #[test]
 fn a_key_of_the_block_let_go_frees_the_other_held_to_press_again() {
-    let mut view = flight();
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    view.input(&key(NAV_OFF_KEY, true));
-    view.input(&key(HYPERSPACE_MODE_KEY, false));
-    view.tick(TICK);
-    view.take_sounds();
-    view.input(&key(NAV_OFF_KEY, false));
-    view.tick(TICK);
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    assert_eq!(
-        count(&mut view, SimSound::NavSelected),
-        1,
-        "both up a frame"
-    );
+    let mut view = faked(in_sol());
+    faked_press(&mut view, HYPERSPACE_MODE_KEY);
+    faked_press(&mut view, NAV_OFF_KEY);
+    faked_release(&mut view, HYPERSPACE_MODE_KEY);
+    view.nav_held_frame();
+    let before = block_presses(&view);
+    faked_release(&mut view, NAV_OFF_KEY);
+    view.nav_held_frame();
+    faked_press(&mut view, HYPERSPACE_MODE_KEY);
+    assert_eq!(block_presses(&view) - before, 1, "both up a frame");
 }
 
 #[test]
 fn each_fresh_press_of_h_or_nav_off_acts_with_no_tick_between() {
     for k in [HYPERSPACE_MODE_KEY, NAV_OFF_KEY] {
-        let mut view = flight();
-        tap(&mut view, k);
-        tap(&mut view, k);
-        assert_eq!(count(&mut view, SimSound::NavSelected), 2, "{k:?}");
+        let mut view = faked(in_sol());
+        for _ in 0..2 {
+            faked_press(&mut view, k);
+            faked_release(&mut view, k);
+        }
+        assert_eq!(block_presses(&view), 2, "{k:?}");
     }
 }
 
@@ -949,49 +878,52 @@ fn h_and_nav_off_held_through_the_jump_act_once_together_after_arrival() {
 
 #[test]
 fn option_backquote_held_lets_go_of_a_target_picked_the_next_tick() {
-    let mut view = fighting(armed(2, &[]), &two_npcs());
-    view.input(&key(Key::Alt, true));
-    view.input(&key(NAV_OFF_KEY, true));
-    view.tick(TICK);
-    view.take_sounds();
-    tap(&mut view, NEAREST_KEY);
-    assert!(target_of(&view).is_some(), "Option-R picks");
-    view.take_sounds();
-    view.tick(TICK);
-    assert_eq!(target_of(&view), None);
-    assert_eq!(count(&mut view, SimSound::TargetCleared), 1);
+    // Whether a target is let go is nova-sim's
+    // (`option_backquote_lets_go_of_the_target`).
+    let mut view = faked(in_sol());
+    view.track_held(&key(Key::Alt, true));
+    faked_press(&mut view, NAV_OFF_KEY);
+    view.nav_held_frame();
+    faked_press(&mut view, NEAREST_KEY);
+    faked_release(&mut view, NEAREST_KEY);
+    assert_eq!(
+        sent(&view).last(),
+        Some(&FlightCommand::SelectTarget(nova_sim::TargetPick::Nearest)),
+        "Option-R picks"
+    );
+    view.nav_held_frame();
+    assert_eq!(sent(&view).last(), Some(&FlightCommand::ClearTarget));
 }
 
 #[test]
 fn another_key_pressed_while_option_backquote_is_held_leaves_the_target_to_the_tick() {
-    let mut view = fighting(armed(2, &[]), &two_npcs());
-    view.input(&key(Key::Alt, true));
-    view.input(&key(NAV_OFF_KEY, true));
-    view.tick(TICK);
-    alt_tap(&mut view, NEAREST_KEY);
-    view.input(&key(Key::Alt, true));
-    let picked = target_of(&view);
-    assert!(picked.is_some());
-    tap(&mut view, Key::Char('q'));
-    assert_eq!(target_of(&view), picked, "no press of the block");
+    let mut view = faked(in_sol());
+    view.track_held(&key(Key::Alt, true));
+    faked_press(&mut view, NAV_OFF_KEY);
+    view.nav_held_frame();
+    faked_press(&mut view, NEAREST_KEY);
+    faked_release(&mut view, NEAREST_KEY);
+    let picked = sent(&view).len();
+    faked_press(&mut view, Key::Char('q'));
+    faked_release(&mut view, Key::Char('q'));
+    assert_eq!(sent(&view).len(), picked, "no press of the block");
 }
 
 #[test]
 fn option_backquote_held_blocks_h_but_not_its_map_nor_with_h_held_its_target() {
-    let mut view = fighting(armed(2, &[]), &two_npcs());
-    view.input(&key(Key::Alt, true));
-    view.input(&key(NAV_OFF_KEY, true));
-    view.tick(TICK);
-    view.take_sounds();
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    assert_eq!(floating_alpha(&view), Some(255), "the map shown");
-    view.tick(TICK);
-    assert_eq!(count(&mut view, SimSound::NavSelected), 0, "H blocked");
-    assert_eq!(nav_mode(&view), NavMode::Off);
-    tap(&mut view, NEAREST_KEY);
-    assert!(target_of(&view).is_some());
-    view.tick(TICK);
-    assert!(target_of(&view).is_some(), "the latch held by H");
+    let mut view = faked_sol(in_sol());
+    view.track_held(&key(Key::Alt, true));
+    faked_press(&mut view, NAV_OFF_KEY);
+    view.nav_held_frame();
+    faked_press(&mut view, HYPERSPACE_MODE_KEY);
+    assert!(view.floating.is_up(), "the map shown");
+    view.nav_held_frame();
+    assert_eq!(block_presses(&view), 0, "H blocked");
+    faked_press(&mut view, NEAREST_KEY);
+    faked_release(&mut view, NEAREST_KEY);
+    let picked = sent(&view).len();
+    view.nav_held_frame();
+    assert_eq!(sent(&view).len(), picked, "the latch held by H");
 }
 
 /// The system Hyper Select picks first from Alpha Centauri (131), the
@@ -1171,24 +1103,27 @@ fn cursor_alpha_holding(mut view: View, k: Key) -> Option<u8> {
 
 #[test]
 fn a_slot_key_held_fades_the_cursor_while_the_slot_block_polls_it() {
-    let pressed_only = cursor_alpha_holding(flight(), Key::Char('q'));
+    let pressed_only = faked_alpha_holding(Key::Char('q'));
     assert_ne!(pressed_only, Some(239));
     for k in [
         STELLAR_SLOT_KEYS[1][0],
         STELLAR_SLOT_KEYS[1][1],
         NEAREST_STELLAR_KEY,
     ] {
-        assert_eq!(cursor_alpha_holding(flight(), k), Some(239), "{k:?}");
+        assert_eq!(faked_alpha_holding(k), Some(239), "{k:?}");
     }
     assert_eq!(
-        cursor_alpha_holding(flight(), NEAREST_STELLAR_COMMAND_KEY),
+        faked_alpha_holding(NEAREST_STELLAR_COMMAND_KEY),
         pressed_only,
         "5 without Command"
     );
-    let mut menu = escorted();
-    tap(&mut menu, MENU_KEY);
+    let mut menu = super::faked_flight::at_rest(catalog());
+    let mut rows = menu.frame.hud.escort_rows;
+    rows[0].present = true;
+    menu.escort_menu.toggle(menu.elapsed, &rows);
+    assert!(menu.escort_menu.is_open());
     assert_eq!(
-        cursor_alpha_holding(menu, STELLAR_SLOT_KEYS[1][0]),
+        faked_alpha_of(menu, STELLAR_SLOT_KEYS[1][0]),
         pressed_only,
         "the menu's 2: its loop sets no fade"
     );
@@ -1207,4 +1142,79 @@ fn a_slot_key_held_during_a_jump_fades_the_cursor_only_by_its_press() {
             "{stage}"
         );
     }
+}
+
+/// Whether `view`'s world draws the double-time icon, `cïcn` 20000 at the
+/// top left.
+fn faked_double_time_drawn(view: &Faked) -> bool {
+    super::faked_world::world_list(view).iter().any(|command| {
+        *command
+            == DrawCommand::Picture {
+                image: ImageKey::icon(20000),
+                top_left: Point::new(0.0, 0.0),
+            }
+    })
+}
+
+/// A view over a flight showing the player at rest and NPC 0 of ship 129
+/// at (100, -100), and its id.
+fn faked_with_npc() -> (Faked, NpcId) {
+    let npc = super::faked_world::npc_129(0, Vec2::new(100.0, -100.0), 90.0);
+    let view = super::faked_world::world(
+        trafficked(&[130], 1, 129, 3),
+        super::faked_hud::among(vec![npc]),
+    );
+    (view, NpcId(0))
+}
+
+/// The cursor's alpha `view`'s world draws it with, if it draws it.
+fn faked_cursor_alpha(view: &Faked) -> Option<u8> {
+    super::faked_world::world_list(view)
+        .iter()
+        .find_map(|command| match *unclipped(command) {
+            DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+            _ => None,
+        })
+}
+
+/// The cursor's alpha two ticks after `k` is pressed and held in `view`.
+fn faked_alpha_of(mut view: Faked, k: Key) -> Option<u8> {
+    view.cursor_input(&Input::PointerMoved(NOWHERE));
+    super::faked_flight::hold(&mut view, k, true);
+    super::faked_flight::ticked(&mut view, 2);
+    faked_cursor_alpha(&view)
+}
+
+/// [`faked_alpha_of`] a view at rest.
+fn faked_alpha_holding(k: Key) -> Option<u8> {
+    faked_alpha_of(super::faked_flight::at_rest(catalog()), k)
+}
+
+/// A press of `k` as flight's input dispatches the keys these tests use:
+/// the cursor told, its key's routine, then the key tracked as held.
+fn faked_press(view: &mut Faked, k: Key) {
+    let input = key(k, true);
+    view.cursor_input(&input);
+    match k {
+        HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY => view.hyperspace_key(k),
+        NEAREST_KEY => view.press_nearest_key(),
+        TARGET_KEY => view.press_target_key(),
+        _ => view.nav_key(k),
+    }
+    view.track_held(&input);
+}
+
+/// A release of `k`, as flight's input tracks it.
+fn faked_release(view: &mut Faked, k: Key) {
+    let input = key(k, false);
+    view.cursor_input(&input);
+    view.track_held(&input);
+}
+
+/// How many Nav Off / Hyperspace Mode block presses `view` sent.
+fn block_presses(view: &Faked) -> usize {
+    sent(view)
+        .iter()
+        .filter(|command| matches!(command, FlightCommand::NavModeKeys { .. }))
+        .count()
 }

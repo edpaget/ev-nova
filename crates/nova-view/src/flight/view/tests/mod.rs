@@ -2630,12 +2630,6 @@ fn npc_ids(view: &View) -> Vec<NpcId> {
     session.npcs().iter().map(|npc| npc.id).collect()
 }
 
-/// A full cloak.
-const CLOAKED: nova_sim::cloak::Cloak = nova_sim::cloak::Cloak {
-    fade: nova_sim::cloak::FADE_FULL,
-    direction: 0,
-};
-
 /// Turns east at rest, then drifts out slowly that way until far
 /// enough to jump: facing Alpha Centauri and slow enough, J streaks at
 /// once.
@@ -4013,7 +4007,7 @@ fn map_sounds(view: &mut View) -> Vec<UiSound> {
 }
 
 /// Where on screen `view` draws NPC `id`.
-fn npc_on_screen(view: &View, id: NpcId) -> Point {
+fn npc_on_screen<C, S: FlightSim>(view: &FlightView<C, S>, id: NpcId) -> Point {
     view.camera()
         .world_to_screen(view.shown_npc(&npc_record(view, id)).0)
 }
