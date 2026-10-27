@@ -19,8 +19,10 @@ use std::path::Path;
 use std::rc::Rc;
 
 use nova_data::records::character::Character;
+use nova_data::records::mission::Mission;
 use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
+use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, Record};
@@ -30,9 +32,10 @@ use nova_sim::fixture::SessionBuilder;
 use nova_sim::flight_frame::{Answer, FlightCommand, FlightFrame};
 use nova_sim::navigation::NavMode;
 use nova_sim::{
-    CharacterStart, CombatCatalog, CommodityStrings, DateAffixes, DisasterRecord, GovtRecord,
-    HullRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipFields, ShipId,
-    StarSystem, StartDate, StartError, StellarId, StellarPick, SystemId, Vec2, WeaponRecord,
+    CharacterStart, CombatCatalog, CommodityStrings, DateAffixes, Direction, DisasterRecord, Good,
+    GovtRecord, HullRecord, JunkRecord, LandingSite, Lot, Order, OutfitId, OutfitRecord,
+    PilotCatalog, ShipFields, ShipId, StarSystem, StartDate, StartError, StellarId, StellarPick,
+    SystemId, Vec2, WeaponRecord,
 };
 use nova_sim::{MissionId, TICK};
 use nova_view::devtools::{PilotDesk, PilotEdit};
@@ -1099,5 +1102,149 @@ fn a_real_board_opens_the_plunder_dialog_on_the_sessions_boarding() {
         view.session().expect("flying").boarding(),
         None,
         "let go through the port"
+    );
+}
+
+// The spaceport and the missions, over a real session's `PortSource`
+// and commands.
+
+/// A `STR#` of `strings`.
+fn str_list(strings: &[&str]) -> Vec<u8> {
+    let mut bytes = i16::try_from(strings.len())
+        .expect("a short list")
+        .to_be_bytes()
+        .to_vec();
+    for string in strings {
+        bytes.push(u8::try_from(string.len()).expect("a short string"));
+        bytes.extend(string.as_bytes());
+    }
+    bytes
+}
+
+/// The first `chär`, with 25,000 credits: ship 128 from system 128.
+fn rich_character() -> Vec<u8> {
+    let mut bytes = character();
+    bytes[0x00..0x04].copy_from_slice(&25_000_i32.to_be_bytes());
+    bytes
+}
+
+/// A ship that flies, with 10 tons of cargo space.
+fn hauler() -> Vec<u8> {
+    let mut bytes = ship();
+    put_i16s(&mut bytes, 0x00, &[10]);
+    bytes
+}
+
+/// Alpha Prime: a landable planet at the centre, a trade center trading
+/// food at medium and metal at low.
+fn trade_center() -> Vec<u8> {
+    let mut bytes = planet();
+    bytes[0x06..0x0A].copy_from_slice(&0x2000_1003_u32.to_be_bytes());
+    bytes
+}
+
+/// A `mïsn` offered at stellar 128's mission computer on every visit,
+/// going nowhere, paying 1,000, with no text.
+fn errand() -> Vec<u8> {
+    let mut bytes = vec![0; Mission::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[128, 0, 0, 0, 0, 100, -1, -1, -1, -1]);
+    bytes[0x1C..0x20].copy_from_slice(&1000_i32.to_be_bytes());
+    put_i16s(&mut bytes, 0x20, &[0, 0, -1, -1, 0, -1, 0, -1, 0]);
+    put_i16s(&mut bytes, 0x32, &[-1, -1, -1, -1, -1, -1, -1, 0, 1, -1]);
+    put_i16s(&mut bytes, 0x58, &[-1]);
+    bytes
+}
+
+/// Alpha (128), holding Alpha Prime (128), a trade center offering
+/// mission 128 at its computer, and the commodities' names and prices.
+/// The first `chär` flies ship 128, holding 10 tons, with 25,000
+/// credits.
+fn port_data() -> Rc<GameData> {
+    let fork = ForkBuilder::new()
+        .resource(Character::TYPE, 128, Some(b"Pilot"), &rich_character())
+        .resource(Ship::TYPE, 128, Some(b"Hauler"), &hauler())
+        .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[], &[128]))
+        .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &trade_center())
+        .resource(Mission::TYPE, 128, Some(b"Errand"), &errand())
+        .resource(
+            StrList::TYPE,
+            4000,
+            Some(b"Commodities"),
+            &str_list(&[
+                "Food",
+                "Industrial",
+                "Medical Supplies",
+                "Luxury Goods",
+                "Metal",
+                "Equipment",
+            ]),
+        )
+        .resource(
+            StrList::TYPE,
+            4004,
+            Some(b"Prices"),
+            &str_list(&["75", "350", "750", "900", "200", "550"]),
+        )
+        .build()
+        .bytes;
+    let file = OneFile(fork);
+    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+}
+
+/// A whole flight view over a real session of [`port_data`], landed on
+/// Alpha Prime, its landing settled.
+fn docked_view() -> FlightView<Rc<GameData>> {
+    let data = port_data();
+    let session = SessionBuilder::flying(&data)
+        .landed_at(SystemId(128), StellarId(128))
+        .build();
+    let mut view = FlightView::from_session(data, session.into());
+    view.settle_script();
+    view
+}
+
+#[test]
+fn a_real_trade_changes_the_market_shown() {
+    let mut view = docked_view();
+    let before = view.market().expect("an exchange");
+    let food = before
+        .rows
+        .iter()
+        .position(|row| row.good == Good::Commodity(0))
+        .expect("food traded");
+    let order = Order {
+        row: food,
+        good: Good::Commodity(0),
+        direction: Direction::Buy,
+        lot: Lot::Click,
+    };
+    assert_eq!(view.trade(order), Ok(10), "the hold filled");
+    let after = view.market().expect("still an exchange");
+    assert_ne!(after, before, "the hold traded shows");
+    assert_eq!(
+        Some(after),
+        view.session().ok().and_then(nova_sim::Session::market),
+        "the session's own"
+    );
+}
+
+#[test]
+fn a_real_mission_accept_shows_in_the_mission_info() {
+    let mut view = docked_view();
+    assert_eq!(view.mission_info().rows, []);
+    let computer = view.open_mission_computer().expect("an offer");
+    let mission = computer.rows.first().expect("listed").mission;
+    assert_eq!(mission, MissionId(128));
+    assert_eq!(view.accept_mission(mission), Ok(0));
+    let info = view.mission_info();
+    assert_eq!(
+        info.rows.iter().map(|row| row.slot).collect::<Vec<_>>(),
+        [0],
+        "listed in its slot"
+    );
+    assert_eq!(
+        Some(info),
+        view.session().ok().map(nova_sim::Session::mission_info),
+        "as the session lists it"
     );
 }
