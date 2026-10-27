@@ -13039,17 +13039,51 @@ mod tests {
         events
     }
 
+    /// The events as A at the centre fires `record` once to the right
+    /// among `others`, in the ship loop ([`phase::handle_npcs`]), its shot
+    /// takes `moves` moves ([`phase::fly_shots`]), and the collision
+    /// passes test the last ([`phase::test_hits`]).
+    fn struck_on_move(record: WeaponRecord, others: Vec<Ship>, moves: u32) -> Vec<CombatEvent> {
+        let mut combat = Combat::default();
+        let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(record)];
+        ships.extend(others);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        for _ in 0..moves {
+            phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+        }
+        phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+        combat.take_events()
+    }
+
+    /// The events as A at the centre fires the beam `record` once to the
+    /// right among `others`, in the ship loop ([`phase::handle_npcs`]),
+    /// and `_HandleBeams` runs `ticks` times ([`phase::close_tick`]), the
+    /// first in the tick it is fired.
+    fn beam_fought(record: WeaponRecord, others: Vec<Ship>, ticks: u32) -> Vec<CombatEvent> {
+        let mut combat = Combat::default();
+        let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(record)];
+        ships.extend(others);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        for _ in 0..ticks {
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
+        }
+        combat.take_events()
+    }
+
     #[test]
     fn a_shots_contact_hit_explodes_at_its_blast_radius() {
-        let events = fight_once(hellhound(blaster()), vec![Ship::at(2, 100.0, 0.0)], 8);
+        // Its 6th move, from 75 to 90 pixels out, meets B's edge at 84.
+        let events = struck_on_move(hellhound(blaster()), vec![Ship::at(2, 100.0, 0.0)], 6);
         assert_eq!(sizes(&events), [145.0], "{events:?}");
     }
 
     #[test]
     fn a_shots_proximity_hit_explodes_at_its_blast_radius() {
         // The first move ends 30 from B: within trunc(30 + 32 x 0.333) =
-        // 40, beyond its 16-pixel radius. The next tick's pass tests it.
-        let events = fight_once(hellhound(fast_gun(30)), vec![Ship::at(2, 100.0, 30.0)], 2);
+        // 40, beyond its 16-pixel radius.
+        let events = struck_on_move(hellhound(fast_gun(30)), vec![Ship::at(2, 100.0, 30.0)], 1);
         assert_eq!(sizes(&events), [145.0], "{events:?}");
     }
 
@@ -13060,13 +13094,21 @@ mod tests {
             flags: 0x8000,
             ..hellhound(blaster())
         };
-        let events = fight_once(flak, Vec::new(), 4);
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(flak)];
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        // Its 3 moves, then its end of life.
+        for _ in 0..4 {
+            phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+        }
+        let events = combat.take_events();
         assert_eq!(sizes(&events), [145.0], "{events:?}");
     }
 
     #[test]
     fn a_beams_hit_on_a_ship_explodes_at_its_blast_radius_every_tick() {
-        let events = fight_once(hellhound(laser()), vec![Ship::at(2, 100.0, 0.0)], 5);
+        let events = beam_fought(hellhound(laser()), vec![Ship::at(2, 100.0, 0.0)], 6);
         assert_eq!(sizes(&events), [145.0; 3], "{events:?}");
     }
 
@@ -13074,13 +13116,13 @@ mod tests {
     fn a_shots_hit_on_an_asteroid_explodes_at_its_blast_radius() {
         let mut combat = Combat::default();
         let mut rocks = Rocks::of([rock(0, 100.0, 0.0)]);
-        let (_, events) = shoot_rocks(
+        let (_, events) = shot_at_rocks(
             &mut combat,
             A,
             hellhound(blaster()),
             Vec::new(),
             &mut rocks,
-            8,
+            6,
         );
         assert_eq!(sizes(&events), [145.0], "{events:?}");
     }
@@ -13088,13 +13130,22 @@ mod tests {
     #[test]
     fn a_planet_type_shots_hit_on_a_stellar_explodes_at_its_blast_radius() {
         let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
-        let (_, _, events, _) = shoot_once(
-            hellhound(planet_gun()),
-            Vec::new(),
-            &mut stellars,
-            &Arsenal::default(),
-            7,
-        );
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(hellhound(planet_gun()))];
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        // Its 6th move, from 75 to 90 pixels out, meets the stellar's edge.
+        for _ in 0..6 {
+            phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+        }
+        phase::run(&mut combat, &mut ships, &NovaDisable, |c, f, a, ch| {
+            let scenery = Scenery {
+                stellars: &mut stellars,
+                ..Scenery::default()
+            };
+            c.test_hits(f, a, scenery, ch);
+        });
+        let events = combat.take_events();
         assert_eq!(sizes(&events), [145.0], "{events:?}");
     }
 
@@ -13133,29 +13184,20 @@ mod tests {
 
     #[test]
     fn a_shots_hit_on_an_npc_shows_its_flash_that_frame_and_a_beams_the_next() {
-        let events = fight_once(blaster(), vec![Ship::at(2, 100.0, 0.0)], 8);
+        let events = struck_on_move(blaster(), vec![Ship::at(2, 100.0, 0.0)], 6);
         assert_eq!(lateness(&events), [(B, false)]);
-        let events = fight_once(laser(), vec![Ship::at(2, 100.0, 0.0)], 5);
+        let events = beam_fought(laser(), vec![Ship::at(2, 100.0, 0.0)], 6);
         assert_eq!(lateness(&events), [(B, true); 3]);
     }
 
     #[test]
     fn any_hit_on_the_player_shows_its_flash_the_next_frame() {
-        let mut combat = Combat::default();
-        let mut ships = [
-            Ship::at(1, 0.0, 0.0).armed(blaster()),
-            Ship {
-                id: ShipRef::Player,
-                fleet: ShipRef::Player,
-                ..Ship::at(0, 100.0, 0.0)
-            },
-        ];
-        let mut events = Vec::new();
-        for _ in 0..8 {
-            tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = QUIET;
-            events.extend(combat.take_events());
-        }
+        let player = Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            ..Ship::at(0, 100.0, 0.0)
+        };
+        let events = struck_on_move(blaster(), vec![player], 6);
         assert_eq!(lateness(&events), [(ShipRef::Player, true)]);
     }
 
@@ -13163,12 +13205,13 @@ mod tests {
     fn a_missile_lock_raises_a_hit_on_its_target_that_flashes_its_shield() {
         let mut combat = Combat::default();
         let mut ships = [player_with(missile()), far_b()];
-        let mut events = Vec::new();
+        phase::fire_player(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        // The player's missile moves in the tick it is fired: its 40.
         for _ in 0..40 {
-            tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = QUIET;
-            events.extend(combat.take_events());
+            phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
         }
+        let events = combat.take_events();
         assert_eq!(
             raised(&events),
             [(B, Some(WeaponId(134)), Vec2::new(5000.0, 0.0), false)],
@@ -13189,10 +13232,10 @@ mod tests {
             blast_radius: 30,
             ..blaster()
         };
-        let events = fight_once(
+        let events = struck_on_move(
             shell,
             vec![Ship::at(2, 100.0, 0.0), Ship::at(3, 100.0, 25.0)],
-            7,
+            6,
         );
         let hits = raised(&events);
         let ships: Vec<ShipRef> = hits.iter().map(|hit| hit.0).collect();
@@ -13206,7 +13249,7 @@ mod tests {
 
     #[test]
     fn a_beam_raises_a_hit_at_its_end_every_tick_it_touches_a_ship() {
-        let events = fight_once(laser(), vec![Ship::at(2, 100.0, 0.0)], 5);
+        let events = beam_fought(laser(), vec![Ship::at(2, 100.0, 0.0)], 6);
         let hits = raised(&events);
         assert_eq!(hits.len(), 3, "{hits:?}");
         for (ship, weapon, at, passes) in hits {
@@ -13222,7 +13265,7 @@ mod tests {
             ..blaster()
         };
         for (record, passes) in [(piercing, true), (blaster(), false)] {
-            let events = fight_once(record, vec![Ship::at(2, 100.0, 0.0)], 8);
+            let events = struck_on_move(record, vec![Ship::at(2, 100.0, 0.0)], 6);
             let hits = raised(&events);
             assert_eq!(hits.len(), 1, "{hits:?}");
             assert_eq!(hits[0].3, passes);
@@ -13235,13 +13278,15 @@ mod tests {
         for (flags, passes) in [(0, false), (piercing, true)] {
             let mut combat = Combat::default();
             let mut rocks = Rocks::of([rock(0, 107.0, 0.0)]);
-            let (_, events) = shoot_rocks(
+            // Its 7th move, from 90 to 105 pixels out, meets the
+            // asteroid's edge at 97.
+            let (_, events) = shot_at_rocks(
                 &mut combat,
                 ShipRef::Player,
                 blasting(flags, 0),
                 vec![Ship::at(2, 110.0, 20.0)],
                 &mut rocks,
-                8,
+                7,
             );
             let hits = raised(&events);
             assert_eq!(hits.len(), 1, "{flags:#x}: {hits:?}");
@@ -13264,7 +13309,7 @@ mod tests {
             wreck(WRECK, 200.0, 0.0, 0.0),
             holding(1, 40.0, 0.0, 100.0, 300.0, 300.0),
         ];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let hits = raised(&combat.take_events());
         assert_eq!(hits, [(A, None, Vec2::ZERO, false)]);
     }
@@ -13279,24 +13324,24 @@ mod tests {
         let after = ShipId(ESCAPE_POD_SHIP.0 + 1);
         for ship_type in [ESCAPE_POD_SHIP, after] {
             // A blast reaches it, and a beam the class after the pod.
-            let events = fight_once(
+            let events = struck_on_move(
                 shell,
                 vec![
                     Ship::at(4, 100.0, 0.0),
                     pod(Ship::at(3, 100.0, 25.0), ship_type),
                 ],
-                7,
+                6,
             );
             let ships: Vec<ShipRef> = raised(&events).iter().map(|hit| hit.0).collect();
             assert_eq!(ships, [ShipRef::Npc(NpcId(4))], "{ship_type:?}");
-            let events = fight_once(laser(), vec![pod(Ship::at(2, 100.0, 0.0), after)], 5);
+            let events = beam_fought(laser(), vec![pod(Ship::at(2, 100.0, 0.0), after)], 6);
             assert_eq!(raised(&events), [], "{ship_type:?}");
             let mut combat = Combat::default();
             let mut ships = [
                 wreck(WRECK, 200.0, 0.0, 0.0),
                 pod(holding(1, 40.0, 0.0, 100.0, 300.0, 300.0), ship_type),
             ];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(raised(&combat.take_events()), [], "{ship_type:?}");
         }
     }
