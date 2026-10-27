@@ -1506,47 +1506,6 @@ fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
     );
 }
 
-/// The fight of [`armed`] with the NPC straight above the player and
-/// facing it, firing a blaster of `mass_dmg` that ignores shields at
-/// it, ticked until the player is no longer intact: the line then.
-fn downed_line(mass_dmg: i16) -> (Condition, Option<String>) {
-    let mut catalog = armed(1, &[]);
-    catalog.weapons[0].mass_dmg = mass_dmg;
-    catalog.weapons[0].flags = 0x0020;
-    catalog.hulls[0].death_delay = 30;
-    catalog.hulls[1] = hull_of(129, &[BLASTER]);
-    let mut view = fighting(catalog, &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
-    for _ in 0..400 {
-        view.tick(TICK);
-        let condition = view.session().expect("flying").player_condition();
-        if condition != Condition::Intact {
-            return (condition, view.message().map(str::to_owned));
-        }
-    }
-    panic!("the player was never downed");
-}
-
-#[test]
-fn the_player_broken_up_at_a_hit_is_left_told_ship_destroyed() {
-    let (condition, line) = downed_line(1000);
-    assert!(
-        matches!(condition, Condition::Dying { .. }),
-        "{condition:?}"
-    );
-    assert_eq!(
-        line.as_deref(),
-        Some("Ship destroyed."),
-        "#288 replaced #287"
-    );
-}
-
-#[test]
-fn the_player_disabled_is_told_ship_disabled() {
-    let (condition, line) = downed_line(1);
-    assert_eq!(condition, Condition::Disabled);
-    assert_eq!(line.as_deref(), Some("Ship disabled."));
-}
-
 #[test]
 fn command_and_x_together_hold_the_eject() {
     assert_eq!(EJECT_KEY, Key::Char('x'));

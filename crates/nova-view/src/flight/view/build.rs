@@ -690,7 +690,7 @@ impl<
                 session.jettison_cargo(true, &mut view.sim.chance);
             }
         });
-        self.say_messages();
+        self.say_messages(Self::WORDS);
     }
 
     /// The mission info [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asked for the mission info
@@ -714,7 +714,7 @@ impl<
         };
         match session.press_mission_info() {
             MissionInfoPress::Refused => {}
-            MissionInfoPress::NoActiveMissions => self.say_messages(),
+            MissionInfoPress::NoActiveMissions => self.say_messages(Self::WORDS),
             MissionInfoPress::Opens(info) => {
                 self.pending_mission_info = Some(info);
                 self.held.clear();

@@ -257,7 +257,7 @@ impl<
             self.catch_up();
             self.map.recentre();
         }
-        self.relay_messages();
+        self.relay_messages(Self::WORDS);
         // The session may have populated its system afresh.
         self.read_npc_sheets();
     }
@@ -406,10 +406,10 @@ impl<
             return;
         }
         let (fighters, pay, drained) = self.arrival_outputs();
+        let date = (Self::WORDS.date)(self);
         let Ok(session) = &mut self.sim.session else {
             return;
         };
-        let date = session.long_date_text();
         let mut messages = std::mem::take(&mut self.pending_leads);
         messages.extend(drained);
         let scene = self.scene.as_ref();
@@ -686,9 +686,9 @@ impl<
         let (greeting, rest): (Vec<_>, Vec<_>) = messages
             .into_iter()
             .partition(|message| matches!(message, SimMessage::TookOff { .. }));
-        let mut line = self.word(greeting);
+        let mut line = self.word(greeting, Self::WORDS);
         line.extend(pay);
-        (line, self.word(rest), system)
+        (line, self.word(rest, Self::WORDS), system)
     }
 
     /// Says `line` as [`FlightView::say_all`] does, then each of `rest` in
@@ -768,7 +768,7 @@ impl<
             said.extend(self.fighters_said());
         }
         self.say_all(&said);
-        self.say_messages();
+        self.say_messages(Self::WORDS);
     }
 
     /// Plays `effect` for the ship having come out of a gate, caught up
@@ -789,7 +789,7 @@ impl<
             return;
         };
         let pressed = session.land();
-        self.say_messages();
+        self.say_messages(Self::WORDS);
         let Ok(session) = &mut self.sim.session else {
             return;
         };

@@ -13,7 +13,7 @@ use nova_sim::{
 };
 use nova_sim::{
     Boarding, Market, Order, Outfitter, Pilot, PlunderView, RechargeRefusal, Session, ShipId,
-    ShipNaming, ShipRefusal, Shipyard, SimMessage, StellarId, Take, Taken, TradeRefusal,
+    ShipNaming, ShipRefusal, Shipyard, StellarId, Take, Taken, TradeRefusal,
 };
 
 use crate::flight::catalog::StatusBars;
@@ -26,8 +26,8 @@ use crate::{Key, Point};
 use super::outputs::FlightTexts;
 use super::{
     BOARD_LINE_TICKS, BOARD_REFUSAL_TICKS, BarStep, FlightView, GRANT_TICKS, MESSAGE_TICKS,
-    NavFlash, REPELLED, Then, board_refusal_message, grant_message, message_text,
-    mission_board_message, names, plunder_message,
+    NavFlash, REPELLED, Then, board_refusal_message, grant_message, mission_board_message, names,
+    plunder_message,
 };
 
 impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
@@ -91,43 +91,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         self.pending_landing.take()
     }
 
-    /// Shows `text` as the message, from now, for `ticks` of flight,
-    /// replacing whatever was shown, as `_DisplayComm` does
-    /// (@0x9024b-0x90256), and sets the session's message line to it
-    /// ([`Session::comm_shown`]): a line the view raises itself, or one
-    /// it composes from the session's at an arrival, a take-off or a
-    /// settling, where nothing counts down between the session raising
-    /// the parts and the view showing the whole. The lines the session
-    /// raised in a frame's steps are relayed ([`FlightView::relay`]).
-    ///
-    /// Every write to the message slot goes through this, `relay`,
-    /// [`FlightView::clear_message`], [`FlightView::acknowledge_message`]
-    /// or [`FlightView::blank_message`], so the session's line stays in
-    /// step with the slot.
-    pub(super) fn say_for(&mut self, text: impl Into<String>, ticks: u16) {
-        self.relay(text, ticks);
-        if let Ok(session) = &mut self.sim.session {
-            session.comm_shown(ticks);
-        }
-    }
-
-    /// Clears the message line when it holds `text`, as the original
-    /// clears one message by name (`_HandlePlayer` @0x6b231-0x6b2a7,
-    /// @0x6dedb-0x6df29): it shows an empty line for 1 tick, the
-    /// session's line too.
-    pub(super) fn clear_message(&mut self, text: &str) {
-        if self
-            .message
-            .as_ref()
-            .is_some_and(|message| message.text == text)
-        {
-            self.message = None;
-            if let Ok(session) = &mut self.sim.session {
-                session.comm_shown(1);
-            }
-        }
-    }
-
     /// Return (`ackComm`): clears the message line, and the session's
     /// for a tick while a line shows ([`Session::comm_acknowledged`],
     /// `_HandlePlayer` @0x6dd22-0x6dd65).
@@ -136,15 +99,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         if let Ok(session) = &mut self.sim.session {
             session.comm_acknowledged();
         }
-    }
-
-    /// Empties the message slot at a change the session settles its line
-    /// for itself: a landing, which sets it to 0
-    /// (`_HandlePlayerDockRequest` @0x66d7f); the take-off after it, from
-    /// that 0; and an arrival, whose own line the session raised and the
-    /// view shows next ([`FlightView::say_for`]).
-    pub(super) fn blank_message(&mut self) {
-        self.message = None;
     }
 
     /// Holds `offer`'s prompt for the router, letting go of the flight
@@ -337,53 +291,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         }
     }
 
-    /// Shows the session's messages since they were last taken, each in
-    /// turn, in the original's words; an arrival's waits for its arrival
-    /// to be caught up with ([`FlightView::arrived`]). Called right after
-    /// a press or a settling raised them, with nothing counted down
-    /// since, it sets the session's line to the last shown
-    /// ([`FlightView::say_for`]); after a frame's steps,
-    /// [`FlightView::relay_messages`] leaves the line alone.
-    pub(super) fn say_messages(&mut self) {
-        for (text, ticks) in self.worded_messages() {
-            self.say_for(text, ticks);
-        }
-    }
-
-    /// Shows the session's messages raised in a frame's steps, as
-    /// [`FlightView::say_messages`] does, but relayed
-    /// ([`FlightView::relay`]): the session set its line as it raised
-    /// each, and the steps have counted it down since.
-    pub(super) fn relay_messages(&mut self) {
-        for (text, ticks) in self.worded_messages() {
-            self.relay(text, ticks);
-        }
-    }
-
-    /// The session's messages since they were last taken, worded.
-    fn worded_messages(&mut self) -> Vec<(String, u16)> {
-        let messages = self.drain().take_messages();
-        self.word(messages)
-    }
-
-    /// The words of each of `messages`, in order, with its ticks, the
-    /// stellars named from the scene; an arrival's has none here, and
-    /// waits for its arrival to be caught up with
-    /// ([`FlightView::arrived`]), which leads with it.
-    pub(super) fn word(&mut self, messages: Vec<SimMessage>) -> Vec<(String, u16)> {
-        let Ok(session) = &self.sim.session else {
-            return Vec::new();
-        };
-        let mut said = Vec::new();
-        for message in messages {
-            match message_text(&message, session, self.scene.as_ref(), &mut self.sim.chance) {
-                Some(text) => said.push((text, message.ticks())),
-                None => self.pending_leads.push(message),
-            }
-        }
-        said
-    }
-
     /// Presses the jettison key: with Command held, jettisons the cargo,
     /// and with Option (Alt) too, all but the mission cargo (see
     /// [`Session::jettison_cargo`]), saying what went.
@@ -395,7 +302,7 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         if let Ok(session) = &mut self.sim.session {
             session.jettison_cargo(all, &mut self.sim.chance);
         }
-        self.say_messages();
+        self.say_messages(Self::WORDS);
     }
 
     /// The flight, or why it could not start.

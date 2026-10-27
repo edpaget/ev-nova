@@ -80,6 +80,7 @@ mod drain;
 mod escorts;
 mod faked_flight;
 mod faked_hud;
+mod faked_travel;
 mod faked_world;
 mod flying;
 mod hyperspace;

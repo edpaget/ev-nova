@@ -12,9 +12,11 @@ use crate::flight::escorts::fighters_abandoned_message;
 use crate::flight::sim_port::FlightSim;
 use crate::{Diagnostic, Sound};
 
+use super::words::Words;
 use super::{
     FlightView, MESSAGE_TICKS, Message, SCRIPT_MESSAGE_TICKS, Said, comm_message, pay_said,
 };
+use nova_sim::flight_frame::FlightCommand;
 
 /// The mission texts taken over flight ([`FlightView::flight_texts`]),
 /// with what their redraw needs.
@@ -99,6 +101,95 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightEvent::SaveDue`]: nova_sim::flight_frame::FlightEvent::SaveDue
     pub fn take_save_due(&mut self) -> bool {
         self.drain().take_save_due()
+    }
+
+    /// Shows `text` as the message, from now, for `ticks` of flight,
+    /// replacing whatever was shown, as `_DisplayComm` does
+    /// (@0x9024b-0x90256), and sets the flight's message line to it
+    /// ([`FlightCommand::CommShown`], `nova_sim::Session::comm_shown`): a
+    /// line the view raises itself, or one it composes from the flight's
+    /// at an arrival, a take-off or a settling, where nothing counts down
+    /// between the flight raising the parts and the view showing the
+    /// whole. The lines the flight raised in a frame's steps are relayed
+    /// ([`FlightView::relay`]).
+    ///
+    /// Every write to the message slot goes through this, `relay`,
+    /// [`FlightView::clear_message`], [`FlightView::acknowledge_message`]
+    /// or [`FlightView::blank_message`], so the flight's line stays in
+    /// step with the slot.
+    pub(super) fn say_for(&mut self, text: impl Into<String>, ticks: u16) {
+        self.relay(text, ticks);
+        self.send(FlightCommand::CommShown(ticks));
+    }
+
+    /// Clears the message line when it holds `text`, as the original
+    /// clears one message by name (`_HandlePlayer` @0x6b231-0x6b2a7,
+    /// @0x6dedb-0x6df29): it shows an empty line for 1 tick, the
+    /// flight's line too.
+    pub(super) fn clear_message(&mut self, text: &str) {
+        if self
+            .message
+            .as_ref()
+            .is_some_and(|message| message.text == text)
+        {
+            self.message = None;
+            self.send(FlightCommand::CommShown(1));
+        }
+    }
+
+    /// Empties the message slot at a change the flight settles its line
+    /// for itself: a landing, which sets it to 0
+    /// (`_HandlePlayerDockRequest` @0x66d7f); the take-off after it, from
+    /// that 0; and an arrival, whose own line the flight raised and the
+    /// view shows next ([`FlightView::say_for`]).
+    pub(super) fn blank_message(&mut self) {
+        self.message = None;
+    }
+
+    /// Shows the flight's messages since they were last taken, each in
+    /// turn, in the words `words` gives; an arrival's waits for its
+    /// arrival to be caught up with (`FlightView::arrived`). Called right
+    /// after a press or a settling raised them, with nothing counted down
+    /// since, it sets the flight's line to the last shown
+    /// ([`FlightView::say_for`]); after a frame's steps,
+    /// [`FlightView::relay_messages`] leaves the line alone.
+    pub(super) fn say_messages(&mut self, words: Words<Self>) {
+        for (text, ticks) in self.worded_messages(words) {
+            self.say_for(text, ticks);
+        }
+    }
+
+    /// Shows the flight's messages raised in a frame's steps, as
+    /// [`FlightView::say_messages`] does, but relayed
+    /// ([`FlightView::relay`]): the flight set its line as it raised
+    /// each, and the steps have counted it down since.
+    pub(super) fn relay_messages(&mut self, words: Words<Self>) {
+        for (text, ticks) in self.worded_messages(words) {
+            self.relay(text, ticks);
+        }
+    }
+
+    /// The flight's messages since they were last taken
+    /// ([`FlightEvent::Message`]), worded.
+    ///
+    /// [`FlightEvent::Message`]: nova_sim::flight_frame::FlightEvent::Message
+    fn worded_messages(&mut self, words: Words<Self>) -> Said {
+        let messages = self.drain().take_messages();
+        self.word(messages, words)
+    }
+
+    /// The words `words` gives each of `messages`, in order, with its
+    /// ticks; an arrival's has none here, and waits for its arrival to be
+    /// caught up with (`FlightView::arrived`), which leads with it.
+    pub(super) fn word(&mut self, messages: Vec<SimMessage>, words: Words<Self>) -> Said {
+        let mut said = Vec::new();
+        for message in messages {
+            match (words.text)(self, &message) {
+                Some(text) => said.push((text, message.ticks())),
+                None => self.pending_leads.push(message),
+            }
+        }
+        said
     }
 
     /// Shows `text`, a line the session raised and has already set its

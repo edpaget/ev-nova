@@ -689,6 +689,7 @@ mod stars;
 mod stellar_looks;
 mod stepping;
 mod travel;
+mod words;
 mod world;
 
 pub use dialog_map::MapOpener;
