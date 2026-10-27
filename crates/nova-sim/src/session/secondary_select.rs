@@ -97,7 +97,7 @@ impl Session {
     /// read at the press, where the original reads it at the pass
     /// (`QuickKeyCheck(0x3a)` @0x6acf6): the press is taken on the next
     /// pass, before any frame is drawn, so the difference is never seen.
-    pub fn press_weapon_select(&mut self, backwards: bool) {
+    pub(crate) fn press_weapon_select(&mut self, backwards: bool) {
         self.ship.weapon_keys.select_press = Some(backwards);
     }
 

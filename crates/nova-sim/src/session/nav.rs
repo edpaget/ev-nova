@@ -458,7 +458,7 @@ impl Session {
     ///
     /// A key that finds a stellar raises [`SimSound::NavSelected`], even
     /// for the one selected (@0x69ebc). Selecting changes the mode to 2
-    /// and starts the brackets' fly-in ([`Session::nav_brackets`]), and
+    /// and starts the brackets' fly-in (`Chart::nav_brackets`), and
     /// drops the dock request (@0x69efd-0x69f12), only when it is not the
     /// stellar selected in mode 2 already (@0x69ec4-0x69ed6). A click in
     /// space is [`Session::click_in_space`], whose walk passes over the

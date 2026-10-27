@@ -2250,8 +2250,12 @@ impl Session {
     /// `_DrawStatusWeap` (@0x4c1ce-0x4c1f4) reads the player's rounds of
     /// it; none when that names none, nothing is selected, or the
     /// session has no record of the weapon.
+    ///
+    /// For the tests: the frame fills its HUD from the sub-state's own
+    /// (`Session::fill_hud`).
+    #[cfg(test)]
     #[must_use]
-    pub fn secondary_line_count(&self) -> Option<u32> {
+    pub(crate) fn secondary_line_count(&self) -> Option<u32> {
         self.ship.secondary_line_count(&self.pilot, &self.statics)
     }
 
@@ -4925,7 +4929,7 @@ impl Session {
     /// ship type has no record (the original's type range check @0x73609);
     /// either way the bar is `ïntf` 128.
     #[must_use]
-    pub fn interface_government(&self) -> Option<GovtId> {
+    pub(crate) fn interface_government(&self) -> Option<GovtId> {
         interface_government(&self.pilot, &self.statics)
     }
 

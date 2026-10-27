@@ -300,7 +300,7 @@ pub struct FrameHud {
     /// ([`Session::secondary`](crate::Session::secondary)).
     pub secondary: Option<WeaponId>,
     /// The count the secondary weapon's line shows after its name
-    /// ([`Session::secondary_line_count`](crate::Session::secondary_line_count)).
+    /// (`Session::secondary_line_count`).
     pub secondary_line_count: Option<u32>,
     /// What the player's outfits give the radar
     /// (`Session::radar_gear`).

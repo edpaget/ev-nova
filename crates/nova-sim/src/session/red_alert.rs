@@ -41,6 +41,10 @@ impl Session {
     }
 
     /// The Red Alert icon frame shown, if any.
+    ///
+    /// For the tests: the frame fills its HUD from the Red Alert's own
+    /// (`Session::fill_hud`).
+    #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     pub fn red_alert_icon(&self) -> Option<AlertIcon> {
         self.red_alert.icon()

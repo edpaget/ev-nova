@@ -170,9 +170,9 @@
 //! at once ([`retake_target`](super::cadence::retake_target)). Its target blinks bright on the
 //! same 8 ticks either way, and it shows no stellars or ships while the
 //! ship is landed. The player's outfits give it IFF colours and a density
-//! scanner ([`Session::radar_gear`]); far from the system's centre an
+//! scanner ([`FrameHud::radar_gear`](nova_sim::flight_frame::FrameHud::radar_gear)); far from the system's centre an
 //! arrow points back to it; and each tick the interference in the system
-//! ([`Session::interference`]) may fill it with static, rolled on the
+//! ([`FrameHud::interference`](nova_sim::flight_frame::FrameHud::interference)) may fill it with static, rolled on the
 //! effects' chance.
 //!
 //! In port the app draws the status bar alone under the spaceport

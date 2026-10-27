@@ -37,8 +37,12 @@ impl Session {
     /// (after a take-off) nor any other mode shows them. A dominated stellar takes the green frames: the same
     /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76), which
     /// `Session::iff_dominated` models.
+    ///
+    /// For the tests: the frame fills its HUD from the sub-state's own
+    /// (`Session::fill_hud`).
+    #[cfg(test)]
     #[must_use]
-    pub fn nav_brackets(&self) -> Option<NavBrackets> {
+    pub(crate) fn nav_brackets(&self) -> Option<NavBrackets> {
         self.chart.nav_brackets()
     }
 

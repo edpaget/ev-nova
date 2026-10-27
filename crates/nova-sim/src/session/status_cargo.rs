@@ -13,8 +13,12 @@ use crate::status_cargo::{
 impl Session {
     /// What the status bar's cargo area lists (see
     /// [`status_cargo::status_cargo`]).
+    ///
+    /// For the tests: the frame fills its HUD from the sub-state's own
+    /// (`Session::fill_hud`).
+    #[cfg(test)]
     #[must_use]
-    pub fn status_cargo(&self) -> StatusCargo {
+    pub(crate) fn status_cargo(&self) -> StatusCargo {
         self.ship
             .status_cargo(&self.pilot, &self.statics, &self.setup)
     }

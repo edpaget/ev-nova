@@ -20,7 +20,7 @@ impl Session {
     /// What the target panel's status line shows of `npc` (see
     /// [`target_panel::status`]).
     #[must_use]
-    pub fn target_status(&self, npc: &Npc) -> TargetStatus {
+    pub(crate) fn target_status(&self, npc: &Npc) -> TargetStatus {
         let record = self.statics.ship_record(npc.ship);
         target_panel::status(&StatusFacts {
             reserves: npc.reserves,
@@ -40,7 +40,7 @@ impl Session {
     /// mission escort; a fighter the player launched is one whose carrier
     /// is the player.
     #[must_use]
-    pub fn target_tag(&self, npc: &Npc) -> Option<TargetTag> {
+    pub(crate) fn target_tag(&self, npc: &Npc) -> Option<TargetTag> {
         target_panel::tag(&TagFacts {
             govt: npc.govt,
             led_by_player: npc.escorts_player(),

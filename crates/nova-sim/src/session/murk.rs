@@ -15,7 +15,7 @@ impl Session {
     /// (@0x6f8f-0x704b) sums them.
     ///
     /// It is worked out afresh at every call, as
-    /// [`Session::interference`] is. The original caches it in
+    /// the interference is (`Chart::interference`). The original caches it in
     /// `_playerEffectiveMurk`; when that goes stale is
     /// rdm:task/reset-player-precalced-left-out-branches's question.
     #[must_use]
@@ -44,7 +44,7 @@ impl Chart {
     /// (@0x6f8f-0x704b) sums them.
     ///
     /// It is worked out afresh at every call, as
-    /// [`Session::interference`] is. The original caches it in
+    /// the interference is (`Chart::interference`). The original caches it in
     /// `_playerEffectiveMurk`; when that goes stale is
     /// rdm:task/reset-player-precalced-left-out-branches's question.
     #[must_use]

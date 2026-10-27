@@ -9,7 +9,7 @@
 //! system's person slot now alone (see the `spawn_availability` module).
 //! A person NPC is named by
 //! its record, with its subtitle ([`Session::npc_name`],
-//! [`Session::npc_subtitle`]).
+//! `Space::npc_subtitle`).
 //!
 //! **Hailed.** A person's comm quote (`STR#` 7100 #`CommQuote`, when it
 //! is above 0) is said as the rule set reads
@@ -184,8 +184,12 @@ impl Session {
     /// marked mission ship, the mission's drawn subtitle unless that is
     /// empty, its person's never (@0x4b80f-0x4b86f); otherwise its
     /// person's, unless it has none or it is empty (@0x4b880).
+    ///
+    /// For the tests: the frame fills its HUD from the sub-state's own
+    /// (`Session::fill_hud`).
+    #[cfg(test)]
     #[must_use]
-    pub fn npc_subtitle(&self, npc: &Npc) -> Option<&str> {
+    pub(crate) fn npc_subtitle(&self, npc: &Npc) -> Option<&str> {
         self.space.npc_subtitle(&self.pilot, npc)
     }
 
