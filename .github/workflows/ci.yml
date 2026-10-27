@@ -162,6 +162,42 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: mise run bundle -- dist
+      # The signing seam (rdm phase
+      # windows-platform-cross-roadmap/phase-2-sign-windows-builds-in-ci):
+      # sign target/x86_64-pc-windows-msvc/release's nova.exe and
+      # nova-dump.exe here, between the Build above and the packing below,
+      # which takes the executables as they are and never rebuilds them.
+      # WiX v5, pinned: v6 and later need an Open Source Maintenance Fee
+      # EULA flag.
+      - name: Install WiX (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      # ev-nova-x86_64-pc-windows-msvc.msi, the per-user installer, beside
+      # the zip in dist/; it stages under target/. A second pack of the same
+      # executables (the same version, a new ProductCode) is the "older"
+      # build the installer test upgrades from.
+      - name: Package (Windows installer)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release dist
+          mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release target/installer/previous
+      # The same phase signs dist/'s .msi here, before it is tested and
+      # uploaded.
+      # Installs, upgrades and uninstalls the .msi for real
+      # (crates/nova-bundle/tests/it/windows_installer.rs); without NOVA_MSI
+      # that test skips.
+      - name: Test the Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:NOVA_MSI = (Resolve-Path dist\ev-nova-x86_64-pc-windows-msvc.msi).Path
+          $env:NOVA_MSI_PREVIOUS = (Resolve-Path target\installer\previous\ev-nova-x86_64-pc-windows-msvc.msi).Path
+          cargo test --locked -p nova-bundle --test it windows_installer -- --nocapture
       # One top-level directory holding the two binaries, README.txt and
       # LICENSE. No game data.
       - name: Package

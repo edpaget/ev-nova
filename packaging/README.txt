@@ -5,9 +5,17 @@ A tester build of the latest `main` of https://github.com/edpaget/ev-nova.
 Each download holds:
 
   nova        the game: opens the game data in a window
-              (Nova.app on macOS)
+              (Nova.app on macOS, nova.exe on Windows)
   nova-dump   writes the game data out as JSON, PNG and WAV files
+  README.txt  this file
   LICENSE     GPL-3.0-or-later; covers the code, not the game data
+
+The downloads are:
+
+  ev-nova-aarch64-apple-darwin.dmg      macOS (Apple silicon), a disk image
+  ev-nova-x86_64-pc-windows-msvc.msi    Windows, an installer
+  ev-nova-x86_64-pc-windows-msvc.zip    Windows, a portable copy
+  ev-nova-x86_64-unknown-linux-gnu.tar.gz  Linux
 
 EV Nova's data files are copyrighted and are not included. Supply your own
 copy of the game's `Nova Files` directory.
@@ -48,8 +56,26 @@ ad-hoc signed instead: macOS blocks a downloaded copy of it until you
 choose Open Anyway in System Settings > Privacy & Security, or run
 `xattr -dr com.apple.quarantine /Applications/Nova.app`.
 
-Windows: SmartScreen may warn about an unknown publisher. Choose
-"More info", then "Run anyway".
+Windows
+-------
+
+The installer (.msi) installs the game for you alone, without
+administrator rights, into %LOCALAPPDATA%\Programs\Nova. It adds a "Nova"
+entry to the Start menu and an "EV Nova" entry to Settings > Apps >
+Installed apps (Apps & features), where you uninstall it. Uninstalling
+removes the program but keeps your settings and pilots in
+%APPDATA%\nova. Installing a newer nightly over an older one replaces it
+in place.
+
+The zip is a portable copy: unzip it anywhere and run nova.exe. Nothing
+is installed, and deleting the folder removes it.
+
+Either way the game finds your EV Nova's `Nova Files` itself, or asks you
+for your EV Nova folder and remembers your pick.
+
+Neither is signed yet, so SmartScreen may warn about an unknown publisher
+when you open the installer or nova.exe. Choose "More info", then "Run
+anyway".
 
 More detail: the "Using your own data" section of the README,
 https://github.com/edpaget/ev-nova#using-your-own-data
