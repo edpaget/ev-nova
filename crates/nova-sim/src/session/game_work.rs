@@ -230,20 +230,22 @@ impl Session {
     }
 
     /// A pass of the game's work while landed, the traffic drawn from
-    /// `catalog`, drawing on `chance`: the fight and
-    /// the traffic stand still, and the player neither moves nor fires.
-    /// What runs, in order: a gate's pending entry ends, as on any pass;
-    /// the escape pod's rescue, which ends the pass when it settles
-    /// ([`Session::rescue_if_due`]); `_HandlePlayer`'s warning on a new
-    /// jump (see the `wait_for_me` module); the reinforcement clock's tick
-    /// held behind the last pass's work on the line, then the traffic's
-    /// tail, the clock's own tick held again while work waits on the line
-    /// (see the `reinforcements` and `comm_calls` modules); the player's
-    /// explosion of the last pass forgotten; the headings the ships were
-    /// drawn at dropped; and the pass's asteroid work
-    /// ([`Session::tick_asteroids`], see the `asteroids` module). Whether
-    /// the rescue settled on it. Nothing queued on the line settles while
-    /// landed ([`Session::settle_line_queue`]).
+    /// `catalog`, drawing on `chance`: the fight and the traffic stand still,
+    /// and the player neither moves nor fires. What runs, in order: a gate's
+    /// pending entry ends, as on any pass; the escape pod's rescue, which ends
+    /// the pass when it settles ([`Session::rescue_if_due`]); `_HandlePlayer`'s
+    /// warning on a new jump (see the `wait_for_me` module); the reinforcement
+    /// clock's tick held behind the last pass's work on the line spent with no
+    /// effect, as the clock stands while landed (`_HandleReinforcements`
+    /// @0x44504 runs in `_DoPlayGameWork`, which a landed player's spaceport
+    /// never runs; see [`Session::tick_reinforcements`]), then the traffic's
+    /// tail, the clock's own tick held again while work waits on the line (see
+    /// the `reinforcements` and `comm_calls` modules); the player's explosion
+    /// of the last pass forgotten; the headings the ships were drawn at
+    /// dropped; and the pass's asteroid work ([`Session::tick_asteroids`], see
+    /// the `asteroids` module). Whether the rescue settled on it. Nothing
+    /// queued on the line settles while landed
+    /// ([`Session::settle_line_queue`]).
     fn landed_work(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -256,9 +258,7 @@ impl Session {
             return true;
         }
         self.warn_fighters_left_behind(chance);
-        if std::mem::take(&mut self.space.reinforcements_held) {
-            self.tick_reinforcements(chance);
-        }
+        self.space.reinforcements_held = false;
         self.traffic_tail(chance);
         self.ship.fate.player_exploded_this_tick = false;
         self.space.drawn.clear();

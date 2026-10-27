@@ -1,7 +1,9 @@
 //! Tests of a landed pass of the game's work (`Session::landed_work`),
 //! each through [`Session::game_work`] with the session landed: one for
 //! each piece of the work, in the order the pass runs them, so leaving
-//! any piece out fails its test.
+//! any piece out fails its test. A landed pass settles nothing on the
+//! line and ticks no reinforcement clock (both stand while landed): the
+//! held tick's flag is only cleared, and the line's work waits.
 //!
 //! Some state a landed pass meets can't be reached by a landing alone (a
 //! gate's pending entry, a jump accepted, an explosion of the last pass);
@@ -88,7 +90,7 @@ fn a_landed_pass_warns_of_fighters_left_behind_by_a_new_jump() {
 #[test]
 fn a_landed_pass_spends_a_held_reinforcement_tick_and_the_clock_stands() {
     // The clock's tick held behind the last pass's work on the line is
-    // spent, and stands as the landed clock does (see the
+    // spent with no effect: the clock stands while landed (see the
     // `reinforcements` module).
     let catalog = reinforced();
     let mut session = super::reinforcements::tests::flying(&catalog);
