@@ -13,6 +13,10 @@ impl Session {
     /// order their slots entered it by the engine, firing order by the
     /// other reading
     /// ([`Combat::shots_drawn`](crate::combat::Combat::shots_drawn)).
+    ///
+    /// For the tests: the frame fills from `Space`'s own
+    /// (`Space::fill_shots`).
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn shots_drawn(&self) -> Vec<&Shot> {
         self.space.shots_drawn()
@@ -27,7 +31,7 @@ impl Space {
     /// other reading
     /// ([`Combat::shots_drawn`](crate::combat::Combat::shots_drawn)).
     #[must_use]
-    fn shots_drawn(&self) -> Vec<&Shot> {
+    pub(super) fn shots_drawn(&self) -> Vec<&Shot> {
         self.combat.shots_drawn()
     }
 }

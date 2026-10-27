@@ -57,10 +57,10 @@ impl Session {
         };
         self.fill_ships(ships);
         self.fill_drawn(drawn);
-        self.fill_shots(shots);
-        self.fill_beams(beams);
-        self.fill_boxes(cargo_boxes);
-        self.fill_asteroids(asteroids);
+        self.space.fill_shots(shots);
+        self.space.fill_beams(beams);
+        self.space.fill_boxes(cargo_boxes);
+        self.space.fill_asteroids(asteroids);
         self.fill_stellars(stellars);
         *effective_murk = self.effective_murk();
         *system_murk = self.system_murk();

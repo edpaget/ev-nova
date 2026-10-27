@@ -262,7 +262,7 @@ impl Setup {
 impl Space {
     /// The asteroids in the field about the player, in slot order (see
     /// [`asteroid`](crate::asteroid)).
-    fn asteroids(&self) -> impl Iterator<Item = &Asteroid> {
+    pub(super) fn asteroids(&self) -> impl Iterator<Item = &Asteroid> {
         self.asteroids.iter()
     }
 

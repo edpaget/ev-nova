@@ -5,7 +5,8 @@
 //! [`FrameShot::of`]), so a field the frame and a pass both carry is
 //! built once.
 
-use super::super::Session;
+use super::super::{Chart, Session, Space};
+use crate::catalog::StellarId;
 use crate::combat::ShipRef;
 use crate::flight_frame::{
     FrameAsteroid, FrameBeam, FrameBox, FrameShip, FrameShot, FrameStellar, GateFade,
@@ -95,8 +96,31 @@ impl Session {
         into.extend(self.draw_layers());
     }
 
+    /// Fills `into` with each stellar the system lists, shown or not
+    /// ([`Chart::stellars_listed`]), each with how it is drawn: whatever
+    /// stellar of the system a scene holds has its record.
+    pub(super) fn fill_stellars(&self, into: &mut Vec<FrameStellar>) {
+        into.clear();
+        into.extend(
+            self.chart
+                .stellars_listed()
+                .map(|(id, shown)| FrameStellar {
+                    id,
+                    shown,
+                    destroyed: self.galaxy().destroyed(id),
+                    drawn: self.drawn_sheet(id),
+                    counted: self.counted_sheet(id),
+                    frozen: self.frame_frozen(id),
+                    counts_none: self.counts_no_frames(id),
+                    gate_frame: self.gate_frame(id),
+                }),
+        );
+    }
+}
+
+impl Space {
     /// Fills `into` with the shots in flight, in the order they are drawn
-    /// ([`Session::shots_drawn`]).
+    /// (`Space::shots_drawn`).
     pub(super) fn fill_shots(&self, into: &mut Vec<FrameShot>) {
         into.clear();
         into.extend(self.shots_drawn().into_iter().map(FrameShot::of));
@@ -119,28 +143,18 @@ impl Session {
         into.clear();
         into.extend(self.asteroids().map(FrameAsteroid::of));
     }
+}
 
-    /// Fills `into` with each stellar shown, in nav order, then each other
-    /// one its system lists, in its `NavDefs` order, each with how it is
-    /// drawn: whatever stellar of the system a scene holds has its record.
-    pub(super) fn fill_stellars(&self, into: &mut Vec<FrameStellar>) {
-        into.clear();
-        let shown = self.chart.sites.iter().map(|site| (site.id, true));
+impl Chart {
+    /// Each stellar shown, in nav order, then each other one its system
+    /// lists, in its `NavDefs` order, with whether it is shown.
+    pub(super) fn stellars_listed(&self) -> impl Iterator<Item = (StellarId, bool)> + '_ {
+        let shown = self.sites.iter().map(|site| (site.id, true));
         let others = self
-            .chart
             .listed
             .iter()
-            .filter(|listed| !self.chart.sites.iter().any(|site| site.id == listed.id))
+            .filter(|listed| !self.sites.iter().any(|site| site.id == listed.id))
             .map(|site| (site.id, false));
-        into.extend(shown.chain(others).map(|(id, shown)| FrameStellar {
-            id,
-            shown,
-            destroyed: self.galaxy().destroyed(id),
-            drawn: self.drawn_sheet(id),
-            counted: self.counted_sheet(id),
-            frozen: self.frame_frozen(id),
-            counts_none: self.counts_no_frames(id),
-            gate_frame: self.gate_frame(id),
-        }));
+        shown.chain(others)
     }
 }

@@ -177,7 +177,7 @@ impl PlayerShip {
 impl Space {
     /// The cargo boxes in space (see [`cargo_box`](crate::cargo_box)).
     #[must_use]
-    fn cargo_boxes(&self) -> &[CargoBox] {
+    pub(super) fn cargo_boxes(&self) -> &[CargoBox] {
         self.boxes.boxes()
     }
 
