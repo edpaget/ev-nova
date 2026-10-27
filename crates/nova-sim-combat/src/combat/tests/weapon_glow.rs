@@ -53,7 +53,7 @@ fn the_player_firing_a_glow_weapon_glows_once_a_call_that_frame() {
     let mut player = player_with(simultaneous(glowing(blaster())));
     player.armament = triple(simultaneous(glowing(blaster())));
     let mut ships = [player, Ship::at(2, 200.0, 0.0)];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::fire_player(&mut combat, &mut ships, &NovaDisable);
     let events = combat.take_events();
     assert_eq!(fired(&events, ShipRef::Player), 3, "three copies");
     assert_eq!(glows(&events), [(ShipRef::Player, false)], "one glow");
@@ -65,7 +65,7 @@ fn an_npcs_pick_of_several_copies_glows_once_a_call() {
     let mut firer = Ship::at(1, 0.0, 0.0).picking(128).targeting(B).facing(90.0);
     firer.armament = triple(simultaneous(glowing(blaster())));
     let mut ships = [firer, Ship::at(2, 200.0, 0.0)];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     let events = combat.take_events();
     assert_eq!(fired(&events, A), 3, "three copies");
     assert_eq!(glows(&events), [(A, false)], "one glow");
@@ -79,10 +79,12 @@ fn a_weapon_without_the_flag_never_glows() {
         Ship::at(1, 0.0, 50.0).armed(blaster()).picking(128),
         Ship::at(2, 200.0, 0.0),
     ];
-    tick(&mut combat, &mut ships, &NovaDisable);
-    let events = combat.take_events();
-    assert!(fired(&events, ShipRef::Player) > 0 && fired(&events, A) > 0);
-    assert_eq!(glows(&events), []);
+    phase::fire_player(&mut combat, &mut ships, &NovaDisable);
+    let player = combat.take_events();
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    let npc = combat.take_events();
+    assert!(fired(&player, ShipRef::Player) > 0 && fired(&npc, A) > 0);
+    assert_eq!((glows(&player), glows(&npc)), (vec![], vec![]));
 }
 
 #[test]
@@ -94,9 +96,9 @@ fn a_call_that_fires_nothing_never_glows() {
     });
     let mut combat = Combat::default();
     let mut ships = [player_with(slow), Ship::at(2, 200.0, 0.0)];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::fire_player(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(glows(&combat.take_events()), [(ShipRef::Player, false)]);
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::fire_player(&mut combat, &mut ships, &NovaDisable);
     let events = combat.take_events();
     assert_eq!(fired(&events, ShipRef::Player), 0, "reloading");
     assert_eq!(glows(&events), [], "reloading");
@@ -111,40 +113,44 @@ fn a_call_that_fires_nothing_never_glows() {
         Ship::at(1, 0.0, 50.0).armed(launcher).picking(128),
         Ship::at(2, 200.0, 0.0),
     ];
-    tick(&mut combat, &mut ships, &NovaDisable);
-    let events = combat.take_events();
-    assert_eq!(fired(&events, ShipRef::Player) + fired(&events, A), 0);
-    assert_eq!(glows(&events), [], "out of ammo");
+    phase::fire_player(&mut combat, &mut ships, &NovaDisable);
+    let player = combat.take_events();
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    let npc = combat.take_events();
+    assert_eq!(fired(&player, ShipRef::Player) + fired(&npc, A), 0);
+    assert_eq!(
+        (glows(&player), glows(&npc)),
+        (vec![], vec![]),
+        "out of ammo"
+    );
 }
 
 #[test]
 fn point_defence_glows_never_when_it_fires() {
     let mut combat = Combat::default();
     let mut ships = missile_attack(glowing(quad()));
-    let mut seen = Vec::new();
-    let mut defended = false;
-    for _ in 0..30 {
-        tick(&mut combat, &mut ships, &NovaDisable);
-        let events = combat.take_events();
-        defended |= fired(&events, A) > 0;
-        seen.extend(glows(&events));
-    }
-    assert!(defended, "point defence fired");
-    assert_eq!(seen, []);
+    missile_in_flight(&mut combat, &mut ships);
+    combat.take_events();
+    phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
+    let events = combat.take_events();
+    assert!(fired(&events, A) > 0, "point defence fired");
+    assert_eq!(glows(&events), []);
 }
 
 #[test]
 fn a_point_defence_beam_at_a_missile_glows_never_on_its_ticks() {
     let mut combat = Combat::default();
     let mut ships = missile_attack(glowing(pd_beam()));
-    let mut seen = Vec::new();
-    let mut beamed = false;
-    for _ in 0..30 {
-        tick(&mut combat, &mut ships, &NovaDisable);
-        beamed |= !combat.beams().is_empty();
+    missile_in_flight(&mut combat, &mut ships);
+    combat.take_events();
+    phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
+    assert!(!combat.beams().is_empty(), "point defence beamed");
+    let mut seen = glows(&combat.take_events());
+    // `_HandleBeams` on each of its ticks (@0x309ab-0x309bb).
+    for _ in 0..5 {
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         seen.extend(glows(&combat.take_events()));
     }
-    assert!(beamed, "point defence beamed");
     assert_eq!(seen, []);
 }
 
@@ -154,7 +160,7 @@ fn a_bay_launch_glows_never_in_the_fight() {
     let mut combat = Combat::default();
     let mut ships = carrier();
     ships[0].armament = Armament::new([(WeaponSpec::new(&bay), 1)]);
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(combat.take_sorties().len(), 1, "launched");
     assert_eq!(glows(&combat.take_events()), [], "_AILaunchFighter");
 
@@ -174,7 +180,7 @@ fn a_bay_launch_glows_never_in_the_fight() {
     };
     player.armament = Armament::new([(WeaponSpec::new(&bay), 1)]);
     let mut ships = [player, other];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::fire_player(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(combat.take_sorties().len(), 1, "launched");
     assert_eq!(glows(&combat.take_events()), [], "the session's to light");
 }
@@ -196,13 +202,27 @@ fn a_sub_munition_release_glows_never() {
     });
     let arsenal = Arsenal::new(&[shell, sub], Vec::new());
     let mut combat = Combat::default();
+    let govts = Governments::default();
+    let arena = || phase::arena(&arsenal, &govts, Rules::default());
     let mut ships = [player_with(shell), Ship::at(2, 0.0, 400.0)];
-    let mut seen = Vec::new();
-    for tick_no in 0..6 {
-        tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
-        if tick_no == 0 {
-            ships[0].trigger = QUIET;
-        }
+    phase::run_in(
+        &mut combat,
+        &mut ships,
+        arena(),
+        &mut NeverFires,
+        |combat, fighters, arena, chance| combat.fire_player(fighters, arena, chance),
+    );
+    ships[0].trigger = QUIET;
+    let mut seen = glows(&combat.take_events());
+    // The shell ends its life in `_HandleShot` (@0x36195), releasing them.
+    for _ in 0..6 {
+        phase::run_in(
+            &mut combat,
+            &mut ships,
+            arena(),
+            &mut NeverFires,
+            |combat, fighters, arena, chance| combat.fly_shots(fighters, arena, chance),
+        );
         seen.extend(glows(&combat.take_events()));
     }
     assert!(!sub_shots(&combat).is_empty(), "released");
@@ -216,13 +236,13 @@ fn a_live_glow_beam_glows_its_firer_late_each_tick_including_its_last() {
         Ship::at(1, 0.0, 0.0).armed(glowing(laser())).picking(146),
         Ship::at(2, 100.0, 0.0),
     ];
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    ships[0].trigger = QUIET;
+    assert_eq!(glows(&combat.take_events()), [(A, false)], "its pick's");
     let mut kept = Vec::new();
     let mut seen = Vec::new();
-    for tick_no in 0..5 {
-        tick(&mut combat, &mut ships, &NovaDisable);
-        if tick_no == 0 {
-            ships[0].trigger = QUIET;
-        }
+    for _ in 0..5 {
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         kept.push(combat.beams().len());
         seen.push(glows(&combat.take_events()));
     }
@@ -230,11 +250,11 @@ fn a_live_glow_beam_glows_its_firer_late_each_tick_including_its_last() {
     assert_eq!(
         seen,
         [
-            vec![(A, false), (A, true)],
+            vec![(A, true)],
             vec![(A, true)],
             vec![(A, true)],
             vec![],
-            vec![],
+            vec![]
         ]
     );
 }
@@ -246,10 +266,15 @@ fn a_beam_glows_never_on_double_times_second_pass() {
         Ship::at(1, 0.0, 0.0).armed(glowing(laser())).picking(146),
         Ship::at(2, 100.0, 0.0),
     ];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     ships[0].trigger = QUIET;
     combat.take_events();
-    tick_on(&mut combat, &mut ships, GamePass::Again);
+    phase::run_on(
+        &mut combat,
+        &mut ships,
+        GamePass::Again,
+        |combat, fighters, arena, chance| combat.close_tick(fighters, arena, &mut [], chance),
+    );
     assert_eq!(combat.beams().len(), 1, "still live");
     assert_eq!(glows(&combat.take_events()), []);
 }
