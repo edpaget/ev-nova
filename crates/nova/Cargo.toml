@@ -37,6 +37,11 @@ wgpu = { workspace = true, optional = true }
 nova-appkit.workspace = true
 rfd.workspace = true
 
+# The console calls behind nova-win32's safe API: attaching to the
+# terminal's console, as `nova.exe` is a Windows-subsystem program.
+[target.'cfg(windows)'.dependencies]
+nova-win32.workspace = true
+
 [dev-dependencies]
 # The app and integration tests record Audio commands with the `recording`
 # mock.

@@ -12,6 +12,7 @@
 //! of every resize, occlusion and redraw, and the app acts only on a
 //! change.
 
+pub mod console;
 pub mod dialogs;
 #[cfg(target_os = "macos")]
 mod menu_bar;

@@ -94,6 +94,11 @@
 //! and 1 when the data named cannot be listed or the window cannot be
 //! opened.
 
+// No console window from Explorer; started from a terminal, the game
+// attaches to its console (`nova::platform::console`). Not in tests, so a
+// test harness built from this file still prints.
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+
 use std::cell::RefCell;
 use std::path::Path;
 use std::process::ExitCode;
@@ -110,7 +115,7 @@ use nova::platform::{Dialogs, Runner, event_loop};
 use nova::rulebook::eight_bit_reading;
 use nova::saves::FilePilots;
 use nova::startup::{
-    DiskData, Fatal, FileLog, Launch, Report, Started, StartupLog, StdTerminal, usual_places,
+    DiskData, Fatal, FileLog, Launch, Report, Started, StartupLog, Terminal, usual_places,
 };
 use nova_audio::{Audio, AudioCore, FileSettings, KiraAudio, SettingsStore};
 use nova_data::fonts::open_charcoal;
@@ -176,14 +181,30 @@ fn run(
     (runner, result)
 }
 
+/// Where the startup report says stderr goes: on Windows, once stderr is
+/// connected to a console if it can be, before anything is written.
+#[cfg(windows)]
+fn stderr_terminal() -> impl Terminal {
+    use nova::platform::console::{ConsoleTerminal, Win32Console, connect_stderr};
+    ConsoleTerminal(connect_stderr(&mut Win32Console))
+}
+
+/// Where the startup report says stderr goes: the real stderr's word.
+#[cfg(not(windows))]
+fn stderr_terminal() -> impl Terminal {
+    nova::startup::StdTerminal
+}
+
 fn main() -> ExitCode {
+    // First: on Windows nothing reaches a console before it is attached.
+    let terminal = stderr_terminal();
     let env = |name: &str| std::env::var_os(name);
     let started = nova::startup::run(
         Launch {
             args: std::env::args_os().skip(1).collect(),
             nova_data: env("NOVA_DATA"),
             usual: usual_places(Os::current(), env),
-            terminal: &StdTerminal,
+            terminal: &terminal,
             log: log_path(Os::current(), env)
                 .map(|path| Box::new(FileLog::new(path)) as Box<dyn StartupLog>),
             stderr: Box::new(std::io::stderr()),
