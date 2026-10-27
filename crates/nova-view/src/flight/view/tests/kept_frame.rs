@@ -89,6 +89,33 @@ fn use_as_my_ship_draws_the_captured_ship_where_it_is_not_from_the_old_ships_pla
 }
 
 #[test]
+fn a_take_off_draws_the_ship_where_it_leaves_the_stellar_not_from_its_place_before_landing() {
+    let mut view = over_earth(catalog());
+    view.tick(TICK);
+    land_now(&mut view);
+    assert!(view.take_landing().is_some(), "landed");
+    // Where the ship was drawn from, and kept, before it landed.
+    let before = nova_sim::flight_frame::ShipPlace {
+        position: Vec2::new(-40.0, 30.0),
+        heading: 90.0,
+    };
+    view.previous = before;
+    view.frame.ships[0].position = before.position;
+    view.frame.ships[0].heading = before.heading;
+    view.alpha = 0.5;
+    view.take_off();
+    let now = *view.session().expect("flying").player();
+    assert_eq!(view.previous, now.into(), "not from the old place");
+    assert_eq!(view.alpha(), 0.0);
+    assert_eq!(view.shown_position(), at(now.position.x, now.position.y));
+    assert_eq!(
+        view.frame.player().position,
+        now.position,
+        "the kept frame's"
+    );
+}
+
+#[test]
 fn an_arrival_draws_the_ship_where_it_arrives_and_the_new_systems_stellars_as_it_holds_them() {
     let mut view = destructible();
     run_set(&mut view, "Y140");
