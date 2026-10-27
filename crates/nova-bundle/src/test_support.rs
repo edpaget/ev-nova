@@ -10,6 +10,7 @@ use std::rc::Rc;
 use crate::bundle::{BundleError, Host, bundle};
 use crate::ports::{Files, Invocation, Process, RunError};
 use crate::signing::{Credentials, Signing};
+use crate::spec::BundleSpec;
 use crate::spec::tests::sample_metadata;
 
 /// Everything the ports were asked to do, in order.
@@ -238,10 +239,12 @@ pub(crate) struct Paths {
 }
 
 pub(crate) fn paths() -> Paths {
-    let bundle = Path::new("/work")
-        .join("ev-nova")
-        .join("target")
-        .join("bundle");
+    // Cargo's own spelling of the target dir, so the paths in each command's
+    // args (text, not paths) match on Windows, where `join` writes `\`.
+    let target = BundleSpec::from_metadata(&sample_metadata())
+        .expect("spec")
+        .target_dir;
+    let bundle = target.join("bundle");
     let staging = bundle.join("staging");
     let signing = bundle.join("signing");
     let out = bundle.join("out");
