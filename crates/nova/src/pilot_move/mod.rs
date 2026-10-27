@@ -290,10 +290,12 @@ mod tests {
         fn entries(&self, dir: &Path) -> io::Result<Option<Vec<OsString>>> {
             self.record(Call::Entries(dir.to_path_buf()));
             self.fails(dir)?;
+            // A real directory lists in no particular order; this one
+            // lists its names backwards, so the move has to sort them.
             Ok(self
                 .dirs
                 .get(dir)
-                .map(|files| files.keys().cloned().collect()))
+                .map(|files| files.keys().rev().cloned().collect()))
         }
 
         fn exists(&self, path: &Path) -> io::Result<bool> {
