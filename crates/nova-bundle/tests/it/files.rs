@@ -79,3 +79,24 @@ fn a_symbolic_link_is_unsupported_off_unix() {
         .expect_err("unsupported");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
 }
+
+#[test]
+fn writes_a_secret_replacing_what_was_there() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let file = dir.path().join("AuthKey_ID.p8");
+    StdFiles.write_secret(&file, b"first key").expect("write");
+    StdFiles.write_secret(&file, b"key").expect("rewrite");
+    assert_eq!(fs::read(&file).expect("read"), b"key");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_secret_is_readable_by_its_owner_alone() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let file = dir.path().join("developer-id.p12");
+    StdFiles.write_secret(&file, b"p12").expect("write");
+    let mode = fs::metadata(&file).expect("metadata").permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+}

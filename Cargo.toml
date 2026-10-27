@@ -41,6 +41,9 @@ embed-resource = "3.0.12"
 object = { version = "0.37.3", default-features = false, features = ["read_core", "pe", "std"] }
 # Reads the Windows manifest back as XML in nova-winres's and nova's tests.
 roxmltree = "0.20.0"
+# nova-bundle decodes the Developer ID certificate and the notary API key
+# from base64 signing variables; the version plist already locks.
+base64 = "0.23"
 binrw = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
