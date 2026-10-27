@@ -147,7 +147,7 @@ impl Session {
     /// reading every ship is boxed where it is. A ship not here is boxed
     /// where it is, which is nowhere.
     #[must_use]
-    pub fn hover_place(&self, ship: ShipRef) -> HoverPlace {
+    pub(crate) fn hover_place(&self, ship: ShipRef) -> HoverPlace {
         self.space.hover_place(&self.setup, ship)
     }
 

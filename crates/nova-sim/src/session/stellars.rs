@@ -230,7 +230,7 @@ impl Session {
     /// click box ([`Session::select_stellar`]), the shots and the views
     /// read this one answer.
     #[must_use]
-    pub fn drawn_sheet(&self, stellar: StellarId) -> DrawnSheet {
+    pub(crate) fn drawn_sheet(&self, stellar: StellarId) -> DrawnSheet {
         self.chart
             .sites
             .iter()
@@ -248,7 +248,7 @@ impl Session {
     /// centre less 16 on each axis (see the `story` module's "Built by
     /// stellar-fidelity phase 8").
     #[must_use]
-    pub fn frame_frozen(&self, stellar: StellarId) -> bool {
+    pub(crate) fn frame_frozen(&self, stellar: StellarId) -> bool {
         self.space.frame_frozen(&self.setup, stellar)
     }
 
@@ -259,7 +259,7 @@ impl Session {
     /// animates (`_HandleStellarSprites` @0x2e802), even when a later
     /// clone brings counting frames into the slot.
     #[must_use]
-    pub fn counts_no_frames(&self, stellar: StellarId) -> bool {
+    pub(crate) fn counts_no_frames(&self, stellar: StellarId) -> bool {
         self.space.counts_no_frames(&self.setup, stellar)
     }
 
@@ -273,7 +273,7 @@ impl Session {
     /// sheet); by the Bible, the sheet it draws
     /// ([`Session::drawn_sheet`]). Its `Type` for a stellar not shown.
     #[must_use]
-    pub fn counted_sheet(&self, stellar: StellarId) -> DrawnSheet {
+    pub(crate) fn counted_sheet(&self, stellar: StellarId) -> DrawnSheet {
         if self.setup.rules.source_for(RuleKey::StellarFrameCount) == RuleSource::Bible {
             return self.drawn_sheet(stellar);
         }

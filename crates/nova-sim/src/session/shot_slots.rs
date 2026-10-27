@@ -14,7 +14,7 @@ impl Session {
     /// other reading
     /// ([`Combat::shots_drawn`](crate::combat::Combat::shots_drawn)).
     #[must_use]
-    pub fn shots_drawn(&self) -> Vec<&Shot> {
+    pub(crate) fn shots_drawn(&self) -> Vec<&Shot> {
         self.space.shots_drawn()
     }
 }

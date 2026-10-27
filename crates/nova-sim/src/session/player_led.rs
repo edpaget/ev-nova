@@ -114,7 +114,7 @@ impl Session {
     /// drawn in, which the view stacks the shots among
     /// ([`sprite_layer`](crate::sprite_layer)).
     #[must_use]
-    pub fn draw_layers(&self) -> Vec<(ShipRef, ShipLayer)> {
+    pub(crate) fn draw_layers(&self) -> Vec<(ShipRef, ShipLayer)> {
         let (order, layers): (Vec<ShipRef>, Vec<(ShipRef, ShipLayer)>) =
             match self.setup.rules.source_for(RuleKey::ShipOverlap) {
                 RuleSource::Engine => {
@@ -188,7 +188,7 @@ impl Session {
     /// whatever its slot last cloned, as the frames are cloned only at a
     /// display (@0x2b824; see [`Session::hover_place`]).
     #[must_use]
-    pub fn framed_by(&self, ship: ShipRef) -> Option<ShipId> {
+    pub(crate) fn framed_by(&self, ship: ShipRef) -> Option<ShipId> {
         let (slot, own, hull) = match ship {
             ShipRef::Player => (Slot::Player, self.pilot.ship, self.ship.fit.hull),
             ShipRef::Npc(id) => {

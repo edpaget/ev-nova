@@ -32,7 +32,7 @@ impl Session {
     /// The frame hypergate `gate` draws, or `None` for a stellar shown
     /// that is not a hypergate, or one not shown.
     #[must_use]
-    pub fn gate_frame(&self, gate: StellarId) -> Option<u16> {
+    pub(crate) fn gate_frame(&self, gate: StellarId) -> Option<u16> {
         let site = self.chart.gate_site(gate)?;
         let anim = GateAnimation::of(site);
         Some(

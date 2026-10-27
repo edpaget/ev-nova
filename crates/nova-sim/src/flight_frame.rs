@@ -93,10 +93,10 @@ pub struct FlightFrame {
     /// ([`Session::npcs`](crate::Session::npcs)).
     pub ships: Vec<FrameShip>,
     /// The ships drawn, in draw order, each with its layer
-    /// ([`Session::draw_layers`](crate::Session::draw_layers)).
+    /// (`Session::draw_layers`).
     pub drawn: Vec<(ShipRef, ShipLayer)>,
     /// Each shot in flight, in the order it is drawn
-    /// ([`Session::shots_drawn`](crate::Session::shots_drawn)).
+    /// (`Session::shots_drawn`).
     pub shots: Vec<FrameShot>,
     /// Each beam being fired, in the fight's order
     /// ([`Session::beams`](crate::Session::beams)).
@@ -594,18 +594,18 @@ pub struct FrameShip {
     /// [`Session::engine_glow`](crate::Session::engine_glow)).
     pub glow: u8,
     /// How its cloak lets the screen show it
-    /// ([`Session::cloak_shown`](crate::Session::cloak_shown), the
-    /// player's [`Session::player_cloak_shown`](crate::Session::player_cloak_shown)).
+    /// (`Session::cloak_shown`, the
+    /// player's `Session::player_cloak_shown`).
     pub cloak: CloakShown,
     /// Its ion tint as its last display left it, if it glows.
     pub ion_tint: Option<IonTint>,
     /// Its fade at a gate it comes out of or enters ([`GateFade`]).
     pub gate: GateFade,
     /// Where its hover and click box is
-    /// ([`Session::hover_place`](crate::Session::hover_place)).
+    /// (`Session::hover_place`).
     pub hover: HoverPlace,
     /// The ship type whose frames its slot sprite holds, which sizes its
-    /// box ([`Session::framed_by`](crate::Session::framed_by)).
+    /// box (`Session::framed_by`).
     pub framed: Option<ShipId>,
     /// Its government, whose target code the view reads; none for the
     /// player and for an independent.
@@ -857,20 +857,20 @@ pub struct FrameStellar {
     /// ([`Session::galaxy`](crate::Session::galaxy)).
     pub destroyed: bool,
     /// The sheet it draws
-    /// ([`Session::drawn_sheet`](crate::Session::drawn_sheet)).
+    /// (`Session::drawn_sheet`).
     pub drawn: DrawnSheet,
     /// The sheet whose frame count it animates over
-    /// ([`Session::counted_sheet`](crate::Session::counted_sheet)).
+    /// (`Session::counted_sheet`).
     pub counted: DrawnSheet,
     /// Whether its frame is frozen
-    /// ([`Session::frame_frozen`](crate::Session::frame_frozen)).
+    /// (`Session::frame_frozen`).
     pub frozen: bool,
     /// Whether it animates over no frames
-    /// ([`Session::counts_no_frames`](crate::Session::counts_no_frames)).
+    /// (`Session::counts_no_frames`).
     pub counts_none: bool,
     /// The frame it draws as a hypergate, or `None` for one that isn't
     /// one or isn't shown
-    /// ([`Session::gate_frame`](crate::Session::gate_frame)).
+    /// (`Session::gate_frame`).
     pub gate_frame: Option<u16>,
 }
 

@@ -85,7 +85,7 @@ impl Session {
     /// How the player's cloak lets the screen show its ship (see the
     /// module docs).
     #[must_use]
-    pub fn player_cloak_shown(&self) -> CloakShown {
+    pub(crate) fn player_cloak_shown(&self) -> CloakShown {
         cloak::shown(self.ship.cloak.cloak, SEEN_AT_FULL_FADE)
     }
 

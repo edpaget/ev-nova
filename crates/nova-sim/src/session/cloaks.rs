@@ -92,7 +92,7 @@ impl Session {
     /// drawn as it is (@0x2d169-0x2d16c). A ship waiting at its gate is
     /// left to the view's tint, as now.
     #[must_use]
-    pub fn cloak_shown(&self, npc: &Npc) -> CloakShown {
+    pub(crate) fn cloak_shown(&self, npc: &Npc) -> CloakShown {
         PlayerShip::cloak_shown(&self.pilot, &self.statics, npc)
     }
 
