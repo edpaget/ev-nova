@@ -304,17 +304,6 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
 }
 
 impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
-    /// Holds `offer`'s prompt for the router, letting go of the flight
-    /// keys; a mission accepted at once shows nothing here, its texts
-    /// queued in the session, its before-movie first, for the router to
-    /// show over flight.
-    pub(super) fn hold_offer(&mut self, offer: VenueOffer) {
-        if let VenueOffer::Prompt(prompt) = offer {
-            self.pending_offer = Some(prompt);
-            self.held.clear();
-        }
-    }
-
     /// Boards the target, or says why not: a boarding that opens is held
     /// for the router ([`FlightView::take_boarding`]), and a mission
     /// offered in its place too ([`FlightView::take_offer`]), each letting
@@ -392,16 +381,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         } else if !self.board_latch {
             self.board_latch = self.board();
         }
-    }
-
-    /// Ends the hail under way, if any ([`Session::hang_up`]), and
-    /// refreshes the HUD as the original's comm dialog does on closing
-    /// ([`FlightView::redraw_status`]).
-    pub fn hang_up(&mut self) {
-        if let Ok(session) = &mut self.sim.session {
-            session.hang_up();
-        }
-        self.redraw_status();
     }
 
     /// What is on board the ship just boarded, named, once: the router

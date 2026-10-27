@@ -10,12 +10,12 @@ use nova_sim::PlayerCommand;
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::{
     ALERT_CICN, AsteroidCatalog, Behaviour, BoardingRule, CombatCatalog, CommCatalog, DisableRule,
-    FixedStep, Haggle, HailOptions, HailView, HashedRolls, LegalCode, Pilot, PilotCatalog,
-    PointDefenceRule, Rulebook, Session, StartError, TrafficCatalog,
+    FixedStep, HailOptions, HashedRolls, LegalCode, Pilot, PilotCatalog, PointDefenceRule,
+    Rulebook, Session, StartError, TrafficCatalog,
 };
 use nova_sim::{
-    ControlBits, Hailed, HireTerms, KeptBerths, LastRefresh, MissionInfo, MissionInfoPress,
-    OfferPrompt, PersonRules, PlayerInfo, pilot_panel::PilotPanel, ship_layer::SlotSprites,
+    ControlBits, HireTerms, KeptBerths, LastRefresh, MissionInfo, MissionInfoPress, OfferPrompt,
+    PersonRules, PlayerInfo, pilot_panel::PilotPanel, ship_layer::SlotSprites,
     story::sprite_pool::StellarSpritePool,
 };
 
@@ -35,11 +35,11 @@ use crate::system::kept_frames::KeptFrames;
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::DialogTemplate;
-use crate::{Diagnostic, Key, ScreenAction, SoundPrefs};
+use crate::{Diagnostic, ScreenAction, SoundPrefs};
 
 use super::{
-    BarFor, FlightOverlays, FlightView, MESSAGE_TICKS, Metrics, SharedChance, Then,
-    hail_refusal_message, opening_scene, window_width,
+    BarFor, FlightOverlays, FlightView, MESSAGE_TICKS, Metrics, SharedChance, Then, opening_scene,
+    window_width,
 };
 
 impl<
@@ -511,80 +511,14 @@ impl<
         }
     }
 
-    /// The flight with the comm dialog listing `hail_options`.
+    /// The flight with the comm dialog listing `hail_options`
+    /// ([`SessionFlight::with_hail_options`]).
     #[must_use]
     pub fn with_hail_options(self, hail_options: HailOptions) -> Self {
         Self {
-            hail_options,
+            sim: self.sim.with_hail_options(hail_options),
             ..self
         }
-    }
-
-    /// Hails the target ([`Session::hail_key`]), Option held as Alt is,
-    /// or says why not: a hail answered is held for the router
-    /// ([`FlightView::take_hail`]), the escort dialog a fleet escort opens
-    /// in its place ([`FlightView::take_escort_dialog`]) and a mission
-    /// offered in its place ([`FlightView::take_offer`]), each letting go
-    /// of the flight
-    /// keys; one accepted at once shows nothing, and so does a navigation
-    /// stellar that answers, as its comm dialog is not built.
-    pub(super) fn hail(&mut self) {
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        let option = self.held.contains(&Key::Alt);
-        match session.hail_key(
-            &*self.catalog,
-            &self.hail_options,
-            option,
-            &mut self.sim.chance,
-        ) {
-            Ok(Hailed::Comm(view)) => {
-                self.pending_hail = Some(view);
-                self.held.clear();
-            }
-            Ok(Hailed::Escort(view)) => {
-                self.pending_escort_dialog = Some(view);
-                self.held.clear();
-            }
-            Ok(Hailed::Offer(offer)) => self.hold_offer(offer),
-            // The planet comm dialog (`_DoPlanetCommDialog`) is not built
-            // yet: rdm:task/planet-domination opens it here.
-            Ok(Hailed::Stellar(_)) => {}
-            Err(refusal) => {
-                if let Some(text) = hail_refusal_message(refusal) {
-                    self.say_for(text, MESSAGE_TICKS);
-                }
-            }
-        }
-    }
-
-    /// The hail just answered, once: the router takes it to open the comm
-    /// dialog.
-    pub fn take_hail(&mut self) -> Option<HailView> {
-        self.pending_hail.take()
-    }
-
-    /// The escort dialog just opened, once: the router takes it to show
-    /// the dialog.
-    pub fn take_escort_dialog(&mut self) -> Option<nova_sim::escort_dialog::EscortDialogView> {
-        self.pending_escort_dialog.take()
-    }
-
-    /// Presses `button` in the escort dialog, through the session
-    /// ([`Session::press_escort`]): what it shows after, or none once it
-    /// closes. A close refreshes the HUD, as a hail's does
-    /// ([`FlightView::hang_up`]).
-    pub fn press_escort(
-        &mut self,
-        button: nova_sim::escort_dialog::EscortButton,
-    ) -> Option<nova_sim::escort_dialog::EscortDialogView> {
-        let session = self.sim.session.as_mut().ok()?;
-        let view = session.press_escort(button);
-        if view.is_none() {
-            self.redraw_status();
-        }
-        view
     }
 
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen since
@@ -718,36 +652,6 @@ impl<
     /// [`FlightView::refuse_mission`].
     pub fn take_offer(&mut self) -> Option<OfferPrompt> {
         self.pending_offer.take()
-    }
-
-    /// The comm dialog's contents while a hail is under way
-    /// ([`Session::hailing`]).
-    #[must_use]
-    pub fn hailing(&self) -> Option<HailView> {
-        self.sim
-            .session
-            .as_ref()
-            .ok()?
-            .hailing(&*self.catalog, &self.hail_options)
-    }
-
-    /// Presses the `pick`th option listed, through the session
-    /// ([`Session::answer`]).
-    pub fn answer(&mut self, pick: usize) -> Option<HailView> {
-        let session = self.sim.session.as_mut().ok()?;
-        session.answer(
-            pick,
-            &*self.catalog,
-            &self.hail_options,
-            &mut self.sim.chance,
-        )
-    }
-
-    /// Makes `choice` in the haggle dialog, through the session
-    /// ([`Session::haggle`]).
-    pub fn haggle(&mut self, choice: Haggle) -> Option<HailView> {
-        let session = self.sim.session.as_mut().ok()?;
-        session.haggle(choice, &*self.catalog, &self.hail_options)
     }
 
     /// The flight with each day's events and the traffic rolled on
@@ -1002,7 +906,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
             pending_player_info: false,
             pending_offer: None,
             pending_leads: Vec::new(),
-            hail_options: HailOptions::default(),
             glow_rolls: HashedRolls::new(1),
             npc_sheets: BTreeMap::new(),
             npc_previous: Vec::new(),

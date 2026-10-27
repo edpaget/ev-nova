@@ -80,6 +80,7 @@ mod drain;
 mod escorts;
 mod faked_escorts;
 mod faked_flight;
+mod faked_hail;
 mod faked_hud;
 mod faked_landing;
 mod faked_travel;
@@ -3304,7 +3305,7 @@ fn captured_in(catalog: FakeCatalog) -> View {
     assert_eq!(view.message(), None, "the assignment dialog says it");
     view
 }
-use nova_sim::{Haggle, HailOptions, HailRefusal, Help};
+use nova_sim::{HailOptions, HailRefusal, Help};
 
 /// [`boardable`]'s ship comm strings: "c<n>" for each, with "Channel
 /// open." in every variant of the first group.
@@ -3327,32 +3328,6 @@ fn hailable(intact: bool) -> View {
         ..boardable()
     };
     beside_in(catalog, 750, 750, 0, intact)
-}
-
-/// An option that asks a price, saying nothing.
-#[derive(Debug)]
-struct Sell;
-
-impl nova_sim::HailOption for Sell {
-    fn label(&self) -> String {
-        "Sell".to_owned()
-    }
-
-    fn applies(&self, _hail: &nova_sim::Hail) -> bool {
-        true
-    }
-
-    fn press(&self, _hail: &nova_sim::Hail, _chance: &mut dyn Chance) -> nova_sim::Answer {
-        let line = nova_sim::Reply::Line { list: 1, index: 1 };
-        nova_sim::Answer {
-            ask: Some(nova_sim::Ask {
-                paid: (line, None),
-                declined: (line, None),
-                short: line,
-            }),
-            ..nova_sim::Answer::default()
-        }
-    }
 }
 
 /// An option the ship answers by flying over to refuel the player.

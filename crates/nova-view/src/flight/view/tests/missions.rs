@@ -1759,30 +1759,6 @@ fn targeting_ace(catalog: FakeCatalog) -> View {
 }
 
 #[test]
-fn y_on_a_person_offering_its_mission_reports_the_offer_once() {
-    let mut view = targeting_ace(offering(0, Some("<OSN> needs help."), false));
-    assert_eq!(view.take_offer(), None);
-    view.input(&key(Key::Up, true));
-    tap(&mut view, HAIL_KEY);
-    assert_eq!(view.take_hail(), None, "no comm dialog");
-    let prompt = view.take_offer().expect("offered");
-    assert_eq!(prompt.mission, MissionId(130));
-    assert_eq!(prompt.text, "Ace needs help.");
-    assert_eq!(view.take_offer(), None, "once");
-    view.tick(TICK);
-    assert_eq!(
-        view.session().expect("flying").player().velocity,
-        Vec2::ZERO,
-        "the flight keys let go"
-    );
-    assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-    assert_eq!(
-        view.pilot().expect("a pilot").missions().missions(),
-        [MissionId(130)]
-    );
-}
-
-#[test]
 fn i_with_no_mission_says_you_have_no_active_missions() {
     let mut view = flight();
     let _ = view.take_sounds();
@@ -1994,15 +1970,6 @@ fn i_with_the_map_open_does_nothing() {
 }
 
 #[test]
-fn an_offer_keeps_the_message() {
-    let mut view = targeting_ace(offering(0, Some("Help?"), false));
-    view.say_for(MISSION_FAILED, 240);
-    tap(&mut view, HAIL_KEY);
-    view.take_offer().expect("offered");
-    assert_eq!(view.message(), Some(MISSION_FAILED), "under the dialog");
-}
-
-#[test]
 fn a_refusal_of_the_offer_goes_through_the_session() {
     let mut view = targeting_ace(offering(0, Some("Help?"), false));
     tap(&mut view, HAIL_KEY);
@@ -2151,33 +2118,6 @@ fn b_on_a_person_offering_on_boarding_reports_the_offer_and_no_plunder() {
         Some("Aboard.".to_owned())
     );
     assert_eq!(view.message(), None, "nothing granted");
-}
-
-#[test]
-fn an_offer_accepted_at_once_queues_its_before_movie_first() {
-    let mut catalog = offering(0, None, true);
-    catalog.mission_texts[0].movies.offer = nova_sim::DescMovie::from_desc("Ace.mov", 0x0004);
-    let mut view = targeting_ace(catalog);
-    tap(&mut view, HAIL_KEY);
-    assert_eq!(view.take_offer(), None);
-    assert_eq!(
-        view.take_mission_texts().first(),
-        nova_sim::DescMovie::from_desc("Ace.mov", 0x0004)
-            .map(nova_sim::MissionShown::Movie)
-            .as_ref()
-    );
-}
-
-#[test]
-fn an_offer_accepted_at_once_shows_nothing() {
-    let mut view = targeting_ace(offering(0, None, true));
-    tap(&mut view, HAIL_KEY);
-    assert_eq!(view.take_offer(), None);
-    assert_eq!(view.take_hail(), None);
-    assert_eq!(
-        view.pilot().expect("a pilot").missions().missions(),
-        [MissionId(130)]
-    );
 }
 
 /// A plunder's lines read as `_AIPlunderShipContents` builds them, the

@@ -456,7 +456,7 @@
 //!   [`FlightView::accept_mission`] or [`FlightView::refuse_mission`]; a
 //!   mission that cannot be refused, with no offer text, is accepted at
 //!   once and shows nothing. Any other hail opens the comm dialog,
-//!   listing the screen's [`HailOptions`]
+//!   listing the screen's [`HailOptions`](nova_sim::HailOptions)
 //!   ([`FlightView::with_hail_options`]; Nova's by default), its replies
 //!   read through the [`CommCatalog`](nova_sim::CommCatalog) port, and otherwise says why in the
 //!   original's words (`STR#` 2002 #53-54), or nothing with no target. A
@@ -638,9 +638,9 @@ use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::gate_entry::enter_level;
 use nova_sim::{
-    Chance, CombatEvent, Condition, FixedStep, GovtId, HailOptions, HailView, HashedRolls, NavMode,
-    NeverFires, NpcId, OutfitRefusal, OutfitRun, Reselection, Reserves, ShipId, ShipRef,
-    SimMessage, StellarId, SystemId, Vec2, flight::normalized, flight::shortest_turn,
+    Chance, CombatEvent, Condition, FixedStep, GovtId, HailView, HashedRolls, NavMode, NeverFires,
+    NpcId, OutfitRefusal, OutfitRun, Reselection, Reserves, ShipId, ShipRef, SimMessage, StellarId,
+    SystemId, Vec2, flight::normalized, flight::shortest_turn,
 };
 use nova_sim::{InterfaceLoad, MissionInfo, OfferPrompt, TextBar};
 
@@ -678,6 +678,7 @@ mod dialog_map;
 mod docked;
 mod drawing;
 mod gates;
+mod hail;
 mod hyperspace;
 mod inbox;
 mod interface;
@@ -1265,8 +1266,6 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// The session's arrival messages taken before their arrival is
     /// caught up with, which leads them.
     pending_leads: Vec<SimMessage>,
-    /// The options the comm dialog lists.
-    hail_options: HailOptions,
     /// The course map, shown or not.
     map: GalaxyMap,
     /// Whether the course map is shown.

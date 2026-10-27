@@ -393,34 +393,3 @@ fn the_bars_news_is_drawn_through_the_session_on_the_flights_chance() {
     assert_eq!(broken.news(), None);
     assert_eq!(broken.news_picture(), None);
 }
-
-// The escort dialog.
-
-#[test]
-fn y_on_a_fleet_escort_opens_the_escort_dialog_once_and_its_presses_go_to_the_session() {
-    let mut view = escorted();
-    option(&mut view, TARGET_KEY);
-    assert_eq!(
-        view.session().expect("flying").target().map(|npc| npc.id),
-        Some(NpcId(1))
-    );
-    assert_eq!(view.take_escort_dialog(), None);
-    tap(&mut view, HAIL_KEY);
-    let opened = view.take_escort_dialog().expect("the escort dialog");
-    assert_eq!(opened.ship, ShipId(130));
-    assert_eq!(view.take_escort_dialog(), None, "once");
-    assert_eq!(view.take_hail(), None, "no comm dialog");
-    let marked = view
-        .press_escort(nova_sim::escort_dialog::EscortButton::Sell)
-        .expect("still open");
-    assert_eq!(marked.mark, Some(nova_sim::fleet::EscortMark::Sell));
-    assert_eq!(
-        view.press_escort(nova_sim::escort_dialog::EscortButton::Close),
-        None
-    );
-    assert_eq!(
-        view.press_escort(nova_sim::escort_dialog::EscortButton::Sell),
-        None,
-        "closed"
-    );
-}
