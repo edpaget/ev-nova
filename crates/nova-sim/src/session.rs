@@ -482,6 +482,8 @@ mod exchange_events;
 mod exit_cursors;
 mod explored;
 #[cfg(test)]
+mod fight_order;
+#[cfg(test)]
 mod fighter_capacity;
 mod fighters;
 #[cfg(test)]
