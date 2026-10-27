@@ -83,7 +83,8 @@
 //! ([`nova::startup`]).
 //!
 //! Every startup error and warning goes to standard error and to the
-//! startup log, `~/Library/Logs/nova/nova.log` on macOS, rewritten each
+//! startup log, `~/Library/Logs/nova/nova.log` on macOS and
+//! `%LOCALAPPDATA%\nova\logs\nova.log` on Windows, rewritten each
 //! launch. When standard error is not a terminal (a double-clicked app), a
 //! fatal startup error is shown in an alert too, and the startup warnings
 //! are listed in one sheet over the game window once it opens. The
