@@ -1,7 +1,8 @@
 //! The Windows resources `nova.exe` embeds, built by nova's build script
 //! on any platform: the icon (an `.ico` made from the macOS `.icns`,
-//! [`ico_from_icns`]), the version numbers ([`version_quad`]) and the
-//! resource script that names them and the manifest ([`resource_script`]).
+//! [`ico_from_icns`]), the version numbers ([`version_quad`]), the
+//! resource script that names them and the manifest ([`resource_script`]),
+//! and the linker arguments that go with them ([`link_args`]).
 //!
 //! The crate is plain, safe Rust with no platform code, so every decision
 //! the build script makes is tested everywhere. The script itself only
@@ -14,10 +15,12 @@
 //! information is `VS_VERSION_INFO`.
 
 mod ico;
+mod link;
 mod script;
 mod version;
 
 pub use ico::{ICON_SIZES, IconError, ico_from_icns};
+pub use link::{MAIN_STACK_BYTES, link_args};
 pub use script::{Resources, escape, resource_script};
 pub use version::{VersionError, version_quad};
 
