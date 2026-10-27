@@ -12,7 +12,7 @@ use super::*;
 /// the ship and none wraps; each `Rand` roll counts up, so every
 /// scattering rolls frames the last did not.
 #[derive(Default)]
-struct Counting {
+pub(super) struct Counting {
     rolls: u32,
 }
 
@@ -29,15 +29,6 @@ impl Chance for Counting {
         self.rolls += 1;
         u16::try_from(self.rolls % u32::from(sides.max(1))).expect("below sides")
     }
-}
-
-/// `catalog`'s flight, its effects rolled on a [`Counting`] chance,
-/// caught up with once.
-fn counted(catalog: FakeCatalog) -> View {
-    let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Counting::default()));
-    let mut view = FlightView::new(catalog).with_effects_chance(SharedChance::new(chance));
-    view.tick(Duration::ZERO);
-    view
 }
 
 fn stars_of(view: &View) -> [Star; 20] {
@@ -228,12 +219,6 @@ fn a_step_scrolls_the_stars_by_the_ships_move_twice_over_in_double_time() {
     }
 }
 
-/// Close enough for a sum of f32 moves: the test flies the ship a few
-/// units a pass.
-fn near(a: f32, b: f32) -> bool {
-    (a - b).abs() < 1e-3
-}
-
 #[test]
 fn the_frame_draws_the_first_passs_placement_in_double_time() {
     for double in [false, true] {
@@ -306,62 +291,4 @@ fn a_scattering_due_scatters_the_stars_afresh_on_the_frames_ship() {
     for star in faked_stars(&view) {
         assert_eq!((star.x, star.y), (ship.x, ship.y), "on the ship");
     }
-}
-
-/// Whether every star's factor is a `Rand(35)` roll × 0.01, some above 0.
-fn rolled_factors(view: &View) -> bool {
-    let stars = stars_of(view);
-    stars.iter().all(|star| {
-        let hundredths = (star.factor * 100.0).round();
-        (0.0..35.0).contains(&hundredths) && near(star.factor, hundredths * 0.01)
-    }) && stars.iter().any(|star| star.factor > 0.0)
-}
-
-fn all_fixed(view: &View) -> bool {
-    stars_of(view).iter().all(|star| star.factor == 0.0)
-}
-
-#[test]
-fn the_parallax_starfield_is_on_by_default_and_rolls_each_stars_factor() {
-    let mut view = counted(starry());
-    assert!(view.parallax_starfield(), "on by default");
-    assert!(rolled_factors(&view));
-    jump_to_alpha(&mut view);
-    assert!(rolled_factors(&view));
-}
-
-#[test]
-fn with_the_parallax_starfield_off_every_factor_is_0() {
-    let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Counting::default()));
-    let mut view = FlightView::new(starry())
-        .with_effects_chance(SharedChance::new(chance))
-        .with_parallax_starfield(false);
-    assert!(!view.parallax_starfield());
-    view.tick(Duration::ZERO);
-    assert!(stars_of(&view).iter().all(|star| star.shown));
-    assert!(all_fixed(&view));
-    jump_to_alpha(&mut view);
-    assert!(all_fixed(&view));
-}
-
-#[test]
-fn a_parallax_starfield_change_waits_for_the_next_scattering() {
-    let mut view = counted(starry());
-    let before = stars_of(&view);
-    view.set_parallax_starfield(false);
-    assert!(!view.parallax_starfield());
-    assert_eq!(stars_of(&view), before, "the stars scattered keep theirs");
-    jump_to_alpha(&mut view);
-    assert!(all_fixed(&view));
-    view.set_parallax_starfield(true);
-    assert!(all_fixed(&view), "until the next scattering");
-    let mut back_on = counted(starry());
-    back_on.set_parallax_starfield(false);
-    back_on.set_parallax_starfield(true);
-    jump_to_alpha(&mut back_on);
-    assert!(back_on.parallax_starfield());
-    assert!(
-        rolled_factors(&back_on),
-        "back on, the next scattering rolls"
-    );
 }

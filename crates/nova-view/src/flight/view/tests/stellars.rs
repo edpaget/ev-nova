@@ -526,19 +526,6 @@ fn a_load_shows_every_stellar_from_frame_0() {
 }
 
 #[test]
-fn a_frame_during_the_streak_still_redraws_the_hull() {
-    let mut view = FlightView::new(shipbuying());
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    jump_now(&mut view);
-    run_set(&mut view, "H129");
-    view.tick(TICK);
-    assert!(view.jump_effect().is_some(), "still streaking");
-    assert_eq!(view.session().map(Session::system), Ok(SystemId(130)));
-    assert_eq!(sheets(&view), [ShipId(128), ShipId(129)]);
-}
-
-#[test]
 fn fighters_abandoned_are_told_only_with_the_layout_of_the_move_settled() {
     let rules = Rulebook::default().with_override(RuleKey::MoveArrival, RuleSource::Bible);
     let mut view = fighters_out().with_rules(rules);

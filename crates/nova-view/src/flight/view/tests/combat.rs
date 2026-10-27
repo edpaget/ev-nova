@@ -645,59 +645,6 @@ fn a_take_off_after_the_first_step_reads_no_sheet_or_card() {
 }
 
 #[test]
-fn arriving_repopulates_from_the_new_system() {
-    let mut view = FlightView::new(trafficked(&[131], 2, 129, 1));
-    view.tick(TICK);
-    assert_eq!(npc_ids(&view), []);
-    jump_to_alpha(&mut view);
-    assert_eq!(npc_ids(&view).len(), 2);
-    assert_eq!(
-        *view.catalog().sheets_asked.borrow(),
-        [ShipId(128), ShipId(129)],
-        "read on arrival"
-    );
-}
-
-#[test]
-fn the_traffic_flies_on_through_the_whole_warp_and_the_ship_moves_off() {
-    // The traffic follows the ship out, then makes for planet 128 at
-    // the centre as the ship jumps.
-    let catalog = FakeCatalog {
-        sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
-        ..trafficked(&[130], 2, 129, 1)
-    };
-    let jumped = Rc::new(std::cell::Cell::new(false));
-    let landing = Goal::Land(StellarId(128));
-    let mut view = FlightView::new(catalog)
-        .with_behaviour(Rc::new(InspectingUntil(Rc::clone(&jumped), landing)));
-    plot(&mut view, 131);
-    ready_to_jump(&mut view);
-    jumped.set(true);
-    view.input(&key(JUMP, true));
-    assert!(view.jump_effect().is_some(), "jumping on J");
-    let leaving = player(&view);
-    let start = npc_states(&view);
-    assert_eq!(start.len(), 2);
-    view.tick(ms(500));
-    assert!(view.session().expect("flying").in_warp_lead_in());
-    assert_ne!(npc_states(&view), start, "the traffic flies on");
-    while view.session().expect("flying").in_warp_lead_in() {
-        view.tick(TICK);
-    }
-    let past = npc_states(&view);
-    view.tick(ms(150));
-    assert_ne!(npc_states(&view), past, "past the lead-in too");
-    assert_ne!(
-        player(&view).position,
-        leaving.position,
-        "the ship moves off"
-    );
-    assert_eq!(view.session().expect("flying").system(), SystemId(130));
-    tick_to_arrival(&mut view);
-    assert_eq!(view.session().expect("flying").system(), SystemId(131));
-}
-
-#[test]
 fn npcs_stand_still_while_the_map_is_open_or_the_ship_is_landed() {
     let catalog = FakeCatalog {
         sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
@@ -1507,26 +1454,6 @@ fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
 }
 
 #[test]
-fn command_and_x_together_hold_the_eject() {
-    assert_eq!(EJECT_KEY, Key::Char('x'));
-    let mut view = ejecting_view(ejecting_in(100, &[188]), &[Key::Command, EJECT_KEY]);
-    assert_eq!(
-        until_ejected(&mut view),
-        (true, false),
-        "before any breakup"
-    );
-}
-
-#[test]
-fn command_alone_or_x_alone_does_not() {
-    for keys in [Key::Command, EJECT_KEY] {
-        let keys = [keys];
-        let mut view = ejecting_view(ejecting_in(100, &[188]), &keys);
-        assert_eq!(until_ejected(&mut view), (false, true), "{keys:?}");
-    }
-}
-
-#[test]
 fn an_ejected_player_takes_no_key() {
     let mut view = ejecting_view(ejecting_in(100, &[188, 187]), &[]);
     assert!(until_ejected(&mut view).0);
@@ -1537,36 +1464,6 @@ fn an_ejected_player_takes_no_key() {
     let session = view.session().expect("flying");
     assert_eq!(session.nav_target(), None, "no landing request");
     assert!(!session.takes(PlayerCommand::Land));
-}
-
-#[test]
-fn the_pod_is_rescued_after_350_ticks_and_the_rescue_stops_stepping_with_its_desc() {
-    let mut catalog = ejecting_in(100, &[188, 187]);
-    catalog.home = true;
-    let mut view = ejecting_view(catalog, &[]);
-    assert!(until_ejected(&mut view).0);
-    assert_eq!(view.take_rescue_desc(), None);
-    let mut ticks = 0;
-    let desc = loop {
-        ticks += 1;
-        view.tick(TICK);
-        if let Some(desc) = view.take_rescue_desc() {
-            break desc;
-        }
-        assert!(ticks <= nova_sim::POD_TICKS, "no rescue");
-    };
-    assert_eq!(desc, 13999);
-    assert_eq!(ticks, nova_sim::POD_TICKS);
-    assert_eq!(view.take_rescue_desc(), None, "once");
-    let session = view.session().expect("flying");
-    assert_eq!(session.ship(), ShipId(128));
-    assert_eq!(session.system(), SystemId(128));
-    assert_eq!(session.player().position, Vec2::new(50.0, 50.0));
-    assert_eq!(
-        view.previous.position,
-        Vec2::new(50.0, 50.0),
-        "laid out where the rescue put it: nothing else stepped"
-    );
 }
 
 #[test]
@@ -2043,107 +1940,6 @@ fn landing_clears_the_effects() {
     assert_eq!(*view.effects(), Effects::default());
 }
 
-#[test]
-fn arriving_clears_the_effects() {
-    let mut view = fighting(detonating(), &[]);
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    detonate(&mut view);
-    jump_now(&mut view);
-    arrive_now(&mut view);
-    assert_eq!(view.session().expect("flying").system(), SystemId(131));
-    assert_eq!(*view.effects(), Effects::default());
-}
-
-/// [`armed`]'s flight whose Proxima, 140, Alpha Centauri's stellar at its
-/// centre, explodes in `bööm` 128 (explosion type 0), which sounds `snd `
-/// 302, as a crön's `Y140` destroys it on the first day.
-fn proxima_on_the_day() -> FakeCatalog {
-    let mut catalog = armed(0, &[BLASTER]);
-    catalog.lives = vec![nova_sim::StellarLife {
-        explosion: nova_sim::catalog::Explosion::decode(0),
-        ..life(140, 0)
-    }];
-    catalog.boom_sounds = vec![(nova_sim::BoomId(128), nova_sim::SoundId(302))];
-    catalog.crons = vec![nova_sim::catalog::CronRecord {
-        id: nova_sim::catalog::CronId(128),
-        first_day: 0,
-        first_month: 0,
-        first_year: 0,
-        last_day: 0,
-        last_month: 0,
-        last_year: 0,
-        random: 100,
-        duration: 0,
-        pre_holdoff: 0,
-        post_holdoff: 0,
-        flags: 0,
-        enable_on: Test::default(),
-        on_start: nova_sim::Script::parse("Y140"),
-        on_end: nova_sim::Script::default(),
-        contribute: 0,
-        require: 0,
-        news_govt: [-1; 4],
-        govt_news: [-1; 4],
-        ind_news: -1,
-    }];
-    catalog
-}
-
-/// Jumps to Alpha Centauri, ticking until the tick the session arrives,
-/// and no further.
-fn arrive_in_131(view: &mut View) {
-    plot(view, 131);
-    fly_out(view);
-    jump_now(view);
-    for _ in 0..1000 {
-        view.tick(TICK);
-        if view.session().expect("flying").system() == SystemId(131) {
-            return;
-        }
-    }
-    panic!("never arrived");
-}
-
-#[test]
-fn a_crons_y_on_a_jumps_day_is_drawn_on_the_arrivals_first_frame() {
-    // The explosion stays in the explod table through the arrival
-    // (@0x1d7fb), advanced once by `_PrepareAllSprites` (@0x6c59c).
-    let mut view = fighting(proxima_on_the_day(), &[]);
-    arrive_in_131(&mut view);
-    let explosions = view.effects().explosions();
-    assert_eq!(explosions.len(), 1, "{explosions:?}");
-    assert_eq!(explosions[0].boom, nova_sim::BoomId(128));
-    assert_eq!(explosions[0].at, Point::new(0.0, 0.0), "Proxima's place");
-    assert_eq!(explosions[0].frame, 1.0, "advanced once");
-}
-
-#[test]
-fn a_ys_explosion_plays_no_boom_sound_from_the_view() {
-    let mut view = fighting(proxima_on_the_day(), &[]);
-    arrive_in_131(&mut view);
-    let mut sounds = view.take_sounds();
-    view.tick(TICK);
-    sounds.extend(view.take_sounds());
-    let heard = |sound: &Sound| match sound {
-        Sound::Sim(nova_sim::SimSound::Explosion { sound, .. })
-        | Sound::Combat(CombatSound { sound, .. }) => *sound == nova_sim::SoundId(302),
-        _ => false,
-    };
-    assert_eq!(
-        sounds
-            .iter()
-            .filter(|sound| heard(sound))
-            .collect::<Vec<_>>(),
-        [&Sound::Sim(nova_sim::SimSound::Explosion {
-            sound: nova_sim::SoundId(302),
-            offset: (1350, 0),
-            priority: 6,
-        })],
-        "the session's, once"
-    );
-}
-
 /// [`armed`]'s NPC, shïp 129, of `DeathDelay` 4 and one crew pod, which
 /// one hit of the player's blaster breaks up: the pod comes out on its
 /// explosion tick, at a timer of 2.
@@ -2197,32 +1993,6 @@ fn a_dying_npcs_pod_is_drawn_and_heard_until_landing_clears_it() {
     assert!(heard.contains(&nova_sim::SoundId(372)), "{heard:?}");
     land_now(&mut view);
     assert!(view.take_landing().is_some());
-    assert!(view.effects().pods().is_empty());
-    assert_eq!(pods_drawn(&view), 0);
-}
-
-#[test]
-fn arriving_leaves_no_pod_drawn() {
-    let mut view = fighting(podding(), &placed(750, 650, 180));
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    let ahead = player(&view).position + nova_sim::Vec2::new(0.0, -80.0);
-    let npc = view.session().expect("flying").npcs()[0].id;
-    nova_sim::fixture::place(view.sim.session.as_mut().expect("flying"), npc, ahead);
-    let placed_at = view.session().expect("flying").npcs()[0].state;
-    assert_eq!(
-        (placed_at.position, placed_at.velocity),
-        (ahead, nova_sim::Vec2::ZERO),
-        "placed ahead, at rest"
-    );
-    eject_a_pod(&mut view);
-    jump_now(&mut view);
-    assert!(
-        !view.effects().pods().is_empty(),
-        "still adrift as the jump begins"
-    );
-    arrive_now(&mut view);
-    assert_eq!(view.session().expect("flying").system(), SystemId(131));
     assert!(view.effects().pods().is_empty());
     assert_eq!(pods_drawn(&view), 0);
 }

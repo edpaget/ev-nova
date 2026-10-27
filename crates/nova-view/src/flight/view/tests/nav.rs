@@ -584,17 +584,6 @@ fn once_j_is_accepted_the_label_turns_bright_at_the_next_refresh() {
 }
 
 #[test]
-fn arriving_clears_the_target_and_l_selects_in_the_new_system() {
-    let mut view = flight();
-    tap(&mut view, LAND);
-    jump_to_alpha(&mut view);
-    assert_eq!(nav_target(&view), None);
-    assert_eq!(nav(&view), [hud::NAV_OFF]);
-    tap(&mut view, LAND);
-    assert_eq!(nav(&view), [hud::NAV_STELLAR, "Proxima"]);
-}
-
-#[test]
 fn tab_in_a_flight_that_never_started_does_nothing() {
     let mut view = FlightView::new(FakeCatalog {
         character: Err(StartError::NoCharacter),

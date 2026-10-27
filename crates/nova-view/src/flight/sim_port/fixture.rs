@@ -56,7 +56,7 @@ use super::{CommSource, FlightSim, MapSource, PortSource, fresh_description};
 pub struct FakeFlight {
     frame: FlightFrame,
     applied: Vec<FlightCommand>,
-    answers: VecDeque<Answer>,
+    answers: VecDeque<(Answer, Option<FlightFrame>)>,
     events: Vec<FlightEvent>,
     reports: VecDeque<StepReport>,
     stepped: Vec<(StepInput, u32)>,
@@ -195,7 +195,14 @@ impl FakeFlight {
     /// answered done, so the answers a test queues line up with the
     /// commands it is about.
     pub fn queue_answer(&mut self, answer: Answer) {
-        self.answers.push_back(answer);
+        self.answers.push_back((answer, None));
+    }
+
+    /// Answers the next command not yet answered with `answer`, as
+    /// [`FakeFlight::queue_answer`] does, and shows `frame` from then on,
+    /// as a command that changes the flight leaves it.
+    pub fn queue_answer_showing(&mut self, answer: Answer, frame: FlightFrame) {
+        self.answers.push_back((answer, Some(frame)));
     }
 
     /// Hands out `event` on the next drain.
@@ -281,7 +288,13 @@ impl FlightSim for FakeFlight {
         if shown {
             return Answer::Done;
         }
-        self.answers.pop_front().unwrap_or(Answer::Refused)
+        let Some((answer, frame)) = self.answers.pop_front() else {
+            return Answer::Refused;
+        };
+        if let Some(frame) = frame {
+            self.frame = frame;
+        }
+        answer
     }
 
     fn drain(&mut self, into: &mut Vec<FlightEvent>) {
@@ -1660,6 +1673,23 @@ mod tests {
             fake.set_frame(frame.clone());
             assert_eq!(check_contract(&mut fake), Ok(()), "{frame:?}");
         }
+    }
+
+    #[test]
+    fn the_fake_shows_the_frame_an_answer_leaves() {
+        let mut fake = FakeFlight::new();
+        fake.queue_answer_showing(Answer::Jumped(SystemId(131)), stellar(129));
+        fake.queue_answer(Answer::Done);
+        assert_eq!(
+            fake.apply(FlightCommand::Jump),
+            Answer::Jumped(SystemId(131))
+        );
+        let mut frame = FlightFrame::default();
+        fake.frame(&mut frame);
+        assert_eq!(frame, stellar(129), "shown from the answer on");
+        assert_eq!(fake.apply(FlightCommand::Land), Answer::Done);
+        fake.frame(&mut frame);
+        assert_eq!(frame, stellar(129), "kept by an answer with no frame");
     }
 
     #[test]

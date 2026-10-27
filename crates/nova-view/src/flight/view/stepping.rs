@@ -35,14 +35,17 @@ use nova_sim::flight_frame::{PassReport, StepInput, StepRun};
 use nova_sim::{Controls, Face, PlayerCommand, RuleKey, RuleSource, Rulebook, ShipRef, Turn, Vec2};
 
 use crate::Key;
+use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::effects::{LoopedSounds, Scene};
 use crate::flight::sim_port::FlightSim;
 use crate::system::camera::Anchor;
+use crate::system::catalog::SystemCatalog;
 
+use super::words::Words;
 use super::{
     AFTERBURNER_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FlightView,
     LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY, dying, glow_decay, play_area, point, show_combat,
-    stars, window_width,
+    show_frozen_frames, show_gate_frames, stars, window_width,
 };
 
 /// The rules the view shows the steps' effects, the stars and the world
@@ -237,5 +240,44 @@ impl<C, S: FlightSim> FlightView<C, S> {
             first,
             chance,
         );
+    }
+}
+
+/// The frame's steps whole: the steps, the gates' and frozen stellars'
+/// frames, the rescue's layout, the messages and the traffic's sheets.
+impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> FlightView<C, S> {
+    /// Runs up to `steps` of the flight's steps for the frame, under the
+    /// keys held ([`FlightView::step_frame`]): each stopped before it
+    /// once the warp has ended or the hold run out, each the advance pass
+    /// in the original's order, the answers to what its close struck and
+    /// the quotes, then in double time the second pass with the same
+    /// (`nova_sim::Session::step`), the view's effects stepped after each
+    /// pass and the comm notes and quotes said. Then each hypergate draws
+    /// the frame the steps left it on, and a pass whose ship tick brought
+    /// the escape pod's rescue, which ends the stepping there, has the
+    /// view laid out afresh where the rescue put the ship. Then the
+    /// messages the steps raised are said, in `words`, and the sheets of a system the
+    /// session populated afresh are read. Flight and the jump's warp both
+    /// step this way.
+    ///
+    /// The comm notes and quotes are said before the gates' frames are
+    /// shown, where the view once showed the frames first: the two touch
+    /// nothing in common, and both are set before the frame is drawn.
+    pub(super) fn run_steps(&mut self, steps: u32, words: Words<Self>) {
+        let rescued = self.step_frame(steps, self.anchor());
+        if let Some(scene) = &mut self.scene {
+            show_frozen_frames(scene, &self.frame);
+            show_gate_frames(scene, &self.frame);
+        }
+        if rescued {
+            // Laid out in the system the rescue took the pod to, from where
+            // it put the ship, before the frame is drawn; the course map
+            // looking there too (`_HandlePlayer` @0x68fab).
+            self.catch_up();
+            self.map.recentre();
+        }
+        self.relay_messages(words);
+        // The session may have populated its system afresh.
+        self.read_npc_sheets();
     }
 }

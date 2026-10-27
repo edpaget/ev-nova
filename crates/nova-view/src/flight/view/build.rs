@@ -420,16 +420,6 @@ impl<
         self
     }
 
-    /// The flight with its explosions and debris rolled on `chance`, apart
-    /// from the simulation's.
-    #[must_use]
-    pub fn with_effects_chance(self, effects_chance: SharedChance) -> Self {
-        Self {
-            effects_chance,
-            ..self
-        }
-    }
-
     /// The flight with the HUD's text, and the course map's panels',
     /// measured by `metrics`.
     #[must_use]
@@ -770,52 +760,6 @@ impl<
         }
     }
 
-    /// The flight with jumps playing their white fades or not, as the
-    /// Hyperspace Effects preference is on (the default) or off.
-    #[must_use]
-    pub fn with_hyperspace_effects(self, hyperspace_effects: bool) -> Self {
-        Self {
-            hyperspace_effects,
-            ..self
-        }
-    }
-
-    /// Sets whether the next jump plays its white fades; a jump already
-    /// playing keeps its own.
-    pub fn set_hyperspace_effects(&mut self, hyperspace_effects: bool) {
-        self.hyperspace_effects = hyperspace_effects;
-    }
-
-    /// Whether jumps play their white fades.
-    #[must_use]
-    pub fn hyperspace_effects(&self) -> bool {
-        self.hyperspace_effects
-    }
-
-    /// The flight with each scattering of the stars giving them their own
-    /// parallax factors or not, as the Parallax Starfield preference is on
-    /// (the default) or off.
-    #[must_use]
-    pub fn with_parallax_starfield(self, parallax_starfield: bool) -> Self {
-        Self {
-            parallax_starfield,
-            ..self
-        }
-    }
-
-    /// Sets whether the stars get their own parallax factors. It takes
-    /// effect at the next scattering; the stars already scattered keep
-    /// their factors.
-    pub fn set_parallax_starfield(&mut self, parallax_starfield: bool) {
-        self.parallax_starfield = parallax_starfield;
-    }
-
-    /// Whether the stars' scatterings give them their own parallax factors.
-    #[must_use]
-    pub fn parallax_starfield(&self) -> bool {
-        self.parallax_starfield
-    }
-
     /// The flight with shots leaving their particle trails and smoke or
     /// not, as the Smoke Trails preference is on (the default) or off.
     #[must_use]
@@ -931,6 +875,62 @@ struct Opening {
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
+    /// The flight with its explosions and debris rolled on `chance`, apart
+    /// from the simulation's.
+    #[must_use]
+    pub fn with_effects_chance(self, effects_chance: SharedChance) -> Self {
+        Self {
+            effects_chance,
+            ..self
+        }
+    }
+
+    /// The flight with each scattering of the stars giving them their own
+    /// parallax factors or not, as the Parallax Starfield preference is on
+    /// (the default) or off.
+    #[must_use]
+    pub fn with_parallax_starfield(self, parallax_starfield: bool) -> Self {
+        Self {
+            parallax_starfield,
+            ..self
+        }
+    }
+
+    /// Sets whether the stars get their own parallax factors. It takes
+    /// effect at the next scattering; the stars already scattered keep
+    /// their factors.
+    pub fn set_parallax_starfield(&mut self, parallax_starfield: bool) {
+        self.parallax_starfield = parallax_starfield;
+    }
+
+    /// Whether the stars' scatterings give them their own parallax factors.
+    #[must_use]
+    pub fn parallax_starfield(&self) -> bool {
+        self.parallax_starfield
+    }
+
+    /// The flight with jumps playing their white fades or not, as the
+    /// Hyperspace Effects preference is on (the default) or off.
+    #[must_use]
+    pub fn with_hyperspace_effects(self, hyperspace_effects: bool) -> Self {
+        Self {
+            hyperspace_effects,
+            ..self
+        }
+    }
+
+    /// Sets whether the next jump plays its white fades; a jump already
+    /// playing keeps its own.
+    pub fn set_hyperspace_effects(&mut self, hyperspace_effects: bool) {
+        self.hyperspace_effects = hyperspace_effects;
+    }
+
+    /// Whether jumps play their white fades.
+    #[must_use]
+    pub fn hyperspace_effects(&self) -> bool {
+        self.hyperspace_effects
+    }
+
     /// The flight drawing the port's own `overlays`, the title and the
     /// help line, which are off by default.
     #[must_use]

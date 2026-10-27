@@ -1383,19 +1383,6 @@ fn starry() -> FakeCatalog {
     }
 }
 
-/// The stars `view` draws first in its world: its starfield's, `alpha` of
-/// the way between its last two snapshots, by its rules' reading of
-/// [`RuleKey::FlightStarfield`].
-fn drawn_stars(view: &View) -> Vec<DrawCommand> {
-    let source = view.session().map_or(RuleSource::Engine, |session| {
-        session.rules().source_for(RuleKey::FlightStarfield)
-    });
-    let mut list = DrawList::new();
-    let stars = (&view.stars, &view.looks);
-    super::stars::draw(&mut list, stars, source, &view.camera(), view.alpha);
-    list.iter().cloned().collect()
-}
-
 /// Whether `command` is one of the stars [`star_sheet`] draws.
 fn is_star(command: &DrawCommand) -> bool {
     matches!(
@@ -1689,13 +1676,6 @@ fn on_map(view: &mut View, id: i16) -> Point {
     map.transform().world_to_screen(system.position())
 }
 
-/// Where system `id` is drawn on the course map as it looks now.
-fn on_map_now(view: &View, id: i16) -> Point {
-    let map = view.course_map();
-    let system = map.model().system(SystemId(id)).expect("on the map");
-    map.transform().world_to_screen(system.position())
-}
-
 /// Clicks the left button at `at`.
 fn click(view: &mut View, at: Point) {
     for pressed in [true, false] {
@@ -1748,26 +1728,10 @@ fn planner(view: View) -> View {
     view.with_rules(rules)
 }
 
-/// Marks system `id` known, as a map or a visit would.
-fn know(view: &mut View, id: i16) {
-    view.sim
-        .session
-        .as_mut()
-        .expect("flying")
-        .mark_known([SystemId(id)]);
-}
-
 /// Whether the open map draws Clear Route enabled
 /// (`showClearRouteButton`).
 fn clear_route_enabled(view: &View) -> bool {
     view.course_map().clear_route_enabled()
-}
-
-/// Presses Shift, clicks at `at` and lets Shift go.
-fn shift_click(view: &mut View, at: Point) {
-    view.input(&key(Key::Shift, true));
-    click(view, at);
-    view.input(&key(Key::Shift, false));
 }
 
 /// Thrusts straight up until the ship is at least the minimum jump
@@ -1787,22 +1751,6 @@ fn fly_out(view: &mut View) {
         player(view)
     );
 }
-
-/// The mode-3 link the open course map draws, as (from, to) on the
-/// map; none while it is shut.
-fn hyper_selected_links(view: &View) -> Vec<(Point, Point)> {
-    if !view.map_open() {
-        return Vec::new();
-    }
-    view.course_map()
-        .picture()
-        .and_then(|picture| picture.mode3_link)
-        .map(|(from, to)| (on_map_now(view, from.0), on_map_now(view, to.0)))
-        .into_iter()
-        .collect()
-}
-
-const REFUSED: Sound = Sound::Sim(SimSound::Refused);
 
 /// `view` begun as a new pilot's, ticked once past the land hint, its
 /// message and sounds let go.
@@ -3729,11 +3677,6 @@ fn told(view: View) -> View {
     };
     view.with_strings(Rc::new(strings))
 }
-/// The ships whose sheets `view` has asked for.
-fn sheets(view: &View) -> Vec<ShipId> {
-    view.catalog().sheets_asked.borrow().clone()
-}
-
 fn systems_read(view: &View) -> Vec<SystemId> {
     view.catalog().systems_read.borrow().clone()
 }
@@ -4172,12 +4115,4 @@ fn sims(view: &mut View) -> Vec<SimSound> {
 /// The times `view` raised `sound` since its sounds were last taken.
 fn count(view: &mut View, sound: SimSound) -> usize {
     sims(view).into_iter().filter(|&s| s == sound).count()
-}
-
-/// Sets the player's condition in `view` to `to`.
-fn condition(view: &mut View, to: Condition) {
-    let Ok(session) = &mut view.sim.session else {
-        panic!("flying");
-    };
-    nova_sim::fixture::set_player_condition(session, to);
 }

@@ -17,7 +17,7 @@ use nova_sim::{
 };
 
 use crate::flight::catalog::StatusBars;
-use crate::flight::jump::JumpEffect;
+use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyMap;
 use crate::time::sixtieths;
 use crate::ui::PlunderShown;
@@ -30,7 +30,9 @@ use super::{
     plunder_message,
 };
 
-impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
+/// The course map's, the cursor's and the landing's accessors, over the
+/// [`FlightSim`] port.
+impl<C, S: FlightSim> FlightView<C, S> {
     /// Where the hover cursor is drawn, or `None` while it isn't.
     #[must_use]
     pub fn cursor_at(&self) -> Option<Point> {
@@ -78,19 +80,14 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         self.map.zoom()
     }
 
-    /// The jump's effect, while it plays: the warp and its fade to white
-    /// until the ship arrives, or else the arrival's fade-in (or flash).
-    #[must_use]
-    pub fn jump_effect(&self) -> Option<&JumpEffect> {
-        self.jump.as_ref().or(self.fade_in.as_ref())
-    }
-
     /// The stellar the ship has just landed on, once: the router takes it
     /// to show the spaceport.
     pub fn take_landing(&mut self) -> Option<StellarId> {
         self.pending_landing.take()
     }
+}
 
+impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// Return (`ackComm`): clears the message line, and the session's
     /// for a tick while a line shows ([`Session::comm_acknowledged`],
     /// `_HandlePlayer` @0x6dd22-0x6dd65).

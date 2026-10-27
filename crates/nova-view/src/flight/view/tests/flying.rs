@@ -750,20 +750,6 @@ fn landing_while_thrusting_puts_the_glow_out() {
 }
 
 #[test]
-fn beginning_a_jump_while_thrusting_puts_the_glow_out() {
-    let mut view = FlightView::new(layered());
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 6);
-    assert_eq!(ship_sprites(&view).len(), 3, "glowing");
-    jump_now(&mut view);
-    assert_eq!(view.session().expect("flying").engine_glow(), 0);
-    let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
-    assert_eq!(ids, [2000, 2200], "jumping");
-}
-
-#[test]
 fn a_ship_without_layers_draws_only_its_sprite() {
     let view = lit(at_rest(catalog()), Some(32), 6);
     let ids: Vec<_> = super::faked_world::faked_ship_sprites(&view)
@@ -1246,41 +1232,6 @@ fn a_new_system_shows_on_the_radar_at_once_leaving_the_timer_and_blink() {
         .map(|s| s.position)
         .collect();
     assert_eq!(stellars, scene, "Alpha Centauri's");
-}
-
-#[test]
-fn an_arrival_shows_the_new_systems_stellars_at_once() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    // Coast a tick, so the arrival falls between the radar's refreshes
-    // and the test shows the arrival's own refresh.
-    ticks(&mut view, 1);
-    jump_now(&mut view);
-    let leaving = view.session().expect("flying").system();
-    for _ in 0..1000 {
-        let cadence = view.hud_cadence;
-        view.tick(TICK);
-        if view.session().expect("flying").system() != leaving {
-            let now = u64::try_from(crate::time::ticks(view.elapsed)).expect("in range");
-            let mut probe = cadence;
-            assert!(!probe.advance(now).radar, "not a refresh tick");
-            assert_eq!(view.hud_cadence.blink_on(), cadence.blink_on());
-            break;
-        }
-    }
-    assert_ne!(view.session().expect("flying").system(), leaving);
-    let stellars: Vec<Point> = view
-        .radar_shown(&view.frame_now())
-        .stellars
-        .iter()
-        .map(|s| s.position)
-        .collect();
-    assert_eq!(stellars, [at(0.0, 0.0)], "Alpha Centauri's");
-    assert_eq!(
-        view.radar_shown(&view.frame_now()).player,
-        view.shown_position()
-    );
 }
 
 #[test]

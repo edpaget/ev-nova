@@ -3,9 +3,7 @@
 use std::time::Duration;
 
 use nova_sim::PlayerCommand;
-use nova_sim::{
-    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Session, Steps, TrafficCatalog,
-};
+use nova_sim::{AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Steps, TrafficCatalog};
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
@@ -186,13 +184,7 @@ impl<
     /// (see there).
     fn tick_then(&mut self, dt: Duration) {
         self.catch_up();
-        if let Some(effect) = &mut self.fade_in {
-            effect.advance(dt);
-            if effect.done() {
-                self.fade_in = None;
-            }
-        }
-        self.settle_given_up_jump();
+        self.fade_frame(dt);
         if self.map_open {
             // The map's own frame: its borders' null events.
             self.map.tick(dt);
@@ -205,7 +197,7 @@ impl<
         self.held_keys_frame();
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
-        self.run_steps(steps);
+        self.run_steps(steps, Self::WORDS);
         self.update_escort_menu();
         self.alpha = alpha;
         self.step_cursor(steps);
@@ -213,17 +205,7 @@ impl<
         if let Some(effect) = &mut self.jump {
             effect.advance(dt);
         }
-        if self.sim.session.as_ref().is_ok_and(Session::warp_end_due) {
-            self.arrive();
-            self.fade_in = self
-                .jump
-                .take()
-                .map(|mut effect| {
-                    effect.arrive();
-                    effect
-                })
-                .filter(|effect| !effect.done());
-        }
+        self.arrival_frame(Self::WORDS);
         self.advance_hud();
     }
 

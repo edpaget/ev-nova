@@ -5,10 +5,10 @@
 use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 use nova_sim::{
-    Assigned, Assignment, AsteroidCatalog, CombatCatalog, CommCatalog, Condition, Departure,
-    GateKind, GateRefusal, LandOutcome, LandPress, LandingRefusal, OutfitOrder, OutfitRefusal,
-    OutfitRun, PilotCatalog, Session, Settled, ShipId, ShipPurchase, ShipRefusal, SimMessage,
-    StellarId, TrafficCatalog,
+    Assigned, Assignment, AsteroidCatalog, CombatCatalog, CommCatalog, Departure, GateKind,
+    GateRefusal, LandOutcome, LandPress, LandingRefusal, OutfitOrder, OutfitRefusal, OutfitRun,
+    PilotCatalog, Session, Settled, ShipId, ShipPurchase, ShipRefusal, SimMessage, StellarId,
+    TrafficCatalog,
 };
 use nova_sim::{PlayerCommand, TagNames};
 
@@ -26,11 +26,9 @@ use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
 use super::{
-    BOARD_KEY, FAR_ENOUGH, FlightView, GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, MAP_KEY,
-    NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, Said, TOO_CLOSE, TRACTORED, Then,
-    arrival_lead, arrival_message_with, assigned_message, assigned_ticks, gate_refusal_message,
-    jump_refusal_message, jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter,
-    refusal_message, show_frozen_frames, show_gate_frames, stellar_name,
+    BOARD_KEY, FlightView, GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, MAP_KEY, NavFlash,
+    Redrawn, SCRIPT_MESSAGE_TICKS, Said, Then, assigned_message, assigned_ticks,
+    gate_refusal_message, landing_refusal_ticks, no_outfitter, refusal_message, stellar_name,
 };
 
 impl<
@@ -120,126 +118,6 @@ impl<
         self.map_input_then(input, Self::close_map);
     }
 
-    /// Begins a jump, or shows why not when the player is told
-    /// ([`Session::jump_refusal_told`]). Starting it clears the message
-    /// line only when it says [`TOO_CLOSE`], [`TRACTORED`], [`FAR_ENOUGH`]
-    /// or [`NOTHING_OUT_HERE`] (`_HandlePlayer` @0x6b231-0x6b3d9, #36 at
-    /// @0x6b2ac-0x6b30d). The original's second jump
-    /// path clears them again (@0x6d601-0x6d7b1), once the pilot is past
-    /// the tutorial, which the arrival line replaces anyway. The keys
-    /// held stay held: the session flies the jump without them, and a
-    /// steering, thrust or fire key still held at arrival acts then, as
-    /// the original reads those live. J held through the jump does
-    /// nothing after it: its latch is set on every frame of the jump
-    /// ([`FlightView::jump_frame`]).
-    fn jump(&mut self) {
-        self.settle_given_up_jump();
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        match session.begin_jump() {
-            Ok(_) => {
-                for text in [TOO_CLOSE, TRACTORED, FAR_ENOUGH, NOTHING_OUT_HERE] {
-                    self.clear_message(text);
-                }
-                self.start_jump_effect();
-            }
-            Err(refusal) => {
-                if session.jump_refusal_told(&refusal)
-                    && let Some(text) = jump_refusal_message(&refusal)
-                {
-                    self.say_for(text, jump_refusal_ticks(&refusal));
-                }
-            }
-        }
-    }
-
-    /// Runs up to `steps` of the flight's steps for the frame, under the
-    /// keys held ([`FlightView::step_frame`]): each stopped before it
-    /// once the warp has ended or the hold run out, each the advance pass
-    /// in the original's order, the answers to what its close struck and
-    /// the quotes, then in double time the second pass with the same
-    /// (`nova_sim::Session::step`), the view's effects stepped after each
-    /// pass and the comm notes and quotes said. Then each hypergate draws
-    /// the frame the steps left it on, and a pass whose ship tick brought
-    /// the escape pod's rescue, which ends the stepping there, has the
-    /// view laid out afresh where the rescue put the ship. Then the
-    /// messages the steps raised are said, and the sheets of a system the
-    /// session populated afresh are read. Flight and the jump's warp both
-    /// step this way.
-    ///
-    /// The comm notes and quotes are said before the gates' frames are
-    /// shown, where the view once showed the frames first: the two touch
-    /// nothing in common, and both are set before the frame is drawn.
-    pub(super) fn run_steps(&mut self, steps: u32) {
-        let rescued = self.step_frame(steps, self.anchor());
-        if let Some(scene) = &mut self.scene {
-            show_frozen_frames(scene, &self.frame);
-            show_gate_frames(scene, &self.frame);
-        }
-        if rescued {
-            // Laid out in the system the rescue took the pod to, from where
-            // it put the ship, before the frame is drawn; the course map
-            // looking there too (`_HandlePlayer` @0x68fab).
-            self.catch_up();
-            self.map.recentre();
-        }
-        self.relay_messages(Self::WORDS);
-        // The session may have populated its system afresh.
-        self.read_npc_sheets();
-    }
-
-    /// Starts the jump's effect once the session says the jump has begun,
-    /// or lights the screen, unless it is playing already; and starts its
-    /// fade to white once the frame's `_hyperGamma` is above 0
-    /// ([`FlightFrame::hyper_gamma`](nova_sim::flight_frame::FlightFrame::hyper_gamma)),
-    /// read afresh, as it follows a jump just begun.
-    pub(super) fn start_jump_effect(&mut self) {
-        self.refresh_frame();
-        let Ok(session) = &self.sim.session else {
-            return;
-        };
-        // `_hyperGamma` goes back to -1 on the first pass after the
-        // arrival, so it lights only a jump still under way.
-        let under_way = session.jumping().is_some() || session.preparing_jump().is_some();
-        let lit = under_way && self.frame.hyper_gamma > 0.0;
-        if self.jump.is_none() && (session.jumping().is_some() || lit) {
-            self.jump = Some(JumpEffect::warp(self.hyperspace_effects));
-        }
-        if lit && let Some(effect) = &mut self.jump {
-            effect.light();
-        }
-    }
-
-    /// Settles the jump's effect once the session has given its jump up
-    /// before arrival (its warp collapsed under a disabled player, or cut
-    /// by a sabotage kill outfit): lit, the screen fades back from white;
-    /// unlit, the effect is dropped ([`JumpEffect::given_up`]).
-    ///
-    /// It runs at the top of a tick, before the keys, and before a jump
-    /// begins ([`FlightView::jump`]), as `_HandlePlayer` calls
-    /// `_FadeWhiteOut` at the top of its first pass with +0x50 no longer
-    /// above 0 (@0x6840b-0x6841f): the frame drawn after the cancelling
-    /// tick still shows the fade to white where it had got, as the
-    /// original's asynchronous `CGDisplayFade` runs on under it.
-    pub(super) fn settle_given_up_jump(&mut self) {
-        if self.jump.is_none() || self.jump_under_way() {
-            return;
-        }
-        if let Some(fade) = self.jump.take().and_then(JumpEffect::given_up) {
-            self.fade_in = Some(fade);
-        }
-    }
-
-    /// Whether the ship is braking and turning before a jump.
-    #[cfg(test)]
-    pub(super) fn preparing_jump(&self) -> bool {
-        self.sim
-            .session
-            .as_ref()
-            .is_ok_and(|session| session.preparing_jump().is_some())
-    }
-
     /// The keys `_HandlePlayer` polls with a latch, once a frame, with
     /// those held down, in its order: Option-\` and the Nav Off /
     /// Hyperspace Mode block ([`FlightView::nav_keys_frame`]), Hyper
@@ -270,187 +148,12 @@ impl<
         }
     }
 
-    /// One frame of the jump key, with J down or not, as `_HandlePlayer`
-    /// runs it (@0x6b0da-0x6badf) on [`FlightView::jump_latch`]: during a
-    /// jump, the latch set (@0x6bad3), so J held through a jump does
-    /// nothing after it; with J down and the player intact, a jump begun
-    /// or refused when the latch is clear (@0x6b86d, @0x6b955), and the
-    /// latch set; otherwise, J up or the player disabled or breaking up
-    /// (`_IsDisabled`), the latch cleared (@0x6badf). So J held into a
-    /// disable, or first pressed while disabled, acts on the first frame
-    /// the player is intact again.
-    pub(super) fn jump_frame(&mut self, down: bool) {
-        let frame = self.frame_now();
-        if frame.jump_under_way {
-            self.jump_latch = true;
-            return;
-        }
-        // A session that failed has no jump to begin (`FlightView::jump`).
-        let intact = self.sim.session.is_ok() && frame.player().condition == Condition::Intact;
-        if down && intact {
-            if !self.jump_latch {
-                self.jump();
-            }
-            self.jump_latch = true;
-        } else {
-            self.jump_latch = false;
-        }
-    }
-
-    /// Ends the jump: the ship arrives in the next system, caught up with
-    /// as [`FlightView::arrived`] says.
-    pub(super) fn arrive(&mut self) {
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        if session
-            .arrive(&*self.catalog, &mut self.sim.chance)
-            .is_some()
-        {
-            self.arrived();
-        }
-    }
-
-    /// Catches up with the ship having arrived in a system
-    /// ([`FlightView::catch_up`], which lays it out from the session's
-    /// event, drawn from where the ship arrives), and shows the session's
-    /// arrival message in the original's words, naming the scene laid
-    /// out, or the system's message buoy in its place
-    /// ([`SimMessage::Buoy`], its text as the session gives it), followed
-    /// by how many fighters were abandoned and how many hired escorts
-    /// defected unpaid, if any, the fighters first. A buoy's arrival
-    /// carries no fighter notes: the session drops them, as the buoy
-    /// replaces the arrival line's suffix too.
-    fn arrived(&mut self) {
-        self.catch_up();
-        self.show_arrival_explosions();
-        // Every arrival sets `_mapScroll` to the system arrived in: a
-        // jump's (`_HandlePlayer` @0x6c073), a hypergate's
-        // (`_PlayerEnterHypergate` @0x63a5d) and a wormhole's
-        // (`_PlayerEnterWormhole` @0x64307).
-        self.map.recentre();
-        if self.sim.session.is_err() {
-            return;
-        }
-        let (fighters, pay, drained) = self.arrival_outputs();
-        let date = (Self::WORDS.date)(self);
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        let mut messages = std::mem::take(&mut self.pending_leads);
-        messages.extend(drained);
-        let scene = self.scene.as_ref();
-        let chance = &mut self.sim.chance;
-        let worded: Vec<(String, u16)> = messages
-            .iter()
-            .filter_map(|message| {
-                Some((
-                    message_text(message, session, scene, chance)?,
-                    message.ticks(),
-                ))
-            })
-            .collect();
-        self.blank_message();
-        let Some(scene) = &self.scene else {
-            return;
-        };
-        let stellars = !scene.stellars().is_empty();
-        let mut said: Vec<(String, u16)> = messages
-            .iter()
-            .filter_map(|message| {
-                let text = match message {
-                    SimMessage::Buoy(text) => text.clone(),
-                    _ => {
-                        arrival_message_with(arrival_lead(message)?, scene.name(), &date, stellars)
-                    }
-                };
-                Some((text, message.ticks()))
-            })
-            .next_back()
-            .into_iter()
-            .collect();
-        said.extend(worded);
-        said.extend(fighters);
-        said.extend(pay);
-        self.say_all(&said);
-    }
-
-    /// Catches the screen up with what the session has told since this
-    /// was last called ([`FlightEvent::Session`]), and gives what it
-    /// redrew. Several events of a kind ask for one reaction, decided by
-    /// the events alone and never by what the session was last asked to
-    /// do: a change to the galaxy draws the flight's galaxy on the course
-    /// map with the course as it is flown ([`FlightView::catch_up_then`]);
-    /// a change of ship reads the player's sprite sheet afresh
-    /// ([`FlightView::follow_ship`]); a system entered afresh is laid out
-    /// ([`FlightView::lay_out`]); otherwise a move to another stellar of
-    /// the system shown draws the ship there ([`FlightView::place_ship`]);
-    /// and a rebuild point that changed which stellars are shown, with no
-    /// system entered, reads the scene again with them ([`shown_scene`](super::shown_scene))
-    /// ([`FlightView::redraw_scene_then`], with the status bar's follow
-    /// and redraw, [`FlightView::follow_bar`] and
-    /// [`FlightView::redraw_status`], still the session's).
-    ///
-    /// The only place the session events are taken: each frame calls it
-    /// first, so a change made outside the view's own methods (a
-    /// developer tools' edit, a set expression a control bit runs) is
-    /// drawn by the next frame; and each of the view's methods that drives
-    /// the session between frames calls it last, so its caller sees the
-    /// screen caught up at once. Taking the events again finds none.
-    ///
-    /// [`FlightEvent::Session`]: nova_sim::flight_frame::FlightEvent::Session
-    pub(super) fn catch_up(&mut self) -> Redrawn {
-        // Refreshed before the early return too: a session that failed
-        // draws the default frame.
-        self.refresh_frame();
-        if self.sim.session.is_err() {
-            return Redrawn::default();
-        }
-        self.catch_up_then(|view, redrawn| {
-            view.redraw_scene_then(redrawn, Self::follow_bar, Self::redraw_status);
-        })
-    }
-
-    /// Shows the explosions the jump left pending, a crön's `Y` on its
-    /// days among them, in the scene just laid out, so they are on the
-    /// arrival's first frame: the original keeps its explod table through
-    /// the arrival (only `_ResetPlayer` empties it, @0x1d7fb), and its
-    /// `_PrepareAllSprites` advances them once (@0x6c59c, `_HandleExplods`
-    /// @0x3a7ce) before the frame's own pass, which the steps' order from
-    /// spawn to draw stands for. A `Y`'s carries no sound of its own (see
-    /// [`Effects::apply`](crate::flight::effects::Effects::apply)).
-    fn show_arrival_explosions(&mut self) {
-        let player = self.player_place_now().position;
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        let scene = self.presentation.scene(player);
-        let chance = &mut self.effects_chance;
-        let events = session.take_combat_events();
-        for event in &events {
-            self.effects.apply(event, &scene, &self.looks, chance);
-        }
-        if !events.is_empty() {
-            self.effects.step(&[], &scene, &self.looks, chance);
-        }
-    }
-
     /// The pilot flying, as the developer tools' desk: its edits reach
     /// the session, moves read the catalog, and the course map's galaxy
     /// names the places. `None` when the session failed.
     pub fn pilot_desk(&mut self) -> Option<SessionDesk<'_, C>> {
         let session = self.sim.session.as_mut().ok()?;
         Some(SessionDesk::new(session, &*self.catalog, self.map.model()))
-    }
-
-    /// Catches the screen up with an edit made through the pilot desk now,
-    /// rather than on the next frame, from the session's events (see the
-    /// module docs): a move to another system is laid out as an arrival
-    /// is, with no message, and one to another stellar of the system shown
-    /// draws the ship there, the course map showing the session's course
-    /// again. Nothing is read when nothing moved.
-    pub fn resync(&mut self) {
-        self.catch_up();
     }
 
     /// Takes off from the stellar landed on, and gives it; `None` when the
@@ -618,27 +321,6 @@ impl<
         (line, self.word(rest, Self::WORDS), system)
     }
 
-    /// Says `line` as [`FlightView::say_all`] does, then each of `rest` in
-    /// turn, replacing it.
-    fn say_after(&mut self, line: &[(String, u16)], rest: Vec<(String, u16)>) {
-        self.say_all(line);
-        for (text, ticks) in rest {
-            self.say_for(text, ticks);
-        }
-    }
-
-    /// Shows the texts of `said`, joined by two spaces, when there is
-    /// anything, for the ticks of the first: the others are appended to
-    /// it, as `_HandlePlayer` appends the abandoned fighters to the
-    /// arrival line (@0x6c3c4).
-    fn say_all(&mut self, said: &[(String, u16)]) {
-        let Some(&(_, ticks)) = said.first() else {
-            return;
-        };
-        let texts: Vec<&str> = said.iter().map(|(text, _)| text.as_str()).collect();
-        self.say_for(texts.join("  "), ticks);
-    }
-
     /// Settles what the set expressions run since queued, as
     /// [`Session::settle_script`] does, reading the catalog and drawing on
     /// the flight's chance. A `Q` run while landed never takes off here:
@@ -702,7 +384,11 @@ impl<
     /// with as an arrival is ([`FlightView::arrived`]).
     fn came_through(&mut self, effect: JumpEffect) {
         self.held.clear();
-        self.arrived();
+        let combat = match &mut self.sim.session {
+            Ok(session) => session.take_combat_events(),
+            Err(_) => Vec::new(),
+        };
+        self.arrived(&combat, Self::WORDS);
         self.fade_in = Some(effect);
     }
 
@@ -1074,6 +760,53 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.redraw_status();
         let choice = self.map.take_gate_choice();
         enter_gate(self, choice);
+    }
+
+    /// Catches the screen up with what the flight has told since this
+    /// was last called ([`FlightEvent::Session`]), and gives what it
+    /// redrew. Several events of a kind ask for one reaction, decided by
+    /// the events alone and never by what the flight was last asked to
+    /// do: a change to the galaxy draws the flight's galaxy on the course
+    /// map with the course as it is flown ([`FlightView::catch_up_then`]);
+    /// a change of ship reads the player's sprite sheet afresh
+    /// (`FlightView::follow_ship`); a system entered afresh is laid out
+    /// (`FlightView::lay_out`); otherwise a move to another stellar of
+    /// the system shown draws the ship there ([`FlightView::place_ship`]);
+    /// and a rebuild point that changed which stellars are shown, with no
+    /// system entered, reads the scene again with them
+    /// ([`FlightView::redraw_scene_then`], with the status bar's follow
+    /// and redraw, [`FlightView::follow_bar`] and
+    /// [`FlightView::redraw_status`]).
+    ///
+    /// The only place the session events are taken: each frame calls it
+    /// first, so a change made outside the view's own methods (a
+    /// developer tools' edit, a set expression a control bit runs) is
+    /// drawn by the next frame; and each of the view's methods that drives
+    /// the flight between frames calls it last, so its caller sees the
+    /// screen caught up at once. Taking the events again finds none. A
+    /// flight that failed drains nothing, and its frame is the default.
+    ///
+    /// [`FlightEvent::Session`]: nova_sim::flight_frame::FlightEvent::Session
+    pub(super) fn catch_up(&mut self) -> Redrawn
+    where
+        C: SystemCatalog + ShipSprites + CombatLooks + StatusBars,
+    {
+        self.catch_up_then(|view, redrawn| {
+            view.redraw_scene_then(redrawn, Self::follow_bar, Self::redraw_status);
+        })
+    }
+
+    /// Catches the screen up with an edit made through the pilot desk now,
+    /// rather than on the next frame, from the flight's events (see the
+    /// module docs): a move to another system is laid out as an arrival
+    /// is, with no message, and one to another stellar of the system shown
+    /// draws the ship there, the course map showing the flight's course
+    /// again. Nothing is read when nothing moved.
+    pub fn resync(&mut self)
+    where
+        C: SystemCatalog + ShipSprites + CombatLooks + StatusBars,
+    {
+        self.catch_up();
     }
 
     /// [`FlightView::catch_up`]'s work over the port, with `redraw` the

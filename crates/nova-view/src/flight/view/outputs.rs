@@ -192,6 +192,27 @@ impl<C, S: FlightSim> FlightView<C, S> {
         said
     }
 
+    /// Says `line` as [`FlightView::say_all`] does, then each of `rest` in
+    /// turn, replacing it.
+    pub(super) fn say_after(&mut self, line: &[(String, u16)], rest: Vec<(String, u16)>) {
+        self.say_all(line);
+        for (text, ticks) in rest {
+            self.say_for(text, ticks);
+        }
+    }
+
+    /// Shows the texts of `said`, joined by two spaces, when there is
+    /// anything, for the ticks of the first: the others are appended to
+    /// it, as `_HandlePlayer` appends the abandoned fighters to the
+    /// arrival line (@0x6c3c4).
+    pub(super) fn say_all(&mut self, said: &[(String, u16)]) {
+        let Some(&(_, ticks)) = said.first() else {
+            return;
+        };
+        let texts: Vec<&str> = said.iter().map(|(text, _)| text.as_str()).collect();
+        self.say_for(texts.join("  "), ticks);
+    }
+
     /// Shows `text`, a line the session raised and has already set its
     /// message line to, for `ticks`, leaving the session's line alone: a
     /// relay comes after the frame's steps have counted it down, and in a

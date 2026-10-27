@@ -6,8 +6,10 @@
 
 use super::faked_world::{in_sol_with, the_player_at, world};
 use super::*;
+use crate::flight::jump::{FADE_IN_FOR, FADE_OUT_FOR, JumpEffect, JumpPhase};
 use crate::flight::view::words::Words;
 use nova_sim::flight_frame::FlightEvent;
+use nova_sim::{SessionEvent, SimSound};
 
 /// How a test words the flight's messages: each by its `Debug` text, but
 /// an arrival's lead, which waits for its arrival, and the long date as
@@ -47,6 +49,15 @@ pub(super) fn faked_lasts(view: &mut Faked, text: &str, n: u16) {
     );
     faked_tick(view);
     assert_eq!(view.message(), None, "gone after {n} ticks");
+}
+
+/// The commands `view` sent its flight, the message line's left out.
+pub(super) fn sent_but_lines(view: &Faked) -> Vec<FlightCommand> {
+    sent(view)
+        .iter()
+        .filter(|command| !matches!(command, FlightCommand::CommShown(_)))
+        .cloned()
+        .collect()
 }
 
 /// The message lines `view` sent its flight, by their ticks
@@ -358,4 +369,706 @@ fn the_flight_keys_held_are_the_views() {
     assert!(!view.holds_keys());
     view.track_held(&key(Key::Up, true));
     assert!(view.holds_keys());
+}
+
+// The jump.
+
+/// The frame of an intact flight in Sol, the player of ship 128 alone at
+/// its centre.
+fn sol() -> FlightFrame {
+    in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+}
+
+/// [`sol`] with a jump under way, its own warp begun as `warping` says.
+fn under_way(warping: bool) -> FlightFrame {
+    FlightFrame {
+        jump_under_way: true,
+        warping,
+        ..sol()
+    }
+}
+
+/// Shows `frame` from now on, the kept frame filled from it, as a step
+/// leaves it.
+fn now_shows(view: &mut Faked, frame: FlightFrame) {
+    view.sim.set_frame(frame);
+    view.refresh_frame();
+}
+
+#[test]
+fn j_says_a_refusal_the_player_is_told_in_its_words_for_its_ticks_and_beeps_as_drained() {
+    use nova_sim::JumpRefusal;
+    for (refusal, text, ticks) in [
+        (JumpRefusal::NoDestination, NO_DESTINATION, 360),
+        (JumpRefusal::TooClose { distance: 0.0 }, TOO_CLOSE, 360),
+        (JumpRefusal::Tractored, TRACTORED, 360),
+        (JumpRefusal::NoFuel { fuel: 50.0 }, NO_FUEL, 240),
+        (JumpRefusal::Landed, TAKE_OFF_FIRST, 240),
+    ] {
+        let mut view = faked(in_sol());
+        view.sim.queue_answer(Answer::JumpRefused {
+            refusal,
+            told: true,
+        });
+        view.sim.queue_event(FlightEvent::Sound(SimSound::Refused));
+        view.jump_frame(true);
+        assert_eq!(sent_but_lines(&view), [FlightCommand::Jump], "{refusal:?}");
+        assert_eq!(view.jump_effect(), None, "{refusal:?}");
+        assert_eq!(
+            view.drained_sounds(),
+            [Sound::Sim(SimSound::Refused)],
+            "{refusal:?}: the flight's beep"
+        );
+        faked_lasts(&mut view, text, ticks);
+    }
+    let mut untold = faked(in_sol());
+    untold.sim.queue_answer(Answer::JumpRefused {
+        refusal: JumpRefusal::NoDestination,
+        told: false,
+    });
+    untold.jump_frame(true);
+    assert_eq!(untold.message(), None, "a refusal not told says nothing");
+    assert_eq!(shown_to_flight(&untold), [0_u16; 0]);
+}
+
+#[test]
+fn j_acts_only_on_an_intact_frame() {
+    for condition in [
+        Condition::Disabled,
+        Condition::Dying {
+            ticks_left: 100,
+            starting: false,
+        },
+    ] {
+        let mut view = faked(in_sol());
+        view.sim.frame_mut().ships[0].condition = condition;
+        view.jump_frame(true);
+        assert_eq!(sent(&view), [], "{condition:?}: no J");
+        view.sim.frame_mut().ships[0].condition = Condition::Intact;
+        view.jump_frame(true);
+        assert_eq!(sent(&view), [FlightCommand::Jump], "{condition:?}: intact");
+    }
+}
+
+#[test]
+fn starting_a_jump_clears_the_hints_and_too_close_and_keeps_any_other_line() {
+    for text in [FAR_ENOUGH, NOTHING_OUT_HERE, TOO_CLOSE, TRACTORED] {
+        let mut view = faked(in_sol());
+        view.say_for(text, 512);
+        view.sim.queue_answer(Answer::Jumped(SystemId(131)));
+        view.jump_frame(true);
+        assert_eq!(view.message(), None, "{text}");
+        assert_eq!(shown_to_flight(&view), [512, 1], "{text}: a tick of none");
+    }
+    for text in [NO_FUEL, MISSION_FAILED, NO_DESTINATION] {
+        let mut view = faked(in_sol());
+        view.say_for(text, 240);
+        view.sim.queue_answer(Answer::Jumped(SystemId(131)));
+        view.jump_frame(true);
+        assert_eq!(view.message(), Some(text), "{text} stays");
+    }
+}
+
+#[test]
+fn the_jump_effect_waits_for_the_jump_itself_and_starts_at_once_when_it_has() {
+    let mut view = faked(sol());
+    view.sim
+        .queue_answer_showing(Answer::Jumped(SystemId(131)), under_way(false));
+    view.jump_frame(true);
+    assert_eq!(view.jump_effect(), None, "braking and turning first");
+    for _ in 0..3 {
+        view.start_jump_effect();
+        assert_eq!(view.jump_effect(), None);
+    }
+    now_shows(&mut view, under_way(true));
+    view.start_jump_effect();
+    assert_eq!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::Warp),
+        "on the frame the jump itself begins"
+    );
+    let mut ready = faked(sol());
+    ready
+        .sim
+        .queue_answer_showing(Answer::Jumped(SystemId(131)), under_way(true));
+    ready.jump_frame(true);
+    assert_eq!(
+        ready.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::Warp),
+        "a ship ready to jump warps on J"
+    );
+}
+
+/// A view whose flight warps to Alpha Centauri, its effect begun.
+fn warping() -> Faked {
+    let mut view = faked(sol());
+    jump_now(&mut view);
+    view
+}
+
+/// Presses J on `view`'s flight, which begins its jump at once.
+fn jump_now(view: &mut Faked) {
+    view.sim
+        .queue_answer_showing(Answer::Jumped(SystemId(131)), under_way(true));
+    view.jump_frame(true);
+    assert!(view.jump_effect().is_some(), "warping");
+}
+
+/// [`warping`]'s view with the frame's `_hyperGamma` at `gamma`.
+fn lit(view: &mut Faked, gamma: f32) {
+    now_shows(
+        view,
+        FlightFrame {
+            hyper_gamma: gamma,
+            ..under_way(true)
+        },
+    );
+    view.start_jump_effect();
+}
+
+/// The frame of the flight arrived in Alpha Centauri (131), its jump
+/// over, and the session's event of the system entered drained next.
+fn arrived_in_alpha(view: &mut Faked) {
+    view.sim.set_frame(FlightFrame {
+        system: SystemId(131),
+        stellars: Vec::new(),
+        ..sol()
+    });
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::SystemChanged));
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::Arrived(SystemId(131))));
+}
+
+/// The warp's end: the frame says it is due, and the flight answers the
+/// arrival with `combat`.
+fn at_the_warps_end(view: &mut Faked, combat: Vec<CombatEvent>) {
+    now_shows(
+        view,
+        FlightFrame {
+            warp_end_due: true,
+            ..under_way(true)
+        },
+    );
+    view.sim.queue_answer(Answer::Arrived {
+        system: SystemId(131),
+        combat,
+    });
+    arrived_in_alpha(view);
+}
+
+#[test]
+fn the_fade_to_white_starts_as_the_frame_lights_the_screen_and_the_arrival_waits_for_the_warps_end()
+{
+    let mut view = warping();
+    assert_eq!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::Warp)
+    );
+    view.arrival_frame(faked_words());
+    assert_eq!(
+        sent_but_lines(&view),
+        [FlightCommand::Jump],
+        "no arrival yet"
+    );
+    lit(&mut view, 0.5);
+    assert!(matches!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::FadeOut(_))
+    ));
+    if let Some(effect) = &mut view.jump {
+        effect.advance(ms(750));
+    }
+    let mut list = DrawList::new();
+    view.draw_fades(&mut list);
+    assert!(fade(&list).is_some(), "fading to white");
+    view.arrival_frame(faked_words());
+    assert!(matches!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::FadeOut(_))
+    ));
+    at_the_warps_end(&mut view, Vec::new());
+    view.arrival_frame(faked_words());
+    assert_eq!(
+        sent_but_lines(&view),
+        [FlightCommand::Jump, FlightCommand::Arrive]
+    );
+    assert_eq!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::FadeIn(0.0)),
+        "white at arrival"
+    );
+    assert!(view.jump.is_none(), "the warp's effect is the fade-in now");
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+    assert_eq!(view.course_map().current(), Some(SystemId(131)));
+    if let Some(effect) = &mut view.fade_in {
+        effect.advance(FADE_IN_FOR);
+    }
+    view.fade_frame(TICK);
+    assert_eq!(view.jump_effect(), None, "then plain flight");
+}
+
+#[test]
+fn a_jump_given_up_before_the_screen_is_lit_drops_its_effect() {
+    let mut view = warping();
+    now_shows(&mut view, in_sol());
+    view.fade_frame(TICK);
+    assert_eq!(view.jump_effect(), None);
+    let mut list = DrawList::new();
+    view.draw_fades(&mut list);
+    assert_eq!(fade(&list), None, "nothing white");
+}
+
+#[test]
+fn a_jump_given_up_once_the_screen_is_lit_fades_back_from_white() {
+    let mut view = warping();
+    lit(&mut view, 0.5);
+    if let Some(effect) = &mut view.jump {
+        effect.advance(FADE_OUT_FOR);
+    }
+    now_shows(&mut view, in_sol());
+    view.fade_frame(TICK);
+    assert!(
+        matches!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeIn(_))
+        ),
+        "{:?}",
+        view.jump_effect()
+    );
+    view.fade_frame(FADE_IN_FOR);
+    view.fade_frame(TICK);
+    assert_eq!(view.jump_effect(), None, "the white gone");
+}
+
+#[test]
+fn with_effects_off_the_arrival_flashes_white_once() {
+    let mut view = faked(sol()).with_hyperspace_effects(false);
+    jump_now(&mut view);
+    at_the_warps_end(&mut view, Vec::new());
+    view.arrival_frame(faked_words());
+    let mut list = DrawList::new();
+    view.draw_fades(&mut list);
+    assert_eq!(
+        fade(&list).map(|(_, color)| color),
+        Some(Color::WHITE),
+        "opaque white"
+    );
+    view.fade_frame(ms(33));
+    assert_eq!(view.jump_effect(), None, "no fade in");
+    let mut on = faked(sol()).with_hyperspace_effects(false);
+    on.set_hyperspace_effects(true);
+    jump_now(&mut on);
+    lit(&mut on, 0.5);
+    assert!(
+        matches!(
+            on.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeOut(_))
+        ),
+        "set back on, the next jump fades"
+    );
+}
+
+#[test]
+fn arriving_shows_the_arrival_line_with_the_date_and_lets_a_refusal_go() {
+    let mut view = warping();
+    view.say_for(NO_DESTINATION, 360);
+    at_the_warps_end(&mut view, Vec::new());
+    view.arrival_frame(faked_words());
+    let text = arrival_message("Alpha Centauri", DATE, false);
+    faked_lasts(&mut view, &text, 240);
+}
+
+#[test]
+fn j_during_the_arrival_fade_in_begins_the_next_jump_and_the_fade_plays_on() {
+    let mut view = warping();
+    at_the_warps_end(&mut view, Vec::new());
+    view.arrival_frame(faked_words());
+    let arrival = view.message().expect("the arrival line").to_owned();
+    view.sim.queue_answer_showing(
+        Answer::Jumped(SystemId(132)),
+        FlightFrame {
+            system: SystemId(131),
+            ..under_way(false)
+        },
+    );
+    // A fresh press follows a release, which clears the latch.
+    view.jump_latch = false;
+    view.jump_frame(true);
+    assert_eq!(view.message(), Some(arrival.as_str()), "not refused");
+    assert!(view.fade_in.is_some(), "the fade-in plays on");
+    assert_eq!(sent_but_lines(&view).last(), Some(&FlightCommand::Jump));
+}
+
+#[test]
+fn j_in_a_flight_that_never_started_is_refused_and_does_nothing() {
+    let mut view = faked(FlightFrame::default());
+    view.jump_frame(true);
+    assert_eq!(sent(&view), [FlightCommand::Jump]);
+    assert_eq!(view.jump_effect(), None);
+    assert_eq!(view.message(), None);
+}
+
+#[test]
+fn the_course_map_starts_on_the_current_system_with_no_course() {
+    let view = faked(in_sol());
+    assert!(!view.map_open());
+    assert_eq!(view.course_map().mode(), MapMode::Course);
+    assert_eq!(view.course_map().current(), Some(SystemId(130)));
+    assert_eq!(view.course_map().route(), []);
+    assert_eq!(view.jump_effect(), None);
+    assert_eq!((MAP_KEY, JUMP_KEY), (MAP, JUMP));
+}
+
+#[test]
+fn a_failed_flights_catch_up_redraws_nothing() {
+    let mut view = faked(FlightFrame::default());
+    let scene = view.scene().map(SystemScene::id);
+    assert_eq!(view.catch_up(), Redrawn::default());
+    assert_eq!(view.frame, FlightFrame::default(), "the default frame");
+    assert_eq!(
+        view.scene().map(SystemScene::id),
+        scene,
+        "laid out as it was"
+    );
+}
+
+// J's frame (controls.rs's).
+
+/// J held through `frames` frames of `view` with the frame's condition
+/// `condition`, a jump answered `answer` at each J sent.
+fn j_frames(view: &mut Faked, condition: Condition, frames: usize) {
+    view.sim.frame_mut().ships[0].condition = condition;
+    for _ in 0..frames {
+        view.jump_frame(true);
+    }
+}
+
+#[test]
+fn j_held_into_a_disable_acts_again_on_the_first_intact_tick() {
+    let mut view = faked(in_sol());
+    j_frames(&mut view, Condition::Intact, 1);
+    assert_eq!(sent(&view), [FlightCommand::Jump], "refused once");
+    j_frames(&mut view, Condition::Disabled, 3);
+    assert_eq!(sent(&view), [FlightCommand::Jump], "the latch cleared");
+    j_frames(&mut view, Condition::Intact, 2);
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::Jump, FlightCommand::Jump],
+        "again on the first intact frame, once"
+    );
+}
+
+#[test]
+fn j_first_pressed_while_disabled_and_held_jumps_on_the_first_intact_tick() {
+    let mut view = faked(in_sol());
+    j_frames(&mut view, Condition::Disabled, 2);
+    assert_eq!(sent(&view), []);
+    j_frames(&mut view, Condition::Intact, 1);
+    assert_eq!(sent(&view), [FlightCommand::Jump]);
+}
+
+#[test]
+fn j_let_go_while_disabled_does_nothing_on_the_repair() {
+    let mut view = faked(in_sol());
+    j_frames(&mut view, Condition::Disabled, 2);
+    view.jump_frame(false);
+    view.sim.frame_mut().ships[0].condition = Condition::Intact;
+    view.jump_frame(false);
+    assert_eq!(sent(&view), []);
+}
+
+#[test]
+fn j_held_while_intact_is_refused_once() {
+    let mut view = faked(in_sol());
+    j_frames(&mut view, Condition::Intact, 5);
+    assert_eq!(sent(&view), [FlightCommand::Jump]);
+}
+
+#[test]
+fn j_held_through_a_jump_does_nothing_after_it() {
+    let mut view = warping();
+    for _ in 0..3 {
+        view.jump_frame(true);
+    }
+    now_shows(&mut view, in_sol());
+    for _ in 0..3 {
+        view.jump_frame(true);
+    }
+    assert_eq!(sent(&view), [FlightCommand::Jump], "latched through it");
+    view.jump_frame(false);
+    view.jump_frame(true);
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::Jump, FlightCommand::Jump],
+        "a fresh press after the let-go"
+    );
+}
+
+// The arrival's world.
+
+#[test]
+fn an_arrivals_pending_explosions_are_drawn_on_its_first_frame_and_unheard_from_the_view() {
+    let boom = nova_sim::catalog::Explosion::decode(0).expect("type 0");
+    let mut view = world(
+        armed(0, &[BLASTER]),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    jump_now(&mut view);
+    at_the_warps_end(
+        &mut view,
+        vec![CombatEvent::ExplodedHeard {
+            at: Vec2::ZERO,
+            explosion: boom,
+        }],
+    );
+    view.drained_sounds();
+    view.arrival_frame(faked_words());
+    let explosions = view.effects().explosions();
+    assert_eq!(explosions.len(), 1, "{explosions:?}");
+    assert_eq!(explosions[0].boom, boom.boom);
+    assert_eq!(explosions[0].at, Point::new(0.0, 0.0));
+    assert_eq!(explosions[0].frame, 1.0, "advanced once: {explosions:?}");
+    assert!(
+        !view
+            .drained_sounds()
+            .iter()
+            .any(|sound| matches!(sound, Sound::Combat(_))),
+        "a `Y`'s: the session raised its sound"
+    );
+}
+
+#[test]
+fn arriving_lays_out_the_new_system_letting_go_of_the_effects_pods_and_smoke() {
+    let mut view = world(
+        armed(0, &[BLASTER]),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    super::faked_world::raise(
+        &mut view,
+        &[CombatEvent::Exploded {
+            at: Vec2::ZERO,
+            explosion: nova_sim::catalog::Explosion::decode(0).expect("type 0"),
+            size: 0.0,
+        }],
+    );
+    assert_ne!(*view.effects(), Effects::default());
+    jump_now(&mut view);
+    at_the_warps_end(&mut view, Vec::new());
+    view.arrival_frame(faked_words());
+    assert_eq!(*view.effects(), Effects::default());
+    assert!(view.effects().pods().is_empty());
+    assert_eq!(view.shot_looks.smoke().puffs(), []);
+}
+
+#[test]
+fn arriving_reads_the_new_systems_traffic_sheets() {
+    let mut view = world(trafficked(&[131], 2, 129, 1), sol());
+    jump_now(&mut view);
+    let read = view.catalog().sheets_asked.borrow().clone();
+    at_the_warps_end(&mut view, Vec::new());
+    view.sim.frame_mut().traffic_ships = vec![ShipId(129)];
+    view.arrival_frame(faked_words());
+    let asked = view.catalog().sheets_asked.borrow().clone();
+    assert_eq!(asked[read.len()..], [ShipId(129)], "read on arrival");
+}
+
+#[test]
+fn a_jumps_arrival_puts_the_maps_scroll_back_on_the_current_system() {
+    let mut view = warping();
+    view.map.centre_on_system(SystemId(132));
+    at_the_warps_end(&mut view, Vec::new());
+    view.arrival_frame(faked_words());
+    let mut recentred = faked(FlightFrame {
+        system: SystemId(131),
+        ..FlightFrame::default()
+    });
+    recentred.map.recentre();
+    assert_eq!(
+        view.course_map()
+            .place()
+            .map(crate::galaxy::place::MapPlace::scroll),
+        recentred
+            .course_map()
+            .place()
+            .map(crate::galaxy::place::MapPlace::scroll)
+    );
+}
+
+#[test]
+fn an_arrival_shows_the_new_systems_stellars_on_the_radar_at_once_leaving_the_cadence() {
+    let mut view = warping();
+    let cadence = view.hud_cadence;
+    at_the_warps_end(&mut view, Vec::new());
+    view.sim.frame_mut().stellars = vec![record::stellar(StellarId(140))];
+    view.arrival_frame(faked_words());
+    assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
+    let stellars: Vec<Point> = view
+        .radar_shown(&view.frame_now())
+        .stellars
+        .iter()
+        .map(|s| s.position)
+        .collect();
+    assert_eq!(stellars, [at(0.0, 0.0)], "Alpha Centauri's Proxima");
+}
+
+#[test]
+fn the_escape_pods_rescue_lays_the_view_out_where_it_put_the_ship_and_gives_its_desc() {
+    use nova_sim::flight_frame::{ShipPlace, StepReport, StepRun};
+    let mut view = faked(sol());
+    view.map.centre_on_system(SystemId(132));
+    let there = ShipPlace {
+        position: Vec2::new(50.0, 50.0),
+        heading: 90.0,
+    };
+    view.sim.queue_report(StepReport {
+        steps: vec![StepRun {
+            rescued: Some(there),
+            ..StepRun::default()
+        }],
+        stopped: true,
+    });
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::SystemChanged));
+    view.sim.queue_event(FlightEvent::RescueDesc(13999));
+    view.sim.set_frame(FlightFrame {
+        system: SystemId(131),
+        ships: vec![the_player_at(Vec2::new(50.0, 50.0), 90.0)],
+        ..sol()
+    });
+    view.run_steps(1, faked_words());
+    assert_eq!(
+        view.previous.position,
+        Vec2::new(50.0, 50.0),
+        "laid out there"
+    );
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+    assert_eq!(view.take_rescue_desc(), Some(13999));
+    assert_eq!(view.take_rescue_desc(), None, "once");
+    let mut recentred = faked(FlightFrame {
+        system: SystemId(131),
+        ..FlightFrame::default()
+    });
+    recentred.map.recentre();
+    assert_eq!(
+        view.course_map()
+            .place()
+            .map(crate::galaxy::place::MapPlace::scroll),
+        recentred
+            .course_map()
+            .place()
+            .map(crate::galaxy::place::MapPlace::scroll),
+        "the map's scroll on the system the pod reached"
+    );
+}
+
+#[test]
+fn a_change_of_ship_during_the_streak_reads_its_sheet() {
+    let mut view = world(shipbuying(), sol());
+    jump_now(&mut view);
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::ShipChanged));
+    view.sim.set_frame(FlightFrame {
+        ships: vec![record::player(129, Vec2::ZERO, 0.0)],
+        ..under_way(true)
+    });
+    view.catch_up();
+    assert!(view.jump_effect().is_some(), "still streaking");
+    assert_eq!(view.sheet_ship, Some(ShipId(129)), "the hull redrawn");
+}
+
+#[test]
+fn the_cursor_draws_under_the_jumps_fade() {
+    let mut view = world(catalog(), sol());
+    view.looks = Looks::read(&*view.catalog, std::iter::empty());
+    jump_now(&mut view);
+    lit(&mut view, 0.5);
+    if let Some(effect) = &mut view.jump {
+        effect.advance(ms(750));
+    }
+    view.cursor_input(&Input::PointerMoved(Point::new(40.0, 400.0)));
+    let mut list = super::faked_hud::flown(&view);
+    view.draw_fades(&mut list);
+    let cursor = list
+        .iter()
+        .position(|command| {
+            matches!(unclipped(command), DrawCommand::Sprite { image, .. } if image.id == 651)
+        })
+        .expect("drawn");
+    let (at_fade, _) = fade(&list).expect("fading out");
+    assert!(cursor < at_fade, "under the fade");
+}
+
+// The stars' scattering at an arrival.
+
+/// A view over a starry world, its effects rolled on a counting chance,
+/// caught up with once, so its stars are scattered.
+fn starry_world() -> Faked {
+    let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(super::stars::Counting::default()));
+    let mut view = world(starry(), sol()).with_effects_chance(SharedChance::new(chance));
+    view.catch_up();
+    view
+}
+
+/// An arrival's scattering: the flight tells the stars to scatter afresh
+/// ([`SessionEvent::StarfieldReset`]) as it lays the new system out.
+fn scattered_on_arrival(view: &mut Faked) {
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::StarfieldReset));
+    view.catch_up();
+}
+
+/// Whether every star's factor is a `Rand(35)` roll × 0.01, some above 0.
+fn rolled(view: &Faked) -> bool {
+    let stars = view.stars.stars();
+    stars.iter().all(|star| {
+        let hundredths = (star.factor * 100.0).round();
+        (0.0..35.0).contains(&hundredths) && (star.factor - hundredths * 0.01).abs() < 1e-4
+    }) && stars.iter().any(|star| star.factor > 0.0)
+}
+
+/// Whether every star's factor is 0.
+fn fixed(view: &Faked) -> bool {
+    view.stars.stars().iter().all(|star| star.factor == 0.0)
+}
+
+#[test]
+fn the_parallax_starfield_is_on_by_default_and_each_scattering_rolls_each_stars_factor() {
+    let mut view = starry_world();
+    assert!(view.parallax_starfield(), "on by default");
+    assert!(rolled(&view));
+    scattered_on_arrival(&mut view);
+    assert!(rolled(&view));
+}
+
+#[test]
+fn with_the_parallax_starfield_off_every_factor_is_0() {
+    let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(super::stars::Counting::default()));
+    let mut view = world(starry(), sol())
+        .with_effects_chance(SharedChance::new(chance))
+        .with_parallax_starfield(false);
+    assert!(!view.parallax_starfield());
+    view.catch_up();
+    assert!(view.stars.stars().iter().all(|star| star.shown));
+    assert!(fixed(&view));
+    scattered_on_arrival(&mut view);
+    assert!(fixed(&view));
+}
+
+#[test]
+fn a_parallax_starfield_change_waits_for_the_next_scattering() {
+    let mut view = starry_world();
+    let before = view.stars.stars();
+    view.set_parallax_starfield(false);
+    assert_eq!(
+        view.stars.stars(),
+        before,
+        "the stars scattered keep theirs"
+    );
+    scattered_on_arrival(&mut view);
+    assert!(fixed(&view));
+    view.set_parallax_starfield(true);
+    assert!(fixed(&view), "until the next scattering");
+    scattered_on_arrival(&mut view);
+    assert!(rolled(&view), "back on, the next scattering rolls");
 }

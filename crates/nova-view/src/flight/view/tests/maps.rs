@@ -2155,22 +2155,6 @@ fn opening_the_map_guards_a_zoom_of_0_or_less() {
 }
 
 #[test]
-fn a_jumps_arrival_puts_the_scroll_back_on_the_current_system_keeping_the_zoom() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    tap(&mut view, MAP);
-    tap(&mut view, Key::Char('-'));
-    tap(&mut view, MAP);
-    view.map.centre_on_system(SystemId(132));
-    let zoom = map_place(&view).0;
-    fly_out(&mut view);
-    view.input(&key(JUMP, true));
-    arrive_now(&mut view);
-    assert_eq!(view.session().expect("flying").system(), SystemId(131));
-    assert_eq!(map_place(&view), (zoom, scroll_of(&view, 131)));
-}
-
-#[test]
 fn a_hypergates_exit_puts_the_scroll_back_on_the_current_system() {
     let mut view = FlightView::new(gated());
     land_now(&mut view);
@@ -2180,23 +2164,6 @@ fn a_hypergates_exit_puts_the_scroll_back_on_the_current_system() {
     tap(&mut view, MAP);
     assert_eq!(view.session().expect("flying").system(), SystemId(131));
     assert_eq!(map_place(&view).1, scroll_of(&view, 131));
-}
-
-#[test]
-fn the_escape_pods_rescue_puts_the_scroll_back_on_the_current_system() {
-    let mut catalog = ejecting_in(100, &[188, 187]);
-    catalog.home = true;
-    let mut view = ejecting_view(catalog, &[]);
-    assert!(until_ejected(&mut view).0);
-    view.map.centre_on_system(SystemId(132));
-    for _ in 0..nova_sim::POD_TICKS {
-        view.tick(TICK);
-        if view.take_rescue_desc().is_some() {
-            break;
-        }
-    }
-    let system = view.session().expect("flying").system();
-    assert_eq!(map_place(&view).1, scroll_of(&view, system.0));
 }
 
 #[test]
