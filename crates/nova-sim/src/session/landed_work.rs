@@ -124,10 +124,10 @@ fn a_landed_pass_forgets_the_last_passes_explosion() {
 
 #[test]
 fn nothing_on_the_line_settles_while_landed_and_the_clocks_tick_stays_held() {
-    // `Session::settle_line_queue` settles nothing landed: a refuel's
-    // note queued waits, unsaid, and the traffic's tail holds the
-    // reinforcement clock's tick behind it. The landed pass's call does
-    // nothing, so this pins its guard, not the call.
+    // Nothing on the line settles landed (`Session::settle_line_queue`
+    // returns at once there, so a landed pass doesn't call it): a
+    // refuel's note queued waits, unsaid, and the traffic's tail holds
+    // the reinforcement clock's tick behind it.
     let catalog = catalog();
     let mut session = landed(&catalog);
     let id = session.space.traffic.add_npc(npc(0, session.stats()));

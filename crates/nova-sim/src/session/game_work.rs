@@ -205,7 +205,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> bool {
         if self.mode.landed().is_some() {
-            return self.landed_work(catalog, rules, chance);
+            return self.landed_work(catalog, chance);
         }
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
@@ -230,7 +230,7 @@ impl Session {
     }
 
     /// A pass of the game's work while landed, the traffic drawn from
-    /// `catalog`, the fight by `rules`, drawing on `chance`: the fight and
+    /// `catalog`, drawing on `chance`: the fight and
     /// the traffic stand still, and the player neither moves nor fires.
     /// What runs, in order: a gate's pending entry ends, as on any pass;
     /// the escape pod's rescue, which ends the pass when it settles
@@ -239,15 +239,14 @@ impl Session {
     /// held behind the last pass's work on the line, then the traffic's
     /// tail, the clock's own tick held again while work waits on the line
     /// (see the `reinforcements` and `comm_calls` modules); the player's
-    /// explosion of the last pass forgotten; the work queued on the line
-    /// settled ([`Session::settle_line_queue`]); the headings the ships
-    /// were drawn at dropped; and the pass's asteroid work
+    /// explosion of the last pass forgotten; the headings the ships were
+    /// drawn at dropped; and the pass's asteroid work
     /// ([`Session::tick_asteroids`], see the `asteroids` module). Whether
-    /// the rescue settled on it.
+    /// the rescue settled on it. Nothing queued on the line settles while
+    /// landed ([`Session::settle_line_queue`]).
     fn landed_work(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
-        rules: Rules,
         chance: &mut (impl Chance + ?Sized),
     ) -> bool {
         let mut source = &mut *chance;
@@ -262,7 +261,6 @@ impl Session {
         }
         self.traffic_tail(chance);
         self.ship.fate.player_exploded_this_tick = false;
-        self.settle_line_queue(rules.law, chance);
         self.space.drawn.clear();
         self.tick_asteroids(chance);
         false
