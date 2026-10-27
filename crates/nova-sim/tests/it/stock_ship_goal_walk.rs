@@ -1413,7 +1413,14 @@ fn fly_until_aborted(
             return Err(format!("still held after {TICKS} ticks"));
         }
         before = npc_ids(session);
-        session.tick_traffic(data, &ai, &mut NeverFires);
+        crate::passes::work_with(
+            session,
+            data,
+            nova_sim::Controls::default(),
+            &ai,
+            nova_sim::Rules::default(),
+            &mut NeverFires,
+        );
         let _ = session.settle_script(data, &mut NeverFires);
         ticks += 1;
     }

@@ -11,14 +11,13 @@
 use crate::common;
 
 use nova_data::GameData;
-use nova_sim::combat::Rules;
 use nova_sim::combat::armament::Arsenal;
 use nova_sim::combat::hull::Condition;
 use nova_sim::npc_escape::{ESCAPE_ROLL_ODDS, pod_interval};
 use nova_sim::person::ESCAPE_POD;
 use nova_sim::{
-    Chance, CombatCatalog, CombatEvent, Controls, NpcId, Pilot, PilotCatalog, Session, ShipId,
-    ShipRef, TrafficCatalog,
+    Chance, CombatCatalog, CombatEvent, NpcId, Pilot, PilotCatalog, Session, ShipId, ShipRef,
+    TrafficCatalog,
 };
 
 /// The Star Liner.
@@ -179,12 +178,18 @@ fn hulk(session: &Session, ship: ShipId) -> Option<NpcId> {
 /// Ticks `session` on `chance` until its hulk of class `ship` has come
 /// and gone: the tick of each of the hulk's pods, counted from the first
 /// tick.
-fn hulk_pods(session: &mut Session, ship: ShipId, chance: &mut Rolls) -> Vec<u32> {
+fn hulk_pods(session: &mut Session, data: &GameData, ship: ShipId, chance: &mut Rolls) -> Vec<u32> {
     let mut left = None;
     let mut pods = Vec::new();
     for tick in 0..600 {
-        session.tick(Controls::default());
-        session.tick_combat(Rules::default(), &mut *chance);
+        crate::passes::work_with(
+            session,
+            data,
+            nova_sim::Controls::default(),
+            &crate::passes::Passive,
+            nova_sim::Rules::default(),
+            &mut *chance,
+        );
         let events = session.take_combat_events();
         left = left.or_else(|| hulk(session, ship));
         if let Some(id) = left {
@@ -208,7 +213,7 @@ fn a_stock_star_liners_dying_hulk_ejects_its_pods_on_the_interval() {
     // Auto-eject arms at half the DeathDelay, 50: the hulk is left at 50,
     // and ejects its first pod at once.
     let mut session = dying_in(&data, STAR_LINER, 60);
-    let pods = hulk_pods(&mut session, STAR_LINER, &mut Rolls::default());
+    let pods = hulk_pods(&mut session, &data, STAR_LINER, &mut Rolls::default());
     assert!((4..=10).contains(&pods.len()), "{pods:?}");
     let gaps: Vec<u32> = pods.windows(2).map(|pair| pair[1] - pair[0]).collect();
     assert!((1..=10).contains(&gaps[0]), "the first at once: {gaps:?}");
@@ -225,7 +230,7 @@ fn a_stock_fed_carriers_dying_hulk_rolls_once_and_launches_a_viper() {
     };
     let mut session = dying_in(&data, FED_CARRIER, 90);
     let mut chance = Rolls::default();
-    let pods = hulk_pods(&mut session, FED_CARRIER, &mut chance);
+    let pods = hulk_pods(&mut session, &data, FED_CARRIER, &mut chance);
     assert_eq!(chance.escape_rolls, 1, "one roll for the dying hulk");
     let vipers = session
         .npcs()

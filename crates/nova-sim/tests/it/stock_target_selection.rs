@@ -32,9 +32,7 @@ use nova_sim::govt::Governments;
 use nova_sim::rank::Blessing;
 use nova_sim::stats::ShipStats;
 use nova_sim::traffic::npc::{AiType, Npc, NpcId};
-use nova_sim::{
-    Behaviour, Condition, Goal, GovtId, NovaAi, Pilot, PilotCatalog, Session, ShipId, ShipRef,
-};
+use nova_sim::{Behaviour, Condition, Goal, GovtId, Pilot, PilotCatalog, Session, ShipId, ShipRef};
 use nova_sim_base::fixture::Draws;
 
 const P: ShipRef = ShipRef::Player;
@@ -195,18 +193,42 @@ fn wanted_in_fomalhaut(data: &GameData, outfits: serde_json::Value) -> (Session,
     (session, fed)
 }
 
-/// Whether any Federation ship attacks the player over 600 ticks of
-/// [`wanted_in_fomalhaut`]'s session.
+/// Whether any Federation ship attacks the player over 600 passes of
+/// [`wanted_in_fomalhaut`]'s session, as its hunt finds the player: up to
+/// the pass a scan finds the scrambler, an illegal outfit to the
+/// Federation, which turns the scanner on the player whatever its hunt
+/// (each pass settles its scans; see the session's `mission_cargo`
+/// module).
 fn hunted(data: &GameData, outfits: serde_json::Value) -> bool {
     let (mut session, _) = wanted_in_fomalhaut(data, outfits);
     let mut chance = Seeded(0x5EED);
-    (0..600).any(|_| {
-        session.tick_traffic(data, &NovaAi::default(), &mut chance);
-        session
+    for _ in 0..600 {
+        crate::passes::nova(
+            &mut session,
+            data,
+            nova_sim::Controls::default(),
+            &mut chance,
+        );
+        let scanned = common::drained(&mut session).iter().any(|event| {
+            matches!(
+                event,
+                nova_sim::flight_frame::FlightEvent::Message(
+                    nova_sim::SimMessage::IllegalOutfit { .. }
+                )
+            )
+        });
+        if scanned {
+            return false;
+        }
+        if session
             .npcs()
             .iter()
             .any(|npc| npc.govt == Some(FEDERATION) && npc.goal == Goal::Attack(P))
-    })
+        {
+            return true;
+        }
+    }
+    false
 }
 
 #[test]

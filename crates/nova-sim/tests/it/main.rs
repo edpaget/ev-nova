@@ -5,6 +5,7 @@
 //! every `tests/*.rs` file is a separate binary to link.
 
 mod common;
+mod passes;
 
 mod asteroids;
 mod fleet_escorts;

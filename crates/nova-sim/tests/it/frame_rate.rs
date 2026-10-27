@@ -44,6 +44,25 @@ impl CombatCatalog for Pilot {
     }
 }
 
+/// No traffic: the system is empty.
+impl nova_sim::TrafficCatalog for Pilot {
+    fn system_traffic(&self, _id: SystemId) -> Option<nova_sim::SystemTraffic> {
+        None
+    }
+
+    fn dude(&self, _id: nova_sim::DudeId) -> Option<nova_sim::DudeRecord> {
+        None
+    }
+
+    fn fleets(&self) -> Vec<nova_sim::FleetRecord> {
+        Vec::new()
+    }
+
+    fn persons(&self) -> Vec<nova_sim::PersonRecord> {
+        Vec::new()
+    }
+}
+
 impl PilotCatalog for Pilot {
     fn first_character(&self) -> Result<CharacterStart, StartError> {
         Ok(CharacterStart {
@@ -198,7 +217,7 @@ fn fly(fps: u64) -> ShipState {
         let held = controls((frame - 1) * 2 / fps);
         let now = frame * 1_000_000_000 / fps;
         for _ in 0..clock.advance(Duration::from_nanos(now - last)).steps {
-            session.tick(held);
+            crate::passes::work(&mut session, &Pilot, held);
         }
         last = now;
     }

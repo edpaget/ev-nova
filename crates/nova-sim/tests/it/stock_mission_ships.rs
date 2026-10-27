@@ -57,7 +57,14 @@ fn in_flight(data: &GameData, pilot: &Pilot, system: SystemId) -> Session {
     let there = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let mut session = Session::fly(data, there).expect("flies");
     let _ = session.settle_script(data, &mut NeverFires);
-    session.tick_traffic(data, &NovaAi::default(), &mut NeverFires);
+    crate::passes::work_with(
+        &mut session,
+        data,
+        nova_sim::Controls::default(),
+        &NovaAi::default(),
+        nova_sim::Rules::default(),
+        &mut NeverFires,
+    );
     session
 }
 
@@ -202,7 +209,14 @@ fn a_stock_missions_escorts_come_in_on_their_timer_and_join_the_players_formatio
     };
     assert_eq!(escorts(&flying), 0, "none at setup");
     for _ in 0..30 {
-        flying.tick_traffic(&data, &NovaAi::default(), &mut NeverFires);
+        crate::passes::work_with(
+            &mut flying,
+            &data,
+            nova_sim::Controls::default(),
+            &NovaAi::default(),
+            nova_sim::Rules::default(),
+            &mut NeverFires,
+        );
     }
     let count = usize::try_from(record.ships.count).expect("a count");
     assert_eq!(escorts(&flying), count, "come in after the timer, joined");
@@ -293,7 +307,14 @@ fn a_stock_avoid_mission_set_up_with_the_system_spawns_its_hunters_then_auto_abo
     );
     let _ = session.settle_script(&data, &mut NeverFires);
     assert!(of_dude(&data, &session, dude) >= count, "its hunters came");
-    session.tick_traffic(&data, &NovaAi::default(), &mut NeverFires);
+    crate::passes::work_with(
+        &mut session,
+        &data,
+        nova_sim::Controls::default(),
+        &NovaAi::default(),
+        nova_sim::Rules::default(),
+        &mut NeverFires,
+    );
     assert!(session.npcs().iter().all(|npc| npc.mission.is_none()));
     assert!(
         of_dude(&data, &session, dude) >= count,
@@ -318,7 +339,14 @@ fn a_stock_avoid_mission_whose_hunters_come_later_auto_aborts_as_they_come_in() 
     while let Some(active) = session.pilot().missions().get(slot) {
         assert!(active.ships.appear > 0, "the timer runs until they come");
         before = session.npcs().len();
-        session.tick_traffic(&data, &ai, &mut NeverFires);
+        crate::passes::work_with(
+            &mut session,
+            &data,
+            nova_sim::Controls::default(),
+            &ai,
+            nova_sim::Rules::default(),
+            &mut NeverFires,
+        );
         let _ = session.settle_script(&data, &mut NeverFires);
     }
     let jumping_in = session
@@ -389,7 +417,14 @@ fn a_stock_missions_aux_ships_come_in_on_their_countdown_as_ordinary_traffic() {
     let mut flying = in_flight(&data, session.pilot(), session.pilot().system());
     assert!(aux(&flying).is_empty(), "none at setup");
     for _ in 0..140 {
-        flying.tick_traffic(&data, &NovaAi::default(), &mut NeverFires);
+        crate::passes::work_with(
+            &mut flying,
+            &data,
+            nova_sim::Controls::default(),
+            &NovaAi::default(),
+            nova_sim::Rules::default(),
+            &mut NeverFires,
+        );
     }
     let came = aux(&flying);
     assert_eq!(

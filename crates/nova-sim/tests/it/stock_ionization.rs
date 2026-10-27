@@ -113,7 +113,7 @@ fn an_ion_cannons_charge_slows_the_stock_first_ships_thrust_and_sheds() {
     };
     let speed_after = |charge: f32| {
         let mut session = flying(&data, serde_json::json!([]));
-        session.tick(Controls::default());
+        crate::passes::work(&mut session, &data, nova_sim::Controls::default());
         nova_sim::fixture::set_player_ion(
             &mut session,
             Ion {
@@ -122,7 +122,7 @@ fn an_ion_cannons_charge_slows_the_stock_first_ships_thrust_and_sheds() {
                 ..Ion::default()
             },
         );
-        session.tick(thrust);
+        crate::passes::work(&mut session, &data, thrust);
         (
             session.player().velocity,
             session.ion().charge,

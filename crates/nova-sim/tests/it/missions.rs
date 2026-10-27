@@ -8,8 +8,8 @@ use nova_sim::catalog::{AuxShip, ListedStellar, MissionId, MissionRecord, Missio
 use nova_sim::landing::StellarFlags;
 use nova_sim::mission::Venue;
 use nova_sim::{
-    Bit, CharacterStart, CombatCatalog, CommodityStrings, Controls, DateAffixes, DisasterRecord,
-    GovtRecord, HullRecord, JunkRecord, LandOutcome, LandPress, LandingSite, NeverFires, OutfitId,
+    Bit, CharacterStart, CombatCatalog, CommodityStrings, DateAffixes, DisasterRecord, GovtRecord,
+    HullRecord, JunkRecord, LandOutcome, LandPress, LandingSite, NeverFires, OutfitId,
     OutfitRecord, Pilot, PilotCatalog, Script, Session, SetExpr, ShipFields, ShipId, StarSystem,
     StartDate, StartError, StellarId, SystemId, Test, Vec2, WeaponRecord,
 };
@@ -303,17 +303,17 @@ fn docked_at_128(courier: &Courier) -> Session {
     let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let mut session = Session::fly(courier, saved).expect("flies");
     assert_eq!(session.landed(), None, "resumed in flight");
-    assert_eq!(land(&mut session), StellarId(128));
+    assert_eq!(land(&mut session, courier), StellarId(128));
     let _ = session.settle_script(courier, &mut NeverFires);
     session
 }
 
 /// Presses L until it lands, the first press requesting a stellar and a
-/// tick between presses for the dock approach.
-fn land(session: &mut Session) -> StellarId {
+/// pass of `courier`'s between presses for the dock approach.
+fn land(session: &mut Session, courier: &Courier) -> StellarId {
     for press in 0..3 {
         if press > 0 {
-            session.tick(nova_sim::Controls::default());
+            crate::passes::work(session, courier, nova_sim::Controls::default());
         }
         if let Ok(LandPress::Outcome(LandOutcome::Landed(stellar))) = session.land() {
             return stellar;
@@ -335,14 +335,14 @@ fn fly_to_140(session: &mut Session, courier: &Courier) {
         if session.jumping().is_some() {
             break;
         }
-        session.tick(Controls::default());
+        crate::passes::work(session, courier, nova_sim::Controls::default());
     }
     assert_eq!(
         session.arrive(courier, &mut NeverFires),
         Some(SystemId(131))
     );
     let _ = session.settle_script(courier, &mut NeverFires);
-    assert_eq!(land(session), StellarId(140));
+    assert_eq!(land(session, courier), StellarId(140));
     let _ = session.settle_script(courier, &mut NeverFires);
 }
 

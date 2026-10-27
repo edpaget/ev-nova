@@ -1176,7 +1176,14 @@ fn traffic_seen(
         .map(|npc| (npc.ship, npc.govt))
         .collect();
     for _ in 0..ticks {
-        session.tick_traffic(data, &nova_sim::ai::Peaceful, chance);
+        crate::passes::work_with(
+            session,
+            data,
+            nova_sim::Controls::default(),
+            &nova_sim::ai::Peaceful,
+            nova_sim::Rules::default(),
+            chance,
+        );
         seen.extend(session.npcs().iter().map(|npc| (npc.ship, npc.govt)));
     }
     seen
@@ -1206,15 +1213,19 @@ fn stock_traffic_flies_the_systems_dudes_and_fleets() {
     session.plot_course(next).expect("a route");
     let mut tries = 0;
     while session.player().position.length() < session.stats().jump_distance {
-        session.tick(nova_sim::Controls {
-            thrust: true,
-            ..nova_sim::Controls::default()
-        });
+        crate::passes::work(
+            &mut session,
+            &data,
+            nova_sim::Controls {
+                thrust: true,
+                ..nova_sim::Controls::default()
+            },
+        );
         tries += 1;
         assert!(tries < 10_000, "never got out");
     }
     session.begin_jump().expect("jumps");
-    finish_pre_jump(&mut session);
+    finish_pre_jump(&mut session, &data);
     assert_eq!(session.arrive(&data, &mut chance), Some(next));
     let seen = traffic_seen(&data, &mut session, &mut chance, 3000);
     assert!(!seen.is_empty(), "traffic in sÿst {}", next.0);
@@ -1314,9 +1325,12 @@ fn alpharas_named_fleet_comes_when_its_roll_fires() {
     assert_eq!(session.npcs(), []);
     // Rand(500) = 1, then Rand(100) + 1 = 1, within 20: the first named
     // fleet, flët 129.
-    session.tick_traffic(
+    crate::passes::work_with(
+        &mut session,
         &data,
+        nova_sim::Controls::default(),
         &nova_sim::ai::Peaceful,
+        nova_sim::Rules::default(),
         &mut Script(std::collections::VecDeque::from([1])),
     );
     let lead = session.npcs().first().expect("the fleet's lead");
@@ -3866,9 +3880,14 @@ fn trader_disabled_in_fomalhaut(data: &GameData) -> Fomalhaut {
         let (controls, fire) = closing_on(&session, quarry);
         disabled |= quarry.condition == Condition::Disabled;
         session.hold_fire(fire && !disabled, false);
-        session.tick(controls);
-        session.tick_combat(nova_sim::Rules::default(), &mut chance);
-        session.tick_traffic(data, &NovaAi::default(), &mut chance);
+        crate::passes::work_with(
+            &mut session,
+            data,
+            controls,
+            &NovaAi::default(),
+            nova_sim::Rules::default(),
+            &mut chance,
+        );
         fled |= npc_of(&session, trader).is_some_and(|npc| npc.goal == Goal::Flee(ShipRef::Player));
         answered |= session
             .npcs()
@@ -3880,8 +3899,14 @@ fn trader_disabled_in_fomalhaut(data: &GameData) -> Fomalhaut {
     }
     for _ in 0..30 {
         session.hold_fire(false, false);
-        session.tick(nova_sim::Controls::default());
-        session.tick_combat(nova_sim::Rules::default(), &mut chance);
+        crate::passes::work_with(
+            &mut session,
+            data,
+            nova_sim::Controls::default(),
+            &crate::passes::Passive,
+            nova_sim::Rules::default(),
+            &mut chance,
+        );
     }
     Fomalhaut {
         session,
@@ -4068,8 +4093,7 @@ fn attacking_a_stock_trader_then_boarding_and_capturing_it() {
             break;
         };
         let controls = boarding(session, quarry);
-        session.tick(controls);
-        session.tick_traffic(&data, &NovaAi::default(), &mut fight.chance);
+        crate::passes::nova(session, &data, controls, &mut fight.chance);
     }
     let Some(nova_sim::Boarding::Opened(view)) = opened else {
         panic!("boarded: {opened:?}");
@@ -4116,16 +4140,16 @@ fn attacking_a_stock_trader_then_boarding_and_capturing_it() {
     session.plot_course(next).expect("a route");
     let mut tries = 0;
     while session.player().position.length() < session.stats().jump_distance {
-        session.tick(nova_sim::Controls {
+        let thrust = nova_sim::Controls {
             thrust: true,
             ..nova_sim::Controls::default()
-        });
-        session.tick_traffic(&data, &NovaAi::default(), &mut fight.chance);
+        };
+        crate::passes::nova(session, &data, thrust, &mut fight.chance);
         tries += 1;
         assert!(tries < 10_000, "never got out");
     }
     session.begin_jump().expect("jumps");
-    finish_pre_jump(session);
+    finish_pre_jump(session, &data);
     assert_eq!(session.arrive(&data, &mut fight.chance), Some(next));
     let arrived: Vec<_> = session
         .npcs()
@@ -4426,7 +4450,14 @@ fn a_wanted_pilot_buys_off_a_hunting_federation_ship() {
     let (mut session, fed) = hailing_the_federation_in(&data, -100, 128);
     let mut chance = Seeded(0x5EED);
     let hunting = (0..600).any(|_| {
-        session.tick_traffic(&data, &NovaAi::default(), &mut chance);
+        crate::passes::work_with(
+            &mut session,
+            &data,
+            nova_sim::Controls::default(),
+            &NovaAi::default(),
+            nova_sim::Rules::default(),
+            &mut chance,
+        );
         npc_of(&session, fed).is_some_and(|npc| npc.goal == Goal::Attack(ShipRef::Player))
     });
     assert!(hunting, "the Federation hunts the wanted pilot");
@@ -4455,9 +4486,22 @@ fn a_wanted_pilot_buys_off_a_hunting_federation_ship() {
     assert_eq!(session.pilot().cash(), cash - price);
     session.hang_up();
     for _ in 0..300 {
-        session.tick(nova_sim::Controls::default());
-        session.tick_combat(nova_sim::Rules::default(), &mut chance);
-        session.tick_traffic(&data, &NovaAi::default(), &mut chance);
+        crate::passes::work_with(
+            &mut session,
+            &data,
+            nova_sim::Controls::default(),
+            &crate::passes::Passive,
+            nova_sim::Rules::default(),
+            &mut chance,
+        );
+        crate::passes::work_with(
+            &mut session,
+            &data,
+            nova_sim::Controls::default(),
+            &NovaAi::default(),
+            nova_sim::Rules::default(),
+            &mut chance,
+        );
         if let Some(npc) = npc_of(&session, fed) {
             assert!(npc.goal.attacking().is_none(), "{:?}", npc.goal);
             assert_ne!(npc.target, Some(ShipRef::Player));
@@ -5466,7 +5510,7 @@ fn hg_kania_leads_to_hg_tichel() {
         }
         .into())
     );
-    session.tick(nova_sim::Controls::default());
+    crate::passes::work(&mut session, &data, nova_sim::Controls::default());
     assert_eq!(
         session.land(),
         Ok(LandPress::AtGate {
@@ -5497,14 +5541,14 @@ fn hg_kania_leads_to_hg_tichel() {
     assert_eq!(full, Gauge::full(300.0));
 }
 
-/// Ticks `session` through the pre-jump turn and braking until the jump
-/// itself begins.
-fn finish_pre_jump(session: &mut Session) {
+/// Works `data`'s `session` through the pre-jump turn and braking until
+/// the jump itself begins.
+fn finish_pre_jump(session: &mut Session, data: &GameData) {
     for _ in 0..10_000 {
         if session.jumping().is_some() {
             return;
         }
-        session.tick(nova_sim::Controls::default());
+        crate::passes::work(session, data, nova_sim::Controls::default());
     }
     panic!("never began the jump");
 }
@@ -5638,7 +5682,14 @@ fn stock_pick_made(
 ) -> Option<nova_sim::WeaponId> {
     let mut session = destroyer_in_fomalhaut(data);
     let mut chance = NeverFires;
-    session.tick_traffic(data, &NovaAi::default(), &mut chance);
+    crate::passes::work_with(
+        &mut session,
+        data,
+        nova_sim::Controls::default(),
+        &NovaAi::default(),
+        nova_sim::Rules::default(),
+        &mut chance,
+    );
     let mut npc = session
         .npcs()
         .first()

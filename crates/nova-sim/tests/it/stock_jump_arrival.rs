@@ -39,14 +39,14 @@ fn a_stock_jump_arrives_1350_out_on_the_side_it_left_at_top_speed() {
         if session.player().position.length() >= session.stats().jump_distance {
             break;
         }
-        session.tick(thrust);
+        crate::passes::work(&mut session, &data, thrust);
     }
     session.begin_jump().expect("jumps");
     for _ in 0..10_000 {
         if session.warp_end_due() {
             break;
         }
-        session.tick(Controls::default());
+        crate::passes::work(&mut session, &data, nova_sim::Controls::default());
     }
     assert!(session.warp_end_due(), "the warp ends");
     let heading = session.player().heading;
