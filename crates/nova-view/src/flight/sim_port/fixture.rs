@@ -512,7 +512,7 @@ fn unlike_hud(hud: &FrameHud) -> FrameHud {
         red_alert,
         escort_rows,
     } = hud;
-    let gauge = |gauge: Gauge| Gauge::full(if gauge.max > 1.5 { 1.0 } else { 2.0 });
+    let gauge = |gauge: Gauge| Gauge::full(gauge.max + 1.0);
     FrameHud {
         reserves: Reserves {
             shield: gauge(reserves.shield),

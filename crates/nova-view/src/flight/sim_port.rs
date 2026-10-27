@@ -255,6 +255,51 @@ mod tests {
 
     impl MapSource for NothingOpen {}
 
+    /// A flight with nothing to it, answering every port method it may
+    /// leave to its default by that default.
+    struct Defaults;
+
+    impl FlightSim for Defaults {
+        fn frame(&self, into: &mut FlightFrame) {
+            *into = FlightFrame::default();
+        }
+
+        fn step(&mut self, _input: &StepInput, _steps: u32, into: &mut StepReport) {
+            into.clear();
+        }
+
+        fn apply(&mut self, _command: FlightCommand) -> Answer {
+            Answer::Refused
+        }
+
+        fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
+
+        fn takes(&self, _gate: PlayerCommand) -> bool {
+            true
+        }
+
+        fn hover(&self, _at: Vec2, _drawn: &DrawnBoxes) -> Option<Hover> {
+            None
+        }
+    }
+
+    impl MapSource for Defaults {}
+
+    impl CommSource for Defaults {}
+
+    impl PortSource for Defaults {}
+
+    #[test]
+    fn by_default_a_description_is_resolved_for_a_new_pilot_and_a_missing_one_is_empty() {
+        let mut flight = Defaults;
+        assert_eq!(
+            flight.load_description(Some("{b5 \"set\" \"clear\"}, sir."), None),
+            "clear, sir."
+        );
+        assert_eq!(flight.load_description(None, None), "");
+        assert_eq!(flight.coming_traffic(), []);
+    }
+
     #[test]
     fn a_source_with_nothing_open_answers_nothing() {
         let source = NothingOpen;
