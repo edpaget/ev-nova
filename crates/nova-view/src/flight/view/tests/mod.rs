@@ -55,7 +55,7 @@ use nova_sim::{
     ALERT_CICN, AbortError, AcceptError, Assigned, Assignment, AsteroidCatalog, CombatCatalog,
     ComputerRefusal, Controls, FighterNote, MissionId, MissionShown, NotOffered, Pilot,
     PilotCatalog, PlayerCommand, Rulebook, Rules, StellarIff, StellarPick, Take, Taken,
-    TrafficCatalog, Turn, VenueOffer, lights_level,
+    TrafficCatalog, Turn, VenueOffer,
 };
 
 use crate::system::catalog::{
@@ -63,8 +63,8 @@ use crate::system::catalog::{
 };
 use crate::{Blend, DrawCommand, Font};
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
-use nova_sim::{BlinkChance, GLOW_CRUISE, HashedRolls, glow_level};
 use nova_sim::{BoardRefusal, DockKind, MissionBoardLine};
+use nova_sim::{GLOW_CRUISE, glow_level};
 use nova_sim::{RuleKey, RuleSource};
 
 mod anchor;
@@ -78,6 +78,7 @@ mod dialog_map;
 mod docked;
 mod drain;
 mod escorts;
+mod faked_flight;
 mod faked_hud;
 mod faked_world;
 mod flying;

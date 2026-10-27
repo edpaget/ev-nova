@@ -1,4 +1,9 @@
+use super::faked_flight::{at_rest, hold, last_controls, ship_at, tick_to, ticked};
+use super::faked_hud::{among, barred, barred_by, flown};
+use super::faked_world::in_sol_with;
 use super::*;
+use nova_sim::Face;
+use nova_sim::status_cargo::StatusCargo;
 
 // Building.
 
@@ -169,189 +174,136 @@ fn the_unstarted_flight_shows_help_only_when_turned_on() {
 
 #[test]
 fn holding_up_thrusts_the_ship_up_and_the_camera_follows() {
-    let mut view = flight();
-    assert_eq!(view.input(&key(Key::Up, true)), ScreenAction::None);
-    view.tick(Duration::from_secs(1));
-    let expected = launched(THRUST, 30);
-    assert_eq!(player(&view), expected);
-    // At rest for the first tick, then 0.06 more a tick for 29 ticks:
-    // 0.06 x 435 = 26.1 up.
-    assert!(expected.position.y < -26.0, "{expected:?}");
-    assert_eq!(expected.position.x, 0.0);
+    // How far a thrust carries the ship is nova-sim's
+    // (`thrust_accelerates_along_the_heading_and_then_moves`).
+    let mut view = at_rest(catalog());
+    hold(&mut view, Key::Up, true);
+    tick_to(&mut view, Some(ship_at(Vec2::new(0.0, -23.4), 0.0)));
+    assert!(last_controls(&view).thrust, "Up held");
+    tick_to(&mut view, Some(ship_at(Vec2::new(0.0, -26.1), 0.0)));
+    view.alpha = 0.5;
     assert_eq!(view.camera().center(), view.shown_position());
     let shown = view.shown_position();
+    assert_eq!(shown.x, 0.0);
     // Drawn at most a step behind.
-    let behind = shown.y - expected.position.y;
-    assert!((0.0..=3.0 + 1e-4).contains(&behind), "{shown:?}");
+    assert!((-26.1..=-23.4).contains(&shown.y), "{shown:?}");
 }
 
 #[test]
 fn releasing_up_coasts() {
-    let mut view = flight();
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 10);
-    view.input(&key(Key::Up, false));
-    let coasting = player(&view);
-    ticks(&mut view, 10);
-    let later = player(&view);
-    assert_eq!(later.velocity, coasting.velocity);
-    assert_eq!(later, stepped(coasting, Controls::default(), 10));
+    // That a coast keeps its velocity is nova-sim's (`a_ship_coasts_without_drag`).
+    let mut view = at_rest(catalog());
+    hold(&mut view, Key::Up, true);
+    ticked(&mut view, 1);
+    hold(&mut view, Key::Up, false);
+    ticked(&mut view, 1);
+    let thrusts: Vec<bool> = view
+        .sim
+        .inputs()
+        .iter()
+        .map(|input| input.controls.thrust)
+        .collect();
+    assert_eq!(thrusts, [true, false]);
 }
 
 #[test]
 fn left_and_right_turn_the_ship_and_its_frame() {
-    let mut view = flight();
-    view.input(&key(Key::Right, true));
-    ticks(&mut view, 11);
-    // 30° after 10 steps, drawn a step behind.
-    assert_eq!(player(&view).heading, 33.0);
+    // The turn rate is nova-sim's
+    // (`right_turns_clockwise_and_left_anticlockwise_at_the_turn_rate`,
+    // `turning_alone_does_not_move_the_ship`).
+    let mut view = at_rest(catalog());
+    hold(&mut view, Key::Right, true);
+    tick_to(&mut view, Some(ship_at(Vec2::ZERO, 30.0)));
+    tick_to(&mut view, Some(ship_at(Vec2::ZERO, 33.0)));
+    assert_eq!(last_controls(&view).turn, Turn::Right);
+    // Drawn a step behind.
     assert_eq!(view.shown_heading(), 30.0);
     assert_eq!(view.frame(), Some(3));
-    view.input(&key(Key::Right, false));
-    view.input(&key(Key::Left, true));
-    ticks(&mut view, 21);
-    assert_eq!(player(&view).heading, 330.0);
+    hold(&mut view, Key::Right, false);
+    hold(&mut view, Key::Left, true);
+    tick_to(&mut view, Some(ship_at(Vec2::ZERO, 330.0)));
+    tick_to(&mut view, Some(ship_at(Vec2::ZERO, 327.0)));
+    assert_eq!(last_controls(&view).turn, Turn::Left);
     assert_eq!(view.frame(), Some(33));
-    assert_eq!(player(&view).velocity, Vec2::ZERO, "turning alone");
 }
 
 #[test]
 fn left_and_right_together_cancel() {
-    let mut view = flight();
-    view.input(&key(Key::Left, true));
-    view.input(&key(Key::Right, true));
-    ticks(&mut view, 5);
-    assert_eq!(player(&view).heading, 0.0);
-}
-
-/// Whether `view`'s ship has turned to `aim`: within a whole-degree turn
-/// of it, where the player's auto-turn stops.
-fn facing(view: &View, aim: i16) -> bool {
-    let rate = view.session().expect("flying").handling().turn_rate;
-    nova_sim::player_turn::settled(
-        player(view).heading,
-        rate,
-        aim,
-        nova_sim::player_turn::PlayerTurn::WholeDegrees,
-    )
+    let mut view = at_rest(catalog());
+    hold(&mut view, Key::Left, true);
+    hold(&mut view, Key::Right, true);
+    ticked(&mut view, 1);
+    assert_eq!(last_controls(&view).turn, Turn::None);
 }
 
 #[test]
 fn z_is_the_afterburner_key_held() {
     assert_eq!(AFTERBURNER_KEY, Key::Char('z'));
-    let mut view = flight();
+    let mut view = at_rest(catalog());
     assert!(!view.controls().afterburner);
-    view.input(&key(AFTERBURNER_KEY, true));
+    hold(&mut view, AFTERBURNER_KEY, true);
     assert!(view.controls().afterburner);
-    view.input(&key(AFTERBURNER_KEY, false));
+    hold(&mut view, AFTERBURNER_KEY, false);
     assert!(!view.controls().afterburner);
-}
-
-/// [`catalog`] with ship 128 carrying an afterburner, `oütf` 197 of
-/// `ModVal` 30, as a default item.
-fn afterburning() -> FakeCatalog {
-    FakeCatalog {
-        outfits: vec![OutfitRecord {
-            id: OutfitId(197),
-            name: "Afterburner".to_owned(),
-            short_name: "Afterburner".to_owned(),
-            mods: [(15, 30), (0, 0), (0, 0), (0, 0)],
-            lc_name: "afterburner".to_owned(),
-            lc_plural: "afterburners".to_owned(),
-            ..multi_jumping().outfits[0].clone()
-        }],
-        defaults: vec![(OutfitId(197), 1)],
-        ..catalog()
-    }
 }
 
 #[test]
 fn up_and_z_held_with_an_afterburner_pass_the_top_speed_and_burn_fuel() {
-    let mut view = FlightView::new(afterburning());
-    let top = view.session().expect("flying").top_speed();
-    let full = reserves(&view).fuel.now;
-    view.input(&key(Key::Right, true));
-    ticks(&mut view, 30);
-    view.input(&key(Key::Right, false));
-    view.input(&key(Key::Up, true));
-    view.input(&key(AFTERBURNER_KEY, true));
-    ticks(&mut view, 120);
-    let speed = player(&view).velocity.length();
-    assert!(speed > top * 1.5, "{speed} of {top}");
-    assert!(reserves(&view).fuel.now < full);
-    view.input(&key(AFTERBURNER_KEY, false));
-    ticks(&mut view, 400);
-    let speed = player(&view).velocity.length();
-    assert!(
-        speed <= top * std::f32::consts::SQRT_2 + 1e-3,
-        "bled back: {speed}"
-    );
+    // How far past the top speed it goes, what it burns and how it bleeds
+    // back are nova-sim's
+    // (`thrust_and_afterburner_reach_1_8_times_top_speed_on_an_axis_a_tick_behind_the_box`,
+    // `the_fuel_drains_to_none_and_the_afterburner_stops_the_tick_after`,
+    // `released_the_box_bleeds_at_accel_x_0_4_a_tick_holding_the_velocity_to_it`).
+    let mut view = at_rest(catalog());
+    hold(&mut view, Key::Up, true);
+    hold(&mut view, AFTERBURNER_KEY, true);
+    ticked(&mut view, 1);
+    let controls = last_controls(&view);
+    assert!(controls.thrust && controls.afterburner, "{controls:?}");
+    hold(&mut view, AFTERBURNER_KEY, false);
+    ticked(&mut view, 1);
+    let controls = last_controls(&view);
+    assert!(controls.thrust && !controls.afterburner, "{controls:?}");
 }
 
 #[test]
 fn a_turns_the_ship_toward_its_target_and_alt_a_toward_the_nav_stellar() {
+    // How the face key turns the ship is nova-sim's
+    // (`the_auto_turn_turns_while_more_than_a_turn_off_and_stops_without_snapping`,
+    // `while_the_auto_turn_aims_the_turn_keys_do_nothing`).
     assert_eq!(FACE_TARGET_KEY, Key::Char('a'));
-    let mut view = fighting(armed(2, &[]), &two_npcs());
-    tap(&mut view, Key::Tab);
-    let target = view.session().expect("flying").target().expect("targeted");
-    let toward = nova_sim::trig::intercept_angle(player(&view).position, target.state.position);
-    assert!(!facing(&view, toward), "not yet");
-    view.input(&key(FACE_TARGET_KEY, true));
-    view.input(&key(Key::Left, true));
-    ticks(&mut view, 90);
-    // The target drifts: face where it is now.
-    let target = view.session().expect("flying").target().expect("targeted");
-    let toward = nova_sim::trig::intercept_angle(player(&view).position, target.state.position);
-    assert!(facing(&view, toward), "{:?} toward {toward}", player(&view));
-    view.input(&key(Key::Left, false));
-    // Stellar 129, at (300, -200), selected: Alt-A faces it.
-    tap(&mut view, Key::Char('2'));
-    let stellar = nova_sim::trig::intercept_angle(player(&view).position, Vec2::new(300.0, -200.0));
-    view.input(&key(Key::Alt, true));
-    ticks(&mut view, 90);
-    assert!(
-        facing(&view, stellar),
-        "{:?} toward {stellar}",
-        player(&view)
-    );
+    let mut view = at_rest(catalog());
+    hold(&mut view, FACE_TARGET_KEY, true);
+    hold(&mut view, Key::Left, true);
+    ticked(&mut view, 1);
+    assert_eq!(last_controls(&view).face, Face::Target);
+    hold(&mut view, Key::Left, false);
+    hold(&mut view, Key::Alt, true);
+    ticked(&mut view, 1);
+    assert_eq!(last_controls(&view).face, Face::Stellar, "Alt-A");
     // Let go of, the turn keys turn the ship again.
-    view.input(&key(FACE_TARGET_KEY, false));
-    view.input(&key(Key::Alt, false));
-    let before = player(&view).heading;
-    view.input(&key(Key::Right, true));
-    ticks(&mut view, 1);
-    assert_ne!(player(&view).heading, before);
+    hold(&mut view, FACE_TARGET_KEY, false);
+    hold(&mut view, Key::Alt, false);
+    hold(&mut view, Key::Right, true);
+    ticked(&mut view, 1);
+    let controls = last_controls(&view);
+    assert_eq!((controls.face, controls.turn), (Face::Off, Turn::Right));
 }
 
 #[test]
 fn down_turns_the_ship_against_its_motion() {
-    let mut view = flight();
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 30);
-    view.input(&key(Key::Up, false));
-    view.input(&key(Key::Down, true));
-    ticks(&mut view, 70);
-    // Within a turn of 180, without snapping onto it.
-    let rate = view.session().expect("flying").handling().turn_rate;
-    assert!(
-        nova_sim::player_turn::settled(
-            player(&view).heading,
-            rate,
-            180,
-            nova_sim::player_turn::PlayerTurn::WholeDegrees
-        ),
-        "{:?}",
-        player(&view)
-    );
-    let stopped = player(&view).heading;
-    assert_eq!(stopped, 177.0, "a turn short");
-    ticks(&mut view, 5);
-    assert_eq!(player(&view).heading, stopped, "it stays there");
+    // Where reverse aims, a turn short of 180 and holding Left off, is
+    // nova-sim's (`reverse_aims_against_the_velocity_from_0_05_on_either_axis`,
+    // `the_auto_turn_turns_while_more_than_a_turn_off_and_stops_without_snapping`).
+    let mut view = at_rest(catalog());
+    hold(&mut view, Key::Down, true);
+    hold(&mut view, Key::Left, true);
+    tick_to(&mut view, Some(ship_at(Vec2::ZERO, 177.0)));
+    let controls = last_controls(&view);
+    assert!(controls.reverse, "{controls:?}");
+    assert_eq!(controls.turn, Turn::Left, "sent; the session holds it off");
+    ticked(&mut view, 1);
     assert_eq!(view.frame(), Some(17));
-    // Left is held off while reverse aims: the heading stays put.
-    view.input(&key(Key::Left, true));
-    ticks(&mut view, 1);
-    assert!((player(&view).heading - 177.0).abs() < 1e-3);
 }
 
 #[test]
@@ -368,10 +320,11 @@ fn repeats_hold_a_key_and_releasing_the_keys_stops_the_thrust() {
 
 #[test]
 fn a_release_without_a_press_does_nothing() {
-    let mut view = flight();
-    view.input(&key(Key::Up, false));
-    ticks(&mut view, 3);
-    assert_eq!(player(&view), start());
+    let mut view = at_rest(catalog());
+    hold(&mut view, Key::Up, false);
+    ticked(&mut view, 1);
+    assert!(view.held.is_empty());
+    assert_eq!(last_controls(&view), Controls::default());
 }
 
 #[test]
@@ -404,73 +357,42 @@ fn other_input_changes_nothing_and_never_quits() {
 
 #[test]
 fn the_ship_is_drawn_alpha_of_the_way_from_the_last_step_to_this_one() {
-    let mut view = flight();
-    // A tick at rest first, the new session's box of none.
-    view.tick(TICK);
-    view.input(&key(Key::Up, true));
-    view.tick(TICK);
-    let first = stepped(start(), THRUST, 1);
-    assert_eq!(player(&view), first);
+    let mut view = at_rest(catalog());
+    let first = Vec2::new(0.0, -0.06);
+    tick_to(&mut view, Some(ship_at(first, 0.0)));
     assert_eq!(view.alpha(), 0.0);
     assert_eq!(view.shown_position(), at(0.0, 0.0), "a step behind");
-    view.tick(TICK / 2);
-    assert!((view.alpha() - 0.5).abs() < 1e-6, "{}", view.alpha());
-    assert_eq!(player(&view), first, "no step yet");
+    view.alpha = 0.5;
     let half = view.shown_position();
-    assert!((half.y - first.position.y / 2.0).abs() < 1e-6, "{half:?}");
+    assert!((half.y - first.y / 2.0).abs() < 1e-6, "{half:?}");
     assert_eq!(half.x, 0.0);
     assert_eq!(view.camera().center(), half);
-    // The rest of the tick: one more step, and back to its start.
-    view.tick(REST_OF_TICK);
-    let second = stepped(first, THRUST, 1);
-    assert_eq!(player(&view), second);
-    assert_eq!(view.alpha(), 0.0);
-    assert_eq!(
-        view.shown_position(),
-        at(first.position.x, first.position.y)
-    );
+    // The next step, and back to its start.
+    tick_to(&mut view, Some(ship_at(Vec2::new(0.0, -0.18), 0.0)));
+    assert_eq!(view.shown_position(), at(first.x, first.y));
 }
 
 #[test]
 fn mid_flight_the_ship_is_drawn_between_its_last_two_positions() {
-    let mut view = flight();
-    view.input(&key(Key::Right, true));
-    ticks(&mut view, 15);
-    view.input(&key(Key::Right, false));
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 20);
-    let before = player(&view);
-    ticks(&mut view, 1);
-    let after = player(&view);
-    view.tick(TICK / 4);
+    let mut view = at_rest(catalog());
+    let before = Vec2::new(12.0, -9.0);
+    let after = Vec2::new(13.5, -10.0);
+    tick_to(&mut view, Some(ship_at(before, 45.0)));
+    tick_to(&mut view, Some(ship_at(after, 45.0)));
+    view.alpha = 0.25;
     let shown = view.shown_position();
     let expected = |from: f32, to: f32| from + (to - from) * view.alpha();
-    assert!(
-        before.position.x > 1.0 && before.position.y < -1.0,
-        "{before:?}"
-    );
-    assert!((shown.x - expected(before.position.x, after.position.x)).abs() < 1e-4);
-    assert!((shown.y - expected(before.position.y, after.position.y)).abs() < 1e-4);
+    assert!((shown.x - expected(before.x, after.x)).abs() < 1e-4);
+    assert!((shown.y - expected(before.y, after.y)).abs() < 1e-4);
 }
 
 #[test]
 fn the_heading_is_drawn_the_short_way_round_across_0() {
-    let mut view = flight();
-    view.input(&key(Key::Left, true));
-    view.tick(TICK);
-    assert_eq!(player(&view).heading, 357.0);
-    view.tick(TICK / 2);
-    assert!(
-        (view.shown_heading() - 358.5).abs() < 1e-3,
-        "{}",
-        view.shown_heading()
-    );
-    view.input(&key(Key::Left, false));
-    view.input(&key(Key::Right, true));
-    view.tick(REST_OF_TICK);
-    view.tick(TICK / 2);
-    // From 357 to 0: half way is 358.5 again, not 178.5.
-    assert_eq!(player(&view).heading, 0.0);
+    let mut view = at_rest(catalog());
+    tick_to(&mut view, Some(ship_at(Vec2::ZERO, 357.0)));
+    tick_to(&mut view, Some(ship_at(Vec2::ZERO, 0.0)));
+    view.alpha = 0.5;
+    // From 357 to 0: half way is 358.5, not 178.5.
     assert!(
         (view.shown_heading() - 358.5).abs() < 1e-3,
         "{}",
@@ -516,9 +438,11 @@ fn the_title_and_help_are_not_drawn_by_default() {
             cheats: false,
         }
     );
-    assert_eq!(flight().overlays(), FlightOverlays::default());
-    assert_eq!(flight().with_overlays(TITLED).overlays(), TITLED);
-    let texts = texts(&drawn(&flight()));
+    let view = barred(catalog(), among(Vec::new()));
+    assert_eq!(view.overlays(), FlightOverlays::default());
+    let view = view.with_overlays(TITLED);
+    assert_eq!(view.overlays(), TITLED);
+    let texts = texts(&flown(&barred(catalog(), among(Vec::new()))));
     assert!(!texts.contains(&"Sol (sÿst 130)".to_owned()), "{texts:?}");
     assert!(!texts.contains(&HELP.to_owned()), "{texts:?}");
 }
@@ -539,7 +463,7 @@ fn the_title_draws_when_turned_on() {
         help: false,
         cheats: false,
     };
-    let list = drawn(&flight().with_overlays(titled));
+    let list = flown(&barred(catalog(), among(Vec::new())).with_overlays(titled));
     let before = before_the_hud(&list);
     assert_eq!(
         before.last(),
@@ -556,7 +480,7 @@ fn the_help_line_draws_when_turned_on() {
         help: true,
         cheats: false,
     };
-    let list = drawn(&flight().with_overlays(helped));
+    let list = flown(&barred(catalog(), among(Vec::new())).with_overlays(helped));
     let before = before_the_hud(&list);
     assert_eq!(
         before.last(),
@@ -564,7 +488,7 @@ fn the_help_line_draws_when_turned_on() {
         "over the flight, under the HUD"
     );
     assert!(!texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
-    let both = drawn(&flight().with_overlays(TITLED));
+    let both = flown(&barred(catalog(), among(Vec::new())).with_overlays(TITLED));
     let before = before_the_hud(&both);
     assert_eq!(
         before[before.len() - 2..],
@@ -578,21 +502,24 @@ fn the_help_line_draws_when_turned_on() {
 
 #[test]
 fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
-    let mut view = FlightView::new(starry());
-    view.tick(Duration::ZERO);
-    let list = drawn(&view);
+    let mut frame = in_sol_with(vec![ship_at(Vec2::ZERO, 0.0)]);
+    frame.hud.reserves = ShipStats::new(FIELDS, &[]).full();
+    let mut view = barred(starry(), frame);
+    view.reset_stars();
+    let list = flown(&view);
     let mut expected = DrawList::new();
     // The stars, the stellars and the ship are the world, the HUD over it.
     expected.world(|expected| {
-        for star in drawn_stars(&view) {
+        for star in faked_stars(&view) {
             expected.push(star);
         }
         scene::draw_stellars(expected, view.scene().expect("a scene"), &view.camera());
         expected.sprite(ImageKey::sprite(2000, 0), PLAYER_AT, Color::WHITE);
     });
+    let bar = view.status_bar.as_ref().expect("a status bar");
     hud::draw(
         &mut expected,
-        view.status_bar().expect("a status bar"),
+        bar,
         &HudState {
             radar: &RadarScene {
                 player: at(0.0, 0.0),
@@ -615,13 +542,12 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
             blink_on: false,
             reserves: ShipStats::new(FIELDS, &[]).full(),
             nav: NavDisplay::Off,
-            cargo: Some(&view.session().expect("flying").status_cargo()),
+            cargo: Some(&StatusCargo::default()),
             disabled: false,
         },
         None,
         VIEW_SIZE.0,
     );
-    let bar = view.status_bar().expect("a status bar");
     let origin = hud::bar_origin(bar, VIEW_SIZE.0);
     target::draw_target_panel(&mut expected, &bar.layout, origin, None, None);
     target::draw_secondary(&mut expected, &bar.layout, origin, None, None);
@@ -644,11 +570,11 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
 
 #[test]
 fn the_ship_stays_at_the_play_areas_centre_as_the_stellars_go_by() {
-    let mut view = FlightView::new(starry());
-    view.input(&key(Key::Up, true));
-    view.input(&key(Key::Right, true));
-    view.tick(Duration::from_millis(1500));
-    let list = drawn(&view);
+    let mut view = barred(starry(), in_sol_with(vec![ship_at(Vec2::ZERO, 0.0)]));
+    view.reset_stars();
+    tick_to(&mut view, Some(ship_at(Vec2::new(40.0, -90.0), 125.0)));
+    tick_to(&mut view, None);
+    let list = flown(&view);
     let shown = sprites(&list);
     let camera = view.camera();
     assert_eq!(
@@ -661,18 +587,18 @@ fn the_ship_stays_at_the_play_areas_centre_as_the_stellars_go_by() {
     assert_ne!(view.frame(), Some(0));
     assert_eq!(shown[0].1, camera.world_to_screen(at(0.0, -600.0)));
     assert_ne!(shown[0].1, at(415.0, -216.0), "the stellars moved");
-    let stars = drawn_stars(&view);
+    let stars = faked_stars(&view);
     assert_eq!(stars.len(), 20);
     assert!(list.iter().take(stars.len()).eq(stars.iter()), "the stars");
 }
 
 #[test]
 fn the_stellars_animate_with_time() {
-    let mut view = flight();
-    ticks(&mut view, 1);
-    assert_eq!(sprites(&drawn(&view))[1].0, ImageKey::sprite(1129, 1));
-    ticks(&mut view, 2);
-    assert_eq!(sprites(&drawn(&view))[1].0, ImageKey::sprite(1129, 3));
+    let mut view = at_rest(catalog());
+    ticked(&mut view, 1);
+    assert_eq!(sprites(&flown(&view))[1].0, ImageKey::sprite(1129, 1));
+    ticked(&mut view, 2);
+    assert_eq!(sprites(&flown(&view))[1].0, ImageKey::sprite(1129, 3));
 }
 
 #[test]
@@ -681,9 +607,9 @@ fn a_ship_without_a_sheet_is_a_placeholder_with_the_reason() {
         sheet: Err("no shän 128 for shïp 128".to_owned()),
         ..catalog()
     };
-    let view = FlightView::new(sheetless);
+    let view = barred(sheetless, among(Vec::new()));
     assert_eq!(view.frame(), None);
-    let list = drawn(&view);
+    let list = flown(&view);
     assert_eq!(sprites(&list).len(), 2, "the stellars only");
     let mut expected = DrawList::new();
     crossed_box(&mut expected, PLAYER_AT, PLACEHOLDER_SIZE, PLACEHOLDER);
@@ -727,42 +653,26 @@ fn layered() -> FakeCatalog {
 
 #[test]
 fn a_coasting_ship_draws_its_lights_over_it_and_no_glow() {
-    let mut view = FlightView::new(layered());
+    // That the glow goes out as the ship coasts is nova-sim's
+    // (`the_engine_glow_ramps_up_with_thrust_and_down_after_it`).
+    let view = at_rest(layered());
+    let view = lit(view, Some(32), 0);
     assert_eq!(
-        ship_sprites(&view),
+        super::faked_world::faked_ship_sprites(&view),
         [
             (ImageKey::sprite(2000, 0), PLAYER_AT),
             (ImageKey::sprite(2200, 0), PLAYER_AT),
         ]
     );
-    view.input(&key(Key::Up, true));
-    assert_eq!(ship_sprites(&view).len(), 2, "held, but not yet flown");
-    ticks(&mut view, 3);
-    view.input(&key(Key::Up, false));
-    // As many ticks coasting as thrusting: the glow has faded out.
-    ticks(&mut view, 3);
-    let session = view.session().expect("flying");
-    assert!(!session.thrusting());
-    assert_eq!(session.engine_glow(), 0);
-    assert_eq!(
-        ship_sprites(&view)
-            .iter()
-            .map(|(image, _)| image.id)
-            .collect::<Vec<_>>(),
-        [2000, 2200],
-        "coasting"
-    );
 }
 
 #[test]
 fn a_thrusting_ship_draws_its_glow_between_it_and_its_lights() {
-    let mut view = FlightView::new(layered());
-    view.input(&key(Key::Up, true));
     // A base of 6: drawn at every roll.
-    ticks(&mut view, 6);
+    let view = lit(at_rest(layered()), Some(32), 6);
     let centre = view.camera().world_to_screen(view.shown_position());
     assert_eq!(
-        ship_sprites(&view),
+        super::faked_world::faked_ship_sprites(&view),
         [
             (ImageKey::sprite(2000, 0), centre),
             (ImageKey::sprite(2100, 0), centre),
@@ -771,43 +681,28 @@ fn a_thrusting_ship_draws_its_glow_between_it_and_its_lights() {
     );
 }
 
-/// The ship's sprites' image ids and blends, as [`ship_sprites`].
-fn ship_blends(view: &View) -> Vec<(i16, Blend)> {
-    drawn(view)
-        .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Sprite { image, blend, .. } if (2000..2300).contains(&image.id) => {
-                Some((image.id, *blend))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 #[test]
 fn a_thrusting_ships_glow_and_lights_or_onto_its_normal_sprite() {
-    let mut view = FlightView::new(layered());
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 6);
+    let view = lit(at_rest(layered()), Some(32), 6);
     assert_eq!(
-        ship_blends(&view),
+        faked_ship_blends(&view),
         [(2000, Blend::Normal), (2100, Blend::Or), (2200, Blend::Or),]
     );
     assert!(
-        !drawn(&view).iter().any(|command| matches!(
-            command,
-            DrawCommand::Sprite {
-                blend: Blend::Additive,
-                ..
-            }
-        )),
+        !super::faked_world::world_list(&view)
+            .iter()
+            .any(|command| matches!(
+                command,
+                DrawCommand::Sprite {
+                    blend: Blend::Additive,
+                    ..
+                }
+            )),
         "nothing in a thrusting, lit frame is added"
     );
-    view.input(&key(Key::Up, false));
-    ticks(&mut view, 6);
-    assert_eq!(view.session().expect("flying").engine_glow(), 0);
+    let view = lit(view, Some(32), 0);
     assert_eq!(
-        ship_blends(&view),
+        faked_ship_blends(&view),
         [(2000, Blend::Normal), (2200, Blend::Or)],
         "coasting"
     );
@@ -815,18 +710,21 @@ fn a_thrusting_ships_glow_and_lights_or_onto_its_normal_sprite() {
 
 #[test]
 fn the_layers_turn_with_the_ship_between_steps() {
-    let mut view = FlightView::new(layered());
-    view.input(&key(Key::Up, true));
-    view.input(&key(Key::Right, true));
-    // 50 steps and a half: the display is between two steps.
-    ticks(&mut view, 50);
-    view.tick(TICK / 2);
-    assert_ne!(view.shown_heading(), player(&view).heading, "between");
+    let mut view = lit(at_rest(layered()), Some(32), 6);
+    let mut turned = |heading| {
+        let mut ship = view.frame.player();
+        ship.heading = heading;
+        tick_to(&mut view, Some(ship));
+    };
+    turned(147.0);
+    turned(150.0);
+    view.alpha = 0.5;
+    assert_ne!(view.shown_heading(), view.frame.player().heading, "between");
     let frame = view.frame().expect("a sheet");
     assert_eq!(frame, 14, "148.5, truncated: {}", view.shown_heading());
     let centre = view.camera().world_to_screen(view.shown_position());
     assert_eq!(
-        ship_sprites(&view),
+        super::faked_world::faked_ship_sprites(&view),
         [
             (ImageKey::sprite(2000, frame), centre),
             (ImageKey::sprite(2100, frame), centre),
@@ -867,62 +765,38 @@ fn beginning_a_jump_while_thrusting_puts_the_glow_out() {
 
 #[test]
 fn a_ship_without_layers_draws_only_its_sprite() {
-    let mut view = flight();
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 3);
-    assert!(view.session().expect("flying").thrusting());
-    let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+    let view = lit(at_rest(catalog()), Some(32), 6);
+    let ids: Vec<_> = super::faked_world::faked_ship_sprites(&view)
+        .iter()
+        .map(|(i, _)| i.id)
+        .collect();
     assert_eq!(ids, [2000]);
 }
 
 #[test]
 fn a_ship_without_a_sheet_draws_no_layers() {
-    let mut view = FlightView::new(FakeCatalog {
+    let view = at_rest(FakeCatalog {
         sheet: Err("no shän 128 for shïp 128".to_owned()),
         ..layered()
     });
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 3);
-    assert_eq!(ship_sprites(&view), []);
-}
-
-/// Every command drawing the glow, `rlëD` 2100, whatever its blend.
-fn glow_commands(view: &View) -> Vec<DrawCommand> {
-    drawn(view)
-        .iter()
-        .filter(|command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 2100))
-        .cloned()
-        .collect()
-}
-
-/// The glow commands for a base of `base` at `tick`: the glow drawn by
-/// OR at the level [`glow_level`] gives over the ship's centre, on its
-/// frame, or none when it is hidden.
-fn glow_for(view: &View, base: u8, tick: u64) -> Vec<DrawCommand> {
-    let frame = view.frame().expect("a sheet") % 36;
-    let center = view.camera().world_to_screen(view.shown_position());
-    glow_level(base, tick, &view.glow_rolls)
-        .map(|level| DrawCommand::Sprite {
-            image: ImageKey::sprite(2100, frame),
-            center,
-            tint: lights_tint(level),
-            blend: Blend::Or,
-        })
-        .into_iter()
-        .collect()
+    let view = lit(view, Some(32), 6);
+    assert_eq!(super::faked_world::faked_ship_sprites(&view), []);
 }
 
 #[test]
 fn the_glow_ramps_in_and_flickers_at_the_glow_function_level() {
-    let mut view = FlightView::new(layered());
-    view.input(&key(Key::Up, true));
+    // The base's ramp is nova-sim's
+    // (`the_engine_glow_ramps_up_with_thrust_and_down_after_it`); the view
+    // draws its level at each tick.
+    let mut view = at_rest(layered());
     let mut cruising = Vec::new();
     for n in 1..=40_u8 {
-        ticks(&mut view, 1);
         let base = n.min(GLOW_CRUISE);
-        assert_eq!(view.session().expect("flying").engine_glow(), base);
-        let want = glow_for(&view, base, u64::from(n));
-        assert_eq!(glow_commands(&view), want, "tick {n}");
+        let mut ship = view.frame.player();
+        ship.glow = base;
+        tick_to(&mut view, Some(ship));
+        let want = faked_glow_for(&view, base, u64::from(n));
+        assert_eq!(faked_glow_commands(&view), want, "tick {n}");
         if n >= 6 {
             assert_eq!(want.len(), 1, "a base of 6 or more always shows");
         }
@@ -936,17 +810,15 @@ fn the_glow_ramps_in_and_flickers_at_the_glow_function_level() {
 
 #[test]
 fn releasing_up_fades_the_glow_out() {
-    let mut view = FlightView::new(layered());
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 30);
-    assert_eq!(view.session().expect("flying").engine_glow(), GLOW_CRUISE);
-    view.input(&key(Key::Up, false));
+    let mut view = at_rest(layered());
+    ticked(&mut view, 30);
     for k in 1..=40_u8 {
-        ticks(&mut view, 1);
         let base = GLOW_CRUISE.saturating_sub(k);
-        assert_eq!(view.session().expect("flying").engine_glow(), base);
-        let want = glow_for(&view, base, 30 + u64::from(k));
-        assert_eq!(glow_commands(&view), want, "{k} ticks after");
+        let mut ship = view.frame.player();
+        ship.glow = base;
+        tick_to(&mut view, Some(ship));
+        let want = faked_glow_for(&view, base, 30 + u64::from(k));
+        assert_eq!(faked_glow_commands(&view), want, "{k} ticks after");
         if k == 3 {
             let level = glow_level(21, 33, &view.glow_rolls).expect("still drawn");
             let alpha = lights_tint(level).a;
@@ -994,44 +866,29 @@ fn lights_alphas(view: &View) -> Vec<u8> {
 
 #[test]
 fn the_shuttles_lights_blink_with_game_time() {
-    let mut view = FlightView::new(blinking(SHUTTLE));
-    assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 0: off");
-    assert_eq!(ship_sprites(&view)[0].0.id, 2000, "the ship is drawn");
-    ticks(&mut view, 1);
-    assert_eq!(lights_tints(&view), [Color::WHITE], "tick 1: on");
-    ticks(&mut view, 3);
-    assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 4: off");
-    ticks(&mut view, 6);
-    assert_eq!(lights_alphas(&view), [255], "tick 10: on again");
-    ticks(&mut view, 3);
-    assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 13: the gap");
+    // When the Shuttle's lights are lit is nova-sim's
+    // (`the_shuttle_double_flashes_every_40_ticks`); its record says.
+    let view = lit(at_rest(blinking(SHUTTLE)), None, 0);
+    assert_eq!(faked_lights_alphas(&view), [0_u8; 0], "off");
+    assert_eq!(
+        super::faked_world::faked_ship_sprites(&view)[0].0.id,
+        2000,
+        "the ship is drawn"
+    );
+    let view = lit(view, Some(32), 0);
+    assert_eq!(faked_lights_tints(&view), [Color::WHITE], "on");
 }
 
 #[test]
 fn a_pulsing_light_is_ored_at_its_level() {
-    // The stock triangle: 10 to 31.
-    let triangle = Blink {
-        mode: 2,
-        a: 10,
-        b: 75,
-        c: 32,
-        d: 75,
-    };
-    let mut view = FlightView::new(blinking(triangle));
-    assert_eq!(lights_alphas(&view), [0_u8; 0], "0.75: not drawn");
-    ticks(&mut view, 1);
-    assert_eq!(lights_alphas(&view), [8], "level 1");
-    ticks(&mut view, 40);
-    assert_eq!(lights_alphas(&view), [247], "level 31");
-}
-
-/// Every command drawing the lights, `rlëD` 2200, whatever its blend.
-fn lights_commands(view: &View) -> Vec<DrawCommand> {
-    drawn(view)
-        .iter()
-        .filter(|command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 2200))
-        .cloned()
-        .collect()
+    // The stock triangle's levels, 10 to 31, are nova-sim's
+    // (`the_stock_triangle_pulses_between_10_and_31_every_58_ticks`).
+    let view = lit(at_rest(blinking(SHUTTLE)), None, 0);
+    assert_eq!(faked_lights_alphas(&view), [0_u8; 0], "level 0: not drawn");
+    let view = lit(view, Some(1), 0);
+    assert_eq!(faked_lights_alphas(&view), [8], "level 1");
+    let view = lit(view, Some(31), 0);
+    assert_eq!(faked_lights_alphas(&view), [247], "level 31");
 }
 
 /// The lights drawn by OR with `tint` over the coasting ship's centre.
@@ -1046,61 +903,48 @@ fn lights_at(tint: Color) -> DrawCommand {
 
 #[test]
 fn lights_are_ored_scaled_by_level_below_full_and_whole_at_full() {
-    // The stock triangle, 10 to 31, never full: the original draws
-    // every level with its translucent blit, which ORs in the lights
-    // scaled by level/32 (see `lights_tint`).
-    let triangle = Blink {
-        mode: 2,
-        a: 10,
-        b: 75,
-        c: 32,
-        d: 75,
-    };
-    let rolls = HashedRolls::new(0);
-    let mut view = FlightView::new(blinking(triangle));
-    let mut levels = Vec::new();
-    for tick in 0..=101 {
-        let level = lights_level(&triangle, tick, &rolls);
-        let want: Vec<_> = level
-            .map(|n| lights_at(lights_tint(n)))
-            .into_iter()
-            .collect();
-        assert_eq!(lights_commands(&view), want, "tick {tick}");
-        levels.extend(level);
-        ticks(&mut view, 1);
+    // The original draws every level below full with its translucent
+    // blit, which ORs in the lights scaled by level/32 (see
+    // `lights_tint`); full is ORed whole.
+    let mut view = lit(at_rest(blinking(SHUTTLE)), None, 0);
+    for level in 1..=32 {
+        view = lit(view, Some(level), 0);
+        assert_eq!(
+            faked_lights_commands(&view),
+            [lights_at(lights_tint(level))],
+            "level {level}"
+        );
     }
-    assert!(levels.contains(&10), "the lowest level is drawn");
-    assert!(levels.contains(&31), "the highest level is drawn");
-
-    // A steady light is full: ORed whole.
-    let view = FlightView::new(blinking(Blink::STEADY));
-    assert_eq!(lights_commands(&view), [lights_at(Color::WHITE)]);
+    assert_eq!(lights_tint(32), Color::WHITE);
 }
 
 #[test]
 fn steady_lights_are_ored_at_full_from_the_first_frame() {
-    // No tick: the lights are displayed once before the first frame, as
-    // `_PrepareAllSprites` runs `_HandleShipDisplay`.
-    let view = FlightView::new(blinking(Blink::STEADY));
-    assert_eq!(lights_tints(&view), [Color::WHITE]);
+    // That a steady light is lit full before the first frame is nova-sim's
+    // (`modes_other_than_one_to_three_hold_the_lights_steady_at_full`,
+    // `prepare_all_sprites_steps_the_players_fade_and_every_npcs_once`).
+    let view = lit(at_rest(blinking(Blink::STEADY)), Some(32), 0);
+    assert_eq!(faked_lights_tints(&view), [Color::WHITE]);
 }
 
 #[test]
 fn the_glow_still_shows_while_the_lights_are_off() {
-    let mut view = FlightView::new(blinking(SHUTTLE));
-    view.input(&key(Key::Up, true));
-    // Tick 13: the Shuttle's lights are dark, and a base of 13 always
-    // shows the glow.
-    ticks(&mut view, 13);
-    assert!(view.session().expect("flying").thrusting());
+    let mut view = at_rest(blinking(SHUTTLE));
+    ticked(&mut view, 12);
+    let mut ship = view.frame.player();
+    ship.glow = 13;
+    ship.drawn.lights = None;
+    tick_to(&mut view, Some(ship));
     assert_eq!(
-        ship_blends(&view),
+        faked_ship_blends(&view),
         [(2000, Blend::Normal), (2100, Blend::Or)]
     );
-    let glow = drawn(&view).iter().find_map(|command| match command {
-        DrawCommand::Sprite { image, tint, .. } if image.id == 2100 => Some(*tint),
-        _ => None,
-    });
+    let glow = super::faked_world::world_list(&view)
+        .iter()
+        .find_map(|command| match command {
+            DrawCommand::Sprite { image, tint, .. } if image.id == 2100 => Some(*tint),
+            _ => None,
+        });
     let level = glow_level(13, 13, &view.glow_rolls).expect("drawn");
     assert_eq!(glow, Some(lights_tint(level)));
 }
@@ -1118,26 +962,6 @@ fn the_blink_pauses_while_the_map_is_open() {
     assert_eq!(lights_alphas(&view), [255], "still tick 3");
     ticks(&mut view, 1);
     assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 4");
-}
-
-#[test]
-fn random_lights_roll_on_the_flights_chance() {
-    // A=5 B=12 C=3: one of 8 levels from 5, every 4 ticks: the first, before
-    // the first frame, the solver's on `HashedRolls` from seed 0; the next
-    // on the flight's chance, each its second outcome.
-    let random = Blink {
-        mode: 3,
-        a: 5,
-        b: 12,
-        c: 3,
-        d: 0,
-    };
-    let rolls = HashedRolls::new(0);
-    let first = lights_tint(5 + rolls.roll(0, 8) as u8).a;
-    let mut view = FlightView::new(blinking(random)).with_chance(rolling_one());
-    assert_eq!(lights_alphas(&view), [first]);
-    ticks(&mut view, 4);
-    assert_eq!(lights_alphas(&view), [lights_tint(6).a]);
 }
 
 // The HUD.
@@ -1160,7 +984,9 @@ fn a_new_pilot_shows_the_default_status_bar() {
 
 #[test]
 fn the_status_bar_alone_is_flights_bar_and_nothing_else() {
-    let view = landed_view().with_overlays(TITLED);
+    let mut frame = among(Vec::new());
+    frame.docked = true;
+    let view = barred(catalog(), frame).with_overlays(TITLED);
     let mut bar = DrawList::new();
     view.draw_status_bar(&mut bar);
     let background = DrawCommand::Picture {
@@ -1171,7 +997,7 @@ fn the_status_bar_alone_is_flights_bar_and_nothing_else() {
     assert_eq!(dots_on_radar(&bar), [(926, 96)], "the blank radar");
     assert_eq!(sprites(&bar), [], "no stellars or ship");
     assert!(!texts(&bar).contains(&HELP.to_owned()), "no help line");
-    let flown = drawn(&view);
+    let flown = flown(&view);
     let from = flown
         .iter()
         .position(|command| *command == background)
@@ -1186,7 +1012,7 @@ fn the_status_bar_alone_is_flights_bar_and_nothing_else() {
         bar: Err("no ïntf 128".to_owned()),
         ..catalog()
     };
-    let view = over_earth(barless);
+    let view = barred(barless, among(Vec::new()));
     let mut bar = DrawList::new();
     view.draw_status_bar(&mut bar);
     assert_eq!(bar.len(), 0, "nothing, not even why");
@@ -1194,8 +1020,10 @@ fn the_status_bar_alone_is_flights_bar_and_nothing_else() {
 
 #[test]
 fn the_hud_shows_the_status_bar_full_bars_and_the_stellars_on_radar() {
-    let view = flight();
-    let list = drawn(&view);
+    let mut frame = among(Vec::new());
+    frame.hud.reserves = ShipStats::new(FIELDS, &[]).full();
+    let view = barred(catalog(), frame);
+    let list = flown(&view);
     assert!(
         list.iter().any(|c| *c
             == DrawCommand::Picture {
@@ -1268,7 +1096,7 @@ fn a_stellars_radar_shape_and_sprite_width_reach_the_radar() {
         site(151, (-640.0, 320.0), 0),
         site(152, (0.0, 640.0), 0),
     ]);
-    let view = FlightView::new(FakeCatalog {
+    let catalog = FakeCatalog {
         sites,
         sol_more: vec![
             sized(150, (640, 0), (300, 300), true),
@@ -1276,7 +1104,15 @@ fn a_stellars_radar_shape_and_sprite_width_reach_the_radar() {
             sized(152, (0, 640), (250, 150), false),
         ],
         ..catalog()
-    });
+    };
+    let mut frame = among(Vec::new());
+    frame
+        .stellars
+        .extend([150, 151, 152].map(|id| record::stellar(StellarId(id))));
+    for stellar in &mut frame.stellars {
+        stellar.iff = None;
+    }
+    let view = barred(catalog, frame);
     let dim = RadarColor::Dim;
     // A station is a 2×2 square whatever its size; past 89 pixels wide
     // an oval grows 2 a side, past 199, 3.
@@ -1302,26 +1138,28 @@ fn a_stellars_radar_shape_and_sprite_width_reach_the_radar() {
     );
 }
 
-/// The radar's player position: where it was when the radar last
-/// refreshed, or now.
-fn radar_player(view: &View) -> Point {
-    view.radar_shown(&view.frame_now()).player
-}
-
 #[test]
 fn by_the_engine_the_radar_holds_between_refreshes_eight_ticks_apart() {
-    let mut view = flight();
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 1);
+    let mut view = barred(catalog(), among(Vec::new()));
+    let mut y = 0.0;
+    let mut fly = |view: &mut Faked| {
+        y -= 1.0;
+        tick_to(view, Some(ship_at(Vec2::new(0.0, y), 0.0)));
+    };
+    fly(&mut view);
     let refreshed = view.shown_position();
-    assert_eq!(radar_player(&view), refreshed, "refreshed on the first");
+    assert_eq!(
+        faked_radar_player(&view),
+        refreshed,
+        "refreshed on the first"
+    );
     for tick in 2..=8 {
-        ticks(&mut view, 1);
-        assert_eq!(radar_player(&view), refreshed, "held on tick {tick}");
+        fly(&mut view);
+        assert_eq!(faked_radar_player(&view), refreshed, "held on tick {tick}");
     }
     assert_ne!(view.shown_position(), refreshed, "the ship moved");
-    ticks(&mut view, 1);
-    assert_eq!(radar_player(&view), view.shown_position(), "the 9th");
+    fly(&mut view);
+    assert_eq!(faked_radar_player(&view), view.shown_position(), "the 9th");
     assert_eq!(
         radar_marks(&view)[0],
         small_oval(
@@ -1333,18 +1171,21 @@ fn by_the_engine_the_radar_holds_between_refreshes_eight_ticks_apart() {
 
 #[test]
 fn by_the_other_reading_the_radar_follows_the_ship_every_frame() {
-    let mut view = every_frame(flight());
-    let before = dots_on_radar(&drawn(&view));
-    view.input(&key(Key::Up, true));
-    for _ in 0..45 {
-        ticks(&mut view, 1);
-        assert_eq!(radar_player(&view), view.shown_position());
+    let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Bible);
+    let mut view = barred_by(catalog(), among(Vec::new()), &rules);
+    let before = dots_on_radar(&flown(&view));
+    for n in 1..=45 {
+        tick_to(
+            &mut view,
+            Some(ship_at(Vec2::new(0.0, -2.0 * n as f32), 0.0)),
+        );
+        assert_eq!(faked_radar_player(&view), view.shown_position());
     }
-    view.tick(TICK / 2);
+    view.alpha = 0.5;
     let shown = view.shown_position();
     assert!(shown.y < -10.0, "{shown:?}");
-    assert_eq!(radar_player(&view), shown, "between ticks too");
-    let after = dots_on_radar(&drawn(&view));
+    assert_eq!(faked_radar_player(&view), shown, "between ticks too");
+    let after = dots_on_radar(&flown(&view));
     let y = |world| radar::radar_offset(world, shown.y, 96);
     assert_eq!(
         radar_marks(&view),
@@ -1444,19 +1285,22 @@ fn an_arrival_shows_the_new_systems_stellars_at_once() {
 
 #[test]
 fn the_targets_blip_blinks_bright_every_eight_ticks_under_both_readings() {
+    // Which ship Tab picks is nova-sim's
+    // (`a_target_key_answers_the_target_it_picks`).
     for every in [false, true] {
-        let (_, chance) = scripted(&placed(850, 650, 90));
-        let view = FlightView::new(trafficked(&[130], 1, 129, 3))
-            .with_chance(chance)
-            .with_behaviour(Rc::new(Still));
-        let mut view = if every { every_frame(view) } else { view };
-        view.tick(TICK);
-        tap(&mut view, TARGET_KEY);
-        assert!(view.session().expect("flying").target().is_some());
-        ticks(&mut view, 7);
+        let rules = if every {
+            Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Bible)
+        } else {
+            Rulebook::default()
+        };
+        let npc = super::faked_world::npc_129(0, Vec2::new(100.0, -100.0), 90.0);
+        let mut view = barred_by(trafficked(&[130], 1, 129, 3), among(vec![npc]), &rules);
+        ticked(&mut view, 1);
+        super::faked_hud::changes(&mut view, |frame| frame.target = Some(record::target(0)));
+        ticked(&mut view, 7);
         let mut seen = Vec::new();
         for _ in 0..24 {
-            ticks(&mut view, 1);
+            ticked(&mut view, 1);
             let [RadarMark::Pixel { color, .. }] = blips(&view)[..] else {
                 panic!("one blip: {:?}", blips(&view));
             };
@@ -1466,7 +1310,7 @@ fn the_targets_blip_blinks_bright_every_eight_ticks_under_both_readings() {
         expected.extend([RadarColor::Bright; 8]);
         expected.extend([RadarColor::Dim; 8]);
         assert_eq!(seen, expected, "every frame: {every}");
-        let list = drawn(&view);
+        let list = flown(&view);
         let bright = list.iter().filter(|command| {
             matches!(command, DrawCommand::Dot { color, .. } if *color == layout().bright_radar)
         });
@@ -1476,13 +1320,16 @@ fn the_targets_blip_blinks_bright_every_eight_ticks_under_both_readings() {
 
 #[test]
 fn the_bars_show_the_sessions_reserves() {
-    let view = flight();
-    let reserves = reserves(&view);
-    assert_eq!(reserves, ShipStats::new(FIELDS, &[]).full());
+    // A new pilot's full reserves are nova-sim's
+    // (`a_fill_writes_the_ships_reserves`).
+    let reserves = ShipStats::new(FIELDS, &[]).full();
+    let mut frame = among(Vec::new());
+    frame.hud.reserves = reserves;
+    let view = barred(catalog(), frame);
     let mut expected = DrawList::new();
     hud::draw(
         &mut expected,
-        view.status_bar().expect("a status bar"),
+        view.status_bar.as_ref().expect("a status bar"),
         &HudState {
             radar: &RadarScene::default(),
             blink_on: false,
@@ -1494,21 +1341,17 @@ fn the_bars_show_the_sessions_reserves() {
         None,
         VIEW_SIZE.0,
     );
-    assert_eq!(lines(&drawn(&view)), lines(&expected));
+    assert_eq!(lines(&flown(&view)), lines(&expected));
 }
 
 #[test]
 fn an_unreadable_status_bar_says_why_and_flight_goes_on() {
-    let barless = FakeCatalog {
-        bar: Err("no ïntf 128".to_owned()),
-        ..catalog()
-    };
-    let mut view = FlightView::new(barless);
-    assert_eq!(view.status_bar(), Err("no ïntf 128"));
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 5);
-    assert_eq!(player(&view), launched(THRUST, 5));
-    let list = drawn(&view);
+    let mut view = at_rest(catalog());
+    view.status_bar = Err("no ïntf 128".to_owned());
+    hold(&mut view, Key::Up, true);
+    ticked(&mut view, 5);
+    assert!(last_controls(&view).thrust, "flight goes on");
+    let list = flown(&view);
     let mut reason = DrawList::new();
     hud::draw_unavailable(&mut reason, "no ïntf 128", VIEW_SIZE.0);
     assert_eq!(list.iter().last(), reason.iter().next());
@@ -1597,4 +1440,96 @@ fn the_same_keys_fly_the_same_at_30_60_and_120_fps() {
     assert!(at_30.position.y < 0.0, "{at_30:?}");
     assert_eq!(fly(60), at_30);
     assert_eq!(fly(120), at_30);
+}
+
+/// `view` with its player's record lit as `lights` says and glowing at
+/// `glow`, shown from now on.
+fn lit(mut view: Faked, lights: Option<u8>, glow: u8) -> Faked {
+    super::faked_hud::changes(&mut view, |frame| {
+        frame.ships[0].drawn.lights = lights;
+        frame.ships[0].glow = glow;
+    });
+    view
+}
+
+/// The ship's sprites' image ids and blends `view`'s world draws.
+fn faked_ship_blends(view: &Faked) -> Vec<(i16, Blend)> {
+    super::faked_world::world_list(view)
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Sprite { image, blend, .. } if (2000..2300).contains(&image.id) => {
+                Some((image.id, *blend))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every command `view`'s world draws the glow, `rlëD` 2100, with.
+fn faked_glow_commands(view: &Faked) -> Vec<DrawCommand> {
+    super::faked_world::world_list(view)
+        .iter()
+        .filter(|command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 2100))
+        .cloned()
+        .collect()
+}
+
+/// The glow commands for a base of `base` at `tick`: the glow drawn by
+/// OR at the level `glow_level` gives over the ship's centre, on its
+/// frame, or none when it is hidden.
+fn faked_glow_for(view: &Faked, base: u8, tick: u64) -> Vec<DrawCommand> {
+    let frame = view.frame().expect("a sheet") % 36;
+    let center = view.camera().world_to_screen(view.shown_position());
+    glow_level(base, tick, &view.glow_rolls)
+        .map(|level| DrawCommand::Sprite {
+            image: ImageKey::sprite(2100, frame),
+            center,
+            tint: lights_tint(level),
+            blend: Blend::Or,
+        })
+        .into_iter()
+        .collect()
+}
+
+/// Every command `view`'s world draws the lights, `rlëD` 2200, with.
+fn faked_lights_commands(view: &Faked) -> Vec<DrawCommand> {
+    super::faked_world::world_list(view)
+        .iter()
+        .filter(|command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 2200))
+        .cloned()
+        .collect()
+}
+
+/// The tints `view` ORs the lights with.
+fn faked_lights_tints(view: &Faked) -> Vec<Color> {
+    faked_lights_commands(view)
+        .into_iter()
+        .filter_map(|command| match command {
+            DrawCommand::Sprite {
+                tint,
+                blend: Blend::Or,
+                ..
+            } => Some(tint),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The lights' alphas `view` draws: one, or none when they are off.
+fn faked_lights_alphas(view: &Faked) -> Vec<u8> {
+    faked_lights_tints(view).iter().map(|tint| tint.a).collect()
+}
+
+/// The radar's player position on `view`.
+fn faked_radar_player(view: &Faked) -> Point {
+    view.radar_shown(&view.frame).player
+}
+
+/// The stars `view` draws, in order.
+fn faked_stars(view: &Faked) -> Vec<DrawCommand> {
+    super::faked_world::world_list(view)
+        .iter()
+        .filter(|command| is_star(command))
+        .cloned()
+        .collect()
 }

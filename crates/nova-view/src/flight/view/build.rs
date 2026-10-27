@@ -521,19 +521,6 @@ impl<
         }
     }
 
-    /// The flight drawing the port's own `overlays`, the title and the
-    /// help line, which are off by default.
-    #[must_use]
-    pub fn with_overlays(self, overlays: FlightOverlays) -> Self {
-        Self { overlays, ..self }
-    }
-
-    /// The port's own overlays the flight draws.
-    #[must_use]
-    pub fn overlays(&self) -> FlightOverlays {
-        self.overlays
-    }
-
     /// The flight with the comm dialog listing `hail_options`.
     #[must_use]
     pub fn with_hail_options(self, hail_options: HailOptions) -> Self {
@@ -944,6 +931,19 @@ struct Opening {
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
+    /// The flight drawing the port's own `overlays`, the title and the
+    /// help line, which are off by default.
+    #[must_use]
+    pub fn with_overlays(self, overlays: FlightOverlays) -> Self {
+        Self { overlays, ..self }
+    }
+
+    /// The port's own overlays the flight draws.
+    #[must_use]
+    pub fn overlays(&self) -> FlightOverlays {
+        self.overlays
+    }
+
     /// The catalog the screen reads.
     #[must_use]
     pub fn catalog(&self) -> &C {
