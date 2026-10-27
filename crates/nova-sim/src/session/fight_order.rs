@@ -283,3 +283,50 @@ fn a_spent_shots_blast_lands_after_the_npcs_point_defence_and_before_their_picks
         assert_eq!(fired, expected, "{armor}: its point defence, then its pick");
     }
 }
+
+#[test]
+fn a_contact_hit_lands_before_a_spent_shots_blast_of_the_same_pass() {
+    // `_DoPlayGameWork` runs the collision passes (@0x43e70-0x44015)
+    // before `_HandleShot` (@0x44385). On pass 0 the player fires a flak
+    // shell straight up, its third move spending it 30 above the player on
+    // pass 2, and the NPC, 30 to the right of that and facing the player,
+    // fires its blaster at it. On pass 3 the NPC's shot meets the player
+    // in the collision passes, and then the shell's blast, of radius 40,
+    // lands on them both.
+    let flak = WeaponRecord {
+        count: 3,
+        speed: 1000,
+        blast_radius: 40,
+        flags: 0x8000,
+        ..blaster(128)
+    };
+    let catalog = arming(flak, blaster(129), 0);
+    let mut session = with_an_npc_at(&catalog, 780, 720, 225);
+    assert_eq!(session.npcs()[0].state.position, Vec2::new(30.0, -30.0));
+    session.hold_trigger(FIRE);
+    hold(&mut session, FIRE);
+    work(&mut session, &catalog, Controls::default());
+    session.hold_trigger(Trigger::default());
+    hold(&mut session, Trigger::default());
+    work(&mut session, &catalog, Controls::default());
+    work(&mut session, &catalog, Controls::default());
+    session.take_combat_events();
+    work(&mut session, &catalog, Controls::default());
+    let hits: Vec<(ShipRef, Option<WeaponId>)> = session
+        .take_combat_events()
+        .iter()
+        .filter_map(|event| match *event {
+            CombatEvent::Hit { ship, weapon, .. } => Some((ship, weapon)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        hits,
+        [
+            (ShipRef::Player, Some(WeaponId(129))),
+            (ShipRef::Player, Some(WeaponId(128))),
+            (NPC, Some(WeaponId(128))),
+        ],
+        "the contact, then the blast"
+    );
+}
