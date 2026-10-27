@@ -98,7 +98,8 @@ impl Kept {
             | Goal::Mine
             | Goal::Scoop
             | Goal::Plunder { .. }
-            | Goal::CountWait => Self::Stop,
+            | Goal::CountWait
+            | Goal::AttackStellar(_) => Self::Stop,
         }
     }
 }

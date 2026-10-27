@@ -1421,6 +1421,7 @@ impl Combatant {
             plundering: false,
             mining: false,
             emerging: false,
+            jumping_in: false,
             cloak_scanner: false,
             has_cloak: false,
             jamming: nova_sim::combat::jamming::Jamming::NONE,

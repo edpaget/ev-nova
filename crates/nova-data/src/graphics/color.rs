@@ -23,6 +23,19 @@ pub(crate) fn rgb555(value: u16) -> [u8; 4] {
     [widen(10), widen(5), widen(0), 255]
 }
 
+/// The 16-bit `xRRRRRGGGGGBBBBB` value a decoded pixel lands as in a
+/// 16-bit QuickDraw world: each channel's top five bits. A clear pixel
+/// (alpha 0), which no picture opcode covered, is the white the world was
+/// erased to.
+pub(crate) fn to_rgb555(rgba: [u8; 4]) -> u16 {
+    if rgba[3] == 0 {
+        return 0x7FFF;
+    }
+    let [r, g, b, _] = rgba.map(|c| u16::from(c >> 3));
+    // The fields share no bits, so `+` is the same as `|`.
+    (r << 10) + (g << 5) + b
+}
+
 /// A colour table, indexed by the pixel values it maps.
 #[derive(Clone, Debug)]
 pub(crate) struct ColorTable {
@@ -92,6 +105,31 @@ mod tests {
         assert_eq!(rgb555(0x4210), [132, 132, 132, 255]);
         assert_eq!(rgb555((1 << 10) | (2 << 5) | 0b11), [8, 16, 24, 255]);
         assert_eq!(rgb555((5 << 10) | (9 << 5) | 0b1_1110), [41, 74, 247, 255]);
+    }
+
+    #[test]
+    fn to_rgb555_keeps_each_channels_top_five_bits() {
+        assert_eq!(to_rgb555([0, 0, 0, 255]), 0x0000);
+        assert_eq!(to_rgb555([0xFF, 0xFF, 0xFF, 255]), 0x7FFF);
+        assert_eq!(to_rgb555([0xF8, 0xF8, 0xF8, 255]), 0x7FFF);
+        assert_eq!(to_rgb555([0xF7, 0xFF, 0xFF, 255]), 0x7BFF);
+        assert_eq!(to_rgb555([0xFF, 0, 0, 255]), 0x7C00);
+        assert_eq!(to_rgb555([0, 0xFF, 0, 255]), 0x03E0);
+        assert_eq!(to_rgb555([0, 0, 0xFF, 255]), 0x001F);
+        assert_eq!(
+            to_rgb555([0x12, 0x34, 0x56, 255]),
+            (0b10 << 10) | (0b110 << 5) | 0b1010
+        );
+        // Partly clear pixels keep their colour; fully clear ones are white.
+        assert_eq!(
+            to_rgb555([0x08, 0x10, 0x18, 1]),
+            (0b1 << 10) | (0b10 << 5) | 0b11
+        );
+        assert_eq!(to_rgb555([0, 0, 0, 0]), 0x7FFF);
+        // Round trips through rgb555.
+        for value in [0x0000, 0x7FFF, 0x1234, 0x7C1F] {
+            assert_eq!(to_rgb555(rgb555(value)), value);
+        }
     }
 
     fn table(bytes: &[u8]) -> Result<ColorTable, GraphicsError> {

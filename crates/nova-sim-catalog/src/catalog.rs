@@ -156,6 +156,14 @@ pub struct LandingSite {
     /// master without one (`_LoadMasterStellarSprite` @0x1ed8c-0x1ed97,
     /// `_GetStellarSpriteXSize` @0xaced-0xacff).
     pub type_counts_frames: bool,
+    /// Whether its `DeadType`'s `spïn` gives a frame count above 0,
+    /// `xTiles` × `yTiles`, as [`type_counts_frames`](Self::type_counts_frames)
+    /// for its `Type`: a sprite slot cloning a master without one keeps
+    /// the frame it showed (`_SWSetCurrentFrameIndex` @0xa90e7-0xa90ee;
+    /// stellar-fidelity phase 8). `true` where
+    /// [`dead_graphic`](Self::dead_graphic) is `None`, so it means
+    /// something only beside it.
+    pub dead_counts_frames: bool,
     /// Its `CustSndID`, raw, as [`GateSite::exit_angle`]: the heading an
     /// NPC comes out of it on when it is a hypergate or wormhole and the
     /// value is 0 to 359 (`nova_sim::gate::exit_heading`).
@@ -167,6 +175,11 @@ pub struct LandingSite {
     /// when not 0 (`nova_sim::map_panel`; `_MapDialogUpdate`
     /// @0x1061f-0x106a9 reads it at runtime +0x46c).
     pub gravity: i16,
+    /// Its `Fee`, raw: the Bible's "fee that is deducted from the player's
+    /// credits when landing on this stellar". `_HandlePlayerDockRequest`
+    /// and `_HandlePlayerDockApproach` read it at runtime +0x38;
+    /// `nova_sim::landing::fee_due` decides when it is due.
+    pub fee: i32,
     /// Its animation fields and frame counts, which a hypergate's sprite
     /// reads (`nova_sim::gate_sprite`).
     pub animation: SiteAnimation,
@@ -1994,6 +2007,10 @@ pub trait PilotCatalog {
     /// Every `spöb` that can be read, by ascending ID, with its `Flags`,
     /// raw.
     fn stellar_flags(&self) -> Vec<(StellarId, u32)>;
+    /// Every `spöb` that can be read, by ascending ID, whose `Weapon` names
+    /// a `wëap` (128 or more), with it. A `Weapon` of 127 or less is none
+    /// (`_LoadObjectData` @0x7779f-0x777b2): such a stellar has no gun.
+    fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)>;
     /// The first `chär`'s `DatePrefix` and `DateSuffix`, or none (both
     /// empty) when there is no `chär` or it does not decode.
     fn date_affixes(&self) -> DateAffixes;
@@ -2010,6 +2027,17 @@ pub trait PilotCatalog {
     /// 1000), or `None` when it cannot be read: the frames the original's
     /// rebuild gives a sprite slot it left empty.
     fn fallback_frame_size(&self) -> Option<(u32, u32)>;
+    /// Whether graphic type 0's `spïn` (1000) gives a frame count above 0,
+    /// `xTiles` × `yTiles`: a slot the original's rebuild fills with it
+    /// shows no frame when it does not (`_SWSetCurrentFrameIndex`
+    /// @0xa90e7-0xa90ee, called @0x332d0; stellar-fidelity phase 8).
+    /// Means something only beside a [`fallback_frame_size`] that is
+    /// `Some`. `true` unless overridden, as every stock `spïn` counts.
+    ///
+    /// [`fallback_frame_size`]: PilotCatalog::fallback_frame_size
+    fn fallback_counts_frames(&self) -> bool {
+        true
+    }
     /// Every `mïsn` that can be read, by ascending ID.
     fn missions(&self) -> Vec<MissionRecord>;
     /// What the screens show of every `mïsn` that can be read, by
@@ -2152,6 +2180,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).stellar_flags()
     }
 
+    fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
+        (**self).stellar_weapons()
+    }
+
     fn date_affixes(&self) -> DateAffixes {
         (**self).date_affixes()
     }
@@ -2166,6 +2198,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         (**self).fallback_frame_size()
+    }
+
+    fn fallback_counts_frames(&self) -> bool {
+        (**self).fallback_counts_frames()
     }
 
     fn missions(&self) -> Vec<MissionRecord> {
@@ -2292,6 +2328,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
         (**self).stellar_flags()
     }
 
+    fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
+        (**self).stellar_weapons()
+    }
+
     fn date_affixes(&self) -> DateAffixes {
         (**self).date_affixes()
     }
@@ -2306,6 +2346,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         (**self).fallback_frame_size()
+    }
+
+    fn fallback_counts_frames(&self) -> bool {
+        (**self).fallback_counts_frames()
     }
 
     fn missions(&self) -> Vec<MissionRecord> {
@@ -2579,6 +2623,11 @@ mod tests {
     }
 
     /// Ship 128 is average; system 130 alone exists.
+    #[test]
+    fn a_catalog_that_does_not_say_counts_graphic_type_0s_frames() {
+        assert!(One.fallback_counts_frames(), "every stock spïn counts");
+    }
+
     struct One;
 
     impl PilotCatalog for One {
@@ -2676,9 +2725,11 @@ mod tests {
                 dead_graphic: Some(5),
                 dead_frame_size: Some((60, 60)),
                 type_counts_frames: true,
+                dead_counts_frames: true,
                 exit_angle: -1,
                 tribute: 0,
                 gravity: 0,
+                fee: 0,
                 animation: crate::catalog::SiteAnimation::default(),
             }]
         }
@@ -2771,6 +2822,11 @@ mod tests {
         /// Stellar 128, uninhabited.
         fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
             vec![(StellarId(128), 0x20)]
+        }
+
+        /// Stellar 128, armed with 196.
+        fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
+            vec![(StellarId(128), WeaponId(196))]
         }
 
         /// Stellar 128, back after 7 days.
@@ -2962,6 +3018,7 @@ mod tests {
             format!("{:?}", catalog.first_stellars()),
             format!("{:?}", catalog.boom_sounds()),
             format!("{:?}", catalog.voices()),
+            format!("{:?}", catalog.stellar_weapons()),
         ]
     }
 
@@ -3035,6 +3092,10 @@ mod tests {
         }
 
         fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+            Vec::new()
+        }
+
+        fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
             Vec::new()
         }
 
@@ -3175,6 +3236,7 @@ mod tests {
             direct[37].contains("GovtId(128): GovtVoice { set: Some(3)"),
             "forwarded, not a default: {direct:?}"
         );
+        assert_eq!(direct[38], "[(StellarId(128), WeaponId(196))]");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

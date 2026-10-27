@@ -85,7 +85,8 @@ pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
 }
 
 /// How long the message for `refusal` stays: [`TOO_FAR_TICKS`] too far
-/// or too fast, [`LANDING_TICKS`] denied, not landable or cloaked, and
+/// or too fast, [`LANDING_TICKS`] denied, not landable, cloaked or short
+/// of the fee (`_DisplayComm` @0x67c88), and
 /// [`MESSAGE_TICKS`] for the silent ones. A disabled ship's refusal, and
 /// one where the land key makes no dock request (jumping, no stellars,
 /// nothing landable), shows no message ([`refusal_message`]), so its
@@ -96,6 +97,7 @@ pub fn landing_refusal_ticks(refusal: &LandingRefusal) -> u16 {
         LandingRefusal::TooFar { .. } | LandingRefusal::TooFast { .. } => TOO_FAR_TICKS,
         LandingRefusal::Denied { .. }
         | LandingRefusal::NotLandable { .. }
+        | LandingRefusal::CannotPayFee { .. }
         | LandingRefusal::Cloaked => LANDING_TICKS,
         LandingRefusal::Jumping
         | LandingRefusal::Disabled
@@ -652,11 +654,22 @@ pub fn hyperspace_hint(map: &str, jump: &str) -> String {
 /// Texts to say, each with its ticks.
 pub(super) type Said = Vec<(String, u16)>;
 
-/// The name of stellar `id` in `scene`, if it shows it: empty otherwise.
-pub(super) fn stellar_name(scene: Option<&SystemScene>, id: StellarId) -> &str {
+/// The name of stellar `id`: its name in `scene` if the scene holds it,
+/// or, for one the scene doesn't hold, such as one another system owns or
+/// a landed `M`'s in another system, its `spöb` name from `session`
+/// (`Session::stellar_name`), as the original reads a stellar's name with
+/// no check of the system (`_DrawStatusNav` @0x4a0fd-0x4a149). None for
+/// a stellar with neither. The nav readout, the landing refusals and
+/// [`message_text`] all name a stellar through this.
+pub(super) fn stellar_name(
+    scene: Option<&SystemScene>,
+    session: &Session,
+    id: StellarId,
+) -> Option<String> {
     scene
         .and_then(|scene| scene.stellars().iter().find(|named| named.id == id))
-        .map_or("", |named| named.name.as_str())
+        .map(|named| named.name.clone())
+        .or_else(|| session.stellar_name(id))
 }
 
 /// What the message line says of `message`, the names read from
@@ -672,27 +685,30 @@ pub(super) fn message_text(
     chance: &mut dyn Chance,
 ) -> Option<String> {
     let ship = || session.pilot().ship_name().unwrap_or_default();
+    let named = |stellar| stellar_name(scene, session, stellar).unwrap_or_default();
     match message {
         SimMessage::DockRequested { stellar, kind } => Some(request_line(
             *kind,
-            stellar_name(scene, *stellar),
+            &named(*stellar),
             ship(),
             RequestPicks::roll(*kind, chance),
         )),
-        SimMessage::DockCleared { stellar, kind } => Some(approach_greeting(
+        SimMessage::DockCleared { stellar, kind, fee } => Some(approach_greeting(
             *kind,
-            stellar_name(scene, *stellar),
+            &named(*stellar),
             ship(),
             GreetingPicks::roll(*kind, chance),
+            *fee,
+            session.rules().source_for(nova_sim::RuleKey::PayMillions),
         )),
         SimMessage::TookOff { stellar, lead } => Some(take_off_greeting(
             *lead,
-            stellar_name(scene, *stellar),
+            &named(*stellar),
             &session.long_date_text(),
         )),
         SimMessage::Tutorial(TutorialHint::Land { stellar, station }) => Some(land_hint(
             *station,
-            stellar_name(scene, *stellar),
+            &named(*stellar),
             &key_label(LAND_KEY).unwrap_or_default(),
         )),
         _ => sim_message_text(message, session),
@@ -847,6 +863,18 @@ pub const LAND_ON: &str = "land on ";
 pub const DOCKING_DENIED: &str = "Docking request denied.";
 /// `STR#` 2002 #83.
 pub const LANDING_DENIED: &str = "Landing request denied.";
+/// `STR#` 2002 #61: the fee refusal's opening (@0x669e9-0x669fc).
+pub const NOT_ENOUGH: &str = "You don't have enough";
+/// `_creditsCString` (0x184560): the word the fee refusal and the
+/// approach greeting's fee line put after the number or #61, plural
+/// whatever the amount (@0x66a0f-0x66a1b, @0x64e34-0x64e40).
+pub const CREDITS: &str = "credits";
+/// `STR#` 2002 #62: the fee refusal's tail at a hypergate (@0x66a40).
+pub const TO_PAY_HYPERGATE_FEE: &str = "to pay the hypergate fee.";
+/// `STR#` 2002 #63: the fee refusal's tail at a station (@0x66a50).
+pub const TO_PAY_DOCKING_FEE: &str = "to pay the docking fee.";
+/// `STR#` 2002 #64: the fee refusal's tail elsewhere (@0x66a60).
+pub const TO_PAY_LANDING_FEE: &str = "to pay the landing fee.";
 /// `STR#` 2002 #89: why a ship cannot dock at a station.
 pub const HOSTILE_STATION: &str = "The station's hull integrity is too unstable.";
 /// `STR#` 2002 #90: why a ship cannot land on a planet.
@@ -885,6 +913,12 @@ pub const YOU_ARE_CLEARED_TO_LAND: &str = "You are cleared to land.";
 pub const COMMENCE_FINAL_APPROACH: &str = "Commence final approach.";
 /// `STR#` 2002 #101.
 pub const WELCOME_TO: &str = "Welcome to";
+/// `STR#` 2002 #103: the greeting's fee line at a station (@0x64dca).
+pub const FEE_IS_DOCKING: &str = "[Docking fee is";
+/// `STR#` 2002 #104: the greeting's fee line elsewhere (@0x64dda).
+pub const FEE_IS_LANDING: &str = "[Landing fee is";
+/// `STR#` 2002 #105: the greeting's fee line's end (@0x64e45-0x64e58).
+pub const FEE_END: &str = ".]";
 
 /// The picks that word the dock request's line ([`request_line`]): the
 /// rolls the original makes for it (`_HandlePlayerDockRequest`
@@ -972,14 +1006,27 @@ pub fn request_line(kind: DockKind, stellar: &str, ship: &str, picks: RequestPic
 /// its greeting ends there (@0x64a59, @0x64e4d). Otherwise `picks.welcome` 0 adds
 /// [`COMMENCE_FINAL_APPROACH`], and any other [`WELCOME_TO`], " ", the
 /// stellar's name and ". ". For example "Kestrel, you're cleared to land.
-/// Welcome to Earth. ". The fee line that may follow is
-/// rdm:task/landing-fee's.
+/// Welcome to Earth. ".
+///
+/// Then, when `fee` is due there (`Fee` above 0 and not dominated,
+/// @0x64d87-0x64d96), the fee line (@0x64da6-0x64e58): "  ",
+/// [`FEE_IS_DOCKING`] at a station or [`FEE_IS_LANDING`] elsewhere, " ",
+/// the fee with its commas (`_StrcatCommaNumber` @0x64e21, its millions
+/// by `millions`,
+/// [`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)), " ",
+/// [`CREDITS`] and [`FEE_END`]: "… Welcome to Earth.   [Landing fee is
+/// 1,000 credits.]". A hypergate's greeting has none: it ends before the
+/// fee block (@0x64a59 → 0x64e5d), so `STR#` 2002 #102 "[Hypergate fee
+/// is" is never shown and is left out. A wormhole is no hypergate here,
+/// and gets the station's or the planet's.
 #[must_use]
 pub fn approach_greeting(
     kind: DockKind,
     stellar: &str,
     ship: &str,
     picks: GreetingPicks,
+    fee: Option<i64>,
+    millions: RuleSource,
 ) -> String {
     let (lead, cleared, you_are, space) = match kind {
         DockKind::Hypergate => (
@@ -1007,11 +1054,24 @@ pub fn approach_greeting(
         _ => format!("{you_are}{space}"),
     };
     if kind == DockKind::Hypergate {
-        opening
-    } else if picks.welcome == 0 {
+        return opening;
+    }
+    let greeting = if picks.welcome == 0 {
         format!("{opening}{COMMENCE_FINAL_APPROACH}")
     } else {
         format!("{opening}{WELCOME_TO} {stellar}. ")
+    };
+    match fee {
+        Some(fee) => {
+            let lead = if kind == DockKind::Station {
+                FEE_IS_DOCKING
+            } else {
+                FEE_IS_LANDING
+            };
+            let fee = comma_number(fee, millions);
+            format!("{greeting}  {lead} {fee} {CREDITS}{FEE_END}")
+        }
+        None => greeting,
     }
 }
 
@@ -1032,6 +1092,10 @@ pub fn approach_greeting(
 ///   [`HOSTILE_STATION`] or [`HOSTILE_PLANET`].
 /// - Denied (@0x67ea3-0x67eea): [`HYPERGATE_DENIED`] at a hypergate only;
 ///   a wormhole says the station's or the planet's.
+/// - Short of the fee (@0x669e9-0x66a60): [`NOT_ENOUGH`], " ", [`CREDITS`],
+///   " ", then [`TO_PAY_HYPERGATE_FEE`] at a hypergate, else
+///   [`TO_PAY_DOCKING_FEE`] at a station or [`TO_PAY_LANDING_FEE`], so a
+///   wormhole says the station's or the planet's.
 #[must_use]
 pub fn refusal_message(
     refusal: &LandingRefusal,
@@ -1080,6 +1144,14 @@ pub fn refusal_message(
             } else {
                 pick(station, DOCKING_DENIED, LANDING_DENIED)
             }
+        }
+        LandingRefusal::CannotPayFee { station, .. } => {
+            let tail = if gate == Some(GateKind::Hypergate) {
+                TO_PAY_HYPERGATE_FEE
+            } else {
+                pick(station, TO_PAY_DOCKING_FEE, TO_PAY_LANDING_FEE)
+            };
+            return Some(format!("{NOT_ENOUGH} {CREDITS} {tail}"));
         }
     };
     Some(text.to_owned())
@@ -1401,10 +1473,83 @@ mod tests {
         }
     }
 
+    /// The greeting at Earth, of `kind`, for the Kestrel, picking
+    /// opening 1 and `welcome`, with `fee` due, its millions by
+    /// `millions`.
+    fn charged(kind: DockKind, welcome: u16, fee: Option<i64>, millions: RuleSource) -> String {
+        approach_greeting(
+            kind,
+            "Earth",
+            "Kestrel",
+            GreetingPicks {
+                opening: 1,
+                welcome,
+            },
+            fee,
+            millions,
+        )
+    }
+
+    #[test]
+    fn a_greeting_with_a_fee_due_ends_with_the_fee_line() {
+        // "  " (@0x64da6), #103/#104, " ", `_StrcatCommaNumber(Fee)`
+        // (@0x64e21), " ", `_creditsCString`, #105 (@0x64e45-0x64e58).
+        let engine = RuleSource::Engine;
+        assert_eq!(
+            charged(DockKind::Planet, 1, Some(1000), engine),
+            "Kestrel, you're cleared to land. Welcome to Earth.   [Landing fee is 1,000 credits.]"
+        );
+        assert_eq!(
+            charged(DockKind::Planet, 0, Some(1000), engine),
+            "Kestrel, you're cleared to land. Commence final approach.  [Landing fee is 1,000 credits.]"
+        );
+        assert_eq!(
+            charged(DockKind::Station, 0, Some(1000), engine),
+            "Kestrel, you're cleared to dock. Commence final approach.  [Docking fee is 1,000 credits.]"
+        );
+        assert!(
+            charged(DockKind::Planet, 0, Some(1), engine).ends_with(" 1 credits.]"),
+            "always plural"
+        );
+        assert!(
+            charged(DockKind::Planet, 0, Some(2_500_000), engine).ends_with(" 2.50M credits.]")
+        );
+        assert!(
+            charged(DockKind::Planet, 0, Some(2_500_000), RuleSource::Bible)
+                .ends_with(" 2,500,000 credits.]")
+        );
+        assert_eq!(
+            [FEE_IS_DOCKING, FEE_IS_LANDING, FEE_END],
+            ["[Docking fee is", "[Landing fee is", ".]"]
+        );
+    }
+
+    #[test]
+    fn a_hypergates_greeting_and_one_with_no_fee_have_no_fee_line() {
+        // A hypergate's greeting ends before the fee block (@0x64a59).
+        let engine = RuleSource::Engine;
+        assert_eq!(
+            charged(DockKind::Hypergate, 0, Some(1000), engine),
+            charged(DockKind::Hypergate, 0, None, engine)
+        );
+        assert!(!charged(DockKind::Hypergate, 0, Some(1000), engine).contains('['));
+        assert_eq!(
+            charged(DockKind::Planet, 1, None, engine),
+            "Kestrel, you're cleared to land. Welcome to Earth. "
+        );
+    }
+
     #[test]
     fn every_pick_of_the_greeting_reads_as_the_original() {
         let greeting = |kind, opening, welcome| {
-            approach_greeting(kind, "Earth", "Kestrel", GreetingPicks { opening, welcome })
+            approach_greeting(
+                kind,
+                "Earth",
+                "Kestrel",
+                GreetingPicks { opening, welcome },
+                None,
+                RuleSource::Engine,
+            )
         };
         for (kind, opening, welcome, text) in [
             (
@@ -1684,6 +1829,48 @@ mod tests {
                 "The station's hull integrity is too unstable.",
                 "The planet's environment is too hostile.",
             ]
+        );
+    }
+
+    #[test]
+    fn a_pilot_who_cannot_pay_is_told_which_fee() {
+        // #61, " ", `_creditsCString`, " ", then #62 at a hypergate (its
+        // bit tested first), else #63 at a station, else #64
+        // (@0x669e9-0x66a60): a wormhole takes the station's or planet's.
+        let stellar = StellarId(128);
+        let fee = |station, gate| {
+            refusal_message(
+                &LandingRefusal::CannotPayFee { stellar, station },
+                gate,
+                "Earth",
+            )
+        };
+        let landing = "You don't have enough credits to pay the landing fee.";
+        let docking = "You don't have enough credits to pay the docking fee.";
+        let hypergate = "You don't have enough credits to pay the hypergate fee.";
+        assert_eq!(fee(false, None).as_deref(), Some(landing));
+        assert_eq!(fee(true, None).as_deref(), Some(docking));
+        for station in [false, true] {
+            assert_eq!(
+                fee(station, Some(GateKind::Hypergate)).as_deref(),
+                Some(hypergate)
+            );
+        }
+        assert_eq!(
+            fee(false, Some(GateKind::Wormhole)).as_deref(),
+            Some(landing)
+        );
+        assert_eq!(
+            fee(true, Some(GateKind::Wormhole)).as_deref(),
+            Some(docking)
+        );
+        assert_eq!(
+            landing_refusal_ticks(&LandingRefusal::CannotPayFee {
+                stellar,
+                station: false,
+            }),
+            250,
+            "`_DisplayComm(text, 0xfa, …)` @0x67c88"
         );
     }
 

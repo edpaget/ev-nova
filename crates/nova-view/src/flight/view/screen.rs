@@ -214,7 +214,7 @@ impl<
             self.advance_death_fade(dt);
             return;
         }
-        self.elapsed += dt;
+        self.step_stellars(dt);
         self.held_keys_frame();
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);

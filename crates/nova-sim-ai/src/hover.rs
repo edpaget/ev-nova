@@ -23,10 +23,16 @@
 //!
 //! Unlike [`targetable`](crate::targeting::targetable) it has no check for
 //! a ship emerging from a gate. Its hit box is the sprite's rect (+0x1a),
-//! grown by [`CLICK_MARGIN`](crate::navigation::CLICK_MARGIN) on every
-//! side when it is no taller than
-//! [`SMALL_SPRITE_HEIGHT`](crate::navigation::SMALL_SPRITE_HEIGHT)
-//! (@0x38183-0x381ba), the rule a click on a stellar uses. The player's own
+//! placed with its top left at the centre less half the frame, halved as
+//! integers (`_HandleShipDisplay` @0x2cd1c-0x2ce31), grown by
+//! [`CLICK_MARGIN`](crate::navigation::CLICK_MARGIN) on every side when it
+//! is no wider than
+//! [`SMALL_SPRITE_WIDTH`](crate::navigation::SMALL_SPRITE_WIDTH)
+//! (@0x38183-0x381a8), and tested by `_PtInRect` (@0x381ba), which leaves
+//! the right and bottom edges out: the rule a click on a stellar uses
+//! ([`SpriteRect`](crate::navigation::SpriteRect)). The original places the
+//! rect at whole pixels from the player; the box here is around the
+//! view's drawn centre, as the view draws the ship. The player's own
 //! ship counts only while it has a target (+0x70 not -1,
 //! @0x381c3-0x381d5). The other-system check (@0x38145) has no engine
 //! counterpart: every NPC is in the player's system.
@@ -40,7 +46,7 @@ use crate::catalog::StellarId;
 use crate::cloak::Scanner;
 use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
-use crate::navigation::half_box;
+use crate::navigation::SpriteRect;
 use crate::targeting::type_targetable;
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -89,13 +95,12 @@ pub fn hover_gate(npc: &Npc, scanner: Scanner) -> bool {
         && type_targetable(npc, scanner)
 }
 
-/// Whether `at` is in `drawn`'s hit box, edges included (see the module
-/// docs).
+/// Whether `at` is in `drawn`'s hit box: the stellars' rule
+/// ([`SpriteRect::holds`]) over the frame placed around its centre
+/// ([`SpriteRect::centred`]), see the module docs.
 #[must_use]
 pub fn in_box(at: Vec2, drawn: DrawnBox) -> bool {
-    let (half_width, half_height) = half_box(Some((drawn.width, drawn.height)));
-    let offset = at - drawn.centre;
-    offset.x.abs() <= half_width && offset.y.abs() <= half_height
+    SpriteRect::centred(drawn.centre, (drawn.width, drawn.height)).holds(at)
 }
 
 /// The ship under `at` among the player's (only when `targeting`, the
@@ -275,21 +280,46 @@ mod tests {
         assert_eq!(ship_under(&npcs, BLIND, false, Vec2::ZERO, &drawn), None);
     }
 
-    #[test]
-    fn a_box_no_taller_than_47_grows_by_16_and_a_48_high_one_does_not() {
-        let sized = |height| DrawnBox {
+    /// A box of `width` × `height` centred at (100, 100).
+    fn sized(width: u32, height: u32) -> DrawnBox {
+        DrawnBox {
             centre: Vec2::new(100.0, 100.0),
-            width: 20,
+            width,
             height,
-        };
-        // Half of 20 wide is 10, plus the 16-pixel margin.
-        assert!(in_box(Vec2::new(126.0, 100.0), sized(47)));
-        assert!(!in_box(Vec2::new(126.5, 100.0), sized(47)));
-        assert!(in_box(Vec2::new(100.0, 100.0 - 23.5 - 16.0), sized(47)));
-        assert!(in_box(Vec2::new(110.0, 124.0), sized(48)), "edges count");
-        assert!(!in_box(Vec2::new(110.5, 100.0), sized(48)));
-        assert!(!in_box(Vec2::new(100.0, 124.5), sized(48)));
-        assert!(in_box(Vec2::new(90.0, 76.0), sized(48)));
+        }
+    }
+
+    #[test]
+    fn a_ships_box_margin_reads_its_width() {
+        // 40 wide spans [80, 120) and 60 high [70, 130): 16 more a side.
+        let tall = sized(40, 60);
+        for (x, y) in [(64.0, 100.0), (135.5, 100.0), (100.0, 54.0), (100.0, 145.5)] {
+            assert!(in_box(Vec2::new(x, y), tall), "({x}, {y})");
+        }
+        for (x, y) in [(63.5, 100.0), (136.0, 100.0), (100.0, 53.5), (100.0, 146.0)] {
+            assert!(!in_box(Vec2::new(x, y), tall), "({x}, {y})");
+        }
+        // 60 wide spans [70, 130) and 40 high [80, 120), with no margin.
+        let wide = sized(60, 40);
+        assert!(in_box(Vec2::new(70.0, 80.0), wide));
+        for (x, y) in [(69.5, 100.0), (100.0, 79.5), (100.0, 120.5)] {
+            assert!(!in_box(Vec2::new(x, y), wide), "({x}, {y})");
+        }
+        let at_47 = sized(47, 100);
+        assert!(in_box(Vec2::new(100.0, 34.0), at_47), "47 wide gets it");
+        assert!(
+            !in_box(Vec2::new(100.0, 49.5), sized(48, 100)),
+            "48 does not"
+        );
+    }
+
+    #[test]
+    fn a_ships_right_and_bottom_edges_miss() {
+        let ship = sized(60, 60);
+        assert!(in_box(Vec2::new(70.0, 70.0), ship), "left and top count");
+        assert!(in_box(Vec2::new(129.5, 129.5), ship));
+        assert!(!in_box(Vec2::new(130.0, 100.0), ship), "right");
+        assert!(!in_box(Vec2::new(100.0, 130.0), ship), "bottom");
     }
 
     #[test]

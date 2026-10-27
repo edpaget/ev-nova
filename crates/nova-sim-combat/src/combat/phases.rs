@@ -9,6 +9,7 @@
 use super::asteroid_walk::AsteroidField;
 use super::ion::IonLockout;
 use super::lineup::reread;
+use super::stellar::StellarTarget;
 use super::stellar_hazards::StellarHazards;
 use super::{
     Combat, Field, Fighter, Firers, GamePass, Rules, Scenery, ShipRef, Sides, Target, regenerate,
@@ -331,7 +332,11 @@ impl Combat {
     /// ([`Ion::shed`](super::ion::Ion::shed)). Every ship has regenerated and
     /// been displayed already, at its own step ([`Combat::display_player`],
     /// [`Combat::handle_npcs`]): a breakup a beam begins starts at the
-    /// ship's next display step.
+    /// ship's next display step. A planet-type beam strikes `stellars`
+    /// only by the Bible's reading of
+    /// [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)
+    /// ([`beam_stellar`](super::beam_stellar)); their strikes are taken
+    /// with [`Combat::take_stellar_strikes`].
     ///
     /// It lends the beams no asteroid field: it is [`Combat::close_tick_in`]
     /// with none.
@@ -339,20 +344,25 @@ impl Combat {
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
+        stellars: &mut [StellarTarget],
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.close_tick_in(fighters, arena, None, chance);
+        self.close_tick_in(fighters, arena, stellars, None, chance);
     }
 
     /// [`Combat::close_tick`] with `field` lent to the beams: each beam
     /// whose ship pass hit nothing runs `_HandleBeams`' asteroid pass on
     /// it as its turn comes, before the next beam is tested
     /// ([`asteroid_beam`](super::asteroid_beam)), so a later beam meets
-    /// what an earlier one left, its fragments included.
+    /// what an earlier one left, its fragments included. A beam a stellar
+    /// stopped (the Bible's reading of
+    /// [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)) hit no ship,
+    /// so it runs the asteroid pass too, short of the stellar.
     pub fn close_tick_in(
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
+        stellars: &mut [StellarTarget],
         mut field: Option<AsteroidField<'_>>,
         chance: &mut (impl Chance + ?Sized),
     ) {
@@ -378,12 +388,15 @@ impl Combat {
             // (`_HandleBeams` @0x316a1), so a later beam's filter reads the
             // escort an earlier one took out of the player's fleet.
             for index in 0..self.beams.len() {
+                let (pass_through, beam_planet_flag) = self.hit_readings();
                 let sides = Sides {
                     targets: &targets,
                     govts: arena.govts,
-                    pass_through: self.pass_through,
+                    pass_through,
+                    beam_planet_flag,
                 };
-                let Some(hit) = self.beam_hit(index, fighters, &sides, pass.beam_damage()) else {
+                let among = (&*fighters, &mut *stellars);
+                let Some(hit) = self.beam_hit(index, among, &sides, pass.beam_damage()) else {
                     if let Some(field) = field.as_mut() {
                         self.cut_asteroids(index, fighters, field, pass, chance);
                     }

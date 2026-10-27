@@ -157,6 +157,11 @@ pub enum SimMessage {
         stellar: StellarId,
         /// How the greeting words it.
         kind: DockKind,
+        /// The landing fee due there, when one is
+        /// (`nova_sim::landing::fee_due`: a `Fee` above 0 at a stellar
+        /// not dominated, @0x64d87-0x64d96): the greeting's fee line
+        /// states it, unless the stellar is a hypergate.
+        fee: Option<i64>,
     },
     /// The player ejected into an escape ship: "Escaping in" (`STR#` 2002
     /// #52), a space, the ship's shipyard long name and a full stop
@@ -446,6 +451,11 @@ mod tests {
             ship_name: None,
             fine: 0,
         };
+        let greeted = SimMessage::DockCleared {
+            stellar: StellarId(128),
+            kind: DockKind::Hypergate,
+            fee: None,
+        };
         let cases = [
             (SimMessage::Arrived(SystemId(128)), 240),
             (SimMessage::Buoy("Message Buoy: hello.".into()), 480),
@@ -511,13 +521,7 @@ mod tests {
                 SimMessage::ScanHail("Ship 128:  Kestrel, halt.".to_owned()),
                 400,
             ),
-            (
-                SimMessage::DockCleared {
-                    stellar: StellarId(128),
-                    kind: DockKind::Hypergate,
-                },
-                250,
-            ),
+            (greeted, 250),
             (
                 SimMessage::IllegalJunk {
                     scanner: ShipId(128),

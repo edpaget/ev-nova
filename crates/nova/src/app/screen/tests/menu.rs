@@ -1911,6 +1911,68 @@ fn the_logo_picks_on_the_effects_chance_given_before_or_after_the_menu() {
     }
 }
 
+/// A source whose draws are always 0, recording each `below` bound.
+#[derive(Default)]
+struct Zeros(Vec<u32>);
+
+impl nova_sim::Chance for Zeros {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        self.0.push(n);
+        0
+    }
+
+    fn roll(&mut self, _sides: u16) -> u16 {
+        0
+    }
+}
+
+/// System 128 holding stellar 128 at (0, 0), whose `spïn` 1000 names a
+/// 4-frame `rlëD`, each next frame random (`Flags2` 0x0002) every tick.
+fn flickering_data() -> Rc<GameData> {
+    let sheet = (0..4)
+        .fold(RledBuilder::new(1, 1), |sheet, _| {
+            sheet.frame(|f| f.line().pixels(&[0x7C00]))
+        })
+        .build();
+    let mut spin = vec![0; Spin::SIZE.expect("fixed")];
+    for (at, value) in [(0x00, 1000_i16), (0x04, 1), (0x06, 1), (0x08, 2), (0x0A, 2)] {
+        spin[at..at + 2].copy_from_slice(&value.to_be_bytes());
+    }
+    let mut stellar = vec![0; Stellar::SIZE.expect("fixed")];
+    stellar[0x20..0x22].copy_from_slice(&0x0002_u16.to_be_bytes());
+    stellar[0x22..0x24].copy_from_slice(&1_i16.to_be_bytes());
+    loaded(
+        &ForkBuilder::new()
+            .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
+            .resource(RLED, 1000, None, &sheet)
+            .resource(Spin::TYPE, 1000, None, &spin)
+            .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[128]))
+            .resource(Stellar::TYPE, 128, Some(b"Flicker"), &stellar),
+    )
+}
+
+#[test]
+fn the_galaxy_viewer_draws_its_stellars_random_frames_on_the_effects_chance() {
+    let zeros = Rc::new(RefCell::new(Zeros::default()));
+    let mut screen =
+        AppScreen::new(flickering_data()).with_effects_chance(SharedChance::new(zeros.clone()));
+    enter(&mut screen, 128);
+    let shown: Vec<Option<u16>> = (0..3)
+        .map(|_| {
+            screen.tick(Duration::from_secs(1) / 30);
+            screen.system_view().expect("a system open").frame(0)
+        })
+        .collect();
+    // From 1, a draw of 0 is frame 0; from 0, frame 1. The default
+    // chance, taking the last frame allowed, would show 1, 3, 2.
+    assert_eq!(shown, [Some(1), Some(0), Some(1)]);
+    assert_eq!(zeros.borrow().0, [3, 3, 3]);
+}
+
 #[test]
 fn the_main_screen_stands_still_behind_a_dialog_opened_over_it() {
     for open in [MenuChoice::Preferences, MenuChoice::About] {

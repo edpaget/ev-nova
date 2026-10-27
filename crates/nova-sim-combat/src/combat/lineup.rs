@@ -19,6 +19,7 @@
 //! same way.
 
 use super::hull::DisableRule;
+use super::planet_type::BeamPlanetFlag;
 use super::projectile::{Sight, Target};
 use super::sides::{PassThrough, Sides};
 use super::{Fighter, ShipRef};
@@ -44,17 +45,19 @@ pub(super) struct Lineup<'a> {
     pub(super) govts: &'a Governments,
     /// Who counts as the player for the pass-through flags.
     pub(super) pass_through: PassThrough,
+    /// Which of its weapon's bits makes a beam planet-type.
+    pub(super) beam_planet_flag: BeamPlanetFlag,
 }
 
 impl<'a> Lineup<'a> {
     /// The ships of `fighters`, each standing where the blasts meet it,
-    /// and seen at its place among `seen_at`, by `govts`' relations and
-    /// `pass_through`'s player.
+    /// and seen at its place among `seen_at`, by `govts`' relations,
+    /// `pass_through`'s player and `beam_planet_flag`'s beam bit.
     pub(super) fn new(
         fighters: &[Fighter],
         seen_at: &[Vec2],
         govts: &'a Governments,
-        pass_through: PassThrough,
+        (pass_through, beam_planet_flag): (PassThrough, BeamPlanetFlag),
     ) -> Self {
         let stood: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         let seen = stood
@@ -71,6 +74,7 @@ impl<'a> Lineup<'a> {
             sights: fighters.iter().map(Fighter::sight).collect(),
             govts,
             pass_through,
+            beam_planet_flag,
         }
     }
 
@@ -80,6 +84,7 @@ impl<'a> Lineup<'a> {
             targets: &self.stood,
             govts: self.govts,
             pass_through: self.pass_through,
+            beam_planet_flag: self.beam_planet_flag,
         }
     }
 

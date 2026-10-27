@@ -24,8 +24,17 @@
 //!    ([`projectile`](super::projectile)); as a homing shot, any ship but
 //!    its target, unless `Flags2` 0x0008 (@0x44812-0x44836);
 //! 4. as a shot no ship fired ([`Source::Other`]), any ship but the one it
-//!    is aimed at, when it is aimed at one (@0x44a71-0x44a88); nothing
-//!    below applies to it.
+//!    is aimed at, when it is aimed at one (@0x44a71-0x44a88); of the
+//!    rules below only rule 8 applies to it, as the branch jumps there,
+//!    and rules 9 and 10 pass for a firer of -1. Besides a shot turned on
+//!    its firer and a sub-munition of one, a stellar's gun launches such
+//!    shots ([`stellar_guns`](super::stellar_guns)).
+//!
+//! Every shot, a ship's or not, also never hits (rule 8) a ship whose
+//! class's planet-type bit (`Flags` 0x0400) differs from its weapon's
+//! (`Flags2` 0x0400, @0x44a8e-0x44acc; [`planet_type`](super::planet_type)):
+//! a planet-type shot passes through ordinary ships, the player's
+//! included, and an ordinary shot through planet-type ones.
 //!
 //! A ship's shot, its firer read as it is now (see below), also never
 //! hits a ship:
@@ -71,12 +80,16 @@
 //! stop on one breaking up, and tests no government; it never hits its
 //! firer, its firer's leader, a ship its firer leads, a led ship allied
 //! with the player when its firer is too (@0x30ba0-0x30c05, @0x30d10), the
-//! `Booty` 0x0100 pairs as a shot's (@0x30c3c-0x30cf2), or class 0x2ff
-//! itself, a later class being hit (@0x30dd2-0x30dd8). Nor does it hit any
-//! ship while its firer, an NPC, mines ([`Ties::mining`]): `_HandleBeams`
-//! skips the ship it found and goes on to its asteroid pass
-//! (@0x30f4c-0x30f8c → @0x316c2), so a mining beam cuts the asteroid
-//! behind a ship ([`asteroid_beam`](super::asteroid_beam)).
+//! `Booty` 0x0100 pairs as a shot's (@0x30c3c-0x30cf2), a ship whose
+//! planet-type bit differs from the beam's (@0x30d34-0x30d82), which the
+//! fight's [`BeamPlanetFlag`] reads from its weapon's `Flags` by the
+//! original and its `Flags2` by the Bible
+//! ([`planet_type::beam_may_hit`]), or class 0x2ff itself, a later class
+//! being hit (@0x30dd2-0x30dd8). Nor does it hit any ship while its
+//! firer, an NPC, mines ([`Ties::mining`]): `_HandleBeams` skips the ship
+//! it found and goes on to its asteroid pass (@0x30f4c-0x30f8c →
+//! @0x316c2), so a mining beam cuts the asteroid behind a ship
+//! ([`asteroid_beam`](super::asteroid_beam)).
 //!
 //! The flag rules (6g-6j, 9 and the beam's pairs) count the player as the
 //! fight's [`PassThrough`] says: the original's whole player side, or the
@@ -107,16 +120,16 @@
 //!
 //! Left out, each with its owner: the nag ship (@0x44803), as there is
 //! none; two defence ships of one stellar (6c, @0x44893) and a non-ship
-//! shot's +0x8c clause (@0x44a81), task `planet-domination`; the
-//! planet-type match (8, @0x44a8e; the beam's @0x30d4f), stellar-fidelity
-//! phase 2; the beam's system test (@0x30dc1), as only the player's system
-//! is simulated. None of these functions draws or plays a sound.
+//! shot's +0x8c clause (@0x44a81), task `planet-domination`; the beam's
+//! system test (@0x30dc1), as only the player's system is simulated. None
+//! of these functions draws or plays a sound.
 
 use super::ShipRef;
 use super::beam::Beam;
 #[cfg(doc)]
 use super::hull::Condition;
 use super::hull::ESCAPE_POD_SHIP;
+use super::planet_type::{self, BeamPlanetFlag};
 use super::projectile::{Jam, Shot, Source, Target};
 use super::weapon::Guidance;
 use crate::catalog::GovtId;
@@ -142,6 +155,10 @@ pub struct Ties {
     pub govt: Option<GovtId>,
     /// Its `düde`'s `Booty`, or `None` when it has no `düde`.
     pub booty: Option<u16>,
+    /// Whether its class is planet-type (`shïp` `Flags` 0x0400, class
+    /// +0x9e8), which the planet-type rules match against a weapon's
+    /// ([`planet_type`](super::planet_type)).
+    pub planet_type: bool,
     /// Whether it is an NPC mining asteroid slot 0, the original's state
     /// 16 (`_AIShipIsAttackingAsteroid` @0x8982b): its shots and beams
     /// pass through every ship. Never the player.
@@ -178,8 +195,9 @@ impl From<RuleSource> for PassThrough {
 }
 
 /// What the hit rules read beyond the shot or beam and the ship: every
-/// ship in the fight this tick, the governments' flags, and who counts as
-/// the player for the pass-through flags.
+/// ship in the fight this tick, the governments' flags, who counts as
+/// the player for the pass-through flags, and which bit makes a beam
+/// planet-type.
 #[derive(Clone, Copy, Debug)]
 pub struct Sides<'a> {
     /// Every ship in the fight.
@@ -188,6 +206,8 @@ pub struct Sides<'a> {
     pub govts: &'a Governments,
     /// Who counts as the player for the pass-through flags.
     pub pass_through: PassThrough,
+    /// Which of its weapon's bits makes a beam planet-type.
+    pub beam_planet_flag: BeamPlanetFlag,
 }
 
 impl Sides<'_> {
@@ -206,10 +226,16 @@ impl Sides<'_> {
         {
             return false;
         }
+        let matched = planet_type::shot_may_hit(&shot.weapon, target.ties.planet_type);
         let kept = match shot.source {
             Source::Ship(kept) => kept,
-            Source::Other => return shot.aimed_at.is_none_or(|aimed| aimed == target.ship),
+            Source::Other => {
+                return matched && shot.aimed_at.is_none_or(|aimed| aimed == target.ship);
+            }
         };
+        if !matched {
+            return false;
+        }
         let firer = shot.firer;
         let ties = self.ties_of(firer, kept);
         let theirs = target.ties;
@@ -286,6 +312,9 @@ impl Sides<'_> {
             && firer == ShipRef::Player
             && self.govts.flag(theirs.govt, NEVER_ATTACKS_PLAYER)
         {
+            return false;
+        }
+        if !planet_type::beam_may_hit(&beam.weapon, self.beam_planet_flag, theirs.planet_type) {
             return false;
         }
         target.ship_type != ESCAPE_POD_SHIP

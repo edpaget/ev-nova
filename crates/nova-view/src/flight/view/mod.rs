@@ -155,7 +155,8 @@
 //! right edge, its radar showing the stellars and ships around the ship
 //! as drawn, its bars the session's shield, armour and fuel, and its nav
 //! area the session's nav mode and selection. Without a status bar it
-//! says why, and flight goes on. By [`RuleKey::HudCadence`]'s engine
+//! says why, and flight goes on. By
+//! [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine
 //! reading the radar shows what it held at its last refresh, every 8
 //! ticks ([`HudCadence`]) or when the original's `_RedrawStatus` would
 //! redraw it (a new system, landing, take-off, or closing the map, the
@@ -636,8 +637,8 @@ use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     Behaviour, BoardingRule, Chance, CombatEvent, Condition, DisableRule, FixedStep, GovtId,
     HailOptions, HailView, HashedRolls, LegalCode, NavMode, NeverFires, Npc, NpcId, OutfitRefusal,
-    OutfitRun, PointDefenceRule, Reselection, Reserves, RuleKey, Session, ShipId, ShipRef,
-    ShipState, SimMessage, StellarId, SystemId, Vec2, flight::normalized, flight::shortest_turn,
+    OutfitRun, PointDefenceRule, Reselection, Reserves, Session, ShipId, ShipRef, ShipState,
+    SimMessage, StellarId, SystemId, Vec2, flight::normalized, flight::shortest_turn,
 };
 use nova_sim::{DrawnBox, DrawnShips, HoverPlace};
 use nova_sim::{InterfaceLoad, MissionInfo, OfferPrompt, TextBar};
@@ -660,6 +661,7 @@ use crate::galaxy::GalaxyMap;
 use crate::galaxy::map::MapPicture;
 use crate::system::camera::{Anchor, Camera};
 use crate::system::catalog::SystemCatalog;
+use crate::system::kept_frames::KeptFrames;
 use crate::system::scene::{PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::text::TextMetrics;
 use crate::{Color, Diagnostic, Key, Point, SoundPrefs, UiSound};
@@ -1076,6 +1078,13 @@ pub struct FlightView<C> {
     session: Result<Session, String>,
     /// The session's system, laid out; `None` when the session failed.
     scene: Option<SystemScene>,
+    /// Each stellar's animation state as the scene that last showed it
+    /// left it: the original's per-`spöb` current frame, next frame and
+    /// timer (+0x476, +0x478, +0x490), kept per flight so a stellar shown
+    /// again resumes where it stood ([`KeptFrames`], stellar-fidelity
+    /// phase 12). A load or a new pilot is a new flight, so every stellar
+    /// starts afresh then.
+    kept_frames: KeptFrames,
     /// The player ship's sheet, or why it cannot be shown.
     sheet: Result<ShipSheet, String>,
     /// The class `sheet` and `status_bar` were read for; `None` when the
@@ -1279,12 +1288,14 @@ pub struct FlightView<C> {
     /// When the HUD refreshes, and the radar target's blink.
     hud_cadence: HudCadence,
     /// What the radar showed at its last refresh, which it shows until the
-    /// next under [`RuleKey::HudCadence`]'s engine reading; `None` before
-    /// the first.
+    /// next under
+    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// engine reading; `None` before the first.
     radar_scene: Option<RadarScene>,
     /// What the nav area showed at its last refresh, and the nav mode it
     /// showed it for, which it shows until the next under
-    /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
+    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// engine reading; `None` before the first.
     nav_scene: Option<(NavMode, NavDisplay)>,
     /// How long the nav area shows the take-off's snapshot from before its
     /// deselect ([`FlightView::took_off`]); `None` when none is held.
@@ -1299,11 +1310,13 @@ pub struct FlightView<C> {
     nav_texts: u64,
     /// What the target panel showed at its last redraw, and what it drew
     /// it for, which it shows until the next under
-    /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
+    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// engine reading; `None` before the first.
     target_scene: Option<(Option<Drawn>, Option<TargetPanel>)>,
     /// The shield, armour and fuel gauges at their last redraw, which
     /// they show while docked until the next under
-    /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
+    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// engine reading; `None` before the first.
     reserves_scene: Option<Reserves>,
     /// The bar's redraws held for the docked mission texts shown, one for
     /// each, made as each closes ([`FlightView::close_mission_text`]).
@@ -1400,28 +1413,44 @@ struct Redrawn {
     stellar: bool,
     /// The galaxy overlay changed: the course map was rebuilt.
     galaxy: bool,
-    /// A rebuild point changed which stellars are shown, or which shown
-    /// are dead since it: the stellars were drawn again, and read again
-    /// when they are others.
+    /// A rebuild point changed which stellars are shown, which shown are
+    /// dead since it, or the sheet whose frame count one of them animates
+    /// over: the stellars were drawn again, each changed one at its
+    /// current frame, and read again when they are others.
     rebuilt: bool,
     /// The stars were scattered afresh.
     stars: bool,
 }
 
-/// Draws each stellar of `scene` as `session` holds it: by whether its
-/// galaxy holds it destroyed, its `DeadType` sheet or its `Type` sheet, as
-/// the original's per-frame sprite tick picks them (story-runtime phase
-/// 7), and, by the session's reading of [`RuleKey::DeadTypeFallback`],
-/// graphic type 0's sheet for one with no `DeadType` sheet that has been
-/// dead since the last rebuild point (story-runtime phase 9).
+/// How `session` holds stellar `id`: destroyed as its galaxy holds it,
+/// with the sheet the session says it draws ([`Session::drawn_sheet`]:
+/// its `DeadType` sheet, graphic type 0's or its `Type` sheet,
+/// story-runtime phases 7 and 9, stellar-fidelity phase 1), which the
+/// click box reads too, and animating over the frame count the session
+/// says ([`Session::counted_sheet`], stellar-fidelity phase 1), or over
+/// none ([`Session::counts_no_frames`]), its frame frozen when the session
+/// says ([`Session::frame_frozen`], stellar-fidelity phase 8).
+fn look(session: &Session, id: StellarId) -> StellarLook {
+    StellarLook {
+        destroyed: session.galaxy().destroyed(id),
+        drawn: session.drawn_sheet(id),
+        counted: session.counted_sheet(id),
+        frozen: session.frame_frozen(id),
+        counts_none: session.counts_no_frames(id),
+    }
+}
+
+/// Draws each stellar of `scene` as `session` holds it ([`look`]), as the
+/// original's per-frame sprite tick swaps its sheet.
 fn show_destroyed(scene: &mut SystemScene, session: &Session) {
-    scene.set_destroyed(
-        |id| StellarLook {
-            destroyed: session.galaxy().destroyed(id),
-            dead_since_rebuild: session.dead_since_rebuild(id),
-        },
-        session.rules().source_for(RuleKey::DeadTypeFallback),
-    );
+    scene.set_destroyed(|id| look(session, id));
+}
+
+/// Marks each stellar of `scene` frozen as `session` holds it
+/// ([`Session::frame_frozen`]): after the steps of each tick, as a flight
+/// frame freezes or thaws a slot with no event (stellar-fidelity phase 8).
+fn show_frozen_frames(scene: &mut SystemScene, session: &Session) {
+    scene.set_frozen(|id| session.frame_frozen(id));
 }
 
 /// Draws each hypergate of `scene` on the frame `session` gives it

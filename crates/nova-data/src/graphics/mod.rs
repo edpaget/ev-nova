@@ -9,10 +9,13 @@
 //! | `PICT` ([`PICT`]) | [`decode_pict`] | one image the size of `picFrame` |
 //! | `cicn` | [`decode_cicn`] | one image, the mask as alpha |
 //! | `ppat` | [`decode_ppat`] | one opaque image |
-//! | `rlëD` ([`RLED`]) | [`decode_rled`] | a [`SpriteSheet`] of equal-sized frames |
+//! | `rlëD` ([`RLED`]) | [`decode_rled`], [`decode_rled_as`] | a [`SpriteSheet`] of equal-sized frames |
 //!
 //! [`apply_mask`] gives a decoded picture its alpha from a second picture,
-//! its mask, as Nova masks its button caps.
+//! its mask, as Nova masks its button caps. [`cut_pict_sheet`] cuts a
+//! decoded sprites picture and its mask into a [`SpriteSheet`], as the
+//! original does for a `spïn` with no `rlëD`; its mask has the opposite
+//! polarity.
 //!
 //! A sprite sheet's header gives frame size and count but not how the frames
 //! are arranged. That comes from the `spïn` or `shän` record pointing at the
@@ -39,8 +42,8 @@
 //!   Pixel Pattern Resource".
 //! - `rlëD`: the EV Nova Bible for meaning, and the open-source ResForge
 //!   editor's (MIT) decoder as a second reading of the byte layout and
-//!   token semantics, including the pixel-run token (see [`decode_rled`]).
-//!   No code was copied.
+//!   token semantics. The pixel-run token follows the original's blitter
+//!   instead (see [`decode_rled`]). No code was copied.
 //! - Layouts: the Bible's `spïn` (`xTiles`, "Horizontal grid dimension")
 //!   and `shän` (`FramesPer`, "The number of frames for one rotation";
 //!   `BaseSetCount`, "The number of sprite sets").
@@ -53,7 +56,11 @@
 //!   the whole frame: 598 16-bit (word PackBits) and 73 32-bit (byte
 //!   PackBits of red, green and blue planes). Their opcodes are only
 //!   HeaderOp, DefHilite, Clip, LongComment, DirectBitsRect and EndPic.
-//! - 282 `rlëD`s, all 16-bit, using tokens 0 to 4.
+//! - 282 `rlëD`s, all 16-bit, using tokens 0 to 4. Plug-ins may also hold
+//!   8-bit sheets, which decode as the original's 16-bit world draws them
+//!   ([`EightBitReading::AsDrawn`]), or through the Mac's standard palette
+//!   ([`EightBitReading::SystemPalette`]); other depths are
+//!   [`GraphicsError::UnsupportedDepth`].
 //! - 29 `cicn`s (2, 4 and 8-bit) and 10 `ppat`s (8-bit, 64x64), all
 //!   indexed through sparse colour tables looked up by `value`.
 //!
@@ -96,10 +103,13 @@ mod mask;
 mod packbits;
 mod pattern;
 mod pict;
+mod pict_sheet;
 mod pixmap;
 mod reader;
 mod rled;
+mod rled8;
 mod sheet;
+mod system_clut;
 
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
@@ -111,5 +121,7 @@ pub use image::Image;
 pub use mask::apply_mask;
 pub use pattern::{PPAT, decode_ppat};
 pub use pict::{PICT, decode_pict};
-pub use rled::{RLED, RledInfo, decode_rled, scan_rled};
+pub use pict_sheet::{SheetMask, cut_pict_sheet};
+pub use rled::{RLED, RledInfo, decode_rled, decode_rled_as, scan_rled};
+pub use rled8::EightBitReading;
 pub use sheet::{SheetLayout, SpriteSheet};

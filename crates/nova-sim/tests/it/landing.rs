@@ -13,9 +13,10 @@ use nova_sim::{
 };
 
 /// One `chär` flying an average ship that turns 6° a tick from system
-/// 130, which holds `sites`.
+/// 130, which holds `sites`, starting with `cash` credits.
 struct Pilot {
     sites: Vec<LandingSite>,
+    cash: i32,
 }
 
 /// No asteroids anywhere.
@@ -73,6 +74,7 @@ impl PilotCatalog for Pilot {
             ship: Some(ShipId(128)),
             systems: [Some(SystemId(130)), None, None, None],
             start: StartDate::default(),
+            cash: self.cash,
             ..CharacterStart::default()
         })
     }
@@ -131,6 +133,10 @@ impl PilotCatalog for Pilot {
     }
 
     fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+        Vec::new()
+    }
+
+    fn stellar_weapons(&self) -> Vec<(StellarId, nova_sim::WeaponId)> {
         Vec::new()
     }
 
@@ -207,15 +213,22 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         dead_graphic: None,
         dead_frame_size: None,
         type_counts_frames: true,
+        dead_counts_frames: true,
         exit_angle: -1,
         tribute: 0,
         gravity: 0,
+        fee: 0,
         animation: nova_sim::catalog::SiteAnimation::default(),
     }
 }
 
 fn session(sites: Vec<LandingSite>) -> Session {
-    Session::start(&Pilot { sites }).expect("starts")
+    session_with(sites, 0)
+}
+
+/// [`session`], the pilot starting with `cash` credits.
+fn session_with(sites: Vec<LandingSite>, cash: i32) -> Session {
+    Session::start(&Pilot { sites, cash }).expect("starts")
 }
 
 const STATION: u32 = StellarFlags::CAN_LAND | StellarFlags::STATION;
@@ -306,6 +319,7 @@ fn a_new_pilot_is_denied_where_a_record_is_needed() {
 fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     let catalog = Pilot {
         sites: vec![at_centre(StellarFlags::CAN_LAND, 0)],
+        cash: 0,
     };
     let mut session = Session::start(&catalog).expect("starts");
     let thrust = Controls {
@@ -338,7 +352,8 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     for _ in 0..40 {
         session.tick(reverse);
     }
-    while session.player().velocity.length() > 1.0 {
+    // Under 0.75 on each axis, the original's per-axis gate.
+    while session.player().velocity.length() > 0.75 {
         session.tick(thrust);
     }
     assert_eq!(
@@ -352,4 +367,31 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
         Some(StellarId(128))
     );
     assert_eq!(session.landed(), None);
+}
+
+#[test]
+fn landing_on_a_stellar_with_a_fee_pays_it_and_one_short_of_it_is_refused() {
+    let site = LandingSite {
+        fee: 100,
+        ..at_centre(StellarFlags::CAN_LAND, 0)
+    };
+    let mut session = session_with(vec![site], 500);
+    assert_eq!(session.land(), Ok(requested(false)));
+    session.tick(Controls::default());
+    assert_eq!(
+        session.land(),
+        Ok(LandOutcome::Landed(StellarId(128)).into())
+    );
+    assert_eq!(session.pilot().cash, 400);
+
+    let mut short = session_with(vec![site], 99);
+    assert_eq!(
+        short.land(),
+        Err(LandingRefusal::CannotPayFee {
+            stellar: StellarId(128),
+            station: false,
+        })
+    );
+    assert_eq!(short.pilot().cash, 99);
+    assert_eq!(short.landed(), None);
 }

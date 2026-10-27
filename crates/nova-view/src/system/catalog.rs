@@ -6,12 +6,15 @@ use std::rc::Rc;
 
 pub use nova_data::{StellarId, SystemId};
 
-/// A stellar's resolved sprite sheet: its `rlëD` ID, how many frames it
-/// has and each frame's size.
+use crate::sheet_image::SheetImage;
+
+/// A stellar's resolved sprite sheet: the image its frames come from, how
+/// many frames it has and each frame's size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StellarSheet {
-    /// The `rlëD`'s ID.
-    pub image_id: i16,
+    /// The image its frames come from: its `rlëD`, or its `spïn`'s `PICT`
+    /// pair.
+    pub image: SheetImage,
     /// How many frames it has; never zero.
     pub frames: NonZeroU16,
     /// Each frame's width in pixels.
@@ -28,8 +31,10 @@ pub struct AnimationData {
     pub delay: i16,
     /// `Frame0Bias`: how many times longer frame 0 shows for.
     pub frame0_bias: i16,
-    /// `Flags2` 0x0080: animate only when destroyed.
-    pub only_when_destroyed: bool,
+    /// `Flags2`, raw: the view reads its animation bits (0x0001 alternate
+    /// with frame 0, 0x0002 random next frame, 0x0080 animate only when
+    /// destroyed) and its hypergate bit (0x1000).
+    pub flags2: u16,
 }
 
 /// One stellar object, placed in its system.

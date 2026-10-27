@@ -574,12 +574,7 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
         for star in drawn_stars(&view) {
             expected.push(star);
         }
-        scene::draw_stellars(
-            expected,
-            view.scene().expect("a scene"),
-            &view.camera(),
-            Duration::ZERO,
-        );
+        scene::draw_stellars(expected, view.scene().expect("a scene"), &view.camera());
         expected.sprite(ImageKey::sprite(2000, 0), PLAYER_AT, Color::WHITE);
     });
     hud::draw(
@@ -1246,7 +1241,7 @@ fn a_stellars_radar_shape_and_sprite_width_reach_the_radar() {
     // `w` x `h` frames: the radar reads the width, never the height.
     let sized = |id, at, (w, h): (u32, u32), square| StellarContents {
         sprite: Ok(StellarSheet {
-            image_id: 1000 + id,
+            image: crate::SheetImage::Rled(1000 + id),
             frames: NonZeroU16::MIN,
             frame_width: w,
             frame_height: h,

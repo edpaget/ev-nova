@@ -37,9 +37,12 @@
 //!
 //! A ship that lands is not recorded: the original keeps a landed ship in
 //! its slot, waiting at the stellar (`_HighLevelAIHandler`
-//! @0x8dadc-0x8db5a), which rdm:phase/stellar-fidelity/phase-5-npc-landing-reach
-//! builds. An escape pod freed (`_AIDispatch` @0x8fbb3) fires nothing, so
-//! no target names it.
+//! @0x8dadc-0x8db5a), and so does the traffic
+//! ([`land_flight::stay`](crate::traffic::land_flight::stay)). Under
+//! [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other reading
+//! a mission ship that lands leaves the system, unrecorded too, as no
+//! slot of the original's is freed that way. An escape pod freed
+//! (`_AIDispatch` @0x8fbb3) fires nothing, so no target names it.
 
 use crate::combat::ShipRef;
 use crate::traffic::autopilot::Outcome;

@@ -16,10 +16,17 @@
 //!    it is now, never swapped for another (`_HandlePlayer` @0x6a8ed goes
 //!    to the nearest pick only when +0x6c is -1); with none, the nearest
 //!    stellar with the can-land flag, destroyed or not
-//!    ([`nearest_stellar`], `_FindNearestStellar`), station or planet,
-//!    which the press selects ([`DockPress::selected`]) and goes on with
-//!    (@0x6a8ed-0x6a956); a pick it can't land on is selected and then
-//!    refused at step 2. With
+//!    ([`nearest_stellar`], `_FindNearestStellar`), station or planet, a
+//!    hypergate or wormhole counting only strictly within 500 pixels by
+//!    the engine's reading of
+//!    [`RuleKey::GatePickRange`](crate::RuleKey::GatePickRange)
+//!    (@0x2838-0x2853), which the press selects ([`DockPress::selected`])
+//!    and goes on with (@0x6a8ed-0x6a956); a pick it can't land on is
+//!    selected and then refused at step 2. The `nova_sim::Session` passes
+//!    as `sites` every active stellar its system lists, owned there or
+//!    not, which are what its selection holds, so a held pick another
+//!    system owns is found and refused again (stellar-fidelity phase 14).
+//!    With
 //!    stellars but none with the can-land flag it selects nothing and
 //!    refuses with
 //!    [`LandingRefusal::NothingLandable`]; with no stellars,
@@ -35,17 +42,26 @@
 //!    kept. The owner can differ from the player's system between rebuild
 //!    points, once a galaxy change has given the stellar to another
 //!    system; the caller says whether the system holds it.
-//! 3. **Uninhabited** (@0x66b51-0x66bcd): the request becomes the
+//! 3. **The fee** (@0x669b4-0x66a80): when a fee is due ([`fee_due`])
+//!    and it is more than the pilot's cash, signed (@0x669d0-0x669d6, so
+//!    a pilot with exactly the fee pays it), it refuses with
+//!    [`LandingRefusal::CannotPayFee`], silently, and drops the request
+//!    (@0x67cc1-0x67cd0). It comes before the cloak, the disabled ship's
+//!    silent press, the uninhabited stellar and the clearance, so it
+//!    refuses the first press as well as the landing one. The charge
+//!    ([`pay_fee`]) is the `nova_sim::Session`'s, on landing and on
+//!    entering a hypergate or wormhole (@0x66db9-0x66df5).
+//! 4. **Uninhabited** (@0x66b51-0x66bcd): the request becomes the
 //!    stellar's at [`CLEARED`], "No response." is said
-//!    ([`DockSaid::NoResponse`]), and the press goes on to 4, so it lands
+//!    ([`DockSaid::NoResponse`]), and the press goes on to 5, so it lands
 //!    in the same press when it can.
-//! 4. **The attempt** (@0x66bd2-0x67800): when the request is the
+//! 5. **The attempt** (@0x66bd2-0x67800): when the request is the
 //!    stellar's, it lands if [`check_landing`] allows, and the request
 //!    ends. Otherwise the refusal keeps the request and the target, and
 //!    the player tries again (the manual: "If you're too far away, or if
 //!    you're moving too fast ... your ship's computer will beep at you and
 //!    you can try again").
-//! 5. **The request** (@0x6788f-0x67c4b, @0x67ea3-0x67ef9): otherwise
+//! 6. **The request** (@0x6788f-0x67c4b, @0x67ea3-0x67ef9): otherwise
 //!    traffic control is asked ([`cleared`]), the old counter granting it
 //!    ([`Standing::granted`]). Cleared, the request becomes the stellar's,
 //!    at [`REQUESTED_NEAR`] in silence within
@@ -65,8 +81,14 @@
 //!    decide whether a ship moving too fast is told it is too far or too
 //!    fast, as the original's dock request reads them again for its
 //!    refusal (@0x6773a-0x677c0).
-//! 2. [`LandingRefusal::TooFast`]: the ship is moving faster than
-//!    [`LANDING_SPEED`].
+//! 2. [`LandingRefusal::TooFast`]: the ship is moving too fast, by
+//!    [`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed). By the
+//!    engine's reading, unless |vx| and |vy| are each at most
+//!    [`PER_AXIS_LANDING_SPEED`], 0.75, compared in single precision and
+//!    inclusive, a NaN on either axis refused (`_FloatAbs` of +0x20 and
+//!    +0x24 @0x66beb-0x66c1d, `ucomiss` against the float at 0xdd658
+//!    @0x66c3c-0x66c66). By the other reading, the port's earlier check:
+//!    the overall speed above [`LANDING_SPEED`], 1.0.
 //!
 //! **Clearance** ([`cleared`]) is `_HandlePlayerDockRequest`'s clearance
 //! block (@0x67903-0x67a05), whole. Its checks run in this order, the pilot's [`Standing`] giving what they
@@ -109,22 +131,15 @@
 //!   @0x97112-0x97125), domination by Demand Tribute (+0x46 written
 //!   @0x978fa, cleared @0x9740f) and `_DoPlanetCommDialog`'s blessing
 //!   (@0x96c15): rdm:task/planet-domination.
-//! - The fee: its refusal (@0x669b4-0x66a80), the approach greeting's fee
-//!   line (@0x64d70-0x64e58) and the charge (@0x66db9-0x66df5):
-//!   rdm:task/landing-fee. The engine models no fee, and no stock stellar
-//!   has one.
 //! - The cloak refusal (@0x66a85-0x66ae9) and the silent press of a
 //!   disabled or dying ship (@0x66aee-0x66b14) are the
 //!   `nova_sim::Session`'s, which refuses them after the press's
-//!   landability with [`LandingRefusal::Cloaked`] (STR# 2002 #73,
+//!   landability and fee with [`LandingRefusal::Cloaked`] (STR# 2002 #73,
 //!   beeping `snd ` 153 at the shared tail @0x67e8f) and
 //!   [`LandingRefusal::Disabled`], the cloak first.
-//! - The fee refusal (@0x669b4-0x66a80), which is silent
-//!   (rdm:task/landing-fee).
-//! - The per-axis 0.75 speed gate (@0x66c3c-0x66c66):
-//!   rdm:phase/stellar-fidelity/phase-6-per-axis-landing-speed.
-//! - The player's AI wait (+0x4c, tested @0x66c2f and zeroed @0x66b6d):
-//!   the engine keeps none.
+//! - The player's AI wait (+0x4c, tested @0x66c29-0x66c36 and zeroed
+//!   @0x66b6d): the player's +0x4c is never above 0, so the test always
+//!   passes, and the engine keeps none.
 //!
 //! Each refusal says whether the stellar is a station, which picks the
 //! original's "dock at this station" or "land on this planet" wording.
@@ -147,7 +162,11 @@
 //! - [`UNLOADED_TYPE_WIDTH`], 150, while it is not
 //!   ([`TypeWidth::Unloaded`]): a destroyed stellar from a rebuild point
 //!   until a flight frame loads it again, unless another stellar shown
-//!   keeps it loaded, or a `Type` whose sheet cannot be read;
+//!   keeps it loaded, or a `Type` whose sheet cannot be read; and,
+//!   whatever its master, a stellar whose owner is not the player's
+//!   system (@0xacb9-0xacc1, before the master tests), which the dock
+//!   request refuses as not landable before it reads the reach, so only
+//!   NPC gate entry meets it;
 //! - [`OUT_OF_RANGE_FRAME_WIDTH`], 32, for a loaded master whose `spïn`
 //!   gives no frame count ([`TypeWidth::OutOfRange`]);
 //!
@@ -157,15 +176,29 @@
 //! by phase 10"). By the other reading, the port's earlier circle: within
 //! [`landing_radius`] of the centre.
 //!
-//! NPCs land by their own rule, which stays on the [`landing_radius`]
-//! circle under either reading: the original's NPC landing is
-//! `_HighLevelAIHandler` state 1, whose box goes by the ship's turn rate
-//! (`phase/stellar-fidelity/phase-5-npc-landing-reach`). The quarter of
-//! the width, inclusive (@0x8dbdf), is state 20's box for entering a
-//! hypergate or wormhole, not a landing ([`stellar_width`], see
-//! `nova_sim::traffic::gate_entry`).
-//! The original's speed gate is per axis (story-runtime phase 17,
-//! per-axis-landing-speed).
+//! **NPCs land by their own rule** ([`npc_over`]), whichever reading of
+//! `LandingDistance` holds, following
+//! [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding). By the engine's
+//! reading, `_HighLevelAIHandler` state 1's box (@0x8d90d-0x8da07): the
+//! ship's offset from the stellar's centre, `(float)stellar − ship`
+//! truncated to whole pixels on each axis (`cvttss2si`, then a 16-bit
+//! `cwde` @0x8d929, @0x8d94b, not replicated), each at most the
+//! half-width [`npc_box`], inclusive: [`NPC_BOX`], 40 (@0x8d90f), or
+//! below a turn rate of [`NPC_BOX_TURN`] (`_ShipTurnRate`, the float
+//! @0xdd044) trunc((9 − turn) × 8 + 32) in doubles (@0xdda90, @0xdda98,
+//! @0xdd578; a 16-bit `movsx` @0x8d9b7, not replicated). So a ship 40.9
+//! pixels off on each axis is over the stellar, and one 41.0 off on
+//! either is not. A turn that is not a number keeps 40 (`jp`), and an
+//! offset that is not a number truncates to 0x80000000, whose low word 0
+//! is inside. By the other reading, the port's earlier circle: within
+//! [`landing_radius`]. The speed it must be below, the brake and the
+//! approach are the NPC flight's (`nova_sim::traffic::land_flight`).
+//!
+//! The quarter of the width, inclusive (@0x8dbdf), is state 20's box for
+//! entering a hypergate or wormhole, not a landing ([`stellar_width`],
+//! see `nova_sim::traffic::gate_entry`).
+//! The player's speed gate is per axis in the original, built by
+//! stellar-fidelity phase 6 (item 2 above).
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::clearance::{self, CLEARED, DockRequest, REQUESTED_NEAR};
@@ -178,7 +211,17 @@ use crate::rulebook::RuleSource;
 /// from top speed in about 20 ticks, and at it a ship takes more than two
 /// seconds to cross even a small stellar, so a landing ship is visibly
 /// parked over the stellar, as Nova asks.
+///
+/// It is now the other reading of
+/// [`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed) for the player
+/// and of [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding) for an NPC.
 pub const LANDING_SPEED: f32 = 1.0;
+
+/// The fastest the player can land on each axis by the original, in
+/// pixels a tick: the single-precision float 0.75 at 0xdd658 (bytes
+/// `0000403f`, not a double), compared inclusively with |vx| and |vy| by
+/// `_HandlePlayerDockRequest` (@0x66c3c-0x66c66).
+pub const PER_AXIS_LANDING_SPEED: f32 = 0.75;
 
 /// The landing radius of a stellar with no sprite: half the 64-pixel
 /// placeholder box the views draw for it, so it matches what is drawn.
@@ -246,7 +289,7 @@ pub enum LandingRefusal {
     Jumping,
     /// The ship is disabled, breaking up or destroyed: refused silently,
     /// the dock request's bare epilogue 0x67eef, after the landability
-    /// check, the fee (not modelled) and the cloak ([`Self::Cloaked`])
+    /// check, the fee and the cloak ([`Self::Cloaked`])
     /// for a disabled ship, and before anything for a breaking-up or
     /// destroyed one (see `nova_sim::Session::land`).
     Disabled,
@@ -288,6 +331,21 @@ pub enum LandingRefusal {
         /// Its `MinStatus`.
         min_status: i16,
     },
+    /// The pilot can't pay the stellar's landing `Fee`
+    /// (`_HandlePlayerDockRequest` @0x669b4-0x66a80): a fee is due
+    /// ([`fee_due`]) and is more than the pilot's cash. It says `STR#`
+    /// 2002 #61 "You don't have enough", " ", `_creditsCString`
+    /// "credits", " " and #62 "to pay the hypergate fee." at a hypergate,
+    /// else #63 "to pay the docking fee." at a station, else #64 "to pay
+    /// the landing fee.", for 250 ticks (`_DisplayComm` @0x67c88-0x67cbc).
+    /// The dock request is dropped (@0x67cc1-0x67cd0). Silent: it plays
+    /// no `_beepSnd`.
+    CannotPayFee {
+        /// The stellar.
+        stellar: StellarId,
+        /// Whether it is a station.
+        station: bool,
+    },
     /// The ship is moving too fast.
     TooFast {
         /// The stellar.
@@ -312,7 +370,7 @@ impl LandingRefusal {
     /// (`_HandlePlayer` @0x6a8cb, @0x6a90f, and `_FindNearestStellar`
     /// giving -1 @0x6a94c), [`Self::Disabled`] goes to its bare epilogue
     /// (0x67eef), and [`Self::Denied`] plays `_beepSnd[1]` instead
-    /// (@0x67ec6).
+    /// (@0x67ec6). [`Self::CannotPayFee`] plays nothing (@0x669b4-0x66a80).
     ///
     /// A [`Self::NotLandable`] from a press with no target beeps too: the
     /// press selects the nearest stellar with the can-land flag
@@ -327,18 +385,25 @@ impl LandingRefusal {
     }
 }
 
-/// Half the larger side of `site`'s sprite's frame, which is what the
-/// player sees as its disc, or [`UNKNOWN_STELLAR_RADIUS`] without a
+/// The disc a stellar's frame of `(width, height)` shows: half its larger
+/// side. The landing radius takes it from the `Type` sheet's frame
+/// ([`landing_radius`]); the shots take it from the frame the stellar
+/// draws, which may be its sprite slot's when no `Type` sheet can be read
+/// (`nova_sim::Session`'s stellar targets).
+#[must_use]
+pub fn frame_radius((width, height): (u32, u32)) -> f32 {
+    width.max(height) as f32 / 2.0
+}
+
+/// The [`frame_radius`] of `site`'s `Type` sheet's frame, which is what
+/// the player sees as its disc, or [`UNKNOWN_STELLAR_RADIUS`] without a
 /// sprite: the landing radius of [`RuleKey::LandingDistance`]'s other
-/// reading, the radius NPCs land within, and the disc the shots hit.
+/// reading and the radius NPCs land within.
 ///
 /// [`RuleKey::LandingDistance`]: crate::RuleKey::LandingDistance
 #[must_use]
 pub fn landing_radius(site: &LandingSite) -> f32 {
-    site.frame_size
-        .map_or(UNKNOWN_STELLAR_RADIUS, |(width, height)| {
-            width.max(height) as f32 / 2.0
-        })
+    site.frame_size.map_or(UNKNOWN_STELLAR_RADIUS, frame_radius)
 }
 
 /// The original's reach when the stellar's sprite slot shows no frame
@@ -430,6 +495,65 @@ pub fn landing_reach(site: &LandingSite, shown: StellarShown, source: RuleSource
     LandingReach::Box(reach)
 }
 
+/// The half-width of an NPC's landing box from a turn rate of
+/// [`NPC_BOX_TURN`] up, in pixels (`mov $0x28, %ebx`, @0x8d90f).
+pub const NPC_BOX: f32 = 40.0;
+/// The turn rate below which an NPC's landing box widens (the float
+/// @0xdd044).
+pub const NPC_BOX_TURN: f32 = 8.0;
+/// The turn rate the widening counts down from (the double @0xdda90).
+pub const NPC_BOX_TOP_TURN: f64 = 9.0;
+/// The pixels the box widens by for each degree of turn below
+/// [`NPC_BOX_TOP_TURN`] (the double @0xdda98).
+pub const NPC_BOX_PER_TURN: f64 = 8.0;
+/// The widened box's base half-width (the double @0xdd578).
+pub const NPC_BOX_BASE: f64 = 32.0;
+
+/// The half-width of the box an NPC turning at `turn_rate` lands in
+/// (`_HighLevelAIHandler` state 1, @0x8d90f-0x8d9a8): [`NPC_BOX`], or
+/// below a turn of [`NPC_BOX_TURN`] trunc((9 − turn) × 8 + 32), in
+/// doubles. A turn that is not a number keeps [`NPC_BOX`], as the
+/// comparison's `jp` does.
+#[must_use]
+pub fn npc_box(turn_rate: f32) -> f32 {
+    if turn_rate < NPC_BOX_TURN {
+        // A multiply then an add, as the original's `mulsd`/`addsd`.
+        let half = (NPC_BOX_TOP_TURN - f64::from(turn_rate)) * NPC_BOX_PER_TURN + NPC_BOX_BASE;
+        // Truncated, as `cvttsd2si` does; its 16-bit `movsx` is not
+        // replicated.
+        #[allow(clippy::cast_possible_truncation)]
+        let half = half.trunc() as f32;
+        half
+    } else {
+        NPC_BOX
+    }
+}
+
+/// Whether an NPC at `position`, turning at `turn_rate`, is over `site`
+/// under `source`
+/// ([`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)). By the engine's
+/// reading, `_HighLevelAIHandler` state 1's box (@0x8d90d-0x8da07): its
+/// offset from the centre truncated to whole pixels on each axis, each at
+/// most [`npc_box`] of its turn, inclusive; an offset that is not a number
+/// reads as 0, inside. By the other reading, the port's earlier circle:
+/// within [`landing_radius`] of the centre, whatever the turn. The one
+/// place either region is decided: the traffic's landing flight asks it by
+/// both readings, for the landing and for the unfold.
+#[must_use]
+pub fn npc_over(site: &LandingSite, position: Vec2, turn_rate: f32, source: RuleSource) -> bool {
+    if source == RuleSource::Bible {
+        return (site.position - position).length() <= landing_radius(site);
+    }
+    let half = npc_box(turn_rate);
+    // `cvttss2si`'s truncation; Rust gives 0 for NaN as the original's
+    // 0x80000000 does in its low word. The `cwde` back from 16 bits is
+    // not replicated.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    let whole = |offset: f32| (offset as i32) as f32;
+    let within = |offset: f32| whole(offset).abs() <= half;
+    within(site.position.x - position.x) && within(site.position.y - position.y)
+}
+
 /// What the land key did, when it was not refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LandOutcome {
@@ -473,19 +597,29 @@ pub struct DockPress {
 
 /// What the land key does with the navigation target `target` (the
 /// stellar held, wherever it is now) and the dock request `dock`, for the
-/// ship `player` among the system's stellars `sites` (in navigation
-/// order), where `cleared` says whether traffic control clears the pilot
-/// to request docking at an inhabited stellar ([`cleared`]), `held` says
-/// whether the player's system still holds a stellar, owned and active,
-/// and `reach` gives a stellar's [`LandingReach`]: see the module docs.
+/// ship `player`, its pilot holding `cash`, among the system's stellars
+/// `sites` (in navigation order), where `cleared` says whether traffic
+/// control clears the pilot to request docking at an inhabited stellar
+/// ([`cleared`]), `held` says whether the player's system still holds a
+/// stellar, owned and active (its owner word, +0x14, is the player's
+/// system), and `reach` gives a stellar's [`LandingReach`], the speed read
+/// by `speed` ([`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed))
+/// and the untargeted pick's gate limit by `gates`
+/// ([`RuleKey::GatePickRange`](crate::RuleKey::GatePickRange)): see the
+/// module docs.
+// One argument per thing the original's dock request reads.
+#[allow(clippy::too_many_arguments)]
 pub fn land_or_select(
     target: Option<&LandingSite>,
     dock: Option<DockRequest>,
     player: &ShipState,
+    cash: i64,
     sites: &[LandingSite],
     cleared: impl Fn(&LandingSite) -> bool,
     held: impl Fn(&LandingSite) -> bool,
     reach: impl Fn(&LandingSite) -> LandingReach,
+    speed: RuleSource,
+    gates: RuleSource,
 ) -> DockPress {
     let refused = |refusal| DockPress {
         selected: None,
@@ -495,7 +629,7 @@ pub fn land_or_select(
     };
     let (site, selected) = match target {
         Some(site) => (site, None),
-        None => match nearest_stellar_site(player.position, sites) {
+        None => match nearest_stellar_site(player.position, sites, gates) {
             Some(site) => (site, Some(site.id)),
             None if sites.is_empty() => return refused(LandingRefusal::NoStellars),
             None => return refused(LandingRefusal::NothingLandable),
@@ -510,6 +644,14 @@ pub fn land_or_select(
         };
     }
     let (stellar, station) = (site.id, is_station(site));
+    if fee_due(site).is_some_and(|fee| fee > cash) {
+        return DockPress {
+            selected,
+            dock: None,
+            said: None,
+            outcome: Err(LandingRefusal::CannotPayFee { stellar, station }),
+        };
+    }
     let (mut dock, mut said) = (dock, None);
     if has(site, StellarFlags::UNINHABITED) {
         dock = Some(DockRequest {
@@ -525,7 +667,7 @@ pub fn land_or_select(
         outcome,
     };
     if let Some(request) = dock.filter(|request| request.stellar == stellar) {
-        let attempt = check_landing(player, site, request.permission, reach(site));
+        let attempt = check_landing(player, site, request.permission, reach(site), speed);
         let dock = if attempt.is_ok() { None } else { dock };
         return pressed(dock, said, attempt.map(LandOutcome::Landed));
     }
@@ -552,6 +694,31 @@ pub fn land_or_select(
         said,
         Ok(LandOutcome::Requested { stellar, station }),
     )
+}
+
+/// The landing fee `site` charges, when one is due: its `Fee` when that is
+/// above 0 and it is not dominated, else `None`. `_HandlePlayerDockRequest`
+/// tests the same for its refusal (`Fee` @0x669b7-0x669b9, the domination
+/// byte +0x46 @0x669bf-0x669c3) and its charge (@0x66dd1-0x66dd5), and
+/// `_HandlePlayerDockApproach` for the greeting's fee line
+/// (@0x64d87-0x64d96).
+///
+/// The engine knows only the always-dominated `Flags2`
+/// [`DOMINATED`](crate::market::DOMINATED); domination by Demand Tribute
+/// (the runtime byte) is rdm:task/planet-domination's, and this is the one
+/// reader to switch when it lands.
+#[must_use]
+pub fn fee_due(site: &LandingSite) -> Option<i64> {
+    (site.fee > 0 && site.flags2 & crate::market::DOMINATED == 0).then_some(i64::from(site.fee))
+}
+
+/// The cash a pilot holding `cash` has left after paying `fee`: their
+/// difference, and 0 when that is negative (`subl` @0x66de3, the clamp
+/// @0x66deb-0x66df5). The press refuses a pilot who can't pay first
+/// ([`LandingRefusal::CannotPayFee`]), so the clamp is never met from it.
+#[must_use]
+pub fn pay_fee(cash: i64, fee: i64) -> i64 {
+    (cash - fee).max(0)
 }
 
 /// Whether `site` can be landed on at all, by its flags and whether it is
@@ -603,47 +770,94 @@ pub fn is_dockable_destroyed_or_not(site: &LandingSite) -> bool {
     GateKind::of(site.flags2).is_none() && has(site, StellarFlags::CAN_LAND)
 }
 
-/// The stellar among `sites` whose centre is nearest `position`, as
-/// `_FindNearestStellar` (@0x276c-0x2888) picks it: it skips only a
-/// stellar without the can-land flag (`Flags` 0x01, @0x27cd), so a
-/// destroyed one counts, and so does an intact one landable only once
-/// destroyed. Inactive stellars are never in `sites`. The earlier in
-/// `sites` of any equally near wins (@0x285a-0x285d); `None` when none has
-/// the flag. Left out: the hypergate/wormhole 500 px limit
-/// (@0x2838-0x2853) and candidates owned by another visible system, both
-/// rdm:task/gate-stellar-targeting-fidelity.
+/// The squared distance, 250000.0 (500 pixels), a hypergate or wormhole
+/// must be strictly within for [`nearest_stellar`] to count it by the
+/// engine's reading of
+/// [`RuleKey::GatePickRange`](crate::RuleKey::GatePickRange): the float at
+/// 0xdd050, compared by `ucomiss` @0x284a.
+pub const GATE_PICK_RANGE_SQUARED: f32 = 250_000.0;
+
+/// The stellar among `sites` (in navigation order) whose centre is nearest
+/// `position`, as `_FindNearestStellar` (@0x276c-0x2888) picks it, the
+/// gate limit read by `gates`
+/// ([`RuleKey::GatePickRange`](crate::RuleKey::GatePickRange)). The whole
+/// function:
+///
+/// - F1: it starts with no best, its best distance -1.0 (@0x2777-0x2785).
+/// - F2, F3: it walks the system's sixteen `NavDefs` slots, skipping an
+///   empty one and one whose stellar is not active (+0x44,
+///   @0x278a-0x27c7). Which stellars those are is the caller's: `sites`
+///   holds them (see `nova_sim::Session`'s pick candidates).
+/// - F4: it skips a stellar without the can-land flag (`Flags` 0x01,
+///   @0x27cd). Being destroyed and `Flags` 0x80 are not read, so a
+///   destroyed stellar counts, and so does an intact one landable only
+///   once destroyed.
+/// - F5: it reads no owner (+0x14), so a stellar another visible system
+///   owns counts. Refusing it is the caller's.
+/// - F6: the distance is squared, `dx·dx + dy·dy` in single precision
+///   (@0x27d7-0x2844), never rooted.
+/// - F7: by the engine's reading, a hypergate or wormhole (`Flags2` &
+///   0x3000, @0x2838-0x2841) counts only when that is strictly below
+///   [`GATE_PICK_RANGE_SQUARED`] (@0x284a-0x2853); every other stellar
+///   counts at any distance (@0x2848). By the other reading, a gate counts
+///   at any distance.
+/// - F8: the nearest wins, the earlier of any at an equal squared distance
+///   (`ja` @0x285a-0x285d).
+/// - F9: `None` when none counts (@0x287d).
+///
+/// A NaN distance, which would stick as the best (@0x285a-0x2868), can't
+/// arise: positions are never NaN.
 #[must_use]
-pub fn nearest_stellar(position: Vec2, sites: &[LandingSite]) -> Option<StellarId> {
-    nearest_stellar_site(position, sites).map(|site| site.id)
+pub fn nearest_stellar(
+    position: Vec2,
+    sites: &[LandingSite],
+    gates: RuleSource,
+) -> Option<StellarId> {
+    nearest_stellar_site(position, sites, gates).map(|site| site.id)
 }
 
 /// The stellar [`nearest_stellar`] (`_FindNearestStellar`) names, and whether it is a station
 /// (`spöb` `Flags` 0x10), as the tutorial's land hint words it
 /// (`_HandlePlayer` @0x709e8-0x70a31; see `nova_sim::tutorial`).
 #[must_use]
-pub fn nearest_stellar_station(position: Vec2, sites: &[LandingSite]) -> Option<(StellarId, bool)> {
-    nearest_stellar_site(position, sites).map(|site| (site.id, is_station(site)))
+pub fn nearest_stellar_station(
+    position: Vec2,
+    sites: &[LandingSite],
+    gates: RuleSource,
+) -> Option<(StellarId, bool)> {
+    nearest_stellar_site(position, sites, gates).map(|site| (site.id, is_station(site)))
 }
 
 /// The site [`nearest_stellar`] names: the one the land key selects when
 /// there is no target.
-fn nearest_stellar_site(position: Vec2, sites: &[LandingSite]) -> Option<&LandingSite> {
+fn nearest_stellar_site(
+    position: Vec2,
+    sites: &[LandingSite],
+    gates: RuleSource,
+) -> Option<&LandingSite> {
+    let squared = |site: &LandingSite| (site.position - position).length_squared();
+    let in_range = |site: &&LandingSite| {
+        gates != RuleSource::Engine
+            || GateKind::of(site.flags2).is_none()
+            || squared(site) < GATE_PICK_RANGE_SQUARED
+    };
     nearest(
         position,
         sites
             .iter()
-            .filter(|site| has(site, StellarFlags::CAN_LAND)),
+            .filter(|site| has(site, StellarFlags::CAN_LAND))
+            .filter(in_range),
     )
 }
 
-/// The one of `sites` whose centre is nearest `position`, the first of
-/// any equally near.
+/// The one of `sites` whose centre is nearest `position` by squared
+/// distance, the first of any equally near.
 fn nearest<'a>(
     position: Vec2,
     sites: impl Iterator<Item = &'a LandingSite>,
 ) -> Option<&'a LandingSite> {
-    let distance = |site: &LandingSite| (site.position - position).length();
-    sites.min_by(|a, b| distance(a).total_cmp(&distance(b)))
+    let squared = |site: &LandingSite| (site.position - position).length_squared();
+    sites.min_by(|a, b| squared(a).total_cmp(&squared(b)))
 }
 
 fn not_landable(site: &LandingSite) -> LandingRefusal {
@@ -662,20 +876,24 @@ fn has(site: &LandingSite, flag: u32) -> bool {
 /// stellar, or the refusal that applies (`_HandlePlayerDockRequest`
 /// @0x66c13-0x66cfd, @0x67687-0x67800). A counter not past
 /// [`REQUESTED_NEAR`] is [`LandingRefusal::TooFar`] wherever the ship is,
-/// as is a ship outside the reach; then a ship faster than
-/// [`LANDING_SPEED`] is [`LandingRefusal::TooFast`].
+/// as is a ship outside the reach; then a ship too fast by `reading`
+/// ([`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed)) is
+/// [`LandingRefusal::TooFast`]: by the engine, |vx| or |vy| above
+/// [`PER_AXIS_LANDING_SPEED`] or not a number (@0x66c3c-0x66c66); by the
+/// other reading, the overall speed above [`LANDING_SPEED`].
 pub fn check_landing(
     player: &ShipState,
     site: &LandingSite,
     permission: i16,
     reach: LandingReach,
+    reading: RuleSource,
 ) -> Result<StellarId, LandingRefusal> {
     let (stellar, station) = (site.id, is_station(site));
     if permission <= REQUESTED_NEAR || !reach.holds(site.position - player.position) {
         return Err(LandingRefusal::TooFar { stellar, station });
     }
-    let speed = player.velocity.length();
-    if speed > LANDING_SPEED {
+    if too_fast(player.velocity, reading) {
+        let speed = player.velocity.length();
         return Err(LandingRefusal::TooFast {
             stellar,
             station,
@@ -683,6 +901,20 @@ pub fn check_landing(
         });
     }
     Ok(stellar)
+}
+
+/// Whether a ship moving at `velocity` is too fast to land by `reading`
+/// (see [`check_landing`]). By the engine, written so that a NaN axis
+/// fails both compares and refuses, as the `jp` @0x66c51 and the
+/// unordered `jb` @0x66c66 do.
+fn too_fast(velocity: Vec2, reading: RuleSource) -> bool {
+    match reading {
+        RuleSource::Engine => {
+            !(velocity.x.abs() <= PER_AXIS_LANDING_SPEED
+                && velocity.y.abs() <= PER_AXIS_LANDING_SPEED)
+        }
+        RuleSource::Bible => velocity.length() > LANDING_SPEED,
+    }
 }
 
 /// The `MinStatus` that never clears by record (@0x67915).
@@ -844,6 +1076,9 @@ mod tests {
     /// only care about the record itself.
     const GOVT: Option<GovtId> = Some(GovtId(128));
 
+    /// Cash enough for any fee the tests set.
+    const RICH: i64 = 1_000_000;
+
     /// A landable planet at (`x`, `y`), 100 x 60 (radius 50), anyone may
     /// land on.
     fn site(id: i16, x: f32, y: f32) -> LandingSite {
@@ -862,9 +1097,11 @@ mod tests {
             dead_graphic: None,
             dead_frame_size: None,
             type_counts_frames: true,
+            dead_counts_frames: true,
             exit_angle: -1,
             tribute: 0,
             gravity: 0,
+            fee: 0,
             animation: crate::catalog::SiteAnimation::default(),
         }
     }
@@ -906,6 +1143,16 @@ mod tests {
     /// request at [`CLEARED`], by `site`'s [`engine_reach`]: the stellar
     /// landed on, or the refusal. Traffic control is not asked.
     fn check(player: &ShipState, site: &LandingSite) -> Result<StellarId, LandingRefusal> {
+        check_by(player, site, RuleSource::Engine)
+    }
+
+    /// [`check`] with the speed read by `reading`
+    /// ([`RuleKey::LandingSpeed`](crate::RuleKey::LandingSpeed)).
+    fn check_by(
+        player: &ShipState,
+        site: &LandingSite,
+        reading: RuleSource,
+    ) -> Result<StellarId, LandingRefusal> {
         let press = land_or_select(
             Some(site),
             Some(DockRequest {
@@ -913,10 +1160,13 @@ mod tests {
                 permission: CLEARED,
             }),
             player,
+            RICH,
             std::slice::from_ref(site),
             |_| panic!("traffic control is asked"),
             |_| true,
             engine_reach,
+            reading,
+            RuleSource::Engine,
         );
         press.outcome.map(|outcome| match outcome {
             LandOutcome::Landed(stellar) => stellar,
@@ -938,10 +1188,13 @@ mod tests {
             None,
             None,
             &parked(),
+            RICH,
             std::slice::from_ref(site),
             |site| landing_record(site, system_govt, &record) >= site.min_status,
             |_| true,
             engine_reach,
+            RuleSource::Engine,
+            RuleSource::Engine,
         );
         press.outcome.map(|outcome| match outcome {
             LandOutcome::Landed(stellar) | LandOutcome::Requested { stellar, .. } => stellar,
@@ -949,8 +1202,68 @@ mod tests {
     }
 
     #[test]
+    fn a_stellar_the_players_system_does_not_hold_is_not_landable_before_any_reach() {
+        // Over it, at rest and cleared: only the owner test refuses
+        // (@0x6699a-0x669a4), before the uninhabited, request, speed and
+        // reach tests.
+        let sites = system();
+        let uninhabited = LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            ..sites[1]
+        };
+        for site in [sites[1], uninhabited] {
+            let press = land_or_select(
+                Some(&site),
+                request(128, CLEARED),
+                &parked(),
+                RICH,
+                std::slice::from_ref(&site),
+                |_| panic!("traffic control is asked"),
+                |_| false,
+                |_| panic!("the reach is read"),
+                RuleSource::Engine,
+                RuleSource::Engine,
+            );
+            assert_eq!(
+                press,
+                DockPress {
+                    selected: None,
+                    dock: request(128, CLEARED),
+                    said: None,
+                    outcome: Err(LandingRefusal::NotLandable {
+                        stellar: StellarId(128),
+                        station: false,
+                    }),
+                }
+            );
+        }
+        let picked = land_or_select(
+            None,
+            None,
+            &parked(),
+            RICH,
+            &sites,
+            |_| true,
+            |site| site.id != StellarId(128),
+            engine_reach,
+            RuleSource::Engine,
+            RuleSource::Engine,
+        );
+        assert_eq!(
+            picked.selected,
+            Some(StellarId(128)),
+            "selected all the same"
+        );
+        assert!(matches!(
+            picked.outcome,
+            Err(LandingRefusal::NotLandable { .. })
+        ));
+    }
+
+    #[test]
     fn the_named_values() {
         assert_eq!(LANDING_SPEED, 1.0);
+        assert_eq!(PER_AXIS_LANDING_SPEED, 0.75);
         assert_eq!(UNKNOWN_STELLAR_RADIUS, 32.0);
         assert_eq!(NO_FRAME_REACH, 75.0);
         assert_eq!(UNLOADED_TYPE_WIDTH, 150);
@@ -969,6 +1282,13 @@ mod tests {
             ],
             [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80]
         );
+    }
+
+    #[test]
+    fn a_frame_disc_is_half_the_frame_s_larger_side() {
+        assert_eq!(frame_radius((100, 60)), 50.0);
+        assert_eq!(frame_radius((140, 185)), 92.5);
+        assert_eq!(frame_radius((141, 85)), 70.5);
     }
 
     #[test]
@@ -1090,9 +1410,12 @@ mod tests {
                 ..site(130, 0.0, 500.0)
             },
         ];
-        assert_eq!(nearest_stellar(Vec2::ZERO, &sites), Some(StellarId(128)));
         assert_eq!(
-            nearest_stellar(Vec2::new(0.0, 450.0), &sites),
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+            Some(StellarId(128))
+        );
+        assert_eq!(
+            nearest_stellar(Vec2::new(0.0, 450.0), &sites, RuleSource::Engine),
             Some(StellarId(130))
         );
     }
@@ -1167,32 +1490,42 @@ mod tests {
             },
         ];
         assert_eq!(
-            nearest_stellar(Vec2::ZERO, &sites),
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
             Some(StellarId(130)),
             "landable only once destroyed, and intact"
         );
         assert_eq!(
-            nearest_stellar(Vec2::new(450.0, 0.0), &sites),
+            nearest_stellar(Vec2::new(450.0, 0.0), &sites, RuleSource::Engine),
             Some(StellarId(128))
         );
         assert_eq!(
-            nearest_stellar_station(Vec2::new(-250.0, 0.0), &sites),
+            nearest_stellar_station(Vec2::new(-250.0, 0.0), &sites, RuleSource::Engine),
             Some((StellarId(131), true)),
             "a station counts, and is said to be one"
         );
         assert_eq!(
-            nearest_stellar_station(Vec2::new(450.0, 0.0), &sites),
+            nearest_stellar_station(Vec2::new(450.0, 0.0), &sites, RuleSource::Engine),
             Some((StellarId(128), false))
         );
-        assert_eq!(nearest_stellar_station(Vec2::ZERO, &[]), None);
+        assert_eq!(
+            nearest_stellar_station(Vec2::ZERO, &[], RuleSource::Engine),
+            None
+        );
     }
 
     #[test]
     fn with_no_can_land_flag_there_is_no_nearest_stellar() {
-        assert_eq!(nearest_stellar(Vec2::ZERO, &[]), None);
-        assert_eq!(nearest_stellar(Vec2::ZERO, &[with_flags(0)]), None);
+        assert_eq!(nearest_stellar(Vec2::ZERO, &[], RuleSource::Engine), None);
         assert_eq!(
-            nearest_stellar(Vec2::ZERO, &[with_flags(StellarFlags::ONLY_WHEN_DESTROYED)]),
+            nearest_stellar(Vec2::ZERO, &[with_flags(0)], RuleSource::Engine),
+            None
+        );
+        assert_eq!(
+            nearest_stellar(
+                Vec2::ZERO,
+                &[with_flags(StellarFlags::ONLY_WHEN_DESTROYED)],
+                RuleSource::Engine
+            ),
             None
         );
     }
@@ -1201,9 +1534,221 @@ mod tests {
     #[test]
     fn equally_near_stellars_go_to_the_earlier_in_nav_order() {
         let sites = [site(131, 0.0, 100.0), site(128, 0.0, -100.0)];
-        assert_eq!(nearest_stellar(Vec2::ZERO, &sites), Some(StellarId(131)));
+        assert_eq!(
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+            Some(StellarId(131))
+        );
         let sites = [site(128, 0.0, -100.0), site(131, 0.0, 100.0)];
-        assert_eq!(nearest_stellar(Vec2::ZERO, &sites), Some(StellarId(128)));
+        assert_eq!(
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+            Some(StellarId(128))
+        );
+    }
+
+    /// A wormhole at (`x`, `y`) as the stock ones are flagged: can-land
+    /// and uninhabited (`Flags` 0x21), `Flags2` 0x2000.
+    fn wormhole(id: i16, x: f32, y: f32) -> LandingSite {
+        LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            flags2: WORMHOLE,
+            ..site(id, x, y)
+        }
+    }
+
+    /// A hypergate at (`x`, `y`): can-land (`Flags` 0x01), `Flags2` 0x1000.
+    fn hypergate(id: i16, x: f32, y: f32) -> LandingSite {
+        LandingSite {
+            flags2: HYPERGATE,
+            ..site(id, x, y)
+        }
+    }
+
+    /// The gates of the gate-limit tests, each built at (`x`, `y`).
+    const GATES: [fn(i16, f32, f32) -> LandingSite; 2] = [wormhole, hypergate];
+
+    /// `_FindNearestStellar` counts a gate (`Flags2` & 0x3000) only when
+    /// its squared distance is strictly below 250000.0 (`ucomiss` against
+    /// 0xdd050, `jae` @0x284a-0x2853): exactly 500 px away it does not
+    /// count, and the planet 900 px away is picked.
+    #[test]
+    fn by_the_engine_a_gate_exactly_500_away_is_not_picked() {
+        for gate in GATES {
+            let sites = [gate(130, 300.0, 400.0), site(128, 900.0, 0.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+                Some(StellarId(128)),
+                "{:?}",
+                sites[0].flags2
+            );
+        }
+    }
+
+    /// d² = 300² + 399² = 249201, below 250000.0: the gate counts.
+    #[test]
+    fn by_the_engine_a_gate_just_inside_500_is_picked() {
+        for gate in GATES {
+            let sites = [site(128, 900.0, 0.0), gate(130, 300.0, 399.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+                Some(StellarId(130)),
+                "{:?}",
+                sites[1].flags2
+            );
+            assert_eq!(
+                nearest_stellar_station(Vec2::ZERO, &sites, RuleSource::Engine),
+                Some((StellarId(130), false))
+            );
+        }
+    }
+
+    /// With only gates 500 px or more away there is no pick, and an
+    /// untargeted L selects nothing and refuses in silence.
+    #[test]
+    fn by_the_engine_only_far_gates_give_no_pick_and_l_refuses_nothing_landable() {
+        let sites = [wormhole(130, 300.0, 400.0), hypergate(131, -600.0, 0.0)];
+        assert_eq!(
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+            None
+        );
+        assert_eq!(
+            nearest_stellar_station(Vec2::ZERO, &sites, RuleSource::Engine),
+            None
+        );
+        let press = land_or_select(
+            None,
+            None,
+            &parked(),
+            RICH,
+            &sites,
+            |_| panic!("traffic control is asked"),
+            |_| true,
+            |_| panic!("the reach is read"),
+            RuleSource::Engine,
+            RuleSource::Engine,
+        );
+        assert_eq!(
+            press,
+            DockPress {
+                selected: None,
+                dock: None,
+                said: None,
+                outcome: Err(LandingRefusal::NothingLandable),
+            }
+        );
+        assert!(!LandingRefusal::NothingLandable.beeps(), "silent");
+    }
+
+    /// The other reading counts a gate at any distance, the port's
+    /// earlier pick.
+    #[test]
+    fn by_the_other_reading_a_gate_counts_at_any_distance() {
+        for gate in GATES {
+            let sites = [gate(130, 300.0, 400.0), site(128, 900.0, 0.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &sites, RuleSource::Bible),
+                Some(StellarId(130))
+            );
+            let far = [site(128, 9000.0, 0.0), gate(130, 5000.0, 0.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &far, RuleSource::Bible),
+                Some(StellarId(130))
+            );
+            assert_eq!(
+                nearest_stellar_station(Vec2::ZERO, &far, RuleSource::Bible),
+                Some((StellarId(130), false))
+            );
+        }
+    }
+
+    /// The limit is the gates' alone (`je 0x2855` @0x2848): an ordinary
+    /// stellar counts at any distance by either reading.
+    #[test]
+    fn a_planet_far_away_counts_by_either_reading() {
+        let sites = [site(128, 5000.0, 0.0), wormhole(130, 4000.0, 0.0)];
+        assert_eq!(
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Engine),
+            Some(StellarId(128))
+        );
+        assert_eq!(
+            nearest_stellar(
+                Vec2::new(-3000.0, 0.0),
+                &[site(128, 3000.0, 4000.0)],
+                RuleSource::Engine
+            ),
+            Some(StellarId(128))
+        );
+        assert_eq!(
+            nearest_stellar(Vec2::ZERO, &sites, RuleSource::Bible),
+            Some(StellarId(130))
+        );
+    }
+
+    /// The choice is on d² (F6, F8), the earlier winning only an equal
+    /// d²: (300, 400) and (500, 0) are both 250000 from the origin, and
+    /// (0, 499) is nearer than both. Nothing orders two stellars
+    /// differently by d² than by its root (the root is monotonic), so
+    /// only the ties are shown.
+    #[test]
+    fn of_two_stellars_the_earlier_wins_only_an_equal_squared_distance() {
+        for gates in [RuleSource::Engine, RuleSource::Bible] {
+            let tied = [site(128, 300.0, 400.0), site(129, 500.0, 0.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &tied, gates),
+                Some(StellarId(128))
+            );
+            let tied = [site(129, 500.0, 0.0), site(128, 300.0, 400.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &tied, gates),
+                Some(StellarId(129))
+            );
+            let nearer = [site(128, 300.0, 400.0), site(129, 0.0, 499.0)];
+            assert_eq!(
+                nearest_stellar(Vec2::ZERO, &nearer, gates),
+                Some(StellarId(129))
+            );
+        }
+    }
+
+    /// The limit is measured from the ship, wherever it is.
+    #[test]
+    fn by_the_engine_the_gate_limit_is_measured_from_the_ship() {
+        let from = Vec2::new(1000.0, -400.0);
+        for gate in GATES {
+            let sites = [site(128, 5000.0, 0.0), gate(130, 1100.0, -400.0)];
+            assert_eq!(
+                nearest_stellar(from, &sites, RuleSource::Engine),
+                Some(StellarId(130))
+            );
+            let sites = [site(128, 5000.0, 0.0), gate(130, 1300.0, 0.0)];
+            assert_eq!(
+                nearest_stellar(from, &sites, RuleSource::Engine),
+                Some(StellarId(128)),
+                "exactly 500 away"
+            );
+        }
+    }
+
+    /// An untargeted L selects as the pick does, by each reading.
+    #[test]
+    fn untargeted_l_selects_by_the_gate_reading() {
+        let sites = [wormhole(130, 300.0, 400.0), site(128, 900.0, 0.0)];
+        let pressed = |gates| {
+            land_or_select(
+                None,
+                None,
+                &parked(),
+                RICH,
+                &sites,
+                |_| true,
+                |_| true,
+                engine_reach,
+                RuleSource::Engine,
+                gates,
+            )
+            .selected
+        };
+        assert_eq!(pressed(RuleSource::Engine), Some(StellarId(128)));
+        assert_eq!(pressed(RuleSource::Bible), Some(StellarId(130)));
     }
 
     #[test]
@@ -1242,7 +1787,15 @@ mod tests {
     fn exactly_at_the_radius_is_over_it_and_just_beyond_is_not() {
         let target = site(128, 0.0, 0.0);
         let circle = LandingReach::Circle(landing_radius(&target));
-        let at = |x, y| check_landing(&ship(x, y, 0.0, 0.0), &target, CLEARED, circle);
+        let at = |x, y| {
+            check_landing(
+                &ship(x, y, 0.0, 0.0),
+                &target,
+                CLEARED,
+                circle,
+                RuleSource::Engine,
+            )
+        };
         assert_eq!(at(30.0, 40.0), Ok(StellarId(128)));
         assert!(matches!(
             at(30.0, 40.01),
@@ -1277,14 +1830,30 @@ mod tests {
     fn the_same_reach_decides_too_fast_and_too_far() {
         let target = site(128, 0.0, 0.0);
         let reach = LandingReach::Box(175.0);
-        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, CLEARED, reach);
+        let fast = |y| {
+            check_landing(
+                &ship(0.0, y, 3.0, 0.0),
+                &target,
+                CLEARED,
+                reach,
+                RuleSource::Engine,
+            )
+        };
         assert!(matches!(fast(174.0), Err(LandingRefusal::TooFast { .. })));
         assert!(matches!(fast(175.0), Err(LandingRefusal::TooFar { .. })));
         // Outside today's 50 circle but inside the box: too fast, not too
         // far.
         assert!(matches!(fast(60.0), Err(LandingRefusal::TooFast { .. })));
         let circle = LandingReach::Circle(50.0);
-        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, CLEARED, circle);
+        let fast = |y| {
+            check_landing(
+                &ship(0.0, y, 3.0, 0.0),
+                &target,
+                CLEARED,
+                circle,
+                RuleSource::Engine,
+            )
+        };
         assert!(matches!(fast(50.0), Err(LandingRefusal::TooFast { .. })));
         assert!(matches!(fast(60.0), Err(LandingRefusal::TooFar { .. })));
     }
@@ -1414,6 +1983,101 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_npcs_box_is_40_from_a_turn_of_8_and_widens_below_it() {
+        assert_eq!(NPC_BOX, 40.0);
+        assert_eq!(NPC_BOX_TURN, 8.0);
+        assert_eq!(NPC_BOX_TOP_TURN, 9.0);
+        assert_eq!(NPC_BOX_PER_TURN, 8.0);
+        assert_eq!(NPC_BOX_BASE, 32.0);
+        for (turn, half) in [
+            (8.0, 40.0),
+            (12.0, 40.0),
+            (7.99, 40.0),
+            (7.5, 44.0),
+            (7.0, 48.0),
+            (1.0, 96.0),
+            (f32::NAN, 40.0),
+        ] {
+            assert_eq!(npc_box(turn), half, "{turn}");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_an_npc_is_over_a_stellar_within_its_box_in_whole_pixels() {
+        let planet = site(128, 100.0, -50.0);
+        let over = |dx: f32, dy: f32, turn| {
+            npc_over(
+                &planet,
+                Vec2::new(100.0 + dx, -50.0 + dy),
+                turn,
+                RuleSource::Engine,
+            )
+        };
+        for (dx, dy) in [(40.9, 40.9), (-40.9, -40.9), (40.9, -40.9), (0.0, 0.0)] {
+            assert!(over(dx, dy, 8.0), "{dx} {dy}");
+        }
+        for (dx, dy) in [(41.0, 0.0), (-41.0, 0.0), (0.0, 41.0), (0.0, -41.0)] {
+            assert!(!over(dx, dy, 8.0), "{dx} {dy}");
+        }
+        assert!(over(48.9, -48.9, 7.0));
+        assert!(!over(49.0, 0.0, 7.0));
+        assert!(!over(0.0, 49.0, 7.0));
+        // Far beyond any 16-bit offset: outside, not wrapped.
+        assert!(!over(1.0e9, 0.0, 8.0));
+    }
+
+    #[test]
+    fn by_the_engine_an_npc_at_no_position_is_over_the_stellar() {
+        let planet = site(128, 0.0, 0.0);
+        for position in [
+            Vec2::new(f32::NAN, f32::NAN),
+            Vec2::new(f32::NAN, 0.0),
+            Vec2::new(0.0, f32::NAN),
+        ] {
+            assert!(npc_over(&planet, position, 8.0, RuleSource::Engine));
+        }
+    }
+
+    #[test]
+    fn by_the_bible_an_npc_is_over_a_stellar_within_its_landing_radius() {
+        // 100 x 60: a radius of 50.
+        let planet = site(128, 0.0, 0.0);
+        let over = |x: f32, y: f32| npc_over(&planet, Vec2::new(x, y), 8.0, RuleSource::Bible);
+        assert!(over(30.0, 40.0));
+        assert!(over(-50.0, 0.0));
+        assert!(!over(30.0, 40.01));
+        assert!(!over(40.0, 40.0), "inside the box of 40");
+        // A turn rate makes no difference to the circle.
+        assert!(npc_over(
+            &planet,
+            Vec2::new(48.0, 0.0),
+            1.0,
+            RuleSource::Bible
+        ));
+        assert!(!npc_over(
+            &planet,
+            Vec2::new(60.0, 0.0),
+            1.0,
+            RuleSource::Bible
+        ));
+        // Measured from the stellar's centre, wherever it is.
+        let off_centre = site(128, 500.0, -300.0);
+        let at = |x: f32, y: f32| Vec2::new(500.0 + x, -300.0 + y);
+        assert!(npc_over(
+            &off_centre,
+            at(30.0, 40.0),
+            8.0,
+            RuleSource::Bible
+        ));
+        assert!(!npc_over(
+            &off_centre,
+            at(30.0, 40.01),
+            8.0,
+            RuleSource::Bible
+        ));
     }
 
     #[test]
@@ -1588,17 +2252,120 @@ mod tests {
         ));
     }
 
+    /// [`TooFast`](LandingRefusal::TooFast) at stellar 128, a planet,
+    /// for a ship moving at `velocity`.
+    fn too_fast(velocity: Vec2) -> Result<StellarId, LandingRefusal> {
+        Err(LandingRefusal::TooFast {
+            stellar: StellarId(128),
+            station: false,
+            speed: velocity.length(),
+        })
+    }
+
+    /// [`check_by`] over stellar 128 for a parked ship moving at
+    /// (`vx`, `vy`), by `reading`.
+    fn moving(vx: f32, vy: f32, reading: RuleSource) -> Result<StellarId, LandingRefusal> {
+        check_by(&ship(0.0, 0.0, vx, vy), &site(128, 0.0, 0.0), reading)
+    }
+
     #[test]
-    fn exactly_the_landing_speed_lands() {
+    fn each_axis_at_most_three_quarters_lands_by_the_engine() {
+        let overall = Vec2::new(0.7, 0.7).length();
+        assert!(overall > 0.98 && overall < LANDING_SPEED, "{overall}");
+        assert_eq!(moving(0.7, 0.7, RuleSource::Engine), Ok(StellarId(128)));
+        assert_eq!(
+            moving(0.8, 0.0, RuleSource::Engine),
+            too_fast(Vec2::new(0.8, 0.0))
+        );
+        assert_eq!(
+            moving(0.0, -0.8, RuleSource::Engine),
+            too_fast(Vec2::new(0.0, -0.8))
+        );
+        // The default helper reads the engine.
+        assert_eq!(
+            check(&ship(0.0, 0.0, 0.8, 0.0), &site(128, 0.0, 0.0)),
+            too_fast(Vec2::new(0.8, 0.0))
+        );
+    }
+
+    #[test]
+    fn three_quarters_on_an_axis_is_inclusive_by_the_engine() {
+        assert_eq!(PER_AXIS_LANDING_SPEED, 0.75);
+        assert_eq!(moving(0.75, -0.75, RuleSource::Engine), Ok(StellarId(128)));
+        assert_eq!(moving(-0.75, 0.75, RuleSource::Engine), Ok(StellarId(128)));
+        let over = 0.75_f32.next_up();
+        assert_eq!(
+            moving(over, 0.0, RuleSource::Engine),
+            too_fast(Vec2::new(over, 0.0))
+        );
+        assert_eq!(
+            moving(0.0, -over, RuleSource::Engine),
+            too_fast(Vec2::new(0.0, -over))
+        );
+        // The readings differ both ways.
+        assert_eq!(moving(0.74, 0.74, RuleSource::Engine), Ok(StellarId(128)));
+        assert_eq!(
+            moving(0.74, 0.74, RuleSource::Bible),
+            too_fast(Vec2::new(0.74, 0.74))
+        );
+    }
+
+    #[test]
+    fn a_velocity_that_is_not_a_number_is_too_fast_by_the_engine() {
+        for (vx, vy) in [(f32::NAN, 0.0), (0.0, f32::NAN)] {
+            assert!(
+                matches!(
+                    moving(vx, vy, RuleSource::Engine),
+                    Err(LandingRefusal::TooFast { .. })
+                ),
+                "{vx} {vy}"
+            );
+            // The port's earlier check lets it land, as it did.
+            assert_eq!(moving(vx, vy, RuleSource::Bible), Ok(StellarId(128)));
+        }
+    }
+
+    #[test]
+    fn the_other_reading_checks_the_overall_speed() {
+        let bible = RuleSource::Bible;
+        assert_eq!(moving(0.7, 0.7, bible), Ok(StellarId(128)));
+        assert_eq!(moving(0.8, 0.0, bible), Ok(StellarId(128)));
+        assert_eq!(moving(0.0, 1.0, bible), Ok(StellarId(128)));
+        assert_eq!(moving(-1.0, 0.0, bible), Ok(StellarId(128)));
+        assert_eq!(
+            moving(0.0, 1.0_f32.next_up(), bible),
+            too_fast(Vec2::new(0.0, 1.0_f32.next_up()))
+        );
+        assert_eq!(moving(0.6, 0.81, bible), too_fast(Vec2::new(0.6, 0.81)));
+    }
+
+    #[test]
+    fn too_far_comes_before_too_fast_by_either_reading() {
         let target = site(128, 0.0, 0.0);
-        assert_eq!(
-            check(&ship(0.0, 0.0, 0.0, 1.0), &target),
-            Ok(StellarId(128))
-        );
-        assert_eq!(
-            check(&ship(0.0, 0.0, -1.0, 0.0), &target),
-            Ok(StellarId(128))
-        );
+        for reading in RuleSource::ALL {
+            let outside = ship(0.0, 500.0, 0.8, 0.0);
+            assert!(
+                matches!(
+                    check_landing(&outside, &target, CLEARED, engine_reach(&target), reading),
+                    Err(LandingRefusal::TooFar { .. })
+                ),
+                "{reading:?}"
+            );
+            let over = ship(0.0, 0.0, 0.8, 0.0);
+            assert!(
+                matches!(
+                    check_landing(
+                        &over,
+                        &target,
+                        REQUESTED_NEAR,
+                        engine_reach(&target),
+                        reading
+                    ),
+                    Err(LandingRefusal::TooFar { .. })
+                ),
+                "{reading:?}"
+            );
+        }
     }
 
     #[test]
@@ -1657,10 +2424,13 @@ mod tests {
             target,
             dock,
             player,
+            RICH,
             sites,
             |_| clear,
             |_| true,
             engine_reach,
+            RuleSource::Engine,
+            RuleSource::Engine,
         )
     }
 
@@ -1737,10 +2507,13 @@ mod tests {
             Some(&gone),
             request(128, 0x2ed),
             &parked(),
+            RICH,
             &sites,
             |_| panic!("traffic control is asked"),
             |site| sites.contains(site),
             engine_reach,
+            RuleSource::Engine,
+            RuleSource::Engine,
         );
         assert_eq!(
             pressed,
@@ -1763,10 +2536,13 @@ mod tests {
             Some(&sites[2]),
             request(130, CLEARED),
             &ship(400.0, 0.0, 0.0, 0.0),
+            RICH,
             &sites,
             |_| panic!("traffic control is asked"),
             |site| site.id != StellarId(130),
             engine_reach,
+            RuleSource::Engine,
+            RuleSource::Engine,
         );
         let refusal = LandingRefusal::NotLandable {
             stellar: StellarId(130),
@@ -1792,10 +2568,13 @@ mod tests {
             None,
             None,
             &parked(),
+            RICH,
             &sites,
             |_| panic!("traffic control is asked"),
             |site| site.id != StellarId(128),
             engine_reach,
+            RuleSource::Engine,
+            RuleSource::Engine,
         );
         assert_eq!(
             pressed,
@@ -2393,10 +3172,195 @@ mod tests {
                 station,
                 min_status: 10,
             },
+            // No `PlaySound` on the fee refusal's path (@0x669b4-0x66a80,
+            // `_DisplayComm` @0x67c88-0x67cbc).
+            LandingRefusal::CannotPayFee { stellar, station },
         ];
         for refusal in silent {
             assert!(!refusal.beeps(), "{refusal:?}");
         }
+    }
+
+    /// `site` with this `Fee`.
+    fn charging(fee: i32, site: LandingSite) -> LandingSite {
+        LandingSite { fee, ..site }
+    }
+
+    #[test]
+    fn a_fee_is_due_only_when_above_0_at_a_stellar_not_dominated() {
+        // `Fee > 0` (@0x669b7-0x669b9) and the domination byte clear
+        // (@0x669bf-0x669c3), as the charge (@0x66dd1-0x66dd5) and the
+        // greeting (@0x64d87-0x64d96) read them.
+        let planet = site(128, 0.0, 0.0);
+        assert_eq!(fee_due(&charging(0, planet)), None);
+        assert_eq!(fee_due(&charging(-5, planet)), None);
+        assert_eq!(fee_due(&charging(100, planet)), Some(100));
+        let dominated = LandingSite {
+            flags2: crate::market::DOMINATED,
+            ..charging(100, planet)
+        };
+        assert_eq!(fee_due(&dominated), None);
+    }
+
+    #[test]
+    fn paying_a_fee_takes_it_from_the_cash_and_never_below_0() {
+        // `subl` @0x66de3, then a negative cash set to 0 @0x66deb-0x66df5.
+        assert_eq!(pay_fee(500, 100), 400);
+        assert_eq!(pay_fee(100, 100), 0);
+        assert_eq!(pay_fee(50, 100), 0);
+    }
+
+    /// L pressed by a ship parked over `site`, the system's one stellar,
+    /// with `cash`, `site` selected and `dock` requested, traffic control
+    /// clearing as `clear` says.
+    fn pay(
+        site: &LandingSite,
+        cash: i64,
+        dock: Option<DockRequest>,
+        clear: impl Fn(&LandingSite) -> bool,
+    ) -> DockPress {
+        land_or_select(
+            Some(site),
+            dock,
+            &parked(),
+            cash,
+            std::slice::from_ref(site),
+            clear,
+            |_| true,
+            engine_reach,
+            RuleSource::Engine,
+            RuleSource::Engine,
+        )
+    }
+
+    #[test]
+    fn a_player_who_cannot_pay_the_fee_is_refused_and_the_request_dropped() {
+        // `Fee > cash`, signed (@0x669d0-0x669d6): the request is dropped
+        // (`_dockTarget`/`_dockPermission` = -1 @0x67cc1-0x67cd0).
+        let site = charging(100, site(128, 0.0, 0.0));
+        let press = pay(&site, 99, request(128, CLEARED), |_| {
+            panic!("traffic control is asked")
+        });
+        assert_eq!(
+            press,
+            DockPress {
+                selected: None,
+                dock: None,
+                said: None,
+                outcome: Err(LandingRefusal::CannotPayFee {
+                    stellar: StellarId(128),
+                    station: false,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn a_player_with_exactly_the_fee_lands() {
+        let site = charging(100, site(128, 0.0, 0.0));
+        let press = pay(&site, 100, request(128, CLEARED), |_| true);
+        assert_eq!(press.outcome, landed(128));
+        assert_eq!(press.dock, None);
+    }
+
+    #[test]
+    fn the_fee_refuses_the_first_press_before_traffic_control_is_asked() {
+        // @0x669b4 comes before the clearance block (@0x67903).
+        let site = charging(100, site(128, 0.0, 0.0));
+        let press = land_or_select(
+            None,
+            None,
+            &parked(),
+            0,
+            std::slice::from_ref(&site),
+            |_| panic!("traffic control is asked"),
+            |_| true,
+            |_| panic!("the reach is read"),
+            RuleSource::Engine,
+            RuleSource::Engine,
+        );
+        assert_eq!(
+            press,
+            DockPress {
+                selected: Some(StellarId(128)),
+                dock: None,
+                said: None,
+                outcome: Err(LandingRefusal::CannotPayFee {
+                    stellar: StellarId(128),
+                    station: false,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn the_fee_refuses_an_uninhabited_stellar_before_no_response() {
+        // @0x669b4 comes before the uninhabited test (@0x66b51).
+        let site = LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            ..charging(100, site(128, 0.0, 0.0))
+        };
+        let press = pay(&site, 0, None, |_| true);
+        assert_eq!(press.said, None);
+        assert_eq!(press.dock, None);
+        assert!(matches!(
+            press.outcome,
+            Err(LandingRefusal::CannotPayFee { .. })
+        ));
+    }
+
+    #[test]
+    fn a_stellar_that_is_not_landable_is_refused_so_before_its_fee() {
+        let not_landable = charging(100, with_flags(0));
+        assert!(matches!(
+            pay(&not_landable, 0, None, |_| true).outcome,
+            Err(LandingRefusal::NotLandable { .. })
+        ));
+        let site = charging(100, site(128, 0.0, 0.0));
+        let unheld = land_or_select(
+            Some(&site),
+            None,
+            &parked(),
+            0,
+            std::slice::from_ref(&site),
+            |_| true,
+            |_| false,
+            engine_reach,
+            RuleSource::Engine,
+            RuleSource::Engine,
+        );
+        assert!(matches!(
+            unheld.outcome,
+            Err(LandingRefusal::NotLandable { .. })
+        ));
+    }
+
+    #[test]
+    fn no_fee_due_refuses_nobody() {
+        let planet = site(128, 0.0, 0.0);
+        let dominated = LandingSite {
+            flags2: crate::market::DOMINATED,
+            ..charging(100, planet)
+        };
+        for site in [dominated, charging(0, planet), charging(-5, planet)] {
+            let press = pay(&site, 0, request(128, CLEARED), |_| true);
+            assert_eq!(press.outcome, landed(128), "{site:?}");
+        }
+    }
+
+    #[test]
+    fn a_station_that_cannot_be_paid_says_so() {
+        let station = LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::STATION,
+            ..charging(100, site(128, 0.0, 0.0))
+        };
+        assert_eq!(
+            pay(&station, 0, None, |_| true).outcome,
+            Err(LandingRefusal::CannotPayFee {
+                stellar: StellarId(128),
+                station: true,
+            })
+        );
     }
 
     #[test]

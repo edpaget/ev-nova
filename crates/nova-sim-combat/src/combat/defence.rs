@@ -30,7 +30,11 @@
 //!   [`RuleKey::PdHostility`](crate::RuleKey::PdHostility) the
 //!   [`PointDefenceRule`] must also call the firer hostile: Nova's
 //!   [`Allegiance`] calls a missile hostile unless its firer is in the
-//!   defender's fleet, or both have governments that are allies.
+//!   defender's fleet, or both have governments that are allies. A shot
+//!   no ship launched ([`Source::Other`]) has no firer to ask about, so it
+//!   is hostile unasked: a stellar's (see
+//!   [`stellar_guns`](super::stellar_guns)), whose firer and fleet are
+//!   placeholders its target fills, and a shot turned on its firer too.
 //! - Only with no candidate missile, however near a ship is, does it
 //!   fire at a ship (@0x394c3): one of a class of `Flags2` 0x0008
 //!   ([`HullSpec::pd_target`]), neither the defender nor its leader,
@@ -87,7 +91,7 @@ use std::fmt::Debug;
 use super::ShipRef;
 use super::aim::blind_spot;
 use super::hull::{Condition, HullSpec};
-use super::projectile::{Jam, Shot, ShotId, Target};
+use super::projectile::{Jam, Shot, ShotId, Source, Target};
 use super::weapon::{Guidance, WeaponSpec};
 use crate::catalog::{FrameSize, GovtId};
 use crate::cloak::{self, Observer};
@@ -177,7 +181,8 @@ pub fn engagement_range(spec: &WeaponSpec) -> f32 {
 /// @0x3944e-0x3945e). By the engine (`rule` none) there is no
 /// other test; by the other reading
 /// ([`RuleKey::PdHostility`](crate::RuleKey::PdHostility)), `rule` must
-/// also call the firer hostile, with the relations in `govts`.
+/// also call the firer hostile, with the relations in `govts`, but for a
+/// shot no ship launched ([`Source::Other`]), which is hostile unasked.
 ///
 /// The original truncates the squared distance into 32 bits, so a missile
 /// past 2³¹ (about 46,341 pixels) reads in range; here it is not wrapped.
@@ -211,7 +216,9 @@ pub fn choose<'a>(
                 at.heading,
                 trig::intercept_angle(at.position, shot.position),
             )
-            && rule.is_none_or(|rule| rule.hostile(defender, Side::of(shot), govts));
+            && rule.is_none_or(|rule| {
+                shot.source == Source::Other || rule.hostile(defender, Side::of(shot), govts)
+            });
         if candidate {
             best = Some((shot, distance));
         }
@@ -841,6 +848,40 @@ mod tests {
             [govts.clone(), govts],
             "asked with them"
         );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_shot_no_ship_launched_is_hostile_without_asking() {
+        // A stellar's missile at the player, its placeholder firer and
+        // fleet the player (see `stellar_guns`).
+        let player = Side {
+            ship: ShipRef::Player,
+            fleet: ShipRef::Player,
+            govt: None,
+        };
+        let stellar_shot = Shot {
+            firer: ShipRef::Player,
+            fleet: ShipRef::Player,
+            source: Source::Other,
+            ..missile(1, 0.0, -50.0, Some(ShipRef::Player))
+        };
+        let peaceful = Recording::default();
+        let govts = Governments::default();
+        let pick = |rule: &dyn PointDefenceRule| {
+            choose(
+                player,
+                &ShipState::default(),
+                &HullSpec::default(),
+                &quad(0),
+                &[stellar_shot],
+                Some(rule),
+                &govts,
+            )
+            .map(|shot| shot.id)
+        };
+        assert_eq!(pick(&peaceful), Some(ShotId(1)));
+        assert!(peaceful.asked.take().is_empty(), "not asked");
+        assert_eq!(pick(&Allegiance), Some(ShotId(1)), "Nova's rule");
     }
 
     /// Governments 128 and 129 are allies, 130 is at war with 128, and

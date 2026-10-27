@@ -173,8 +173,10 @@
 //!    stellar below 0 is skipped by the later shots. This comes in the
 //!    proximity pass, as the original's stellar check
 //!    (`_CheckShotProximities` @0x37224-0x37527) does, after the contact
-//!    passes and before the shot's fuse; beams never hit a stellar. The
-//!    session takes each hit as a [`StellarStrike`]
+//!    passes and before the shot's fuse; beams never hit a stellar by the
+//!    engine's reading of
+//!    [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars) (step 8).
+//!    The session takes each hit as a [`StellarStrike`]
 //!    ([`Combat::take_stellar_strikes`]) and shoots down those it
 //!    destroyed.
 //! 3. Each of the pass's hits lands as the walk finds it (`Combat::land`),
@@ -260,11 +262,15 @@
 //! 8. The beams' hits land. A beam damages
 //!    the nearest ship it may hit in its cone, or the first its segment
 //!    meets, as the fight's rules say ([`beam`]), every tick until its
-//!    life is over, and ends where it hit. A beam that hits no ship, or a
-//!    mining NPC's, which passes every ship, goes on to the asteroids the
-//!    session lends ([`Combat::close_tick_in`]): it cuts, wears down,
-//!    breaks, pushes or tractors the one it reaches before the next beam
-//!    is tested ([`asteroid_beam`]).
+//!    life is over, and ends where it hit. It never hits a stellar by the
+//!    engine's reading of
+//!    [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars); by the
+//!    Bible's, a planet-type beam meeting a stellar nearer than its ship
+//!    strikes the stellar instead ([`beam_stellar`]). A beam that hits no
+//!    ship, or a mining NPC's, which passes every ship, goes on to the
+//!    asteroids the session lends ([`Combat::close_tick_in`]): it cuts,
+//!    wears down, breaks, pushes or tractors the one it reaches before the
+//!    next beam is tested ([`asteroid_beam`]).
 //!
 //!    Shots, beams and blasts reach a ship breaking up as they do any other
 //!    not destroyed; a hit on it is a [`Strike`] that downs nothing, and
@@ -390,6 +396,7 @@ pub mod asteroid_hit;
 pub mod asteroid_seek;
 pub mod asteroid_walk;
 pub mod beam;
+pub mod beam_stellar;
 mod collision;
 pub mod damage;
 pub mod defence;
@@ -409,6 +416,7 @@ pub mod ion_tint;
 pub mod jamming;
 mod lineup;
 pub mod phases;
+pub mod planet_type;
 mod player_berths;
 pub mod plunder;
 pub mod projectile;
@@ -424,6 +432,7 @@ pub mod sides;
 mod source_slot;
 pub mod spin_timer;
 pub mod stellar;
+pub mod stellar_guns;
 pub mod stellar_hazards;
 pub mod submunition;
 pub mod tractor_hold;
@@ -451,6 +460,7 @@ use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
 use lineup::Lineup;
 pub use phases::Arena;
+use planet_type::{BeamPlanetFlag, BlastKind, PlanetBlasts};
 use plunder::Plunderer;
 use projectile::{
     BombLaunch, DecayStep, Jam, LockAngle, ProximityFuse, Shot, ShotId, ShotLayer, Sight, Source,
@@ -465,7 +475,7 @@ use weapon::{Explosion, Guidance};
 
 use crate::asteroid::Asteroids;
 use crate::bay::FIGHTER_BAY;
-use crate::catalog::{GovtId, ShipId, WeaponId};
+use crate::catalog::{GovtId, ShipId, StellarId, WeaponId};
 use crate::chance::Chance;
 use crate::flight::{ShipState, normalized};
 use crate::geometry::Vec2;
@@ -651,6 +661,21 @@ pub enum CombatEvent {
         /// How the ship was moving.
         velocity: Vec2,
     },
+    /// A stellar's gun fired a shot (`_HandleStellarWeapons`
+    /// @0x2f553-0x2f59a, see [`stellar_guns`]): its weapon's `Sound` is
+    /// heard from the stellar, once a shot, at
+    /// [`STELLAR_GUN_PRIORITY`], with no looped test. A stellar is no
+    /// ship, so [`CombatEvent::Fired`] can't carry it.
+    StellarFired {
+        /// The stellar.
+        stellar: StellarId,
+        /// Its weapon.
+        weapon: WeaponId,
+        /// Where it fired from: the stellar.
+        at: Vec2,
+        /// How its weapon's `Sound` plays.
+        sound: FireSound,
+    },
 }
 
 /// How a weapon's firing sounds: its `Sound` (`snd ` 200 + `Sound`,
@@ -692,6 +717,11 @@ pub const AI_FIRE_PRIORITY: u8 = 4;
 /// fighter launched (`_AILaunchFighter` @0x81433, played @0x81466 after
 /// `_LaunchFighter` succeeds @0x8141c-0x81423), with no looped test.
 pub const BAY_LAUNCH_PRIORITY: u8 = 5;
+
+/// The priority a stellar's gun plays its weapon's sound at, once a shot
+/// (`_HandleStellarWeapons` `_PlaySoundDistance(-1, snd, 5, …)`
+/// @0x2f59a), with no looped test ([`CombatEvent::StellarFired`]).
+pub const STELLAR_GUN_PRIORITY: u8 = 5;
 
 /// The priority a shot's released sub-munitions play their weapon's sound
 /// at, once a release, at the parent (`_SpawnShotSubmunitions` @0x3f23b-0x3f2f2,
@@ -968,6 +998,11 @@ pub struct Fighter<'a> {
     /// Whether it waits in the gate it comes out of: point defence never
     /// sees it (`_ShipVisibleToShip` @0x972d). The player never does.
     pub emerging: bool,
+    /// Whether it is jumping in, goal 8 (`_AIIsShipJumpingIn` @0x82f12):
+    /// gliding in, or bursting out of its gate from its first moving tick.
+    /// A stellar's gun holds fire at it (`_IsThreatToStellar`
+    /// @0x9f16-0x9f2a, [`stellar_guns`]). Never the player.
+    pub jumping_in: bool,
     /// Whether it has a cloak scanner on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)): its
     /// point defence sees a cloaked ship within 200 pixels on each axis
@@ -1224,6 +1259,13 @@ pub struct Combat {
     breakup: Breakup,
     /// Who counts as the player for the pass-through flags.
     pass_through: PassThrough,
+    /// Which ships a blast reaches by their planet type.
+    planet_blasts: PlanetBlasts,
+    /// Which of its weapon's bits makes a beam planet-type.
+    beam_planet_flag: BeamPlanetFlag,
+    /// Whether a planet-type beam hits a stellar
+    /// ([`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)).
+    beam_stellars: RuleSource,
     /// How often a decaying shot takes a step.
     decay: DecayStep,
     /// Whether an NPC's pick spends on a copy that spawns nothing
@@ -1423,14 +1465,24 @@ impl Combat {
             fighter.condition.count_down();
         }
         self.display_player(fighters, arena);
-        self.test_hits(fighters, arena, scenery, chance);
+        let Scenery {
+            stellars,
+            asteroids,
+            hazards: _,
+        } = scenery;
+        let collided = Scenery {
+            stellars: &mut *stellars,
+            asteroids,
+            hazards,
+        };
+        self.test_hits(fighters, arena, collided, chance);
         self.defend_npcs(fighters, arena, None, false, chance);
         self.fly_shots(fighters, arena, chance);
         self.handle_npcs(fighters, arena, chance);
         if let Some(hazards) = hazards {
             self.hazards(fighters, hazards);
         }
-        self.close_tick(fighters, arena, chance);
+        self.close_tick(fighters, arena, stellars, chance);
     }
 
     /// Marks the last strike on `ship` since `first_strike`, but a missile
@@ -1611,6 +1663,31 @@ impl Combat {
     /// says (see [`sides`]): by default, [`PassThrough::PlayerSide`].
     pub fn set_pass_through(&mut self, pass_through: PassThrough) {
         self.pass_through = pass_through;
+    }
+
+    /// Has a blast reach ships by their planet type as `reading` says
+    /// (see [`planet_type`]): by default, [`PlanetBlasts::Original`].
+    pub fn set_planet_blasts(&mut self, reading: PlanetBlasts) {
+        self.planet_blasts = reading;
+    }
+
+    /// Has a beam read its planet type from the bit `reading` says (see
+    /// [`planet_type`]): by default, [`BeamPlanetFlag::Flags`].
+    pub fn set_beam_planet_flag(&mut self, reading: BeamPlanetFlag) {
+        self.beam_planet_flag = reading;
+    }
+
+    /// Has a planet-type beam hit a stellar as `reading` says (see
+    /// [`beam_stellar`]): by default, the engine's, which never does.
+    pub fn set_beam_stellars(&mut self, reading: RuleSource) {
+        self.beam_stellars = reading;
+    }
+
+    /// The readings the hit rules take ([`Sides`]): who counts as the
+    /// player for the pass-through flags, and which bit makes a beam
+    /// planet-type.
+    fn hit_readings(&self) -> (PassThrough, BeamPlanetFlag) {
+        (self.pass_through, self.beam_planet_flag)
     }
 
     /// Has a decaying shot take a step as `step` says: by default,
@@ -2543,7 +2620,7 @@ impl Combat {
                 _ => fighter.state.position,
             })
             .collect();
-        let mut lineup = Lineup::new(fighters, &touchable_at, govts, self.pass_through);
+        let mut lineup = Lineup::new(fighters, &touchable_at, govts, self.hit_readings());
         let first_strike = self.strikes.len();
         let entry = self.entry_order();
         let terms = collision::WalkTerms { arsenal, rule };
@@ -2674,17 +2751,27 @@ impl Combat {
     /// multiplied by `factor` ([`GamePass`]), cone hits and segment hits
     /// alike; its `Impact` and `Ionization` never are. The caller lands it
     /// before the next beam is tested, as `_HandleBeams` damages the ship
-    /// in its beam loop (@0x316a1).
+    /// in its beam loop (@0x316a1). By the Bible's reading of
+    /// [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars), a
+    /// planet-type beam meeting one of `stellars` nearer than the ship it
+    /// hits strikes the stellar instead, and hits no ship ([`beam_stellar`]);
+    /// by the engine's it never does.
     fn beam_hit(
         &mut self,
         index: usize,
-        fighters: &[Fighter],
+        (fighters, stellars): (&[Fighter], &mut [StellarTarget]),
         sides: &Sides,
         factor: f32,
     ) -> Option<Landed> {
         let beam_rules = self.beam_rules;
+        let hit = self.beams[index].hit(sides, beam_rules);
+        if self.beam_stellars == RuleSource::Bible
+            && self.beam_strikes_stellar(index, hit.map(|(_, at)| at), stellars, factor)
+        {
+            return None;
+        }
+        let (ship, at) = hit?;
         let beam = &mut self.beams[index];
-        let (ship, at) = beam.hit(sides, beam_rules)?;
         beam.end = at;
         let beam = *beam;
         let meant = beam.aimed_at.or_else(|| {
@@ -3204,6 +3291,7 @@ impl Fighter<'_> {
             leader: self.leader,
             govt: self.govt,
             booty: self.booty,
+            planet_type: self.hull.planet_type,
             mining: self.mining,
         }
     }
@@ -3535,11 +3623,27 @@ fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
 }
 
 /// The hits `shot`'s `blast` lands, each of `hit` and `weight`
-/// ([`Strike::weight`]), on the ships among `targets` it [`reached`]: by
-/// the shot's attacker, neither direct nor intended, pushing from the
-/// blast's centre and ionizing over its circle.
-fn blasted(shot: &Shot, blast: &Blast, hit: Hit, weight: f32, targets: &[Target]) -> Vec<Landed> {
-    reached(blast, targets)
+/// ([`Strike::weight`]), on the ships among `targets` it [`reached`] whose
+/// planet type a blast of `kind` reaches by `reading`
+/// ([`planet_type::blast_reaches`]): by the shot's attacker, neither
+/// direct nor intended, pushing from the blast's centre and ionizing over
+/// its circle.
+fn blasted(
+    shot: &Shot,
+    blast: &Blast,
+    (hit, weight): (Hit, f32),
+    targets: &[Target],
+    (kind, reading): (BlastKind, PlanetBlasts),
+) -> Vec<Landed> {
+    let planet_weapon = shot.weapon.planet_type();
+    let reachable: Vec<Target> = targets
+        .iter()
+        .filter(|target| {
+            planet_type::blast_reaches(kind, reading, planet_weapon, target.ties.planet_type)
+        })
+        .copied()
+        .collect();
+    reached(blast, &reachable)
         .into_iter()
         .map(|ship| Landed {
             ship,
@@ -3663,11 +3767,13 @@ mod tests {
     mod idle_bays;
     mod ion_lockout_tick;
     mod lineup;
+    mod planet_hits;
     mod plunder_fire;
     mod proximity_slots;
     mod rating_stretch;
     mod shot_slots;
     mod shot_visits;
+    mod stellar_guns;
     mod stellar_hazards;
     mod strike_terms;
     mod tick_phases;
@@ -3699,6 +3805,7 @@ mod tests {
         docked: bool,
         mining: bool,
         emerging: bool,
+        jumping_in: bool,
         cloak_scanner: bool,
         has_cloak: bool,
         jamming: Jamming,
@@ -3766,6 +3873,7 @@ mod tests {
                 docked: false,
                 mining: false,
                 emerging: false,
+                jumping_in: false,
                 cloak_scanner: false,
                 has_cloak: false,
                 jamming: Jamming::NONE,
@@ -3830,6 +3938,7 @@ mod tests {
                 threatens_player: self.threatens_player,
                 plundering: self.plundering,
                 emerging: self.emerging,
+                jumping_in: self.jumping_in,
                 cloak_scanner: self.cloak_scanner,
                 has_cloak: self.has_cloak,
                 jamming: self.jamming,
@@ -6073,12 +6182,12 @@ mod tests {
 
     #[test]
     fn diagnostics_are_taken_once() {
-        let planet_type = WeaponRecord {
-            flags2: 0x0400,
+        let exclusive = WeaponRecord {
+            flags3: 0x0020,
             ..blaster()
         };
         let mut combat = Combat::default();
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(planet_type)];
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(exclusive)];
         for _ in 0..3 {
             tick(&mut combat, &mut ships, &NovaDisable);
         }
@@ -8836,11 +8945,15 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_in_the_shots_path_is_hit_before_the_stellar() {
+    fn a_planet_type_ship_in_the_shots_path_is_hit_before_the_stellar() {
+        // Only a planet-type ship: rule 8 passes the shot through an
+        // ordinary one (`_ShotCanHitShip` @0x44a8e-0x44acc).
+        let mut planet = Ship::at(2, 100.0, 0.0);
+        planet.hull.planet_type = true;
         let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
         let (_, ships, _, strikes) = shoot_once(
             planet_gun(),
-            vec![Ship::at(2, 100.0, 0.0)],
+            vec![planet],
             &mut stellars,
             &Arsenal::default(),
             8,
@@ -10217,8 +10330,21 @@ mod tests {
         let massless = of_mass(Ship::at(2, 100.0, 100.0), 0.0);
         let mut planet = of_mass(Ship::at(2, 100.0, 100.0), 100.0);
         planet.hull.planet_type = true;
-        for target in [massless, planet] {
-            let mut ships = [tractor_firer(200.0, 135.0), target];
+        // Only a beam of `Flags` 0x0400 may hit a planet-type ship
+        // (`_HandleBeams` @0x30d34-0x30d82).
+        let mut planet_tractor = tractor_firer(200.0, 135.0);
+        planet_tractor.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                flags: planet_type::BEAM_PLANET_FLAG,
+                ..tractor_beam()
+            }),
+            1,
+        )]);
+        for (firer, target) in [
+            (tractor_firer(200.0, 135.0), massless),
+            (planet_tractor, planet),
+        ] {
+            let mut ships = [firer, target];
             let shoves = tractored(&mut ships);
             assert_eq!(shoves, []);
             assert_eq!((ships[0].tractor, ships[1].tractor), (None, None));

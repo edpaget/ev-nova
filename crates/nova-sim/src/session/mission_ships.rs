@@ -1209,14 +1209,15 @@ impl Session {
     /// marked as `marks` had them before it, in the order they left: each
     /// that left the system raises [`Fate::Departed`], then its slot
     /// counts it ([`Session::count_left_mission_ship`]) when it counts.
-    /// One that jumped out left and counts; one that landed left and
-    /// counts only under [`RuleKey::LandedLeaves`]'s other reading, as the
-    /// original's waits at the stellar; one that entered a gate left, as
+    /// One that jumped out left and counts; one that landed is among them
+    /// only under [`RuleKey::LandedLeaves`]'s other reading, which takes it
+    /// out as it lands, and so left and counts (by the engine's it stays,
+    /// waiting at the stellar, as the original's does, and is not among
+    /// them); one that entered a gate left, as
     /// the original frees its slot, but counts only under
     /// [`RuleKey::GateExitCounts`]'s other reading; a docked fighter never
     /// left, nor did an escape pod freed (see `nova_sim::traffic::pod_flight`).
     pub(super) fn mission_ships_left(&mut self, marks: &[(NpcId, MissionMark)]) {
-        let landed_leaves = self.setup.rules.source_for(RuleKey::LandedLeaves) == RuleSource::Bible;
         let gate_exit_counts =
             self.setup.rules.source_for(RuleKey::GateExitCounts) == RuleSource::Bible;
         let left: Vec<(NpcId, MissionMark, bool)> = self
@@ -1226,15 +1227,13 @@ impl Session {
             .iter()
             .filter_map(|&(id, outcome)| {
                 let counts = match outcome {
-                    Outcome::JumpedOut => true,
-                    Outcome::Landed(_) if landed_leaves => true,
+                    // A landing is among the departures only when it leaves
+                    // (`traffic::land_flight::leaves`).
+                    Outcome::JumpedOut | Outcome::Landed(_) => true,
                     Outcome::EnteredGate(_) => gate_exit_counts,
                     // An escape pod's slot freed silently (+0xb8 = 0
                     // @0x8fbb3) raises no fate.
-                    Outcome::Landed(_)
-                    | Outcome::Docked { .. }
-                    | Outcome::Flying
-                    | Outcome::Freed => {
+                    Outcome::Docked { .. } | Outcome::Flying | Outcome::Freed => {
                         return None;
                     }
                 };
@@ -3540,8 +3539,13 @@ pub(super) mod tests {
         let catalog = goal_catalog(CHASE_OFF, 0);
         let mut session = in_flight(&catalog);
         let id = session.npcs()[0].id;
+        let site = session.chart.sites[0];
         land_ship(&mut session, &catalog, 0);
-        assert!(session.npcs().iter().all(|npc| npc.id != id), "gone");
+        let landed = session.space.npc(id).expect("it stays in the system");
+        assert_eq!(landed.state.position, site.position, "at the stellar");
+        assert_eq!(landed.state.velocity, Vec2::ZERO, "stopped");
+        assert!(landed.wait_running(), "waiting there");
+        assert_eq!(landed.visited, Some(site.id));
         assert!(!departed(&session, id));
         assert_eq!(chased_and_left(&session), (0, 2));
     }
@@ -3555,6 +3559,7 @@ pub(super) mod tests {
         );
         let id = session.npcs()[0].id;
         land_ship(&mut session, &catalog, 0);
+        assert!(session.npcs().iter().all(|npc| npc.id != id), "gone");
         assert!(departed(&session, id));
         assert_eq!(chased_and_left(&session), (1, 1));
     }

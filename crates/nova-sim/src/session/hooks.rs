@@ -231,8 +231,12 @@ impl Session {
         // The stellar `_DoNewPilot` saves as last landed on (@0x1926e,
         // @0x1927b-0x192a6), into the file only (@0x1935f); the engine's
         // pilot is what it saves.
-        self.pilot.stellar = nearest_stellar(self.ship.player.position, &self.chart.sites)
-            .or_else(|| self.chart.listed.first().map(|site| site.id));
+        self.pilot.stellar = nearest_stellar(
+            self.ship.player.position,
+            &self.chart.sites,
+            self.setup.rules.source_for(crate::RuleKey::GatePickRange),
+        )
+        .or_else(|| self.chart.listed.first().map(|site| site.id));
         // Game entry's reset comes after `_DoNewPilot`'s
         // `OnStart` (@0x1925e, @0x19ffb; see the `ranks` module).
         self.reset_precalced();
@@ -1337,6 +1341,38 @@ mod tests {
         assert_eq!(session.pilot().stellar(), None);
         session.begin(&catalog, &mut Scripted::default());
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
+    }
+
+    /// `_DoNewPilot`'s pick is `_FindNearestStellar`'s, gate limit and
+    /// all (@0x1926e): by the engine, a wormhole 650 from (50, 50) is
+    /// passed over for a planet 1950 away; by the other reading it is
+    /// saved.
+    #[test]
+    fn begin_passes_over_a_far_gate_by_the_engine() {
+        let mut catalog = starting_with("");
+        catalog.sites = vec![(
+            SystemId(130),
+            vec![
+                crate::session::stellar_picks::tests::wormhole(150, 50.0, 700.0),
+                crate::testkit::planet(128, 2000.0, 50.0),
+            ],
+        )];
+        for (rules, saved) in [
+            (crate::rulebook::Rulebook::default(), 128),
+            (
+                crate::rulebook::Rulebook::default()
+                    .with_override(crate::RuleKey::GatePickRange, RuleSource::Bible),
+                150,
+            ),
+        ] {
+            let mut session = new_pilot(&catalog).with_rules(rules);
+            session.begin(&catalog, &mut Scripted::default());
+            assert_eq!(
+                session.pilot().stellar(),
+                Some(StellarId(saved)),
+                "{rules:?}"
+            );
+        }
     }
 
     #[test]

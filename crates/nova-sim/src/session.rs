@@ -446,6 +446,7 @@ mod cargo_boxes;
 #[cfg(test)]
 mod carrier_lead;
 mod chart;
+mod chart_ownership;
 mod clearance;
 mod cloaks;
 mod collision_order;
@@ -508,6 +509,7 @@ mod kept_berths;
 mod kept_rescues;
 mod killed_explosions;
 mod land_on_stellar;
+mod landing_fee;
 mod last_refresh;
 mod launch_frame;
 mod lost_lead;
@@ -541,6 +543,8 @@ mod person_offers;
 mod persons;
 mod pilot_panel;
 mod pirate_plunder;
+#[cfg(test)]
+mod planet_weapons;
 mod player_cloak;
 mod player_downed;
 mod player_info;
@@ -582,6 +586,10 @@ mod stale_sprites;
 mod statics;
 mod status_cargo;
 mod steering;
+#[cfg(test)]
+mod stellar_attackers;
+mod stellar_guns;
+mod stellar_picks;
 mod stellars;
 mod story;
 mod stray_words;
@@ -784,6 +792,7 @@ impl FightTerms {
                 .docking
                 .is_some_and(|docking| docking.sub == crate::traffic::plunder_dock::DockSub::Dock);
         let emerging = npc.emerging();
+        let jumping_in = npc.jumping_in();
         let cloak_scanner = npc.cloak_gear.scanner.on_screen;
         // A waiting ship's fire block is skipped (`_HandleShip`
         // @0x34a54-0x34a72).
@@ -831,6 +840,7 @@ impl FightTerms {
             docked,
             mining: npc.goal == Goal::Mine,
             emerging,
+            jumping_in,
             cloak_scanner,
             has_cloak: self.has_cloak,
             jamming: self.jamming,
@@ -1177,6 +1187,11 @@ impl Session {
         let stock = arsenal.stock_outfits(ship, &outfits);
         let ships = catalog.ships();
         fill_in(&mut pilot, &defaults, &stock, &ships);
+        let lives: BTreeMap<StellarId, crate::catalog::StellarLife> = catalog
+            .stellar_lives()
+            .into_iter()
+            .map(|life| (life.id, life))
+            .collect();
         let statics = Statics {
             ammo_outfits: Arsenal::ammo_outfits(&outfits),
             outfits,
@@ -1194,12 +1209,14 @@ impl Session {
             )),
             box_frames: crate::scoop::BoxFrames::new(catalog.box_frame_sizes()),
             asteroid_fields: asteroids::fields(&catalog.asteroid_fields()),
-            lives: catalog
-                .stellar_lives()
-                .into_iter()
-                .map(|life| (life.id, life))
+            destroyable: lives
+                .values()
+                .filter(|life| crate::story::wreck::destroyable(life))
+                .map(|life| life.id)
                 .collect(),
+            lives,
             fallback_frame: catalog.fallback_frame_size(),
+            fallback_counts: catalog.fallback_counts_frames(),
             uniform_dudes: mission_ships::uniform_dudes(&missions, catalog),
             missions,
             crons,
@@ -1215,6 +1232,7 @@ impl Session {
             place_names: catalog.place_names(),
             first_stellars: catalog.first_stellars().into_iter().collect(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
+            stellar_weapons: catalog.stellar_weapons().into_iter().collect(),
             boom_sounds: catalog.boom_sounds().into_iter().collect(),
         };
         let mut session = Self {
@@ -1341,6 +1359,7 @@ impl Session {
         self.space.combat.set_pass_through(PassThrough::from(
             rules.source_for(RuleKey::PlayerPassThrough),
         ));
+        self.space.combat.set_planet_type_rules(&rules);
         self.space
             .combat
             .set_decay(DecayStep::from(rules.source_for(RuleKey::ShotDecay)));
@@ -1905,7 +1924,8 @@ impl Session {
                 fleet: &self.pilot.escorts,
             },
             spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
-            // No tractor's step: the entry flies no ship.
+            // No tractor's step: the entry flies no ship. No stellar
+            // shots can shoot down either: it decides for no ship.
             ..World::new(&self.chart.sites)
         };
         let last = self.space.last_npc();
@@ -2151,6 +2171,9 @@ impl Session {
             npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
             successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
             held_burst: self.setup.rules.source_for(RuleKey::HeldGateBurst),
+            npc_landing: self.setup.rules.source_for(RuleKey::NpcLanding),
+            landed_leaves: self.setup.rules.source_for(RuleKey::LandedLeaves),
+            destroyable: &self.statics.destroyable,
         };
         let stepped = f(&mut self.space.traffic, world);
         // The grudges the traffic decided as it answered strikes, in turn
@@ -2243,6 +2266,9 @@ impl Session {
             npc_escort_ai: self.setup.rules.source_for(RuleKey::NpcEscortAi),
             successor_repairer: self.setup.rules.source_for(RuleKey::SuccessorRepairer),
             held_burst: self.setup.rules.source_for(RuleKey::HeldGateBurst),
+            npc_landing: self.setup.rules.source_for(RuleKey::NpcLanding),
+            landed_leaves: self.setup.rules.source_for(RuleKey::LandedLeaves),
+            destroyable: &self.statics.destroyable,
         }
     }
 
@@ -2462,6 +2488,7 @@ impl Session {
             .map(npc_escape::AtStep::of)
             .collect();
         self.handle_npcs(pass, rules, chance);
+        self.stellar_guns(pass, rules, chance);
         self.beams_phase(pass, rules, chance);
         // The words the pass's stray beams stepped, before the NPCs'
         // escape pods read the crew pods left (see the `npc_escape`
@@ -3544,11 +3571,22 @@ impl Session {
     /// then awaits [`Session::enter_hypergate`] or
     /// [`Session::enter_wormhole`], until the next tick.
     ///
+    /// A stellar's landing `Fee`, when one is due
+    /// ([`landing::fee_due`](crate::landing::fee_due)), refuses a pilot
+    /// whose cash is below it ([`LandingRefusal::CannotPayFee`],
+    /// @0x669b4-0x66a80) right after the not-landable check, before the
+    /// disabled ship's press, the uninhabited stellar's reply and the
+    /// clearance: silently, the dock request dropped, the selection kept.
+    /// A press that lands, or enters a hypergate or wormhole, charges it
+    /// before the gate branch (@0x66db9-0x66df5); a hypergate map
+    /// cancelled after does not refund it (see the `landing_fee` module).
+    ///
     /// A disabled ship's press goes as far as `_HandlePlayerDockRequest`
     /// does for it and no further: with no target it selects one, starting
     /// its fly-in, as the land key does before the dock request
     /// (@0x6a8fb-0x6a932); a target that can't be landed on is refused as
-    /// an intact ship's is (@0x66977-0x669aa), and with nothing to select
+    /// an intact ship's is (@0x66977-0x669aa), so is a pilot who can't pay
+    /// the fee (@0x669b4, the request dropped), and with nothing to select
     /// ([`LandingRefusal::NoStellars`], [`LandingRefusal::NothingLandable`])
     /// the press makes no dock request, as an intact ship's makes none
     /// (@0x6a94c). Then the dock
@@ -3571,9 +3609,10 @@ impl Session {
     /// system.
     ///
     /// A cloaked ship's press goes as far as a disabled ship's, and the
-    /// dock request's `_ShipIsCloaked` (@0x66a8e), before its
-    /// `_IsDisabled`, refuses it [`LandingRefusal::Cloaked`] with a beep,
-    /// disabled or not; a cloak still fading in lands as before.
+    /// dock request's `_ShipIsCloaked` (@0x66a8e), after the fee
+    /// (@0x669b4) and before its `_IsDisabled`, refuses it
+    /// [`LandingRefusal::Cloaked`] with a beep, disabled or not, unless
+    /// the fee refused it first; a cloak still fading in lands as before.
     ///
     /// A refusal from the dock request that [`LandingRefusal::beeps`]
     /// pushes [`SimSound::Refused`], `_beepSnd[3]` (@0x67e8f, @0x676aa,
@@ -3606,37 +3645,46 @@ impl Session {
         };
         let blessing = self.blessing();
         let reading = self.setup.rules.source_for(RuleKey::BlessingLanding);
+        let candidates = self.chart.pick_candidates(&self.pilot, &self.statics);
         // The stellar held, wherever its system lists it, and the dock
         // request's recheck of it (@0x6699a-0x669aa): its owner word the
-        // player's system, and active, which the stellars shown hold as the
-        // last rebuild point left them.
+        // player's system ([`Chart::held_here`]), and active, which the
+        // stellars shown hold as the last rebuild point left them.
         let target = self
             .nav_target()
             .and_then(|id| self.chart.listed.iter().find(|site| site.id == id));
-        let player = self.pilot.system;
         let held = |site: &LandingSite| {
             self.chart.sites.iter().any(|shown| shown.id == site.id)
-                && self
-                    .chart
-                    .galaxy
-                    .holder(site.id, self.statics.listers(site.id), player)
-                    == Some(player)
+                && self.chart.held_here(&self.pilot, &self.statics, site.id)
         };
         let press = land_or_select(
             target,
             self.port.dock,
             &self.ship.player,
-            &self.chart.sites,
+            self.pilot.cash,
+            &candidates,
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             held,
-            |site| self.space.landing_reach(&self.setup, site),
+            |site| {
+                let held = self.chart.held_here(&self.pilot, &self.statics, site.id);
+                self.space.landing_reach(&self.setup, site, held)
+            },
+            self.setup.rules.source_for(RuleKey::LandingSpeed),
+            self.setup.rules.source_for(RuleKey::GatePickRange),
         );
-        // The cloak's refusal (@0x66a8e) comes before the disabled one
-        // (@0x66aee), each after the landability (@0x66977-0x669ae).
+        // The fee's refusal (@0x669b4) comes before the cloak's
+        // (`_ShipIsCloaked` @0x66a8e), which comes before the disabled one
+        // (@0x66aee), all after the landability (@0x66977-0x669ae).
         let cloaked = self.ship.cloak.cloak.is_cloaked();
         if cloaked || disabled {
             self.chart.select_pressed(press.selected);
             return match press.outcome {
+                Err(refusal @ LandingRefusal::CannotPayFee { .. }) => {
+                    // The original drops the request (@0x67cc1-0x67cd0)
+                    // before reaching `_ShipIsCloaked` or `_IsDisabled`.
+                    self.port.dock = press.dock;
+                    Err(refusal)
+                }
                 Err(
                     refusal @ (LandingRefusal::NotLandable { .. }
                     | LandingRefusal::NoStellars
@@ -3648,6 +3696,9 @@ impl Session {
         }
         let outcome = self.apply_press(press)?;
         if let LandOutcome::Landed(stellar) = outcome {
+            // Before the branch on the stellar's kind (@0x66db9-0x66df5),
+            // so a gate's entry pays it too.
+            self.chart.charge_fee(stellar, &mut self.pilot);
             if let Some(kind) = self.gate_kind(stellar) {
                 self.ship.warp.gate = Some(stellar);
                 return Ok(LandPress::AtGate { stellar, kind });
@@ -3657,8 +3708,8 @@ impl Session {
         Ok(outcome.into())
     }
 
-    /// What `stellar`, one of the system's, leads through, if it is a
-    /// hypergate or wormhole.
+    /// What `stellar`, one the system lists, shown or not, leads through,
+    /// if it is a hypergate or wormhole.
     #[must_use]
     pub fn gate_kind(&self, stellar: StellarId) -> Option<GateKind> {
         self.chart.gate_kind(stellar)
@@ -6832,11 +6883,13 @@ impl Chart {
         overlaid_sites(&self.galaxy, catalog, system)
     }
 
-    /// What `stellar`, one of the system's, leads through, if it is a
-    /// hypergate or wormhole.
+    /// What `stellar`, one the system lists, leads through, if it is a
+    /// hypergate or wormhole: read from `listed`, so a gate another
+    /// visible system owns, which the land key can select, is worded as
+    /// one (`STR#` 2002 #84 then #85/#86, @0x67cda-0x67dc4).
     #[must_use]
     fn gate_kind(&self, stellar: StellarId) -> Option<GateKind> {
-        let site = self.sites.iter().find(|site| site.id == stellar)?;
+        let site = self.listed.iter().find(|site| site.id == stellar)?;
         GateKind::of(site.flags2)
     }
 
@@ -7828,7 +7881,8 @@ pub(super) mod tests {
                 &flying,
                 &planet(128, 30.0, -40.0),
                 crate::clearance::CLEARED,
-                crate::landing::LandingReach::Box(175.0)
+                crate::landing::LandingReach::Box(175.0),
+                crate::rulebook::RuleSource::Engine,
             )
             .map(|_| StellarId(128))
         );
@@ -16464,14 +16518,26 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn every_ai_type_lands_peacefully() {
+    fn every_ai_type_lands_peacefully_waits_there_then_leaves_by_hyperspace() {
         for ai_type in 1..=4 {
             // 129, 2000 out, is beyond the 999 bound on a destination.
-            let how = Outcome::Landed(StellarId(128));
             let catalog = trafficked(130, 1, ai_type);
             let mut session = Session::start(&catalog).expect("starts");
             session.populate(&catalog, &mut NeverFires);
-            assert_eq!(first_departure(&mut session, &catalog), how, "AI {ai_type}");
+            let mut ticks = 0;
+            while session.npcs()[0].ai_wait == 0 {
+                session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+                assert_eq!(session.departed(), [], "AI {ai_type}: it stays");
+                ticks += 1;
+                assert!(ticks < 3000, "AI {ai_type}: never landed");
+            }
+            let landed = &session.npcs()[0];
+            assert_eq!(landed.visited, Some(StellarId(128)), "AI {ai_type}");
+            assert_eq!(landed.ai_wait, 498, "AI {ai_type}: 300 + Rand(200)");
+            // Its stay out, the idle block finds it has visited a stellar
+            // here and sends it away by hyperspace.
+            let how = first_departure(&mut session, &catalog);
+            assert_eq!(how, Outcome::JumpedOut, "AI {ai_type}");
             assert_eq!(session.npcs(), []);
         }
     }
@@ -16961,6 +17027,17 @@ pub(super) mod tests {
         assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
         stop_npcs(&mut session);
         session
+    }
+
+    /// `session` landing its NPCs by the port's earlier circle, the other
+    /// reading of `npc_landing`, for a test about something else: by the
+    /// engine's box (80 for a ship turning 3 a tick), a ship idling near
+    /// planet 128 at (30, -40) lands at once.
+    pub(super) fn landing_by_circle(session: &mut Session) {
+        session.setup.rules = session
+            .setup
+            .rules
+            .with_override(RuleKey::NpcLanding, RuleSource::Bible);
     }
 
     pub(super) const FIRE: Trigger = Trigger {
@@ -21662,7 +21739,7 @@ pub(super) mod tests {
     #[test]
     fn diagnostics_are_drained_once() {
         let mut catalog = armed();
-        catalog.weapons[0].flags2 = 0x0400;
+        catalog.weapons[0].flags3 = 0x0020;
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
         for _ in 0..5 {
@@ -21672,8 +21749,8 @@ pub(super) mod tests {
             session.take_diagnostics(),
             [SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: WeaponId(128),
-                field: crate::combat::flags::FlagField::Flags2,
-                bit: 0x0400
+                field: crate::combat::flags::FlagField::Flags3,
+                bit: 0x0020
             }]
         );
         assert_eq!(session.take_diagnostics(), []);

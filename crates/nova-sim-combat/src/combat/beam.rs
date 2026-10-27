@@ -1167,9 +1167,9 @@ mod tests {
             ..Beam::launch(laser(), firer, firer, &at(0.0, 0.0, 90.0), Aiming::Ahead)
         };
         let sides = Sides {
-            targets,
             govts,
             pass_through,
+            ..crate::combat::fixture::among(targets)
         };
         beam.hit(&sides, BeamRules::default()).map(|(ship, _)| ship)
     }

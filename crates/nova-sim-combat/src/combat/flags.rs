@@ -170,11 +170,11 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     // a player's bay's lit by the session for a fighter put in the
     // system; the view draws it.
     (Flags2, 0x0200, Any, Presentation),
-    // Planet-type weapon. Its shots hit destroyable stellars (`stellar`);
-    // the ship side (planet-type ships, blasts sparing ships) is not done
-    // (story-runtime phase 13 "planet-type-weapons-and-ships"), so it is
-    // still reported.
-    (Flags2, 0x0400, Any, Unimplemented),
+    // Planet-type weapon. Its shots hit destroyable stellars (`stellar`)
+    // and only planet-type ships, and its expiry blast spares ships
+    // (`planet_type`); the AI fires it at stellars
+    // (`nova_sim::ai::death_star`).
+    (Flags2, 0x0400, Any, Implemented),
     // Not selectable or shown out of ammo.
     (Flags2, 0x0800, Any, Presentation),
     // Disables but never destroys: its shots, blasts and beams can't kill
@@ -284,7 +284,7 @@ mod tests {
         (Flags2, 0x0080, [Implemented; 4]),
         (Flags2, 0x0100, [Implemented; 4]),
         (Flags2, 0x0200, [Presentation; 4]),
-        (Flags2, 0x0400, [Unimplemented; 4]),
+        (Flags2, 0x0400, [Implemented; 4]),
         (Flags2, 0x0800, [Presentation; 4]),
         (Flags2, 0x1000, [Implemented; 4]),
         (Flags2, 0x2000, [NA, Presentation, NA, NA]),
@@ -414,7 +414,7 @@ mod tests {
     fn every_unimplemented_bit_set_is_listed_in_the_tables_order() {
         assert_eq!(
             unimplemented(&spec(-1, 0x0048, 0x0480, 0x0034)),
-            [(Flags, 0x0040), (Flags2, 0x0400), (Flags3, 0x0020),],
+            [(Flags, 0x0040), (Flags3, 0x0020),],
             "the guided-only 0x0008 left out"
         );
         assert_eq!(unimplemented(&spec(-1, 0, 0, 0)), []);

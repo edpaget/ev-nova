@@ -69,6 +69,9 @@
 
 use super::damage::Blast;
 use super::impact::speed_limit;
+#[cfg(doc)]
+use super::planet_type;
+use super::planet_type::PlanetBlasts;
 use super::projectile::{Shot, contact};
 use super::weapon::{HitParticles, WeaponSpec};
 use super::{ParticleBurst, ShipRef};
@@ -244,15 +247,17 @@ pub fn hit_burst(at: Vec2, particles: &HitParticles, variation: u32) -> Particle
 
 /// The blast of `shot`'s hit on an asteroid at `at` (@0x3670d-0x368ca):
 /// only a player's shot's (the player its [`Shot::attacker`]), with a
-/// `BlastRadius` above none, from a weapon that is not planet-type; it
-/// hits no ship directly, and spares the player only by `Flags` 0x0100.
-/// The caller leaves planet-type ships out of those it may reach
-/// (@0x367a8).
+/// `BlastRadius` above none, from a weapon that is not planet-type
+/// (@0x36734) when `reading` is the original's; it hits no ship directly,
+/// and spares the player only by `Flags` 0x0100. The caller leaves out of
+/// those it may reach the ships of a planet type `reading` spares
+/// ([`planet_type::blast_reaches`], @0x367a8).
 #[must_use]
-pub fn blast(shot: &Shot, at: Vec2) -> Option<Blast> {
+pub fn blast(shot: &Shot, at: Vec2, reading: PlanetBlasts) -> Option<Blast> {
     let weapon = &shot.weapon;
     let players = shot.attacker() == Some(ShipRef::Player);
-    (players && weapon.blast_radius > 0.0 && !weapon.planet_type()).then(|| Blast {
+    let spared = reading == PlanetBlasts::Original && weapon.planet_type();
+    (players && weapon.blast_radius > 0.0 && !spared).then(|| Blast {
         at,
         radius: weapon.blast_radius,
         direct: None,
@@ -611,6 +616,7 @@ mod tests {
     #[test]
     fn only_a_players_shot_with_a_blast_radius_and_not_planet_type_blasts() {
         let at = Vec2::new(3.0, 4.0);
+        let blast = |shot: &Shot, at| blast(shot, at, PlanetBlasts::Original);
         assert_eq!(
             blast(&blasting(ShipRef::Player, 30, 0, 0), at),
             Some(Blast {
@@ -629,6 +635,22 @@ mod tests {
         assert_eq!(blast(&blasting(npc, 30, 0, 0), at), None);
         assert_eq!(blast(&blasting(ShipRef::Player, 0, 0, 0), at), None);
         assert_eq!(blast(&blasting(ShipRef::Player, 30, 0, 0x0400), at), None);
+    }
+
+    #[test]
+    fn by_the_matching_reading_a_planet_type_weapon_blasts_at_an_asteroid_too() {
+        let at = Vec2::new(3.0, 4.0);
+        let planet = blasting(ShipRef::Player, 30, 0, 0x0400);
+        assert_eq!(
+            blast(&planet, at, PlanetBlasts::Matching).map(|b| b.radius),
+            Some(30.0)
+        );
+        let npc = ShipRef::Npc(crate::combat::NpcId(1));
+        assert_eq!(
+            blast(&blasting(npc, 30, 0, 0x0400), at, PlanetBlasts::Matching),
+            None,
+            "still the player's alone"
+        );
     }
 
     #[test]

@@ -73,7 +73,7 @@ impl<C> FlightView<C> {
             match pass {
                 WorldPass::Layer(SpriteLayer::Stars) => self.draw_stars_and_message(list, camera),
                 WorldPass::Layer(SpriteLayer::Stellars) => {
-                    scene::draw_stellars(list, scene, camera, self.elapsed);
+                    scene::draw_stellars(list, scene, camera);
                 }
                 WorldPass::BeamsUnderShips => {
                     weapons::draw_beams(list, &beams, &self.looks, true, lightning);

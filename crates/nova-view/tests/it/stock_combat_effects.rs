@@ -195,7 +195,7 @@ fn a_stock_escape_pod_draws_on_shan_895s_sheet_of_36_rotations() {
     let drawn = list
         .into_iter()
         .filter(|command| {
-            matches!(command, DrawCommand::Sprite { image, .. } if image.id == sheet.image_id)
+            matches!(command, DrawCommand::Sprite { image, .. } if *image == sheet.image.frame(image.frame))
         })
         .count();
     assert_eq!(drawn, 1);

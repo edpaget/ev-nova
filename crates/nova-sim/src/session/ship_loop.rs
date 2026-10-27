@@ -228,6 +228,7 @@ mod tests {
     use crate::combat::{CombatEvent, Rules, ShipRef};
     use crate::flight::Controls;
     use crate::geometry::Vec2;
+    use crate::rulebook::RuleSource;
     use crate::session::Session;
     use crate::session::tests::{FIRE, armed, blaster, facing_an_npc};
     use crate::stats::ShipStats;
@@ -444,19 +445,61 @@ mod tests {
         assert_ne!(heading(1, 2, true), still, "where it stood");
     }
 
-    #[test]
-    fn an_npc_whose_flight_lands_takes_no_step_and_no_later_blast() {
-        // Its slot is inactive from its own `_HandleShip`: the loop skips
-        // its display, and a later slot's shockwave reaches it no more.
-        let catalog = armed();
-        let mut session = empty(&catalog);
+    /// `session`'s NPC `lander` put at rest over the system's first
+    /// stellar, bound to land on it, and a wreck in slot `berth` beside it
+    /// whose blast reaches it, a mission ship that lands leaving as
+    /// `landed_leaves` says; after a pass of `catalog`.
+    fn land_beside_a_wreck(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        lander: NpcId,
+        berth: u32,
+        landed_leaves: crate::rulebook::RuleSource,
+    ) {
+        session.setup.rules = session
+            .setup
+            .rules
+            .with_override(crate::rulebook::RuleKey::LandedLeaves, landed_leaves);
         let site = session.chart.sites[0];
-        let lander = place(&mut session, 1, site.position, Vec2::ZERO);
-        session.space.traffic.npcs_mut()[0].goal = Goal::Land(site.id);
-        wreck(&mut session, 2, site.position + Vec2::new(20.0, 0.0));
+        let npc = session.space.npc_mut(lander).expect("there");
+        npc.state.position = site.position;
+        npc.state.velocity = Vec2::ZERO;
+        npc.goal = Goal::Land(site.id);
+        wreck(session, berth, site.position + Vec2::new(20.0, 0.0));
         session.take_combat_events();
-        pass(&mut session, &catalog, &Keep);
+        pass(session, catalog, &Keep);
+    }
+
+    #[test]
+    fn an_npc_whose_flight_lands_stays_in_its_slot_and_a_later_blast_reaches_it() {
+        // State 1's landing leaves its slot active (+0xb8 is not cleared,
+        // @0x8dadc-0x8db5a), so a later slot's shockwave reaches it.
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let catalog = armed();
+            let mut session = empty(&catalog);
+            let lander = place(&mut session, 1, Vec2::ZERO, Vec2::ZERO);
+            land_beside_a_wreck(&mut session, &catalog, lander, 2, reading);
+            assert_eq!(session.departed(), [], "{reading:?}");
+            let waiting = session.space.npc(lander).expect("it stays");
+            assert!(waiting.wait_running(), "{reading:?}: waiting there");
+            assert!(hit(&session.take_combat_events(), lander), "{reading:?}");
+        }
+    }
+
+    #[test]
+    fn a_mission_ship_that_leaves_as_it_lands_takes_no_step_and_no_later_blast() {
+        // By `landed_leaves`' other reading its slot is inactive from its
+        // own `_HandleShip`: the loop skips its display, and a later slot's
+        // shockwave reaches it no more.
+        use crate::session::mission_ships::tests::{goal_catalog, in_flight};
+        // A chase-off goal's ships (`ShipGoal` 6).
+        let catalog = goal_catalog(6, 0);
+        let mut session = in_flight(&catalog);
+        let lander = session.npcs()[0].id;
+        let site = session.chart.sites[0];
+        land_beside_a_wreck(&mut session, &catalog, lander, 30, RuleSource::Bible);
         assert_eq!(session.departed(), [(lander, Outcome::Landed(site.id))]);
+        assert!(session.space.npc(lander).is_none(), "gone");
         assert!(!hit(&session.take_combat_events(), lander));
     }
 

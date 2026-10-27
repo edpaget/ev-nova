@@ -155,6 +155,10 @@ pub fn sprite_in_area(area: Area, at: Vec2, width: f32, height: f32) -> bool {
 pub struct NavBrackets {
     /// The stellar bracketed.
     pub stellar: StellarId,
+    /// The stellar's spöb position (+0x4/+0x6), where the brackets are
+    /// drawn whether its system shows it or not (`_HandleNavTargetSprites`
+    /// @0x2fd9f-0x2fdda).
+    pub position: Vec2,
     /// How far out they are ([`FlyIn::expand`]).
     pub expand: f32,
     /// Whether the stellar is dominated: the green frames.

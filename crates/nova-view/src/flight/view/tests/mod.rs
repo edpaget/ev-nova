@@ -129,6 +129,9 @@ struct FakeCatalog {
     /// The stellars Sol lists after Earth and the Moon: none, by
     /// default.
     sol_more: Vec<StellarContents>,
+    /// How many frames Proxima's (140's) `Type` sheet has in Alpha
+    /// Centauri: 1, by default.
+    proxima_frames: u16,
     systems_read: RefCell<Vec<SystemId>>,
     /// The `dësc`s: none, by default.
     descriptions: Vec<(i16, String)>,
@@ -220,6 +223,12 @@ struct FakeCatalog {
     /// The stellars that can be destroyed and regenerated: none, by
     /// default.
     lives: Vec<nova_sim::StellarLife>,
+    /// The Moon's (129) sheets and graphic type 0's, given to the sim
+    /// and the view alike: the defaults, unless set.
+    moon: Option<MoonSheets>,
+    /// Why the Moon's (129) `Type` sheet cannot be read, in the sim and
+    /// the view alike: it can, by default.
+    moon_unreadable: Option<&'static str>,
     /// The missions: none, by default.
     missions: Vec<nova_sim::catalog::MissionRecord>,
     /// What the mission screens show of each: none, by default.
@@ -239,6 +248,20 @@ struct FakeCatalog {
     /// The systems besides Sol with a lived-in `NavDefs` slot on the
     /// map: none, by default.
     lived: Vec<i16>,
+}
+
+/// The sizes of the Moon's (129) `Type` sheet (1129) and `DeadType`
+/// sheet (2129, when there is one), and of graphic type 0's sheet,
+/// each square; the frames of its `Type` and `DeadType` sheets; and
+/// its `Flags2` (0x0080 to animate only when destroyed).
+#[derive(Clone, Copy, Debug)]
+struct MoonSheets {
+    width: u32,
+    dead_width: Option<u32>,
+    zero_width: u32,
+    frames: u16,
+    dead_frames: u16,
+    flags2: u16,
 }
 
 /// No strings unless a test sets them.
@@ -358,12 +381,12 @@ fn catalog() -> FakeCatalog {
         codes: Vec::new(),
         box_sheet: Ok(EffectSheet {
             frame_width: 0,
-            image_id: 500,
+            image: crate::SheetImage::Rled(500),
             frames: NonZeroU16::new(36).expect("non-zero"),
         }),
         cursor_sheet: Ok(EffectSheet {
             frame_width: 0,
-            image_id: 651,
+            image: crate::SheetImage::Rled(651),
             frames: NonZeroU16::new(8).expect("non-zero"),
         }),
         star_sheet: Err("no spïn 700".to_owned()),
@@ -386,9 +409,12 @@ fn catalog() -> FakeCatalog {
         alpha_buoy: -1,
         voices: nova_sim::voice::Voices::default(),
         sol_more: Vec::new(),
+        proxima_frames: 1,
         gates: Vec::new(),
         gate_listers: Vec::new(),
         lives: Vec::new(),
+        moon: None,
+        moon_unreadable: None,
         missions: Vec::new(),
         mission_texts: Vec::new(),
         visibility: Vec::new(),
@@ -397,6 +423,36 @@ fn catalog() -> FakeCatalog {
         boom_sounds: Vec::new(),
         governed: Vec::new(),
         lived: Vec::new(),
+    }
+}
+
+impl FakeCatalog {
+    /// System `system`'s landing sites, before any `DeadType`.
+    fn system_sites(&self, system: SystemId) -> Vec<LandingSite> {
+        match system.0 {
+            130 => {
+                let mut sites = self.sites.clone();
+                if let Some(moon) = self.moon {
+                    for site in sites.iter_mut().filter(|site| site.id == StellarId(129)) {
+                        site.frame_size = Some((moon.width, moon.width));
+                        site.dead_graphic = moon.dead_width.map(|_| 9);
+                        site.dead_frame_size = moon.dead_width.map(|w| (w, w));
+                    }
+                }
+                if self.moon_unreadable.is_some() {
+                    for site in sites.iter_mut().filter(|site| site.id == StellarId(129)) {
+                        site.frame_size = None;
+                    }
+                }
+                sites
+            }
+            131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            132 if self.onward || self.fan => Vec::new(),
+            133 if self.reborn => vec![site(141, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            128 if self.home => Vec::new(),
+            134 if self.near => Vec::new(),
+            other => panic!("asked for sÿst {other}'s sites"),
+        }
     }
 }
 
@@ -417,9 +473,11 @@ fn site(id: i16, (x, y): (f32, f32), flags: u32) -> LandingSite {
         dead_graphic: None,
         dead_frame_size: None,
         type_counts_frames: true,
+        dead_counts_frames: true,
         exit_angle: -1,
         tribute: 0,
         gravity: 0,
+        fee: 0,
         animation: nova_sim::catalog::SiteAnimation::default(),
     }
 }
@@ -494,16 +552,18 @@ impl PilotCatalog for FakeCatalog {
             || (id.0 == 134 && self.near)
     }
 
+    /// Earth (128) and Proxima (140) have the `DeadType` sheet the
+    /// view draws for them ([`dying`]).
     fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
-        match system.0 {
-            130 => self.sites.clone(),
-            131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
-            132 if self.onward || self.fan => Vec::new(),
-            133 if self.reborn => vec![site(141, (0.0, 0.0), StellarFlags::CAN_LAND)],
-            128 if self.home => Vec::new(),
-            134 if self.near => Vec::new(),
-            other => panic!("asked for sÿst {other}'s sites"),
+        let mut sites = self.system_sites(system);
+        for site in sites
+            .iter_mut()
+            .filter(|site| matches!(site.id.0, 128 | 140))
+        {
+            site.dead_graphic = Some(site.id.0 - 100);
+            site.dead_frame_size = Some((30, 30));
         }
+        sites
     }
 
     fn star_map(&self) -> Vec<StarSystem> {
@@ -577,6 +637,10 @@ impl PilotCatalog for FakeCatalog {
         Vec::new()
     }
 
+    fn stellar_weapons(&self) -> Vec<(StellarId, nova_sim::WeaponId)> {
+        Vec::new()
+    }
+
     /// Stock's: no prefix, and " NC".
     fn date_affixes(&self) -> DateAffixes {
         DateAffixes {
@@ -594,7 +658,10 @@ impl PilotCatalog for FakeCatalog {
     }
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
-        Some((100, 100))
+        Some(
+            self.moon
+                .map_or((100, 100), |moon| (moon.zero_width, moon.zero_width)),
+        )
     }
 
     fn missions(&self) -> Vec<nova_sim::catalog::MissionRecord> {
@@ -722,7 +789,7 @@ fn stellar(id: i16, name: &str, (x, y): (i16, i16), frames: u16) -> StellarConte
         x,
         y,
         sprite: Ok(StellarSheet {
-            image_id: 1000 + id,
+            image: crate::SheetImage::Rled(1000 + id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 20,
             frame_height: 20,
@@ -731,7 +798,7 @@ fn stellar(id: i16, name: &str, (x, y): (i16, i16), frames: u16) -> StellarConte
         animation: AnimationData {
             delay: 1,
             frame0_bias: 0,
-            only_when_destroyed: false,
+            flags2: 0,
         },
         radar_square: false,
     }
@@ -746,7 +813,7 @@ const TYPE_ZERO: i16 = 3000;
 fn dying(id: i16, name: &str, at: (i16, i16), frames: u16) -> StellarContents {
     StellarContents {
         dead_sprite: Some(Ok(StellarSheet {
-            image_id: 2000 + id,
+            image: crate::SheetImage::Rled(2000 + id),
             frames: NonZeroU16::MIN,
             frame_width: 30,
             frame_height: 30,
@@ -769,7 +836,10 @@ impl SystemCatalog for FakeCatalog {
                 .chain(self.sol_more.iter().cloned())
                 .collect(),
             ),
-            131 => ("Alpha Centauri", vec![dying(140, "Proxima", (0, 0), 1)]),
+            131 => (
+                "Alpha Centauri",
+                vec![dying(140, "Proxima", (0, 0), self.proxima_frames)],
+            ),
             132 if self.onward => ("Barnard", Vec::new()),
             133 if self.reborn => (
                 "Alpha Reborn",
@@ -779,15 +849,38 @@ impl SystemCatalog for FakeCatalog {
             134 if self.near => ("Proxima Near", Vec::new()),
             other => panic!("asked for sÿst {other}"),
         };
+        let mut stellars: Vec<StellarContents> = stellars;
+        let mut zero = 40;
+        if let Some(moon) = self.moon {
+            zero = moon.zero_width;
+            let square = |image_id, width, frames| StellarSheet {
+                image: crate::SheetImage::Rled(image_id),
+                frames: NonZeroU16::new(frames).expect("non-zero"),
+                frame_width: width,
+                frame_height: width,
+            };
+            for stellar in stellars.iter_mut().filter(|s| s.id == StellarId(129)) {
+                stellar.sprite = Ok(square(1129, moon.width, moon.frames));
+                stellar.dead_sprite = moon
+                    .dead_width
+                    .map(|w| Ok(square(2129, w, moon.dead_frames)));
+                stellar.animation.flags2 = moon.flags2;
+            }
+        }
+        if let Some(reason) = self.moon_unreadable {
+            for stellar in stellars.iter_mut().filter(|s| s.id == StellarId(129)) {
+                stellar.sprite = Err(reason.to_owned());
+            }
+        }
         SystemContents {
             id,
             name: name.to_owned(),
             stellars,
             type_zero_sprite: Ok(StellarSheet {
-                image_id: TYPE_ZERO,
+                image: crate::SheetImage::Rled(TYPE_ZERO),
                 frames: NonZeroU16::MIN,
-                frame_width: 40,
-                frame_height: 40,
+                frame_width: zero,
+                frame_height: zero,
             }),
             problems: Vec::new(),
         }
@@ -933,7 +1026,7 @@ impl CombatLooks for FakeCatalog {
             0 => self.box_sheet.clone(),
             1..=4 => Ok(EffectSheet {
                 frame_width: 0,
-                image_id: 500 + graphic.cast_signed(),
+                image: crate::SheetImage::Rled(500 + graphic.cast_signed()),
                 frames: NonZeroU16::new(36).expect("non-zero"),
             }),
             other => Err(format!("no spïn {}", 500 + other)),
@@ -944,7 +1037,7 @@ impl CombatLooks for FakeCatalog {
     fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
         Ok(EffectSheet {
             frame_width: 0,
-            image_id: 1800 + i16::from(kind),
+            image: crate::SheetImage::Rled(1800 + i16::from(kind)),
             frames: NonZeroU16::new(36).expect("non-zero"),
         })
     }
@@ -956,7 +1049,7 @@ impl CombatLooks for FakeCatalog {
     /// The escape pods' sheet: `rlëD` 1095, of 36 rotations.
     fn pod_sheet(&self) -> Result<EffectSheet, String> {
         Ok(EffectSheet {
-            image_id: 1095,
+            image: crate::SheetImage::Rled(1095),
             frames: NonZeroU16::new(36).expect("non-zero"),
             frame_width: 0,
         })
@@ -1350,6 +1443,43 @@ fn governed(mut catalog: FakeCatalog, ship: i16, interface: i16) -> FakeCatalog 
 /// The fake catalog with system 130 holding just `sites`.
 fn flight_among(sites: Vec<LandingSite>) -> View {
     FlightView::new(FakeCatalog { sites, ..catalog() })
+}
+
+/// A flight in Sol, which lists `unseen`, stellar 150 named "Hole", after
+/// Earth: system 128 lists it too and, the lowest visible lister, owns
+/// it, so Sol doesn't show it.
+fn flight_with_unseen(unseen: LandingSite) -> View {
+    assert_eq!(unseen.id, StellarId(150));
+    let mut catalog = FakeCatalog {
+        home: true,
+        gate_listers: vec![(SystemId(128), StellarId(150))],
+        sites: vec![site(128, (0.0, -600.0), StellarFlags::CAN_LAND), unseen],
+        ..catalog()
+    };
+    catalog
+        .place_names
+        .stellars
+        .insert(StellarId(150), "Hole".to_owned());
+    let view = FlightView::new(catalog);
+    let session = view.session().expect("flying");
+    assert_eq!(
+        session.stellars_shown().collect::<Vec<_>>(),
+        [StellarId(128)]
+    );
+    view
+}
+
+/// A wormhole as stock ones are (`Flags` 0x21, `Flags2` 0x2000), 300
+/// below the centre the ship starts at: within L's 500 pixels.
+fn unseen_wormhole() -> LandingSite {
+    LandingSite {
+        flags2: 0x2000,
+        ..site(
+            150,
+            (0.0, 300.0),
+            StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+        )
+    }
 }
 
 const LAND: Key = Key::Char('l');
@@ -2425,7 +2555,7 @@ fn holding(id: i16, weapon: WeaponId) -> OutfitRecord {
 fn effect_sheet(image_id: i16, frames: u16) -> EffectSheet {
     EffectSheet {
         frame_width: 0,
-        image_id,
+        image: crate::SheetImage::Rled(image_id),
         frames: Frames::new(frames).expect("non-zero"),
     }
 }

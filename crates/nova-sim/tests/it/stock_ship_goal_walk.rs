@@ -657,6 +657,10 @@ impl PilotCatalog for Probed<'_> {
         self.data.stellar_flags()
     }
 
+    fn stellar_weapons(&self) -> Vec<(StellarId, nova_sim::WeaponId)> {
+        self.data.stellar_weapons()
+    }
+
     fn date_affixes(&self) -> cat::DateAffixes {
         self.data.date_affixes()
     }
@@ -671,6 +675,10 @@ impl PilotCatalog for Probed<'_> {
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         self.data.fallback_frame_size()
+    }
+
+    fn fallback_counts_frames(&self) -> bool {
+        self.data.fallback_counts_frames()
     }
 
     fn missions(&self) -> Vec<MissionRecord> {

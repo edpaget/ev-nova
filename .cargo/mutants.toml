@@ -16,6 +16,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # An NPC's landing box widens below a turn of 8 (`npc_box`); at exactly
+    # 8, trunc((9 - 8) x 8 + 32) is the plain box's 40, so `<=` gives the
+    # same half-width.
+    "landing\\.rs:[0-9]+:[0-9]+: replace < with <= in npc_box$",
     # The stars' murk level: trunc(murk × 0.9) above 29 is held to 29, so
     # at exactly 29 holding it gives the same 29 (`_HandleStars`
     # @0x2f8cc-0x2f913).
@@ -593,6 +597,11 @@ exclude_re = [
     # `PilotCatalog::voices`' default body is `Voices::default()`, so
     # replacing it with `Default::default()` is the same body.
     "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::voices -> Voices with Default::default\\(\\)$",
+    # A stellar's frame 0 shows `AnimDelay` x `Frame0Bias` ticks only when
+    # the bias is above 1; a bias of exactly 1 gives `AnimDelay` x 1, the
+    # same threshold as `AnimDelay` (whatever its sign), so `>` and `>=`
+    # choose the same. The test sits in `Frames::advance`.
+    "system/animation\\.rs:.*replace > with >= in Frames::(step|advance)$",
     # Right onto an empty cell: testing the cell itself (`cell * 1`) for
     # the next one lets the cell move on, but the step back after it
     # (@0x5835a-0x583b8) returns to the last listed, the cell it left, so

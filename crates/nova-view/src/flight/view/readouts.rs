@@ -3,8 +3,8 @@
 
 use std::borrow::Cow;
 
+use nova_sim::StellarIff;
 use nova_sim::{NavMode, RuleKey, RuleSource, Session, TargetTag};
-use nova_sim::{StellarIff, TagNames};
 
 use crate::flight::cadence::{Drawn, retake_target};
 use crate::flight::hud::{NavDestination, NavDisplay};
@@ -13,7 +13,7 @@ use crate::flight::target::{Tag, TargetPanel};
 use crate::spaceport::PortDialog;
 use crate::time::ticks;
 
-use super::{FlightView, radar_ships};
+use super::{FlightView, radar_ships, stellar_name};
 
 impl<C> FlightView<C> {
     /// What the radar shows now ([`RadarScene`]): the player's ship and
@@ -35,7 +35,10 @@ impl<C> FlightView<C> {
                 .map(|stellar| RadarStellar {
                     position: stellar.position,
                     square: stellar.radar_square,
-                    sprite_width: stellar.drawn().as_ref().ok().map(|sheet| sheet.frame_width),
+                    sprite_width: stellar
+                        .drawn()
+                        .and_then(|sheet| sheet.as_ref().ok())
+                        .map(|sheet| sheet.frame_width),
                     iff: session
                         .stellar_iff(stellar.id)
                         .unwrap_or(StellarIff::Unlandable),
@@ -320,13 +323,9 @@ impl<C> FlightView<C> {
         };
         match mode {
             NavMode::Off => NavDisplay::Off,
-            NavMode::Stellar(target) => NavDisplay::Stellar(target.and_then(|target| {
-                self.scene
-                    .as_ref()
-                    .and_then(|scene| scene.stellars().iter().find(|s| s.id == target))
-                    .map(|stellar| stellar.name.clone())
-                    .or_else(|| session.stellar_name(target))
-            })),
+            NavMode::Stellar(target) => NavDisplay::Stellar(
+                target.and_then(|target| stellar_name(self.scene.as_ref(), session, target)),
+            ),
             NavMode::Hyperspace(next) => NavDisplay::Hyperspace {
                 destination: next.map_or(NavDestination::None, |next| {
                     session

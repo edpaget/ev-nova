@@ -32,7 +32,7 @@ fn beams_amid(
         asteroids: field,
         types,
     };
-    combat.close_tick_in(&mut fighters, arena, Some(field), &mut NeverFires);
+    combat.close_tick_in(&mut fighters, arena, &mut [], Some(field), &mut NeverFires);
     combat.take_events()
 }
 

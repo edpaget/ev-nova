@@ -40,11 +40,12 @@
 //! flag first, so the stale mark is unobservable, and the engine takes the
 //! NPC out of the system.
 //!
-//! **Left out.** A captured `ShipBehav` 2 ship flies `_DeathStarAI`, not
-//! `_EscortAI` (`_AIDispatch` @0x8fc2d-0x8fc38, @0x8ff3a-0x8ff43); the
-//! engine flies `ShipBehav` 2 as its own until
-//! rdm:phase/stellar-fidelity/phase-2-planet-type-weapons-and-ships. No
-//! stock mission has `ShipBehav` 2.
+//! A captured `ShipBehav` 2 ship thinks as `_DeathStarAI`, then
+//! `_WarshipAI`, not as `_EscortAI` (`_AIDispatch` @0x8fc2d-0x8fc38,
+//! @0x8ff3a-0x8ff43): built by stellar-fidelity phase 2, keyed on the mark
+//! ([`death_star`](crate::ai::death_star), the `stellar_attackers`
+//! module). Its gate wait and answer to hits stay the escorts'. No stock
+//! mission has `ShipBehav` 2.
 
 use super::Session;
 use crate::escort::FormationSlot;

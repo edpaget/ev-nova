@@ -3,10 +3,11 @@
 //! and redraws, as the window sends them: a system whose one `düde` flies
 //! a trader, one ship on average. Entering flight populates it on the
 //! app's source of chance: the trader is drawn with its own sprite and as
-//! a dim radar blip, flies to the system's planet and lands there, and is
-//! gone. Every flight's NPCs decide as the router's behaviour says,
-//! whether flight was entered with the developer's F or a new pilot flies
-//! it, and its ships are disabled as the router's rule says. The trader
+//! a dim radar blip, flies to the system's planet and lands there, and
+//! waits there, stopped. Every flight's NPCs decide as the router's
+//! behaviour says, whether flight was entered with the developer's F or a
+//! new pilot flies it, and its ships are disabled as the router's rule
+//! says. The trader
 //! carries a weapon the simulation reports as not fully done, and a
 //! trader that fires it has the app write that out once, as a line.
 
@@ -122,13 +123,14 @@ fn trader() -> Vec<u8> {
     bytes
 }
 
-/// A planet-type `wëap`: unguided, 10 pixels a tick for 12 ticks, every
-/// 20, of `Flags2` 0x0400, which the simulation does not do yet.
-fn planet_gun() -> Vec<u8> {
+/// An exclusive `wëap`: unguided, 10 pixels a tick for 12 ticks, every
+/// 20, of `Flags3` 0x0020, which the simulation does not do yet for the
+/// player.
+fn exclusive_gun() -> Vec<u8> {
     let mut bytes = vec![0; Weapon::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[20, 12, 2, 2, -1, 1000, -1]);
     put_i16s(&mut bytes, 0x16, &[-1]);
-    bytes[0x48..0x4A].copy_from_slice(&0x0400_u16.to_be_bytes());
+    bytes[0x66..0x68].copy_from_slice(&0x0020_u16.to_be_bytes());
     bytes
 }
 
@@ -236,7 +238,7 @@ fn data() -> Rc<GameData> {
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship(300, 300))
         .resource(Ship::TYPE, 129, Some(b"Trader"), &trader())
-        .resource(Weapon::TYPE, 181, Some(b"Planet Gun"), &planet_gun())
+        .resource(Weapon::TYPE, 181, Some(b"Exclusive Gun"), &exclusive_gun())
         .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
         .resource(ShipAnim::TYPE, 129, None, &ship_anim(2001))
         .resource(RLED, 2000, None, &sheet(36, 1))
@@ -606,18 +608,38 @@ fn dim_pixels(frame: &Frame) -> Vec<Point> {
 }
 
 #[test]
-fn the_trader_flies_to_the_planet_lands_and_is_gone() {
+fn the_trader_flies_to_the_planet_lands_and_waits_there() {
     let mut harness = Harness::flying(None);
     harness.frame();
     harness.run(1);
     let trader = harness.session().npcs()[0].clone();
     assert_eq!(trader.goal, Goal::Land(StellarId(128)));
-    // Starting at its top speed, it overshoots the planet and comes back
-    // to settle within the 8 x 8 planet's 4 pixels, circling in on its
-    // 0.12 thrust for about a minute.
-    let last = harness.run(70);
-    assert_eq!(harness.session().npcs(), [], "landed and gone");
-    assert_eq!(traders(&last), []);
+    // Starting at its top speed, it closes on the planet by sub 2's
+    // approach and brakes in its landing box (40 pixels a side, wider for
+    // a slower turn) until it moves below 0.35 a tick on each axis. Then
+    // it stays, stopped, for its wait of 300 to 499 ticks.
+    let mut landed = None;
+    for _ in 0..70 {
+        let last = harness.run(1);
+        let session = harness.session();
+        assert_eq!(session.npcs().len(), 1, "still in the system");
+        if session.npcs()[0].wait_running() {
+            landed = Some(last);
+            break;
+        }
+    }
+    let last = landed.expect("it lands within 70 seconds");
+    let waiting = harness.session().npcs()[0].clone();
+    assert_eq!(waiting.id, trader.id);
+    assert_eq!(waiting.visited, Some(StellarId(128)));
+    assert_eq!(waiting.state.velocity, Vec2::ZERO, "stopped");
+    // Over Alpha Prime, at (0, -300), within the widest box there is.
+    let off = waiting.state.position - Vec2::new(0.0, -300.0);
+    assert!(off.x.abs() <= 104.0 && off.y.abs() <= 104.0, "{off:?}");
+    assert_ne!(traders(&last), [], "still drawn");
+    let still = harness.run(1);
+    assert_eq!(harness.session().npcs()[0].state, waiting.state, "waiting");
+    assert_ne!(traders(&still), []);
 }
 
 #[test]
@@ -682,7 +704,7 @@ fn a_flights_diagnostics_are_written_out_once_as_lines() {
          nova: cargo box 4: no spïn 504\n\
          nova: cursor: no spïn 650\n\
          nova: stars: no spïn 700\n\
-         nova: wëap 181 Flags2 0x0400 not implemented\n",
+         nova: wëap 181 Flags3 0x0020 not implemented\n",
         "its shots', the cargo boxes', the cursor's and the stars' sheets missing from the fixture, as the flight \
          opened; then the trader fired, again and again"
     );

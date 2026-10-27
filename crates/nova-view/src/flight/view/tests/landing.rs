@@ -98,6 +98,8 @@ fn the_picks_roll_their_ranges_and_decide_only_their_words() {
                 opening: 2,
                 welcome,
             },
+            None,
+            nova_sim::RuleSource::Engine,
         )
     };
     assert!(greeting(0).ends_with(COMMENCE_FINAL_APPROACH));
@@ -143,6 +145,55 @@ fn the_selecting_l_shows_the_requests_line_then_a_tick_near_shows_the_greeting()
     assert!(!far, "never greeted");
     view.input(&key(Key::Up, false));
     assert_lasts(&mut view, &greeting, 250);
+}
+
+/// Over a stellar charging 1,000 credits with `flags2`, the pilot holding
+/// as much: L, a tick, and the greeting shown.
+fn greeted_at_a_fee(flags2: u16) -> (View, String) {
+    let site = LandingSite {
+        fee: 1000,
+        flags2,
+        ..site(129, (6.0, -8.0), StellarFlags::CAN_LAND)
+    };
+    let mut view = FlightView::new(FakeCatalog {
+        sites: vec![site],
+        character: Ok(CharacterStart {
+            cash: 1000,
+            ..catalog().character.expect("a chär")
+        }),
+        ..catalog()
+    });
+    tap(&mut view, LAND);
+    ticks(&mut view, 1);
+    let greeting = view.message().expect("greeted").to_owned();
+    (view, greeting)
+}
+
+#[test]
+fn the_greeting_at_a_stellar_with_a_fee_states_it() {
+    let (mut view, greeting) = greeted_at_a_fee(0);
+    let ship = ship_name(&view);
+    assert_eq!(
+        greeting,
+        format!(
+            "Cleared to land, {ship}. Commence final approach.  [Landing fee is 1,000 credits.]"
+        )
+    );
+    assert_lasts(&mut view, &greeting, 250);
+}
+
+#[test]
+fn a_dominated_stellars_or_a_hypergates_greeting_states_no_fee() {
+    // Domination waives it (@0x64d92-0x64d96).
+    let (view, greeting) = greeted_at_a_fee(nova_sim::market::DOMINATED);
+    let ship = ship_name(&view);
+    assert_eq!(
+        greeting,
+        format!("Cleared to land, {ship}. Commence final approach.")
+    );
+    let (_, gate) = greeted_at_a_fee(nova_sim::gate::HYPERGATE);
+    assert!(gate.starts_with("Cleared for hypergate entry"), "{gate}");
+    assert!(!gate.contains('['), "{gate}");
 }
 
 #[test]
@@ -355,9 +406,11 @@ fn starting_a_jump_clears_only_too_close() {
 #[test]
 fn too_far_at_a_hypergate_or_wormhole_says_so_for_360_ticks() {
     for (flags2, text) in [(0x1000, TOO_FAR_HYPERGATE), (0x2000, TOO_FAR_WORMHOLE)] {
+        // Within 500 px, which L's pick needs of a gate
+        // (`_FindNearestStellar` @0x2838-0x2853), and out of its reach.
         let mut view = flight_among(vec![LandingSite {
             flags2,
-            ..site(128, (0.0, -600.0), StellarFlags::CAN_LAND)
+            ..site(128, (0.0, -400.0), StellarFlags::CAN_LAND)
         }]);
         tap(&mut view, LAND);
         tap(&mut view, LAND);
@@ -402,6 +455,60 @@ fn a_not_landable_station_or_planet_is_named_for_250_ticks() {
         tap(&mut view, LAND);
         assert_lasts(&mut view, text, LANDING_TICKS);
     }
+}
+
+/// L selects a wormhole the system lists but another owns, and its dock
+/// request refuses it with the wormhole's line, #84 then #86, with no name
+/// (@0x6699a-0x669a4, @0x67cda-0x67d3c).
+#[test]
+fn l_near_an_unseen_wormhole_says_it_cannot_be_entered() {
+    let mut view = flight_with_unseen(unseen_wormhole());
+    tap(&mut view, LAND);
+    assert_eq!(nav_target(&view), Some(StellarId(150)));
+    assert_lasts(
+        &mut view,
+        &gate_refusal_message(GateKind::Wormhole),
+        LANDING_TICKS,
+    );
+}
+
+/// A planet another system owns is named by its spöb name, as the
+/// not-landable line reads it (#87/#88, @0x67d4c-0x67dc4).
+#[test]
+fn l_at_an_unseen_planet_names_it_by_its_spob_name() {
+    let mut view = flight_with_unseen(site(150, (0.0, 300.0), StellarFlags::CAN_LAND));
+    tap(&mut view, LAND);
+    assert_eq!(nav_target(&view), Some(StellarId(150)));
+    assert_lasts(
+        &mut view,
+        "Your ship is unable to land on  Hole. The planet's environment is too hostile.",
+        LANDING_TICKS,
+    );
+}
+
+/// The messages that name a stellar name one the scene doesn't hold by
+/// its spöb name too, as the nav readout and the refusals do: a dock
+/// request and a land hint at "Hole", which another system owns.
+#[test]
+fn a_dock_request_and_a_land_hint_name_an_unseen_stellar_by_its_spob_name() {
+    let view = flight_with_unseen(site(150, (0.0, 300.0), StellarFlags::CAN_LAND));
+    let session = view.session().expect("flying");
+    let (_, mut chance) = scripted(&[0, 0]);
+    let request = SimMessage::DockRequested {
+        stellar: StellarId(150),
+        kind: DockKind::Planet,
+    };
+    let text = message_text(&request, session, view.scene.as_ref(), &mut chance)
+        .expect("a dock request is worded");
+    assert!(text.contains("Hole"), "{text}");
+    let hint = SimMessage::Tutorial(nova_sim::TutorialHint::Land {
+        stellar: StellarId(150),
+        station: false,
+    });
+    assert_eq!(
+        message_text(&hint, session, view.scene.as_ref(), &mut chance),
+        Some(land_hint(false, "Hole", "L"))
+    );
 }
 
 #[test]

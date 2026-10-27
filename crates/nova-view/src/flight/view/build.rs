@@ -30,6 +30,7 @@ use crate::flight::hud::{self};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::camera::VIEW_SIZE;
 use crate::system::catalog::SystemCatalog;
+use crate::system::kept_frames::KeptFrames;
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::DialogTemplate;
@@ -228,6 +229,7 @@ impl<
             double_time: false,
             session,
             scene,
+            kept_frames: KeptFrames::new(),
             sheet,
             sheet_ship,
             bar_government,

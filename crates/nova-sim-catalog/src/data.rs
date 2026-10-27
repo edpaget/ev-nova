@@ -273,9 +273,12 @@ impl PilotCatalog for GameData {
                     dead_graphic: dead_frame_size.map(|_| stellar.dead_type),
                     dead_frame_size,
                     type_counts_frames: counts_frames(self, stellar.graphic_type),
+                    dead_counts_frames: dead_frame_size
+                        .is_none_or(|_| counts_frames(self, stellar.dead_type)),
                     exit_angle: stellar.cust_snd_id,
                     tribute: stellar.tribute,
                     gravity: stellar.gravity,
+                    fee: stellar.fee,
                     animation: SiteAnimation {
                         delay: stellar.anim_delay,
                         frame0_bias: stellar.frame0_bias,
@@ -418,6 +421,17 @@ impl PilotCatalog for GameData {
             .collect()
     }
 
+    /// No upper bound is checked here: a `Weapon` past the last `wëap`
+    /// finds no record, and the session gives that stellar no gun.
+    fn stellar_weapons(&self) -> Vec<(StellarId, WeaponId)> {
+        self.records::<Stellar>()
+            .filter_map(|(id, stellar)| {
+                let weapon = stellar.ok()?.record.weapon?;
+                (weapon.0 >= 128).then_some((StellarId(id), weapon))
+            })
+            .collect()
+    }
+
     fn stellar_lives(&self) -> Vec<StellarLife> {
         self.records::<Stellar>()
             .filter_map(|(id, stellar)| {
@@ -438,6 +452,10 @@ impl PilotCatalog for GameData {
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         let sheet = self.spin_sheet(stellar_spin_id(0)?).ok()?.sheet;
         Some((sheet.frame_width(), sheet.frame_height()))
+    }
+
+    fn fallback_counts_frames(&self) -> bool {
+        counts_frames(self, 0)
     }
 
     /// Each `Visibility` parsed once and shared
@@ -1503,24 +1521,7 @@ mod tests {
         StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
     };
     use crate::control::{Script, Test, TestExpr};
-
-    /// One data file, `/data/Nova Data`, holding a fork.
-    struct OneFile(Vec<u8>);
-
-    impl DirLister for OneFile {
-        fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-            Ok(vec![Listing {
-                name: "Nova Data".into(),
-                kind: EntryKind::File,
-            }])
-        }
-    }
-
-    impl ForkReader for OneFile {
-        fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            Ok((fork == Fork::Data).then(|| self.0.clone()))
-        }
-    }
+    use crate::test_store::{put_i16s, store, store_named};
 
     /// Whether two tests are the one parse, shared.
     fn shared(a: &Test, b: &Test) -> bool {
@@ -1530,33 +1531,6 @@ mod tests {
     /// Whether two scripts are the one parse, shared.
     fn shared_script(a: &Script, b: &Script) -> bool {
         std::sync::Arc::ptr_eq(&a.0, &b.0)
-    }
-
-    fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
-        let named: Vec<_> = resources
-            .iter()
-            .map(|(ty, id, data)| (*ty, *id, None, data.clone()))
-            .collect();
-        store_named(&named)
-    }
-
-    /// The store of these resources, each with its name, if any.
-    fn store_named(resources: &[(ResType, i16, Option<&str>, Vec<u8>)]) -> GameData {
-        let fork = resources
-            .iter()
-            .fold(ForkBuilder::new(), |fork, (ty, id, name, data)| {
-                fork.resource(*ty, *id, name.map(str::as_bytes), data)
-            })
-            .build()
-            .bytes;
-        let file = OneFile(fork);
-        GameData::load(&file, &file, Path::new("/data"), None).expect("opens")
-    }
-
-    fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
-        for (i, value) in values.iter().enumerate() {
-            bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
-        }
     }
 
     /// A `chär` starting in `ship` in these systems, with no cash and no
@@ -2727,9 +2701,11 @@ mod tests {
                     dead_graphic: Some(0),
                     dead_frame_size: Some((12, 30)),
                     type_counts_frames: true,
+                    dead_counts_frames: true,
                     exit_angle: 0,
                     tribute: 0,
                     gravity: 0,
+                    fee: 0,
                     animation: SiteAnimation {
                         type_frames: 1,
                         dead_frames: 1,
@@ -2751,9 +2727,11 @@ mod tests {
                     dead_graphic: Some(0),
                     dead_frame_size: Some((12, 30)),
                     type_counts_frames: false,
+                    dead_counts_frames: true,
                     exit_angle: 0,
                     tribute: 250,
                     gravity: 0,
+                    fee: 0,
                     animation: SiteAnimation {
                         dead_frames: 1,
                         ..SiteAnimation::default()
@@ -2867,6 +2845,36 @@ mod tests {
             (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
         ]);
         assert!(!no_spin.landing_sites(SystemId(130))[0].type_counts_frames);
+    }
+
+    #[test]
+    fn a_landing_site_counts_dead_frames_when_its_dead_types_spins_tiles_multiply_above_0() {
+        for (x_tiles, y_tiles, counts) in [
+            (1, 1, true),
+            (-2, -3, true),
+            (0, 5, false),
+            (-1, 4, false),
+            (300, 300, true),
+            (300, -300, false),
+        ] {
+            let data = store(&[
+                (System::TYPE, 130, system_with(&[128])),
+                // `Type` 4 has no `spïn`; `DeadType` 0 is `spïn` 1000.
+                (Stellar::TYPE, 128, dead_as(stellar(0, 0, 4, 1, 0), 0)),
+                (Spin::TYPE, 1000, tiled(x_tiles, y_tiles)),
+                (RLED, 1000, sheet(12, 30)),
+            ]);
+            let site = data.landing_sites(SystemId(130))[0];
+            assert_eq!(site.dead_graphic, Some(0));
+            assert_eq!(site.dead_counts_frames, counts, "{x_tiles} x {y_tiles}");
+        }
+        let no_dead_sheet = store(&[
+            (System::TYPE, 130, system_with(&[128])),
+            (Stellar::TYPE, 128, dead_as(stellar(0, 0, 4, 1, 0), 5)),
+        ]);
+        let site = no_dead_sheet.landing_sites(SystemId(130))[0];
+        assert_eq!(site.dead_graphic, None);
+        assert!(site.dead_counts_frames, "true with no `DeadType` sheet");
     }
 
     /// A `röid` of this `Strength` and `SpinRate`, with no yield, no
@@ -3087,6 +3095,31 @@ mod tests {
     }
 
     #[test]
+    fn graphic_type_0_counts_frames_when_spin_1000s_tiles_multiply_above_0() {
+        for (x_tiles, y_tiles, counts) in [
+            (1, 1, true),
+            (-2, -3, true),
+            (0, 5, false),
+            (-1, 4, false),
+            (300, 300, true),
+            (300, -300, false),
+        ] {
+            let data = store(&[
+                (Spin::TYPE, 1000, tiled(x_tiles, y_tiles)),
+                (RLED, 1000, sheet(12, 30)),
+            ]);
+            assert_eq!(
+                data.fallback_counts_frames(),
+                counts,
+                "{x_tiles} x {y_tiles}"
+            );
+            let data = std::rc::Rc::new(data);
+            assert_eq!(PilotCatalog::fallback_counts_frames(&data), counts, "Rc");
+            assert_eq!(PilotCatalog::fallback_counts_frames(&&*data), counts, "&");
+        }
+    }
+
+    #[test]
     fn a_borrowed_or_shared_game_data_forwards_the_fallback_frame_size() {
         for (resources, size) in [
             (
@@ -3275,6 +3308,26 @@ mod tests {
             .map(|site| site.gravity)
             .collect();
         assert_eq!(found, gravities);
+    }
+
+    #[test]
+    fn a_landing_sites_fee_is_its_spöbs_raw() {
+        // `Fee` (`spöb` +0x234, i32) goes through raw, whatever it is:
+        // `nova_sim::landing::fee_due` decides what a value means.
+        let fees: [i32; 3] = [0, 1000, -5];
+        let mut resources = vec![(System::TYPE, 130, system_with(&[128, 129, 130]))];
+        for (id, fee) in (128..).zip(fees) {
+            let mut bytes = stellar(0, 0, 0, 1, 0);
+            bytes[0x234..0x238].copy_from_slice(&fee.to_be_bytes());
+            resources.push((Stellar::TYPE, id, bytes));
+        }
+        let data = store(&resources);
+        let found: Vec<i32> = data
+            .landing_sites(SystemId(130))
+            .iter()
+            .map(|site| site.fee)
+            .collect();
+        assert_eq!(found, fees);
     }
 
     #[test]
@@ -3918,6 +3971,34 @@ mod tests {
             "the unreadable 129 left out"
         );
         assert_eq!(store(&[]).stellar_flags(), []);
+    }
+
+    /// A `spöb` whose `Weapon` (0x23A) is `weapon`.
+    fn gunned(weapon: i16) -> Vec<u8> {
+        let mut bytes = stellar(0, 0, 0, 0, 0);
+        put_i16s(&mut bytes, 0x23A, &[weapon]);
+        bytes
+    }
+
+    #[test]
+    fn stellar_weapons_list_every_readable_spöb_whose_weapon_is_128_or_more_by_id() {
+        let data = store(&[
+            (Stellar::TYPE, 133, gunned(199)),
+            (Stellar::TYPE, 128, gunned(128)),
+            (Stellar::TYPE, 129, short(gunned(196))),
+            (Stellar::TYPE, 130, gunned(0)),
+            (Stellar::TYPE, 131, gunned(-1)),
+            (Stellar::TYPE, 132, gunned(127)),
+        ]);
+        assert_eq!(
+            data.stellar_weapons(),
+            [
+                (StellarId(128), WeaponId(128)),
+                (StellarId(133), WeaponId(199)),
+            ],
+            "the unreadable 129 left out; 0, -1 and 127 are none (@0x7779f-0x777b2)"
+        );
+        assert_eq!(store(&[]).stellar_weapons(), []);
     }
 
     /// A `wëap` with every field the combat catalog reads set to

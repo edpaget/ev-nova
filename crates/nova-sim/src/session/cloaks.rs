@@ -551,11 +551,13 @@ mod tests {
     }
 
     /// NPC 0's cloak after `ticks` of the traffic, keeping its goal
-    /// `goal`, set up cloaked with a ship type's `Flags2` `flags2`.
+    /// `goal`, set up cloaked with a ship type's `Flags2` `flags2`. It
+    /// lands by the circle, so a landing one is still on its way.
     fn cloak_after(goal: crate::ai::Goal, flags2: u16, ticks: u32) -> crate::cloak::Cloak {
         use nova_sim_base::fixture::Draws;
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
+        crate::session::tests::landing_by_circle(&mut session);
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.cloak_gear = crate::cloak::CloakGear {
             flags2,

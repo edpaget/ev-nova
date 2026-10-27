@@ -630,6 +630,48 @@ mod tests {
     }
 
     #[test]
+    fn seeking_sub_munitions_of_a_planet_type_weapon_pick_only_planet_type_ships() {
+        // `_FindNearestValidShotTarget` asks `_ShotCanHitShip` of the
+        // sub-munition, whose rule 8 matches its own weapon's bit.
+        let planet = Ties {
+            planet_type: true,
+            ..Ties::default()
+        };
+        let targets = [
+            Target {
+                ties: planet,
+                ..ship(HIT, 100.0, 450.0)
+            },
+            ship(NEAR, 100.0, 60.0),
+        ];
+        let pick = |sub: &WeaponSpec| {
+            released(
+                &parent(-1, 1, 0, 0, 0x0010),
+                sub,
+                (None, false),
+                &among(&targets),
+                &mut Draws::of(&[]),
+            )[0]
+            .target
+        };
+        let planet_sub = WeaponSpec {
+            flags2: crate::combat::weapon::PLANET_TYPE,
+            ..sub(-1)
+        };
+        assert_eq!(pick(&planet_sub), Some(HIT), "the far planet-type ship");
+        assert_eq!(pick(&sub(-1)), Some(NEAR), "an ordinary one the near ship");
+        let ordinary_only = [targets[0]];
+        let alone = released(
+            &parent(-1, 1, 0, 0, 0x0010),
+            &sub(-1),
+            (None, false),
+            &among(&ordinary_only),
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(alone[0].target, None, "no ship it may hit");
+    }
+
+    #[test]
     fn a_seeking_sub_munition_no_ship_fired_seeks_past_the_given_target() {
         // A shot no ship fired hits only the ship it is aimed at
         // (@0x44a71-0x44a88), but the seek asks with no target of its own
@@ -657,6 +699,7 @@ mod tests {
                 leader: Some(ShipRef::Player),
                 govt: None,
                 booty: Some(0x0100),
+                planet_type: false,
                 mining: true,
             }),
         ] {

@@ -49,7 +49,10 @@
 //!    later slots before they move; an escape fighter launched into a
 //!    later slot is reached in the same loop; then the session's work
 //!    after the fly half, the line work its docks and repairs queued
-//!    settled ([`Session::ship_loop`]).
+//!    settled ([`Session::ship_loop`]); then the stellar guns
+//!    (`_HandleStellarWeapons` @0x444d7, after `_HandleStellarSprites`
+//!    @0x444d2), each armed stellar firing at its target (see the
+//!    `stellar_guns` module).
 //! 7. The asteroids (`_SpawnAsteroid` @0x44243 and `_HandleAsteroids`
 //!    @0x444f5, after the collision passes; see the `asteroids` module),
 //!    and on the second pass the reinforcement clock
@@ -315,6 +318,9 @@ impl Session {
             None => Motion::Again,
         };
         self.ship_loop(start, motion, pass, rules, chance);
+        // `_HandleStellarSprites` (@0x444d2), then `_HandleStellarWeapons`
+        // (@0x444d7).
+        self.stellar_guns(pass, rules, chance);
         // `_HandleAsteroids` (@0x444f5) and the second pass's
         // `_HandleReinforcements` (@0x44504), after the collision passes
         // and before the beams, which meet each asteroid where this step
@@ -481,6 +487,7 @@ impl Session {
             plundering: false,
             mining: false,
             emerging: false,
+            jumping_in: false,
             cloak_scanner: scanner.on_screen,
             has_cloak,
             jamming: player_terms.jamming,
@@ -592,6 +599,11 @@ impl Session {
     /// deadly stellar kills is out of the beams. The kills' hold starts
     /// before the beams' hits settle (see the `deadly_stellars` module),
     /// as a phase that lands hits settles ([`Session::settle_landed`]).
+    /// The beams meet the stellars shown that shots can hit, which only
+    /// the Bible's reading of
+    /// [`RuleKey::BeamStellars`](crate::rulebook::RuleKey::BeamStellars)
+    /// lets them strike; each a beam shoots down runs its `OnDestroy` (see
+    /// the `stellars` module) once the hits have settled.
     ///
     /// The asteroid field is lent to the beams for the phase
     /// ([`Combat::close_tick_in`]), which cut, wear down, break, push and
@@ -600,6 +612,7 @@ impl Session {
     /// module).
     pub(super) fn beams_phase(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
         let hazards = self.stellar_hazards();
+        let mut stellars = self.stellar_targets();
         let was = self.space.npcs_before();
         let player_was = self.ship.condition;
         let types = std::rc::Rc::clone(&self.statics.asteroid_types);
@@ -610,12 +623,13 @@ impl Session {
                 asteroids: &mut asteroids,
                 types: &types,
             };
-            combat.close_tick_in(fighters, arena, Some(field), chance);
+            combat.close_tick_in(fighters, arena, &mut stellars, Some(field), chance);
         });
         self.space.asteroids = asteroids;
         self.space.settle_asteroid_remains(&mut *chance);
         let killed = self.hold_stellar_kills();
         self.settle_landed(&was, (player_was, killed), rules, chance);
+        self.strike_stellars(&stellars, rules.law, chance);
     }
 
     /// The fight's collision passes on `pass` by `rules`, drawing on
@@ -1189,6 +1203,9 @@ mod tests {
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.goal = Goal::Hold;
         npc.state.velocity = Vec2::new(0.3, 0.0);
+        // The warm-up pass landed it on planet 128, within its box; a lead
+        // drifting on, and its escort cloned from it, wait for nothing.
+        npc.ai_wait = 0;
         let mut escort = npc.clone();
         escort.leader = Some(lead);
         escort.goal = Goal::Follow { lead, guard: None };

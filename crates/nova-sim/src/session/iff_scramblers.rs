@@ -18,9 +18,12 @@
 //! [`Surroundings::iff_marked`](crate::ai::Surroundings::iff_marked): a
 //! marked government's warship takes no player candidate from its hunt
 //! (`_SelectWarshipTarget` @0x8aa13, see `nova_sim::ai::target`). The
-//! other readers (`_AIDoesShipLikePlayer` @0x82424, `_IsThreatToStellar`
-//! @0xa062, `_DoPlanetCommDialog` @0x96c4d) are rdm:task/iff-scrambler-other-readers's
-//! and rdm:phase/stellar-fidelity/phase-13-stellar-defence-guns's.
+//! stellar guns read them too: a marked government's stellar, or a
+//! stellar of no government in a marked government's system, spares the
+//! player and its escorts (`_IsThreatToStellar` @0xa062, see the
+//! [`stellar_guns`](super::stellar_guns) module). The other readers
+//! (`_AIDoesShipLikePlayer` @0x82424, `_DoPlanetCommDialog` @0x96c4d) are
+//! rdm:task/iff-scrambler-other-readers's.
 //!
 //! **The player's ship.** [`Session::player_side`] gives the AI its ship
 //! type, so a xenophobe passes over the escape pod (class 0x2ff), and the

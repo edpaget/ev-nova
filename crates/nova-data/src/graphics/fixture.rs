@@ -213,6 +213,17 @@ impl PictBuilder {
     }
 }
 
+/// A `width` x `height` version 2 `PICT` of these 8-bit `[r, g, b]`
+/// pixels, row by row, in one `DirectBitsRect` covering the whole frame.
+#[must_use]
+pub fn rgb888_pict(width: i16, height: i16, pixels: &[[u8; 3]]) -> Vec<u8> {
+    let frame = [0, 0, height, width];
+    PictBuilder::new(frame)
+        .direct_bits(&DirectBits::rgb888(frame, pixels))
+        .end()
+        .build()
+}
+
 /// A QuickDraw rectangle's 8 bytes.
 fn rect_bytes(rect: [i16; 4]) -> Vec<u8> {
     rect.iter().flat_map(|v| v.to_be_bytes()).collect()
@@ -673,7 +684,9 @@ impl RledFrame {
         self.token(1, 0)
     }
 
-    /// Opaque 16-bit pixels, padded to a 4-byte boundary.
+    /// Opaque 16-bit pixels, padded to a 4-byte boundary. (For an 8-bit
+    /// sheet's tokens, see [`RledFrame::pixels8`], [`RledFrame::skip8`] and
+    /// [`RledFrame::run8`], which count bytes.)
     #[must_use]
     pub fn pixels(mut self, pixels: &[u16]) -> Self {
         self.bytes.extend(token(2, 2 * pixels.len() as u32));
@@ -698,6 +711,31 @@ impl RledFrame {
         self.bytes.extend(token(4, 2 * n));
         self.bytes.extend(a.to_be_bytes());
         self.bytes.extend(b.to_be_bytes());
+        self
+    }
+
+    /// Pixel bytes of an 8-bit sheet: a byte count of `bytes.len()`, then
+    /// the bytes, padded to a 4-byte boundary.
+    #[must_use]
+    pub fn pixels8(mut self, bytes: &[u8]) -> Self {
+        self.bytes.extend(token(2, bytes.len() as u32));
+        self.bytes.extend_from_slice(bytes);
+        self.bytes
+            .resize(self.bytes.len() + (4 - bytes.len() % 4) % 4, 0);
+        self
+    }
+
+    /// A skip of `n` bytes in an 8-bit sheet.
+    #[must_use]
+    pub fn skip8(self, n: u32) -> Self {
+        self.token(3, n)
+    }
+
+    /// A run of `n` bytes in an 8-bit sheet, with the file word `word`.
+    #[must_use]
+    pub fn run8(mut self, n: u32, word: [u8; 4]) -> Self {
+        self.bytes.extend(token(4, n));
+        self.bytes.extend(word);
         self
     }
 

@@ -211,7 +211,7 @@ fn a_lock_lands_in_the_shot_step() {
                 .map(|_| tick_no),
         );
         combat.handle_npcs(&mut fighters, arena, &mut NeverFires);
-        combat.close_tick(&mut fighters, arena, &mut NeverFires);
+        combat.close_tick(&mut fighters, arena, &mut [], &mut NeverFires);
         let closed = combat.take_strikes();
         assert!(
             closed.iter().all(|strike| !strike.lock),

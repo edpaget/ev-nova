@@ -30,6 +30,7 @@ use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
+use crate::sheet_image::SheetImage;
 
 /// Scans the sheet and its layers on every call, reading their sizes,
 /// frame counts and runs without decoding a pixel; the flight screen asks
@@ -266,7 +267,7 @@ impl CombatLooks for GameData {
     fn pod_sheet(&self) -> Result<EffectSheet, String> {
         let sheet = self.ship_sheet(nova_sim::ESCAPE_POD_SHIP)?;
         Ok(EffectSheet {
-            image_id: sheet.image_id,
+            image: SheetImage::Rled(sheet.image_id),
             frames: sheet.rotations,
             frame_width: sheet.frame_width,
         })
@@ -314,11 +315,11 @@ const MAX_SMOKE_SET: u16 = 7;
 /// read.
 fn effect_sheet(data: &GameData, id: i16) -> Result<EffectSheet, String> {
     let spin = data.spin_sheet(id).map_err(|err| err.to_string())?;
-    // The decoder refuses a sheet without frames.
+    // The decoders refuse a sheet without frames.
     let count = u16::try_from(spin.frame_count()).unwrap_or(u16::MAX);
     let frames = NonZeroU16::new(count).unwrap_or(NonZeroU16::MIN);
     Ok(EffectSheet {
-        image_id: spin.image_id,
+        image: SheetImage::of(spin.kind, spin.spin_id, spin.image_id),
         frames,
         frame_width: spin.sheet.frame_width(),
     })
@@ -878,7 +879,7 @@ mod tests {
     /// A sheet of `frames` frames 3 pixels wide, as [`sheet`] builds them.
     fn sheet_of(image_id: i16, frames: u16) -> EffectSheet {
         EffectSheet {
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 3,
         }
@@ -1198,7 +1199,46 @@ mod tests {
         let look = empty.boom_look(BoomId(128)).expect("there").expect("reads");
         assert_eq!(
             look.sheet,
-            Err("rlëD 400: the rlëD sheet has no frames".to_owned())
+            Err("rlëD 400: the sprite sheet has no frames".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_explosion_whose_spin_is_a_pict_pair_keys_its_sheet_by_the_spin() {
+        use nova_data::graphics::fixture::rgb888_pict;
+
+        // `spïn` 402 has no `rlëD`: sprites `PICT` 2402 and mask 2502, two
+        // 4 x 4 frames cut from the 8 x 4 picture.
+        let mut pict_pair = vec![0; Spin::SIZE.expect("fixed")];
+        for (at, value) in [
+            (0x00, 2402),
+            (0x02, 2502),
+            (0x04, 4),
+            (0x06, 4),
+            (0x08, 2),
+            (0x0A, 1),
+        ] {
+            put_i16(&mut pict_pair, at, value);
+        }
+        let data = named_store(&[
+            (Boom::TYPE, 128, None, boom(100, -1, 2)),
+            (Spin::TYPE, 402, None, pict_pair),
+            (
+                PICT,
+                2402,
+                None,
+                rgb888_pict(8, 4, &[[0x80, 0x40, 0x20]; 32]),
+            ),
+            (PICT, 2502, None, rgb888_pict(8, 4, &[[0xFF; 3]; 32])),
+        ]);
+        let look = data.boom_look(BoomId(128)).expect("there").expect("reads");
+        assert_eq!(
+            look.sheet,
+            Ok(EffectSheet {
+                image: crate::SheetImage::Spin(402),
+                frames: NonZeroU16::new(2).expect("non-zero"),
+                frame_width: 4,
+            })
         );
     }
 

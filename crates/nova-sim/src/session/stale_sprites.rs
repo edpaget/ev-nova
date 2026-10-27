@@ -9,8 +9,9 @@
 //! player's place then. Each flight frame's sprite tick places them again
 //! ([`Session::see_stellars`]), as `_HandleStellarSprites` (@0x444d2)
 //! moves the owned slots each pass. A slot is placed at its stellar's
-//! place less half the frame it is drawn with
-//! ([`Space::drawn_frame_size`]). The pool outlives the session: the
+//! place less half its size as `_GetSpriteXSize` and `_GetSpriteYSize`
+//! read it ([`Space::slot_sprite_size`], @0x2ee3d-0x2ef1a): the frame it
+//! is drawn with, 32 square for a frame frozen, and nothing for none. The pool outlives the session: the
 //! app hands it to the next pilot's session in the same run
 //! ([`Session::stellar_sprite_pool`],
 //! [`Session::carry_stellar_sprite_pool`]), as the original never clears
@@ -71,7 +72,7 @@ impl Session {
             .map(|site| {
                 let frame = self
                     .space
-                    .drawn_frame_size(&self.statics, &self.setup, site)
+                    .slot_sprite_size(&self.statics, &self.setup, site)
                     .unwrap_or((0, 0));
                 (
                     site.id,
@@ -187,6 +188,7 @@ mod tests {
     use crate::deadly_stellar::DEADLY_STELLAR;
     use crate::rulebook::Rulebook;
     use crate::session::tests::{armed, facing_an_npc};
+    use crate::story::rebuild::Fallback;
     use crate::testkit::{FakePilotCatalog, planet};
 
     /// A deadly stellar `id` at (`x`, `y`), 100 x 100.
@@ -356,14 +358,20 @@ mod tests {
         };
         let mut session = among(&catalog, &[dead], Rulebook::default());
         session.chart.sites = vec![dead];
-        session.space.rebuilt.rebuild(&[dead], |_| true, true);
+        session
+            .space
+            .rebuilt
+            .rebuild(&[dead], |_| true, Fallback::Counts, RuleSource::Engine);
         assert!(session.dead_since_rebuild(dead.id));
         fight(&mut session);
         assert_eq!(session.npcs(), [], "graphic type 0's frame reaches");
         // Not dead since the rebuild: its slot keeps its `Type` frames.
         let mut whole_then = among(&catalog, &[dead], Rulebook::default());
         whole_then.chart.sites = vec![dead];
-        whole_then.space.rebuilt.rebuild(&[dead], |_| false, true);
+        whole_then
+            .space
+            .rebuilt
+            .rebuild(&[dead], |_| false, Fallback::Counts, RuleSource::Engine);
         fight(&mut whole_then);
         assert_eq!(whole_then.npcs().len(), 1, "its Type frame");
     }
@@ -410,6 +418,43 @@ mod tests {
             SlotSprite::Ghost {
                 top_left: offset(site.position, player, frame)
             }
+        );
+    }
+
+    #[test]
+    fn a_frozen_slot_is_placed_as_a_32_pixel_sprite() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        // Its `Type` counts no frames; its `DeadType`, 100 x 60, does.
+        let site = LandingSite {
+            type_counts_frames: false,
+            dead_graphic: Some(9),
+            dead_frame_size: Some((100, 60)),
+            ..*session.chart.sites.first().expect("a stellar shown")
+        };
+        session.chart.sites = vec![site];
+        session.rebuild_sprite_pool();
+        // `Y`, a frame, `U`, a frame.
+        let rebuilt = &mut session.space.rebuilt;
+        rebuilt.frame(&[site], |_| true, RuleSource::Engine);
+        rebuilt.frame(&[site], |_| false, RuleSource::Engine);
+        assert!(session.frame_frozen(site.id));
+        let player = Vec2::new(30.0, -7.0);
+        session.ship.player.position = player;
+        session.place_stellar_sprites();
+        let mut pool = session.stellar_sprite_pool().clone();
+        pool.rebuild([]);
+        #[allow(clippy::cast_possible_truncation)]
+        let at = (
+            (site.position.x - player.x).trunc() as i32,
+            (site.position.y - player.y).trunc() as i32,
+        );
+        assert_eq!(
+            pool.sprite_of(site.id, false),
+            SlotSprite::Ghost {
+                top_left: (at.0 - 16, at.1 - 16)
+            },
+            "16 from its centre on each axis, not 50 and 30"
         );
     }
 
