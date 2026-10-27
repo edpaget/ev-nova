@@ -10,19 +10,18 @@ use nova_sim::{
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
-use crate::flight::hud::{self};
 use crate::galaxy::GalaxyCatalog;
 use crate::system::catalog::SystemCatalog;
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{
-    Color, Diagnostic, DrawList, Input, Key, MouseButton, Screen, ScreenAction, Sound, ViewShape,
+    Diagnostic, DrawList, Input, Key, MouseButton, Screen, ScreenAction, Sound, ViewShape,
 };
 
 use super::{
     BOARD_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
-    LAND_KEY, MAP_KEY, NEAREST_KEY, SELECT_KEY, TARGET_KEY, TITLE, TITLE_SIZE, ZOOM_IN_KEY,
-    ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY,
+    LAND_KEY, MAP_KEY, NEAREST_KEY, SELECT_KEY, TARGET_KEY, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY,
+    ZOOM_OUT_KEY,
 };
 
 impl<
@@ -325,15 +324,7 @@ impl<
             } else {
                 TargetPick::NearestThreat
             }),
-            Some(SELECT_KEY) => {
-                // Option is read at the press, the original reading it at
-                // the pass (@0x6acf6): the press is taken on the next
-                // step, before a frame is drawn.
-                let backwards = self.held.contains(&Key::Alt);
-                if let Ok(session) = &mut self.sim.session {
-                    session.press_weapon_select(backwards);
-                }
-            }
+            Some(SELECT_KEY) => self.press_weapon_select(),
             Some(key) => self.nav_key(key),
             None => {}
         }
@@ -350,22 +341,6 @@ impl<
     fn draw_scene(&self, list: &mut DrawList) -> bool {
         #[cfg(test)]
         self.check_frame_kept();
-        if !self.draw_world_scene(list, &self.world_hud()) {
-            let reason = self.session().err().unwrap_or_default();
-            list.text(
-                format!("Cannot start flight: {reason}"),
-                TITLE,
-                TITLE_SIZE,
-                None,
-                Color::ERROR,
-            );
-            self.draw_help(list);
-            return false;
-        }
-        match &self.status_bar {
-            Ok(bar) => self.draw_bar(list, bar, self.view.0),
-            Err(reason) => hud::draw_unavailable(list, reason, self.view.0),
-        }
-        true
+        self.draw_flight(list, || self.session().err().unwrap_or_default().to_owned())
     }
 }

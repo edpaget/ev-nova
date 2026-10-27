@@ -168,8 +168,8 @@ fn faked_mid_fight() -> Faked {
 
 #[test]
 fn a_fights_world_and_its_target_layer_are_world_and_every_text_overlay() {
-    let view = faked_mid_fight();
-    let list = super::faked_world::world_list_with(&view, &super::faked_world::targeting(1));
+    let mut view = faked_mid_fight();
+    let list = super::faked_world::world_list_with(&mut view, &super::faked_world::targeting(1));
     assert_world_then_overlay(&list);
     let world = DrawLayer::World;
     assert_eq!(list.layered().next().map(|(layer, _)| layer), Some(world));
@@ -329,12 +329,12 @@ fn the_floating_map_and_the_escort_menu_are_world_and_their_text_overlay() {
         catalog(),
         super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]),
     );
-    let mut hud = super::super::world::WorldHud::none();
+    let mut hud = nova_sim::flight_frame::FrameHud::default();
     hud.escort_rows[0].present = true;
     view.escort_menu.toggle(view.elapsed, &hud.escort_rows);
     view.sim.map_mut().drawing = Some(sol_drawing());
     view.hyperspace_key(HYPERSPACE_MODE_KEY);
-    let list = super::faked_world::world_list_with(&view, &hud);
+    let list = super::faked_world::world_list_with(&mut view, &hud);
     let border = floating_border(&list);
     assert!(!border.is_empty(), "the floating map is up");
     for line in &border {

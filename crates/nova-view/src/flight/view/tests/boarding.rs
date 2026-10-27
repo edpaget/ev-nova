@@ -456,7 +456,11 @@ fn the_target_panel_is_redrawn_once_the_plunder_dialog_closes() {
         view.plunder(Take::Credits),
         Taken::Credits(boarding.credits)
     );
-    assert_eq!(*view.target_shown(), view.target_now(), "redrawn at once");
+    assert_eq!(
+        *view.target_shown(&view.frame_now()),
+        view.target_now(&view.frame_now()),
+        "redrawn at once"
+    );
     assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
 }
 
@@ -736,13 +740,17 @@ fn hanging_up_a_hail_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
     tap(&mut view, HAIL_KEY);
     view.take_hail().expect("hailed");
     let stale = RadarScene::default();
-    assert_ne!(view.radar_now(), stale);
+    assert_ne!(view.radar_now(&view.frame_now()), stale);
     view.radar_scene = Some(stale);
     let cadence = view.hud_cadence;
     view.hang_up();
     assert_eq!(view.hailing(), None);
     assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
-    assert_eq!(*view.radar_shown(), view.radar_now(), "as _RedrawStatus");
+    assert_eq!(
+        *view.radar_shown(&view.frame_now()),
+        view.radar_now(&view.frame_now()),
+        "as _RedrawStatus"
+    );
 }
 
 #[test]

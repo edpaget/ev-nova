@@ -52,7 +52,10 @@ use super::{
 /// [`RuleKey::TranslucentShotFade`], [`RuleKey::FlightAnchor`],
 /// [`RuleKey::LightningZigZag`] and [`RuleKey::IonTintMurkColour`]
 /// (rdm:phase/view-sim-seam/phase-7-world-frame, which pulled these four
-/// forward from rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks).
+/// forward from rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks),
+/// and the HUD's [`RuleKey::HudCadence`]
+/// (rdm:phase/view-sim-seam/phase-8-hud-and-target-frame, which pulled it
+/// forward from phase 12 too).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Presentation {
     /// [`RuleKey::ShipDebris`]'s reading.
@@ -71,10 +74,12 @@ pub(super) struct Presentation {
     pub(super) zig_zag: RuleSource,
     /// [`RuleKey::IonTintMurkColour`]'s reading.
     pub(super) ion_tint_murk: RuleSource,
+    /// [`RuleKey::HudCadence`]'s reading.
+    pub(super) hud_cadence: RuleSource,
 }
 
 impl Presentation {
-    /// The eight as `rules` read them.
+    /// The nine as `rules` read them.
     pub(super) fn of(rules: &Rulebook) -> Self {
         Self {
             debris: rules.source_for(RuleKey::ShipDebris),
@@ -85,6 +90,7 @@ impl Presentation {
             anchor: rules.source_for(RuleKey::FlightAnchor),
             zig_zag: rules.source_for(RuleKey::LightningZigZag),
             ion_tint_murk: rules.source_for(RuleKey::IonTintMurkColour),
+            hud_cadence: rules.source_for(RuleKey::HudCadence),
         }
     }
 

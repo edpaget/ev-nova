@@ -4,7 +4,6 @@
 //! every visible-area rule measured against the widened view, and the
 //! course map in its 1024-wide frame, centred.
 
-use super::super::world::WorldHud;
 use super::faked_world::{
     faked_ship_sprites, in_sol_with, npc_129, saying, targeting, the_player_at, world, world_list,
     world_list_with,
@@ -14,6 +13,7 @@ use crate::flight::escorts::MENU_KEY;
 use crate::flight::floating;
 use crate::flight::{alert, brackets};
 use crate::view_shape::ViewShape;
+use nova_sim::flight_frame::FrameHud;
 
 /// A 16:9 window's widened view.
 const WIDE: (f32, f32) = (1365.0, 768.0);
@@ -96,11 +96,11 @@ fn the_floating_map_and_the_escort_menu_and_double_time_icon_keep_their_rules() 
     let mut view = widened_world(vec![the_player_at(Vec2::ZERO, 0.0)]);
     view.sim.frame_mut().double_time = true;
     view.refresh_frame();
-    let mut hud = WorldHud::none();
+    let mut hud = FrameHud::default();
     hud.escort_rows[0].present = true;
     view.escort_menu.toggle(view.elapsed, &hud.escort_rows);
     assert!(view.escort_menu.is_open());
-    let list = world_list_with(&view, &hud);
+    let list = world_list_with(&mut view, &hud);
     assert!(list.iter().any(|command| *command
         == DrawCommand::Picture {
             image: ImageKey::icon(alert::DOUBLE_TIME_CICN),
@@ -153,8 +153,8 @@ fn a_ship_and_a_stellar_500_left_of_the_player_are_drawn_on_screen() {
     // 500 left of the player is off the classic view's left edge, 415
     // from it. Whether the session counts the ship on screen is nova-sim's
     // (the play area it is told, `the_flight_is_told_the_widened_play_area`).
-    let view = npc_at(-500.0);
-    let list = world_list_with(&view, &targeting(0));
+    let mut view = npc_at(-500.0);
+    let list = world_list_with(&mut view, &targeting(0));
     let at_85: Vec<ImageKey> = sprites(&list)
         .into_iter()
         .filter(|&(_, center)| center == at(85.0, 384.0))

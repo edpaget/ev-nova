@@ -511,6 +511,8 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             Ok(session) => session.recharge()?,
             Err(_) => return Err(RechargeRefusal::NoFuel),
         };
+        // The fuel gauge shows the fuel bought (`FrameHud::reserves`).
+        self.refresh_frame();
         self.draw_marked_nav();
         let fuel = self.reserves().fuel;
         if let Some(held) = &mut self.reserves_scene {
@@ -1053,14 +1055,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
                 }
             }
         }
-    }
-
-    /// Whether a docked mission text still shown holds the status bar's
-    /// graphic: a `C`, `E` or `H` staged after it loads another `ïntf` only
-    /// as it closes ([`FlightView::close_mission_text`]), under
-    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine reading, as the held scenes are.
-    pub(super) fn bar_held(&self) -> bool {
-        self.hud_waits() && self.bar_steps.iter().any(BarStep::holds_bar)
     }
 
     /// The shipyard of the stellar landed on, as [`Session::shipyard`]

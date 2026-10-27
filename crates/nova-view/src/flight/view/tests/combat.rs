@@ -1310,8 +1310,8 @@ fn lit_npc_at(at: Vec2, heading: f32) -> nova_sim::flight_frame::FrameShip {
 fn the_fight_is_drawn_between_the_stellars_in_order() {
     // The world under the title and the HUD: layers.rs's
     // `a_fights_scene_and_its_target_layer_are_the_world_and_its_hud_and_every_text_overlay`.
-    let view = firing_at_an_npc_with_murk(armed(1, &[BLASTER, UNDER, OVER]), 0);
-    let list = super::faked_world::world_list_with(&view, &super::faked_world::targeting(0));
+    let mut view = firing_at_an_npc_with_murk(armed(1, &[BLASTER, UNDER, OVER]), 0);
+    let list = super::faked_world::world_list_with(&mut view, &super::faked_world::targeting(0));
     let stellar = first(&list, sprite_of(1128));
     let under = first(&list, line_in(Color::rgba(0, 0, 255, 255)));
     let npc = first(&list, sprite_of(2001));
@@ -2475,8 +2475,8 @@ fn the_target_is_bracketed_and_its_panel_shows_it() {
 #[test]
 fn the_nav_brackets_draw_under_the_ship_brackets() {
     // Which stellar a slot key selects is the session's.
-    let view = firing_at_an_npc_with_murk(armed(1, &[BLASTER, UNDER, OVER]), 0);
-    let hud = super::super::world::WorldHud {
+    let mut view = firing_at_an_npc_with_murk(armed(1, &[BLASTER, UNDER, OVER]), 0);
+    let hud = nova_sim::flight_frame::FrameHud {
         nav_brackets: Some(nova_sim::brackets::NavBrackets {
             stellar: StellarId(128),
             position: Vec2::new(0.0, -600.0),
@@ -2485,7 +2485,7 @@ fn the_nav_brackets_draw_under_the_ship_brackets() {
         }),
         ..super::faked_world::targeting(0)
     };
-    let list = super::faked_world::world_list_with(&view, &hud);
+    let list = super::faked_world::world_list_with(&mut view, &hud);
     let nav = first(&list, icon_in(10000..=10007));
     let ship = first(&list, icon_in(10008..=10023));
     let npc = first(&list, sprite_of(2001));
@@ -2556,11 +2556,11 @@ fn a_target_whose_sheet_cannot_be_read_is_bracketed_round_its_crossed_box() {
     let mut npc = lit_npc(90.0);
     npc.class = ShipId(130);
     npc.framed = Some(ShipId(130));
-    let view = world(
+    let mut view = world(
         trafficked(&[130], 1, 130, 3),
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), npc]),
     );
-    let list = super::faked_world::world_list_with(&view, &super::faked_world::targeting(0));
+    let list = super::faked_world::world_list_with(&mut view, &super::faked_world::targeting(0));
     let corners: Vec<(i16, Point)> = list
         .iter()
         .filter_map(|command| match command {
@@ -2647,12 +2647,16 @@ fn a_change_of_target_shows_at_once() {
     tap(&mut view, Key::Tab);
     assert_eq!(target_of(&view), Some(NpcId(1)));
     assert_eq!(drawn_for(&view), Some(NpcId(0)), "not yet retaken");
-    assert_eq!(*view.target_shown(), view.target_now(), "shown at once");
+    assert_eq!(
+        *view.target_shown(&view.frame_now()),
+        view.target_now(&view.frame_now()),
+        "shown at once"
+    );
     view.tick(TICK);
     assert_eq!(drawn_for(&view), Some(NpcId(1)), "retaken");
     tap(&mut view, Key::Tab);
     assert_eq!(target_of(&view), None);
-    assert_eq!(*view.target_shown(), None, "lost at once");
+    assert_eq!(*view.target_shown(&view.frame_now()), None, "lost at once");
     let list = texts(&drawn(&view));
     assert!(list.contains(&NO_TARGET.to_owned()), "{list:?}");
 }

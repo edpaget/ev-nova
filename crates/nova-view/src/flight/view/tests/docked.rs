@@ -407,7 +407,11 @@ fn the_mission_computers_close_redraws_the_whole_bar() {
     view.settle_script();
     desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
     assert_eq!(port_nav(&view), naming("Earth"), "held");
-    assert_ne!(view.reserves_shown().fuel.now, 100.0, "held");
+    assert_ne!(
+        view.reserves_shown(&view.frame_now()).fuel.now,
+        100.0,
+        "held"
+    );
     view.open_port_dialog();
     view.close_port_dialog(PortDialog::MissionComputer);
     assert_eq!(
@@ -415,7 +419,11 @@ fn the_mission_computers_close_redraws_the_whole_bar() {
         naming("Proxima"),
         "redrawn, though the restore changed nothing"
     );
-    assert_eq!(view.reserves_shown().fuel.now, 100.0, "redrawn");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()).fuel.now,
+        100.0,
+        "redrawn"
+    );
 }
 
 #[test]
@@ -654,7 +662,7 @@ fn a_brief_text_shows_over_the_bar_as_on_accept_left_it() {
                 assert_eq!(view.accept_mission(MissionId(131)), Ok(0), "{what}");
             }
             assert_eq!(view.take_mission_texts().len(), 1, "{what}: the brief");
-            let shown = view.reserves_shown();
+            let shown = view.reserves_shown(&view.frame_now());
             match (changes, how) {
                 (true, _) => {
                     assert_eq!(
@@ -695,7 +703,11 @@ fn a_refuse_text_shows_over_the_bar_from_before_the_refusal() {
         stale_bar(&mut view);
         assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(()));
         assert_eq!(view.take_mission_texts().len(), 1, "{script}");
-        assert_eq!(view.reserves_shown(), before, "{script}: before OnRefuse");
+        assert_eq!(
+            view.reserves_shown(&view.frame_now()),
+            before,
+            "{script}: before OnRefuse"
+        );
         assert_eq!(port_nav(&view), naming("Earth"), "{script}");
         view.close_mission_text();
         assert_eq!(retaken(&view), WHOLE_BAR, "{script}: the text closed");
@@ -736,7 +748,7 @@ fn relanded_by(
     view.take_off().expect("takes off");
     view.settle_script();
     land_now(&mut view);
-    (view.reserves_shown(), view)
+    (view.reserves_shown(&view.frame_now()), view)
 }
 
 /// A text queued before an `H` onto ship 130 (under `ïntf` 129, whose
@@ -878,7 +890,7 @@ fn an_outfit_hooks_s_text_shows_over_the_bar_as_the_hook_left_it() {
         assert_eq!(bar_shown(&view), Some(705), "{what}: at the H130");
         let noted = view.bar_steps.front().expect("staged").bar.reserves;
         assert_eq!(
-            view.reserves_shown().fuel.max,
+            view.reserves_shown(&view.frame_now()).fuel.max,
             noted.fuel.max - 100.0,
             "{what}: as at the H130, before G201's tank"
         );
@@ -886,7 +898,7 @@ fn an_outfit_hooks_s_text_shows_over_the_bar_as_the_hook_left_it() {
         view.close_mission_text();
         assert_eq!(bar_shown(&view), Some(700), "{what}: the H129, once closed");
         assert_eq!(
-            view.reserves_shown(),
+            view.reserves_shown(&view.frame_now()),
             view.reserves(),
             "{what}: at the H129"
         );
@@ -918,7 +930,11 @@ fn an_outfit_orders_own_draw_waits_for_its_hooks_texts() {
                 "{what}: the text's bar, before the M"
             );
             assert!(!view.nav_marked, "{what}: its redraw drew the nav");
-            assert_eq!(view.radar_scene, Some(view.radar_now()), "{what}");
+            assert_eq!(
+                view.radar_scene,
+                Some(view.radar_now(&view.frame_now())),
+                "{what}"
+            );
         }
     }
 }
@@ -951,12 +967,20 @@ fn a_ship_hooks_s_text_shows_before_the_purchases_own_redraw() {
         assert_eq!(view.take_mission_texts().len(), 1, "{what}: S131's brief");
         view.catch_up();
         assert_eq!(bar_shown(&view), Some(700), "{what}: the old graphic");
-        assert_eq!(view.reserves_shown(), before, "{what}: before the purchase");
+        assert_eq!(
+            view.reserves_shown(&view.frame_now()),
+            before,
+            "{what}: before the purchase"
+        );
         view.close_mission_text();
         assert_eq!(bar_shown(&view), Some(705), "{what}: the new ship's");
         let filled = view.reserves();
         assert_eq!(filled.fuel.now, filled.fuel.max, "{what}: filled");
-        assert_eq!(view.reserves_shown(), filled, "{what}: filled, once closed");
+        assert_eq!(
+            view.reserves_shown(&view.frame_now()),
+            filled,
+            "{what}: filled, once closed"
+        );
     }
 }
 
@@ -975,10 +999,14 @@ fn a_comp_text_shows_the_gauges_from_before_on_success() {
         let (landed, mut view) = relanded(script, "", false);
         view.settle_script();
         assert_eq!(view.take_mission_texts().len(), 1, "{script}");
-        assert_eq!(view.reserves_shown(), landed, "{script}: the landing's");
+        assert_eq!(
+            view.reserves_shown(&view.frame_now()),
+            landed,
+            "{script}: the landing's"
+        );
         assert_eq!(port_nav(&view), naming("Earth"), "{script}");
         view.close_mission_text();
-        let shown = view.reserves_shown();
+        let shown = view.reserves_shown(&view.frame_now());
         if at_h {
             assert_eq!(
                 shown.fuel.max,
@@ -1001,7 +1029,7 @@ fn a_fail_text_shows_over_the_bar_as_on_failure_left_it() {
         let (landed, mut view) = relanded("", &format!("{h} G201 M131"), true);
         view.settle_script();
         assert_eq!(view.take_mission_texts().len(), 1, "{h}: the fail text");
-        let shown = view.reserves_shown();
+        let shown = view.reserves_shown(&view.frame_now());
         if changes {
             assert_eq!(
                 shown.fuel.max,
@@ -1048,7 +1076,7 @@ fn a_landings_two_texts_each_close_to_their_own_bar_and_the_loads_before_the_nex
     view.take_off().expect("takes off");
     view.settle_script();
     land_now(&mut view);
-    let landed = view.reserves_shown();
+    let landed = view.reserves_shown(&view.frame_now());
     view.settle_script();
     assert_eq!(
         view.session().map(Session::ship),
@@ -1060,12 +1088,16 @@ fn a_landings_two_texts_each_close_to_their_own_bar_and_the_loads_before_the_nex
         2,
         "A's CompText, then B's after A's OnSuccess"
     );
-    assert_eq!(view.reserves_shown(), landed, "the landing's");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()),
+        landed,
+        "the landing's"
+    );
     assert_eq!(landed.fuel.max, 250.0, "the landing's ship");
     assert_eq!(port_nav(&view), naming("Earth"));
     view.close_mission_text();
     assert_eq!(
-        view.reserves_shown().fuel.max,
+        view.reserves_shown(&view.frame_now()).fuel.max,
         350.0,
         "A's text as it noted the bar, then A's H130 as at its operator, \
          before G201's tank"
@@ -1105,7 +1137,7 @@ fn an_accepts_two_texts_close_to_their_own_bars_and_the_dialog_redraws_after_the
     desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
     view.close_mission_text();
     assert_eq!(
-        view.reserves_shown(),
+        view.reserves_shown(&view.frame_now()),
         queued,
         "the brief as it noted the bar, and no redraw of the dialog's yet"
     );
@@ -1116,7 +1148,7 @@ fn an_accepts_two_texts_close_to_their_own_bars_and_the_dialog_redraws_after_the
         WHOLE_BAR,
         "the load's text, then the computer's redraw"
     );
-    assert_eq!(view.reserves_shown().fuel.now, 100.0);
+    assert_eq!(view.reserves_shown(&view.frame_now()).fuel.now, 100.0);
     assert!(view.bar_steps.is_empty());
 }
 
@@ -1160,10 +1192,14 @@ fn by_the_engine_the_gauges_hold_while_docked_until_a_shop_closes() {
     desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
     assert_eq!(view.outfit(BUY_TANK), Ok(()));
     assert_eq!(view.reserves().fuel.max, 350.0, "the tank");
-    assert_eq!(view.reserves_shown(), held, "landing's");
+    assert_eq!(view.reserves_shown(&view.frame_now()), held, "landing's");
     assert_eq!(fuel_drawn(&view), landed, "drawn held");
     view.refresh_status();
-    assert_eq!(view.reserves_shown(), view.reserves(), "the shop closed");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()),
+        view.reserves(),
+        "the shop closed"
+    );
     assert_ne!(fuel_drawn(&view), landed);
 }
 
@@ -1175,7 +1211,11 @@ fn by_the_other_reading_the_gauges_follow_at_once_while_docked() {
     let landed = fuel_drawn(&view);
     desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
     assert_eq!(view.outfit(BUY_TANK), Ok(()));
-    assert_eq!(view.reserves_shown(), view.reserves(), "at once");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()),
+        view.reserves(),
+        "at once"
+    );
     assert_ne!(fuel_drawn(&view), landed);
 }
 
@@ -1186,19 +1226,35 @@ fn a_recharge_redraws_the_fuel_gauge_alone() {
     land_now(&mut view);
     desk_reserve(&mut view, Reserve::Fuel, 100.0);
     view.refresh_status();
-    assert_eq!(view.reserves_shown().fuel.now, 100.0, "held at 100");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()).fuel.now,
+        100.0,
+        "held at 100"
+    );
     desk_reserve(&mut view, Reserve::Shield, 10.0);
-    assert_eq!(view.reserves_shown().shield.now, 40.0, "held full");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()).shield.now,
+        40.0,
+        "held full"
+    );
     assert!(view.recharge().is_ok());
     assert_eq!(view.reserves().fuel.now, 250.0);
-    assert_eq!(view.reserves_shown().fuel.now, 250.0, "redrawn at once");
-    assert_eq!(view.reserves_shown().shield.now, 40.0, "still held");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()).fuel.now,
+        250.0,
+        "redrawn at once"
+    );
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()).shield.now,
+        40.0,
+        "still held"
+    );
     desk_reserve(&mut view, Reserve::Fuel, 100.0);
     let mut desk = view.pilot_desk().expect("flying");
     desk.edit(PilotEdit::Credits(0)).expect("set");
     assert_eq!(view.recharge(), Ok(0), "nothing to pay with");
     assert_eq!(
-        view.reserves_shown().fuel.now,
+        view.reserves_shown(&view.frame_now()).fuel.now,
         100.0,
         "redrawn, as `_DoPortDialog` draws whatever the fill"
     );
@@ -1210,9 +1266,17 @@ fn a_ship_bought_under_the_same_bar_keeps_the_gauges_until_the_shipyard_closes()
     land_now(&mut view);
     view.buy_ship(ShipId(129), "Kestrel").expect("bought");
     assert_eq!(view.reserves().fuel.max, 350.0, "its tank");
-    assert_eq!(view.reserves_shown().fuel.max, 250.0, "the old ship's");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()).fuel.max,
+        250.0,
+        "the old ship's"
+    );
     view.refresh_status();
-    assert_eq!(view.reserves_shown().fuel.max, 350.0, "the shipyard closed");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()).fuel.max,
+        350.0,
+        "the shipyard closed"
+    );
 }
 
 #[test]
@@ -1220,10 +1284,14 @@ fn a_purchase_redraws_the_whole_bar_before_it_buys() {
     let mut view = FlightView::new(shipbuying());
     land_now(&mut view);
     desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
-    assert_eq!(view.reserves_shown().fuel.now, 250.0, "held");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()).fuel.now,
+        250.0,
+        "held"
+    );
     view.buy_ship(ShipId(129), "Kestrel").expect("bought");
     assert_eq!(view.reserves().fuel.max, 350.0, "its tank");
-    let shown = view.reserves_shown().fuel;
+    let shown = view.reserves_shown(&view.frame_now()).fuel;
     assert_eq!(
         (shown.now, shown.max),
         (100.0, 250.0),
@@ -1237,7 +1305,11 @@ fn a_ship_bought_under_another_bar_shows_its_gauges_at_once() {
     land_now(&mut view);
     view.buy_ship(ShipId(129), "Kestrel").expect("bought");
     assert_eq!(bar_shown(&view), Some(705), "ïntf 129");
-    assert_eq!(view.reserves_shown().fuel.max, 350.0, "at once");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()).fuel.max,
+        350.0,
+        "at once"
+    );
 }
 
 // An outfitter order whose script changes the ship's `ïntf`.
@@ -1382,7 +1454,7 @@ fn an_outfit_order_changing_the_intf_and_back_redraws_the_bar_as_at_the_last_cha
     assert_eq!(view.session().map(Session::ship), Ok(ShipId(129)));
     assert_eq!(port_nav(&view), naming("Proxima"), "redrawn at the H");
     assert_eq!(
-        view.reserves_shown().fuel.max,
+        view.reserves_shown(&view.frame_now()).fuel.max,
         view.reserves().fuel.max - 100.0,
         "the gauges as at H129, before G201's tank"
     );
@@ -1397,11 +1469,18 @@ fn a_ship_purchases_on_purchase_intf_change_shows_the_gauges_before_the_fill() {
     desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
     view.buy_ship(ShipId(129), "Kestrel").expect("bought");
     assert_eq!(view.session().map(Session::ship), Ok(ShipId(130)));
-    let (shown, now) = (view.reserves_shown().fuel, view.reserves().fuel);
+    let (shown, now) = (
+        view.reserves_shown(&view.frame_now()).fuel,
+        view.reserves().fuel,
+    );
     assert_eq!(shown.max, now.max, "ship 130's, under its ïntf");
     assert!(shown.now < shown.max, "{shown:?}: not yet filled");
     assert_eq!(now.now, now.max, "the fill");
-    assert_eq!(view.nav_shown(), view.nav_now(), "the purchase's own draw");
+    assert_eq!(
+        view.nav_shown(&view.frame_now()),
+        view.nav_now(),
+        "the purchase's own draw"
+    );
 }
 
 #[test]
@@ -1418,7 +1497,10 @@ fn a_ship_purchases_on_purchase_m_shows_in_its_nav_draw_over_the_gauges_before_t
         naming("Proxima"),
         "the purchase's own nav draw (@0x5f0b1)"
     );
-    let (shown, now) = (view.reserves_shown().fuel, view.reserves().fuel);
+    let (shown, now) = (
+        view.reserves_shown(&view.frame_now()).fuel,
+        view.reserves().fuel,
+    );
     assert_eq!(shown.max, now.max, "ship 130's, under its ïntf");
     assert!(shown.now < shown.max, "{shown:?}: not yet filled");
     assert_eq!(now.now, now.max, "the fill");
@@ -1449,23 +1531,27 @@ fn the_take_off_after_a_landed_m_names_its_stellar_for_one_frame() {
             Ok(NavMode::Stellar(None)),
             "{what}: let go"
         );
-        assert_eq!(view.nav_shown(), flashing("Proxima"), "{what}: held");
+        assert_eq!(
+            view.nav_shown(&view.frame_now()),
+            flashing("Proxima"),
+            "{what}: held"
+        );
         view.tick(Duration::from_millis(1));
         assert_eq!(
-            view.nav_shown(),
+            view.nav_shown(&view.frame_now()),
             flashing("Proxima"),
             "{what}: a frame within the tick"
         );
         view.tick(TICK);
         assert_eq!(
-            view.nav_shown(),
+            view.nav_shown(&view.frame_now()),
             NavDisplay::Stellar(None),
             "{what}: a tick on"
         );
         let mut view = told(docked_at_earth(port(), RuleSource::Bible));
         take_off(&mut view);
         assert_eq!(
-            view.nav_shown(),
+            view.nav_shown(&view.frame_now()),
             NavDisplay::Stellar(None),
             "{what}: by the bible"
         );
@@ -1487,13 +1573,13 @@ fn the_take_offs_held_nav_shows_in_the_first_frame_drawn_after_it_whatever_the_r
         assert_eq!(view.take_off(), Some(StellarId(128)));
         view.tick(frame);
         assert_eq!(
-            view.nav_shown(),
+            view.nav_shown(&view.frame_now()),
             flashing("Proxima"),
             "{fps} fps: the first frame drawn, though it crosses a tick"
         );
         view.tick(TICK);
         assert_eq!(
-            view.nav_shown(),
+            view.nav_shown(&view.frame_now()),
             NavDisplay::Stellar(None),
             "{fps} fps: a tick on"
         );
@@ -1506,7 +1592,7 @@ fn a_take_off_with_nothing_let_go_holds_nothing() {
     run_set(&mut view, "M132");
     view.settle_script();
     assert_eq!(view.take_off(), Some(StellarId(128)));
-    assert_eq!(view.nav_shown(), NavDisplay::Stellar(None));
+    assert_eq!(view.nav_shown(&view.frame_now()), NavDisplay::Stellar(None));
     assert_eq!(view.nav_flash, None, "no flash to end");
 }
 
@@ -1519,14 +1605,26 @@ fn a_plain_take_off_names_the_landed_stellar_for_one_frame() {
         Ok(NavMode::Stellar(None)),
         "let go"
     );
-    assert_eq!(view.nav_shown(), flashing("Earth"), "held");
+    assert_eq!(view.nav_shown(&view.frame_now()), flashing("Earth"), "held");
     view.tick(TICK);
-    assert_eq!(view.nav_shown(), flashing("Earth"), "the first frame");
+    assert_eq!(
+        view.nav_shown(&view.frame_now()),
+        flashing("Earth"),
+        "the first frame"
+    );
     view.tick(TICK);
-    assert_eq!(view.nav_shown(), NavDisplay::Stellar(None), "a tick on");
+    assert_eq!(
+        view.nav_shown(&view.frame_now()),
+        NavDisplay::Stellar(None),
+        "a tick on"
+    );
     let mut view = docked_at_earth(port(), RuleSource::Bible);
     view.take_off();
-    assert_eq!(view.nav_shown(), NavDisplay::Stellar(None), "by the bible");
+    assert_eq!(
+        view.nav_shown(&view.frame_now()),
+        NavDisplay::Stellar(None),
+        "by the bible"
+    );
 }
 
 #[test]
@@ -1553,14 +1651,25 @@ fn a_take_off_with_a_course_names_the_landed_stellar_over_the_cue_for_one_frame(
         Ok(NavMode::Hyperspace(Some(SystemId(131)))),
         "cued"
     );
-    assert_eq!(view.nav_shown(), flashing("Earth"), "held over the cue");
+    assert_eq!(
+        view.nav_shown(&view.frame_now()),
+        flashing("Earth"),
+        "held over the cue"
+    );
     view.tick(TICK);
-    assert_eq!(view.nav_shown(), flashing("Earth"), "the first frame");
+    assert_eq!(
+        view.nav_shown(&view.frame_now()),
+        flashing("Earth"),
+        "the first frame"
+    );
     view.tick(TICK);
     assert!(
-        matches!(view.nav_shown(), NavDisplay::Hyperspace { .. }),
+        matches!(
+            view.nav_shown(&view.frame_now()),
+            NavDisplay::Hyperspace { .. }
+        ),
         "a tick on: {:?}",
-        view.nav_shown()
+        view.nav_shown(&view.frame_now())
     );
 }
 
@@ -1594,9 +1703,13 @@ fn a_text_queued_in_the_take_offs_days_shows_over_its_held_nav() {
     view.settle_script();
     assert_eq!(view.take_off(), Some(StellarId(128)));
     assert_eq!(view.take_mission_texts().len(), 1, "the cron's mission");
-    assert_eq!(view.nav_shown(), flashing("Proxima"), "under its text");
+    assert_eq!(
+        view.nav_shown(&view.frame_now()),
+        flashing("Proxima"),
+        "under its text"
+    );
     view.tick(TICK);
-    assert_eq!(view.nav_shown(), NavDisplay::Stellar(None));
+    assert_eq!(view.nav_shown(&view.frame_now()), NavDisplay::Stellar(None));
 }
 
 #[test]
@@ -1606,7 +1719,11 @@ fn a_pilot_resumed_and_landed_holds_the_gauges_from_its_landing() {
     land_now(&mut view);
     assert_eq!(view.outfit(BUY_TANK), Ok(()));
     assert_eq!(view.reserves().fuel.max, 350.0, "the tank");
-    assert_eq!(view.reserves_shown().fuel.max, 250.0, "the landing's");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()).fuel.max,
+        250.0,
+        "the landing's"
+    );
 }
 
 #[test]
@@ -1615,8 +1732,12 @@ fn landing_redraws_the_held_gauges() {
     view.reserves_scene = Some(Reserves::default());
     desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
     land_now(&mut view);
-    assert_eq!(view.reserves_shown(), view.reserves(), "landing's");
-    assert_eq!(view.reserves_shown().fuel.now, 100.0);
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()),
+        view.reserves(),
+        "landing's"
+    );
+    assert_eq!(view.reserves_shown(&view.frame_now()).fuel.now, 100.0);
 }
 
 #[test]
@@ -1626,7 +1747,11 @@ fn in_flight_the_gauges_stay_live_by_the_engine() {
     view.redraw_status();
     let before = fuel_drawn(&view);
     desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
-    assert_eq!(view.reserves_shown().fuel.now, 100.0, "at once");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()).fuel.now,
+        100.0,
+        "at once"
+    );
     assert_ne!(fuel_drawn(&view), before);
 }
 

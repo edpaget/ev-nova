@@ -566,7 +566,7 @@ fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
             click(&mut view, alpha);
         }
         let stale = RadarScene::default();
-        assert_ne!(view.radar_now(), stale);
+        assert_ne!(view.radar_now(&view.frame_now()), stale);
         view.radar_scene = Some(stale);
         let cadence = view.hud_cadence;
         if by_key {
@@ -580,7 +580,11 @@ fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
             view.hud_cadence, cadence,
             "neither timed nor flipped: {case}"
         );
-        assert_eq!(*view.radar_shown(), view.radar_now(), "{case}");
+        assert_eq!(
+            *view.radar_shown(&view.frame_now()),
+            view.radar_now(&view.frame_now()),
+            "{case}"
+        );
     }
 }
 

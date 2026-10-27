@@ -84,8 +84,8 @@ fn firing_with_sprays() -> Faked {
 
 #[test]
 fn a_beam_and_each_effect_is_drawn_in_its_layer() {
-    let view = firing_with_sprays();
-    let list = world_list_with(&view, &targeting(0));
+    let mut view = firing_with_sprays();
+    let list = world_list_with(&mut view, &targeting(0));
     let stellar = first(&list, sprite_of(1128));
     let under = first(&list, line_in(Color::rgba(0, 0, 255, 255)));
     let asteroid = first(&list, sprite_of(1800));
@@ -111,7 +111,7 @@ fn the_cursor_and_the_double_time_icon_are_drawn_after_the_brackets_and_under_th
     view.sim.frame_mut().double_time = true;
     view.refresh_frame();
     view.cursor_input(&Input::PointerMoved(Point::new(40.0, 400.0)));
-    let list = world_list_with(&view, &targeting(0));
+    let list = world_list_with(&mut view, &targeting(0));
     let brackets = first(&list, icon_in(10008..=10023));
     let cursor = first(&list, sprite_of(651));
     let double_time = first(&list, icon_in(DOUBLE_TIME_CICN..=DOUBLE_TIME_CICN));
@@ -279,12 +279,12 @@ fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
     // The menu's rows are the session's, in the world's extras
     // (rdm:phase/view-sim-seam/phase-10-comm-escorts-boarding-on-port).
     let mut view = firing_with_sprays();
-    let mut hud = super::super::world::WorldHud::none();
+    let mut hud = nova_sim::flight_frame::FrameHud::default();
     hud.escort_rows[0].present = true;
     view.escort_menu.toggle(view.elapsed, &hud.escort_rows);
     assert!(view.escort_menu.is_open());
     floating_up(&mut view);
-    let list = world_list_with(&view, &hud);
+    let list = world_list_with(&mut view, &hud);
     let floating = first(&list, floating_border_line);
     let menu = first(&list, |command| {
         *command == fill_command(escort_menu_frame(), Color::BLACK)

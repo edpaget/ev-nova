@@ -192,18 +192,18 @@ impl<
         sim.frame(&mut frame);
         let session = &sim.session;
         let (scene, sheet, sheet_ship, status_bar) = match &session {
-            Ok(session) => (
+            Ok(_) => (
                 Some(opening_scene(&catalog, &frame)),
                 catalog.ship_sheet(frame.player().class),
                 Some(frame.player().class),
-                hud::choose_status_bar(&catalog, session.interface_government()),
+                hud::choose_status_bar(&catalog, frame.hud.interface_government),
             ),
             Err(reason) => (None, Err(reason.clone()), None, Err(reason.clone())),
         };
         let bar_government = session
             .as_ref()
             .ok()
-            .map(|session| BarFor(session.interface_government()));
+            .map(|_| BarFor(frame.hud.interface_government));
         let mut map = GalaxyMap::course(&catalog);
         if let Ok(session) = &session {
             map.set_nebula_pick(session.rules().source_for(nova_sim::RuleKey::NebulaPicture));

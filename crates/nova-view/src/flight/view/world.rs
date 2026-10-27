@@ -39,9 +39,8 @@
 //!   the window (@0x21b54-0x21ba4)
 //!   (rdm:phase/play-feel-followups/phase-2-flight-world-clipped-to-play-area).
 
-use nova_sim::brackets::{NavBrackets, TargetBrackets};
+use nova_sim::Vec2;
 use nova_sim::sprite_layer::{SpriteLayer, WORLD_PASSES, WorldPass};
-use nova_sim::{AlertIcon, ClassRow, EscortClass, Vec2};
 
 use crate::flight::alert;
 use crate::flight::asteroids;
@@ -57,54 +56,16 @@ use crate::{Color, DrawList, Point};
 use super::stars;
 use super::{FlightView, HELP, HELP_AT, OVERLAY_SIZE, TITLE, TITLE_SIZE};
 
-/// What the world draws that the flight's frame doesn't hold yet: the
-/// target layer's brackets and Red Alert icon
-/// (rdm:phase/view-sim-seam/phase-8-hud-and-target-frame) and the escort
-/// menu's rows among the floaters
-/// (rdm:phase/view-sim-seam/phase-10-comm-escorts-boarding-on-port). A
-/// session's flight takes them from its session as it draws
-/// ([`FlightView::world_hud`]); [`WorldHud::none`] is a flight's with
-/// none of them.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct WorldHud {
-    /// The brackets round the nav target (`nova_sim::Session::nav_brackets`).
-    pub(super) nav_brackets: Option<NavBrackets>,
-    /// The brackets round the ship target
-    /// (`nova_sim::Session::target_brackets`).
-    pub(super) target_brackets: Option<TargetBrackets>,
-    /// The Red Alert icon shown (`nova_sim::Session::red_alert_icon`).
-    pub(super) red_alert: Option<AlertIcon>,
-    /// The escort menu's class rows (`nova_sim::Session::escort_menu`).
-    pub(super) escort_rows: [ClassRow; 4],
-}
-
-impl WorldHud {
-    /// None of them: no brackets, no Red Alert, no escort of any class.
-    pub(super) fn none() -> Self {
-        Self {
-            nav_brackets: None,
-            target_brackets: None,
-            red_alert: None,
-            escort_rows: EscortClass::ALL.map(|class| ClassRow {
-                class,
-                present: false,
-                order: None,
-            }),
-        }
-    }
-}
-
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// Draws the sprite world over the scene laid out, with `hud`'s
-    /// brackets, icon and escort rows ([`FlightView::draw_world`]), then the
-    /// system's title and the help line when their overlays are on: whether
-    /// there was a scene to draw.
-    pub(super) fn draw_world_scene(&self, list: &mut DrawList, hud: &WorldHud) -> bool {
+    /// Draws the sprite world over the scene laid out
+    /// ([`FlightView::draw_world`]), then the system's title and the help
+    /// line when their overlays are on: whether there was a scene to draw.
+    pub(super) fn draw_world_scene(&self, list: &mut DrawList) -> bool {
         let Some(scene) = &self.scene else {
             return false;
         };
         let camera = self.camera();
-        list.world(|list| self.draw_world(list, scene, &camera, hud));
+        list.world(|list| self.draw_world(list, scene, &camera));
         if self.overlays.title {
             list.text(
                 format!("{} (sÿst {})", scene.name(), scene.id().0),
@@ -115,6 +76,30 @@ impl<C, S: FlightSim> FlightView<C, S> {
             );
         }
         self.draw_help(list);
+        true
+    }
+
+    /// Draws the scene and its HUD from the kept frame, the fades left
+    /// out: whether there was a scene to draw, or only why flight could
+    /// not start (`reason`, asked only then). The sprite world goes
+    /// first ([`FlightView::draw_world_scene`]), then the status bar over
+    /// it ([`FlightView::draw_bar`]), or why it can't be shown.
+    pub(super) fn draw_flight(&self, list: &mut DrawList, reason: impl FnOnce() -> String) -> bool {
+        if !self.draw_world_scene(list) {
+            list.text(
+                format!("Cannot start flight: {}", reason()),
+                TITLE,
+                TITLE_SIZE,
+                None,
+                Color::ERROR,
+            );
+            self.draw_help(list);
+            return false;
+        }
+        match &self.status_bar {
+            Ok(bar) => self.draw_bar(list, (bar, self.view.0), &self.frame),
+            Err(reason) => hud::draw_unavailable(list, reason, self.view.0),
+        }
         true
     }
 
@@ -135,18 +120,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Draws the sprite world, pass by pass in [`WORLD_PASSES`]' order
-    /// (see the module docs), from the kept frame, with `hud`'s brackets,
-    /// icon and escort rows. The message line's box is drawn over the
-    /// stars and its text with the floaters; the text, the floating map's
-    /// and the escort menu's included, is overlay among the world
-    /// ([`DrawList::world`]).
-    pub(super) fn draw_world(
-        &self,
-        list: &mut DrawList,
-        scene: &SystemScene,
-        camera: &Camera,
-        hud: &WorldHud,
-    ) {
+    /// (see the module docs), from the kept frame, its brackets, icon and
+    /// escort rows from the frame's HUD
+    /// ([`FlightFrame::hud`](nova_sim::flight_frame::FlightFrame::hud)).
+    /// The message line's box is drawn over the stars and its text with
+    /// the floaters; the text, the floating map's and the escort menu's
+    /// included, is overlay among the world ([`DrawList::world`]).
+    pub(super) fn draw_world(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
         let beams = self.shown_beams(camera);
         let lightning = (self.presentation.zig_zag, self.shot_looks.lightning());
         let stacked = self.sprites_stacked(camera);
@@ -170,9 +150,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 WorldPass::Layer(SpriteLayer::Smoke) => self.draw_smoke(list, camera),
                 WorldPass::Layer(SpriteLayer::Explosions) => self.draw_explosions(list, camera),
                 WorldPass::Layer(SpriteLayer::Targets) => {
-                    self.draw_targets(list, (scene, camera), hud);
+                    self.draw_targets(list, (scene, camera));
                 }
-                WorldPass::Floaters => self.draw_floaters(list, &hud.escort_rows),
+                WorldPass::Floaters => self.draw_floaters(list),
                 WorldPass::BeamsOverShips => {
                     weapons::draw_beams(list, &beams, &self.looks, false, lightning);
                 }
@@ -195,8 +175,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// cursor (@0x2027d-0x202f9) unless the course map is open, which
     /// hides it, clipped to the play area ([`FlightView::play_rect`]),
     /// the red-alert icon (@0x202fe-0x2038b) and the double-time icon
-    /// (@0x20390-0x203fd), while the frame says double time is on.
-    fn draw_targets(&self, list: &mut DrawList, at: (&SystemScene, &Camera), hud: &WorldHud) {
+    /// (@0x20390-0x203fd), while the frame says double time is on: the
+    /// brackets and the icon as the frame's HUD holds them.
+    fn draw_targets(&self, list: &mut DrawList, at: (&SystemScene, &Camera)) {
+        let hud = &self.frame.hud;
         self.draw_brackets(list, at, hud.nav_brackets, hud.target_brackets);
         if !self.map_open {
             self.cursor.draw(list, &self.looks, self.play_rect());
@@ -226,7 +208,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// callback ORs the background frame's message rect over the sprites
     /// (@0x38b52-0x38b90; its box stays under the sprites, in
     /// [`FlightView::draw_stars_and_message`]), then the floating map
-    /// (@0x38b95-0x38c0a), then the escort menu with its `rows`
+    /// (@0x38b95-0x38c0a), then the escort menu with the frame's rows
     /// (@0x38c0f-0x38c5b).
     ///
     /// The text of all three (the message, the floating map's names, the
@@ -236,14 +218,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// particles; drawn into a world texture under a frame upscaler, the
     /// world is laid out before the overlay and the text draws over the
     /// particles (rdm:phase/play-feel-cross-roadmap/phase-3-floater-text-under-the-particles-upscaled).
-    fn draw_floaters(&self, list: &mut DrawList, rows: &[ClassRow; 4]) {
+    fn draw_floaters(&self, list: &mut DrawList) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         if let Some(message) = self.message() {
             hud::draw_message_text(list, message, self.view, metrics);
         }
         self.draw_floating_map(list);
-        self.escort_menu
-            .draw(list, rows, self.escort_colors, metrics);
+        self.escort_menu.draw(
+            list,
+            &self.frame.hud.escort_rows,
+            self.escort_colors,
+            metrics,
+        );
     }
 
     /// Draws the stars, by the flight's reading of

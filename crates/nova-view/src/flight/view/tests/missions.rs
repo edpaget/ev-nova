@@ -105,7 +105,7 @@ fn closing_a_mission_dialog_or_its_texts_redraws_the_hud() {
     }];
     let mut view = FlightView::new(errands);
     let stale = RadarScene::default();
-    let fresh = view.radar_now();
+    let fresh = view.radar_now(&view.frame_now());
     assert_ne!(fresh, stale);
     view.radar_scene = Some(stale.clone());
     let _ = view.accept_mission(MissionId(130));
@@ -122,18 +122,34 @@ fn closing_a_mission_dialog_or_its_texts_redraws_the_hud() {
     let held = Reserves::default();
     assert_ne!(view.reserves(), held);
     view.reserves_scene = Some(held);
-    assert_eq!(view.reserves_shown(), held, "held");
+    assert_eq!(view.reserves_shown(&view.frame_now()), held, "held");
     assert_eq!(view.refuse_mission(MissionId(131)).map(|_| ()), Ok(()));
-    assert_eq!(view.reserves_shown(), view.reserves(), "refused docked");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()),
+        view.reserves(),
+        "refused docked"
+    );
     view.reserves_scene = Some(held);
     view.radar_scene = Some(stale.clone());
     assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
     assert_eq!(view.take_mission_texts().len(), 1);
-    assert_eq!(view.reserves_shown(), held, "the brief shown over the bar");
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()),
+        held,
+        "the brief shown over the bar"
+    );
     assert_eq!(view.radar_scene.as_ref(), Some(&stale), "the brief shown");
     view.close_mission_text();
-    assert_eq!(view.radar_scene, Some(view.radar_now()), "the brief closed");
-    assert_eq!(view.reserves_shown(), view.reserves(), "the brief closed");
+    assert_eq!(
+        view.radar_scene,
+        Some(view.radar_now(&view.frame_now())),
+        "the brief closed"
+    );
+    assert_eq!(
+        view.reserves_shown(&view.frame_now()),
+        view.reserves(),
+        "the brief closed"
+    );
 }
 
 #[test]
@@ -2045,7 +2061,7 @@ fn an_offer_answered_over_flight_shows_its_text_over_the_pre_answer_bar() {
     for (what, unrefusable, refuse) in FLIGHT_ANSWERS {
         let mut view = offered_in_flight(RuleSource::Engine, unrefusable, refuse);
         let before = view.reserves();
-        let nav = view.nav_shown();
+        let nav = view.nav_shown(&view.frame_now());
         if refuse {
             assert_eq!(
                 view.refuse_mission(MissionId(130)).map(|_| ()),
@@ -2066,15 +2082,27 @@ fn an_offer_answered_over_flight_shows_its_text_over_the_pre_answer_bar() {
         view.select_stellar(StellarPick::Slot(0));
         assert_ne!(view.nav_now(), nav, "{what}: Earth selected");
         assert_eq!(view.take_mission_texts().len(), 1, "{what}: its text");
-        assert_eq!(view.reserves_shown(), before, "{what}: under the text");
-        assert_eq!(view.nav_shown(), nav, "{what}: the nav held too");
+        assert_eq!(
+            view.reserves_shown(&view.frame_now()),
+            before,
+            "{what}: under the text"
+        );
+        assert_eq!(
+            view.nav_shown(&view.frame_now()),
+            nav,
+            "{what}: the nav held too"
+        );
         view.close_mission_text();
         assert_eq!(
-            view.reserves_shown(),
+            view.reserves_shown(&view.frame_now()),
             view.reserves(),
             "{what}: live once it closed"
         );
-        assert_eq!(view.nav_shown(), view.nav_now(), "{what}: nav live too");
+        assert_eq!(
+            view.nav_shown(&view.frame_now()),
+            view.nav_now(),
+            "{what}: nav live too"
+        );
         assert!(view.bar_steps.is_empty(), "{what}: let go");
     }
 }
@@ -2093,7 +2121,11 @@ fn under_the_bible_cadence_flights_gauges_stay_live_under_an_offers_text() {
             assert_eq!(view.accept_mission(MissionId(130)), Ok(0), "{what}");
         }
         assert_eq!(view.take_mission_texts().len(), 1, "{what}: its text");
-        assert_eq!(view.reserves_shown(), view.reserves(), "{what}: live");
+        assert_eq!(
+            view.reserves_shown(&view.frame_now()),
+            view.reserves(),
+            "{what}: live"
+        );
     }
 }
 

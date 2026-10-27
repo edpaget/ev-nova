@@ -1305,7 +1305,7 @@ fn a_stellars_radar_shape_and_sprite_width_reach_the_radar() {
 /// The radar's player position: where it was when the radar last
 /// refreshed, or now.
 fn radar_player(view: &View) -> Point {
-    view.radar_shown().player
+    view.radar_shown(&view.frame_now()).player
 }
 
 #[test]
@@ -1370,12 +1370,18 @@ fn while_landed_the_radar_shows_only_the_player_until_take_off() {
         assert_eq!(flying.len(), 3, "the Sun, the Moon and the player");
         land_now(&mut view);
         assert!(view.session().expect("flying").landed().is_some());
-        assert!(view.radar_shown().blank, "at once, as _RedrawStatus");
+        assert!(
+            view.radar_shown(&view.frame_now()).blank,
+            "at once, as _RedrawStatus"
+        );
         assert_eq!(radar_marks(&view), [PLAYER_PIXEL]);
         let list = drawn(&view);
         assert_eq!(dots_on_radar(&list), [(926, 96)]);
         view.take_off().expect("took off");
-        assert!(!view.radar_shown().blank, "at once on take-off");
+        assert!(
+            !view.radar_shown(&view.frame_now()).blank,
+            "at once on take-off"
+        );
         assert_eq!(radar_marks(&view).len(), 3);
     }
 }
@@ -1388,7 +1394,7 @@ fn a_new_system_shows_on_the_radar_at_once_leaving_the_timer_and_blink() {
     move_to(&mut view, 131, 140);
     view.resync();
     assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
-    let shown = view.radar_shown();
+    let shown = view.radar_shown(&view.frame_now());
     assert_eq!(shown.player, view.shown_position());
     let stellars: Vec<Point> = shown.stellars.iter().map(|s| s.position).collect();
     let scene: Vec<Point> = view
@@ -1424,13 +1430,16 @@ fn an_arrival_shows_the_new_systems_stellars_at_once() {
     }
     assert_ne!(view.session().expect("flying").system(), leaving);
     let stellars: Vec<Point> = view
-        .radar_shown()
+        .radar_shown(&view.frame_now())
         .stellars
         .iter()
         .map(|s| s.position)
         .collect();
     assert_eq!(stellars, [at(0.0, 0.0)], "Alpha Centauri's");
-    assert_eq!(view.radar_shown().player, view.shown_position());
+    assert_eq!(
+        view.radar_shown(&view.frame_now()).player,
+        view.shown_position()
+    );
 }
 
 #[test]

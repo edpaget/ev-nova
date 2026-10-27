@@ -162,15 +162,15 @@ fn a_click_where_a_ship_is_drawn_sends_its_box_there_and_its_brackets_frame_it()
                 .expect("boxed")
                 .1;
             assert_eq!(boxed.centre, Vec2::new(-300.0, 0.0), "where it is drawn");
-            let hud = super::super::world::WorldHud {
+            let hud = nova_sim::flight_frame::FrameHud {
                 target_brackets: Some(nova_sim::brackets::TargetBrackets {
                     npc: NpcId(0),
                     expand: 0.0,
                     standing: brackets::Standing::Neutral,
                 }),
-                ..super::super::world::WorldHud::none()
+                ..nova_sim::flight_frame::FrameHud::default()
             };
-            let corners: Vec<Point> = world_list_with(&view, &hud)
+            let corners: Vec<Point> = world_list_with(&mut view, &hud)
                 .iter()
                 .filter_map(|command| match command {
                     DrawCommand::Picture { image, top_left }

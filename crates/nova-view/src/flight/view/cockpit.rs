@@ -1,9 +1,10 @@
 //! [`FlightView`]'s cockpit: controls and keys, the floating map, escorts,
-//! the world's brackets and icon as the session holds them, the combat
-//! display and the status bar. The world itself is drawn from the kept
+//! the combat display and the status bar, drawn from the flight's frame
+//! (its HUD and target parts). The world itself is drawn from the kept
 //! frame (the `drawing` and `world` modules).
 
 use nova_sim::PlayerCommand;
+use nova_sim::flight_frame::FlightFrame;
 use nova_sim::{
     ClassRow, Condition, EscortCommand, NavMode, Reserves, Session, StellarPick, SystemId,
     TargetPick,
@@ -56,40 +57,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         }
     }
 
-    /// What the shield, armour and fuel gauges show this frame: while
-    /// docked, by [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine reading, the snapshot
-    /// taken at their last redraw, as the original's port draws them
-    /// only at its redraws (`_statusRedraw[1]` and `[4]`): an outfitter
-    /// order or a ship purchase under the same `ïntf` leaves them as they
-    /// were (@0x5c59d, @0x5d324). In flight the same while the texts of
-    /// a person's offer answered over flight show
-    /// ([`FlightView::answer_in_flight`]), as the text dialog's modal loop
-    /// draws no bar. Otherwise in flight, by the other reading, or before
-    /// the first redraw, the gauges as they are now
-    /// ([`FlightView::reserves`]): flight's every frame marks them as
-    /// they change.
-    pub(super) fn reserves_shown(&self) -> Reserves {
-        let docked = self
-            .sim
-            .session
-            .as_ref()
-            .is_ok_and(|session| session.landed().is_some());
-        match self.reserves_scene {
-            Some(held) if (docked || !self.bar_steps.is_empty()) && self.hud_waits() => held,
-            _ => self.reserves(),
-        }
-    }
-
-    /// The ship's shield, armour and fuel, or none for a session that
-    /// never started.
-    pub(super) fn reserves(&self) -> Reserves {
-        self.sim
-            .session
-            .as_ref()
-            .map(Session::reserves)
-            .unwrap_or_default()
-    }
-
     /// The [`PlayerCommand`] a press of `key` sends, as [`Screen::input`](crate::Screen::input)
     /// dispatches it; `None` for a key that is no command.
     pub(super) fn command_of(&self, key: Key) -> Option<PlayerCommand> {
@@ -119,21 +86,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             _ => return None,
         };
         Some(command)
-    }
-
-    /// The escort menu's class rows ([`Session::escort_menu`]); none for
-    /// a session that failed.
-    pub(super) fn escort_rows(&self) -> [ClassRow; 4] {
-        self.sim.session.as_ref().map_or_else(
-            |_| {
-                nova_sim::EscortClass::ALL.map(|class| ClassRow {
-                    class,
-                    present: false,
-                    order: None,
-                })
-            },
-            Session::escort_menu,
-        )
     }
 
     /// Selects the escort menu's group `n` (keys 1-5), if the player has
@@ -280,41 +232,70 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     pub fn shut_escort_menu(&mut self) {
         self.escort_menu.close();
     }
+}
 
-    /// What the world draws that its frame doesn't hold yet, as the
-    /// session holds it ([`WorldHud`](super::world::WorldHud)): the nav
-    /// and target brackets ([`Session::nav_brackets`],
-    /// [`Session::target_brackets`]), the Red Alert icon the session shows
-    /// ([`Session::red_alert_icon`]; see the `alert` module) and the escort
-    /// menu's rows ([`FlightView::escort_rows`]); none of them for a session
-    /// that failed.
-    pub(super) fn world_hud(&self) -> super::world::WorldHud {
-        let mut hud = super::world::WorldHud::none();
-        if let Ok(session) = &self.sim.session {
-            hud.nav_brackets = session.nav_brackets();
-            hud.target_brackets = session.target_brackets();
-            hud.red_alert = session.red_alert_icon();
-            hud.escort_rows = self.escort_rows();
+/// The status bar, its gauges and the escort menu's rows, over the
+/// [`FlightSim`] port: each reads the flight's frame
+/// ([`FlightFrame::hud`], [`FlightFrame::target`]), the kept one, or the
+/// one a draw is handed ([`FlightView::draw_bar`]).
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// What the shield, armour and fuel gauges show this frame, of
+    /// `frame`'s: while docked, by
+    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine
+    /// reading, the snapshot taken at their last redraw, as the original's
+    /// port draws them only at its redraws (`_statusRedraw[1]` and `[4]`):
+    /// an outfitter order or a ship purchase under the same `ïntf` leaves
+    /// them as they were (@0x5c59d, @0x5d324). In flight the same while
+    /// the texts of a person's offer answered over flight show
+    /// ([`FlightView::answer_in_flight`]), as the text dialog's modal loop
+    /// draws no bar. Otherwise in flight, by the other reading, or before
+    /// the first redraw, the gauges as they are now
+    /// ([`FrameHud::reserves`](nova_sim::flight_frame::FrameHud::reserves)): flight's every frame marks them as they
+    /// change.
+    pub(super) fn reserves_shown(&self, frame: &FlightFrame) -> Reserves {
+        match self.reserves_scene {
+            Some(held) if (frame.docked || !self.bar_steps.is_empty()) && self.hud_waits() => held,
+            _ => frame.hud.reserves,
         }
-        hud
+    }
+
+    /// The ship's shield, armour and fuel now, as the flight's frame,
+    /// filled afresh, holds them
+    /// ([`FrameHud::reserves`](nova_sim::flight_frame::FrameHud::reserves));
+    /// none for a session that never started. Read afresh, as the docked
+    /// calls that change them (a recharge, an outfitter order, a
+    /// mission's script) read them right after.
+    pub(super) fn reserves(&self) -> Reserves {
+        self.frame_now().hud.reserves
+    }
+
+    /// The escort menu's class rows, as the kept frame holds them
+    /// ([`FrameHud::escort_rows`](nova_sim::flight_frame::FrameHud::escort_rows)); none present for a session that
+    /// failed.
+    pub(super) fn escort_rows(&self) -> [ClassRow; 4] {
+        self.frame.hud.escort_rows
     }
 
     /// Draws the status bar's target panel ([`FlightView::target_shown`])
-    /// and secondary weapon line. The weapon line follows every frame: the
-    /// original redraws it (`_statusRedraw[3]`) on every event that
-    /// changes it, so drawing it each frame shows the same.
-    fn draw_combat_hud(&self, list: &mut DrawList, bar: &StatusBar, view_width: f32) {
-        let Ok(session) = &self.sim.session else {
-            return;
-        };
+    /// and secondary weapon line, of `frame`'s target and secondary
+    /// ([`FrameHud::secondary`](nova_sim::flight_frame::FrameHud::secondary), [`FrameHud::secondary_line_count`](nova_sim::flight_frame::FrameHud::secondary_line_count)). The
+    /// weapon line follows every frame: the original redraws it
+    /// (`_statusRedraw[3]`) on every event that changes it, so drawing it
+    /// each frame shows the same.
+    fn draw_combat_hud(
+        &self,
+        list: &mut DrawList,
+        (bar, view_width): (&StatusBar, f32),
+        frame: &FlightFrame,
+    ) {
         let origin = hud::bar_origin(bar, view_width);
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        let shown = self.target_shown();
+        let shown = self.target_shown(frame);
         target::draw_target_panel(list, &bar.layout, origin, shown.as_ref().as_ref(), metrics);
-        let line = session.secondary().map(|id| {
+        let line = frame.hud.secondary.map(|id| {
             let look = self.looks.weapon(id);
             let name = look.map_or_else(|| format!("wëap {}", id.0), |look| look.name.clone());
-            target::secondary_text(&name, session.secondary_line_count())
+            target::secondary_text(&name, frame.hud.secondary_line_count)
         });
         target::draw_secondary(list, &bar.layout, origin, line.as_deref(), metrics);
     }
@@ -327,35 +308,41 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// spaceport stays clean. The spaceport is Nova's 1024 x 768, however
     /// wide flight's view is, so the bar is drawn at that width's right
     /// edge.
+    ///
+    /// It draws the flight's frame filled afresh ([`FlightView::frame_now`]),
+    /// not the kept one: the docked calls that change the session
+    /// (rdm:phase/view-sim-seam/phase-11-spaceport-on-port) don't all fill
+    /// the kept frame afresh after them yet.
     pub fn draw_status_bar(&self, list: &mut DrawList) {
         if let Ok(bar) = &self.status_bar {
-            self.draw_bar(list, bar, VIEW_SIZE.0);
+            self.draw_bar(list, (bar, VIEW_SIZE.0), &self.frame_now());
         }
     }
 
-    /// Draws `bar` showing the HUD against the right edge of a view
-    /// `view_width` wide: the radar, gauges and nav area as
-    /// shown ([`FlightView::radar_shown`], [`FlightView::reserves_shown`],
-    /// [`FlightView::nav_shown`]), the cargo area, then the target panel
-    /// and the secondary weapon's line.
-    pub(super) fn draw_bar(&self, list: &mut DrawList, bar: &StatusBar, view_width: f32) {
+    /// Draws `bar` showing `frame`'s HUD against the right edge of a view
+    /// `view_width` wide: the radar, gauges and nav area as shown
+    /// ([`FlightView::radar_shown`], [`FlightView::reserves_shown`],
+    /// [`FlightView::nav_shown`]), the cargo area
+    /// ([`FrameHud::cargo`](nova_sim::flight_frame::FrameHud::cargo)), the fuel gauge left out while the player is
+    /// disabled, then the target panel and the secondary weapon's line.
+    pub(super) fn draw_bar(
+        &self,
+        list: &mut DrawList,
+        (bar, view_width): (&StatusBar, f32),
+        frame: &FlightFrame,
+    ) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        let radar = self.radar_shown();
-        let cargo = self.sim.session.as_ref().ok().map(Session::status_cargo);
+        let radar = self.radar_shown(frame);
         let state = HudState {
             radar: &radar,
             blink_on: self.hud_cadence.blink_on(),
-            reserves: self.reserves_shown(),
-            nav: self.nav_shown(),
-            cargo: cargo.as_ref(),
-            disabled: self
-                .sim
-                .session
-                .as_ref()
-                .is_ok_and(|session| session.player_condition() == Condition::Disabled),
+            reserves: self.reserves_shown(frame),
+            nav: self.nav_shown(frame),
+            cargo: Some(&frame.hud.cargo),
+            disabled: frame.player().condition == Condition::Disabled,
         };
         hud::draw(list, bar, &state, metrics, view_width);
-        self.draw_combat_hud(list, bar, view_width);
+        self.draw_combat_hud(list, (bar, view_width), frame);
     }
 }
 
@@ -724,5 +711,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Picks the target as `pick` says ([`FlightCommand::SelectTarget`]).
     pub(super) fn select_target(&mut self, pick: TargetPick) {
         self.send(FlightCommand::SelectTarget(pick));
+    }
+
+    /// A press of Weapon Select ([`SELECT_KEY`]), backwards with Option
+    /// held ([`FlightCommand::SelectWeapon`]). Option is read at the press,
+    /// the original reading it at the pass (@0x6acf6): the press is taken
+    /// on the next step, before a frame is drawn.
+    pub(super) fn press_weapon_select(&mut self) {
+        let backwards = self.held.contains(&Key::Alt);
+        self.send(FlightCommand::SelectWeapon { backwards });
     }
 }

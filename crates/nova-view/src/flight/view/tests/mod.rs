@@ -29,6 +29,7 @@ use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
 use crate::flight::jump::JumpPhase;
 use crate::flight::radar::RadarStellar;
 use crate::flight::radar::{self, IRect, RadarColor, RadarMark};
+use crate::flight::sim_port::FlightSim;
 use crate::flight::sim_port::fixture::{FakeFlight, record};
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::Tag;
@@ -1428,17 +1429,17 @@ fn lines(list: &DrawList) -> Vec<DrawCommand> {
 const STOCK_RADAR: IRect = IRect::new(838, 8, 1014, 184);
 
 /// What the radar shows this frame, as marks on the stock radar.
-fn radar_marks(view: &View) -> Vec<RadarMark> {
+fn radar_marks(view: &FlightView<FakeCatalog, impl FlightSim>) -> Vec<RadarMark> {
     radar::marks(
         STOCK_RADAR,
-        &view.radar_shown(),
+        &view.radar_shown(&view.frame_now()),
         view.hud_cadence.blink_on(),
     )
 }
 
 /// The ships' blips on the radar this frame: its pixels but the
 /// player's, the last.
-fn blips(view: &View) -> Vec<RadarMark> {
+fn blips(view: &FlightView<FakeCatalog, impl FlightSim>) -> Vec<RadarMark> {
     let mut marks: Vec<RadarMark> = radar_marks(view)
         .into_iter()
         .filter(|mark| matches!(mark, RadarMark::Pixel { .. }))
@@ -2474,10 +2475,10 @@ enum Accepted {
 /// nav area, the target panel and the radar.
 fn retaken(view: &View) -> [bool; 4] {
     [
-        view.reserves_shown() == view.reserves(),
-        view.nav_shown() == view.nav_now(),
-        *view.target_shown() == view.target_now(),
-        view.radar_scene == Some(view.radar_now()),
+        view.reserves_shown(&view.frame_now()) == view.reserves(),
+        view.nav_shown(&view.frame_now()) == view.nav_now(),
+        *view.target_shown(&view.frame_now()) == view.target_now(&view.frame_now()),
+        view.radar_scene == Some(view.radar_now(&view.frame_now())),
     ]
 }
 /// The nav area naming `name` in mode 2, as flight shows it.
@@ -3191,16 +3192,16 @@ fn detonate(view: &mut View) {
 
 /// What the target panel's status line shows this frame, if there is
 /// a target.
-fn status_shown(view: &View) -> Option<nova_sim::TargetStatus> {
-    view.target_shown()
+fn status_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<nova_sim::TargetStatus> {
+    view.target_shown(&view.frame_now())
         .as_ref()
         .as_ref()
         .map(|panel| panel.status)
 }
 
 /// What the target panel's status line would show of the target now.
-fn status_now(view: &View) -> Option<nova_sim::TargetStatus> {
-    view.target_now().map(|panel| panel.status)
+fn status_now(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<nova_sim::TargetStatus> {
+    view.target_now(&view.frame_now()).map(|panel| panel.status)
 }
 
 /// Disables every ship.
@@ -3948,7 +3949,7 @@ fn cargo(view: &View) -> Vec<(String, Point)> {
 }
 
 /// The engine tick `view` has reached.
-fn now_tick(view: &View) -> u64 {
+fn now_tick(view: &FlightView<FakeCatalog, impl FlightSim>) -> u64 {
     u64::try_from(crate::time::ticks(view.elapsed)).expect("in range")
 }
 const HYPER_SELECT: Key = Key::Char('\\');

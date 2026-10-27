@@ -40,17 +40,23 @@ pub(super) fn shows(view: &mut Faked, frame: FlightFrame) {
     view.read_npc_sheets();
 }
 
-/// The world `view` draws, with no brackets, Red Alert or escorts
-/// ([`WorldHud::none`](super::super::world::WorldHud::none)).
+/// The world `view` draws, its brackets, Red Alert and escorts its
+/// frame's ([`FlightFrame::hud`](nova_sim::flight_frame::FlightFrame::hud)).
 pub(super) fn world_list(view: &Faked) -> DrawList {
-    world_list_with(view, &super::super::world::WorldHud::none())
+    let mut list = DrawList::new();
+    assert!(view.draw_world_scene(&mut list), "a scene to draw");
+    list
 }
 
-/// The world `view` draws with `hud`'s brackets, icon and escort rows.
-pub(super) fn world_list_with(view: &Faked, hud: &super::super::world::WorldHud) -> DrawList {
-    let mut list = DrawList::new();
-    assert!(view.draw_world_scene(&mut list, hud), "a scene to draw");
-    list
+/// The world `view` draws with its flight's frame showing `hud`'s
+/// brackets, icon and escort rows from now on.
+pub(super) fn world_list_with(
+    view: &mut Faked,
+    hud: &nova_sim::flight_frame::FrameHud,
+) -> DrawList {
+    view.sim.frame_mut().hud = hud.clone();
+    view.refresh_frame();
+    world_list(view)
 }
 
 /// The ships' sprites `view` draws (sheets 2000 to 2299).
@@ -158,16 +164,16 @@ pub(super) fn box_at(at: Vec2) -> nova_sim::flight_frame::FrameBox {
     }
 }
 
-/// The world's extras with NPC `id` targeted, its brackets settled round
-/// it as a neutral's.
-pub(super) fn targeting(id: u32) -> super::super::world::WorldHud {
-    super::super::world::WorldHud {
+/// A HUD with NPC `id` targeted, its brackets settled round it as a
+/// neutral's.
+pub(super) fn targeting(id: u32) -> nova_sim::flight_frame::FrameHud {
+    nova_sim::flight_frame::FrameHud {
         target_brackets: Some(nova_sim::brackets::TargetBrackets {
             npc: NpcId(id),
             expand: 0.0,
             standing: crate::flight::brackets::Standing::Neutral,
         }),
-        ..super::super::world::WorldHud::none()
+        ..nova_sim::flight_frame::FrameHud::default()
     }
 }
 

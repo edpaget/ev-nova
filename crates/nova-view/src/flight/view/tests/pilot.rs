@@ -923,14 +923,14 @@ fn landed_shipyard_with_iff() -> View {
 fn a_ship_bought_with_iff_shows_it_at_once() {
     let mut view = landed_shipyard_with_iff();
     assert!(view.hud_waits(), "the engine's reading");
-    assert!(!view.radar_shown().iff, "landing's");
+    assert!(!view.radar_shown(&view.frame_now()).iff, "landing's");
     assert_eq!(
         view.buy_ship(ShipId(999), "Kestrel"),
         Err(ShipRefusal::NotListed)
     );
-    assert!(!view.radar_shown().iff, "refused");
+    assert!(!view.radar_shown(&view.frame_now()).iff, "refused");
     view.buy_ship(ShipId(129), "Kestrel").expect("bought");
-    assert!(view.radar_shown().iff, "its default IFF");
+    assert!(view.radar_shown(&view.frame_now()).iff, "its default IFF");
     assert!(radar_filled(&view));
 }
 
@@ -950,15 +950,27 @@ fn a_ship_bought_redraws_the_nav_area_and_the_target_panel() {
         view.target_scene = Some((None, Some(stale_target.clone())));
     };
     stale(&mut view);
-    assert_eq!(view.nav_shown(), stale_nav, "held");
-    assert_eq!(*view.target_shown(), Some(stale_target.clone()), "held");
+    assert_eq!(view.nav_shown(&view.frame_now()), stale_nav, "held");
+    assert_eq!(
+        *view.target_shown(&view.frame_now()),
+        Some(stale_target.clone()),
+        "held"
+    );
     assert!(view.buy_ship(ShipId(999), "Kestrel").is_err());
-    assert_eq!(view.nav_shown(), view.nav_now(), "the prompt's close");
+    assert_eq!(
+        view.nav_shown(&view.frame_now()),
+        view.nav_now(),
+        "the prompt's close"
+    );
     stale(&mut view);
-    assert_eq!(view.nav_shown(), stale_nav, "held again");
-    assert_eq!(*view.target_shown(), Some(stale_target.clone()), "held");
+    assert_eq!(view.nav_shown(&view.frame_now()), stale_nav, "held again");
+    assert_eq!(
+        *view.target_shown(&view.frame_now()),
+        Some(stale_target.clone()),
+        "held"
+    );
     view.buy_ship(ShipId(129), "Kestrel").expect("bought");
-    assert_eq!(view.nav_shown(), view.nav_now(), "redrawn");
-    assert_ne!(view.nav_shown(), stale_nav);
-    assert_eq!(*view.target_shown(), None, "redrawn");
+    assert_eq!(view.nav_shown(&view.frame_now()), view.nav_now(), "redrawn");
+    assert_ne!(view.nav_shown(&view.frame_now()), stale_nav);
+    assert_eq!(*view.target_shown(&view.frame_now()), None, "redrawn");
 }

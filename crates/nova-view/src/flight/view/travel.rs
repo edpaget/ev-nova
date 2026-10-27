@@ -353,15 +353,13 @@ impl<
     /// disable, or first pressed while disabled, acts on the first frame
     /// the player is intact again.
     pub(super) fn jump_frame(&mut self, down: bool) {
-        if self.jump_under_way() {
+        let frame = self.frame_now();
+        if frame.jump_under_way {
             self.jump_latch = true;
             return;
         }
-        let intact = self
-            .sim
-            .session
-            .as_ref()
-            .is_ok_and(|session| session.player_condition() == Condition::Intact);
+        // A session that failed has no jump to begin (`FlightView::jump`).
+        let intact = self.sim.session.is_ok() && frame.player().condition == Condition::Intact;
         if down && intact {
             if !self.jump_latch {
                 self.jump();

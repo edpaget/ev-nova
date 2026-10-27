@@ -188,12 +188,12 @@ fn selecting_a_stellar_draws_cicn_10000_to_10003_flying_in_then_settled() {
 /// The nav bracket `cïcn`s `view` draws (10000-10007) with `nav`, and
 /// where.
 fn faked_nav_icons(
-    view: &Faked,
+    view: &mut Faked,
     nav: Option<nova_sim::brackets::NavBrackets>,
 ) -> Vec<(i16, Point)> {
-    let hud = super::super::world::WorldHud {
+    let hud = nova_sim::flight_frame::FrameHud {
         nav_brackets: nav,
-        ..super::super::world::WorldHud::none()
+        ..nova_sim::flight_frame::FrameHud::default()
     };
     super::faked_world::world_list_with(view, &hud)
         .iter()
@@ -220,11 +220,11 @@ fn nav_at(id: i16, (x, y): (f32, f32), expand: f32) -> nova_sim::brackets::NavBr
 fn no_nav_brackets_are_drawn_without_the_flights_and_its_are_drawn_round_the_stellar() {
     // When the session has none (Nav Off, Hyper Select) and how they fly
     // in: nova-sim's brackets tests.
-    let view = faked_sol_scene();
-    assert_eq!(faked_nav_icons(&view, None), []);
+    let mut view = faked_sol_scene();
+    assert_eq!(faked_nav_icons(&mut view, None), []);
     let moon = faked_on_screen(&view, (300.0, -200.0));
     assert_eq!(
-        faked_nav_icons(&view, Some(nav_at(129, (300.0, -200.0), 196.0))),
+        faked_nav_icons(&mut view, Some(nav_at(129, (300.0, -200.0), 196.0))),
         corners_at(10000, moon, 10.0 + 196.0),
         "flying in"
     );
@@ -239,7 +239,7 @@ fn a_stellar_whose_sprite_cannot_be_read_is_bracketed_at_half_64() {
     let mut frame =
         super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]);
     frame.stellars.push(record::stellar(StellarId(131)));
-    let view = super::faked_world::world(
+    let mut view = super::faked_world::world(
         FakeCatalog {
             sol_more: vec![unreadable],
             ..catalog()
@@ -248,7 +248,7 @@ fn a_stellar_whose_sprite_cannot_be_read_is_bracketed_at_half_64() {
     );
     let broken = faked_on_screen(&view, (100.0, 0.0));
     assert_eq!(
-        faked_nav_icons(&view, Some(nav_at(131, (100.0, 0.0), 0.0))),
+        faked_nav_icons(&mut view, Some(nav_at(131, (100.0, 0.0), 0.0))),
         corners_at(10000, broken, 64.0)
     );
 }
@@ -259,15 +259,15 @@ fn a_stellar_whose_sprite_cannot_be_read_is_bracketed_at_half_64() {
 /// at half 64 (`_HandleNavTargetSprites` @0x2fd9f-0x2fdda, @0x2fe41).
 #[test]
 fn an_unseen_selection_is_bracketed_at_its_spot_at_half_64() {
-    let view = faked_sol_scene();
+    let mut view = faked_sol_scene();
     let hole = faked_on_screen(&view, (0.0, 300.0));
     assert_eq!(
-        faked_nav_icons(&view, Some(nav_at(150, (0.0, 300.0), 196.0))),
+        faked_nav_icons(&mut view, Some(nav_at(150, (0.0, 300.0), 196.0))),
         corners_at(10000, hole, 64.0 + 196.0),
         "flying in"
     );
     assert_eq!(
-        faked_nav_icons(&view, Some(nav_at(150, (0.0, 300.0), 0.0))),
+        faked_nav_icons(&mut view, Some(nav_at(150, (0.0, 300.0), 0.0))),
         corners_at(10000, hole, 64.0)
     );
 }
@@ -284,14 +284,14 @@ fn the_hud_names_an_unseen_selection() {
 #[test]
 fn a_dominated_stellar_is_bracketed_green() {
     // Whether it is: the session's (its `Flags2` DOMINATED).
-    let view = faked_sol_scene();
+    let mut view = faked_sol_scene();
     let earth = faked_on_screen(&view, (0.0, -600.0));
     let dominated = Some(nova_sim::brackets::NavBrackets {
         dominated: true,
         ..nav_at(128, (0.0, -600.0), 0.0)
     });
     assert_eq!(
-        faked_nav_icons(&view, dominated),
+        faked_nav_icons(&mut view, dominated),
         corners_at(10004, earth, 10.0)
     );
 }
@@ -660,7 +660,7 @@ fn outfitted(catalog: FakeCatalog, defaults: &[(i16, u16)]) -> FakeCatalog {
 fn an_iff_outfit_turns_on_the_black_backdrop_and_the_cyan_player() {
     let mut view = FlightView::new(outfitted(catalog(), &[(300, 1)]));
     ticks(&mut view, 1);
-    assert!(view.radar_shown().iff);
+    assert!(view.radar_shown(&view.frame_now()).iff);
     let marks = radar_marks(&view);
     assert_eq!(
         marks[0],
@@ -675,7 +675,12 @@ fn an_iff_outfit_turns_on_the_black_backdrop_and_the_cyan_player() {
         color: RadarColor::Cyan
     }));
     // Earth and the Moon, landable to a clean record: yellow.
-    let stellars: Vec<StellarIff> = view.radar_shown().stellars.iter().map(|s| s.iff).collect();
+    let stellars: Vec<StellarIff> = view
+        .radar_shown(&view.frame_now())
+        .stellars
+        .iter()
+        .map(|s| s.iff)
+        .collect();
     assert_eq!(stellars, [StellarIff::Cleared, StellarIff::Cleared]);
     let list = drawn(&view);
     let black = list.iter().any(|command| {
@@ -685,7 +690,7 @@ fn an_iff_outfit_turns_on_the_black_backdrop_and_the_cyan_player() {
     for without in [outfitted(catalog(), &[]), outfitted(catalog(), &[(301, 1)])] {
         let mut view = FlightView::new(without);
         ticks(&mut view, 1);
-        assert!(!view.radar_shown().iff);
+        assert!(!view.radar_shown(&view.frame_now()).iff);
         assert_eq!(radar_marks(&view).last(), Some(&PLAYER_PIXEL));
         assert!(
             !radar_marks(&view)
@@ -768,9 +773,12 @@ fn an_outfitter_order_redraws_the_radar_at_once_while_docked() {
     for (name, place) in entries {
         let mut view = landed_radar_outfitter();
         assert!(view.hud_waits(), "the engine's reading");
-        assert!(!view.radar_shown().iff, "{name}: landing's");
+        assert!(
+            !view.radar_shown(&view.frame_now()).iff,
+            "{name}: landing's"
+        );
         place(&mut view, order(Direction::Buy));
-        assert!(view.radar_shown().iff, "{name}: bought");
+        assert!(view.radar_shown(&view.frame_now()).iff, "{name}: bought");
         assert!(radar_filled(&view), "{name}: bought");
         assert!(radar_marks(&view).contains(&RadarMark::Pixel {
             x: 926,
@@ -778,7 +786,7 @@ fn an_outfitter_order_redraws_the_radar_at_once_while_docked() {
             color: RadarColor::Cyan
         }));
         place(&mut view, order(Direction::Sell));
-        assert!(!view.radar_shown().iff, "{name}: sold");
+        assert!(!view.radar_shown(&view.frame_now()).iff, "{name}: sold");
         assert!(!radar_filled(&view), "{name}: sold");
         assert_eq!(radar_marks(&view).last(), Some(&PLAYER_PIXEL), "{name}");
     }
@@ -831,7 +839,7 @@ fn a_heavy_npc_shows_as_a_square_only_with_a_density_scanner() {
 #[test]
 fn a_ships_iff_code_reaches_the_radar() {
     let view = with_heavy_npc(0, &[(300, 1)]);
-    let ships = &view.radar_shown().ships;
+    let ships = &view.radar_shown(&view.frame_now()).ships;
     assert_eq!(ships.len(), 1);
     assert_eq!(ships[0].iff, ShipIff::Other);
     assert!(!ships[0].heavy);
@@ -845,16 +853,22 @@ fn a_ships_iff_code_reaches_the_radar() {
 #[test]
 fn a_plotted_course_hides_the_arrow_until_a_stellar_is_selected() {
     let mut view = flight();
-    assert!(!view.radar_now().hyperspace_mode, "no course");
-    plot(&mut view, 131);
-    assert!(view.radar_now().hyperspace_mode);
     assert!(
-        view.radar_shown().hyperspace_mode,
+        !view.radar_now(&view.frame_now()).hyperspace_mode,
+        "no course"
+    );
+    plot(&mut view, 131);
+    assert!(view.radar_now(&view.frame_now()).hyperspace_mode);
+    assert!(
+        view.radar_shown(&view.frame_now()).hyperspace_mode,
         "redrawn as the map closes"
     );
     tap_slot(&mut view, NEAREST_STELLAR_KEY);
     assert!(view.session().expect("flying").nav_target().is_some());
-    assert!(!view.radar_now().hyperspace_mode, "a stellar selected");
+    assert!(
+        !view.radar_now(&view.frame_now()).hyperspace_mode,
+        "a stellar selected"
+    );
 }
 
 fn arrow_lines(view: &View) -> usize {
@@ -899,10 +913,17 @@ fn interfered(level: i16, draws: &[u32]) -> (Rc<RefCell<Script>>, View) {
 fn interference_shows_static_at_the_next_refresh() {
     // The threshold roll 0 (1 ≤ 100), then pattern 3.
     let (script, mut view) = interfered(100, &[0, 3]);
-    assert_eq!(view.radar_shown().static_pattern, None, "before a tick");
+    assert_eq!(
+        view.radar_shown(&view.frame_now()).static_pattern,
+        None,
+        "before a tick"
+    );
     ticks(&mut view, 1);
     assert_eq!(script.borrow().asked, [100, 10]);
-    assert_eq!(view.radar_shown().static_pattern, Some(131));
+    assert_eq!(
+        view.radar_shown(&view.frame_now()).static_pattern,
+        Some(131)
+    );
     assert_eq!(
         radar_marks(&view)[0],
         RadarMark::Pattern {
@@ -924,7 +945,7 @@ fn without_interference_no_static_shows_and_nothing_is_rolled() {
     let (script, mut view) = interfered(0, &[]);
     for _ in 0..20 {
         ticks(&mut view, 1);
-        assert_eq!(view.radar_shown().static_pattern, None);
+        assert_eq!(view.radar_shown(&view.frame_now()).static_pattern, None);
     }
     assert!(script.borrow().asked.is_empty());
 }
@@ -940,7 +961,7 @@ fn anti_interference_lowers_the_level_static_is_rolled_against() {
     let mut view = FlightView::new(catalog).with_effects_chance(chance);
     ticks(&mut view, 1);
     assert_eq!(script.borrow().asked, [100]);
-    assert_eq!(view.radar_shown().static_pattern, None);
+    assert_eq!(view.radar_shown(&view.frame_now()).static_pattern, None);
 }
 
 #[test]

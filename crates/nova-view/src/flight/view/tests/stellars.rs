@@ -130,7 +130,7 @@ fn the_flight_scene_draws_the_systems_wormhole_and_hypergate() {
 fn the_radar_shows_the_systems_wormhole_and_hypergate_as_squares() {
     let mut view = sol_with_gates();
     ticks(&mut view, 1);
-    let radar = view.radar_shown();
+    let radar = view.radar_shown(&view.frame_now());
     let gates: Vec<(Point, bool)> = radar
         .stellars
         .iter()

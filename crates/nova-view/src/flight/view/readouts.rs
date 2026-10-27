@@ -3,9 +3,8 @@
 
 use std::borrow::Cow;
 
-use nova_sim::StellarIff;
-use nova_sim::flight_frame::FlightCommand;
-use nova_sim::{NavMode, RuleKey, RuleSource, TargetTag};
+use nova_sim::flight_frame::{FlightCommand, FlightFrame};
+use nova_sim::{NavMode, RuleSource, ShipRef, StellarIff, TargetTag};
 
 use crate::flight::cadence::{Drawn, retake_target};
 use crate::flight::hud::{NavDestination, NavDisplay};
@@ -17,19 +16,24 @@ use crate::time::ticks;
 use super::{FlightView, radar_ships, stellar_name};
 use crate::flight::sim_port::FlightSim;
 
-impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
-    /// What the radar shows now ([`RadarScene`]): the player's ship and
-    /// the other ships where they are drawn, the scene's stellars in nav
-    /// order with the shape and sprite width the radar reads, and blank
-    /// while the ship is landed (`_playerIsLanded`); each with its IFF
-    /// code, the player's IFF and density scanner, this tick's static
-    /// ([`FlightView::advance_hud`]), and whether the nav mode is
-    /// hyperspace ([`Session::nav_mode`](nova_sim::Session::nav_mode)).
-    pub(super) fn radar_now(&self) -> RadarScene {
-        // Without a session flight shows only why, never the radar.
-        let Ok(session) = &self.sim.session else {
-            return RadarScene::default();
-        };
+/// The HUD, the radar and the target panel, over the [`FlightSim`] port:
+/// each reads the flight's frame ([`FlightFrame::hud`],
+/// [`FlightFrame::target`], the ships' and stellars' records), the
+/// redraws the frame the view keeps, filled afresh first, and the draws
+/// the frame they are handed ([`FlightView::draw_bar`]).
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// What the radar shows in `frame` ([`RadarScene`]): the player's ship
+    /// and the other ships where they are drawn, the scene's stellars in
+    /// nav order with the shape and sprite width the radar reads, and
+    /// blank while the ship is landed (`_playerIsLanded`,
+    /// [`FlightFrame::docked`]); each with its IFF code (a stellar's
+    /// [`FrameStellar::iff`](nova_sim::flight_frame::FrameStellar::iff),
+    /// unlandable for one the frame has none for), the player's IFF and
+    /// density scanner, this tick's static ([`FlightView::advance_hud`]),
+    /// and whether the nav mode is hyperspace
+    /// ([`FlightView::nav_mode`]). A flight that failed to start draws no
+    /// bar, so what its radar would show is never seen.
+    pub(super) fn radar_now(&self, frame: &FlightFrame) -> RadarScene {
         let stellars = self.scene.as_ref().map_or_else(Vec::new, |scene| {
             scene
                 .stellars()
@@ -41,24 +45,24 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
                         .drawn()
                         .and_then(|sheet| sheet.as_ref().ok())
                         .map(|sheet| sheet.frame_width),
-                    iff: session
-                        .stellar_iff(stellar.id)
+                    iff: frame
+                        .stellar(stellar.id)
+                        .and_then(|record| record.iff)
                         .unwrap_or(StellarIff::Unlandable),
                 })
                 .collect()
         });
-        let gear = session.radar_gear();
+        let gear = frame.hud.radar_gear;
+        let target = frame.target.as_ref().map(|target| target.npc);
         RadarScene {
             player: self.shown_position(),
             stellars,
-            // The target's id is the target panel's read, phase 8's
-            // (rdm:phase/view-sim-seam/phase-8-hud-and-target-frame).
-            ships: radar_ships(session.target().map(|npc| npc.id), &self.shown_npcs()),
-            blank: session.landed().is_some(),
+            ships: radar_ships(target, &self.shown_npcs()),
+            blank: frame.docked,
             iff: gear.iff,
             density_scanner: gear.density_scanner,
             static_pattern: self.radar_static,
-            hyperspace_mode: matches!(self.nav_mode(), NavMode::Hyperspace(_)),
+            hyperspace_mode: matches!(frame.nav_mode, NavMode::Hyperspace(_)),
         }
     }
 
@@ -199,8 +203,10 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         self.retake_reserves();
     }
 
-    /// Takes the gauges' snapshot afresh.
+    /// Takes the gauges' snapshot afresh, the kept frame filled afresh
+    /// first, as [`FlightView::retake_radar`] fills it.
     pub(super) fn retake_reserves(&mut self) {
+        self.refresh_frame();
         self.reserves_scene = Some(self.reserves());
     }
 
@@ -220,63 +226,75 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// has just changed the session behind the port.
     pub(super) fn retake_radar(&mut self) {
         self.refresh_frame();
-        self.radar_scene = Some(self.radar_now());
+        self.radar_scene = Some(self.radar_now(&self.frame));
     }
 
-    /// What the target panel is drawn for now: the target, its ship type
-    /// and its shield; none without a target.
-    fn target_drawn(&self) -> Option<Drawn> {
-        let npc = self.sim.session.as_ref().ok()?.target()?;
+    /// What the target panel is drawn for in `frame`: the target, its ship
+    /// type and its shield, from its own record
+    /// ([`FlightFrame::ship`]); none without a target.
+    fn target_drawn(frame: &FlightFrame) -> Option<Drawn> {
+        let target = frame.target.as_ref()?;
+        let record = frame.ship(ShipRef::Npc(target.npc))?;
         Some(Drawn {
-            npc: npc.id,
-            ship: npc.ship,
-            shield: npc.reserves.shield.now,
+            npc: target.npc,
+            ship: record.class,
+            shield: record.shield.now,
         })
     }
 
-    /// What the target panel shows of the target now (see
-    /// [`TargetPanel`]); none without a target.
-    pub(super) fn target_now(&self) -> Option<TargetPanel> {
-        let session = self.sim.session.as_ref().ok()?;
-        let npc = session.target()?;
-        let card = self.cards.get(&npc.ship);
-        let tag = session.target_tag(npc).and_then(|tag| match tag {
+    /// What the target panel shows of the target in `frame` (see
+    /// [`TargetPanel`], [`FrameTarget`](nova_sim::flight_frame::FrameTarget)):
+    /// its name, its subtitle or its ship type's card's, the card's
+    /// picture, its status line, and its label, a government's code read
+    /// from the catalog; none without a target.
+    pub(super) fn target_now(&self, frame: &FlightFrame) -> Option<TargetPanel> {
+        let target = frame.target.as_ref()?;
+        let class = frame.ship(ShipRef::Npc(target.npc))?.class;
+        let card = self.cards.get(&class);
+        let tag = target.tag.and_then(|tag| match tag {
             TargetTag::Code(govt) => self.codes.get(&govt).cloned().flatten().map(Tag::Code),
             TargetTag::Escort => Some(Tag::Escort),
             TargetTag::Fighter => Some(Tag::Fighter),
         });
         Some(TargetPanel {
-            name: session.npc_name(npc).unwrap_or_default().to_owned(),
-            subtitle: session
-                .npc_subtitle(npc)
-                .map(str::to_owned)
+            name: target.name.clone(),
+            subtitle: target
+                .subtitle
+                .clone()
                 .or_else(|| card.map(|card| card.subtitle.clone()))
                 .unwrap_or_default(),
             picture: card.and_then(|card| card.picture),
-            status: session.target_status(npc),
+            status: target.status,
             tag,
         })
     }
 
-    /// Takes the target panel's snapshot afresh.
+    /// Takes the target panel's snapshot afresh, the kept frame filled
+    /// afresh first, as [`FlightView::retake_radar`] fills it.
     pub(super) fn retake_target(&mut self) {
-        self.target_scene = Some((self.target_drawn(), self.target_now()));
+        self.refresh_frame();
+        self.target_scene = Some((
+            Self::target_drawn(&self.frame),
+            self.target_now(&self.frame),
+        ));
     }
 
-    /// What the target panel shows this frame: by
-    /// [`RuleKey::HudCadence`]'s engine reading, the snapshot taken at its
-    /// last redraw while it is of the target the player has now; by the
-    /// other, before the first redraw, or once the target has changed,
-    /// the panel as it is now ([`FlightView::target_now`]).
-    pub(super) fn target_shown(&self) -> Cow<'_, Option<TargetPanel>> {
+    /// What the target panel shows this frame, of `frame`'s target: by
+    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine
+    /// reading, the snapshot taken at its last redraw while it is of the
+    /// target the player has now; by the other, before the first redraw,
+    /// or once the target has changed, the panel as it is now
+    /// ([`FlightView::target_now`]).
+    pub(super) fn target_shown(&self, frame: &FlightFrame) -> Cow<'_, Option<TargetPanel>> {
         match &self.target_scene {
             Some((drawn, shown))
                 if self.hud_waits()
-                    && drawn.map(|drawn| drawn.npc) == self.target_drawn().map(|now| now.npc) =>
+                    && drawn.map(|drawn| drawn.npc)
+                        == Self::target_drawn(frame).map(|now| now.npc) =>
             {
                 Cow::Borrowed(shown)
             }
-            _ => Cow::Owned(self.target_now()),
+            _ => Cow::Owned(self.target_now(frame)),
         }
     }
 
@@ -306,10 +324,8 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// pattern as `_DrawStatusRadar` draws; ours rolls both here, once a
     /// tick, which changes no decision the player can see.
     pub(super) fn advance_hud(&mut self) {
-        if let Ok(session) = &self.sim.session {
-            self.radar_static =
-                radar::static_frame(session.interference(), &mut self.effects_chance);
-        }
+        self.radar_static =
+            radar::static_frame(self.frame.hud.interference, &mut self.effects_chance);
         let now = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
         let refresh = self.hud_cadence.advance(now);
         if refresh.radar {
@@ -322,14 +338,13 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             self.retake_nav();
         }
         let shown = self.target_scene.as_ref().and_then(|(drawn, _)| *drawn);
-        if self.target_scene.is_none()
-            || retake_target(shown.as_ref(), self.target_drawn().as_ref(), refresh)
-        {
+        let now = Self::target_drawn(&self.frame);
+        if self.target_scene.is_none() || retake_target(shown.as_ref(), now.as_ref(), refresh) {
             self.retake_target();
         }
     }
 
-    /// What the nav area shows this frame: by [`RuleKey::HudCadence`]'s
+    /// What the nav area shows this frame: by [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
     /// engine reading, the snapshot taken at its last refresh, text and
     /// colours both, in flight while the nav mode is the one it was taken
     /// for and while docked whatever it is; by the other, before the first
@@ -361,16 +376,11 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// The snapshot shows in flight whatever the mode, too, while the
     /// texts of a person's offer answered over flight show
     /// ([`FlightView::answer_in_flight`]).
-    pub(super) fn nav_shown(&self) -> NavDisplay {
-        let docked = self
-            .sim
-            .session
-            .as_ref()
-            .is_ok_and(|session| session.landed().is_some());
+    pub(super) fn nav_shown(&self, frame: &FlightFrame) -> NavDisplay {
         match &self.nav_scene {
             Some((_, shown))
                 if self.hud_waits()
-                    && (docked
+                    && (frame.docked
                         || !self.bar_steps.is_empty()
                         || self.nav_flash.is_some()
                         || self.nav_mode_shown()) =>
@@ -382,18 +392,14 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     }
 
     /// Whether the HUD's content waits for its refreshes: the engine's
-    /// reading of [`RuleKey::HudCadence`].
+    /// reading of [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence),
+    /// as the view's presentation holds it
+    /// ([`Presentation`](super::stepping::Presentation)).
     pub(super) fn hud_waits(&self) -> bool {
-        self.sim
-            .session
-            .as_ref()
-            .map_or(RuleSource::Engine, |session| {
-                session.rules().source_for(RuleKey::HudCadence)
-            })
-            == RuleSource::Engine
+        self.presentation.hud_cadence == RuleSource::Engine
     }
 
-    /// What the radar shows this frame: by [`RuleKey::HudCadence`]'s
+    /// What the radar shows this frame: by [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
     /// engine reading, the snapshot taken at its last refresh; by the
     /// other, or before the first refresh, the radar as it is now
     /// ([`FlightView::radar_now`]).
@@ -412,17 +418,13 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// arrow, which no landable stock stellar is far enough out to draw.
     /// The port's other timers are recorded in the `cadence` module's
     /// docs.
-    pub(super) fn radar_shown(&self) -> Cow<'_, RadarScene> {
+    pub(super) fn radar_shown(&self, frame: &FlightFrame) -> Cow<'_, RadarScene> {
         match &self.radar_scene {
             Some(shown) if self.hud_waits() => Cow::Borrowed(shown),
-            _ => Cow::Owned(self.radar_now()),
+            _ => Cow::Owned(self.radar_now(frame)),
         }
     }
-}
 
-/// The nav area and the port dialogs' nav save, over the [`FlightSim`]
-/// port.
-impl<C, S: FlightSim> FlightView<C, S> {
     /// A port dialog (the outfitter, exchange, shipyard, the bar's hire
     /// screen or the mission computer) opens: the nav is saved
     /// ([`FlightCommand::SavePortNav`], [`Session::save_port_nav`](nova_sim::Session::save_port_nav)), as

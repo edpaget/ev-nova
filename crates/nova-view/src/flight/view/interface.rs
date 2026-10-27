@@ -11,60 +11,6 @@ use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use super::{BarFor, FlightView, Then};
 
 impl<C: StatusBars> FlightView<C, crate::flight::SessionFlight<C>> {
-    /// Chooses the status bar for the ship's government, as
-    /// `_LoadIntfResource` loads it ([`hud::rechoose_status_bar`]), unless
-    /// a mission text still shown holds the bar a `C`, `E` or `H` after it
-    /// loads ([`FlightView::bar_held`]). Called at every
-    /// [`FlightView::catch_up`] and as a text closes.
-    ///
-    /// The original loads the bar inside the purchase, capture or set
-    /// expression. Ours waits for the next `catch_up`, on the next frame or
-    /// in the view call that drove the change, which is still before any
-    /// frame is drawn: in flight, or docked with no text shown, the player
-    /// never sees the old bar on the new ship. Under a docked mission text
-    /// queued before the operator, the original shows the old bar
-    /// (`_LoadIntfResource` @0x156c7 comes after the text), and so does
-    /// ours, until that text's close redraws at the operator
-    /// ([`FlightView::close_mission_text`]). A redraw that drops a held
-    /// text's redraws ([`FlightView::redraw_status`]) lets go of the hold
-    /// at the next `catch_up`, a tick at most, before the next frame.
-    pub(super) fn follow_bar(&mut self) {
-        if self.bar_held() {
-            return;
-        }
-        if let Ok(session) = &self.sim.session {
-            let government = session.interface_government();
-            self.choose_bar(government);
-        }
-    }
-
-    /// Chooses the status bar for `government` ([`hud::rechoose_status_bar`])
-    /// when the bar shown was chosen for another: the original returns at
-    /// once for the `ïntf` already loaded (@0x73663-0x73672), and asking
-    /// only for another government does the same, as a ship type's
-    /// government picks its `ïntf` ([`Session::interface_government`](nova_sim::Session::interface_government)).
-    pub(super) fn choose_bar(&mut self, government: Option<GovtId>) {
-        if self.bar_government == Some(BarFor(government)) {
-            return;
-        }
-        self.status_bar =
-            hud::rechoose_status_bar(&*self.catalog, government, self.status_bar.as_ref().ok());
-        self.bar_government = Some(BarFor(government));
-    }
-
-    /// The `ïntf` the ship flies under now, as [`hud::interface_for`]
-    /// reads it from the session's government; none for a session that
-    /// failed. A ship purchase and an outfitter order each compare it
-    /// before and after, as `_LoadIntfResource` redraws the whole bar
-    /// only for an `ïntf` other than the one loaded (@0x73663-0x73672).
-    pub(super) fn interface_now(&self) -> Option<Result<i16, String>> {
-        let session = self.sim.session.as_ref().ok()?;
-        Some(hud::interface_for(
-            &*self.catalog,
-            session.interface_government(),
-        ))
-    }
-
     /// Runs `run` on the session, as the docked bar sees it: the `ïntf`
     /// loaded before it is noted, and what it ran docked is staged
     /// ([`FlightView::stage_bar`]), the dialog drawing `then` after it. In
@@ -113,6 +59,69 @@ impl<C: DescriptionSource + DescriptionGraphics, S: FlightSim> FlightView<C, S> 
 }
 
 impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
+    /// Whether a docked mission text still shown holds the status bar's
+    /// graphic: a `C`, `E` or `H` staged after it loads another `ïntf` only
+    /// as it closes ([`FlightView::close_mission_text`]), under
+    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine reading, as the held scenes are.
+    pub(super) fn bar_held(&self) -> bool {
+        self.hud_waits() && self.bar_steps.iter().any(super::BarStep::holds_bar)
+    }
+
+    /// Chooses the status bar for the ship's government, as
+    /// `_LoadIntfResource` loads it ([`hud::rechoose_status_bar`]), unless
+    /// a mission text still shown holds the bar a `C`, `E` or `H` after it
+    /// loads ([`FlightView::bar_held`]). Called at every
+    /// [`FlightView::catch_up`] and as a text closes.
+    ///
+    /// The original loads the bar inside the purchase, capture or set
+    /// expression. Ours waits for the next `catch_up`, on the next frame or
+    /// in the view call that drove the change, which is still before any
+    /// frame is drawn: in flight, or docked with no text shown, the player
+    /// never sees the old bar on the new ship. Under a docked mission text
+    /// queued before the operator, the original shows the old bar
+    /// (`_LoadIntfResource` @0x156c7 comes after the text), and so does
+    /// ours, until that text's close redraws at the operator
+    /// ([`FlightView::close_mission_text`]). A redraw that drops a held
+    /// text's redraws ([`FlightView::redraw_status`]) lets go of the hold
+    /// at the next `catch_up`, a tick at most, before the next frame.
+    ///
+    /// The government is the flight's frame's, filled afresh
+    /// ([`FrameHud::interface_government`](nova_sim::flight_frame::FrameHud::interface_government)).
+    /// A flight with no bar chosen, one whose session failed, follows none.
+    pub(super) fn follow_bar(&mut self) {
+        if self.bar_held() || self.bar_government.is_none() {
+            return;
+        }
+        let government = self.frame_now().hud.interface_government;
+        self.choose_bar(government);
+    }
+
+    /// Chooses the status bar for `government` ([`hud::rechoose_status_bar`])
+    /// when the bar shown was chosen for another: the original returns at
+    /// once for the `ïntf` already loaded (@0x73663-0x73672), and asking
+    /// only for another government does the same, as a ship type's
+    /// government picks its `ïntf` ([`Session::interface_government`](nova_sim::Session::interface_government)).
+    pub(super) fn choose_bar(&mut self, government: Option<GovtId>) {
+        if self.bar_government == Some(BarFor(government)) {
+            return;
+        }
+        self.status_bar =
+            hud::rechoose_status_bar(&*self.catalog, government, self.status_bar.as_ref().ok());
+        self.bar_government = Some(BarFor(government));
+    }
+
+    /// The `ïntf` the ship flies under now, as [`hud::interface_for`]
+    /// reads it from the government in the flight's frame, filled afresh;
+    /// none for a flight with no bar chosen, one whose session failed. A
+    /// ship purchase and an outfitter order each compare it before and
+    /// after, as `_LoadIntfResource` redraws the whole bar only for an
+    /// `ïntf` other than the one loaded (@0x73663-0x73672).
+    pub(super) fn interface_now(&self) -> Option<Result<i16, String>> {
+        self.bar_government?;
+        let government = self.frame_now().hud.interface_government;
+        Some(hud::interface_for(&*self.catalog, government))
+    }
+
     /// The `C`, `E` and `H` the session ran while docked since its last
     /// run of docked scripts began
     /// ([`FlightEvent::InterfaceLoad`](nova_sim::flight_frame::FlightEvent::InterfaceLoad))

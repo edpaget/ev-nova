@@ -161,3 +161,44 @@ fn a_failed_flight_keeps_the_default_frame_through_its_catch_ups() {
     assert_eq!(view.frame, FlightFrame::default());
     assert_eq!(view.frame.player(), FrameShip::default());
 }
+
+#[test]
+fn a_status_redraw_after_a_change_behind_the_port_snapshots_the_change() {
+    // A desk edit with no resync after it: the session changed behind
+    // the port, as the concrete docked and travel code changes it.
+    let mut view = flight();
+    view.redraw_status();
+    let before = view.reserves_scene.expect("taken");
+    let mut desk = view.pilot_desk().expect("flying");
+    desk.edit(PilotEdit::Reserve(nova_sim::Reserve::Fuel, 100.0))
+        .expect("set");
+    assert_eq!(view.frame.hud.reserves, before, "the kept frame, stale");
+    view.redraw_status();
+    let taken = view.reserves_scene.expect("taken");
+    assert_eq!(taken.fuel.now, 100.0, "the change");
+    assert_eq!(
+        view.frame.hud.reserves, taken,
+        "the kept frame filled first"
+    );
+}
+
+#[test]
+fn the_port_bar_shows_the_hold_a_trade_changed() {
+    let labels = FakeCatalog {
+        strings: vec![(4003, vec!["Food:".to_owned(), "Ind:".to_owned()])],
+        ..catalog()
+    };
+    let mut view = FlightView::new(trading()).with_strings(Rc::new(labels));
+    land_now(&mut view);
+    let bar_texts = |view: &View| {
+        let mut bar = DrawList::new();
+        view.draw_status_bar(&mut bar);
+        texts(&bar)
+    };
+    assert!(
+        !bar_texts(&view).contains(&"Food:".to_owned()),
+        "an empty hold"
+    );
+    assert_eq!(view.trade(BUY_FOOD), Ok(10));
+    assert!(bar_texts(&view).contains(&"Food:".to_owned()));
+}
