@@ -99,13 +99,22 @@ fn tab_on_the_course_map_retakes_the_nav_area_at_once() {
 
 #[test]
 fn closing_the_map_after_a_tab_shows_its_selection_in_the_nav_area() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    tap(&mut view, Key::Tab);
-    tap(&mut view, MAP);
+    // Tab's selection and the cue's, with no course to cue, are nova-sim's
+    // (`the_maps_cycle_selects_the_next_link_in_mode_3`,
+    // `the_cue_selects_the_courses_next_hop`).
+    let mut view = super::faked_hud::barred(catalog(), super::faked_hud::among(Vec::new()));
+    view.sim.map_mut().drawing = Some(sol_drawing());
+    view.open_map();
     let alpha = NavMode::Hyperspace(Some(SystemId(131)));
-    assert_eq!(nav_mode(&view), alpha, "no course to cue");
-    assert_eq!(nav(&view), cueing_alpha(), "shown once the map closes");
+    view.sim.frame_mut().nav_mode = alpha;
+    view.sim.queue_answer(Answer::Done);
+    faked_map_tap(&mut view, Key::Tab);
+    view.close_map_then(|_, _| panic!("no hypergate"));
+    assert_eq!(
+        super::faked_hud::nav_of(&view),
+        cueing_alpha(),
+        "shown once the map closes"
+    );
 }
 
 #[test]
@@ -536,56 +545,24 @@ fn in_port_tab_or_backslash_with_the_map_key_held_closes_the_map() {
 
 #[test]
 fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
-    // The course map, closed by its key or as Escape does; then the
-    // hypergate map, cancelled and entered (`_PlayerEnterHypergate`).
-    // The gate's Sol lists Earth and the Moon too, so its radar holds
-    // them.
-    let gated_sol = || {
-        let mut gated = gated();
-        gated.sites.extend(catalog().sites);
-        gated
-    };
-    for (catalog, pick, by_key) in [
-        (catalog(), false, true),
-        (catalog(), false, false),
-        (gated_sol(), false, true),
-        (gated_sol(), true, true),
-    ] {
-        let gate = !catalog.gates.borrow().is_empty();
-        let mut view = FlightView::new(catalog);
-        ticks(&mut view, 3);
-        if gate {
-            land_now(&mut view);
-            assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-        } else {
-            tap(&mut view, MAP);
-        }
-        assert!(view.map_open());
-        if pick {
-            let alpha = on_map(&mut view, 131);
-            click(&mut view, alpha);
-        }
-        let stale = RadarScene::default();
-        assert_ne!(view.radar_now(&view.frame_now()), stale);
-        view.radar_scene = Some(stale);
-        let cadence = view.hud_cadence;
-        if by_key {
-            tap(&mut view, MAP);
-        } else {
-            view.close_map();
-        }
-        let case = format!("gate {gate}, pick {pick}, by key {by_key}");
-        assert!(!view.map_open(), "{case}");
-        assert_eq!(
-            view.hud_cadence, cadence,
-            "neither timed nor flipped: {case}"
-        );
-        assert_eq!(
-            *view.radar_shown(&view.frame_now()),
-            view.radar_now(&view.frame_now()),
-            "{case}"
-        );
+    // The course map, closed by its key or as Escape does, both through
+    // `close_map`'s port half; the hypergate map's closes are
+    // `closing_the_hypergate_map_redraws_the_radar_at_once_leaving_the_timer_and_blink`'s.
+    let mut view = super::faked_hud::barred(catalog(), super::faked_hud::among(Vec::new()));
+    view.sim.map_mut().drawing = Some(sol_drawing());
+    for _ in 0..3 {
+        super::faked_hud::hud_tick(&mut view);
     }
+    view.open_map();
+    assert!(view.map_open);
+    let stale = RadarScene::default();
+    assert_ne!(view.radar_now(&view.frame), stale);
+    view.radar_scene = Some(stale);
+    let cadence = view.hud_cadence;
+    view.close_map_then(|_, _| panic!("no hypergate"));
+    assert!(!view.map_open);
+    assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
+    assert_eq!(*view.radar_shown(&view.frame), view.radar_now(&view.frame));
 }
 
 #[test]
@@ -1414,11 +1391,17 @@ fn zooms_are_taken_through_a_jump_and_refused_once_exploded() {
 
 #[test]
 fn the_map_is_drawn_after_the_double_time_icon_and_before_the_escort_menu() {
-    let mut view = escorted().with_double_time(true);
-    tap(&mut view, MENU_KEY);
-    assert!(view.escort_menu().is_open());
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    let list = drawn(&view);
+    // The escort menu's rows are the frame's.
+    let mut frame = super::faked_hud::among(Vec::new());
+    frame.double_time = true;
+    frame.hud.escort_rows[0].present = true;
+    let mut view = super::faked_world::world(catalog(), frame);
+    view.escort_menu
+        .toggle(view.elapsed, &view.frame.hud.escort_rows);
+    assert!(view.escort_menu.is_open());
+    view.sim.map_mut().drawing = Some(sol_drawing());
+    view.hyperspace_key(HYPERSPACE_MODE_KEY);
+    let list = super::faked_world::world_list(&view);
     let commands: Vec<&DrawCommand> = list.iter().collect();
     let icon = commands
         .iter()
@@ -2533,4 +2516,40 @@ fn a_slot_key_held_during_a_jump_does_not_hold_the_zoom_back() {
     hold(&mut view, STELLAR_SLOT_KEYS[2][1]);
     floating_tap(&mut view, ZOOM_OUT_KEY);
     assert_eq!(view.floating.zoom(), 4, "F3 is not polled");
+}
+
+#[test]
+fn closing_the_hypergate_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
+    // The hypergate map, cancelled and entered (`_PlayerEnterHypergate`),
+    // on a real session: the gate's entry is
+    // rdm:phase/view-sim-seam/phase-9-travel-on-port's. The gate's Sol
+    // lists Earth and the Moon too, so its radar holds them.
+    for pick in [false, true] {
+        let mut gated = gated();
+        gated.sites.extend(catalog().sites);
+        let mut view = FlightView::new(gated);
+        ticks(&mut view, 3);
+        land_now(&mut view);
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        assert!(view.map_open());
+        if pick {
+            let alpha = on_map(&mut view, 131);
+            click(&mut view, alpha);
+        }
+        let stale = RadarScene::default();
+        assert_ne!(view.radar_now(&view.frame_now()), stale);
+        view.radar_scene = Some(stale);
+        let cadence = view.hud_cadence;
+        tap(&mut view, MAP);
+        assert!(!view.map_open(), "pick {pick}");
+        assert_eq!(
+            view.hud_cadence, cadence,
+            "neither timed nor flipped: pick {pick}"
+        );
+        assert_eq!(
+            *view.radar_shown(&view.frame_now()),
+            view.radar_now(&view.frame_now()),
+            "pick {pick}"
+        );
+    }
 }

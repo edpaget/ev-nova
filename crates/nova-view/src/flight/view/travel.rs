@@ -905,49 +905,18 @@ impl<
     /// the briefing's the nav as the map opened, docked or in flight, the
     /// computer's then redrawing the nav area, and mission info's nothing.
     pub fn close_map(&mut self) {
-        // `_SaveMapBordersState` for a change, whatever the map's mode,
-        // unless docked (@0x13c21-0x13c3f).
-        let docked = self.frame_now().docked;
-        if !docked && self.map.borders_changed_since_open() {
-            self.map_borders_save = Some(self.map.borders_shown());
-        }
-        self.map.cancel_pointer();
-        self.map.release_keys();
-        self.map.close_find();
-        self.map_open = false;
-        self.map_key_held = false;
-        let opened = self.map_opened.take();
-        if self.map.mode() != MapMode::Hypergate {
-            if docked {
-                self.redraw_status();
-                if let Some(nav) = opened.and_then(|opened| opened.nav) {
-                    self.send(FlightCommand::RestoreMapSelection(nav));
-                }
-                self.restore_opener_nav(opened);
+        self.close_map_then(|view, choice| {
+            let Ok(session) = &mut view.sim.session else {
                 return;
+            };
+            match session.enter_hypergate(choice, &*view.catalog, &mut view.sim.chance) {
+                Ok(_) => {
+                    let effect = JumpEffect::emerging(view.hyperspace_effects);
+                    view.came_through(effect);
+                }
+                Err(refusal) => view.gate_refused(Some(refusal)),
             }
-            let by_dialog =
-                opened.is_some_and(|opened| matches!(opened.by, MapOpening::Dialog(..)));
-            if !by_dialog {
-                self.ui_sounds.push(UiSound::MapClosed);
-            }
-            self.send(FlightCommand::CueCourse);
-            self.redraw_status();
-            self.restore_opener_nav(opened);
-            return;
-        }
-        self.redraw_status();
-        let choice = self.map.take_gate_choice();
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        match session.enter_hypergate(choice, &*self.catalog, &mut self.sim.chance) {
-            Ok(_) => {
-                let effect = JumpEffect::emerging(self.hyperspace_effects);
-                self.came_through(effect);
-            }
-            Err(refusal) => self.gate_refused(Some(refusal)),
-        }
+        });
     }
 
     /// Buys a ship named `name` as [`Session::buy_ship`] does, it and its
@@ -1134,6 +1103,52 @@ impl<
 /// ([`FlightView::close_map`]), as the hypergate entry it may run is still
 /// the session's: [`FlightView::map_input_taken`] says when it is due.
 impl<C, S: FlightSim> FlightView<C, S> {
+    /// [`FlightView::close_map`]'s work over the port, the hypergate's
+    /// entry left to `enter_gate`, handed the system picked on the
+    /// hypergate map (rdm:phase/view-sim-seam/phase-9-travel-on-port): the
+    /// borders' save, the map shut, then the course map's close, docked
+    /// or in flight, or the hypergate map's redraw before `enter_gate`
+    /// runs (see there).
+    pub(super) fn close_map_then(
+        &mut self,
+        enter_gate: impl FnOnce(&mut Self, Option<nova_sim::SystemId>),
+    ) {
+        // `_SaveMapBordersState` for a change, whatever the map's mode,
+        // unless docked (@0x13c21-0x13c3f).
+        let docked = self.frame_now().docked;
+        if !docked && self.map.borders_changed_since_open() {
+            self.map_borders_save = Some(self.map.borders_shown());
+        }
+        self.map.cancel_pointer();
+        self.map.release_keys();
+        self.map.close_find();
+        self.map_open = false;
+        self.map_key_held = false;
+        let opened = self.map_opened.take();
+        if self.map.mode() != MapMode::Hypergate {
+            if docked {
+                self.redraw_status();
+                if let Some(nav) = opened.and_then(|opened| opened.nav) {
+                    self.send(FlightCommand::RestoreMapSelection(nav));
+                }
+                self.restore_opener_nav(opened);
+                return;
+            }
+            let by_dialog =
+                opened.is_some_and(|opened| matches!(opened.by, MapOpening::Dialog(..)));
+            if !by_dialog {
+                self.ui_sounds.push(UiSound::MapClosed);
+            }
+            self.send(FlightCommand::CueCourse);
+            self.redraw_status();
+            self.restore_opener_nav(opened);
+            return;
+        }
+        self.redraw_status();
+        let choice = self.map.take_gate_choice();
+        enter_gate(self, choice);
+    }
+
     /// [`FlightView::catch_up`]'s work over the port, with `redraw` the
     /// redraws that still read the session ([`FlightView::redraw_scene_then`]
     /// for a session's flight): drains the flight's session events
