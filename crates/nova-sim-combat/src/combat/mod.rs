@@ -13719,9 +13719,93 @@ mod tests {
         }
     }
 
+    /// A at the centre fires `record` once to the right in the ship loop
+    /// ([`phase::handle_npcs`]), among `others`, and `_HandleShot` flies
+    /// its shot `moves` times with `arsenal` ([`fly_by_arsenal`]). The fight,
+    /// its events kept, and the ships.
+    fn a_fires_and_flies(
+        record: WeaponRecord,
+        others: Vec<Ship>,
+        arsenal: &Arsenal,
+        moves: u32,
+    ) -> (Combat, Vec<Ship>) {
+        let mut combat = Combat::default();
+        let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(record)];
+        ships.extend(others);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        for _ in 0..moves {
+            fly_by_arsenal(&mut combat, &mut ships, arsenal);
+        }
+        (combat, ships)
+    }
+
+    /// `_HandleShot` among `ships`, each sub-munition's weapon read from
+    /// `arsenal` ([`Combat::fly_shots`]).
+    fn fly_by_arsenal(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
+        let govts = Governments::default();
+        let arena = phase::arena(arsenal, &govts, Rules::default());
+        phase::run_in(
+            combat,
+            ships,
+            arena,
+            &mut NeverFires,
+            |combat, fighters, arena, chance| {
+                combat.fly_shots(fighters, arena, chance);
+            },
+        );
+    }
+
+    /// The collision passes among `ships` and `scenery`, each
+    /// sub-munition's weapon read from `arsenal` ([`Combat::test_hits`]).
+    fn hits_tested_amid(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        arsenal: &Arsenal,
+        scenery: Scenery<'_>,
+    ) {
+        let govts = Governments::default();
+        let arena = phase::arena(arsenal, &govts, Rules::default());
+        phase::run_in(
+            combat,
+            ships,
+            arena,
+            &mut NeverFires,
+            |combat, fighters, arena, chance| {
+                combat.test_hits(fighters, arena, scenery, chance);
+            },
+        );
+    }
+
+    /// The events of the collision passes that test the sixth move of
+    /// A's `record`, fired among `others`: a blaster's from 75 to 90,
+    /// which enters B's 16 pixels at 100.
+    fn sixth_move_tested(record: WeaponRecord, others: Vec<Ship>) -> Vec<CombatEvent> {
+        let (mut combat, mut ships) = a_fires_and_flies(record, others, &Arsenal::default(), 6);
+        combat.take_events();
+        phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+        combat.take_events()
+    }
+
+    /// The events of `_HandleBeams` run 6 times, after A at the centre
+    /// fires `record` to the right in the ship loop, among `others`.
+    fn beam_events(record: WeaponRecord, others: Vec<Ship>) -> Vec<CombatEvent> {
+        let mut combat = Combat::default();
+        let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(record)];
+        ships.extend(others);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        combat.take_events();
+        let mut events = Vec::new();
+        for _ in 0..6 {
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
+            events.extend(combat.take_events());
+        }
+        events
+    }
+
     #[test]
     fn a_shots_contact_hit_on_a_ship_sprays_its_particles_where_it_met_it() {
-        let events = fight_once(spraying(blaster()), vec![Ship::at(2, 100.0, 0.0)], 8);
+        let events = sixth_move_tested(spraying(blaster()), vec![Ship::at(2, 100.0, 0.0)]);
         let seen = bursts(&events);
         assert_eq!(seen.len(), 1, "{events:?}");
         assert!(within(seen[0].at, Vec2::new(84.0, 0.0)), "{:?}", seen[0]);
@@ -13730,7 +13814,16 @@ mod tests {
 
     #[test]
     fn a_shots_proximity_hit_on_a_ship_sprays_its_particles_where_the_shot_is() {
-        let events = fight_once(spraying(fast_gun(30)), vec![Ship::at(2, 100.0, 30.0)], 2);
+        // The first move ends 30 from B, within its fuse's reach.
+        let (mut combat, mut ships) = a_fires_and_flies(
+            spraying(fast_gun(30)),
+            vec![Ship::at(2, 100.0, 30.0)],
+            &Arsenal::default(),
+            1,
+        );
+        combat.take_events();
+        phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+        let events = combat.take_events();
         let seen = bursts(&events);
         assert_eq!(seen.len(), 1, "{events:?}");
         let hits = raised(&events);
@@ -13739,7 +13832,7 @@ mod tests {
 
     #[test]
     fn a_beam_tick_sprays_its_particles_at_its_end_varied_25_percent() {
-        let events = fight_once(spraying(laser()), vec![Ship::at(2, 100.0, 0.0)], 5);
+        let events = beam_events(spraying(laser()), vec![Ship::at(2, 100.0, 0.0)]);
         let seen = bursts(&events);
         assert_eq!(seen.len(), 3, "a burst a tick: {events:?}");
         for burst in seen {
@@ -13751,13 +13844,16 @@ mod tests {
     #[test]
     fn a_planet_type_shots_hit_on_a_stellar_sprays_its_particles() {
         let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
-        let (_, _, events, _) = shoot_once(
-            spraying(planet_gun()),
-            Vec::new(),
-            &mut stellars,
-            &Arsenal::default(),
-            7,
-        );
+        let arsenal = Arsenal::default();
+        let (mut combat, mut ships) =
+            a_fires_and_flies(spraying(planet_gun()), Vec::new(), &arsenal, 6);
+        combat.take_events();
+        let scenery = Scenery {
+            stellars: &mut stellars,
+            ..Scenery::default()
+        };
+        hits_tested_amid(&mut combat, &mut ships, &arsenal, scenery);
+        let events = combat.take_events();
         let seen = bursts(&events);
         assert_eq!(seen.len(), 1, "{events:?}");
         let at = explosions(&events)[0].0;
@@ -13766,10 +13862,11 @@ mod tests {
 
     #[test]
     fn a_weapon_without_hit_particles_sprays_none() {
-        let events = fight_once(blaster(), vec![Ship::at(2, 100.0, 0.0)], 8);
+        let events = sixth_move_tested(blaster(), vec![Ship::at(2, 100.0, 0.0)]);
         assert_eq!(raised(&events).len(), 1, "it hit");
         assert_eq!(bursts(&events), []);
-        let events = fight_once(laser(), vec![Ship::at(2, 100.0, 0.0)], 5);
+        let events = beam_events(laser(), vec![Ship::at(2, 100.0, 0.0)]);
+        assert_eq!(raised(&events).len(), 3, "it hit");
         assert_eq!(bursts(&events), []);
     }
 
@@ -13780,10 +13877,9 @@ mod tests {
             blast_radius: 30,
             ..spraying(blaster())
         };
-        let events = fight_once(
+        let events = sixth_move_tested(
             shell,
             vec![Ship::at(2, 100.0, 0.0), Ship::at(3, 100.0, 25.0)],
-            7,
         );
         assert_eq!(raised(&events).len(), 2, "B hit, C blasted");
         assert_eq!(bursts(&events).len(), 1, "{events:?}");
@@ -13812,10 +13908,17 @@ mod tests {
         }
     }
 
+    /// The events of `_HandleShot`'s four visits to A's `record`, fired
+    /// alone: three moves, then its end of life.
+    fn life_spent(record: WeaponRecord) -> Vec<CombatEvent> {
+        let (mut combat, _) = a_fires_and_flies(record, Vec::new(), &Arsenal::default(), 4);
+        combat.take_events()
+    }
+
     #[test]
     fn a_shot_that_ends_its_life_without_detonating_fizzles_where_it_is() {
         for explod_type in [1, 500, 1014] {
-            let events = fight_once(short_shot(explod_type, 0), Vec::new(), 4);
+            let events = life_spent(short_shot(explod_type, 0));
             let seen = fizzles(&events);
             assert_eq!(seen.len(), 1, "{explod_type}: {events:?}");
             assert!(within(seen[0], Vec2::new(30.0, 0.0)), "{seen:?}");
@@ -13826,55 +13929,64 @@ mod tests {
     #[test]
     fn a_shot_of_explod_type_0_or_below_never_fizzles() {
         for explod_type in [0, -1] {
-            let events = fight_once(short_shot(explod_type, 0), Vec::new(), 4);
+            let events = life_spent(short_shot(explod_type, 0));
             assert_eq!(fizzles(&events), [], "{explod_type}");
         }
     }
 
     #[test]
     fn a_detonating_shot_explodes_and_does_not_fizzle() {
-        let events = fight_once(short_shot(1, 0x8000), Vec::new(), 4);
+        let events = life_spent(short_shot(1, 0x8000));
         assert_eq!(fizzles(&events), []);
         assert_eq!(sizes(&events).len(), 1, "it exploded");
     }
 
     #[test]
     fn a_shot_that_hits_never_fizzles() {
-        let events = fight_once(
-            WeaponRecord {
-                explod_type: 1,
-                ..blaster()
-            },
+        let record = WeaponRecord {
+            explod_type: 1,
+            ..blaster()
+        };
+        let (mut combat, mut ships) = a_fires_and_flies(
+            record,
             vec![Ship::at(2, 100.0, 0.0)],
-            16,
+            &Arsenal::default(),
+            6,
         );
-        assert_eq!(raised(&events).len(), 1, "it hit");
-        assert_eq!(fizzles(&events), []);
+        phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(raised(&combat.take_events()).len(), 1, "it hit");
+        // `_HandleShot`'s visits past what was its life.
+        for _ in 0..10 {
+            phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+        }
+        assert_eq!(fizzles(&combat.take_events()), []);
     }
 
     #[test]
     fn a_missile_point_defence_destroys_never_fizzles() {
-        let [defender, attacker] = missile_attack(quad());
+        // Undowned, it would fizzle at its fifth visit.
         let missile = WeaponRecord {
-            speed: 500,
+            count: 5,
             explod_type: 1,
-            ..missile()
+            ..still_missile()
         };
-        let mut ships = [defender, attacker.armed(drawn(missile, 18))];
         let mut combat = Combat::default();
-        let mut events = Vec::new();
-        for _ in 0..30 {
-            tick(&mut combat, &mut ships, &NovaDisable);
-            ships[1].trigger = QUIET;
-            events.extend(combat.take_events());
-        }
+        put(&mut combat, pd_shot(), A, Vec2::ZERO, Vec2::ZERO);
+        put(&mut combat, missile, B, Vec2::new(3.0, 0.0), Vec2::ZERO);
+        let mut ships = [Ship::at(3, 1000.0, 1000.0)];
+        phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+        let events = combat.take_events();
         assert!(
             events
                 .iter()
                 .any(|event| matches!(event, CombatEvent::ShotDown { .. })),
             "{events:?}"
         );
-        assert_eq!(fizzles(&events), []);
+        // `_HandleShot`'s visits past what was its life.
+        for _ in 0..30 {
+            phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+        }
+        assert_eq!(fizzles(&combat.take_events()), []);
     }
 
     #[test]
@@ -13897,14 +14009,10 @@ mod tests {
             };
             let arsenal = Arsenal::new(&[record, detonating, sub], Vec::new());
             for record in [record, detonating] {
-                let mut combat = Combat::default();
-                let mut ships = [Ship::at(1, 0.0, 0.0).armed(record)];
-                let mut events = Vec::new();
-                for _ in 0..3 {
-                    tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
-                    ships[0].trigger = QUIET;
-                    events.extend(combat.take_events());
-                }
+                // Of life 1, its first visit spends it and its second
+                // ends it.
+                let (mut combat, _) = a_fires_and_flies(record, Vec::new(), &arsenal, 2);
+                let events = combat.take_events();
                 let ended = fizzles(&events).len() + sizes(&events).len();
                 assert_eq!(ended == 1, shown, "{count} {:#x}", record.flags);
                 let released = events
