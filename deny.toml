@@ -23,7 +23,7 @@ deny = [
     # ban on AppKit's bindings is about workspace crates: two third-party
     # crates in the default build bind AppKit themselves, winit for the
     # windowing and rfd for the startup dialogs (the open panel and the
-    # alerts, a macOS-only dependency of nova). (Cargo.lock also lists
+    # alerts, a dependency of nova on macOS and, for the alerts, Windows). (Cargo.lock also lists
     # objc2-link-presentation as depending on them, but only through a
     # feature the default build leaves off, so it is not in this graph.)
     { crate = "nova-appkit", wrappers = ["nova"], reason = "only the game installs the macOS menu bar" },

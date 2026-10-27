@@ -9,6 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use nova::platform::console::{ConsoleTerminal, StderrGoes};
 use nova::startup::{
     DataSource, FatalAlert, Launch, NovaFilesDialog, Opened, Started, StartupLog, Terminal,
     resolve_pick, run,
@@ -71,6 +72,27 @@ impl StartupLog for Log {
     }
 }
 
+/// A stderr whose bytes the test can read.
+#[derive(Clone, Default)]
+struct Written(Rc<RefCell<Vec<u8>>>);
+
+impl Written {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.borrow().clone()).expect("UTF-8")
+    }
+}
+
+impl io::Write for Written {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct Alerts(Vec<String>);
 
@@ -88,6 +110,9 @@ struct Machine {
     log: Log,
     store: MemorySettings,
     terminal: bool,
+    /// Where a Windows console says stderr goes, over `terminal`.
+    console: Option<StderrGoes>,
+    stderr: Written,
 }
 
 impl Machine {
@@ -105,21 +130,28 @@ impl Machine {
             log: Log::default(),
             store: store.clone(),
             terminal: false,
+            console: None,
+            stderr: Written::default(),
         }
     }
 
     fn launch(&mut self) -> Result<Started<(), PathBuf>, u8> {
-        let terminal = Stderr {
+        let stderr = Stderr {
             terminal: self.terminal,
+        };
+        let console = self.console.map(ConsoleTerminal);
+        let terminal: &dyn Terminal = match &console {
+            Some(console) => console,
+            None => &stderr,
         };
         run(
             Launch {
                 args: Vec::<OsString>::new(),
                 nova_data: None,
                 usual: usual(),
-                terminal: &terminal,
+                terminal,
                 log: Some(Box::new(self.log.clone())),
-                stderr: Box::new(io::sink()),
+                stderr: Box::new(self.stderr.clone()),
                 settings: Some(Box::new(self.store.clone()) as Box<dyn SettingsStore>),
                 source: &self.disk,
                 dialog: &mut self.panel,
@@ -188,6 +220,31 @@ fn a_cancel_from_a_terminal_shows_no_alert() {
     machine.terminal = true;
     assert_eq!(machine.launch().err(), Some(2));
     assert_eq!(machine.alerts.0, Vec::<String>::new());
+}
+
+#[test]
+fn a_windows_stderr_going_nowhere_shows_the_fatal_error_in_the_box_and_the_log() {
+    let mut machine = Machine::new(&MemorySettings::new(), &[], &[]);
+    machine.console = Some(StderrGoes::Nowhere);
+    assert_eq!(machine.launch().err(), Some(2));
+    let [message] = machine.alerts.0.as_slice() else {
+        panic!("one box: {:?}", machine.alerts.0);
+    };
+    assert!(message.starts_with("nova: found no EV Nova data in "));
+    assert_eq!(machine.log.0.borrow().last(), Some(message), "logged too");
+}
+
+#[test]
+fn a_windows_stderr_given_or_attached_gets_the_fatal_error_and_no_box() {
+    for goes in [StderrGoes::Redirected, StderrGoes::Attached] {
+        let mut machine = Machine::new(&MemorySettings::new(), &[], &[]);
+        machine.console = Some(goes);
+        assert_eq!(machine.launch().err(), Some(2), "{goes:?}");
+        assert_eq!(machine.alerts.0, Vec::<String>::new(), "{goes:?}");
+        let logged = machine.log.0.borrow().last().cloned().expect("logged");
+        assert!(logged.starts_with("nova: found no EV Nova data in "));
+        assert_eq!(machine.stderr.text(), format!("{logged}\n"), "{goes:?}");
+    }
 }
 
 #[test]

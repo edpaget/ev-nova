@@ -90,6 +90,16 @@
 //! are listed in one sheet over the game window once it opens. The
 //! simulation's diagnostics while the game runs stay on standard error.
 //!
+//! On Windows `nova.exe` is a Windows-subsystem program, so Explorer opens
+//! no console for it. Started from `cmd`, PowerShell or Windows Terminal,
+//! it attaches to that terminal's console, and its lines print there,
+//! after the prompt, which comes back at once
+//! ([`nova::platform::console`]). There the alert and the warnings box are
+//! message boxes, shown only when standard error goes nowhere: a file or a
+//! pipe it was given counts as read. The executable carries its icon,
+//! version and manifest (`packaging/windows/nova.exe.manifest`: per-monitor
+//! DPI awareness, the UTF-8 code page and long paths).
+//!
 //! Exits 2 on a usage error and when no `Nova Files` are found or picked,
 //! and 1 when the data named cannot be listed or the window cannot be
 //! opened.

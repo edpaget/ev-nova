@@ -5,9 +5,15 @@
 //!
 //! On macOS they are rfd's: an `NSOpenPanel` that can pick a folder or a
 //! package (so both `EV Nova.app` and its `Nova Files`), and `NSAlert`s.
-//! No first-party `unsafe` is added for them. Elsewhere there are none
-//! yet ([`Dialogs`] picks nothing and shows nothing; stderr already has
-//! every line): the Windows and Linux platform roadmaps add theirs.
+//! On Windows the alerts are rfd's too, each a `MessageBoxW` (rfd's
+//! `common-controls-v6` feature is off; the manifest's Common Controls 6
+//! dependency themes the box all the same). The warnings box is owned by
+//! the game window, so it stays over it, and Windows takes no input in
+//! the window until it is dismissed, while the game goes on drawing
+//! beneath. No first-party `unsafe` is added for them. The Windows open
+//! panel comes with its own phase: until then, and on Linux, nothing is
+//! picked ([`Dialogs`]), and on Linux nothing is shown either (stderr
+//! already has every line).
 //!
 //! The panel and the fatal alert are modal, so they run only outside the
 //! event loop (winit panics when its handler is entered again while it
@@ -41,7 +47,7 @@ impl NovaFilesDialog for Dialogs {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 impl FatalAlert for Dialogs {
     fn show_fatal(&mut self, message: &str) {
         let _ = rfd::MessageDialog::new()
@@ -55,7 +61,7 @@ impl FatalAlert for Dialogs {
 /// Starts a sheet over `window` listing the startup warnings in `body`,
 /// and returns at once: the sheet stays until the player dismisses it,
 /// while the game goes on beneath it.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub fn show_warnings(window: &Window, body: &str) {
     // The sheet begins as the future is made, and its completion keeps the
     // alert alive: the future itself is not needed.
@@ -77,12 +83,12 @@ impl NovaFilesDialog for Dialogs {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 impl FatalAlert for Dialogs {
     /// No alert yet: stderr and the log have the message.
     fn show_fatal(&mut self, _message: &str) {}
 }
 
 /// No sheet yet: stderr and the log have the warnings.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 pub fn show_warnings(_window: &Window, _body: &str) {}
