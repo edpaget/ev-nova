@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
-use nova_winres::{Resources, ico_from_icns, resource_script};
+use nova_winres::{Resources, ico_from_icns, link_args, resource_script};
 
 /// The product's name, as `[package.metadata.bundle] name` gives it to
 /// the macOS bundle.
@@ -55,10 +55,12 @@ fn main() {
         compiled.manifest_optional()
     };
     compiled.unwrap_or_else(|error| panic!("{}: {error}", rc.display()));
-    // Only the manifest above: MSVC's linker makes none of its own, so
-    // there are never two RT_MANIFEST resources to collide.
-    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-        println!("cargo:rustc-link-arg-bin=nova=/MANIFEST:NO");
+    // MSVC's linker makes no manifest of its own beside the one above, and
+    // gives the main thread the 8 MiB stack macOS and Linux do; see
+    // `nova_winres::link_args`.
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    for arg in link_args(&target_env) {
+        println!("cargo:rustc-link-arg-bin=nova={arg}");
     }
 }
 
