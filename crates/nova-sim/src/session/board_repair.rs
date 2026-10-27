@@ -123,15 +123,17 @@ impl Session {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::flight::Controls;
+    use crate::testkit::work;
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
     use super::*;
     use crate::board::{Boarding, MAX_ESCORTS, Take, Taken};
     use crate::catalog::GovtId;
-    use crate::chance::NeverFires;
+
+    use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
-    use crate::combat::{Rules, ShipRef};
     use crate::escort::EscortOrder;
     use crate::legal::NovaLaw;
     use crate::message::SimMessage;
@@ -405,7 +407,7 @@ mod tests {
     /// over it and targeting it. Its NPC.
     fn disabled_viper(catalog: &crate::testkit::FakePilotCatalog, vipers: u16) -> (Session, NpcId) {
         let mut session = fleet(catalog, vipers, Vec::new());
-        launch(&mut session);
+        launch(&mut session, catalog);
         let id = session
             .npcs()
             .iter()
@@ -413,7 +415,7 @@ mod tests {
             .expect("launched")
             .id;
         session.space.npc_mut(id).expect("there").reserves.armor.now = 1.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert!(!session.is_escort(id), "lost to the fleet");
         assert_eq!(
             session

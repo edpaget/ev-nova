@@ -132,6 +132,11 @@ fn its_fighter_docks_once_the_escort_keeps_formation_or_holds_and_the_round_goes
         assert!(until_launched(&mut session, &catalog, 5), "{command:?}");
         let id = vipers(&session)[0].id;
         assert_eq!(aboard(&session, escort), 1, "{command:?}: one out");
+        // Out of its bay's reach, so its turn to dock comes a pass before
+        // its dock: launched, thought and moved in one frame, it is still
+        // within reach of the escort.
+        let fighter = session.space.npc_mut(id).expect("out");
+        fighter.state.position = fighter.state.position + crate::geometry::Vec2::new(300.0, 0.0);
         session.command_escorts(EscortGroup::All, command, &mut crate::chance::NeverFires);
         fight(&mut session, &catalog, &sitting_ai());
         assert_eq!(
