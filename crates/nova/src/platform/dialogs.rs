@@ -9,16 +9,17 @@
 //! `common-controls-v6` feature is off; the manifest's Common Controls 6
 //! dependency themes the box all the same). The warnings box is owned by
 //! the game window, so it stays over it, and Windows takes no input in
-//! the window until it is dismissed, while the game goes on drawing
-//! beneath. No first-party `unsafe` is added for them. The Windows open
-//! panel comes with its own phase: until then, and on Linux, nothing is
-//! picked ([`Dialogs`]), and on Linux nothing is shown either (stderr
+//! the window until it is dismissed. It runs on a thread of its own, so
+//! the game goes on drawing beneath. No first-party `unsafe` is added for
+//! them. The Windows open panel comes with its own phase: until then, and
+//! on Linux, nothing is picked ([`Dialogs`]), and on Linux nothing is shown either (stderr
 //! already has every line).
 //!
 //! The panel and the fatal alert are modal, so they run only outside the
 //! event loop (winit panics when its handler is entered again while it
-//! runs). The warnings are a sheet, started once the game window is up and
-//! the application is running, which needs no nested run loop.
+//! runs). The warnings are a sheet (on Windows a box on its own thread),
+//! started once the game window is up and the application is running,
+//! which needs no nested run loop.
 
 use std::path::PathBuf;
 
@@ -61,10 +62,10 @@ impl FatalAlert for Dialogs {
 /// Starts a sheet over `window` listing the startup warnings in `body`,
 /// and returns at once: the sheet stays until the player dismisses it,
 /// while the game goes on beneath it.
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(target_os = "macos")]
 pub fn show_warnings(window: &Window, body: &str) {
-    // The sheet begins as the future is made, and its completion keeps the
-    // alert alive: the future itself is not needed.
+    // rfd's macOS backend begins the sheet as the future is made, and its
+    // completion keeps the alert alive: the future itself is not needed.
     drop(
         rfd::AsyncMessageDialog::new()
             .set_level(rfd::MessageLevel::Warning)
@@ -73,6 +74,25 @@ pub fn show_warnings(window: &Window, body: &str) {
             .set_parent(window)
             .show(),
     );
+}
+
+/// Shows a message box owned by `window` listing the startup warnings in
+/// `body`, and returns at once: the box runs on a thread of its own until
+/// the player dismisses it, while the game goes on beneath it.
+///
+/// rfd's async dialog can't be used here as on macOS: its Windows backend
+/// spawns the `MessageBoxW` thread only when the future is first polled,
+/// so a dropped future shows nothing. The blocking dialog takes the
+/// window's handle here, on the event loop's thread, and rfd marks it
+/// `Send`, so the thread only runs it.
+#[cfg(windows)]
+pub fn show_warnings(window: &Window, body: &str) {
+    let dialog = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title(WARNINGS_TITLE)
+        .set_description(body)
+        .set_parent(window);
+    std::thread::spawn(move || dialog.show());
 }
 
 #[cfg(not(target_os = "macos"))]
