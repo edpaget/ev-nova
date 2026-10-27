@@ -462,6 +462,8 @@ mod deadly_stellars;
 mod derelicts;
 mod display_step;
 mod double_time;
+#[cfg(test)]
+mod drift_blast;
 mod dying_player_escorts;
 mod edit;
 mod eject;
