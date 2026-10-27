@@ -328,10 +328,11 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     }
 }
 
-/// The mission computer's cut offer names are filled by the session, as
-/// [`Session::offer_text`] fills them; a session that failed fills none.
-impl<C> crate::spaceport::OfferNames for FlightView<C, crate::flight::SessionFlight<C>> {
+/// The mission computer's cut offer names are filled by the flight
+/// ([`PortSource::offer_text`](crate::flight::sim_port::PortSource::offer_text),
+/// [`Session::offer_text`]); a flight that failed fills none.
+impl<C, S: FlightSim> crate::spaceport::OfferNames for FlightView<C, S> {
     fn munged(&self, mission: MissionId, raw: &str) -> Option<String> {
-        self.sim.session.as_ref().ok()?.offer_text(mission, raw)
+        self.sim.offer_text(mission, raw)
     }
 }

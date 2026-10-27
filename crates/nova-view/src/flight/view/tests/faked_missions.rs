@@ -725,3 +725,25 @@ fn a_docked_jettisons_on_failure_intf_change_redraws_the_whole_bar_at_the_operat
         }
     }
 }
+
+#[test]
+fn the_offer_names_are_the_flights() {
+    use crate::spaceport::OfferNames;
+    let mut view = faked(in_sol());
+    assert_eq!(
+        OfferNames::munged(&view, MissionId(130), "Run <PAY>"),
+        None,
+        "nothing offered"
+    );
+    view.sim.port_mut().offer_texts = vec![(MissionId(130), "Run 1,000".to_owned())];
+    assert_eq!(
+        OfferNames::munged(&view, MissionId(130), "Run <PAY>").as_deref(),
+        Some("Run 1,000"),
+        "the flight's munge"
+    );
+    assert_eq!(
+        OfferNames::munged(&view, MissionId(999), "Run"),
+        None,
+        "not offered"
+    );
+}

@@ -131,6 +131,9 @@ pub struct FakePort {
     pub ship_naming: Option<Result<ShipNaming, ShipRefusal>>,
     /// [`PortSource::offer_gap`]'s answer; [`OFFER_GAP_TICKS`] when `None`.
     pub offer_gap: Option<u32>,
+    /// The offers [`PortSource::offer_text`] fills, each with the text it
+    /// gives whatever the raw text; none for a mission not listed.
+    pub offer_texts: Vec<(MissionId, String)>,
 }
 
 /// What a [`FakeFlight`] answers the [`NameSource`] questions with, each
@@ -591,6 +594,11 @@ impl PortSource for FakeFlight {
 
     fn refusable_offer_dialog(&self, mission: MissionId) -> bool {
         self.port.refusable.contains(&mission)
+    }
+
+    fn offer_text(&self, mission: MissionId, raw: &str) -> Option<String> {
+        let _ = raw;
+        named(&self.port.offer_texts, &mission).cloned()
     }
 
     fn outfitter(&mut self) -> Option<Outfitter> {
@@ -2048,7 +2056,9 @@ mod tests {
         assert_eq!(fake.ship_naming(ShipId(129)), Err(ShipRefusal::NoShipyard));
         assert_eq!(fake.offer_gap(), OFFER_GAP_TICKS);
         assert!(!fake.refusable_offer_dialog(MissionId(130)));
+        assert_eq!(fake.offer_text(MissionId(130), "Run <PAY>"), None);
         let port = fake.port_mut();
+        port.offer_texts = vec![(MissionId(130), "Run 1,000".to_owned())];
         port.market = Some(Market::default());
         port.recharge_enabled = true;
         port.news = Some(News::default());
@@ -2069,6 +2079,11 @@ mod tests {
         assert!(fake.seen_intro());
         assert!(fake.refusable_offer_dialog(MissionId(130)));
         assert!(!fake.refusable_offer_dialog(MissionId(131)));
+        assert_eq!(
+            fake.offer_text(MissionId(130), "Run <PAY>").as_deref(),
+            Some("Run 1,000")
+        );
+        assert_eq!(fake.offer_text(MissionId(131), "Run"), None, "not offered");
         assert_eq!(fake.outfitter(), Some(Outfitter::default()));
         assert_eq!(fake.mission_info(), info);
         assert_eq!(fake.offer_gap(), 45);

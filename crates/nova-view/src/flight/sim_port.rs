@@ -308,6 +308,15 @@ pub trait PortSource {
         false
     }
 
+    /// `raw` with its tags filled for `mission`'s offer on the visit under
+    /// way, as the mission computer fills a cut offer's name
+    /// (`nova_sim::Session::offer_text`): none when it is not offered, as
+    /// in flight, where no offer is open.
+    fn offer_text(&self, mission: MissionId, raw: &str) -> Option<String> {
+        let _ = (mission, raw);
+        None
+    }
+
     /// The outfitter of the stellar landed on, the day's rolls drawn on
     /// the flight's chance (`nova_sim::Session::outfitter`).
     fn outfitter(&mut self) -> Option<Outfitter> {
@@ -562,5 +571,6 @@ mod tests {
             Err(ShipRefusal::NoShipyard)
         );
         assert_eq!(source.offer_gap(), OFFER_GAP_TICKS);
+        assert_eq!(source.offer_text(MissionId(130), "Run <PAY>"), None);
     }
 }

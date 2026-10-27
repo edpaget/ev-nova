@@ -491,6 +491,10 @@ impl<C> PortSource for SessionFlight<C> {
             .is_ok_and(|session| session.refusable_offer_dialog(mission))
     }
 
+    fn offer_text(&self, mission: MissionId, raw: &str) -> Option<String> {
+        self.session().ok()?.offer_text(mission, raw)
+    }
+
     fn outfitter(&mut self) -> Option<Outfitter> {
         self.session.as_mut().ok()?.outfitter(&mut self.chance)
     }
@@ -708,6 +712,7 @@ mod tests {
         assert_eq!(flight.mission_info(), MissionInfo::default());
         assert!(!flight.seen_intro());
         assert!(!flight.refusable_offer_dialog(MissionId(130)));
+        assert_eq!(flight.offer_text(MissionId(130), "Run <PAY>"), None);
         assert_eq!(flight.outfitter(), None);
         assert_eq!(flight.shipyard(), None);
         assert_eq!(flight.escorts_for_hire(), None);
