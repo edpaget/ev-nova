@@ -872,3 +872,18 @@ fn a_refused_gate_sends_no_travel_command() {
     view.jump_frame(true);
     assert_eq!(sent(&view), [FlightCommand::Jump], "taken again");
 }
+
+#[test]
+fn a_command_sent_under_a_refused_gate_is_refused_unsent() {
+    let mut view = faked(sol());
+    view.sim.refuse(nova_sim::PlayerCommand::Jump);
+    view.sim.queue_answer(Answer::Jumped(SystemId(131)));
+    assert_eq!(view.send_gated(FlightCommand::Jump), Answer::Refused);
+    assert_eq!(sent(&view), [], "nothing sent");
+    assert_eq!(
+        view.send_gated(FlightCommand::Arrive),
+        Answer::Jumped(SystemId(131)),
+        "a command no key gates is sent"
+    );
+    assert_eq!(sent(&view), [FlightCommand::Arrive]);
+}

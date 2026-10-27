@@ -40,12 +40,15 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// and says the gate's line when the flight says the stellar is one
     /// ([`Answer::LandRefused`]'s `gate`). Each command is sent under its
     /// gate ([`FlightView::send_gated`]), so a press the flight doesn't take
-    /// sends nothing. A flight that failed refuses the press.
+    /// sends nothing and says nothing. A flight that failed refuses the
+    /// press.
     pub(super) fn land(&mut self, words: Words<Self>) {
-        if !self.takes_command(&FlightCommand::Land) {
+        let pressed = self.send_gated(FlightCommand::Land);
+        if pressed.is_refused() {
+            // Not taken (`FlightView::send_gated`), or a flight that failed:
+            // nothing was pressed.
             return;
         }
-        let pressed = self.send_gated(FlightCommand::Land);
         self.say_messages(words);
         match pressed {
             Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
