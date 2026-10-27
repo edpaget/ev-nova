@@ -363,10 +363,19 @@ fn the_outfitter_and_the_shipyard_are_the_flights() {
         prompt: "Name her.".to_owned(),
         default: "Kestrel 123".to_owned(),
     };
+    let shipyard = nova_sim::Shipyard {
+        rows: Vec::new(),
+        trade_in: 5000,
+        cash: 1000,
+        current: ShipId(128),
+        rules: Rulebook::default(),
+    };
     let port = view.sim.port_mut();
     port.outfitter = Some(nova_sim::Outfitter::default());
+    port.shipyard = Some(shipyard.clone());
     port.ship_naming = Some(Ok(naming.clone()));
     assert_eq!(view.outfitter(), Some(nova_sim::Outfitter::default()));
+    assert_eq!(view.shipyard(), Some(shipyard));
     assert_eq!(view.ship_naming(ShipId(129)), Ok(naming));
 }
 
