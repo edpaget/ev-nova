@@ -24,19 +24,42 @@ fn pirate(record: WeaponRecord, target: ShipRef, plundering: bool) -> Ship {
     }
 }
 
-/// `ships` fought for `ticks` ticks, ship 0 firing on its first tick
-/// alone, `between` run on them after that first tick: the events.
-fn fought(ships: &mut [Ship], ticks: u32, between: impl Fn(&mut [Ship])) -> Vec<CombatEvent> {
+/// The moves `_HandleShot` gives a shell fired from the centre up to the
+/// one that crosses B, 100 pixels ahead: its sixth, from 75 to 90, comes
+/// within B's 16-pixel hit radius.
+const TO_B: usize = 6;
+
+/// `ships`, ship 0 firing its shell in its own phase ([`phase::fire`])
+/// and no more, `between` run on them after; then the shell flown to the
+/// move that crosses B and that move tested: the events.
+fn shelled(ships: &mut [Ship], between: impl Fn(&mut [Ship])) -> Vec<CombatEvent> {
     let mut combat = Combat::default();
-    let mut events = Vec::new();
-    tick(&mut combat, ships, &NovaDisable);
-    events.extend(combat.take_events());
+    let firer = ships[0].id;
+    phase::fire(&mut combat, ships, firer, &NovaDisable);
+    let mut events = combat.take_events();
     ships[0].trigger = QUIET;
     between(ships);
-    for _ in 1..ticks {
-        tick(&mut combat, ships, &NovaDisable);
+    for _ in 0..TO_B {
+        phase::fly_shots(&mut combat, ships, &NovaDisable);
+    }
+    phase::test_hits(&mut combat, ships, &NovaDisable);
+    events.extend(combat.take_events());
+    events
+}
+
+/// `ships`, the NPC ship 0 firing its beam in the ship loop and no more,
+/// then `_HandleBeams` run over the beam's three ticks and the one that
+/// ends it: the events.
+fn beamed(ships: &mut [Ship]) -> Vec<CombatEvent> {
+    let mut combat = Combat::default();
+    phase::handle_npcs(&mut combat, ships, &NovaDisable);
+    let mut events = combat.take_events();
+    ships[0].trigger = QUIET;
+    for _ in 0..4 {
+        phase::close_tick(&mut combat, ships, &NovaDisable);
         events.extend(combat.take_events());
     }
+    assert_eq!(combat.beams(), [], "the beam is out");
     events
 }
 
@@ -51,10 +74,10 @@ fn spared(ship: &Ship, events: &[CombatEvent]) -> bool {
 #[test]
 fn a_plunderers_shot_leaves_its_intact_victim_at_1_armour_and_an_attackers_destroys_it() {
     let mut ships = [pirate(shell(), B, true), Ship::at(2, 100.0, 0.0)];
-    let events = fought(&mut ships, 20, |_| {});
+    let events = shelled(&mut ships, |_| {});
     assert!(spared(&ships[1], &events), "{:?}", ships[1].reserves);
     let mut ships = [pirate(shell(), B, false), Ship::at(2, 100.0, 0.0)];
-    let events = fought(&mut ships, 20, |_| {});
+    let events = shelled(&mut ships, |_| {});
     assert!(broke_up(&events, &[B]), "attacking, it kills");
 }
 
@@ -68,10 +91,10 @@ fn a_docked_pirates_shot_at_its_intact_target_is_disable_only_and_no_other() {
         ..pirate(shell(), target, false)
     };
     let mut ships = [docked(B), Ship::at(2, 100.0, 0.0)];
-    let events = fought(&mut ships, 20, |_| {});
+    let events = shelled(&mut ships, |_| {});
     assert!(spared(&ships[1], &events), "{:?}", ships[1].reserves);
     let mut ships = [docked(B), Ship::at(2, 100.0, 0.0)];
-    let events = fought(&mut ships, 20, |ships| ships[0].docked = false);
+    let events = shelled(&mut ships, |ships| ships[0].docked = false);
     assert!(spared(&ships[1], &events), "the launch flag holds");
     // Aimed at C, disabled, the shell meets B in its path: not spared, as
     // there is no goal-0xd branch and its target isn't intact.
@@ -80,7 +103,7 @@ fn a_docked_pirates_shot_at_its_intact_target_is_disable_only_and_no_other() {
         ..Ship::at(3, 0.0, 900.0)
     };
     let mut ships = [docked(C), Ship::at(2, 100.0, 0.0), wreck];
-    let events = fought(&mut ships, 20, |_| {});
+    let events = shelled(&mut ships, |_| {});
     assert!(broke_up(&events, &[B]), "no goal-0xd branch");
 }
 
@@ -88,21 +111,21 @@ fn a_docked_pirates_shot_at_its_intact_target_is_disable_only_and_no_other() {
 fn the_shots_flag_is_set_as_it_leaves_and_holds_when_the_pirate_turns_to_attack() {
     let mut combat = Combat::default();
     let mut ships = [pirate(shell(), B, true), Ship::at(2, 100.0, 0.0)];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     assert!(combat.shots().iter().all(|shot| shot.disable_only));
     assert_eq!(combat.shots().len(), 1);
     let mut ships = [pirate(shell(), B, true), Ship::at(2, 100.0, 0.0)];
-    let events = fought(&mut ships, 20, |ships| ships[0].plundering = false);
+    let events = shelled(&mut ships, |ships| ships[0].plundering = false);
     assert!(spared(&ships[1], &events), "the launch flag");
 }
 
 #[test]
 fn a_shot_fired_attacking_that_lands_on_the_ship_the_pirate_turned_to_plunder_cannot_kill() {
     let mut ships = [pirate(shell(), B, false), Ship::at(2, 100.0, 0.0)];
-    let events = fought(&mut ships, 20, |ships| ships[0].plundering = true);
+    let events = shelled(&mut ships, |ships| ships[0].plundering = true);
     assert!(spared(&ships[1], &events), "the hit's own test");
     let mut ships = [pirate(shell(), B, false), Ship::at(2, 100.0, 0.0)];
-    let events = fought(&mut ships, 20, |ships| {
+    let events = shelled(&mut ships, |ships| {
         ships[0].plundering = true;
         ships[0].target = Some(C);
     });
@@ -117,7 +140,7 @@ fn every_shot_of_a_plunderer_spares_whatever_it_hits_and_its_blast_too() {
         Ship::at(2, 100.0, 0.0),
         Ship::at(3, 0.0, 900.0),
     ];
-    let events = fought(&mut ships, 20, |_| {});
+    let events = shelled(&mut ships, |_| {});
     assert!(
         spared(&ships[1], &events),
         "goal 0xd's own branch (@0x3e9fb)"
@@ -131,7 +154,7 @@ fn every_shot_of_a_plunderer_spares_whatever_it_hits_and_its_blast_too() {
         Ship::at(2, 100.0, 0.0),
         Ship::at(3, 100.0, 25.0),
     ];
-    let events = fought(&mut ships, 20, |_| {});
+    let events = shelled(&mut ships, |_| {});
     assert!(spared(&ships[1], &events));
     assert!(spared(&ships[2], &events), "the blast's bystander");
 }
@@ -144,7 +167,7 @@ fn the_players_fire_never_spares_by_the_plunder() {
         ..pirate(shell(), B, true)
     };
     let mut ships = [player, Ship::at(2, 100.0, 0.0)];
-    let events = fought(&mut ships, 20, |_| {});
+    let events = shelled(&mut ships, |_| {});
     assert!(broke_up(&events, &[B]));
 }
 
@@ -159,7 +182,7 @@ fn an_escort_of_a_plunderer_cannot_kill_its_own_target_and_one_the_player_leads_
         let mut lead = Ship::at(1, 0.0, 600.0).targeting(C);
         lead.plundering = leader_plunders;
         let mut ships = [escort, Ship::at(2, 100.0, 0.0), lead];
-        let events = fought(&mut ships, 20, |_| {});
+        let events = shelled(&mut ships, |_| {});
         (spared(&ships[1], &events), broke_up(&events, &[B]))
     };
     assert_eq!(escorted(A, true, B), (true, false), "its leader plunders");
@@ -185,11 +208,11 @@ fn beam() -> WeaponRecord {
 fn a_plunderers_beam_is_disable_only_at_the_intact_ship_it_plunders_alone() {
     let mut combat = Combat::default();
     let mut ships = [pirate(beam(), B, true), Ship::at(2, 100.0, 0.0)];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     assert!(combat.beams().iter().all(|beam| beam.disable_only));
     assert!(!combat.beams().is_empty());
     let mut ships = [pirate(beam(), B, true), Ship::at(2, 100.0, 0.0)];
-    let events = fought(&mut ships, 10, |_| {});
+    let events = beamed(&mut ships);
     assert!(spared(&ships[1], &events));
     // Its target far off and disabled: the beam carries no flag, and B,
     // which it meets in its path, is no target of the pirate's.
@@ -203,7 +226,7 @@ fn a_plunderers_beam_is_disable_only_at_the_intact_ship_it_plunders_alone() {
         Ship::at(2, 100.0, 0.0),
         far_wreck(),
     ];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     assert!(combat.beams().iter().all(|beam| !beam.disable_only));
     assert!(!combat.beams().is_empty());
     let mut ships = [
@@ -211,7 +234,7 @@ fn a_plunderers_beam_is_disable_only_at_the_intact_ship_it_plunders_alone() {
         Ship::at(2, 100.0, 0.0),
         far_wreck(),
     ];
-    let events = fought(&mut ships, 10, |_| {});
+    let events = beamed(&mut ships);
     assert!(broke_up(&events, &[B]), "no goal-0xd branch for a beam");
 }
 
@@ -224,15 +247,15 @@ fn a_beam_at_a_victim_disabled_as_it_fires_carries_no_flag_but_its_hit_still_spa
     };
     let mut combat = Combat::default();
     let mut ships = [pirate(beam(), B, true), downed()];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     assert!(combat.beams().iter().all(|beam| !beam.disable_only));
     assert!(!combat.beams().is_empty());
     let mut ships = [pirate(beam(), B, true), downed()];
-    let events = fought(&mut ships, 10, |_| {});
+    let events = beamed(&mut ships);
     assert_eq!(ships[1].reserves.armor.now, damage::SPARED_ARMOR);
     assert!(!broke_up(&events, &[B]));
     let mut ships = [pirate(beam(), B, false), downed()];
-    let events = fought(&mut ships, 10, |_| {});
+    let events = beamed(&mut ships);
     assert!(broke_up(&events, &[B]), "attacking, it finishes it off");
 }
 
@@ -245,11 +268,27 @@ fn a_sub_munition_reads_its_owners_plunder_as_it_is_released_not_its_parents_fla
             pirate(shell, C, plundering_at_launch),
             Ship::at(3, 500.0, 0.0),
         ];
-        tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+        let govts = Governments::default();
+        let arena = || phase::arena(&arsenal, &govts, Rules::default());
+        phase::run_in(
+            &mut combat,
+            &mut ships,
+            arena(),
+            &mut NeverFires,
+            |combat, fighters, arena, chance| combat.handle_npcs(fighters, arena, chance),
+        );
         ships[0].trigger = QUIET;
         ships[0].plundering = plundering_after;
-        for _ in 1..5 {
-            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+        // Its fourth visit of `_HandleShot` ends the shell's life
+        // (@0x36195), releasing them.
+        for _ in 0..4 {
+            phase::run_in(
+                &mut combat,
+                &mut ships,
+                arena(),
+                &mut NeverFires,
+                |combat, fighters, arena, chance| combat.fly_shots(fighters, arena, chance),
+            );
         }
         let subs = sub_shots(&combat);
         assert_eq!(subs.len(), 2);
@@ -274,7 +313,7 @@ fn a_plunderers_point_defence_shot_leaves_disable_only() {
         let mut ships = missile_attack(quad());
         ships[0].plundering = plundering;
         missile_in_flight(&mut combat, &mut ships);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let defence: Vec<bool> = combat
             .shots()
             .iter()
