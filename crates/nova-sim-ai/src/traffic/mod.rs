@@ -1237,7 +1237,8 @@ impl Traffic {
 
     /// Advances the traffic one tick as [`Traffic::tick_in`] does, but for
     /// the NPCs in `still`, which decide, aim and cloak as the others do
-    /// and keep their place: none of them moves, lands or jumps out. It
+    /// and keep their place: none of them moves but by a drift in its
+    /// think ([`plunder::drift`]), lands or jumps out. It
     /// is its think half ([`Traffic::think_holding`]) then its fly half
     /// ([`Traffic::fly_holding`]).
     pub fn tick_holding(
@@ -1265,7 +1266,10 @@ impl Traffic {
     /// gate waits, each flying NPC's cloak think and each escape pod's
     /// wait, as `_AIDispatch` runs them (@0x4429d: `_AIHandleCloaking`
     /// @0x8fcaa, the pod's wait in [`pod_flight::count_down`]). No NPC
-    /// moves.
+    /// moves but a drifting one, 0.7 along its heading in its think, as
+    /// `_HighLevelAIHandler`'s goal 0xe moves it (@0x8eb6b-0x8ebd4,
+    /// [`plunder::drift`]), before the fight's `_HandleShot` (@0x44385)
+    /// meets it.
     pub fn think_holding(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
