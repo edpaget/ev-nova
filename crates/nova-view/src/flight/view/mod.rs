@@ -1570,11 +1570,16 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
         "course_plotted",
         kept.course_plotted == fresh.course_plotted,
     );
-    check("docked", kept.docked == fresh.docked);
+    check("landed", kept.landed == fresh.landed);
     check(
         "jump_under_way",
         kept.jump_under_way == fresh.jump_under_way,
     );
+    check("warping", kept.warping == fresh.warping);
+    check("warp_end_due", kept.warp_end_due == fresh.warp_end_due);
+    check("fate", kept.fate == fresh.fate);
+    check("hold_expired", kept.hold_expired == fresh.hold_expired);
+    check("leave_due", kept.leave_due == fresh.leave_due);
     check(
         "jump_readiness",
         kept.jump_readiness == fresh.jump_readiness,

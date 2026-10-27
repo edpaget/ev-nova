@@ -985,7 +985,7 @@ fn a_new_pilot_shows_the_default_status_bar() {
 #[test]
 fn the_status_bar_alone_is_flights_bar_and_nothing_else() {
     let mut frame = among(Vec::new());
-    frame.docked = true;
+    frame.landed = Some(StellarId(128));
     let view = barred(catalog(), frame).with_overlays(TITLED);
     let mut bar = DrawList::new();
     view.draw_status_bar(&mut bar);

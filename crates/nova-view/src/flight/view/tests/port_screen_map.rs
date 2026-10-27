@@ -41,7 +41,7 @@ fn turn_nav_off(view: &mut View) {
 /// [`sol_drawing`], its nav as a map opens Earth selected.
 fn faked_docked() -> Faked {
     let mut view = faked_sol(FlightFrame {
-        docked: true,
+        landed: Some(StellarId(128)),
         nav_mode: EARTH,
         ..in_sol()
     });

@@ -402,7 +402,7 @@ impl PlayerShip {
     /// ([`Session::arrive`]): its natural end, or a pass after its
     /// fallback (see the module docs).
     #[must_use]
-    fn warp_end_due(&self, jump: Option<Jump>) -> bool {
+    pub(super) fn warp_end_due(&self, jump: Option<Jump>) -> bool {
         self.warp.warp.end_due && super::jumping(jump).is_some()
     }
 

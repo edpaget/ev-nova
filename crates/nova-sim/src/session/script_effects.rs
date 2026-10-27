@@ -538,7 +538,7 @@ impl MissionRun {
     /// others; see the module docs). The leave waits for the texts and
     /// dialogs shown over the spaceport, which never read it.
     #[must_use]
-    fn leave_due(&self, landed: Option<StellarId>) -> bool {
+    pub(super) fn leave_due(&self, landed: Option<StellarId>) -> bool {
         landed.is_some() && self.queued.leave.is_some()
     }
 
@@ -624,7 +624,7 @@ impl MissionRun {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::{
         DudeId, DudeRecord, GovtId, HullRecord, LandingSite, ShipId, SoundId, StellarId,
@@ -674,7 +674,7 @@ mod tests {
     /// at (300, 0), then planet 151. Two ships fly in 130 and three in
     /// 131. Ship 129 has a record; ship 130, a fighter of no fuel, too.
     /// The player's ship carries a blaster, outfit 250 holding it.
-    fn moving() -> FakePilotCatalog {
+    pub(in crate::session) fn moving() -> FakePilotCatalog {
         let base = catalog();
         let gate = LandingSite {
             flags2: HYPERGATE,
@@ -1761,6 +1761,15 @@ mod tests {
         let mut chance = Scripted::rolling(rolls);
         session.run_set(&SetExpr::parse(text).expect("parses"), &mut chance);
         chance.sides_asked
+    }
+
+    /// A session landed on planet 128 of [`moving`]'s `catalog`, a `Q`
+    /// run there holding its leave for the take-off: "Leave now.".
+    pub(in crate::session) fn leave_held(catalog: &FakePilotCatalog) -> Session {
+        let mut session = told(landed(catalog));
+        run_rolling(&mut session, "Q25048", &[2]);
+        assert!(session.leave_due(), "due once run");
+        session
     }
 
     /// Takes off from wherever `session` is landed, on a chance that

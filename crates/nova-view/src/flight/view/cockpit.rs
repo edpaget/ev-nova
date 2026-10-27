@@ -254,7 +254,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// change.
     pub(super) fn reserves_shown(&self, frame: &FlightFrame) -> Reserves {
         match self.reserves_scene {
-            Some(held) if (frame.docked || !self.bar_steps.is_empty()) && self.hud_waits() => held,
+            Some(held) if (frame.docked() || !self.bar_steps.is_empty()) && self.hud_waits() => {
+                held
+            }
             _ => frame.hud.reserves,
         }
     }

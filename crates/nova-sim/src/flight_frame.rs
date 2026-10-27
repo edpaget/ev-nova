@@ -31,21 +31,23 @@ use crate::combat::shot_layer::ShotLayer;
 use crate::combat::{CombatEvent, ShipRef};
 use crate::escort::{ClassRow, EscortClass};
 use crate::flight::{Controls, ShipState};
+use crate::gate::{GateKind, GateRefusal};
 use crate::geometry::Vec2;
 use crate::grant::Granted;
 use crate::hail::CommNote;
 use crate::hire::PayNote;
 use crate::hover::{DrawnBox, DrawnShips, Hover};
-use crate::hyperspace::JumpReadiness;
+use crate::hyperspace::{JumpReadiness, JumpRefusal};
 use crate::iff::{RadarGear, ShipIff, StellarIff};
+use crate::landing::LandingRefusal;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
-use crate::player_fate::Drawn as ShipDrawn;
+use crate::player_fate::{Drawn as ShipDrawn, PlayerCommand, PlayerFate};
 use crate::red_alert::AlertIcon;
 use crate::reserves::{Gauge, Reserves};
 use crate::session::{
-    HoverPlace, InterfaceLoad, MapClicked, MapPress, MissionShown, PersonQuote, SavedNav,
-    SessionEvent, StellarPick, TextBar,
+    Departure, HoverPlace, InterfaceLoad, LandPress, MapClicked, MapPress, MissionShown,
+    PersonQuote, SavedNav, SessionEvent, Settled, StellarPick, TextBar,
 };
 use crate::ship_layer::ShipLayer;
 use crate::sound::SimSound;
@@ -77,14 +79,32 @@ pub struct FlightFrame {
     /// Whether a course is plotted, flown or not
     /// ([`Session::course`](crate::Session::course) has a hop).
     pub course_plotted: bool,
-    /// Whether the player is docked
-    /// ([`Session::landed`](crate::Session::landed) is some).
-    pub docked: bool,
+    /// The stellar the player is docked at, if any
+    /// ([`Session::landed`](crate::Session::landed)); [`FlightFrame::docked`]
+    /// says whether it is.
+    pub landed: Option<StellarId>,
     /// Whether a jump is under way, the pre-jump stage included: the
     /// original's +0x50 > 0, which its key blocks test live
     /// ([`Session::jumping`](crate::Session::jumping) or
     /// [`Session::preparing_jump`](crate::Session::preparing_jump)).
     pub jump_under_way: bool,
+    /// Whether the jump itself has begun, past the pre-jump stage, and the
+    /// ship is not yet arrived
+    /// ([`Session::jumping`](crate::Session::jumping) is some).
+    pub warping: bool,
+    /// Whether the warp has ended, so the jump arrives
+    /// ([`Session::warp_end_due`](crate::Session::warp_end_due)).
+    pub warp_end_due: bool,
+    /// Where the player's ship is in its lifecycle
+    /// ([`Session::player_fate`](crate::Session::player_fate)).
+    pub fate: PlayerFate,
+    /// Whether the hold after the player's explosion has run out, now or
+    /// before: flight steps no more
+    /// ([`Session::hold_expired`](crate::Session::hold_expired)).
+    pub hold_expired: bool,
+    /// Whether a `Q` run while landed waits for the take-off
+    /// ([`Session::leave_due`](crate::Session::leave_due)).
+    pub leave_due: bool,
     /// Whether the ship can jump to the system selected, as the nav area
     /// draws it ([`Session::jump_readiness`](crate::Session::jump_readiness)).
     pub jump_readiness: JumpReadiness,
@@ -143,7 +163,7 @@ pub struct FlightFrame {
 
 impl Default for FlightFrame {
     /// A session that failed to start: nav off, no course, in flight, no
-    /// jump; the player alone, drawn in full in the ships' layer at the
+    /// jump, the player flying, no hold and no leave due; the player alone, drawn in full in the ships' layer at the
     /// default place, with no NPCs, shots, beams, boxes, asteroids or
     /// stellars; no murk and no background.
     fn default() -> Self {
@@ -152,8 +172,13 @@ impl Default for FlightFrame {
             system: SystemId(0),
             course_shown: Vec::new(),
             course_plotted: false,
-            docked: false,
+            landed: None,
             jump_under_way: false,
+            warping: false,
+            warp_end_due: false,
+            fate: PlayerFate::Flying,
+            hold_expired: false,
+            leave_due: false,
             jump_readiness: JumpReadiness::Blocked,
             texts_queued: 0,
             map_key: MapKey::default(),
@@ -177,6 +202,12 @@ impl Default for FlightFrame {
 }
 
 impl FlightFrame {
+    /// Whether the player is docked ([`FlightFrame::landed`] is some).
+    #[must_use]
+    pub fn docked(&self) -> bool {
+        self.landed.is_some()
+    }
+
     /// The player's ship: [`FlightFrame::ships`]' first record, or the
     /// default one's place when a frame holds none.
     #[must_use]
@@ -453,6 +484,108 @@ pub enum FlightCommand {
         /// Whether Option was down at the press.
         backwards: bool,
     },
+    /// The jump key: begin a jump
+    /// ([`Session::begin_jump`](crate::Session::begin_jump)).
+    Jump,
+    /// The land key: request clearance, land or enter a gate
+    /// ([`Session::land`](crate::Session::land)).
+    Land,
+    /// Open the hypergate the ship is at, for its map to offer its links
+    /// ([`Session::open_hypergate`](crate::Session::open_hypergate)).
+    OpenHypergate,
+    /// Enter the hypergate opened, for the system picked on its map, or
+    /// cancel with none
+    /// ([`Session::enter_hypergate`](crate::Session::enter_hypergate)).
+    EnterHypergate(Option<SystemId>),
+    /// Pass through the wormhole the ship is at
+    /// ([`Session::enter_wormhole`](crate::Session::enter_wormhole)).
+    EnterWormhole,
+    /// End the jump once its warp has ended
+    /// ([`Session::arrive`](crate::Session::arrive)).
+    Arrive,
+    /// The port's Leave: take off
+    /// ([`Session::leave_port`](crate::Session::leave_port)).
+    TakeOff,
+    /// Take off for a held `Q`'s leave, if one is due
+    /// ([`Session::leave_if_due`](crate::Session::leave_if_due)).
+    LeaveIfDue,
+    /// Settle the escorts' marks as the ship leaves the stellar
+    /// ([`Session::land_escorts`](crate::Session::land_escorts)).
+    LandEscorts,
+    /// Settle what the set expressions run since queued
+    /// ([`Session::settle_script`](crate::Session::settle_script)).
+    SettleScript,
+    /// Begin the fade to black after the hold has expired
+    /// ([`Session::begin_fade`](crate::Session::begin_fade)).
+    BeginFade,
+    /// End play once the fade is over
+    /// ([`Session::end_play`](crate::Session::end_play)).
+    EndPlay,
+    /// The view showed a line on the message line for this many ticks:
+    /// the session's line follows it
+    /// ([`Session::comm_shown`](crate::Session::comm_shown)).
+    CommShown(u16),
+}
+
+impl FlightCommand {
+    /// The player's command the session takes this command under
+    /// ([`Session::takes`](crate::Session::takes)), which the view asks
+    /// before it sends it: `None` for the commands no key gates, the map's
+    /// own input and the sequencing the view runs at its own points.
+    ///
+    /// - The nav's keys and clicks ([`FlightCommand::SelectStellar`],
+    ///   [`FlightCommand::NavModeKeys`], Option-backquote's
+    ///   [`FlightCommand::ClearTarget`], a [`FlightCommand::ClickInSpace`]
+    ///   and a [`FlightCommand::SelectOnFloatingMap`]) are
+    ///   [`PlayerCommand::Nav`]; Hyper Select is
+    ///   [`PlayerCommand::SelectSystem`], a target key
+    ///   [`PlayerCommand::Target`] and Weapon Select
+    ///   [`PlayerCommand::SelectWeapon`].
+    /// - [`FlightCommand::Jump`] is [`PlayerCommand::Jump`]; the land key's
+    ///   [`FlightCommand::Land`], and the gates it opens or passes
+    ///   through ([`FlightCommand::OpenHypergate`],
+    ///   [`FlightCommand::EnterWormhole`]), are [`PlayerCommand::Land`].
+    /// - [`FlightCommand::EnterHypergate`] comes with the hypergate map's
+    ///   close, which no key gates once the map is open, and is `None`, as
+    ///   are the map's clicks, cycle and Clear Route, its marks and cue,
+    ///   the nav's saves and restores, the arrival, the take-offs, the
+    ///   escorts' landing, the settling, the fade, the end of play and
+    ///   the message line's.
+    #[must_use]
+    pub fn gate(&self) -> Option<PlayerCommand> {
+        match self {
+            Self::SelectStellar(_)
+            | Self::NavModeKeys { .. }
+            | Self::ClearTarget
+            | Self::ClickInSpace { .. }
+            | Self::SelectOnFloatingMap(_) => Some(PlayerCommand::Nav),
+            Self::SelectNextSystem => Some(PlayerCommand::SelectSystem),
+            Self::SelectTarget(_) => Some(PlayerCommand::Target),
+            Self::SelectWeapon { .. } => Some(PlayerCommand::SelectWeapon),
+            Self::Jump => Some(PlayerCommand::Jump),
+            Self::Land | Self::OpenHypergate | Self::EnterWormhole => Some(PlayerCommand::Land),
+            Self::MapClick(_)
+            | Self::CycleMapSelection
+            | Self::ClearRoute
+            | Self::MarkKnown(_)
+            | Self::CueCourse
+            | Self::SavePortNav
+            | Self::RestorePortNav
+            | Self::RestoreBarNav
+            | Self::PutBackPortNav
+            | Self::RestoreMapNav(_)
+            | Self::RestoreMapSelection(_)
+            | Self::EnterHypergate(_)
+            | Self::Arrive
+            | Self::TakeOff
+            | Self::LeaveIfDue
+            | Self::LandEscorts
+            | Self::SettleScript
+            | Self::BeginFade
+            | Self::EndPlay
+            | Self::CommShown(_) => None,
+        }
+    }
 }
 
 /// A press on an in-flight map, as [`FlightCommand::MapClick`] carries it:
@@ -509,6 +642,56 @@ pub enum Answer {
     /// targeted, the player's own as it let go of the target, or the
     /// stellar it selected.
     InSpace(Hover),
+    /// The system a [`FlightCommand::Jump`] is bound for: the jump has
+    /// begun, or was already being prepared.
+    Jumped(SystemId),
+    /// Why a [`FlightCommand::Jump`] was refused, and whether the player
+    /// is told ([`Session::jump_refusal_told`](crate::Session::jump_refusal_told)).
+    /// Not [`Answer::Refused`]: a refusal told raises its beep.
+    JumpRefused {
+        /// Why.
+        refusal: JumpRefusal,
+        /// Whether the player is told.
+        told: bool,
+    },
+    /// What a [`FlightCommand::Land`] did, when it was not refused.
+    LandPress(LandPress),
+    /// Why a [`FlightCommand::Land`] was refused, and what gate the
+    /// stellar it names is, if any
+    /// ([`Session::gate_kind`](crate::Session::gate_kind)). Not
+    /// [`Answer::Refused`]: a refusal may raise its beep.
+    LandRefused {
+        /// Why.
+        refusal: LandingRefusal,
+        /// The gate the refusal's stellar is, if it names one and it is a
+        /// gate.
+        gate: Option<GateKind>,
+    },
+    /// The links a [`FlightCommand::OpenHypergate`] offers.
+    Offered(Vec<SystemId>),
+    /// Why entering or opening a gate took the ship nowhere. Not
+    /// [`Answer::Refused`]: the hypergate's entry is consumed.
+    GateRefused(GateRefusal),
+    /// The system an arrival ([`FlightCommand::Arrive`],
+    /// [`FlightCommand::EnterHypergate`], [`FlightCommand::EnterWormhole`])
+    /// arrived in, and what happened in the fight up to the arrival that
+    /// no step took: the explosions the jump left pending, a crön's `Y` on
+    /// its days among them, for the view to show on the arrival's first
+    /// frame.
+    Arrived {
+        /// The system arrived in.
+        system: SystemId,
+        /// The fight's events still pending, in order.
+        combat: Vec<CombatEvent>,
+    },
+    /// What a take-off ([`FlightCommand::TakeOff`],
+    /// [`FlightCommand::LeaveIfDue`]) did.
+    Departed(Departure),
+    /// What a [`FlightCommand::LandEscorts`] has to report over the
+    /// spaceport; `None` when nothing was sold or upgraded.
+    EscortReport(Option<String>),
+    /// What a [`FlightCommand::SettleScript`] settled.
+    Settled(Settled),
 }
 
 impl Answer {
@@ -1083,6 +1266,89 @@ mod tests {
         };
         report.clear();
         assert_eq!(report, StepReport::default());
+    }
+
+    #[test]
+    fn each_command_is_gated_by_the_key_that_sends_it_or_by_none() {
+        use crate::flight_frame::FlightCommand as C;
+        let saved = SavedNav::of(NavMode::Off);
+        let gated = [
+            (
+                C::SelectStellar(StellarPick::Slot(0)),
+                Some(PlayerCommand::Nav),
+            ),
+            (
+                C::NavModeKeys {
+                    nav_off: true,
+                    h: false,
+                },
+                Some(PlayerCommand::Nav),
+            ),
+            (C::ClearTarget, Some(PlayerCommand::Nav)),
+            (
+                C::ClickInSpace {
+                    at: Vec2::ZERO,
+                    drawn: DrawnBoxes::default(),
+                },
+                Some(PlayerCommand::Nav),
+            ),
+            (C::SelectOnFloatingMap(None), Some(PlayerCommand::Nav)),
+            (C::SelectNextSystem, Some(PlayerCommand::SelectSystem)),
+            (
+                C::SelectTarget(TargetPick::Next),
+                Some(PlayerCommand::Target),
+            ),
+            (
+                C::SelectWeapon { backwards: false },
+                Some(PlayerCommand::SelectWeapon),
+            ),
+            (C::Jump, Some(PlayerCommand::Jump)),
+            (C::Land, Some(PlayerCommand::Land)),
+            (C::OpenHypergate, Some(PlayerCommand::Land)),
+            (C::EnterWormhole, Some(PlayerCommand::Land)),
+            (
+                C::MapClick(MapClick {
+                    hits: Vec::new(),
+                    shift: false,
+                    hypergate: None,
+                    missions: Vec::new(),
+                    green: None,
+                }),
+                None,
+            ),
+            (C::CycleMapSelection, None),
+            (C::ClearRoute, None),
+            (C::MarkKnown(Vec::new()), None),
+            (C::CueCourse, None),
+            (C::SavePortNav, None),
+            (C::RestorePortNav, None),
+            (C::RestoreBarNav, None),
+            (C::PutBackPortNav, None),
+            (C::RestoreMapNav(saved), None),
+            (C::RestoreMapSelection(saved), None),
+            (C::EnterHypergate(Some(SystemId(131))), None),
+            (C::Arrive, None),
+            (C::TakeOff, None),
+            (C::LeaveIfDue, None),
+            (C::LandEscorts, None),
+            (C::SettleScript, None),
+            (C::BeginFade, None),
+            (C::EndPlay, None),
+            (C::CommShown(240), None),
+        ];
+        for (command, gate) in gated {
+            assert_eq!(command.gate(), gate, "{command:?}");
+        }
+    }
+
+    #[test]
+    fn a_frame_is_docked_while_it_names_a_stellar_landed_on() {
+        assert!(!FlightFrame::default().docked());
+        let landed = FlightFrame {
+            landed: Some(StellarId(128)),
+            ..FlightFrame::default()
+        };
+        assert!(landed.docked());
     }
 
     #[test]

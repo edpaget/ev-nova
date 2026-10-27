@@ -383,6 +383,26 @@ impl LandingRefusal {
             Self::NotLandable { .. } | Self::Cloaked | Self::TooFar { .. } | Self::TooFast { .. }
         )
     }
+
+    /// The stellar the refusal names, if any: the one the press was
+    /// refused at, out of reach, too fast, not landable, denied or
+    /// unpaid. The refusals before any stellar is picked, and the
+    /// disabled and cloaked ship's, name none.
+    #[must_use]
+    pub fn stellar(&self) -> Option<StellarId> {
+        match *self {
+            Self::TooFar { stellar, .. }
+            | Self::TooFast { stellar, .. }
+            | Self::NotLandable { stellar, .. }
+            | Self::Denied { stellar, .. }
+            | Self::CannotPayFee { stellar, .. } => Some(stellar),
+            Self::Jumping
+            | Self::NoStellars
+            | Self::NothingLandable
+            | Self::Disabled
+            | Self::Cloaked => None,
+        }
+    }
 }
 
 /// The disc a stellar's frame of `(width, height)` shows: half its larger
@@ -1199,6 +1219,46 @@ mod tests {
         press.outcome.map(|outcome| match outcome {
             LandOutcome::Landed(stellar) | LandOutcome::Requested { stellar, .. } => stellar,
         })
+    }
+
+    #[test]
+    fn a_refusal_names_the_stellar_it_was_refused_at_or_none() {
+        let id = StellarId(130);
+        for named in [
+            LandingRefusal::TooFar {
+                stellar: id,
+                station: false,
+            },
+            LandingRefusal::TooFast {
+                stellar: id,
+                station: true,
+                speed: 9.0,
+            },
+            LandingRefusal::NotLandable {
+                stellar: id,
+                station: false,
+            },
+            LandingRefusal::Denied {
+                stellar: id,
+                station: false,
+                min_status: 0,
+            },
+            LandingRefusal::CannotPayFee {
+                stellar: id,
+                station: false,
+            },
+        ] {
+            assert_eq!(named.stellar(), Some(id), "{named:?}");
+        }
+        for unnamed in [
+            LandingRefusal::Jumping,
+            LandingRefusal::NoStellars,
+            LandingRefusal::NothingLandable,
+            LandingRefusal::Disabled,
+            LandingRefusal::Cloaked,
+        ] {
+            assert_eq!(unnamed.stellar(), None, "{unnamed:?}");
+        }
     }
 
     #[test]

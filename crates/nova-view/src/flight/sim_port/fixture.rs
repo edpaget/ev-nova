@@ -10,7 +10,6 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
-use nova_sim::JumpReadiness;
 use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
@@ -29,6 +28,7 @@ use nova_sim::{
     DescMovie, EscortClass, Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, ShipRef,
     StellarId, StellarPick, Vec2,
 };
+use nova_sim::{JumpReadiness, PlayerFate};
 
 use super::{CommSource, FlightSim, MapSource, PortSource, fresh_description};
 
@@ -398,14 +398,20 @@ pub fn refused_command() -> FlightCommand {
 /// leaves a field unwritten then shows in the comparison. The
 /// destructuring names every field, so a field added to [`FlightFrame`]
 /// doesn't compile until it is changed here.
+#[allow(clippy::too_many_lines)] // a few lines for each of the frame's fields
 pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
     let FlightFrame {
         nav_mode,
         system,
         course_shown,
         course_plotted,
-        docked,
+        landed,
         jump_under_way,
+        warping,
+        warp_end_due,
+        fate,
+        hold_expired,
+        leave_due,
         jump_readiness,
         texts_queued,
         map_key,
@@ -435,8 +441,21 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             Vec::new()
         },
         course_plotted: !course_plotted,
-        docked: !docked,
+        landed: if landed.is_some() {
+            None
+        } else {
+            Some(StellarId(128))
+        },
         jump_under_way: !jump_under_way,
+        warping: !warping,
+        warp_end_due: !warp_end_due,
+        fate: if *fate == PlayerFate::Flying {
+            PlayerFate::GameOver
+        } else {
+            PlayerFate::Flying
+        },
+        hold_expired: !hold_expired,
+        leave_due: !leave_due,
         jump_readiness: if *jump_readiness == JumpReadiness::Blocked {
             JumpReadiness::Clear
         } else {
@@ -1453,8 +1472,13 @@ mod tests {
             system: SystemId(i16::MAX),
             course_shown: vec![SystemId(131)],
             course_plotted: true,
-            docked: true,
+            landed: Some(StellarId(128)),
             jump_under_way: true,
+            warping: true,
+            warp_end_due: true,
+            fate: PlayerFate::Fading,
+            hold_expired: true,
+            leave_due: true,
             jump_readiness: JumpReadiness::Underway,
             texts_queued: u64::MAX,
             map_key: MapKey {
@@ -1471,8 +1495,13 @@ mod tests {
                 system,
                 course_shown,
                 course_plotted,
-                docked,
+                landed,
                 jump_under_way,
+                warping,
+                warp_end_due,
+                fate,
+                hold_expired,
+                leave_due,
                 jump_readiness,
                 texts_queued,
                 map_key,
@@ -1511,8 +1540,13 @@ mod tests {
             assert_ne!(other.system, *system);
             assert_ne!(other.course_shown, *course_shown);
             assert_ne!(other.course_plotted, *course_plotted);
-            assert_ne!(other.docked, *docked);
+            assert_ne!(other.landed, *landed);
             assert_ne!(other.jump_under_way, *jump_under_way);
+            assert_ne!(other.warping, *warping);
+            assert_ne!(other.warp_end_due, *warp_end_due);
+            assert_ne!(other.fate, *fate);
+            assert_ne!(other.hold_expired, *hold_expired);
+            assert_ne!(other.leave_due, *leave_due);
             assert_ne!(other.jump_readiness, *jump_readiness);
             assert_ne!(other.texts_queued, *texts_queued);
             assert_ne!(other.map_key, *map_key);

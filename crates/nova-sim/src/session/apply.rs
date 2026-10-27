@@ -2,14 +2,35 @@
 //! view's `FlightSim` port sends them, each matched to the session method
 //! that runs it, and its [`Answer`] (see
 //! [`flight_frame`](crate::flight_frame)). The match lives here, on the
-//! session's side, so the view's adapter only forwards.
+//! session's side, so the view's adapter only forwards. The travel
+//! commands' arms are in the `travel` module.
 
 use super::Session;
+use crate::chance::Chance;
 use crate::flight_frame::{Answer, FlightCommand};
+use crate::session::SimCatalog;
+
+mod travel;
+
+/// What [`Session::apply`] is handed: the catalog the travel commands
+/// read, and what they draw on. The adapter shares the catalog only once
+/// the view has (`nova_view`'s `SessionFlight::share_catalog`); before
+/// that, `catalog` is `None`, and the commands that read one are
+/// refused (see [`Session::apply`]). The comm's law and the boardings'
+/// rule join it as their commands cross the port
+/// (rdm:phase/view-sim-seam/phase-10-comm-escorts-boarding-on-port).
+pub struct ApplyCollaborators<'a> {
+    /// The catalog the arrivals, the gates, the take-offs and the
+    /// settling read, if the view has shared it.
+    pub catalog: Option<&'a dyn SimCatalog>,
+    /// What the arrivals, the gates, the take-offs, the escorts' landing
+    /// and the settling draw on.
+    pub chance: &'a mut dyn Chance,
+}
 
 impl Session {
-    /// Runs `command` and answers it: [`Answer::Refused`] when it did
-    /// nothing.
+    /// Runs `command`, handed `collab`, and answers it: [`Answer::Refused`]
+    /// when it did nothing.
     ///
     /// - [`FlightCommand::SelectStellar`] runs [`Session::select_stellar`],
     ///   answered with the stellar selected, or refused during a jump and
@@ -35,18 +56,23 @@ impl Session {
     /// - [`FlightCommand::ClickInSpace`] runs [`Session::click_in_space`],
     ///   answered with what it took, or refused when it changed nothing:
     ///   landed, or a click on nothing it takes.
+    /// - The travel commands are answered as the `travel` module says:
+    ///   the jump, the land key and the gates, the arrival, the take-offs,
+    ///   the escorts' landing, the settling, the fade and the end of play.
+    ///   Those that read the catalog are refused without one.
     /// - The rest are never refused, and answer [`Answer::Done`]:
     ///   [`FlightCommand::SelectWeapon`] ([`Session::press_weapon_select`],
     ///   which the next pass takes; the view asks the gate first),
     ///   [`FlightCommand::ClearRoute`] ([`Session::clear_route`]),
     ///   [`FlightCommand::MarkKnown`] ([`Session::mark_known`]),
-    ///   [`FlightCommand::CueCourse`] ([`Session::cue_course`]), and the
+    ///   [`FlightCommand::CueCourse`] ([`Session::cue_course`]),
+    ///   [`FlightCommand::CommShown`] ([`Session::comm_shown`]), and the
     ///   nav's saves and restores: [`Session::save_port_nav`],
     ///   [`Session::restore_port_nav`], [`Session::restore_bar_nav`],
     ///   [`Session::put_back_port_nav`], [`Session::restore_map_nav`] and
     ///   [`Session::restore_map_selection`].
     #[allow(clippy::needless_pass_by_value)] // the port sends commands by value, and later ones carry owned data
-    pub fn apply(&mut self, command: FlightCommand) -> Answer {
+    pub fn apply(&mut self, command: FlightCommand, collab: &mut ApplyCollaborators<'_>) -> Answer {
         match command {
             FlightCommand::SelectStellar(pick) => self
                 .select_stellar(pick)
@@ -115,6 +141,22 @@ impl Session {
                 self.press_weapon_select(backwards);
                 Answer::Done
             }
+            FlightCommand::CommShown(ticks) => {
+                self.comm_shown(ticks);
+                Answer::Done
+            }
+            FlightCommand::Jump
+            | FlightCommand::Land
+            | FlightCommand::OpenHypergate
+            | FlightCommand::EnterHypergate(_)
+            | FlightCommand::EnterWormhole
+            | FlightCommand::Arrive
+            | FlightCommand::TakeOff
+            | FlightCommand::LeaveIfDue
+            | FlightCommand::LandEscorts
+            | FlightCommand::SettleScript
+            | FlightCommand::BeginFade
+            | FlightCommand::EndPlay => self.apply_travel(command, collab),
         }
     }
 }
@@ -140,6 +182,19 @@ mod tests {
     use crate::testkit::{begin_jump_now, catalog, fly_out, land_now, npc};
     use crate::traffic::npc::NpcId;
 
+    /// Runs `command` on `session` as the adapter does once the view has
+    /// shared no catalog, drawing on a chance that never fires: the
+    /// commands that read none.
+    pub(super) fn apply(session: &mut Session, command: FlightCommand) -> Answer {
+        session.apply(
+            command,
+            &mut ApplyCollaborators {
+                catalog: None,
+                chance: &mut crate::chance::NeverFires,
+            },
+        )
+    }
+
     /// A session started on `catalog`, its sounds so far taken.
     fn quiet(catalog: &crate::testkit::FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
@@ -148,7 +203,7 @@ mod tests {
     }
 
     /// A session flying a jump to Alpha Centauri, its sounds so far taken.
-    fn jumping() -> Session {
+    pub(super) fn jumping() -> Session {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
@@ -159,7 +214,7 @@ mod tests {
     }
 
     /// A session landed on Earth (128), its sounds so far taken.
-    fn landed() -> Session {
+    pub(super) fn landed() -> Session {
         let mut session = Session::start(&three_stellars()).expect("starts");
         session.select_stellar(StellarPick::Slot(1));
         land_now(&mut session).expect("lands");
@@ -178,7 +233,7 @@ mod tests {
     fn hyper_select_answers_the_system_it_selects() {
         let mut session = quiet(&catalog());
         assert_eq!(
-            session.apply(FlightCommand::SelectNextSystem),
+            apply(&mut session, FlightCommand::SelectNextSystem),
             Answer::System(Some(SystemId(131)))
         );
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
@@ -193,7 +248,7 @@ mod tests {
         session.select_stellar(StellarPick::Slot(0));
         session.take_sounds();
         assert_eq!(
-            session.apply(FlightCommand::SelectNextSystem),
+            apply(&mut session, FlightCommand::SelectNextSystem),
             Answer::System(None)
         );
         assert_eq!(session.nav_mode(), NavMode::Stellar(None));
@@ -205,7 +260,7 @@ mod tests {
         let mut session = jumping();
         let before = session.nav_mode();
         assert_eq!(
-            session.apply(FlightCommand::SelectNextSystem),
+            apply(&mut session, FlightCommand::SelectNextSystem),
             Answer::Refused
         );
         assert_eq!(session.nav_mode(), before);
@@ -217,7 +272,10 @@ mod tests {
         let mut session = quiet(&catalog());
         let id = ship(&mut session);
         session.chart.target = Some(id);
-        assert_eq!(session.apply(FlightCommand::ClearTarget), Answer::Done);
+        assert_eq!(
+            apply(&mut session, FlightCommand::ClearTarget),
+            Answer::Done
+        );
         assert_eq!(session.chart.target, None);
         assert_eq!(session.take_sounds(), [SimSound::TargetCleared]);
     }
@@ -225,7 +283,10 @@ mod tests {
     #[test]
     fn option_backquote_with_no_target_is_refused_and_silent() {
         let mut session = quiet(&catalog());
-        assert_eq!(session.apply(FlightCommand::ClearTarget), Answer::Refused);
+        assert_eq!(
+            apply(&mut session, FlightCommand::ClearTarget),
+            Answer::Refused
+        );
         assert_eq!(session.chart.target, None);
         assert_eq!(session.take_sounds(), []);
     }
@@ -235,7 +296,7 @@ mod tests {
         let mut session = quiet(&catalog());
         let id = ship(&mut session);
         assert_eq!(
-            session.apply(FlightCommand::SelectTarget(TargetPick::Next)),
+            apply(&mut session, FlightCommand::SelectTarget(TargetPick::Next)),
             Answer::Target(Some(id))
         );
         assert_eq!(session.chart.target, Some(id));
@@ -246,7 +307,7 @@ mod tests {
     fn a_target_key_is_refused_while_landed_and_changes_nothing() {
         let mut session = landed();
         assert_eq!(
-            session.apply(FlightCommand::SelectTarget(TargetPick::Next)),
+            apply(&mut session, FlightCommand::SelectTarget(TargetPick::Next)),
             Answer::Refused
         );
         assert_eq!(session.chart.target, None);
@@ -259,18 +320,24 @@ mod tests {
         session.select_stellar(StellarPick::Slot(0));
         session.take_sounds();
         assert_eq!(
-            session.apply(FlightCommand::NavModeKeys {
-                nav_off: true,
-                h: false
-            }),
+            apply(
+                &mut session,
+                FlightCommand::NavModeKeys {
+                    nav_off: true,
+                    h: false
+                }
+            ),
             Answer::Done
         );
         assert_eq!(session.nav_mode(), NavMode::Off);
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
-        session.apply(FlightCommand::NavModeKeys {
-            nav_off: false,
-            h: true,
-        });
+        apply(
+            &mut session,
+            FlightCommand::NavModeKeys {
+                nav_off: false,
+                h: true,
+            },
+        );
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
     }
 
@@ -279,10 +346,13 @@ mod tests {
         let mut session = jumping();
         let before = session.nav_mode();
         assert_eq!(
-            session.apply(FlightCommand::NavModeKeys {
-                nav_off: true,
-                h: true
-            }),
+            apply(
+                &mut session,
+                FlightCommand::NavModeKeys {
+                    nav_off: true,
+                    h: true
+                }
+            ),
             Answer::Refused
         );
         assert_eq!(session.nav_mode(), before);
@@ -294,7 +364,10 @@ mod tests {
         let mut session = Session::start(&three_stellars()).expect("starts");
         session.take_sounds();
         assert_eq!(
-            session.apply(FlightCommand::SelectStellar(StellarPick::Slot(0))),
+            apply(
+                &mut session,
+                FlightCommand::SelectStellar(StellarPick::Slot(0))
+            ),
             Answer::Stellar(StellarId(131))
         );
         assert_eq!(session.nav_mode(), NavMode::Stellar(Some(StellarId(131))));
@@ -307,7 +380,10 @@ mod tests {
         session.take_sounds();
         let before = session.nav_mode();
         assert_eq!(
-            session.apply(FlightCommand::SelectStellar(StellarPick::Slot(3))),
+            apply(
+                &mut session,
+                FlightCommand::SelectStellar(StellarPick::Slot(3))
+            ),
             Answer::Refused
         );
         assert_eq!(session.nav_mode(), before);
@@ -324,7 +400,10 @@ mod tests {
         session.take_sounds();
         let before = session.nav_mode();
         assert_eq!(
-            session.apply(FlightCommand::SelectStellar(StellarPick::Slot(0))),
+            apply(
+                &mut session,
+                FlightCommand::SelectStellar(StellarPick::Slot(0))
+            ),
             Answer::Refused
         );
         assert_eq!(session.nav_mode(), before);
@@ -345,7 +424,7 @@ mod tests {
     #[test]
     fn an_accepted_map_click_answers_what_it_did() {
         let mut session = quiet(&catalog());
-        let answer = session.apply(click(&[131]));
+        let answer = apply(&mut session, click(&[131]));
         let Answer::Clicked(clicked) = answer else {
             panic!("accepted: {answer:?}");
         };
@@ -359,7 +438,11 @@ mod tests {
         let mut session = quiet(&catalog());
         let before = (session.nav_mode(), session.course().to_vec());
         for hits in [&[][..], &[133]] {
-            assert_eq!(session.apply(click(hits)), Answer::Refused, "{hits:?}");
+            assert_eq!(
+                apply(&mut session, click(hits)),
+                Answer::Refused,
+                "{hits:?}"
+            );
         }
         assert_eq!((session.nav_mode(), session.course().to_vec()), before);
         assert_eq!(session.take_sounds(), []);
@@ -391,7 +474,7 @@ mod tests {
     fn the_maps_cycle_selects_the_next_link_in_mode_3() {
         let mut session = quiet(&catalog());
         assert_eq!(
-            session.apply(FlightCommand::CycleMapSelection),
+            apply(&mut session, FlightCommand::CycleMapSelection),
             Answer::Done
         );
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
@@ -403,7 +486,7 @@ mod tests {
         let mut session = landed();
         let before = session.nav_mode();
         assert_eq!(
-            session.apply(FlightCommand::CycleMapSelection),
+            apply(&mut session, FlightCommand::CycleMapSelection),
             Answer::Refused
         );
         assert_eq!(session.nav_mode(), before);
@@ -416,7 +499,7 @@ mod tests {
     fn clear_route_clears_the_course_and_lets_go_of_the_selection() {
         let mut session = quiet(&catalog());
         session.plot_course(SystemId(132)).expect("a route");
-        assert_eq!(session.apply(FlightCommand::ClearRoute), Answer::Done);
+        assert_eq!(apply(&mut session, FlightCommand::ClearRoute), Answer::Done);
         assert_eq!(session.course(), []);
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
     }
@@ -425,7 +508,10 @@ mod tests {
     fn a_floating_map_hit_selects_its_link_in_mode_3() {
         let mut session = quiet(&catalog());
         assert_eq!(
-            session.apply(FlightCommand::SelectOnFloatingMap(Some(SystemId(131)))),
+            apply(
+                &mut session,
+                FlightCommand::SelectOnFloatingMap(Some(SystemId(131)))
+            ),
             Answer::Done
         );
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
@@ -437,7 +523,7 @@ mod tests {
         let mut session = jumping();
         let before = session.nav_mode();
         assert_eq!(
-            session.apply(FlightCommand::SelectOnFloatingMap(None)),
+            apply(&mut session, FlightCommand::SelectOnFloatingMap(None)),
             Answer::Refused
         );
         assert_eq!(session.nav_mode(), before);
@@ -450,7 +536,7 @@ mod tests {
         let mut session = quiet(&catalog());
         assert!(!session.is_known(SystemId(133)));
         assert_eq!(
-            session.apply(FlightCommand::MarkKnown(vec![SystemId(133)])),
+            apply(&mut session, FlightCommand::MarkKnown(vec![SystemId(133)])),
             Answer::Done
         );
         assert!(session.is_known(SystemId(133)));
@@ -461,11 +547,14 @@ mod tests {
     fn the_cue_selects_the_courses_next_hop() {
         let mut session = quiet(&catalog());
         session.plot_course(SystemId(132)).expect("a route");
-        session.apply(FlightCommand::NavModeKeys {
-            nav_off: true,
-            h: false,
-        });
-        assert_eq!(session.apply(FlightCommand::CueCourse), Answer::Done);
+        apply(
+            &mut session,
+            FlightCommand::NavModeKeys {
+                nav_off: true,
+                h: false,
+            },
+        );
+        assert_eq!(apply(&mut session, FlightCommand::CueCourse), Answer::Done);
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
     }
 
@@ -474,12 +563,18 @@ mod tests {
     fn a_port_dialog_saves_the_nav_and_restores_it_once() {
         let mut session = landed();
         let saved = session.nav_mode();
-        assert_eq!(session.apply(FlightCommand::SavePortNav), Answer::Done);
+        assert_eq!(
+            apply(&mut session, FlightCommand::SavePortNav),
+            Answer::Done
+        );
         session.chart.nav = NavMode::Off;
-        assert_eq!(session.apply(FlightCommand::RestorePortNav), Answer::Done);
+        assert_eq!(
+            apply(&mut session, FlightCommand::RestorePortNav),
+            Answer::Done
+        );
         assert_eq!(session.nav_mode(), saved);
         session.chart.nav = NavMode::Off;
-        session.apply(FlightCommand::RestorePortNav);
+        apply(&mut session, FlightCommand::RestorePortNav);
         assert_eq!(session.nav_mode(), NavMode::Off, "restored once");
     }
 
@@ -488,12 +583,15 @@ mod tests {
     fn the_exchanges_map_puts_back_the_port_nav_and_keeps_the_save() {
         let mut session = landed();
         let saved = session.nav_mode();
-        session.apply(FlightCommand::SavePortNav);
+        apply(&mut session, FlightCommand::SavePortNav);
         session.chart.nav = NavMode::Off;
-        assert_eq!(session.apply(FlightCommand::PutBackPortNav), Answer::Done);
+        assert_eq!(
+            apply(&mut session, FlightCommand::PutBackPortNav),
+            Answer::Done
+        );
         assert_eq!(session.nav_mode(), saved);
         session.chart.nav = NavMode::Off;
-        session.apply(FlightCommand::RestorePortNav);
+        apply(&mut session, FlightCommand::RestorePortNav);
         assert_eq!(session.nav_mode(), saved, "still saved");
     }
 
@@ -504,7 +602,10 @@ mod tests {
         let saved = session.nav_mode();
         session.chart.bar_nav = Some(saved);
         session.chart.nav = NavMode::Off;
-        assert_eq!(session.apply(FlightCommand::RestoreBarNav), Answer::Done);
+        assert_eq!(
+            apply(&mut session, FlightCommand::RestoreBarNav),
+            Answer::Done
+        );
         assert_eq!(session.nav_mode(), saved);
     }
 
@@ -516,7 +617,7 @@ mod tests {
         let saved = session.map_nav();
         session.chart.nav = NavMode::Off;
         assert_eq!(
-            session.apply(FlightCommand::RestoreMapNav(saved)),
+            apply(&mut session, FlightCommand::RestoreMapNav(saved)),
             Answer::Done
         );
         assert_eq!(session.map_nav(), saved);
@@ -526,12 +627,12 @@ mod tests {
     #[test]
     fn the_maps_close_in_port_puts_back_the_selection_keeping_the_mode() {
         let mut session = quiet(&catalog());
-        session.apply(FlightCommand::SelectNextSystem);
+        apply(&mut session, FlightCommand::SelectNextSystem);
         let saved = session.map_nav();
         session.clear_route();
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
         assert_eq!(
-            session.apply(FlightCommand::RestoreMapSelection(saved)),
+            apply(&mut session, FlightCommand::RestoreMapSelection(saved)),
             Answer::Done
         );
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
@@ -560,7 +661,7 @@ mod tests {
             drawn: boxes(id, false),
         };
         assert_eq!(
-            session.apply(click),
+            apply(&mut session, click),
             Answer::InSpace(crate::hover::Hover::Ship(id))
         );
         assert_eq!(session.target().map(|npc| npc.id), Some(id));
@@ -578,7 +679,7 @@ mod tests {
             drawn: boxes(id, true),
         };
         assert_eq!(
-            session.apply(click),
+            apply(&mut session, click),
             Answer::InSpace(crate::hover::Hover::Player)
         );
         assert_eq!(session.target(), None);
@@ -593,7 +694,7 @@ mod tests {
             at: crate::geometry::Vec2::new(-3000.0, 3000.0),
             drawn: boxes(id, true),
         };
-        assert_eq!(session.apply(click), Answer::Refused);
+        assert_eq!(apply(&mut session, click), Answer::Refused);
         assert_eq!(session, before);
     }
 
@@ -605,7 +706,7 @@ mod tests {
             at: crate::geometry::Vec2::ZERO,
             drawn: boxes(NpcId(1), true),
         };
-        assert_eq!(session.apply(click), Answer::Refused);
+        assert_eq!(apply(&mut session, click), Answer::Refused);
         assert_eq!(session, before);
     }
 
@@ -614,15 +715,24 @@ mod tests {
         use crate::session::tests::{MISSILE, ROCKET, with_secondaries};
         let catalog = with_secondaries(catalog());
         let mut session = Session::start(&catalog).expect("starts");
-        let answer = session.apply(FlightCommand::SelectWeapon { backwards: false });
+        let answer = apply(
+            &mut session,
+            FlightCommand::SelectWeapon { backwards: false },
+        );
         assert_eq!(answer, Answer::Done);
         assert_eq!(session.secondary(), None, "the press waits for the pass");
         crate::testkit::work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.secondary(), Some(ROCKET));
-        session.apply(FlightCommand::SelectWeapon { backwards: false });
+        apply(
+            &mut session,
+            FlightCommand::SelectWeapon { backwards: false },
+        );
         crate::testkit::work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.secondary(), Some(MISSILE));
-        session.apply(FlightCommand::SelectWeapon { backwards: true });
+        apply(
+            &mut session,
+            FlightCommand::SelectWeapon { backwards: true },
+        );
         crate::testkit::work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.secondary(), Some(ROCKET), "backwards with Option");
     }

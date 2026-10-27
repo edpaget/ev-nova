@@ -35,9 +35,10 @@ use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    Allegiance, Behaviour, BoardingRule, DescMovie, DisableRule, Hover, LegalCode, MapMarks,
-    MissionId, NovaAi, NovaBoarding, NovaDisable, NovaLaw, PlayerCommand, PointDefenceRule, Rules,
-    SavedNav, Session, ShipId, SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, Vec2,
+    Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DescMovie, DisableRule, Hover,
+    LegalCode, MapMarks, MissionId, NovaAi, NovaBoarding, NovaDisable, NovaLaw, PlayerCommand,
+    PointDefenceRule, Rules, SavedNav, Session, ShipId, SimCatalog, StellarId, StepCollaborators,
+    SystemId, TagNames, Vec2,
 };
 
 use super::SharedChance;
@@ -220,11 +221,18 @@ impl<C> FlightSim for SessionFlight<C> {
         session.step(input, steps, &mut collab, into);
     }
 
+    /// Forwards to `Session::apply`, handing it the catalog the view
+    /// shared ([`SessionFlight::share_catalog`]), if it has, and the
+    /// flight's chance; a failed session refuses every command.
     fn apply(&mut self, command: FlightCommand) -> Answer {
-        match &mut self.session {
-            Ok(session) => session.apply(command),
-            Err(_) => Answer::Refused,
-        }
+        let Ok(session) = &mut self.session else {
+            return Answer::Refused;
+        };
+        let mut collab = ApplyCollaborators {
+            catalog: self.catalog.as_ref().map(|shared| &*shared.0),
+            chance: &mut self.chance,
+        };
+        session.apply(command, &mut collab)
     }
 
     /// Forwards to `Session::drain_events`; a failed session drains

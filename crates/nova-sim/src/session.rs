@@ -636,6 +636,7 @@ pub use nav::SavedNav;
 pub use ship_change::{InterfaceLoad, ShipChangeRules};
 
 pub use crate::mission::{AcceptError, OfferPrompt, VenueOffer};
+pub use apply::ApplyCollaborators;
 pub use edit::RelocateRefusal;
 pub use events::SessionEvent;
 pub use mission_screens::{
@@ -3075,7 +3076,7 @@ impl Session {
     /// (@0x6c6d7-0x6c706).
     pub fn arrive(
         &mut self,
-        catalog: &(impl PilotCatalog + TrafficCatalog),
+        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<SystemId> {
         // A move's entry still owed comes before the jump's window opens
@@ -3508,7 +3509,7 @@ impl Session {
     /// pending.
     pub fn open_hypergate(
         &mut self,
-        catalog: &impl PilotCatalog,
+        catalog: &(impl PilotCatalog + ?Sized),
     ) -> Result<Vec<SystemId>, GateRefusal> {
         let here = self
             .ship
@@ -3572,7 +3573,7 @@ impl Session {
     pub fn enter_hypergate(
         &mut self,
         to: Option<SystemId>,
-        catalog: &(impl PilotCatalog + TrafficCatalog),
+        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) -> Result<SystemId, GateRefusal> {
         let here = self
@@ -3651,7 +3652,7 @@ impl Session {
     /// (see the `takeoff_grace` module).
     pub fn enter_wormhole(
         &mut self,
-        catalog: &(impl PilotCatalog + TrafficCatalog),
+        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) -> Result<SystemId, GateRefusal> {
         let here = self
@@ -3692,7 +3693,7 @@ impl Session {
         system: SystemId,
         exit: &GateSite,
         kind: GateKind,
-        catalog: &(impl PilotCatalog + TrafficCatalog),
+        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
         // `_PlayerEnterHypergate` @0x63e91, `_PlayerEnterWormhole`
@@ -21748,7 +21749,7 @@ pub(super) mod tests {
     }
 
     /// A session whose player has exploded and whose hold has run out.
-    fn expired_hold() -> Session {
+    pub(super) fn expired_hold() -> Session {
         let catalog = deadly();
         let mut session = facing_an_npc(&catalog, 180);
         session.ship.condition = Condition::Destroyed;

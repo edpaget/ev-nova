@@ -223,7 +223,7 @@ fn closing_the_hypergate_map_saves_a_borders_change_too() {
 #[test]
 fn tab_on_the_bars_map_is_refused_and_changes_nothing() {
     let mut view = faked_sol(FlightFrame {
-        docked: true,
+        landed: Some(StellarId(128)),
         ..in_sol()
     });
     view.open_bar_map();
@@ -294,7 +294,7 @@ fn tab_on_a_hypergate_map_with_nothing_to_pick_redraws_nothing() {
 #[test]
 fn tab_on_the_bars_map_redraws_nothing() {
     let mut view = faked_sol(FlightFrame {
-        docked: true,
+        landed: Some(StellarId(128)),
         ..in_sol()
     });
     view.open_bar_map();
@@ -534,7 +534,7 @@ fn in_port_tab_or_backslash_with_the_map_key_held_closes_the_map() {
     // Both fall through on a planet (@0x13d20).
     for k in [Key::Tab, Key::Char('\\')] {
         let mut view = faked_sol(FlightFrame {
-            docked: true,
+            landed: Some(StellarId(128)),
             ..in_sol()
         });
         view.open_bar_map();
@@ -2213,7 +2213,7 @@ fn a_floating_map_show_puts_the_scroll_back_on_the_current_system() {
 #[test]
 fn the_bars_map_shows_the_scroll_the_flight_left() {
     let mut view = faked_sol(FlightFrame {
-        docked: true,
+        landed: Some(StellarId(128)),
         ..in_sol()
     });
     view.map.centre_on_system(SystemId(132));

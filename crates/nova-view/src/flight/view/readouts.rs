@@ -58,7 +58,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             player: self.shown_position(),
             stellars,
             ships: radar_ships(target, &self.shown_npcs()),
-            blank: frame.docked,
+            blank: frame.docked(),
             iff: gear.iff,
             density_scanner: gear.density_scanner,
             static_pattern: self.radar_static,
@@ -380,7 +380,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         match &self.nav_scene {
             Some((_, shown))
                 if self.hud_waits()
-                    && (frame.docked
+                    && (frame.docked()
                         || !self.bar_steps.is_empty()
                         || self.nav_flash.is_some()
                         || self.nav_mode_shown()) =>

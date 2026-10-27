@@ -69,7 +69,7 @@ fn map_button(done: bool) -> Point {
 /// and preselecting the current system, with the course map open (opened
 /// in port when the frame is docked).
 fn faked_on_the_map(frame: FlightFrame) -> Faked {
-    let (docked, current) = (frame.docked, frame.system);
+    let (docked, current) = (frame.docked(), frame.system);
     let mut view = faked_in(named(catalog()), frame);
     view.map = view.map.clone().with_metrics(Rc::new(MonoMetrics));
     let map = view.sim.map_mut();
@@ -369,7 +369,7 @@ fn port_type(view: &mut View, text: &str) {
 #[test]
 fn find_works_on_the_bars_map_where_m_types() {
     let mut view = faked_on_the_map(FlightFrame {
-        docked: true,
+        landed: Some(StellarId(128)),
         ..in_sol()
     });
     let alpha = faked_on_map(&mut view, 131);

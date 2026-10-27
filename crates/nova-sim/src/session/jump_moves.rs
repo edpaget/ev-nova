@@ -146,7 +146,7 @@ impl Session {
         catalog: &C,
         chance: &mut (impl Chance + ?Sized),
     ) where
-        C: PilotCatalog + TrafficCatalog,
+        C: PilotCatalog + TrafficCatalog + ?Sized,
     {
         let system = self.pilot.system;
         let placed = self.chart.jump_window.is_some_and(|window| window.placed);

@@ -21,8 +21,13 @@ impl Session {
             system,
             course_shown,
             course_plotted,
-            docked,
+            landed,
             jump_under_way,
+            warping,
+            warp_end_due,
+            fate,
+            hold_expired,
+            leave_due,
             jump_readiness,
             texts_queued,
             map_key,
@@ -46,8 +51,13 @@ impl Session {
         *system = self.system();
         *course_shown = self.course_shown();
         *course_plotted = !self.course().is_empty();
-        *docked = self.landed().is_some();
-        *jump_under_way = self.jumping().is_some() || self.preparing_jump().is_some();
+        *landed = self.mode.landed();
+        *jump_under_way = self.mode.jump().is_some();
+        *warping = super::jumping(self.mode.jump()).is_some();
+        *warp_end_due = self.ship.warp_end_due(self.mode.jump());
+        *fate = self.ship.player_fate(self.player_end, self.pod);
+        *hold_expired = self.ship.hold_expired(self.player_end);
+        *leave_due = self.run.leave_due(self.mode.landed());
         *jump_readiness = self.jump_readiness();
         *texts_queued = self.texts_queued();
         *map_key = MapKey {
@@ -189,8 +199,13 @@ pub(super) mod tests {
             system: SystemId(999),
             course_shown: vec![SystemId(998)],
             course_plotted: true,
-            docked: true,
+            landed: Some(StellarId(999)),
             jump_under_way: true,
+            warping: true,
+            warp_end_due: true,
+            fate: crate::player_fate::PlayerFate::GameOver,
+            hold_expired: true,
+            leave_due: true,
             jump_readiness: JumpReadiness::Underway,
             texts_queued: u64::MAX,
             map_key: MapKey {
@@ -346,14 +361,61 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_fill_writes_whether_the_player_is_docked() {
+    fn a_fill_writes_the_stellar_the_player_is_docked_at() {
         let mut session = Session::start(&three_stellars()).expect("starts");
-        assert!(!filled(&session).docked);
+        assert_eq!(filled(&session).landed, None);
         session.select_stellar(StellarPick::Slot(1));
         land_now(&mut session).expect("lands");
         let mut frame = FlightFrame::default();
         session.fill_frame(&mut frame);
-        assert!(frame.docked);
+        assert_eq!(frame.landed, Some(StellarId(128)));
+        assert_eq!(frame.landed, session.landed());
+        assert!(frame.docked());
+    }
+
+    #[test]
+    fn a_fill_writes_whether_the_jump_itself_has_begun_and_its_warp_has_ended() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        let frame = filled(&session);
+        assert_eq!((frame.warping, frame.warp_end_due), (false, false));
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session, &catalog);
+        session.begin_jump().expect("accepted");
+        let frame = filled(&session);
+        assert!(frame.jump_under_way);
+        assert!(!frame.warping, "the pre-jump stage isn't the warp");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
+        let frame = filled(&session);
+        assert_eq!((frame.warping, frame.warp_end_due), (true, false));
+        for _ in 0..1000 {
+            if session.warp_end_due() {
+                break;
+            }
+            crate::testkit::work(&mut session, &catalog, crate::flight::Controls::default());
+        }
+        assert!(session.warp_end_due(), "the warp ended");
+        let frame = filled(&session);
+        assert_eq!((frame.warping, frame.warp_end_due), (true, true));
+    }
+
+    #[test]
+    fn a_fill_writes_the_players_fate_and_whether_its_hold_has_expired() {
+        use crate::player_fate::PlayerFate;
+        let session = Session::start(&catalog()).expect("starts");
+        let frame = filled(&session);
+        assert_eq!(
+            (frame.fate, frame.hold_expired),
+            (PlayerFate::Flying, false)
+        );
+        let mut session = crate::session::tests::expired_hold();
+        let frame = filled(&session);
+        assert_eq!(frame.fate, PlayerFate::Holding { ticks_left: 0 });
+        assert!(frame.hold_expired);
+        session.begin_fade();
+        let frame = filled(&session);
+        assert_eq!((frame.fate, frame.hold_expired), (PlayerFate::Fading, true));
+        assert_eq!(frame.fate, session.player_fate());
     }
 
     #[test]
@@ -392,6 +454,15 @@ pub(super) mod tests {
         let mut frame = FlightFrame::default();
         session.fill_frame(&mut frame);
         assert!(frame.jump_under_way);
+    }
+
+    #[test]
+    fn a_fill_writes_whether_a_leave_waits_for_the_take_off() {
+        let catalog = crate::session::script_effects::tests::moving();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert!(!filled(&session).leave_due);
+        session = crate::session::script_effects::tests::leave_held(&catalog);
+        assert!(filled(&session).leave_due);
     }
 
     #[test]

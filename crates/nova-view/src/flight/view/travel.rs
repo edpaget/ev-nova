@@ -1115,7 +1115,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ) {
         // `_SaveMapBordersState` for a change, whatever the map's mode,
         // unless docked (@0x13c21-0x13c3f).
-        let docked = self.frame_now().docked;
+        let docked = self.frame_now().docked();
         if !docked && self.map.borders_changed_since_open() {
             self.map_borders_save = Some(self.map.borders_shown());
         }
@@ -1244,7 +1244,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`classic_offset`]), and at 0 over the spaceport, which is
     /// classic, where the bar and the docked mission dialogs open it.
     pub(super) fn map_offset(&self) -> Point {
-        let in_port = self.frame_now().docked;
+        let in_port = self.frame_now().docked();
         let x = if in_port {
             0.0
         } else {
@@ -1460,7 +1460,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// map. A modifier is taken too: a Mac sends no key-down for one
     /// alone, so the filter never sees it.
     fn map_filter_takes(&self, key: Key) -> bool {
-        let docked = self.frame_now().docked;
+        let docked = self.frame_now().docked();
         match key {
             Key::Shift
             | Key::Control

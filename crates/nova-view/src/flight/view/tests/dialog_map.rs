@@ -208,7 +208,14 @@ fn a_dialogs_map_opens_in_silence_docked_and_in_flight() {
             MapOpener::Computer(None),
             MapOpener::Briefing(MapMarks::NONE),
         ] {
-            let mut view = faked_dialogs(FlightFrame { docked, ..in_sol() }, MapMarks::NONE, MOON);
+            let mut view = faked_dialogs(
+                FlightFrame {
+                    landed: docked.then_some(StellarId(128)),
+                    ..in_sol()
+                },
+                MapMarks::NONE,
+                MOON,
+            );
             view.open_dialog_map(opener);
             assert!(view.map_open, "{opener:?}");
             assert_eq!(view.ui_sounds, [], "{opener:?}, docked {docked}");
@@ -338,7 +345,7 @@ fn a_computers_map_close_retakes_the_nav_area_after_its_restore_and_an_offers_no
     ] {
         let mut view = faked_dialogs(
             FlightFrame {
-                docked: true,
+                landed: Some(StellarId(128)),
                 nav_mode: MOON,
                 ..in_sol()
             },

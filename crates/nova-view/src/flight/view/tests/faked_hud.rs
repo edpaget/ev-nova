@@ -159,7 +159,7 @@ fn a_stellars_radar_colour_is_its_records_iff_unlandable_without_one() {
 #[test]
 fn the_radar_is_blank_docked_and_shows_the_frames_gear_and_static() {
     let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
-    frame.docked = true;
+    frame.landed = Some(StellarId(128));
     frame.hud.radar_gear = nova_sim::RadarGear {
         iff: true,
         density_scanner: true,
