@@ -17,6 +17,7 @@ nova-render = { path = "crates/nova-render" }
 nova-metalfx = { path = "crates/nova-metalfx" }
 nova-appkit = { path = "crates/nova-appkit" }
 nova-win32 = { path = "crates/nova-win32" }
+nova-winres = { path = "crates/nova-winres" }
 nova-sim = { path = "crates/nova-sim" }
 nova-sim-base = { path = "crates/nova-sim-base" }
 nova-sim-catalog = { path = "crates/nova-sim-catalog" }
@@ -33,6 +34,13 @@ png = "0.18"
 # plist back. Its default `serde` feature is not needed.
 plist = { version = "1.10.1", default-features = false }
 tempfile = "3"
+# Compiles nova.exe's resource script (its icon, version information and
+# manifest) on Windows; for any other target it does nothing.
+embed-resource = "3.0.12"
+# Reads the PE nova.exe's tests check, as structures.
+object = { version = "0.37.3", default-features = false, features = ["read_core", "pe", "std"] }
+# Reads the Windows manifest back as XML in nova-winres's and nova's tests.
+roxmltree = "0.20.0"
 binrw = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
