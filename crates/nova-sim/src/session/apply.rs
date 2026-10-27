@@ -7,8 +7,9 @@
 //! boarding's and the escorts' in the `comm` module, the spaceport's
 //! shops', bar's, jettison's, assignment's and intro's in the `port`
 //! module, the mission screens' and the mission info key's in the
-//! `missions` module, and the player info key's and its dialog's in the
-//! `player_info` module.
+//! `missions` module, the player info key's and its dialog's in the
+//! `player_info` module, and the view's settings' in the `settings`
+//! module.
 
 use super::Session;
 use crate::board::BoardingRule;
@@ -22,6 +23,7 @@ mod comm;
 mod missions;
 mod player_info;
 mod port;
+mod settings;
 mod travel;
 
 /// What [`Session::apply`] is handed: the catalog the travel commands
@@ -100,6 +102,9 @@ impl Session {
     /// - The player info's are answered as the `player_info` module says:
     ///   its key, whose own refusal rides its answer, and its dialog's
     ///   opening, refused without a catalog.
+    /// - The settings are answered as the `settings` module says: the
+    ///   window's width, the double-time key and the sound's quiet, each
+    ///   [`Answer::Done`].
     /// - The rest are never refused, and answer [`Answer::Done`]:
     ///   [`FlightCommand::SelectWeapon`] ([`Session::press_weapon_select`],
     ///   which the next pass takes; the view asks the gate first),
@@ -236,6 +241,9 @@ impl Session {
             FlightCommand::PressPlayerInfo | FlightCommand::OpenPlayerInfo => {
                 self.apply_player_info(command, collab)
             }
+            FlightCommand::SetWindowWidth(_)
+            | FlightCommand::SetDoubleTimeKey(_)
+            | FlightCommand::SetSoundQuiet(_) => self.apply_setting(command),
         }
     }
 }

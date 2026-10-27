@@ -592,6 +592,7 @@ mod script_move;
 mod secondary_select;
 mod self_destruct;
 mod self_repair;
+mod session_setup;
 mod setup;
 mod ship_change;
 mod ship_display;
@@ -641,7 +642,7 @@ pub use ship_change::{InterfaceLoad, ShipChangeRules};
 
 pub use crate::mission::{AcceptError, OfferPrompt, VenueOffer};
 pub use apply::ApplyCollaborators;
-pub use edit::RelocateRefusal;
+pub use edit::{DeskReading, RelocateRefusal};
 pub use events::SessionEvent;
 pub use mission_screens::{
     ComputerRefusal, ComputerRow, InfoRow, MissionComputer, MissionInfo, MissionInfoPress,
@@ -653,6 +654,7 @@ pub use missions::{AbortError, NotOffered, RefuseShown};
 pub use person_offers::Hailed;
 pub use persons::PersonQuote;
 pub use script_effects::{Departure, ScriptEffectRules, Settled};
+pub use session_setup::{CarryOver, SessionSetup};
 pub use slot_visibility::HoverPlace;
 pub use step::{SimCatalog, StepCollaborators};
 pub use takeoff_grace::TAKEOFF_GRACE_TICKS;

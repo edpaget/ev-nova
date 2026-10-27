@@ -679,6 +679,20 @@ pub enum FlightCommand {
     /// The intro screen was shown
     /// ([`Session::mark_intro_seen`](crate::Session::mark_intro_seen)).
     MarkIntroSeen,
+    /// The view's game window is this many logical units wide, which each
+    /// system's `Asteroids` is stored by
+    /// ([`Session::set_window_width`](crate::Session::set_window_width)):
+    /// a setting the view sends as it is built and resized.
+    SetWindowWidth(u32),
+    /// The double-time key is on or off
+    /// ([`Session::set_double_time_key`](crate::Session::set_double_time_key)):
+    /// a setting the view sends as the player's preference changes.
+    SetDoubleTimeKey(bool),
+    /// The player's sound effects are quiet or not, which the Red Alert's
+    /// blink reads
+    /// ([`Session::set_sound_quiet`](crate::Session::set_sound_quiet)): a
+    /// setting the view sends as the sound preferences change.
+    SetSoundQuiet(bool),
 }
 
 impl FlightCommand {
@@ -722,7 +736,9 @@ impl FlightCommand {
     ///   bar's and the mission screens', which run docked where no key
     ///   gates them. [`FlightCommand::Jettison`] is `None` too: its key's
     ///   press is gated by the key, and the player info's Jettison by no
-    ///   gate.
+    ///   gate. So are the settings ([`FlightCommand::SetWindowWidth`],
+    ///   [`FlightCommand::SetDoubleTimeKey`],
+    ///   [`FlightCommand::SetSoundQuiet`]), which no key sends.
     #[must_use]
     pub fn gate(&self) -> Option<PlayerCommand> {
         match self {
@@ -792,7 +808,10 @@ impl FlightCommand {
             | Self::Jettison { .. }
             | Self::Assign(_)
             | Self::MarkIntroSeen
-            | Self::OpenPlayerInfo => None,
+            | Self::OpenPlayerInfo
+            | Self::SetWindowWidth(_)
+            | Self::SetDoubleTimeKey(_)
+            | Self::SetSoundQuiet(_) => None,
         }
     }
 }
@@ -1639,6 +1658,9 @@ mod tests {
             (C::PressMissionInfo, Some(PlayerCommand::MissionInfo)),
             (C::PressPlayerInfo, Some(PlayerCommand::PlayerInfo)),
             (C::OpenPlayerInfo, None),
+            (C::SetWindowWidth(1024), None),
+            (C::SetDoubleTimeKey(true), None),
+            (C::SetSoundQuiet(true), None),
         ];
         for (command, gate) in gated {
             assert_eq!(command.gate(), gate, "{command:?}");

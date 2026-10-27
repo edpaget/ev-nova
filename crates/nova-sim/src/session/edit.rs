@@ -54,9 +54,10 @@ use super::Session;
 use super::entry::{Arrival, Entry, NoTraffic, Placement, ShipPlacement};
 use crate::catalog::{PilotCatalog, StellarId, SystemId};
 use crate::chance::NeverFires;
+use crate::control::Bit;
 use crate::date::GameDate;
 use crate::landing::is_dockable;
-use crate::reserves::Reserve;
+use crate::reserves::{Reserve, Reserves};
 
 /// Why [`Session::relocate`] refused to move the pilot, or
 /// [`Session::land_at`] to land it.
@@ -75,6 +76,28 @@ pub enum RelocateRefusal {
     /// The stellar is a hypergate or wormhole, or cannot be landed on.
     #[error("that stellar cannot be landed on")]
     NotLandable,
+}
+
+/// The pilot flying as the developer tools' desk reads it
+/// ([`Session::desk_reading`]): plain values, which the desk names.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeskReading {
+    /// The pilot's name.
+    pub name: String,
+    /// Its cash.
+    pub credits: i64,
+    /// The ship's shield, armour and fuel.
+    pub reserves: Reserves,
+    /// The date.
+    pub date: GameDate,
+    /// The date as the game writes it ([`Session::date_text`]).
+    pub date_text: String,
+    /// The system the pilot is in.
+    pub system: SystemId,
+    /// The stellar it is landed on; none in flight.
+    pub landed: Option<StellarId>,
+    /// The control bits set, ascending.
+    pub bits: Vec<Bit>,
 }
 
 impl Session {
@@ -184,6 +207,24 @@ impl Session {
         Ok(())
     }
 
+    /// What the developer tools' desk reads of the pilot flying, in one
+    /// value ([`DeskReading`]): its name and cash, the ship's reserves, the
+    /// date and its text, its system and the stellar it is landed on, and
+    /// the control bits set.
+    #[must_use]
+    pub fn desk_reading(&self) -> DeskReading {
+        DeskReading {
+            name: self.pilot.name().to_owned(),
+            credits: self.pilot.cash(),
+            reserves: self.reserves(),
+            date: self.date(),
+            date_text: self.date_text(),
+            system: self.system(),
+            landed: self.landed(),
+            bits: self.pilot.control_bits().iter().collect(),
+        }
+    }
+
     /// Sets the ship's `reserve` to `amount`, held within its gauge (none
     /// for NaN), landed or in flight, and gives what it holds; a save is
     /// due.
@@ -227,6 +268,33 @@ mod tests {
     fn session() -> Session {
         let catalog = catalog();
         Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies")
+    }
+
+    #[test]
+    fn the_desks_reading_is_the_pilots_reserves_date_place_and_bits() {
+        assert_eq!(session().desk_reading().landed, None, "in flight");
+        let catalog = atlas();
+        let mut session = landed(&catalog);
+        session.set_credits(77);
+        session.set_reserve(Reserve::Fuel, 120.0);
+        let bit = |n| crate::control::Bit::new(n).expect("in range");
+        session.set_control_bit(bit(42), true);
+        session.set_control_bit(bit(7), true);
+        let reading = session.desk_reading();
+        assert_eq!(
+            reading,
+            DeskReading {
+                name: "Ada".to_owned(),
+                credits: 77,
+                reserves: session.reserves(),
+                date: session.date(),
+                date_text: session.date_text(),
+                system: SystemId(130),
+                landed: Some(StellarId(128)),
+                bits: vec![bit(7), bit(42)],
+            }
+        );
+        assert_eq!(reading.reserves.fuel.now, 120.0);
     }
 
     #[test]
