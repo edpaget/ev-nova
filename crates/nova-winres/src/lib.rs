@@ -1,8 +1,12 @@
-//! The Windows resources `nova.exe` embeds, built by nova's build script
-//! on any platform: the icon (an `.ico` made from the macOS `.icns`,
-//! [`ico_from_icns`]), the version numbers ([`version_quad`]), the
-//! resource script that names them and the manifest ([`resource_script`]),
-//! and the linker arguments that go with them ([`link_args`]).
+//! What nova's build script makes, built on any platform: the Windows
+//! resources `nova.exe` embeds, and the app id every target's window
+//! takes from nova's `Cargo.toml` ([`bundle_identifier`]).
+//!
+//! The Windows resources are the icon (an `.ico` made from the macOS
+//! `.icns`, [`ico_from_icns`]), the version numbers ([`version_quad`]),
+//! the resource script that names them and the manifest
+//! ([`resource_script`]), and the linker arguments that go with them
+//! ([`link_args`]).
 //!
 //! The crate is plain, safe Rust with no platform code, so every decision
 //! the build script makes is tested everywhere. The script itself only
@@ -14,11 +18,13 @@
 //! manifest is `CREATEPROCESS_MANIFEST_RESOURCE_ID`; the version
 //! information is `VS_VERSION_INFO`.
 
+mod app_id;
 mod ico;
 mod link;
 mod script;
 mod version;
 
+pub use app_id::{AppIdError, bundle_identifier};
 pub use ico::{ICON_SIZES, IconError, ico_from_icns};
 pub use link::{MAIN_STACK_BYTES, link_args};
 pub use script::{Resources, escape, resource_script};

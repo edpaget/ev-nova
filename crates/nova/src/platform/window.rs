@@ -66,6 +66,25 @@ pub(crate) fn with_exe_icon(
         .with_taskbar_icon(icon)
 }
 
+/// `attributes` with the game's app id ([`APP_ID`](super::APP_ID)) as
+/// the window's Wayland app id and X11 `WM_CLASS` (class and instance),
+/// so the desktop file of that name gives the dock and task switcher the
+/// game's icon and name. The X11 and Wayland traits' `with_name` set the
+/// same field, so the one call covers both.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+pub(crate) fn with_app_id(
+    attributes: winit::window::WindowAttributes,
+) -> winit::window::WindowAttributes {
+    use winit::platform::wayland::WindowAttributesExtWayland;
+    WindowAttributesExtWayland::with_name(attributes, super::APP_ID, super::APP_ID)
+}
+
 /// A [`WindowPort`] over a winit window.
 #[derive(Clone, Debug)]
 pub struct WinitWindow(pub Arc<Window>);

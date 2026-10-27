@@ -1,7 +1,11 @@
+//! Sets `NOVA_APP_ID`, the window's app id (`nova::platform::APP_ID`),
+//! to `[package.metadata.bundle] identifier` in this package's
+//! `Cargo.toml`, for every target.
+//!
 //! Embeds `nova.exe`'s Windows resources: its icon (made from the macOS
 //! `.icns`), its version information and its application manifest
 //! (`packaging/windows/nova.exe.manifest`). For any other target it does
-//! nothing. Every decision is `nova_winres`'s; this only reads and writes
+//! no more. Every decision is `nova_winres`'s; this only reads and writes
 //! the files and runs the resource compiler.
 //!
 //! On a Windows host the resources must compile, so a Windows build
@@ -12,7 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
-use nova_winres::{Resources, ico_from_icns, link_args, resource_script};
+use nova_winres::{Resources, bundle_identifier, ico_from_icns, link_args, resource_script};
 
 /// The product's name, as `[package.metadata.bundle] name` gives it to
 /// the macOS bundle.
@@ -20,6 +24,13 @@ const PRODUCT_NAME: &str = "EV Nova";
 
 fn main() {
     let crate_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let cargo_toml = crate_dir.join("Cargo.toml");
+    println!("cargo:rerun-if-changed={}", cargo_toml.display());
+    let manifest = fs::read_to_string(&cargo_toml)
+        .unwrap_or_else(|error| panic!("{}: {error}", cargo_toml.display()));
+    let app_id = bundle_identifier(&manifest)
+        .unwrap_or_else(|error| panic!("{}: {error}", cargo_toml.display()));
+    println!("cargo:rustc-env=NOVA_APP_ID={app_id}");
     let packaging = crate_dir.join("..").join("..").join("packaging");
     let icns = packaging.join("macos").join("Nova.icns");
     let manifest = packaging.join("windows").join("nova.exe.manifest");

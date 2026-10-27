@@ -23,6 +23,14 @@ pub use dialogs::Dialogs;
 pub use runner::{Runner, event_loop};
 pub use window::WinitWindow;
 
+/// The game's app id: `[package.metadata.bundle] identifier` in nova's
+/// `Cargo.toml`, which `build.rs` reads. It names the Linux desktop file
+/// (`<APP_ID>.desktop`, which nova-bundle writes from the same key), and
+/// the window takes it as its Wayland app id and X11 `WM_CLASS`, so docks
+/// and task switchers match the window to the desktop file's icon and
+/// name.
+pub const APP_ID: &str = env!("NOVA_APP_ID");
+
 use std::time::Duration;
 
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent as WinitEvent};

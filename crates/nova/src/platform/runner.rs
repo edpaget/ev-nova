@@ -205,6 +205,14 @@ fn open(
         .with_resizable(true);
     #[cfg(windows)]
     let attributes = super::window::with_exe_icon(attributes);
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    let attributes = super::window::with_app_id(attributes);
     let window = event_loop
         .create_window(attributes)
         .map_err(|error| OpenFailure::Window(error.to_string()))?;

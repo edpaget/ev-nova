@@ -1,6 +1,6 @@
 [package]
 name = "nova-winres"
-description = "The Windows resources nova.exe embeds: its icon, version information and resource script, built on any platform"
+description = "What nova's build script makes, on any platform: the Windows resources nova.exe embeds (its icon, version information and resource script), and the app id read from nova's Cargo.toml"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,8 @@ publish.workspace = true
 [dependencies]
 # The errors' messages.
 thiserror.workspace = true
+# nova's Cargo.toml, read for its `[package.metadata.bundle] identifier`.
+toml.workspace = true
 
 [dev-dependencies]
 # Reads packaging/windows/nova.exe.manifest back as XML in the tests.
