@@ -304,16 +304,6 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
 }
 
 impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
-    /// Return (`ackComm`): clears the message line, and the session's
-    /// for a tick while a line shows ([`Session::comm_acknowledged`],
-    /// `_HandlePlayer` @0x6dd22-0x6dd65).
-    pub(super) fn acknowledge_message(&mut self) {
-        self.message = None;
-        if let Ok(session) = &mut self.sim.session {
-            session.comm_acknowledged();
-        }
-    }
-
     /// Holds `offer`'s prompt for the router, letting go of the flight
     /// keys; a mission accepted at once shows nothing here, its texts
     /// queued in the session, its before-movie first, for the router to

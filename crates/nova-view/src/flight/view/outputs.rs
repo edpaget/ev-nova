@@ -137,6 +137,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// Return (`ackComm`): clears the message line, and the flight's for
+    /// a tick while a line shows ([`FlightCommand::CommAcknowledged`],
+    /// `nova_sim::Session::comm_acknowledged`, `_HandlePlayer`
+    /// @0x6dd22-0x6dd65).
+    pub(super) fn acknowledge_message(&mut self) {
+        self.message = None;
+        self.send(FlightCommand::CommAcknowledged);
+    }
+
     /// Empties the message slot at a change the flight settles its line
     /// for itself: a landing, which sets it to 0
     /// (`_HandlePlayerDockRequest` @0x66d7f); the take-off after it, from
