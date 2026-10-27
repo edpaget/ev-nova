@@ -371,13 +371,16 @@ pub(super) fn slot_of(npc: &Npc) -> Slot {
 mod tests {
     use super::*;
     use crate::catalog::{MissionShip, ShipId};
+
     use crate::combat::hull::Condition;
+    use crate::flight::Controls;
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
     use crate::rulebook::Rulebook;
     use crate::session::mission_ships::tests::{
         accepted, jump_to, shipping, ships_catalog, take_off, ticks,
     };
+    use crate::testkit::work;
     use crate::traffic::npc::NpcId;
     use crate::traffic::warp_out::WarpGoal;
     use crate::warp;
@@ -449,7 +452,7 @@ mod tests {
         let mut player: f32 = 0.0;
         let mut npcs = std::collections::BTreeMap::new();
         for _ in 0..n {
-            session.tick(thrust);
+            work(session, &catalog, thrust);
             ticks(session, catalog, 1);
             player = player.max(session.player().velocity.length());
             for npc in session.npcs() {
@@ -815,7 +818,6 @@ mod tests {
                 session.space.traffic.departed()
             );
             let before: Vec<_> = led.iter().map(|&id| state(&session, id)).collect();
-            session.tick(crate::flight::Controls::default());
             ticks(&mut session, &catalog, 1);
             let clock = session.warp_clock().expect("in the warp");
             let v = warp::npc_warp_out_speed(
@@ -938,10 +940,11 @@ mod tests {
         assert_eq!(drawn(&session), expected);
     }
 
-    /// Advances the fight a tick, with nothing firing: the ships are laid
-    /// out in their layers at its end.
+    /// A pass, with nothing firing: the ships are laid out in their layers
+    /// at its end. The system is set up and no mission ship is due, so the
+    /// pass reads nothing of the catalog the session flies.
     fn combat_tick(session: &mut Session) {
-        session.tick_combat(crate::Rules::default(), &mut crate::chance::NeverFires);
+        work(session, &crate::testkit::catalog(), Controls::default());
     }
 
     /// [`with_traffic`] with the ships laid out once: the session, the

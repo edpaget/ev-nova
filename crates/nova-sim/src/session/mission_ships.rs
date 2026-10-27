@@ -1559,6 +1559,9 @@ pub(super) fn mission_ship_text(
 
 #[cfg(test)]
 pub(super) mod tests {
+    use crate::combat::Rules;
+    use crate::flight::Controls;
+    use crate::testkit::{Passive, work, work_with};
     use std::rc::Rc;
 
     use super::*;
@@ -1717,7 +1720,14 @@ pub(super) mod tests {
     }
 
     pub(in crate::session) fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// The slots of the mission ships in the system, in order.
@@ -2830,7 +2840,14 @@ pub(super) mod tests {
                 ..crate::testkit::planet(160, at.x, at.y)
             }];
             session.chart.listed = session.chart.sites.clone();
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
             assert!(session.space.npc(id).is_none(), "{reading:?}: killed");
             assert_eq!(session.npcs().len(), 1, "{reading:?}");
             let ships = ships_of(&session);
@@ -3414,7 +3431,14 @@ pub(super) mod tests {
     /// end of its warp out, on one traffic tick.
     fn jump_out(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
         warped(session, index);
-        session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// Lands the NPC at `index` on the system's first stellar, from rest
@@ -3425,7 +3449,14 @@ pub(super) mod tests {
         npc.goal = Goal::Land(site.id);
         npc.state.position = site.position;
         npc.state.velocity = Vec2::ZERO;
-        session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// Takes the NPC at `index` out of the system through gate 300, its
@@ -3437,7 +3468,14 @@ pub(super) mod tests {
             gate: StellarId(300),
             ticks_left: 1,
         };
-        session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// Whether a [`Fate::Departed`] is raised for `ship`, not yet settled.
@@ -3476,7 +3514,14 @@ pub(super) mod tests {
         );
         assert!(session.npcs().iter().any(|npc| npc.id == id), "still here");
         assert!(!departed(&session, id));
-        session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert!(session.npcs().iter().all(|npc| npc.id != id), "gone");
         assert!(departed(&session, id));
         assert_eq!(chased_and_left(&session), (1, 1));
@@ -4088,7 +4133,6 @@ pub(super) mod tests {
             tick(&mut session, &catalog);
             settle(&mut session, &catalog);
             assert_eq!(!goals_met(&session), cloaked, "met only once seen");
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
             ticks += 1;
         }
         assert_eq!(
@@ -5239,7 +5283,14 @@ pub(super) mod tests {
     /// `ticks` of the fight, by Nova's rules.
     fn fight(session: &mut Session, ticks: usize) {
         for _ in 0..ticks {
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            work_with(
+                session,
+                &catalog(),
+                Controls::default(),
+                &Passive,
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
         }
     }
 
@@ -5969,7 +6020,14 @@ pub(super) mod tests {
         assert_eq!(session.npcs()[0].goal, Goal::Hold);
         let ticks = 120;
         for _ in 0..ticks {
-            session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         let ship = session
             .npcs()
@@ -5993,7 +6051,14 @@ pub(super) mod tests {
         let id = session.npcs()[0].id;
         assert_eq!(session.npcs()[0].goal, Goal::Idle);
         for _ in 0..120 {
-            session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         let goal = session
             .npcs()
@@ -6116,7 +6181,14 @@ pub(super) mod tests {
         session.take_off(&catalog, &mut chance).expect("takes off");
         assert!(marked(&session).is_empty(), "none at setup");
         for _ in 0..199 {
-            session.tick_traffic(&catalog, &NovaAi::default(), &mut chance);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut chance,
+            );
         }
         assert_eq!(marked_types(&session), [ShipId(200); 3]);
     }
@@ -6204,7 +6276,14 @@ pub(super) mod tests {
         assert!(marked(&session).is_empty(), "none at setup");
         forget_uniform_type(&mut session);
         for _ in 0..199 {
-            session.tick_traffic(&catalog, &NovaAi::default(), &mut chance);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut chance,
+            );
         }
         let types = marked_types(&session);
         assert_eq!(types.len(), 3);
@@ -6480,7 +6559,7 @@ pub(super) mod tests {
             "on screen"
         );
         assert_eq!(session.target_brackets().expect("bracketed").expand, 0.0);
-        session.tick(crate::Controls::default());
+        work(&mut session, &catalog, crate::Controls::default());
         assert_eq!(session.target_brackets().expect("bracketed").expand, 0.0);
     }
 
