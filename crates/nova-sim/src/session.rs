@@ -558,6 +558,8 @@ mod pirate_plunder;
 mod planet_weapons;
 mod player_cloak;
 mod player_downed;
+#[cfg(test)]
+mod player_exits;
 mod player_info;
 mod player_led;
 mod player_repair;

@@ -9628,13 +9628,21 @@ mod tests {
         start(combat.shots().last().expect("a shot"))
     }
 
+    /// Where the newest shot left from, after `ships[0]` fires in its own
+    /// phase ([`phase::fire`]).
+    fn fired_start(combat: &mut Combat, ships: &mut [Ship]) -> Vec2 {
+        let firer = ships[0].id;
+        phase::fire(combat, ships, firer, &NovaDisable);
+        start(combat.shots().last().expect("a shot"))
+    }
+
     #[test]
     fn a_ships_guns_fire_from_its_exit_points_in_turn() {
         let mut combat = Combat::default();
         let ship = Ship::at(1, 50.0, 50.0).armed(gun()).facing(0.0);
         let mut ships = [ship.of(exits_at(0, NOSE_GUNS))];
         let starts: Vec<Vec2> = (0..3)
-            .map(|_| next_start(&mut combat, &mut ships))
+            .map(|_| fired_start(&mut combat, &mut ships))
             .collect();
         for (at, expected) in starts
             .iter()
@@ -9658,11 +9666,11 @@ mod tests {
         };
         let mut ships = [player.of(exits_at(0, NOSE_GUNS))];
         assert!(close_to(
-            next_start(&mut combat, &mut ships),
+            fired_start(&mut combat, &mut ships),
             Vec2::new(10.0, 3.0)
         ));
         assert!(close_to(
-            next_start(&mut combat, &mut ships),
+            fired_start(&mut combat, &mut ships),
             Vec2::new(10.0, -3.0)
         ));
     }
@@ -9679,13 +9687,13 @@ mod tests {
             .facing(0.0)
             .of(exits_at(0, NOSE_GUNS))];
         assert!(close_to(
-            next_start(&mut combat, &mut ships),
+            fired_start(&mut combat, &mut ships),
             Vec2::new(5.0, 5.0)
         ));
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 5.0, 5.0).armed(gun()).facing(0.0)];
         assert!(close_to(
-            next_start(&mut combat, &mut ships),
+            fired_start(&mut combat, &mut ships),
             Vec2::new(5.0, 5.0)
         ));
     }
@@ -9704,7 +9712,7 @@ mod tests {
                 .picking(128)
                 .of(exits_at(0, NOSE_GUNS))
         }];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let starts: Vec<Vec2> = combat.shots().iter().map(start).collect();
         assert_eq!(starts.len(), 2);
         assert!(close_to(starts[0], Vec2::new(3.0, -10.0)), "{starts:?}");
@@ -9720,7 +9728,7 @@ mod tests {
             .drawn_at(4.0)
             .of(exits_at(0, NOSE_GUNS))];
         assert!(
-            close_to(next_start(&mut combat, &mut ships), Vec2::new(3.0, -10.0)),
+            close_to(fired_start(&mut combat, &mut ships), Vec2::new(3.0, -10.0)),
             "frame 0, as drawn"
         );
         assert_eq!(combat.shots()[0].heading, 90.0, "along its heading");
@@ -9733,7 +9741,7 @@ mod tests {
             .armed(gun())
             .facing(0.0)
             .of(exits_at(0, NOSE_GUNS))];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let at: Vec<Vec2> = combat
             .take_events()
             .iter()
@@ -9768,7 +9776,7 @@ mod tests {
             },
         ];
         let target = ships[1].fighter().as_target();
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let shot = &combat.shots()[0];
         let from = |position| ShipState {
             position,
@@ -9804,7 +9812,7 @@ mod tests {
         }];
         let mut velocities = Vec::new();
         for _ in 0..3 {
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
             let shot = combat.shots().last().expect("a shot");
             assert_eq!(shot.heading, 0.0, "facing as aimed");
             velocities.push(shot.velocity);
@@ -9834,7 +9842,7 @@ mod tests {
             .armed(broadside)
             .facing(45.5)
             .of(exits_at(0, [(-3, 10); 4]))];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let velocity = combat.shots()[0].velocity;
         // 45.5 - 90 wraps to 315.5 in float (@0x3ee7e-0x3eea4), then
         // `cvttss2si` (@0x3eeb8) takes 315, not trunc(-44.5) + 360 = 316.
@@ -9848,7 +9856,7 @@ mod tests {
             .armed(gun())
             .facing(45.5)
             .of(exits_at(0, [(3, 10); 4]))];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let shot = combat.shots()[0];
         assert_eq!(shot.heading, 45.0, "trunc(45.5) (@0x3e677)");
         assert_eq!(shot.velocity, trig::accel(45, 10.0));
@@ -9856,8 +9864,8 @@ mod tests {
 
     /// The velocity and heading of the shot of `guidance` and `inaccuracy`
     /// that `ship`, moving (1, 2) and facing up, fires from a starboard
-    /// exit, after its first move: the player's on the tick it is fired,
-    /// an NPC's on the next.
+    /// exit, after it fires in its own phase and the shot takes its first
+    /// move in `_HandleShot`.
     fn fired_broadside(ship: Ship, guidance: i16, inaccuracy: i16) -> (Vec2, f32) {
         let mut combat = Combat::default();
         let record = WeaponRecord {
@@ -9873,15 +9881,10 @@ mod tests {
             },
             ..ship.armed(record).of(exits_at(0, [(3, 10); 4]))
         }];
-        tick(&mut combat, &mut ships, &NovaDisable);
-        if combat
-            .shots()
-            .last()
-            .is_some_and(|shot| shot.moved_from.is_none())
-        {
-            ships[0].trigger = QUIET;
-            tick(&mut combat, &mut ships, &NovaDisable);
-        }
+        let firer = ships[0].id;
+        phase::fire(&mut combat, &mut ships, firer, &NovaDisable);
+        ships[0].trigger = QUIET;
+        phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
         let shot = combat.shots().last().expect("a shot");
         (shot.velocity, shot.heading)
     }
@@ -9926,7 +9929,7 @@ mod tests {
         };
         let mut ships = [defender.armed(broadside), attacker];
         missile_in_flight(&mut combat, &mut ships);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let shot = combat
             .shots()
             .iter()
@@ -9956,13 +9959,17 @@ mod tests {
             .armed(exit_beam(0))
             .facing(0.0)
             .of(exits_at(3, [(10, 20); 4]))];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        // Fired in the ship loop, it is put on its exit as `_HandleBeams`
+        // first follows its firer.
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         let beam = combat.beams()[0];
         assert!(close_to(beam.start, Vec2::new(110.0, 80.0)), "{beam:?}");
         assert!(close_to(beam.end, Vec2::new(110.0, -220.0)), "{beam:?}");
         ships[0].trigger = QUIET;
         ships[0].state.heading = 95.0;
-        tick(&mut combat, &mut ships, &NovaDisable);
+        // `_HandleBeams` keeps it on its firer's exit.
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         let beam = combat.beams()[0];
         assert!(
             close_to(beam.start, Vec2::new(120.0, 110.0)),
@@ -9981,7 +9988,9 @@ mod tests {
                 .of(exits_at(3, [(30, 0); 4])),
             Ship::at(2, 0.0, 100.0),
         ];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        // `_HandleBeams` aims it.
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         let beam = combat.beams()[0];
         assert!(close_to(beam.start, Vec2::new(30.0, 0.0)), "{beam:?}");
         // A whole degree from the exit: 196.7 truncates to 196.
@@ -10022,7 +10031,10 @@ mod tests {
                     .of(manticore()),
                 Ship::at(2, x, 0.0),
             ];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            // Its exit taken as it fires, it is put there as
+            // `_HandleBeams` first follows its firer.
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
             let beam = combat.beams()[0];
             assert_eq!(beam.exit, Some(exit), "{x}");
             assert!(close_to(beam.start, Vec2::new(at, 0.0)), "{x}: {beam:?}");
@@ -10051,7 +10063,7 @@ mod tests {
                     .of(exits_at(0, guns)),
                 Ship::at(2, x, 0.0),
             ];
-            let from = next_start(&mut combat, &mut ships);
+            let from = fired_start(&mut combat, &mut ships);
             assert!(close_to(from, Vec2::new(at, 0.0)), "{x}: {from:?}");
             assert_eq!(
                 ships[0].armament.exit_cursors().next(ExitKind::Gun),
@@ -10109,7 +10121,7 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = defended();
         missile_in_flight(&mut combat, &mut ships);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let fired = defence_shots(&combat);
         assert_eq!(fired.len(), 1, "{:?}", combat.shots());
         let (at, heading) = fired[0];
@@ -10132,31 +10144,35 @@ mod tests {
         combat.set_pd_exit_step(RuleSource::Bible);
         let mut ships = defended();
         missile_in_flight(&mut combat, &mut ships);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let fired = defence_shots(&combat);
         assert!(close_to(fired[0].0, Vec2::new(10.0, 0.0)), "{fired:?}");
         assert_eq!(ships[0].armament.exit_cursors().next(ExitKind::Turret), 1);
     }
 
     #[test]
-    fn the_players_point_defence_steps_a_shared_exit_cursor_before_its_trigger() {
-        // `_HandlePlayer` runs `_HandleShipPointDefense` @0x68c74 before
-        // `_FirePlayerWeapon` @0x6ab55, so point defence steps the turret
-        // exits' cursor first (`_ModifyShotStartPosition`).
+    fn the_players_point_defence_and_trigger_step_one_shared_exit_cursor() {
+        // Point defence and the trigger both step the turret exits' cursor
+        // (`_ModifyShotStartPosition`). `_HandlePlayer` runs
+        // `_HandleShipPointDefense` @0x68c74 before `_FirePlayerWeapon`
+        // @0x6ab55: the session's
+        // `player_exits::the_players_point_defence_steps_the_turret_exits_before_its_trigger`.
         let turret_gun = WeaponRecord {
             exit_type: 1,
             ..gun()
         };
-        for (source, defence_from, gun_from, cursor) in [
+        for (source, defence_from, stepped, gun_from, cursor) in [
             (
                 RuleSource::Engine,
                 Vec2::new(20.0, 0.0),
+                2,
                 Vec2::new(30.0, 0.0),
                 3,
             ),
             (
                 RuleSource::Bible,
                 Vec2::new(10.0, 0.0),
+                1,
                 Vec2::new(20.0, 0.0),
                 2,
             ),
@@ -10172,16 +10188,17 @@ mod tests {
                 (WeaponSpec::new(&exit_defence()), 1),
                 (WeaponSpec::new(&turret_gun), 1),
             ]);
-            // B's missile in flight first, the player quiet.
-            ships[0].trigger = Trigger {
-                point_defence: false,
-                ..QUIET
-            };
-            tick(&mut combat, &mut ships, &NovaDisable);
+            missile_in_flight(&mut combat, &mut ships);
             assert_eq!(combat.shots().len(), 1, "{source:?}: the missile");
-            ships[1].trigger = QUIET;
             ships[0].trigger = PRIMARY_HELD;
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::run(
+                &mut combat,
+                &mut ships,
+                &NovaDisable,
+                |combat, fighters, arena, chance| {
+                    combat.defend_player(fighters, arena, chance);
+                },
+            );
             let fired = defence_shots(&combat);
             assert_eq!(fired.len(), 1, "{source:?}: {:?}", combat.shots());
             let at = fired[0].0;
@@ -10189,6 +10206,13 @@ mod tests {
                 close_to(at, defence_from),
                 "{source:?}: point defence from {at:?}"
             );
+            assert_eq!(
+                ships[0].armament.exit_cursors().next(ExitKind::Turret),
+                stepped,
+                "{source:?}: stepped by point defence"
+            );
+            // The trigger fires from the cursor point defence left.
+            phase::fire_player(&mut combat, &mut ships, &NovaDisable);
             let guns: Vec<Vec2> = combat
                 .shots()
                 .iter()
@@ -10225,7 +10249,7 @@ mod tests {
                 .armed(gun())
                 .facing(0.0)
                 .of(hull_of(raw))];
-            let at = next_start(&mut combat, &mut ships);
+            let at = fired_start(&mut combat, &mut ships);
             assert!(close_to(at, Vec2::new(0.0, behind)), "{source:?}: {at:?}");
         }
         assert_eq!(Compression::from(RuleSource::Bible), Compression::ByHeading);
