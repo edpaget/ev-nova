@@ -379,6 +379,8 @@ impl MissionRun {
 
 #[cfg(test)]
 mod tests {
+
+    use crate::testkit::work;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -638,7 +640,7 @@ mod tests {
         assert_eq!(settled.moved, Some(SystemId(130)), "M and N's entry owed");
         assert!(session.leave_due(), "Q held");
         let _ = session.take_off(&catalog, &mut Scripted::default());
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert!(
             session
                 .take_sounds()

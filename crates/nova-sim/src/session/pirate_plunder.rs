@@ -209,10 +209,13 @@ mod tests {
     use crate::ai::pirate::PirateWarship;
     use crate::ai::plunder_contents::{CargoLine, ClassMarines};
     use crate::catalog::{JunkId, MARINES, MissionRecord, OutfitId, ShipRecord};
+
     use crate::combat::ShipRef;
     use crate::control::{Bit, Script};
+    use crate::flight::Controls;
     use crate::session::tests::{armed, facing_an_npc};
     use crate::testkit::{Draws, FAST, FakePilotCatalog, carrying, mission, outfit, ship};
+    use crate::testkit::{Passive, work_with};
     use crate::traffic::plunder_dock::{DockSub, Docking};
 
     fn bit(n: u16) -> Bit {
@@ -443,10 +446,24 @@ mod tests {
         settle(&mut session, &mut Draws::of(&[]));
         assert!(session.player_boarded());
         assert!(session.player_side().boarded);
-        session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 8]));
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            crate::Rules::default(),
+            &mut Draws::of(&[0; 8]),
+        );
         assert!(session.player_boarded(), "still disabled");
         session.ship.condition = Condition::Intact;
-        session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 8]));
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            crate::Rules::default(),
+            &mut Draws::of(&[0; 8]),
+        );
         assert!(!session.player_boarded(), "@0x68b02");
         assert!(!session.player_side().boarded);
     }
@@ -499,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn a_docked_pirates_plunder_reaches_the_player_in_its_steps_combat_tick() {
+    fn a_docked_pirates_plunder_reaches_the_player_in_its_pass() {
         let catalog = catalog_of(vec![plunderable(140, 0x8000)]);
         let (mut session, pirate) = plundering(&catalog, 20);
         assert!(session.pilot.missions.put(0, carrying(140, 0)));
@@ -513,13 +530,15 @@ mod tests {
             sub: DockSub::Dock,
         });
         npc.ai_wait = 0;
-        session.tick_traffic(
+        // Queued by its think and settled with the pass's line work.
+        work_with(
+            &mut session,
             &catalog,
+            Controls::default(),
             &PirateWarship::default(),
+            crate::Rules::default(),
             &mut Draws::of(&[0; 64]),
         );
-        assert_eq!(session.pilot.cash, 10_000, "held for the combat tick");
-        session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 64]));
         assert_eq!(
             session.space.npc(pirate).map(|npc| npc.goal),
             Some(crate::ai::Goal::Drift)

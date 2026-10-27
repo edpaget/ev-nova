@@ -252,11 +252,14 @@ fn scanner(pilot: &Pilot, statics: &Statics) -> Scanner {
 #[allow(clippy::float_cmp)]
 mod tests {
     use crate::cloak::{CloakShown, FADE_FULL, SCAN_SCREEN, SEEN_AT_FULL_FADE};
+    use crate::combat::Rules;
     use crate::escort::FormationSlot;
+    use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::mission::ships::ShipBehav;
     use crate::session::Session;
     use crate::session::tests::{CAN_CLOAK, CLOAKED, armed, facing_an_npc, holding_260, scanning};
+    use crate::testkit::work_with;
     use crate::traffic::npc::MissionMark;
 
     /// The engine's reading of `cloak_reserves`.
@@ -564,7 +567,14 @@ mod tests {
         npc.cloak = CLOAKED;
         npc.goal = goal;
         for _ in 0..ticks {
-            session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Keep,
+                Rules::default(),
+                &mut Draws::of(&[0; 64]),
+            );
         }
         session.npcs()[0].cloak
     }
@@ -605,7 +615,14 @@ mod tests {
             let class = armament.clone();
             armament.force_burst_reload(&class);
             npc.armament = armament;
-            session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Keep,
+                Rules::default(),
+                &mut Draws::of(&[0; 64]),
+            );
             assert_eq!(session.npcs()[0].cloak.direction == 1, cloaks, "{source:?}");
         }
     }
@@ -650,7 +667,14 @@ mod tests {
             npc.cloak_gear.flags2 = CLOAK_TRAVELLING;
             npc.cloak = CLOAKED;
             npc.goal = Goal::Land(StellarId(128));
-            session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Keep,
+                Rules::default(),
+                &mut Draws::of(&[0; 64]),
+            );
             assert_eq!(session.npcs()[0].cloak.direction >= 0, holds, "{source:?}");
         }
     }
@@ -765,14 +789,20 @@ mod tests {
             assert_eq!(session.world().area_cloak_hold, source);
             session.ship.cloak.cloak = CLOAKED;
             session.space.traffic.npcs_mut()[0].cloak = CLOAKED;
-            session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Keep,
+                Rules::default(),
+                &mut Draws::of(&[0; 64]),
+            );
             assert_eq!(session.npcs()[0].cloak.direction >= 0, holds, "{source:?}");
         }
     }
 
     #[test]
     fn an_escort_in_close_formation_keeps_formation_on_the_area_cloaked_player() {
-        use crate::chance::NeverFires;
         use crate::combat::Rules;
         use crate::rulebook::RuleSource;
         use nova_sim_base::fixture::Draws;
@@ -782,8 +812,14 @@ mod tests {
             session.hold_cloak(true);
             let mut read_cloaked = false;
             for frame in 0..120 {
-                session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
-                session.tick_combat(Rules::default(), &mut NeverFires);
+                work_with(
+                    &mut session,
+                    &catalog,
+                    Controls::default(),
+                    &Keep,
+                    Rules::default(),
+                    &mut Draws::of(&[0; 64]),
+                );
                 let escort = &session.npcs()[0];
                 assert!(escort.close_form, "{source:?} {frame}: keeps formation");
                 read_cloaked |= escort.cloak.is_cloaked();

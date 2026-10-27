@@ -140,12 +140,15 @@ impl PlayerShip {
 mod tests {
     use super::*;
     use crate::catalog::{OutfitId, ShipId, SystemId};
+
     use crate::combat::hull::Condition;
+    use crate::flight::Controls;
     use crate::flight::{Face, Turn, facing};
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
     use crate::pre_jump::slow_enough;
     use crate::stats::{INERTIAL_DAMPENER, INERTIALESS_HULL};
+    use crate::testkit::work;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, outfit};
     use crate::{RuleKey, RuleSource, Rulebook};
 
@@ -176,6 +179,8 @@ mod tests {
     /// A session of `catalog` at rest at the centre facing `heading`.
     fn flying(catalog: &FakePilotCatalog, heading: f32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
+        // Set up, so a pass keeps the NPCs a test adds.
+        session.populate(catalog, &mut crate::chance::NeverFires);
         session.ship.settle_box(&session.pilot, &session.setup);
         session.ship.player.position = Vec2::ZERO;
         session.ship.player.velocity = Vec2::ZERO;
@@ -201,17 +206,25 @@ mod tests {
     /// coasts until the velocity has followed: what the ship is then.
     fn thrust_turn_and_coast(session: &mut Session) -> (Vec2, f32) {
         for _ in 0..60 {
-            session.tick(held(true, Turn::None, false));
+            work(
+                session,
+                &crate::testkit::catalog(),
+                held(true, Turn::None, false),
+            );
         }
         let top = session.top_speed();
         assert!((session.player_speed() - top).abs() < 1e-4, "at full speed");
         assert!(near(session.ship.player.velocity, facing(90.0) * top));
         for _ in 0..30 {
-            session.tick(held(false, Turn::Left, false));
+            work(
+                session,
+                &crate::testkit::catalog(),
+                held(false, Turn::Left, false),
+            );
         }
         assert_eq!(session.ship.player.heading, 0.0);
         for _ in 0..30 {
-            session.tick(Controls::default());
+            work(session, &crate::testkit::catalog(), Controls::default());
         }
         (session.ship.player.velocity, session.player_speed())
     }
@@ -236,19 +249,20 @@ mod tests {
     #[test]
     fn an_inertialess_player_flies_along_its_heading_with_no_drift_hull_or_dampener_alike() {
         let mut by_hull = flying(&hull(), 90.0);
-        let mut by_outfit = flying(&dampened(), 90.0);
+        let catalog = dampened();
+        let mut by_outfit = flying(&catalog, 90.0);
         let (velocity, speed) = thrust_turn_and_coast(&mut by_hull);
         let top = by_hull.top_speed();
         assert!(near(velocity, facing(0.0) * top), "{velocity:?}");
         assert!((speed - top).abs() < 1e-4);
         let at = by_hull.ship.player.position;
-        by_hull.tick(Controls::default());
+        work(&mut by_hull, &catalog, Controls::default());
         assert!(
             near(by_hull.ship.player.position - at, facing(0.0) * top),
             "no drift"
         );
         assert_eq!(thrust_turn_and_coast(&mut by_outfit), (velocity, speed));
-        by_outfit.tick(Controls::default());
+        work(&mut by_outfit, &catalog, Controls::default());
         assert_eq!(
             by_outfit.ship.player, by_hull.ship.player,
             "the same flight"
@@ -266,12 +280,13 @@ mod tests {
 
     #[test]
     fn an_inertial_player_still_drifts_after_turning() {
-        let mut session = flying(&catalog(), 90.0);
+        let catalog = catalog();
+        let mut session = flying(&catalog, 90.0);
         for _ in 0..60 {
-            session.tick(held(true, Turn::None, false));
+            work(&mut session, &catalog, held(true, Turn::None, false));
         }
         for _ in 0..30 {
-            session.tick(held(false, Turn::Left, false));
+            work(&mut session, &catalog, held(false, Turn::Left, false));
         }
         assert!(
             session.ship.player.velocity.x > 5.0,
@@ -282,7 +297,8 @@ mod tests {
 
     #[test]
     fn reverse_brakes_the_speed_by_a_ticks_acceleration_to_none_and_gives_no_aim() {
-        let mut session = flying(&hull(), 90.0);
+        let catalog = hull();
+        let mut session = flying(&catalog, 90.0);
         session.ship.player_speed = 1.0;
         session.ship.player.velocity = Vec2::new(1.0, 0.0);
         session.ship.aim = 45;
@@ -290,17 +306,17 @@ mod tests {
             .ship
             .flying_handling(&session.pilot, &session.setup, session.mode.jump())
             .accel;
-        session.tick(held(false, Turn::None, true));
+        work(&mut session, &catalog, held(false, Turn::None, true));
         assert!((session.player_speed() - (1.0 - accel)).abs() < 1e-6);
         assert_eq!(session.ship.player.heading, 90.0, "reverse turns nothing");
         assert_eq!(session.ship.aim, 45, "and writes no aim");
-        session.tick(held(false, Turn::Right, true));
+        work(&mut session, &catalog, held(false, Turn::Right, true));
         assert_eq!(
             session.ship.player.heading, 93.0,
             "the turn keys still turn"
         );
         for _ in 0..20 {
-            session.tick(held(false, Turn::None, true));
+            work(&mut session, &catalog, held(false, Turn::None, true));
         }
         assert_eq!(session.player_speed(), 0.0, "floored at none");
         assert_eq!(session.ship.player.velocity, Vec2::ZERO);
@@ -308,53 +324,60 @@ mod tests {
 
     #[test]
     fn a_disabled_inertialess_players_speed_falls_by_0_985_a_tick_and_its_glow_by_two() {
-        let mut session = flying(&hull(), 90.0);
+        let catalog = hull();
+        let mut session = flying(&catalog, 90.0);
         session.ship.player_speed = 4.0;
         session.ship.player.velocity = Vec2::new(4.0, 0.0);
         session.ship.engine_glow = 10;
+        // Its armour down to a disabled ship's, so the pass's display
+        // keeps it disabled.
+        session.pilot.reserves.armor.now = 1.0;
         session.ship.condition = Condition::Disabled;
-        session.tick(held(true, Turn::Left, true));
+        work(&mut session, &catalog, held(true, Turn::Left, true));
         assert!((session.player_speed() - 4.0 * 0.985).abs() < 1e-5);
         assert_eq!(session.engine_glow(), 8, "coasting and disabled");
         assert_eq!(session.ship.player.heading, 90.0, "no keys");
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert!((session.player_speed() - 4.0 * 0.985 * 0.985).abs() < 1e-5);
         assert_eq!(session.engine_glow(), 6);
     }
 
     #[test]
     fn coasting_at_full_speed_holds_the_glow_and_thrusting_there_settles_it_at_23() {
-        let mut session = flying(&hull(), 0.0);
+        let catalog = hull();
+        let mut session = flying(&catalog, 0.0);
         session.ship.player_speed = session.top_speed();
         session.ship.player.velocity = facing(0.0) * session.top_speed();
         session.ship.engine_glow = 15;
         for _ in 0..10 {
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
         }
         assert_eq!(session.engine_glow(), 15, "coast -1, follow +1");
         for _ in 0..10 {
-            session.tick(held(true, Turn::None, false));
+            work(&mut session, &catalog, held(true, Turn::None, false));
         }
         assert_eq!(session.engine_glow(), 23);
     }
 
     #[test]
     fn coasting_at_half_speed_from_cruise_the_glow_falls_to_12() {
-        let mut session = flying(&hull(), 0.0);
+        let catalog = hull();
+        let mut session = flying(&catalog, 0.0);
         let half = session.top_speed() / 2.0;
         session.ship.player_speed = half;
         session.ship.player.velocity = facing(0.0) * half;
         session.ship.engine_glow = 24;
         for _ in 0..30 {
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
         }
         assert_eq!(session.engine_glow(), 12);
     }
 
     #[test]
     fn the_inertialess_pre_jump_brakes_the_speed_without_turning_then_turns_to_the_bearing() {
+        let catalog = hull();
         let mut session = super::super::tests::bound_for_131(
-            &hull(),
+            &catalog,
             super::super::tests::OUT,
             Vec2::new(0.0, -6.0),
             0.0,
@@ -366,13 +389,13 @@ mod tests {
             .ship
             .flying_handling(&session.pilot, &session.setup, session.mode.jump())
             .accel;
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert!((session.player_speed() - (6.0 - accel)).abs() < 1e-5);
         assert_eq!(session.ship.player.heading, 0.0, "the brake does not turn");
         assert_eq!(session.ship.aim, 7, "nor aim");
         let mut braking = 1;
         while !slow_enough(session.ship.player.velocity) {
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
             assert_eq!(session.ship.player.heading, 0.0);
             braking += 1;
             assert!(braking < 100, "{:?}", session.ship.player);
@@ -382,7 +405,7 @@ mod tests {
             if session.jumping().is_some() {
                 break;
             }
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
         }
         assert_eq!(session.jumping(), Some(SystemId(131)));
         assert!(
@@ -399,8 +422,9 @@ mod tests {
     /// 1, where the inertial ramp holds 0 and no speed would lower it.
     #[test]
     fn the_inertialess_pre_jump_brakes_the_glow_toward_the_braked_speed() {
+        let catalog = hull();
         let mut session = super::super::tests::bound_for_131(
-            &hull(),
+            &catalog,
             super::super::tests::OUT,
             Vec2::new(0.0, -6.0),
             0.0,
@@ -413,7 +437,7 @@ mod tests {
             .max_speed;
         for (base, glow) in [(16_i16, 15_i16), (0, 1)] {
             session.ship.engine_glow = base;
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
             assert!(!slow_enough(session.ship.player.velocity), "still braking");
             let follow = Follow::Speed {
                 speed: session.player_speed(),

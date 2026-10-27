@@ -118,9 +118,12 @@ mod tests {
     use crate::ai::NovaAi;
     use crate::catalog::SiteAnimation;
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
+    use crate::flight::Controls;
     use crate::flight::ShipState;
     use crate::gate::WORMHOLE;
     use crate::geometry::Vec2;
+    use crate::testkit::work_with;
     use crate::testkit::{FAST, FakePilotCatalog, begin_jump_now, catalog, fly_out, planet};
     use crate::traffic::npc::{Mode, Npc};
 
@@ -160,7 +163,14 @@ mod tests {
     }
 
     fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// Adds a ship of FAST coming out of hypergate 300, waiting `wait`

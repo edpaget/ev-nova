@@ -136,11 +136,14 @@ mod tests {
     use super::*;
     use crate::ai::Goal;
     use crate::ai::wimpy::WimpyTrader;
+
     use crate::combat::ShipRef;
+    use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::hail::CommNote;
     use crate::session::mission_ships::tests::{goal_catalog, in_flight};
     use crate::session::tests::{armed, facing_an_npc};
+    use crate::testkit::work_with;
     use crate::testkit::{Draws, FakePilotCatalog};
     use crate::traffic::plunder::PirateEvent;
     use std::cell::RefCell;
@@ -389,8 +392,14 @@ mod tests {
         npc.state.position = Vec2::new(2.0, 0.0);
         npc.state.velocity = Vec2::ZERO;
         let tick = |session: &mut Session| {
-            session.tick_traffic(&catalog, &WimpyTrader::default(), &mut Draws::of(&[0; 64]));
-            session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 64]));
+            work_with(
+                session,
+                &catalog,
+                Controls::default(),
+                &WimpyTrader::default(),
+                crate::Rules::default(),
+                &mut Draws::of(&[0; 64]),
+            );
             session.take_comm()
         };
         let mut boarded = false;

@@ -309,7 +309,8 @@ mod tests {
     use super::*;
     use crate::catalog::MissionShip;
     use crate::chance::NeverFires;
-    use crate::combat::Rules;
+
+    use crate::flight::Controls;
     use crate::gate::GateKind;
     use crate::rulebook::Rulebook;
     use crate::session::gate_follow::tests::{exit_gate_raising, following, gated};
@@ -317,6 +318,7 @@ mod tests {
         accepted, jump_to, shipping, ships_catalog, take_off,
     };
     use crate::testkit::FakePilotCatalog;
+    use crate::testkit::work;
     use crate::traffic::npc::NpcId;
 
     /// Mission 140's two ships, which never join the player, there from
@@ -366,7 +368,11 @@ mod tests {
         assert!(!drawn(&session, new), "not drawn");
         let (_, terms) = session.fight_terms();
         assert_eq!(terms.last().map(|terms| terms.sprite), Some(None));
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert!(walked(&session, new), "walked once displayed");
         assert!(drawn(&session, new), "drawn once displayed");
     }
@@ -392,7 +398,11 @@ mod tests {
             !drawn(&session, ShipRef::Npc(new)),
             "its slot showed another"
         );
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert!(drawn(&session, ShipRef::Npc(new)));
     }
 
@@ -553,7 +563,11 @@ mod tests {
         let a = ShipRef::Npc(session.npcs()[0].id);
         assert_eq!(session.hover_place(a), HoverPlace::Own);
         assert_eq!(session.hover_place(ShipRef::Player), HoverPlace::Own);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.hover_place(a), HoverPlace::Own);
     }
 
@@ -562,7 +576,11 @@ mod tests {
         let (_, mut session) = flying(Rulebook::default());
         let new = ShipRef::Npc(newcomer(&mut session));
         assert_eq!(session.hover_place(new), HoverPlace::Unplaced);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.hover_place(new), HoverPlace::Own, "once displayed");
     }
 

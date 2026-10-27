@@ -76,10 +76,13 @@ mod tests {
     use crate::ai::Peaceful;
     use crate::ai::afterburner::RATING_ROLL;
     use crate::catalog::{HullRecord, ShipId, ShipRecord, SystemId};
+    use crate::combat::Rules;
     use crate::combat::hull::{AFTERBURNER_ALWAYS, AFTERBURNER_BY_RATING};
+    use crate::flight::Controls;
     use crate::pilot::{Escort, Pilot};
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::{Assigned, Assignment};
+    use crate::testkit::work_with;
     use crate::testkit::{
         FAST, FakePilotCatalog, Ranged, bar, catalog, hull, jump_with, land_now, planet, ship,
     };
@@ -217,7 +220,14 @@ mod tests {
         }];
         let mut session = Session::fly(catalog, pilot).expect("flies");
         session.pilot.combat_rating = 1000;
-        session.tick_traffic(catalog, &Peaceful, chance);
+        work_with(
+            &mut session,
+            catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            chance,
+        );
         session
     }
 

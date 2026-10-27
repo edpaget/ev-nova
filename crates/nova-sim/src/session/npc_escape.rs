@@ -314,12 +314,14 @@ mod tests {
     use crate::catalog::{GovtId, PersonId, ShipId, ShipRecord, WeaponId, WeaponRecord};
     use crate::combat::armament::LauncherRounds;
     use crate::combat::{CombatEvent, Rules};
+    use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
     use crate::pilot::Pilot;
     use crate::rulebook::Rulebook;
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, govt, hull, npc, ship, weapon};
+    use crate::testkit::{Passive, work_with};
     use crate::traffic::SPAWN_RESERVE;
     use crate::traffic::npc::NpcPerson;
 
@@ -410,9 +412,14 @@ mod tests {
 
     fn flying(catalog: &FakePilotCatalog, cut: RuleSource) -> Session {
         let pilot = Pilot::new(catalog, "Ada").expect("starts");
-        Session::fly(catalog, pilot)
+        let mut session = Session::fly(catalog, pilot)
             .expect("flies")
-            .with_rules(Rulebook::default().with_override(RuleKey::EscapeShipCut, cut))
+            .with_rules(Rulebook::default().with_override(RuleKey::EscapeShipCut, cut));
+        // Set up, so a pass keeps the NPCs a test adds, its speed box
+        // settled, so a pass moves the player at the velocity it is given.
+        session.populate(catalog, &mut crate::chance::NeverFires);
+        session.ship.settle_box(&session.pilot, &session.setup);
+        session
     }
 
     /// An NPC of `DeathDelay` `death_delay` and `pods` crew pods at
@@ -469,13 +476,33 @@ mod tests {
             if session.space.npc(id).is_none() {
                 return ticks;
             }
-            session.space.pass_frame = tick + frame_offset;
-            session.tick_combat(Rules::default(), &mut *chance);
+            session.space.frame = tick + frame_offset;
+            let before = session.space.npc(id).expect("there").state;
+            work_with(
+                session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut *chance,
+            );
+            // As its flight (`_HandleShip` @0x44483) left it, drifting,
+            // before its escape check; on the explosion tick it is gone
+            // after.
+            let drifted = before.velocity * crate::flight::DISABLED_DRAG;
+            let flown = session.space.npc(id).map_or(
+                crate::flight::ShipState {
+                    position: before.position + drifted,
+                    velocity: drifted,
+                    ..before
+                },
+                |npc| npc.state,
+            );
             for event in session.take_combat_events() {
                 if let CombatEvent::PodEjected { ship, at, velocity } = event {
                     assert_eq!(ship, ShipRef::Npc(id));
-                    assert_eq!(at, Vec2::new(300.0, 0.0), "where the ship is");
-                    assert_eq!(velocity, Vec2::new(2.0, 4.0), "at its velocity");
+                    assert_eq!(at, flown.position, "where the ship is");
+                    assert_eq!(velocity, flown.velocity, "at its velocity");
                     ticks.push(tick);
                 }
             }
@@ -506,8 +533,15 @@ mod tests {
         let mut session = flying(&catalog, RuleSource::Engine);
         let id = session.space.traffic.add_npc(doomed(100, 2));
         let left = |session: &Session| session.space.npc(id).map(|npc| npc.pods_left);
-        session.space.pass_frame = 0;
-        session.tick_combat(Rules::default(), &mut Rolls::default());
+        session.space.frame = 0;
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut Rolls::default(),
+        );
         assert_eq!(left(&session), Some(2), "the breakup tick ejects none");
         let ticks = pod_ticks(&mut session, id, 1, &mut Rolls::default());
         assert_eq!(ticks, [49, 59], "then none on frame 80");
@@ -522,9 +556,16 @@ mod tests {
         let mut doomed = carrying(doomed(0, 10), 1);
         doomed.person = Some(person(0x0002));
         let id = session.space.traffic.add_npc(doomed);
-        session.space.pass_frame = 0;
+        session.space.frame = 0;
         let mut chance = Rolls::launching(0, 0);
-        session.tick_combat(Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
         let events = session.take_combat_events();
         assert!(
             !events
@@ -585,6 +626,13 @@ mod tests {
         (session, id)
     }
 
+    /// Carrier `id` as its escape check found it, after its pass: its
+    /// flight (`_HandleShip` @0x44483) comes before the check in the ship
+    /// loop (@0x4445c-0x444c4), and nothing moves it after.
+    fn at_escape(session: &Session, id: NpcId) -> crate::flight::ShipState {
+        session.space.npc(id).expect("dying").state
+    }
+
     /// The Vipers in the system.
     fn vipers(session: &Session) -> Vec<Npc> {
         session
@@ -598,8 +646,15 @@ mod tests {
     /// Fights `session` to `id`'s end on `chance`.
     fn to_the_end(session: &mut Session, id: NpcId, chance: &mut Rolls) {
         for tick in 0..200 {
-            session.space.pass_frame = tick;
-            session.tick_combat(Rules::default(), &mut *chance);
+            session.space.frame = tick;
+            work_with(
+                session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut *chance,
+            );
             if session.space.npc(id).is_none() {
                 return;
             }
@@ -610,17 +665,29 @@ mod tests {
     #[test]
     fn by_the_other_reading_the_escape_fighter_leaves_on_a_roll_of_0_cut_once() {
         let catalog = escaping(0);
-        let (mut session, id) = carrier(&catalog, RuleSource::Bible, 1);
+        // Its fighter takes berth 1, below it, which the loop has passed.
+        let (mut session, id) = carrier(&catalog, RuleSource::Bible, 2);
         let mut chance = Rolls::launching(0, 7);
-        session.tick_combat(Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
         assert_eq!(chance.rolls(), 1, "on the breakup tick");
         let launched = vipers(&session);
         assert_eq!(launched.len(), 1);
         let fighter = &launched[0];
-        assert_eq!(fighter.state.position, Vec2::new(300.0, 0.0));
-        assert_eq!(fighter.state.heading, 90.0, "the carrier's, no inaccuracy");
+        let from = at_escape(&session, id);
+        assert_eq!(fighter.state.position, from.position);
+        assert_eq!(
+            fighter.state.heading, from.heading,
+            "the carrier's, no inaccuracy"
+        );
         assert_eq!(fighter.target, Some(ShipRef::Player));
-        let pushed = crate::bay::launch_velocity(Vec2::new(2.0, 4.0), 90.0, 4.0, 6.0);
+        let pushed = crate::bay::launch_velocity(from.velocity, from.heading, 4.0, 6.0);
         assert_eq!(fighter.state.velocity, pushed * 0.5, "half its launch");
         assert_eq!(fighter.reserves.shield.now, 7.0, "Rand(66)");
         // A fighter's shield, 50 × 1.333 (`_LaunchFighter` @0x3d9e7, AI
@@ -628,7 +695,7 @@ mod tests {
         assert!(chance.asked.contains(&66));
         let carrier = session.space.npc(id).expect("dying");
         assert_eq!(carrier.reserves.shield.now, 40.0, "untouched");
-        assert_eq!(carrier.state.velocity, Vec2::new(2.0, 4.0));
+        assert_eq!(carrier.state.velocity, Vec2::new(2.0, 4.0), "not cut");
         assert_eq!(
             carrier.rounds,
             LauncherRounds::default(),
@@ -654,10 +721,19 @@ mod tests {
         // The carrier at berth 2: the fighter takes berth 1, and the cut.
         let (mut session, id) = carrier(&catalog, RuleSource::Engine, 2);
         let mut chance = Rolls::launching(0, 7);
-        session.tick_combat(Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
         let fighter = &vipers(&session)[0];
         assert_eq!(fighter.berth, 1);
-        let pushed = crate::bay::launch_velocity(Vec2::new(2.0, 4.0), 90.0, 4.0, 6.0);
+        let from = at_escape(&session, id);
+        assert_eq!(fighter.state.position, from.position);
+        let pushed = crate::bay::launch_velocity(from.velocity, from.heading, 4.0, 6.0);
         assert_eq!(fighter.state.velocity, pushed * 0.5);
         assert_eq!(fighter.reserves.shield.now, 7.0);
         let held = session.space.npc(id).expect("dying");
@@ -666,8 +742,20 @@ mod tests {
         // cut.
         let (mut session, id) = carrier(&catalog, RuleSource::Engine, 1);
         let mut chance = Rolls::launching(0, 7);
-        session.tick_combat(Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
         let fighter = &vipers(&session)[0];
+        eprintln!(
+            "DBG2 {:?} {:?}",
+            fighter.state,
+            session.space.npc(id).map(|n| n.state)
+        );
         assert_eq!(fighter.berth, 2);
         assert_eq!(fighter.state.velocity, pushed, "uncut");
         assert_eq!(
@@ -696,7 +784,14 @@ mod tests {
                 .shield
                 .now = shield;
             let mut chance = Rolls::launching(0, 7);
-            session.tick_combat(Rules::default(), &mut chance);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut chance,
+            );
             let held = session.space.npc(id).expect("dying");
             assert_eq!(held.reserves.shield.now, cut, "{shield}");
             assert_eq!(held.state.velocity, Vec2::new(1.0, 2.0), "{shield}");
@@ -720,10 +815,19 @@ mod tests {
     fn the_escape_fighter_leaves_along_its_carriers_heading_turned_by_the_bays_inaccuracy() {
         // Inaccuracy 5: Rand(10) - 5, 7 - 5 = 2 degrees off 90.
         let catalog = escaping(5);
-        let (mut session, _) = carrier(&catalog, RuleSource::Bible, 1);
+        // Its fighter takes berth 1, below it, which the loop has passed.
+        let (mut session, id) = carrier(&catalog, RuleSource::Bible, 2);
         let mut chance = Rolls::launching(0, 7);
-        session.tick_combat(Rules::default(), &mut chance);
-        assert_eq!(vipers(&session)[0].state.heading, 92.0);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
+        let from = at_escape(&session, id);
+        assert_eq!(vipers(&session)[0].state.heading, from.heading + 2.0);
         assert!(chance.asked.contains(&10));
     }
 
@@ -747,7 +851,14 @@ mod tests {
             }
             session.ship.player.velocity = Vec2::new(2.0, -4.0);
             let mut chance = Rolls::launching(0, 7);
-            session.tick_combat(Rules::default(), &mut chance);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut chance,
+            );
             assert_eq!(chance.rolls(), 1, "{cut:?}");
             assert_eq!(vipers(&session), [], "{cut:?}: no room");
             assert_eq!(session.pilot.reserves.shield.now, shield, "{cut:?}");
@@ -825,8 +936,15 @@ mod tests {
         let id = session.space.traffic.add_npc(carrier);
         let mut chance = Rolls::launching(0, 0);
         for tick in 0..5 {
-            session.space.pass_frame = tick;
-            session.tick_combat(Rules::default(), &mut chance);
+            session.space.frame = tick;
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut chance,
+            );
         }
         assert_eq!(chance.rolls(), 0, "never read dying");
         assert!(vipers(&session).is_empty(), "nothing launched");

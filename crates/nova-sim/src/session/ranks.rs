@@ -330,7 +330,9 @@ impl MissionRun {
 pub(super) mod tests {
     use crate::catalog::{GovtId, OutfitId, OutfitRecord, RankId, RankRecord, ShipId, ShipRecord};
     use crate::chance::NeverFires;
+
     use crate::control::SetExpr;
+
     use crate::outfitter::OutfitFlags;
     use crate::pilot::Pilot;
     use crate::rank::{BLESSES_LANDING, Blessed, SWEEP_GOVT_ON_ACTIVATE, SWEEP_GOVT_ON_DEACTIVATE};
@@ -339,6 +341,7 @@ pub(super) mod tests {
     use crate::session::Session;
     use crate::session::missions::TextSource;
     use crate::shipyard::ShipFlags3;
+    use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, Scripted, catalog, jump, land_now, outfit, rank, ship};
 
     fn set(text: &str) -> SetExpr {
@@ -1354,7 +1357,11 @@ pub(super) mod tests {
     /// L over planet 128, a tick for the dock approach, and L again.
     fn press_twice(session: &mut Session) -> [Result<LandPress, LandingRefusal>; 2] {
         let first = session.land();
-        session.tick(crate::flight::Controls::default());
+        work(
+            session,
+            &crate::testkit::catalog(),
+            crate::flight::Controls::default(),
+        );
         [first, session.land()]
     }
 
@@ -1386,7 +1393,7 @@ pub(super) mod tests {
                     permission: crate::clearance::REQUESTED_NEAR,
                 });
                 session.take_messages();
-                session.tick(crate::flight::Controls::default());
+                work(&mut session, &catalog, crate::flight::Controls::default());
                 assert_eq!(
                     session
                         .take_messages()
@@ -1407,7 +1414,7 @@ pub(super) mod tests {
         let mut engine = holding(&catalog, Rulebook::default(), &[200]);
         assert_eq!(engine.land(), REQUESTED);
         engine.take_messages();
-        engine.tick(crate::flight::Controls::default());
+        work(&mut engine, &catalog, crate::flight::Controls::default());
         assert_eq!(
             engine.take_messages(),
             [crate::message::SimMessage::DockCleared {

@@ -89,6 +89,8 @@ impl Session {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::combat::Rules;
+    use crate::testkit::{work, work_with};
     use std::rc::Rc;
 
     use super::*;
@@ -244,7 +246,7 @@ mod tests {
         assert_eq!(warned(&mut session, 0), [], "no jump");
         session.begin_jump().expect("accepted");
         assert_eq!(warned(&mut session, 0).len(), 1);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert!(session.jumping().is_none(), "still braking");
         session.begin_jump().expect("the same jump");
         assert_eq!(warned(&mut session, 0), [], "J again in the brake");
@@ -280,8 +282,14 @@ mod tests {
         let mut session = flying(&catalog, &[DART]);
         session.begin_jump().expect("accepted");
         for _ in 0..3 {
-            session.tick(Controls::default());
-            session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         let said = session.take_messages();
         assert_eq!(
@@ -317,9 +325,14 @@ mod tests {
     fn jump_through(session: &mut Session, catalog: &FakePilotCatalog) {
         session.begin_jump().expect("accepted");
         for _ in 0..2000 {
-            session.tick(Controls::default());
-            session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
-            session.tick_combat(crate::Rules::default(), &mut NeverFires);
+            work_with(
+                session,
+                catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                crate::Rules::default(),
+                &mut NeverFires,
+            );
             if session.warp_end_due() {
                 break;
             }
@@ -367,9 +380,16 @@ mod tests {
         viper.goal = Goal::Attack(ShipRef::Npc(raider));
         viper.target = Some(ShipRef::Npc(raider));
         session.begin_jump().expect("accepted");
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert!(session.jumping().is_none(), "braking");
-        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         let viper = npc_of(&session, VIPER).expect("out");
         assert_eq!(viper.target, None);
         assert_eq!(viper.goal, Goal::Formation { guard: None });

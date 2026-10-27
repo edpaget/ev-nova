@@ -40,11 +40,14 @@ mod tests {
     use super::super::*;
     use crate::ai::wimpy::WimpyTrader;
     use crate::catalog::{StellarId, SystemId};
+
+    use crate::flight::Controls;
     use crate::hail::{CommNote, Help};
     use crate::reserves::Gauge;
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::sound::SimSound;
     use crate::testkit::{Draws, FakePilotCatalog};
+    use crate::testkit::{work, work_with};
     use crate::traffic::npc::{Mode, NpcId};
 
     #[test]
@@ -86,18 +89,23 @@ mod tests {
         (session, helper)
     }
 
-    /// A tick of `session`'s traffic, then its line's work settled, as a
-    /// frame's combat tick settles it: the notes said.
+    /// A pass of `session`, its traffic deciding as Nova's traders do,
+    /// its line's work settled in it: the notes said.
     fn traffic_tick(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<CommNote> {
-        session.tick_traffic(catalog, &WimpyTrader::default(), &mut Draws::of(&[0; 64]));
-        session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 64]));
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &WimpyTrader::default(),
+            crate::Rules::default(),
+            &mut Draws::of(&[0; 64]),
+        );
         session.take_comm()
     }
 
-    /// A frame of `session`: the player's flight step, then
-    /// [`traffic_tick`].
+    /// A frame of `session`: its pass ([`traffic_tick`]), the player's
+    /// flight step among it.
     fn frame(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<CommNote> {
-        session.tick(Controls::default());
         traffic_tick(session, catalog)
     }
 
@@ -160,7 +168,11 @@ mod tests {
             session.space.npc(helper).map(|npc| npc.goal),
             Some(Goal::Assist(Help::Refuel))
         );
-        session.tick(Controls::default());
+        // With the refueller gone, the pass's flight step clamps it and
+        // no think tops it up again (`_HandlePlayer` @0x6d9c7-0x6d9f2,
+        // before the AI loop).
+        session.space.traffic.remove(helper);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.reserves().fuel.now, 100.0, "clamped each frame");
     }
 

@@ -44,6 +44,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+
     use std::collections::BTreeMap;
 
     use super::*;
@@ -135,7 +136,11 @@ mod tests {
         let (mut session, [first, _]) = two_strangers();
         crate::fixture::disable(&mut session, first);
         // Laid out at its display step (@0x444ad, @0x2bd24).
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        crate::testkit::work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         let ranks = ranks(&mut session);
         assert_eq!(
             ranks[&npc(first)].expect("walked").layer,

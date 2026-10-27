@@ -16,14 +16,14 @@ pub(crate) use nova_sim_catalog::fixture::{
     outfit, person, planet, rank, ship, star, starting, weapon,
 };
 
-use crate::ai::{Behaviour, Goal, Surroundings};
+use crate::ai::{Behaviour, Goal, Reaction, Surroundings};
 use crate::catalog::{
     PilotCatalog, ShipId, StellarId, StellarLife, StellarMark, SystemId, SystemVisibility,
     TrafficCatalog,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::Trigger;
-use crate::combat::{Rules, ShipRef};
+use crate::combat::{Rules, ShipRef, Strike};
 use crate::control::Test;
 use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
@@ -179,6 +179,31 @@ impl Behaviour for Passive {
 
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
         npc.target
+    }
+}
+
+/// Every NPC keeps its goal, its target and its trigger, as [`Passive`],
+/// but answers the hits it takes as Nova's AI does
+/// ([`NovaAi`](crate::ai::NovaAi)): the traffic of a pass whose test is
+/// about the answers.
+#[derive(Debug, Default)]
+pub(crate) struct Answering(crate::ai::NovaAi);
+
+impl Behaviour for Answering {
+    fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        Passive.decide(npc, around, chance)
+    }
+
+    fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+        Passive.trigger(npc, around)
+    }
+
+    fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+        Passive.target(npc, around)
+    }
+
+    fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
+        self.0.react(npc, strike, around)
     }
 }
 

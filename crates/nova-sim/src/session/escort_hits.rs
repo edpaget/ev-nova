@@ -11,13 +11,16 @@ use super::fighters::tests::{
 use crate::ai::Goal;
 use crate::catalog::StellarId;
 use crate::chance::NeverFires;
+use crate::combat::Rules;
 use crate::combat::ShipRef;
 use crate::combat::armament::Armament;
 use crate::combat::fixture::strike;
 use crate::escort::EscortOrder;
+use crate::flight::Controls;
 use crate::geometry::Vec2;
 use crate::pilot::Escort;
 use crate::testkit::FakePilotCatalog;
+use crate::testkit::work_with;
 use crate::traffic::npc::{Mode, NpcId};
 
 /// A session with the warship escort following `order`; the session and
@@ -44,7 +47,14 @@ fn a_defending_or_attacking_escort_the_player_hits_turns_on_the_player_and_keeps
         let (mut session, escort) = escorted(&catalog, order);
         session.space.strikes = vec![strike(ShipRef::Npc(escort), ShipRef::Player)];
         for tick in 0..10 {
-            session.tick_traffic(&catalog, &sitting_ai(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &sitting_ai(),
+                Rules::default(),
+                &mut NeverFires,
+            );
             assert_eq!(
                 fighting(&session, escort),
                 (Goal::Attack(ShipRef::Player), Some(ShipRef::Player)),
@@ -147,7 +157,14 @@ fn a_defending_escort_turns_on_a_ship_that_hits_it_near_the_player() {
     let attacker = pirate_at(&mut session, 0.0, -600.0, ShipRef::Npc(escort));
     hits(&mut session, escort, attacker);
     for tick in 0..5 {
-        session.tick_traffic(&catalog, &sitting_ai(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &sitting_ai(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(
             fighting(&session, escort),
             (
@@ -161,7 +178,14 @@ fn a_defending_escort_turns_on_a_ship_that_hits_it_near_the_player() {
     let (mut session, escort) = escorted(&catalog, EscortOrder::Defend);
     let near_again = pirate_at(&mut session, 0.0, 500.0, ShipRef::Player);
     pirate_at(&mut session, 0.0, -600.0, ShipRef::Npc(escort));
-    session.tick_traffic(&catalog, &sitting_ai(), &mut NeverFires);
+    work_with(
+        &mut session,
+        &catalog,
+        Controls::default(),
+        &sitting_ai(),
+        Rules::default(),
+        &mut NeverFires,
+    );
     assert_eq!(
         fighting(&session, escort).0,
         Goal::Attack(ShipRef::Npc(near_again))
@@ -187,7 +211,14 @@ fn a_formation_escort_guards_against_its_attacker_while_in_reach() {
     // last), so a draw would take it.
     pirate_at(&mut session, 0.0, -300.0, ShipRef::Player);
     hits(&mut session, escort, attacker);
-    session.tick_traffic(&catalog, &sitting_ai(), &mut NeverFires);
+    work_with(
+        &mut session,
+        &catalog,
+        Controls::default(),
+        &sitting_ai(),
+        Rules::default(),
+        &mut NeverFires,
+    );
     assert_eq!(
         fighting(&session, escort),
         (
@@ -213,7 +244,14 @@ fn a_player_escort_waiting_in_its_gate_hit_by_an_npc_holds_its_point_defence() {
         .emerge_from_gate(StellarId(128), 60);
     let attacker = pirate_at(&mut session, 0.0, -200.0, ShipRef::Npc(escort));
     hits(&mut session, escort, attacker);
-    session.tick_traffic(&catalog, &sitting_ai(), &mut NeverFires);
+    work_with(
+        &mut session,
+        &catalog,
+        Controls::default(),
+        &sitting_ai(),
+        Rules::default(),
+        &mut NeverFires,
+    );
     let npc = session.space.npc(escort).expect("there");
     assert!(npc.emerging(), "{:?}", npc.mode);
     assert_eq!(npc.target, Some(ShipRef::Npc(attacker)));
@@ -239,7 +277,14 @@ fn a_player_escort_held_at_its_gate_by_the_players_hit_flies_at_its_first_think(
         "{:?}",
         held.mode
     );
-    session.tick_traffic(&catalog, &sitting_ai(), &mut NeverFires);
+    work_with(
+        &mut session,
+        &catalog,
+        Controls::default(),
+        &sitting_ai(),
+        Rules::default(),
+        &mut NeverFires,
+    );
     let npc = session.space.npc(escort).expect("there");
     assert_eq!(npc.mode, Mode::Flying);
     assert!(!npc.wait_running());

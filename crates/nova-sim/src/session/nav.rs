@@ -1061,6 +1061,7 @@ impl Chart {
 mod tests {
     use super::*;
     use crate::chance::NeverFires;
+
     use crate::control::SetExpr;
     use crate::flight::Controls;
     use crate::gate::GateRefusal;
@@ -1074,6 +1075,7 @@ mod tests {
     };
     use crate::sound::SimSound;
     use crate::targeting::TargetPick;
+    use crate::testkit::work;
     use crate::testkit::{
         FakePilotCatalog, begin_jump_now, catalog, click_stellar, fly_out, hideable, land_now,
         star, starting,
@@ -1404,11 +1406,12 @@ mod tests {
 
     #[test]
     fn a_click_on_the_stellar_selected_alone_does_nothing_and_makes_no_sound() {
-        let mut session = quiet(Session::start(&three_stellars()).expect("starts"));
+        let catalog = three_stellars();
+        let mut session = quiet(Session::start(&catalog).expect("starts"));
         let on_131 = crate::geometry::Vec2::new(900.0, 0.0);
         assert_eq!(click_stellar(&mut session, on_131), Some(StellarId(131)));
         assert_eq!(session.take_sounds(), [SimSound::NavSelected]);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         let expand = session.nav_brackets().expect("bracketed").expand;
         assert_eq!(click_stellar(&mut session, on_131), None);
         assert_eq!(session.take_sounds(), []);

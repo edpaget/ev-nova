@@ -420,6 +420,7 @@ mod tests {
     use crate::session::ship_change::ClassChange;
     use crate::session::tests::{OUT, bound_for_131};
     use crate::testkit::{FAST, FakePilotCatalog, catalog, hull, land_now, ship};
+    use crate::testkit::{Passive, work, work_with};
 
     /// The test catalog, the player's ship 128 of `shän` `Flags` `flags`
     /// and `sets` base sets, `AnimDelay` 5, 36 frames a turn; ship 129 of
@@ -455,8 +456,7 @@ mod tests {
     /// One step of the session under `controls`: the player's tick, then
     /// the fight and the display.
     fn step(session: &mut Session, controls: Controls) {
-        session.tick(controls);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &crate::testkit::catalog(), controls);
     }
 
     fn banking() -> FrameSpec {
@@ -612,7 +612,7 @@ mod tests {
         for _ in 0..400 {
             let stage = session.ship.warp_stage(session.mode.jump());
             session.ship.ship_display.frames.bank = 14.0;
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
             if session.ship.warp_stage(session.mode.jump()) > JUMP_LEVEL_STAGE {
                 assert_eq!(session.ship.ship_display.frames.bank, 0.0, "past 30");
                 return;
@@ -697,7 +697,7 @@ mod tests {
             session.ship.fit.armament.fold_mut().dir = 0;
             assert_eq!(session.begin_jump(), Ok(SystemId(131)));
             for _ in 0..200 {
-                session.tick(Controls::default());
+                work(&mut session, &catalog, Controls::default());
                 if session.ship.warp_stage(session.mode.jump()) > 1.0 {
                     break;
                 }
@@ -744,7 +744,7 @@ mod tests {
         let catalog = displaying(0, 1);
         let mut session = Session::start(&catalog).expect("starts");
         session.ship.fit.armament.stamp_fire();
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.ship.fit.armament.fold().since_fire, 2);
         session.tick_again(
             Controls::default(),
@@ -843,8 +843,14 @@ mod tests {
         };
         (0..n)
             .map(|_| {
-                session.tick(Controls::default());
-                session.tick_combat(rules, &mut NeverFires);
+                work_with(
+                    session,
+                    &crate::testkit::catalog(),
+                    Controls::default(),
+                    &Passive,
+                    rules,
+                    &mut NeverFires,
+                );
                 session.player_drawn().lights
             })
             .collect()

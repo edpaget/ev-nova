@@ -107,11 +107,14 @@ mod tests {
     use super::*;
     use crate::catalog::{HullRecord, OutfitId, WeaponRecord};
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::combat::hull::{DisableRule, HullSpec, TOUGH};
+    use crate::flight::Controls;
     use crate::reserves::Gauge;
     use crate::self_repair::{MOD_REPAIR, REPAIR_INHIBIT_TICKS};
     use crate::session::tests::{DISABLING, Firing, armed, facing_an_npc};
     use crate::testkit::{Draws, FakePilotCatalog, catalog, hull, outfit};
+    use crate::testkit::{Passive, work, work_with};
     use crate::traffic::npc::NpcId;
 
     /// Repair Droids.
@@ -136,7 +139,7 @@ mod tests {
             session.pilot.outfits.insert(DROIDS, 1);
         }
         session.pilot.reserves.armor.now = 3.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.ship.condition, Condition::Disabled);
         assert!(!session.ship.repair_inhibit.holds());
         let _ = (session.take_sounds(), session.take_messages());
@@ -146,7 +149,14 @@ mod tests {
     /// One fight tick on `draws`, ships disabled by `rules`: what it asked.
     fn tick_on(session: &mut Session, rules: Rules, draws: &[u32]) -> Vec<u32> {
         let mut chance = Draws::of(draws);
-        session.tick_combat(rules, &mut chance);
+        work_with(
+            session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            rules,
+            &mut chance,
+        );
         chance.asked
     }
 
@@ -230,12 +240,26 @@ mod tests {
         session.ship.arm_repair_inhibit();
         let mut chance = Draws::of(&[0]);
         for tick in 0..REPAIR_INHIBIT_TICKS {
-            session.tick_combat(Rules::default(), &mut chance);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut chance,
+            );
             assert!(chance.asked.is_empty(), "tick {tick}");
         }
         assert_eq!(armor(&session), 3.0);
         assert_eq!(session.ship.condition, Condition::Disabled);
-        session.tick_combat(Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
         assert_eq!(chance.asked, [REPAIR_ODDS], "on the 301st");
         assert_eq!(armor(&session), repaired_armor(45.0, false));
         assert_eq!(session.take_messages(), [SimMessage::PropulsionRepaired]);
@@ -285,7 +309,7 @@ mod tests {
         session.pilot.reserves.shield.now = 5.0;
         session.ship.arm_repair_inhibit();
         for _ in 0..REPAIR_INHIBIT_TICKS + 20 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             assert_eq!(session.ship.condition, Condition::Disabled);
             assert_eq!(session.pilot.reserves.shield.now, 5.0);
             assert_eq!(armor(&session), 3.0);
@@ -308,10 +332,10 @@ mod tests {
         let mut session = regenerating(&catalog);
         session.ship.arm_repair_inhibit();
         for tick in 0..REPAIR_INHIBIT_TICKS {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             assert_eq!(armor(&session), 30.0, "tick {tick}");
         }
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(armor(&session), 31.0, "on the 301st");
     }
 
@@ -321,7 +345,7 @@ mod tests {
         let mut session = regenerating(&catalog);
         session.ship.arm_repair_inhibit();
         let pass = |session: &mut Session| {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(session, &catalog, Controls::default());
             session.tick_again(
                 crate::flight::Controls::default(),
                 &crate::ai::NovaAi::default(),
@@ -341,7 +365,7 @@ mod tests {
     fn a_player_never_disabled_regenerates_armour_at_once() {
         let catalog = repairing(0);
         let mut session = regenerating(&catalog);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(armor(&session), 31.0);
     }
 
@@ -351,7 +375,7 @@ mod tests {
         let mut session = regenerating(&catalog);
         session.ship.arm_repair_inhibit();
         session.jettison_cargo(true, &mut NeverFires);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(armor(&session), 31.0);
     }
 
@@ -383,11 +407,25 @@ mod tests {
         };
         let mut session = facing_an_npc(&catalog, 180);
         session.pilot.reserves.armor.now = 10.6;
-        session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Firing,
+            rules,
+            &mut NeverFires,
+        );
         let mut ticks = 0;
         while session.ship.condition == Condition::Intact {
             assert!(ticks < 30, "the player was never hit");
-            session.tick_combat(rules, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                rules,
+                &mut NeverFires,
+            );
             ticks += 1;
         }
         assert_eq!(session.take_messages(), [SimMessage::ShipDisabled]);
@@ -397,12 +435,26 @@ mod tests {
         session.pilot.reserves.armor.now = 40.0;
         session.ship.fit.stats.armor_regen = 1.0;
         for tick in 0..REPAIR_INHIBIT_TICKS {
-            session.tick_combat(rules, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                rules,
+                &mut NeverFires,
+            );
             assert!(armor(&session) <= 40.0, "tick {tick}");
         }
         assert_eq!(session.ship.condition, Condition::Intact);
         let before = armor(&session);
-        session.tick_combat(rules, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            rules,
+            &mut NeverFires,
+        );
         assert_eq!(armor(&session), before + 1.0, "on the 301st");
     }
 }

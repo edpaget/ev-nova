@@ -37,10 +37,12 @@ mod tests {
     use super::super::tests::{FIRE, armed, facing_an_npc};
     use super::super::*;
     use crate::catalog::WeaponRecord;
-    use crate::chance::NeverFires;
+
+    use crate::combat::Combat;
     use crate::combat::shot_layer::ShotLayer;
-    use crate::combat::{Combat, Rules};
+    use crate::flight::Controls;
     use crate::rulebook::{RuleSource, Rulebook};
+    use crate::testkit::work;
     use nova_sim_catalog::fixture::weapon;
 
     #[test]
@@ -49,7 +51,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
         while session.shots().len() < 2 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
         }
         session.space.combat.shots_mut()[0].layer = ShotLayer::OverShips;
         let ids = |shots: Vec<&Shot>| shots.iter().map(|shot| shot.id).collect::<Vec<_>>();
@@ -142,7 +144,7 @@ mod tests {
             npc.trigger = FIRE;
             npc.target = Some(ShipRef::Player);
             let berth = npc.berth;
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             assert_eq!(session.shots().len(), 1, "the shell");
             let mut next = session.npcs()[0].clone();
             next.ship = ShipId(131);
@@ -151,7 +153,7 @@ mod tests {
             let id = session.space.traffic.add_npc(next);
             assert_eq!(session.space.npc(id).map(|npc| npc.berth), Some(berth));
             for _ in 0..5 {
-                session.tick_combat(Rules::default(), &mut NeverFires);
+                work(&mut session, &catalog, Controls::default());
             }
             let subs: Vec<&Shot> = session
                 .shots()
@@ -184,7 +186,7 @@ mod tests {
             "handed to the fight"
         );
         session.hold_trigger(FIRE);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.shots().len(), 1);
         let left = session.slot_sprites().shots.clone();
         assert_eq!(left.rank(0).map(|(layer, _)| layer), Some(ShotLayer::Shots));
@@ -218,7 +220,7 @@ mod tests {
             .expect("starts")
             .with_slot_sprites(sprites);
         session.hold_trigger(FIRE);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.shots().len(), 1);
         assert_eq!(session.shots()[0].spin_timer, 2, "the slot's leftover");
         let left = session.slot_sprites().shots.spin(0);

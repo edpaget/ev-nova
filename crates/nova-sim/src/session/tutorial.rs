@@ -90,9 +90,11 @@ mod tests {
     use super::*;
     use crate::catalog::{StellarId, SystemId};
     use crate::chance::{Chance, NeverFires};
+
     use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::rulebook::Rulebook;
+    use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, Scripted, begin_jump_now, catalog, fly_out, land_now};
     use crate::tutorial::TutorialHint;
 
@@ -110,7 +112,7 @@ mod tests {
 
     /// Ticks once, giving the messages and sounds the tick raised.
     fn tick(session: &mut Session) -> (Vec<SimMessage>, Vec<SimSound>) {
-        session.tick(Controls::default());
+        work(session, &crate::testkit::catalog(), Controls::default());
         (session.take_messages(), session.take_sounds())
     }
 

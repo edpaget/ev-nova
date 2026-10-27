@@ -139,10 +139,13 @@ mod tests {
     use super::*;
     use crate::catalog::{LandingSite, ShipId, ShipRecord, SystemId};
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::fleet::EscortMark;
+    use crate::flight::Controls;
     use crate::handling::ShipFields;
     use crate::market::Good;
     use crate::rulebook::{RuleSource, Rulebook};
+    use crate::testkit::work_with;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, land_now, planet, ship};
     use crate::traffic::npc::NpcId;
 
@@ -384,7 +387,14 @@ mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
-        session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &crate::ai::Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let id = ids(&session)[0].expect("placed");
         let npc = session.space.npc(id).expect("in the system");
         let record = session.statics.ship_record(ShipId(130)).expect("a record");

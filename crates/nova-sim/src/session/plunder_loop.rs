@@ -76,7 +76,9 @@ mod tests {
     use crate::board::{Assigned, Assignment, Boarding, MAX_ESCORTS, NovaBoarding, Take};
     use crate::catalog::{OutfitId, ShipId};
     use crate::chance::NeverFires;
+
     use crate::comm_line::CommLine;
+    use crate::flight::Controls;
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
     use crate::session::tests::{
@@ -85,6 +87,7 @@ mod tests {
     };
     use crate::testkit::Draws;
     use crate::testkit::FakePilotCatalog;
+    use crate::testkit::{Passive, work_with};
 
     /// The sounds raised since they were last taken.
     fn sounds(session: &mut Session) -> Vec<SimSound> {
@@ -468,7 +471,14 @@ mod tests {
                 take(&mut session, press, draws);
             }
             assert_eq!(session.npcs()[0].condition, Condition::Disabled, "{why}");
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
             assert_eq!(
                 session.npcs()[0].condition,
                 Condition::Dying {

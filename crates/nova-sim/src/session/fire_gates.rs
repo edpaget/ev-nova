@@ -15,7 +15,9 @@ use super::tests::{
 use super::*;
 use crate::chance::NeverFires;
 use crate::combat::Rules;
+use crate::flight::Controls;
 use crate::rulebook::{RuleSource, Rulebook};
+use crate::testkit::{work, work_with};
 use crate::traffic::npc::Mode;
 
 /// How many times NPC 0 fired in `events`.
@@ -54,22 +56,31 @@ fn waiting(mode: Mode) -> (crate::testkit::FakePilotCatalog, Session) {
 #[test]
 fn a_ship_holding_its_course_after_its_burst_fires_nothing_then_fires_its_kept_pick() {
     let (catalog, mut session) = waiting(Mode::Coasting { ticks_left: 3 });
-    let mut waited = 0;
-    while session.npcs()[0].mode != Mode::Flying {
-        session.tick_combat(Rules::default(), &mut NeverFires);
-        assert_eq!(npc_fired(&session.take_combat_events()), 0, "it waits");
+    let pass = |session: &mut Session| {
+        work_with(
+            session,
+            &catalog,
+            Controls::default(),
+            &Attacking,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        npc_fired(&session.take_combat_events())
+    };
+    for _ in 0..2 {
+        assert_eq!(pass(&mut session), 0, "it waits");
         assert!(session.shots().is_empty(), "no shot spawned");
         assert_eq!(session.npcs()[0].pick, Some(WeaponId(128)), "kept");
-        session.tick_traffic(&catalog, &Attacking, &mut NeverFires);
-        waited += 1;
-        assert!(waited <= 3, "the wait ends");
+        assert_ne!(session.npcs()[0].mode, Mode::Flying);
     }
-    session.tick_combat(Rules::default(), &mut NeverFires);
+    // Its flight ends the wait and its fire follows in the same
+    // `_HandleShip` (@0x44483).
     assert_eq!(
-        npc_fired(&session.take_combat_events()),
+        pass(&mut session),
         1,
         "its first decision after the wait fires"
     );
+    assert_eq!(session.npcs()[0].mode, Mode::Flying);
 }
 
 #[test]
@@ -79,7 +90,11 @@ fn a_ship_entering_a_gate_fires_nothing_it_held() {
         ticks_left: 10,
     });
     for _ in 0..5 {
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(npc_fired(&session.take_combat_events()), 0);
         assert_eq!(session.npcs()[0].pick, Some(WeaponId(128)), "kept");
     }
@@ -206,8 +221,14 @@ fn reused_slot(reading: RuleSource) -> (crate::testkit::FakePilotCatalog, Sessio
     let catalog = kept_missile_catalog();
     let rules = Rulebook::default().with_override(RuleKey::ReusedSlotPick, reading);
     let mut session = with_an_npc_at(&catalog, 750, 550, 180).with_rules(rules);
-    session.tick_traffic(&catalog, &Missileer, &mut NeverFires);
-    session.tick_combat(Rules::default(), &mut NeverFires);
+    work_with(
+        &mut session,
+        &catalog,
+        Controls::default(),
+        &Missileer,
+        Rules::default(),
+        &mut NeverFires,
+    );
     assert_eq!(missiles_fired(&mut session), 1, "the first ship's");
     assert_eq!(session.npcs()[0].pick, Some(WeaponId(134)), "kept");
     let mut next = session.npcs()[0].clone();
@@ -230,13 +251,25 @@ fn a_new_ship_in_a_reused_berth_fires_its_predecessors_kept_missile_on_its_first
     // +0x72.
     let (catalog, mut session) = reused_slot(RuleSource::Engine);
     assert_eq!(session.npcs()[0].pick, Some(WeaponId(134)), "the slot's");
-    session.tick_traffic(&catalog, &Missileer, &mut NeverFires);
-    session.tick_combat(Rules::default(), &mut NeverFires);
+    work_with(
+        &mut session,
+        &catalog,
+        Controls::default(),
+        &Missileer,
+        Rules::default(),
+        &mut NeverFires,
+    );
     assert_eq!(missiles_fired(&mut session), 1);
     let (catalog, mut session) = reused_slot(RuleSource::Bible);
     assert_eq!(session.npcs()[0].pick, None, "none of its own");
-    session.tick_traffic(&catalog, &Missileer, &mut NeverFires);
-    session.tick_combat(Rules::default(), &mut NeverFires);
+    work_with(
+        &mut session,
+        &catalog,
+        Controls::default(),
+        &Missileer,
+        Rules::default(),
+        &mut NeverFires,
+    );
     assert_eq!(missiles_fired(&mut session), 0);
 }
 
@@ -306,6 +339,8 @@ impl Behaviour for Dogfighting {
 fn dogfight_heading(pick: WeaponId, carries: bool) -> Option<i16> {
     let catalog = armed();
     let mut session = facing_an_npc(&catalog, 180);
+    // Its speed box settled, so a pass moves the player at it.
+    session.ship.settle_box(&session.pilot, &session.setup);
     session.ship.player.velocity = Vec2::new(4.0, 0.0);
     let npc = &mut session.space.traffic.npcs_mut()[0];
     if !carries {
@@ -314,7 +349,14 @@ fn dogfight_heading(pick: WeaponId, carries: bool) -> Option<i16> {
     npc.pick = Some(pick);
     // Its first decision falls due within a few ticks.
     for _ in 0..30 {
-        session.tick_traffic(&catalog, &Dogfighting, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Dogfighting,
+            Rules::default(),
+            &mut NeverFires,
+        );
         if let Some(frame) = session.npcs()[0].pursuit.frame {
             return frame.iter().next().map(|body| body.heading);
         }
@@ -331,6 +373,8 @@ fn a_dogfighter_leads_with_a_pick_it_does_not_carry_by_the_sessions_weapon_recor
     let carried = dogfight_heading(WeaponId(128), true);
     assert!(carried.is_some_and(|heading| heading != 180), "{carried:?}");
     assert_eq!(dogfight_heading(WeaponId(128), false), carried);
-    // A pick of no record leads with nothing: the bearing, straight down.
-    assert_eq!(dogfight_heading(WeaponId(140), false), Some(180));
+    // A pick of no record leads with nothing: the bearing to the player,
+    // which its move (`_HandlePlayer` @0x43e19) has carried 4 right of
+    // straight down before `_AIDispatch` (@0x4429d) reads it.
+    assert_eq!(dogfight_heading(WeaponId(140), false), Some(178));
 }

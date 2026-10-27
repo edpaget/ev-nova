@@ -10,8 +10,11 @@
 use super::*;
 use crate::ai::{Behaviour, Goal, Surroundings};
 use crate::chance::NeverFires;
+use crate::combat::Rules;
+use crate::flight::Controls;
 use crate::rulebook::{RuleKey, RuleSource, RuleValue};
 use crate::session::tests::{arming, blaster, with_an_npc_at};
+use crate::testkit::{work, work_with};
 use crate::traffic::npc::Npc;
 use core::num::NonZeroU32;
 
@@ -59,14 +62,18 @@ fn the_player_gains_its_accel_over_the_divisor_a_tick_from_rest() {
             .expect("starts")
             .with_rules(under(divisor));
         // The first tick's box of none holds the ship at rest.
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.player().velocity, Vec2::ZERO);
         let total = accel_total(session.handling().accel);
         assert!(total > 0.0);
-        session.tick(Controls {
-            thrust: true,
-            ..Controls::default()
-        });
+        work(
+            &mut session,
+            &catalog,
+            Controls {
+                thrust: true,
+                ..Controls::default()
+            },
+        );
         let speed = session.player().velocity.length();
         assert!(close(speed, total / by), "{divisor:?}: {speed}");
     }
@@ -84,7 +91,14 @@ fn an_npc_gains_its_accel_over_the_divisor_a_tick_from_rest() {
         let total = accel_total(npc.stats.handling.accel);
         assert!(total > 0.0);
         assert_eq!(npc.state.heading, 180.0);
-        session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let npc = session.space.npc(id).expect("there");
         let speed = npc.state.velocity.length();
         assert!(
@@ -107,15 +121,19 @@ fn the_player_at_top_speed_turned_a_quarter_and_thrusting_ends_near_c_by_minus_c
     for (rules, circled) in [(Rulebook::default(), false), (circle(), true)] {
         let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
         // The first tick's box of none holds the ship at rest.
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         let c = session.top_speed();
         session.ship.player.velocity = Vec2::new(c, 0.0);
         session.ship.player.heading = 0.0;
         for _ in 0..200 {
-            session.tick(Controls {
-                thrust: true,
-                ..Controls::default()
-            });
+            work(
+                &mut session,
+                &catalog,
+                Controls {
+                    thrust: true,
+                    ..Controls::default()
+                },
+            );
         }
         let velocity = session.player().velocity;
         if circled {
@@ -139,7 +157,14 @@ fn an_npc_coasting_past_its_top_speed_keeps_it_by_default_and_is_rescaled_under_
         npc.goal = Goal::Hold;
         let c = npc.top_speed(1.0);
         npc.state.velocity = Vec2::new(-2.0 * c, 3.0 * c);
-        session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let velocity = session.space.npc(id).expect("there").state.velocity;
         if circled {
             assert!((velocity.length() - c).abs() < 1e-4, "{velocity:?} at {c}");
@@ -194,7 +219,14 @@ fn an_escort_of_a_class_of_no_speed_and_no_accel_flies_immobile_and_stays_put() 
         }];
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         // The first tick places it on its slot.
-        session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let npc = session
             .space
             .traffic
@@ -207,7 +239,14 @@ fn an_escort_of_a_class_of_no_speed_and_no_accel_flies_immobile_and_stays_put() 
         npc.goal = Goal::Hold;
         npc.state.velocity = Vec2::new(3.0, -1.0);
         for _ in 0..3 {
-            session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Keeping,
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         let state = session.space.npc(id).expect("there").state;
         (immobile, at, state)

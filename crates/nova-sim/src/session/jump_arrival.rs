@@ -112,6 +112,7 @@ impl Session {
 mod tests {
     use crate::catalog::{ShipId, SystemId};
     use crate::chance::NeverFires;
+
     use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
@@ -119,6 +120,7 @@ mod tests {
     use crate::session::Session;
     use crate::session::tests::{bound_for_134, chained};
     use crate::stats::INERTIALESS_HULL;
+    use crate::testkit::work;
     use crate::testkit::{FAST, FakePilotCatalog, begin_jump_now, catalog, fly_out, nebula, ship};
     use crate::trig::{accel, whole};
     use crate::{RuleKey, RuleSource, Rulebook};
@@ -200,7 +202,7 @@ mod tests {
         let top = session.top_speed();
         assert!(top > 0.0);
         assert_eq!(session.player_speed(), top);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         let moved = session.player().velocity;
         assert!(moved.length() > 0.0, "{moved:?}");
         let along = crate::flight::facing(session.player().heading);
@@ -304,7 +306,7 @@ mod tests {
             let catalog = catalog();
             let mut session = jumping(&catalog, rules);
             session.arrive(&catalog, &mut NeverFires).expect("arrives");
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
             assert_eq!(
                 session.begin_jump(),
                 Ok(SystemId(132)),

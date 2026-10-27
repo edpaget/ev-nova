@@ -187,7 +187,9 @@ mod tests {
     use crate::board::{Boarding, NovaBoarding};
     use crate::catalog::{MissionId, ShipId};
     use crate::chance::NeverFires;
+
     use crate::combat::hull::Condition;
+    use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::legal::NovaLaw;
     use crate::mission::FailedBy;
@@ -198,6 +200,7 @@ mod tests {
     use crate::session::person_offers::tests as person;
     use crate::session::tests::{alongside, board_by, boardable};
     use crate::testkit::FakePilotCatalog;
+    use crate::testkit::work_with;
     use crate::traffic::npc::{AiType, Mode};
 
     /// `catalog` with ship class `id` of no `Crew`.
@@ -720,8 +723,14 @@ mod tests {
         let held = session.npcs()[0].clone();
         assert_eq!(held.mode, Mode::Coasting { ticks_left: 100 });
         let tick = |session: &mut Session| {
-            session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            work_with(
+                session,
+                &catalog,
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
         };
         for at in 0..BOARDED_WAIT {
             assert!(session.npcs()[0].wait_running(), "{at}");

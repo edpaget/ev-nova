@@ -77,9 +77,10 @@ impl Space {
 #[allow(clippy::float_cmp)]
 mod tests {
     use crate::catalog::GovtRecord;
-    use crate::chance::NeverFires;
+
     use crate::combat::hull::Condition;
     use crate::combat::{CombatEvent, Rules, ShipRef};
+    use crate::flight::Controls;
     use crate::govt::DERELICT;
     use crate::session::Session;
     use crate::session::tests::{armed, facing_an_npc};
@@ -87,6 +88,7 @@ mod tests {
     use crate::story::{Fate, StoryEvent};
     use crate::target_panel::TargetStatus;
     use crate::testkit::{Draws, FakePilotCatalog};
+    use crate::testkit::{Passive, work, work_with};
     use crate::traffic::npc::NpcId;
     use nova_sim_catalog::fixture::govt;
 
@@ -137,7 +139,11 @@ mod tests {
         npc.govt = None;
         npc.condition = Condition::Intact;
         assert!(!session.held_disabled(&session.npcs()[0]));
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.npcs()[0].condition, Condition::Intact);
     }
 
@@ -148,7 +154,11 @@ mod tests {
         assert!(session.held_disabled(&session.npcs()[0]));
         let (_, terms) = session.fight_terms();
         assert!(terms[0].held_disabled);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.npcs()[0].condition, Condition::Disabled);
         let downed = session
             .take_combat_events()
@@ -166,7 +176,11 @@ mod tests {
         npc.reserves.shield.now = 1.0;
         npc.reserves.armor.now = npc.reserves.armor.max - 5.0;
         let before = npc.reserves;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.npcs()[0].reserves, before);
     }
 
@@ -177,7 +191,14 @@ mod tests {
         npc.self_repair = true;
         npc.reserves.armor.now = 1.0;
         let mut chance = Draws::of(&[0]);
-        session.tick_combat(Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
         let npc = &session.npcs()[0];
         assert!(npc.reserves.armor.now > 1.0, "repaired");
         assert_eq!(npc.condition, Condition::Disabled);
@@ -186,7 +207,11 @@ mod tests {
     #[test]
     fn a_derelict_ship_is_drawn_in_the_disabled_layer() {
         let (_, mut session) = derelict();
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert!(
             session
                 .draw_layers()

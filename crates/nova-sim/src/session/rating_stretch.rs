@@ -6,9 +6,9 @@
 
 use super::tests::{armed, facing_an_npc};
 use super::*;
-use crate::chance::NeverFires;
-use crate::combat::Rules;
 use crate::combat::ai_fire::PlayerRating;
+use crate::flight::Controls;
+use crate::testkit::work;
 
 /// [`armed`], `shïp` 128 of `Strength` `strength`.
 fn yardstick(strength: i16) -> crate::testkit::FakePilotCatalog {
@@ -55,7 +55,7 @@ fn shots_at_a_pilot_of(rating: i64) -> usize {
         };
         npc.pick = Some(WeaponId(128));
         npc.target = Some(ShipRef::Player);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         fired += session
             .take_combat_events()
             .iter()

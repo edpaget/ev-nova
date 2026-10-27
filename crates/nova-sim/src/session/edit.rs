@@ -205,8 +205,10 @@ mod tests {
         SystemTraffic,
     };
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::combat::hull::Condition;
     use crate::date::GameDate;
+    use crate::flight::Controls;
     use crate::gate::{GateKind, HYPERGATE, WORMHOLE};
     use crate::geometry::Vec2;
     use crate::hyperspace::{JUMP_FUEL, JumpRefusal};
@@ -220,6 +222,7 @@ mod tests {
     use crate::testkit::{
         FAST, FakePilotCatalog, begin_jump_now, catalog, fly_out, land_now, outfit, planet, ship,
     };
+    use crate::testkit::{Passive, work, work_with};
 
     fn session() -> Session {
         let catalog = catalog();
@@ -737,7 +740,14 @@ mod tests {
             .chart
             .assert_docked_among_shown(session.mode.landed());
         session.take_off(&catalog, &mut NeverFires);
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.npcs().len(), 3);
     }
 
@@ -1144,7 +1154,14 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         session.populate(&catalog, &mut NeverFires);
         session.hold_fire(true, false);
-        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
         session.hold_fire(false, false);
         let combat = session.space.combat.clone();
         assert_eq!(combat.shots().len(), 1);
@@ -1176,7 +1193,7 @@ mod tests {
         assert_eq!(session.take_fighter_notes(), []);
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.take_sounds(), [crate::sound::SimSound::TookOff]);
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(
             session.take_sounds(),
             [crate::sound::SimSound::Script {

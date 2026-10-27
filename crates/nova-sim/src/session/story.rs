@@ -992,6 +992,8 @@ impl MissionRun {
 
 #[cfg(test)]
 mod tests {
+
+    use crate::testkit::work;
     use std::rc::Rc;
 
     use super::*;
@@ -1308,7 +1310,7 @@ mod tests {
         let mut session = quiet(Session::start(&catalog).expect("starts"));
         session.land().expect("selects");
         assert_eq!(session.story_raised(), [], "the first L only selects");
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.story_raised(), [], "nor the approach");
         session.land().expect("lands");
         assert_eq!(session.story_raised(), [LANDED_128]);

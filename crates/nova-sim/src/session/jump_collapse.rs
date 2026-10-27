@@ -149,11 +149,13 @@ mod tests {
     use super::*;
     use crate::catalog::SystemId;
     use crate::chance::NeverFires;
+
     use crate::combat::hull::Condition;
     use crate::flight::{Controls, DISABLED_DRAG};
     use crate::session::JumpRefusal;
     use crate::session::tests::{DISABLING, OUT, bound_for_131};
     use crate::sound::PLAYER_EXPLOSION_HALTS;
+    use crate::testkit::{Passive, work, work_with};
     use crate::testkit::{catalog, fly_out};
 
     // The pure parts.
@@ -221,11 +223,20 @@ mod tests {
         session
     }
 
-    /// Disables the player as a fight does, then ticks.
+    /// Disables the player, as a fight's hit leaves it, then works a pass
+    /// by rules under which it stays disabled: its move collapses the
+    /// jump.
     fn disable_and_tick(session: &mut Session) {
-        session.tick_combat(DISABLING, &mut NeverFires);
+        session.ship.condition = Condition::Disabled;
+        work_with(
+            session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            DISABLING,
+            &mut NeverFires,
+        );
         assert_eq!(session.ship.condition, Condition::Disabled);
-        session.tick(Controls::default());
     }
 
     /// The session's sounds, less the thrust's stopping, which the braking
@@ -260,7 +271,8 @@ mod tests {
     #[test]
     fn a_player_disabled_while_turning_collapses_on_the_clock_from_the_turns_start() {
         // At rest facing up, 90 degrees off east: J turns at once.
-        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
         session.statics_mut().warp_sounds[0] = 25;
         session.begin_jump().expect("jumps");
         assert_eq!(
@@ -271,7 +283,7 @@ mod tests {
             "the warp-up the halt halts"
         );
         for _ in 0..2 {
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
         }
         assert_eq!(session.warp_clock(), Some(2));
         assert_eq!(session.player().heading, 6.0);
@@ -287,11 +299,12 @@ mod tests {
     fn a_player_disabled_in_its_warp_collapses_on_the_warps_clock() {
         // At rest facing east, the bearing: the jump begins at once, and
         // the fight runs through it.
-        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 90.0);
         session.statics_mut().warp_sounds[0] = 25;
         session.begin_jump().expect("jumps");
         for _ in 0..3 {
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
         }
         assert!(session.jumping().is_some());
         assert_eq!(session.warp_clock(), Some(3));
@@ -359,7 +372,11 @@ mod tests {
             ticks_left: 10,
             starting: false,
         };
-        session.tick(Controls::default());
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.preparing_jump(), None);
         assert_eq!(session.take_messages(), [SimMessage::JumpCollapsed]);
         let speed = warp::lead_in_speed(2, factor(), 9);
@@ -376,7 +393,11 @@ mod tests {
         session.take_sounds();
         assert_eq!(session.begin_jump(), Err(JumpRefusal::Disabled));
         for _ in 0..5 {
-            session.tick(Controls::default());
+            work(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+            );
         }
         assert_eq!(session.take_messages(), [], "once");
         assert_eq!(session.take_sounds(), []);
@@ -400,7 +421,11 @@ mod tests {
     fn an_intact_player_in_its_pre_jump_never_collapses() {
         let mut session = braking(9);
         for _ in 0..5 {
-            session.tick(Controls::default());
+            work(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+            );
         }
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         assert_eq!(session.take_messages(), []);

@@ -16,8 +16,10 @@ use crate::catalog::WeaponRecord;
 use crate::chance::NeverFires;
 use crate::combat::exits::ExitKind;
 use crate::combat::{Combat, Rules};
+use crate::flight::Controls;
 use crate::rulebook::{RuleSource, Rulebook};
 use crate::testkit::FakePilotCatalog;
+use crate::testkit::{work, work_with};
 
 /// [`armed`] with a gun of no reload and `ExitType` 0, every hull's four
 /// gun exits 10 ahead and 1, 2, 3 and 4 pixels to starboard.
@@ -71,8 +73,14 @@ fn reused_slot(reading: RuleSource) -> (FakePilotCatalog, Session) {
     let mut session = facing_an_npc(&catalog, 0).with_rules(rules);
     let npc = ShipRef::Npc(NpcId(0));
     for exit in [0, 1] {
-        session.tick_traffic(&catalog, &Firing, &mut NeverFires);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Firing,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let centre = session.npcs()[0].state.position;
         assert_eq!(newest_exit(&session, npc, centre), exit, "the first ship's");
     }
@@ -94,8 +102,14 @@ fn a_new_ship_in_a_reused_slot_fires_its_first_gun_shot_from_the_exit_after_its_
     for (reading, exit) in [(RuleSource::Engine, 2), (RuleSource::Bible, 0)] {
         let (catalog, mut session) = reused_slot(reading);
         let id = session.npcs()[0].id;
-        session.tick_traffic(&catalog, &Firing, &mut NeverFires);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Firing,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let centre = session.npcs()[0].state.position;
         assert_eq!(
             newest_exit(&session, ShipRef::Npc(id), centre),
@@ -143,7 +157,7 @@ fn fired_once(catalog: &FakePilotCatalog, reading: RuleSource) -> Session {
 /// fired from.
 fn fire(session: &mut Session) -> usize {
     session.hold_trigger(FIRE);
-    session.tick_combat(Rules::default(), &mut NeverFires);
+    work(session, &crate::testkit::catalog(), Controls::default());
     session.hold_trigger(Trigger::default());
     newest_exit(session, ShipRef::Player, session.ship.player.position)
 }

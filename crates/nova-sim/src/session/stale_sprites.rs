@@ -182,11 +182,12 @@ impl Chart {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::chance::NeverFires;
-    use crate::combat::Rules;
+
     use crate::deadly_stellar::DEADLY_STELLAR;
+    use crate::flight::Controls;
     use crate::rulebook::Rulebook;
     use crate::session::tests::{armed, facing_an_npc};
+    use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, planet};
 
     /// A deadly stellar `id` at (`x`, `y`), 100 x 100.
@@ -220,7 +221,7 @@ mod tests {
     }
 
     fn fight(session: &mut Session) {
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &crate::testkit::catalog(), Controls::default());
     }
 
     fn other_reading() -> Rulebook {
