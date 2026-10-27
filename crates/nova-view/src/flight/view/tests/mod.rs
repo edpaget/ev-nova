@@ -80,6 +80,7 @@ mod drain;
 mod escorts;
 mod faked_flight;
 mod faked_hud;
+mod faked_landing;
 mod faked_travel;
 mod faked_world;
 mod flying;
@@ -3126,24 +3127,6 @@ fn exploded() -> View {
     view
 }
 
-/// [`armed`] with a blaster whose shots detonate after a tick.
-fn detonating() -> FakeCatalog {
-    let mut catalog = armed(0, &[BLASTER]);
-    catalog.weapons[0].flags = 0x8000;
-    catalog.weapons[0].count = 1;
-    catalog
-}
-
-/// Fires one detonating shot, which explodes as its end of life comes,
-/// the tick after its one move.
-fn detonate(view: &mut View) {
-    view.input(&key(FIRE_KEY, true));
-    view.tick(TICK);
-    view.input(&key(FIRE_KEY, false));
-    view.tick(TICK);
-    assert_eq!(view.effects().explosions().len(), 1);
-}
-
 /// What the target panel's status line shows this frame, if there is
 /// a target.
 fn status_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<nova_sim::TargetStatus> {
@@ -3891,7 +3874,6 @@ const HYPER_SELECT: Key = Key::Char('\\');
 fn course(view: &View) -> Vec<SystemId> {
     view.session().expect("flying").course().to_vec()
 }
-use crate::flight::jump::{ARRIVAL_FLASH_FOR, FADE_IN_FOR};
 use nova_sim::GateKind;
 
 /// Stellar `id` at (`x`, `y`), with `flags2`, `links` and

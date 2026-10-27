@@ -117,51 +117,6 @@ fn closing_the_map_after_a_tab_shows_its_selection_in_the_nav_area() {
     );
 }
 
-#[test]
-fn closing_the_map_cues_the_courses_hop_over_a_tab_selection() {
-    let mut view = FlightView::new(FakeCatalog {
-        fan: true,
-        ..catalog()
-    });
-    plot(&mut view, 131);
-    tap(&mut view, MAP);
-    tap(&mut view, Key::Tab);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(132))));
-    tap(&mut view, MAP);
-    assert_eq!(
-        nav_mode(&view),
-        NavMode::Hyperspace(Some(SystemId(131))),
-        "the close's cue (@0x13c16)"
-    );
-}
-
-/// [`gated`] with Alpha Reborn standing for a hidden Alpha Centauri,
-/// and hypergate 300 linked to 310, in Alpha Centauri, and 320, in
-/// Barnard: the hypergate map is open, offering Alpha Reborn and
-/// Barnard.
-fn at_a_shadowed_gate() -> View {
-    let mut view = FlightView::new(FakeCatalog {
-        reborn: true,
-        onward: true,
-        gates: RefCell::new(vec![
-            gate_site(300, (0.0, 0.0), 0x1200, &[310, 320], 120),
-            gate_site(310, (100.0, 200.0), 0x1000, &[300], 90),
-            gate_site(320, (-50.0, 0.0), 0x1000, &[], 0),
-        ]),
-        gate_listers: vec![
-            (SystemId(131), StellarId(310)),
-            (SystemId(132), StellarId(320)),
-        ],
-        ..gated()
-    });
-    change_galaxy(&mut view, hiding(131));
-    view.tick(TICK);
-    land_now(&mut view);
-    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
-    view
-}
-
 /// A view over a scripted flight in Sol with the hypergate map open,
 /// offering Alpha Reborn (133) and Barnard (132), its flight's cycle
 /// stepping through hidden Alpha Centauri (131) and Barnard.
@@ -197,27 +152,6 @@ fn tab_on_the_hypergate_map_steps_through_the_flights_cycle_shift_reversing_and_
         None,
         "hidden 131 is no offer (@0x638cd-0x638ff)"
     );
-}
-
-#[test]
-fn closing_the_hypergate_map_on_a_tab_pick_enters_the_gate() {
-    let mut view = at_a_shadowed_gate();
-    tap(&mut view, Key::Tab);
-    tap(&mut view, Key::Tab);
-    assert_eq!(view.course_map().selected(), Some(SystemId(132)));
-    view.close_map();
-    assert_eq!(system_of(&view), SystemId(132));
-    assert_eq!(player(&view).position, Vec2::new(-50.0, 0.0), "at 320");
-}
-
-#[test]
-fn closing_the_hypergate_map_saves_a_borders_change_too() {
-    let mut view = at_a_shadowed_gate();
-    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    tap(&mut view, Key::Char('b'));
-    tap(&mut view, Key::Enter);
-    assert!(!view.map_open());
-    assert_eq!(view.take_map_borders_save(), Some(false));
 }
 
 #[test]
@@ -400,61 +334,11 @@ fn with_rules_switches_the_nebula_picture_back() {
 }
 
 #[test]
-fn return_closes_the_course_map_with_the_close_beep_and_the_cue() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    tap(&mut view, NAV_OFF_KEY);
-    tap(&mut view, MAP);
-    view.take_sounds();
-    tap(&mut view, Key::Enter);
-    assert!(!view.map_open());
-    assert_eq!(map_sounds(&mut view), [UiSound::MapClosed]);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
-}
-
-#[test]
 fn return_closes_the_course_map_and_a_repeat_does_not() {
     let mut view = faked_sol(in_sol());
     view.open_map();
     assert!(!faked_map_input(&mut view, &held(Key::Enter)), "a repeat");
     assert!(faked_map_input(&mut view, &key(Key::Enter, true)));
-}
-
-#[test]
-fn return_on_the_hypergate_map_enters_or_cancels_in_silence() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    view.take_sounds();
-    tap(&mut view, Key::Enter);
-    assert!(!view.map_open());
-    assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
-    assert_eq!(map_sounds(&mut view), []);
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    view.take_sounds();
-    tap(&mut view, Key::Enter);
-    assert_eq!(system_of(&view), SystemId(131));
-    assert_eq!(map_sounds(&mut view), []);
-}
-
-#[test]
-fn return_closes_the_bars_map_and_puts_back_the_bars_nav() {
-    // The planner's click writes the nav in port, which the close shows.
-    let mut view = planner(in_the_bar(None));
-    view.open_bar_map();
-    port_click(&mut view, 131);
-    view.take_sounds();
-    view.port_map_input(&key(Key::Enter, true));
-    assert!(!view.map_open());
-    assert_eq!(map_sounds(&mut view), []);
-    assert_eq!(port_nav(&view), cueing_alpha(), "the map's selection drawn");
-    assert_eq!(
-        view.session().map(Session::nav_mode),
-        Ok(NavMode::Stellar(Some(StellarId(128)))),
-        "the bar's nav put back"
-    );
 }
 
 #[test]
@@ -563,102 +447,6 @@ fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
     assert!(!view.map_open);
     assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
     assert_eq!(*view.radar_shown(&view.frame), view.radar_now(&view.frame));
-}
-
-#[test]
-fn without_hyperspace_effects_a_hypergate_flashes_white() {
-    let mut view = FlightView::new(gated()).with_hyperspace_effects(false);
-    land_now(&mut view);
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    tap(&mut view, MAP);
-    assert_eq!(
-        view.jump_effect().map(JumpEffect::phase),
-        Some(JumpPhase::Flash(0.0))
-    );
-    view.tick(ARRIVAL_FLASH_FOR);
-    assert_eq!(view.jump_effect(), None);
-}
-
-#[test]
-fn a_hypergate_without_links_does_nothing() {
-    let mut catalog = gated();
-    catalog.gates.get_mut()[0].links = [None; 8];
-    let mut view = FlightView::new(catalog);
-    tap(&mut view, LAND);
-    ticks(&mut view, 1);
-    let cleared = view.message().map(str::to_owned);
-    tap(&mut view, LAND);
-    assert!(!view.map_open());
-    assert_eq!(system_of(&view), SystemId(130));
-    assert_eq!(view.message(), cleared.as_deref(), "nothing said");
-    assert_eq!(nav_target(&view), None);
-}
-
-#[test]
-fn a_hypergate_whose_links_lead_nowhere_opens_an_empty_map_that_cancels() {
-    let mut catalog = gated();
-    catalog.gates.get_mut()[0].links[0] = Some(StellarId(999));
-    let mut view = FlightView::new(catalog);
-    land_now(&mut view);
-    assert!(view.map_open());
-    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    assert_ne!(view.message(), Some(HYPERGATE_CANCELLED), "not yet");
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    tap(&mut view, MAP);
-    assert!(!view.map_open());
-    assert_eq!(system_of(&view), SystemId(130));
-    assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
-}
-
-#[test]
-fn l_twice_at_a_wormhole_passes_through_it_with_a_flash() {
-    let mut view = FlightView::new(holed());
-    land_now(&mut view);
-    assert!(!view.map_open());
-    assert_eq!(system_of(&view), SystemId(131));
-    assert_eq!(player(&view).position, Vec2::new(-300.0, 40.0));
-    assert_eq!(
-        view.message(),
-        Some("Passing through a wormhole into the Alpha Centauri system on June 23rd, 1177 NC.")
-    );
-    assert_eq!(
-        view.jump_effect().map(JumpEffect::phase),
-        Some(JumpPhase::Flash(0.0))
-    );
-    let mut plain = FlightView::new(holed()).with_hyperspace_effects(false);
-    land_now(&mut plain);
-    assert_eq!(
-        plain.jump_effect().map(JumpEffect::phase),
-        Some(JumpPhase::Flash(0.0)),
-        "whatever the preference"
-    );
-    let passed = "Passing through a wormhole into the Alpha Centauri system on June 23rd, 1177 NC.";
-    assert_lasts(&mut plain, passed, 240);
-}
-
-#[test]
-fn coming_out_of_a_hypergate_says_so_for_360_ticks() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    tap(&mut view, MAP);
-    let exited = "Exiting hypergate in the Alpha Centauri system on June 23rd, 1177 NC.";
-    assert_lasts(&mut view, exited, 360);
-}
-
-#[test]
-fn a_wormhole_with_no_exit_says_why() {
-    let mut catalog = holed();
-    catalog.gates.get_mut().truncate(1);
-    let mut view = FlightView::new(catalog);
-    land_now(&mut view);
-    assert_eq!(system_of(&view), SystemId(130));
-    assert_eq!(view.jump_effect(), None);
-    let why = "Your ship is unable to enter this wormhole - the radiation levels are too extreme.";
-    assert_lasts(&mut view, why, GATE_REFUSAL_TICKS);
 }
 
 #[test]
@@ -2094,12 +1882,6 @@ fn place_of(map: &GalaxyMap) -> (f64, (i32, i32)) {
     (place.zoom(), place.scroll())
 }
 
-/// Where system `id` is in the galaxy, as the course map's scroll holds
-/// it.
-fn scroll_of(view: &View, id: i16) -> (i32, i32) {
-    scroll_on(view.course_map(), id)
-}
-
 /// Where system `id` is in `map`'s galaxy, as its scroll holds it.
 fn scroll_on(map: &GalaxyMap, id: i16) -> (i32, i32) {
     let at = map.model().position(SystemId(id)).expect("on the map");
@@ -2152,18 +1934,6 @@ fn opening_the_map_guards_a_zoom_of_0_or_less() {
     view.map = view.map.clone().with_zoom(0.0);
     view.open_map();
     assert_eq!(place_of(&view.map).0, 1.0);
-}
-
-#[test]
-fn a_hypergates_exit_puts_the_scroll_back_on_the_current_system() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    view.map.centre_on_system(SystemId(132));
-    tap(&mut view, MAP);
-    assert_eq!(view.session().expect("flying").system(), SystemId(131));
-    assert_eq!(map_place(&view).1, scroll_of(&view, 131));
 }
 
 #[test]
@@ -2483,40 +2253,4 @@ fn a_slot_key_held_during_a_jump_does_not_hold_the_zoom_back() {
     hold(&mut view, STELLAR_SLOT_KEYS[2][1]);
     floating_tap(&mut view, ZOOM_OUT_KEY);
     assert_eq!(view.floating.zoom(), 4, "F3 is not polled");
-}
-
-#[test]
-fn closing_the_hypergate_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
-    // The hypergate map, cancelled and entered (`_PlayerEnterHypergate`),
-    // on a real session: the gate's entry is
-    // rdm:phase/view-sim-seam/phase-9-travel-on-port's. The gate's Sol
-    // lists Earth and the Moon too, so its radar holds them.
-    for pick in [false, true] {
-        let mut gated = gated();
-        gated.sites.extend(catalog().sites);
-        let mut view = FlightView::new(gated);
-        ticks(&mut view, 3);
-        land_now(&mut view);
-        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-        assert!(view.map_open());
-        if pick {
-            let alpha = on_map(&mut view, 131);
-            click(&mut view, alpha);
-        }
-        let stale = RadarScene::default();
-        assert_ne!(view.radar_now(&view.frame_now()), stale);
-        view.radar_scene = Some(stale);
-        let cadence = view.hud_cadence;
-        tap(&mut view, MAP);
-        assert!(!view.map_open(), "pick {pick}");
-        assert_eq!(
-            view.hud_cadence, cadence,
-            "neither timed nor flipped: pick {pick}"
-        );
-        assert_eq!(
-            *view.radar_shown(&view.frame_now()),
-            view.radar_now(&view.frame_now()),
-            "pick {pick}"
-        );
-    }
 }

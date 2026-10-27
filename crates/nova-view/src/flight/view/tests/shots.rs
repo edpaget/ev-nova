@@ -561,43 +561,42 @@ fn by_the_engine_a_short_lightning_beam_draws_nothing_and_mended_one_line() {
     assert_eq!(lightning_lines(&mended).len(), 1, "one straight line");
 }
 
-// Landing and arriving clear what the view keeps of the shots: the
-// concrete flight's, on a real session (rdm:phase/view-sim-seam/phase-9-travel-on-port).
+// Landing and arriving let go of what the view keeps of the shots.
 
 #[test]
 fn landing_and_arriving_free_the_smoke() {
-    let smoking = |mut catalog: FakeCatalog| {
-        let (_, look) = catalog
-            .looks
-            .iter_mut()
-            .find(|(id, _)| *id == BLASTER.0)
-            .expect("the blaster's look");
-        let look = look.as_mut().expect("read");
-        look.flags = crate::flight::smoke::SMALL_SMOKE | crate::flight::smoke::LINGERING_SMOKE;
-        catalog
-    };
-    let fire = |view: &mut View| {
-        view.input(&key(FIRE_KEY, true));
-        for _ in 0..3 {
-            view.tick(TICK);
-            view.input(&key(FIRE_KEY, false));
+    use nova_sim::landing::LandOutcome;
+    let smoked = || {
+        let mut view = shooting(smoking_trailing_blaster());
+        for tick in 0..3 {
+            pass_with(
+                &mut view,
+                vec![blaster_shot(tick)],
+                smoke_frame(tick),
+                Vec::new(),
+            );
         }
         assert!(!view.shot_looks.smoke().puffs().is_empty(), "smoking");
+        view
     };
-    let mut catalog = smoking(armed(0, &[BLASTER]));
-    catalog.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
-    let mut view = fighting(catalog, &[]);
-    fire(&mut view);
-    land_now(&mut view);
-    assert!(view.take_landing().is_some());
+    let mut view = smoked();
+    view.sim
+        .queue_answer(Answer::LandPress(nova_sim::LandPress::Outcome(
+            LandOutcome::Landed(StellarId(128)),
+        )));
+    view.land(super::faked_travel::faked_words());
     assert_eq!(view.shot_looks.smoke().puffs(), [], "landed");
 
-    let mut view = fighting(smoking(armed(0, &[BLASTER])), &[]);
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    fire(&mut view);
-    jump_now(&mut view);
-    arrive_now(&mut view);
-    assert_eq!(view.session().expect("flying").system(), SystemId(131));
+    let mut view = smoked();
+    view.sim.queue_answer(Answer::Arrived {
+        system: SystemId(131),
+        combat: Vec::new(),
+    });
+    view.sim.frame_mut().system = SystemId(131);
+    view.sim
+        .queue_event(nova_sim::flight_frame::FlightEvent::Session(
+            nova_sim::SessionEvent::SystemChanged,
+        ));
+    view.arrive(super::faked_travel::faked_words());
     assert_eq!(view.shot_looks.smoke().puffs(), [], "arrived");
 }

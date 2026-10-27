@@ -2,22 +2,20 @@
 //! its steps, arrival, take-off, landing, the shipyard and outfitter
 //! orders.
 
+use nova_sim::PlayerCommand;
 use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 use nova_sim::{
-    Assigned, Assignment, AsteroidCatalog, CombatCatalog, CommCatalog, Departure, GateKind,
-    GateRefusal, LandOutcome, LandPress, LandingRefusal, OutfitOrder, OutfitRefusal, OutfitRun,
-    PilotCatalog, Session, Settled, ShipId, ShipPurchase, ShipRefusal, SimMessage, StellarId,
-    TrafficCatalog,
+    Assigned, Assignment, AsteroidCatalog, CombatCatalog, CommCatalog, Departure, OutfitOrder,
+    OutfitRefusal, OutfitRun, PilotCatalog, Session, Settled, ShipId, ShipPurchase, ShipRefusal,
+    SimMessage, StellarId, TrafficCatalog,
 };
-use nova_sim::{PlayerCommand, TagNames};
 
 use nova_sim::flight_frame::{Answer, FlightCommand, MapClick};
 
 use crate::devtools::SessionDesk;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
-use crate::flight::jump::JumpEffect;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, MapCycle, MapMode, PendingPress, PressAnswer};
 use crate::system::catalog::SystemCatalog;
@@ -26,9 +24,8 @@ use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
 use super::{
-    BOARD_KEY, FlightView, GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, JUMP_KEY, MAP_KEY, NavFlash,
-    Redrawn, SCRIPT_MESSAGE_TICKS, Said, Then, assigned_message, assigned_ticks,
-    gate_refusal_message, landing_refusal_ticks, no_outfitter, refusal_message, stellar_name,
+    BOARD_KEY, FlightView, JUMP_KEY, MAP_KEY, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, Said, Then,
+    assigned_message, assigned_ticks, no_outfitter,
 };
 
 impl<
@@ -71,51 +68,17 @@ impl<
             .is_ok_and(Session::deletes_pilot_on_ending_play)
     }
 
-    /// The input to the map opened over a screen: in port
-    /// ([`FlightView::open_bar_map`], [`FlightView::open_port_screen_map`]),
-    /// or by a mission dialog docked or in flight
-    /// ([`FlightView::open_dialog_map`]): a press of [`MAP_KEY`]
-    /// closes it ([`FlightView::close_map`]), unless
-    /// Find is open, where it types, and anything else goes to the map, so
-    /// flight's own keys and cursor stay out of the port.
+    /// The input to the map opened over a screen
+    /// ([`FlightView::port_map_input_with`]), the flight's messages worded
+    /// by the session ([`FlightView::WORDS`]).
     pub fn port_map_input(&mut self, input: &Input) {
-        let closing = Input::Key {
-            key: MAP_KEY,
-            pressed: true,
-            repeat: false,
-        };
-        if *input == closing && !self.map.finding() {
-            self.close_map();
-        } else {
-            self.map_input(input);
-        }
+        self.port_map_input_with(input, Self::WORDS);
     }
 
-    /// The map's input, the rest of `_MapFilter` (@0x13c63-0x147ab) that
-    /// the map leaves to its owner:
-    ///
-    /// - A key-down (not a repeat) of a key the filter doesn't take
-    ///   ([`FlightView::map_filter_takes`]) while [`MAP_KEY`] is held
-    ///   closes the map ([`FlightView::close_map`]), as the map key's close
-    ///   reads the key held (@0x144db-0x14587). M's own press closes it
-    ///   before this, in flight and in port.
-    /// - A press on it that hits systems is the session's click
-    ///   ([`FlightView::answer_map_press`]), and C or Clear Route clears
-    ///   the route ([`FlightView::clear_route`]).
-    /// - Tab or `\` cycles the selection ([`FlightView::cycle_map`]).
-    /// - Return, or a click on Done, closes the map
-    ///   ([`FlightView::close_map`]): with the close beep and the cue in
-    ///   flight, entering or cancelling the hypergate silently, and putting
-    ///   back the bar's nav in port, as M does.
-    /// - A text Find confirmed is searched as the in-flight map's Find
-    ///   searches ([`Session::find_map_system`]), and the map shows what it
-    ///   found ([`GalaxyMap::show_search`](crate::galaxy::GalaxyMap::show_search)).
-    /// - The map's beeps (Space's and Find's) join the flight's.
-    ///
-    /// While Find is open every input goes to the map, which gives it to
-    /// Find: a key with [`MAP_KEY`] held types, and closes nothing.
-    pub(super) fn map_input(&mut self, input: &Input) {
-        self.map_input_then(input, Self::close_map);
+    /// Closes the course map ([`FlightView::close_map_with`]), the
+    /// flight's messages worded by the session ([`FlightView::WORDS`]).
+    pub fn close_map(&mut self) {
+        self.close_map_with(Self::WORDS);
     }
 
     /// The keys `_HandlePlayer` polls with a latch, once a frame, with
@@ -380,158 +343,6 @@ impl<
         self.say_messages(Self::WORDS);
     }
 
-    /// Plays `effect` for the ship having come out of a gate, caught up
-    /// with as an arrival is ([`FlightView::arrived`]).
-    fn came_through(&mut self, effect: JumpEffect) {
-        self.held.clear();
-        let combat = match &mut self.sim.session {
-            Ok(session) => session.take_combat_events(),
-            Err(_) => Vec::new(),
-        };
-        self.arrived(&combat, Self::WORDS);
-        self.fade_in = Some(effect);
-    }
-
-    /// Presses the land key: requests clearance, lands, enters a gate, or
-    /// shows why not. What the press said (the request's line, or "No
-    /// response.") shows first, so a refusal in the same press replaces
-    /// it. Over a cleared hypergate the course map opens offering its
-    /// links, and over a wormhole the ship passes through at once.
-    pub(super) fn land(&mut self) {
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        let pressed = session.land();
-        self.say_messages(Self::WORDS);
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        match pressed {
-            Ok(LandPress::Outcome(LandOutcome::Requested { .. })) => {}
-            Ok(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
-                self.pending_landing = Some(stellar);
-                self.blank_message();
-                self.effects.clear();
-                self.flashes.clear();
-                self.held_alts.get_mut().clear();
-                self.glows.clear();
-                self.shot_looks.clear();
-                self.redraw_status();
-            }
-            Ok(LandPress::AtGate {
-                kind: GateKind::Hypergate,
-                ..
-            }) => match session.open_hypergate(&*self.catalog) {
-                Ok(offered) => {
-                    self.map.offer_gates(offered);
-                    self.open_map();
-                }
-                Err(refusal) => self.gate_refused(Some(refusal)),
-            },
-            Ok(LandPress::AtGate {
-                kind: GateKind::Wormhole,
-                ..
-            }) => match session.enter_wormhole(&*self.catalog, &mut self.sim.chance) {
-                Ok(_) => self.came_through(JumpEffect::flash()),
-                Err(refusal) => self.gate_refused(Some(refusal)),
-            },
-            Err(refusal) => {
-                let stellar = match refusal {
-                    LandingRefusal::TooFar { stellar, .. }
-                    | LandingRefusal::TooFast { stellar, .. }
-                    | LandingRefusal::NotLandable { stellar, .. }
-                    | LandingRefusal::Denied { stellar, .. }
-                    | LandingRefusal::CannotPayFee { stellar, .. } => Some(stellar),
-                    LandingRefusal::Jumping
-                    | LandingRefusal::NoStellars
-                    | LandingRefusal::NothingLandable
-                    | LandingRefusal::Disabled
-                    | LandingRefusal::Cloaked => None,
-                };
-                let gate = stellar.and_then(|stellar| session.gate_kind(stellar));
-                // A stellar the scene doesn't hold, such as one another
-                // system owns, by its spöb name (`stellar_name`).
-                let name = stellar
-                    .and_then(|stellar| {
-                        stellar_name(
-                            self.scene.as_ref(),
-                            |id| TagNames::stellar_name(session, id),
-                            stellar,
-                        )
-                    })
-                    .unwrap_or_default();
-                let text = refusal_message(&refusal, gate, &name);
-                if let Some(text) = text {
-                    self.say_for(text, landing_refusal_ticks(&refusal));
-                }
-            }
-        }
-    }
-
-    /// Shows what the original says when entering a gate is refused, if
-    /// anything: a cancelled hypergate jump, or a wormhole leading
-    /// nowhere. A hypergate without links says nothing.
-    fn gate_refused(&mut self, refusal: Option<GateRefusal>) {
-        match refusal {
-            Some(GateRefusal::Cancelled) => self.say_for(HYPERGATE_CANCELLED, GATE_REFUSAL_TICKS),
-            Some(GateRefusal::NoExit) => {
-                self.say_for(gate_refusal_message(GateKind::Wormhole), GATE_REFUSAL_TICKS);
-            }
-            Some(GateRefusal::NoLinks | GateRefusal::NotAtGate) | None => {}
-        }
-    }
-
-    /// Closes the course map, abandoning any gesture on it, and goes back
-    /// to flight. Closing the hypergate map enters the hypergate for the
-    /// system picked on it: the ship comes out there, and the new system
-    /// fades in from white ([`JumpEffect::emerging`], or flashes white
-    /// with the Hyperspace Effects preference off); with no pick, the jump
-    /// is cancelled ([`HYPERGATE_CANCELLED`]). Closing the course map cues
-    /// the course's next hop ([`Session::cue_course`]), as the original's
-    /// map does unless it is the hypergate's (`_DoSystemMap` @0x13c16),
-    /// and beeps [`UiSound::MapClosed`], as `_HandlePlayer` does once
-    /// `_DoSystemMap` returns (@0x6a85a). The hypergate map closes
-    /// silently: `_PlayerEnterHypergate` plays no beep around it
-    /// (@0x6385b).
-    ///
-    /// Docked, its close is `_DoSystemMap`'s in port: the whole bar is
-    /// redrawn (`_RefreshSAT` @0x13bc9), showing the nav as the map left
-    /// it, and the course is not cued (@0x13be2-0x13c0a skips
-    /// `_CueNextHyperRouteDest` in port). Then the selection the map
-    /// opened with is put back, the mode kept, with no redraw
-    /// ([`Session::restore_map_selection`], `_DoSystemMap` @0x12349,
-    /// @0x13bee-0x13c06), undoing a Clear Route. It beeps nothing: the
-    /// [`UiSound::MapClosed`] beep is `_HandlePlayer`'s, around the map M
-    /// opens in flight. A mission dialog's map beeps in flight neither.
-    ///
-    /// Then whoever opened it puts back what it saved: when the bar opened
-    /// it ([`FlightView::open_bar_map`]), the nav the bar opened with
-    /// ([`Session::restore_bar_nav`], `_DoBarDialog` @0x492b7-0x492d3),
-    /// with no redraw, as `_UpdateAllPortDialogs` (@0x492d7) draws no
-    /// status, so the nav area shows the map's selection until the port's
-    /// next nav redraw, such as the bar's close; a port screen its own
-    /// ([`FlightView::open_port_screen_map`]), with no redraw either: the
-    /// exchange and the outfitter the nav they opened with, and the
-    /// spaceport, the shipyard, the hire screen and the ship description
-    /// the nav as the map opened; a mission dialog its own
-    /// ([`FlightView::open_dialog_map`]): the offer's, the computer's and
-    /// the briefing's the nav as the map opened, docked or in flight, the
-    /// computer's then redrawing the nav area, and mission info's nothing.
-    pub fn close_map(&mut self) {
-        self.close_map_then(|view, choice| {
-            let Ok(session) = &mut view.sim.session else {
-                return;
-            };
-            match session.enter_hypergate(choice, &*view.catalog, &mut view.sim.chance) {
-                Ok(_) => {
-                    let effect = JumpEffect::emerging(view.hyperspace_effects);
-                    view.came_through(effect);
-                }
-                Err(refusal) => view.gate_refused(Some(refusal)),
-            }
-        });
-    }
-
     /// Buys a ship named `name` as [`Session::buy_ship`] does, it and its
     /// hooks drawing on the flight's chance, and catches up with the
     /// change of ship it tells ([`SessionEvent::ShipChanged`]): the sprite
@@ -716,12 +527,41 @@ impl<
 /// ([`FlightView::close_map`]), as the hypergate entry it may run is still
 /// the session's: [`FlightView::map_input_taken`] says when it is due.
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// [`FlightView::close_map`]'s work over the port, the hypergate's
-    /// entry left to `enter_gate`, handed the system picked on the
-    /// hypergate map (rdm:phase/view-sim-seam/phase-9-travel-on-port): the
-    /// borders' save, the map shut, then the course map's close, docked
-    /// or in flight, or the hypergate map's redraw before `enter_gate`
-    /// runs (see there).
+    /// The course map's close, the hypergate's entry left to
+    /// `enter_gate`, handed the system picked on the hypergate map
+    /// ([`FlightView::close_map_with`]): the borders' save, the map shut,
+    /// then the course map's close, docked or in flight, or the hypergate
+    /// map's redraw before `enter_gate` runs.
+    ///
+    /// Closing the course map in flight cues the course's next hop
+    /// ([`FlightCommand::CueCourse`]), as the original's map does unless
+    /// it is the hypergate's (`_DoSystemMap` @0x13c16), and beeps
+    /// [`UiSound::MapClosed`], as `_HandlePlayer` does once
+    /// `_DoSystemMap` returns (@0x6a85a).
+    ///
+    /// Docked, its close is `_DoSystemMap`'s in port: the whole bar is
+    /// redrawn (`_RefreshSAT` @0x13bc9), showing the nav as the map left
+    /// it, and the course is not cued (@0x13be2-0x13c0a skips
+    /// `_CueNextHyperRouteDest` in port). Then the selection the map
+    /// opened with is put back, the mode kept, with no redraw
+    /// ([`FlightCommand::RestoreMapSelection`], `_DoSystemMap` @0x12349,
+    /// @0x13bee-0x13c06), undoing a Clear Route. It beeps nothing: the
+    /// [`UiSound::MapClosed`] beep is `_HandlePlayer`'s, around the map M
+    /// opens in flight. A mission dialog's map beeps in flight neither.
+    ///
+    /// Then whoever opened it puts back what it saved: when the bar opened
+    /// it ([`FlightView::open_bar_map`]), the nav the bar opened with
+    /// ([`FlightCommand::RestoreBarNav`], `_DoBarDialog` @0x492b7-0x492d3),
+    /// with no redraw, as `_UpdateAllPortDialogs` (@0x492d7) draws no
+    /// status, so the nav area shows the map's selection until the port's
+    /// next nav redraw, such as the bar's close; a port screen its own
+    /// (`FlightView::open_port_screen_map`), with no redraw either: the
+    /// exchange and the outfitter the nav they opened with, and the
+    /// spaceport, the shipyard, the hire screen and the ship description
+    /// the nav as the map opened; a mission dialog its own
+    /// (`FlightView::open_dialog_map`): the offer's, the computer's and
+    /// the briefing's the nav as the map opened, docked or in flight, the
+    /// computer's then redrawing the nav area, and mission info's nothing.
     pub(super) fn close_map_then(
         &mut self,
         enter_gate: impl FnOnce(&mut Self, Option<nova_sim::SystemId>),

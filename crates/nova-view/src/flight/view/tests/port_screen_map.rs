@@ -23,18 +23,12 @@ const SAVING_BEFORE: [PortScreen; 3] = [
     PortScreen::ShipDescription,
 ];
 
-/// Closes the map as M does on it.
-fn press_map(view: &mut View) {
-    view.port_map_input(&key(MAP, true));
-    view.port_map_input(&key(MAP, false));
-    assert!(!view.map_open());
-}
-
-/// Turns the nav off docked, a nav the port dialog's opening didn't
-/// save.
-fn turn_nav_off(view: &mut View) {
-    view.sim.session.as_mut().expect("docked").nav_off();
-    assert_eq!(nav_mode(view), NavMode::Off);
+/// Closes `view`'s map as M does on it, over the port.
+fn faked_press_map(view: &mut Faked) {
+    let words = super::faked_travel::faked_words();
+    view.port_map_input_with(&key(MAP, true), words);
+    view.port_map_input_with(&key(MAP, false), words);
+    assert!(!view.map_open, "closed");
 }
 
 /// A view over a scripted flight docked at Earth, drawing the map as
@@ -92,96 +86,66 @@ fn each_port_screens_map_opens_in_silence() {
 #[test]
 fn each_port_screens_map_closes_in_silence() {
     for screen in SCREENS {
-        let mut view = in_the_bar(None);
+        let mut view = faked_docked();
         view.open_port_screen_map(screen);
-        view.take_sounds();
-        let _ = ui_sounds(&mut view);
-        press_map(&mut view);
-        assert_eq!(view.take_sounds(), [], "{screen:?}: closed");
-        assert_eq!(ui_sounds(&mut view), [], "{screen:?}: closed");
+        faked_press_map(&mut view);
+        assert_eq!(view.ui_sounds, [], "{screen:?}: closed");
+        assert_eq!(view.drained_sounds(), [], "{screen:?}: closed");
     }
 }
-
 #[test]
 fn each_port_screens_map_closing_cues_no_course() {
     for screen in SCREENS {
-        let mut view = in_the_bar(Some(131));
-        view.open_port_dialog();
-        view.open_port_screen_map(screen);
         for close in [key(MAP, true), key(Key::Enter, true)] {
-            if !view.map_open() {
-                view.open_port_screen_map(screen);
-            }
-            view.port_map_input(&close);
-            assert!(!view.map_open(), "{screen:?}: {close:?} closes it");
-            assert_eq!(port_nav(&view), naming("Earth"), "{screen:?}: no cue drawn");
-            assert_eq!(nav_mode(&view), NavMode::Stellar(Some(StellarId(128))));
-            assert_eq!(
-                view.session().map(|session| session.course().to_vec()),
-                Ok(vec![SystemId(131)]),
-                "{screen:?}: the course kept"
+            let mut view = faked_docked();
+            view.open_port_screen_map(screen);
+            view.port_map_input_with(&close, super::faked_travel::faked_words());
+            assert!(!view.map_open, "{screen:?}: {close:?} closes it");
+            assert!(
+                !sent(&view).contains(&FlightCommand::CueCourse),
+                "{screen:?}: {close:?}: no cue in port"
             );
         }
     }
 }
-
 #[test]
 fn the_spaceports_shipyards_and_descriptions_maps_put_back_the_nav_as_they_opened() {
     for screen in SAVING_BEFORE {
-        let mut view = planner(in_the_bar(None));
-        view.open_port_dialog();
-        turn_nav_off(&mut view);
+        let mut view = faked_docked();
         view.open_port_screen_map(screen);
-        port_click(&mut view, 131);
+        let stale = Some((EARTH, NavDisplay::Stellar(Some("Stale".to_owned()))));
+        view.nav_scene = stale.clone();
+        faked_press_map(&mut view);
         assert_eq!(
-            nav_mode(&view),
-            NavMode::Hyperspace(Some(SystemId(131))),
-            "{screen:?}: the planner's click cues the route"
+            sent(&view),
+            [
+                FlightCommand::RestoreMapSelection(SavedNav::of(EARTH)),
+                FlightCommand::RestoreMapNav(SavedNav::of(EARTH)),
+            ],
+            "{screen:?}: the selection, then the nav as the map opened"
         );
-        press_map(&mut view);
-        assert_eq!(
-            port_nav(&view),
-            cueing_alpha(),
-            "{screen:?}: the map's selection drawn, before the restore"
-        );
-        assert_eq!(
-            nav_mode(&view),
-            NavMode::Off,
-            "{screen:?}: the nav as the map opened"
-        );
-        assert_eq!(
-            view.session().map(|session| session.course().to_vec()),
-            Ok(vec![SystemId(131)]),
-            "{screen:?}: the course kept"
+        assert_ne!(
+            view.nav_scene, stale,
+            "{screen:?}: the close's redraw first"
         );
     }
 }
-
 #[test]
 fn the_exchanges_and_outfitters_maps_put_back_the_nav_the_dialog_opened_with_and_keep_it() {
     for screen in [PortScreen::Exchange, PortScreen::Outfitter] {
-        let mut view = planner(in_the_bar(None));
-        view.open_port_dialog();
-        turn_nav_off(&mut view);
+        let mut view = faked_docked();
         view.open_port_screen_map(screen);
-        port_click(&mut view, 131);
-        press_map(&mut view);
-        assert_eq!(port_nav(&view), cueing_alpha(), "{screen:?}: drawn");
+        faked_press_map(&mut view);
         assert_eq!(
-            nav_mode(&view),
-            NavMode::Stellar(Some(StellarId(128))),
-            "{screen:?}: the dialog's save put back"
-        );
-        turn_nav_off(&mut view);
-        view.close_port_dialog(PortDialog::Outfitter);
-        assert_eq!(
-            nav_mode(&view),
-            NavMode::Stellar(Some(StellarId(128))),
-            "{screen:?}: the save kept for the dialog's close"
+            sent(&view),
+            [
+                FlightCommand::RestoreMapSelection(SavedNav::of(EARTH)),
+                FlightCommand::PutBackPortNav,
+            ],
+            "{screen:?}: the dialog's save put back, and kept"
         );
     }
 }
-
 #[test]
 fn the_spaceports_shipyards_and_descriptions_map_closes_send_back_the_nav_as_they_opened() {
     for screen in SAVING_BEFORE {
@@ -230,15 +194,17 @@ fn a_port_screens_map_close_retakes_no_nav_area() {
 #[test]
 fn a_clear_route_on_a_port_screens_map_is_undone() {
     for screen in SCREENS {
-        let mut view = in_the_bar(Some(131));
-        view.open_port_dialog();
+        let mut view = faked_docked();
         view.open_port_screen_map(screen);
-        view.port_map_input(&key(Key::Char('c'), true));
-        assert_eq!(nav_mode(&view), NavMode::Stellar(None), "{screen:?}");
-        press_map(&mut view);
+        view.port_map_input_with(
+            &key(Key::Char('c'), true),
+            super::faked_travel::faked_words(),
+        );
+        assert_eq!(sent(&view), [FlightCommand::ClearRoute], "{screen:?}");
+        faked_press_map(&mut view);
         assert_eq!(
-            nav_mode(&view),
-            NavMode::Stellar(Some(StellarId(128))),
+            sent(&view).get(1),
+            Some(&FlightCommand::RestoreMapSelection(SavedNav::of(EARTH))),
             "{screen:?}: put back"
         );
     }

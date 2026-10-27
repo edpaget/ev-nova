@@ -734,22 +734,6 @@ fn the_layers_turn_with_the_ship_between_steps() {
 }
 
 #[test]
-fn landing_while_thrusting_puts_the_glow_out() {
-    let mut view = FlightView::new(FakeCatalog {
-        sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
-        ..layered()
-    });
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 6);
-    assert_eq!(ship_sprites(&view).len(), 3, "glowing");
-    land_now(&mut view);
-    assert_eq!(view.take_landing(), Some(StellarId(128)));
-    assert_eq!(view.session().expect("flying").engine_glow(), 0);
-    let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
-    assert_eq!(ids, [2000, 2200], "landed");
-}
-
-#[test]
 fn a_ship_without_layers_draws_only_its_sprite() {
     let view = lit(at_rest(catalog()), Some(32), 6);
     let ids: Vec<_> = super::faked_world::faked_ship_sprites(&view)

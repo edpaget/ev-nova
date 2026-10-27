@@ -1929,17 +1929,6 @@ fn a_destroyed_npcs_debris_is_drawn_after_its_explosion() {
     );
 }
 
-#[test]
-fn landing_clears_the_effects() {
-    let mut catalog = detonating();
-    catalog.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
-    let mut view = fighting(catalog, &[]);
-    detonate(&mut view);
-    land_now(&mut view);
-    assert!(view.take_landing().is_some());
-    assert_eq!(*view.effects(), Effects::default());
-}
-
 /// [`armed`]'s NPC, shïp 129, of `DeathDelay` 4 and one crew pod, which
 /// one hit of the player's blaster breaks up: the pod comes out on its
 /// explosion tick, at a timer of 2.
@@ -1950,100 +1939,6 @@ pub(super) fn podding() -> FakeCatalog {
     catalog.hulls[1].death_delay = 4;
     catalog.hulls[1].pod_count = 1;
     catalog
-}
-
-/// Fires at the targeted NPC until its pod is adrift.
-pub(super) fn eject_a_pod(view: &mut View) {
-    tap(view, Key::Tab);
-    view.input(&key(FIRE_KEY, true));
-    for _ in 0..40 {
-        view.tick(TICK);
-        if !view.effects().pods().is_empty() {
-            view.input(&key(FIRE_KEY, false));
-            return;
-        }
-    }
-    panic!("no pod came out");
-}
-
-/// How many escape pods `view` draws, from the pods' sheet (`rlëD` 1095).
-fn pods_drawn(view: &View) -> usize {
-    let mut list = DrawList::new();
-    view.draw(&mut list);
-    list.into_iter()
-        .filter(|command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 1095))
-        .count()
-}
-
-#[test]
-fn a_dying_npcs_pod_is_drawn_and_heard_until_landing_clears_it() {
-    let mut catalog = podding();
-    catalog.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
-    let mut view = fighting(catalog, &placed(750, 650, 180));
-    eject_a_pod(&mut view);
-    assert_eq!(pods_drawn(&view), 1);
-    let heard: Vec<nova_sim::SoundId> = view
-        .take_sounds()
-        .into_iter()
-        .filter_map(|sound| match sound {
-            Sound::Combat(sound) => Some(sound.sound),
-            _ => None,
-        })
-        .collect();
-    assert!(heard.contains(&nova_sim::SoundId(372)), "{heard:?}");
-    land_now(&mut view);
-    assert!(view.take_landing().is_some());
-    assert!(view.effects().pods().is_empty());
-    assert_eq!(pods_drawn(&view), 0);
-}
-
-/// [`detonating`] with a blast of radius 100 doing 1 energy damage,
-/// which reaches the player who fired it.
-fn self_blasting() -> FakeCatalog {
-    let mut catalog = detonating();
-    catalog.weapons[0].blast_radius = 100;
-    catalog.weapons[0].energy_dmg = 1;
-    catalog
-}
-
-/// Fires one [`self_blasting`] shot and ticks until its blast flashes
-/// the player's shield.
-fn flash_the_player(view: &mut View) {
-    detonate(view);
-    for _ in 0..5 {
-        if view.shield_flash(ShipRef::Player).is_some() {
-            return;
-        }
-        view.tick(TICK);
-    }
-    panic!("the player was never hit: {:?}", player(view));
-}
-
-#[test]
-fn landing_clears_the_shield_flashes() {
-    let mut catalog = self_blasting();
-    catalog.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
-    let mut view = fighting(catalog, &[]);
-    flash_the_player(&mut view);
-    land_now(&mut view);
-    assert!(view.take_landing().is_some());
-    assert_eq!(view.shield_flash(ShipRef::Player), None);
-}
-
-#[test]
-fn passing_through_a_wormhole_clears_the_shield_flashes() {
-    let holes = holed();
-    let catalog = FakeCatalog {
-        sites: holes.sites,
-        gates: holes.gates,
-        gate_listers: holes.gate_listers,
-        ..self_blasting()
-    };
-    let mut view = fighting(catalog, &[]);
-    flash_the_player(&mut view);
-    land_now(&mut view);
-    assert_eq!(system_of(&view), SystemId(131));
-    assert_eq!(view.shield_flash(ShipRef::Player), None);
 }
 
 #[test]

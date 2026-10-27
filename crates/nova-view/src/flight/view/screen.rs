@@ -230,7 +230,7 @@ impl<
             if press == Some(MAP_KEY) && !self.map.finding() {
                 self.close_map();
             } else {
-                self.map_input(input);
+                self.map_input(input, Self::WORDS);
             }
             return ScreenAction::None;
         }
@@ -256,7 +256,7 @@ impl<
                 .is_none_or(|command| self.takes(command))
         });
         match press {
-            Some(LAND_KEY) => self.land(),
+            Some(LAND_KEY) => self.land(Self::WORDS),
             Some(BOARD_KEY) => {
                 // A fresh press follows a release, which clears the latch.
                 self.board_latch = false;

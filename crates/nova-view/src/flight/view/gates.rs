@@ -1,0 +1,191 @@
+//! [`FlightView`]'s land key, gates and course map's close, over the
+//! [`FlightSim`] port: the press sends [`FlightCommand::Land`] and says
+//! what the flight answers, the gates open and enter by
+//! [`FlightCommand::OpenHypergate`], [`FlightCommand::EnterWormhole`] and
+//! [`FlightCommand::EnterHypergate`], and the map's close runs whole here,
+//! its hypergate entry among it.
+//!
+//! The words of the flight's messages, the press's and the arrival's,
+//! ride a [`Words`] callback the concrete callee hands in (see the `words`
+//! module).
+
+use nova_sim::flight_frame::{Answer, FlightCommand};
+use nova_sim::landing::LandOutcome;
+use nova_sim::{CombatEvent, GateKind, GateRefusal, LandPress};
+
+use crate::Input;
+use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
+use crate::flight::jump::JumpEffect;
+use crate::flight::sim_port::FlightSim;
+use crate::system::catalog::SystemCatalog;
+
+use super::words::Words;
+use super::{
+    FlightView, GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, MAP_KEY, gate_refusal_message,
+    landing_refusal_ticks, refusal_message, stellar_name,
+};
+
+impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> FlightView<C, S> {
+    /// Presses the land key ([`FlightCommand::Land`]): requests clearance,
+    /// lands, enters a gate, or shows why not. What the press said (the
+    /// request's line, or "No response."), in `words`, shows first, so a
+    /// refusal in the same press replaces it. A landing hands the router
+    /// the stellar ([`FlightView::take_landing`]) and lets go of what the
+    /// view keeps of the fight; over a cleared hypergate the course map
+    /// opens offering its links ([`FlightCommand::OpenHypergate`]), and
+    /// over a wormhole the ship passes through at once
+    /// ([`FlightCommand::EnterWormhole`]). A refusal names its stellar from
+    /// the scene, or by the flight's name for one the scene doesn't hold
+    /// ([`MapSource::stellar_name`](crate::flight::sim_port::MapSource::stellar_name)),
+    /// and says the gate's line when the flight says the stellar is one
+    /// ([`Answer::LandRefused`]'s `gate`). A flight that failed refuses the
+    /// press.
+    pub(super) fn land(&mut self, words: Words<Self>) {
+        let pressed = self.send(FlightCommand::Land);
+        self.say_messages(words);
+        match pressed {
+            Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
+                self.pending_landing = Some(stellar);
+                self.blank_message();
+                self.effects.clear();
+                self.flashes.clear();
+                self.held_alts.get_mut().clear();
+                self.glows.clear();
+                self.shot_looks.clear();
+                self.redraw_status();
+            }
+            Answer::LandPress(LandPress::AtGate {
+                kind: GateKind::Hypergate,
+                ..
+            }) => match self.send(FlightCommand::OpenHypergate) {
+                Answer::Offered(offered) => {
+                    self.map.offer_gates(offered);
+                    self.open_map();
+                }
+                Answer::GateRefused(refusal) => self.gate_refused(refusal),
+                _ => {}
+            },
+            Answer::LandPress(LandPress::AtGate {
+                kind: GateKind::Wormhole,
+                ..
+            }) => match self.send(FlightCommand::EnterWormhole) {
+                Answer::Arrived { combat, .. } => {
+                    self.came_through(JumpEffect::flash(), &combat, words);
+                }
+                Answer::GateRefused(refusal) => self.gate_refused(refusal),
+                _ => {}
+            },
+            Answer::LandRefused { refusal, gate } => {
+                // A stellar the scene doesn't hold, such as one another
+                // system owns, by its spöb name (`stellar_name`).
+                let name = refusal
+                    .stellar()
+                    .and_then(|stellar| {
+                        stellar_name(self.scene.as_ref(), |id| self.sim.stellar_name(id), stellar)
+                    })
+                    .unwrap_or_default();
+                if let Some(text) = refusal_message(&refusal, gate, &name) {
+                    self.say_for(text, landing_refusal_ticks(&refusal));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Shows what the original says when entering a gate is refused, if
+    /// anything: a cancelled hypergate jump, or a wormhole leading
+    /// nowhere. A hypergate without links says nothing.
+    fn gate_refused(&mut self, refusal: GateRefusal) {
+        match refusal {
+            GateRefusal::Cancelled => self.say_for(HYPERGATE_CANCELLED, GATE_REFUSAL_TICKS),
+            GateRefusal::NoExit => {
+                self.say_for(gate_refusal_message(GateKind::Wormhole), GATE_REFUSAL_TICKS);
+            }
+            GateRefusal::NoLinks | GateRefusal::NotAtGate => {}
+        }
+    }
+
+    /// Plays `effect` for the ship having come out of a gate, `combat` the
+    /// fight's events its arrival left pending, caught up with as an
+    /// arrival is ([`FlightView::arrived`]), in `words`; the flight keys
+    /// are let go.
+    fn came_through(&mut self, effect: JumpEffect, combat: &[CombatEvent], words: Words<Self>) {
+        self.held.clear();
+        self.arrived(combat, words);
+        self.fade_in = Some(effect);
+    }
+
+    /// Closes the course map, abandoning any gesture on it, and goes back
+    /// to flight ([`FlightView::close_map_then`]'s close, docked or in
+    /// flight, or the hypergate map's redraw). Closing the hypergate map
+    /// enters the hypergate for the system picked on it
+    /// ([`FlightCommand::EnterHypergate`]): the ship comes out there, and
+    /// the new system fades in from white ([`JumpEffect::emerging`], or
+    /// flashes white with the Hyperspace Effects preference off), its
+    /// arrival said in `words`; with no pick, the jump is cancelled
+    /// ([`HYPERGATE_CANCELLED`]). The hypergate map closes silently:
+    /// `_PlayerEnterHypergate` plays no beep around it (@0x6385b). See
+    /// [`FlightView::close_map_then`] for the course map's close.
+    pub(super) fn close_map_with(&mut self, words: Words<Self>) {
+        self.close_map_then(|view, choice| {
+            match view.send(FlightCommand::EnterHypergate(choice)) {
+                Answer::Arrived { combat, .. } => {
+                    let effect = JumpEffect::emerging(view.hyperspace_effects);
+                    view.came_through(effect, &combat, words);
+                }
+                Answer::GateRefused(refusal) => view.gate_refused(refusal),
+                _ => {}
+            }
+        });
+    }
+
+    /// The map's input, the rest of `_MapFilter` (@0x13c63-0x147ab) that
+    /// the map leaves to its owner ([`FlightView::map_input_then`]), its
+    /// close [`FlightView::close_map_with`], in `words`:
+    ///
+    /// - A key-down (not a repeat) of a key the filter doesn't take
+    ///   (`FlightView::map_filter_takes`) while [`MAP_KEY`] is held
+    ///   closes the map, as the map key's close reads the key held
+    ///   (@0x144db-0x14587). M's own press closes it before this, in
+    ///   flight and in port.
+    /// - A press on it that hits systems is the flight's click
+    ///   (`FlightView::answer_map_press`), and C or Clear Route clears
+    ///   the route (`FlightView::clear_route`).
+    /// - Tab or `\` cycles the selection (`FlightView::cycle_map`).
+    /// - Return, or a click on Done, closes the map: with the close beep
+    ///   and the cue in flight, entering or cancelling the hypergate
+    ///   silently, and putting back the bar's nav in port, as M does.
+    /// - A text Find confirmed is searched as the in-flight map's Find
+    ///   searches
+    ///   ([`MapSource::find_map_system`](crate::flight::sim_port::MapSource::find_map_system)),
+    ///   and the map shows what it found
+    ///   ([`GalaxyMap::show_search`](crate::galaxy::GalaxyMap::show_search)).
+    /// - The map's beeps (Space's and Find's) join the flight's.
+    ///
+    /// While Find is open every input goes to the map, which gives it to
+    /// Find: a key with [`MAP_KEY`] held types, and closes nothing.
+    pub(super) fn map_input(&mut self, input: &Input, words: Words<Self>) {
+        self.map_input_then(input, |view| view.close_map_with(words));
+    }
+
+    /// The input to the map opened over a screen: in port
+    /// ([`FlightView::open_bar_map`], `FlightView::open_port_screen_map`),
+    /// or by a mission dialog docked or in flight
+    /// (`FlightView::open_dialog_map`): a press of [`MAP_KEY`] closes it
+    /// ([`FlightView::close_map_with`]), unless Find is open, where it
+    /// types, and anything else goes to the map
+    /// ([`FlightView::map_input`]), so flight's own keys and cursor stay
+    /// out of the port. The flight's messages are worded in `words`.
+    pub(super) fn port_map_input_with(&mut self, input: &Input, words: Words<Self>) {
+        let closing = Input::Key {
+            key: MAP_KEY,
+            pressed: true,
+            repeat: false,
+        };
+        if *input == closing && !self.map.finding() {
+            self.close_map_with(words);
+        } else {
+            self.map_input(input, words);
+        }
+    }
+}

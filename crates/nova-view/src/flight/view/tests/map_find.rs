@@ -289,25 +289,6 @@ fn a_click_on_find_opens_find_silently() {
 }
 
 #[test]
-fn done_on_the_hypergate_map_enters_the_pick_or_cancels_in_silence() {
-    let mut view = measured(FlightView::new(gated()));
-    land_now(&mut view);
-    view.take_sounds();
-    click(&mut view, map_button(true));
-    assert!(!view.map_open());
-    assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
-    assert_eq!(map_sounds(&mut view), []);
-    let mut view = measured(FlightView::new(gated()));
-    land_now(&mut view);
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    view.take_sounds();
-    click(&mut view, map_button(true));
-    assert_eq!(system_of(&view), SystemId(131));
-    assert_eq!(map_sounds(&mut view), []);
-}
-
-#[test]
 fn space_on_the_hypergate_map_keeps_the_destination_picked() {
     let mut view = faked_in(named(catalog()), in_sol());
     view.map = view.map.clone().with_metrics(Rc::new(MonoMetrics));
@@ -330,28 +311,6 @@ fn space_on_the_hypergate_map_keeps_the_destination_picked() {
         view.map.take_gate_choice(),
         Some(SystemId(131)),
         "the pick to enter"
-    );
-}
-
-#[test]
-fn done_closes_the_bars_map_silently_and_puts_back_the_bars_nav() {
-    let mut view = measured(in_the_bar(None));
-    view.open_bar_map();
-    port_click(&mut view, 131);
-    view.take_sounds();
-    for pressed in [true, false] {
-        view.port_map_input(&Input::PointerButton {
-            button: MouseButton::Left,
-            pressed,
-            at: map_button(true),
-        });
-    }
-    assert!(!view.map_open());
-    assert_eq!(map_sounds(&mut view), []);
-    assert_eq!(
-        view.session().map(Session::nav_mode),
-        Ok(NavMode::Stellar(Some(StellarId(128)))),
-        "the bar's nav put back"
     );
 }
 
@@ -407,12 +366,13 @@ fn with_find_open_on_the_bars_map_m_types_into_it() {
 
 #[test]
 fn closing_the_map_with_find_open_drops_it() {
-    let mut view = on_the_map();
-    type_in(&mut view, "f");
-    view.close_map();
-    tap(&mut view, MAP);
-    assert!(view.map_open());
-    assert!(!view.map_finding());
+    let mut view = faked_on_the_map(in_sol());
+    faked_type_in(&mut view, "f");
+    assert!(view.map.finding(), "Find opened");
+    view.close_map_with(super::faked_travel::faked_words());
+    view.open_map();
+    assert!(view.map_open);
+    assert!(!view.map.finding(), "dropped by the close");
 }
 
 #[test]

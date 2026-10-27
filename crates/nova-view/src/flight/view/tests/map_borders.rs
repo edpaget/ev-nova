@@ -190,49 +190,6 @@ fn by_default_the_rules_run_the_pass_in_a_tick_and_find_runs_none() {
 // The setting and its save.
 
 #[test]
-fn b_then_a_close_in_flight_saves_the_borders_off_once() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    assert!(view.map_borders_shown());
-    tap(&mut view, Key::Char('b'));
-    assert!(!view.map_borders_shown());
-    assert!(labelled(&view, SHOW_BORDERS_LABEL));
-    assert_eq!(view.take_map_borders_save(), None, "not until the close");
-    tap(&mut view, MAP);
-    assert!(!view.map_open());
-    assert_eq!(view.take_map_borders_save(), Some(false));
-    assert_eq!(view.take_map_borders_save(), None, "taken");
-    tap(&mut view, MAP);
-    assert!(!view.course_map().borders_shown(), "the next open keeps it");
-}
-
-#[test]
-fn b_twice_saves_nothing() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    tap(&mut view, Key::Char('b'));
-    tap(&mut view, Key::Char('b'));
-    tap(&mut view, MAP);
-    assert_eq!(view.take_map_borders_save(), None);
-    assert!(view.map_borders_shown());
-}
-
-#[test]
-fn a_change_on_the_bars_map_is_kept_but_not_saved() {
-    let mut view = landed_view();
-    view.open_bar_map();
-    tap(&mut view, Key::Char('b'));
-    view.close_map();
-    assert_eq!(view.take_map_borders_save(), None, "docked");
-    assert!(!view.map_borders_shown(), "kept for the run");
-    view.open_bar_map();
-    assert!(
-        !view.course_map().borders_shown(),
-        "the next open starts off"
-    );
-}
-
-#[test]
 fn the_map_opens_with_the_borders_setting_it_is_given() {
     let mut view = known(FlightView::new(bordered())).with_map_borders(false);
     assert!(!view.map_borders_shown());

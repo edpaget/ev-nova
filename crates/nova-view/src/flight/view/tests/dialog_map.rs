@@ -15,14 +15,6 @@ fn to_proxima(id: i16) -> MissionRecord {
     }
 }
 
-/// [`in_the_bar`] with mission 130 [`to_proxima`], offered at Earth's
-/// mission computer.
-fn offering() -> View {
-    let mut catalog = port();
-    catalog.missions[0] = to_proxima(130);
-    in_the_bar_of(catalog, None)
-}
-
 /// [`flight`] holding mission 130 [`to_proxima`] in slot 0.
 fn holding() -> View {
     let mut catalog = catalog();
@@ -44,11 +36,12 @@ fn the_flights_mission_systems_are_its_sessions() {
     assert_eq!(holding().sim.map_mission_systems(), [SystemId(131)]);
 }
 
-/// Closes the map as M does on it.
-fn press_map(view: &mut View) {
-    view.port_map_input(&key(MAP, true));
-    view.port_map_input(&key(MAP, false));
-    assert!(!view.map_open());
+/// Closes `view`'s map as M does on it, over the port.
+fn faked_press_map(view: &mut Faked) {
+    let words = super::faked_travel::faked_words();
+    view.port_map_input_with(&key(MAP, true), words);
+    view.port_map_input_with(&key(MAP, false), words);
+    assert!(!view.map_open, "closed");
 }
 
 /// A view over a scripted flight in `frame`, drawing the map as
@@ -226,91 +219,53 @@ fn a_dialogs_map_opens_in_silence_docked_and_in_flight() {
 
 #[test]
 fn a_dialogs_map_closes_in_silence_docked_and_in_flight() {
-    let mut view = offering();
-    view.open_dialog_map(MapOpener::Offer(MissionId(130)));
-    view.take_sounds();
-    press_map(&mut view);
-    assert_eq!(map_sounds(&mut view), [], "closed docked");
-    let mut view = holding();
-    for opener in [
-        MapOpener::MissionInfo(Some(0)),
-        MapOpener::Offer(MissionId(130)),
-        MapOpener::Computer(None),
-        MapOpener::Briefing(MapMarks::NONE),
-    ] {
-        view.open_dialog_map(opener);
-        view.take_sounds();
-        press_map(&mut view);
-        assert_eq!(view.take_sounds(), [], "{opener:?}: closed in flight");
+    for landed in [Some(StellarId(128)), None] {
+        for opener in [
+            MapOpener::MissionInfo(Some(0)),
+            MapOpener::Offer(MissionId(130)),
+            MapOpener::Computer(None),
+            MapOpener::Briefing(MapMarks::NONE),
+        ] {
+            let mut view = faked_dialogs(FlightFrame { landed, ..in_sol() }, MapMarks::NONE, MOON);
+            view.open_dialog_map(opener);
+            faked_press_map(&mut view);
+            assert_eq!(view.ui_sounds, [], "{opener:?}, docked at {landed:?}");
+        }
     }
 }
-
 #[test]
 fn in_flight_an_offers_map_puts_back_the_nav_it_opened_with_keeping_the_course() {
+    // The clicks' nav and course are the flight's
+    // (`nova_sim::session::map_click::tests`).
     for opener in [
         MapOpener::Offer(MissionId(130)),
         MapOpener::Computer(None),
         MapOpener::Briefing(MapMarks::NONE),
     ] {
-        let mut view = flight();
-        let before = NavMode::Stellar(Some(StellarId(129)));
-        view.sim
-            .session
-            .as_mut()
-            .expect("flying")
-            .select_stellar(nova_sim::StellarPick::Slot(1));
-        assert_eq!(nav_mode(&view), before, "{opener:?}");
+        let mut view = faked_in_flight();
         view.open_dialog_map(opener);
-        port_click(&mut view, 131);
+        faked_press_map(&mut view);
         assert_eq!(
-            nav_mode(&view),
-            NavMode::Hyperspace(Some(SystemId(131))),
-            "{opener:?}: a plain click writes mode 3 in flight"
-        );
-        view.port_map_input(&key(Key::Shift, true));
-        port_click(&mut view, 131);
-        view.port_map_input(&key(Key::Shift, false));
-        press_map(&mut view);
-        assert_eq!(nav_mode(&view), before, "{opener:?}: put back");
-        assert_eq!(
-            view.session().expect("flying").course(),
-            [SystemId(131)],
-            "{opener:?}: the Shift-click's course kept"
+            sent(&view),
+            [
+                FlightCommand::CueCourse,
+                FlightCommand::RestoreMapNav(SavedNav::of(MOON))
+            ],
+            "{opener:?}: the close's cue, then the nav as the map opened"
         );
     }
 }
-
 #[test]
 fn in_flight_mission_infos_map_keeps_the_clicks_nav_and_cues_the_course() {
-    let mut view = holding();
+    let mut view = faked_in_flight();
     view.open_dialog_map(MapOpener::MissionInfo(Some(0)));
-    view.port_map_input(&key(Key::Shift, true));
-    port_click(&mut view, 131);
-    view.port_map_input(&key(Key::Shift, false));
-    assert_eq!(nav_mode(&view), NavMode::Off, "a Shift-click writes no nav");
-    press_map(&mut view);
+    faked_press_map(&mut view);
     assert_eq!(
-        nav_mode(&view),
-        NavMode::Hyperspace(Some(SystemId(131))),
-        "the close's cue stands"
-    );
-    // A plain click's mode 3 stands too, with no course to cue.
-    let mut view = holding();
-    view.sim
-        .session
-        .as_mut()
-        .expect("flying")
-        .select_stellar(nova_sim::StellarPick::Slot(1));
-    view.open_dialog_map(MapOpener::MissionInfo(Some(0)));
-    port_click(&mut view, 131);
-    press_map(&mut view);
-    assert_eq!(
-        nav_mode(&view),
-        NavMode::Hyperspace(Some(SystemId(131))),
-        "the click's nav stands"
+        sent(&view),
+        [FlightCommand::CueCourse],
+        "the close's cue stands, and nothing is put back"
     );
 }
-
 #[test]
 fn a_dialogs_map_close_sends_back_the_nav_it_opened_with() {
     for opener in [
@@ -377,7 +332,8 @@ fn mission_infos_map_close_restores_nothing() {
 
 #[test]
 fn docked_the_close_puts_back_the_selection_the_map_opened_with_on_every_map() {
-    type Open = fn(&mut View);
+    type Open = fn(&mut Faked);
+    let earth = NavMode::Stellar(Some(StellarId(128)));
     let openers: [(&str, Open); 4] = [
         ("the bar's", |view| view.open_bar_map()),
         ("an offer's", |view| {
@@ -389,56 +345,75 @@ fn docked_the_close_puts_back_the_selection_the_map_opened_with_on_every_map() {
         ("another", |view| view.open_map()),
     ];
     for (what, open) in openers {
-        let mut view = offering();
-        open(&mut view);
-        view.port_map_input(&key(Key::Char('c'), true));
-        assert_eq!(
-            nav_mode(&view),
-            NavMode::Stellar(None),
-            "{what}: Clear Route lets go of it"
+        let mut view = faked_dialogs(
+            FlightFrame {
+                landed: Some(StellarId(128)),
+                nav_mode: earth,
+                ..in_sol()
+            },
+            MapMarks::NONE,
+            earth,
         );
-        press_map(&mut view);
+        open(&mut view);
+        view.port_map_input_with(
+            &key(Key::Char('c'), true),
+            super::faked_travel::faked_words(),
+        );
+        assert_eq!(sent(&view), [FlightCommand::ClearRoute], "{what}");
+        faked_press_map(&mut view);
         assert_eq!(
-            nav_mode(&view),
-            NavMode::Stellar(Some(StellarId(128))),
-            "{what}: put back"
+            sent(&view).get(1),
+            Some(&FlightCommand::RestoreMapSelection(SavedNav::of(earth))),
+            "{what}: the selection put back, undoing the Clear Route"
+        );
+        assert!(!sent(&view).contains(&FlightCommand::CueCourse), "{what}");
+    }
+}
+#[test]
+fn docked_the_computers_map_redraws_the_nav_area_after_its_restore_and_an_offers_not() {
+    let earth = NavMode::Stellar(Some(StellarId(128)));
+    for (opener, after) in [
+        (MapOpener::Offer(MissionId(130)), MOON),
+        (MapOpener::Computer(Some(MissionId(130))), earth),
+    ] {
+        let docked = FlightFrame {
+            landed: Some(StellarId(128)),
+            nav_mode: MOON,
+            ..in_sol()
+        };
+        let mut view = faked_dialogs(docked.clone(), MapMarks::NONE, earth);
+        view.open_dialog_map(opener);
+        // The selection's put-back changes nothing; the dialog's restore
+        // puts Earth back.
+        view.sim.queue_answer(Answer::Done);
+        view.sim.queue_answer_showing(
+            Answer::Done,
+            FlightFrame {
+                nav_mode: earth,
+                ..docked
+            },
+        );
+        faked_press_map(&mut view);
+        assert_eq!(
+            view.nav_scene.as_ref().map(|(nav, _)| *nav),
+            Some(after),
+            "{opener:?}: the close's redraw, then the computer's after the restore"
         );
     }
 }
-
-#[test]
-fn docked_the_computers_map_redraws_the_nav_area_after_its_restore_and_an_offers_not() {
-    let mut view = offering();
-    view.open_dialog_map(MapOpener::Offer(MissionId(130)));
-    view.port_map_input(&key(Key::Char('c'), true));
-    press_map(&mut view);
-    assert_eq!(nav_mode(&view), NavMode::Stellar(Some(StellarId(128))));
-    assert_ne!(
-        port_nav(&view),
-        naming("Earth"),
-        "the close's redraw, before the put-back"
-    );
-    let mut view = offering();
-    view.open_dialog_map(MapOpener::Computer(Some(MissionId(130))));
-    view.port_map_input(&key(Key::Char('c'), true));
-    press_map(&mut view);
-    assert_eq!(port_nav(&view), naming("Earth"), "_DrawStatus after it");
-}
-
 #[test]
 fn a_borders_change_on_a_dialogs_map_saves_in_flight_and_not_docked() {
-    let mut view = holding();
-    view.open_dialog_map(MapOpener::MissionInfo(Some(0)));
-    view.port_map_input(&key(Key::Char('b'), true));
-    press_map(&mut view);
-    assert_eq!(view.take_map_borders_save(), Some(false), "in flight");
-    let mut view = offering();
-    view.open_dialog_map(MapOpener::Offer(MissionId(130)));
-    view.port_map_input(&key(Key::Char('b'), true));
-    press_map(&mut view);
-    assert_eq!(view.take_map_borders_save(), None, "docked");
+    for (landed, saved) in [(None, Some(false)), (Some(StellarId(128)), None)] {
+        let mut view = faked_dialogs(FlightFrame { landed, ..in_sol() }, MapMarks::NONE, MOON);
+        view.open_dialog_map(MapOpener::MissionInfo(Some(0)));
+        view.port_map_input_with(
+            &key(Key::Char('b'), true),
+            super::faked_travel::faked_words(),
+        );
+        faked_press_map(&mut view);
+        assert_eq!(view.take_map_borders_save(), saved, "docked at {landed:?}");
+    }
 }
-
 #[test]
 fn after_a_dialogs_map_flights_map_draws_with_no_marks() {
     for opener in [

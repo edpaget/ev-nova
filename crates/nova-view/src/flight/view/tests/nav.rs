@@ -121,42 +121,6 @@ fn far_from_the_centre_nav_off_with_a_course_lets_the_arrow_show() {
     assert_eq!(most_lines(&mut view), Some(3), "mode -1 shows it");
 }
 
-#[test]
-fn closing_the_course_map_cues_the_courses_first_hop() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    tap(&mut view, NAV_OFF_KEY);
-    assert_eq!(nav_mode(&view), NavMode::Off);
-    tap(&mut view, MAP);
-    tap(&mut view, MAP);
-    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
-    assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
-}
-
-#[test]
-fn the_hypergate_map_opens_with_the_current_system_selected() {
-    let mut view = FlightView::new(gated());
-    plot(&mut view, 131);
-    land_now(&mut view);
-    let map = view.course_map();
-    assert_eq!(map.mode(), MapMode::Hypergate);
-    assert_eq!(map.selected(), Some(SystemId(130)), "Sol");
-    assert_eq!(map.hyper_selection(), None, "nothing in mode 3");
-    tap(&mut view, MAP);
-    assert_eq!(view.message(), Some(HYPERGATE_CANCELLED), "no pick");
-}
-
-#[test]
-fn closing_the_hypergate_map_turns_the_nav_off_and_cues_nothing() {
-    let mut view = FlightView::new(gated());
-    plot(&mut view, 131);
-    land_now(&mut view);
-    tap(&mut view, MAP);
-    assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
-    assert_eq!(course(&view), [SystemId(131)], "the course kept");
-    assert_eq!(nav_mode(&view), NavMode::Off);
-}
-
 // The nav target's brackets.
 
 /// The nav bracket `cïcn`s drawn (10000-10007), and where.

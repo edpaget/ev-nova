@@ -53,39 +53,6 @@ fn while_the_map_is_open_flight_is_paused_and_keys_go_to_the_map() {
     assert_eq!(player(&view).heading, 0.0, "Left went to the map");
 }
 
-#[test]
-fn closing_the_map_abandons_its_drag() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    let empty = Point::new(250.0, 150.0);
-    view.input(&Input::PointerButton {
-        button: crate::MouseButton::Left,
-        pressed: true,
-        at: empty,
-    });
-    view.close_map();
-    assert!(!view.map_open());
-    tap(&mut view, MAP);
-    let place = view.course_map().place().expect("in flight").scroll();
-    view.input(&Input::PointerMoved(Point::new(300.0, 150.0)));
-    view.input(&Input::PointerButton {
-        button: crate::MouseButton::Left,
-        pressed: false,
-        at: empty,
-    });
-    assert_eq!(
-        view.course_map().place().expect("in flight").scroll(),
-        place,
-        "no drag"
-    );
-    assert_eq!(
-        view.course_map().selected(),
-        Some(SystemId(130)),
-        "the preselect"
-    );
-    assert_eq!(view.session().expect("flying").course(), []);
-}
-
 /// The land hint as the fixture words it, for the Moon, the nearest
 /// stellar to the centre.
 const MOON_HINT: &str = "Welcome to Nova - it would be a good idea to start by landing on Moon and having a look around. Hit 'L' to request landing clearance, then hit it again to land.";
@@ -759,27 +726,6 @@ fn the_gate_messages_read_as_the_original() {
 }
 
 #[test]
-fn m_beeps_as_it_opens_and_closes_the_course_map() {
-    let mut view = flight();
-    view.take_sounds();
-    tap(&mut view, MAP);
-    assert!(view.map_open());
-    assert_eq!(ui_sounds(&mut view), [UiSound::MapOpened], "opened");
-    tap(&mut view, MAP);
-    assert!(!view.map_open());
-    assert_eq!(ui_sounds(&mut view), [UiSound::MapClosed], "closed");
-}
-
-#[test]
-fn escape_closing_the_course_map_beeps_its_close() {
-    let mut view = flight();
-    tap(&mut view, MAP);
-    view.take_sounds();
-    view.close_map();
-    assert_eq!(ui_sounds(&mut view), [UiSound::MapClosed]);
-}
-
-#[test]
 fn the_course_map_makes_no_map_sound_on_its_own_input_or_ms_repeats() {
     let mut view = flight();
     tap(&mut view, MAP);
@@ -820,25 +766,6 @@ fn a_refused_m_makes_no_map_sound() {
 }
 
 #[test]
-fn the_hypergate_map_makes_no_map_sound() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    assert_eq!(map_sounds(&mut view), [], "opened");
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    tap(&mut view, MAP);
-    assert_eq!(system_of(&view), SystemId(131));
-    assert_eq!(map_sounds(&mut view), [], "closed on a pick");
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    view.take_sounds();
-    view.close_map();
-    assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
-    assert_eq!(map_sounds(&mut view), [], "cancelled");
-}
-
-#[test]
 fn a_hypergates_greeting_is_one_of_its_own_by_a_roll() {
     let mut view = FlightView::new(gated());
     tap(&mut view, LAND);
@@ -852,44 +779,6 @@ fn a_hypergates_greeting_is_one_of_its_own_by_a_roll() {
     tap(&mut view, LAND);
     ticks(&mut view, 1);
     assert_lasts(&mut view, "You are cleared for hypergate entry. ", 250);
-}
-
-#[test]
-fn a_hypergate_the_pilot_may_not_use_denies_it_in_its_own_words() {
-    let mut catalog = gated();
-    catalog.sites[0].min_status = 100;
-    let mut view = FlightView::new(catalog);
-    tap(&mut view, LAND);
-    assert_lasts(&mut view, HYPERGATE_DENIED, 250);
-}
-
-#[test]
-fn an_offline_gate_is_refused_in_its_own_words() {
-    for (flags2, kind) in [(0x1000, GateKind::Hypergate), (0x2000, GateKind::Wormhole)] {
-        let mut view = flight_among(vec![LandingSite {
-            flags2,
-            ..site(300, (0.0, 0.0), StellarFlags::STATION)
-        }]);
-        tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
-        tap(&mut view, LAND);
-        let refusal = gate_refusal_message(kind);
-        assert_lasts(&mut view, &refusal, 250);
-    }
-    let mut planet = flight_among(vec![site(128, (0.0, 0.0), 0)]);
-    tap_slot(&mut planet, STELLAR_SLOT_KEYS[0][0]);
-    tap(&mut planet, LAND);
-    let line = "Your ship is unable to land on  Earth. The planet's environment is too hostile.";
-    assert_lasts(&mut planet, line, 250);
-}
-
-#[test]
-fn l_twice_at_a_hypergate_opens_the_map_offering_its_links() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    assert!(view.map_open());
-    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    assert_eq!(view.take_landing(), None, "not landed");
-    assert_eq!(system_of(&view), SystemId(130));
 }
 
 /// Taps I in `view`, its sounds taken first: nothing is asked for,
@@ -936,37 +825,6 @@ fn i_while_disabled_is_taken() {
 }
 
 #[test]
-fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    tap(&mut view, MAP);
-    assert!(!view.map_open());
-    assert_eq!(view.course_map().mode(), MapMode::Course);
-    assert_eq!(system_of(&view), SystemId(131));
-    assert_eq!(player(&view).position, Vec2::new(100.0, 200.0));
-    assert_eq!(view.scene().map(SystemScene::name), Some("Alpha Centauri"));
-    assert_eq!(
-        view.message(),
-        Some("Exiting hypergate in the Alpha Centauri system on June 23rd, 1177 NC.")
-    );
-    assert_eq!(
-        view.jump_effect().map(JumpEffect::phase),
-        Some(JumpPhase::FadeIn(0.0))
-    );
-    assert_eq!(view.shown_position(), Point::new(100.0, 200.0));
-    view.tick(FADE_IN_FOR);
-    assert_eq!(view.jump_effect(), None, "the fade is over");
-    assert_eq!(system_of(&view), SystemId(131));
-    assert_eq!(
-        view.course_map().current(),
-        Some(SystemId(131)),
-        "the map follows"
-    );
-}
-
-#[test]
 fn the_ship_flies_under_a_hypergates_fade_in() {
     let mut view = FlightView::new(gated());
     land_now(&mut view);
@@ -984,51 +842,4 @@ fn the_ship_flies_under_a_hypergates_fade_in() {
     assert_eq!(player(&view), stepped(arrived, THRUST, 3));
     assert_ne!(player(&view).position, arrived.position, "it flies");
     assert!(translucent_fade(&drawn(&view)), "still fading in");
-}
-
-#[test]
-fn a_hypergate_whose_gates_system_is_hidden_is_picked_by_the_one_at_its_place() {
-    let mut view = FlightView::new(FakeCatalog {
-        reborn: true,
-        ..gated()
-    });
-    change_galaxy(&mut view, hiding(131));
-    view.tick(TICK);
-    land_now(&mut view);
-    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    let reborn = on_map(&mut view, 133);
-    click(&mut view, reborn);
-    tap(&mut view, MAP);
-    assert_eq!(system_of(&view), SystemId(133));
-    assert_eq!(player(&view).position, Vec2::new(100.0, 200.0), "at 310");
-    assert_eq!(view.scene().map(SystemScene::name), Some("Alpha Reborn"));
-}
-
-#[test]
-fn escape_on_the_hypergate_map_enters_the_gate_too() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    let alpha = on_map(&mut view, 131);
-    click(&mut view, alpha);
-    view.close_map();
-    assert_eq!(system_of(&view), SystemId(131));
-}
-
-#[test]
-fn closing_the_hypergate_map_without_a_pick_cancels() {
-    let mut view = FlightView::new(gated());
-    land_now(&mut view);
-    tap(&mut view, MAP);
-    assert!(!view.map_open());
-    assert_eq!(view.course_map().mode(), MapMode::Course);
-    assert_eq!(system_of(&view), SystemId(130));
-    assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
-    assert_eq!(view.jump_effect(), None);
-    assert_eq!(nav_target(&view), None);
-    // The map is a course map again.
-    tap(&mut view, MAP);
-    assert_eq!(view.course_map().mode(), MapMode::Course);
-    tap(&mut view, MAP);
-    assert_eq!(view.message(), Some(HYPERGATE_CANCELLED), "nothing new");
-    assert_lasts(&mut view, HYPERGATE_CANCELLED, GATE_REFUSAL_TICKS);
 }

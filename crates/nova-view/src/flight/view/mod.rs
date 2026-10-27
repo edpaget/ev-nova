@@ -676,6 +676,7 @@ mod death;
 mod dialog_map;
 mod docked;
 mod drawing;
+mod gates;
 mod hyperspace;
 mod inbox;
 mod interface;
