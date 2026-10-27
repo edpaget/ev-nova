@@ -546,8 +546,6 @@ mod nebulae;
 mod news;
 mod npc_escape;
 mod npc_kinds;
-#[cfg(test)]
-mod npc_shot_wait;
 mod operator_moves;
 mod outbox;
 mod outfits;
