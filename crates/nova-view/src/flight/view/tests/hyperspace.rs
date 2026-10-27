@@ -982,14 +982,6 @@ fn set_hyperspace_effects_changes_the_next_jump() {
 }
 
 #[test]
-fn the_sabotage_death_descs_come_from_the_pilots_outfits() {
-    let mut sabotaged = multi_jumping();
-    sabotaged.outfits[0].mods[0] = (nova_sim::SABOTAGE_KILL, 5000);
-    assert_eq!(FlightView::new(sabotaged).sabotage_death_descs(), [5000]);
-    assert_eq!(flight().sabotage_death_descs(), Vec::<i16>::new());
-}
-
-#[test]
 fn a_multi_jump_plays_one_effect_and_loads_only_the_final_system() {
     let mut view = planner(FlightView::new(multi_jumping())).with_overlays(TITLED);
     plot(&mut view, 132);

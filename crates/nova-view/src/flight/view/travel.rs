@@ -2,8 +2,6 @@
 //! its steps, arrival, take-off, landing, the shipyard and outfitter
 //! orders.
 
-use std::time::Duration;
-
 use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 use nova_sim::{
@@ -12,12 +10,11 @@ use nova_sim::{
     OutfitRun, PilotCatalog, Session, Settled, ShipId, ShipPurchase, ShipRefusal, SimMessage,
     StellarId, TrafficCatalog,
 };
-use nova_sim::{PlayerCommand, PlayerFate, TagNames};
+use nova_sim::{PlayerCommand, TagNames};
 
 use nova_sim::flight_frame::{Answer, FlightCommand, MapClick};
 
 use crate::devtools::SessionDesk;
-use crate::fade::{DEATH_FADE_FOR, ScreenFade};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::jump::JumpEffect;
@@ -50,62 +47,6 @@ impl<
         + EscortMenuLooks,
 > FlightView<C, crate::flight::SessionFlight<C>>
 {
-    /// Covers the view, widened or not, in the arrival's fade-in, then in
-    /// the jump's fade-out, then in the death's fade to black, as far as
-    /// each shows.
-    pub(super) fn draw_fades(&self, list: &mut DrawList) {
-        for effect in [&self.fade_in, &self.jump].into_iter().flatten() {
-            effect.draw_fade(list, self.view);
-        }
-        if let Some(fade) = &self.death_fade {
-            fade.draw(list, self.view);
-        }
-    }
-
-    /// Whether the hold after the player's explosion has run out
-    /// ([`Session::hold_expired`]): flight steps no more.
-    pub(super) fn hold_expired(&self) -> bool {
-        self.sim.session.as_ref().is_ok_and(Session::hold_expired)
-    }
-
-    /// Whether any flight key is held down.
-    #[must_use]
-    pub fn holds_keys(&self) -> bool {
-        !self.held.is_empty()
-    }
-
-    /// The `dësc` IDs a sabotaged player sees as it dies
-    /// ([`Session::sabotage_death_descs`]); none without a session.
-    #[must_use]
-    pub fn sabotage_death_descs(&self) -> Vec<i16> {
-        self.sim
-            .session
-            .as_ref()
-            .map_or_else(|_| Vec::new(), Session::sabotage_death_descs)
-    }
-
-    /// Begins the fade to black after the hold has expired, over
-    /// [`DEATH_FADE_FOR`]; nothing before then ([`Session::begin_fade`]).
-    pub fn begin_fade(&mut self) {
-        let Ok(session) = &mut self.sim.session else {
-            return;
-        };
-        session.begin_fade();
-        if session.player_fate() == PlayerFate::Fading && self.death_fade.is_none() {
-            self.death_fade = Some(ScreenFade::to_black(DEATH_FADE_FOR));
-        }
-    }
-
-    /// Whether the death's fade is over and play has ended: the router
-    /// returns to the main screen.
-    #[must_use]
-    pub fn game_over(&self) -> bool {
-        self.sim
-            .session
-            .as_ref()
-            .is_ok_and(|session| session.player_fate() == PlayerFate::GameOver)
-    }
-
     /// Whether the pilot may be saved now, as [`Session::may_save`] says:
     /// not while the player is dying or dead, nor without a session.
     #[must_use]
@@ -130,20 +71,6 @@ impl<
             .session
             .as_ref()
             .is_ok_and(Session::deletes_pilot_on_ending_play)
-    }
-
-    /// Moves the death's fade on by `dt`, and ends play once it is over;
-    /// nothing else moves.
-    pub(super) fn advance_death_fade(&mut self, dt: Duration) {
-        let Some(fade) = &mut self.death_fade else {
-            return;
-        };
-        fade.advance(dt);
-        if fade.done()
-            && let Ok(session) = &mut self.sim.session
-        {
-            session.end_play();
-        }
     }
 
     /// The input to the map opened over a screen: in port

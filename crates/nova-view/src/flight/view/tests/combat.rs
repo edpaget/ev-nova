@@ -1579,16 +1579,6 @@ fn a_first_tick_eject_rolls_no_puff_for_the_player() {
     assert_eq!((breaking[0].ticks_left, breaking[0].starting), (100, true));
 }
 
-/// The player's layers drawn, by `rlëD`: its ship 2000, glow 2100
-/// and lights 2200 (the NPC's are 2001, 2101 and 2201).
-fn player_layers(view: &View) -> Vec<i16> {
-    ship_sprites(view)
-        .iter()
-        .map(|(image, _)| image.id)
-        .filter(|id| [2000, 2100, 2200].contains(id))
-        .collect()
-}
-
 /// The player's layers drawn in `view`: its ship, its glow and its
 /// lights.
 fn faked_player_layers(view: &Faked) -> Vec<i16> {
@@ -1839,24 +1829,6 @@ fn at_the_explosion() -> View {
     view
 }
 
-/// The shots in flight in `view`'s session.
-fn shots_in(view: &View) -> Vec<nova_sim::combat::projectile::Shot> {
-    view.session().expect("flying").shots().to_vec()
-}
-
-/// The alpha of the black covering the whole screen, if the last
-/// thing `view` draws is one.
-fn black_over(view: &View) -> Option<u8> {
-    match drawn(view).iter().last() {
-        Some(DrawCommand::Line { width, color, .. })
-            if *width == VIEW_SIZE.1 && (color.r, color.g, color.b) == (0, 0, 0) =>
-        {
-            Some(color.a)
-        }
-        _ => None,
-    }
-}
-
 /// [`at_the_explosion`], stepped one tick at a time through the hold
 /// to its expiry, which the view reports.
 fn held_to_expiry() -> View {
@@ -1884,106 +1856,6 @@ fn a_real_flight_meets_the_contract_through_the_hold_its_expiry_and_the_fade() {
     view.tick(Duration::from_millis(1000));
     assert!(view.game_over());
     meets_the_contract(&view, "game over");
-}
-
-#[test]
-fn after_the_explosion_the_scene_runs_on_without_the_ship_until_the_hold_expires() {
-    let mut view = at_the_explosion();
-    let mut shots_moved = 0;
-    for tick in 1..=nova_sim::HOLD_TICKS {
-        let before = shots_in(&view);
-        view.tick(TICK);
-        assert_eq!(player_layers(&view), [0_i16; 0], "dead tick {tick}");
-        assert!(
-            ship_sprites(&view)
-                .iter()
-                .any(|(image, _)| image.id == 2001),
-            "the NPC is drawn on dead tick {tick}"
-        );
-        assert!(!view.take_hold_expired(), "dead tick {tick}");
-        if shots_in(&view) != before {
-            shots_moved += 1;
-        }
-    }
-    assert_eq!(shots_moved, nova_sim::HOLD_TICKS, "the fight runs on");
-    assert_eq!(
-        fate_of(&view),
-        PlayerFate::Holding { ticks_left: 0 },
-        "no ticks left, but not expired"
-    );
-    assert!(!view.game_over());
-    let before = shots_in(&view);
-    view.tick(TICK);
-    assert_ne!(shots_in(&view), before, "the 243rd step runs");
-    assert!(view.take_hold_expired(), "and the hold expires on it");
-    assert!(!view.take_hold_expired(), "once");
-}
-
-#[test]
-fn a_long_frame_stops_stepping_on_the_hold_expirys_step() {
-    let stepped = held_to_expiry();
-    let mut view = at_the_explosion();
-    for _ in 0..nova_sim::HOLD_TICKS - 2 {
-        view.tick(TICK);
-    }
-    view.tick(TICK * 8);
-    assert!(view.take_hold_expired());
-    assert_eq!(shots_in(&view), shots_in(&stepped), "no step after it");
-    assert_eq!(
-        view.session().expect("flying").npcs(),
-        stepped.session().expect("flying").npcs()
-    );
-}
-
-#[test]
-fn at_hold_expiry_flight_stops_and_nothing_fades_until_the_fade_begins() {
-    let mut view = held_to_expiry();
-    let shots = shots_in(&view);
-    for _ in 0..30 {
-        view.tick(TICK);
-        assert_eq!(shots_in(&view), shots, "nothing moves");
-        assert_eq!(black_over(&view), None, "nothing fades");
-        assert_eq!(fate_of(&view), PlayerFate::Holding { ticks_left: 0 });
-        assert!(!view.game_over());
-    }
-    view.begin_fade();
-    assert_eq!(fate_of(&view), PlayerFate::Fading);
-}
-
-#[test]
-fn the_death_fade_goes_to_black_over_a_second_then_the_game_is_over() {
-    let mut view = held_to_expiry();
-    view.begin_fade();
-    let shots = shots_in(&view);
-    view.tick(Duration::from_millis(500));
-    assert_eq!(black_over(&view), Some(128), "half way, over the HUD");
-    assert!(!view.game_over());
-    assert_eq!(shots_in(&view), shots, "the scene is frozen under it");
-    view.tick(Duration::from_millis(499));
-    assert!(!view.game_over());
-    assert_eq!(fate_of(&view), PlayerFate::Fading);
-    view.tick(Duration::from_millis(1));
-    assert_eq!(black_over(&view), Some(255));
-    assert!(view.game_over());
-    assert_eq!(fate_of(&view), PlayerFate::GameOver);
-    assert_eq!(shots_in(&view), shots);
-}
-
-#[test]
-fn beginning_the_fade_before_the_hold_expires_does_nothing() {
-    let mut view = at_the_explosion();
-    view.tick(TICK);
-    view.begin_fade();
-    view.tick(Duration::from_millis(1500));
-    assert_eq!(black_over(&view), None);
-    assert!(!view.game_over());
-    assert!(matches!(fate_of(&view), PlayerFate::Holding { .. }));
-    while !view.take_hold_expired() {
-        view.tick(TICK);
-    }
-    view.tick(Duration::from_millis(1500));
-    assert_eq!(black_over(&view), None, "nor once the hold expires");
-    assert!(!view.game_over());
 }
 
 #[test]

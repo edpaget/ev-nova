@@ -672,6 +672,7 @@ use dialog_map::MapOpened;
 
 mod build;
 mod cockpit;
+mod death;
 mod dialog_map;
 mod docked;
 mod drawing;

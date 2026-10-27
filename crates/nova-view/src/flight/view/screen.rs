@@ -198,8 +198,7 @@ impl<
             self.map.tick(dt);
             return;
         }
-        if self.hold_expired() {
-            self.advance_death_fade(dt);
+        if self.death_frame(dt) {
             return;
         }
         self.step_stellars(dt);

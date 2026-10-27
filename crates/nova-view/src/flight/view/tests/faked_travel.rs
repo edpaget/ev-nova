@@ -252,3 +252,110 @@ fn the_message_box_is_filled_in_the_systems_background_at_rgb555() {
         "the box, under the text"
     );
 }
+
+// Death.
+
+/// [`faked`] in Sol with the flight's fate `fate` and its hold expired
+/// as `expired` says.
+fn dying(fate: PlayerFate, expired: bool) -> Faked {
+    faked(FlightFrame {
+        fate,
+        hold_expired: expired,
+        ..in_sol()
+    })
+}
+
+/// The alpha of the black `view` draws over everything, if it does.
+fn black_of(view: &Faked) -> Option<u8> {
+    let mut list = DrawList::new();
+    view.draw_fades(&mut list);
+    list.iter().find_map(|command| match command {
+        DrawCommand::Line { width, color, .. }
+            if *width == VIEW_SIZE.1 && (color.r, color.g, color.b) == (0, 0, 0) =>
+        {
+            Some(color.a)
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn until_the_hold_has_expired_the_death_frame_leaves_the_tick_to_step() {
+    for fate in [
+        PlayerFate::Flying,
+        PlayerFate::Exploded,
+        PlayerFate::Holding { ticks_left: 5 },
+        PlayerFate::Holding { ticks_left: 0 },
+    ] {
+        let mut view = dying(fate, false);
+        assert!(!view.death_frame(TICK), "{fate:?}: the steps run");
+        assert_eq!(black_of(&view), None, "{fate:?}");
+        assert!(!view.game_over(), "{fate:?}");
+    }
+}
+
+#[test]
+fn at_the_holds_expiry_flight_stops_and_nothing_fades_until_the_fade_begins() {
+    let mut view = dying(PlayerFate::Holding { ticks_left: 0 }, true);
+    for _ in 0..30 {
+        assert!(view.death_frame(TICK), "nothing steps");
+        assert_eq!(black_of(&view), None, "nothing fades");
+        assert!(!view.game_over());
+    }
+    assert_eq!(sent(&view), [], "no end of play asked for");
+    view.sim.queue_answer(Answer::Done);
+    view.sim.frame_mut().fate = PlayerFate::Fading;
+    view.begin_fade();
+    assert_eq!(sent(&view), [FlightCommand::BeginFade]);
+    assert!(view.death_fade.is_some(), "the fade begun");
+}
+
+#[test]
+fn the_death_fade_goes_to_black_over_a_second_then_ends_play() {
+    let mut view = dying(PlayerFate::Fading, true);
+    view.begin_fade();
+    view.death_frame(Duration::from_millis(500));
+    assert_eq!(black_of(&view), Some(128), "half way");
+    view.death_frame(Duration::from_millis(499));
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::BeginFade],
+        "not over: no end yet"
+    );
+    view.sim.queue_answer(Answer::Done);
+    view.sim.frame_mut().fate = PlayerFate::GameOver;
+    view.death_frame(Duration::from_millis(1));
+    assert_eq!(black_of(&view), Some(255));
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::BeginFade, FlightCommand::EndPlay],
+        "play ended at the fade's end"
+    );
+    assert!(view.game_over(), "the frame's fate");
+}
+
+#[test]
+fn beginning_the_fade_before_the_hold_expires_does_nothing() {
+    let mut view = dying(PlayerFate::Holding { ticks_left: 3 }, false);
+    view.begin_fade();
+    assert_eq!(sent(&view), [FlightCommand::BeginFade], "refused");
+    assert!(!view.death_frame(Duration::from_millis(1500)));
+    assert_eq!(black_of(&view), None);
+    assert!(!view.game_over());
+}
+
+#[test]
+fn the_sabotaged_players_death_descs_are_the_flights() {
+    let mut view = faked(in_sol());
+    assert_eq!(view.sabotage_death_descs(), Vec::<i16>::new());
+    view.sim.set_death_descs(vec![5000]);
+    assert_eq!(view.sabotage_death_descs(), [5000]);
+}
+
+#[test]
+fn the_flight_keys_held_are_the_views() {
+    let mut view = faked(in_sol());
+    assert!(!view.holds_keys());
+    view.track_held(&key(Key::Up, true));
+    assert!(view.holds_keys());
+}
