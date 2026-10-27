@@ -99,7 +99,7 @@ description = "Apply infra/github to the LIVE repository, interactively (gh toke
 run = "GITHUB_TOKEN=$(gh auth token) op run --env-file=infra/github/op.env -- sh -c 'tofu -chdir=infra/github init -input=false -lockfile=readonly && tofu -chdir=infra/github apply'"
 
 [tasks.infra-check]
-description = "fmt, validate and mocked-provider tests for infra/github, with no credentials. The one non-cargo check: cargo can't test HCL, and a Rust wrapper would need tofu and the network (not hermetic). Runs only here and in CI's infra job, never in ci or hk"
+description = "fmt, validate, mocked-provider tests and the state-encryption guard for infra/github, with no credentials. The one non-cargo check: cargo can't test HCL, and a Rust wrapper would need tofu and the network (not hermetic). Runs only here and in CI's infra job, never in ci or hk"
 # Evaluating the encryption block needs some passphrase. No state exists
 # where this runs, so the value protects nothing.
 env = { TF_VAR_state_passphrase = "check-only-not-a-secret" }
@@ -108,4 +108,5 @@ run = [
   "tofu -chdir=infra/github init -backend=false -input=false -lockfile=readonly",
   "tofu -chdir=infra/github validate",
   "tofu -chdir=infra/github test",
+  "sh infra/github/check-encryption.sh",
 ]

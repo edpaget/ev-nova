@@ -157,8 +157,18 @@ fails while the temporary block is in place (its guard expects
 ## Checks
 
 `mise run infra-check` runs `tofu fmt -check`, `tofu init -backend=false`,
-`tofu validate` and `tofu test` with mocked providers. It needs no
-credentials and is what CI's `infra` job runs.
+`tofu validate`, `tofu test` with mocked providers, and
+`check-encryption.sh`. It needs no credentials and is what CI's `infra` job
+runs.
+
+`tofu test` can't see the encryption block, so `check-encryption.sh` guards
+it by behaviour, in a temporary directory with copies of the `*.tf` files and
+the infra-check task's dummy passphrase. It checks that the config refuses a
+planted plaintext state and a plaintext plan file ("unencrypted payload"),
+and that an override adding an `unencrypted` fallback to the `state` block,
+and then to the `plan` block, is refused ("enforced flag is set"). It fails
+if the encryption block, its `state` or `plan` block, or either block's
+`enforced = true` is removed or turned off. It never reads the real state.
 
 It is the repository's one check outside cargo, and its scope is narrow on
 purpose: only the `infra-check` task and the `infra` CI job, never part of
