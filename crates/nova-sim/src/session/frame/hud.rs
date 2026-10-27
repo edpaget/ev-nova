@@ -242,7 +242,10 @@ mod tests {
                 order: None,
             })
         );
-        assert_eq!(rows, session.escort_menu());
+        assert_eq!(
+            rows,
+            session.space.escort_rows(&session.pilot, &session.statics)
+        );
     }
 
     #[test]

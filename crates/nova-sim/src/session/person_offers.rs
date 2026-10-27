@@ -209,7 +209,7 @@ impl Session {
     /// [`HailRefusal::NoResponse`] for a navigation stellar that does not
     /// answer, or one not shown; and [`Session::hail`]'s refusals of the
     /// ship target.
-    pub fn hail_key(
+    pub(crate) fn hail_key(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
         options: &HailOptions,

@@ -85,7 +85,8 @@
 //! In hyperspace the escorts let go of their targets every tick
 //! (`_MakeEscortsHyperWithParent` @0x3fdc0-0x3fdc2), so an Attack there
 //! always copies the target afresh; on arrival an order given during the
-//! jump is reset or kept as any other is. The escort menu's rows ([`Session::escort_menu`]) give each
+//! jump is reset or kept as any other is. The escort menu's rows ([`Space::escort_rows`], the frame's
+//! [`FrameHud::escort_rows`](crate::flight_frame::FrameHud::escort_rows)) give each
 //! class's presence and its first escort's order. A carried fighter is
 //! placed as any escort is, its carrier the player (see
 //! [`fighters`](super::fighters)).
@@ -731,7 +732,7 @@ impl Session {
     /// "attacking target" when the report says so (@0x6660a-0x6663c), else
     /// the acknowledgement, queued on the voice channel (see the `voices`
     /// module).
-    pub fn command_escorts(
+    pub(crate) fn command_escorts(
         &mut self,
         group: EscortGroup,
         command: EscortCommand,
@@ -820,22 +821,6 @@ impl Session {
             targeted: reported.is_some(),
             underway: self.mode.jump().is_some(),
         })
-    }
-
-    /// The escort menu's class rows, in its order: whether the player
-    /// leads a ship of each class, hired or a mission escort, disabled
-    /// included (`_DrawEscortMenuInFrame` @0x56392-0x563ca), and the
-    /// standing order of its first escort (`class_row`).
-    #[must_use]
-    pub fn escort_menu(&self) -> [ClassRow; 4] {
-        self.space.escort_rows(&self.pilot, &self.statics)
-    }
-
-    /// Whether the player has an escort flying
-    /// ([`Space::escorts_flying`]).
-    #[must_use]
-    pub fn escorts_flying(&self) -> bool {
-        self.space.escorts_flying(&self.pilot)
     }
 }
 
@@ -3183,7 +3168,7 @@ pub(super) mod tests {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Bible);
         assert_eq!(
-            session.escort_menu(),
+            session.space.escort_rows(&session.pilot, &session.statics),
             [
                 ClassRow {
                     class: EscortClass::Fighter,
@@ -3212,10 +3197,16 @@ pub(super) mod tests {
             EscortCommand::Hold,
             &mut NeverFires,
         );
-        assert_eq!(session.escort_menu()[3].order, Some(EscortOrder::Hold));
+        assert_eq!(
+            session.space.escort_rows(&session.pilot, &session.statics)[3].order,
+            Some(EscortOrder::Hold)
+        );
         let landed = Session::fly(&catalog, escorted(&catalog)).expect("flies");
         assert_eq!(
-            landed.escort_menu().map(|row| row.present),
+            landed
+                .space
+                .escort_rows(&landed.pilot, &landed.statics)
+                .map(|row| row.present),
             [false, false, true, true],
             "by their records before they are placed"
         );

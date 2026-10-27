@@ -144,7 +144,7 @@ impl Session {
 
     /// Return (`ackComm`) clears the message line: for a tick, while a
     /// line shows (`_HandlePlayer` @0x6dd22-0x6dd65).
-    pub fn comm_acknowledged(&mut self) {
+    pub(crate) fn comm_acknowledged(&mut self) {
         self.space.comm_acknowledged();
     }
 
@@ -159,7 +159,7 @@ impl Session {
     /// (@0x949a1) comes after a take's line, which the flight words and
     /// shows ([`Session::comm_shown`]) after the session's own pass (see
     /// the session's `plunder_loop` module).
-    pub fn comm_ticked(&mut self) {
+    pub(crate) fn comm_ticked(&mut self) {
         self.space.comm_ticked();
     }
 

@@ -1611,7 +1611,8 @@ pub(super) mod tests {
     /// The menu row of `class`.
     fn row(session: &Session, class: EscortClass) -> crate::escort::ClassRow {
         session
-            .escort_menu()
+            .space
+            .escort_rows(&session.pilot, &session.statics)
             .into_iter()
             .find(|row| row.class == class)
             .expect("every class has a row")
@@ -1622,13 +1623,13 @@ pub(super) mod tests {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = flying(&catalog);
         let class = mission_escorts(&session)[0].class;
-        for other in session.escort_menu() {
+        for other in session.space.escort_rows(&session.pilot, &session.statics) {
             assert_eq!(other.present, other.class == class, "{:?}", other.class);
             assert_eq!(other.order, None);
         }
         session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires);
         assert_eq!(row(&session, class).order, Some(EscortOrder::Hold));
-        assert!(session.escorts_flying());
+        assert!(session.space.escorts_flying(&session.pilot));
     }
 
     #[test]
@@ -1656,9 +1657,9 @@ pub(super) mod tests {
             npc.condition = Condition::Disabled;
         }
         assert!(row(&session, class).present);
-        assert!(!session.escorts_flying());
+        assert!(!session.space.escorts_flying(&session.pilot));
         session.space.traffic.npcs_mut()[1].condition = Condition::Intact;
-        assert!(session.escorts_flying());
+        assert!(session.space.escorts_flying(&session.pilot));
     }
 
     #[test]
@@ -1668,9 +1669,9 @@ pub(super) mod tests {
         for id in &ids {
             session.space.npc_mut(*id).expect("here").condition = Condition::Disabled;
         }
-        assert!(session.escorts_flying());
+        assert!(session.space.escorts_flying(&session.pilot));
         session.pilot.escorts.clear();
-        assert!(!session.escorts_flying());
+        assert!(!session.space.escorts_flying(&session.pilot));
     }
 
     #[test]
@@ -1835,6 +1836,9 @@ pub(super) mod tests {
             (npc.reserves.shield.now, npc.reserves.armor.now),
             (0.0, 1.0)
         );
-        assert!(session.escorts_flying(), "the other is intact");
+        assert!(
+            session.space.escorts_flying(&session.pilot),
+            "the other is intact"
+        );
     }
 }

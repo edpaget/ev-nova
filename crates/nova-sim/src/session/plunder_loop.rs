@@ -43,7 +43,7 @@ impl Session {
     /// (the session resets, @0x94a0b), but silently and taking nothing:
     /// the flight's way out when it has no dialog to show it in. A capture
     /// awaiting its assignment is let go too.
-    pub fn let_go_of_boarding(&mut self) {
+    pub(crate) fn let_go_of_boarding(&mut self) {
         if self.space.escorts.aboard.is_some() {
             self.close_plunder();
         }

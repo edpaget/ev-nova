@@ -243,7 +243,8 @@
 //! The pilot's fleet flies with it: each escort an NPC
 //! beside the player, keeping formation, following it through jumps, and
 //! fighting by its standing order, which the player commands
-//! ([`Session::command_escorts`], [`Session::escort_menu`]) and which
+//! ([`Session::command_escorts`], the escort menu's rows in
+//! [`FrameHud::escort_rows`](crate::flight_frame::FrameHud::escort_rows)) and which
 //! entering a system resets, or keeps, as the rule set reads
 //! [`RuleKey::EscortOrders`]. A ship captured joins the fleet
 //! where it is, and so does a person hailed that offers to join
