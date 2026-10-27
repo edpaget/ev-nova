@@ -280,7 +280,7 @@ impl<
                 self.jump_latch = false;
                 self.jump_frame(true);
             }
-            Some(JETTISON_KEY) => self.jettison(),
+            Some(JETTISON_KEY) => self.jettison(Self::WORDS),
             Some(MISSION_INFO_KEY) => self.ask_mission_info(Self::WORDS),
             Some(PLAYER_INFO_KEY) => return self.ask_player_info(),
             Some(key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY)) => self.hyperspace_key(key),

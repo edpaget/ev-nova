@@ -332,33 +332,6 @@ fn docked_scripted(fit: impl FnOnce(&mut FakeCatalog)) -> View {
 /// 129), and one that keeps it (ship 129, under 128 as ship 128 is).
 const INTF_ROWS: [(&str, bool); 2] = [("H130", true), ("H129", false)];
 
-#[test]
-fn a_docked_jettisons_on_failure_intf_change_redraws_the_whole_bar_at_the_operator() {
-    for (h, changes) in INTF_ROWS {
-        let mut view = docked_scripted(|catalog| {
-            let mission = &mut catalog.missions[0];
-            mission.cargo_type = 0;
-            mission.cargo_qty = 1;
-            mission.pickup_mode = 0;
-            mission.on_failure = nova_sim::Script::parse(&format!("{h} M131"));
-        });
-        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-        stale_bar(&mut view);
-        view.jettison_all();
-        assert_eq!(
-            view.session()
-                .map(|session| session.pilot().missions().missions().len()),
-            Ok(0),
-            "{h}: failed"
-        );
-        if changes {
-            assert_eq!(retaken(&view), [true, false, true, true], "{h}");
-        } else {
-            assert_eq!(retaken(&view), [false; 4], "{h}: held");
-        }
-    }
-}
-
 /// [`port`] where mission 130 goes to Earth, its `CompText` "Done."
 /// and its `FailText` "Failed.", with `on_success` and `on_failure`,
 /// accepted by `S130` (and failed by `F130` when `fail`), then landed
@@ -691,32 +664,6 @@ fn by_the_other_reading_the_gauges_follow_at_once_while_docked() {
 }
 
 // An outfitter order whose script changes the ship's `ïntf`.
-
-/// Holds a stale snapshot of each of the status bar's parts: no
-/// gauges, nav naming "Stale", a target panel for "Stale", and a
-/// radar with the player off its centre.
-fn stale_bar(view: &mut View) {
-    view.reserves_scene = Some(Reserves::default());
-    view.nav_scene = Some((
-        view.nav_mode(),
-        NavDisplay::Stellar(Some("Stale".to_owned())),
-    ));
-    view.target_scene = Some((
-        None,
-        Some(TargetPanel {
-            name: "Stale".to_owned(),
-            subtitle: String::new(),
-            picture: None,
-            status: nova_sim::TargetStatus::Hidden,
-            tag: None,
-        }),
-    ));
-    view.radar_scene = Some(RadarScene {
-        player: at(-1.0, -1.0),
-        ..RadarScene::default()
-    });
-    assert_eq!(retaken(view), [false; 4], "stale");
-}
 
 /// The whole bar redrawn, or the radar alone.
 const WHOLE_BAR: [bool; 4] = [true; 4];

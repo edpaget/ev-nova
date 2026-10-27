@@ -36,7 +36,7 @@ use crate::ui::dialog::DialogTemplate;
 use crate::{Diagnostic, ScreenAction, SoundPrefs};
 
 use super::{
-    BarFor, FlightOverlays, FlightView, Metrics, SharedChance, Then, opening_scene, window_width,
+    BarFor, FlightOverlays, FlightView, Metrics, SharedChance, opening_scene, window_width,
 };
 
 impl<
@@ -600,18 +600,10 @@ impl<
     }
 
     /// Jettisons everything, mission cargo included, as the player info's
-    /// Jettison does (`_JettisonCargo(1)` @0x5a66d), saying what went.
-    /// Docked, an `OnFailure` `C`, `E` or `H` of a mission it fails
-    /// (`_QuickMissionFailure` @0x99d83) that changes the `ïntf` redraws
-    /// the whole bar at its operator; the player info's close redraws
-    /// after it (@0x5a725).
+    /// Jettison does ([`FlightView::jettison_all_with`]), the flight's
+    /// messages worded by the session ([`FlightView::WORDS`]).
     pub fn jettison_all(&mut self) {
-        self.run_docked(Then::Nothing, |view| {
-            if let Ok(session) = &mut view.sim.session {
-                session.jettison_cargo(true, &mut view.sim.chance);
-            }
-        });
-        self.say_messages(Self::WORDS);
+        self.jettison_all_with(Self::WORDS);
     }
 
     /// The flight with each day's events and the traffic rolled on

@@ -126,52 +126,6 @@ fn the_plunder_messages_are_the_originals() {
 }
 
 #[test]
-fn use_as_escort_says_so() {
-    let mut view = captured();
-    view.tick(TICK / 2);
-    let alpha = view.alpha();
-    assert!(alpha > 0.0, "between steps");
-    assert_eq!(view.assign(Assignment::Escort), Some(Assigned::Escort));
-    assert_eq!(view.alpha(), alpha, "the old ship flies on");
-    let pilot = view.pilot().expect("a pilot");
-    assert_eq!(pilot.escorts().len(), 1);
-    assert!(view.take_save_due());
-    assert_lasts(&mut view, ASSIGNED_ESCORT, 240);
-}
-
-#[test]
-fn use_as_my_ship_flies_and_draws_the_captured_ship() {
-    let mut view = captured();
-    view.tick(TICK / 2);
-    assert!(view.alpha() > 0.0, "between steps");
-    let mut asked = view.catalog().sheets_asked.borrow().clone();
-    assert_eq!(view.assign(Assignment::MyShip), Some(Assigned::MyShip));
-    assert_eq!(view.alpha(), 0.0, "drawn where it is");
-    assert_eq!(view.message(), Some(RETAINED_OLD_SHIP));
-    assert_eq!(view.session().expect("flying").ship(), ShipId(129));
-    asked.push(ShipId(129));
-    assert_eq!(*view.catalog().sheets_asked.borrow(), asked, "read once");
-    view.settle_script();
-    assert_eq!(
-        *view.catalog().sheets_asked.borrow(),
-        asked,
-        "not again once settled"
-    );
-    let drawn_player = sprites(&drawn(&view))
-        .into_iter()
-        .filter(|&(_, center)| center == PLAYER_AT)
-        .map(|(image, _)| image)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        drawn_player,
-        [ImageKey::sprite(2001, 0), ImageKey::sprite(2201, 0)],
-        "ship 129's sheet, and its lights"
-    );
-    assert_eq!(view.assign(Assignment::MyShip), None, "nothing awaits");
-    assert_lasts(&mut view, RETAINED_OLD_SHIP, 360);
-}
-
-#[test]
 fn the_plunder_taken_is_named_as_the_session_names_it() {
     let mut catalog = boardable();
     catalog.fields.holds = 20;

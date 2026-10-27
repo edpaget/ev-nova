@@ -3275,12 +3275,6 @@ fn beside_in(catalog: FakeCatalog, x: u32, y: u32, heading: u32, intact: bool) -
     view
 }
 
-/// [`beside`], boarded by [`Sure`] and captured, awaiting its
-/// assignment.
-fn captured() -> View {
-    captured_in(boardable())
-}
-
 /// [`captured`], from `catalog`, a [`boardable`] one.
 fn captured_in(catalog: FakeCatalog) -> View {
     let (_, chance) = scripted(&placed(750, 750, 0));

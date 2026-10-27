@@ -8,6 +8,7 @@
 //! large.
 
 use super::faked_hud::barred_by;
+use super::faked_travel::{faked_lasts, faked_words, sent_but_lines};
 use super::faked_world::{in_sol_with, the_player_at};
 use super::*;
 use crate::flight::radar::RadarScene;
@@ -18,7 +19,8 @@ use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::status_cargo::CommodityRow;
 use nova_sim::{
     Gauge, InterfaceLoad, MissionText, MissionTextKind, OutfitRefusal, OutfitRun, RechargeRefusal,
-    Reselection, SessionEvent, ShipNaming, ShipPurchase, ShipRefusal, TextBar, TradeRefusal,
+    Reselection, SessionEvent, ShipNaming, ShipPurchase, ShipRefusal, SimMessage, TextBar,
+    TradeRefusal,
 };
 
 /// Ship 128's full gauges: a 40 shield, a 30 armour, 250 fuel.
@@ -1055,4 +1057,227 @@ fn closing_the_hire_screen_or_the_outfitter_sends_its_close() {
         sent(&view),
         [FlightCommand::CloseHire, FlightCommand::CloseOutfitter]
     );
+}
+
+// The jettison.
+
+/// Holds Command (and Option, when `option`) as the jettison key is
+/// pressed, then lets go of them.
+fn jettison_key(view: &mut Faked, option: bool) {
+    view.held.insert(Key::Command);
+    if option {
+        view.held.insert(Key::Alt);
+    }
+    view.jettison(faked_words());
+    view.held.clear();
+}
+
+#[test]
+fn command_k_jettisons_everything_and_says_what_the_flight_said() {
+    let mut view = faked(in_sol());
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::MissionFailed));
+    view.sim.queue_answer(Answer::Done);
+    jettison_key(&mut view, false);
+    assert_eq!(
+        sent_but_lines(&view),
+        [FlightCommand::Jettison { all: true }]
+    );
+    faked_lasts(
+        &mut view,
+        &format!("{:?}", SimMessage::MissionFailed),
+        SimMessage::MissionFailed.ticks(),
+    );
+    assert_eq!(JETTISON_KEY, Key::Char('k'));
+    assert_eq!(MISSION_FAILED, "Mission failed.");
+    assert!(HELP.contains("Cmd-K: jettison"), "{HELP}");
+}
+
+#[test]
+fn command_option_k_keeps_the_mission_cargo() {
+    let mut view = faked(in_sol());
+    view.sim.queue_answer(Answer::Done);
+    jettison_key(&mut view, true);
+    assert_eq!(
+        sent_but_lines(&view),
+        [FlightCommand::Jettison { all: false }]
+    );
+    assert_eq!(view.message(), None, "nothing said");
+    assert_eq!(
+        NON_MISSION_CARGO_JETTISONED,
+        "Non-mission cargo jettisoned."
+    );
+}
+
+#[test]
+fn k_without_command_jettisons_nothing() {
+    let mut view = faked(in_sol());
+    view.jettison(faked_words());
+    view.held.insert(Key::Alt);
+    view.jettison(faked_words());
+    assert_eq!(sent(&view), [], "K alone, then Option-K");
+}
+
+#[test]
+fn the_player_infos_jettison_sends_everything_and_says_what_the_flight_said() {
+    let mut view = faked(in_sol());
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::CargoJettisoned));
+    view.sim.queue_answer(Answer::Done);
+    view.jettison_all_with(faked_words());
+    assert_eq!(
+        sent_but_lines(&view),
+        [FlightCommand::Jettison { all: true }]
+    );
+    assert_eq!(
+        view.message(),
+        Some(format!("{:?}", SimMessage::CargoJettisoned).as_str())
+    );
+    assert_eq!(CARGO_JETTISONED, "Cargo jettisoned.");
+}
+
+#[test]
+fn a_jettisons_boxes_are_drawn_back_along_their_drift_under_the_ship_and_it_sounds() {
+    let drifting = |at: Vec2| nova_sim::flight_frame::FrameBox {
+        velocity: Vec2::new(2.0, -3.0),
+        ..super::faked_world::box_at(at)
+    };
+    let mut view =
+        super::faked_world::world(trading(), in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
+    view.sim
+        .queue_event(FlightEvent::Sound(nova_sim::SimSound::CargoJettisoned));
+    let dropped = leaves(&view, |frame| {
+        frame.cargo_boxes = vec![
+            drifting(Vec2::new(-20.0, 20.0)),
+            drifting(Vec2::new(-25.0, 18.0)),
+        ];
+    });
+    view.sim.queue_answer_showing(Answer::Done, dropped);
+    view.held.insert(Key::Command);
+    view.jettison(faked_words());
+    assert_eq!(
+        view.drained_sounds(),
+        [Sound::Sim(nova_sim::SimSound::CargoJettisoned)],
+        "snd 154"
+    );
+    // A quarter of the way from the last step to this one.
+    view.alpha = 0.25;
+    let camera = view.camera();
+    let expected: Vec<_> = view
+        .frame
+        .cargo_boxes
+        .iter()
+        .map(|made| {
+            (
+                ImageKey::sprite(500, made.frame),
+                camera.world_to_screen(Point::new(
+                    made.velocity.x.mul_add(-0.75, made.position.x),
+                    made.velocity.y.mul_add(-0.75, made.position.y),
+                )),
+            )
+        })
+        .collect();
+    let list = super::faked_world::world_list(&view);
+    let boxes: Vec<_> = sprites(&list)
+        .into_iter()
+        .filter(|(image, _)| image.id == 500)
+        .collect();
+    assert_eq!(boxes, expected);
+    let first_box = first(&list, sprite_of(500));
+    let ship = first(&list, sprite_of(2000));
+    assert!(first_box < ship, "under the ship");
+}
+
+#[test]
+fn an_asteroid_is_drawn_under_the_cargo_boxes() {
+    let frame = FlightFrame {
+        asteroids: vec![super::faked_world::asteroid_at(Vec2::new(40.0, 40.0))],
+        cargo_boxes: vec![super::faked_world::box_at(Vec2::new(-20.0, 20.0))],
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+    };
+    let view = super::faked_world::world(super::missions::rocky(trading()), frame);
+    let list = super::faked_world::world_list(&view);
+    let asteroid = first(&list, sprite_of(1800));
+    let cargo_box = first(&list, sprite_of(500));
+    assert!(asteroid < cargo_box, "{asteroid} {cargo_box}");
+}
+
+// The capture's assignment.
+
+#[test]
+fn use_as_escort_sends_its_choice_and_says_so_the_old_ship_flying_on() {
+    let mut view = super::faked_world::world(
+        boardable(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    view.alpha = 0.5;
+    view.sim.queue_answer(Answer::Assigned(Assigned::Escort));
+    assert_eq!(view.assign(Assignment::Escort), Some(Assigned::Escort));
+    assert_eq!(
+        sent_but_lines(&view),
+        [FlightCommand::Assign(Assignment::Escort)]
+    );
+    assert_eq!(view.alpha(), 0.5, "the old ship flies on");
+    faked_lasts(&mut view, ASSIGNED_ESCORT, 240);
+}
+
+#[test]
+fn use_as_my_ship_draws_the_captured_ship_where_it_is_reading_its_sheet_once() {
+    let mut view = super::faked_world::world(
+        boardable(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    view.alpha = 0.5;
+    // Where the old ship was drawn from, a step ago.
+    view.previous = nova_sim::flight_frame::ShipPlace {
+        position: Vec2::new(-40.0, 30.0),
+        heading: 90.0,
+    };
+    assert_eq!(
+        view.frame.player().class,
+        ShipId(128),
+        "the old ship's frame"
+    );
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::ShipChanged));
+    let taken = leaves(&view, |frame| {
+        frame.ships[0] = record::player(129, Vec2::new(60.0, -10.0), 45.0);
+    });
+    view.sim
+        .queue_answer_showing(Answer::Assigned(Assigned::MyShip), taken);
+    assert_eq!(view.assign(Assignment::MyShip), Some(Assigned::MyShip));
+    assert_eq!(
+        view.previous,
+        nova_sim::flight_frame::ShipPlace {
+            position: Vec2::new(60.0, -10.0),
+            heading: 45.0,
+        },
+        "not from the old place"
+    );
+    assert_eq!(view.alpha(), 0.0, "drawn where it is");
+    assert_eq!(view.shown_position(), at(60.0, -10.0));
+    assert_eq!(
+        view.frame.player().class,
+        ShipId(129),
+        "the new ship's frame"
+    );
+    assert_eq!(view.sheet_ship, Some(ShipId(129)), "its sheet read");
+    assert_eq!(
+        view.assign(Assignment::MyShip),
+        None,
+        "refused: nothing awaits"
+    );
+    faked_lasts(&mut view, RETAINED_OLD_SHIP, OLD_SHIP_TICKS);
+}
+
+// The intro.
+
+#[test]
+fn the_intro_seen_is_the_flights_and_its_mark_is_sent() {
+    let mut view = faked(in_sol());
+    assert!(!view.seen_intro());
+    view.sim.port_mut().seen_intro = true;
+    assert!(view.seen_intro());
+    view.mark_intro_seen();
+    assert_eq!(sent(&view), [FlightCommand::MarkIntroSeen]);
 }

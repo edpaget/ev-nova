@@ -708,3 +708,20 @@ fn a_flight_that_never_started_closes_and_reloads_nothing_but_sends_each() {
         ]
     );
 }
+#[test]
+fn a_docked_jettisons_on_failure_intf_change_redraws_the_whole_bar_at_the_operator() {
+    for changes in [true, false] {
+        let (mut view, after) = scripted_docked(changes);
+        view.sim.queue_answer_showing(Answer::Done, after);
+        view.jettison_all_with(faked_words());
+        assert_eq!(
+            sent_but_lines(&view),
+            [FlightCommand::Jettison { all: true }]
+        );
+        if changes {
+            assert_eq!(retaken(&view), [true, false, true, true]);
+        } else {
+            assert_eq!(retaken(&view), [false; 4], "held");
+        }
+    }
+}

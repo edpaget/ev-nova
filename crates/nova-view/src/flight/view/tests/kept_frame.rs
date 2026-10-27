@@ -62,33 +62,6 @@ fn a_catch_up_redraws_from_the_frame_as_the_events_left_it_and_keeps_it_after() 
 }
 
 #[test]
-fn use_as_my_ship_draws_the_captured_ship_where_it_is_not_from_the_old_ships_place() {
-    let mut view = captured();
-    view.tick(TICK / 2);
-    assert!(view.alpha() > 0.0, "between steps");
-    // Where the old ship was drawn from, a step ago.
-    view.previous = nova_sim::flight_frame::ShipPlace {
-        position: Vec2::new(-40.0, 30.0),
-        heading: 90.0,
-    };
-    assert_eq!(
-        view.frame.player().class,
-        ShipId(128),
-        "the old ship's frame"
-    );
-    assert_eq!(view.assign(Assignment::MyShip), Some(Assigned::MyShip));
-    let now = *view.session().expect("flying").player();
-    assert_eq!(view.previous, now.into(), "not from the old place");
-    assert_eq!(view.alpha(), 0.0);
-    assert_eq!(view.shown_position(), at(now.position.x, now.position.y));
-    assert_eq!(
-        view.frame.player().class,
-        ShipId(129),
-        "the new ship's frame"
-    );
-}
-
-#[test]
 fn a_take_off_draws_the_ship_where_it_leaves_the_stellar_not_from_its_place_before_landing() {
     let mut view = over_earth(catalog());
     view.tick(TICK);

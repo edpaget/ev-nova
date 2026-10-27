@@ -5,8 +5,7 @@
 use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 use nova_sim::{
-    Assigned, Assignment, AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Session,
-    StellarId, TrafficCatalog,
+    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Session, StellarId, TrafficCatalog,
 };
 
 use nova_sim::flight_frame::{Answer, FlightCommand, MapClick};
@@ -22,7 +21,7 @@ use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
 use super::words::Words;
-use super::{BOARD_KEY, FlightView, JUMP_KEY, MAP_KEY, Redrawn, assigned_message, assigned_ticks};
+use super::{BOARD_KEY, FlightView, JUMP_KEY, MAP_KEY, Redrawn};
 
 impl<
     C: PilotCatalog
@@ -105,26 +104,6 @@ impl<
     /// by the session ([`FlightView::WORDS`]).
     pub fn settle_script(&mut self) {
         self.settle_script_with(Self::WORDS);
-    }
-
-    /// Assigns the ship captured, as [`Session::assign`] does, and says
-    /// what it did; after "Use As My Ship" it is drawn where it is, not on
-    /// its way from the old ship, and the change of ship the session tells
-    /// is caught up with ([`SessionEvent::ShipChanged`]), reading the new
-    /// ship's sprite sheet, once. `None` when no capture awaits its
-    /// assignment.
-    pub fn assign(&mut self, choice: Assignment) -> Option<Assigned> {
-        let session = self.sim.session.as_mut().ok()?;
-        let assigned = session.assign(choice, &mut self.sim.chance)?;
-        if assigned == Assigned::MyShip {
-            // Where the new ship is, read from the frame filled afresh
-            // after the assignment, before the catch-up that follows it.
-            self.previous = self.player_place_now();
-            self.alpha = 0.0;
-        }
-        self.catch_up();
-        self.say_for(assigned_message(assigned), assigned_ticks(assigned));
-        Some(assigned)
     }
 }
 

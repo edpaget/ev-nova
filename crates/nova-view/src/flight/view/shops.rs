@@ -1,6 +1,7 @@
 //! [`FlightView`]'s spaceport shops over the [`FlightSim`] port: the
-//! exchange, the recharge, the outfitter, the shipyard and the bar. Each
-//! sends its command
+//! exchange, the recharge, the outfitter, the shipyard and the bar; and
+//! the cargo's jettison, the capture's assignment and the intro's mark.
+//! Each sends its command
 //! ([`FlightCommand`]) and hands back the flight's answer, a flight that
 //! refuses it (one that never started) answering as today's failed
 //! session did; what a screen shows is read through
@@ -9,16 +10,18 @@
 
 use nova_sim::flight_frame::{Answer, FlightCommand};
 use nova_sim::{
-    HireList, HireRefusal, Hired, Market, News, Order, OutfitOrder, OutfitRefusal, OutfitRun,
-    Outfitter, RechargeRefusal, ShipId, ShipNaming, ShipPurchase, ShipRefusal, Shipyard,
-    TradeRefusal,
+    Assigned, Assignment, HireList, HireRefusal, Hired, Market, News, Order, OutfitOrder,
+    OutfitRefusal, OutfitRun, Outfitter, RechargeRefusal, ShipId, ShipNaming, ShipPurchase,
+    ShipRefusal, Shipyard, TradeRefusal,
 };
 
+use crate::Key;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::sim_port::FlightSim;
 use crate::system::catalog::SystemCatalog;
 
-use super::{FlightView, Then, no_outfitter};
+use super::words::Words;
+use super::{FlightView, Then, assigned_message, assigned_ticks, no_outfitter};
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// The exchange of the stellar landed on
@@ -181,6 +184,35 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `nova_sim::Session::close_hire`).
     pub fn close_hire(&mut self) {
         self.send(FlightCommand::CloseHire);
+    }
+
+    /// Presses the jettison key: with Command held, jettisons the cargo,
+    /// and with Option (Alt) too, all but the mission cargo
+    /// ([`FlightCommand::Jettison`], `nova_sim::Session::jettison_cargo`),
+    /// saying what the flight says went, worded by `words`. Its key's
+    /// gate is asked by the key, before the press reaches it
+    /// (`Screen::input`'s filter).
+    pub(super) fn jettison(&mut self, words: Words<Self>) {
+        if !self.held.contains(&Key::Command) {
+            return;
+        }
+        let all = !self.held.contains(&Key::Alt);
+        self.send(FlightCommand::Jettison { all });
+        self.say_messages(words);
+    }
+
+    /// Whether the pilot flying has seen the intro screen
+    /// ([`PortSource::seen_intro`](crate::flight::sim_port::PortSource::seen_intro));
+    /// false for a flight that never started.
+    #[must_use]
+    pub fn seen_intro(&self) -> bool {
+        self.sim.seen_intro()
+    }
+
+    /// Marks the pilot flying as having seen the intro screen
+    /// ([`FlightCommand::MarkIntroSeen`], `nova_sim::Session::mark_intro_seen`).
+    pub fn mark_intro_seen(&mut self) {
+        self.send(FlightCommand::MarkIntroSeen);
     }
 }
 
@@ -359,5 +391,44 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     fn after_outfit_order(&mut self, before: Option<&Result<i16, String>>, passed: bool) {
         let (changes, _) = self.interface_changes(before);
         self.stage_bar(changes, Then::Outfit { passed });
+    }
+
+    /// Jettisons everything, mission cargo included, as the player info's
+    /// Jettison does (`_JettisonCargo(1)` @0x5a66d,
+    /// [`FlightCommand::Jettison`]), saying what the flight says went,
+    /// worded by `words`. Docked, an `OnFailure` `C`, `E` or `H` of a
+    /// mission it fails (`_QuickMissionFailure` @0x99d83) that changes the
+    /// `ïntf` redraws the whole bar at its operator; the player info's
+    /// close redraws after it (@0x5a725). No gate guards it.
+    pub(super) fn jettison_all_with(&mut self, words: Words<Self>) {
+        self.run_docked(Then::Nothing, |view| {
+            view.send(FlightCommand::Jettison { all: true });
+        });
+        self.say_messages(words);
+    }
+
+    /// Assigns the ship captured ([`FlightCommand::Assign`],
+    /// `nova_sim::Session::assign`), and says what it did; after "Use As
+    /// My Ship" it is drawn where it is, not on its way from the old
+    /// ship, and the change of ship the flight tells is caught up with
+    /// ([`SessionEvent::ShipChanged`](nova_sim::SessionEvent::ShipChanged)),
+    /// reading the new ship's sprite sheet, once. `None` when no capture
+    /// awaits its assignment.
+    pub fn assign(&mut self, choice: Assignment) -> Option<Assigned>
+    where
+        C: SystemCatalog + ShipSprites + CombatLooks,
+    {
+        let Answer::Assigned(assigned) = self.send(FlightCommand::Assign(choice)) else {
+            return None;
+        };
+        if assigned == Assigned::MyShip {
+            // Where the new ship is, in the frame the assignment leaves,
+            // before the catch-up that follows it.
+            self.previous = self.player_place_now();
+            self.alpha = 0.0;
+        }
+        self.catch_up();
+        self.say_for(assigned_message(assigned), assigned_ticks(assigned));
+        Some(assigned)
     }
 }

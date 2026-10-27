@@ -7,11 +7,11 @@ use std::time::Duration;
 use nova_sim::{InterfaceLoad, MissionId, MissionShown};
 use nova_sim::{Pilot, Session, StellarId, Take, Taken};
 
+use crate::Point;
 use crate::flight::catalog::StatusBars;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyMap;
 use crate::ui::PlunderShown;
-use crate::{Key, Point};
 
 use super::outputs::FlightTexts;
 use super::{BarStep, FlightView, NavFlash, Then};
@@ -320,20 +320,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         self.plunder_held_with(take, held, Self::WORDS)
     }
 
-    /// Presses the jettison key: with Command held, jettisons the cargo,
-    /// and with Option (Alt) too, all but the mission cargo (see
-    /// [`Session::jettison_cargo`]), saying what went.
-    pub(super) fn jettison(&mut self) {
-        if !self.held.contains(&Key::Command) {
-            return;
-        }
-        let all = !self.held.contains(&Key::Alt);
-        if let Ok(session) = &mut self.sim.session {
-            session.jettison_cargo(all, &mut self.sim.chance);
-        }
-        self.say_messages(Self::WORDS);
-    }
-
     /// The flight, or why it could not start.
     pub fn session(&self) -> Result<&Session, &str> {
         self.sim.session.as_ref().map_err(String::as_str)
@@ -353,29 +339,12 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         self.sim.session.as_ref().ok().map(Session::pilot)
     }
 
-    /// Whether the pilot flying has seen the intro screen
-    /// ([`Session::seen_intro`]); false when the flight never started.
-    #[must_use]
-    pub fn seen_intro(&self) -> bool {
-        self.sim.session.as_ref().is_ok_and(Session::seen_intro)
-    }
-
-    /// Marks the pilot flying as having seen the intro screen
-    /// ([`Session::mark_intro_seen`]); nothing when the flight never
-    /// started.
-    pub fn mark_intro_seen(&mut self) {
-        if let Ok(session) = &mut self.sim.session {
-            session.mark_intro_seen();
-        }
-    }
-
     /// Changes the pilot with `change` while landed, as
-    /// [`Session::transact`] does, and says whether it did.
+    /// [`Session::transact`] does, and says whether it did: through the
+    /// adapter's own [`SessionFlight::transact`](crate::flight::SessionFlight::transact),
+    /// as a closure over the pilot is no command a sim could carry.
     pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
-        self.sim
-            .session
-            .as_mut()
-            .is_ok_and(|session| session.transact(change))
+        self.sim.transact(change)
     }
 
     /// The after-movie a `STR#` text shown now plays, as
