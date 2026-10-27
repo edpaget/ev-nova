@@ -14808,7 +14808,7 @@ mod tests {
     fn under_the_caps_the_players_trigger_finds_the_last_slot_its_point_defence_took() {
         // `_HandlePlayer` runs `_HandleShipPointDefense` @0x68c74 before
         // `_FirePlayerWeapon` @0x6ab55 (the session's order:
-        // `nova_sim::session::defence_order`): point defence takes the
+        // `nova_sim::session::fight_phase_order`): point defence takes the
         // 128th, and the trigger finds none.
         for capped in [false, true] {
             let (mut combat, mut ships) = last_slot_left(ShipRef::Player, capped);
