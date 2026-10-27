@@ -5,15 +5,17 @@
 //!
 //! On macOS they are rfd's: an `NSOpenPanel` that can pick a folder or a
 //! package (so both `EV Nova.app` and its `Nova Files`), and `NSAlert`s.
-//! On Windows the alerts are rfd's too, each a `MessageBoxW` (rfd's
+//! On Windows they are rfd's too: the panel is a folder picker
+//! (`IFileOpenDialog` with `FOS_PICKFOLDERS`), and either the `EV Nova`
+//! folder or its `Nova Files` can be picked, since the lookup tries both
+//! (`crate::startup::locate`). Each alert is a `MessageBoxW` (rfd's
 //! `common-controls-v6` feature is off; the manifest's Common Controls 6
 //! dependency themes the box all the same). The warnings box is owned by
 //! the game window, so it stays over it, and Windows takes no input in
 //! the window until it is dismissed. It runs on a thread of its own, so
 //! the game goes on drawing beneath. No first-party `unsafe` is added for
-//! them. The Windows open panel comes with its own phase: until then, and
-//! on Linux, nothing is picked ([`Dialogs`]), and on Linux nothing is shown either (stderr
-//! already has every line).
+//! them. On Linux nothing is picked or shown yet ([`Dialogs`]): stderr
+//! already has every line.
 //!
 //! The panel and the fatal alert are modal, so they run only outside the
 //! event loop (winit panics when its handler is entered again while it
@@ -45,6 +47,24 @@ impl NovaFilesDialog for Dialogs {
             .set_title(prompt)
             .set_directory("/Applications")
             .pick_file_or_folder()
+    }
+}
+
+#[cfg(windows)]
+impl NovaFilesDialog for Dialogs {
+    /// A folder picker titled `prompt`, opening where Windows last left
+    /// it.
+    ///
+    /// It runs on the calling thread, the main one: the lookup asks
+    /// before the event loop runs and before any window or audio is up,
+    /// so a blocking modal dialog is safe there, as the fatal box is. The
+    /// warnings box needs a thread of its own only because the event
+    /// loop is running by then. rfd sets COM up for the call
+    /// (`CoInitializeEx`, apartment-threaded); should that fail, as on a
+    /// thread already in the multithreaded apartment, no picker shows
+    /// and the call reads as a cancel.
+    fn pick(&mut self, prompt: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new().set_title(prompt).pick_folder()
     }
 }
 
@@ -95,7 +115,7 @@ pub fn show_warnings(window: &Window, body: &str) {
     std::thread::spawn(move || dialog.show());
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 impl NovaFilesDialog for Dialogs {
     /// No dialog yet: nothing is picked.
     fn pick(&mut self, _prompt: &str) -> Option<PathBuf> {
