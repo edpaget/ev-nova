@@ -438,23 +438,44 @@ pub(super) mod tests {
         crate::testkit::work(&mut session, &catalog, crate::flight::Controls::default());
         let frame = filled(&session);
         assert!(!session.beams().is_empty(), "a beam fired");
-        let beams: Vec<FrameBeam> = session.beams().iter().map(FrameBeam::of).collect();
-        assert_eq!(frame.beams, beams);
-        assert_eq!(frame.beams[0].firer, ShipRef::Player);
+        let beam = &session.beams()[0];
+        assert_ne!(beam.start, beam.end, "a start and an end to tell apart");
+        assert_eq!(
+            frame.beams,
+            [FrameBeam {
+                firer: ShipRef::Player,
+                start: beam.start,
+                end: beam.end,
+                weapon: beam.weapon.id,
+                fade: beam.fade,
+            }]
+        );
     }
 
     #[test]
     fn a_fill_writes_the_cargo_boxes_in_space() {
         let mut session = Session::start(&catalog()).expect("starts");
-        let at = *session.player();
-        session
-            .space
-            .boxes
-            .spawn(&at, None, &mut crate::chance::NeverFires);
+        // Of graphic 5, on frame 0: each field its own value.
+        session.space.boxes.spawn_scoopable(
+            Vec2::new(30.0, -40.0),
+            None,
+            5,
+            &mut crate::chance::NeverFires,
+        );
         let frame = filled(&session);
-        let boxes: Vec<FrameBox> = session.cargo_boxes().iter().map(FrameBox::of).collect();
-        assert_eq!(boxes.len(), 1);
-        assert_eq!(frame.cargo_boxes, boxes);
+        let spawned = &session.cargo_boxes()[0];
+        assert_ne!(spawned.velocity, spawned.position);
+        assert_ne!(spawned.frame, spawned.graphic);
+        assert_eq!(
+            frame.cargo_boxes,
+            [FrameBox {
+                position: Vec2::new(30.0, -40.0),
+                velocity: spawned.velocity,
+                frame: spawned.frame,
+                fade: spawned.fade(),
+                graphic: 5,
+            }]
+        );
     }
 
     #[test]
@@ -470,8 +491,15 @@ pub(super) mod tests {
         };
         session.space.asteroids.place(asteroid);
         let frame = filled(&session);
-        assert_eq!(frame.asteroids, [FrameAsteroid::of(&asteroid)]);
-        assert_eq!(frame.asteroids[0].kind, 2);
+        assert_eq!(
+            frame.asteroids,
+            [FrameAsteroid {
+                position: Vec2::new(10.0, 20.0),
+                velocity: Vec2::new(1.0, -1.0),
+                frame: 3.5,
+                kind: 2,
+            }]
+        );
     }
 
     /// `session`'s record of `id`, shown or not, from its own getters.
