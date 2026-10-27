@@ -85,6 +85,10 @@ description = "Windows only, needs WiX v5 (dotnet tool install --global wix --ve
 depends = ["build-windows"]
 run = "cargo run -p nova-bundle --locked --bin nova-installer --"
 
+[tasks.linux-desktop]
+description = "Any host: write the Linux desktop file, AppStream metainfo and hicolor icons as a share/ tree to install into ~/.local/share; pass an output dir after -- (default target/linux)"
+run = "cargo run -p nova-bundle --locked --bin nova-linux --"
+
 [tasks.mutants]
 description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g. -- --file <path>"
 run = "cargo mutants --workspace"

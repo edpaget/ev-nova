@@ -6,6 +6,7 @@
 
 mod env;
 mod files;
+mod linux_desktop;
 #[cfg(target_os = "macos")]
 mod macos_tools;
 mod process;

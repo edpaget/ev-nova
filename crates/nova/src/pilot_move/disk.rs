@@ -11,7 +11,7 @@ use super::MoveFiles;
 ///
 /// A move is a rename. Where `XDG_DATA_HOME` is on another filesystem
 /// than the old directory, a rename can't cross over, so a file is copied
-/// and the original removed instead ([`copy_then_remove`]); anything
+/// and the original removed instead (`copy_then_remove`); anything
 /// else (a directory, say) stays where it was, with the rename's error.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DiskFiles;

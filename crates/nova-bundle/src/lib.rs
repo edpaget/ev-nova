@@ -1,7 +1,9 @@
 //! `nova-bundle`: packs the nightly's installers. Its `nova-bundle`
 //! binary builds `Nova.app`, the macOS bundle of the game, and packs it
 //! into a `.dmg`; its `nova-installer` binary packs the built Windows
-//! executables into a per-user MSI ([`installer`]).
+//! executables into a per-user MSI ([`installer`]); and its `nova-linux`
+//! binary writes the Linux desktop file, AppStream metainfo and icons
+//! ([`linux`]).
 //!
 //! # Usage
 //!
@@ -64,12 +66,26 @@
 //! (by default `target/installer/out`), so the executables can be signed
 //! between the two steps and the `.msi` after them. See [`installer`].
 
+//!
+//! # The Linux desktop files
+//!
+//! ```text
+//! mise run linux-desktop -- [OUT_DIR]
+//! ```
+//!
+//! On any host: `nova-linux` writes `<identifier>.desktop`,
+//! `<identifier>.metainfo.xml` and the hicolor icons as a `share/` tree
+//! in `OUT_DIR` (by default `target/linux`), which the player copies into
+//! `~/.local/share`. The nightly's Linux tarball carries it. See
+//! [`linux`].
+
 pub mod bundle;
 pub mod host;
 pub mod icon;
 pub mod info_plist;
 pub mod installer;
 pub mod layout;
+pub mod linux;
 pub mod notary;
 pub mod ports;
 pub mod signing;
@@ -77,3 +93,4 @@ pub mod spec;
 pub mod system;
 #[cfg(test)]
 mod test_support;
+pub mod xml;

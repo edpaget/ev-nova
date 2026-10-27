@@ -6,6 +6,6 @@ doc-valid-idents = [
     "ResForge", "FFmpeg", "QuickTime", "QuickDraw", "PackBits", "PixMap", "BitMap",
     "ColorTable", "HeaderOp", "DefHilite", "ShortComment", "LongComment",
     "EndPic", "DirectBitsRect", "PackBitsRect", "BitsRect", "CompressedQuickTime",
-    "MetalFX", "WiX",
+    "MetalFX", "WiX", "AppStream",
     "..",
 ]

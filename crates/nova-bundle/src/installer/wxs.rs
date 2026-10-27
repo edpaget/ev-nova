@@ -24,6 +24,7 @@ use super::{
     UPGRADE_CODE, msi_version,
 };
 use crate::spec::BundleSpec;
+use crate::xml::escape;
 
 /// The WiX v4+ schema's namespace.
 pub const NAMESPACE: &str = "http://wixtoolset.org/schemas/v4/wxs";
@@ -71,22 +72,6 @@ fn guid(id: &str) -> &'static str {
             || panic!("no GUID for the component {id}"),
             |(_, guid)| *guid,
         )
-}
-
-/// Text escaped for an XML attribute value.
-fn escape(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&apos;"),
-            c => escaped.push(c),
-        }
-    }
-    escaped
 }
 
 fn path(path: &Path) -> String {

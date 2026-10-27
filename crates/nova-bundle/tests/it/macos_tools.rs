@@ -24,6 +24,10 @@ fn spec(root: &Path) -> BundleSpec {
         identifier: "io.github.edpaget.ev-nova".into(),
         name: "EV Nova".into(),
         category: "public.app-category.role-playing-games".into(),
+        summary: "Play EV Nova from your own copy of its data".into(),
+        description: "A new engine for EV Nova.".into(),
+        homepage: "https://github.com/edpaget/ev-nova".into(),
+        developer: "ev-nova contributors".into(),
     }
 }
 

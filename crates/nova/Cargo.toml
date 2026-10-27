@@ -84,11 +84,20 @@ dev-tools = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit", "dep:wgpu"]
 [lints]
 workspace = true
 
-# Nova.app's identity, which nova-bundle reads through `cargo metadata` into
-# its Info.plist (the version is this package's). The bundle file is
+# The game's identity, which nova-bundle reads through `cargo metadata` into
+# Nova.app's Info.plist, the Windows installer, and the Linux desktop file
+# and AppStream metainfo (the version is this package's). The bundle file is
 # `Nova.app`, so it never replaces an `EV Nova.app` (the original game) in
 # /Applications, but the app menu and Finder name it `name`.
+#
+# `identifier` is also the window's Wayland app id and X11 WM_CLASS, which
+# build.rs reads from here (`nova::platform::APP_ID`), so the desktop file
+# named after it matches the running window.
 [package.metadata.bundle]
 identifier = "io.github.edpaget.ev-nova"
 name = "EV Nova"
 category = "public.app-category.role-playing-games"
+summary = "Play EV Nova from your own copy of its data"
+description = "A new engine for the space trading and combat game EV Nova. It plays the game from your own copy of its data files, which are not included."
+homepage = "https://github.com/edpaget/ev-nova"
+developer = "ev-nova contributors"
