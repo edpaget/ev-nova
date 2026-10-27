@@ -12,12 +12,11 @@ pub struct VersionError(pub String);
 pub fn version_quad(version: &str) -> Result<[u16; 4], VersionError> {
     let refuse = || VersionError(version.to_owned());
     let numbers = version.split(['-', '+']).next().unwrap_or_default();
-    let mut parts = numbers.split('.').map(|part| {
-        if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err(refuse());
-        }
-        part.parse::<u16>().map_err(|_| refuse())
-    });
+    // `parse` takes digits and a leading sign, and the signs are split off
+    // above, so a part parses only when it is all digits.
+    let mut parts = numbers
+        .split('.')
+        .map(|part| part.parse::<u16>().map_err(|_| refuse()));
     let mut next = || parts.next().ok_or_else(refuse)?;
     let quad = [next()?, next()?, next()?, 0];
     match parts.next() {

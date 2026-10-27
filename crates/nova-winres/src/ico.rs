@@ -382,6 +382,33 @@ mod tests {
     }
 
     #[test]
+    fn a_32_pixel_argb_image_is_a_bitmap_without_a_png() {
+        let ico =
+            ico_from_icns(&icns(&[(b"ic05", argb(32, |_, _| [255, 1, 2, 3]))])).expect("an ico");
+        let [(32, 32, 1, 32, image)] = entries(&ico)[..] else {
+            panic!("one 32-pixel entry: {:?}", entries(&ico));
+        };
+        assert_eq!(&image[40..44], [3, 2, 1, 255]);
+    }
+
+    #[test]
+    fn an_empty_entry_is_skipped() {
+        let ico = ico_from_icns(&icns(&[(b"info", Vec::new()), (b"ic11", png(32, b""))]))
+            .expect("an ico");
+        assert_eq!(entries(&ico).len(), 1);
+    }
+
+    #[test]
+    fn a_png_whose_first_chunk_is_not_its_header_is_left_out() {
+        let mut odd = png(32, b"");
+        odd[12..16].copy_from_slice(b"iCCP");
+        assert_eq!(
+            ico_from_icns(&icns(&[(b"ic11", odd)])),
+            Err(IconError::NoSizes)
+        );
+    }
+
+    #[test]
     fn a_png_of_a_size_wins_over_the_argb_of_that_size() {
         let ico = ico_from_icns(&icns(&[
             (b"ic05", argb(32, |_, _| [255; 4])),
