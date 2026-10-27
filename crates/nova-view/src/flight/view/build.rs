@@ -1093,23 +1093,18 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
     /// Reads the sheet of each ship type the traffic can spawn
     /// ([`FlightFrame::traffic_ships`](nova_sim::flight_frame::FlightFrame::traffic_ships))
     /// that has not been read yet, of each type a ship here is boxed by
-    /// ([`FrameShip::framed`](nova_sim::flight_frame::FrameShip::framed),
-    /// `nova_sim::Session::framed_types`), such as the stale frames of a
-    /// hidden ship's slot, and each NPC's government's target code, from the
-    /// frame filled afresh. The player's own type is read with its ship, so
-    /// it is left out while its slot holds its own frames.
+    /// ([`FlightFrame::framed_types`](nova_sim::flight_frame::FlightFrame::framed_types)),
+    /// such as the stale frames of a hidden ship's slot, and each NPC's
+    /// government's target code, from the frame filled afresh. The
+    /// player's own type is read with its ship, so it is left out while
+    /// its slot holds its own frames.
     ///
     /// The traffic types' target cards not read yet are asked for in one
     /// batch ([`CombatLooks::target_cards`]), and none when all are read.
     pub(super) fn read_npc_sheets(&mut self) {
         self.refresh_frame();
         let traffic = self.frame.traffic_ships.clone();
-        let player = self.frame.player();
-        let own = player.framed.filter(|&ship| ship != player.class);
-        let framed: Vec<_> = own
-            .into_iter()
-            .chain(self.frame.npcs().filter_map(|npc| npc.framed))
-            .collect();
+        let framed: Vec<_> = self.frame.framed_types().collect();
         let govts: Vec<_> = self.frame.npcs().filter_map(|npc| npc.govt).collect();
         self.read_traffic_sheets(traffic);
         for ship in framed {

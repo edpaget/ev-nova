@@ -188,6 +188,20 @@ impl FlightFrame {
             .filter(|record| matches!(record.ship, ShipRef::Npc(_)))
     }
 
+    /// Every ship type a ship here is boxed by ([`FrameShip::framed`]),
+    /// such as the stale frames of a hidden ship's slot, other than the
+    /// player's own type for the player, whose sheet is read with its
+    /// ship: the sheets the view must read to box them, the player's slot
+    /// first when it holds another type's frames.
+    pub fn framed_types(&self) -> impl Iterator<Item = ShipId> + '_ {
+        let player = self
+            .ships
+            .iter()
+            .filter(|record| record.ship == ShipRef::Player)
+            .filter_map(|record| record.framed.filter(|&ship| ship != record.class));
+        player.chain(self.npcs().filter_map(|npc| npc.framed))
+    }
+
     /// The record of stellar `id`, if the system lists it.
     #[must_use]
     pub fn stellar(&self, id: StellarId) -> Option<&FrameStellar> {
@@ -909,6 +923,43 @@ impl DrawnShips for DrawnBoxes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A ship record of `ship`, of class `class`, boxed by `framed`.
+    fn boxed(ship: ShipRef, class: i16, framed: Option<i16>) -> FrameShip {
+        FrameShip {
+            ship,
+            class: ShipId(class),
+            framed: framed.map(ShipId),
+            ..FrameShip::default()
+        }
+    }
+
+    #[test]
+    fn the_types_framed_are_each_npcs_and_the_players_only_when_not_its_own() {
+        let npcs = [
+            boxed(ShipRef::Npc(NpcId(1)), 129, Some(129)),
+            boxed(ShipRef::Npc(NpcId(2)), 130, Some(128)),
+            boxed(ShipRef::Npc(NpcId(3)), 131, None),
+        ];
+        let own = FlightFrame {
+            ships: [vec![boxed(ShipRef::Player, 140, Some(140))], npcs.to_vec()].concat(),
+            ..FlightFrame::default()
+        };
+        assert_eq!(
+            own.framed_types().collect::<Vec<_>>(),
+            [ShipId(129), ShipId(128)],
+            "the player's own type is read with its ship"
+        );
+        let stale = FlightFrame {
+            ships: [vec![boxed(ShipRef::Player, 140, Some(150))], npcs.to_vec()].concat(),
+            ..FlightFrame::default()
+        };
+        assert_eq!(
+            stale.framed_types().collect::<Vec<_>>(),
+            [ShipId(150), ShipId(129), ShipId(128)],
+            "the player's slot first when it holds another type's frames"
+        );
+    }
 
     #[test]
     fn a_cleared_report_holds_no_step_and_no_stop() {

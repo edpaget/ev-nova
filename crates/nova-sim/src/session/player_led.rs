@@ -206,21 +206,6 @@ impl Session {
         })
     }
 
-    /// Every ship type [`Session::framed_by`] gives for a ship here now
-    /// other than the player's own type for the player, whose sheet is
-    /// read with its ship: the sheets the view must read to box them,
-    /// the player's slot first when it holds another type's frames.
-    pub fn framed_types(&self) -> impl Iterator<Item = ShipId> + '_ {
-        let player = self
-            .framed_by(ShipRef::Player)
-            .filter(|&ship| ship != self.pilot.ship);
-        let npcs = self
-            .npcs()
-            .iter()
-            .filter_map(|npc| self.framed_by(ShipRef::Npc(npc.id)));
-        player.into_iter().chain(npcs)
-    }
-
     /// Each ship slot's draw layer and when it entered it, as the last
     /// flight tick laid them out ([`Session::draw_order`]), and the frames
     /// it last cloned ([`Session::framed_by`]): the history to hand a
@@ -1295,6 +1280,14 @@ mod tests {
     /// A hidden ship's type, not one any fixture ship flies.
     const HIDDEN: ShipId = ShipId(300);
 
+    /// The ship types `session`'s frame says a ship here is boxed by
+    /// ([`FlightFrame::framed_types`](crate::flight_frame::FlightFrame::framed_types)).
+    fn framed_types(session: &Session) -> Vec<ShipId> {
+        let mut frame = crate::flight_frame::FlightFrame::default();
+        session.fill_frame(&mut frame);
+        frame.framed_types().collect()
+    }
+
     #[test]
     fn a_hidden_ship_is_framed_by_its_berths_last_shown_type() {
         let (mut session, mission, hired) = flying(1);
@@ -1310,8 +1303,8 @@ mod tests {
         assert_eq!(session.framed_by(ShipRef::Player), Some(session.ship()));
         assert_eq!(session.framed_by(ShipRef::Npc(hired)), None, "gone");
         assert_eq!(
-            session
-                .framed_types()
+            framed_types(&session)
+                .into_iter()
                 .collect::<std::collections::BTreeSet<_>>(),
             [ShipId(200), shown].into_iter().collect(),
             "not the player's own type"
@@ -1328,8 +1321,16 @@ mod tests {
             session.framed_by(ShipRef::Npc(hidden)),
             Some(crate::ship_layer::INIT_FRAMES)
         );
-        assert!(session.framed_types().any(|ship| ship == ShipId(128)));
-        assert!(!session.framed_types().any(|ship| ship == HIDDEN));
+        assert!(
+            framed_types(&session)
+                .into_iter()
+                .any(|ship| ship == ShipId(128))
+        );
+        assert!(
+            !framed_types(&session)
+                .into_iter()
+                .any(|ship| ship == HIDDEN)
+        );
     }
 
     #[test]
@@ -1358,7 +1359,7 @@ mod tests {
         assert_eq!(session.framed_by(ShipRef::Player), Some(flown));
         assert_eq!(session.slot_sprites().frames.of(Slot::Player), flown);
         assert_eq!(
-            session.framed_types().next(),
+            framed_types(&session).into_iter().next(),
             Some(flown),
             "the player's slot first"
         );
@@ -1379,7 +1380,11 @@ mod tests {
         // out is framed by its slot's frames whatever its hiding).
         combat_tick(&mut session);
         assert_eq!(session.framed_by(ShipRef::Npc(hidden)), Some(HIDDEN));
-        assert!(session.framed_types().any(|ship| ship == HIDDEN));
+        assert!(
+            framed_types(&session)
+                .into_iter()
+                .any(|ship| ship == HIDDEN)
+        );
         assert_eq!(
             session.slot_sprites().frames.of(Slot::Berth(berth)),
             ShipId(200),
