@@ -306,3 +306,53 @@ fn escort_menu_frame() -> Bounds {
     use crate::flight::escorts::{MENU_AT, MENU_HEIGHT, MENU_WIDTH};
     Bounds::at(MENU_AT, MENU_WIDTH, MENU_HEIGHT)
 }
+
+#[test]
+fn the_ships_are_drawn_in_the_frames_draw_order_whatever_their_records_order() {
+    // A disabled traffic ship under two escorts in their layer, entered
+    // hired first, under a flying ship and the player. The order and the
+    // layers are the session's (nova-sim's
+    // `session::player_led::tests::a_released_escort_is_drawn_over_the_player`,
+    // `a_ship_entering_a_layer_is_drawn_over_the_ships_in_it`).
+    let at = |id: u32| {
+        Vec2::new(
+            -200.0 + 80.0 * f32::from(u16::try_from(id).expect("small")),
+            0.0,
+        )
+    };
+    let mut frame = in_sol_with(vec![
+        the_player_at(Vec2::new(0.0, 100.0), 0.0),
+        npc_129(1, at(1), 0.0),
+        npc_129(2, at(2), 0.0),
+        npc_129(3, at(3), 0.0),
+        npc_129(4, at(4), 0.0),
+    ]);
+    frame.drawn = vec![
+        (ShipRef::Npc(NpcId(3)), nova_sim::ShipLayer::Disabled),
+        (ShipRef::Npc(NpcId(2)), nova_sim::ShipLayer::Led),
+        (ShipRef::Npc(NpcId(1)), nova_sim::ShipLayer::Led),
+        (ShipRef::Npc(NpcId(4)), nova_sim::ShipLayer::Ships),
+        (ShipRef::Player, nova_sim::ShipLayer::Ships),
+    ];
+    let view = world(catalog(), frame);
+    let list = world_list(&view);
+    let drawn_at = |point: Point| {
+        list.iter()
+            .position(|command| {
+                matches!(command, DrawCommand::Sprite { image, center, .. }
+                    if (2000..2300).contains(&image.id) && *center == point)
+            })
+            .expect("drawn")
+    };
+    let on_screen = |world: Vec2| view.camera().world_to_screen(at_point(world));
+    let order: Vec<usize> = [at(3), at(2), at(1), at(4), Vec2::new(0.0, 100.0)]
+        .into_iter()
+        .map(|world| drawn_at(on_screen(world)))
+        .collect();
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+}
+
+/// `world` as a screen-space point before the camera's transform.
+fn at_point(world: Vec2) -> Point {
+    Point::new(world.x, world.y)
+}

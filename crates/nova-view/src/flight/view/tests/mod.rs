@@ -12,7 +12,7 @@ use nova_sim::{
     OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats, SimDiagnostic, SimSound,
     StarSystem, StartDate, StartError, SystemId, TICK, Vec2,
 };
-use nova_sim::{Npc, Session, ShipState};
+use nova_sim::{Session, ShipState};
 
 use super::*;
 use crate::devtools::{PilotDesk, PilotEdit};
