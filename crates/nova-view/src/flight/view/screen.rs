@@ -194,7 +194,7 @@ impl<
             return;
         }
         self.step_stellars(dt);
-        self.held_keys_frame();
+        self.held_keys_frame(Self::WORDS);
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
         self.run_steps(steps, Self::WORDS);
@@ -260,7 +260,7 @@ impl<
             Some(BOARD_KEY) => {
                 // A fresh press follows a release, which clears the latch.
                 self.board_latch = false;
-                self.board_frame(true);
+                self.board_frame(true, Self::WORDS);
                 if self.pending_boarding {
                     return ScreenAction::None;
                 }

@@ -12,23 +12,18 @@ use nova_sim::{
     RefuseShown, VenueOffer,
 };
 use nova_sim::{
-    Boarding, Market, Order, Outfitter, Pilot, PlunderView, RechargeRefusal, Session, ShipId,
-    ShipNaming, ShipRefusal, Shipyard, StellarId, Take, Taken, TradeRefusal,
+    Market, Order, Outfitter, Pilot, RechargeRefusal, Session, ShipId, ShipNaming, ShipRefusal,
+    Shipyard, StellarId, Take, Taken, TradeRefusal,
 };
 
 use crate::flight::catalog::StatusBars;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyMap;
-use crate::time::sixtieths;
 use crate::ui::PlunderShown;
 use crate::{Key, Point};
 
 use super::outputs::FlightTexts;
-use super::{
-    BOARD_LINE_TICKS, BOARD_REFUSAL_TICKS, BarStep, FlightView, GRANT_TICKS, MESSAGE_TICKS,
-    NavFlash, REPELLED, Then, board_refusal_message, grant_message, mission_board_message, names,
-    plunder_message,
-};
+use super::{BarStep, FlightView, NavFlash, Then};
 
 /// The course map's, the cursor's and the landing's accessors, over the
 /// [`FlightSim`] port.
@@ -304,173 +299,34 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
 }
 
 impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
-    /// Boards the target, or says why not: a boarding that opens is held
-    /// for the router ([`FlightView::take_boarding`]), and a mission
-    /// offered in its place too ([`FlightView::take_offer`]), each letting
-    /// go of the flight keys. A failed mission's ship boarded for plunder
-    /// says its pickup or assist line first ([`FlightEvent::BoardLine`](nova_sim::flight_frame::FlightEvent::BoardLine)).
-    /// Whether the attempt sets the board latch
-    /// ([`BoardRefusal::latches`](nova_sim::board::BoardRefusal::latches);
-    /// every board that passes does).
-    pub(super) fn board(&mut self) -> bool {
-        let Ok(session) = &mut self.sim.session else {
-            return false;
-        };
-        let boarded = session.board(
-            &*self.sim.law,
-            &*self.sim.boarding_rule,
-            &mut self.sim.chance,
-        );
-        if let Some(line) = self.board_line_drained()
-            && let Ok(session) = &self.sim.session
-        {
-            let said = mission_board_message(line, session);
-            self.say_for(said, BOARD_LINE_TICKS);
-        }
-        let latches = boarded
-            .as_ref()
-            .map_or_else(|refusal| refusal.latches(), |_| true);
-        if self.sim.session.is_err() {
-            return latches;
-        }
-        match boarded {
-            Ok(Boarding::Opened(_)) => {
-                self.pending_boarding = true;
-                self.held.clear();
-                if let Some(granted) = self.grant_drained()
-                    && let Ok(session) = &self.sim.session
-                {
-                    let (name, plural) = session.outfit_names(granted.outfit).unwrap_or_default();
-                    let said = grant_message(granted.count, name, plural);
-                    self.say_for(said, GRANT_TICKS);
-                }
-            }
-            Ok(Boarding::Repelled) => self.say_for(REPELLED, MESSAGE_TICKS),
-            Ok(Boarding::Offered(offer)) => self.hold_offer(offer),
-            Ok(Boarding::MissionShip(line)) => {
-                if let Some(line) = line
-                    && let Ok(session) = &self.sim.session
-                {
-                    let said = mission_board_message(line, session);
-                    self.say_for(said, BOARD_LINE_TICKS);
-                }
-            }
-            // Its line is the session's message (`FlightEvent::Message`).
-            Ok(Boarding::Recovered(_)) => {}
-            Err(refusal) => {
-                if let Some(text) = board_refusal_message(refusal) {
-                    self.say_for(text, BOARD_REFUSAL_TICKS);
-                }
-            }
-        }
-        latches
-    }
-
-    /// One frame of the Board key, with B down or not, as `_HandlePlayer`
-    /// runs it (@0x6a98b-0x6a9a8) on [`FlightView::board_latch`]: with B
-    /// down and the latch clear, a board attempt
-    /// ([`FlightView::board`]), which sets the latch unless it found no
-    /// target or the player cloaked (`*0xdee18` @0x6504c, after
-    /// @0x65031 and @0x6503f); with B up, the latch cleared. So B held
-    /// with no target, or cloaked, boards on the first frame a target is
-    /// taken or the cloak drops, and any other outcome waits for B's
-    /// release.
-    pub(super) fn board_frame(&mut self, down: bool) {
-        if !down {
-            self.board_latch = false;
-        } else if !self.board_latch {
-            self.board_latch = self.board();
-        }
-    }
-
-    /// What is on board the ship just boarded, named, once: the router
-    /// takes it to open the plunder dialog.
+    /// What is on board the ship just boarded, named, once
+    /// ([`FlightView::take_boarding_with`]), named by the session
+    /// ([`FlightView::WORDS`]): the router takes it to open the plunder
+    /// dialog.
     pub fn take_boarding(&mut self) -> Option<PlunderShown> {
-        if !std::mem::take(&mut self.pending_boarding) {
-            return None;
-        }
-        self.plunder_shown()
+        self.take_boarding_with(Self::WORDS)
     }
 
-    /// What is on board the ship being boarded, while the plunder dialog
-    /// is open ([`Session::boarding`]).
-    #[must_use]
-    pub fn boarding(&self) -> Option<PlunderView> {
-        self.sim.session.as_ref().ok()?.boarding()
-    }
-
-    /// What the plunder dialog shows while it is open: [`Self::boarding`]
-    /// with its cargo's good and its ammunition's outfit named, as
-    /// [`Self::plunder`]'s messages name them.
+    /// What the plunder dialog shows while it is open
+    /// ([`FlightView::plunder_shown_with`]), named by the session
+    /// ([`FlightView::WORDS`]), as [`Self::plunder`]'s messages name them.
     #[must_use]
     pub fn plunder_shown(&self) -> Option<PlunderShown> {
-        let session = self.sim.session.as_ref().ok()?;
-        let view = session.boarding()?;
-        let (good, outfit) = names(
-            session,
-            view.cargo.map(|(good, _)| good),
-            view.ammo.map(|(outfit, _)| outfit),
-        );
-        Some(PlunderShown {
-            view,
-            good: good.map(str::to_owned),
-            outfit: outfit.map(str::to_owned),
-        })
+        self.plunder_shown_with(Self::WORDS)
     }
 
-    /// Presses `take` in the plunder dialog, through the session
-    /// ([`Session::plunder`]), and says what it did. The target panel is
-    /// taken afresh, as `_HandlePlayer` redraws it once the dialog closes
-    /// (@0x6eb97, @0x6eda6). A press made as the dialog opens: see
-    /// [`FlightView::plunder_held`].
+    /// Presses `take` in the plunder dialog
+    /// ([`FlightView::plunder_held_with`]) and says what it did, named by
+    /// the session ([`FlightView::WORDS`]). A press made as the dialog
+    /// opens: see [`FlightView::plunder_held`].
     pub fn plunder(&mut self, take: Take) -> Taken {
-        self.plunder_held(take, Duration::ZERO)
+        self.plunder_held_with(take, Duration::ZERO, Self::WORDS)
     }
 
-    /// [`FlightView::plunder`] with the dialog open for `held`, real time.
-    /// A press that leaves the dialog open ends the loop's pass with
-    /// `_HandleComm` (@0x949a1): the message line counts down one tick,
-    /// a take's own line after `_DisplayComm` sets it, so it shows 239,
-    /// and the floating map is hidden once more than 500 ticks have
-    /// passed since it was shown, `TickCount` moving on under the dialog
-    /// (@0x30262-0x30285).
+    /// [`FlightView::plunder`] with the dialog open for `held`, real time
+    /// ([`FlightView::plunder_held_with`]).
     pub fn plunder_held(&mut self, take: Take, held: Duration) -> Taken {
-        let Ok(session) = &mut self.sim.session else {
-            return Taken::Nothing;
-        };
-        let taken = session.plunder(take, &*self.sim.boarding_rule, &mut self.sim.chance);
-        let open = session.boarding().is_some();
-        let (good, outfit) = match taken {
-            Taken::Cargo { good, .. } => names(session, Some(good), None),
-            Taken::Ammo { outfit, .. } => names(session, None, Some(outfit)),
-            _ => (None, None),
-        };
-        if let Some(text) = plunder_message(taken, good, outfit) {
-            self.say_for(text, MESSAGE_TICKS);
-            // The session's pass counted the line it had; the take's own
-            // comes first in the original (`_DisplayComm`, then
-            // `_HandleComm`).
-            if open && let Ok(session) = &mut self.sim.session {
-                session.comm_ticked();
-            }
-        }
-        if open {
-            if let Some(message) = &mut self.message {
-                message.ticks = message.ticks.saturating_sub(1);
-            }
-            self.floating.expire(sixtieths(self.elapsed + held));
-        }
-        self.retake_target();
-        taken
-    }
-
-    /// Lets the boarding under way go with no dialog shown and no sound
-    /// ([`Session::let_go_of_boarding`]): the router's way out when it
-    /// cannot lay the plunder dialog out.
-    pub fn let_go_of_boarding(&mut self) {
-        if let Ok(session) = &mut self.sim.session {
-            session.let_go_of_boarding();
-        }
+        self.plunder_held_with(take, held, Self::WORDS)
     }
 
     /// Presses the jettison key: with Command held, jettisons the cargo,

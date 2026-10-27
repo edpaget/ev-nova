@@ -2,7 +2,6 @@
 //! its steps, arrival, take-off, landing, the shipyard and outfitter
 //! orders.
 
-use nova_sim::PlayerCommand;
 use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 use nova_sim::{
@@ -22,6 +21,7 @@ use crate::view_shape::classic_offset;
 use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
+use super::words::Words;
 use super::{
     BOARD_KEY, FlightView, JUMP_KEY, MAP_KEY, Redrawn, Then, assigned_message, assigned_ticks,
     no_outfitter,
@@ -78,35 +78,6 @@ impl<
     /// flight's messages worded by the session ([`FlightView::WORDS`]).
     pub fn close_map(&mut self) {
         self.close_map_with(Self::WORDS);
-    }
-
-    /// The keys `_HandlePlayer` polls with a latch, once a frame, with
-    /// those held down, in its order: Option-\` and the Nav Off /
-    /// Hyperspace Mode block ([`FlightView::nav_keys_frame`]), Hyper
-    /// Select ([`FlightView::select_frame`]), the stellar slot keys
-    /// ([`FlightView::slot_keys_frame`]), the Board key
-    /// ([`FlightView::board_frame`]), then the jump key
-    /// ([`FlightView::jump_frame`]), each while the session takes its
-    /// command. A key held across a jump's end, a release of Option or a
-    /// repair acts here, as a press would, on the first frame its latch
-    /// lets it.
-    ///
-    /// It runs before the tick's steps, as `_HandlePlayer` runs before the
-    /// ships' `_HandleShip` (@0x43e19, @0x44483): a repair made in one
-    /// tick's steps is acted on at the next, the frame the original sees
-    /// it. And it runs before the jump effect's arrival, which is where
-    /// the original's arrival frame runs its keys (+0x50 still above 0):
-    /// the arrival tick still counts as jumping, and the first tick after
-    /// it is the original's first frame to act (@0x6c625).
-    pub(super) fn held_keys_frame(&mut self) {
-        let down = |key: Key| self.held.contains(&key);
-        let (jump, board) = (down(JUMP_KEY), down(BOARD_KEY));
-        self.nav_held_frame();
-        if self.takes(PlayerCommand::Board) {
-            self.board_frame(board);
-        }
-        // The jump's frame asks its own gate (`FlightCommand::gate`).
-        self.jump_frame(jump);
     }
 
     /// The pilot flying, as the developer tools' desk: its edits reach
@@ -326,6 +297,34 @@ impl<
 /// ([`FlightView::WORDS`]). [`FlightView::map_input_taken`] says when a
 /// close is due.
 impl<C, S: FlightSim> FlightView<C, S> {
+    /// The keys `_HandlePlayer` polls with a latch, once a frame, with
+    /// those held down, in its order: Option-\` and the Nav Off /
+    /// Hyperspace Mode block ([`FlightView::nav_keys_frame`]), Hyper
+    /// Select ([`FlightView::select_frame`]), the stellar slot keys
+    /// ([`FlightView::slot_keys_frame`]), the Board key
+    /// ([`FlightView::board_frame`]), then the jump key
+    /// ([`FlightView::jump_frame`]), each while the flight takes its
+    /// command, the Board key's worded in `words`. A key held across a jump's end, a release of Option or a
+    /// repair acts here, as a press would, on the first frame its latch
+    /// lets it.
+    ///
+    /// It runs before the tick's steps, as `_HandlePlayer` runs before the
+    /// ships' `_HandleShip` (@0x43e19, @0x44483): a repair made in one
+    /// tick's steps is acted on at the next, the frame the original sees
+    /// it. And it runs before the jump effect's arrival, which is where
+    /// the original's arrival frame runs its keys (+0x50 still above 0):
+    /// the arrival tick still counts as jumping, and the first tick after
+    /// it is the original's first frame to act (@0x6c625).
+    pub(super) fn held_keys_frame(&mut self, words: Words<Self>) {
+        let down = |key: Key| self.held.contains(&key);
+        let (jump, board) = (down(JUMP_KEY), down(BOARD_KEY));
+        self.nav_held_frame();
+        // The Board key's and the jump's frames ask their own gates
+        // (`FlightCommand::gate`).
+        self.board_frame(board, words);
+        self.jump_frame(jump);
+    }
+
     /// The course map's close, the hypergate's entry left to
     /// `enter_gate`, handed the system picked on the hypergate map
     /// ([`FlightView::close_map_with`]): the borders' save, the map shut,

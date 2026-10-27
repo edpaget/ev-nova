@@ -412,6 +412,7 @@ mod tests {
     fn a_take_answers_what_it_took_and_whether_the_dialog_stays_open() {
         let catalog = boardable();
         let mut session = aboard(&catalog);
+        let cash = session.pilot.cash;
         assert_eq!(
             apply_on(
                 &mut session,
@@ -425,6 +426,7 @@ mod tests {
             }
         );
         assert_eq!(session.boarding().map(|view| view.credits), Some(0));
+        assert_eq!(session.pilot.cash, cash + ON_BOARD.credits, "stolen");
         assert_eq!(
             apply_on(&mut session, None, FlightCommand::Plunder(Take::Abort), &[]),
             Answer::Plundered {

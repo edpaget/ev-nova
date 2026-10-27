@@ -670,6 +670,7 @@ use crate::text::TextMetrics;
 use crate::{Color, Diagnostic, Key, Point, SoundPrefs, UiSound};
 use dialog_map::MapOpened;
 
+mod board;
 mod build;
 mod cockpit;
 mod death;

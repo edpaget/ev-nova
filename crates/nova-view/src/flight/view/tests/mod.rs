@@ -78,6 +78,7 @@ mod dialog_map;
 mod docked;
 mod drain;
 mod escorts;
+mod faked_board;
 mod faked_escorts;
 mod faked_flight;
 mod faked_hail;
@@ -3677,107 +3678,6 @@ fn destructible() -> View {
         lives: vec![life(128, 0), life(129, 0), life(140, 0)],
         ..catalog()
     })
-}
-
-/// Grants a person's `GrantCount` of the first outfit it may.
-#[derive(Debug)]
-struct Grants;
-
-impl BoardingRule for Grants {
-    fn repels(&self, _booty: u16) -> bool {
-        false
-    }
-
-    fn capture_odds(&self, _crew: &nova_sim::board::CaptureCrew, _chance: &mut dyn Chance) -> u8 {
-        75
-    }
-
-    fn captures(&self, _odds: u8, _chance: &mut dyn Chance) -> bool {
-        true
-    }
-
-    fn person_credits(&self, credits: i32, _chance: &mut dyn Chance) -> i64 {
-        i64::from(credits)
-    }
-
-    fn grant(
-        &self,
-        grant: &nova_sim::grant::PersonGrant,
-        stock: &[nova_sim::grant::GrantStock],
-        _free_mass: i64,
-        _grant_max: nova_sim::RuleSource,
-        _chance: &mut dyn Chance,
-    ) -> Option<nova_sim::grant::Granted> {
-        let first = nova_sim::grant::candidates(grant.class, stock)
-            .first()
-            .copied()?;
-        Some(nova_sim::grant::Granted {
-            outfit: first.outfit,
-            count: grant.count,
-        })
-    }
-}
-
-/// [`peopled`] with Ace a derelict (government 140), so disabled,
-/// granting `count` spare parts (`oütf` 200, class 7), of no hail
-/// quote; its ship 129 has a crew of 3 and a board reach.
-fn granting(count: i16) -> FakeCatalog {
-    let mut catalog = peopled();
-    let ace = &mut catalog.persons[0];
-    ace.govt = Some(GovtId(140));
-    ace.hail_quote = -1;
-    ace.grant_class = 7;
-    ace.grant_prob = 100;
-    ace.grant_count = count;
-    catalog.govts = vec![nova_sim::GovtRecord {
-        id: GovtId(140),
-        name: String::new(),
-        flags: 0x0800,
-        flags2: 0,
-        crime_tol: 0,
-        initial_rec: 0,
-        penalties: nova_sim::Penalties::default(),
-        max_odds: 100,
-        classes: [-1; 4],
-        allies: [-1; 4],
-        enemies: [-1; 4],
-        comm_name: String::new(),
-        medium_name: String::new(),
-        scan_mask: 0,
-        scan_fine: 0,
-        news_pic: -1,
-        require: 0,
-        inh_jam: [0; 4],
-        skill_mult: 0,
-    }];
-    for record in &mut catalog.ships {
-        record.crew = 3;
-    }
-    catalog.hulls = vec![hull_of(129, &[])];
-    catalog.outfits = vec![OutfitRecord {
-        id: OutfitId(200),
-        name: "Spare Part".to_owned(),
-        short_name: "Spare Part".to_owned(),
-        disp_weight: 0,
-        mass: 0,
-        tech_level: 1,
-        max: 10,
-        flags: 0,
-        cost: 100,
-        mods: [(0, 0); 4],
-        contribute: 0,
-        require: 0,
-        require_govt: -1,
-        buy_random: 100,
-        availability: nova_sim::Test::default(),
-        item_class: 7,
-        lc_name: "spare part".to_owned(),
-        lc_plural: "spare parts".to_owned(),
-        scan_mask: 0,
-        on_purchase: nova_sim::Script::default(),
-        on_sell: nova_sim::Script::default(),
-    }];
-    catalog
 }
 
 /// A flight under fire from an NPC whose every hit disables, stepped

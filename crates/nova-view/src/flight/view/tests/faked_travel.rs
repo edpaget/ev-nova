@@ -13,7 +13,9 @@ use nova_sim::{SessionEvent, SimSound};
 
 /// How a test words the flight's messages: each by its `Debug` text, but
 /// an arrival's lead, which waits for its arrival, and the long date as
-/// [`DATE`].
+/// [`DATE`]; a board line by its `Debug` text, an outfit as "rocket" and
+/// "rockets <id>", and the plunder's good and outfit by their `Debug`
+/// text and as "Rockets <id>".
 pub(super) fn faked_words() -> Words<Faked> {
     Words {
         text: |_, message| match message {
@@ -24,6 +26,14 @@ pub(super) fn faked_words() -> Words<Faked> {
             _ => Some(format!("{message:?}")),
         },
         date: |_| DATE.to_owned(),
+        board_line: |_, line| format!("{line:?}"),
+        outfit_names: |_, outfit| ("rocket".to_owned(), format!("rockets {}", outfit.0)),
+        plunder_names: |_, good, outfit| {
+            (
+                good.map(|good| format!("{good:?}")),
+                outfit.map(|outfit| format!("Rockets {}", outfit.0)),
+            )
+        },
     }
 }
 
