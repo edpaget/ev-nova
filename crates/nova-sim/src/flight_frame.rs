@@ -58,6 +58,11 @@ use crate::target_panel::{TargetStatus, TargetTag};
 use crate::targeting::TargetPick;
 use crate::traffic::npc::Mode;
 use crate::traffic::npc::NpcId;
+use crate::{
+    AbortError, AcceptError, Assigned, Assignment, ComputerRefusal, ComputerRow, HireRefusal,
+    Hired, MissionComputer, MissionId, MissionInfoPress, NotOffered, Order, OutfitOrder, OutfitRun,
+    RechargeRefusal, RefuseShown, ShipPurchase, ShipRefusal, TradeRefusal, VenueOffer,
+};
 
 /// What the flight view draws from, filled by
 /// [`Session::fill_frame`](crate::Session::fill_frame): every field is
@@ -578,6 +583,97 @@ pub enum FlightCommand {
     /// A press in the escort dialog
     /// ([`Session::press_escort`](crate::Session::press_escort)).
     PressEscort(EscortButton),
+    /// An order in the exchange
+    /// ([`Session::trade`](crate::Session::trade)).
+    Trade(Order),
+    /// The spaceport's Recharge
+    /// ([`Session::recharge`](crate::Session::recharge)).
+    Recharge,
+    /// The outfitter opens
+    /// ([`Session::open_outfitter`](crate::Session::open_outfitter)).
+    OpenOutfitter,
+    /// The outfitter closes
+    /// ([`Session::close_outfitter`](crate::Session::close_outfitter)).
+    CloseOutfitter,
+    /// An outfitter order of up to `count`, as the dialog's Buy or Sell
+    /// runs it ([`Session::outfit_order`](crate::Session::outfit_order)).
+    Outfit {
+        /// The outfit, bought or sold.
+        order: OutfitOrder,
+        /// How many to buy or sell.
+        count: u32,
+    },
+    /// An outfitter order of up to `count` that counts a Cancel's outfit
+    /// day ([`Session::outfit_counted_run`](crate::Session::outfit_counted_run)).
+    OutfitCounted {
+        /// The outfit, bought or sold.
+        order: OutfitOrder,
+        /// How many to buy or sell.
+        count: u32,
+    },
+    /// The name prompt's OK: buy a ship of class `ship` named `name`
+    /// ([`Session::buy_ship`](crate::Session::buy_ship)).
+    BuyShip {
+        /// The class bought.
+        ship: ShipId,
+        /// The name the prompt gave it.
+        name: String,
+    },
+    /// The name prompt's Cancel for a ship of this class
+    /// ([`Session::decline_ship`](crate::Session::decline_ship)).
+    DeclineShip(ShipId),
+    /// The bar opens, drawing its visit's news
+    /// ([`Session::open_bar`](crate::Session::open_bar)).
+    OpenBar,
+    /// Hire a ship of this class in the bar
+    /// ([`Session::hire`](crate::Session::hire)).
+    Hire(ShipId),
+    /// The bar's hire screen closes
+    /// ([`Session::close_hire`](crate::Session::close_hire)).
+    CloseHire,
+    /// The mission computer opens
+    /// ([`Session::open_mission_computer`](crate::Session::open_mission_computer)).
+    OpenMissionComputer,
+    /// Select the mission computer's row of this mission, loading its
+    /// text ([`Session::show_computer_row`](crate::Session::show_computer_row)).
+    ShowComputerRow(MissionId),
+    /// Select the mission info's row of this slot, loading its text
+    /// ([`Session::show_info_row`](crate::Session::show_info_row)).
+    ShowInfoRow(u8),
+    /// Accept this mission
+    /// ([`Session::accept_mission`](crate::Session::accept_mission)).
+    AcceptMission(MissionId),
+    /// Refuse this mission's offer
+    /// ([`Session::refuse_mission`](crate::Session::refuse_mission)).
+    RefuseMission(MissionId),
+    /// Abort the mission in this slot
+    /// ([`Session::abort_mission`](crate::Session::abort_mission)).
+    AbortMission(u8),
+    /// The next offer at the venue of this `loc`
+    /// ([`Session::next_offer`](crate::Session::next_offer)).
+    NextOffer(i16),
+    /// Enter the venue of this `loc` for its offers
+    /// ([`Session::enter_offer_venue`](crate::Session::enter_offer_venue)).
+    EnterOfferVenue(i16),
+    /// The mission info opened over this mission's offer dialog closes:
+    /// load its offer `dësc` again
+    /// ([`Session::reload_offer_desc`](crate::Session::reload_offer_desc)).
+    ReloadOfferDesc(MissionId),
+    /// The mission info key
+    /// ([`Session::press_mission_info`](crate::Session::press_mission_info)).
+    PressMissionInfo,
+    /// Jettison the cargo, `all` of it or all but the mission cargo
+    /// ([`Session::jettison_cargo`](crate::Session::jettison_cargo)).
+    Jettison {
+        /// Whether the mission cargo goes too.
+        all: bool,
+    },
+    /// Assign the ship captured
+    /// ([`Session::assign`](crate::Session::assign)).
+    Assign(Assignment),
+    /// The intro screen was shown
+    /// ([`Session::mark_intro_seen`](crate::Session::mark_intro_seen)).
+    MarkIntroSeen,
 }
 
 impl FlightCommand {
@@ -604,8 +700,10 @@ impl FlightCommand {
     ///   [`FlightCommand::EnterWormhole`]), are [`PlayerCommand::Land`].
     /// - The comm key's [`FlightCommand::Hail`] is [`PlayerCommand::Hail`],
     ///   the Board key's [`FlightCommand::Board`] [`PlayerCommand::Board`],
-    ///   and an escort key's [`FlightCommand::CommandEscorts`]
-    ///   [`PlayerCommand::Escort`].
+    ///   an escort key's [`FlightCommand::CommandEscorts`]
+    ///   [`PlayerCommand::Escort`], and the mission info key's
+    ///   [`FlightCommand::PressMissionInfo`] [`PlayerCommand::MissionInfo`],
+    ///   as the session asks it itself.
     /// - [`FlightCommand::EnterHypergate`] comes with the hypergate map's
     ///   close, which no key gates once the map is open, and is `None`, as
     ///   are the map's clicks, cycle and Clear Route, its marks and cue,
@@ -613,9 +711,13 @@ impl FlightCommand {
     ///   escorts' landing, the settling, the fade, the end of play, the
     ///   message line's ([`FlightCommand::CommShown`],
     ///   [`FlightCommand::CommAcknowledged`], [`FlightCommand::CommTicked`])
-    ///   and the dialogs' presses: the comm dialog's answers, haggles and
+    ///   the dialogs' presses: the comm dialog's answers, haggles and
     ///   close, the plunder dialog's takes and its letting go, and the
-    ///   escort dialog's buttons.
+    ///   escort dialog's buttons; and the spaceport's: the shops', the
+    ///   bar's and the mission screens', which run docked where no key
+    ///   gates them. [`FlightCommand::Jettison`] is `None` too: its key's
+    ///   press is gated by the key, and the player info's Jettison by no
+    ///   gate.
     #[must_use]
     pub fn gate(&self) -> Option<PlayerCommand> {
         match self {
@@ -632,6 +734,7 @@ impl FlightCommand {
             Self::Hail { .. } => Some(PlayerCommand::Hail),
             Self::Board => Some(PlayerCommand::Board),
             Self::CommandEscorts { .. } => Some(PlayerCommand::Escort),
+            Self::PressMissionInfo => Some(PlayerCommand::MissionInfo),
             Self::MapClick(_)
             | Self::CycleMapSelection
             | Self::ClearRoute
@@ -659,7 +762,30 @@ impl FlightCommand {
             | Self::HangUp
             | Self::Plunder(_)
             | Self::LetGoOfBoarding
-            | Self::PressEscort(_) => None,
+            | Self::PressEscort(_)
+            | Self::Trade(_)
+            | Self::Recharge
+            | Self::OpenOutfitter
+            | Self::CloseOutfitter
+            | Self::Outfit { .. }
+            | Self::OutfitCounted { .. }
+            | Self::BuyShip { .. }
+            | Self::DeclineShip(_)
+            | Self::OpenBar
+            | Self::Hire(_)
+            | Self::CloseHire
+            | Self::OpenMissionComputer
+            | Self::ShowComputerRow(_)
+            | Self::ShowInfoRow(_)
+            | Self::AcceptMission(_)
+            | Self::RefuseMission(_)
+            | Self::AbortMission(_)
+            | Self::NextOffer(_)
+            | Self::EnterOfferVenue(_)
+            | Self::ReloadOfferDesc(_)
+            | Self::Jettison { .. }
+            | Self::Assign(_)
+            | Self::MarkIntroSeen => None,
         }
     }
 }
@@ -795,6 +921,43 @@ pub enum Answer {
     /// What the escort dialog shows after a [`FlightCommand::PressEscort`]:
     /// `None` once it closes, or when it was not open.
     EscortDialog(Option<EscortDialogView>),
+    /// What a [`FlightCommand::Trade`] traded, or why it was refused.
+    Traded(Result<u32, TradeRefusal>),
+    /// What a [`FlightCommand::Recharge`] cost, or why it was refused.
+    Recharged(Result<i64, RechargeRefusal>),
+    /// The run of a [`FlightCommand::Outfit`] or a
+    /// [`FlightCommand::OutfitCounted`], refused at its first pass or not.
+    Outfitted(OutfitRun),
+    /// What a [`FlightCommand::BuyShip`] bought, or why it was refused.
+    ShipBought(Result<ShipPurchase, ShipRefusal>),
+    /// What a [`FlightCommand::Hire`] hired, or why it was refused.
+    Hired(Result<Hired, HireRefusal>),
+    /// The mission computer a [`FlightCommand::OpenMissionComputer`]
+    /// opened, or why it has nothing.
+    MissionComputer(Result<MissionComputer, ComputerRefusal>),
+    /// The row a [`FlightCommand::ShowComputerRow`] selected; `None` for a
+    /// mission not offered there.
+    ComputerRow(Option<ComputerRow>),
+    /// The text a [`FlightCommand::ShowInfoRow`] loaded; `None` for a free
+    /// slot.
+    InfoRow(Option<String>),
+    /// The slot a [`FlightCommand::AcceptMission`] put the mission in, or
+    /// why it was refused.
+    Accepted(Result<u8, AcceptError>),
+    /// What a [`FlightCommand::RefuseMission`] showed, or that the mission
+    /// was not offered.
+    RefuseShown(Result<RefuseShown, NotOffered>),
+    /// Whether a [`FlightCommand::AbortMission`] aborted, or why not.
+    Aborted(Result<(), AbortError>),
+    /// The offer a [`FlightCommand::NextOffer`] made; `None` with nothing
+    /// to offer.
+    Offer(Option<VenueOffer>),
+    /// What a [`FlightCommand::PressMissionInfo`] did, its own refusal
+    /// among them: not [`Answer::Refused`], which is left to a flight
+    /// with no session, as the view says #354 for that.
+    MissionInfo(MissionInfoPress),
+    /// What a [`FlightCommand::Assign`] did with the ship captured.
+    Assigned(Assigned),
 }
 
 impl Answer {
@@ -1459,9 +1622,55 @@ mod tests {
             ),
             (C::CommAcknowledged, None),
             (C::CommTicked, None),
+            (C::PressMissionInfo, Some(PlayerCommand::MissionInfo)),
         ];
         for (command, gate) in gated {
             assert_eq!(command.gate(), gate, "{command:?}");
+        }
+    }
+
+    #[test]
+    fn the_spaceports_and_the_mission_screens_commands_are_gated_by_none() {
+        use crate::flight_frame::FlightCommand as C;
+        let order = crate::OutfitOrder {
+            outfit: crate::catalog::OutfitId(128),
+            direction: crate::market::Direction::Buy,
+        };
+        let port = [
+            C::Trade(crate::Order {
+                row: 0,
+                good: crate::market::Good::Commodity(0),
+                direction: crate::market::Direction::Buy,
+                lot: crate::market::Lot::Click,
+            }),
+            C::Recharge,
+            C::OpenOutfitter,
+            C::CloseOutfitter,
+            C::Outfit { order, count: 1 },
+            C::OutfitCounted { order, count: 1 },
+            C::BuyShip {
+                ship: ShipId(129),
+                name: "Kestrel".to_owned(),
+            },
+            C::DeclineShip(ShipId(129)),
+            C::OpenBar,
+            C::Hire(ShipId(129)),
+            C::CloseHire,
+            C::OpenMissionComputer,
+            C::ShowComputerRow(crate::MissionId(130)),
+            C::ShowInfoRow(0),
+            C::AcceptMission(crate::MissionId(130)),
+            C::RefuseMission(crate::MissionId(130)),
+            C::AbortMission(0),
+            C::NextOffer(1),
+            C::EnterOfferVenue(1),
+            C::ReloadOfferDesc(crate::MissionId(130)),
+            C::Jettison { all: true },
+            C::Assign(crate::Assignment::Escort),
+            C::MarkIntroSeen,
+        ];
+        for command in port {
+            assert_eq!(command.gate(), None, "{command:?}");
         }
     }
 

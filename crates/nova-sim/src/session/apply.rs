@@ -3,8 +3,11 @@
 //! that runs it, and its [`Answer`] (see
 //! [`flight_frame`](crate::flight_frame)). The match lives here, on the
 //! session's side, so the view's adapter only forwards. The travel
-//! commands' arms are in the `travel` module, and the comm's, the
-//! boarding's and the escorts' in the `comm` module.
+//! commands' arms are in the `travel` module, the comm's, the
+//! boarding's and the escorts' in the `comm` module, the spaceport's
+//! shops', bar's, jettison's, assignment's and intro's in the `port`
+//! module, and the mission screens' and the mission info key's in the
+//! `missions` module.
 
 use super::Session;
 use crate::board::BoardingRule;
@@ -15,6 +18,8 @@ use crate::legal::LegalCode;
 use crate::session::SimCatalog;
 
 mod comm;
+mod missions;
+mod port;
 mod travel;
 
 /// What [`Session::apply`] is handed: the catalog the travel commands
@@ -80,6 +85,16 @@ impl Session {
     ///   (refused without a catalog), the board and the plunder dialog's,
     ///   the escort keys and the escort dialog's, and the message line's
     ///   acknowledgement and count.
+    /// - The spaceport's commands are answered as the `port` module says:
+    ///   the exchange, the recharge, the outfitter, the shipyard, the bar
+    ///   and its hire screen (the bar refused where there is none), the
+    ///   jettison, the assignment of a ship captured (refused with none
+    ///   awaiting) and the intro's mark.
+    /// - The mission commands are answered as the `missions` module says:
+    ///   the mission computer and its rows, the offers and their venues,
+    ///   the accept, the refusal and the abort, the mission info's rows,
+    ///   and its key, whose own refusal rides its answer.
+    /// - None of the spaceport's or the missions' reads the catalog.
     /// - The rest are never refused, and answer [`Answer::Done`]:
     ///   [`FlightCommand::SelectWeapon`] ([`Session::press_weapon_select`],
     ///   which the next pass takes; the view asks the gate first),
@@ -92,6 +107,7 @@ impl Session {
     ///   [`Session::put_back_port_nav`], [`Session::restore_map_nav`] and
     ///   [`Session::restore_map_selection`].
     #[allow(clippy::needless_pass_by_value)] // the port sends commands by value, and later ones carry owned data
+    #[allow(clippy::too_many_lines)] // one arm for each command, or each group the modules answer
     pub fn apply(&mut self, command: FlightCommand, collab: &mut ApplyCollaborators<'_>) -> Answer {
         match command {
             FlightCommand::SelectStellar(pick) => self
@@ -188,6 +204,30 @@ impl Session {
             | FlightCommand::PressEscort(_)
             | FlightCommand::CommAcknowledged
             | FlightCommand::CommTicked => self.apply_comm(command, collab),
+            FlightCommand::Trade(_)
+            | FlightCommand::Recharge
+            | FlightCommand::OpenOutfitter
+            | FlightCommand::CloseOutfitter
+            | FlightCommand::Outfit { .. }
+            | FlightCommand::OutfitCounted { .. }
+            | FlightCommand::BuyShip { .. }
+            | FlightCommand::DeclineShip(_)
+            | FlightCommand::OpenBar
+            | FlightCommand::Hire(_)
+            | FlightCommand::CloseHire
+            | FlightCommand::Jettison { .. }
+            | FlightCommand::Assign(_)
+            | FlightCommand::MarkIntroSeen => self.apply_port(command, collab),
+            FlightCommand::OpenMissionComputer
+            | FlightCommand::ShowComputerRow(_)
+            | FlightCommand::ShowInfoRow(_)
+            | FlightCommand::AcceptMission(_)
+            | FlightCommand::RefuseMission(_)
+            | FlightCommand::AbortMission(_)
+            | FlightCommand::NextOffer(_)
+            | FlightCommand::EnterOfferVenue(_)
+            | FlightCommand::ReloadOfferDesc(_)
+            | FlightCommand::PressMissionInfo => self.apply_missions(command, collab),
         }
     }
 }
