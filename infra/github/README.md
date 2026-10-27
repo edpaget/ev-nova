@@ -143,6 +143,14 @@ owned by the rdm task `macos-signing-environment-cutover`:
 3. Check that `gh secret list --repo edpaget/ev-nova` lists none of them.
    From then on a dispatch from any other branch signs ad-hoc.
 
+Done on 2026-10-27, gated on `main` run
+[40558074930](https://github.com/edpaget/ev-nova/actions/runs/40558074930)
+(63b17659), which deployed to `macos-signing`, signed with Developer ID, and
+notarized and stapled `Nova.app`. The six repository-level secrets are
+deleted, so the environment's copies are the only ones and a branch dispatch
+signs ad-hoc. The steps above stay as the record; to recover a deleted copy,
+re-add it from the 1Password item `ev-nova-ci`, not by following them.
+
 ## Actions and security settings
 
 `actions.tf`, `security.tf` and `repository.tf`'s `security_and_analysis`
