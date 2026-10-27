@@ -725,3 +725,92 @@ fn a_rescue_in_the_pod_stops_the_step_and_opens_its_desc() {
         "drawn where the rescue put it: nothing stepped after it"
     );
 }
+
+// The world drawn from the frame (rdm:phase/view-sim-seam/phase-7-world-frame).
+
+/// The centre of each crossed box and the centre of each sprite in
+/// `list`: where the world's placeholders and sprites are drawn.
+fn centres(list: &nova_view::DrawList) -> Vec<Point> {
+    list.iter()
+        .filter_map(|command| match *command {
+            nova_view::DrawCommand::Sprite { center, .. } => Some(center),
+            nova_view::DrawCommand::Line { from, to, .. } => Some(Point::new(
+                f32::midpoint(from.x, to.x),
+                f32::midpoint(from.y, to.y),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether one of `centres` is within a hundredth of `at`.
+fn near(centres: &[Point], at: Point) -> bool {
+    centres
+        .iter()
+        .any(|c| (c.x - at.x).abs() < 0.01 && (c.y - at.y).abs() < 0.01)
+}
+
+#[test]
+fn a_real_fights_ship_and_shot_are_drawn_where_its_frame_puts_them() {
+    let data = fighting_data(&[]);
+    let session = SessionBuilder::flying(&data).build();
+    let mut view = fighting(data, session);
+    view.input(&key(Key::Space, true));
+    let mut frame = FlightFrame::default();
+    for _ in 0..30 {
+        view.tick(TICK);
+        view.session().expect("flying").fill_frame(&mut frame);
+        if !frame.shots.is_empty() {
+            break;
+        }
+    }
+    assert!(!frame.shots.is_empty(), "a shot in flight");
+    let mut list = nova_view::DrawList::new();
+    view.draw(&mut list);
+    let drawn = centres(&list);
+    let camera = view.camera();
+    let behind = 1.0 - view.alpha();
+    // The trader idles where the frame has it: its crossed box there.
+    let trader = frame.ships[1].position;
+    assert!(
+        near(
+            &drawn,
+            camera.world_to_screen(Point::new(trader.x, trader.y))
+        ),
+        "the trader at {trader:?}: {drawn:?}"
+    );
+    // The shot smoothed back from where the frame has it by its motion.
+    let shot = frame.shots[0];
+    let at = Point::new(
+        shot.velocity.x.mul_add(-behind, shot.position.x),
+        shot.velocity.y.mul_add(-behind, shot.position.y),
+    );
+    assert!(
+        near(&drawn, camera.world_to_screen(at)),
+        "the shot at {at:?}: {drawn:?}"
+    );
+}
+
+#[test]
+fn a_real_click_in_space_targets_the_ship_drawn_under_it() {
+    let data = fighting_data(&[]);
+    let session = SessionBuilder::flying(&data).build();
+    let mut view = fighting(data, session);
+    let mut frame = FlightFrame::default();
+    view.session().expect("flying").fill_frame(&mut frame);
+    let trader = frame.ships[1];
+    let at = view
+        .camera()
+        .world_to_screen(Point::new(trader.position.x, trader.position.y));
+    view.input(&Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: true,
+        at,
+    });
+    let session = view.session().expect("flying");
+    assert_eq!(
+        session.target().map(|npc| nova_sim::ShipRef::Npc(npc.id)),
+        Some(trader.ship),
+        "targeted through the frame's box"
+    );
+}
