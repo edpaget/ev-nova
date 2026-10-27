@@ -83,15 +83,31 @@
 //! ([`nova::startup`]).
 //!
 //! Every startup error and warning goes to standard error and to the
-//! startup log, `~/Library/Logs/nova/nova.log` on macOS, rewritten each
+//! startup log, `~/Library/Logs/nova/nova.log` on macOS and
+//! `%LOCALAPPDATA%\nova\logs\nova.log` on Windows, rewritten each
 //! launch. When standard error is not a terminal (a double-clicked app), a
 //! fatal startup error is shown in an alert too, and the startup warnings
 //! are listed in one sheet over the game window once it opens. The
 //! simulation's diagnostics while the game runs stay on standard error.
 //!
+//! On Windows `nova.exe` is a Windows-subsystem program, so Explorer opens
+//! no console for it. Started from `cmd`, PowerShell or Windows Terminal,
+//! it attaches to that terminal's console, and its lines print there,
+//! after the prompt, which comes back at once
+//! ([`nova::platform::console`]). There the alert and the warnings box are
+//! message boxes, shown only when standard error goes nowhere: a file or a
+//! pipe it was given counts as read. The executable carries its icon,
+//! version and manifest (`packaging/windows/nova.exe.manifest`: per-monitor
+//! DPI awareness, the UTF-8 code page and long paths).
+//!
 //! Exits 2 on a usage error and when no `Nova Files` are found or picked,
 //! and 1 when the data named cannot be listed or the window cannot be
 //! opened.
+
+// No console window from Explorer; started from a terminal, the game
+// attaches to its console (`nova::platform::console`). Not in tests, so a
+// test harness built from this file still prints.
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -109,7 +125,7 @@ use nova::platform::{Dialogs, Runner, event_loop};
 use nova::rulebook::eight_bit_reading;
 use nova::saves::FilePilots;
 use nova::startup::{
-    DiskData, Fatal, FileLog, Launch, Report, Started, StartupLog, StdTerminal, usual_places,
+    DiskData, Fatal, FileLog, Launch, Report, Started, StartupLog, Terminal, usual_places,
 };
 use nova_audio::{Audio, AudioCore, FileSettings, KiraAudio, SettingsStore};
 use nova_data::fonts::open_charcoal;
@@ -175,14 +191,30 @@ fn run(
     (runner, result)
 }
 
+/// Where the startup report says stderr goes: on Windows, once stderr is
+/// connected to a console if it can be, before anything is written.
+#[cfg(windows)]
+fn stderr_terminal() -> impl Terminal {
+    use nova::platform::console::{ConsoleTerminal, Win32Console, connect_stderr};
+    ConsoleTerminal(connect_stderr(&mut Win32Console))
+}
+
+/// Where the startup report says stderr goes: the real stderr's word.
+#[cfg(not(windows))]
+fn stderr_terminal() -> impl Terminal {
+    nova::startup::StdTerminal
+}
+
 fn main() -> ExitCode {
+    // First: on Windows nothing reaches a console before it is attached.
+    let terminal = stderr_terminal();
     let env = |name: &str| std::env::var_os(name);
     let started = nova::startup::run(
         Launch {
             args: std::env::args_os().skip(1).collect(),
             nova_data: env("NOVA_DATA"),
             usual: usual_places(Os::current(), env),
-            terminal: &StdTerminal,
+            terminal: &terminal,
             log: log_path(Os::current(), env)
                 .map(|path| Box::new(FileLog::new(path)) as Box<dyn StartupLog>),
             stderr: Box::new(std::io::stderr()),

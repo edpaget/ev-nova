@@ -626,7 +626,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// screen first ([`Screen::close_requested`]): it exits at once unless
     /// the screen keeps it open, to quit later if it asks to, or at once
     /// if the feed after the close asks ([`Screen::take_quit`]). A screen
-    /// asking to quit exits.
+    /// asking to quit exits. On Windows Alt+F4 arrives as that same close:
+    /// winit 0.30 passes `WM_SYSKEYDOWN` with `VK_F4` to `DefWindowProc`,
+    /// which turns it into `SC_CLOSE` and `WM_CLOSE`, which winit sends as
+    /// `CloseRequested`; the keys themselves quit nothing.
     ///
     /// The original's `_MyModalDialog` also redraws the whole status bar
     /// on an update event for its game window (@0x59b17-0x59be6:
@@ -1478,6 +1481,27 @@ mod tests {
         );
         assert_eq!(app.screen().quits, 1);
         assert_eq!(app.take_warnings(), ["quit 1"], "what quitting reported");
+    }
+
+    #[test]
+    fn alt_f4_as_keys_quits_nothing_by_itself() {
+        // On Windows it comes as CloseRequested, the close tests' path.
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        for (which, pressed) in [
+            (Key::Alt, true),
+            (Key::Function(4), true),
+            (Key::Function(4), false),
+            (Key::Alt, false),
+        ] {
+            assert_eq!(
+                handle(&mut app, &mut window, key(which, pressed)),
+                Control::Continue,
+                "{which:?} {pressed}"
+            );
+        }
+        assert_eq!(app.screen().quits, 0);
+        assert_eq!(app.take_warnings(), Vec::<String>::new(), "no close");
     }
 
     #[test]

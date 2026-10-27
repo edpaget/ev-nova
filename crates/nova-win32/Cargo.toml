@@ -1,0 +1,38 @@
+[package]
+name = "nova-win32"
+description = "The Win32 console calls the game makes, behind a safe API, for Windows only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Every dependency is Windows-only: on any other target the crate is empty.
+[target.'cfg(windows)'.dependencies]
+# The version rfd and winit already lock; only the console calls and the
+# handle's file type.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console"] }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+# Not `workspace = true`: this crate is one of the places unsafe code is
+# allowed, so it denies it (its FFI module allows it) where the workspace
+# forbids it. The clippy table is the workspace's.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"

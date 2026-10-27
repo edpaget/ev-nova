@@ -61,19 +61,24 @@ pub const LOG_FILE: &str = "nova.log";
 
 /// The file each launch writes its startup errors and warnings to on `os`,
 /// or `None` where there is none yet, or when the variables it needs are
-/// unset (or empty). On macOS: `$HOME/Library/Logs/nova/nova.log`, where
-/// Console.app finds it. Windows and Linux add theirs with their platform
-/// roadmaps.
+/// unset (or empty):
+///
+/// - macOS: `$HOME/Library/Logs/nova/nova.log`, where Console.app finds it.
+/// - Windows: `%LOCALAPPDATA%\nova\logs\nova.log`: the machine's own,
+///   not the roaming `%APPDATA%` the settings are in, as a log need not
+///   follow the player to another machine.
+/// - Otherwise none yet: Linux adds its own with its platform roadmap.
 pub fn log_path(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    match os {
-        Os::MacOs => {
-            let home = env("HOME").filter(|home| !home.is_empty())?;
-            let mut path = PathBuf::from(home);
-            path.extend(["Library", "Logs", "nova", LOG_FILE]);
-            Some(path)
-        }
-        Os::Windows | Os::Other => None,
-    }
+    let var = |name: &str| env(name).filter(|value| !value.is_empty());
+    let (base, parts): (_, &[&str]) = match os {
+        Os::MacOs => (var("HOME")?, &["Library", "Logs", "nova"]),
+        Os::Windows => (var("LOCALAPPDATA")?, &["nova", "logs"]),
+        Os::Other => return None,
+    };
+    let mut path = PathBuf::from(base);
+    path.extend(parts);
+    path.push(LOG_FILE);
+    Some(path)
 }
 
 /// The `nova` directory under the platform's configuration directory.
@@ -211,10 +216,34 @@ mod tests {
     }
 
     #[test]
+    fn the_windows_startup_log_is_under_localappdata_logs() {
+        let mut expected = PathBuf::from("C:/Users/p/AppData/Local");
+        expected.extend(["nova", "logs", "nova.log"]);
+        let vars = env(&[
+            ("LOCALAPPDATA", "C:/Users/p/AppData/Local"),
+            ("APPDATA", "C:/Users/p/AppData/Roaming"),
+            ("HOME", "/home/p"),
+        ]);
+        assert_eq!(log_path(Os::Windows, vars), Some(expected));
+    }
+
+    #[test]
+    fn without_a_localappdata_there_is_no_windows_log() {
+        assert_eq!(log_path(Os::Windows, env(&[])), None);
+        assert_eq!(log_path(Os::Windows, env(&[("LOCALAPPDATA", "")])), None);
+        let roaming = env(&[("APPDATA", "C:/Roaming"), ("HOME", "/home/p")]);
+        assert_eq!(log_path(Os::Windows, roaming), None);
+    }
+
+    #[test]
     fn elsewhere_there_is_no_startup_log_yet() {
-        let vars = || env(&[("HOME", "/home/p"), ("APPDATA", "C:/Roaming")]);
-        assert_eq!(log_path(Os::Windows, vars()), None);
-        assert_eq!(log_path(Os::Other, vars()), None);
+        let vars = env(&[
+            ("HOME", "/home/p"),
+            ("APPDATA", "C:/Roaming"),
+            ("LOCALAPPDATA", "C:/Local"),
+            ("XDG_CONFIG_HOME", "/xdg"),
+        ]);
+        assert_eq!(log_path(Os::Other, vars), None);
     }
 
     #[test]

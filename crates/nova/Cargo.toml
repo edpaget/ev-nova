@@ -31,11 +31,27 @@ egui-wgpu = { workspace = true, optional = true }
 egui-winit = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 
-# The macOS menu bar, built behind nova-appkit's safe API, and the open
-# panel and alerts startup shows without a terminal, from rfd.
+# The macOS menu bar, built behind nova-appkit's safe API.
 [target.'cfg(target_os = "macos")'.dependencies]
 nova-appkit.workspace = true
+
+# The open panel (macOS) and the alerts startup shows when nobody reads
+# stderr (macOS and Windows, where they are `MessageBoxW`s), from rfd.
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
 rfd.workspace = true
+
+# The console calls behind nova-win32's safe API: attaching to the
+# terminal's console, as `nova.exe` is a Windows-subsystem program; and
+# the icon's resource id, which the window loads its icon by.
+[target.'cfg(windows)'.dependencies]
+nova-win32.workspace = true
+nova-winres.workspace = true
+
+# `build.rs`: nova.exe's icon, version information and manifest, made by
+# nova-winres and compiled by embed-resource, for Windows targets only.
+[build-dependencies]
+embed-resource.workspace = true
+nova-winres.workspace = true
 
 [dev-dependencies]
 # The app and integration tests record Audio commands with the `recording`
@@ -55,6 +71,10 @@ nova-sim = { workspace = true, features = ["fixture"] }
 tempfile.workspace = true
 # The runner tests build the wgpu errors a GPU set-up can fail with.
 wgpu.workspace = true
+
+# The Windows-only tests of the built nova.exe read its PE structures.
+[target.'cfg(windows)'.dev-dependencies]
+object.workspace = true
 
 [features]
 # The developer tools overlay (egui), toggled with the backquote key. Off by

@@ -5,14 +5,23 @@
 //!
 //! On macOS they are rfd's: an `NSOpenPanel` that can pick a folder or a
 //! package (so both `EV Nova.app` and its `Nova Files`), and `NSAlert`s.
-//! No first-party `unsafe` is added for them. Elsewhere there are none
-//! yet ([`Dialogs`] picks nothing and shows nothing; stderr already has
-//! every line): the Windows and Linux platform roadmaps add theirs.
+//! On Windows they are rfd's too: the panel is a folder picker
+//! (`IFileOpenDialog` with `FOS_PICKFOLDERS`), and either the `EV Nova`
+//! folder or its `Nova Files` can be picked, since the lookup tries both
+//! (`crate::startup::locate`). Each alert is a `MessageBoxW` (rfd's
+//! `common-controls-v6` feature is off; the manifest's Common Controls 6
+//! dependency themes the box all the same). The warnings box is owned by
+//! the game window, so it stays over it, and Windows takes no input in
+//! the window until it is dismissed. It runs on a thread of its own, so
+//! the game goes on drawing beneath. No first-party `unsafe` is added for
+//! them. On Linux nothing is picked or shown yet ([`Dialogs`]): stderr
+//! already has every line.
 //!
 //! The panel and the fatal alert are modal, so they run only outside the
 //! event loop (winit panics when its handler is entered again while it
-//! runs). The warnings are a sheet, started once the game window is up and
-//! the application is running, which needs no nested run loop.
+//! runs). The warnings are a sheet (on Windows a box on its own thread),
+//! started once the game window is up and the application is running,
+//! which needs no nested run loop.
 
 use std::path::PathBuf;
 
@@ -41,7 +50,25 @@ impl NovaFilesDialog for Dialogs {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(windows)]
+impl NovaFilesDialog for Dialogs {
+    /// A folder picker titled `prompt`, opening where Windows last left
+    /// it.
+    ///
+    /// It runs on the calling thread, the main one: the lookup asks
+    /// before the event loop runs and before any window or audio is up,
+    /// so a blocking modal dialog is safe there, as the fatal box is. The
+    /// warnings box needs a thread of its own only because the event
+    /// loop is running by then. rfd sets COM up for the call
+    /// (`CoInitializeEx`, apartment-threaded); should that fail, as on a
+    /// thread already in the multithreaded apartment, no picker shows
+    /// and the call reads as a cancel.
+    fn pick(&mut self, prompt: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new().set_title(prompt).pick_folder()
+    }
+}
+
+#[cfg(any(target_os = "macos", windows))]
 impl FatalAlert for Dialogs {
     fn show_fatal(&mut self, message: &str) {
         let _ = rfd::MessageDialog::new()
@@ -57,8 +84,8 @@ impl FatalAlert for Dialogs {
 /// while the game goes on beneath it.
 #[cfg(target_os = "macos")]
 pub fn show_warnings(window: &Window, body: &str) {
-    // The sheet begins as the future is made, and its completion keeps the
-    // alert alive: the future itself is not needed.
+    // rfd's macOS backend begins the sheet as the future is made, and its
+    // completion keeps the alert alive: the future itself is not needed.
     drop(
         rfd::AsyncMessageDialog::new()
             .set_level(rfd::MessageLevel::Warning)
@@ -69,7 +96,26 @@ pub fn show_warnings(window: &Window, body: &str) {
     );
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Shows a message box owned by `window` listing the startup warnings in
+/// `body`, and returns at once: the box runs on a thread of its own until
+/// the player dismisses it, while the game goes on beneath it.
+///
+/// rfd's async dialog can't be used here as on macOS: its Windows backend
+/// spawns the `MessageBoxW` thread only when the future is first polled,
+/// so a dropped future shows nothing. The blocking dialog takes the
+/// window's handle here, on the event loop's thread, and rfd marks it
+/// `Send`, so the thread only runs it.
+#[cfg(windows)]
+pub fn show_warnings(window: &Window, body: &str) {
+    let dialog = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title(WARNINGS_TITLE)
+        .set_description(body)
+        .set_parent(window);
+    std::thread::spawn(move || dialog.show());
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 impl NovaFilesDialog for Dialogs {
     /// No dialog yet: nothing is picked.
     fn pick(&mut self, _prompt: &str) -> Option<PathBuf> {
@@ -77,12 +123,12 @@ impl NovaFilesDialog for Dialogs {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 impl FatalAlert for Dialogs {
     /// No alert yet: stderr and the log have the message.
     fn show_fatal(&mut self, _message: &str) {}
 }
 
 /// No sheet yet: stderr and the log have the warnings.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 pub fn show_warnings(_window: &Window, _body: &str) {}

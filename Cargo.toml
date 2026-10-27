@@ -16,6 +16,8 @@ nova-view = { path = "crates/nova-view" }
 nova-render = { path = "crates/nova-render" }
 nova-metalfx = { path = "crates/nova-metalfx" }
 nova-appkit = { path = "crates/nova-appkit" }
+nova-win32 = { path = "crates/nova-win32" }
+nova-winres = { path = "crates/nova-winres" }
 nova-sim = { path = "crates/nova-sim" }
 nova-sim-base = { path = "crates/nova-sim-base" }
 nova-sim-catalog = { path = "crates/nova-sim-catalog" }
@@ -32,6 +34,13 @@ png = "0.18"
 # plist back. Its default `serde` feature is not needed.
 plist = { version = "1.10.1", default-features = false }
 tempfile = "3"
+# Compiles nova.exe's resource script (its icon, version information and
+# manifest) on Windows; for any other target it does nothing.
+embed-resource = "3.0.12"
+# Reads the PE nova.exe's tests check, as structures.
+object = { version = "0.37.3", default-features = false, features = ["read_core", "pe", "std"] }
+# Reads the Windows manifest back as XML in nova-winres's and nova's tests.
+roxmltree = "0.20.0"
 # nova-bundle decodes the Developer ID certificate and the notary API key
 # from base64 signing variables; the version plist already locks.
 base64 = "0.23"
@@ -49,8 +58,9 @@ glyphon = "0.12.0"
 winit = "0.30.13"
 pollster = "1.0.1"
 # The open panel that asks for the Nova Files and the startup alerts
-# (nova's macOS-only dependency). Its default features are Linux's portal
-# and Wayland backends, which the macOS build does not need.
+# (nova's dependency on macOS and Windows). Its default features are
+# Linux's portal and Wayland backends, which neither build needs; without
+# `common-controls-v6` its Windows alerts are plain `MessageBoxW`s.
 rfd = { version = "0.17.2", default-features = false }
 bytemuck = { version = "1.25", features = ["derive"] }
 # The developer tools overlay (nova's `dev-tools` feature only). egui-wgpu

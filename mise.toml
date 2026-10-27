@@ -32,6 +32,13 @@ description = "Rustdoc over every crate, private items included, with broken int
 env = { RUSTDOCFLAGS = "-D rustdoc::broken_intra_doc_links" }
 run = "cargo doc --workspace --no-deps --document-private-items --locked"
 
+# Not in `ci`: CI's own Windows leg lints natively. Needs
+# `rustup target add x86_64-pc-windows-msvc`; its own target directory keeps
+# the host build warm.
+[tasks.lint-windows]
+description = "Clippy over every crate and target for Windows (x86_64-pc-windows-msvc), from any host, warnings are errors"
+run = "cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc --target-dir target/windows --locked -- -D warnings"
+
 [tasks.lint-lib]
 description = "Clippy over every crate's libs and bins without dev-dependency features (so no `fixture`), warnings are errors"
 run = "cargo clippy --workspace --locked -- -D warnings"

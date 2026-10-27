@@ -43,4 +43,6 @@ mod system_view;
 mod trade;
 mod traffic;
 mod widescreen;
+#[cfg(windows)]
+mod windows_exe;
 mod world_layer;
