@@ -1158,6 +1158,7 @@ fn restock(reserves: &mut Reserves, kind: &ShipKind) {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 pub(super) mod tests {
+    use crate::testkit::work;
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
@@ -1218,7 +1219,14 @@ pub(super) mod tests {
     }
 
     fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// What each escort's order is after each system entry, `source`
@@ -1561,9 +1569,14 @@ pub(super) mod tests {
     /// A tick of the player under `controls`, then of Nova's traffic, then
     /// of the fight.
     fn fly(session: &mut Session, catalog: &FakePilotCatalog, controls: Controls) {
-        session.tick(controls);
-        session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            controls,
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// Thrust, turning right on every third tick of each ten.
@@ -1609,7 +1622,7 @@ pub(super) mod tests {
             .reserves
             .shield
             .now = 4.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(
             session.pilot().escorts()[0].reserves.shield.now,
             4.0,
@@ -1673,7 +1686,14 @@ pub(super) mod tests {
         let placed = || {
             let mut session = Session::fly(&catalog, escorted(&catalog)).expect("flies");
             let mut chance = Draws::of(&[]).keyed(75, 74);
-            session.tick_traffic(&catalog, &Peaceful, &mut chance);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Peaceful,
+                Rules::default(),
+                &mut chance,
+            );
             assert_eq!(chance.times_asked(75), 1, "the loaded pilot's escort rolls");
             assert_eq!(skills(&session), [(rolled, 1.0), (1.0, 1.0)]);
             session
@@ -2195,17 +2215,17 @@ pub(super) mod tests {
             .reserves
             .shield
             .now = 4.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         land_now(&mut session).expect("lands");
         assert_eq!(session.pilot().escorts()[0].reserves.shield.now, 4.0);
         tick(&mut session, &catalog);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.pilot().escorts()[0].reserves.shield.now, 4.0);
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
         assert_eq!(session.pilot().escorts()[0].reserves.shield.now, 30.0);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(
             session.pilot().escorts()[0].reserves.shield.now,
             30.0,
@@ -2259,7 +2279,7 @@ pub(super) mod tests {
             .reserves
             .armor
             .now = 10.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(
             session
                 .pilot()
@@ -2309,11 +2329,11 @@ pub(super) mod tests {
             .reserves
             .armor
             .now = 0.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.pilot().escorts().len(), 1);
         assert!(session.take_save_due());
         for _ in 0..3 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
         }
         assert_eq!(session.space.npc(freighter), None, "destroyed and gone");
         assert_eq!(session.pilot().escorts()[0].ship, WARSHIP);
@@ -2360,7 +2380,7 @@ pub(super) mod tests {
             assert_eq!(session.space.npc(id).expect("there").former, None);
             session.space.npc_mut(id).expect("there").reserves.armor.now = 10.0;
         }
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert!(session.pilot().escorts().is_empty(), "all lost");
         for ((id, record), kind) in ids.into_iter().zip(&records).zip([
             FormerKind::Hired,
@@ -2407,7 +2427,7 @@ pub(super) mod tests {
         let npc = session.space.npc_mut(hired).expect("there");
         npc.hull.death_delay = 10;
         npc.reserves.armor.now = 0.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         let npc = session.space.npc(hired).expect("breaking up");
         assert!(matches!(npc.condition, Condition::Dying { .. }));
         assert_eq!(
@@ -2416,7 +2436,7 @@ pub(super) mod tests {
         );
         let captured = session.space.escorts.fleet[0].expect("placed");
         session.space.traffic.remove(captured);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.pilot().escorts().len(), 1, "the gone one is lost");
     }
 
@@ -2424,7 +2444,7 @@ pub(super) mod tests {
     fn an_intact_escort_remembers_nothing() {
         let catalog = fleeted();
         let mut session = mixed(&catalog);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.pilot().escorts().len(), 3);
         assert!(session.npcs().iter().all(|npc| npc.former.is_none()));
     }
@@ -2467,7 +2487,7 @@ pub(super) mod tests {
     pub(in crate::session) fn hit(session: &mut Session, index: usize, armor: f32) {
         let id = session.space.escorts.fleet[index].expect("placed");
         session.space.npc_mut(id).expect("there").reserves.armor.now = armor;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &catalog(), Controls::default());
     }
 
     fn cargo(session: &Session) -> BTreeMap<Good, u32> {
@@ -2616,7 +2636,7 @@ pub(super) mod tests {
         let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
         let id = session.space.escorts.fleet[1].expect("placed");
         session.space.traffic.remove(id);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.pilot().escorts().len(), 2, "it is lost");
         assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
     }
@@ -2642,7 +2662,7 @@ pub(super) mod tests {
                 ..crate::testkit::planet(160, at.x, at.y)
             }];
             session.chart.listed = session.chart.sites.clone();
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             assert!(session.space.npc(id).is_none(), "{reading:?}");
             assert_eq!(
                 session.pilot().escorts().len(),
@@ -2741,9 +2761,14 @@ pub(super) mod tests {
 
     /// A tick of the traffic, by `ai`, then of the fight.
     fn fight(session: &mut Session, catalog: &FakePilotCatalog, ai: &NovaAi) {
-        session.tick(Controls::default());
-        session.tick_traffic(catalog, ai, &mut NeverFires);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            ai,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     #[test]
@@ -3079,7 +3104,7 @@ pub(super) mod tests {
                     .all(|npc| npc.target == Some(ShipRef::Npc(quarry))),
                 "attack {streak}"
             );
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
             assert!(
                 escort_npcs(&session).iter().all(|npc| npc.target.is_none()),
                 "let go every pass of the warp"
@@ -3287,7 +3312,7 @@ pub(super) mod tests {
         assert_eq!(session.select_target(TargetPick::NextEscort), warship);
         assert_eq!(session.select_target(TargetPick::NextEscort), freighter);
         tick(&mut session, &catalog);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.target().map(|npc| npc.id), freighter, "kept");
         assert_eq!(session.select_target(TargetPick::NextEscort), None);
     }
@@ -3559,7 +3584,7 @@ pub(super) mod tests {
             .armor
             .now = 0.0;
         for _ in 0..4 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
         }
         assert_eq!(session.pilot().escorts(), []);
         assert!(session.pilot().gone(PersonId(700)));
@@ -3577,7 +3602,7 @@ pub(super) mod tests {
             .reserves
             .armor
             .now = 10.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.pilot().escorts(), []);
         let left = session.space.npc(ace).expect("left behind");
         assert_eq!(left.condition, Condition::Disabled);
