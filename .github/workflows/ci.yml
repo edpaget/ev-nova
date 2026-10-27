@@ -63,9 +63,7 @@ jobs:
   # as its own release build succeeds. Revisit once Windows CI is a hard gate.
   build:
     needs: ci
-    # TEMPORARY (phase 6's signing run): build even though the ci legs fail
-    # on main's unrelated rustdoc errors. Reverted before review.
-    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     strategy:
       # So every platform's build failure is reported in one run.
       fail-fast: false
