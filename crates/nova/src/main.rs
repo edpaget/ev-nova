@@ -9,11 +9,15 @@
 //! and P the Preferences dialog, which turns sound and music on or off and
 //! sets their volumes.
 //!
-//! Pilots are saved, one JSON file each, in a `Pilots` directory beside
-//! the settings file (below): on landing, on taking off, after each change
-//! in the spaceport (each trade in the Trade Center among them), on going
-//! back to the menu and on quitting. Without a place to save them, the
-//! game runs with a warning and saves nothing.
+//! Pilots are saved, one JSON file each, in a `Pilots` directory: on
+//! landing, on taking off, after each change in the spaceport (each trade
+//! in the Trade Center among them), on going back to the menu and on
+//! quitting. On macOS and Windows it is beside the settings file (below),
+//! and elsewhere it is `$XDG_DATA_HOME/nova/Pilots` (or
+//! `~/.local/share/nova/Pilots`). Pilots an earlier version saved beside
+//! the settings there are moved into it at launch, keeping every file,
+//! with a notice in the startup report ([`nova::pilot_move`]). Without a
+//! place to save them, the game runs with a warning and saves nothing.
 //!
 //! Planetary events start at random, and NPC traffic comes and goes at
 //! random, on a generator seeded from the clock when the game starts; the
@@ -47,10 +51,11 @@
 //! device. Without the music the game plays none, with a warning; without
 //! an audio device it runs silently, with a warning.
 //!
-//! The settings (sound, and Hyperspace Effects) are saved in `settings.json` in a `nova` directory
-//! under the platform's configuration directory: `~/Library/Application
-//! Support` on macOS, `%APPDATA%` on Windows, and `$XDG_CONFIG_HOME` (or
-//! `~/.config`) elsewhere. Missing settings start at the defaults, and so
+//! The settings (sound, and Hyperspace Effects) are saved in
+//! `settings.json` in a `nova` directory under the platform's
+//! configuration directory: `~/Library/Application Support` on macOS,
+//! `%APPDATA%` on Windows, and `$XDG_CONFIG_HOME` (or `~/.config`)
+//! elsewhere, where only the settings are. Missing settings start at the defaults, and so
 //! do settings that cannot be read, with a warning.
 //!
 //! The same file chooses, for each rule where the Nova Bible and the
@@ -83,9 +88,10 @@
 //! ([`nova::startup`]).
 //!
 //! Every startup error and warning goes to standard error and to the
-//! startup log, `~/Library/Logs/nova/nova.log` on macOS and
-//! `%LOCALAPPDATA%\nova\logs\nova.log` on Windows, rewritten each
-//! launch. When standard error is not a terminal (a double-clicked app), a
+//! startup log, rewritten each launch: `~/Library/Logs/nova/nova.log` on
+//! macOS, `%LOCALAPPDATA%\nova\logs\nova.log` on Windows, and
+//! `$XDG_STATE_HOME/nova/nova.log` (or `~/.local/state/nova/nova.log`)
+//! elsewhere. When standard error is not a terminal (a double-clicked app), a
 //! fatal startup error is shown in an alert too, and the startup warnings
 //! are listed in one sheet over the game window once it opens. The
 //! simulation's diagnostics while the game runs stay on standard error.
@@ -118,9 +124,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nova::app::start_screen;
 use nova::audio::{game_audio, music_warning, voice_limit};
 use nova::chance::SplitMix;
-use nova::config::{Os, log_path, pilots_dir, settings_path};
+use nova::config::{Os, legacy_pilots_dir, log_path, pilots_dir, settings_path};
 use nova::fonts::game_fonts;
 use nova::load::data_warnings;
+use nova::pilot_move::{DiskFiles, move_pilots, report_lines};
 use nova::platform::{Dialogs, Runner, event_loop};
 use nova::rulebook::eight_bit_reading;
 use nova::saves::FilePilots;
@@ -251,6 +258,16 @@ fn main() -> ExitCode {
     let data = Rc::new(data);
     // Dialog and menu text is laid out by the faces the window draws it in.
     let metrics: Rc<dyn TextMetrics> = Rc::new(GlyphonMetrics::new(&fonts));
+    // Before the keeper reads any, so the last pilot opens from the new
+    // place.
+    if let (Some(old), Some(new)) = (
+        legacy_pilots_dir(Os::current(), env),
+        pilots_dir(Os::current(), env),
+    ) {
+        for line in report_lines(&move_pilots(&mut DiskFiles, &old, &new)) {
+            report.warn(&line);
+        }
+    }
     let pilots = pilots_dir(Os::current(), env)
         .map(|dir| PilotKeeper::new(Box::new(FilePilots::new(dir)) as Box<dyn PilotStore>));
     if pilots.is_none() {

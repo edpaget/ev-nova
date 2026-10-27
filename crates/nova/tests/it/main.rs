@@ -31,6 +31,7 @@ mod news;
 mod outfitter;
 mod person_join;
 mod persons;
+mod pilot_move;
 mod pilots;
 mod preferences;
 mod recharge;
