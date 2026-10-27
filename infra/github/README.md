@@ -175,6 +175,46 @@ new third-party action, add its pattern there and apply it, or the jobs that
 use it fail at startup ("... is not allowed to be used in edpaget/ev-nova").
 A composite action's own nested `uses:` count too.
 
+## Main branch ruleset
+
+`rulesets.tf` declares one ruleset, `protect-main`
+(`github_repository_ruleset.main`), active on `refs/heads/main` (named
+explicitly, not `~DEFAULT_BRANCH`, so a default-branch rename can't move it).
+It has two rules: `non_fast_forward` (no force-push) and `deletion`.
+
+Every rule that would refuse a direct push is left out on purpose, because
+landing (`rdm:land`) pushes straight to `main`:
+
+| Rule left out | Why |
+|---|---|
+| `required_linear_history` | A conflicting rebase is landed by merging `main` into the branch and `merge --no-ff`, which makes a merge commit |
+| `pull_request` (require a PR) | The operator lands without PRs |
+| `required_status_checks` | A landing push is the commit's first appearance on GitHub, so it has no green checks yet; the gate runs locally (`mise run ci`) |
+| `update`, `creation`, `required_signatures` | `update` refuses every push, `main` already exists, and commits here aren't signed |
+
+Landing pushes a fast-forward either way (`merge --ff-only`, or a `--no-ff`
+merge on top of `main`'s tip), so the ruleset doesn't affect it.
+
+**Bypass.** Only the repository admin role (`RepositoryRole`, id 5), in
+`pull_request` mode. Direct pushes stay enforced for everyone, the admin
+included; with `always` the operator's own accidental force-push would go
+through. For an emergency, edit or disable the ruleset in the GitHub UI
+(admins always can), then fix the config and re-apply.
+
+**Re-running the probe.** Never test against `main`.
+
+1. Add `refs/heads/ruleset-probe/force-push` to the include list and apply.
+2. Create the probe from `main`'s tip:
+   `git push origin "$(git rev-parse origin/main):refs/heads/ruleset-probe/force-push"`.
+3. From a detached worktree at `origin/main~1` with an empty commit, run
+   `git push --force origin HEAD:refs/heads/ruleset-probe/force-push`, and
+   `git push origin --delete refs/heads/ruleset-probe/force-push`. Both must be
+   refused with `GH013` ("Cannot force-push to this branch", "Cannot delete
+   this branch").
+4. Remove the probe from the include list and apply.
+5. Only then delete the probe:
+   `git push origin --delete refs/heads/ruleset-probe/force-push`.
+
 ## State
 
 The state is local (`terraform.tfstate`, gitignored) and encrypted with
@@ -206,6 +246,14 @@ There is no `fallback` block, so an unencrypted state is refused, not read.
     (`gh api -X DELETE repos/edpaget/ev-nova/environments/macos-signing`)
     and apply, which recreates it. Nothing is lost: every value is in
     1Password.
+- **The main ruleset** has no `import` block either. Before applying after a
+  lost state, import it inside the same `op run` and `GITHUB_TOKEN` wrapping,
+  or the apply creates a second `protect-main`:
+
+  ```sh
+  gh api repos/edpaget/ev-nova/rulesets --jq '.[] | {id, name}'
+  tofu -chdir=infra/github import github_repository_ruleset.main ev-nova:<id>
+  ```
 - **Lost passphrase:** delete `terraform.tfstate` and re-apply, as above.
 - **Rotating the passphrase:** see below.
 
