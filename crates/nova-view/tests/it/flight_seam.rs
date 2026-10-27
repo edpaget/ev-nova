@@ -309,7 +309,8 @@ fn system(x: i16, links: &[i16], nav_defs: &[i16]) -> Vec<u8> {
     put_i16s(&mut bytes, 0x04, &[-1; 32]);
     put_i16s(&mut bytes, 0x04, links);
     put_i16s(&mut bytes, 0x24, nav_defs);
-    put_i16s(&mut bytes, 0x66, &[-1]);
+    // No government, and no message buoy.
+    put_i16s(&mut bytes, 0x66, &[-1, -1]);
     bytes
 }
 
@@ -475,6 +476,53 @@ fn a_real_landing_plays_its_sound_and_shows_its_line_through_the_drain() {
     assert_eq!(view.take_landing(), Some(StellarId(128)));
     assert!(view.take_save_due(), "the landing's save");
     assert!(!view.take_save_due(), "once");
+}
+
+// The jump, the landing and the take-off, through a whole `FlightView`
+// over a real session (rdm:phase/view-sim-seam/phase-9-travel-on-port).
+
+#[test]
+fn a_real_jump_arrives_in_the_next_system() {
+    let mut view = view();
+    tap(&mut view, Key::Char('m'));
+    let beta = on_map(&view, 129);
+    view.input(&key(Key::Shift, true));
+    click(&mut view, beta);
+    view.input(&key(Key::Shift, false));
+    tap(&mut view, Key::Char('m'));
+    assert_eq!(view.session().expect("flying").course(), [SystemId(129)]);
+    view.input(&key(Key::Up, true));
+    for _ in 0..3000 {
+        let at = view.session().expect("flying").player().position;
+        if at.length() >= nova_sim::hyperspace::MIN_JUMP_DISTANCE {
+            break;
+        }
+        view.tick(TICK);
+    }
+    view.input(&key(Key::Up, false));
+    tap(&mut view, Key::Char('j'));
+    for _ in 0..3000 {
+        if view.session().expect("flying").system() == SystemId(129) {
+            break;
+        }
+        view.tick(TICK);
+    }
+    assert_eq!(view.session().expect("flying").system(), SystemId(129));
+    assert_eq!(view.course_map().current(), Some(MapSystemId(129)));
+    let line = view.message().expect("the arrival line");
+    assert!(line.starts_with("Jumping into the Beta system"), "{line:?}");
+}
+
+#[test]
+fn a_real_landing_hands_the_router_the_stellar_and_a_take_off_gives_it_back() {
+    let mut view = view();
+    land(&mut view);
+    assert_eq!(view.take_landing(), Some(StellarId(128)));
+    assert!(!view.leave_due(), "no held leave");
+    assert_eq!(view.land_escorts(), None, "no escort to settle");
+    assert_eq!(view.take_off(), Some(StellarId(128)));
+    assert_eq!(view.session().expect("flying").landed(), None, "in flight");
+    assert_eq!(view.take_off(), None, "not landed");
 }
 
 /// The systems the open course map draws.

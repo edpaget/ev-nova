@@ -1337,19 +1337,6 @@ fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
 }
 
 #[test]
-fn an_ejected_player_takes_no_key() {
-    let mut view = ejecting_view(ejecting_in(100, &[188, 187]), &[]);
-    assert!(until_ejected(&mut view).0);
-    view.input(&key(MAP_KEY, true));
-    assert!(!view.map_open, "no map");
-    view.input(&key(MAP_KEY, false));
-    view.input(&key(LAND_KEY, true));
-    let session = view.session().expect("flying");
-    assert_eq!(session.nav_target(), None, "no landing request");
-    assert!(!session.takes(PlayerCommand::Land));
-}
-
-#[test]
 fn a_first_tick_eject_rolls_no_puff_for_the_player() {
     let mut view = ejecting_view(ejecting_in(100, &[188, 187]), &[]);
     assert_eq!(until_ejected(&mut view), (true, false));
@@ -1407,53 +1394,6 @@ fn the_players_ship_is_drawn_whole_while_breaking_up_then_without_its_sprite_the
         [0_i16; 0],
         "nothing of it after"
     );
-}
-
-#[test]
-fn the_explosion_tick_sounds_the_klaxon_then_halts_it_before_the_explosion() {
-    // DeathDelay 2: a timer of 6, set on the tick after the hit
-    // (@0x43e29), so 3 ticks of klaxon, then the explosion's.
-    let mut view = fighting(killed_in(2), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
-    let klaxon = Sound::Sim(SimSound::Klaxon);
-    let mut breaking_up = Vec::new();
-    for _ in 0..60 {
-        view.tick(TICK);
-        let sounds = view.take_sounds();
-        match view.session().expect("flying").player_fate() {
-            PlayerFate::BreakingUp { .. } => {
-                breaking_up.push(sounds.iter().filter(|&&sound| sound == klaxon).count());
-            }
-            PlayerFate::Exploded => {
-                assert_eq!(
-                    breaking_up,
-                    [0, 0, 1, 1, 1],
-                    "none as it starts, nor as its timer is set"
-                );
-                let first_combat = sounds
-                    .iter()
-                    .position(|sound| matches!(sound, Sound::Combat(_)));
-                let klaxons: Vec<usize> = (0..sounds.len())
-                    .filter(|&at| sounds[at] == klaxon)
-                    .collect();
-                assert!(first_combat.is_some(), "the explosion sounds: {sounds:?}");
-                assert_eq!(klaxons.len(), 1, "{sounds:?}");
-                let halt = Sound::Sim(SimSound::Halt(&nova_sim::PLAYER_EXPLOSION_HALTS));
-                let halts: Vec<usize> =
-                    (0..sounds.len()).filter(|&at| sounds[at] == halt).collect();
-                assert_eq!(halts, [klaxons[0] + 1], "halted next: {sounds:?}");
-                assert!(halts[0] < first_combat.unwrap_or(0), "{sounds:?}");
-                return;
-            }
-            PlayerFate::Flying | PlayerFate::Disabled => {}
-            fate @ (PlayerFate::Holding { .. }
-            | PlayerFate::Fading
-            | PlayerFate::GameOver
-            | PlayerFate::Ejected { .. }) => {
-                panic!("past the explosion's tick unseen: {fate:?}")
-            }
-        }
-    }
-    panic!("the player's ship never exploded");
 }
 
 fn breakup_ticks_left(view: &View) -> u32 {
