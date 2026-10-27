@@ -481,7 +481,8 @@
 //!   stage included, while the ship breaks up, and for
 //!   [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
 //!   take-off or a gate's exit, the session refuses it with the shared
-//!   refusal beep ([`Session::press_player_info`],
+//!   refusal beep (`Session::press_player_info`, sent as
+//!   [`FlightCommand::PressPlayerInfo`](nova_sim::flight_frame::FlightCommand::PressPlayerInfo),
 //!   [`SimSound::Refused`](nova_sim::SimSound::Refused), @0x7039a-0x703bd);
 //!   once the ship has exploded, and in the escape pod, it does nothing
 //!   and says nothing, as no key handler runs there. Its Jettison
@@ -1070,8 +1071,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// reads in one input or tick without refreshing the kept frame, which
     /// a read here would then find stale. Once every change goes through
     /// [`FlightSim::apply`] and [`FlightSim::step`]
-    /// (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks and
-    /// rdm:phase/view-sim-seam/phase-13-lifecycle-at-the-edge), these can
+    /// (rdm:phase/view-sim-seam/phase-13-lifecycle-at-the-edge), these can
     /// read the kept frame too.
     pub(super) fn frame_now(&self) -> FlightFrame {
         let mut frame = FlightFrame::default();

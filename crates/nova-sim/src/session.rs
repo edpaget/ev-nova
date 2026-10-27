@@ -1472,7 +1472,10 @@ impl Session {
         self
     }
 
-    /// How each disputed rule reads (see [`Session::with_rules`]).
+    /// How each disputed rule reads (see [`Session::with_rules`]): for
+    /// tests, as no code outside the session reads the session's rules
+    /// (the view holds its own reading, given as it is built).
+    #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     pub fn rules(&self) -> &Rulebook {
         self.setup.rules()
@@ -5862,6 +5865,7 @@ impl Statics {
 
 impl Setup {
     /// How each disputed rule reads (see [`Session::with_rules`]).
+    #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     fn rules(&self) -> &Rulebook {
         &self.rules
