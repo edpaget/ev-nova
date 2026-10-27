@@ -11826,6 +11826,49 @@ mod tests {
         );
     }
 
+    /// Runs `phase` among `ships` in `field`, with `arsenal`, by the
+    /// default rules, drawing on `chance`.
+    fn run_in_field(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        (arsenal, field): (&Arsenal, Field),
+        chance: &mut dyn Chance,
+        phase: impl FnOnce(&mut Combat, &mut [Fighter], Arena<'_>, &mut dyn Chance),
+    ) {
+        let govts = Governments::default();
+        let arena = Arena {
+            field,
+            ..phase::arena(arsenal, &govts, Rules::default())
+        };
+        phase::run_in(combat, ships, arena, chance, phase);
+    }
+
+    /// `_HandleShip`'s fire for every NPC among `ships` in `field`, with
+    /// `arsenal`, drawing on `chance` ([`Combat::handle_npcs`]).
+    fn handle_npcs_in_field(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        field: (&Arsenal, Field),
+        chance: &mut dyn Chance,
+    ) {
+        run_in_field(combat, ships, field, chance, |c, f, a, ch| {
+            c.handle_npcs(f, a, ch);
+        });
+    }
+
+    /// `_HandleShot` among `ships` in `field`, with `arsenal`, drawing on
+    /// `chance` ([`Combat::fly_shots`]).
+    fn fly_shots_in_field(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        field: (&Arsenal, Field),
+        chance: &mut dyn Chance,
+    ) {
+        run_in_field(combat, ships, field, chance, |c, f, a, ch| {
+            c.fly_shots(f, a, ch);
+        });
+    }
+
     /// [`missile`] with `seeker` and `jam_vuln`.
     fn vulnerable(seeker: u16, jam_vuln: [i16; 4]) -> WeaponRecord {
         WeaponRecord {
@@ -11836,7 +11879,8 @@ mod tests {
     }
 
     /// The shots in flight after A fires `record` once at B, at (0, -300),
-    /// in a system of `interference`, drawing on `chance`.
+    /// in a system of `interference`, drawing on `chance`
+    /// ([`Combat::handle_npcs`]).
     fn fired_in(record: WeaponRecord, interference: i16, chance: &mut dyn Chance) -> Vec<Shot> {
         let mut combat = Combat::default();
         let mut ships = [
@@ -11847,7 +11891,7 @@ mod tests {
             interference,
             ..Field::default()
         };
-        tick_in(
+        handle_npcs_in_field(
             &mut combat,
             &mut ships,
             (&Arsenal::default(), field),
@@ -11928,14 +11972,11 @@ mod tests {
             interference: 100,
             ..Field::default()
         };
-        for _ in 0..5 {
-            tick_in(
-                &mut combat,
-                &mut ships,
-                (&arsenal, field),
-                &mut Ranged::of(&[]),
-            );
-            ships[0].trigger = QUIET;
+        let mut chance = Ranged::of(&[]);
+        handle_npcs_in_field(&mut combat, &mut ships, (&arsenal, field), &mut chance);
+        // Its 3 moves, then its end of life releases the sub-munition.
+        for _ in 0..4 {
+            fly_shots_in_field(&mut combat, &mut ships, (&arsenal, field), &mut chance);
         }
         let subs = sub_shots(&combat);
         assert_eq!(subs.len(), 1);
@@ -11943,9 +11984,10 @@ mod tests {
         assert_eq!(subs[0].jam, Jam::Interfered);
     }
 
-    /// The heading of the missile `ships[0]` fires on the first tick,
-    /// after `ticks` moves in `field`, the first on the tick after it is
-    /// fired, drawing on `chance`, or `None` once it is gone.
+    /// The heading of the missile `ships[0]` fires
+    /// ([`Combat::handle_npcs`]) after `ticks` moves in `field`
+    /// ([`Combat::fly_shots`]), drawing on `chance`, or `None` once it is
+    /// gone.
     fn missile_heading(
         ships: &mut [Ship],
         ticks: u32,
@@ -11953,9 +11995,11 @@ mod tests {
         chance: &mut dyn Chance,
     ) -> Option<f32> {
         let mut combat = Combat::default();
-        for _ in 0..=ticks {
-            tick_in(&mut combat, ships, (&Arsenal::default(), field), chance);
-            ships[0].trigger = QUIET;
+        let field = (&Arsenal::default(), field);
+        handle_npcs_in_field(&mut combat, ships, field, chance);
+        ships[0].trigger = QUIET;
+        for _ in 0..ticks {
+            fly_shots_in_field(&mut combat, ships, field, chance);
         }
         combat.shots().first().map(|shot| shot.heading)
     }
@@ -12011,17 +12055,18 @@ mod tests {
             let mut chance = Ranged::of(&[(101, 100)]);
             let field = (&Arsenal::default(), Field::default());
             // Fired at B intact, which is then downed.
-            tick_in(&mut combat, &mut ships, field, &mut chance);
+            handle_npcs_in_field(&mut combat, &mut ships, field, &mut chance);
             ships[0].trigger = QUIET;
             ships[1].condition = condition;
             ships[1].held_disabled = held;
             ships[1].reserves.armor.now = 1.0;
             ships[1].hull.death_delay = 90;
-            // Its 15 moves, from the tick after it is fired.
-            for _ in 1..17 {
-                tick_in(&mut combat, &mut ships, field, &mut chance);
+            // Its 16 moves.
+            for _ in 0..16 {
+                fly_shots_in_field(&mut combat, &mut ships, field, &mut chance);
             }
-            assert_ne!(ships[1].condition, Condition::Intact, "{condition:?}");
+            // Still as it was downed: the held one intact.
+            assert_eq!(ships[1].condition, condition, "{condition:?}");
             let heading = combat.shots()[0].heading;
             assert!(
                 (heading - 97.0).abs() < 1e-4,
@@ -12037,23 +12082,27 @@ mod tests {
         ships[1].state.position = Vec2::new(250.0, 0.0);
         let mut combat = Combat::default();
         let mut chance = Ranged::of(&[(101, 100)]);
-        let mut aimed = BTreeMap::new();
-        let mut strikes = Vec::new();
-        for tick in 1..=26 {
-            tick_in(
-                &mut combat,
-                &mut ships,
-                (&Arsenal::default(), Field::default()),
-                &mut chance,
-            );
-            ships[0].trigger = QUIET;
-            // Its 20th move, fired on tick 1.
-            if tick == 21 {
-                aimed = combat.targeted_damage();
-            }
-            strikes.extend(combat.take_strikes());
+        let field = (&Arsenal::default(), Field::default());
+        handle_npcs_in_field(&mut combat, &mut ships, field, &mut chance);
+        ships[0].trigger = QUIET;
+        for _ in 0..20 {
+            fly_shots_in_field(&mut combat, &mut ships, field, &mut chance);
         }
-        assert_eq!(aimed, BTreeMap::from([(B, 15)]));
+        assert_eq!(combat.targeted_damage(), BTreeMap::from([(B, 15)]));
+        // Its 24th move, from 230 to 240 pixels out, reaches B.
+        for _ in 0..4 {
+            fly_shots_in_field(&mut combat, &mut ships, field, &mut chance);
+        }
+        run_in_field(
+            &mut combat,
+            &mut ships,
+            field,
+            &mut chance,
+            |c, f, a, ch| {
+                c.test_hits(f, a, Scenery::default(), ch);
+            },
+        );
+        let strikes = combat.take_strikes();
         assert!(
             strikes
                 .iter()
@@ -12071,15 +12120,20 @@ mod tests {
         let mut ships = [player_with(vulnerable(0, [100, 0, 0, 0])), jammer];
         let mut combat = Combat::default();
         let mut chance = Ranged::of(&[(101, 100)]);
+        let field = (&Arsenal::default(), Field::default());
+        run_in_field(
+            &mut combat,
+            &mut ships,
+            field,
+            &mut chance,
+            |c, f, a, ch| {
+                c.fire_player(f, a, ch);
+            },
+        );
+        ships[0].trigger = QUIET;
         let mut locks = 0;
         for _ in 0..40 {
-            tick_in(
-                &mut combat,
-                &mut ships,
-                (&Arsenal::default(), Field::default()),
-                &mut chance,
-            );
-            ships[0].trigger = QUIET;
+            fly_shots_in_field(&mut combat, &mut ships, field, &mut chance);
             locks += combat
                 .take_strikes()
                 .iter()
@@ -12147,29 +12201,36 @@ mod tests {
             interference: 100,
             ..Field::default()
         };
+        let arsenal = Arsenal::default();
         // Fired on frame 0, it moves on frames 1 to 15.
-        for frame in 0..16 {
-            tick_in(
+        handle_npcs_in_field(
+            &mut combat,
+            &mut ships,
+            (&arsenal, field(0)),
+            &mut NeverFires,
+        );
+        ships[0].trigger = QUIET;
+        for frame in 1..16 {
+            fly_shots_in_field(
                 &mut combat,
                 &mut ships,
-                (&Arsenal::default(), field(frame)),
+                (&arsenal, field(frame)),
                 &mut NeverFires,
             );
-            ships[0].trigger = QUIET;
         }
         assert_eq!(combat.shots()[0].jam, Jam::Interfered);
         assert_eq!(combat.shots()[0].heading, 90.0);
-        tick_in(
+        fly_shots_in_field(
             &mut combat,
             &mut ships,
-            (&Arsenal::default(), field(149)),
+            (&arsenal, field(149)),
             &mut NeverFires,
         );
         assert!((combat.shots()[0].heading - 83.0).abs() < 1e-4);
-        tick_in(
+        fly_shots_in_field(
             &mut combat,
             &mut ships,
-            (&Arsenal::default(), field(150)),
+            (&arsenal, field(150)),
             &mut NeverFires,
         );
         assert!((combat.shots()[0].heading - 90.0).abs() < 1e-4);
@@ -12201,10 +12262,11 @@ mod tests {
                     .targeting(B),
                 Ship::at(2, b.x, b.y),
             ];
-            // Its 16 moves, from the tick after it is fired.
-            for _ in 0..17 {
-                tick(&mut combat, &mut ships, &NovaDisable);
-                ships[0].trigger = QUIET;
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = QUIET;
+            // Its 16 moves.
+            for _ in 0..16 {
+                phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
             }
             assert_eq!(combat.shots()[0].target.is_some(), kept, "{source:?}");
         }
@@ -12218,17 +12280,24 @@ mod tests {
             .targeting(B);
         let mut combat = Combat::default();
         let mut chance = Ranged::of(&[(101, 100), (500, 0)]);
-        let mut strikes = Vec::new();
-        for _ in 0..100 {
-            tick_in(
-                &mut combat,
-                &mut ships,
-                (&Arsenal::default(), Field::default()),
-                &mut chance,
-            );
-            ships[0].trigger = QUIET;
-            strikes.extend(combat.take_strikes());
+        let field = (&Arsenal::default(), Field::default());
+        handle_npcs_in_field(&mut combat, &mut ships, field, &mut chance);
+        ships[0].trigger = QUIET;
+        // Turned on its 16th move, it comes back round to A on its 64th.
+        for _ in 0..64 {
+            fly_shots_in_field(&mut combat, &mut ships, field, &mut chance);
         }
+        run_in_field(
+            &mut combat,
+            &mut ships,
+            field,
+            &mut chance,
+            |c, f, a, ch| {
+                c.test_hits(f, a, Scenery::default(), ch);
+            },
+        );
+        let strikes = combat.take_strikes();
+        assert_eq!(combat.shots(), [], "spent on it");
         let on_firer: Vec<&Strike> = strikes.iter().filter(|strike| strike.ship == A).collect();
         assert_eq!(on_firer.len(), 1, "{strikes:?}");
         let strike = on_firer[0];
@@ -12266,9 +12335,9 @@ mod tests {
                 ..Combat::default()
             };
             let mut ships = [Ship::at(1, 0.0, 0.0), Ship::at(2, 20.0, 0.0)];
-            // Its first move, tested the tick after.
-            tick(&mut combat, &mut ships, &NovaDisable);
-            tick(&mut combat, &mut ships, &NovaDisable);
+            // Its first move, tested by the collision passes.
+            phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+            phase::test_hits(&mut combat, &mut ships, &NovaDisable);
             let strikes = combat.take_strikes();
             assert!(
                 strikes
@@ -12293,24 +12362,26 @@ mod tests {
             flags3: 0x0004,
             ..vulnerable(TURNS_ON_FIRER, [100, 0, 0, 0])
         };
-        for (odds, again) in [(0, true), (1, false)] {
+        for (odds, held) in [(0, false), (1, true)] {
             let mut ships = at_a_jammer([100, 0, 0, 0]);
             ships[0] = Ship::at(1, 0.0, 0.0).armed(single).targeting(B);
             let mut combat = Combat::default();
             let mut chance = Ranged::of(&[(101, 100), (500, odds)]);
-            let mut fires = Vec::new();
-            for tick in 0..30 {
-                tick_in(
-                    &mut combat,
-                    &mut ships,
-                    (&Arsenal::default(), Field::default()),
-                    &mut chance,
-                );
-                if fired(&combat.take_events(), A) > 0 {
-                    fires.push(tick);
-                }
+            let field = (&Arsenal::default(), Field::default());
+            handle_npcs_in_field(&mut combat, &mut ships, field, &mut chance);
+            // Its 16 moves, on the last of which a roll of 0 turns it on A.
+            for _ in 0..16 {
+                fly_shots_in_field(&mut combat, &mut ships, field, &mut chance);
             }
-            assert_eq!(fires.len() > 1, again, "{odds}: {fires:?}");
+            // Its reload counted out, as `_HandleShip` counts it
+            // (@0x33896), then its next move.
+            for _ in 0..3 {
+                ships[0].armament.reload();
+            }
+            fly_shots_in_field(&mut combat, &mut ships, field, &mut chance);
+            assert_eq!(combat.shots().len(), 1, "{odds}: still flying");
+            let reload = ships[0].armament.mounts()[0].reload;
+            assert_eq!(reload > 0.0, held, "{odds}: {reload}");
         }
     }
 
