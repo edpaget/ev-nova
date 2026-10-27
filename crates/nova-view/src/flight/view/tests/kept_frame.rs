@@ -181,24 +181,3 @@ fn a_status_redraw_after_a_change_behind_the_port_snapshots_the_change() {
         "the kept frame filled first"
     );
 }
-
-#[test]
-fn the_port_bar_shows_the_hold_a_trade_changed() {
-    let labels = FakeCatalog {
-        strings: vec![(4003, vec!["Food:".to_owned(), "Ind:".to_owned()])],
-        ..catalog()
-    };
-    let mut view = FlightView::new(trading()).with_strings(Rc::new(labels));
-    land_now(&mut view);
-    let bar_texts = |view: &View| {
-        let mut bar = DrawList::new();
-        view.draw_status_bar(&mut bar);
-        texts(&bar)
-    };
-    assert!(
-        !bar_texts(&view).contains(&"Food:".to_owned()),
-        "an empty hold"
-    );
-    assert_eq!(view.trade(BUY_FOOD), Ok(10));
-    assert!(bar_texts(&view).contains(&"Food:".to_owned()));
-}

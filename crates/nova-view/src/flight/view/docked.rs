@@ -12,8 +12,7 @@ use nova_sim::{
     RefuseShown, VenueOffer,
 };
 use nova_sim::{
-    Market, Order, Outfitter, Pilot, RechargeRefusal, Session, ShipId, ShipNaming, ShipRefusal,
-    Shipyard, StellarId, Take, Taken, TradeRefusal,
+    Outfitter, Pilot, Session, ShipId, ShipNaming, ShipRefusal, Shipyard, StellarId, Take, Taken,
 };
 
 use crate::flight::catalog::StatusBars;
@@ -387,28 +386,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             .is_ok_and(|session| session.transact(change))
     }
 
-    /// The exchange of the stellar landed on, as [`Session::market`] gives
-    /// it; none for a session that failed.
-    #[must_use]
-    pub fn market(&self) -> Option<Market> {
-        self.sim.session.as_ref().ok()?.market()
-    }
-
-    /// Trades as [`Session::trade`] does; a session that failed has no
-    /// exchange. A trade that goes through runs the exchange's
-    /// `_DrawStatus` (@0x5e33a, @0x5e59e), which draws the nav when the
-    /// shipyard's restore marked it ([`FlightView::close_port_dialog`]).
-    pub fn trade(&mut self, order: Order) -> Result<u32, TradeRefusal> {
-        let traded = match &mut self.sim.session {
-            Ok(session) => session.trade(order)?,
-            Err(_) => return Err(TradeRefusal::NoMarket),
-        };
-        // The cargo area shows the hold traded (`FrameHud::cargo`).
-        self.refresh_frame();
-        self.draw_marked_nav();
-        Ok(traded)
-    }
-
     /// The outfitter of the stellar landed on, as [`Session::outfitter`]
     /// gives it, the day's rolls drawn on the flight's chance; none for a
     /// session that failed.
@@ -442,39 +419,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         if let Ok(session) = &mut self.sim.session {
             session.close_hire();
         }
-    }
-
-    /// Recharges as [`Session::recharge`] does; a session that failed
-    /// sells no fuel. A recharge redraws the fuel gauge alone, as the
-    /// original's marks only fuel and cargo (`_statusRedraw[4]` @0x5fdf6)
-    /// before its `_DrawStatus` (@0x5fe05); the shield and armour stay as
-    /// they were drawn. The nav is drawn too when the shipyard's restore
-    /// marked it ([`FlightView::close_port_dialog`]). A refused recharge
-    /// draws nothing.
-    pub fn recharge(&mut self) -> Result<i64, RechargeRefusal> {
-        let paid = match &mut self.sim.session {
-            Ok(session) => session.recharge()?,
-            Err(_) => return Err(RechargeRefusal::NoFuel),
-        };
-        // The fuel gauge shows the fuel bought (`FrameHud::reserves`).
-        self.refresh_frame();
-        self.draw_marked_nav();
-        let fuel = self.reserves().fuel;
-        if let Some(held) = &mut self.reserves_scene {
-            held.fuel = fuel;
-        }
-        Ok(paid)
-    }
-
-    /// Whether the spaceport's Recharge button is enabled, as
-    /// [`Session::recharge_enabled`] says; a session that failed sells no
-    /// fuel.
-    #[must_use]
-    pub fn recharge_enabled(&self) -> bool {
-        self.sim
-            .session
-            .as_ref()
-            .is_ok_and(Session::recharge_enabled)
     }
 
     /// The ships for hire in the bar of the stellar landed on, as

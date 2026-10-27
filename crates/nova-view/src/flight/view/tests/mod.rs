@@ -84,6 +84,7 @@ mod faked_flight;
 mod faked_hail;
 mod faked_hud;
 mod faked_landing;
+mod faked_shops;
 mod faked_travel;
 mod faked_world;
 mod flying;
@@ -2159,7 +2160,7 @@ fn bit_set(view: &View, n: u16) -> bool {
 }
 /// The texts drawn in the nav area of the port's status bar
 /// ([`FlightView::draw_status_bar`]), as [`nav`] reads flight's.
-fn port_nav(view: &View) -> Vec<String> {
+fn port_nav(view: &FlightView<FakeCatalog, impl FlightSim>) -> Vec<String> {
     let area = layout().nav.offset(at(830.0, 0.0));
     let mut bar = DrawList::new();
     view.draw_status_bar(&mut bar);
@@ -2431,7 +2432,7 @@ enum Accepted {
 
 /// Which of the bar's parts show as they are now: the gauges, the
 /// nav area, the target panel and the radar.
-fn retaken(view: &View) -> [bool; 4] {
+fn retaken(view: &FlightView<FakeCatalog, impl FlightSim>) -> [bool; 4] {
     [
         view.reserves_shown(&view.frame_now()) == view.reserves(),
         view.nav_shown(&view.frame_now()) == view.nav_now(),

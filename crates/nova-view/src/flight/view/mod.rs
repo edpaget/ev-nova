@@ -688,6 +688,7 @@ mod outputs;
 mod port_screen_map;
 mod readouts;
 mod screen;
+mod shops;
 mod shots;
 mod slot_block;
 mod sprites;

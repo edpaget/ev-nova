@@ -1220,47 +1220,6 @@ fn by_the_other_reading_the_gauges_follow_at_once_while_docked() {
 }
 
 #[test]
-fn a_recharge_redraws_the_fuel_gauge_alone() {
-    use nova_sim::Reserve;
-    let mut view = FlightView::new(outfitting());
-    land_now(&mut view);
-    desk_reserve(&mut view, Reserve::Fuel, 100.0);
-    view.refresh_status();
-    assert_eq!(
-        view.reserves_shown(&view.frame_now()).fuel.now,
-        100.0,
-        "held at 100"
-    );
-    desk_reserve(&mut view, Reserve::Shield, 10.0);
-    assert_eq!(
-        view.reserves_shown(&view.frame_now()).shield.now,
-        40.0,
-        "held full"
-    );
-    assert!(view.recharge().is_ok());
-    assert_eq!(view.reserves().fuel.now, 250.0);
-    assert_eq!(
-        view.reserves_shown(&view.frame_now()).fuel.now,
-        250.0,
-        "redrawn at once"
-    );
-    assert_eq!(
-        view.reserves_shown(&view.frame_now()).shield.now,
-        40.0,
-        "still held"
-    );
-    desk_reserve(&mut view, Reserve::Fuel, 100.0);
-    let mut desk = view.pilot_desk().expect("flying");
-    desk.edit(PilotEdit::Credits(0)).expect("set");
-    assert_eq!(view.recharge(), Ok(0), "nothing to pay with");
-    assert_eq!(
-        view.reserves_shown(&view.frame_now()).fuel.now,
-        100.0,
-        "redrawn, as `_DoPortDialog` draws whatever the fill"
-    );
-}
-
-#[test]
 fn a_ship_bought_under_the_same_bar_keeps_the_gauges_until_the_shipyard_closes() {
     let mut view = FlightView::new(shipbuying());
     land_now(&mut view);
