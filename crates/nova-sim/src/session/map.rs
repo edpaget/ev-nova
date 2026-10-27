@@ -111,7 +111,7 @@ impl Session {
     /// ([`Session::offer_map_marks`] and its kin), or [`MapMarks::NONE`]
     /// for every other map (see the [`galaxy_map`] module). Each system is
     /// framed as [`Session::system_color_code`] says. The course is the
-    /// one saved, raw. The hypergate map's arrows mark their systems
+    /// one saved, raw, from its start (`Pilot::course_start`). The hypergate map's arrows mark their systems
     /// known as they are drawn: the caller does that with
     /// [`Session::mark_known`] once it has drawn them.
     #[must_use]
@@ -127,6 +127,7 @@ impl Session {
             explored: &self.pilot.explored,
             known: &self.chart.known,
             current: self.pilot.system,
+            course_start: self.pilot.course_start,
             course: &self.pilot.course,
             hyper_slot: self.chart.hyper_slot(&self.pilot),
             hypergate,
@@ -207,7 +208,7 @@ impl Chart {
                 MapStellar {
                     active: self
                         .galaxy
-                        .active_holder(&stellar.systems, pilot.system)
+                        .active_holder(stellar.id, &stellar.systems, pilot.system)
                         .is_some(),
                     flags: stellar.flags,
                     flags2: stellar.flags2,
@@ -242,7 +243,7 @@ impl Chart {
     fn map_mission_systems(&self, pilot: &Pilot, statics: &Statics) -> Vec<SystemId> {
         let active = |stellar| {
             self.galaxy
-                .active_holder(statics.listers(stellar), pilot.system)
+                .active_holder(stellar, statics.listers(stellar), pilot.system)
         };
         let mut systems = Vec::new();
         for (_, mission) in pilot.missions().iter() {
@@ -750,6 +751,7 @@ mod tests {
     fn the_drawing_reads_the_sessions_known_set_course_and_rules() {
         let catalog = coloured();
         let mut session = flown(&catalog, Rulebook::default());
+        session.pilot.restart_course(SystemId(130));
         session.pilot.course = vec![SystemId(131), SystemId(133)];
         let drawing = session.map_drawing(None, &[], MapMarks::NONE);
         let drawn: Vec<SystemId> = drawing.systems.iter().map(|system| system.id).collect();

@@ -77,7 +77,10 @@ pub(super) struct Port {
     /// frame counter.
     pub(super) takeoff_grace: u32,
     /// Whether the next take-off keeps the ship where it touched down
-    /// (the original's `_dontMovePlayerAfterLanding`); never saved.
+    /// (the original's `_dontMovePlayerAfterLanding`); never saved. Set by
+    /// a docked `N`, or by an `N` in flight under `keep_flag`'s other
+    /// reading (see the `script_effects` module): the original clears it
+    /// at every landing (`_PlayerLandOnStellar` @0x631f1-0x631f6).
     pub(super) hold_position: bool,
     /// Where the ship was as it last landed, before it was docked at the
     /// stellar's centre.

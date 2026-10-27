@@ -247,6 +247,7 @@ impl Session {
             carried: true,
             wage: None,
             person: None,
+            mark: None,
         };
         let id = self.space.traffic.add_npc(npc);
         self.pilot.escorts.push(escort);
@@ -282,11 +283,7 @@ impl Session {
         };
         match carrier {
             ShipRef::Player => {
-                let mut rounds = OutfitRounds {
-                    owned: &mut self.pilot.outfits,
-                    sources: &self.statics.ammo_outfits,
-                };
-                let stowed = self.ship.fit.armament.stow(ship, &mut rounds);
+                let stowed = self.ship.stow_fighter(&mut self.pilot, &self.statics, ship);
                 self.unfleet(id);
                 if !stowed {
                     self.out.save_due = true;
@@ -343,11 +340,10 @@ impl Session {
     /// @0x5df3); one no bay launches is lost, which makes a save due.
     fn recall_fighters(&mut self) {
         for fighter in self.drop_fighters(|_, _, _| false) {
-            let mut rounds = OutfitRounds {
-                owned: &mut self.pilot.outfits,
-                sources: &self.statics.ammo_outfits,
-            };
-            if !self.ship.fit.armament.stow(fighter.ship, &mut rounds) {
+            if !self
+                .ship
+                .stow_fighter(&mut self.pilot, &self.statics, fighter.ship)
+            {
                 self.out.save_due = true;
             }
         }
@@ -374,12 +370,7 @@ impl Session {
             if !escort.carried || kept(self, &escort, npc) {
                 continue;
             }
-            self.pilot.escorts.remove(index);
-            if index < self.space.escorts.fleet.len()
-                && let Some(id) = self.space.escorts.fleet.remove(index)
-            {
-                self.space.traffic.remove(id);
-            }
+            self.drop_fleet_escort(index);
             dropped.push(escort);
         }
         dropped.reverse();
@@ -425,6 +416,27 @@ impl Session {
             );
         }
         room
+    }
+
+    /// Whether a bay of the player's that carries ship type `ship` has
+    /// room for one more ([`Session::fighter_room`]), as
+    /// `_CanBuyFighter(type, -1, -1)` asks for a ship boarded
+    /// (@0x5a82-0x5cb2; see the `board_repair` module). The original
+    /// reads the first bay whose `AmmoType` names `ship` and that bay's
+    /// last fighter outfit, in outfit order, for its `Max`; this reads any
+    /// such bay with room, which is the same for every stock bay (one bay
+    /// to a type, one fighter outfit to a bay). A bay whose carried type
+    /// only shares `ship`'s sprites (`_CanBuyFighter` @0x5b0d-0x5b84) is
+    /// rdm:task/fighter-bays-follow-up's variant docking.
+    pub(super) fn can_take_fighter(&self, ship: ShipId) -> bool {
+        let room = self.fighter_room();
+        self.statics.ammo_outfits.iter().any(|&(ammo, outfit)| {
+            self.statics
+                .arsenal
+                .weapon(ammo)
+                .is_some_and(|spec| spec.carried == Some(ship))
+                && room.get(&outfit).is_some_and(|&left| left > 0)
+        })
     }
 
     /// The player's fighters out of type `carried`: none for `None`.
@@ -484,6 +496,24 @@ impl Outbox {
 }
 
 impl PlayerShip {
+    /// A fighter of ship type `ship` goes back aboard, a round to the bay
+    /// launching its type among `pilot`'s outfits, sourced from
+    /// `statics`' ammunition outfits ([`Armament::stow`](crate::Armament::stow)):
+    /// whether a bay took it. A fighter that docks, one recalled and one
+    /// boarded back (see the `board_repair` module) all go aboard so.
+    pub(super) fn stow_fighter(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        ship: ShipId,
+    ) -> bool {
+        let mut rounds = OutfitRounds {
+            owned: &mut pilot.outfits,
+            sources: &statics.ammo_outfits,
+        };
+        self.fit.armament.stow(ship, &mut rounds)
+    }
+
     /// For every outfit whose first mod is [`MOD_AMMO`] naming a weapon of
     /// `MaxAmmo` above 0, the most of it the player may own: that
     /// `MaxAmmo` times the player's launchers of the weapon, stock weapons
@@ -669,6 +699,7 @@ fn fighter(
         lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
         swarm_leader: None,
         owed_burst: None,
+        close_form: false,
         fleet_slot: None,
         order_word: crate::fleet::OrderWord::NONE,
         marines: kind.marines,
@@ -1245,6 +1276,7 @@ pub(super) mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         };
         let mut session = Session::fly(&catalog, pilot(&catalog, 2, vec![warship]))
             .expect("flies")
@@ -1630,6 +1662,31 @@ pub(super) mod tests {
         assert_eq!(session.npcs().len(), 54, "no fighter");
     }
 
+    // Room for a fighter boarded.
+
+    #[test]
+    fn can_take_fighter_is_true_while_the_bay_carrying_the_type_has_room() {
+        // `_CanBuyFighter(type, -1, -1)` (@0x5a82-0x5cb2): the bay holds 4.
+        let catalog = carrying();
+        let room = |vipers: u16, escorts: Vec<Escort>| {
+            fleet(&catalog, vipers, escorts).can_take_fighter(VIPER)
+        };
+        assert!(room(3, Vec::new()), "3 of 4 aboard");
+        assert!(!room(4, Vec::new()), "full");
+        assert!(!room(3, vec![out()]), "3 aboard and 1 out");
+        assert!(room(2, vec![out()]));
+        assert!(
+            !fleet(&catalog, 0, Vec::new()).can_take_fighter(WARSHIP),
+            "no bay carries it"
+        );
+        let mut bare = carrying();
+        bare.hulls[0].weapons.clear();
+        assert!(
+            !fleet(&bare, 0, Vec::new()).can_take_fighter(VIPER),
+            "no bay"
+        );
+    }
+
     // Return to Hangar and docking.
 
     /// A Viper out of its bay, full, with no standing command.
@@ -1641,6 +1698,7 @@ pub(super) mod tests {
             carried: true,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 
@@ -1653,6 +1711,7 @@ pub(super) mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 
@@ -2177,10 +2236,14 @@ pub(super) mod tests {
         assert_eq!(aboard(&session, raider), 0, "drained by its pick");
         fight(&mut session, &catalog, &ai);
         assert_eq!(vipers(&session).len(), 1, "none left to launch");
+        // The one launched may dock back as its carrier draws off: none
+        // more is ever out.
+        let mut most = 0;
         for _ in 0..240 {
             fight(&mut session, &catalog, &ai);
+            most = most.max(vipers(&session).len());
         }
-        assert_eq!(vipers(&session).len(), 1, "none more");
+        assert_eq!(most, 1, "none more");
         assert!(
             session.reserves().shield.now < 30.0,
             "the fighters' shots: {:?}",
@@ -3156,10 +3219,16 @@ pub(super) mod tests {
         assert_eq!(npcs.len(), 1);
         let viper = &npcs[0];
         let duty = viper.escort.expect("an escort");
+        // Pushed back from its slot beside the player to glide in (the
+        // `escort_arrival` module).
+        let slot = crate::flight::ShipState {
+            position: duty.formation.position(session.player()),
+            ..*session.player()
+        };
         assert_eq!(
-            viper.state.position,
-            duty.formation.position(session.player()),
-            "beside the player on its slot"
+            viper.state,
+            crate::escort_arrival::pushed(slot),
+            "pushed back from its slot beside the player"
         );
         assert_eq!(viper.reserves.shield.now, 10.0, "as it was");
         assert_eq!(session.npcs().len(), 1, "no Dart");
@@ -3471,6 +3540,7 @@ pub(super) mod tests {
             carried: true,
             wage: None,
             person: None,
+            mark: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![stray])).expect("flies");
         assert!(
@@ -3515,6 +3585,7 @@ pub(super) mod tests {
             carried: true,
             wage: None,
             person: None,
+            mark: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![fighter])).expect("flies");
         let facts = session.ship.facts(&session.pilot, &session.statics);

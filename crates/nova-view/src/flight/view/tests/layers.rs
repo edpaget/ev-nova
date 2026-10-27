@@ -63,6 +63,7 @@ fn mid_fight() -> View {
     catalog.weapons[0].flags = 0x0020;
     catalog.weapons[0].explod_type = -1;
     catalog.sheet = Ok(layered_sheet());
+    catalog.star_sheet = Ok(star_sheet());
     let draws = [placed(750, 650, 180), placed(700, 750, 0)].concat();
     let mut view = fighting(catalog, &draws).with_overlays(TITLED);
     view.input(&key(Key::Up, true));
@@ -92,7 +93,7 @@ fn layered_sheet() -> ShipSheet {
 }
 
 #[test]
-fn a_fights_scene_is_the_world_and_its_hud_every_text_and_the_cursor_overlay() {
+fn a_fights_scene_and_its_target_layer_are_the_world_and_its_hud_and_every_text_overlay() {
     let view = mid_fight();
     let list = drawn(&view);
     assert_world_then_overlay(&list);
@@ -100,8 +101,8 @@ fn a_fights_scene_is_the_world_and_its_hud_every_text_and_the_cursor_overlay() {
     assert_eq!(list.layered().next().map(|(layer, _)| layer), Some(world));
     // The stars, the stellars, the explosion and its debris, the NPC, the
     // player's ship and its ORed lights, and the shots.
-    assert!(matches!(list.iter().next(), Some(DrawCommand::Dot { .. })));
-    for id in [1128, 1129, 400, 2001, 2000, 2200, 3500] {
+    assert!(list.iter().next().is_some_and(is_star));
+    for id in [700, 1128, 1129, 400, 2001, 2000, 2200, 3500] {
         let found = layers_of(&list, sprite_of(id));
         assert!(!found.is_empty(), "sprite {id} drawn");
         assert!(found.iter().all(|&found| found == world), "{id}: {found:?}");
@@ -120,10 +121,12 @@ fn a_fights_scene_is_the_world_and_its_hud_every_text_and_the_cursor_overlay() {
         world,
         |command| matches!(command, DrawCommand::Dot { color, .. } if *color == DEBRIS_COLOR),
     );
-    // The brackets, the status bar, the title and help, every text, and
-    // the cursor.
+    // The target layer: the brackets and the cursor (clipped to the play
+    // area).
+    assert_all_in(&list, world, icon_in(10000..=10023));
+    assert_all_in(&list, world, sprite_of(651));
+    // The status bar, the title and help, and every text.
     let overlay = DrawLayer::Overlay;
-    assert_all_in(&list, overlay, icon_in(10000..=10023));
     assert_all_in(
         &list,
         overlay,
@@ -131,13 +134,13 @@ fn a_fights_scene_is_the_world_and_its_hud_every_text_and_the_cursor_overlay() {
     );
     assert_all_in(&list, overlay, is_text);
     assert!(texts(&list).contains(&HELP.to_owned()));
-    assert_all_in(&list, overlay, sprite_of(651));
     assert!(world_end(&list) < hud_at(&list), "the world under the HUD");
 }
 
 #[test]
 fn the_message_line_is_overlay_text_drawn_among_the_world() {
-    let mut view = flight();
+    let mut view = FlightView::new(starry());
+    view.tick(Duration::ZERO);
     plot(&mut view, 131);
     view.input(&key(JUMP, true));
     let list = drawn(&view);
@@ -145,13 +148,29 @@ fn the_message_line_is_overlay_text_drawn_among_the_world() {
         .iter()
         .position(|command| *command == message_drawn(TOO_CLOSE))
         .expect("the message");
+    let message_box = list
+        .iter()
+        .position(|command| *command == fill_command(hud::message_box(VIEW_SIZE), Color::BLACK))
+        .expect("its box");
     let layers: Vec<DrawLayer> = list.layered().map(|(layer, _)| layer).collect();
     assert_eq!(layers[message], DrawLayer::Overlay);
-    assert_eq!(layers[message - 1], DrawLayer::World, "over the stars");
-    assert_eq!(layers[message + 1], DrawLayer::World, "under the stellars");
+    assert_eq!(
+        layers[message_box],
+        DrawLayer::World,
+        "the box in the world"
+    );
+    assert_eq!(layers[message_box - 1], DrawLayer::World, "over the stars");
+    assert!(is_star(list.iter().nth(message_box - 1).expect("drawn")));
+    assert_eq!(
+        layers[message_box + 1],
+        DrawLayer::World,
+        "under the stellars"
+    );
     assert!(sprite_of(1128)(
-        list.iter().nth(message + 1).expect("drawn")
+        list.iter().nth(message_box + 1).expect("drawn")
     ));
+    let ship = first(&list, sprite_of(2000));
+    assert!(ship < message, "the text over the ships, with the floaters");
     assert_world_then_overlay(&list);
 }
 
@@ -164,7 +183,7 @@ fn a_placeholders_box_is_world_and_its_reason_overlay() {
     let view = FlightView::new(sheetless);
     let list = drawn(&view);
     let mut placeholder = DrawList::new();
-    crossed_box(&mut placeholder, VIEW_CENTER, PLACEHOLDER_SIZE, PLACEHOLDER);
+    crossed_box(&mut placeholder, PLAYER_AT, PLACEHOLDER_SIZE, PLACEHOLDER);
     for line in &placeholder {
         assert_all_in(&list, DrawLayer::World, |command| command == line);
     }
@@ -228,5 +247,29 @@ fn the_stars_are_world_through_a_jump_and_the_jumps_fade_overlay() {
     let layers: Vec<DrawLayer> = list.layered().map(|(layer, _)| layer).collect();
     assert_eq!(layers[at], DrawLayer::Overlay);
     assert!(world_end(&list) > 0);
+    assert_world_then_overlay(&list);
+}
+
+#[test]
+fn the_floating_map_and_the_escort_menu_are_world_and_their_text_overlay() {
+    use crate::flight::escorts::{MENU_AT, MENU_HEIGHT, MENU_WIDTH};
+    let mut view = fighters_out();
+    tap(&mut view, MENU_KEY);
+    view.input(&key(HYPERSPACE_MODE_KEY, true));
+    view.tick(TICK);
+    let list = drawn(&view);
+    let border = floating_border(&list);
+    assert!(!border.is_empty(), "the floating map is up");
+    for line in &border {
+        assert_all_in(&list, DrawLayer::World, |command| command == line);
+    }
+    let menu = fill_command(Bounds::at(MENU_AT, MENU_WIDTH, MENU_HEIGHT), Color::BLACK);
+    assert_all_in(&list, DrawLayer::World, |command| *command == menu);
+    assert_all_in(
+        &list,
+        DrawLayer::Overlay,
+        |command| matches!(command, DrawCommand::Text { text, .. } if text == "Escort Commands"),
+    );
+    assert_all_in(&list, DrawLayer::Overlay, is_text);
     assert_world_then_overlay(&list);
 }

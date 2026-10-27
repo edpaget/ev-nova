@@ -99,6 +99,11 @@ pub struct StarSystem {
     /// Its `Message`, raw: the message buoy a hyperspace arrival shows,
     /// −1 for none (`nova_sim::StarMap::buoy`).
     pub message: i16,
+    /// Its `BkgndColor`, raw `00RRGGBB`: the colour the original erases
+    /// the flight message's box in while the player is here
+    /// (`_SetSystemBackgroundBackColor` @0x6e06-0x6e46, reading the
+    /// `RGBColor` `_LoadObjectData` builds from it @0x77d85-0x77dc5).
+    pub background: u32,
 }
 
 /// A stellar the player might land on, raw from its `spöb`; the
@@ -293,6 +298,20 @@ pub const FIRST_BOOM: i16 = 128;
 pub const BOOM_TYPES: i16 = 64;
 /// What an explosion type is offset by to add extra small explosions.
 pub const EXTRA_EXPLOSIONS: i16 = 1000;
+
+/// The first explosion sound, `snd ` 300: `_LoadSounds` loads 300-363
+/// into the explosion handles (0x3b5428, from @0x1c200).
+pub const FIRST_EXPLOSION_SOUND: i16 = 300;
+
+/// The `snd ` an explosion of a `bööm` whose `SoundIndex` is `index`
+/// plays, `snd ` 300 + `index`: none outside 0-63, as `_CreateExplosion`
+/// plays only those (@0x3f8dc-0x3f8e5).
+#[must_use]
+pub fn explosion_sound(index: i16) -> Option<SoundId> {
+    (0..BOOM_TYPES)
+        .contains(&index)
+        .then(|| SoundId(FIRST_EXPLOSION_SOUND + index))
+}
 
 /// An explosion: its `bööm`, and whether extra type-0 explosions go off
 /// around it.
@@ -512,6 +531,21 @@ pub struct ShipRecord {
     /// strays from 1.0, in hundredths (class +0x9f8, `_RandomSkillLevel`
     /// @0x6922; see `nova_sim::skill`).
     pub skill_var: i16,
+    /// Its `Subtitle` (class +0xac, `_LoadObjectData` @0x7b0f1): the
+    /// escort dialog's third title line, under the `CommName`.
+    pub subtitle: String,
+    /// The class an escort of it is upgraded to: its `UpgradeTo` when the
+    /// raw ID is 128 or more, none otherwise (`_LoadObjectData`
+    /// @0x7a3de-0x7a3f7, class +0xa22).
+    pub upgrade_to: Option<ShipId>,
+    /// What upgrading an escort of it costs: its `EscUpgrdCost`, a
+    /// negative one read as 0 (`_LoadObjectData` @0x7a410-0x7a417, class
+    /// +0x64).
+    pub esc_upgrd_cost: i64,
+    /// What selling a captured escort of it pays: its `EscSellValue`, or
+    /// `Cost` x 0.1 truncated when that is 0 or less (`_LoadObjectData`
+    /// @0x7a42e-0x7a442, the double at 0xdd110, class +0x68).
+    pub esc_sell_value: i64,
 }
 
 /// The standard commodities, raw from their string lists: `STR#` 4000
@@ -2048,6 +2082,13 @@ pub trait PilotCatalog {
     fn warp_out_sound(&self) -> Option<SoundLength> {
         None
     }
+    /// Each `bööm` that can be read and has a sound, by ascending ID, with
+    /// the `snd ` its explosion plays ([`explosion_sound`]): what a `Y`'s
+    /// explosion sounds (see `nova_sim`'s `y_explosion` module). None by
+    /// default.
+    fn boom_sounds(&self) -> Vec<(BoomId, SoundId)> {
+        Vec::new()
+    }
     /// The escorts' voices: every voice clip, `snd ` 1000-1799, with its
     /// length, and each `gövt`'s `VoiceType` (see the
     /// [`voice`](crate::voice) module); none by default, no clip and no
@@ -2211,6 +2252,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).warp_out_sound()
     }
 
+    fn boom_sounds(&self) -> Vec<(BoomId, SoundId)> {
+        (**self).boom_sounds()
+    }
+
     fn voices(&self) -> Voices {
         (**self).voices()
     }
@@ -2353,6 +2398,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn warp_out_sound(&self) -> Option<SoundLength> {
         (**self).warp_out_sound()
+    }
+
+    fn boom_sounds(&self) -> Vec<(BoomId, SoundId)> {
+        (**self).boom_sounds()
     }
 
     fn voices(&self) -> Voices {
@@ -2709,6 +2758,7 @@ mod tests {
                 interference: 0,
                 murk: 0,
                 message: -1,
+                background: 0,
             }]
         }
 
@@ -2895,6 +2945,10 @@ mod tests {
             })
         }
 
+        fn boom_sounds(&self) -> Vec<(BoomId, SoundId)> {
+            vec![(BoomId(130), SoundId(302))]
+        }
+
         /// `gövt` 128 speaks set 3, forced odd, with one acknowledgement.
         fn voices(&self) -> Voices {
             Voices::read(
@@ -2962,6 +3016,7 @@ mod tests {
             format!("{:?}", catalog.warp_out_sound()),
             format!("{:?}", catalog.mission_dude(DudeId(150))),
             format!("{:?}", catalog.first_stellars()),
+            format!("{:?}", catalog.boom_sounds()),
             format!("{:?}", catalog.voices()),
             format!("{:?}", catalog.stellar_weapons()),
         ]
@@ -3173,11 +3228,15 @@ mod tests {
             direct[35], "[(SystemId(130), StellarId(129))]",
             "forwarded, not the default's 128"
         );
+        assert_eq!(
+            direct[36], "[(BoomId(130), SoundId(302))]",
+            "forwarded, not a default"
+        );
         assert!(
-            direct[36].contains("GovtId(128): GovtVoice { set: Some(3)"),
+            direct[37].contains("GovtId(128): GovtVoice { set: Some(3)"),
             "forwarded, not a default: {direct:?}"
         );
-        assert_eq!(direct[37], "[(StellarId(128), WeaponId(196))]");
+        assert_eq!(direct[38], "[(StellarId(128), WeaponId(196))]");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }
@@ -3504,6 +3563,17 @@ mod tests {
             assert_eq!(Explosion::decode(none), None, "{none}");
         }
         assert_eq!((FIRST_BOOM, BOOM_TYPES, EXTRA_EXPLOSIONS), (128, 64, 1000));
+    }
+
+    #[test]
+    fn an_explosion_sounds_snd_300_on_for_a_sound_index_of_0_to_63_only() {
+        assert_eq!(explosion_sound(0), Some(SoundId(300)));
+        assert_eq!(explosion_sound(5), Some(SoundId(305)));
+        assert_eq!(explosion_sound(63), Some(SoundId(363)));
+        for none in [-1, 64, i16::MIN, i16::MAX] {
+            assert_eq!(explosion_sound(none), None, "{none}");
+        }
+        assert_eq!(Mapped.boom_sounds(), [], "none by default");
     }
 
     #[test]

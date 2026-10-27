@@ -47,6 +47,9 @@ pub enum Showing {
     MainMenu,
     /// The new pilot's name entry, over the main menu.
     NewPilot,
+    /// The new pilot's ship christening, the Text Input dialog over the
+    /// main menu.
+    Christening,
     /// The list of saved pilots, over the main menu.
     OpenPilot,
     /// A note over the main menu, such as the warning that an opened
@@ -61,6 +64,8 @@ pub enum Showing {
     Assignment,
     /// The comm dialog, over flight, which it pauses.
     Comm,
+    /// The escort dialog, over flight, which it pauses.
+    EscortDialog,
     /// The haggle dialog, over the comm dialog.
     Haggle,
     /// The offer dialog of a person hailed or boarded, over flight, which

@@ -101,11 +101,10 @@ use crate::combat::ship_frames::{
     UNFOLDS_TO_FIRE,
 };
 use crate::flight::Flyer;
-use crate::flight::{Controls, FlightRules, Turn, heading_of, shortest_turn};
+use crate::flight::{Controls, FlightRules, Turn};
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
 use crate::traffic::Traffic;
-use crate::traffic::inertialess::Inertia;
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::spawn::{Entry, NewShip};
 
@@ -310,32 +309,13 @@ impl NpcDisplay {
 }
 
 /// Records how `npc` is flown this step under `controls` on `handling`,
-/// its own acceleration its handling's under `flight`, as `inertia` says
-/// (see the module docs).
-pub fn record(
-    npc: &mut Npc,
-    handling: &Handling,
-    controls: Controls,
-    flight: FlightRules,
-    inertia: Inertia,
-) {
+/// its own acceleration its handling's under `flight` (see the module
+/// docs): its turn is the one `_HandleShip` gives it (esi,
+/// @0x34424-0x3458e), none where it is put on the heading it wants.
+pub fn record(npc: &mut Npc, handling: &Handling, controls: Controls, flight: FlightRules) {
     let turn = match controls.turn {
         Turn::Right => 1,
         Turn::Left => -1,
-        Turn::None
-            if inertia == Inertia::Inertial
-                && controls.reverse
-                && npc.state.velocity.length() > flight.at_rest_speed() =>
-        {
-            let off = shortest_turn(npc.state.heading, heading_of(npc.state.velocity * -1.0));
-            if off.abs() <= handling.turn_rate {
-                0
-            } else if off > 0.0 {
-                1
-            } else {
-                -1
-            }
-        }
         Turn::None => 0,
     };
     // Its `_ShipAccelRate`, a sixth while another ship holds it in a
@@ -605,7 +585,6 @@ mod tests {
     use crate::combat::hull::Condition;
     use crate::combat::ship_frames::{ANIMATED, KEY_CARRIED};
     use crate::flight::ShipState;
-    use crate::geometry::Vec2;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
     use crate::traffic::spawn::{Entry, NewShip};
@@ -866,13 +845,7 @@ mod tests {
             thrust,
             ..Controls::default()
         };
-        record(
-            &mut ship,
-            &handling,
-            controls(Turn::Right, true),
-            flight,
-            Inertia::Inertial,
-        );
+        record(&mut ship, &handling, controls(Turn::Right, true), flight);
         assert_eq!(
             ship.display.drive,
             Drive {
@@ -885,13 +858,7 @@ mod tests {
             accel: handling.accel * 2.75,
             ..handling
         };
-        record(
-            &mut ship,
-            &rushing,
-            controls(Turn::Left, true),
-            flight,
-            Inertia::Inertial,
-        );
+        record(&mut ship, &rushing, controls(Turn::Left, true), flight);
         assert_eq!(
             (ship.display.drive.turn, ship.display.drive.thrust),
             (-1, Thrust::Rush)
@@ -900,24 +867,12 @@ mod tests {
             accel: handling.accel * 1.5,
             ..handling
         };
-        record(
-            &mut ship,
-            &breaking,
-            controls(Turn::None, true),
-            flight,
-            Inertia::Inertial,
-        );
+        record(&mut ship, &breaking, controls(Turn::None, true), flight);
         assert_eq!(
             (ship.display.drive.turn, ship.display.drive.thrust),
             (0, Thrust::Plain)
         );
-        record(
-            &mut ship,
-            &handling,
-            controls(Turn::None, false),
-            flight,
-            Inertia::Inertial,
-        );
+        record(&mut ship, &handling, controls(Turn::None, false), flight);
         assert_eq!(ship.display.drive.thrust, Thrust::None);
         // A ship of no acceleration of its own never rushes.
         ship.stats.handling.accel = 0.0;
@@ -926,46 +881,8 @@ mod tests {
             ..handling
         };
         let thrust = controls(Turn::None, true);
-        record(&mut ship, &still, thrust, flight, Inertia::Inertial);
+        record(&mut ship, &still, thrust, flight);
         assert_eq!(ship.display.drive.thrust, Thrust::Plain);
-    }
-
-    #[test]
-    fn reversing_records_the_turn_toward_its_retro_heading_unless_it_snaps() {
-        let flight = FlightRules::default();
-        let handling = flight.handling(stats().handling);
-        let mut ship = folding(0, 1);
-        // Moving east, facing north: the retro heading, west, is to the
-        // left.
-        ship.state = ShipState {
-            velocity: Vec2::new(2.0, 0.0),
-            ..ShipState::default()
-        };
-        let reverse = Controls {
-            reverse: true,
-            ..Controls::default()
-        };
-        record(&mut ship, &handling, reverse, flight, Inertia::Inertial);
-        assert_eq!(ship.display.drive.turn, -1);
-        ship.state.heading = 268.0;
-        record(&mut ship, &handling, reverse, flight, Inertia::Inertial);
-        assert_eq!(ship.display.drive.turn, 0, "within a turn it snaps");
-        ship.state.heading = 200.0;
-        record(&mut ship, &handling, reverse, flight, Inertia::Inertial);
-        assert_eq!(ship.display.drive.turn, 1);
-        ship.state.velocity = Vec2::ZERO;
-        record(&mut ship, &handling, reverse, flight, Inertia::Inertial);
-        assert_eq!(ship.display.drive.turn, 0, "at rest: no turn");
-        ship.state.velocity = Vec2::new(flight.at_rest_speed(), 0.0);
-        record(&mut ship, &handling, reverse, flight, Inertia::Inertial);
-        assert_eq!(ship.display.drive.turn, 0, "at the rest speed: no turn");
-        ship.state.velocity = Vec2::new(2.0, 0.0);
-        let inertialess = Inertia::Inertialess { speed: 2.0 };
-        record(&mut ship, &handling, reverse, flight, inertialess);
-        assert_eq!(
-            ship.display.drive.turn, 0,
-            "an inertialess ship's reverse turns it not"
-        );
     }
 
     #[test]

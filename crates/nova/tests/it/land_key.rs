@@ -257,6 +257,13 @@ impl Harness {
         self.key(code, false);
     }
 
+    /// Presses a stellar slot key and draws the frame whose slot block
+    /// takes it.
+    fn press_slot(&mut self, code: KeyCode) {
+        self.press(code);
+        self.frame();
+    }
+
     fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
@@ -365,7 +372,7 @@ fn with_no_target_l_requests_clearance_at_the_nearest_and_a_second_l_lands_there
 #[test]
 fn with_alpha_minor_chosen_by_its_slot_key_l_lands_there() {
     let mut game = Harness::flying();
-    game.press(KeyCode::Digit1);
+    game.press_slot(KeyCode::Digit1);
     assert_eq!(game.session().nav_target(), Some(StellarId(131)));
     game.press(KeyCode::KeyL);
     assert_eq!(game.showing(), Showing::Flight, "requested");
@@ -380,11 +387,11 @@ fn after_l_selected_the_nearest_a_slot_key_switches_the_target() {
     let mut game = Harness::flying();
     game.press(KeyCode::KeyL);
     assert_eq!(game.session().nav_target(), Some(StellarId(128)));
-    game.press(KeyCode::Digit1);
+    game.press_slot(KeyCode::Digit1);
     assert_eq!(game.session().nav_target(), Some(StellarId(131)));
-    game.press(KeyCode::F2);
+    game.press_slot(KeyCode::F2);
     assert_eq!(game.session().nav_target(), Some(StellarId(128)));
-    game.press(KeyCode::Digit1);
+    game.press_slot(KeyCode::Digit1);
     game.press(KeyCode::KeyL);
     game.approach();
     game.press(KeyCode::KeyL);

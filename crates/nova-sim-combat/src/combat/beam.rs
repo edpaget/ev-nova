@@ -27,6 +27,13 @@
 //! [`RuleKey::BeamConeQuirks`](crate::RuleKey::BeamConeQuirks)
 //! ([`ConeAngle`]) restores it.
 //!
+//! A beam that hits no ship goes on to `_HandleBeams`' asteroid pass
+//! (@0x316c2-0x31d54, [`asteroid_beam`](super::asteroid_beam)): ships come
+//! first, so a ship in the cone shields every asteroid, and the asteroid
+//! the cone or the segment finds cuts the beam short, as a ship does. A
+//! point-defence beam and a weapon of `Seeker` 0x0001 never reach the
+//! asteroids.
+//!
 //! A beam lives its weapon's `Count` ticks, and a decaying one (`Decay`
 //! above none) fades 15 − `Falloff` ticks more, hitting all the while
 //! ([`Beam::live`]). Its life is spent first in the tick, so it is still

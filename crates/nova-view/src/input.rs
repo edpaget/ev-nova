@@ -13,6 +13,11 @@ pub enum Key {
     Up,
     /// Down arrow.
     Down,
+    /// Page Up (fn+Up on a Mac laptop), which the shop grids take as Up.
+    PageUp,
+    /// Page Down (fn+Down on a Mac laptop), which the shop grids take as
+    /// Down.
+    PageDown,
     /// Return or Enter.
     Enter,
     /// Escape.
@@ -57,6 +62,16 @@ pub enum MouseButton {
     Other,
 }
 
+/// How far a wheel or trackpad scroll moves the text under the pointer,
+/// toward the text's end for a positive amount.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScrollDelta {
+    /// Whole or fractional lines: wheel notches.
+    Lines(f32),
+    /// Logical units: a trackpad's movement.
+    Units(f32),
+}
+
 /// One input event for a screen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Input {
@@ -92,6 +107,19 @@ pub enum Input {
         /// Where the pointer was.
         at: Point,
     },
+    /// The mouse wheel turned, or a trackpad scrolled, with the pointer at
+    /// `at`. Only the vertical axis is kept.
+    ///
+    /// The view scrolls whatever scroll reaches it; whether one reaches a
+    /// screen at all is the router's call (the `dialog_text_wheel` rule
+    /// key, read by `nova::app`'s screen router), since the original
+    /// ignores the wheel.
+    Scroll {
+        /// How far, toward the text's end for positive.
+        delta: ScrollDelta,
+        /// Where the pointer was.
+        at: Point,
+    },
 }
 
 impl Input {
@@ -109,6 +137,10 @@ impl Input {
             } => Self::PointerButton {
                 button,
                 pressed,
+                at: moved(at),
+            },
+            Self::Scroll { delta, at } => Self::Scroll {
+                delta,
                 at: moved(at),
             },
             Self::Key { .. } | Self::Text(_) | Self::PointerLeft => self,
@@ -139,6 +171,17 @@ mod tests {
                 button: MouseButton::Right,
                 pressed: false,
                 at: Point::new(0.0, 2.0),
+            }
+        );
+        assert_eq!(
+            Input::Scroll {
+                delta: ScrollDelta::Lines(1.0),
+                at: Point::new(200.0, 10.0),
+            }
+            .translated(by),
+            Input::Scroll {
+                delta: ScrollDelta::Lines(1.0),
+                at: Point::new(30.0, 12.0),
             }
         );
         let key = Input::Key {

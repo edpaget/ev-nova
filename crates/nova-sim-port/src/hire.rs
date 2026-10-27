@@ -124,6 +124,17 @@
 //! module); only then does it leave, so the cargo can stay past the holds
 //! left until the next reset.
 //!
+//! # The wage shown (`_EscortDialogUpdate` @0x94f1a-0x9502d)
+//!
+//! A hired escort's pay line ([`shown_wage`]) works the amount out again
+//! from its ship type's `Cost` (+0x58 of `_shipClass` entry +0x76) times
+//! [`WAGE_SHARE`] (@0x94f9c-0x94fbe), truncated toward zero and not
+//! clamped, so a `Cost` of -100 or below shows a negative amount the
+//! escort is never paid. The unit is "credit" only when that unrounded
+//! share is exactly 1.0 (`ucomisd` with 0xdd0c0, @0x94fd6-0x94ffc), and
+//! "credits" otherwise (@0x94ffe-0x9500d). It calls no payment routine,
+//! so it does not follow a custom [`HireTerms`].
+//!
 //! # Not modelled
 //!
 //! Mission escorts, never paid, wait for missions; and the extra days the
@@ -145,6 +156,7 @@ use std::fmt::Debug;
 use crate::catalog::{LandingSite, OutfitRecord, ShipId, ShipRecord};
 use crate::combat::armament::Arsenal;
 use crate::control::{ControlBits, Gate, PilotFacts, Test};
+use crate::hail::{CreditUnit, ShownWage};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::shipyard::{HIDE_BITS, ShipFlags3, ShipSpecs};
 use crate::wares::{self, HideHigher, Roll};
@@ -153,6 +165,25 @@ use crate::wares::{self, HideHigher, Roll};
 pub const HIRE_FEE_SHARE: f64 = 0.1;
 /// The share of a ship's `Cost` its daily wage is (@0xdd098).
 pub const WAGE_SHARE: f64 = 0.01;
+/// The pay line a hired escort of `ship`'s type shows, as
+/// `_EscortDialogUpdate` works it out (@0x94f9c-0x9500d; see the module
+/// docs): a hundredth of the `Cost`, truncated and not clamped, "credit"
+/// only when the unrounded share is exactly 1.0.
+#[must_use]
+pub fn shown_wage(ship: &ShipRecord) -> ShownWage {
+    let share = f64::from(ship.cost) * WAGE_SHARE;
+    // The original's `ucomisd` is exact, and only `Cost` 100 gives 1.0.
+    #[allow(clippy::float_cmp)]
+    ShownWage {
+        credits: share as i64,
+        unit: if share == 1.0 {
+            CreditUnit::Credit
+        } else {
+            CreditUnit::Credits
+        },
+    }
+}
+
 /// The `HireRandom` from which a class is always for hire: above it
 /// counts as it (`_LoadObjectData` @0x7a35d-0x7a367).
 pub const MAX_HIRE_RANDOM: i16 = wares::ALWAYS_RANDOM;
@@ -332,6 +363,10 @@ pub struct HireList {
     pub cash: i64,
     /// Whether the fleet has room for another escort.
     pub room: bool,
+    /// How each disputed rule reads, the bar's ([`Bar::rules`]): the
+    /// hire screen reads its grid's
+    /// ([`RuleKey::GridSelection`]) from it.
+    pub rules: Rulebook,
 }
 
 impl HireList {
@@ -483,6 +518,7 @@ impl Bar<'_> {
             rows: rows.into_iter().map(|(_, row)| row).collect(),
             cash: self.cash,
             room: self.room,
+            rules: self.rules,
         }
     }
 }
@@ -622,6 +658,35 @@ mod tests {
     }
 
     #[test]
+    fn the_wage_shown_is_a_hundredth_of_the_cost_unclamped_singular_only_at_exactly_one() {
+        use CreditUnit::{Credit, Credits};
+        for (cost, credits, unit) in [
+            (100, 1, Credit),
+            (150, 1, Credits),
+            (199, 1, Credits),
+            (101, 1, Credits),
+            (99, 0, Credits),
+            (0, 0, Credits),
+            (-50, 0, Credits),
+            (-100, -1, Credits),
+            (-150, -1, Credits),
+            (10_000, 100, Credits),
+            (100_000_000, 1_000_000, Credits),
+        ] {
+            assert_eq!(
+                shown_wage(&costing(cost, 4)),
+                ShownWage { credits, unit },
+                "Cost {cost}"
+            );
+        }
+        assert_eq!(
+            NovaHire::default().wage(&costing(-150, 4)),
+            0,
+            "the pay is clamped where the line is not"
+        );
+    }
+
+    #[test]
     fn by_the_engine_a_hire_takes_a_credit_more_when_the_tenth_has_a_fraction() {
         let nova = NovaHire {
             hire_fee: RuleSource::Engine,
@@ -696,6 +761,7 @@ mod tests {
             rows: vec![row(128), row(129)],
             cash: 0,
             room: true,
+            rules: Rulebook::default(),
         };
         assert_eq!(list.row(ShipId(129)).map(|row| row.id), Some(ShipId(129)));
         assert_eq!(list.row(ShipId(130)), None);
@@ -904,6 +970,13 @@ mod tests {
         );
         assert_eq!(open.check(ShipId(129)), Err(HireRefusal::NotForHire));
         assert_eq!(open.check(ShipId(130)), Ok(()), "another bit holds");
+    }
+
+    #[test]
+    fn the_list_carries_the_bars_rules_to_the_hire_screen() {
+        let rules = Rulebook::default().with_override(RuleKey::GridSelection, RuleSource::Bible);
+        let list = hire_list(&[for_hire(129)], 5000, (true, true), &AllowAll, rules);
+        assert_eq!(list.rules, rules);
     }
 
     #[test]

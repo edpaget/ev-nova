@@ -123,7 +123,10 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags, 0x0080, Guided, Implemented),
     // Blast doesn't hurt the player.
     (Flags, 0x0100, Any, Implemented),
-    // Small smoke, big smoke, persistent smoke.
+    // Small smoke, big smoke, persistent smoke. The engine reads 0x0800
+    // for the let-go of a selected secondary that runs out too
+    // (`PERSISTENT_SMOKE`, `RuleKey::EmptySecondary`), which needs no
+    // report.
     (Flags, 0x0200, Any, Presentation),
     (Flags, 0x0400, Any, Presentation),
     (Flags, 0x0800, Any, Presentation),
@@ -135,8 +138,8 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags, 0x8000, Any, Implemented),
     // Passes through asteroids, on any guidance (`asteroid_hit`).
     (Seeker, 0x0001, Any, Implemented),
-    // Guided weapons' behaviour.
-    (Seeker, 0x0002, Guided, Unimplemented),
+    // Seeks asteroids: locks onto one near and ahead (`asteroid_seek`).
+    (Seeker, 0x0002, Guided, Implemented),
     // Confused by sensor interference; turns away when jammed.
     (Seeker, 0x0008, Guided, Implemented),
     (Seeker, 0x0010, Guided, Implemented),
@@ -265,7 +268,7 @@ mod tests {
         (Flags, 0x4000, [NA, NA, NA, Implemented]),
         (Flags, 0x8000, [Implemented; 4]),
         (Seeker, 0x0001, [Implemented; 4]),
-        (Seeker, 0x0002, [NA, NA, Unimplemented, NA]),
+        (Seeker, 0x0002, [NA, NA, Implemented, NA]),
         (Seeker, 0x0008, [NA, NA, Implemented, NA]),
         (Seeker, 0x0010, [NA, NA, Implemented, NA]),
         (Seeker, 0x0020, [Implemented; 4]),
@@ -422,8 +425,9 @@ mod tests {
         });
         assert_eq!(
             unimplemented(&seeking),
-            [(Seeker, 0x0002)],
-            "asteroids, jamming, interference, the ion lockout and the 0x4000 lock are done"
+            [],
+            "asteroids, the asteroid lock, jamming, interference, the ion lockout and the 0x4000 \
+             lock are done"
         );
     }
 
@@ -448,10 +452,7 @@ mod tests {
     #[test]
     fn stock_shaped_guided_weapons_and_turrets_report_their_rows() {
         // The IR Missile: secondary, detonates, seeks asteroids.
-        assert_eq!(
-            unimplemented(&guided(1, 0x8002, 0x0002, 0, 0)),
-            [(Seeker, 0x0002)]
-        );
+        assert_eq!(unimplemented(&guided(1, 0x8002, 0x0002, 0, 0)), []);
         // The Ion Cannon: a looped, rear-blind turreted beam that disables
         // and fires from the exit point nearest the target.
         assert_eq!(unimplemented(&guided(3, 0x4010, 0, 0x1200, 0x0011)), []);

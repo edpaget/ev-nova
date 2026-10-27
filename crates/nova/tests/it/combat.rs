@@ -53,9 +53,9 @@
 //! saying "New escort orders assigned:  All ships attacking target.", and
 //! the pirate's shield drops. E, 4 and V hold the warships alone, which
 //! stay put while the freighter follows the player, and C recalls them.
-//! Option-Tab and Y hail an escort, "What can I do for you?", with Release
-//! alone; R says "Goodbye, captain." and closing the channel releases it,
-//! which the saved pilot keeps. Standing orders are saved on landing, and
+//! Option-Tab and Y hail an escort, which opens the escort dialog with
+//! Close Channel, Release, Upgrade Escort and Sell Escort; R releases it
+//! at once, closing the dialog, which the saved pilot keeps. Standing orders are saved on landing, and
 //! reopened they are back to formation by the engine's `escort_orders`,
 //! or kept by its other reading in the settings file.
 //!
@@ -2493,7 +2493,8 @@ fn with_fleet(pilot: &Pilot, ships: &[i16]) -> Pilot {
                 "order": null,
                 "carried": false,
                 "wage": null,
-                "person": null
+                "person": null,
+                "mark": null
             })
         })
         .collect();
@@ -2795,7 +2796,7 @@ fn the_escort_menu_holds_the_warships_alone_and_c_recalls_them() {
 }
 
 #[test]
-fn hailing_an_escort_offers_release_which_removes_it_from_the_saved_fleet() {
+fn hailing_an_escort_opens_the_escort_dialog_whose_release_removes_it_from_the_saved_fleet() {
     let store = MemoryPilots::new();
     let mut game = escorted(&store, &[], &[129], |screen| screen);
     let escort = game.escorts()[0].id;
@@ -2804,8 +2805,7 @@ fn hailing_an_escort_offers_release_which_removes_it_from_the_saved_fleet() {
     game.key(Key::Alt, false);
     assert_eq!(game.session().target().map(|npc| npc.id), Some(escort));
     game.tap(Key::Char('y'));
-    assert_eq!(game.showing(), Showing::Comm);
-    assert_eq!(game.reply(), "What can I do for you?");
+    assert_eq!(game.showing(), Showing::EscortDialog);
     let shown = run_texts(&game.frame());
     let buttons: Vec<&String> = shown
         .iter()
@@ -2813,18 +2813,20 @@ fn hailing_an_escort_offers_release_which_removes_it_from_the_saved_fleet() {
             [
                 "Greetings",
                 "Request Assistance",
-                "Beg For Mercy",
                 "Release",
                 "Close Channel",
+                "Upgrade Escort",
+                "Sell Escort",
             ]
             .contains(&text.as_str())
         })
         .collect();
-    assert_eq!(buttons, ["Close Channel", "Release"]);
+    assert_eq!(
+        buttons,
+        ["Close Channel", "Release", "Upgrade Escort", "Sell Escort"]
+    );
     game.tap(Key::Char('r'));
-    assert_eq!(game.reply(), "Goodbye, captain.");
-    game.tap(Key::Escape);
-    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.showing(), Showing::Flight, "released at once");
     assert!(!game.session().is_escort(escort));
     let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
     assert_eq!(saved.escorts(), []);
@@ -3321,6 +3323,8 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     game.frame();
     assert_eq!(game.fighters_out(), 0, "no fighter out");
     game.tap(Key::Char('w'));
+    // Two frames make a tick, whose secondary block takes the press.
+    game.frame();
     assert!(text_at(&game.frame(), "Bay - 2").is_some());
 }
 

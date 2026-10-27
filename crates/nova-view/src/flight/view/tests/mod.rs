@@ -13,10 +13,11 @@ use nova_sim::{
 use super::*;
 use crate::devtools::{PilotDesk, PilotEdit};
 use crate::draw::crossed_box;
+use crate::draw::fill_command;
 use crate::draw::lights_tint;
 use crate::flight::cadence::{NAV_PERIOD_TICKS, TARGET_PERIOD_TICKS};
 use crate::flight::catalog::{
-    Blink, BoomLook, GovtId, LayerSheet, StatusBarLayout, TargetCard, WeaponLook,
+    Blink, BoomLook, GovtId, LayerSheet, StarSheet, StatusBarLayout, TargetCard, WeaponLook,
 };
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::{EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS};
@@ -46,8 +47,8 @@ use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
     ALERT_CICN, AbortError, AcceptError, Assigned, Assignment, AsteroidCatalog, CombatCatalog,
     ComputerRefusal, Controls, FighterNote, MissionId, MissionShown, NotOffered, Pilot,
-    PilotCatalog, PlayerCommand, RechargeRefusal, Rulebook, Rules, StellarIff, StellarPick, Take,
-    Taken, TrafficCatalog, Turn, VenueOffer, lights_level,
+    PilotCatalog, PlayerCommand, Rulebook, Rules, StellarIff, StellarPick, Take, Taken,
+    TrafficCatalog, Turn, VenueOffer, lights_level,
 };
 
 use crate::system::catalog::{
@@ -59,10 +60,13 @@ use nova_sim::{BlinkChance, GLOW_CRUISE, HashedRolls, glow_level};
 use nova_sim::{BoardRefusal, DockKind, MissionBoardLine};
 use nova_sim::{RuleKey, RuleSource};
 
+mod anchor;
 mod boarding;
+mod cloak;
 mod combat;
 mod comm_line;
 mod controls;
+mod dates;
 mod dialog_map;
 mod docked;
 mod escorts;
@@ -76,11 +80,14 @@ mod maps;
 mod missions;
 mod nav;
 mod pilot;
+mod port_screen_map;
 mod self_destruct;
 mod ship_drawing;
 mod shots;
+mod stars;
 mod stellars;
 mod widescreen;
+mod world_layers;
 
 /// The first `chär` flies ship 128 (an average ship that turns 3° a
 /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system
@@ -113,6 +120,8 @@ struct FakeCatalog {
     sol_interference: i16,
     /// System 130's `Murk`: none, by default.
     sol_murk: i16,
+    /// System 130's `BkgndColor`: black, by default.
+    sol_background: u32,
     /// System 131's `Message`: no buoy (−1), by default.
     alpha_buoy: i16,
     /// The escorts' voices: none, by default.
@@ -140,6 +149,8 @@ struct FakeCatalog {
     ships: Vec<ShipRecord>,
     /// The ships whose sheets were asked for.
     sheets_asked: RefCell<Vec<ShipId>>,
+    /// Each batch of ships whose target cards were asked for.
+    cards_asked: RefCell<Vec<Vec<ShipId>>>,
     /// Each system's traffic: none, by default.
     traffic: Vec<(SystemId, nova_sim::SystemTraffic)>,
     /// The düdes: none, by default.
@@ -165,6 +176,9 @@ struct FakeCatalog {
     box_sheet: Result<EffectSheet, String>,
     /// The mouse cursor's sheet: `rlëD` 651 of 8 frames, by default.
     cursor_sheet: Result<EffectSheet, String>,
+    /// The stars' sheet: none, by default, so no star is drawn
+    /// ([`star_sheet`] draws them).
+    star_sheet: Result<StarSheet, String>,
     /// The asteroid types: none, by default.
     asteroid_types: Vec<nova_sim::AsteroidTypeRecord>,
     /// Each system's asteroid field: none, by default.
@@ -226,6 +240,8 @@ struct FakeCatalog {
     place_names: nova_sim::catalog::PlaceNames,
     /// The `crön`s: none, by default.
     crons: Vec<nova_sim::catalog::CronRecord>,
+    /// Each `bööm`'s sound, as the session reads it: none, by default.
+    boom_sounds: Vec<(nova_sim::BoomId, nova_sim::SoundId)>,
     /// Each system's government, in the session's map and the course
     /// map's catalog: none, by default.
     governed: Vec<(i16, i16)>,
@@ -352,6 +368,7 @@ fn catalog() -> FakeCatalog {
         junk: Vec::new(),
         ships: Vec::new(),
         sheets_asked: RefCell::default(),
+        cards_asked: RefCell::default(),
         traffic: Vec::new(),
         dudes: Vec::new(),
         weapons: Vec::new(),
@@ -372,6 +389,7 @@ fn catalog() -> FakeCatalog {
             image: crate::SheetImage::Rled(651),
             frames: NonZeroU16::new(8).expect("non-zero"),
         }),
+        star_sheet: Err("no spïn 700".to_owned()),
         asteroid_types: Vec::new(),
         asteroid_fields: Vec::new(),
         strings: Vec::new(),
@@ -387,6 +405,7 @@ fn catalog() -> FakeCatalog {
         sol_navs: Vec::new(),
         sol_interference: 0,
         sol_murk: 0,
+        sol_background: 0,
         alpha_buoy: -1,
         voices: nova_sim::voice::Voices::default(),
         sol_more: Vec::new(),
@@ -401,6 +420,7 @@ fn catalog() -> FakeCatalog {
         visibility: Vec::new(),
         place_names: nova_sim::catalog::PlaceNames::default(),
         crons: Vec::new(),
+        boom_sounds: Vec::new(),
         governed: Vec::new(),
         lived: Vec::new(),
     }
@@ -463,7 +483,7 @@ fn site(id: i16, (x, y): (f32, f32), flags: u32) -> LandingSite {
 }
 
 /// The start's date, with stock's affixes.
-const DATE: &str = "June 23, 1177 NC";
+const DATE: &str = "June 23rd, 1177 NC";
 
 /// Stock `ïntf` 128's areas, with background `PICT` 700.
 fn layout() -> StatusBarLayout {
@@ -556,6 +576,7 @@ impl PilotCatalog for FakeCatalog {
             interference: 0,
             murk: 0,
             message: -1,
+            background: 0,
         };
         let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
         let sol = self.sol_links();
@@ -564,6 +585,7 @@ impl PilotCatalog for FakeCatalog {
                 stellars: self.sol_navs.clone(),
                 interference: self.sol_interference,
                 murk: self.sol_murk,
+                background: self.sol_background,
                 ..star(130, (0.0, 0.0), &sol)
             },
             StarSystem {
@@ -690,6 +712,10 @@ impl PilotCatalog for FakeCatalog {
 
     fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
         self.crons.clone()
+    }
+
+    fn boom_sounds(&self) -> Vec<(nova_sim::BoomId, nova_sim::SoundId)> {
+        self.boom_sounds.clone()
     }
 
     fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
@@ -979,6 +1005,13 @@ impl CombatLooks for FakeCatalog {
             .unwrap_or_default()
     }
 
+    /// Each card as [`FakeCatalog::target_card`] gives it, the batch
+    /// recorded.
+    fn target_cards(&self, ships: &[ShipId]) -> Vec<TargetCard> {
+        self.cards_asked.borrow_mut().push(ships.to_vec());
+        ships.iter().map(|&ship| self.target_card(ship)).collect()
+    }
+
     fn target_code(&self, govt: GovtId) -> Option<String> {
         self.codes
             .iter()
@@ -1026,6 +1059,10 @@ impl CombatLooks for FakeCatalog {
         (set < 2).then(|| crate::flight::catalog::SmokeSheet {
             first_icon: 1000 + 8 * i16::from(set),
         })
+    }
+
+    fn star_sheet(&self) -> Result<StarSheet, String> {
+        self.star_sheet.clone()
     }
 }
 
@@ -1077,6 +1114,11 @@ impl StatusBars for FakeCatalog {
 fn flight() -> View {
     FlightView::new(catalog())
 }
+
+/// Where flight draws the player's ship in Nova's own 1024 x 768 by the
+/// original's reading of [`RuleKey::FlightAnchor`]: the play area's
+/// centre, `_screenCenter`, (trunc((1024 − 194) / 2), 384).
+const PLAYER_AT: Point = Point::new(415.0, 384.0);
 
 fn at(x: f32, y: f32) -> Point {
     Point::new(x, y)
@@ -1215,9 +1257,53 @@ fn overlay(text: &str, origin: Point, size: f32, color: Color) -> DrawCommand {
     }
 }
 
+/// The stars' sheet, `rlëD` 700 of 16 frames of 5 × 5, as stock's.
+fn star_sheet() -> StarSheet {
+    StarSheet {
+        image_id: 700,
+        frames: NonZeroU16::new(16).expect("non-zero"),
+        size: (5, 5),
+    }
+}
+
+/// [`catalog`] with the stars' sheet, so flight draws its stars.
+fn starry() -> FakeCatalog {
+    FakeCatalog {
+        star_sheet: Ok(star_sheet()),
+        ..catalog()
+    }
+}
+
+/// The stars `view` draws first in its world: its starfield's, `alpha` of
+/// the way between its last two snapshots, by its rules' reading of
+/// [`RuleKey::FlightStarfield`].
+fn drawn_stars(view: &View) -> Vec<DrawCommand> {
+    let source = view.session().map_or(RuleSource::Engine, |session| {
+        session.rules().source_for(RuleKey::FlightStarfield)
+    });
+    let mut list = DrawList::new();
+    let stars = (&view.stars, &view.looks);
+    super::stars::draw(&mut list, stars, source, &view.camera(), view.alpha);
+    list.iter().cloned().collect()
+}
+
+/// Whether `command` is one of the stars [`star_sheet`] draws.
+fn is_star(command: &DrawCommand) -> bool {
+    matches!(
+        command,
+        DrawCommand::Sprite {
+            image,
+            blend: Blend::Or,
+            ..
+        } if image.id == 700
+    )
+}
+
+/// The sprites drawn, the stars left out.
 fn sprites(list: &DrawList) -> Vec<(ImageKey, Point)> {
     list.iter()
-        .filter_map(|command| match command {
+        .filter(|command| !is_star(command))
+        .filter_map(|command| match unclipped(command) {
             DrawCommand::Sprite { image, center, .. } => Some((*image, *center)),
             _ => None,
         })
@@ -1273,6 +1359,7 @@ fn texts(list: &DrawList) -> Vec<String> {
 const TITLED: FlightOverlays = FlightOverlays {
     title: true,
     help: true,
+    cheats: false,
 };
 fn layer(image_id: i16, frames: u16) -> LayerSheet {
     LayerSheet {
@@ -1467,6 +1554,20 @@ fn ms(millis: u64) -> Duration {
 fn tap(view: &mut View, k: Key) {
     view.input(&key(k, true));
     view.input(&key(k, false));
+}
+
+/// Taps `k`, one of the stellar slot keys, then runs the frame whose slot
+/// block takes it.
+fn tap_slot(view: &mut View, k: Key) {
+    tap(view, k);
+    ticks(view, 1);
+}
+
+/// Taps `k`, then runs the step whose secondary block takes it (see
+/// `nova_sim::session`'s `secondary_select`).
+fn tap_and_step(view: &mut View, k: Key) {
+    tap(view, k);
+    ticks(view, 1);
 }
 
 /// Where system `id` is on the course map, brought into item 3 first: the
@@ -1949,6 +2050,10 @@ fn shipbuying() -> FakeCatalog {
             combat_govt: None,
             escort_type: -1,
             skill_var: 0,
+            subtitle: String::new(),
+            upgrade_to: None,
+            esc_upgrd_cost: 0,
+            esc_sell_value: 0,
             on_capture: nova_sim::Script::default(),
             on_purchase: nova_sim::Script::default(),
             on_retire: nova_sim::Script::default(),
@@ -2203,6 +2308,10 @@ fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCatalog
         combat_govt: None,
         escort_type: -1,
         skill_var: 0,
+        subtitle: String::new(),
+        upgrade_to: None,
+        esc_upgrd_cost: 0,
+        esc_sell_value: 0,
         on_capture: nova_sim::Script::default(),
         on_purchase: nova_sim::Script::default(),
         on_retire: nova_sim::Script::default(),
@@ -2312,7 +2421,7 @@ use crate::flight::brackets::{self, Standing};
 use crate::flight::catalog::EffectSheet;
 use crate::flight::effects::{DEBRIS_COLOR, Effects};
 use crate::flight::target::{self, NO_SECONDARY, NO_TARGET};
-use crate::flight::weapons::{BEAM_UNDER_SHIPS, translucent};
+use crate::flight::weapons::BEAM_UNDER_SHIPS;
 use crate::sound::CombatSound;
 
 const BLASTER: WeaponId = WeaponId(128);
@@ -2596,7 +2705,16 @@ fn first(list: &DrawList, wanted: impl Fn(&DrawCommand) -> bool) -> usize {
 }
 
 fn sprite_of(id: i16) -> impl Fn(&DrawCommand) -> bool {
-    move |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == id)
+    move |command| matches!(unclipped(command), DrawCommand::Sprite { image, .. } if image.id == id)
+}
+
+/// `command`, or what it draws when it is [`DrawCommand::Clipped`]: the
+/// cursor is clipped to the play area.
+fn unclipped(command: &DrawCommand) -> &DrawCommand {
+    match command {
+        DrawCommand::Clipped { command, .. } => unclipped(command),
+        command => command,
+    }
 }
 
 /// Whether a command draws a `cïcn` in `ids`.
@@ -2681,6 +2799,10 @@ fn ship_class(id: i16) -> ShipRecord {
         combat_govt: None,
         escort_type: -1,
         skill_var: 0,
+        subtitle: String::new(),
+        upgrade_to: None,
+        esc_upgrd_cost: 0,
+        esc_sell_value: 0,
         on_capture: nova_sim::Script::default(),
         on_purchase: nova_sim::Script::default(),
         on_retire: nova_sim::Script::default(),
@@ -3057,7 +3179,8 @@ fn with_fleet(pilot: &Pilot, ships: &[i16], carried: bool) -> Pilot {
                 "order": null,
                 "carried": carried,
                 "wage": null,
-                "person": null
+                "person": null,
+                "mark": null
             })
         })
         .collect();

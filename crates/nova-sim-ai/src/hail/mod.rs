@@ -45,6 +45,7 @@
 //! disagreement: 0x0010's "always … for free" means for free, and the
 //! ship must still like the player and be free.
 
+pub mod advice;
 pub mod assist;
 pub mod battle;
 pub mod deal;
@@ -191,6 +192,11 @@ pub struct Hail<'a> {
     /// Every NPC in the system, the ship hailed among them: what a helper
     /// picks its target from (see [`battle`]).
     pub npcs: &'a [Npc],
+    /// The last ships of the berths vacated with their records intact
+    /// ([`Traffic::vacated`](crate::traffic::Traffic::vacated)), which
+    /// only the pick of rank battle help and of a paid helper reads
+    /// ([`Hail::vacated_threats`]). The session sets it; none otherwise.
+    pub vacated: &'a [Npc],
     /// The help the player needs, if any.
     pub need: Option<Help>,
     /// The comm quote (an entry in `STR#` 7100) Greetings says in place
@@ -257,12 +263,31 @@ impl<'a> Hail<'a> {
     /// `_AIFightEnemyThreatToPlayer` (@0x82c9f-0x82d11) picks among, by
     /// its inline test (+0x70 == 0, AI state 3 or 4, @0x82cda-0x82cef), so
     /// not a ship attacking one the player leads. Rank battle help and a
-    /// paid helper pick from these ([`battle`]).
+    /// paid helper pick from these ([`battle`]), and, as the routine has
+    /// no active test (+0xb8), from the [`Hail::vacated_threats`] too.
     pub fn threats_to_player(&self) -> impl Iterator<Item = &'a Npc> + use<'a> {
         let me = self.npc.id;
         self.npcs
             .iter()
             .filter(move |other| other.id != me && other.threatens_player())
+    }
+
+    /// The [`Hail::vacated`] ships that pass the same inline test
+    /// ([`Npc::threatens_player`]: +0x70 == 0, AI state 3 or 4, intact
+    /// standing for `_IsDisabled` and `_IsDying` on the record as it was
+    /// left), in the order recorded: the inactive slots
+    /// `_AIFightEnemyThreatToPlayer` still counts (@0x82c9f-0x82d99; see
+    /// [`traffic::vacated`](crate::traffic::vacated)). A berth that the
+    /// ship hailed or any NPC in the system holds is not one: a ship
+    /// taking a berth drops its record anyway.
+    pub fn vacated_threats(&self) -> impl Iterator<Item = &'a Npc> + use<'a> {
+        let npcs = self.npcs;
+        let mine = self.npc.berth;
+        self.vacated.iter().filter(move |gone| {
+            gone.berth != mine
+                && gone.threatens_player()
+                && npcs.iter().all(|npc| npc.berth != gone.berth)
+        })
     }
 }
 
@@ -340,6 +365,7 @@ impl<'a> Hail<'a> {
                 .any(|other| other.threatens_player_among(around.npcs)),
             threatened_by_enemy: player_threatened_by_enemy_of(npc, around),
             npcs: around.npcs,
+            vacated: &[],
             need,
             quote: None,
             joins: false,
@@ -496,15 +522,51 @@ pub struct HailView {
 }
 
 /// What the comm dialog shows of a ship the player leads hailed
-/// (`_CommDialogUpdate` @0x90688-0x90704): "Hired Escort" with its daily
-/// pay for a hired escort, or "Escort" for any other (a captured escort,
-/// a launched fighter, a mission escort).
+/// (`_CommDialogUpdate` @0x90688-0x90704): "Hired Escort" for a hired
+/// escort, or "Escort" for any other (a captured escort, a launched
+/// fighter, a mission escort). A fleet escort hailed opens the escort
+/// dialog instead (`nova_sim::escort_dialog`), which shows a hired
+/// escort's pay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EscortStatus {
-    /// The wage a hired escort is paid a day, as
-    /// `nova_sim::Session::with_rules`
-    /// says; none for one not hired.
-    pub wage: Option<i64>,
+    /// Whether it is a hired fleet escort (+0xbb).
+    pub hired: bool,
+}
+
+/// The word after a pay amount: `_creditString` ("credit") or
+/// `_creditsString` ("credits").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreditUnit {
+    /// "credit", the singular.
+    Credit,
+    /// "credits", every other amount.
+    Credits,
+}
+
+/// A hired escort's daily pay as its pay line shows it: the whole
+/// credits drawn and the unit after them, which the core decides
+/// (`_EscortDialogUpdate` @0x94f9c-0x9500d).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShownWage {
+    /// The amount drawn, which may be negative.
+    pub credits: i64,
+    /// "credit" or "credits".
+    pub unit: CreditUnit,
+}
+
+impl ShownWage {
+    /// A kept whole-credit `wage` shown as itself: "credit" at exactly 1.
+    #[must_use]
+    pub fn kept(wage: i64) -> Self {
+        Self {
+            credits: wage,
+            unit: if wage == 1 {
+                CreditUnit::Credit
+            } else {
+                CreditUnit::Credits
+            },
+        }
+    }
 }
 
 /// How long an assisting ship's comm note shows: 240 (`_HighLevelAIHandler`
@@ -588,8 +650,9 @@ impl HailOptions {
     /// and Use As Escort, as `rulebook` chooses: the first three's
     /// [`RuleKey::QuietHails`](crate::RuleKey::QuietHails), Greetings'
     /// [`RuleKey::LongAdvice`](crate::RuleKey::LongAdvice), Request
-    /// Assistance's [`RuleKey::BattleHelpTarget`](crate::RuleKey::BattleHelpTarget)
-    /// and [`RuleKey::BraveTraderBattleHelp`](crate::RuleKey::BraveTraderBattleHelp),
+    /// Assistance's [`RuleKey::BattleHelpTarget`](crate::RuleKey::BattleHelpTarget),
+    /// [`RuleKey::BraveTraderBattleHelp`](crate::RuleKey::BraveTraderBattleHelp)
+    /// and [`RuleKey::BattleHelpGoneSlots`](crate::RuleKey::BattleHelpGoneSlots),
     /// and Use As Escort's [`RuleKey::PersonJoin`](crate::RuleKey::PersonJoin)
     /// entries. Release is for the player's escorts and Use As Escort for
     /// the rest, so the two are never listed together.
@@ -657,6 +720,7 @@ pub(crate) mod fixture {
             player_threatened: false,
             threatened_by_enemy: false,
             npcs: &[],
+            vacated: &[],
             need: None,
             quote: None,
             joins: false,
@@ -680,6 +744,15 @@ mod tests {
     use crate::traffic::npc::{AiType, NpcId};
     use nova_sim_catalog::fixture::govt;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn a_kept_wage_shows_as_itself_singular_only_at_one() {
+        let shown = |credits, unit| ShownWage { credits, unit };
+        assert_eq!(ShownWage::kept(1), shown(1, CreditUnit::Credit));
+        assert_eq!(ShownWage::kept(0), shown(0, CreditUnit::Credits));
+        assert_eq!(ShownWage::kept(2), shown(2, CreditUnit::Credits));
+        assert_eq!(ShownWage::kept(175), shown(175, CreditUnit::Credits));
+    }
 
     #[test]
     fn a_comm_note_shows_for_240_ticks_whatever_the_help() {
@@ -1538,6 +1611,7 @@ mod tests {
                 list: reply::GREETINGS.0,
                 index: reply::GREETINGS.1,
                 greet_if_blank: false,
+                patch: None,
                 long_advice,
             })
         };

@@ -1,5 +1,5 @@
 //! The flight screen: the player's ship flying from its starting system,
-//! over the parallax starfield and among the system's stellars, with the
+//! over the original's starfield and among the system's stellars, with the
 //! camera following the ship, and jumping through hyperspace along the
 //! course plotted on the galaxy map.
 //!
@@ -70,10 +70,13 @@
 //! (`_SetupWind` @0x1b720, `_InitSprites`, `_SetupSpriteWorld` @0x21b54),
 //! so each place here takes the view's size:
 //!
-//! - the camera keeps the ship at the view's centre
-//!   ([`FlightView::camera`]; the original's `_screenCenter` is the play
-//!   area's, filed as
-//!   rdm:phase/display-modes-fidelity/phase-1-ship-at-play-area-centre);
+//! - the camera keeps the ship at the play area's centre, the original's
+//!   `_screenCenter`, (415, 384) at 1024 x 768, or by
+//!   [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor)'s other
+//!   reading at the view's centre ([`FlightView::camera`],
+//!   [`Anchor`](crate::system::camera::Anchor)); the play area, the
+//!   brackets, clicks in space and the starfield (see the `stars` module)
+//!   are placed from the same anchor;
 //! - the status bar against the right edge
 //!   ([`bar_origin`](super::hud::bar_origin)), the message box across the
 //!   bottom ([`message_box`](super::hud::message_box)), the Red Alert
@@ -85,8 +88,10 @@
 //!   width less [`STATUS_BAR_WIDTH`], for cloaks, scanners, observed
 //!   goals, brackets and the asteroid field; a click in space, which the
 //!   bar's [`STATUS_BAR_WIDTH`] at the right edge doesn't take; the
-//!   starfield, which covers the whole view; and the fades, which cover
-//!   it.
+//!   original's stars, scattered and wrapped over the play area, or by
+//!   [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield)'s
+//!   other reading the stand-in's dots, which cover the whole view; and
+//!   the fades, which cover it.
 //!
 //! The course map, the bar's and the mission dialogs' included, is drawn
 //! in its 1024 x 768 frame, centred over a widened flight and taking the
@@ -98,13 +103,19 @@
 //! explosions, debris and sounds, rolled on their own [`SharedChance`]
 //! ([`FlightView::with_effects_chance`]), never on the simulation's. The
 //! beams live before the fight's step are passed along, so a looped
-//! weapon is heard once a beam. The fight is drawn over the stellars:
-//! the asteroid field ([`asteroids`](super::asteroids), smoothed as the cargo boxes are),
-//! the cargo boxes a jettison left ([`boxes`](super::boxes), smoothed as the shots
-//! are), beams that go under the ships, then the ships, then the shots
-//! (each smoothed as the ships are) and the other beams, then the
-//! explosions and debris, then the brackets round the target
-//! ([`weapons`](super::weapons), [`effects`](super::effects), [`target`](super::target)). The HUD shows
+//! weapon is heard once a beam. The fight is drawn in the sprite world's
+//! layers, as `_SetupSpriteWorld` orders them
+//! ([`nova_sim::sprite_layer::WORLD_PASSES`], `world.rs`): over the
+//! stellars, the beams that go under the ships, the asteroid field
+//! ([`asteroids`](super::asteroids), smoothed as the cargo boxes are), the
+//! disabled ships, the cargo boxes a jettison left ([`boxes`](super::boxes),
+//! smoothed as the shots are) and the escape pods, the smoke, the shots and
+//! the ships in their layers (each smoothed as the ships are), the
+//! explosions, the target layer (the brackets round the target, the cursor
+//! and the red-alert and double-time icons), the other beams, the
+//! floaters (the message line's text, the floating map and the escort
+//! menu) and last the particles ([`weapons`](super::weapons),
+//! [`effects`](super::effects), [`target`](super::target)). The HUD shows
 //! the target panel and the secondary weapon's line, its text laid out
 //! by the screen's [`TextMetrics`] ([`FlightView::with_metrics`]).
 //! Landing and arriving clear the effects.
@@ -310,15 +321,21 @@
 //!   ([`FlightView::open_dialog_map`]): marked with the green mission
 //!   system and the arrow flag the dialog gives it, opening and closing
 //!   in silence, its close followed by the dialog's own restore of the
-//!   nav (see [`MapOpener`]'s module).
+//!   nav (see [`MapOpener`]'s module). So does the spaceport, a shop,
+//!   the shipyard or the hire screen, and the ship description
+//!   ([`FlightView::open_port_screen_map`]), silently and unmarked (see
+//!   [`PortScreen`]'s module).
 //! - The HUD's nav area shows the session's nav mode and its selection
 //!   ([`Session::nav_mode`]): the nav system off, a stellar, or a system
 //!   (see [`hud`](super::hud)). As in the original
 //!   (`_HandlePlayer` @0x68390; see [`navigation`](nova_sim::navigation)),
-//!   1-4 and F1-F4 ([`STELLAR_SLOT_KEYS`], presses) select the stellar in
+//!   1-4 and F1-F4 ([`STELLAR_SLOT_KEYS`]) select the stellar in
 //!   that slot of the system's nav defaults, 1-4 only while the escort
-//!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) the nearest stellar,
-//!   as L does with none. A left click in space
+//!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) and, with the menu shut,
+//!   Command-5 ([`NEAREST_STELLAR_COMMAND_KEY`]) the nearest stellar, as L
+//!   does with none. They share one latch and are polled once a frame, as
+//!   the original's block is (the `slot_block` module): one pick a frame, by
+//!   the block's order, and none while another of them is held. A left click in space
 //!   ([`Session::click_in_space`]) picks a ship first: one under it
 //!   becomes the target, a click on the player's own ship lets go of the
 //!   target, and only a click that leaves the target as it was selects
@@ -572,7 +589,7 @@
 //! The message line is drawn as `_DisplayComm` (@0x90201) draws it: one
 //! slot, a new message replacing the old and its time, in the rect
 //! `_InitSprites` sets up ([`hud::message_box`](super::hud::message_box)), wrapped, in the system
-//! font at 12 pt in white ([`hud::draw_message`](super::hud::draw_message)). It is drawn over the
+//! font at 12 pt in white ([`hud::draw_message_text`](super::hud::draw_message_text)). It is drawn over the
 //! starfield and under everything else, as the original draws it on the
 //! sprite world's background. Each message stays for as many ticks of
 //! flight as its original caller asks ([`MESSAGE_TICKS`] and the
@@ -613,7 +630,6 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::cloak::{CloakShown, TRANSLUCENCY_STEPS};
 use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::gate_entry::enter_level;
@@ -637,12 +653,13 @@ use super::floating::FloatingMap;
 use super::hud::{NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::JumpEffect;
 use super::radar::{RadarScene, RadarShip};
+use super::stars::Starfield;
 use super::target::TargetPanel;
 use super::weapon_glow::WeaponGlows;
 use crate::fade::ScreenFade;
 use crate::galaxy::GalaxyMap;
 use crate::galaxy::map::MapPicture;
-use crate::system::camera::Camera;
+use crate::system::camera::{Anchor, Camera};
 use crate::system::catalog::SystemCatalog;
 use crate::system::kept_frames::KeptFrames;
 use crate::system::scene::{PLACEHOLDER_SIZE, StellarLook, SystemScene};
@@ -656,15 +673,20 @@ mod dialog_map;
 mod docked;
 mod interface;
 mod messages;
+mod port_screen_map;
 mod readouts;
 mod screen;
 mod shots;
+mod slot_block;
 mod sprites;
+mod stars;
 mod travel;
+mod world;
 
 pub use dialog_map::MapOpener;
 pub(crate) use dialog_map::is_map_press;
 pub use messages::*;
+pub use port_screen_map::PortScreen;
 
 /// The developer overlays: the system's title and the help line.
 const TITLE: Point = Point::new(16.0, 32.0);
@@ -675,28 +697,41 @@ const OVERLAY_SIZE: f32 = 14.0;
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
 pub const HELP: &str = "Arrows: fly   A: face target   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave";
-/// The port's own overlays on the flight screen, which the original does
-/// not draw: developer settings, both off by default.
+/// The developer settings flight carries: two overlays the original does
+/// not draw, and cheat mode. All are off by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FlightOverlays {
     /// The system's name and `sÿst` ID at the top left.
     pub title: bool,
     /// The [`HELP`] line of keys at the bottom.
     pub help: bool,
+    /// The original's cheat mode (`_cheatsActive`, which nothing in 1.1
+    /// turns on): the player info shows its IDs
+    /// ([`PlayerInfo::cheats`](nova_sim::player_info::PlayerInfo::cheats)).
+    pub cheats: bool,
 }
 
 /// The keys flight holds: the original's defaults, Alt, which turns the
 /// weapon select key back, Shift, which turns the target select key back,
+/// the weapon select key, whose hold fades the cursor, the weapon safety
+/// key, which lets go of the secondary on every pass it is held,
 /// Command, which the jettison, eject and self-destruct keys need, the
 /// eject key and the self-destruct key, which work only held with Command,
-/// the land key, which holds the dock
+/// the cloak key, which toggles once a hold, the land key, which holds the dock
 /// approach back while it is down, H and `\`, which show the floating map
-/// while they are down, and \` and J. H, `\`, \` and J act again when
-/// held across a jump's end, a release of Option or a repair, as the
-/// original polls them with a latch each ([`FlightView::held_keys_frame`]);
-/// the original's `_quickKeyCheckResult` counts \` and J as held too
-/// (@0x69aa1, @0x6b0e6), which the floating map's zoom keys read.
-const FLIGHT_KEYS: [Key; 18] = [
+/// while they are down, \` and J, and B, which `_HandlePlayer` polls every
+/// frame, setting the cursor's fade while it is down (@0x6a98b-0x6a999).
+/// H, `\`, \` and J act again when held across a jump's end, a release
+/// of Option or a repair, and B once a target is taken or the cloak drops,
+/// as the original polls them with a latch each
+/// ([`FlightView::held_keys_frame`]); the original's
+/// `_quickKeyCheckResult` counts \`, J and B as held too (@0x69aa1,
+/// @0x6b0e6, @0x6a98b), which the floating map's zoom keys read. The
+/// stellar slot keys 1-4, F1-F4, F5 and the 5 are held for their block's
+/// latch and frame (see the `slot_block` module); they fade the cursor and
+/// hold the zoom back only while `_HandlePlayer` polls them
+/// ([`FlightView::slot_key_polled`]).
+const FLIGHT_KEYS: [Key; 32] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -705,16 +740,30 @@ const FLIGHT_KEYS: [Key; 18] = [
     AFTERBURNER_KEY,
     FIRE_KEY,
     SECONDARY_KEY,
+    SELECT_KEY,
+    DESELECT_KEY,
     Key::Alt,
     Key::Shift,
     Key::Command,
     LAND_KEY,
     EJECT_KEY,
     SELF_DESTRUCT_KEY,
+    CLOAK_KEY,
     HYPERSPACE_MODE_KEY,
     HYPER_SELECT_KEY,
     NAV_OFF_KEY,
     JUMP_KEY,
+    BOARD_KEY,
+    STELLAR_SLOT_KEYS[0][0],
+    STELLAR_SLOT_KEYS[1][0],
+    STELLAR_SLOT_KEYS[2][0],
+    STELLAR_SLOT_KEYS[3][0],
+    NEAREST_STELLAR_COMMAND_KEY,
+    STELLAR_SLOT_KEYS[0][1],
+    STELLAR_SLOT_KEYS[1][1],
+    STELLAR_SLOT_KEYS[2][1],
+    STELLAR_SLOT_KEYS[3][1],
+    NEAREST_STELLAR_KEY,
 ];
 
 /// The face-target key: the original's default A for its `autopilot`
@@ -735,8 +784,18 @@ pub const FIRE_KEY: Key = Key::Space;
 /// The secondary fire key: the original's default (`fireKey1`).
 pub const SECONDARY_KEY: Key = Key::Control;
 /// The secondary weapon select key: the original's default
-/// (`weapSelect`); with Alt (Option) it selects the one before.
+/// (`weapSelect`); with Alt (Option) it selects the one before, in `wëap`
+/// ID order, on the next pass (see `nova_sim::session`'s
+/// `secondary_select`). Held, it fades the cursor, as `_HandlePlayer` sets
+/// *0x3b5550 on every pass it is down (@0x6ac2a).
 pub const SELECT_KEY: Key = Key::Char('w');
+/// The weapon safety key: the original's default for key-preference slot
+/// 0x2 (`weapSafe`, Keys.nib's "Weapon Safety:"), keycode 0x01, S, which
+/// `_loadKeys` falls back to when the defaults hold none
+/// (@0xcdde9-0xcde0c). Held, it lets go of the secondary selected, on
+/// every pass with one selected (`_HandlePlayer` @0x6adc2-0x6ae1b; see
+/// [`Session::hold_weapon_safety`](nova_sim::Session::hold_weapon_safety)).
+pub const DESELECT_KEY: Key = Key::Char('s');
 /// The target select key: the original's default (`targSel`), which
 /// picks the next ship in turn.
 pub const TARGET_KEY: Key = Key::Tab;
@@ -779,6 +838,11 @@ pub const EJECT_KEY: Key = Key::Char('x');
 /// (@0x70fa7-0x70fb5). The keypad's `-` (0x4e) arrives as the same key,
 /// a platform difference accepted as [`ZOOM_OUT_KEY`]'s is.
 pub const SELF_DESTRUCT_KEY: Key = Key::Char('-');
+/// The cloak key: the original's default for key-preference slot 0x52
+/// (`cloakKey`), keycode 0x20, U (`_loadKeys` @0xce461-0xce4d4). Held,
+/// it cloaks or uncloaks once a hold, with no Command
+/// (`_HandlePlayer` @0x705b7; see the session's `player_cloak`).
+pub const CLOAK_KEY: Key = Key::Char('u');
 /// The escorts' attack key: the original's default (`Keys.nib`'s
 /// `escortCmdKey0`, "Attack Target").
 pub const ESCORT_ATTACK_KEY: Key = Key::Char('f');
@@ -796,8 +860,12 @@ pub const MENU_CLOSE_KEY: Key = Key::Enter;
 /// the system's navigation defaults, from the first. The original reads
 /// keys 1-4 (Mac keycodes 0x12-0x15) and F1-F4 (`_loadKeys` @0xce6c8
 /// hard-codes 0x7a, 0x78, 0x63, 0x76 at +0x34..+0x3a) in `_HandlePlayer`
-/// @0x69cf6-0x69f17. While the escort menu is open, 1-4 pick its groups
-/// instead ([`GROUP_KEYS`](super::escorts::GROUP_KEYS)); F1-F4 always pick a stellar.
+/// @0x69d2b-0x69f17, with F5 and Command-5, as one block with one latch
+/// (the `slot_block` module). While the escort menu shows,
+/// `_QuickKeyCheck` hides 1-4 from the block (@0xa106-0xa124) and they
+/// pick its groups instead
+/// ([`GROUP_KEYS`](super::escorts::GROUP_KEYS)); F1-F4 always pick a
+/// stellar.
 pub const STELLAR_SLOT_KEYS: [[Key; 2]; 4] = [
     [Key::Char('1'), Key::Function(1)],
     [Key::Char('2'), Key::Function(2)],
@@ -806,9 +874,17 @@ pub const STELLAR_SLOT_KEYS: [[Key; 2]; 4] = [
 ];
 /// The nearest stellar key: F5 (Mac keycode 0x60), which the original
 /// reads beside the slot keys (@0x69cf6-0x69f17) and which selects the
-/// stellar its land key would with nothing selected. Its Cmd-5 twin has
-/// no key here.
+/// stellar its land key would with nothing selected. Command-5
+/// ([`NEAREST_STELLAR_COMMAND_KEY`]) is its twin.
 pub const NEAREST_STELLAR_KEY: Key = Key::Function(5);
+/// The other nearest stellar key: the top-row 5 (Mac keycode 0x17), held
+/// together with Command (0x37), which `_HandlePlayer` polls only while F5
+/// is up (@0x69dbc-0x69dda) and picks with as F5 does. Both are
+/// hard-coded, not key preferences. While the escort menu shows,
+/// `_QuickKeyCheck` hides the 5 from this block (@0xa106-0xa124), so
+/// Command-5 then picks the menu's Freighters instead
+/// ([`GROUP_KEYS`](super::escorts::GROUP_KEYS)); 5 alone picks nothing.
+pub const NEAREST_STELLAR_COMMAND_KEY: Key = Key::Char('5');
 /// The Nav Off key, which turns the nav system off, the course kept: the
 /// original's default, backquote (`_loadKeys` @0xcd5f8 `navOff` 0x32,
 /// handled in `_HandlePlayer` @0x69a94-0x69b63). With Option held it
@@ -1040,10 +1116,17 @@ pub struct FlightView<C> {
     /// acts, cleared on a frame it is up, and left as it is during a jump
     /// ([`FlightView::select_frame`]).
     select_latch: bool,
+    /// The stellar slot keys' block: its latch (0xdede0) and the presses
+    /// its next frame takes ([`FlightView::slot_keys_frame`]).
+    slot_block: slot_block::SlotBlock,
     /// The jump key's latch (0xdee44): set on every frame J runs its
     /// block, a jump's included; cleared on a frame J is up, or down while
     /// the player is not intact ([`FlightView::jump_frame`]).
     jump_latch: bool,
+    /// The Board key's latch (0xdee18): set by a board attempt past its
+    /// no-target and cloak returns, cleared on a frame B is up
+    /// ([`FlightView::board_frame`]).
+    board_latch: bool,
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
     /// The message line's one slot (`_DisplayComm`'s 0x3b565c): a new
@@ -1062,6 +1145,9 @@ pub struct FlightView<C> {
     pending_boarding: bool,
     /// The hail just answered, for the router.
     pending_hail: Option<HailView>,
+    /// The escort dialog a fleet escort hailed just opened, for the
+    /// router.
+    pending_escort_dialog: Option<nova_sim::escort_dialog::EscortDialogView>,
     /// The mission info [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asked the screen be opened
     /// on, for the router.
     pending_mission_info: Option<MissionInfo>,
@@ -1120,6 +1206,9 @@ pub struct FlightView<C> {
     /// Whether shots leave their particle trails and smoke, as the Smoke
     /// Trails preference says.
     smoke_trails: bool,
+    /// Whether each scattering gives the stars their own parallax
+    /// factors, as the Parallax Starfield preference says.
+    parallax_starfield: bool,
     /// Whether ships show their weapon glow, as the Weapon Effects
     /// preference says.
     weapon_effects: bool,
@@ -1165,6 +1254,13 @@ pub struct FlightView<C> {
     effects: Effects,
     /// What the effects are rolled on.
     effects_chance: SharedChance,
+    /// The original's starfield (see the `stars` module), rolled on the
+    /// effects' chance.
+    stars: Starfield,
+    /// Whether the stars are to be scattered at the next catch-up: once
+    /// the flight is built, play entered or a game begun, when its chance
+    /// and view are set.
+    stars_due: bool,
     /// Each ship's shield flash while its timer runs.
     flashes: BTreeMap<ShipRef, ShieldFlash>,
     /// Each ship's alt layer as last drawn, which a disabled 0x0020 ship
@@ -1322,6 +1418,8 @@ struct Redrawn {
     /// over: the stellars were drawn again, each changed one at its
     /// current frame, and read again when they are others.
     rebuilt: bool,
+    /// The stars were scattered afresh.
+    stars: bool,
 }
 
 /// How `session` holds stellar `id`: destroyed as its galaxy holds it,
@@ -1651,25 +1749,6 @@ fn dying(
     me.into_iter().chain(npcs).collect()
 }
 
-/// The alpha a ship's sprite is drawn with for how its cloak shows it
-/// ([`Session::cloak_shown`]), or `None` when it is not drawn: full when
-/// opaque, and a translucency of n 64ths leaving (64 - n) 64ths of full
-/// alpha, rounded to nearest. A ship waiting at the gate it comes out of
-/// is hidden, then faded in, by its tint ([`npc_tint`]), as
-/// `_HandleShipDisplay` (@0x2c090-0x2c18e) fades it. The radar still shows
-/// a cloaked ship, as `_DrawStatusRadar` does not ask.
-fn cloak_alpha(shown: CloakShown) -> Option<u8> {
-    match shown {
-        CloakShown::Opaque => Some(u8::MAX),
-        CloakShown::Translucent(level) => {
-            let steps = u16::from(TRANSLUCENCY_STEPS);
-            let left = steps - u16::from(level.min(TRANSLUCENCY_STEPS));
-            u8::try_from((left * 255 + steps / 2) / steps).ok()
-        }
-        CloakShown::Hidden => None,
-    }
-}
-
 /// Each of `shown` the radar shows, where it is drawn, whether it is the
 /// player's target, its IFF code and whether it is heavy: those
 /// [`Session::on_radar`] says, a cloaked ship only when its cloak shows
@@ -1695,11 +1774,11 @@ const HEAVY_MASS: f32 = 99.0;
 /// The play area about the ship, in world units, in a view `view` in size:
 /// the view left of the status bar, x from 0 to width − 194 as
 /// `_SetupSpriteWorld` makes the sprite world (@0x21b54-0x21ba4), the ship
-/// drawn at the camera's anchor. The session reads it to tell whether a
-/// ship is on screen, for cloaks, scanners and observed goals, the
-/// brackets and the asteroid field.
-fn play_area(view: (f32, f32)) -> nova_sim::cloak::Area {
-    let camera = Camera::centred_on_in(Point::default(), view);
+/// drawn at `anchor`, as the flight's camera draws it. The session reads it
+/// to tell whether a ship is on screen, for cloaks, scanners and observed
+/// goals, the brackets and the asteroid field.
+fn play_area(view: (f32, f32), anchor: Anchor) -> nova_sim::cloak::Area {
+    let camera = Camera::centred_on_in(Point::default(), view).with_anchor(anchor);
     let top_left = camera.screen_to_world(Point::default());
     let bottom_right = camera.screen_to_world(Point::new(view.0 - STATUS_BAR_WIDTH, view.1));
     nova_sim::cloak::Area {
@@ -1708,6 +1787,17 @@ fn play_area(view: (f32, f32)) -> nova_sim::cloak::Area {
         right: bottom_right.x,
         bottom: bottom_right.y,
     }
+}
+
+/// The game window's width, in a view `view` in size, whole, that each
+/// system's `Asteroids` is stored by
+/// (`nova_sim::asteroid::FieldSpec::stored`): the view's whole width, the
+/// original's window drawing flight one pixel to a logical unit. Our
+/// window can be resized in play, where the original's can't; the session
+/// reads the width it is told last (see `nova_sim::Session::set_window_width`).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // a view's width, positive and far below u32::MAX
+fn window_width(view: (f32, f32)) -> u32 {
+    view.0 as u32
 }
 
 /// The run of an outfitter order a session that failed gives: no

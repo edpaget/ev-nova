@@ -1,7 +1,7 @@
 //! [`AppScreen`]'s input routing: the spaceport's input, the `serve_*`
 //! methods and the router itself.
 
-use nova_sim::VenueOffer;
+use nova_sim::{RuleKey, RuleSource, VenueOffer};
 use nova_view::flight::FlightView;
 use nova_view::spaceport::offer::OfferChoice;
 use nova_view::{Input, Key, MenuCommand, MouseButton, Point, Screen, ScreenAction, Showing};
@@ -133,12 +133,10 @@ impl AppScreen {
                 spaceport.show_mission_texts(flight.take_mission_texts());
                 spaceport.set_mission_computer(flight.open_mission_computer());
             }
-            // A refused refill says why in the spaceport.
+            // The refill says nothing, as `_DoPortDialog` says nothing;
+            // Recharge's button follows below.
             if recharge {
-                match flight.recharge() {
-                    Ok(_) => spaceport.recharged(),
-                    Err(refusal) => spaceport.refuse_recharge(refusal),
-                }
+                let _ = flight.recharge();
             }
             // Each changes the cash; an outfit the cargo space and the
             // trade-in; and a ship the cargo space, the free mass and the
@@ -157,6 +155,9 @@ impl AppScreen {
         self.serve_player_info();
         if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
             refresh_status_bar(spaceport, flight);
+            // After every input, before the next frame is drawn, so the
+            // button lags no frame behind the cash and the tank.
+            spaceport.set_recharge_enabled(flight.recharge_enabled());
         }
         ScreenAction::None
     }
@@ -164,9 +165,11 @@ impl AppScreen {
     /// The texts the spaceport's mission computer and mission info screen
     /// have shown selected, loaded through flight as the original loads a
     /// selected row's (`_MissionFilter` @0x9f9bd, `_MissionInfoFilter`
-    /// @0x9d89f) and shown while still selected. The screens themselves
-    /// open as they are asked for, earlier in the input
-    /// (`open_port_dialogs`).
+    /// @0x9d89f) and shown while still selected, the computer's offer name
+    /// cut by the screen and filled by flight's session. The screens
+    /// themselves open as they are asked for, earlier in the input
+    /// (`open_port_dialogs`, and the computer again after an accept), so
+    /// a selection's blank name is filled before the next frame.
     fn serve_mission_screens(&mut self) {
         let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
             return;
@@ -174,7 +177,7 @@ impl AppScreen {
         if let Some(mission) = spaceport.take_computer_text_request()
             && let Some(row) = flight.show_computer_row(mission)
         {
-            spaceport.show_computer_row(&row);
+            spaceport.show_computer_row(&row, &*flight);
         }
         load_info_text(spaceport, flight);
         if let Some(mission) = spaceport.take_offer_reload() {
@@ -384,12 +387,14 @@ impl AppScreen {
             (self.player_info.is_some(), Overlay::PlayerInfo),
             (self.haggle.is_some(), Overlay::Haggle),
             (self.comm.is_some(), Overlay::Comm),
+            (self.escort_dialog.is_some(), Overlay::EscortDialog),
             (self.flight_dialog_map_open(), Overlay::DialogMap),
             (self.missions.is_some(), Overlay::Missions),
             (self.offer.is_some(), Overlay::Offer),
             (self.plunder.is_some(), Overlay::Plunder),
             (self.assignment.is_some(), Overlay::Assignment),
             (self.new_pilot.is_some(), Overlay::NewPilot),
+            (self.christening.is_some(), Overlay::Christening),
             (self.open_pilot.is_some(), Overlay::OpenPilot),
             (self.load_note.is_some(), Overlay::LoadNote),
             (self.question.is_some(), Overlay::Question),
@@ -442,12 +447,14 @@ impl AppScreen {
             Overlay::PlayerInfo => self.player_info_input(moved),
             Overlay::Haggle => self.haggle_input(moved),
             Overlay::Comm => self.comm_input(moved),
+            Overlay::EscortDialog => self.escort_dialog_input(moved),
             Overlay::DialogMap => self.flight_dialog_map_input(input),
             Overlay::Missions => self.missions_input(moved),
             Overlay::Offer => self.offer_input(moved),
             Overlay::Plunder => self.plunder_input(moved),
             Overlay::Assignment => self.assignment_input(moved),
             Overlay::NewPilot => self.new_pilot_input(moved),
+            Overlay::Christening => self.christening_input(moved),
             Overlay::OpenPilot => self.open_pilot_input(moved),
             Overlay::LoadNote => self.load_note_input(moved),
             Overlay::Question => self.question_input(moved),
@@ -456,7 +463,17 @@ impl AppScreen {
 
     /// Routes one input, as [`Screen::input`] describes, first noting
     /// where a pointer input puts the pointer.
+    ///
+    /// A wheel or trackpad scroll reaches no screen by the engine's
+    /// reading of [`RuleKey::DialogTextWheel`], as the original takes no
+    /// wheel; by the other it goes where a pointer input goes, and only a
+    /// dialog's scrolling text acts on it.
     pub(super) fn route(&mut self, input: &Input) -> ScreenAction {
+        if matches!(input, Input::Scroll { .. })
+            && self.rules.source_for(RuleKey::DialogTextWheel) == RuleSource::Engine
+        {
+            return ScreenAction::None;
+        }
         self.note_pointer(input);
         self.note_keys(input);
         // Command-Q quits at once, silently, wherever it is pressed (the
@@ -555,7 +572,7 @@ impl AppScreen {
                 Some(Point::new(at.x - offset.x, at.y))
             }
             Input::PointerLeft => None,
-            Input::Key { .. } | Input::Text(_) => return,
+            Input::Key { .. } | Input::Text(_) | Input::Scroll { .. } => return,
         };
     }
 }
@@ -582,6 +599,7 @@ pub(super) enum Overlay {
     PlayerInfo,
     Haggle,
     Comm,
+    EscortDialog,
     /// A mission dialog's map over flight.
     DialogMap,
     Missions,
@@ -589,6 +607,7 @@ pub(super) enum Overlay {
     Plunder,
     Assignment,
     NewPilot,
+    Christening,
     OpenPilot,
     LoadNote,
     Question,

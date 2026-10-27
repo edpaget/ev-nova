@@ -187,11 +187,10 @@ pub struct FateRow {
 /// A command the flight view sends the session for one of the player's
 /// keys (or a click), named after its keymap slot in the original.
 ///
-/// Pause (slot 0x2e) and cloak (slot 0x52) have no variant: each joins
-/// when its key is built, by the work that owns it (rdm:task/cloaking-device
-/// for the cloak). The breaking-up row refuses pause (0x45ef0) and the
-/// cloak (0x705d6, silently). The eject (slot 0x22), the self-destruct
-/// (slot 0x24) and the player info (slot 0x32) have theirs.
+/// Pause (slot 0x2e) has no variant: it joins when its key is built. The
+/// breaking-up row refuses pause (0x45ef0) and the cloak (0x705d6,
+/// silently). The eject (slot 0x22), the self-destruct (slot 0x24), the
+/// player info (slot 0x32) and the cloak (slot 0x52) have theirs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerCommand {
     /// The galaxy map: `mapKey` (slot 0x12).
@@ -219,6 +218,13 @@ pub enum PlayerCommand {
     SelectSystem,
     /// Choosing a secondary weapon: `weapSelect` (slot 0x0).
     SelectWeapon,
+    /// Letting go of the secondary weapon: `weapSafe` (slot 0x2), Weapon
+    /// Safety, held. Flying, disabled and breaking-up players take it, as
+    /// `_HandlePlayer`'s secondary block reads no condition or jump state
+    /// (@0x6adc2-0x6ae1b); the dead branch and the pod's frames reach no
+    /// key handler, so the other rows refuse it
+    /// (`nova_sim::Session::hold_weapon_safety`).
+    DeselectWeapon,
     /// The escort menu, its acknowledgement and group keys, and the escort
     /// commands (slots 0x54, 0x60-0x66).
     Escort,
@@ -245,11 +251,18 @@ pub enum PlayerCommand {
     /// key handler, so the other rows refuse it
     /// (`nova_sim::Session::hold_self_destruct`).
     SelfDestruct,
+    /// The cloaking device: `cloakKey` (slot 0x52, read at 0x705b7),
+    /// held. Flying and disabled players take it, and the session refuses
+    /// it, in silence, while disabled or jumping (@0x705e0, @0x705e7).
+    /// The breaking-up row refuses it silently (@0x705d6 → 0x7066b), and
+    /// the dead branch and the pod's frames reach no key handler, so the
+    /// other rows refuse it too (`nova_sim::Session::hold_cloak`).
+    Cloak,
 }
 
 impl PlayerCommand {
     /// Every command, for tests that go over them all.
-    pub const ALL: [PlayerCommand; 15] = [
+    pub const ALL: [PlayerCommand; 17] = [
         Self::Map,
         Self::Land,
         Self::Jump,
@@ -261,10 +274,12 @@ impl PlayerCommand {
         Self::Nav,
         Self::SelectSystem,
         Self::SelectWeapon,
+        Self::DeselectWeapon,
         Self::Escort,
         Self::Eject,
         Self::PlayerInfo,
         Self::SelfDestruct,
+        Self::Cloak,
     ];
 }
 
@@ -354,6 +369,7 @@ impl PlayerFate {
                     PlayerCommand::Map,
                     PlayerCommand::Land,
                     PlayerCommand::MissionInfo,
+                    PlayerCommand::Cloak,
                 ]),
                 saves: false,
             },
@@ -561,10 +577,11 @@ mod tests {
         },
     ];
 
-    const REFUSED_WHILE_BREAKING_UP: [PlayerCommand; 3] = [
+    const REFUSED_WHILE_BREAKING_UP: [PlayerCommand; 4] = [
         PlayerCommand::Map,
         PlayerCommand::Land,
         PlayerCommand::MissionInfo,
+        PlayerCommand::Cloak,
     ];
 
     #[test]
@@ -577,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn breaking_up_players_refuse_the_map_landing_and_mission_info() {
+    fn breaking_up_players_refuse_the_map_landing_mission_info_and_cloak() {
         for fate in BREAKING_UP {
             for command in REFUSED_WHILE_BREAKING_UP {
                 assert!(!fate.row().input.takes(command), "{fate:?} {command:?}");
@@ -719,6 +736,49 @@ mod tests {
             );
         }
         assert!(PlayerCommand::ALL.contains(&PlayerCommand::SelfDestruct));
+    }
+
+    #[test]
+    fn only_flying_and_disabled_players_take_the_cloak_key() {
+        // The key's breakup-timer gate (@0x705d6) goes silently to
+        // 0x7066b; the dead branch and the pod's frames reach no key.
+        for fate in [PlayerFate::Flying, PlayerFate::Disabled] {
+            assert!(fate.row().input.takes(PlayerCommand::Cloak), "{fate:?}");
+        }
+        for fate in BREAKING_UP
+            .into_iter()
+            .chain([PlayerFate::Exploded, PlayerFate::Ejected { ticks_left: 9 }])
+            .chain(AFTER_THE_EXPLOSION)
+        {
+            assert!(!fate.row().input.takes(PlayerCommand::Cloak), "{fate:?}");
+        }
+        assert!(PlayerCommand::ALL.contains(&PlayerCommand::Cloak));
+    }
+
+    #[test]
+    fn only_flying_disabled_and_breaking_up_players_take_the_weapon_safety() {
+        // `_HandlePlayer`'s secondary block runs while disabled and while
+        // breaking up (@0x6adc2); the dead branch and the pod's frames
+        // return before it (@0x68853, @0x68ddd).
+        for fate in [PlayerFate::Flying, PlayerFate::Disabled]
+            .into_iter()
+            .chain(BREAKING_UP)
+        {
+            assert!(
+                fate.row().input.takes(PlayerCommand::DeselectWeapon),
+                "{fate:?}"
+            );
+        }
+        for fate in [PlayerFate::Exploded, PlayerFate::Ejected { ticks_left: 9 }]
+            .into_iter()
+            .chain(AFTER_THE_EXPLOSION)
+        {
+            assert!(
+                !fate.row().input.takes(PlayerCommand::DeselectWeapon),
+                "{fate:?}"
+            );
+        }
+        assert!(PlayerCommand::ALL.contains(&PlayerCommand::DeselectWeapon));
     }
 
     #[test]

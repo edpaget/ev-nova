@@ -11,6 +11,27 @@ const SECOND: Duration = DEATH_FADE_FOR;
 /// The intro text's `dësc`.
 const INTRO_TEXT: i16 = 600;
 
+#[test]
+fn entering_play_takes_the_refresh_a_later_new_pilot_reads_afresh() {
+    let store = MemoryPilots::new();
+    let mut screen = AppScreen::new(hiding_beta_data())
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
+    create_held(&mut screen, "Ada");
+    let held = screen.game.as_ref().expect("Ada's game held");
+    assert_eq!(
+        held.last_refresh(),
+        Some(nova_sim::LastRefresh::default()),
+        "before her OnStart hid Beta"
+    );
+    enter_ship(&mut screen);
+    assert_eq!(
+        flight(&screen).last_refresh(),
+        Some(nova_sim::LastRefresh::hiding([nova_sim::SystemId(129)])),
+        "_EnterGameFromMainScreen @0x19f81"
+    );
+}
+
 /// The alpha of the black covering the whole view, if the last thing
 /// `screen` draws is one.
 #[allow(clippy::float_cmp)] // The view's height, exactly as drawn.
@@ -200,6 +221,40 @@ fn flight_shows_once_the_fade_ends_under_a_black_that_clears_over_a_second_untic
 }
 
 #[test]
+fn the_handovers_warm_up_frame_reads_the_coming_traffics_sheet_and_card_before_any_step() {
+    let store = MemoryPilots::new();
+    let mut screen = with_dialogs(super::encounters::boarding_data())
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
+    create_held(&mut screen, "Ada");
+    let trader = nova_sim::ShipId(129);
+    let held = screen.game_in_progress().expect("held");
+    assert!(!held.has_read_traffic(trader), "not read on the menu");
+    choose(&mut screen, MenuChoice::EnterShip);
+    // Through the fade out and the intro, up to the handover.
+    for _ in 0..1000 {
+        match screen.showing() {
+            Showing::Flight => break,
+            Showing::Intro => tap(&mut screen, SKIP_KEY),
+            Showing::IntroText => tap(&mut screen, Key::Enter),
+            _ => {}
+        }
+        screen.tick(Duration::from_millis(100));
+    }
+    assert_eq!(screen.showing(), Showing::Flight, "handed over");
+    assert!(screen.entering(), "fading in, before any step");
+    let flight = flight(&screen);
+    assert!(
+        flight.session().expect("flying").npcs().is_empty(),
+        "no traffic yet"
+    );
+    assert!(
+        flight.has_read_traffic(trader),
+        "the trader's sheet and card, read under the black"
+    );
+}
+
+#[test]
 fn keys_held_as_play_starts_do_nothing_until_their_next_repeat() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
@@ -257,6 +312,7 @@ fn reentering_shuts_the_escort_menu_and_starts_the_cursor_hidden() {
         carried: false,
         wage: None,
         person: None,
+        mark: None,
     });
     pilot.seen_intro = true;
     store.put("Ada", &nova_sim::save::encode(&pilot));

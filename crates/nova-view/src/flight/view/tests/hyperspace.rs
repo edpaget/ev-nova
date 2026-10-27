@@ -720,8 +720,7 @@ fn a_jump_moves_off_fades_to_white_arrives_on_the_warp_end_and_fades_in() {
     assert_eq!(view.jump_effect(), None);
     let list = drawn(&view);
     assert_eq!(fade(&list), None);
-    let mut stars = DrawList::new();
-    starfield::draw(&mut stars, &view.camera());
+    let stars = drawn_stars(&view);
     assert!(list.iter().take(stars.len()).eq(stars.iter()));
     let flying = player(&view);
     view.input(&key(Key::Up, true));
@@ -983,7 +982,7 @@ fn a_multi_jump_plays_one_effect_and_loads_only_the_final_system() {
     assert!(texts(&drawn(&view)).contains(&"Barnard (sÿst 132)".to_owned()));
     assert_eq!(
         view.message(),
-        Some("Jumping into the Barnard system on June 24, 1177 NC. No stellar objects present."),
+        Some("Jumping into the Barnard system on June 24th, 1177 NC. No stellar objects present."),
         "names the final system"
     );
     assert!(view.jump_effect().is_some(), "fading in");
@@ -1214,16 +1213,20 @@ fn option_backquote_clears_the_target_through_a_jump_and_nav_off_is_ignored() {
 }
 
 #[test]
-fn weapon_select_is_taken_through_a_jump() {
+fn weapon_select_and_safety_are_taken_through_a_jump() {
     for mut view in through_a_jump(|| fighting(armed(0, &[BLASTER, ROCKET, MISSILE]), &[])) {
         let stage = stage(&view);
         assert_eq!(secondary_of(&view), None, "{stage}");
-        tap(&mut view, SELECT_KEY);
+        tap_and_step(&mut view, SELECT_KEY);
         assert_eq!(secondary_of(&view), Some(ROCKET), "{stage}");
-        tap(&mut view, SELECT_KEY);
+        tap_and_step(&mut view, SELECT_KEY);
         assert_eq!(secondary_of(&view), Some(MISSILE), "{stage}");
         alt_tap(&mut view, SELECT_KEY);
+        ticks(&mut view, 1);
         assert_eq!(secondary_of(&view), Some(ROCKET), "{stage}: Option-W");
+        view.input(&key(DESELECT_KEY, true));
+        ticks(&mut view, 1);
+        assert_eq!(secondary_of(&view), None, "{stage}: Weapon Safety");
     }
 }
 
@@ -1353,6 +1356,15 @@ fn nav_and_screen_keys_are_ignored_through_a_jump() {
         ] {
             tap(&mut view, k);
         }
+        command_tap(&mut view, NEAREST_STELLAR_COMMAND_KEY, false);
+        // The slot block's frame, still in the jump, takes nothing.
+        view.tick(TICK);
+        assert!(view.jump_under_way(), "{stage}: still jumping");
+        assert_eq!(nav_target(&view), None, "{stage}: no slot pick");
+        command_tap(&mut view, NEAREST_STELLAR_COMMAND_KEY, false);
+        view.tick(TICK);
+        assert!(view.jump_under_way(), "{stage}: still jumping");
+        assert_eq!(nav_target(&view), None, "{stage}: Command-5 picks nothing");
         let earth = on_screen(&view, (0.0, -600.0));
         click(&mut view, earth);
         assert!(!view.map_open(), "{stage}");
@@ -1366,6 +1378,39 @@ fn nav_and_screen_keys_are_ignored_through_a_jump() {
         assert_eq!(view.preparing_jump(), braking, "{stage}");
         assert_eq!(view.jump_effect().is_some(), !braking, "{stage}");
     }
+}
+
+#[test]
+fn a_slot_key_pressed_in_a_jump_and_held_selects_after_it() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    jump_now(&mut view);
+    view.tick(ms(300));
+    view.input(&key(STELLAR_SLOT_KEYS[0][0], true));
+    tick_to_arrival(&mut view);
+    assert_eq!(nav_target(&view), None, "the arrival frame is the jump's");
+    view.tick(TICK);
+    assert_eq!(
+        nav_target(&view),
+        Some(StellarId(140)),
+        "the first after it"
+    );
+}
+
+#[test]
+fn a_slot_key_held_from_before_a_jump_does_nothing_after_it() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    view.input(&key(STELLAR_SLOT_KEYS[0][0], true));
+    view.tick(TICK);
+    assert!(nav_target(&view).is_some(), "selected before the jump");
+    plot(&mut view, 131);
+    jump_now(&mut view);
+    tick_to_arrival(&mut view);
+    ticks(&mut view, 3);
+    assert_eq!(nav_target(&view), None, "latched through it");
 }
 
 #[test]
@@ -1509,7 +1554,7 @@ fn arriving_shows_the_jump_message_on_the_message_line() {
         }
         view.tick(TICK);
     }
-    let date = view.session().expect("flying").date_text();
+    let date = view.session().expect("flying").long_date_text();
     let name = view.scene().expect("arrived").name().to_owned();
     let text = arrival_message(&name, &date, true);
     assert!(text.contains("Alpha Centauri"), "{text}");
@@ -1684,11 +1729,11 @@ fn hyper_select_with_the_map_open_changes_nothing() {
 fn the_gate_messages_read_as_the_original() {
     assert_eq!(
         arrival_message_with(EXITING_HYPERGATE, "Alpha Centauri", DATE, true),
-        "Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC."
+        "Exiting hypergate in the Alpha Centauri system on June 23rd, 1177 NC."
     );
     assert_eq!(
         arrival_message_with(PASSING_WORMHOLE, "Barnard", DATE, false),
-        "Passing through a wormhole into the Barnard system on June 23, 1177 NC. \
+        "Passing through a wormhole into the Barnard system on June 23rd, 1177 NC. \
          No stellar objects present."
     );
     assert_eq!(
@@ -1819,13 +1864,13 @@ fn an_offline_gate_is_refused_in_its_own_words() {
             flags2,
             ..site(300, (0.0, 0.0), StellarFlags::STATION)
         }]);
-        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
         tap(&mut view, LAND);
         let refusal = gate_refusal_message(kind);
         assert_lasts(&mut view, &refusal, 250);
     }
     let mut planet = flight_among(vec![site(128, (0.0, 0.0), 0)]);
-    tap(&mut planet, STELLAR_SLOT_KEYS[0][0]);
+    tap_slot(&mut planet, STELLAR_SLOT_KEYS[0][0]);
     tap(&mut planet, LAND);
     let line = "Your ship is unable to land on  Earth. The planet's environment is too hostile.";
     assert_lasts(&mut planet, line, 250);
@@ -1898,7 +1943,7 @@ fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate() {
     assert_eq!(view.scene().map(SystemScene::name), Some("Alpha Centauri"));
     assert_eq!(
         view.message(),
-        Some("Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC.")
+        Some("Exiting hypergate in the Alpha Centauri system on June 23rd, 1177 NC.")
     );
     assert_eq!(
         view.jump_effect().map(JumpEffect::phase),

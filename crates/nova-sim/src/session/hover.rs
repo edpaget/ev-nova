@@ -81,10 +81,13 @@ impl Session {
     /// (`Space::click_rect`) is grown by 16 a side when no wider than 47,
     /// and its right and bottom edges miss (@0x6a649-0x6a686); a slot
     /// frozen on a stale frame is clicked by that frame from the centre
-    /// less 16, and a slot showing no frame by no rect. The spöb +0x44
-    /// skip (@0x6a632) matches `sites`, the stellars shown, as HSSV sets
-    /// +0x44 for exactly those (@0x32c42, @0x32cdf). `_statusRedraw` := 1
+    /// less 16, and a slot showing no frame by no rect. `_statusRedraw` := 1
     /// (@0x6a6e4) needs no model: the status panel is drawn every frame.
+    ///
+    /// The walk skips a hidden stellar (spob +0x44, @0x6a632) by walking
+    /// the chart's sites, which hold only the active stellars, as
+    /// `_HandleStellarSystemVisibility` clears and sets +0x44 (@0x32c42,
+    /// @0x32cdf) and hands out slots only to active ones (@0x32ee4).
     ///
     /// Left out: the floating map's clicks (@0x6a130-0x6a342,
     /// @0x6a719-0x6a762, hud-fidelity phase 24, as the engine draws no

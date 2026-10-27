@@ -144,6 +144,7 @@ fn the_unstarted_flight_shows_help_only_when_turned_on() {
     let view = FlightView::new(failed).with_overlays(FlightOverlays {
         title: false,
         help: true,
+        cheats: false,
     });
     let list = drawn(&view);
     let help = overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM);
@@ -498,7 +499,8 @@ fn the_title_and_help_are_not_drawn_by_default() {
         FlightOverlays::default(),
         FlightOverlays {
             title: false,
-            help: false
+            help: false,
+            cheats: false,
         }
     );
     assert_eq!(flight().overlays(), FlightOverlays::default());
@@ -522,6 +524,7 @@ fn the_title_draws_when_turned_on() {
     let titled = FlightOverlays {
         title: true,
         help: false,
+        cheats: false,
     };
     let list = drawn(&flight().with_overlays(titled));
     let before = before_the_hud(&list);
@@ -538,6 +541,7 @@ fn the_help_line_draws_when_turned_on() {
     let helped = FlightOverlays {
         title: false,
         help: true,
+        cheats: false,
     };
     let list = drawn(&flight().with_overlays(helped));
     let before = before_the_hud(&list);
@@ -561,14 +565,17 @@ fn the_help_line_draws_when_turned_on() {
 
 #[test]
 fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
-    let view = flight();
+    let mut view = FlightView::new(starry());
+    view.tick(Duration::ZERO);
     let list = drawn(&view);
     let mut expected = DrawList::new();
     // The stars, the stellars and the ship are the world, the HUD over it.
     expected.world(|expected| {
-        starfield::draw(expected, &view.camera());
+        for star in drawn_stars(&view) {
+            expected.push(star);
+        }
         scene::draw_stellars(expected, view.scene().expect("a scene"), &view.camera());
-        expected.sprite(ImageKey::sprite(2000, 0), VIEW_CENTER, Color::WHITE);
+        expected.sprite(ImageKey::sprite(2000, 0), PLAYER_AT, Color::WHITE);
     });
     hud::draw(
         &mut expected,
@@ -606,13 +613,13 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
     target::draw_target_panel(&mut expected, &bar.layout, origin, None, None);
     target::draw_secondary(&mut expected, &bar.layout, origin, None, None);
     assert_eq!(list, expected);
-    assert!(matches!(list.iter().next(), Some(DrawCommand::Dot { .. })));
+    assert_eq!(list.iter().take_while(|c| is_star(c)).count(), 20);
     assert_eq!(
         sprites(&list),
         [
-            (ImageKey::sprite(1128, 0), at(512.0, -216.0)),
-            (ImageKey::sprite(1129, 0), at(812.0, 184.0)),
-            (ImageKey::sprite(2000, 0), VIEW_CENTER),
+            (ImageKey::sprite(1128, 0), at(415.0, -216.0)),
+            (ImageKey::sprite(1129, 0), at(715.0, 184.0)),
+            (ImageKey::sprite(2000, 0), PLAYER_AT),
         ]
     );
     assert_eq!(
@@ -623,8 +630,8 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
 }
 
 #[test]
-fn the_ship_stays_at_the_screens_centre_as_the_stellars_go_by() {
-    let mut view = flight();
+fn the_ship_stays_at_the_play_areas_centre_as_the_stellars_go_by() {
+    let mut view = FlightView::new(starry());
     view.input(&key(Key::Up, true));
     view.input(&key(Key::Right, true));
     view.tick(Duration::from_millis(1500));
@@ -635,18 +642,15 @@ fn the_ship_stays_at_the_screens_centre_as_the_stellars_go_by() {
         shown[2],
         (
             ImageKey::sprite(2000, view.frame().expect("a sheet")),
-            VIEW_CENTER
+            PLAYER_AT
         )
     );
     assert_ne!(view.frame(), Some(0));
     assert_eq!(shown[0].1, camera.world_to_screen(at(0.0, -600.0)));
-    assert_ne!(shown[0].1, at(512.0, -216.0), "the stellars moved");
-    let mut stars = DrawList::new();
-    starfield::draw(&mut stars, &camera);
-    assert!(
-        list.iter().take(stars.len()).eq(stars.iter()),
-        "stars under the camera"
-    );
+    assert_ne!(shown[0].1, at(415.0, -216.0), "the stellars moved");
+    let stars = drawn_stars(&view);
+    assert_eq!(stars.len(), 20);
+    assert!(list.iter().take(stars.len()).eq(stars.iter()), "the stars");
 }
 
 #[test]
@@ -669,7 +673,7 @@ fn a_ship_without_a_sheet_is_a_placeholder_with_the_reason() {
     let list = drawn(&view);
     assert_eq!(sprites(&list).len(), 2, "the stellars only");
     let mut expected = DrawList::new();
-    crossed_box(&mut expected, VIEW_CENTER, PLACEHOLDER_SIZE, PLACEHOLDER);
+    crossed_box(&mut expected, PLAYER_AT, PLACEHOLDER_SIZE, PLACEHOLDER);
     assert_eq!(
         lines(&list)[..expected.len()],
         *lines(&expected),
@@ -684,14 +688,13 @@ fn a_ship_without_a_sheet_is_a_placeholder_with_the_reason() {
         Some(overlay(
             "Sprite unavailable: no shän 128 for shïp 128",
             at(
-                VIEW_CENTER.x - PLACEHOLDER_SIZE / 2.0,
-                VIEW_CENTER.y + PLACEHOLDER_SIZE / 2.0 + MESSAGE_GAP
+                PLAYER_AT.x - PLACEHOLDER_SIZE / 2.0,
+                PLAYER_AT.y + PLACEHOLDER_SIZE / 2.0 + MESSAGE_GAP
             ),
             OVERLAY_SIZE,
             Color::ERROR
         ))
     );
-    assert!(matches!(list.iter().next(), Some(DrawCommand::Dot { .. })));
 }
 
 // The engine glow and running lights.
@@ -715,8 +718,8 @@ fn a_coasting_ship_draws_its_lights_over_it_and_no_glow() {
     assert_eq!(
         ship_sprites(&view),
         [
-            (ImageKey::sprite(2000, 0), VIEW_CENTER),
-            (ImageKey::sprite(2200, 0), VIEW_CENTER),
+            (ImageKey::sprite(2000, 0), PLAYER_AT),
+            (ImageKey::sprite(2200, 0), PLAYER_AT),
         ]
     );
     view.input(&key(Key::Up, true));
@@ -1022,7 +1025,7 @@ fn lights_commands(view: &View) -> Vec<DrawCommand> {
 fn lights_at(tint: Color) -> DrawCommand {
     DrawCommand::Sprite {
         image: ImageKey::sprite(2200, 0),
-        center: VIEW_CENTER,
+        center: PLAYER_AT,
         tint,
         blend: Blend::Or,
     }

@@ -1,6 +1,7 @@
 //! [`AppScreen`]'s answer to the window's close, and the questions it
-//! asks on the main menu in the Yes/No dialog: the quit question, and New
-//! Pilot's over a game in progress ([`Question`]).
+//! asks on the main menu in the Yes/No dialog ([`Question`]): the quit
+//! question, New Pilot's over a game in progress, and New Pilot's over a
+//! pilot already saved under the name typed.
 //!
 //! On the main screen, the original's close box (`_MainScreenMouse` part
 //! 6, @0x1aeb4-0x1aef7) asks `STR#` 140 #10 in the Yes/No dialog
@@ -55,7 +56,10 @@
 
 use std::rc::Rc;
 
-use nova_view::ui::yes_no::{NEW_PILOT_QUESTION, QUIT_QUESTION, YES_NO_DIALOG};
+use nova_sim::Pilot;
+use nova_view::ui::yes_no::{
+    NEW_PILOT_QUESTION, QUIT_QUESTION, REPLACE_PILOT_QUESTION, YES_NO_DIALOG,
+};
 use nova_view::ui::{DescriptionSource, YesNoDialog};
 use nova_view::{Input, Screen, ScreenAction, Showing};
 
@@ -63,21 +67,32 @@ use super::{AppScreen, Held};
 
 /// What a question asked over the main menu is for, which decides what
 /// its Yes does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum Question {
     /// `STR#` 140 #10, the window's close: Yes quits at once.
     Quit,
     /// `STR#` 140 #8, New Pilot over a game in progress: Yes opens the
     /// New Pilot dialog (`_MainScreenChoice` @0x1a74a-0x1a78f).
     NewPilot,
+    /// `STR#` 140 #9, a New Pilot named as a pilot already saved: Yes goes
+    /// on to christen the new pilot's ship, and the pilot saved under
+    /// `saved` is replaced once the new one is saved; No returns to the
+    /// main menu with nothing changed (`_DoNewPilot` @0x18c08-0x18c63).
+    ReplacePilot {
+        /// The new pilot, built from the New Pilot dialog.
+        pilot: Box<Pilot>,
+        /// The key the pilot it replaces is saved under.
+        saved: String,
+    },
 }
 
 impl Question {
     /// The question's text.
-    fn text(self) -> &'static str {
+    fn text(&self) -> &'static str {
         match self {
             Self::Quit => QUIT_QUESTION,
             Self::NewPilot => NEW_PILOT_QUESTION,
+            Self::ReplacePilot { .. } => REPLACE_PILOT_QUESTION,
         }
     }
 }
@@ -135,7 +150,7 @@ impl AppScreen {
     /// and whether it could: the router needs dialogs, and the dialog has
     /// to build.
     pub(super) fn ask(&mut self, question: Question) -> bool {
-        let Some(dialog) = self.question_dialog(question) else {
+        let Some(dialog) = self.question_dialog(&question) else {
             return false;
         };
         let menu = self.shown_mut();
@@ -147,7 +162,7 @@ impl AppScreen {
 
     /// `question` in the Yes/No dialog, if the router has dialogs and the
     /// dialog can be built.
-    fn question_dialog(&self, question: Question) -> Option<YesNoDialog> {
+    fn question_dialog(&self, question: &Question) -> Option<YesNoDialog> {
         let dialogs = self.dialogs.as_ref()?;
         let template = dialogs.resources.dialog_template(YES_NO_DIALOG).ok()?;
         Some(YesNoDialog::new(
@@ -161,18 +176,23 @@ impl AppScreen {
     /// The question's input, all of it: No closes it, back to the main
     /// menu, leaving everything as it was; Yes closes it and does what
     /// the question is for: the quit question quits at once
-    /// ([`Screen::take_quit`]), and New Pilot's opens the New Pilot
-    /// dialog.
+    /// ([`Screen::take_quit`]), New Pilot's opens the New Pilot dialog,
+    /// and the replace question christens the new pilot's ship
+    /// ([`AppScreen::open_christening`]), the key that answered it, if a
+    /// key did, flushed as the New Pilot dialog's is.
     pub(super) fn question_input(&mut self, input: &Input) -> ScreenAction {
-        let (asked, dialog) = self.question.as_mut().expect("asked");
-        let asked = *asked;
+        let (_, dialog) = self.question.as_mut().expect("asked");
         dialog.input(input);
         match dialog.take_answer() {
             Some(true) => {
-                self.question = None;
+                let (asked, _) = self.question.take().expect("asked");
                 match asked {
                     Question::Quit => self.quit_due = true,
                     Question::NewPilot => self.open_new_pilot(),
+                    Question::ReplacePilot { pilot, saved } => {
+                        let by_key = matches!(input, Input::Key { .. });
+                        self.open_christening(*pilot, by_key, Some(saved));
+                    }
                 }
             }
             Some(false) => self.question = None,

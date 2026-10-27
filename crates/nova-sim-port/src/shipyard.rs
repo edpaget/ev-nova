@@ -214,9 +214,14 @@
 //! Ship checks that the class can be bought, then opens the "Text Input"
 //! prompt (`_EVTextInputDialog`, `_DoShipyardDialog` @0x5eb6c), and makes
 //! the purchase only when the prompt is confirmed (@0x5ebc2). The prompt
-//! reads [`NAME_PROMPT`] (`STR#` 2002 #120), a space, the class's
-//! `LongName` and ": " (@0x5ea1c-0x5eac6), so the Long Name is part of the
-//! question, and no message follows the purchase. Its default is the
+//! is built afresh each time Buy is pressed, inside the dialog loop
+//! (@0x5ea22 clears the buffer): [`NAME_PROMPT_LIST`]
+//! #[`NAME_PROMPT_INDEX`] (`STR#` 2002 #120, `_StrcatIndCString`
+//! @0x5ea29-0x5ea3c, read through `CommCatalog`), a space, the class's
+//! `LongName` and ": " (@0x5ea55-0x5eac6), so the Long Name is part of the
+//! question, and no message follows the purchase. `_StrcatIndCString`
+//! (@0x72f90-0x72fd7) appends nothing for a missing list or entry, so the
+//! prompt then reads " <LongName>: ". Its default is the
 //! class's name, a space and three digits, each `_Rand(9) + 1`, drawn left
 //! to right (@0x5eacb-0x5eb4c): "Shuttle 482" ([`ShipNaming`], `nova_sim::Session::ship_naming`). The name
 //! confirmed is kept on the pilot through `_CullNameString`, which drops a
@@ -267,7 +272,7 @@ use std::collections::BTreeMap;
 use crate::bay::FIGHTER_BAY;
 use crate::catalog::WeaponId;
 use crate::catalog::{
-    CronRecord, LandingSite, OutfitId, OutfitRecord, RankRecord, ShipId, ShipRecord,
+    CommCatalog, CronRecord, LandingSite, OutfitId, OutfitRecord, RankRecord, ShipId, ShipRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Arsenal, MOD_AMMO, MOD_WEAPON, StockFit, fit_stock, fitted};
@@ -285,6 +290,7 @@ use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
 use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::stats::ShipStats;
+use crate::string_entry::entry;
 use crate::wares::{self, DayRolls, HideBits, HideHigher, Roll, ShownTons};
 
 /// The `shïp` `Flags3` bits the shipyard reads (the Bible): not the same
@@ -1313,8 +1319,13 @@ impl Flown<'_> {
     }
 }
 
-/// The name prompt's opening words, `STR#` 2002 #120.
-pub const NAME_PROMPT: &str = "Please name your new";
+/// The `STR#` list holding the name prompt's opening words
+/// (`_StrcatIndCString(buf, 0x7d2, 0x78)` @0x5ea29-0x5ea3c).
+pub const NAME_PROMPT_LIST: i16 = 2002;
+
+/// The opening words' entry in [`NAME_PROMPT_LIST`], 1-based: #120,
+/// "Please name your new" in the stock data.
+pub const NAME_PROMPT_INDEX: usize = 120;
 
 /// The longest name the original's name prompt takes, in characters
 /// (`_EVTextInputDialog`'s most, 0x40 @0x5eb5d, checked @0x554b3).
@@ -1325,20 +1336,26 @@ pub const SHIP_NAME_CHARS: usize = 64;
 pub struct ShipNaming {
     /// The ship class to buy.
     pub ship: ShipId,
-    /// The prompt's text: [`NAME_PROMPT`], a space, the class's
-    /// `LongName`, then ": ".
+    /// The prompt's text: [`NAME_PROMPT_LIST`] #[`NAME_PROMPT_INDEX`]
+    /// (empty when missing), a space, the class's `LongName`, then ": ".
     pub prompt: String,
     /// The name the prompt opens with: the class's name, a space and three
     /// digits from 1 to 9.
     pub default: String,
 }
 
-/// The prompt for naming a new ship of class `record`, its default's
-/// digits drawn on `chance`, as the module says.
-pub fn naming(record: &ShipRecord, chance: &mut dyn Chance) -> ShipNaming {
+/// The prompt for naming a new ship of class `record`, its opening words
+/// read from `strings` and its default's digits drawn on `chance`, as the
+/// module says.
+pub fn naming(
+    strings: &(impl CommCatalog + ?Sized),
+    record: &ShipRecord,
+    chance: &mut dyn Chance,
+) -> ShipNaming {
+    let opening = entry(strings, NAME_PROMPT_LIST, NAME_PROMPT_INDEX);
     ShipNaming {
         ship: record.id,
-        prompt: format!("{NAME_PROMPT} {}: ", record.long_name),
+        prompt: format!("{opening} {}: ", record.long_name),
         default: numbered_name(&record.name, 3, chance),
     }
 }
@@ -4430,7 +4447,11 @@ mod tests {
     #[test]
     fn the_prompt_names_the_long_name_and_the_default_is_the_class_name_and_three_digits() {
         let mut chance = Scripted::rolling(&[3, 8, 0]);
-        let naming = naming(&ship(129, FAST), &mut chance);
+        let naming = naming(
+            &Prompts::opening("Please name your new"),
+            &ship(129, FAST),
+            &mut chance,
+        );
         assert_eq!(
             naming,
             ShipNaming {
@@ -4440,6 +4461,49 @@ mod tests {
             }
         );
         assert_eq!(chance.sides_asked, [9, 9, 9]);
+    }
+
+    /// `STR#` lists by ID, canned: the name prompt's list and nothing else.
+    #[derive(Default)]
+    struct Prompts(Vec<String>);
+
+    impl Prompts {
+        /// `STR#` 2002 with #120 set to `text`.
+        fn opening(text: &str) -> Self {
+            let mut list = vec![String::new(); NAME_PROMPT_INDEX - 1];
+            list.push(text.to_owned());
+            Self(list)
+        }
+    }
+
+    impl CommCatalog for Prompts {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            if id == NAME_PROMPT_LIST {
+                self.0.clone()
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    #[test]
+    fn a_plug_in_s_opening_words_open_the_prompt() {
+        let prompt = naming(
+            &Prompts::opening("Christen thy"),
+            &ship(129, FAST),
+            &mut NeverFires,
+        )
+        .prompt;
+        assert_eq!(prompt, "Christen thy The Ship 129: ");
+    }
+
+    #[test]
+    fn without_the_entry_the_prompt_is_a_space_and_the_long_name() {
+        let short = Prompts(vec!["x".to_owned(); NAME_PROMPT_INDEX - 1]);
+        for strings in [Prompts::default(), short] {
+            let prompt = naming(&strings, &ship(129, FAST), &mut NeverFires).prompt;
+            assert_eq!(prompt, " The Ship 129: ");
+        }
     }
 
     #[test]
@@ -4495,6 +4559,7 @@ mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }];
         pilot.gone_persons = std::collections::BTreeSet::from([crate::catalog::PersonId(151)]);
         pilot.grudges = std::collections::BTreeSet::from([crate::catalog::PersonId(152)]);

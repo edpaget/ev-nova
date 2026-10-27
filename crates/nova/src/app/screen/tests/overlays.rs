@@ -349,6 +349,7 @@ fn quiet() -> Prefs {
         quicktime_movies: true,
         smoke_trails: true,
         weapon_effects: true,
+        parallax_starfield: true,
         fullscreen: nova_view::FullscreenKind::Borderless,
         scaling: nova_view::Scaling::Native,
     }
@@ -644,6 +645,39 @@ fn a_smoke_trails_change_in_the_dialog_reaches_flight_already_built() {
     );
     click_at(&mut screen, point);
     assert!(flight_view(&screen).smoke_trails(), "back on");
+}
+
+#[test]
+fn flight_is_built_with_the_routers_parallax_starfield() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    assert!(flight_view(&screen).parallax_starfield(), "on by default");
+    let mut screen = with_dialogs(data()).with_prefs(Prefs {
+        parallax_starfield: false,
+        ..quiet()
+    });
+    fly(&mut screen);
+    assert!(!flight_view(&screen).parallax_starfield());
+}
+
+#[test]
+fn a_parallax_starfield_change_in_the_dialog_reaches_flight_already_built() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    open_prefs(&mut screen);
+    let point = prefs_dialog(&screen).parallax_starfield().rect().center();
+    click_at(&mut screen, point);
+    assert!(!flight_view(&screen).parallax_starfield());
+    assert_eq!(
+        screen.take_prefs(),
+        Some(Prefs {
+            parallax_starfield: false,
+            ..Prefs::default()
+        }),
+        "reported, to be saved"
+    );
+    click_at(&mut screen, point);
+    assert!(flight_view(&screen).parallax_starfield(), "back on");
 }
 
 #[test]
@@ -1011,6 +1045,7 @@ fn p_opens_the_player_info_over_the_spaceport_and_its_dialogs() {
     let mut screen = landed_shipyard(&MemoryPilots::new());
     click_port_item(&mut screen, 9);
     check(&mut screen, "the shipyard");
+    select_first_ship(&mut screen);
     screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
     assert!(
         spaceport(&screen)
@@ -1030,6 +1065,67 @@ fn p_opens_the_player_info_over_the_spaceport_and_its_dialogs() {
     assert!(spaceport(&screen).offer_dialog().is_some());
     check(&mut screen, "the spaceport's offer");
     assert!(spaceport(&screen).offer_dialog().is_some(), "still offered");
+}
+
+/// The player info's background pictures `open` draws, each with its
+/// clip.
+fn player_info_background(open: &PlayerInfoScreen) -> Vec<DrawCommand> {
+    use nova_view::ui::player_info::BACKGROUND;
+    drawn(open)
+        .iter()
+        .filter(|command| match command {
+            DrawCommand::Clipped { command, .. } => matches!(
+                **command,
+                DrawCommand::Picture { ref image, .. }
+                | DrawCommand::StretchedPicture { ref image, .. }
+                    if BACKGROUND.contains(image)
+            ),
+            _ => false,
+        })
+        .cloned()
+        .collect()
+}
+
+/// What `open` draws of the fixture data's player info background: its
+/// upper cap alone ([`UPPER_CAP_SIZE`]), at its own size over the
+/// window's top-left, as neither the middle nor the lower cap is there.
+fn data_background(open: &PlayerInfoScreen) -> Vec<DrawCommand> {
+    let window = open.bounds().expect("laid out");
+    let (width, height) = UPPER_CAP_SIZE;
+    vec![DrawCommand::Clipped {
+        clip: window,
+        command: Box::new(DrawCommand::StretchedPicture {
+            image: nova_view::ImageKey::picture(8518),
+            top_left: window.min,
+            width: f32::from(width),
+            height: f32::from(height),
+        }),
+    }]
+}
+
+#[test]
+fn the_flight_player_info_draws_the_game_datas_background_pictures() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    let open = screen.flight_player_info().expect("open");
+    assert_eq!(
+        player_info_background(open),
+        data_background(open),
+        "the 300 x 30 upper cap the data holds, and no middle or lower cap"
+    );
+}
+
+#[test]
+fn the_spaceport_player_info_draws_the_game_datas_background_pictures() {
+    let mut screen = landed_trader(&MemoryPilots::new());
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    let open = spaceport(&screen).player_info().expect("open");
+    assert_eq!(
+        player_info_background(open),
+        data_background(open),
+        "the 300 x 30 upper cap the data holds, and no middle or lower cap"
+    );
 }
 
 #[test]

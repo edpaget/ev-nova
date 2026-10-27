@@ -15,8 +15,8 @@ use nova_sim::{
     StartError, TrafficCatalog,
 };
 use nova_sim::{
-    ControlBits, Hailed, HireTerms, KeptBerths, MissionInfo, MissionInfoPress, OfferPrompt,
-    PersonRules, PlayerInfo, pilot_panel::PilotPanel, ship_layer::SlotSprites,
+    ControlBits, Hailed, HireTerms, KeptBerths, LastRefresh, MissionInfo, MissionInfoPress,
+    OfferPrompt, PersonRules, PlayerInfo, pilot_panel::PilotPanel, ship_layer::SlotSprites,
     story::sprite_pool::StellarSpritePool,
 };
 
@@ -38,7 +38,7 @@ use crate::{Diagnostic, Key, ScreenAction, SoundPrefs};
 
 use super::{
     BarFor, FlightOverlays, FlightView, MESSAGE_TICKS, Metrics, SharedChance, Then,
-    hail_refusal_message, opening_scene,
+    hail_refusal_message, opening_scene, window_width,
 };
 
 impl<
@@ -83,12 +83,27 @@ impl<
     /// flight's chance: for a pilot just created, before its first save.
     /// The
     /// ship, which the beginning puts at (50, 50), is drawn there from the
-    /// first frame, not on its way from where the view was read. A
-    /// session that failed begins nothing.
+    /// first frame, not on its way from where the view was read, and the
+    /// stars are scattered afresh about it when the flight is next caught
+    /// up with, as `_ResetGameData` scatters them (@0x1df5e). A session
+    /// that failed begins nothing.
     pub fn begin(&mut self) {
         if let Ok(session) = &mut self.session {
             session.begin(&self.catalog, &mut self.chance);
             self.place_ship();
+            self.stars_due = true;
+        }
+    }
+
+    /// Enters play from the main screen as [`Session::enter_game`] does:
+    /// the refresh a later new pilot reads is taken afresh, and the stars
+    /// are scattered afresh when the flight is next caught up with, as
+    /// `_EnterGameFromMainScreen` scatters them (@0x19f7c). A session that
+    /// failed enters nothing.
+    pub fn enter_game(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.enter_game();
+            self.stars_due = true;
         }
     }
 
@@ -136,7 +151,11 @@ impl<
     /// The flight of `session` as [`FlightView::flying`] reads it.
     #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
     fn read(catalog: C, session: Result<Session, StartError>) -> Self {
-        let session = session.map_err(|err| err.to_string());
+        let mut session = session.map_err(|err| err.to_string());
+        if let Ok(session) = &mut session {
+            // Sized as the view starts, before anything reads its field.
+            session.set_window_width(window_width(VIEW_SIZE));
+        }
         let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
                 Some(opening_scene(&catalog, session)),
@@ -202,6 +221,7 @@ impl<
             death_fade: None,
             hyperspace_effects: true,
             smoke_trails: true,
+            parallax_starfield: true,
             weapon_effects: true,
             sound_prefs: SoundPrefs::default(),
             alert_width,
@@ -221,12 +241,15 @@ impl<
             held: HashSet::new(),
             nav_latch: false,
             select_latch: false,
+            slot_block: super::slot_block::SlotBlock::default(),
             jump_latch: false,
+            board_latch: false,
             pending_landing: None,
             message: None,
             overlays: FlightOverlays::default(),
             pending_boarding: false,
             pending_hail: None,
+            pending_escort_dialog: None,
             pending_mission_info: None,
             pending_player_info: false,
             pending_offer: None,
@@ -247,6 +270,8 @@ impl<
             codes: BTreeMap::new(),
             effects: Effects::default(),
             effects_chance: SharedChance::default(),
+            stars: crate::flight::stars::Starfield::new(),
+            stars_due: true,
             flashes: BTreeMap::new(),
             held_alts: std::cell::RefCell::default(),
             glows: crate::flight::weapon_glow::WeaponGlows::default(),
@@ -354,6 +379,27 @@ impl<
     #[must_use]
     pub fn kept_berths(&self) -> Option<KeptBerths> {
         self.session.as_ref().ok().map(Session::kept_berths)
+    }
+
+    /// The flight with a new pilot's neighbour pass reading `carried`,
+    /// what an earlier flight of the same run left
+    /// ([`Session::with_last_refresh`]).
+    #[must_use]
+    pub fn with_last_refresh(self, carried: LastRefresh) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_last_refresh(carried)),
+            ..self
+        }
+    }
+
+    /// What the flight's last galaxy refresh left hidden, for a new pilot
+    /// made later in the run ([`Session::last_refresh`]), or `None` when
+    /// its session never started.
+    #[must_use]
+    pub fn last_refresh(&self) -> Option<LastRefresh> {
+        self.session.as_ref().ok().map(Session::last_refresh)
     }
 
     /// The flight with `terms` giving the fee and wage of a hire
@@ -518,8 +564,10 @@ impl<
 
     /// Hails the target ([`Session::hail_key`]), Option held as Alt is,
     /// or says why not: a hail answered is held for the router
-    /// ([`FlightView::take_hail`]), and a mission offered in its place
-    /// too ([`FlightView::take_offer`]), each letting go of the flight
+    /// ([`FlightView::take_hail`]), the escort dialog a fleet escort opens
+    /// in its place ([`FlightView::take_escort_dialog`]) and a mission
+    /// offered in its place ([`FlightView::take_offer`]), each letting go
+    /// of the flight
     /// keys; one accepted at once shows nothing, and so does a navigation
     /// stellar that answers, as its comm dialog is not built.
     pub(super) fn hail(&mut self) {
@@ -530,6 +578,10 @@ impl<
         match session.hail_key(&self.catalog, &self.hail_options, option, &mut self.chance) {
             Ok(Hailed::Comm(view)) => {
                 self.pending_hail = Some(view);
+                self.held.clear();
+            }
+            Ok(Hailed::Escort(view)) => {
+                self.pending_escort_dialog = Some(view);
                 self.held.clear();
             }
             Ok(Hailed::Offer(offer)) => self.hold_offer(offer),
@@ -550,6 +602,28 @@ impl<
         self.pending_hail.take()
     }
 
+    /// The escort dialog just opened, once: the router takes it to show
+    /// the dialog.
+    pub fn take_escort_dialog(&mut self) -> Option<nova_sim::escort_dialog::EscortDialogView> {
+        self.pending_escort_dialog.take()
+    }
+
+    /// Presses `button` in the escort dialog, through the session
+    /// ([`Session::press_escort`]): what it shows after, or none once it
+    /// closes. A close refreshes the HUD, as a hail's does
+    /// ([`FlightView::hang_up`]).
+    pub fn press_escort(
+        &mut self,
+        button: nova_sim::escort_dialog::EscortButton,
+    ) -> Option<nova_sim::escort_dialog::EscortDialogView> {
+        let session = self.session.as_mut().ok()?;
+        let view = session.press_escort(button);
+        if view.is_none() {
+            self.redraw_status();
+        }
+        view
+    }
+
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen since
     /// this was last taken, once: the router opens it on
     /// [`FlightView::player_info`] over the paused flight.
@@ -558,13 +632,14 @@ impl<
     }
 
     /// What the player info screen shows, as [`Session::player_info`]
-    /// gives it from the screen's catalog, changing nothing; `None` for a
-    /// session that failed. An opening of the screen is
+    /// gives it from the screen's catalog, marked with the cheats setting,
+    /// changing nothing; `None` for a session that failed. An opening of
+    /// the screen is
     /// [`FlightView::open_player_info`].
     #[must_use]
     pub fn player_info(&self) -> Option<PlayerInfo> {
         let session = self.session.as_ref().ok()?;
-        Some(session.player_info(&self.catalog))
+        Some(self.marked(session.player_info(&self.catalog)))
     }
 
     /// What the main screen's pilot panel says about the pilot, as
@@ -579,11 +654,22 @@ impl<
     /// The player info dialog opens, as [`Session::open_player_info`] has
     /// it: the session resets first, so the screen it gives shows the
     /// cargo trimmed; none in a jump or while the ship breaks up, when
-    /// nothing opens, or for a session that failed. The router opens the
-    /// screen on it, from flight and from the spaceport alike.
+    /// nothing opens, or for a session that failed. It is marked with the
+    /// cheats setting. The router opens the screen on it, from flight and
+    /// from the spaceport alike.
     pub fn open_player_info(&mut self) -> Option<PlayerInfo> {
         let session = self.session.as_mut().ok()?;
-        session.open_player_info(&self.catalog)
+        let info = session.open_player_info(&self.catalog)?;
+        Some(self.marked(info))
+    }
+
+    /// `info` marked with the cheats setting ([`FlightOverlays::cheats`]),
+    /// which the session leaves off.
+    fn marked(&self, info: PlayerInfo) -> PlayerInfo {
+        PlayerInfo {
+            cheats: self.overlays.cheats,
+            ..info
+        }
     }
 
     /// Presses [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) outside a jump, its [`PlayerCommand`]
@@ -699,27 +785,66 @@ impl<
     /// not been read yet, and of each type a ship here is boxed by
     /// ([`Session::framed_types`]), such as the stale frames of a hidden
     /// ship's slot.
+    ///
+    /// The traffic types' target cards not read yet are asked for in one
+    /// batch ([`CombatLooks::target_cards`]), and none when all are read.
     pub(super) fn read_npc_sheets(&mut self) {
         let Ok(session) = &self.session else {
             return;
         };
-        for ship in session.traffic_ships() {
-            self.npc_sheets
-                .entry(ship)
-                .or_insert_with(|| self.catalog.ship_sheet(ship));
-            self.cards
-                .entry(ship)
-                .or_insert_with(|| self.catalog.target_card(ship));
-        }
-        for ship in session.framed_types() {
+        let traffic = session.traffic_ships();
+        let framed: Vec<_> = session.framed_types().collect();
+        let govts: Vec<_> = session.npcs().iter().filter_map(|npc| npc.govt).collect();
+        self.read_traffic_sheets(traffic);
+        for ship in framed {
             self.npc_sheets
                 .entry(ship)
                 .or_insert_with(|| self.catalog.ship_sheet(ship));
         }
-        for govt in session.npcs().iter().filter_map(|npc| npc.govt) {
+        for govt in govts {
             self.codes
                 .entry(govt)
                 .or_insert_with(|| self.catalog.target_code(govt));
+        }
+    }
+
+    /// Reads, in the warm-up frame of entering play, the sheets and target
+    /// cards of the ship types the system's traffic will bring
+    /// ([`Session::coming_traffic_ships`]), so the first step, which fills
+    /// the system, reads none: their reading is the one-time cost of a
+    /// run's first stepped frame, and the warm-up frame is drawn under
+    /// black. A session that failed reads nothing.
+    pub fn warm_up_traffic(&mut self) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        let coming = session.coming_traffic_ships(&self.catalog);
+        self.read_traffic_sheets(coming);
+    }
+
+    /// Whether the sheet and the target card of ship type `ship` are read
+    /// already, so a step that brings one reads neither.
+    #[must_use]
+    pub fn has_read_traffic(&self, ship: nova_sim::ShipId) -> bool {
+        self.npc_sheets.contains_key(&ship) && self.cards.contains_key(&ship)
+    }
+
+    /// Reads the sheet of each of `traffic` not read yet, and their target
+    /// cards not read yet in one batch ([`CombatLooks::target_cards`]),
+    /// none when all are read.
+    fn read_traffic_sheets(&mut self, traffic: Vec<nova_sim::ShipId>) {
+        for &ship in &traffic {
+            self.npc_sheets
+                .entry(ship)
+                .or_insert_with(|| self.catalog.ship_sheet(ship));
+        }
+        let unread: Vec<_> = traffic
+            .into_iter()
+            .filter(|ship| !self.cards.contains_key(ship))
+            .collect();
+        if !unread.is_empty() {
+            let cards = self.catalog.target_cards(&unread);
+            self.cards.extend(unread.into_iter().zip(cards));
         }
     }
 
@@ -750,6 +875,30 @@ impl<
     #[must_use]
     pub fn hyperspace_effects(&self) -> bool {
         self.hyperspace_effects
+    }
+
+    /// The flight with each scattering of the stars giving them their own
+    /// parallax factors or not, as the Parallax Starfield preference is on
+    /// (the default) or off.
+    #[must_use]
+    pub fn with_parallax_starfield(self, parallax_starfield: bool) -> Self {
+        Self {
+            parallax_starfield,
+            ..self
+        }
+    }
+
+    /// Sets whether the stars get their own parallax factors. It takes
+    /// effect at the next scattering; the stars already scattered keep
+    /// their factors.
+    pub fn set_parallax_starfield(&mut self, parallax_starfield: bool) {
+        self.parallax_starfield = parallax_starfield;
+    }
+
+    /// Whether the stars' scatterings give them their own parallax factors.
+    #[must_use]
+    pub fn parallax_starfield(&self) -> bool {
+        self.parallax_starfield
     }
 
     /// The flight with shots leaving their particle trails and smoke or

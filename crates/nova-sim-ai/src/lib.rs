@@ -40,6 +40,9 @@
 //!   [`ClassRow`](escort::ClassRow)s, an escort NPC's
 //!   [`EscortDuty`](escort::EscortDuty), the formation it keeps beside the
 //!   player, and how it scores the threats to the player.
+//! - [`escort_arrival`]: where the escorts arrive with the player from a
+//!   jump: pushed [`push_distance`](escort_arrival::push_distance) back
+//!   along its heading to glide in ([`pushed`](escort_arrival::pushed)).
 //! - [`gate`]: hypergates and wormholes: which a stellar is
 //!   ([`GateKind`](gate::GateKind)), where each leads, and how a ship
 //!   comes out of one, under the [`GateArrivalRule`](gate::GateArrivalRule)
@@ -107,7 +110,7 @@ use nova_sim_catalog::{ControlBits, SimSound, buoy, catalog, control, voice, war
 #[allow(unused_imports)]
 use nova_sim_combat::message::SimMessage;
 #[allow(unused_imports)]
-use nova_sim_combat::{bay, cloak, combat, fleet, self_repair, ship_layer};
+use nova_sim_combat::{area_cloak, bay, cloak, combat, fleet, self_repair, ship_layer};
 #[allow(unused_imports)]
 use nova_sim_state::{govt, landing, legal, market, stats};
 
@@ -115,6 +118,7 @@ pub mod ai;
 pub mod brackets;
 pub mod cargo_box;
 pub mod escort;
+pub mod escort_arrival;
 pub mod escort_voice;
 pub mod gate;
 pub mod hail;

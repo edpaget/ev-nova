@@ -1,17 +1,30 @@
 //! The New Pilot dialog (`DLOG` 3102, "Create a new pilot:"): the new
-//! pilot's name, gender and Strict Play.
+//! pilot's name, nickname, gender and Strict Play.
 //!
 //! The stock dialog asks for a full name, a nickname, Strict Play and a
-//! gender. The full name, Strict Play and the gender are used: the name's
-//! field (item 8) takes the typed text, the Strict Play check box (item 4)
-//! starts clear and flips at each click, as `_DoNewPilotNameDialog` flips
-//! it (@0x16a1c-0x16a8f), the gender control (item 11) switches between
-//! Male and Female at each click, OK (item 1, and Return) creates the
-//! pilot, and Cancel (item 2, and Escape) goes back. The nickname and the
-//! pictures are inert. Without the interface file,
-//! [`NewPilotDialog::fallback`] lays out the name, the gender, OK and
-//! Cancel itself; it has no Strict Play box, so its pilots do not play
-//! Strict Play.
+//! gender. The Full Name field (item 8) and the Nickname field (item 9)
+//! take the typed text. They open with the defaults the caller draws
+//! ([`NewPilotDialog::with_defaults`]; `nova_sim::new_pilot`), the name
+//! focused and selected whole (`SelectDialogItemText(8, 0, 0xfe)`
+//! @0x16802), so typing replaces it. Typing goes to the focused field; Tab
+//! moves the focus to the other field and selects all of it, as the Dialog
+//! Manager does; a click in a field focuses it with the caret at its end
+//! and nothing selected (the field places no caret by the pointer). Only
+//! the focused field draws its caret or selection. The Strict Play check
+//! box (item 4) starts clear and flips at each click, as
+//! `_DoNewPilotNameDialog` flips it (@0x16a1c-0x16a8f), the gender control
+//! (item 11) switches between Male and Female at each click, OK (item 1,
+//! and Return) creates the pilot with the name and nickname as typed (the
+//! caller keeps them as the original does), and Cancel (item 2, and
+//! Escape) goes back. The pictures are inert. Without the interface file,
+//! [`NewPilotDialog::fallback`] lays out the name, the nickname, the
+//! gender, OK and Cancel itself; it has no Strict Play box, so its pilots
+//! do not play Strict Play.
+//!
+//! Each field holds [`NAME_LENGTH`] characters, and OK does nothing while
+//! the name is blank: the engine's own checks. `_DoNewPilotNameDialog`'s
+//! (beeping at a name or nickname over 24 characters, @0x16a00) are not
+//! ported yet.
 //!
 //! The stock gender control is `CNTL` 500, a pop-up menu titled "Gender:"
 //! (a 95-unit title) over `MENU` 500, whose items are "Male" and
@@ -38,7 +51,7 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, outline,
+    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, outline,
 };
 use super::prefs::{BACKDROP, BORDER};
 use super::text_field::TextField;
@@ -52,6 +65,8 @@ pub const OK_ITEM: usize = 1;
 pub const CANCEL_ITEM: usize = 2;
 /// The Full Name field's item.
 pub const NAME_ITEM: usize = 8;
+/// The Nickname field's item.
+pub const NICKNAME_ITEM: usize = 9;
 /// The gender control's item.
 pub const GENDER_ITEM: usize = 11;
 /// The Strict Play check box's item.
@@ -68,7 +83,7 @@ const GENDER_TITLE_WIDTH: f32 = 95.0;
 const GENDER_INSET: f32 = 4.0;
 /// The gender control's text size, in Geneva.
 const GENDER_SIZE: f32 = 12.0;
-/// The longest name, in characters: the original's `Str31`.
+/// The longest name or nickname, in characters: the original's `Str31`.
 pub const NAME_LENGTH: usize = 31;
 /// What the dialog says when a pilot by the name typed is already saved:
 /// the first sentence of `STR#` 140 #9.
@@ -78,17 +93,15 @@ const REFUSAL_GAP: f32 = 4.0;
 /// A refusal's size, in Geneva.
 const REFUSAL_SIZE: f32 = 10.0;
 
-/// The items that are drawn but do nothing: the Nickname field (9) is
-/// blank.
-const INERT_ITEMS: [usize; 1] = [9];
-
 /// What the player chose.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NewPilotOutcome {
     /// Create a pilot.
     Create {
-        /// The name, trimmed and not empty.
+        /// The name, as typed and not blank.
         name: String,
+        /// The nickname, as typed; empty without the field.
+        nickname: String,
         /// The gender chosen.
         gender: Gender,
         /// Whether Strict Play was ticked.
@@ -143,11 +156,24 @@ impl GenderControl {
     }
 }
 
+/// Which of the dialog's fields has the focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Focus {
+    /// The Full Name field.
+    Name,
+    /// The Nickname field.
+    Nickname,
+}
+
 /// "Create a new pilot:": the name typed, and OK or Cancel.
 #[derive(Clone)]
 pub struct NewPilotDialog {
     dialog: Dialog,
     field: TextField,
+    /// The Nickname field, when the template shows it.
+    nickname: Option<TextField>,
+    /// The field typing goes to.
+    focus: Focus,
     /// The Strict Play check box, when the template shows it.
     strict_play: Option<Toggle>,
     /// The gender control, when the template shows it.
@@ -164,6 +190,7 @@ impl std::fmt::Debug for NewPilotDialog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NewPilotDialog")
             .field("name", &self.name())
+            .field("nickname", &self.nickname())
             .field("gender", &self.gender)
             .field("strict_play", &self.strict_play())
             .field("outcome", &self.outcome)
@@ -189,11 +216,7 @@ impl NewPilotDialog {
                 "DITL {NEW_PILOT_DIALOG} has no item {NAME_ITEM} for the pilot's name"
             ));
         }
-        let roles: Vec<(usize, Role)> = INERT_ITEMS
-            .iter()
-            .map(|&item| (item, Role::Greyed))
-            .collect();
-        let dialog = Dialog::new(template, &roles, Rc::clone(&metrics))
+        let dialog = Dialog::new(template, &[], Rc::clone(&metrics))
             .with_buttons(ButtonSkin::NOVA, style)
             .with_default(Some(OK_ITEM))
             .with_cancel(Some(CANCEL_ITEM));
@@ -209,6 +232,14 @@ impl NewPilotDialog {
                 _ => None,
             })
             .flatten();
+        let nickname = dialog
+            .item_shown(NICKNAME_ITEM)
+            .then(|| match &template.items[NICKNAME_ITEM - 1].kind {
+                ItemSpec::EditText(_) => dialog.item_bounds(NICKNAME_ITEM),
+                _ => None,
+            })
+            .flatten()
+            .map(|rect| TextField::new(rect, NAME_LENGTH));
         let gender_control = dialog
             .item_shown(GENDER_ITEM)
             .then(|| dialog.item_bounds(GENDER_ITEM))
@@ -217,6 +248,8 @@ impl NewPilotDialog {
         Ok(Self {
             dialog,
             field: TextField::new(field_rect, NAME_LENGTH),
+            nickname,
+            focus: Focus::Name,
             strict_play,
             gender_control,
             gender: Gender::default(),
@@ -226,8 +259,24 @@ impl NewPilotDialog {
         })
     }
 
+    /// The dialog with its fields holding `name` and `nickname`: the
+    /// name focused and selected whole, so typing replaces it, and the
+    /// nickname unselected until it is focused (`_DoNewPilotNameDialog`
+    /// @0x1679c-0x16802).
+    #[must_use]
+    pub fn with_defaults(mut self, name: &str, nickname: &str) -> Self {
+        self.field.set_text(name);
+        if let Some(field) = &mut self.nickname {
+            field.set_text(nickname);
+            field.deselect_to_end();
+        }
+        self.focus = Focus::Name;
+        self
+    }
+
     /// The dialog laid out without the interface file: the title, the
-    /// Full Name label and field, and OK and Cancel, centred.
+    /// Full Name and Nickname labels and fields, the gender control, and
+    /// OK and Cancel, centred.
     #[must_use]
     pub fn fallback(style: ButtonStyle, metrics: Rc<dyn TextMetrics>) -> Self {
         Self::new(&fallback_template(), style, metrics).expect("the fallback has a name field")
@@ -237,6 +286,43 @@ impl NewPilotDialog {
     #[must_use]
     pub fn name(&self) -> &str {
         self.field.text()
+    }
+
+    /// The nickname typed so far; empty without the field.
+    #[must_use]
+    pub fn nickname(&self) -> &str {
+        self.nickname.as_ref().map_or("", TextField::text)
+    }
+
+    /// The Nickname field, when the template shows it.
+    #[must_use]
+    pub fn nickname_field(&self) -> Option<&TextField> {
+        self.nickname.as_ref()
+    }
+
+    /// Which field has the focus.
+    #[must_use]
+    pub fn focus(&self) -> Focus {
+        self.focus
+    }
+
+    /// Gives `focus` the focus, its text selected whole when `select_all`
+    /// (Tab) or its caret at its end with nothing selected (a click). The
+    /// Nickname without its field leaves the focus where it is.
+    fn focus_on(&mut self, focus: Focus, select_all: bool) {
+        let field = match focus {
+            Focus::Name => &mut self.field,
+            Focus::Nickname => match &mut self.nickname {
+                Some(field) => field,
+                None => return,
+            },
+        };
+        if select_all {
+            field.select_first(usize::MAX);
+        } else {
+            field.deselect_to_end();
+        }
+        self.focus = focus;
     }
 
     /// The gender chosen so far: Male until a click switches it.
@@ -283,9 +369,9 @@ impl NewPilotDialog {
 }
 
 /// The built-in "Create a new pilot:": 326 x 213, centred, with OK (1),
-/// Cancel (2), the Full Name label (5), its field (8), the gender control
-/// (11) and the title (12), each where stock has it; the other items are
-/// parked outside it.
+/// Cancel (2), the Full Name and Nickname labels (5, 6), their fields (8,
+/// 9), the gender control (11) and the title (12), each where stock has
+/// it; the other items are parked outside it.
 fn fallback_template() -> DialogTemplate {
     let at = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
     let parked = || ItemTemplate {
@@ -309,8 +395,18 @@ fn fallback_template() -> DialogTemplate {
         enabled: false,
         kind: ItemSpec::StaticText("Full Name:".to_owned()),
     };
+    items[5] = ItemTemplate {
+        bounds: at(54.0, 59.0, 79.0, 16.0),
+        enabled: false,
+        kind: ItemSpec::StaticText("Nickname:".to_owned()),
+    };
     items[NAME_ITEM - 1] = ItemTemplate {
         bounds: at(149.0, 36.0, 170.0, 16.0),
+        enabled: true,
+        kind: ItemSpec::EditText(String::new()),
+    };
+    items[NICKNAME_ITEM - 1] = ItemTemplate {
+        bounds: at(149.0, 59.0, 170.0, 16.0),
         enabled: true,
         kind: ItemSpec::EditText(String::new()),
     };
@@ -332,12 +428,28 @@ fn fallback_template() -> DialogTemplate {
 }
 
 impl Screen for NewPilotDialog {
-    /// Typed characters and Backspace go to the name field, and change of
-    /// the name clears a refusal. Space only types a space. Everything else
-    /// goes to the dialog: a click on Strict Play ticks or clears it, a
-    /// click on the gender control switches the gender, OK (or Return) creates the pilot when the name is not
-    /// blank, and Cancel (or Escape) cancels. It never quits.
+    /// Typed characters and Backspace go to the focused field, and a
+    /// change of the name clears a refusal. Space only types a space. Tab
+    /// (its repeats too) focuses the other field, its text selected whole.
+    /// Everything else goes to the dialog: a click in a field focuses it, a
+    /// click on Strict Play ticks or clears it, a click on the gender
+    /// control switches the gender, OK (or Return) creates the pilot when
+    /// the name is not blank, and Cancel (or Escape) cancels. It never
+    /// quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Key {
+            key: Key::Tab,
+            pressed: true,
+            ..
+        } = input
+        {
+            let next = match self.focus {
+                Focus::Name if self.nickname.is_some() => Focus::Nickname,
+                _ => Focus::Name,
+            };
+            self.focus_on(next, true);
+            return ScreenAction::None;
+        }
         let typing = matches!(
             input,
             Input::Text(_)
@@ -347,22 +459,32 @@ impl Screen for NewPilotDialog {
                 }
         );
         if typing {
-            if self.field.input(input) {
-                self.refusal = None;
+            match (self.focus, &mut self.nickname) {
+                (Focus::Nickname, Some(field)) => {
+                    field.input(input);
+                }
+                _ => {
+                    if self.field.input(input) {
+                        self.refusal = None;
+                    }
+                }
             }
             return ScreenAction::None;
         }
         match self.dialog.input(input) {
             Some(DialogEvent::Item(OK_ITEM)) => {
-                let name = self.field.text().trim();
-                if !name.is_empty() {
+                let name = self.field.text();
+                if !name.trim().is_empty() {
                     self.outcome = Some(NewPilotOutcome::Create {
                         name: name.to_owned(),
+                        nickname: self.nickname().to_owned(),
                         gender: self.gender,
                         strict_play: self.strict_play(),
                     });
                 }
             }
+            Some(DialogEvent::Item(NAME_ITEM)) => self.focus_on(Focus::Name, false),
+            Some(DialogEvent::Item(NICKNAME_ITEM)) => self.focus_on(Focus::Nickname, false),
             Some(DialogEvent::Item(STRICT_PLAY_ITEM)) => {
                 if let Some(toggle) = &mut self.strict_play {
                     *toggle = Toggle::new(toggle.rect(), toggle.label(), !toggle.on());
@@ -384,8 +506,9 @@ impl Screen for NewPilotDialog {
     fn tick(&mut self, _dt: Duration) {}
 
     /// The backdrop and its outline, the dialog, the Strict Play check
-    /// box, the name field, the gender control, and the refusal under the name
-    /// in the error colour.
+    /// box, the name and nickname fields (only the focused one with its
+    /// caret or selection), the gender control, and the refusal under the
+    /// name in the error colour.
     fn draw(&self, list: &mut DrawList) {
         let bounds = self.dialog.bounds();
         fill_rect(list, bounds, BACKDROP);
@@ -394,7 +517,17 @@ impl Screen for NewPilotDialog {
         if let Some(toggle) = &self.strict_play {
             toggle.draw(false, &self.metrics, list);
         }
-        self.field.draw(&*self.metrics, list);
+        let metrics = &*self.metrics;
+        match self.focus {
+            Focus::Name => self.field.draw(metrics, list),
+            Focus::Nickname => self.field.draw_unfocused(metrics, list),
+        }
+        if let Some(field) = &self.nickname {
+            match self.focus {
+                Focus::Nickname => field.draw(metrics, list),
+                Focus::Name => field.draw_unfocused(metrics, list),
+            }
+        }
         if let Some(control) = &self.gender_control {
             control.draw(self.gender, &*self.metrics, list);
         }
@@ -494,6 +627,7 @@ mod tests {
     fn created(name: &str, gender: Gender) -> NewPilotOutcome {
         NewPilotOutcome::Create {
             name: name.to_owned(),
+            nickname: String::new(),
             gender,
             strict_play: false,
         }
@@ -576,11 +710,11 @@ mod tests {
     }
 
     #[test]
-    fn return_or_ok_creates_the_pilot_with_the_name_trimmed() {
+    fn return_or_ok_creates_the_pilot_with_the_name_as_typed() {
         let mut dialog = dialog();
         typed(&mut dialog, " Ada ");
         dialog.input(&key(Key::Enter));
-        assert_eq!(dialog.take_outcome(), Some(created("Ada", Gender::Male)));
+        assert_eq!(dialog.take_outcome(), Some(created(" Ada ", Gender::Male)));
         assert_eq!(dialog.take_outcome(), None, "taken once");
 
         let mut dialog = self::dialog();
@@ -632,6 +766,7 @@ mod tests {
     #[test]
     fn space_types_a_space_and_activates_nothing() {
         let mut dialog = dialog();
+        dialog.input(&key(Key::Tab));
         dialog.input(&key(Key::Tab));
         typed(&mut dialog, "A b");
         assert_eq!(dialog.name(), "A b");
@@ -688,6 +823,10 @@ mod tests {
             &mut expected,
         );
         dialog.field().draw(&MonoMetrics, &mut expected);
+        dialog
+            .nickname_field()
+            .expect("stock has one")
+            .draw_unfocused(&MonoMetrics, &mut expected);
         GenderControl::new(rect(51.0, 92.0, 200.0, 20.0)).draw(
             Gender::Male,
             &MonoMetrics,
@@ -711,13 +850,155 @@ mod tests {
     }
 
     #[test]
-    fn the_inert_items_do_nothing() {
-        let mut dialog = dialog();
-        let at = center(&dialog, 9);
-        click(&mut dialog, at);
+    fn the_nickname_field_is_item_9_and_starts_empty() {
+        let dialog = dialog();
+        assert_eq!(NICKNAME_ITEM, 9);
+        assert_eq!(dialog.nickname(), "");
+        assert_eq!(
+            dialog.nickname_field().map(TextField::rect),
+            Some(rect(149.0, 59.0, 170.0, 16.0))
+        );
+        assert_eq!(dialog.focus(), Focus::Name);
+    }
+
+    #[test]
+    fn with_defaults_both_fields_show_them_and_typing_replaces_the_name() {
+        let mut dialog = dialog().with_defaults("Shane Merrol", "Hunter");
+        assert_eq!(dialog.name(), "Shane Merrol");
+        assert_eq!(dialog.nickname(), "Hunter");
+        assert_eq!(dialog.focus(), Focus::Name);
+        assert!(dialog.field().selected(), "the name is selected whole");
+        assert_eq!(dialog.field().selection(), "Shane Merrol".len());
+        let nickname = dialog.nickname_field().expect("a field");
+        assert!(!nickname.selected(), "the nickname is not");
+        typed(&mut dialog, "A");
+        assert_eq!(dialog.name(), "A");
+        assert_eq!(dialog.nickname(), "Hunter");
+    }
+
+    #[test]
+    fn tab_focuses_the_other_field_and_selects_all_of_it() {
+        let mut dialog = dialog().with_defaults("Shane Merrol", "Hunter");
+        dialog.input(&key(Key::Tab));
+        assert_eq!(dialog.focus(), Focus::Nickname);
+        let nickname = dialog.nickname_field().expect("a field");
+        assert_eq!(nickname.selection(), "Hunter".len());
+        typed(&mut dialog, "Ace");
+        assert_eq!(dialog.nickname(), "Ace");
+        assert_eq!(dialog.name(), "Shane Merrol");
+        dialog.input(&key(Key::Backspace));
+        assert_eq!(dialog.nickname(), "Ac", "Backspace goes to the focus");
+        dialog.input(&Input::Key {
+            key: Key::Tab,
+            pressed: true,
+            repeat: true,
+        });
+        assert_eq!(dialog.focus(), Focus::Name, "a repeat moves it too");
+        assert_eq!(dialog.field().selection(), "Shane Merrol".len());
+        typed(&mut dialog, "Bo");
+        assert_eq!(dialog.name(), "Bo");
+        dialog.input(&Input::Key {
+            key: Key::Tab,
+            pressed: false,
+            repeat: false,
+        });
+        assert_eq!(dialog.focus(), Focus::Name, "a release does nothing");
         assert_eq!(dialog.take_outcome(), None);
-        assert_eq!(INERT_ITEMS, [9], "the nickname");
-        assert_eq!(dialog.name(), "");
+    }
+
+    #[test]
+    fn a_click_in_a_field_focuses_it_with_the_caret_at_its_end() {
+        let mut dialog = dialog().with_defaults("Shane", "Hunter");
+        let at = center(&dialog, NICKNAME_ITEM);
+        assert_eq!(click(&mut dialog, at), [], "silently");
+        assert_eq!(dialog.focus(), Focus::Nickname);
+        assert!(!dialog.nickname_field().expect("a field").selected());
+        typed(&mut dialog, "s");
+        assert_eq!(dialog.nickname(), "Hunters");
+        let at = center(&dialog, NAME_ITEM);
+        click(&mut dialog, at);
+        assert_eq!(dialog.focus(), Focus::Name);
+        assert!(!dialog.field().selected());
+        typed(&mut dialog, "y");
+        assert_eq!(dialog.name(), "Shaney");
+        assert_eq!(dialog.take_outcome(), None);
+    }
+
+    #[test]
+    fn only_the_focused_field_draws_its_caret_or_selection() {
+        let mut dialog = dialog().with_defaults("Shane", "Hunter");
+        let field_draw = |dialog: &NewPilotDialog, focused: Focus| {
+            let mut expected = DrawList::new();
+            let nickname = dialog.nickname_field().expect("a field");
+            match focused {
+                Focus::Name => {
+                    dialog.field().draw(&MonoMetrics, &mut expected);
+                    nickname.draw_unfocused(&MonoMetrics, &mut expected);
+                }
+                Focus::Nickname => {
+                    dialog.field().draw_unfocused(&MonoMetrics, &mut expected);
+                    nickname.draw(&MonoMetrics, &mut expected);
+                }
+            }
+            expected.iter().cloned().collect::<Vec<_>>()
+        };
+        for focus in [Focus::Name, Focus::Nickname] {
+            if dialog.focus() != focus {
+                dialog.input(&key(Key::Tab));
+            }
+            let fields = field_draw(&dialog, focus);
+            assert!(
+                drawn(&dialog)
+                    .windows(fields.len())
+                    .any(|window| window == fields),
+                "{focus:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ok_creates_the_pilot_with_the_name_and_nickname_as_typed() {
+        let mut dialog = dialog().with_defaults("The Ace;x", " Hunter ");
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_outcome(),
+            Some(NewPilotOutcome::Create {
+                name: "The Ace;x".to_owned(),
+                nickname: " Hunter ".to_owned(),
+                gender: Gender::Male,
+                strict_play: false,
+            })
+        );
+    }
+
+    #[test]
+    fn a_nickname_holds_31_characters() {
+        let mut dialog = dialog();
+        dialog.input(&key(Key::Tab));
+        typed(&mut dialog, &"x".repeat(40));
+        assert_eq!(dialog.nickname().chars().count(), 31);
+    }
+
+    #[test]
+    fn without_a_nickname_field_tab_keeps_the_name_and_selects_it() {
+        let mut template = stock();
+        template.items[NICKNAME_ITEM - 1].kind = ItemSpec::User;
+        let mut dialog = NewPilotDialog::new(&template, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds")
+            .with_defaults("Ada", "Hunter");
+        assert_eq!(dialog.nickname_field(), None);
+        assert_eq!(dialog.nickname(), "");
+        let name = center(&dialog, NAME_ITEM);
+        click(&mut dialog, name);
+        assert!(!dialog.field().selected(), "a click leaves the caret");
+        dialog.input(&key(Key::Tab));
+        assert_eq!(dialog.focus(), Focus::Name);
+        assert!(dialog.field().selected(), "Tab selects the name again");
+        let at = center(&dialog, NICKNAME_ITEM);
+        click(&mut dialog, at);
+        assert_eq!(dialog.focus(), Focus::Name);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), Some(created("Ada", Gender::Male)));
     }
 
     #[test]
@@ -760,6 +1041,7 @@ mod tests {
             dialog.take_outcome(),
             Some(NewPilotOutcome::Create {
                 name: "Ada".to_owned(),
+                nickname: String::new(),
                 gender: Gender::Male,
                 strict_play: true,
             })
@@ -877,13 +1159,40 @@ mod tests {
     fn the_fallback_has_a_name_field_ok_and_cancel() {
         let mut dialog = NewPilotDialog::fallback(ButtonStyle::STOCK, Rc::new(MonoMetrics));
         let texts = texts(&dialog);
-        for shown in ["OK", "Cancel", "Full Name:", "Create a new pilot:"] {
+        for shown in [
+            "OK",
+            "Cancel",
+            "Full Name:",
+            "Nickname:",
+            "Create a new pilot:",
+        ] {
             assert!(texts.contains(&shown.to_owned()), "{shown}: {texts:?}");
         }
+        let origin = dialog.dialog().bounds().min;
+        assert_eq!(
+            dialog.nickname_field().map(TextField::rect),
+            Some(rect(origin.x + 149.0, origin.y + 59.0, 170.0, 16.0)),
+            "the fallback has a nickname where stock has it"
+        );
+        dialog.input(&key(Key::Tab));
+        typed(&mut dialog, "Ace");
+        assert_eq!(dialog.nickname(), "Ace");
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Backspace));
+        dialog.input(&key(Key::Backspace));
+        dialog.input(&key(Key::Backspace));
         typed(&mut dialog, "Ada");
         let ok = center(&dialog, OK_ITEM);
         click(&mut dialog, ok);
-        assert_eq!(dialog.take_outcome(), Some(created("Ada", Gender::Male)));
+        assert_eq!(
+            dialog.take_outcome(),
+            Some(NewPilotOutcome::Create {
+                name: "Ada".to_owned(),
+                nickname: "Ace".to_owned(),
+                gender: Gender::Male,
+                strict_play: false,
+            })
+        );
         let gender = center(&dialog, GENDER_ITEM);
         click(&mut dialog, gender);
         assert_eq!(
@@ -891,7 +1200,6 @@ mod tests {
             Gender::Female,
             "the fallback has the control"
         );
-        let origin = dialog.dialog().bounds().min;
         assert_eq!(
             dialog.dialog().item_bounds(GENDER_ITEM),
             Some(rect(origin.x + 51.0, origin.y + 92.0, 200.0, 20.0)),
@@ -928,7 +1236,7 @@ mod tests {
         assert_eq!(
             format!("{dialog:?}"),
             format!(
-                "NewPilotDialog {{ name: \"Ada\", gender: Male, strict_play: false, outcome: None, refusal: Some({NAME_TAKEN:?}), .. }}"
+                "NewPilotDialog {{ name: \"Ada\", nickname: \"\", gender: Male, strict_play: false, outcome: None, refusal: Some({NAME_TAKEN:?}), .. }}"
             )
         );
     }

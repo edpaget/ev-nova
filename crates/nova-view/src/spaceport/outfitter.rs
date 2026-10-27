@@ -19,9 +19,16 @@
 //! letter or digit and grey otherwise (the Bible); and how many the player
 //! has, when any, in the top-right corner ([`outfit_picture`],
 //! [`grid`](super::grid)).
-//! One cell is selected, by a click on it or with the arrow keys, and
-//! highlighted; the grid scrolls a row at a time with the arrows below it,
-//! or with the selection. With nothing listed, the grid says so (`STR#`
+//! Every listed cell is framed in the `cölr` `GridDim` colour. One cell is
+//! selected, by a click on it or with the arrow keys, and highlighted:
+//! framed again, last, in `GridBright`, not filled
+//! ([`GridColors`](super::grid::GridColors)); the grid scrolls a row at a
+//! time with the arrows below it,
+//! or with the selection. The arrow keys, and Page Up and Page Down as Up
+//! and Down, move the selection by
+//! [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows), as the
+//! shipyard's do: by the engine, Up on the first row and Down onto an
+//! empty cell stay (`_OutfitFilter` @0x58203-0x583b8). With nothing listed, the grid says so (`STR#`
 //! 2002 #206).
 //!
 //! The selected outfit's picture is `PICT` 6000 plus its ID less 128, or
@@ -121,6 +128,18 @@
 //! reads the description of an outfit not already shown. Either way, a
 //! press on the highlighted cell changes nothing.
 //!
+//! The opening and the scroll arrows follow the same key. By the engine,
+//! the outfitter opens with nothing selected, as `_DoOutfitDialog` does
+//! (@0x5bb19-0x5bb54, the description emptied @0x5bd0f-0x5bd1c): no cell
+//! is highlighted, Buy and Sell are greyed, and the picture, the info box
+//! and the description are blank until a click or an arrow picks a cell.
+//! A scroll arrow that scrolls keeps the highlighted cell while it stays
+//! in view, reading its description again (@0x5d384-0x5d3b4,
+//! @0x5d70c-0x5d737), and otherwise selects nothing, ending a reset
+//! (@0x5d3bb-0x5d3d6, @0x5d73e-0x5d759); one that cannot scroll changes
+//! nothing. By the other reading, the port's earlier behaviour, it opens
+//! on the first cell, and a scroll keeps the selection, off screen too.
+//!
 //! Given the offer dialog's template ([`OutfitterScreen::with_offers`]),
 //! the outfitter offers missions as `_DoOutfitDialog` and `_OutfitFilter`
 //! do: it asks for an offer as it opens
@@ -150,7 +169,8 @@ use nova_sim::{
 
 use super::catalog::SpaceportCatalog;
 use super::credits::{self, comma_tons_text, credits_text, draw_amount_rows};
-use super::grid::{self, CellGrid, Shown, text};
+use super::grid::{self, CellGrid, GridColors, GridLooks, Scrolled, Shown, text};
+use super::grid_arrows::ArrowMoves;
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
@@ -158,8 +178,9 @@ use super::quantity_ask::QuantityAsk;
 use super::trade::{BUY_LABEL, MAX_LOT_KEY, SELL_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::DrawList;
 use crate::flight::escorts::NUMBER_WORDS;
+use crate::flight::view::is_map_press;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
@@ -171,7 +192,7 @@ use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::comm::grouped;
 use crate::ui::desc::DescDialog;
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::quantity::QuantityDialog;
 
@@ -201,8 +222,8 @@ pub const SCROLL_UP_ITEM: usize = 10;
 pub const SCROLL_DOWN_ITEM: usize = 11;
 
 pub use super::grid::{
-    CELL_HEIGHT, CELL_WIDTH, COLUMNS, GREY, GRID_ROWS, INSET, NO_PICTURE, SELECTED_COLOR,
-    TEXT_COLOR, TEXT_FONT, TEXT_SIZE, name_lines,
+    CELL_HEIGHT, CELL_WIDTH, COLUMNS, GREY, GRID_ROWS, INSET, NO_PICTURE, TEXT_COLOR, TEXT_FONT,
+    TEXT_SIZE, name_lines,
 };
 
 /// Buys one, as Buy does: the original's default.
@@ -417,10 +438,11 @@ pub fn outfit_desc_id(outfit: OutfitId) -> i16 {
 
 /// What the outfitter reads about an outfit: its description, through
 /// [`DescriptionSource`], and whether its picture exists, through
-/// [`SpaceportCatalog::picture_exists`]. Anything that is both is one.
-pub trait OutfitterCatalog: SpaceportCatalog + DescriptionSource {}
+/// [`SpaceportCatalog::picture_exists`], and the grid's colours, through
+/// [`GridLooks`]. Anything that is all three is one.
+pub trait OutfitterCatalog: SpaceportCatalog + DescriptionSource + GridLooks {}
 
-impl<T: SpaceportCatalog + DescriptionSource + ?Sized> OutfitterCatalog for T {}
+impl<T: SpaceportCatalog + DescriptionSource + GridLooks + ?Sized> OutfitterCatalog for T {}
 
 /// The catalog, shared, with a `Debug` that shows nothing of it.
 #[derive(Clone)]
@@ -451,18 +473,14 @@ struct Laid {
     shown: Option<(OutfitId, Shown)>,
 }
 
-/// Whether a grid cell is highlighted, and with none, the outfit Buy and
-/// Sell answer for (`*0xded5c` and `*0xded58`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Highlight {
-    /// The grid's selected cell is highlighted, and its outfit selected.
-    Cell,
-    /// No cell is highlighted. `Some` is the outfit an order that changed
-    /// the listing reset the selection to, listed or not
-    /// ([`OutfitterScreen::reselect`]); `None` is nothing selected, after
-    /// an empty cell clicked by the engine's reading of
-    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection).
-    None(Option<OutfitId>),
+/// What the screen's own keys asked for, until each is taken.
+#[derive(Clone, Copy, Debug, Default)]
+struct KeyAsks {
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// asked for the mission info screen.
+    mission_info: bool,
+    /// Whether the map key asked for the course map.
+    map: bool,
 }
 
 /// The Outfitter of the stellar landed on.
@@ -472,11 +490,17 @@ pub struct OutfitterScreen {
     laid: Result<Laid, String>,
     outfitter: Outfitter,
     catalog: CatalogHandle,
+    /// The grid's frame colours, read from the catalog once.
+    colors: GridColors,
     /// Each listed outfit's picture, by row, read once a list (none
     /// without the dialog).
     pictures: Vec<Option<i16>>,
-    /// The selected cell and the grid's scrolling.
+    /// The selected cell, whether one is highlighted (`*0xded5c`), and
+    /// the grid's scrolling.
     grid: CellGrid,
+    /// The reading of [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows)
+    /// the grid's arrows follow, read from the outfitter's rules once.
+    arrow_moves: ArrowMoves,
     /// The order asked for, and how many it moves, until it is taken.
     order: Option<(OutfitOrder, u32)>,
     /// The key B or S last went down on (a press, not a repeat), and the
@@ -494,12 +518,16 @@ pub struct OutfitterScreen {
     offering: Option<VenueOffers>,
     style: ButtonStyle,
     closed: bool,
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
-    /// asked for the mission info screen.
-    info_requested: bool,
-    /// Whether a cell is highlighted, and with none, the outfit Buy and
-    /// Sell answer for.
-    highlight: Highlight,
+    /// What its keys asked for, until each is taken.
+    asks: KeyAsks,
+    /// The outfit Buy and Sell answer for while no cell is highlighted
+    /// (`*0xded58`): `Some` is the outfit an order that changed the
+    /// listing reset the selection to, listed or not
+    /// ([`OutfitterScreen::reselect`]); `None` is nothing selected, after
+    /// an empty cell clicked by the engine's reading of
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection).
+    /// Unread while a cell is highlighted.
+    unhighlighted_outfit: Option<OutfitId>,
     /// Whether an order left nothing listed, so the outfitter closes
     /// once its alert is closed.
     leaving: bool,
@@ -516,7 +544,13 @@ impl OutfitterScreen {
     /// sell loop shows its words in "Desc Dialog", laid out by `alert`,
     /// its template (`DLOG` 3003), and none without one. Its buttons are
     /// labelled in `style`, and each outfit's picture and description are
-    /// read from `catalog`. The first cell is selected.
+    /// read from `catalog`. It opens as
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection) reads
+    /// it: by the engine with nothing selected, Buy and Sell greyed and
+    /// no picture, info box or description, as `_DoOutfitDialog` sets
+    /// `*0xded58` and `*0xded5c` to -1, the scroll to 0 and clears Sell
+    /// and Buy (@0x5bb19-0x5bb54) and empties the description
+    /// (@0x5bd0f-0x5bd1c); by the other, with the first cell selected.
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
@@ -553,12 +587,15 @@ impl OutfitterScreen {
                 shown: None,
             }
         });
+        let arrow_moves = ArrowMoves::from_rules(&outfitter.rules);
         let mut screen = Self {
             laid,
             outfitter,
+            colors: catalog.grid_colors(),
             catalog: CatalogHandle(catalog),
             pictures: Vec::new(),
             grid: CellGrid::default(),
+            arrow_moves,
             order: None,
             held: None,
             quantity: QuantityAsk::new(quantity.ok(), style),
@@ -567,14 +604,19 @@ impl OutfitterScreen {
             offering: None,
             style,
             closed: false,
-            info_requested: false,
-            highlight: Highlight::Cell,
+            asks: KeyAsks::default(),
+            unhighlighted_outfit: None,
             leaving: false,
             description_request: None,
             sounds: Vec::new(),
         };
         screen.read_pictures();
-        screen.select(0);
+        if screen.follows_outfit_filter() {
+            screen.grid.clear();
+            screen.selected_changed();
+        } else {
+            screen.select(0);
+        }
         screen
     }
 
@@ -640,6 +682,14 @@ impl OutfitterScreen {
         }
     }
 
+    /// Whether the map key (`_keyPrefs` +0x12, a press) has asked for the
+    /// course map since this was last asked, once (`_OutfitFilter` item 2, @0x580f3-0x58111): never in the
+    /// dialogs open over the outfitter or its offer, and never without its
+    /// dialog. Whoever holds the session opens it over the spaceport.
+    pub fn take_map_request(&mut self) -> bool {
+        std::mem::take(&mut self.asks.map)
+    }
+
     /// The mission of the offer open over it, when the offer's map key
     /// asked for the map since this was last asked, once.
     pub fn take_offer_map_request(&mut self) -> Option<MissionId> {
@@ -654,7 +704,7 @@ impl OutfitterScreen {
             .offering
             .as_mut()
             .is_some_and(VenueOffers::take_info_request);
-        std::mem::take(&mut self.info_requested) || offer
+        std::mem::take(&mut self.asks.mission_info) || offer
     }
 
     /// Whether the outfitter has asked for an offer since this was last
@@ -729,9 +779,7 @@ impl OutfitterScreen {
     /// ([`OutfitterScreen::reselect`]).
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
-        self.grid
-            .selected(self.outfitter.rows.len())
-            .filter(|_| self.highlight == Highlight::Cell)
+        self.grid.selected(self.outfitter.rows.len())
     }
 
     /// The outfit Buy and Sell answer for (`*0xded58`, which
@@ -743,9 +791,10 @@ impl OutfitterScreen {
     /// (@0x58632-0x58648).
     #[must_use]
     pub fn selected_outfit(&self) -> Option<OutfitId> {
-        match self.highlight {
-            Highlight::Cell => self.selected().map(|index| self.outfitter.rows[index].id),
-            Highlight::None(outfit) => outfit,
+        if self.grid.highlighted() {
+            self.selected().map(|index| self.outfitter.rows[index].id)
+        } else {
+            self.unhighlighted_outfit
         }
     }
 
@@ -788,8 +837,9 @@ impl OutfitterScreen {
         match after {
             Reselection::Kept => {}
             Reselection::Reset(outfit) => {
-                self.highlight = Highlight::None(Some(outfit));
+                self.unhighlighted_outfit = Some(outfit);
                 self.grid = CellGrid::default();
+                self.grid.clear();
                 self.selected_changed();
             }
             Reselection::Leave => self.leaving = true,
@@ -846,7 +896,7 @@ impl OutfitterScreen {
     /// With no cell highlighted, after a reset or an empty cell clicked,
     /// it keeps that and the grid's scroll.
     pub fn set_outfitter(&mut self, outfitter: Outfitter) {
-        if self.highlight != Highlight::Cell {
+        if !self.grid.highlighted() {
             self.outfitter = outfitter;
             self.read_pictures();
             self.selected_changed();
@@ -1006,30 +1056,60 @@ impl OutfitterScreen {
     }
 
     /// Moves the selection for an arrow `key` going down, and says
-    /// whether it was an arrow. With no cell highlighted, after a reset or
-    /// an empty cell clicked, an arrow highlights one: Right and Down pick
-    /// the first cell shown, and Left and Up the last cell shown, or the
-    /// last listed when fewer are (`_OutfitFilter` @0x583bd-0x58440);
-    /// otherwise the grid moves the selection.
+    /// whether it was an arrow, as [`CellGrid::arrow`] moves it by the reading
+    /// of [`RuleKey::GridArrows`](nova_sim::RuleKey::GridArrows): by the
+    /// engine, Up on the first row and Down onto an empty cell stay, and
+    /// Page Up and Page Down move as Up and Down. With no cell highlighted,
+    /// after a reset or an empty cell clicked, an arrow highlights one:
+    /// Right and Down pick the first cell shown, and Left and Up the last
+    /// cell shown, slot 19 of the 20 (`andl $0x13` @0x583e5), or the last
+    /// listed when fewer are (`_OutfitFilter` @0x583bd-0x58440).
     fn arrow(&mut self, key: Key) -> bool {
-        let count = self.outfitter.rows.len();
-        if self.highlight == Highlight::Cell {
-            return self.grid.arrow(key, count);
-        }
-        let first = self.grid.top_row() * COLUMNS;
-        let index = match key {
-            Key::Right | Key::Down => first,
-            Key::Left | Key::Up => first + COLUMNS * GRID_ROWS - 1,
-            _ => return false,
-        };
-        self.highlight = Highlight::Cell;
-        self.grid.select(index, count);
-        true
+        self.grid
+            .arrow(key, self.outfitter.rows.len(), self.arrow_moves)
     }
 
-    /// Scrolls the grid a row down, or up, never past either end.
+    /// Scrolls the grid a row down, or up, never past either end, with
+    /// the selection as
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection) reads
+    /// it. By the engine, as `_DoOutfitDialog`'s scroll arrows do (item 10
+    /// @0x5d351-0x5d3d6, item 11 @0x5d6b0-0x5d759), a scroll that moves
+    /// keeps the highlighted cell while it stays in view and reads its
+    /// description again (@0x5d384-0x5d3b4, @0x5d70c-0x5d737), and
+    /// otherwise selects nothing, letting go of a reset's outfit
+    /// (@0x5d3bb-0x5d3d6, @0x5d73e-0x5d759); one that cannot move changes
+    /// nothing. By the other reading, the selection is kept, off screen
+    /// too, and nothing is read.
+    ///
+    /// The arrows are reached only by a click released over them
+    /// (`_TrackOutfitButtons` @0x2a1b9-0x2a2ce): one scroll a click, none
+    /// while held, and no key. The original leaves Buy and Sell to the
+    /// next event's `_OutfitFilter` prelude (@0x58061-0x580ca), which comes
+    /// before the update event draws them; the screen regreys them here
+    /// at once, which no frame can tell apart.
     fn scroll(&mut self, down: bool) {
-        self.grid.scroll(down, self.outfitter.rows.len());
+        let count = self.outfitter.rows.len();
+        if !self.follows_outfit_filter() {
+            self.grid.scroll(down, count);
+            return;
+        }
+        match self.grid.scroll_dropping_hidden(down, count) {
+            Scrolled::Stayed => {}
+            Scrolled::Kept => self.reread(),
+            Scrolled::Dropped => {
+                self.unhighlighted_outfit = None;
+                self.selected_changed();
+            }
+        }
+    }
+
+    /// Regreys and shows the selected outfit, reading its description
+    /// again even when it is already shown.
+    fn reread(&mut self) {
+        if let Ok(laid) = &mut self.laid {
+            laid.shown = None;
+        }
+        self.selected_changed();
     }
 
     /// Activates dialog item `item`: Done closes, Buy and Sell ask, and the
@@ -1072,10 +1152,10 @@ impl OutfitterScreen {
     /// and by the other is left to the dialog.
     fn press_cell(&mut self, index: usize) -> bool {
         if index < self.outfitter.rows.len() {
-            self.highlight = Highlight::Cell;
             self.select(index);
         } else if self.follows_outfit_filter() {
-            self.highlight = Highlight::None(None);
+            self.unhighlighted_outfit = None;
+            self.grid.clear();
             self.selected_changed();
         } else {
             return false;
@@ -1083,6 +1163,10 @@ impl OutfitterScreen {
         true
     }
 
+    /// The shown cells, each its picture, owned count and name, then its
+    /// frame in `GridDim`; then, last, the selected cell framed again in
+    /// `GridBright` over its neighbours' shared lines. No cell is filled
+    /// (`_OutfitDialogUpdate` @0x573ef-0x57895, @0x578a1-0x578c7).
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
         let metrics = &*laid.metrics.0;
         let Some(grid) = laid.dialog.item_bounds(GRID_ITEM) else {
@@ -1093,18 +1177,23 @@ impl OutfitterScreen {
             text(list, NO_ITEMS, origin, TEXT_COLOR);
             return;
         }
-        for (index, cell) in self.grid.shown(grid, self.outfitter.rows.len()) {
-            let row = &self.outfitter.rows[index];
-            if Some(index) == self.selected() {
-                fill_rect(list, cell, SELECTED_COLOR);
-            }
-            outline(list, cell, GREY);
-            grid::draw_cell_picture(list, cell, self.pictures[index]);
-            if row.owned > 0 {
-                grid::draw_corner_text(list, metrics, cell, &row.owned.to_string(), true);
-            }
-            grid::draw_cell_name(list, metrics, cell, &row.short_name);
-        }
+        let count = self.outfitter.rows.len();
+        let selected = self.selected();
+        self.grid.draw_cells(
+            list,
+            grid,
+            count,
+            selected,
+            self.colors,
+            |list, index, cell| {
+                let row = &self.outfitter.rows[index];
+                grid::draw_cell_picture(list, cell, self.pictures[index]);
+                if row.owned > 0 {
+                    grid::draw_corner_text(list, metrics, cell, &row.owned.to_string(), true);
+                }
+                grid::draw_cell_name(list, metrics, cell, &row.short_name);
+            },
+        );
     }
 
     fn draw_selected(&self, laid: &Laid, list: &mut DrawList) {
@@ -1186,8 +1275,12 @@ impl Screen for OutfitterScreen {
             }
             return ScreenAction::None;
         }
+        if is_map_press(input) {
+            self.asks.map = true;
+            return ScreenAction::None;
+        }
         if is_mission_info_press(input) {
-            self.info_requested = true;
+            self.asks.mission_info = true;
             return ScreenAction::None;
         }
         let pressed =
@@ -1299,7 +1392,7 @@ mod tests {
         Launcher, OutfitFacts, Raise, Reselection, RuleKey, RuleSource, Rulebook, SaleAlert,
     };
 
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_rect, frame_rect};
     use crate::font::Font;
     use crate::input::MouseButton;
     use crate::sound::UiSound;
@@ -1363,6 +1456,12 @@ mod tests {
         fn picture_exists(&self, id: i16) -> bool {
             self.asked.borrow_mut().push(format!("PICT {id}"));
             self.pictures.contains(&id)
+        }
+    }
+
+    impl GridLooks for FakeArt {
+        fn grid_colors(&self) -> GridColors {
+            grid::TEST_GRID_COLORS
         }
     }
 
@@ -1438,7 +1537,8 @@ mod tests {
         (template(), Rc::new(MonoMetrics))
     }
 
-    fn screen_with(outfitter: Outfitter, art: &Rc<FakeArt>) -> OutfitterScreen {
+    /// The outfitter `outfitter` as it opens, reading from `art`.
+    fn opened_with(outfitter: Outfitter, art: &Rc<FakeArt>) -> OutfitterScreen {
         let catalog: Rc<dyn OutfitterCatalog> = Rc::clone(art) as Rc<dyn OutfitterCatalog>;
         OutfitterScreen::new(
             Ok(layout()),
@@ -1448,6 +1548,19 @@ mod tests {
             catalog,
             ButtonStyle::STOCK,
         )
+    }
+
+    /// The outfitter `outfitter` with the first cell picked, as a click on
+    /// it would, reading from `art`.
+    fn screen_with(outfitter: Outfitter, art: &Rc<FakeArt>) -> OutfitterScreen {
+        let mut screen = opened_with(outfitter, art);
+        screen.select(0);
+        screen
+    }
+
+    /// The outfitter `outfitter` as it opens.
+    fn opened(outfitter: Outfitter) -> OutfitterScreen {
+        opened_with(outfitter, &art())
     }
 
     /// Stock `DITL` 1003, fixed at (10, 20): OK (1), the prompt (2), the
@@ -1594,9 +1707,10 @@ mod tests {
             ],
             [1, 4, 5, 6, 7, 8, 9, 10, 11]
         );
-        assert_eq!((COLUMNS, GRID_ROWS), (4, 4));
-        assert!(CELL_WIDTH * COLUMNS as f32 <= 333.0);
-        assert!(CELL_HEIGHT * GRID_ROWS as f32 <= 271.0);
+        assert_eq!((COLUMNS, GRID_ROWS), (4, 5));
+        assert_eq!((CELL_WIDTH, CELL_HEIGHT), (84.0, 55.0));
+        assert_eq!(grid::CELL_PITCH_X * COLUMNS as f32 + 1.0, 333.0);
+        assert_eq!(grid::CELL_PITCH_Y * GRID_ROWS as f32 + 1.0, 271.0);
         assert_eq!((BUY_KEY, SELL_KEY), (Key::Char('b'), Key::Char('s')));
         assert_eq!((FIRST_PICTURE, FIRST_DESCRIPTION), (6000, 3000));
         assert_eq!(
@@ -1817,18 +1931,66 @@ mod tests {
     }
 
     #[test]
-    fn it_is_centred_with_the_first_cell_selected() {
+    fn by_the_engine_it_opens_with_nothing_selected() {
+        let mut screen = opened(outfitter());
+        assert_eq!((screen.selected(), screen.selected_outfit()), (None, None));
+        assert_eq!(screen.top_row(), 0);
+        assert_eq!(enabled(&screen), (false, false), "Buy and Sell grey");
+        let commands = drawn(&screen);
+        for index in 0..4 {
+            assert!(
+                !contains(&commands, &bright_frame(&screen, index)),
+                "{index}"
+            );
+        }
+        let words = words(&screen);
+        assert!(!words.contains(&"dësc 3000.".to_owned()), "{words:?}");
+        assert!(!words.contains(&PRICE_LABEL.to_owned()), "{words:?}");
+        let picture = item(&screen, PICTURE_ITEM);
+        assert!(
+            !commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::StretchedPicture { top_left, .. } if *top_left == picture.min
+            )),
+            "no picture"
+        );
+        assert_eq!(screen.take_description_request(), None);
+    }
+
+    #[test]
+    fn by_the_engine_the_first_arrow_after_opening_picks_a_cell_and_reads_it() {
+        let mut right = opened(long(30));
+        press(&mut right, Key::Right);
+        assert_eq!(right.selected(), Some(0));
+        assert_eq!(right.take_description_request(), Some(3000 + 200 - 128));
+        let mut up = opened(long(30));
+        press(&mut up, Key::Up);
+        assert_eq!(up.selected(), Some(19), "the last shown");
+        assert_eq!(up.take_description_request(), Some(3000 + 219 - 128));
+    }
+
+    #[test]
+    fn by_the_other_reading_it_opens_on_the_first_cell() {
+        let mut screen = opened(by_the_other_grid_reading(outfitter()));
+        assert_eq!(screen.selected(), Some(0));
+        assert_eq!(screen.selected_outfit(), Some(OutfitId(128)));
+        assert_eq!(enabled(&screen), (true, true));
+        assert!(contains(&drawn(&screen), &bright_frame(&screen, 0)));
+        assert!(words(&screen).contains(&"dësc 3000.".to_owned()));
+        assert_eq!(screen.take_description_request(), Some(3000));
+    }
+
+    #[test]
+    fn it_is_centred() {
         let screen = screen();
         assert_eq!(screen.problem(), None);
         assert_eq!(screen.dialog().expect("laid out").bounds().min, ORIGIN);
-        assert_eq!(screen.selected(), Some(0));
-        assert_eq!(screen.top_row(), 0);
         assert!(!screen.closed());
         assert_eq!(screen.outfitter(), &outfitter());
         assert_eq!(item(&screen, GRID_ITEM), rect(138.0, 231.0, 333.0, 271.0));
         assert_eq!(
             screen.cell_bounds(5),
-            Some(rect(138.0 + 83.0, 231.0 + 67.0, 83.0, 67.0))
+            Some(rect(138.0 + 83.0, 231.0 + 54.0, 84.0, 55.0))
         );
     }
 
@@ -1846,6 +2008,7 @@ mod tests {
             art(),
             ButtonStyle::STOCK,
         );
+        click_cell(&mut screen, 0);
         click_item(&mut screen, SELL_ITEM);
         assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
         click_item(&mut screen, BUY_ITEM);
@@ -1957,50 +2120,54 @@ mod tests {
         }
     }
 
-    /// The selected cell's highlight: the cell filled.
-    fn highlight(screen: &OutfitterScreen, index: usize) -> Vec<DrawCommand> {
+    /// Shown cell `index`'s frame in `color`.
+    fn framed(screen: &OutfitterScreen, index: usize, color: Color) -> Vec<DrawCommand> {
         let mut list = DrawList::new();
-        fill_rect(
-            &mut list,
-            screen.cell_bounds(index).expect("a cell"),
-            SELECTED_COLOR,
-        );
+        frame_rect(&mut list, screen.cell_bounds(index).expect("a cell"), color);
         list.iter().cloned().collect()
     }
 
-    /// A cell's frame.
+    /// Shown cell `index`'s frame in the fake's `GridDim`.
     fn frame(screen: &OutfitterScreen, index: usize) -> Vec<DrawCommand> {
-        let mut list = DrawList::new();
-        outline(&mut list, screen.cell_bounds(index).expect("a cell"), GREY);
-        list.iter().cloned().collect()
+        framed(screen, index, grid::TEST_GRID_COLORS.dim)
+    }
+
+    /// Shown cell `index`'s selection: framed in the fake's `GridBright`.
+    fn bright_frame(screen: &OutfitterScreen, index: usize) -> Vec<DrawCommand> {
+        framed(screen, index, grid::TEST_GRID_COLORS.bright)
     }
 
     fn contains(commands: &[DrawCommand], part: &[DrawCommand]) -> bool {
         commands.windows(part.len()).any(|window| window == part)
     }
 
+    /// The frame rule itself is `grid::CellGrid::draw_cells`'s, tested
+    /// there; this checks the outfitter hands it its grid item, rows,
+    /// selection and `cölr` colours.
     #[test]
-    fn the_selected_cell_is_highlighted_and_every_listed_cell_framed() {
-        let mut screen = screen();
+    fn the_grid_is_drawn_by_the_shared_cell_rule_on_its_item_in_the_catalogs_colours() {
+        let mut screen = screen_of(long(22));
+        let grid_item = item(&screen, GRID_ITEM);
         let commands = drawn(&screen);
-        let first = highlight(&screen, 0);
-        let at = commands
-            .windows(first.len())
-            .position(|window| window == first)
-            .expect("highlighted");
-        let light = commands
-            .iter()
-            .position(|c| matches!(c, DrawCommand::Text { text, .. } if text == "Light"))
-            .expect("drawn");
-        assert!(at < light, "under the text");
-        for index in 0..4 {
+        for index in 0..20 {
+            assert_eq!(
+                screen.cell_bounds(index),
+                Some(grid::cell_bounds(grid_item, index))
+            );
             assert!(contains(&commands, &frame(&screen, index)), "{index}");
         }
-        assert!(!contains(&commands, &frame(&screen, 4)), "nothing there");
+        assert!(contains(&commands, &bright_frame(&screen, 0)), "selected");
         press(&mut screen, Key::Right);
         let commands = drawn(&screen);
-        assert!(!contains(&commands, &first));
-        assert!(contains(&commands, &highlight(&screen, 1)));
+        assert!(!contains(&commands, &bright_frame(&screen, 0)));
+        assert!(contains(&commands, &bright_frame(&screen, 1)));
+        let few = drawn(&screen_of(long(3)));
+        let three = screen_of(long(3));
+        assert!(contains(&few, &frame(&three, 2)));
+        assert!(
+            !contains(&few, &frame(&three, 3)),
+            "no frame on an empty cell"
+        );
     }
 
     #[test]
@@ -2028,6 +2195,33 @@ mod tests {
     }
 
     #[test]
+    fn by_the_engine_down_onto_an_empty_cell_and_up_on_the_first_row_stay() {
+        let at = |outfitter: Outfitter, from: usize, k: Key| {
+            let mut screen = screen_of(outfitter);
+            click_cell(&mut screen, from);
+            press(&mut screen, k);
+            (screen.selected(), screen.selected_outfit())
+        };
+        let outfit = |index: usize| Some(OutfitId(200 + i16::try_from(index).expect("few")));
+        assert_eq!(at(long(10), 6, Key::Down), (Some(6), outfit(6)));
+        assert_eq!(at(long(10), 2, Key::Up), (Some(2), outfit(2)));
+        assert_eq!(at(long(10), 1, Key::PageDown), (Some(5), outfit(5)));
+        assert_eq!(at(long(10), 5, Key::PageUp), (Some(1), outfit(1)));
+        let clamped = |outfitter: Outfitter| Outfitter {
+            rules: outfitter
+                .rules
+                .with_override(RuleKey::GridArrows, RuleSource::Bible),
+            ..outfitter
+        };
+        assert_eq!(at(clamped(long(10)), 6, Key::Down), (Some(9), outfit(9)));
+        assert_eq!(at(clamped(long(10)), 2, Key::Up), (Some(0), outfit(0)));
+        assert_eq!(
+            at(clamped(long(10)), 6, Key::PageDown),
+            (Some(9), outfit(9))
+        );
+    }
+
+    #[test]
     fn a_click_on_a_cell_selects_it_and_by_the_other_reading_on_an_empty_one_nothing() {
         let mut screen = screen_of(by_the_other_grid_reading(outfitter()));
         click_cell(&mut screen, 2);
@@ -2036,10 +2230,24 @@ mod tests {
         assert_eq!(screen.selected(), Some(2), "the first empty cell");
         let grid = item(&screen, GRID_ITEM);
         let mut full = screen_of(long(20));
-        click(&mut full, Point::new(grid.max.x - 0.5, grid.min.y + 1.0));
-        assert_eq!(full.selected(), Some(0), "past the last column");
-        click(&mut full, Point::new(grid.min.x + 1.0, grid.max.y - 0.5));
-        assert_eq!(full.selected(), Some(0), "past the last row");
+        click(&mut full, Point::new(grid.max.x, grid.min.y + 1.0));
+        assert_eq!(full.selected(), Some(0), "the right edge is out");
+        click(&mut full, Point::new(grid.min.x + 1.0, grid.max.y));
+        assert_eq!(full.selected(), Some(0), "the bottom edge is out");
+        click(&mut full, Point::new(grid.min.x + 83.0, grid.min.y + 1.0));
+        assert_eq!(full.selected(), Some(0), "83 right is still column 0");
+        click(&mut full, Point::new(grid.min.x + 84.0, grid.min.y + 54.0));
+        assert_eq!(
+            full.selected(),
+            Some(1),
+            "84 right is column 1, 54 down row 0"
+        );
+        click(&mut full, Point::new(grid.max.x - 0.5, grid.max.y - 0.5));
+        assert_eq!(
+            full.selected(),
+            Some(19),
+            "the last cell reaches the corner"
+        );
         click(&mut screen, Point::new(grid.min.x + 1.0, grid.min.y + 1.0));
         assert_eq!(screen.selected(), Some(0));
         click(&mut screen, Point::new(grid.min.x - 1.0, grid.min.y + 1.0));
@@ -2068,30 +2276,171 @@ mod tests {
             .collect()
     }
 
+    /// `outfitter`'s screen with index 20 of 22 selected on the last row,
+    /// then scrolled up past it to the first.
+    fn scrolled_past_twenty(outfitter: Outfitter) -> OutfitterScreen {
+        let mut screen = opened(outfitter);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        click_cell(&mut screen, 16);
+        assert_eq!((screen.selected(), screen.top_row()), (Some(20), 1));
+        click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!(screen.top_row(), 0);
+        screen
+    }
+
+    #[test]
+    fn by_the_other_reading_a_scroll_keeps_the_selection_off_screen() {
+        let screen = scrolled_past_twenty(by_the_other_grid_reading(long(22)));
+        assert_eq!(screen.selected(), Some(20));
+        assert_eq!(screen.selected_outfit(), Some(OutfitId(220)));
+        assert_eq!(enabled(&screen), (true, false), "Buy still answers");
+        assert!(!any_highlight(&screen), "off screen");
+        let mut kept = opened(by_the_other_grid_reading(long(30)));
+        let _ = kept.take_description_request();
+        click_item(&mut kept, SCROLL_DOWN_ITEM);
+        assert_eq!(kept.selected(), Some(0), "the first cell, off screen");
+        assert_eq!(kept.take_description_request(), None, "nothing re-read");
+    }
+
+    #[test]
+    fn by_the_engine_a_scroll_that_takes_the_cell_out_of_view_leaves_nothing_selected() {
+        let up = scrolled_past_twenty(long(22));
+        let mut down = opened(long(30));
+        click_cell(&mut down, 3);
+        assert!(any_info(&down) && described(&down));
+        click_item(&mut down, SCROLL_DOWN_ITEM);
+        assert_eq!(down.top_row(), 1);
+        for screen in [up, down] {
+            assert_eq!((screen.selected(), screen.selected_outfit()), (None, None));
+            assert_eq!(enabled(&screen), (false, false));
+            assert!(!any_highlight(&screen));
+            assert!(!any_info(&screen), "{:?}", words(&screen));
+            assert!(!described(&screen));
+            assert_eq!(picture_drawn(&screen), None);
+        }
+    }
+
+    #[test]
+    fn by_the_engine_a_scroll_that_keeps_the_cell_in_view_reads_its_description_again() {
+        let art = art();
+        let mut screen = opened_with(long(30), &art);
+        click_cell(&mut screen, 9);
+        assert_eq!(screen.take_description_request(), Some(3000 + 209 - 128));
+        art.asked.borrow_mut().clear();
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!((screen.selected(), screen.top_row()), (Some(9), 1));
+        assert_eq!(screen.take_description_request(), Some(3000 + 209 - 128));
+        assert_eq!(*art.asked.borrow(), ["dësc 3081"], "read again");
+        assert!(contains(&drawn(&screen), &bright_frame(&screen, 5)));
+        assert_eq!(enabled(&screen), (true, false));
+        click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!((screen.selected(), screen.top_row()), (Some(9), 0));
+        assert_eq!(screen.take_description_request(), Some(3081), "Up too");
+    }
+
+    /// 30 outfits numbered from 200, with the blaster in place of index
+    /// `index`.
+    fn long_with_blaster_at(index: usize) -> Outfitter {
+        let mut outfitter = long(30);
+        outfitter.rows[index] = row(128, "Light\\nBlaster", 1000, 1, 2);
+        outfitter
+    }
+
+    #[test]
+    fn by_the_engine_a_scroll_ends_a_reset() {
+        let mut screen = reset(opened(long_with_blaster_at(0)));
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert_eq!(enabled(&screen), (true, true));
+        click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!(screen.top_row(), 0, "cannot scroll");
+        assert_eq!(screen.selected_outfit(), Some(BLASTER), "unchanged");
+        assert_eq!(enabled(&screen), (true, true));
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!(screen.top_row(), 1);
+        assert_eq!(screen.selected_outfit(), None, "the reset ended");
+        assert_eq!(enabled(&screen), (false, false));
+        press(&mut screen, BUY_KEY);
+        assert_eq!(screen.take_order(), None);
+    }
+
+    #[test]
+    fn by_the_engine_a_scroll_fills_a_blank_description() {
+        let mut screen = reset(opened(long_with_blaster_at(19)));
+        let _ = screen.take_description_request();
+        press(&mut screen, Key::Up);
+        assert_eq!(screen.selected(), Some(19));
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert!(!described(&screen), "blank, as the reset left it");
+        assert_eq!(screen.take_description_request(), None);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!((screen.selected(), screen.top_row()), (Some(19), 1));
+        assert!(words(&screen).contains(&"dësc 3000.".to_owned()));
+        assert_eq!(screen.take_description_request(), Some(3000));
+    }
+
+    #[test]
+    fn a_held_b_stops_after_a_scroll_drops_its_outfit() {
+        let repeat_b = |screen: &mut OutfitterScreen| {
+            screen.input(&key(BUY_KEY, true, true));
+            screen.take_order()
+        };
+        let mut dropped = opened(long(30));
+        click_cell(&mut dropped, 3);
+        press(&mut dropped, BUY_KEY);
+        assert_eq!(dropped.take_order(), Some(order(203, Direction::Buy)));
+        click_item(&mut dropped, SCROLL_DOWN_ITEM);
+        assert_eq!(repeat_b(&mut dropped), None, "the held B stops");
+        let mut kept = opened(long(30));
+        click_cell(&mut kept, 9);
+        press(&mut kept, BUY_KEY);
+        assert_eq!(kept.take_order(), Some(order(209, Direction::Buy)));
+        click_item(&mut kept, SCROLL_DOWN_ITEM);
+        assert_eq!(repeat_b(&mut kept), Some(order(209, Direction::Buy)));
+    }
+
+    #[test]
+    fn by_the_engine_a_scroll_that_cannot_move_changes_nothing() {
+        for (outfitter, item) in [(long(30), SCROLL_UP_ITEM), (long(20), SCROLL_DOWN_ITEM)] {
+            let mut screen = opened(outfitter);
+            click_cell(&mut screen, 2);
+            let _ = screen.take_description_request();
+            let before = drawn(&screen);
+            click_item(&mut screen, item);
+            assert_eq!(screen.selected(), Some(2), "{item}");
+            assert_eq!(screen.take_description_request(), None, "{item}");
+            assert_eq!(drawn(&screen), before, "{item}");
+        }
+        let mut unselected = opened(long(20));
+        click_item(&mut unselected, SCROLL_DOWN_ITEM);
+        assert_eq!(unselected.selected(), None);
+        assert_eq!(unselected.take_description_request(), None);
+    }
+
     #[test]
     fn the_grid_scrolls_a_row_at_a_time_with_the_selection_or_its_arrows() {
         let mut screen = screen_of(long(22));
-        let first: Vec<_> = (0..16).map(|n| format!("Good {n}")).collect();
+        let first: Vec<_> = (0..20).map(|n| format!("Good {n}")).collect();
         assert_eq!(names(&screen), first);
-        for _ in 0..3 {
+        for _ in 0..4 {
             press(&mut screen, Key::Down);
         }
-        assert_eq!((screen.selected(), screen.top_row()), (Some(12), 0));
+        assert_eq!((screen.selected(), screen.top_row()), (Some(16), 0));
         press(&mut screen, Key::Down);
-        assert_eq!((screen.selected(), screen.top_row()), (Some(16), 1));
+        assert_eq!((screen.selected(), screen.top_row()), (Some(20), 1));
         assert_eq!(names(&screen)[0], "Good 4");
-        assert!(contains(&drawn(&screen), &highlight(&screen, 12)));
-        press(&mut screen, Key::Down);
-        assert_eq!((screen.selected(), screen.top_row()), (Some(20), 2));
         assert_eq!(names(&screen).last().map(String::as_str), Some("Good 21"));
+        assert!(contains(&drawn(&screen), &bright_frame(&screen, 16)));
         click_item(&mut screen, SCROLL_DOWN_ITEM);
-        assert_eq!(screen.top_row(), 2, "the last row shows");
-        click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!(screen.top_row(), 1, "the last row shows");
         click_item(&mut screen, SCROLL_UP_ITEM);
         assert_eq!(screen.top_row(), 0);
         click_item(&mut screen, SCROLL_UP_ITEM);
         assert_eq!(screen.top_row(), 0, "the first row shows");
-        assert_eq!(screen.selected(), Some(20), "scrolling keeps the selection");
+        assert_eq!(
+            screen.selected(),
+            None,
+            "scrolled out of view by the engine"
+        );
         click_item(&mut screen, SCROLL_DOWN_ITEM);
         assert_eq!(screen.top_row(), 1);
         click_cell(&mut screen, 0);
@@ -2945,7 +3294,7 @@ mod tests {
         let commands = drawn(screen);
         (0..COLUMNS * GRID_ROWS)
             .filter(|&index| screen.cell_bounds(index).is_some())
-            .any(|index| contains(&commands, &highlight(screen, index)))
+            .any(|index| contains(&commands, &bright_frame(screen, index)))
     }
 
     /// Whether outfit `outfit` can go `direction` by `screen`'s outfitter.
@@ -3053,10 +3402,23 @@ mod tests {
         for _ in 0..6 {
             press(&mut screen, Key::Down);
         }
-        assert_eq!(screen.top_row(), 3);
+        assert_eq!(screen.top_row(), 2);
         let screen = reset(screen);
         assert_eq!(screen.top_row(), 0);
         assert_eq!(names(&screen)[0], "Good 0");
+    }
+
+    #[test]
+    fn after_a_reset_the_grid_reports_nothing_highlighted_until_an_arrow_picks_a_shown_cell() {
+        for (k, picked) in [(Key::Right, 0), (Key::Left, 9)] {
+            let mut screen = reset(screen_of(long(10)));
+            assert!(!screen.grid.highlighted(), "{k:?}: the grid's own bit");
+            assert_eq!(screen.grid.selected(10), None, "{k:?}");
+            press(&mut screen, k);
+            assert!(screen.grid.highlighted(), "{k:?}");
+            assert_eq!(screen.grid.selected(10), Some(picked), "{k:?}");
+            assert_eq!(screen.selected(), Some(picked), "{k:?}");
+        }
     }
 
     #[test]
@@ -3065,7 +3427,7 @@ mod tests {
         click_cell(&mut clicked, 2);
         assert_eq!(clicked.selected(), Some(2));
         assert_eq!(clicked.selected_outfit(), Some(OutfitId(130)));
-        assert!(contains(&drawn(&clicked), &highlight(&clicked, 2)));
+        assert!(contains(&drawn(&clicked), &bright_frame(&clicked, 2)));
         let mut empty = reset(screen());
         click_cell(&mut empty, 4);
         assert_eq!(empty.selected(), None, "an empty cell");
@@ -3092,8 +3454,10 @@ mod tests {
         for (k, first_or_last) in [
             (Key::Right, 0),
             (Key::Down, 0),
-            (Key::Left, 15),
-            (Key::Up, 15),
+            (Key::PageDown, 0),
+            (Key::Left, 19),
+            (Key::Up, 19),
+            (Key::PageUp, 19),
         ] {
             assert_eq!(arrowed(long(30), 0, k), at(first_or_last, 0), "{k:?}");
             assert_eq!(
@@ -3105,8 +3469,8 @@ mod tests {
         for k in [Key::Left, Key::Up] {
             assert_eq!(arrowed(long(10), 0, k), at(9, 0), "{k:?}: the last");
             assert_eq!(
-                arrowed(long(22), 2, k),
-                at(21, 2),
+                arrowed(long(22), 1, k),
+                at(21, 1),
                 "{k:?}: the last, scrolled"
             );
         }
@@ -3229,11 +3593,11 @@ mod tests {
         };
         for k in [Key::Right, Key::Down] {
             assert_eq!(arrowed(long(10), 0, 12, k), at(0, 0), "{k:?}");
-            assert_eq!(arrowed(long(22), 2, 14, k), at(8, 2), "{k:?} scrolled");
+            assert_eq!(arrowed(long(22), 1, 19, k), at(4, 1), "{k:?} scrolled");
         }
         for k in [Key::Left, Key::Up] {
             assert_eq!(arrowed(long(10), 0, 12, k), at(9, 0), "{k:?}");
-            assert_eq!(arrowed(long(22), 2, 14, k), at(21, 2), "{k:?} scrolled");
+            assert_eq!(arrowed(long(22), 1, 19, k), at(21, 1), "{k:?} scrolled");
         }
     }
 
@@ -3275,7 +3639,7 @@ mod tests {
         press(&mut screen, Key::Right);
         assert_eq!(screen.selected(), Some(0));
         assert_eq!(screen.selected_outfit(), Some(BLASTER));
-        assert!(contains(&drawn(&screen), &highlight(&screen, 0)));
+        assert!(contains(&drawn(&screen), &bright_frame(&screen, 0)));
         assert_eq!(picture_drawn(&screen), Some(ImageKey::picture(6000)));
         assert!(any_info(&screen));
         assert!(follows(&info_placed(&screen), PRICE_LABEL, "1,000 cr"));
@@ -3388,12 +3752,22 @@ mod tests {
         assert_eq!(screen.selected_outfit(), Some(BLASTER));
         assert_eq!(enabled(&screen), (false, true), "regreyed");
         assert!(!any_highlight(&screen));
-        let mut scrolled = reset(screen_of(long(30)));
+        // A scroll ends the reset by the engine; the other reading keeps it.
+        let mut scrolled = reset(screen_of(by_the_other_grid_reading(long(30))));
         click_item(&mut scrolled, SCROLL_DOWN_ITEM);
-        scrolled.set_outfitter(unlisted_blaster());
+        scrolled.set_outfitter(by_the_other_grid_reading(unlisted_blaster()));
         assert_eq!(scrolled.top_row(), 1, "the scroll kept");
         assert_eq!(scrolled.selected(), None);
         assert_eq!(enabled(&scrolled), (true, true), "the unlisted blaster");
+        let mut dropped = reset(screen_of(long(30)));
+        click_item(&mut dropped, SCROLL_DOWN_ITEM);
+        dropped.set_outfitter(long(30));
+        assert_eq!(dropped.top_row(), 1, "the scroll kept");
+        assert_eq!(
+            (dropped.selected(), dropped.selected_outfit()),
+            (None, None)
+        );
+        assert_eq!(enabled(&dropped), (false, false));
     }
 
     #[test]
@@ -3749,6 +4123,7 @@ mod tests {
                 art(),
                 ButtonStyle::STOCK,
             );
+            click_cell(&mut screen, 0);
             alt_click(&mut screen, BUY_ITEM);
             let asking = screen.quantity().expect("asking");
             assert_eq!(
@@ -4382,6 +4757,7 @@ mod tests {
             art(),
             ButtonStyle::STOCK,
         );
+        click_cell(&mut screen, 0);
         screen.alert(&rack_alert(OutfitRefusal::NegativeFreeMass, false));
         assert!(screen.alert_dialog().is_none());
         press(&mut screen, SELL_KEY);
@@ -4463,6 +4839,44 @@ mod tests {
         );
         press(&mut broken, i);
         assert!(!broken.take_info_request(), "no dialog");
+    }
+
+    #[test]
+    fn the_map_key_asks_for_the_map_on_a_press_not_in_the_quantity_dialog_or_the_alert() {
+        let m = crate::flight::view::MAP_KEY;
+        let mut screen = counting_screen();
+        assert!(!screen.take_map_request());
+        screen.input(&key(m, true, true));
+        screen.input(&key(m, false, false));
+        assert!(!screen.take_map_request(), "a repeat or a release");
+        press(&mut screen, m);
+        assert!(screen.take_map_request());
+        assert!(!screen.take_map_request(), "once");
+        assert!(!screen.take_info_request());
+        assert!(!screen.closed());
+        alt_click(&mut screen, BUY_ITEM);
+        press(&mut screen, m);
+        assert!(!screen.take_map_request(), "the quantity dialog takes it");
+        assert!(screen.quantity().is_some());
+        let mut screen = alerting(RAISED);
+        press(&mut screen, m);
+        assert!(!screen.take_map_request(), "the alert takes it");
+        assert!(screen.alert_dialog().is_some());
+        let mut broken = OutfitterScreen::new(
+            Err("no DLOG 1002".to_owned()),
+            Ok(quantity()),
+            Ok(desc_template()),
+            outfitter(),
+            art() as Rc<dyn OutfitterCatalog>,
+            ButtonStyle::STOCK,
+        );
+        press(&mut broken, m);
+        assert!(!broken.take_map_request(), "no dialog");
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        press(&mut screen, m);
+        assert!(!screen.take_map_request(), "the offer's");
+        assert!(screen.take_offer_map_request().is_some());
     }
 
     #[test]

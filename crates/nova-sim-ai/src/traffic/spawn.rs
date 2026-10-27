@@ -3387,6 +3387,7 @@ mod tests {
                 carried: false,
                 wage: None,
                 person: Some(PersonId(id)),
+                mark: None,
             })
             .collect()
     }

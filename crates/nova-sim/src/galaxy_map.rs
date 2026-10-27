@@ -13,7 +13,11 @@
 //! 1. **The course**, off the hypergate map only (@0xe5e3): each pair of
 //!    consecutive `_hyperRoute` entries, both ≠ −1, as raw IDs, never
 //!    resolved by place (@0xe661-0xe7a2). The route's first entry is the
-//!    current system ([`MapDrawing::course`]).
+//!    course's start, slot 0 ([`MapState::course_start`]); with none (−1)
+//!    the first pair is skipped and the line starts at the first hop. The
+//!    player's position is never an end: after an `M` or `N` keeps the
+//!    course, the line still starts at the system it was started from
+//!    ([`MapDrawing::course`]).
 //! 2. **The current system's links** (@0xe7a8-0xe986): each of its 16
 //!    Con slots resolved by place (`_FindActiveCoLocatedSystem`), the
 //!    known and explored flags never read ([`MapDrawing::current_links`]).
@@ -229,7 +233,11 @@ pub struct MapState<'a> {
     pub known: &'a BTreeSet<SystemId>,
     /// The system the player is in.
     pub current: SystemId,
-    /// The course's hops after the current system, raw.
+    /// The course's start, `_hyperRoute` slot 0: the system it was last
+    /// started or advanced from (`Pilot::course_start`). `None` is −1,
+    /// which skips the first pair.
+    pub course_start: Option<SystemId>,
+    /// The course's hops after its start, raw: slots 1 on.
     pub course: &'a [SystemId],
     /// The current system's Con slot selected in mode 3 (+0x6c), if any.
     pub hyper_slot: Option<usize>,
@@ -286,11 +294,14 @@ pub fn draw_map(
     let course = if state.hypergate.is_some() {
         Vec::new()
     } else {
-        let route: Vec<SystemId> = std::iter::once(current)
-            .chain(state.course.iter().copied())
+        let route: Vec<Option<SystemId>> = std::iter::once(state.course_start)
+            .chain(state.course.iter().copied().map(Some))
             .take(ROUTE_ENTRIES)
             .collect();
-        route.windows(2).map(|hop| (hop[0], hop[1])).collect()
+        route
+            .windows(2)
+            .filter_map(|pair| Some((pair[0]?, pair[1]?)))
+            .collect()
     };
     let current_links = state
         .slots(current)
@@ -400,6 +411,7 @@ mod tests {
             explored,
             known,
             current: SystemId(130),
+            course_start: None,
             course: &[],
             hyper_slot: None,
             hypergate: None,
@@ -715,12 +727,16 @@ mod tests {
     // The course, the gate and the names.
 
     #[test]
-    fn the_course_is_drawn_raw_from_the_current_system() {
-        // 133 is hidden: the course still runs through it.
+    fn the_course_is_drawn_raw_from_its_start() {
+        // In 131, the course started from 130 and kept: the line still
+        // starts at 130, never at the player. 133 is hidden: the course
+        // still runs through it.
         let galaxy = galaxy(chain_systems(), &[133]);
         let (explored, known) = (set(&[]), set(&[]));
         let course = ids(&[131, 133, 140]);
         let state = MapState {
+            current: SystemId(131),
+            course_start: Some(SystemId(130)),
             course: &course,
             ..state(&galaxy, &explored, &known)
         };
@@ -731,6 +747,45 @@ mod tests {
         );
         assert!(!drawing.hypergate);
         assert!(drawing.gate_arrows.is_empty());
+    }
+
+    #[test]
+    fn a_course_with_no_start_is_drawn_from_its_first_hop() {
+        // Slot 0 is −1: the first pair is skipped, the rest drawn
+        // (@0xe66a).
+        let galaxy = galaxy(chain_systems(), &[]);
+        let (explored, known) = (set(&[]), set(&[]));
+        let course = ids(&[131, 133, 140]);
+        let state = MapState {
+            course: &course,
+            ..state(&galaxy, &explored, &known)
+        };
+        assert_eq!(
+            draw_map(&state, uncoded).course,
+            [(131, 133), (133, 140)].map(|(a, b)| (SystemId(a), SystemId(b)))
+        );
+        let one = ids(&[131]);
+        let state = MapState {
+            course: &one,
+            ..state
+        };
+        assert!(draw_map(&state, uncoded).course.is_empty());
+    }
+
+    #[test]
+    fn the_course_is_capped_at_the_routes_32_entries() {
+        let galaxy = galaxy(chain_systems(), &[]);
+        let (explored, known) = (set(&[]), set(&[]));
+        let course: Vec<SystemId> = (1..=40).map(SystemId).collect();
+        let state = MapState {
+            course_start: Some(SystemId(0)),
+            course: &course,
+            ..state(&galaxy, &explored, &known)
+        };
+        let drawn = draw_map(&state, uncoded).course;
+        assert_eq!(drawn.len(), ROUTE_ENTRIES - 1);
+        assert_eq!(drawn.first(), Some(&(SystemId(0), SystemId(1))));
+        assert_eq!(drawn.last(), Some(&(SystemId(30), SystemId(31))));
     }
 
     fn chain_systems() -> Vec<crate::catalog::StarSystem> {
@@ -749,6 +804,7 @@ mod tests {
         let course = ids(&[131]);
         let offered = ids(&[133, 132]);
         let state = MapState {
+            course_start: Some(SystemId(130)),
             course: &course,
             hypergate: Some(&offered),
             ..state(&galaxy, &explored, &known)

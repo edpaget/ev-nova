@@ -138,7 +138,7 @@ use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::spaceport::missions::{
     ABORT_ITEM, ACCEPT_ITEM, INFO_TEXT_ITEM, MissionComputerScreen, MissionInfoScreen,
-    TEXT_ITEM as COMPUTER_TEXT_ITEM,
+    NAME_ITEM as COMPUTER_NAME_ITEM, TEXT_ITEM as COMPUTER_TEXT_ITEM,
 };
 use nova_view::spaceport::{OfferDialog, SpaceportView};
 use nova_view::text::fixture::MonoMetrics;
@@ -1232,10 +1232,10 @@ fn due(pilot: &Pilot) -> Pilot {
 }
 
 /// Mission BBS's item.
-const MISSION_BBS: usize = 11;
+const MISSION_BBS: usize = 10;
 
 /// The Bar's item.
-const BAR: usize = 10;
+const BAR: usize = 11;
 
 #[test]
 fn the_mission_computers_selected_text_is_loaded_through_flight() {
@@ -1264,6 +1264,45 @@ fn the_mission_computers_selected_text_is_loaded_through_flight() {
         .lines()
         .concat();
     assert_eq!(shown, "4".repeat(24), "loaded, its letters drawn");
+}
+
+#[test]
+fn the_mission_computer_shows_the_offers_name_cut_then_filled_on_its_first_frame() {
+    // Item 5 is 269 wide: the stored name is cut to 268 in Times 18
+    // (9.9 a character in `MonoMetrics`), 26 characters and the
+    // ellipsis, before its tags are filled.
+    let data = game_data_named(
+        Named {
+            run: b"Run to <DST> by the long road home;courier",
+            bar: "Smoke and quiet talk.",
+        },
+        &timed(mission(128, 200, 201)),
+        bar_job(),
+        "Take this to <DST>.",
+        -1,
+        &pad(),
+        ForkBuilder::new(),
+        |fork| fork,
+    );
+    let store = MemoryPilots::new();
+    let mut game = Game::with_data(&store, &ada(), data);
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    let computer = game.spaceport().mission_computer().expect("open");
+    let name = computer
+        .dialog()
+        .and_then(|dialog| dialog.text(COMPUTER_NAME_ITEM))
+        .expect("the name item")
+        .lines()
+        .join(" ");
+    assert_eq!(name, "Run to Pad by the long r…", "cut, then filled");
+    let frame = game.frame();
+    assert!(
+        texts(&frame).contains(&"Run to Pad by the long r…".to_owned()),
+        "drawn on the first frame: {:?}",
+        texts(&frame)
+    );
 }
 
 /// Whether the frame drew `text`, and drew no conditional text left
@@ -1905,6 +1944,8 @@ fn the_hire_screens_info_panels_close_redraws_the_port_bar() {
     let mut game = bought_the_racer(&store);
     game.click_port(BAR);
     game.tap(Key::Char('h'));
+    // It opens with nothing selected: Right picks the first ship.
+    game.tap(Key::Right);
     game.tap(Key::Space);
     let hire = game
         .spaceport()

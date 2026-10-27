@@ -3,7 +3,9 @@
 //!
 //! The session flies the warp (see `nova_sim`'s `warp_stage` module): the
 //! ship moves off along its bearing, up to 50 pixels a tick, so the
-//! camera and the starfield show the rush. The effect plays on top, on
+//! camera and the starfield show the rush: the stars are `_HandleStars`'
+//! sprites ([`stars`](super::stars)), each moving with the ship by its
+//! parallax and wrapping back in as the ship outruns it. The effect plays on top, on
 //! display time, in the phases [`JumpPhase`] names:
 //!
 //! 1. [`JumpPhase::Warp`]: from the jump's start nothing shows, until the

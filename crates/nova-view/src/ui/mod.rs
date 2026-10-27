@@ -12,6 +12,9 @@
 //!   and `TrackControl`-style pointer tracking.
 //! - [`scroll_text`]: text wrapped into a box and scrolled a line at a
 //!   time.
+//! - [`text_box`]: a static text box, as `TETextBox` draws one: its last
+//!   line clipped to the box. The news, exchange, flight message,
+//!   shipyard weapons, player info and shop descriptions draw through it.
 //! - [`row_list`]: a [`RowList`] of one-line rows in a box, one of them
 //!   selected by a click or the arrow keys.
 //! - [`dialog`]: a modal [`Dialog`] laid out from a `DLOG`/`DITL`
@@ -56,6 +59,9 @@
 //!   ([`AssignmentDialog`]).
 //! - [`comm`]: the comm dialog ([`CommDialog`]), talking to a ship
 //!   hailed, and the haggle dialog ([`HaggleDialog`]) over its price.
+//! - [`escort_dialog`]: the escort dialog
+//!   ([`EscortDialog`](escort_dialog::EscortDialog)) a fleet escort
+//!   hailed opens, with its Upgrade, Sell and Release.
 //! - [`catalog`]: the ports the widgets read: [`DialogResources`] and
 //!   [`DescriptionSource`].
 //! - [`data`]: the ports' adapters over `nova_data`'s `InterfaceData` and
@@ -68,6 +74,7 @@ pub mod data;
 pub mod desc;
 pub mod dialog;
 pub mod edit_dialog;
+pub mod escort_dialog;
 pub mod mission_dialogs;
 pub mod mission_info;
 pub mod mode_picker;
@@ -82,6 +89,7 @@ pub mod quantity;
 pub mod row_list;
 pub mod scroll_text;
 pub mod slice;
+pub mod text_box;
 pub mod text_field;
 pub mod text_input;
 pub mod toggle;
@@ -89,11 +97,12 @@ pub mod volume;
 pub mod yes_no;
 
 pub use button::{Button, ButtonImages, ButtonSkin, ButtonStyle, ButtonTracker};
-pub use catalog::{DescriptionSource, DialogResources};
+pub use catalog::{DescriptionSource, DialogResources, PictureSizes};
 pub use comm::{CommDialog, CommPress, HaggleDialog};
 pub use desc::DescDialog;
 pub use dialog::{
     Dialog, DialogEvent, DialogFrame, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role,
+    TextBacking,
 };
 pub use edit_dialog::{Confirm, EditDialog, EditItems};
 pub use new_pilot::{NewPilotDialog, NewPilotOutcome};

@@ -199,6 +199,24 @@ fn a_loaded_flight_reads_the_rules_it_is_given() {
 }
 
 #[test]
+fn a_loaded_flight_keeps_the_saved_course_as_the_rules_it_is_given_read() {
+    let mut pilot = docked_pilot("Ada");
+    pilot.course = vec![SystemId(131)];
+    pilot.course_start = Some(pilot.system);
+    let cleared = FlightView::loaded(catalog(), pilot.clone(), Rulebook::default());
+    assert_eq!(
+        cleared.session().map(|session| session.course().to_vec()),
+        Ok(vec![])
+    );
+    let other = Rulebook::default().with_override(RuleKey::LoadedCourse, RuleSource::Bible);
+    let kept = FlightView::loaded(catalog(), pilot, other);
+    assert_eq!(
+        kept.session().map(|session| session.course().to_vec()),
+        Ok(vec![SystemId(131)])
+    );
+}
+
+#[test]
 fn landing_taking_off_and_transactions_make_a_save_due() {
     let centred = FakeCatalog {
         sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
@@ -557,13 +575,30 @@ fn opening_the_outfitter_lifts_the_sessions_once_an_opening_limit() {
 }
 
 #[test]
+fn recharge_is_enabled_as_the_session_says() {
+    let mut view = FlightView::new(outfitting());
+    assert!(!view.recharge_enabled(), "in flight");
+    land_now(&mut view);
+    assert!(!view.recharge_enabled(), "a full tank");
+    let mut desk = view.pilot_desk().expect("flying");
+    desk.edit(PilotEdit::Reserve(nova_sim::Reserve::Fuel, 100.0))
+        .expect("set");
+    assert!(view.recharge_enabled(), "room in the tank");
+    let broken = FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..outfitting()
+    };
+    assert!(!FlightView::new(broken).recharge_enabled());
+}
+
+#[test]
 fn recharging_goes_through_the_session() {
     use nova_sim::RechargeRefusal;
     let mut view = FlightView::new(outfitting());
     assert_eq!(view.recharge(), Err(RechargeRefusal::NoFuel), "in flight");
     land_now(&mut view);
     view.take_save_due();
-    assert_eq!(view.recharge(), Err(RechargeRefusal::Full));
+    assert_eq!(view.recharge(), Ok(0), "a full tank");
     assert!(!view.take_save_due());
     let broken = FakeCatalog {
         character: Err(StartError::NoCharacter),
@@ -754,14 +789,23 @@ fn the_outfitter_and_shipyard_roll_on_the_flights_chance() {
 fn the_naming_is_the_sessions_on_the_flights_chance() {
     let always = Rc::new(RefCell::new(Always::default()));
     let shared: Rc<RefCell<dyn Chance>> = always.clone();
-    let mut view = FlightView::new(shipbuying()).with_chance(SharedChance::new(shared));
+    let mut prompts = vec![String::new(); 119];
+    prompts.push("Christen thy".to_owned());
+    let catalog = FakeCatalog {
+        strings: vec![(2002, prompts)],
+        ..shipbuying()
+    };
+    let mut view = FlightView::new(catalog).with_chance(SharedChance::new(shared));
     assert_eq!(view.ship_naming(ShipId(129)), Err(ShipRefusal::NoShipyard));
     land_now(&mut view);
     view.take_save_due();
     assert_eq!(view.ship_naming(ShipId(999)), Err(ShipRefusal::NotListed));
     let naming = view.ship_naming(ShipId(129)).expect("a naming");
     assert_eq!(naming.ship, ShipId(129));
-    assert_eq!(naming.prompt, "Please name your new : ");
+    assert_eq!(
+        naming.prompt, "Christen thy : ",
+        "#120, read from the catalog"
+    );
     assert_eq!(naming.default, "Fast 999", "each digit the last of nine");
     assert!(!view.take_save_due());
     let mut broken = FlightView::new(FakeCatalog {

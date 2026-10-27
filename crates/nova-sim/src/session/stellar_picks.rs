@@ -45,7 +45,7 @@ impl Chart {
             .iter()
             .filter(|site| {
                 self.galaxy
-                    .active_holder(statics.listers(site.id), pilot.system)
+                    .active_holder(site.id, statics.listers(site.id), pilot.system)
                     .is_some()
             })
             .copied()

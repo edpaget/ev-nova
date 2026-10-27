@@ -4,22 +4,15 @@ use std::time::Duration;
 
 use nova_sim::PlayerCommand;
 use nova_sim::{
-    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, RuleKey, RuleSource, Session, Steps,
-    TargetPick, TrafficCatalog,
+    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Session, Steps, TargetPick,
+    TrafficCatalog,
 };
 
-use crate::flight::alert;
-use crate::flight::asteroids::{self};
-use crate::flight::boxes::{self};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::hud::{self};
-use crate::flight::weapons::{self};
 use crate::galaxy::GalaxyCatalog;
-use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
-use crate::system::scene::{self, SystemScene};
-use crate::system::starfield;
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{
@@ -111,7 +104,9 @@ impl<
         match press {
             Some(LAND_KEY) => self.land(),
             Some(BOARD_KEY) => {
-                self.board();
+                // A fresh press follows a release, which clears the latch.
+                self.board_latch = false;
+                self.board_frame(true);
                 if self.pending_boarding {
                     return ScreenAction::None;
                 }
@@ -156,9 +151,12 @@ impl<
                 TargetPick::NearestThreat
             }),
             Some(SELECT_KEY) => {
+                // Option is read at the press, the original reading it at
+                // the pass (@0x6acf6): the press is taken on the next
+                // step, before a frame is drawn.
                 let backwards = self.held.contains(&Key::Alt);
                 if let Ok(session) = &mut self.session {
-                    session.select_secondary(backwards);
+                    session.press_weapon_select(backwards);
                 }
             }
             Some(key) => self.nav_key(key),
@@ -244,9 +242,9 @@ impl<
         self.advance_hud();
     }
 
-    /// The scene, its HUD and the cursor, then the fades. With the course
-    /// map open, the map's dialog over the paused scene as it would be
-    /// drawn shut, less the cursor, which the map hides, its 1024 x 768
+    /// The scene and its HUD, then the fades. With the course map open,
+    /// the map's dialog over the paused scene as it would be drawn shut,
+    /// less the cursor, which the map hides, its 1024 x 768
     /// frame centred in a widened view ([`FlightView::map_offset`]); in
     /// port, where the bar opens it, the dialog alone, where the classic
     /// spaceport has it, for the app to draw over the spaceport.
@@ -266,7 +264,6 @@ impl<
             return;
         }
         if self.draw_scene(list) {
-            self.cursor.draw(list, &self.looks);
             self.draw_fades(list);
         }
     }
@@ -350,9 +347,12 @@ impl<
         + EscortMenuLooks,
 > FlightView<C>
 {
-    /// Draws the scene and its HUD, the cursor and the fades left out:
-    /// whether there was a scene to draw, or only why flight could not
-    /// start.
+    /// Draws the scene and its HUD, the fades left out: whether there was
+    /// a scene to draw, or only why flight could not start. The sprite
+    /// world goes first, in `_SetupSpriteWorld`'s order
+    /// ([`FlightView::draw_world`]), the brackets, the cursor, the icons,
+    /// the floating map and the escort menu among it, then the overlay
+    /// over it: the title, the help and the status bar.
     fn draw_scene(&self, list: &mut DrawList) -> bool {
         let Some(scene) = &self.scene else {
             let reason = self.session().err().unwrap_or_default();
@@ -368,17 +368,6 @@ impl<
         };
         let camera = self.camera();
         list.world(|list| self.draw_world(list, scene, &camera));
-        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        self.draw_brackets(list, scene, &camera);
-        self.draw_red_alert(list);
-        if self.session.as_ref().is_ok_and(Session::double_time) {
-            alert::draw_double_time(list);
-        }
-        // `_PostDrawCallback`'s order: the floating map over the sprites
-        // and icons, under the escort menu (@0x38b95-0x38c72).
-        self.draw_floating_map(list);
-        self.escort_menu
-            .draw(list, &self.escort_rows(), self.escort_colors, metrics);
         if self.overlays.title {
             list.text(
                 format!("{} (sÿst {})", scene.name(), scene.id().0),
@@ -394,36 +383,5 @@ impl<
             Err(reason) => hud::draw_unavailable(list, reason, self.view.0),
         }
         true
-    }
-
-    /// Draws the sprite world, the scene under the HUD: the stars, the
-    /// message line, the stellars, asteroids and boxes, the beams under
-    /// the ships, the ships and shots, the beams over them, the effects
-    /// and the smoke. The message line is text, so it is overlay among
-    /// the world ([`DrawList::world`]).
-    fn draw_world(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
-        starfield::draw(list, camera);
-        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        if let Some(message) = self.message() {
-            hud::draw_message(list, message, self.view, metrics);
-        }
-        scene::draw_stellars(list, scene, camera);
-        asteroids::draw_asteroids(list, &self.shown_asteroids(camera), &self.looks);
-        boxes::draw_boxes(list, &self.shown_boxes(camera), &self.looks);
-        self.effects.draw_pods(list, camera, &self.looks);
-        let beams = self.shown_beams(camera);
-        let zig_zag = self.session.as_ref().map_or(RuleSource::Engine, |session| {
-            session.rules().source_for(RuleKey::LightningZigZag)
-        });
-        let lightning = (zig_zag, self.shot_looks.lightning());
-        weapons::draw_beams(list, &beams, &self.looks, true, lightning);
-        self.draw_sprites(list, camera);
-        weapons::draw_beams(list, &beams, &self.looks, false, lightning);
-        self.effects.draw(list, camera, &self.looks);
-        if let Ok(session) = &self.session {
-            let viewer = session.player().position;
-            let murk = session.effective_murk();
-            self.shot_looks.draw_smoke(list, camera, viewer, murk);
-        }
     }
 }

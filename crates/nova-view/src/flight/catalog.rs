@@ -227,6 +227,21 @@ pub struct EffectSheet {
     pub frame_width: u32,
 }
 
+/// The starfield's sprite sheet ([`CombatLooks::star_sheet`]): its
+/// `rlëD`, how many frames it holds and each frame's width and height,
+/// which the stars wrap and are placed by (`_HandleStars` reads them with
+/// `_GetSpriteXSize` and `_GetSpriteYSize`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StarSheet {
+    /// The `rlëD`'s ID.
+    pub image_id: i16,
+    /// How many frames the sheet holds: the `spïn`'s x tiles × y tiles
+    /// (`_LoadSprites` stores it at +0x54).
+    pub frames: NonZeroU16,
+    /// Each frame's width and height in pixels.
+    pub size: (u32, u32),
+}
+
 /// A smoke set's sprite: the eight `cicn`s from
 /// [`FIRST_SMOKE_ICON`] + 8 × set, which `_LoadSprites` makes its master
 /// from (@0x21855-0x21907), for sets 0 and 1 only.
@@ -329,7 +344,9 @@ pub struct BoomLook {
 pub struct TargetCard {
     /// Its `Subtitle`.
     pub subtitle: String,
-    /// Its picture, `PICT` 3000 + (ID - 128), when there is one.
+    /// Its target picture: its own `PICT` 3000 + (ID − 128), else its base
+    /// ship's, and none without a `shän` (see
+    /// [`crate::target_picture::target_picture`]).
     pub picture: Option<i16>,
 }
 
@@ -343,6 +360,12 @@ pub trait CombatLooks {
     /// What the target panel shows of ship type `ship`; empty when it
     /// cannot be read.
     fn target_card(&self, ship: ShipId) -> TargetCard;
+    /// [`CombatLooks::target_card`] of each of `ships`, in order: one ask
+    /// for a batch, which a catalog may answer more cheaply than one at a
+    /// time.
+    fn target_cards(&self, ships: &[ShipId]) -> Vec<TargetCard> {
+        ships.iter().map(|&ship| self.target_card(ship)).collect()
+    }
     /// Govt `govt`'s `TargetCode`, if it has one.
     fn target_code(&self, govt: GovtId) -> Option<String>;
     /// The sheet of cargo box graphic `graphic`, `spïn` 500 + `graphic`,
@@ -363,6 +386,10 @@ pub trait CombatLooks {
     /// Smoke set `set`'s sprite ([`SmokeSheet`]): none for a set past 1,
     /// or when any of its eight `cicn`s is missing or does not decode.
     fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet>;
+    /// The starfield's sheet, `spïn` 700, which `_LoadSprites` makes the
+    /// master star sprite from (`_GetSpriteInfo(0x2bc)` @0x21037), or why
+    /// it cannot be read.
+    fn star_sheet(&self) -> Result<StarSheet, String>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -377,6 +404,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for &T {
 
     fn target_card(&self, ship: ShipId) -> TargetCard {
         (**self).target_card(ship)
+    }
+
+    fn target_cards(&self, ships: &[ShipId]) -> Vec<TargetCard> {
+        (**self).target_cards(ships)
     }
 
     fn target_code(&self, govt: GovtId) -> Option<String> {
@@ -401,6 +432,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for &T {
 
     fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
         (**self).smoke_sheet(set)
+    }
+
+    fn star_sheet(&self) -> Result<StarSheet, String> {
+        (**self).star_sheet()
     }
 }
 
@@ -418,6 +453,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for Rc<T> {
         (**self).target_card(ship)
     }
 
+    fn target_cards(&self, ships: &[ShipId]) -> Vec<TargetCard> {
+        (**self).target_cards(ships)
+    }
+
     fn target_code(&self, govt: GovtId) -> Option<String> {
         (**self).target_code(govt)
     }
@@ -440,6 +479,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for Rc<T> {
 
     fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
         (**self).smoke_sheet(set)
+    }
+
+    fn star_sheet(&self) -> Result<StarSheet, String> {
+        (**self).star_sheet()
     }
 }
 
@@ -476,12 +519,16 @@ pub struct Looks {
     pub pod: Option<Result<EffectSheet, String>>,
     /// Each smoke set's sprite there is ([`SMOKE_SETS`]).
     pub smokes: BTreeMap<u8, SmokeSheet>,
+    /// The starfield's sheet ([`CombatLooks::star_sheet`]), or why it
+    /// cannot be read; `None` when it was not read. No star is drawn
+    /// without it.
+    pub stars: Option<Result<StarSheet, String>>,
 }
 
 impl Looks {
     /// The looks of `weapons`, of every explosion type, of the cargo
-    /// boxes, of every asteroid type, of the cursor and of the escape
-    /// pods, read from `catalog`.
+    /// boxes, of every asteroid type, of the cursor, of the escape pods
+    /// and of the stars, read from `catalog`.
     pub fn read(catalog: &impl CombatLooks, weapons: impl IntoIterator<Item = WeaponId>) -> Self {
         Self {
             weapons: weapons
@@ -503,7 +550,14 @@ impl Looks {
             smokes: (0..SMOKE_SETS)
                 .filter_map(|set| Some((set, catalog.smoke_sheet(set)?)))
                 .collect(),
+            stars: Some(catalog.star_sheet()),
         }
+    }
+
+    /// The starfield's sheet, if it was read.
+    #[must_use]
+    pub fn star_sheet(&self) -> Option<&StarSheet> {
+        self.stars.as_ref()?.as_ref().ok()
     }
 
     /// Smoke set `set`'s sprite, if there is one: only sets 0 and 1 have
@@ -555,7 +609,8 @@ impl Looks {
     /// at all, as the catalog says, and a sheet that could not, after its
     /// `wëap`, `bööm` or cargo box graphic ("wëap 140: no spïn 3005");
     /// the weapons' by ID, then the explosions', then the boxes', then the
-    /// cursor's ("cursor: no spïn 650"). An asteroid type's sheet is left
+    /// cursor's ("cursor: no spïn 650"), then the stars' ("stars: no spïn
+    /// 700"). An asteroid type's sheet is left
     /// out: a scenario may lack the types no system holds, and an asteroid
     /// whose sheet was not read draws as a crossed box.
     #[must_use]
@@ -584,7 +639,16 @@ impl Looks {
             Some(Err(reason)) => Some(format!("cursor: {reason}")),
             _ => None,
         };
-        weapons.chain(booms).chain(boxes).chain(cursor).collect()
+        let stars = match &self.stars {
+            Some(Err(reason)) => Some(format!("stars: {reason}")),
+            _ => None,
+        };
+        weapons
+            .chain(booms)
+            .chain(boxes)
+            .chain(cursor)
+            .chain(stars)
+            .collect()
     }
 }
 
@@ -762,14 +826,28 @@ mod tests {
                 first_icon: FIRST_SMOKE_ICON + SMOKE_FRAMES * i16::from(set),
             })
         }
+
+        fn star_sheet(&self) -> Result<StarSheet, String> {
+            Ok(StarSheet {
+                image_id: 700,
+                frames: NonZeroU16::new(16).expect("non-zero"),
+                size: (5, 5),
+            })
+        }
     }
 
     /// Everything `catalog` says about weapon 128, `bööm` 129, ship 130,
-    /// govt 131, cargo box graphic 2, asteroid type 3 and smoke set 1.
+    /// govt 131, cargo box graphic 2, asteroid type 3, smoke set 1 and the
+    /// stars, and ships 132 and 133's cards in a batch.
     fn looks(catalog: impl CombatLooks) -> String {
         format!(
-            "{:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+            "{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
             catalog.weapon_look(WeaponId(128)).map(|look| look.name),
+            catalog
+                .target_cards(&[ShipId(132), ShipId(133)])
+                .into_iter()
+                .map(|card| card.subtitle)
+                .collect::<Vec<_>>(),
             catalog
                 .boom_look(BoomId(129))
                 .map(|look| look.map(|look| look.sheet.map(|sheet| sheet.image))),
@@ -778,6 +856,7 @@ mod tests {
             catalog.box_sheet(2).map(|sheet| sheet.image),
             catalog.asteroid_sheet(3).map(|sheet| sheet.image),
             catalog.smoke_sheet(1).map(|sheet| sheet.first_icon),
+            catalog.star_sheet().map(|sheet| sheet.image_id),
         )
     }
 
@@ -866,6 +945,7 @@ mod tests {
             asteroids: BTreeMap::from([(0, Err("no".to_owned()))]),
             cursor: Some(Err("no".to_owned())),
             pod: Some(Err("no".to_owned())),
+            stars: Some(Err("no".to_owned())),
         };
         assert_eq!(unread.asteroid_sheet(0), None);
         assert_eq!(unread.weapon(WeaponId(1)), None);
@@ -878,8 +958,27 @@ mod tests {
     }
 
     #[test]
+    fn the_looks_read_the_stars_sheet() {
+        let looks = Looks::read(&Named, []);
+        assert_eq!(
+            looks.star_sheet(),
+            Some(&StarSheet {
+                image_id: 700,
+                frames: NonZeroU16::new(16).expect("non-zero"),
+                size: (5, 5),
+            })
+        );
+        let unread = Looks {
+            stars: Some(Err("no".to_owned())),
+            ..Looks::default()
+        };
+        assert_eq!(unread.star_sheet(), None);
+        assert_eq!(Looks::default().star_sheet(), None, "not read");
+    }
+
+    #[test]
     fn borrowed_and_shared_combat_looks_are_combat_looks() {
-        let direct = r#"Ok("w128") Some(Ok(Ok(Rled(129)))) "s130" Some("g131") Ok(Rled(502)) Ok(Rled(803)) Some(1008)"#;
+        let direct = r#"Ok("w128") ["s132", "s133"] Some(Ok(Ok(Rled(129)))) "s130" Some("g131") Ok(Rled(502)) Ok(Rled(803)) Some(1008) Ok(700)"#;
         assert_eq!(looks(Named), direct);
         assert_eq!(looks(&Named), direct);
         assert_eq!(looks(Rc::new(Named)), direct);
@@ -943,6 +1042,10 @@ mod tests {
         fn smoke_sheet(&self, _set: u8) -> Option<SmokeSheet> {
             None
         }
+
+        fn star_sheet(&self) -> Result<StarSheet, String> {
+            Err("no spïn 700".to_owned())
+        }
     }
 
     #[test]
@@ -971,6 +1074,7 @@ mod tests {
                 "cargo box 3: no spïn 503",
                 "cargo box 4: no spïn 504",
                 "cursor: no spïn 650",
+                "stars: no spïn 700",
             ]
         );
     }

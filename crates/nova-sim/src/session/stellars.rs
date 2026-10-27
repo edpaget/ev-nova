@@ -11,9 +11,10 @@
 //!   [`RuleKey::DestroyInvincible`]'s engine reading an invincible stellar
 //!   (`Strength` 0 or -1) is left as it was. A stellar with no record, or
 //!   outside the original's slots, 128 to 2175, is left alone. When the
-//!   stellar is among those shown in flight and was not destroyed before,
-//!   it makes the stellar's explosion at its centre, invincible or not
-//!   (@0x15a59-0x15ab4). By [`RuleKey::YOnDestroy`]'s engine reading it
+//!   stellar is the player's system's and was not destroyed before, it
+//!   makes the stellar's explosion at its own position, invincible or
+//!   not, heard at once, docked or not, and drawn only in flight
+//!   (@0x15a59-0x15ab4; see the `y_explosion` module). By [`RuleKey::YOnDestroy`]'s engine reading it
 //!   runs no `OnDestroy`; by the Bible's it runs it once it has destroyed
 //!   a whole stellar, unless that stellar's `OnDestroy` is running
 //!   already, which is reported as a `ScriptNote` instead.
@@ -107,6 +108,13 @@
 //! swap in is shown explored from the next rebuild point. That share
 //! raises no event and tells nothing.
 //!
+//! It then rescues, docked or not: by the engine reading of
+//! [`RuleKey::RescueUntilRefresh`], each stellar the player's system
+//! lists that no system owns and no system has rescued is kept as the
+//! player's system's until the next refresh (@0x32c58-0x32ca1; see the
+//! `kept_rescues` module), so it stays that system's across a gate's
+//! exit or an `M`.
+//!
 //! In flight, each rebuild point then derives which stellars are shown
 //! afresh, as `_HandleStellarSystemVisibility` sets them active and owned
 //! (see the `entry` module), and tells `StellarsRebuilt` when that
@@ -177,16 +185,17 @@ impl Session {
     /// `_HandleStellarSystemVisibility` rewrites it first @0x32ab3-0x32b0d),
     /// the exploration shared by place (`Chart::share_explored`, as
     /// it then raises each system to its head's level @0x32b13-0x32b8f)
-    /// and the known set worked out afresh (`Chart::rework_known`,
-    /// @0x32b7b, @0x32b91-0x32c10), before its stellars; then, in flight, the
+    /// the known set worked out afresh (`Chart::rework_known`,
+    /// @0x32b7b, @0x32b91-0x32c10) and the rescue kept
+    /// (`Chart::keep_rescues`, @0x32c58-0x32ca1), before its stellars;
+    /// then, in flight, the
     /// stellars shown derived afresh (`Session::reshow`), then which of
     /// them are dead since it and the sheet each counts the frames of,
     /// then the sprite pool handed out (see the `stale_sprites` module).
     /// Whether it changed the stellars or a counted sheet.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
-        self.chart.rewrite_course(&mut self.pilot, &self.setup);
-        self.chart.share_explored(&mut self.pilot, &self.setup);
-        self.chart.rework_known(&self.pilot);
+        self.chart
+            .rebuild_chart(&mut self.pilot, &self.statics, &self.setup);
         let reshown = self.reshow();
         let galaxy = &self.chart.galaxy;
         let rebuilt = self.space.rebuilt.rebuild(
@@ -317,18 +326,9 @@ impl Session {
             return;
         };
         let destroyed_before = self.chart.galaxy.destroyed(stellar);
-        let site = self
-            .chart
-            .sites
-            .iter()
-            .find(|site| site.id == stellar)
-            .copied();
-        let shown = site.is_some() && self.mode.landed().is_none();
-        if let Some(site) = site
-            && let Some(explosion) = wreck::explodes_on_y(&life, shown, destroyed_before)
-        {
-            self.space.combat.explode(site.position, explosion);
-        }
+        // The explosion, heard at once, before the countdown
+        // (@0x15a59-0x15ab4; see the `y_explosion` module).
+        self.explode_on_y(stellar, &life, destroyed_before);
         self.space.strength.remove(&stellar);
         if wreck::destroys(
             &life,
@@ -754,6 +754,19 @@ fn sheet_frame_size(
 }
 
 impl Chart {
+    /// A rebuild point's catalog-free parts, docked or not (see the module
+    /// docs): the course rewritten, the exploration shared by place, the
+    /// known set worked out afresh and the rescue kept for `pilot`'s
+    /// system, which ends a wait for the rebuild. `Session::rebuild_quietly`
+    /// runs them before its stellars, and a jump's in-flight move alone
+    /// (see the `jump_moves` module).
+    pub(super) fn rebuild_chart(&mut self, pilot: &mut Pilot, statics: &Statics, setup: &Setup) {
+        self.rewrite_course(pilot, setup);
+        self.share_explored(pilot, setup);
+        self.rework_known(pilot);
+        self.keep_rescues(pilot, statics, setup);
+    }
+
     /// Destroys a new pilot's stellars that start the game destroyed
     /// (`Flags2` 0x0040), within the original's slots, each with the
     /// countdown `Y` gives it, as `_DoNewPilot` does before its `OnStart`
@@ -1604,7 +1617,7 @@ mod tests {
     }
 
     /// The explosions among `events` of `bööm` `kind`, where each was and
-    /// its size.
+    /// its size: a `Y`'s, heard already, of size 0.
     fn sized_booms(events: &[CombatEvent], kind: i16) -> Vec<(Vec2, f32)> {
         events
             .iter()
@@ -1614,6 +1627,11 @@ mod tests {
                     explosion,
                     size,
                 } if Some(explosion) == Explosion::decode(kind) => Some((at, size)),
+                CombatEvent::ExplodedHeard { at, explosion }
+                    if Some(explosion) == Explosion::decode(kind) =>
+                {
+                    Some((at, 0.0))
+                }
                 _ => None,
             })
             .collect()
@@ -1678,13 +1696,18 @@ mod tests {
     }
 
     #[test]
-    fn an_on_destroys_move_waits_for_the_settling() {
+    fn an_on_destroys_move_writes_the_system_at_once_and_enters_it_at_the_settling() {
         let catalog = shooting([destroying("M131")]);
         let mut session = quiet(&catalog);
         fire(&mut session, 3);
-        assert_eq!(session.system(), SystemId(130), "not yet");
+        assert_eq!(session.system(), SystemId(131), "at the operator");
+        assert!(
+            session.stellars_shown().any(|id| id == StellarId(128)),
+            "130's until the entry"
+        );
         let _ = session.settle_script(&catalog, &mut Scripted::default());
         assert_eq!(session.system(), SystemId(131));
+        assert!(!session.stellars_shown().any(|id| id == StellarId(128)));
     }
 
     /// Fines government 140 a `kill` penalty of -3 for a killing, and
@@ -1846,6 +1869,47 @@ mod tests {
         );
         assert_eq!(destroyed(&session, 128), Some(left(2)));
         assert_eq!(ranks_held(&session), [200, 201]);
+    }
+
+    /// Whether `session`'s blessing has government 141 (the overlay's)
+    /// bless landing.
+    fn blessed_by_141(session: &Session) -> bool {
+        session
+            .blessing()
+            .blesses(Some(GovtId(141)), crate::rank::Blessed::Landing)
+    }
+
+    #[test]
+    fn a_rank_lost_to_shooting_a_stellar_down_outlasts_its_on_destroy_reset_by_the_engine() {
+        for (source, after_kill) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            // [`ranked`]'s session, but 200 blesses landing too.
+            let mut catalog = shooting([destroying("b5")]);
+            catalog.ranks = crime_ranks();
+            catalog.ranks[0].flags |= crate::rank::BLESSES_LANDING;
+            let mut session = overlaid(&catalog)
+                .with_rules(Rulebook::default().with_override(RuleKey::BlessingRefresh, source));
+            session
+                .pilot
+                .ranks
+                .extend([crate::catalog::RankId(200), crate::catalog::RankId(201)]);
+            session.reset_precalced();
+            assert!(blessed_by_141(&session), "{source:?}: held and reset");
+            session.shoot_down(
+                StellarId(128),
+                Some(ShipRef::Player),
+                &NovaLaw::default(),
+                &mut NeverFires,
+            );
+            assert!(session.control_bit(bit(5)), "{source:?}: its OnDestroy ran");
+            assert_eq!(ranks_held(&session), [201], "{source:?}");
+            assert_eq!(
+                blessed_by_141(&session),
+                after_kill,
+                "{source:?}: OnDestroy's reset @0x374a9 runs before the slap @0x37518"
+            );
+            session.reset_precalced();
+            assert!(!blessed_by_141(&session), "{source:?}: the next reset");
+        }
     }
 
     /// [`ranked`]'s session, 128 taken to none by two shots, then shot

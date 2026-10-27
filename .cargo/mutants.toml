@@ -20,6 +20,24 @@ exclude_re = [
     # 8, trunc((9 - 8) x 8 + 32) is the plain box's 40, so `<=` gives the
     # same half-width.
     "landing\\.rs:[0-9]+:[0-9]+: replace < with <= in npc_box$",
+    # The stars' murk level: trunc(murk × 0.9) above 29 is held to 29, so
+    # at exactly 29 holding it gives the same 29 (`_HandleStars`
+    # @0x2f8cc-0x2f913).
+    "nova-view/src/flight/stars\\.rs:[0-9]+:[0-9]+: replace > with >= in murk_level$",
+    # `_ScrollStarfield` moves only stars of factor above 0; a factor of
+    # 0 moves a star by 0 anyway, so >= moves none further.
+    "nova-view/src/flight/stars\\.rs:[0-9]+:[0-9]+: replace > with >= in Starfield::scroll$",
+    # The beams' asteroid push-or-pull reads the sign of a non-zero
+    # `Impact`: `moves` returns before it for an `Impact` of none, so
+    # `impact < 0.0` and `impact <= 0.0` split the rest the same way.
+    "asteroid_beam\\.rs:[0-9]+:[0-9]+: replace < with <= in moves$",
+    # The trait's default `boom_sounds` is empty already: `vec![]` is the
+    # same empty list as `Vec::new()`.
+    "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::boom_sounds -> Vec<\\(BoomId, SoundId\\)> with vec!\\[\\]$",
+    # Widening a 5-bit channel, (c5 << 3) | (c5 >> 2): the two halves
+    # never share a bit (the first's low 3 bits are 0, the second is at
+    # most 7), so OR and XOR give the same byte.
+    'replace \| with \^ in widen5',
     # A formation slot's side push turns by trunc(heading + 90) % 360:
     # `_Accel` reads it through `_TableSin` and `_TableCos`, which take any
     # whole degree mod 360 (`trig::table_radians`), so + 360 gives the same
@@ -43,6 +61,9 @@ exclude_re = [
     # degree mod 360 (`trig::table_radians`), so bearing + 180 + 360 and
     # bearing - 180 place the ship at the same bits for every bearing.
     "nova-sim-ai/src/jump_arrival\\.rs:[0-9]+:[0-9]+: replace (% with \\+|\\+ with -) in top_speed_arrival$",
+    # The arriving escort's push back, (trunc heading + 180) mod 360, is read
+    # through `_Accel` the same way: + 360 and - 180 give the same bits.
+    "nova-sim-ai/src/escort_arrival\\.rs:[0-9]+:[0-9]+: replace (% with \\+|\\+ with -) in pushed$",
     # The board check's reverse heading, (theirs + 180) mod 360: for whole
     # degrees in 0..=360, theirs - 180 is the same reverse less 360, and
     # `_AngularDifference`'s two folds give the same distance from it for
@@ -439,11 +460,6 @@ exclude_re = [
     # `AnimDelay` for a bias above 1: with `>=`, a bias of exactly 1 takes
     # that branch too, and 1 x `AnimDelay` is `AnimDelay` anyway.
     "gate_sprite.rs:.*replace > with >= in GateAnimation::threshold",
-    # `_AIShipIsScooping` (goal 0x11): no goal the engine has scoops until
-    # rdm:phase/asteroids/phase-5-ai-mining adds the miner's, so both
-    # answer false for every NPC already. Phase 5 removes these two.
-    "ai/mod.rs:.*replace Goal::scooping -> bool with false",
-    "traffic/npc.rs:.*replace Npc::is_scooping -> bool with false",
     # A shockwave's flash is late on a ship before its wreck in the table:
     # the wreck is destroyed, so its own shockwave never reaches it, and a
     # victim's index never equals the wreck's.
@@ -511,6 +527,12 @@ exclude_re = [
     "afterburner.rs:[0-9]+:[0-9]+: replace > with >= in push_speed",
     "afterburner.rs:[0-9]+:[0-9]+: replace < with <= in drain",
     "afterburner.rs:[0-9]+:[0-9]+: replace > with >= in MaxVel::bleed",
+    # The player's cloak jitter needs only a seed of its own: seed 0, which
+    # `Default` gives, is no NPC's cloak seed (`0x434c_4f41_4b00_0000`
+    # plus an ID) nor any glow's (1 for the player's, 2 + 2n for NPC n's),
+    # so it jitters as independently as the chosen one; which jitter a
+    # seed draws is no behaviour of the original's.
+    "nova-view/src/flight/cloak_fade\\.rs:[0-9]+:[0-9]+: replace player_cloak_rolls -> HashedRolls with Default::default\\(\\)$",
     # The lightning rolls' seed joins a high word shifted past 32 bits and
     # a low word below 2^32, and a trail colour joins channels shifted to
     # their own 8 bits: their bits never overlap, so `|` and `^` give the
@@ -580,4 +602,12 @@ exclude_re = [
     # same threshold as `AnimDelay` (whatever its sign), so `>` and `>=`
     # choose the same. The test sits in `Frames::advance`.
     "system/animation\\.rs:.*replace > with >= in Frames::(step|advance)$",
+    # Right onto an empty cell: testing the cell itself (`cell * 1`) for
+    # the next one lets the cell move on, but the step back after it
+    # (@0x5835a-0x583b8) returns to the last listed, the cell it left, so
+    # the filter's own check (@0x5823c-0x5824a) changes nothing seen.
+    "nova-view/src/spaceport/grid_arrows\\.rs:154:37: replace \\+ with \\* in filter$",
+    # A good-price stellar may land or trade, `Flags` 0x1 | 0x2 (@0x9148a):
+    # the two bits are disjoint, so `^` makes the same 0x3.
+    "nova-sim-ai/src/hail/advice\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in AdvicePort::qualifies$",
 ]

@@ -24,10 +24,10 @@ pub use window::WinitWindow;
 
 use std::time::Duration;
 
-use winit::event::{ElementState, WindowEvent as WinitEvent};
+use winit::event::{ElementState, MouseScrollDelta, WindowEvent as WinitEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
-use crate::app::{WindowEvent, WindowPort};
+use crate::app::{WheelDelta, WindowEvent, WindowPort};
 use nova_view::{Key, MouseButton};
 
 /// The app's event for winit's `event`, or `None` for events the app does
@@ -55,11 +55,25 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
             button: map_button(*button),
             pressed: state.is_pressed(),
         },
+        WinitEvent::MouseWheel { delta, .. } => WindowEvent::Scroll {
+            delta: wheel_delta(*delta)?,
+        },
         WinitEvent::Focused(false) => WindowEvent::FocusLost,
         WinitEvent::Focused(true) => WindowEvent::FocusGained,
         WinitEvent::CloseRequested => WindowEvent::CloseRequested,
         _ => return None,
     })
+}
+
+/// The vertical part of winit's wheel `delta`, toward the text's end for
+/// positive, or `None` for one only across. winit's positive y scrolls
+/// toward the top (the wheel turned away from the user, or a trackpad
+/// swiped down with natural scrolling), so the sign flips.
+fn wheel_delta(delta: MouseScrollDelta) -> Option<WheelDelta> {
+    match delta {
+        MouseScrollDelta::LineDelta(_, y) => (y != 0.0).then(|| WheelDelta::Lines(-y)),
+        MouseScrollDelta::PixelDelta(at) => (at.y != 0.0).then(|| WheelDelta::Px(-at.y)),
+    }
 }
 
 /// The app's events for winit's `event`, in the order the app takes them,
@@ -125,6 +139,10 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::ArrowRight) => Key::Right,
         PhysicalKey::Code(KeyCode::ArrowUp) => Key::Up,
         PhysicalKey::Code(KeyCode::ArrowDown) => Key::Down,
+        // The shop grids' Page Up and Page Down, Mac key codes 0x74 and
+        // 0x79, fn+Up and fn+Down on a Mac laptop.
+        PhysicalKey::Code(KeyCode::PageUp) => Key::PageUp,
+        PhysicalKey::Code(KeyCode::PageDown) => Key::PageDown,
         PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => Key::Enter,
         PhysicalKey::Code(KeyCode::Escape) => Key::Escape,
         PhysicalKey::Code(KeyCode::Space) => Key::Space,
@@ -217,6 +235,9 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::Digit2) => Key::Char('2'),
         PhysicalKey::Code(KeyCode::Digit3) => Key::Char('3'),
         PhysicalKey::Code(KeyCode::Digit4) => Key::Char('4'),
+        // The top-row 5: the escort menu's Freighters key, and with
+        // Command flight's second nearest-stellar key. 6-0 stay unmapped.
+        PhysicalKey::Code(KeyCode::Digit5) => Key::Char('5'),
         // F1-F4, flight's other stellar slot keys, and F5, its nearest
         // stellar key.
         PhysicalKey::Code(KeyCode::F1) => Key::Function(1),
@@ -246,7 +267,7 @@ mod tests {
     use std::time::Duration;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
 
-    use winit::event::{DeviceId, MouseButton as WinitButton};
+    use winit::event::{DeviceId, MouseButton as WinitButton, TouchPhase};
 
     use super::*;
 
@@ -280,6 +301,8 @@ mod tests {
             (KeyCode::ArrowRight, Key::Right),
             (KeyCode::ArrowUp, Key::Up),
             (KeyCode::ArrowDown, Key::Down),
+            (KeyCode::PageUp, Key::PageUp),
+            (KeyCode::PageDown, Key::PageDown),
             (KeyCode::Enter, Key::Enter),
             (KeyCode::NumpadEnter, Key::Enter),
             (KeyCode::Escape, Key::Escape),
@@ -325,6 +348,7 @@ mod tests {
             (KeyCode::Digit2, Key::Char('2')),
             (KeyCode::Digit3, Key::Char('3')),
             (KeyCode::Digit4, Key::Char('4')),
+            (KeyCode::Digit5, Key::Char('5')),
             (KeyCode::F1, Key::Function(1)),
             (KeyCode::F2, Key::Function(2)),
             (KeyCode::F3, Key::Function(3)),
@@ -332,7 +356,7 @@ mod tests {
             (KeyCode::F5, Key::Function(5)),
             (KeyCode::F11, Key::Function(11)),
             (KeyCode::KeyQ, Key::Other),
-            (KeyCode::Digit5, Key::Other),
+            (KeyCode::Digit6, Key::Other),
             (KeyCode::F6, Key::Other),
         ];
         for (code, key) in cases {
@@ -346,7 +370,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 44] = [
+    const GAME_CHARACTER_KEYS: [Key; 46] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -356,6 +380,7 @@ mod tests {
         nova_view::flight::view::MAP_KEY,
         nova_view::flight::view::JUMP_KEY,
         nova_view::flight::view::SELECT_KEY,
+        nova_view::flight::view::DESELECT_KEY,
         nova_view::flight::view::NEAREST_KEY,
         nova_view::flight::view::HYPER_SELECT_KEY,
         nova_view::flight::view::HYPERSPACE_MODE_KEY,
@@ -381,6 +406,7 @@ mod tests {
         nova_view::spaceport::shipyard::BUY_KEY,
         nova_view::ui::mission_info::MISSION_INFO_KEY,
         nova_view::flight::escorts::MENU_KEY,
+        nova_view::flight::escorts::GROUP_KEYS[4],
         nova_view::flight::view::ESCORT_RECALL_KEY,
         nova_view::spaceport::bar::NEWS_KEYS[0],
         nova_view::spaceport::PORT_KEYS[0].0,
@@ -420,6 +446,7 @@ mod tests {
             '2' => KeyCode::Digit2,
             '3' => KeyCode::Digit3,
             '4' => KeyCode::Digit4,
+            '5' => KeyCode::Digit5,
             '=' => KeyCode::Equal,
             '+' => KeyCode::NumpadAdd,
             '-' => KeyCode::Minus,
@@ -621,6 +648,55 @@ mod tests {
         );
     }
 
+    fn wheel(delta: MouseScrollDelta) -> WinitEvent {
+        WinitEvent::MouseWheel {
+            device_id: DeviceId::dummy(),
+            delta,
+            phase: TouchPhase::Moved,
+        }
+    }
+
+    #[test]
+    fn a_wheel_is_a_scroll_toward_the_end_for_a_turn_toward_the_user() {
+        for (y, lines) in [(1.0, -1.0), (-2.5, 2.5)] {
+            assert_eq!(
+                translate(&wheel(MouseScrollDelta::LineDelta(0.0, y)), &WINDOWED),
+                Some(WindowEvent::Scroll {
+                    delta: WheelDelta::Lines(lines)
+                }),
+                "{y}"
+            );
+        }
+        assert_eq!(
+            translate(
+                &wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+                    0.0, 24.0
+                ))),
+                &WINDOWED
+            ),
+            Some(WindowEvent::Scroll {
+                delta: WheelDelta::Px(-24.0)
+            })
+        );
+    }
+
+    #[test]
+    fn a_scroll_only_across_is_not_translated() {
+        assert_eq!(
+            translate(&wheel(MouseScrollDelta::LineDelta(3.0, 0.0)), &WINDOWED),
+            None
+        );
+        assert_eq!(
+            translate(
+                &wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+                    5.0, 0.0
+                ))),
+                &WINDOWED
+            ),
+            None
+        );
+    }
+
     #[test]
     fn closing_is_close_requested() {
         assert_eq!(
@@ -716,6 +792,12 @@ mod tests {
         assert_eq!(
             events(&WinitEvent::CloseRequested, true),
             [WindowEvent::CloseRequested]
+        );
+        assert_eq!(
+            events(&wheel(MouseScrollDelta::LineDelta(0.0, 1.0)), true),
+            [WindowEvent::Scroll {
+                delta: WheelDelta::Lines(-1.0)
+            }]
         );
     }
 }

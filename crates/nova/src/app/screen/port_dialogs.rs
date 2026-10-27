@@ -35,7 +35,9 @@ pub(super) fn open_outfitter(spaceport: &mut SpaceportView, flight: &mut FlightV
 
 /// Opens `flight`'s course map over `spaceport` when a map key there asked
 /// for it ([`SpaceportView::take_map_request`]): the bar's (`_BarFilter`
-/// item 8, `_DoSystemMap` @0x492b2), or a mission dialog's, an offer's,
+/// item 8, `_DoSystemMap` @0x492b2), a port screen's, the spaceport's, a
+/// shop's, the shipyard's, the hire screen's or a ship description's
+/// ([`FlightView::open_port_screen_map`]), or a mission dialog's, an offer's,
 /// the computer's, mission info's or the briefing's
 /// ([`FlightView::open_dialog_map`]), the spaceport letting go of its
 /// gesture and keys as it is covered. The screen that asked stays open
@@ -48,6 +50,7 @@ pub(super) fn open_port_map(spaceport: &mut SpaceportView, flight: &mut FlightVi
     spaceport.release_keys();
     match map {
         PortMap::Bar => flight.open_bar_map(),
+        PortMap::Screen(screen) => flight.open_port_screen_map(screen),
         PortMap::Dialog(opener) => flight.open_dialog_map(opener),
     }
 }

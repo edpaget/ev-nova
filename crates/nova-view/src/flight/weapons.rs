@@ -54,10 +54,6 @@ pub const BEAM_UNDER_SHIPS: u16 = 0x2000;
 /// `Flags3`: the shot is translucent, added to what is under it (see
 /// [`shot_fade`](super::shot_fade)).
 pub const TRANSLUCENT: u16 = 0x0002;
-/// The alpha every explosion is drawn at ([`effects`](super::effects)): a
-/// placeholder for the original's additive blend of a translucent
-/// explosion.
-pub const TRANSLUCENT_ALPHA: f32 = 0.75;
 /// The side of the crossed box drawn for a shot whose look cannot be
 /// read, in the placeholder colour.
 pub const SHOT_PLACEHOLDER_SIZE: f32 = 8.0;
@@ -291,12 +287,6 @@ pub fn see_through(t: u8) -> Color {
 /// The steps of a shot's translucency.
 const FADE_STEPS: u8 = 32;
 
-/// White at [`TRANSLUCENT_ALPHA`].
-#[must_use]
-pub fn translucent() -> Color {
-    Color::rgba(255, 255, 255, (TRANSLUCENT_ALPHA * 255.0) as u8)
-}
-
 /// A beam to draw: from where to where on screen, its weapon, and how
 /// far it has faded.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -318,7 +308,11 @@ pub struct BeamShown {
 /// ([`StepRolls::for_beam`]) by `rule`'s reading of
 /// [`RuleKey::LightningZigZag`](nova_sim::RuleKey::LightningZigZag); a
 /// beam whose look was not read is a plain line in [`Color::ERROR`], over
-/// the ships.
+/// the ships. The world draws the beams under the ships just over the
+/// stellars, as the stellar layer's `_BeamDrawOffscreenCallback` does,
+/// and the others over every layer, the explosions included, as the
+/// target layer's `_BeamDrawCallback` does
+/// ([`WorldPass`](nova_sim::sprite_layer::WorldPass)).
 pub fn draw_beams(
     list: &mut DrawList,
     beams: &[BeamShown],
@@ -781,6 +775,7 @@ mod tests {
             asteroids: BTreeMap::new(),
             cursor: None,
             pod: None,
+            stars: None,
         }
     }
 

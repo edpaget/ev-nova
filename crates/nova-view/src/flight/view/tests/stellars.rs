@@ -262,7 +262,7 @@ fn the_radar_shows_the_systems_wormhole_and_hypergate_as_squares() {
 #[test]
 fn f5_near_the_wormhole_selects_it_and_the_nav_area_names_it() {
     let mut view = sol_with_gates();
-    tap(&mut view, NEAREST_STELLAR_KEY);
+    tap_slot(&mut view, NEAREST_STELLAR_KEY);
     assert_eq!(nav_target(&view), Some(StellarId(150)));
     assert_eq!(nav(&view), [hud::NAV_STELLAR, "Hole"]);
 }
@@ -329,12 +329,18 @@ fn a_change_to_the_galaxy_is_drawn_on_the_next_frame_and_not_before() {
     assert!(!on_the_course_map(&view, 132));
 }
 
+/// The rules that keep a loaded pilot's course, so a flight can start
+/// on one.
+fn course_kept() -> Rulebook {
+    Rulebook::default().with_override(RuleKey::LoadedCourse, RuleSource::Bible)
+}
+
 #[test]
 fn the_course_map_shows_the_course_as_it_is_flown() {
     let catalog = catalog();
     let mut session = Session::start(&catalog).expect("starts");
     session.plot_course(SystemId(131)).expect("a route");
-    let mut view = FlightView::with_pilot(catalog, session.pilot().clone());
+    let mut view = FlightView::loaded(catalog, session.pilot().clone(), course_kept());
     assert_eq!(view.course_map().route(), [SystemId(131)]);
     change_galaxy(&mut view, hiding(131));
     view.tick(TICK);
@@ -354,7 +360,7 @@ fn bound_for_alpha_with_reborn_explored() -> View {
     session.plot_course(SystemId(131)).expect("a route");
     let explore = nova_sim::SetExpr::parse("X133").expect("parses");
     session.run_set(&explore, &mut NeverFires);
-    let mut view = FlightView::with_pilot(catalog, session.pilot().clone());
+    let mut view = FlightView::loaded(catalog, session.pilot().clone(), course_kept());
     // A pilot flies with the nav system off: H cues the course.
     tap(&mut view, HYPERSPACE_MODE_KEY);
     view
@@ -1340,4 +1346,30 @@ fn a_random_stellars_frames_roll_on_the_effects_chance() {
     assert_eq!(plain, [1, 2, 3]);
     assert!(unasked.is_empty(), "{unasked:?}");
     assert_eq!(session, plain_session, "the session's script untouched");
+}
+
+// Draw order (crons-news-ranks-fidelity phase 14).
+
+#[test]
+fn overlapping_stellars_are_drawn_lowest_id_first_whatever_their_navdefs_order() {
+    let mut catalog = FakeCatalog {
+        sol_more: vec![stellar(127, "Under the Moon", (300, -200), 1)],
+        ..catalog()
+    };
+    catalog
+        .sites
+        .push(site(127, (300.0, -200.0), StellarFlags::CAN_LAND));
+    let mut view = FlightView::new(catalog);
+    view.tick(TICK);
+    assert_eq!(
+        scene_ids(&view),
+        [StellarId(128), StellarId(129), StellarId(127)],
+        "Sol lists the Moon before 127"
+    );
+    let images: Vec<i16> = sprites(&drawn(&view))
+        .into_iter()
+        .map(|(image, _)| image.id)
+        .filter(|id| (1127..=1129).contains(id))
+        .collect();
+    assert_eq!(images, [1127, 1128, 1129], "127 under the Moon");
 }

@@ -85,8 +85,8 @@ pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
 }
 
 /// How long the message for `refusal` stays: [`TOO_FAR_TICKS`] too far
-/// or too fast, [`LANDING_TICKS`] denied, not landable or short of the
-/// fee (`_DisplayComm` @0x67c88), and
+/// or too fast, [`LANDING_TICKS`] denied, not landable, cloaked or short
+/// of the fee (`_DisplayComm` @0x67c88), and
 /// [`MESSAGE_TICKS`] for the silent ones. A disabled ship's refusal, and
 /// one where the land key makes no dock request (jumping, no stellars,
 /// nothing landable), shows no message ([`refusal_message`]), so its
@@ -97,7 +97,8 @@ pub fn landing_refusal_ticks(refusal: &LandingRefusal) -> u16 {
         LandingRefusal::TooFar { .. } | LandingRefusal::TooFast { .. } => TOO_FAR_TICKS,
         LandingRefusal::Denied { .. }
         | LandingRefusal::NotLandable { .. }
-        | LandingRefusal::CannotPayFee { .. } => LANDING_TICKS,
+        | LandingRefusal::CannotPayFee { .. }
+        | LandingRefusal::Cloaked => LANDING_TICKS,
         LandingRefusal::Jumping
         | LandingRefusal::Disabled
         | LandingRefusal::NoStellars
@@ -136,6 +137,9 @@ pub const ESCORT_REPAIRED: &str = "Escort repaired.";
 /// `STR#` 2002 #128: a disabled former fighter did (`_HandleShip`
 /// @0x33b3b).
 pub const FIGHTER_REPAIRED: &str = "Fighter repaired.";
+/// `STR#` 2002 #129: the player boarded a disabled ship of a type its
+/// bays carry into its bay (`_HandlePlayerBoardAttempt` @0x65d85-0x65e29).
+pub const FIGHTER_CAPTURED: &str = "Fighter captured.";
 /// `STR#` 2002 #37: the disabled player's Repair Droids repaired it
 /// (`_HandlePlayer` @0x68bf0-0x68c3f).
 pub const PROPULSION_REPAIRED: &str = "Propulsion systems repaired.";
@@ -394,6 +398,7 @@ pub(super) fn sim_message_text(message: &SimMessage, session: &Session) -> Optio
         SimMessage::NoActiveMissions => NO_ACTIVE_MISSIONS,
         SimMessage::EscortRepaired => ESCORT_REPAIRED,
         SimMessage::FighterRepaired => FIGHTER_REPAIRED,
+        SimMessage::FighterCaptured => FIGHTER_CAPTURED,
         SimMessage::PropulsionRepaired => PROPULSION_REPAIRED,
         SimMessage::CargoStolen { .. } | SimMessage::ShipStolen { .. } => {
             return stolen_text(message, session);
@@ -616,7 +621,9 @@ pub fn key_label(key: Key) -> Option<String> {
 /// What the message line says as the ship takes off past the tutorial
 /// from the stellar named `stellar` on `date`, led by
 /// [`TAKE_OFF_LEADS`]`[lead]`, as `_PlayerLandOnStellar` builds it
-/// (@0x635f7-0x63732): "Taking off from Earth on 23 June 1177."
+/// (@0x635f7-0x63732): "Taking off from Earth on June 23rd, 1177 NC.".
+/// `date` is the long date, which the original writes with
+/// `_DateToLongString` (@0x8ef8, called @0x636d7).
 #[must_use]
 pub fn take_off_greeting(lead: u16, stellar: &str, date: &str) -> String {
     let lead = TAKE_OFF_LEADS[usize::from(lead) % TAKE_OFF_LEADS.len()];
@@ -697,7 +704,7 @@ pub(super) fn message_text(
         SimMessage::TookOff { stellar, lead } => Some(take_off_greeting(
             *lead,
             &named(*stellar),
-            &session.date_text(),
+            &session.long_date_text(),
         )),
         SimMessage::Tutorial(TutorialHint::Land { stellar, station }) => Some(land_hint(
             *station,
@@ -737,7 +744,9 @@ pub fn arrival_message(system: &str, date: &str, stellars: bool) -> String {
 /// [`EXITING_HYPERGATE`] or [`PASSING_WORMHOLE`] through a gate, as
 /// `_PlayerEnterHypergate` (@0x63c45-0x63dbe) and `_PlayerEnterWormhole`
 /// (@0x6444c-0x6457d) build it; [`NO_STELLARS`] follows when the system
-/// has no stellars.
+/// has no stellars. `date` is the long date, which the original writes
+/// with `_DateToLongString` (@0x8ef8, called @0x6c34b for a jump,
+/// @0x63d35 for a hypergate and @0x6450c for a wormhole).
 #[must_use]
 pub fn arrival_message_with(lead: &str, system: &str, date: &str, stellars: bool) -> String {
     let mut text = format!("{lead} {system} {SYSTEM_ON} {date}.");
@@ -767,6 +776,7 @@ pub(super) fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::NoActiveMissions
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
+        | SimMessage::FighterCaptured
         | SimMessage::PropulsionRepaired
         | SimMessage::CargoStolen { .. }
         | SimMessage::ShipStolen { .. }
@@ -869,6 +879,9 @@ pub const TO_PAY_LANDING_FEE: &str = "to pay the landing fee.";
 pub const HOSTILE_STATION: &str = "The station's hull integrity is too unstable.";
 /// `STR#` 2002 #90: why a ship cannot land on a planet.
 pub const HOSTILE_PLANET: &str = "The planet's environment is too hostile.";
+/// `STR#` 2002 #73: a cloaked ship's land key
+/// (`_HandlePlayerDockRequest` @0x66a85-0x66ae9).
+pub const DISENGAGE_CLOAK: &str = "Disengage cloaking device first.";
 
 /// `STR#` 2002 #76.
 pub const DOCKMASTER_READS_YOU: &str = "dockmaster reads you";
@@ -1102,6 +1115,7 @@ pub fn refusal_message(
         | LandingRefusal::Disabled
         | LandingRefusal::NoStellars
         | LandingRefusal::NothingLandable => return None,
+        LandingRefusal::Cloaked => DISENGAGE_CLOAK,
         LandingRefusal::TooFar { station, .. } => by_gate(
             station,
             TOO_FAR_HYPERGATE,
@@ -1179,16 +1193,25 @@ pub const RETAINED_OLD_SHIP: &str = "You retained your old ship as an escort.";
 /// `STR#` 2002 #305: no slot was free for the old ship.
 pub const LOST_OLD_SHIP: &str = "You were unable to retain your old ship as an escort.";
 
+/// The credits take's line: `STR#` 2002 #116 ("You stole all the"), a
+/// space, `*0x3b557c` (#33, "credits", the plural whatever the amount), a
+/// space and #108 ("from this ship."), with no amount
+/// (`_DoPlunderDialog` @0x93b40-0x93bec).
+pub const STOLE_CREDITS: &str = "You stole all the credits from this ship.";
+
 /// What the player is told when `refusal` stops a boarding: the
-/// original's words for it, or nothing.
+/// original's words for it, or nothing for a silent one
+/// ([`BoardRefusal::silent`]).
 #[must_use]
 pub fn board_refusal_message(refusal: BoardRefusal) -> Option<&'static str> {
-    match refusal {
-        BoardRefusal::CantBoard => Some(CANT_BOARD),
-        BoardRefusal::TooFar => Some(NOT_CLOSE_ENOUGH),
-        BoardRefusal::TooFast => Some(TOO_FAST_TO_BOARD),
-        BoardRefusal::NoTarget | BoardRefusal::Misaligned => None,
+    if refusal.silent() {
+        return None;
     }
+    Some(match refusal {
+        BoardRefusal::TooFar => NOT_CLOSE_ENOUGH,
+        BoardRefusal::TooFast => TOO_FAST_TO_BOARD,
+        _ => CANT_BOARD,
+    })
 }
 
 /// What the player is told of a press in the plunder dialog that did
@@ -1205,7 +1228,7 @@ pub fn plunder_message(taken: Taken, good: Option<&str>, outfit: Option<&str>) -
             let good = good.unwrap_or("cargo");
             format!("You salvaged {stored} {tons} of {good} from this ship.")
         }
-        Taken::Credits(credits) => format!("You stole all the {credits} credits from this ship."),
+        Taken::Credits(_) => STOLE_CREDITS.to_owned(),
         Taken::Ammo { count: 0, .. } => NO_AMMO_STORED.to_owned(),
         Taken::Ammo { count, .. } => {
             let outfit = outfit.unwrap_or("rounds");
@@ -2014,16 +2037,16 @@ mod tests {
     #[test]
     fn arrival_message_reads_as_the_original() {
         assert_eq!(
-            arrival_message("Sol", "June 23, 1177 NC", true),
-            "Jumping into the Sol system on June 23, 1177 NC."
+            arrival_message("Sol", "June 23rd, 1177 NC", true),
+            "Jumping into the Sol system on June 23rd, 1177 NC."
         );
     }
 
     #[test]
     fn arrival_message_in_a_system_without_stellars_says_so() {
         assert_eq!(
-            arrival_message("Sol", "June 23, 1177 NC", false),
-            "Jumping into the Sol system on June 23, 1177 NC. No stellar objects present."
+            arrival_message("Sol", "June 23rd, 1177 NC", false),
+            "Jumping into the Sol system on June 23rd, 1177 NC. No stellar objects present."
         );
     }
 
@@ -2142,6 +2165,20 @@ mod tests {
              fined 1 credit.",
             "no count"
         );
+    }
+
+    #[test]
+    fn the_cloaked_landing_refusal_says_disengage_cloaking_device_first_for_250_ticks() {
+        // STR# 2002 #73 via `_DisplayComm` for 0xfa ticks (@0x66ade).
+        for gate in [None, Some(GateKind::Hypergate), Some(GateKind::Wormhole)] {
+            assert_eq!(
+                refusal_message(&LandingRefusal::Cloaked, gate, "Earth").as_deref(),
+                Some("Disengage cloaking device first."),
+                "{gate:?}"
+            );
+        }
+        assert_eq!(DISENGAGE_CLOAK, "Disengage cloaking device first.");
+        assert_eq!(landing_refusal_ticks(&LandingRefusal::Cloaked), 250);
     }
 
     #[test]

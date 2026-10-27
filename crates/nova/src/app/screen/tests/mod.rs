@@ -89,6 +89,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 mod appear;
+mod christening;
 mod death;
 mod dialog_maps;
 mod encounters;
@@ -100,9 +101,11 @@ mod map_find;
 mod menu;
 mod menu_commands;
 mod missions;
+mod new_pilot;
 mod overlays;
 mod port;
 mod quit_question;
+mod wheel;
 mod widescreen;
 
 /// One data file, `/data/Nova Data`, holding a fork.
@@ -199,6 +202,28 @@ fn game_data_selling(
 /// [`data`], where the `chär`'s `OnStart` is `on_start`.
 fn starting_data(on_start: &[u8]) -> Rc<GameData> {
     game_data_starting(false, false, false, on_start, b"")
+}
+
+/// [`data`], where Alpha (128) links Beta (129), which is visible
+/// until bit 5 is set (`Visibility` `!b5`), and the `chär`'s `OnStart`
+/// sets bit 5: a new pilot hides Beta as its game begins.
+fn hiding_beta_data() -> Rc<GameData> {
+    let mut built = game_data_fork(false, false, false, 100, b"b5", b"", None).build();
+    let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
+    built.put_u16(alpha + 0x04, 129);
+    let beta = built.layout.data_entry(System::TYPE, 129) + 4;
+    for (at, byte) in b"!b5".iter().enumerate() {
+        built.put_u8(beta + 0x96 + at, *byte);
+    }
+    loaded_bytes(built.bytes)
+}
+
+/// Whether the pilot of `flight` has explored Beta (129).
+fn explored_beta(flight: &FlightView<Rc<GameData>>) -> bool {
+    flight
+        .pilot()
+        .expect("a pilot")
+        .has_explored(nova_sim::SystemId(129))
 }
 
 /// [`outfitting_data`], where the booster's `OnPurchase` is
@@ -344,6 +369,9 @@ fn game_data_fork(
     }
     let ship = if shipbuying {
         stellar[0x09] |= 0x08;
+        let mut prompts = vec![""; 119];
+        prompts.push("Please name your new");
+        fork = fork.resource(StrList::TYPE, 2002, None, &str_list(&prompts));
         second_ship(buy_random)
     } else {
         vec![0; Ship::SIZE.expect("fixed")]
@@ -371,6 +399,24 @@ fn game_data_fork(
         .resource(Spin::TYPE, 650, None, &spin)
         .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
         .resource(Desc::TYPE, MENU_X_TEXT, None, &x_text())
+        .resource(PICT, 8518, None, &upper_cap_picture())
+}
+
+/// The player info's upper cap's size in [`game_data_fork`]: not the
+/// stock 413 x 40, so a layout from the stock sizes shows.
+const UPPER_CAP_SIZE: (i16, i16) = (300, 30);
+
+/// A grey `PICT` [`UPPER_CAP_SIZE`]: the player info's upper cap
+/// (`PICT` 8518), the only one of its background pictures the fixture
+/// data holds.
+fn upper_cap_picture() -> Vec<u8> {
+    let (width, height) = UPPER_CAP_SIZE;
+    let bounds = [0, 0, height, width];
+    let count = usize::try_from(width * height).expect("positive");
+    PictBuilder::new(bounds)
+        .direct_bits(&DirectBits::rgb555(bounds, &vec![0x4210; count]))
+        .end()
+        .build()
 }
 
 /// `fork` with the main menu's art, so the menu draws the original's
@@ -978,7 +1024,8 @@ const MAP: Key = Key::Char('m');
 /// Dialog templates by ID: "Desc Dialog" (3003), 200 x 100 at (0, 0),
 /// with Done (1) and a 100 x 36 text box (3): three lines of the About
 /// text show; the note alert (3000), 200 x 100, with OK (1) and a
-/// text box (3); and "Spaceport" (1000), [`spaceport_template`].
+/// text box (3); "Spaceport" (1000), [`spaceport_template`]; and "Text
+/// Input" (3001), [`text_input_template`].
 struct Dialogs;
 
 impl DialogResources for Dialogs {
@@ -996,6 +1043,9 @@ impl DialogResources for Dialogs {
         }
         if id == NEW_PILOT_DIALOG {
             return Ok(new_pilot_template());
+        }
+        if id == TEXT_INPUT_DIALOG {
+            return Ok(text_input_template());
         }
         if id == PLAYER_INFO_DIALOG {
             return Ok(player_info_template());
@@ -1406,6 +1456,15 @@ pub(crate) fn create_held(screen: &mut AppScreen, name: &str) {
     assert_eq!(screen.showing(), Showing::NewPilot);
     type_text(screen, name);
     screen.input(&key(Key::Enter, true));
+    christen(screen);
+}
+
+/// Confirms the new pilot's ship christening with its default, Return,
+/// when it is open.
+pub(crate) fn christen(screen: &mut AppScreen) {
+    if screen.showing() == Showing::Christening {
+        screen.input(&key(Key::Enter, true));
+    }
 }
 
 /// Opens the first saved pilot from the main menu's list, which then
@@ -1491,6 +1550,7 @@ fn create_strict(screen: &mut AppScreen, name: &str) {
     }
     type_text(screen, name);
     screen.input(&key(Key::Enter, true));
+    christen(screen);
     if screen.showing() == Showing::MainMenu {
         enter_ship(screen);
     }
@@ -1499,8 +1559,8 @@ fn create_strict(screen: &mut AppScreen, name: &str) {
 // The note on a load that fell back.
 
 /// "Create a new pilot:", smaller: 326 x 213 at (0, 0), with OK (1),
-/// Cancel (2), Strict Play (4) and the Full Name field (8); the rest
-/// parked.
+/// Cancel (2), Strict Play (4) and the Full Name and Nickname fields (8,
+/// 9); the rest parked.
 fn new_pilot_template() -> DialogTemplate {
     let item = |x, y, w, h, kind| ItemTemplate {
         bounds: Bounds::at(Point::new(x, y), w, h),
@@ -1522,6 +1582,13 @@ fn new_pilot_template() -> DialogTemplate {
     items[7] = item(
         140.0,
         30.0,
+        170.0,
+        16.0,
+        ItemSpec::EditText("Edit Text".into()),
+    );
+    items[8] = item(
+        140.0,
+        53.0,
         170.0,
         16.0,
         ItemSpec::EditText("Edit Text".into()),
@@ -1788,6 +1855,23 @@ impl DialogResources for ShipyardDialogs {
 /// pilots in `store`, flying a new pilot named Ada, landed.
 fn landed_shipyard(store: &MemoryPilots) -> AppScreen {
     landed_shipyard_of(shipbuying_data(), store)
+}
+
+/// Selects the open shipyard's first cell, as Right picks it from none:
+/// by the engine the shipyard opens with nothing selected
+/// (`_DoShipyardDialog` @0x5e6d8-0x5e705, `_ShipyardFilter`
+/// @0x60734-0x607b7).
+fn select_first_ship(screen: &mut AppScreen) {
+    screen.input(&key(Key::Right, true));
+    screen.input(&key(Key::Right, false));
+}
+
+/// Selects the open outfitter's first cell, as Right picks it from none:
+/// by the engine the outfitter opens with nothing selected
+/// (`_DoOutfitDialog` @0x5bb19-0x5bb54, `_OutfitFilter` @0x583bd-0x58440).
+fn select_first_outfit(screen: &mut AppScreen) {
+    screen.input(&key(Key::Right, true));
+    screen.input(&key(Key::Right, false));
 }
 
 /// [`landed_shipyard`], on `data`.

@@ -14,8 +14,9 @@
 //!    as it thrusts; sub 3 by [`leave_flight`]'s run out, from the system's
 //!    centre (0,0), not from the stellar; sub 1 by [`leave_flight`]'s stop,
 //!    not refuelling, which reads the cut velocity, so a ship just above
-//!    0.35 settles; sub 0x16 turning to the stellar's bearing
-//!    (`_CalcInterceptAngle`) with no thrust (+0x30 the preamble's 0,
+//!    0.35 settles; sub 0x16 wanting the stellar's bearing
+//!    (`_CalcInterceptAngle`), which `_HandleShip` turns it to
+//!    ([`flight::turn_to`]), with no thrust (+0x30 the preamble's 0,
 //!    +0x34 untouched, so an owed gate burst is kept). The fire is
 //!    [`death_star::trigger`]'s.
 //!
@@ -29,9 +30,9 @@ use crate::ai::death_star::{self, Band};
 use crate::ai::leave::Leg;
 use crate::catalog::LandingSite;
 use crate::combat::armament::Arsenal;
-use crate::flight::{Controls, FlightRules};
+use crate::flight::{self, Controls, FlightRules};
 use crate::handling::Handling;
-use crate::traffic::autopilot::{Outcome, steer};
+use crate::traffic::autopilot::Outcome;
 use crate::traffic::held_burst::{self, Word};
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::npc::Npc;
@@ -62,7 +63,8 @@ pub fn fly(
     }
     match band {
         Band::Approach => {
-            let (controls, flown) = approach_flight::toward(&npc.state, site.position, handling);
+            let (controls, flown) =
+                approach_flight::toward(&mut npc.state, site.position, handling);
             held_burst::step(npc, &flown, controls, flight, inertia, Word::Writes);
             Outcome::Flying
         }
@@ -71,7 +73,7 @@ pub fn fly(
         Band::Aim => {
             let bearing = trig::intercept_angle(npc.state.position, site.position);
             let controls = Controls {
-                turn: steer(npc.state.heading, f32::from(bearing), handling),
+                turn: flight::turn_to(&mut npc.state, bearing, handling.turn_rate),
                 ..Controls::default()
             };
             let word = Word::Keeps { thrust: 0.0 };

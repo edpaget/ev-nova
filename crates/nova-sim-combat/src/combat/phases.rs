@@ -6,6 +6,7 @@
 //! (see the [`combat`](super) module docs' steps). [`Combat::tick_on`]
 //! runs them in that order with nothing between them.
 
+use super::asteroid_walk::AsteroidField;
 use super::ion::IonLockout;
 use super::lineup::reread;
 use super::stellar::StellarTarget;
@@ -16,6 +17,7 @@ use super::{
 };
 use crate::chance::Chance;
 use crate::combat::armament::Arsenal;
+use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::ship_layer::Slot;
 
@@ -286,11 +288,28 @@ impl Combat {
     ///
     /// A held slot, a shot point defence ended and hid at life 0, has no
     /// end of life (@0x36195 → @0x35f0a → @0x3617c): the collision passes
-    /// have already tested and let it go (`Combat::test_hidden`).
+    /// have already tested and let it go (`Combat::proximity_pass`).
+    ///
+    /// It lends the guidance no asteroids: it is [`Combat::fly_shots_in`]
+    /// with none.
     pub fn fly_shots(
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.fly_shots_in(fighters, arena, &[], chance);
+    }
+
+    /// [`Combat::fly_shots`] with the guidance lent where each asteroid
+    /// slot's asteroid is, by slot, as `_HandleShot` meets them: a homing
+    /// `Seeker` 0x0002 shot may lock onto one, and a locked one steers at
+    /// its slot's ([`asteroid_seek`](super::asteroid_seek)).
+    pub fn fly_shots_in(
+        &mut self,
+        fighters: &mut [Fighter],
+        arena: Arena<'_>,
+        asteroids: &[Option<Vec2>],
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;
@@ -298,7 +317,7 @@ impl Combat {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let terms = (arena.govts, arena.arsenal);
-        self.handle_shots(fighters, terms, arena.rules.disable, chance);
+        self.handle_shots(fighters, terms, arena.rules.disable, asteroids, chance);
         self.hold_reloads(fighters);
     }
 
@@ -318,11 +337,33 @@ impl Combat {
     /// [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)
     /// ([`beam_stellar`](super::beam_stellar)); their strikes are taken
     /// with [`Combat::take_stellar_strikes`].
+    ///
+    /// It lends the beams no asteroid field: it is [`Combat::close_tick_in`]
+    /// with none.
     pub fn close_tick(
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
         stellars: &mut [StellarTarget],
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.close_tick_in(fighters, arena, stellars, None, chance);
+    }
+
+    /// [`Combat::close_tick`] with `field` lent to the beams: each beam
+    /// whose ship pass hit nothing runs `_HandleBeams`' asteroid pass on
+    /// it as its turn comes, before the next beam is tested
+    /// ([`asteroid_beam`](super::asteroid_beam)), so a later beam meets
+    /// what an earlier one left, its fragments included. A beam a stellar
+    /// stopped (the Bible's reading of
+    /// [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)) hit no ship,
+    /// so it runs the asteroid pass too, short of the stellar.
+    pub fn close_tick_in(
+        &mut self,
+        fighters: &mut [Fighter],
+        arena: Arena<'_>,
+        stellars: &mut [StellarTarget],
+        mut field: Option<AsteroidField<'_>>,
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;
@@ -356,6 +397,9 @@ impl Combat {
                 };
                 let among = (&*fighters, &mut *stellars);
                 let Some(hit) = self.beam_hit(index, among, &sides, pass.beam_damage()) else {
+                    if let Some(field) = field.as_mut() {
+                        self.cut_asteroids(index, fighters, field, pass, chance);
+                    }
                     continue;
                 };
                 let ship = hit.ship;

@@ -700,6 +700,7 @@ mod tests {
                 govt: None,
                 booty: Some(0x0100),
                 planet_type: false,
+                mining: true,
             }),
         ] {
             let parent = Shot {

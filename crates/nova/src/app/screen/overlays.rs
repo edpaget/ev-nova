@@ -13,7 +13,9 @@ use nova_view::spaceport::offer::{
 use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::MissionDialogs;
-use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG};
+use nova_view::ui::player_info::{
+    BackgroundSizes, PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG,
+};
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
 use nova_view::ui::{
@@ -210,6 +212,7 @@ impl AppScreen {
             for flight in self.flights_mut() {
                 flight.set_hyperspace_effects(prefs.hyperspace_effects);
                 flight.set_smoke_trails(prefs.smoke_trails);
+                flight.set_parallax_starfield(prefs.parallax_starfield);
                 flight.set_weapon_effects(weapon_effects);
                 flight.set_sound_prefs(prefs.sound);
             }
@@ -236,6 +239,9 @@ impl AppScreen {
         if let Some(dialog) = &mut self.comm {
             return Some(dialog);
         }
+        if let Some(dialog) = &mut self.escort_dialog {
+            return Some(dialog);
+        }
         if let Some(dialogs) = &mut self.missions {
             return Some(dialogs);
         }
@@ -250,6 +256,9 @@ impl AppScreen {
         }
         if let Some(dialog) = &mut self.new_pilot {
             return Some(dialog);
+        }
+        if let Some(open) = &mut self.christening {
+            return Some(&mut open.dialog);
         }
         if let Some(list) = &mut self.open_pilot {
             return Some(list);
@@ -323,6 +332,13 @@ impl AppScreen {
         }
         if let Some(view) = self.flight.as_mut().and_then(FlightView::take_hail) {
             self.open_comm(&view);
+        }
+        if let Some(view) = self
+            .flight
+            .as_mut()
+            .and_then(FlightView::take_escort_dialog)
+        {
+            self.open_escort_dialog(&view);
         }
         if let Some(prompt) = self.flight.as_mut().and_then(FlightView::take_offer) {
             self.open_offer(prompt);
@@ -433,7 +449,8 @@ impl AppScreen {
     /// opens ([`FlightView::open_player_info`], which resets the session
     /// first; nothing opens in a jump or while the ship breaks up): laid out by
     /// the interface file's `DLOG` 1017 and its Yes/No dialog, 3002, or
-    /// saying why not. The screen below lets go of its keys. With no
+    /// saying why not, over the game data's background pictures
+    /// ([`BackgroundSizes::read`]). The screen below lets go of its keys. With no
     /// dialogs, nothing opens, as the mission info does not.
     fn open_flight_player_info(&mut self) {
         let Some(dialogs) = &self.dialogs else {
@@ -454,6 +471,7 @@ impl AppScreen {
             confirm,
             info,
             self.data.button_style(),
+            BackgroundSizes::read(&self.data),
         ));
     }
 
@@ -479,6 +497,19 @@ impl AppScreen {
             }
         }
         ScreenAction::None
+    }
+
+    /// Opens what a board made in flight's tick, the Board key held
+    /// (`nova_view::flight::FlightView`'s `board_frame`): the plunder
+    /// dialog, or a person's mission offered in its place, as the press's
+    /// board opens them (the flight branch of the router's input).
+    pub(super) fn open_frame_boarding(&mut self) {
+        if let Some(shown) = self.flight.as_mut().and_then(FlightView::take_boarding) {
+            self.open_plunder(&shown);
+        }
+        if let Some(prompt) = self.flight.as_mut().and_then(FlightView::take_offer) {
+            self.open_offer(prompt);
+        }
     }
 
     /// Opens the offer dialog on `prompt`, a person's mission offered on

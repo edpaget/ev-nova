@@ -180,7 +180,7 @@ fn a_seeking_sub_munition_of_a_proximity_hit_reads_the_escort_unled() {
             beside,
             None,
         );
-        let struck = walk_amid(&mut combat, &mut ships, &mut [], &arsenal);
+        let struck = walk_amid(&mut combat, &mut ships, &mut Rocks::of([]), &arsenal);
         assert_eq!(struck[..2], [(E, Some(A)), (X, Some(ShipRef::Player))]);
         let subs: Vec<Option<ShipRef>> = combat
             .shots()
@@ -233,7 +233,7 @@ fn s1_then_s2(e: Ship) -> (Vec<(ShipRef, Option<ShipRef>)>, Vec<SubSeated>) {
         below_e,
         None,
     );
-    let struck = walk_amid(&mut combat, &mut ships, &mut [], &arsenal);
+    let struck = walk_amid(&mut combat, &mut ships, &mut Rocks::of([]), &arsenal);
     let subs = combat
         .shots()
         .iter()
@@ -277,7 +277,7 @@ fn a_proximity_hits_own_sub_munitions_read_its_own_hit() {
         beside,
         None,
     );
-    walk_amid(&mut combat, &mut ships, &mut [], &arsenal);
+    walk_amid(&mut combat, &mut ships, &mut Rocks::of([]), &arsenal);
     let targets: Vec<Option<ShipRef>> = combat
         .shots()
         .iter()

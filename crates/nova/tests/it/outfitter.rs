@@ -19,6 +19,7 @@
 //! With a map for sale too, a map bought once greys Buy for the rest of
 //! that opening of the outfitter, and the next opening lifts it.
 
+use crate::common::text_input_items;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -352,6 +353,8 @@ fn ditl(items: &[Vec<u8>]) -> Vec<u8> {
 /// fourteen items, stock "Spaceport" (`DLOG` 1000) and its fifteen user
 /// items, and stock "Outfit" (`DLOG` 1002, 765 x 321, centred) and its
 /// thirteen user items.
+///
+/// With stock "Text Input" (`DLOG` 3001) too, for the ship's christening.
 fn interface() -> InterfaceData {
     let text = |bounds, s: &str| ditl_item(bounds, STATIC_TEXT | DISABLED, s.as_bytes());
     let field = |bounds| ditl_item(bounds, EDIT_TEXT, b"Edit Text");
@@ -420,6 +423,8 @@ fn interface() -> InterfaceData {
         (Ditl::TYPE, 1002, ditl(&outfit)),
         (Dlog::TYPE, 3102, dlog((78, 175, 291, 501), 3102)),
         (Ditl::TYPE, 3102, ditl(&new_pilot)),
+        (Dlog::TYPE, 3001, dlog((100, 100, 238, 460), 3001)),
+        (Ditl::TYPE, 3001, ditl(&text_input_items(ditl_item))),
         (Dlog::TYPE, 1000, dlog((-201, 60, 316, 678), 1000)),
         (Ditl::TYPE, 1000, ditl(&spaceport)),
     ]);
@@ -632,13 +637,21 @@ impl Harness {
     }
 }
 
-/// What the Outfitter first shows the new pilot: the outfits listed, the
-/// booster's description and info box, and the buttons.
-const FIRST_LOOK: [&str; 16] = [
+/// What the Outfitter first shows the new pilot: the outfits listed and
+/// the buttons, with nothing selected.
+const FIRST_LOOK: [&str; 7] = [
     "Speed",
     "Booster",
     "Fuel Tank",
     "Fuel Scoop",
+    "Buy",
+    "Sell",
+    "Done",
+];
+
+/// What the Outfitter adds once the booster's cell is clicked: its
+/// description and info box.
+const BOOSTER_LOOK: [&str; 9] = [
     "Bolted-on thrusters.",
     "Item Price:",
     "5,000 cr",
@@ -648,28 +661,12 @@ const FIRST_LOOK: [&str; 16] = [
     "25,000 cr",
     "Available:",
     "8 tons",
-    "Buy",
-    "Sell",
-    "Done",
 ];
 
-#[test]
-fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart() {
-    let store = MemoryPilots::new();
-    let mut game = Harness::opening(&store);
-    let new_pilot = game.menu_button(MenuChoice::NewPilot);
-    game.click(new_pilot);
-    game.type_name("Ada");
-    game.press(KeyCode::Enter);
-    game.enter_ship();
-    assert_eq!(game.showing(), Showing::Flight);
-    game.frame();
-    let base_speed = game.top_speed();
-    assert!((base_speed - 3.0).abs() < 1e-6, "{base_speed}");
-    game.land();
-    assert_eq!(game.showing(), Showing::Spaceport);
-
-    // The Outfitter lists what tech level 2 allows, heaviest weight first.
+/// Opens the Outfitter for the new pilot and checks its first look: what
+/// tech level 2 allows, heaviest weight first, with nothing selected, so
+/// B buys nothing.
+fn first_look(game: &mut Harness) {
     game.open_outfitter();
     let ids: Vec<_> = game
         .outfitter()
@@ -683,12 +680,42 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     for text in FIRST_LOOK {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
+    for text in BOOSTER_LOOK {
+        assert!(!shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
     assert!(!shown.contains(&"Warp Core".to_owned()));
+    game.press(KeyCode::KeyB);
+    assert_eq!(game.pilot().owned(BOOSTER), 0, "Buy is grey");
+}
+
+#[test]
+fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
+    game.press(KeyCode::Enter);
+    game.enter_ship();
+    assert_eq!(game.showing(), Showing::Flight);
+    game.frame();
+    let base_speed = game.top_speed();
+    assert!((base_speed - 3.0).abs() < 1e-6, "{base_speed}");
+    game.land();
+    assert_eq!(game.showing(), Showing::Spaceport);
+
+    first_look(&mut game);
 
     // Select the booster by its cell and buy one with B: the pilot pays
     // and is saved.
     let cell = game.outfitter().cell_bounds(0).expect("a cell").center();
     game.click(cell);
+    let shown = texts(&game.frame());
+    for text in BOOSTER_LOOK.into_iter().chain(FIRST_LOOK) {
+        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
     let writes = store.writes();
     game.press(KeyCode::KeyB);
     assert_eq!(game.pilot().owned(BOOSTER), 1);
@@ -759,6 +786,8 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     let fuel = game.pilot().reserves().fuel;
     assert!((fuel.max - 400.0).abs() < 1e-3, "{fuel:?}");
     game.open_outfitter();
+    let cell = game.outfitter().cell_bounds(0).expect("a cell").center();
+    game.click(cell);
     let shown = texts(&game.frame());
     assert!(shown.contains(&"13,000 cr".to_owned()), "{shown:?}");
     assert!(shown.contains(&"1 ton".to_owned()), "{shown:?}");
@@ -784,6 +813,8 @@ fn a_map_bought_greys_buy_until_the_outfitter_opens_again() {
     let new_pilot = game.menu_button(MenuChoice::NewPilot);
     game.click(new_pilot);
     game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
     game.press(KeyCode::Enter);
     game.enter_ship();
     game.frame();

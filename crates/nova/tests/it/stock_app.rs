@@ -552,7 +552,7 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     assert_eq!((today.day(), today.month(), today.year()), (23, 6, 1177));
     assert_eq!(
         flight.message(),
-        Some("Exiting hypergate in the Tichel system on June 23, 1177 NC.")
+        Some("Exiting hypergate in the Tichel system on June 23rd, 1177 NC.")
     );
 }
 
@@ -896,6 +896,8 @@ fn a_new_stock_pilot_sees_the_three_intro_pictures_for_45_seconds_each() {
     for c in "Ada".chars() {
         driver.send(WindowEvent::Text(c));
     }
+    driver.press(Key::Enter);
+    // The ship's christening, confirmed with its default.
     driver.press(Key::Enter);
     assert_eq!(driver.showing(), Showing::MainMenu);
     let enter = crate::common::enter_ship_at(driver.app.screen());

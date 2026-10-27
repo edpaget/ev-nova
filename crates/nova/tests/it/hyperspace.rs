@@ -380,6 +380,7 @@ impl Harness {
             .with_flight_overlays(FlightOverlays {
                 title: true,
                 help: true,
+                cheats: false,
             });
         let mut harness = Self {
             app: App::new(&FakeWindow, data, screen),
@@ -459,6 +460,8 @@ impl Harness {
         for c in name.chars() {
             self.send(WindowEvent::Text(c));
         }
+        self.press(Key::Enter);
+        // The ship's christening, confirmed with its default.
         self.press(Key::Enter);
         self.enter_ship();
         assert_eq!(self.showing(), Showing::Flight);
@@ -840,10 +843,10 @@ fn centred(x: f32, y: f32, w: f32, h: f32) -> Rect {
 }
 
 /// Where the stellar at (0, -300) is drawn with the camera on the ship as
-/// drawn.
+/// drawn, at the play area's centre, (415, 384).
 fn stellar_drawn(harness: &Harness) -> Rect {
     let shown = harness.flight().shown_position();
-    centred(512.0 - shown.x, 384.0 - 300.0 - shown.y, 8.0, 8.0)
+    centred(415.0 - shown.x, 384.0 - 300.0 - shown.y, 8.0, 8.0)
 }
 
 fn date(harness: &Harness) -> (u8, u8, i32) {
@@ -948,7 +951,7 @@ fn a_jump_into_a_system_with_a_message_buoy_shows_the_buoy_in_place_of_the_arriv
     plain.jump_to_beta();
     assert_eq!(
         plain.flight().message(),
-        Some("Jumping into the Beta system on June 24, 1177."),
+        Some("Jumping into the Beta system on June 24th, 1177."),
         "no buoy at -1"
     );
 }
@@ -962,7 +965,7 @@ fn a_buoy_into_a_system_with_no_stellars_replaces_the_no_stellars_suffix_too() {
     plain.jump_to_beta();
     assert_eq!(
         plain.flight().message(),
-        Some("Jumping into the Beta system on June 24, 1177. No stellar objects present."),
+        Some("Jumping into the Beta system on June 24th, 1177. No stellar objects present."),
         "no buoy at -1: the suffix shows"
     );
 }
@@ -1572,7 +1575,7 @@ fn a_hypergate_picked_on_the_map_brings_the_ship_out_of_its_linked_gate() {
     assert!(
         shows(
             &frame,
-            "Exiting hypergate in the Gamma system on June 23, 1177."
+            "Exiting hypergate in the Gamma system on June 23rd, 1177."
         ),
         "{:?}",
         texts(&frame)

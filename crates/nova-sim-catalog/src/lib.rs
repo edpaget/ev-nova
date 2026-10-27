@@ -51,6 +51,7 @@ pub mod data;
 pub mod fixture;
 #[cfg(test)]
 mod pict_sheet_sites;
+pub mod resource_name;
 pub mod sound;
 pub mod strings;
 #[cfg(test)]
@@ -73,4 +74,5 @@ pub use control::{
     Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,
     SetExpr, SetOp, SetOpKind, Test, TestExpr,
 };
+pub use resource_name::trim_resource_name;
 pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound};

@@ -5,20 +5,19 @@
 //! year ([`StartDate`]), raw. A month outside 1-12 means January, and a day
 //! that the month does not have means the 1st.
 //!
-//! [`date_text`] is how a date is displayed: `{DatePrefix}{Month} {day},
-//! {year}{DateSuffix}`, as in stock's "June 23, 1177 NC". The Bible says the
-//! `chär`'s `DatePrefix` and `DateSuffix` are "appended to the start/end of
-//! the date whenever it's displayed", so they are used verbatim, with no
-//! spaces added; the suffix is an era marker, so the year comes last. The
-//! data names no months: the original took them from the system's long-date
-//! format, so they are the twelve English names here, with no weekday, no
+//! [`long_date_text`] is the original's long date (`_DateToLongString`
+//! @0x8ef8): `{DatePrefix}{Month} {day}{ordinal}, {year}{DateSuffix}`, as
+//! in stock's "June 23rd, 1177 NC". The arrival messages of a jump, a
+//! hypergate and a wormhole, the take-off greeting and a mission's `<DL>`
+//! show it. The Bible says the `chär`'s `DatePrefix` and `DateSuffix` are
+//! "appended to the start/end of the date whenever it's displayed", so
+//! they are used verbatim, with no spaces added; the suffix is an era
+//! marker, so the year comes last. The months are `STR#` 137 #1-12 of
+//! `Nova-DF.rsrc`, "January" to "December", with no weekday, no
 //! zero-padding, and the year a plain integer that keeps its sign.
 //!
-//! [`long_date_text`] is the original's long date (`_DateToLongString`
-//! @0x8ef8), which a mission's `<DL>` reads: the same, with the day's
-//! English ordinal, "June 23rd, 1177 NC". The arrival and landing
-//! messages, which the original also writes long, keep [`date_text`]
-//! for now (rdm:task/long-date-ordinals).
+//! [`date_text`] is the same without the ordinal, "June 23, 1177 NC". The
+//! original has no counterpart: it is kept only for the developer tools.
 //!
 //! [`med_date_text`] is the original's medium date (`_DateToMedString`
 //! @0x8cb6), which the mission computer and the mission info screen
@@ -117,8 +116,9 @@ const MONTH_NAMES: [&str; 12] = [
     "December",
 ];
 
-/// `date` as it is displayed, wrapped in `affixes`: for example
-/// "June 23, 1177 NC".
+/// `date` wrapped in `affixes`, without the ordinal: for example
+/// "June 23, 1177 NC". The original writes no date this way; only the
+/// developer tools show it. The player sees [`long_date_text`].
 #[must_use]
 pub fn date_text(date: GameDate, affixes: &DateAffixes) -> String {
     let month = MONTH_NAMES[usize::from(date.month - 1)];

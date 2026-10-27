@@ -30,7 +30,7 @@
 use std::rc::Rc;
 
 use nova_data::GameData;
-use nova_sim::Pilot;
+use nova_sim::{LastRefresh, Pilot};
 use nova_view::flight::FlightView;
 
 use super::{AppScreen, Side};
@@ -58,6 +58,16 @@ impl AppScreen {
         if let Some(old) = self.game.replace(flight) {
             self.remember_flight(&old);
         }
+    }
+
+    /// What the run's last galaxy refresh left hidden, for a new pilot's
+    /// neighbour pass (see [`nova_sim::LastRefresh`]): the game held's,
+    /// else the last flight put away's, else `None`, the launch's.
+    pub(super) fn run_refresh(&self) -> Option<LastRefresh> {
+        self.game
+            .as_ref()
+            .and_then(FlightView::last_refresh)
+            .or_else(|| self.last_refresh.clone())
     }
 
     /// Settles what the held game's hooks queued
@@ -94,9 +104,13 @@ impl AppScreen {
     }
 
     /// Saves the game held, as [`AppScreen::save_pilot`] saves the
-    /// flight shown.
-    fn save_game(&mut self) {
-        if let Some(warning) = self.game.as_ref().and_then(|game| self.save_warning(game)) {
+    /// flight shown, in place of the pilot saved under `replaces`, if any.
+    fn save_game(&mut self, replaces: Option<&str>) {
+        if let Some(warning) = self
+            .game
+            .as_ref()
+            .and_then(|game| self.save_warning(game, replaces))
+        {
             self.warnings.push(warning);
         }
     }
@@ -107,16 +121,27 @@ impl AppScreen {
     /// (`_SavePilotFile` @0x1935f) and returns to the main screen with the
     /// pilot loaded; choice 0 runs no sweep after it (@0x1a795-0x1a7d2).
     /// What the settling then makes due is saved too, as after any input.
+    /// Each save is in place of the pilot saved under `replaces`, if any
+    /// (`nova_sim::saves::PilotKeeper::save_replacing`).
     /// Its intro is remembered for the entry
-    /// ([`AppScreen::remember_new_pilot_intro`]).
-    pub(super) fn hold_new_pilot(&mut self, mut flight: FlightView<Rc<GameData>>) {
+    /// ([`AppScreen::remember_new_pilot_intro`]). Its neighbour pass
+    /// reads the run's last refresh ([`AppScreen::run_refresh`]).
+    pub(super) fn hold_new_pilot(
+        &mut self,
+        flight: FlightView<Rc<GameData>>,
+        replaces: Option<&str>,
+    ) {
+        let mut flight = match self.run_refresh() {
+            Some(carried) => flight.with_last_refresh(carried),
+            None => flight,
+        };
         self.remember_new_pilot_intro();
         flight.begin();
         flight.take_save_due();
         self.hold_game(flight);
-        self.save_game();
+        self.save_game(replaces);
         if self.settle_game() {
-            self.save_game();
+            self.save_game(replaces);
         }
     }
 }

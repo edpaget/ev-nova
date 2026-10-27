@@ -164,7 +164,8 @@ pub fn planet(id: i16, x: f32, y: f32) -> LandingSite {
 /// every day (`BuyRandom` 100), never for hire (`HireRandom` 0),
 /// requiring nothing, with no default items, no `Flags` or `Flags3`, no
 /// `SkillVar` and no inherent government, hailed as "ship `id`", a wimpy trader whose escort class
-/// is worked out (`EscortType` -1).
+/// is worked out (`EscortType` -1). It has no subtitle, upgrades to
+/// nothing and sells, as an escort, for 1,000 (its `Cost` x 0.1).
 #[must_use]
 pub fn ship(id: i16, fields: ShipFields) -> ShipRecord {
     ShipRecord {
@@ -196,6 +197,10 @@ pub fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         combat_govt: None,
         escort_type: -1,
         skill_var: 0,
+        subtitle: String::new(),
+        upgrade_to: None,
+        esc_upgrd_cost: 0,
+        esc_sell_value: 1_000,
         on_capture: crate::control::Script::default(),
         on_purchase: crate::control::Script::default(),
         on_retire: crate::control::Script::default(),
@@ -390,6 +395,7 @@ pub fn star(id: i16, (x, y): (f32, f32), links: &[i16]) -> StarSystem {
         interference: 0,
         murk: 0,
         message: -1,
+        background: 0,
     }
 }
 

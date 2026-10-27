@@ -7,13 +7,13 @@
 //! does from step 2 on ([`advance`]). Each [`step`]:
 //!
 //! 1. Turns. Left and right turn by the ship's turn rate, the full rate
-//!    (`_HandleShip`). Otherwise reverse turns towards the heading
-//!    opposite the ship's velocity, by at most the turn rate, landing on
-//!    it exactly once it is within one tick's turn. A ship at rest has no
-//!    velocity to turn from, so reverse does nothing; one no faster than
-//!    [`FlightRules::at_rest_speed`] counts as at rest. (The original's
-//!    NPCs have no reverse: the AI turns them, and
-//!    rdm task `brake-leaves-sub-thrust-drift` owns their brake.)
+//!    (`_HandleShip`); reverse never turns an NPC. The AI works out which
+//!    way: every NPC substate wants a whole-degree heading (+0x68), and
+//!    `_HandleShip` turns the ship to it ([`turn_to`], or [`turn_to_own`]
+//!    for one that wants none), by the rate beyond it and onto it within
+//!    it, before the step. (The autopilot's brake, which stands in for
+//!    sub 1, stops by thresholds of its own:
+//!    rdm:phase/play-feel-2/phase-15-brake-leaves-sub-thrust-drift.)
 //! 2. Thrusts: thrust adds the ship's acceleration along its new heading to
 //!    its velocity. By default ([`SpeedCap::PerAxis`], the original's), as
 //!    `_AdjustedAccel` adds it ([`adjusted_accel`], @0x2ae4b-0x2af43): on
@@ -47,8 +47,8 @@
 //! speed along its heading instead, which its owner keeps (the session
 //! for the player, traffic for an NPC). Its tick is an
 //! [`inertialess_step`] or [`inertialess_player_step`]: it turns as
-//! above, but reverse never turns it (an NPC's turns by its keys alone,
-//! and the player's reverse gives no aim). Thrust and reverse move the
+//! above (an NPC's by its keys alone, and the player's reverse gives no
+//! aim). Thrust and reverse move the
 //! speed, not the velocity, up to the top speed; the player's speed is
 //! then capped at its box (@0x6d356). Then the velocity is pulled toward
 //! heading x speed on each axis, capped as in step 3, and the ship moves
@@ -70,23 +70,15 @@ use crate::rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
 use crate::speed_cap::{SpeedCap, adjusted_accel, circle, speed_limit};
 use crate::trig;
 
-/// The speed, in pixels a tick, at or below which reverse treats a ship as
-/// at rest under the original's thrust ([`at_rest_speed`] of
-/// [`ORIGINAL_THRUST_DIVISOR`]).
-pub const AT_REST_SPEED: f32 = 0.5 / ORIGINAL_THRUST_DIVISOR;
-
-/// The speed, in pixels a tick, at or below which an NPC's reverse
-/// ([`step`]) treats a ship as at rest when `Accel` is divided by
-/// `divisor`: half of one tick's thrust from the weakest engine (`Accel`
-/// 1). Thrust never changes a speed by less than that, so anything slower
-/// is the rounding left over from braking, whose direction is
-/// meaningless. The player's reverse tests each axis against the
-/// original's 0.05 instead
+/// The speed, in pixels a tick, at or below which the autopilot's own
+/// planning treats an NPC as at rest: half of one tick's thrust from the
+/// weakest engine (`Accel` 1) under the original's thrust
+/// ([`ORIGINAL_THRUST_DIVISOR`]). Thrust never changes a speed by less
+/// than that, so anything slower is the rounding left over from braking,
+/// whose direction is meaningless. The player's reverse tests each axis
+/// against the original's 0.05 instead
 /// ([`reverse_aim`](crate::player_turn::reverse_aim)).
-#[must_use]
-pub fn at_rest_speed(divisor: NonZeroU32) -> f32 {
-    (0.5 / f64::from(divisor.get())) as f32
-}
+pub const AT_REST_SPEED: f32 = 0.5 / ORIGINAL_THRUST_DIVISOR;
 
 /// The rules a ship flies by, read from the [`Rulebook`] at each use: the
 /// thrust's divisor ([`RuleValue::ThrustDivisor`]), the speed cap
@@ -179,13 +171,6 @@ impl FlightRules {
     #[must_use]
     pub fn handling(self, handling: Handling) -> Handling {
         handling.thrust_under(self.thrust_divisor)
-    }
-
-    /// The speed reverse treats as at rest under these rules
-    /// ([`at_rest_speed`]).
-    #[must_use]
-    pub fn at_rest_speed(self) -> f32 {
-        at_rest_speed(self.thrust_divisor)
     }
 }
 
@@ -291,13 +276,15 @@ pub enum Face {
 pub struct Controls {
     /// Accelerate along the heading.
     pub thrust: bool,
-    /// Turn left or right. For an NPC ([`step`]) it takes precedence over
-    /// `reverse`; the player's are held off while reverse or the face key
-    /// aims ([`player_turn`](crate::player_turn)).
+    /// Turn left or right: an NPC's turn, which the AI works out
+    /// ([`turn_to`]); the player's are held off while reverse or the face
+    /// key aims ([`player_turn`](crate::player_turn)).
     pub turn: Turn,
-    /// Turn to face against the velocity: in an NPC's [`step`], and in the
-    /// session's aim for the player's
-    /// ([`reverse_aim`](crate::player_turn::reverse_aim)).
+    /// The player's reverse key, which the session aims the player's ship
+    /// by ([`reverse_aim`](crate::player_turn::reverse_aim)) and which
+    /// takes speed off an inertialess player's ship
+    /// ([`inertialess_player_step`]); for an inertialess NPC, the AI's
+    /// brake ([`inertialess_step`]). An inertial NPC's [`step`] ignores it.
     pub reverse: bool,
     /// The face-target key, which the session aims the player's ship by.
     pub face: Face,
@@ -326,30 +313,9 @@ pub fn step(
     rules: FlightRules,
     flyer: Flyer,
 ) {
-    state.heading = npc_turn(state, handling, controls, rules);
+    state.heading = turned(state.heading, controls.turn, handling.turn_rate);
     let caps = Caps::top(handling.max_speed);
     advance(state, handling, controls.thrust, caps, rules, flyer);
-}
-
-/// The heading an inertial NPC at `state` turns to this tick under
-/// `controls`, as `handling` allows under `rules`: [`step`]'s turn. The
-/// turn keys turn it ([`turned`]); with neither held, reverse turns it
-/// toward its retro heading while it moves faster than
-/// [`FlightRules::at_rest_speed`] ([`turn_toward`]).
-#[must_use]
-pub fn npc_turn(
-    state: &ShipState,
-    handling: &Handling,
-    controls: Controls,
-    rules: FlightRules,
-) -> f32 {
-    let rate = handling.turn_rate;
-    match controls.turn {
-        Turn::None if controls.reverse && state.velocity.length() > rules.at_rest_speed() => {
-            turn_toward(state.heading, heading_of(state.velocity * -1.0), rate)
-        }
-        turn => turned(state.heading, turn, rate),
-    }
 }
 
 /// Advances the player's ship, `state`, one tick under `controls`, flying
@@ -570,6 +536,18 @@ pub fn turn_to(state: &mut ShipState, wanted: i16, rate: f32) -> Turn {
     }
     state.heading = f32::from(wanted);
     Turn::None
+}
+
+/// [`turn_to`] for a substate that wants no heading of its own:
+/// `_LowLevelAIHandler` sets +0x68 to the ship's heading truncated every
+/// frame before its substate runs (`cvttss2si(+0x44)`, @0x85228-0x8522d),
+/// so `_HandleShip` puts the ship on its own whole degree, which is
+/// always within its turn: `state`'s heading is truncated, and the ship
+/// shows no turn.
+///
+/// The caller skips it while the ship's AI wait runs, as for [`turn_to`].
+pub fn turn_to_own(state: &mut ShipState) {
+    state.heading = f32::from(trig::whole(state.heading));
 }
 
 /// The unit vector a ship heading `heading` degrees faces.
@@ -795,6 +773,20 @@ mod tests {
             (Turn::None, 90.0),
             "its own whole heading: truncated"
         );
+    }
+
+    #[test]
+    fn a_ship_wanting_its_own_heading_is_put_on_its_whole_degree() {
+        for heading in [37.6, 37.0, 359.9, 0.4] {
+            let mut state = ShipState {
+                velocity: Vec2::new(1.0, -2.0),
+                heading,
+                ..ShipState::default()
+            };
+            turn_to_own(&mut state);
+            assert_eq!(state.heading, heading.trunc(), "{heading}");
+            assert_eq!(state.velocity, Vec2::new(1.0, -2.0), "{heading}");
+        }
     }
 
     #[test]
@@ -1180,136 +1172,29 @@ mod tests {
     // Reverse.
 
     #[test]
-    fn reverse_turns_towards_the_heading_against_the_velocity() {
-        // Moving up (heading 0); behind is 180, as far one way as the other,
-        // and the turn goes clockwise.
+    fn an_npcs_step_turns_by_its_turn_keys_alone_never_by_reverse() {
+        // The AI turns an NPC to the heading it wants (`turn_to`): reverse
+        // neither turns nor brakes an inertial one.
         let up = moving(Vec2::new(0.0, -3.0), 0.0);
-        assert_eq!(after(up, REVERSE, 1).heading, 3.0);
-        assert_eq!(after(up, REVERSE, 59).heading, 177.0);
-        assert_eq!(after(up, REVERSE, 60).heading, 180.0);
-        assert_eq!(after(up, REVERSE, 90).heading, 180.0, "and stays there");
-        // Moving left, facing up: behind is 90, clockwise.
-        let left = moving(Vec2::new(-2.0, 0.0), 0.0);
-        assert_eq!(after(left, REVERSE, 1).heading, 3.0);
-        // Moving right, facing up: behind is 270, anticlockwise.
-        let right = moving(Vec2::new(2.0, 0.0), 0.0);
-        assert_eq!(after(right, REVERSE, 1).heading, 357.0);
-        assert_eq!(after(right, REVERSE, 30).heading, 270.0);
-        // Reverse alone neither thrusts nor brakes.
-        assert_eq!(after(right, REVERSE, 30).velocity, Vec2::new(2.0, 0.0));
-    }
-
-    #[test]
-    fn reverse_lands_on_the_heading_behind_without_overshooting() {
-        // Moving down and right at 45°: behind is 315.
-        let state = moving(Vec2::new(1.0, 1.0), 313.5);
-        let reversed = after(state, REVERSE, 1);
-        assert!((reversed.heading - 315.0).abs() < 1e-4, "{reversed:?}");
-        let again = after(reversed, REVERSE, 1);
-        assert_eq!(again.heading, reversed.heading, "no oscillation");
-        // Exactly one tick's turn away lands on it too.
-        let one_turn = moving(Vec2::new(0.0, -1.0), 177.0);
-        assert_eq!(after(one_turn, REVERSE, 1).heading, 180.0);
-    }
-
-    #[test]
-    fn reverse_across_0_turns_the_short_way() {
-        // Moving down, facing just left of up: behind is 0, a short turn
-        // clockwise across 360.
-        let state = moving(Vec2::new(0.0, 1.0), 350.0);
-        assert_eq!(after(state, REVERSE, 1).heading, 353.0);
-        let landed = after(state, REVERSE, 4).heading;
-        assert!(landed < 1e-4 || landed > 360.0 - 1e-4, "{landed}");
-    }
-
-    #[test]
-    fn reverse_at_rest_does_nothing() {
-        let state = heading(45.0);
-        assert_eq!(after(state, REVERSE, 5), state);
-    }
-
-    #[test]
-    fn an_npcs_left_or_right_overrides_reverse() {
-        let up = moving(Vec2::new(0.0, -3.0), 0.0);
+        assert_eq!(
+            after(up, REVERSE, 5),
+            ShipState {
+                position: Vec2::new(0.0, -15.0),
+                ..up
+            }
+        );
         let left = Controls {
             turn: Turn::Left,
             ..REVERSE
         };
         assert_eq!(after(up, left, 1).heading, 357.0);
-        let right = Controls {
-            turn: Turn::Right,
-            ..REVERSE
-        };
-        let moving_right = moving(Vec2::new(2.0, 0.0), 0.0);
-        assert_eq!(after(moving_right, right, 1).heading, 3.0);
     }
 
     #[test]
-    fn reverse_then_thrust_brakes_the_ship_to_a_stop_under_either_cap() {
-        for flyer in FLYERS {
-            for rules in [FlightRules::default(), CIRCLE] {
-                let mut state = moving(Vec2::new(0.0, -3.0), 0.0);
-                for _ in 0..60 {
-                    step(&mut state, &SHIP, REVERSE, rules, flyer);
-                }
-                assert_eq!(state.heading, 180.0);
-                let brake = Controls {
-                    thrust: true,
-                    ..REVERSE
-                };
-                // Facing back, each tick of thrust takes 0.1 off the speed.
-                for _ in 0..30 {
-                    step(&mut state, &SHIP, brake, rules, flyer);
-                    assert!((state.heading - 180.0).abs() < 1e-3, "{state:?}");
-                }
-                assert!(
-                    state.velocity.length() < 1e-4,
-                    "{flyer:?} {rules:?}: {state:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn reverse_counts_a_ship_at_or_below_the_rest_speed_as_at_rest() {
-        let creeping = moving(Vec2::new(0.0, AT_REST_SPEED), 90.0);
-        assert_eq!(after(creeping, REVERSE, 1).heading, 90.0);
-        // One tick's thrust from the weakest engine is motion.
-        let weakest = Handling::from_totals(300, 1, 10.0);
-        let nudged = moving(Vec2::new(0.0, weakest.accel), 90.0);
-        assert_eq!(after(nudged, REVERSE, 1).heading, 87.0, "towards 0");
-    }
-
-    #[test]
-    fn the_rest_speed_is_half_the_weakest_engines_thrust_under_the_divisor() {
-        assert_eq!(FlightRules::default().at_rest_speed(), AT_REST_SPEED);
+    fn the_rest_speed_is_half_the_weakest_engines_thrust() {
         assert_eq!(AT_REST_SPEED, 0.5 / 5000.0);
-        for by in [1, 3000, 7919, u32::MAX] {
-            let rules = under(by);
-            let weakest = rules.handling(Handling::from_totals(300, 1, 10.0));
-            let half = rules.at_rest_speed();
-            assert!(
-                ((f64::from(half) * 2.0 - f64::from(weakest.accel)) / f64::from(weakest.accel))
-                    .abs()
-                    < 1e-6,
-                "{by}: {half} against {weakest:?}"
-            );
-        }
-        // Under 3000 a ship creeping at 0.5 / 3000 is at rest; under the
-        // original's 5000 it moves.
-        let creeping = moving(Vec2::new(0.0, under(3000).at_rest_speed()), 90.0);
-        let mut slow = creeping;
-        step(&mut slow, &SHIP, REVERSE, under(3000), Flyer::Player);
-        assert_eq!(slow.heading, 90.0, "at rest under 3000");
-        let mut fast = creeping;
-        step(
-            &mut fast,
-            &SHIP,
-            REVERSE,
-            FlightRules::default(),
-            Flyer::Player,
-        );
-        assert_eq!(fast.heading, 87.0, "moving under 5000");
+        let weakest = Handling::from_totals(300, 1, 10.0);
+        assert_eq!(AT_REST_SPEED * 2.0, weakest.accel);
     }
 
     // The player's step.
@@ -1870,38 +1755,5 @@ mod tests {
             .npc_formation,
             NpcFormation::Earlier
         );
-    }
-
-    #[test]
-    fn reverse_after_braking_to_a_stop_leaves_the_heading_alone() {
-        // Braking leaves a rounding error's worth of velocity, pointing
-        // anywhere; reverse treats that as at rest.
-        let mut state = moving(Vec2::new(0.0, -3.0), 0.0);
-        let brake = Controls {
-            thrust: true,
-            ..REVERSE
-        };
-        for _ in 0..60 {
-            step(
-                &mut state,
-                &SHIP,
-                REVERSE,
-                FlightRules::default(),
-                Flyer::Player,
-            );
-        }
-        for _ in 0..30 {
-            step(
-                &mut state,
-                &SHIP,
-                brake,
-                FlightRules::default(),
-                Flyer::Player,
-            );
-        }
-        assert!(state.velocity != Vec2::ZERO, "leftover: {state:?}");
-        let stopped = state.heading;
-        let held = after(state, REVERSE, 10);
-        assert_eq!(held.heading, stopped, "{held:?}");
     }
 }

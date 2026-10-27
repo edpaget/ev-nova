@@ -106,33 +106,35 @@
 //!      ship is not walked); each ship meets the layer's shots in firing
 //!      order, and a shot that touches a ship it may hit ([`sides`]) hits
 //!      it. So of two ships a move touches, the one walked first takes
-//!      the shot. Then the layer's shots meet the asteroids they touched
-//!      (see 2a).
+//!      the shot. Then the asteroids, in slot order, meet the layer's
+//!      shots that touched them (see 2a). Then the asteroids meet point
+//!      defence's layer.
 //!    - A point-defence shot still in point defence's layer (fired at a
 //!      missile; one fired at a ship is in the shot layer, contact-tested
 //!      like any shot and meeting no missile,
-//!      [`ShotLayer`](projectile::ShotLayer)) whose sprite overlaps a
-//!      homing missile's where both ended their moves, seen from where the
-//!      player stood ([`defence`]), is spent on every such missile,
-//!      whoever fired it and whatever it is aimed at, but one that touched
-//!      a ship on its move, whose hit comes first; a missile hit after its
-//!      durability is used up is shot down where the point-defence shot
-//!      is, and vanishes from the shots in flight.
-//!    - Each shot whose proximity fuse a ship sets off at the end of its
-//!      move hits it, as
+//!      [`ShotLayer`](projectile::ShotLayer)) and not spent on an
+//!      asteroid, whose sprite overlaps a homing missile's where both
+//!      ended their moves, seen from where the player stood ([`defence`]),
+//!      is spent on every such missile, whoever fired it and whatever it
+//!      is aimed at, but one the contact passes spent on a ship or an
+//!      asteroid; a missile hit after its durability is used up is shot
+//!      down where the point-defence shot is, and vanishes from the shots
+//!      in flight.
+//!    - The proximity pass goes by slot. Each shot point defence ended,
+//!      this pass's and the missiles the last tick's point-defence beams
+//!      downed, is kept hidden at life 0, neither drawn nor counted, and
+//!      takes its turn in its slot ([`hidden`]). Each planet-type shot
+//!      meets the stellars first (see 2b), and one that strikes goes no
+//!      further. Then each live shot whose proximity fuse a ship sets off
+//!      at the end of its move hits it, as
 //!      [`RuleKey::ProximityFuse`](crate::RuleKey::ProximityFuse) reads it
 //!      ([`Shot::fused`]: by the engine, the first ship in the fight's
-//!      order within its reach, the hit at the shot), or else an asteroid
-//!      that set it off.
+//!      order within its reach, the hit at the shot); a hidden one meets
+//!      no ship. Then an asteroid in its armed fuse's reach sets it off.
 //!    - Each shot whose move spent its life is tested against no ship,
-//!      fuse or stellar, but meets an asteroid it touched; met by none, it
-//!      waits in the table for its end of life in step 5.
-//!    - Each shot point defence ended, this pass's and the missiles the
-//!      last tick's point-defence beams downed, is kept hidden at life 0:
-//!      neither drawn nor counted, it meets no ship, but a stellar, if it
-//!      is planet-type, or an asteroid in its armed fuse's reach still
-//!      sets it off ([`hidden`]).
-//!    - Each planet-type shot left meets the stellars (see 2b).
+//!      fuse or stellar, but meets an asteroid it touched, and point
+//!      defence; met by none, it waits in the table for its end of life
+//!      in step 5.
 //!
 //!    A shot that hits damages the ship, less a point of mass and of energy
 //!    for each decay step it has taken ([`DecayStep`](projectile::DecayStep)),
@@ -144,30 +146,35 @@
 //!    before the shots move again. Sub-munitions released here take their
 //!    first move in step 5.
 //!
-//!    2a. Each shot meets the asteroids the session hands the tick
-//!    ([`AsteroidTarget`](asteroid_hit::AsteroidTarget)), where the last
-//!    pass's step left them, as the original collides them
-//!    (`_DoPlayGameWork` @0x43e70-0x43fd8, then `_CheckShotProximities`
+//!    2a. Each shot meets the asteroids of the field the session lends the
+//!    tick ([`AsteroidField`]), slot by slot,
+//!    where the last pass's step left them, as the original collides them
+//!    (`_DoPlayGameWork` @0x43e70-0x43ffa, then `_CheckShotProximities`
 //!    @0x44015): a ship it touched first, then an asteroid it touched,
-//!    then a ship that set its fuse off, then an asteroid that set it off
-//!    ([`asteroid_hit`]). Point-defence shots meet them too, but one spent
-//!    on a missile does not. A hit on an asteroid explodes, throws off the
-//!    weapon's hit particles ([`CombatEvent::Particles`]), blasts the ships
-//!    about it if it is the player's, takes the weapon's mass damage off
-//!    the asteroid's strength and pushes it, and the shot is used up with
-//!    no sub-munitions. An asteroid below 0 is broken: the later shots pass
-//!    through it, and the session takes its slot
-//!    ([`Combat::take_broken_asteroids`]) and destroys it.
+//!    the one in the lower slot of two, then a ship that set its fuse off,
+//!    then an asteroid that set it off ([`asteroid_hit`]). Point-defence
+//!    shots meet them too, before any missile. A hit on an asteroid
+//!    explodes, throws off the weapon's hit particles
+//!    ([`CombatEvent::Particles`]), blasts the ships about it if it is the
+//!    player's, takes the weapon's mass damage off the asteroid's strength
+//!    and pushes it, and the shot is used up with no sub-munitions. An
+//!    asteroid below 0 is destroyed at once in the field: its fragments
+//!    are seated, its particles and explosion raised, and its remains kept
+//!    for the session's boxes ([`Combat::take_asteroid_remains`]). The
+//!    rest of the walk that destroyed it still meets it, a later walk
+//!    neither it nor its fragments, and the proximity pass its fragments
+//!    ([`asteroid_walk`]).
 //!
-//!    2b. Each planet-type shot still in flight, past its `ProxSafety`,
-//!    whose move met a stellar still standing among those the session
-//!    hands the tick ([`StellarTarget`]) is spent on it: it explodes where
-//!    it hit, with no blast and no sub-munitions, and takes its mass and
-//!    energy damage off the stellar's strength. A stellar below 0 is
-//!    skipped by the later shots. This comes after the ship hits, as the
-//!    original's stellar check (`_CheckShotProximities`
-//!    @0x44015) comes after its ship collision passes; beams never hit a
-//!    stellar by the engine's reading of
+//!    2b. Each planet-type shot, past its `ProxSafety`, whose move met a
+//!    stellar still standing among those the session hands the tick
+//!    ([`StellarTarget`]), the first in the system's list, is spent on
+//!    it: it explodes where it hit, with no blast and no sub-munitions,
+//!    and takes its mass and energy damage off the stellar's strength. A
+//!    stellar below 0 is skipped by the later shots. This comes in the
+//!    proximity pass, as the original's stellar check
+//!    (`_CheckShotProximities` @0x37224-0x37527) does, after the contact
+//!    passes and before the shot's fuse; beams never hit a stellar by the
+//!    engine's reading of
 //!    [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars) (step 8).
 //!    The session takes each hit as a [`StellarStrike`]
 //!    ([`Combat::take_stellar_strikes`]) and shoots down those it
@@ -259,7 +266,11 @@
 //!    engine's reading of
 //!    [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars); by the
 //!    Bible's, a planet-type beam meeting a stellar nearer than its ship
-//!    strikes the stellar instead ([`beam_stellar`]).
+//!    strikes the stellar instead ([`beam_stellar`]). A beam that hits no
+//!    ship, or a mining NPC's, which passes every ship, goes on to the
+//!    asteroids the session lends ([`Combat::close_tick_in`]): it cuts,
+//!    wears down, breaks, pushes or tractors the one it reaches before the
+//!    next beam is tested ([`asteroid_beam`]).
 //!
 //!    Shots, beams and blasts reach a ship breaking up as they do any other
 //!    not destroyed; a hit on it is a [`Strike`] that downs nothing, and
@@ -380,7 +391,10 @@ mod ai_dispatch;
 pub mod ai_fire;
 pub mod aim;
 pub mod armament;
+pub mod asteroid_beam;
 pub mod asteroid_hit;
+pub mod asteroid_seek;
+pub mod asteroid_walk;
 pub mod beam;
 pub mod beam_stellar;
 mod collision;
@@ -406,7 +420,9 @@ pub mod planet_type;
 mod player_berths;
 pub mod plunder;
 pub mod projectile;
+mod proximity;
 pub mod report;
+pub mod script_explosions;
 pub mod ship_frames;
 pub mod ship_lights;
 pub mod shockwave;
@@ -426,7 +442,8 @@ use std::collections::BTreeMap;
 
 use aim::Pointing;
 use armament::{Armament, Arsenal, Launch, Rounds, Shooter, Trigger};
-use asteroid_hit::{AsteroidFuse, AsteroidTarget};
+use asteroid_hit::AsteroidFuse;
+use asteroid_walk::AsteroidField;
 use beam::{Aiming, Beam, BeamHitTest, BeamRules, ConeAngle};
 pub use collision::SpriteRank;
 use damage::{Blast, Hit};
@@ -456,6 +473,7 @@ use stellar::{StellarStrike, StellarTarget};
 use stellar_hazards::{HazardResistance, StellarHazards, StellarKill};
 use weapon::{Explosion, Guidance};
 
+use crate::asteroid::Asteroids;
 use crate::bay::FIGHTER_BAY;
 use crate::catalog::{GovtId, ShipId, StellarId, WeaponId};
 use crate::chance::Chance;
@@ -528,6 +546,16 @@ pub enum CombatEvent {
         /// loaded `BlastRadius` is floored at none: a negative size
         /// scatters none either way.
         size: f32,
+    },
+    /// An explosion of size 0 whose sound the session has raised already,
+    /// as a `SimSound::Explosion`: a stellar a `Y` destroyed (`_EvalSetExp`
+    /// @0x15ab4; see the [`script_explosions`] module). Drawn as an
+    /// [`Exploded`](Self::Exploded) is, its sound not played again.
+    ExplodedHeard {
+        /// Where.
+        at: Vec2,
+        /// Its explosion.
+        explosion: Explosion,
     },
     /// A ship was disabled.
     Disabled {
@@ -746,14 +774,15 @@ pub struct ParticleBurst {
 }
 
 /// What a fight's tick may hit besides ships: the destroyable stellars
-/// shown and the asteroids in the field, each borrowed from the session,
-/// which writes back what the shots left of them.
+/// shown, which the session writes back what the shots left of, and the
+/// asteroid field, lent whole.
 #[derive(Debug, Default)]
 pub struct Scenery<'a> {
     /// The stellars ([`stellar`]).
     pub stellars: &'a mut [StellarTarget],
-    /// The asteroids ([`asteroid_hit`]).
-    pub asteroids: &'a mut [AsteroidTarget],
+    /// The asteroid field the shots wear and destroy in place
+    /// ([`asteroid_walk`]): none when none is lent.
+    pub asteroids: Option<AsteroidField<'a>>,
     /// The stellar hazards ([`stellar_hazards`]): none when there are
     /// none.
     pub hazards: Option<&'a StellarHazards>,
@@ -935,8 +964,10 @@ pub struct Fighter<'a> {
     /// newly disabled, and the [`DisableRule`] is not asked of it.
     pub held_disabled: bool,
     /// Whether it is cloaked: it fires only its weapons that fire while
-    /// cloaked ([`Armament::has_ammo`]), and point defence sees it only
-    /// with a cloak scanner ([`defence::choose_ship`]). The player never is.
+    /// cloaked ([`Armament::has_ammo`]; the player's fire,
+    /// `_FirePlayerWeapon` @0x627f5-0x62814, and its point defence
+    /// @0x3931c-0x3932f, too), and point defence sees it only with a cloak
+    /// scanner ([`defence::choose_ship`]).
     pub cloaked: bool,
     /// The ship it attacks or snipes at, which point defence reads as
     /// fighting that ship (`_IsShipFightingMe` @0x827fa: the original's
@@ -959,6 +990,11 @@ pub struct Fighter<'a> {
     /// at other ships are its weapons' own ([`plunder`]). Never the
     /// player.
     pub docked: bool,
+    /// Whether it is an NPC mining asteroid slot 0, the original's state
+    /// 16 (`_AIShipIsAttackingAsteroid` @0x8982b): its shots and beams
+    /// pass through every ship ([`Ties::mining`], see
+    /// [`sides`](self::sides)). Never the player.
+    pub mining: bool,
     /// Whether it waits in the gate it comes out of: point defence never
     /// sees it (`_ShipVisibleToShip` @0x972d). The player never does.
     pub emerging: bool,
@@ -975,7 +1011,11 @@ pub struct Fighter<'a> {
     pub cloak_scanner: bool,
     /// Whether it has a cloak (`_HasCloak`): a homing shot it fires at its
     /// leader sees the leader cloaked (`_ShipVisibleToShip` @0x9788-0x97a2,
-    /// [`Sight::has_cloak`]). The player never has.
+    /// [`Sight::has_cloak`]). An NPC's is its own cloak, or the area branch
+    /// (@0x964c-0x96bf): its leader's area cloak it rides in close
+    /// formation ([`area_cloak::has_cloak`](crate::area_cloak::has_cloak)).
+    /// The player's reads the outfits it owns; it has no leader, so nothing
+    /// reads it yet.
     pub has_cloak: bool,
     /// How strongly it jams each jamming type (`_ShipECM`, see
     /// [`jamming`]), whatever its condition: a disabled ship jams nothing.
@@ -1087,6 +1127,11 @@ pub struct Field {
     /// against as it is launched, whoever fires it (`_SpawnShot`
     /// @0x3eab2-0x3eb66).
     pub interference: i16,
+    /// The player's combat rating against `shïp` 128's `Strength`: what
+    /// stretches the reload of an NPC's pick fired at the player
+    /// ([`ai_fire::PlayerRating::stretch`], `_FireAIShipWeapon`
+    /// @0x88fb3-0x8901b). The default stretches nothing.
+    pub player_rating: ai_fire::PlayerRating,
 }
 
 /// A hit that landed on a ship in the hit pass, step 5 or step 8, before it
@@ -1172,9 +1217,15 @@ impl GamePass {
 
     /// What a beam's damage is multiplied by on this pass.
     fn beam_damage(self) -> f32 {
+        f32::from(self.beam_times())
+    }
+
+    /// [`GamePass::beam_damage`], whole, as an asteroid's strength takes
+    /// it ([`asteroid_beam`]).
+    fn beam_times(self) -> i16 {
         match self {
-            Self::Advance { double_time: true } => 2.0,
-            _ => 1.0,
+            Self::Advance { double_time: true } => 2,
+            _ => 1,
         }
     }
 }
@@ -1267,9 +1318,10 @@ pub struct Combat {
     /// as `_HandlePlayer` moves it before the passes. A session that runs
     /// the traffic before the whole fight needs the NPCs' too.
     stood: BTreeMap<ShipRef, Vec2>,
-    /// The slots of the asteroids broken since they were last taken, in
-    /// the order they broke.
-    broken_asteroids: Vec<usize>,
+    /// What the asteroids the shots and the beams destroyed left, since
+    /// it was last taken, in the order they were destroyed
+    /// ([`Combat::take_asteroid_remains`]).
+    asteroid_remains: Vec<crate::asteroid::Remains>,
     /// Whether the player's quadrant turrets test their blind spots
     /// ([`RuleKey::QuadrantTurretBlindSpots`](crate::RuleKey::QuadrantTurretBlindSpots)).
     quadrant_blind: RuleSource,
@@ -1317,8 +1369,8 @@ pub struct Combat {
     /// by the engine, it does.
     source_slot: RuleSource,
     /// The shots point defence ended at life 0, their sprites hidden,
-    /// kept for the next proximity pass's stellar and asteroid branches
-    /// (see [`hidden`]).
+    /// kept for the next proximity pass, where each takes its turn in its
+    /// slot among the live shots (see [`hidden`]).
     hidden: Vec<Shot>,
     /// The beams that ended in the last tick's step 6 and after: under the
     /// caps each still holds its slot through the next tick's firing (see
@@ -1379,7 +1431,9 @@ impl Combat {
     }
 
     /// Advances the fight a tick as [`Combat::tick`] does, on `pass`,
-    /// which the beams' step reads (see [`GamePass`]).
+    /// which the beams' step reads (see [`GamePass`]). It lends the beams
+    /// no asteroid field ([`Combat::close_tick`]): the session runs the
+    /// phases itself and lends it ([`Combat::close_tick_in`]).
     #[allow(clippy::too_many_arguments)]
     pub fn tick_on(
         &mut self,
@@ -2205,6 +2259,9 @@ impl Combat {
             &mut self.reports,
             self.ai_spend,
             &mut |spec| ai_fire::spawn(spec, &state, &hull, target, arc),
+            // Only a ship whose target is slot 0, the player, is stretched
+            // (@0x88fb3).
+            (fighter.target == Some(ShipRef::Player)).then_some(self.field.player_rating),
         );
         let Some(volley) = volley else {
             return;
@@ -2494,21 +2551,22 @@ impl Combat {
     /// moved yet is not tested, as its sprite is not shown. The tests go
     /// in the original's order ([`collision`]):
     ///
-    /// 1. the point-defence layer against the missiles
-    ///    ([`Combat::intercept`]), whose precheck stands in for the
-    ///    contact passes the original runs first;
-    /// 2. the contact passes, each shot layer against the ships, walked by
-    ///    layer and entry, then the asteroids; then point defence's layer
-    ///    against the asteroids;
-    /// 3. the proximity pass, a ship then an asteroid ([`Combat::resolve`]);
-    ///    then the shots point defence ended, kept hidden at life 0, which
-    ///    only a stellar or an asteroid sets off ([`hidden`],
-    ///    [`Combat::test_hidden`]): this pass's point-defence ends and the
-    ///    last tick's beam kills;
-    /// 4. the stellars ([`Combat::strike_stellars`]).
+    /// 1. the contact passes, each shot layer against the ships, walked by
+    ///    layer and entry, then the asteroids, walked by slot, against the
+    ///    layer; then the asteroids against point defence's layer;
+    /// 2. point defence's layer against the missiles
+    ///    ([`Combat::intercept`]): a shot spent in 1 is hidden by then and
+    ///    never met, and each it ends is kept hidden at life 0 ([`hidden`]);
+    /// 3. the proximity pass ([`Combat::proximity_pass`]), slot by slot,
+    ///    the shots point defence ended, this pass's and the last tick's
+    ///    beam kills, among the live ones: each slot's stellar, then, live,
+    ///    its fuse's ship, then its fuse's asteroid.
     ///
-    /// A shot whose move spent it meets only the asteroids it touches, and
-    /// is kept for its end of life in `_HandleShot` ([`Combat::handle_shots`]).
+    /// All three run in [`Combat::resolve`]. A shot whose move spent it
+    /// meets only the asteroids it touches and point defence, and is kept
+    /// for its end of life in `_HandleShot` ([`Combat::handle_shots`]).
+    /// Point defence's [`CombatEvent::ShotDown`] follows the contact
+    /// passes' events.
     ///
     /// The pass meets each NPC where it stood as the last tick ran, as
     /// its last `_HandleShip` left it, and the player where it is now, as
@@ -2548,6 +2606,11 @@ impl Combat {
             asteroids,
             hazards: _,
         } = scenery;
+        let mut none = Asteroids::default();
+        let mut field = asteroids.unwrap_or(AsteroidField {
+            asteroids: &mut none,
+            types: &asteroid_walk::NO_TYPES,
+        });
         let now = self.stand_where_they_stood(fighters);
         let player_stood = self.stood.get(&ShipRef::Player).copied();
         let touchable_at: Vec<Vec2> = fighters
@@ -2558,24 +2621,16 @@ impl Combat {
             })
             .collect();
         let mut lineup = Lineup::new(fighters, &touchable_at, govts, self.hit_readings());
-        let camera = position_of(&lineup.seen, ShipRef::Player).unwrap_or(Vec2::ZERO);
         let first_strike = self.strikes.len();
-        let mut gone = vec![false; self.shots.len()];
-        let ranks: Vec<_> = fighters.iter().map(|fighter| fighter.sprite).collect();
-        let walked = collision::walk_order(&ranks);
         let entry = self.entry_order();
-        self.intercept(camera, (&lineup.seen_sides(), &walked), &entry, &mut gone);
         let terms = collision::WalkTerms { arsenal, rule };
         self.resolve(
             (fighters, &mut lineup),
-            (&gone, &entry),
+            &entry,
             &terms,
             chance,
-            &mut *asteroids,
+            (stellars, &mut field),
         );
-        let hits = self.test_hidden(fighters, &mut *stellars, asteroids);
-        self.land(fighters, hits, rule);
-        self.strike_stellars(stellars);
         for (fighter, position) in fighters.iter_mut().zip(now) {
             fighter.state.position = position;
         }
@@ -2622,74 +2677,6 @@ impl Combat {
             truncate_downed_player(fighter, rule);
             let downed = self.settle_condition(fighter, rule);
             self.mark_downed(first_strike, fighter.ship, downed);
-        }
-    }
-
-    /// The hit pass's point-defence layer: each point-defence shot in
-    /// point defence's layer ([`ShotLayer::PointDefence`], 0x3b53bc) that
-    /// has moved meets every missile in the homing layer
-    /// ([`ShotLayer::Homing`], 0x3b531c, the only shot layer
-    /// `_DoPlayGameWork` collides it with, @0x43fff-0x44010) that has moved whose sprite its own
-    /// overlaps where both ended their moves, seen from `camera`, where
-    /// the player stood as they moved, or the origin in a fight without
-    /// it ([`defence::sprites_meet`]), and is spent on them: each it meets
-    /// takes [`defence::pd_damage`], and one destroyed
-    /// ([`Shot::take_pd_hit`]) is shot down where the point-defence shot
-    /// is, and vanishes from the shots in flight. There is no other test: a lost missile, one
-    /// point defence cannot target (`Flags` 0x0080), a friendly one or one
-    /// aimed elsewhere is met all the same (`_PointDefenseCollisionHandler`
-    /// @0x37776-0x3785d). A missile shot down by an earlier shot this
-    /// pass, or that touches a ship among `touch` on its move that the
-    /// contact passes walk, those of `walked`'s indices
-    /// ([`touches_a_ship`], which the original's contact passes take
-    /// first, @0x43e75-0x43ffa), is not met; one that touches only a
-    /// hidden ship is, as the contact passes never walk a hidden ship's
-    /// sprite (@0xacba3); one whose move spent its life
-    /// still is, as the pass tests no life. What is spent or destroyed is
-    /// marked `gone`, and [`Combat::resolve`] keeps it hidden at life 0
-    /// for the proximity pass that follows ([`hidden`]).
-    ///
-    /// The shots go in `entry`'s order, each layer in the order it keeps
-    /// them ([`Combat::entry_order`]), each against every missile in that
-    /// order, as `_SWCollideSpriteLayer` walks both layers from their
-    /// heads (@0xacb4b): by
-    /// [`RuleKey::ShotOverlap`](crate::RuleKey::ShotOverlap)'s engine
-    /// reading the order their slots entered them, a reused slot whose
-    /// sprite was already in the layer keeping its place (`_SWAddSprite`
-    /// @0xac620, `_PutSpriteInLayer` @0x768c); by the other, firing order.
-    fn intercept(
-        &mut self,
-        camera: Vec2,
-        (touch, walked): (&Sides, &[usize]),
-        entry: &[usize],
-        gone: &mut [bool],
-    ) {
-        for &pd in entry {
-            let defender = &self.shots[pd];
-            if defender.layer != ShotLayer::PointDefence || defender.moved_from.is_none() {
-                continue;
-            }
-            for &missile in entry {
-                let shot = &self.shots[missile];
-                let Some(from) = shot.moved_from else {
-                    continue;
-                };
-                if gone[missile]
-                    || shot.layer != ShotLayer::Homing
-                    || !defence::sprites_meet(&self.shots[pd], shot, camera)
-                    || touches_a_ship(shot, from, touch, walked)
-                {
-                    continue;
-                }
-                gone[pd] = true;
-                let damage = defence::pd_damage(&self.shots[pd].weapon);
-                if self.shots[missile].take_pd_hit(damage) {
-                    gone[missile] = true;
-                    self.events.push(CombatEvent::ShotDown {
-                        at: self.shots[pd].position,
-                    });
-                }
-            }
         }
     }
 
@@ -3009,141 +2996,6 @@ impl Combat {
         }
     }
 
-    /// `shot`'s hit on `target` at `at` (`_HandleAsteroidHit`
-    /// @0x36637-0x369c7, see [`asteroid_hit`]): its explosion and its hit
-    /// particles go off there; a player's shot blasts the active ships
-    /// among `fighters` in its square, but planet-type ones, into `hits`;
-    /// the asteroid takes its damage and is broken, or pushed. The shot is
-    /// used up, and releases nothing.
-    ///
-    /// The blast's hits are `_DamageShip`'s as @0x36888 passes them: by the
-    /// shot's source, neither direct nor intended, can't-kill as the shot is
-    /// disable-only, pushing by the weapon's `Impact` from the blast's
-    /// centre with no source gate, and ionizing over its circle
-    /// (`_IonizeShip` @0x368b7), as a shot's own blast does.
-    fn hit_asteroid(
-        &mut self,
-        shot: &Shot,
-        target: &mut AsteroidTarget,
-        at: Vec2,
-        fighters: &[Fighter],
-        hits: &mut Vec<Landed>,
-    ) {
-        let weapon = &shot.weapon;
-        if let Some(explosion) = weapon.explosion {
-            self.events.push(CombatEvent::Exploded {
-                at,
-                explosion,
-                size: weapon.blast_radius,
-            });
-        }
-        self.spray(weapon, at, asteroid_hit::HIT_PART_VARIATION);
-        if let Some(blast) = asteroid_hit::blast(shot, at, self.planet_blasts) {
-            let reaches = |fighter: &&Fighter| {
-                let (kind, reading) = (BlastKind::AsteroidHit, self.planet_blasts);
-                planet_type::blast_reaches(
-                    kind,
-                    reading,
-                    weapon.planet_type(),
-                    fighter.hull.planet_type,
-                )
-            };
-            let ships = fighters
-                .iter()
-                .filter(|fighter| fighter.condition.active())
-                .filter(reaches)
-                .map(|fighter| (fighter.ship, fighter.state.position));
-            let hit = Hit {
-                cant_kill: shot.disable_only,
-                ..Hit::of(weapon)
-            };
-            hits.extend(blast.reaches(ships).into_iter().map(|ship| Landed {
-                ship,
-                by: shot.attacker(),
-                weapon: Some(weapon.id),
-                at: blast.at,
-                hit,
-                direct: false,
-                intended: false,
-                lock: false,
-                weight: 0.0,
-                push: Push {
-                    from: blast.at,
-                    impact: weapon.impact,
-                    beam: false,
-                },
-                ion: Some(Dose::of(
-                    weapon,
-                    Some(Burst {
-                        centre: blast.at,
-                        radius: blast.radius,
-                    }),
-                )),
-            }));
-        }
-        target.strength = asteroid_hit::damaged(target.strength, weapon);
-        if asteroid_hit::broken(target.strength) {
-            self.broken_asteroids.push(target.slot);
-        } else if weapon.impact != 0.0 && target.mass > 0 {
-            target.velocity =
-                asteroid_hit::push(target.velocity, shot.heading, weapon.impact, target.mass);
-        }
-    }
-
-    /// Step 7b, the hit pass's last test: each planet-type shot left in
-    /// flight that met a stellar still standing among `stellars` on its
-    /// last move ([`Shot::moved_from`]) is spent on it ([`stellar`]): it
-    /// explodes where it hit, with no blast and no sub-munitions, and
-    /// takes its damage off the stellar's strength. A sub-munition
-    /// released in the pass has not moved, so it is first checked the
-    /// next tick, as the original tests a shot against the stellars only
-    /// when `Count - ProxSafety > life` (@0x371fc-0x3721e) and a fresh
-    /// shot's life is `Count` (`_SpawnShot` @0x3e801-0x3e808): one of
-    /// `ProxSafety` 0 or more is never tested on the frame it is released.
-    /// One an end of life seats in a slot `_HandleShot` has already
-    /// visited first moves, and so is first checked, a tick later still.
-    fn strike_stellars(&mut self, stellars: &mut [StellarTarget]) {
-        let mut kept = Vec::with_capacity(self.shots.len());
-        for shot in std::mem::take(&mut self.shots) {
-            // A shot its move spent is never tested (`_CheckShotProximities`
-            // @0x371ea); it waits for its end of life (`Combat::handle_shots`).
-            let met = shot
-                .moved_from
-                .filter(|_| !shot.expired())
-                .and_then(|was| stellar::met(&shot, was, stellars));
-            let Some((index, at)) = met else {
-                kept.push(shot);
-                continue;
-            };
-            self.slots.hold(shot.slot);
-            self.strike_stellar(&shot, &mut stellars[index], at);
-        }
-        self.shots = kept;
-    }
-
-    /// `shot`'s hit on `target` at `at`, which spends it (see
-    /// [`Combat::strike_stellars`]): it explodes there with its hit
-    /// particles, with no blast and no sub-munitions, and takes its damage
-    /// off the stellar's strength.
-    fn strike_stellar(&mut self, shot: &Shot, target: &mut StellarTarget, at: Vec2) {
-        if let Some(explosion) = shot.weapon.explosion {
-            self.events.push(CombatEvent::Exploded {
-                at,
-                explosion,
-                size: shot.weapon.blast_radius,
-            });
-        }
-        self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
-        let damage = stellar::damage(&shot.weapon);
-        target.strength -= damage;
-        self.stellar_strikes.push(StellarStrike {
-            stellar: target.stellar,
-            by: shot.attacker(),
-            damage,
-            destroyed: stellar::shot_down(target.strength),
-        });
-    }
-
     /// Puts in flight the sub-munitions `parent` releases at `target`
     /// among `targets`, their weapon read from `arsenal` (none when it
     /// cannot be read), heard from where the parent is. Released, they
@@ -3382,13 +3234,6 @@ impl Combat {
         self.events.push(CombatEvent::Particles(burst));
     }
 
-    /// The slots of the asteroids the shots broke since they were last
-    /// taken, in the order they broke; taking them empties the list. The
-    /// session destroys each.
-    pub fn take_broken_asteroids(&mut self) -> Vec<usize> {
-        std::mem::take(&mut self.broken_asteroids)
-    }
-
     /// The fighters launched since they were last taken, in order; taking
     /// them empties the list.
     pub fn take_sorties(&mut self) -> Vec<Sortie> {
@@ -3447,6 +3292,7 @@ impl Fighter<'_> {
             govt: self.govt,
             booty: self.booty,
             planet_type: self.hull.planet_type,
+            mining: self.mining,
         }
     }
 
@@ -3706,21 +3552,6 @@ fn truncate_downed_player(fighter: &mut Fighter, rule: &dyn DisableRule) {
     }
 }
 
-/// Whether `shot` meets a ship by contact on its move here from `from`
-/// among the ships of `sides` at `walked`'s indices, those the contact
-/// passes walk ([`collision::walk_order`]), a hidden ship not among them:
-/// the original's contact passes, which run before point defence's
-/// (`_DoPlayGameWork` @0x43e75-0x44010), so point defence never meets
-/// it. A shot whose move spent its life is not tested, as in the hit pass
-/// ([`Combat::hit_pass`]).
-fn touches_a_ship(shot: &Shot, from: Vec2, sides: &Sides, walked: &[usize]) -> bool {
-    !shot.expired()
-        && walked.iter().any(|&ship| {
-            let target = &sides.targets[ship];
-            shot.touches(from, target).is_some() && sides.shot_can_hit(shot, target)
-        })
-}
-
 /// What a beam's hit weighs as a player's stray hit ([`Strike::weight`]):
 /// `_HandleBeams` passes 1 as `_DamageShip`'s arg +0x34.
 pub const BEAM_WEIGHT: f32 = 1.0;
@@ -3922,6 +3753,10 @@ mod tests {
     use nova_sim_catalog::fixture::weapon;
 
     mod ai_dispatch;
+    mod asteroid_beams;
+    mod asteroid_contact_first;
+    mod asteroid_seekers;
+    mod asteroid_walk;
     mod collision_walk;
     mod display_step;
     mod escort_lost_in_place;
@@ -3934,6 +3769,8 @@ mod tests {
     mod lineup;
     mod planet_hits;
     mod plunder_fire;
+    mod proximity_slots;
+    mod rating_stretch;
     mod shot_slots;
     mod shot_visits;
     mod stellar_guns;
@@ -3966,6 +3803,7 @@ mod tests {
         threatens_player: bool,
         plundering: bool,
         docked: bool,
+        mining: bool,
         emerging: bool,
         jumping_in: bool,
         cloak_scanner: bool,
@@ -4033,6 +3871,7 @@ mod tests {
                 threatens_player: false,
                 plundering: false,
                 docked: false,
+                mining: false,
                 emerging: false,
                 jumping_in: false,
                 cloak_scanner: false,
@@ -4115,6 +3954,7 @@ mod tests {
                 rounds: &mut self.rounds,
                 drawn_heading: self.drawn_heading.unwrap_or(self.state.heading),
                 docked: self.docked,
+                mining: self.mining,
                 sprite: self.sprite,
                 slot: self.slot,
                 resists: self.resists,
@@ -8246,7 +8086,7 @@ mod tests {
             guidance: 1,
             count: 50,
             speed: 500,
-            seeker: 0x0002,
+            flags: 0x0040,
             ..weapon(148)
         });
         let mut combat = Combat::default();
@@ -8263,8 +8103,8 @@ mod tests {
             combat.take_diagnostics(),
             [SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: WeaponId(148),
-                field: flags::FlagField::Seeker,
-                bit: 0x0002,
+                field: flags::FlagField::Flags,
+                bit: 0x0040,
             }]
         );
     }
@@ -9155,12 +8995,24 @@ mod tests {
     }
 
     #[test]
-    fn a_shot_strikes_the_nearest_stellar_along_its_path_whatever_their_order() {
+    fn a_shot_strikes_the_first_stellar_in_the_systems_order_not_the_nearest() {
+        // `_CheckShotProximities` walks the system's list and stops at the
+        // first it hits (@0x37230-0x37527).
         let mut stellars = [far(100), near(100)];
         let (strikes, seen) = through_two(&mut stellars);
-        assert_eq!(strikes, [strike(14, false)], "128, the nearer");
-        assert_eq!((stellars[0].strength, stellars[1].strength), (100, 86));
-        assert!(close(&seen, 40.0), "on the nearer's edge: {seen:?}");
+        assert_eq!(
+            strikes,
+            [StellarStrike {
+                stellar: StellarId(129),
+                ..strike(14, false)
+            }],
+            "129, listed first"
+        );
+        assert_eq!((stellars[0].strength, stellars[1].strength), (86, 100));
+        assert!(close(&seen, 80.0), "on the farther's edge: {seen:?}");
+        let mut stellars = [near(100), far(100)];
+        let (strikes, _) = through_two(&mut stellars);
+        assert_eq!(strikes, [strike(14, false)], "128, listed first");
     }
 
     #[test]
@@ -12194,6 +12046,7 @@ mod tests {
         let field = |frame| Field {
             frame,
             interference: 100,
+            ..Field::default()
         };
         // Fired on frame 0, it moves on frames 1 to 15.
         for frame in 0..16 {
@@ -12364,19 +12217,77 @@ mod tests {
 
     // Asteroids.
 
-    use crate::combat::asteroid_hit::{AsteroidFuse, AsteroidTarget};
+    use crate::asteroid::{Asteroid, AsteroidType, Asteroids, KINDS, Remains};
+    use crate::combat::asteroid_hit::AsteroidFuse;
+    use crate::combat::asteroid_walk::AsteroidField;
 
-    /// An asteroid in slot `slot` at (`x`, `y`), of radius 10, strength 10
-    /// and `Mass` 20, at rest.
-    fn rock(slot: usize, x: f32, y: f32) -> AsteroidTarget {
-        AsteroidTarget {
-            slot,
+    /// An asteroid of kind 0 in slot `slot` at (`x`, `y`), of strength 10,
+    /// at rest.
+    fn rock(slot: usize, x: f32, y: f32) -> (usize, Asteroid) {
+        worn(slot, x, y, 10)
+    }
+
+    /// [`rock`] with `strength` left.
+    fn worn(slot: usize, x: f32, y: f32, strength: i16) -> (usize, Asteroid) {
+        let asteroid = Asteroid {
             position: Vec2::new(x, y),
             velocity: Vec2::ZERO,
-            radius: 10.0,
-            strength: 10,
-            mass: 20,
+            frame: 0.0,
+            spin: 0.0,
+            strength,
+            kind: 0,
+        };
+        (slot, asteroid)
+    }
+
+    /// An asteroid field lent to a test's fight: its slots, and its
+    /// kinds, of which kind 0 is 20 across, so of radius 10, of `Mass` 20,
+    /// and leaves nothing as it is destroyed.
+    #[derive(Clone, Debug)]
+    struct Rocks {
+        field: Asteroids,
+        types: [AsteroidType; KINDS],
+    }
+
+    impl Rocks {
+        /// A field holding each of `placed` in its slot.
+        fn of(placed: impl IntoIterator<Item = (usize, Asteroid)>) -> Self {
+            let mut types = [AsteroidType::MISSING; KINDS];
+            types[0] = AsteroidType {
+                size: (20.0, 20.0),
+                mass: 20,
+                ..AsteroidType::MISSING
+            };
+            let mut field = Asteroids::default();
+            for (slot, asteroid) in placed {
+                field.seat(slot, asteroid);
+            }
+            Self { field, types }
         }
+
+        /// The asteroid in `slot`, if any.
+        fn get(&self, slot: usize) -> Option<Asteroid> {
+            self.field.get(slot).copied()
+        }
+
+        /// The asteroid in `slot`.
+        fn at(&self, slot: usize) -> Asteroid {
+            self.get(slot)
+                .unwrap_or_else(|| panic!("slot {slot}: {self:?}"))
+        }
+
+        /// The field, lent.
+        fn lend(&mut self) -> AsteroidField<'_> {
+            AsteroidField {
+                asteroids: &mut self.field,
+                types: &self.types,
+            }
+        }
+    }
+
+    /// Where each of `remains` was, in order.
+    fn remains_at(remains: &[Remains]) -> Vec<Vec2> {
+        remains.iter().map(|left| left.at).collect()
     }
 
     /// [`blaster`] exploding in `bööm` 130 with an `Impact` of 10, its
@@ -12400,11 +12311,11 @@ mod tests {
         ships: &mut [Ship],
         arsenal: &Arsenal,
         rules: Rules,
-        rocks: &mut [AsteroidTarget],
+        rocks: &mut Rocks,
     ) {
         let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
         let scenery = Scenery {
-            asteroids: rocks,
+            asteroids: Some(rocks.lend()),
             ..Scenery::default()
         };
         combat.tick(
@@ -12429,7 +12340,7 @@ mod tests {
         firer: ShipRef,
         record: WeaponRecord,
         others: Vec<Ship>,
-        rocks: &mut [AsteroidTarget],
+        rocks: &mut Rocks,
         ticks: u32,
     ) -> (Vec<Ship>, Vec<CombatEvent>) {
         let sub = WeaponRecord {
@@ -12465,21 +12376,18 @@ mod tests {
     #[test]
     fn a_shot_that_meets_an_asteroid_damages_pushes_explodes_sprays_and_is_gone() {
         let mut combat = Combat::default();
-        let mut rocks = [rock(3, 100.0, 0.0)];
+        let mut rocks = Rocks::of([rock(3, 100.0, 0.0)]);
         let shell = WeaponRecord {
             sub_count: 2,
             sub_type: Some(WeaponId(148)),
             ..rock_gun()
         };
         let (_, events) = shoot_rocks(&mut combat, A, shell, Vec::new(), &mut rocks, 8);
-        assert_eq!(
-            rocks[0].strength, 6,
-            "its 4 mass damage, none of its 10 energy"
-        );
+        let left = rocks.at(3);
+        assert_eq!(left.strength, 6, "its 4 mass damage, none of its 10 energy");
         assert!(
-            (rocks[0].velocity - Vec2::new(0.5, 0.0)).length() < 1e-5,
-            "{:?}",
-            rocks[0].velocity
+            (left.velocity - Vec2::new(0.5, 0.0)).length() < 1e-5,
+            "{left:?}"
         );
         assert_eq!(combat.shots(), [], "used up");
         let seen = unfired(&events);
@@ -12507,15 +12415,15 @@ mod tests {
             ]
         );
         assert_eq!(fired(&events, A), 1, "no sub-munitions released");
-        assert_eq!(combat.take_broken_asteroids(), Vec::<usize>::new());
+        assert_eq!(combat.take_asteroid_remains(), [], "none destroyed");
     }
 
     #[test]
     fn a_hit_without_hit_particles_or_an_explosion_raises_neither() {
         let mut combat = Combat::default();
-        let mut rocks = [rock(0, 100.0, 0.0)];
+        let mut rocks = Rocks::of([rock(0, 100.0, 0.0)]);
         let (_, events) = shoot_rocks(&mut combat, A, blaster(), Vec::new(), &mut rocks, 8);
-        assert_eq!(rocks[0].strength, 6);
+        assert_eq!(rocks.at(0).strength, 6);
         assert_eq!(unfired(&events), []);
     }
 
@@ -12523,18 +12431,26 @@ mod tests {
     fn an_asteroid_is_not_pushed_without_an_impact_or_a_mass() {
         for (impact, mass) in [(0, 20), (10, 0), (10, -5)] {
             let mut combat = Combat::default();
-            let mut rocks = [AsteroidTarget {
-                mass,
-                velocity: Vec2::new(0.25, 0.0),
-                ..rock(0, 100.0, 0.0)
-            }];
+            let (slot, drifting) = rock(0, 100.0, 0.0);
+            let mut rocks = Rocks::of([(
+                slot,
+                Asteroid {
+                    velocity: Vec2::new(0.25, 0.0),
+                    ..drifting
+                },
+            )]);
+            rocks.types[0].mass = mass;
             let gun = WeaponRecord {
                 impact,
                 ..blaster()
             };
             shoot_rocks(&mut combat, A, gun, Vec::new(), &mut rocks, 8);
-            assert_eq!(rocks[0].strength, 6, "{impact} {mass}");
-            assert_eq!(rocks[0].velocity, Vec2::new(0.25, 0.0), "{impact} {mass}");
+            assert_eq!(rocks.at(0).strength, 6, "{impact} {mass}");
+            assert_eq!(
+                rocks.at(0).velocity,
+                Vec2::new(0.25, 0.0),
+                "{impact} {mass}"
+            );
         }
     }
 
@@ -12550,7 +12466,7 @@ mod tests {
     #[test]
     fn a_ship_the_shot_touches_is_hit_before_an_asteroid_nearer_along_its_path() {
         let mut combat = Combat::default();
-        let mut rocks = [rock(0, 40.0, 0.0)];
+        let mut rocks = Rocks::of([rock(0, 40.0, 0.0)]);
         let (ships, _) = shoot_rocks(
             &mut combat,
             A,
@@ -12559,14 +12475,14 @@ mod tests {
             &mut rocks,
             2,
         );
-        assert_eq!(rocks[0].strength, 10, "untouched");
+        assert_eq!(rocks.at(0).strength, 10, "untouched");
         assert!(ships[1].reserves.shield.now < 10.0, "the ship took it");
     }
 
     #[test]
     fn an_asteroid_the_shot_touches_is_hit_before_a_ship_that_only_sets_its_fuse_off() {
         let mut combat = Combat::default();
-        let mut rocks = [rock(0, 80.0, 0.0)];
+        let mut rocks = Rocks::of([rock(0, 80.0, 0.0)]);
         // The move ends 30 from B: within its fuse's reach of
         // trunc(30 + 32 x 0.333) = 40, beyond its 16-pixel radius.
         let (ships, _) = shoot_rocks(
@@ -12577,7 +12493,7 @@ mod tests {
             &mut rocks,
             2,
         );
-        assert_eq!(rocks[0].strength, 6);
+        assert_eq!(rocks.at(0).strength, 6);
         assert_eq!(ships[1].reserves, Reserves::full(10.0, 30.0, 100.0));
     }
 
@@ -12585,7 +12501,7 @@ mod tests {
     fn a_ship_that_sets_the_fuse_off_is_hit_before_an_asteroid_in_the_fuses_reach() {
         let mut combat = Combat::default();
         // Off the path, but 25 from where the shot ends.
-        let mut rocks = [rock(0, 100.0, 25.0)];
+        let mut rocks = Rocks::of([rock(0, 100.0, 25.0)]);
         let (ships, _) = shoot_rocks(
             &mut combat,
             A,
@@ -12594,20 +12510,20 @@ mod tests {
             &mut rocks,
             2,
         );
-        assert_eq!(rocks[0].strength, 10);
+        assert_eq!(rocks.at(0).strength, 10);
         assert!(ships[1].reserves.shield.now < 10.0);
     }
 
     #[test]
     fn an_armed_fuse_with_no_ship_in_reach_takes_the_asteroid_where_the_shot_is() {
         let mut combat = Combat::default();
-        let mut rocks = [rock(4, 100.0, 25.0)];
+        let mut rocks = Rocks::of([rock(4, 100.0, 25.0)]);
         let gun = WeaponRecord {
             explod_type: 2,
             ..fast_gun(30)
         };
         let (_, events) = shoot_rocks(&mut combat, A, gun, Vec::new(), &mut rocks, 2);
-        assert_eq!(rocks[0].strength, 6);
+        assert_eq!(rocks.at(4).strength, 6);
         let seen = unfired(&events);
         assert_eq!(seen.len(), 1, "{seen:?}");
         let CombatEvent::Exploded { at, explosion, .. } = seen[0] else {
@@ -12623,24 +12539,25 @@ mod tests {
         for (fuse, hit) in [(AsteroidFuse::Original, true), (AsteroidFuse::Bible, false)] {
             let mut combat = Combat::default();
             combat.set_asteroid_fuse(fuse);
-            let mut rocks = [rock(0, 100.0, 25.0)];
+            let mut rocks = Rocks::of([rock(0, 100.0, 25.0)]);
             let gun = WeaponRecord {
                 flags2: 0x0004,
                 ..fast_gun(30)
             };
             shoot_rocks(&mut combat, A, gun, Vec::new(), &mut rocks, 2);
-            assert_eq!(rocks[0].strength < 10, hit, "{fuse:?}");
+            assert_eq!(rocks.at(0).strength < 10, hit, "{fuse:?}");
             assert_eq!(combat.shots().is_empty(), hit, "{fuse:?}");
         }
     }
 
     #[test]
-    fn a_second_shot_the_same_tick_passes_through_an_asteroid_the_first_broke() {
+    fn a_second_shot_of_the_walk_is_spent_on_the_asteroid_the_first_destroyed() {
+        // `_SWCollideSpriteLayer` reads the asteroid's visibility once, as
+        // its turn begins (@0xacba3): the second shot of the same walk
+        // meets its struct, below 0 still, and destroys it again
+        // (@0x3691a).
         let mut combat = Combat::default();
-        let mut rocks = [AsteroidTarget {
-            strength: 2,
-            ..rock(5, 100.0, 0.0)
-        }];
+        let mut rocks = Rocks::of([worn(5, 100.0, 0.0, 2)]);
         let arsenal = Arsenal::default();
         // A and its escort C side by side, neither's shots hitting the
         // other (`sides`: a ship led by the firer, or the firer's leader).
@@ -12648,8 +12565,7 @@ mod tests {
         escort.fleet = A;
         escort.leader = Some(A);
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(fast_gun(0)), escort];
-        // Both meet it on their first move, the tick after they are fired;
-        // the second shot flies on.
+        // Both meet it on their first move, the tick after they are fired.
         tick_amid(
             &mut combat,
             &mut ships,
@@ -12669,25 +12585,17 @@ mod tests {
                 &mut rocks,
             );
         }
-        assert_eq!(rocks[0].strength, -2, "the first shot's alone");
-        assert_eq!(combat.shots().len(), 1, "the second flies on");
-        assert_eq!(combat.take_broken_asteroids(), [5]);
-        assert_eq!(combat.take_broken_asteroids(), Vec::<usize>::new(), "taken");
+        assert_eq!(rocks.get(5), None, "destroyed");
+        assert_eq!(combat.shots(), [], "both spent on it");
+        let at = Vec2::new(100.0, 0.0);
+        assert_eq!(remains_at(&combat.take_asteroid_remains()), [at, at]);
+        assert_eq!(combat.take_asteroid_remains(), [], "taken");
     }
 
     #[test]
-    fn asteroids_broken_in_a_tick_are_taken_in_the_order_they_broke() {
+    fn asteroids_destroyed_in_a_tick_leave_their_remains_in_the_order_they_were_destroyed() {
         let mut combat = Combat::default();
-        let mut rocks = [
-            AsteroidTarget {
-                strength: 1,
-                ..rock(2, 100.0, 50.0)
-            },
-            AsteroidTarget {
-                strength: 1,
-                ..rock(5, 100.0, 0.0)
-            },
-        ];
+        let mut rocks = Rocks::of([worn(2, 100.0, 50.0, 1), worn(5, 100.0, 0.0, 1)]);
         let mut ships = [
             Ship::at(1, 0.0, 0.0).armed(fast_gun(0)),
             Ship::at(3, 0.0, 50.0).armed(fast_gun(0)),
@@ -12704,7 +12612,13 @@ mod tests {
                 ship.trigger = QUIET;
             }
         }
-        assert_eq!(combat.take_broken_asteroids(), [5, 2]);
+        // The asteroids are walked in slot order, slot 2's first, though
+        // A's shot comes first in the shots layer.
+        assert_eq!(
+            remains_at(&combat.take_asteroid_remains()),
+            [Vec2::new(100.0, 50.0), Vec2::new(100.0, 0.0)]
+        );
+        assert_eq!(rocks.field.active(), 0);
     }
 
     /// A gun of the player's with a `BlastRadius` of 30 and these `Flags`
@@ -12723,7 +12637,7 @@ mod tests {
     /// planet-type, in it: the strikes, in order.
     fn blasted(firer: ShipRef, weapon: WeaponRecord) -> Vec<Strike> {
         let mut combat = Combat::default();
-        let mut rocks = [rock(0, 100.0, 0.0)];
+        let mut rocks = Rocks::of([rock(0, 100.0, 0.0)]);
         let mut planet = Ship::at(4, 100.0, -25.0);
         planet.hull.planet_type = true;
         let others = vec![Ship::at(2, 110.0, 20.0), Ship::at(3, 100.0, 60.0), planet];
@@ -12758,7 +12672,7 @@ mod tests {
     #[test]
     fn a_disable_only_blast_at_an_asteroid_never_destroys_the_ship_it_reaches() {
         let mut combat = Combat::default();
-        let mut rocks = [rock(0, 100.0, 0.0)];
+        let mut rocks = Rocks::of([rock(0, 100.0, 0.0)]);
         let frail = holding(2, 110.0, 20.0, 0.0, 2.0, 30.0);
         let (ships, _) = shoot_rocks(
             &mut combat,
@@ -12783,7 +12697,7 @@ mod tests {
         for (flags, hurt) in [(0, true), (0x0100, false)] {
             let mut combat = Combat::default();
             // Met at (10, 0): the player in the square.
-            let mut rocks = [rock(0, 20.0, 0.0)];
+            let mut rocks = Rocks::of([rock(0, 20.0, 0.0)]);
             shoot_rocks(
                 &mut combat,
                 ShipRef::Player,
@@ -12813,7 +12727,7 @@ mod tests {
         };
         let mut combat = Combat::default();
         let mut ships = missile_attack(quad());
-        let mut rocks = [rock(0, 0.0, -40.0)];
+        let mut rocks = Rocks::of([rock(0, 0.0, -40.0)]);
         for _ in 0..12 {
             tick_amid(
                 &mut combat,
@@ -12824,7 +12738,7 @@ mod tests {
             );
             ships[1].trigger = QUIET;
         }
-        assert!(rocks[0].strength < 10, "{rocks:?}");
+        assert!(rocks.at(0).strength < 10, "{rocks:?}");
         let downed = combat
             .take_events()
             .iter()
@@ -12908,7 +12822,7 @@ mod tests {
     #[test]
     fn a_shots_hit_on_an_asteroid_explodes_at_its_blast_radius() {
         let mut combat = Combat::default();
-        let mut rocks = [rock(0, 100.0, 0.0)];
+        let mut rocks = Rocks::of([rock(0, 100.0, 0.0)]);
         let (_, events) = shoot_rocks(
             &mut combat,
             A,
@@ -13069,7 +12983,7 @@ mod tests {
         let piercing = crate::combat::weapon::PASSES_SHIELDS;
         for (flags, passes) in [(0, false), (piercing, true)] {
             let mut combat = Combat::default();
-            let mut rocks = [rock(0, 107.0, 0.0)];
+            let mut rocks = Rocks::of([rock(0, 107.0, 0.0)]);
             let (_, events) = shoot_rocks(
                 &mut combat,
                 ShipRef::Player,
@@ -13736,7 +13650,7 @@ mod tests {
                 }
                 combat.put_in_flight(spent_shell);
                 let mut ships = [Ship::at(1, 0.0, 1000.0)];
-                let mut rocks = [rock(0, 500.0, 0.0)];
+                let mut rocks = Rocks::of([rock(0, 500.0, 0.0)]);
                 tick_amid(
                     &mut combat,
                     &mut ships,

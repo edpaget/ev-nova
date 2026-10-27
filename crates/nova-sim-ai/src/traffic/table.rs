@@ -620,7 +620,8 @@ pub fn kind(
         armament,
         rounds,
         appear_on: record.appear_on.clone(),
-        cloak: CloakGear::of(record.fields.flags2, &defaults, outfits),
+        cloak: CloakGear::of(record.fields.flags2, &defaults, outfits)
+            .with_upkeep(&record.defaults, outfits),
         self_repair: self_repair::has_gear(&defaults, outfits),
         miner: record.flags3 & crate::ai::miner::MINER_BITS,
         can_scoop: scoop::has_asteroid_scoop(&defaults, outfits),
@@ -1689,6 +1690,11 @@ mod tests {
                 decloaks_when_hit: true,
                 on_radar: true,
                 flags2: 0x5282,
+                shield_usage: 8,
+                fuel_usage: 0,
+                zeroes_shields: false,
+                can_cloak_mod: Some(0x080b),
+                area: false,
                 scanner: crate::cloak::Scanner::default(),
             }
         );

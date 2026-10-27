@@ -225,8 +225,10 @@ pub const QUOTE_GAP_TICKS: u64 = 1350;
 pub struct QuoteTags<'a> {
     /// The person's name: `<OSN>`.
     pub person: &'a str,
-    /// The pilot's name: `<PN>`, and `<PNN>` with no nickname yet.
+    /// The pilot's name: `<PN>`, and `<PNN>` with no nickname.
     pub pilot: &'a str,
+    /// The pilot's nickname: `<PNN>`; empty for none.
+    pub nickname: &'a str,
     /// The player's ship type's name: `<PST>`.
     pub ship_type: &'a str,
     /// The player's ship's name, as the player named it: `<PSN>`.
@@ -252,6 +254,7 @@ pub struct QuoteTags<'a> {
 pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
     let context = TagContext {
         pilot: tags.pilot,
+        nickname: tags.nickname,
         ship_type: tags.ship_type,
         ship_name: tags.ship_name,
         person: Some(tags.person),
@@ -265,6 +268,8 @@ pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
 }
 
 /// What a person's hail quote filters see of the player.
+// Each flag is its own filter's, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuoteView {
     /// Whether the person likes the player
@@ -272,6 +277,11 @@ pub struct QuoteView {
     pub liked: bool,
     /// Whether the player is jumping out.
     pub player_jumping: bool,
+    /// Whether the person's ship sees the player
+    /// (`_ShipVisibleToShip(player, ship)` @0x33c87: a cloaked player only
+    /// by a cloak scanner on screen within 200, or by its escort with a
+    /// cloak of its own).
+    pub seen: bool,
     /// The player's ship type's `InherentAI`.
     pub player_ai: i16,
     /// Whether the person's `LinkMission` is available from a ship
@@ -295,7 +305,9 @@ pub enum Eligible {
 
 /// Whether `npc`'s hail quote, flown by `person`, may be said this tick
 /// as `view` sees the player, among `npcs` (`_HandleShip` @0x33bea-0x33f21;
-/// see the module docs). A quote on attack is due once the ship threatens
+/// see the module docs). None while the ship doesn't see the player
+/// ([`QuoteView::seen`]): `_ShipVisibleToShip` @0x33c87 gates the whole
+/// quote block, beside the player's jump. A quote on attack is due once the ship threatens
 /// the player or a ship the player leads among `npcs`
 /// ([`Npc::threatens_player_among`]; `_IsThreatToPlayer` asked @0x33d38).
 #[must_use]
@@ -308,7 +320,7 @@ pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView, npcs: &[N
             npc.condition,
             Condition::Dying { .. } | Condition::Destroyed
         );
-    if person.hail_quote < 1 || view.player_jumping || !flying {
+    if person.hail_quote < 1 || view.player_jumping || !view.seen || !flying {
         return Eligible::No;
     }
     let flag = |bit: u16| person.flags & bit != 0;
@@ -946,6 +958,7 @@ mod tests {
         let tags = QuoteTags {
             person: "Bounty Hunter",
             pilot: "Stock",
+            nickname: "",
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             ranks: RankNames::none(),
@@ -958,6 +971,11 @@ mod tests {
             "Bounty Hunter: Prepare to die, Stock!"
         );
         assert_eq!(expand_tags("Hey <PNN>.", &tags), "Hey Stock.");
+        let nicknamed = QuoteTags {
+            nickname: "Hunter",
+            ..tags.clone()
+        };
+        assert_eq!(expand_tags("Hey <PNN>.", &nicknamed), "Hey Hunter.");
         assert_eq!(expand_tags("<PSN> or <PST>?", &tags), "Kestrel or Shuttle?");
         assert_eq!(
             expand_tags("Yes, <PRK>. No, <SRK>.", &tags),
@@ -972,6 +990,7 @@ mod tests {
         let mut tags = QuoteTags {
             person: "Bounty Hunter",
             pilot: "Stock",
+            nickname: "",
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             ranks: RankNames::none(),
@@ -1011,6 +1030,7 @@ mod tests {
         let mut tags = QuoteTags {
             person: "Bounty Hunter",
             pilot: "Stock",
+            nickname: "",
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             ranks: RankNames {
@@ -1049,11 +1069,12 @@ mod tests {
         }
     }
 
-    /// The player liked, not jumping, in a ship of `InherentAI` 1, its
-    /// missions available.
+    /// The player liked, not jumping and seen, in a ship of `InherentAI`
+    /// 1, its missions available.
     const VIEW: QuoteView = QuoteView {
         liked: true,
         player_jumping: false,
+        seen: true,
         player_ai: 1,
         mission_available: true,
     };
@@ -1239,6 +1260,28 @@ mod tests {
             eligible(&intact, quoting(0), VIEW)
         );
         assert_ne!(eligible(&intact, first, VIEW), Eligible::No);
+    }
+
+    #[test]
+    fn a_person_that_cannot_see_the_player_says_no_quote() {
+        // `_HandleShip` @0x33c87 gates the whole quote block.
+        let unseen = QuoteView {
+            seen: false,
+            ..VIEW
+        };
+        let intact = npc_of(Condition::Intact, IDLE);
+        let attacking = npc_of(Condition::Intact, ATTACKING);
+        assert_eq!(eligible(&intact, quoting(0), VIEW), Eligible::Yes);
+        assert_eq!(eligible(&intact, quoting(0), unseen), Eligible::No);
+        let on_attack = quoting(QUOTE_ON_ATTACK);
+        assert_eq!(eligible(&attacking, on_attack, VIEW), Eligible::Now);
+        assert_eq!(eligible(&attacking, on_attack, unseen), Eligible::No);
+        let mission = NpcPerson {
+            mission: true,
+            ..quoting(QUOTE_IF_MISSION)
+        };
+        assert_eq!(eligible(&intact, mission, VIEW), Eligible::Yes);
+        assert_eq!(eligible(&intact, mission, unseen), Eligible::No);
     }
 
     #[test]

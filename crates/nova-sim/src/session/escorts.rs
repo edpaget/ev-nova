@@ -8,7 +8,10 @@
 //! ship type has a record is placed on its formation slot (2, 3, … in
 //! fleet order, the mission escorts after them in one formation, see
 //! [`mission_escorts`](super::mission_escorts)), with the player's
-//! heading and velocity, of no
+//! heading and velocity: by the engine first on a slot counted without
+//! the mission escorts, then on a jump's arrival pushed back to glide in,
+//! and after a take-off or a pilot flown moved onto its final slot (see
+//! [`escort_arrival`](super::escort_arrival)). It is of no
 //! government, its AI type its `InherentAI`, carrying its class's stock
 //! weapons and rounds, with its record's shield, armour and fuel and its
 //! standing order. Its record follows its reserves as it fights. Every
@@ -23,8 +26,15 @@
 //! (@0x2bf8a), so no frame shows it and no dose ORs into it. Each keeps
 //! its cloak, fade and direction, as `_RespawnEscort` writes neither
 //! +0x64 nor +0xc8d8, so an escort cloaked or fading when the player
-//! leaves arrives the same way and decides from there on its first
-//! think. At a hypergate or wormhole exit each is placed on its slot
+//! leaves arrives the same way, its fade then stepped by the entry's
+//! `_PrepareAllSprites` calls before the first frame (once at a jump's
+//! arrival, twice at a take-off or gate exit; see the `slot_visibility`
+//! module), and decides from there on its first think. Through a jump's
+//! warp it goes on thinking its cloak and stepping its fade, in goal
+//! 0xb, to the warp's end. A ship captured into the fleet joins with
+//! neither fade nor direction (`_DoPlunderDialog` @0x946e3, @0x946f9;
+//! see [`Session::join_fleet`]); a person joining by hail keeps its
+//! cloak. At a hypergate or wormhole exit each is placed on its slot
 //! and then comes out of the exit gate after the player (see
 //! [`gate_escorts`](super::gate_escorts)). Landed, the escorts wait in
 //! the record. A trader escort's
@@ -96,7 +106,10 @@
 //! left by the reset its tail runs (`_DamageShip` @0x3b013,
 //! `_DestroyPartialFleetCargo` @0xcd32-0xcff6; [`Session::lose_cargo_share`],
 //! see the `precalced` module). A warship escort lost takes nothing and
-//! runs no reset, and the mission cargo is never touched. A mission
+//! runs no reset, and the mission cargo is never touched. The tons of
+//! each commodity it took become its own hold, overwriting what it held
+//! (`_DestroyPartialFleetCargo` @0xcf76), and boarding it to repair it
+//! gives them back (see [`board_repair`](super::board_repair)). A mission
 //! escort breaking up takes its share too (see
 //! [`mission_escorts`](super::mission_escorts)). A ship captured joins
 //! the fleet where it is, intact, its armour at half its most; a
@@ -174,7 +187,8 @@ pub(super) struct KeptEscort {
 
 impl Session {
     /// The escorts enter the system (see the module docs): by the
-    /// engine their standing orders are reset, and each is placed on its
+    /// engine their standing orders are reset, and each is placed beside
+    /// the player, for [`Session::place_entering_escorts`] to put on its
     /// slot, escort `i` at berth `berths[i]` ([`Space::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Space::fleet_kept`]): its aux
     /// mark, its skill, its afterburner, its voice, its cloak, and its
@@ -243,10 +257,6 @@ impl Session {
             .collect();
         self.space.traffic.reserve(BTreeSet::new());
         self.space.escorts.restock_persons = false;
-        self.reform();
-        for id in self.space.escorts.fleet.clone().into_iter().flatten() {
-            self.snap(id);
-        }
     }
 
     /// Escort `index` as an NPC in the system at the first free berth, its
@@ -355,6 +365,7 @@ impl Session {
             lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
             swarm_leader: None,
             owed_burst: None,
+            close_form: false,
             fleet_slot: None,
             order_word: crate::fleet::OrderWord::NONE,
             marines: kind.marines,
@@ -551,12 +562,7 @@ impl Session {
             })
             .collect();
         for id in lost {
-            let index = self
-                .space
-                .escorts
-                .fleet
-                .iter()
-                .position(|&placed| placed == Some(id));
+            let index = self.space.fleet_index(id);
             let record = index
                 .and_then(|index| self.pilot.escorts.get(index))
                 .copied();
@@ -569,7 +575,7 @@ impl Session {
             }
             self.dismiss(id);
             if let Some(ship) = takes.filter(|_| here) {
-                self.lose_cargo_share(ship);
+                self.lose_cargo_share(ship, id);
             }
         }
     }
@@ -581,13 +587,14 @@ impl Session {
     /// each caller tests (@0x3affd, @0x350d1); a warship or interceptor
     /// takes nothing, and no reset runs. The ship's own `Holds` are not in
     /// the fleet's holds it takes its share of; by the other reading of
-    /// [`RuleKey::LostCargoShare`] they count too.
-    pub(super) fn lose_cargo_share(&mut self, ship: ShipId) {
+    /// [`RuleKey::LostCargoShare`] they count too. The share destroyed is
+    /// NPC `lost`'s hold.
+    pub(super) fn lose_cargo_share(&mut self, ship: ShipId, lost: NpcId) {
         let Some(holds) = self.statics.trader_holds(ship) else {
             return;
         };
         let counted = self.setup.rules.source_for(RuleKey::LostCargoShare) == RuleSource::Bible;
-        self.destroy_cargo_share(holds, counted);
+        self.destroy_cargo_share(holds, counted, Some(lost));
     }
 
     /// `_DestroyPartialFleetCargo` (@0xcd32-0xcff6) for a ship other than
@@ -598,17 +605,22 @@ impl Session {
     /// (@0xcff6; [`Session::reset_precalced`]), its trim cutting the
     /// commodities to the fleet's holds against everything carried, the
     /// mission cargo aboard included. The mission cargo is never touched.
-    /// The tons destroyed go nowhere: the original writes them into the
-    /// lost ship's own slots (@0xcf76), which nothing the engine models
-    /// reads.
-    pub(super) fn destroy_cargo_share(&mut self, holds: i16, counted: bool) {
+    /// The tons of each commodity destroyed become the `lost` ship's own
+    /// hold, every one of the six, so whatever it held is overwritten
+    /// (`movw %dx, 0x7a(ship)` @0xcf76); a `jünk` destroyed goes nowhere
+    /// (@0xcf94-0xcfe4). Boarding the ship to repair it gives them back
+    /// (see the `board_repair` module).
+    pub(super) fn destroy_cargo_share(&mut self, holds: i16, counted: bool, lost: Option<NpcId>) {
         let share = market::lost_share(
             holds,
             self.ship.fit.stats.capacity,
             market::escort_tons(self.escort_holds()),
             counted,
         );
-        market::destroy_share(&mut self.pilot.cargo, share);
+        let destroyed = market::destroy_share(&mut self.pilot.cargo, share);
+        if let Some(npc) = lost.and_then(|id| self.space.npc_mut(id)) {
+            npc.cargo = NpcHold::from_words(destroyed);
+        }
         self.reset_precalced();
     }
 
@@ -628,13 +640,7 @@ impl Session {
     /// its type. Without it, a disabled holding escort the fleet lost and
     /// later repaired would wait for good.
     pub(super) fn unfleet(&mut self, id: NpcId) -> bool {
-        let Some(index) = self
-            .space
-            .escorts
-            .fleet
-            .iter()
-            .position(|&placed| placed == Some(id))
-        else {
+        let Some(index) = self.space.fleet_index(id) else {
             return false;
         };
         self.space.escorts.fleet.remove(index);
@@ -651,6 +657,20 @@ impl Session {
         true
     }
 
+    /// Escort `index` leaves the fleet and the system: its record, its
+    /// place in the fleet and its NPC, if any, go together, keeping the
+    /// fleet and the pilot's escorts in step. Unlike
+    /// [`Session::unfleet`], its NPC goes too, and the fleet is not
+    /// re-formed: the caller re-forms it once it has dropped all it drops.
+    pub(super) fn drop_fleet_escort(&mut self, index: usize) {
+        self.pilot.escorts.remove(index);
+        if index < self.space.escorts.fleet.len()
+            && let Some(id) = self.space.escorts.fleet.remove(index)
+        {
+            self.space.traffic.remove(id);
+        }
+    }
+
     /// Escort NPC `id` is released (see [`hail`](super::hail)): it takes
     /// its share of the fleet's cargo while still in the fleet, its own
     /// `Holds` among the fleet's when it is a trader
@@ -658,6 +678,16 @@ impl Session {
     /// ship type by the engine reading of [`RuleKey::ReleaseCargoShare`]
     /// and only a trader by the other; then it leaves the fleet and the
     /// system (`_AIMakeShipLeave`), jumping out whatever its fuel.
+    ///
+    /// Both the comm dialog's close (@0x96848-0x968c1) and the escort
+    /// dialog's Release (@0x95485-0x9550f) reset it as it goes: it can
+    /// never be boarded (+0xb9 1), it is no former escort (+0xc8de -1),
+    /// its AI type is its class's `InherentAI` (+0x88, which an escort's
+    /// already is in the engine), and `_AISetup` (@0x7f3e2) clears its
+    /// order word (+0xc90a, [`Npc::order_word`]). `_AISetup`'s goal and
+    /// sub 0 and its goal targets +0x90 and +0x92 (-2) give way to the
+    /// leave's goal and its target cleared, which follow at once; the
+    /// engine has no field for its +0xc906 or +0xc92e.
     pub(super) fn release(&mut self, id: NpcId) {
         if !self.is_escort(id) {
             return;
@@ -666,10 +696,13 @@ impl Session {
             .space
             .released_holds(&self.pilot, &self.statics, &self.setup, id)
         {
-            self.destroy_cargo_share(holds, false);
+            self.destroy_cargo_share(holds, false, Some(id));
         }
         self.dismiss(id);
         if let Some(npc) = self.space.npc_mut(id) {
+            npc.boarded = true;
+            npc.former = None;
+            npc.order_word = crate::fleet::OrderWord::NONE;
             super::hail::make_leave(npc);
         }
     }
@@ -821,6 +854,14 @@ impl Statics {
 }
 
 impl Space {
+    /// The fleet index of escort NPC `id`, if it is in the fleet.
+    pub(super) fn fleet_index(&self, id: NpcId) -> Option<usize> {
+        self.escorts
+            .fleet
+            .iter()
+            .position(|&placed| placed == Some(id))
+    }
+
     /// The ship-table slot ([`Npc::berth`]) each of the fleet's escorts
     /// takes as the system is set up, by its index. As
     /// `_DeleteAllComputerShips` (@0x3bf5f) keeps the player's ships in
@@ -943,11 +984,7 @@ impl Space {
         setup: &Setup,
         id: NpcId,
     ) -> Option<i16> {
-        let index = self
-            .escorts
-            .fleet
-            .iter()
-            .position(|&placed| placed == Some(id))?;
+        let index = self.fleet_index(id)?;
         let ship = pilot.escorts.get(index)?.ship;
         match setup.rules.source_for(RuleKey::ReleaseCargoShare) {
             RuleSource::Engine => statics.ship_record(ship).map(|record| record.fields.holds),
@@ -1120,7 +1157,7 @@ fn restock(reserves: &mut Reserves, kind: &ShipKind) {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
@@ -1158,6 +1195,7 @@ mod tests {
                 carried: false,
                 wage: None,
                 person: None,
+                mark: None,
             };
             2
         ];
@@ -1273,7 +1311,7 @@ mod tests {
     /// ship) with the escort ship types, in neither system's traffic: the
     /// player's ship 128 is 40 pixels across, the warship 50 and the
     /// freighter 30, all flying as fast as the player.
-    fn fleeted() -> FakePilotCatalog {
+    pub(in crate::session) fn fleeted() -> FakePilotCatalog {
         FakePilotCatalog {
             ship_records: vec![
                 ship(128, FAST),
@@ -1329,6 +1367,7 @@ mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 
@@ -1386,6 +1425,16 @@ mod tests {
     fn slot_of(session: &Session, npc: &Npc) -> Vec2 {
         let duty = npc.escort.expect("an escort");
         duty.formation.position(session.player())
+    }
+
+    /// Where escort `npc` arrives from a jump: pushed back from its slot
+    /// beside the player, with the player's state, to glide in (the
+    /// `escort_arrival` module).
+    fn pushed_from_slot(session: &Session, npc: &Npc) -> ShipState {
+        crate::escort_arrival::pushed(ShipState {
+            position: slot_of(session, npc),
+            ..*session.player()
+        })
     }
 
     #[test]
@@ -1549,7 +1598,7 @@ mod tests {
     }
 
     #[test]
-    fn escorts_follow_the_player_through_a_jump_on_their_slots_with_their_shield() {
+    fn escorts_follow_the_player_through_a_jump_back_from_their_slots_with_their_shield() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         let warship = session.space.escorts.fleet[0].expect("placed");
@@ -1570,9 +1619,12 @@ mod tests {
         let escorts = escort_npcs(&session);
         assert_eq!(escorts.len(), 2, "both came along");
         for npc in &escorts {
-            assert_eq!(npc.state.position, slot_of(&session, npc), "on its slot");
-            assert_eq!(npc.state.velocity, session.player().velocity);
-            assert_eq!(npc.state.heading, session.player().heading);
+            assert_eq!(
+                npc.state,
+                pushed_from_slot(&session, npc),
+                "pushed back from its slot"
+            );
+            assert_eq!(npc.mode, Mode::JumpingIn { tick: 0 }, "to glide in");
         }
         assert_eq!(
             escorts[0].reserves.shield.now, 4.0,
@@ -1584,7 +1636,7 @@ mod tests {
     }
 
     #[test]
-    fn escorts_arrive_at_the_players_top_speed_velocity() {
+    fn escorts_arrive_50_faster_than_the_players_top_speed_velocity() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
@@ -1595,8 +1647,13 @@ mod tests {
         );
         let escorts = escort_npcs(&session);
         assert_eq!(escorts.len(), 2);
+        let heading = crate::trig::whole(player.heading);
         for npc in &escorts {
-            assert_eq!(npc.state.velocity, player.velocity);
+            assert_eq!(
+                npc.state.velocity,
+                player.velocity + crate::trig::accel(heading, 50.0),
+                "50 faster along its heading"
+            );
             assert_eq!(npc.state.heading, player.heading);
         }
     }
@@ -1765,8 +1822,9 @@ mod tests {
     }
 
     /// Checks that, once the fleet has entered a new system, the first
-    /// escort is a new NPC carrying `cloak` exactly, and the second has
-    /// the default.
+    /// escort is a new NPC carrying `cloak` exactly (the cloak it left
+    /// with, as the entry's `_PrepareAllSprites` steps left it), and the
+    /// second has the default.
     fn assert_cloak_kept(session: &Session, before: NpcId, cloak: Cloak) {
         let escorts: Vec<NpcId> = session
             .space
@@ -1818,9 +1876,36 @@ mod tests {
         assert_cloak_kept(&session, before, FULLY_CLOAKED);
     }
 
+    /// A take-off steps each ship's fade twice before the first tick:
+    /// `_HandlePlayerDockRequest` runs `_PrepareAllSprites` after the
+    /// setup (@0x6764e) and again after the stellars' visibility
+    /// (@0x67658), and each displays every ship, its fade step included
+    /// (@0x2d088-0x2d164). An escort fading in at 10 takes off at 11.5.
+    #[test]
+    fn a_take_off_steps_each_ships_fade_twice_before_the_first_tick() {
+        let catalog = crate::testkit::far_129_reachable(fleeted());
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let fading = Cloak {
+            fade: 10.0,
+            direction: 1,
+        };
+        let before = cloak_first_escort(&mut session, fading);
+        land_now(&mut session).expect("lands");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        let stepped = Cloak {
+            fade: 10.0 + 2.0 * crate::cloak::FADE_RATE,
+            direction: 1,
+        };
+        assert_cloak_kept(&session, before, stepped);
+    }
+
     /// The carried direction, not just the fade, comes through: an escort
-    /// fading in when the player jumps arrives with the same fade and
-    /// direction.
+    /// fading in when the player jumps arrives with the same direction,
+    /// its fade stepped once on by the arrival's `_PrepareAllSprites`
+    /// (`_HandlePlayer` @0x6c59c), which displays it before the first
+    /// frame.
     #[test]
     fn an_escort_fading_in_when_the_player_jumps_arrives_fading_in() {
         let catalog = fleeted();
@@ -1831,7 +1916,11 @@ mod tests {
         };
         let before = cloak_first_escort(&mut session, fading);
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
-        assert_cloak_kept(&session, before, fading);
+        let stepped = Cloak {
+            fade: 10.0 + crate::cloak::FADE_RATE,
+            direction: 1,
+        };
+        assert_cloak_kept(&session, before, stepped);
     }
 
     /// An escort's first think in the new system works from the cloak it
@@ -1863,6 +1952,160 @@ mod tests {
             }
         );
         assert!(cloak.is_cloaked());
+    }
+
+    /// How many passes before the warp's end the escort is cloaked: few
+    /// enough that its fade, falling 0.75 a pass from 32, is not yet out
+    /// as the warp ends.
+    const CLOAKED_BEFORE_THE_END: u16 = 20;
+
+    /// [`fleeted`]'s session by the engine, its warship escort given a
+    /// cloak of `Flags2` `flags2`, its jump to 131 begun and run through
+    /// its lead-in and on until [`CLOAKED_BEFORE_THE_END`] passes are left
+    /// to the warp's end, the escort then fully cloaked: the session and
+    /// the escort.
+    fn cloaked_near_the_warp_end(catalog: &FakePilotCatalog, flags2: u16) -> (Session, NpcId) {
+        let (mut session, escort) = past_the_lead_in(catalog, flags2);
+        let mut to_the_end = 0;
+        let mut ahead = session.clone();
+        while !ahead.warp_end_due() {
+            warp_pass(&mut ahead, catalog);
+            to_the_end += 1;
+            assert!(to_the_end < 1000, "the warp never ended");
+        }
+        assert!(
+            to_the_end > CLOAKED_BEFORE_THE_END,
+            "{to_the_end} passes past the lead-in"
+        );
+        for _ in CLOAKED_BEFORE_THE_END..to_the_end {
+            warp_pass(&mut session, catalog);
+        }
+        assert!(!session.in_warp_lead_in());
+        cloak_first_escort(&mut session, FULLY_CLOAKED);
+        (session, escort)
+    }
+
+    /// [`fleeted`]'s session by the engine, its warship escort given a
+    /// cloak of `Flags2` `flags2`, its jump to 131 begun and run through
+    /// its lead-in: the session and the escort.
+    fn past_the_lead_in(catalog: &FakePilotCatalog, flags2: u16) -> (Session, NpcId) {
+        let mut session = flying(catalog, RuleSource::Engine);
+        let first = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(first).expect("there").cloak_gear = crate::cloak::CloakGear {
+            device: true,
+            flags2,
+            ..crate::cloak::CloakGear::default()
+        };
+        session.plot_course(SystemId(131)).expect("a route");
+        crate::testkit::fly_out(&mut session);
+        begin_jump_now(&mut session).expect("jumps");
+        let mut passes = 0;
+        while session.in_warp_lead_in() {
+            warp_pass(&mut session, catalog);
+            passes += 1;
+            assert!(passes < 1000, "the lead-in never ended");
+        }
+        (session, first)
+    }
+
+    /// One advance pass of the game's work, no keys held.
+    fn warp_pass(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.game_work(
+            Controls::default(),
+            catalog,
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
+    }
+
+    /// The escort's cloak, checking it still flies, following the
+    /// player's jump (goal 0xb).
+    fn following_cloak(session: &Session, escort: NpcId) -> Cloak {
+        let npc = session.space.npc(escort).expect("still in the system");
+        assert_eq!(npc.mode, crate::traffic::npc::Mode::Flying);
+        assert!(
+            matches!(
+                npc.warp.goal,
+                Some(crate::traffic::warp_out::WarpGoal::Follow(_))
+            ),
+            "{:?}",
+            npc.warp
+        );
+        npc.cloak
+    }
+
+    /// An escort cloaked once the warp is past its lead-in thinks its
+    /// cloak and steps its fade on every pass to the warp's end, as
+    /// `_DoPlayGameWork` runs `_AIDispatch` (@0x4429d, `_AIHandleCloaking`
+    /// @0x8fcaa) and the display (@0x444ad, the fade @0x2d088-0x2d164)
+    /// for every ship with no test of the player's jump. Following the
+    /// player's jump (goal 0xb) it reads only the jump's term (`Flags2`
+    /// 0x0400, @0x834e6-0x8350b), which its type lacks, though it would
+    /// stay cloaked in formation (0x0800): so it uncloaks on its first
+    /// think (`_DoShipUncloak` @0xdf55) and fades out at 0.75 a pass. It
+    /// arrives with the fade it had at the warp's end, stepped once more
+    /// by the arrival's `_PrepareAllSprites` (@0x6c59c).
+    #[test]
+    fn a_cloaked_escort_fades_out_through_the_warp_and_arrives_with_that_fade() {
+        use crate::cloak::{CLOAK_TRAVELLING, FADE_FULL, FADE_RATE};
+        let catalog = fleeted();
+        let (mut session, escort) = cloaked_near_the_warp_end(&catalog, CLOAK_TRAVELLING);
+        let mut passes: u16 = 0;
+        while !session.warp_end_due() {
+            warp_pass(&mut session, &catalog);
+            passes += 1;
+            assert_eq!(
+                following_cloak(&session, escort),
+                Cloak {
+                    fade: FADE_FULL - FADE_RATE * f32::from(passes),
+                    direction: -1,
+                },
+                "pass {passes}"
+            );
+        }
+        assert_eq!(passes, CLOAKED_BEFORE_THE_END);
+        let at_the_end = FADE_FULL - FADE_RATE * f32::from(passes);
+        assert_eq!(at_the_end, 17.0);
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert_cloak_kept(
+            &session,
+            escort,
+            Cloak {
+                fade: at_the_end - FADE_RATE,
+                direction: -1,
+            },
+        );
+    }
+
+    /// With the jump's term (`Flags2` 0x0400), which holds in goal 0xb
+    /// (@0x834e6-0x8350b), the escort stays fully cloaked through the
+    /// warp and arrives so.
+    #[test]
+    fn a_cloaked_escort_with_the_jump_cloak_stays_cloaked_through_the_warp() {
+        use crate::cloak::{CLOAK_JUMPING, CLOAK_TRAVELLING};
+        let catalog = fleeted();
+        let (mut session, escort) =
+            cloaked_near_the_warp_end(&catalog, CLOAK_JUMPING | CLOAK_TRAVELLING);
+        let mut passes = 0;
+        while !session.warp_end_due() {
+            warp_pass(&mut session, &catalog);
+            passes += 1;
+            assert_eq!(
+                following_cloak(&session, escort),
+                FULLY_CLOAKED,
+                "pass {passes}"
+            );
+        }
+        assert_eq!(passes, CLOAKED_BEFORE_THE_END);
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert_cloak_kept(&session, escort, FULLY_CLOAKED);
     }
 
     /// By the original's formation flight
@@ -1917,7 +2160,7 @@ mod tests {
         let escorts = escort_npcs(&session);
         assert_eq!(escorts.len(), 2);
         for npc in &escorts {
-            assert_eq!(npc.state.position, slot_of(&session, npc));
+            assert_eq!(npc.state, pushed_from_slot(&session, npc));
         }
         assert!(straying(&mut session, &catalog, 300) <= escort::KEEP_FORMATION);
     }
@@ -2171,13 +2414,17 @@ mod tests {
     // The cargo a lost escort takes.
 
     /// Food, a commodity.
-    const FOOD: Good = Good::Commodity(0);
+    pub(in crate::session) const FOOD: Good = Good::Commodity(0);
     /// Opals, a `jünk`.
     const OPALS: Good = Good::Junk(JunkId(146));
 
     /// A session of `fleet` by `source` of `LostCargoShare`, its first
     /// traffic tick done, holding 9 food and 3 opals.
-    fn laden(catalog: &FakePilotCatalog, fleet: Vec<Escort>, source: RuleSource) -> Session {
+    pub(in crate::session) fn laden(
+        catalog: &FakePilotCatalog,
+        fleet: Vec<Escort>,
+        source: RuleSource,
+    ) -> Session {
         let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
         pilot.escorts = fleet;
         let mut session = Session::fly(catalog, pilot)
@@ -2189,7 +2436,7 @@ mod tests {
     }
 
     /// The warship and two freighters, all full.
-    fn trader_fleet() -> Vec<Escort> {
+    pub(in crate::session) fn trader_fleet() -> Vec<Escort> {
         let full = Reserves::full(30.0, 45.0, 300.0);
         vec![
             escort(WARSHIP, full, None),
@@ -2199,7 +2446,7 @@ mod tests {
     }
 
     /// Escort `index`'s armour goes to `armor`, and the fight ticks.
-    fn hit(session: &mut Session, index: usize, armor: f32) {
+    pub(in crate::session) fn hit(session: &mut Session, index: usize, armor: f32) {
         let id = session.space.escorts.fleet[index].expect("placed");
         session.space.npc_mut(id).expect("there").reserves.armor.now = armor;
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -2262,6 +2509,32 @@ mod tests {
             .find(|npc| npc.ship == FREIGHTER && npc.escort.is_none());
         assert_eq!(lost.map(|npc| npc.condition), Some(Condition::Disabled));
         assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 5), (OPALS, 2)]));
+    }
+
+    #[test]
+    fn a_lost_trader_escort_holds_the_share_it_destroyed_overwriting_its_hold() {
+        // `movw %dx, 0x7a(ship)` @0xcf76 writes all six, zeros included;
+        // the opals, a `jünk`, go nowhere (@0xcf94-0xcfe4).
+        let catalog = fleeted();
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        let id = session.space.escorts.fleet[1].expect("placed");
+        session.space.npc_mut(id).expect("there").cargo = NpcHold::from_words([1, 2, 3, 4, 5, 6]);
+        hit(&mut session, 1, 10.0);
+        assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 5), (OPALS, 2)]));
+        assert_eq!(
+            session.space.npc(id).map(|npc| npc.cargo),
+            Some(NpcHold::from_words([4, 0, 0, 0, 0, 0]))
+        );
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        let warship = session.space.escorts.fleet[0].expect("placed");
+        let hold = NpcHold::from_words([1, 2, 3, 4, 5, 6]);
+        session.space.npc_mut(warship).expect("there").cargo = hold;
+        hit(&mut session, 0, 10.0);
+        assert_eq!(
+            session.space.npc(warship).map(|npc| npc.cargo),
+            Some(hold),
+            "a warship takes no share"
+        );
     }
 
     #[test]

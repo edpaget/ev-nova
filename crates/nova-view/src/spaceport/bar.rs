@@ -59,7 +59,9 @@
 //! map ([`BarScreen::take_map_request`]), as `_BarFilter`'s first key
 //! check answers item 8 (@0x47a6e-0x47a9b). It is no button, and it asks
 //! only while the bar is laid out and neither the news, the hire screen
-//! nor an offer has the input, as each of those has its own filter.
+//! nor an offer has the input, as each of those has its own filter. The
+//! hire screen's own map key asks for the shipyard's map, or its ship
+//! description's while its Info panel is open, as the shipyard does.
 //! Whoever holds the session opens flight's course map over the
 //! spaceport, and puts back the nav the bar opened with as it closes
 //! (`_DoBarDialog` @0x492a3-0x4930b).
@@ -79,11 +81,13 @@ use super::hire::HireScreen;
 use super::layout::LEAVE_LABEL;
 use super::news::{NEWS_DIALOG, NewsScreen, shown_news_picture};
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
+use super::port_map::PortMap;
 use super::shipyard::{InfoTemplates, ShipyardCatalog};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
-use crate::flight::view::MAP_KEY;
+use crate::flight::PortScreen;
+use crate::flight::view::{MAP_KEY, is_map_press};
 use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
@@ -93,7 +97,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, TextBacking};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::VariantTemplates;
 use crate::ui::player_info::is_player_info_press;
@@ -225,8 +229,9 @@ struct Asks {
     player_info: bool,
     /// The visit's news: Holovid was pressed.
     news: bool,
-    /// The course map: [`MAP_KEY`] was pressed.
-    map: bool,
+    /// The course map [`MAP_KEY`] asked for: the bar's, or the hire
+    /// screen's.
+    map: Option<PortMap>,
 }
 
 /// The bar of the stellar landed on.
@@ -297,11 +302,15 @@ impl BarScreen {
                 (HIRE_ITEM, Role::Button(HIRE_ESCORT.to_owned())),
                 (
                     TEXT_ITEM,
+                    // White on a black box: `_BarDialogUpdate` sets it
+                    // with `TETextBox` (@0x4794e) and inverts the item
+                    // (`InvertRect` @0x47959).
                     Role::ScrollText {
                         text,
                         font: Font::Geneva,
                         size: BODY_SIZE,
                         color: BODY_COLOR,
+                        backing: Some(TextBacking::BLACK_BOX),
                     },
                 ),
             ];
@@ -461,8 +470,12 @@ impl BarScreen {
     }
 
     /// Ticks only its offers' timer, as covered: something is open over
-    /// the bar.
+    /// the bar. The hire screen's time runs on too, the gap between two
+    /// presses on its grid measured by the clock.
     pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(hire) = &mut self.hire {
+            hire.tick(dt);
+        }
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, true);
         }
@@ -522,11 +535,16 @@ impl BarScreen {
         std::mem::take(&mut self.asks.hire)
     }
 
-    /// Whether [`MAP_KEY`] has asked for the course map since this was
-    /// last asked (`_BarFilter`'s item 8): whoever holds the session opens
-    /// it over the spaceport.
-    pub fn take_map_request(&mut self) -> bool {
-        std::mem::take(&mut self.asks.map)
+    /// The course map [`MAP_KEY`] has asked for since this was last
+    /// asked, once: the bar's ([`PortMap::Bar`], `_BarFilter`'s item 8),
+    /// or the hire screen's, the shipyard dialog in hire mode
+    /// ([`PortScreen::Shipyard`], `_ShipyardFilter` item 3,
+    /// @0x608ed-0x6090b), or its ship description's while its Info panel
+    /// is open ([`PortScreen::ShipDescription`], `_ShipDescFilter` item 4,
+    /// @0x51108-0x51126). Whoever holds the session opens it over the
+    /// spaceport.
+    pub fn take_map_request(&mut self) -> Option<PortMap> {
+        self.asks.map.take()
     }
 
     /// The mission of the offer open over it, when the offer's map key
@@ -648,6 +666,19 @@ impl Screen for BarScreen {
         {
             return ScreenAction::None;
         }
+        // The hire screen's filters read the map key first, before player
+        // info (`_ShipyardFilter` @0x608ed, `_ShipDescFilter` @0x51108).
+        if let Some(hire) = &self.hire
+            && hire.dialog().is_some()
+            && is_map_press(input)
+        {
+            self.asks.map = Some(PortMap::Screen(if hire.info_panel().is_some() {
+                PortScreen::ShipDescription
+            } else {
+                PortScreen::Shipyard
+            }));
+            return ScreenAction::None;
+        }
         if is_player_info_press(input) && (self.hire.is_some() || self.laid.is_ok()) {
             self.asks.player_info = true;
             return ScreenAction::None;
@@ -692,7 +723,7 @@ impl Screen for BarScreen {
                 repeat: false,
             })
         {
-            self.asks.map = true;
+            self.asks.map = Some(PortMap::Bar);
             return ScreenAction::None;
         }
         if let Input::Key {
@@ -726,9 +757,13 @@ impl Screen for BarScreen {
         ScreenAction::None
     }
 
-    /// The wait for the next offer runs down, the hire screen or the news
-    /// covering the bar while either is open; once it is out the bar asks.
+    /// The hire screen's time runs on while it is open, and the wait for
+    /// the next offer runs down, the hire screen or the news covering the
+    /// bar while either is open; once it is out the bar asks.
     fn tick(&mut self, dt: Duration) {
+        if let Some(hire) = &mut self.hire {
+            hire.tick(dt);
+        }
         let covered = self.hire.is_some() || self.news.is_some();
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);
@@ -807,12 +842,13 @@ mod tests {
     use nova_sim::{HireRefusal, HireRow, ShipFields, ShipSpecs};
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_command};
     use crate::geometry::{Bounds, Point};
     use crate::input::MouseButton;
     use crate::spaceport::catalog::{PortRecord, SpaceportCatalog};
     use crate::spaceport::shipyard::ShipBaseImages;
     use crate::text::fixture::MonoMetrics;
+    use crate::ui::ScrollText;
     use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -892,6 +928,12 @@ mod tests {
 
         fn button_style(&self) -> ButtonStyle {
             panic!("the style is given")
+        }
+    }
+
+    impl crate::spaceport::grid::GridLooks for FakeArt {
+        fn grid_colors(&self) -> crate::spaceport::grid::GridColors {
+            crate::spaceport::grid::GridColors::STOCK
         }
     }
 
@@ -997,6 +1039,7 @@ mod tests {
     /// A list of `rows` ships, all hireable, the fleet with room.
     fn list(rows: usize) -> HireList {
         HireList {
+            rules: nova_sim::Rulebook::default(),
             rows: (0..rows)
                 .map(|n| HireRow {
                     id: ShipId(128 + n as i16),
@@ -1086,6 +1129,46 @@ mod tests {
             "Gamble shown"
         );
         assert_eq!(screen.problem(), None);
+    }
+
+    #[test]
+    fn the_bar_text_draws_over_a_black_box_filling_its_item() {
+        let screen = bar();
+        let area = screen
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(TEXT_ITEM))
+            .expect("the text item");
+        let commands = drawn(&screen);
+        let fill = commands
+            .iter()
+            .position(|command| *command == fill_command(area, Color::BLACK))
+            .expect("filled black");
+        let text = commands
+            .iter()
+            .position(|command| {
+                matches!(command, DrawCommand::Text { text, .. } if text == "dësc 10029.")
+            })
+            .expect("the bar text");
+        assert!(fill < text, "the box is under the text");
+    }
+
+    #[test]
+    fn up_and_down_still_scroll_the_bar_text() {
+        let mut screen = bar();
+        let desc = screen.take_description_request().expect("asked");
+        let long: Vec<String> = (0..40).map(|n| format!("line {n}")).collect();
+        screen.show_description(desc, &long.join("\r"));
+        let first = |screen: &BarScreen| {
+            screen
+                .dialog()
+                .and_then(|dialog| dialog.text(TEXT_ITEM))
+                .map(ScrollText::first)
+        };
+        screen.input(&key(Key::Down, false));
+        screen.input(&key(Key::Down, true));
+        assert_eq!(first(&screen), Some(2));
+        screen.input(&key(Key::Up, false));
+        assert_eq!(first(&screen), Some(1));
     }
 
     #[test]
@@ -1198,6 +1281,7 @@ mod tests {
         let mut screen = laid_hire_bar();
         let bar_desc = screen.take_description_request().expect("the bar's");
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         assert_eq!(screen.take_description_request(), Some(14_000));
         assert_eq!(screen.take_description_request(), None, "once");
         screen.show_description(14_000, "Loaded pilot.");
@@ -1225,15 +1309,35 @@ mod tests {
     fn the_mission_info_key_asks_from_the_hire_screen_which_stays_open() {
         let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         screen.input(&key(MISSION_INFO_KEY, false));
         assert!(screen.take_info_request());
         assert!(screen.hire_screen().is_some(), "still open");
     }
 
     #[test]
+    fn the_hire_screens_refused_beep_gets_out_through_the_bar() {
+        let mut screen = laid_hire_bar();
+        screen.open_hire(list(2));
+        screen.take_sounds();
+        screen.input(&key(super::super::hire::HIRE_KEY, false));
+        assert_eq!(screen.take_hire(), None, "nothing selected");
+        let sounds = screen.take_sounds();
+        assert_eq!(
+            sounds
+                .iter()
+                .filter(|s| **s == Sound::Ui(crate::sound::UiSound::BuyRefused))
+                .count(),
+            1,
+            "{sounds:?}"
+        );
+    }
+
+    #[test]
     fn the_mission_info_key_asks_from_the_hire_info_panel_which_stays_open() {
         let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         screen.input(&key(crate::spaceport::shipyard::INFO_KEY, false));
         assert!(
             screen
@@ -1254,9 +1358,39 @@ mod tests {
     }
 
     #[test]
+    fn the_map_key_asks_for_the_shipyards_map_from_the_hire_screen_and_its_info_panel() {
+        let mut screen = laid_hire_bar();
+        screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
+        screen.input(&key(MAP_KEY, false));
+        assert_eq!(
+            screen.take_map_request(),
+            Some(PortMap::Screen(PortScreen::Shipyard))
+        );
+        assert_eq!(screen.take_map_request(), None, "once");
+        assert!(screen.hire_screen().is_some(), "still open");
+        screen.input(&key(crate::spaceport::shipyard::INFO_KEY, false));
+        screen.input(&key(MAP_KEY, false));
+        assert_eq!(
+            screen.take_map_request(),
+            Some(PortMap::Screen(PortScreen::ShipDescription))
+        );
+        assert!(
+            screen
+                .hire_screen()
+                .and_then(HireScreen::info_panel)
+                .is_some(),
+            "the panel stays open"
+        );
+        assert!(!screen.take_player_info_request());
+        assert!(!screen.take_info_request());
+    }
+
+    #[test]
     fn the_mission_info_key_asks_nothing_from_a_hire_screen_without_its_dialog() {
         let mut screen = bar();
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         assert!(
             screen
                 .hire_screen()
@@ -1270,6 +1404,7 @@ mod tests {
     fn the_hire_screen_opens_over_the_bar_and_takes_every_input_until_it_closes() {
         let mut screen = bar();
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         let hire = screen.hire_screen().expect("open");
         assert_eq!(hire.problem(), Some("no DLOG 1004"), "its own template");
         assert_eq!(hire.list().rows.len(), 2);
@@ -1321,10 +1456,12 @@ mod tests {
         );
         assert_eq!(screen.take_hire(), None, "no hire screen");
         screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
         screen.input(&key(Key::Char('h'), false));
         assert_eq!(screen.take_hire(), Some(ShipId(128)));
         assert_eq!(screen.take_hire(), None, "once");
         let full = HireList {
+            rules: nova_sim::Rulebook::default(),
             room: false,
             rows: vec![HireRow {
                 hire: Err(HireRefusal::FleetFull),
@@ -1360,6 +1497,7 @@ mod tests {
                 .any(|(text, color)| text.contains("no DLOG 1013") && *color == Color::ERROR)
         );
         screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
         assert!(screen.hire_screen().is_none());
         screen.input(&key(Key::Char('h'), false));
         assert!(!screen.take_hire_request());
@@ -1430,10 +1568,11 @@ mod tests {
             true,
         );
         screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
         let hire = screen
             .hire_screen()
             .and_then(HireScreen::dialog)
-            .and_then(|dialog| dialog.item_bounds(7))
+            .and_then(|dialog| dialog.item_bounds(1))
             .expect("Hire Escort")
             .center();
         let button = |pressed| Input::PointerButton {
@@ -1450,6 +1589,50 @@ mod tests {
         screen.input(&button(false));
         assert_eq!(screen.take_hire(), Some(ShipId(128)));
         assert_eq!(screen.take_sounds(), []);
+    }
+
+    /// The bar's time reaches its hire screen, whose double-click reads
+    /// the gap between two presses.
+    #[test]
+    fn the_bar_ticks_its_hire_screen_for_the_double_click() {
+        use nova_sim::mission::screens::mac_ticks;
+        for (gap, opens, covered) in [
+            (mac_ticks(10), true, false),
+            (mac_ticks(16), false, false),
+            (mac_ticks(16), false, true),
+        ] {
+            let mut screen = laid_hire_bar();
+            screen.open_hire(list(2));
+            let at = screen
+                .hire_screen()
+                .and_then(|hire| hire.cell_bounds(1))
+                .expect("a cell")
+                .center();
+            let press = |screen: &mut BarScreen| {
+                for pressed in [true, false] {
+                    screen.input(&Input::PointerButton {
+                        button: MouseButton::Left,
+                        pressed,
+                        at,
+                    });
+                }
+            };
+            press(&mut screen);
+            if covered {
+                screen.tick_covered(gap);
+            } else {
+                screen.tick(gap);
+            }
+            press(&mut screen);
+            assert_eq!(
+                screen
+                    .hire_screen()
+                    .and_then(HireScreen::info_panel)
+                    .is_some(),
+                opens,
+                "{gap:?}, covered: {covered}"
+            );
+        }
     }
 
     #[test]
@@ -1598,6 +1781,7 @@ mod tests {
     fn by_the_engine_an_offer_due_under_the_hire_screen_is_asked_for_as_it_closes() {
         let mut screen = offering();
         screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
         assert!(screen.take_offer_restart(), "the hire screen restarts it");
         screen.rearm(ms(600));
         screen.tick(ms(10_000));
@@ -1617,6 +1801,7 @@ mod tests {
         screen.tick(ms(500));
         assert!(!screen.take_offer_restart());
         screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
         assert!(screen.take_offer_restart());
         assert!(!screen.take_offer_restart(), "once");
         screen.rearm(ms(600));
@@ -1645,6 +1830,7 @@ mod tests {
     fn by_the_other_reading_the_hire_screen_neither_restarts_nor_runs_the_wait() {
         let mut screen = offering().with_offer_clock(RuleSource::Bible);
         screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
         assert!(!screen.take_offer_restart());
         screen.tick(ms(10_000));
         assert!(!screen.take_offer_request());
@@ -2060,18 +2246,18 @@ mod tests {
     #[test]
     fn the_map_key_asks_for_the_map_on_a_press_only() {
         let mut screen = bar();
-        assert!(!screen.take_map_request());
+        assert_eq!(screen.take_map_request(), None);
         screen.input(&key(MAP_KEY, true));
-        assert!(!screen.take_map_request(), "a repeat");
+        assert_eq!(screen.take_map_request(), None, "a repeat");
         screen.input(&Input::Key {
             key: MAP_KEY,
             pressed: false,
             repeat: false,
         });
-        assert!(!screen.take_map_request(), "a release");
+        assert_eq!(screen.take_map_request(), None, "a release");
         screen.input(&key(MAP_KEY, false));
-        assert!(screen.take_map_request());
-        assert!(!screen.take_map_request(), "once");
+        assert_eq!(screen.take_map_request(), Some(PortMap::Bar));
+        assert_eq!(screen.take_map_request(), None, "once");
         assert!(!screen.take_hire_request());
         assert!(!screen.take_news_request());
         assert!(!screen.closed());
@@ -2079,17 +2265,22 @@ mod tests {
         let mut screen = newsy();
         screen.open_news(&news(), 9000);
         screen.input(&key(MAP_KEY, false));
-        assert!(!screen.take_map_request(), "the news open");
+        assert_eq!(screen.take_map_request(), None, "the news open");
 
         let mut screen = bar();
         screen.open_hire(list(2));
+        screen.input(&key(Key::Right, false));
         screen.input(&key(MAP_KEY, false));
-        assert!(!screen.take_map_request(), "the hire screen open");
+        assert_eq!(
+            screen.take_map_request(),
+            None,
+            "a hire screen without its dialog"
+        );
 
         let mut screen = offering();
         screen.open_offer(prompt());
         screen.input(&key(MAP_KEY, false));
-        assert!(!screen.take_map_request(), "an offer open");
+        assert_eq!(screen.take_map_request(), None, "an offer open");
 
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
@@ -2104,7 +2295,7 @@ mod tests {
             true,
         );
         screen.input(&key(MAP_KEY, false));
-        assert!(!screen.take_map_request(), "without the bar's dialog");
+        assert_eq!(screen.take_map_request(), None, "without the bar's dialog");
     }
 
     /// `_BarFilter` @0x47a4b maps its keys to items with no click.

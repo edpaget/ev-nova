@@ -98,16 +98,102 @@ impl Refresh {
     }
 }
 
-/// The session settling, with the catalog and the chance it settles with
-/// and what it has settled: the story dispatcher's [`Stage`].
+/// How much a settling settles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Settling {
+    /// The moves, the events and a `Q`'s leave: [`Session::settle_story`].
+    Full,
+    /// The events alone, the moves and a leave held for the next full
+    /// settling: [`Session::dispatch_explored_since`], with a catalog or
+    /// with [`NoCatalog`].
+    EventsOnly,
+}
+
+/// What a settling reads from the catalog: a landing's offer roll and
+/// re-offer (the `Landed` arms of [`Consumer::Offers`] and
+/// [`Consumer::Missions`]), and the moves. Every catalog has it; so has
+/// [`NoCatalog`], for an events-only settling that has none.
+pub(super) trait SettlingCatalog {
+    /// Rolls the offers at `stellar`, landed on
+    /// ([`Session::roll_landing_offers`]).
+    fn roll_landing_offers(
+        &self,
+        session: &mut Session,
+        stellar: StellarId,
+        chance: &mut dyn Chance,
+    );
+    /// The landing's galaxy refresh and re-offer (`missions::REOFFER`).
+    fn reoffer(&self, session: &mut Session, chance: &mut dyn Chance);
+    /// Completes the entry the moves owe ([`Session::settle_moves`]).
+    fn settle_moves(&self, session: &mut Session, chance: &mut dyn Chance, settled: &mut Settled);
+}
+
+impl<C: PilotCatalog + TrafficCatalog + ?Sized> SettlingCatalog for C {
+    fn roll_landing_offers(
+        &self,
+        session: &mut Session,
+        stellar: StellarId,
+        chance: &mut dyn Chance,
+    ) {
+        session.roll_landing_offers(stellar, self, chance);
+    }
+
+    fn reoffer(&self, session: &mut Session, chance: &mut dyn Chance) {
+        session.refresh_galaxy(self);
+        session.reoffer_missions(chance);
+    }
+
+    fn settle_moves(&self, session: &mut Session, chance: &mut dyn Chance, settled: &mut Settled) {
+        session.settle_moves(self, chance, settled);
+    }
+}
+
+/// No catalog: an events-only settling's that has none, as a map grant's
+/// and a take-off's explorations dispatch (see [`Session::grant_outfit`]
+/// and the `map_walk` module). An events-only
+/// settling holds the entry the moves owe (every move is applied at its
+/// operator, see the `operator_moves` module), and it only ever dispatches the
+/// [`StoryEvent::Explored`] events taken and what their scripts raise,
+/// never a [`StoryEvent::Landed`], which only a landing raises: so none of
+/// this is reached, and a debug build says so if it is.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct NoCatalog;
+
+impl NoCatalog {
+    /// Fails a debug build: an events-only settling read the catalog.
+    fn unreached(what: &str) {
+        if cfg!(debug_assertions) {
+            unreachable!("an events-only settling read the catalog: {what}");
+        }
+    }
+}
+
+impl SettlingCatalog for NoCatalog {
+    fn roll_landing_offers(&self, _: &mut Session, _: StellarId, _: &mut dyn Chance) {
+        Self::unreached("the offer roll");
+    }
+
+    fn reoffer(&self, _: &mut Session, _: &mut dyn Chance) {
+        Self::unreached("the re-offer");
+    }
+
+    fn settle_moves(&self, _: &mut Session, _: &mut dyn Chance, _: &mut Settled) {
+        Self::unreached("the moves");
+    }
+}
+
+/// The session settling, with the catalog and the chance it settles with,
+/// what it has settled and how much it settles: the story dispatcher's
+/// [`Stage`].
 struct SessionStage<'a, C: ?Sized> {
     session: &'a mut Session,
     catalog: &'a C,
     chance: &'a mut dyn Chance,
     settled: &'a mut Settled,
+    settling: Settling,
 }
 
-impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
+impl<C: SettlingCatalog + ?Sized> Stage for SessionStage<'_, C> {
     fn matching(&self, event: &StoryEvent) -> Vec<SubscriptionId> {
         self.session.run.story.registry.matching(event)
     }
@@ -157,8 +243,8 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
             // module).
             Consumer::Offers => {
                 if let (missions::ROLL, &StoryEvent::Landed { stellar }) = (id, event) {
-                    self.session
-                        .roll_landing_offers(stellar, self.catalog, &mut *self.chance);
+                    self.catalog
+                        .roll_landing_offers(self.session, stellar, &mut *self.chance);
                 }
             }
             // The galaxy refresh after the land check (@0xa1af2) and the
@@ -166,8 +252,7 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
             // (see the `missions` module).
             Consumer::Missions => match (id, event) {
                 (missions::REOFFER, StoryEvent::Landed { .. }) => {
-                    self.session.refresh_galaxy(self.catalog);
-                    self.session.reoffer_missions(&mut *self.chance);
+                    self.catalog.reoffer(self.session, &mut *self.chance);
                 }
                 _ => self.session.mission_effect(id, event, &mut *self.chance),
             },
@@ -198,6 +283,7 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
             catalog,
             chance,
             settled,
+            settling,
         } = self;
         session.run_ops(expr, &mut **chance, &mut |session, chance| {
             between(&mut SessionStage {
@@ -205,16 +291,26 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
                 catalog: *catalog,
                 chance,
                 settled,
+                settling: *settling,
             });
         });
     }
 
+    /// Completes the entry the moves owe; nothing when only the events
+    /// settle.
     fn settle_moves(&mut self) {
-        self.session
-            .settle_moves(self.catalog, &mut *self.chance, self.settled);
+        if self.settling == Settling::EventsOnly {
+            return;
+        }
+        self.catalog
+            .settle_moves(self.session, &mut *self.chance, self.settled);
     }
 
+    /// Applies a pending leave; none when only the events settle.
     fn settle_leave(&mut self) -> bool {
+        if self.settling == Settling::EventsOnly {
+            return false;
+        }
         self.session.run.settle_leave(
             &mut self.session.out,
             self.session.mode.landed(),
@@ -352,6 +448,77 @@ impl Session {
     ) where
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
+        self.settle_events(catalog, chance, settled, Settling::Full);
+    }
+
+    /// Dispatches now the [`StoryEvent::Explored`] events raised since
+    /// `mark` ([`MissionRun::story_mark`]), in order, and the events their
+    /// subscriptions raise, as [`RuleKey::StoryReentry`] reads: the entry
+    /// their moves owe and a `Q`'s leave wait for the next settling
+    /// ([`Session::settle_story`]), and so does every event raised before
+    /// `mark`, and every other kind raised since, kept in order. Events
+    /// dropped past the limit are told, as [`ScriptNote::EventsDropped`].
+    /// The nebulae's explorations at once (see the `jump_exploration`
+    /// module): a jump's, with its `catalog`, and a map grant's and a
+    /// take-off's, with [`NoCatalog`] ([`Session::grant_outfit`]).
+    ///
+    /// It may run inside a settling, a grant run from a subscription's
+    /// script: this settling is its own, with its own budget, and the
+    /// outer one's queue is its own too, so the outer settling goes on as
+    /// it was. Grants nested through `OnExplore`s are bounded by the
+    /// nebulae, each marked explored before its `OnExplore` runs.
+    pub(super) fn dispatch_explored_since<C>(
+        &mut self,
+        catalog: &C,
+        chance: &mut dyn Chance,
+        mark: usize,
+    ) where
+        C: SettlingCatalog + ?Sized,
+    {
+        self.dispatch_since(catalog, chance, mark, StoryEventKind::Explored);
+    }
+
+    /// Dispatches now the events of `kind` raised since `mark`, as
+    /// [`Session::dispatch_explored_since`] does the explorations: a
+    /// jump's [`StoryEvent::EnteredSystem`] before its re-explore and its
+    /// population (see the `jump_exploration` module).
+    pub(super) fn dispatch_since<C>(
+        &mut self,
+        catalog: &C,
+        chance: &mut dyn Chance,
+        mark: usize,
+        kind: StoryEventKind,
+    ) where
+        C: SettlingCatalog + ?Sized,
+    {
+        let (now, mut kept): (VecDeque<_>, VecDeque<_>) =
+            std::mem::take(&mut self.run.story.raised)
+                .into_iter()
+                .enumerate()
+                .partition(|(n, event)| *n >= mark && event.kind() == kind);
+        self.run.story.raised = now.into_iter().map(|(_, event)| event).collect();
+        self.settle_events(
+            catalog,
+            chance,
+            &mut Settled::default(),
+            Settling::EventsOnly,
+        );
+        let mut kept: VecDeque<StoryEvent> = kept.drain(..).map(|(_, event)| event).collect();
+        kept.append(&mut self.run.story.raised);
+        self.run.story.raised = kept;
+    }
+
+    /// Settles as `settling` says, through the story dispatcher (see
+    /// [`Session::settle_story`]).
+    fn settle_events<C>(
+        &mut self,
+        catalog: &C,
+        chance: &mut dyn Chance,
+        settled: &mut Settled,
+        settling: Settling,
+    ) where
+        C: SettlingCatalog + ?Sized,
+    {
         let reentry = Reentry::from(self.setup.rules.source_for(RuleKey::StoryReentry));
         let dropped = dispatch::settle(
             &mut SessionStage {
@@ -359,6 +526,7 @@ impl Session {
                 catalog,
                 chance,
                 settled,
+                settling,
             },
             reentry,
         );
@@ -453,17 +621,27 @@ impl Session {
     /// ([`Session::change_galaxy`]): the player moved out of a system now
     /// hidden, the traffic retargeted, [`SessionEvent::GalaxyChanged`]
     /// told and a save due. Stellar ownership follows from the overlay
-    /// ([`OverlaidGalaxy::owner`]), derived before the move. Whether it
-    /// changed anything.
+    /// ([`OverlaidGalaxy::owner`]), derived before the move. Every rescue
+    /// kept is forgotten first, whatever the refresh changes
+    /// (@0x9968a-0x9969f), and after the move the player's system rescues
+    /// afresh, standing in for the rebuild the original runs after each
+    /// such refresh (see the `kept_rescues` module). What it leaves
+    /// hidden is kept for a later new pilot, changed or not (see the
+    /// `last_refresh` module). Whether it changed anything.
     pub(super) fn refresh_galaxy<C>(&mut self, catalog: &C) -> bool
     where
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
         self.propagate_cached_tests();
         let refresh = self.refresh_now();
-        self.change_galaxy(catalog, |overlay| {
+        self.chart.forget_rescues();
+        let changed = self.change_galaxy(catalog, |overlay| {
             refresh.write(overlay);
-        })
+        });
+        self.chart
+            .keep_rescues(&self.pilot, &self.statics, &self.setup);
+        self.chart.snapshot_refresh();
+        changed
     }
 
     /// A load's galaxy refresh (`_LoadPilotData` @0x751ca, @0x7531f): every
@@ -475,10 +653,18 @@ impl Session {
     /// ([`leave_hidden`]), docked or not. When the refresh changed
     /// anything, the stellars are rebuilt quietly after it, as the load's
     /// rebuild follows its refresh (@0x751ca, @0x751cf): in flight, the
-    /// stellars shown are those the refreshed galaxy gives.
+    /// stellars shown are those the refreshed galaxy gives. Every rescue
+    /// kept is forgotten first, and the player's system rescues afresh
+    /// after the move, changed or not (see the `kept_rescues` module).
+    /// What it leaves hidden is kept for a later new pilot, changed or
+    /// not (see the `last_refresh` module).
     pub(super) fn refresh_galaxy_quietly(&mut self, catalog: &(impl PilotCatalog + ?Sized)) {
         self.propagate_cached_tests();
+        self.chart.forget_rescues();
         if !self.refresh_now().write(&mut self.pilot.galaxy) {
+            self.chart
+                .keep_rescues(&self.pilot, &self.statics, &self.setup);
+            self.chart.snapshot_refresh();
             return;
         }
         self.chart.galaxy.set_overlay(self.pilot.galaxy.clone());
@@ -487,6 +673,7 @@ impl Session {
             let sites = self.chart.read_sites(catalog, system);
             self.set_player_system(system, sites, Dock::AsItWas);
         }
+        self.chart.snapshot_refresh();
         self.rebuild_quietly();
     }
 
@@ -728,16 +915,11 @@ impl MissionRun {
         self.story.raised.push_back(event);
     }
 
-    /// How many events have been raised and not yet settled: a mark to
-    /// raise earlier ones at ([`MissionRun::raise_at`]).
+    /// How many events have been raised and not yet settled: a mark
+    /// before the events raised from now on
+    /// ([`Session::dispatch_explored_since`]).
     pub(super) fn story_mark(&self) -> usize {
         self.story.raised.len()
-    }
-
-    /// Raises `event` at `mark`, before the events raised since: where a
-    /// source learns of an event only after later ones.
-    pub(super) fn raise_at(&mut self, mark: usize, event: StoryEvent) {
-        self.story.raised.insert(mark, event);
     }
 
     /// Watches the NPC `ship`: the next flight tick of the traffic that
@@ -819,7 +1001,7 @@ mod tests {
     use crate::date::GameDate;
     use crate::market::ActiveEvent;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-    use crate::session::entry::NoTraffic;
+    use crate::session::jump_exploration::tests::watching_explored;
     use crate::session::tests::{NEW, buy, outfitted, sell, shipbuying, surplus};
     use crate::session::{SessionEvent, Settled};
     use crate::story::{
@@ -841,7 +1023,7 @@ mod tests {
     fn days_at_take_off(session: &mut Session) -> usize {
         let landed = session.date();
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&testkit::catalog(), &mut NeverFires)
             .expect("takes off");
         (0..10)
             .find(|&days| after(landed, days) == session.date())
@@ -1044,7 +1226,7 @@ mod tests {
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("buys");
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&testkit::catalog(), &mut NeverFires)
             .expect("takes off");
         assert!(session.take_save_due());
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
@@ -1162,28 +1344,31 @@ mod tests {
         system: SystemId(130),
     };
 
+    /// The take-off's `Explored` is dispatched at once, inside its walk
+    /// (`_AutoSetExploration` @0x634b1-0x634c8; see the `map_walk`
+    /// module), so it is not left raised.
     #[test]
-    fn a_take_off_raises_its_days_then_explored_then_took_off() {
+    fn a_take_off_raises_its_days_then_took_off() {
         let mut session = quiet(shopping());
         assert_eq!(session.outfit(buy(SPEED), &mut NeverFires), Ok(()));
         let landed = session.date();
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&testkit::catalog(), &mut NeverFires)
             .expect("takes off");
         let mut expected = days_after(landed, 2);
-        expected.extend([EXPLORED_130, TOOK_OFF_128]);
+        expected.push(TOOK_OFF_128);
         assert_eq!(session.story_raised(), expected);
     }
 
     #[test]
-    fn by_the_other_stay_reading_a_take_off_raises_only_explored_and_took_off() {
+    fn by_the_other_stay_reading_a_take_off_raises_only_took_off() {
         let rules = Rulebook::default().with_override(RuleKey::StayDays, RuleSource::Bible);
         let mut session = quiet(shopping().with_rules(rules));
         assert_eq!(session.outfit(buy(SPEED), &mut NeverFires), Ok(()));
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&testkit::catalog(), &mut NeverFires)
             .expect("takes off");
-        assert_eq!(session.story_raised(), [EXPLORED_130, TOOK_OFF_128]);
+        assert_eq!(session.story_raised(), [TOOK_OFF_128]);
     }
 
     #[test]
@@ -1240,17 +1425,44 @@ mod tests {
         }
     }
 
+    /// `session` watching a jump's [`StoryEvent::EnteredSystem`] for
+    /// `system`: a fixture subscription to it sets bit 30.
+    fn watching_entered(mut session: Session, system: i16) -> Session {
+        session
+            .register_story(Subscription::new(
+                SubscriptionId {
+                    consumer: Consumer::Fixture,
+                    record: 30,
+                    hook: 0,
+                },
+                EventFilter::EnteredSystem(SystemId(system)),
+                Script::parse("b30"),
+            ))
+            .expect("registers");
+        session
+    }
+
+    /// Whether [`watching_entered`]'s subscription has run.
+    fn entered_ran(session: &Session) -> bool {
+        session
+            .pilot()
+            .control_bit(crate::control::Bit::new(30).expect("a bit"))
+    }
+
     #[test]
-    fn a_jump_raises_the_arrivals_explored_then_its_days_then_entered_system() {
+    fn a_jump_dispatches_the_arrivals_explored_at_once_then_raises_its_days_then_entered_system() {
         let catalog = testkit::catalog();
-        let mut session = quiet(Session::start(&catalog).expect("starts"));
+        let session = quiet(Session::start(&catalog).expect("starts"));
+        let (session, seen) = watching_explored(session, &[131]);
+        let mut session = watching_entered(session, 131);
         session.ship.fit.stats.jump_days = 2;
         let left = session.date();
         jump(&mut session, &catalog, 131).expect("arrives");
-        let mut expected = vec![explored(131)];
-        expected.extend(days_after(left, 2));
-        expected.push(entered(131, Entrance::Jump));
-        assert_eq!(session.story_raised(), expected);
+        assert_eq!(seen.systems(), [SystemId(131), SystemId(131)], "again");
+        // The jump's `EnteredSystem` is dispatched at once, after the days
+        // (@0x6c15d); the days wait for the caller's settling.
+        assert!(entered_ran(&session));
+        assert_eq!(session.story_raised(), days_after(left, 2));
     }
 
     #[test]
@@ -1270,15 +1482,14 @@ mod tests {
     }
 
     #[test]
-    fn a_jumps_explored_follows_the_events_raised_before_it() {
+    fn a_jumps_events_follow_the_events_raised_before_it() {
         let catalog = testkit::catalog();
         let mut session = quiet(Session::start(&catalog).expect("starts"));
         session.run.raise(LANDED_128);
         let left = session.date();
         jump(&mut session, &catalog, 131).expect("arrives");
-        let mut expected = vec![LANDED_128, explored(131)];
+        let mut expected = vec![LANDED_128];
         expected.extend(days_after(left, 1));
-        expected.push(entered(131, Entrance::Jump));
         assert_eq!(session.story_raised(), expected);
     }
 
@@ -1307,17 +1518,21 @@ mod tests {
         assert_eq!(session.story_raised(), expected, "like a jump");
     }
 
-    /// `session` after running `M131` and settling its move.
-    fn moved(mut session: Session, catalog: &FakePilotCatalog) -> Vec<StoryEvent> {
+    /// What `session` raises and leaves undispatched running `M131` and
+    /// completing its move's entry.
+    fn moved(session: Session, catalog: &FakePilotCatalog) -> Vec<StoryEvent> {
+        let mut session = quiet(session);
         let expr = SetExpr::parse("M131").expect("parses");
         session.run_set(&expr, &mut NeverFires);
-        let mut session = quiet(session);
         session.settle_moves(catalog, &mut NeverFires, &mut Settled::default());
         session.story_raised()
     }
 
     #[test]
     fn a_move_raises_entered_system_and_as_an_arrival_explored() {
+        // As an arrival the operator raises `Explored`; in flight the
+        // operator dispatches its `EnteredSystem` (@0x159a8), and docked the
+        // entry raises its engine-only one.
         let catalog = testkit::catalog();
         for (reading, landed) in [
             (RuleSource::Engine, true),
@@ -1330,9 +1545,12 @@ mod tests {
             if landed {
                 land_now(&mut session).expect("lands");
             }
-            let mut expected = vec![entered(131, Entrance::ScriptMove { landed })];
+            let mut expected = Vec::new();
             if reading == RuleSource::Bible {
                 expected.push(explored(131));
+            }
+            if landed {
+                expected.push(entered(131, Entrance::ScriptMove { landed }));
             }
             assert_eq!(moved(session, &catalog), expected, "{reading:?} {landed}");
         }
@@ -1354,7 +1572,7 @@ mod tests {
     }
 
     #[test]
-    fn a_multi_jump_raises_the_passed_systems_explored_before_its_days() {
+    fn a_multi_jump_dispatches_the_passed_systems_explored_at_once() {
         use crate::hyperspace::MultiJumpRule;
         use crate::session::tests::{bound_for_134, chained};
         for (rule, mod_val, days) in [(MultiJumpRule::Engine, 2, 1), (MultiJumpRule::PerHop, 1, 2)]
@@ -1362,16 +1580,20 @@ mod tests {
             let catalog = chained(testkit::catalog(), mod_val);
             let mut session = bound_for_134(&catalog, rule);
             testkit::begin_jump_now(&mut session).expect("jumps");
-            let mut session = quiet(session);
+            let (session, seen) = watching_explored(quiet(session), &[131, 132]);
+            let mut session = watching_entered(session, 132);
             let left = session.date();
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),
                 Some(SystemId(132))
             );
-            let mut expected = vec![explored(131), explored(132)];
-            expected.extend(days_after(left, days));
-            expected.push(entered(132, Entrance::Jump));
-            assert_eq!(session.story_raised(), expected, "{rule:?}");
+            assert_eq!(
+                seen.systems(),
+                [131, 132, 132].map(SystemId),
+                "{rule:?}: 132 again"
+            );
+            assert!(entered_ran(&session), "{rule:?}");
+            assert_eq!(session.story_raised(), days_after(left, days), "{rule:?}");
         }
     }
 
@@ -1383,13 +1605,13 @@ mod tests {
         let mut session = bound_for_134(&catalog, MultiJumpRule::Engine);
         testkit::begin_jump_now(&mut session).expect("jumps");
         session.plot_course(SystemId(133)).expect("a route");
-        let mut session = quiet(session);
+        let (session, seen) = watching_explored(quiet(session), &[131, 133]);
+        let mut session = watching_entered(session, 131);
         let left = session.date();
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
-        let mut expected = vec![explored(131)];
-        expected.extend(days_after(left, 1));
-        expected.push(entered(131, Entrance::Jump));
-        assert_eq!(session.story_raised(), expected);
+        assert_eq!(seen.systems(), [SystemId(131), SystemId(131)]);
+        assert!(entered_ran(&session));
+        assert_eq!(session.story_raised(), days_after(left, 1));
     }
 
     // The dispatch, through fixture subscriptions.
@@ -1637,17 +1859,29 @@ mod tests {
     }
 
     #[test]
-    fn a_hooks_move_dispatches_its_events_at_the_next_settling() {
+    fn an_in_flight_moves_enter_system_dispatches_at_its_operator() {
+        // `_MissionHandlePlayerEnteredNewSystem` @0x159a8, inside the
+        // operator; by the other reading of `story_reentry` it waits for
+        // the next settling.
         let catalog = testkit::catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        register(
-            &mut session,
-            [sub(1, EventFilter::EnteredSystem(SystemId(131)), "", "b3")],
-        );
-        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
-        assert_eq!(bits(&session), [0_u16; 0], "deferred");
-        let _ = session.settle_script(&catalog, &mut NeverFires);
-        assert_eq!(bits(&session), [3]);
+        for reading in RuleSource::ALL {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::StoryReentry, reading));
+            register(
+                &mut session,
+                [sub(1, EventFilter::EnteredSystem(SystemId(131)), "", "b3")],
+            );
+            session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+            let at_once: &[u16] = if reading == RuleSource::Engine {
+                &[3]
+            } else {
+                &[]
+            };
+            assert_eq!(bits(&session), at_once, "{reading:?}");
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert_eq!(bits(&session), [3], "{reading:?}: once");
+        }
     }
 
     // The writer's catalog-free entry.
@@ -1862,6 +2096,7 @@ mod tests {
             carried: false,
             wage: Some(100),
             person: None,
+            mark: None,
         });
         session.set_credits(1000);
         session.let_days_pass(2, &mut NeverFires);
@@ -2038,11 +2273,12 @@ mod tests {
         assert!(visible(&session, 131) && !visible(&session, 134));
         set(&mut session, &catalog, "b50");
         session.take_events();
+        let (mut session, seen) = watching_explored(session, &[131, 134]);
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(134)));
         assert!(!visible(&session, 131) && visible(&session, 134));
         assert_eq!(
-            session.story_raised().first(),
-            Some(&explored(131)),
+            seen.systems().first(),
+            Some(&SystemId(131)),
             "explored as 131 stood before the refresh"
         );
         assert!(session.take_events().contains(&SessionEvent::GalaxyChanged));

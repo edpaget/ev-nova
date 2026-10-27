@@ -15,8 +15,10 @@
 //! reading), the pilot resumes docked with its cargo: S sells a ton at
 //! the local price and Alt-S, confirming the quantity dialog's default,
 //! the rest, then holding B buys a ton a repeat and Alt-B, confirmed
-//! likewise, fills the hold again.
+//! likewise, fills the hold again. The Trade Center lists in the colours
+//! of the game data's `cölr` 128.
 
+use crate::common::text_input_items;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -28,6 +30,7 @@ use nova::platform;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
+use nova_data::records::colors::Colors;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
 use nova_data::records::ship::Ship;
@@ -45,11 +48,11 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::{Good, Pilot, PilotKeeper, PilotStore, RuleKey, RuleSource, Rulebook};
-use nova_view::MouseButton;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::menu::fixture::main_screen_resources;
-use nova_view::spaceport::TradeScreen;
+use nova_view::spaceport::{ListColors, TradeScreen};
+use nova_view::{Color, MouseButton};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -196,6 +199,31 @@ fn spin() -> Vec<u8> {
     bytes
 }
 
+/// `STR#` 2002 as far as #392, with the exchange dialog's words in
+/// place and the rest empty.
+fn trade_words() -> Vec<&'static str> {
+    let mut list = vec![""; 392];
+    for (n, word) in [
+        (1, "ton"),
+        (2, "tons"),
+        (197, "Commodity:"),
+        (199, "In Hold:"),
+        (200, "Price:"),
+        (364, "Free cargo space"),
+    ] {
+        list[n - 1] = word;
+    }
+    list
+}
+
+/// The list colours the game data's `cölr` 128 gives, none of them the
+/// stock ones.
+const LIST_COLORS: ListColors = ListColors {
+    text: Color::rgba(0x11, 0x22, 0x33, 255),
+    background: Color::rgba(0x44, 0x55, 0x66, 255),
+    hilite: Color::rgba(0x77, 0x88, 0x99, 255),
+};
+
 fn game_data() -> Rc<GameData> {
     let mut resources = vec![
         (Character::TYPE, 128, character()),
@@ -226,6 +254,7 @@ fn game_data() -> Rc<GameData> {
             str_list(&["75", "350", "750", "900", "200", "550"]),
         ),
         (PICT, 10_004, pict(6, 3, [0, 90, 0])),
+        (StrList::TYPE, 2002, str_list(&trade_words())),
     ];
     for state in [7500, 7503, 7506] {
         resources.push((PICT, state, pict(13, 25, [200, 0, 0])));
@@ -234,8 +263,21 @@ fn game_data() -> Rc<GameData> {
         resources.push((PICT, state + 100, pict(13, 25, [0, 0, 0])));
         resources.push((PICT, state + 102, pict(13, 25, [0, 0, 0])));
     }
-    // The main menu's art, so the menu draws the original's screen.
+    // The main menu's art, so the menu draws the original's screen, its
+    // `cölr` 128 also giving the lists the colours of `LIST_COLORS`.
     resources.extend(main_screen_resources());
+    let (_, _, colors) = resources
+        .iter_mut()
+        .find(|(ty, id, _)| *ty == Colors::TYPE && *id == 128)
+        .expect("the main screen's colours");
+    for (at, color) in [
+        (0x8E, LIST_COLORS.text),
+        (0x92, LIST_COLORS.background),
+        (0x96, LIST_COLORS.hilite),
+    ] {
+        let rgb24 = u32::from_be_bytes([0, color.r, color.g, color.b]);
+        colors[at..at + 4].copy_from_slice(&rgb24.to_be_bytes());
+    }
     let file = fork(&resources);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
@@ -281,6 +323,8 @@ fn ditl(items: &[Vec<u8>]) -> Vec<u8> {
 /// Stock "Create a new pilot:" (`DLOG` 3102, 326 x 213, centred) and its
 /// fourteen items, stock "Spaceport" (`DLOG` 1000) and its fifteen user
 /// items, and stock "Trade" (`DLOG` 1001) and its seventeen user items.
+///
+/// With stock "Text Input" (`DLOG` 3001) too, for the ship's christening.
 fn interface() -> InterfaceData {
     let text = |bounds, s: &str| ditl_item(bounds, STATIC_TEXT | DISABLED, s.as_bytes());
     let field = |bounds| ditl_item(bounds, EDIT_TEXT, b"Edit Text");
@@ -353,6 +397,8 @@ fn interface() -> InterfaceData {
         (Ditl::TYPE, 1001, ditl(&trade)),
         (Dlog::TYPE, 3102, dlog((78, 175, 291, 501), 3102)),
         (Ditl::TYPE, 3102, ditl(&new_pilot)),
+        (Dlog::TYPE, 3001, dlog((100, 100, 238, 460), 3001)),
+        (Ditl::TYPE, 3001, ditl(&text_input_items(ditl_item))),
         (Dlog::TYPE, 1000, dlog((-201, 60, 316, 678), 1000)),
         (Ditl::TYPE, 1000, ditl(&spaceport)),
     ]);
@@ -551,9 +597,21 @@ impl Harness {
     }
 }
 
-/// The status bar's text for `free` tons and `cash` credits.
-fn status(free: u32, cash: i64) -> String {
-    format!("Free cargo space: {free} tons    Credits: {cash}")
+/// The header's labels, in `STR#` 2002's words, for a ship alone.
+const HEADER: [&str; 3] = ["Commodity:", "In Hold:", "Price:"];
+
+/// The cargo summary's free-space line for `free` tons, a ship alone.
+fn free_space(free: u32) -> String {
+    format!("Free cargo space: {free} tons")
+}
+
+impl Harness {
+    /// Asserts the Trade Center shows `free` tons free in its cargo
+    /// summary and the exchange holds `cash` credits.
+    fn assert_shows(&mut self, free: u32, cash: i64) {
+        assert!(texts(&self.frame()).contains(&free_space(free)));
+        assert_eq!(self.trade().market().cash, cash);
+    }
 }
 
 #[test]
@@ -563,6 +621,8 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     let new_pilot = game.menu_button(MenuChoice::NewPilot);
     game.click(new_pilot);
     game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
     game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
@@ -574,10 +634,13 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     game.open_trade_center();
     let cash = i64::from(CASH);
     let shown = texts(&game.frame());
-    for text in ["Food", "75", "Metal", "160", "Buy", "Sell", "Done"] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    for text in HEADER
+        .iter()
+        .chain(&["Food", "75", "Metal", "160", "Buy", "Sell", "Done"])
+    {
+        assert!(shown.contains(&(*text).to_owned()), "{text}: {shown:?}");
     }
-    assert!(shown.contains(&status(10, cash)), "{shown:?}");
+    game.assert_shows(10, cash);
     for untraded in [
         "Industrial",
         "Medical Supplies",
@@ -595,7 +658,7 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     assert_eq!(game.pilot().cash(), full);
     assert_eq!(store.writes(), writes + 1);
     assert_eq!(saved(&store, "Ada").held(FOOD), 10);
-    assert!(texts(&game.frame()).contains(&status(0, full)));
+    game.assert_shows(0, full);
     assert_eq!(game.trade().market().free, 0);
 
     // Done closes the exchange; closing the window saves the cargo.
@@ -630,7 +693,7 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
         game.trade().market().row(FOOD).map(|row| row.held),
         Some(10)
     );
-    assert!(texts(&game.frame()).contains(&status(0, full)));
+    game.assert_shows(0, full);
 
     // Selling pays the local price: S sells a ton, and Alt-S asks how
     // many, the quantity dialog opening at everything left, which Return
@@ -650,7 +713,7 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     game.press(KeyCode::Enter);
     assert_eq!(game.pilot().held(FOOD), 0, "everything left is sold");
     assert_eq!(game.pilot().cash(), cash);
-    assert!(texts(&game.frame()).contains(&status(10, cash)));
+    game.assert_shows(10, cash);
     assert_eq!(saved(&store, "Ada").held(FOOD), 0);
 
     // Holding B buys a ton on the press and a ton on each repeat.
@@ -670,8 +733,26 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     game.press(KeyCode::Enter);
     assert_eq!(game.pilot().held(FOOD), 10, "the hold is full");
     assert_eq!(game.pilot().cash(), full);
-    assert!(texts(&game.frame()).contains(&status(0, full)));
+    game.assert_shows(0, full);
     assert_eq!(saved(&store, "Ada").held(FOOD), 10);
 }
 
 crate::common::entry_harness!(Harness, click, frame);
+
+#[test]
+fn the_trade_center_lists_in_the_game_datas_list_colours() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store, RuleSource::Engine);
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
+    game.press(KeyCode::Enter);
+    game.enter_ship();
+    game.frame();
+    game.land();
+    game.open_trade_center();
+    assert_ne!(LIST_COLORS, ListColors::STOCK);
+    assert_eq!(game.trade().colors(), LIST_COLORS);
+}

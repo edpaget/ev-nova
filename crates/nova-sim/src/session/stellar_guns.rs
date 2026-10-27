@@ -122,7 +122,7 @@ impl Session {
         let listers = listers_of(&self.statics.listed_stellars, stellar);
         self.chart
             .galaxy
-            .active_holder(listers, self.pilot.system)
+            .active_holder(stellar, listers, self.pilot.system)
             .is_some()
     }
 

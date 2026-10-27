@@ -933,8 +933,10 @@ impl Session {
     /// The deadline check of the mission in `slot` (`_MissionObjectivesCheck`
     /// @0x9eba5-0x9ec61), drawing on `chance`: with none of its days left,
     /// not failed already, and the ship not docked, it fails at once
-    /// ([`Session::quick_failure`]).
-    fn mission_deadline(&mut self, slot: u8, chance: &mut dyn Chance) {
+    /// ([`Session::quick_failure`]). Once failed it does nothing, so the
+    /// `DayPassed` hooks that follow a jump's first check
+    /// ([`Session::check_goals_after_jump`]) apply it no second time.
+    pub(super) fn mission_deadline(&mut self, slot: u8, chance: &mut dyn Chance) {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
@@ -1251,6 +1253,7 @@ impl Session {
     ) -> TagContext<'_> {
         TagContext {
             pilot: &self.pilot.name,
+            nickname: &self.pilot.nickname,
             ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
             ship_name: self.pilot.ship_name().unwrap_or_default(),
             person: match self.setup.rules.source_for(RuleKey::OfferingShipName) {
@@ -1776,7 +1779,7 @@ impl TagNames for Session {
     fn stellar_system(&self, stellar: StellarId) -> Option<SystemId> {
         self.chart
             .galaxy
-            .whereabouts(self.statics.listers(stellar), self.pilot.system)
+            .whereabouts(stellar, self.statics.listers(stellar), self.pilot.system)
             .named(self.chart.galaxy.map().places())
     }
 
@@ -2302,6 +2305,7 @@ mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }];
         let refused = |session: &Session| {
             session
@@ -2379,6 +2383,7 @@ mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }];
         session.pilot.cargo.insert(Good::Commodity(0), 25);
         assert_eq!(
@@ -4893,6 +4898,15 @@ mod tests {
             other.plain_text("<PN> of the <PSN>, a <PST>, <PRK>: <DST> <PAY> <OSN>"),
             "Stock of the Kestrel, a Ship 128, captain: <DST> <PAY> [Error]"
         );
+    }
+
+    #[test]
+    fn a_mission_texts_pnn_reads_the_pilots_nickname_or_its_name_with_none() {
+        let catalog = briefed();
+        let mut session = stocks(&catalog);
+        assert_eq!(session.mission_text(3, "<PN> <PNN>"), "Stock Stock");
+        session.pilot.nickname = "Hunter".to_owned();
+        assert_eq!(session.mission_text(3, "<PN> <PNN>"), "Stock Hunter");
     }
 
     #[test]

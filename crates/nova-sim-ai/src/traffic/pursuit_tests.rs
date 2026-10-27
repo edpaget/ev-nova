@@ -169,6 +169,7 @@ fn the_step_leads_an_approach_as_the_worlds_approach_lead_says() {
         &mut crate::combat::report::Reports::default(),
         RuleSource::Engine,
         &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+        None,
     );
     ship.pick = Some(WeaponId(130));
     let mut player = player_at(Vec2::new(0.0, -400.0));

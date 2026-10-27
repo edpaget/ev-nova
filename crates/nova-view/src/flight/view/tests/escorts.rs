@@ -25,6 +25,7 @@ fn each_key_asks_the_session_for_its_command() {
         (ESCORT_HOLD_KEY, PlayerCommand::Escort),
         (ESCORT_RECALL_KEY, PlayerCommand::Escort),
         (SELECT_KEY, PlayerCommand::SelectWeapon),
+        (DESELECT_KEY, PlayerCommand::DeselectWeapon),
         (NEAREST_STELLAR_KEY, PlayerCommand::Nav),
         (NAV_OFF_KEY, PlayerCommand::Nav),
         (Key::Function(1), PlayerCommand::Nav),
@@ -47,6 +48,13 @@ fn each_key_asks_the_session_for_its_command() {
     assert!(!view.escort_menu().is_open());
     assert_eq!(view.command_of(Key::Char('1')), Some(PlayerCommand::Nav));
     assert_eq!(view.command_of(GROUP_KEYS[4]), None, "5 is no stellar slot");
+    view.input(&key(Key::Command, true));
+    assert_eq!(
+        view.command_of(NEAREST_STELLAR_COMMAND_KEY),
+        Some(PlayerCommand::Nav),
+        "Command-5"
+    );
+    view.input(&key(Key::Command, false));
     tap(&mut view, MENU_KEY);
     assert!(view.escort_menu().is_open());
     assert_eq!(view.command_of(Key::Char('1')), Some(PlayerCommand::Escort));
@@ -140,7 +148,7 @@ fn a_jump_into_a_buoyed_system_shows_the_buoy_for_480_ticks_in_place_of_the_arri
     jump_to_alpha(&mut plain);
     assert_eq!(
         plain.message(),
-        Some("Jumping into the Alpha Centauri system on June 24, 1177 NC.")
+        Some("Jumping into the Alpha Centauri system on June 24th, 1177 NC.")
     );
     // The arrival's 240 ticks, less those the jump's end took.
     let arrival = shown_for(&mut plain);
@@ -177,7 +185,7 @@ fn fighters_abandoned_in_a_jump_are_told_on_arrival() {
     assert_eq!(
         view.message(),
         Some(
-            "Jumping into the Alpha Centauri system on June 24, 1177 NC.  (Two fighters abandoned)"
+            "Jumping into the Alpha Centauri system on June 24th, 1177 NC.  (Two fighters abandoned)"
         )
     );
     assert_eq!(view.pilot().expect("flying").escorts(), []);
@@ -348,6 +356,28 @@ fn the_escort_menus_keys_beep_as_the_original_does() {
 }
 
 #[test]
+fn a_press_of_an_absent_class_keeps_the_menu_open_another_8_seconds_in_silence() {
+    let mut view = escorted();
+    tap(&mut view, MENU_KEY);
+    let rows = view.session().expect("flying").escort_menu();
+    let absent = (1..5)
+        .find(|&n| match EscortGroup::ALL[n] {
+            EscortGroup::All => false,
+            EscortGroup::Class(class) => !rows.iter().any(|row| row.class == class && row.present),
+        })
+        .expect("an absent class");
+    view.tick(Duration::from_secs(5));
+    view.take_sounds();
+    tap(&mut view, GROUP_KEYS[absent]);
+    assert_eq!(view.take_sounds(), [], "silent");
+    assert_eq!(view.escort_menu().group(), EscortGroup::All, "kept");
+    view.tick(Duration::from_secs(7));
+    assert!(view.escort_menu().is_open(), "12 s after it opened");
+    view.tick(Duration::from_secs(1) + TICK);
+    assert!(!view.escort_menu().is_open(), "8 s after the press");
+}
+
+#[test]
 fn a_click_in_the_open_escort_menu_over_a_ship_does_nothing() {
     let menu = Point::new(MENU_AT.x + MENU_WIDTH / 2.0, MENU_AT.y + MENU_HEIGHT / 2.0);
     let under = escorted().camera().screen_to_world(menu);
@@ -453,15 +483,51 @@ fn with_the_escort_menu_open_1_to_4_pick_groups_not_stellars() {
     let mut view = escorted();
     tap(&mut view, MENU_KEY);
     assert!(view.escort_menu().is_open());
-    tap(&mut view, Key::Char('2'));
+    tap_slot(&mut view, Key::Char('2'));
     assert_eq!(nav_target(&view), None, "the menu took it");
-    tap(&mut view, Key::Function(2));
+    tap_slot(&mut view, Key::Function(2));
     assert_eq!(nav_target(&view), Some(StellarId(129)), "F2 never does");
     tap(&mut view, MENU_CLOSE_KEY);
     assert!(!view.escort_menu().is_open());
-    tap(&mut view, Key::Char('1'));
+    tap_slot(&mut view, Key::Char('1'));
     assert_eq!(nav_target(&view), Some(StellarId(128)), "shut: a stellar");
     assert_eq!(view.escort_menu().group(), EscortGroup::All);
+}
+
+#[test]
+fn with_the_escort_menu_open_command_5_picks_freighters_not_a_stellar() {
+    let mut catalog = boardable();
+    for record in &mut catalog.ships {
+        if record.id == ShipId(130) {
+            record.escort_type = 3;
+            record.inherent_ai = 3;
+        }
+    }
+    let pilot = with_escorts(&Pilot::new(&catalog, "Freighted").expect("starts"), &[130]);
+    let (_, chance) = scripted(&placed(750, 650, 0));
+    let mut view = FlightView::with_pilot(catalog, pilot)
+        .with_chance(chance)
+        .with_behaviour(Rc::new(Still));
+    view.tick(TICK);
+    tap(&mut view, MENU_KEY);
+    assert!(view.escort_menu().is_open());
+    view.take_sounds();
+    command_tap(&mut view, NEAREST_STELLAR_COMMAND_KEY, false);
+    ticks(&mut view, 1);
+    assert_eq!(
+        view.escort_menu().group(),
+        EscortGroup::Class(EscortClass::Freighter)
+    );
+    assert_eq!(nav_target(&view), None, "no stellar");
+    assert_eq!(ui_sounds(&mut view), [UiSound::EscortGroupSelected]);
+    tap(&mut view, MENU_CLOSE_KEY);
+    command_tap(&mut view, NEAREST_STELLAR_COMMAND_KEY, false);
+    ticks(&mut view, 1);
+    let nearest = nav_target(&view);
+    assert!(nearest.is_some(), "shut: the nearest");
+    tap(&mut view, NAV_OFF_KEY);
+    tap_slot(&mut view, NEAREST_STELLAR_KEY);
+    assert_eq!(nav_target(&view), nearest, "as F5's");
 }
 
 #[test]
@@ -881,4 +947,55 @@ fn the_bars_news_is_drawn_through_the_session_on_the_flights_chance() {
     assert!(!broken.open_bar());
     assert_eq!(broken.news(), None);
     assert_eq!(broken.news_picture(), None);
+}
+
+// The escort dialog and leaving a shipyard.
+
+#[test]
+fn y_on_a_fleet_escort_opens_the_escort_dialog_once_and_its_presses_go_to_the_session() {
+    let mut view = escorted();
+    option(&mut view, TARGET_KEY);
+    assert_eq!(
+        view.session().expect("flying").target().map(|npc| npc.id),
+        Some(NpcId(1))
+    );
+    assert_eq!(view.take_escort_dialog(), None);
+    tap(&mut view, HAIL_KEY);
+    let opened = view.take_escort_dialog().expect("the escort dialog");
+    assert_eq!(opened.ship, ShipId(130));
+    assert_eq!(view.take_escort_dialog(), None, "once");
+    assert_eq!(view.take_hail(), None, "no comm dialog");
+    let marked = view
+        .press_escort(nova_sim::escort_dialog::EscortButton::Sell)
+        .expect("still open");
+    assert_eq!(marked.mark, Some(nova_sim::fleet::EscortMark::Sell));
+    assert_eq!(
+        view.press_escort(nova_sim::escort_dialog::EscortButton::Close),
+        None
+    );
+    assert_eq!(
+        view.press_escort(nova_sim::escort_dialog::EscortButton::Sell),
+        None,
+        "closed"
+    );
+}
+
+#[test]
+fn leaving_a_shipyard_settles_the_marks_through_the_session() {
+    let catalog = shipbuying();
+    let pilot = with_escorts(&Pilot::new(&catalog, "Seller").expect("starts"), &[129]);
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["escorts"][0]["mark"] = serde_json::json!("sell");
+    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut view = FlightView::with_pilot(catalog, pilot).with_behaviour(Rc::new(Still));
+    view.tick(TICK);
+    assert_eq!(view.land_escorts(), None, "in flight");
+    land_now(&mut view);
+    assert_eq!(
+        view.land_escorts().as_deref(),
+        Some("One escort was sold for a profit of 0 credit.")
+    );
+    assert_eq!(view.pilot().map(|pilot| pilot.escorts().len()), Some(0));
+    assert_eq!(view.land_escorts(), None, "nothing left");
 }

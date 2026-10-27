@@ -3,7 +3,7 @@
 //! - [`GameSettings`]: the sound settings ([`AudioSettings`]), whether
 //!   hyperspace jumps play their white fades, whether `dësc` movies play,
 //!   whether shots trail and smoke, whether ships show their weapon glow,
-//!   whether the game runs fullscreen, and how ([`FullscreenSetting`]),
+//!   whether the stars get their own parallax factors, whether the game runs fullscreen, and how ([`FullscreenSetting`]),
 //!   and the Scaling chosen ([`ScalingSetting`]).
 //! - [`SettingsKeeper`]: the rules. It reads the settings through a
 //!   [`SettingsStore`] (falling back to the defaults when there are none
@@ -14,11 +14,11 @@
 //!
 //! The file is JSON, with the keys `sound`, `music`, `effects_volume`,
 //! `music_volume`, `hyperspace_effects`, `quicktime_movies`,
-//! `smoke_trails`, `weapon_effects`, `show_map_borders`, `fullscreen`,
-//! `fullscreen_kind`, `frame_upscaler` and `nova_files`; files saved
-//! before the last nine existed load unchanged, with the hyperspace
-//! effects, the movies, the smoke trails, the weapon effects and the map's
-//! borders on, the game windowed and, when fullscreen, borderless, the
+//! `smoke_trails`, `weapon_effects`, `parallax_starfield`,
+//! `show_map_borders`, `fullscreen`, `fullscreen_kind`, `frame_upscaler`
+//! and `nova_files`; files saved before the last ten existed load
+//! unchanged, with the hyperspace effects, the movies, the smoke trails,
+//! the weapon effects, the parallax starfield and the map's borders on, the game windowed and, when fullscreen, borderless, the
 //! world drawn natively, and no `Nova Files` remembered.
 //!
 //! `smoke_trails` is true when trails are drawn, the Preferences box's
@@ -160,6 +160,9 @@ pub struct GameSettings {
     /// Whether ships show their weapon glow: the original's Weapon Effects
     /// preference.
     pub weapon_effects: bool,
+    /// Whether each scattering of the stars gives them their own parallax
+    /// factors: the original's Parallax Starfield preference.
+    pub parallax_starfield: bool,
     /// Whether the galaxy map shades government borders: the original's
     /// `ShowMapBorders`.
     pub map_borders: bool,
@@ -173,8 +176,8 @@ pub struct GameSettings {
 
 impl Default for GameSettings {
     /// The default sound settings, with the hyperspace effects, the
-    /// movies, the smoke trails, the weapon effects and the map's borders
-    /// on, in a window, the world drawn natively.
+    /// movies, the smoke trails, the weapon effects, the parallax
+    /// starfield and the map's borders on, in a window, the world drawn natively.
     fn default() -> Self {
         Self {
             audio: AudioSettings::default(),
@@ -184,6 +187,7 @@ impl Default for GameSettings {
             quicktime_movies: true,
             smoke_trails: true,
             weapon_effects: true,
+            parallax_starfield: true,
             map_borders: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
@@ -203,6 +207,7 @@ impl GameSettings {
             quicktime_movies: self.quicktime_movies,
             smoke_trails: self.smoke_trails,
             weapon_effects: self.weapon_effects,
+            parallax_starfield: self.parallax_starfield,
             fullscreen: self.fullscreen_kind.kind(),
             scaling: self.frame_upscaler.known().unwrap_or_default(),
         }
@@ -223,6 +228,7 @@ impl GameSettings {
             quicktime_movies: prefs.quicktime_movies,
             smoke_trails: prefs.smoke_trails,
             weapon_effects: prefs.weapon_effects,
+            parallax_starfield: prefs.parallax_starfield,
             ..self
         }
     }
@@ -246,6 +252,7 @@ struct Saved {
     quicktime_movies: bool,
     smoke_trails: bool,
     weapon_effects: bool,
+    parallax_starfield: bool,
     show_map_borders: bool,
     frame_upscaler: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -326,6 +333,7 @@ impl From<GameSettings> for Saved {
             quicktime_movies: settings.quicktime_movies,
             smoke_trails: settings.smoke_trails,
             weapon_effects: settings.weapon_effects,
+            parallax_starfield: settings.parallax_starfield,
             show_map_borders: settings.map_borders,
             frame_upscaler: settings.frame_upscaler.0,
             // A name that isn't UTF-8 can't be a JSON string: it is left
@@ -357,6 +365,7 @@ impl From<Saved> for GameSettings {
             quicktime_movies: saved.quicktime_movies,
             smoke_trails: saved.smoke_trails,
             weapon_effects: saved.weapon_effects,
+            parallax_starfield: saved.parallax_starfield,
             map_borders: saved.show_map_borders,
             frame_upscaler: ScalingSetting(saved.frame_upscaler),
             nova_files: saved.nova_files.map(PathBuf::from),
@@ -509,6 +518,7 @@ mod tests {
             map_borders: true,
             smoke_trails: true,
             weapon_effects: true,
+            parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
         }
@@ -531,6 +541,7 @@ mod tests {
                 map_borders: true,
                 smoke_trails: true,
                 weapon_effects: true,
+                parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
                 nova_files: None,
             }
@@ -603,6 +614,7 @@ mod tests {
                 map_borders: true,
                 smoke_trails: true,
                 weapon_effects: true,
+                parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
                 nova_files: None,
             }
@@ -630,6 +642,7 @@ mod tests {
                 map_borders: true,
                 smoke_trails: true,
                 weapon_effects: true,
+                parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
                 nova_files: None,
             }
@@ -918,6 +931,45 @@ mod tests {
             .expect("saves");
         assert_eq!(json(&store)["sound"], false, "the audio kept");
         assert_eq!(json(&store)["smoke_trails"], true);
+    }
+
+    #[test]
+    fn the_parallax_starfield_starts_on_and_a_file_without_it_has_it_on() {
+        assert!(GameSettings::default().parallax_starfield);
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"hyperspace_effects": false}"#));
+        assert_eq!(warning, None);
+        assert!(
+            keeper.settings().parallax_starfield,
+            "ParallaxStarfield's default, on"
+        );
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"parallax_starfield": false}"#));
+        assert_eq!(warning, None);
+        assert!(!keeper.settings().parallax_starfield);
+    }
+
+    #[test]
+    fn the_parallax_starfield_is_saved_with_the_rest_and_the_prefs_carry_it() {
+        let store = MemorySettings::holding(r#"{"smoke_trails": false}"#);
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        let settings = keeper.settings().with_prefs(Prefs {
+            parallax_starfield: false,
+            smoke_trails: false,
+            ..Prefs::default()
+        });
+        assert!(!settings.parallax_starfield);
+        assert!(!settings.prefs().parallax_starfield);
+        keeper.change(settings.clone()).expect("saves");
+        assert_eq!(json(&store)["parallax_starfield"], false);
+        assert_eq!(json(&store)["smoke_trails"], false, "the rest kept");
+        let (restarted, warning) = SettingsKeeper::open(store.clone());
+        assert_eq!((restarted.settings(), warning), (settings, None));
+        let on = restarted.settings().with_prefs(Prefs {
+            smoke_trails: false,
+            ..Prefs::default()
+        });
+        assert!(on.parallax_starfield && on.prefs().parallax_starfield);
     }
 
     #[test]
@@ -1233,6 +1285,7 @@ mod tests {
                 "quicktime_movies": true,
                 "smoke_trails": true,
                 "weapon_effects": true,
+                "parallax_starfield": true,
                 "show_map_borders": true,
                 "frame_upscaler": "native",
             })
@@ -1297,6 +1350,7 @@ mod tests {
                 map_borders: true,
                 smoke_trails: true,
                 weapon_effects: true,
+                parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
                 nova_files: None,
             })
@@ -1350,6 +1404,7 @@ mod tests {
                 quicktime_movies: true,
                 smoke_trails: true,
                 weapon_effects: true,
+                parallax_starfield: true,
                 fullscreen: FullscreenKind::Borderless,
                 scaling: Scaling::Native,
             }
@@ -1423,6 +1478,7 @@ mod tests {
             map_borders: true,
             smoke_trails: true,
             weapon_effects: true,
+            parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
         };

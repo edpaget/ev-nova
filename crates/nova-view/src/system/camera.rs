@@ -7,19 +7,27 @@
 //! one logical unit ([`WORLD_SCALE`]): distances and speeds read from the
 //! data need no conversion. y grows downwards, as on screen.
 //!
-//! The camera keeps the world point drawn at its view's centre, its
-//! anchor: (floor(view width / 2), view height / 2), [`VIEW_CENTER`] in
-//! Nova's own 1024 x 768 ([`VIEW_SIZE`]), and (682, 384) in flight widened
-//! to 1365 x 768 ([`Camera::centred_on_in`]):
+//! The camera keeps its world point drawn at its anchor, the screen point
+//! its [`Anchor`] picks:
+//!
+//! - [`Anchor::ViewCentre`], every camera's default: the view's centre,
+//!   (floor(view width / 2), view height / 2), [`VIEW_CENTER`] in Nova's
+//!   own 1024 x 768 ([`VIEW_SIZE`]), and (682, 384) widened to 1365 x 768
+//!   ([`Camera::centred_on_in`]). The system viewer draws from it.
+//! - [`Anchor::PlayAreaCentre`]: the centre of the play area left of the
+//!   status bar, (trunc((width − 194) / 2), trunc(height / 2)), (415, 384)
+//!   at 1024 x 768: `_screenCenter`, which `_SetupWind` sets
+//!   (@0x1b720-0x1b78a) and the original draws all of flight's world
+//!   from. Flight draws from it by
+//!   [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor)'s engine
+//!   reading, from the view's centre by the other.
+//!
+//! Either way:
 //!
 //! - `world_to_screen(p) = anchor + (p - center) x WORLD_SCALE`
 //! - `screen_to_world(s) = center + (s - anchor) / WORLD_SCALE`
-//!
-//! The original draws flight's world from `_screenCenter`, the centre of
-//! the play area left of the status bar (`_SetupWind` @0x1b720); ours
-//! keeps the view's centre, filed as
-//! rdm:phase/display-modes-fidelity/phase-1-ship-at-play-area-centre,
-//! which changes [`Camera::anchor`] alone.
+
+use nova_sim::RuleSource;
 
 use crate::Point;
 use crate::geometry::Bounds;
@@ -36,6 +44,49 @@ pub const CAMERA_SPEED: f32 = 960.0;
 /// How far past the system's outermost stellars the camera may go, in
 /// world units.
 pub const CAMERA_MARGIN: f32 = 1024.0;
+/// The status bar's width (0xc2): the stock bars'. `_SetupWind` takes it
+/// from the screen's to find the play area's centre (@0x1b720-0x1b78a);
+/// flight takes it for the play area's right edge, the strip at the right
+/// that takes no clicks, and the bar's width when its background cannot be
+/// read. The one definition, so the anchor and the play area agree.
+pub const STATUS_BAR_WIDTH: f32 = 194.0;
+
+/// The screen point a [`Camera`] draws its centre at.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Anchor {
+    /// The view's centre, (floor(width / 2), height / 2).
+    #[default]
+    ViewCentre,
+    /// The play area's centre left of the status bar, (trunc((width −
+    /// 194) × 0.5), trunc(height × 0.5)): the original's `_screenCenter`
+    /// (`_SetupWind` @0x1b720-0x1b78a, 0.5 at 0xdd128).
+    PlayAreaCentre,
+}
+
+impl Anchor {
+    /// The anchor flight draws from by `source`'s reading of
+    /// [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor): the
+    /// play area's centre by the original's, the view's by the other.
+    #[must_use]
+    pub fn in_flight(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::PlayAreaCentre,
+            RuleSource::Bible => Self::ViewCentre,
+        }
+    }
+
+    /// The anchor's screen point in a view `view` logical units in size.
+    #[must_use]
+    pub fn point(self, view: (f32, f32)) -> Point {
+        match self {
+            Self::ViewCentre => Point::new((view.0 / 2.0).floor(), view.1 / 2.0),
+            Self::PlayAreaCentre => Point::new(
+                ((view.0 - STATUS_BAR_WIDTH) * 0.5).trunc(),
+                (view.1 * 0.5).trunc(),
+            ),
+        }
+    }
+}
 
 /// What the system view shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,6 +97,8 @@ pub struct Camera {
     limits: Bounds,
     /// The view's size, in logical units.
     view: (f32, f32),
+    /// Where on the view `center` is drawn.
+    anchor: Anchor,
 }
 
 impl Camera {
@@ -57,6 +110,7 @@ impl Camera {
             center: Point::default(),
             limits,
             view: VIEW_SIZE,
+            anchor: Anchor::ViewCentre,
         }
     }
 
@@ -79,10 +133,17 @@ impl Camera {
                 max: center,
             },
             view,
+            anchor: Anchor::ViewCentre,
         }
     }
 
-    /// The world point at the view's centre.
+    /// The camera drawing its centre at `anchor` instead.
+    #[must_use]
+    pub fn with_anchor(self, anchor: Anchor) -> Self {
+        Self { anchor, ..self }
+    }
+
+    /// The world point drawn at the [`anchor`](Camera::anchor).
     #[must_use]
     pub fn center(&self) -> Point {
         self.center
@@ -94,11 +155,12 @@ impl Camera {
         self.view
     }
 
-    /// The screen point [`Camera::center`] is drawn at: (floor(width / 2),
-    /// height / 2), [`VIEW_CENTER`] in Nova's own view.
+    /// The screen point [`Camera::center`] is drawn at, as its [`Anchor`]
+    /// picks: by default (floor(width / 2), height / 2), [`VIEW_CENTER`]
+    /// in Nova's own view.
     #[must_use]
     pub fn anchor(&self) -> Point {
-        Point::new((self.view.0 / 2.0).floor(), self.view.1 / 2.0)
+        self.anchor.point(self.view)
     }
 
     /// Where the world point `p` is drawn.
@@ -264,6 +326,64 @@ mod tests {
         assert_eq!(Camera::centred_on(p).anchor(), VIEW_CENTER);
         assert_eq!(Camera::centred_on(p), Camera::centred_on_in(p, VIEW_SIZE));
         assert_eq!(sol().view_size(), VIEW_SIZE);
+    }
+
+    #[test]
+    fn the_play_area_anchor_is_the_screen_centre_left_of_the_status_bar() {
+        let p = at(-250.5, 1200.25);
+        for (view, anchor) in [
+            ((1024.0, 768.0), at(415.0, 384.0)),
+            ((1365.0, 768.0), at(585.0, 384.0)),
+            // 1367 − 194 = 1173: trunc(586.5).
+            ((1367.0, 768.0), at(586.0, 384.0)),
+            // An odd height: trunc(384.5).
+            ((1024.0, 769.0), at(415.0, 384.0)),
+        ] {
+            let camera = Camera::centred_on_in(p, view).with_anchor(Anchor::PlayAreaCentre);
+            assert_eq!(camera.anchor(), anchor, "{view:?}");
+            assert_eq!(Anchor::PlayAreaCentre.point(view), anchor, "{view:?}");
+            assert_eq!(camera.world_to_screen(p), anchor, "{view:?}");
+            assert_eq!(camera.screen_to_world(anchor), p, "{view:?}");
+            for s in [at(0.0, 0.0), at(view.0, view.1), at(100.5, 700.25)] {
+                let back = camera.world_to_screen(camera.screen_to_world(s));
+                assert!(close(back, s), "{s:?} came back as {back:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_view_centre_anchor_is_every_camera_s_default() {
+        let p = at(10.0, 20.0);
+        for view in [(1024.0, 768.0), (1365.0, 768.0), (1024.0, 769.0)] {
+            let camera = Camera::centred_on_in(p, view);
+            assert_eq!(camera.with_anchor(Anchor::ViewCentre), camera);
+            assert_eq!(camera.anchor(), Anchor::ViewCentre.point(view));
+        }
+        assert_eq!(
+            Anchor::ViewCentre.point((1024.0, 769.0)),
+            at(512.0, 384.5),
+            "as before: half the height, untruncated"
+        );
+        assert_eq!(sol().with_anchor(Anchor::ViewCentre), sol());
+    }
+
+    #[test]
+    fn flight_takes_the_play_area_anchor_by_the_original_and_the_view_centre_otherwise() {
+        assert_eq!(
+            Anchor::in_flight(RuleSource::Engine),
+            Anchor::PlayAreaCentre
+        );
+        assert_eq!(Anchor::in_flight(RuleSource::Bible), Anchor::ViewCentre);
+    }
+
+    #[test]
+    fn a_play_area_anchored_camera_moves_and_draws_as_a_centred_one_does() {
+        let mut camera = sol().with_anchor(Anchor::PlayAreaCentre);
+        camera.move_by(250.0, -120.0);
+        assert_eq!(camera.center(), at(250.0, -120.0));
+        assert_eq!(camera.world_to_screen(at(250.0, -120.0)), at(415.0, 384.0));
+        assert_eq!(camera.world_to_screen(at(350.0, -100.0)), at(515.0, 404.0));
+        assert_eq!(camera.view_size(), VIEW_SIZE);
     }
 
     #[test]

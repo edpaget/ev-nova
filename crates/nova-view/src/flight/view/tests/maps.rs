@@ -619,7 +619,7 @@ fn l_twice_at_a_wormhole_passes_through_it_with_a_flash() {
     assert_eq!(player(&view).position, Vec2::new(-300.0, 40.0));
     assert_eq!(
         view.message(),
-        Some("Passing through a wormhole into the Alpha Centauri system on June 23, 1177 NC.")
+        Some("Passing through a wormhole into the Alpha Centauri system on June 23rd, 1177 NC.")
     );
     assert_eq!(
         view.jump_effect().map(JumpEffect::phase),
@@ -632,7 +632,7 @@ fn l_twice_at_a_wormhole_passes_through_it_with_a_flash() {
         Some(JumpPhase::Flash(0.0)),
         "whatever the preference"
     );
-    let passed = "Passing through a wormhole into the Alpha Centauri system on June 23, 1177 NC.";
+    let passed = "Passing through a wormhole into the Alpha Centauri system on June 23rd, 1177 NC.";
     assert_lasts(&mut plain, passed, 240);
 }
 
@@ -643,7 +643,7 @@ fn coming_out_of_a_hypergate_says_so_for_360_ticks() {
     let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     tap(&mut view, MAP);
-    let exited = "Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC.";
+    let exited = "Exiting hypergate in the Alpha Centauri system on June 23rd, 1177 NC.";
     assert_lasts(&mut view, exited, 360);
 }
 
@@ -725,8 +725,8 @@ fn an_attacker_following_through_a_wormhole_is_not_drawn_while_it_emerges_but_is
     assert_eq!(
         sprites(&list),
         [
-            (ImageKey::sprite(1140, 0), at(812.0, 344.0)),
-            (ImageKey::sprite(2000, 0), VIEW_CENTER),
+            (ImageKey::sprite(1140, 0), at(715.0, 344.0)),
+            (ImageKey::sprite(2000, 0), PLAYER_AT),
         ],
         "Proxima and the player, not the ship emerging"
     );
@@ -919,35 +919,28 @@ fn a_disabled_ship_draws_under_the_escorts() {
 }
 
 #[test]
-fn cloak_alpha_maps_each_shown_state_to_a_tint_alpha() {
-    assert_eq!(cloak_alpha(CloakShown::Opaque), Some(255));
-    assert_eq!(cloak_alpha(CloakShown::Translucent(0x1e)), Some(135));
-    assert_eq!(cloak_alpha(CloakShown::Translucent(0)), Some(255));
-    assert_eq!(
-        cloak_alpha(CloakShown::Translucent(0x20)),
-        Some(128),
-        "127.5, rounded to nearest"
-    );
-    assert_eq!(cloak_alpha(CloakShown::Hidden), None);
-}
-
-#[test]
-fn a_fully_cloaked_escort_is_drawn_at_its_translucent_alpha() {
+fn a_fully_cloaked_escort_is_drawn_at_its_full_fades_translucency() {
     let (mut view, ships) = escorted_on_a_mission();
     let session = view.session.as_mut().expect("flying");
     nova_sim::fixture::cloak(session, ships.mission, CLOAKED);
     let list = drawn(&view);
     let at = npc_on_screen(&view, ships.mission);
-    let tint = list.iter().find_map(|command| match *command {
+    let hull = list.iter().find_map(|command| match *command {
         DrawCommand::Sprite {
             image,
             center,
             tint,
-            ..
-        } if image.id == 2001 && center == at => Some(tint),
+            blend,
+        } if image.id == 2001 && center == at => Some((tint, blend)),
         _ => None,
     });
-    assert_eq!(tint.map(|tint| tint.a), Some(135));
+    assert_eq!(
+        hull,
+        Some((
+            crate::draw::translucent_tint(4, 30),
+            crate::draw::Blend::OrTranslucent
+        ))
+    );
 }
 
 // The floating map.
@@ -958,7 +951,7 @@ const FRAME_CENTRE: Point = Point::new(686.0, 278.0);
 /// stellar 128.
 const FRAME_MISS: Point = Point::new(700.0, 300.0);
 /// Where [`with_sites`] puts stellar 129, outside the frame.
-const OUTSIDE_FRAME: Point = Point::new(512.0, 284.0);
+const OUTSIDE_FRAME: Point = Point::new(415.0, 284.0);
 
 /// [`near`]'s flight with Sol's stellars 128 under [`FRAME_MISS`] and
 /// 129 under [`OUTSIDE_FRAME`], as the camera starts.
@@ -966,12 +959,12 @@ fn with_sites() -> View {
     let view = FlightView::new(FakeCatalog {
         near: true,
         sites: vec![
-            site(128, (188.0, -84.0), StellarFlags::CAN_LAND),
+            site(128, (285.0, -84.0), StellarFlags::CAN_LAND),
             site(129, (0.0, -100.0), StellarFlags::CAN_LAND),
         ],
         ..catalog()
     });
-    assert_eq!(on_screen(&view, (188.0, -84.0)), FRAME_MISS);
+    assert_eq!(on_screen(&view, (285.0, -84.0)), FRAME_MISS);
     assert_eq!(on_screen(&view, (0.0, -100.0)), OUTSIDE_FRAME);
     view
 }
@@ -1426,6 +1419,22 @@ fn a_zoom_key_does_nothing_while_another_key_is_held() {
         tap(&mut view, ZOOM_OUT_KEY);
         assert_eq!(floating_dots(&view)[1], near_at(4.0 / 3.0), "{k:?} let go");
     }
+}
+
+#[test]
+fn a_zoom_key_does_nothing_while_b_is_held() {
+    // B's `_QuickKeyCheck` (@0x6a98b) sets `_quickKeyCheckResult`, which
+    // the zoom reads (@0x70f5d).
+    let mut view = near();
+    tap(&mut view, HYPERSPACE_MODE_KEY);
+    view.input(&key(BOARD_KEY, true));
+    view.take_sounds();
+    tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0));
+    assert_eq!(view.take_sounds(), []);
+    view.input(&key(BOARD_KEY, false));
+    tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(floating_dots(&view)[1], near_at(4.0 / 3.0), "let go");
 }
 
 #[test]
@@ -2250,4 +2259,58 @@ fn a_shift_click_writing_a_hop_enables_clear_route() {
     shift_click(&mut view, alpha);
     assert!(clear_route_enabled(&view));
     assert_eq!(view.course_map().route(), [SystemId(131)], "shown");
+}
+
+/// Whether a zoom key's press zooms the floating map, shown by H, with
+/// `k` held and the escort menu opened first when `menu`.
+fn zooms_holding(mut view: View, k: Key, menu: bool) -> bool {
+    tap(&mut view, HYPERSPACE_MODE_KEY);
+    if menu {
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+    }
+    view.input(&key(k, true));
+    let zoom = view.floating.zoom();
+    tap(&mut view, ZOOM_OUT_KEY);
+    view.floating.zoom() != zoom
+}
+
+#[test]
+fn a_slot_key_held_holds_the_zoom_back_while_the_original_polls_it() {
+    for k in [
+        STELLAR_SLOT_KEYS[1][0],
+        STELLAR_SLOT_KEYS[2][1],
+        NEAREST_STELLAR_KEY,
+    ] {
+        assert!(!zooms_holding(near(), k, false), "{k:?}");
+    }
+    assert!(
+        zooms_holding(near(), NEAREST_STELLAR_COMMAND_KEY, false),
+        "5 without Command is not polled"
+    );
+    assert!(
+        !zooms_holding(escorted(), STELLAR_SLOT_KEYS[1][0], true),
+        "the escort loop polls 2 with the menu open"
+    );
+    assert!(
+        !zooms_holding(escorted(), NEAREST_STELLAR_COMMAND_KEY, true),
+        "and 5"
+    );
+    assert!(
+        zooms_holding(escorted(), NEAREST_STELLAR_COMMAND_KEY, false),
+        "5 with the menu shut"
+    );
+}
+
+#[test]
+fn a_slot_key_held_during_a_jump_does_not_hold_the_zoom_back() {
+    for mut view in through_a_jump(near) {
+        let stage = stage(&view);
+        view.input(&key(HYPER_SELECT_KEY, true));
+        view.tick(TICK);
+        view.input(&key(HYPER_SELECT_KEY, false));
+        view.input(&key(STELLAR_SLOT_KEYS[2][1], true));
+        tap(&mut view, ZOOM_OUT_KEY);
+        assert_eq!(view.floating.zoom(), 4, "{stage}: F3 is not polled");
+    }
 }

@@ -8,8 +8,9 @@
 //! - **It flies at full thrust along its heading** ([`controls`]):
 //!   `_AIDispatch` sets its thrust to `_ShipAccelRate` (+0x30), its top
 //!   speed to `_ShipMaxSpeed` (+0x34) and the heading it steers to to its
-//!   own, truncated (+0x68 = `trunc(+0x44)`), so it never turns by more
-//!   than the fraction of a degree. It flies by the same flight step as
+//!   own, truncated (+0x68 = `trunc(+0x44)`), so `_HandleShip` puts it on
+//!   its whole degree, but while its wait (+0x4c) runs, which skips the
+//!   turn (@0x3443f-0x34446). It flies by the same flight step as
 //!   every NPC, so the thrust divisor, the per-axis caps and an
 //!   inertialess hull's flight all apply.
 //! - **It counts its wait down and leaves silently** ([`count_down`]): on
@@ -36,11 +37,10 @@
 //! fight's countdowns (`plunder::count_down`, `board_wait::count_down`)
 //! read.
 
-use super::autopilot::{Outcome, steer};
+use super::autopilot::Outcome;
 use super::npc::{Mode, Npc, NpcId};
 use crate::combat::hull::ESCAPE_POD_SHIP;
-use crate::flight::Controls;
-use crate::handling::Handling;
+use crate::flight::{self, Controls};
 
 /// Whether `npc` is an escape pod, of class [`ESCAPE_POD_SHIP`].
 #[must_use]
@@ -48,14 +48,17 @@ pub fn is_pod(npc: &Npc) -> bool {
     npc.ship == ESCAPE_POD_SHIP
 }
 
-/// The controls a pod flies by: full thrust, steering to its own heading
-/// truncated to the whole degree.
-#[must_use]
-pub fn controls(npc: &Npc, handling: &Handling) -> Controls {
-    let heading = npc.state.heading;
+/// The controls `npc`, a pod, flies by: full thrust, its heading put on
+/// its own whole degree, the +0x68 `_AIDispatch` writes, as `_HandleShip`
+/// turns it ([`flight::turn_to_own`]); while its wait runs
+/// ([`Mode::Adrift`] above none, +0x4c > 0) the turn is skipped
+/// (@0x3443f-0x34446), as a pod is never in a count wait.
+pub fn controls(npc: &mut Npc) -> Controls {
+    if !matches!(npc.mode, Mode::Adrift { ticks_left } if ticks_left > 0) {
+        flight::turn_to_own(&mut npc.state);
+    }
     Controls {
         thrust: true,
-        turn: steer(heading, heading.trunc(), handling),
         ..Controls::default()
     }
 }
@@ -179,14 +182,21 @@ mod tests {
     }
 
     #[test]
-    fn a_pods_heading_never_turns_past_its_whole_degree() {
+    fn a_pods_heading_holds_while_its_wait_runs_and_then_is_put_on_its_whole_degree() {
+        // `_HandleShip` skips its turn while +0x4c is above 0
+        // (@0x3443f-0x34446), and the pod's wait counts down before it
+        // flies.
         let behaviour = Recording::default();
         for heading in [0.0, 45.0, 45.5, 359.9] {
             let mut traffic = holding(vec![pod(heading, Mode::Adrift { ticks_left: 5 })]);
-            for _ in 0..5 {
+            for _ in 0..4 {
                 tick(&mut traffic, &behaviour);
                 assert_eq!(traffic.npcs()[0].state.heading, heading);
             }
+            tick(&mut traffic, &behaviour);
+            let pod = &traffic.npcs()[0];
+            assert_eq!(pod.mode, Mode::Adrift { ticks_left: 0 });
+            assert_eq!(pod.state.heading, heading.trunc(), "{heading}");
         }
     }
 
@@ -221,16 +231,20 @@ mod tests {
     }
 
     #[test]
-    fn a_pods_controls_are_full_thrust_to_its_whole_heading() {
-        let handling = Handling {
-            turn_rate: 0.4,
-            ..Handling::default()
+    fn a_pods_controls_are_full_thrust_its_heading_put_on_its_whole_degree_with_no_wait() {
+        let full = Controls {
+            thrust: true,
+            ..Controls::default()
         };
-        let controls = controls(&pod(45.9, Mode::Flying), &handling);
-        assert!(controls.thrust);
-        assert_eq!(controls.turn, crate::flight::Turn::Left, "back to 45°");
-        let none = super::controls(&pod(45.0, Mode::Flying), &handling);
-        assert_eq!(none.turn, crate::flight::Turn::None);
+        for mode in [Mode::Flying, Mode::Adrift { ticks_left: 0 }] {
+            let mut flying = pod(45.9, mode);
+            assert_eq!(controls(&mut flying), full, "{mode:?}");
+            assert_eq!(flying.state.heading, 45.0, "{mode:?}");
+        }
+        // While its wait runs, its turn is skipped.
+        let mut waiting = pod(45.9, Mode::Adrift { ticks_left: 3 });
+        assert_eq!(controls(&mut waiting), full);
+        assert_eq!(waiting.state.heading, 45.9);
         assert!(!is_pod(&npc(0, ShipStats::default())));
     }
 }

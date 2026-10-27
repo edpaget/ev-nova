@@ -558,11 +558,13 @@ pub fn threat_score_to(
 
 /// How strongly `escort` takes the player for a threat to its NPC `lead`
 /// among `around` (`_IsShipANearbyThreatToParent` with slot 0 the
-/// candidate): none with no player in the system, a disabled one, one the
+/// candidate): none with no player in the system, one the escort doesn't
+/// see ([`Surroundings::sees`], @0x8370e, tested before the disabled test),
+/// a disabled one, one the
 /// lead's government blesses with peace, or one the lead doesn't threaten
 /// by the narrow `_IsThreatToPlayer(lead)` (`_ExtendedIsThreatToShip`
-/// @0x81a89-0x81a9c, [`Npc::threatens_player_among`]). The player is
-/// always seen. The score is `scored`'s, the class the player's
+/// @0x81a89-0x81a9c, [`Npc::threatens_player_among`]). The
+/// score is `scored`'s, the class the player's
 /// ([`PlayerSide::class`](crate::ai::PlayerSide::class)).
 #[must_use]
 pub fn player_threat_score(
@@ -572,7 +574,8 @@ pub fn player_threat_score(
     radius: Option<f32>,
 ) -> Option<f32> {
     let player = around.player?;
-    if player.condition != Condition::Intact
+    if !around.sees(escort, ShipRef::Player)
+        || player.condition != Condition::Intact
         || around.blessed(lead.govt)
         || !lead.threatens_player_among(around.npcs)
     {
@@ -1540,6 +1543,24 @@ mod tests {
         assert_eq!(
             nearest_threat(&escort, Parent::Npc(&lead), &around, None),
             Some(ShipRef::Npc(NpcId(2)))
+        );
+    }
+
+    #[test]
+    fn an_npc_escort_takes_no_cloaked_player_it_cannot_see_for_a_threat_to_its_lead() {
+        // `_ShipVisibleToShip(player, escort)` @0x8370e, before `_IsDisabled`.
+        let mut lead = lead_at(0.0, 0.0);
+        lead.goal = crate::ai::Goal::Attack(ShipRef::Player);
+        let escort = led(1, 0.0, 0.0);
+        let npcs = [escort.clone(), lead.clone()];
+        let cloaked = with_player(&npcs, (0.0, 150.0), |player| {
+            *player = crate::ai::fixture::cloaked_player(*player);
+        });
+        assert_eq!(player_threat_score(&escort, &lead, &cloaked, None), None);
+        let scanning = crate::ai::fixture::scanning(escort);
+        assert!(
+            player_threat_score(&scanning, &lead, &cloaked, None).is_some(),
+            "scanned within 200"
         );
     }
 

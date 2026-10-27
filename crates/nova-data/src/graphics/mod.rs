@@ -122,6 +122,6 @@ pub use mask::apply_mask;
 pub use pattern::{PPAT, decode_ppat};
 pub use pict::{PICT, decode_pict};
 pub use pict_sheet::{SheetMask, cut_pict_sheet};
-pub use rled::{RLED, decode_rled, decode_rled_as};
+pub use rled::{RLED, RledInfo, decode_rled, decode_rled_as, scan_rled};
 pub use rled8::EightBitReading;
 pub use sheet::{SheetLayout, SpriteSheet};

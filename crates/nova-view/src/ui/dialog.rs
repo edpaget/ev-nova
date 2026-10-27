@@ -10,7 +10,7 @@
 use std::rc::Rc;
 
 use crate::color::Color;
-use crate::draw::DrawList;
+use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -145,6 +145,9 @@ pub enum Role {
         size: f32,
         /// Its colour.
         color: Color,
+        /// A filled box drawn under it, with its text inset, or `None` for
+        /// text straight on whatever is below.
+        backing: Option<TextBacking>,
     },
     /// Not there at all: not drawn, not hit-tested and never focused, as
     /// if it were outside the dialog. Any kind of item can be hidden.
@@ -152,6 +155,29 @@ pub enum Role {
     /// Shown greyed and never activated: a button draws disabled. Any
     /// kind of item can be greyed.
     Greyed,
+}
+
+/// A filled box under a scrolling text: the box the original paints or
+/// inverts behind a dialog's text item, white text on black.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextBacking {
+    /// The box's colour.
+    pub fill: Color,
+    /// How far inside the item the box is, on every side.
+    pub fill_inset: f32,
+    /// How far inside the item the text is set: across, then down, on
+    /// both sides of each axis, as `InsetRect` takes them.
+    pub text_inset: (f32, f32),
+}
+
+impl TextBacking {
+    /// A black box filling the whole item, the text set over all of it:
+    /// `TETextBox` black on white, then `InvertRect` over the item.
+    pub const BLACK_BOX: Self = Self {
+        fill: Color::BLACK,
+        fill_inset: 0.0,
+        text_inset: (0.0, 0.0),
+    };
 }
 
 /// A dialog's frame: three pictures stacked top to bottom over its bounds,
@@ -181,10 +207,12 @@ pub enum DialogEvent {
 #[derive(Clone, Debug, PartialEq)]
 enum Widget {
     Button(Button),
-    /// Wrapped text; it scrolls when `scrolls`.
+    /// Wrapped text; it scrolls when `scrolls`, over a box filled in a
+    /// colour when `fill` holds one.
     Text {
         text: ScrollText,
         scrolls: bool,
+        fill: Option<(Bounds, Color)>,
     },
     /// Laid out and hit-tested, but not drawn.
     Blank,
@@ -431,6 +459,7 @@ impl Dialog {
             Widget::Text {
                 text,
                 scrolls: true,
+                ..
             } => Some(text),
             _ => None,
         })
@@ -456,7 +485,10 @@ impl Dialog {
     /// - Return activates the default item, and Escape the cancel item.
     /// - Tab moves the focus to the next enabled button, and Space
     ///   activates the focused one.
-    /// - Up and Down, repeats included, scroll the scrolling text.
+    /// - Up and Down, repeats included, scroll the first scrolling text.
+    /// - A wheel or trackpad scroll inside the dialog scrolls the scrolling
+    ///   text under the pointer, if any; static text ignores it, and a
+    ///   click in progress stays armed.
     ///
     /// Key repeats never activate anything.
     pub fn input(&mut self, input: &Input) -> Option<DialogEvent> {
@@ -466,6 +498,19 @@ impl Dialog {
                 pressed: true,
                 repeat,
             } => self.key(key, repeat),
+            Input::Scroll { at, .. } => {
+                if self.bounds.contains(at) {
+                    self.items.iter_mut().any(|item| match &mut item.widget {
+                        Widget::Text {
+                            text,
+                            scrolls: true,
+                            ..
+                        } => text.input(input),
+                        _ => false,
+                    });
+                }
+                None
+            }
             Input::Key { .. } | Input::Text(_) | Input::PointerLeft => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
@@ -481,6 +526,7 @@ impl Dialog {
                         Widget::Text {
                             text,
                             scrolls: true,
+                            ..
                         } => Some(text),
                         _ => None,
                     });
@@ -589,7 +635,12 @@ impl Dialog {
                         outline(list, item.bounds, self.style.up);
                     }
                 }
-                Widget::Text { text, .. } => text.draw(list),
+                Widget::Text { text, fill, .. } => {
+                    if let Some((area, color)) = fill {
+                        fill_rect(list, *area, *color);
+                    }
+                    text.draw(list);
+                }
                 Widget::Blank => {}
             }
         }
@@ -623,6 +674,7 @@ fn widget(
                 metrics,
             ),
             scrolls: false,
+            fill: None,
         },
         (ItemSpec::User, Some(Role::Button(label))) => button(label),
         (
@@ -632,11 +684,22 @@ fn widget(
                 font,
                 size,
                 color,
+                backing,
             }),
-        ) => Widget::Text {
-            text: ScrollText::new(text, *font, *size, *color, bounds, metrics),
-            scrolls: true,
-        },
+        ) => {
+            let (text_rect, fill) = match backing {
+                None => (bounds, None),
+                Some(backing) => (
+                    bounds.inset(backing.text_inset.0, backing.text_inset.1),
+                    Some((bounds.grown(-backing.fill_inset), backing.fill)),
+                ),
+            };
+            Widget::Text {
+                text: ScrollText::new(text, *font, *size, *color, text_rect, metrics),
+                scrolls: true,
+                fill,
+            }
+        }
         _ => Widget::Blank,
     }
 }
@@ -659,8 +722,8 @@ pub(crate) fn outline(list: &mut DrawList, rect: Bounds, color: Color) {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::draw::{DrawCommand, fill_command};
+    use crate::input::{MouseButton, ScrollDelta};
     use crate::text::fixture::MonoMetrics;
 
     fn at(x: f32, y: f32) -> Point {
@@ -1247,6 +1310,7 @@ mod tests {
                     font: Font::Geneva,
                     size: 10.0,
                     color: Color::WHITE,
+                    backing: None,
                 },
             ),
         ]
@@ -1321,6 +1385,98 @@ mod tests {
         assert_eq!(dialog.scroll_text().expect("text").first(), 1);
     }
 
+    fn wheel(at: Point) -> Input {
+        Input::Scroll {
+            delta: ScrollDelta::Lines(1.0),
+            at,
+        }
+    }
+
+    /// `desc_like` with item 4 a second scrolling text, at `x`.
+    fn two_texts(x: f32) -> Dialog {
+        let mut template = desc_like();
+        template.items[3].bounds = rect(x, 10.0, 23.0, 23.0);
+        let mut roles = desc_roles("l0\rl1\rl2\rl3\rl4");
+        roles.push((
+            4,
+            Role::ScrollText {
+                text: "m0\rm1\rm2".into(),
+                font: Font::Geneva,
+                size: 10.0,
+                color: Color::WHITE,
+                backing: None,
+            },
+        ));
+        dialog(&template, &roles)
+    }
+
+    fn first(dialog: &Dialog, item: usize) -> usize {
+        dialog.text(item).expect("text").first()
+    }
+
+    #[test]
+    fn a_wheel_over_the_scrolling_text_scrolls_it() {
+        let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
+        assert_eq!(dialog.input(&wheel(at(20.0, 20.0))), None);
+        assert_eq!(first(&dialog, 3), 1);
+    }
+
+    #[test]
+    fn a_wheel_over_a_button_or_outside_the_dialog_does_nothing() {
+        let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
+        for point in [at(150.0, 80.0), at(300.0, 300.0)] {
+            assert_eq!(dialog.input(&wheel(point)), None, "{point:?}");
+        }
+        assert_eq!(first(&dialog, 3), 0);
+    }
+
+    #[test]
+    fn a_wheel_over_static_text_does_nothing() {
+        let mut template = yes_no();
+        template.items[2].kind = ItemSpec::StaticText("a b c d e f g h i j k l m".repeat(20));
+        let mut dialog = dialog(&template, &[]);
+        let before = drawn(&dialog);
+        let over = at(YES_NO.x + 60.0, YES_NO.y + 10.0);
+        assert_eq!(dialog.input(&wheel(over)), None);
+        assert_eq!(drawn(&dialog), before);
+    }
+
+    #[test]
+    fn a_wheel_scrolls_only_the_text_under_the_pointer() {
+        let mut dialog = two_texts(150.0);
+        dialog.input(&wheel(at(160.0, 20.0)));
+        assert_eq!((first(&dialog, 3), first(&dialog, 4)), (0, 1));
+        dialog.input(&wheel(at(20.0, 20.0)));
+        assert_eq!((first(&dialog, 3), first(&dialog, 4)), (1, 1));
+        dialog.input(&key(Key::Down));
+        assert_eq!(
+            (first(&dialog, 3), first(&dialog, 4)),
+            (2, 1),
+            "the arrow keys drive the first"
+        );
+    }
+
+    #[test]
+    fn a_wheel_over_a_text_but_outside_the_dialog_does_nothing() {
+        // Item 4 straddles the dialog's right edge, at 200.
+        let mut dialog = two_texts(190.0);
+        assert!(dialog.item_shown(4));
+        dialog.input(&wheel(at(205.0, 20.0)));
+        assert_eq!(first(&dialog, 4), 0);
+        dialog.input(&wheel(at(195.0, 20.0)));
+        assert_eq!(first(&dialog, 4), 1);
+    }
+
+    #[test]
+    fn a_wheel_during_a_click_leaves_it_armed() {
+        let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
+        let button = at(150.0, 80.0);
+        assert_eq!(dialog.input(&press(button)), None);
+        dialog.input(&wheel(at(20.0, 20.0)));
+        assert_eq!(first(&dialog, 3), 1);
+        assert_eq!(dialog.input(&release(button)), Some(DialogEvent::Item(1)));
+    }
+
     #[test]
     fn static_text_does_not_scroll() {
         let mut template = yes_no();
@@ -1330,6 +1486,99 @@ mod tests {
         let before = drawn(&dialog);
         dialog.input(&key(Key::Down));
         assert_eq!(drawn(&dialog), before);
+    }
+
+    /// `desc_like`'s roles, its text item (3) backed by `backing`.
+    fn backed_roles(text: &str, backing: TextBacking) -> Vec<(usize, Role)> {
+        let mut roles = desc_roles(text);
+        if let Role::ScrollText { backing: slot, .. } = &mut roles[1].1 {
+            *slot = Some(backing);
+        }
+        roles
+    }
+
+    /// A box filled red, inset 1, its text inset (5, 3).
+    const INSET: TextBacking = TextBacking {
+        fill: Color::rgba(255, 0, 0, 255),
+        fill_inset: 1.0,
+        text_inset: (5.0, 3.0),
+    };
+
+    #[test]
+    fn a_backed_text_fills_its_box_before_its_text_runs() {
+        let dialog = dialog(
+            &desc_like(),
+            &backed_roles("l0\rl1", TextBacking::BLACK_BOX),
+        );
+        let commands = drawn(&dialog);
+        // The button's three pictures and label, the fill, then the lines.
+        assert_eq!(
+            commands[4],
+            fill_command(rect(10.0, 10.0, 40.0, 36.0), Color::BLACK)
+        );
+        assert!(
+            matches!(&commands[5], DrawCommand::Text { text, .. } if text == "l0"),
+            "{commands:#?}"
+        );
+        assert_eq!(commands.len(), 7);
+    }
+
+    #[test]
+    fn a_backed_text_is_wrapped_and_placed_in_its_inset_box() {
+        // Item 3 is 40 x 36 at (10, 10): inset (5, 3) it is 30 x 30 at
+        // (15, 13), 6 Geneva-10 characters a line and 2 lines of 12.
+        let mut dialog = dialog(&desc_like(), &backed_roles("abcdef gh\rl1\rl2", INSET));
+        let commands = drawn(&dialog);
+        assert_eq!(
+            commands[4],
+            fill_command(rect(11.0, 11.0, 38.0, 34.0), INSET.fill)
+        );
+        assert!(
+            matches!(
+                &commands[5],
+                DrawCommand::Text { text, origin, .. }
+                    if text == "abcdef" && *origin == at(15.0, 13.0)
+            ),
+            "{commands:#?}"
+        );
+        let text = dialog.text(3).expect("text");
+        assert_eq!((text.visible(), text.lines().len()), (2, 4));
+        dialog.set_text(3, "abcdefg");
+        let text = dialog.text(3).expect("text");
+        assert_eq!(
+            text.rect(),
+            rect(15.0, 13.0, 30.0, 30.0),
+            "kept on set_text"
+        );
+        assert_eq!(text.lines(), ["abcdef", "g"]);
+    }
+
+    #[test]
+    fn an_unbacked_text_draws_no_fill() {
+        let dialog = dialog(&desc_like(), &desc_roles("l0"));
+        assert!(
+            !drawn(&dialog)
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Line { .. })),
+        );
+    }
+
+    #[test]
+    fn a_backed_text_outside_the_dialog_draws_nothing() {
+        let mut template = desc_like();
+        template.items[2].bounds = rect(10.0, 150.0, 40.0, 36.0);
+        let dialog = dialog(&template, &backed_roles("l0", TextBacking::BLACK_BOX));
+        // Only the button's pictures and label.
+        assert_eq!(drawn(&dialog).len(), 4);
+    }
+
+    #[test]
+    fn up_and_down_still_scroll_a_backed_text() {
+        let mut dialog = dialog(&desc_like(), &backed_roles("l0\rl1\rl2\rl3\rl4", INSET));
+        dialog.input(&key(Key::Down));
+        assert_eq!(dialog.text(3).expect("text").first(), 1);
+        dialog.input(&key(Key::Up));
+        assert_eq!(dialog.text(3).expect("text").first(), 0);
     }
 
     #[test]

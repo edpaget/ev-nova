@@ -11,7 +11,9 @@ pub enum SimSound {
     /// The ship stopped thrusting: the player let go, or it landed or
     /// began a jump.
     ThrustStopped,
-    /// The ship landed. The stellar's own sound is its spaceport's
+    /// The ship landed at an uninhabited stellar: `_PlayerLandOnStellar`'s
+    /// `_beepSnd[1]`, `snd ` 151 (@0x632be-0x632ef). An inhabited
+    /// stellar's touchdown is silent. The stellar's own sound is its spaceport's
     /// ambient sound, which the spaceport plays once it is frontmost, not
     /// at touchdown (`_DoPortDialog` @0x5fa50, `_PortFilter` @0x4f041).
     Landed,
@@ -55,6 +57,18 @@ pub enum SimSound {
     /// (`_HandlePlayer` @0x68cdd-0x68cff; see
     /// `nova_sim::red_alert`).
     RedAlert,
+    /// The player's ship began to cloak: `cloakSnd[1]`, `snd ` 381
+    /// (`_DoShipCloak` @0xdec0-0xdef3, at priority 8). It plays only for
+    /// the player (+0x86 0) and only when the fade was not already going
+    /// in (`jg` @0xded2): no NPC's cloak ever sounds. The cloak key raises
+    /// it (see `nova_sim_combat::player_cloak`).
+    Cloaked,
+    /// The player's ship began to uncloak: `cloakSnd[0]`, `snd ` 380
+    /// (`_DoShipUncloak` @0xdf9e-0xdfd0, at priority 8). It plays only for
+    /// the player, cloaked, and only when the fade was not already going
+    /// out (`js` @0xdfb0). The cloak key, the upkeep's uncloak and a
+    /// direct hit's decloak raise it (see `nova_sim_combat::player_cloak`).
+    Uncloaked,
     /// A `Q` set operator's message is shown in flight.
     ScriptMessage,
     /// Cargo was jettisoned in flight: `_beepSnd[4]`, `snd ` 154
@@ -131,6 +145,13 @@ pub enum SimSound {
     /// dialog: `_beepSnd[4]`, `snd ` 154 (`_HandlePlayerCommunication`
     /// @0x62232-0x6223d).
     HailOffer,
+    /// The escort dialog opened for a fleet escort hailed: `_beepSnd[4]`,
+    /// `snd ` 154, at priority 1 (`_DoEscortDialog` @0x95228-0x9524b).
+    EscortDialogOpened,
+    /// The escort dialog closed, by any button, Release's included:
+    /// `_beepSnd[2]`, `snd ` 152, at priority 1 (`_DoEscortDialog`
+    /// @0x955d9-0x955fc).
+    EscortDialogClosed,
     /// A person's hail quote was said in flight, by its own filters
     /// (`_HandleShip` @0x33f9e) or as it turned on the player
     /// (`_AIMakeShipAttackPlayer` @0x89ce1): `_beepSnd[4]`, `snd ` 154
@@ -194,6 +215,16 @@ pub enum SimSound {
     /// @0x6a585): `_beepSnd[0]`, `snd ` 150. With no target either is
     /// silent.
     TargetCleared,
+    /// A secondary-weapon key was taken (`_HandlePlayer`'s secondary
+    /// block; see `nova_sim::session`'s `secondary_select`): Weapon Select
+    /// picking a secondary, even the one already selected when it is the
+    /// only candidate, before its step (@0x6acce-0x6acf1), and Weapon
+    /// Safety letting go of the selection (@0x6adf8-0x6ae1b), on every pass
+    /// it is held with one selected: `_beepSnd[2]`, `snd ` 152, at
+    /// priority 1. Weapon Select with no candidate raises
+    /// [`SimSound::Refused`] instead; the let-go of a secondary that runs
+    /// out is silent.
+    SecondarySelected,
     /// A first-flight tutorial hint was shown: `_beepSnd[4]`, `snd ` 154
     /// (`_HandlePlayer` @0x70a1c, @0x70c12, @0x70dab, @0x70e59; see
     /// `nova_sim::tutorial`).
@@ -270,6 +301,21 @@ pub enum SimSound {
     /// played by `PlaySound` with no test of whether it is playing
     /// (`_HandlePlayer` @0x69375). Its priority is 100.
     OnboardExplosion,
+    /// A stellar a `Y` destroyed exploded (`_EvalSetExp` @0x15ab4): the
+    /// explosion's `snd `, 300 + its `bööm`'s `SoundIndex` when that is
+    /// 0-63, which `_CreateExplosion` plays at once, whether the player is
+    /// docked or in flight, with `_PlaySoundDistance(-1, snd, 6, ..)` from
+    /// the explosion to the player (@0x3f8ca-0x3f91a). The view draws the
+    /// explosion without playing it again (`CombatEvent::ExplodedHeard`).
+    Explosion {
+        /// The `snd `.
+        sound: SoundId,
+        /// Where the explosion is from the player, in whole pixels, x
+        /// right and y down: how far away it is heard.
+        offset: (i32, i32),
+        /// Its priority, [`EXPLOSION_PRIORITY`].
+        priority: u16,
+    },
     /// A disabled or dying player's pre-jump collapsed: `_beepSnd[1]`,
     /// `snd ` 151 (`_PlaySound` @0x68aaf), after a [`SimSound::Halt`] of
     /// [`WARP_UP_HALTS`]. Its priority is 50.
@@ -294,6 +340,9 @@ pub enum SimSound {
     /// `nova_sim::landing::LandingRefusal::beeps`),
     /// and Closest Target finding no ship (`_HandlePlayer` @0x6aadb; see
     /// `nova_sim::Session::select_target`),
+    /// and Weapon Select finding no secondary to pick (`_HandlePlayer`
+    /// @0x6ad90-0x6adb3, priority 1; see `nova_sim::session`'s
+    /// `secondary_select`),
     /// as does each board refusal said, #131 too far (@0x65f9a), #132 too
     /// fast (@0x65fcc) and #130 can't board, a refused `PickupMode` 2
     /// pickup's too (@0x65ffe), all at priority 1, not modelled (see
@@ -323,6 +372,10 @@ pub enum SimSound {
     /// `_beepSnd[1]`, `snd ` 151, at priority 15 (`PlaySound` @0x701fb).
     SelfDestructed,
 }
+
+/// The priority an explosion's sound plays at: `_CreateExplosion`'s
+/// `_PlaySoundDistance(.., 6, ..)` (@0x3f8f1, played @0x3f91a).
+pub const EXPLOSION_PRIORITY: u16 = 6;
 
 /// The warp-up sounds `_warpUpSnd[0]` and `[1]`, `snd ` 128 and 129
 /// (loaded @0x1c12f-0x1c14f), in the order the player's eject halts them
@@ -359,5 +412,10 @@ mod tests {
     #[test]
     fn the_escape_pod_sound_is_snd_372() {
         assert_eq!(ESCAPE_POD_SOUND, SoundId(372));
+    }
+
+    #[test]
+    fn an_explosion_plays_at_priority_6() {
+        assert_eq!(EXPLOSION_PRIORITY, 6);
     }
 }

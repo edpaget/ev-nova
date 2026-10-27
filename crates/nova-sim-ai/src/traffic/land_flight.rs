@@ -106,7 +106,7 @@ pub fn fly(
 ) -> Outcome {
     let turn = handling.turn_rate;
     if !landing::npc_over(site, npc.state.position, turn, RuleSource::Engine) {
-        let (controls, flown) = approach_flight::toward(&npc.state, site.position, handling);
+        let (controls, flown) = approach_flight::toward(&mut npc.state, site.position, handling);
         held_burst::step(npc, &flown, controls, flight, inertia, Word::Writes);
         return Outcome::Flying;
     }
@@ -236,7 +236,8 @@ mod tests {
     /// `npc`'s twin flown a tick of sub 2's approach on `handling`.
     fn approached(npc: &Npc, handling: &Handling) -> Npc {
         let mut twin = npc.clone();
-        let (controls, capped) = approach_flight::toward(&twin.state, site().position, handling);
+        let (controls, capped) =
+            approach_flight::toward(&mut twin.state, site().position, handling);
         held_burst::step(
             &mut twin,
             &capped,

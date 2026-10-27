@@ -197,6 +197,9 @@ impl FormerEscort {
     /// Its record as it rejoins the fleet holding `reserves`: its class,
     /// standing order (which neither `_DamageShip` nor the rejoin touch,
     /// +0xc90a), wage and person as they were, a fighter still carried.
+    /// Boarded back into the fleet, its standing order is cleared after
+    /// this, as `_HandlePlayerBoardAttempt`'s `_AISetup` clears +0xc90a
+    /// (@0x65c76; see `nova_sim::board_repair`).
     #[must_use]
     pub fn rejoined(&self, reserves: Reserves) -> Escort {
         Escort {
@@ -349,6 +352,7 @@ mod tests {
             carried,
             wage,
             person: Some(PersonId(700)),
+            mark: None,
         }
     }
 

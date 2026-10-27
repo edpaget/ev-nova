@@ -45,7 +45,9 @@
 //! ([`Session::punish`]), boarding one ([`Session::board`]) and shooting
 //! a stellar down ([`Session::shoot_down`], one pass for the ten
 //! convictions, as the nine after the first find no matching rank still
-//! active). A mission's special ship is no victim. The pass reads the
+//! active) and a scan finding contraband (`Crime::Smuggle`,
+//! [`Session::scanned_by`], as `_ScanPlayer` slaps @0x7ebcc and
+//! @0x7f01f). A mission's special ship is no victim. The pass reads the
 //! session's [`RankCrimeReach`](crate::rulebook::RuleKey::RankCrimeReach)
 //! and [`RankUnaffiliatedGroup`](crate::rulebook::RuleKey::RankUnaffiliatedGroup)
 //! rules, makes no save due and plays no sound.
@@ -70,7 +72,8 @@
 //! `L` blesses, or stops blessing, as its set
 //! expression ends, and a crime's rank loss (`MissionRun::lose_ranks_to`,
 //! `_SlapWithPenalty`'s pass, which reaches no reset) only at the next
-//! reset. By the other reading the table is built
+//! reset. A stellar shot down is no exception: its `OnDestroy` resets
+//! (@0x374a9) before the slap (@0x37518), so the loss still waits. By the other reading the table is built
 //! from the active ranks as they are when it is asked.
 //!
 //! *Ordering against the original.* The engine runs a take-off's, a gate

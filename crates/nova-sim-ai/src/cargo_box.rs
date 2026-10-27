@@ -49,11 +49,12 @@
 //!
 //! Spawning the scoopable boxes is
 //! rdm:phase/asteroids/phase-2-shoot-and-break-asteroids's; their pickup
-//! is [`scoop`](crate::scoop)'s ([`CargoBoxes::take_touching`]). Left
-//! out: the AI that steers for them
-//! (rdm:phase/asteroids/phase-5-ai-mining); the player's wrap shift; and
-//! the sprite murk, which the view draws for shots alone so far
-//! (rdm:task/murk-other-sprites).
+//! is [`scoop`](crate::scoop)'s ([`CargoBoxes::take_touching`]); the
+//! miners that steer for them are
+//! [`mine_flight`](crate::traffic::mine_flight)'s. Left out: the player's
+//! wrap shift; the sprite murk, which the view draws for shots alone so
+//! far (rdm:task/murk-other-sprites); and the table's first-free slots,
+//! as the boxes are kept in spawn order (rdm:task/cargo-box-slot-order).
 
 use crate::chance::Chance;
 use crate::flight::{ShipState, facing};
@@ -132,6 +133,13 @@ impl CargoBox {
         let fade = (FADE_LIFE - self.life).trunc() as u8;
         fade.min(MAX_FADE)
     }
+}
+
+/// Whether any of `boxes` is scoopable: the original's
+/// `_miningBoxesActive` (see [`CargoBoxes::any_scoopable`]).
+#[must_use]
+pub fn any_scoopable(boxes: &[CargoBox]) -> bool {
+    boxes.iter().any(|cargo_box| cargo_box.scoopable)
 }
 
 /// How many boxes a ship whose share of a jettison is `share` tons drops
@@ -271,10 +279,11 @@ impl CargoBoxes {
     }
 
     /// Whether any box is scoopable: the original's `_miningBoxesActive`,
-    /// which gates the scoop's collision (see [`scoop`](crate::scoop)).
+    /// which gates the scoop's collision (see [`scoop`](crate::scoop)) and
+    /// a miner's state 17 (see [`miner`](crate::ai::miner)).
     #[must_use]
     pub fn any_scoopable(&self) -> bool {
-        self.boxes.iter().any(|cargo_box| cargo_box.scoopable)
+        any_scoopable(&self.boxes)
     }
 
     /// Takes the first scoopable box, in table order, that a ship's disc,

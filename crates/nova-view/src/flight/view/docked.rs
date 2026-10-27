@@ -184,17 +184,23 @@ impl<C> FlightView<C> {
     /// offered in its place too ([`FlightView::take_offer`]), each letting
     /// go of the flight keys. A failed mission's ship boarded for plunder
     /// says its pickup or assist line first ([`Session::take_board_line`]).
-    pub(super) fn board(&mut self) {
+    /// Whether the attempt sets the board latch
+    /// ([`BoardRefusal::latches`](nova_sim::board::BoardRefusal::latches);
+    /// every board that passes does).
+    pub(super) fn board(&mut self) -> bool {
         let Ok(session) = &mut self.session else {
-            return;
+            return false;
         };
         let boarded = session.board(&*self.law, &*self.boarding_rule, &mut self.chance);
         if let Some(line) = session.take_board_line() {
             let said = mission_board_message(line, session);
             self.say_for(said, BOARD_LINE_TICKS);
         }
+        let latches = boarded
+            .as_ref()
+            .map_or_else(|refusal| refusal.latches(), |_| true);
         let Ok(session) = &mut self.session else {
-            return;
+            return latches;
         };
         match boarded {
             Ok(Boarding::Opened(_)) => {
@@ -214,11 +220,31 @@ impl<C> FlightView<C> {
                     self.say_for(said, BOARD_LINE_TICKS);
                 }
             }
+            // Its line is the session's message ([`Session::take_messages`]).
+            Ok(Boarding::Recovered(_)) => {}
             Err(refusal) => {
                 if let Some(text) = board_refusal_message(refusal) {
                     self.say_for(text, BOARD_REFUSAL_TICKS);
                 }
             }
+        }
+        latches
+    }
+
+    /// One frame of the Board key, with B down or not, as `_HandlePlayer`
+    /// runs it (@0x6a98b-0x6a9a8) on [`FlightView::board_latch`]: with B
+    /// down and the latch clear, a board attempt
+    /// ([`FlightView::board`]), which sets the latch unless it found no
+    /// target or the player cloaked (`*0xdee18` @0x6504c, after
+    /// @0x65031 and @0x6503f); with B up, the latch cleared. So B held
+    /// with no target, or cloaked, boards on the first frame a target is
+    /// taken or the cloak drops, and any other outcome waits for B's
+    /// release.
+    pub(super) fn board_frame(&mut self, down: bool) {
+        if !down {
+            self.board_latch = false;
+        } else if !self.board_latch {
+            self.board_latch = self.board();
         }
     }
 
@@ -499,6 +525,14 @@ impl<C> FlightView<C> {
             held.fuel = fuel;
         }
         Ok(paid)
+    }
+
+    /// Whether the spaceport's Recharge button is enabled, as
+    /// [`Session::recharge_enabled`] says; a session that failed sells no
+    /// fuel.
+    #[must_use]
+    pub fn recharge_enabled(&self) -> bool {
+        self.session.as_ref().is_ok_and(Session::recharge_enabled)
     }
 
     /// The ships for hire in the bar of the stellar landed on, as
@@ -1053,14 +1087,6 @@ impl<C> FlightView<C> {
         self.session.as_mut().ok()?.shipyard(&mut self.chance)
     }
 
-    /// The prompt for naming a ship of class `ship` before it is bought,
-    /// as [`Session::ship_naming`] gives it, on the flight's chance; a
-    /// session that failed has no shipyard.
-    pub fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
-        let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
-        session.ship_naming(ship, &mut self.chance)
-    }
-
     /// Declines to buy a ship of class `ship`, as [`Session::decline_ship`]
     /// does; nothing for a session that failed. The whole bar is redrawn
     /// as the name prompt closes on Cancel (`_RefreshSAT` @0x5eb73).
@@ -1075,5 +1101,24 @@ impl<C> FlightView<C> {
     /// says; taking it clears it.
     pub fn take_save_due(&mut self) -> bool {
         self.session.as_mut().is_ok_and(Session::take_save_due)
+    }
+}
+
+/// The mission computer's cut offer names are filled by the session, as
+/// [`Session::offer_text`] fills them; a session that failed fills none.
+impl<C> crate::spaceport::OfferNames for FlightView<C> {
+    fn munged(&self, mission: MissionId, raw: &str) -> Option<String> {
+        self.session.as_ref().ok()?.offer_text(mission, raw)
+    }
+}
+
+impl<C: nova_sim::CommCatalog> FlightView<C> {
+    /// The prompt for naming a ship of class `ship` before it is bought,
+    /// as [`Session::ship_naming`] gives it, its words read from the
+    /// flight's catalog, on the flight's chance; a session that failed
+    /// has no shipyard.
+    pub fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
+        let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
+        session.ship_naming(ship, &self.catalog, &mut self.chance)
     }
 }

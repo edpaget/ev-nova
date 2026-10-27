@@ -55,13 +55,19 @@ pub(super) struct PlayerShip {
     pub(super) tractor: Option<TractorLock>,
     /// The player's ionization ([`Session::ion`](super::Session::ion)).
     pub(super) ion: Ion,
-    /// The fire command the player holds.
+    /// The fire command the player holds; its secondary is filled in
+    /// from the selection as it fires while the secondary fire key is held
+    /// (see the `secondary_select` module).
     pub(super) trigger: Trigger,
     /// The secondary weapon the player has selected, if any: none to
-    /// start with, set by the select key alone, and let go as the module
-    /// docs say. By the engine it may name a weapon the ship no longer
-    /// carries ([`RuleKey::StaleSecondary`](crate::rulebook::RuleKey::StaleSecondary)).
+    /// start with, set by the select key alone, and let go by the Weapon
+    /// Safety key, by running out (see the `secondary_select` module) and
+    /// as the module docs say. By the engine it may name a weapon the ship
+    /// no longer carries ([`RuleKey::StaleSecondary`](crate::rulebook::RuleKey::StaleSecondary)).
     pub(super) secondary: Option<WeaponId>,
+    /// The secondary fire key, a Weapon Select press waiting and the
+    /// Weapon Safety key (see the `secondary_select` module). Unsaved.
+    pub(super) weapon_keys: super::secondary_select::WeaponKeys,
     /// Whether the player's fuel capacity is cached, as `_ShipFuelCapacity`
     /// caches it (`*0x3b508c`, @0x2f55-0x2feb) at the flight tick's fuel
     /// regeneration and an Energy take, until a reset invalidates it
@@ -80,6 +86,9 @@ pub(super) struct PlayerShip {
     pub(super) fate: Fate,
     /// The player's warp and double time.
     pub(super) warp: Warp,
+    /// The player's cloak, its key and its latch (see the `player_cloak`
+    /// module). Unsaved.
+    pub(super) cloak: super::player_cloak::PlayerCloak,
 }
 
 /// What the player's ship's class and outfits give it, rewritten only by
@@ -234,6 +243,7 @@ impl PlayerShip {
             ion: Ion::default(),
             trigger: Trigger::default(),
             secondary: None,
+            weapon_keys: super::secondary_select::WeaponKeys::default(),
             fuel_cap_cached: false,
             aim: 0,
             fit: Fit {
@@ -275,6 +285,7 @@ impl PlayerShip {
                 double_time_key: false,
                 jump_accepted: false,
             },
+            cloak: super::player_cloak::PlayerCloak::default(),
         }
     }
 }

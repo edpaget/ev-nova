@@ -20,7 +20,7 @@
 //!   `Contribute` bits count ([`cron::contributes`]).
 //! - [`date`]: the in-game [`GameDate`](date::GameDate), a Gregorian day
 //!   that advances a day for each day a jump takes, and
-//!   [`date::date_text`], how it is displayed.
+//!   [`date::long_date_text`], how the messages show it.
 //! - [`govt`]: the [`Governments`](govt::Governments) and their
 //!   relations: allies, enemies, xenophobes and the flags that say how
 //!   their ships behave.
@@ -54,6 +54,9 @@
 //!   its `shïp`'s fields and the outfits it carries: the one place its
 //!   handling, reserve capacities, fuel, shield and armour regeneration
 //!   and cargo space come from.
+//! - [`trade_dialog`]: what the exchange's dialog shows beside its
+//!   prices: the header's hold or fleet, each row's price marker and the
+//!   cargo summary, in `STR#` 2002's words.
 //!
 //! A doc here links only to items of this crate, `nova-sim-base` and
 //! `nova-sim-catalog`. An item of a crate above it is named by its facade
@@ -79,3 +82,4 @@ pub mod legal;
 pub mod market;
 pub mod outfit_effects;
 pub mod stats;
+pub mod trade_dialog;

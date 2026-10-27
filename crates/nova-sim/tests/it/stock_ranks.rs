@@ -99,6 +99,7 @@ fn stock_desc_5066_names_the_ambassador_by_short_name_and_by_the_bible_by_conv_n
             .with_override(RuleKey::CrossedRankTags, crossed);
         let context = TagContext {
             pilot: "Stock",
+            nickname: "",
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             person: None,

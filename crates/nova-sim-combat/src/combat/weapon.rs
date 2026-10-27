@@ -442,6 +442,11 @@ pub const ONE_AT_A_TIME: u16 = 0x0004;
 /// `Flags2`: hidden when out of ammo, so selecting a secondary skips it
 /// while it has no rounds.
 pub const HIDE_WHEN_EMPTY: u16 = 0x0800;
+/// `Flags`: more persistent smoke, by the Bible. The original's let-go of
+/// a selected secondary that runs out tests it too (`_HandlePlayer`
+/// @0x6abe9; see
+/// [`RuleKey::EmptySecondary`](crate::RuleKey::EmptySecondary)).
+pub const PERSISTENT_SMOKE: u16 = 0x0800;
 /// `Flags`: point defence cannot target its shots
 /// (`_HandleShipPointDefense` @0x393f4), though a point-defence shot that
 /// touches one still meets it (see [`defence`](super::defence)).
@@ -454,6 +459,10 @@ pub const PROXIMITY_BY_OTHERS: u16 = 0x0008;
 /// `Interference` (`_SpawnShot` @0x3eac5; see
 /// [`projectile`](super::projectile)).
 pub const SENSOR_INTERFERENCE: u16 = 0x0008;
+/// `Seeker`: a homing shot of it seeks asteroids: one ahead and near may
+/// lock it (`_HandleShotGuidance` @0x32546; see
+/// [`asteroid_seek`](super::asteroid_seek)).
+pub const SEEKS_ASTEROIDS: u16 = 0x0002;
 /// `Seeker`: a homing shot of it jammed turns away from its target
 /// (`_HandleShotGuidance` @0x3221d), where any other stops turning.
 pub const TURNS_AWAY_JAMMED: u16 = 0x0010;
@@ -687,6 +696,27 @@ impl WeaponSpec {
         .then_some(LeadShot {
             speed: self.speed,
             rocket: self.guidance == Guidance::Rocket,
+        })
+    }
+
+    /// The shot `_CalcObjectLeadAngle` leads with for it at a point
+    /// object, such as asteroid slot 0: its speed, by its guidance's gate
+    /// of -1, 4, 7, 8 and 9 (@0x2b1c3-0x2b207), never a rocket, as 6 fails
+    /// the gate; none for any other, which gets the table bearing
+    /// ([`object_lead_angle`](crate::trig::object_lead_angle)).
+    #[must_use]
+    pub fn object_lead_shot(&self) -> Option<LeadShot> {
+        matches!(
+            self.guidance,
+            Guidance::Unguided
+                | Guidance::Turret
+                | Guidance::FrontTurret
+                | Guidance::RearTurret
+                | Guidance::PointDefence
+        )
+        .then_some(LeadShot {
+            speed: self.speed,
+            rocket: false,
         })
     }
 
@@ -996,6 +1026,28 @@ mod tests {
             })
         );
         for guidance in [0, 1, 3, 5, 10, 99] {
+            assert_eq!(lead(guidance), None, "{guidance}");
+        }
+    }
+
+    #[test]
+    fn only_guidance_minus_1_4_7_8_and_9_leads_at_an_object() {
+        let lead = |guidance: i16| {
+            WeaponSpec::new(&WeaponRecord {
+                guidance,
+                speed: 1500,
+                ..weapon(128)
+            })
+            .object_lead_shot()
+        };
+        let plain = Some(LeadShot {
+            speed: 15.0,
+            rocket: false,
+        });
+        for guidance in [-1, 4, 7, 8, 9] {
+            assert_eq!(lead(guidance), plain, "{guidance}");
+        }
+        for guidance in [0, 1, 3, 5, 6, 10, 99] {
             assert_eq!(lead(guidance), None, "{guidance}");
         }
     }

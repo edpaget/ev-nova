@@ -264,7 +264,7 @@ fn an_ordinary_shots_hit_blast_reaches_a_planet_type_ship_beside_its_victim() {
 fn asteroid_blasts(flags2: u16, reading: RuleSource) -> Vec<ShipRef> {
     let mut combat = Combat::default();
     combat.set_planet_blasts(PlanetBlasts::from(reading));
-    let mut rocks = [rock(0, 100.0, 0.0)];
+    let mut rocks = Rocks::of([rock(0, 100.0, 0.0)]);
     let others = vec![Ship::at(2, 110.0, 20.0), planet(Ship::at(4, 100.0, -25.0))];
     shoot_rocks(
         &mut combat,

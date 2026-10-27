@@ -51,7 +51,10 @@
 //! system, and the flight is told how many defected
 //! ([`Session::take_pay_notes`]), which makes a save due; paying alone
 //! makes none, as paying a haggled price makes none. Hailing a hired
-//! escort shows the wage it is paid ([`EscortStatus`](crate::hail::EscortStatus)).
+//! escort shows its pay line ([`EscortStatus`](crate::hail::EscortStatus)):
+//! by the engine, as `_EscortDialogUpdate` works it out from the `Cost`
+//! ([`hire::shown_wage`](crate::hire::shown_wage)), which can differ from
+//! the wage paid in its unit and, for a `Cost` of -100 or below, its sign.
 //!
 //! The session keeps its [`HireTerms`] and [`ControlBits`] rather than
 //! being passed them on each call, a deliberate departure from
@@ -66,6 +69,7 @@ use super::{Chart, Outbox, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::control::ControlBits;
+use crate::hail::ShownWage;
 use crate::hire::{Bar, HireList, HireRefusal, HireTerms, Hired, PayNote};
 use crate::landing::StellarFlags;
 use crate::pilot::{Escort, Pilot};
@@ -145,16 +149,13 @@ impl Session {
                 }
                 // A trader takes its share of the cargo, and the session
                 // resets, while it is still in the fleet, its own holds
-                // among the fleet's (@0x40225-0x40240).
+                // among the fleet's (@0x40225-0x40240). The share written
+                // into its hold goes with it, as it leaves the system at
+                // once.
                 if let Some(holds) = self.statics.trader_holds(escort.ship) {
-                    self.destroy_cargo_share(holds, false);
+                    self.destroy_cargo_share(holds, false, None);
                 }
-                self.pilot.escorts.remove(index);
-                if index < self.space.escorts.fleet.len()
-                    && let Some(id) = self.space.escorts.fleet.remove(index)
-                {
-                    self.space.traffic.remove(id);
-                }
+                self.drop_fleet_escort(index);
                 defected = defected.saturating_add(1);
             }
         }
@@ -236,6 +237,7 @@ impl Session {
                     carried: false,
                     wage: Some(wage),
                     person: None,
+                    mark: None,
                 });
             }
         });
@@ -283,6 +285,21 @@ impl Setup {
             RuleSource::Bible => kept,
         }
     }
+
+    /// The pay line hailing hired `escort` shows (see
+    /// [`RuleKey::EscortWage`]): by the engine, worked out from its ship
+    /// type's record as `_EscortDialogUpdate` draws it
+    /// ([`hire::shown_wage`](crate::hire::shown_wage)); otherwise, or with
+    /// no record, the wage it was hired at.
+    pub(super) fn shown_wage(&self, statics: &Statics, escort: &Escort) -> ShownWage {
+        let kept = ShownWage::kept(escort.wage.unwrap_or(0));
+        match self.rules.source_for(RuleKey::EscortWage) {
+            RuleSource::Engine => statics
+                .ship_record(escort.ship)
+                .map_or(kept, crate::hire::shown_wage),
+            RuleSource::Bible => kept,
+        }
+    }
 }
 
 impl Space {
@@ -327,11 +344,10 @@ mod tests {
     use crate::combat::ShipRef;
     use crate::control::{PilotFacts, Test, TestExpr};
     use crate::escort::{EscortCommand, EscortDuty, EscortGroup, slot_position};
-    use crate::hail::{EscortStatus, HailOptions};
+    use crate::hail::{CreditUnit, HailOptions, ShownWage};
     use crate::hire::{HireRow, NovaHire, PayNote};
     use crate::reserves::Reserves;
     use crate::rulebook::Rulebook;
-    use crate::session::entry::NoTraffic;
     use crate::session::mission_ships::tests::crowd;
     use crate::stats::HYPERSPACE_DAYS;
     use crate::stats::ShipStats;
@@ -784,6 +800,7 @@ mod tests {
             carried,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 
@@ -868,6 +885,7 @@ mod tests {
                 carried: false,
                 wage: Some(100),
                 person: None,
+                mark: None,
             }]
         );
         assert!(session.take_save_due());
@@ -1159,10 +1177,13 @@ mod tests {
             Some(2),
             "through the jump"
         );
-        assert_eq!(
-            npc.state.position,
-            slot_position(session.player(), 2, 2, duty.formation.spacing)
-        );
+        // Pushed back from its slot to glide in (the `escort_arrival`
+        // module).
+        let slot = crate::flight::ShipState {
+            position: slot_position(session.player(), 2, 2, duty.formation.spacing),
+            ..*session.player()
+        };
+        assert_eq!(npc.state, crate::escort_arrival::pushed(slot));
 
         let quarry = pirate(&mut session, 0.0, -400.0);
         assert_eq!(session.select_target(TargetPick::Nearest), Some(quarry));
@@ -1500,7 +1521,7 @@ mod tests {
         let mut session = docked(1000, RuleSource::Engine);
         assert_eq!(session.pilot().cash(), 1000, "landing pays nothing");
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&catalog(), &mut NeverFires)
             .expect("takes off");
         assert_eq!(session.pilot().cash(), 600);
         assert_eq!(session.take_pay_notes(), []);
@@ -1521,7 +1542,7 @@ mod tests {
             let landed = session.date();
             session.port.stay.ship_bought = true;
             session
-                .take_off(&NoTraffic, &mut NeverFires)
+                .take_off(&catalog(), &mut NeverFires)
                 .expect("takes off");
             assert_eq!(session.pilot().cash(), cash, "{rule:?}");
             let mut days = std::iter::successors(Some(landed), |date| Some(date.next_day()));
@@ -1537,7 +1558,7 @@ mod tests {
             RuleSource::Engine
         );
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&catalog(), &mut NeverFires)
             .expect("takes off");
         assert_eq!(session.pilot().cash(), 250);
         assert_eq!(session.pilot().escorts().len(), 3);
@@ -1554,7 +1575,7 @@ mod tests {
             RuleSource::Bible
         );
         session
-            .take_off(&NoTraffic, &mut NeverFires)
+            .take_off(&catalog(), &mut NeverFires)
             .expect("takes off");
         assert_eq!(session.pilot().cash(), 1000);
         session.tick_traffic(&paying(), &Peaceful, &mut NeverFires);
@@ -1583,23 +1604,26 @@ mod tests {
         (session, id)
     }
 
-    /// What hailing NPC `id` says of it as an escort.
+    /// The pay line the escort dialog shows for NPC `id`, hailed.
     fn status(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         id: crate::NpcId,
-    ) -> Option<EscortStatus> {
+    ) -> Option<ShownWage> {
         session.chart.target = Some(id);
-        session
-            .hail(catalog, &HailOptions::default(), &mut NeverFires)
+        match session
+            .hail_key(catalog, &HailOptions::default(), false, &mut NeverFires)
             .expect("answered")
-            .escort
+        {
+            crate::session::Hailed::Escort(view) => view.pay,
+            other => panic!("{other:?}"),
+        }
     }
 
     /// What one jump day pays, and the hail shows, for a hired escort
     /// whose ship type's `Cost` is now `cost` (none: no record), by
     /// `rule`; and its record's wage.
-    fn wage_paid(cost: Option<i32>, rule: RuleSource) -> (i64, Option<EscortStatus>, Option<i64>) {
+    fn wage_paid(cost: Option<i32>, rule: RuleSource) -> (i64, Option<ShownWage>, Option<i64>) {
         let mut catalog = barred(vec![hireable(129, 100)]);
         match cost {
             Some(cost) => catalog.ship_records[1].cost = cost,
@@ -1609,7 +1633,7 @@ mod tests {
         }
         let (mut session, id) = rehired(&catalog, rule);
         let shown = id.and_then(|id| status(&mut session, &catalog, id));
-        session.hang_up();
+        session.press_escort(crate::escort_dialog::EscortButton::Close);
         jump(&mut session, &catalog, 131).expect("arrives");
         let wage = session.pilot().escorts()[0].wage;
         assert_eq!(
@@ -1625,7 +1649,7 @@ mod tests {
     fn by_the_engine_a_hired_escort_is_paid_the_wage_its_type_gives_now() {
         assert_eq!(
             wage_paid(Some(30_000), RuleSource::Engine),
-            (300, Some(EscortStatus { wage: Some(300) }), Some(100))
+            (300, Some(ShownWage::kept(300)), Some(100))
         );
         assert_eq!(
             wage_paid(None, RuleSource::Engine).0,
@@ -1646,7 +1670,7 @@ mod tests {
     fn by_the_other_reading_a_hired_escort_is_paid_the_wage_it_was_hired_at() {
         assert_eq!(
             wage_paid(Some(30_000), RuleSource::Bible),
-            (100, Some(EscortStatus { wage: Some(100) }), Some(100))
+            (100, Some(ShownWage::kept(100)), Some(100))
         );
     }
 
@@ -1655,10 +1679,77 @@ mod tests {
         for rule in RuleSource::ALL {
             assert_eq!(
                 wage_paid(Some(10_000), rule),
-                (100, Some(EscortStatus { wage: Some(100) }), Some(100)),
+                (100, Some(ShownWage::kept(100)), Some(100)),
                 "{rule:?}"
             );
         }
+    }
+
+    /// The pay line hailing shows for a hired escort that keeps a wage
+    /// of `kept` and whose ship type's `Cost` is now `cost`, by `rule`;
+    /// and what one jump day pays it.
+    fn line_and_pay(kept: i64, cost: i32, rule: RuleSource) -> (ShownWage, i64) {
+        let mut catalog = barred(vec![hireable(129, 100)]);
+        catalog.ship_records[1].cost = cost;
+        let (mut session, id) = rehired(&catalog, rule);
+        session.pilot.escorts[0].wage = Some(kept);
+        let shown = id
+            .and_then(|id| status(&mut session, &catalog, id))
+            .expect("hired");
+        session.press_escort(crate::escort_dialog::EscortButton::Close);
+        let cash = session.pilot().cash();
+        jump(&mut session, &catalog, 131).expect("arrives");
+        (shown, cash - session.pilot().cash())
+    }
+
+    fn shown(credits: i64, unit: CreditUnit) -> ShownWage {
+        ShownWage { credits, unit }
+    }
+
+    #[test]
+    fn by_the_engine_the_pay_line_is_worked_out_from_the_cost_now() {
+        let engine = RuleSource::Engine;
+        assert_eq!(
+            line_and_pay(100, 100, engine),
+            (shown(1, CreditUnit::Credit), 1)
+        );
+        assert_eq!(
+            line_and_pay(100, 150, engine),
+            (shown(1, CreditUnit::Credits), 1)
+        );
+        assert_eq!(
+            line_and_pay(100, -150, engine),
+            (shown(-1, CreditUnit::Credits), 0),
+            "the line is not clamped, the pay is"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_the_pay_line_shows_the_wage_kept() {
+        let bible = RuleSource::Bible;
+        assert_eq!(
+            line_and_pay(100, 30_000, bible),
+            (shown(100, CreditUnit::Credits), 100)
+        );
+        assert_eq!(
+            line_and_pay(1, 150, bible),
+            (shown(1, CreditUnit::Credit), 1)
+        );
+    }
+
+    #[test]
+    fn with_no_record_the_pay_line_shows_the_wage_kept() {
+        let mut catalog = barred(vec![hireable(129, 100)]);
+        catalog.ship_records.pop();
+        let (mut session, id) = rehired(&catalog, RuleSource::Engine);
+        assert_eq!(id, None, "no NPC to hail");
+        session.pilot.escorts[0].wage = Some(1);
+        assert_eq!(
+            session
+                .setup
+                .shown_wage(&session.statics, &session.pilot.escorts[0]),
+            shown(1, CreditUnit::Credit)
+        );
     }
 
     #[test]

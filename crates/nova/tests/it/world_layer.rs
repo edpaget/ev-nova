@@ -50,19 +50,16 @@ fn flight_draws_its_scene_in_the_world_and_its_hud_and_text_over_it() {
         let mut game = flying(window, &store);
         let frame = game.frame();
         let (w, h) = (frame.logical.w as f32, frame.logical.h as f32);
-        // The stars first, in the world.
-        assert!(
-            matches!(frame.batches.first(), Some(Batch::Solid(_))),
-            "{window:?}"
-        );
+        // The scene first, in the world (the fixture has no stars' sheet,
+        // so no stars).
         assert_eq!(frame.layer(0), WORLD, "{window:?}");
-        // The player's ship, at the view's centre, and the two NPCs above
-        // it, in the world.
+        // The player's ship, at the play area's centre left of the 194-wide
+        // status bar, and the two NPCs above it, in the world.
         let world = quads_in(&frame, WORLD);
         let centred = |quad: &QuadInstance| {
             let dest = quad.dest;
             let (x, y) = (dest.x + dest.w / 2.0, dest.y + dest.h / 2.0);
-            (x - w / 2.0).abs() <= 1.0 && (y - h / 2.0).abs() <= 1.0
+            (x - ((w - 194.0) / 2.0).trunc()).abs() <= 1.0 && (y - (h / 2.0).trunc()).abs() <= 1.0
         };
         assert!(world.iter().any(centred), "{window:?}: {world:?}");
         assert!(world.len() >= 3, "{window:?}: {world:?}");

@@ -187,6 +187,7 @@ mod tests {
                 carried: false,
                 wage: None,
                 person: None,
+                mark: None,
             };
             MAX_ESCORTS
         ];
@@ -415,6 +416,7 @@ mod tests {
                 carried: false,
                 wage: None,
                 person: None,
+                mark: None,
             };
             MAX_ESCORTS
         ];

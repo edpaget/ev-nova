@@ -89,10 +89,11 @@
 //! - A hypergate (`_PlayerEnterHypergate`): off on every outcome
 //!   (@0x637e4-0x637f2, @0x63fa2-0x63faa), and when it has no links.
 //! - `M` or `N` in flight (`_EvalSetExp` @0x157e3, @0x158fd): the
-//!   selection let go, the mode kept, as the move settles (the `entry`
-//!   module's table). The developer tools' relocation, which has no
-//!   original, does the same.
-//! - `M` or `N` landed, at its operator, before its move is queued
+//!   selection let go, the mode kept, at its operator (the
+//!   `operator_moves` module), and again as its entry completes (the
+//!   `entry` module's table). The developer tools' relocation, which has
+//!   no original, does the same.
+//! - `M` or `N` landed, at its operator, before its move is applied
 //!   (`Chart::select_for_landed_move`; `M` @0x1570e-0x157f5, `N`
 //!   @0x158d9-0x158fd): `M` in mode 2 selects the destination's first
 //!   stellar that can be read (+0x6c, @0x156f2-0x15705), or none with
@@ -112,6 +113,10 @@
 //!   the mission computer @0x5ffc0-0x5ffd0 / @0x60084-0x60096. So a
 //!   landed `M` or `N` run inside one is undone as it closes. When the
 //!   restored nav shows is the flight view's.
+//! - The exchange's and the outfitter's maps
+//!   ([`Session::put_back_port_nav`]): each puts back that open-time save
+//!   after a map opened from it, keeping it (@0x5e004-0x5e01a,
+//!   @0x5be9e-0x5beba).
 //! - The bar's restore ([`Session::restore_bar_nav`]): the bar saves both
 //!   as it opens ([`Session::open_bar`], `_DoBarDialog` @0x48efe-0x48f11,
 //!   the raw selection) and puts them back after each map opened from it
@@ -311,6 +316,16 @@ impl Session {
     /// save is restored once.
     pub fn restore_port_nav(&mut self) {
         self.chart.restore_port_nav();
+    }
+
+    /// Puts back the nav saved as the port dialog opened
+    /// ([`Session::save_port_nav`]), mode and selection exactly as saved,
+    /// and keeps the save, as the exchange and the outfitter write +0x6a
+    /// and +0x6c back from it after a map opened from them
+    /// (@0x5e004-0x5e01a, @0x5be9e-0x5beba): the dialog's own close still
+    /// restores it once. With nothing saved it changes nothing.
+    pub fn put_back_port_nav(&mut self) {
+        self.chart.put_back_port_nav();
     }
 
     /// The nav as it stands, for a mission dialog to put back after the
@@ -635,15 +650,13 @@ impl Chart {
 
     /// A landed `M` (`first`) or `N` into `system` writes the selection
     /// at its operator, as `_EvalSetExp` does (`M` @0x1570e-0x157f5, `N`
-    /// @0x158d9-0x158fd), before its move is queued: `M` in mode 2 selects
+    /// @0x158d9-0x158fd), before its move is applied: `M` in mode 2 selects
     /// the system's first stellar that can be read, or none with none;
     /// any other `M`, and every `N`, lets go of the selection and keeps
     /// the mode, so Off stays off. Nothing is written for a system that
     /// doesn't exist, as the move skips it too, nor in flight, where the
-    /// move's settling lets go of the selection (the `entry` module's
-    /// table). The original lets go of it in flight at the operator too
-    /// (@0x157e3, @0x158fd); ours' settling comes later in the same input
-    /// or tick, before any frame is drawn, so the player never sees it.
+    /// in-flight tail lets go of the selection at the operator too
+    /// (@0x157e3, @0x158fd; see the `operator_moves` module).
     /// Why the first stellar that can be read and a system that doesn't
     /// exist are the original's, as far as it can be modelled, is in the
     /// module docs.
@@ -678,6 +691,14 @@ impl Chart {
     /// save is restored once.
     fn restore_port_nav(&mut self) {
         if let Some(saved) = self.port_nav.take() {
+            self.set_nav(saved);
+        }
+    }
+
+    /// Puts back the nav saved as the port dialog opened, keeping the save
+    /// ([`Session::put_back_port_nav`]).
+    fn put_back_port_nav(&mut self) {
+        if let Some(saved) = self.port_nav {
             self.set_nav(saved);
         }
     }
@@ -857,6 +878,7 @@ impl Chart {
         };
         out.sounds.push(SimSound::HyperSelected);
         if setup.hyper_select == HyperSelectRule::OneJumpCourse {
+            pilot.restart_course(pilot.system);
             pilot.course = vec![next];
         }
         self.set_nav(NavMode::Hyperspace(Some(next)));
@@ -1066,14 +1088,44 @@ mod tests {
         assert_eq!(session.nav_mode(), NavMode::Off);
     }
 
-    #[test]
-    fn a_pilot_loaded_with_a_course_flies_with_the_nav_system_off_and_cannot_jump() {
-        let catalog = catalog();
-        let mut pilot = Pilot::new(&catalog, "").expect("a pilot");
+    /// A pilot saved with a course, from the system it starts in.
+    fn coursed_pilot(catalog: &FakePilotCatalog) -> Pilot {
+        let mut pilot = Pilot::new(catalog, "").expect("a pilot");
         pilot.course = ids(&[131, 132]);
-        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        pilot.course_start = Some(pilot.system);
+        pilot
+    }
+
+    #[test]
+    fn a_pilot_loaded_with_a_course_flies_with_none_by_the_engine() {
+        let catalog = catalog();
+        let mut session =
+            Session::load(&catalog, coursed_pilot(&catalog), &Rulebook::default()).expect("flies");
+        assert_eq!(session.nav_mode(), NavMode::Off);
+        assert_eq!(session.course(), ids(&[]), "the course cleared");
+        assert_eq!(session.pilot().course_start(), None, "the start cleared");
+        session.hyperspace_mode();
+        assert_ne!(session.nav_mode(), hyperspace(131), "no course hop cued");
+        let mut session =
+            Session::load(&catalog, coursed_pilot(&catalog), &Rulebook::default()).expect("flies");
+        fly_out(&mut session);
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
+    }
+
+    #[test]
+    fn by_the_other_reading_a_pilot_loaded_with_a_course_keeps_it_with_the_nav_system_off_and_cannot_jump()
+     {
+        let catalog = catalog();
+        let pilot = coursed_pilot(&catalog);
+        let start = pilot.course_start;
+        let rules = Rulebook::default().with_override(RuleKey::LoadedCourse, RuleSource::Bible);
+        let mut session = Session::load(&catalog, pilot, &rules).expect("flies");
         assert_eq!(session.nav_mode(), NavMode::Off);
         assert_eq!(session.course(), ids(&[131, 132]), "the course kept");
+        assert_eq!(session.pilot().course_start(), start, "the start kept");
+        let mut pressed = Session::load(&catalog, coursed_pilot(&catalog), &rules).expect("flies");
+        pressed.hyperspace_mode();
+        assert_eq!(pressed.nav_mode(), hyperspace(131), "the course hop cued");
         fly_out(&mut session);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
     }
@@ -1287,6 +1339,12 @@ mod tests {
         assert_eq!(session.select_next_system(), Some(SystemId(131)));
         assert_eq!(session.nav_mode(), hyperspace(131));
         assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
+        assert_eq!(session.course(), [SystemId(131)]);
+        assert_eq!(
+            session.pilot.course_start(),
+            Some(session.system()),
+            "the one-jump course starts at the current system"
+        );
     }
 
     // The stellar keys, the click and the land key.
@@ -1515,13 +1573,15 @@ mod tests {
     }
 
     #[test]
-    fn in_flight_the_operator_leaves_the_selection_to_the_settling() {
+    fn in_flight_the_operator_lets_go_of_the_selection() {
+        // @0x157e3, @0x158fd, inside the operator (see the
+        // `operator_moves` module).
         let catalog = catalog();
         for expr in ["M131", "N131"] {
             let mut session = Session::start(&catalog).expect("starts");
             session.chart.nav = stellar(128);
             run(&mut session, expr);
-            assert_eq!(session.nav_mode(), stellar(128), "{expr}");
+            assert_eq!(session.nav_mode(), NavMode::Stellar(None), "{expr}");
             let _ = session.settle_script(&catalog, &mut NeverFires);
             assert_eq!(session.nav_mode(), NavMode::Stellar(None), "{expr}");
         }
@@ -1674,6 +1734,34 @@ mod tests {
             NavMode::Stellar(None),
             "the save was restored already"
         );
+    }
+
+    #[test]
+    fn a_port_nav_put_back_writes_the_save_back_and_keeps_it() {
+        for before in [stellar(128), hyperspace(131), NavMode::Off] {
+            let (_, mut session) = landed();
+            session.chart.nav = before;
+            session.save_port_nav();
+            session.chart.nav = hyperspace(129);
+            session.put_back_port_nav();
+            assert_eq!(session.nav_mode(), before, "put back {before:?}");
+
+            session.chart.nav = hyperspace(129);
+            session.put_back_port_nav();
+            assert_eq!(session.nav_mode(), before, "kept {before:?}");
+
+            session.chart.nav = hyperspace(129);
+            session.restore_port_nav();
+            assert_eq!(session.nav_mode(), before, "restored {before:?}");
+        }
+    }
+
+    #[test]
+    fn a_port_nav_put_back_without_a_save_changes_nothing() {
+        let (_, mut session) = landed();
+        session.chart.nav = hyperspace(131);
+        session.put_back_port_nav();
+        assert_eq!(session.nav_mode(), hyperspace(131));
     }
 
     // A mission dialog's map's save and restore.

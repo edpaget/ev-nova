@@ -210,7 +210,10 @@ pub use self::interface::{
 pub use self::ship_desc::ship_desc_id;
 pub use self::shot_spin::shot_spin_id;
 pub use self::spin_sprite::{SheetKind, SpinSheet, SpinSpriteError};
-pub use self::sprite::{LayerError, LayerSprite, ShipLayer, ShipLayers, ShipSprite, SpriteError};
+pub use self::sprite::{
+    LayerError, LayerSprite, SheetScan, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite,
+    ShipSpriteInfo, SpriteError,
+};
 pub use self::stellar_sprite::{StellarSprite, StellarSpriteError, stellar_spin_id};
 
 /// Why the store could not be opened at all.

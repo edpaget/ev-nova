@@ -33,35 +33,40 @@
 //! its sub-dialogs read, so the open spaceport serves the stellar it
 //! opened on until it is left.
 //!
-//! **Here.** `Mxxx` and `Nxxx`
-//! only queue their move: a set expression runs in the middle of a
-//! purchase, a capture or a hook, with no catalog to read the new system
-//! from. Landed, each writes the nav selection at once, at its operator,
-//! as the original does, from each system's first stellar read as the
-//! session starts (see the `nav` module), so a dialog's redraw after the
-//! script shows it. [`Session::settle_script`] applies the moves in order at a safe
-//! point, which whoever runs set expressions calls after each input and
-//! tick, before saving; a move to a system in range that does not exist
-//! runs the move's tail with no move, as an `N` out of range does below,
-//! by [`ScriptEffectRules::missing_system_move`]'s engine reading, and
-//! does nothing by the other. Each move makes a save
-//! due. In flight a move gives up a jump being prepared.
+//! **Here.** `Mxxx` and `Nxxx` apply at their operator, as `_EvalSetExp`
+//! applies them, with no catalog: a set expression runs in the middle of
+//! a purchase, a capture or a hook (see the `operator_moves` module). The
+//! operator writes the player's system and places the ship, landed or in
+//! flight; landed it empties the offers and writes the nav selection,
+//! from each system's first stellar read as the session starts (see the
+//! `nav` module), so a dialog's redraw after the script shows it; in
+//! flight it lets go of the selection, rebuilds the chart and dispatches
+//! the enter-system hook. A later operator of the same script reads the
+//! system moved to. A move to a system in range that does not exist runs
+//! the move's tail with no move, as an `N` out of range does below, by
+//! [`ScriptEffectRules::missing_system_move`]'s engine reading, and does
+//! nothing by the other. Each move makes a save due. From a jump's end to
+//! its entry an in-flight move is the jump's own (see the `jump_moves`
+//! module), and from the ship leaving the spaceport to the take-off's
+//! last nebula pass a move is the take-off's landed move (see the
+//! `take_off_moves` module).
 //!
-//! [`Session::run_set`] stays catalog-free, so a script it runs in the
-//! middle of something else (a record's hook) always queues.
-//! [`Session::settle_script`] is the story dispatcher's one dispatch
-//! point: it applies the moves, dispatches the story events raised, then
-//! applies a `Q`'s leave in flight (a landed one is held for the
-//! take-off), until nothing is left. The scripts the
-//! dispatcher runs nest, by [`RuleKey::StoryReentry`]'s engine reading:
-//! after each operator, their moves settle and the events raised
-//! dispatch before the next operator. The events a deferred script's
-//! moves raise dispatch from the caller's next `settle_script` (see the
+//! What needs the catalog, the move's entry, waits for
+//! [`Session::settle_script`], which whoever runs set expressions calls
+//! after each input and tick, before saving: the story dispatcher's one
+//! dispatch point. It completes the entry the moves owe, dispatches the
+//! story events raised, then applies a `Q`'s leave in flight (a landed
+//! one is held for the take-off), until nothing is left. In flight the
+//! entry gives up a jump being prepared. The scripts the dispatcher runs
+//! nest, by [`RuleKey::StoryReentry`]'s engine reading: after each
+//! operator, their moves' entry completes and the events raised dispatch
+//! before the next operator. The events a deferred script raises
+//! dispatch from the caller's next `settle_script` (see the
 //! [`story`](crate::story) module's "Dispatch").
 //!
 //! A move enters the system as every way in does, by its rows of the
-//! table in the `entry` module ([`Session::enter_system`]): `move_to`
-//! only chooses where the ship goes, as below.
+//! table in the `entry` module ([`Session::enter_system`]), with the ship
+//! where the operator put it, as below.
 //!
 //! In flight, the ship is in the new system: its stellars read, the
 //! navigation target, a gate's pending entry, the shots and beams, the
@@ -90,10 +95,12 @@
 //!
 //! Every take-off now explores the system, as the original's does, which
 //! changes nothing in a system explored already. It keeps the ship where
-//! it touched down, instead of the stellar's centre, after an `N`: by
-//! [`ScriptEffectRules::keep_flag`]'s engine reading after any `N` since
-//! the last take-off, landed or in flight, as the original's flag stays
-//! set; by the other, only after a landed one. The flag is not saved.
+//! it touched down, instead of the stellar's centre, after an `N` run
+//! while docked: by [`ScriptEffectRules::keep_flag`]'s engine reading only
+//! then, as the original clears its flag at every landing
+//! (`_PlayerLandOnStellar` @0x631f1-0x631f6) before the take-off reads it
+//! (@0x633ad); by the other, after any `N` since the last take-off, landed
+//! or in flight. The flag is not saved.
 //!
 //! What else a move does follows [`ScriptEffectRules::arrival`]. By the
 //! engine, nothing: the course is kept, and J refuses while its next
@@ -122,8 +129,8 @@
 //! the player's own system is entered again as a move within the system,
 //! the ship kept as it is, the pilot's stellar kept and no take-off hold
 //! set. That move is never an arrival, whatever
-//! [`ScriptEffectRules::arrival`] says, as it moves nowhere. It queues
-//! and settles as a move does. By the other reading it does nothing, as
+//! [`ScriptEffectRules::arrival`] says, as it moves nowhere. It applies
+//! at its operator and owes its entry as a move does. By the other reading it does nothing, as
 //! every other operator out of range does (see the `control` module).
 //!
 //! **An `M` or `N` to a system with no `sÿst`** (in range) runs that same
@@ -210,22 +217,20 @@
 //! landed or not, over whatever plays. The session never calls audio: the
 //! sound leaves it as an event, drained with [`Session::take_sounds`].
 //!
-//! Not yet as the original: the mission work its moves do
-//! (`_dockedPortMissions`, `_MissionHandlePlayerEnteredNewSystem`) waits
-//! for missions. The first stellar is the first of
+//! The first stellar a landed move's entry docks at is the first of
 //! [`PilotCatalog::landing_sites`], destroyed or not, as the original
 //! reads neither landability nor the destroyed state there. A landed `M`
 //! docks the pilot at it when it has the can-land flag and is no gate,
 //! destroyed or not and landable only once destroyed or not
-//! ([`is_dockable_destroyed_or_not`]), as the original docks there; only
+//! ([`is_dockable_destroyed_or_not`](crate::landing::is_dockable_destroyed_or_not)),
+//! as the original docks there; only
 //! a gate or a stellar without the can-land flag leaves it on none.
 
-use super::entry::{Arrival, Entry, Placement, ShipPlacement};
+use super::entry::{Placement, ShipPlacement};
 use super::{MissionRun, Outbox, Session, Setup};
 use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
-use crate::landing::is_dockable_destroyed_or_not;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::sound::SimSound;
 
@@ -239,8 +244,9 @@ pub struct ScriptEffectRules {
     pub starless: RuleSource,
     /// Whether a move is an arrival ([`RuleKey::MoveArrival`]).
     pub arrival: RuleSource,
-    /// Whether an `N` in flight keeps the next take-off's landing
-    /// position ([`RuleKey::MoveKeepFlag`]).
+    /// Whether an `N` in flight, or after a take-off's placement, keeps
+    /// the next take-off's landing position ([`RuleKey::MoveKeepFlag`]):
+    /// by the engine reading it doesn't, as every landing clears the flag.
     pub keep_flag: RuleSource,
     /// Whether a blank `Q` makes the player leave ([`RuleKey::BlankLeave`]).
     pub blank_leave: RuleSource,
@@ -375,30 +381,18 @@ impl Session {
         }
     }
 
-    /// Applies the moves queued, in order, each read from `catalog`,
-    /// populating on `chance` where the rules say, and notes the last on
-    /// `settled`.
+    /// Completes the entry the moves applied at their operators owe
+    /// ([`Session::settle_pending_move`]; see the `operator_moves`
+    /// module), reading `catalog`, populating on `chance` where the rules
+    /// say, and notes the system moved to on `settled`.
     pub(super) fn settle_moves(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
         settled: &mut Settled,
     ) {
-        for step in std::mem::take(&mut self.run.queued.moves) {
-            let (system, keep) = match step {
-                ScriptMove::To(system) => (system, false),
-                ScriptMove::KeepPosition(system) => (system, true),
-                ScriptMove::Stay => {
-                    self.stay(catalog, chance);
-                    continue;
-                }
-            };
-            if catalog.system_exists(system) {
-                self.move_to(system, keep, catalog, chance);
-                settled.moved = Some(self.pilot.system);
-            } else if self.setup.script_effect_rules().missing_system_move == RuleSource::Engine {
-                self.stay(catalog, chance);
-            }
+        if let Some(system) = self.settle_pending_move(catalog, catalog, chance) {
+            settled.moved = Some(system);
         }
     }
 
@@ -467,80 +461,36 @@ impl Session {
             });
         self.run.queued.leave = picked.or_else(|| self.setup.blank_leave());
     }
+}
 
-    /// An `N` out of range, or by [`ScriptEffectRules::missing_system_move`]'s
-    /// engine reading an `M` or `N` to a system with no record: the
-    /// move's tail, with no move (see the module docs). Landed, the offers are emptied and nothing else changes;
-    /// in flight, the player's own system is entered again, the ship kept
-    /// as it is, as a move within the system that is never an arrival
-    /// ([`Entry::ScriptStay`]). It moves nowhere, so `settled.moved` is
-    /// left as it was.
-    fn stay(
-        &mut self,
-        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
-        chance: &mut (impl Chance + ?Sized),
-    ) {
-        if self.mode.landed().is_some() {
-            self.run.empty_offers();
-            return;
-        }
-        let system = self.pilot.system;
-        let arrival = Arrival {
-            system,
-            sites: self.chart.read_sites(catalog, system),
-            placement: Placement {
-                ship: ShipPlacement::Keep,
-                stellar: None,
-                hold: false,
-            },
-        };
-        self.enter_system(Entry::ScriptStay, arrival, catalog, catalog, chance);
-    }
-
-    /// Moves the player to `system`, keeping the position when `keep`
-    /// (`N`) or else at its first stellar (`M`), read from `catalog`, and
-    /// enters it as a move (see the module docs): only the placement is
-    /// chosen here.
-    fn move_to(
-        &mut self,
-        system: SystemId,
-        keep: bool,
-        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
-        chance: &mut (impl Chance + ?Sized),
-    ) {
-        let sites = self.chart.read_sites(catalog, system);
-        let first = sites.first().map(|site| {
-            let dock = is_dockable_destroyed_or_not(site).then_some(site.id);
-            (site.position, dock)
-        });
-        let rules = self.setup.script_effect_rules();
-        let landed = self.mode.landed().is_some();
-        let ship = match first {
-            _ if keep => ShipPlacement::Keep,
-            Some((position, _)) => ShipPlacement::AtRest(position),
-            None if landed || rules.starless == RuleSource::Bible => {
-                ShipPlacement::AtRest(Vec2::ZERO)
-            }
-            None => ShipPlacement::Keep,
-        };
-        let stellar = first.and_then(|(_, dock)| dock).filter(|_| landed && !keep);
-        let placement = Placement {
-            ship,
-            stellar,
-            hold: keep && (landed || rules.keep_flag == RuleSource::Engine),
-        };
-        let arrival = Arrival {
-            system,
-            sites,
-            placement,
-        };
-        self.enter_system(
-            Entry::ScriptMove { landed },
-            arrival,
-            catalog,
-            catalog,
-            chance,
-        );
+/// Where a move puts the ship (see the module docs), the system's first
+/// stellar at `first`, with the stellar to dock at landed, if any, kept
+/// when `keep` (`N`), `landed` or not, by `rules`: `M` stops it there,
+/// its speed along its heading kept (`_EvalSetExp` @0x157a6-0x157da),
+/// which landed is none already (`_PlayerLandOnStellar` @0x63409, and
+/// nothing writes it while docked); with no stellar it
+/// stays as it is in flight, unless [`ScriptEffectRules::starless`] stops
+/// it at the centre, and landed it rests at the centre. `N` keeps the
+/// ship, and holds the next take-off's landing position landed, or in
+/// flight by [`ScriptEffectRules::keep_flag`]'s other reading.
+pub(super) fn move_placement(
+    first: Option<(Vec2, Option<StellarId>)>,
+    keep: bool,
+    landed: bool,
+    rules: ScriptEffectRules,
+) -> Placement {
+    let ship = match first.map(|(position, _)| position) {
+        _ if keep => ShipPlacement::Keep,
+        Some(position) => ShipPlacement::Stopped(position),
+        None if landed => ShipPlacement::AtRest(Vec2::ZERO),
+        None if rules.starless == RuleSource::Bible => ShipPlacement::Stopped(Vec2::ZERO),
+        None => ShipPlacement::Keep,
+    };
+    let stellar = first.and_then(|(_, dock)| dock).filter(|_| landed && !keep);
+    Placement {
+        ship,
+        stellar,
+        hold: keep && (landed || rules.keep_flag == RuleSource::Bible),
     }
 }
 
@@ -787,6 +737,7 @@ mod tests {
             carried,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 
@@ -912,13 +863,14 @@ mod tests {
     // Through run_set.
 
     #[test]
-    fn m_and_n_are_queued_until_settled() {
+    fn m_and_n_write_the_system_at_their_operators_and_owe_one_entry() {
         let catalog = moving();
         let mut session = flying(&catalog);
         run(&mut session, "M131 N132");
-        assert_eq!(session.system(), SystemId(130), "nothing yet");
+        assert_eq!(session.system(), SystemId(132), "at the operators");
+        assert_eq!(ids(&session.chart.sites), [128, 129], "shown at the entry");
         assert_eq!(session.take_script_notes(), []);
-        assert!(!session.take_save_due());
+        assert!(session.take_save_due());
         assert_eq!(settle(&mut session, &catalog).moved, Some(SystemId(132)));
         assert_eq!(session.system(), SystemId(132));
         assert!(session.take_save_due());
@@ -981,6 +933,19 @@ mod tests {
             Vec2::new(300.0, 0.0),
             "a gate as any stellar"
         );
+    }
+
+    #[test]
+    fn m_in_flight_keeps_the_speed_along_the_heading() {
+        // `_EvalSetExp` zeroes +0x20/+0x24 (@0x157d1, @0x157da) and never
+        // writes +0x48, which an inertialess ship's velocity follows from
+        // the next frame (`_AdjustInertialessShipVelocity` @0x6d43a).
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        session.ship.player_speed = 4.0;
+        moved(&mut session, &catalog, "M131");
+        assert_eq!(session.player().velocity, Vec2::ZERO);
+        assert_eq!(session.player_speed(), 4.0, "kept");
     }
 
     /// `pilot` saved and loaded, then flown.
@@ -1188,13 +1153,23 @@ mod tests {
 
     #[test]
     fn two_moves_in_one_settle_bring_the_ships_left_behind_back() {
+        // The moves out and back owe one entry, from 130 into 130, so the
+        // traffic is never left behind, under either reading.
         let catalog = moving();
-        for (reading, back) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+        for reading in RuleSource::ALL {
             let mut session = flying(&catalog).with_rules(left_behind(reading));
             let before = session.npcs().to_vec();
             assert_eq!(before.len(), 2);
             moved(&mut session, &catalog, "M131 M130");
             assert_eq!(session.system(), SystemId(130), "{reading:?}");
+            assert_eq!(session.npcs(), before, "{reading:?}");
+        }
+        // Settled in between, the move out leaves them behind first.
+        for (reading, back) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut session = flying(&catalog).with_rules(left_behind(reading));
+            let before = session.npcs().to_vec();
+            moved(&mut session, &catalog, "M131");
+            moved(&mut session, &catalog, "M130");
             let expected = if back { before } else { Vec::new() };
             assert_eq!(session.npcs(), expected, "{reading:?}");
         }
@@ -1260,9 +1235,11 @@ mod tests {
         pilot.escorts = vec![escort(129, false), escort(130, true)];
         let mut session = flying_with(&catalog, pilot).with_rules(rules);
         session.plot_course(SystemId(132)).expect("a route");
+        assert!(session.pilot().course_start().is_some());
         moved(&mut session, &catalog, "M131");
         assert!(session.pilot().has_explored(SystemId(131)));
         assert_eq!(session.course(), []);
+        assert_eq!(session.pilot().course_start(), None, "the start cleared");
         assert_eq!(session.pilot().escorts().len(), 1, "the dry fighter left");
         assert_eq!(
             session.take_fighter_notes(),
@@ -1511,9 +1488,11 @@ mod tests {
         let rules = Rulebook::default().with_override(RuleKey::MoveArrival, RuleSource::Bible);
         let mut session = landed(&catalog).with_rules(rules);
         session.plot_course(SystemId(131)).expect("a route");
+        assert!(session.pilot().course_start().is_some());
         moved(&mut session, &catalog, "N131");
         assert!(session.pilot().has_explored(SystemId(131)));
         assert_eq!(session.course(), []);
+        assert_eq!(session.pilot().course_start(), None, "the start cleared");
         assert_eq!(session.landed(), Some(StellarId(128)));
     }
 
@@ -1538,8 +1517,15 @@ mod tests {
     /// The ship lands from (10, -10) on planet 128, after `text` ran in
     /// flight under `keep_flag`, and takes off: where it is then.
     fn taken_off_after(text: &str, keep_flag: RuleSource) -> Vec2 {
+        taken_off_under(
+            text,
+            Rulebook::default().with_override(RuleKey::MoveKeepFlag, keep_flag),
+        )
+    }
+
+    /// [`taken_off_after`] under the whole of `rules`.
+    fn taken_off_under(text: &str, rules: Rulebook) -> Vec2 {
         let catalog = moving();
-        let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, keep_flag);
         let mut session = flying(&catalog).with_rules(rules);
         moved(&mut session, &catalog, text);
         session.ship.player.position = Vec2::new(10.0, -10.0);
@@ -1549,36 +1535,48 @@ mod tests {
     }
 
     #[test]
-    fn by_the_engine_an_n_in_flight_keeps_the_next_take_offs_landing_position() {
+    fn by_the_engine_an_n_in_flight_leaves_the_take_off_as_any_other() {
+        // `_PlayerLandOnStellar` clears the flag first (@0x631f1-0x631f6).
         assert_eq!(
             taken_off_after("N130", RuleSource::Engine),
+            Vec2::new(30.0, -40.0)
+        );
+        assert_eq!(
+            taken_off_under("N130", Rulebook::default()),
+            Vec2::new(30.0, -40.0),
+            "the default"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_an_n_in_flight_keeps_the_next_take_offs_landing_position() {
+        assert_eq!(
+            taken_off_after("N130", RuleSource::Bible),
             Vec2::new(10.0, -10.0)
         );
         assert_eq!(
-            taken_off_after("M130", RuleSource::Engine),
+            taken_off_after("M130", RuleSource::Bible),
             Vec2::new(30.0, -40.0),
             "only N"
         );
     }
 
     #[test]
-    fn by_the_other_reading_an_n_in_flight_leaves_the_take_off_as_any_other() {
-        assert_eq!(
-            taken_off_after("N130", RuleSource::Bible),
-            Vec2::new(30.0, -40.0)
-        );
-    }
-
-    #[test]
-    fn by_the_other_reading_a_landed_n_still_keeps_the_landing_position() {
-        let catalog = moving();
-        let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, RuleSource::Bible);
-        let mut session = flying(&catalog).with_rules(rules);
-        session.ship.player.position = Vec2::new(10.0, -10.0);
-        land_now(&mut session).expect("lands");
-        moved(&mut session, &catalog, "N130");
-        session.take_off(&catalog, &mut NeverFires);
-        assert_eq!(session.player().position, Vec2::new(10.0, -10.0));
+    fn a_landed_n_keeps_the_landing_position_by_either_reading() {
+        for source in RuleSource::ALL {
+            let catalog = moving();
+            let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, source);
+            let mut session = flying(&catalog).with_rules(rules);
+            session.ship.player.position = Vec2::new(10.0, -10.0);
+            land_now(&mut session).expect("lands");
+            moved(&mut session, &catalog, "N130");
+            session.take_off(&catalog, &mut NeverFires);
+            assert_eq!(
+                session.player().position,
+                Vec2::new(10.0, -10.0),
+                "{source:?}"
+            );
+        }
     }
 
     // P.
@@ -2082,13 +2080,7 @@ mod tests {
         let position = session.player().position;
         let velocity = session.player().velocity;
         let raised = stayed(&mut session, &catalog, "N9999");
-        assert_eq!(
-            raised,
-            [crate::story::StoryEvent::EnteredSystem {
-                system: SystemId(130),
-                how: crate::story::Entrance::ScriptMove { landed: false },
-            }]
-        );
+        assert_eq!(raised, [], "its hook dispatched at the operator (@0x159a8)");
         assert_eq!(session.system(), SystemId(130));
         assert_eq!(session.player().position, position);
         assert_eq!(session.player().velocity, velocity);
@@ -2127,11 +2119,8 @@ mod tests {
                 .assert_docked_among_shown(session.mode.landed());
             assert_eq!(
                 session.story_raised(),
-                [crate::story::StoryEvent::EnteredSystem {
-                    system: SystemId(130),
-                    how: crate::story::Entrance::ScriptMove { landed: false },
-                }],
-                "{text}"
+                [],
+                "{text}: its hook dispatched at the operator (@0x159a8)"
             );
             assert_eq!(settled.moved, None, "{text}: moved nowhere");
             assert_eq!(session.system(), SystemId(130), "{text}");

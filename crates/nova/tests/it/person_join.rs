@@ -986,6 +986,25 @@ fn boarding_wreck_of_0x0200_offers_its_mission_in_place_of_the_plunder() {
 }
 
 #[test]
+fn b_held_as_the_wreck_of_0x0200_is_targeted_offers_its_mission_on_the_next_frame() {
+    // `_HandlePlayer` boards every frame B is down until an attempt gets
+    // past the no-target return (@0x6a98b, @0x65031).
+    let store = MemoryPilots::new();
+    let knobs = Knobs {
+        wreck_flags: 0x0200,
+        wreck_mission: 128,
+        ..PLAIN
+    };
+    let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
+    game.key(Key::Char('b'), true);
+    game.target_person(129);
+    assert_eq!(game.showing(), Showing::Flight);
+    game.frame();
+    assert_eq!(game.showing(), Showing::Offer);
+    assert_eq!(game.offered(), Some(128));
+}
+
+#[test]
 fn by_the_settings_other_reading_merchant_joins_and_flies_again_after_a_save() {
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, JOINING);

@@ -313,11 +313,8 @@ fn leaving_the_spaceport_by_leave_sounds_only_the_take_off() {
     land(&mut screen);
     assert_eq!(
         screen.take_sounds(),
-        [
-            Sound::Sim(SimSound::TrafficControl),
-            Sound::Sim(SimSound::Landed)
-        ],
-        "the greeting, then the landing"
+        [Sound::Sim(SimSound::TrafficControl)],
+        "the greeting; an inhabited stellar's touchdown is silent"
     );
     let leave = spaceport(&screen)
         .dialog()

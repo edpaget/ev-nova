@@ -3,7 +3,8 @@
 //! needs (the sizes, and the buttons' frame-0 masks), and the pilot
 //! panel's ([`PilotPanelSource`]): `cölr` 128's menu font and colours,
 //! `STR#` 2002's labels, each `shïp`'s Subtitle, and the `shän` base
-//! images and `PICT` sizes [`target_picture`] picks its picture from,
+//! images and `PICT` sizes
+//! [`target_picture`](crate::target_picture::target_picture) picks its picture from,
 //! and the intro screen's ([`IntroSource`]): the first `chär`'s intro
 //! fields, `PICT` sizes, and whether a `snd ` exists. Thin lookups; the
 //! decisions are the core's.
@@ -22,12 +23,11 @@ use super::art::{
     MainScreenSource, PictFrames, ROLLOVER_SPIN, RolloverArt, SLIDE_SPINS, SpriteMask,
 };
 use super::intro::{CharacterIntro, IntroPicture, IntroSource};
-use super::pilot_panel::{PanelLabels, PanelLooks, PanelShip, PilotPanelSource, target_picture};
+use super::pilot_panel::{PanelLabels, PanelLooks, PanelShip, PilotPanelSource};
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::Point;
 use crate::sound::SoundId;
-use crate::spaceport::ShipBaseImages;
 
 /// The `snd ` resource type.
 const SND: nova_rsrc::ResType = nova_rsrc::ResType::new(*b"snd ");
@@ -80,22 +80,14 @@ impl PilotPanelSource for GameData {
         };
         PanelShip {
             subtitle: entry.record.subtitle.as_str().to_owned(),
-            picture: target_picture(ship, &ship_bases(self), |id| picture_size(self, id)),
+            picture: crate::target_picture::game_target_picture(self, ship),
         }
     }
 }
 
-/// Each `shän`'s `BaseImage` whose `shïp` decodes.
-fn ship_bases(data: &GameData) -> Vec<(ShipId, i16)> {
-    let mut bases = data.ship_base_images();
-    bases.retain(|(id, _)| matches!(data.get::<Ship>(id.0), Some(Ok(_))));
-    bases
-}
-
 /// `PICT` `id`'s width and height, if it exists and decodes.
 fn picture_size(data: &GameData, id: i16) -> Option<(u32, u32)> {
-    let image = decode_pict(data.resource(PICT, id)?.resource.data()).ok()?;
-    Some((image.width(), image.height()))
+    crate::ui::PictureSizes::picture_size(data, id)
 }
 
 impl MainScreenSource for GameData {
@@ -211,7 +203,7 @@ mod tests {
         ROLLOVER_SPRITE, SLIDE_FRAME, SLIDE_FRAMES, SLIDE_PICTS, SLIDE_POSITIONS,
         game_data as game, main_screen_resources,
     };
-    use crate::menu::pilot_panel::ShipPicture;
+    use crate::target_picture::ShipPicture;
 
     /// The fixture's resources without (`ty`, `id`).
     fn without(ty: ResType, id: i16) -> GameData {

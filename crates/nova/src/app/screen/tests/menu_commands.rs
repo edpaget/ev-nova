@@ -194,6 +194,7 @@ fn quit_question() -> AppScreen {
 fn naming() -> AppScreen {
     let mut screen = landed_shipyard(&MemoryPilots::new());
     click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
     screen.input(&key(Key::Char('b'), true));
     screen.input(&Input::Text('b'));
     screen.input(&key(Key::Char('b'), false));

@@ -113,6 +113,29 @@ pub enum Blend {
     /// leave the destination exactly; an opaque black texel darkens it to
     /// `d5 × (32 − k) >> 5`.
     OrCrossfade,
+    /// The original's translucent copy with its source and destination
+    /// factors set apart: `_BlitPixieRLETranslucent` (0xc1568) with
+    /// `_BlitPixieTranslucentCopy` (0xc1110), which compute
+    /// `((src_c × n_c) >> 5) | ((dst_c × m) >> 5)` per 5-bit channel. A
+    /// fully cloaked ship's hull at translucency 0x1e (+0xa8) with its
+    /// channel factors at 2 draws so, at n = 2 − 30 + 32 = 4 and m = 30
+    /// (`_HandleShipDisplay` @0x2d1d6-0x2d22a; see
+    /// [`cloak_fade`](crate::flight::cloak_fade)). [`Blend::OrCrossfade`]
+    /// ties m to 32 − n, so it cannot.
+    ///
+    /// # The tint
+    ///
+    /// Its colour channels are the source factors and its alpha the
+    /// destination factor, each in 32nds: `n_c = round(c × 32 / 255)`,
+    /// `m = round(a × 32 / 255)`, exact for [`translucent_tint`].
+    ///
+    /// # The bit depth
+    ///
+    /// As [`Blend::OrCrossfade`]'s, with n per channel in place of k and m
+    /// in place of 32 − k: the source is the texel's straight colour in 5
+    /// bits, the destination is quantised to 5 bits, and a transparent
+    /// texel (a skipped RLE pixel) leaves the destination exactly.
+    OrTranslucent,
 }
 
 impl Blend {
@@ -121,7 +144,7 @@ impl Blend {
     /// copy of the scene, so a later overlapping quad starts a new batch.
     #[must_use]
     pub fn reads_backdrop(self) -> bool {
-        matches!(self, Self::Or | Self::OrCrossfade)
+        matches!(self, Self::Or | Self::OrCrossfade | Self::OrTranslucent)
     }
 }
 
@@ -306,10 +329,12 @@ impl DrawCommand {
 /// Which layer of the frame a command is drawn in.
 ///
 /// Only flight draws a world layer ([`DrawList::world`]): space, the
-/// stellars, asteroids, boxes, beams, ships, shots, effects and smoke,
-/// everything the original draws into its sprite world. Everything else
-/// (the HUD, every text, the maps, the dialogs, the cursor and the fades)
-/// is overlay, and so is all of every other screen's drawing.
+/// stellars, asteroids, boxes, beams, ships, shots, effects and smoke, the
+/// brackets, the cursor and the red-alert and double-time icons, the
+/// message line's box, the floating map and the escort menu (but for
+/// their text), everything the original draws into its sprite world.
+/// Everything else (the HUD, every text, the course map, the dialogs and
+/// the fades) is overlay, and so is all of every other screen's drawing.
 ///
 /// A renderer may draw the world at the logical resolution and enlarge it
 /// (a frame upscaler), drawing the overlay over it at the window's own.
@@ -422,6 +447,16 @@ impl DrawList {
             center,
             tint,
             blend: Blend::OrCrossfade,
+        })
+    }
+
+    /// Appends a [`DrawCommand::Sprite`] drawn with [`Blend::OrTranslucent`].
+    pub fn translucent_sprite(&mut self, image: ImageKey, center: Point, tint: Color) -> &mut Self {
+        self.push(DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend: Blend::OrTranslucent,
         })
     }
 
@@ -634,15 +669,30 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
 ///
 /// Where this deviates from the original:
 ///
-/// - **Cloaking is not modelled.** A cloaked ship's bias (+0xb0 ≠ 0)
-///   mixes the lights toward a colour and keeps them off `AddOver` even at
-///   level 32. Nor is the 8-bit depth, whose alpha-table blits were not
+/// - **The 8-bit depth is not modelled**: its alpha-table blits were not
 ///   traced.
+///
+/// A cloaking ship's layers take no bias either: `_HandleShipDisplay`
+/// leaves +0xb0 alone below a full fade and caps each channel factor at
+/// trunc(32 − fade) (@0x2d4ed-0x2d641), which takes a level of 32 off
+/// `AddOver` onto the translucent blit, the same OR formula at the capped
+/// level (see [`cloak_fade`](crate::flight::cloak_fade)).
 #[must_use]
 pub fn lights_tint(level: u8) -> Color {
     let full = u16::from(FULL);
     let level = u16::from(level).min(full);
     Color::rgba(255, 255, 255, ((level * 255 + full / 2) / full) as u8)
+}
+
+/// The tint of a [`Blend::OrTranslucent`] sprite whose source factor is
+/// `source` and destination factor `destination`, each in 32nds and held
+/// to 32: white at `source` 32nds, at `destination` 32nds of full alpha.
+#[must_use]
+pub fn translucent_tint(source: u8, destination: u8) -> Color {
+    let full = u16::from(FULL);
+    let scale = |n: u8| ((u16::from(n).min(full) * 255 + full / 2) / full) as u8;
+    let n = scale(source);
+    Color::rgba(n, n, n, scale(destination))
 }
 
 /// Fills `area` with `color`. There is no rectangle command: a horizontal
@@ -655,6 +705,46 @@ pub fn fill_rect(list: &mut DrawList, area: Bounds, color: Color) {
         area.height(),
         color,
     );
+}
+
+/// A one-pixel rule from `from` to `to` in `color`, as a pen-1 `LineTo`
+/// covers it: both ends included.
+pub fn rule(list: &mut DrawList, from: Point, to: Point, color: Color) {
+    let area = Bounds {
+        min: from,
+        max: Point::new(to.x + 1.0, to.y + 1.0),
+    };
+    fill_rect(list, area, color);
+}
+
+/// QuickDraw's `FrameRect(rect)` in `color`: a one-pixel border just
+/// inside it, ruled top, bottom, left, then right.
+pub fn frame_rect(list: &mut DrawList, rect: Bounds, color: Color) {
+    let (left, top) = (rect.min.x, rect.min.y);
+    let (right, bottom) = (rect.max.x - 1.0, rect.max.y - 1.0);
+    rule(list, Point::new(left, top), Point::new(right, top), color);
+    rule(
+        list,
+        Point::new(left, bottom),
+        Point::new(right, bottom),
+        color,
+    );
+    rule(list, Point::new(left, top), Point::new(left, bottom), color);
+    rule(
+        list,
+        Point::new(right, top),
+        Point::new(right, bottom),
+        color,
+    );
+}
+
+/// The one command [`fill_rect`] draws for `area` in `color`, for tests
+/// to compare drawn commands against.
+#[cfg(test)]
+pub(crate) fn fill_command(area: Bounds, color: Color) -> DrawCommand {
+    let mut list = DrawList::new();
+    fill_rect(&mut list, area, color);
+    list.iter().next().cloned().expect("a fill is one command")
 }
 
 impl<'a> IntoIterator for &'a DrawList {
@@ -672,6 +762,50 @@ mod tests {
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
+    }
+
+    #[test]
+    fn a_rule_covers_both_ends_as_a_pen_1_line_to_does() {
+        let mut list = DrawList::new();
+        rule(&mut list, at(2.0, 5.0), at(9.0, 5.0), Color::WHITE);
+        let area = Bounds {
+            min: at(2.0, 5.0),
+            max: at(10.0, 6.0),
+        };
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [fill_command(area, Color::WHITE)]
+        );
+    }
+
+    #[test]
+    fn frame_rect_rules_a_one_pixel_border_just_inside_the_rect() {
+        let red = Color::rgba(255, 0, 0, 255);
+        let mut list = DrawList::new();
+        frame_rect(&mut list, Bounds::at(at(10.0, 20.0), 84.0, 55.0), red);
+        let edge = |min: Point, max: Point| fill_command(Bounds { min, max }, red);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [
+                edge(at(10.0, 20.0), at(94.0, 21.0)),
+                edge(at(10.0, 74.0), at(94.0, 75.0)),
+                edge(at(10.0, 20.0), at(11.0, 75.0)),
+                edge(at(93.0, 20.0), at(94.0, 75.0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_translucent_tint_carries_its_source_factor_in_colour_and_its_destination_in_alpha() {
+        assert_eq!(translucent_tint(4, 30), Color::rgba(32, 32, 32, 239));
+        assert_eq!(translucent_tint(32, 32), Color::WHITE);
+        assert_eq!(translucent_tint(40, 0), Color::rgba(255, 255, 255, 0));
+        assert!(Blend::OrTranslucent.reads_backdrop());
+        let mut list = DrawList::new();
+        let tint = translucent_tint(4, 30);
+        list.translucent_sprite(ImageKey::sprite(1, 0), at(1.0, 2.0), tint)
+            .translucent_sprite(ImageKey::sprite(2, 0), at(3.0, 4.0), tint);
+        assert_eq!(list.iter().count(), 2, "chained onto the list");
     }
 
     #[test]

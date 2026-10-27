@@ -373,7 +373,6 @@ mod tests {
     #[test]
     fn an_ionized_npcs_rush_is_measured_against_its_slowed_thrust() {
         use crate::flight::Controls;
-        use crate::traffic::inertialess::Inertia;
         use crate::traffic::ship_display::{Thrust, record};
         let flight = FlightRules::default();
         let mut ship = charged(200.0);
@@ -387,9 +386,9 @@ mod tests {
             thrust: true,
             ..Controls::default()
         };
-        record(&mut ship, &rush, thrust, flight, Inertia::Inertial);
+        record(&mut ship, &rush, thrust, flight);
         assert_eq!(ship.display.drive.thrust, Thrust::Rush);
-        record(&mut ship, &own, thrust, flight, Inertia::Inertial);
+        record(&mut ship, &own, thrust, flight);
         assert_eq!(ship.display.drive.thrust, Thrust::Plain);
     }
 

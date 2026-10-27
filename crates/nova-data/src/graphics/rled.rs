@@ -37,6 +37,20 @@ pub(super) const RUN: u8 = 4;
 /// The low 24 bits of a token: its byte count.
 const COUNT_MASK: u32 = 0x00FF_FFFF;
 
+/// What [`scan_rled`] reads from an `rlëD` without decoding its pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RledInfo {
+    /// Each frame's width in pixels.
+    pub frame_width: u32,
+    /// Each frame's height in pixels.
+    pub frame_height: u32,
+    /// How many frames the sheet holds: at least one.
+    pub frames: u16,
+    /// Whether any frame has a run, so the decoded sheet would keep
+    /// [`SpriteSheet::solid_frames`].
+    pub has_runs: bool,
+}
+
 /// Decodes an `rlëD` to its frames, arranged by `layout` (or
 /// [`SheetLayout::DEFAULT`]) when composed. An 8-bit sheet decodes as the
 /// original's 16-bit world draws it ([`EightBitReading::AsDrawn`]); see
@@ -83,6 +97,60 @@ pub fn decode_rled_as(
     reading: EightBitReading,
 ) -> Result<SpriteSheet, GraphicsError> {
     let mut r = Reader::new(data);
+    let header = read_header(&mut r, data.len())?;
+    let (width, height) = (header.width, header.height);
+    let units = Units::of(&header, reading);
+    let layout = layout.unwrap_or(SheetLayout::DEFAULT);
+    if header.depth == DEPTH_8 {
+        let mut painter = Rled8::new(reading, width, height, header.count);
+        walk(data, r.pos(), &header, units, &mut painter)?;
+        Ok(painter.finish(layout))
+    } else {
+        let mut painter = Painter {
+            width,
+            height,
+            frames: Vec::with_capacity(usize::from(header.count)),
+            frame: Image::transparent(width, height),
+            solids: Vec::with_capacity(usize::from(header.count)),
+            solid: None,
+        };
+        walk(data, r.pos(), &header, units, &mut painter)?;
+        let sheet = SpriteSheet::new(width, height, painter.frames, layout);
+        Ok(sheet.with_solid(solid_frames(painter.solids, width, height)))
+    }
+}
+
+/// Reads an `rlëD`'s frame size, frame count and whether it has runs,
+/// without decoding a pixel.
+///
+/// It walks the same tokens as [`decode_rled`], so it fails exactly where
+/// and as that does, and succeeds with what the decoded sheet would hold.
+pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
+    let mut r = Reader::new(data);
+    let header = read_header(&mut r, data.len())?;
+    let units = Units::of(&header, EightBitReading::AsDrawn);
+    let mut scanner = Scanner { has_runs: false };
+    walk(data, r.pos(), &header, units, &mut scanner)?;
+    Ok(RledInfo {
+        frame_width: header.width,
+        frame_height: header.height,
+        frames: header.count,
+        has_runs: scanner.has_runs,
+    })
+}
+
+/// An `rlëD`'s checked header.
+struct Header {
+    width: u32,
+    height: u32,
+    /// [`DEPTH`] or [`DEPTH_8`].
+    depth: u16,
+    /// At least one.
+    count: u16,
+}
+
+/// Reads and checks the 16-byte header of an `input_len`-byte sheet.
+fn read_header(r: &mut Reader<'_>, input_len: usize) -> Result<Header, GraphicsError> {
     let width = r.u16()?;
     let height = r.u16()?;
     let depth = r.u16()?;
@@ -104,78 +172,96 @@ pub fn decode_rled_as(
     let (width, height) = (u32::from(width), u32::from(height));
     check_budget(
         u64::from(width) * u64::from(height) * u64::from(count),
-        data.len(),
+        input_len,
     )?;
-    let layout = layout.unwrap_or(SheetLayout::DEFAULT);
-    if depth == DEPTH_8 {
-        let mut painter = Rled8::new(reading, width, height, count);
-        walk(&mut r, data.len(), height, count, &mut painter)?;
-        Ok(painter.finish(layout))
-    } else {
-        let mut painter = Rled16::new(width, height, count);
-        walk(&mut r, data.len(), height, count, &mut painter)?;
-        Ok(painter.finish(layout))
-    }
+    Ok(Header {
+        width,
+        height,
+        depth,
+        count,
+    })
 }
 
-/// One drawing token (`PIXELS`, `SKIP` or `RUN`) and where it is.
+/// How a walk measures a token's count: in 16-bit pixels (two bytes
+/// each), or byte by byte for an 8-bit sheet.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Token {
-    /// The opcode.
-    pub(super) op: u8,
-    /// Its byte count.
-    pub(super) count: u32,
-    /// The frame it draws in, counting from 0.
-    pub(super) frame: u32,
-    /// The line it draws on, counting from 0.
-    pub(super) line: u32,
-    /// Where it starts.
-    pub(super) offset: usize,
+struct Units {
+    /// Bytes per unit: 2 for a 16-bit pixel, 1 for an 8-bit byte.
+    size: u32,
+    /// Units a line holds.
+    row_len: u32,
 }
 
-impl Token {
-    /// The error for a token that draws past the end of its line.
-    pub(super) fn overflow(&self) -> GraphicsError {
-        GraphicsError::LineOverflow {
-            frame: self.frame,
-            line: self.line,
-            offset: self.offset,
+impl Units {
+    /// The units of `header`'s sheet, an 8-bit one read as `reading` says:
+    /// as drawn, a row holds two bytes per pixel; through the palette, one.
+    fn of(header: &Header, reading: EightBitReading) -> Self {
+        if header.depth == DEPTH_8 {
+            let row_len = match reading {
+                EightBitReading::AsDrawn => 2 * header.width,
+                EightBitReading::SystemPalette => header.width,
+            };
+            Self { size: 1, row_len }
+        } else {
+            Self {
+                size: 2,
+                row_len: header.width,
+            }
         }
     }
 }
 
-/// What one depth does with a sheet's tokens. The walk ([`walk`]) checks
-/// the frame and line structure; a painter draws.
-pub(super) trait Painter {
-    /// A line starts: drawing returns to its left edge.
-    fn line_start(&mut self);
-    /// Draws `token`, reading any data it carries from `r`.
-    fn draw(&mut self, token: Token, r: &mut Reader<'_>) -> Result<(), GraphicsError>;
-    /// The frame ends.
+/// What a token walk does with the tokens it has checked. Positions and
+/// lengths are in the walk's [`Units`].
+pub(super) trait Sink {
+    /// A `PIXELS` token's data, drawn from `(x, y)` right: big-endian
+    /// 16-bit pixels at 16 bits, one byte per unit at 8.
+    fn pixels(&mut self, x: u32, y: u32, pixels: &[u8]);
+    /// A `RUN` of `len` units of `word` (as read big-endian from the
+    /// file), from `(x, y)` right.
+    fn run(&mut self, x: u32, y: u32, len: u32, word: u32);
+    /// The current frame is finished.
     fn frame_end(&mut self);
 }
 
-/// Walks the tokens after the header until `count` frames have ended,
-/// handing each to `painter`. `steps` bounds the walk: every token is four
-/// bytes, so the data runs out first.
+/// The padding after `n` bytes of pixel data, up to a 4-byte boundary.
+fn pad4(n: usize) -> usize {
+    (4 - n % 4) % 4
+}
+
+/// Walks the tokens of `data` from `start` (just past the header),
+/// checking each, until `header.count` frames have ended.
+///
+/// It reads the bytes directly rather than through a [`Reader`], as this
+/// loop runs once per token of every sheet the flight reads; each failed
+/// read is an [`GraphicsError::UnexpectedEnd`] at the read's start, as a
+/// [`Reader`]'s is.
 fn walk(
-    r: &mut Reader<'_>,
-    steps: usize,
-    height: u32,
-    count: u16,
-    painter: &mut impl Painter,
+    data: &[u8],
+    start: usize,
+    header: &Header,
+    units: Units,
+    sink: &mut impl Sink,
 ) -> Result<(), GraphicsError> {
-    let mut frames = 0;
+    let height = header.height;
+    let mut pos = start;
+    let mut ended: u32 = 0;
     let mut lines = 0;
-    for _ in 0..steps {
-        let offset = r.pos();
-        let token = r.u32()?;
-        let op = (token >> 24) as u8;
+    let mut x = 0;
+    // Every token is four bytes, so the data runs out first.
+    for _ in 0..data.len() {
+        let offset = pos;
+        let Some(&[op, count_high, count_mid, count_low]) = data.get(pos..pos + 4) else {
+            return Err(GraphicsError::UnexpectedEnd { offset });
+        };
+        pos += 4;
+        let token = u32::from_be_bytes([op, count_high, count_mid, count_low]);
+        let len = (token & COUNT_MASK) / units.size;
         match op {
             FRAME_END => {
-                painter.frame_end();
-                frames += 1;
-                if frames == u32::from(count) {
+                sink.frame_end();
+                ended += 1;
+                if ended == u32::from(header.count) {
                     return Ok(());
                 }
                 lines = 0;
@@ -183,117 +269,115 @@ fn walk(
             LINE_START => {
                 if lines == height {
                     return Err(GraphicsError::TooManyLines {
-                        frame: frames,
+                        frame: ended,
                         offset,
                     });
                 }
                 lines += 1;
-                painter.line_start();
+                x = 0;
             }
             PIXELS | SKIP | RUN => {
-                let Some(line) = lines.checked_sub(1) else {
+                let Some(y) = lines.checked_sub(1) else {
                     return Err(GraphicsError::TokenOutsideLine { offset });
                 };
-                let token = Token {
-                    op,
-                    count: token & COUNT_MASK,
-                    frame: frames,
-                    line,
-                    offset,
-                };
-                painter.draw(token, r)?;
+                if units.size == 2 && op == PIXELS && token & 1 == 1 {
+                    return Err(GraphicsError::OddByteCount { offset });
+                }
+                if x + len > units.row_len {
+                    return Err(GraphicsError::LineOverflow {
+                        frame: ended,
+                        line: y,
+                        offset,
+                    });
+                }
+                match op {
+                    PIXELS => {
+                        // `len` is within the row, so this cannot
+                        // overflow.
+                        let count = (units.size * len) as usize;
+                        let Some(pixels) = data.get(pos..pos + count) else {
+                            return Err(GraphicsError::UnexpectedEnd { offset: pos });
+                        };
+                        pos += count;
+                        // Padded to four bytes.
+                        let padded = pos + pad4(count);
+                        if padded > data.len() {
+                            return Err(GraphicsError::UnexpectedEnd { offset: pos });
+                        }
+                        pos = padded;
+                        sink.pixels(x, y, pixels);
+                    }
+                    RUN => {
+                        let Some(&[b0, b1, b2, b3]) = data.get(pos..pos + 4) else {
+                            return Err(GraphicsError::UnexpectedEnd { offset: pos });
+                        };
+                        pos += 4;
+                        sink.run(x, y, len, u32::from_be_bytes([b0, b1, b2, b3]));
+                    }
+                    _ => {}
+                }
+                x += len;
             }
             token => return Err(GraphicsError::UnsupportedToken { token, offset }),
         }
     }
-    Err(GraphicsError::UnexpectedEnd { offset: r.pos() })
+    Err(GraphicsError::UnexpectedEnd { offset: pos })
 }
 
-/// The padding after `n` bytes of pixel data, up to a 4-byte boundary.
-pub(super) fn pad4(n: usize) -> usize {
-    (4 - n % 4) % 4
-}
-
-/// A 16-bit sheet's frames as they are drawn.
-struct Rled16 {
+/// A sink that paints each frame of a 16-bit sheet, and each frame's runs
+/// alone.
+struct Painter {
     width: u32,
     height: u32,
     frames: Vec<Image>,
+    frame: Image,
     /// Each finished frame's runs, if it had any.
     solids: Vec<Option<Image>>,
-    frame: Image,
-    /// The frame's own runs, once it has one.
+    /// The current frame's runs, if it has any.
     solid: Option<Image>,
-    x: u32,
 }
 
-impl Rled16 {
-    fn new(width: u32, height: u32, count: u16) -> Self {
-        Self {
-            width,
-            height,
-            frames: Vec::with_capacity(usize::from(count)),
-            solids: Vec::with_capacity(usize::from(count)),
-            frame: Image::transparent(width, height),
-            solid: None,
-            x: 0,
+impl Sink for Painter {
+    fn pixels(&mut self, x: u32, y: u32, pixels: &[u8]) {
+        for (i, &word) in (0..).zip(pixels.as_chunks::<2>().0) {
+            self.frame.put(x + i, y, rgb555(u16::from_be_bytes(word)));
         }
     }
 
-    fn finish(self, layout: SheetLayout) -> SpriteSheet {
-        let solid = solid_frames(self.solids, self.width, self.height);
-        SpriteSheet::new(self.width, self.height, self.frames, layout).with_solid(solid)
-    }
-}
-
-impl Painter for Rled16 {
-    fn line_start(&mut self) {
-        self.x = 0;
-    }
-
-    fn draw(&mut self, token: Token, r: &mut Reader<'_>) -> Result<(), GraphicsError> {
-        if token.op == PIXELS && token.count & 1 == 1 {
-            return Err(GraphicsError::OddByteCount {
-                offset: token.offset,
-            });
+    fn run(&mut self, x: u32, y: u32, len: u32, word: u32) {
+        // Low half on even pixels, high half on odd ones.
+        let colours = [rgb555(word as u16), rgb555((word >> 16) as u16)];
+        let (width, height) = (self.width, self.height);
+        let solid = self
+            .solid
+            .get_or_insert_with(|| Image::transparent(width, height));
+        for i in 0..len {
+            let colour = colours[(i % 2) as usize];
+            self.frame.put(x + i, y, colour);
+            solid.put(x + i, y, colour);
         }
-        let (x, y, len) = (self.x, token.line, token.count / 2);
-        if x + len > self.width {
-            return Err(token.overflow());
-        }
-        match token.op {
-            PIXELS => {
-                let bytes = r.bytes(2 * len as usize)?;
-                for (i, &word) in (0..).zip(bytes.as_chunks::<2>().0) {
-                    self.frame.put(x + i, y, rgb555(u16::from_be_bytes(word)));
-                }
-                r.skip(pad4(bytes.len()))?;
-            }
-            RUN => {
-                let word = r.u32()?;
-                // Low half on even pixels, high half on odd ones.
-                let colours = [rgb555(word as u16), rgb555((word >> 16) as u16)];
-                let (width, height) = (self.width, self.height);
-                let solid = self
-                    .solid
-                    .get_or_insert_with(|| Image::transparent(width, height));
-                for i in 0..len {
-                    let colour = colours[(i % 2) as usize];
-                    self.frame.put(x + i, y, colour);
-                    solid.put(x + i, y, colour);
-                }
-            }
-            _ => {}
-        }
-        self.x += len;
-        Ok(())
     }
 
     fn frame_end(&mut self) {
-        let frame = std::mem::replace(&mut self.frame, Image::transparent(self.width, self.height));
-        self.frames.push(frame);
+        let next = Image::transparent(self.width, self.height);
+        self.frames.push(std::mem::replace(&mut self.frame, next));
         self.solids.push(self.solid.take());
     }
+}
+
+/// A sink that only notes whether any run appeared.
+struct Scanner {
+    has_runs: bool,
+}
+
+impl Sink for Scanner {
+    fn pixels(&mut self, _: u32, _: u32, _: &[u8]) {}
+
+    fn run(&mut self, _: u32, _: u32, _: u32, _: u32) {
+        self.has_runs = true;
+    }
+
+    fn frame_end(&mut self) {}
 }
 
 /// Each frame's solid runs, a frame without any clear, when any frame
@@ -637,6 +721,11 @@ mod tests {
             decode(&bytes[..31]),
             Err(GraphicsError::UnexpectedEnd { offset: 30 })
         );
+        // Cut just past the padding: the next token is what is missing.
+        assert_eq!(
+            decode(&bytes[..32]),
+            Err(GraphicsError::UnexpectedEnd { offset: 32 })
+        );
     }
 
     #[test]
@@ -771,6 +860,126 @@ mod tests {
                 input_len: 16
             })
         );
+    }
+
+    /// What `scan_rled` reads, taken from a decoded sheet.
+    fn info_of(sheet: &SpriteSheet) -> RledInfo {
+        RledInfo {
+            frame_width: sheet.frame_width(),
+            frame_height: sheet.frame_height(),
+            frames: sheet.frames().len() as u16,
+            has_runs: sheet.solid_frames().is_some(),
+        }
+    }
+
+    #[test]
+    fn a_scan_reads_the_size_frame_count_and_runs() {
+        let bytes = RledBuilder::new(3, 2)
+            .frame(|f| f.line().pixels(&[RED, GREEN]))
+            .frame(|f| f.line().run(3, WHITE, RED))
+            .build();
+        let expected = RledInfo {
+            frame_width: 3,
+            frame_height: 2,
+            frames: 2,
+            has_runs: true,
+        };
+        assert_eq!(scan_rled(&bytes), Ok(expected));
+        assert_eq!(decode(&bytes).map(|sheet| info_of(&sheet)), Ok(expected));
+    }
+
+    #[test]
+    fn a_scan_of_a_sheet_without_runs_says_so() {
+        let bytes = RledBuilder::new(4, 1)
+            .frame(|f| f.line().pixels(&[RED]).skip(1).pixels(&[BLUE]))
+            .frame(|f| f.line().skip(4))
+            .frame(|f| f)
+            .build();
+        assert_eq!(
+            scan_rled(&bytes),
+            Ok(RledInfo {
+                frame_width: 4,
+                frame_height: 1,
+                frames: 3,
+                has_runs: false,
+            })
+        );
+    }
+
+    /// Every way a sheet can be broken fails the scan as it fails the
+    /// decode, offsets and all.
+    #[test]
+    fn a_scan_fails_exactly_as_the_decode_does() {
+        let truncated = RledBuilder::new(3, 2)
+            .frame(|f| f.line().pixels(&[RED, GREEN, BLUE]).line().run(2, RED, RED))
+            .frame(|f| f.line().skip(1))
+            .build();
+        let cases: Vec<(&str, Vec<u8>)> = vec![
+            (
+                "bad depth",
+                RledBuilder::new(2, 2).depth(24).frame(|f| f).build(),
+            ),
+            ("zero width", RledBuilder::new(0, 2).frame(|f| f).build()),
+            ("zero height", RledBuilder::new(2, 0).frame(|f| f).build()),
+            ("no frames", RledBuilder::new(2, 2).frame_count(0).build()),
+            (
+                "over budget",
+                RledBuilder::new(65535, 65535).frame_count(65535).build(),
+            ),
+            (
+                "too many lines",
+                RledBuilder::new(1, 2)
+                    .frame(|f| f.line().line())
+                    .frame(|f| f.line().line().line())
+                    .build(),
+            ),
+            (
+                "token outside a line",
+                RledBuilder::new(2, 2)
+                    .frame(RledFrame::line)
+                    .frame(|f| f.run(1, RED, RED))
+                    .build(),
+            ),
+            (
+                "odd byte count",
+                RledBuilder::new(3, 1)
+                    .frame(|f| f.line().token(2, 3).raw(&[0; 4]))
+                    .build(),
+            ),
+            (
+                "line overflow",
+                RledBuilder::new(3, 2)
+                    .frame(RledFrame::line)
+                    .frame(|f| f.line().line().skip(2).run(2, RED, RED))
+                    .build(),
+            ),
+            (
+                "unknown token",
+                RledBuilder::new(2, 2)
+                    .frame(|f| f.line().token(5, 0))
+                    .build(),
+            ),
+            ("truncated pixels", truncated[..28].to_vec()),
+            ("truncated padding", truncated[..31].to_vec()),
+            ("truncated run", truncated[..truncated.len() - 16].to_vec()),
+            (
+                "no last frame end",
+                truncated[..truncated.len() - 4].to_vec(),
+            ),
+        ];
+        for (name, bytes) in cases {
+            let decoded = decode(&bytes).map(|sheet| info_of(&sheet));
+            assert!(decoded.is_err(), "{name}: {decoded:?}");
+            assert_eq!(scan_rled(&bytes), decoded, "{name}");
+        }
+        for len in 0..truncated.len() {
+            let bytes = &truncated[..len];
+            assert_eq!(
+                scan_rled(bytes),
+                decode(bytes).map(|sheet| info_of(&sheet)),
+                "{len}"
+            );
+        }
     }
 
     #[test]

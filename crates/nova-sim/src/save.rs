@@ -8,6 +8,11 @@
 //! reads the current version strictly: a field missing from it is an
 //! error, not a default.
 //!
+//! The course and its start are always saved. Whether a load keeps them
+//! is [`RuleKey::LoadedCourse`](crate::RuleKey::LoadedCourse)'s: by the
+//! engine's reading `Session::load` drops them, as the original's open
+//! clears `_hyperRoute`.
+//!
 //! - Version 1: the name, ship, system, the stellar last landed on, date,
 //!   cash, reserves and course.
 //! - Version 2: adds the explored systems and the legal records, none in
@@ -116,8 +121,26 @@
 //!   An older save can't tell whether its pilot ever entered play, and
 //!   showing a long-played pilot the intro is worse than skipping it for
 //!   one never flown, so the upgrade gives `true`.
+//! - Version 32: adds the course's start (`course_start`, a system or
+//!   `null`), the original's `_hyperRoute` slot 0 (0x3b51c8): the system
+//!   the course was last started or advanced from, which the rewrite at
+//!   each rebuild point reads (`_HandleStellarSystemVisibility`
+//!   @0x32aaa-0x32b0d). Every writer of slot 0 but `M` and `N` leaves it
+//!   at the player's system, so the upgrade gives the pilot's `system`
+//!   when the course has hops, and `null` when it has none.
+//! - Version 33: adds the pilot's nickname (`nickname`, its text, empty
+//!   for none), the original's `_playerNickname`, which its pilot file
+//!   keeps as 0x40 bytes at +0x5d98 (`_WritePilotData` @0x727cc-0x727e9,
+//!   `_LoadPilotData` @0x75d1a-0x75d37). Every older pilot was made with
+//!   the New Pilot dialog's Nickname field inert, so the upgrade gives `""`.
+//! - Version 34: adds each escort's mark for the next shipyard (`mark`,
+//!   `upgrade`, `sell` or `null`), the original's pilot `+0xe82e[i]` and
+//!   `+0xe8ae[i]` (`_LoadPilotData` @0x75a75-0x75ad3), set in the escort
+//!   dialog (see [`escort_dialog`](crate::escort_dialog)). No older
+//!   save could mark one, so the upgrade gives `null`.
 //!
-//! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
+//! IDs are saved as their raw numbers, the nickname (`nickname`) as its
+//! text, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
 //! day, each reserve as how much the ship has and can hold, each good held
 //! as its kind (`commodity` with its number, or `junk` with its ID) and
@@ -127,7 +150,8 @@
 //! standing order (`defend`, `attack`, `hold`, `dock`, or `null` for
 //! none), whether it is `carried`, its `wage` in credits a day (`null`
 //! for an escort that was not hired), and the `person` it is (a `përs`
-//! ID, or `null`; one whose record is gone is kept as saved). The
+//! ID, or `null`; one whose record is gone is kept as saved), and its
+//! `mark` (`upgrade`, `sell` or `null`). The
 //! fighters aboard a bay are its
 //! rounds, the ammunition outfits saved with the outfits; the fighters
 //! out are the carried escorts. Which carrier a fighter came from is
@@ -205,6 +229,7 @@ use crate::control::Bit;
 use crate::cron::CronState;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
+use crate::fleet::EscortMark;
 use crate::market::{ActiveEvent, Good};
 use crate::mission::aux_ships::AuxShips;
 use crate::mission::{ActiveMission, ActiveMissions, FailedBy, ShipSystem, SpecialShips, Stop};
@@ -214,7 +239,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 31;
+pub const CURRENT: u64 = 34;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -312,6 +337,34 @@ struct SavedEscort {
     wage: Option<i64>,
     #[serde(deserialize_with = "Option::deserialize")]
     person: Option<i16>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    mark: Option<SavedMark>,
+}
+
+/// A saved escort's mark for the next shipyard.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SavedMark {
+    Upgrade,
+    Sell,
+}
+
+impl From<EscortMark> for SavedMark {
+    fn from(mark: EscortMark) -> Self {
+        match mark {
+            EscortMark::Upgrade => Self::Upgrade,
+            EscortMark::Sell => Self::Sell,
+        }
+    }
+}
+
+impl From<SavedMark> for EscortMark {
+    fn from(saved: SavedMark) -> Self {
+        match saved {
+            SavedMark::Upgrade => Self::Upgrade,
+            SavedMark::Sell => Self::Sell,
+        }
+    }
 }
 
 /// A saved standing order.
@@ -889,6 +942,7 @@ fn missions_of(saved: Vec<SavedMission>) -> Result<ActiveMissions, SaveError> {
 struct Saved {
     version: u64,
     name: String,
+    nickname: String,
     ship: i16,
     /// `None` for a ship not yet named.
     #[serde(deserialize_with = "Option::deserialize")]
@@ -901,6 +955,9 @@ struct Saved {
     cash: i64,
     reserves: SavedReserves,
     course: Vec<i16>,
+    /// `None` for no start (the original's slot 0 at -1).
+    #[serde(deserialize_with = "Option::deserialize")]
+    course_start: Option<i16>,
     explored: Vec<i16>,
     charted: Vec<i16>,
     reinforcement_days: Vec<SavedReinforcementDays>,
@@ -1001,12 +1058,24 @@ fn crons_of(saved: Vec<SavedCron>) -> BTreeMap<CronId, CronState> {
         .collect()
 }
 
+/// The legal records `legal` holds as saved, by government.
+fn saved_legal(legal: &BTreeMap<GovtId, i16>) -> Vec<SavedRecord> {
+    legal
+        .iter()
+        .map(|(govt, &record)| SavedRecord {
+            govt: govt.0,
+            record,
+        })
+        .collect()
+}
+
 /// `pilot` as the current version's save: pretty JSON.
 #[must_use]
 pub fn encode(pilot: &Pilot) -> String {
     let saved = Saved {
         version: CURRENT,
         name: pilot.name.clone(),
+        nickname: pilot.nickname.clone(),
         ship: pilot.ship.0,
         ship_name: pilot.ship_name.clone(),
         system: pilot.system.0,
@@ -1015,17 +1084,11 @@ pub fn encode(pilot: &Pilot) -> String {
         cash: pilot.cash,
         reserves: pilot.reserves.into(),
         course: pilot.course.iter().map(|system| system.0).collect(),
+        course_start: pilot.course_start.map(|system| system.0),
         explored: pilot.explored.iter().map(|system| system.0).collect(),
         charted: pilot.charted.iter().map(|system| system.0).collect(),
         reinforcement_days: saved_reinforcement_days(&pilot.reinforcement_days),
-        legal: pilot
-            .legal
-            .iter()
-            .map(|(govt, &record)| SavedRecord {
-                govt: govt.0,
-                record,
-            })
-            .collect(),
+        legal: saved_legal(&pilot.legal),
         system_legal: pilot.system_legal.as_ref().map(|legal| {
             legal
                 .iter()
@@ -1077,6 +1140,7 @@ pub fn encode(pilot: &Pilot) -> String {
                 carried: escort.carried,
                 wage: escort.wage,
                 person: escort.person.map(|person| person.0),
+                mark: escort.mark.map(SavedMark::from),
             })
             .collect(),
         gone_persons: pilot.gone_persons.iter().map(|person| person.0).collect(),
@@ -1138,7 +1202,42 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     charted,
     reinforcement_days,
     seen_intro,
+    course_start,
+    nickname,
+    escort_marks,
 ];
+
+/// Version 33 to 34: no escort is marked for an upgrade or a sale, as
+/// the escort dialog that marks them was not built.
+fn escort_marks(save: &mut Value) {
+    add_to_each(save, "escorts", "mark", &Value::Null);
+}
+
+/// Version 32 to 33: no nickname. Every older pilot was made with the New
+/// Pilot dialog's Nickname field inert, so none had one.
+fn nickname(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("nickname".to_owned(), Value::String(String::new()));
+    }
+}
+
+/// Version 31 to 32: the course's start. Every writer of the original's
+/// slot 0 but `M` and `N` leaves it at the player's system, so a course
+/// with hops starts there, and no course has no start.
+fn course_start(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        let has_hops = object
+            .get("course")
+            .and_then(Value::as_array)
+            .is_some_and(|course| !course.is_empty());
+        let start = if has_hops {
+            object.get("system").cloned().unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+        object.insert("course_start".to_owned(), start);
+    }
+}
 
 /// Version 30 to 31: the intro screen seen. An older save can't tell
 /// whether its pilot ever entered play, and showing a long-played pilot
@@ -1454,6 +1553,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
     let missions = missions_of(saved.missions)?;
     Ok(Pilot {
         name: saved.name,
+        nickname: saved.nickname,
         ship: ShipId(saved.ship),
         ship_name: saved.ship_name,
         system: SystemId(saved.system),
@@ -1462,6 +1562,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         cash: saved.cash,
         reserves: saved.reserves.into(),
         course: saved.course.into_iter().map(SystemId).collect(),
+        course_start: saved.course_start.map(SystemId),
         explored: explored_of(&saved.explored, &saved.charted),
         charted: saved.charted.into_iter().map(SystemId).collect(),
         reinforcement_days: reinforcement_days_of(saved.reinforcement_days),
@@ -1505,6 +1606,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
                 carried: saved.carried,
                 wage: saved.wage,
                 person: saved.person.map(PersonId),
+                mark: saved.mark.map(EscortMark::from),
             })
             .collect(),
         gone_persons: saved.gone_persons.into_iter().map(PersonId).collect(),
@@ -1590,6 +1692,7 @@ mod tests {
                 carried: false,
                 wage: None,
                 person: None,
+                mark: None,
             },
             Escort {
                 ship: ShipId(141),
@@ -1598,6 +1701,7 @@ mod tests {
                 carried: false,
                 wage: None,
                 person: None,
+                mark: None,
             },
             Escort {
                 ship: ShipId(144),
@@ -1606,6 +1710,7 @@ mod tests {
                 carried: true,
                 wage: None,
                 person: None,
+                mark: None,
             },
             Escort {
                 ship: ShipId(128),
@@ -1614,6 +1719,7 @@ mod tests {
                 carried: false,
                 wage: Some(100),
                 person: None,
+                mark: None,
             },
             Escort {
                 ship: ShipId(136),
@@ -1622,6 +1728,7 @@ mod tests {
                 carried: false,
                 wage: None,
                 person: Some(PersonId(128)),
+                mark: None,
             },
         ]
     }
@@ -1651,6 +1758,7 @@ mod tests {
                 },
             },
             course: vec![SystemId(132), SystemId(133)],
+            course_start: Some(SystemId(131)),
             explored: BTreeSet::from([SystemId(130), SystemId(131), SystemId(200)]),
             charted: BTreeSet::from([SystemId(131)]),
             reinforcement_days: BTreeMap::from([(SystemId(130), 2), (SystemId(200), 15)]),
@@ -1679,6 +1787,7 @@ mod tests {
             crons: holding_off(),
             ranks: BTreeSet::from([RankId(140), RankId(128)]),
             seen_intro: true,
+            nickname: String::new(),
         }
     }
 
@@ -1831,8 +1940,10 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 31);
+        assert_eq!(CURRENT, 34);
+        assert_eq!(value["nickname"], "");
         assert_eq!(value["seen_intro"], true);
+        assert_eq!(value["course_start"], 131);
         assert_eq!(value["explored"], serde_json::json!([130, 131, 200]));
         assert_eq!(value["charted"], serde_json::json!([131]));
         assert_eq!(
@@ -1909,7 +2020,8 @@ mod tests {
                 "order": "defend",
                 "carried": false,
                 "wage": null,
-                "person": null
+                "person": null,
+                "mark": null
             })
         );
         assert_eq!(value["escorts"][4]["person"], 128);
@@ -1923,7 +2035,7 @@ mod tests {
         assert_eq!(value["escorts"][3]["wage"], 100);
         assert_eq!(value["strict_play"], false);
         assert_eq!(value["jumped_from"], 130);
-        assert!(text.contains("\n  \"version\": 31"), "{text}");
+        assert!(text.contains("\n  \"version\": 34"), "{text}");
     }
 
     #[test]
@@ -2157,6 +2269,7 @@ mod tests {
                     carried: false,
                     wage: None,
                     person: None,
+                    mark: None,
                 },
                 Escort {
                     ship: ShipId(141),
@@ -2165,6 +2278,7 @@ mod tests {
                     carried: false,
                     wage: None,
                     person: None,
+                    mark: None,
                 },
             ]
         );
@@ -3584,10 +3698,172 @@ mod tests {
         assert_eq!(back, pilot);
     }
 
-    /// `pilot` saved at version 30: whether it has seen the intro screen
-    /// not kept.
-    fn at_version_30(pilot: &Pilot) -> String {
+    /// `pilot` saved at version 33: no escort's mark kept.
+    fn at_version_33(pilot: &Pilot) -> String {
         let mut value: serde_json::Value = serde_json::from_str(&encode(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(33);
+        for escort in value["escorts"].as_array_mut().expect("a list") {
+            escort.as_object_mut().expect("an object").remove("mark");
+        }
+        value.to_string()
+    }
+
+    /// A pilot whose second escort is marked for sale and fourth for an
+    /// upgrade.
+    fn marked() -> Pilot {
+        let mut pilot = seasoned();
+        pilot.escorts[1].mark = Some(EscortMark::Sell);
+        pilot.escorts[3].mark = Some(EscortMark::Upgrade);
+        pilot
+    }
+
+    #[test]
+    fn an_escorts_mark_survives_a_round_trip() {
+        let pilot = marked();
+        let text = encode(&pilot);
+        let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+        let marks: Vec<_> = (0..5)
+            .map(|i| value["escorts"][i]["mark"].clone())
+            .collect();
+        assert_eq!(
+            marks,
+            [
+                serde_json::Value::Null,
+                "sell".into(),
+                serde_json::Value::Null,
+                "upgrade".into(),
+                serde_json::Value::Null
+            ]
+        );
+        assert_eq!(decode(&text), Ok(pilot));
+    }
+
+    #[test]
+    fn a_version_33_save_loads_with_no_escort_marked_and_saves_at_the_current_version() {
+        let pilot = decode(&at_version_33(&marked())).expect("loads");
+        assert!(pilot.escorts.iter().all(|escort| escort.mark.is_none()));
+        assert_eq!(pilot, seasoned());
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], CURRENT);
+        assert_eq!(value["escorts"][1]["mark"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_current_save_missing_an_escorts_mark_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_33(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(CURRENT);
+        let text = value.to_string();
+        assert!(unusable(&text).contains("mark"), "{}", unusable(&text));
+    }
+
+    /// `pilot` saved at version 32: no nickname kept, nor any escort's
+    /// mark.
+    fn at_version_32(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_33(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(32);
+        value.as_object_mut().expect("an object").remove("nickname");
+        value.to_string()
+    }
+
+    #[test]
+    fn the_nickname_survives_a_round_trip() {
+        let pilot = seasoned().with_nickname("Hunter".to_owned());
+        let back = decode(&encode(&pilot)).expect("loads");
+        assert_eq!(back.nickname(), "Hunter");
+        assert_eq!(back, pilot);
+    }
+
+    #[test]
+    fn a_version_32_save_loads_with_no_nickname_and_saves_at_the_current_version() {
+        let nicknamed = seasoned().with_nickname("Hunter".to_owned());
+        let pilot = decode(&at_version_32(&nicknamed)).expect("loads");
+        assert_eq!(pilot.nickname(), "");
+        assert_eq!(pilot, seasoned());
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], CURRENT);
+        assert_eq!(value["nickname"], "");
+    }
+
+    #[test]
+    fn a_current_save_missing_nickname_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_32(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(CURRENT);
+        add_to_each(&mut value, "escorts", "mark", &serde_json::Value::Null);
+        let text = value.to_string();
+        assert!(unusable(&text).contains("nickname"), "{}", unusable(&text));
+    }
+
+    /// `pilot` saved at version 31: the course's start not kept, nor the
+    /// nickname.
+    fn at_version_31(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_32(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(31);
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("course_start");
+        value.to_string()
+    }
+
+    #[test]
+    fn the_course_start_survives_a_round_trip_either_way() {
+        for course_start in [None, Some(SystemId(130))] {
+            let pilot = Pilot {
+                course_start,
+                ..seasoned()
+            };
+            let back = decode(&encode(&pilot)).expect("loads");
+            assert_eq!(back.course_start(), course_start);
+            assert_eq!(back, pilot, "{course_start:?}");
+        }
+    }
+
+    #[test]
+    fn a_version_31_save_starts_a_course_with_hops_at_the_pilots_system() {
+        let elsewhere = Pilot {
+            course_start: Some(SystemId(200)),
+            ..seasoned()
+        };
+        let pilot = decode(&at_version_31(&elsewhere)).expect("loads");
+        assert_eq!(pilot.course_start(), Some(SystemId(131)));
+        assert_eq!(pilot, seasoned());
+    }
+
+    #[test]
+    fn a_version_31_save_with_no_course_has_no_start() {
+        let idle = Pilot {
+            course: Vec::new(),
+            course_start: Some(SystemId(131)),
+            ..seasoned()
+        };
+        let pilot = decode(&at_version_31(&idle)).expect("loads");
+        assert_eq!(pilot.course_start(), None);
+    }
+
+    #[test]
+    fn a_current_save_missing_course_start_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_31(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(CURRENT);
+        add_to_each(&mut value, "escorts", "mark", &serde_json::Value::Null);
+        value["nickname"] = serde_json::json!("");
+        let text = value.to_string();
+        assert!(
+            unusable(&text).contains("course_start"),
+            "{}",
+            unusable(&text)
+        );
+    }
+
+    /// `pilot` saved at version 30: whether it has seen the intro screen
+    /// not kept, nor the course's start.
+    fn at_version_30(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_31(pilot)).expect("JSON");
         value["version"] = serde_json::Value::from(30);
         value
             .as_object_mut()
@@ -3625,6 +3901,9 @@ mod tests {
         let mut value: serde_json::Value =
             serde_json::from_str(&at_version_30(&seasoned())).expect("JSON");
         value["version"] = serde_json::Value::from(CURRENT);
+        add_to_each(&mut value, "escorts", "mark", &serde_json::Value::Null);
+        value["course_start"] = serde_json::json!(131);
+        value["nickname"] = serde_json::json!("");
         let text = value.to_string();
         assert!(
             unusable(&text).contains("seen_intro"),
@@ -3809,9 +4088,12 @@ mod tests {
         let mut value: serde_json::Value =
             serde_json::from_str(&at_version_27(&seasoned())).expect("JSON");
         value["version"] = serde_json::Value::from(CURRENT);
+        add_to_each(&mut value, "escorts", "mark", &serde_json::Value::Null);
         value["charted"] = serde_json::json!([]);
         value["reinforcement_days"] = serde_json::json!([]);
         value["seen_intro"] = serde_json::json!(true);
+        value["course_start"] = serde_json::json!(131);
+        value["nickname"] = serde_json::json!("");
         let text = value.to_string();
         assert!(unusable(&text).contains("ship_done"), "{}", unusable(&text));
     }
@@ -3916,6 +4198,7 @@ mod tests {
         let mut value: serde_json::Value =
             serde_json::from_str(&at_version_25(&seasoned())).expect("JSON");
         value["version"] = serde_json::Value::from(CURRENT);
+        add_to_each(&mut value, "escorts", "mark", &serde_json::Value::Null);
         let text = value.to_string();
         assert!(
             unusable(&text).contains("uniform_type"),
@@ -4243,12 +4526,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 31", "\"version\": 32");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 32 }));
+        let newer = encode(&seasoned()).replace("\"version\": 34", "\"version\": 35");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 35 }));
         assert_eq!(
-            SaveError::Newer { version: 32 }.to_string(),
+            SaveError::Newer { version: 35 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 32, and this version of Nova reads up to 31)."
+             (it is version 35, and this version of Nova reads up to 34)."
         );
     }
 

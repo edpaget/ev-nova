@@ -11,6 +11,10 @@
 //! (`nova_sim::shipyard`, `nova_sim::Shipyard`, …), so the rest of the
 //! workspace reaches them through it.
 //!
+//! - [`auto_refuel`]: the auto-refueller's top-up on landing at an
+//!   inhabited stellar: which outfits are one
+//!   ([`carries_auto_refueller`](auto_refuel::carries_auto_refueller))
+//!   and the top-up ([`fill`](auto_refuel::fill)).
 //! - [`board`]: boarding a disabled ship: whether the player can
 //!   ([`BoardRefusal`](board::BoardRefusal)), the
 //!   [`Plunder`](board::Plunder) rolled for it, the plunder dialog's
@@ -20,9 +24,26 @@
 //!   [`BoardingRule`](board::BoardingRule) port with Nova's
 //!   [`NovaBoarding`](board::NovaBoarding): who repels boarders, the
 //!   capture odds and the capture roll, a person's credits and its grant.
+//! - [`board_repair`]: boarding the player's own disabled escorts and
+//!   fighters back: which own-ship path a board takes
+//!   ([`recovery`](board_repair::recovery)).
+//! - [`christening`]: christening a new pilot's ship: the prompt and
+//!   default `_DoNewPilot` asks with
+//!   ([`Christening`](christening::Christening)) and the name kept
+//!   ([`christen`](christening::christen)).
+//! - [`new_pilot`]: the New Pilot dialog's name and nickname: the
+//!   defaults `_DoNewPilot` opens it with
+//!   ([`name_defaults`](new_pilot::name_defaults)) and the names kept
+//!   ([`kept_name`](new_pilot::kept_name)).
 //! - [`escape`]: the player's escape: the escape pod and auto-eject
 //!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
 //!   and where the escape pod is taken.
+//! - [`escort_dialog`]: the escort dialog a fleet escort hailed opens:
+//!   what it shows ([`EscortDialogView`](escort_dialog::EscortDialogView)),
+//!   when an escort can be upgraded or sold, its Upgrade and Sell marks
+//!   ([`toggle`](escort_dialog::toggle)), and what leaving a shipyard
+//!   does with them ([`settle_marks`](escort_dialog::settle_marks),
+//!   [`escort_land_text`](escort_dialog::escort_land_text)).
 //! - [`npc_escape`]: what a dying NPC leaves behind: when its crew's
 //!   escape pods and its person's pod come out, and when it rolls for an
 //!   escape ship.
@@ -62,8 +83,10 @@
 //! - [`player_info`]: what the player info screen shows
 //!   ([`PlayerInfo`](player_info::PlayerInfo)).
 //! - [`recharge`]: recharging in the spaceport: which stellars sell
-//!   fuel ([`sells_fuel`](recharge::sells_fuel)), what filling the tank
-//!   costs, and each [`RechargeRefusal`](recharge::RechargeRefusal).
+//!   fuel ([`sells_fuel`](recharge::sells_fuel)), when the Recharge
+//!   button is enabled ([`enabled`](recharge::enabled)), the refill
+//!   ([`fill`](recharge::fill)), and the
+//!   [`RechargeRefusal`](recharge::RechargeRefusal).
 //! - [`ship_change`]: changing the player's ship outside the shipyard,
 //!   as the `C`, `E` and `H` set operators do: which outfits carry over.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
@@ -86,7 +109,7 @@
 // `nova-sim-base`, `nova-sim-catalog`, `nova-sim-state`,
 // `nova-sim-combat`, `nova-sim-ai` and `nova-sim-story`.
 #[allow(unused_imports)]
-use nova_sim_ai::{ai, escort, gate, traffic};
+use nova_sim_ai::{ai, escort, gate, hail, traffic};
 #[allow(unused_imports)]
 use nova_sim_base::{
     RuleKey, chance, flight, fuel, geometry, handling, ionization, reserves, rulebook, rules,
@@ -100,13 +123,18 @@ use nova_sim_state::{clearance, cron, landing, market, outfit_effects, stats};
 #[allow(unused_imports)]
 use nova_sim_story::{exploration, mission, person, pilot, rank, story, text_tags};
 
+pub mod auto_refuel;
 pub mod board;
+pub mod board_repair;
+pub mod christening;
 pub mod escape;
+pub mod escort_dialog;
 pub mod gate_sprite;
 pub mod grant;
 pub mod hire;
 pub mod iff;
 pub mod murk;
+pub mod new_pilot;
 pub mod npc_escape;
 pub mod order_loop;
 pub mod outfitter;
@@ -114,4 +142,5 @@ pub mod player_info;
 pub mod recharge;
 pub mod ship_change;
 pub mod shipyard;
+pub(crate) mod string_entry;
 pub mod wares;

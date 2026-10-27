@@ -41,7 +41,7 @@
 //! | [`UncountedSheet`](RuleKey::UncountedSheet) | `uncounted_sheet` | a sprite slot cloning a graphic whose `spïn`'s `xTiles` × `yTiles` is 0 or less keeps the frame it showed: none from a rebuild point (nothing drawn, the landing reach 75), and between rebuild points the frame it had, frozen and placed as a 32-pixel sprite; the stellar does not animate until the next rebuild point (`_SWCloneFramesFromMaster` @0xac4ec, `_SWSetCurrentFrameIndex` @0xa90e7-0xa90ee, `_HandleStellarSystemVisibility` @0x32e7a, @0x331c6; `_HandleStellarSprites` @0x2e7e5, @0x2ee20-0x2ef1a; see `nova_sim::story`) | the sheet's own decoded frames, drawn and animated\* |
 //! | [`NpcLanding`](RuleKey::NpcLanding) | `npc_landing` | an NPC lands when its whole-pixel offset from the stellar's centre is at most 40 on each axis (trunc((9 − turn) × 8 + 32) below a turn rate of 8) and it moves below 0.35 a tick on each axis; inside the box but faster it brakes by sub 1, its velocity and speed × 0.98 a tick; outside it flies sub 2's approach, and a folding ship unfolds inside the box (`_HighLevelAIHandler` @0x8d903-0x8db5a; see `nova_sim_ai::traffic::land_flight`) | within `landing_radius` (half the larger side of the `Type` frame, or 32 with no sprite), as a circle, at or below 1.0 a tick, flying the port's earlier approach\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction (`nova_sim::NovaHire`) | exactly the fee shown\* |
-//! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now (`nova_sim::Session`) | the wage kept on its record when hired\* |
+//! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now, and its pay line shows a hundredth of that `Cost` unclamped, "credit" only at exactly 1.0 (`_EscortDialogUpdate` @0x94f9c-0x9500d; `nova_sim::Session`) | the wage kept on its record when hired, shown as itself\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear (`nova_sim::NovaPersons`) | 5 %, one of those who may appear picked evenly |
 //! | [`SystemPersons`](RuleKey::SystemPersons) | `system_persons` | a `sÿst` Person slot brings its person on `Rand(100) + 1` at most its chance (`nova_sim::NovaPersons`) | always |
 //! | [`LinkSystSlip`](RuleKey::LinkSystSlip) | `link_syst_slip` | a person's system `LinkSyst` also allows the system of ID `LinkSyst` + 128 (`nova_sim::NovaPersons`) | that system only |
@@ -69,7 +69,7 @@
 //! | [`ShipChangeNegativeStock`](RuleKey::ShipChangeNegativeStock) | `ship_change_negative_stock` | `E` and `H` add a negative `WeapCount` or `AmmoLoad` signed, taking that many launchers or rounds away, floored at none (`_EvalSetExp` @0x15555, @0x155c3; `nova_sim::ShipChangeRules`) | it adds nothing, as a purchase reads it\* |
 //! | [`MoveStarless`](RuleKey::MoveStarless) | `move_starless` | `M` in flight into a system with no stellar keeps the ship's position and velocity (`nova_sim::ScriptEffectRules`) | the ship is put at rest at the system's centre |
 //! | [`MoveArrival`](RuleKey::MoveArrival) | `move_arrival` | `M` and `N` only change where the ship is: the course is kept, the system is explored by the next take-off, and in flight only every ship the player leads (hired and mission escorts, fighters out) follows, the new system filling with arrivals over time (`nova_sim::ScriptEffectRules`) | the move is an arrival: explored, the course cleared, and in flight populated at once\* |
-//! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | an `N` in flight leaves the next take-off keeping the ship where it landed (`nova_sim::ScriptEffectRules`) | only a landed `N` keeps the landing position\* |
+//! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | only a docked `N` keeps the next take-off's landing position: `N` sets `_dontMovePlayerAfterLanding` landed or not (`_EvalSetExp` @0x15903), every landing clears it before the port (`_PlayerLandOnStellar` @0x631f1-0x631f6), and the take-off reads and clears it (@0x633ad-0x633bb, @0x63400) (`nova_sim::ScriptEffectRules`) | an `N` in flight, or after a take-off's placement, also keeps the next take-off's landing position\* |
 //! | [`BlankLeave`](RuleKey::BlankLeave) | `blank_leave` | a `Q` with no message to show does nothing, and cancels an earlier one (`nova_sim::ScriptEffectRules`) | the player leaves all the same, with no message |
 //! | [`ScriptSound`](RuleKey::ScriptSound) | `script_sound` | one mission sound at a time: `P` sounds on the next flight tick, the last one before it counting, and not while the last is still playing (`nova_sim::ScriptEffectRules`) | every `P` sounds at once, landed or not\* |
 //! | [`OutOfRangeMove`](RuleKey::OutOfRangeMove) | `out_of_range_move` | an `N` whose system is out of range (128-2175) runs the move's tail with no move: landed, the offers are emptied; in flight, the scene is reset and the system entered again where the ship is (`_EvalSetExp` @0x158e3, @0x1593f-0x159ad; `nova_sim::ScriptEffectRules`) | it does nothing, as every other operator out of range does\* |
@@ -94,7 +94,8 @@
 //! | [`CountedSale`](RuleKey::CountedSale) | `counted_sale` | each pass of a counted sale checks the order as a whole: a raised `Max` refuses while the target owned exceeds its raw `Max` x (owned now - the whole count) (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed `MaxAmmo` x (owned now - the pass index - 1) (@0x5cb9c-0x5cbc7), signed, so an Alt sale is refused sooner than as many single clicks; only the engine readings of `raised_max` and `launcher_sale` read it (`_DoOutfitDialog`; `nova_sim::Outfitter::check_at`) | each pass is checked as one sale, (owned now - 1)¶¶¶¶ |
 //! | [`RelistedSale`](RuleKey::RelistedSale) | `relisted_sale` | a sale that changes the listing (`_SetupPortAvailableItems` true, @0x5d00a) resets the selection to `oütf` 128 and the loop index to 0, or 512 with nothing listed, so the passes left check and sell `oütf` 128, listed or not, and can outrun the count (`_DoOutfitDialog` @0x5d017-0x5d150, @0x5d164-0x5d1b1; `nova_sim::Session`) | the ordered outfit and the pass index are kept††††† |
 //! | [`RelistedSelection`](RuleKey::RelistedSelection) | `relisted_selection` | an order that changes the listing (`_SetupPortAvailableItems` true after the buy loop @0x5c314 or a sale @0x5d00a) selects `oütf` 128 with no cell highlighted (`*0xded58` = 0, `*0xded5c` = -1, @0x5c32c-0x5c33b, @0x5d01c-0x5d02b). Buy and Sell then answer for it, listed or not (`_OutfitFilter` @0x5806f-0x580ca), and the picture, description and info box are blank. With nothing listed the outfitter closes (-0x63d @0x5c40c, @0x5d128, @0x5da33; `nova_sim::Session`) | the selected cell is kept and the outfitter stays open§§§§§ |
-//! | [`GridSelection`](RuleKey::GridSelection) | `grid_selection` | the outfitter's selection is the selected outfit (`*0xded58`), which can be none, and its description is read only when it changes: a press on an empty cell position in the grid selects nothing (`*0xded58` = `*0xded5c` = -1, @0x58632-0x58648), greying Buy and Sell and blanking the picture, info box and description (@0x588e4-0x588fe; `_OutfitDialogUpdate` @0x5789b-0x578a5), and an arrow that leaves the selected outfit as it was reads no description (@0x58442-0x5844f) while the picture and info box follow the highlighted cell (@0x57949-0x579d6) (nova-view's `OutfitterScreen`) | the selection is the highlighted cell: a press on an empty cell is ignored, and the description follows the cell¶¶¶¶¶ |
+//! | [`GridSelection`](RuleKey::GridSelection) | `grid_selection` | the outfitter's selection is the selected outfit (`*0xded58`), which can be none, and its description is read only when it changes: a press on an empty cell position in the grid selects nothing (`*0xded58` = `*0xded5c` = -1, @0x58632-0x58648), greying Buy and Sell and blanking the picture, info box and description (@0x588e4-0x588fe; `_OutfitDialogUpdate` @0x5789b-0x578a5), and an arrow that leaves the selected outfit as it was reads no description (@0x58442-0x5844f) while the picture and info box follow the highlighted cell (@0x57949-0x579d6); the outfitter opens with nothing selected (`_DoOutfitDialog` @0x5bb19-0x5bb54, description emptied @0x5bd0f-0x5bd1c), and a scroll arrow that scrolls keeps the highlighted cell while it stays in view, re-reading its description (@0x5d384-0x5d3b4, @0x5d70c-0x5d737), and otherwise selects nothing, ending a reset (@0x5d3bb-0x5d3d6, @0x5d73e-0x5d759) (nova-view's `OutfitterScreen`); the shipyard's and the hire screen's selection is `_ShipyardFilter`'s ship (`*0xdece4`), which can be none: they open with nothing selected (`_DoShipyardDialog` @0x5e6d8-0x5e705), a press on an empty cell selects nothing (@0x60a5d-0x60a73), and a scroll arrow that scrolls selects nothing (@0x5f580-0x5f5be, @0x5f60b-0x5f670), greying Buy Ship (Hire Escort) and Info and blanking the picture, info box and description (nova-view's `ShipyardScreen` and `HireScreen`) | the selection is the highlighted cell: the first cell is selected on opening, a press on an empty cell is ignored, a scroll keeps the selection, and the outfitter's description follows the cell¶¶¶¶¶ |
+//! | [`GridArrows`](RuleKey::GridArrows) | `grid_arrows` | an arrow moves the highlighted cell as `_OutfitFilter` and `_ShipyardFilter` do (@0x58203-0x583b8, @0x6057a-0x6072f): Up on the list's first row stays, Down moves only onto a listed cell, and Down from the bottom row scrolls and steps back to the last listed; Page Up and Page Down move as Up and Down (@0x581b0-0x581dd) (nova-view's `CellGrid`, for the outfitter, the shipyard and the hire screen) | the port's earlier moves: Up on the first row selects the first cell, and Down past the end the last listed; Page Up and Page Down move as Up and Down |
 //! | [`MassPrice`](RuleKey::MassPrice) | `mass_price` | an outfit flagged 0x0200 costs max(`Cost`, `Cost` × the flown class's `Mass`), so `Cost` on a class of `Mass` 0 or less, and a `Cost` of 0 or less costs 0, flag or not (`_AdjustedItemCost` @0x5869-0x5895; `_PlayerShipTradeInPrice` @0xb0e3-0xb106; `nova_sim::outfitter::unit_price`) | `Cost` × `Mass`, never below 0§§§§ |
 //! | [`ScaledMass`](RuleKey::ScaledMass) | `scaled_mass` | an outfit flagged 0x0400 of `Mass` above 0 weighs max(`Mass`, `Mass` × the class's `Mass` / 100, truncated), so its own `Mass` on a class of `Mass` below 100, in the outfitter, the free mass, the grants and the Shipyard Info Space (`_AdjustedItemMass` @0x2889-0x28c2; `_ShipFreeMass` @0xb4c1-0xb4ed; `nova_sim::outfitter::unit_mass`) | `Mass` × the class's `Mass` / 100, truncated, for `Mass` above 0‡‡‡‡‡ |
 //! | [`TradeInOutfits`](RuleKey::TradeInOutfits) | `trade_in_outfits` | a ship's trade-in counts every outfit owned but a persistent one, an unsellable one included, at half its line (`_PlayerShipTradeInPrice` @0xb0d5-0xb0e1, @0xb109-0xb11f; `nova_sim::Session`) | an unsellable outfit is left out too†††† |
@@ -112,7 +113,7 @@
 //! | [`StartOutsideDialog`](RuleKey::StartOutsideDialog) | `start_outside_dialog` | an accept with no offer dialog open (an `S` outside `OnAccept` and `OnRefuse`, or an unrefusable offer with no text) leaves a destination that is the stellar docked at, or in flight the stellar target, unreached, and drops and refilters no offers; the unrefusable offer's caller then shifts the list as [`offer_shift`](RuleKey::OfferShift) reads it, which, the list left as it is, drops that offer itself under either reading of that key (`_DoMissionAccept` @0xa1fde, @0xa200b; `_OfferMissionFromPort` @0xa377d-0xa37a1; see `nova_sim::mission`) | every accept acts as if made from the offer dialog, so the unrefusable offer's accept drops and refilters the offers, and the engine's `offer_shift` then drops the next listed offer as well\* |
 //! | [`OfferShift`](RuleKey::OfferShift) | `offer_shift` | once an outside offer is answered, by an accept from the dialog, a refusal or the accept at once, unless the accept fails, the outside list loses the entry at the index the offer was found at, in the list as the answer left it: a dialog accept, whose own offer is dropped already, drops the next listed offer whatever its venue; a refusal whose `OnRefuse` refilters can leave the refused offer listed; the accept at once drops its own offer, or the next one too when `start_outside_dialog` reads otherwise (`_OfferMissionFromPort` @0xa377d-0xa37a1; see `nova_sim::mission`) | each answer drops only the answered offer, so the next offer is offered next\* |
 //! | [`DescMovieGlobals`](RuleKey::DescMovieGlobals) | `desc_movie_globals` | the movie checks read the last `dësc` loaded: a `STR#` text (no room, a cargo pickup with no space, the mission computer's refusal) plays that `dësc`'s after-movie once it closes, so inside an offer the offer's after-movie plays after the no-room text too; and the offer dialog's after-check reads what its answer left, so a `RefuseText`'s after-movie plays a second time and the offer's none (`_LoadDescription` @0x71895-0x718de, @0x71a5e-0x71a77; `_ShowTextDialog` @0x5b40b-0x5b44f; `_OfferOneMission` @0xa3580-0xa35b8) | each dialog plays only its own `dësc`'s movie: a `STR#` text none, and the offer dialog its own after-movie\* |
-//! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see `nova_sim::text_tags`) | it reads in full with its commas, "1,234,567"\* |
+//! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see `nova_sim::text_tags`), and so do the totals of escorts sold and upgraded at a shipyard (`_DoEscortLand` @0x4067c, @0x4078c) | it reads in full with its commas, "1,234,567"\* |
 //! | [`MissionOrder`](RuleKey::MissionOrder) | `mission_order` | offers of `DispWeight` 0 or more keep index order, the rest after by descending weight (`_RandomizeMissionData` @0xa1842-0xa197d; see `nova_sim::mission`) | all by descending `DispWeight`, ties in index order |
 //! | [`PersonMissionStellar`](RuleKey::PersonMissionStellar) | `person_mission_stellar` | a person's mission is resolved at its spawn from the player's navigation target, or from no stellar with none, and an accept in flight reaches a destination that is the navigation target (`_RandomizeOneMission` @0xa151f-0xa1526, `_DoMissionAccept` @0xa1fc5-0xa1ff8; see `nova_sim::mission`) | it is resolved from the first stellar the player's system lists, or spöb 128 with none (@0xa14e8-0xa1518), and an accept in flight reaches no destination\* |
 //! | [`MissionStellarDraw`](RuleKey::MissionStellarDraw) | `mission_stellar_draw` | a random destination -2 is drawn as the original draws it: any inhabited, normal-landable non-station stellar of a visible system but the origin and the one excluded, at any distance, once its scan finds a distant inhabited stellar, station or not; the draw tests the distance of the scan's first hit, not of the stellar drawn (`_SelectMissionStellar` @0x9a26a, @0x9a2c7-0x9a330, the distance test @0x9a3ce-0x9a3db; see `nova_sim::mission`)\*\*\*\*\* | only a candidate distant from the origin is drawn, as every other random code draws\* |
@@ -152,16 +153,28 @@
 //! | [`RankCrimeReach`](RuleKey::RankCrimeReach) | `rank_crime_reach` | a crime takes a rank of `Flags` 0x0004 or 0x0040 when `_GovtAllies` finds the victim's government allied with the rank's, an equal one included, so a crime against an independent ship takes an unaffiliated rank (`_SlapWithPenalty` @0x9c70; see `nova_sim::rank`) | 0x0040 only for a crime against the rank's own government, 0x0004 for its own or its allies, an unaffiliated rank never\*\*\*\*\*\*\*\*\* |
 //! | [`ColocatedResolution`](RuleKey::ColocatedResolution) | `colocated_resolution` | the lowest-ID visible system at a place stands for every system there, a visible one too; links reach only it; a visible system it shadows claims no stellar, so a mission's random destination never draws a stellar only shadowed systems list, unless the player is in one that lists it (`_FindActiveCoLocatedSystem` @0x4c02-0x4c40, `_PropagateMissionBitEffects` @0x9968a-0x997ae, `_HandleStellarSystemVisibility` @0x32c58-0x32cdf; see `nova_sim::story` and `nova_sim::mission`) | a visible system stands for itself, links reach every visible system at the place, and each stellar goes to the lowest-ID visible system listing it, so a mission may draw it¶¶¶¶¶¶¶ |
 //! | [`VisibilityRefresh`](RuleKey::VisibilityRefresh) | `visibility_refresh` | `Visibility` is evaluated at a landing (@0xa175f, @0xa1af2), a jump's arrival before its days (@0x6bf3f), a new pilot after its `OnStart`, and a load (see `nova_sim::story`) | after every settled script as well\*\*\*\*\*\*\*\* |
+//! | [`ArrivalSystem`](RuleKey::ArrivalSystem) | `arrival_system` | an arrival enters the system it is given as it is, a visible one shadowed at its place too, and only a system hidden after its refresh moves the player (@0x99918); a jump's system is decided before its refresh (@0x6bf3f): the last hop's stand-in on the multi-jump branch (@0x6bdc1-0x6bdd4), else the raw Con target of the slot selected (+0x6c, @0x6bd3a, @0x6be0b); a wormhole's exit its owner as it is (@0x642a7) (see `nova_sim::session`'s `arrival_system` module) | every arrival resolved by place after the refresh, a jump into the stand-in J took¶¶¶¶¶¶¶ |
+//! | [`ExchangeEvents`](RuleKey::ExchangeEvents) | `exchange_events` | the exchange shows only the first `öops` event by ID at the docked stellar with days left above 0, as "<name> has raised/lowered the price of <cargo>."; a first event of commodity -1 shows nothing (`_TradeDialogUpdate` @0x4dcc3-0x4dfba; see `nova_sim::exchange_events`) | the name of every local event that moves a commodity |
+//! | [`RescueUntilRefresh`](RuleKey::RescueUntilRefresh) | `rescue_until_refresh` | a stellar no visible system claims is kept by the system that rescued it, the player's when it lists it, until the next refresh clears every owner (`_HandleStellarSystemVisibility` @0x32c58-0x32ca1, `_PropagateMissionBitEffects` @0x9968a): a gate exit, a wormhole exit or an `M`/`N` leaves it with the old system; a stellar neither owned nor rescued has no owner between a refresh or a landed `M`/`N` and the next rebuild point, so the owner-first readers fall back to `_FindSystemFromStellar` (`_RandomizeOneMission` @0xa15a8, `_MungeBriefing` @0x9c8de, `_MapDialogUpdate` @0x10c03; see `nova_sim::story`) | the rescue is derived for the player's current system only, so a rescued stellar follows the player |
 //! | [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff) | `cron_zero_duration_holdoff` | a `Duration` 0 crön's pre-holdoff end runs `OnStart` and `OnEnd` and writes nothing more (`_CronEventHandler` @0x387a8-0x387c1), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and ends as `cron_post_holdoff` says (see `nova_sim::cron`) | `OnEnd` once, then the `PostHoldoff`: **the default — a deliberate departure from the original**†††††††† |
 //! | [`CronPostHoldoff`](RuleKey::CronPostHoldoff) | `cron_post_holdoff` | a running crön's end, with `PostHoldoff` above 0, loads its `PreHoldoff` into the holdoff and leaves its days (@0x387f1-0x387f6 → 0x388c5): it re-runs, or with `PreHoldoff` 0 its `OnEnd` runs every day for good and its news stays (see `nova_sim::cron`) | `PostHoldoff` days with the days at -1, then inactive: **the default — a deliberate departure from the original**†††††††† |
 //! | [`CronZeroDurationNoHoldoff`](RuleKey::CronZeroDurationNoHoldoff) | `cron_zero_duration_no_holdoff` | a `Duration` 0 crön with no holdoffs runs `OnStart` and `OnEnd`, sets its days to -1 and stays active (`_CronEventHandler` @0x388cb-0x388ff), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and it goes inactive (see `nova_sim::cron`) | `OnEnd` once, inactive at once |
 //! | [`BattleHelpTarget`](RuleKey::BattleHelpTarget) | `battle_help_target` | a helper sent to fight a threat to the player, by rank battle help or for a price, picks uniformly among every other ship that targets the player in AI state 3 or 4, enemy of the helper or not (`_AIFightEnemyThreatToPlayer` @0x82c9f-0x82d99; see `nova_sim_ai::hail::battle`) | only among those of a government that is an enemy of the helper's, as the routine's name says |
 //! | [`BraveTraderBattleHelp`](RuleKey::BraveTraderBattleHelp) | `brave_trader_battle_help` | an independent brave trader whose ship-table slot is divisible by 3 asks a price to fight a threat to the player, as a warship does (`_DoCommDialog` @0x963a9-0x963d9; see `nova_sim_ai::hail::battle`) | no brave trader does: each says "I'd rather not." |
+//! | [`BattleHelpGoneSlots`](RuleKey::BattleHelpGoneSlots) | `battle_help_gone_slots` | a helper sent to fight a threat to the player, by rank battle help or for a price, also counts and picks a vacated berth's last ship that threatens the player, as `_AIFightEnemyThreatToPlayer` (@0x82c80-0x82dba) never tests the active flag and a person swapped for its mission ship on the hail clears only that flag (@0x62520; see `nova_sim_ai::traffic::vacated`) | only ships still in the system\* |
+//! | [`FlightAnchor`](RuleKey::FlightAnchor) | `flight_anchor` | flight draws the player's ship, and the world, the play area, the brackets, clicks in space and the starfield about it, at the play area's centre left of the status bar, (trunc((W − 194) / 2), trunc(H / 2)), (415, 384) at 1024 x 768: `_screenCenter` as `_SetupWind` sets it (@0x1b720-0x1b78a; see `nova_view`'s `Camera`) | the view's centre, (floor(W / 2), H / 2): the port's earlier reading\* |
+//! | [`FlightStarfield`](RuleKey::FlightStarfield) | `flight_starfield` | flight draws the original's sprite starfield: min(trunc(play height / 600 × 20), 20) stars of `spïn` 700 (`_RandomizeStars` @0x0b145-0x0b324), wrapped at twice their size outside the play area and dimmed by the system's murk (`_HandleStars` @0x2f87d-0x2fcae), moved by their parallax factor of the ship's last move (`_ScrollStarfield` @0x8171-0x81d5), none in a system of negative `Murk`; scattered afresh at a jump's arrival, a gate's exit and the rescue (see `nova_view`'s `flight::stars`) | three layers of procedural dots at fixed parallax covering the view: the port's earlier reading\* |
+//! | [`EmptySecondary`](RuleKey::EmptySecondary) | `empty_secondary` | a selected secondary of `Flags` 0x0800 (more persistent smoke) that `_WeaponHasAmmo` fails is let go, silently, on every `_HandlePlayer` pass, fire key held or not, disabled or in a jump too (@0x6abcc-0x6ac08; see `nova_sim::session`'s `secondary_select`) | one of `Flags2` 0x0800, hidden when empty, as the select key tests (@0x6ad72)\* |
+//! | [`NewPilotNameTaken`](RuleKey::NewPilotNameTaken) | `new_pilot_name_taken` | a New Pilot named as a saved pilot (ignoring case, as `_DoesPilotExist` @0x72def-0x72e6a matches) asks `STR#` 140 #9 in the Yes/No dialog: Yes goes on to the christening and replaces the saved pilot when the new one is first saved, No returns to the main menu with nothing changed (`_DoNewPilot` @0x18c08-0x18c63; see `nova::app`'s menu) | the name is refused under its field and the New Pilot dialog stays open\* |
+//! | [`RechargeDebt`](RuleKey::RechargeDebt) | `recharge_debt` | R or F pressed with the cash below 0 at a stellar that isn't dominated, or an auto-refueller's top-up on landing at an inhabited stellar, clears the debt and takes as many units of fuel, possibly leaving the tank below empty, as `_DoPortDialog` (@0x5fdbf-0x5fdcf; see `nova_sim::recharge`) and `_DoAutoRefuel` (@0x41c48-0x41c62; see `nova_sim::auto_refuel`) clamp the missing units to the cash | the cash counts as 0: nothing fills and the debt stands\* |
+//! | [`EscortArrival`](RuleKey::EscortArrival) | `escort_arrival` | the hired escorts and fighters kept are snapped onto a formation counted without the mission escorts; on a jump's arrival each is pushed 891.7344 back along its heading, gains 50 along it and glides in as a ship arriving by hyperspace does; a take-off, load or new pilot re-snaps every led ship onto its final slot, a mission escort by position only (`_SetupShipsInSystem` @0x42c8e-0x42d9e, @0x4319a-0x431b2; see `nova_sim::escort_arrival`) | every led ship is snapped onto its final slot with the player's state, the port's earlier placement\* |
+//! | [`DialogTextWheel`](RuleKey::DialogTextWheel) | `dialog_text_wheel` | the wheel and trackpad do nothing: the original reads its events through `_WaitNextEvent` and installs no mouse Carbon handler (@0xcc748, @0xccb83) | a wheel or trackpad scroll over a dialog's scrolling text scrolls it, as Up and Down do (see `nova_view::ui::ScrollText`)\* |
+//! | [`LoadedCourse`](RuleKey::LoadedCourse) | `loaded_course` | a pilot opened from a save flies with no course: `_OpenPilotFile`'s and `_OpenLastPilotFile`'s `_ResetPlayer` clears `_hyperRoute` (@0x1d6bb-0x1d6cd), and `_LoadPilotData` never restores it | the saved course and its start are kept, the port's earlier behaviour (see `nova_sim::Session::load`)\* |
 //! | [`BlessingRefresh`](RuleKey::BlessingRefresh) | `blessing_refresh` | the blessing table is taken at each of the original's resets (`_ResetPlayerPrecalcedValues` @0xc8be-0xc981), the end of every set expression that is not empty among them, so a `K` or `L` blesses or stops blessing as its expression ends, not between its operators, and a crime's rank loss (`_SlapWithPenalty`, which reaches no reset) only at the next reset (see `nova_sim::rank`) | live, from the active ranks: within an expression, and from the crime on\* |
 //! | [`BlessingLanding`](RuleKey::BlessingLanding) | `blessing_landing` | `Flags` 0x0200 clears a governed stellar past both its `MinStatus` and its government's `Require` (`_HandlePlayerDockRequest` @0x67940-0x67a05; see `nova_sim::landing`) | past `MinStatus` only, so `Require` still refuses |
 //! | [`BlessingAlwaysAttacks`](RuleKey::BlessingAlwaysAttacks) | `blessing_always_attacks` | a `Flags` 0x0004 government's word turns its warships and interceptors on a player that a rank's `Flags` 0x0100 blesses with that government's peace, as `_WarshipAI` @0x8b7b0 and `_InterceptorAI` @0x8cb5c read no blessing (see `nova_sim::ai::warship`) | the blessing holds the word back, as the Bible's ränk 0x0100 "will not automatically attack" reads |
 //! | [`ExploredByPlace`](RuleKey::ExploredByPlace) | `explored_by_place` | exploring a system explores its place's head (`_RecursiveAutoExplore` @0xd9b6-0xda10, the arrivals and the take-off), and each rebuild point explores every system at an explored head's place, hidden or not (`_HandleStellarSystemVisibility` @0x32b13-0x32b8f; see `nova_sim::exploration`) | each system is explored on its own\* |
-//! | [`RouteRewrite`](RuleKey::RouteRewrite) | `route_rewrite` | each rebuild point rewrites every hidden hop of the course to the system at its place and cuts the course at the first hop with none (`_HandleStellarSystemVisibility` @0x32ab3-0x32b0d), and an arrival that made no hop clears the course when its next hop stands elsewhere, or drops that hop when it stands at the arrival (@0x6c472-0x6c4c6; see `nova_sim::course`) | hops resolved only when used, and an arrival drops only the hops made\* |
+//! | [`RouteRewrite`](RuleKey::RouteRewrite) | `route_rewrite` | each rebuild point rewrites every hidden entry of the course, its start (slot 0) included, to the system at its place and cuts the course at the first with none, the whole course when it is the start (`_HandleStellarSystemVisibility` @0x32aaa-0x32b0d), and an arrival that made no hop clears the course when its next hop stands elsewhere, or drops that hop when it stands at the arrival (@0x6c472-0x6c4c6; see `nova_sim::course`) | hops resolved only when used, and an arrival drops only the hops made\* |
 //! | [`NebulaExploreOnce`](RuleKey::NebulaExploreOnce) | `nebula_explore_once` | whether a nebula is explored is never saved, so a load's sweep over the visible explored systems runs its `OnExplore` again (`_ResetPlayer` @0x1da86, Open Pilot's `_MainScreenChoice` @0x1a8d4-0x1a906, and `_OpenLastPilotFile` @0x765a2-0x765ce at launch; see `nova_sim::nebula`) | `OnExplore` runs once a pilot, through the once-fired record\* |
 //! | [`NebulaNewPilot`](RuleKey::NebulaNewPilot) | `nebula_new_pilot` | a new pilot explores no nebula until its first exploration, a take-off, a jump or a map (`_DoNewPilot` @0x18de5, @0x1df4b, @0x19118, before its first refresh @0x1925e; see `nova_sim::nebula`) | the start system's nebulae are explored as the game begins††††††††† |
 //! | [`ScanOutfitsPastJunk`](RuleKey::ScanOutfitsPastJunk) | `scan_outfits_past_junk` | while the player carries any `jünk` with a `ScanMask`, a scan that finds no illegal `jünk` ends without scanning the outfits (`_ScanPlayer` @0x7eabd-0x7eefa; see `nova_sim::scan`) | the outfits are scanned when no illegal `jünk` is found\* |
@@ -192,18 +205,19 @@
 //! | [`AsteroidEntryField`](RuleKey::AsteroidEntryField) | `asteroid_entry_field` | every way into a system kills the asteroid field, a jump's arrival as well, as each caller of `_CreateAsteroids` sets `_killAsteroids` first (@0x6c4fc, @0x3fa05): the field fills one asteroid a tick from the edges (see `nova_sim::asteroid`) | a jump's arrival, and a session starting or loading in flight, keeps the field `_CreateAsteroids` places\* |
 //! | [`AsteroidRespawnRing`](RuleKey::AsteroidRespawnRing) | `asteroid_respawn_ring` | an asteroid spawned at the edge starts at least 0.7 × (half the play area + 128) out on both axes (`_SpawnAsteroid` @0x3a351-0x3a538; `nova_sim::asteroid::Ring::Original`), which can be on screen on a wide play area | just off the screen, inside the cull (`nova_sim::asteroid::Ring::Outside`)\* |
 //! | [`FuseIgnoresAsteroids`](RuleKey::FuseIgnoresAsteroids) | `fuse_ignores_asteroids` | every armed proximity fuse is set off by the first asteroid in reach, as no code reads `Flags2` 0x0004 (`_CheckShotProximities` @0x376ab-0x37758; `nova_sim::combat::asteroid_hit::AsteroidFuse::Original`) | the fuse of a weapon with `Flags2` 0x0004 ignores asteroids: "proximity detonator ignores asteroids" (`nova_sim::combat::asteroid_hit::AsteroidFuse::Bible`) |
+//! | [`AsteroidCountByWidth`](RuleKey::AsteroidCountByWidth) | `asteroid_count_by_width` | a system's `Asteroids` is stored × the window's width / 640, truncated, at most 16, and 0 when 0 or less (`_LoadObjectData` @0x77c72-0x77ce7; see `nova_sim::asteroid::FieldSpec::stored`): the field's spawn and the map's hazard words read it | the raw `Asteroids`, as the Bible gives it, whatever the window's size |
 //! | [`PlayerPassThrough`](RuleKey::PlayerPassThrough) | `player_pass_through` | the whole player side passes through ships of `gövt` `Flags` 0x0008 and `düde` `Booty` 0x0100, a player-side firer of `Flags` 0x0040 hits nothing, the player's and its direct escorts' shots pass through `Flags` 0x0040 ships, and a `Booty` 0x0100 ship's fire (or its led ships' of no `düde`) passes through every ship allied with the player (`_ShotCanHitShip` @0x4496d-0x44a4e, @0x44ad2-0x44b2f; `_HandleBeams` @0x30c3c-0x30cf2; see `nova_sim::combat::sides`) | the player alone: its own shots pass through those ships, its beams through the 0x0040 and 0x0100 ones, and a 0x0100 ship's own fire through the player |
 //! | [`ShotDecay`](RuleKey::ShotDecay) | `shot_decay` | a decaying shot loses a point of its direct hit's mass and energy damage every `Decay` + 1 ticks, each floored at none, its blasts whole (`_HandleShot` @0x35eb2-0x35efc, `_HandleShipHit` @0x36add-0x36afd; see `nova_sim::combat::projectile::DecayStep`) | every `Decay` ticks |
 //! | [`PlunderAmmoBays`](RuleKey::PlunderAmmoBays) | `plunder_ammo_bays` | a fighter bay the player carries, of a fighter other than the launcher's `AmmoType`, ends the search for a weapon that fires a boarded ship's rounds, so none are offered when it comes before every such weapon by ID (`_PlayerCanUseAmmoType` @0x58bb-0x58df; see `nova_sim::board::player_fires`) | the bay is passed by\* |
 //! | [`AiSpendWithoutShot`](RuleKey::AiSpendWithoutShot) | `ai_spend_without_shot` | every copy of an NPC's pick that has its ammunition spends its round or fuel whether or not it spawns: a turret with its target in a blind spot or outside the box of its reach, a quadrant turret out of its arc, a missile or turret with no target, a bomb, and a fighter bay kept as the pick, which drains a fighter a frame with no launch (`_FireAIShipWeapon` @0x88cd8-0x88dac; see `nova_sim::combat::armament::Armament::fire_pick`) | only a copy that spawns spends\* |
 //! | [`ExitCompression`](RuleKey::ExitCompression) | `exit_compression` | a weapon exit point takes its `shän`'s up compression when, turned to the frame its ship is drawn on, it lies up the screen, and the down one otherwise, so an exit behind a ship facing up takes the down one (`_ModifyShotStartPosition2` @0x717d-0x71f2; see `nova_sim::combat::exits`) | by the heading: up for 0-90 and 270-359, down for 91-269 (the Bible's `UpCompressX`) |
 //! | [`PdExitStep`](RuleKey::PdExitStep) | `pd_exit_step` | each point-defence shot moves its cursor on two exits, one in `_SpawnShot` and one as it is set back to the centre and placed again, so a ship's point defence fires from every other exit (`_HandleShipPointDefense` @0x396e5, @0x39707-0x3976c; see `nova_sim::combat::Combat`) | one exit a shot, each in turn\* |
-//! | [`BeamHitTest`](RuleKey::BeamHitTest) | `beam_hit_test` | a beam hits the nearest ship whose centre lies in its cone: within its `BeamLength` plus half the ship's radius trunc(0.66 × its sprite's width), and trunc(10r / 32) degrees of its heading, the hit ending trunc(dist − 0.2 × width) along it (`_HandleBeams` @0x30dde-0x31051; see `nova_sim::combat::beam`) | the first ship whose hit circle its segment meets, ending where it meets it\* |
-//! | [`BeamConeQuirks`](RuleKey::BeamConeQuirks) | `beam_cone_quirks` | the cone's angle test is the plain difference of the whole-degree bearing and the jittered heading, with no 0/360 wrap, so a beam at 2° misses a ship at 358° (`_HandleBeams` @0x30ec4-0x30edd); the asteroid pass takes its "nearest" asteroid by the ship of the same index's distance (@0x317f2-0x3180c; asteroids phase 6) | the angle wraps, and the nearest asteroid is by its own distance: **the default — a deliberate departure from the original**†††††††††††† |
+//! | [`BeamHitTest`](RuleKey::BeamHitTest) | `beam_hit_test` | a beam hits the nearest ship whose centre lies in its cone: within its `BeamLength` plus half the ship's radius trunc(0.66 × its sprite's width), and trunc(10r / 32) degrees of its heading, the hit ending trunc(dist − 0.2 × width) along it (`_HandleBeams` @0x30dde-0x31051; see `nova_sim::combat::beam`), and with no ship hit the nearest asteroid in its cone (`nova_sim::combat::asteroid_beam`) | the first ship whose hit circle its segment meets, ending where it meets it, or else the first such asteroid\* |
+//! | [`BeamConeQuirks`](RuleKey::BeamConeQuirks) | `beam_cone_quirks` | the cone's angle test is the plain difference of the whole-degree bearing and the jittered heading, with no 0/360 wrap, so a beam at 2° misses a ship at 358° (`_HandleBeams` @0x30ec4-0x30edd); the asteroid pass takes its "nearest" asteroid by the ship of the same index's distance (@0x317f2-0x3180c; see `nova_sim::combat::asteroid_beam`) | the angle wraps, and the nearest asteroid is by its own distance: **the default — a deliberate departure from the original**†††††††††††† |
 //! | [`BombRocketLaunch`](RuleKey::BombRocketLaunch) | `bomb_rocket_launch` | an NPC's freefall bomb (5) and rocket (6), an escort's too, leave at its ship's velocity and its `Speed` along its heading, broadside with a negative `Inaccuracy`; only the player's bomb takes 0.8 of its ship's velocity, and its rocket its ship's (`_SpawnShot` @0x3e73a-0x3e783, @0x3ede8-0x3ee0a; see `nova_sim::combat::projectile::BombLaunch`) | every ship's bomb at 0.8 of its ship's velocity, and its rocket at its ship's |
 //! | [`PdHostility`](RuleKey::PdHostility) | `pd_hostility` | point defence fires at a missile aimed at its ship or its leader whoever fired it, with no hostility test; the collision side meets any missile it touches, and with no missile the ship branch fires at a ship by its own threat tests, under both readings (`_HandleShipPointDefense` @0x393b1-0x3969d; see `nova_sim::combat::defence`) | only at a missile whose firer the fight's point-defence rule calls hostile, Nova's by fleets and alliances\* |
 //! | [`JamHalving`](RuleKey::JamHalving) | `jam_halving` | a government of `Flags` 0x0080 halves the whole jamming of every NPC of it, its class government's `InhJam` and its default items' jammers, toward zero before the 0-100 clamp, whatever its AI type (`_ShipECM` @0x3ccf-0x3cef; see `nova_sim::combat::jamming`) | only a freighter's (AI type 1 or 2), and only its `InhJam` share |
-//! | [`SeekerLockAngle`](RuleKey::SeekerLockAngle) | `seeker_lock_angle` | a `Seeker` 0x4000 missile drops its lock on a target within ±249 pixels on each axis whose truncated bearing less its heading, absolute and mod 360 with no fold, is above 45, so one heading 355 drops it at a bearing of 5 (`_HandleShotGuidance` @0x323ac-0x323ed; see `nova_sim::combat::projectile::LockAngle`) | the short way round: **the default — a deliberate departure from the original**††††††††††††† |
+//! | [`SeekerLockAngle`](RuleKey::SeekerLockAngle) | `seeker_lock_angle` | a `Seeker` 0x4000 missile drops its lock on a target within ±249 pixels on each axis whose truncated bearing less its heading, absolute and mod 360 with no fold, is above 45, so one heading 355 drops it at a bearing of 5, and a `Seeker` 0x0002 missile locks onto an asteroid within ±199 pixels only at 15 or less by the same measure (`_HandleShotGuidance` @0x323ac-0x323ed, @0x325b9-0x325fb; see `nova_sim::combat::projectile::LockAngle`) | the short way round: **the default — a deliberate departure from the original**††††††††††††† |
 //! | [`ShipDebris`](RuleKey::ShipDebris) | `ship_debris` | a destroyed ship scatters no debris: `_HandleShipDisplay` sets off only its `Explode2` (@0x2d7ef-0x2dee7), with no `_SpawnParticles` call on the death branch | the view's `DEBRIS_COUNT` pieces of debris: **the default — a deliberate departure from the original**†††††††††††††† |
 //! | [`QuadrantTurretBlindSpots`](RuleKey::QuadrantTurretBlindSpots) | `quadrant_turret_blind_spots` | the player's quadrant turrets (7 and 8) test no blind spot: a 7 or 8 fires at a target in its arc whatever its weapon's or its ship's blind-spot flags, while a 3 or 4 holds fire in one (`_FirePlayerWeapon` @0x62aeb-0x62c38; see `nova_sim::combat::aim`); an NPC's turret pick (an escort's formation fire among them) is tested for them under both readings as `_AIFireTurret` picks it (@0x80d0b) | a blind spot holds a 7 or 8 as it holds a 3 or 4 (the Bible: "Turreted weapon has a blind spot") |
 //! | [`PlayerForwardRecoil`](RuleKey::PlayerForwardRecoil) | `player_forward_recoil` | a player's weapon recoils only for a `Recoil` above none (`_FirePlayerWeapon` @0x62eb2-0x62eb5, a signed `jle`), so a negative one pushes it nowhere (see `nova_sim::combat::Combat`) | a negative `Recoil` but -1 pushes the player forward, as an NPC's does (the Bible: "Negative values thrust the ship forwards") |
@@ -273,6 +287,7 @@
 //! | [`RefuelCap`](RuleKey::RefuelCap) | `refuel_cap` | a refuelling ship gives a unit a think while its target holds 100 or less, with no cap at the tank, done only above 100, tested before the add (@0x8f548-0x8f57f); the player's per-frame clamp to the tank (@0x6d9c7-0x6d9e1) leaves a tank of 100 or less refuelled for ever (see `nova_sim_ai::traffic::refuel_dock`) | the add stops at the tank, and a full tank is done too\* |
 //! | [`EscapeToMainScreen`](RuleKey::EscapeToMainScreen) | `escape_to_main_screen` | Escape in flight entered from the main screen saves the pilot and returns to the main screen with it still held, so Enter Ship resumes it: the port's own control, as `_PlayGame` is left only by death (`_HandlePlayer` @0x6883d) or Quit | Escape in flight does nothing, as in the original\* |
 //! | [`IntroForReopenedPilot`](RuleKey::IntroForReopenedPilot) | `intro_for_reopened_pilot` | a pilot that hasn't seen the intro screen gets, as it enters play, the intro of the last pilot New Pilot made in this run, and an empty one (no picture, no text, still marked seen) when none has been made since launch, as the intro's IDs are globals that only `_DoNewPilot` fills (`_GetCharResourceIntroIDs` @0x193ad) and `_InitMainScreen` resets at launch (@0x16101-0x1612d; see `nova_view::menu::intro`) | the first `chär`'s intro, made in this run or not ("shown when the player starts a new game with this character") |
+//! | [`CloakOnReload`](RuleKey::CloakOnReload) | `cloak_on_reload` | a ship type of `Flags2` 0x0100 cloaks while any weapon it carries has its reload timer strictly above its `Reload` (`_AIHandleCloaking` @0x8345d-0x834b3; see `nova_sim_combat::cloak`), so a burst reload no longer than `Reload` (the Pulse Laser, 146) never cloaks it | while any weapon it carries that bursts is on its burst reload ("cloak when their weapon goes into burst reload") |
 //! | [`FormationFlight`](RuleKey::FormationFlight) | `formation_flight` | an escort keeping formation (goal 0xa) picks its substate by its distance from its leader, inclusive on each axis: within 300 it closes formation (sub 0xc), counter-thrusting to its leader's velocity until within 0.525 on each axis, then taking it and stepping its heading 1° a frame toward the leader's; within 600 it closes (sub 0xb), beyond it approaches (sub 9), each steering at its guard or else its leader; with its leader unseen, it brakes within 300 (sub 1). Close formation nudges it from 8 off its slot, inclusive, by ten frames' thrust that can carry it past, cut by its ion charge (`_HighLevelAIHandler` @0x8ed15-0x8ef37, `_LowLevelAIHandler` @0x878fc-0x87e01, `_AIMaintainFormation` @0x84f04-0x8503f; see `nova_sim_ai::traffic::formation_flight`) | the port's earlier formation, measured from the slot: within 300 it takes its leader's velocity and heading at once, within 600 it closes at the speed it can brake from, beyond it flies at full speed, and it is nudged back from beyond 8, never past the slot, with no ion cut\* |
 //! | [`NpcEscortAi`](RuleKey::NpcEscortAi) | `npc_escort_ai` | a ship with an NPC parent (a fleet's escort, a ship a pirate took into its fleet, an NPC carrier's fighter) flies `_EscortAI` under it: the order its lead last issued it every eighth frame by its class, the lead's shield, target and odds (`_AIIssueEscortOrders` @0x8986d-0x89b8d; see `nova_sim_ai::ai::escort_orders`), Defend and Attack fighting the nearest threat to the lead, formation guarding against a threat drawn among those to the lead, firing its best turret at it, Return docking a fighter (`_EscortAI` @0x838d2-0x83f5d, `_AIFightThreatToParent` @0x81de6, `_FindNearestThreatToParent` @0x83861; see `nova_sim_ai::ai::fleet_escort`); a fleet whose lead is gone, disabled or breaking up is led by its intact follower of greatest class `Mass`, taking over the lead's job under its government, every other following it after the regroup pause (goal 0x13, released on a 1-in-100 draw each frame), a disabled follower with no intact fellow left alone in it (`_AICheckParentExists` @0x8926a-0x89501, `_AIDispatch` @0x8fe73-0x8febb; see `nova_sim_ai::traffic::succession`); a disabled ship's dispatch drops its leader for good (@0x8fece-0x8ff13), and a ship left with none leaves its fleet with goal 0 and its class's `InherentAI` once whole (@0x83917-0x8397b) | the port's earlier routing: a led ship flies by its own AI type following its lead, an NPC carrier's fighter attacks its carrier's quarry or docks, and only a fighter whose carrier is gone leaves its fleet; no lead is succeeded and none pauses, and a disabled escort keeps its lead\* |
 //! | [`FighterCapacity`](RuleKey::FighterCapacity) | `fighter_capacity` | a fighter (AI type 5: launched from a bay, the player's or an NPC carrier's, or rejoined as one) holds 1.333 × its class's shield and armour and recharges its shield 1.333 × as fast, its armour recharge unscaled, until it leaves its carrier (`_ShipShieldCapacity` @0x2a91-0x2aa7, `_ShipArmorCapacity` @0x2cb9-0x2cd2, `_ShipShieldRechargeRate` @0x2b96-0x2bac; see `nova_sim_combat::bay`) | its class's shield, armour and shield recharge, as the `shïp` `Shield`, `Armor` and `ShieldRe` read |
@@ -285,6 +300,9 @@
 //! | [`BeamStellars`](RuleKey::BeamStellars) | `beam_stellars` | a beam never hits a stellar: `_HandleBeams` (@0x30295-0x31e1f) reads no stellar (see `nova_sim::combat::beam_stellar`) | a planet-type beam (`Flags2` 0x0400) is stopped by a destroyable stellar nearer along it than the ship it hits, and takes its `MassDmg` + `EnergyDmg` a tick off its strength: "can only hit planet-type ships or destroyable stellars" |
 //! | [`LandingSpeed`](RuleKey::LandingSpeed) | `landing_speed` | the player lands only at most 0.75 a tick on each axis, inclusive, in single precision, a NaN refused (`_HandlePlayerDockRequest` @0x66c3c-0x66c66; see `nova_sim_state::landing::check_landing`) | the overall speed at most 1.0 a tick\* |
 //! | [`GatePickRange`](RuleKey::GatePickRange) | `gate_pick_range` | the nearest-stellar pick (the land key, F5, the tutorial's land hints, a new pilot's saved stellar) counts a hypergate or wormhole (`Flags2` & 0x3000) only when its squared distance is strictly below 250000.0, 500 pixels (`_FindNearestStellar` @0x2838-0x2853; see `nova_sim_state::landing::nearest_stellar`, and see `nova_sim::story`) | a gate counts at any distance\* |
+//! | [`CloakReserves`](RuleKey::CloakReserves) | `cloak_reserves` | `_ShipCanCloak` reads the usage nibbles from the cloak mod's `ModType` word, 0x11, not its `ModVal` (@0x558d, @0x5610), so every cloak, the player's and an NPC's, needs fuel above 0 and none needs shield; the last owned cloak outfit, or the last cloak default-item slot, decides (`_ShipCanCloak` @0x553c-0x56b0; see `nova_sim_combat::cloak`) | the `ModVal`'s nibbles decide: a fuel usage needs fuel above 0 and a shield usage needs shield above 0 |
+//! | [`AreaCloakHold`](RuleKey::AreaCloakHold) | `area_cloak_hold` | `_HandleShip`'s frame hold asks `_ShipCanCloak`, which reads only the ship's own items, so an escort riding its leader's area cloak (`ModVal` 0x1000 of a `ModType` 17 mod) with no cloak of its own is uncloaked the frame it reads cloaked and never stays cloaked; no stock outfit has the bit (`_HandleShip` @0x3413d-0x3415f, `_HasAreaCloak` @0x3d49-0x3e24, `_HasCloak` @0x964c-0x96bf; see `nova_sim_combat::area_cloak`) | the hold counts the ride as a cloak it can keep, so the escort stays cloaked while it rides ("ships in formation with a ship carrying this cloaking device will also be cloaked") |
+//! | [`NewPilotVisibility`](RuleKey::NewPilotVisibility) | `new_pilot_visibility` | a new pilot's neighbour pass reads the visible flags the run's last galaxy refresh left: a pilot loaded, made or flown earlier in the run, or at launch with no pilot the refresh of clear bits, as `_DoNewPilot` tests +0x1eb (@0x18fc5) before its own refresh (@0x1925e; launch @0x4740c; see `nova_sim::Session::begin`) | it reads the new pilot's own refresh\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -349,8 +367,10 @@
 //! `npc_jump_fuel`, `odds_cache`, `refuel_cap`,
 //! `escape_to_main_screen`, `formation_flight`, `npc_escort_ai`,
 //! `escort_order_reach`, `npc_formation`, `successor_repairer`,
-//! `held_gate_burst` or
-//! `comm_quote`
+//! `held_gate_burst`, `new_pilot_visibility`, `recharge_debt`,
+//! `battle_help_gone_slots`, `flight_anchor`, `flight_starfield`,
+//! `empty_secondary`, `escort_arrival`, `dialog_text_wheel`,
+//! `loaded_course` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count` and `nebula_explore_once`
 //! ("the explored state of the nebulae isn't saved from game to game ...
@@ -468,10 +488,20 @@
 //! reading is the port's earlier behaviour, the selected cell kept and
 //! the outfitter left open after any order, not anything the Bible says.
 //!
-//! ¶¶¶¶¶ The Bible says nothing of the outfitter's grid. The other
-//! reading is the port's earlier behaviour, a press on an empty cell
-//! ignored and the description read whenever the highlighted cell shows
-//! an outfit not already described, not anything the Bible says.
+//! ¶¶¶¶¶ The Bible says nothing of the outfitter's, the shipyard's or
+//! the hire screen's grid. The other reading is the port's earlier
+//! behaviour, a press on an empty cell ignored and the description read
+//! whenever the highlighted cell shows an outfit not already described,
+//! and the shipyard and hire screen opening on their first cell and
+//! keeping it through a scroll, not anything the Bible says. A second
+//! press on a cell within 15 Mac ticks opens Shipyard Info by both
+//! readings (`_ShipyardFilter` @0x60cd7-0x60d12): the port had no
+//! double-click, not a reading of its own. The outfitter's opening and
+//! scroll arrows read it as the shipyard's do: by the engine it opens
+//! with nothing selected, and a scroll keeps the highlighted cell only
+//! while it stays in view, re-reading its description; by the other, the
+//! port's earlier behaviour, it opens on the first cell and a scroll
+//! keeps the selection, off screen too.
 //!
 //! \*\*\*\*\* The Bible says only that a persistent outfit "stays with
 //! you when you trade ships", as the engine has it. The other reading is
@@ -534,7 +564,10 @@
 //! ¶¶¶¶¶¶¶ The Bible says a replacement system shares its original's
 //! coordinates and does not say which of two visible systems at one place
 //! wins. The other reading is story-runtime phase 4's, the port's choice,
-//! not anything the Bible says (see `nova_sim::story`).
+//! not anything the Bible says (see `nova_sim::story`). The Bible says
+//! nothing of which system an arrival at such a place enters either:
+//! `arrival_system`'s other reading is story-runtime phase 4's and
+//! crons-news-ranks phase 5's, the port's choice.
 //!
 //! \*\*\*\*\*\*\*\* The Bible gives `Visibility` as a test and does not
 //! say when it is evaluated. The other reading is the port's choice, not
@@ -618,6 +651,10 @@
 //! explosions and sparks the player would otherwise see; no stock
 //! mission, crön or storyline relies on a shot failing. The Bible says
 //! nothing of them; the engine's reading restores the original's tables.
+//! Uncapped, the explosions, smoke puffs and escape pods still take the
+//! first free slot and draw in slot order, the pool growing past the
+//! table's end as the original's would if it were larger (the view's
+//! `slot_pool`).
 //!
 //! †††††††††††††††† `sound_voices` follows the other reading by default too,
 //! uncapped like `combat_caps`: the user's decision is that the original's
@@ -993,9 +1030,13 @@ rule_keys! {
     /// by the engine, the wage its ship type's record gives now, worked
     /// out from its `Cost` on every pay day as `_DoEscortPayment` does;
     /// otherwise the wage kept on its record when it was hired, as the
-    /// phase has it. The Bible is silent here, so the other reading is
-    /// the intended behaviour, not anything the Bible says (see
-    /// `nova_sim::Session::with_rules`).
+    /// phase has it. The pay line hailing shows follows the same
+    /// reading: by the engine, worked out from the `Cost` as
+    /// `_EscortDialogUpdate` draws it (`nova_sim::hire::shown_wage`):
+    /// a hundredth, not clamped, and "credit" only when `Cost` x 0.01 is
+    /// exactly 1.0; otherwise the wage kept, "credit" at 1. The Bible is
+    /// silent here, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see `nova_sim::Session::with_rules`).
     EscortWage => "escort_wage",
     /// How often a person (`përs`) takes an ordinary ship's place, and
     /// which: by the engine, a draw of `Rand(7)` of 0, then `Rand(1022)`
@@ -1267,15 +1308,19 @@ rule_keys! {
     /// Bible says (see `nova_sim::ScriptEffectRules`).
     MoveArrival => "move_arrival",
     /// What the `N` set operator's flag does when it runs in flight: by
-    /// the engine, `_dontMovePlayerAfterLanding` (@0x158d9) stays set
-    /// until the next take-off, which then keeps the ship where it landed
-    /// instead of at the stellar's centre, and clears it
-    /// (`_PlayerLandOnStellar` @0x633ad-0x63400); otherwise only a landed
-    /// `N` keeps the landing position, and a take-off after an `N` in
-    /// flight is from the stellar's centre as any other. The Bible is
-    /// silent here, so the other reading is the intended behaviour, not
-    /// anything the Bible says (see
-    /// `nova_sim::ScriptEffectRules`).
+    /// the engine, nothing. `N` sets `_dontMovePlayerAfterLanding`
+    /// (0x316951) landed or in flight (`_EvalSetExp` @0x15903-0x15908),
+    /// every landing clears it first (`_PlayerLandOnStellar`
+    /// @0x631f1-0x631f6, before the port), and the take-off reads and
+    /// clears it after the port (@0x633ad-0x633bb, @0x63400). So only an
+    /// `N` run while docked keeps the ship where it landed instead of at
+    /// the stellar's centre; one in flight, or after the take-off's
+    /// placement, is cleared before it is read. By the other reading,
+    /// the one control-bits phase 8 read from the take-off alone, kept as
+    /// a setting, an `N` in flight or after the placement also keeps the
+    /// next take-off's landing position. The Bible is silent here, so the
+    /// other reading is the intended behaviour, not anything the Bible
+    /// says (see `nova_sim::ScriptEffectRules`).
     MoveKeepFlag => "move_keep_flag",
     /// What a `Q` set operator whose `STR#` is missing or empty, or whose
     /// pick is empty, does: by the engine, nothing, as the player leaves
@@ -1627,7 +1672,66 @@ rule_keys! {
     /// outfit not already described. The Bible says nothing of the grid,
     /// so the other reading is the port's earlier behaviour, not anything
     /// the Bible says (see nova-view's `OutfitterScreen`).
+    ///
+    /// The shipyard and the hire screen read it too, as `_DoShipyardDialog`
+    /// (@0x5e679), which runs both (`*0xdeda0` the hire flag), and its
+    /// `_ShipyardFilter` (@0x60449) keep their selection. By the engine,
+    /// the selected ship (`*0xdece4`) is kept apart from the highlighted
+    /// cell (`*0xded3c`, a visible position 0-19) and can be none (-1).
+    /// Both screens open with nothing selected (@0x5e6d8-0x5e705): Buy
+    /// Ship (Hire Escort) and Info grey (`_CalcShipCanBuy` @0x4f6e3,
+    /// `_DrawShipyardButtons` @0x2a3f7-0x2a405), and the picture, the info
+    /// box and the description are blank (`_ShipyardDialogUpdate`
+    /// @0x58fd0-0x58fda). A press on an empty cell position sets both to
+    /// -1 (@0x60a5d-0x60a73) and reaches no dialog item (@0x60d73-0x60de0).
+    /// A scroll arrow that scrolls (items 12 and 13) sets both to -1 and
+    /// empties the description (@0x5f580-0x5f5be, @0x5f60b-0x5f670); one
+    /// that cannot scroll changes nothing. By the other reading, the
+    /// first cell is selected on opening, a press on an empty cell is
+    /// ignored, falling through to the dialog, and a scroll keeps the
+    /// selection. By both, a second press on the same listed position
+    /// within 15 Mac ticks opens Shipyard Info (@0x60cd7-0x60d12), the
+    /// position counted on screen, not by ship, so a press across a
+    /// scroll opens the ship now there; an empty press between forgets
+    /// the last.
+    ///
+    /// The outfitter's opening and scroll arrows read it too. By the
+    /// engine, `_DoOutfitDialog` opens with `*0xded58` and `*0xded5c` at
+    /// -1, the scroll at 0 and Buy and Sell cleared (@0x5bb19-0x5bb54),
+    /// and the description emptied (@0x5bd0f-0x5bd1c): no cell is
+    /// highlighted, Buy and Sell are grey, and the picture, info box and
+    /// description are blank. A scroll arrow that scrolls (items 10 and
+    /// 11) keeps the highlighted cell while it stays in view (Up from
+    /// visible positions 0-15, Down from 4-19), reading its description
+    /// again (@0x5d384-0x5d3b4, @0x5d70c-0x5d737); otherwise, from any
+    /// other cell or none, it sets both to -1 and empties the description
+    /// (@0x5d3bb-0x5d3d6, @0x5d73e-0x5d759), ending a reset. One that
+    /// cannot scroll changes nothing. By the other reading, the first cell
+    /// is selected on opening and a scroll keeps the selection, off screen
+    /// too, reading nothing.
     GridSelection => "grid_selection",
+    /// Where an arrow key moves the outfitter's, the shipyard's and the
+    /// hire screen's highlighted cell. By the engine, `_OutfitFilter`
+    /// (@0x58203-0x583b8) and `_ShipyardFilter` (@0x6057a-0x6072f, which
+    /// also runs the hire screen) move it alike, on the cell's visible
+    /// position 0-19 and the scroll: Right moves on one only onto a listed
+    /// cell, and from the last position scrolls a row while the grid can
+    /// (@0x58227-0x5828a); Left moves back one, and from the first
+    /// position scrolls back a row (@0x5828f-0x582bf); Up moves up a row,
+    /// and from the top row scrolls up while the grid can, so **on the
+    /// list's first row it stays** (@0x582c4-0x582f5); Down moves down a
+    /// row **only onto a listed cell, staying otherwise**, and from the
+    /// bottom row scrolls while the grid can, then steps back to the last
+    /// listed cell (@0x582f7-0x58352, @0x5835a-0x583b8). Page Up (Mac key
+    /// 0x74) moves as Up and Page Down (0x79) as Down
+    /// (@0x581b0-0x581dd). By the other reading, the port's earlier moves:
+    /// Up on the first row selects the first cell and Down past the end
+    /// the last listed. Page Up and Page Down move as Up and Down by both,
+    /// and with no cell highlighted an arrow picks the first or the last
+    /// cell shown by both (@0x583bd-0x58440). The Bible says nothing of
+    /// the grid, so the other reading is the port's earlier behaviour (see
+    /// nova-view's `CellGrid`).
+    GridArrows => "grid_arrows",
     /// How an outfit flagged 0x0200 (price by ship mass) is priced. By
     /// the engine, `_AdjustedItemCost` (@0x5869-0x5895) gives 0 for a
     /// `Cost` of 0 or less (@0x5872-0x5878). Otherwise, with the flag, it
@@ -1882,7 +1986,9 @@ rule_keys! {
     /// other reading, in full with its commas: "1,234,567". The Bible
     /// says nothing of it, so the other reading is the intended
     /// behaviour, not anything the Bible says (see
-    /// `nova_sim::text_tags`).
+    /// `nova_sim::text_tags`). The report of escorts sold and upgraded at
+    /// a shipyard reads its totals the same way (`_DoEscortLand`
+    /// @0x4067c, @0x4078c; see `nova_sim::escort_dialog`).
     PayMillions => "pay_millions",
     /// The order the mission computer and the other venues list their
     /// offers in. By the engine, as `_RandomizeMissionData`
@@ -2267,6 +2373,54 @@ rule_keys! {
     /// reading, after every settled script as well (see the
     /// `nova_sim::story` module's "Visibility and governments").
     VisibilityRefresh => "visibility_refresh",
+    /// Which system an arrival enters (see `nova_sim::session`'s
+    /// `arrival_system` module and the `nova_sim::story` module's
+    /// "Visibility and governments"). By the engine, the system it is
+    /// given, as it is, unless that system is hidden after any refresh the
+    /// arrival runs, when the refresh's move takes the player out of it
+    /// (`_PropagateMissionBitEffects` @0x998f1-0x99a36, the +0x1eb test
+    /// @0x99918): a visible system shadowed at its place by a lower one is
+    /// entered as it is. A jump's system is decided before its refresh
+    /// (@0x6bf3f): on the multi-jump branch the last hop's stand-in
+    /// (`_HandlePlayer` @0x6bdc1-0x6bdd4), otherwise the raw Con target of
+    /// the slot the jump was selected from (+0x6c, @0x6bd3a-0x6bd47,
+    /// written @0x6be0b). A wormhole comes out in its exit's owner as it
+    /// is (`_PlayerEnterWormhole` @0x642a7), `M` and `N` enter the system
+    /// they name (@0x158f2), and the escape pod's rescue the found
+    /// stellar's owner (@0x68f99-0x68f9e), a rescue kept until the next
+    /// refresh included, so possibly a system shadowed at its place. By
+    /// the other reading,
+    /// story-runtime phase 4's and crons-news-ranks phase 5's, every
+    /// arrival is resolved by place after the refresh, and a jump enters
+    /// the stand-in J took.
+    ArrivalSystem => "arrival_system",
+    /// What the exchange shows of the `öops` events active at the docked
+    /// stellar (see `nova_sim::exchange_events`). By the engine, only the
+    /// first by ID with days left above 0 (`_TradeDialogUpdate`
+    /// @0x4dd39, the loop exits @0x4dfba), as the sentence "<name> has
+    /// raised/lowered the price of <cargo>." (`STR#` 2002 #192-#194,
+    /// #181, @0x4ddd7-0x4df3c); a first event of commodity -1 shows
+    /// nothing. By the other reading, the name of every such event that
+    /// moves a commodity.
+    ExchangeEvents => "exchange_events",
+    /// How long a stellar no visible system claims stays with the system
+    /// that rescued it (see `nova_sim::story`'s galaxy overlay notes). By
+    /// the engine, as the original: `_HandleStellarSystemVisibility`
+    /// writes the player's system into an unowned stellar's owner
+    /// (+0x14) when that system lists it (@0x32c58-0x32ca1) and never
+    /// overwrites a set owner, so the rescue lasts until the next refresh
+    /// clears every owner (`_PropagateMissionBitEffects` @0x9968a): a
+    /// jump, a landing or a load. A gate exit, a wormhole exit or an `M`
+    /// or `N` with no refresh between leaves it with the old system. A
+    /// stellar neither owned nor rescued has no owner between a refresh,
+    /// or a landed `M` or `N`, and the next rebuild point, so the
+    /// owner-first readers fall back to `_FindSystemFromStellar`
+    /// (`_RandomizeOneMission` @0xa15a8, `_MungeBriefing` @0x9c8de,
+    /// `_MapDialogUpdate` @0x10c03; see the session's `owners_unset`
+    /// module). By the other reading (crons-news-ranks phase 13's), the
+    /// rescue is derived for the player's current system only, so a
+    /// rescued stellar follows the player, and no owner is left unset.
+    RescueUntilRefresh => "rescue_until_refresh",
     /// What a `Duration` 0 crön does on the day its `PreHoldoff` ends: by
     /// the engine, `OnStart` and `OnEnd` run but nothing more is written
     /// (`_CronEventHandler` @0x387a8-0x387c1), so the next day the
@@ -2696,6 +2850,15 @@ rule_keys! {
     /// detonator ignores asteroids": the fuse of a weapon with the bit
     /// passes asteroids by, though its shots still hit one they touch.
     FuseIgnoresAsteroids => "fuse_ignores_asteroids",
+    /// How a system's `Asteroids` is stored, which both its asteroid
+    /// field's spawn and the galaxy map's "Navigation Hazards:" words read
+    /// (see `nova_sim::asteroid::FieldSpec::stored`). By the engine, as
+    /// `_LoadObjectData` stores it at runtime +0x94 (@0x77c72-0x77ce7):
+    /// times the game window's width / 640.0, truncated, at most 16, and
+    /// 0 for a count of 0 or less, so a wider window holds more asteroids.
+    /// By the Bible, the raw `Asteroids`, "the number of asteroids in the
+    /// system", whatever the window's size.
+    AsteroidCountByWidth => "asteroid_count_by_width",
     /// Who counts as the player where a government's or a `düde`'s flags
     /// let shots and beams pass through (see
     /// `nova_sim::combat::sides`). By the engine, the whole player
@@ -2773,7 +2936,10 @@ rule_keys! {
     /// × its sprite's width), and within trunc(10r / 32) degrees of the
     /// beam's heading, the hit ending trunc(dist − 0.2 × width) along the
     /// beam. By the other reading, the beam's segment against each ship's
-    /// hit circle, the first it meets, ending where it meets it. The
+    /// hit circle, the first it meets, ending where it meets it; a beam
+    /// that hits no ship finds its asteroid the same way, the first whose
+    /// hit circle its segment meets (`nova_sim::combat::asteroid_beam`),
+    /// where by the engine it takes the asteroid pass's cone. The
     /// Bible says nothing of it, so the other reading is the engine's
     /// earlier choice, not anything the Bible says.
     BeamHitTest => "beam_hit_test",
@@ -2784,10 +2950,10 @@ rule_keys! {
     /// (@0x30ec4-0x30edd), so a beam at 2 degrees, or at -2 after its
     /// jitter, misses a ship at 358; and the asteroid pass takes its
     /// "nearest" asteroid by the distance of the ship of the same index
-    /// (@0x317f2-0x3180c), which asteroids phase 6 reads from this key.
-    /// By the other reading, the angle wraps and the nearest asteroid is
-    /// by its own distance. The other reading is the default (see the
-    /// module docs).
+    /// (@0x317f2-0x3180c; `nova_sim::combat::asteroid_beam`, its angle
+    /// test read the same way). By the other reading, the angle wraps and
+    /// the nearest asteroid is by its own distance. The other reading is
+    /// the default (see the module docs).
     BeamConeQuirks => "beam_cone_quirks",
     /// How a ship's freefall bombs (guidance 5) and rockets (6) leave it
     /// (see `nova_sim::combat::projectile::BombLaunch`). By the
@@ -2832,14 +2998,17 @@ rule_keys! {
     /// share. The player is never halved.
     JamHalving => "jam_halving",
     /// How a `Seeker` 0x4000 homing shot measures how far off ahead a
-    /// target within its ±249-pixel box is (see
+    /// target within its ±249-pixel box is, and a `Seeker` 0x0002 one an
+    /// asteroid within its ±199-pixel box (see
     /// `nova_sim::combat::projectile::LockAngle`). By the
-    /// engine, as `_HandleShotGuidance` reads it (@0x323ac-0x323ed): the
-    /// truncated bearing less the heading, absolute and mod 360 with no
-    /// fold, so a shot heading 355 at a bearing of 5 is 350 off and drops
-    /// its lock. By the other reading (the Bible: "Loses lock if target not
-    /// directly ahead"), the short way round. Either way it drops its lock
-    /// above 45. The other reading is the default (see the module docs).
+    /// engine, as `_HandleShotGuidance` reads it (@0x323ac-0x323ed,
+    /// @0x325b9-0x325fb): the truncated bearing less the heading, absolute
+    /// and mod 360 with no fold, so a shot heading 355 at a bearing of 5 is
+    /// 350 off: it drops its lock, or never locks onto the asteroid. By the
+    /// other reading (the Bible: "Loses lock if target not directly
+    /// ahead"), the short way round. Either way it drops its lock above 45
+    /// and locks onto an asteroid at 15 or less. The other reading is the
+    /// default (see the module docs).
     SeekerLockAngle => "seeker_lock_angle",
     /// Whether a destroyed ship scatters debris particles (the view's
     /// `effects` module). By the engine, none: `_HandleShipDisplay` sets
@@ -3666,6 +3835,16 @@ rule_keys! {
     /// `chär`, so a pilot reopened after a New Pilot in the same run sees
     /// the same pictures by either reading.
     IntroForReopenedPilot => "intro_for_reopened_pilot",
+    /// When a ship type of `Flags2` 0x0100 cloaks for a reloading weapon
+    /// (see `nova_sim_combat::cloak`). By the engine, as
+    /// `_AIHandleCloaking` tests it (@0x8345d-0x834b3): while any weapon
+    /// it carries has its reload timer strictly above its `Reload`, which
+    /// a burst reload longer than `Reload` does (the Wraiths' weapons 165
+    /// and 167) and one no longer does not (the pirates' Pulse Laser,
+    /// 146, `Reload` and `BurstReload` both 15). By the Bible's "cloak
+    /// when their weapon goes into burst reload": while any weapon it
+    /// carries that bursts is on its burst reload, however long.
+    CloakOnReload => "cloak_on_reload",
     /// How an escort keeps formation, goal 0xa (see
     /// [`FormationFlight`](crate::flight::FormationFlight) and
     /// `nova_sim_ai::traffic::formation_flight`). By the engine, as the
@@ -3832,6 +4011,159 @@ rule_keys! {
     /// Bible says nothing of it. See the `nova_sim::story` module's "Built
     /// by stellar-fidelity phase 14".
     GatePickRange => "gate_pick_range",
+    /// Which reserves a cloak needs to hold, asked wherever
+    /// `_ShipCanCloak` (@0x553c) is: the player's cloak key and upkeep, an
+    /// NPC's frame hold, cloak-when-hit and the observe goal. By the
+    /// engine, as the original: it takes the usage nibbles from the cloak
+    /// mod's `ModType` word instead of its `ModVal` (@0x558d, @0x5610), and
+    /// `ModType` 17 is 0x11, so every cloak needs fuel above 0 and none
+    /// needs shield. By the Bible's reading the nibbles come from the
+    /// `ModVal`: a fuel usage `(ModVal >> 4) & 0xf` needs fuel above 0 and
+    /// a shield usage `(ModVal >> 8) & 0xf` needs shield above 0. In both,
+    /// the last owned cloak outfit (the player) or the last cloak
+    /// default-item slot (an NPC) decides, through its first cloak mod
+    /// (see `nova_sim_combat::cloak`).
+    CloakReserves => "cloak_reserves",
+    /// Whether `_HandleShip`'s frame hold (@0x3413d-0x3415f) keeps a
+    /// ship riding its leader's area cloak (`ModVal` 0x1000 of a
+    /// `ModType` 17 mod: `_HasAreaCloak` @0x3d49-0x3e24, `_HasCloak`'s
+    /// area branch @0x964c-0x96bf; see `nova_sim_combat::area_cloak`). By
+    /// the engine, as the original: the hold asks `_ShipCanCloak`, which
+    /// reads only the ship's own items, so an escort riding the area
+    /// cloak with no cloak of its own is uncloaked the frame it reads
+    /// cloaked and never stays cloaked. By the Bible's reading ("Area
+    /// cloak - ships in formation with a ship carrying this cloaking
+    /// device will also be cloaked") the hold counts the ride as a cloak
+    /// it can keep, so the escort stays cloaked while it rides. Only the
+    /// hold reads it: every other `_ShipCanCloak` caller (the player's
+    /// key and upkeep, cloak-when-hit, the observe goal) reads the ship's
+    /// own gear in both readings. No stock outfit has the bit.
+    AreaCloakHold => "area_cloak_hold",
+    /// Which visibility a new pilot's neighbour pass reads (see
+    /// `nova_sim::Session::begin`). By the engine, the visible flags the
+    /// run's last galaxy refresh left, as `_DoNewPilot` tests +0x1eb
+    /// (@0x18fc5) before its own refresh (@0x1925e): a pilot loaded, made
+    /// or flown earlier in the run decides which neighbours are explored,
+    /// and at launch with no pilot the refresh of clear bits (@0x4740c)
+    /// does. By the other reading, the new pilot's own refresh, as if
+    /// `_DoNewPilot` refreshed first. The Bible says nothing of it.
+    NewPilotVisibility => "new_pilot_visibility",
+    /// Whether a helper sent to fight a threat to the player, by rank
+    /// battle help or for a price, also counts and picks the last ship of
+    /// a berth vacated with its record intact (see
+    /// `nova_sim_ai::traffic::vacated` and `nova_sim_ai::hail::battle`).
+    /// By the engine, it does, as `_AIFightEnemyThreatToPlayer`
+    /// (@0x82c80-0x82dba) never tests the active flag (+0xb8): a hostile
+    /// person swapped for its mission ship on the hail, whose slot loses
+    /// only that flag (`_HandlePlayerCommunication` @0x62520), stays a
+    /// candidate until its berth is taken again or the system is left,
+    /// and a helper sent at it says "Okay, I'm on my way." and fights
+    /// none of the threats. By the other reading, only ships still in the
+    /// system, as the routine evidently means. The Bible says nothing of
+    /// it.
+    BattleHelpGoneSlots => "battle_help_gone_slots",
+    /// Where flight draws the player's ship, and so the world about it
+    /// (`nova_view`'s `Camera` anchor). By the engine, the play area's
+    /// centre left of the status bar, (trunc((W − 194) × 0.5),
+    /// trunc(H × 0.5)): `_screenCenter` as `_SetupWind` sets it
+    /// (@0x1b720-0x1b78a, 0.5 at 0xdd128, 194 the bar's width), its only
+    /// writer, (415, 384) at 1024 x 768 and (585, 384) at 1365 x 768.
+    /// Every world sprite is drawn from it: `_HandleShipDisplay`
+    /// @0x2cd32-0x2cd9d, `_HandleStellarSprites` @0x2eeb3, `_HandleShot`
+    /// @0x35c70, `_HandleBeams` @0x3092d/0x309f4, `_HandleAsteroids`
+    /// @0x36481, `_HandleBoxes` @0x2e1df, `_HandleSmoke` @0x2e4d5,
+    /// `_HandleExplods` @0x2f6e0, `_HandleEscapePods` @0x39f25,
+    /// `_HandleStars` @0x2fc3f, `_HandleNavTargetSprites` @0x2fdbb,
+    /// `_HandleWeapTargetSprites` @0x3004b and
+    /// `_HandleStellarSystemVisibility` @0x330a3; the play area, the
+    /// brackets, clicks in space and the starfield follow it. By the other
+    /// reading, the view's centre, (floor(W / 2), H / 2), the port's
+    /// earlier reading. The Bible says nothing of it.
+    FlightAnchor => "flight_anchor",
+    /// What flight draws behind the world. By the engine, the original's
+    /// sprite starfield: `_RandomizeStars` (@0x0b145-0x0b324) scatters
+    /// min(trunc(play height / 600 × 20), 20) stars of `spïn` 700 over
+    /// the play area about the ship (20 slots, `_InitArrays` @0x1bb95),
+    /// each a random frame and, with the Parallax Starfield preference, a
+    /// parallax factor of 0 to 0.34, none in a system of negative `Murk`;
+    /// `_HandleStars` (@0x2f87d-0x2fcae) wraps each that passes twice its
+    /// size outside the play area to the other side and dims them in a
+    /// murky system; `_ScrollStarfield` (@0x8171-0x81d5) moves each by its
+    /// factor of the ship's last move. A jump's arrival, a gate's exit and
+    /// the escape pod's rescue scatter them afresh; an `M` or `N` move
+    /// keeps them. By the other reading, three layers of procedural dots
+    /// at fixed parallax covering the view, the port's earlier reading
+    /// (`nova_view`'s `system::starfield`). The Bible says nothing of it.
+    FlightStarfield => "flight_starfield",
+    /// Which selected secondary weapon running out of ammunition lets go
+    /// of. By the engine, one of `Flags` 0x0800 (weapon record +0x21 &
+    /// 0x08, @0x6abe9), the Bible's "more persistent smoke": every
+    /// `_HandlePlayer` pass, fire key held or not, while disabled and in a
+    /// jump too, a selection of that bit for which `_WeaponHasAmmo` fails
+    /// becomes none (+0x72 = -1, @0x6abcc-0x6ac08), silently. By the other
+    /// reading, one of `Flags2` 0x0800, hidden when empty, the bit the
+    /// select key tests (@0x6ad72): what the routine evidently means. No
+    /// stock `wëap` sets either bit. The Bible says nothing of it.
+    EmptySecondary => "empty_secondary",
+    /// What the New Pilot dialog does with a name a pilot is already saved
+    /// under, matched ignoring case as `_DoesPilotExist` (@0x72def-0x72e6a)
+    /// finds the file. By the engine, as `_DoNewPilot` asks
+    /// (@0x18c08-0x18c63): `STR#` 140 #9 in the Yes/No dialog; Yes goes on
+    /// to the christening and the new pilot replaces the saved one when it
+    /// is first saved (`_SavePilotFile` @0x1935f), No returns to the main
+    /// menu with nothing changed (see `nova::app`'s menu). By the other
+    /// reading, the port's earlier one, the name is refused under its field
+    /// and the New Pilot dialog stays open. The Bible says nothing of it.
+    NewPilotNameTaken => "new_pilot_name_taken",
+    /// What Recharge (R or F, which skip the button's cash test) does
+    /// with the cash below 0 at a stellar that isn't dominated, and what
+    /// an auto-refueller's top-up on landing at an inhabited stellar does
+    /// with it. By the engine, `_DoPortDialog` (@0x5fdbf-0x5fdcf) and
+    /// `_DoAutoRefuel` (@0x41c48-0x41c62) clamp the missing units to the
+    /// cash, so the debt is cleared and the tank drained by as many units,
+    /// possibly below empty. By the other reading the cash counts as 0, so
+    /// nothing fills and the debt stands. The Bible says nothing of fuel
+    /// prices, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see `nova_sim::recharge::fill` and
+    /// `nova_sim::auto_refuel::fill`).
+    RechargeDebt => "recharge_debt",
+    /// Where the player's escorts are placed as it enters a system. By the
+    /// engine, as `_SetupShipsInSystem` places them: the hired escorts and
+    /// fighters kept are snapped onto a formation counted without the
+    /// mission escorts (@0x42c8e-0x42ca1); on a jump's arrival each is then
+    /// pushed 891.7344 back along its whole-degree heading, gains 50 along
+    /// it and glides in as an NPC arriving by hyperspace does
+    /// (@0x42ca6-0x42d9e); and a take-off, a load or a new pilot re-snaps
+    /// every ship the player leads onto its final slot, a mission escort
+    /// by position only, keeping its own velocity and speed
+    /// (@0x4319a-0x431b2). By the other reading, the port's earlier
+    /// placement, every ship the player leads is snapped onto its final
+    /// slot with the player's state, keeping formation from the first
+    /// frame. The Bible says nothing of it (see
+    /// `nova_sim::escort_arrival`).
+    EscortArrival => "escort_arrival",
+    /// Whether the mouse wheel and a trackpad scroll a dialog's scrolling
+    /// text (`nova_view::ui::ScrollText`). By the engine they do nothing,
+    /// anywhere: the original reads its events through `_WaitNextEvent`,
+    /// which delivers no wheel, and its one `_InstallEventHandler` call
+    /// (@0xcc748) installs `_AppEventHandler` (@0xccb83) for menu commands
+    /// and activation only, no mouse class. By the other reading a wheel
+    /// or trackpad scroll over a dialog's scrolling text scrolls it, as Up
+    /// and Down do. The Bible says nothing of the wheel, so the other
+    /// reading is a convenience of the port's, not anything the Bible says
+    /// (read by `nova::app`'s screen router).
+    DialogTextWheel => "dialog_text_wheel",
+    /// Whether a pilot opened from a save keeps the course it was saved
+    /// with. By the engine it flies with no course, hops and start alike:
+    /// `_OpenPilotFile` (@0x7673e, then `_LoadPilotData` @0x7677e) and
+    /// `_OpenLastPilotFile` (@0x76502, then @0x76582) call `_ResetPlayer`,
+    /// which sets all 32 words of `_hyperRoute` (0x3b51c8) to -1
+    /// (@0x1d6bb-0x1d6cd), and `_LoadPilotData` never writes it back. By
+    /// the other reading, the port's earlier behaviour, the saved course
+    /// and its start are kept. The save keeps the course under both
+    /// readings. The Bible says nothing of it, so the other reading is a
+    /// convenience of the port's (read by `nova_sim::Session::load`).
+    LoadedCourse => "loaded_course",
 }
 
 impl RuleKey {
@@ -4003,6 +4335,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_rulebook_is_small_enough_to_pass_by_value() {
+        // Clippy's `large_types_passed_by_value` asks for a reference past
+        // 256 bytes, and tests across the workspace take a `Rulebook` by
+        // value: its size must not grow with the number of keys.
+        assert!(
+            std::mem::size_of::<Rulebook>() <= 128,
+            "{} bytes",
+            std::mem::size_of::<Rulebook>()
+        );
+    }
+
+    #[test]
     fn an_override_replaces_the_last_one_for_its_rule_alone() {
         let last = *RuleKey::ALL.last().expect("rules");
         let rulebook = Rulebook::default()
@@ -4028,6 +4372,27 @@ mod tests {
             Rulebook::default().with_override(RuleKey::CrimeGains, RuleSource::Engine),
             Rulebook::default().with_override(RuleKey::CrimeGains, RuleSource::Engine)
         );
+    }
+
+    #[test]
+    fn an_override_reads_back_and_a_later_one_replaces_it() {
+        let rule = RuleKey::ALL[RuleKey::ALL.len() - 1];
+        for global in [None, Some(RuleSource::Engine), Some(RuleSource::Bible)] {
+            let base = global.map_or_else(Rulebook::default, Rulebook::new);
+            for first in RuleSource::ALL {
+                for then in RuleSource::ALL {
+                    let rulebook = base.with_override(rule, first).with_override(rule, then);
+                    assert_eq!(rulebook.source_for(rule), then, "{global:?} {first:?}");
+                }
+            }
+            let one = base.with_override(RuleKey::ALL[64], RuleSource::Bible);
+            for (n, other) in RuleKey::ALL.into_iter().enumerate() {
+                if n != 64 {
+                    assert_eq!(one.source_for(other), base.source_for(other), "{other:?}");
+                }
+            }
+            assert_eq!(one.source_for(RuleKey::ALL[64]), RuleSource::Bible);
+        }
     }
 
     #[test]
@@ -4166,7 +4531,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(175),
+            RuleKey::ALL.iter().rev().nth(192),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -4183,7 +4548,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(174),
+            RuleKey::ALL.iter().rev().nth(191),
             Some(&RuleKey::StartOutsideDialog)
         );
     }
@@ -4197,7 +4562,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(173),
+            RuleKey::ALL.iter().rev().nth(190),
             Some(&RuleKey::OfferShift)
         );
     }
@@ -4214,7 +4579,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(172),
+            RuleKey::ALL.iter().rev().nth(189),
             Some(&RuleKey::DescMovieGlobals)
         );
     }
@@ -4254,7 +4619,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(171),
+            RuleKey::ALL.iter().rev().nth(188),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -4276,7 +4641,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(170),
+            RuleKey::ALL.iter().rev().nth(187),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -4301,7 +4666,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(169),
+            RuleKey::ALL.iter().rev().nth(186),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -4327,7 +4692,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(168),
+            RuleKey::ALL.iter().rev().nth(185),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -4347,7 +4712,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(167),
+            RuleKey::ALL.iter().rev().nth(184),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -4364,7 +4729,7 @@ mod tests {
             Some(RuleKey::MissionAllyIndex)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(166),
+            RuleKey::ALL.iter().rev().nth(183),
             Some(&RuleKey::MissionAllyIndex)
         );
         assert_eq!(
@@ -4384,7 +4749,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(165),
+            RuleKey::ALL.iter().rev().nth(182),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -4404,7 +4769,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(162),
+            RuleKey::ALL.iter().rev().nth(179),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -4426,7 +4791,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(161),
+            RuleKey::ALL.iter().rev().nth(178),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -4443,7 +4808,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(118),
+            RuleKey::ALL.iter().rev().nth(132),
             Some(&RuleKey::GateEscorts)
         );
     }
@@ -4460,7 +4825,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(117),
+            RuleKey::ALL.iter().rev().nth(131),
             Some(&RuleKey::LostCargoShare)
         );
     }
@@ -4477,7 +4842,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(116),
+            RuleKey::ALL.iter().rev().nth(130),
             Some(&RuleKey::NonStrictSpeed)
         );
     }
@@ -4494,7 +4859,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(115),
+            RuleKey::ALL.iter().rev().nth(129),
             Some(&RuleKey::HunterBribe)
         );
     }
@@ -4511,7 +4876,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(114),
+            RuleKey::ALL.iter().rev().nth(128),
             Some(&RuleKey::ShipOverlap)
         );
     }
@@ -4534,7 +4899,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(113),
+            RuleKey::ALL.iter().rev().nth(127),
             Some(&RuleKey::ShotOverlap)
         );
     }
@@ -4560,7 +4925,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(112),
+            RuleKey::ALL.iter().rev().nth(126),
             Some(&RuleKey::SubmunitionSourceSlot)
         );
     }
@@ -4583,7 +4948,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(111),
+            RuleKey::ALL.iter().rev().nth(125),
             Some(&RuleKey::ReusedShotSlotRoll)
         );
     }
@@ -4600,7 +4965,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(110),
+            RuleKey::ALL.iter().rev().nth(124),
             Some(&RuleKey::QuadrantTurretArc)
         );
     }
@@ -4617,7 +4982,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(109),
+            RuleKey::ALL.iter().rev().nth(123),
             Some(&RuleKey::HiddenShips)
         );
     }
@@ -4634,7 +4999,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(108),
+            RuleKey::ALL.iter().rev().nth(122),
             Some(&RuleKey::HiddenShipHoverBox)
         );
     }
@@ -4655,7 +5020,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(107),
+            RuleKey::ALL.iter().rev().nth(121),
             Some(&RuleKey::BreakupStall)
         );
     }
@@ -4672,7 +5037,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(106),
+            RuleKey::ALL.iter().rev().nth(120),
             Some(&RuleKey::EjectVelocity)
         );
     }
@@ -4689,7 +5054,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(105),
+            RuleKey::ALL.iter().rev().nth(119),
             Some(&RuleKey::RescueArmor)
         );
     }
@@ -4710,7 +5075,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(104),
+            RuleKey::ALL.iter().rev().nth(118),
             Some(&RuleKey::UnlistedStellar)
         );
     }
@@ -4727,7 +5092,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(103),
+            RuleKey::ALL.iter().rev().nth(117),
             Some(&RuleKey::NewbieFuelRefusal)
         );
     }
@@ -4744,7 +5109,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(102),
+            RuleKey::ALL.iter().rev().nth(116),
             Some(&RuleKey::MissingBuoyString)
         );
     }
@@ -4761,7 +5126,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(101),
+            RuleKey::ALL.iter().rev().nth(115),
             Some(&RuleKey::PatrolUninhabited)
         );
     }
@@ -4778,7 +5143,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(100),
+            RuleKey::ALL.iter().rev().nth(114),
             Some(&RuleKey::GateExitCounts)
         );
     }
@@ -4795,7 +5160,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(98),
+            RuleKey::ALL.iter().rev().nth(112),
             Some(&RuleKey::SpawnReserve)
         );
     }
@@ -4812,7 +5177,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(97),
+            RuleKey::ALL.iter().rev().nth(111),
             Some(&RuleKey::ArrivalHits)
         );
     }
@@ -4826,7 +5191,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(96),
+            RuleKey::ALL.iter().rev().nth(110),
             Some(&RuleKey::HireNoSlot)
         );
     }
@@ -4843,7 +5208,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(95),
+            RuleKey::ALL.iter().rev().nth(109),
             Some(&RuleKey::AsteroidEntryField)
         );
     }
@@ -4860,8 +5225,34 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(94),
+            RuleKey::ALL.iter().rev().nth(108),
             Some(&RuleKey::AsteroidRespawnRing)
+        );
+    }
+
+    #[test]
+    fn the_asteroid_count_by_width_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(
+            RuleKey::AsteroidCountByWidth.key(),
+            "asteroid_count_by_width"
+        );
+        assert_eq!(
+            RuleKey::from_key("asteroid_count_by_width"),
+            Some(RuleKey::AsteroidCountByWidth)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::AsteroidCountByWidth),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::default()
+                .with_override(RuleKey::AsteroidCountByWidth, RuleSource::Bible)
+                .source_for(RuleKey::AsteroidCountByWidth),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(106),
+            Some(&RuleKey::AsteroidCountByWidth)
         );
     }
 
@@ -4880,7 +5271,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(93),
+            RuleKey::ALL.iter().rev().nth(107),
             Some(&RuleKey::FuseIgnoresAsteroids)
         );
     }
@@ -4897,7 +5288,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(99),
+            RuleKey::ALL.iter().rev().nth(113),
             Some(&RuleKey::MoveLeftBehind)
         );
     }
@@ -4914,7 +5305,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(92),
+            RuleKey::ALL.iter().rev().nth(105),
             Some(&RuleKey::PlayerPassThrough)
         );
     }
@@ -4931,7 +5322,10 @@ mod tests {
             Rulebook::new(RuleSource::Bible).source_for(RuleKey::ShotDecay),
             RuleSource::Bible
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(91), Some(&RuleKey::ShotDecay));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(104),
+            Some(&RuleKey::ShotDecay)
+        );
     }
 
     #[test]
@@ -4950,7 +5344,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(90),
+            RuleKey::ALL.iter().rev().nth(103),
             Some(&RuleKey::PlunderAmmoBays)
         );
     }
@@ -4971,7 +5365,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(89),
+            RuleKey::ALL.iter().rev().nth(102),
             Some(&RuleKey::AiSpendWithoutShot)
         );
     }
@@ -4992,7 +5386,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(88),
+            RuleKey::ALL.iter().rev().nth(101),
             Some(&RuleKey::ExitCompression)
         );
     }
@@ -5010,7 +5404,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(87),
+            RuleKey::ALL.iter().rev().nth(100),
             Some(&RuleKey::PdExitStep)
         );
     }
@@ -5031,7 +5425,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(86),
+            RuleKey::ALL.iter().rev().nth(99),
             Some(&RuleKey::BeamHitTest)
         );
     }
@@ -5052,7 +5446,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(84),
+            RuleKey::ALL.iter().rev().nth(97),
             Some(&RuleKey::BombRocketLaunch)
         );
     }
@@ -5073,7 +5467,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(83),
+            RuleKey::ALL.iter().rev().nth(96),
             Some(&RuleKey::PdHostility)
         );
     }
@@ -5091,7 +5485,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(82),
+            RuleKey::ALL.iter().rev().nth(95),
             Some(&RuleKey::JamHalving)
         );
     }
@@ -5112,7 +5506,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(81),
+            RuleKey::ALL.iter().rev().nth(94),
             Some(&RuleKey::SeekerLockAngle)
         );
     }
@@ -5130,7 +5524,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(80),
+            RuleKey::ALL.iter().rev().nth(93),
             Some(&RuleKey::ShipDebris)
         );
     }
@@ -5154,7 +5548,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(79),
+            RuleKey::ALL.iter().rev().nth(92),
             Some(&RuleKey::QuadrantTurretBlindSpots)
         );
     }
@@ -5175,7 +5569,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(78),
+            RuleKey::ALL.iter().rev().nth(91),
             Some(&RuleKey::PlayerForwardRecoil)
         );
     }
@@ -5193,7 +5587,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(77),
+            RuleKey::ALL.iter().rev().nth(90),
             Some(&RuleKey::CombatCaps)
         );
     }
@@ -5214,7 +5608,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(76),
+            RuleKey::ALL.iter().rev().nth(89),
             Some(&RuleKey::ProximityFuse)
         );
     }
@@ -5231,7 +5625,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(75),
+            RuleKey::ALL.iter().rev().nth(88),
             Some(&RuleKey::MapCycleStart)
         );
     }
@@ -5248,7 +5642,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(74),
+            RuleKey::ALL.iter().rev().nth(87),
             Some(&RuleKey::MapLinkPairing)
         );
     }
@@ -5269,7 +5663,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(85),
+            RuleKey::ALL.iter().rev().nth(98),
             Some(&RuleKey::BeamConeQuirks)
         );
     }
@@ -5289,7 +5683,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(73),
+            RuleKey::ALL.iter().rev().nth(86),
             Some(&RuleKey::StellarIdentityRecord)
         );
     }
@@ -5303,7 +5697,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(72),
+            RuleKey::ALL.iter().rev().nth(85),
             Some(&RuleKey::OfferClock)
         );
     }
@@ -5323,7 +5717,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(71),
+            RuleKey::ALL.iter().rev().nth(84),
             Some(&RuleKey::CharacterStatusSpread)
         );
     }
@@ -5336,7 +5730,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(160), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(177), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -5351,7 +5745,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(159),
+            RuleKey::ALL.iter().rev().nth(176),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -5368,7 +5762,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(158),
+            RuleKey::ALL.iter().rev().nth(175),
             Some(&RuleKey::PlainBoardCounts)
         );
     }
@@ -5385,7 +5779,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(157),
+            RuleKey::ALL.iter().rev().nth(174),
             Some(&RuleKey::HiddenLossFails)
         );
     }
@@ -5402,7 +5796,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(156),
+            RuleKey::ALL.iter().rev().nth(173),
             Some(&RuleKey::ShipDoneOnce)
         );
     }
@@ -5419,7 +5813,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(155),
+            RuleKey::ALL.iter().rev().nth(172),
             Some(&RuleKey::SwapArrives)
         );
     }
@@ -5436,7 +5830,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(154),
+            RuleKey::ALL.iter().rev().nth(171),
             Some(&RuleKey::SmugglingShipName)
         );
     }
@@ -5453,7 +5847,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(153),
+            RuleKey::ALL.iter().rev().nth(170),
             Some(&RuleKey::PaySlotOffset)
         );
     }
@@ -5470,7 +5864,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(152),
+            RuleKey::ALL.iter().rev().nth(169),
             Some(&RuleKey::MissionlessTags)
         );
     }
@@ -5484,7 +5878,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(151),
+            RuleKey::ALL.iter().rev().nth(168),
             Some(&RuleKey::PrkNnnName)
         );
     }
@@ -5501,7 +5895,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(150),
+            RuleKey::ALL.iter().rev().nth(167),
             Some(&RuleKey::CrossedRankTags)
         );
     }
@@ -5518,7 +5912,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(149),
+            RuleKey::ALL.iter().rev().nth(166),
             Some(&RuleKey::OfferingShipName)
         );
     }
@@ -5535,7 +5929,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(148),
+            RuleKey::ALL.iter().rev().nth(165),
             Some(&RuleKey::CachedAvailBits)
         );
     }
@@ -5558,7 +5952,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(147),
+            RuleKey::ALL.iter().rev().nth(164),
             Some(&RuleKey::SpawnAvailability)
         );
     }
@@ -5572,7 +5966,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(146),
+            RuleKey::ALL.iter().rev().nth(163),
             Some(&RuleKey::HudCadence)
         );
     }
@@ -5586,7 +5980,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(145),
+            RuleKey::ALL.iter().rev().nth(162),
             Some(&RuleKey::AlertBlink)
         );
     }
@@ -5599,7 +5993,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(164),
+            RuleKey::ALL.iter().rev().nth(181),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -5617,7 +6011,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(143),
+            RuleKey::ALL.iter().rev().nth(160),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -5634,7 +6028,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(142),
+            RuleKey::ALL.iter().rev().nth(159),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -5651,11 +6045,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(141),
+            RuleKey::ALL.iter().rev().nth(158),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(140),
+            RuleKey::ALL.iter().rev().nth(157),
             Some(&RuleKey::SalaryCap)
         );
     }
@@ -5672,7 +6066,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(139),
+            RuleKey::ALL.iter().rev().nth(156),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -5691,15 +6085,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(138),
+            RuleKey::ALL.iter().rev().nth(155),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(137),
+            RuleKey::ALL.iter().rev().nth(154),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(136),
+            RuleKey::ALL.iter().rev().nth(153),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -5716,7 +6110,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(135),
+            RuleKey::ALL.iter().rev().nth(152),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -5730,12 +6124,52 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(134),
+            RuleKey::ALL.iter().rev().nth(151),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(133),
+            RuleKey::ALL.iter().rev().nth(150),
             Some(&RuleKey::VisibilityRefresh)
+        );
+    }
+
+    #[test]
+    fn the_arrival_system_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::ArrivalSystem.key(), "arrival_system");
+        assert_eq!(
+            RuleKey::from_key("arrival_system"),
+            Some(RuleKey::ArrivalSystem)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::ArrivalSystem),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::default()
+                .with_override(RuleKey::ArrivalSystem, RuleSource::Bible)
+                .source_for(RuleKey::ArrivalSystem),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(149),
+            Some(&RuleKey::ArrivalSystem)
+        );
+    }
+
+    #[test]
+    fn the_exchange_events_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::ExchangeEvents.key(), "exchange_events");
+        assert_eq!(
+            RuleKey::from_key("exchange_events"),
+            Some(RuleKey::ExchangeEvents)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::ExchangeEvents),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(148),
+            Some(&RuleKey::ExchangeEvents)
         );
     }
 
@@ -5755,11 +6189,11 @@ mod tests {
             );
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(132),
+            RuleKey::ALL.iter().rev().nth(146),
             Some(&RuleKey::CronZeroDurationHoldoff)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(131),
+            RuleKey::ALL.iter().rev().nth(145),
             Some(&RuleKey::CronPostHoldoff)
         );
     }
@@ -5776,17 +6210,18 @@ mod tests {
                 .source_for(rule),
             RuleSource::Bible
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(130), Some(&rule));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(144), Some(&rule));
     }
 
     #[test]
     fn the_battle_help_rules_are_found_by_their_keys_and_read_the_engine() {
         for (rule, key, at) in [
-            (RuleKey::BattleHelpTarget, "battle_help_target", 129),
+            (RuleKey::BattleHelpTarget, "battle_help_target", 143),
+            (RuleKey::BattleHelpGoneSlots, "battle_help_gone_slots", 8),
             (
                 RuleKey::BraveTraderBattleHelp,
                 "brave_trader_battle_help",
-                128,
+                142,
             ),
         ] {
             assert_eq!(rule.key(), key);
@@ -5811,11 +6246,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(127),
+            RuleKey::ALL.iter().rev().nth(141),
             Some(&RuleKey::BlessingRefresh)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(126),
+            RuleKey::ALL.iter().rev().nth(140),
             Some(&RuleKey::BlessingLanding)
         );
     }
@@ -5835,7 +6270,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(125),
+            RuleKey::ALL.iter().rev().nth(139),
             Some(&RuleKey::BlessingAlwaysAttacks)
         );
     }
@@ -5852,7 +6287,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(124),
+            RuleKey::ALL.iter().rev().nth(138),
             Some(&RuleKey::ExploredByPlace)
         );
     }
@@ -5869,7 +6304,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(123),
+            RuleKey::ALL.iter().rev().nth(137),
             Some(&RuleKey::RouteRewrite)
         );
     }
@@ -5886,7 +6321,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(122),
+            RuleKey::ALL.iter().rev().nth(136),
             Some(&RuleKey::NebulaExploreOnce)
         );
     }
@@ -5903,7 +6338,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(121),
+            RuleKey::ALL.iter().rev().nth(135),
             Some(&RuleKey::NebulaNewPilot)
         );
     }
@@ -5917,13 +6352,20 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(120),
+            RuleKey::ALL.iter().rev().nth(134),
             Some(&RuleKey::ScanOutfitsPastJunk)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(119),
+            RuleKey::ALL.iter().rev().nth(133),
             Some(&RuleKey::OutfitScanFine)
         );
+    }
+
+    #[test]
+    fn the_grid_arrows_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::GridArrows.key(), "grid_arrows");
+        assert_eq!(RuleKey::from_key("grid_arrows"), Some(RuleKey::GridArrows));
+        assert_eq!(RuleKey::GridArrows.default_source(), RuleSource::Engine);
     }
 
     #[test]
@@ -6060,7 +6502,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(177),
+            RuleKey::ALL.iter().rev().nth(194),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -6223,6 +6665,7 @@ mod tests {
                 RuleKey::RelistedSale,
                 RuleKey::RelistedSelection,
                 RuleKey::GridSelection,
+                RuleKey::GridArrows,
                 RuleKey::MassPrice,
                 RuleKey::ScaledMass,
                 RuleKey::TradeInOutfits,
@@ -6279,6 +6722,9 @@ mod tests {
                 RuleKey::RankCrimeReach,
                 RuleKey::ColocatedResolution,
                 RuleKey::VisibilityRefresh,
+                RuleKey::ArrivalSystem,
+                RuleKey::ExchangeEvents,
+                RuleKey::RescueUntilRefresh,
                 RuleKey::CronZeroDurationHoldoff,
                 RuleKey::CronPostHoldoff,
                 RuleKey::CronZeroDurationNoHoldoff,
@@ -6319,6 +6765,7 @@ mod tests {
                 RuleKey::AsteroidEntryField,
                 RuleKey::AsteroidRespawnRing,
                 RuleKey::FuseIgnoresAsteroids,
+                RuleKey::AsteroidCountByWidth,
                 RuleKey::PlayerPassThrough,
                 RuleKey::ShotDecay,
                 RuleKey::PlunderAmmoBays,
@@ -6400,6 +6847,7 @@ mod tests {
                 RuleKey::RefuelCap,
                 RuleKey::EscapeToMainScreen,
                 RuleKey::IntroForReopenedPilot,
+                RuleKey::CloakOnReload,
                 RuleKey::FormationFlight,
                 RuleKey::NpcEscortAi,
                 RuleKey::FighterCapacity,
@@ -6411,7 +6859,19 @@ mod tests {
                 RuleKey::BeamPlanetFlag,
                 RuleKey::BeamStellars,
                 RuleKey::LandingSpeed,
-                RuleKey::GatePickRange
+                RuleKey::GatePickRange,
+                RuleKey::CloakReserves,
+                RuleKey::AreaCloakHold,
+                RuleKey::NewPilotVisibility,
+                RuleKey::BattleHelpGoneSlots,
+                RuleKey::FlightAnchor,
+                RuleKey::FlightStarfield,
+                RuleKey::EmptySecondary,
+                RuleKey::NewPilotNameTaken,
+                RuleKey::RechargeDebt,
+                RuleKey::EscortArrival,
+                RuleKey::DialogTextWheel,
+                RuleKey::LoadedCourse
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
@@ -6465,7 +6925,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(70),
+            RuleKey::ALL.iter().rev().nth(83),
             Some(&RuleKey::TextNegation)
         );
     }
@@ -6482,7 +6942,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(69),
+            RuleKey::ALL.iter().rev().nth(82),
             Some(&RuleKey::StrayTextBrace)
         );
     }
@@ -6499,7 +6959,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(68),
+            RuleKey::ALL.iter().rev().nth(81),
             Some(&RuleKey::SnipeBrakeLead)
         );
     }
@@ -6516,7 +6976,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(67),
+            RuleKey::ALL.iter().rev().nth(80),
             Some(&RuleKey::ReusedSlotPick)
         );
     }
@@ -6533,7 +6993,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(66),
+            RuleKey::ALL.iter().rev().nth(79),
             Some(&RuleKey::ReusedSlotExits)
         );
     }
@@ -6550,7 +7010,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(65),
+            RuleKey::ALL.iter().rev().nth(78),
             Some(&RuleKey::StrayBeamExit)
         );
     }
@@ -6571,7 +7031,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(64),
+            RuleKey::ALL.iter().rev().nth(77),
             Some(&RuleKey::SoundVoices)
         );
     }
@@ -6594,7 +7054,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(63),
+            RuleKey::ALL.iter().rev().nth(76),
             Some(&RuleKey::LoopedSoundWait)
         );
     }
@@ -6617,7 +7077,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(62),
+            RuleKey::ALL.iter().rev().nth(75),
             Some(&RuleKey::BombHeadingWrap)
         );
     }
@@ -6640,7 +7100,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(59),
+            RuleKey::ALL.iter().rev().nth(72),
             Some(&RuleKey::LightningZigZag)
         );
     }
@@ -6663,7 +7123,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(58),
+            RuleKey::ALL.iter().rev().nth(71),
             Some(&RuleKey::StrayShootPenalty)
         );
     }
@@ -6686,7 +7146,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(57),
+            RuleKey::ALL.iter().rev().nth(70),
             Some(&RuleKey::IndependentKin)
         );
     }
@@ -6709,7 +7169,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(60),
+            RuleKey::ALL.iter().rev().nth(73),
             Some(&RuleKey::TranslucentShotFade)
         );
     }
@@ -6728,7 +7188,7 @@ mod tests {
                 .source_for(RuleKey::LowMurk),
             RuleSource::Bible
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(61), Some(&RuleKey::LowMurk));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(74), Some(&RuleKey::LowMurk));
     }
 
     #[test]
@@ -6743,7 +7203,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(56),
+            RuleKey::ALL.iter().rev().nth(69),
             Some(&RuleKey::MapPlotting)
         );
     }
@@ -6760,7 +7220,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(55),
+            RuleKey::ALL.iter().rev().nth(68),
             Some(&RuleKey::CueUnplacedHop)
         );
     }
@@ -6777,7 +7237,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(54),
+            RuleKey::ALL.iter().rev().nth(67),
             Some(&RuleKey::NebulaPicture)
         );
     }
@@ -6794,7 +7254,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(53),
+            RuleKey::ALL.iter().rev().nth(66),
             Some(&RuleKey::MapBorderPace)
         );
     }
@@ -6811,7 +7271,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(52),
+            RuleKey::ALL.iter().rev().nth(65),
             Some(&RuleKey::MapFindBorders)
         );
     }
@@ -6831,7 +7291,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(51),
+            RuleKey::ALL.iter().rev().nth(64),
             Some(&RuleKey::ReinforcementInhibitor)
         );
     }
@@ -6848,7 +7308,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(50),
+            RuleKey::ALL.iter().rev().nth(63),
             Some(&RuleKey::LedAllyAttack)
         );
     }
@@ -6865,7 +7325,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(49),
+            RuleKey::ALL.iter().rev().nth(62),
             Some(&RuleKey::IffScrambler)
         );
     }
@@ -6882,7 +7342,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(48),
+            RuleKey::ALL.iter().rev().nth(61),
             Some(&RuleKey::FriendShieldCarry)
         );
     }
@@ -6899,7 +7359,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(47),
+            RuleKey::ALL.iter().rev().nth(60),
             Some(&RuleKey::ApproachLead)
         );
     }
@@ -6916,7 +7376,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(46),
+            RuleKey::ALL.iter().rev().nth(59),
             Some(&RuleKey::AfterburnerYardstick)
         );
     }
@@ -6933,7 +7393,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(45),
+            RuleKey::ALL.iter().rev().nth(58),
             Some(&RuleKey::PlunderMarines)
         );
     }
@@ -6953,7 +7413,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(44),
+            RuleKey::ALL.iter().rev().nth(57),
             Some(&RuleKey::MainScreenReturnFade)
         );
     }
@@ -6970,7 +7430,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(43),
+            RuleKey::ALL.iter().rev().nth(56),
             Some(&RuleKey::CrewlessMissionShip)
         );
     }
@@ -6983,7 +7443,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::SpeedCap),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(42), Some(&RuleKey::SpeedCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(55), Some(&RuleKey::SpeedCap));
     }
 
     #[test]
@@ -6995,7 +7455,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(54),
             Some(&RuleKey::PlayerTurn)
         );
     }
@@ -7012,7 +7472,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(40),
+            RuleKey::ALL.iter().rev().nth(53),
             Some(&RuleKey::FaceNavSlot)
         );
     }
@@ -7035,7 +7495,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(39),
+            RuleKey::ALL.iter().rev().nth(52),
             Some(&RuleKey::InertialDampener)
         );
     }
@@ -7058,7 +7518,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(38),
+            RuleKey::ALL.iter().rev().nth(51),
             Some(&RuleKey::EscapeShipCut)
         );
     }
@@ -7084,7 +7544,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(50),
             Some(&RuleKey::WeaponEffectsNextLaunch)
         );
     }
@@ -7107,7 +7567,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(36),
+            RuleKey::ALL.iter().rev().nth(49),
             Some(&RuleKey::ReusedShotSlotSpin)
         );
     }
@@ -7126,7 +7586,7 @@ mod tests {
                 .source_for(RuleKey::HitFocus),
             RuleSource::Bible
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(35), Some(&RuleKey::HitFocus));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(48), Some(&RuleKey::HitFocus));
     }
 
     #[test]
@@ -7147,7 +7607,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(34),
+            RuleKey::ALL.iter().rev().nth(47),
             Some(&RuleKey::UndisplayedShips)
         );
     }
@@ -7170,7 +7630,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(33),
+            RuleKey::ALL.iter().rev().nth(46),
             Some(&RuleKey::LaunchFrameAi)
         );
     }
@@ -7193,7 +7653,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(32),
+            RuleKey::ALL.iter().rev().nth(45),
             Some(&RuleKey::CapturedPerson)
         );
     }
@@ -7219,7 +7679,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(31),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::ShipAnimationDoubleStep)
         );
     }
@@ -7242,7 +7702,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(30),
+            RuleKey::ALL.iter().rev().nth(43),
             Some(&RuleKey::LoadedEscortFoldSet)
         );
     }
@@ -7265,7 +7725,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(29),
+            RuleKey::ALL.iter().rev().nth(42),
             Some(&RuleKey::IonFireLockout)
         );
     }
@@ -7288,7 +7748,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(28),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::IonTintMurkColour)
         );
     }
@@ -7311,7 +7771,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(27),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::SelfDestructSecond)
         );
     }
@@ -7334,7 +7794,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(26),
+            RuleKey::ALL.iter().rev().nth(39),
             Some(&RuleKey::GravityAfterburner)
         );
     }
@@ -7357,7 +7817,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(25),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::DeadlyStellarKill)
         );
     }
@@ -7380,7 +7840,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(24),
+            RuleKey::ALL.iter().rev().nth(37),
             Some(&RuleKey::NpcDefaultItems)
         );
     }
@@ -7403,7 +7863,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(23),
+            RuleKey::ALL.iter().rev().nth(36),
             Some(&RuleKey::JumpArrival)
         );
     }
@@ -7429,7 +7889,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(22),
+            RuleKey::ALL.iter().rev().nth(35),
             Some(&RuleKey::LightsOutZeroesBlink)
         );
     }
@@ -7452,7 +7912,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(21),
+            RuleKey::ALL.iter().rev().nth(34),
             Some(&RuleKey::DisabledAltHeld)
         );
     }
@@ -7478,7 +7938,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(20),
+            RuleKey::ALL.iter().rev().nth(33),
             Some(&RuleKey::ReusedSlotBlinkTimer)
         );
     }
@@ -7504,7 +7964,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(32),
             Some(&RuleKey::SpawnAnimRollsFirstClass)
         );
     }
@@ -7527,7 +7987,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(31),
             Some(&RuleKey::StaleStellarSprite)
         );
     }
@@ -7550,7 +8010,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(30),
             Some(&RuleKey::NpcJumpFuel)
         );
     }
@@ -7569,7 +8029,7 @@ mod tests {
                 .source_for(RuleKey::OddsCache),
             RuleSource::Bible
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(16), Some(&RuleKey::OddsCache));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(29), Some(&RuleKey::OddsCache));
     }
 
     #[test]
@@ -7590,7 +8050,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(28),
             Some(&RuleKey::ReusedSlotSearch)
         );
     }
@@ -7609,7 +8069,7 @@ mod tests {
                 .source_for(RuleKey::RefuelCap),
             RuleSource::Bible
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(14), Some(&RuleKey::RefuelCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(27), Some(&RuleKey::RefuelCap));
     }
 
     #[test]
@@ -7630,7 +8090,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(26),
             Some(&RuleKey::EscapeToMainScreen)
         );
     }
@@ -7656,8 +8116,195 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(25),
             Some(&RuleKey::IntroForReopenedPilot)
+        );
+    }
+
+    #[test]
+    fn the_new_pilot_visibility_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::NewPilotVisibility.key(), "new_pilot_visibility");
+        assert_eq!(
+            RuleKey::from_key("new_pilot_visibility"),
+            Some(RuleKey::NewPilotVisibility)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::NewPilotVisibility),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::default()
+                .with_override(RuleKey::NewPilotVisibility, RuleSource::Bible)
+                .source_for(RuleKey::NewPilotVisibility),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(9),
+            Some(&RuleKey::NewPilotVisibility)
+        );
+    }
+
+    #[test]
+    fn the_flight_anchor_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::FlightAnchor;
+        assert_eq!(rule.key(), "flight_anchor");
+        assert_eq!(RuleKey::from_key("flight_anchor"), Some(rule));
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+    }
+
+    #[test]
+    fn the_flight_starfield_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::FlightStarfield;
+        assert_eq!(rule.key(), "flight_starfield");
+        assert_eq!(RuleKey::from_key("flight_starfield"), Some(rule));
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+    }
+
+    #[test]
+    fn the_empty_secondary_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::EmptySecondary;
+        assert_eq!(rule.key(), "empty_secondary");
+        assert_eq!(RuleKey::from_key("empty_secondary"), Some(rule));
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(5), Some(&rule));
+    }
+
+    #[test]
+    fn the_new_pilot_name_taken_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::NewPilotNameTaken;
+        assert_eq!(rule.key(), "new_pilot_name_taken");
+        assert_eq!(RuleKey::from_key("new_pilot_name_taken"), Some(rule));
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(4), Some(&rule));
+    }
+
+    #[test]
+    fn the_recharge_debt_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::RechargeDebt;
+        assert_eq!(rule.key(), "recharge_debt");
+        assert_eq!(RuleKey::from_key("recharge_debt"), Some(rule));
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(3), Some(&rule));
+    }
+
+    #[test]
+    fn the_escort_arrival_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::EscortArrival;
+        assert_eq!(rule.key(), "escort_arrival");
+        assert_eq!(RuleKey::from_key("escort_arrival"), Some(rule));
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(2), Some(&rule));
+    }
+
+    #[test]
+    fn the_dialog_text_wheel_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::DialogTextWheel;
+        assert_eq!(rule.key(), "dialog_text_wheel");
+        assert_eq!(RuleKey::from_key("dialog_text_wheel"), Some(rule));
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(1), Some(&rule));
+    }
+
+    #[test]
+    fn the_loaded_course_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::LoadedCourse;
+        assert_eq!(rule.key(), "loaded_course");
+        assert_eq!(RuleKey::from_key("loaded_course"), Some(rule));
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&rule));
+    }
+
+    #[test]
+    fn the_rescue_until_refresh_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::RescueUntilRefresh.key(), "rescue_until_refresh");
+        assert_eq!(
+            RuleKey::from_key("rescue_until_refresh"),
+            Some(RuleKey::RescueUntilRefresh)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::RescueUntilRefresh),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::default()
+                .with_override(RuleKey::RescueUntilRefresh, RuleSource::Bible)
+                .source_for(RuleKey::RescueUntilRefresh),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(147),
+            Some(&RuleKey::RescueUntilRefresh)
+        );
+    }
+
+    #[test]
+    fn the_cloak_on_reload_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::CloakOnReload.key(), "cloak_on_reload");
+        assert_eq!(
+            RuleKey::from_key("cloak_on_reload"),
+            Some(RuleKey::CloakOnReload)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::CloakOnReload),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::default()
+                .with_override(RuleKey::CloakOnReload, RuleSource::Bible)
+                .source_for(RuleKey::CloakOnReload),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(24),
+            Some(&RuleKey::CloakOnReload)
         );
     }
 
@@ -7679,7 +8326,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(23),
             Some(&RuleKey::FormationFlight)
         );
     }
@@ -7702,7 +8349,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(22),
             Some(&RuleKey::NpcEscortAi)
         );
     }
@@ -7725,7 +8372,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::FighterCapacity)
         );
     }
@@ -7748,7 +8395,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::EscortOrderReach)
         );
     }
@@ -7771,7 +8418,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::NpcFormation)
         );
     }
@@ -7794,7 +8441,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::SuccessorRepairer)
         );
     }
@@ -7817,7 +8464,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(17),
             Some(&RuleKey::HeldGateBurst)
         );
     }
@@ -7840,7 +8487,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::PlanetBlasts)
         );
     }
@@ -7863,7 +8510,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::BeamPlanetFlag)
         );
     }
@@ -7886,7 +8533,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::BeamStellars)
         );
     }
@@ -7909,7 +8556,7 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::LandingSpeed)
         );
     }
@@ -7932,7 +8579,56 @@ mod tests {
                 .source_for(RuleKey::GatePickRange),
             RuleSource::Bible
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::GatePickRange));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(12),
+            Some(&RuleKey::GatePickRange)
+        );
+    }
+
+    #[test]
+    fn the_cloak_reserves_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::CloakReserves.key(), "cloak_reserves");
+        assert_eq!(
+            RuleKey::from_key("cloak_reserves"),
+            Some(RuleKey::CloakReserves)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::CloakReserves),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::default()
+                .with_override(RuleKey::CloakReserves, RuleSource::Bible)
+                .source_for(RuleKey::CloakReserves),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(11),
+            Some(&RuleKey::CloakReserves)
+        );
+    }
+
+    #[test]
+    fn the_area_cloak_hold_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::AreaCloakHold.key(), "area_cloak_hold");
+        assert_eq!(
+            RuleKey::from_key("area_cloak_hold"),
+            Some(RuleKey::AreaCloakHold)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::AreaCloakHold),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::default()
+                .with_override(RuleKey::AreaCloakHold, RuleSource::Bible)
+                .source_for(RuleKey::AreaCloakHold),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(10),
+            Some(&RuleKey::AreaCloakHold)
+        );
     }
 
     #[test]

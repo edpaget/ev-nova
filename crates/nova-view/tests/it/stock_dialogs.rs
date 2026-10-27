@@ -19,8 +19,8 @@ use nova_view::geometry::{Bounds, Point};
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::desc::{DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
 use nova_view::ui::new_pilot::{
-    CANCEL_ITEM, GENDER_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome,
-    OK_ITEM as NEW_PILOT_OK_ITEM, STRICT_PLAY_ITEM,
+    CANCEL_ITEM, GENDER_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NICKNAME_ITEM, NewPilotDialog,
+    NewPilotOutcome, OK_ITEM as NEW_PILOT_OK_ITEM, STRICT_PLAY_ITEM,
 };
 use nova_view::ui::note::{
     LOAD_FALLBACK_NOTE, NOTE_DIALOG, NoteDialog, OK_ITEM as NOTE_OK_ITEM,
@@ -441,6 +441,8 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         assert!(prefs.smoke_trails().enabled(), "{}", path.display());
         assert_eq!(prefs.weapon_effects().label(), "Weapon Effects");
         assert!(prefs.weapon_effects().enabled(), "{}", path.display());
+        assert_eq!(prefs.parallax_starfield().label(), "Parallax Starfield");
+        assert!(prefs.parallax_starfield().enabled(), "{}", path.display());
         let ok = dialog.item_bounds(OK_ITEM).expect("OK");
         let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
         let name = path.display();
@@ -456,6 +458,7 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
             prefs.quicktime_movies(),
             prefs.smoke_trails(),
             prefs.weapon_effects(),
+            prefs.parallax_starfield(),
         ]) {
             let rect = toggle.rect();
             let apart = rect.max.x <= music.min.x
@@ -466,8 +469,9 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         }
         assert_eq!(
             prefs.inert().len(),
-            5,
-            "{name}: QuickTime Movies, Smoke Trails and Weapon Effects work, Run in a \
+            4,
+            "{name}: QuickTime Movies, Smoke Trails, Weapon Effects and Parallax Starfield \
+             work, Run in a \
              window is the display picker and Share Processor Time the Scaling list"
         );
         assert!(
@@ -496,6 +500,7 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
                 prefs.quicktime_movies(),
                 prefs.smoke_trails(),
                 prefs.weapon_effects(),
+                prefs.parallax_starfield(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
             .chain([prefs.effects_volume().rects().bounds(), music, ok, keys])
@@ -557,6 +562,7 @@ fn the_preferences_dialogs_scaling_list_fills_share_processor_times_row() {
                 prefs.quicktime_movies(),
                 prefs.smoke_trails(),
                 prefs.weapon_effects(),
+                prefs.parallax_starfield(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
             .chain([
@@ -612,6 +618,7 @@ fn the_preferences_dialogs_relaunch_notice_has_its_area_to_itself() {
                 prefs.quicktime_movies(),
                 prefs.smoke_trails(),
                 prefs.weapon_effects(),
+                prefs.parallax_starfield(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
             .chain([
@@ -706,7 +713,43 @@ fn the_new_pilot_dialog_takes_a_name_in_its_full_name_field() {
             dialog.take_outcome(),
             Some(NewPilotOutcome::Create {
                 name: "Ada".to_owned(),
+                nickname: String::new(),
                 gender: nova_sim::Gender::Female,
+                strict_play: false,
+            }),
+            "{name}"
+        );
+    }
+}
+
+/// The stock dialog's Nickname field (item 9) is live: Tab focuses it,
+/// and OK creates the pilot with the nickname typed.
+#[test]
+fn the_new_pilot_dialogs_nickname_field_is_live() {
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(NEW_PILOT_DIALOG)
+            .expect("converts");
+        let name = path.display();
+        assert_eq!(
+            template.items[NICKNAME_ITEM - 1].kind,
+            ItemSpec::EditText("Edit Text".to_owned()),
+            "{name}"
+        );
+        let mut dialog = NewPilotDialog::new(&template, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds")
+            .with_defaults("Shane Merrol", "Hunter");
+        dialog.input(&key(Key::Tab));
+        for c in "Ace".chars() {
+            dialog.input(&Input::Text(c));
+        }
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_outcome(),
+            Some(NewPilotOutcome::Create {
+                name: "Shane Merrol".to_owned(),
+                nickname: "Ace".to_owned(),
+                gender: nova_sim::Gender::Male,
                 strict_play: false,
             }),
             "{name}"
@@ -750,6 +793,7 @@ fn the_new_pilot_dialogs_strict_play_box_is_live() {
             dialog.take_outcome(),
             Some(NewPilotOutcome::Create {
                 name: "Ada".to_owned(),
+                nickname: String::new(),
                 gender: nova_sim::Gender::Male,
                 strict_play: true,
             }),
@@ -796,6 +840,7 @@ fn the_mission_computer_lays_out_with_its_items_where_recorded() {
                 rows: vec![ComputerRow {
                     mission: MissionId(128),
                     name: "Run".to_owned(),
+                    raw_name: "Run".to_owned(),
                     text: "Go.".to_owned(),
                 }],
                 today: "June 23rd, 1177 NC".to_owned(),
@@ -844,6 +889,34 @@ fn the_mission_info_screen_lays_out_with_its_items_where_recorded() {
         );
         let dialog = screen.dialog().expect("laid out");
         assert!(!dialog.item_shown(6), "the map lies outside");
+    }
+}
+
+#[test]
+fn the_escort_dialog_lays_out_with_its_items_where_recorded() {
+    use nova_view::ui::escort_dialog::{
+        CLOSE_ITEM, ESCORT_DIALOG, INFO_ITEM, PICTURE_ITEM, RELEASE_ITEM, SELL_ITEM, TITLE_ITEM,
+        UPGRADE_ITEM,
+    };
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(ESCORT_DIALOG)
+            .expect("converts");
+        assert_eq!(
+            (template.bounds.width(), template.bounds.height()),
+            (424.0, 259.0)
+        );
+        for (item, bounds) in [
+            (CLOSE_ITEM, rect(29.0, 225.0, 146.0, 26.0)),
+            (RELEASE_ITEM, rect(29.0, 197.0, 146.0, 26.0)),
+            (UPGRADE_ITEM, rect(29.0, 141.0, 146.0, 26.0)),
+            (SELL_ITEM, rect(29.0, 169.0, 146.0, 26.0)),
+            (INFO_ITEM, rect(14.0, 9.0, 192.0, 58.0)),
+            (PICTURE_ITEM, rect(217.0, 30.0, 200.0, 200.0)),
+            (TITLE_ITEM, rect(14.0, 79.0, 192.0, 52.0)),
+        ] {
+            assert_eq!(template.items[item - 1].bounds, bounds, "item {item}");
+        }
     }
 }
 
@@ -1010,11 +1083,39 @@ fn the_picture_variants_frames_decode_at_their_sizes() {
     assert_eq!(size(PICTURE_BACKGROUND), (266, 306), "Bar + pict");
 }
 
+/// A player info with nothing in it but the pilot's name.
+fn blank_player_info() -> nova_sim::PlayerInfo {
+    nova_sim::PlayerInfo {
+        pilot_name: "Ada".to_owned(),
+        date: String::new(),
+        system: String::new(),
+        legal_status: String::new(),
+        combat_rating: String::new(),
+        ship_name: String::new(),
+        ship_class: String::new(),
+        turn_rate: 0,
+        accel: 0,
+        max_speed: 0,
+        credits: 0,
+        shield: None,
+        armor: None,
+        energy: None,
+        income: None,
+        fleet: false,
+        cargo: None,
+        extras: None,
+        honors: None,
+        jettisonable: false,
+        words: nova_sim::player_info::Words::STOCK,
+        cheat_ids: nova_sim::player_info::CheatIds::default(),
+        cheats: false,
+    }
+}
+
 #[test]
 fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
-    use nova_sim::PlayerInfo;
     use nova_view::ui::player_info::{
-        BACKGROUND, CAP_HEIGHT, PLAYER_INFO_DIALOG, PlayerInfoButton, PlayerInfoScreen, Tab,
+        BACKGROUND, BackgroundSizes, PLAYER_INFO_DIALOG, PlayerInfoButton, PlayerInfoScreen, Tab,
         YES_NO_DIALOG,
     };
     for (dir, path) in builds() {
@@ -1040,30 +1141,14 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
         assert!(!template.items[5].enabled, "the content box is disabled");
         let confirm = ui.dialog_template(YES_NO_DIALOG);
         assert!(confirm.is_ok(), "{confirm:?}");
-        let info = PlayerInfo {
-            pilot_name: "Ada".to_owned(),
-            date: String::new(),
-            system: String::new(),
-            legal_status: String::new(),
-            ship_name: String::new(),
-            ship_class: String::new(),
-            turn_rate: 0,
-            accel: 0,
-            max_speed: 0,
-            credits: 0,
-            shield: None,
-            armor: None,
-            energy: None,
-            income: None,
-            fleet: false,
-            cargo: None,
-            extras: None,
-            honors: None,
-            jettisonable: false,
-            words: nova_sim::player_info::Words::STOCK,
-        };
-        let screen =
-            PlayerInfoScreen::new(Ok((template, mono())), confirm, info, ButtonStyle::STOCK);
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        let screen = PlayerInfoScreen::new(
+            Ok((template, mono())),
+            confirm,
+            blank_player_info(),
+            ButtonStyle::STOCK,
+            BackgroundSizes::read(&data),
+        );
         assert_eq!(screen.problem(), None);
         assert_eq!(screen.tab(), Tab::General);
         let bounds = screen.bounds().expect("laid out");
@@ -1072,6 +1157,50 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
             screen.button_bounds(PlayerInfoButton::Done),
             Some(ltrb(598.0, 465.0, 697.0, 490.0))
         );
+        let window = ltrb(305.0, 270.0, 718.0, 497.0);
+        let clipped = |command| DrawCommand::Clipped {
+            clip: window,
+            command: Box::new(command),
+        };
+        let stretched = |id, top_left, height| {
+            clipped(DrawCommand::StretchedPicture {
+                image: ImageKey::picture(id),
+                top_left,
+                width: 413.0,
+                height,
+            })
+        };
+        let background: Vec<DrawCommand> = drawn(&screen)
+            .into_iter()
+            .filter(|command| match command {
+                DrawCommand::Clipped { command, .. } => matches!(
+                    **command,
+                    DrawCommand::Picture { ref image, .. }
+                    | DrawCommand::StretchedPicture { ref image, .. }
+                        if BACKGROUND.contains(image)
+                ),
+                _ => false,
+            })
+            .collect();
+        assert_eq!(
+            background,
+            [
+                clipped(DrawCommand::Picture {
+                    image: BACKGROUND[1],
+                    top_left: Point::new(305.0, 310.0),
+                }),
+                stretched(8518, Point::new(305.0, 270.0), 40.0),
+                stretched(8520, Point::new(305.0, 457.0), 40.0),
+            ],
+            "the stock span of 147 crops the 215-high middle under the lower cap"
+        );
+    }
+}
+
+#[test]
+fn the_player_infos_background_pictures_are_read_at_their_stock_sizes() {
+    use nova_view::ui::player_info::{BACKGROUND, BackgroundSizes, PictureSize};
+    for (dir, _) in builds() {
         let data = GameData::open(&dir, None).expect("the stock data opens");
         let size = |key: ImageKey| {
             let image = picture(&data, key.id);
@@ -1080,7 +1209,16 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
         assert_eq!(size(BACKGROUND[0]), (413, 40), "upper");
         assert_eq!(size(BACKGROUND[1]), (413, 215), "middle");
         assert_eq!(size(BACKGROUND[2]), (413, 40), "lower");
-        assert_eq!(CAP_HEIGHT, 40.0);
+        let own = |width, height| Some(PictureSize { width, height });
+        assert_eq!(
+            BackgroundSizes::read(&data),
+            BackgroundSizes {
+                upper: own(413.0, 40.0),
+                middle: own(413.0, 215.0),
+                lower: own(413.0, 40.0),
+            },
+            "read through the port"
+        );
     }
 }
 
@@ -1168,7 +1306,8 @@ fn the_maps_dlog_2000_is_601_by_513_with_its_items_where_the_map_puts_them() {
 /// widened flight view each lands where the original's `_CenterWindow`
 /// puts it once its 1024x768 frame is centred: none keeps its `DLOG`
 /// bounds. Comm 1007, haggle 1008, plunder 1011, mission info 1012, the
-/// offers 1016 and 1020, player info 1017, assignment 1018, the map 2000,
+/// offers 1016 and 1020, player info 1017, assignment 1018, the escort
+/// dialog 1022, the map 2000,
 /// yes/no 3002, the texts 3003 and 3004, Find 3005 and the preferences
 /// 4003.
 #[test]
@@ -1176,7 +1315,8 @@ fn every_dialog_opened_over_flight_is_centred() {
     for (_, path) in builds() {
         let ui = interface(&path);
         for id in [
-            1007, 1008, 1011, 1012, 1016, 1017, 1018, 1020, 2000, 3002, 3003, 3004, 3005, 4003,
+            1007, 1008, 1011, 1012, 1016, 1017, 1018, 1020, 1022, 2000, 3002, 3003, 3004, 3005,
+            4003,
         ] {
             let template = ui.dialog_template(id).expect("converts");
             assert_eq!(

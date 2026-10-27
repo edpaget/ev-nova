@@ -20,18 +20,21 @@
 
 use nova_sim::AlertIcon;
 
-use super::hud::STATUS_BAR_WIDTH;
 use crate::geometry::Point;
+use crate::system::camera::Anchor;
 use crate::{DrawList, ImageKey};
 
 /// Where the icon's top-left corner is, for `cïcn` 18000 `width` pixels
 /// wide, in a view `view_width` wide: x = 2 × trunc((`view_width` − 194) /
 /// 2) − width, the original's doubled `_screenCenter` (set by
-/// `_SetupWind` @0x1b720). That is the bar's left edge less the width,
-/// and a pixel further left when the play area's width is odd.
+/// `_SetupWind` @0x1b720, [`Anchor::PlayAreaCentre`]). That is the bar's
+/// left edge less the width, and a pixel further left when the play
+/// area's width is odd. It is placed so by both readings of
+/// [`RuleKey::FlightAnchor`](nova_sim::RuleKey::FlightAnchor), as
+/// `_InitSprites` places it.
 #[must_use]
 pub fn alert_origin(width: u32, view_width: f32) -> Point {
-    let half_play = ((view_width - STATUS_BAR_WIDTH) / 2.0).trunc();
+    let half_play = Anchor::PlayAreaCentre.point((view_width, 0.0)).x;
     Point::new(2.0 * half_play - width as f32, 0.0)
 }
 

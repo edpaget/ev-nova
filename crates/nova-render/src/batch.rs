@@ -263,9 +263,15 @@ impl<S: ImageSource> Renderer<S> {
                 let run = TextRun {
                     text: text.clone(),
                     font,
+                    // Whole pixels, as QuickDraw's pen is. Across rounds
+                    // as `pixel_clip` rounds the clip's edges, so a run
+                    // and its clip meet on the same column in a widened
+                    // view. Down rounds halves down, to the first row a
+                    // quad's top edge there fills, so text keeps its place
+                    // against the boxes and rules drawn with it.
                     origin_px: (
-                        rect.x as f32 + origin.x * across,
-                        rect.y as f32 + origin.y * down,
+                        (rect.x as f32 + origin.x * across).round(),
+                        (rect.y as f32 + origin.y * down - 0.5).ceil(),
                     ),
                     size_px,
                     line_height_px,
@@ -640,6 +646,13 @@ fn crossfade_opacity(tint: Color) -> u8 {
     ((u32::from(tint.a) * 32 + 127) / 255) as u8
 }
 
+/// The source factors (red, green, blue) and the destination factor, in
+/// 32nds, that `tint` asks a [`Blend::OrTranslucent`] sprite to be drawn
+/// with: `round(c × 32 / 255)` of each channel `c`, alpha last.
+fn translucent_factors(tint: Color) -> [u8; 4] {
+    [tint.r, tint.g, tint.b, tint.a].map(|c| ((u32::from(c) * 32 + 127) / 255) as u8)
+}
+
 /// Whether `a` and `b` share any area; rectangles that only touch along
 /// an edge do not.
 fn overlaps(a: Rect, b: Rect) -> bool {
@@ -670,6 +683,7 @@ fn push_quad(
             let [r, g, b, _] = rgba(tint);
             [r, g, b, f32::from(crossfade_opacity(tint)) / 32.0]
         }
+        Blend::OrTranslucent => translucent_factors(tint).map(|n| f32::from(n) / 32.0),
         Blend::Normal | Blend::Additive | Blend::Max => rgba(tint),
     };
     let quad = QuadInstance {
@@ -1465,6 +1479,23 @@ mod tests {
     }
 
     #[test]
+    fn a_translucent_quads_tint_is_its_source_and_destination_factors_in_exact_32nds() {
+        for (source, destination) in [(4, 30), (0, 32), (32, 0), (17, 9)] {
+            let tint = nova_view::draw::translucent_tint(source, destination);
+            assert_eq!(
+                translucent_factors(tint),
+                [source, source, source, destination]
+            );
+            let mut list = DrawList::new();
+            list.translucent_sprite(ImageKey::sprite(200, 0), at(10.0, 10.0), tint);
+            let frame = render_one(&list, &viewport());
+            assert_eq!(sprite_blends(&frame), [(Blend::OrTranslucent, 1)]);
+            let n = f32::from(source) / 32.0;
+            assert_eq!(tints(&frame), [[n, n, n, f32::from(destination) / 32.0]]);
+        }
+    }
+
+    #[test]
     fn overlapping_crossfade_sprites_split_and_never_share_an_or_batch() {
         let sprite = ImageKey::sprite(200, 0);
         let mut list = DrawList::new();
@@ -1859,7 +1890,8 @@ mod tests {
         let Batch::Text(runs) = &frame.batches[0] else {
             panic!("{frame:?}");
         };
-        assert_eq!(runs[0].origin_px, (x * across, 100.0 * 1.406_25));
+        // Whole window pixels: 1905.9 and 140.6 round to the nearer.
+        assert_eq!(runs[0].origin_px, (1906.0, 141.0));
         assert_eq!(runs[0].size_px, 12.0 * 1.406_25, "sized by the height");
         assert_eq!(runs[0].wrap_px, Some(100.0 * across));
         // The GPU projects quads from the logical space onto the content.
@@ -1869,11 +1901,30 @@ mod tests {
         let Batch::Text(cut) = &frame.batches[2] else {
             panic!("{frame:?}");
         };
-        let column = runs[0].origin_px.0.round();
+        let column = runs[0].origin_px.0;
         assert_eq!(projected.round(), column);
         assert_eq!(cut[0].clip.x as f32, column);
         assert_eq!(cut[0].clip.x + cut[0].clip.w, 1920, "to the window's edge");
         assert_eq!(cut[0].clip.h, 1080);
+    }
+
+    #[test]
+    fn a_text_runs_origin_lands_on_whole_window_pixels() {
+        let mut list = DrawList::new();
+        list.text("Hi", at(1.3, 2.7), 10.0, None, Color::WHITE)
+            .text("Lo", at(1.2, 2.2), 10.0, None, Color::WHITE)
+            .text("Tie", at(1.25, 2.25), 10.0, None, Color::WHITE);
+        let frame = render_one(&list, &viewport());
+        let Batch::Text(runs) = &frame.batches[0] else {
+            panic!("{frame:?}");
+        };
+        // 2.6 and 5.4 pixels round to the nearer pixel; 2.4 and 4.4 too.
+        assert_eq!(runs[0].origin_px, (3.0, 5.0));
+        assert_eq!(runs[1].origin_px, (2.0, 4.0));
+        // Halfway, across rounds up, to the column its clip's left edge
+        // rounds to; down rounds down, to the row a quad's top edge there
+        // fills first, so text keeps its place in its box.
+        assert_eq!(runs[2].origin_px, (3.0, 4.0));
     }
 
     #[test]
@@ -2003,6 +2054,84 @@ mod tests {
                 },
             ],
             "whole inside its clip, as it is; wholly outside, nothing"
+        );
+    }
+
+    #[test]
+    fn the_player_infos_middle_picture_is_cropped_not_squashed() {
+        use nova_view::ui::player_info::{BackgroundSizes, PictureSize, draw_background};
+        let page = 512.0;
+        let sized = |width, height| Some(PictureSize { width, height });
+        let stock = BackgroundSizes {
+            upper: sized(413.0, 40.0),
+            middle: sized(413.0, 215.0),
+            lower: sized(413.0, 40.0),
+        };
+        let images = FakeImages::default()
+            .with(
+                ImageKind::Pict,
+                8518,
+                vec![solid(413, 40, [255, 0, 0, 255])],
+            )
+            .with(
+                ImageKind::Pict,
+                8519,
+                vec![solid(413, 215, [0, 255, 0, 255])],
+            )
+            .with(
+                ImageKind::Pict,
+                8520,
+                vec![solid(413, 40, [0, 0, 255, 255])],
+            );
+        let mut renderer = Renderer::with_page_size(images, 512);
+        let mut gpu = RecordingGpu::new();
+        let mut list = DrawList::new();
+        draw_background(&mut list, Bounds::at(at(0.0, 0.0), 413.0, 227.0), &stock);
+        let viewport = Viewport::new(LogicalSize { w: 512, h: 384 }, (512, 384), 1.0);
+
+        assert_eq!(
+            renderer.render(&list, &viewport, &mut gpu),
+            RenderReport::default()
+        );
+
+        let frame = gpu.submits()[0].clone();
+        let quads: Vec<QuadInstance> = frame
+            .batches
+            .iter()
+            .filter_map(|batch| match batch {
+                Batch::Sprites { quads, .. } => Some(quads.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let [middle, upper, lower] = quads.as_slice() else {
+            panic!("three pictures: {frame:?}");
+        };
+        assert_eq!(
+            middle.dest,
+            Rect {
+                x: 0.0,
+                y: 40.0,
+                w: 413.0,
+                h: 187.0
+            },
+            "from below the upper cap to the window's bottom"
+        );
+        assert!(
+            ((middle.uv.v1 - middle.uv.v0) * page - 187.0).abs() < 1e-3,
+            "187 of the picture's 215 rows, not all 215 squashed: {middle:?}"
+        );
+        assert!(((middle.uv.u1 - middle.uv.u0) * page - 413.0).abs() < 1e-3);
+        assert_eq!(upper.dest.y, 0.0);
+        assert_eq!(
+            lower.dest,
+            Rect {
+                x: 0.0,
+                y: 187.0,
+                w: 413.0,
+                h: 40.0
+            },
+            "the lower cap over the middle's cut bottom"
         );
     }
 

@@ -44,7 +44,12 @@
 //! original. Each flight put away or held leaves its ship slots'
 //! draw-layer history, which every later flight of the run starts from,
 //! as the original's sprite layers outlive a pilot
-//! ([`nova_sim::ship_layer`]).
+//! ([`nova_sim::ship_layer`]). A new pilot's neighbour pass reads what
+//! the game held, else the last flight put away, left of its galaxy
+//! refreshes ([`nova_sim::LastRefresh`]), or, with neither, the
+//! launch's, as `_DoNewPilot` reads the visible flags the run's last
+//! refresh wrote (@0x18fc5); entering play from the menu takes the held
+//! game's afresh ([`FlightView::enter_game`]).
 //!
 //! A pilot with a name is saved through the [`PilotKeeper`] on creation,
 //! on landing, on taking off, after each change made in the spaceport
@@ -310,13 +315,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
-use nova_sim::KeptBerths;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::story::sprite_pool::StellarSpritePool;
 use nova_sim::{
     Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HireTerms, LegalCode,
     PersonRules, PilotKeeper, PilotStore, PointDefenceRule, Rulebook,
 };
+use nova_sim::{KeptBerths, LastRefresh};
 pub use nova_view::Showing;
 use nova_view::fade::ScreenFade;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
@@ -341,7 +346,9 @@ use nova_view::{FullscreenKind, Scaling};
 
 mod appear;
 mod build;
+mod christening;
 mod entry;
+mod escort_dialog;
 mod flight;
 mod game;
 mod launch;
@@ -510,6 +517,11 @@ pub struct AppScreen {
     /// [`nova_sim::traffic::kept_berths`]). Empty at launch, as the
     /// table's fresh pages read 0.
     kept_berths: KeptBerths,
+    /// What the galaxy refreshes of the last flight put away left
+    /// hidden, which a new pilot's neighbour pass reads when no game is
+    /// held ([`AppScreen::run_refresh`]); `None` at launch, when the
+    /// launch's own refresh is read.
+    last_refresh: Option<LastRefresh>,
     /// The course map's zoom the last flight put away left, which each
     /// new flight's map opens at: the original's `_mapZoom` is set once,
     /// by its data, and never reset by a new or loaded pilot.
@@ -550,6 +562,9 @@ pub struct AppScreen {
     menu: Option<Menu>,
     /// The New Pilot dialog, while it is open over the main menu.
     new_pilot: Option<NewPilotDialog>,
+    /// The new pilot's ship christening, while it is open over the main
+    /// menu.
+    christening: Option<christening::Christening>,
     /// The saved pilots' list, while it is open over the main menu.
     open_pilot: Option<PilotList>,
     /// The note that an opened pilot's load fell back (`STR#` 140 #52),
@@ -599,6 +614,12 @@ pub struct AppScreen {
     control_bits: Rc<dyn ControlBits>,
     /// The comm dialog, while a hail is under way.
     comm: Option<CommDialog>,
+    /// The escort dialog, while a fleet escort hailed is talked to.
+    escort_dialog: Option<nova_view::ui::escort_dialog::EscortDialog>,
+    /// Whether the port's Leave waits for the report of the escorts sold
+    /// and upgraded, shown over the spaceport, to close (see the
+    /// `escort_dialog` module).
+    leave_held: bool,
     /// The haggle dialog, over the comm dialog, while a price is asked.
     haggle: Option<HaggleDialog>,
     /// The offer dialog of a person hailed or boarded, over flight, until

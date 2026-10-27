@@ -5,11 +5,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::catalog::{
-    CronRecord, DateAffixes, DudeId, ListedStellar, MissionId, MissionRecord, MissionTexts,
-    NebulaRecord, OutfitId, OutfitRecord, PlaceNames, RankRecord, ShipRecord, StellarId,
+    BoomId, CronRecord, DateAffixes, DudeId, ListedStellar, MissionId, MissionRecord, MissionTexts,
+    NebulaRecord, OutfitId, OutfitRecord, PlaceNames, RankRecord, ShipRecord, SoundId, StellarId,
     StellarLife, SystemId, SystemVisibility, WeaponId,
 };
 use crate::combat::armament::Arsenal;
+use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::market::Goods;
 use crate::mission::StellarMarks;
@@ -119,6 +120,21 @@ pub(super) struct Statics {
     /// `wëap` its `Weapon` names, which `_HandleStellarWeapons` fires (see
     /// the `stellar_guns` module). A stellar not here has none.
     pub(super) stellar_weapons: BTreeMap<StellarId, WeaponId>,
+    /// Each `bööm` with a sound, and the `snd ` its explosion plays, read
+    /// when the session starts: what a `Y`'s explosion sounds (see the
+    /// `y_explosion` module).
+    pub(super) boom_sounds: BTreeMap<BoomId, SoundId>,
+}
+
+impl Statics {
+    /// `stellar`'s own position, its `spöb`'s raw `xPos` and `yPos`
+    /// ([`StellarMarks::place`]): what `_EvalSetExp`'s `M` (@0x157a6,
+    /// @0x157c4) and `Y` (@0x15a8b) read; the centre for one with no
+    /// record.
+    pub(super) fn stellar_position(&self, stellar: StellarId) -> Vec2 {
+        let (x, y) = self.stellar_marks.place(stellar).unwrap_or_default();
+        Vec2::new(f32::from(x), f32::from(y))
+    }
 }
 
 #[cfg(test)]

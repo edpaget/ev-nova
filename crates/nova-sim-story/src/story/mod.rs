@@ -284,7 +284,9 @@
 //! `ShipFate`, on
 //! `TookOff` (the first flight frame after a landing or a docked accept,
 //! held until the take-off's setup has run, as the original sets the
-//! system up first, @0x674c2), and in flight on `EnteredSystem`; an accept in flight is checked once
+//! system up first, @0x674c2), and in flight on `EnteredSystem` but a
+//! jump's, whose check follows its setup (the hook runs before it,
+//! @0x6c15d, the poll after); an accept in flight is checked once
 //! its settling is done. The ships' arrivals raise
 //! [`Fate::Arrived`], their first sighting [`Fate::Observed`] and their
 //! leaving [`Fate::Departed`], so an escort's presence, an observation
@@ -363,7 +365,10 @@
 //! `OnStart` and, quietly, at a load, which covers Open Pilot's call
 //! (`_MainScreenChoice` @0x1a8ca); a return from play to the main screen
 //! keeps the session as play left it, as `_DoMainScreen`'s own setup runs
-//! once a launch. By the other
+//! once a launch. What the last refresh left hidden is carried to the
+//! next new pilot of the run, whose neighbour loop reads the visible flags
+//! before its own refresh (@0x18fc5; `nova_sim::LastRefresh`,
+//! [`RuleKey::NewPilotVisibility`](crate::RuleKey::NewPilotVisibility)). By the other
 //! reading of [`RuleKey::VisibilityRefresh`](crate::RuleKey::VisibilityRefresh)
 //! it also refreshes after every settled script that changed the pilot.
 //! The availability tests stay live reads at each spawn, where the
@@ -452,7 +457,7 @@
 //!
 //! | Event | Its one source | The original's |
 //! |---|---|---|
-//! | [`EnteredSystem`](StoryEvent::EnteredSystem) | `enter_system`'s `announce` step, for every [`Entrance`] | the enter-system hook |
+//! | [`EnteredSystem`](StoryEvent::EnteredSystem) | `enter_system`'s `announce` step, for every [`Entrance`] but a jump's and an in-flight move's; a jump's arrival, after its days, dispatched at once; an in-flight `M` or `N`, at its operator, dispatched at once (@0x159a8) | the enter-system hook |
 //! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as `nova_sim::Session::land` docks | the spaceport opening |
 //! | [`TookOff`](StoryEvent::TookOff) | `nova_sim::Session::take_off`, after its day | `_PlayerLandOnStellar` after the spaceport |
 //! | [`DayPassed`](StoryEvent::DayPassed) | the daily step, as its last participant | `_IncrementGameTime` |
@@ -466,7 +471,15 @@
 //! arrival raises the `Explored` of the systems it passes and of the one
 //! it arrives at, its `DayPassed` events, then `EnteredSystem`: the
 //! original explores those nebulae before the days (@0x6bddb, @0x6be12;
-//! see "Checked for phase 3"). Every other way in raises its `DayPassed`
+//! see "Checked for phase 3"), and runs the enter-system hook after them
+//! and before it explores the arrival again and sets it up (@0x6c15d,
+//! @0x6c1db, @0x6c1f9). Each `Explored` and the `EnteredSystem` is
+//! dispatched as it is raised, the `DayPassed` events left for the
+//! settling. A map granted (`G`, the outfitter's buy, the plunder)
+//! raises the `Explored` of each system it reaches and dispatches them
+//! at once, inside the grant, before the grant's paint and its caller's
+//! next step (`_GrantOutfitItem` @0x44dcb, @0x44e12, @0x44e86;
+//! `nova_sim::Session::grant_outfit`). Every other way in raises its `DayPassed`
 //! events, if any, `EnteredSystem`, then `Explored` when its row
 //! explores, but a gate's or wormhole's exit, which explores no nebula.
 //! Each exploration raises `Explored`, the system explored
@@ -574,15 +587,18 @@
 //!   the enter-system subscriptions there (@0x159a3, @0x159a8).
 //!
 //! **Where it nests.** `nova_sim::Session::run_set`
-//! stays catalog-free: `apply_op` only queues a move or a `Q`, since a
-//! script has no catalog to read the new system from (see
-//! `script_effects`). The one place that dispatches is
+//! stays catalog-free. `apply_op` applies a move's catalog-free part at
+//! its operator, as `_EvalSetExp` does: the system written, the ship
+//! placed, and in flight the rebuild and its `EnteredSystem` dispatched
+//! there, events only (see the session's `operator_moves` module). The
+//! move's entry, which needs the catalog (the stellars shown, the scene
+//! and the traffic), waits, as does a `Q`. The place that settles is
 //! `nova_sim::Session::settle_script`, which holds
 //! the catalog and which the program calls after every input and tick.
 //! The landing, the take-off, the daily step, combat and boarding have no
 //! catalog, so the events they raise wait there. It settles in a loop:
-//! the moves queued (and the `EnteredSystem` an `enter_system` they cause
-//! raises), then the next event raised, first in, first out, dispatched,
+//! the entry the moves owe, then the next event raised, first in, first
+//! out, dispatched,
 //! and once none is left a `Q`'s leave in flight, whose events dispatch
 //! in the same settling. A `Q` run while landed is held instead, as the
 //! original holds `_absquatulateStr`
@@ -593,9 +609,9 @@
 //! off and settles again at once itself, so the take-off's events
 //! dispatch before its save and its first frame. The
 //! subscriptions' scripts run through the dispatcher's
-//! runner, which, after each operator handed to `apply_op`, settles the
-//! moves it queued, dispatches the events raised, depth first, and only
-//! then runs the next operator. So for the scripts the dispatcher runs,
+//! runner, which, after each operator handed to `apply_op`, completes the
+//! entry its moves owe, dispatches the events raised, depth first, and
+//! only then runs the next operator. So for the scripts the dispatcher runs,
 //! the original's nesting in the middle of a script is matched. A `Q`
 //! only sets the message (@0x15bee), as the original's does, so it is
 //! never settled in the middle of a script.
@@ -615,8 +631,10 @@
 //!   `nova_sim::Session::assign`.
 //!
 //! `C`, `E` and `H` change ships and run no hook. The deferred effects
-//! queue. At the caller's next safe point, its `settle_script`, they
-//! settle, and the events they raise dispatch, nested from there. So
+//! (a move's entry, the events raised but an in-flight move's
+//! `EnteredSystem`) wait. At the caller's next safe point, its
+//! `settle_script`, they settle, and the events they raise dispatch,
+//! nested from there. So
 //! under the default, nesting means depth first from the nearest safe
 //! point.
 //!
@@ -625,9 +643,10 @@
 //! has finished and the script has settled, then dispatches in the order
 //! raised, first in, first out; never in the middle of a script:
 //!
-//! 1. a dispatch runs its subscriptions' scripts, in order;
-//! 2. `settle_script` applies the queued moves, and an `enter_system` they
-//!    cause raises `EnteredSystem`;
+//! 1. a dispatch runs its subscriptions' scripts, in order, an in-flight
+//!    move raising its `EnteredSystem` at its operator without
+//!    dispatching it;
+//! 2. `settle_script` completes the entry the moves owe;
 //! 3. the dispatcher takes the next pending event, that one among them;
 //! 4. and so on until none is pending.
 //!
@@ -743,7 +762,18 @@
 //! list: those it owns, and, for the player's system, any it lists that
 //! no system owns, the rescue `_HandleStellarSystemVisibility` writes
 //! (@0x32c58-0x32cb3) and that lasts until the next refresh
-//! ([`OverlaidGalaxy::holder`], [`OverlaidGalaxy::shown`]). The session
+//! ([`OverlaidGalaxy::holder`], [`OverlaidGalaxy::shown`]). By the engine
+//! reading of
+//! [`RuleKey::RescueUntilRefresh`](crate::RuleKey::RescueUntilRefresh) the
+//! galaxy keeps each rescue, never saved, from the rebuild point that
+//! makes it to the next refresh ([`OverlaidGalaxy::keep_rescues`],
+//! [`OverlaidGalaxy::forget_rescues`]), so a stellar rescued in one system
+//! stays that system's, unshown, after a gate's exit or an `M` into
+//! another that lists it. Between a refresh, or a landed `M` or `N`, and
+//! the next rebuild point the owners are left unset
+//! ([`OverlaidGalaxy::await_rebuild`]): a stellar neither owned nor
+//! rescued has no holder there. By the other reading the rescue is
+//! derived for the player's system alone. The session
 //! derives the stellars shown at the original's rebuild points, and the
 //! flight view draws only those. A reader that turns a stellar into a
 //! system goes owner-first, as the original's do: the holder, else
@@ -840,9 +870,17 @@
 //! `nova_sim::course` module).
 //!
 //! The player is always in a visible system. Every arrival (a jump, a
-//! gate's exit, `M` and `N`, and the developer tools' relocation) resolves
-//! its system by the same rule before it enters. For a jump and a gate
-//! this is the original's; for `M` and `N` it is the engine's own: the
+//! gate's exit, `M` and `N`, the escape pod's rescue and the developer
+//! tools' relocation) enters the system as
+//! [`RuleKey::ArrivalSystem`](crate::RuleKey::ArrivalSystem) says (see
+//! the `nova_sim::session` `arrival_system` module): by the engine, the
+//! system it is given as it is, a visible system shadowed at its place
+//! too, and a hidden one moved out of as the refresh moves the player
+//! ([`OverlaidGalaxy::entered`]); a jump decides its system before its
+//! refresh, the raw Con target it was selected from off the multi-jump
+//! branch. By the other reading, story-runtime phase 4's, every arrival is
+//! resolved by place after the refresh ([`OverlaidGalaxy::arrival`]). For
+//! `M` and `N` into a hidden system the move is the engine's own: the
 //! original writes the system given (@0x158f2) and leaves the player in a
 //! hidden system until the next refresh moves it. A government override
 //! is the engine's own too, with no Rulebook key: the original changes a
@@ -3605,8 +3643,9 @@
 //! - `_ShipVisibleToShip` (@0x971c) holds a ship invisible while it is
 //!   emerging from a hypergate (`_AIShipIsEmergingFromHypergate`
 //!   @0x972d), and a cloaked one (its fade level, +0x64) visible only to
-//!   an escort of it that has a cloak itself (its parent +0x9a the
-//!   target, `_HasCloak` @0x979b; never the player) or to an observer
+//!   an escort of it that has a cloak, its own or the target's area cloak
+//!   it rides in close formation (its parent +0x9a the target, `_HasCloak`
+//!   @0x979b; never the player) or to an observer
 //!   with a cloak scanner (+0xc91c) within 200 on both axes
 //!   (@0x97a4-0x97f8); every other ship is visible. No stock outfit is a
 //!   cloak scanner, so the stock player sees a cloaked ship only once it
@@ -3669,12 +3708,17 @@
 //! - **A stellar's system.** `_FindSystemFromStellar` (@0x7ec1-0x7f48)
 //!   gives the lowest-ID visible system whose `NavDefs` list the stellar,
 //!   else the lowest-ID system that lists it.
-//! - **Arrivals.** A jump resolves its hops by place
-//!   (`_FindActiveCoLocatedSystem` @0x6bd67, @0x6bd7b, @0x6bdc1). A
+//! - **Arrivals.** A jump resolves its hops by place on its multi-jump
+//!   branch only (`_FindActiveCoLocatedSystem` @0x6bd67, @0x6bd7b,
+//!   @0x6bdc1); otherwise it writes the raw Con link it was selected from
+//!   (+0x6c, @0x6bd3a, @0x6be0b), unresolved, before its refresh, which
+//!   moves the player only out of a hidden system (@0x99918). A
 //!   hypergate's exit takes the stellar's system (`_FindSystemFromStellar`
-//!   @0x638e4) and resolves it by place (@0x638ed), and so does a
-//!   wormhole's (@0x64085, @0x64155, @0x64204). `M` and `N` write the
-//!   system they are given (@0x158f2) and resolve nothing.
+//!   @0x638e4) and resolves it by place (@0x638ed). A wormhole's
+//!   `_FindActiveCoLocatedSystem` calls (@0x64085, @0x64155, @0x64204)
+//!   only filter its candidates: it comes out in the exit's owner as it
+//!   is (@0x642a7). `M` and `N` write the system they are given (@0x158f2)
+//!   and resolve nothing.
 //! - **Traffic over time** reads the current system afresh at each spawn.
 //!   Every frame `_DoPlayGameWork` calls `_EnterMoreShips` with the
 //!   player's system (@0x44228-0x44237), which reads that system's record

@@ -45,7 +45,8 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, outline,
+    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, TextBacking,
+    outline,
 };
 use super::prefs::{BACKDROP, BORDER};
 
@@ -227,6 +228,7 @@ impl PlunderDialog {
                 font: Font::Geneva,
                 size: TEXT_SIZE,
                 color: TEXT_COLOR,
+                backing: None,
             },
         ));
         let template = enabling(template, TAKE_BUTTONS.iter().map(|&(item, ..)| item));
@@ -399,11 +401,15 @@ impl AssignmentDialog {
             (ESCORT_ITEM, Role::Button(ESCORT_LABEL.to_owned())),
             (
                 QUESTION_ITEM,
+                // White on black: `_CapturedAssignmentDialogUpdate` sets
+                // `ForeColor` 30 on `BackColor` 33 (@0x51604-0x51620) and
+                // erases the item black under its `TETextBox` (@0x51689).
                 Role::ScrollText {
                     text: QUESTION.to_owned(),
                     font: Font::Geneva,
                     size: TEXT_SIZE,
                     color: TEXT_COLOR,
+                    backing: Some(TextBacking::BLACK_BOX),
                 },
             ),
         ];
@@ -482,10 +488,11 @@ mod tests {
     use nova_sim::{Good, NpcId, OutfitId, ShipId};
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_command};
     use crate::input::{Key, MouseButton};
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
+    use crate::ui::ScrollText;
 
     /// A trader with 13 tons of food, 2 rounds of rockets, credits and
     /// energy, at odds of 43.
@@ -909,6 +916,42 @@ mod tests {
                 height: 114.0,
             }
         );
+    }
+
+    #[test]
+    fn the_assignment_question_draws_over_a_black_box_filling_its_item() {
+        let dialog = assignment();
+        let area = dialog
+            .dialog()
+            .item_bounds(QUESTION_ITEM)
+            .expect("the question");
+        let commands = drawn(&dialog);
+        let fill = commands
+            .iter()
+            .position(|command| *command == fill_command(area, Color::BLACK))
+            .expect("filled black");
+        let text = commands
+            .iter()
+            .position(|command| {
+                matches!(command, DrawCommand::Text { origin, .. } if area.contains(*origin))
+            })
+            .expect("the question's first line");
+        assert!(fill < text, "the box is under the text");
+    }
+
+    #[test]
+    fn up_and_down_still_scroll_the_assignment_question() {
+        // The question's item cut to one line, so the question overflows.
+        let mut template = stock_assignment();
+        template.items[QUESTION_ITEM - 1].bounds.max.y = 6.0 + 12.0;
+        let mut dialog = AssignmentDialog::new(&template, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        let first =
+            |dialog: &AssignmentDialog| dialog.dialog().text(QUESTION_ITEM).map(ScrollText::first);
+        dialog.input(&key(Key::Down));
+        assert_eq!(first(&dialog), Some(1));
+        dialog.input(&key(Key::Up));
+        assert_eq!(first(&dialog), Some(0));
     }
 
     #[test]

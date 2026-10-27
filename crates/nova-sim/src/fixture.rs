@@ -7,7 +7,9 @@
 //! [`set_player_condition`], for downing or repairing the player directly;
 //! [`set_player_ion`] and [`set_player_tractor`], for ionizing or
 //! holding the player directly; [`put_player_over`], for bringing the player over a ship to board it;
-//! [`cloak`], for setting a ship's cloak directly; [`hide`], for
+//! [`remember_escort`], for making a ship the player's former escort;
+//! [`cloak`] and [`set_player_cloak`], for setting a ship's or the
+//! player's cloak directly; [`hide`], for
 //! making a ship's type one whose `Cost` is -1; [`place`], for putting a
 //! ship somewhere directly; [`sabotage_kill`], for setting off the
 //! player's kill outfit directly; and
@@ -83,6 +85,21 @@ pub fn put_player_over(session: &mut Session, id: NpcId) {
     session.put_player_over(id);
 }
 
+/// Makes NPC `id` in `session`, if it is in the system, remember being
+/// the player's escort of `record` ([`Npc::former`](crate::traffic::npc::Npc::former)): for a test that
+/// boards a former escort back without losing it in a fight.
+pub fn remember_escort(session: &mut Session, id: NpcId, record: crate::pilot::Escort) {
+    if let Some(npc) = session.npc_mut(id) {
+        npc.former = Some(crate::self_repair::FormerEscort { record });
+    }
+}
+
+/// Sets the player's cloak in `session` to `to`: for a test that draws
+/// the player's ship cloaked.
+pub fn set_player_cloak(session: &mut Session, to: Cloak) {
+    session.set_player_cloak(to);
+}
+
 /// Sets NPC `id`'s cloak in `session` to `to`, if it is in the system:
 /// for a test that draws a ship cloaked.
 pub fn cloak(session: &mut Session, id: NpcId, to: Cloak) {
@@ -129,9 +146,12 @@ pub fn sabotage_kill(session: &mut Session) {
 /// A [`PilotStore`] in memory that records each write and delete. Clones
 /// share the saves, the records and the failure switches, so a test can seed the
 /// store before the app takes a clone, read back what was saved and when,
-/// or "restart" over another clone.
+/// or "restart" over another clone. Its keys are told apart by case, unless
+/// it is made [`ignoring_case`](Self::ignoring_case).
 #[derive(Clone, Debug, Default)]
 pub struct MemoryPilots {
+    /// How keys match, if ignoring case: `Some(keeps_spelling)`.
+    ignores_case: Option<bool>,
     saves: Rc<RefCell<BTreeMap<String, String>>>,
     written: Rc<RefCell<Vec<(String, String)>>>,
     fail_reads: Rc<Cell<bool>>,
@@ -150,18 +170,51 @@ impl MemoryPilots {
         Self::default()
     }
 
+    /// A store with nothing saved whose keys ignore case, as the Mac's file
+    /// names do: one save for "shane" and "Shane", which each key reads,
+    /// writes and deletes. A write over a save in another spelling keeps
+    /// the spelling saved when `keeps_spelling`, or renames it to the key
+    /// written.
+    #[must_use]
+    pub fn ignoring_case(keeps_spelling: bool) -> Self {
+        Self {
+            ignores_case: Some(keeps_spelling),
+            ..Self::default()
+        }
+    }
+
+    /// The key `key` is saved under, if anything is: itself, or when the
+    /// store ignores case, the saved key that matches it ignoring case.
+    fn saved_as(&self, key: &str) -> Option<String> {
+        let saves = self.saves.borrow();
+        if self.ignores_case.is_none() {
+            return saves.contains_key(key).then(|| key.to_owned());
+        }
+        let key = key.to_lowercase();
+        saves
+            .keys()
+            .find(|saved| saved.to_lowercase() == key)
+            .cloned()
+    }
+
     /// Saves `text` under `key`, as if it had been written; it does not
     /// count as a write.
     pub fn put(&self, key: &str, text: &str) {
-        self.saves
-            .borrow_mut()
-            .insert(key.to_owned(), text.to_owned());
+        let mut at = key.to_owned();
+        if let Some(saved) = self.saved_as(key) {
+            self.saves.borrow_mut().remove(&saved);
+            if self.ignores_case == Some(true) {
+                at = saved;
+            }
+        }
+        self.saves.borrow_mut().insert(at, text.to_owned());
     }
 
     /// The text saved under `key`, if any.
     #[must_use]
     pub fn text(&self, key: &str) -> Option<String> {
-        self.saves.borrow().get(key).cloned()
+        let saved = self.saved_as(key)?;
+        self.saves.borrow().get(&saved).cloned()
     }
 
     /// Every key saved, in order.
@@ -264,7 +317,9 @@ impl PilotStore for MemoryPilots {
         if self.fail_deletes.get() {
             return Err(io::Error::other("the disk is locked"));
         }
-        self.saves.borrow_mut().remove(key);
+        if let Some(saved) = self.saved_as(key) {
+            self.saves.borrow_mut().remove(&saved);
+        }
         self.deleted.borrow_mut().push(key.to_owned());
         Ok(())
     }
@@ -325,6 +380,29 @@ mod tests {
         set_player_tractor(&mut session, lock);
         assert_eq!(session.tractor(), lock);
         assert!(session.held_by_other());
+    }
+
+    #[test]
+    fn a_store_ignoring_case_keeps_one_save_for_both_spellings() {
+        for keeps_spelling in [false, true] {
+            let store = MemoryPilots::ignoring_case(keeps_spelling);
+            store.write("shane", "old").expect("writes");
+            store.write("Shane", "new").expect("writes");
+            let spelling = if keeps_spelling { "shane" } else { "Shane" };
+            assert_eq!(store.list().expect("lists"), [spelling], "{keeps_spelling}");
+            for key in ["shane", "Shane", "SHANE"] {
+                assert_eq!(store.read(key).expect("reads").as_deref(), Some("new"));
+            }
+            store.delete("SHANE").expect("deletes");
+            assert_eq!(store.keys(), Vec::<String>::new(), "{keeps_spelling}");
+        }
+        let store = MemoryPilots::new();
+        store.write("shane", "old").expect("writes");
+        store.write("Shane", "new").expect("writes");
+        assert_eq!(store.keys(), ["Shane", "shane"], "case kept apart");
+        assert_eq!(store.read("SHANE").expect("reads"), None);
+        store.delete("SHANE").expect("deletes");
+        assert_eq!(store.keys(), ["Shane", "shane"]);
     }
 
     #[test]

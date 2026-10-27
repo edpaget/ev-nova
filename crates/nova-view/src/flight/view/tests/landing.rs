@@ -286,7 +286,7 @@ fn each_refusal_says_why_in_the_originals_words() {
     // Only a selected stellar reaches the dock request's not-landable
     // line (@0x6a945-0x6a94c, @0x66977-0x669ae).
     let mut view = flight_among(vec![centre(0, 0)]);
-    tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
     tap(&mut view, LAND);
     assert_eq!(nav_target(&view), Some(StellarId(140)), "kept");
     assert_eq!(
@@ -451,7 +451,7 @@ fn a_not_landable_station_or_planet_is_named_for_250_ticks() {
         // Selected: only a selected stellar reaches the dock request
         // (@0x6a945-0x6a94c).
         let mut view = flight_among(vec![site(128, (0.0, 0.0), flags)]);
-        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
         tap(&mut view, LAND);
         assert_lasts(&mut view, text, LANDING_TICKS);
     }
@@ -528,26 +528,33 @@ fn the_refusal_is_drawn_until_its_ticks_have_passed() {
 }
 
 #[test]
-fn the_message_draws_over_the_starfield_and_under_the_ships() {
-    let mut view = flight();
+fn the_messages_box_draws_over_the_starfield_under_the_ships_and_its_text_over_them() {
+    let mut view = FlightView::new(starry());
     land_now(&mut view);
     let list = drawn(&view);
     let commands: Vec<&DrawCommand> = list.iter().collect();
-    let mut stars = DrawList::new();
-    starfield::draw(&mut stars, &view.camera());
+    let stars = drawn_stars(&view);
     let stars: Vec<&DrawCommand> = stars.iter().collect();
     assert!(!stars.is_empty());
     assert_eq!(commands[..stars.len()], stars[..], "the starfield first");
     assert_eq!(
         commands[stars.len()],
-        &message_drawn(TOO_FAR_PLANET),
-        "then the message"
+        &fill_command(hud::message_box(VIEW_SIZE), Color::BLACK),
+        "then the message's box, black in a black system"
     );
     let sprite = commands
         .iter()
-        .position(|c| matches!(c, DrawCommand::Sprite { .. }))
+        .position(|c| matches!(c, DrawCommand::Sprite { .. }) && !is_star(c))
         .expect("the player's sprite");
-    assert!(stars.len() < sprite, "the ship over it");
+    let text = commands
+        .iter()
+        .position(|c| **c == message_drawn(TOO_FAR_PLANET))
+        .expect("the message");
+    // `_DisplayComm` draws into the background frame, under the sprites;
+    // `_FloaterDrawCallback` ORs its message rect over them
+    // (@0x38b52-0x38b90).
+    assert!(stars.len() < sprite, "the ship over the box");
+    assert!(sprite < text, "the text over the ship");
 }
 
 #[test]
@@ -557,7 +564,8 @@ fn a_long_message_wraps_in_the_box_by_the_metrics() {
     let text = vec!["abcd"; 60].join(" ");
     view.say_for(text.clone(), MESSAGE_TICKS);
     let mut expected = DrawList::new();
-    hud::draw_message(
+    hud::draw_message_box(&mut expected, VIEW_SIZE, Color::BLACK);
+    hud::draw_message_text(
         &mut expected,
         &text,
         VIEW_SIZE,
@@ -570,8 +578,38 @@ fn a_long_message_wraps_in_the_box_by_the_metrics() {
         .position(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == message_at()))
         .expect("the message");
     let expected: Vec<&DrawCommand> = expected.iter().collect();
-    assert_eq!(expected.len(), 2);
-    assert_eq!(commands[first..first + 2], expected[..]);
+    assert_eq!(
+        expected.len(),
+        4,
+        "the box, two whole lines and a clipped third"
+    );
+    assert!(commands[..first].contains(&expected[0]), "the box under");
+    assert_eq!(commands[first..first + 3], expected[1..]);
+}
+
+#[test]
+fn the_message_box_is_filled_in_the_systems_background_at_rgb555() {
+    // `_DisplayComm` erases the rect in the system's `BkgndColor`
+    // (@0x902cf, @0x6e06), which the thousands-of-colours display holds
+    // as 5 bits a channel: 0x07 is 0, 0x0F is 0x08 and 0x12 is 0x10.
+    let mut coloured = catalog();
+    coloured.sol_background = 0x0007_0F12;
+    let mut view = FlightView::new(coloured);
+    land_now(&mut view);
+    let list = drawn(&view);
+    let commands: Vec<&DrawCommand> = list.iter().collect();
+    let message = commands
+        .iter()
+        .position(|c| **c == message_drawn(TOO_FAR_PLANET))
+        .expect("the message");
+    let filled = fill_command(
+        hud::message_box(VIEW_SIZE),
+        Color::rgba(0x00, 0x08, 0x10, 255),
+    );
+    assert!(
+        commands[..message].contains(&&filled),
+        "the box, under the text"
+    );
 }
 
 #[test]
@@ -647,12 +685,13 @@ fn landing_in_a_flight_that_never_started_does_nothing() {
     assert_eq!(view.take_off(), None);
 }
 
-/// Only the landing beep sounds at touchdown: the stellar's own sound
-/// is its spaceport's ambient sound, which plays once the spaceport is
+/// Nothing sounds at an inhabited stellar's touchdown (only an
+/// uninhabited one beeps, `_PlayerLandOnStellar` @0x632be-0x632ef): the
+/// stellar's own sound is its spaceport's ambient sound, which plays once the spaceport is
 /// frontmost (see the spaceport's
 /// `the_ambient_sound_plays_on_the_first_frame_then_after_each_wait`).
 #[test]
-fn l_over_a_stellar_sounds_only_the_landing_at_touchdown() {
+fn l_over_an_inhabited_stellar_is_silent_at_touchdown() {
     let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
     assert_eq!(view.take_sounds(), []);
     tap(&mut view, LAND);
@@ -664,8 +703,8 @@ fn l_over_a_stellar_sounds_only_the_landing_at_touchdown() {
         "the greeting"
     );
     tap(&mut view, LAND);
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::Landed)]);
-    assert_eq!(view.take_sounds(), [], "taken");
+    assert_eq!(view.take_landing(), Some(StellarId(140)), "landed");
+    assert_eq!(view.take_sounds(), [], "the touchdown is silent");
     view.take_off();
     assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TookOff)]);
 }

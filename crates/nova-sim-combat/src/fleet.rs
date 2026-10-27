@@ -36,6 +36,21 @@ pub struct Escort {
     /// none for any other escort. One whose person no longer has a record
     /// flies as an ordinary escort of its ship class.
     pub person: Option<PersonId>,
+    /// What it is marked for at the next shipyard, from the escort dialog
+    /// (`nova_sim::escort_dialog`): an upgrade (the original's +0xbf) or a
+    /// sale (+0xbe), which never both stand; none at every join, as
+    /// `_SpawnEscort` @0x3ff98 and a capture clear both.
+    pub mark: Option<EscortMark>,
+}
+
+/// What an escort is marked for at the next shipyard (`_DoEscortLand`
+/// @0x4031f settles it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EscortMark {
+    /// Upgraded to its class's `UpgradeTo` for its `EscUpgrdCost`.
+    Upgrade,
+    /// Sold for its class's `EscSellValue`.
+    Sell,
 }
 
 impl Escort {

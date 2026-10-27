@@ -1,6 +1,8 @@
 //! [`FlightView`]'s map opened by a mission dialog: an offer, the mission
 //! computer, mission info or the accept's briefing text, each on the map
-//! key ([`FlightView::open_dialog_map`]). All addresses are in
+//! key ([`FlightView::open_dialog_map`]), and who opened the map shown
+//! ([`MapOpening`]), the port screens' maps among them
+//! ([`FlightView::open_port_screen_map`]). All addresses are in
 //! `EV Nova.app`'s `EV Nova` (i386).
 //!
 //! It is flight's course map, over the spaceport docked and over flight
@@ -37,6 +39,7 @@
 
 use nova_sim::{MapMarks, MissionId, SavedNav, Session};
 
+use super::port_screen_map::{self, PortScreen};
 use super::{FlightView, MAP_KEY};
 use crate::Input;
 
@@ -80,6 +83,8 @@ pub(super) enum MapOpening {
     Bar,
     /// A mission dialog, with the marks it gave.
     Dialog(MapOpener, MapMarks),
+    /// A port screen ([`FlightView::open_port_screen_map`]).
+    Port(PortScreen),
 }
 
 /// How the map shown was opened: who opened it, and the nav as it
@@ -116,8 +121,8 @@ impl<C> FlightView<C> {
     }
 
     /// The restore of the map's opener, after its close (see the module
-    /// docs): the bar's ([`Session::restore_bar_nav`]), or a mission
-    /// dialog's.
+    /// docs): the bar's ([`Session::restore_bar_nav`]), a port screen's
+    /// ([`PortScreen`]), or a mission dialog's.
     pub(super) fn restore_opener_nav(&mut self, opened: Option<MapOpened>) {
         let Some(opened) = opened else {
             return;
@@ -128,6 +133,7 @@ impl<C> FlightView<C> {
         match opened.by {
             MapOpening::Plain | MapOpening::Dialog(MapOpener::MissionInfo(_), _) => {}
             MapOpening::Bar => session.restore_bar_nav(),
+            MapOpening::Port(screen) => port_screen_map::restore_nav(session, screen, &opened),
             MapOpening::Dialog(dialog, _) => {
                 if let Some(nav) = opened.nav {
                     session.restore_map_nav(nav);

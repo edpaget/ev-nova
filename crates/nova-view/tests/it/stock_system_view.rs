@@ -194,10 +194,12 @@ fn every_stock_system_can_be_entered_from_the_map_and_left() {
                 _ => None,
             })
             .collect();
-        let expected: Vec<Point> = raw[&id]
-            .nav_def
-            .iter()
-            .flatten()
+        // Drawn in ascending stellar ID, as the original's sprite slots
+        // stack them, whatever the `NavDefs` order.
+        let mut by_id: Vec<_> = raw[&id].nav_def.iter().flatten().collect();
+        by_id.sort_by_key(|s| s.0);
+        let expected: Vec<Point> = by_id
+            .into_iter()
             .map(|s| {
                 let record = stellar(&data, s.0);
                 Point::new(

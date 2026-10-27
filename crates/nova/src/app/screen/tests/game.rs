@@ -567,6 +567,7 @@ fn yes_opens_the_new_pilot_dialog() {
     assert!(!screen.take_quit(), "no quit");
     type_text(&mut screen, "Bea");
     screen.input(&key(Key::Enter, true));
+    christen(&mut screen);
     assert_eq!(screen.showing(), Showing::MainMenu);
     assert_eq!(held_name(&screen), "Bea", "in place of Ada");
     assert_eq!(store.keys(), ["Ada", "Bea"]);

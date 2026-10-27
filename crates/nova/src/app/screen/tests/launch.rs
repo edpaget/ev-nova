@@ -79,6 +79,7 @@ fn the_last_pilot_opened_is_held_at_launch() {
     choose(&mut screen, MenuChoice::NewPilot);
     type_text(&mut screen, "Bea");
     screen.input(&key(Key::Enter, true));
+    christen(&mut screen);
     assert_eq!(store.last().as_deref(), Some("Bea"), "the last save");
     open_held(&mut screen);
     assert_eq!(held_name(&screen), "Ada", "the list's first");

@@ -20,7 +20,12 @@
 //!   first, then the NPCs in order), but not the one it last inspected
 //!   nor another interceptor (AI type 4, @0x8cd4e, @0x8cdfe: a ship with
 //!   no AI, [`Npc::no_ai`], reads as none, whatever its class); the
-//!   original retries `Rand(64)` slots, here one draw among them. Within [`INSPECT_REACH`] of it on both axes
+//!   original retries `Rand(64)` slots, here one draw among them. It
+//!   picks only a ship it sees (`_ShipVisibleToShip`, @0x8cd5f in the
+//!   count, @0x8ce13 in the pick; [`sight`](super::sight)), the player
+//!   too: a cloaked player it can't see is no pick, and so raises no
+//!   pre-scan hail.
+//!   Within [`INSPECT_REACH`] of it on both axes
 //!   (@0x8f11e, [`within_reach`]) it has looked it over, and decides
 //!   again; the traffic remembers the ship ([`Npc::inspected`]). Having
 //!   looked the player over, it has scanned the player
@@ -304,13 +309,14 @@ fn re_pick(
 /// last inspected nor the one it has just looked over.
 fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Goal> {
     let done = [npc.inspected, npc.goal.inspecting()];
-    let player = around.live(ShipRef::Player).then_some(ShipRef::Player);
+    let player = (around.live(ShipRef::Player) && around.sees(npc, ShipRef::Player))
+        .then_some(ShipRef::Player);
     let npcs = around
         .npcs
         .iter()
         .filter(|other| other.id != npc.id && (other.no_ai || other.ai_type != AiType::Interceptor))
         .map(|other| ShipRef::Npc(other.id))
-        .filter(|&ship| around.live(ship));
+        .filter(|&ship| around.live(ship) && around.sees(npc, ship));
     let candidates: Vec<ShipRef> = player
         .into_iter()
         .chain(npcs)
@@ -332,7 +338,8 @@ mod tests {
     use crate::ai::CommCall;
     use crate::ai::fire::AmmoLeft;
     use crate::ai::fixture::{
-        NEUTRAL, PIRATES, POLICE, TRADERS, around, govts, n, ship, short_of_ammo, sites,
+        NEUTRAL, PIRATES, POLICE, TRADERS, around, cloaked, govts, n, scanning, ship,
+        short_of_ammo, sites,
     };
     use crate::catalog::{StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
@@ -457,6 +464,43 @@ mod tests {
                 "the player and two NPCs; not another interceptor"
             );
         }
+    }
+
+    #[test]
+    fn idle_it_never_picks_a_cloaked_ship_it_cant_see_to_inspect() {
+        let npcs = [
+            police(),
+            cloaked(ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0)),
+            ship(3, TRADERS, AiType::WimpyTrader, 900.0, 0.0),
+        ];
+        let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[1]);
+        assert_eq!(
+            (goal, asked),
+            (Goal::Inspect(n(3)), vec![2]),
+            "the player and the trader it sees"
+        );
+        let sites = sites();
+        let govts = govts(0, 0);
+        let alone = &npcs[..2];
+        let around = crate::ai::Surroundings {
+            govts: &govts,
+            ..crate::ai::Surroundings::new(&sites, alone)
+        };
+        assert_eq!(
+            Interceptor::default().decide(&alone[0], &around, &mut Draws::of(&[0])),
+            Goal::Land(StellarId(128)),
+            "nothing it sees: it patrols"
+        );
+    }
+
+    #[test]
+    fn it_inspects_a_cloaked_ship_its_scanner_sees() {
+        let npcs = [
+            scanning(police()),
+            cloaked(ship(2, TRADERS, AiType::WimpyTrader, 150.0, 0.0)),
+        ];
+        let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[1]);
+        assert_eq!((goal, asked), (Goal::Inspect(n(2)), vec![2]));
     }
 
     #[test]
@@ -1047,15 +1091,6 @@ mod tests {
         );
     }
 
-    /// `npc` fully cloaked.
-    fn cloaked(mut npc: Npc) -> Npc {
-        npc.cloak = crate::cloak::Cloak {
-            fade: crate::cloak::FADE_FULL,
-            direction: 0,
-        };
-        npc
-    }
-
     /// The decision of `cop` inspecting NPC 2, a trader 500 off, cloaked
     /// as `hidden` says.
     fn inspecting(cop: Npc, hidden: bool) -> Decision {
@@ -1075,6 +1110,73 @@ mod tests {
         let decision = inspecting(cop, true);
         assert_eq!(decision.goal, Goal::Idle, "@0x8d39a-0x8d3ee");
         assert!(decision.clears_target);
+    }
+
+    // A cloaked player (`_ShipVisibleToShip` with the player the target).
+
+    /// The interceptor's whole decision among `npcs` (it first), the police
+    /// of `police_flags`, a cloaked player at `at`, drawing `draws`.
+    fn by_cloaked_player(
+        police_flags: u16,
+        npcs: &[Npc],
+        at: (f32, f32),
+        draws: &[u32],
+    ) -> Decision {
+        let govts = govts(0, police_flags);
+        let sites = sites();
+        let mut seen = around(&sites, npcs, &govts, at, 0);
+        seen.player = seen.player.map(crate::ai::fixture::cloaked_player);
+        Interceptor::default().decision(&npcs[0], &seen, &mut Draws::of(draws))
+    }
+
+    #[test]
+    fn an_interceptors_0x0004_word_turns_it_on_no_cloaked_player_it_cannot_see() {
+        const ALWAYS: u16 = crate::govt::ALWAYS_ATTACKS_PLAYER;
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        let busy = Npc {
+            goal: Goal::Attack(n(2)),
+            ..police()
+        };
+        let unseen =
+            by_cloaked_player(ALWAYS, &[busy.clone(), pirate.clone()], (0.0, -100.0), &[0]);
+        assert_eq!(unseen.goal, Goal::Attack(n(2)), "it keeps its NPC fight");
+        assert!(!unseen.turns_on_player && !unseen.provokes);
+        let scanned = by_cloaked_player(ALWAYS, &[scanning(busy), pirate], (0.0, -100.0), &[0]);
+        assert_eq!(
+            (scanned.goal, scanned.turns_on_player, scanned.provokes),
+            (Goal::Attack(P), true, true),
+            "scanned within 200"
+        );
+    }
+
+    #[test]
+    fn an_interceptor_inspects_no_cloaked_player_it_cannot_see_and_raises_no_pre_scan_hail() {
+        let unseen = by_cloaked_player(0, &[police()], (0.0, -1000.0), &[0]);
+        assert_eq!(
+            (unseen.goal, unseen.comm_call),
+            (Goal::Land(StellarId(128)), None),
+            "nothing it sees: it patrols"
+        );
+        let scanned = by_cloaked_player(0, &[scanning(police())], (0.0, -150.0), &[0]);
+        assert_eq!(
+            (scanned.goal, scanned.comm_call),
+            (Goal::Inspect(P), Some(CommCall::PreScan)),
+            "scanned within 200"
+        );
+    }
+
+    #[test]
+    fn an_interceptor_inspecting_the_player_drops_it_once_the_player_cloaks_out_of_sight() {
+        let cop = Npc {
+            goal: Goal::Inspect(P),
+            ..police()
+        };
+        let decision = by_cloaked_player(0, std::slice::from_ref(&cop), (0.0, -1000.0), &[]);
+        assert_eq!(decision.goal, Goal::Idle, "@0x8d3cd");
+        assert!(decision.clears_target);
+        let scanned = by_cloaked_player(0, &[scanning(cop)], (0.0, -150.0), &[]);
+        assert_eq!(scanned.goal, Goal::Inspect(P), "scanned within 200");
+        assert!(!scanned.clears_target);
     }
 
     #[test]

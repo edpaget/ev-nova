@@ -16,11 +16,15 @@
 //! - **The brake** ([`brake`]) is `_LowLevelAIHandler` substate 1's
 //!   (@0x85384-0x85403): while the ship moves [`MOVING`] or more on
 //!   either axis, a thrust of -0.5 x `_ShipAccelRate` (@0x853f6), and no
-//!   turn, where an inertial ship turns against its motion.
+//!   heading wanted, where an inertial ship turns against its motion: the
+//!   low level's default +0x68 (@0x8522d) has `_HandleShip` truncate its
+//!   heading: [`brake`] hands back that whole heading for its caller to
+//!   turn to ([`flight::turn_to`](crate::flight::turn_to)).
 //! - **The engine's own planning** (the autopilot's stopping distance,
 //!   braking speed and velocity match, which no port of the original's
-//!   reaches yet) gains an inertialess arm: it faces the velocity it
-//!   wants and thrusts or brakes the speed toward that velocity's length
+//!   reaches yet) gains an inertialess arm: it turns to the velocity it
+//!   wants as `_HandleShip` turns every NPC
+//!   ([`flight::turn_to`](crate::flight::turn_to)) and thrusts or brakes the speed toward that velocity's length
 //!   ([`match_speed`]), and stops in the distance half a tick's thrust a
 //!   tick takes ([`stopping_distance`], [`braking_speed`]). Without it an
 //!   inertialess ship would turn away to brake and speed up instead. A
@@ -44,12 +48,13 @@
 //!
 //! None of these blocks plays a sound.
 
-use crate::flight::{Controls, ShipState, heading_of, shortest_turn};
+use crate::flight::{self, Controls, ShipState, heading_of, shortest_turn};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::inertialess::{ADJUST_RATE, BRAKE, adjust_velocity};
-use crate::traffic::autopilot::{ALIGNED, steer};
+use crate::traffic::autopilot::ALIGNED;
 use crate::traffic::npc::Npc;
+use crate::trig;
 
 /// How fast, in pixels a tick on either axis, a ship braking must still
 /// move to brake (`_LowLevelAIHandler` substate 1, the double 0.35 at
@@ -101,13 +106,20 @@ pub fn moving(velocity: Vec2) -> bool {
 
 /// Substate 1's brake for an inertialess ship at `state`: reverse, which
 /// an inertialess ship's step takes as [`BRAKE`], while it is
-/// [`moving`]; nothing once it isn't. It never turns.
+/// [`moving`], nothing once it isn't; and the heading it wants (+0x68).
+/// It writes none (@0x853d7-0x85403), so that is the low level's default,
+/// its own heading truncated (@0x8522d), which the caller turns it to as
+/// `_HandleShip` does ([`flight::turn_to`]). It hands the heading back
+/// rather than turning the ship itself, as a refuel's stop works the
+/// substate out before its AI-wait check, which skips the turn
+/// ([`leave_flight::stop_wanting`](crate::traffic::leave_flight::stop_wanting)).
 #[must_use]
-pub fn brake(state: &ShipState) -> Controls {
-    Controls {
+pub fn brake(state: &ShipState) -> (Controls, i16) {
+    let controls = Controls {
         reverse: moving(state.velocity),
         ..Controls::default()
-    }
+    };
+    (controls, trig::whole(state.heading))
 }
 
 /// How far an inertialess ship at `speed` travels while it brakes to a
@@ -139,29 +151,39 @@ pub fn braking_speed(distance: f32, handling: &Handling) -> f32 {
 }
 
 /// An inertialess ship at `state`, holding `speed`, matching its velocity
-/// to `desired`: it turns to face `desired` ([`steer`]) and thrusts while
-/// it faces it within [`ALIGNED`] (or its turn rate, if wider) and its
-/// speed is more than half a tick's thrust short of `desired`'s length;
-/// it brakes (reverse) while its speed is more than that past it, or while
-/// it faces more than a quarter turn away. Wanting to be at rest, it
-/// brakes and does not turn.
-#[must_use]
-pub fn match_speed(state: &ShipState, speed: f32, handling: &Handling, desired: Vec2) -> Controls {
+/// to `desired`: it wants `desired`'s table heading
+/// (`_CalcInterceptAngle((0,0), desired × 100.0)`), which `_HandleShip`
+/// turns it to ([`flight::turn_to`]), and thrusts while it faces it
+/// within [`ALIGNED`] (or its turn rate, if wider) and its speed is more
+/// than half a tick's thrust short of `desired`'s length; it brakes
+/// (reverse) while its speed is more than that past it, or while it faces
+/// more than a quarter turn away, each by its heading before the turn.
+/// Wanting to be at rest, it brakes and wants no heading, its heading
+/// truncated ([`flight::turn_to_own`]).
+pub fn match_speed(
+    state: &mut ShipState,
+    speed: f32,
+    handling: &Handling,
+    desired: Vec2,
+) -> Controls {
     let target = desired.length();
     let slack = handling.accel / 2.0;
     if target <= slack {
+        flight::turn_to_own(state);
         return Controls {
             reverse: speed > slack,
             ..Controls::default()
         };
     }
-    let wanted = heading_of(desired);
-    let off = shortest_turn(state.heading, wanted).abs();
+    let off = shortest_turn(state.heading, heading_of(desired)).abs();
     let aligned = off <= ALIGNED.max(handling.turn_rate);
+    let thrust = aligned && speed < target - slack;
+    let reverse = speed > target + slack || (off > 90.0 && speed > slack);
+    let wanted = trig::intercept_angle(Vec2::ZERO, desired * 100.0);
     Controls {
-        thrust: aligned && speed < target - slack,
-        turn: steer(state.heading, wanted, handling),
-        reverse: speed > target + slack || (off > 90.0 && speed > slack),
+        thrust,
+        turn: flight::turn_to(state, wanted, handling.turn_rate),
+        reverse,
         ..Controls::default()
     }
 }
@@ -254,6 +276,12 @@ mod tests {
 
     fn near(a: Vec2, b: Vec2) -> bool {
         (a - b).length() < 1e-4
+    }
+
+    /// [`super::match_speed`] of a ship at `state`, which it leaves as it
+    /// was.
+    fn match_speed(state: &ShipState, speed: f32, handling: &Handling, desired: Vec2) -> Controls {
+        super::match_speed(&mut state.clone(), speed, handling, desired)
     }
 
     #[test]
@@ -891,5 +919,78 @@ mod tests {
         );
         let stop = match_speed(&facing_north, 1.0, &handling, Vec2::ZERO);
         assert!(stop.reverse && stop.turn == Turn::None);
+    }
+
+    #[test]
+    fn matching_a_velocity_turns_to_its_table_heading_and_wanting_rest_truncates_its_heading() {
+        let handling = Handling {
+            max_speed: 6.0,
+            accel: 0.2,
+            turn_rate: 3.0,
+        };
+        // Wanting (4, 4): the table's heading is 134, the float's 135.
+        let mut state = at(0.0, 0.0, 0.0, 0.0, 135.4);
+        let controls = super::match_speed(&mut state, 1.0, &handling, Vec2::new(4.0, 4.0));
+        assert_eq!((controls.turn, state.heading), (Turn::None, 134.0));
+        // Wanting rest, it wants no heading: +0x68's default (@0x8522d).
+        for speed in [0.0, 1.0] {
+            let mut resting = at(0.0, 0.0, 0.0, 0.0, 37.6);
+            let controls = super::match_speed(&mut resting, speed, &handling, Vec2::ZERO);
+            assert_eq!((controls.turn, resting.heading), (Turn::None, 37.0));
+        }
+    }
+
+    #[test]
+    fn substate_1s_brake_reverses_while_moving_and_wants_its_own_whole_heading() {
+        // Sub 1's inertialess branch writes no +0x68 (@0x853d7-0x85403):
+        // the low level's default, its heading truncated (@0x8522d).
+        let (controls, wanted) = brake(&at(0.0, 0.0, 0.0, -0.5, 37.6));
+        assert!(controls.reverse);
+        assert_eq!(wanted, 37);
+        let (controls, wanted) = brake(&at(0.0, 0.0, 0.35, 0.35, 359.9));
+        assert!(!controls.reverse, "not moving");
+        assert_eq!(wanted, 359);
+    }
+
+    /// A ship at `heading` turning `rate` degrees a tick, holding 1.0,
+    /// matching its velocity to 4 east (table heading 90): the turn
+    /// `match_speed` gives it, and its heading after the tick's step.
+    fn matched_east(heading: f32, rate: f32) -> (Turn, f32) {
+        let handling = Handling {
+            max_speed: 6.0,
+            accel: 0.2,
+            turn_rate: rate,
+        };
+        let mut state = at(0.0, 0.0, 0.0, 0.0, heading);
+        let controls = super::match_speed(&mut state, 1.0, &handling, Vec2::new(4.0, 0.0));
+        let mut speed = 1.0;
+        crate::flight::inertialess_step(
+            &mut state,
+            &mut speed,
+            &handling,
+            controls,
+            FlightRules::default(),
+        );
+        (controls.turn, state.heading)
+    }
+
+    #[test]
+    fn matching_a_velocity_measures_its_gap_to_the_table_heading_in_whole_degrees() {
+        // 88.1 is 1.9 off 90, within 1.95, but 88 is 2 whole degrees off:
+        // it turns by its rate, where a float gap would put it on 90.
+        let (turn, heading) = matched_east(88.1, 1.95);
+        assert_eq!(turn, Turn::Right);
+        assert!((heading - 90.05).abs() < 1e-4, "{heading}");
+        // 91.9 is 91, 1 off: within the turn, put on 90.
+        assert_eq!(matched_east(91.9, 1.95), (Turn::None, 90.0));
+    }
+
+    #[test]
+    fn matching_a_velocity_beyond_its_turn_of_the_table_heading_steps_by_its_rate() {
+        assert_eq!(matched_east(80.0, 3.0), (Turn::Right, 83.0));
+        assert_eq!(matched_east(100.0, 3.0), (Turn::Left, 97.0));
+        // The short way round across 0.
+        assert_eq!(matched_east(300.0, 3.0), (Turn::Right, 303.0));
+        assert_eq!(matched_east(93.0, 3.0), (Turn::None, 90.0), "a turn off");
     }
 }

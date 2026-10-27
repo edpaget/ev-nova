@@ -6,7 +6,7 @@
 
 use std::num::NonZeroU16;
 
-use nova_data::graphics::{CICN, PICT, decode_cicn, decode_pict};
+use nova_data::graphics::{CICN, decode_cicn};
 use nova_data::records::boom::Boom;
 use nova_data::records::colors::Colors;
 use nova_data::records::govt::Govt;
@@ -15,7 +15,7 @@ use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::decode_snd;
-use nova_data::{GameData, LayerError, LayerSprite, shot_spin_id};
+use nova_data::{GameData, LayerError, LayerSprite, SheetScan, shot_spin_id};
 use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
 use nova_sim::combat::weapon::loaded_falloff;
@@ -23,8 +23,8 @@ use nova_sim::data::FIRST_ASTEROID_SPIN;
 
 use super::catalog::{
     BoomId, BoomLook, CombatLooks, EffectSheet, FIRST_SMOKE_ICON, GovtId, LayerSheet, SMOKE_FRAMES,
-    SMOKE_SETS, ShipId, ShipSheet, ShipSprites, SmokeSheet, SoundId, StatusBarLayout, StatusBars,
-    TargetCard, WeaponId, WeaponLook,
+    SMOKE_SETS, ShipId, ShipSheet, ShipSprites, SmokeSheet, SoundId, StarSheet, StatusBarLayout,
+    StatusBars, TargetCard, WeaponId, WeaponLook,
 };
 use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
@@ -32,19 +32,21 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::sheet_image::SheetImage;
 
-/// Decodes the sheet and its layers on every call; the flight screen asks
-/// once, when it opens and when a ship is bought.
+/// Scans the sheet and its layers on every call, reading their sizes,
+/// frame counts and runs without decoding a pixel; the flight screen asks
+/// once for each ship type, when it opens, when a ship is bought and when
+/// traffic brings a new type.
 impl ShipSprites for GameData {
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
-        let sprite = self.ship_sprite(id).map_err(|err| err.to_string())?;
+        let sprite = self.ship_sprite_info(id).map_err(|err| err.to_string())?;
         let sheet = &sprite.sheet;
         // The sheet's layout is the `shän`'s frames per rotation as columns.
-        let rotations = NonZeroU16::new(sheet.layout().columns())
+        let rotations = NonZeroU16::new(sheet.layout.columns())
             .expect("a sheet layout has at least one column");
         // A layer that cannot be resolved is drawn as no layer; the ship
         // browser is where its error is shown.
         let [glow, lights, weapon, alt, shield] =
-            self.ship_layers(id).map_or([None; 5], |layers| {
+            self.ship_layer_infos(id).map_or([None; 5], |layers| {
                 [
                     layers.glow,
                     layers.lights,
@@ -59,8 +61,8 @@ impl ShipSprites for GameData {
         Ok(ShipSheet {
             image_id: sprite.image_id,
             rotations,
-            frame_width: sheet.frame_width(),
-            frame_height: sheet.frame_height(),
+            frame_width: sheet.info.frame_width,
+            frame_height: sheet.info.frame_height,
             glow,
             lights,
             weapon,
@@ -68,23 +70,23 @@ impl ShipSprites for GameData {
             alt,
             shield,
             base_transp: field(|anim| anim.base_transp),
-            solid: sheet.solid_frames().is_some(),
+            solid: sheet.info.has_runs,
         })
     }
 }
 
 /// A resolved layer's ID, frame count and whether it holds solid runs;
 /// `None` for one that failed.
-fn layer_sheet(layer: Result<LayerSprite<'_>, LayerError>) -> Option<LayerSheet> {
+fn layer_sheet(layer: Result<LayerSprite<'_, SheetScan>, LayerError>) -> Option<LayerSheet> {
     let layer = layer.ok()?;
-    // An `rlëD` header counts its frames in a u16, and the decoder rejects
-    // a sheet with none (`GraphicsError::NoFrames`).
-    let frames = NonZeroU16::new(layer.sheet.frames().len() as u16)
-        .expect("a decoded rlëD has at least one frame");
+    // The scan, like the decoder, rejects a sheet with no frames
+    // (`GraphicsError::NoFrames`).
+    let frames =
+        NonZeroU16::new(layer.sheet.info.frames).expect("a scanned rlëD has at least one frame");
     Some(LayerSheet {
         image_id: layer.image_id,
         frames,
-        solid: layer.sheet.solid_frames().is_some(),
+        solid: layer.sheet.info.has_runs,
     })
 }
 
@@ -129,9 +131,7 @@ impl StatusBars for GameData {
     }
 
     fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
-        let found = self.resource(PICT, id)?;
-        let picture = decode_pict(found.resource.data()).ok()?;
-        Some((picture.width(), picture.height()))
+        crate::ui::PictureSizes::picture_size(self, id)
     }
 
     fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
@@ -151,13 +151,9 @@ pub const FIRST_BOX_SPIN: i16 = 500;
 /// The mouse cursor's `spïn`, which `_InitSprites` loads with
 /// `_GetSpriteInfo(0x28a)` (@0x2147c-0x215eb).
 pub const CURSOR_SPIN: i16 = 650;
-/// The first `snd ` of the explosions' sounds (`_LoadSounds`: 300-363).
-pub const FIRST_BOOM_SOUND: i16 = 300;
-/// The first target picture, `PICT` 3000 for `shïp` 128
-/// (`_LoadSprites`).
-pub const FIRST_TARGET_PICTURE: i16 = 3000;
-/// The first `shïp`.
-const FIRST_SHIP: i16 = 128;
+/// The stars' `spïn`, which `_LoadSprites` makes the master star sprite
+/// from with `_GetSpriteInfo(0x2bc)` (@0x21037).
+pub const STAR_SPIN: i16 = 700;
 /// `FrameAdvance` per frame a tick (the double @0xdd098).
 pub const FRAME_ADVANCE_UNIT: f32 = 0.01;
 
@@ -220,19 +216,31 @@ impl CombatLooks for GameData {
         Some(Ok(BoomLook {
             sheet: effect_sheet(self, FIRST_BOOM_SPIN.saturating_add(boom.graphic_index)),
             advance: f32::from(boom.frame_advance) * FRAME_ADVANCE_UNIT,
-            sound: offset_sound(FIRST_BOOM_SOUND, boom.sound_index),
+            sound: nova_sim::catalog::explosion_sound(boom.sound_index),
         }))
     }
 
     fn target_card(&self, ship: ShipId) -> TargetCard {
-        let Some(Ok(entry)) = self.get::<Ship>(ship.0) else {
-            return TargetCard::default();
-        };
-        let picture = FIRST_TARGET_PICTURE.saturating_add(ship.0 - FIRST_SHIP);
-        TargetCard {
-            subtitle: entry.record.subtitle.as_str().to_owned(),
-            picture: self.resource(PICT, picture).map(|_| picture),
-        }
+        self.target_cards(&[ship]).pop().unwrap_or_default()
+    }
+
+    /// Reads every `shïp`'s base image once for the batch, rather than
+    /// once per ship.
+    fn target_cards(&self, ships: &[ShipId]) -> Vec<TargetCard> {
+        let bases = crate::target_picture::game_ship_bases(self);
+        ships
+            .iter()
+            .map(|&ship| {
+                let Some(Ok(entry)) = self.get::<Ship>(ship.0) else {
+                    return TargetCard::default();
+                };
+                TargetCard {
+                    subtitle: entry.record.subtitle.as_str().to_owned(),
+                    picture: crate::target_picture::game_target_picture_among(self, &bases, ship)
+                        .map(|p| p.picture),
+                }
+            })
+            .collect()
     }
 
     fn target_code(&self, govt: GovtId) -> Option<String> {
@@ -262,6 +270,17 @@ impl CombatLooks for GameData {
             image: SheetImage::Rled(sheet.image_id),
             frames: sheet.rotations,
             frame_width: sheet.frame_width,
+        })
+    }
+
+    fn star_sheet(&self) -> Result<StarSheet, String> {
+        let spin = self.spin_sheet(STAR_SPIN).map_err(|err| err.to_string())?;
+        // The decoder refuses a sheet without frames.
+        let count = u16::try_from(spin.frame_count()).unwrap_or(u16::MAX);
+        Ok(StarSheet {
+            image_id: spin.image_id,
+            frames: NonZeroU16::new(count).unwrap_or(NonZeroU16::MIN),
+            size: (spin.sheet.frame_width(), spin.sheet.frame_height()),
         })
     }
 
@@ -359,8 +378,8 @@ mod tests {
     use std::path::Path;
 
     use nova_data::Record;
-    use nova_data::graphics::RLED;
     use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
+    use nova_data::graphics::{PICT, RLED};
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
@@ -1095,6 +1114,23 @@ mod tests {
     }
 
     #[test]
+    fn the_stars_sheet_is_spin_700_with_its_frames_width_and_height() {
+        let data = named_store(&[
+            (Spin::TYPE, 700, None, spin(701)),
+            (RLED, 701, None, sheet(16)),
+        ]);
+        assert_eq!(
+            data.star_sheet(),
+            Ok(StarSheet {
+                image_id: 701,
+                frames: NonZeroU16::new(16).expect("non-zero"),
+                size: (3, 2),
+            })
+        );
+        assert_eq!(named_store(&[]).star_sheet(), Err("no spïn 700".to_owned()));
+    }
+
+    #[test]
     fn a_cargo_boxs_sheet_is_spin_500_and_its_graphic() {
         let data = named_store(&[
             (Spin::TYPE, 500, None, spin(600)),
@@ -1125,6 +1161,7 @@ mod tests {
         let data = named_store(&[
             (Boom::TYPE, 130, None, boom(100, 2, 0)),
             (Boom::TYPE, 135, None, boom(30, -1, 5)),
+            (Boom::TYPE, 136, None, boom(100, 64, 0)),
             (Spin::TYPE, 400, None, spin(400)),
             (RLED, 400, None, sheet(12)),
             (Spin::TYPE, 405, None, spin(405)),
@@ -1137,6 +1174,10 @@ mod tests {
         assert_eq!(slow.sheet, Ok(sheet_of(405, 20)));
         assert!((slow.advance - 0.3).abs() < 1e-6, "{slow:?}");
         assert_eq!(slow.sound, None);
+        // `_CreateExplosion` plays `SoundIndex` 0-63 alone
+        // (@0x3f8dc-0x3f8e5).
+        let past = data.boom_look(BoomId(136)).expect("there").expect("reads");
+        assert_eq!(past.sound, None, "past the 64 explosion sounds");
     }
 
     #[test]
@@ -1225,6 +1266,8 @@ mod tests {
         let data = named_store(&[
             (Ship::TYPE, 128, None, subtitled("Light Transport")),
             (Ship::TYPE, 129, None, subtitled("Freighter")),
+            (ShipAnim::TYPE, 128, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 129, None, anim(1100, 1, 8)),
             (PICT, 3000, None, picture(2, 2)),
         ]);
         assert_eq!(
@@ -1243,6 +1286,55 @@ mod tests {
             "without a PICT 3001"
         );
         assert_eq!(data.target_card(ShipId(130)), TargetCard::default());
+    }
+
+    #[test]
+    fn a_target_card_falls_back_to_the_base_ships_picture() {
+        let data = named_store(&[
+            (Ship::TYPE, 128, None, subtitled("Light Transport")),
+            (Ship::TYPE, 129, None, subtitled("Variant")),
+            (Ship::TYPE, 130, None, subtitled("Other Hull")),
+            (Ship::TYPE, 131, None, subtitled("No Anim")),
+            (ShipAnim::TYPE, 128, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 129, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 130, None, anim(1200, 1, 8)),
+            (PICT, 3000, None, picture(2, 2)),
+            (PICT, 3003, None, picture(2, 2)),
+        ]);
+        assert_eq!(
+            data.target_card(ShipId(129)).picture,
+            Some(3000),
+            "128's, the base sharing BaseImage 1000"
+        );
+        assert_eq!(data.target_card(ShipId(130)).picture, None, "no sharer");
+        assert_eq!(
+            data.target_card(ShipId(131)).picture,
+            None,
+            "no shän, though PICT 3003 exists (@0x23ef3)"
+        );
+    }
+
+    #[test]
+    fn a_batch_of_target_cards_is_each_ships_card_in_order() {
+        let data = named_store(&[
+            (Ship::TYPE, 128, None, subtitled("Light Transport")),
+            (Ship::TYPE, 129, None, subtitled("Variant")),
+            (Ship::TYPE, 130, None, subtitled("Other Hull")),
+            (Ship::TYPE, 131, None, subtitled("No Anim")),
+            (ShipAnim::TYPE, 128, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 129, None, anim(1000, 1, 8)),
+            (ShipAnim::TYPE, 130, None, anim(1200, 1, 8)),
+            (PICT, 3000, None, picture(2, 2)),
+            (PICT, 3002, None, picture(2, 2)),
+        ]);
+        let ships = [131, 129, 140, 128, 130, 129].map(ShipId);
+        let one_by_one: Vec<TargetCard> = ships.iter().map(|&s| data.target_card(s)).collect();
+        assert_eq!(data.target_cards(&ships), one_by_one);
+        assert_eq!(one_by_one[0].subtitle, "No Anim");
+        assert_eq!(one_by_one[1].picture, Some(3000), "the base ship's");
+        assert_eq!(one_by_one[2], TargetCard::default(), "no shïp 140");
+        assert_eq!(one_by_one[4].picture, Some(3002), "its own");
+        assert_eq!(data.target_cards(&[]), []);
     }
 
     /// A `gövt` whose `TargetCode` is `code`.

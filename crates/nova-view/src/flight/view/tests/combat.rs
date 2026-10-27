@@ -1,4 +1,5 @@
 use super::*;
+use nova_sim::cloak::CloakShown;
 
 // Traffic.
 
@@ -43,12 +44,12 @@ fn an_npc_is_drawn_with_its_own_sprite_where_it_is_facing_its_heading() {
     assert_eq!(
         sprites(&list),
         [
-            (ImageKey::sprite(1128, 0), at(512.0, -216.0)),
-            (ImageKey::sprite(1129, 1), at(812.0, 184.0)),
-            (ImageKey::sprite(2001, frame), at(612.0, 284.0)),
-            (ImageKey::sprite(2101, frame), at(612.0, 284.0)),
-            (ImageKey::sprite(2201, frame), at(612.0, 284.0)),
-            (ImageKey::sprite(2000, 0), VIEW_CENTER),
+            (ImageKey::sprite(1128, 0), at(415.0, -216.0)),
+            (ImageKey::sprite(1129, 1), at(715.0, 184.0)),
+            (ImageKey::sprite(2001, frame), at(515.0, 284.0)),
+            (ImageKey::sprite(2101, frame), at(515.0, 284.0)),
+            (ImageKey::sprite(2201, frame), at(515.0, 284.0)),
+            (ImageKey::sprite(2000, 0), PLAYER_AT),
         ],
         "after the stellars, before the player, its glow and lights over it"
     );
@@ -87,7 +88,7 @@ fn a_ship_waiting_at_its_gate_is_drawn_by_its_tint_and_any_ship_by_its_cloak() {
 }
 
 #[test]
-fn a_ship_the_player_cannot_see_for_its_cloak_is_not_drawn() {
+fn a_fully_cloaked_ship_is_hidden_and_one_fading_out_drawn_fading() {
     let (_, chance) = scripted(&placed(850, 650, 90));
     let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
         .with_chance(chance)
@@ -101,8 +102,8 @@ fn a_ship_the_player_cannot_see_for_its_cloak_is_not_drawn() {
     npc.cloak.fade = 8.0;
     assert_eq!(
         session.cloak_shown(&npc),
-        CloakShown::Opaque,
-        "faded out enough to be seen"
+        CloakShown::Fading(8.0),
+        "still fading"
     );
 }
 
@@ -132,9 +133,18 @@ fn a_cloaked_ship_is_on_the_radar_only_when_the_session_says() {
 
 #[test]
 fn the_play_area_is_the_screen_left_of_the_status_bar_about_the_ship() {
-    let area = play_area(VIEW_SIZE);
+    let area = play_area(VIEW_SIZE, crate::system::camera::Anchor::PlayAreaCentre);
     assert_eq!(
         area,
+        nova_sim::cloak::Area {
+            left: -415.0,
+            top: -384.0,
+            right: 1024.0 - 194.0 - 415.0,
+            bottom: 384.0,
+        }
+    );
+    assert_eq!(
+        play_area(VIEW_SIZE, crate::system::camera::Anchor::ViewCentre),
         nova_sim::cloak::Area {
             left: -512.0,
             top: -384.0,
@@ -148,6 +158,18 @@ fn the_play_area_is_the_screen_left_of_the_status_bar_about_the_ship() {
         .with_behaviour(Rc::new(Still));
     view.tick(TICK);
     assert_eq!(view.session().expect("flying").play_area(), area, "told");
+}
+
+#[test]
+fn the_play_area_anchor_centres_the_ship_in_the_play_area() {
+    let anchor = crate::system::camera::Anchor::PlayAreaCentre;
+    for width in [800.0, 1024.0, 1280.0, 1366.0] {
+        let view = (width, 768.0);
+        let area = play_area(view, anchor);
+        let screen_mid = (area.right - area.left) * 0.5;
+        assert_eq!(screen_mid, anchor.point(view).x, "width {width}");
+        assert_eq!(area.left + area.right, 0.0, "width {width}");
+    }
 }
 
 #[test]
@@ -598,7 +620,7 @@ fn an_npc_whose_sheet_cannot_be_read_is_a_crossed_box() {
     view.tick(TICK);
     let list = drawn(&view);
     let mut boxed = DrawList::new();
-    crossed_box(&mut boxed, at(612.0, 284.0), PLACEHOLDER_SIZE, PLACEHOLDER);
+    crossed_box(&mut boxed, at(515.0, 284.0), PLACEHOLDER_SIZE, PLACEHOLDER);
     let commands: Vec<_> = list.iter().cloned().collect();
     let expected: Vec<_> = boxed.iter().cloned().collect();
     assert!(
@@ -625,6 +647,78 @@ fn each_ship_types_sheet_is_read_once() {
         [ShipId(128), ShipId(129)],
         "not again"
     );
+}
+
+/// [`trafficked`] in 130 and 131, with 131's traffic düde 129 flying
+/// ships 129 and 130 where 130's flies only 129.
+fn trafficked_with_new_types_in_131() -> FakeCatalog {
+    let mut catalog = trafficked(&[130, 131], 2, 129, 1);
+    let mut dude_types = [(-1, 0); 8];
+    dude_types[0] = (129, 100);
+    catalog.traffic[1].1.dude_types = dude_types;
+    catalog.dudes.push((
+        nova_sim::DudeId(129),
+        nova_sim::DudeRecord {
+            ai_type: 1,
+            govt: None,
+            ships: vec![(ShipId(129), 1), (ShipId(130), 1)],
+            booty: 0,
+            info_types: 0,
+        },
+    ));
+    catalog
+}
+
+#[test]
+fn the_first_step_reads_its_traffic_types_cards_in_one_batch() {
+    let mut view = FlightView::new(trafficked_with_new_types_in_131());
+    ticks(&mut view, 5);
+    assert!(!npc_ids(&view).is_empty());
+    assert_eq!(*view.catalog().cards_asked.borrow(), [vec![ShipId(129)]]);
+    jump_to_alpha(&mut view);
+    assert_eq!(
+        *view.catalog().cards_asked.borrow(),
+        [vec![ShipId(129)], vec![ShipId(130)]],
+        "only the type new to 131"
+    );
+}
+
+#[test]
+fn the_warm_up_reads_the_coming_traffics_sheets_and_cards_so_the_first_step_reads_none() {
+    let mut view = FlightView::new(trafficked(&[130, 131], 3, 129, 1));
+    assert!(!view.has_read_traffic(ShipId(129)), "nothing read yet");
+    view.warm_up_traffic();
+    assert!(view.has_read_traffic(ShipId(129)), "its sheet and card");
+    assert!(!view.has_read_traffic(ShipId(130)), "not coming");
+    assert_eq!(npc_ids(&view), [], "nothing populated");
+    let sheets = view.catalog().sheets_asked.borrow().clone();
+    let cards = view.catalog().cards_asked.borrow().clone();
+    assert_eq!(sheets, [ShipId(128), ShipId(129)]);
+    assert_eq!(cards, [vec![ShipId(129)]]);
+    ticks(&mut view, 5);
+    assert_eq!(npc_ids(&view).len(), 3, "populated by the first step");
+    assert_eq!(*view.catalog().sheets_asked.borrow(), sheets);
+    assert_eq!(*view.catalog().cards_asked.borrow(), cards);
+}
+
+#[test]
+fn a_take_off_after_the_first_step_reads_no_sheet_or_card() {
+    let catalog = FakeCatalog {
+        sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+        ..trafficked(&[130], 2, 129, 1)
+    };
+    let mut view = FlightView::new(catalog);
+    ticks(&mut view, 5);
+    assert!(!npc_ids(&view).is_empty(), "the traffic spawned");
+    let sheets = view.catalog().sheets_asked.borrow().clone();
+    let cards = view.catalog().cards_asked.borrow().clone();
+    assert_eq!(cards, [vec![ShipId(129)]]);
+    land_now(&mut view);
+    view.take_off().expect("took off");
+    ticks(&mut view, 5);
+    assert!(!npc_ids(&view).is_empty(), "the traffic spawned again");
+    assert_eq!(*view.catalog().sheets_asked.borrow(), sheets);
+    assert_eq!(*view.catalog().cards_asked.borrow(), cards);
 }
 
 #[test]
@@ -897,6 +991,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         weapons: vec![exclusive],
         hulls: vec![hull],
         looks: vec![(181, Ok(WeaponLook::default()))],
+        star_sheet: Ok(star_sheet()),
         ..trafficked(&[130], 1, 129, 3)
     };
     let mut view = FlightView::new(catalog)
@@ -931,6 +1026,7 @@ fn a_look_whose_sheet_cannot_be_read_still_sounds_and_is_reported_once() {
             sound: None,
         }),
     ));
+    catalog.star_sheet = Ok(star_sheet());
     let mut view = fighting(catalog, &[]);
     assert_eq!(
         view.take_diagnostics(),
@@ -1022,7 +1118,7 @@ fn r_targets_the_nearest_threat_over_a_nearer_ship_and_brackets_it_red() {
 #[test]
 fn space_fires_the_primaries_and_control_the_secondary_while_held() {
     let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     view.input(&key(FIRE_KEY, true));
     ticks(&mut view, 2);
     view.input(&held(FIRE_KEY));
@@ -1056,7 +1152,7 @@ fn the_flight_keys_are_held_until_let_go_or_released() {
 #[test]
 fn letting_go_of_the_keys_lets_go_of_the_fire_keys() {
     let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     view.input(&key(FIRE_KEY, true));
     view.input(&key(SECONDARY_KEY, true));
     ticks(&mut view, 1);
@@ -1070,31 +1166,93 @@ fn w_selects_the_next_secondary_and_alt_w_the_one_before() {
     let mut view = fighting(armed(0, &[BLASTER, ROCKET, MISSILE, TORCH]), &[]);
     assert_eq!(secondary_of(&view), None);
     tap(&mut view, SELECT_KEY);
+    assert_eq!(secondary_of(&view), None, "until the next step");
+    ticks(&mut view, 1);
     assert_eq!(secondary_of(&view), Some(ROCKET));
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     assert_eq!(secondary_of(&view), Some(MISSILE));
     view.input(&held(SELECT_KEY));
+    ticks(&mut view, 1);
     assert_eq!(secondary_of(&view), Some(MISSILE), "a repeat does nothing");
     view.input(&key(Key::Alt, true));
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     assert_eq!(secondary_of(&view), Some(ROCKET));
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     assert_eq!(secondary_of(&view), Some(TORCH), "wrapping");
     view.input(&key(Key::Alt, false));
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     assert_eq!(secondary_of(&view), Some(ROCKET));
     view.input(&key(Key::Alt, true));
     view.release_keys();
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     assert_eq!(secondary_of(&view), Some(MISSILE), "Alt let go");
     assert_eq!(SELECT_KEY, Key::Char('w'));
+}
+
+#[test]
+fn w_beeps_as_it_selects_and_is_refused_with_no_secondary() {
+    let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+    sims(&mut view);
+    tap_and_step(&mut view, SELECT_KEY);
+    assert_eq!(count(&mut view, SimSound::SecondarySelected), 1);
+    let mut unarmed = fighting(armed(0, &[BLASTER]), &[]);
+    sims(&mut unarmed);
+    tap_and_step(&mut unarmed, SELECT_KEY);
+    assert_eq!(count(&mut unarmed, SimSound::Refused), 1);
+    assert_eq!(secondary_of(&unarmed), None);
+}
+
+#[test]
+fn s_held_lets_go_of_the_secondary_on_the_next_step_and_beeps_once() {
+    let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+    tap_and_step(&mut view, SELECT_KEY);
+    sims(&mut view);
+    view.input(&key(DESELECT_KEY, true));
+    assert_eq!(secondary_of(&view), Some(ROCKET), "until the next step");
+    ticks(&mut view, 1);
+    assert_eq!(secondary_of(&view), None);
+    assert_eq!(count(&mut view, SimSound::SecondarySelected), 1);
+    ticks(&mut view, 2);
+    assert_eq!(count(&mut view, SimSound::SecondarySelected), 0, "held");
+    view.input(&key(DESELECT_KEY, false));
+    tap_and_step(&mut view, SELECT_KEY);
+    assert_eq!(secondary_of(&view), Some(ROCKET), "let go of");
+    assert_eq!(DESELECT_KEY, Key::Char('s'));
+}
+
+#[test]
+fn s_with_no_secondary_selected_is_silent() {
+    let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+    sims(&mut view);
+    view.input(&key(DESELECT_KEY, true));
+    ticks(&mut view, 2);
+    assert_eq!(secondary_of(&view), None);
+    assert_eq!(count(&mut view, SimSound::SecondarySelected), 0);
+}
+
+#[test]
+fn s_pressed_while_the_map_is_open_does_nothing_once_it_closes() {
+    let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+    tap_and_step(&mut view, SELECT_KEY);
+    tap(&mut view, MAP);
+    view.input(&key(DESELECT_KEY, true));
+    tap(&mut view, MAP);
+    ticks(&mut view, 2);
+    assert_eq!(secondary_of(&view), Some(ROCKET));
 }
 
 #[test]
 fn the_combat_keys_do_nothing_while_the_map_is_open() {
     let mut view = fighting(armed(2, &[BLASTER, ROCKET, MISSILE]), &two_npcs());
     tap(&mut view, MAP);
-    for k in [Key::Tab, NEAREST_KEY, SELECT_KEY, FIRE_KEY, SECONDARY_KEY] {
+    for k in [
+        Key::Tab,
+        NEAREST_KEY,
+        SELECT_KEY,
+        DESELECT_KEY,
+        FIRE_KEY,
+        SECONDARY_KEY,
+    ] {
         view.input(&key(k, true));
     }
     tap(&mut view, MAP);
@@ -1174,7 +1332,7 @@ fn the_sounds_are_the_sessions_then_the_fights() {
     );
 }
 
-fn line_in(color: Color) -> impl Fn(&DrawCommand) -> bool {
+pub(super) fn line_in(color: Color) -> impl Fn(&DrawCommand) -> bool {
     move |command| matches!(command, DrawCommand::Line { color: c, .. } if *c == color)
 }
 
@@ -1182,7 +1340,12 @@ fn line_in(color: Color) -> impl Fn(&DrawCommand) -> bool {
 /// firing its blaster (which explodes where it hits) and two beams, one
 /// drawn under the ships and one over them, at it.
 fn firing_at_an_npc() -> View {
-    let catalog = armed(1, &[BLASTER, UNDER, OVER]);
+    firing_at_an_npc_in(armed(1, &[BLASTER, UNDER, OVER]))
+}
+
+/// [`firing_at_an_npc`] from `catalog`, an [`armed`] one carrying the
+/// blaster and the two beams.
+pub(super) fn firing_at_an_npc_in(catalog: FakeCatalog) -> View {
     let mut view = fighting(catalog, &placed(750, 650, 180));
     tap(&mut view, Key::Tab);
     view.input(&key(FIRE_KEY, true));
@@ -1208,16 +1371,52 @@ fn the_fight_is_drawn_between_the_stellars_and_the_hud_in_order() {
     );
     let hud = hud_at(&list);
     // An unguided shot is in the shot layer 0x3b52f0, under the intact
-    // ships (`_SetupSpriteWorld` @0x21d0c-0x21e24).
+    // ships, and the explosion in `_explodLayer` 0x3b52b8, under the target
+    // layer's brackets and then its beams (`_SetupSpriteWorld`
+    // @0x21d0c-0x21e24).
     let order = [
-        stellar, under, shot, npc, ship, over, explosion, brackets, title, hud,
+        stellar, under, shot, npc, ship, explosion, brackets, over, title, hud,
     ];
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
-    let DrawCommand::Sprite { tint, .. } = list.iter().nth(explosion).cloned().expect("drawn")
+    let DrawCommand::Sprite { tint, blend, .. } =
+        list.iter().nth(explosion).cloned().expect("drawn")
     else {
         panic!("a sprite")
     };
-    assert_eq!(tint, translucent());
+    // The default catalog's system is clear (`sol_murk` 0): added at full,
+    // unmurked (`_HandleExplods` @0x2f7b0-0x2f7e2).
+    assert_eq!((blend, tint), (Blend::Or, lights_tint(32)));
+}
+
+#[test]
+fn an_explosion_in_a_murky_system_is_murked_as_the_player_sees_it() {
+    let mut catalog = armed(1, &[BLASTER, UNDER, OVER]);
+    catalog.sol_murk = 100;
+    let view = firing_at_an_npc_in(catalog);
+    let session = view.session().expect("flying");
+    let murk = session.effective_murk();
+    assert_eq!(murk, 100);
+    let boom = view.effects().explosions()[0].at;
+    let level = crate::flight::murk::sprite_murk(
+        nova_sim::Vec2::new(boom.x, boom.y),
+        session.player().position,
+        murk,
+    );
+    assert!(level > 0, "murked where it went off: {boom:?}");
+    let list = drawn(&view);
+    let explosion = first(&list, sprite_of(400));
+    let DrawCommand::Sprite { tint, blend, .. } =
+        list.iter().nth(explosion).cloned().expect("drawn")
+    else {
+        panic!("a sprite")
+    };
+    assert_eq!(
+        (blend, tint),
+        (
+            Blend::Or,
+            crate::flight::murk::murk_tint(lights_tint(32), level)
+        )
+    );
 }
 
 #[test]
@@ -1743,6 +1942,31 @@ fn an_exploded_player_takes_no_command() {
     assert_eq!(view.take_landing(), None);
     assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS));
     assert_ne!(view.message(), Some(NO_ESCORTS));
+}
+
+#[test]
+fn a_refused_nav_stops_the_held_slot_keys_once_the_player_has_exploded() {
+    for k in [
+        Key::Function(1),
+        STELLAR_SLOT_KEYS[1][0],
+        NEAREST_STELLAR_KEY,
+    ] {
+        let mut view = exploded();
+        let nav = nav_target(&view);
+        view.take_sounds();
+        view.input(&key(k, true));
+        ticks(&mut view, 3);
+        assert_eq!(nav_target(&view), nav, "{k:?} held");
+        view.input(&key(k, false));
+        tap_slot(&mut view, k);
+        assert_eq!(nav_target(&view), nav, "{k:?} tapped");
+        assert!(
+            !view
+                .take_sounds()
+                .contains(&Sound::Sim(SimSound::NavSelected)),
+            "{k:?}: no select sound"
+        );
+    }
 }
 
 /// Where `view` draws [`catalog`]'s stellar 129, checked to be in the
@@ -2284,10 +2508,99 @@ fn arriving_clears_the_effects() {
     assert_eq!(*view.effects(), Effects::default());
 }
 
+/// [`armed`]'s flight whose Proxima, 140, Alpha Centauri's stellar at its
+/// centre, explodes in `bööm` 128 (explosion type 0), which sounds `snd `
+/// 302, as a crön's `Y140` destroys it on the first day.
+fn proxima_on_the_day() -> FakeCatalog {
+    let mut catalog = armed(0, &[BLASTER]);
+    catalog.lives = vec![nova_sim::StellarLife {
+        explosion: nova_sim::catalog::Explosion::decode(0),
+        ..life(140, 0)
+    }];
+    catalog.boom_sounds = vec![(nova_sim::BoomId(128), nova_sim::SoundId(302))];
+    catalog.crons = vec![nova_sim::catalog::CronRecord {
+        id: nova_sim::catalog::CronId(128),
+        first_day: 0,
+        first_month: 0,
+        first_year: 0,
+        last_day: 0,
+        last_month: 0,
+        last_year: 0,
+        random: 100,
+        duration: 0,
+        pre_holdoff: 0,
+        post_holdoff: 0,
+        flags: 0,
+        enable_on: Test::default(),
+        on_start: nova_sim::Script::parse("Y140"),
+        on_end: nova_sim::Script::default(),
+        contribute: 0,
+        require: 0,
+        news_govt: [-1; 4],
+        govt_news: [-1; 4],
+        ind_news: -1,
+    }];
+    catalog
+}
+
+/// Jumps to Alpha Centauri, ticking until the tick the session arrives,
+/// and no further.
+fn arrive_in_131(view: &mut View) {
+    plot(view, 131);
+    fly_out(view);
+    jump_now(view);
+    for _ in 0..1000 {
+        view.tick(TICK);
+        if view.session().expect("flying").system() == SystemId(131) {
+            return;
+        }
+    }
+    panic!("never arrived");
+}
+
+#[test]
+fn a_crons_y_on_a_jumps_day_is_drawn_on_the_arrivals_first_frame() {
+    // The explosion stays in the explod table through the arrival
+    // (@0x1d7fb), advanced once by `_PrepareAllSprites` (@0x6c59c).
+    let mut view = fighting(proxima_on_the_day(), &[]);
+    arrive_in_131(&mut view);
+    let explosions = view.effects().explosions();
+    assert_eq!(explosions.len(), 1, "{explosions:?}");
+    assert_eq!(explosions[0].boom, nova_sim::BoomId(128));
+    assert_eq!(explosions[0].at, Point::new(0.0, 0.0), "Proxima's place");
+    assert_eq!(explosions[0].frame, 1.0, "advanced once");
+}
+
+#[test]
+fn a_ys_explosion_plays_no_boom_sound_from_the_view() {
+    let mut view = fighting(proxima_on_the_day(), &[]);
+    arrive_in_131(&mut view);
+    let mut sounds = view.take_sounds();
+    view.tick(TICK);
+    sounds.extend(view.take_sounds());
+    let heard = |sound: &Sound| match sound {
+        Sound::Sim(nova_sim::SimSound::Explosion { sound, .. })
+        | Sound::Combat(CombatSound { sound, .. }) => *sound == nova_sim::SoundId(302),
+        _ => false,
+    };
+    assert_eq!(
+        sounds
+            .iter()
+            .filter(|sound| heard(sound))
+            .collect::<Vec<_>>(),
+        [&Sound::Sim(nova_sim::SimSound::Explosion {
+            sound: nova_sim::SoundId(302),
+            offset: (1350, 0),
+            priority: 6,
+        })],
+        "the session's, once"
+    );
+}
+
 /// [`armed`]'s NPC, shïp 129, of `DeathDelay` 4 and one crew pod, which
 /// one hit of the player's blaster breaks up: the pod comes out on its
 /// explosion tick, at a timer of 2.
-fn podding() -> FakeCatalog {
+pub(super) fn podding() -> FakeCatalog {
     let mut catalog = armed(1, &[BLASTER]);
     catalog.weapons[0].energy_dmg = 200;
     catalog.weapons[0].mass_dmg = 200;
@@ -2297,7 +2610,7 @@ fn podding() -> FakeCatalog {
 }
 
 /// Fires at the targeted NPC until its pod is adrift.
-fn eject_a_pod(view: &mut View) {
+pub(super) fn eject_a_pod(view: &mut View) {
     tap(view, Key::Tab);
     view.input(&key(FIRE_KEY, true));
     for _ in 0..40 {
@@ -2465,7 +2778,7 @@ fn the_target_is_bracketed_and_its_panel_shows_it() {
 #[test]
 fn the_nav_brackets_draw_under_the_ship_brackets() {
     let mut view = firing_at_an_npc();
-    tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+    tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
     let list = drawn(&view);
     let nav = first(&list, icon_in(10000..=10007));
     let ship = first(&list, icon_in(10008..=10023));
@@ -2697,7 +3010,7 @@ fn the_hud_shows_no_target_and_the_secondary_weapon() {
     let list = texts(&drawn(&view));
     assert!(list.contains(&NO_TARGET.to_owned()), "{list:?}");
     assert!(list.contains(&NO_SECONDARY.to_owned()), "{list:?}");
-    tap(&mut view, SELECT_KEY);
+    tap_and_step(&mut view, SELECT_KEY);
     let list = texts(&drawn(&view));
     assert!(list.contains(&"Rocket".to_owned()), "{list:?}");
     let unarmed = texts(&drawn(&fighting(armed(0, &[BLASTER]), &[])));

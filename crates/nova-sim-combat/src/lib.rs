@@ -7,6 +7,10 @@
 //! `nova_sim::Armament`, …), so the rest of the workspace reaches them
 //! through it.
 //!
+//! - [`area_cloak`]: area cloaks: whether an escort in close formation
+//!   rides its cloaked leader's area cloak ([`area_cloak::rides`]), so has
+//!   a cloak ([`area_cloak::has_cloak`]), and whether the frame's hold keeps
+//!   it ([`area_cloak::holds`]).
 //! - [`asteroid`]: a system's asteroid field: the 16 slots
 //!   ([`Asteroids`](asteroid::Asteroids)), how an asteroid spawns at the
 //!   field's edge or in place, how it drifts and spins, and when it is
@@ -61,7 +65,8 @@
 //! - [`self_repair`]: a disabled ship repairing itself
 //!   ([`can_self_repair`](self_repair::can_self_repair)), and a former
 //!   escort rejoining the player as it does.
-//! - [`sprite_layer`]: the order the ship and shot layers are drawn in.
+//! - [`sprite_layer`]: the order the flight world's sprite layers, beams
+//!   and particles are drawn in.
 //! - [`ship_layer`]: the layers ships are drawn in
 //!   ([`ShipLayer`](ship_layer::ShipLayer)): the disabled at the bottom,
 //!   then the ships the player leads, then the rest with the player.
@@ -87,6 +92,7 @@ use nova_sim_catalog::{ControlBits, buoy, catalog, control};
 #[allow(unused_imports)]
 use nova_sim_state::{clearance, cron, govt, legal};
 
+pub mod area_cloak;
 pub mod asteroid;
 pub mod bay;
 pub mod cloak;
@@ -94,6 +100,7 @@ pub mod combat;
 pub mod comm_line;
 pub mod fleet;
 pub mod message;
+pub mod player_cloak;
 pub mod player_fate;
 pub mod sabotage;
 pub mod self_destruct;

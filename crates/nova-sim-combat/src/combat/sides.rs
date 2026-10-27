@@ -69,7 +69,12 @@
 //! - that shares its firer's root (`_ShipsShareParent` @0x7926-0x79c1,
 //!   10): each climbs its leaders while it is active and has a leader not
 //!   itself, so the player's shots pass through the ships it leads and
-//!   theirs through it.
+//!   theirs through it;
+//! - at all, while its firer, an NPC, mines asteroid slot 0 (6k,
+//!   @0x44a54-0x44a6f: an owner index above 0 and
+//!   `_AIShipIsAttackingAsteroid`, its state 16, [`Ties::mining`]). The
+//!   state is the firer's at hit time, so a shot in flight from a miner
+//!   that has since been provoked hits.
 //!
 //! A beam ([`Sides::beam_can_hit`]) never hits a destroyed ship, but does
 //! stop on one breaking up, and tests no government; it never hits its
@@ -80,7 +85,11 @@
 //! fight's [`BeamPlanetFlag`] reads from its weapon's `Flags` by the
 //! original and its `Flags2` by the Bible
 //! ([`planet_type::beam_may_hit`]), or class 0x2ff itself, a later class
-//! being hit (@0x30dd2-0x30dd8).
+//! being hit (@0x30dd2-0x30dd8). Nor does it hit any ship while its
+//! firer, an NPC, mines ([`Ties::mining`]): `_HandleBeams` skips the ship
+//! it found and goes on to its asteroid pass (@0x30f4c-0x30f8c →
+//! @0x316c2), so a mining beam cuts the asteroid behind a ship
+//! ([`asteroid_beam`](super::asteroid_beam)).
 //!
 //! The flag rules (6g-6j, 9 and the beam's pairs) count the player as the
 //! fight's [`PassThrough`] says: the original's whole player side, or the
@@ -111,10 +120,9 @@
 //!
 //! Left out, each with its owner: the nag ship (@0x44803), as there is
 //! none; two defence ships of one stellar (6c, @0x44893) and a non-ship
-//! shot's +0x8c clause (@0x44a81), task `planet-domination`; a miner's
-//! shots and beams (6k, @0x44a54; @0x30f4c), asteroids phase 5; the
-//! beam's system test (@0x30dc1), as only the player's system is
-//! simulated. None of these functions draws or plays a sound.
+//! shot's +0x8c clause (@0x44a81), task `planet-domination`; the beam's
+//! system test (@0x30dc1), as only the player's system is simulated. None
+//! of these functions draws or plays a sound.
 
 use super::ShipRef;
 use super::beam::Beam;
@@ -151,6 +159,10 @@ pub struct Ties {
     /// +0x9e8), which the planet-type rules match against a weapon's
     /// ([`planet_type`](super::planet_type)).
     pub planet_type: bool,
+    /// Whether it is an NPC mining asteroid slot 0, the original's state
+    /// 16 (`_AIShipIsAttackingAsteroid` @0x8982b): its shots and beams
+    /// pass through every ship. Never the player.
+    pub mining: bool,
 }
 
 impl Ties {
@@ -227,6 +239,9 @@ impl Sides<'_> {
         let firer = shot.firer;
         let ties = self.ties_of(firer, kept);
         let theirs = target.ties;
+        if ties.mining {
+            return false;
+        }
         if target.ship == firer
             || (ties.leader.is_some() && ties.leader == theirs.leader)
             || (ties.govt.is_some() && ties.govt == theirs.govt)
@@ -275,6 +290,9 @@ impl Sides<'_> {
             return false;
         }
         let ties = self.ties_of(firer, beam.ties);
+        if ties.mining {
+            return false;
+        }
         let theirs = target.ties;
         let allied = self.allied_with_player(target.ship, theirs.leader);
         if let Some(leader) = theirs.leader
@@ -608,6 +626,84 @@ mod tests {
             ..rolled(Some(100))
         };
         assert!(among(&[]).shot_can_hit(&shot, &classed(80, Condition::Intact)));
+    }
+
+    /// `npc(1)`, mining as `mining` says, and `npc(2)` beside it.
+    fn mining_pair(mining: bool) -> [Target; 2] {
+        let mut miner = ship(npc(1), None);
+        miner.ties.mining = mining;
+        [miner, ship(npc(2), None)]
+    }
+
+    /// A gun shot of `npc(1)`'s, its ties kept as `kept`.
+    fn miners_shot(kept: Ties) -> Shot {
+        Shot {
+            source: Source::Ship(kept),
+            ..Shot::launch(
+                WeaponSpec::new(&weapon(128)),
+                npc(1),
+                npc(1),
+                &ShipState::default(),
+                0.0,
+            )
+        }
+    }
+
+    /// A beam of `npc(1)`'s, its ties kept as `kept`.
+    fn miners_beam(kept: Ties) -> Beam {
+        Beam {
+            ties: kept,
+            ..Beam::launch(
+                WeaponSpec::new(&crate::catalog::WeaponRecord {
+                    guidance: 0,
+                    ..weapon(128)
+                }),
+                npc(1),
+                npc(1),
+                &ShipState::default(),
+                crate::combat::beam::Aiming::Ahead,
+            )
+        }
+    }
+
+    #[test]
+    fn a_mining_ships_shots_and_beams_hit_no_ship() {
+        let targets = mining_pair(true);
+        let sides = among(&targets);
+        let kept = targets[0].ties;
+        assert!(!sides.shot_can_hit(&miners_shot(kept), &targets[1]));
+        assert!(!sides.beam_can_hit(&miners_beam(kept), &targets[1]));
+    }
+
+    #[test]
+    fn a_ship_not_mining_hits_with_the_same_shots_and_beams() {
+        let targets = mining_pair(false);
+        let sides = among(&targets);
+        let kept = targets[0].ties;
+        assert!(sides.shot_can_hit(&miners_shot(kept), &targets[1]));
+        assert!(sides.beam_can_hit(&miners_beam(kept), &targets[1]));
+    }
+
+    #[test]
+    fn a_miners_fire_reads_its_ties_now_over_those_it_kept() {
+        let mined = Ties {
+            mining: true,
+            ..Ties::default()
+        };
+        let stopped = mining_pair(false);
+        let sides = among(&stopped);
+        assert!(sides.shot_can_hit(&miners_shot(mined), &stopped[1]));
+        assert!(sides.beam_can_hit(&miners_beam(mined), &stopped[1]));
+        let started = mining_pair(true);
+        let sides = among(&started);
+        let unmined = Ties::default();
+        assert!(!sides.shot_can_hit(&miners_shot(unmined), &started[1]));
+        assert!(!sides.beam_can_hit(&miners_beam(unmined), &started[1]));
+        // Gone from the fight, the copy it kept.
+        let left = [ship(npc(2), None)];
+        let sides = among(&left);
+        assert!(!sides.shot_can_hit(&miners_shot(mined), &left[0]));
+        assert!(!sides.beam_can_hit(&miners_beam(mined), &left[0]));
     }
 
     #[test]

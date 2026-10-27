@@ -4,8 +4,9 @@
 //! line of a failed mission's ship and the assist path's hold.
 //!
 //! **The checks** ([`check_board`](crate::board::check_board)) see the
-//! target with its class's `Crew` and whether it carries a mission's mark,
-//! and read
+//! target with its class's `Crew`, whether it carries a mission's mark,
+//! whether it remembers being the player's escort and whether the
+//! [`NAG_SHIP`] flies it, and read
 //! [`RuleKey::CrewlessMissionShip`](crate::RuleKey::CrewlessMissionShip):
 //! by the engine a mission's special ship is boarded whatever its crew.
 //!
@@ -24,9 +25,10 @@
 //! ship, which takes the first. A person with a `LinkMission` never calls
 //! it, whatever its `Flags`: with 0x0200 its offer (@0x65907) or, its
 //! mission unavailable, its plunder (@0x65991); without, the plunder past
-//! it (@0x65a21 → @0x65ede). The fighter and escort cases that skip it are
-//! the boarding and fighter-bay follow-ups' (rdm:task/boarding-follow-up,
-//! rdm:task/fighter-bays-follow-up). The call is a strike that is answered
+//! it (@0x65a21 → @0x65ede). The own-ship paths never call it (see the
+//! `board_repair` module), and a ship the [`BOUNTY_HUNTER`](crate::board::BOUNTY_HUNTER) or the
+//! [`NAG_SHIP`] flies always does, whatever its `LinkMission`, as its board
+//! skips the person test (@0x657e9-0x657fe → @0x65ed9). The call is a strike that is answered
 //! but not direct ([`Strike::direct`]): `_DoGoodSamaritan` writes only goal
 //! 4 and the target on the ships its gates pass (@0x82891-0x82ba8), so the
 //! ship boarded and its lead draw no hit's reaction, cut no wait and ask
@@ -49,7 +51,7 @@
 //! no wait.
 
 use super::{Outbox, Session, Space, Statics};
-use crate::board::{BoardRefusal, BoardTarget, MissionBoardLine};
+use crate::board::{BoardRefusal, BoardTarget, MissionBoardLine, NAG_SHIP};
 use crate::combat::{Nominal, ShipRef, Strike};
 use crate::sound::SimSound;
 use crate::traffic::npc::{Npc, NpcId};
@@ -102,8 +104,10 @@ impl Outbox {
 
 impl Statics {
     /// `npc` as the boarding checks see it: its class's `Crew` (none
-    /// without a record) and whether it carries a mission's mark, failed,
-    /// standing or stale.
+    /// without a record), whether it carries a mission's mark, failed,
+    /// standing or stale, whether it remembers being the player's escort
+    /// ([`Npc::former`]) and whether the
+    /// [`NAG_SHIP`] flies it.
     pub(super) fn board_target(&self, npc: &Npc) -> BoardTarget {
         BoardTarget {
             state: npc.state,
@@ -111,6 +115,8 @@ impl Statics {
             boarded: npc.boarded,
             crew: self.crew(npc.ship),
             mission: npc.mission.is_some(),
+            former: npc.former.is_some(),
+            nag_ship: npc.person.is_some_and(|person| person.id == NAG_SHIP),
             reach: npc.hull.board_reach,
         }
     }
@@ -134,11 +140,18 @@ impl Space {
     /// pilot can't be saved in it, so the lag crosses no boundary the
     /// player sees or keeps.
     pub(super) fn call_good_samaritans(&mut self, npc: &Npc) {
-        if !calls_good_samaritan(npc) {
-            return;
+        if calls_good_samaritan(npc) {
+            self.call_samaritans_to(npc.id);
         }
+    }
+
+    /// Calls the NPCs to NPC `id`'s help as
+    /// [`Space::call_good_samaritans`] does, whoever flies it: the call
+    /// a ship the [`BOUNTY_HUNTER`](crate::board::BOUNTY_HUNTER) or the [`NAG_SHIP`] flies makes
+    /// whatever its `LinkMission` (@0x65ed9, see the module docs).
+    pub(super) fn call_samaritans_to(&mut self, id: NpcId) {
         self.strikes.push(Strike {
-            ship: ShipRef::Npc(npc.id),
+            ship: ShipRef::Npc(id),
             by: Some(ShipRef::Player),
             damage: 0.0,
             downed: None,
@@ -346,6 +359,29 @@ mod tests {
     }
 
     #[test]
+    fn the_nag_ship_cannot_be_boarded() {
+        // +0xc8d0 0x3ff (@0x650b7-0x650c0 → #130).
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.space.traffic.npcs_mut()[0].person =
+            Some(crate::session::tests::flown_by(crate::board::NAG_SHIP.0));
+        let _ = session.take_sounds();
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Err(BoardRefusal::CantBoard)
+        );
+        assert_eq!(session.take_sounds(), [SimSound::Refused]);
+        assert!(!session.npcs()[0].boarded);
+        session.space.traffic.npcs_mut()[0].person = Some(crate::session::tests::flown_by(
+            crate::board::BOUNTY_HUNTER.0,
+        ));
+        assert!(
+            board_by(&mut session, &NovaLaw::default()).is_ok(),
+            "the bounty hunter boards"
+        );
+    }
+
+    #[test]
     fn no_target_not_facing_it_or_a_landed_ship_is_refused_silently() {
         let catalog = boardable();
         let silent: [Refusal; 3] = [
@@ -378,6 +414,55 @@ mod tests {
             );
             assert_eq!(session.take_sounds(), [], "{why}");
         }
+    }
+
+    /// A full cloak, which reads cloaked.
+    const CLOAKED: crate::cloak::Cloak = crate::cloak::Cloak {
+        fade: crate::cloak::FADE_FULL,
+        direction: 0,
+    };
+
+    #[test]
+    fn a_cloaked_player_boards_nothing_silently() {
+        // `_ShipIsCloaked` @0x6503f → 0x6605a, before the latch
+        // (@0x6504c) and every check.
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.ship.cloak.cloak = CLOAKED;
+        session.ship.player.velocity = Vec2::new(0.3, 0.0);
+        let pilot = session.pilot().clone();
+        let _ = session.take_sounds();
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Err(BoardRefusal::Cloaked)
+        );
+        assert_eq!(session.take_sounds(), [], "no beep");
+        assert_eq!(session.take_board_line(), None, "no line");
+        assert_eq!(session.space.strikes, [], "no samaritans");
+        assert_eq!(session.pilot(), &pilot, "no conviction");
+        assert_eq!(session.ship.player.velocity, Vec2::new(0.3, 0.0));
+        assert!(!session.npcs()[0].boarded);
+        session.ship.cloak.cloak = crate::cloak::Cloak {
+            fade: 10.0,
+            direction: 1,
+        };
+        assert!(
+            board_by(&mut session, &NovaLaw::default()).is_ok(),
+            "still fading in"
+        );
+    }
+
+    #[test]
+    fn a_cloaked_player_with_no_target_is_refused_no_target() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.ship.cloak.cloak = CLOAKED;
+        session.chart.target = None;
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Err(BoardRefusal::NoTarget),
+            "@0x65031 first"
+        );
     }
 
     #[test]

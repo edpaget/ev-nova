@@ -1,30 +1,27 @@
-//! Which systems a map outfit explores ([`map_reveals`]), as the
-//! [`MapReach`] its `ModVal` gives says (see
+//! Which walks a map outfit runs ([`map_walks`]), as the [`MapReach`]
+//! its `ModVal` gives says (see
 //! [`outfit_effects`](crate::outfit_effects)), and which systems are
 //! inhabited ([`inhabited`]). Both follow the
-//! [`RuleKey::MapExplore`](crate::RuleKey::MapExplore) rule.
+//! [`RuleKey::MapExplore`](crate::RuleKey::MapExplore) rule; the walk
+//! itself is the [`map_walk`](crate::map_walk) module's.
 //!
-//! **Within N jumps** ([`MapReach::Jumps`]). By the engine,
-//! `_AutoSetExploration` (@0xdaba) clears a visited set and calls
-//! `_RecursiveAutoExplore` (@0xd942) on the player's system at depth 0.
-//! That walk returns at once when the depth is above N or the system was
-//! visited; otherwise it marks the system visited, explores it, and
-//! recurses into each of its Con1 to Con16 links in order, each resolved
-//! to the active system at the link's position, at depth + 1
-//! ([`StarMap::ordered_jumps`]). It is depth first, so a system first
-//! reached the long way round, too deep to go on from, is never entered
-//! again by a shorter way, and the systems beyond it within N jumps are
-//! missed. By the Bible ("how many jumps away from the current system to
-//! explore"), every system within N jumps is explored, breadth first.
-//! Both follow the session's [`HyperlinkRule`].
+//! **Within N jumps** ([`MapReach::Jumps`]): one walk from the player's
+//! system, reaching N (`_GrantOutfitItem` @0x44da6-0x44dcb).
 //!
 //! **Inhabited independent systems** ([`MapReach::InhabitedIndependent`],
-//! @0x44ddb-0x44e26): every system on the map with no government that is
-//! [`inhabited`].
+//! @0x44ddb-0x44e26): a walk reaching 0 over every system on the map with
+//! no government that is [`inhabited`], by ascending ID (@0x44e12).
 //!
-//! **A government class** ([`MapReach::GovtClass`], @0x44e2e-0x44ea1):
-//! every system whose government has the class in one of its four
-//! `Class` fields; an independent system never.
+//! **A government class** ([`MapReach::GovtClass`], @0x44e2e-0x44ea1): a
+//! walk reaching 0 over every system whose government has the class in
+//! one of its four `Class` fields, by ascending ID (@0x44e86); an
+//! independent system never.
+//!
+//! The original tests each system as its loop reaches it, so a walk run
+//! before could change the next test. It reads the system's visibility
+//! (+0x1eb), government (+0x8) and stellars, which change only at a
+//! refresh, and no `OnExplore` refreshes (no set operator writes the
+//! galaxy overlay), so they are worked out first here.
 //!
 //! **Inhabited.** `_SystemIsInhabited` (@0x4c4a) reads only a system's
 //! *first four* `NavDefs` slots ([`ENGINE_SLOTS`]): it is inhabited when
@@ -58,8 +55,8 @@
 //!
 //! The original's walk also explores the nebulae near each system
 //! (`_ExploreNebulaeFromSystem`, not its head's): the session raises
-//! `Explored` for each system reached, and its `nebulae` module explores
-//! them (see the [`nebula`](crate::nebula) module).
+//! `Explored` for each system reached and dispatches it at once (see the
+//! [`map_walk`](crate::map_walk) and [`nebula`](crate::nebula) modules).
 //!
 //! **Known** ([`known_from`]). A system's known flag (+0x1ec) is what the
 //! galaxy map draws besides the explored systems (`_DrawMap` @0xea0b,
@@ -82,11 +79,11 @@
 //! explored systems, then the charted ones, raising each member to its
 //! head's level.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 
 use crate::catalog::SystemId;
 use crate::govt::Governments;
-use crate::hyperspace::{HyperlinkRule, Places, StarMap};
+use crate::hyperspace::{Places, StarMap};
 use crate::outfit_effects::MapReach;
 use crate::rulebook::RuleSource;
 use crate::story::OverlaidGalaxy;
@@ -115,30 +112,23 @@ pub fn inhabited(stellars: &[Option<(u32, u16)>], source: RuleSource) -> bool {
         .any(|&(flags, flags2)| flags & UNINHABITED == 0 && flags2 & GATES == 0)
 }
 
-/// The systems a map reaching `reach` explores from the player's system
-/// `from`, along `map`'s hyperlinks under `hyperlinks`, with `govts`'
-/// classes, as `source` says (see the module docs).
+/// The walks a map reaching `reach` runs from the player's system
+/// `from`, over `map` with `govts`' classes, inhabited as `source` says
+/// (see the module docs): each walk's origin and reach, in order.
 #[must_use]
-pub fn map_reveals(
+pub fn map_walks(
     reach: MapReach,
     from: SystemId,
     map: &StarMap,
-    hyperlinks: HyperlinkRule,
     govts: &Governments,
     source: RuleSource,
-) -> BTreeSet<SystemId> {
+) -> Vec<(SystemId, u16)> {
     match reach {
-        MapReach::Jumps(most) => match source {
-            RuleSource::Engine => {
-                let mut visited = BTreeSet::new();
-                walk(map, hyperlinks, from, 0, most, &mut visited);
-                visited
-            }
-            RuleSource::Bible => within(map, hyperlinks, from, most),
-        },
+        MapReach::Jumps(most) => vec![(from, most)],
         MapReach::InhabitedIndependent => map
             .systems()
             .filter(|&id| map.govt(id).is_none() && inhabited(map.stellars(id), source))
+            .map(|id| (id, 0))
             .collect(),
         MapReach::GovtClass(class) => map
             .systems()
@@ -147,26 +137,9 @@ pub fn map_reveals(
                     .and_then(|govt| govts.get(govt))
                     .is_some_and(|record| record.classes.contains(&class))
             })
+            .map(|id| (id, 0))
             .collect(),
-        MapReach::Nothing => BTreeSet::new(),
-    }
-}
-
-/// The engine's depth-first walk from `at`, `depth` jumps out, to at most
-/// `most` (`_RecursiveAutoExplore` @0xd942).
-fn walk(
-    map: &StarMap,
-    hyperlinks: HyperlinkRule,
-    at: SystemId,
-    depth: u32,
-    most: u16,
-    visited: &mut BTreeSet<SystemId>,
-) {
-    if depth > u32::from(most) || !visited.insert(at) {
-        return;
-    }
-    for next in map.ordered_jumps(at, hyperlinks) {
-        walk(map, hyperlinks, next, depth + 1, most, visited);
+        MapReach::Nothing => Vec::new(),
     }
 }
 
@@ -259,28 +232,6 @@ pub fn known_from(galaxy: &OverlaidGalaxy, explored: &BTreeSet<SystemId>) -> BTr
     known
 }
 
-/// Every system within `most` jumps of `from`, `from` among them.
-fn within(
-    map: &StarMap,
-    hyperlinks: HyperlinkRule,
-    from: SystemId,
-    most: u16,
-) -> BTreeSet<SystemId> {
-    let mut reached = BTreeSet::from([from]);
-    let mut queue = VecDeque::from([(from, 0)]);
-    while let Some((at, depth)) = queue.pop_front() {
-        if depth == most {
-            continue;
-        }
-        for next in map.jumps(at, hyperlinks) {
-            if reached.insert(next) {
-                queue.push_back((next, depth + 1));
-            }
-        }
-    }
-    reached
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,110 +243,22 @@ mod tests {
         list.iter().copied().map(SystemId).collect()
     }
 
-    fn reveals(
-        map: &StarMap,
-        reach: MapReach,
-        from: i16,
-        source: RuleSource,
-    ) -> BTreeSet<SystemId> {
-        map_reveals(
-            reach,
-            SystemId(from),
-            map,
-            HyperlinkRule::Engine,
-            &Governments::default(),
-            source,
-        )
-    }
-
-    /// 128 - 129 - 130 - 131 in a line, each linking the next and back.
-    fn line() -> StarMap {
-        StarMap::new(vec![
-            star(128, (0.0, 0.0), &[129]),
-            star(129, (1.0, 0.0), &[128, 130]),
-            star(130, (2.0, 0.0), &[129, 131]),
-            star(131, (3.0, 0.0), &[130]),
-        ])
+    /// The walks `reach` runs from `from` over `map`, with no
+    /// governments: each origin with its reach.
+    fn walks(map: &StarMap, reach: MapReach, from: i16, source: RuleSource) -> Vec<(i16, u16)> {
+        map_walks(reach, SystemId(from), map, &Governments::default(), source)
+            .into_iter()
+            .map(|(system, reach)| (system.0, reach))
+            .collect()
     }
 
     #[test]
-    fn a_map_of_n_jumps_explores_the_line_that_far_both_ways() {
-        let map = line();
+    fn a_map_of_n_jumps_runs_one_walk_from_the_players_system_and_nothing_none() {
+        let map = StarMap::new(vec![star(129, (0.0, 0.0), &[])]);
         for source in RuleSource::ALL {
-            assert_eq!(
-                reveals(&map, MapReach::Jumps(1), 128, source),
-                ids(&[128, 129])
-            );
-            assert_eq!(
-                reveals(&map, MapReach::Jumps(2), 128, source),
-                ids(&[128, 129, 130])
-            );
-            assert_eq!(
-                reveals(&map, MapReach::Jumps(1), 130, source),
-                ids(&[129, 130, 131])
-            );
-            assert_eq!(
-                reveals(&map, MapReach::Jumps(9), 129, source),
-                ids(&[128, 129, 130, 131])
-            );
-            assert_eq!(reveals(&map, MapReach::Nothing, 129, source), ids(&[]));
-        }
-    }
-
-    /// A (128) lists B (129) then C (130); B lists A and C; C lists A, B
-    /// and D (131); D lists C.
-    fn diamond() -> StarMap {
-        StarMap::new(vec![
-            star(128, (0.0, 0.0), &[129, 130]),
-            star(129, (1.0, 0.0), &[128, 130]),
-            star(130, (1.0, 1.0), &[128, 129, 131]),
-            star(131, (2.0, 1.0), &[130]),
-        ])
-    }
-
-    #[test]
-    fn the_engines_depth_first_walk_misses_a_system_the_bibles_reaches() {
-        // The engine goes A, B (1), C (2, too deep to go on), and never
-        // enters C again from A at 1, so D, two jumps from A, is missed.
-        let map = diamond();
-        assert_eq!(
-            reveals(&map, MapReach::Jumps(2), 128, RuleSource::Engine),
-            ids(&[128, 129, 130])
-        );
-        assert_eq!(
-            reveals(&map, MapReach::Jumps(2), 128, RuleSource::Bible),
-            ids(&[128, 129, 130, 131])
-        );
-        assert_eq!(
-            reveals(&map, MapReach::Jumps(3), 128, RuleSource::Engine),
-            ids(&[128, 129, 130, 131])
-        );
-    }
-
-    #[test]
-    fn the_walk_follows_the_hyperlink_rule() {
-        // 129 lists 128, which does not list it back.
-        let map = StarMap::new(vec![
-            star(128, (0.0, 0.0), &[]),
-            star(129, (1.0, 0.0), &[128]),
-        ]);
-        for source in RuleSource::ALL {
-            let explored = |rule| {
-                map_reveals(
-                    MapReach::Jumps(1),
-                    SystemId(128),
-                    &map,
-                    rule,
-                    &Governments::default(),
-                    source,
-                )
-            };
-            assert_eq!(explored(HyperlinkRule::Engine), ids(&[128]), "{source:?}");
-            assert_eq!(
-                explored(HyperlinkRule::BothWays),
-                ids(&[128, 129]),
-                "{source:?}"
-            );
+            assert_eq!(walks(&map, MapReach::Jumps(3), 129, source), [(129, 3)]);
+            assert_eq!(walks(&map, MapReach::Jumps(1), 200, source), [(200, 1)]);
+            assert_eq!(walks(&map, MapReach::Nothing, 129, source), []);
         }
     }
 
@@ -424,18 +287,18 @@ mod tests {
             ),
         ]);
         assert_eq!(
-            reveals(
+            walks(
                 &map,
                 MapReach::InhabitedIndependent,
                 129,
                 RuleSource::Engine
             ),
-            ids(&[128])
+            [(128, 0)]
         );
         assert_eq!(
-            reveals(&map, MapReach::InhabitedIndependent, 129, RuleSource::Bible),
-            ids(&[128, 132]),
-            "any stellar counts"
+            walks(&map, MapReach::InhabitedIndependent, 129, RuleSource::Bible),
+            [(128, 0), (132, 0)],
+            "any stellar counts, each walked on its own by ascending ID"
         );
     }
 
@@ -447,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn a_government_class_map_explores_the_systems_of_any_government_of_that_class() {
+    fn a_government_class_map_walks_each_system_of_any_government_of_that_class() {
         let map = StarMap::new(vec![
             with(star(128, (0.0, 0.0), &[]), Some(140), &[]),
             with(star(129, (1.0, 0.0), &[]), Some(141), &[]),
@@ -461,19 +324,18 @@ mod tests {
             classed(142, [2, 4, -1, -1]),
         ]);
         for source in RuleSource::ALL {
-            let explored = |class| {
-                map_reveals(
+            let walked = |class| {
+                map_walks(
                     MapReach::GovtClass(class),
                     SystemId(131),
                     &map,
-                    HyperlinkRule::Engine,
                     &govts,
                     source,
                 )
             };
-            assert_eq!(explored(3), ids(&[128, 129]));
-            assert_eq!(explored(4), ids(&[130]));
-            assert_eq!(explored(5), ids(&[]));
+            assert_eq!(walked(3), [(SystemId(128), 0), (SystemId(129), 0)]);
+            assert_eq!(walked(4), [(SystemId(130), 0)]);
+            assert_eq!(walked(5), []);
         }
     }
 

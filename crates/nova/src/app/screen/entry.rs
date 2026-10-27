@@ -36,7 +36,10 @@
 //! (`_DoPlayGameWork(1)` under `_ignoreKeys` and `_gameFrozen`
 //! @0x1a37d-0x1a397, and `_PlayGame` @0x457f3-0x45819), which settles
 //! the asteroid field and catches up with the session's events but runs
-//! no step. The load or New Pilot already ran the rebuilds the original
+//! no step. Under the black of that frame, flight also reads the sheets
+//! and target cards of the ship types the system's traffic will bring
+//! ([`FlightView::warm_up_traffic`]), so the first step, which fills the
+//! system, doesn't stall on reading them. The load or New Pilot already ran the rebuilds the original
 //! makes at entry (`_PropagateMissionBitEffects`,
 //! `_ResetPlayerPrecalcedValues`, `_HandleStellarSystemVisibility`,
 //! `_HandleStellarSprites`), and nothing changes the game on the main
@@ -57,9 +60,11 @@
 //! keyed click's 601, which the click's end raised: inaudible, and before
 //! any boundary the player sees.
 //!
-//! Left out, with the starfield's clear and re-randomising at entry, the
-//! display-mode check and the text's movie:
-//! rdm:phase/main-screen-fidelity/phase-6-entry-left-outs.
+//! Left out, the display-mode check and the text's movie:
+//! rdm:phase/main-screen-fidelity/phase-6-entry-left-outs. The starfield's
+//! re-randomising at entry, and its clear in a system of negative murk,
+//! are the flight's (`nova_view::flight::FlightView`), which scatters its
+//! stars when it is first caught up with.
 
 use std::time::Duration;
 
@@ -353,19 +358,22 @@ impl AppScreen {
     }
 
     /// Moves the game into the flight slot and shows flight, which a
-    /// return from play comes back to the main menu from; then readies
-    /// flight's first frame (see the module docs), and replays what the
-    /// entry held.
+    /// return from play comes back to the main menu from; then enters play
+    /// ([`FlightView::enter_game`]), readies flight's first frame (see the
+    /// module docs), and replays what the entry held.
     fn hand_over(&mut self) {
         self.drop_flight();
         self.flight = self.game.take();
         self.return_to = Side::MainMenu;
         self.switch_to(Side::Flight);
         if let Some(flight) = &mut self.flight {
+            // `_EnterGameFromMainScreen`'s refresh (@0x19f81).
+            flight.enter_game();
             flight.cancel_pointer();
             flight.release_keys();
             flight.shut_escort_menu();
             flight.tick(Duration::ZERO);
+            flight.warm_up_traffic();
         }
         let held = self
             .entry

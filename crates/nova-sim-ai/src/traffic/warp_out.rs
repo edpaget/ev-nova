@@ -132,12 +132,12 @@ use std::collections::BTreeMap;
 use crate::ai::Goal;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
-use crate::flight::{Controls, FlightRules, drag_by, turned};
+use crate::flight::{self, Controls, FlightRules, drag_by, turned};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::traffic::Outcome;
 use crate::traffic::World;
-use crate::traffic::autopilot::{plain_step, position_step, steer};
+use crate::traffic::autopilot::{plain_step, position_step};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::jump_with_leader;
 use crate::traffic::npc::{Mode, Npc, NpcId};
@@ -499,21 +499,22 @@ pub fn warp_block(npc: &mut Npc, led: Led, world: &WarpWorld, jumping: bool) {
 }
 
 /// One pass of a jumping ship's flight before its warp-out: it moves on
-/// at its velocity and turns toward its desired heading, with no thrust
-/// and no fire (see the module docs).
+/// at its velocity and turns to its desired heading as `_HandleShip`
+/// turns it ([`flight::turn_to`]), with no thrust and no fire (see the
+/// module docs).
 ///
 /// While its AI wait runs it only moves on, with no turn (`_HandleShip`
 /// @0x34a54-0x34a72), as the autopilot moves a waiting ship.
 pub fn fly(npc: &mut Npc, handling: &Handling, flight: FlightRules, inertia: Inertia) {
-    let controls = Controls {
-        turn: steer(npc.state.heading, f32::from(npc.warp.aim), handling),
-        ..Controls::default()
-    };
     npc.trigger = crate::combat::armament::Trigger::default();
     if npc.ai_wait > 0 && !npc.count_wait() {
         position_step(npc, handling, inertia);
         return;
     }
+    let controls = Controls {
+        turn: flight::turn_to(&mut npc.state, npc.warp.aim, handling.turn_rate),
+        ..Controls::default()
+    };
     match inertia {
         // A turn alone writes neither word.
         Inertia::Inertial => plain_step(npc, handling, controls, flight, inertia),
@@ -1565,6 +1566,47 @@ mod tests {
         );
         assert_eq!(ship.state.heading, 90.0, "no turn (@0x34a54-0x34a72)");
         assert_eq!(ship.state.position, Vec2::new(2002.0, 0.0), "it moves on");
+        // Within its turn of its aim, it isn't put on it either.
+        for inertia in [Inertia::Inertial, Inertia::Inertialess { speed: 0.0 }] {
+            let mut near = warping(3.0, 0);
+            near.state.heading = 89.4;
+            near.ai_wait = 5;
+            fly(&mut near, &handling, FlightRules::default(), inertia);
+            assert_eq!(near.state.heading, 89.4, "{inertia:?}");
+        }
+    }
+
+    /// A ship on its own jump at `heading`, its aim 90, flown one pass
+    /// turning `rate` degrees a tick, as `inertia` says: its heading after.
+    fn jumping_from(heading: f32, rate: f32, inertia: Inertia) -> f32 {
+        let mut ship = warping(3.0, 0);
+        ship.state.heading = heading;
+        let handling = Handling {
+            turn_rate: rate,
+            ..ship.stats.handling
+        };
+        fly(&mut ship, &handling, FlightRules::default(), inertia);
+        ship.state.heading
+    }
+
+    const BOTH: [Inertia; 2] = [Inertia::Inertial, Inertia::Inertialess { speed: 0.0 }];
+
+    #[test]
+    fn a_jumping_ship_within_its_turn_of_its_aim_is_put_on_it() {
+        // 88.6 is 2 whole degrees off 90, within 3 (@0x34581-0x3458e).
+        for inertia in BOTH {
+            assert_eq!(jumping_from(88.6, 3.0, inertia), 90.0, "{inertia:?}");
+            assert_eq!(jumping_from(91.9, 3.0, inertia), 90.0, "{inertia:?}");
+        }
+    }
+
+    #[test]
+    fn a_jumping_ship_measures_its_gap_to_its_aim_in_whole_degrees() {
+        // 88.1 is 1.9 off 90, within 1.95, but 88 is 2 whole degrees off.
+        for inertia in BOTH {
+            let heading = jumping_from(88.1, 1.95, inertia);
+            assert!((heading - 90.05).abs() < 1e-4, "{inertia:?}: {heading}");
+        }
     }
 
     #[test]

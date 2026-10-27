@@ -15,15 +15,17 @@ use nova_data::graphics::{PICT, decode_pict};
 use nova_data::{GameData, InterfaceData};
 use nova_sim::{Chance, Pilot, Service, Session};
 use nova_view::geometry::{Bounds, Point};
+use nova_view::image::ImageKey;
 use nova_view::sound::{Sound, SoundId, UiSound};
 use nova_view::spaceport::layout::{BACKGROUND, LEAVE_ITEM, SPACEPORT_DIALOG};
 use nova_view::spaceport::trade::{
     BACKGROUND as TRADE_BACKGROUND, BUY_ITEM, DONE_ITEM, SELL_ITEM, TRADE_DIALOG,
 };
-use nova_view::spaceport::{SpaceportView, StellarId, TradeScreen};
+use nova_view::spaceport::{ListColors, ListLooks, SpaceportView, StellarId, TradeScreen};
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::DescriptionSource;
 use nova_view::ui::DialogResources;
+use nova_view::ui::button::ButtonSkin;
 use nova_view::ui::quantity::QUANTITY_DIALOG;
 use nova_view::{DrawCommand, DrawList, Screen};
 
@@ -38,8 +40,8 @@ fn builds() -> Vec<(PathBuf, PathBuf)> {
 }
 
 /// Port Kane's spaceport: its landscape, name and description over the
-/// 618 x 517 "Spaceport" background, centred, with Leave bottom right and a
-/// button for each service its flags offer; its ambient sound, "Federation
+/// 618 x 517 "Spaceport" background, centred, with Leave bottom right and
+/// the services its flags offer; its ambient sound, "Federation
 /// Station.SFIL" (`snd ` 10032), plays on its first frame.
 #[test]
 fn port_kanes_spaceport_shows_its_landscape_description_and_services() {
@@ -104,6 +106,80 @@ fn port_kanes_spaceport_shows_its_landscape_description_and_services() {
     }
 }
 
+/// The left cap `view` draws for button `item` and whether the label
+/// `label` sits inside the item.
+fn button(view: &SpaceportView, item: usize, label: &str) -> (Option<ImageKey>, bool) {
+    let bounds = view
+        .dialog()
+        .expect("laid out")
+        .item_bounds(item)
+        .expect("an item");
+    let mut list = DrawList::new();
+    view.draw(&mut list);
+    let cap = list.iter().find_map(|command| match command {
+        DrawCommand::StretchedPicture {
+            image, top_left, ..
+        } if *top_left == bounds.min => Some(*image),
+        _ => None,
+    });
+    let placed = list.iter().any(|command| {
+        matches!(command, DrawCommand::Text { text, origin, .. }
+            if text == label && bounds.contains(*origin))
+    });
+    (cap, placed)
+}
+
+/// Every stock spaceport draws all seven buttons, as `_DrawPlanetButtons`
+/// does (@0x29873-0x2995e): Port Kane (137) the Mission BBS at item 10
+/// and the Bar at item 11, and its Shipyard, which it lacks, disabled;
+/// Reflex-ion (129, uninhabited, `Flags` 0x21) all six disabled but
+/// Leave.
+#[test]
+fn stock_spaceports_draw_every_button_greying_what_they_lack() {
+    let normal = Some(ButtonSkin::NOVA.normal.left);
+    let disabled = Some(ButtonSkin::NOVA.disabled.left);
+    let labels = [
+        (12, "Leave"),
+        (4, "Recharge"),
+        (7, "Trade Center"),
+        (8, "Outfitter"),
+        (9, "Shipyard"),
+        (10, "Mission BBS"),
+        (11, "Bar"),
+    ];
+    for (dir, ui) in builds() {
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        let ui = InterfaceData::open(&ui).expect("the interface file opens");
+        let view = |stellar| {
+            let template = ui.dialog_template(SPACEPORT_DIALOG).expect("Spaceport");
+            SpaceportView::new(
+                &data,
+                StellarId(stellar),
+                Ok((template, Rc::new(MonoMetrics))),
+            )
+        };
+        let kane = view(137);
+        for (item, label) in labels {
+            let cap = if item == 9 { disabled } else { normal };
+            assert_eq!(
+                button(&kane, item, label),
+                (cap, true),
+                "Port Kane: {label}"
+            );
+        }
+        let reflexion = view(129);
+        assert_eq!(reflexion.offered(), []);
+        for (item, label) in labels {
+            let cap = if item == LEAVE_ITEM { normal } else { disabled };
+            assert_eq!(
+                button(&reflexion, item, label),
+                (cap, true),
+                "Reflex-ion: {label}"
+            );
+        }
+    }
+}
+
 /// A new stock pilot, resumed over Port Kane (`spöb` 137 in Kania, where
 /// it starts) through a save that says so, and landed there.
 fn at_port_kane(data: &GameData) -> Session {
@@ -116,14 +192,20 @@ fn at_port_kane(data: &GameData) -> Session {
 
 /// Port Kane's Trade Center: its exchange in the 426 x 252 "Trade"
 /// dialog, centred over its background, with Done, Buy and Sell along the
-/// bottom and a row for each good.
+/// bottom, the header in `STR#` 2002's words, a row for each good and the
+/// cargo summary's free space, with no status line.
 #[test]
 fn port_kanes_trade_center_lists_its_goods_in_the_trade_dialog() {
     for (dir, ui) in builds() {
         let data = GameData::open(&dir, None).expect("the stock data opens");
         let ui = InterfaceData::open(&ui).expect("the interface file opens");
         let template = ui.dialog_template(TRADE_DIALOG).expect("Trade");
-        let market = at_port_kane(&data).market().expect("a trade center");
+        // The strings the app gives the session: `STR#` 2002's words.
+        let strings = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+        let market = at_port_kane(&data)
+            .with_strings(strings)
+            .market()
+            .expect("a trade center");
         let screen = TradeScreen::new(
             Ok((template, Rc::new(MonoMetrics))),
             ui.dialog_template(QUANTITY_DIALOG),
@@ -162,9 +244,37 @@ fn port_kanes_trade_center_lists_its_goods_in_the_trade_dialog() {
                 _ => None,
             })
             .collect();
-        for shown in ["Food", "93", "Equipment", "440", "Done", "Buy", "Sell"] {
+        for shown in [
+            "Commodity:",
+            "In Hold:",
+            "Price:",
+            "Food",
+            "93",
+            "Equipment",
+            "440",
+            "Done",
+            "Buy",
+            "Sell",
+        ] {
             assert!(texts.contains(&shown), "{shown}: {texts:?}");
         }
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.starts_with("Free cargo space: ")),
+            "{texts:?}"
+        );
+        assert!(!texts.iter().any(|text| text.contains("Credits")));
+    }
+}
+
+/// Stock `cölr` 128's list colours are the stock ones: white text on
+/// black, the selection dark red.
+#[test]
+fn the_stock_list_colours_are_colr_128s() {
+    for (dir, _) in builds() {
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        assert_eq!(data.list_colors(), ListColors::STOCK);
     }
 }
 
@@ -246,8 +356,8 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
         );
         for (item, x, w) in [
             (INFO_ITEM, 253.0, 89.0),
-            (SHIPYARD_DONE, 365.0, 109.0),
-            (BUY_SHIP_ITEM, 480.0, 109.0),
+            (SHIPYARD_DONE, 480.0, 109.0),
+            (BUY_SHIP_ITEM, 365.0, 109.0),
         ] {
             assert_eq!(
                 dialog.item_bounds(item),
@@ -265,6 +375,14 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
             let picture = decode_pict(picture.resource.data()).expect("decodes");
             assert_eq!((picture.width(), picture.height()), size, "{id}");
         }
+        // It opens with nothing selected, as `_DoShipyardDialog` does;
+        // Right picks the first cell.
+        assert_eq!(screen.selected(), None, "nothing selected as it opens");
+        screen.input(&nova_view::Input::Key {
+            key: nova_view::Key::Right,
+            pressed: true,
+            repeat: false,
+        });
         let mut list = DrawList::new();
         screen.draw(&mut list);
         assert_eq!(
@@ -450,7 +568,7 @@ fn the_shuttles_name_is_asked_in_the_stock_text_input_dialog() {
         let mut session = fly(&data, &save);
         session.shipyard(&mut Fires).expect("a shipyard");
         let naming = session
-            .ship_naming(nova_sim::ShipId(128), &mut Highest)
+            .ship_naming(nova_sim::ShipId(128), &data, &mut Highest)
             .expect("the Shuttle can be bought");
         assert_eq!(
             naming.prompt,

@@ -6,9 +6,10 @@
 //! sets sub 2 there, @0x8d9b2-0x8da07; see
 //! [`land_flight`](crate::traffic::land_flight)).
 //!
-//! - It turns to `_CalcInterceptAngle(ship, stellar)`, the whole-degree
-//!   bearing of the stellar ([`trig::intercept_angle`]).
-//! - It thrusts while off that bearing by less than its turn rate and
+//! - It wants `_CalcInterceptAngle(ship, stellar)`, the whole-degree
+//!   bearing of the stellar ([`trig::intercept_angle`]), and `_HandleShip`
+//!   turns it there ([`flight::turn_to`]).
+//! - It thrusts, by its heading before that turn, while off that bearing by less than its turn rate and
 //!   [`TURN_SLACK`] degrees, strictly ([`fire::off_by`]), at its full
 //!   `_ShipAccelRate`: within [`NEAR`] of the stellar on both axes,
 //!   strictly, capped at [`NEAR_CAP`] of its `_ShipMaxSpeed` (+0x34);
@@ -23,10 +24,9 @@
 //! plays no sound.
 
 use crate::ai::fire;
-use crate::flight::{Controls, ShipState};
+use crate::flight::{self, Controls, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
-use crate::traffic::autopilot::steer;
 use crate::trig;
 
 /// How far beyond a turn, in degrees, a ship closing in still thrusts
@@ -40,13 +40,16 @@ pub const NEAR_CAP: f32 = 0.25;
 
 /// Substate 2's controls for a ship at `state` on `handling` closing in on
 /// a stellar at `stellar`, and the handling they fly by: its top speed
-/// capped near the stellar (see the module docs).
+/// capped near the stellar (see the module docs). `state` is turned as
+/// `_HandleShip` turns it ([`flight::turn_to`]).
 #[must_use]
-pub fn toward(state: &ShipState, stellar: Vec2, handling: &Handling) -> (Controls, Handling) {
+pub fn toward(state: &mut ShipState, stellar: Vec2, handling: &Handling) -> (Controls, Handling) {
     let bearing = trig::intercept_angle(state.position, stellar);
+    // The low level reads its thrust before `_HandleShip` turns it.
+    let thrust = fire::off_by(state.heading, bearing) < handling.turn_rate + TURN_SLACK;
     let controls = Controls {
-        thrust: fire::off_by(state.heading, bearing) < handling.turn_rate + TURN_SLACK,
-        turn: steer(state.heading, f32::from(bearing), handling),
+        thrust,
+        turn: flight::turn_to(state, bearing, handling.turn_rate),
         ..Controls::default()
     };
     let off = state.position - stellar;
@@ -91,16 +94,16 @@ mod tests {
     fn closing_in_it_turns_to_the_bearing_and_thrusts_within_its_turn_and_5_degrees() {
         let (x, y) = (0.0, 800.0);
         let to = bearing(x, y);
-        let (facing, _) = toward(&at(x, y, to), Vec2::ZERO, &HANDLING);
+        let (facing, _) = toward(&mut at(x, y, to), Vec2::ZERO, &HANDLING);
         assert!(facing.thrust);
         assert_eq!(facing.turn, Turn::None);
         let limit = HANDLING.turn_rate + TURN_SLACK;
-        let (inside, _) = toward(&at(x, y, to + limit - 1.0), Vec2::ZERO, &HANDLING);
+        let (inside, _) = toward(&mut at(x, y, to + limit - 1.0), Vec2::ZERO, &HANDLING);
         assert!(inside.thrust, "8 degrees off");
-        let (edge, _) = toward(&at(x, y, to + limit), Vec2::ZERO, &HANDLING);
+        let (edge, _) = toward(&mut at(x, y, to + limit), Vec2::ZERO, &HANDLING);
         assert!(!edge.thrust, "9 degrees off is not within");
         assert_eq!(edge.turn, Turn::Left, "it turns back");
-        let (other, _) = toward(&at(x, y, to - limit), Vec2::ZERO, &HANDLING);
+        let (other, _) = toward(&mut at(x, y, to - limit), Vec2::ZERO, &HANDLING);
         assert!(!other.thrust);
         assert_eq!(other.turn, Turn::Right);
         assert!(!facing.reverse);
@@ -108,7 +111,7 @@ mod tests {
 
     #[test]
     fn within_500_on_both_axes_it_is_capped_at_a_quarter_of_its_top_speed() {
-        let flown = |x: f32, y: f32| toward(&at(x, y, bearing(x, y)), Vec2::ZERO, &HANDLING).1;
+        let flown = |x: f32, y: f32| toward(&mut at(x, y, bearing(x, y)), Vec2::ZERO, &HANDLING).1;
         let capped = Handling {
             max_speed: 2.0,
             ..HANDLING
@@ -118,7 +121,7 @@ mod tests {
         assert_eq!(flown(0.0, -500.0), HANDLING);
         assert_eq!(flown(600.0, 10.0), HANDLING);
         assert_eq!(
-            toward(&at(f32::NAN, 0.0, 0.0), Vec2::ZERO, &HANDLING).1,
+            toward(&mut at(f32::NAN, 0.0, 0.0), Vec2::ZERO, &HANDLING).1,
             HANDLING,
             "not a number reads as far"
         );

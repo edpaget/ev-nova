@@ -689,6 +689,7 @@ mod tests {
                 carried: false,
                 wage: Some(10),
                 person: None,
+                mark: None,
             },
         });
         ship

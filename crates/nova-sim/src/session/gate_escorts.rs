@@ -17,9 +17,11 @@
 //! followers included. Neither makes a sound.
 //!
 //! `_SetupShipsInSystem` has snapped the hired escorts and fighters into
-//! formation before (@0x42c94-0x42ca1); loop C moves them to the gate.
-//! Only a take-off reaches the snap of every led ship
-//! (`_SetupShipsInSystem(sys, 1)` @0x674ad-0x674c2).
+//! a formation counted without the mission escorts before
+//! (@0x42c94-0x42ca1; [`Session::snap_kept_escorts`]), and pushed none, as
+//! only a jump's arrival does (see the `escort_arrival` module); loop C
+//! moves them to the gate. Only a take-off reaches the snap of every led
+//! ship (`_SetupShipsInSystem(sys, 1)` @0x674ad-0x674c2).
 //!
 //! The goal is left as it is: [`Goal::Formation`](crate::ai::Goal)
 //! resumes after the burst, as `_EscortAI` does once goal 21 ends;
@@ -97,6 +99,7 @@ mod tests {
     use super::*;
     use crate::catalog::{ShipId, SystemId};
     use crate::chance::NeverFires;
+    use crate::cloak::Cloak;
     use crate::combat::armament::Trigger;
     use crate::gate::GateKind;
     use crate::pilot::Escort;
@@ -118,6 +121,7 @@ mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 
@@ -340,6 +344,258 @@ mod tests {
         }
     }
 
+    /// An escort fading in at 10.
+    const FADING_IN: Cloak = Cloak {
+        fade: 10.0,
+        direction: 1,
+    };
+
+    /// Fades the hired escort in from 10 ([`FADING_IN`]): its NPC.
+    fn fade_in_hired(session: &mut Session) -> NpcId {
+        let before = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(before).expect("here").cloak = FADING_IN;
+        before
+    }
+
+    /// The hired escort's cloak, from a new NPC than `before`.
+    fn hired_cloak(session: &Session, before: NpcId) -> Cloak {
+        let hired = session.space.escorts.fleet[0].expect("placed");
+        assert_ne!(hired, before, "a new NPC");
+        session.space.npc(hired).expect("here").cloak
+    }
+
+    /// [`FADING_IN`] stepped `steps` times.
+    fn stepped(steps: u8) -> Cloak {
+        Cloak {
+            fade: FADING_IN.fade + f32::from(steps) * crate::cloak::FADE_RATE,
+            direction: 1,
+        }
+    }
+
+    /// A gate exit, of either kind, steps each ship's fade twice before
+    /// the first tick: `_HandlePlayerDockRequest` runs `_PrepareAllSprites`
+    /// after the setup and loop C (@0x6764e) and again after the stellars'
+    /// visibility (@0x67658). The exit is in another system, so
+    /// `_PlayerEnterHypergate`'s and `_PlayerEnterWormhole`'s own call
+    /// (@0x63e91, @0x64743) steps none of the ships left behind.
+    #[test]
+    fn a_gate_exit_steps_each_ships_fade_twice_before_the_first_tick() {
+        for kind in [GateKind::Hypergate, GateKind::Wormhole] {
+            let catalog = catalog();
+            let mut session = flying(&catalog, Rulebook::default());
+            let before = fade_in_hired(&mut session);
+            exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
+            assert_eq!(hired_cloak(&session, before), stepped(2), "{kind:?}");
+        }
+    }
+
+    /// [`catalog`] with hypergate 300 linked to 320 too, a hypergate in
+    /// 130, the system it is in, at (500, 500).
+    fn gated_into_130() -> FakePilotCatalog {
+        let mut catalog = catalog();
+        catalog.gates[0].links[1] = Some(StellarId(320));
+        catalog.gates.push(crate::catalog::GateSite {
+            id: StellarId(320),
+            position: Vec2::new(500.0, 500.0),
+            flags2: crate::gate::HYPERGATE,
+            links: [
+                Some(StellarId(300)),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            exit_angle: 90,
+        });
+        catalog.gate_listers.push((SystemId(130), StellarId(320)));
+        catalog
+    }
+
+    /// Takes hypergate 300 to 320, in 130, the system gone in.
+    fn exit_into_130(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.ship.player.position = Vec2::new(-3000.0, 0.0);
+        session.ship.player.velocity = Vec2::ZERO;
+        session.chart.nav = crate::navigation::NavMode::Off;
+        session.land().expect("selects");
+        session.dock_approach();
+        session.land().expect("at the gate");
+        let out = session.enter_hypergate(Some(SystemId(130)), catalog, &mut NeverFires);
+        assert_eq!(out, Ok(SystemId(130)));
+    }
+
+    /// Out of a gate into the system gone in, the ships left behind pass
+    /// the display's system test (@0x2b7d8-0x2b7ed) at
+    /// `_PlayerEnterHypergate`'s `_PrepareAllSprites` (@0x63e91), which
+    /// runs once the player's system is set (@0x639fd) and before the old
+    /// ships are deleted (@0x67096): each steps its fade once more, and an
+    /// escort carries that into its respawn. Its exit's two calls step it
+    /// twice after.
+    #[test]
+    fn a_gate_exit_into_the_system_gone_in_steps_the_old_ships_fades_once_more() {
+        let catalog = gated_into_130();
+        let mut session = flying(&catalog, Rulebook::default());
+        let before = fade_in_hired(&mut session);
+        exit_into_130(&mut session, &catalog);
+        assert_eq!(session.space.npc(before), None, "the old NPC gone");
+        assert_eq!(hired_cloak(&session, before), stepped(3));
+    }
+
+    /// The player's own slot always passes the display's system test
+    /// (@0x2b7d8-0x2b7e0: ship 0's +0x74 against itself), so the gate
+    /// entry's `_PrepareAllSprites` (@0x63e91, @0x64743) steps its fade
+    /// once whatever the exit, and the exit's two calls twice after.
+    #[test]
+    fn a_gate_entry_steps_the_players_fade_whatever_the_exit() {
+        for kind in [GateKind::Hypergate, GateKind::Wormhole] {
+            let catalog = catalog();
+            let mut session = flying(&catalog, Rulebook::default());
+            session.ship.cloak.cloak = FADING_IN;
+            exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
+            assert_eq!(session.player_cloak(), stepped(3), "{kind:?}");
+        }
+        let catalog = gated_into_130();
+        let mut session = flying(&catalog, Rulebook::default());
+        session.ship.cloak.cloak = FADING_IN;
+        exit_into_130(&mut session, &catalog);
+        assert_eq!(
+            session.player_cloak(),
+            stepped(3),
+            "into the system gone in"
+        );
+    }
+
+    /// One advance pass of the game's work, no keys held.
+    fn pass(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.game_work(
+            crate::flight::Controls::default(),
+            catalog,
+            &crate::ai::NovaAi::default(),
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
+    }
+
+    /// `_AIHandleCloaking`'s parent rule (@0x83633-0x8366d) with the
+    /// player, ship 0, as the parent of its hired escort in close
+    /// formation: the escort's think reads the player's cloak as the
+    /// player's display step left it on the same pass.
+    #[test]
+    fn the_players_escorts_cloak_once_the_player_reads_cloaked() {
+        use crate::cloak::{CloakGear, FADE_FULL, MOD_CLOAK};
+        let mut catalog = catalog();
+        catalog
+            .outfits
+            .push(nova_sim_catalog::fixture::outfit(300, &[(MOD_CLOAK, 0)]));
+        let mut session = flying(&catalog, Rulebook::default());
+        session
+            .pilot
+            .outfits
+            .insert(crate::catalog::OutfitId(300), 1);
+        session.pilot.reserves.fuel.now = 100.0;
+        let hired = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(hired).expect("here").cloak_gear = CloakGear {
+            device: true,
+            ..CloakGear::default()
+        };
+        let cloak = |session: &Session| session.space.npc(hired).expect("here").cloak;
+        for _ in 0..60 {
+            pass(&mut session, &catalog);
+        }
+        assert_eq!(cloak(&session), Cloak::default(), "the player uncloaked");
+        session.ship.cloak.cloak = Cloak {
+            fade: FADE_FULL,
+            direction: 0,
+        };
+        let mut passes = 0;
+        while cloak(&session).direction != 1 && passes < 60 {
+            pass(&mut session, &catalog);
+            passes += 1;
+        }
+        assert_eq!(cloak(&session).direction, 1, "cloaking with the player");
+    }
+
+    /// A gate-exit escort's cloak doesn't think while its wait +0x4c
+    /// (`Rand(20) + 15`, @0x675a3-0x675b7) runs: `_AIDispatch` thinks it
+    /// only once +0x4c is at or below 0 (@0x8fc9e-0x8fcaa), and
+    /// `_HandleShip` counts it down after the dispatch (@0x35022-0x35048,
+    /// the ship loop @0x44542 after the AI loop @0x44270-0x442ae; the
+    /// dispatch's own countdown @0x8fb82 is for ship type 0x2ff alone,
+    /// @0x8fb62-0x8fb68). So a wait of N thinks first on pass N + 1, with
+    /// goal 0x15 still (no term), and the burst's goal 8 (@0x8dd8a), set
+    /// by the high level after the think, cloaks a ship of `Flags2` 0x0400
+    /// on pass N + 2. Its fade steps on every pass meanwhile, as the
+    /// display reads no wait.
+    #[test]
+    fn a_gate_exit_escort_thinks_its_cloak_the_pass_after_its_wait_runs_out() {
+        use crate::cloak::{CLOAK_JUMPING, CLOAK_TRAVELLING, CloakGear, FADE_RATE};
+        let catalog = catalog();
+        let mut session = flying(&catalog, Rulebook::default());
+        exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+        let hired = session.space.escorts.fleet[0].expect("placed");
+        let other = session
+            .player_led()
+            .find(|npc| npc.mission_escort())
+            .expect("a mission escort")
+            .id;
+        let npc = session.space.npc_mut(hired).expect("here");
+        assert_eq!(npc.cloak, Cloak::default(), "truly uncloaked");
+        npc.cloak_gear = CloakGear {
+            device: true,
+            flags2: CLOAK_JUMPING | CLOAK_TRAVELLING,
+            ..CloakGear::default()
+        };
+        let Mode::Emerging { ticks_left: wait } = npc.mode else {
+            panic!("{:?}", npc.mode)
+        };
+        assert_eq!(wait, 34);
+        let seeded = Cloak {
+            fade: 4.0,
+            direction: 1,
+        };
+        // With a cloak, so `_HandleShip`'s hold (@0x3413d) keeps it once
+        // it reads cloaked, and with no condition that would cloak it: a
+        // think would uncloak it.
+        let other_npc = session.space.npc_mut(other).expect("here");
+        other_npc.cloak = seeded;
+        other_npc.cloak_gear = CloakGear {
+            device: true,
+            ..CloakGear::default()
+        };
+        let mut risen = seeded.fade;
+        for pass_no in 1..=wait + 2 {
+            pass(&mut session, &catalog);
+            let npc = session.space.npc(hired).expect("here");
+            assert_eq!(
+                npc.cloak.direction,
+                i8::from(pass_no == wait + 2),
+                "pass {pass_no}: {:?}",
+                npc.mode
+            );
+            if pass_no <= wait {
+                risen += FADE_RATE;
+                let other = session.space.npc(other).expect("here");
+                assert_eq!(
+                    other.cloak,
+                    Cloak {
+                        fade: risen,
+                        direction: 1,
+                    },
+                    "pass {pass_no}: {:?}",
+                    other.mode
+                );
+            }
+            match pass_no {
+                p if p < wait => assert!(npc.emerging(), "pass {p}"),
+                p if p == wait => assert_eq!(npc.mode, Mode::LeavingGate { tick: 0 }),
+                p if p == wait + 1 => assert_eq!(npc.mode, Mode::LeavingGate { tick: 1 }),
+                _ => {}
+            }
+        }
+    }
+
     #[test]
     fn like_a_jump_the_led_ships_are_left_as_a_jumps_arrival_leaves_them() {
         let catalog = catalog();
@@ -354,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn a_take_off_and_a_jump_still_place_the_escorts_on_their_slots() {
+    fn a_take_off_places_the_escorts_on_their_slots_and_a_jump_pushes_them_back() {
         let catalog = catalog();
         let session = flying(&catalog, Rulebook::default());
         let led = led(&session);
@@ -368,7 +624,21 @@ mod tests {
         assert_eq!(session.pilot.system, SystemId(131));
         let hired = session.space.escorts.fleet[0].expect("placed");
         let npc = session.space.npc(hired).expect("here").clone();
-        assert!(on_slot(&session, &npc), "jump: {:?}", npc.state);
+        // Pushed back from its slot to glide in (the `escort_arrival`
+        // module), not out of a gate. The two mission escorts are not
+        // counted in the provisional snap, so the hired escort's is slot 2
+        // of 2, all three of one width.
+        let slot = crate::escort::FormationSlot {
+            slot: 2,
+            ships: 2,
+            ..npc.formation().expect("a slot")
+        };
+        let snapped = ShipState {
+            position: slot.position(&session.ship.player),
+            ..session.ship.player
+        };
+        assert_eq!(npc.state, crate::escort_arrival::pushed(snapped), "jump");
+        assert_eq!(npc.mode, Mode::JumpingIn { tick: 0 });
         assert!(!npc.emerging());
     }
 }

@@ -35,8 +35,21 @@
 //!   `_LoadStrings` fills from [`RATING_STRINGS`] #1 to #11
 //!   (@0x71c5d-0x71c8f): 0 or less is the first, 1 to 99 the second, and
 //!   each doubling from 100 the next, up to 25,600 and over, the
-//!   eleventh. The main screen's pilot panel shows it; the player info's
-//!   Combat Rating row does not yet.
+//!   eleventh. The main screen's pilot panel shows it, and so does the
+//!   player info's Combat Rating row (`_PlayerInfoDialogUpdate` calls the
+//!   same routine @0x52ade), both through one session lookup, so the two
+//!   can't disagree.
+//! - **Not read: `_EvalPlayerStudliness`** (@0x92190, its rating read
+//!   @0x921f3). It scores `_playerStudliness` (0x31b246) from the comm
+//!   ship's government record and the rating (1 when over 0, 2 more over
+//!   499), but nothing in 1.1 calls it: no `call` targets 0x92190, which
+//!   appears only in the symbol table (file offsets 0xed018, 0xed024,
+//!   0xf8e5c), and `_playerStudliness`'s only pointer slot (0xdef04) is
+//!   loaded only inside it (@0x9219f). The engine builds nothing for it.
+//! - **Not yet read: Demand Tribute** (`_DoPlanetCommDialog`, rating read
+//!   @0x975d5-0x975ea): below 12,800, cheats off, the planet laughs off
+//!   the demand (`STR#` 3002 #`_responseRandom` + 6). The engine has no
+//!   planet comm dialog; rdm:task/planet-domination ports it whole.
 
 /// The most a rating is set back to once it is over it.
 pub const RATING_CAP: i64 = 10_000_000;

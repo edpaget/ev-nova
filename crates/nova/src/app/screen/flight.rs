@@ -19,11 +19,11 @@ use nova_view::spaceport::shipyard::{
     InfoTemplates, SHIP_INFO_DIALOG, SHIP_PICTURE_INFO_DIALOG, SHIPYARD_DIALOG,
 };
 use nova_view::spaceport::trade::TRADE_DIALOG;
-use nova_view::spaceport::{OutfitterCatalog, ShipyardCatalog};
+use nova_view::spaceport::{ListLooks, OutfitterCatalog, ShipyardCatalog};
 use nova_view::ui::catalog::DescriptionGraphics;
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::{DescShown, MissionDialogs};
-use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, YES_NO_DIALOG};
+use nova_view::ui::player_info::{BackgroundSizes, PLAYER_INFO_DIALOG, YES_NO_DIALOG};
 use nova_view::ui::quantity::QUANTITY_DIALOG;
 use nova_view::ui::text_input::TEXT_INPUT_DIALOG;
 use nova_view::ui::{DescriptionSource, DialogResources};
@@ -51,7 +51,8 @@ impl AppScreen {
         if let Some(market) = self.flight.as_ref().and_then(FlightView::market) {
             let trade = template(TRADE_DIALOG).map(|(template, _)| template);
             let quantity = template(QUANTITY_DIALOG).map(|(template, _)| template);
-            spaceport = spaceport.with_trade(trade, quantity, market);
+            let colors = self.data.list_colors();
+            spaceport = spaceport.with_trade(trade, quantity, market, colors);
         }
         if let Some(outfitter) = self.flight.as_mut().and_then(FlightView::outfitter) {
             let outfit = template(OUTFIT_DIALOG).map(|(template, _)| template);
@@ -108,10 +109,19 @@ impl AppScreen {
                 );
         }
         spaceport = spaceport
-            .with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG))
+            .with_player_info(
+                template_of(PLAYER_INFO_DIALOG),
+                template_of(YES_NO_DIALOG),
+                BackgroundSizes::read(&self.data),
+            )
             .with_offer_clock(self.rules.source_for(RuleKey::OfferClock))
             .with_movies(self.movies.clone())
             .with_chance(self.chance.clone());
+        // Recharge is enabled by the cash and the tank, which only flight
+        // knows; it is told again after each input.
+        if let Some(flight) = &self.flight {
+            spaceport.set_recharge_enabled(flight.recharge_enabled());
+        }
         self.drop_spaceport();
         self.spaceport = Some(spaceport);
         self.serve_descriptions();
@@ -146,6 +156,7 @@ impl AppScreen {
         self.plunder = None;
         self.assignment = None;
         self.comm = None;
+        self.escort_dialog = None;
         self.haggle = None;
         self.offer = None;
         self.missions = None;
@@ -237,8 +248,11 @@ impl AppScreen {
     /// ([`AppScreen::at_hold_expiry`]); once the death's fade is over, the
     /// return to the main menu as it appears
     /// ([`AppScreen::return_to_main_screen`]), or, without one, to the side
-    /// flight was entered from, which fades in from black.
+    /// flight was entered from, which fades in from black. A board the
+    /// tick made, the Board key held, opens as a press's does
+    /// ([`AppScreen::open_frame_boarding`]).
     pub(super) fn after_flight_tick(&mut self) {
+        self.open_frame_boarding();
         if self
             .flight
             .as_mut()
@@ -271,12 +285,15 @@ impl AppScreen {
     }
 
     /// Keeps `flight`'s ship slots' draw-layer and cloned-frame history,
-    /// its stellar sprite pool, what its berths keep, its course map's
-    /// zoom and whether the map shows the borders, for the next flight in
-    /// this run.
+    /// its stellar sprite pool, what its berths keep, what its last galaxy
+    /// refresh left hidden, its course map's zoom and whether the map
+    /// shows the borders, for the next flight in this run.
     pub(super) fn remember_flight(&mut self, flight: &FlightView<Rc<GameData>>) {
         if let Some(slot_sprites) = flight.slot_sprites() {
             self.slot_sprites = slot_sprites.clone();
+        }
+        if let Some(last_refresh) = flight.last_refresh() {
+            self.last_refresh = Some(last_refresh);
         }
         if let Some(pool) = flight.stellar_sprite_pool() {
             self.stellar_sprites = pool.clone();
@@ -328,22 +345,31 @@ impl AppScreen {
         if let Some(warning) = self
             .flight
             .as_ref()
-            .and_then(|flight| self.save_warning(flight))
+            .and_then(|flight| self.save_warning(flight, None))
         {
             self.warnings.push(warning);
         }
     }
 
-    /// Saves `flight`'s pilot as [`AppScreen::save_pilot`] says, and the
-    /// warning a failure gives.
-    pub(super) fn save_warning(&self, flight: &FlightView<Rc<GameData>>) -> Option<String> {
+    /// Saves `flight`'s pilot as [`AppScreen::save_pilot`] says, in place
+    /// of the pilot saved under `replaces` when there is one
+    /// (`nova_sim::saves::PilotKeeper::save_replacing`), and the warning a
+    /// failure gives.
+    pub(super) fn save_warning(
+        &self,
+        flight: &FlightView<Rc<GameData>>,
+        replaces: Option<&str>,
+    ) -> Option<String> {
         let keeper = self.keeper()?;
         if !flight.may_save() {
             return None;
         }
         let pilot = flight.pilot()?;
         pilot_key(pilot.name())?;
-        keeper.save(pilot).err()
+        match replaces {
+            Some(replaces) => keeper.save_replacing(pilot, replaces).err(),
+            None => keeper.save(pilot).err(),
+        }
     }
 
     /// Settles what the set expressions run in flight or in the spaceport
@@ -380,22 +406,43 @@ impl AppScreen {
     /// this runs after every input and tick, the input that closes the
     /// last of them leaves before a frame draws the spaceport bare. With
     /// no spaceport open, the ship leaves at once.
+    ///
+    /// Either leave first settles the escorts' marks: a report of what
+    /// they sold and upgraded shows over the spaceport and holds the
+    /// leave until it closes ([`AppScreen::report_escorts_landed`]).
     fn leave_if_due(&mut self) {
+        let holds = self
+            .spaceport
+            .as_ref()
+            .is_some_and(SpaceportView::holds_leave);
+        if self.leave_held {
+            if !holds {
+                self.leave_held = false;
+                self.leave_port_by(FlightView::take_off);
+            }
+            return;
+        }
         if !self.flight.as_ref().is_some_and(FlightView::leave_due) {
             return;
         }
-        if self
-            .spaceport
-            .as_ref()
-            .is_some_and(SpaceportView::holds_leave)
-        {
+        if holds || self.report_escorts_landed() {
             return;
         }
         self.leave_port_by(FlightView::leave_if_due);
     }
 
-    /// Leaves the spaceport by its Leave ([`FlightView::take_off`]).
+    /// Leaves the spaceport by its Leave ([`FlightView::take_off`]), once
+    /// the report of the escorts sold and upgraded, if any, has closed.
     pub(super) fn leave_port(&mut self) {
+        // The spaceport stays left under the report: the held leave goes
+        // on once it closes (`AppScreen::leave_if_due`).
+        if self.leave_held {
+            return;
+        }
+        if self.report_escorts_landed() {
+            self.leave_held = true;
+            return;
+        }
         self.leave_port_by(FlightView::take_off);
     }
 
@@ -514,6 +561,7 @@ impl AppScreen {
     /// (@0x601d2-0x601eb). A move while landed keeps the spaceport open,
     /// and its sound with it.
     fn drop_spaceport(&mut self) {
+        self.leave_held = false;
         if let Some(mut spaceport) = self.spaceport.take() {
             self.sounds.extend(spaceport.close_sounds());
         }

@@ -218,14 +218,14 @@ fn a_click_on_the_players_own_ship_lets_go_of_the_target_with_the_clear_beep() {
     let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
     let over = npc_on_screen(&view, id);
     assert!(
-        (over.x - VIEW_CENTER.x).abs() > 64.0 || (over.y - VIEW_CENTER.y).abs() > 64.0,
+        (over.x - PLAYER_AT.x).abs() > 64.0 || (over.y - PLAYER_AT.y).abs() > 64.0,
         "the NPC at {over:?} sits clear of the player's ship"
     );
     tap(&mut view, TARGET_KEY);
     assert_eq!(target_of(&view), Some(id));
     view.take_sounds();
     // The camera centres on the player, so its ship is drawn at the centre.
-    click(&mut view, VIEW_CENTER);
+    click(&mut view, PLAYER_AT);
     assert_eq!(target_of(&view), None);
     assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetCleared)]);
 }
@@ -234,7 +234,7 @@ fn a_click_on_the_players_own_ship_lets_go_of_the_target_with_the_clear_beep() {
 fn a_click_on_the_players_own_ship_with_no_target_is_silent() {
     let (mut view, _) = flight_with_npc(trafficked(&[130], 1, 129, 3));
     view.take_sounds();
-    click(&mut view, VIEW_CENTER);
+    click(&mut view, PLAYER_AT);
     assert_eq!(target_of(&view), None);
     assert_eq!(view.take_sounds(), []);
 }
@@ -301,11 +301,11 @@ fn a_button_press_shows_the_cursor_where_it_is() {
 }
 
 #[test]
-fn the_cursor_draws_over_the_hud_and_under_the_jump_fade() {
+fn the_cursor_draws_in_the_world_under_the_hud_and_the_jump_fade() {
     let cursor_at = |list: &DrawList| {
         list.iter()
             .position(
-                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 651),
+                |command| matches!(unclipped(command), DrawCommand::Sprite { image, .. } if image.id == 651),
             )
             .expect("drawn")
     };
@@ -313,8 +313,9 @@ fn the_cursor_draws_over_the_hud_and_under_the_jump_fade() {
     view.input(&Input::PointerMoved(NOWHERE));
     let list = drawn(&view);
     let cursor = cursor_at(&list);
-    assert!(cursor > hud_at(&list), "over the HUD");
-    assert_eq!(cursor, list.len() - 1, "last, with no fade");
+    // A sprite of the target layer, clipped to the play area, so the
+    // status bar is never under it.
+    assert!(cursor < hud_at(&list), "under the HUD");
 
     let mut view = fading_in_on_course_to_barnard();
     view.input(&Input::PointerMoved(NOWHERE));
@@ -366,15 +367,15 @@ fn a_cloaked_npc_is_hovered_only_with_a_scanner_that_targets_cloaked_ships() {
 fn the_players_own_ship_is_hovered_only_while_it_holds_a_target() {
     let (mut view, _) = flight_with_npc(trafficked(&[130], 1, 129, 3));
     let frame = |view: &mut View| {
-        view.input(&Input::PointerMoved(VIEW_CENTER));
+        view.input(&Input::PointerMoved(PLAYER_AT));
         ticks(view, 2);
         cursor_sprites(&drawn(view))
     };
-    assert_eq!(frame(&mut view), [(0, VIEW_CENTER)], "no target");
+    assert_eq!(frame(&mut view), [(0, PLAYER_AT)], "no target");
     view.input(&key(TARGET_KEY, true));
     view.input(&key(TARGET_KEY, false));
     assert!(view.session().expect("flying").target().is_some());
-    assert_eq!(frame(&mut view), [(1, VIEW_CENTER)], "a target");
+    assert_eq!(frame(&mut view), [(1, PLAYER_AT)], "a target");
 }
 
 #[test]
@@ -382,7 +383,7 @@ fn an_npc_of_a_cost_minus_one_type_is_not_drawn_but_is_still_hovered() {
     let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
     let over = npc_on_screen(&view, id);
     let near = |list: &DrawList| {
-        list.iter().any(|command| match *command {
+        list.iter().any(|command| match *unclipped(command) {
             DrawCommand::Sprite { center, image, .. } => {
                 image.id != 651
                     && (center.x - over.x).abs() < 0.01
@@ -477,7 +478,7 @@ fn a_hidden_player_is_hovered_by_the_box_its_slot_last_drew() {
         view.input(&key(TARGET_KEY, true));
         view.input(&key(TARGET_KEY, false));
         assert!(view.session().expect("flying").target().is_some());
-        hovers(&mut view, Point::new(VIEW_CENTER.x, VIEW_CENTER.y + off))
+        hovers(&mut view, Point::new(PLAYER_AT.x, PLAYER_AT.y + off))
     };
     let engine = Rulebook::default;
     assert!(hover(engine(), 40.0), "inside shïp 131's 100-pixel frame");
@@ -604,6 +605,51 @@ fn a_flight_hands_its_kept_berths_to_its_session_and_back() {
     assert_eq!(failed.kept_berths(), None);
 }
 
+/// A new pilot of [`catalog`] begun, with `carried` handed on, if any:
+/// whether it explored Alpha Centauri (131), Sol's neighbour.
+fn begun_explores_131(carried: Option<nova_sim::LastRefresh>) -> bool {
+    let catalog = catalog();
+    let pilot = Pilot::new(&catalog, "Ada").expect("starts");
+    let view = FlightView::with_pilot(catalog, pilot);
+    let mut view = match carried {
+        Some(carried) => view.with_last_refresh(carried),
+        None => view,
+    };
+    view.begin();
+    view.session()
+        .expect("flying")
+        .pilot()
+        .has_explored(SystemId(131))
+}
+
+#[test]
+fn a_flight_hands_the_last_refresh_to_its_new_pilots_neighbour_pass_and_back() {
+    let hiding = nova_sim::LastRefresh::hiding([SystemId(131)]);
+    assert!(begun_explores_131(None), "the launch's");
+    assert!(!begun_explores_131(Some(hiding.clone())), "the one carried");
+    // 131 hidden until the `OnStart` sets bit 50.
+    let mut shown_on_start = starting_with("b50");
+    shown_on_start
+        .visibility
+        .push(nova_sim::catalog::SystemVisibility {
+            id: SystemId(131),
+            visibility: nova_sim::control::Test::parse("b50"),
+        });
+    let pilot = Pilot::new(&shown_on_start, "Ada").expect("starts");
+    let mut view = FlightView::with_pilot(shown_on_start, pilot);
+    view.begin();
+    assert_eq!(view.last_refresh(), Some(hiding.clone()), "before OnStart");
+    view.enter_game();
+    assert_eq!(view.last_refresh(), Some(nova_sim::LastRefresh::default()));
+    let mut failed = FlightView::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    })
+    .with_last_refresh(hiding);
+    failed.enter_game();
+    assert_eq!(failed.last_refresh(), None);
+}
+
 #[test]
 fn a_flight_hands_its_slot_sprites_to_its_session_and_back() {
     let mut sprites = SlotSprites::default();
@@ -655,10 +701,12 @@ fn a_key_pressed_in_flight_fades_the_cursor_at_the_next_step() {
     view.input(&key(Key::Char('q'), true));
     ticks(&mut view, 1);
     let tint = |view: &View| {
-        drawn(view).iter().find_map(|command| match *command {
-            DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
-            _ => None,
-        })
+        drawn(view)
+            .iter()
+            .find_map(|command| match *unclipped(command) {
+                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+                _ => None,
+            })
     };
     assert_eq!(tint(&view), Some(247), "31 of 32");
     view.input(&key(Key::Up, true));
@@ -673,13 +721,68 @@ fn z_held_fades_the_cursor_as_a_flight_key_with_no_afterburner_carried() {
         view.input(&Input::PointerMoved(NOWHERE));
         view.input(&key(k, true));
         ticks(&mut view, 2);
-        drawn(&view).iter().find_map(|command| match *command {
-            DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
-            _ => None,
-        })
+        drawn(&view)
+            .iter()
+            .find_map(|command| match *unclipped(command) {
+                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+                _ => None,
+            })
     };
     assert_eq!(tint_after_two(AFTERBURNER_KEY), Some(239), "held: 30 of 32");
     assert_ne!(tint_after_two(Key::Char('q')), Some(239), "a key not held");
+    assert_eq!(
+        tint_after_two(SELECT_KEY),
+        Some(239),
+        "W: every pass, @0x6ac2a"
+    );
+    assert_eq!(
+        tint_after_two(DESELECT_KEY),
+        tint_after_two(Key::Char('q')),
+        "S with none selected: only its press, @0x6ade1"
+    );
+}
+
+#[test]
+fn b_held_fades_the_cursor_as_a_flight_key() {
+    // `_HandlePlayer` sets the cursor's fade every frame B is down
+    // (@0x6a98b-0x6a999), a target or not.
+    let tint_after_two = |k: Key| {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        view.input(&key(k, true));
+        ticks(&mut view, 2);
+        drawn(&view)
+            .iter()
+            .find_map(|command| match *unclipped(command) {
+                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+                _ => None,
+            })
+    };
+    assert_eq!(tint_after_two(BOARD_KEY), Some(239), "held: 30 of 32");
+    assert_ne!(tint_after_two(Key::Char('q')), Some(239), "a key not held");
+}
+
+#[test]
+fn the_cursor_is_clipped_to_the_play_area_short_of_the_status_bar() {
+    let mut view = flight();
+    view.input(&Input::PointerMoved(NOWHERE));
+    let list = drawn(&view);
+    let clips: Vec<Bounds> = list
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Clipped { clip, command } if sprite_of(651)(command) => Some(*clip),
+            _ => None,
+        })
+        .collect();
+    // `_SetupSpriteWorld`'s sprite world: the window less 194 at the
+    // right (`subw $0xc2` @0x21b66).
+    assert_eq!(
+        clips,
+        [Bounds {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(VIEW_SIZE.0 - STATUS_BAR_WIDTH, VIEW_SIZE.1),
+        }]
+    );
 }
 
 #[test]
@@ -1093,4 +1196,57 @@ fn j_held_through_a_jump_does_nothing_after_arrival() {
     assert!(!view.take_sounds().contains(&REFUSED));
     assert!(!view.preparing_jump());
     assert_eq!(view.session().expect("flying").jumping(), None);
+}
+
+/// The cursor's alpha two ticks after `k` is pressed and held in `view`.
+fn cursor_alpha_holding(mut view: View, k: Key) -> Option<u8> {
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.input(&key(k, true));
+    ticks(&mut view, 2);
+    drawn(&view)
+        .iter()
+        .find_map(|command| match *unclipped(command) {
+            DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+            _ => None,
+        })
+}
+
+#[test]
+fn a_slot_key_held_fades_the_cursor_while_the_slot_block_polls_it() {
+    let pressed_only = cursor_alpha_holding(flight(), Key::Char('q'));
+    assert_ne!(pressed_only, Some(239));
+    for k in [
+        STELLAR_SLOT_KEYS[1][0],
+        STELLAR_SLOT_KEYS[1][1],
+        NEAREST_STELLAR_KEY,
+    ] {
+        assert_eq!(cursor_alpha_holding(flight(), k), Some(239), "{k:?}");
+    }
+    assert_eq!(
+        cursor_alpha_holding(flight(), NEAREST_STELLAR_COMMAND_KEY),
+        pressed_only,
+        "5 without Command"
+    );
+    let mut menu = escorted();
+    tap(&mut menu, MENU_KEY);
+    assert_eq!(
+        cursor_alpha_holding(menu, STELLAR_SLOT_KEYS[1][0]),
+        pressed_only,
+        "the menu's 2: its loop sets no fade"
+    );
+}
+
+#[test]
+fn a_slot_key_held_during_a_jump_fades_the_cursor_only_by_its_press() {
+    for (view, other) in through_a_jump(flight)
+        .into_iter()
+        .zip(through_a_jump(flight))
+    {
+        let stage = stage(&view);
+        assert_eq!(
+            cursor_alpha_holding(*view, STELLAR_SLOT_KEYS[1][1]),
+            cursor_alpha_holding(*other, Key::Char('q')),
+            "{stage}"
+        );
+    }
 }

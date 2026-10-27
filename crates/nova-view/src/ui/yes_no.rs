@@ -45,6 +45,12 @@ pub const QUIT_QUESTION: &str = "Are you sure you want to quit?";
 pub const NEW_PILOT_QUESTION: &str =
     "There\u{2019}s already a pilot file loaded. Are you sure you want to create a new one?";
 
+/// `STR#` 140 #9, the question New Pilot asks when a pilot is already
+/// saved under the name typed (`_DoNewPilot` @0x18c08-0x18c63), kept here
+/// as [`QUIT_QUESTION`] is.
+pub const REPLACE_PILOT_QUESTION: &str =
+    "A pilot file by that name already exists. Is it okay to replace it with this new pilot?";
+
 /// The Yes/No dialog asking a question, until it is answered.
 #[derive(Clone, Debug)]
 pub struct YesNoDialog {
@@ -70,6 +76,7 @@ impl YesNoDialog {
                 font: Font::Geneva,
                 size: STATIC_TEXT_SIZE,
                 color: STATIC_TEXT_COLOR,
+                backing: None,
             },
         )];
         let mut dialog = Dialog::new(template, &roles, metrics)

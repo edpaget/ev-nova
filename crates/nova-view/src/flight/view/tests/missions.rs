@@ -1,4 +1,5 @@
 use super::*;
+use crate::spaceport::OfferNames;
 
 // The mission screens.
 
@@ -39,6 +40,20 @@ fn the_mission_screens_go_through_the_session() {
         Some(computer.rows[1].clone()),
         "loaded through the session"
     );
+    let munged = OfferNames::munged(&view, MissionId(130), "Run <PAY>");
+    assert_eq!(
+        munged,
+        view.session()
+            .ok()
+            .and_then(|session| session.offer_text(MissionId(130), "Run <PAY>")),
+        "the session's munge"
+    );
+    assert!(munged.is_some_and(|name| !name.contains("<PAY>")), "filled");
+    assert_eq!(
+        OfferNames::munged(&view, MissionId(999), "Run"),
+        None,
+        "not offered"
+    );
     assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
     assert_eq!(view.refuse_mission(MissionId(131)).map(|_| ()), Ok(()));
     let texts: Vec<_> = view
@@ -70,6 +85,7 @@ fn the_mission_screens_go_through_the_session() {
         Err(ComputerRefusal::NoneAvailable)
     );
     assert_eq!(broken.show_computer_row(MissionId(130)), None);
+    assert_eq!(OfferNames::munged(&broken, MissionId(130), "Run"), None);
     assert_eq!(
         broken.accept_mission(MissionId(130)),
         Err(AcceptError::NotOffered)
@@ -154,7 +170,7 @@ fn entering_another_venue_through_the_flight_offers_a_suppressed_offer_again() {
 /// accepted mission 130, carrying 4 tons of food loaded at accept,
 /// `Flags` `flags`, and bought the other 6 tons full of food when
 /// `food`, then took off.
-fn carrying(flags: u16, food: bool) -> View {
+pub(super) fn carrying(flags: u16, food: bool) -> View {
     carrying_in(trading(), Rulebook::default(), flags, food)
 }
 
@@ -284,7 +300,7 @@ fn command_k_drops_cargo_boxes_drawn_under_the_ship_where_they_drift() {
 
 /// `base` with asteroid type 0, its sheet `rlëD` 1800, and system 130
 /// holding 3 of it.
-fn rocky(base: FakeCatalog) -> FakeCatalog {
+pub(super) fn rocky(base: FakeCatalog) -> FakeCatalog {
     FakeCatalog {
         asteroid_types: vec![nova_sim::AsteroidTypeRecord {
             kind: 0,
@@ -304,7 +320,7 @@ fn rocky(base: FakeCatalog) -> FakeCatalog {
 }
 
 /// The rules with `key` read as the other reading.
-fn other_reading(key: RuleKey) -> Rulebook {
+pub(super) fn other_reading(key: RuleKey) -> Rulebook {
     Rulebook::default().with_override(key, RuleSource::Bible)
 }
 
@@ -312,11 +328,19 @@ fn asteroid_count(view: &View) -> usize {
     view.session().expect("flying").asteroids().count()
 }
 
+/// `view` in a view 640 wide, whose window stores each system's
+/// `Asteroids` unscaled, so a test's counts are its catalog's.
+fn unscaled(mut view: View) -> View {
+    view.set_view_size((640.0, 768.0));
+    view
+}
+
 #[test]
 fn each_step_spawns_an_asteroid_at_the_edge_until_the_systems_count() {
     // Just off screen, so none is culled as it spawns.
-    let mut view =
-        FlightView::new(rocky(catalog())).with_rules(other_reading(RuleKey::AsteroidRespawnRing));
+    let mut view = unscaled(
+        FlightView::new(rocky(catalog())).with_rules(other_reading(RuleKey::AsteroidRespawnRing)),
+    );
     assert_eq!(asteroid_count(&view), 0);
     for count in [1, 2, 3, 3] {
         ticks(&mut view, 1);
@@ -326,8 +350,9 @@ fn each_step_spawns_an_asteroid_at_the_edge_until_the_systems_count() {
 
 #[test]
 fn a_flight_started_in_flight_shows_its_placed_field_before_any_step() {
-    let mut view =
-        FlightView::new(rocky(catalog())).with_rules(other_reading(RuleKey::AsteroidEntryField));
+    let mut view = unscaled(
+        FlightView::new(rocky(catalog())).with_rules(other_reading(RuleKey::AsteroidEntryField)),
+    );
     view.tick(Duration::ZERO);
     assert_eq!(asteroid_count(&view), 3, "placed, no step run");
     let list = drawn(&view);
@@ -336,7 +361,7 @@ fn a_flight_started_in_flight_shows_its_placed_field_before_any_step() {
         .filter(|(image, _)| image.id == 1800)
         .count();
     assert_eq!(asteroids, 3);
-    let mut engine = FlightView::new(rocky(catalog()));
+    let mut engine = unscaled(FlightView::new(rocky(catalog())));
     engine.tick(Duration::ZERO);
     assert_eq!(asteroid_count(&engine), 0, "by the engine");
 }
@@ -470,6 +495,19 @@ fn a_former_escort_rejoining_says_escort_or_fighter_repaired() {
     for message in [SimMessage::EscortRepaired, SimMessage::FighterRepaired] {
         assert_eq!(arrival_lead(&message), None, "{message:?}");
     }
+}
+
+#[test]
+fn fighter_captured_says_the_originals_words() {
+    // `STR#` 2002 #129.
+    assert_eq!(FIGHTER_CAPTURED, "Fighter captured.");
+    let view = flight();
+    let session = view.session().expect("flying");
+    assert_eq!(
+        sim_message_text(&SimMessage::FighterCaptured, session).as_deref(),
+        Some(FIGHTER_CAPTURED)
+    );
+    assert_eq!(arrival_lead(&SimMessage::FighterCaptured), None);
 }
 
 /// A flight whose one outfit is called "bomb", "bombs".
@@ -1046,7 +1084,8 @@ fn with_paid_fleet(pilot: &Pilot, escorts: &[(i16, bool, Option<i64>)]) -> Pilot
                 "order": null,
                 "carried": carried,
                 "wage": wage,
-                "person": null
+                "person": null,
+                "mark": null
             })
         })
         .collect();
@@ -1092,7 +1131,7 @@ fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
     jump_to_alpha(&mut view);
     let said = format!(
         "{}  {DEFECTED_ONE}",
-        "Jumping into the Alpha Centauri system on June 24, 1177 NC."
+        "Jumping into the Alpha Centauri system on June 24th, 1177 NC."
     );
     assert_eq!(view.message(), Some(said.as_str()), "after the arrival");
     assert_eq!(view.pilot().expect("flying").escorts(), []);
@@ -1100,7 +1139,7 @@ fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
     jump_to_alpha(&mut paid);
     assert_eq!(
         paid.message(),
-        Some("Jumping into the Alpha Centauri system on June 24, 1177 NC."),
+        Some("Jumping into the Alpha Centauri system on June 24th, 1177 NC."),
         "the arrival alone"
     );
     assert_eq!(paid.pilot().map(Pilot::cash), Some(0));
@@ -1108,7 +1147,7 @@ fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
 
 /// The greeting from Earth on the take-off of a docked [`paying`]
 /// flight, its lead the one the fixture's scripted draws leave.
-const PAYING_GREETING: &str = "Departing Earth on June 24, 1177 NC.";
+const PAYING_GREETING: &str = "Departing Earth on June 24th, 1177 NC.";
 
 #[test]
 fn by_the_engine_an_escort_left_unpaid_at_take_off_defects_and_the_flight_says_so() {
@@ -1151,7 +1190,7 @@ fn fighters_abandoned_and_escorts_defected_on_one_arrival_are_said_together() {
     assert_eq!(
         view.message(),
         Some(
-            "Jumping into the Alpha Centauri system on June 24, 1177 NC.  (Two fighters abandoned)  Due to lack of pay, one of your escorts has defected."
+            "Jumping into the Alpha Centauri system on June 24th, 1177 NC.  (Two fighters abandoned)  Due to lack of pay, one of your escorts has defected."
         )
     );
     assert_eq!(view.pilot().expect("flying").escorts(), []);
@@ -1585,7 +1624,7 @@ fn a_landed_q_shows_the_take_offs_pay_after_its_message() {
 
 /// The greeting from Earth on the day after the fixture's start, its
 /// lead the first, as the flight's chance rolls.
-const EARTH_GREETING: &str = "Launching from Earth on June 24, 1177 NC.";
+const EARTH_GREETING: &str = "Launching from Earth on June 24th, 1177 NC.";
 
 #[test]
 fn take_off_says_the_greeting_for_240() {
@@ -1594,8 +1633,8 @@ fn take_off_says_the_greeting_for_240() {
     assert_eq!(message(&view), Some(message_drawn(EARTH_GREETING)));
     assert_lasts(&mut view, EARTH_GREETING, 240);
     assert_eq!(
-        take_off_greeting(2, "Earth", "June 24, 1177 NC"),
-        "Taking off from Earth on June 24, 1177 NC."
+        take_off_greeting(2, "Earth", "June 24th, 1177 NC"),
+        "Taking off from Earth on June 24th, 1177 NC."
     );
     let leads: Vec<String> = (0..5)
         .map(|lead| take_off_greeting(lead, "X", "D"))
@@ -1926,6 +1965,21 @@ fn opening_the_player_info_gives_the_screen_unless_in_a_jump() {
 }
 
 #[test]
+fn open_player_info_carries_the_cheats_setting() {
+    let mut view = flight();
+    assert!(
+        !view.open_player_info().expect("opens").cheats,
+        "off by default"
+    );
+    let mut view = flight().with_overlays(FlightOverlays {
+        cheats: true,
+        ..FlightOverlays::default()
+    });
+    assert!(view.open_player_info().expect("opens").cheats);
+    assert!(view.player_info().expect("reads").cheats, "the getter too");
+}
+
+#[test]
 fn p_with_the_map_open_does_nothing() {
     let mut view = flight();
     tap(&mut view, MAP_KEY);
@@ -2006,7 +2060,7 @@ fn offered_in_flight(cadence: RuleSource, unrefusable: bool, refuse: bool) -> Vi
         .with_chance(chance)
         .with_behaviour(Rc::new(Still));
     view.tick(TICK);
-    tap(&mut view, NEAREST_STELLAR_KEY);
+    tap_slot(&mut view, NEAREST_STELLAR_KEY);
     tap(&mut view, TARGET_KEY);
     tap(&mut view, HAIL_KEY);
     view.take_offer().expect("offered");

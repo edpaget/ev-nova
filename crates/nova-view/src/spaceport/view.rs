@@ -6,9 +6,10 @@
 //! description (`dësc` = `spöb` ID) and the button style through
 //! [`DescriptionSource`]. It draws the background, then the landscape
 //! stretched into its item, then the stellar's name centred in the name
-//! bar, then the dialog: the description scrolling in its box, Leave, and
-//! a button for each service the stellar's flags offer. The other service
-//! items stay blank, and clicks on them do nothing.
+//! bar, then the dialog: the description scrolling in its box and the
+//! seven buttons of [`buttons`](super::buttons), as `_DrawPlanetButtons`
+//! draws them. A service the stellar's flags don't offer is drawn
+//! disabled, and a click on it does nothing.
 //!
 //! Leave, Return and Escape leave: the router takes off. Each of the
 //! [`PORT_KEYS`](super::layout::PORT_KEYS) presses its button, as
@@ -102,10 +103,11 @@
 //! screen beneath lets go of its keys.
 //!
 //! Where the stellar sells fuel, Recharge (item 4) asks for a refill,
-//! taken through the spaceport ([`SpaceportView::take_recharge`]). A
-//! refusal ([`SpaceportView::refuse_recharge`]) shows in the description
-//! box in place of the description until the next button is activated, or
-//! the ship is recharged ([`SpaceportView::recharged`]).
+//! taken through the spaceport ([`SpaceportView::take_recharge`]). Its
+//! button is enabled as whoever flies the ship says
+//! ([`SpaceportView::set_recharge_enabled`]), while R and F ask whatever
+//! the button shows, as `_PortFilter` skips `_TrackPlanetButtons`. Nothing
+//! is said of the refill, as `_DoPortDialog` says nothing (@0x5fd5d-0x5fe25).
 //!
 //! The stellar's ambient sound (its `CustSndID`, 128 and up) plays while
 //! nothing covers the spaceport, as `_PortFilter` @0x4f041 plays it, and
@@ -127,12 +129,14 @@
 //! the original ends in `_RefreshSAT` say so too
 //! ([`SpaceportView::take_status_refresh`]): whoever flies the ship
 //! redraws the status bar at each. The map key asks for the course map
-//! ([`SpaceportView::take_map_request`], a [`PortMap`]) from five screens:
-//! the bar, an offer over any venue, the mission computer, mission info
-//! (not when opened over an offer or the computer) and the accept's
-//! briefing text. Its close redraws the whole bar and puts back the
-//! selection the map opened with, then the nav the bar or the mission
-//! dialog saved, as each does (flight's `FlightView::close_map`). An
+//! ([`SpaceportView::take_map_request`], a [`PortMap`]) from every port
+//! screen: the spaceport, the exchange, the outfitter, the shipyard, the
+//! bar and its hire screen, the ship description over either, an offer
+//! over any venue, the mission computer, mission info (not when opened
+//! over an offer or the computer) and the accept's briefing text. Its
+//! close redraws the whole bar and puts back the selection the map
+//! opened with, then the nav the screen or the mission dialog saved, as
+//! each does (flight's `FlightView::close_map`). An
 //! outfitter, shipyard or hire screen with
 //! nothing listed never opens: it says so in "Desc Dialog" (`STR#` 2002
 //! #206, #223, #224) and returns before its nav save or its close
@@ -143,11 +147,6 @@
 //!
 //! - The bar's Gamble text (`_ShowTextDialog` @0x4918c, then
 //!   `_RefreshSAT` @0x49191): ours' Gamble isn't built and shows greyed.
-//! - The map key on the other port screens (the spaceport, the shops and
-//!   the ship description each call `_DoSystemMap` on their filter's
-//!   map-key check): ours opens the map only from the five screens above.
-//!   Filed as
-//!   rdm:phase/hud-fidelity-followups/phase-1-map-key-from-the-other-port-screens.
 //! - Mission info's Abort with nothing selected (@0x9e51d-0x9e557): ours
 //!   greys Abort unless the selected mission can be aborted.
 //! - A screen whose dialog is missing: the original never shows the bar,
@@ -173,30 +172,30 @@ use nova_sim::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENT
 use nova_sim::{
     ComputerRefusal, ComputerRow, DescMovie, HireList, Market, MissionComputer, MissionId,
     MissionInfo, MissionShown, News, OfferPrompt, Order, OutfitOrder, Outfitter, PlayerInfo,
-    RechargeRefusal, Reselection, RuleSource, SaleAlert, Service, ShipId, ShipNaming, Shipyard,
-    sells_fuel, services,
+    Reselection, RuleSource, SaleAlert, Service, ShipId, ShipNaming, Shipyard, sells_fuel,
+    services,
 };
 
 use super::ambient::Ambient;
 use super::bar::{BarScreen, BarTemplates, Hiring};
+use super::buttons;
 use super::catalog::{SpaceportCatalog, StellarId};
 use super::hire::HireScreen;
 use super::layout::{
-    BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, LEAVE_LABEL, NAME_FONT, NAME_ITEM, NAME_SIZE,
-    RECHARGE_ITEM, RECHARGE_LABEL, TEXT_ITEM, item_service, label, landscape_id, port_key_item,
-    service_item,
+    BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, NAME_FONT, NAME_ITEM, NAME_SIZE, RECHARGE_ITEM,
+    TEXT_ITEM, item_service, landscape_id, port_key_item,
 };
-use super::missions::{MissionComputerScreen, MissionInfoScreen};
+use super::missions::{MissionComputerScreen, MissionInfoScreen, OfferNames};
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::outfitter::{NO_ITEMS, OutfitterCatalog, OutfitterScreen};
 use super::port_map::PortMap;
 use super::service::ServiceScreen;
 use super::shipyard::{InfoTemplates, NO_SHIPS, ShipOrder, ShipyardCatalog, ShipyardScreen};
-use super::trade::TradeScreen;
+use super::trade::{ListColors, TradeScreen};
 use crate::color::Color;
 use crate::draw::DrawList;
-use crate::flight::MapOpener;
-use crate::flight::view::SharedChance;
+use crate::flight::view::{SharedChance, is_map_press};
+use crate::flight::{MapOpener, PortScreen};
 use crate::font::Font;
 use crate::geometry::Point;
 use crate::image::ImageKey;
@@ -208,28 +207,18 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog, DescTemplates};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, TextBacking};
 use crate::ui::mission_dialogs::{DescShown, MissionDialogs};
 use crate::ui::mission_info::is_mission_info_press;
 #[cfg(doc)]
 use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::ui::player_info::{PlayerInfoScreen, is_player_info_press};
+use crate::ui::player_info::{BackgroundSizes, PlayerInfoScreen, is_player_info_press};
 
 /// Where the reason the spaceport cannot be shown goes, its size and
 /// colour.
 pub const PROBLEM_AT: Point = Point::new(16.0, 32.0);
 /// The reason's size.
 pub const PROBLEM_SIZE: f32 = 20.0;
-
-/// Why recharging was refused for want of credits. No stock `STR#` has
-/// one, so it is built the way the original builds its fee refusals from
-/// `STR#` 2002: #61 "You don't have enough" + #33 "credits" + a tail like
-/// #63's "to pay the docking fee.".
-pub const CANNOT_AFFORD_RECHARGE: &str = "You don't have enough credits to recharge.";
-
-/// Why recharging was refused with the tank full. No stock `STR#` has
-/// one, so these are our own words.
-pub const ALREADY_RECHARGED: &str = "Your ship is already fully recharged.";
 
 /// The spaceport, laid out.
 #[derive(Clone, Debug)]
@@ -239,31 +228,12 @@ struct Port {
     /// The landscape `PICT`, or the missing one's ID.
     landscape: Result<i16, i16>,
     offered: Vec<Service>,
-    /// Whether the stellar sells fuel, so Recharge is a button.
+    /// Whether the stellar sells fuel, so Recharge can be enabled.
     sells_fuel: bool,
-    /// The stellar's description, to show again after a refusal.
-    description: String,
-    /// Whether a refusal shows in the description box.
-    refused: bool,
     /// Why there is no description, if there is none.
     description_problem: Option<String>,
     style: ButtonStyle,
     metrics: MetricsHandle,
-}
-
-impl Port {
-    /// Shows `message` in the description box in its place.
-    fn refuse(&mut self, message: &str) {
-        self.dialog.set_text(TEXT_ITEM, message);
-        self.refused = true;
-    }
-
-    /// Shows the description again, if a refusal shows in its place.
-    fn show_description(&mut self) {
-        if std::mem::take(&mut self.refused) {
-            self.dialog.set_text(TEXT_ITEM, &self.description);
-        }
-    }
 }
 
 /// The metrics, shared, with a `Debug` that shows nothing of them.
@@ -455,6 +425,18 @@ struct Missioning {
     info_requested: bool,
 }
 
+/// What the player info screen is laid out from
+/// ([`SpaceportView::with_player_info`]).
+#[derive(Clone, Debug)]
+struct PlayerInfoDialogs {
+    /// `DLOG` 1017, or why there is none.
+    template: Result<DialogTemplate, String>,
+    /// The Yes/No dialog, `DLOG` 3002, or why there is none.
+    confirm: Result<DialogTemplate, String>,
+    /// The background pictures' sizes.
+    background: BackgroundSizes,
+}
+
 /// The spaceport of the stellar landed on.
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // each is one request, taken on its own
@@ -465,12 +447,14 @@ pub struct SpaceportView {
     /// The screen open over it, if any.
     open: Option<Open>,
     /// The exchange's dialog template and its quantity dialog's (or why
-    /// there are none) and the exchange as it is, once given.
-    #[allow(clippy::type_complexity)] // Two templates and the exchange.
+    /// there are none), the exchange as it is and its list's colours,
+    /// once given.
+    #[allow(clippy::type_complexity)] // Two templates, the exchange and its colours.
     trade: Option<(
         Result<DialogTemplate, String>,
         Result<DialogTemplate, String>,
         Market,
+        ListColors,
     )>,
     /// The outfitter, once given.
     outfitting: Option<Outfitting>,
@@ -497,15 +481,15 @@ pub struct SpaceportView {
     /// since the texts closed were last taken
     /// ([`SpaceportView::take_texts_closed`]).
     texts_dropped: usize,
-    /// The player info screen's dialog and its Yes/No dialog, once given.
-    #[allow(clippy::type_complexity)] // Two templates.
-    player_info_dialogs: Option<(
-        Result<DialogTemplate, String>,
-        Result<DialogTemplate, String>,
-    )>,
+    /// The player info screen's dialog, its Yes/No dialog and its
+    /// background pictures' sizes, once given.
+    player_info_dialogs: Option<PlayerInfoDialogs>,
     /// Whether [`PLAYER_INFO_KEY`] asked for the player info screen in the
     /// spaceport itself.
     player_info_requested: bool,
+    /// Whether the map key asked for the course map in the spaceport
+    /// itself (`_PortFilter` item 3).
+    port_map_requested: bool,
     /// The player info screen, over everything else.
     player_info: Option<PlayerInfoScreen>,
     /// Whether its Jettison was confirmed since this was last taken.
@@ -563,32 +547,30 @@ impl SpaceportView {
                 Ok(text) => (text, None),
                 Err(reason) => (String::new(), Some(reason)),
             };
-            let mut roles = vec![
-                (LEAVE_ITEM, Role::Button(LEAVE_LABEL.to_owned())),
-                (
-                    TEXT_ITEM,
-                    Role::ScrollText {
-                        text: text.clone(),
-                        font: Font::Geneva,
-                        size: BODY_SIZE,
-                        color: BODY_COLOR,
-                    },
-                ),
-            ];
-            roles.extend(offered.iter().map(|&service| {
-                (
-                    service_item(service),
-                    Role::Button(label(service).to_owned()),
-                )
-            }));
-            if sells_fuel {
-                roles.push((RECHARGE_ITEM, Role::Button(RECHARGE_LABEL.to_owned())));
-            }
+            let mut roles = buttons::roles();
+            roles.push((
+                TEXT_ITEM,
+                // White on a black box: `_PortDialogUpdate` sets it with
+                // `TETextBox` (@0x4ef64) and inverts the item
+                // (`InvertRect` @0x4ef72) when it is visible
+                // (`RectInRgn` @0x4ef08), which `Dialog` models as the
+                // item being inside the dialog.
+                Role::ScrollText {
+                    text,
+                    font: Font::Geneva,
+                    size: BODY_SIZE,
+                    color: BODY_COLOR,
+                    backing: Some(TextBacking::BLACK_BOX),
+                },
+            ));
             let style = catalog.button_style();
-            let dialog = Dialog::new(&template, &roles, Rc::clone(&metrics))
+            let mut dialog = Dialog::new(&template, &roles, Rc::clone(&metrics))
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(Some(LEAVE_ITEM))
                 .with_cancel(Some(LEAVE_ITEM));
+            for item in buttons::greyed(&offered, sells_fuel) {
+                dialog.set_greyed(item, true);
+            }
             let landscape = landscape_id(record.cust_pic_id, record.graphic_type);
             Ok(Port {
                 dialog,
@@ -600,8 +582,6 @@ impl SpaceportView {
                 },
                 offered,
                 sells_fuel,
-                description: text,
-                refused: false,
                 description_problem,
                 style,
                 metrics: MetricsHandle(metrics),
@@ -626,6 +606,7 @@ impl SpaceportView {
             texts_dropped: 0,
             player_info_dialogs: None,
             player_info_requested: false,
+            port_map_requested: false,
             player_info: None,
             player_info_jettison: false,
             left: false,
@@ -744,15 +725,12 @@ impl SpaceportView {
     }
 
     /// Shows `text`, `dësc` `id` loaded, where it is shown: as the
-    /// spaceport's description when `id` is the stellar's (in the box
-    /// once a refusal there is over), and otherwise in the screen open.
+    /// spaceport's description when `id` is the stellar's, and otherwise
+    /// in the screen open.
     pub fn show_description(&mut self, id: i16, text: &str) {
         if id == self.stellar.0 {
             if let Ok(port) = &mut self.port {
-                text.clone_into(&mut port.description);
-                if !port.refused {
-                    port.dialog.set_text(TEXT_ITEM, text);
-                }
+                port.dialog.set_text(TEXT_ITEM, text);
             }
             return;
         }
@@ -788,48 +766,44 @@ impl SpaceportView {
         !self.texts_queued() && std::mem::take(&mut self.status_refresh)
     }
 
-    /// Whether Recharge has been clicked since this was last asked:
-    /// whoever flies the ship refills it, then says how it went with
-    /// [`SpaceportView::recharged`] or [`SpaceportView::refuse_recharge`].
+    /// Whether Recharge has been clicked, or R or F pressed, since this
+    /// was last asked: whoever flies the ship refills it, then tells the
+    /// spaceport whether Recharge is still enabled
+    /// ([`SpaceportView::set_recharge_enabled`]).
     pub fn take_recharge(&mut self) -> bool {
         std::mem::take(&mut self.recharge)
     }
 
-    /// Says why recharging was refused, in the description box in place of
-    /// the description, until the next button is activated. With no fuel
-    /// sold, which Recharge is never offered for, the description stays.
-    pub fn refuse_recharge(&mut self, refusal: RechargeRefusal) {
-        let Ok(port) = &mut self.port else {
-            return;
-        };
-        match refusal {
-            RechargeRefusal::CannotAfford => port.refuse(CANNOT_AFFORD_RECHARGE),
-            RechargeRefusal::Full => port.refuse(ALREADY_RECHARGED),
-            RechargeRefusal::NoFuel => port.show_description(),
-        }
-    }
-
-    /// Says the ship has been recharged: the description shows again.
-    pub fn recharged(&mut self) {
+    /// Enables or disables the Recharge button, as whoever flies the ship
+    /// decides from the cash and the tank (`_DrawPlanetButtons`
+    /// @0x297a3-0x297f4; `nova_sim::Session::recharge_enabled`). Until
+    /// told it is enabled where fuel is sold; where none is, it stays
+    /// disabled whatever it is told. A disabled Recharge takes no click,
+    /// as `_TrackPlanetButtons` takes none (@0x29ae2-0x29b28), but R and F
+    /// still ask. Whoever flies the ship tells it as the spaceport is
+    /// shown and after each input, before the next frame is drawn.
+    pub fn set_recharge_enabled(&mut self, enabled: bool) {
         if let Ok(port) = &mut self.port {
-            port.show_description();
+            port.dialog
+                .set_greyed(RECHARGE_ITEM, !(enabled && port.sells_fuel));
         }
     }
 
     /// The spaceport with the stellar's exchange, `market`, which the
     /// Trade Center opens laid out by `template`, the "Trade" dialog (or
     /// saying why there is none), its quantity dialog by `quantity` (or,
-    /// without it, the dialog's fallback). Without it, the Trade Center
-    /// opens its placeholder.
+    /// without it, the dialog's fallback), its list in `colors`. Without
+    /// it, the Trade Center opens its placeholder.
     #[must_use]
     pub fn with_trade(
         self,
         template: Result<DialogTemplate, String>,
         quantity: Result<DialogTemplate, String>,
         market: Market,
+        colors: ListColors,
     ) -> Self {
         Self {
-            trade: Some((template, quantity, market)),
+            trade: Some((template, quantity, market, colors)),
             ..self
         }
     }
@@ -858,7 +832,7 @@ impl SpaceportView {
         if let Some(Open::Trade(screen)) = &mut self.open {
             screen.set_market(market.clone());
         }
-        if let Some((_, _, kept)) = &mut self.trade {
+        if let Some((_, _, kept, _)) = &mut self.trade {
             *kept = market;
         }
     }
@@ -1161,23 +1135,43 @@ impl SpaceportView {
     }
 
     /// The course map asked for since this was last asked, once (see the
-    /// [`port_map`](super::port_map) module): the bar's
+    /// [`port_map`](super::port_map) module): the spaceport's own, the
+    /// exchange's, the outfitter's or the shipyard's (or its ship
+    /// description's), the bar's or its hire screen's
     /// ([`BarScreen::take_map_request`]), or a mission dialog's, asked by
     /// the offer open over the venue open or the spaceport, the mission
     /// computer with its selected offer, or the mission texts and the
     /// mission info screen over them ([`MissionDialogs::take_map_request`]).
     /// Whoever flies the ship opens it over the spaceport.
     pub fn take_map_request(&mut self) -> Option<PortMap> {
+        if std::mem::take(&mut self.port_map_requested) {
+            return Some(PortMap::Screen(PortScreen::Spaceport));
+        }
         let open = match &mut self.open {
             Some(Open::Bar(screen)) => {
-                if screen.take_map_request() {
-                    return Some(PortMap::Bar);
+                if let Some(map) = screen.take_map_request() {
+                    return Some(map);
                 }
                 screen.take_offer_map_request()
             }
-            Some(Open::Trade(screen)) => screen.take_offer_map_request(),
-            Some(Open::Outfitter(screen)) => screen.take_offer_map_request(),
-            Some(Open::Shipyard(screen)) => screen.take_offer_map_request(),
+            Some(Open::Trade(screen)) => {
+                if screen.take_map_request() {
+                    return Some(PortMap::Screen(PortScreen::Exchange));
+                }
+                screen.take_offer_map_request()
+            }
+            Some(Open::Outfitter(screen)) => {
+                if screen.take_map_request() {
+                    return Some(PortMap::Screen(PortScreen::Outfitter));
+                }
+                screen.take_offer_map_request()
+            }
+            Some(Open::Shipyard(screen)) => {
+                if let Some(asked) = screen.take_map_request() {
+                    return Some(PortMap::Screen(asked));
+                }
+                screen.take_offer_map_request()
+            }
             Some(Open::Computer(screen)) => {
                 if let Some(opener) = screen.take_map_request() {
                     return Some(PortMap::Dialog(opener));
@@ -1510,10 +1504,11 @@ impl SpaceportView {
     }
 
     /// Shows `row`, loaded, in the mission computer open while its offer
-    /// is selected.
-    pub fn show_computer_row(&mut self, row: &ComputerRow) {
+    /// is selected, its cut name filled by `names`
+    /// ([`MissionComputerScreen::show_row`]).
+    pub fn show_computer_row(&mut self, row: &ComputerRow, names: &impl OfferNames) {
         if let Some(Open::Computer(screen)) = &mut self.open {
-            screen.show_row(row);
+            screen.show_row(row, names);
         }
     }
 
@@ -1624,15 +1619,21 @@ impl SpaceportView {
 
     /// The spaceport with the player info screen's dialog, `template`
     /// (`DLOG` 1017), and its Yes/No dialog, `confirm` (`DLOG` 3002), or
-    /// why there are none.
+    /// why there are none, and its background pictures' sizes,
+    /// `background`.
     #[must_use]
     pub fn with_player_info(
         self,
         template: Result<DialogTemplate, String>,
         confirm: Result<DialogTemplate, String>,
+        background: BackgroundSizes,
     ) -> Self {
         Self {
-            player_info_dialogs: Some((template, confirm)),
+            player_info_dialogs: Some(PlayerInfoDialogs {
+                template,
+                confirm,
+                background,
+            }),
             ..self
         }
     }
@@ -1666,12 +1667,28 @@ impl SpaceportView {
         let Ok(port) = &self.port else {
             return;
         };
-        let (template, confirm) = self.player_info_dialogs.clone().unwrap_or_else(|| {
+        let dialogs = self.player_info_dialogs.clone().unwrap_or_else(|| {
             let none = || Err("the player info dialog was not given".to_owned());
-            (none(), none())
+            PlayerInfoDialogs {
+                template: none(),
+                confirm: none(),
+                background: BackgroundSizes {
+                    upper: None,
+                    middle: None,
+                    lower: None,
+                },
+            }
         });
-        let layout = template.map(|template| (template, Rc::clone(&port.metrics.0)));
-        self.player_info = Some(PlayerInfoScreen::new(layout, confirm, info, port.style));
+        let layout = dialogs
+            .template
+            .map(|template| (template, Rc::clone(&port.metrics.0)));
+        self.player_info = Some(PlayerInfoScreen::new(
+            layout,
+            dialogs.confirm,
+            info,
+            port.style,
+            dialogs.background,
+        ));
     }
 
     /// The player info screen open, if it is.
@@ -1806,8 +1823,10 @@ impl SpaceportView {
     }
 
     /// Queues `text` to show in "Desc Dialog", with no picture or movie,
-    /// over the spaceport, when it has the mission dialogs.
-    fn show_text(&mut self, text: &str) {
+    /// over the spaceport, when it has the mission dialogs: a text no
+    /// mission is behind, such as the report of the escorts sold and
+    /// upgraded on leaving.
+    pub fn show_text(&mut self, text: &str) {
         if let Some(dialogs) = &mut self.dialogs {
             dialogs.show_descs(vec![DescShown {
                 text: text.to_owned(),
@@ -1847,8 +1866,10 @@ impl SpaceportView {
     /// and player info screens (`_DoMissionInfoDialog`,
     /// `_DoPlayerInfoDialog`), the exchange's and the outfitter's
     /// quantity (`_DoQuantityDialog` @0x5e25a, @0x5c1aa), the shipyard's
-    /// naming prompt (`_EVTextInputDialog` @0x5eb6c) and the bar's news
-    /// (`_DoNewsDialog` @0x491d7). The spaceport itself and the screens
+    /// naming prompt (`_EVTextInputDialog` @0x5eb6c), the shipyard's and
+    /// the hire screen's Info panel (`_DoShipyardDescription`, whose
+    /// `_ShipDescFilter` @0x510e5 never reads the string) and the bar's
+    /// news (`_DoNewsDialog` @0x491d7). The spaceport itself and the screens
     /// over it close at once instead, their filters reading the string
     /// first: `_PortFilter` @0x4f047, `_BarFilter` @0x47a51,
     /// `_TradeFilter` @0x4e0b5, `_OutfitFilter` @0x58042, and
@@ -1867,8 +1888,15 @@ impl SpaceportView {
             Some(Open::Outfitter(screen)) => {
                 screen.quantity().is_some() || screen.alert_dialog().is_some()
             }
-            Some(Open::Shipyard(screen)) => screen.naming().is_some(),
-            Some(Open::Bar(screen)) => screen.news_screen().is_some(),
+            Some(Open::Shipyard(screen)) => {
+                screen.naming().is_some() || screen.info_panel().is_some()
+            }
+            Some(Open::Bar(screen)) => {
+                screen.news_screen().is_some()
+                    || screen
+                        .hire_screen()
+                        .is_some_and(|hire| hire.info_panel().is_some())
+            }
             Some(Open::Service(_) | Open::Computer(_)) | None => false,
         }
     }
@@ -1925,9 +1953,8 @@ impl SpaceportView {
     }
 
     /// Activates dialog item `item`: Leave leaves, Recharge (where fuel is
-    /// sold) asks for a refill, and an offered service's button opens it,
-    /// each showing the description again in place of a refusal. Anything
-    /// else does nothing.
+    /// sold) asks for a refill, and an offered service's button opens it.
+    /// Anything else does nothing.
     /// Opens the bar, laid out with `metrics` and its buttons in `style`,
     /// when it is given, and true; false, opening nothing, without it.
     fn open_bar_screen(&mut self, metrics: Rc<dyn TextMetrics>, style: ButtonStyle) -> bool {
@@ -1963,14 +1990,12 @@ impl SpaceportView {
             return;
         };
         if item == RECHARGE_ITEM && port.sells_fuel {
-            port.show_description();
             self.recharge = true;
             return;
         }
         let Some(service) = item_service(item).filter(|s| port.offered.contains(s)) else {
             return;
         };
-        port.show_description();
         if let (Some(missioning), Service::MissionBbs) = (&mut self.missioning, service) {
             missioning.requested = true;
             return;
@@ -1991,9 +2016,10 @@ impl SpaceportView {
         let clock = self.offer_clock;
         self.open = Some(
             match (&self.trade, &self.outfitting, &self.shipbuying, service) {
-                (Some((template, quantity, market)), _, _, Service::TradeCenter) => {
+                (Some((template, quantity, market, colors)), _, _, Service::TradeCenter) => {
                     let layout = template.clone().map(|template| (template, metrics));
-                    let screen = TradeScreen::new(layout, quantity.clone(), market.clone(), style);
+                    let screen = TradeScreen::new(layout, quantity.clone(), market.clone(), style)
+                        .with_colors(*colors);
                     Open::Trade(Box::new(match offer {
                         Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
@@ -2068,7 +2094,8 @@ fn lists_no_ships(shipbuying: Option<&Shipbuying>, service: Service) -> bool {
 
 impl Screen for SpaceportView {
     /// An open service takes every input until it closes. Otherwise the
-    /// mission info and player info keys ask for their screens, a press of
+    /// map key asks for the course map, as `_PortFilter`'s first key check
+    /// does, the mission info and player info keys ask for their screens, a press of
     /// one of the [`PORT_KEYS`](super::layout::PORT_KEYS) presses its
     /// button, and every other input goes to the dialog. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
@@ -2108,6 +2135,11 @@ impl Screen for SpaceportView {
                 }
             }
             self.note_closings(before);
+            return ScreenAction::None;
+        }
+        // `_PortFilter`'s first key check (@0x4f165-0x4f185).
+        if is_map_press(input) && self.port.is_ok() {
+            self.port_map_requested = true;
             return ScreenAction::None;
         }
         if is_mission_info_press(input)
@@ -2327,25 +2359,26 @@ impl SpaceportView {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(in crate::spaceport) mod tests {
     use crate::ui::mission_info::MISSION_INFO_KEY;
     use std::cell::RefCell;
 
     use nova_sim::landing::StellarFlags;
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_command};
     use crate::geometry::Bounds;
     use crate::input::MouseButton;
     use crate::sound::{Sound, UiSound};
     use crate::spaceport::catalog::PortRecord;
-    use crate::spaceport::layout::SERVICE_ITEMS;
+    use crate::spaceport::layout::{SERVICE_ITEMS, service_item};
     use crate::text::fixture::MonoMetrics;
+    use crate::ui::ScrollText;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
     /// Stellar 140, Earth: a planet with a trade center and a bar, of
     /// `Type` 3 with no custom picture, so its landscape is `PICT` 10003.
-    struct FakePort {
+    pub(in crate::spaceport) struct FakePort {
         port: Result<PortRecord, String>,
         pictures: Vec<i16>,
         description: Result<String, String>,
@@ -2449,15 +2482,20 @@ mod tests {
         (template(), Rc::new(MonoMetrics))
     }
 
-    fn view_of(catalog: &FakePort) -> SpaceportView {
+    pub(in crate::spaceport) fn view_of(catalog: &FakePort) -> SpaceportView {
         SpaceportView::new(catalog, StellarId(140), Ok(layout()))
+    }
+
+    /// Earth without the port dialog.
+    pub(in crate::spaceport) fn without_its_dialog() -> SpaceportView {
+        SpaceportView::new(&catalog(), StellarId(140), Err("no DLOG 1000".to_owned()))
     }
 
     fn earth() -> SpaceportView {
         view_of(&catalog())
     }
 
-    fn drawn(view: &impl Screen) -> Vec<DrawCommand> {
+    pub(in crate::spaceport) fn drawn(view: &impl Screen) -> Vec<DrawCommand> {
         let mut list = DrawList::new();
         view.draw(&mut list);
         list.iter().cloned().collect()
@@ -2473,7 +2511,7 @@ mod tests {
             .collect()
     }
 
-    fn key(key: Key) -> Input {
+    pub(in crate::spaceport) fn key(key: Key) -> Input {
         Input::Key {
             key,
             pressed: true,
@@ -2481,7 +2519,7 @@ mod tests {
         }
     }
 
-    fn click(view: &mut SpaceportView, at: Point) {
+    pub(in crate::spaceport) fn click(view: &mut SpaceportView, at: Point) {
         for pressed in [true, false] {
             view.input(&Input::PointerButton {
                 button: MouseButton::Left,
@@ -2491,12 +2529,12 @@ mod tests {
         }
     }
 
-    fn click_item(view: &mut SpaceportView, number: usize) {
+    pub(in crate::spaceport) fn click_item(view: &mut SpaceportView, number: usize) {
         let at = item(view, number).center();
         click(view, at);
     }
 
-    fn item(view: &SpaceportView, item: usize) -> Bounds {
+    pub(in crate::spaceport) fn item(view: &SpaceportView, item: usize) -> Bounds {
         view.dialog()
             .expect("laid out")
             .item_bounds(item)
@@ -2561,16 +2599,10 @@ mod tests {
     }
 
     #[test]
-    fn only_the_offered_services_recharge_and_leave_are_buttons() {
+    fn every_button_is_drawn_in_its_item_in_the_style_asked_for() {
         let view = earth();
         let commands = drawn(&view);
-        let labels = texts(&commands);
-        for shown in ["Trade Center", "Bar", "Mission BBS", "Recharge", "Leave"] {
-            assert!(labels.contains(&shown.to_owned()), "{shown}: {labels:?}");
-        }
-        for hidden in ["Shipyard", "Outfitter", "Done"] {
-            assert!(!labels.contains(&hidden.to_owned()), "{hidden}: {labels:?}");
-        }
+        assert!(!texts(&commands).contains(&"Done".to_owned()));
         // Each in its own item, with the button style asked for.
         let label_at = |text: &str| {
             commands.iter().find_map(|command| match command {
@@ -2585,14 +2617,20 @@ mod tests {
         };
         for (text, item_number) in [
             ("Trade Center", 7),
-            ("Bar", 10),
-            ("Mission BBS", 11),
+            ("Mission BBS", 10),
+            ("Bar", 11),
             ("Recharge", 4),
             ("Leave", 12),
         ] {
             let (origin, color) = label_at(text).expect(text);
             assert!(item(&view, item_number).contains(origin), "{text}");
             assert_eq!(color, Color::BLACK, "{text}");
+        }
+        // Those Earth doesn't offer, greyed.
+        for (text, item_number) in [("Outfitter", 8), ("Shipyard", 9)] {
+            let (origin, color) = label_at(text).expect(text);
+            assert!(item(&view, item_number).contains(origin), "{text}");
+            assert_eq!(color, ButtonStyle::STOCK.grey, "{text}");
         }
         assert_eq!(item(&view, 12), on_screen(471.0, 456.0, 145.0, 25.0));
     }
@@ -2625,6 +2663,41 @@ mod tests {
     }
 
     #[test]
+    fn the_description_draws_over_a_black_box_filling_its_item() {
+        let view = earth();
+        let commands = drawn(&view);
+        let fill = commands
+            .iter()
+            .position(|command| *command == fill_command(item(&view, TEXT_ITEM), Color::BLACK))
+            .expect("filled black");
+        let text = commands
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Text { text, .. } if text == "Blue and green."))
+            .expect("the description");
+        assert!(fill < text, "the box is under the text");
+    }
+
+    #[test]
+    fn up_and_down_still_scroll_the_description() {
+        let long: Vec<String> = (0..40).map(|n| format!("line {n}")).collect();
+        let catalog = FakePort {
+            description: Ok(long.join("\r")),
+            ..catalog()
+        };
+        let mut view = view_of(&catalog);
+        let first = |view: &SpaceportView| {
+            view.dialog()
+                .and_then(|dialog| dialog.text(TEXT_ITEM))
+                .map(ScrollText::first)
+        };
+        view.input(&key(Key::Down));
+        view.input(&key(Key::Down));
+        assert_eq!(first(&view), Some(2));
+        view.input(&key(Key::Up));
+        assert_eq!(first(&view), Some(1));
+    }
+
+    #[test]
     fn leave_return_and_escape_leave() {
         let mut view = earth();
         click_item(&mut view, 12);
@@ -2639,8 +2712,8 @@ mod tests {
     #[test]
     fn clicks_elsewhere_do_nothing() {
         let mut view = earth();
-        // The shipyard's and outfitter's places, the blank button, the
-        // landscape and the description.
+        // The shipyard's and outfitter's greyed buttons, the blank item,
+        // the landscape and the description.
         for number in [9, 8, 13, 5, 6, 3] {
             click_item(&mut view, number);
         }
@@ -2671,7 +2744,7 @@ mod tests {
         assert!(view.open_service().is_none());
         assert!(!view.left());
         // Done, clicked.
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(
             view.open_service().map(ServiceScreen::service),
             Some(Service::Bar)
@@ -2779,27 +2852,6 @@ mod tests {
         assert!(!texts(&drawn(&view)).iter().any(|t| t.contains("dësc")));
     }
 
-    #[test]
-    fn an_uninhabited_stellar_offers_only_leave() {
-        let catalog = FakePort {
-            port: Ok(PortRecord {
-                flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
-                ..catalog().port.expect("a record")
-            }),
-            ..catalog()
-        };
-        let view = view_of(&catalog);
-        assert_eq!(view.offered(), []);
-        let labels = texts(&drawn(&view));
-        assert!(labels.contains(&"Leave".to_owned()));
-        assert!(!labels.contains(&"Mission BBS".to_owned()));
-        assert!(!labels.contains(&"Recharge".to_owned()), "no fuel sold");
-        let mut view = view;
-        click_item(&mut view, RECHARGE_ITEM);
-        assert!(!view.take_recharge());
-        assert_eq!(view.take_sounds(), [], "a blank item is silent");
-    }
-
     fn problem(reason: &str) -> DrawCommand {
         DrawCommand::Text {
             text: format!(
@@ -2894,14 +2946,14 @@ mod tests {
         click(&mut view, super::super::service::DONE_BUTTON.center());
         assert!(view.open_service().is_none(), "closed");
         assert_eq!(view.take_sounds(), []);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Escape));
         assert!(view.open_service().is_none());
         assert_eq!(view.take_sounds(), [], "Escape is silent");
     }
 
     #[test]
-    fn keys_blank_items_and_a_spaceport_that_cannot_be_shown_are_silent() {
+    fn keys_greyed_buttons_and_a_spaceport_that_cannot_be_shown_are_silent() {
         let mut view = earth();
         click_item(&mut view, 9);
         view.input(&key(Key::Enter));
@@ -2943,7 +2995,7 @@ mod tests {
     }
 
     /// A stellar with `flags`, otherwise Earth.
-    fn flagged(flags: u32) -> FakePort {
+    pub(in crate::spaceport) fn flagged(flags: u32) -> FakePort {
         FakePort {
             port: Ok(PortRecord {
                 flags,
@@ -3009,11 +3061,9 @@ mod tests {
             view.input(&key(Key::Char(letter)));
             assert!(view.take_recharge(), "{letter}");
             assert!(!view.take_recharge(), "once");
-            view.refuse_recharge(RechargeRefusal::Full);
-            assert_eq!(box_lines(&view), [ALREADY_RECHARGED]);
             view.input(&key(Key::Char(letter)));
-            assert_eq!(box_lines(&view), DESCRIPTION, "{letter}: recharge again");
-            assert!(view.take_recharge(), "{letter}");
+            assert!(view.take_recharge(), "{letter}: again");
+            assert_eq!(box_lines(&view), DESCRIPTION, "{letter}: nothing said");
             assert!(view.open_service().is_none());
             assert!(!view.left());
             assert_eq!(view.take_sounds(), [], "{letter}");
@@ -3023,15 +3073,14 @@ mod tests {
     /// `_DoPortDialog`'s answers gate each item on the stellar's flags
     /// (@0x5fd6c, @0x5fe71, @0x5feb5, @0x5ff2c, @0x5ffb7, @0x60115), and
     /// a key meets no other gate, so a letter for a service the stellar
-    /// doesn't offer does nothing, as a click on a blank button does.
+    /// doesn't offer does nothing, as a click on its greyed button does.
     #[test]
     fn a_letter_for_a_service_not_offered_does_nothing() {
         let mut bare = view_of(&flagged(StellarFlags::CAN_LAND));
-        bare.refuse_recharge(RechargeRefusal::Full);
         for letter in ['o', 's', 'b', 'c', 't'] {
             bare.input(&key(Key::Char(letter)));
             assert!(bare.open_service().is_none(), "{letter}");
-            assert_eq!(box_lines(&bare), [ALREADY_RECHARGED], "{letter}");
+            assert_eq!(box_lines(&bare), DESCRIPTION, "{letter}");
         }
         assert_eq!(bare.take_sounds(), []);
         let uninhabited = || flagged(StellarFlags::CAN_LAND | StellarFlags::UNINHABITED);
@@ -3124,8 +3173,6 @@ mod tests {
 
     // Recharging.
 
-    use nova_sim::RechargeRefusal;
-
     use crate::spaceport::layout::RECHARGE_ITEM;
 
     /// The lines in the description box.
@@ -3150,15 +3197,6 @@ mod tests {
     const DESCRIPTION: [&str; 2] = ["Blue and green.", "Home."];
 
     #[test]
-    fn the_refusals_say_why_in_the_originals_words_or_ours() {
-        assert_eq!(
-            CANNOT_AFFORD_RECHARGE,
-            "You don't have enough credits to recharge."
-        );
-        assert_eq!(ALREADY_RECHARGED, "Your ship is already fully recharged.");
-    }
-
-    #[test]
     fn recharge_is_asked_for_once_per_click() {
         let mut view = earth();
         assert!(!view.take_recharge(), "nothing clicked");
@@ -3171,65 +3209,21 @@ mod tests {
     }
 
     #[test]
-    fn a_refusal_shows_in_the_description_box_until_recharged() {
-        for (refusal, message) in [
-            (RechargeRefusal::CannotAfford, CANNOT_AFFORD_RECHARGE),
-            (RechargeRefusal::Full, ALREADY_RECHARGED),
-        ] {
-            let mut view = earth();
-            click_item(&mut view, RECHARGE_ITEM);
-            view.refuse_recharge(refusal);
-            assert_eq!(box_lines(&view), [message], "{refusal:?}");
-            let labels = texts(&drawn(&view));
-            assert!(labels.contains(&message.to_owned()), "{labels:?}");
-            assert!(!labels.contains(&DESCRIPTION[0].to_owned()), "{labels:?}");
-            view.recharged();
-            assert_eq!(box_lines(&view), DESCRIPTION);
-        }
-    }
-
-    #[test]
-    fn the_description_is_asked_to_load_and_shows_loaded_after_a_refusal() {
+    fn the_description_is_asked_to_load_and_shows_loaded() {
         let mut view = earth();
         assert_eq!(view.take_description_request(), Some(140));
         assert_eq!(view.take_description_request(), None, "once");
         view.show_description(140, "Loaded port.");
         assert_eq!(box_lines(&view), ["Loaded port."]);
         click_item(&mut view, RECHARGE_ITEM);
-        view.refuse_recharge(RechargeRefusal::Full);
         view.show_description(140, "Loaded again.");
-        assert_eq!(box_lines(&view), [ALREADY_RECHARGED], "the refusal stays");
-        view.recharged();
         assert_eq!(box_lines(&view), ["Loaded again."]);
         view.show_description(141, "Another.");
         assert_eq!(box_lines(&view), ["Loaded again."], "not the port's");
     }
 
     #[test]
-    fn with_no_fuel_sold_the_description_stays() {
-        let mut view = earth();
-        view.refuse_recharge(RechargeRefusal::NoFuel);
-        assert_eq!(box_lines(&view), DESCRIPTION);
-    }
-
-    #[test]
-    fn a_refusal_shows_until_the_next_button_is_activated() {
-        let mut view = earth();
-        view.refuse_recharge(RechargeRefusal::Full);
-        click_item(&mut view, 13);
-        assert_eq!(box_lines(&view), [ALREADY_RECHARGED], "a blank item");
-        click_item(&mut view, RECHARGE_ITEM);
-        assert_eq!(box_lines(&view), DESCRIPTION, "recharge again");
-        assert!(view.take_recharge());
-        view.refuse_recharge(RechargeRefusal::Full);
-        click_item(&mut view, 7);
-        view.input(&key(Key::Escape));
-        assert!(view.open_service().is_none());
-        assert_eq!(box_lines(&view), DESCRIPTION, "a service");
-    }
-
-    #[test]
-    fn recharged_without_a_refusal_keeps_the_description_where_it_is() {
+    fn recharge_keeps_the_description_where_it_is() {
         let catalog = FakePort {
             description: Ok((0..40)
                 .map(|n| format!("l{n}"))
@@ -3239,15 +3233,17 @@ mod tests {
         };
         let mut view = view_of(&catalog);
         view.input(&key(Key::Down));
-        view.recharged();
+        click_item(&mut view, RECHARGE_ITEM);
+        view.set_recharge_enabled(false);
+        assert!(view.take_recharge());
         assert_eq!(view_first_line(&view), 1, "not scrolled back");
     }
 
     #[test]
     fn a_spaceport_that_cannot_be_shown_takes_recharge_news_quietly() {
         let mut broken = SpaceportView::new(&catalog(), StellarId(140), Err("no".to_owned()));
-        broken.refuse_recharge(RechargeRefusal::Full);
-        broken.recharged();
+        broken.set_recharge_enabled(true);
+        broken.set_recharge_enabled(false);
         assert!(!broken.take_recharge());
         assert_eq!(broken.problem(), Some("no"));
     }
@@ -3304,6 +3300,8 @@ mod tests {
                 held,
                 sold_here: true,
                 bought_here: true,
+                slot: 0,
+                marker: None,
             }],
             events: Vec::new(),
             cash: 1000,
@@ -3334,8 +3332,15 @@ mod tests {
     }
 
     fn trading(template: Result<Template, String>) -> SpaceportView {
-        earth().with_trade(template, Ok(quantity_template()), exchange(0))
+        earth().with_trade(template, Ok(quantity_template()), exchange(0), COLORS)
     }
+
+    /// The list colours the spaceport's exchange is given.
+    const COLORS: ListColors = ListColors {
+        text: Color::rgba(1, 2, 3, 255),
+        background: Color::rgba(4, 5, 6, 255),
+        hilite: Color::rgba(7, 8, 9, 255),
+    };
 
     fn trade_item(view: &SpaceportView, number: usize) -> Point {
         view.open_trade()
@@ -3354,6 +3359,7 @@ mod tests {
         click_item(&mut view, 7);
         let open = view.open_trade().expect("trading");
         assert_eq!(open.market(), &exchange(0));
+        assert_eq!(open.colors(), COLORS, "in the colours given");
         assert!(view.open_service().is_none());
         // Drawn over the spaceport, as the original's dialog is.
         let mut expected: Vec<DrawCommand> = drawn(&earth());
@@ -3367,7 +3373,7 @@ mod tests {
         assert!(view.open_trade().is_none());
         assert!(!view.left());
         // The other services still open their placeholders.
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(
             view.open_service().map(ServiceScreen::service),
             Some(Service::Bar)
@@ -3521,7 +3527,7 @@ mod tests {
     }
 
     /// A fuel tank, `owned` owned, with 5000 credits and 8 tons free.
-    fn tanks(owned: u16) -> Outfitter {
+    pub(in crate::spaceport) fn tanks(owned: u16) -> Outfitter {
         Outfitter {
             rows: vec![OutfitRow {
                 id: OutfitId(200),
@@ -3579,6 +3585,18 @@ mod tests {
             .center()
     }
 
+    /// Clicks the open outfitter's cell `index`, as a player picks an
+    /// outfit: it opens with none selected.
+    fn click_outfit_cell(view: &mut SpaceportView, index: usize) {
+        let at = view
+            .open_outfitter()
+            .expect("outfitting")
+            .cell_bounds(index)
+            .expect("a cell")
+            .center();
+        click(view, at);
+    }
+
     #[test]
     fn with_an_outfitter_its_button_opens_it_over_the_spaceport() {
         let mut view = outfitting(Ok(outfit_template()));
@@ -3599,7 +3617,7 @@ mod tests {
         assert!(view.open_outfitter().is_none());
         assert!(!view.left());
         // The other services keep their placeholders.
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(
             view.open_service().map(ServiceScreen::service),
             Some(Service::Bar)
@@ -3616,7 +3634,7 @@ mod tests {
         assert!(!view.take_outfitter_opened(), "once");
         view.input(&key(Key::Escape));
         assert!(!view.take_outfitter_opened(), "closing is not opening");
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(!view.take_outfitter_opened(), "the bar is not it");
         view.input(&key(Key::Escape));
         click_item(&mut view, 8);
@@ -3636,7 +3654,7 @@ mod tests {
         view.input(&key(Key::Escape));
         assert!(view.take_outfitter_closed());
         assert!(!view.take_outfitter_closed(), "once");
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Escape));
         assert!(!view.take_outfitter_closed(), "the bar is not it");
         click_item(&mut view, 8);
@@ -3682,6 +3700,7 @@ mod tests {
             Some(4),
             "it opens on the latest"
         );
+        click_outfit_cell(&mut view, 0);
         view.input(&key(Key::Char('b')));
         assert_eq!(
             view.take_outfit(),
@@ -3715,6 +3734,7 @@ mod tests {
     fn the_outfitters_quantity_dialog_is_laid_out_by_its_template() {
         let mut view = outfitting(Ok(outfit_template()));
         click_item(&mut view, 8);
+        click_outfit_cell(&mut view, 0);
         view.input(&key(Key::Alt));
         let buy = outfit_item(&view, 7);
         click(&mut view, buy);
@@ -3864,12 +3884,12 @@ mod tests {
         );
         // The mission computer is one; the bar and a placeholder are not.
         let mut view = drinking(true);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Escape));
         assert!(view.open_bar().is_none());
         assert_eq!(view.take_port_dialog_closed(), None, "the bar");
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         view.input(&key(Key::Escape));
         assert!(view.mission_computer().is_none());
@@ -3911,7 +3931,7 @@ mod tests {
             assert_eq!(view.take_port_dialog_opened(), None, "closing");
         }
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         assert_eq!(view.take_port_dialog_opened(), None, "only asked for");
         view.open_mission_computer(Ok(offers()));
         assert_eq!(
@@ -3920,7 +3940,7 @@ mod tests {
         );
         assert_eq!(view.take_port_dialog_opened(), None, "once");
         let mut view = drinking(true);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(view.take_port_dialog_opened(), None, "the bar");
         let mut view = earth();
         click_item(&mut view, 7);
@@ -3958,6 +3978,12 @@ mod tests {
     use nova_sim::{Rulebook, ShipFacts, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
 
     use crate::spaceport::shipyard::ShipOrder;
+
+    impl crate::spaceport::grid::GridLooks for FakePort {
+        fn grid_colors(&self) -> crate::spaceport::grid::GridColors {
+            crate::spaceport::grid::GridColors::STOCK
+        }
+    }
 
     impl ShipBaseImages for FakePort {
         fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
@@ -4095,7 +4121,7 @@ mod tests {
         view.input(&key(Key::Escape));
         assert!(view.open_shipyard().is_none());
         assert!(!view.left());
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(
             view.open_service().map(ServiceScreen::service),
             Some(Service::Bar)
@@ -4137,6 +4163,7 @@ mod tests {
         assert_eq!(view.take_ship(), None, "nothing open");
         view.set_shipyard(yard(16_000));
         click_item(&mut view, 9);
+        view.input(&key(Key::Right));
         assert_eq!(
             view.open_shipyard()
                 .map(|open| open.shipyard().rows[0].price),
@@ -4195,7 +4222,8 @@ mod tests {
     fn a_ship_declined_at_its_prompt_is_taken_through_the_spaceport() {
         let mut view = shipbuying(Ok(shipyard_template()));
         click_item(&mut view, 9);
-        let buy = shipyard_item(&view, 7);
+        view.input(&key(Key::Right));
+        let buy = shipyard_item(&view, 1);
         click(&mut view, buy);
         assert_eq!(view.take_ship_request(), Some(ShipId(129)));
         view.open_ship_naming(&naming());
@@ -4217,7 +4245,7 @@ mod tests {
         let mut view = shipbuying(Ok(shipyard_template()));
         click_item(&mut view, 9);
         assert_eq!(view.take_sounds(), []);
-        let buy = shipyard_item(&view, 7);
+        let buy = shipyard_item(&view, 1);
         let button = |pressed| Input::PointerButton {
             button: MouseButton::Left,
             pressed,
@@ -4228,7 +4256,7 @@ mod tests {
         view.input(&button(false));
         assert_eq!(view.take_ship_request(), None, "the click was abandoned");
         assert_eq!(view.take_sounds(), []);
-        let done = shipyard_item(&view, 1);
+        let done = shipyard_item(&view, 7);
         click(&mut view, done);
         assert!(view.open_shipyard().is_none(), "closed");
         assert_eq!(view.take_sounds(), []);
@@ -4288,15 +4316,15 @@ mod tests {
     fn opening_the_bar_is_told_once() {
         let mut view = drinking(true);
         assert!(!view.take_bar_opened(), "nothing open");
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(view.take_bar_opened());
         assert!(!view.take_bar_opened(), "once");
         view.input(&key(Key::Escape));
         assert!(!view.take_bar_opened(), "leaving is not opening");
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(view.take_bar_opened(), "each time it opens");
         let mut view = earth();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(!view.take_bar_opened(), "the placeholder is not the bar");
     }
 
@@ -4305,7 +4333,7 @@ mod tests {
         let mut view = drinking(true);
         assert!(!view.take_news_request(), "nothing open");
         view.open_news(&the_news(), 9000);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(
             view.open_bar().and_then(BarScreen::news_screen).is_none(),
             "only an answer opens it"
@@ -4335,6 +4363,7 @@ mod tests {
     /// `rows` ships for hire, the fleet with `room` or not.
     fn hirelings(rows: usize, room: bool) -> HireList {
         HireList {
+            rules: nova_sim::Rulebook::default(),
             rows: (0..rows)
                 .map(|n| HireRow {
                     id: ShipId(128 + n as i16),
@@ -4388,7 +4417,7 @@ mod tests {
     fn with_a_bar_its_button_opens_it_over_the_spaceport() {
         let mut view = drinking(true);
         assert!(view.open_bar().is_none());
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         let bar = view.open_bar().expect("in the bar");
         assert!(view.open_service().is_none());
         assert_eq!(
@@ -4414,11 +4443,12 @@ mod tests {
         assert!(!view.take_hire_request(), "nothing open");
         view.open_hire(hirelings(1, true));
         assert_eq!(view.take_hire(), None);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         assert!(!view.take_hire_request(), "once");
         view.open_hire(hirelings(2, true));
+        view.input(&key(Key::Right));
         let hire = view
             .open_bar()
             .and_then(BarScreen::hire_screen)
@@ -4436,7 +4466,7 @@ mod tests {
         click(&mut view, hire_label);
         assert!(!view.take_hire_request(), "the fleet is full");
         view.input(&key(Key::Escape));
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Char('e')));
         assert!(
             !view.take_hire_request(),
@@ -4448,10 +4478,11 @@ mod tests {
     fn the_hire_screen_closing_is_reported_once_after_a_hire_a_cancel_or_nothing_for_hire() {
         let mut view = drinking(true);
         assert!(!view.take_hire_closed(), "nothing open");
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         view.open_hire(hirelings(2, true));
+        view.input(&key(Key::Right));
         assert!(!view.take_hire_closed(), "opening is not closing");
         view.input(&key(Key::Char('h')));
         assert_eq!(view.take_hire(), Some(ShipId(128)));
@@ -4482,7 +4513,9 @@ mod tests {
     #[test]
     fn with_nothing_for_hire_a_text_says_so() {
         let mut view = drinking_with_info();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
+        let _ = view.take_offer_request();
+        let _ = view.take_status_refresh();
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         view.open_hire(hirelings(0, true));
@@ -4490,6 +4523,8 @@ mod tests {
         assert!(bar.hire_screen().is_none());
         assert_eq!(shown_text(&view), Some(NONE_FOR_HIRE.to_owned()));
         assert_eq!(view.take_port_dialog_opened(), None);
+        assert!(!view.take_status_refresh(), "nothing redrawn");
+        assert_eq!(view.take_offer_request(), None, "no offer asked");
     }
 
     #[test]
@@ -4497,8 +4532,12 @@ mod tests {
         use crate::flight::view::MAP_KEY;
         let mut view = drinking(true);
         view.input(&key(MAP_KEY));
-        assert_eq!(view.take_map_request(), None, "no bar open");
-        click_item(&mut view, 10);
+        assert_eq!(
+            view.take_map_request(),
+            Some(PortMap::Screen(PortScreen::Spaceport)),
+            "no bar open: the spaceport's own"
+        );
+        click_item(&mut view, 11);
         view.input(&key(MAP_KEY));
         assert_eq!(view.take_map_request(), Some(PortMap::Bar));
         assert_eq!(view.take_map_request(), None, "once");
@@ -4513,7 +4552,7 @@ mod tests {
             assert_eq!(view.take_offer_request(), Some(SPACEPORT));
             if venue != SPACEPORT {
                 let item = match venue {
-                    BAR => 10,
+                    BAR => 11,
                     TRADE_CENTER => 7,
                     OUTFITTER => 8,
                     _ => 9,
@@ -4608,7 +4647,7 @@ mod tests {
     #[test]
     fn a_full_fleet_greys_hire_escort_when_the_bar_opens() {
         let mut view = drinking(false);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(Key::Char('h')));
         assert!(!view.take_hire_request());
         let debug = format!("{view:?}");
@@ -4705,7 +4744,7 @@ mod tests {
 
     /// Earth with its mission screens given, its offers laid out by the
     /// text's shape, and both picture variants by [`picture_template`].
-    fn missioned() -> SpaceportView {
+    pub(in crate::spaceport) fn missioned() -> SpaceportView {
         earth().with_missions(
             Ok(computer_template()),
             Ok(info_template()),
@@ -4733,6 +4772,7 @@ mod tests {
             rows: vec![ComputerRow {
                 mission: MissionId(130),
                 name: "Run".to_owned(),
+                raw_name: "Run".to_owned(),
                 text: "Go.".to_owned(),
             }],
             today: "June 23rd, 1177 NC".to_owned(),
@@ -4751,7 +4791,7 @@ mod tests {
     fn mission_bbs_asks_for_the_mission_computer() {
         let mut view = missioned();
         assert!(!view.take_mission_computer_request());
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         assert!(view.open_service().is_none(), "no placeholder");
         assert!(view.take_mission_computer_request());
         assert!(!view.take_mission_computer_request(), "once");
@@ -4772,7 +4812,7 @@ mod tests {
     #[test]
     fn without_mission_screens_mission_bbs_opens_its_placeholder() {
         let mut view = earth();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         assert_eq!(
             view.open_service().map(ServiceScreen::service),
             Some(Service::MissionBbs)
@@ -4783,7 +4823,7 @@ mod tests {
     #[test]
     fn a_refused_computer_says_why_over_the_spaceport() {
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Err(ComputerRefusal::NoneAvailable));
         assert!(view.mission_computer().is_none());
         assert_eq!(
@@ -4796,7 +4836,7 @@ mod tests {
         dialog.draw(&mut over);
         expected.extend(over.iter().cloned());
         assert_eq!(drawn(&view), expected);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(
             view.open_bar().is_none() && view.open_service().is_none(),
             "it takes every input"
@@ -4810,7 +4850,7 @@ mod tests {
     fn an_accept_is_taken_through_the_spaceport_and_the_computer_handed_back() {
         let mut view = missioned();
         assert_eq!(view.take_mission_accept(), None, "nothing open");
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         let at = view
             .mission_computer()
@@ -4838,7 +4878,7 @@ mod tests {
     #[test]
     fn the_mission_computer_closing_waits_for_the_texts_queued() {
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         view.show_mission_texts(vec![MissionText {
             kind: MissionTextKind::Brief,
@@ -4891,7 +4931,7 @@ mod tests {
     #[test]
     fn a_refused_mission_computer_opens_and_closes_once_its_refusal_closes() {
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Err(ComputerRefusal::NoneAvailable));
         assert_eq!(
             view.take_port_dialog_opened(),
@@ -4910,7 +4950,7 @@ mod tests {
     #[test]
     fn mission_texts_show_one_after_another_over_whatever_is_open() {
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         let text = |mission, text: &str| MissionText {
             graphic: None,
@@ -5016,7 +5056,7 @@ mod tests {
         )
     }
 
-    fn offered() -> OfferPrompt {
+    pub(in crate::spaceport) fn offered() -> OfferPrompt {
         OfferPrompt {
             mission: MissionId(141),
             text: "Ferry this.".to_owned(),
@@ -5035,7 +5075,7 @@ mod tests {
 
     /// Earth with every venue: a trade center, an outfitter, a shipyard
     /// and a bar, and its mission screens.
-    fn venues() -> SpaceportView {
+    pub(in crate::spaceport) fn venues() -> SpaceportView {
         let port = FakePort {
             port: Ok(PortRecord {
                 flags: FLAGS | StellarFlags::OUTFITTER | StellarFlags::SHIPYARD,
@@ -5046,7 +5086,12 @@ mod tests {
         let outfits: Rc<dyn OutfitterCatalog> = Rc::new(outfitting_port());
         let ships: Rc<dyn ShipyardCatalog> = Rc::new(shipyard_port());
         view_of(&port)
-            .with_trade(Ok(trade_template()), Ok(quantity_template()), exchange(0))
+            .with_trade(
+                Ok(trade_template()),
+                Ok(quantity_template()),
+                exchange(0),
+                ListColors::STOCK,
+            )
             .with_outfitter(
                 Ok(outfit_template()),
                 Ok(quantity_template()),
@@ -5121,7 +5166,7 @@ mod tests {
         assert_eq!(view.take_offer_choice(), None);
         view.input(&key(Key::Escape));
         assert!(!view.left(), "the offer took the Escape");
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(view.open_bar().is_none() && view.open_service().is_none());
         view.input(&key(Key::Enter));
         assert!(view.offer_dialog().is_none(), "answered, it closes");
@@ -5283,10 +5328,15 @@ mod tests {
 
     #[test]
     fn each_open_screens_description_is_asked_through_the_spaceport() {
-        for item in [8, 9, 10] {
+        for item in [8, 9, 11] {
             let mut view = venues();
             assert_eq!(view.take_description_request(), Some(140), "the port's");
             click_item(&mut view, item);
+            if item == 8 || item == 9 {
+                // The outfitter and the shipyard open with nothing
+                // selected by the engine.
+                view.input(&key(Key::Right));
+            }
             let id = view.take_description_request().expect("asked");
             assert_ne!(id, 140, "{item}");
             assert_eq!(view.take_description_request(), None, "{item}: once");
@@ -5341,7 +5391,7 @@ mod tests {
     fn the_bar_asks_as_its_venue_a_quarter_second_after_it_opens() {
         let mut view = drinking_with_offers();
         assert_eq!(view.take_offer_request(), Some(SPACEPORT));
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(view.take_offer_request(), None);
         view.tick(ms(249));
         assert_eq!(view.take_offer_request(), None);
@@ -5385,7 +5435,7 @@ mod tests {
         );
         view.input(&key(Key::Char('n')));
         let _ = view.take_offer_choice();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.tick(ms(250));
         assert_eq!(view.take_offer_request(), Some(BAR));
         view.open_offer(pictured());
@@ -5430,7 +5480,7 @@ mod tests {
     fn the_mission_computer_and_placeholder_services_ask_nothing() {
         let mut view = missioned();
         assert_eq!(view.take_offer_request(), Some(SPACEPORT));
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         view.tick(Duration::from_secs(10));
         assert_eq!(view.take_offer_request(), None, "the computer");
@@ -5457,7 +5507,7 @@ mod tests {
     #[test]
     fn a_mission_text_shown_holds_the_bars_wait() {
         let mut view = drinking_with_offers();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.show_mission_texts(vec![MissionText {
             kind: MissionTextKind::Refuse,
             mission: MissionId(141),
@@ -5476,7 +5526,7 @@ mod tests {
     #[test]
     fn without_mission_screens_the_bar_asks_for_no_offer() {
         let mut view = drinking(true);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.tick(Duration::from_secs(10));
         assert_eq!(view.take_offer_request(), None);
         view.open_offer(offered());
@@ -5516,7 +5566,7 @@ mod tests {
         }
     }
 
-    fn actives(rows: usize) -> MissionInfo {
+    pub(in crate::spaceport) fn actives(rows: usize) -> MissionInfo {
         MissionInfo {
             rows: (0..rows)
                 .map(|n| InfoRow {
@@ -5538,11 +5588,11 @@ mod tests {
         assert!(view.take_mission_info_request(), "the spaceport");
         assert!(!view.take_mission_info_request(), "once");
         let mut view = drinking_with_offers();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.input(&key(MISSION_INFO_KEY));
         assert!(view.take_mission_info_request(), "the bar");
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         view.input(&key(MISSION_INFO_KEY));
         assert!(view.take_mission_info_request(), "the computer");
@@ -5628,7 +5678,7 @@ mod tests {
             assert_eq!(view.take_offer_request(), Some(SPACEPORT));
             if venue != SPACEPORT {
                 let item = match venue {
-                    BAR => 10,
+                    BAR => 11,
                     TRADE_CENTER => 7,
                     OUTFITTER => 8,
                     _ => 9,
@@ -5659,20 +5709,33 @@ mod tests {
         assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::MissionInfoClosed)]);
     }
 
+    /// Fills nothing: the stored name as it is.
+    struct AsStored;
+
+    impl OfferNames for AsStored {
+        fn munged(&self, _: MissionId, raw: &str) -> Option<String> {
+            Some(raw.to_owned())
+        }
+    }
+
     #[test]
     fn the_mission_screens_ask_for_their_selected_texts_and_show_them_loaded() {
         let mut view = missioned();
         assert_eq!(view.take_computer_text_request(), None, "nothing open");
         assert_eq!(view.take_info_text_request(), None);
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         assert_eq!(view.take_computer_text_request(), Some(MissionId(130)));
         assert_eq!(view.take_computer_text_request(), None, "once");
-        view.show_computer_row(&ComputerRow {
-            mission: MissionId(130),
-            name: "Run, loaded".to_owned(),
-            text: "Go, loaded.".to_owned(),
-        });
+        view.show_computer_row(
+            &ComputerRow {
+                mission: MissionId(130),
+                name: "Run, loaded".to_owned(),
+                raw_name: "Run <DST>".to_owned(),
+                text: "Go, loaded.".to_owned(),
+            },
+            &AsStored,
+        );
         let computer = view.mission_computer().expect("open");
         let item = |item| {
             computer
@@ -5683,6 +5746,7 @@ mod tests {
                 .join(" ")
         };
         assert_eq!(item(crate::spaceport::missions::TEXT_ITEM), "Go, loaded.");
+        assert_eq!(item(crate::spaceport::missions::NAME_ITEM), "Run <DST>");
         view.open_mission_info(actives(2));
         assert_eq!(view.take_info_text_request(), Some(0));
         view.show_info_text(0, "Text 0, loaded.");
@@ -5699,7 +5763,7 @@ mod tests {
     #[test]
     fn mission_info_opens_over_whatever_is_open_only_with_missions_to_show() {
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         view.open_mission_info(actives(0));
         assert!(view.mission_info().is_none(), "nothing to show");
@@ -5720,7 +5784,8 @@ mod tests {
     // Player info.
 
     use crate::ui::player_info::{
-        PLAYER_INFO_KEY, PlayerInfoButton, PlayerInfoScreen as InfoScreen, Tab,
+        BACKGROUND, BackgroundSizes, PLAYER_INFO_KEY, PictureSize, PlayerInfoButton,
+        PlayerInfoScreen as InfoScreen, Tab,
     };
     use nova_sim::PlayerInfo;
 
@@ -5747,12 +5812,13 @@ mod tests {
         }
     }
 
-    fn pilot_info() -> PlayerInfo {
+    pub(in crate::spaceport) fn pilot_info() -> PlayerInfo {
         PlayerInfo {
             pilot_name: "Ada".to_owned(),
             date: String::new(),
             system: String::new(),
             legal_status: String::new(),
+            combat_rating: String::new(),
             ship_name: String::new(),
             ship_class: String::new(),
             turn_rate: 0,
@@ -5769,13 +5835,31 @@ mod tests {
             honors: None,
             jettisonable: true,
             words: nova_sim::player_info::Words::STOCK,
+            cheat_ids: nova_sim::player_info::CheatIds::default(),
+            cheats: false,
+        }
+    }
+
+    /// The stock background pictures' sizes.
+    fn stock_background() -> BackgroundSizes {
+        let size = |width, height| Some(PictureSize { width, height });
+        BackgroundSizes {
+            upper: size(413.0, 40.0),
+            middle: size(413.0, 215.0),
+            lower: size(413.0, 40.0),
         }
     }
 
     /// `view` with the player info screen's dialogs given, its Yes/No
-    /// dialog the text's shape.
-    fn informed(view: SpaceportView) -> SpaceportView {
-        view.with_player_info(Ok(player_info_template()), Ok(text_template()))
+    /// dialog the text's shape, and its background `sizes`.
+    fn informed_with(view: SpaceportView, sizes: BackgroundSizes) -> SpaceportView {
+        view.with_player_info(Ok(player_info_template()), Ok(text_template()), sizes)
+    }
+
+    /// `view` with the player info screen's dialogs given, its Yes/No
+    /// dialog the text's shape, over the stock pictures.
+    pub(in crate::spaceport) fn informed(view: SpaceportView) -> SpaceportView {
+        informed_with(view, stock_background())
     }
 
     /// Presses P on `view`, which asked nothing before: whether it asks.
@@ -5797,7 +5881,7 @@ mod tests {
         assert!(asks_player_info(&mut view), "the spaceport");
         assert!(!view.take_player_info_request(), "once");
         let mut view = drinking_with_offers();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(asks_player_info(&mut view), "the bar");
         view.open_hire(hirelings(1, true));
         assert!(view.open_bar().and_then(BarScreen::hire_screen).is_some());
@@ -5811,7 +5895,7 @@ mod tests {
         view.open_ship_naming(&naming());
         assert!(!asks_player_info(&mut view), "its name prompt");
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         assert!(asks_player_info(&mut view), "the mission computer");
         let mut view = missioned();
@@ -5830,7 +5914,7 @@ mod tests {
             let mut view = venues();
             assert_eq!(view.take_offer_request(), Some(SPACEPORT));
             let item = match venue {
-                BAR => 10,
+                BAR => 11,
                 TRADE_CENTER => 7,
                 OUTFITTER => 8,
                 _ => 9,
@@ -5951,7 +6035,7 @@ mod tests {
         let player = MockMoviePlayer::playing((160, 120), 2);
         let mut view = venues().with_movies(movies_of(&player));
         assert_eq!(view.take_offer_request(), Some(SPACEPORT));
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.tick(FIRST_OFFER_DELAY);
         assert_eq!(view.take_offer_request(), Some(BAR));
         view.open_offer(filmed_offer(0));
@@ -6136,7 +6220,7 @@ mod tests {
             let mut view = venues().with_movies(movies_of(&player));
             assert_eq!(view.take_offer_request(), Some(SPACEPORT));
             let item = match venue {
-                BAR => 10,
+                BAR => 11,
                 TRADE_CENTER => 7,
                 OUTFITTER => 8,
                 _ => 9,
@@ -6236,7 +6320,7 @@ mod tests {
     #[test]
     fn the_player_info_opens_over_whatever_is_open_and_closes_back_to_it() {
         let mut view = informed(missioned());
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         view.open_player_info(pilot_info());
         let screen = view.player_info().expect("open");
@@ -6259,6 +6343,33 @@ mod tests {
         assert!(view.mission_computer().is_some(), "and nothing below");
         view.input(&key(PLAYER_INFO_KEY));
         assert!(view.take_player_info_request(), "asked again");
+    }
+
+    #[test]
+    fn the_player_info_draws_its_background_from_the_sizes_given() {
+        let sizes = BackgroundSizes {
+            middle: None,
+            ..stock_background()
+        };
+        let mut view = informed_with(missioned(), sizes);
+        view.open_player_info(pilot_info());
+        let screen = view.player_info().expect("open");
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        let pictures: Vec<i16> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Clipped { command, .. } => match **command {
+                    DrawCommand::StretchedPicture { image, .. }
+                    | DrawCommand::Picture { image, .. } => Some(image),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .filter(|image| BACKGROUND.contains(image))
+            .map(|image| image.id)
+            .collect();
+        assert_eq!(pictures, [8518, 8520], "no middle given, none drawn");
     }
 
     #[test]
@@ -6306,7 +6417,7 @@ mod tests {
     fn the_screen_below_waits_while_it_is_open() {
         let mut view = informed(drinking_with_offers());
         assert_eq!(view.take_offer_request(), Some(SPACEPORT));
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view.open_player_info(pilot_info());
         view.tick(Duration::from_secs(10));
         assert_eq!(view.take_offer_request(), None, "the bar's wait held");
@@ -6347,7 +6458,7 @@ mod tests {
     /// The spaceport button that opens `venue`.
     fn venue_item(venue: i16) -> usize {
         match venue {
-            BAR => 10,
+            BAR => 11,
             TRADE_CENTER => 7,
             OUTFITTER => 8,
             _ => 9,
@@ -6534,7 +6645,7 @@ mod tests {
     fn the_spaceport_and_the_screens_whose_filters_leave_hold_no_leave() {
         assert!(!earth().holds_leave());
         let mut view = missioned();
-        click_item(&mut view, 11);
+        click_item(&mut view, 10);
         view.open_mission_computer(Ok(offers()));
         assert!(view.mission_computer().is_some());
         assert!(!view.holds_leave(), "the computer (`_MissionFilter`)");
@@ -6551,12 +6662,32 @@ mod tests {
         assert!(view.open_shipyard().is_some());
         assert!(!view.holds_leave(), "the shipyard (`_ShipyardFilter`)");
         let mut view = drinking(true);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(!view.holds_leave(), "the bar (`_BarFilter`)");
         view.input(&key(Key::Char('h')));
         view.open_hire(hirelings(1, true));
         assert!(view.open_bar().and_then(BarScreen::hire_screen).is_some());
         assert!(!view.holds_leave(), "the hire screen (`_ShipyardFilter`)");
+    }
+
+    #[test]
+    fn the_shipyards_info_panel_holds_a_leave() {
+        let mut view = in_the_shipyards_panel();
+        assert!(view.holds_leave(), "`_ShipDescFilter` never reads it");
+        view.input(&key(Key::Enter));
+        let shipyard = view.open_shipyard().expect("still open");
+        assert!(shipyard.info_panel().is_none());
+        assert!(!view.holds_leave(), "`_ShipyardFilter` answers it");
+    }
+
+    #[test]
+    fn the_hire_screens_info_panel_holds_a_leave() {
+        let mut view = in_the_hire_panel();
+        assert!(view.holds_leave(), "`_ShipDescFilter` never reads it");
+        view.input(&key(Key::Enter));
+        let hire = view.open_bar().and_then(BarScreen::hire_screen);
+        assert!(hire.is_some_and(|hire| hire.info_panel().is_none()));
+        assert!(!view.holds_leave(), "`_ShipyardFilter` answers it");
     }
 
     #[test]
@@ -6612,6 +6743,7 @@ mod tests {
         assert!(view.holds_leave(), "the alert");
         view.input(&key(Key::Escape));
         assert!(!view.holds_leave());
+        click_outfit_cell(&mut view, 0);
         view.input(&key(Key::Alt));
         let buy = outfit_item(&view, 7);
         click(&mut view, buy);
@@ -6641,7 +6773,8 @@ mod tests {
     fn the_shipyards_naming_prompt_holds_a_leave() {
         let mut view = shipbuying(Ok(shipyard_template()));
         click_item(&mut view, 9);
-        let buy = shipyard_item(&view, 7);
+        view.input(&key(Key::Right));
+        let buy = shipyard_item(&view, 1);
         click(&mut view, buy);
         view.open_ship_naming(&naming());
         assert!(view.holds_leave());
@@ -6658,7 +6791,7 @@ mod tests {
     #[test]
     fn the_bars_news_holds_a_leave() {
         let mut view = drinking(true);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         let at = bar_item(&view, 3);
         click(&mut view, at);
         view.open_news(&the_news(), 9000);
@@ -6782,7 +6915,7 @@ mod tests {
         let mut view = kane();
         assert_eq!(frame(&mut view), ambient(false));
         view.tick(mac_ticks(900));
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(view.open_service().is_some());
         view.tick(Duration::from_secs(60));
         assert_eq!(view.take_sounds(), [], "under the bar");
@@ -6861,7 +6994,7 @@ mod tests {
 
     /// Earth with its mission screens, the player info screen and its bar
     /// given, the hire screen's info panel too.
-    fn drinking_with_info() -> SpaceportView {
+    pub(in crate::spaceport) fn drinking_with_info() -> SpaceportView {
         let art: Rc<dyn ShipyardCatalog> = Rc::new(catalog());
         informed(missioned()).with_bar(
             plain_bar(Ok(bar_template())),
@@ -6874,12 +7007,15 @@ mod tests {
     }
 
     /// `view` in its bar, with the hire screen open over two ships.
-    fn hiring(mut view: SpaceportView) -> SpaceportView {
-        click_item(&mut view, 10);
+    pub(in crate::spaceport) fn hiring(mut view: SpaceportView) -> SpaceportView {
+        click_item(&mut view, 11);
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         view.open_hire(hirelings(2, true));
         assert!(view.open_bar().and_then(BarScreen::hire_screen).is_some());
+        // By the engine nothing is selected as it opens: Right picks the
+        // first cell.
+        view.input(&key(Key::Right));
         view
     }
 
@@ -6932,7 +7068,7 @@ mod tests {
         let mut view = view_of(&sounding(LOOPS));
         assert_eq!(frame(&mut view), ambient(true));
         assert_eq!(frame(&mut view), ambient(true));
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(frame(&mut view), [], "covered");
         view.input(&key(Key::Escape));
         assert_eq!(frame(&mut view), ambient(true));
@@ -6973,7 +7109,7 @@ mod tests {
     fn a_press_on_the_landscape_under_something_open_is_not_the_ports() {
         let mut view = kane();
         frame(&mut view);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         let landscape = item(&view, LANDSCAPE_ITEM).center();
         click(&mut view, landscape);
         assert_eq!(view.take_sounds(), []);
@@ -7021,12 +7157,13 @@ mod tests {
     #[test]
     fn the_hire_screen_is_a_port_dialog() {
         let mut view = drinking(true);
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert_eq!(view.take_port_dialog_opened(), None, "the bar");
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         assert_eq!(view.take_port_dialog_opened(), None, "only asked for");
         view.open_hire(hirelings(2, true));
+        view.input(&key(Key::Right));
         assert_eq!(view.take_port_dialog_opened(), Some(PortDialog::Hire));
         assert_eq!(view.take_port_dialog_opened(), None, "once");
         view.open_hire(hirelings(2, true));
@@ -7044,6 +7181,7 @@ mod tests {
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         view.open_hire(hirelings(2, true));
+        view.input(&key(Key::Right));
         assert_eq!(view.take_port_dialog_opened(), Some(PortDialog::Hire));
         view.input(&key(Key::Char('h')));
         assert_eq!(view.take_hire(), Some(ShipId(128)));
@@ -7074,7 +7212,7 @@ mod tests {
     /// [`drinking_with_info`] in its bar.
     fn in_the_bar() -> SpaceportView {
         let mut view = drinking_with_info();
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         view
     }
 
@@ -7089,9 +7227,10 @@ mod tests {
     }
 
     /// [`shipbuying_with_info`] in its shipyard, its info panel open.
-    fn in_the_shipyards_panel() -> SpaceportView {
+    pub(in crate::spaceport) fn in_the_shipyards_panel() -> SpaceportView {
         let mut view = shipbuying_with_info();
         click_item(&mut view, 9);
+        view.input(&key(Key::Right));
         view.input(&key(INFO_KEY));
         let shipyard = view.open_shipyard().expect("shipbuying");
         assert!(shipyard.info_panel().is_some());
@@ -7243,6 +7382,7 @@ mod tests {
             |info| {
                 let mut view = with_info(shipbuying_with_info(), info);
                 click_item(&mut view, 9);
+                view.input(&key(Key::Right));
                 view.input(&key(INFO_KEY));
                 view
             },
@@ -7270,7 +7410,7 @@ mod tests {
             |info| {
                 let mut view = with_info(venues(), info);
                 assert_eq!(view.take_offer_request(), Some(SPACEPORT));
-                click_item(&mut view, 10);
+                click_item(&mut view, 11);
                 view.tick(FIRST_OFFER_DELAY);
                 assert_eq!(view.take_offer_request(), Some(BAR));
                 view.open_offer(offered());
@@ -7373,7 +7513,7 @@ mod tests {
             Rc::clone(&art),
             true,
         );
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         assert!(view.open_bar().and_then(BarScreen::problem).is_some());
         view.input(&key(Key::Escape));
         assert!(view.open_bar().is_none());
@@ -7386,7 +7526,7 @@ mod tests {
             art,
             true,
         );
-        click_item(&mut view, 10);
+        click_item(&mut view, 11);
         let at = bar_item(&view, 3);
         click(&mut view, at);
         assert!(view.take_news_request());

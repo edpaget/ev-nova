@@ -281,13 +281,17 @@ fn placing_the_trader() -> SharedChance {
     SharedChance::new(script)
 }
 
-/// [`placing_the_trader`] for a new pilot: the offers' roll table its
-/// beginning draws, each the last outcome, then the setup.
+/// [`placing_the_trader`] for a new pilot: its name's and nickname's
+/// defaults and its christening's default, each the first, then the
+/// offers' roll table its beginning draws, each the last outcome, then the
+/// setup.
 fn begun_placing_the_trader() -> SharedChance {
+    let christening = [0, 0, 0].into_iter();
     let table = std::iter::repeat_n(99, nova_sim::mission::ROLLED);
     let setup = [6, 6, 0, 0, 850, 650, 0];
-    let script: Rc<RefCell<dyn Chance>> =
-        Rc::new(RefCell::new(Script(table.chain(setup).collect())));
+    let script: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Script(
+        christening.chain(table).chain(setup).collect(),
+    )));
     SharedChance::new(script)
 }
 
@@ -428,6 +432,8 @@ impl Harness {
             harness.send(WindowEvent::Text(c));
         }
         harness.press(Key::Enter);
+        // The ship's christening, confirmed with its default.
+        harness.press(Key::Enter);
         harness.enter_ship();
         assert_eq!(harness.showing(), Showing::Flight);
         harness
@@ -566,8 +572,8 @@ fn entering_flight_shows_the_trader_with_its_sprite_and_a_radar_blip() {
     let trader = session.npcs()[0].clone();
     assert_eq!(trader.ship, ShipId(129));
     assert_eq!(trader.state.position, Vec2::new(100.0, -100.0));
-    // The player is at the centre of the screen, (512, 384).
-    assert_eq!(traders(&first), [centred(612.0, 284.0, 2.0, 2.0)]);
+    // The player is at the play area's centre, (415, 384).
+    assert_eq!(traders(&first), [centred(515.0, 284.0, 2.0, 2.0)]);
     // The planet's 2 x 2 oval on the radar; the trader joins it at the
     // radar's next refresh, within 8 ticks (16 frames), a dim pixel where
     // it is then: (100, -100) is 3.125 radar pixels each way from the
@@ -646,12 +652,19 @@ fn the_routers_behaviour_decides_for_a_flight_entered_with_f() {
 }
 
 /// The trader, idling, has braked to rest from the top speed setup
-/// started it at, heading up from (100, -100): 501 pixels on, a half turn
-/// at its top speed of 6 and 50 ticks of its 0.12 thrust.
+/// started it at, heading up from (100, -100): about 501 pixels on, a half
+/// turn at its top speed of 6 and its 0.12 thrust down to sub 1's 0.35 a
+/// tick on each axis, then settling by 0.95 a tick (@0x855e3-0x85624),
+/// still creeping under 0.35 a tick.
 fn assert_idle_braked_to_rest(trader: &Npc) {
-    assert!(trader.state.velocity.length() < 1e-5, "{:?}", trader.state);
+    let velocity = trader.state.velocity;
+    assert!(
+        velocity.x.abs() < 0.35 && velocity.y.abs() < 0.35,
+        "{:?}",
+        trader.state
+    );
     let off = trader.state.position - Vec2::new(100.0, -601.0);
-    assert!(off.length() < 1e-3, "{:?}", trader.state);
+    assert!(off.length() < 5.0, "{:?}", trader.state);
 }
 
 #[test]
@@ -690,8 +703,9 @@ fn a_flights_diagnostics_are_written_out_once_as_lines() {
          nova: cargo box 3: no spïn 503\n\
          nova: cargo box 4: no spïn 504\n\
          nova: cursor: no spïn 650\n\
+         nova: stars: no spïn 700\n\
          nova: wëap 181 Flags3 0x0020 not implemented\n",
-        "its shots', the cargo boxes' and the cursor's sheets missing from the fixture, as the flight \
+        "its shots', the cargo boxes', the cursor's and the stars' sheets missing from the fixture, as the flight \
          opened; then the trader fired, again and again"
     );
 }

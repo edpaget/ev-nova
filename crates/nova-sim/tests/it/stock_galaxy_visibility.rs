@@ -4,7 +4,9 @@
 //! missions 183 and 887, resolve to 141 by default (`colocated_resolution`
 //! engine), and wormhole 466 shows only in Spica, which owns it. A swap
 //! at Aldebaran keeps the place explored (`explored_by_place` engine).
-//! Skips, passing, when `NOVA_DATA` is unset.
+//! A single jump to Aldebaran from Homeland, selected by place, arrives
+//! in 532 as it is, the Con link it was selected from, by default
+//! (`arrival_system` engine). Skips, passing, when `NOVA_DATA` is unset.
 
 use crate::common;
 
@@ -16,8 +18,8 @@ use nova_sim::gate::{WormholeRule, wormhole_exit};
 use nova_sim::pilot::Gender;
 use nova_sim::story::{GalaxyOverlay, HiddenMove, OverlaidGalaxy, listers_of};
 use nova_sim::{
-    CoLocated, HyperlinkRule, NeverFires, OutfitId, PilotCatalog, RuleKey, RuleSource, Rulebook,
-    Session, SetExpr, StellarId, SystemId,
+    CoLocated, Controls, HyperlinkRule, NeverFires, OutfitId, Pilot, PilotCatalog, RuleKey,
+    RuleSource, Rulebook, Session, SetExpr, StellarId, SystemId,
 };
 
 /// A pilot with only these bits set, as a control-bit test reads it.
@@ -224,7 +226,7 @@ fn the_spica_wormhole_has_exits() {
         StellarId(466),
         spica,
         &sites,
-        |id| galaxy.holder(listers_of(&listed, id), spica),
+        |id| galaxy.holder(id, listers_of(&listed, id), spica),
         WormholeRule::UnlinkedOnly,
         &mut NeverFires,
     )
@@ -287,5 +289,77 @@ fn a_swap_at_aldebaran_keeps_the_place_explored() {
             source == RuleSource::Engine,
             "{source:?}: the landing's rebuild point"
         );
+    }
+}
+
+/// A stock pilot flying in Homeland (173) with b305 set, so both versions
+/// of Aldebaran are visible, reading `arrival_system` as `source`.
+fn in_homeland(data: &GameData, source: RuleSource) -> Session {
+    let mut pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
+    pilot.system = SystemId(173);
+    pilot.bits_mut().set(Bit::new(B305).expect("a control bit"));
+    let session = Session::fly(data, pilot)
+        .expect("flies")
+        .with_rules(Rulebook::default().with_override(RuleKey::ArrivalSystem, source));
+    assert_eq!(session.system(), SystemId(173));
+    assert!(session.galaxy().visible(SystemId(141)) && session.galaxy().visible(SystemId(532)));
+    session
+}
+
+/// Flies out of the no-jump zone, jumps to the system selected, waits out
+/// the warp and arrives.
+fn jump(session: &mut Session, data: &GameData) -> Option<SystemId> {
+    let thrust = Controls {
+        thrust: true,
+        ..Controls::default()
+    };
+    for _ in 0..10_000 {
+        if session.player().position.length() >= session.stats().jump_distance {
+            break;
+        }
+        session.tick(thrust);
+    }
+    session.begin_jump().expect("jumps");
+    for _ in 0..10_000 {
+        if session.warp_end_due() {
+            break;
+        }
+        session.tick(Controls::default());
+    }
+    assert!(session.warp_end_due(), "the warp ends");
+    session.arrive(data, &mut NeverFires)
+}
+
+#[test]
+fn a_single_jump_to_aldebaran_selected_by_place_arrives_in_532_as_it_is() {
+    let Some(data) = open() else {
+        return;
+    };
+    for source in RuleSource::ALL {
+        let mut session = in_homeland(&data, source);
+        // The cue selects Aldebaran by place: 173's first Con slot standing
+        // there, Con1, which names 532 (`_CueNextHyperRouteDest`
+        // @0xe30f-0xe344).
+        session.plot_course(SystemId(141)).expect("a route");
+        assert_eq!(session.course(), [SystemId(141)]);
+        let arrived = jump(&mut session, &data);
+        let shown: BTreeSet<i16> = session.stellars_shown().map(|stellar| stellar.0).collect();
+        match source {
+            RuleSource::Engine => {
+                assert_eq!(arrived, Some(SystemId(532)), "the raw Con link");
+                assert!(shown.contains(&430) && shown.contains(&433), "{shown:?}");
+                assert!(
+                    SHARED.iter().all(|id| !shown.contains(id)),
+                    "141's: {shown:?}"
+                );
+            }
+            RuleSource::Bible => {
+                assert_eq!(arrived, Some(SystemId(141)), "resolved by place");
+                assert!(SHARED.iter().all(|id| shown.contains(id)), "{shown:?}");
+                assert!(!shown.contains(&430) && !shown.contains(&433), "{shown:?}");
+            }
+        }
+        assert_eq!(session.system(), arrived.expect("arrived"), "{source:?}");
+        assert_eq!(session.course(), [] as [SystemId; 0], "{source:?}");
     }
 }

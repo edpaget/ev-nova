@@ -57,6 +57,14 @@
 //!   below 0 moves to the expenses (@0x535c3-0x535cd). The line shows
 //!   only when either is above 0: "Expenses:" when the income is the
 //!   less, else "Net Income:" with expenses, else "Income:".
+//! - **Cheat mode** ([`CheatIds`], [`cheat_suffix`]). With
+//!   `_cheatsActive` (0xdeb60) nonzero, " (n)" follows four values in
+//!   their white: System the `sÿst` ID (@0x52951-0x52991), Legal Status
+//!   the player's raw record in the system, on the inhabited branch only
+//!   (@0x52a16-0x52a5d), Combat Rating the kill count (@0x52ae3-0x52b22)
+//!   and Ship Class the `shïp` ID (@0x52c1d-0x52c5e). Nothing in 1.1
+//!   turns it on (F13 @0x6f17e only turns it off), so here it is a
+//!   developer setting, carried as [`PlayerInfo::cheats`].
 //!
 //! **The Cargo text** ([`cargo_text`], `_SetupPlayerInfoText`
 //! @0x53cde-0x545e4). A 256-slot table, each slot from -1: a commodity
@@ -1103,6 +1111,29 @@ pub fn system_is_inhabited(stellars: impl IntoIterator<Item = (bool, bool)>) -> 
         .any(|(uninhabited, gate)| !uninhabited && !gate)
 }
 
+/// The numbers cheat mode appends to four General rows
+/// (`_PlayerInfoDialogUpdate` @0x52951, @0x52a16, @0x52ae3, @0x52c1d).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CheatIds {
+    /// The system's `sÿst` ID, after System.
+    pub system: i16,
+    /// The player's record the Legal Status was read from, after it;
+    /// `None` in an uninhabited system, whose "N/A" gets none.
+    pub record: Option<i16>,
+    /// The kill count the combat rating reads, after Combat Rating.
+    pub kills: i64,
+    /// The ship's `shïp` ID, after Ship Class.
+    pub class: i16,
+}
+
+/// The suffix cheat mode appends to a General value: `" ("`, the
+/// number, then `")"` (`DrawString` of the Pascal strings @0xd97ab and
+/// @0xdaddc around `NumToString`).
+#[must_use]
+pub fn cheat_suffix(n: impl std::fmt::Display) -> String {
+    format!(" ({n})")
+}
+
 /// What the player info screen shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlayerInfo {
@@ -1114,6 +1145,11 @@ pub struct PlayerInfo {
     pub system: String,
     /// The legal status string, or "N/A".
     pub legal_status: String,
+    /// The combat rating's words, `STR#` 138 by
+    /// `nova_sim::rating::string_index` (`_DrawCombatRatingString` @0x57e5, drawn by
+    /// `_PlayerInfoDialogUpdate` @0x52ade); empty when the list has no
+    /// such entry.
+    pub combat_rating: String,
     /// The ship's name.
     pub ship_name: String,
     /// The ship class's name.
@@ -1147,6 +1183,12 @@ pub struct PlayerInfo {
     /// The `STR#` 2002 strings the screen shows, the same the texts and
     /// the legal status were written with.
     pub words: Words,
+    /// The numbers cheat mode appends, always filled.
+    pub cheat_ids: CheatIds,
+    /// Whether cheat mode is on, so the screen appends [`Self::cheat_ids`].
+    /// The session leaves it `false`; flight sets it from its developer
+    /// setting.
+    pub cheats: bool,
 }
 
 #[cfg(test)]
@@ -1196,6 +1238,12 @@ mod tests {
         let text = text(cargo);
         let rest = text.split_once(":\r\r").expect("a heading").1;
         rest.split_once(".\r\r").expect("a tail").0.to_owned()
+    }
+
+    #[test]
+    fn a_cheat_suffix_is_the_number_in_brackets_after_a_space() {
+        assert_eq!(cheat_suffix(128), " (128)");
+        assert_eq!(cheat_suffix(-5), " (-5)");
     }
 
     #[test]

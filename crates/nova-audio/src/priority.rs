@@ -13,10 +13,10 @@
 
 use crate::port::Priority;
 
-/// The landing beep, `_beepSnd[1]`: the dock request's clearance beep
-/// (`_HandlePlayerDockRequest` @0x67a69, and its family @0x676aa,
-/// @0x676fe, @0x67e8f, @0x67ec6), and `_PlayerLandOnStellar`'s
-/// (@0x632ef), all at 1.
+/// The landing beep, `_beepSnd[1]` at 1: `_PlayerLandOnStellar`'s at an
+/// uninhabited stellar (@0x632ef) alone. The dock request's @0x67a69 and
+/// @0x67ec6 are [`TRAFFIC_CONTROL`]'s, and @0x676aa, @0x676fe and
+/// @0x67e8f are [`REFUSED`]'s.
 pub const LANDING: Priority = Priority::new(1);
 /// A take-off sound. The original takes off in silence, so no site gives
 /// one: the lowest.
@@ -57,6 +57,9 @@ pub const ESCORT_GROUP: Priority = Priority::new(1);
 /// "You don't have any escorts.", `_beepSnd[3]`: `_HandlePlayer`
 /// @0x6de82.
 pub const NO_ESCORTS: Priority = Priority::new(1);
+/// The shipyard's or the hire screen's buy refused, `_beepSnd[3]`:
+/// `_DoShipyardDialog` @0x5f238-0x5f256.
+pub const BUY_REFUSED: Priority = Priority::new(1);
 /// The main screen's E refused, `_beepSnd[3]`: `_MainScreenChoice`
 /// @0x1aaac.
 pub const ENTER_REFUSED: Priority = Priority::new(10);
@@ -67,6 +70,9 @@ pub const ESCORT_REPAIRED: Priority = Priority::new(8);
 pub const PROPULSION_REPAIRED: Priority = Priority::new(1);
 /// The Red Alert, `_redAlertSnd`: `_HandlePlayer` @0x68cff.
 pub const RED_ALERT: Priority = Priority::new(5);
+/// The player cloaking or uncloaking, `cloakSnd[1]` / `cloakSnd[0]`:
+/// `_DoShipCloak` @0xdef3, `_DoShipUncloak` @0xdfd0.
+pub const CLOAK: Priority = Priority::new(8);
 /// Cargo jettisoned, `_beepSnd[4]`: `_JettisonCargo` @0x3e33d.
 pub const JETTISON: Priority = Priority::new(1);
 /// A scan failing a mission, `_beepSnd[1]`: `_ScanPlayer`'s
@@ -101,6 +107,10 @@ pub const HAIL_OFFER: Priority = Priority::new(1);
 /// A person's hail quote, `_beepSnd[4]`: `_ShowPersonHailQuote`
 /// @0x445ad.
 pub const HAIL_QUOTE: Priority = Priority::new(1);
+/// The escort dialog opened, `_beepSnd[4]`: `_DoEscortDialog` @0x9524b.
+pub const ESCORT_DIALOG_OPENED: Priority = Priority::new(1);
+/// The escort dialog closed, `_beepSnd[2]`: `_DoEscortDialog` @0x955fc.
+pub const ESCORT_DIALOG_CLOSED: Priority = Priority::new(1);
 /// A nav key, `_beepSnd[0]`: `_HandlePlayer` @0x69b19, @0x69ebc,
 /// @0x6a6c1.
 pub const NAV_SELECTED: Priority = Priority::new(1);
@@ -113,6 +123,9 @@ pub const TARGET_SELECTED: Priority = Priority::new(1);
 /// The ship target let go, `_beepSnd[0]`: `_HandlePlayer` @0x69a7d,
 /// @0x6a585.
 pub const TARGET_CLEARED: Priority = Priority::new(1);
+/// Weapon Select picking a secondary, or Weapon Safety letting go of one,
+/// `_beepSnd[2]`: `_HandlePlayer` @0x6acf1, @0x6ae1b.
+pub const SECONDARY_SELECTED: Priority = Priority::new(1);
 /// A tutorial hint, `_beepSnd[4]`: `_HandlePlayer` @0x70a1c, @0x70c12,
 /// @0x70dab, @0x70e59.
 pub const TUTORIAL_HINT: Priority = Priority::new(1);
@@ -228,10 +241,12 @@ mod tests {
             (ESCORTS_COMMANDED, 1, "escorts commanded"),
             (ESCORT_GROUP, 1, "escort group"),
             (NO_ESCORTS, 1, "no escorts"),
+            (BUY_REFUSED, 1, "buy refused"),
             (ENTER_REFUSED, 10, "enter refused"),
             (ESCORT_REPAIRED, 8, "escort repaired"),
             (PROPULSION_REPAIRED, 1, "propulsion repaired"),
             (RED_ALERT, 5, "red alert"),
+            (CLOAK, 8, "cloak"),
             (JETTISON, 1, "jettison"),
             (SCAN_FAILED, 1, "scan failed"),
             (SMUGGLING, 1, "smuggling"),
@@ -243,11 +258,14 @@ mod tests {
             (SCAN_HAIL, 1, "scan hail"),
             (REINFORCEMENTS, 1, "reinforcements"),
             (HAIL_OFFER, 1, "hail offer"),
+            (ESCORT_DIALOG_OPENED, 1, "escort dialog opened"),
+            (ESCORT_DIALOG_CLOSED, 1, "escort dialog closed"),
             (HAIL_QUOTE, 1, "hail quote"),
             (NAV_SELECTED, 1, "nav selected"),
             (HYPER_SELECTED, 1, "hyper selected"),
             (TARGET_SELECTED, 1, "target selected"),
             (TARGET_CLEARED, 1, "target cleared"),
+            (SECONDARY_SELECTED, 1, "secondary selected"),
             (TUTORIAL_HINT, 1, "tutorial hint"),
             (SHIP_DOWNED, 1, "ship downed"),
             (DOWNED_MISSION_FAILED, 1, "downed mission failed"),

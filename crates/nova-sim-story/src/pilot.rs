@@ -4,8 +4,8 @@
 //! A new pilot starts as the first `chär` by ascending ID says: its ship,
 //! in the first of its starting systems that exists, on its starting date,
 //! with its cash (none, when the `chär`'s is negative) and its legal
-//! records, its ship named after its class (the `chär`'s own christening
-//! prompt is not shown yet), owning its ship's stock weapons and their `AmmoLoad` as
+//! records, its ship named after its class until the New Pilot flow
+//! christens it, owning its ship's stock weapons and their `AmmoLoad` as
 //! outfits ([`Arsenal::stock_outfits`]) and then its default items
 //! (repeated slots adding up), as `_DoNewPilot` fits them (@0x18f48,
 //! @0x18f4d), and with the ship's shield, armour and fuel full at what it
@@ -44,14 +44,21 @@
 //! paint is saved, as the original's pilot file keeps it
 //! (`_WritePilotData` @0x727f2); drawing it is not done yet.
 //!
+//! It keeps its nickname, the original's `_playerNickname` (0x3b5290),
+//! which the New Pilot dialog sets (`_DoNewPilot` @0x191ca-0x191dc) and the
+//! pilot file keeps (+0x5d98, `_WritePilotData` @0x727cc-0x727e9): empty
+//! for none, as a pilot built without the dialog has.
+//!
 //! It keeps its ship's name, the original's `_shipName`: a new pilot's
-//! ship is named after its class (the `shïp`'s name; the original's
-//! new-pilot dialog asks for one, `_CullNameString` @0x19195, which is
-//! not shown yet), and a pilot from a save made before ships had names
-//! is named after its class when flown. The `T` set operator renames it
-//! (see the session's `ship_change` module); buying or capturing a ship
-//! leaves the name as it is for now (the shipyard's name dialog is not
-//! shown yet), and nothing displays it yet.
+//! ship is named after its class (the `shïp`'s name) until the New Pilot
+//! flow christens it ([`Pilot::with_ship_name`], `nova_sim::christening`,
+//! `_DoNewPilot` @0x18cca-0x18d76, @0x19189-0x191ae), so a pilot built
+//! without the prompt, in a headless run or a test, keeps its class's
+//! name. A pilot from a save made before ships had names is named after
+//! its class when flown. The `T` set operator renames it (see the
+//! session's `ship_change` module), and buying a ship names it from the
+//! shipyard's name prompt (`nova_sim::Session::buy_ship`); capturing a
+//! ship leaves the name as it is.
 //!
 //! It keeps what play has changed of the galaxy, the
 //! [`GalaxyOverlay`]: none on a new pilot, so its galaxy is the
@@ -99,6 +106,7 @@ use crate::outfit_effects::Rgb15;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 use crate::story::{GalaxyOverlay, SubscriptionId};
+use crate::trade_dialog::MissionLoad;
 
 /// How far a system is explored: the original's `sÿst` +0x90, which
 /// takes 0, 1 or 2 and is only ever raised.
@@ -125,6 +133,9 @@ pub enum ExploredLevel {
 pub struct Pilot {
     /// The pilot's name; empty for a pilot that is never saved.
     pub name: String,
+    /// The pilot's nickname (`_playerNickname`, 0x3b5290); empty for none,
+    /// which `<PNN>` reads as the name.
+    pub nickname: String,
     /// The ship class flown.
     pub ship: ShipId,
     /// The ship's name. `None` for a ship never named: a save from
@@ -141,7 +152,13 @@ pub struct Pilot {
     /// The ship's shield, armour and fuel.
     pub reserves: Reserves,
     /// The systems still to jump to, in order, ending at the destination.
+    /// Saved with the pilot; whether a load keeps it is the
+    /// `loaded_course` rule's (read by `nova_sim::Session::load`).
     pub course: Vec<SystemId>,
+    /// The system the course was last started or advanced from: the
+    /// original's course slot 0 (`_hyperRoute`, 0x3b51c8), where `None`
+    /// is -1. `course` holds the original's slots 1 and up.
+    pub course_start: Option<SystemId>,
     /// Every system the pilot has been in: those at
     /// [`ExploredLevel::Explored`] or above.
     pub explored: BTreeSet<SystemId>,
@@ -248,6 +265,7 @@ impl Pilot {
         let stats = ShipStats::new(fields, &outfit_mods(&outfits, &records));
         Ok(Self {
             name: name.to_owned(),
+            nickname: String::new(),
             ship,
             ship_name: Some(class_name(&catalog.ships(), ship)),
             system,
@@ -256,6 +274,7 @@ impl Pilot {
             cash: i64::from(character.cash.max(0)),
             reserves: stats.full(),
             course: Vec::new(),
+            course_start: None,
             explored: BTreeSet::from([system]),
             charted: BTreeSet::new(),
             reinforcement_days: BTreeMap::new(),
@@ -288,6 +307,29 @@ impl Pilot {
     #[must_use]
     pub fn with_gender(self, gender: Gender) -> Self {
         Self { gender, ..self }
+    }
+
+    /// The pilot with its ship named `name`, everything else unchanged:
+    /// the name the New Pilot flow christens it with.
+    #[must_use]
+    pub fn with_ship_name(self, name: String) -> Self {
+        Self {
+            ship_name: Some(name),
+            ..self
+        }
+    }
+
+    /// The pilot with nickname `nickname`, everything else unchanged: the
+    /// nickname the New Pilot dialog keeps (`_DoNewPilot` @0x191ca-0x191dc).
+    #[must_use]
+    pub fn with_nickname(self, nickname: String) -> Self {
+        Self { nickname, ..self }
+    }
+
+    /// The pilot's nickname; empty for none.
+    #[must_use]
+    pub fn nickname(&self) -> &str {
+        &self.nickname
     }
 
     /// The player's gender.
@@ -431,6 +473,28 @@ impl Pilot {
     #[must_use]
     pub fn course(&self) -> &[SystemId] {
         &self.course
+    }
+
+    /// The system the course was last started or advanced from (see
+    /// [`Pilot::course_start`](#structfield.course_start)).
+    #[must_use]
+    pub fn course_start(&self) -> Option<SystemId> {
+        self.course_start
+    }
+
+    /// Empties the course, its start included: all 32 of the original's
+    /// slots -1.
+    pub fn clear_course(&mut self) {
+        self.course.clear();
+        self.course_start = None;
+    }
+
+    /// Empties the course's hops and starts it at `system`, as Clear Route
+    /// (@0x12c74-0x12c98) and the gate exits (@0x63e0e-0x63e3c,
+    /// @0x64708-0x64731) do.
+    pub fn restart_course(&mut self, system: SystemId) {
+        self.course.clear();
+        self.course_start = Some(system);
     }
 
     /// Every system the pilot has been in, by ascending ID.
@@ -636,7 +700,8 @@ impl LegalRecords for Pilot {
 }
 
 /// The pilot at an exchange: its cash, the goods it holds, the mission
-/// cargo aboard ([`Pilot::total_cargo`]) and the events under way.
+/// cargo aboard ([`Pilot::total_cargo`]), each mission slot's cargo and
+/// the events under way.
 impl Trader for Pilot {
     fn cash(&self) -> i64 {
         self.cash
@@ -652,6 +717,19 @@ impl Trader for Pilot {
 
     fn events_under_way(&self) -> &BTreeMap<DisasterId, ActiveEvent> {
         &self.events
+    }
+
+    /// Each held mission slot's cargo, in slot order: whether it is
+    /// aboard, its cargo type and its tons.
+    fn mission_loads(&self) -> Vec<MissionLoad> {
+        self.missions
+            .iter()
+            .map(|(_, active)| MissionLoad {
+                aboard: active.aboard,
+                cargo_type: active.cargo_type,
+                tons: active.cargo_tons,
+            })
+            .collect()
     }
 
     fn cash_mut(&mut self) -> &mut i64 {
@@ -712,6 +790,28 @@ mod tests {
         assert_eq!(pilot.stellar(), None);
         assert_eq!(pilot.date(), GameDate::from_start(START));
         assert_eq!(pilot.course(), []);
+        assert_eq!(pilot.course_start(), None);
+    }
+
+    #[test]
+    fn clearing_the_course_empties_its_hops_and_its_start() {
+        let mut pilot =
+            Pilot::new(&starting([Some(131), None, None, None]), "Ada").expect("starts");
+        pilot.course = vec![SystemId(132)];
+        pilot.course_start = Some(SystemId(131));
+        pilot.clear_course();
+        assert_eq!(pilot.course(), []);
+        assert_eq!(pilot.course_start(), None);
+    }
+
+    #[test]
+    fn restarting_the_course_empties_its_hops_and_starts_it_at_a_system() {
+        let mut pilot =
+            Pilot::new(&starting([Some(131), None, None, None]), "Ada").expect("starts");
+        pilot.course = vec![SystemId(132)];
+        pilot.restart_course(SystemId(133));
+        assert_eq!(pilot.course(), []);
+        assert_eq!(pilot.course_start(), Some(SystemId(133)));
     }
 
     #[test]
@@ -724,6 +824,35 @@ mod tests {
         assert_eq!(pilot.ship_name(), Some("Ship 128"));
         let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
         assert_eq!(pilot.ship_name(), Some(""), "no record of its class");
+    }
+
+    #[test]
+    fn a_pilot_with_a_ship_name_changes_only_its_ship_name() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        let named = pilot.clone().with_ship_name("Raven".to_owned());
+        assert_eq!(named.ship_name(), Some("Raven"));
+        assert_eq!(
+            Pilot {
+                ship_name: pilot.ship_name.clone(),
+                ..named
+            },
+            pilot
+        );
+    }
+
+    #[test]
+    fn a_new_pilot_has_no_nickname_until_given_one() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert_eq!(pilot.nickname(), "");
+        let nicknamed = pilot.clone().with_nickname("Hunter".to_owned());
+        assert_eq!(nicknamed.nickname(), "Hunter");
+        assert_eq!(
+            Pilot {
+                nickname: String::new(),
+                ..nicknamed
+            },
+            pilot
+        );
     }
 
     #[test]
@@ -1073,6 +1202,7 @@ mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         };
         pilot.escorts.push(escort);
         assert_eq!(pilot.escorts(), [escort]);
@@ -1089,6 +1219,7 @@ mod tests {
             carried,
             wage: None,
             person: None,
+            mark: None,
         };
         pilot.escorts = vec![escort(true), escort(false), escort(true), escort(false)];
         assert_eq!(pilot.escort_count(), 2);
@@ -1105,6 +1236,7 @@ mod tests {
             carried: false,
             wage,
             person: None,
+            mark: None,
         };
         assert!(!escort(None).hired(), "captured");
         assert!(escort(Some(0)).hired());
@@ -1320,5 +1452,39 @@ mod tests {
         assert_eq!(pilot.cash(), 750);
         assert_eq!(pilot.held(Good::Commodity(5)), 2);
         assert_eq!(pilot.held(Good::Commodity(3)), 7);
+    }
+
+    #[test]
+    fn the_trader_port_gives_each_mission_slots_cargo() {
+        use crate::mission::ActiveMission;
+        use crate::mission::fixture::carrying;
+        use crate::trade_dialog::MissionLoad;
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        assert_eq!(Trader::mission_loads(&pilot), []);
+        pilot.missions.put(3, carrying(140, 5));
+        pilot.missions.put(
+            1,
+            ActiveMission {
+                cargo_type: None,
+                aboard: false,
+                ..carrying(141, -2)
+            },
+        );
+        assert_eq!(
+            Trader::mission_loads(&pilot),
+            [
+                MissionLoad {
+                    aboard: false,
+                    cargo_type: None,
+                    tons: -2,
+                },
+                MissionLoad {
+                    aboard: true,
+                    cargo_type: Some(0),
+                    tons: 5,
+                },
+            ],
+            "in slot order"
+        );
     }
 }

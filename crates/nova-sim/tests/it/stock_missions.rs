@@ -167,6 +167,7 @@ fn every_stock_missions_texts_fill_every_tag_but_the_ranks() {
     };
     let context = |cargo: i16| TagContext {
         pilot: "Stock",
+        nickname: "",
         ship_type: "Shuttle",
         ship_name: "Kestrel",
         person: Some("Bounty Hunter"),
@@ -302,9 +303,11 @@ fn a_stock_offer_of_flag_0x0100_marks_its_destinations_holder_on_its_map() {
             .or(offer.return_to)
             .map(|stop: Stop| stop.stellar);
         let holder = stellar.and_then(|stellar| {
-            session
-                .galaxy()
-                .holder(listers_of(&listed, stellar), session.pilot().system())
+            session.galaxy().holder(
+                stellar,
+                listers_of(&listed, stellar),
+                session.pilot().system(),
+            )
         });
         if record.flags & MARKS_DESTINATION == 0 {
             assert_eq!(marks.green, None, "{:?}", offer.mission);

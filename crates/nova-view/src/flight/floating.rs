@@ -130,8 +130,9 @@
 //!   press, so holding one zoom key while pressing another zooms.
 //! - `_quickKeyCheckResult` blocks a zoom while any key `_HandlePlayer`
 //!   polled is down. Ours blocks it while a key the flight holds is down
-//!   (the flight keys, the modifiers, H and `\`); keys it doesn't hold (J,
-//!   B, Y, …) don't block it.
+//!   (the flight keys, the modifiers, H and `\`, and the stellar slot keys
+//!   and escort digits while `_HandlePlayer` polls them); keys it doesn't
+//!   hold (B, Y, …) don't block it.
 //!
 //! [`FlightView`]: super::FlightView
 //! [`GalaxyMap::draw_marks`]: crate::galaxy::GalaxyMap::draw_marks

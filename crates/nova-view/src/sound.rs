@@ -99,6 +99,14 @@ pub enum UiSound {
     EscortMenuToggled,
     /// E found no escort to command (`_beepSnd[3]`).
     NoEscorts,
+    /// B in the shipyard, or H on the hire screen, asked for a ship with
+    /// none selected, or one that cannot be bought or hired:
+    /// `_DoShipyardDialog`'s item 1 plays `_beepSnd[3]` (`snd ` 153) at
+    /// priority 1 (@0x5e9bb-0x5e9d6 → @0x5f22a/@0x5f231, `PlaySound`
+    /// @0x5f238-0x5f256), in both modes. Buy Ship and Hire Escort are
+    /// greyed then, and a greyed button is never pressed
+    /// (`_TrackShipyardButtons` @0x2a63c-0x2a64b), so only the key beeps.
+    BuyRefused,
     /// The escort menu selected a group (`_beepSnd[2]`).
     EscortGroupSelected,
     /// The bar's news dialog opened: `_DoNewsDialog` plays `_beepSnd[1]`

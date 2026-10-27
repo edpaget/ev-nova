@@ -123,8 +123,23 @@ File every divergence the binary shows, however niche.
   storyline goes to `<slug>-fidelity` instead. Create that roadmap, depending
   on the feature roadmap, the first time it's needed.
 - If the roadmap is finished, file a task, not a phase.
-- If a nearly finished roadmap blocks others, ask whether new findings
-  should go to a follow-up roadmap so it can finish.
+
+### Phase caps, follow-ups and dependencies
+
+A roadmap that keeps growing never finishes, and it blocks the roadmaps
+that depend on it.
+
+- A roadmap holds at most 20 phases. Phases found during its run are added
+  until it reaches 20.
+- Past 20, a finding that needs only the roadmap's own branch goes to
+  `<slug>-followups`. Create that roadmap the first time it's needed, with
+  `rdm roadmap depend` on the capped roadmap.
+- A finding that waits on another roadmap's not-started or unlanded work goes
+  to `<slug>-cross-roadmap` at any phase count. That roadmap depends on the
+  origin roadmap and on every roadmap the work waits on. A finding that waits
+  on a task names the task in its body, since a task can't be a dependency.
+- The existing phases stay, and amending them is fine. When a phase moves to
+  one of these roadmaps, repoint the `rdm:phase/...` links that named it.
 
 ## Testing with hand-written mocks
 

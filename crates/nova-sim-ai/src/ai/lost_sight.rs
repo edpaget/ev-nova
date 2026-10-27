@@ -250,21 +250,12 @@ pub fn after_inspection(npc: &Npc, decision: Decision, around: &Surroundings) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::fixture::{TRADERS, around, govts, n, ship, sites};
+    use crate::ai::fixture::{TRADERS, around, cloaked, govts, n, ship, sites};
     use crate::bay::Carrier;
-    use crate::cloak::{Cloak, FADE_FULL};
     use crate::combat::ShipRef;
     use crate::rulebook::RuleSource;
     use crate::traffic::npc::{AiType, NpcId};
     use nova_sim_base::fixture::Draws;
-
-    fn cloaked(mut npc: Npc) -> Npc {
-        npc.cloak = Cloak {
-            fade: FADE_FULL,
-            direction: 0,
-        };
-        npc
-    }
 
     /// NPC 1 of `ai_type` at the centre, its timer `timer`.
     fn hunter(ai_type: AiType, timer: SearchTimer) -> Npc {
@@ -580,5 +571,36 @@ mod tests {
         assert_eq!(kept, of(Goal::Inspect(n(2))));
         let fled = inspected(quarry(true), of(Goal::Flee(n(2))));
         assert_eq!(fled, of(Goal::Flee(n(2))), "a flight is left alone");
+    }
+
+    #[test]
+    fn a_ship_attacking_a_cloaked_player_it_cannot_see_searches_for_it() {
+        let search = |npc: Npc, at: (f32, f32)| {
+            let (sites, govts) = (sites(), govts(0, 0));
+            let npcs = [npc];
+            let mut around = around(&sites, &npcs, &govts, at, 0);
+            around.player = around.player.map(crate::ai::fixture::cloaked_player);
+            let mut chance = Draws::of(&[0]);
+            after_think(
+                &npcs[0],
+                of(Goal::Attack(ShipRef::Player)),
+                &around,
+                &mut chance,
+            )
+        };
+        let warship = hunter(AiType::Warship, SearchTimer::Unset);
+        let unseen = search(warship.clone(), (0.0, 2000.0));
+        assert_eq!(
+            unseen.lost_sight,
+            Some(LostSight::Searching(100)),
+            "@0x8d738"
+        );
+        assert_eq!(unseen.goal, Goal::Attack(ShipRef::Player));
+        let scanned = search(crate::ai::fixture::scanning(warship), (0.0, 150.0));
+        assert_eq!(
+            scanned.lost_sight,
+            Some(LostSight::Seen),
+            "scanned within 200"
+        );
     }
 }

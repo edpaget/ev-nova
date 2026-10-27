@@ -436,9 +436,18 @@ impl SystemScene {
 /// sprite (or, without a sheet, a placeholder box and the reason, and with
 /// a slot showing no frame, nothing), then every name under its stellar,
 /// so no sprite covers a name.
+///
+/// Both passes go in ascending stellar ID, so of two overlapping stellars
+/// the higher ID is on top. `_HandleStellarSystemVisibility` fills its
+/// sprite slots in ID order (@0x32ec1-0x33229), `_SWAddSprite` appends each
+/// new slot to the layer's tail (@0xac624) and `_SWAnimateSpriteWorld`
+/// walks each layer from its head (@0xb9727). The scene itself stays in
+/// navigation order.
 pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
+    let mut by_id: Vec<&SceneStellar> = scene.stellars().iter().collect();
+    by_id.sort_by_key(|stellar| stellar.id);
     let mut labels = Vec::new();
-    for stellar in scene.stellars() {
+    for stellar in by_id {
         let centre = camera.world_to_screen(stellar.position);
         let (at, (width, height)) = match stellar.drawn() {
             None => (centre, (0.0, 0.0)),
@@ -841,24 +850,65 @@ mod tests {
             .expect("the name is drawn")
     }
 
+    /// The names drawn, in order.
+    fn names_drawn(scene: &SystemScene) -> Vec<String> {
+        let mut list = DrawList::new();
+        let camera = Camera::centred_on(Point::default());
+        draw_stellars(&mut list, scene, &camera);
+        list.iter()
+            .filter_map(|command| match command {
+                crate::DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Two stellars at the same place, listed in `navigation` order.
+    fn overlapping(navigation: [i16; 2]) -> SystemScene {
+        let stellars = navigation
+            .iter()
+            .map(|&id| stellar(id, 0, 0, Ok(sheet(id + 1000, 1))))
+            .collect();
+        SystemScene::load(
+            &FakeCatalog::new(vec![system(135, stellars)]),
+            SystemId(135),
+        )
+    }
+
+    #[test]
+    fn overlapping_stellars_draw_in_ascending_id_whatever_their_navigation_order() {
+        let lower_on_bottom = [ImageKey::sprite(1200, 0), ImageKey::sprite(1300, 0)];
+        for navigation in [[300, 200], [200, 300]] {
+            let scene = overlapping(navigation);
+            let ids: Vec<_> = scene.stellars().iter().map(|s| s.id.0).collect();
+            assert_eq!(ids, navigation, "the scene keeps navigation order");
+            assert_eq!(drawn(&scene), lower_on_bottom);
+            assert_eq!(names_drawn(&scene), ["Stellar 200", "Stellar 300"]);
+        }
+    }
+
     #[test]
     fn a_hypergate_draws_the_frame_its_session_gives_modulo_its_sheet() {
         let mut scene = SystemScene::load(&catalog(), SystemId(130));
         scene.step(3, &mut NeverFires);
         let before = drawn(&scene);
-        assert_eq!(before[0], ImageKey::sprite(1001, 1), "its own animation");
+        assert_eq!(
+            before[1],
+            ImageKey::sprite(1001, 1),
+            "its own animation (129 drawn second)"
+        );
         let gate = |frame| move |id: StellarId| (id == StellarId(129)).then_some(frame);
         scene.set_gate_frames(gate(3));
         assert_eq!(scene.stellars()[0].gate_frame, Some(3));
         assert_eq!(scene.stellars()[1].gate_frame, None);
         let shown = drawn(&scene);
-        assert_eq!(shown[0], ImageKey::sprite(1001, 3));
-        assert_eq!(shown[1..], before[1..], "the rest as they were");
+        assert_eq!(shown[1], ImageKey::sprite(1001, 3));
+        assert_eq!(shown[0], before[0], "the rest as they were");
         scene.set_gate_frames(gate(0));
-        assert_eq!(drawn(&scene)[0], ImageKey::sprite(1001, 0));
+        assert_eq!(drawn(&scene)[1], ImageKey::sprite(1001, 0));
         // A frame past the sheet drawn wraps round its 4 frames.
         scene.set_gate_frames(gate(6));
-        assert_eq!(drawn(&scene)[0], ImageKey::sprite(1001, 2));
+        assert_eq!(drawn(&scene)[1], ImageKey::sprite(1001, 2));
         scene.set_gate_frames(|_| None);
         assert_eq!(drawn(&scene), before);
     }
@@ -1394,9 +1444,10 @@ mod tests {
         scene.set_frozen(only_129);
         scene.set_gate_frames(gate(1));
         scene.step(4, &mut NeverFires);
-        assert_eq!(drawn(&scene)[0], ImageKey::sprite(1001, 3), "kept");
+        // 129 is drawn second, after 128.
+        assert_eq!(drawn(&scene)[1], ImageKey::sprite(1001, 3), "kept");
         scene.set_frozen(|_| false);
-        assert_eq!(drawn(&scene)[0], ImageKey::sprite(1001, 1), "thawed");
+        assert_eq!(drawn(&scene)[1], ImageKey::sprite(1001, 1), "thawed");
     }
 
     #[test]

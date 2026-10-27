@@ -7,13 +7,18 @@
 //!
 //! **The comm dialog** shows a [`HailView`]: the ship's reply in item 10,
 //! its picture (`PICT` 5000 + its ID - 128) in item 11, and in item 12
-//! "Class: <ship> (<government>)" (`STR#` 2002 #195), with "Status:
-//! Hostile" (#196, #174) in red below for a hostile ship, and for a
-//! ship the player leads "Status: Hired Escort" (#166) and its daily pay,
-//! "Pay: <wage> credits per day" (#297, #267), or "Status: Escort"
-//! (#168), in bright green (`_CommDialogUpdate` @0x90688-0x90704; the
-//! pay line is the original's escort dialog's, shown here, as the help
-//! says the comm window shows a hired escort's cost per day). Its buttons
+//! "Class: <ship> (<government>)" (`STR#` 2002 #195), all in Geneva 9
+//! ([`TEXT_SIZE`]). Below the class, on the baseline 40 pixels under
+//! item 12's top, the status line (`_CommDialogUpdate` @0x905f5-0x90704)
+//! is two runs: "Status:" (#196) in grey at the item's left, then the
+//! value. For a ship the player leads it is "Hired Escort" (#166) or
+//! "Escort" (#168) in bright green, 35 pixels right of the item's left.
+//! A fleet escort hailed opens the escort dialog instead
+//! ([`escort_dialog`](super::escort_dialog)), which shows a hired
+//! escort's pay; so "Hired Escort" shows here only for a ship the
+//! session reports so. For a hostile ship it is "Hostile" (#174) in red, after the label and
+//! two spaces, bold as QuickDraw smears it: drawn twice, a pixel apart.
+//! Other ships show no status. Its buttons
 //! stand in a column, [`BUTTON_STEP`] apart, at item 3's left, width and
 //! height: the options listed, in order, the first at item 3's top (so
 //! the second stands at item 2's place), and "Close Channel" (`STR#` 150
@@ -41,7 +46,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::hire::{ESCORT, HIRED_ESCORT, PAY_LABEL, PER_DAY};
+use nova_sim::hire::{ESCORT, HIRED_ESCORT};
 use nova_sim::{Haggle, HailView, ShipId};
 
 use crate::color::Color;
@@ -55,7 +60,8 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, outline,
+    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, TextBacking,
+    outline,
 };
 use super::prefs::{BACKDROP, BORDER};
 
@@ -90,15 +96,37 @@ pub const CLASS_LABEL: &str = "Class:";
 pub const STATUS_LABEL: &str = "Status:";
 /// `STR#` 2002 #174.
 pub const HOSTILE: &str = "Hostile";
-/// The hostile status's colour.
+/// The hostile status's colour: QuickDraw's `redColor`, which
+/// `_CommDialogUpdate` sets with `ForeColor(205)` (@0x9064e).
 pub const HOSTILE_COLOR: Color = Color::rgba(0xFF, 0x00, 0x00, 255);
-/// The colour of the player's escort's status and pay: bright green.
+/// The colour of the player's escort's status and pay: `_brightGreen`
+/// (0, 0xFFFF, 0), which `_CommDialogUpdate` sets with `RGBForeColor`
+/// (@0x906ce).
 pub const ESCORT_COLOR: Color = Color::rgba(0x00, 0xFF, 0x00, 255);
+/// The colour of the "Status:" label: `_rgbMedGrey` (0x8000 in each
+/// channel), which `_CommDialogUpdate` sets with `RGBForeColor`
+/// (@0x9060d).
+pub const LABEL_COLOR: Color = Color::rgba(128, 128, 128, 255);
+/// How far below item 12's top the status line's baseline stands: 0x28
+/// (@0x905f9).
+pub const STATUS_BASELINE: f32 = 40.0;
+/// How far right of item 12's left an escort's status stands: 0x23
+/// (@0x906be).
+pub const VALUE_COLUMN: f32 = 35.0;
+/// What `_CommDialogUpdate` draws between "Status:" and "Hostile": the
+/// Pascal string at 0xd97c7, two spaces (@0x90642), in the label's grey,
+/// so it only moves the pen.
+pub const HOSTILE_GAP: &str = "  ";
 /// The comm dialog's key that closes the channel, besides Return, Enter
 /// and Escape.
 pub const CLOSE_KEY: char = 'e';
-/// The text's size, in Geneva.
-pub const TEXT_SIZE: f32 = 10.0;
+/// The text's size, in Geneva: `_smallTextSize`, which `_InitStuff`
+/// sets to 9 (@0x1d3eb) with `_smallTextFont` Geneva (@0x1d3d1-0x1d3e1).
+/// `_CommDialogUpdate` sets both for the class line and the status runs
+/// (@0x9051d-0x9052d) and again for the reply (@0x9078b-0x9079b), and
+/// `_HaggleDialogUpdate` for the price it asks (@0x91b7b-0x91b96), so it
+/// is every text's size in both dialogs.
+pub const TEXT_SIZE: f32 = 9.0;
 /// The text's colour.
 pub const TEXT_COLOR: Color = Color::WHITE;
 
@@ -169,33 +197,55 @@ pub fn class_text(view: &HailView) -> String {
     }
 }
 
-/// A hired escort's pay line for `wage` a day: "Pay: <wage> credits per
-/// day" (`STR#` 2002 #297 and #267), "credit" for a wage of 1.
-#[must_use]
-pub fn pay_text(wage: i64) -> String {
-    let unit = if wage == 1 { "credit" } else { "credits" };
-    format!("{PAY_LABEL} {} {unit} {PER_DAY}", grouped(wage))
+/// Where a status line's value stands on its baseline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ValuePlace {
+    /// Where the pen stops after "Status:" and then this string, drawn in
+    /// the label's colour: "Hostile" after [`HOSTILE_GAP`] (@0x90642).
+    AfterLabel(&'static str),
+    /// This far right of item 12's left: an escort's status at
+    /// [`VALUE_COLUMN`] (@0x906be).
+    Column(f32),
 }
 
-/// The status lines item 12 shows below the class for `view`, each with
-/// its colour: for a ship the player leads "Status: Hired Escort" (`STR#`
-/// 2002 #166) and its pay, or "Status: Escort" (#168), in bright green;
-/// for a hostile ship "Status: Hostile", in red; otherwise none.
+/// The status line item 12 shows for a ship: "Status:" in
+/// [`LABEL_COLOR`], then its value (`_CommDialogUpdate` @0x905f5-0x90704).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StatusLine {
+    /// "Hostile", "Hired Escort" or "Escort".
+    pub value: &'static str,
+    /// The value's colour.
+    pub color: Color,
+    /// Where the value stands.
+    pub place: ValuePlace,
+    /// Whether the value is bold (`TextFace(1)` @0x9065a).
+    pub bold: bool,
+}
+
+/// The status line of `view`: for a ship the player leads "Hired Escort"
+/// (`STR#` 2002 #166) or "Escort" (#168) in bright green at
+/// [`VALUE_COLUMN`]; for a hostile ship "Hostile" (#174) in bold red
+/// after two spaces; otherwise none, as the original draws nothing.
+///
+/// The original tests the threat first (@0x9061a), this the escort; they
+/// agree, as `_ExtendedIsThreatToPlayer` is false for any ship the
+/// player leads (@0x81b9f).
 #[must_use]
-pub fn status_lines(view: &HailView) -> Vec<(String, Color)> {
+pub fn status_line(view: &HailView) -> Option<StatusLine> {
     match view.escort {
-        Some(status) => {
-            let what = if status.wage.is_some() {
-                HIRED_ESCORT
-            } else {
-                ESCORT
-            };
-            let mut lines = vec![(format!("{STATUS_LABEL} {what}"), ESCORT_COLOR)];
-            lines.extend(status.wage.map(|wage| (pay_text(wage), ESCORT_COLOR)));
-            lines
-        }
-        None if view.hostile => vec![(format!("{STATUS_LABEL} {HOSTILE}"), HOSTILE_COLOR)],
-        None => Vec::new(),
+        Some(status) => Some(StatusLine {
+            value: if status.hired { HIRED_ESCORT } else { ESCORT },
+            color: ESCORT_COLOR,
+            place: ValuePlace::Column(VALUE_COLUMN),
+            bold: false,
+        }),
+        None if view.hostile => Some(StatusLine {
+            value: HOSTILE,
+            color: HOSTILE_COLOR,
+            place: ValuePlace::AfterLabel(HOSTILE_GAP),
+            bold: true,
+        }),
+        None => None,
     }
 }
 
@@ -207,7 +257,7 @@ pub fn ship_picture(ship: ShipId) -> ImageKey {
 
 /// Draws `picture` over `bounds`, or without one a dark backdrop with an
 /// outline.
-fn backdrop(list: &mut DrawList, bounds: Bounds, picture: Option<ImageKey>) {
+pub(super) fn backdrop(list: &mut DrawList, bounds: Bounds, picture: Option<ImageKey>) {
     if let Some(image) = picture {
         list.stretched_picture(image, bounds.min, bounds.width(), bounds.height());
     } else {
@@ -216,13 +266,34 @@ fn backdrop(list: &mut DrawList, bounds: Bounds, picture: Option<ImageKey>) {
     }
 }
 
-/// The scrolling text role of `text`.
+/// The scrolling text role of `text`, straight on the dialog.
 fn text_role(text: String) -> Role {
     Role::ScrollText {
         text,
         font: Font::Geneva,
         size: TEXT_SIZE,
         color: TEXT_COLOR,
+        backing: None,
+    }
+}
+
+/// The reply's box: `_CommDialogUpdate` paints item 10 inset 1 white
+/// (@0x907b5), sets the reply in the item inset (5, 3) (@0x907d9), then
+/// inverts the inset-1 box (@0x90839): white text on a black box.
+const REPLY_BACKING: TextBacking = TextBacking {
+    fill: Color::BLACK,
+    fill_inset: 1.0,
+    text_inset: (5.0, 3.0),
+};
+
+/// The reply's scrolling text role: `text` over [`REPLY_BACKING`].
+fn reply_role(text: String) -> Role {
+    Role::ScrollText {
+        text,
+        font: Font::Geneva,
+        size: TEXT_SIZE,
+        color: TEXT_COLOR,
+        backing: Some(REPLY_BACKING),
     }
 }
 
@@ -421,7 +492,7 @@ fn layout(
     let items = template.items.len();
     let mut roles = vec![
         (CLOSE_ITEM, Role::Button(CLOSE_CHANNEL.to_owned())),
-        (REPLY_ITEM, text_role(view.reply.clone())),
+        (REPLY_ITEM, reply_role(view.reply.clone())),
         (CLASS_ITEM, text_role(class_text(view))),
     ];
     let mut buttons = [CLOSE_ITEM].to_vec();
@@ -480,6 +551,61 @@ fn comm_template() -> DialogTemplate {
     }
 }
 
+impl CommDialog {
+    /// The status line ([`status_line`]) in item 12 at `at`, as
+    /// `_CommDialogUpdate` draws it (@0x905f5-0x90704): on the baseline
+    /// [`STATUS_BASELINE`] below the item's top, "Status:" (`STR#` 2002
+    /// #196) in grey at its left, then the value, unwrapped, in its
+    /// colour: an escort's at [`VALUE_COLUMN`], "Hostile" where the pen
+    /// stops after the label and two spaces, smeared bold
+    /// ([`smeared`]).
+    fn draw_status(&self, list: &mut DrawList, at: Bounds) {
+        let Some(line) = status_line(&self.view) else {
+            return;
+        };
+        let top = at.min.y + STATUS_BASELINE - TEXT_SIZE;
+        list.text(
+            STATUS_LABEL,
+            Point::new(at.min.x, top),
+            TEXT_SIZE,
+            None,
+            LABEL_COLOR,
+        );
+        let x = match line.place {
+            ValuePlace::Column(column) => at.min.x + column,
+            ValuePlace::AfterLabel(gap) => {
+                let width = |text| self.metrics.width(Font::Geneva, TEXT_SIZE, text);
+                at.min.x + width(STATUS_LABEL) + width(gap)
+            }
+        };
+        let origin = Point::new(x, top);
+        if line.bold {
+            smeared(list, line.value, origin, line.color);
+        } else {
+            list.text(line.value, origin, TEXT_SIZE, None, line.color);
+        }
+    }
+}
+
+/// `text` in bold, as QuickDraw draws it for a face with no bold member
+/// (the Geneva the original gets on Mac OS X): the plain glyphs, then
+/// again a pixel to the right, over the first. QuickDraw also widens each
+/// character by a pixel, which this leaves out, as nothing follows the
+/// one bold word on its line. `_PlanetCommDialogUpdate` sets bold too
+/// (`TextFace(1)` @0x91093); whoever ports it can lift this into a shared
+/// module.
+fn smeared(list: &mut DrawList, text: &str, origin: Point, color: Color) {
+    for dx in [0.0, 1.0] {
+        list.text(
+            text,
+            Point::new(origin.x + dx, origin.y),
+            TEXT_SIZE,
+            None,
+            color,
+        );
+    }
+}
+
 impl Screen for CommDialog {
     /// A key press (not a repeat) that is a press is one; every other
     /// event goes to the dialog, and a button activated is its press. It
@@ -507,9 +633,8 @@ impl Screen for CommDialog {
     fn tick(&mut self, _dt: Duration) {}
 
     /// The picture (or the backdrop), the ship's picture (a person's
-    /// `HailPict` in its place), then the dialog
-    /// and the ship's status lines ([`status_lines`]), halfway down item
-    /// 12, a line apart.
+    /// `HailPict` in its place), then the dialog and the ship's status
+    /// line ([`CommDialog::draw_status`]).
     fn draw(&self, list: &mut DrawList) {
         backdrop(list, self.dialog.bounds(), self.picture);
         if let Some(at) = self.dialog.item_bounds(PICTURE_ITEM) {
@@ -521,17 +646,7 @@ impl Screen for CommDialog {
         }
         self.dialog.draw(list);
         if let Some(at) = self.dialog.item_bounds(CLASS_ITEM) {
-            let line_height = self.metrics.line_height(Font::Geneva, TEXT_SIZE);
-            for (n, (text, color)) in status_lines(&self.view).into_iter().enumerate() {
-                let y = at.min.y + at.height() / 2.0 + line_height * n as f32;
-                list.text(
-                    text,
-                    Point::new(at.min.x, y),
-                    TEXT_SIZE,
-                    Some(at.width()),
-                    color,
-                );
-            }
+            self.draw_status(list, at);
         }
     }
 
@@ -715,7 +830,7 @@ mod tests {
     use nova_sim::{EscortStatus, HailButton, NpcId};
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_command};
     use crate::input::MouseButton;
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
@@ -923,6 +1038,62 @@ mod tests {
     }
 
     #[test]
+    fn the_reply_draws_over_its_item_inset_1_filled_black_its_text_inset_5_3() {
+        let dialog = dialog(&view());
+        let item = dialog.dialog().item_bounds(REPLY_ITEM).expect("item 10");
+        let commands = drawn(&dialog);
+        let fill = commands
+            .iter()
+            .position(|command| *command == fill_command(item.grown(-1.0), Color::BLACK))
+            .expect("item 10 inset 1, filled black");
+        let (text, origin) = commands
+            .iter()
+            .enumerate()
+            .find_map(|(at, command)| match command {
+                DrawCommand::Text { text, origin, .. } if text == "Channel open." => {
+                    Some((at, *origin))
+                }
+                _ => None,
+            })
+            .expect("the reply");
+        assert!(fill < text, "the box is under the text");
+        assert_eq!(
+            origin,
+            Point::new(item.min.x + 5.0, item.min.y + 3.0),
+            "inset (5, 3)"
+        );
+        let class = dialog.dialog().item_bounds(CLASS_ITEM).expect("item 12");
+        assert!(
+            !commands.iter().any(|command| {
+                [class, class.grown(-1.0)]
+                    .into_iter()
+                    .any(|area| *command == fill_command(area, Color::BLACK))
+            }),
+            "the class has no box"
+        );
+    }
+
+    #[test]
+    fn up_and_down_still_scroll_the_reply() {
+        let long: Vec<String> = (0..20).map(|n| format!("line {n}")).collect();
+        let mut dialog = dialog(&HailView {
+            reply: long.join("\r"),
+            ..view()
+        });
+        let first = |dialog: &CommDialog| {
+            dialog
+                .dialog()
+                .text(REPLY_ITEM)
+                .map(super::super::scroll_text::ScrollText::first)
+        };
+        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::Down));
+        assert_eq!(first(&dialog), Some(2));
+        dialog.input(&key(Key::Up));
+        assert_eq!(first(&dialog), Some(1));
+    }
+
+    #[test]
     fn return_enter_escape_and_e_close_the_channel() {
         for pressed in [Key::Enter, Key::Escape, Key::Char('e'), Key::Char('E')] {
             let mut dialog = dialog(&view());
@@ -1010,10 +1181,9 @@ mod tests {
         let shown = texts(&dialog);
         assert!(shown.contains(&"Channel open.".to_owned()), "{shown:?}");
         assert_eq!(class_text(&view()), "Class: Cruiser (Federation)");
-        assert!(shown.contains(&"Class: Cruiser".to_owned()), "{shown:?}");
         assert!(
-            shown.contains(&"(Federation)".to_owned()),
-            "wrapped: {shown:?}"
+            shown.contains(&"Class: Cruiser (Federation)".to_owned()),
+            "on one line at 9 points: {shown:?}"
         );
         assert!(
             !shown.iter().any(|text| text.contains(HOSTILE)),
@@ -1090,75 +1260,89 @@ mod tests {
     }
 
     #[test]
-    fn a_hostile_ship_shows_its_status_in_red() {
-        let hostile = HailView {
-            hostile: true,
-            ..view()
-        };
-        let dialog = dialog(&hostile);
-        let status: Vec<(String, Point, Color)> = drawn(&dialog)
+    fn the_comm_dialogs_text_is_geneva_9() {
+        assert_eq!(TEXT_SIZE, 9.0, "_smallTextSize");
+        let sizes: Vec<(String, Font, f32)> = drawn(&dialog(&view()))
             .into_iter()
             .filter_map(|command| match command {
                 DrawCommand::Text {
-                    text,
-                    origin,
-                    color,
-                    ..
-                } if text.contains(HOSTILE) => Some((text, origin, color)),
+                    text, font, size, ..
+                } => Some((text, font, size)),
                 _ => None,
             })
+            .filter(|(text, ..)| text == "Channel open." || text.starts_with(CLASS_LABEL))
             .collect();
         assert_eq!(
-            status,
-            [(
-                "Status: Hostile".to_owned(),
-                Point::new(40.0, 96.0),
-                HOSTILE_COLOR
-            )],
-            "halfway down item 12"
+            sizes,
+            [
+                ("Channel open.".to_owned(), Font::Geneva, 9.0),
+                ("Class: Cruiser (Federation)".to_owned(), Font::Geneva, 9.0),
+            ],
+            "the reply and the class line"
         );
     }
 
-    /// The status lines `view`'s dialog draws in item 12: each text, its
-    /// origin and colour.
-    fn status_lines_drawn(view: &HailView) -> Vec<(String, Point, Color)> {
-        drawn(&dialog(view))
+    /// A status run: its text, origin, colour, size and wrap width.
+    type Run = (String, Point, Color, f32, Option<f32>);
+
+    /// The status runs `dialog` draws in item 12.
+    fn status_runs(dialog: &CommDialog) -> Vec<Run> {
+        drawn(dialog)
             .into_iter()
             .filter_map(|command| match command {
                 DrawCommand::Text {
                     text,
                     origin,
                     color,
+                    size,
+                    wrap_width,
                     ..
-                } if text.starts_with(STATUS_LABEL) || text.starts_with(PAY_LABEL) => {
-                    Some((text, origin, color))
+                } if [STATUS_LABEL, HOSTILE, HIRED_ESCORT, ESCORT].contains(&text.as_str()) => {
+                    Some((text, origin, color, size, wrap_width))
                 }
                 _ => None,
             })
             .collect()
     }
 
+    fn run(text: &str, x: f32, y: f32, color: Color) -> Run {
+        (text.to_owned(), Point::new(x, y), color, 9.0, None)
+    }
+
     #[test]
-    fn a_hired_escort_shows_its_status_and_daily_pay_in_bright_green() {
-        let hired = HailView {
-            escort: Some(EscortStatus { wage: Some(1000) }),
+    fn a_hostile_ship_shows_a_grey_label_then_hostile_in_bold_red_after_two_spaces() {
+        let hostile = HailView {
+            hostile: true,
             ..view()
         };
-        let below = 96.0 + MonoMetrics.line_height(Font::Geneva, TEXT_SIZE);
+        // Baseline 73 + 40 = 113, so the top is 104; "Status:" and two
+        // spaces are 9 x 4.5 wide.
         assert_eq!(
-            status_lines_drawn(&hired),
+            status_runs(&dialog(&hostile)),
             [
-                (
-                    "Status: Hired Escort".to_owned(),
-                    Point::new(40.0, 96.0),
-                    ESCORT_COLOR
-                ),
-                (
-                    "Pay: 1,000 credits per day".to_owned(),
-                    Point::new(40.0, below),
-                    ESCORT_COLOR
-                ),
-            ]
+                run(STATUS_LABEL, 40.0, 104.0, LABEL_COLOR),
+                run(HOSTILE, 80.5, 104.0, HOSTILE_COLOR),
+                run(HOSTILE, 81.5, 104.0, HOSTILE_COLOR),
+            ],
+            "the second Hostile is the bold smear"
+        );
+        assert_eq!(LABEL_COLOR, Color::rgba(128, 128, 128, 255));
+        assert_eq!(HOSTILE_COLOR, Color::rgba(0xFF, 0x00, 0x00, 255));
+    }
+
+    #[test]
+    fn a_hired_escort_shows_a_grey_label_and_hired_escort_at_35() {
+        let hired = HailView {
+            escort: Some(EscortStatus { hired: true }),
+            ..view()
+        };
+        assert_eq!(
+            status_runs(&dialog(&hired)),
+            [
+                run(STATUS_LABEL, 40.0, 104.0, LABEL_COLOR),
+                run(HIRED_ESCORT, 75.0, 104.0, ESCORT_COLOR),
+            ],
+            "drawn once, not bold, with no pay line: the escort dialog shows that"
         );
         assert_eq!(ESCORT_COLOR, Color::rgba(0x00, 0xFF, 0x00, 255));
     }
@@ -1166,29 +1350,126 @@ mod tests {
     #[test]
     fn an_escort_not_hired_shows_its_status_alone() {
         let captured = HailView {
-            escort: Some(EscortStatus { wage: None }),
+            escort: Some(EscortStatus { hired: false }),
+            ..view()
+        };
+        let expected = [
+            run(STATUS_LABEL, 40.0, 104.0, LABEL_COLOR),
+            run(ESCORT, 75.0, 104.0, ESCORT_COLOR),
+        ];
+        assert_eq!(status_runs(&dialog(&captured)), expected);
+        let hostile = HailView {
+            hostile: true,
+            ..captured
+        };
+        assert_eq!(
+            status_runs(&dialog(&hostile)),
+            expected,
+            "an escort, never hostile"
+        );
+        assert_eq!(status_runs(&dialog(&view())), [], "a ship that is neither");
+    }
+
+    #[test]
+    fn the_status_line_follows_item_12_where_it_stands() {
+        let mut moved = stock();
+        moved.items[CLASS_ITEM - 1].bounds = Bounds::at(Point::new(60.0, 90.0), 134.0, 46.0);
+        let escort = HailView {
+            escort: Some(EscortStatus { hired: false }),
+            ..view()
+        };
+        let dialog = CommDialog::new(&moved, &escort, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        assert_eq!(
+            status_runs(&dialog),
+            [
+                run(STATUS_LABEL, 60.0, 121.0, LABEL_COLOR),
+                run(ESCORT, 95.0, 121.0, ESCORT_COLOR),
+            ]
+        );
+    }
+
+    /// Mono metrics but for "Status:", 30 wide, and two spaces, 6.
+    struct LabelMetrics;
+
+    impl TextMetrics for LabelMetrics {
+        fn width(&self, font: Font, size: f32, text: &str) -> f32 {
+            match text {
+                STATUS_LABEL => 30.0,
+                HOSTILE_GAP => 6.0,
+                _ => MonoMetrics.width(font, size, text),
+            }
+        }
+
+        fn line_height(&self, font: Font, size: f32) -> f32 {
+            MonoMetrics.line_height(font, size)
+        }
+    }
+
+    #[test]
+    fn the_hostile_value_follows_the_measured_label() {
+        let hostile = HailView {
+            hostile: true,
+            ..view()
+        };
+        let dialog = CommDialog::new(
+            &stock(),
+            &hostile,
+            ButtonStyle::STOCK,
+            Rc::new(LabelMetrics),
+        )
+        .expect("builds");
+        assert_eq!(
+            status_runs(&dialog)[1..],
+            [
+                run(HOSTILE, 76.0, 104.0, HOSTILE_COLOR),
+                run(HOSTILE, 77.0, 104.0, HOSTILE_COLOR),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_status_line_is_hostile_bold_after_the_gap_or_an_escort_at_the_column() {
+        let hostile = HailView {
             hostile: true,
             ..view()
         };
         assert_eq!(
-            status_lines_drawn(&captured),
-            [(
-                "Status: Escort".to_owned(),
-                Point::new(40.0, 96.0),
-                ESCORT_COLOR
-            )],
-            "an escort, never hostile"
+            status_line(&hostile),
+            Some(StatusLine {
+                value: HOSTILE,
+                color: HOSTILE_COLOR,
+                place: ValuePlace::AfterLabel(HOSTILE_GAP),
+                bold: true,
+            })
         );
-        assert_eq!(status_lines_drawn(&view()), [], "a ship that is neither");
-    }
-
-    #[test]
-    fn a_days_pay_of_one_credit_is_singular() {
-        assert_eq!(pay_text(1), "Pay: 1 credit per day");
-        assert_eq!(pay_text(0), "Pay: 0 credits per day");
-        assert_eq!(pay_text(2), "Pay: 2 credits per day");
-        assert_eq!(pay_text(175), "Pay: 175 credits per day");
-        assert_eq!(pay_text(12_000), "Pay: 12,000 credits per day");
+        assert_eq!(HOSTILE_GAP, "  ");
+        let escort = |hired| HailView {
+            escort: Some(EscortStatus { hired }),
+            hostile: true,
+            ..view()
+        };
+        assert_eq!(
+            status_line(&escort(true)),
+            Some(StatusLine {
+                value: HIRED_ESCORT,
+                color: ESCORT_COLOR,
+                place: ValuePlace::Column(VALUE_COLUMN),
+                bold: false,
+            })
+        );
+        assert_eq!(
+            status_line(&escort(false)),
+            Some(StatusLine {
+                value: ESCORT,
+                color: ESCORT_COLOR,
+                place: ValuePlace::Column(VALUE_COLUMN),
+                bold: false,
+            })
+        );
+        assert_eq!(VALUE_COLUMN, 35.0);
+        assert_eq!(STATUS_BASELINE, 40.0);
+        assert_eq!(status_line(&view()), None);
     }
 
     #[test]
@@ -1269,6 +1550,16 @@ mod tests {
     fn the_haggle_dialog_asks_the_price_with_its_two_buttons() {
         let dialog = haggle(3000);
         assert_eq!(dialog.lines(), ["Pay me 3,000 credits."]);
+        let sizes: Vec<(Font, f32)> = drawn(&dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text, font, size, ..
+                } if text == "Pay me 3,000 credits." => Some((font, size)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sizes, [(Font::Geneva, 9.0)], "_smallTextSize, @0x91b8b");
         let labels = texts(&dialog);
         assert!(labels.contains(&"Accept Price".to_owned()), "{labels:?}");
         assert!(labels.contains(&"Lower Price".to_owned()), "{labels:?}");

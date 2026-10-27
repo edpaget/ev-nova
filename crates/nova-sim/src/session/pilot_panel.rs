@@ -7,7 +7,6 @@ use super::{Chart, Session, Setup, Statics};
 use crate::catalog::PilotCatalog;
 use crate::pilot::Pilot;
 use crate::pilot_panel::PilotPanel;
-use crate::rating::{RATING_STRINGS, string_index};
 
 impl Session {
     /// What the main screen's pilot panel says about the pilot (see
@@ -33,16 +32,13 @@ impl Chart {
         catalog: &impl PilotCatalog,
     ) -> PilotPanel {
         let words = setup.player_info_words();
-        let rating = string_index(pilot.combat_rating());
         PilotPanel {
             pilot_name: pilot.name().to_owned(),
             ship_name: pilot.ship_name().unwrap_or_default().to_owned(),
             ship_class: statics.ship_name(pilot.ship).unwrap_or_default().to_owned(),
             ship: pilot.ship,
             legal_status: self.legal_status(pilot, statics, setup, catalog, &words),
-            combat_rating: setup
-                .nth_string(RATING_STRINGS, rating + 1)
-                .unwrap_or_default(),
+            combat_rating: setup.combat_rating_text(pilot.combat_rating()),
             date: super::med_date_text(pilot, statics),
         }
     }
@@ -57,6 +53,7 @@ mod tests {
     use crate::landing::StellarFlags;
     use crate::news::MISC_STRINGS;
     use crate::player_info::LEGAL_STATUS_STRINGS;
+    use crate::rating::RATING_STRINGS;
     use crate::session::tests::alternates;
     use crate::testkit::{FAST, FakePilotCatalog, planet, ship, starting};
 

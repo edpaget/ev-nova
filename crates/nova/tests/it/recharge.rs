@@ -8,12 +8,14 @@
 //! the test sees what is saved.
 //!
 //! A new pilot jumps to Beta, a jump's fuel (100) gone, lands on Beta
-//! Prime and clicks Recharge: the tank fills for 100 credits, and the
-//! pilot is saved. Recharge again is refused, the tank being full, and
-//! says so in the description box; nothing changes and nothing is saved.
-//! It takes off with the tank full. A pilot with too few credits is
-//! refused, and told why.
+//! Prime and clicks Recharge: the tank fills for 100 credits, the pilot
+//! is saved, and Recharge greys, the tank being full, so a click on it
+//! does nothing. It takes off with the tank full. A pilot with no credits
+//! lands to a greyed Recharge, and its R key fills nothing; one with too
+//! few fills as many units as they buy. Nothing is ever said of it, as
+//! `_DoPortDialog` says nothing.
 
+use crate::common::text_input_items;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -278,6 +280,8 @@ fn ditl(items: &[Vec<u8>]) -> Vec<u8> {
 
 /// Stock "Create a new pilot:" (`DLOG` 3102) and "Spaceport" (`DLOG`
 /// 1000), whose item 4 is Recharge's.
+///
+/// With stock "Text Input" (`DLOG` 3001) too, for the ship's christening.
 fn interface() -> InterfaceData {
     let text = |bounds, s: &str| ditl_item(bounds, STATIC_TEXT | DISABLED, s.as_bytes());
     let field = |bounds| ditl_item(bounds, EDIT_TEXT, b"Edit Text");
@@ -323,6 +327,8 @@ fn interface() -> InterfaceData {
     let file = fork(&[
         (Dlog::TYPE, 3102, dlog((78, 175, 291, 501), 3102)),
         (Ditl::TYPE, 3102, ditl(&new_pilot)),
+        (Dlog::TYPE, 3001, dlog((100, 100, 238, 460), 3001)),
+        (Ditl::TYPE, 3001, ditl(&text_input_items(ditl_item))),
         (Dlog::TYPE, 1000, dlog((-201, 60, 316, 678), 1000)),
         (Ditl::TYPE, 1000, ditl(&spaceport)),
     ]);
@@ -620,6 +626,8 @@ fn at_beta_prime(store: &MemoryPilots, cash: i32) -> Harness {
         game.type_key(code, Some(letter));
     }
     game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
+    game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
@@ -641,10 +649,32 @@ fn at_beta_prime(store: &MemoryPilots, cash: i32) -> Harness {
     game
 }
 
+/// The colour of the label `label` in `frame`.
+fn label_color(frame: &Frame, label: &str) -> nova_view::Color {
+    frame
+        .batches
+        .iter()
+        .find_map(|batch| match batch {
+            Batch::Text(runs) => runs
+                .iter()
+                .find(|run| run.text == label)
+                .map(|run| run.color),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{label} drawn"))
+}
+
+/// Whether Recharge is drawn enabled in `frame`: in Leave's colour, as
+/// every enabled button's label is, and not the disabled grey.
+fn recharge_enabled(frame: &Frame) -> bool {
+    label_color(frame, "Recharge") == label_color(frame, "Leave")
+}
+
 #[test]
-fn recharge_fills_the_tank_for_a_credit_a_unit_and_a_full_one_is_refused() {
+fn recharge_fills_the_tank_for_a_credit_a_unit_then_greys() {
     let store = MemoryPilots::new();
     let mut game = at_beta_prime(&store, 10_000);
+    assert!(recharge_enabled(&game.frame()), "fuel missing and cash");
 
     // Recharge: 100 units missing, 100 credits, and the pilot saved.
     let writes = store.writes();
@@ -652,20 +682,18 @@ fn recharge_fills_the_tank_for_a_credit_a_unit_and_a_full_one_is_refused() {
     assert_eq!(game.fuel(), Gauge::full(300.0));
     assert_eq!(game.pilot().cash(), 10_000 - 100);
     assert_eq!(store.writes(), writes + 1, "saved");
-    let shown = texts(&game.frame());
-    assert!(shown.contains(&DESCRIPTION.to_owned()), "{shown:?}");
+    let frame = game.frame();
+    assert!(!recharge_enabled(&frame), "the tank full");
+    assert!(
+        texts(&frame).contains(&DESCRIPTION.to_owned()),
+        "nothing said"
+    );
 
-    // Again, with the tank full: refused, and the box says why.
+    // A click on it now does nothing.
     let before = game.pilot();
     game.recharge();
     assert_eq!(game.pilot(), before, "nothing changes");
     assert_eq!(store.writes(), writes + 1, "nothing saved");
-    let shown = texts(&game.frame());
-    assert!(
-        shown.contains(&"Your ship is already fully recharged.".to_owned()),
-        "{shown:?}"
-    );
-    assert!(!shown.contains(&DESCRIPTION.to_owned()), "{shown:?}");
 
     // Leave: it takes off with the tank full and the credits paid.
     game.press(KeyCode::Escape);
@@ -676,18 +704,43 @@ fn recharge_fills_the_tank_for_a_credit_a_unit_and_a_full_one_is_refused() {
 }
 
 #[test]
-fn a_pilot_short_of_credits_is_refused_and_told_why() {
+fn with_no_credits_recharge_lands_greyed_and_its_key_fills_nothing() {
     let store = MemoryPilots::new();
-    let mut game = at_beta_prime(&store, 99);
+    let mut game = at_beta_prime(&store, 0);
+    assert!(!recharge_enabled(&game.frame()), "no cash");
     let before = game.pilot();
     let writes = store.writes();
     game.recharge();
+    game.press(KeyCode::KeyR);
+    assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(game.pilot(), before, "nothing changes");
     assert_eq!(store.writes(), writes, "nothing saved");
-    let shown = texts(&game.frame());
     assert!(
-        shown.contains(&"You don't have enough credits to recharge.".to_owned()),
-        "{shown:?}"
+        texts(&game.frame()).contains(&DESCRIPTION.to_owned()),
+        "nothing said"
+    );
+}
+
+#[test]
+fn a_pilot_short_of_credits_fills_as_far_as_they_go() {
+    let store = MemoryPilots::new();
+    let mut game = at_beta_prime(&store, 99);
+    let writes = store.writes();
+    game.recharge();
+    assert_eq!(
+        game.fuel(),
+        Gauge {
+            now: 299.0,
+            max: 300.0
+        }
+    );
+    assert_eq!(game.pilot().cash(), 0);
+    assert_eq!(store.writes(), writes + 1, "saved");
+    let frame = game.frame();
+    assert!(!recharge_enabled(&frame), "no cash left");
+    assert!(
+        texts(&frame).contains(&DESCRIPTION.to_owned()),
+        "nothing said"
     );
 }
 

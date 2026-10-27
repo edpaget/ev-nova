@@ -341,6 +341,7 @@ impl Harness {
             .with_flight_overlays(FlightOverlays {
                 title: true,
                 help: true,
+                cheats: false,
             });
         Self {
             app: App::new(&FakeWindow, data, screen),
@@ -484,7 +485,7 @@ fn rect(bounds: Bounds) -> Rect {
 }
 
 #[test]
-fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
+fn l_over_the_planet_shows_its_spaceport_with_every_button() {
     let mut harness = Harness::flying(0);
     harness.frame();
     harness.press_physical(KeyCode::KeyL);
@@ -523,11 +524,11 @@ fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
         "Bar",
         "Mission BBS",
         "Leave",
+        // Not offered, so drawn disabled.
+        "Shipyard",
+        "Outfitter",
     ] {
         assert!(texts.iter().any(|t| t == shown), "{shown}: {texts:?}");
-    }
-    for hidden in ["Shipyard", "Outfitter"] {
-        assert!(!texts.iter().any(|t| t == hidden), "{hidden}: {texts:?}");
     }
 }
 
@@ -535,7 +536,7 @@ fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
 fn the_bar_opens_over_the_spaceport_with_its_hire_escort_button() {
     let mut harness = Harness::flying(0);
     harness.land();
-    let bar = harness.item(10).center();
+    let bar = harness.item(11).center();
     harness.click(bar);
     let frame = harness.frame();
     let texts = texts(&frame);
@@ -561,7 +562,7 @@ fn the_bar_opens_over_the_spaceport_with_its_hire_escort_button() {
 fn mission_bbs_with_nothing_offered_says_so_and_done_returns() {
     let mut harness = Harness::flying(0);
     harness.land();
-    let bbs = harness.item(11).center();
+    let bbs = harness.item(10).center();
     harness.click(bbs);
     let frame = harness.frame();
     let texts = texts(&frame);
@@ -680,11 +681,12 @@ fn landing_and_leaving_play_their_sounds_and_space_has_no_music() {
         [play(151, nova_audio::priority::TRAFFIC_CONTROL)],
         "traffic control"
     );
-    // The landing beep, then, on the spaceport's first frame, the
-    // planet's own ambient sound.
+    // An inhabited planet's touchdown is silent (`_PlayerLandOnStellar`
+    // beeps only at an uninhabited stellar, @0x632be-0x632ef); on the
+    // spaceport's first frame, the planet's own ambient sound.
     harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
-    assert_eq!(drain(&log), [play(151, nova_audio::priority::LANDING)]);
+    assert_eq!(drain(&log), [], "the touchdown is silent");
     harness.frame();
     assert_eq!(
         drain(&log),

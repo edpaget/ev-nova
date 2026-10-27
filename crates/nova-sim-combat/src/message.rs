@@ -74,8 +74,14 @@ pub enum SimMessage {
     /// (`_HandleShip` @0x33b45-0x33bac, `STR#` 2002 #127).
     EscortRepaired,
     /// A disabled former fighter repaired itself and rejoined the fleet
-    /// (`_HandleShip` @0x33b32-0x33bac, `STR#` 2002 #128).
+    /// (`_HandleShip` @0x33b32-0x33bac, `STR#` 2002 #128), or the player
+    /// boarded its own disabled fighter back into its bay
+    /// (`_HandlePlayerBoardAttempt` @0x65af6, @0x65e29).
     FighterRepaired,
+    /// The player boarded a disabled ship of a type its bays carry, with
+    /// room, into its bay (`_HandlePlayerBoardAttempt` @0x65d85-0x65e29,
+    /// `STR#` 2002 #129).
+    FighterCaptured,
     /// The disabled player's Repair Droids repaired it: "Propulsion
     /// systems repaired." (`_HandlePlayer` @0x68bf0-0x68c3f, `STR#` 2002
     /// #37; see the session's `player_repair` module).
@@ -297,7 +303,9 @@ impl SimMessage {
     ///   @0x7e79d, @0x7ea96, @0x7eece, @0x7f38f).
     /// - [`EscortRepaired`](Self::EscortRepaired) and
     ///   [`FighterRepaired`](Self::FighterRepaired): 250 (`_HandleShip`
-    ///   @0x33ba1).
+    ///   @0x33ba1, `_HandlePlayerBoardAttempt` @0x65cff, @0x65af6,
+    ///   @0x65e29), as [`FighterCaptured`](Self::FighterCaptured)
+    ///   (@0x65e29).
     /// - [`PropulsionRepaired`](Self::PropulsionRepaired): 250
     ///   (`_HandlePlayer` @0x68c3f, 0xfa pushed @0x68c34).
     /// - [`TookOff`](Self::TookOff): 240 (`_PlayerLandOnStellar`
@@ -365,6 +373,7 @@ impl SimMessage {
             | Self::ReinforcementsApproaching(_) => 240,
             Self::EscortRepaired
             | Self::FighterRepaired
+            | Self::FighterCaptured
             | Self::PropulsionRepaired
             | Self::JumpCollapsed
             | Self::WaitForMe(_)
@@ -418,6 +427,12 @@ mod tests {
         for (message, ticks) in cases {
             assert_eq!(message.ticks(), ticks, "{message:?}");
         }
+    }
+
+    #[test]
+    fn fighter_captured_lasts_250_ticks() {
+        // 0xfa pushed for `_DisplayComm` (@0x65e29), as for the repairs.
+        assert_eq!(SimMessage::FighterCaptured.ticks(), 250);
     }
 
     #[test]

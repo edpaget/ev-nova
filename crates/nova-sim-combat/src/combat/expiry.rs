@@ -41,6 +41,7 @@ use crate::combat::armament::Arsenal;
 use crate::combat::damage::Hit;
 use crate::combat::hull::DisableRule;
 use crate::combat::projectile::Shot;
+use crate::geometry::Vec2;
 use crate::govt::Governments;
 
 /// Puts each of `fighters` at its place among `at`, a view of the
@@ -83,7 +84,10 @@ impl Combat {
     ///   shot's spin timer in its slot (`ShotSlots::spin_pass`,
     ///   @0x35879-0x358c4); then its missile lock, if it makes one
     ///   ([`lock`]), lands at once (@0x35855), reading the target where it
-    ///   is now.
+    ///   is now. A homing shot reads the `asteroids`, by slot, where they
+    ///   are as `_HandleShot` meets them, which `_HandleAsteroids` moves
+    ///   only after the ship loop (see
+    ///   [`asteroid_seek`](super::asteroid_seek)).
     ///
     /// Each ship a visit's landing strikes settles its condition at once
     /// (`Combat::settle_struck`), and is read again whole for the visits
@@ -95,6 +99,7 @@ impl Combat {
         fighters: &mut [Fighter],
         (govts, arsenal): (&Governments, &Arsenal),
         rule: &dyn DisableRule,
+        asteroids: &[Option<Vec2>],
         chance: &mut dyn Chance,
     ) {
         // Each NPC where it stood as the last tick ran, which the ends of
@@ -117,7 +122,7 @@ impl Combat {
                     self.shots.retain(|flying| flying.slot != visit);
                     self.land_at_visit(fighters, hits, (&mut lineup, true), rule);
                 } else {
-                    self.move_shot(index, &lineup, chance);
+                    self.move_shot(index, &lineup, asteroids, chance);
                     let sides = lineup.seen_sides();
                     let locked: Vec<Landed> =
                         lock(&self.shots[index], &sides).into_iter().collect();
@@ -136,10 +141,18 @@ impl Combat {
     }
 
     /// The shot in flight at `index` flies a tick among the ships of
-    /// `lineup` where they are now, drawing on `chance`, and runs its
-    /// slot's spin timer if it spins (see [`Combat::handle_shots`]).
-    fn move_shot(&mut self, index: usize, lineup: &Lineup, chance: &mut dyn Chance) {
+    /// `lineup` where they are now and the `asteroids`, by slot, drawing on
+    /// `chance`, and runs its slot's spin timer if it spins (see
+    /// [`Combat::handle_shots`]).
+    fn move_shot(
+        &mut self,
+        index: usize,
+        lineup: &Lineup,
+        asteroids: &[Option<Vec2>],
+        chance: &mut dyn Chance,
+    ) {
         let guide = Guide {
+            asteroids,
             sights: &lineup.sights,
             frame: self.field.frame,
             lock_angle: self.lock_angle,

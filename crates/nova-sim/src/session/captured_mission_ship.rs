@@ -120,6 +120,26 @@ mod tests {
             .id
     }
 
+    /// `_DoPlunderDialog` zeroes the captured ship's fade and direction
+    /// (@0x946e3, @0x946f9) before `_AISetup` and
+    /// `_AIShipCapturedByPlayer`, so a mission's special ship joining as a
+    /// mission escort is zeroed too.
+    #[test]
+    fn a_special_ship_captured_while_its_cloak_still_fades_joins_at_fade_0() {
+        let catalog = goal_catalog(0, 0);
+        let mut session = in_flight(&catalog);
+        fail(&mut session);
+        let id = first_marked(&session);
+        session.space.npc_mut(id).expect("here").cloak = crate::cloak::Cloak {
+            fade: 12.0,
+            direction: -1,
+        };
+        session.join_fleet(id, &mut NeverFires);
+        let npc = session.space.npc(id).expect("here");
+        assert!(npc.mission_escort());
+        assert_eq!(npc.cloak, crate::cloak::Cloak::default());
+    }
+
     /// Mission 140 of `goal`, in flight, failed, its first ship captured
     /// for an escort: the session and that ship.
     fn captured(catalog: &FakePilotCatalog) -> (Session, NpcId) {
@@ -139,6 +159,7 @@ mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 

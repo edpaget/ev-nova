@@ -113,6 +113,8 @@ pub(crate) fn player(x: f32, y: f32) -> PlayerSide {
         class: EscortClass::Freighter,
         boarded: false,
         speed: 0.0,
+        cloak: crate::cloak::Cloak::default(),
+        area_cloak: false,
     }
 }
 
@@ -160,4 +162,29 @@ pub(crate) fn records_of<'a>(npcs: impl IntoIterator<Item = &'a Npc>) -> Arsenal
 /// NPC `id` as a ship.
 pub(crate) fn n(id: u32) -> ShipRef {
     ShipRef::Npc(NpcId(id))
+}
+
+/// `npc` fully cloaked.
+pub(crate) fn cloaked(mut npc: Npc) -> Npc {
+    npc.cloak = crate::cloak::Cloak {
+        fade: crate::cloak::FADE_FULL,
+        direction: 0,
+    };
+    npc
+}
+
+/// `npc` with a cloak scanner on screen, seeing a cloaked ship within 200
+/// of it on both axes.
+pub(crate) fn scanning(mut npc: Npc) -> Npc {
+    npc.cloak_gear.scanner.on_screen = true;
+    npc
+}
+
+/// `player` fully cloaked.
+pub(crate) fn cloaked_player(mut player: PlayerSide) -> PlayerSide {
+    player.cloak = crate::cloak::Cloak {
+        fade: crate::cloak::FADE_FULL,
+        direction: 0,
+    };
+    player
 }

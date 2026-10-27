@@ -647,6 +647,7 @@ mod tests {
                 carried: false,
                 wage: None,
                 person: None,
+                mark: None,
             },
         });
         let npcs = [holding(Goal::Attack(n(2)), Some(n(2))), escort];

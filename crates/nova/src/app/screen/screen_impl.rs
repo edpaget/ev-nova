@@ -205,6 +205,9 @@ impl Screen for AppScreen {
         let mut dialogs = DrawList::new();
         let under_map = [
             self.new_pilot.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.christening
+                .as_ref()
+                .map(|open| &open.dialog as &dyn Screen),
             self.open_pilot.as_ref().map(|pilots| pilots as &dyn Screen),
             self.load_note.as_ref().map(|note| note as &dyn Screen),
             self.question
@@ -213,6 +216,9 @@ impl Screen for AppScreen {
             self.plunder.as_ref().map(|dialog| dialog as &dyn Screen),
             self.assignment.as_ref().map(|dialog| dialog as &dyn Screen),
             self.comm.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.escort_dialog
+                .as_ref()
+                .map(|dialog| dialog as &dyn Screen),
             self.offer.as_ref().map(|dialog| dialog as &dyn Screen),
             self.player_info
                 .as_ref()
@@ -343,6 +349,9 @@ impl Screen for AppScreen {
             self.new_pilot
                 .as_mut()
                 .map(|dialog| dialog as &mut dyn Screen),
+            self.christening
+                .as_mut()
+                .map(|open| &mut open.dialog as &mut dyn Screen),
             self.open_pilot.as_mut().map(|list| list as &mut dyn Screen),
             self.load_note.as_mut().map(|note| note as &mut dyn Screen),
             self.question
@@ -359,6 +368,9 @@ impl Screen for AppScreen {
                 .as_mut()
                 .map(|dialog| dialog as &mut dyn Screen),
             self.comm.as_mut().map(|dialog| dialog as &mut dyn Screen),
+            self.escort_dialog
+                .as_mut()
+                .map(|dialog| dialog as &mut dyn Screen),
             self.haggle.as_mut().map(|dialog| dialog as &mut dyn Screen),
             self.offer.as_mut().map(|dialog| dialog as &mut dyn Screen),
             self.missions

@@ -76,6 +76,9 @@ pub(super) struct Space {
     /// What the view shows of space about the player's ship (see the
     /// `cloaks` module).
     pub(super) play_area: crate::cloak::Area,
+    /// How wide the view's game window is, which each system's
+    /// `Asteroids` is stored by (see the `asteroids` module); never saved.
+    pub(super) window_width: u32,
     /// The fight's strikes since the last traffic tick, for the NPCs to
     /// answer.
     pub(super) strikes: Vec<Strike>,
@@ -140,6 +143,8 @@ pub(super) struct Escorts {
     pub(super) aboard: Option<Aboard>,
     /// The hail under way, if any.
     pub(super) talk: Option<hail::Talk>,
+    /// The escort dialog open, if any (see the `escort_dialog` module).
+    pub(super) dialog: Option<super::escort_dialog::EscortDialog>,
     /// Each escort of the fleet's NPC in the system, lined up with the
     /// pilot's escorts while in flight; none for one not placed.
     pub(super) fleet: Vec<Option<NpcId>>,
@@ -182,6 +187,7 @@ impl Space {
             // module).
             asteroid_field_due: true,
             play_area: crate::cloak::DEFAULT_PLAY_AREA,
+            window_width: crate::asteroid::DEFAULT_WINDOW_WIDTH,
             strikes: Vec::new(),
             frame: 0,
             pass_frame: 0,
@@ -196,6 +202,7 @@ impl Space {
             escorts: Escorts {
                 aboard: None,
                 talk: None,
+                dialog: None,
                 fleet: Vec::new(),
                 restock_persons: false,
                 class_orders: [None; 4],

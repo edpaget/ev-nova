@@ -148,6 +148,7 @@ impl<A: Audio> AudioCore<A> {
                     | Showing::Plunder
                     | Showing::Assignment
                     | Showing::Comm
+                    | Showing::EscortDialog
                     | Showing::Haggle
                     | Showing::Offer
                     | Showing::MissionText
@@ -200,6 +201,8 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.script_message, at::SCRIPT_MESSAGE);
             }
             SimSound::RedAlert => self.play(self.table.red_alert, at::RED_ALERT),
+            SimSound::Cloaked => self.play(self.table.cloak, at::CLOAK),
+            SimSound::Uncloaked => self.play(self.table.uncloak, at::CLOAK),
             SimSound::CargoJettisoned => self.play(self.table.jettison, at::JETTISON),
             SimSound::ScanFailedMission => {
                 self.play(self.table.scan_failed, at::SCAN_FAILED);
@@ -227,6 +230,12 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.reinforcements, at::REINFORCEMENTS);
             }
             SimSound::HailOffer => self.play(self.table.hail_offer, at::HAIL_OFFER),
+            SimSound::EscortDialogOpened => {
+                self.play(self.table.escort_dialog_opened, at::ESCORT_DIALOG_OPENED);
+            }
+            SimSound::EscortDialogClosed => {
+                self.play(self.table.escort_dialog_closed, at::ESCORT_DIALOG_CLOSED);
+            }
             SimSound::HailQuote => self.play(self.table.hail_quote, at::HAIL_QUOTE),
             SimSound::PersonOfferBoarded | SimSound::Boarded => {
                 self.play(self.table.airlock, at::AIRLOCK);
@@ -242,6 +251,9 @@ impl<A: Audio> AudioCore<A> {
             }
             SimSound::TargetCleared => {
                 self.play(self.table.target_cleared, at::TARGET_CLEARED);
+            }
+            SimSound::SecondarySelected => {
+                self.play(self.table.secondary_selected, at::SECONDARY_SELECTED);
             }
             SimSound::TutorialHint => {
                 self.play(self.table.tutorial_hint, at::TUTORIAL_HINT);
@@ -286,6 +298,17 @@ impl<A: Audio> AudioCore<A> {
             | SimSound::SelfDestructCancelled
             | SimSound::SelfDestructed => self.take_self_destruct(sound),
             SimSound::Halt(sounds) => self.halt(sounds),
+            // Heard as a fight's explosion is (`_PlaySoundDistance`).
+            SimSound::Explosion {
+                sound,
+                offset,
+                priority,
+            } => self.take_fight(CombatSound {
+                sound,
+                offset,
+                priority,
+                until_stopped: false,
+            }),
             SimSound::Voice { sound } => self.play(Some(sound), at::VOICE),
             SimSound::HaltVoice { sound } => self.halt(&[sound]),
         }
@@ -323,6 +346,7 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.escort_group, at::ESCORT_GROUP);
             }
             UiSound::NoEscorts => self.play(self.table.no_escorts, at::NO_ESCORTS),
+            UiSound::BuyRefused => self.play(self.table.buy_refused, at::BUY_REFUSED),
             UiSound::EnterRefused => {
                 self.play(self.table.enter_refused, at::ENTER_REFUSED);
             }
@@ -664,7 +688,7 @@ pub fn distance_gain(offset: (i32, i32)) -> f32 {
 
 /// Whether `showing` is shown over another screen, keeping the scene
 /// below it: the About text, the Preferences dialog, the new pilot's name
-/// entry, the saved pilots' list, a note and a question over the main
+/// entry and its ship's christening, the saved pilots' list, a note and a question over the main
 /// menu, and the plunder,
 /// assignment, comm, haggle and offer dialogs, the mission texts and the
 /// mission info screen over flight.
@@ -674,12 +698,14 @@ fn is_overlay(showing: Showing) -> bool {
         Showing::About
             | Showing::Preferences
             | Showing::NewPilot
+            | Showing::Christening
             | Showing::OpenPilot
             | Showing::Note
             | Showing::Question
             | Showing::Plunder
             | Showing::Assignment
             | Showing::Comm
+            | Showing::EscortDialog
             | Showing::Haggle
             | Showing::Offer
             | Showing::MissionText
@@ -727,12 +753,14 @@ fn has_music(scene: Showing) -> bool {
         | Showing::About
         | Showing::Preferences
         | Showing::NewPilot
+        | Showing::Christening
         | Showing::OpenPilot
         | Showing::Note
         | Showing::Question
         | Showing::Plunder
         | Showing::Assignment
         | Showing::Comm
+        | Showing::EscortDialog
         | Showing::Haggle
         | Showing::Offer
         | Showing::MissionText
@@ -889,6 +917,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one case for each of the sounds
     fn each_event_plays_at_its_priority() {
         use crate::priority as at;
         let script = |exclusive| {
@@ -913,6 +942,8 @@ mod tests {
             (ARRIVED, at::ARRIVAL),
             (Sound::Sim(SimSound::ScriptMessage), at::SCRIPT_MESSAGE),
             (Sound::Sim(SimSound::RedAlert), at::RED_ALERT),
+            (Sound::Sim(SimSound::Cloaked), at::CLOAK),
+            (Sound::Sim(SimSound::Uncloaked), at::CLOAK),
             (Sound::Sim(SimSound::CargoJettisoned), at::JETTISON),
             (Sound::Sim(SimSound::ScanFailedMission), at::SCAN_FAILED),
             (Sound::Sim(SimSound::Smuggling), at::SMUGGLING),
@@ -930,6 +961,14 @@ mod tests {
             (Sound::Sim(SimSound::EscortRepaired), at::ESCORT_REPAIRED),
             (Sound::Sim(SimSound::FleetArrivalQuote), at::FLEET_QUOTE),
             (Sound::Sim(SimSound::HailOffer), at::HAIL_OFFER),
+            (
+                Sound::Sim(SimSound::EscortDialogOpened),
+                at::ESCORT_DIALOG_OPENED,
+            ),
+            (
+                Sound::Sim(SimSound::EscortDialogClosed),
+                at::ESCORT_DIALOG_CLOSED,
+            ),
             (Sound::Sim(SimSound::HailQuote), at::HAIL_QUOTE),
             (Sound::Sim(SimSound::PersonOfferBoarded), at::AIRLOCK),
             (Sound::Sim(SimSound::Boarded), at::AIRLOCK),
@@ -937,6 +976,10 @@ mod tests {
             (Sound::Sim(SimSound::TargetSelected), at::TARGET_SELECTED),
             (Sound::Sim(SimSound::HyperSelected), at::HYPER_SELECTED),
             (Sound::Sim(SimSound::TargetCleared), at::TARGET_CLEARED),
+            (
+                Sound::Sim(SimSound::SecondarySelected),
+                at::SECONDARY_SELECTED,
+            ),
             (Sound::Sim(SimSound::TutorialHint), at::TUTORIAL_HINT),
             (Sound::Sim(SimSound::ShipDowned), at::SHIP_DOWNED),
             (
@@ -970,6 +1013,7 @@ mod tests {
             (Sound::Ui(UiSound::EscortMenuToggled), at::ESCORT_MENU),
             (Sound::Ui(UiSound::EscortGroupSelected), at::ESCORT_GROUP),
             (Sound::Ui(UiSound::NoEscorts), at::NO_ESCORTS),
+            (Sound::Ui(UiSound::BuyRefused), at::BUY_REFUSED),
             (Sound::Ui(UiSound::EnterRefused), at::ENTER_REFUSED),
             (Sound::Ui(UiSound::NewsOpened), at::NEWS_OPEN),
             (Sound::Ui(UiSound::MissionInfoOpened), at::NEWS_OPEN),
@@ -1283,6 +1327,31 @@ mod tests {
     }
 
     #[test]
+    fn a_secondary_selected_or_let_go_beeps_152_and_one_refused_153() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::SecondarySelected),
+                Sound::Sim(SimSound::Refused),
+            ],
+        );
+        assert_eq!(drain(&log), [play(152, EFFECTS), play(153, EFFECTS)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            secondary_selected: Some(SoundId(160)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::SecondarySelected)],
+        );
+        assert_eq!(drain(&log), [play(160, EFFECTS)]);
+    }
+
+    #[test]
     fn a_tutorial_hint_beeps_154_and_a_told_refusal_153() {
         let (mut core, log) = original();
         core.set_effects_volume(Volume::new(0.5));
@@ -1549,6 +1618,19 @@ mod tests {
             &[Sound::Sim(SimSound::RedAlert)],
         );
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn the_cloak_plays_381_and_the_uncloak_380_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Cloaked)]);
+        assert_eq!(drain(&log), [play(381, 0.5)]);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::Uncloaked)],
+        );
+        assert_eq!(drain(&log), [play(380, 0.5)]);
     }
 
     #[test]
@@ -2405,6 +2487,31 @@ mod tests {
         assert_eq!(drain(&log), [], "sound off");
     }
 
+    #[test]
+    fn a_ys_explosion_plays_its_snd_at_its_priority_by_its_distance() {
+        // `_CreateExplosion`'s `_PlaySoundDistance(-1, snd, 6, ..)`
+        // (@0x3f8f1-0x3f91a), docked as in flight.
+        let explosion = |offset| {
+            Sound::Sim(SimSound::Explosion {
+                sound: SoundId(302),
+                offset,
+                priority: 6,
+            })
+        };
+        let (mut core, log) = original();
+        core.set_music(false);
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::Flight), &[explosion((400, 0))]);
+        assert_eq!(drain(&log), [play(302, 0.3125)], "by its distance");
+        core.update(Some(Showing::Spaceport), &[explosion((0, 0))]);
+        assert_eq!(drain(&log), [play(302, 0.5)], "docked");
+        let (mut core, log) = original();
+        core.update(Some(Showing::Flight), &[fight(208, (0, 0))]);
+        core.update(None, &[explosion((0, 0))]);
+        let played = drain_prioritised(&log);
+        assert_eq!(priorities(&played), [Priority::new(4), Priority::new(6)]);
+    }
+
     // Music.
 
     fn fade_out(volume: f32) -> AudioCommand {
@@ -2437,6 +2544,7 @@ mod tests {
         for overlay in [
             Showing::About,
             Showing::NewPilot,
+            Showing::Christening,
             Showing::OpenPilot,
             Showing::Note,
             Showing::Question,
@@ -2545,6 +2653,7 @@ mod tests {
         for overlay in [
             Showing::Preferences,
             Showing::NewPilot,
+            Showing::Christening,
             Showing::OpenPilot,
             Showing::Note,
             Showing::Question,
@@ -2782,6 +2891,7 @@ mod tests {
             Showing::Plunder,
             Showing::Assignment,
             Showing::Comm,
+            Showing::EscortDialog,
             Showing::Haggle,
             Showing::Offer,
             Showing::MissionText,

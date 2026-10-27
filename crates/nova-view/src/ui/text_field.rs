@@ -85,6 +85,14 @@ impl TextField {
         self.caret = self.selection;
     }
 
+    /// Ends any selection, with the caret after the last character: where
+    /// a click inside a field leaves it here, as the field places no caret
+    /// by the pointer.
+    pub fn deselect_to_end(&mut self) {
+        self.selection = 0;
+        self.caret = self.text.chars().count();
+    }
+
     /// Whether any of its text is selected.
     #[must_use]
     pub fn selected(&self) -> bool {
@@ -167,6 +175,17 @@ impl TextField {
     /// the text, and the caret where it is when nothing is selected,
     /// measured by `metrics`.
     pub fn draw(&self, metrics: &dyn TextMetrics, list: &mut DrawList) {
+        self.draw_as(true, metrics, list);
+    }
+
+    /// The background, its outline and the text, with no selection or
+    /// caret: the field drawn while another has the focus.
+    pub fn draw_unfocused(&self, metrics: &dyn TextMetrics, list: &mut DrawList) {
+        self.draw_as(false, metrics, list);
+    }
+
+    /// The field, its selection and caret drawn only when `focused`.
+    fn draw_as(&self, focused: bool, metrics: &dyn TextMetrics, list: &mut DrawList) {
         fill_rect(list, self.rect, BACKGROUND);
         outline(list, self.rect, EDGE);
         let height = metrics.line_height(Font::Geneva, TEXT_SIZE);
@@ -174,7 +193,7 @@ impl TextField {
         let left = self.rect.min.x + INSET;
         let before =
             |chars: usize| metrics.width(Font::Geneva, TEXT_SIZE, &self.text[..self.offset(chars)]);
-        if self.selected() {
+        if focused && self.selected() {
             fill_rect(
                 list,
                 Bounds::at(Point::new(left, top), before(self.selection), height),
@@ -188,7 +207,7 @@ impl TextField {
             None,
             TEXT_COLOR,
         );
-        if self.selected() {
+        if !focused || self.selected() {
             return;
         }
         let caret = left + before(self.caret);
@@ -489,5 +508,36 @@ mod tests {
             list.iter().nth(5),
             Some(DrawCommand::Text { text, .. }) if text == "Ada"
         ));
+    }
+
+    #[test]
+    fn deselecting_puts_the_caret_at_the_end_and_typing_appends() {
+        let mut field = selected("Ada");
+        field.deselect_to_end();
+        assert!(!field.selected());
+        assert!(field.input(&Input::Text('h')));
+        assert_eq!(field.text(), "Adah");
+        field.input(&key(Key::Backspace, true, false));
+        field.input(&key(Key::Backspace, true, false));
+        assert_eq!(field.text(), "Ad", "the caret was at the end");
+    }
+
+    #[test]
+    fn unfocused_it_draws_its_box_and_text_but_no_selection_or_caret() {
+        for field in [selected("Ada"), {
+            let mut field = field(31);
+            typed(&mut field, "Ada");
+            field
+        }] {
+            let mut list = DrawList::new();
+            field.draw_unfocused(&MonoMetrics, &mut list);
+            let rect = field.rect();
+            let mut expected = DrawList::new();
+            fill_rect(&mut expected, rect, BACKGROUND);
+            outline(&mut expected, rect, EDGE);
+            let top = 58.0 - LINE_HEIGHT * 12.0 / 2.0;
+            expected.text("Ada", Point::new(103.0, top), 12.0, None, TEXT_COLOR);
+            assert_eq!(list, expected);
+        }
     }
 }

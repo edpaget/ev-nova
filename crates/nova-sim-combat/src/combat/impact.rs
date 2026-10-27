@@ -98,6 +98,12 @@ pub const NEAR: f32 = 50.0;
 /// it (0.75 @0xdd1f8).
 pub const HOLD_SHARE: f64 = 0.75;
 
+/// The share of an asteroid's `Mass` a tractor's firer must stay below
+/// for the beam to pull the firer to it rather than the asteroid back
+/// along the beam (0.5 @0xdd128, `_HandleBeams` @0x31ab7-0x31b0d; see
+/// [`asteroid_beam`](super::asteroid_beam)).
+pub const ASTEROID_PULL_SHARE: f64 = 0.5;
+
 /// A ship as a push reads it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Body {
@@ -208,13 +214,31 @@ pub fn tractor(target: &Body, firer: &Body, start: Vec2, impact: f32, cap: Speed
     if f64::from(firer.mass) >= HOLD_SHARE * f64::from(target.mass) {
         return Tractor::Holds;
     }
-    let off = start - target.position;
+    Tractor::Pulls(self_pull(firer, target.position, start, impact, cap))
+}
+
+/// The velocity a tractor beam of `impact` (below none) from `start`
+/// leaves its `firer` with as it pulls itself toward what it touches at
+/// `toward`, a ship or an asteroid (`_HandleBeams` @0x312dd-0x31450 and
+/// @0x31b41-0x31ca3): `Impact` / its `Mass` along the bearing from `toward`
+/// to the start, soft-capped at its class speed and clamped to its top
+/// speed as `cap` reads. None while the start is within [`NEAR`] of
+/// `toward` on both axes, or for a massless or planet-type firer.
+#[must_use]
+pub fn self_pull(
+    firer: &Body,
+    toward: Vec2,
+    start: Vec2,
+    impact: f32,
+    cap: SpeedCap,
+) -> Option<Vec2> {
+    let off = start - toward;
     let close = off.x.abs() < NEAR && off.y.abs() < NEAR;
     if close || !pushable(firer) {
-        return Tractor::Pulls(None);
+        return None;
     }
-    let bearing = f32::from(intercept_angle(target.position, start));
-    Tractor::Pulls(Some(pulled(firer, bearing, impact, firer.top_speed, cap)))
+    let bearing = f32::from(intercept_angle(toward, start));
+    Some(pulled(firer, bearing, impact, firer.top_speed, cap))
 }
 
 /// Whether a push can move `body`: a class of some `Mass`, not

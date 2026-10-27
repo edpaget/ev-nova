@@ -33,6 +33,7 @@
 //! place of the comm dialog. Skips, passing, when `NOVA_DATA` is unset.
 
 use crate::common;
+use nova_sim::escort_arrival::push_distance;
 
 use nova_data::GameData;
 use nova_data::records::character::Character;
@@ -1345,7 +1346,6 @@ fn alpharas_named_fleet_comes_when_its_roll_fires() {
 use std::collections::{BTreeMap, BTreeSet};
 
 use nova_sim::combat::armament::{Arsenal, LauncherRounds, Rounds};
-use nova_sim::combat::flags::FlagField;
 use nova_sim::combat::impact::TractorLock;
 use nova_sim::combat::ion::Ion;
 use nova_sim::combat::jamming::{Halving, Jamming};
@@ -1419,6 +1419,7 @@ impl Combatant {
             attacking: self.attacking,
             threatens_player: self.threatens_player,
             plundering: false,
+            mining: false,
             emerging: false,
             jumping_in: false,
             cloak_scanner: false,
@@ -2837,6 +2838,7 @@ fn a_stock_interference_system_confuses_a_stock_seeker() {
     let field = nova_sim::Field {
         frame: 0,
         interference: obatta.interference,
+        ..nova_sim::Field::default()
     };
     for id in [135, 137] {
         let missile = stock_weapon(&data, id);
@@ -3285,14 +3287,10 @@ fn every_stock_point_defence_turret_engages_an_ir_missile_in_range() {
     }
 }
 
-/// Stock weapons, and the unimplemented flags each reports.
-type Row = (&'static [i16], &'static [(FlagField, u16)]);
-
 /// Every stock guided weapon and turret, fired again and again at a ship
-/// ahead, reports exactly its unimplemented flags, each once.
+/// ahead, reports no unimplemented flag.
 #[test]
-fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
-    use FlagField::Seeker;
+fn every_stock_guided_weapon_and_turret_reports_no_unimplemented_flag() {
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -3327,26 +3325,10 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
     // The sensor-interference `Seeker` 0x0008 (135, 137, 160, 230, 234) is
     // ported (see `projectile`), so it reports nothing either. `Seeker`
     // 0x0001 (148, 182, 184, 185, 199, 229, 137) passes through asteroids
-    // and `Flags2` 0x8000 (196-198, 230) mines them, both done. What is
-    // left is `Seeker` 0x0002, the asteroid lock.
-    let rows: [Row; 1] = [(&[134, 135, 136, 160, 230, 234], &[(Seeker, 0x2)])];
-    let expected: BTreeSet<SimDiagnostic> = rows
-        .iter()
-        .flat_map(|(weapons, flags)| {
-            weapons.iter().flat_map(move |&weapon| {
-                flags.iter().map(
-                    move |&(field, bit)| SimDiagnostic::UnimplementedWeaponFlag {
-                        weapon: WeaponId(weapon),
-                        field,
-                        bit,
-                    },
-                )
-            })
-        })
-        .collect();
-    assert_eq!(expected.len(), 6);
-    assert_eq!(diagnostics.len(), 6, "each once: {diagnostics:?}");
-    assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
+    // and `Flags2` 0x8000 (196-198, 230) mines them, both done. The last
+    // left, `Seeker` 0x0002, the asteroid lock of 134, 135, 136, 160, 230
+    // and 234, is ported too (see `asteroid_seek`).
+    assert_eq!(diagnostics, []);
 }
 
 /// Every stock `shïp` has a `shän` whose weapon exit points reach its
@@ -4154,8 +4136,8 @@ fn attacking_a_stock_trader_then_boarding_and_capturing_it() {
     assert_eq!(arrived.len(), 1, "the trader came along");
     assert_eq!(arrived[0].ship, class);
     assert!(session.is_escort(arrived[0].id));
-    let off = arrived[0].state.position - session.player().position;
-    assert!(off.length() < 100.0, "beside the player: {off:?}");
+    let back = (arrived[0].state.position - session.player().position).length() - push_distance();
+    assert!(back.abs() < 100.0, "pushed back to glide in: {back}");
 }
 
 /// The stock ships' escort classes: the Shuttle (`shïp` 128) a freighter,
@@ -4322,6 +4304,7 @@ fn the_three_stock_42_character_advice_lines_follow_long_advice() {
                 list,
                 index,
                 greet_if_blank: false,
+                patch: None,
                 long_advice,
             };
             assert_eq!(
@@ -5410,6 +5393,7 @@ fn the_bounty_hunters_hail_quote_names_him_and_the_pilot() {
     let tags = QuoteTags {
         person: "Bounty Hunter",
         pilot: "Stock",
+        nickname: "",
         ship_type: "Shuttle",
         ship_name: "Kestrel",
         ranks: nova_sim::rank::RankNames::none(),
@@ -5695,6 +5679,8 @@ fn stock_pick_made(
         class: nova_sim::escort::EscortClass::Freighter,
         boarded: false,
         speed: 0.0,
+        cloak: nova_sim::cloak::Cloak::default(),
+        area_cloak: false,
     };
     let npcs = [npc.clone()];
     let around = nova_sim::ai::Surroundings {

@@ -23,10 +23,14 @@
 //! - **[`SCOOPS`]** with an asteroid scoop ([`Npc::can_scoop`], +0xc3):
 //!   a hold as full as its `Holds` ([`NpcHold::total`](crate::traffic::npc::NpcHold::total)
 //!   ≥ [`Npc::holds`], `_TotalCargo` against `shïp` +0x0) leaves (state 2,
-//!   @0x8b2e7-0x8b32f); otherwise, with [`MINES`] too, it mines
-//!   (state 16, @0x8b346-0x8b34c), asteroids or none; otherwise it
+//!   @0x8b2e7-0x8b32f), and stays leaving on every think after; otherwise,
+//!   while a box in space is scoopable ([`Surroundings::boxes`],
+//!   `_miningBoxesActive`, [`any_scoopable`]), it scoops (state 17,
+//!   [`Goal::Scoop`], @0x8b331-0x8b344); otherwise, with [`MINES`] too, it
+//!   mines (state 16, @0x8b346-0x8b34c), asteroids or none; otherwise it
 //!   shuttles. Without a scoop it shuttles, so an Asteroid Miner (0x0003)
-//!   without one never mines or stops.
+//!   without one never mines, scoops or stops. A jettisoned box is never
+//!   scoopable, so it is no reason to scoop.
 //! - **[`MINES`] alone** keeps the goal the first test gave.
 //! - **The shuttle** (@0x8b35f-0x8b463): while its AI wait (+0x4c) runs
 //!   ([`Npc::wait_running`]), state 0 with no travel stellar
@@ -50,17 +54,21 @@
 //! No `PlaySound` or `_beepSnd` call is anywhere in it; the distress
 //! call's beep is `_AICallForHelp`'s.
 //!
-//! **Left out** (see rdm:phase/combat-ai-fidelity/phase-2-miners-without-asteroids):
+//! How states 16 and 17 are flown, and what a mining ship fires, is
+//! [`mine_orders`](crate::ai::mine_orders)'s,
+//! [`mine_flight`](crate::traffic::mine_flight)'s and
+//! [`fire_untargeted`](crate::ai::fire_untargeted)'s.
 //!
-//! - State 17, scooping boxes while `_miningBoxesActive` is set
-//!   (@0x8b331-0x8b344): rdm:phase/asteroids/phase-5-ai-mining. The core
-//!   treats boxes as inactive.
-//! - State 2's +0x50 clamp and +0xa4 stamp (@0x8b307-0x8b329,
-//!   @0x8b428-0x8b44a), the warp stage's:
-//!   rdm:phase/ship-handling-fidelity/phase-8-warp-out.
+//! State 2's +0x50 clamp (a negative stage raised to 0) and +0xa4 stamp
+//! (@0x8b307-0x8b329, @0x8b428-0x8b44a) need no port: the leave's own
+//! jump, sub 4, starts any stage at 0 or below at 1.0 and stamps the
+//! clock again (@0x858a4-0x858b0, see
+//! [`warp_out`](crate::traffic::warp_out)), and nothing reads the clock or
+//! a stage at or below 0 before then.
 
 use crate::ai::call_for_help::when_fleeing;
 use crate::ai::{Behaviour, Decision, Goal, Surroundings, leave, provoked_by};
+use crate::cargo_box::any_scoopable;
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -167,6 +175,9 @@ pub fn decide(npc: &Npc, around: &Surroundings) -> Goal {
         if npc.cargo.total() >= u64::from(npc.holds) {
             return Goal::JumpOut;
         }
+        if any_scoopable(around.boxes) {
+            return Goal::Scoop;
+        }
         if mines {
             return Goal::Mine;
         }
@@ -212,6 +223,7 @@ mod tests {
     use super::*;
     use crate::ai::fixture::{PIRATES, TRADERS, n, ship};
     use crate::ai::{Behaviour, Goal, Surroundings};
+    use crate::cargo_box::CargoBox;
     use crate::catalog::{LandingSite, StellarId};
     use crate::combat::hull::Condition;
     use crate::gate::{HYPERGATE, WORMHOLE};
@@ -531,6 +543,102 @@ mod tests {
             deciding(&scooper, &stellars(), None),
             Goal::Land(StellarId(129)),
             "no boxes: the shuttle"
+        );
+    }
+
+    /// A box at (`x`, `y`) with 100 ticks of life, scoopable as
+    /// `scoopable` says.
+    fn cargo(x: f32, y: f32, scoopable: bool) -> CargoBox {
+        CargoBox {
+            position: Vec2::new(x, y),
+            velocity: Vec2::ZERO,
+            life: 100.0,
+            frame: 0,
+            spin: 0,
+            graphic: 1,
+            scoopable,
+            contents: Some(2),
+        }
+    }
+
+    /// `npc`'s goal among `stellars`, with `rock` in slot 0 and `boxes`
+    /// in space.
+    fn among_boxes(npc: &Npc, rock: Option<Asteroid>, boxes: &[CargoBox]) -> Goal {
+        let npcs = [npc.clone()];
+        let sites = stellars();
+        let around = Surroundings {
+            mining_rock: rock,
+            boxes,
+            ..Surroundings::new(&sites, &npcs)
+        };
+        decide(npc, &around)
+    }
+
+    #[test]
+    fn a_miner_that_can_scoop_scoops_while_a_scoopable_box_is_in_space() {
+        // State 17 (@0x8b331-0x8b344), with 0x0001 or without.
+        let boxes = [cargo(500.0, 0.0, true)];
+        for bits in [SCOOPS, MINER_BITS] {
+            let mut room = miner(bits, true);
+            room.cargo.add(0, 19);
+            assert_eq!(among_boxes(&room, None, &boxes), Goal::Scoop, "{bits}");
+            assert_eq!(
+                among_boxes(&room, Some(rock()), &boxes),
+                Goal::Scoop,
+                "{bits}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_jettisoned_box_is_no_reason_to_scoop() {
+        let jettisoned = [cargo(500.0, 0.0, false)];
+        assert_eq!(
+            among_boxes(&miner(SCOOPS, true), None, &jettisoned),
+            Goal::Land(StellarId(129)),
+            "the shuttle"
+        );
+        assert_eq!(
+            among_boxes(&miner(MINER_BITS, true), None, &jettisoned),
+            Goal::Mine
+        );
+    }
+
+    #[test]
+    fn with_no_box_left_a_scooping_miner_shuttles_or_mines_again() {
+        let mut scooping = miner(SCOOPS, true);
+        scooping.goal = Goal::Scoop;
+        assert_eq!(
+            among_boxes(&scooping, None, &[]),
+            Goal::Land(StellarId(129))
+        );
+        scooping.miner = MINER_BITS;
+        assert_eq!(among_boxes(&scooping, Some(rock()), &[]), Goal::Mine);
+        assert_eq!(among_boxes(&scooping, None, &[]), Goal::Mine);
+    }
+
+    #[test]
+    fn a_full_hold_leaves_before_it_scoops_and_stays_leaving() {
+        let boxes = [cargo(500.0, 0.0, true)];
+        let mut full = miner(MINER_BITS, true);
+        full.cargo.add(0, 20);
+        assert_eq!(among_boxes(&full, Some(rock()), &boxes), Goal::JumpOut);
+        full.goal = Goal::JumpOut;
+        assert_eq!(among_boxes(&full, Some(rock()), &boxes), Goal::JumpOut);
+        assert_eq!(among_boxes(&full, Some(rock()), &[]), Goal::JumpOut);
+    }
+
+    #[test]
+    fn a_miner_that_cant_scoop_never_scoops() {
+        let boxes = [cargo(500.0, 0.0, true)];
+        assert_eq!(
+            among_boxes(&miner(MINER_BITS, false), Some(rock()), &boxes),
+            Goal::Land(StellarId(129)),
+            "the shuttle"
+        );
+        assert_eq!(
+            among_boxes(&miner(MINES, false), Some(rock()), &boxes),
+            Goal::Mine
         );
     }
 

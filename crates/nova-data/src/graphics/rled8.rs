@@ -40,11 +40,9 @@
 //! translucent, the legacy 8-bit world), is in `nova_sim_story`'s
 //! "Checked for stellar-fidelity phase 4".
 
-use super::GraphicsError;
 use super::color::rgb555;
 use super::image::Image;
-use super::reader::Reader;
-use super::rled::{PIXELS, Painter, RUN, Token, pad4, solid_frames};
+use super::rled::{Sink, solid_frames};
 use super::sheet::{SheetLayout, SpriteSheet};
 use super::system_clut::system_colour;
 
@@ -79,7 +77,6 @@ pub(super) struct Rled8 {
     cells: Vec<Option<Cell>>,
     /// Whether the frame has a run.
     has_run: bool,
-    x: u32,
     frames: Vec<Image>,
     solids: Vec<Option<Image>>,
 }
@@ -98,7 +95,6 @@ impl Rled8 {
             row_len,
             cells: vec![None; row_len as usize * height as usize],
             has_run: false,
-            x: 0,
             frames: Vec::with_capacity(usize::from(count)),
             solids: Vec::with_capacity(usize::from(count)),
         }
@@ -152,39 +148,22 @@ fn mem_set_byte(word: u32, n: u32, i: u32) -> u8 {
     le[k as usize]
 }
 
-impl Painter for Rled8 {
-    fn line_start(&mut self) {
-        self.x = 0;
+impl Sink for Rled8 {
+    fn pixels(&mut self, x: u32, y: u32, pixels: &[u8]) {
+        for (i, &value) in (0..).zip(pixels) {
+            self.put(x + i, y, Cell { value, run: false });
+        }
     }
 
-    fn draw(&mut self, token: Token, r: &mut Reader<'_>) -> Result<(), GraphicsError> {
-        let (x, y, n) = (self.x, token.line, token.count);
-        if x + n > self.row_len {
-            return Err(token.overflow());
+    fn run(&mut self, x: u32, y: u32, n: u32, word: u32) {
+        self.has_run = true;
+        for i in 0..n {
+            let value = match self.reading {
+                EightBitReading::AsDrawn => mem_set_byte(word, n, i),
+                EightBitReading::SystemPalette => (word >> 24) as u8,
+            };
+            self.put(x + i, y, Cell { value, run: true });
         }
-        match token.op {
-            PIXELS => {
-                let bytes = r.bytes(n as usize)?;
-                for (i, &value) in (0..).zip(bytes) {
-                    self.put(x + i, y, Cell { value, run: false });
-                }
-                r.skip(pad4(bytes.len()))?;
-            }
-            RUN => {
-                let word = r.u32()?;
-                self.has_run = true;
-                for i in 0..n {
-                    let value = match self.reading {
-                        EightBitReading::AsDrawn => mem_set_byte(word, n, i),
-                        EightBitReading::SystemPalette => (word >> 24) as u8,
-                    };
-                    self.put(x + i, y, Cell { value, run: true });
-                }
-            }
-            _ => {}
-        }
-        self.x += n;
-        Ok(())
     }
 
     fn frame_end(&mut self) {
@@ -213,6 +192,7 @@ impl Painter for Rled8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graphics::GraphicsError;
     use crate::graphics::fixture::{RledBuilder, RledFrame};
     use crate::graphics::rled::decode_rled_as;
 

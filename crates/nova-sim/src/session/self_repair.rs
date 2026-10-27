@@ -35,6 +35,10 @@
 //! disabled again, as [`Session::lose_escorts`] loses an escort only at
 //! the hit or the tick that downs it (`_DamageShip` @0x3af8f-0x3afdd).
 //!
+//! A former escort can also be boarded back into the fleet (see the
+//! `board_repair` module): that repair runs `_AISetup`, which clears its
+//! order word and so its standing order, where this rejoin keeps it.
+//!
 //! A repaired ship that remembers nothing (traffic carrying the gear, or
 //! a disabled mission escort, which never left its formation) only gets
 //! its armour back; a mission escort resumes as one.
@@ -46,7 +50,7 @@
 use super::Session;
 use crate::chance::Chance;
 use crate::combat::Rules;
-use crate::combat::hull::Condition;
+use crate::combat::hull::{Condition, DisableRule};
 use crate::self_repair::{
     FormerEscort, REPAIR_ODDS, can_self_repair, rejoin_message, repaired_armor,
 };
@@ -67,11 +71,7 @@ impl Session {
             }
         }
         for id in disabled {
-            let held = self
-                .space
-                .npc(id)
-                .is_some_and(|npc| self.held_disabled(npc));
-            let Some(npc) = self.space.npc_mut(id) else {
+            let Some(npc) = self.space.npc(id) else {
                 continue;
             };
             // The gear is tested before the draw, so that a ship without
@@ -80,17 +80,34 @@ impl Session {
             if !can_self_repair(drawn, npc.condition, npc.reserves.armor.now, true) {
                 continue;
             }
-            npc.reserves.armor.now = repaired_armor(npc.reserves.armor.max, npc.hull.tough);
-            let still = held || rules.disable.disabled(npc.reserves.armor, &npc.hull);
-            npc.condition = if still {
-                Condition::Disabled
-            } else {
-                Condition::Intact
-            };
-            if let Some(former) = npc.former.take() {
+            self.repair_hull(id, rules.disable);
+            if let Some(former) = self.space.npc_mut(id).and_then(|npc| npc.former.take()) {
                 self.rejoin(id, former);
             }
         }
+    }
+
+    /// NPC `id`'s armour goes to [`repaired_armor`] and its condition is
+    /// decided again at once: disabled while it is held disabled
+    /// ([`Session::held_disabled`]) or `disable` still disables it, intact
+    /// otherwise. The self-repair (`_HandleShip` @0x33a4e-0x33ad4) and the
+    /// boarding repair (`_HandlePlayerBoardAttempt` @0x65bf2-0x65c66; see
+    /// the `board_repair` module) both repair so.
+    pub(super) fn repair_hull(&mut self, id: NpcId, disable: &dyn DisableRule) {
+        let held = self
+            .space
+            .npc(id)
+            .is_some_and(|npc| self.held_disabled(npc));
+        let Some(npc) = self.space.npc_mut(id) else {
+            return;
+        };
+        npc.reserves.armor.now = repaired_armor(npc.reserves.armor.max, npc.hull.tough);
+        let still = held || disable.disabled(npc.reserves.armor, &npc.hull);
+        npc.condition = if still {
+            Condition::Disabled
+        } else {
+            Condition::Intact
+        };
     }
 
     /// Former escort NPC `id`, repaired, rejoins the fleet as `former`
@@ -186,6 +203,7 @@ mod tests {
             carried: false,
             wage: None,
             person: None,
+            mark: None,
         }
     }
 

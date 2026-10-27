@@ -49,8 +49,11 @@
 //!   `_FindSystemFromStellar` gives, unresolved by place (@0x9c8de-0x9c937,
 //!   @0x9c9f9-0x9ca5c). So the name follows a galaxy change after the
 //!   offer, as the original's does.
-//! - There is no nickname, so `<PNN>` is the pilot's name; and no
-//!   licence, so `<REG>` is empty.
+//! - `<PNN>` is the pilot's nickname, or its name when it has none. The
+//!   original's fallback copies the name's Pascal buffer unconverted
+//!   (@0x9cf9b-0x9cfb6), so it reads the length byte and whatever stale
+//!   bytes follow the name: a read of stale memory, not replicated; the
+//!   name is read as intended. There is no licence, so `<REG>` is empty.
 //! - `<SN>` reads a slot's ship name, which stays empty until
 //!   rdm:phase/mission-ships/phase-1-spawn-mission-ships draws one.
 //! - The rank tags read the context's [`RankNames`]. `<PRKnnn>` and
@@ -431,8 +434,10 @@ pub fn load_leet(text: &str, chance: &mut dyn Chance) -> String {
 /// What a text's tags read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TagContext<'a> {
-    /// The pilot's name: `<PN>`, and `<PNN>`, as there is no nickname.
+    /// The pilot's name: `<PN>`, and `<PNN>` with no nickname.
     pub pilot: &'a str,
+    /// The pilot's nickname: `<PNN>`; empty for none.
+    pub nickname: &'a str,
     /// The player's ship class's name: `<PST>`.
     pub ship_type: &'a str,
     /// The player's ship's name: `<PSN>`.
@@ -580,6 +585,16 @@ fn fill_crossed<'a>(
     filled
 }
 
+/// What `<PNN>` reads: the nickname, or the pilot's name when it is empty
+/// (`_MungeBriefing` @0x9cf61-0x9cfb6).
+fn nickname_or_name<'a>(context: &TagContext<'a>) -> &'a str {
+    if context.nickname.is_empty() {
+        context.pilot
+    } else {
+        context.nickname
+    }
+}
+
 /// `text` with its tags filled as `context` and `names` say, as
 /// `_MungeBriefing` (@0x9c11d) fills them: one tag at a time in the
 /// table's order (0xdb198), every occurrence, case-sensitively, so a
@@ -599,7 +614,7 @@ pub fn expand(text: &str, context: &TagContext, names: &(impl TagNames + ?Sized)
     };
     let player = [
         ("<PN>", context.pilot),
-        ("<PNN>", context.pilot),
+        ("<PNN>", nickname_or_name(context)),
         ("<PSN>", context.ship_name),
         ("<PST>", context.ship_type),
         ("<OSN>", context.person.unwrap_or(UNSET)),
@@ -676,6 +691,7 @@ pub fn expand_before_any_pilot(text: &str, ships: &(impl PilotCatalog + ?Sized))
         .unwrap_or_default();
     let context = TagContext {
         pilot: "",
+        nickname: "",
         ship_type: &ship_type,
         ship_name: "",
         person: None,
@@ -862,6 +878,7 @@ mod tests {
     fn context(mission: Option<MissionValues>) -> TagContext<'static> {
         TagContext {
             pilot: "Stock",
+            nickname: "",
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             person: Some("Bounty Hunter"),
@@ -1057,6 +1074,16 @@ mod tests {
             with(values(), "<PN>, <PNN>, <PSN>, <PST>"),
             "Stock, Stock, Kestrel, Shuttle"
         );
+    }
+
+    #[test]
+    fn pnn_is_the_nickname_or_the_name_with_none() {
+        let nicknamed = TagContext {
+            nickname: "Hunter",
+            ..context(Some(values()))
+        };
+        assert_eq!(expand("<PN>, <PNN>", &nicknamed, &names()), "Stock, Hunter");
+        assert_eq!(with(values(), "<PNN>"), "Stock");
     }
 
     #[test]
