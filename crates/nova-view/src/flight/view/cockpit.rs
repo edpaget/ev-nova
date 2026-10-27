@@ -713,6 +713,32 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.send(FlightCommand::SelectTarget(pick));
     }
 
+    /// A press of Target Select ([`TARGET_KEY`]): the next ship, the
+    /// previous with Shift, each among the player's escorts with Option
+    /// ([`FlightCommand::SelectTarget`]).
+    pub(super) fn press_target_key(&mut self) {
+        let (shift, option) = (
+            self.held.contains(&Key::Shift),
+            self.held.contains(&Key::Alt),
+        );
+        self.select_target(match (shift, option) {
+            (false, false) => TargetPick::Next,
+            (false, true) => TargetPick::NextEscort,
+            (true, false) => TargetPick::Previous,
+            (true, true) => TargetPick::PreviousEscort,
+        });
+    }
+
+    /// A press of Closest Target ([`NEAREST_KEY`]): the nearest threat, or
+    /// the nearest ship with Option ([`FlightCommand::SelectTarget`]).
+    pub(super) fn press_nearest_key(&mut self) {
+        self.select_target(if self.held.contains(&Key::Alt) {
+            TargetPick::Nearest
+        } else {
+            TargetPick::NearestThreat
+        });
+    }
+
     /// A press of Weapon Select ([`SELECT_KEY`]), backwards with Option
     /// held ([`FlightCommand::SelectWeapon`]). Option is read at the press,
     /// the original reading it at the pass (@0x6acf6): the press is taken

@@ -5,7 +5,6 @@ use crate::system::camera::{VIEW_CENTER, VIEW_SIZE};
 use nova_sim::flight::player_step;
 use nova_sim::flight_frame::GateFade;
 use nova_sim::landing::StellarFlags;
-use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     Behaviour, BoardingRule, CharacterStart, CommodityStrings, DateAffixes, DisableRule,
     DisasterRecord, FlightRules, GateSite, Handling, JunkRecord, LandingSite, OutfitId,

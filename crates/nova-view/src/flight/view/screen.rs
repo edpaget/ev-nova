@@ -4,8 +4,7 @@ use std::time::Duration;
 
 use nova_sim::PlayerCommand;
 use nova_sim::{
-    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Session, Steps, TargetPick,
-    TrafficCatalog,
+    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Session, Steps, TrafficCatalog,
 };
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
@@ -307,23 +306,9 @@ impl<
             Some(key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY)) => {
                 self.zoom_floating_map(key);
             }
-            Some(TARGET_KEY) => self.select_target(
-                match (
-                    self.held.contains(&Key::Shift),
-                    self.held.contains(&Key::Alt),
-                ) {
-                    (false, false) => TargetPick::Next,
-                    (false, true) => TargetPick::NextEscort,
-                    (true, false) => TargetPick::Previous,
-                    (true, true) => TargetPick::PreviousEscort,
-                },
-            ),
+            Some(TARGET_KEY) => self.press_target_key(),
             Some(key) if self.escort_key(key) => {}
-            Some(NEAREST_KEY) => self.select_target(if self.held.contains(&Key::Alt) {
-                TargetPick::Nearest
-            } else {
-                TargetPick::NearestThreat
-            }),
+            Some(NEAREST_KEY) => self.press_nearest_key(),
             Some(SELECT_KEY) => self.press_weapon_select(),
             Some(key) => self.nav_key(key),
             None => {}

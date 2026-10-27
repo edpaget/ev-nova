@@ -218,31 +218,6 @@ fn the_target_panel_shows_the_frames_target_with_its_types_card_and_its_code() {
 // The status bar.
 
 #[test]
-fn the_bar_draws_the_frames_reserves_and_no_fuel_gauge_while_disabled() {
-    let mut frame = among(Vec::new());
-    frame.hud.reserves = ShipStats::new(FIELDS, &[]).full();
-    let mut view = barred(armed(1, &[]), frame);
-    let colors = |view: &Faked| -> Vec<Color> {
-        lines(&flown(view))
-            .into_iter()
-            .filter_map(|command| match command {
-                DrawCommand::Line { color, .. } => Some(color),
-                _ => None,
-            })
-            .collect()
-    };
-    let layout = layout();
-    assert!(colors(&view).contains(&layout.fuel_full), "intact");
-    let mut frame = view.frame.clone();
-    frame.ships[0].condition = nova_sim::Condition::Disabled;
-    shows(&mut view, frame);
-    let shown = colors(&view);
-    assert!(!shown.contains(&layout.fuel_full), "{shown:?}");
-    assert!(!shown.contains(&layout.fuel_partial), "{shown:?}");
-    assert!(shown.contains(&layout.armor_color), "{shown:?}");
-}
-
-#[test]
 fn the_bar_lists_the_frames_cargo_and_names_its_secondary_with_its_count() {
     let mut frame = among(Vec::new());
     frame.hud.cargo.cash = 12_345;

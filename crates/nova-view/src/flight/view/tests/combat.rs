@@ -1,6 +1,7 @@
+use super::faked_hud::{among, barred, barred_by, flown, hud_tick, targeted};
 use super::faked_world::{in_sol_with, npc_129, shows, the_player_at, world, world_list};
 use super::*;
-use nova_sim::flight_frame::{PassReport, ShipPlace, StepReport, StepRun};
+use nova_sim::flight_frame::{FrameShip, FrameTarget, PassReport, ShipPlace, StepReport, StepRun};
 
 // Traffic.
 
@@ -182,11 +183,12 @@ fn the_play_area_anchor_centres_the_ship_in_the_play_area() {
 
 #[test]
 fn an_npc_is_a_dim_blip_on_the_radar() {
-    let (_, chance) = scripted(&placed(850, 650, 90));
-    let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    view.tick(TICK);
+    // Where the traffic puts it is the session's; its record puts it on
+    // the radar (`a_fill_writes_every_ship_the_player_first_then_each_npc_in_the_systems_order`).
+    let view = barred(
+        trafficked(&[130], 1, 129, 3),
+        among(vec![npc_129(0, Vec2::new(100.0, -100.0), 90.0)]),
+    );
     // (100, -100) is 3.125 pixels each way: (929.125, 92.875).
     let blip = RadarMark::Pixel {
         x: 929,
@@ -194,7 +196,7 @@ fn an_npc_is_a_dim_blip_on_the_radar() {
         color: RadarColor::Dim,
     };
     assert_eq!(blips(&view), [blip]);
-    let list = drawn(&view);
+    let list = flown(&view);
     assert!(
         list.iter().any(|command| *command
             == DrawCommand::Dot {
@@ -253,21 +255,18 @@ fn an_npc_coming_out_of_a_gate_is_hidden_then_fades_in() {
 
 #[test]
 fn an_npc_coming_out_of_a_gate_is_on_the_radar_all_along() {
-    // The radar's half, on a real session (rdm:phase/view-sim-seam/phase-8-hud-and-target-frame).
-    let mut catalog = trafficked(&[130], 1, 129, 3);
-    catalog.sites.push(LandingSite {
-        flags2: nova_sim::gate::HYPERGATE,
-        exit_angle: 90,
-        ..site(141, (200.0, 100.0), StellarFlags::CAN_LAND)
-    });
-    let (_, chance) = scripted(&[0, 0, 6, 6, 0, 0, 0, 2]);
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    ticks(&mut view, 21);
-    let mode = view.session().expect("flying").npcs()[0].mode;
-    assert_eq!(mode, Mode::Emerging { ticks_left: 40 });
-    assert_eq!(npc_tints(&drawn(&view)), [], "hidden");
+    // When it comes out is the session's (nova-sim's emerge tests); its
+    // record keeps it on the radar.
+    let emerging = FrameShip {
+        gate: GateFade::Emerging { ticks_left: 40 },
+        ..lit_npc(0.0)
+    };
+    let view = barred(trafficked(&[130], 1, 129, 3), among(vec![emerging]));
+    assert_eq!(
+        npc_tints(&super::faked_world::world_list(&view)),
+        [],
+        "hidden"
+    );
     assert_eq!(blips(&view).len(), 1, "on the radar all the same");
 }
 
@@ -1021,22 +1020,41 @@ fn a_target_key_press_beeps_once_and_its_repeat_is_silent() {
 
 #[test]
 fn r_targets_the_nearest_threat_over_a_nearer_ship_and_brackets_it_red() {
-    let mut view = fighting(armed(2, &[]), &two_npcs()).with_behaviour(Rc::new(Threatening));
-    tap(&mut view, NEAREST_KEY);
-    assert_eq!(target_of(&view), None, "no threat yet: unchanged");
-    view.tick(TICK);
-    tap(&mut view, NEAREST_KEY);
+    // Which ship R picks is nova-sim's
+    // (`selecting_the_nearest_threat_picks_the_nearest_npc_fighting_the_player`),
+    // and its standing (`standing_is_disabled_first_then_escort_then_threat_then_neutral`).
+    let mut view = barred(armed(2, &[]), among(vec![lit_npc(180.0)]));
+    view.press_nearest_key();
+    view.track_held(&key(Key::Alt, true));
+    view.press_nearest_key();
     assert_eq!(
-        target_of(&view),
-        Some(NpcId(0)),
-        "the threat, though farther"
+        sent(&view),
+        [
+            FlightCommand::SelectTarget(nova_sim::TargetPick::NearestThreat),
+            FlightCommand::SelectTarget(nova_sim::TargetPick::Nearest),
+        ]
     );
-    let list = drawn(&view);
-    assert_eq!(bracket_icons(&list), [10008, 10009, 10010, 10011], "red");
-    alt_tap(&mut view, NEAREST_KEY);
-    assert_eq!(target_of(&view), Some(NpcId(1)), "Alt-R: the nearer");
-    let list = drawn(&view);
-    assert_eq!(bracket_icons(&list), [10012, 10013, 10014, 10015], "yellow");
+    let bracketed = |view: &mut Faked, standing| {
+        let mut frame = view.frame.clone();
+        frame.target = Some(record::target(0));
+        frame.hud.target_brackets = Some(nova_sim::brackets::TargetBrackets {
+            npc: NpcId(0),
+            expand: 0.0,
+            standing,
+        });
+        shows(view, frame);
+        bracket_icons(&flown(view))
+    };
+    assert_eq!(
+        bracketed(&mut view, Standing::Hostile),
+        [10008, 10009, 10010, 10011],
+        "red"
+    );
+    assert_eq!(
+        bracketed(&mut view, Standing::Neutral),
+        [10012, 10013, 10014, 10015],
+        "yellow"
+    );
 }
 
 #[test]
@@ -1242,23 +1260,6 @@ fn the_sounds_are_the_sessions_then_the_fights() {
 
 pub(super) fn line_in(color: Color) -> impl Fn(&DrawCommand) -> bool {
     move |command| matches!(command, DrawCommand::Line { color: c, .. } if *c == color)
-}
-
-/// The flight with an NPC 100 pixels above the player, the player
-/// firing its blaster (which explodes where it hits) and two beams, one
-/// drawn under the ships and one over them, at it.
-fn firing_at_an_npc() -> View {
-    firing_at_an_npc_in(armed(1, &[BLASTER, UNDER, OVER]))
-}
-
-/// [`firing_at_an_npc`] from `catalog`, an [`armed`] one carrying the
-/// blaster and the two beams.
-pub(super) fn firing_at_an_npc_in(catalog: FakeCatalog) -> View {
-    let mut view = fighting(catalog, &placed(750, 650, 180));
-    tap(&mut view, Key::Tab);
-    view.input(&key(FIRE_KEY, true));
-    ticks(&mut view, 5);
-    view
 }
 
 /// A scripted fight: the player at the centre and NPC 0 100 above it,
@@ -2428,12 +2429,23 @@ fn passing_through_a_wormhole_clears_the_shield_flashes() {
 
 #[test]
 fn the_target_is_bracketed_and_its_panel_shows_it() {
-    let view = firing_at_an_npc();
-    let session = view.session().expect("flying");
-    let npc = &session.npcs()[0];
-    let list = drawn(&view);
-    let (shown, _) = view.shown_npc(&npc_record(&view, npc.id));
-    let Some(Ok(sheet)) = view.npc_sheets.get(&npc.ship) else {
+    let target = FrameTarget {
+        name: "Ship 129".to_owned(),
+        tag: Some(nova_sim::TargetTag::Code(GovtId(140))),
+        ..record::target(0)
+    };
+    let mut frame = targeted(
+        vec![FrameShip {
+            govt: Some(GovtId(140)),
+            ..lit_npc(180.0)
+        }],
+        target,
+    );
+    frame.hud = super::faked_world::targeting(0);
+    let view = barred(armed(1, &[]), frame);
+    let list = flown(&view);
+    let (shown, _) = view.shown_npc(&npc_record(&view, NpcId(0)));
+    let Some(Ok(sheet)) = view.npc_sheets.get(&ShipId(129)) else {
         panic!("a sheet");
     };
     let mut expected = DrawList::new();
@@ -2450,7 +2462,7 @@ fn the_target_is_bracketed_and_its_panel_shows_it() {
         commands.windows(4).any(|run| run == expected),
         "{commands:?}"
     );
-    let bar = view.status_bar().expect("a status bar");
+    let bar = view.status_bar.as_ref().expect("a status bar");
     let mut panel = DrawList::new();
     target::draw_target_panel(
         &mut panel,
@@ -2498,54 +2510,56 @@ fn the_nav_brackets_draw_under_the_ship_brackets() {
 
 #[test]
 fn a_disabled_targets_brackets_are_grey() {
-    let catalog = armed(1, &[]);
-    let mut view = fighting(catalog, &placed(750, 650, 180)).with_disable_rule(Rc::new(Disabling));
-    tap(&mut view, Key::Tab);
-    view.tick(TICK);
-    let session = view.session().expect("flying");
-    assert_eq!(session.npcs()[0].condition, Condition::Disabled);
-    let list = drawn(&view);
+    // That a disabled ship's standing is grey is nova-sim's
+    // (`standing_is_disabled_first_then_escort_then_threat_then_neutral`),
+    // and its status line (`a_fill_writes_the_targets_name_subtitle_status_and_tag`).
+    let target = FrameTarget {
+        status: nova_sim::TargetStatus::Disabled,
+        ..record::target(0)
+    };
+    let mut frame = targeted(vec![lit_npc(180.0)], target);
+    frame.hud.target_brackets = Some(nova_sim::brackets::TargetBrackets {
+        npc: NpcId(0),
+        expand: 0.0,
+        standing: Standing::Disabled,
+    });
+    let list = flown(&barred(armed(1, &[]), frame));
     assert_eq!(bracket_icons(&list), [10020, 10021, 10022, 10023]);
     assert!(texts(&list).contains(&target::DISABLED.to_owned()));
 }
 
-/// The ship bracket `cïcn`s drawn (10008-10023), and where.
-fn ship_bracket_corners(view: &View) -> Vec<(i16, Point)> {
-    drawn(view)
-        .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Picture { image, top_left } if icon_in(10008..=10023)(command) => {
-                Some((image.id, *top_left))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// Where `view` draws its target's sprite.
-fn target_on_screen(view: &View) -> Point {
-    let session = view.session().expect("flying");
-    let npc = session.target().expect("a target");
-    view.camera()
-        .world_to_screen(view.shown_npc(&npc_record(view, npc.id)).0)
-}
-
 #[test]
 fn targeting_a_ship_on_screen_flies_its_brackets_in_then_settles_them() {
-    let mut view = fighting(armed(1, &[]), &placed(750, 650, 180));
-    assert_eq!(ship_bracket_corners(&view), []);
-    tap(&mut view, Key::Tab);
-    // Ship 129, 40 x 40: half 20; neutral, from 10012.
-    assert_eq!(
-        ship_bracket_corners(&view),
-        corners_at(10012, target_on_screen(&view), 20.0 + 196.0),
-        "a frame drawn before the next tick"
-    );
-    for expand in [196.0, 136.0, 76.0, 16.0, 0.0, 0.0] {
-        view.tick(TICK);
+    // The fly-in's expand on each tick is nova-sim's
+    // (`a_new_target_on_screen_flies_in_from_256`); the view draws each.
+    let mut frame = targeted(vec![lit_npc(180.0)], record::target(0));
+    frame.hud = super::faked_world::targeting(0);
+    let mut view = barred(armed(1, &[]), frame);
+    let corners = |view: &Faked| -> Vec<(i16, Point)> {
+        flown(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Picture { image, top_left } if icon_in(10008..=10023)(command) => {
+                    Some((image.id, *top_left))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let on_screen = |view: &Faked| {
+        view.camera()
+            .world_to_screen(view.shown_npc(&npc_record(view, NpcId(0))).0)
+    };
+    for expand in [196.0, 136.0, 76.0, 16.0, 0.0] {
+        let mut frame = view.frame.clone();
+        if let Some(brackets) = &mut frame.hud.target_brackets {
+            brackets.expand = expand;
+        }
+        shows(&mut view, frame);
+        // Ship 129, 40 x 40: half 20; neutral, from 10012.
         assert_eq!(
-            ship_bracket_corners(&view),
-            corners_at(10012, target_on_screen(&view), 20.0 + expand),
+            corners(&view),
+            corners_at(10012, on_screen(&view), 20.0 + expand),
             "{expand}"
         );
     }
@@ -2577,57 +2591,37 @@ fn a_target_whose_sheet_cannot_be_read_is_bracketed_round_its_crossed_box() {
     assert_eq!(corners, corners_at(10012, target, PLACEHOLDER_SIZE / 2.0));
 }
 
-/// An unarmed flight targeting its one NPC, intact, its panel drawn
-/// two ticks after a timed redraw.
-fn targeting_after_a_redraw(view: View) -> View {
-    let mut view = view;
-    while now_tick(&view) % TARGET_PERIOD_TICKS != 1 {
-        view.tick(TICK);
-    }
-    tap(&mut view, Key::Tab);
-    view.tick(TICK);
-    assert_eq!(status_shown(&view), status_now(&view));
-    assert!(
-        matches!(status_shown(&view), Some(nova_sim::TargetStatus::Shield(_))),
-        "{:?}",
-        status_shown(&view)
-    );
-    view
-}
-
 #[test]
 fn the_target_panel_holds_a_disabling_until_its_next_timed_redraw() {
-    let view = fighting(armed(1, &[]), &placed(750, 650, 180));
-    let view = targeting_after_a_redraw(view);
+    let mut view = faked_targeting_after_a_redraw(&Rulebook::default());
     let held = status_shown(&view);
-    let mut view = view.with_disable_rule(Rc::new(Disabling));
-    view.tick(TICK);
+    disable_the_target(&mut view);
+    hud_tick(&mut view);
     assert_eq!(status_now(&view), Some(nova_sim::TargetStatus::Disabled));
     while !now_tick(&view).is_multiple_of(TARGET_PERIOD_TICKS) {
         assert_eq!(status_shown(&view), held, "tick {}", now_tick(&view));
-        assert!(!texts(&drawn(&view)).contains(&target::DISABLED.to_owned()));
-        view.tick(TICK);
+        assert!(!texts(&flown(&view)).contains(&target::DISABLED.to_owned()));
+        hud_tick(&mut view);
     }
     assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
-    assert!(texts(&drawn(&view)).contains(&target::DISABLED.to_owned()));
+    assert!(texts(&flown(&view)).contains(&target::DISABLED.to_owned()));
 }
 
 #[test]
 fn read_the_bibles_way_the_target_panel_follows_every_frame() {
-    let view = every_frame(fighting(armed(1, &[]), &placed(750, 650, 180)));
-    let view = targeting_after_a_redraw(view);
-    let mut view = view.with_disable_rule(Rc::new(Disabling));
-    view.tick(TICK);
+    let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Bible);
+    let mut view = faked_targeting_after_a_redraw(&rules);
+    disable_the_target(&mut view);
+    hud_tick(&mut view);
     assert_ne!(now_tick(&view) % TARGET_PERIOD_TICKS, 0);
     assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
 }
 
 #[test]
 fn redrawing_the_status_retakes_the_target_panel() {
-    let view = fighting(armed(1, &[]), &placed(750, 650, 180));
-    let view = targeting_after_a_redraw(view);
-    let mut view = view.with_disable_rule(Rc::new(Disabling));
-    view.tick(TICK);
+    let mut view = faked_targeting_after_a_redraw(&Rulebook::default());
+    disable_the_target(&mut view);
+    hud_tick(&mut view);
     assert_ne!(status_shown(&view), status_now(&view), "held");
     view.redraw_status();
     assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
@@ -2635,45 +2629,59 @@ fn redrawing_the_status_retakes_the_target_panel() {
 
 #[test]
 fn a_change_of_target_shows_at_once() {
-    let mut view = fighting(armed(2, &[]), &two_npcs());
-    tap(&mut view, Key::Tab);
-    view.tick(TICK);
-    let drawn_for = |view: &View| {
+    let mut view = barred(
+        armed(2, &[]),
+        among(vec![lit_npc(180.0), npc_129(1, Vec2::new(-50.0, 0.0), 0.0)]),
+    );
+    let target = |view: &mut Faked, id: Option<u32>| {
+        let mut frame = view.frame.clone();
+        frame.target = id.map(record::target);
+        shows(view, frame);
+    };
+    target(&mut view, Some(0));
+    hud_tick(&mut view);
+    let drawn_for = |view: &Faked| {
         view.target_scene
             .as_ref()
             .and_then(|(drawn, _)| drawn.map(|drawn| drawn.npc))
     };
     assert_eq!(drawn_for(&view), Some(NpcId(0)));
-    tap(&mut view, Key::Tab);
-    assert_eq!(target_of(&view), Some(NpcId(1)));
+    target(&mut view, Some(1));
     assert_eq!(drawn_for(&view), Some(NpcId(0)), "not yet retaken");
     assert_eq!(
-        *view.target_shown(&view.frame_now()),
-        view.target_now(&view.frame_now()),
+        *view.target_shown(&view.frame),
+        view.target_now(&view.frame),
         "shown at once"
     );
-    view.tick(TICK);
+    hud_tick(&mut view);
     assert_eq!(drawn_for(&view), Some(NpcId(1)), "retaken");
-    tap(&mut view, Key::Tab);
-    assert_eq!(target_of(&view), None);
-    assert_eq!(*view.target_shown(&view.frame_now()), None, "lost at once");
-    let list = texts(&drawn(&view));
+    target(&mut view, None);
+    assert_eq!(*view.target_shown(&view.frame), None, "lost at once");
+    let list = texts(&flown(&view));
     assert!(list.contains(&NO_TARGET.to_owned()), "{list:?}");
 }
 
 #[test]
 fn a_falling_shield_shows_at_the_radar_refreshes_only() {
-    let mut catalog = armed(1, &[BLASTER]);
-    catalog.weapons[0].energy_dmg = 1;
-    let mut view = fighting(catalog, &placed(750, 650, 180));
-    tap(&mut view, Key::Tab);
-    view.input(&key(FIRE_KEY, true));
+    // How fast the shield falls is the fight's; the panel follows it at
+    // the radar's refreshes and its own timed redraws.
+    let mut view = barred(
+        armed(1, &[]),
+        targeted(vec![lit_npc(180.0)], record::target(0)),
+    );
     let mut shown = status_shown(&view);
     let mut changes = 0;
     let mut held = 0;
-    for _ in 0..240 {
+    for tick in 0..240_u8 {
+        let mut frame = view.frame.clone();
+        let falling = 100 - u32::from(tick / 3);
+        frame.ships[1].shield.now = f32::from(100 - tick / 3);
+        if let Some(target) = &mut frame.target {
+            target.status = nova_sim::TargetStatus::Shield(falling);
+        }
+        shows(&mut view, frame);
         let (blink, before) = (view.hud_cadence.blink_on(), now_tick(&view));
-        view.tick(TICK);
+        hud_tick(&mut view);
         let radar = view.hud_cadence.blink_on() != blink;
         let timed = now_tick(&view) / TARGET_PERIOD_TICKS > before / TARGET_PERIOD_TICKS;
         let now = status_shown(&view);
@@ -2686,24 +2694,20 @@ fn a_falling_shield_shows_at_the_radar_refreshes_only() {
             held += 1;
         }
         shown = now;
-        if target_of(&view).is_none() {
-            break;
-        }
     }
-    view.input(&key(FIRE_KEY, false));
     assert!(changes > 1, "the shield fell: {changes}");
     assert!(held > 0, "and was held between refreshes");
 }
 
 #[test]
 fn a_disabled_player_has_no_fuel_gauge() {
-    let mut catalog = armed(1, &[]);
-    catalog.hulls[1] = hull_of(129, &[BLASTER]);
-    let mut view = fighting(catalog, &placed(750, 650, 180))
-        .with_behaviour(Rc::new(Firing))
-        .with_disable_rule(Rc::new(Disabling));
-    let colors = |view: &View| -> Vec<Color> {
-        lines(&drawn(view))
+    // When the player is disabled is the session's; the frame's record
+    // says so (`a_fill_writes_every_ship_the_player_first_then_each_npc_in_the_systems_order`).
+    let mut frame = among(Vec::new());
+    frame.hud.reserves = ShipStats::new(FIELDS, &[]).full();
+    let mut view = barred(armed(1, &[]), frame);
+    let colors = |view: &Faked| -> Vec<Color> {
+        lines(&flown(view))
             .into_iter()
             .filter_map(|command| match command {
                 DrawCommand::Line { color, .. } => Some(color),
@@ -2713,16 +2717,9 @@ fn a_disabled_player_has_no_fuel_gauge() {
     };
     let layout = layout();
     assert!(colors(&view).contains(&layout.fuel_full), "intact");
-    for _ in 0..40 {
-        if view.session().expect("flying").player_condition() == Condition::Disabled {
-            break;
-        }
-        view.tick(TICK);
-    }
-    assert_eq!(
-        view.session().expect("flying").player_condition(),
-        Condition::Disabled
-    );
+    let mut frame = view.frame.clone();
+    frame.ships[0].condition = Condition::Disabled;
+    shows(&mut view, frame);
     let shown = colors(&view);
     assert!(!shown.contains(&layout.fuel_full), "{shown:?}");
     assert!(!shown.contains(&layout.fuel_partial), "{shown:?}");
@@ -2731,22 +2728,30 @@ fn a_disabled_player_has_no_fuel_gauge() {
 
 #[test]
 fn the_hud_shows_no_target_and_the_secondary_weapon() {
-    let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
-    let list = texts(&drawn(&view));
+    // Which secondary a press selects on the next step is nova-sim's
+    // (`a_select_press_goes_in_weap_id_order_and_backwards_with_option`,
+    // `weapon_select_answers_done_and_the_next_steps_pass_takes_it`).
+    let mut view = barred(armed(0, &[BLASTER, ROCKET]), among(Vec::new()));
+    let list = texts(&flown(&view));
     assert!(list.contains(&NO_TARGET.to_owned()), "{list:?}");
     assert!(list.contains(&NO_SECONDARY.to_owned()), "{list:?}");
-    tap_and_step(&mut view, SELECT_KEY);
-    let list = texts(&drawn(&view));
+    view.press_weapon_select();
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::SelectWeapon { backwards: false }]
+    );
+    let mut frame = view.frame.clone();
+    frame.hud.secondary = Some(ROCKET);
+    shows(&mut view, frame);
+    let list = texts(&flown(&view));
     assert!(list.contains(&"Rocket".to_owned()), "{list:?}");
-    let unarmed = texts(&drawn(&fighting(armed(0, &[BLASTER]), &[])));
-    assert!(unarmed.contains(&NO_SECONDARY.to_owned()), "{unarmed:?}");
 }
 
 #[test]
 fn the_panel_is_laid_out_by_the_metrics_given() {
-    let view = fighting(armed(0, &[BLASTER]), &[])
-        .with_metrics(Rc::new(crate::text::fixture::MonoMetrics));
-    let list = drawn(&view);
+    let mut view = barred(armed(0, &[BLASTER]), among(Vec::new()));
+    view.metrics = Some(Metrics(Rc::new(crate::text::fixture::MonoMetrics)));
+    let list = flown(&view);
     let origin = list
         .iter()
         .find_map(|c| match c {
@@ -3058,4 +3063,34 @@ fn a_ship_the_player_shoves_is_drawn_moved_on_the_frame_of_the_hit() {
     view.step_frame(1, view.anchor());
     view.alpha = 0.5;
     assert_ne!(sprites(&world_list(&view)), before, "drawn moved");
+}
+
+/// A view by `rules` whose target, NPC 0, intact, was taken just after a
+/// timed redraw of the panel, its panel drawn a tick later.
+fn faked_targeting_after_a_redraw(rules: &Rulebook) -> Faked {
+    let mut view = barred_by(armed(1, &[]), among(vec![lit_npc(180.0)]), rules);
+    while now_tick(&view) % TARGET_PERIOD_TICKS != 1 {
+        hud_tick(&mut view);
+    }
+    let mut frame = view.frame.clone();
+    frame.target = Some(record::target(0));
+    shows(&mut view, frame);
+    hud_tick(&mut view);
+    assert_eq!(status_shown(&view), status_now(&view));
+    assert!(
+        matches!(status_shown(&view), Some(nova_sim::TargetStatus::Shield(_))),
+        "{:?}",
+        status_shown(&view)
+    );
+    view
+}
+
+/// The target, NPC 0, disabled from now on, as the session shows it.
+fn disable_the_target(view: &mut Faked) {
+    let mut frame = view.frame.clone();
+    frame.ships[1].condition = Condition::Disabled;
+    if let Some(target) = &mut frame.target {
+        target.status = nova_sim::TargetStatus::Disabled;
+    }
+    shows(view, frame);
 }
