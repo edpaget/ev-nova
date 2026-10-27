@@ -38,10 +38,14 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// the scene, or by the flight's name for one the scene doesn't hold
     /// ([`MapSource::stellar_name`](crate::flight::sim_port::MapSource::stellar_name)),
     /// and says the gate's line when the flight says the stellar is one
-    /// ([`Answer::LandRefused`]'s `gate`). A flight that failed refuses the
-    /// press.
+    /// ([`Answer::LandRefused`]'s `gate`). Each command is sent under its
+    /// gate ([`FlightView::send_gated`]), so a press the flight doesn't take
+    /// sends nothing. A flight that failed refuses the press.
     pub(super) fn land(&mut self, words: Words<Self>) {
-        let pressed = self.send(FlightCommand::Land);
+        if !self.takes_command(&FlightCommand::Land) {
+            return;
+        }
+        let pressed = self.send_gated(FlightCommand::Land);
         self.say_messages(words);
         match pressed {
             Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
@@ -61,7 +65,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
                 // Refused, a hypergate without links or no entry pending
                 // (`GateRefusal::NoLinks`, `NotAtGate`), says nothing
                 // (`FlightView::gate_refused`).
-                if let Answer::Offered(offered) = self.send(FlightCommand::OpenHypergate) {
+                if let Answer::Offered(offered) = self.send_gated(FlightCommand::OpenHypergate) {
                     self.map.offer_gates(offered);
                     self.open_map();
                 }
@@ -69,7 +73,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             Answer::LandPress(LandPress::AtGate {
                 kind: GateKind::Wormhole,
                 ..
-            }) => match self.send(FlightCommand::EnterWormhole) {
+            }) => match self.send_gated(FlightCommand::EnterWormhole) {
                 Answer::Arrived { combat, .. } => {
                     self.came_through(JumpEffect::flash(), &combat, words);
                 }

@@ -529,9 +529,13 @@ pub enum FlightCommand {
 
 impl FlightCommand {
     /// The player's command the session takes this command under
-    /// ([`Session::takes`](crate::Session::takes)), which the view asks
-    /// before it sends it: `None` for the commands no key gates, the map's
-    /// own input and the sequencing the view runs at its own points.
+    /// ([`Session::takes`](crate::Session::takes)): `None` for the commands
+    /// no key gates, the map's own input and the sequencing the view runs
+    /// at its own points. The view's one mapping from a command to its
+    /// gate: it asks it before it sends a travel command, and before J's
+    /// latch moves (`nova_view`'s `FlightView::takes_command` and
+    /// `FlightView::send_gated`). Keys it asks mid-input, before any
+    /// command exists, it gates by the key (`FlightView::command_of`).
     ///
     /// - The nav's keys and clicks ([`FlightCommand::SelectStellar`],
     ///   [`FlightCommand::NavModeKeys`], Option-backquote's

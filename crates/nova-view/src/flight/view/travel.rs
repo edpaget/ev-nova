@@ -105,9 +105,8 @@ impl<
         if self.takes(PlayerCommand::Board) {
             self.board_frame(board);
         }
-        if self.takes(PlayerCommand::Jump) {
-            self.jump_frame(jump);
-        }
+        // The jump's frame asks its own gate (`FlightCommand::gate`).
+        self.jump_frame(jump);
     }
 
     /// The pilot flying, as the developer tools' desk: its edits reach

@@ -854,3 +854,21 @@ fn docked_the_settling_stages_the_bar_as_its_scripts_ran() {
     assert!(view.bar_steps.is_empty(), "no text, nothing staged");
     assert_eq!(sent_but_lines(&view), [FlightCommand::SettleScript]);
 }
+
+// The gates the commands are taken under (`FlightCommand::gate`).
+
+#[test]
+fn a_refused_gate_sends_no_travel_command() {
+    let mut view = faked(sol());
+    view.sim.refuse(nova_sim::PlayerCommand::Land);
+    view.land(faked_words());
+    assert_eq!(sent(&view), [], "L under a refused Land gate");
+    view.sim.refuse(nova_sim::PlayerCommand::Jump);
+    view.jump_latch = false;
+    view.jump_frame(true);
+    assert_eq!(sent(&view), [], "J under a refused Jump gate");
+    assert!(!view.jump_latch, "its latch left as it was");
+    view.sim.take(nova_sim::PlayerCommand::Jump);
+    view.jump_frame(true);
+    assert_eq!(sent(&view), [FlightCommand::Jump], "taken again");
+}

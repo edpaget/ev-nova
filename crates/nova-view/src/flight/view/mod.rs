@@ -1117,6 +1117,36 @@ impl<C, S: FlightSim> FlightView<C, S> {
         answer
     }
 
+    /// Whether the flight takes `command` now: the player's command it is
+    /// taken under ([`FlightCommand::gate`]) taken
+    /// ([`FlightSim::takes`]), or none to ask. The one mapping from a
+    /// command to its gate: the travel commands ask it here, before they
+    /// are sent ([`FlightView::send_gated`]) or before a key's latch moves
+    /// (`FlightView::jump_frame`). The keys that ask a gate mid-input
+    /// before any command exists ask it by the key (`Screen::input`'s
+    /// filter, `FlightView::command_of`), and so do the polls that hold
+    /// no command of their own yet: the nav block and Hyper Select
+    /// (`FlightView::nav_held_frame`), the Board key (phase 10's) and the
+    /// step's holds (`FlightView::step_input`).
+    ///
+    /// [`FlightCommand::gate`]: nova_sim::flight_frame::FlightCommand::gate
+    pub(super) fn takes_command(&self, command: &nova_sim::flight_frame::FlightCommand) -> bool {
+        command.gate().is_none_or(|gate| self.takes(gate))
+    }
+
+    /// Sends `command` as [`FlightView::send`] does once the flight takes
+    /// it ([`FlightView::takes_command`]); refused, sends nothing and
+    /// answers [`Answer::Refused`](nova_sim::flight_frame::Answer::Refused).
+    pub(super) fn send_gated(
+        &mut self,
+        command: nova_sim::flight_frame::FlightCommand,
+    ) -> nova_sim::flight_frame::Answer {
+        if !self.takes_command(&command) {
+            return nova_sim::flight_frame::Answer::Refused;
+        }
+        self.send(command)
+    }
+
     /// Drains the flight into the inbox ([`FlightSim::drain`]) and gives
     /// it, for the caller to take its own kind from at its own place (see
     /// the `inbox` module).

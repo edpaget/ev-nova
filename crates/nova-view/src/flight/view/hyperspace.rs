@@ -38,7 +38,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// latch is set on every frame of the jump ([`FlightView::jump_frame`]).
     fn jump(&mut self) {
         self.settle_given_up_jump();
-        match self.send(FlightCommand::Jump) {
+        match self.send_gated(FlightCommand::Jump) {
             Answer::Jumped(_) => {
                 for text in [TOO_CLOSE, TRACTORED, FAR_ENOUGH, NOTHING_OUT_HERE] {
                     self.clear_message(text);
@@ -66,9 +66,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// (`_IsDisabled`), the latch cleared (@0x6badf). So J held into a
     /// disable, or first pressed while disabled, acts on the first frame
     /// the player is intact again. The jump under way and the player's
-    /// condition are read from one frame filled afresh. A flight that
-    /// failed refuses the jump ([`FlightView::jump`]).
+    /// condition are read from one frame filled afresh. While the flight
+    /// refuses the jump's gate ([`FlightView::takes_command`]) the frame
+    /// does nothing, the latch left as it was. A flight that failed
+    /// refuses the jump ([`FlightView::jump`]).
     pub(super) fn jump_frame(&mut self, down: bool) {
+        if !self.takes_command(&FlightCommand::Jump) {
+            return;
+        }
         let frame = self.frame_now();
         if frame.jump_under_way {
             self.jump_latch = true;
