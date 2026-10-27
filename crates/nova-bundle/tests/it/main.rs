@@ -6,7 +6,11 @@
 
 mod env;
 mod files;
+#[cfg(target_os = "linux")]
+mod linux_appimage;
 mod linux_desktop;
+#[cfg(target_os = "linux")]
+mod linux_flatpak;
 #[cfg(target_os = "macos")]
 mod macos_tools;
 mod process;
