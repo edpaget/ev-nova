@@ -14049,7 +14049,7 @@ mod tests {
         let heard = |player: Ship| -> Vec<Option<u8>> {
             let mut combat = Combat::default();
             let mut ships = [player, Ship::at(2, 100.0, 0.0)];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::fire_player(&mut combat, &mut ships, &NovaDisable);
             sounds(&combat.take_events())
                 .into_iter()
                 .map(|(_, sound)| sound.map(|sound| sound.priority))
@@ -14114,7 +14114,7 @@ mod tests {
         player.hull.mass = 50.0;
         let mut combat = Combat::default();
         combat.set_player_forward_recoil(forward);
-        tick(&mut combat, &mut [player], &NovaDisable);
+        phase::fire_player(&mut combat, &mut [player], &NovaDisable);
         combat.take_shoves()
     }
 
@@ -14143,7 +14143,7 @@ mod tests {
         player.target = None;
         player.hull.mass = 50.0;
         let mut combat = Combat::default();
-        tick(&mut combat, &mut [player], &NovaDisable);
+        phase::fire_player(&mut combat, &mut [player], &NovaDisable);
         assert_eq!(combat.take_shoves(), []);
     }
 
@@ -14184,7 +14184,7 @@ mod tests {
         player.hull.mass = 50.0;
         player.target = None;
         let mut combat = Combat::default();
-        tick(&mut combat, &mut [player], &NovaDisable);
+        phase::fire_player(&mut combat, &mut [player], &NovaDisable);
         let still = combat
             .shots()
             .iter()
@@ -14214,7 +14214,7 @@ mod tests {
         let mut combat = Combat::default();
         combat.set_quadrant_blind_spots(reading);
         let mut ships = [shooter, Ship::at(2, 100.0, 0.0)];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::fire(&mut combat, &mut ships, id, &NovaDisable);
         combat
             .shots()
             .iter()
@@ -14258,7 +14258,7 @@ mod tests {
                 },
                 Ship::at(2, -100.0, 0.0),
             ];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::fire_player(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(combat.shots(), [], "{reading:?}");
         }
     }
@@ -14281,9 +14281,14 @@ mod tests {
             let id = shooter.id;
             let mut combat = Combat::default();
             let mut ships = [shooter, Ship::at(2, 0.0, -3000.0)];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::fire(&mut combat, &mut ships, id, &NovaDisable);
             let reserves = ships[0].reserves;
             assert_eq!((reserves.shield.now, reserves.armor.now), (0.0, 0.0));
+            // The breakup starts at the ship's display: an NPC's in the
+            // ship loop, the player's in its own display step (@0x43e29).
+            if id == ShipRef::Player {
+                phase::display_player(&mut combat, &mut ships, &NovaDisable);
+            }
             assert!(
                 about(&combat.take_events(), id)
                     .iter()
@@ -14327,7 +14332,12 @@ mod tests {
                 combat.put_in_flight(flown(shell, Vec2::new(0.0, -3000.0), 3));
                 let mut ships = [Ship::at(1, 0.0, 0.0), Ship::at(2, 100.0, 0.0)];
                 let mut stellars = [stellar_at(0.0, 500.0, 20.0, 100)];
-                tick_by(&mut combat, &mut ships, &arsenal, &mut stellars);
+                let scenery = Scenery {
+                    stellars: &mut stellars,
+                    ..Scenery::default()
+                };
+                hits_tested_amid(&mut combat, &mut ships, &arsenal, scenery);
+                fly_by_arsenal(&mut combat, &mut ships, &arsenal);
                 assert_eq!(sub_shots(&combat).len(), released, "{what} {capped}");
             }
         }
@@ -14392,13 +14402,12 @@ mod tests {
                 combat.put_in_flight(spent_shell);
                 let mut ships = [Ship::at(1, 0.0, 1000.0)];
                 let mut rocks = Rocks::of([rock(0, 500.0, 0.0)]);
-                tick_amid(
-                    &mut combat,
-                    &mut ships,
-                    &arsenal,
-                    Rules::default(),
-                    &mut rocks,
-                );
+                let scenery = Scenery {
+                    asteroids: Some(rocks.lend()),
+                    ..Scenery::default()
+                };
+                hits_tested_amid(&mut combat, &mut ships, &arsenal, scenery);
+                fly_by_arsenal(&mut combat, &mut ships, &arsenal);
                 assert_eq!(sub_shots(&combat).len(), released, "{what} {capped}");
             }
         }
@@ -14409,8 +14418,10 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = missile_attack(self_destructing(quad()));
         missile_in_flight(&mut combat, &mut ships);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(ships[0].reserves.armor.now, 0.0);
+        // Its breakup starts at its display, in the ship loop.
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert!(
             about(&combat.take_events(), A)
                 .iter()
@@ -14427,19 +14438,14 @@ mod tests {
             ..weapon(148)
         });
         let arsenal = Arsenal::new(&[shell, sub], Vec::new());
-        let mut combat = Combat::default();
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
-        // Released as the shell's end of life comes, the tick after its
-        // third move, which is the fourth tick.
-        for _ in 0..5 {
-            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
-            ships[0].trigger = QUIET;
-        }
+        // Released as the shell's end of life comes, at `_HandleShot`'s
+        // visit after its third move.
+        let (combat, ships) = a_fires_and_flies(shell, Vec::new(), &arsenal, 4);
         assert_eq!(sub_shots(&combat).len(), 2, "released");
         assert_eq!(ships[0].reserves.armor.now, 30.0, "spared");
         let mut combat = Combat::default();
         let mut ships = [player_with(self_destructing(laser()))];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::fire_player(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.beams().len(), 1);
         assert_eq!(ships[0].reserves.armor.now, 30.0, "a beam spares it");
     }
