@@ -435,7 +435,7 @@ impl Session {
     ///
     /// [`NotOffered`] for a mission not offered: in flight, any but the
     /// offer from a ship the dialog shows.
-    pub fn refuse_mission(
+    pub(crate) fn refuse_mission(
         &mut self,
         mission: MissionId,
         chance: &mut dyn Chance,
@@ -511,7 +511,11 @@ impl Session {
     ///
     /// [`AbortError::NotActive`] for a free slot; [`AbortError::Refused`]
     /// when a check refuses, and then nothing runs.
-    pub fn abort_mission(&mut self, slot: u8, chance: &mut dyn Chance) -> Result<(), AbortError> {
+    pub(crate) fn abort_mission(
+        &mut self,
+        slot: u8,
+        chance: &mut dyn Chance,
+    ) -> Result<(), AbortError> {
         self.out.begin_docked_run();
         let mission = self
             .pilot

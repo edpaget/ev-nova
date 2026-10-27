@@ -148,7 +148,7 @@ impl Session {
     /// (@0x3e2fe-0x3e33d), a mission failed or not, and drops the cargo
     /// boxes behind the player and its trader escorts, drawing on
     /// `chance` (see the `cargo_boxes` module); landed, neither.
-    pub fn jettison_cargo(&mut self, all: bool, chance: &mut dyn Chance) {
+    pub(crate) fn jettison_cargo(&mut self, all: bool, chance: &mut dyn Chance) {
         // A new run of docked scripts, its failures' `OnFailure` (see
         // [`Session::take_interface_loads`]).
         self.out.begin_docked_run();

@@ -4114,7 +4114,7 @@ impl Session {
     /// a save is due. When the ship is not landed at a trade center, or
     /// the order would move nothing, nothing changes and the refusal says
     /// why.
-    pub fn trade(&mut self, order: Order) -> Result<u32, TradeRefusal> {
+    pub(crate) fn trade(&mut self, order: Order) -> Result<u32, TradeRefusal> {
         let market = self.market().ok_or(TradeRefusal::NoMarket)?;
         let tons = market.tons(order)?;
         let price = market.ordered(order).map_or(0, |row| row.price);
@@ -4182,7 +4182,7 @@ impl Session {
     /// clean-record outfit can be bought again (see [`outfitter`]), and
     /// the session resets (@0x5bb57; see the `precalced` module), before
     /// the outfitter's list is built.
-    pub fn open_outfitter(&mut self) {
+    pub(crate) fn open_outfitter(&mut self) {
         self.port.open_outfit_visit(&self.pilot);
         self.reset_precalced();
     }
@@ -4200,7 +4200,7 @@ impl Session {
     /// order's refit, and its taking away of the outfits flagged 0x0010
     /// (@0x5dadd-0x5db0e) is the purchase's, at once (see the `outfits`
     /// module).
-    pub fn close_outfitter(&mut self) {
+    pub(crate) fn close_outfitter(&mut self) {
         self.reset_precalced();
         self.run.offer_venue = None;
     }
@@ -4210,7 +4210,7 @@ impl Session {
     /// hire mode returns (@0x49235; see the `precalced` module). A hire
     /// ([`Session::hire`]) resets nothing of its own, so a hire's reset
     /// is this one, after it.
-    pub fn close_hire(&mut self) {
+    pub(crate) fn close_hire(&mut self) {
         self.reset_precalced();
     }
 
@@ -4303,7 +4303,7 @@ impl Session {
     /// restart can still end in the original. The ceiling's one cost is
     /// that a plug-in order relisting on more than 512 sales is cut short
     /// where the original would finish.
-    pub fn outfit_order(
+    pub(crate) fn outfit_order(
         &mut self,
         order: OutfitOrder,
         count: u32,
@@ -4609,7 +4609,7 @@ impl Session {
     /// [`outfit_order`](Self::outfit_order) gives it: a Cancel's count of
     /// none whose button passed its own check
     /// ([`OutfitRun::button_passed`]) counts the outfit day too.
-    pub fn outfit_counted_run(
+    pub(crate) fn outfit_counted_run(
         &mut self,
         order: OutfitOrder,
         count: u32,
@@ -4703,7 +4703,7 @@ impl Session {
     /// @0x5f0d5-0x5f0f8), the next time the shipyard's list is built
     /// ([`shipyard`](Self::shipyard)); until then it can be named and
     /// bought again. Nothing about the pilot changes, so no save is due.
-    pub fn decline_ship(&mut self, ship: ShipId) {
+    pub(crate) fn decline_ship(&mut self, ship: ShipId) {
         self.port.decline_ship(ship);
     }
 

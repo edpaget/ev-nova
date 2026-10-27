@@ -17,7 +17,7 @@ impl Session {
     /// Marks the pilot as having seen the intro screen. It asks for no
     /// save: the original saves nothing at entry, so the flag reaches disk
     /// with the next save.
-    pub fn mark_intro_seen(&mut self) {
+    pub(crate) fn mark_intro_seen(&mut self) {
         self.pilot.seen_intro = true;
     }
 }

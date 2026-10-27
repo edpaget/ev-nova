@@ -206,7 +206,11 @@ impl Session {
     /// [`HireRefusal::NoBar`] when not landed at a stellar with a bar,
     /// and, by the other reading of [`RuleKey::HireNoSlot`],
     /// [`HireRefusal::NoSlot`] when the system has no slot for it.
-    pub fn hire(&mut self, ship: ShipId, chance: &mut dyn Chance) -> Result<Hired, HireRefusal> {
+    pub(crate) fn hire(
+        &mut self,
+        ship: ShipId,
+        chance: &mut dyn Chance,
+    ) -> Result<Hired, HireRefusal> {
         let list = self.escorts_for_hire(chance).ok_or(HireRefusal::NoBar)?;
         list.check(ship)?;
         let record = self

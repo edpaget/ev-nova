@@ -309,7 +309,7 @@ impl Session {
     /// missions.", `STR#` 2002 #354
     /// ([`SimMessage::NoActiveMissions`](crate::SimMessage::NoActiveMissions),
     /// @0x7055c-0x705a8).
-    pub fn press_mission_info(&mut self) -> MissionInfoPress {
+    pub(crate) fn press_mission_info(&mut self) -> MissionInfoPress {
         if self.mode.jump().is_some() || !self.takes(PlayerCommand::MissionInfo) {
             return MissionInfoPress::Refused;
         }
@@ -354,7 +354,7 @@ impl Session {
     /// offer dialog closes (@0xa335c): the movie and the governments it
     /// leaves are the offer's again. The text is drawn already, so it is
     /// not filled.
-    pub fn reload_offer_desc(&mut self, mission: MissionId, chance: &mut dyn Chance) {
+    pub(crate) fn reload_offer_desc(&mut self, mission: MissionId, chance: &mut dyn Chance) {
         let texts = self.mission_texts(mission);
         let raw = texts.and_then(|texts| texts.offer.clone());
         let movie = texts.and_then(|texts| texts.movies.offer.clone());
@@ -588,7 +588,7 @@ impl Session {
     /// then its name filled, as `_MissionDialogUpdate` munges the
     /// selected name after (@0x9f40c), drawing on `chance`. `None` when
     /// it is not offered.
-    pub fn show_computer_row(
+    pub(crate) fn show_computer_row(
         &mut self,
         mission: MissionId,
         chance: &mut dyn Chance,
@@ -612,7 +612,7 @@ impl Session {
     /// one empty, keeping the governments) and filled for the slot, as
     /// `_MissionInfoFilter` loads a selected row's (@0x9d89f-0x9d8bc),
     /// drawing on `chance`. `None` for a free slot.
-    pub fn show_info_row(&mut self, slot: u8, chance: &mut dyn Chance) -> Option<String> {
+    pub(crate) fn show_info_row(&mut self, slot: u8, chance: &mut dyn Chance) -> Option<String> {
         let active = self.pilot.missions.get(slot)?;
         let texts = self.mission_texts(active.mission);
         let raw = texts.and_then(|texts| texts.quick_brief.clone());
@@ -672,7 +672,7 @@ impl Session {
     /// # Errors
     ///
     /// As [`Session::mission_computer`].
-    pub fn open_mission_computer(&mut self) -> Result<MissionComputer, ComputerRefusal> {
+    pub(crate) fn open_mission_computer(&mut self) -> Result<MissionComputer, ComputerRefusal> {
         if self
             .ship
             .accept_refusal(&self.pilot, &self.statics, &self.setup, 0, &mut NeverFires)
@@ -743,7 +743,7 @@ impl Session {
     /// Enters venue `loc` for its offers (`_OfferMissionFromPort`
     /// @0xa36a7-0xa36d7): entering one other than the last forgets the
     /// suppressed offers, unless it is the spaceport ([`SPACEPORT`]).
-    pub fn enter_offer_venue(&mut self, loc: i16) {
+    pub(crate) fn enter_offer_venue(&mut self, loc: i16) {
         self.run.enter_offer_venue(loc);
     }
 
