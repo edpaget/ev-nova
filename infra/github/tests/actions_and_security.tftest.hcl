@@ -52,13 +52,24 @@ run "actions_permissions_are_declared" {
   }
 
   assert {
-    condition     = github_actions_repository_permissions.ev_nova.allowed_actions == "all"
-    error_message = "allowed_actions must be all."
+    condition     = github_actions_repository_permissions.ev_nova.allowed_actions == "selected"
+    error_message = "allowed_actions must be selected: an explicit allowlist."
   }
 
   assert {
-    condition     = length(github_actions_repository_permissions.ev_nova.allowed_actions_config) == 0
-    error_message = "No allowed_actions_config block while allowed_actions is all."
+    condition = (
+      github_actions_repository_permissions.ev_nova.allowed_actions_config[0].github_owned_allowed &&
+      !github_actions_repository_permissions.ev_nova.allowed_actions_config[0].verified_allowed
+    )
+    error_message = "Allow GitHub-owned actions, but not every verified creator."
+  }
+
+  assert {
+    condition = (
+      toset(github_actions_repository_permissions.ev_nova.allowed_actions_config[0].patterns_allowed) ==
+      toset(["Swatinem/rust-cache@*", "cargo-bins/cargo-binstall@*", "jdx/mise-action@*"])
+    )
+    error_message = "patterns_allowed must be exactly the three third-party actions ci.yml uses."
   }
 }
 

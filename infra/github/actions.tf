@@ -14,8 +14,22 @@ import {
 resource "github_actions_repository_permissions" "ev_nova" {
   repository = github_repository.ev_nova.name
 
-  enabled         = true
-  allowed_actions = "all"
+  enabled = true
+  # Every fork PR runs ci.yml, so a workflow edit must not be able to pull in
+  # any third-party action: each new one needs a pattern here, applied first,
+  # or its jobs fail at startup. Not every verified creator either: that is
+  # broad third-party code ci.yml never uses.
+  allowed_actions = "selected"
+  allowed_actions_config {
+    github_owned_allowed = true
+    verified_allowed     = false
+    # Any ref: pinning refs is sha_pinning_required's job.
+    patterns_allowed = [
+      "Swatinem/rust-cache@*",
+      "cargo-bins/cargo-binstall@*",
+      "jdx/mise-action@*",
+    ]
+  }
   # Off until ci.yml pins its actions by SHA (rdm task pin-ci-actions-by-sha).
   sha_pinning_required = false
 }
