@@ -1169,35 +1169,6 @@ fn by_the_other_reading_the_radar_follows_the_ship_every_frame() {
 }
 
 #[test]
-fn while_landed_the_radar_shows_only_the_player_until_take_off() {
-    for every in [false, true] {
-        let view = flight_among(vec![
-            site(128, (0.0, -600.0), StellarFlags::CAN_LAND),
-            site(129, (6.0, -8.0), StellarFlags::CAN_LAND),
-        ]);
-        let mut view = if every { every_frame(view) } else { view };
-        ticks(&mut view, 3);
-        let flying = radar_marks(&view);
-        assert_eq!(flying.len(), 3, "the Sun, the Moon and the player");
-        land_now(&mut view);
-        assert!(view.session().expect("flying").landed().is_some());
-        assert!(
-            view.radar_shown(&view.frame_now()).blank,
-            "at once, as _RedrawStatus"
-        );
-        assert_eq!(radar_marks(&view), [PLAYER_PIXEL]);
-        let list = drawn(&view);
-        assert_eq!(dots_on_radar(&list), [(926, 96)]);
-        view.take_off().expect("took off");
-        assert!(
-            !view.radar_shown(&view.frame_now()).blank,
-            "at once on take-off"
-        );
-        assert_eq!(radar_marks(&view).len(), 3);
-    }
-}
-
-#[test]
 fn a_new_system_shows_on_the_radar_at_once_leaving_the_timer_and_blink() {
     let mut view = landed_view();
     ticks(&mut view, 3);

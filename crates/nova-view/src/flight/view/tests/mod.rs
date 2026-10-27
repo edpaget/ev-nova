@@ -1504,12 +1504,6 @@ fn lit_hull(hull: nova_sim::HullRecord, blink: Blink) -> nova_sim::HullRecord {
     }
 }
 
-/// `view`'s flight with [`RuleKey::HudCadence`] read the Bible's way:
-/// the HUD every frame.
-fn every_frame(view: View) -> View {
-    view.with_rules(Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Bible))
-}
-
 /// `ïntf` 129: [`layout`] in another shield colour, over `PICT` 705.
 fn bar_129() -> StatusBarLayout {
     StatusBarLayout {

@@ -394,37 +394,6 @@ fn moon_frame(view: &View) -> u16 {
     sprites(&drawn(view))[1].0.frame
 }
 
-#[test]
-fn a_take_off_shows_a_stellars_current_frame_on_the_sheet_it_now_draws() {
-    let mut view = FlightView::new(FakeCatalog {
-        sites: vec![
-            site(128, (6.0, -8.0), StellarFlags::CAN_LAND),
-            site(129, (300.0, -200.0), StellarFlags::CAN_LAND),
-        ],
-        lives: vec![life(129, 0)],
-        moon: Some(MoonSheets {
-            width: 50,
-            dead_width: Some(70),
-            zero_width: 90,
-            frames: 4,
-            dead_frames: 2,
-            flags2: 0,
-        }),
-        ..catalog()
-    });
-    ticks(&mut view, 2);
-    assert_eq!(moon_frame(&view), 2);
-    // The landing's two presses take a tick between them: frame 3.
-    land_now(&mut view);
-    run_set(&mut view, "Y129");
-    view.take_off();
-    assert_eq!(
-        sprites(&drawn(&view))[1].0,
-        ImageKey::sprite(2129, 1),
-        "frame 3 of the DeadType's 2 at the take-off's rebuild, not 0"
-    );
-}
-
 /// The Moon's animation state as `view` keeps it while Sol is not shown.
 fn moon_kept(view: &View) -> Option<u16> {
     view.kept_frames
@@ -466,44 +435,6 @@ fn a_real_jump_away_and_back_resumes_the_frame_shown_on_leaving() {
     assert_eq!(moon_frame(&view), (left + 1) % 4, "and on from there");
 }
 
-/// The frame Proxima (140) shows, while the scene holds it.
-fn proxima_frame(view: &View) -> Option<u16> {
-    view.scene()
-        .expect("laid out")
-        .stellars()
-        .iter()
-        .find(|stellar| stellar.id == StellarId(140))
-        .map(|stellar| stellar.frames.shown())
-}
-
-#[test]
-fn a_stellar_shown_again_in_the_same_system_resumes() {
-    let catalog = FakeCatalog {
-        proxima_frames: 4,
-        ..proxima_in_sol()
-    };
-    let mut view = FlightView::with_pilot(catalog, docked_pilot("Ada"));
-    land_now(&mut view);
-    assert_eq!(view.take_landing(), Some(StellarId(128)));
-    move_to(&mut view, 131, 140);
-    view.tick(TICK);
-    assert_eq!(scene_ids(&view), [StellarId(140)], "docked at it");
-    ticks(&mut view, 2);
-    let docked = proxima_frame(&view).expect("shown");
-    assert_ne!(docked, 0, "under way");
-    assert_eq!(view.take_off(), Some(StellarId(140)));
-    assert_eq!(scene_ids(&view), [], "let go by the take-off's rebuild");
-    // Docked at Earth, then moved back to Proxima: shown again.
-    let session = view.sim.session.as_mut().expect("flying");
-    session
-        .land_at(&*view.catalog, SystemId(130), StellarId(128))
-        .expect("lands");
-    move_to(&mut view, 131, 140);
-    view.catch_up();
-    assert_eq!(scene_ids(&view), [StellarId(140)], "shown again");
-    assert_eq!(proxima_frame(&view), Some(docked), "where it was left");
-}
-
 #[test]
 fn a_load_shows_every_stellar_from_frame_0() {
     let mut view = flight();
@@ -523,23 +454,6 @@ fn a_load_shows_every_stellar_from_frame_0() {
     assert_eq!(moon_frame(&new), 1, "a new pilot's, one tick in");
     new.tick(TICK);
     assert_eq!(moon_frame(&new), 2, "a new pilot's, then on");
-}
-
-#[test]
-fn fighters_abandoned_are_told_only_with_the_layout_of_the_move_settled() {
-    let rules = Rulebook::default().with_override(RuleKey::MoveArrival, RuleSource::Bible);
-    let mut view = fighters_out().with_rules(rules);
-    run_set(&mut view, "M131");
-    settle_session(&mut view);
-    view.tick(TICK);
-    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
-    view.settle_script();
-    assert_eq!(view.message(), None, "no layout from this settling");
-    assert_eq!(
-        view.drain().take_fighter_notes(),
-        [FighterNote::Abandoned(2)],
-        "left for the next arrival"
-    );
 }
 
 #[test]

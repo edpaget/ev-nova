@@ -10,23 +10,6 @@ use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 
 use super::{BarFor, FlightView, Then};
 
-impl<C: StatusBars> FlightView<C, crate::flight::SessionFlight<C>> {
-    /// Runs `run` on the session, as the docked bar sees it: the `ïntf`
-    /// loaded before it is noted, and what it ran docked is staged
-    /// ([`FlightView::stage_bar`]), the dialog drawing `then` after it. In
-    /// flight `run` runs alone.
-    pub(super) fn run_docked<T>(&mut self, then: Then, run: impl FnOnce(&mut Self) -> T) -> T {
-        if !self.docked() {
-            return run(self);
-        }
-        let before = self.interface_now();
-        let done = run(self);
-        let (changes, _) = self.interface_changes(before.as_ref());
-        self.stage_bar(changes, then);
-        done
-    }
-}
-
 /// The descriptions, over the [`FlightSim`] port: read from the catalog
 /// here, taken in by the flight ([`FlightSim::load_description`]).
 impl<C: DescriptionSource + DescriptionGraphics, S: FlightSim> FlightView<C, S> {
@@ -59,6 +42,21 @@ impl<C: DescriptionSource + DescriptionGraphics, S: FlightSim> FlightView<C, S> 
 }
 
 impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
+    /// Runs `run` on the flight, as the docked bar sees it: the `ïntf`
+    /// loaded before it is noted, and what it ran docked is staged
+    /// ([`FlightView::stage_bar`]), the dialog drawing `then` after it. In
+    /// flight `run` runs alone.
+    pub(super) fn run_docked<T>(&mut self, then: Then, run: impl FnOnce(&mut Self) -> T) -> T {
+        if !self.docked() {
+            return run(self);
+        }
+        let before = self.interface_now();
+        let done = run(self);
+        let (changes, _) = self.interface_changes(before.as_ref());
+        self.stage_bar(changes, then);
+        done
+    }
+
     /// Whether a docked mission text still shown holds the status bar's
     /// graphic: a `C`, `E` or `H` staged after it loads another `ïntf` only
     /// as it closes ([`FlightView::close_mission_text`]), under

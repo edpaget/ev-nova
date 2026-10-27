@@ -31,10 +31,6 @@ impl Chance for Counting {
     }
 }
 
-fn stars_of(view: &View) -> [Star; 20] {
-    view.stars.stars()
-}
-
 /// A scripted flight from `catalog` of the player alone at `at` in Sol of
 /// murk `murk` as loaded, its effects rolled on a [`Counting`] chance.
 fn faked_counted(catalog: FakeCatalog, at: Vec2, murk: i16) -> Faked {
@@ -139,20 +135,6 @@ fn a_system_entered_with_no_starfield_reset_keeps_the_stars() {
     caught_up(&mut view);
     assert_eq!(view.frame.system, SystemId(131));
     assert_eq!(faked_stars(&view), before);
-}
-
-#[test]
-fn landing_and_taking_off_keep_the_stars() {
-    let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Counting::default()));
-    let mut view = over_earth(starry()).with_effects_chance(SharedChance::new(chance));
-    view.tick(Duration::ZERO);
-    assert!(stars_of(&view).iter().all(|star| star.shown));
-    land_now(&mut view);
-    assert!(view.take_landing().is_some(), "landed");
-    let before = stars_of(&view);
-    view.take_off();
-    view.tick(Duration::ZERO);
-    assert_eq!(stars_of(&view), before);
 }
 
 #[test]

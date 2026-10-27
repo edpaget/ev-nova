@@ -625,26 +625,6 @@ fn a_real_flights_coming_traffic_is_the_types_its_session_brings() {
 }
 
 #[test]
-fn a_take_off_after_the_first_step_reads_no_sheet_or_card() {
-    let catalog = FakeCatalog {
-        sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
-        ..trafficked(&[130], 2, 129, 1)
-    };
-    let mut view = FlightView::new(catalog);
-    ticks(&mut view, 5);
-    assert!(!npc_ids(&view).is_empty(), "the traffic spawned");
-    let sheets = view.catalog().sheets_asked.borrow().clone();
-    let cards = view.catalog().cards_asked.borrow().clone();
-    assert_eq!(cards, [vec![ShipId(129)]]);
-    land_now(&mut view);
-    view.take_off().expect("took off");
-    ticks(&mut view, 5);
-    assert!(!npc_ids(&view).is_empty(), "the traffic spawned again");
-    assert_eq!(*view.catalog().sheets_asked.borrow(), sheets);
-    assert_eq!(*view.catalog().cards_asked.borrow(), cards);
-}
-
-#[test]
 fn npcs_stand_still_while_the_map_is_open_or_the_ship_is_landed() {
     let catalog = FakeCatalog {
         sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
@@ -663,103 +643,6 @@ fn npcs_stand_still_while_the_map_is_open_or_the_ship_is_landed() {
     let before = npc_states(&view);
     ticks(&mut view, 10);
     assert_eq!(npc_states(&view), before, "landed");
-}
-
-#[test]
-fn taking_off_repopulates_the_system() {
-    let catalog = FakeCatalog {
-        sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
-        ..trafficked(&[130], 2, 129, 1)
-    };
-    let mut view = FlightView::new(catalog);
-    view.tick(TICK);
-    assert_eq!(npc_ids(&view), [NpcId(0), NpcId(1)]);
-    land_now(&mut view);
-    view.take_off().expect("took off");
-    assert_eq!(npc_ids(&view), [NpcId(2), NpcId(3)], "before any tick");
-    view.tick(TICK);
-    assert_eq!(npc_ids(&view), [NpcId(2), NpcId(3)], "populated once");
-}
-
-/// [`trafficked`] with one ship 129 of AI 3 in 130, over planet 128
-/// at the centre.
-/// [`trafficked`] with the ship over an uninhabited 128, which it
-/// lands on in one press, with no tick to bring the traffic in.
-fn trafficked_over_128() -> FakeCatalog {
-    FakeCatalog {
-        sites: vec![site(
-            128,
-            (0.0, 0.0),
-            StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
-        )],
-        ..trafficked(&[130], 1, 129, 3)
-    }
-}
-
-/// Whether `list` draws a sprite at world point `world`.
-fn sprite_at(view: &View, list: &DrawList, world: Vec2) -> bool {
-    let screen = view.camera().world_to_screen(point(world));
-    sprites(list).iter().any(|&(_, center)| center == screen)
-}
-
-#[test]
-fn the_first_frame_after_take_off_draws_none_of_the_ships_from_before_the_landing() {
-    let mut draws = placed(850, 650, 90).to_vec();
-    // The take-off's escort-strength seed, then its population.
-    draws.push(0);
-    draws.extend(placed(650, 850, 90));
-    let (_, chance) = scripted(&draws);
-    let mut view = FlightView::new(trafficked_over_128())
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    view.tick(TICK);
-    let before = npc_states(&view)[0].position;
-    assert_eq!(before, Vec2::new(100.0, -100.0));
-    tap(&mut view, LAND);
-    view.take_off().expect("took off");
-    let after = npc_states(&view)[0].position;
-    assert_eq!(after, Vec2::new(-100.0, 100.0));
-
-    let list = drawn(&view);
-    assert!(!sprite_at(&view, &list, before), "with no tick");
-    assert!(sprite_at(&view, &list, after), "with no tick");
-
-    let states = npc_states(&view);
-    view.tick(TICK / 4);
-    assert_eq!(npc_states(&view), states, "no step");
-    let list = drawn(&view);
-    assert!(!sprite_at(&view, &list, before), "after a frame of no step");
-    assert!(sprite_at(&view, &list, after), "after a frame of no step");
-}
-
-#[test]
-fn a_ship_type_first_flown_at_take_off_is_drawn_with_its_sprite_at_once() {
-    // The take-off's escort-strength seed, then its population.
-    let mut draws = vec![0];
-    draws.extend(placed(650, 850, 90));
-    let (_, chance) = scripted(&draws);
-    let mut view = FlightView::new(trafficked_over_128())
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    tap(&mut view, LAND);
-    assert!(view.take_landing().is_some(), "landed before any traffic");
-    view.take_off().expect("took off");
-    let after = npc_states(&view)[0].position;
-    let list = drawn(&view);
-    let mut boxed = DrawList::new();
-    crossed_box(
-        &mut boxed,
-        view.camera().world_to_screen(point(after)),
-        PLACEHOLDER_SIZE,
-        PLACEHOLDER,
-    );
-    let commands: Vec<_> = list.iter().cloned().collect();
-    let expected: Vec<_> = boxed.iter().cloned().collect();
-    assert!(
-        !commands.windows(expected.len()).any(|run| run == expected),
-        "no placeholder"
-    );
-    assert!(sprite_at(&view, &list, after), "its own sprite");
 }
 
 // Combat.

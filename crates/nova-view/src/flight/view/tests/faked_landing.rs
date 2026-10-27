@@ -659,3 +659,198 @@ fn a_borders_change_on_the_hypergate_map_saves_but_one_docked_is_kept_unsaved() 
         "the next open starts off"
     );
 }
+
+// The take-off and the settling.
+
+/// [`sol`] docked at `stellar`, the player at `at`.
+fn docked_at(stellar: i16, at: Vec2) -> FlightFrame {
+    FlightFrame {
+        landed: Some(StellarId(stellar)),
+        ships: vec![the_player_at(at, 0.0)],
+        ..sol()
+    }
+}
+
+/// The answer to a take-off from `stellar`, nothing settled.
+fn departed(stellar: i16) -> Answer {
+    Answer::Departed(nova_sim::Departure {
+        stellar: StellarId(stellar),
+        settled: nova_sim::Settled::default(),
+    })
+}
+
+#[test]
+fn taking_off_gives_the_stellar_and_draws_the_ship_there_on_the_next_frame() {
+    let mut view = faked(docked_at(140, Vec2::new(6.0, -8.0)));
+    view.alpha = 0.5;
+    let flying = FlightFrame {
+        landed: None,
+        ..docked_at(140, Vec2::new(6.0, -8.0))
+    };
+    view.sim.queue_answer_showing(departed(140), flying);
+    assert_eq!(view.take_off_with(faked_words()), Some(StellarId(140)));
+    assert_eq!(sent_but_lines(&view), [FlightCommand::TakeOff]);
+    assert_eq!(view.alpha(), 0.0);
+    assert_eq!(view.shown_position(), at(6.0, -8.0));
+    assert_eq!(view.camera().center(), at(6.0, -8.0));
+    assert_eq!(
+        view.take_off_with(faked_words()),
+        None,
+        "not landed: refused"
+    );
+}
+
+#[test]
+fn a_take_off_greets_in_the_flights_words_and_lets_no_line_from_before_stay() {
+    let mut view = faked(docked_at(128, Vec2::ZERO));
+    view.say_for(TOO_FAR_PLANET, TOO_FAR_TICKS);
+    let greeting = SimMessage::TookOff {
+        stellar: StellarId(128),
+        lead: 0,
+    };
+    view.sim.queue_event(FlightEvent::Message(greeting.clone()));
+    view.sim.queue_answer_showing(departed(128), sol());
+    view.take_off_with(faked_words());
+    faked_lasts(&mut view, &format!("{greeting:?}"), greeting.ticks());
+}
+
+#[test]
+fn a_held_leave_takes_off_saying_its_message_and_none_due_does_nothing() {
+    let mut view = faked(FlightFrame {
+        leave_due: true,
+        ..docked_at(128, Vec2::ZERO)
+    });
+    assert!(view.leave_due(), "the frame's");
+    view.sim
+        .queue_event(FlightEvent::LeaveMessage("Leave now.".to_owned()));
+    view.sim.queue_answer_showing(departed(128), sol());
+    assert_eq!(view.leave_if_due_with(faked_words()), Some(StellarId(128)));
+    assert_eq!(sent_but_lines(&view), [FlightCommand::LeaveIfDue]);
+    faked_lasts(&mut view, "Leave now.", SCRIPT_MESSAGE_TICKS);
+    assert!(!view.leave_due());
+    assert_eq!(view.leave_if_due_with(faked_words()), None, "none due");
+}
+
+#[test]
+fn the_escorts_landing_reports_what_the_flight_reports() {
+    let mut view = faked(docked_at(128, Vec2::ZERO));
+    view.sim
+        .queue_answer(Answer::EscortReport(Some("Escort sold.".to_owned())));
+    assert_eq!(view.land_escorts(), Some("Escort sold.".to_owned()));
+    assert_eq!(view.land_escorts(), None, "refused: nothing");
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::LandEscorts, FlightCommand::LandEscorts]
+    );
+}
+
+#[test]
+fn taking_off_in_a_flight_that_never_started_does_nothing() {
+    let mut view = faked(FlightFrame::default());
+    assert_eq!(view.take_off_with(faked_words()), None);
+    assert_eq!(view.leave_if_due_with(faked_words()), None);
+    assert_eq!(view.land_escorts(), None);
+    assert!(!view.leave_due());
+}
+
+#[test]
+fn while_docked_the_radar_shows_only_the_player_until_the_take_off() {
+    let mut view = faked(docked_at(128, Vec2::ZERO));
+    assert!(view.radar_shown(&view.frame_now()).blank, "docked");
+    view.sim.queue_answer_showing(departed(128), sol());
+    view.take_off_with(faked_words());
+    assert!(
+        !view.radar_shown(&view.frame_now()).blank,
+        "at once on take-off"
+    );
+}
+
+#[test]
+fn a_take_off_draws_its_new_traffic_with_its_sprites_and_none_from_before_the_landing() {
+    let before = super::faked_world::npc_129(0, Vec2::new(100.0, -100.0), 0.0);
+    let mut view = world(
+        armed(1, &[BLASTER]),
+        FlightFrame {
+            ships: vec![the_player_at(Vec2::ZERO, 0.0), before],
+            ..docked_at(128, Vec2::ZERO)
+        },
+    );
+    let after = super::faked_world::npc_129(2, Vec2::new(-100.0, 100.0), 0.0);
+    view.sim.queue_answer_showing(
+        departed(128),
+        FlightFrame {
+            traffic_ships: vec![ShipId(129)],
+            ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), after])
+        },
+    );
+    view.take_off_with(faked_words());
+    let sprites = super::faked_world::faked_ship_sprites(&view);
+    let at_screen = |place: Vec2| view.camera().world_to_screen(point(place));
+    assert!(
+        sprites
+            .iter()
+            .any(|&(_, centre)| centre == at_screen(Vec2::new(-100.0, 100.0))),
+        "the new traffic drawn at once, with its own sprite: {sprites:?}"
+    );
+    assert!(
+        !sprites
+            .iter()
+            .any(|&(_, centre)| centre == at_screen(Vec2::new(100.0, -100.0))),
+        "none of the ships from before the landing"
+    );
+}
+
+#[test]
+fn landing_and_taking_off_keep_the_stars() {
+    let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(super::stars::Counting::default()));
+    let mut view = world(starry(), sol()).with_effects_chance(SharedChance::new(chance));
+    view.catch_up();
+    assert!(view.stars.stars().iter().all(|star| star.shown));
+    press_l(&mut view, landed(128));
+    let before = view.stars.stars();
+    view.sim.queue_answer_showing(departed(128), sol());
+    view.take_off_with(faked_words());
+    view.catch_up();
+    assert_eq!(view.stars.stars(), before);
+}
+
+#[test]
+fn the_settling_sends_its_command_and_says_what_it_settled() {
+    let mut view = faked(sol());
+    view.sim.queue_answer(Answer::Settled(nova_sim::Settled {
+        message: Some("Hello.".to_owned()),
+        ..nova_sim::Settled::default()
+    }));
+    view.settle_script_with(faked_words());
+    assert_eq!(sent_but_lines(&view), [FlightCommand::SettleScript]);
+    faked_lasts(&mut view, "Hello.", SCRIPT_MESSAGE_TICKS);
+}
+
+#[test]
+fn fighters_abandoned_are_told_only_with_the_layout_of_the_move_settled() {
+    let mut view = faked(sol());
+    view.sim
+        .queue_event(FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(
+            2,
+        )));
+    view.sim
+        .queue_answer(Answer::Settled(nova_sim::Settled::default()));
+    view.settle_script_with(faked_words());
+    assert_eq!(view.message(), None, "no layout from this settling");
+    assert_eq!(
+        view.drain().take_fighter_notes(),
+        [nova_sim::FighterNote::Abandoned(2)],
+        "left for the next arrival"
+    );
+}
+
+#[test]
+fn docked_the_settling_stages_the_bar_as_its_scripts_ran() {
+    let mut view = faked(docked_at(128, Vec2::ZERO));
+    assert!(view.docked());
+    view.sim
+        .queue_answer(Answer::Settled(nova_sim::Settled::default()));
+    view.settle_script_with(faked_words());
+    assert!(view.bar_steps.is_empty(), "no text, nothing staged");
+    assert_eq!(sent_but_lines(&view), [FlightCommand::SettleScript]);
+}
