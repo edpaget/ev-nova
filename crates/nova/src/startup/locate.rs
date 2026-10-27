@@ -89,8 +89,12 @@ fn inside_app(app: PathBuf) -> PathBuf {
 /// - macOS: `/Applications/EV Nova.app/Contents/Resources/Nova Files`,
 ///   then the same under `$HOME/Applications` (left out when `HOME` is
 ///   unset or empty).
-/// - Elsewhere: none yet. The Windows and Linux platform roadmaps add
-///   theirs here.
+/// - Windows ([`windows_places`]): the `Nova Files` of an `EV Nova`
+///   folder in `%ProgramFiles%`, then `%ProgramFiles(x86)%`, then under
+///   `Ambrosia Software` in each, then in `%LOCALAPPDATA%\Programs`. A
+///   missing or empty variable drops its places, and a place named twice
+///   (`ProgramFiles(x86)` the same as `ProgramFiles`) is tried once.
+/// - Elsewhere: none yet. The Linux platform roadmap adds its own here.
 pub fn usual_places(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
     match os {
         Os::MacOs => {
@@ -100,8 +104,48 @@ pub fn usual_places(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Vec<PathB
                 .map(|home| inside_app(Path::new(&home).join("Applications").join("EV Nova.app")));
             std::iter::once(system).chain(user).collect()
         }
-        Os::Windows | Os::Other => Vec::new(),
+        Os::Windows => windows_places(env),
+        Os::Other => Vec::new(),
     }
+}
+
+/// Windows' usual places, from `env`.
+///
+/// Each is the `Nova Files` folder, never the `EV Nova` folder above it:
+/// the loader reads only the top level of the folder it is given, so the
+/// `EV Nova` folder would "load" its interface file, `Nova.rez`, as the
+/// game's data. EV Nova CE unzips to an `EV Nova` folder, which the
+/// community keeps in `Program Files`; Ambrosia's own 32-bit installer's
+/// folder isn't known, so its vendor folder is a guess, under both
+/// `Program Files` roots. `%LOCALAPPDATA%\Programs` is Windows' place for
+/// a program installed without an administrator.
+fn windows_places(env: impl Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
+    let var = |name: &str| {
+        env(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let program_files: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)"]
+        .into_iter()
+        .filter_map(var)
+        .collect();
+    let vendors: [&[&str]; 2] = [&[], &["Ambrosia Software"]];
+    let installed = vendors.into_iter().flat_map(|vendor| {
+        program_files.iter().map(move |root| {
+            let mut dir = root.clone();
+            dir.extend(vendor);
+            dir
+        })
+    });
+    let per_user = var("LOCALAPPDATA").map(|local| local.join("Programs"));
+    let mut places = Vec::new();
+    for mut dir in installed.chain(per_user) {
+        dir.extend(["EV Nova", "Nova Files"]);
+        if !places.contains(&dir) {
+            places.push(dir);
+        }
+    }
+    places
 }
 
 /// The directory a pick names: an `EV Nova.app` (any `.app`, in any case)
@@ -342,7 +386,7 @@ mod tests {
 
     use nova_audio::recording::MemorySettings;
     use nova_rsrc::ResType;
-    use nova_rsrc::fixture::ForkBuilder;
+    use nova_rsrc::fixture::{ForkBuilder, RezBuilder};
 
     use super::*;
 
@@ -487,13 +531,98 @@ mod tests {
     }
 
     #[test]
-    fn elsewhere_there_are_no_usual_places_yet() {
-        for os in [Os::Windows, Os::Other] {
+    fn on_other_systems_there_are_no_usual_places_yet() {
+        assert_eq!(
+            usual_places(Os::Other, env(&[("HOME", "/home/p")])),
+            Vec::<PathBuf>::new()
+        );
+    }
+
+    /// The `Nova Files` of an `EV Nova` folder at `parts` under `root`.
+    fn windows_place(root: &str, parts: &[&str]) -> PathBuf {
+        let mut dir = Path::new(root).to_path_buf();
+        dir.extend(parts);
+        dir.extend(["EV Nova", "Nova Files"]);
+        dir
+    }
+
+    const PROGRAM_FILES: (&str, &str) = ("ProgramFiles", "/pf");
+    const PROGRAM_FILES_X86: (&str, &str) = ("ProgramFiles(x86)", "/pf86");
+    const LOCAL_APP_DATA: (&str, &str) = ("LOCALAPPDATA", "/local");
+
+    #[test]
+    fn on_windows_the_usual_places_are_the_program_files_folders_then_the_users() {
+        assert_eq!(
+            usual_places(
+                Os::Windows,
+                env(&[PROGRAM_FILES, PROGRAM_FILES_X86, LOCAL_APP_DATA])
+            ),
+            [
+                windows_place("/pf", &[]),
+                windows_place("/pf86", &[]),
+                windows_place("/pf", &["Ambrosia Software"]),
+                windows_place("/pf86", &["Ambrosia Software"]),
+                windows_place("/local", &["Programs"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn on_windows_a_missing_or_empty_variable_drops_its_places() {
+        for vars in [
+            env(&[PROGRAM_FILES_X86, LOCAL_APP_DATA]),
+            env(&[("ProgramFiles", ""), PROGRAM_FILES_X86, LOCAL_APP_DATA]),
+        ] {
             assert_eq!(
-                usual_places(os, env(&[("HOME", "/home/p")])),
-                Vec::<PathBuf>::new()
+                usual_places(Os::Windows, vars),
+                [
+                    windows_place("/pf86", &[]),
+                    windows_place("/pf86", &["Ambrosia Software"]),
+                    windows_place("/local", &["Programs"]),
+                ]
             );
         }
+        assert_eq!(
+            usual_places(
+                Os::Windows,
+                env(&[
+                    PROGRAM_FILES,
+                    ("ProgramFiles(x86)", ""),
+                    ("LOCALAPPDATA", "")
+                ])
+            ),
+            [
+                windows_place("/pf", &[]),
+                windows_place("/pf", &["Ambrosia Software"]),
+            ]
+        );
+        assert_eq!(
+            usual_places(Os::Windows, env(&[LOCAL_APP_DATA])),
+            [windows_place("/local", &["Programs"])]
+        );
+    }
+
+    #[test]
+    fn on_32_bit_windows_the_one_program_files_folder_is_tried_once() {
+        assert_eq!(
+            usual_places(
+                Os::Windows,
+                env(&[PROGRAM_FILES, ("ProgramFiles(x86)", "/pf"), LOCAL_APP_DATA])
+            ),
+            [
+                windows_place("/pf", &[]),
+                windows_place("/pf", &["Ambrosia Software"]),
+                windows_place("/local", &["Programs"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn on_windows_with_no_variables_there_are_no_usual_places() {
+        assert_eq!(
+            usual_places(Os::Windows, env(&[("HOME", "/home/p")])),
+            Vec::<PathBuf>::new()
+        );
     }
 
     #[test]
@@ -774,6 +903,79 @@ mod tests {
             }
             other => panic!("unreadable: {:?}", kind(&other)),
         }
+    }
+
+    /// A Windows `.rez` file the loader reads.
+    fn rez_file() -> Vec<u8> {
+        RezBuilder::new()
+            .resource(ResType(*b"STR#"), 128, None, &[0, 0])
+            .build()
+            .bytes
+    }
+
+    /// Lays out an `EV Nova` folder as EV Nova CE unzips it, under `root`:
+    /// its interface file, and a `Nova Files` holding `files`.
+    fn ce_install(root: &Path, files: &[(&str, Vec<u8>)]) -> PathBuf {
+        let ev_nova = root.join("EV Nova");
+        let nova_files = ev_nova.join("Nova Files");
+        fs::create_dir_all(&nova_files).expect("makes the folders");
+        fs::write(ev_nova.join("Nova.rez"), rez_file()).expect("writes");
+        for (name, bytes) in files {
+            fs::write(nova_files.join(name), bytes).expect("writes");
+        }
+        nova_files
+    }
+
+    /// A fake Windows environment whose three roots are in `tmp`.
+    fn windows_env(tmp: &Path) -> impl Fn(&str) -> Option<OsString> + use<> {
+        let roots = [
+            ("ProgramFiles", tmp.join("pf")),
+            ("ProgramFiles(x86)", tmp.join("pf86")),
+            ("LOCALAPPDATA", tmp.join("local")),
+        ];
+        move |name| {
+            roots
+                .iter()
+                .find(|(var, _)| *var == name)
+                .map(|(_, dir)| dir.clone().into_os_string())
+        }
+    }
+
+    #[test]
+    fn a_ce_install_in_program_files_x86_is_found_on_disk_without_asking() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        fs::create_dir_all(tmp.path().join("pf")).expect("makes the folder");
+        let nova_files = ce_install(&tmp.path().join("pf86"), &[("Nova Data 1.rez", rez_file())]);
+        let usual = usual_places(Os::Windows, windows_env(tmp.path()));
+        let mut dialog = Picks::default();
+        let located = locate(None, None, &usual, &DiskData, &mut dialog);
+        let found = located.outcome.expect("found");
+        assert_eq!((found.dir, found.via), (nova_files, Via::Usual));
+        assert_eq!(found.data.files().len(), 1);
+        assert_eq!(located.remember, Remember::Keep);
+        assert_eq!(dialog.prompts, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_nova_files_with_only_music_and_movies_is_not_a_usual_place() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        ce_install(
+            &tmp.path().join("pf86"),
+            &[
+                ("Nova Music.mp3", b"ID3\x04\0\0\0\0\0\0".to_vec()),
+                ("Race 1.mov", b"\0\0\0\x14ftypqt  ".to_vec()),
+            ],
+        );
+        let per_user = ce_install(
+            &tmp.path().join("local").join("Programs"),
+            &[("Nova Data 1.rez", rez_file())],
+        );
+        let usual = usual_places(Os::Windows, windows_env(tmp.path()));
+        let mut dialog = Picks::default();
+        let located = locate(None, None, &usual, &DiskData, &mut dialog);
+        let found = located.outcome.expect("found");
+        assert_eq!((found.dir, found.via), (per_user, Via::Usual));
+        assert_eq!(dialog.prompts, Vec::<String>::new());
     }
 
     fn kind<D>(opened: &Opened<D>) -> &'static str {
