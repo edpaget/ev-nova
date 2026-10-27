@@ -9052,6 +9052,48 @@ mod tests {
         (combat, ships, events, strikes)
     }
 
+    /// The collision passes among `ships` and `stellars`, with `arsenal`
+    /// ([`Combat::test_hits`]).
+    fn test_hits_among(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        arsenal: &Arsenal,
+        stellars: &mut [StellarTarget],
+    ) {
+        run_with(combat, ships, arsenal, |combat, fighters, arena, chance| {
+            let scenery = Scenery {
+                stellars,
+                ..Scenery::default()
+            };
+            combat.test_hits(fighters, arena, scenery, chance);
+        });
+    }
+
+    /// Ship A at the centre fires `weapon` once to the right in the ship
+    /// loop, among `others`, with `arsenal`; the shot takes `moves` moves
+    /// in `_HandleShot`, and the collision passes test the last of them
+    /// among `stellars`. The events, and the strikes on stellars, in order.
+    fn shot_into_stellars(
+        weapon: WeaponRecord,
+        others: Vec<Ship>,
+        stellars: &mut [StellarTarget],
+        arsenal: &Arsenal,
+        moves: u32,
+    ) -> (Combat, Vec<Ship>, Vec<CombatEvent>, Vec<StellarStrike>) {
+        let mut combat = Combat::default();
+        let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(weapon)];
+        ships.extend(others);
+        handle_npcs_with(&mut combat, &mut ships, arsenal);
+        ships[0] = Ship::at(1, 0.0, 0.0);
+        for _ in 0..moves {
+            fly_shots_with(&mut combat, &mut ships, arsenal);
+        }
+        test_hits_among(&mut combat, &mut ships, arsenal, stellars);
+        let events = combat.take_events();
+        let strikes = combat.take_stellar_strikes();
+        (combat, ships, events, strikes)
+    }
+
     fn strike(damage: i64, destroyed: bool) -> StellarStrike {
         StellarStrike {
             stellar: StellarId(128),
@@ -9074,12 +9116,13 @@ mod tests {
     #[test]
     fn a_planet_type_shot_entering_a_stellar_damages_it_by_its_mass_and_energy_and_is_gone() {
         let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
-        let (combat, _, events, strikes) = shoot_once(
+        // Its sixth move, from 75 to 90, enters it.
+        let (combat, _, events, strikes) = shot_into_stellars(
             planet_gun(),
             Vec::new(),
             &mut stellars,
             &Arsenal::default(),
-            7,
+            6,
         );
         assert_eq!(strikes, [strike(14, false)], "4 mass and 10 energy");
         assert_eq!(stellars[0].strength, 86);
@@ -9136,8 +9179,9 @@ mod tests {
     #[test]
     fn a_shot_of_another_weapon_passes_through_a_stellar() {
         let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+        // The move a planet-type shot enters it on.
         let (combat, _, events, strikes) =
-            shoot_once(blaster(), Vec::new(), &mut stellars, &Arsenal::default(), 8);
+            shot_into_stellars(blaster(), Vec::new(), &mut stellars, &Arsenal::default(), 6);
         assert_eq!(strikes, []);
         assert_eq!(stellars[0].strength, 100);
         assert_eq!(combat.shots().len(), 1, "flying on");
@@ -9151,12 +9195,13 @@ mod tests {
         let mut planet = Ship::at(2, 100.0, 0.0);
         planet.hull.planet_type = true;
         let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
-        let (_, ships, _, strikes) = shoot_once(
+        // Its sixth move reaches both.
+        let (_, ships, _, strikes) = shot_into_stellars(
             planet_gun(),
             vec![planet],
             &mut stellars,
             &Arsenal::default(),
-            8,
+            6,
         );
         assert_eq!(strikes, []);
         assert_eq!(stellars[0].strength, 100);
@@ -9172,9 +9217,9 @@ mod tests {
             speed: 10_000,
             ..planet_gun()
         };
-        // Its first move, tested the next tick.
+        // Its first move.
         let (_, _, events, strikes) =
-            shoot_once(fast, Vec::new(), stellars, &Arsenal::default(), 2);
+            shot_into_stellars(fast, Vec::new(), stellars, &Arsenal::default(), 1);
         let at = explosions(&events).iter().map(|(at, _)| *at).collect();
         (strikes, at)
     }
@@ -9237,8 +9282,9 @@ mod tests {
             ..planet_gun()
         };
         let mut stellars = [stellar_at(150.0, 0.0, 10.0, 100)];
+        // Its second move, from 100 to 200.
         let (_, _, events, strikes) =
-            shoot_once(fast, Vec::new(), &mut stellars, &Arsenal::default(), 3);
+            shot_into_stellars(fast, Vec::new(), &mut stellars, &Arsenal::default(), 2);
         assert_eq!(strikes, [strike(14, false)]);
         let seen = explosions(&events);
         assert!(
@@ -9256,12 +9302,13 @@ mod tests {
             ..shell
         };
         let mut stellars = [stellar_at(15.0, 0.0, 10.0, 100)];
-        let (combat, ships, _, strikes) = shoot_once(
+        // Its first move, from 0 to 10, enters it.
+        let (mut combat, mut ships, _, strikes) = shot_into_stellars(
             shell,
             vec![Ship::at(2, 15.0, 40.0)],
             &mut stellars,
             &arsenal,
-            5,
+            1,
         );
         assert_eq!(strikes.len(), 1);
         assert_eq!(
@@ -9270,6 +9317,11 @@ mod tests {
             "no blast"
         );
         assert_eq!(combat.shots(), [], "no sub-munitions");
+        // Nor at what would have been the end of its life.
+        for _ in 0..3 {
+            fly_shots_with(&mut combat, &mut ships, &arsenal);
+        }
+        assert_eq!(combat.shots(), [], "none later");
     }
 
     #[test]
@@ -9279,23 +9331,22 @@ mod tests {
             ..planet_gun()
         };
         let mut stellars = [stellar_at(0.0, 0.0, 1000.0, 100)];
-        // Its fourth move, the first past its safety, is tested on the
-        // fifth tick.
-        for ticks in 1..=4 {
+        // Its fourth move is the first past its safety.
+        for moves in 0..=3 {
             let (_, _, _, strikes) =
-                shoot_once(safe, Vec::new(), &mut stellars, &Arsenal::default(), ticks);
-            assert_eq!(strikes, [], "{ticks}");
+                shot_into_stellars(safe, Vec::new(), &mut stellars, &Arsenal::default(), moves);
+            assert_eq!(strikes, [], "{moves}");
         }
         let (_, _, _, strikes) =
-            shoot_once(safe, Vec::new(), &mut stellars, &Arsenal::default(), 5);
+            shot_into_stellars(safe, Vec::new(), &mut stellars, &Arsenal::default(), 4);
         assert_eq!(strikes, [strike(14, false)], "its fourth move");
         let mut stellars = [stellar_at(0.0, 0.0, 1000.0, 100)];
-        let (_, _, _, strikes) = shoot_once(
+        let (_, _, _, strikes) = shot_into_stellars(
             planet_gun(),
             Vec::new(),
             &mut stellars,
             &Arsenal::default(),
-            2,
+            1,
         );
         assert_eq!(strikes, [strike(14, false)], "none: its first move");
     }
@@ -9311,14 +9362,10 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(planet_gun()),
             Ship::at(2, 0.0, 50.0).armed(planet_gun()),
         ];
-        tick_by(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
-        // Their first moves, the next tick, tested the tick after.
-        for ship in &mut ships {
-            ship.trigger = QUIET;
-        }
-        for _ in 0..2 {
-            tick_by(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
-        }
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        // Their first moves, tested.
+        phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+        test_hits_among(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
         (
             combat.take_stellar_strikes(),
             combat.shots().len(),
@@ -9353,9 +9400,22 @@ mod tests {
             ..laser()
         };
         let mut stellars = [stellar_at(0.0, 0.0, 1000.0, 100)];
-        let (_, _, _, strikes) =
-            shoot_once(beam, Vec::new(), &mut stellars, &Arsenal::default(), 3);
-        assert_eq!(strikes, []);
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(beam)];
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.beams().len(), 1);
+        // `_HandleBeams` each tick of its 3.
+        for _ in 0..3 {
+            phase::run(
+                &mut combat,
+                &mut ships,
+                &NovaDisable,
+                |combat, fighters, arena, chance| {
+                    combat.close_tick(fighters, arena, &mut stellars, chance);
+                },
+            );
+        }
+        assert_eq!(combat.take_stellar_strikes(), []);
         assert_eq!(stellars[0].strength, 100);
     }
 
