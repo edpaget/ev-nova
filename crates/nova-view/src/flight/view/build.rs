@@ -6,15 +6,14 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::PlayerCommand;
 use nova_sim::{
     ALERT_CICN, AsteroidCatalog, Behaviour, BoardingRule, CombatCatalog, CommCatalog, DisableRule,
     FixedStep, HailOptions, HashedRolls, LegalCode, Pilot, PilotCatalog, PointDefenceRule,
     Rulebook, Session, StartError, TrafficCatalog,
 };
 use nova_sim::{
-    ControlBits, HireTerms, KeptBerths, LastRefresh, PersonRules, PlayerInfo,
-    pilot_panel::PilotPanel, ship_layer::SlotSprites, story::sprite_pool::StellarSpritePool,
+    ControlBits, HireTerms, KeptBerths, LastRefresh, PersonRules, ship_layer::SlotSprites,
+    story::sprite_pool::StellarSpritePool,
 };
 
 use crate::flight::cadence::HudCadence;
@@ -33,7 +32,7 @@ use crate::system::kept_frames::KeptFrames;
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::DialogTemplate;
-use crate::{Diagnostic, ScreenAction, SoundPrefs};
+use crate::{Diagnostic, SoundPrefs};
 
 use super::{
     BarFor, FlightOverlays, FlightView, Metrics, SharedChance, opening_scene, window_width,
@@ -523,87 +522,6 @@ impl<
             sim: self.sim.with_hail_options(hail_options),
             ..self
         }
-    }
-
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen since
-    /// this was last taken, once: the router opens it on
-    /// [`FlightView::player_info`] over the paused flight.
-    pub fn take_player_info_request(&mut self) -> bool {
-        std::mem::take(&mut self.pending_player_info)
-    }
-
-    /// What the player info screen shows, as [`Session::player_info`]
-    /// gives it from the screen's catalog, marked with the cheats setting,
-    /// changing nothing; `None` for a session that failed. An opening of
-    /// the screen is
-    /// [`FlightView::open_player_info`].
-    #[must_use]
-    pub fn player_info(&self) -> Option<PlayerInfo> {
-        let session = self.sim.session.as_ref().ok()?;
-        Some(self.marked(session.player_info(&*self.catalog)))
-    }
-
-    /// What the main screen's pilot panel says about the pilot, as
-    /// [`Session::pilot_panel`] gives it from the screen's catalog,
-    /// changing nothing; `None` for a session that failed.
-    #[must_use]
-    pub fn pilot_panel(&self) -> Option<PilotPanel> {
-        let session = self.sim.session.as_ref().ok()?;
-        Some(session.pilot_panel(&*self.catalog))
-    }
-
-    /// The player info dialog opens, as [`Session::open_player_info`] has
-    /// it: the session resets first, so the screen it gives shows the
-    /// cargo trimmed; none in a jump or while the ship breaks up, when
-    /// nothing opens, or for a session that failed. It is marked with the
-    /// cheats setting. The router opens the screen on it, from flight and
-    /// from the spaceport alike.
-    pub fn open_player_info(&mut self) -> Option<PlayerInfo> {
-        let session = self.sim.session.as_mut().ok()?;
-        let info = session.open_player_info(&*self.catalog)?;
-        Some(self.marked(info))
-    }
-
-    /// `info` marked with the cheats setting ([`FlightOverlays::cheats`]),
-    /// which the session leaves off.
-    fn marked(&self, info: PlayerInfo) -> PlayerInfo {
-        PlayerInfo {
-            cheats: self.overlays.cheats,
-            ..info
-        }
-    }
-
-    /// Presses [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) outside a jump, its [`PlayerCommand`]
-    /// taken: when the session takes the press too
-    /// ([`Session::press_player_info`]), asks the router for the player
-    /// info screen, letting go of the flight keys (`_HandlePlayer`
-    /// @0x702bf-0x703c9); when it refuses, with its beep, nothing more.
-    pub(super) fn ask_player_info(&mut self) -> ScreenAction {
-        if self.press_player_info() {
-            self.pending_player_info = true;
-            self.held.clear();
-        }
-        ScreenAction::None
-    }
-
-    /// Whether the session takes a press of [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
-    /// ([`Session::press_player_info`], which beeps a refusal); a failed
-    /// session takes it, and the router opens nothing for it.
-    fn press_player_info(&mut self) -> bool {
-        match &mut self.sim.session {
-            Ok(session) => session.press_player_info(),
-            Err(_) => true,
-        }
-    }
-
-    /// A press of [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) during a jump: outside the map, the
-    /// session refuses it with its beep ([`Session::press_player_info`],
-    /// @0x702f7, @0x7039a-0x703bd), when the player's fate takes it.
-    pub(super) fn refuse_player_info(&mut self) -> ScreenAction {
-        if !self.map_open && self.takes(PlayerCommand::PlayerInfo) {
-            let _ = self.press_player_info();
-        }
-        ScreenAction::None
     }
 
     /// The flight with each day's events and the traffic rolled on

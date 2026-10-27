@@ -523,31 +523,22 @@ fn fighters_abandoned_in_a_move_are_told_after_a_qs_message() {
 
 // Persons' mission offers.
 
+/// Kept real for phase 13 (rdm:phase/view-sim-seam/phase-13-lifecycle-at-the-edge):
+/// `Screen::input`'s press filter routes P to the player info's press,
+/// and lets no repeat through. What the press does runs on `FakeFlight`
+/// (`tests/faked_player.rs`).
 #[test]
-fn p_asks_for_the_player_info_once_letting_go_of_the_flight_keys() {
+fn p_through_the_screen_asks_once_and_a_repeat_does_not() {
     let mut view = flight();
     assert!(!view.take_player_info_request());
-    view.input(&key(Key::Up, true));
     tap(&mut view, PLAYER_INFO_KEY);
     assert!(view.take_player_info_request());
-    assert!(!view.take_player_info_request(), "once");
     view.input(&Input::Key {
         key: PLAYER_INFO_KEY,
         pressed: true,
         repeat: true,
     });
     assert!(!view.take_player_info_request(), "not a repeat");
-    view.tick(TICK);
-    assert_eq!(
-        view.session().expect("flying").player().velocity,
-        Vec2::ZERO,
-        "the flight keys let go"
-    );
-    assert_eq!(
-        view.player_info().map(|info| info.credits),
-        Some(view.pilot().expect("flying").cash())
-    );
-    assert!(view.take_sounds().is_empty(), "silent");
 }
 
 #[test]
@@ -586,15 +577,6 @@ fn p_during_a_jump_beeps_and_asks_nothing() {
 }
 
 #[test]
-fn p_while_the_player_breaks_up_beeps_and_asks_nothing() {
-    let mut view = breaking_up();
-    let _ = view.take_sounds();
-    tap(&mut view, PLAYER_INFO_KEY);
-    assert!(!view.take_player_info_request());
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::Refused)]);
-}
-
-#[test]
 fn p_once_the_player_has_exploded_or_ejected_does_nothing_and_says_nothing() {
     let mut holding = exploded();
     assert!(matches!(fate_of(&holding), PlayerFate::Holding { .. }));
@@ -606,43 +588,6 @@ fn p_once_the_player_has_exploded_or_ejected_does_nothing_and_says_nothing() {
         assert!(!view.take_player_info_request(), "{why}");
         assert_eq!(view.take_sounds(), [], "{why}");
     }
-}
-
-#[test]
-fn p_while_disabled_asks_for_the_player_info_in_silence() {
-    let mut view = disabled_player();
-    let _ = view.take_sounds();
-    tap(&mut view, PLAYER_INFO_KEY);
-    assert!(view.take_player_info_request());
-    assert_eq!(view.take_sounds(), []);
-}
-
-#[test]
-fn opening_the_player_info_gives_the_screen_unless_in_a_jump() {
-    let mut view = flight();
-    assert_eq!(view.open_player_info(), view.player_info(), "flying");
-    let mut view = flight();
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    view.input(&key(JUMP, true));
-    assert!(view.session().expect("flying").preparing_jump().is_some());
-    assert!(view.player_info().is_some(), "the getter reads it");
-    assert_eq!(view.open_player_info(), None, "no opening (@0x5a02a)");
-}
-
-#[test]
-fn open_player_info_carries_the_cheats_setting() {
-    let mut view = flight();
-    assert!(
-        !view.open_player_info().expect("opens").cheats,
-        "off by default"
-    );
-    let mut view = flight().with_overlays(FlightOverlays {
-        cheats: true,
-        ..FlightOverlays::default()
-    });
-    assert!(view.open_player_info().expect("opens").cheats);
-    assert!(view.player_info().expect("reads").cheats, "the getter too");
 }
 
 #[test]

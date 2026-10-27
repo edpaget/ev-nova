@@ -13,11 +13,13 @@
 //! commands lives on the session's side, with the catalog the view
 //! shared, the chance, the law, the boarding rule and the hail options,
 //! [`FlightSim::drain`] to `Session::drain_events`, [`CommSource`]'s to
-//! `Session::hailing` and `Session::boarding`, and [`PortSource`]'s and
-//! [`NameSource`]'s to the session's method of each name. A session that failed to start
+//! `Session::hailing` and `Session::boarding`, and [`PortSource`]'s,
+//! [`NameSource`]'s and [`PilotSource`]'s to the session's method of each
+//! name. A session that failed to start
 //! fills the default frame, runs no step, refuses every command, answers
 //! nothing open and drains nothing. [`SessionFlight::transact`], which
-//! takes a closure no command can carry, is the adapter's own API.
+//! takes a closure no command can carry, and [`SessionFlight::pilot`],
+//! the pilot the app saves and names, are the adapter's own API.
 //!
 //! **For the strangler's length**, the view's
 //! `FlightView<C, SessionFlight<C>>` blocks reach the session and the
@@ -39,17 +41,19 @@ use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
+use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
     Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DescMovie, DisableRule, Good,
     HailOptions, HailView, HireList, Hover, JunkId, LegalCode, MapMarks, Market, MissionId,
     MissionInfo, News, NovaAi, NovaBoarding, NovaDisable, NovaLaw, OutfitId, Outfitter, Pilot,
-    PlayerCommand, PlunderView, PointDefenceRule, Rules, SavedNav, Session, ShipId, ShipNaming,
-    ShipRefusal, Shipyard, SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, Vec2,
+    PlayerCommand, PlayerInfo, PlunderView, PointDefenceRule, Rules, SavedNav, Session, ShipId,
+    ShipNaming, ShipRefusal, Shipyard, SimCatalog, StellarId, StepCollaborators, SystemId,
+    TagNames, Vec2,
 };
 
 use super::SharedChance;
-use super::sim_port::{CommSource, FlightSim, MapSource, NameSource, PortSource};
+use super::sim_port::{CommSource, FlightSim, MapSource, NameSource, PilotSource, PortSource};
 
 /// The flight of a real `nova_sim::Session`, or why it could not start,
 /// with the collaborators its calls are handed (see the module docs).
@@ -218,6 +222,14 @@ impl<C> SessionFlight<C> {
             hail_options,
             ..self
         }
+    }
+
+    /// The pilot flying, if the flight started: the adapter's own API, not
+    /// the port's, for the app's save and the name it shows, as
+    /// [`SessionFlight::transact`] is.
+    #[must_use]
+    pub fn pilot(&self) -> Option<&Pilot> {
+        self.session().ok().map(Session::pilot)
     }
 
     /// Changes the pilot with `change` while landed, as
@@ -548,6 +560,23 @@ impl<C> NameSource for SessionFlight<C> {
     }
 }
 
+/// Each forwards to the session's method of its name, over the catalog
+/// the view shared ([`SessionFlight::share_catalog`]); a failed session,
+/// or one never shared a catalog, shows none.
+impl<C> PilotSource for SessionFlight<C> {
+    fn player_info(&self) -> Option<PlayerInfo> {
+        let session = self.session().ok()?;
+        let catalog = &self.catalog.as_ref()?.0;
+        Some(session.player_info(&**catalog))
+    }
+
+    fn pilot_panel(&self) -> Option<PilotPanel> {
+        let session = self.session().ok()?;
+        let catalog = &self.catalog.as_ref()?.0;
+        Some(session.pilot_panel(&**catalog))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use nova_sim::StellarPick;
@@ -613,6 +642,8 @@ mod tests {
         assert_eq!(flight.cargo_name(0), None);
         assert_eq!(flight.player_ship_name(), None);
         assert_eq!(flight.long_date(), "");
+        assert_eq!(flight.player_info(), None);
+        assert_eq!(flight.pilot_panel(), None);
     }
 
     #[test]
@@ -719,6 +750,8 @@ mod tests {
             FlightCommand::EnterOfferVenue(1),
             FlightCommand::ReloadOfferDesc(MissionId(130)),
             FlightCommand::PressMissionInfo,
+            FlightCommand::PressPlayerInfo,
+            FlightCommand::OpenPlayerInfo,
             FlightCommand::Jettison { all: true },
             FlightCommand::Assign(nova_sim::Assignment::Escort),
             FlightCommand::MarkIntroSeen,
@@ -781,6 +814,11 @@ mod tests {
         let mut into = vec![FlightEvent::SaveDue];
         failed().drain(&mut into);
         assert_eq!(into, [FlightEvent::SaveDue]);
+    }
+
+    #[test]
+    fn a_failed_flight_has_no_pilot() {
+        assert!(failed().pilot().is_none());
     }
 
     #[test]

@@ -44,6 +44,7 @@ use crate::landing::LandingRefusal;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
 use crate::player_fate::{Drawn as ShipDrawn, PlayerCommand, PlayerFate};
+use crate::player_info::PlayerInfo;
 use crate::red_alert::AlertIcon;
 use crate::reserves::{Gauge, Reserves};
 use crate::session::{
@@ -662,6 +663,10 @@ pub enum FlightCommand {
     /// The mission info key
     /// ([`Session::press_mission_info`](crate::Session::press_mission_info)).
     PressMissionInfo,
+    /// The player info key (`Session::press_player_info`).
+    PressPlayerInfo,
+    /// The player info dialog opens (`Session::open_player_info`).
+    OpenPlayerInfo,
     /// Jettison the cargo, `all` of it or all but the mission cargo
     /// ([`Session::jettison_cargo`](crate::Session::jettison_cargo)).
     Jettison {
@@ -735,6 +740,7 @@ impl FlightCommand {
             Self::Board => Some(PlayerCommand::Board),
             Self::CommandEscorts { .. } => Some(PlayerCommand::Escort),
             Self::PressMissionInfo => Some(PlayerCommand::MissionInfo),
+            Self::PressPlayerInfo => Some(PlayerCommand::PlayerInfo),
             Self::MapClick(_)
             | Self::CycleMapSelection
             | Self::ClearRoute
@@ -785,7 +791,8 @@ impl FlightCommand {
             | Self::ReloadOfferDesc(_)
             | Self::Jettison { .. }
             | Self::Assign(_)
-            | Self::MarkIntroSeen => None,
+            | Self::MarkIntroSeen
+            | Self::OpenPlayerInfo => None,
         }
     }
 }
@@ -956,6 +963,13 @@ pub enum Answer {
     /// among them: not [`Answer::Refused`], which is left to a flight
     /// with no session, as the view says #354 for that.
     MissionInfo(MissionInfoPress),
+    /// Whether the session took a [`FlightCommand::PressPlayerInfo`]: its
+    /// own refusal, which beeps, rides it, not [`Answer::Refused`], which
+    /// is left to a flight with no session.
+    PlayerInfoPressed(bool),
+    /// What a [`FlightCommand::OpenPlayerInfo`] opened: the screen, or
+    /// none in a jump or while the ship breaks up.
+    PlayerInfo(Option<Box<PlayerInfo>>),
     /// What a [`FlightCommand::Assign`] did with the ship captured.
     Assigned(Assigned),
 }
@@ -1623,6 +1637,8 @@ mod tests {
             (C::CommAcknowledged, None),
             (C::CommTicked, None),
             (C::PressMissionInfo, Some(PlayerCommand::MissionInfo)),
+            (C::PressPlayerInfo, Some(PlayerCommand::PlayerInfo)),
+            (C::OpenPlayerInfo, None),
         ];
         for (command, gate) in gated {
             assert_eq!(command.gate(), gate, "{command:?}");

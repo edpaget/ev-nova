@@ -30,6 +30,13 @@ fn a_session_that_failed_has_no_pilot_desk() {
     assert!(view.scene().is_none());
 }
 
+/// This phase's real check of the adapter's [`PilotSource`]
+/// (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks): the pilot
+/// panel and the player info are the session's, over the catalog the
+/// view shared. What the view does with them runs on `FakeFlight`
+/// (`tests/faked_player.rs`).
+///
+/// [`PilotSource`]: crate::flight::sim_port::PilotSource
 #[test]
 fn the_pilot_panel_is_the_sessions_and_none_for_a_session_that_failed() {
     let view = landed_view();
@@ -37,6 +44,11 @@ fn the_pilot_panel_is_the_sessions_and_none_for_a_session_that_failed() {
     assert_eq!(
         view.pilot_panel(),
         Some(session.pilot_panel(view.catalog()))
+    );
+    assert_eq!(
+        view.player_info(),
+        Some(session.player_info(view.catalog())),
+        "the player info too"
     );
     assert_eq!(
         view.pilot_panel().map(|panel| panel.pilot_name),
@@ -47,6 +59,7 @@ fn the_pilot_panel_is_the_sessions_and_none_for_a_session_that_failed() {
         ..catalog()
     });
     assert_eq!(broken.pilot_panel(), None);
+    assert_eq!(broken.player_info(), None);
 }
 
 #[test]

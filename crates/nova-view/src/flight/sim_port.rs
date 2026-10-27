@@ -13,14 +13,16 @@
 //! code across the port a slice at a time, growing the port and its
 //! values as it goes.
 //!
-//! The supertraits, [`MapSource`], [`CommSource`], [`PortSource`] and
-//! [`NameSource`], hold the course map's, the comm's, the spaceport's and
-//! the wording's questions, each method defaulting to "nothing open" or
-//! "no name", so a sim that has none of them open needs no code.
-//! [`MapSource`] has the course map's, the floating map's and the nav
-//! area's, [`CommSource`] the hail's and the boarding's, [`PortSource`]
-//! the spaceport's screens' and the mission screens', and [`NameSource`]
-//! the names and the date the view words the flight's messages with.
+//! The supertraits, [`MapSource`], [`CommSource`], [`PortSource`],
+//! [`NameSource`] and [`PilotSource`], hold the course map's, the comm's,
+//! the spaceport's, the wording's and the pilot's screens' questions,
+//! each method defaulting to "nothing open" or "no name", so a sim that
+//! has none of them open needs no code. [`MapSource`] has the course
+//! map's, the floating map's and the nav area's, [`CommSource`] the hail's
+//! and the boarding's, [`PortSource`] the spaceport's screens' and the
+//! mission screens', [`NameSource`] the names and the date the view words
+//! the flight's messages with, and [`PilotSource`] the player info
+//! screen's and the pilot panel's.
 //!
 //! The `fixture` feature (and this crate's tests) exposes `fixture`:
 //! `FakeFlight`, a scripted sim for the view's component tests, and
@@ -35,11 +37,12 @@ use nova_sim::map_borders::BorderSources;
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::mission::screens::OFFER_GAP_TICKS;
+use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
     DescMovie, Good, HailView, HireList, Hover, JunkId, MapMarks, Market, MissionId, MissionInfo,
-    News, OutfitId, Outfitter, PlayerCommand, PlunderView, SavedNav, ShipId, ShipNaming,
-    ShipRefusal, Shipyard, StellarId, SystemId, Vec2,
+    News, OutfitId, Outfitter, PlayerCommand, PlayerInfo, PlunderView, SavedNav, ShipId,
+    ShipNaming, ShipRefusal, Shipyard, StellarId, SystemId, Vec2,
 };
 
 #[cfg(any(test, feature = "fixture"))]
@@ -47,7 +50,7 @@ pub mod fixture;
 
 /// The flight the view shows, as the view needs it (see the module
 /// docs).
-pub trait FlightSim: MapSource + CommSource + PortSource + NameSource {
+pub trait FlightSim: MapSource + CommSource + PortSource + NameSource + PilotSource {
     /// Fills `into` with what the view draws now, writing every field, so
     /// a frame kept from an earlier fill shows nothing stale.
     fn frame(&self, into: &mut FlightFrame);
@@ -407,6 +410,25 @@ pub trait NameSource {
     }
 }
 
+/// The pilot's screens' questions of the flight: what the player info
+/// screen and the main screen's pilot panel show, each none by default, a
+/// flight with no pilot to show. Opening the player info screen is a
+/// command ([`FlightCommand::OpenPlayerInfo`]), as it resets the flight
+/// first.
+pub trait PilotSource {
+    /// What the player info screen shows, changing nothing
+    /// (`nova_sim::Session::player_info`).
+    fn player_info(&self) -> Option<PlayerInfo> {
+        None
+    }
+
+    /// What the main screen's pilot panel says about the pilot, changing
+    /// nothing (`nova_sim::Session::pilot_panel`).
+    fn pilot_panel(&self) -> Option<PilotPanel> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,6 +443,8 @@ mod tests {
     impl PortSource for NothingOpen {}
 
     impl NameSource for NothingOpen {}
+
+    impl PilotSource for NothingOpen {}
 
     /// A flight with nothing to it, answering every port method it may
     /// leave to its default by that default.
@@ -457,6 +481,8 @@ mod tests {
     impl PortSource for Defaults {}
 
     impl NameSource for Defaults {}
+
+    impl PilotSource for Defaults {}
 
     #[test]
     fn by_default_a_description_loads_as_its_raw_text_and_a_missing_one_is_empty() {
@@ -502,6 +528,13 @@ mod tests {
         assert_eq!(source.cargo_name(0), None);
         assert_eq!(source.player_ship_name(), None);
         assert_eq!(source.long_date(), "");
+    }
+
+    #[test]
+    fn a_pilot_source_with_no_pilot_shows_none() {
+        let source = NothingOpen;
+        assert_eq!(source.player_info(), None);
+        assert_eq!(source.pilot_panel(), None);
     }
 
     #[test]

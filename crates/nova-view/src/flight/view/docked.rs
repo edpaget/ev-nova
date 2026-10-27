@@ -300,10 +300,11 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         self.sim.session.as_ref().is_ok_and(Session::load_repaired)
     }
 
-    /// The pilot flying, if the flight started.
+    /// The pilot flying, if the flight started, through the adapter's own
+    /// [`SessionFlight::pilot`](crate::flight::SessionFlight::pilot).
     #[must_use]
     pub fn pilot(&self) -> Option<&Pilot> {
-        self.sim.session.as_ref().ok().map(Session::pilot)
+        self.sim.pilot()
     }
 
     /// Changes the pilot with `change` while landed, as

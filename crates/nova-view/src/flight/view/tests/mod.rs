@@ -86,6 +86,7 @@ mod faked_hail;
 mod faked_hud;
 mod faked_landing;
 mod faked_missions;
+mod faked_player;
 mod faked_shops;
 mod faked_travel;
 mod faked_wording;

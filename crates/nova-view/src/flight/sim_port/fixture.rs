@@ -21,6 +21,7 @@ use nova_sim::map_borders::BorderSources;
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::navigation::NavMode;
+use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::status_cargo::StatusCargo;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{ClassRow, Gauge, HailView, PlunderView, RadarGear, Reserves, Take};
@@ -33,10 +34,10 @@ use nova_sim::{JumpReadiness, PlayerFate};
 use nova_sim::mission::screens::OFFER_GAP_TICKS;
 use nova_sim::{
     Direction, Good, HireList, JunkId, Lot, Market, MissionInfo, News, Order, OutfitId, Outfitter,
-    ShipNaming, ShipRefusal, Shipyard,
+    PlayerInfo, ShipNaming, ShipRefusal, Shipyard,
 };
 
-use super::{CommSource, FlightSim, MapSource, NameSource, PortSource};
+use super::{CommSource, FlightSim, MapSource, NameSource, PilotSource, PortSource};
 
 /// A scripted [`FlightSim`]: it shows the frame it was given, records
 /// each command in the order sent, answers each from a queue
@@ -56,8 +57,9 @@ use super::{CommSource, FlightSim, MapSource, NameSource, PortSource};
 /// records each load ([`FakeFlight::descriptions_loaded`]). It gives the death
 /// `dësc`s it is given ([`FakeFlight::set_death_descs`]), and answers
 /// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]),
-/// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]) and
-/// [`NameSource`] from [`FakeNames`] ([`FakeFlight::names_mut`]). It
+/// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]),
+/// [`NameSource`] from [`FakeNames`] ([`FakeFlight::names_mut`]) and
+/// [`PilotSource`] from [`FakePilot`] ([`FakeFlight::pilot_mut`]). It
 /// answers the message line's commands ([`FlightCommand::CommShown`],
 /// [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`])
 /// done without taking an answer from the queue, as the message line's
@@ -83,6 +85,7 @@ pub struct FakeFlight {
     comm: FakeComm,
     port: FakePort,
     names: FakeNames,
+    pilot: FakePilot,
 }
 
 /// What a [`FakeFlight`] answers the [`CommSource`] questions with, each
@@ -157,6 +160,17 @@ pub struct FakeNames {
     pub player_ship_name: Option<String>,
     /// [`NameSource::long_date`]'s answer.
     pub long_date: String,
+}
+
+/// What a [`FakeFlight`] answers the [`PilotSource`] questions with, each
+/// field the answer to the question of its name. The default shows none,
+/// as a [`PilotSource`]'s defaults do.
+#[derive(Clone, Debug, Default)]
+pub struct FakePilot {
+    /// [`PilotSource::player_info`]'s answer.
+    pub player_info: Option<PlayerInfo>,
+    /// [`PilotSource::pilot_panel`]'s answer.
+    pub pilot_panel: Option<PilotPanel>,
 }
 
 /// The name `names` gives `id`, if it lists one.
@@ -366,6 +380,11 @@ impl FakeFlight {
     /// What the wording's names and date are answered with, to script.
     pub fn names_mut(&mut self) -> &mut FakeNames {
         &mut self.names
+    }
+
+    /// What the pilot's screens are answered with, to script.
+    pub fn pilot_mut(&mut self) -> &mut FakePilot {
+        &mut self.pilot
     }
 
     /// The map's questions asked whose arguments matter, in the order
@@ -634,6 +653,16 @@ impl NameSource for FakeFlight {
 
     fn long_date(&self) -> String {
         self.names.long_date.clone()
+    }
+}
+
+impl PilotSource for FakeFlight {
+    fn player_info(&self) -> Option<PlayerInfo> {
+        self.pilot.player_info.clone()
+    }
+
+    fn pilot_panel(&self) -> Option<PilotPanel> {
+        self.pilot.pilot_panel.clone()
     }
 }
 
@@ -1774,6 +1803,8 @@ mod tests {
     impl MapSource for Broken {}
 
     impl NameSource for Broken {}
+
+    impl PilotSource for Broken {}
 
     impl CommSource for Broken {
         fn boarding(&self) -> Option<PlunderView> {

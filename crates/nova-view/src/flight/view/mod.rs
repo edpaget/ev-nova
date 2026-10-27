@@ -687,6 +687,7 @@ mod interface;
 mod messages;
 mod missions;
 mod outputs;
+mod player;
 mod port_screen_map;
 mod readouts;
 mod screen;

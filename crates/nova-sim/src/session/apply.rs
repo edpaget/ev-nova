@@ -6,8 +6,9 @@
 //! commands' arms are in the `travel` module, the comm's, the
 //! boarding's and the escorts' in the `comm` module, the spaceport's
 //! shops', bar's, jettison's, assignment's and intro's in the `port`
-//! module, and the mission screens' and the mission info key's in the
-//! `missions` module.
+//! module, the mission screens' and the mission info key's in the
+//! `missions` module, and the player info key's and its dialog's in the
+//! `player_info` module.
 
 use super::Session;
 use crate::board::BoardingRule;
@@ -19,6 +20,7 @@ use crate::session::SimCatalog;
 
 mod comm;
 mod missions;
+mod player_info;
 mod port;
 mod travel;
 
@@ -95,6 +97,9 @@ impl Session {
     ///   the accept, the refusal and the abort, the mission info's rows,
     ///   and its key, whose own refusal rides its answer.
     /// - None of the spaceport's or the missions' reads the catalog.
+    /// - The player info's are answered as the `player_info` module says:
+    ///   its key, whose own refusal rides its answer, and its dialog's
+    ///   opening, refused without a catalog.
     /// - The rest are never refused, and answer [`Answer::Done`]:
     ///   [`FlightCommand::SelectWeapon`] ([`Session::press_weapon_select`],
     ///   which the next pass takes; the view asks the gate first),
@@ -228,6 +233,9 @@ impl Session {
             | FlightCommand::EnterOfferVenue(_)
             | FlightCommand::ReloadOfferDesc(_)
             | FlightCommand::PressMissionInfo => self.apply_missions(command, collab),
+            FlightCommand::PressPlayerInfo | FlightCommand::OpenPlayerInfo => {
+                self.apply_player_info(command, collab)
+            }
         }
     }
 }
