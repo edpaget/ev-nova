@@ -276,8 +276,8 @@ fn the_message_text_is_drawn_over_the_over_beams_and_under_the_floating_map() {
 
 #[test]
 fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
-    // The menu's rows are the session's, in the world's extras
-    // (rdm:phase/view-sim-seam/phase-10-comm-escorts-boarding-on-port).
+    // The menu's rows are the frame's (`FrameHud::escort_rows`), shown
+    // here as a step would leave them.
     let mut view = firing_with_sprays();
     let mut hud = nova_sim::flight_frame::FrameHud::default();
     hud.escort_rows[0].present = true;

@@ -318,8 +318,9 @@ pub struct FloatingLinks {
 /// as [`FlightFrame::hud`] carries it: the status bar's gauges, cargo
 /// area, secondary weapon line and radar gear, the `ïntf` it is chosen
 /// by, and the target layer's brackets, Red Alert icon and escort menu
-/// rows. The default is a failed session's: no brackets, no alert, no
-/// escort of any class, and empty reserves and cargo.
+/// rows, with whether an escort is flying. The default is a failed
+/// session's: no brackets, no alert, no escort of any class or flying, and
+/// empty reserves and cargo.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameHud {
     /// The ship's shield, armour and fuel

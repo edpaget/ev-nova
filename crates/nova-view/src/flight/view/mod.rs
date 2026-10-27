@@ -1122,14 +1122,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Whether the flight takes `command` now: the player's command it is
     /// taken under ([`FlightCommand::gate`]) taken
     /// ([`FlightSim::takes`]), or none to ask. The one mapping from a
-    /// command to its gate: the travel commands ask it here, before they
-    /// are sent ([`FlightView::send_gated`]) or before a key's latch moves
-    /// (`FlightView::jump_frame`). The keys that ask a gate mid-input
+    /// command to its gate: the travel, comm and escort commands ask it
+    /// here, before they are sent ([`FlightView::send_gated`]) or before a
+    /// key's latch moves (`FlightView::jump_frame`,
+    /// `FlightView::board_frame`). The keys that ask a gate mid-input
     /// before any command exists ask it by the key (`Screen::input`'s
     /// filter, `FlightView::command_of`), and so do the polls that hold
     /// no command of their own yet: the nav block and Hyper Select
-    /// (`FlightView::nav_held_frame`), the Board key (phase 10's) and the
-    /// step's holds (`FlightView::step_input`).
+    /// (`FlightView::nav_held_frame`) and the step's holds
+    /// (`FlightView::step_input`).
     ///
     /// [`FlightCommand::gate`]: nova_sim::flight_frame::FlightCommand::gate
     pub(super) fn takes_command(&self, command: &nova_sim::flight_frame::FlightCommand) -> bool {
