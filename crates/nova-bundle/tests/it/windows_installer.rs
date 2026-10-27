@@ -113,6 +113,15 @@ fn product_info(code: &str, attribute: &str) -> String {
     )))
 }
 
+/// The product's Apps & features icon: a path Windows Installer reports
+/// with environment variables (`%APPDATA%\Microsoft\Installer\…`), expanded.
+fn product_icon(code: &str) -> PathBuf {
+    PathBuf::from(one(powershell(&format!(
+        "[Environment]::ExpandEnvironmentVariables((Get-Prop $installer 'ProductInfo' @({}, 'ProductIcon')))",
+        quote(code)
+    ))))
+}
+
 fn related_products() -> Vec<String> {
     powershell(&format!(
         // PowerShell enumerates the returned StringList: one line per item.
@@ -313,8 +322,8 @@ fn installs_for_the_user_alone_upgrades_in_place_and_uninstalls_keeping_settings
 
     // Apps & features: the version and an icon.
     assert_eq!(product_info(&code, "VersionString"), expected_version());
-    let icon = product_info(&code, "ProductIcon");
-    assert!(Path::new(&icon).is_file(), "ProductIcon {icon}");
+    let icon = product_icon(&code);
+    assert!(icon.is_file(), "ProductIcon {}", icon.display());
 
     uninstall(&code, &logs.path().join("uninstall.log"));
     assert_ne!(product_state(&code), INSTALLED);
