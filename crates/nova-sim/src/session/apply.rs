@@ -36,6 +36,8 @@ impl Session {
     ///   answered with what it took, or refused when it changed nothing:
     ///   landed, or a click on nothing it takes.
     /// - The rest are never refused, and answer [`Answer::Done`]:
+    ///   [`FlightCommand::SelectWeapon`] ([`Session::press_weapon_select`],
+    ///   which the next pass takes; the view asks the gate first),
     ///   [`FlightCommand::ClearRoute`] ([`Session::clear_route`]),
     ///   [`FlightCommand::MarkKnown`] ([`Session::mark_known`]),
     ///   [`FlightCommand::CueCourse`] ([`Session::cue_course`]), and the
@@ -109,6 +111,10 @@ impl Session {
             FlightCommand::ClickInSpace { at, drawn } => self
                 .click_in_space(at, &drawn)
                 .map_or(Answer::Refused, Answer::InSpace),
+            FlightCommand::SelectWeapon { backwards } => {
+                self.press_weapon_select(backwards);
+                Answer::Done
+            }
         }
     }
 }
@@ -601,5 +607,23 @@ mod tests {
         };
         assert_eq!(session.apply(click), Answer::Refused);
         assert_eq!(session, before);
+    }
+
+    #[test]
+    fn weapon_select_answers_done_and_the_next_steps_pass_takes_it() {
+        use crate::session::tests::{MISSILE, ROCKET, with_secondaries};
+        let catalog = with_secondaries(catalog());
+        let mut session = Session::start(&catalog).expect("starts");
+        let answer = session.apply(FlightCommand::SelectWeapon { backwards: false });
+        assert_eq!(answer, Answer::Done);
+        assert_eq!(session.secondary(), None, "the press waits for the pass");
+        crate::testkit::work(&mut session, &catalog, crate::flight::Controls::default());
+        assert_eq!(session.secondary(), Some(ROCKET));
+        session.apply(FlightCommand::SelectWeapon { backwards: false });
+        crate::testkit::work(&mut session, &catalog, crate::flight::Controls::default());
+        assert_eq!(session.secondary(), Some(MISSILE));
+        session.apply(FlightCommand::SelectWeapon { backwards: true });
+        crate::testkit::work(&mut session, &catalog, crate::flight::Controls::default());
+        assert_eq!(session.secondary(), Some(ROCKET), "backwards with Option");
     }
 }

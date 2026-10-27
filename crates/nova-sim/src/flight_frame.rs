@@ -446,6 +446,13 @@ pub enum FlightCommand {
         /// The boxes the ships are drawn in.
         drawn: DrawnBoxes,
     },
+    /// A press of Weapon Select, `backwards` with Option down: the next
+    /// pass's secondary block takes it
+    /// ([`Session::press_weapon_select`](crate::Session::press_weapon_select)).
+    SelectWeapon {
+        /// Whether Option was down at the press.
+        backwards: bool,
+    },
 }
 
 /// A press on an in-flight map, as [`FlightCommand::MapClick`] carries it:
