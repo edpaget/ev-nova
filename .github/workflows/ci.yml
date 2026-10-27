@@ -102,8 +102,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Built in an ubuntu:22.04 container, so the tarball's and the
+          # AppImage's binary need no glibc newer than 2.35, the floor
+          # packaging/README.txt records. The image outlives GitHub's
+          # ubuntu-22.04 runner. The Flatpak is built in its own job below.
           - name: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            container: ubuntu:22.04
             target: x86_64-unknown-linux-gnu
           # Nova.app for Apple silicon, in a .dmg: `mise run bundle` builds
           # on the arm64 runner and packs the bundle (crates/nova-bundle).
@@ -116,6 +121,8 @@ jobs:
             os: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
+    # Only the Linux leg names one; empty, a leg runs on the runner itself.
+    container: ${{ matrix.container }}
     # The signing secrets live in the macos-signing environment, whose
     # deployment-branch policy allows only main (infra/github/signing.tf).
     # Only main's macOS leg enters it. Every other leg, and every other
@@ -128,10 +135,17 @@ jobs:
       # As in `ci`: install only the Rust toolchain.
       MISE_AUTO_INSTALL: "false"
     steps:
-      - uses: actions/checkout@v5
-      # nova-audio plays through cpal, which builds against ALSA on Linux.
+      # The container starts bare and as root (no sudo): a compiler for
+      # rustup's toolchain and the C build scripts, git and curl for
+      # checkout and mise, ALSA's headers (nova-audio plays through cpal,
+      # which builds against ALSA on Linux), objdump (binutils) for the
+      # AppImage's glibc check, and file for appimagetool.
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libasound2-dev binutils git curl ca-certificates file xz-utils
+      - uses: actions/checkout@v5
       - uses: jdx/mise-action@v5
         with:
           install: false
@@ -208,7 +222,8 @@ jobs:
       # One top-level directory holding the two binaries, README.txt and
       # LICENSE, and on Linux the share/ tree (the desktop file, the
       # AppStream metainfo and the hicolor icons) to copy into
-      # ~/.local/share. No game data.
+      # ~/.local/share. No game data. The Linux leg's AppImage is packed
+      # after it, beside the tarball in dist/.
       - name: Package
         if: runner.os != 'macOS'
         shell: bash
@@ -235,6 +250,43 @@ jobs:
             *) tar czf "$name.tar.gz" "$name" ;;
           esac
           rm -rf "$name"
+      # ev-nova-x86_64-unknown-linux-gnu.AppImage, beside the tarball in
+      # dist/; it stages under target/ (crates/nova-bundle/src/linux/appimage).
+      # appimagetool and the type2 runtime it embeds are pinned and checked
+      # (rdm phase linux-platform/phase-3-appimage-and-flatpak, Findings
+      # e). The container has no FUSE, so appimagetool, itself an
+      # AppImage, extracts itself to run. The bundler's own cargo build is
+      # a no-op after the Build step above.
+      - name: Package (AppImage)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          ARCH: x86_64
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/appimage"
+          mkdir -p "$tools"
+          curl -fsSL -o "$tools/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          curl -fsSL -o "$tools/runtime-x86_64" \
+            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          sha256sum -c - <<EOF
+          ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $tools/appimagetool
+          2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  $tools/runtime-x86_64
+          EOF
+          chmod +x "$tools/appimagetool"
+          NOVA_APPIMAGETOOL="$tools/appimagetool" NOVA_APPIMAGE_RUNTIME="$tools/runtime-x86_64" \
+            mise run appimage -- dist
+      # Extracts the AppImage and checks its AppDir and its binary's glibc
+      # and libraries (crates/nova-bundle/tests/it/linux_appimage.rs);
+      # without NOVA_APPIMAGE that test skips.
+      - name: Test the AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          NOVA_APPIMAGE="$PWD/dist/ev-nova-x86_64-unknown-linux-gnu.AppImage" \
+            cargo test --locked -p nova-bundle --test it linux_appimage -- --nocapture
       # Only a hand-off to `publish`.
       - uses: actions/upload-artifact@v4
         with:
@@ -243,11 +295,65 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # ev-nova-x86_64-unknown-linux-gnu.flatpak, built from vendored sources
+  # on the freedesktop runtime by `mise run flatpak`
+  # (crates/nova-bundle/src/linux/flatpak). On the runner itself, not in a
+  # container: flatpak-builder sandboxes each build with bubblewrap, which
+  # an unprivileged Docker container doesn't allow. Its binary is built in
+  # the runtime's SDK, so the container's glibc floor doesn't apply.
+  flatpak:
+    needs: ci
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    env:
+      MISE_AUTO_INSTALL: "false"
+    steps:
+      - uses: actions/checkout@v5
+      # xvfb gives the installed app's zenity a display for the test.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder desktop-file-utils xvfb
+      # Ubuntu 24.04 restricts unprivileged user namespaces through
+      # AppArmor, which bubblewrap needs for every build and run sandbox.
+      - name: Allow bubblewrap's user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      # flatpak-builder installs the runtime, SDK and Rust extension from
+      # this remote (--install-deps-from=flathub --user).
+      - run: flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - uses: jdx/mise-action@v5
+        with:
+          install: false
+      - run: mise install rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: flatpak
+      - name: Package (Flatpak)
+        run: mise run flatpak -- dist
+      # Installs the bundle with --user into a home the test owns, checks
+      # its permissions, zenity and exports
+      # (crates/nova-bundle/tests/it/linux_flatpak.rs); without NOVA_FLATPAK
+      # that test skips.
+      - name: Test the Flatpak
+        run: |
+          NOVA_FLATPAK="$PWD/dist/ev-nova-x86_64-unknown-linux-gnu.flatpak" \
+            xvfb-run -a cargo test --locked -p nova-bundle --test it linux_flatpak -- --nocapture
+      # Only a hand-off to `publish`.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-x86_64-unknown-linux-gnu-flatpak
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
   # Moves the `nightly` tag to this commit and replaces the prerelease's
-  # assets. All or nothing: it needs every `build` leg, so a failed leg on
-  # any platform skips publishing and leaves the previous nightly untouched.
+  # assets. All or nothing: it needs every `build` leg and the Flatpak, so
+  # a failed leg on any platform skips publishing and leaves the previous
+  # nightly untouched.
   publish:
-    needs: build
+    needs: [build, flatpak]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
