@@ -61,9 +61,11 @@ glyphon = "0.12.0"
 winit = "0.30.13"
 pollster = "1.0.1"
 # The open panel that asks for the Nova Files and the startup alerts
-# (nova's dependency on macOS and Windows). Its default features are
-# Linux's portal and Wayland backends, which neither build needs; without
-# `common-controls-v6` its Windows alerts are plain `MessageBoxW`s.
+# (nova's dependency on macOS, Windows and Linux). Its default features are
+# Linux's portal and Wayland backends: nova turns `xdg-portal` back on for
+# Linux alone, and leaves `wayland` off, as the picker runs before any
+# window exists. Without `common-controls-v6` its Windows alerts are plain
+# `MessageBoxW`s.
 rfd = { version = "0.17.2", default-features = false }
 bytemuck = { version = "1.25", features = ["derive"] }
 # The developer tools overlay (nova's `dev-tools` feature only). egui-wgpu

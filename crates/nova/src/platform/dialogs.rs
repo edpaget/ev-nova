@@ -13,9 +13,21 @@
 //! dependency themes the box all the same). The warnings box is owned by
 //! the game window, so it stays over it, and Windows takes no input in
 //! the window until it is dismissed. It runs on a thread of its own, so
-//! the game goes on drawing beneath. No first-party `unsafe` is added for
-//! them. On Linux nothing is picked or shown yet ([`Dialogs`]): stderr
-//! already has every line.
+//! the game goes on drawing beneath.
+//!
+//! On Linux they are rfd's `xdg-portal` backend. The panel is the XDG
+//! desktop portal's file chooser picking a folder (its `FileChooser`
+//! `OpenFile`, reached over a `dlopen`ed libdbus), so, as on Windows, the
+//! `EV Nova` folder or its `Nova Files` is picked; without libdbus or a
+//! portal service, rfd runs `zenity` for it instead. The alerts have no
+//! portal: rfd always runs `zenity --error` or `--warning`, so where
+//! zenity isn't installed (many KDE desktops, the freedesktop Flatpak
+//! runtime) nothing is shown and rfd only logs it. stderr and the startup
+//! log still have every line. The warnings box runs on a thread of its
+//! own, as on Windows.
+//!
+//! No first-party `unsafe` is added for them. On any other system nothing
+//! is picked or shown ([`Dialogs`]): stderr already has every line.
 //!
 //! The panel and the fatal alert are modal, so they run only outside the
 //! event loop (winit panics when its handler is entered again while it
@@ -68,7 +80,19 @@ impl NovaFilesDialog for Dialogs {
     }
 }
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(target_os = "linux")]
+impl NovaFilesDialog for Dialogs {
+    /// The file-chooser portal picking a folder, titled `prompt`; zenity's
+    /// when there is no portal.
+    ///
+    /// It runs on the calling thread before the event loop and any window,
+    /// as on the other platforms, so it has no parent window.
+    fn pick(&mut self, prompt: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new().set_title(prompt).pick_folder()
+    }
+}
+
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 impl FatalAlert for Dialogs {
     fn show_fatal(&mut self, message: &str) {
         let _ = rfd::MessageDialog::new()
@@ -115,20 +139,35 @@ pub fn show_warnings(window: &Window, body: &str) {
     std::thread::spawn(move || dialog.show());
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+/// Shows zenity's warning box listing the startup warnings in `body`, and
+/// returns at once: the box runs on a thread of its own until the player
+/// dismisses it, while the game goes on beneath it.
+///
+/// As on Windows, rfd's async dialog is a lazy future here, so a dropped
+/// one shows nothing; and zenity takes no parent window, so none is set.
+#[cfg(target_os = "linux")]
+pub fn show_warnings(_window: &Window, body: &str) {
+    let dialog = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title(WARNINGS_TITLE)
+        .set_description(body);
+    std::thread::spawn(move || dialog.show());
+}
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 impl NovaFilesDialog for Dialogs {
-    /// No dialog yet: nothing is picked.
+    /// No dialog: nothing is picked.
     fn pick(&mut self, _prompt: &str) -> Option<PathBuf> {
         None
     }
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 impl FatalAlert for Dialogs {
-    /// No alert yet: stderr and the log have the message.
+    /// No alert: stderr and the log have the message.
     fn show_fatal(&mut self, _message: &str) {}
 }
 
-/// No sheet yet: stderr and the log have the warnings.
-#[cfg(not(any(target_os = "macos", windows)))]
+/// No sheet: stderr and the log have the warnings.
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 pub fn show_warnings(_window: &Window, _body: &str) {}

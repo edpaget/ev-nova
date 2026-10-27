@@ -35,10 +35,18 @@ wgpu = { workspace = true, optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 nova-appkit.workspace = true
 
-# The open panel (macOS) and the alerts startup shows when nobody reads
-# stderr (macOS and Windows, where they are `MessageBoxW`s), from rfd.
-[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+# The open panel and the alerts startup shows when nobody reads stderr,
+# from rfd: on macOS `NSOpenPanel` and `NSAlert`s, on Windows a folder
+# picker and `MessageBoxW`s, on Linux the XDG file-chooser portal (zenity
+# without it) and zenity's alerts.
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 rfd.workspace = true
+
+# rfd's Linux backend: the FileChooser portal over a `dlopen`ed libdbus,
+# falling back to zenity, with no GTK or Wayland crates. Turned on here, for
+# Linux only, so the macOS and Windows builds keep their feature sets.
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { workspace = true, features = ["xdg-portal"] }
 
 # The console calls behind nova-win32's safe API: attaching to the
 # terminal's console, as `nova.exe` is a Windows-subsystem program; and
