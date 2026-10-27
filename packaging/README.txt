@@ -107,6 +107,16 @@ running game shows its icon and name in the dock and task switcher.
 
 Without installing, run ./nova from the unpacked folder.
 
+The game opens the `Nova Files` it used last time, else those of the
+Windows release in a Wine prefix ($WINEPREFIX, ~/.wine, or Lutris's
+~/Games/ev-nova, under drive_c/Program Files or Program Files (x86)),
+else a copied folder at ~/.local/share/nova/Nova Files
+($XDG_DATA_HOME/nova) or ~/Games/EV Nova/Nova Files. Failing those it
+asks you for your EV Nova folder through the desktop's file chooser, and
+remembers your pick. Started from the menu, it shows a startup error or
+warnings in a box when zenity is installed; they are always in the
+startup log.
+
 The game keeps your settings in ~/.config/nova ($XDG_CONFIG_HOME/nova),
 saves your pilots in ~/.local/share/nova/Pilots ($XDG_DATA_HOME/nova),
 and logs its startup to ~/.local/state/nova/nova.log

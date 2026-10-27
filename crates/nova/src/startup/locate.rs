@@ -19,6 +19,8 @@ use crate::cli::Usage;
 use crate::config::Os;
 use crate::settings::{GameSettings, SettingsKeeper};
 
+mod linux;
+
 /// What the open panel asks first.
 pub const PROMPT: &str = "Locate your EV Nova folder";
 
@@ -101,7 +103,11 @@ fn inside_app(app: PathBuf) -> PathBuf {
 ///   `Ambrosia Software` in each, then in `%LOCALAPPDATA%\Programs`. A
 ///   missing or empty variable drops its places, and a place named twice
 ///   (`ProgramFiles(x86)` the same as `ProgramFiles`) is tried once.
-/// - Elsewhere: none yet. The Linux platform roadmap adds its own here.
+/// - Linux and any other XDG system (`linux::linux_places`): the
+///   Windows release's `Nova Files` in the Wine prefixes (`$WINEPREFIX`,
+///   `~/.wine`, Lutris's `~/Games/ev-nova`), then a copy in
+///   `$XDG_DATA_HOME/nova/Nova Files`, then in
+///   `~/Games/EV Nova/Nova Files`.
 pub fn usual_places(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
     match os {
         Os::MacOs => {
@@ -112,7 +118,7 @@ pub fn usual_places(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Vec<PathB
             std::iter::once(system).chain(user).collect()
         }
         Os::Windows => windows_places(env),
-        Os::Other => Vec::new(),
+        Os::Other => linux::linux_places(env),
     }
 }
 
@@ -136,17 +142,32 @@ fn windows_places(env: impl Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
         .into_iter()
         .filter_map(var)
         .collect();
-    let vendors: [&[&str]; 2] = [&[], &["Ambrosia Software"]];
-    let installed = vendors.into_iter().flat_map(|vendor| {
-        program_files.iter().map(move |root| {
-            let mut dir = root.clone();
-            dir.extend(vendor);
-            dir
-        })
-    });
     let per_user = var("LOCALAPPDATA").map(|local| local.join("Programs"));
+    nova_files_in(installs_in(&program_files).into_iter().chain(per_user))
+}
+
+/// The folders an installer may put an `EV Nova` folder in, under the
+/// `Program Files` folders `roots`: each root, then `Ambrosia Software`
+/// in each (Ambrosia's own installer's folder isn't known).
+fn installs_in(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let vendors: [&[&str]; 2] = [&[], &["Ambrosia Software"]];
+    vendors
+        .into_iter()
+        .flat_map(|vendor| {
+            roots.iter().map(move |root| {
+                let mut dir = root.clone();
+                dir.extend(vendor);
+                dir
+            })
+        })
+        .collect()
+}
+
+/// The `Nova Files` of an `EV Nova` folder in each of `dirs`, in order,
+/// each tried once.
+fn nova_files_in(dirs: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
     let mut places = Vec::new();
-    for mut dir in installed.chain(per_user) {
+    for mut dir in dirs {
         dir.extend(["EV Nova", "Nova Files"]);
         if !places.contains(&dir) {
             places.push(dir);
@@ -491,9 +512,9 @@ mod tests {
     /// A dialog that gives its picks in turn, then cancels; records each
     /// prompt.
     #[derive(Default)]
-    struct Picks {
+    pub(super) struct Picks {
         picks: VecDeque<PathBuf>,
-        prompts: Vec<String>,
+        pub(super) prompts: Vec<String>,
     }
 
     impl Picks {
@@ -521,7 +542,7 @@ mod tests {
     }
 
     /// An environment holding `vars`, and nothing else.
-    fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+    pub(super) fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
         let vars: Vec<(String, OsString)> = vars
             .iter()
             .map(|(name, value)| ((*name).to_owned(), OsString::from(value)))
@@ -587,11 +608,11 @@ mod tests {
     }
 
     #[test]
-    fn on_other_systems_there_are_no_usual_places_yet() {
-        assert_eq!(
-            usual_places(Os::Other, env(&[("HOME", "/home/p")])),
-            Vec::<PathBuf>::new()
-        );
+    fn on_other_systems_the_usual_places_are_linuxs() {
+        let vars = [("HOME", "/home/p"), ("WINEPREFIX", "/prefix")];
+        let places = usual_places(Os::Other, env(&vars));
+        assert!(!places.is_empty());
+        assert_eq!(places, linux::linux_places(env(&vars)));
     }
 
     /// The `Nova Files` of an `EV Nova` folder at `parts` under `root`.
@@ -1050,7 +1071,7 @@ mod tests {
 
     /// A data file the loader reads: a flattened fork, as data-fork files
     /// are.
-    fn data_file() -> Vec<u8> {
+    pub(super) fn data_file() -> Vec<u8> {
         ForkBuilder::new()
             .resource(ResType(*b"STR#"), 128, None, &[0, 0])
             .build()
@@ -1091,7 +1112,7 @@ mod tests {
     }
 
     /// A Windows `.rez` file the loader reads.
-    fn rez_file() -> Vec<u8> {
+    pub(super) fn rez_file() -> Vec<u8> {
         RezBuilder::new()
             .resource(ResType(*b"STR#"), 128, None, &[0, 0])
             .build()
@@ -1100,7 +1121,7 @@ mod tests {
 
     /// Lays out an `EV Nova` folder as EV Nova CE unzips it, under `root`:
     /// its interface file, and a `Nova Files` holding `files`.
-    fn ce_install(root: &Path, files: &[(&str, Vec<u8>)]) -> PathBuf {
+    pub(super) fn ce_install(root: &Path, files: &[(&str, Vec<u8>)]) -> PathBuf {
         let ev_nova = root.join("EV Nova");
         let nova_files = ev_nova.join("Nova Files");
         fs::create_dir_all(&nova_files).expect("makes the folders");

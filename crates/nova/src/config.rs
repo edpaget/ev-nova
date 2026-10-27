@@ -124,7 +124,7 @@ pub fn log_path(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBu
 /// Relative here means without a root (`Path::has_root`), not
 /// `!is_absolute()`: on a Windows host `/home/p` has a root but isn't
 /// absolute, and the `Os::Other` paths are tested on every host.
-fn xdg_dir(
+pub(crate) fn xdg_dir(
     env: impl Fn(&str) -> Option<OsString>,
     name: &str,
     fallback: &[&str],
