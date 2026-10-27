@@ -8315,19 +8315,6 @@ mod tests {
 
     // Strikes.
 
-    /// Ticks until a strike is made, or 40 ticks pass, and gives the
-    /// strikes of that tick.
-    fn first_strikes(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) -> Vec<Strike> {
-        for _ in 0..40 {
-            tick_with(combat, ships, arsenal, Rules::default());
-            let strikes = combat.take_strikes();
-            if !strikes.is_empty() {
-                return strikes;
-            }
-        }
-        Vec::new()
-    }
-
     /// The strikes of the collision passes that test the `moves`th move of
     /// the shots `ships`' NPCs fire in a ship loop, with `arsenal`: an
     /// NPC's shot first moves at the `_HandleShot` after its pick.
@@ -9620,12 +9607,6 @@ mod tests {
 
     fn close_to(a: Vec2, b: Vec2) -> bool {
         (a - b).length() < 1e-3
-    }
-
-    /// Where the newest shot left from, after a tick among `ships`.
-    fn next_start(combat: &mut Combat, ships: &mut [Ship]) -> Vec2 {
-        tick(combat, ships, &NovaDisable);
-        start(combat.shots().last().expect("a shot"))
     }
 
     /// Where the newest shot left from, after `ships[0]` fires in its own
