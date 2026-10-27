@@ -38,10 +38,10 @@ impl<
     /// Never quits: Escape is the router's. While a jump is under way,
     /// the pre-jump stage included, P is refused with its beep, and a press
     /// goes on only when [`FlightView::taken_during_jump`] takes it; a
-    /// click in space selects nothing then, as [`Session::select_stellar`]
+    /// click in space selects nothing then, as [`Session::select_stellar`](nova_sim::Session::select_stellar)
     /// refuses during a jump (@0x6a145, @0x6a5ef). Otherwise, and of the
     /// keys taken during a jump, each key's [`PlayerCommand`] is asked of
-    /// the session ([`Session::takes`]) and a refused one does nothing,
+    /// the session ([`Session::takes`](nova_sim::Session::takes)) and a refused one does nothing,
     /// saying nothing: while the player's ship breaks up the map, landing
     /// and mission info (`_HandlePlayer`'s breakup-timer gates at 0x6a7b3,
     /// 0x6a8cb and 0x7044b), and once it has exploded every command (the
@@ -71,8 +71,8 @@ impl<
     /// open nothing moves. The session flies on through the whole jump, its
     /// warp included: the jump's effect starts once the jump has begun,
     /// fades to white from the first step the session's `_hyperGamma` is
-    /// above 0 ([`Session::hyper_gamma`]), and the ship arrives on the step
-    /// the session says the warp has ended ([`Session::warp_end_due`]),
+    /// above 0 ([`FlightFrame::hyper_gamma`](nova_sim::flight_frame::FlightFrame::hyper_gamma)), and the ship arrives on the step
+    /// the session says the warp has ended ([`FlightFrame::warp_end_due`](nova_sim::flight_frame::FlightFrame::warp_end_due)),
     /// whose steps stop there, before the frame is drawn. From then on the
     /// rest of the effect, the fade-in or the white flash, plays over the
     /// new system; that plays on with the map open too, as the original's

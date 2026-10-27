@@ -29,7 +29,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// The next frame draws the ship where it is, at
     /// the stellar, not on its way from where it was, in the system a move
     /// made while landed went to, laid out afresh as the session tells
-    /// ([`SessionEvent`]); it shows no message
+    /// ([`SessionEvent`](nova_sim::SessionEvent)); it shows no message
     /// from before the landing, but greets the pilot past the tutorial
     /// ([`take_off_greeting`](super::take_off_greeting)), or shows a held `Q`'s message, for
     /// [`SCRIPT_MESSAGE_TICKS`], in place of the greeting
@@ -37,7 +37,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// hired escorts defected
     /// for want of the take-off's pay ([`defection_message`](super::defection_message)); the
     /// session has populated the system's traffic afresh
-    /// ([`Session::take_off`]), so no frame draws the ships from before
+    /// (`nova_sim::Session::take_off`), so no frame draws the ships from before
     /// the landing. Leaving passes the stay's days, their
     /// events rolled on the flight's chance, and what settling them did
     /// shows as [`FlightView::settle_script`] shows it.
@@ -49,7 +49,8 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     }
 
     /// Takes off for a `Q` run while landed, if its leave is due
-    /// ([`Session::leave_if_due`]), as [`FlightView::take_off`] does for
+    /// ([`FlightCommand::LeaveIfDue`], `nova_sim::Session::leave_if_due`), as
+    /// [`FlightView::take_off_with`] does for
     /// the port's Leave, and gives the stellar left; `None`, and nothing
     /// changes, when no leave is due. The router calls it once nothing
     /// shown over the spaceport holds the leave.
@@ -61,7 +62,8 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     }
 
     /// Settles the escorts' marks as the ship leaves the stellar it is
-    /// landed at ([`Session::land_escorts`]), drawing on the flight's
+    /// landed at ([`FlightCommand::LandEscorts`], `nova_sim::Session::land_escorts`),
+    /// drawing on the flight's
     /// chance, and gives the report to show over the spaceport; none when
     /// nothing was sold or upgraded. The router calls it before either
     /// leave.
@@ -85,7 +87,8 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     }
 
     /// Whether a `Q` run while landed waits for the take-off
-    /// ([`Session::leave_due`]): whoever shows the spaceport leaves it
+    /// ([`FlightFrame::leave_due`](nova_sim::flight_frame::FlightFrame::leave_due)):
+    /// whoever shows the spaceport leaves it
     /// ([`FlightView::leave_if_due`]), as its Leave does, once nothing
     /// shown over it holds the leave.
     #[must_use]
@@ -193,12 +196,12 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     }
 
     /// Settles what the set expressions run since queued, as
-    /// [`Session::settle_script`] does, reading the catalog and drawing on
+    /// `nova_sim::Session::settle_script` does ([`FlightCommand::SettleScript`]), reading the catalog and drawing on
     /// the flight's chance. A `Q` run while landed never takes off here:
     /// it is held ([`FlightView::leave_due`]) for the router to leave the
     /// spaceport once nothing shown over it holds the leave
     /// ([`FlightView::leave_if_due`]), which shows its message. The screen
-    /// catches up with what the session told ([`SessionEvent`]): a
+    /// catches up with what the flight told ([`SessionEvent`](nova_sim::SessionEvent)): a
     /// move in flight lays out the system the ship is in afresh, even the
     /// same one, as the original kills its explosions and smoke, and how
     /// many fighters were abandoned, if any, is shown after a `Q`'s
