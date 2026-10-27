@@ -213,13 +213,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> bool {
         if self.mode.landed().is_some() {
-            self.tick(controls);
-            if self.rescue_if_due(catalog, chance) {
-                return true;
-            }
-            self.tick_traffic(catalog, behaviour, chance);
-            self.tick_combat(rules, chance);
-            return false;
+            return self.landed_work(catalog, rules, chance);
         }
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
@@ -240,6 +234,45 @@ impl Session {
             return true;
         }
         self.pass_after_move(&start, pass, Some(catalog), behaviour, rules, chance);
+        false
+    }
+
+    /// A pass of the game's work while landed, the traffic drawn from
+    /// `catalog`, the fight by `rules`, drawing on `chance`: the fight and
+    /// the traffic stand still, and the player neither moves nor fires.
+    /// What runs, in order: a gate's pending entry ends, as on any pass;
+    /// the escape pod's rescue, which ends the pass when it settles
+    /// ([`Session::rescue_if_due`]); `_HandlePlayer`'s warning on a new
+    /// jump (see the `wait_for_me` module); the reinforcement clock's tick
+    /// held behind the last pass's work on the line, then the traffic's
+    /// tail, the clock's own tick held again while work waits on the line
+    /// (see the `reinforcements` and `comm_calls` modules); the player's
+    /// explosion of the last pass forgotten; the work queued on the line
+    /// settled ([`Session::settle_line_queue`]); the headings the ships
+    /// were drawn at dropped; and the pass's asteroid work
+    /// ([`Session::tick_asteroids`], see the `asteroids` module). Whether
+    /// the rescue settled on it.
+    fn landed_work(
+        &mut self,
+        catalog: &(impl PilotCatalog + TrafficCatalog),
+        rules: Rules,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> bool {
+        let mut source = &mut *chance;
+        let chance: &mut dyn Chance = &mut source;
+        self.ship.warp.gate = None;
+        if self.rescue_if_due(catalog, chance) {
+            return true;
+        }
+        self.warn_fighters_left_behind(chance);
+        if std::mem::take(&mut self.space.reinforcements_held) {
+            self.tick_reinforcements(chance);
+        }
+        self.traffic_tail(chance);
+        self.ship.fate.player_exploded_this_tick = false;
+        self.settle_line_queue(rules.law, chance);
+        self.space.drawn.clear();
+        self.tick_asteroids(chance);
         false
     }
 
@@ -712,6 +745,7 @@ impl Space {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::testkit::work;
     use std::cell::RefCell;
 
     use crate::ai::{Behaviour, Decision, Goal, NovaAi, Reaction, Surroundings};
@@ -892,43 +926,6 @@ mod tests {
                 assert_eq!(moved, Vec2::ZERO, "at rest");
             }
         }
-    }
-
-    #[test]
-    fn a_shoved_npc_is_moved_on_the_advance_pass_of_the_hit_unlike_by_the_separate_parts() {
-        // Carried from the flight view's test of a shoved ship drawn moved
-        // on the frame of the hit: the advance pass steps in
-        // `_DoPlayGameWork`'s order, the separate parts in their own.
-        let catalog = FakePilotCatalog {
-            weapons: vec![WeaponRecord {
-                impact: 3000,
-                energy_dmg: 5,
-                ..blaster()
-            }],
-            ..armed()
-        };
-        let mut session = facing_an_npc(&catalog, 180);
-        session.space.traffic.npcs_mut()[0].hull.mass = 40.0;
-        let shield = session.npcs()[0].reserves.shield.now;
-        let behaviour = Recording::default();
-        for _ in 0..60 {
-            let mut by_parts = session.clone();
-            by_parts.hold_fire(true, false);
-            by_parts.tick(Controls::default());
-            by_parts.tick_traffic(&catalog, &behaviour, &mut NeverFires);
-            by_parts.tick_combat(Rules::default(), &mut NeverFires);
-            session.hold_fire(true, false);
-            pass(&mut session, &catalog, Controls::default(), &behaviour);
-            if session.npcs()[0].reserves.shield.now < shield {
-                assert_ne!(
-                    session.npcs()[0].state.position,
-                    by_parts.npcs()[0].state.position,
-                    "pushed"
-                );
-                return;
-            }
-        }
-        panic!("never hit");
     }
 
     #[test]
@@ -1157,7 +1154,7 @@ mod tests {
             direction: 1,
         };
         let id = session.space.traffic.add_npc(npc);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.space.npc(id).expect("there").cloak.fade, 4.0);
     }
 
@@ -1180,7 +1177,7 @@ mod tests {
         let id = session.space.traffic.add_npc(npc);
         session.begin_jump().expect("jumps");
         assert!(session.in_warp_lead_in());
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.space.npc(id).expect("there").cloak.fade, 4.75);
     }
 
@@ -1196,7 +1193,7 @@ mod tests {
         session.hold_trigger(FIRE);
         let mut ticks = 0;
         while session.npcs()[0].condition == Condition::Intact {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             session.hold_trigger(Trigger::default());
             ticks += 1;
             assert!(ticks < 20, "never disabled");
@@ -1206,7 +1203,7 @@ mod tests {
             fate: Fate::Disabled,
         };
         assert_eq!(fates(&session), [disabled]);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(fates(&session), [disabled], "once");
     }
 
