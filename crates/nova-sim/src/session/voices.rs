@@ -40,10 +40,7 @@
 //! step 3, as in the original. Double time's second pass runs no
 //! [`Space::handle_voice`] and no cues (`_DoPlayGameWork(0)` skips
 //! @0x4402a-0x44350); a victory it queues waits for the next advance pass,
-//! as the original's does. The separate parts
-//! ([`Session::tick_traffic`](super::Session::tick_traffic)) answer their cues through the same
-//! [`Space::answer_voice_cues`], so no stale cue reaches a later pass, but
-//! none of them plays the channel.
+//! as the original's does.
 //!
 //! [`Npc::voice`]: crate::traffic::npc::Npc::voice
 
@@ -959,9 +956,10 @@ mod tests {
     }
 
     #[test]
-    fn the_separate_parts_answer_their_thinks_cues() {
-        // `tick_traffic` answers the cues it queued, so none is left for
-        // a later pass to answer on its own draws.
+    fn a_pass_answers_its_thinks_cues() {
+        // The advance pass answers the cues its thinks queued
+        // ([`Space::answer_voice_cues`]), so none is left for a later pass
+        // to answer on its own draws.
         let catalog = voiced();
         let (mut session, _) = raided(&catalog, &[MEDIUM]);
         work_with(

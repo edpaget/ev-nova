@@ -1800,9 +1800,7 @@ impl Combat {
     /// passes and before the AI runs (`_DoPlayGameWork` @0x44223, before
     /// `_AIDispatch` @0x4429d), so no shot the passes hit counts. The
     /// session's `nova_sim::Session::game_work` reads them there, after
-    /// [`Combat::test_hits`]; its separate parts, which run the traffic
-    /// before the fight, read them before the hit pass, so the shots that
-    /// pass will hit still count.
+    /// [`Combat::test_hits`].
     #[must_use]
     pub fn targeted_damage(&self) -> BTreeMap<ShipRef, i32> {
         let mut aimed = BTreeMap::new();

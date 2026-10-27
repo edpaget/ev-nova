@@ -260,20 +260,10 @@ impl Session {
         id
     }
 
-    /// Takes each fighter that docked on the last traffic tick aboard its
-    /// carrier (see the module docs): the player's leaves the fleet, its
-    /// round to its bay, and one no bay launches is lost, which makes a
-    /// save due.
-    pub(super) fn dock_fighters(&mut self) {
-        let departed = self.space.traffic.departed().to_vec();
-        for (id, outcome) in departed {
-            self.dock_fighter(id, outcome);
-        }
-    }
-
     /// Takes NPC `id` aboard its carrier when its flight's `outcome` docked
-    /// it, as [`Session::dock_fighters`] does for each; any other outcome
-    /// is left alone. The ship loop settles each dock at the fighter's own
+    /// it (see the module docs): the player's leaves the fleet, its round
+    /// to its bay, and one no bay launches is lost, which makes a save
+    /// due; any other outcome is left alone. The ship loop settles each dock at the fighter's own
     /// slot, as `_LowLevelAIHandler` calls `_AIAddFighterToParent` there
     /// (@0x87fef), so no later slot's step finds the player's fighter gone
     /// from the system but still in the fleet.
@@ -1107,7 +1097,15 @@ pub(super) mod tests {
             (walked, session.draw_order().contains(&fighter))
         };
         let launched = shown(&session);
-        session.handle_npcs(pass, Rules::default(), &mut NeverFires);
+        // The ship loop's displays (@0x444ad).
+        let start = super::super::game_work::PassStart::of(&session);
+        session.ship_loop(
+            &start,
+            super::super::ship_loop::Motion::Again,
+            pass,
+            Rules::default(),
+            &mut NeverFires,
+        );
         [launched, shown(&session)]
     }
 

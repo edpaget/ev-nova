@@ -591,7 +591,8 @@ impl Condition {
     /// its condition yet, its armour gone ([`breaking_up`](Self::breaking_up)).
     /// A ship type that holds no armour never reads dying by its armour,
     /// and a destroyed ship never reads dying. The NPC escape-ship check
-    /// (`nova_sim::Session::npc_escapes`) reads it.
+    /// in the session's ship loop (`nova_sim::Session::game_work`) reads
+    /// it.
     #[must_use]
     pub fn is_dying(self, armor: Gauge) -> bool {
         matches!(self, Self::Dying { .. }) || self.breaking_up(armor).is_some()

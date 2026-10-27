@@ -21,7 +21,7 @@
 //! or explodes a ship at the end of its countdown. The engine runs one
 //! check a pass in the same place, the player's display step after its
 //! move ([`Session::eject_check`], see the `display_step` module), on
-//! both passes and in [`Session::tick_combat`]:
+//! both passes:
 //!
 //! - It reads the player as `_IsDying` (@0x253d) does, its armour live,
 //!   so a sabotage kill this pass is seen dying though no display has

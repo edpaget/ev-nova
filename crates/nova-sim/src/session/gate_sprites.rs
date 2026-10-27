@@ -4,8 +4,8 @@
 //! `_DoPlayGameWork` calls `_HandleShip` (@0x44483), then
 //! `_HandleShipDisplay` (@0x444ad), then `_HandleStellarSprites`
 //! (@0x444d2), so each gate steps after the ships have moved, reading them
-//! as this frame left them: at the end of [`Session::tick_traffic`], before
-//! the frame is drawn. It steps whenever the ship is not docked, while a
+//! as this frame left them: at the end of the pass's ship loop
+//! ([`Session::ship_loop`]), before the frame is drawn. It steps whenever the ship is not docked, while a
 //! jump plays too, as the original's stellars animate then.
 //!
 //! The gates are those of the stellars shown, kept whenever they change:
@@ -65,7 +65,7 @@ impl Session {
 
     /// One tick of every hypergate shown, held open by the NPCs as they
     /// are now or by the player's dock request ([`held_open`]), read after
-    /// this tick's approach ran in `fly_player`, as `_HandleStellarSprites`
+    /// this pass's approach ran in `player_move`, as `_HandleStellarSprites`
     /// runs after `_HandlePlayer`; its random picks drawn on `chance`. A ship
     /// heading in holds it within [`approach_reach`] of the width of the
     /// frame its slot draws ([`NO_SPRITE_WIDTH`] with none), grown by

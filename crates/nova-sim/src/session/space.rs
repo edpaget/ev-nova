@@ -3,7 +3,7 @@
 //! stellars' damage and the sprites shown, the message line, the
 //! escorts' and encounters' state ([`Escorts`]), and the escorts' voice
 //! channel (see the `voices` module). The coordinators that
-//! read other state too (`step_traffic`, `tick_combat`, `ship_loop`,
+//! read other state too (`step_traffic`, `game_work`, `ship_loop`,
 //! `populate`, `reform`, `world` and `settle_line_queue`) stay on
 //! `Session`.
 
@@ -34,9 +34,10 @@ pub(super) struct Space {
     /// `reinforcements` module); never saved, as the original saves
     /// neither.
     pub(super) reinforcements: reinforcements::Reinforcements,
-    /// Whether the reinforcement clock's tick of the last traffic tick is
-    /// held behind the frame's work on the line, for `settle_line_queue`
-    /// to run (see [`Session::tick_traffic`](super::Session::tick_traffic)).
+    /// Whether the reinforcement clock's tick of the last pass's traffic
+    /// is held behind the frame's work on the line, for
+    /// `settle_line_queue` to run (see the `reinforcements` and
+    /// `comm_calls` modules).
     pub(super) reinforcements_held: bool,
     /// The governments an IFF scrambler has marked (see the
     /// `iff_scramblers` module); never saved, as the original saves none.
@@ -53,7 +54,7 @@ pub(super) struct Space {
     /// resets the traffic while landed. A take-off populates at once.
     pub(super) traffic_due: bool,
     /// The heading each ship in the fight was drawn at after the last
-    /// [`Session::tick_combat`](super::Session::tick_combat): its heading as that tick ended, which the
+    /// pass ([`Session::game_work`](super::Session::game_work)): its heading as that pass ended, which the
     /// view draws before the next. Each ship's shots leave from the exit
     /// points of that frame (see [`Fighter::drawn_heading`](crate::combat::Fighter::drawn_heading)); a ship not
     /// in it, new to the fight, fires from its own heading's. Dropped while

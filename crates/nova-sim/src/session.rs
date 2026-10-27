@@ -162,21 +162,23 @@
 //! population ([`Session::populate`]) on each arrival, replacing the last
 //! system's, and on the first traffic tick in flight after the session
 //! starts and after each take-off, as the original sets a system up on
-//! arrival and on take-off. [`Session::tick_traffic`] advances it a tick,
-//! NPCs deciding as a [`Behaviour`] says and rolling on the caller's
-//! [`Chance`], seeing the player's ship, the governments read when the
-//! session starts, the system's government and the player's legal record
-//! in the system (see [`legal`](crate::legal)), and answering the fight's strikes since the last traffic
-//! tick; it stands still while the player is landed, and flies on through
-//! the player's jump, the ships the player leads warping out with it (see
-//! the `warp_stage` module).
+//! arrival and on take-off. Each advance pass ([`Session::game_work`])
+//! thinks and flies it, NPCs deciding as a [`Behaviour`] says and rolling
+//! on the caller's [`Chance`], seeing the player's ship, the governments
+//! read when the session starts, the system's government and the
+//! player's legal record in the system (see [`legal`](crate::legal)), and
+//! answering the fight's strikes as each phase lands them; it stands still
+//! while the player is landed, and flies on through the player's jump,
+//! the ships the player leads warping out with it (see the `warp_stage`
+//! module).
 //!
 //! Ships fight ([`combat`](crate::combat)): the player holds a fire
 //! command ([`Session::hold_trigger`]) and aims at its target, and each
 //! NPC holds the fire command and aims at the target its [`Behaviour`]
-//! last decided, and [`Session::tick_combat`] advances the fight a tick
-//! among the player and the NPCs, with each ship's weapons, read when the
-//! session starts, by the fight's [`Rules`]: disabling ships as a
+//! last decided, and each pass's phases advance the fight among the
+//! player and the NPCs (see the `game_work` module), with each ship's
+//! weapons, read when the session starts, by the fight's
+//! [`Rules`](crate::combat::Rules): disabling ships as a
 //! [`DisableRule`](crate::combat::hull::DisableRule) says, and every
 //! ship's point defence engaging the missiles fired at it, with no target
 //! needed, whoever fired them, or, by the other reading of
@@ -394,7 +396,7 @@
 //!   asteroids, stellar damage and sprites, the comm line), with its part
 //!   `escorts` (the fleet, its class orders, the boarding and the hail
 //!   open); the coordinators that read other state too (`step_traffic`,
-//!   `tick_combat`, `ship_loop`, `populate`, `reform`, `world`,
+//!   `game_work`, `ship_loop`, `populate`, `reform`, `world`,
 //!   `settle_line_queue`) stay on `Session`.
 //! - `chart: chart::Chart` (`chart` module; phase 6, done): what the
 //!   player sees of the galaxy and has selected in it (the stellars
@@ -675,8 +677,7 @@ use crate::combat::report::SimDiagnostic;
 use crate::combat::sides::PassThrough;
 use crate::combat::stellar_hazards::HazardResistance;
 use crate::combat::{
-    CombatEvent, Downed, EscortLoss, Field, Fighter, GamePass, Rules, ShipRef, Shove, SpriteRank,
-    Strike,
+    CombatEvent, Downed, EscortLoss, Field, Fighter, GamePass, ShipRef, Shove, SpriteRank, Strike,
 };
 use crate::control::ScriptNote;
 use crate::date::{self, GameDate};
@@ -736,8 +737,8 @@ use crate::warp;
 
 pub use crate::combat::hull::ESCAPE_POD_SHIP;
 
-/// What [`Session::tick_combat`] works out for a ship's [`Fighter`]
-/// beyond what the ship carries.
+/// What a pass's fight works out for a ship's [`Fighter`] beyond what
+/// the ship carries ([`Session::with_fighters`]).
 // Each flag is its own, read on its own.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug)]
@@ -955,7 +956,7 @@ pub struct Session {
     mode: Mode,
     /// How far the game's end has got since the player's ship exploded:
     /// set to the hold's start on the explosion tick, counted down by
-    /// [`Session::tick`]'s dead branch, then moved on by
+    /// the player's move's dead branch (`dead_tick`), then moved on by
     /// [`Session::begin_fade`] and [`Session::end_play`]. Read only while
     /// the ship is destroyed, and never saved: the session is dropped
     /// when play ends. Beside `mode`, not in it: it can coexist with a
@@ -1491,63 +1492,6 @@ impl Session {
         self
     }
 
-    /// Advances the session one tick under the player's `controls`, ramps
-    /// the engine glow with the thrust, then regenerates fuel. During the
-    /// pre-jump stage the controls are ignored: the ship flies the stage
-    /// ([`pre_jump::fly`]) instead, and the jump begins on the tick it is
-    /// ready. The warp's clock starts on the first tick of the jump on
-    /// which the ship no longer brakes, sounding the warp-up, stops if it
-    /// brakes again, and counts on through hyperspace until the ship
-    /// arrives (see the [`warp`](crate::warp) module). A landed ship, or one in hyperspace, does
-    /// not move and glows not at all; a landed one gains no fuel, while one in
-    /// hyperspace regenerates it and has it clamped to its tank, as
-    /// `_HandlePlayer` does through the warp stage (@0x6d96d-0x6d9f2). As the jump begins and on every tick in
-    /// hyperspace, the ships the player leads let go of their targets
-    /// (`_MakeEscortsHyperWithParent` @0x3fdc0-0x3fdc2; see the `escorts`
-    /// module). In flight, a mission sound a `P` holds
-    /// sounds (see the `script_effects` module). Any tick ends a gate's pending entry: the
-    /// original's hypergate map is modal, so nothing ticks between the
-    /// land key and the pick. A ship that is not intact ignores the
-    /// controls and drifts, slowing by [`crate::flight::DISABLED_DRAG`] a
-    /// tick before it moves, its pre-jump collapsing first (see the
-    /// `jump_collapse` module), and a destroyed one stays where it is, letting go of its
-    /// targets and counting the hold after its explosion down (see
-    /// `dead_tick`).
-    ///
-    /// Each tick in flight, a jump's and the pod's included, counts the
-    /// take-off grace down (see the `takeoff_grace` module). Each tick in
-    /// flight, a jump's included, moves the frame counter on,
-    /// and on a due frame ([`market::junk_step_due`]) steps the held
-    /// tribbles and perishables in the space the goods and the mission
-    /// cargo aboard leave, unless the player is destroyed. It then
-    /// runs the Red Alert on that frame (see the `red_alert` module), the
-    /// tutorial's hint block (see the `tutorial` module) and the dock
-    /// approach (see the `clearance` module), and flies the target
-    /// brackets in (see the `brackets` module). A
-    /// landed tick moves none of them. While the escape pod's countdown
-    /// runs, the pod flies itself in place of the controls, the jump, the
-    /// fuel and the dock approach (see the `eject` module's `pod_tick`).
-    ///
-    /// This is the player's part of the advance pass, its fire left to
-    /// the fight ([`Session::tick_combat`]); double time's second pass
-    /// runs it again ([`Session::tick_again`]). Only
-    /// [`Session::game_work`] runs the player's fire before its move, as
-    /// `_HandlePlayer` does.
-    pub fn tick(&mut self, controls: Controls) {
-        self.ship.warp.gate = None;
-        if self.mode.landed().is_some() {
-            return;
-        }
-        let frame = self.pass_head();
-        self.fly_player(
-            frame,
-            controls,
-            GamePass::Advance {
-                double_time: self.ship.warp.double_time,
-            },
-        );
-    }
-
     /// The head of an advance pass in flight: the warp-ups and the
     /// warp-out play a frame's worth, double time is latched, the
     /// take-off grace counts down, a mission sound plays, and the frame
@@ -1570,16 +1514,6 @@ impl Session {
         self.space.pass_frame = frame;
         self.space.frame = market::next_frame(frame);
         frame
-    }
-
-    /// The player's part of a game-work pass on `frame` under `controls`
-    /// (`_HandlePlayer`, which runs on both passes; see the
-    /// `double_time` module): everything [`Session::tick`] does after the
-    /// frame counter moves on, its work before the move
-    /// ([`Session::before_move`]) then the move ([`Session::player_move`]).
-    fn fly_player(&mut self, frame: i16, controls: Controls, pass: GamePass) {
-        self.before_move(frame, pass);
-        self.player_move(controls, pass);
     }
 
     /// `_HandlePlayer`'s work on `frame` before its move, on `pass`: first
@@ -1618,8 +1552,10 @@ impl Session {
     }
 
     /// `_HandlePlayer`'s move under `controls` on `pass`: the escape pod's
-    /// flight while its countdown runs (see the `eject` module), else the
-    /// ship's motion ([`Session::move_player`]) and the dock approach.
+    /// flight while its countdown runs, in place of the controls, the
+    /// jump, the fuel and the dock approach (see the `eject` module's
+    /// `pod_tick`), else the ship's motion ([`Session::move_player`]) and
+    /// the dock approach (see the `clearance` module).
     fn player_move(&mut self, controls: Controls, pass: GamePass) {
         if self.pod.is_some() {
             self.pod_tick();
@@ -1634,9 +1570,25 @@ impl Session {
         self.dock_approach();
     }
 
-    /// The ship's motion in [`Session::fly_player`] on `pass`: by its
+    /// The ship's motion in [`Session::player_move`] on `pass`: by its
     /// condition and the jump under way, under `controls`, then the fuel's
-    /// regeneration.
+    /// regeneration. The engine glow ramps with the thrust. During the
+    /// pre-jump stage the controls are ignored: the ship flies the stage
+    /// ([`pre_jump::fly`]) instead, and the jump begins on the pass it is
+    /// ready. The warp's clock starts on the first pass of the jump on
+    /// which the ship no longer brakes, sounding the warp-up, stops if it
+    /// brakes again, and counts on through hyperspace until the ship
+    /// arrives (see the [`warp`](crate::warp) module). A ship in
+    /// hyperspace regenerates its fuel and has it clamped to its tank, as
+    /// `_HandlePlayer` does through the warp stage (@0x6d96d-0x6d9f2). As
+    /// the jump begins and on every pass in hyperspace, the ships the
+    /// player leads let go of their targets (`_MakeEscortsHyperWithParent`
+    /// @0x3fdc0-0x3fdc2; see the `escorts` module). A ship that is not
+    /// intact ignores the controls and drifts, slowing by
+    /// [`crate::flight::DISABLED_DRAG`] a pass before it moves, its
+    /// pre-jump collapsing first (see the `jump_collapse` module), and a
+    /// destroyed one stays where it is, letting go of its targets and
+    /// counting the hold after its explosion down (see `dead_tick`).
     ///
     /// The warp's clock moves on only on the advance pass: it is
     /// `TickCount`, real time, which double time's second pass doesn't
@@ -1936,69 +1888,6 @@ impl Session {
         self.let_go_of_gone_target();
     }
 
-    /// Advances the NPC traffic one tick, NPCs deciding as `behaviour`
-    /// says, rolling on `chance`. While the ship is landed it stands
-    /// still; through a jump it flies on, the ships the player leads
-    /// warping out with it (see the `warp_stage` module and
-    /// `nova_sim::traffic::warp_out`). The first tick in flight after the session starts
-    /// instead populates the system ([`Session::populate`]) from
-    /// `catalog`, as the original sets a system up on arrival; its NPCs
-    /// move from the next. A take-off populates the system itself
-    /// ([`Session::take_off`]).
-    /// A target that landed or jumped out is let go. Each tick that moves
-    /// the NPCs raises the first sighting of the ships watched
-    /// ([`Session::watch_ship`]), and each mission ship that left the
-    /// system raises [`Fate::Departed`] and is counted (see the
-    /// `mission_ships` module). The fuel the NPCs refuelling the player
-    /// gave it lands (see the `refuel_dock` module). The frame's work on the line,
-    /// its calls, scans, plunders, docks, repairs and refuel notes, is
-    /// queued in slot order, and settles in [`Session::tick_combat`] (see
-    /// the `comm_calls` module). Then, unless the ship is docked, each
-    /// hypergate shown steps its sprite (see the `gate_sprites` module),
-    /// while a jump plays too; before that, in flight or jumping, the
-    /// player's system's reinforcement clock ticks, after the frame's
-    /// calls (see the `reinforcements` module), unless work is queued on
-    /// the line: then its tick is held, and runs in
-    /// [`Session::tick_combat`] right after the work settles, or, if no
-    /// combat tick came between, first thing in the next traffic tick.
-    /// The traffic ticks in the same [`World`] the gate exit's arrivals
-    /// pass steps it in (`Session::step_traffic`).
-    ///
-    /// This runs the traffic before the fight ([`Session::tick_combat`]):
-    /// only [`Session::game_work`] runs its AI after the fight's collision
-    /// passes and its motion after the shots, as `_DoPlayGameWork` does.
-    pub fn tick_traffic(
-        &mut self,
-        catalog: &(impl TrafficCatalog + ?Sized),
-        behaviour: &(impl Behaviour + ?Sized),
-        chance: &mut (impl Chance + ?Sized),
-    ) {
-        // The player part's warning (the `wait_for_me` module).
-        self.warn_fighters_left_behind(chance);
-        if std::mem::take(&mut self.space.reinforcements_held) {
-            self.tick_reinforcements(chance);
-        }
-        if self.mode.landed().is_none() {
-            if self.space.traffic_due {
-                if self.jumping().is_none() {
-                    self.populate(catalog, chance);
-                }
-            } else {
-                let (strikes, marks) = self.before_traffic_ai(catalog, chance);
-                self.step_traffic(|traffic, world| {
-                    traffic.tick_in(behaviour, world, &strikes, chance);
-                });
-                self.space
-                    .after_traffic_ai(&mut self.pilot, &self.setup, &mut self.out, chance);
-                // No cue outlives its tick (see the `voices` module).
-                self.space.answer_voice_cues(&self.statics, &mut *chance);
-                self.dock_fighters();
-                self.after_traffic_motion(&marks, chance);
-            }
-        }
-        self.traffic_tail(chance);
-    }
-
     /// The session's work before the traffic's AI, reading `catalog` and
     /// drawing on `chance`: the mission ships' arrivals, the inactive ones
     /// unmarked, the mission escorts joined, and the player's own ships
@@ -2032,8 +1921,8 @@ impl Session {
     /// carrier is lost out of their fleets by the other reading of
     /// [`RuleKey::NpcEscortAi`] (the `lost_lead` module), and
     /// the watched ships observed. The fighters that docked are taken
-    /// aboard before it ([`Session::dock_fighters`]), by the ship loop at
-    /// each one's own slot.
+    /// aboard before it, by the ship loop at each one's own slot
+    /// ([`Session::dock_fighter`]).
     fn after_traffic_motion(&mut self, marks: &TrafficMarks, chance: &mut (impl Chance + ?Sized)) {
         self.mission_ships_left(&marks.marks);
         self.resolve_person_offers(marks.last, &mut &mut *chance);
@@ -2067,10 +1956,9 @@ impl Session {
     /// display pass, so the frame drawn after the pass shows the answer.
     /// [`Session::game_work`] and [`Session::tick_again`] call this after
     /// each of those phases; a flight calls it after each pass for what
-    /// the pass's close struck (the beams, the shockwaves), as after
-    /// [`Session::tick_combat`] for a caller of the separate parts. Whatever
-    /// is left unanswered, the next traffic tick answers (as for a
-    /// caller that never calls this). While the ship is landed, or before
+    /// the pass's close struck (the beams, the shockwaves). Whatever is
+    /// left unanswered, the next pass's think answers (as for a caller
+    /// that never calls this). While the ship is landed, or before
     /// the system is set up, nothing is answered; the world runs through a
     /// jump, so a hit in it is answered.
     pub fn answer_strikes(&mut self, behaviour: &(impl Behaviour + ?Sized)) {
@@ -2085,10 +1973,11 @@ impl Session {
     /// the system's stellars, the player, the governments, the system's
     /// government and the player's legal record with it, the persons'
     /// world, the escorts' tons, the led ships' speed factor, the damage
-    /// the fight's shots aim, the gates' widths and asteroid slot 0. The tick
-    /// ([`Session::tick_traffic`]), the gate exit's arrivals pass
-    /// ([`Session::gate_exit_pass`]) and double time's second pass (see
-    /// the `double_time` module) step the traffic in it.
+    /// the fight's shots aim, the gates' widths and asteroid slot 0. The
+    /// advance pass's think and flight ([`Session::game_work`]), the gate
+    /// exit's arrivals pass ([`Session::gate_exit_pass`]) and double
+    /// time's second pass (see the `double_time` module) step the traffic
+    /// in it.
     fn step_traffic<R>(&mut self, f: impl FnOnce(&mut Traffic, World<'_>) -> R) -> R {
         let system_govt = self.chart.galaxy.govt(self.pilot.system);
         let facts = control::Facts {
@@ -2178,8 +2067,8 @@ impl Session {
     /// persons' world: the session's rules and control bits, and the
     /// pilot's persons gone and grudges, and asteroid slot 0. No damage is
     /// aimed in it, and no
-    /// gate's width is known: only the traffic's tick fires and flies, and
-    /// it reads the fight's and the gates' ([`Session::tick_traffic`]).
+    /// gate's width is known: only a pass's traffic fires and flies, and
+    /// it reads the fight's and the gates' (`Session::step_traffic`).
     fn world(&self) -> World<'_> {
         self.world_in(self.pilot.system)
     }
@@ -2328,154 +2217,6 @@ impl Session {
     #[must_use]
     pub fn secondary_line_count(&self) -> Option<u32> {
         self.ship.secondary_line_count(&self.pilot, &self.statics)
-    }
-
-    /// Advances the fight a tick among the player and the NPCs, its phases
-    /// in [`Combat::tick_on`](crate::combat::Combat::tick_on)'s order with nothing of the session's between
-    /// them but each phase's settling (see the `game_work` module): this
-    /// is the fight's part of the separate parts, run after the traffic's
-    /// tick, where only [`Session::game_work`] runs the original's order
-    /// between the player, the fight and the traffic. Each ship is aimed
-    /// at its target, the fight going by `rules`, each shot's inaccuracy
-    /// and spread drawn on `chance` (see [`Combat::tick`](crate::combat::Combat::tick)); each NPC destroyed is taken out of
-    /// the system, and the target is let go once it is breaking up or
-    /// gone. While the ship is landed, it stands still. Through a jump,
-    /// from its brake to its arrival, the fight goes on, but the player's
-    /// held trigger fires nothing but its point defence (see
-    /// `player_trigger`, @0x6aaf0 and @0x6ab75).
-    ///
-    /// Each NPC intact before the tick and no longer raises
-    /// [`Fate::Disabled`], and each destroyed raises [`Fate::Destroyed`]
-    /// as it is taken out (see the `story` module's findings). A rescue
-    /// mission's ship not yet boarded, and a ship of a Derelict
-    /// government, fight held disabled (`Session::held_disabled`; see
-    /// the `mission_ships` and `derelicts` modules).
-    /// The player is convicted of disabling and destroying an NPC, but
-    /// not a mission's special ship (see `punish`). Each NPC that looked
-    /// the player over in the traffic tick scans it with the frame's work
-    /// on the line below, convicting by `rules`' law (see the
-    /// `mission_cargo` module), jumping or not: past the warp's lead-in
-    /// the scan itself is held, as `_ScanPlayer`'s jump-timing check holds
-    /// it (@0x7e562-0x7e633). The fight runs on through a jump, as the
-    /// original's does (see the `warp_stage` module). The stellars
-    /// shown that shots can hit take their damage, and each shot
-    /// down is destroyed and runs its `OnDestroy` (see the `stellars`
-    /// module). While the player's ship breaks up, the klaxon sounds in
-    /// its display step, after its fire (see the `display_step` module),
-    /// and on the player's explosion tick a [`SimSound::Halt`] of the
-    /// klaxon and the warp sounds follows it
-    /// ([`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)). Every
-    /// hit, blast and beam tick of a weapon with an `Impact`, a tractor
-    /// beam's self-pull, and the shockwave of a heavy ship's final
-    /// explosion, the player's too, set the velocity of each ship they push
-    /// ([`impact`](crate::combat::impact)); the player's is not pushed
-    /// while its jump is under way, the pre-jump stage included. A tractor
-    /// beam sets the lock of the ship it holds, the player's
-    /// ([`Session::tractor`]) or an NPC's; an NPC whose warp out is under
-    /// way is not pushed either. Before anything else, unless landed, the
-    /// boarded flag is cleared unless the player is disabled (see the
-    /// `pirate_plunder` module), and the sabotage clock ticks, and what it
-    /// sets off goes off (see the `sabotage` module). The eject is checked
-    /// in the player's display step, after its fire, and the self-destruct
-    /// counts down after it (see the `eject` and `self_destruct` modules).
-    /// Then the frame's work on the line, its calls, scans, plunders,
-    /// docks, repairs and refuel notes, settles in slot order, with the
-    /// reinforcement clock's tick held behind it, jumping or not (see the
-    /// `comm_calls` module). The player's "Ship disabled." and "Ship
-    /// destroyed." lines are spoken as the fight's hits leave it (see the
-    /// `player_downed` module), before the next pass's eject check takes
-    /// it into a new ship. After
-    /// all of it, landed or jumping, the pass's asteroid work runs
-    /// ([`Session::tick_asteroids`]), so the shots meet the asteroids
-    /// where the last pass left them, as the frame before drew them, and
-    /// a hit's push moves its asteroid in this pass's step. Each ship
-    /// fires from the exit points of the frame it was drawn on after the
-    /// last fight tick, its heading as that tick ended
-    /// ([`Fighter::drawn_heading`]), as every ship fires before the
-    /// original draws it again.
-    pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
-        self.ship.fate.player_exploded_this_tick = false;
-        if self.mode.landed().is_some() {
-            // The fight stands still, but the work queued on the line
-            // settles (see `settle_line_queue`), and the pass's asteroid
-            // work runs (see the `asteroids` module).
-            self.settle_line_queue(rules.law, &mut &mut *chance);
-            self.space.drawn.clear();
-            self.tick_asteroids(&mut *chance);
-            return;
-        }
-        self.before_fight(rules, &mut &mut *chance);
-        let pass = GamePass::Advance {
-            double_time: self.ship.warp.double_time,
-        };
-        self.fight(pass, rules, &mut *chance);
-        // After the shots, as `_SpawnAsteroid` and `_HandleAsteroids`
-        // come after the collision passes (see the `asteroids` module).
-        self.tick_asteroids(chance);
-    }
-
-    /// `_HandlePlayer`'s part of a game-work pass that comes before the
-    /// fight, on either pass (see the `double_time` module): the boarded
-    /// flag's clear (see the `pirate_plunder` module), the repair
-    /// inhibit's countdown and the disabled player's self-repair (see the
-    /// `player_repair` module) and the sabotage clock's tick (see the
-    /// `sabotage` module), drawing on `chance`. The eject check, and the
-    /// self-destruct countdown after it, come in the player's display
-    /// step, after its fire ([`Session::fight`]).
-    fn before_fight(&mut self, rules: Rules, chance: &mut dyn Chance) {
-        self.ship.unboard_unless_disabled();
-        self.player_repair_tick(rules, &mut *chance);
-        self.sabotage_tick(rules, &mut *chance);
-    }
-
-    /// The fight's part of a game-work pass on `pass` (see
-    /// [`Session::tick_combat`] after the scans): the fight's phases in
-    /// [`Combat::tick_on`](crate::combat::Combat::tick_on)'s order, by `rules`, drawing on `chance`, each
-    /// phase that lands hits settled after it, and what the pass leaves
-    /// settled once after the last (see the `game_work` module).
-    fn fight(&mut self, pass: GamePass, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
-        let mut source = &mut *chance;
-        let chance: &mut dyn Chance = &mut source;
-        let start = game_work::PassStart::of(self);
-        self.space.count_player_berths(&self.setup);
-        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.defend_player(fighters, arena, chance);
-            combat.fire_player(fighters, arena, chance);
-            combat.regenerate_player(fighters, arena);
-        });
-        // `_HandlePlayer`'s secondary block, after its fire (see the
-        // `secondary_select` module).
-        self.secondary_block();
-        self.player_display_step(pass, rules, start.player_head(), chance);
-        // The traffic tick's work on the line, after `_HandlePlayer`'s
-        // lines (the sabotage's, the eject's), as the AI loop's calls
-        // follow them (see the `comm_calls` module).
-        self.settle_line_queue(rules.law, chance);
-        self.collision_passes(pass, rules, chance);
-        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.defend_npcs(fighters, arena, None, false, chance);
-        });
-        let spots = self.space.asteroid_spots();
-        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.fly_shots_in(fighters, arena, &spots, chance);
-        });
-        // `_HandleShip`'s escape check reads each NPC as its step finds
-        // it (see the `npc_escape` module).
-        let stepped: Vec<npc_escape::AtStep> = self
-            .space
-            .traffic
-            .npcs()
-            .iter()
-            .map(npc_escape::AtStep::of)
-            .collect();
-        self.handle_npcs(pass, rules, chance);
-        self.beams_phase(pass, rules, chance);
-        // The words the pass's stray beams stepped, before the NPCs'
-        // escape pods read the crew pods left (see the `npc_escape`
-        // module).
-        self.step_stray_words(chance);
-        self.npc_escapes(start.npcs(), &stepped, chance);
-        self.fight_tail(rules, chance);
     }
 
     /// Notes the heading each ship is drawn at as the fight's tick ends,
@@ -3002,7 +2743,7 @@ impl Session {
     /// during the stage gives the same system and changes nothing, without
     /// asking the rules again, so a ship that brakes into its no-jump zone
     /// still jumps. Once it has stopped braking the warp's clock runs (see
-    /// [`Session::tick`]), and the warp-up sounds here when the ship needs
+    /// `Session::move_player`), and the warp-up sounds here when the ship needs
     /// no braking. Through the warp stage the ship moves off toward the
     /// bearing and the world runs on (see the `warp_stage` module) until
     /// the warp ends ([`Session::warp_end_due`]); the scans are held past
@@ -6549,8 +6290,7 @@ impl Space {
     /// it landed (see the `refuel_dock` module). The comm calls, scans and
     /// the rest of the frame's work on the line are queued, and settle
     /// later ([`Session::settle_line_queue`]): in [`Session::game_work`]
-    /// after `_AIDispatch`'s loop (`Session::dispatch_npcs`), and in the
-    /// separate parts in [`Session::tick_combat`].
+    /// after `_AIDispatch`'s loop (`Session::dispatch_npcs`).
     fn after_traffic_ai(
         &mut self,
         pilot: &mut Pilot,

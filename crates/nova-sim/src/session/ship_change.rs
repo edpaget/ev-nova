@@ -334,7 +334,7 @@ impl Session {
     /// This session with `rule` saying when the player's ship is
     /// disabled after a change of ship (see the module docs):
     /// [`NovaDisable`] by default. The fight's own rule is given each
-    /// tick ([`Session::tick_combat`]).
+    /// pass ([`Session::game_work`]).
     #[must_use]
     pub fn with_disable_rule(mut self, rule: Rc<dyn DisableRule>) -> Self {
         self.setup.disable_rule = Shared(rule);

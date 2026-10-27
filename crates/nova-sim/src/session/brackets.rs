@@ -2,7 +2,7 @@
 //! which stellar and which ship are bracketed, how far out, and in which
 //! frames.
 //!
-//! - **Each flight tick** ([`Session::tick`]), the jump's and a destroyed
+//! - **Each flight pass** ([`Session::game_work`]), the jump's and a destroyed
 //!   player's too, steps each fly-in while there is a target and settles
 //!   it while there is none, as `_HandleNavTargetSprites` (@0x2fcaf) and
 //!   `_HandleWeapTargetSprites` (@0x2ff1a) do on every pass. A landed

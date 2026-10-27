@@ -17,8 +17,8 @@
 //!
 //! Each line sets `_commCount` at once (`_DisplayComm` @0x9024b), so a
 //! later slot's call reads it (≤ 0 free @0x8308c, < 0 idle @0x8cecd). The
-//! session settles everything queued in the combat tick, after
-//! `_HandlePlayer`'s part of the frame ([`LineQueue::take_all`]).
+//! session settles everything queued in the pass, after the AI loop
+//! ([`LineQueue::take_all`]).
 //!
 //! The engine's NPCs are kept in the order they came, not by slot, so the
 //! queue keeps its work in order of (frame, berth), stable among equal

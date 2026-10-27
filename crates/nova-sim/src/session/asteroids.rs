@@ -21,9 +21,7 @@
 //! has just moved it (see the `asteroid_beams` module). The spawn comes
 //! before the AI and the ships' fire in the original and after them
 //! here; a new asteroid is met by no shot until the next pass either way,
-//! so that crosses no boundary the player sees. The separate parts'
-//! [`Session::tick_combat`], no game path, runs it after the whole fight
-//! (see the `game_work` module).
+//! so that crosses no boundary the player sees.
 //!
 //! *The refill against the spawn.* The collision passes
 //! (@0x43e70-0x44015, `_CheckShotProximities` @0x44015) break asteroids

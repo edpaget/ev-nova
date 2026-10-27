@@ -26,9 +26,9 @@
 //! the ship class's warp factor, d the warp sound's duration) the scan
 //! runs, and so it does through the pre-jump braking, and always for a
 //! disabled player (see the [`warp`](crate::warp) module, which works
-//! it). The session takes the scans in `Session::tick_combat` through
-//! the lead-in, the traffic flying on to queue them, and holds them in
-//! `Session::scanned_by` once it is past.
+//! it). The session takes the scans as each pass settles its line work
+//! (`Session::game_work`) through the lead-in, the traffic flying on to
+//! queue them, and holds them in `Session::scanned_by` once it is past.
 //!
 //! # Contraband
 //!

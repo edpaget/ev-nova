@@ -6,8 +6,8 @@
 //! -0x2cb) and its jump state +0x50 is above 0 (@0x688aa-0x688b5).
 //! `_IsDisabled` is an armour test (@0x2d95-0x2dcc), so a dying player,
 //! its armour gone, collapses too. The engine runs the collapse
-//! ([`Session::collapse_jump`]) in [`Session::tick`]'s arm for a disabled
-//! or dying player, in its [`Jump::PreJump`] or its [`Jump::Hyperspace`],
+//! ([`Session::collapse_jump`]) in the player's move's arm for a disabled
+//! or dying player (`Session::move_player`), in its [`Jump::PreJump`] or its [`Jump::Hyperspace`],
 //! as the world runs through the warp (see the `warp_stage` module).
 //!
 //! **The speed.** el = `TickCount` − +0xa4 (@0x688bb-0x688c0), the Mac
@@ -41,7 +41,7 @@
 //! heading cut to whole degrees (`cvttss2si` @0x689d3); otherwise it is
 //! left (`jbe` 0x689e1) ([`collapsed_velocity`]). The disabled drag
 //! (0.995 @0x68ace) runs after it in the same frame, as the engine's
-//! `None` arm of [`Session::tick`] drags and steps once the jump is gone.
+//! `None` arm of the player's move drags and steps once the jump is gone.
 //!
 //! **The rest.** +0x50 = −1.0 (@0x689ea) ends the jump. The comm line
 //! says [`SimMessage::JumpCollapsed`], `STR#` 2002 #35 (`_GetIndString`
@@ -54,18 +54,18 @@
 //! **Ordering against the original.** `_PlayGame` calls `_HandlePlayer`
 //! (@0x43e19) before `_HandleShot` (@0x44385) and `_HandleShip`
 //! (@0x44483), so a hit that disables the player collapses the jump in
-//! the next frame's `_HandlePlayer`. The engine does the same: the fight
-//! in [`Session::tick_combat`] disables, and the next [`Session::tick`]
-//! collapses. A sabotage bomb that disables (in `tick_combat`) does
-//! likewise, a frame after the original's (@0x69a05, after 0x688aa in
-//! the same `_HandlePlayer`): a one-tick lag that crosses no boundary the
-//! player sees. The eject (@0x6f22c) comes after the collapse in
-//! `_HandlePlayer`, so [`Session::eject`] collapses a pre-jump first,
-//! before the hulk takes the player's state and before the class
-//! changes. The pass's move collapses it already for a player dying or
-//! disabled as the pass begins; a separate fight tick
-//! ([`Session::tick_combat`]) with no move before it can still meet a
-//! player in its pre-jump at the eject.
+//! the next frame's `_HandlePlayer`. The engine does the same: the pass's
+//! fight disables, and the next pass's move collapses. A sabotage bomb
+//! that disables goes off in `_HandlePlayer` (@0x69a05) after its
+//! collapse check (0x688aa), so the original collapses that jump in the
+//! next frame; the engine's move, after the bomb in the same pass,
+//! collapses it in the bomb's own (filed:
+//! rdm:task/sabotage-disable-collapses-jump-a-frame-early). The eject
+//! (@0x6f22c) comes after the collapse in `_HandlePlayer`, so
+//! [`Session::eject`] collapses a pre-jump first, before the hulk takes
+//! the player's state and before the class changes. The pass's move
+//! collapses it already for a player dying or disabled as the pass
+//! begins.
 //!
 //! **Left out.**
 //!

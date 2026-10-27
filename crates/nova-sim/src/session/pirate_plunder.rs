@@ -2,18 +2,16 @@
 //! @0x83fab-0x84a2d), which the traffic queues as [`PirateEvent`]s on the
 //! line at the pirate's berth, and this answers one by one
 //! ([`Session::answer_pirate`]) as the frame's work on the line settles in
-//! slot order in the combat tick (see the `comm_calls` module).
+//! slot order in the pass (see the `comm_calls` module).
 //!
 //! - **A dock with the player** ([`PirateEvent::PlayerDockedWith`]): the
 //!   player is boarded ([`Session::player_boarded`], its slot's +0xb9,
 //!   `_LowLevelAIHandler` @0x86fc7), so pirates pass it over or wait on it
 //!   ([`PlayerSide::boarded`](crate::ai::PlayerSide::boarded)). It is
-//!   cleared at the head of each combat tick the player isn't disabled
+//!   cleared at the head of each pass the player isn't disabled
 //!   ([`PlayerShip::unboard_unless_disabled`]), as `_HandlePlayer` clears it
 //!   each frame before the ships think (@0x68b02), and kept only in
-//!   flight: a ship slot field, it is never saved. The frame's traffic
-//!   tick reads the flag the last frame left, as it runs before the
-//!   combat tick: a frame's lag crossing no boundary the player sees.
+//!   flight: a ship slot field, it is never saved.
 //! - **A repair of the player** ([`PirateEvent::PlayerRepaired`]): see the
 //!   `repair_dock` module. A ship docking to repair the player boards it
 //!   as a pirate does ([`PirateEvent::PlayerDockedWith`]).

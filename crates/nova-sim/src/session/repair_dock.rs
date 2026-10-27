@@ -4,8 +4,8 @@
 //! ship has docked and waited its dock (see
 //! [`repair_dock`](crate::traffic::repair_dock)), on the line at the
 //! repairer's berth, and [`Session::answer_pirate`] answers in slot order
-//! with the frame's other lines in the combat tick (see the `comm_calls`
-//! module).
+//! with the frame's other lines as the pass settles them (see the
+//! `comm_calls` module).
 //!
 //! - The player is unboarded (+0xb9 = 0, @0x86d92).
 //! - While the player's ship is disabled, its armour rises

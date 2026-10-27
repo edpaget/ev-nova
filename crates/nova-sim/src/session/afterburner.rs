@@ -20,8 +20,8 @@
 //!
 //! **What reads it.** `_HandlePlayer` runs before `_HandleShot`
 //! (`_DoPlayGameWork` @0x43e19, @0x44385), so `_DamageShip`'s knockback
-//! reads this frame's `_abOn`, as the fight here, after
-//! [`Session::tick`], reads [`Session::afterburner_on`].
+//! reads this frame's `_abOn`, as the pass's fight here, after the
+//! player's move, reads [`Session::afterburner_on`].
 //!
 //! **Left out.** `_HasAfterburner`'s cheats (the engine has none); the
 //! outfit caches (`_playerHasAfterburner` *0x3b514c and the fuel usage's,
@@ -46,9 +46,9 @@ use crate::pilot::Pilot;
 use crate::rulebook::RuleKey;
 
 impl Session {
-    /// Whether the player's afterburner is on this tick, `_abOn`, as
-    /// [`Session::tick`] last engaged it: what the fight's knockback reads
-    /// (see the module docs).
+    /// Whether the player's afterburner is on this tick, `_abOn`, as the
+    /// last pass's move engaged it: what the fight's knockback reads (see
+    /// the module docs).
     #[must_use]
     pub fn afterburner_on(&self) -> bool {
         self.ship.afterburner_on()
@@ -126,9 +126,9 @@ impl Session {
 }
 
 impl PlayerShip {
-    /// Whether the player's afterburner is on this tick, `_abOn`, as
-    /// [`Session::tick`] last engaged it: what the fight's knockback reads
-    /// (see the module docs).
+    /// Whether the player's afterburner is on this tick, `_abOn`, as the
+    /// last pass's move engaged it: what the fight's knockback reads (see
+    /// the module docs).
     #[must_use]
     fn afterburner_on(&self) -> bool {
         self.afterburner_on

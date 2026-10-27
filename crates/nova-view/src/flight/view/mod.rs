@@ -467,7 +467,7 @@
 //!   player give their help in the traffic's tick (a repair is the
 //!   traffic's, by the screen's [`DisableRule`](nova_sim::DisableRule)), and each that is done
 //!   says so, as a message ([`comm_message`]), taken after the step's
-//!   combat tick, which settles the notes in slot order with the frame's
+//!   advance pass, which settles the notes in slot order with the frame's
 //!   other lines ([`FlightEvent::Comm`](nova_sim::flight_frame::FlightEvent::Comm)). During a jump, its pre-jump stage included, Y is
 //!   taken and the session refuses the hail, silently, as
 //!   `_HandlePlayerCommunication` refuses while the jump state is set

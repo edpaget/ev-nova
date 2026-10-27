@@ -78,8 +78,7 @@
 //! [`Session::game_work`] after `_AIDispatch`'s loop
 //! (`Session::dispatch_npcs`), the fighters launched and thinking in it
 //! among the slots, and again after the ship loop for the docks and
-//! repairs the fly half made; in the separate parts in
-//! [`Session::tick_combat`], after the player's display step:
+//! repairs the fly half made:
 //!
 //! - an earlier slot's scan line, stolen line, refuel or repair note
 //!   keeps a later slot's distress call and pre-scan hail off, and their
@@ -195,23 +194,21 @@ impl Session {
     /// `chance`, so an earlier slot's line keeps a later slot's call off
     /// as the original's does (see the module docs). Then the
     /// reinforcement clock's tick held behind them runs, if one was (see
-    /// [`Session::tick_traffic`]). Nothing settles while the player is
+    /// the `reinforcements` module). Nothing settles while the player is
     /// landed.
     ///
     /// *Ordering against the original.* The plunder's cargo, credits and
-    /// mission failures and the repair's armour settle here, after
-    /// `before_fight`, where the original carries them out inside the
-    /// loop; the loop follows `_HandlePlayer` there too. All of it is
-    /// later in the step than the loop, but before the fight, the frame's
+    /// mission failures and the repair's armour settle here, after the
+    /// loop, where the original carries them out inside it. All of it is
+    /// later in the pass than the loop, but before the shots, the frame's
     /// drawing and any dialog, landing, jump or save, so no boundary is
     /// crossed.
     ///
-    /// `Session::tick_combat` settles it first, jumping or not, after
-    /// `before_fight`; each scan is held past the warp's lead-in by
-    /// `_ScanPlayer`'s jump-timing check (@0x7e562-0x7e633; see
-    /// [`Session::scanned_by`]). The work waits from the traffic tick that
-    /// queued it to the combat tick of the same step, so it settles before
-    /// the frame is drawn. In the warp the view steps the session only
+    /// The pass settles it jumping or not; each scan is held past the
+    /// warp's lead-in by `_ScanPlayer`'s jump-timing check
+    /// (@0x7e562-0x7e633; see [`Session::scanned_by`]). The work waits from
+    /// the think that queued it to its pass's settling, so it settles
+    /// before the frame is drawn. In the warp the view steps the session only
     /// while its lead-in lasts, and the arrival comes after its last step,
     /// so work queued in the lead-in settles before the arrival too. Work
     /// the arrival would cut off is dropped with the system's traffic, as

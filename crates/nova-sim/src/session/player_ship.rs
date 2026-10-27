@@ -150,12 +150,12 @@ pub(super) struct Latches {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Fate {
-    /// Whether the player's ship was destroyed on the latest
-    /// [`Session::tick_combat`](super::Session::tick_combat), the tick the
-    /// fight raised its `CombatEvent::Destroyed`; read by
+    /// Whether the player's ship was destroyed on the latest advance
+    /// pass ([`Session::game_work`](super::Session::game_work)), the pass
+    /// the fight raised its `CombatEvent::Destroyed`; read by
     /// [`Session::player_fate`](super::Session::player_fate). It stays
-    /// set until the next `tick_combat`, so every interpolated view frame
-    /// drawn after that tick sees
+    /// set until the next advance pass's head, so every interpolated view
+    /// frame drawn after that pass sees
     /// [`PlayerFate::Exploded`](crate::player_fate::PlayerFate::Exploded):
     /// the original hides on its own frame boundary, so this crosses no
     /// boundary the player can see.

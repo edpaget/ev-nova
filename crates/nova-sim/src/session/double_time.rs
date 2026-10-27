@@ -25,7 +25,7 @@
 //! already on at launch, and on macOS, where winit 0.30.13 reports no Caps
 //! Lock key, there is no double time. The warp-ups' play state is the
 //! session's ([`WarpUps`](crate::warp::WarpUps)). The session latches the
-//! switch at the top of each advance pass ([`Session::tick`]), after the
+//! switch at the top of each advance pass ([`Session::game_work`]), after the
 //! warp-ups play on a frame, where the original latches at the end of the
 //! iteration before: nothing runs between the two.
 //!

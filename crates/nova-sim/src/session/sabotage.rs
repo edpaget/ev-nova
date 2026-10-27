@@ -9,9 +9,8 @@
 //! [`Session::tick_again`]): after the player's point defence and before
 //! its trigger, as the block (0x692e5) sits between them (@0x68c74,
 //! @0x6ab55); so a kill that gives up a pre-jump comes after the point
-//! defence rested through it. [`Session::tick_combat`] runs it at its
-//! head, after its return while landed and before the eject check,
-//! through a jump too. It is skipped
+//! defence rested through it, through a jump too; landed, no pass runs
+//! it. It is skipped
 //! while the player is in the escape pod: `_HandlePlayer` reaches the
 //! block (0x692e5) only once the pod's countdown is out (0x68d1d-0x68d25),
 //! and runs it before its death-timer decrement (@0x6d7e6), the klaxon
@@ -59,8 +58,7 @@
 //! `precalced` module).
 //!
 //! *Ordering against the original.* [`Session::game_work`] runs the block
-//! before the player's steering, as the original does; the separate parts
-//! run it after [`Session::tick`]'s steering in the same step.
+//! before the player's steering, as the original does.
 
 use super::{PlayerShip, Session, Statics};
 use crate::chance::Chance;

@@ -7,10 +7,9 @@
 //! accepted, once a jump, as the jump then sets +0x50 to 1.0 to brake
 //! (@0x6b6aa) or 2.0 (@0x6b5e9). [`Session::begin_jump`] marks the jump
 //! it accepts (not a press during the pre-jump stage), and the next player
-//! part takes the mark ([`Session::warn_fighters_left_behind`]): the head
-//! of [`Session::tick_traffic`] in the `tick` driver, and
+//! part takes the mark ([`Session::warn_fighters_left_behind`]):
 //! [`Session::game_work`] right after the player's move, before the
-//! traffic's AI.
+//! traffic's AI, or its landed work while landed.
 //!
 //! **The count** (slots 1-63, @0x6b405-0x6b47a): each ship in the system
 //! the player leads that is its fighter (AI type 5: a ship the player

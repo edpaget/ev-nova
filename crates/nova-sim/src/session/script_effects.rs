@@ -208,8 +208,8 @@
 //! `P` plays on the first flight frame after the take-off.
 //!
 //! Here, by [`ScriptEffectRules::sound`]'s engine reading, `P` holds its
-//! sound, a later one replacing it, and the session's next flight tick
-//! ([`Session::tick`]) sounds it as [`SimSound::Script`], exclusive: the
+//! sound, a later one replacing it, and the session's next flight pass
+//! ([`Session::game_work`]) sounds it as [`SimSound::Script`], exclusive: the
 //! audio side plays it on its one mission channel, unless the last sound
 //! played there is still playing. A jump's arrival drops a held sound;
 //! a hypergate or wormhole exit does not, so it sounds on the first tick

@@ -65,10 +65,6 @@
 //! own beam steps its word, and a dying NPC fires none, so no fixture
 //! reaches a word stepped in the pass that its pods then read.
 //!
-//! The separate parts (`Session::fight`) still run every NPC's block
-//! after the beams, reading each NPC as its step found it, the stray
-//! words stepped first; they are no game path.
-//!
 //! Left out: snd 372's priority 5 (`_PlaySoundDistance` @0x351fa,
 //! @0x35300), which the view doesn't play by yet
 //! (rdm:phase/ship-handling-fidelity/phase-20-npc-pod-sound-priority-and-fire-gate);
@@ -78,7 +74,7 @@
 //!
 //! [`PodEjected`]: crate::combat::CombatEvent::PodEjected
 
-use super::{NpcBefore, Session, Space, Statics};
+use super::{Session, Space, Statics};
 use crate::chance::Chance;
 use crate::combat::armament::{Rounds, inaccuracy};
 use crate::combat::hull::Condition;
@@ -141,33 +137,6 @@ pub(super) fn escape_may_run(was: Condition, at_step: AtStep) -> bool {
 }
 
 impl Session {
-    /// Runs each dying NPC's escape pods and its escape-ship roll for
-    /// this tick, against what each NPC `was` before the fight's tick and
-    /// how its own step found it (`stepped`), drawing on `chance` (see the
-    /// module docs), as the separate parts run them (`Session::fight`).
-    /// An NPC that took no step this tick takes neither.
-    pub(super) fn npc_escapes(
-        &mut self,
-        was: &[NpcBefore],
-        stepped: &[AtStep],
-        chance: &mut dyn Chance,
-    ) {
-        let ids: Vec<(Condition, AtStep)> = self
-            .space
-            .traffic
-            .npcs()
-            .iter()
-            .filter_map(|npc| {
-                let before = was.iter().find(|before| before.id == npc.id)?;
-                let at_step = stepped.iter().find(|at_step| at_step.id == npc.id)?;
-                Some((before.condition, *at_step))
-            })
-            .collect();
-        for (before, at_step) in ids {
-            self.npc_escape(before, at_step, chance);
-        }
-    }
-
     /// Runs one NPC's escape pods and escape-ship roll for this tick (see
     /// the module docs), the NPC as its own step found it (`at_step`),
     /// against its condition before the pass's fight (`was`), drawing on

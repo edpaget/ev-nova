@@ -49,8 +49,7 @@
 //! jump's pre-jump and warp: the jump state +0x50 gates only the fire
 //! keys (@0x6aaf0, @0x6ab75) and the disabled flag only the fire. Landed,
 //! no pass runs. It runs on both passes of a double-time frame, as
-//! `_HandlePlayer` does ([`Session::player_fires`] on either, and
-//! [`Session::tick_combat`]'s fight).
+//! `_HandlePlayer` does ([`Session::player_fires`] on either).
 //!
 //! The original runs the block before the reloads' countdown (@0x6ae25),
 //! which the engine counts inside the fire: they share no state, so the

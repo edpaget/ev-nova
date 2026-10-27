@@ -29,7 +29,7 @@
 //! whole stellar first (@0xb700): nothing damages one within a day, so
 //! forgetting all the damage at once is the original's pass by index.
 //!
-//! **Shots.** The fight's tick ([`Session::tick_combat`]) hands the
+//! **Shots.** Each pass's fight (see the `game_work` module) hands the
 //! combat the stellars shown that shots can hit (whole, of `Strength`
 //! above 0, with a sprite, as big as their disc), each with its current
 //! strength, and keeps what the shots leave of it: the session holds the
@@ -113,9 +113,9 @@
 //! rescue rebuilds too (@0x69135): the engine has none, and whoever builds
 //! it calls the rebuild. Its debug key that explores every system
 //! (@0x6dad1) has no counterpart. The flight frame that drops a stellar
-//! seen whole is the end of [`Session::tick_combat`] in flight, after the
-//! shots, as the original's sprite tick (@0x444d2) follows
-//! `_CheckShotProximities` (@0x44015).
+//! seen whole is the end of the pass's fight in flight
+//! ([`Session::fight_tail`]), after the shots, as the original's sprite
+//! tick (@0x444d2) follows `_CheckShotProximities` (@0x44015).
 
 use super::{Chart, Outbox, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};

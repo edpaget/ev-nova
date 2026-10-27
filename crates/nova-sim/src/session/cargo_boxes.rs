@@ -71,7 +71,7 @@ impl Session {
     /// Read live. The original keeps the flag from the last
     /// `_ResetPlayerPrecalcedValues` (14 callers, the scoop itself among
     /// them), and the only time that shows is a jünk step in flight
-    /// (`market::step_junk` in `fly_player`), which can fill or free the
+    /// (`market::step_junk` in `before_move`), which can fill or free the
     /// hold with no reset: the original then still scoops one box into a
     /// hold the step just filled, or passes over one it just freed room
     /// for, until the next reset. The engine reads the hold as it is.
@@ -160,7 +160,7 @@ impl PlayerShip {
     /// Read live. The original keeps the flag from the last
     /// `_ResetPlayerPrecalcedValues` (14 callers, the scoop itself among
     /// them), and the only time that shows is a jünk step in flight
-    /// (`market::step_junk` in `fly_player`), which can fill or free the
+    /// (`market::step_junk` in `before_move`), which can fill or free the
     /// hold with no reset: the original then still scoops one box into a
     /// hold the step just filled, or passes over one it just freed room
     /// for, until the next reset. The engine reads the hold as it is.
