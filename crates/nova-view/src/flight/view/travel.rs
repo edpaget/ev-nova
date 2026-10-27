@@ -319,9 +319,12 @@ impl<
 /// The course map, over the [`FlightSim`] port: its opening, drawing,
 /// panels, input and Clear Route read the flight through its frame
 /// ([`FlightView::frame_now`]) and [`MapSource`](crate::flight::sim_port::MapSource),
-/// and send their commands through it. Its close stays concrete
-/// ([`FlightView::close_map`]), as the hypergate entry it may run is still
-/// the session's: [`FlightView::map_input_taken`] says when it is due.
+/// and send their commands through it. Its close is generic too
+/// ([`FlightView::close_map_with`], in the `gates` module), the hypergate
+/// entry it may run a command ([`FlightCommand::EnterHypergate`]); the
+/// concrete [`FlightView::close_map`] only hands it the session's words
+/// ([`FlightView::WORDS`]). [`FlightView::map_input_taken`] says when a
+/// close is due.
 impl<C, S: FlightSim> FlightView<C, S> {
     /// The course map's close, the hypergate's entry left to
     /// `enter_gate`, handed the system picked on the hypergate map

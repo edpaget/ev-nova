@@ -299,6 +299,22 @@ fn landing_lets_go_of_the_line_the_effects_the_flashes_and_the_glows() {
     let mut flash = ShieldFlash::default();
     flash.hit(false);
     view.flashes.insert(ShipRef::Player, flash);
+    view.glows.step(&[(ShipRef::Player, false)], |_| Some(1.0));
+    assert!(view.glows.drawn(ShipRef::Player).is_some(), "a glow lit");
+    let alt = crate::flight::held_alt::AltLayer {
+        image: ImageKey::sprite(2100, 0),
+        at: Point::new(0.0, 0.0),
+        tint: Color::WHITE,
+        colorize: None,
+        blend: crate::Blend::Normal,
+    };
+    let held = view.held_alts.get_mut().shown(
+        ShipRef::Player,
+        nova_sim::combat::ship_frames::Alt::Drawn(0),
+        Some(alt),
+        true,
+    );
+    assert_eq!(held, Some(alt), "an alt held");
     view.say_for(TOO_FAR_PLANET, TOO_FAR_TICKS);
     assert_ne!(*view.effects(), Effects::default());
     press_l(&mut view, landed(128));
@@ -307,6 +323,12 @@ fn landing_lets_go_of_the_line_the_effects_the_flashes_and_the_glows() {
     assert_eq!(*view.effects(), Effects::default());
     assert!(view.effects().pods().is_empty());
     assert!(view.flashes.is_empty(), "the shield flashes");
+    assert_eq!(view.glows.drawn(ShipRef::Player), None, "the weapon glow");
+    assert_eq!(
+        *view.held_alts.borrow(),
+        crate::flight::held_alt::HeldAlts::default(),
+        "the alts held"
+    );
 }
 
 #[test]
