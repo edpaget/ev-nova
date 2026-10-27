@@ -694,12 +694,14 @@ fn interface() -> Vec<u8> {
 /// The first `chär` flies the "Gunship" (ship 128, 30 shield, 45 armour,
 /// carrying the [`blaster`], held by `oütf` 228, and `items`) from Alpha
 /// (128), whose one `düde` flies the "Trader" (ship 129: no shield, 10
-/// armour, no speed). The escape pod is ship 895; `oütf` 188 is an
+/// armour, no speed, a crew of 3). The escape pod is ship 895; `oütf` 188 is an
 /// escape pod (`ModType` 11) and 187 an auto-eject (20). The status bar
 /// is [`interface`]'s.
 fn fighting_data(items: &[(i16, i16)]) -> Rc<GameData> {
     let mut trader = armed_ship(0, 10, &[], &[]);
     put_i16s(&mut trader, 0x06, &[0]);
+    // A crew of 3, so it can be boarded.
+    put_i16s(&mut trader, 0x44, &[3]);
     let mut holder = fitting(1, 128);
     put_i16s(&mut holder, 0x0A, &[10]);
     let fork = ForkBuilder::new()
@@ -1014,4 +1016,76 @@ fn a_real_session_with_an_escort_flying_meets_the_contract() {
     assert!(frame.hud.escorts_flying, "the hired escort");
     assert!(frame.hud.escort_rows.iter().any(|row| row.present));
     assert_eq!(check_contract(&mut flight), Ok(()));
+}
+
+// The comm and the boarding through the port
+// (rdm:phase/view-sim-seam/phase-10-comm-escorts-boarding-on-port).
+
+#[test]
+fn a_real_hail_opens_the_comm_dialog_with_the_sessions_hail_view() {
+    let data = fighting_data(&[]);
+    let session = SessionBuilder::flying(&data).build();
+    let mut view = fighting(Rc::clone(&data), session);
+    tap(&mut view, Key::Tab);
+    tap(&mut view, Key::Char('y'));
+    let hail = view.take_hail().expect("the trader answers");
+    let session = view.session().expect("flying");
+    assert_eq!(
+        Some(hail),
+        session.hailing(&data, &nova_sim::HailOptions::default()),
+        "the session's own, with Nova's options"
+    );
+    assert_eq!(
+        view.hailing(),
+        view.session()
+            .expect("flying")
+            .hailing(&data, &nova_sim::HailOptions::default())
+    );
+    view.hang_up();
+    assert_eq!(view.hailing(), None, "hung up through the port");
+}
+
+/// `session` of `data` stepped once, as a view's first frame steps it:
+/// its trader brought in 100 pixels above the player.
+fn trader_in(data: &Rc<GameData>, mut session: nova_sim::Session) -> nova_sim::Session {
+    let mut chance = drawing(&[6, 6, 0, 0, 750, 650, 180, 2]);
+    let mut collab = nova_sim::StepCollaborators {
+        catalog: data,
+        behaviour: &Idle,
+        rules: nova_sim::Rules::default(),
+        chance: &mut chance,
+    };
+    let mut report = nova_sim::flight_frame::StepReport::default();
+    session.step(
+        &nova_sim::flight_frame::StepInput::default(),
+        1,
+        &mut collab,
+        &mut report,
+    );
+    assert_eq!(session.npcs().len(), 1, "the trader is in");
+    session
+}
+
+#[test]
+fn a_real_board_opens_the_plunder_dialog_on_the_sessions_boarding() {
+    let data = fighting_data(&[]);
+    let mut session = trader_in(&data, SessionBuilder::flying(&data).build());
+    let trader = session.npcs()[0].id;
+    nova_sim::fixture::disable(&mut session, trader);
+    nova_sim::fixture::put_player_over(&mut session, trader);
+    let mut view = FlightView::from_session(data, session.into()).with_behaviour(Rc::new(Idle));
+    tap(&mut view, Key::Char('b'));
+    let shown = view.take_boarding().expect("the plunder dialog opens");
+    let boarding = view.session().expect("flying").boarding();
+    assert_eq!(Some(shown.view), boarding, "the session's boarding");
+    assert_eq!(view.boarding(), boarding);
+    assert_eq!(
+        view.plunder(nova_sim::Take::Abort),
+        nova_sim::Taken::Aborted
+    );
+    assert_eq!(
+        view.session().expect("flying").boarding(),
+        None,
+        "let go through the port"
+    );
 }
