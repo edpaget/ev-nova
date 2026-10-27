@@ -5304,9 +5304,10 @@ mod tests {
         let mut target = Ship::at(2, 100.0, 0.0);
         target.reserves.shield = Gauge::full(100.0);
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser()), target];
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let mut shields = Vec::new();
         for _ in 0..5 {
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
             shields.push(ships[1].reserves.shield.now);
         }
         assert_eq!(shields, [95.0, 90.0, 85.0, 85.0, 85.0]);
@@ -5326,7 +5327,8 @@ mod tests {
                 ..laser()
             };
             let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser), struck];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(combat.take_strikes().len(), 1, "{id:?}");
             ships[1].reserves.armor.now
         };
@@ -5345,9 +5347,10 @@ mod tests {
         let mut leader = Ship::at(2, 100.0, 0.0);
         leader.reserves.shield = Gauge::full(100.0);
         let mut ships = [firer, leader];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.beams().len(), 1);
-        tick(&mut combat, &mut ships[1..], &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships[1..], &NovaDisable);
         assert_eq!(combat.beams().len(), 1, "it lasts");
         assert_eq!(
             ships[1].reserves.shield.now, 100.0,
@@ -5356,18 +5359,20 @@ mod tests {
         assert_eq!(combat.take_strikes(), []);
     }
 
-    /// Each tick of `ticks` with `weapon` fired once from (0, 0) at a ship
-    /// of 100 shield at (100, 0): the beams there after it, their fade,
-    /// and the ship's shield.
+    /// Each of `ticks` runs of `_HandleBeams` ([`phase::close_tick`])
+    /// after `weapon` is fired once from (0, 0) at a ship of 100 shield at
+    /// (100, 0): the beams there after it, their fade, and the ship's
+    /// shield.
     fn beam_ticks(weapon: WeaponRecord, ticks: usize) -> Vec<(Vec<u32>, f32)> {
         let mut combat = Combat::default();
         let mut target = Ship::at(2, 100.0, 0.0);
         target.reserves.shield = Gauge::full(100.0);
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(weapon), target];
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
         (0..ticks)
             .map(|_| {
-                tick(&mut combat, &mut ships, &NovaDisable);
-                ships[0].trigger = QUIET;
+                phase::close_tick(&mut combat, &mut ships, &NovaDisable);
                 let fades = combat.beams().iter().map(|beam| beam.fade).collect();
                 (fades, ships[1].reserves.shield.now)
             })
@@ -5408,9 +5413,10 @@ mod tests {
     }
 
     /// A beam of `Count` 3 and `Decay` 1 at `Falloff` 10 lives 3 + (15 −
-    /// 10) = 8 ticks. Fired every 4 with the trigger held, a new beam
-    /// comes while the last is in its fade, so two are live from the
-    /// second on, and each hits every tick it lives.
+    /// 10) = 8 ticks. Launched every 4, as its `Reload` of 4 fires it with
+    /// the trigger held, a new beam comes while the last is in its fade,
+    /// so two are live from the second on, and each hits every tick it
+    /// lives.
     #[test]
     fn a_fast_firing_fading_beams_overlap() {
         let pulsing = WeaponRecord {
@@ -5422,11 +5428,16 @@ mod tests {
         let mut combat = Combat::default();
         let mut target = Ship::at(2, 100.0, 0.0);
         target.reserves.shield = Gauge::full(1000.0);
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(pulsing), target];
+        let mut ships = [Ship::at(1, 0.0, 0.0), target];
         let mut ticks = Vec::new();
-        for _ in 0..13 {
+        for tick_no in 0..13 {
+            if tick_no % 4 == 0 {
+                let weapon = WeaponSpec::new(&pulsing);
+                let beam = Beam::launch(weapon, A, A, &ships[0].state, Aiming::Ahead);
+                combat.beams.push(beam);
+            }
             let before = ships[1].reserves.shield.now;
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
             let mut fades: Vec<u32> = combat.beams().iter().map(|beam| beam.fade).collect();
             fades.sort_unstable();
             ticks.push((fades, before - ships[1].reserves.shield.now));
@@ -5450,11 +5461,12 @@ mod tests {
     }
 
     /// The ships `combat` has the laser of a ship at (0, 0) facing
-    /// `heading` hit on its first tick, among `ships`.
+    /// `heading` hit at its first `_HandleBeams`, among `ships`.
     fn beamed(mut combat: Combat, heading: f32, ships: Vec<Ship>) -> Vec<ShipRef> {
         let firer = Ship::at(1, 0.0, 0.0).facing(heading).armed(laser());
         let mut ships: Vec<Ship> = std::iter::once(firer).chain(ships).collect();
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         combat
             .take_strikes()
             .iter()
@@ -5527,10 +5539,11 @@ mod tests {
         let mut target = Ship::at(2, 100.0, 0.0);
         target.reserves.shield = Gauge::full(100.0);
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(flamer), target];
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let mut explosions = Vec::new();
         let mut ends = Vec::new();
         for _ in 0..5 {
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
             ends.extend(combat.beams().iter().map(|beam| beam.end));
             explosions.push(
                 combat
@@ -5566,13 +5579,14 @@ mod tests {
     fn a_beam_follows_its_firer_and_outlives_its_disabling() {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser())];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         ships[0].state.position = Vec2::new(5.0, 6.0);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.beams()[0].start, Vec2::new(5.0, 6.0));
         ships[0].condition = Condition::Disabled;
         ships[0].state.position = Vec2::new(7.0, 8.0);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(
             combat.beams()[0].start,
             Vec2::new(7.0, 8.0),
@@ -5588,7 +5602,8 @@ mod tests {
         };
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(long)];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         ships[0].trigger = QUIET;
         ships[0].condition = Condition::Dying {
             ticks_left: 9,
@@ -5596,15 +5611,16 @@ mod tests {
         };
         for x in [10.0, 20.0] {
             ships[0].state.position = Vec2::new(x, 0.0);
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(combat.beams()[0].start, Vec2::new(x, 0.0), "followed");
         }
     }
 
-    /// Each tick of `ticks` after a beam of 4 ticks fired from (0, 0)
-    /// facing right at a ship of 100 shield at (100, 0), its firer then
-    /// left at `left`, which may move it or take it away: the beams'
-    /// starts and ends, and the ship's shield.
+    /// Each of four runs of `_HandleBeams` ([`phase::close_tick`]) after
+    /// a beam of 4 ticks fired from (0, 0) facing right at a ship of 100
+    /// shield at (100, 0) first hits, its firer then left at `left`, which
+    /// may move it or take it away: the beams' starts and ends, and the
+    /// ship's shield.
     fn beam_left(left: impl Fn(&mut [Ship; 2]) -> usize) -> Vec<(Vec<(Vec2, Vec2)>, f32)> {
         let four = WeaponRecord {
             count: 4,
@@ -5614,12 +5630,13 @@ mod tests {
         let mut target = Ship::at(2, 100.0, 0.0);
         target.reserves.shield = Gauge::full(100.0);
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(four), target];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         ships[0].trigger = QUIET;
         let from = left(&mut ships);
         (0..4)
             .map(|_| {
-                tick(&mut combat, &mut ships[from..], &NovaDisable);
+                phase::close_tick(&mut combat, &mut ships[from..], &NovaDisable);
                 let beams = combat
                     .beams()
                     .iter()
@@ -5661,11 +5678,11 @@ mod tests {
             ..laser()
         };
         let mut combat = Combat::default();
-        tick(
-            &mut combat,
-            &mut [Ship::at(1, 0.0, 0.0).armed(shaky)],
-            &NovaDisable,
-        );
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shaky)];
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        // It first points along its jitter as it follows, in
+        // `_HandleBeams`.
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         // `NeverFires` draws the last of `Rand(6)`: 5 - 3.
         assert_eq!(combat.beams()[0].heading, 92.0);
     }
@@ -5680,24 +5697,41 @@ mod tests {
         [Ship::at(1, 0.0, 0.0).armed(laser()), target]
     }
 
+    /// The ship loop among `ships` on `pass` ([`Combat::handle_npcs`]),
+    /// where an NPC fires its beam.
+    fn handle_npcs_on(combat: &mut Combat, ships: &mut [Ship], pass: GamePass) {
+        phase::run_on(combat, ships, pass, |combat, fighters, arena, chance| {
+            combat.handle_npcs(fighters, arena, chance);
+        });
+    }
+
+    /// `_HandleBeams` and the late steps among `ships` on `pass`
+    /// ([`Combat::close_tick`]).
+    fn close_tick_on(combat: &mut Combat, ships: &mut [Ship], pass: GamePass) {
+        phase::run_on(combat, ships, pass, |combat, fighters, arena, chance| {
+            combat.close_tick(fighters, arena, &mut [], chance);
+        });
+    }
+
     #[test]
     fn on_the_second_pass_a_beam_ages_but_neither_follows_nor_hits() {
         let mut combat = Combat::default();
         let mut ships = laser_and_target();
-        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        handle_npcs_on(&mut combat, &mut ships, DOUBLE_TIME);
+        close_tick_on(&mut combat, &mut ships, DOUBLE_TIME);
         assert_eq!(ships[1].reserves.shield.now, 90.0);
         ships[0].state.position = Vec2::new(5.0, 6.0);
         combat.take_strikes();
-        tick_on(&mut combat, &mut ships, GamePass::Again);
+        close_tick_on(&mut combat, &mut ships, GamePass::Again);
         let beam = combat.beams()[0];
         assert_eq!(beam.start, Vec2::ZERO, "not moved onto its firer");
         assert_eq!(beam.life, 1, "aged");
         assert_eq!(ships[1].reserves.shield.now, 90.0, "no hit");
         assert_eq!(combat.take_strikes(), []);
-        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        close_tick_on(&mut combat, &mut ships, DOUBLE_TIME);
         assert_eq!(ships[1].reserves.shield.now, 80.0, "its last hit");
         assert_eq!(combat.beams()[0].life, 0, "drawn on its last hit's tick");
-        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        close_tick_on(&mut combat, &mut ships, DOUBLE_TIME);
         assert_eq!(combat.beams(), [], "over after its third tick");
         assert_eq!(ships[1].reserves.shield.now, 80.0);
     }
@@ -5706,12 +5740,13 @@ mod tests {
     fn a_beam_fired_on_the_second_pass_hits_only_on_the_advance_pass() {
         let mut combat = Combat::default();
         let mut ships = laser_and_target();
-        tick_on(&mut combat, &mut ships, GamePass::Again);
+        handle_npcs_on(&mut combat, &mut ships, GamePass::Again);
+        close_tick_on(&mut combat, &mut ships, GamePass::Again);
         assert_eq!(combat.beams().len(), 1, "fired");
         assert_eq!(ships[1].reserves.shield.now, 100.0, "no hit yet");
-        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        close_tick_on(&mut combat, &mut ships, DOUBLE_TIME);
         assert_eq!(ships[1].reserves.shield.now, 90.0);
-        tick_on(&mut combat, &mut ships, GamePass::Again);
+        close_tick_on(&mut combat, &mut ships, GamePass::Again);
         // The second pass spends only a life above none (@0x30371-0x30383).
         assert_eq!(
             combat.beams()[0].life,
@@ -5719,7 +5754,7 @@ mod tests {
             "its third tick, on the second pass: spent, and kept"
         );
         assert_eq!(ships[1].reserves.shield.now, 90.0);
-        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        close_tick_on(&mut combat, &mut ships, DOUBLE_TIME);
         assert_eq!(combat.beams(), [], "the advance pass ends it, with no hit");
         assert_eq!(ships[1].reserves.shield.now, 90.0);
     }
@@ -5728,7 +5763,8 @@ mod tests {
     fn in_double_time_a_beam_does_double_damage_on_the_advance_pass() {
         let mut combat = Combat::default();
         let mut ships = laser_and_target();
-        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        handle_npcs_on(&mut combat, &mut ships, DOUBLE_TIME);
+        close_tick_on(&mut combat, &mut ships, DOUBLE_TIME);
         assert_eq!(ships[1].reserves.shield.now, 90.0, "twice its 5 energy");
         let cutter = WeaponRecord {
             mass_dmg: 3,
@@ -5738,7 +5774,8 @@ mod tests {
         let mut bare = Ship::at(2, 100.0, 0.0);
         bare.reserves.shield = Gauge::full(0.0);
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(cutter), bare];
-        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        handle_npcs_on(&mut combat, &mut ships, DOUBLE_TIME);
+        close_tick_on(&mut combat, &mut ships, DOUBLE_TIME);
         assert_eq!(ships[1].reserves.armor.now, 24.0, "twice its 3 mass");
     }
 
@@ -5746,16 +5783,14 @@ mod tests {
     fn without_double_time_beam_damage_is_unchanged() {
         let mut combat = Combat::default();
         let mut ships = laser_and_target();
-        tick_on(
-            &mut combat,
-            &mut ships,
-            GamePass::Advance { double_time: false },
-        );
+        let single = GamePass::Advance { double_time: false };
+        handle_npcs_on(&mut combat, &mut ships, single);
+        close_tick_on(&mut combat, &mut ships, single);
         assert_eq!(ships[1].reserves.shield.now, 95.0);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(
             ships[1].reserves.shield.now, 90.0,
-            "a plain tick is the same"
+            "the phase's default pass is the same"
         );
     }
 
