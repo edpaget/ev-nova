@@ -191,7 +191,7 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags3, 0x0001, Any, Implemented),
     // Translucent shots.
     (Flags3, 0x0002, Any, Presentation),
-    // One shot at a time (`Combat::tick`'s hold); only `_HandleShot`
+    // One shot at a time (`Combat::fly_shots`' hold); only `_HandleShot`
     // reads it, so no beam does.
     (Flags3, 0x0004, Shots, Implemented),
     // Fires from the exit point nearest the target (`exits`).

@@ -9,7 +9,7 @@
 //! self-repair for 300 ticks (`_playerRepairInhibit` = 300.0
 //! @0x3b186-0x3b18d; see the `player_repair` module). Its armour is
 //! truncated toward zero (@0x3b193-0x3b1a1) by the fight itself, before
-//! it decides the breakup (`Combat::tick_on`), as the original's dying
+//! it decides the breakup (`Combat::settle_condition`), as the original's dying
 //! test after the truncation (`_IsDying` @0x3b1e5) reads the truncated
 //! armour: an intact player hit down to 0.4 armour is truncated to none
 //! and starts to break up in the same tick.

@@ -45,11 +45,12 @@
 //! - [`submunition`]: the shots a shot releases on a hit and at the end
 //!   of its life.
 //!
-//! [`Combat`] holds the shots and beams in flight. Each tick
-//! ([`Combat::tick`]) runs over every ship in the fight, each a
-//! [`Fighter`] with the ship it targets, by the fight's [`Rules`], in this
-//! order, each step one of the tick's public phases (see [`phases`]),
-//! which a session may run with its own work between them:
+//! [`Combat`] holds the shots and beams in flight. Each tick runs over
+//! every ship in the fight, each a [`Fighter`] with the ship it targets,
+//! by the fight's [`Rules`], in this order, each step one of the tick's
+//! public phases (see [`phases`]), which the session runs with its own
+//! work between them (`nova_sim::Session::pass_after_move`, the one place
+//! the order is written out):
 //!
 //! 1. The player's point defence fires ([`Combat::defend_player`]), then
 //!    the player fires the weapons its trigger holds that are ready and
@@ -367,7 +368,7 @@
 //! its new layer a frame early (weapons-fidelity phase 39, item 3). See
 //! the `collision` module.
 
-//! A tick runs on a [`GamePass`] ([`Combat::tick_on`]): double time's second
+//! A tick runs on a [`GamePass`] ([`Arena::pass`]): double time's second
 //! pass runs every step but the NPCs' point defence, which it skips, and
 //! the beams', which only spend their life on it, and the advance pass in
 //! double time doubles the beams' damage.
@@ -1299,7 +1300,8 @@ pub struct Combat {
     /// [`PointDefenceRule`] which missiles are hostile
     /// ([`RuleKey::PdHostility`](crate::RuleKey::PdHostility)).
     pd_hostility: RuleSource,
-    /// The field of the tick under way, as [`Combat::tick`] was given it.
+    /// The field of the tick under way, as its last phase was given it
+    /// ([`Arena::field`]).
     field: Field,
     /// How a `Seeker` 0x4000 shot measures its lock
     /// ([`RuleKey::SeekerLockAngle`](crate::RuleKey::SeekerLockAngle)).
@@ -1403,85 +1405,6 @@ pub const PLAYER_SECONDARY_FIRE_PRIORITY: u8 = 6;
 pub const SELF_DESTRUCT: i16 = -999;
 
 impl Combat {
-    /// Advances the fight among `fighters` and `scenery` a tick (see the
-    /// module docs), by `rules`, in `field`, with the relations between
-    /// governments in `govts`, each sub-munition's weapon read from
-    /// `arsenal` and each shot's inaccuracy and spread drawn on `chance`.
-    /// Each stellar's strength, and each asteroid's strength and velocity,
-    /// is left as the shots left it. It is the advance pass at single
-    /// speed ([`Combat::tick_on`]).
-    #[allow(clippy::too_many_arguments)]
-    pub fn tick(
-        &mut self,
-        fighters: &mut [Fighter],
-        arsenal: &Arsenal,
-        govts: &Governments,
-        rules: Rules,
-        field: Field,
-        scenery: Scenery<'_>,
-        chance: &mut (impl Chance + ?Sized),
-    ) {
-        let pass = GamePass::Advance { double_time: false };
-        self.tick_on(
-            pass, fighters, arsenal, govts, rules, field, scenery, chance,
-        );
-    }
-
-    /// Advances the fight a tick as [`Combat::tick`] does, on `pass`,
-    /// which the beams' step reads (see [`GamePass`]). It lends the beams
-    /// no asteroid field ([`Combat::close_tick`]): the session runs the
-    /// phases itself and lends it ([`Combat::close_tick_in`]).
-    #[allow(clippy::too_many_arguments)]
-    pub fn tick_on(
-        &mut self,
-        pass: GamePass,
-        fighters: &mut [Fighter],
-        arsenal: &Arsenal,
-        govts: &Governments,
-        rules: Rules,
-        field: Field,
-        scenery: Scenery<'_>,
-        chance: &mut (impl Chance + ?Sized),
-    ) {
-        let hazards = scenery.hazards;
-        let arena = Arena {
-            pass,
-            arsenal,
-            govts,
-            rules,
-            field,
-        };
-        self.displays.clear();
-        self.defend_player(fighters, arena, chance);
-        self.fire_player(fighters, arena, chance);
-        self.regenerate_player(fighters, arena);
-        for fighter in fighters
-            .iter_mut()
-            .filter(|fighter| fighter.ship == ShipRef::Player)
-        {
-            fighter.condition.count_down();
-        }
-        self.display_player(fighters, arena);
-        let Scenery {
-            stellars,
-            asteroids,
-            hazards: _,
-        } = scenery;
-        let collided = Scenery {
-            stellars: &mut *stellars,
-            asteroids,
-            hazards,
-        };
-        self.test_hits(fighters, arena, collided, chance);
-        self.defend_npcs(fighters, arena, None, false, chance);
-        self.fly_shots(fighters, arena, chance);
-        self.handle_npcs(fighters, arena, chance);
-        if let Some(hazards) = hazards {
-            self.hazards(fighters, hazards);
-        }
-        self.close_tick(fighters, arena, stellars, chance);
-    }
-
     /// Marks the last strike on `ship` since `first_strike`, but a missile
     /// lock's, as `downed` it, if it was.
     fn mark_downed(&mut self, first_strike: usize, ship: ShipRef, downed: Option<Downed>) {

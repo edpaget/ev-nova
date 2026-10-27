@@ -3,8 +3,10 @@
 //! trigger and its regeneration, the collision passes, the NPCs' point
 //! defence and launches, `_HandleShot`, each NPC's `_HandleShip` by slot,
 //! then `_HandleBeams` and the late steps
-//! (see the [`combat`](super) module docs' steps). [`Combat::tick_on`]
-//! runs them in that order with nothing between them.
+//! (see the [`combat`](super) module docs' steps). The session runs them
+//! in that order, its own work between them
+//! (`nova_sim::Session::pass_after_move`); the fight keeps no copy of the
+//! order.
 
 use super::asteroid_walk::AsteroidField;
 use super::ion::IonLockout;
