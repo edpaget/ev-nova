@@ -29,6 +29,10 @@ exclude_re = [
     # the `None` the mutant puts back
     # (`sim_port::tests::a_comm_source_with_nothing_open_answers_nothing`).
     "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace CommSource::(hailing|boarding) -> Option<[A-Za-z]+> with None$",
+    # `PortSource`'s defaults are "nothing open" too: its refuse button's
+    # body is already the `false` the mutant puts back
+    # (`sim_port::tests::a_port_source_with_nothing_open_answers_nothing`).
+    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace PortSource::refusable_offer_dialog -> bool with false$",
     # `FlightSim::death_descs`'s default is "no sabotage": its body is
     # already the empty list the mutant puts back.
     "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace FlightSim::death_descs -> Vec<i16> with vec!\\[\\]$",
