@@ -4194,7 +4194,7 @@ mod tests {
             Ship::at(2, 150.0, 0.0).armed(missile).targeting(A),
         ];
         missile_in_flight(&mut combat, &mut ships);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let defence: Vec<&Shot> = combat
             .shots()
             .iter()
@@ -4259,7 +4259,7 @@ mod tests {
             ship.rounds = LauncherRounds::from([(WeaponId(150), 1)]);
             let mut combat = Combat::default();
             let mut ships = [ship];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
             fired(&combat.take_events(), A)
         };
         assert_eq!(carrier(Some(ShipId(200))), 1);
@@ -4267,9 +4267,9 @@ mod tests {
     }
 
     /// The reload a ship's `Seeker` 0x0020 blaster (reload 0) is left at
-    /// after a tick's fire and reload, its ship `player` or an NPC of
-    /// ionization factor `factor`, under `lockout`; and how many shots it
-    /// fired.
+    /// after its own phase's fire and reload ([`phase::fire`]), its ship
+    /// `player` or an NPC of ionization factor `factor`, under `lockout`;
+    /// and how many shots it fired.
     fn ion_held_reload(player: bool, factor: f32, lockout: RuleSource) -> (f32, usize) {
         let mut combat = Combat::default();
         combat.set_ion_lockout(lockout);
@@ -4286,7 +4286,7 @@ mod tests {
         ship.ion.charge = factor * 100.0;
         let id = ship.id;
         let mut ships = [ship];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::fire(&mut combat, &mut ships, id, &NovaDisable);
         let shots = fired(&combat.take_events(), id);
         (ships[0].armament.mounts()[0].reload, shots)
     }
@@ -4317,11 +4317,11 @@ mod tests {
     }
 
     #[test]
-    fn an_npcs_shot_waits_at_its_launch_point_the_tick_it_is_fired() {
+    fn an_npcs_shot_leaves_unmoved_for_its_firers_government_and_ends_after_its_count() {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(blaster())];
         ships[0].govt = Some(GovtId(140));
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(
             combat.take_events(),
             [CombatEvent::Fired {
@@ -4336,19 +4336,26 @@ mod tests {
         assert_eq!(combat.take_events(), [], "taken");
         assert_eq!(combat.shots().len(), 1);
         assert_eq!(combat.shots()[0].govt(), Some(GovtId(140)), "its firer's");
-        // `_HandleShip` fires it after `_HandleShot` has moved the shots
-        // (@0x44483 after @0x44385): it first moves the next tick.
-        assert_eq!(combat.shots()[0].position, Vec2::ZERO, "unmoved");
+        // `_HandleShip` (@0x44483) fires it unmoved; that it comes after
+        // `_HandleShot` (@0x44385), so the shot first moves the next tick,
+        // is the session's order
+        // (`nova_sim::session::npc_shot_wait`).
+        assert_eq!(
+            (combat.shots()[0].position, combat.shots()[0].moved_from),
+            (Vec2::ZERO, None),
+            "unmoved"
+        );
         assert_eq!(combat.beams(), []);
-        for _ in 1..14 {
-            tick(&mut combat, &mut [Ship::at(1, 0.0, 0.0)], &NovaDisable);
+        let mut quiet = [Ship::at(1, 0.0, 0.0)];
+        for _ in 0..13 {
+            phase::fly_shots(&mut combat, &mut quiet, &NovaDisable);
         }
-        // Its 13th move, on the 14th tick, spent it: it is drawn at its last point for a
-        // tick, and its end of life comes in the next tick's hit pass.
+        // Its 13th move spent it: it is drawn at its last point until its
+        // next visit ends its life (@0x36195).
         assert_eq!(combat.shots().len(), 1, "spent, at its last point");
         assert!((combat.shots()[0].position.x - 195.0).abs() < 1e-3);
-        tick(&mut combat, &mut [Ship::at(1, 0.0, 0.0)], &NovaDisable);
-        assert_eq!(combat.shots(), [], "gone the tick after its count");
+        phase::fly_shots(&mut combat, &mut quiet, &NovaDisable);
+        assert_eq!(combat.shots(), [], "gone at the visit after its count");
     }
 
     #[test]
@@ -4428,12 +4435,12 @@ mod tests {
         let mut target = Ship::at(2, 0.0, 0.0);
         target.reserves.armor.now = 0.0;
         let mut ships = [target];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let events = combat.take_events();
         assert!(matches!(events[0], CombatEvent::BreakingUp { ship: B, .. }));
         assert!(matches!(events[1], CombatEvent::Destroyed { ship: B, .. }));
         assert_eq!(ships[0].condition, Condition::Destroyed);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.take_events(), [], "destroyed once");
     }
 
@@ -4458,13 +4465,25 @@ mod tests {
         combat
     }
 
-    /// How many ticks after the one it breaks up on `ship` is destroyed,
-    /// under `breakup`: none within 400.
+    /// Runs the step of `ships`' first ship in which its death timer
+    /// ticks and its display runs: the player's display step
+    /// ([`phase::display_player`]) or, for an NPC, the ship loop
+    /// ([`phase::handle_npcs`]).
+    fn own_step(combat: &mut Combat, ships: &mut [Ship], rule: &dyn DisableRule) {
+        if ships[0].id == ShipRef::Player {
+            phase::display_player(combat, ships, rule);
+        } else {
+            phase::handle_npcs(combat, ships, rule);
+        }
+    }
+
+    /// How many of its own steps ([`own_step`]) after the one it breaks up
+    /// in `ship` is destroyed, under `breakup`: none within 400.
     fn breakup_ticks(ship: Ship, breakup: Breakup) -> Option<u32> {
         let mut combat = breaking_up_by(breakup);
         let mut ships = [ship];
         for tick_no in 0..400 {
-            tick(&mut combat, &mut ships, &NovaDisable);
+            own_step(&mut combat, &mut ships, &NovaDisable);
             let events = combat.take_events();
             if tick_no == 0 {
                 assert!(
@@ -4514,7 +4533,7 @@ mod tests {
         for (player, timer) in [(true, 15), (false, 5)] {
             let mut combat = Combat::default();
             let mut ships = [breaking(player, 5)];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            own_step(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(
                 ships[0].condition,
                 Condition::Dying {
@@ -4523,7 +4542,7 @@ mod tests {
                 },
                 "player {player}"
             );
-            tick(&mut combat, &mut ships, &NovaDisable);
+            own_step(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(
                 ships[0].condition,
                 Condition::Dying {
@@ -4554,7 +4573,7 @@ mod tests {
     fn an_npc_with_a_death_delay_of_one_explodes_the_tick_after_by_default() {
         let mut combat = Combat::default();
         let mut ships = [breaking(false, 1)];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(
             ships[0].condition,
             Condition::Dying {
@@ -4583,7 +4602,7 @@ mod tests {
             let mut ships = [breaking(player, death_delay)];
             let mut events = Vec::new();
             for _ in 0..300 {
-                tick(&mut combat, &mut ships, &NovaDisable);
+                own_step(&mut combat, &mut ships, &NovaDisable);
                 events.extend(combat.take_events());
             }
             assert_eq!(
@@ -4607,13 +4626,13 @@ mod tests {
         let mut armourless = Ship::at(2, 0.0, 0.0);
         armourless.reserves.armor = Gauge::full(0.0);
         let mut ships = [armourless];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(ships[0].condition, Condition::Intact);
         assert_eq!(combat.take_events(), []);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(ships[0].condition, Condition::Intact, "none to lose");
         ships[0].reserves.armor = Gauge { now: 0.0, max: 0.5 };
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert!(matches!(ships[0].condition, Condition::Destroyed));
     }
 
@@ -4662,7 +4681,7 @@ mod tests {
         target.hull.mass = 400.0;
         let mut ships = [target];
         for _ in 0..=60 {
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         }
         let events = combat.take_events();
         assert!(
@@ -4675,8 +4694,8 @@ mod tests {
     }
 
     /// A ship of `mass` tons at (`x`, `y`) whose armour is gone, with no
-    /// death delay, so it breaks up and explodes on the next tick: `id`,
-    /// an NPC or the player.
+    /// death delay, so it breaks up and explodes at its next display:
+    /// `id`, an NPC or the player.
     fn wreck(id: ShipRef, mass: f32, x: f32, y: f32) -> Ship {
         let mut ship = Ship::at(9, x, y);
         ship.id = id;
@@ -4711,7 +4730,7 @@ mod tests {
             holding(2, 66.0, 0.0, 100.0, 300.0, 300.0),
             holding(3, -30.0, 66.0, 100.0, 300.0, 300.0),
         ];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(ships[0].condition, Condition::Destroyed);
         assert_eq!(left(&ships[1]), (68.0, 300.0));
         assert_eq!(left(&ships[2]), (100.0, 300.0), "66 off on x");
@@ -4744,7 +4763,7 @@ mod tests {
         for wrecked in [planet, wreck(WRECK, 99.0, 0.0, 0.0)] {
             let mut combat = Combat::default();
             let mut ships = [wrecked, holding(1, 10.0, 0.0, 100.0, 300.0, 300.0)];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(ships[0].condition, Condition::Destroyed);
             assert_eq!(left(&ships[1]), (100.0, 300.0));
             assert_eq!(combat.take_strikes(), []);
@@ -4765,7 +4784,7 @@ mod tests {
         let mut npc = holding(1, 40.0, 0.0, 100.0, 300.0, 300.0);
         npc.hull.mass = 200.0;
         let mut ships = [wreck(ShipRef::Player, 200.0, 0.0, 0.0), npc];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::display_player(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(ships[0].condition, Condition::Destroyed);
         assert_eq!(left(&ships[1]), (68.0, 300.0));
         let strikes = combat.take_strikes();
@@ -4784,7 +4803,7 @@ mod tests {
         player.fleet = ShipRef::Player;
         player.hull.mass = 200.0;
         let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), player];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(left(&ships[1]), (68.0, 300.0));
         let strikes = combat.take_strikes();
         assert_eq!(strikes.len(), 1, "{strikes:?}");
@@ -4809,7 +4828,7 @@ mod tests {
             holding(1, 20.0, 0.0, 0.0, 300.0, 300.0),
             holding(2, -20.0, 0.0, 0.0, 13_350.0, 40_000.0),
         ];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(left(&ships[1]), (0.0, 268.0));
         assert_eq!(ships[1].condition, Condition::Intact);
         assert_eq!(left(&ships[2]), (0.0, 13_333.0), "floored, still disabled");
@@ -4867,7 +4886,7 @@ mod tests {
             starting: false,
         };
         let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), dying];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(left(&ships[1]), (0.0, -33.0));
         assert_eq!(
             ships[1].condition,
@@ -4895,7 +4914,7 @@ mod tests {
         jumping.hull.mass = 200.0;
         jumping.jumping = true;
         let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), jumping];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(left(&ships[1]), (68.0, 300.0));
         assert_eq!(combat.take_shoves(), []);
     }
@@ -4909,7 +4928,7 @@ mod tests {
         slow.class_speed = 4.0;
         slow.top_speed = 6.0;
         let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), slow];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let shoves = combat.take_shoves();
         assert_eq!(shoves.len(), 1, "{shoves:?}");
         // -9 + 7.5 is -1.5, short of the class speed; 7 is clamped to 6.
@@ -4929,7 +4948,7 @@ mod tests {
         slow.class_speed = 4.0;
         slow.top_speed = 6.0;
         let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), slow];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let shoves = combat.take_shoves();
         assert_eq!(shoves.len(), 1, "{shoves:?}");
         let pushed = Vec2::new(-1.5, 7.0);
@@ -4973,7 +4992,7 @@ mod tests {
             disabled: true,
             ..Recording::default()
         };
-        tick(&mut combat, &mut ships, &rule);
+        phase::handle_npcs(&mut combat, &mut ships, &rule);
         let asked = rule.asked.take();
         // Slot by slot (@0x4445c): A at its display, its condition
         // settled; the tough ship at its `_HandleShip`'s regeneration,
@@ -4994,10 +5013,10 @@ mod tests {
             [CombatEvent::Disabled { ship: A }]
         );
         assert_eq!(ships[1].condition, Condition::Disabled);
-        tick(&mut combat, &mut ships, &rule);
+        phase::handle_npcs(&mut combat, &mut ships, &rule);
         assert_eq!(combat.take_events(), [], "disabled once");
         let well = Recording::default();
-        tick(&mut combat, &mut ships, &well);
+        phase::handle_npcs(&mut combat, &mut ships, &well);
         assert_eq!(ships[1].condition, Condition::Intact, "as the rule says");
         assert_eq!(combat.take_events(), []);
     }
@@ -5014,7 +5033,7 @@ mod tests {
         let mut ships = [held];
         let well = Recording::default();
         for _ in 0..3 {
-            tick(&mut combat, &mut ships, &well);
+            phase::handle_npcs(&mut combat, &mut ships, &well);
             assert_eq!(ships[0].condition, Condition::Disabled);
         }
         assert_eq!(combat.take_events(), [], "never newly disabled");
@@ -5025,7 +5044,7 @@ mod tests {
             "nor shields: it is disabled"
         );
         ships[0].reserves.armor.now = 30.0;
-        tick(&mut combat, &mut ships, &well);
+        phase::handle_npcs(&mut combat, &mut ships, &well);
         assert_eq!(ships[0].condition, Condition::Disabled, "at full armour");
     }
 
@@ -5063,7 +5082,7 @@ mod tests {
         held.condition = Condition::Disabled;
         held.reserves.armor.now = 0.0;
         let mut ships = [held];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let events = combat.take_events();
         assert!(matches!(events[0], CombatEvent::BreakingUp { ship: B, .. }));
         assert!(matches!(events[1], CombatEvent::Destroyed { ship: B, .. }));
@@ -5076,12 +5095,12 @@ mod tests {
         let mut released = Ship::at(1, 0.0, 0.0);
         released.condition = Condition::Disabled;
         let mut ships = [released];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(ships[0].condition, Condition::Intact, "full armour");
         assert_eq!(combat.take_events(), []);
         ships[0].condition = Condition::Disabled;
         ships[0].reserves.armor.now = 5.0;
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(ships[0].condition, Condition::Disabled, "below a third");
         assert_eq!(combat.take_events(), [], "not newly disabled");
     }
@@ -5199,12 +5218,12 @@ mod tests {
         let mut ships = [ship];
         let mut shields = Vec::new();
         for _ in 0..4 {
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
             shields.push(ships[0].reserves.shield.now);
         }
         assert_eq!(shields, [7.0, 9.0, 10.0, 10.0]);
         ships[0].reserves.shield.now = 12.0;
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(ships[0].reserves.shield.now, 12.0, "over-full, kept");
         assert_eq!(ships[0].reserves.armor.now, 20.0, "no ArmorRech, no armour");
     }
@@ -5218,20 +5237,20 @@ mod tests {
         ship.shield_regen = 0.5;
         ship.armor_regen = 1.0;
         let mut ships = [ship];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(
             (ships[0].reserves.shield.now, ships[0].reserves.armor.now),
             (-0.5, 29.5)
         );
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(ships[0].reserves.armor.now, 30.0, "up to its most");
         let disabling = Recording {
             disabled: true,
             ..Recording::default()
         };
         ships[0].reserves.armor.now = 5.0;
-        tick(&mut combat, &mut ships, &disabling);
-        tick(&mut combat, &mut ships, &disabling);
+        phase::handle_npcs(&mut combat, &mut ships, &disabling);
+        phase::handle_npcs(&mut combat, &mut ships, &disabling);
         assert_eq!(ships[0].condition, Condition::Disabled);
         assert_eq!(ships[0].reserves.armor.now, 5.0, "not while disabled");
         assert_eq!(ships[0].reserves.shield.now, 0.0, "nor shields");
@@ -5239,7 +5258,7 @@ mod tests {
             ticks_left: 9,
             starting: false,
         };
-        tick(&mut combat, &mut ships, &disabling);
+        phase::handle_npcs(&mut combat, &mut ships, &disabling);
         assert_eq!(
             (ships[0].reserves.shield.now, ships[0].reserves.armor.now),
             (0.0, 5.0),
