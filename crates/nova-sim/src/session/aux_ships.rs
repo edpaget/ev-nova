@@ -344,8 +344,10 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtId, MissionId, MissionShip, ShipId, StellarId, SystemId};
     use crate::chance::NeverFires;
+
     use crate::combat::hull::Condition;
     use crate::control::SetExpr;
+
     use crate::gate::GateKind;
     use crate::mission::active::AUTO_ABORT;
     use crate::mission::aux_ships::{AUX_EVERY_VISIT, AuxShips};
@@ -357,6 +359,7 @@ mod tests {
     };
     use crate::story::StoryEvent;
     use crate::testkit::{Draws, FAST, FakePilotCatalog, land_now, ship};
+
     use crate::traffic::npc::Mode;
 
     /// Mission 140's auxiliary ships.

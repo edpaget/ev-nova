@@ -191,6 +191,7 @@ mod tests {
     use crate::combat::hull::{HullSpec, TOUGH};
     use crate::combat::weapon::Explosion;
     use crate::combat::{CombatEvent, ShipRef};
+    use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::pilot::Pilot;
     use crate::reserves::Gauge;
@@ -198,6 +199,7 @@ mod tests {
     use crate::sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL};
     use crate::session::tests::{armed, facing_an_npc};
     use crate::testkit::{Draws, FakePilotCatalog, land_now, outfit};
+    use crate::testkit::{Passive, work_with};
 
     /// A kill outfit and a bomb outfit.
     const KILL: i16 = 261;
@@ -225,7 +227,14 @@ mod tests {
     /// A fight tick drawing `draws`: its sounds.
     fn fight(session: &mut Session, draws: &[u32]) -> Vec<SimSound> {
         session.take_sounds();
-        session.tick_combat(Rules::default(), &mut Draws::of(draws));
+        work_with(
+            session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut Draws::of(draws),
+        );
         session.take_sounds()
     }
 
@@ -265,7 +274,14 @@ mod tests {
             "@0x19ffb"
         );
         let mut draws = Draws::of(&[37]);
-        session.tick_combat(Rules::default(), &mut draws);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut draws,
+        );
         assert_eq!(draws.asked.first(), Some(&100));
         assert_eq!(session.ship.latches.sabotage.counter(), 38.0);
         fight(&mut session, &[]);
@@ -642,7 +658,14 @@ mod tests {
         } else {
             Draws::of(&[draw])
         };
-        session.tick_combat(Rules::default(), &mut draws);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut draws,
+        );
         assert!(draws.asked.contains(&151), "Rand(300 x 0.5 + 1)");
         let reserves = session.pilot.reserves;
         (reserves.shield.now, reserves.armor.now)
@@ -674,7 +697,14 @@ mod tests {
         catalog.outfits.push(outfit(263, &[(SABOTAGE_BOMB, 128)]));
         let mut session = lit(&catalog, &[(263, 2), (BOMB, 1)]);
         let mut draws = Draws::of(&[0, 0]);
-        session.tick_combat(Rules::default(), &mut draws);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut draws,
+        );
         assert_eq!(
             session.take_messages(),
             [
@@ -715,7 +745,14 @@ mod tests {
             disable: &Below200,
             ..Rules::default()
         };
-        session.tick_combat(rules, &mut Draws::of(&[0, 0]));
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            rules,
+            &mut Draws::of(&[0, 0]),
+        );
         // The first leaves 100.99, still disabled by this rule, so the
         // second finds the player disabled and leaves it at 1.
         assert_eq!(session.pilot.reserves.armor.now, 1.0);

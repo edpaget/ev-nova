@@ -247,6 +247,9 @@ fn leave_formation(npc: &mut Npc, inherent: Option<AiType>) {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::combat::Rules;
+    use crate::flight::Controls;
+    use crate::testkit::{Passive, work_with};
     use std::collections::BTreeMap;
 
     use super::*;
@@ -488,7 +491,14 @@ mod tests {
             .with(AiType::WimpyTrader, asked.clone())
             .with(AiType::BraveTrader, asked.clone());
         for _ in 0..16 {
-            session.tick_traffic(&catalog, &ai, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &ai,
+                Rules::default(),
+                &mut NeverFires,
+            );
             let npc = &session.npcs()[0];
             assert!(npc.mission_escort());
             assert!(matches!(npc.goal, Goal::Formation { .. }), "{:?}", npc.goal);
@@ -633,9 +643,14 @@ mod tests {
         let ai = crate::ai::NovaAi::default();
         let mut braking = 0;
         while session.jumping().is_none() {
-            session.tick(crate::flight::Controls::default());
-            session.tick_traffic(&catalog, &ai, &mut NeverFires);
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                crate::flight::Controls::default(),
+                &ai,
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
             assert!(
                 session.space.traffic.departed().is_empty(),
                 "none leaves alone"
@@ -645,9 +660,14 @@ mod tests {
         }
         assert_eq!(led_offsets(&session).len(), 3, "all still led");
         for _ in 0..30 {
-            session.tick(crate::flight::Controls::default());
-            session.tick_traffic(&catalog, &ai, &mut NeverFires);
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                crate::flight::Controls::default(),
+                &ai,
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
             for npc in session.player_led() {
                 assert_eq!(
                     npc.warp.goal,
@@ -680,7 +700,14 @@ mod tests {
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         session.space.traffic.npcs_mut()[0].condition = Condition::Destroyed;
-        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.npcs().len(), 1);
         assert_eq!(slots(&session), [(2, 2)]);
         assert_eq!(ships_of(&session).destroyed, 1, "a lost mission ship");
@@ -715,7 +742,14 @@ mod tests {
         npc.reserves.armor.now = 0.0;
         npc.hull.death_delay = 5;
         let id = npc.id;
-        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        work_with(
+            session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
         let npc = session.space.npc(id).expect("breaking up");
         assert!(matches!(npc.condition, Condition::Dying { .. }));
         id
@@ -778,7 +812,14 @@ mod tests {
                 ..crate::testkit::planet(160, at.x, at.y)
             }];
             session.chart.listed = session.chart.sites.clone();
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &Passive,
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
             assert!(session.space.npc(id).is_none(), "{reading:?}: killed");
             assert_eq!(slots(&session), [(2, 2)], "{reading:?}: re-formed");
             assert_eq!(session.pilot.cargo, cargo, "{reading:?}");
@@ -837,7 +878,14 @@ mod tests {
             if session.space.npc(id).is_none() {
                 break;
             }
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &Passive,
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
         }
         assert_eq!(session.space.npc(id), None, "destroyed and gone");
         assert_eq!(ships_of(&session).destroyed, 1, "a lost mission ship");
@@ -862,7 +910,14 @@ mod tests {
     fn a_disabled_mission_escort_destroys_no_cargo() {
         let mut session = laden(1, RuleSource::Engine);
         session.space.traffic.npcs_mut()[0].condition = Condition::Disabled;
-        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.pilot.cargo, BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
         assert!(session.npcs()[0].mission_escort());
     }
@@ -886,13 +941,27 @@ mod tests {
         npc.self_repair = true;
         npc.reserves.armor.now = 1.0;
         let id = npc.id;
-        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(
             session.space.npc(id).expect("here").condition,
             Condition::Disabled
         );
         let mut chance = crate::testkit::Draws::of(&[0]);
-        session.tick_combat(crate::combat::Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut chance,
+        );
         assert_eq!(chance.asked, [crate::self_repair::REPAIR_ODDS]);
         let npc = session.space.npc(id).expect("here");
         assert_eq!(npc.condition, Condition::Intact);
@@ -1313,7 +1382,14 @@ mod tests {
         take_off(&mut session, &catalog);
         session.space.traffic.npcs_mut()[1].condition = Condition::Disabled;
         session.space.traffic.npcs_mut()[0].condition = Condition::Destroyed;
-        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
         assert!(session.pilot().escorts().is_empty());
         assert!(session.space.escorts.fleet.is_empty());
         assert_eq!(ships_of(&session).destroyed, 1);

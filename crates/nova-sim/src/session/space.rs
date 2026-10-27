@@ -43,6 +43,11 @@ pub(super) struct Space {
     pub(super) iff_marked: BTreeSet<GovtId>,
     /// The NPCs in the system.
     pub(super) traffic: Traffic,
+    /// What a test puts on the line as the next advance pass's thinks
+    /// queue theirs, each at its actor's berth (see
+    /// `Session::pass_after_move`).
+    #[cfg(test)]
+    pub(super) queued_in_frame: Vec<crate::traffic::plunder::PirateEvent>,
     /// Whether the system is to be populated on the next traffic tick in
     /// flight: from the session's start, and after a relocation that
     /// resets the traffic while landed. A take-off populates at once.
@@ -168,6 +173,8 @@ impl Space {
             reinforcements_held: false,
             iff_marked: BTreeSet::new(),
             traffic: Traffic::new(),
+            #[cfg(test)]
+            queued_in_frame: Vec::new(),
             traffic_due: true,
             drawn: BTreeMap::new(),
             combat: Combat::default(),

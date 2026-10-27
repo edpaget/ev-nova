@@ -293,6 +293,10 @@ impl Session {
             self.dispatch_npcs(pass, behaviour, rules, chance);
             // `_EscortAI`'s variants and target calls, in berth order.
             self.space.answer_voice_cues(&self.statics, &mut *chance);
+            #[cfg(test)]
+            for event in std::mem::take(&mut self.space.queued_in_frame) {
+                self.space.traffic.queue_pirate_event(event);
+            }
             // Every think's work on the line, the launched fighters'
             // among it, in slot order (see `Session::dispatch_npcs`).
             self.settle_line_queue(rules.law, chance);

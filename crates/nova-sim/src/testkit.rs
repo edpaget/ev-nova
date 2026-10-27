@@ -22,6 +22,7 @@ use crate::catalog::{
     TrafficCatalog,
 };
 use crate::chance::{Chance, NeverFires};
+use crate::combat::armament::Trigger;
 use crate::combat::{Rules, ShipRef};
 use crate::control::Test;
 use crate::flight::{Controls, Turn};
@@ -162,14 +163,18 @@ pub(crate) fn hideable(catalog: &mut FakePilotCatalog) {
     }
 }
 
-/// Every NPC keeps its goal and its target, firing nothing: the traffic
-/// of a pass whose test is about something else.
+/// Every NPC keeps its goal, its target and its trigger: the traffic of a
+/// pass whose test is about something else.
 #[derive(Debug)]
 pub(crate) struct Passive;
 
 impl Behaviour for Passive {
     fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
         npc.goal
+    }
+
+    fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
+        npc.trigger
     }
 
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {

@@ -1,5 +1,6 @@
 //! Tests of the reinforcement fleet in a session.
 
+use crate::testkit::work_with;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -148,7 +149,14 @@ fn flown(catalog: &FakePilotCatalog, pilot: Pilot) -> Session {
     let mut session = Session::fly(catalog, pilot)
         .expect("flies")
         .with_strings(Rc::new(Lines));
-    session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+    work_with(
+        &mut session,
+        catalog,
+        Controls::default(),
+        &Peaceful,
+        Rules::default(),
+        &mut NeverFires,
+    );
     let _ = (session.take_messages(), session.take_sounds());
     session
 }
@@ -291,14 +299,21 @@ fn npc_mut(session: &mut Session, id: NpcId) -> Option<&mut Npc> {
         .find(|npc| npc.id == id)
 }
 
-/// A traffic tick of `catalog` in which nobody decides anything new: the
+/// A pass of `catalog` in which nobody decides anything new: the
 /// messages and sounds it raised.
 fn ticked(session: &mut Session, catalog: &FakePilotCatalog) -> (Vec<SimMessage>, Vec<SimSound>) {
-    session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+    work_with(
+        session,
+        catalog,
+        Controls::default(),
+        &Keeping,
+        Rules::default(),
+        &mut NeverFires,
+    );
     (session.take_messages(), session.take_sounds())
 }
 
-/// The messages of `ticks` traffic ticks of `catalog`.
+/// The messages of `ticks` passes of `catalog`.
 fn heard(session: &mut Session, catalog: &FakePilotCatalog, ticks: i16) -> Vec<SimMessage> {
     (0..ticks)
         .flat_map(|_| ticked(session, catalog).0)
@@ -338,11 +353,17 @@ fn timer(session: &Session) -> i32 {
     session.clock_here().timer
 }
 
-/// A traffic tick as `calls` decide, then the combat tick of the same
-/// step, which settles the calls (see the `comm_calls` module).
+/// A pass as `calls` decide, which settles the calls (see the
+/// `comm_calls` module).
 fn step(session: &mut Session, catalog: &FakePilotCatalog, calls: &Calling) {
-    session.tick_traffic(catalog, calls, &mut NeverFires);
-    session.tick_combat(Rules::default(), &mut NeverFires);
+    work_with(
+        session,
+        catalog,
+        Controls::default(),
+        calls,
+        Rules::default(),
+        &mut NeverFires,
+    );
 }
 
 /// The player's system's countdown.
@@ -908,9 +929,14 @@ fn a_call_held_behind_a_scan_still_starts_the_timer_the_clock_ticks_on_that_fram
     };
     for _ in 0..20 {
         inspect_again(&mut session, scanner);
-        session.tick_traffic(&catalog, &behaviour, &mut NeverFires);
-        assert_eq!(timer(&session), 0, "held behind the scan, no tick yet");
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &behaviour,
+            Rules::default(),
+            &mut NeverFires,
+        );
         if timer(&session) > 0 {
             break;
         }
@@ -961,9 +987,14 @@ fn a_later_slots_call_is_still_made_after_an_earlier_slots_scan_puts_its_find_on
     for _ in 0..20 {
         inspect_again(&mut session, scanner);
         let mut chance = Draws::of(&[0]);
-        session.tick_traffic(&catalog, &behaviour, &mut chance);
-        assert_eq!(timer(&session), 0, "held behind the scan, no tick yet");
-        session.tick_combat(Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &behaviour,
+            Rules::default(),
+            &mut chance,
+        );
         let (messages, sounds) = (session.take_messages(), session.take_sounds());
         if timer(&session) > 0 {
             assert!(
@@ -1003,10 +1034,14 @@ fn a_frames_announcement_comes_after_its_held_distress_call() {
         calls: Vec::new(),
         flees: vec![(trader, pirate)],
     };
-    session.tick_traffic(&catalog, &behaviour, &mut NeverFires);
-    assert_eq!(session.take_messages(), [], "the call and the clock held");
-    assert_eq!(timer(&session), 10);
-    session.tick_combat(Rules::default(), &mut NeverFires);
+    work_with(
+        &mut session,
+        &catalog,
+        Controls::default(),
+        &behaviour,
+        Rules::default(),
+        &mut NeverFires,
+    );
     let messages = session.take_messages();
     assert!(
         matches!(messages.as_slice(), [SimMessage::CallForHelp(_), announcement] if *announcement == announced()[0]),
@@ -1017,32 +1052,4 @@ fn a_frames_announcement_comes_after_its_held_distress_call() {
         [SimSound::CallForHelp, SimSound::ReinforcementsApproaching]
     );
     assert_eq!(timer(&session), 9);
-}
-
-#[test]
-fn a_held_clock_tick_is_not_lost_when_no_combat_tick_follows() {
-    let catalog = reinforced();
-    let mut session = flying(&catalog);
-    let warship = fight(&mut session, FED, 100.0);
-    session.call_for_reinforcements(warship, false, None);
-    let scanner = scanner(&mut session);
-    let behaviour = ScanFirst {
-        scanner,
-        calls: Vec::new(),
-        flees: Vec::new(),
-    };
-    session.tick_traffic(&catalog, &behaviour, &mut NeverFires);
-    assert_eq!(timer(&session), i32::from(TIME), "held");
-    session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
-    assert_eq!(timer(&session), i32::from(TIME) - 1, "the held tick ran");
-    session.tick_combat(Rules::default(), &mut NeverFires);
-    assert_eq!(
-        timer(&session),
-        i32::from(TIME) - 2,
-        "held again behind the scan still queued, then settled"
-    );
-    session.tick_combat(Rules::default(), &mut NeverFires);
-    assert_eq!(timer(&session), i32::from(TIME) - 2, "once only");
-    session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
-    assert_eq!(timer(&session), i32::from(TIME) - 3, "back in place");
 }
