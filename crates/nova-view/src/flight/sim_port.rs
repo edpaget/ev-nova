@@ -76,6 +76,14 @@ pub trait FlightSim: MapSource + CommSource + PortSource {
     /// step it shows. `None` with no box and no stellar under it.
     fn hover(&self, at: Vec2, drawn: &DrawnBoxes) -> Option<Hover>;
 
+    /// The `dësc` IDs a sabotaged player sees as it dies
+    /// (`nova_sim::Session::sabotage_death_descs`): the router asks once
+    /// the hold after the explosion has run out. None by default: a sim
+    /// with no sabotage.
+    fn death_descs(&self) -> Vec<i16> {
+        Vec::new()
+    }
+
     /// The ship types the system's traffic will bring
     /// (`nova_sim::Session::coming_traffic_ships`), whose sheets the view
     /// reads as play is entered. None by default: a sim with no traffic.
@@ -298,6 +306,7 @@ mod tests {
         );
         assert_eq!(flight.load_description(None, None), "");
         assert_eq!(flight.coming_traffic(), []);
+        assert_eq!(flight.death_descs(), Vec::<i16>::new());
     }
 
     #[test]

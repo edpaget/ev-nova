@@ -47,8 +47,11 @@ use super::{CommSource, FlightSim, MapSource, PortSource, fresh_description};
 /// ([`FakeFlight::set_coming_traffic`]). It loads each description with
 /// the next text queued ([`FakeFlight::queue_description`]), or as a new
 /// pilot's once the queue is empty ([`fresh_description`]), recording
-/// each load ([`FakeFlight::descriptions_loaded`]). One with nothing
-/// scripted meets [`check_contract`].
+/// each load ([`FakeFlight::descriptions_loaded`]). It gives the death
+/// `dësc`s it is given ([`FakeFlight::set_death_descs`]). It answers
+/// [`FlightCommand::CommShown`] done without taking an answer from the
+/// queue, as the message line's follow-up rides along with the commands a
+/// test is about. One with nothing scripted meets [`check_contract`].
 #[derive(Clone, Debug, Default)]
 pub struct FakeFlight {
     frame: FlightFrame,
@@ -65,6 +68,7 @@ pub struct FakeFlight {
     coming: Vec<ShipId>,
     descriptions: VecDeque<String>,
     loaded: Vec<(Option<String>, Option<DescMovie>)>,
+    death_descs: Vec<i16>,
 }
 
 /// What a [`FakeFlight`] answers the [`MapSource`] questions with, each
@@ -174,13 +178,22 @@ impl FakeFlight {
         self.descriptions.push_back(text.to_owned());
     }
 
+    /// Gives `descs` as the death `dësc`s from now on
+    /// ([`FlightSim::death_descs`]).
+    pub fn set_death_descs(&mut self, descs: Vec<i16>) {
+        self.death_descs = descs;
+    }
+
     /// Each description loaded, its text and movie, in order.
     #[must_use]
     pub fn descriptions_loaded(&self) -> &[(Option<String>, Option<DescMovie>)] {
         &self.loaded
     }
 
-    /// Answers the next command not yet answered with `answer`.
+    /// Answers the next command not yet answered with `answer`: the
+    /// message line's [`FlightCommand::CommShown`] takes none, and is
+    /// answered done, so the answers a test queues line up with the
+    /// commands it is about.
     pub fn queue_answer(&mut self, answer: Answer) {
         self.answers.push_back(answer);
     }
@@ -263,7 +276,11 @@ impl FlightSim for FakeFlight {
     }
 
     fn apply(&mut self, command: FlightCommand) -> Answer {
+        let shown = matches!(command, FlightCommand::CommShown(_));
         self.applied.push(command);
+        if shown {
+            return Answer::Done;
+        }
         self.answers.pop_front().unwrap_or(Answer::Refused)
     }
 
@@ -282,6 +299,10 @@ impl FlightSim for FakeFlight {
 
     fn coming_traffic(&self) -> Vec<ShipId> {
         self.coming.clone()
+    }
+
+    fn death_descs(&self) -> Vec<i16> {
+        self.death_descs.clone()
     }
 
     fn load_description(&mut self, raw: Option<&str>, movie: Option<&DescMovie>) -> String {
@@ -711,7 +732,25 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 /// - **a weapon select waits for the step**: Weapon Select
 ///   ([`FlightCommand::SelectWeapon`]) is answered done or refused, never
 ///   with anything else, and the frame after it equals the frame before,
-///   as the press is taken by the next step.
+///   as the press is taken by the next step;
+/// - **the travel facts agree**: a frame's warp end is due only while the
+///   jump itself is under way ([`FlightFrame::warping`]), the jump itself
+///   only while a jump is under way, a leave is due only while landed, and
+///   the hold has expired only with the fate
+///   [`PlayerFate::Holding`]` { ticks_left: 0 }`, [`PlayerFate::Fading`] or
+///   [`PlayerFate::GameOver`]: an expired hold reads `Holding { ticks_left:
+///   0 }` until the fade begins ([`FlightCommand::BeginFade`]);
+/// - **no arrival before the warp's end**: with the warp's end not due,
+///   [`FlightCommand::Arrive`] is refused, and the frame after it equals
+///   the frame before;
+/// - **the fade waits for the hold**: before the hold has expired,
+///   [`FlightCommand::BeginFade`] and [`FlightCommand::EndPlay`] are
+///   refused, and the frame after them equals the frame before;
+/// - **a jump's answer is its kind**: [`FlightCommand::Jump`] answers
+///   [`Answer::Jumped`], [`Answer::JumpRefused`] or [`Answer::Refused`]; a
+///   refusal leaves [`FlightFrame::jump_under_way`] as it was (a disabled
+///   ship's J is refused mid-jump too), and after [`Answer::Jumped`] a
+///   jump is under way. Checked last, as a jump begun changes the flight.
 ///
 /// The error says which clause failed.
 pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
@@ -763,7 +802,90 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
     }
     check_world(sim, &once)?;
     check_hud(&once)?;
-    check_weapon_select(sim, &once)
+    check_weapon_select(sim, &once)?;
+    check_travel(sim, &once)?;
+    check_jump(sim, &once)
+}
+
+/// [`check_contract`]'s clauses on the travel facts, the arrival and the
+/// fade, `once` the frame filled before.
+fn check_travel(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String> {
+    let facts = |what: &str| Err(format!("the travel facts agree: {what}"));
+    if once.warp_end_due && !once.warping {
+        return facts("the warp's end is due with no warp");
+    }
+    if once.warping && !once.jump_under_way {
+        return facts("a warp with no jump under way");
+    }
+    if once.leave_due && !once.docked() {
+        return facts("a leave due in flight");
+    }
+    if once.hold_expired
+        && !matches!(
+            once.fate,
+            PlayerFate::Holding { ticks_left: 0 } | PlayerFate::Fading | PlayerFate::GameOver
+        )
+    {
+        return facts(&format!("the hold expired with the fate {:?}", once.fate));
+    }
+    if !once.warp_end_due {
+        refused_unchanged(
+            sim,
+            once,
+            FlightCommand::Arrive,
+            "no arrival before the warp's end",
+        )?;
+    }
+    if !once.hold_expired {
+        for command in [FlightCommand::BeginFade, FlightCommand::EndPlay] {
+            refused_unchanged(sim, once, command, "the fade waits for the hold")?;
+        }
+    }
+    Ok(())
+}
+
+/// Sends `command`, which `clause` says must be refused, and checks that
+/// it is, and that the frame after it equals `once`.
+fn refused_unchanged(
+    sim: &mut impl FlightSim,
+    once: &FlightFrame,
+    command: FlightCommand,
+    clause: &str,
+) -> Result<(), String> {
+    let sent = format!("{command:?}");
+    let answer = sim.apply(command);
+    if !answer.is_refused() {
+        return Err(format!("{clause}: {sent} answered {answer:?}"));
+    }
+    let mut after = unlike(once);
+    sim.frame(&mut after);
+    if after != *once {
+        return Err(format!("{clause}: the frame was {once:?}, then {after:?}"));
+    }
+    Ok(())
+}
+
+/// [`check_contract`]'s jump clause, `once` the frame filled before.
+fn check_jump(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String> {
+    let answer = sim.apply(FlightCommand::Jump);
+    let mut after = unlike(once);
+    sim.frame(&mut after);
+    let clause = "a jump's answer is its kind";
+    match answer {
+        Answer::Jumped(_) if !after.jump_under_way => {
+            Err(format!("{clause}: {answer:?} with no jump under way"))
+        }
+        Answer::JumpRefused { .. } | Answer::Refused
+            if after.jump_under_way != once.jump_under_way =>
+        {
+            Err(format!(
+                "{clause}: {answer:?} took the jump under way from {} to {}",
+                once.jump_under_way, after.jump_under_way
+            ))
+        }
+        Answer::Jumped(_) | Answer::JumpRefused { .. } | Answer::Refused => Ok(()),
+        _ => Err(format!("{clause}: it answered {answer:?}")),
+    }
 }
 
 /// [`check_contract`]'s clauses on the HUD and the target in `once`, the
@@ -1154,6 +1276,28 @@ mod tests {
         AnswersTheSelect,
         /// Weapon Select changes the frame.
         SelectChangesTheFrame,
+        /// The warp's end is due with no warp.
+        WarpEndsUnwarped,
+        /// A warp with no jump under way.
+        WarpsWithoutAJump,
+        /// A leave is due in flight.
+        LeavesInFlight,
+        /// The hold has expired with the player flying.
+        ExpiresFlying,
+        /// The arrival is answered before the warp's end.
+        ArrivesEarly,
+        /// The arrival refused changes the frame.
+        ArrivalChangesTheFrame,
+        /// The fade begins before the hold has expired.
+        FadesEarly,
+        /// Play ends before the hold has expired.
+        EndsEarly,
+        /// The jump is answered with a stellar.
+        AnswersTheJump,
+        /// A refused jump puts a jump under way.
+        RefusalJumps,
+        /// A jump answered as begun leaves none under way.
+        JumpsNowhere,
     }
 
     /// A [`FakeFlight`] with one [`Fault`].
@@ -1197,6 +1341,13 @@ mod tests {
                     ..record::stellar(StellarId(129))
                 }),
                 Fault::RowsOutOfOrder => into.hud.escort_rows.swap(0, 1),
+                Fault::WarpEndsUnwarped => {
+                    into.warp_end_due = true;
+                    into.jump_under_way = true;
+                }
+                Fault::WarpsWithoutAJump => into.warping = true,
+                Fault::LeavesInFlight => into.leave_due = true,
+                Fault::ExpiresFlying => into.hold_expired = true,
                 _ => {}
             }
         }
@@ -1218,7 +1369,30 @@ mod tests {
         fn apply(&mut self, command: FlightCommand) -> Answer {
             let click = matches!(command, FlightCommand::ClickInSpace { .. });
             let select = matches!(command, FlightCommand::SelectWeapon { .. });
+            let arrive = matches!(command, FlightCommand::Arrive);
+            let fade = matches!(command, FlightCommand::BeginFade);
+            let end = matches!(command, FlightCommand::EndPlay);
+            let jump = matches!(command, FlightCommand::Jump);
             match self.fault {
+                Fault::ArrivesEarly if arrive => Answer::Arrived {
+                    system: SystemId(131),
+                    combat: Vec::new(),
+                },
+                Fault::ArrivalChangesTheFrame if arrive => {
+                    self.fake.set_frame(stellar(129));
+                    Answer::Refused
+                }
+                Fault::FadesEarly if fade => Answer::Done,
+                Fault::EndsEarly if end => Answer::Done,
+                Fault::AnswersTheJump if jump => Answer::Stellar(StellarId(128)),
+                Fault::RefusalJumps if jump => {
+                    self.fake.frame_mut().jump_under_way = true;
+                    Answer::JumpRefused {
+                        refusal: nova_sim::JumpRefusal::NoDestination,
+                        told: false,
+                    }
+                }
+                Fault::JumpsNowhere if jump => Answer::Jumped(SystemId(131)),
                 Fault::AnswersTheSelect if select => Answer::Stellar(StellarId(128)),
                 Fault::SelectChangesTheFrame if select => {
                     self.fake.set_frame(stellar(129));
@@ -1382,6 +1556,133 @@ mod tests {
             "{changed}"
         );
         assert!(changed.contains("the frame was"), "{changed}");
+    }
+
+    #[test]
+    fn travel_facts_that_disagree_break_the_contract() {
+        for (fault, what) in [
+            (
+                Fault::WarpEndsUnwarped,
+                "the warp's end is due with no warp",
+            ),
+            (Fault::WarpsWithoutAJump, "a warp with no jump under way"),
+            (Fault::LeavesInFlight, "a leave due in flight"),
+            (
+                Fault::ExpiresFlying,
+                "the hold expired with the fate Flying",
+            ),
+        ] {
+            let clause = clause(fault);
+            assert_eq!(
+                clause,
+                format!("the travel facts agree: {what}"),
+                "{fault:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_arrival_before_the_warps_end_breaks_the_contract() {
+        let answered = clause(Fault::ArrivesEarly);
+        assert!(
+            answered.starts_with("no arrival before the warp's end"),
+            "{answered}"
+        );
+        assert!(answered.contains("answered"), "{answered}");
+        let changed = clause(Fault::ArrivalChangesTheFrame);
+        assert!(
+            changed.starts_with("no arrival before the warp's end"),
+            "{changed}"
+        );
+        assert!(changed.contains("the frame was"), "{changed}");
+    }
+
+    #[test]
+    fn a_fade_or_an_end_before_the_hold_breaks_the_contract() {
+        for (fault, command) in [
+            (Fault::FadesEarly, "BeginFade"),
+            (Fault::EndsEarly, "EndPlay"),
+        ] {
+            let clause = clause(fault);
+            assert!(
+                clause.starts_with("the fade waits for the hold"),
+                "{fault:?}: {clause}"
+            );
+            assert!(clause.contains(command), "{fault:?}: {clause}");
+        }
+    }
+
+    #[test]
+    fn a_jump_answered_otherwise_or_against_its_kind_breaks_the_contract() {
+        for (fault, says) in [
+            (Fault::AnswersTheJump, "it answered"),
+            (
+                Fault::RefusalJumps,
+                "took the jump under way from false to true",
+            ),
+            (Fault::JumpsNowhere, "with no jump under way"),
+        ] {
+            let clause = clause(fault);
+            assert!(
+                clause.starts_with("a jump's answer is its kind"),
+                "{fault:?}: {clause}"
+            );
+            assert!(clause.contains(says), "{fault:?}: {clause}");
+        }
+    }
+
+    #[test]
+    fn a_fake_through_a_jump_a_hold_and_a_leave_meets_the_contract() {
+        let warping = FlightFrame {
+            jump_under_way: true,
+            warping: true,
+            warp_end_due: true,
+            ..stellar(128)
+        };
+        let leaving = FlightFrame {
+            landed: Some(StellarId(128)),
+            leave_due: true,
+            ..stellar(128)
+        };
+        let expired = |fate| FlightFrame {
+            fate,
+            hold_expired: true,
+            ..stellar(128)
+        };
+        for frame in [
+            warping,
+            leaving,
+            expired(PlayerFate::Holding { ticks_left: 0 }),
+            expired(PlayerFate::Fading),
+            expired(PlayerFate::GameOver),
+        ] {
+            let mut fake = FakeFlight::new();
+            fake.set_frame(frame.clone());
+            assert_eq!(check_contract(&mut fake), Ok(()), "{frame:?}");
+        }
+    }
+
+    #[test]
+    fn the_fake_answers_the_message_line_done_without_its_queue() {
+        let mut fake = FakeFlight::new();
+        fake.queue_answer(Answer::Jumped(SystemId(131)));
+        assert_eq!(fake.apply(FlightCommand::CommShown(240)), Answer::Done);
+        assert_eq!(
+            fake.apply(FlightCommand::Jump),
+            Answer::Jumped(SystemId(131))
+        );
+        assert_eq!(
+            fake.applied(),
+            [FlightCommand::CommShown(240), FlightCommand::Jump]
+        );
+    }
+
+    #[test]
+    fn the_fake_gives_the_death_descs_it_is_given() {
+        let mut fake = FakeFlight::new();
+        assert_eq!(fake.death_descs(), Vec::<i16>::new());
+        fake.set_death_descs(vec![130, 131]);
+        assert_eq!(fake.death_descs(), [130, 131]);
     }
 
     #[test]

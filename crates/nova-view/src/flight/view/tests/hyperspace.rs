@@ -730,6 +730,40 @@ fn a_jump_moves_off_fades_to_white_arrives_on_the_warp_end_and_fades_in() {
 }
 
 #[test]
+fn a_real_flight_meets_the_contract_through_a_jump() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    meets_the_contract(&view, "ready, the check's J begun");
+    tap(&mut view, JUMP);
+    assert!(view.frame.jump_under_way && !view.frame.warping);
+    meets_the_contract(&view, "preparing");
+    jump_now(&mut view);
+    assert!(view.frame.warping);
+    meets_the_contract(&view, "warping");
+    let mut flight = view.sim.clone();
+    let mut frame = nova_sim::flight_frame::FlightFrame::default();
+    let mut report = nova_sim::flight_frame::StepReport::default();
+    for _ in 0..2000 {
+        flight.frame(&mut frame);
+        if frame.warp_end_due {
+            break;
+        }
+        flight.step(
+            &nova_sim::flight_frame::StepInput::default(),
+            1,
+            &mut report,
+        );
+    }
+    assert!(frame.warp_end_due, "the warp ended");
+    assert_eq!(
+        crate::flight::sim_port::fixture::check_contract(&mut flight),
+        Ok(()),
+        "at the warp's end"
+    );
+}
+
+#[test]
 fn the_fade_starts_on_the_tick_the_screen_is_lit_and_arrival_waits_for_the_session() {
     let mut view = flight();
     plot(&mut view, 131);

@@ -2289,6 +2289,17 @@ fn in_the_bar_of(mut catalog: FakeCatalog, course: Option<i16>) -> View {
     view
 }
 
+/// The port's contract (`check_contract`) holds of `view`'s real flight,
+/// checked on a copy, as the check sends commands.
+fn meets_the_contract(view: &View, at: &str) {
+    let mut flight = view.sim.clone();
+    assert_eq!(
+        crate::flight::sim_port::fixture::check_contract(&mut flight),
+        Ok(()),
+        "{at}"
+    );
+}
+
 /// A view over a scripted flight ([`FakeFlight`]), for the component
 /// tests of the code on the port.
 type Faked = FlightView<FakeCatalog, FakeFlight>;

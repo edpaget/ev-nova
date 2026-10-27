@@ -5,11 +5,13 @@
 //!
 //! It forwards: [`FlightSim::frame`] to `Session::fill_frame`,
 //! [`FlightSim::hover`] to `Session::hover`, [`FlightSim::coming_traffic`]
-//! to `Session::coming_traffic_ships`,
+//! to `Session::coming_traffic_ships`, [`FlightSim::death_descs`] to
+//! `Session::sabotage_death_descs`,
 //! [`FlightSim::step`] to `Session::step`, with its collaborators and
 //! the catalog the view shared,
 //! [`FlightSim::apply`] to `Session::apply`, whose match over the
-//! commands lives on the session's side, and [`FlightSim::drain`] to
+//! commands lives on the session's side, with the catalog the view shared
+//! and the chance, and [`FlightSim::drain`] to
 //! `Session::drain_events`. A session that failed to start fills the
 //! default frame, runs no step, refuses every command and drains nothing.
 //!
@@ -48,8 +50,9 @@ use super::sim_port::{CommSource, FlightSim, MapSource, PortSource, fresh_descri
 /// with the collaborators its calls are handed (see the module docs).
 /// `C` is the catalog the view reads; it names the flight the view's
 /// default `FlightView<C>` shows. The view shares its handle on it with
-/// the flight as it is read ([`SessionFlight::share_catalog`]).
-#[derive(Clone, Debug)]
+/// the flight as it is read ([`SessionFlight::share_catalog`]). A clone
+/// shares the catalog and the collaborators, and copies the session.
+#[derive(Debug)]
 pub struct SessionFlight<C> {
     /// The flight, or why it could not start.
     pub(in crate::flight) session: Result<Session, String>,
@@ -72,6 +75,24 @@ pub struct SessionFlight<C> {
     /// `C` names the view's catalog: the flight the view's default
     /// `FlightView<C>` shows.
     view_catalog: PhantomData<C>,
+}
+
+// By hand: the derive would ask `C: Clone`, which only names the view's
+// catalog.
+impl<C> Clone for SessionFlight<C> {
+    fn clone(&self) -> Self {
+        Self {
+            session: self.session.clone(),
+            chance: self.chance.clone(),
+            behaviour: Rc::clone(&self.behaviour),
+            disable_rule: Rc::clone(&self.disable_rule),
+            defence_rule: Rc::clone(&self.defence_rule),
+            law: Rc::clone(&self.law),
+            boarding_rule: Rc::clone(&self.boarding_rule),
+            catalog: self.catalog.clone(),
+            view_catalog: PhantomData,
+        }
+    }
 }
 
 /// The view's catalog, as the flight reads it: as a `SimCatalog` only,
@@ -252,6 +273,13 @@ impl<C> FlightSim for SessionFlight<C> {
         self.session().ok()?.hover(at, drawn)
     }
 
+    /// Forwards to `Session::sabotage_death_descs`; a failed session has
+    /// none.
+    fn death_descs(&self) -> Vec<i16> {
+        self.session()
+            .map_or_else(|_| Vec::new(), Session::sabotage_death_descs)
+    }
+
     /// Forwards to `Session::coming_traffic_ships`, reading the catalog the
     /// view shared ([`SessionFlight::share_catalog`]); a failed session, or
     /// one never shared a catalog, brings none.
@@ -420,6 +448,30 @@ mod tests {
         assert_eq!(flight.galaxy(), None);
         assert_eq!(flight.hover(Vec2::ZERO, &DrawnBoxes::default()), None);
         assert_eq!(flight.coming_traffic(), []);
+        assert_eq!(flight.death_descs(), Vec::<i16>::new());
+    }
+
+    #[test]
+    fn a_failed_flight_refuses_the_travel_commands() {
+        let mut flight = failed();
+        for command in [
+            FlightCommand::Jump,
+            FlightCommand::Land,
+            FlightCommand::Arrive,
+            FlightCommand::TakeOff,
+            FlightCommand::LeaveIfDue,
+            FlightCommand::LandEscorts,
+            FlightCommand::SettleScript,
+            FlightCommand::BeginFade,
+            FlightCommand::EndPlay,
+            FlightCommand::CommShown(240),
+        ] {
+            assert_eq!(
+                flight.apply(command.clone()),
+                Answer::Refused,
+                "{command:?}"
+            );
+        }
     }
 
     #[test]

@@ -1910,6 +1910,24 @@ fn held_to_expiry() -> View {
 }
 
 #[test]
+fn a_real_flight_meets_the_contract_through_the_hold_its_expiry_and_the_fade() {
+    let mut view = at_the_explosion();
+    meets_the_contract(&view, "the explosion");
+    view.tick(TICK);
+    meets_the_contract(&view, "the hold");
+    let mut view = held_to_expiry();
+    assert!(view.frame.hold_expired);
+    assert_eq!(view.frame.fate, PlayerFate::Holding { ticks_left: 0 });
+    meets_the_contract(&view, "the expiry");
+    view.begin_fade();
+    assert_eq!(fate_of(&view), PlayerFate::Fading);
+    meets_the_contract(&view, "the fade");
+    view.tick(Duration::from_millis(1000));
+    assert!(view.game_over());
+    meets_the_contract(&view, "game over");
+}
+
+#[test]
 fn after_the_explosion_the_scene_runs_on_without_the_ship_until_the_hold_expires() {
     let mut view = at_the_explosion();
     let mut shots_moved = 0;
