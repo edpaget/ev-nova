@@ -320,7 +320,7 @@ fn run(done: u32, passed: bool, stopped: Option<OutfitRefusal>) -> OutfitRun {
 }
 
 /// What a purchase bought: a ship for nothing.
-fn purchase() -> ShipPurchase {
+pub(super) fn purchase() -> ShipPurchase {
     ShipPurchase {
         price: 0,
         trade_in: 0,

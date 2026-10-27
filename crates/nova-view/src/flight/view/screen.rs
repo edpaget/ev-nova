@@ -281,7 +281,7 @@ impl<
                 self.jump_frame(true);
             }
             Some(JETTISON_KEY) => self.jettison(),
-            Some(MISSION_INFO_KEY) => self.ask_mission_info(),
+            Some(MISSION_INFO_KEY) => self.ask_mission_info(Self::WORDS),
             Some(PLAYER_INFO_KEY) => return self.ask_player_info(),
             Some(key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY)) => self.hyperspace_key(key),
             Some(key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY)) => {

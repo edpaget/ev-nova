@@ -150,7 +150,7 @@ fn a_stellar_answering_or_a_refused_hail_opens_nothing_and_says_nothing() {
         view.sim.queue_answer(answer.clone());
         hail_thrusting(&mut view);
         assert_eq!(view.take_hail(), None, "{answer:?}");
-        assert_eq!(view.pending_offer.take(), None, "{answer:?}");
+        assert_eq!(view.take_offer(), None, "{answer:?}");
         assert_eq!(view.take_escort_dialog(), None, "{answer:?}");
         assert_eq!(view.message(), None, "{answer:?}");
         assert!(view.held.contains(&Key::Up), "{answer:?}: the keys held");
@@ -234,15 +234,15 @@ fn hanging_up_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
 #[test]
 fn y_on_a_person_offering_its_mission_holds_the_offer_once_letting_go_of_the_keys() {
     let mut view = sol();
-    assert_eq!(view.pending_offer.take(), None);
+    assert_eq!(view.take_offer(), None);
     view.sim
         .queue_answer(Answer::Hailed(Hailed::Offer(VenueOffer::Prompt(prompt(
             "Ace needs help.",
         )))));
     hail_thrusting(&mut view);
     assert_eq!(view.take_hail(), None, "no comm dialog");
-    assert_eq!(view.pending_offer.take(), Some(prompt("Ace needs help.")));
-    assert_eq!(view.pending_offer.take(), None, "once");
+    assert_eq!(view.take_offer(), Some(prompt("Ace needs help.")));
+    assert_eq!(view.take_offer(), None, "once");
     assert!(view.held.is_empty(), "the flight keys let go");
 }
 
@@ -255,7 +255,7 @@ fn an_offer_keeps_the_message() {
             "Help?",
         )))));
     view.hail();
-    view.pending_offer.take().expect("offered");
+    view.take_offer().expect("offered");
     assert_eq!(view.message(), Some(MISSION_FAILED), "under the dialog");
 }
 
@@ -268,7 +268,7 @@ fn an_offer_accepted_at_once_shows_nothing() {
             accepted: Ok(0),
         })));
     hail_thrusting(&mut view);
-    assert_eq!(view.pending_offer.take(), None);
+    assert_eq!(view.take_offer(), None);
     assert_eq!(view.take_hail(), None);
     assert!(view.held.contains(&Key::Up), "nothing to let go for");
 }

@@ -684,6 +684,7 @@ mod hyperspace;
 mod inbox;
 mod interface;
 mod messages;
+mod missions;
 mod outputs;
 mod port_screen_map;
 mod readouts;

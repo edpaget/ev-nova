@@ -318,102 +318,6 @@ fn a_comp_text_shows_the_landed_stellar_and_the_next_redraw_its_on_successs_move
     assert_eq!(port_nav(&view), naming("Proxima"));
 }
 
-#[test]
-fn a_dialogs_redraw_shows_what_the_script_run_with_it_wrote() {
-    type Fit = fn(&mut FakeCatalog);
-    type Step = fn(&mut View);
-    let rows: [(&str, Fit, Step); 5] = [
-        (
-            "OnAccept",
-            |catalog| catalog.missions[0].on_accept = nova_sim::Script::parse("M131"),
-            |view| assert_eq!(view.accept_mission(MissionId(130)), Ok(0)),
-        ),
-        (
-            "OnRefuse",
-            |catalog| catalog.missions[0].on_refuse = nova_sim::Script::parse("M131"),
-            |view| assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(())),
-        ),
-        (
-            "a RefuseText before OnRefuse",
-            |catalog| {
-                catalog.missions[0].on_refuse = nova_sim::Script::parse("M131");
-                catalog.mission_texts = vec![MissionTexts {
-                    refuse: Some("No.".to_owned()),
-                    ..MissionTexts::named(MissionId(130), "Run")
-                }];
-            },
-            |view| {
-                assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(()));
-                assert_eq!(view.take_mission_texts().len(), 1);
-                view.close_mission_text();
-            },
-        ),
-        (
-            "a BriefText after OnAccept",
-            |catalog| {
-                catalog.missions[0].on_accept = nova_sim::Script::parse("M131");
-                catalog.mission_texts = vec![MissionTexts {
-                    brief: Some("Go.".to_owned()),
-                    ..MissionTexts::named(MissionId(130), "Run")
-                }];
-            },
-            |view| {
-                assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-                assert_eq!(view.take_mission_texts().len(), 1);
-                view.close_mission_text();
-            },
-        ),
-        (
-            "a ship's OnPurchase",
-            |catalog| {
-                let ship = catalog
-                    .ships
-                    .iter_mut()
-                    .find(|ship| ship.id == ShipId(129))
-                    .expect("ship 129");
-                ship.on_purchase = nova_sim::Script::parse("M131");
-            },
-            |view| {
-                view.buy_ship(ShipId(129), "Kestrel").expect("bought");
-            },
-        ),
-    ];
-    for (what, fit, step) in rows {
-        let mut catalog = port();
-        fit(&mut catalog);
-        let mut view = docked_at_earth(catalog, RuleSource::Engine);
-        step(&mut view);
-        assert_eq!(port_nav(&view), naming("Proxima"), "{what}");
-    }
-}
-
-#[test]
-fn a_text_never_shows_over_a_later_redraw() {
-    let mut catalog = port();
-    catalog.missions[0].on_accept = nova_sim::Script::parse("M131");
-    catalog.mission_texts = vec![MissionTexts {
-        brief: Some("Go.".to_owned()),
-        ..MissionTexts::named(MissionId(130), "Run")
-    }];
-    let mut view = docked_at_earth(catalog, RuleSource::Engine);
-    assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-    run_set(&mut view, "M132");
-    view.refresh_status();
-    assert_eq!(port_nav(&view), naming(hud::NAV_NO_DESTINATION));
-    assert_eq!(
-        view.take_mission_texts().len(),
-        1,
-        "the brief, noting Proxima"
-    );
-    assert_eq!(port_nav(&view), naming(hud::NAV_NO_DESTINATION));
-    view.close_mission_text();
-    assert_eq!(
-        port_nav(&view),
-        naming(hud::NAV_NO_DESTINATION),
-        "the brief's close dropped with it"
-    );
-}
-
 // A docked mission script's `C`, `E` and `H`, and the bar under its
 // texts.
 
@@ -427,28 +331,6 @@ fn docked_scripted(fit: impl FnOnce(&mut FakeCatalog)) -> View {
 /// An `H` that puts the ship under another `ïntf` (ship 130, under
 /// 129), and one that keeps it (ship 129, under 128 as ship 128 is).
 const INTF_ROWS: [(&str, bool); 2] = [("H130", true), ("H129", false)];
-
-#[test]
-fn a_docked_on_abort_intf_change_redraws_the_whole_bar_at_the_operator() {
-    for (h, changes) in INTF_ROWS {
-        let mut view = docked_scripted(|catalog| {
-            catalog.missions[0].on_abort = nova_sim::Script::parse(&format!("{h} M131"));
-        });
-        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-        stale_bar(&mut view);
-        view.abort_mission(0).expect("aborted");
-        if changes {
-            assert_eq!(
-                retaken(&view),
-                [true, false, true, true],
-                "{h}: the whole bar, the nav from before the M"
-            );
-            assert_eq!(port_nav(&view), naming("Earth"), "{h}");
-        } else {
-            assert_eq!(retaken(&view), [false; 4], "{h}: held");
-        }
-    }
-}
 
 #[test]
 fn a_docked_jettisons_on_failure_intf_change_redraws_the_whole_bar_at_the_operator() {
@@ -474,97 +356,6 @@ fn a_docked_jettisons_on_failure_intf_change_redraws_the_whole_bar_at_the_operat
         } else {
             assert_eq!(retaken(&view), [false; 4], "{h}: held");
         }
-    }
-}
-
-#[test]
-fn a_brief_text_shows_over_the_bar_as_on_accept_left_it() {
-    for (h, changes) in INTF_ROWS {
-        for how in [Accepted::Computer, Accepted::Offer, Accepted::AtOnce] {
-            let what = format!("{h}, {how:?}");
-            let mut view = docked_scripted(|catalog| {
-                let mission = &mut catalog.missions[1];
-                mission.on_accept = nova_sim::Script::parse(&format!("{h} G201 M131"));
-                if how != Accepted::Computer {
-                    mission.avail_loc = SPACEPORT;
-                }
-                if how == Accepted::AtOnce {
-                    mission.flags = nova_sim::mission::screens::UNREFUSABLE;
-                }
-            });
-            assert_eq!(
-                view.session()
-                    .map(|session| session.refusable_offer_dialog(MissionId(131))),
-                Ok(how == Accepted::Offer),
-                "{what}"
-            );
-            let before = view.reserves();
-            stale_bar(&mut view);
-            if how == Accepted::AtOnce {
-                assert!(
-                    matches!(
-                        view.next_offer(SPACEPORT),
-                        Some(VenueOffer::Accepted {
-                            accepted: Ok(0),
-                            ..
-                        })
-                    ),
-                    "{what}"
-                );
-            } else {
-                assert_eq!(view.accept_mission(MissionId(131)), Ok(0), "{what}");
-            }
-            assert_eq!(view.take_mission_texts().len(), 1, "{what}: the brief");
-            let shown = view.reserves_shown(&view.frame_now());
-            match (changes, how) {
-                (true, _) => {
-                    assert_eq!(
-                        shown.fuel.max,
-                        view.reserves().fuel.max - 100.0,
-                        "{what}: as at the H, before G201's tank"
-                    );
-                    assert_eq!(port_nav(&view), naming("Earth"), "{what}: before the M");
-                }
-                (false, Accepted::Offer) => {
-                    assert_eq!(shown, before, "{what}: the dialog's redraw before it");
-                    assert_eq!(port_nav(&view), naming("Earth"), "{what}");
-                }
-                (false, _) => {
-                    assert_eq!(retaken(&view), [false; 4], "{what}: held");
-                    assert_eq!(port_nav(&view), naming("Stale"), "{what}");
-                }
-            }
-            view.close_mission_text();
-            assert_eq!(retaken(&view), WHOLE_BAR, "{what}: the brief closed");
-            assert_eq!(port_nav(&view), naming("Proxima"), "{what}");
-        }
-    }
-}
-
-#[test]
-fn a_refuse_text_shows_over_the_bar_from_before_the_refusal() {
-    for script in ["M131 G201", "H130 M131 G201"] {
-        let mut view = docked_scripted(|catalog| {
-            catalog.missions[0].avail_loc = SPACEPORT;
-            catalog.missions[0].on_refuse = nova_sim::Script::parse(script);
-            catalog.mission_texts.push(MissionTexts {
-                refuse: Some("No.".to_owned()),
-                ..MissionTexts::named(MissionId(130), "Run")
-            });
-        });
-        let before = view.reserves();
-        stale_bar(&mut view);
-        assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(()));
-        assert_eq!(view.take_mission_texts().len(), 1, "{script}");
-        assert_eq!(
-            view.reserves_shown(&view.frame_now()),
-            before,
-            "{script}: before OnRefuse"
-        );
-        assert_eq!(port_nav(&view), naming("Earth"), "{script}");
-        view.close_mission_text();
-        assert_eq!(retaken(&view), WHOLE_BAR, "{script}: the text closed");
-        assert_eq!(port_nav(&view), naming("Proxima"), "{script}");
     }
 }
 
@@ -829,41 +620,6 @@ fn a_landings_two_texts_each_close_to_their_own_bar_and_the_loads_before_the_nex
         "B's text, then B's H129 after its M"
     );
     assert_eq!(port_nav(&view), naming("Proxima"));
-    assert!(view.bar_steps.is_empty());
-}
-
-#[test]
-fn an_accepts_two_texts_close_to_their_own_bars_and_the_dialog_redraws_after_the_last() {
-    let mut view = docked_scripted(|catalog| {
-        let mission = &mut catalog.missions[1];
-        mission.cargo_type = 0;
-        mission.cargo_qty = 1;
-        mission.pickup_mode = 0;
-        mission.on_accept = nova_sim::Script::parse("M131");
-        catalog.mission_texts[0].load_cargo = Some("Loaded.".to_owned());
-    });
-    assert_eq!(view.accept_mission(MissionId(131)), Ok(0));
-    let queued = view.reserves();
-    assert_eq!(
-        view.take_mission_texts().len(),
-        2,
-        "the BriefText, then the LoadCargText"
-    );
-    desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
-    view.close_mission_text();
-    assert_eq!(
-        view.reserves_shown(&view.frame_now()),
-        queued,
-        "the brief as it noted the bar, and no redraw of the dialog's yet"
-    );
-    assert_eq!(port_nav(&view), naming("Proxima"), "OnAccept's M");
-    view.close_mission_text();
-    assert_eq!(
-        retaken(&view),
-        WHOLE_BAR,
-        "the load's text, then the computer's redraw"
-    );
-    assert_eq!(view.reserves_shown(&view.frame_now()).fuel.now, 100.0);
     assert!(view.bar_steps.is_empty());
 }
 

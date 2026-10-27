@@ -84,6 +84,7 @@ mod faked_flight;
 mod faked_hail;
 mod faked_hud;
 mod faked_landing;
+mod faked_missions;
 mod faked_shops;
 mod faked_travel;
 mod faked_world;
@@ -99,7 +100,6 @@ mod missions;
 mod nav;
 mod outputs;
 mod pilot;
-mod port_resets;
 mod port_screen_map;
 mod ship_drawing;
 mod shots;
@@ -2420,15 +2420,6 @@ fn cueing_alpha() -> Vec<String> {
     ]
 }
 use nova_sim::mission::screens::SPACEPORT;
-
-/// How an accept is made: from the mission computer, from the offer
-/// dialog with a refuse button, or at once with no dialog.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Accepted {
-    Computer,
-    Offer,
-    AtOnce,
-}
 
 /// Which of the bar's parts show as they are now: the gauges, the
 /// nav area, the target panel and the radar.

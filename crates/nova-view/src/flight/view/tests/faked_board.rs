@@ -290,7 +290,7 @@ fn b_on_a_person_offering_on_boarding_holds_the_offer_and_no_plunder() {
     view.held.insert(Key::Up);
     view.board(faked_words());
     assert_eq!(view.take_boarding_with(faked_words()), None, "no plunder");
-    assert_eq!(view.pending_offer.take(), Some(prompt));
+    assert_eq!(view.take_offer(), Some(prompt));
     assert!(view.held.is_empty(), "the flight keys let go");
     assert_eq!(view.message(), None, "nothing granted");
 }

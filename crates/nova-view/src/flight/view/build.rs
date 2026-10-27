@@ -7,16 +7,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::PlayerCommand;
-use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::{
     ALERT_CICN, AsteroidCatalog, Behaviour, BoardingRule, CombatCatalog, CommCatalog, DisableRule,
     FixedStep, HailOptions, HashedRolls, LegalCode, Pilot, PilotCatalog, PointDefenceRule,
     Rulebook, Session, StartError, TrafficCatalog,
 };
 use nova_sim::{
-    ControlBits, HireTerms, KeptBerths, LastRefresh, MissionInfo, MissionInfoPress, OfferPrompt,
-    PersonRules, PlayerInfo, pilot_panel::PilotPanel, ship_layer::SlotSprites,
-    story::sprite_pool::StellarSpritePool,
+    ControlBits, HireTerms, KeptBerths, LastRefresh, PersonRules, PlayerInfo,
+    pilot_panel::PilotPanel, ship_layer::SlotSprites, story::sprite_pool::StellarSpritePool,
 };
 
 use crate::flight::cadence::HudCadence;
@@ -38,8 +36,7 @@ use crate::ui::dialog::DialogTemplate;
 use crate::{Diagnostic, ScreenAction, SoundPrefs};
 
 use super::{
-    BarFor, FlightOverlays, FlightView, MESSAGE_TICKS, Metrics, SharedChance, Then, opening_scene,
-    window_width,
+    BarFor, FlightOverlays, FlightView, Metrics, SharedChance, Then, opening_scene, window_width,
 };
 
 impl<
@@ -615,43 +612,6 @@ impl<
             }
         });
         self.say_messages(Self::WORDS);
-    }
-
-    /// The mission info [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asked for the mission info
-    /// screen on, once: the router opens the screen on it over the paused
-    /// flight.
-    pub fn take_mission_info_request(&mut self) -> Option<MissionInfo> {
-        self.pending_mission_info.take()
-    }
-
-    /// Presses [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), as `_HandlePlayer` does
-    /// (@0x70405-0x705a8), the session deciding
-    /// ([`Session::press_mission_info`]): with an active mission shown,
-    /// asks the router for the mission info screen, letting go of the
-    /// flight keys; with none, says the session's #354 on the message
-    /// line after its refusal beep; refused, nothing. A flight whose
-    /// session never started says #354 alone, with no session to beep.
-    pub(super) fn ask_mission_info(&mut self) {
-        let Ok(session) = self.sim.session.as_mut() else {
-            self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS);
-            return;
-        };
-        match session.press_mission_info() {
-            MissionInfoPress::Refused => {}
-            MissionInfoPress::NoActiveMissions => self.say_messages(Self::WORDS),
-            MissionInfoPress::Opens(info) => {
-                self.pending_mission_info = Some(info);
-                self.held.clear();
-            }
-        }
-    }
-
-    /// The mission a person hailed or boarded just offered, once: the
-    /// router takes it to open the offer dialog over the paused flight,
-    /// and answers it through [`FlightView::accept_mission`] or
-    /// [`FlightView::refuse_mission`].
-    pub fn take_offer(&mut self) -> Option<OfferPrompt> {
-        self.pending_offer.take()
     }
 
     /// The flight with each day's events and the traffic rolled on

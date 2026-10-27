@@ -3,43 +3,17 @@ use crate::spaceport::OfferNames;
 
 // The mission screens.
 
+/// Kept real for phase 12 (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks),
+/// as the `OfferNames` impl stays concrete for its `NameSource`: the
+/// mission computer's cut offer names are filled by the session.
 #[test]
-fn the_mission_screens_go_through_the_session() {
+fn the_offer_names_are_the_sessions() {
     let mut errands = catalog();
     errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
     errands.missions = vec![errand(130), errand(131)];
-    errands.mission_texts = vec![
-        MissionTexts {
-            brief: Some("Go.".to_owned()),
-            ..MissionTexts::named(MissionId(130), "Run")
-        },
-        MissionTexts {
-            refuse: Some("Fine.".to_owned()),
-            ..MissionTexts::named(MissionId(131), "Walk")
-        },
-    ];
     let mut view = FlightView::new(errands);
-    assert_eq!(
-        view.mission_computer(),
-        Err(ComputerRefusal::NoneAvailable),
-        "in flight"
-    );
-    assert_eq!(
-        view.accept_mission(MissionId(130)),
-        Err(AcceptError::NotOffered)
-    );
-    assert_eq!(view.refuse_mission(MissionId(131)), Err(NotOffered));
     land_now(&mut view);
     view.settle_script();
-    let computer = view.mission_computer().expect("opens");
-    let names: Vec<_> = computer.rows.iter().map(|row| row.name.as_str()).collect();
-    assert_eq!(names, ["Run", "Walk"]);
-    assert_eq!(view.open_mission_computer(), Ok(computer.clone()));
-    assert_eq!(
-        view.show_computer_row(MissionId(131)),
-        Some(computer.rows[1].clone()),
-        "loaded through the session"
-    );
     let munged = OfferNames::munged(&view, MissionId(130), "Run <PAY>");
     assert_eq!(
         munged,
@@ -54,132 +28,11 @@ fn the_mission_screens_go_through_the_session() {
         None,
         "not offered"
     );
-    assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-    assert_eq!(view.refuse_mission(MissionId(131)).map(|_| ()), Ok(()));
-    let texts: Vec<_> = view
-        .take_mission_texts()
-        .into_iter()
-        .map(|shown| match shown {
-            MissionShown::Text(text) => (text.kind, text.text),
-            MissionShown::Movie(movie) => panic!("an offer movie: {movie:?}"),
-        })
-        .collect();
-    assert_eq!(
-        texts,
-        [
-            (MissionTextKind::Brief, "Go.".to_owned()),
-            (MissionTextKind::Refuse, "Fine.".to_owned()),
-        ]
-    );
-    assert_eq!(view.take_mission_texts(), [], "taken");
-    let mut broken = FlightView::new(FakeCatalog {
+    let broken = FlightView::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..catalog()
     });
-    assert_eq!(
-        broken.mission_computer(),
-        Err(ComputerRefusal::NoneAvailable)
-    );
-    assert_eq!(
-        broken.open_mission_computer(),
-        Err(ComputerRefusal::NoneAvailable)
-    );
-    assert_eq!(broken.show_computer_row(MissionId(130)), None);
     assert_eq!(OfferNames::munged(&broken, MissionId(130), "Run"), None);
-    assert_eq!(
-        broken.accept_mission(MissionId(130)),
-        Err(AcceptError::NotOffered)
-    );
-    assert_eq!(broken.refuse_mission(MissionId(130)), Err(NotOffered));
-    assert_eq!(broken.take_mission_texts(), []);
-}
-
-#[test]
-fn closing_a_mission_dialog_or_its_texts_redraws_the_hud() {
-    let mut errands = catalog();
-    errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
-    errands.missions = vec![errand(130), errand(131)];
-    errands.mission_texts = vec![MissionTexts {
-        brief: Some("Go.".to_owned()),
-        ..MissionTexts::named(MissionId(130), "Run")
-    }];
-    let mut view = FlightView::new(errands);
-    let stale = RadarScene::default();
-    let fresh = view.radar_now(&view.frame_now());
-    assert_ne!(fresh, stale);
-    view.radar_scene = Some(stale.clone());
-    let _ = view.accept_mission(MissionId(130));
-    assert_eq!(view.radar_scene.as_ref(), Some(&fresh), "accepted");
-    view.radar_scene = Some(stale.clone());
-    let _ = view.refuse_mission(MissionId(130));
-    assert_eq!(view.radar_scene.as_ref(), Some(&fresh), "refused");
-    view.radar_scene = Some(stale.clone());
-    assert_eq!(view.take_mission_texts(), []);
-    assert_eq!(view.radar_scene.as_ref(), Some(&stale), "nothing shown");
-    land_now(&mut view);
-    view.settle_script();
-    // Docked, the held gauges are redrawn too.
-    let held = Reserves::default();
-    assert_ne!(view.reserves(), held);
-    view.reserves_scene = Some(held);
-    assert_eq!(view.reserves_shown(&view.frame_now()), held, "held");
-    assert_eq!(view.refuse_mission(MissionId(131)).map(|_| ()), Ok(()));
-    assert_eq!(
-        view.reserves_shown(&view.frame_now()),
-        view.reserves(),
-        "refused docked"
-    );
-    view.reserves_scene = Some(held);
-    view.radar_scene = Some(stale.clone());
-    assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-    assert_eq!(view.take_mission_texts().len(), 1);
-    assert_eq!(
-        view.reserves_shown(&view.frame_now()),
-        held,
-        "the brief shown over the bar"
-    );
-    assert_eq!(view.radar_scene.as_ref(), Some(&stale), "the brief shown");
-    view.close_mission_text();
-    assert_eq!(
-        view.radar_scene,
-        Some(view.radar_now(&view.frame_now())),
-        "the brief closed"
-    );
-    assert_eq!(
-        view.reserves_shown(&view.frame_now()),
-        view.reserves(),
-        "the brief closed"
-    );
-}
-
-#[test]
-fn entering_another_venue_through_the_flight_offers_a_suppressed_offer_again() {
-    let mut errands = catalog();
-    errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
-    errands.missions = (130..146).map(errand).collect();
-    errands.missions.push(MissionRecord {
-        avail_loc: 1,
-        flags: nova_sim::mission::screens::UNREFUSABLE,
-        ..errand(150)
-    });
-    let mut view = FlightView::new(errands);
-    land_now(&mut view);
-    view.settle_script();
-    for id in 130..146 {
-        assert!(view.accept_mission(MissionId(id)).is_ok(), "{id}");
-    }
-    view.enter_offer_venue(1);
-    let refused = Some(VenueOffer::Accepted {
-        mission: MissionId(150),
-        accepted: Err(AcceptError::Refused(
-            nova_sim::mission::AcceptRefusal::SlotsFull,
-        )),
-    });
-    assert_eq!(view.next_offer(1), refused);
-    assert_eq!(view.next_offer(1), None, "suppressed");
-    view.enter_offer_venue(3);
-    view.enter_offer_venue(1);
-    assert_eq!(view.next_offer(1), refused, "offered again");
 }
 
 /// A flight from [`trading`]'s Earth, its ship of 10 tons, that
@@ -1020,41 +873,10 @@ fn the_smuggling_notice_names_the_scanner_by_the_found_missions_ship_name() {
     );
 }
 
-#[test]
-fn mission_info_and_aborts_go_through_the_session() {
-    let mut errands = catalog();
-    errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
-    errands.missions = vec![errand(130)];
-    errands.mission_texts = vec![MissionTexts {
-        quick_brief: Some("Quick.".to_owned()),
-        ..MissionTexts::named(MissionId(130), "Run")
-    }];
-    let mut view = FlightView::new(errands);
-    assert_eq!(view.mission_info().rows, []);
-    assert_eq!(view.abort_mission(0), Err(AbortError::NotActive));
-    land_now(&mut view);
-    view.settle_script();
-    assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-    let slots: Vec<_> = view
-        .mission_info()
-        .rows
-        .iter()
-        .map(|row| row.slot)
-        .collect();
-    assert_eq!(slots, [0]);
-    assert_eq!(view.show_info_row(0).as_deref(), Some("Quick."));
-    assert_eq!(view.show_info_row(1), None, "a free slot");
-    assert_eq!(view.abort_mission(0), Ok(()));
-    assert_eq!(view.mission_info().rows, []);
-    let mut broken = FlightView::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    });
-    assert_eq!(broken.mission_info().rows, []);
-    assert_eq!(broken.show_info_row(0), None);
-    assert_eq!(broken.abort_mission(0), Err(AbortError::NotActive));
-}
-
+/// The adapter's own check (rdm:phase/view-sim-seam/phase-11-spaceport-on-port):
+/// it hands the flight's chance to a command, the next offer, and to the
+/// offer gap. What the view does with the answers runs on `FakeFlight`
+/// (`tests/faked_missions.rs`).
 #[test]
 fn the_bars_offers_go_through_the_session_on_the_flights_chance() {
     let mut errands = catalog();
@@ -1077,12 +899,6 @@ fn the_bars_offers_go_through_the_session_on_the_flights_chance() {
     assert_eq!(prompt.mission, MissionId(141));
     assert_eq!(view.offer_gap(), nova_sim::mission::screens::mac_ticks(37));
     assert_eq!(script.borrow().asked, [30]);
-    let mut broken = FlightView::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    });
-    broken.enter_offer_venue(1);
-    assert_eq!(broken.next_offer(1), None);
 }
 
 /// [`boardable`] with ship 130 of `Cost` 10,000 (a wage of 100), and
@@ -1582,117 +1398,6 @@ fn fighters_abandoned_in_a_move_are_told_after_a_qs_message() {
 
 // Persons' mission offers.
 
-/// [`peopled`] with Ace of `flags` linked to mission 130, offered
-/// from a ship, its offer text `offer`, refusable unless
-/// `unrefusable`.
-fn offering(flags: u16, offer: Option<&str>, unrefusable: bool) -> FakeCatalog {
-    let mut catalog = peopled();
-    catalog.persons[0].flags = flags;
-    catalog.persons[0].link_mission = Some(130);
-    catalog.missions = vec![nova_sim::catalog::MissionRecord {
-        id: MissionId(130),
-        avail_stel: -1,
-        avail_loc: 2,
-        avail_record: 0,
-        avail_rating: 0,
-        avail_random: 100,
-        avail_ship_type: 0,
-        avail_bits: nova_sim::Test::default(),
-        require: 0,
-        flags: if unrefusable { 0x0004 } else { 0 },
-        flags2: 0,
-        travel_stel: -1,
-        return_stel: -1,
-        cargo_type: -1,
-        cargo_qty: 0,
-        pickup_mode: -1,
-        drop_off_mode: -1,
-        scan_mask: 0,
-        pay_val: 0,
-        time_limit: 0,
-        disp_weight: 0,
-        on_accept: nova_sim::Script::default(),
-        on_refuse: nova_sim::Script::default(),
-        on_success: nova_sim::Script::default(),
-        on_failure: nova_sim::Script::default(),
-        on_abort: nova_sim::Script::default(),
-        on_ship_done: nova_sim::Script::default(),
-        can_abort: 1,
-        comp_govt: None,
-        comp_reward: 0,
-        date_post_inc: 0,
-        ships: nova_sim::catalog::MissionShip::NONE,
-        aux: nova_sim::catalog::AuxShip::NONE,
-    }];
-    catalog.mission_texts = vec![nova_sim::catalog::MissionTexts {
-        offer: offer.map(str::to_owned),
-        ..nova_sim::catalog::MissionTexts::named(MissionId(130), "Help Ace")
-    }];
-    catalog
-}
-
-/// `catalog`'s flight with Ace listed and placed 100 above the
-/// player, targeted.
-fn targeting_ace(catalog: FakeCatalog) -> View {
-    let (_, chance) = scripted(&ACE[..4]);
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    view.tick(TICK);
-    tap(&mut view, TARGET_KEY);
-    view
-}
-
-#[test]
-fn i_with_no_mission_says_you_have_no_active_missions() {
-    let mut view = flight();
-    let _ = view.take_sounds();
-    tap(&mut view, MISSION_INFO_KEY);
-    assert_eq!(view.take_mission_info_request(), None);
-    assert_eq!(
-        view.take_sounds(),
-        [Sound::Sim(SimSound::Refused)],
-        "_beepSnd[3], snd 153"
-    );
-    assert_lasts(&mut view, NO_ACTIVE_MISSIONS, 240);
-}
-
-#[test]
-fn i_in_a_flight_that_never_started_says_no_active_missions_without_a_beep() {
-    let mut view = FlightView::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    });
-    assert!(view.session().is_err());
-    let _ = view.take_sounds();
-    tap(&mut view, MISSION_INFO_KEY);
-    assert_eq!(view.take_mission_info_request(), None);
-    assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS));
-    assert_eq!(view.take_sounds(), [], "no session to beep");
-}
-
-#[test]
-fn i_with_an_active_mission_asks_for_the_info_screen_once() {
-    let mut view = targeting_ace(offering(0, Some("Help?"), false));
-    tap(&mut view, HAIL_KEY);
-    view.take_offer().expect("offered");
-    assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-    view.input(&key(Key::Up, true));
-    let _ = view.take_sounds();
-    tap(&mut view, MISSION_INFO_KEY);
-    assert_eq!(view.take_sounds(), [], "no beep from flight");
-    let info = view.take_mission_info_request().expect("asked");
-    assert_eq!(info, view.mission_info());
-    assert_eq!(view.take_mission_info_request(), None, "once");
-    assert_eq!(view.message(), None);
-    view.tick(TICK);
-    assert_eq!(
-        view.session().expect("flying").player().velocity,
-        Vec2::ZERO,
-        "the flight keys let go"
-    );
-}
-
 #[test]
 fn p_asks_for_the_player_info_once_letting_go_of_the_flight_keys() {
     let mut view = flight();
@@ -1852,133 +1557,6 @@ fn i_with_the_map_open_does_nothing() {
     tap(&mut view, MISSION_INFO_KEY);
     assert_eq!(view.message(), None);
     assert_eq!(view.take_mission_info_request(), None);
-}
-
-#[test]
-fn a_refusal_of_the_offer_goes_through_the_session() {
-    let mut view = targeting_ace(offering(0, Some("Help?"), false));
-    tap(&mut view, HAIL_KEY);
-    view.take_offer().expect("offered");
-    assert_eq!(view.refuse_mission(MissionId(130)).map(|_| ()), Ok(()));
-    assert_eq!(
-        view.refuse_mission(MissionId(130)),
-        Err(NotOffered),
-        "answered"
-    );
-}
-
-/// How a person's offer is answered over flight: accepted or refused
-/// in the dialog with a refuse button, or accepted in the one-button
-/// dialog.
-const FLIGHT_ANSWERS: [(&str, bool, bool); 3] = [
-    ("an accept", false, false),
-    ("a refusal", false, true),
-    ("a one-button accept", true, false),
-];
-
-/// [`offering`] Ace's refusable (or `unrefusable`) mission 130, with
-/// a `BriefText` and a `RefuseText`, whose `OnAccept` (or, `refuse`,
-/// `OnRefuse`) is `G200`, a tank: hailed and its offer taken, in
-/// flight with the nearest stellar, the Moon, selected, the HUD's
-/// cadence read as `cadence` says.
-fn offered_in_flight(cadence: RuleSource, unrefusable: bool, refuse: bool) -> View {
-    let mut catalog = offering(0, Some("Help?"), unrefusable);
-    catalog.outfits = vec![shipbuying().outfits[0].clone()];
-    let script = nova_sim::Script::parse("G200");
-    let mission = &mut catalog.missions[0];
-    if refuse {
-        mission.on_refuse = script;
-    } else {
-        mission.on_accept = script;
-    }
-    let texts = &mut catalog.mission_texts[0];
-    texts.brief = Some("Go.".to_owned());
-    texts.refuse = Some("No.".to_owned());
-    let (_, chance) = scripted(&ACE[..4]);
-    let rules = Rulebook::default().with_override(RuleKey::HudCadence, cadence);
-    let mut view = FlightView::new(catalog)
-        .with_rules(rules)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
-    view.tick(TICK);
-    tap_slot(&mut view, NEAREST_STELLAR_KEY);
-    tap(&mut view, TARGET_KEY);
-    tap(&mut view, HAIL_KEY);
-    view.take_offer().expect("offered");
-    view
-}
-
-#[test]
-fn an_offer_answered_over_flight_shows_its_text_over_the_pre_answer_bar() {
-    for (what, unrefusable, refuse) in FLIGHT_ANSWERS {
-        let mut view = offered_in_flight(RuleSource::Engine, unrefusable, refuse);
-        let before = view.reserves();
-        let nav = view.nav_shown(&view.frame_now());
-        if refuse {
-            assert_eq!(
-                view.refuse_mission(MissionId(130)).map(|_| ()),
-                Ok(()),
-                "{what}"
-            );
-        } else {
-            assert_eq!(view.accept_mission(MissionId(130)), Ok(0), "{what}");
-        }
-        assert_eq!(
-            view.reserves().fuel.max,
-            before.fuel.max + 100.0,
-            "{what}: G200 ran"
-        );
-        // A selection the bar hasn't drawn: an `M` or `N` in the
-        // answer can't stand for it, as its move lays the system out
-        // afresh as it settles, which redraws the whole bar.
-        view.select_stellar(StellarPick::Slot(0));
-        assert_ne!(view.nav_now(), nav, "{what}: Earth selected");
-        assert_eq!(view.take_mission_texts().len(), 1, "{what}: its text");
-        assert_eq!(
-            view.reserves_shown(&view.frame_now()),
-            before,
-            "{what}: under the text"
-        );
-        assert_eq!(
-            view.nav_shown(&view.frame_now()),
-            nav,
-            "{what}: the nav held too"
-        );
-        view.close_mission_text();
-        assert_eq!(
-            view.reserves_shown(&view.frame_now()),
-            view.reserves(),
-            "{what}: live once it closed"
-        );
-        assert_eq!(
-            view.nav_shown(&view.frame_now()),
-            view.nav_now(),
-            "{what}: nav live too"
-        );
-        assert!(view.bar_steps.is_empty(), "{what}: let go");
-    }
-}
-
-#[test]
-fn under_the_bible_cadence_flights_gauges_stay_live_under_an_offers_text() {
-    for (what, unrefusable, refuse) in FLIGHT_ANSWERS {
-        let mut view = offered_in_flight(RuleSource::Bible, unrefusable, refuse);
-        if refuse {
-            assert_eq!(
-                view.refuse_mission(MissionId(130)).map(|_| ()),
-                Ok(()),
-                "{what}"
-            );
-        } else {
-            assert_eq!(view.accept_mission(MissionId(130)), Ok(0), "{what}");
-        }
-        assert_eq!(view.take_mission_texts().len(), 1, "{what}: its text");
-        assert_eq!(
-            view.reserves_shown(&view.frame_now()),
-            view.reserves(),
-            "{what}: live"
-        );
-    }
 }
 
 /// A plunder's lines read as `_AIPlunderShipContents` builds them, the
