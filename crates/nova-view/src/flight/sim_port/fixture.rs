@@ -26,11 +26,11 @@ use nova_sim::status_cargo::StatusCargo;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{ClassRow, Gauge, RadarGear, Reserves};
 use nova_sim::{
-    Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, ShipRef, StellarId, StellarPick,
-    Vec2,
+    DescMovie, EscortClass, Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, ShipRef,
+    StellarId, StellarPick, Vec2,
 };
 
-use super::{CommSource, FlightSim, MapSource, PortSource};
+use super::{CommSource, FlightSim, MapSource, PortSource, fresh_description};
 
 /// A scripted [`FlightSim`]: it shows the frame it was given, records
 /// each command in the order sent, answers each from a queue
@@ -44,8 +44,11 @@ use super::{CommSource, FlightSim, MapSource, PortSource};
 /// arguments matter ([`FakeFlight::asked`]). It answers the hover as told
 /// ([`FakeFlight::set_hover`]), recording each ask
 /// ([`FakeFlight::hovers`]), and the coming traffic from its list
-/// ([`FakeFlight::set_coming_traffic`]). One with nothing scripted meets
-/// [`check_contract`].
+/// ([`FakeFlight::set_coming_traffic`]). It loads each description with
+/// the next text queued ([`FakeFlight::queue_description`]), or as a new
+/// pilot's once the queue is empty ([`fresh_description`]), recording
+/// each load ([`FakeFlight::descriptions_loaded`]). One with nothing
+/// scripted meets [`check_contract`].
 #[derive(Clone, Debug, Default)]
 pub struct FakeFlight {
     frame: FlightFrame,
@@ -60,6 +63,8 @@ pub struct FakeFlight {
     hover: Option<Hover>,
     hovers: RefCell<Vec<(Vec2, DrawnBoxes)>>,
     coming: Vec<ShipId>,
+    descriptions: VecDeque<String>,
+    loaded: Vec<(Option<String>, Option<DescMovie>)>,
 }
 
 /// What a [`FakeFlight`] answers the [`MapSource`] questions with, each
@@ -164,6 +169,17 @@ impl FakeFlight {
         self.coming = ships;
     }
 
+    /// Loads the next description not yet loaded as `text`.
+    pub fn queue_description(&mut self, text: &str) {
+        self.descriptions.push_back(text.to_owned());
+    }
+
+    /// Each description loaded, its text and movie, in order.
+    #[must_use]
+    pub fn descriptions_loaded(&self) -> &[(Option<String>, Option<DescMovie>)] {
+        &self.loaded
+    }
+
     /// Answers the next command not yet answered with `answer`.
     pub fn queue_answer(&mut self, answer: Answer) {
         self.answers.push_back(answer);
@@ -266,6 +282,13 @@ impl FlightSim for FakeFlight {
 
     fn coming_traffic(&self) -> Vec<ShipId> {
         self.coming.clone()
+    }
+
+    fn load_description(&mut self, raw: Option<&str>, movie: Option<&DescMovie>) -> String {
+        self.loaded.push((raw.map(str::to_owned), movie.cloned()));
+        self.descriptions
+            .pop_front()
+            .unwrap_or_else(|| fresh_description(raw))
     }
 }
 
@@ -657,7 +680,19 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///   no ship and not the player's;
 /// - **a click on nothing is refused**: a click in space far from
 ///   anything, with no boxes, is refused, and the frame after it equals
-///   the frame before.
+///   the frame before;
+/// - **a target has a record**: a frame's target is among its ships;
+/// - **target brackets only round the target**: a frame has target
+///   brackets only with a target, and they name it;
+/// - **interference within 100**: a frame's interference is at most 100;
+/// - **only a shown stellar has an IFF**: each stellar not shown has
+///   none;
+/// - **the escort rows in their order**: a frame's escort rows are of
+///   each [`EscortClass`] in [`EscortClass::ALL`]'s order;
+/// - **a weapon select waits for the step**: Weapon Select
+///   ([`FlightCommand::SelectWeapon`]) is answered done or refused, never
+///   with anything else, and the frame after it equals the frame before,
+///   as the press is taken by the next step.
 ///
 /// The error says which clause failed.
 pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
@@ -707,7 +742,76 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
             "no step asked, none run: the report was {report:?}"
         ));
     }
-    check_world(sim, &once)
+    check_world(sim, &once)?;
+    check_hud(&once)?;
+    check_weapon_select(sim, &once)
+}
+
+/// [`check_contract`]'s clauses on the HUD and the target in `once`, the
+/// frame filled before.
+fn check_hud(once: &FlightFrame) -> Result<(), String> {
+    if let Some(target) = &once.target
+        && once.ship(ShipRef::Npc(target.npc)).is_none()
+    {
+        return Err(format!("a target has a record: {:?} has none", target.npc));
+    }
+    if let Some(brackets) = &once.hud.target_brackets
+        && once.target.as_ref().map(|target| target.npc) != Some(brackets.npc)
+    {
+        return Err(format!(
+            "target brackets only round the target: round {:?}, the target {:?}",
+            brackets.npc,
+            once.target.as_ref().map(|target| target.npc)
+        ));
+    }
+    if once.hud.interference > 100 {
+        return Err(format!(
+            "interference within 100: it was {}",
+            once.hud.interference
+        ));
+    }
+    if let Some(stellar) = once
+        .stellars
+        .iter()
+        .find(|stellar| !stellar.shown && stellar.iff.is_some())
+    {
+        return Err(format!(
+            "only a shown stellar has an IFF: {:?} isn't shown, and has {:?}",
+            stellar.id, stellar.iff
+        ));
+    }
+    if !once
+        .hud
+        .escort_rows
+        .iter()
+        .map(|row| row.class)
+        .eq(EscortClass::ALL)
+    {
+        return Err(format!(
+            "the escort rows in their order: {:?}",
+            once.hud.escort_rows.map(|row| row.class)
+        ));
+    }
+    Ok(())
+}
+
+/// [`check_contract`]'s weapon select clause, `once` the frame filled
+/// before.
+fn check_weapon_select(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String> {
+    let answer = sim.apply(FlightCommand::SelectWeapon { backwards: false });
+    if !matches!(answer, Answer::Done | Answer::Refused) {
+        return Err(format!(
+            "a weapon select waits for the step: it answered {answer:?}"
+        ));
+    }
+    let mut after = unlike(once);
+    sim.frame(&mut after);
+    if after != *once {
+        return Err(format!(
+            "a weapon select waits for the step: the frame was {once:?}, then {after:?}"
+        ));
+    }
+    Ok(())
 }
 
 /// [`check_contract`]'s clauses on the world: the ships' records and
@@ -1015,6 +1119,22 @@ mod tests {
         AnswersTheClick,
         /// The click on nothing changes the frame.
         ClickChangesTheFrame,
+        /// The frame targets a ship it has no record of.
+        TargetsAStray,
+        /// The frame brackets a ship with no target.
+        BracketsWithoutATarget,
+        /// The frame brackets another ship than its target.
+        BracketsAnother,
+        /// The frame's interference is over 100.
+        InterferenceOver100,
+        /// A stellar not shown has an IFF.
+        UnshownIff,
+        /// The escort rows are out of order.
+        RowsOutOfOrder,
+        /// Weapon Select is answered with a stellar.
+        AnswersTheSelect,
+        /// Weapon Select changes the frame.
+        SelectChangesTheFrame,
     }
 
     /// A [`FakeFlight`] with one [`Fault`].
@@ -1037,9 +1157,27 @@ mod tests {
                 self.fake.frame(into);
             }
             let npc = ShipRef::Npc(nova_sim::NpcId(7));
+            let brackets = |id| nova_sim::brackets::TargetBrackets {
+                npc: nova_sim::NpcId(id),
+                expand: 0.0,
+                standing: nova_sim::brackets::Standing::Neutral,
+            };
             match self.fault {
                 Fault::NpcFirst => into.ships.insert(0, record::npc(7, 129, Vec2::ZERO, 0.0)),
                 Fault::DrawsAStray => into.drawn.push((npc, nova_sim::ShipLayer::Ships)),
+                Fault::TargetsAStray => into.target = Some(record::target(7)),
+                Fault::BracketsWithoutATarget => into.hud.target_brackets = Some(brackets(7)),
+                Fault::BracketsAnother => {
+                    into.ships.push(record::npc(7, 129, Vec2::ZERO, 0.0));
+                    into.target = Some(record::target(7));
+                    into.hud.target_brackets = Some(brackets(8));
+                }
+                Fault::InterferenceOver100 => into.hud.interference = 101,
+                Fault::UnshownIff => into.stellars.push(nova_sim::flight_frame::FrameStellar {
+                    shown: false,
+                    ..record::stellar(StellarId(129))
+                }),
+                Fault::RowsOutOfOrder => into.hud.escort_rows.swap(0, 1),
                 _ => {}
             }
         }
@@ -1060,7 +1198,13 @@ mod tests {
 
         fn apply(&mut self, command: FlightCommand) -> Answer {
             let click = matches!(command, FlightCommand::ClickInSpace { .. });
+            let select = matches!(command, FlightCommand::SelectWeapon { .. });
             match self.fault {
+                Fault::AnswersTheSelect if select => Answer::Stellar(StellarId(128)),
+                Fault::SelectChangesTheFrame if select => {
+                    self.fake.set_frame(stellar(129));
+                    Answer::Done
+                }
                 Fault::AnswersTheRefusal => Answer::Stellar(StellarId(128)),
                 Fault::RefusalChangesTheFrame => {
                     self.fake.set_frame(stellar(129));
@@ -1172,6 +1316,93 @@ mod tests {
             "{clause}"
         );
         assert!(clause.contains("the frame was"), "{clause}");
+    }
+
+    #[test]
+    fn a_target_with_no_record_breaks_the_contract() {
+        assert!(clause(Fault::TargetsAStray).starts_with("a target has a record"));
+    }
+
+    #[test]
+    fn target_brackets_without_a_target_or_round_another_break_the_contract() {
+        for fault in [Fault::BracketsWithoutATarget, Fault::BracketsAnother] {
+            let clause = clause(fault);
+            assert!(
+                clause.starts_with("target brackets only round the target"),
+                "{fault:?}: {clause}"
+            );
+        }
+    }
+
+    #[test]
+    fn interference_over_100_breaks_the_contract() {
+        assert!(clause(Fault::InterferenceOver100).starts_with("interference within 100"));
+    }
+
+    #[test]
+    fn an_iff_on_a_stellar_not_shown_breaks_the_contract() {
+        assert!(clause(Fault::UnshownIff).starts_with("only a shown stellar has an IFF"));
+    }
+
+    #[test]
+    fn escort_rows_out_of_order_break_the_contract() {
+        assert!(clause(Fault::RowsOutOfOrder).starts_with("the escort rows in their order"));
+    }
+
+    #[test]
+    fn a_weapon_select_answered_or_changing_the_frame_breaks_the_contract() {
+        let answered = clause(Fault::AnswersTheSelect);
+        assert!(
+            answered.starts_with("a weapon select waits for the step"),
+            "{answered}"
+        );
+        assert!(answered.contains("answered"), "{answered}");
+        let changed = clause(Fault::SelectChangesTheFrame);
+        assert!(
+            changed.starts_with("a weapon select waits for the step"),
+            "{changed}"
+        );
+        assert!(changed.contains("the frame was"), "{changed}");
+    }
+
+    #[test]
+    fn a_fake_showing_a_target_its_brackets_and_iffs_meets_the_contract() {
+        let mut fake = FakeFlight::new();
+        let mut frame = stellar(128);
+        frame.ships.push(record::npc(7, 129, Vec2::ZERO, 0.0));
+        frame.target = Some(record::target(7));
+        frame.hud.target_brackets = Some(nova_sim::brackets::TargetBrackets {
+            npc: nova_sim::NpcId(7),
+            expand: 0.0,
+            standing: nova_sim::brackets::Standing::Neutral,
+        });
+        frame.hud.interference = 100;
+        frame.stellars = vec![record::stellar(StellarId(128))];
+        fake.set_frame(frame);
+        assert_eq!(check_contract(&mut fake), Ok(()));
+    }
+
+    #[test]
+    fn the_fake_loads_descriptions_as_queued_then_for_a_new_pilot_recording_each() {
+        let mut fake = FakeFlight::new();
+        fake.queue_description("scripted");
+        let movie = DescMovie {
+            file: "Intro.mov".to_owned(),
+            after: true,
+            double_size: false,
+            cinematic: false,
+        };
+        assert_eq!(fake.load_description(Some("raw"), Some(&movie)), "scripted");
+        assert_eq!(fake.load_description(Some("plain"), None), "plain");
+        assert_eq!(fake.load_description(None, None), "");
+        assert_eq!(
+            fake.descriptions_loaded(),
+            [
+                (Some("raw".to_owned()), Some(movie)),
+                (Some("plain".to_owned()), None),
+                (None, None),
+            ]
+        );
     }
 
     #[test]

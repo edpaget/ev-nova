@@ -35,13 +35,13 @@ use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    Allegiance, Behaviour, BoardingRule, DisableRule, Hover, LegalCode, MapMarks, MissionId,
-    NovaAi, NovaBoarding, NovaDisable, NovaLaw, PlayerCommand, PointDefenceRule, Rules, SavedNav,
-    Session, ShipId, SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, Vec2,
+    Allegiance, Behaviour, BoardingRule, DescMovie, DisableRule, Hover, LegalCode, MapMarks,
+    MissionId, NovaAi, NovaBoarding, NovaDisable, NovaLaw, PlayerCommand, PointDefenceRule, Rules,
+    SavedNav, Session, ShipId, SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, Vec2,
 };
 
 use super::SharedChance;
-use super::sim_port::{CommSource, FlightSim, MapSource, PortSource};
+use super::sim_port::{CommSource, FlightSim, MapSource, PortSource, fresh_description};
 
 /// The flight of a real `nova_sim::Session`, or why it could not start,
 /// with the collaborators its calls are handed (see the module docs).
@@ -253,6 +253,16 @@ impl<C> FlightSim for SessionFlight<C> {
             _ => Vec::new(),
         }
     }
+
+    /// Forwards to `Session::load_description`, drawing on the flight's
+    /// chance; a failed session resolves only the conditional text, for a
+    /// new pilot ([`fresh_description`]).
+    fn load_description(&mut self, raw: Option<&str>, movie: Option<&DescMovie>) -> String {
+        match &mut self.session {
+            Ok(session) => session.load_description(raw, movie, &mut self.chance),
+            Err(_) => fresh_description(raw),
+        }
+    }
 }
 
 /// Each forwards to the session's method of its name; a failed session
@@ -412,6 +422,13 @@ mod tests {
         };
         failed().step(&StepInput::default(), 3, &mut report);
         assert_eq!(report, StepReport::default());
+    }
+
+    #[test]
+    fn a_failed_flight_loads_a_description_for_a_new_pilot() {
+        let mut flight = failed();
+        assert_eq!(flight.load_description(Some("plain"), None), "plain");
+        assert_eq!(flight.load_description(None, None), "");
     }
 
     #[test]

@@ -34,7 +34,8 @@ use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, StellarId, SystemId, Vec2,
+    DescMovie, Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, StellarId, SystemId,
+    Vec2,
 };
 
 #[cfg(any(test, feature = "fixture"))]
@@ -81,6 +82,36 @@ pub trait FlightSim: MapSource + CommSource + PortSource {
     fn coming_traffic(&self) -> Vec<ShipId> {
         Vec::new()
     }
+
+    /// Loads `raw`, a `dësc` the view read that may be missing, naming
+    /// `movie`, as `_LoadDescription` loads one
+    /// (`nova_sim::Session::load_description`): taken in for the pilot,
+    /// its `l33t` letters drawn on the flight's chance, its movie the last
+    /// loaded. A port method rather than a command, as it draws on the
+    /// flight's chance. By default only its conditional text is resolved,
+    /// for a new pilot ([`fresh_description`]), as a flight that failed
+    /// to start does; a missing one is empty.
+    fn load_description(&mut self, raw: Option<&str>, movie: Option<&DescMovie>) -> String {
+        let _ = movie;
+        fresh_description(raw)
+    }
+}
+
+/// `raw`, a `dësc` that may be missing, with its conditional text
+/// resolved for a new pilot
+/// ([`Gate::FRESH`](nova_sim::control::Gate::FRESH)): what a flight that
+/// failed to start loads ([`FlightSim::load_description`]'s default).
+/// A missing one is empty.
+#[must_use]
+pub fn fresh_description(raw: Option<&str>) -> String {
+    raw.map(|raw| {
+        nova_sim::text_parse::conditional_text(
+            raw,
+            nova_sim::control::Gate::FRESH.pilot,
+            nova_sim::text_parse::ParseRules::default(),
+        )
+    })
+    .unwrap_or_default()
 }
 
 /// The course map's questions of the flight, and the floating map's and

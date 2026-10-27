@@ -78,6 +78,7 @@ mod dialog_map;
 mod docked;
 mod drain;
 mod escorts;
+mod faked_hud;
 mod faked_world;
 mod flying;
 mod hyperspace;

@@ -81,10 +81,13 @@ impl<C: StatusBars> FlightView<C, crate::flight::SessionFlight<C>> {
     }
 }
 
-impl<C: DescriptionSource + DescriptionGraphics> FlightView<C, crate::flight::SessionFlight<C>> {
+/// The descriptions, over the [`FlightSim`] port: read from the catalog
+/// here, taken in by the flight ([`FlightSim::load_description`]).
+impl<C: DescriptionSource + DescriptionGraphics, S: FlightSim> FlightView<C, S> {
     /// `dësc` `id`, loaded as `_LoadDescription` loads one for a screen
     /// that shows it now: read from the catalog, then taken in by the
-    /// session ([`Session::load_description`](nova_sim::Session::load_description)), its conditional text
+    /// flight ([`FlightSim::load_description`],
+    /// `nova_sim::Session::load_description`), its conditional text
     /// resolved for the pilot, the remembered rank governments reset and
     /// parsed, its movie the last loaded ([`FlightView::loaded_after_movie`]),
     /// and in the `l33t` mode its letters drawn on the flight's chance.
@@ -93,29 +96,19 @@ impl<C: DescriptionSource + DescriptionGraphics> FlightView<C, crate::flight::Se
     ///
     /// # Errors
     ///
-    /// Why the `dësc` cannot be read; the governments are kept and the
-    /// movie emptied, as a missing one's are (@0x71a5e-0x71a77).
+    /// Why the `dësc` cannot be read; the flight loads it missing, so the
+    /// governments are kept and the movie emptied, as a missing one's are
+    /// (@0x71a5e-0x71a77).
     pub fn load_description(&mut self, id: i16) -> Result<String, String> {
         let raw = match self.catalog.description(id) {
             Ok(raw) => raw,
             Err(reason) => {
-                if let Ok(session) = &mut self.sim.session {
-                    let _ = session.load_description(None, None, &mut self.sim.chance);
-                }
+                let _ = self.sim.load_description(None, None);
                 return Err(reason);
             }
         };
         let movie = self.catalog.description_movie(id);
-        Ok(match &mut self.sim.session {
-            Ok(session) => {
-                session.load_description(Some(&raw), movie.as_ref(), &mut self.sim.chance)
-            }
-            Err(_) => nova_sim::text_parse::conditional_text(
-                &raw,
-                nova_sim::control::Gate::FRESH.pilot,
-                nova_sim::text_parse::ParseRules::default(),
-            ),
-        })
+        Ok(self.sim.load_description(Some(&raw), movie.as_ref()))
     }
 }
 
