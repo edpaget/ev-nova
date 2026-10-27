@@ -526,6 +526,8 @@ fn a_real_jump_arrives_in_the_next_system() {
     assert_eq!(view.course_map().current(), Some(MapSystemId(129)));
     let line = view.message().expect("the arrival line");
     assert!(line.starts_with("Jumping into the Beta system"), "{line:?}");
+    let date = view.session().expect("flying").long_date_text();
+    assert!(line.contains(&date), "on the session's date: {line:?}");
 }
 
 #[test]
@@ -1247,4 +1249,41 @@ fn a_real_mission_accept_shows_in_the_mission_info() {
         view.session().ok().map(nova_sim::Session::mission_info),
         "as the session lists it"
     );
+}
+
+// The wording's names and date and the player info, through a whole
+// `FlightView` over a real session
+// (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks).
+
+#[test]
+fn a_real_take_off_greets_naming_its_stellar_and_the_sessions_long_date() {
+    let mut view = view();
+    land(&mut view);
+    assert_eq!(view.take_landing(), Some(StellarId(128)));
+    assert_eq!(view.take_off(), Some(StellarId(128)));
+    let date = view.session().expect("flying").long_date_text();
+    let line = view.message().expect("the greeting");
+    assert!(line.contains("Alpha Prime"), "the stellar: {line:?}");
+    assert!(
+        line.ends_with(&format!(" on {date}.")),
+        "the date: {line:?}"
+    );
+}
+
+#[test]
+fn a_real_p_opens_the_sessions_player_info_and_the_pilot_panel_is_the_sessions() {
+    let data = data();
+    let session = SessionBuilder::flying(&data).build();
+    let mut view = FlightView::from_session(Rc::clone(&data), session.into());
+    tap(&mut view, nova_view::ui::player_info::PLAYER_INFO_KEY);
+    assert!(
+        view.take_player_info_request(),
+        "the session took the press"
+    );
+    let session = view.session().expect("flying");
+    let shown = session.player_info(&*data);
+    let panel = session.pilot_panel(&*data);
+    assert_eq!(view.player_info(), Some(shown.clone()));
+    assert_eq!(view.pilot_panel(), Some(panel));
+    assert_eq!(view.open_player_info(), Some(shown), "it opens");
 }
