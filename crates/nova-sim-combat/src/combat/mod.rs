@@ -3967,21 +3967,6 @@ mod tests {
         );
     }
 
-    /// A tick among `ships` on `pass`, by the default rules.
-    fn tick_on(combat: &mut Combat, ships: &mut [Ship], pass: GamePass) {
-        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-        combat.tick_on(
-            pass,
-            &mut fighters,
-            &Arsenal::default(),
-            &Governments::default(),
-            Rules::default(),
-            Field::default(),
-            Scenery::default(),
-            &mut NeverFires,
-        );
-    }
-
     /// A tick among `ships` and `stellars`, with `arsenal`.
     fn tick_by(
         combat: &mut Combat,
@@ -6726,24 +6711,6 @@ mod tests {
         .targeting(B)
     }
 
-    /// The strikes over `ticks` ticks after `ships[0]` fires once, each
-    /// with the tick it came on, the first tick being 1.
-    fn strikes_over(ships: &mut [Ship], arsenal: &Arsenal, ticks: u32) -> Vec<(u32, Strike)> {
-        let mut combat = Combat::default();
-        let mut strikes = Vec::new();
-        for tick in 1..=ticks {
-            tick_with(&mut combat, ships, arsenal, Rules::default());
-            ships[0].trigger = QUIET;
-            strikes.extend(
-                combat
-                    .take_strikes()
-                    .into_iter()
-                    .map(|strike| (tick, strike)),
-            );
-        }
-        strikes
-    }
-
     /// The strikes over the first `flies` runs of `_HandleShot`
     /// ([`Combat::fly_shots`]) after `ships[0]` fires once in its own
     /// phase, each with the run it came in, the first being 1, each
@@ -7072,22 +7039,12 @@ mod tests {
 
     // One shot at a time (`Flags3` 0x0004, `_HandleShot` @0x35c09-0x35c42).
 
-    /// The ticks of the first `ticks` on which `ships[0]` fires.
-    fn fire_ticks(ships: &mut [Ship], ticks: u32) -> Vec<u32> {
-        let mut combat = Combat::default();
-        (0..ticks)
-            .filter(|_| {
-                tick(&mut combat, ships, &NovaDisable);
-                fired(&combat.take_events(), ships[0].id) > 0
-            })
-            .collect()
-    }
-
     #[test]
     fn an_npcs_weapon_fires_once_every_reload_runs_of_the_ship_loop() {
         // Reload 3, which `_HandleShip` counts down (@0x33896) before the
-        // pick (@0x34ffd). A one-at-a-time weapon's hold: see the
-        // `tick_phases` tests.
+        // pick (@0x34ffd). A one-at-a-time weapon's hold against that
+        // countdown is the session's order (`nova_sim`'s `fight_order`
+        // tests).
         let every = WeaponRecord {
             reload: 3,
             count: 10,
@@ -7600,12 +7557,6 @@ mod tests {
     /// ([`phase::test_hits`]): their events.
     fn hit_tested(combat: &mut Combat, ships: &mut [Ship]) -> Vec<CombatEvent> {
         phase::test_hits(combat, ships, &NovaDisable);
-        combat.take_events()
-    }
-
-    /// A tick of `combat` among `ships`, by Nova's rules: its events.
-    fn met(combat: &mut Combat, ships: &mut [Ship]) -> Vec<CombatEvent> {
-        tick(combat, ships, &NovaDisable);
         combat.take_events()
     }
 
@@ -8303,38 +8254,11 @@ mod tests {
         assert_eq!(struck(&mut combat), [(e, false, false), (B, true, true)]);
     }
 
-    /// Runs `step` among `ships` with `arsenal`, by the default rules.
-    fn run_with(
-        combat: &mut Combat,
-        ships: &mut [Ship],
-        arsenal: &Arsenal,
-        step: impl FnOnce(&mut Combat, &mut [Fighter], Arena<'_>, &mut dyn Chance),
-    ) {
-        let govts = Governments::default();
-        let arena = phase::arena(arsenal, &govts, Rules::default());
-        phase::run_in(combat, ships, arena, &mut NeverFires, step);
-    }
-
     /// The ship loop ([`Combat::handle_npcs`]) among `ships`, with
     /// `arsenal`.
     fn handle_npcs_with(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
         run_with(combat, ships, arsenal, |combat, fighters, arena, chance| {
             combat.handle_npcs(fighters, arena, chance);
-        });
-    }
-
-    /// `_HandleShot` ([`Combat::fly_shots`]) among `ships`, with `arsenal`.
-    fn fly_shots_with(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
-        run_with(combat, ships, arsenal, |combat, fighters, arena, chance| {
-            combat.fly_shots(fighters, arena, chance);
-        });
-    }
-
-    /// The collision passes ([`Combat::test_hits`]) among `ships`, with
-    /// `arsenal`, and no stellars.
-    fn test_hits_with(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
-        run_with(combat, ships, arsenal, |combat, fighters, arena, chance| {
-            combat.test_hits(fighters, arena, Scenery::default(), chance);
         });
     }
 
