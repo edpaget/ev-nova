@@ -1,6 +1,6 @@
 //! [`FlightView`]'s spaceport shops over the [`FlightSim`] port: the
-//! exchange, the recharge, the outfitter and the shipyard. Each sends its
-//! command
+//! exchange, the recharge, the outfitter, the shipyard and the bar. Each
+//! sends its command
 //! ([`FlightCommand`]) and hands back the flight's answer, a flight that
 //! refuses it (one that never started) answering as today's failed
 //! session did; what a screen shows is read through
@@ -9,8 +9,9 @@
 
 use nova_sim::flight_frame::{Answer, FlightCommand};
 use nova_sim::{
-    Market, Order, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, RechargeRefusal, ShipId,
-    ShipNaming, ShipPurchase, ShipRefusal, Shipyard, TradeRefusal,
+    HireList, HireRefusal, Hired, Market, News, Order, OutfitOrder, OutfitRefusal, OutfitRun,
+    Outfitter, RechargeRefusal, ShipId, ShipNaming, ShipPurchase, ShipRefusal, Shipyard,
+    TradeRefusal,
 };
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
@@ -129,6 +130,57 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub fn decline_ship(&mut self, ship: ShipId) {
         self.redraw_status();
         self.send(FlightCommand::DeclineShip(ship));
+    }
+
+    /// Opens the bar of the stellar landed on ([`FlightCommand::OpenBar`],
+    /// `nova_sim::Session::open_bar`), drawing the visit's news on the
+    /// flight's chance: whether it opened, false where there is no bar.
+    pub fn open_bar(&mut self) -> bool {
+        self.send(FlightCommand::OpenBar) == Answer::Done
+    }
+
+    /// The news of the bar visit under way
+    /// ([`PortSource::news`](crate::flight::sim_port::PortSource::news)):
+    /// none for a flight that never started.
+    #[must_use]
+    pub fn news(&self) -> Option<&News> {
+        self.sim.news()
+    }
+
+    /// The picture the bar's news is drawn over
+    /// ([`PortSource::news_picture`](crate::flight::sim_port::PortSource::news_picture)):
+    /// none for a flight that never started.
+    #[must_use]
+    pub fn news_picture(&self) -> Option<i16> {
+        self.sim.news_picture()
+    }
+
+    /// The ships for hire in the bar of the stellar landed on, the day's
+    /// rolls drawn on the flight's chance
+    /// ([`PortSource::escorts_for_hire`](crate::flight::sim_port::PortSource::escorts_for_hire)):
+    /// none for a flight that never started.
+    pub fn escorts_for_hire(&mut self) -> Option<HireList> {
+        self.sim.escorts_for_hire()
+    }
+
+    /// Hires a ship of class `ship` ([`FlightCommand::Hire`],
+    /// `nova_sim::Session::hire`), on the flight's chance.
+    ///
+    /// # Errors
+    ///
+    /// The [`HireRefusal`] the flight answers; a flight that never started
+    /// has no bar ([`HireRefusal::NoBar`]).
+    pub fn hire(&mut self, ship: ShipId) -> Result<Hired, HireRefusal> {
+        match self.send(FlightCommand::Hire(ship)) {
+            Answer::Hired(hired) => hired,
+            _ => Err(HireRefusal::NoBar),
+        }
+    }
+
+    /// The bar's hire screen closes ([`FlightCommand::CloseHire`],
+    /// `nova_sim::Session::close_hire`).
+    pub fn close_hire(&mut self) {
+        self.send(FlightCommand::CloseHire);
     }
 }
 

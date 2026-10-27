@@ -981,3 +981,78 @@ fn a_redraw_clears_the_shipyards_nav_mark() {
         }
     }
 }
+
+// The bar.
+
+#[test]
+fn opening_the_bar_sends_its_command_and_says_whether_it_opened() {
+    let mut view = docked();
+    view.sim.queue_answer(Answer::Done);
+    assert!(view.open_bar());
+    assert!(!view.open_bar(), "refused: no bar");
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::OpenBar, FlightCommand::OpenBar]
+    );
+}
+
+#[test]
+fn the_bars_news_its_picture_and_its_hire_list_are_the_flights() {
+    let mut view = docked();
+    assert_eq!(view.news(), None);
+    assert_eq!(view.news_picture(), None);
+    assert_eq!(view.escorts_for_hire(), None);
+    let news = nova_sim::News {
+        commercial: "C2".to_owned(),
+        story: "G2".to_owned(),
+    };
+    let list = nova_sim::HireList {
+        rows: Vec::new(),
+        cash: 1000,
+        room: true,
+        rules: Rulebook::default(),
+    };
+    let port = view.sim.port_mut();
+    port.news = Some(news.clone());
+    port.news_picture = Some(9000);
+    port.hire_list = Some(list.clone());
+    assert_eq!(view.news(), Some(&news));
+    assert_eq!(view.news_picture(), Some(9000));
+    assert_eq!(view.escorts_for_hire(), Some(list));
+}
+
+#[test]
+fn a_hire_sends_its_class_and_hands_back_the_flights_answer() {
+    let mut view = docked();
+    let hired = nova_sim::Hired {
+        ship: ShipId(129),
+        fee: 90,
+        wage: 9,
+        joined: true,
+    };
+    view.sim.queue_answer(Answer::Hired(Ok(hired)));
+    assert_eq!(view.hire(ShipId(129)), Ok(hired));
+    view.sim
+        .queue_answer(Answer::Hired(Err(nova_sim::HireRefusal::NotForHire)));
+    assert_eq!(
+        view.hire(ShipId(129)),
+        Err(nova_sim::HireRefusal::NotForHire)
+    );
+    assert_eq!(
+        view.hire(ShipId(129)),
+        Err(nova_sim::HireRefusal::NoBar),
+        "refused: a flight that never started has no bar"
+    );
+    assert_eq!(sent(&view), vec![FlightCommand::Hire(ShipId(129)); 3]);
+}
+
+#[test]
+fn closing_the_hire_screen_or_the_outfitter_sends_its_close() {
+    let mut view = docked();
+    view.close_hire();
+    view.close_outfitter();
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::CloseHire, FlightCommand::CloseOutfitter]
+    );
+}

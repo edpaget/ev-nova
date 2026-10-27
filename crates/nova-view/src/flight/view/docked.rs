@@ -7,11 +7,10 @@ use std::time::Duration;
 use nova_sim::mission::offer_gap;
 use nova_sim::mission::screens::mac_ticks;
 use nova_sim::{
-    AbortError, AcceptError, ComputerRefusal, ComputerRow, HireList, HireRefusal, Hired,
-    InterfaceLoad, MissionComputer, MissionId, MissionInfo, MissionShown, News, NotOffered,
-    RefuseShown, VenueOffer,
+    AbortError, AcceptError, ComputerRefusal, ComputerRow, InterfaceLoad, MissionComputer,
+    MissionId, MissionInfo, MissionShown, NotOffered, RefuseShown, VenueOffer,
 };
-use nova_sim::{Pilot, Session, ShipId, StellarId, Take, Taken};
+use nova_sim::{Pilot, Session, StellarId, Take, Taken};
 
 use crate::flight::catalog::StatusBars;
 use crate::flight::sim_port::FlightSim;
@@ -382,58 +381,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             .session
             .as_mut()
             .is_ok_and(|session| session.transact(change))
-    }
-
-    /// The bar's hire screen closes, as [`Session::close_hire`] has it; a
-    /// session that failed has no bar.
-    pub fn close_hire(&mut self) {
-        if let Ok(session) = &mut self.sim.session {
-            session.close_hire();
-        }
-    }
-
-    /// The ships for hire in the bar of the stellar landed on, as
-    /// [`Session::escorts_for_hire`] gives them, the day's rolls drawn on
-    /// the flight's chance; none for a session that failed.
-    pub fn escorts_for_hire(&mut self) -> Option<HireList> {
-        self.sim
-            .session
-            .as_mut()
-            .ok()?
-            .escorts_for_hire(&mut self.sim.chance)
-    }
-
-    /// Opens the bar of the stellar landed on as [`Session::open_bar`]
-    /// does, drawing the visit's news on the flight's chance; false for a
-    /// session that failed, or not landed at a bar.
-    pub fn open_bar(&mut self) -> bool {
-        self.sim
-            .session
-            .as_mut()
-            .is_ok_and(|session| session.open_bar(&mut self.sim.chance))
-    }
-
-    /// The news of the bar visit under way, as [`Session::news`] gives
-    /// it; none for a session that failed.
-    #[must_use]
-    pub fn news(&self) -> Option<&News> {
-        self.sim.session.as_ref().ok()?.news()
-    }
-
-    /// The picture the bar's news is drawn over, as
-    /// [`Session::news_picture`] gives it; none for a session that failed.
-    #[must_use]
-    pub fn news_picture(&self) -> Option<i16> {
-        self.sim.session.as_ref().ok()?.news_picture()
-    }
-
-    /// Hires a ship as [`Session::hire`] does, on the flight's chance; a
-    /// session that failed has no bar.
-    pub fn hire(&mut self, ship: ShipId) -> Result<Hired, HireRefusal> {
-        match &mut self.sim.session {
-            Ok(session) => session.hire(ship, &mut self.sim.chance),
-            Err(_) => Err(HireRefusal::NoBar),
-        }
     }
 
     /// The mission computer of the stellar landed on, as

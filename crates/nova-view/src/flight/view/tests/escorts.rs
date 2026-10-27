@@ -331,6 +331,10 @@ fn the_help_line_names_the_escort_keys() {
 
 // Hiring escorts and paying them.
 
+/// The adapter's own check (rdm:phase/view-sim-seam/phase-11-spaceport-on-port):
+/// it hands the flight's chance to a rolled read, the hire list, and to
+/// a command, the hire. What the view does with the answers runs on
+/// `FakeFlight` (`tests/faked_shops.rs`).
 #[test]
 fn hiring_goes_through_the_session_on_the_flights_chance() {
     let always = Rc::new(RefCell::new(Always::default()));
@@ -349,14 +353,10 @@ fn hiring_goes_through_the_session_on_the_flights_chance() {
     assert_eq!(view.pilot().map(Pilot::cash), Some(1000 - 90));
     assert_eq!(view.pilot().expect("flying").escorts()[0].wage, Some(9));
     assert!(view.take_save_due());
-    let mut broken = FlightView::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..hiring()
-    });
-    assert_eq!(broken.escorts_for_hire(), None);
-    assert_eq!(broken.hire(ShipId(129)), Err(HireRefusal::NoBar));
 }
 
+/// The adapter's own check: it hands the flight's chance to the bar's
+/// opening, whose news it reads back.
 #[test]
 fn the_bars_news_is_drawn_through_the_session_on_the_flights_chance() {
     let always = Rc::new(RefCell::new(Always::default()));
@@ -385,11 +385,4 @@ fn the_bars_news_is_drawn_through_the_session_on_the_flights_chance() {
         }),
         "each the last string, as the flight's chance rolls"
     );
-    let mut broken = FlightView::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..hiring()
-    });
-    assert!(!broken.open_bar());
-    assert_eq!(broken.news(), None);
-    assert_eq!(broken.news_picture(), None);
 }
