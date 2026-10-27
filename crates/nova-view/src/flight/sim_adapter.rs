@@ -400,6 +400,8 @@ mod tests {
         assert_eq!(flight.stellar_name(StellarId(128)), None);
         assert!(!flight.has_explored(none));
         assert_eq!(flight.galaxy(), None);
+        assert_eq!(flight.hover(Vec2::ZERO, &DrawnBoxes::default()), None);
+        assert_eq!(flight.coming_traffic(), []);
     }
 
     #[test]

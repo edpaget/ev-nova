@@ -605,6 +605,9 @@ fn the_warm_up_reads_the_coming_traffics_sheets_and_cards_so_the_first_step_read
     let cards = view.catalog().cards_asked.borrow().clone();
     assert_eq!(sheets, [ShipId(128), ShipId(129)]);
     assert_eq!(cards, [vec![ShipId(129)]]);
+    let card = view.cards.remove(&ShipId(129)).expect("read");
+    assert!(!view.has_read_traffic(ShipId(129)), "its sheet alone");
+    view.cards.insert(ShipId(129), card);
     let mut frame = in_sol_with(vec![
         the_player_at(Vec2::ZERO, 0.0),
         npc_129(0, Vec2::ZERO, 0.0),
@@ -613,6 +616,13 @@ fn the_warm_up_reads_the_coming_traffics_sheets_and_cards_so_the_first_step_read
     shows(&mut view, frame);
     assert_eq!(*view.catalog().sheets_asked.borrow(), sheets);
     assert_eq!(*view.catalog().cards_asked.borrow(), cards);
+}
+
+#[test]
+fn a_real_flights_coming_traffic_is_the_types_its_session_brings() {
+    // Which they are: nova-sim's (`Session::coming_traffic_ships`).
+    let view = FlightView::new(trafficked(&[130, 131], 3, 129, 1));
+    assert_eq!(view.sim.coming_traffic(), [ShipId(129)]);
 }
 
 #[test]

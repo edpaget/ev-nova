@@ -677,6 +677,16 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn the_players_record_faces_its_heading_and_is_boxed_by_its_own_frames() {
+        let ship = record::player(129, Vec2::new(3.0, 4.0), 90.0);
+        assert_eq!(ship.ship, ShipRef::Player);
+        assert_eq!(ship.class, ShipId(129));
+        assert_eq!(ship.position, Vec2::new(3.0, 4.0));
+        assert_eq!(ship.heading.to_bits(), 90.0_f32.to_bits());
+        assert_eq!(ship.framed, Some(ShipId(129)));
+    }
+
     fn stellar(id: i16) -> FlightFrame {
         FlightFrame {
             nav_mode: NavMode::Stellar(Some(StellarId(id))),

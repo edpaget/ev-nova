@@ -356,3 +356,77 @@ fn the_ships_are_drawn_in_the_frames_draw_order_whatever_their_records_order() {
 fn at_point(world: Vec2) -> Point {
     Point::new(world.x, world.y)
 }
+
+// Between steps (the drawing's interpolation, on the kept frame).
+
+#[test]
+fn an_asteroid_is_drawn_back_along_its_velocity_between_steps() {
+    let frame = FlightFrame {
+        asteroids: vec![nova_sim::flight_frame::FrameAsteroid {
+            velocity: Vec2::new(8.0, -4.0),
+            ..asteroid_at(Vec2::new(100.0, 50.0))
+        }],
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+    };
+    let mut view = world(rocky(trading()), frame);
+    view.alpha = 0.25;
+    let camera = view.camera();
+    let asteroids = view.shown_asteroids(&camera);
+    assert_eq!(asteroids.len(), 1);
+    // A quarter of the way from where it was a step ago.
+    assert_eq!(
+        asteroids[0].at,
+        camera.world_to_screen(Point::new(100.0 - 8.0 * 0.75, 50.0 + 4.0 * 0.75))
+    );
+}
+
+#[test]
+fn a_beam_is_drawn_moved_with_its_firer_between_steps() {
+    let mut view = world(
+        armed(0, &[UNDER]),
+        FlightFrame {
+            beams: vec![beam(
+                ShipRef::Player,
+                UNDER,
+                Vec2::ZERO,
+                Vec2::new(0.0, -100.0),
+            )],
+            ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+        },
+    );
+    // The player is drawn half way from a step ago, (-10, 6).
+    view.previous = nova_sim::flight_frame::ShipPlace {
+        position: Vec2::new(-10.0, 6.0),
+        heading: 0.0,
+    };
+    view.alpha = 0.5;
+    let camera = view.camera();
+    let beams = view.shown_beams(&camera);
+    assert_eq!(beams.len(), 1);
+    assert_eq!(
+        beams[0].start,
+        camera.world_to_screen(Point::new(-5.0, 3.0))
+    );
+    assert_eq!(
+        beams[0].end,
+        camera.world_to_screen(Point::new(-5.0, -97.0))
+    );
+}
+
+#[test]
+fn a_shield_flash_shows_from_the_frame_after_its_hit_until_it_runs_out() {
+    let mut view = world(catalog(), in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
+    let flash = view.flashes.entry(ShipRef::Player).or_default();
+    flash.hit(false);
+    assert_eq!(view.shield_flash(ShipRef::Player), None, "not stepped yet");
+    let flash = view.flashes.get_mut(&ShipRef::Player).expect("hit");
+    flash.step(100.0, 100.0, true);
+    let shown = view.shield_flash(ShipRef::Player).expect("shown");
+    assert!(shown > 0.0, "{shown}");
+    let flash = view.flashes.get_mut(&ShipRef::Player).expect("hit");
+    while !flash.spent() {
+        flash.step(100.0, 100.0, true);
+    }
+    flash.step(100.0, 100.0, true);
+    assert_eq!(view.shield_flash(ShipRef::Player), None, "run out");
+}
