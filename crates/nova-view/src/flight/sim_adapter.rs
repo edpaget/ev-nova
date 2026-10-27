@@ -1,7 +1,7 @@
 //! [`SessionFlight`]: the [`FlightSim`] adapter over a real
 //! `nova_sim::Session`, with the collaborators the session's calls are
 //! handed: the chance, the NPCs' behaviour and the fight's, the law's and
-//! the boardings' rules.
+//! the boardings' rules, and the comm dialog's options.
 //!
 //! It forwards: [`FlightSim::frame`] to `Session::fill_frame`,
 //! [`FlightSim::hover`] to `Session::hover`, [`FlightSim::coming_traffic`]
@@ -10,10 +10,12 @@
 //! [`FlightSim::step`] to `Session::step`, with its collaborators and
 //! the catalog the view shared,
 //! [`FlightSim::apply`] to `Session::apply`, whose match over the
-//! commands lives on the session's side, with the catalog the view shared
-//! and the chance, and [`FlightSim::drain`] to
-//! `Session::drain_events`. A session that failed to start fills the
-//! default frame, runs no step, refuses every command and drains nothing.
+//! commands lives on the session's side, with the catalog the view
+//! shared, the chance, the law, the boarding rule and the hail options,
+//! [`FlightSim::drain`] to `Session::drain_events`, and [`CommSource`]'s
+//! to `Session::hailing` and `Session::boarding`. A session that failed
+//! to start fills the default frame, runs no step, refuses every command,
+//! answers nothing and drains nothing.
 //!
 //! **For the strangler's length**, the view's
 //! `FlightView<C, SessionFlight<C>>` blocks reach the session and the
@@ -38,9 +40,9 @@ use nova_sim::map_search::SearchOutcome;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
     Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DescMovie, DisableRule, HailOptions,
-    Hover, LegalCode, MapMarks, MissionId, NovaAi, NovaBoarding, NovaDisable, NovaLaw,
-    PlayerCommand, PointDefenceRule, Rules, SavedNav, Session, ShipId, SimCatalog, StellarId,
-    StepCollaborators, SystemId, TagNames, Vec2,
+    HailView, Hover, LegalCode, MapMarks, MissionId, NovaAi, NovaBoarding, NovaDisable, NovaLaw,
+    PlayerCommand, PlunderView, PointDefenceRule, Rules, SavedNav, Session, ShipId, SimCatalog,
+    StellarId, StepCollaborators, SystemId, TagNames, Vec2,
 };
 
 use super::SharedChance;
@@ -202,6 +204,15 @@ impl<C> SessionFlight<C> {
     pub fn with_boarding_rule(self, boarding_rule: Rc<dyn BoardingRule>) -> Self {
         Self {
             boarding_rule,
+            ..self
+        }
+    }
+
+    /// The flight with its comm dialog listing `hail_options`.
+    #[must_use]
+    pub fn with_hail_options(self, hail_options: HailOptions) -> Self {
+        Self {
+            hail_options,
             ..self
         }
     }
@@ -402,7 +413,21 @@ impl<C> MapSource for SessionFlight<C> {
     }
 }
 
-impl<C> CommSource for SessionFlight<C> {}
+/// Each forwards to the session's method of its name; a failed session
+/// answers nothing. The hail reads the catalog the view shared
+/// ([`SessionFlight::share_catalog`]) and lists the flight's hail options,
+/// and answers nothing before the catalog is shared.
+impl<C> CommSource for SessionFlight<C> {
+    fn hailing(&self) -> Option<HailView> {
+        let session = self.session().ok()?;
+        let catalog = &self.catalog.as_ref()?.0;
+        session.hailing(&**catalog, &self.hail_options)
+    }
+
+    fn boarding(&self) -> Option<PlunderView> {
+        self.session().ok()?.boarding()
+    }
+}
 
 impl<C> PortSource for SessionFlight<C> {}
 
@@ -473,6 +498,35 @@ mod tests {
             FlightCommand::BeginFade,
             FlightCommand::EndPlay,
             FlightCommand::CommShown(240),
+        ] {
+            assert_eq!(
+                flight.apply(command.clone()),
+                Answer::Refused,
+                "{command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_flight_refuses_the_comm_commands_and_answers_no_comm() {
+        let mut flight = failed();
+        assert_eq!(flight.hailing(), None);
+        assert_eq!(flight.boarding(), None);
+        for command in [
+            FlightCommand::Hail { option: false },
+            FlightCommand::AnswerHail(0),
+            FlightCommand::Haggle(nova_sim::Haggle::Accept),
+            FlightCommand::HangUp,
+            FlightCommand::Board,
+            FlightCommand::Plunder(nova_sim::Take::Cargo),
+            FlightCommand::LetGoOfBoarding,
+            FlightCommand::CommandEscorts {
+                group: nova_sim::EscortGroup::All,
+                command: nova_sim::EscortCommand::Hold,
+            },
+            FlightCommand::PressEscort(nova_sim::escort_dialog::EscortButton::Close),
+            FlightCommand::CommAcknowledged,
+            FlightCommand::CommTicked,
         ] {
             assert_eq!(
                 flight.apply(command.clone()),

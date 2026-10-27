@@ -17,8 +17,8 @@
 //! [`PortSource`], hold the course map's, the comm's and the spaceport's
 //! questions, each method defaulting to "nothing open", so a sim that has
 //! none of them open needs no code. [`MapSource`] has the course map's,
-//! the floating map's and the nav area's; the other two are empty for
-//! now.
+//! the floating map's and the nav area's, [`CommSource`] the hail's and
+//! the boarding's; [`PortSource`] is empty for now.
 //!
 //! The `fixture` feature (and this crate's tests) exposes `fixture`:
 //! `FakeFlight`, a scripted sim for the view's component tests, and
@@ -34,8 +34,8 @@ use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    DescMovie, Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, StellarId, SystemId,
-    Vec2,
+    DescMovie, HailView, Hover, MapMarks, MissionId, PlayerCommand, PlunderView, SavedNav, ShipId,
+    StellarId, SystemId, Vec2,
 };
 
 #[cfg(any(test, feature = "fixture"))]
@@ -246,9 +246,25 @@ pub trait MapSource {
     }
 }
 
-/// The comm's questions of the flight: hails and their answers. None yet:
-/// each method will default to "nothing open".
-pub trait CommSource {}
+/// The comm's questions of the flight: the hail under way and the
+/// boarding under way, each defaulting to "nothing open". The escort
+/// dialog's contents come only with the commands' answers
+/// ([`Answer::Hailed`], [`Answer::EscortDialog`]), as the view asks
+/// nothing else of it.
+pub trait CommSource {
+    /// The comm dialog's contents while a hail is under way
+    /// (`nova_sim::Session::hailing`): none with no hail under way.
+    fn hailing(&self) -> Option<HailView> {
+        None
+    }
+
+    /// What is on board the ship being boarded while the plunder dialog
+    /// is open (`nova_sim::Session::boarding`): none with no boarding
+    /// under way, or a capture awaiting its assignment.
+    fn boarding(&self) -> Option<PlunderView> {
+        None
+    }
+}
 
 /// The spaceport's questions of the flight. None yet: each method will
 /// default to "nothing open".
@@ -262,6 +278,8 @@ mod tests {
     struct NothingOpen;
 
     impl MapSource for NothingOpen {}
+
+    impl CommSource for NothingOpen {}
 
     /// A flight with nothing to it, answering every port method it may
     /// leave to its default by that default.
@@ -329,5 +347,12 @@ mod tests {
         assert_eq!(source.stellar_name(StellarId(128)), None);
         assert!(!source.has_explored(none));
         assert_eq!(source.galaxy(), None);
+    }
+
+    #[test]
+    fn a_comm_source_with_nothing_open_answers_nothing() {
+        let source = NothingOpen;
+        assert_eq!(source.hailing(), None);
+        assert_eq!(source.boarding(), None);
     }
 }

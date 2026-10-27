@@ -23,7 +23,7 @@ use nova_sim::map_search::SearchOutcome;
 use nova_sim::navigation::NavMode;
 use nova_sim::status_cargo::StatusCargo;
 use nova_sim::story::OverlaidGalaxy;
-use nova_sim::{ClassRow, Gauge, RadarGear, Reserves};
+use nova_sim::{ClassRow, Gauge, HailView, PlunderView, RadarGear, Reserves, Take};
 use nova_sim::{
     DescMovie, EscortClass, Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, ShipRef,
     StellarId, StellarPick, Vec2,
@@ -48,10 +48,13 @@ use super::{CommSource, FlightSim, MapSource, PortSource, fresh_description};
 /// the next text queued ([`FakeFlight::queue_description`]), or as a new
 /// pilot's once the queue is empty ([`fresh_description`]), recording
 /// each load ([`FakeFlight::descriptions_loaded`]). It gives the death
-/// `dësc`s it is given ([`FakeFlight::set_death_descs`]). It answers
-/// [`FlightCommand::CommShown`] done without taking an answer from the
-/// queue, as the message line's follow-up rides along with the commands a
-/// test is about. One with nothing scripted meets [`check_contract`].
+/// `dësc`s it is given ([`FakeFlight::set_death_descs`]), and answers
+/// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]). It
+/// answers the message line's commands ([`FlightCommand::CommShown`],
+/// [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`])
+/// done without taking an answer from the queue, as the message line's
+/// follow-ups ride along with the commands a test is about. One with
+/// nothing scripted meets [`check_contract`].
 #[derive(Clone, Debug, Default)]
 pub struct FakeFlight {
     frame: FlightFrame,
@@ -69,6 +72,18 @@ pub struct FakeFlight {
     descriptions: VecDeque<String>,
     loaded: Vec<(Option<String>, Option<DescMovie>)>,
     death_descs: Vec<i16>,
+    comm: FakeComm,
+}
+
+/// What a [`FakeFlight`] answers the [`CommSource`] questions with, each
+/// field the answer to the question of its name. The default answers
+/// nothing, as a [`CommSource`]'s defaults do.
+#[derive(Clone, Debug, Default)]
+pub struct FakeComm {
+    /// [`CommSource::hailing`]'s answer.
+    pub hailing: Option<HailView>,
+    /// [`CommSource::boarding`]'s answer.
+    pub boarding: Option<PlunderView>,
 }
 
 /// What a [`FakeFlight`] answers the [`MapSource`] questions with, each
@@ -191,9 +206,10 @@ impl FakeFlight {
     }
 
     /// Answers the next command not yet answered with `answer`: the
-    /// message line's [`FlightCommand::CommShown`] takes none, and is
-    /// answered done, so the answers a test queues line up with the
-    /// commands it is about.
+    /// message line's commands ([`FlightCommand::CommShown`],
+    /// [`FlightCommand::CommAcknowledged`], [`FlightCommand::CommTicked`])
+    /// take none, and are answered done, so the answers a test queues line
+    /// up with the commands it is about.
     pub fn queue_answer(&mut self, answer: Answer) {
         self.answers.push_back((answer, None));
     }
@@ -256,6 +272,11 @@ impl FakeFlight {
         &mut self.map
     }
 
+    /// What the comm's questions are answered with, to script.
+    pub fn comm_mut(&mut self) -> &mut FakeComm {
+        &mut self.comm
+    }
+
     /// The map's questions asked whose arguments matter, in the order
     /// asked ([`MapAsk`]).
     #[must_use]
@@ -283,9 +304,14 @@ impl FlightSim for FakeFlight {
     }
 
     fn apply(&mut self, command: FlightCommand) -> Answer {
-        let shown = matches!(command, FlightCommand::CommShown(_));
+        let line = matches!(
+            command,
+            FlightCommand::CommShown(_)
+                | FlightCommand::CommAcknowledged
+                | FlightCommand::CommTicked
+        );
         self.applied.push(command);
-        if shown {
+        if line {
             return Answer::Done;
         }
         let Some((answer, frame)) = self.answers.pop_front() else {
@@ -418,7 +444,15 @@ impl MapSource for FakeFlight {
     }
 }
 
-impl CommSource for FakeFlight {}
+impl CommSource for FakeFlight {
+    fn hailing(&self) -> Option<HailView> {
+        self.comm.hailing.clone()
+    }
+
+    fn boarding(&self) -> Option<PlunderView> {
+        self.comm.boarding
+    }
+}
 
 impl PortSource for FakeFlight {}
 
@@ -744,6 +778,9 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///   none;
 /// - **the escort rows in their order**: a frame's escort rows are of
 ///   each [`EscortClass`] in [`EscortClass::ALL`]'s order;
+/// - **escorts fly only with a row present**: a frame with an escort
+///   flying ([`FrameHud::escorts_flying`]) has at least one of its escort
+///   rows present, as every escort flying leads a class;
 /// - **a weapon select waits for the step**: Weapon Select
 ///   ([`FlightCommand::SelectWeapon`]) is answered done or refused, never
 ///   with anything else, and the frame after it equals the frame before,
@@ -765,7 +802,11 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///   [`Answer::Jumped`], [`Answer::JumpRefused`] or [`Answer::Refused`]; a
 ///   refusal leaves [`FlightFrame::jump_under_way`] as it was (a disabled
 ///   ship's J is refused mid-jump too), and after [`Answer::Jumped`] a
-///   jump is under way. Checked last, as a jump begun changes the flight.
+///   jump is under way. Checked last, as a jump begun changes the flight;
+/// - **no plunder without a boarding**: with no boarding under way
+///   ([`CommSource::boarding`] none), a take in the plunder dialog
+///   ([`FlightCommand::Plunder`]) is refused, and the frame after it
+///   equals the frame before. Checked before the jump.
 ///
 /// The error says which clause failed.
 pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
@@ -819,7 +860,21 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
     check_hud(&once)?;
     check_weapon_select(sim, &once)?;
     check_travel(sim, &once)?;
+    check_plunder(sim, &once)?;
     check_jump(sim, &once)
+}
+
+/// [`check_contract`]'s plunder clause, `once` the frame filled before.
+fn check_plunder(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String> {
+    if sim.boarding().is_some() {
+        return Ok(());
+    }
+    refused_unchanged(
+        sim,
+        once,
+        FlightCommand::Plunder(Take::Cargo),
+        "no plunder without a boarding",
+    )
 }
 
 /// [`check_contract`]'s clauses on the travel facts, the arrival and the
@@ -946,6 +1001,12 @@ fn check_hud(once: &FlightFrame) -> Result<(), String> {
         return Err(format!(
             "the escort rows in their order: {:?}",
             once.hud.escort_rows.map(|row| row.class)
+        ));
+    }
+    if once.hud.escorts_flying && !once.hud.escort_rows.iter().any(|row| row.present) {
+        return Err(format!(
+            "escorts fly only with a row present: none of {:?} is",
+            once.hud.escort_rows
         ));
     }
     Ok(())
@@ -1287,6 +1348,12 @@ mod tests {
         UnshownIff,
         /// The escort rows are out of order.
         RowsOutOfOrder,
+        /// An escort flies with no row present.
+        FliesWithNoRow,
+        /// A take with no boarding is answered.
+        PlundersNothing,
+        /// A take with no boarding changes the frame.
+        PlunderChangesTheFrame,
         /// Weapon Select is answered with a stellar.
         AnswersTheSelect,
         /// Weapon Select changes the frame.
@@ -1356,6 +1423,7 @@ mod tests {
                     ..record::stellar(StellarId(129))
                 }),
                 Fault::RowsOutOfOrder => into.hud.escort_rows.swap(0, 1),
+                Fault::FliesWithNoRow => into.hud.escorts_flying = true,
                 Fault::WarpEndsUnwarped => {
                     into.warp_end_due = true;
                     into.jump_under_way = true;
@@ -1388,7 +1456,16 @@ mod tests {
             let fade = matches!(command, FlightCommand::BeginFade);
             let end = matches!(command, FlightCommand::EndPlay);
             let jump = matches!(command, FlightCommand::Jump);
+            let plunder = matches!(command, FlightCommand::Plunder(_));
             match self.fault {
+                Fault::PlundersNothing if plunder => Answer::Plundered {
+                    taken: nova_sim::Taken::Nothing,
+                    open: false,
+                },
+                Fault::PlunderChangesTheFrame if plunder => {
+                    self.fake.set_frame(stellar(129));
+                    Answer::Refused
+                }
                 Fault::ArrivesEarly if arrive => Answer::Arrived {
                     system: SystemId(131),
                     combat: Vec::new(),
@@ -1442,7 +1519,11 @@ mod tests {
 
     impl MapSource for Broken {}
 
-    impl CommSource for Broken {}
+    impl CommSource for Broken {
+        fn boarding(&self) -> Option<PlunderView> {
+            self.fake.boarding()
+        }
+    }
 
     impl PortSource for Broken {}
 
@@ -1555,6 +1636,78 @@ mod tests {
     #[test]
     fn escort_rows_out_of_order_break_the_contract() {
         assert!(clause(Fault::RowsOutOfOrder).starts_with("the escort rows in their order"));
+    }
+
+    #[test]
+    fn an_escort_flying_with_no_row_present_breaks_the_contract() {
+        assert!(clause(Fault::FliesWithNoRow).starts_with("escorts fly only with a row present"));
+    }
+
+    #[test]
+    fn a_take_with_no_boarding_answered_or_changing_the_frame_breaks_the_contract() {
+        for fault in [Fault::PlundersNothing, Fault::PlunderChangesTheFrame] {
+            assert!(
+                clause(fault).starts_with("no plunder without a boarding"),
+                "{fault:?}: {}",
+                clause(fault)
+            );
+        }
+    }
+
+    #[test]
+    fn a_fake_boarding_or_with_an_escort_flying_meets_the_contract() {
+        let mut flying = FakeFlight::new();
+        let mut frame = stellar(128);
+        frame.hud.escorts_flying = true;
+        frame.hud.escort_rows[0].present = true;
+        flying.set_frame(frame);
+        assert_eq!(check_contract(&mut flying), Ok(()), "a row present");
+        let mut aboard = FakeFlight::new();
+        aboard.set_frame(stellar(128));
+        aboard.comm_mut().boarding = Some(boarded());
+        assert_eq!(
+            check_contract(&mut aboard),
+            Ok(()),
+            "a boarding under way may answer a take as it will"
+        );
+    }
+
+    /// What is on board NPC 0, a ship 129.
+    fn boarded() -> PlunderView {
+        PlunderView {
+            npc: nova_sim::NpcId(0),
+            ship: ShipId(129),
+            credits: 100,
+            cargo: None,
+            ammo: None,
+            fuel: 0,
+            odds: 0,
+        }
+    }
+
+    #[test]
+    fn the_fake_answers_nothing_of_the_comm_until_scripted_then_as_scripted() {
+        let mut fake = FakeFlight::new();
+        assert_eq!(fake.hailing(), None);
+        assert_eq!(fake.boarding(), None);
+        fake.comm_mut().boarding = Some(boarded());
+        assert_eq!(fake.boarding(), Some(boarded()));
+        let hail = nova_sim::HailView {
+            npc: nova_sim::NpcId(0),
+            ship: ShipId(129),
+            first: None,
+            reply: "Hello.".to_owned(),
+            comm_name: String::new(),
+            govt_name: None,
+            hostile: false,
+            options: Vec::new(),
+            asking: None,
+            pay_me: true,
+            escort: None,
+            portrait: None,
+        };
+        fake.comm_mut().hailing = Some(hail.clone());
+        assert_eq!(fake.hailing(), Some(hail));
     }
 
     #[test]
@@ -1698,15 +1851,19 @@ mod tests {
     fn the_fake_answers_the_message_line_done_without_its_queue() {
         let mut fake = FakeFlight::new();
         fake.queue_answer(Answer::Jumped(SystemId(131)));
-        assert_eq!(fake.apply(FlightCommand::CommShown(240)), Answer::Done);
+        let line = [
+            FlightCommand::CommShown(240),
+            FlightCommand::CommAcknowledged,
+            FlightCommand::CommTicked,
+        ];
+        for command in line.clone() {
+            assert_eq!(fake.apply(command.clone()), Answer::Done, "{command:?}");
+        }
         assert_eq!(
             fake.apply(FlightCommand::Jump),
             Answer::Jumped(SystemId(131))
         );
-        assert_eq!(
-            fake.applied(),
-            [FlightCommand::CommShown(240), FlightCommand::Jump]
-        );
+        assert_eq!(fake.applied(), [&line[..], &[FlightCommand::Jump]].concat());
     }
 
     #[test]

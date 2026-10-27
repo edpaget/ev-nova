@@ -992,3 +992,26 @@ fn a_real_target_shows_in_the_panel_and_brackets() {
         .count();
     assert_eq!(brackets, 4, "its four corners");
 }
+
+#[test]
+fn a_real_session_with_an_escort_flying_meets_the_contract() {
+    let data = fighting_data(&[]);
+    let escort = nova_sim::fleet::Escort {
+        ship: ShipId(129),
+        reserves: nova_sim::Reserves::full(10.0, 10.0, 100.0),
+        order: None,
+        carried: false,
+        wage: Some(10),
+        person: None,
+        mark: None,
+    };
+    let session = SessionBuilder::flying(&data)
+        .with_escorts(vec![escort])
+        .build();
+    let mut flight = SessionFlight::<Rc<GameData>>::from(session);
+    let mut frame = FlightFrame::default();
+    flight.frame(&mut frame);
+    assert!(frame.hud.escorts_flying, "the hired escort");
+    assert!(frame.hud.escort_rows.iter().any(|row| row.present));
+    assert_eq!(check_contract(&mut flight), Ok(()));
+}
