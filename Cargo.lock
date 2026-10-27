@@ -1519,6 +1519,7 @@ dependencies = [
 name = "nova-bundle"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "plist",
  "serde",
  "serde_json",

@@ -16,7 +16,20 @@
 //! The `.dmg` goes to the output directory, `<target>/bundle/out` unless
 //! one is given. Staging never lies under it: CI uploads everything in its
 //! output directory (`dist/`).
+//!
+//! A Developer ID run keeps its secrets and scratch files beside staging,
+//! in a directory it removes when it ends, and the output directory never
+//! overlaps it:
+//!
+//! ```text
+//! <target>/bundle/signing/
+//!   developer-id.p12          the certificate, decoded
+//!   AuthKey_<key id>.p8       the notary API key, decoded
+//!   nova-signing.keychain-db  the temporary keychain
+//!   Nova.zip                  the app as sent to the notary
+//! ```
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::icon::ICON_FILE;
@@ -33,40 +46,100 @@ pub const DMG: &str = "ev-nova-aarch64-apple-darwin.dmg";
 /// The `.dmg`'s volume name.
 pub const VOLUME: &str = "EV Nova";
 
-/// The staging and output directories.
+/// The staging, signing and output directories.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
     /// The tree that becomes the `.dmg`'s volume.
     pub staging: PathBuf,
+    /// Where a Developer ID run keeps its secrets and scratch files.
+    signing: PathBuf,
     /// Where the `.dmg` is written.
     pub out: PathBuf,
 }
 
-/// The output directory would hold the staging tree.
+/// The output directory asked for can't be used.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[error(
-    "the output directory {} holds the staging directory {}: choose another",
-    out.display(),
-    staging.display()
-)]
-pub struct StagingInOutput {
-    /// The staging directory.
-    pub staging: PathBuf,
-    /// The output directory asked for.
-    pub out: PathBuf,
+pub enum LayoutError {
+    /// It would hold the staging tree, which CI would then upload.
+    #[error(
+        "the output directory {} holds the staging directory {}: choose another",
+        out.display(),
+        staging.display()
+    )]
+    StagingInOutput {
+        /// The staging directory.
+        staging: PathBuf,
+        /// The output directory asked for.
+        out: PathBuf,
+    },
+    /// It is, holds or lies in the signing directory, which holds secrets
+    /// and is removed when the run ends.
+    #[error(
+        "the output directory {} overlaps the signing directory {}: choose another",
+        out.display(),
+        signing.display()
+    )]
+    OutputInSigning {
+        /// The signing directory.
+        signing: PathBuf,
+        /// The output directory asked for.
+        out: PathBuf,
+    },
 }
 
 impl Layout {
     /// The layout under Cargo's `target_dir`, writing the `.dmg` to `out`
     /// or, when none is given, to `<target_dir>/bundle/out`.
-    pub fn new(target_dir: &Path, out: Option<PathBuf>) -> Result<Self, StagingInOutput> {
+    pub fn new(target_dir: &Path, out: Option<PathBuf>) -> Result<Self, LayoutError> {
         let bundle = target_dir.join("bundle");
         let staging = bundle.join("staging");
+        let signing = bundle.join("signing");
         let out = out.unwrap_or_else(|| bundle.join("out"));
         if staging.starts_with(&out) {
-            return Err(StagingInOutput { staging, out });
+            return Err(LayoutError::StagingInOutput { staging, out });
         }
-        Ok(Self { staging, out })
+        if signing.starts_with(&out) || out.starts_with(&signing) {
+            return Err(LayoutError::OutputInSigning { signing, out });
+        }
+        Ok(Self {
+            staging,
+            signing,
+            out,
+        })
+    }
+
+    /// The signing directory, beside staging.
+    #[must_use]
+    pub fn signing(&self) -> PathBuf {
+        self.signing.clone()
+    }
+
+    /// The temporary keychain the certificate is imported into.
+    #[must_use]
+    pub fn keychain(&self) -> PathBuf {
+        self.signing.join("nova-signing.keychain-db")
+    }
+
+    /// The decoded Developer ID certificate.
+    #[must_use]
+    pub fn cert(&self) -> PathBuf {
+        self.signing.join("developer-id.p12")
+    }
+
+    /// The decoded notary API key, named as App Store Connect names it.
+    #[must_use]
+    pub fn api_key(&self, key_id: &OsStr) -> PathBuf {
+        let mut name = OsStr::new("AuthKey_").to_owned();
+        name.push(key_id);
+        name.push(".p8");
+        self.signing.join(name)
+    }
+
+    /// The zip of `Nova.app` sent to the notary, which takes no bare
+    /// bundle.
+    #[must_use]
+    pub fn app_zip(&self) -> PathBuf {
+        self.signing.join("Nova.zip")
     }
 
     /// `Nova.app`.
@@ -155,12 +228,45 @@ mod tests {
         for out in [target(), target().join("bundle")] {
             assert_eq!(
                 Layout::new(&target(), Some(out.clone())),
-                Err(StagingInOutput {
+                Err(LayoutError::StagingInOutput {
                     staging: target().join("bundle").join("staging"),
                     out,
                 })
             );
         }
+    }
+
+    #[test]
+    fn an_output_dir_in_or_at_the_signing_dir_is_refused() {
+        let signing = target().join("bundle").join("signing");
+        for out in [signing.clone(), signing.join("out")] {
+            let refused = Layout::new(&target(), Some(out.clone()));
+            assert_eq!(
+                refused,
+                Err(LayoutError::OutputInSigning {
+                    signing: signing.clone(),
+                    out: out.clone(),
+                })
+            );
+            let text = refused.expect_err("refused").to_string();
+            assert!(text.contains(&out.display().to_string()), "{text}");
+        }
+    }
+
+    #[test]
+    fn names_the_signing_paths_beside_staging() {
+        let layout = Layout::new(&target(), None).expect("layout");
+        let signing = target().join("bundle").join("signing");
+        assert_eq!(layout.signing(), signing);
+        assert_eq!(layout.keychain(), signing.join("nova-signing.keychain-db"));
+        assert_eq!(layout.cert(), signing.join("developer-id.p12"));
+        assert_eq!(
+            layout.api_key(std::ffi::OsStr::new("KEY123")),
+            signing.join("AuthKey_KEY123.p8")
+        );
+        assert_eq!(layout.app_zip(), signing.join("Nova.zip"));
+        assert!(!layout.signing().starts_with(&layout.staging));
+        assert!(!layout.signing().starts_with(&layout.out));
     }
 
     #[test]

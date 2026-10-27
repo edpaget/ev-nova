@@ -43,9 +43,11 @@ holds `nova` and `nova-dump` built from the latest commit on `main`:
 - `ev-nova-x86_64-pc-windows-msvc.zip`
 
 These are tester builds, and they contain no game data. Each download has a
-`README.txt` on running them. On macOS, `Nova.app` is ad-hoc signed but not
-notarized, so Gatekeeper blocks a downloaded copy the first time: choose Open
-Anyway in System Settings > Privacy & Security, or run
+`README.txt` on running them. On macOS, `Nova.app` is signed with a Developer
+ID and notarized by Apple, so a downloaded copy opens with a double-click. A
+bundle built without the signing keys (a local `mise run bundle`) is ad-hoc
+signed instead, and macOS blocks a downloaded copy of it the first time: choose
+Open Anyway in System Settings > Privacy & Security, or run
 `xattr -dr com.apple.quarantine /Applications/Nova.app`.
 
 ## Using your own data

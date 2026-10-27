@@ -4,6 +4,7 @@
 //! integration tests as a module here, not as a new `tests/*.rs` file:
 //! every `tests/*.rs` file is a separate binary to link.
 
+mod env;
 mod files;
 #[cfg(target_os = "macos")]
 mod macos_tools;

@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use crate::bundle::Host;
+use crate::signing::Signing;
 
 /// The bundler's usage line.
 pub const USAGE: &str = "usage: nova-bundle [OUT_DIR]   (run it as `mise run bundle -- [OUT_DIR]`)";
@@ -29,13 +30,14 @@ pub enum HostError {
 /// The host from the arguments after the program name, `$CARGO`,
 /// `$MACOSX_DEPLOYMENT_TARGET` and the working directory, which a relative
 /// output directory is taken against, on the host `os`
-/// (`std::env::consts::OS`).
+/// (`std::env::consts::OS`), signing as `signing` says.
 pub fn host(
     args: Vec<OsString>,
     cargo: Option<OsString>,
     deployment_target: Option<String>,
     cwd: &Path,
     os: &str,
+    signing: Signing,
 ) -> Result<Host, HostError> {
     if os != "macos" {
         return Err(HostError::NotMacOs(os.to_owned()));
@@ -56,6 +58,7 @@ pub fn host(
         cargo: cargo.unwrap_or_else(|| OsString::from("cargo")),
         min_system,
         out: out.map(|out| cwd.join(out)),
+        signing,
     })
 }
 
@@ -64,6 +67,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::test_support::credentials;
 
     fn cwd() -> PathBuf {
         Path::new("/work").join("ev-nova")
@@ -81,6 +85,7 @@ mod tests {
             Some("13.0".into()),
             &cwd(),
             "macos",
+            Signing::AdHoc,
         )
         .expect("host");
         assert_eq!(
@@ -89,13 +94,22 @@ mod tests {
                 cargo: "/bin/cargo".into(),
                 min_system: "13.0".into(),
                 out: None,
+                signing: Signing::AdHoc,
             }
         );
     }
 
     #[test]
     fn a_relative_output_is_taken_against_the_working_directory() {
-        let host = host(os(&["dist"]), None, Some("13.0".into()), &cwd(), "macos").expect("host");
+        let host = host(
+            os(&["dist"]),
+            None,
+            Some("13.0".into()),
+            &cwd(),
+            "macos",
+            Signing::AdHoc,
+        )
+        .expect("host");
         assert_eq!(host.out, Some(cwd().join("dist")));
     }
 
@@ -108,6 +122,7 @@ mod tests {
             Some("13.0".into()),
             &cwd(),
             "macos",
+            Signing::AdHoc,
         )
         .expect("host");
         assert_eq!(host.out, Some(out));
@@ -115,7 +130,15 @@ mod tests {
 
     #[test]
     fn cargo_defaults_to_the_one_on_the_path() {
-        let host = host(vec![], None, Some("13.0".into()), &cwd(), "macos").expect("host");
+        let host = host(
+            vec![],
+            None,
+            Some("13.0".into()),
+            &cwd(),
+            "macos",
+            Signing::AdHoc,
+        )
+        .expect("host");
         assert_eq!(host.cargo, "cargo");
     }
 
@@ -123,7 +146,14 @@ mod tests {
     fn two_arguments_or_an_option_are_a_usage_error() {
         for args in [os(&["a", "b"]), os(&["--help"]), os(&["-h"])] {
             assert_eq!(
-                host(args.clone(), None, Some("13.0".into()), &cwd(), "macos"),
+                host(
+                    args.clone(),
+                    None,
+                    Some("13.0".into()),
+                    &cwd(),
+                    "macos",
+                    Signing::AdHoc
+                ),
                 Err(HostError::Usage),
                 "{args:?}"
             );
@@ -134,7 +164,7 @@ mod tests {
     fn an_unset_or_empty_deployment_target_is_an_error() {
         for target in [None, Some(String::new())] {
             assert_eq!(
-                host(vec![], None, target, &cwd(), "macos"),
+                host(vec![], None, target, &cwd(), "macos", Signing::AdHoc),
                 Err(HostError::NoDeploymentTarget)
             );
         }
@@ -144,9 +174,31 @@ mod tests {
     fn a_host_other_than_macos_is_refused() {
         for os in ["linux", "windows"] {
             assert_eq!(
-                host(vec![], None, Some("13.0".into()), &cwd(), os),
+                host(
+                    vec![],
+                    None,
+                    Some("13.0".into()),
+                    &cwd(),
+                    os,
+                    Signing::AdHoc
+                ),
                 Err(HostError::NotMacOs(os.to_owned()))
             );
         }
+    }
+
+    #[test]
+    fn the_signing_mode_is_carried_through() {
+        let signing = Signing::DeveloperId(credentials());
+        let host = host(
+            vec![],
+            None,
+            Some("13.0".into()),
+            &cwd(),
+            "macos",
+            signing.clone(),
+        )
+        .expect("host");
+        assert_eq!(host.signing, signing);
     }
 }
