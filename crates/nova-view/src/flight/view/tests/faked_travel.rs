@@ -6,6 +6,7 @@
 
 use super::faked_world::{in_sol_with, the_player_at, world};
 use super::*;
+use crate::flight::escorts::fighters_abandoned_message;
 use crate::flight::jump::{FADE_IN_FOR, FADE_OUT_FOR, JumpEffect, JumpPhase};
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::{SessionEvent, SimSound};
@@ -1054,4 +1055,123 @@ fn a_parallax_starfield_change_waits_for_the_next_scattering() {
     assert!(fixed(&view), "until the next scattering");
     scattered_on_arrival(&mut view);
     assert!(rolled(&view), "back on, the next scattering rolls");
+}
+
+// The arrival's line, over the flight's names and date
+// (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks). Which notes the
+// flight raises, the buoy's string and their ticks are nova-sim's.
+
+/// [`warping`]'s view at the warp's end, the flight's events of its
+/// arrival in Alpha Centauri `events` drained after the system's change.
+fn arriving_with(events: Vec<FlightEvent>) -> Faked {
+    let mut view = warping();
+    at_the_warps_end(&mut view, Vec::new());
+    for event in events {
+        view.sim.queue_event(event);
+    }
+    view
+}
+
+/// The arrival line in Alpha Centauri on the flight's date.
+fn alpha_arrival() -> String {
+    arrival_message("Alpha Centauri", DATE, false)
+}
+
+#[test]
+fn a_jump_into_a_buoyed_system_shows_the_buoy_for_480_ticks_in_place_of_the_arrival() {
+    let buoy = SimMessage::Buoy(HELLO.to_owned());
+    let mut view = arriving_with(vec![FlightEvent::Message(buoy.clone())]);
+    view.arrival_frame();
+    assert_eq!(buoy.ticks(), 480);
+    faked_lasts(&mut view, HELLO, buoy.ticks());
+}
+
+#[test]
+fn an_empty_buoy_replaces_the_line_shown_before_the_jump() {
+    let mut view = warping();
+    view.say_for("Before the jump.", 10_000);
+    at_the_warps_end(&mut view, Vec::new());
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::Buoy(String::new())));
+    view.arrival_frame();
+    assert_eq!(view.message(), Some(""));
+}
+
+#[test]
+fn fighters_abandoned_in_a_jump_are_told_on_arrival() {
+    let mut view = arriving_with(vec![FlightEvent::FighterNote(
+        nova_sim::FighterNote::Abandoned(2),
+    )]);
+    view.arrival_frame();
+    let said = format!("{}  {}", alpha_arrival(), fighters_abandoned_message(2));
+    assert_eq!(view.message(), Some(said.as_str()));
+}
+
+#[test]
+fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
+    let mut view = arriving_with(vec![FlightEvent::PayNote(nova_sim::PayNote::Defected(1))]);
+    view.arrival_frame();
+    let said = format!("{}  {DEFECTED_ONE}", alpha_arrival());
+    assert_eq!(view.message(), Some(said.as_str()), "after the arrival");
+}
+
+#[test]
+fn fighters_abandoned_and_escorts_defected_on_one_arrival_are_said_together() {
+    let mut view = arriving_with(vec![
+        FlightEvent::PayNote(nova_sim::PayNote::Defected(1)),
+        FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(2)),
+    ]);
+    view.arrival_frame();
+    let said = format!(
+        "{}  {}  {DEFECTED_ONE}",
+        alpha_arrival(),
+        fighters_abandoned_message(2)
+    );
+    assert_eq!(view.message(), Some(said.as_str()), "the fighters first");
+}
+
+// The tutorial's hints, relayed from a frame's steps.
+
+/// A view over a flight in Sol showing the Moon (129), the steps'
+/// `message` drained after them and relayed.
+fn relaying(message: SimMessage) -> Faked {
+    let mut view = faked(FlightFrame {
+        stellars: vec![record::stellar(StellarId(129))],
+        ..in_sol()
+    });
+    view.sim.queue_event(FlightEvent::Message(message));
+    view.relay_messages();
+    view
+}
+
+#[test]
+fn the_land_hint_names_the_stellar_and_l() {
+    let hint = SimMessage::Tutorial(nova_sim::TutorialHint::Land {
+        stellar: StellarId(129),
+        station: false,
+    });
+    let mut view = relaying(hint.clone());
+    assert_eq!(hint.ticks(), 512);
+    faked_lasts(&mut view, &land_hint(false, "Moon", "L"), hint.ticks());
+}
+
+#[test]
+fn the_hyperspace_hint_names_m_and_j() {
+    let hint = "Now you should probably hyperspace to another system. Hit 'M' to access the map, select a nearby system, then move outward and hit 'J' to begin your jump.";
+    assert_eq!(hyperspace_hint("M", "J"), hint);
+    let message = SimMessage::Tutorial(nova_sim::TutorialHint::Hyperspace);
+    let mut view = relaying(message.clone());
+    faked_lasts(&mut view, hint, message.ticks());
+}
+
+#[test]
+fn far_enough_and_nothing_out_here_last_512() {
+    let far = SimMessage::Tutorial(nova_sim::TutorialHint::FarEnough);
+    let mut view = relaying(far.clone());
+    assert_eq!(view.message(), Some(FAR_ENOUGH));
+    let nothing = SimMessage::Tutorial(nova_sim::TutorialHint::NothingOutHere);
+    view.sim.queue_event(FlightEvent::Message(nothing.clone()));
+    view.relay_messages();
+    assert_eq!(nothing.ticks(), 512);
+    faked_lasts(&mut view, NOTHING_OUT_HERE, nothing.ticks());
 }

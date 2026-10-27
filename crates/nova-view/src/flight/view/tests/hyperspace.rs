@@ -58,71 +58,12 @@ fn while_the_map_is_open_flight_is_paused_and_keys_go_to_the_map() {
 const MOON_HINT: &str = "Welcome to Nova - it would be a good idea to start by landing on Moon and having a look around. Hit 'L' to request landing clearance, then hit it again to land.";
 
 #[test]
-fn the_land_hint_names_the_stellar_and_l() {
-    let mut view = flight();
-    view.begin();
-    view.take_sounds();
-    ticks(&mut view, 1);
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TutorialHint)]);
-    assert_eq!(message(&view), Some(message_drawn(MOON_HINT)));
-    assert_lasts(&mut view, MOON_HINT, 512);
-}
-
-#[test]
 fn the_land_hint_words_a_station_as_docking() {
     assert_eq!(
         land_hint(true, "Earth Station", "L"),
         "Welcome to Nova - it would be a good idea to start by docking at Earth Station and having a look around. Hit 'L' to request landing clearance, then hit it again to land."
     );
     assert_eq!(land_hint(false, "Moon", "L"), MOON_HINT);
-}
-
-#[test]
-fn the_hyperspace_hint_names_m_and_j() {
-    let hint = "Now you should probably hyperspace to another system. Hit 'M' to access the map, select a nearby system, then move outward and hit 'J' to begin your jump.";
-    assert_eq!(hyperspace_hint("M", "J"), hint);
-    // At (50, 50), where a new pilot starts.
-    let mut view = new_pilot(flight_among(vec![site(
-        128,
-        (50.0, 50.0),
-        StellarFlags::CAN_LAND,
-    )]));
-    land_now(&mut view);
-    assert_eq!(view.take_landing(), Some(StellarId(128)));
-    view.take_off().expect("takes off");
-    view.take_sounds();
-    // The take-off's frame is -14: the hint comes at 0.
-    ticks(&mut view, 14);
-    assert_eq!(view.message(), None);
-    ticks(&mut view, 1);
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TutorialHint)]);
-    assert_lasts(&mut view, hint, 512);
-}
-
-#[test]
-fn far_enough_and_nothing_out_here_last_512() {
-    let mut view = new_pilot(flight());
-    fly_far(&mut view);
-    // The ship drifts on outward: #30 shows on the first sixtieth
-    // frame past 1,414 px, until #31 replaces it past 3,162 px.
-    let distance = |view: &View| player(view).position.length();
-    let mut far = None;
-    for tick in 0..2000 {
-        ticks(&mut view, 1);
-        match (view.message(), far) {
-            (Some(FAR_ENOUGH), None) => far = Some((tick, distance(&view))),
-            (Some(FAR_ENOUGH), Some(_)) => {}
-            (Some(NOTHING_OUT_HERE), Some((since, at))) => {
-                assert!(at > 1414.3, "{at}");
-                assert!(distance(&view) > 3162.3, "{}", distance(&view));
-                assert!(tick - since < 512, "#30 shown throughout");
-                assert_lasts(&mut view, NOTHING_OUT_HERE, 512);
-                return;
-            }
-            (shown, _) => panic!("{shown:?} at tick {tick}"),
-        }
-    }
-    panic!("#31 never came: {:?}", player(&view));
 }
 
 #[test]

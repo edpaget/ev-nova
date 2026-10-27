@@ -73,7 +73,6 @@ mod cloak;
 mod combat;
 mod comm_line;
 mod controls;
-mod dates;
 mod dialog_map;
 mod docked;
 mod drain;
@@ -1582,14 +1581,6 @@ fn unseen_wormhole() -> LandingSite {
 }
 
 const LAND: Key = Key::Char('l');
-
-/// The message drawn at its place, if any.
-fn message(view: &View) -> Option<DrawCommand> {
-    drawn(view)
-        .iter()
-        .find(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == message_at()))
-        .cloned()
-}
 
 /// Where the message's first line is drawn: the message box's
 /// top-left.
@@ -3555,14 +3546,6 @@ fn run_set(view: &mut View, text: &str) {
     view.refresh_frame();
 }
 
-/// `view` with `STR#` 25048 holding one message.
-fn told(view: View) -> View {
-    let strings = FakeCatalog {
-        strings: vec![(25048, vec!["Off you go, <PSN>.".to_owned()])],
-        ..catalog()
-    };
-    view.with_strings(Rc::new(strings))
-}
 fn systems_read(view: &View) -> Vec<SystemId> {
     view.catalog().systems_read.borrow().clone()
 }
@@ -3719,23 +3702,6 @@ fn gated() -> FakeCatalog {
     }
 }
 
-/// Sol holds unlinked wormhole 400 at its centre, over the ship, and
-/// Alpha Centauri unlinked wormhole 410 at (-300, 40).
-fn holed() -> FakeCatalog {
-    FakeCatalog {
-        sites: vec![LandingSite {
-            flags2: 0x2200,
-            ..site(400, (0.0, 0.0), StellarFlags::CAN_LAND)
-        }],
-        gates: RefCell::new(vec![
-            gate_site(400, (0.0, 0.0), 0x2200, &[], 120),
-            gate_site(410, (-300.0, 40.0), 0x2000, &[], 0),
-        ]),
-        gate_listers: vec![(SystemId(131), StellarId(410))],
-        ..catalog()
-    }
-}
-
 fn system_of(view: &View) -> SystemId {
     view.session().expect("flying").system()
 }
@@ -3822,19 +3788,6 @@ fn radar_filled(view: &View) -> bool {
         })
 }
 
-/// Thrusts straight up until the ship is more than 2700 from the
-/// centre, then lets go of Up.
-fn fly_far(view: &mut View) {
-    view.input(&key(Key::Up, true));
-    for _ in 0..5000 {
-        if player(view).position.length() > 2700.0 {
-            break;
-        }
-        view.tick(TICK);
-    }
-    view.input(&key(Key::Up, false));
-    assert!(player(view).position.length() > 2700.0);
-}
 /// Quiet sound preferences: effects at level 1.
 const QUIET: SoundPrefs = SoundPrefs {
     sound: true,

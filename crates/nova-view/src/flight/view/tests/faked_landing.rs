@@ -897,3 +897,107 @@ fn a_command_sent_under_a_refused_gate_is_refused_unsent() {
     );
     assert_eq!(sent(&view), [FlightCommand::Arrive]);
 }
+
+// The request's, the greeting's and the take-off's lines over the
+// flight's names and date (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks).
+// When the flight raises each, its fee and its notes are nova-sim's.
+
+/// [`sol`]'s flight, which shows Earth (128) and the Moon (129), naming
+/// the player's ship Kestrel.
+fn sol_named() -> Faked {
+    let mut view = faked(sol());
+    view.sim.names_mut().player_ship_name = Some("Kestrel".to_owned());
+    view
+}
+
+#[test]
+fn the_selecting_l_shows_the_requests_line_then_a_tick_near_shows_the_greeting() {
+    let mut view = sol_named();
+    let request = SimMessage::DockRequested {
+        stellar: StellarId(129),
+        kind: DockKind::Planet,
+    };
+    view.sim.queue_event(FlightEvent::Message(request.clone()));
+    press_l(&mut view, requested(129));
+    let line = "Moon traffic control reads you, Kestrel. Begin initial approach.";
+    assert_eq!(view.message(), Some(line), "the picks' first outcomes");
+    faked_lasts(&mut view, line, request.ticks());
+    let greeting = SimMessage::DockCleared {
+        stellar: StellarId(129),
+        kind: DockKind::Planet,
+        fee: None,
+    };
+    view.sim.queue_event(FlightEvent::Message(greeting.clone()));
+    view.relay_messages();
+    let said = "Cleared to land, Kestrel. Commence final approach.";
+    faked_lasts(&mut view, said, greeting.ticks());
+}
+
+#[test]
+fn take_off_says_the_greeting_for_240() {
+    let mut view = faked(docked_at(128, Vec2::ZERO));
+    let greeting = SimMessage::TookOff {
+        stellar: StellarId(128),
+        lead: 0,
+    };
+    view.sim.queue_event(FlightEvent::Message(greeting.clone()));
+    view.sim.queue_answer_showing(departed(128), sol());
+    assert_eq!(view.take_off(), Some(StellarId(128)));
+    assert_eq!(greeting.ticks(), 240);
+    faked_lasts(&mut view, &take_off_greeting(0, "Earth", DATE), 240);
+    assert_eq!(
+        take_off_greeting(2, "Earth", "June 24th, 1177 NC"),
+        "Taking off from Earth on June 24th, 1177 NC."
+    );
+    let leads: Vec<String> = (0..5)
+        .map(|lead| take_off_greeting(lead, "X", "D"))
+        .collect();
+    assert_eq!(
+        leads,
+        [
+            "Launching from X on D.",
+            "Blasting off from X on D.",
+            "Taking off from X on D.",
+            "Leaving X on D.",
+            "Departing X on D."
+        ]
+    );
+}
+
+#[test]
+fn the_greeting_leads_the_pay_notes() {
+    let mut view = faked(docked_at(128, Vec2::ZERO));
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::TookOff {
+            stellar: StellarId(128),
+            lead: 4,
+        }));
+    view.sim
+        .queue_event(FlightEvent::PayNote(nova_sim::PayNote::Defected(1)));
+    view.sim.queue_answer_showing(departed(128), sol());
+    view.take_off().expect("takes off");
+    let said = format!("{}  {DEFECTED_ONE}", take_off_greeting(4, "Earth", DATE));
+    faked_lasts(&mut view, &said, 240);
+}
+
+#[test]
+fn a_landed_q_shows_the_take_offs_pay_after_its_message() {
+    let mut view = faked(docked_at(128, Vec2::ZERO));
+    view.sim
+        .queue_event(FlightEvent::LeaveMessage("Off you go.".to_owned()));
+    view.sim
+        .queue_event(FlightEvent::PayNote(nova_sim::PayNote::Defected(1)));
+    view.sim.queue_answer_showing(departed(128), sol());
+    view.take_off().expect("takes off");
+    let said = format!("Off you go.  {DEFECTED_ONE}");
+    faked_lasts(&mut view, &said, SCRIPT_MESSAGE_TICKS);
+}
+
+#[test]
+fn a_new_pilots_take_off_says_nothing() {
+    let mut view = faked(docked_at(128, Vec2::ZERO));
+    view.say_for(TOO_FAR_PLANET, TOO_FAR_TICKS);
+    view.sim.queue_answer_showing(departed(128), sol());
+    assert_eq!(view.take_off(), Some(StellarId(128)));
+    assert_eq!(view.message(), None, "the flight said nothing");
+}

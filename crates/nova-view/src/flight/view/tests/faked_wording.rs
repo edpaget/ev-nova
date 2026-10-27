@@ -532,8 +532,10 @@ fn a_stolen_cargos_line_says_its_numbers_by_the_views_millions_reading() {
     }
 }
 
+/// The fee a greeting carries, said by the view's held millions reading;
+/// the flight decides whether one is due.
 #[test]
-fn an_approach_greetings_fee_is_said_by_the_views_millions_reading() {
+fn the_greeting_at_a_stellar_with_a_fee_states_it() {
     let cleared = SimMessage::DockCleared {
         stellar: StellarId(128),
         kind: DockKind::Planet,
@@ -559,6 +561,46 @@ fn an_approach_greetings_fee_is_said_by_the_views_millions_reading() {
         assert_eq!(said, [(expected.clone(), cleared.ticks())], "{millions:?}");
         assert!(expected.ends_with(fee), "{expected}");
     }
+}
+
+/// A greeting the flight raised with no fee due, a dominated stellar's,
+/// says none, and a hypergate's never says one.
+#[test]
+fn a_dominated_stellars_or_a_hypergates_greeting_states_no_fee() {
+    let mut view = worded_by(RuleSource::Engine);
+    let greeting = |kind, fee| SimMessage::DockCleared {
+        stellar: StellarId(128),
+        kind,
+        fee,
+    };
+    let said = view.word(vec![
+        greeting(DockKind::Planet, None),
+        greeting(DockKind::Hypergate, Some(1000)),
+    ]);
+    assert_eq!(
+        said[0].0,
+        "Cleared to land, Kestrel. Commence final approach."
+    );
+    assert!(
+        said[1].0.starts_with("Cleared for hypergate entry"),
+        "{}",
+        said[1].0
+    );
+    assert!(!said[1].0.contains('['), "{}", said[1].0);
+}
+
+#[test]
+fn a_scan_that_fails_a_mission_says_so_on_the_message_line() {
+    let mut view = worded_by(RuleSource::Engine);
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::MissionScanned));
+    view.relay_messages();
+    assert_eq!(SimMessage::MissionScanned.ticks(), 400);
+    super::faked_travel::faked_lasts(&mut view, MISSION_SCANNED, 400);
+    assert_eq!(
+        MISSION_SCANNED,
+        "Your ship has been scanned - mission failed."
+    );
 }
 
 #[test]
