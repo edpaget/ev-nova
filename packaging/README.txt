@@ -9,6 +9,7 @@ Each download holds:
   nova-dump   writes the game data out as JSON, PNG and WAV files
   README.txt  this file
   LICENSE     GPL-3.0-or-later; covers the code, not the game data
+  share/      Linux only: the desktop entry, AppStream metadata and icons
 
 The downloads are:
 
@@ -76,6 +77,52 @@ for your EV Nova folder and remembers your pick.
 Neither is signed yet, so SmartScreen may warn about an unknown publisher
 when you open the installer or nova.exe. Choose "More info", then "Run
 anyway".
+
+Linux
+-----
+
+The Linux download is a tarball (.tar.gz) holding one folder with nova,
+nova-dump, README.txt, LICENSE and a share/ folder:
+
+  share/applications/io.github.edpaget.ev-nova.desktop
+      the menu entry: what launchers, docks and app grids show
+  share/metainfo/io.github.edpaget.ev-nova.metainfo.xml
+      AppStream metadata, which software centres read
+  share/icons/hicolor/<size>/apps/io.github.edpaget.ev-nova.png
+      the icon, at each size from 16x16 to 512x512
+
+To install it for you alone, from inside the unpacked folder:
+
+  mkdir -p ~/.local/bin ~/.local/share
+  cp nova nova-dump ~/.local/bin/
+  cp -r share/applications share/icons share/metainfo ~/.local/share/
+  update-desktop-database ~/.local/share/applications   (optional)
+
+The menu entry starts `nova` from your PATH, so ~/.local/bin must be on
+the PATH your desktop session starts with (most distributions put it there
+once it exists; log out and in again). If it isn't, edit the Exec= line of
+~/.local/share/applications/io.github.edpaget.ev-nova.desktop to the full
+path of nova. "EV Nova" then appears among your applications, and the
+running game shows its icon and name in the dock and task switcher.
+
+Without installing, run ./nova from the unpacked folder.
+
+The game keeps your settings in ~/.config/nova ($XDG_CONFIG_HOME/nova),
+saves your pilots in ~/.local/share/nova/Pilots ($XDG_DATA_HOME/nova),
+and logs its startup to ~/.local/state/nova/nova.log
+($XDG_STATE_HOME/nova). Earlier builds saved pilots in
+~/.config/nova/Pilots: the first launch of this one moves them, every
+file, and says so in its startup log. A pilot whose name is already taken
+in the new folder is left where it was, with a warning.
+
+Checking the icon (by hand)
+---------------------------
+
+After installing as above, on GNOME (Wayland) and in an X11 session:
+start "EV Nova" from the applications list, and check that the dock (or
+the top bar's app menu) and the Alt+Tab switcher show the game's icon, a
+gold star in a ring on dark blue, and the name "EV Nova", not a generic
+icon or "nova".
 
 More detail: the "Using your own data" section of the README,
 https://github.com/edpaget/ev-nova#using-your-own-data

@@ -34,8 +34,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       # nova-audio plays through cpal, which builds against ALSA on Linux.
+      # desktop-file-utils and appstream are the validators the Linux
+      # desktop file and metainfo test runs (NOVA_LINUX_VALIDATORS below).
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config desktop-file-utils appstream
       - uses: jdx/mise-action@v5
         with:
           install: false
@@ -55,8 +57,13 @@ jobs:
         with:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The Linux leg runs the desktop file and metainfo through the
+      # validators it installed (crates/nova-bundle/tests/it/linux_desktop.rs);
+      # elsewhere the value is empty and that test skips.
       - run: mise run ci
         shell: bash
+        env:
+          NOVA_LINUX_VALIDATORS: ${{ runner.os == 'Linux' && '1' || '' }}
 
   # infra/github's structural checks: tofu fmt, validate and the
   # mocked-provider tests. It gets no secrets, no GITHUB_TOKEN and no OP_*
@@ -199,7 +206,9 @@ jobs:
           $env:NOVA_MSI_PREVIOUS = (Resolve-Path target\installer\previous\ev-nova-x86_64-pc-windows-msvc.msi).Path
           cargo test --locked -p nova-bundle --test it windows_installer -- --nocapture
       # One top-level directory holding the two binaries, README.txt and
-      # LICENSE. No game data.
+      # LICENSE, and on Linux the share/ tree (the desktop file, the
+      # AppStream metainfo and the hicolor icons) to copy into
+      # ~/.local/share. No game data.
       - name: Package
         if: runner.os != 'macOS'
         shell: bash
@@ -216,6 +225,9 @@ jobs:
               cp "$release/nova" "$release/nova-dump" "dist/$name/"
               ;;
           esac
+          if [ "${{ runner.os }}" = Linux ]; then
+            mise run linux-desktop -- "dist/$name"
+          fi
           cp packaging/README.txt LICENSE "dist/$name/"
           cd dist
           case "${{ matrix.os }}" in
