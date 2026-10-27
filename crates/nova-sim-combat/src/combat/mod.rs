@@ -3744,6 +3744,7 @@ mod tests {
     mod plunder_fire;
     mod proximity_slots;
     mod rating_stretch;
+    mod rock_blasts;
     mod shot_slots;
     mod shot_visits;
     mod stellar_guns;

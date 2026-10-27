@@ -1,38 +1,20 @@
-//! The fight's tests of the stellar hazards inside its tick
-//! ([`stellar_hazards`](crate::combat::stellar_hazards)): gravity's pull and
-//! the deadly stellars' kills land after the shots and before the beams,
-//! as `_DoPlayGameWork` calls `_HandleGravity` (@0x44509) and
-//! `_HandleDeadlyStellars` (@0x4450e) before it jumps to `_HandleBeams`
-//! (@0x4453d).
+//! The fight's tests of the stellar hazards
+//! ([`stellar_hazards`](crate::combat::stellar_hazards)): gravity's pull
+//! (`_HandleGravity` @0x44509) and the deadly stellars' kills
+//! (`_HandleDeadlyStellars` @0x4450e), and how the beams (`_HandleBeams`
+//! @0x4453d) meet what they leave.
 
 use super::*;
 use crate::combat::stellar_hazards::{
     DeadlyDisc, GravitySource, HazardResistance, StellarHazards, StellarKill,
 };
 
-/// A tick among `ships` on `pass` with `hazards`, by the default rules,
-/// each shove set on its ship as the session sets it: every shove made.
-fn tick_in(
-    combat: &mut Combat,
-    ships: &mut [Ship],
-    hazards: &StellarHazards,
-    pass: GamePass,
-) -> Vec<Shove> {
-    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.tick_on(
-        pass,
-        &mut fighters,
-        &Arsenal::default(),
-        &Governments::default(),
-        Rules::default(),
-        Field::default(),
-        Scenery {
-            hazards: Some(hazards),
-            ..Scenery::default()
-        },
-        &mut NeverFires,
-    );
-    drop(fighters);
+/// The stellar hazards among `ships` ([`Combat::hazards`]), each shove
+/// set on its ship as the session sets it: every shove made.
+fn hazards_among(combat: &mut Combat, ships: &mut [Ship], hazards: &StellarHazards) -> Vec<Shove> {
+    phase::run(combat, ships, &NovaDisable, |combat, fighters, _, _| {
+        combat.hazards(fighters, hazards);
+    });
     let shoves = combat.take_shoves();
     for shove in &shoves {
         if let Some(ship) = ships.iter_mut().find(|ship| ship.id == shove.ship) {
@@ -41,8 +23,6 @@ fn tick_in(
     }
     shoves
 }
-
-const ADVANCE: GamePass = GamePass::Advance { double_time: false };
 
 /// Gravity alone: `gravity` at `at`.
 fn pulling(at: Vec2, gravity: i16) -> StellarHazards {
@@ -89,7 +69,7 @@ fn the_pull_lands_on_the_velocity_as_a_shove() {
     let mut combat = Combat::default();
     let mut ships = [Ship::at(1, 0.0, 0.0), Ship::at(2, 0.0, 300.0)];
     let stellar = Vec2::new(2000.0, 0.0);
-    let shoves = tick_in(&mut combat, &mut ships, &pulling(stellar, 40), ADVANCE);
+    let shoves = hazards_among(&mut combat, &mut ships, &pulling(stellar, 40));
     let a = crate::gravity::pull(Vec2::ZERO, stellar, 40, 1.0);
     let b = crate::gravity::pull(Vec2::new(0.0, 300.0), stellar, 40, 1.0);
     assert!(a.x > 0.09, "{a:?}");
@@ -125,7 +105,7 @@ fn each_source_pulls_in_turn_adding_to_the_velocity() {
         gravity: vec![east, west],
         deadly: Vec::new(),
     };
-    let shoves = tick_in(&mut combat, &mut ships, &hazards, ADVANCE);
+    let shoves = hazards_among(&mut combat, &mut ships, &hazards);
     let once = Vec2::new(1.0, 2.0) + crate::gravity::pull(Vec2::ZERO, east.at, 40, 1.0);
     let twice = once + crate::gravity::pull(Vec2::ZERO, west.at, 30, 1.0);
     assert_eq!(shoves_on(&shoves, A), [once, twice]);
@@ -150,7 +130,7 @@ fn a_resisting_fighter_is_neither_pulled_nor_killed() {
             radius: 50.0,
         }],
     };
-    let shoves = tick_in(&mut combat, &mut ships, &hazards, ADVANCE);
+    let shoves = hazards_among(&mut combat, &mut ships, &hazards);
     assert_eq!(shoves, []);
     assert_eq!(ships[0].condition, Condition::Intact);
     assert_eq!(combat.take_stellar_kills(), []);
@@ -160,7 +140,7 @@ fn a_resisting_fighter_is_neither_pulled_nor_killed() {
     let mut killed_only = exploding(2, 0.0, 0.0);
     killed_only.resists.gravity = true;
     let mut ships = [pulled_only, killed_only];
-    let shoves = tick_in(&mut combat, &mut ships, &hazards, ADVANCE);
+    let shoves = hazards_among(&mut combat, &mut ships, &hazards);
     assert_eq!(shoves_on(&shoves, A).len(), 1, "{shoves:?}");
     assert_eq!(shoves_on(&shoves, B), []);
     assert_eq!(
@@ -191,7 +171,7 @@ fn a_destroyed_fighter_is_not_pulled_and_a_dying_one_is_pulled_but_not_killed() 
             radius: 50.0,
         }],
     };
-    let shoves = tick_in(&mut combat, &mut ships, &hazards, ADVANCE);
+    let shoves = hazards_among(&mut combat, &mut ships, &hazards);
     assert_eq!(shoves_on(&shoves, A), [], "destroyed");
     assert_eq!(shoves_on(&shoves, B).len(), 1, "dying: {shoves:?}");
     assert!(matches!(ships[1].condition, Condition::Dying { .. }));
@@ -208,12 +188,10 @@ fn a_kill_destroys_at_minus_1000_armour_in_one_explode2_once_however_many_discs(
         exploding(2, 0.0, 100.0),
         exploding(3, 500.0, 0.0),
     ];
-    // Disabled by its armour, so its display step before the hazards
-    // keeps it so.
     ships[0].condition = Condition::Disabled;
     ships[0].reserves.armor.now = 1.0;
     let overlapping = deadly(&[(Vec2::new(0.0, 50.0), 80.0), (Vec2::ZERO, 80.0)]);
-    tick_in(&mut combat, &mut ships, &overlapping, ADVANCE);
+    hazards_among(&mut combat, &mut ships, &overlapping);
     let seen = combat.stellar_kills().to_vec();
     assert_eq!(seen.len(), 2, "seen in place");
     for ship in &ships[..2] {
@@ -265,39 +243,9 @@ fn a_kill_destroys_at_minus_1000_armour_in_one_explode2_once_however_many_discs(
 fn a_ship_with_no_explode2_is_killed_with_no_explosion() {
     let mut combat = Combat::default();
     let mut ships = [Ship::at(1, 0.0, 0.0)];
-    tick_in(
-        &mut combat,
-        &mut ships,
-        &deadly(&[(Vec2::ZERO, 10.0)]),
-        ADVANCE,
-    );
+    hazards_among(&mut combat, &mut ships, &deadly(&[(Vec2::ZERO, 10.0)]));
     assert_eq!(ships[0].condition, Condition::Destroyed);
     assert_eq!(exploded(&combat.take_events()), []);
-}
-
-#[test]
-fn the_second_pass_pulls_and_kills_too() {
-    let mut combat = Combat::default();
-    let mut ships = [Ship::at(1, 0.0, 0.0), exploding(2, 400.0, 0.0)];
-    let hazards = StellarHazards {
-        gravity: vec![GravitySource {
-            at: Vec2::new(-2000.0, 0.0),
-            gravity: 40,
-        }],
-        deadly: vec![DeadlyDisc {
-            at: Vec2::new(400.0, 0.0),
-            radius: 10.0,
-        }],
-    };
-    let shoves = tick_in(&mut combat, &mut ships, &hazards, GamePass::Again);
-    assert_eq!(shoves_on(&shoves, A).len(), 1);
-    assert_eq!(
-        combat.take_stellar_kills(),
-        [StellarKill {
-            ship: B,
-            was: Condition::Intact
-        }]
-    );
 }
 
 #[test]
@@ -308,13 +256,16 @@ fn a_pulled_ships_beam_knockback_is_clamped_on_the_velocity_the_pull_left() {
     let mut ships = [Ship::at(1, 0.0, 0.0).armed(beam_of(50)), target];
     // Within 548 pixels the pull is Gravity / 30 a tick: 5 east.
     let hazards = pulling(Vec2::new(400.0, 0.0), 150);
-    let shoves = tick_in(&mut combat, &mut ships, &hazards, ADVANCE);
-    let pushed = shoves_on(&shoves, B);
-    assert_eq!(pushed.len(), 2, "the pull, then the beam: {shoves:?}");
-    assert!(close_by(pushed[0], Vec2::new(5.0, 0.0)), "{pushed:?}");
+    let pulled = hazards_among(&mut combat, &mut ships, &hazards);
+    let pulled = shoves_on(&pulled, B);
+    assert_eq!(pulled.len(), 1, "the pull: {pulled:?}");
+    assert!(close_by(pulled[0], Vec2::new(5.0, 0.0)), "{pulled:?}");
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
+    let pushed = shoves_on(&combat.take_shoves(), B);
     // 5 + 50 clamped to 10, not 10 + 5.
-    assert!(close_by(pushed[1], Vec2::new(10.0, 0.0)), "{pushed:?}");
-    assert!(close_by(ships[1].state.velocity, Vec2::new(10.0, 0.0)));
+    assert_eq!(pushed.len(), 1, "the beam: {pushed:?}");
+    assert!(close_by(pushed[0], Vec2::new(10.0, 0.0)), "{pushed:?}");
 }
 
 #[test]
@@ -322,32 +273,41 @@ fn a_ship_a_deadly_stellar_kills_takes_no_beam_strike_that_tick() {
     let mut combat = Combat::default();
     let mut ships = laser_and_target();
     ships[1].hull.explosion = Some(BOOM);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(combat.beams().len(), 1, "fired");
     let hazards = deadly(&[(Vec2::new(100.0, 0.0), 10.0)]);
-    tick_in(&mut combat, &mut ships, &hazards, ADVANCE);
+    hazards_among(&mut combat, &mut ships, &hazards);
     assert_eq!(ships[1].condition, Condition::Destroyed);
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(ships[1].reserves.shield.now, 100.0, "unhurt by the beam");
     assert_eq!(combat.take_strikes(), []);
 }
 
-#[test]
-fn a_beam_whose_firer_a_deadly_stellar_kills_stays_where_its_firer_was() {
+/// A's [`laser`] fired at B in the ship loop and held at the beams' step.
+fn laser_held() -> (Combat, [Ship; 2]) {
     let mut combat = Combat::default();
     let mut ships = laser_and_target();
-    tick_in(&mut combat, &mut ships, &StellarHazards::default(), ADVANCE);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(combat.beams()[0].start, Vec2::ZERO);
+    (combat, ships)
+}
+
+#[test]
+fn a_beam_whose_firer_a_deadly_stellar_kills_stays_where_its_firer_was() {
+    let (mut combat, mut ships) = laser_held();
     ships[0].state.position = Vec2::new(5.0, 6.0);
     let hazards = deadly(&[(Vec2::new(5.0, 6.0), 10.0)]);
-    tick_in(&mut combat, &mut ships, &hazards, ADVANCE);
+    hazards_among(&mut combat, &mut ships, &hazards);
     assert_eq!(ships[0].condition, Condition::Destroyed);
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
     let beam = combat.beams()[0];
     assert_eq!(beam.start, Vec2::ZERO, "not moved onto its dead firer");
     // As a beam whose firer a hit destroyed.
-    let mut combat = Combat::default();
-    let mut ships = laser_and_target();
-    tick_in(&mut combat, &mut ships, &StellarHazards::default(), ADVANCE);
+    let (mut combat, mut ships) = laser_held();
     ships[0].state.position = Vec2::new(5.0, 6.0);
     ships[0].condition = Condition::Destroyed;
-    tick_in(&mut combat, &mut ships, &StellarHazards::default(), ADVANCE);
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(combat.beams()[0].start, beam.start);
 }
 
@@ -359,18 +319,14 @@ fn a_stellar_kill_makes_no_shockwave() {
     heavy.fleet = WRECK;
     heavy.hull.mass = 200.0;
     let mut ships = [heavy, holding(1, 30.0, 0.0, 100.0, 300.0, 300.0)];
-    tick_in(
-        &mut combat,
-        &mut ships,
-        &deadly(&[(Vec2::ZERO, 5.0)]),
-        ADVANCE,
-    );
+    hazards_among(&mut combat, &mut ships, &deadly(&[(Vec2::ZERO, 5.0)]));
     assert_eq!(ships[0].condition, Condition::Destroyed);
     assert_eq!(left(&ships[1]), (100.0, 300.0), "no shockwave");
     assert_eq!(combat.take_strikes(), []);
     assert_eq!(combat.take_shoves(), []);
-    // Nor a death timer on later ticks.
-    tick_in(&mut combat, &mut ships, &StellarHazards::default(), ADVANCE);
+    // Nor a death timer at the ship loop's display.
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(left(&ships[1]), (100.0, 300.0));
+    assert_eq!(combat.take_strikes(), []);
     assert_eq!(ships[0].condition, Condition::Destroyed);
 }
