@@ -314,17 +314,6 @@ fn space_on_the_hypergate_map_keeps_the_destination_picked() {
     );
 }
 
-/// Types `text` into the map open in port, a key and its character at
-/// a time.
-fn port_type(view: &mut View, text: &str) {
-    for c in text.chars() {
-        let k = Key::Char(c);
-        view.port_map_input(&key(k, true));
-        view.port_map_input(&Input::Text(c));
-        view.port_map_input(&key(k, false));
-    }
-}
-
 #[test]
 fn find_works_on_the_bars_map_where_m_types() {
     let mut view = faked_on_the_map(FlightFrame {
@@ -349,12 +338,23 @@ fn find_works_on_the_bars_map_where_m_types() {
 
 #[test]
 fn with_find_open_on_the_bars_map_m_types_into_it() {
-    let mut view = measured(in_the_bar_of(named(port()), None));
-    view.open_bar_map();
-    port_type(&mut view, "f");
+    let mut view = faked_on_the_map(FlightFrame {
+        landed: Some(StellarId(128)),
+        ..in_sol()
+    });
+    let words = super::faked_travel::faked_words();
+    let mut port_type = |text: &str| {
+        for c in text.chars() {
+            let k = Key::Char(c);
+            view.port_map_input_with(&key(k, true), words);
+            view.port_map_input_with(&Input::Text(c), words);
+            view.port_map_input_with(&key(k, false), words);
+        }
+    };
+    port_type("f");
+    port_type("m");
+    assert!(view.map_open(), "M typed, not the close");
     assert!(view.map_finding());
-    port_type(&mut view, "m");
-    assert!(view.map_open(), "M typed");
     let typed = view
         .course_map()
         .find_dialog()

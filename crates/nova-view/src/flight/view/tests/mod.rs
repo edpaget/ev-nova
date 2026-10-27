@@ -79,6 +79,7 @@ mod docked;
 mod drain;
 mod escorts;
 mod faked_board;
+mod faked_docked;
 mod faked_escorts;
 mod faked_flight;
 mod faked_hail;
@@ -1727,12 +1728,6 @@ fn planner(view: View) -> View {
     view.with_rules(rules)
 }
 
-/// Whether the open map draws Clear Route enabled
-/// (`showClearRouteButton`).
-fn clear_route_enabled(view: &View) -> bool {
-    view.course_map().clear_route_enabled()
-}
-
 /// Thrusts straight up until the ship is at least the minimum jump
 /// distance from the centre, then lets go of Up.
 fn fly_out(view: &mut View) {
@@ -2400,18 +2395,6 @@ fn a_scripted_flights_map_sends_its_cycle_and_reports_its_close() {
     assert!(faked_map_input(&mut view, &key(Key::Enter, true)));
 }
 
-/// Clicks system `id` on the map open in port.
-fn port_click(view: &mut View, id: i16) {
-    let at = on_map(view, id);
-    for pressed in [true, false] {
-        view.port_map_input(&Input::PointerButton {
-            button: crate::MouseButton::Left,
-            pressed,
-            at,
-        });
-    }
-}
-
 /// The nav area showing Alpha Centauri (131), unexplored, in mode 3.
 fn cueing_alpha() -> Vec<String> {
     vec![
@@ -2431,11 +2414,6 @@ fn retaken(view: &FlightView<FakeCatalog, impl FlightSim>) -> [bool; 4] {
         view.radar_scene == Some(view.radar_now(&view.frame_now())),
     ]
 }
-/// The nav area naming `name` in mode 2, as flight shows it.
-fn flashing(name: &str) -> NavDisplay {
-    NavDisplay::Stellar(Some(name.to_owned()))
-}
-
 /// The first `chär`'s `OnStart` is `on_start`.
 fn starting_with(on_start: &str) -> FakeCatalog {
     let base = catalog();
@@ -3562,42 +3540,6 @@ impl ControlBits for Nothing {
         false
     }
 }
-/// [`trafficked`] with no traffic of its own but a Person slot at
-/// 100 %, "Ace" (`përs` 600, subtitle "Top Gun"), flying ship 129 and
-/// saying `STR#` 7101 #1, "<OSN>: Prepare to die, <PN>!", now and
-/// then.
-fn peopled() -> FakeCatalog {
-    let mut catalog = trafficked(&[130], 0, 129, 3);
-    catalog.traffic[0].1.persons[0] = (Some(nova_sim::PersonId(600)), 100);
-    catalog.persons = vec![nova_sim::PersonRecord {
-        id: nova_sim::PersonId(600),
-        name: "Ace".to_owned(),
-        link_syst: -2,
-        govt: None,
-        ai_type: 3,
-        aggress: 2,
-        coward: 0,
-        ship: Some(ShipId(129)),
-        weapons: Vec::new(),
-        credits: 0,
-        shield_mod: 0,
-        hail_pict: None,
-        comm_quote: -1,
-        hail_quote: 1,
-        link_mission: None,
-        flags: 0,
-        active_on: nova_sim::Test::default(),
-        subtitle: "Top Gun".to_owned(),
-        flags2: 0,
-        grant_class: 0,
-        grant_count: 0,
-        grant_prob: 0,
-        mission_ship: None,
-    }];
-    catalog.strings = vec![(7101, vec!["<OSN>: Prepare to die, <PN>!".to_owned()])];
-    catalog
-}
-
 /// Runs set expression `text` on `view`'s session.
 fn run_set(view: &mut View, text: &str) {
     let expr = nova_sim::SetExpr::parse(text).expect("parses");
