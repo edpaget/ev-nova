@@ -34,6 +34,18 @@ resource "github_repository" "ev_nova" {
   squash_merge_commit_title   = "COMMIT_OR_PR_TITLE"
   squash_merge_commit_message = "COMMIT_MESSAGES"
 
+  # Only these two are sent by provider 6.13.0; the other secret-scanning
+  # settings are manual (README.md, "Actions and security settings").
+  # No advanced_security: the provider refuses it on a public repository.
+  security_and_analysis {
+    secret_scanning {
+      status = "disabled"
+    }
+    secret_scanning_push_protection {
+      status = "disabled"
+    }
+  }
+
   lifecycle {
     prevent_destroy = true
     # Cosmetic settings are out of scope (see README.md).
