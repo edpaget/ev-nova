@@ -9462,15 +9462,35 @@ mod tests {
                     pod(Ship::at(2, 100.0, 0.0), ship_type),
                     Ship::at(4, 150.0, 0.0),
                 ];
-                for _ in 0..12 {
-                    tick(&mut combat, &mut ships, &NovaDisable);
-                    if record.beam_length == 0 {
-                        ships[0].trigger = QUIET;
+                phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+                ships[0].trigger = QUIET;
+                let mut struck = Vec::new();
+                if record.beam_length == 0 {
+                    // The shot's sixth move reaches B; the collision passes
+                    // test it.
+                    for _ in 0..6 {
+                        phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+                    }
+                    phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+                    struck.extend(combat.take_strikes());
+                    let unspent = !combat.shots().is_empty();
+                    assert_eq!(unspent, passes, "unspent, {ship_type:?}");
+                    // Its ninth reaches D.
+                    for _ in 0..3 {
+                        phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+                    }
+                    phase::test_hits(&mut combat, &mut ships, &NovaDisable);
+                } else {
+                    // `_HandleBeams` each tick of the beam's 3.
+                    for _ in 0..3 {
+                        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
+                        struck.extend(combat.take_strikes());
                     }
                 }
+                struck.extend(combat.take_strikes());
                 assert_eq!(hurt(&ships[1]), !immune, "{ship_type:?} {record:?}");
                 assert_eq!(hurt(&ships[2]), passes, "behind, {ship_type:?} {record:?}");
-                let struck = combat.take_strikes().iter().any(|strike| strike.ship == B);
+                let struck = struck.iter().any(|strike| strike.ship == B);
                 assert_eq!(struck, !immune, "{ship_type:?} {record:?}");
             }
             // A blast still reaches it: A's shell hits D, C beside it.
@@ -9480,13 +9500,11 @@ mod tests {
                 Ship::at(4, 100.0, 0.0),
                 pod(Ship::at(3, 100.0, 25.0), ship_type),
             ];
-            for _ in 0..12 {
-                tick(&mut combat, &mut ships, &NovaDisable);
-                ships[0].trigger = QUIET;
-            }
+            // The shell's sixth move reaches D.
+            let strikes = strikes_on_move(&mut combat, &mut ships, &Arsenal::default(), 6);
             assert!(hurt(&ships[1]), "hit directly, {ship_type:?}");
             assert_eq!(hurt(&ships[2]), !immune, "blasted, {ship_type:?}");
-            let struck = combat.take_strikes().iter().any(|strike| strike.ship == C);
+            let struck = strikes.iter().any(|strike| strike.ship == C);
             assert_eq!(struck, !immune, "blasted, {ship_type:?}");
             // A shockwave neither hurts nor pushes it: its push is
             // `_DamageShip`'s, past the early-out (@0x3a87c), the only call
@@ -9495,7 +9513,9 @@ mod tests {
             let mut pushed = pod(holding(1, 40.0, 0.0, 100.0, 300.0, 300.0), ship_type);
             pushed.hull.mass = 200.0;
             let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), pushed];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            // The wreck's display explodes it, its shockwave striking at
+            // once.
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(
                 left(&ships[1]) == (100.0, 300.0),
                 immune,
@@ -9519,8 +9539,13 @@ mod tests {
             ship.fleet = id;
             ship.reserves.armor.now = 0.0;
             let mut ships = [ship];
+            // Its display step, where a ship of no armour breaks up.
             for _ in 0..20 {
-                tick(&mut combat, &mut ships, &NovaDisable);
+                if id == ShipRef::Player {
+                    phase::display_player(&mut combat, &mut ships, &NovaDisable);
+                } else {
+                    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+                }
             }
             assert_eq!(ships[0].condition, Condition::Intact, "{id:?}");
             assert_eq!(about(&combat.take_events(), id), [], "{id:?}");
@@ -9530,7 +9555,7 @@ mod tests {
         let mut ship = pod(Ship::at(1, 0.0, 0.0), ShipId(ESCAPE_POD_SHIP.0 - 1));
         ship.reserves.armor.now = 0.0;
         let mut ships = [ship];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_ne!(ships[0].condition, Condition::Intact);
     }
 
