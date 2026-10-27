@@ -21,9 +21,8 @@ resource "github_repository_ruleset" "main" {
   conditions {
     ref_name {
       # Explicit ref, not ~DEFAULT_BRANCH, so a default-branch rename can't
-      # move the protection. The probe ref is here only for phase 4's
-      # force-push proof; the next commit removes it.
-      include = ["refs/heads/main", "refs/heads/ruleset-probe/force-push"]
+      # move the protection.
+      include = ["refs/heads/main"]
       exclude = []
     }
   }

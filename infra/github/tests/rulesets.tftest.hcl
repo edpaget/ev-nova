@@ -47,10 +47,8 @@ run "ruleset_targets_main" {
     error_message = "The ruleset must be an active branch ruleset on the managed repository."
   }
 
-  # The force-push probe is included for phase 4's proof only; the next
-  # commit removes it.
   assert {
-    condition     = github_repository_ruleset.main.conditions[0].ref_name[0].include == tolist(["refs/heads/main", "refs/heads/ruleset-probe/force-push"])
+    condition     = github_repository_ruleset.main.conditions[0].ref_name[0].include == tolist(["refs/heads/main"])
     error_message = "The ruleset must name refs/heads/main explicitly (not ~DEFAULT_BRANCH)."
   }
 
