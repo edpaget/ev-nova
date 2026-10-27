@@ -320,6 +320,7 @@ pub(super) mod tests {
                 present: true,
                 order: Some(crate::escort::EscortOrder::Hold),
             }),
+            escorts_flying: true,
         }
     }
 

@@ -246,7 +246,7 @@ fn leave_formation(npc: &mut Npc, inherent: Option<AiType>) {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use crate::combat::Rules;
     use crate::flight::Controls;
     use crate::testkit::{Passive, work_with};
@@ -276,7 +276,7 @@ mod tests {
 
     /// Two special ships of düde 150 escorting the player (`ShipBehav`
     /// 1), of `ShipSyst` `syst` and `ShipStart` `start`.
-    fn escorting(syst: i16, start: i16) -> MissionShip {
+    pub(in crate::session) fn escorting(syst: i16, start: i16) -> MissionShip {
         MissionShip {
             behav: 1,
             ..shipping(syst, start)
@@ -1485,7 +1485,7 @@ mod tests {
     }
 
     /// A session in flight with only mission 140's two escorts.
-    fn flying(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn flying(catalog: &FakePilotCatalog) -> Session {
         let mut session = accepted(catalog);
         take_off(&mut session, catalog);
         assert_eq!(mission_escorts(&session).len(), 2);

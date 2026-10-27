@@ -564,6 +564,7 @@ fn unlike_hud(hud: &FrameHud) -> FrameHud {
         target_brackets,
         red_alert,
         escort_rows,
+        escorts_flying,
     } = hud;
     let gauge = |gauge: Gauge| Gauge::full(gauge.max + 1.0);
     FrameHud {
@@ -606,6 +607,7 @@ fn unlike_hud(hud: &FrameHud) -> FrameHud {
             present: !row.present,
             ..row
         }),
+        escorts_flying: !escorts_flying,
     }
 }
 
@@ -1900,6 +1902,7 @@ mod tests {
             target_brackets,
             red_alert,
             escort_rows,
+            escorts_flying,
         } = hud;
         assert_ne!(other.reserves, *reserves);
         assert_ne!(other.cargo, *cargo);
@@ -1912,6 +1915,7 @@ mod tests {
         assert_ne!(other.target_brackets, *target_brackets);
         assert_ne!(other.red_alert, *red_alert);
         assert_ne!(other.escort_rows, *escort_rows);
+        assert_ne!(other.escorts_flying, *escorts_flying);
     }
 
     #[test]

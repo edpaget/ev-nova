@@ -3,29 +3,44 @@
 //! that runs it, and its [`Answer`] (see
 //! [`flight_frame`](crate::flight_frame)). The match lives here, on the
 //! session's side, so the view's adapter only forwards. The travel
-//! commands' arms are in the `travel` module.
+//! commands' arms are in the `travel` module, and the comm's, the
+//! boarding's and the escorts' in the `comm` module.
 
 use super::Session;
+use crate::board::BoardingRule;
 use crate::chance::Chance;
 use crate::flight_frame::{Answer, FlightCommand};
+use crate::hail::HailOptions;
+use crate::legal::LegalCode;
 use crate::session::SimCatalog;
 
+mod comm;
 mod travel;
 
 /// What [`Session::apply`] is handed: the catalog the travel commands
-/// read, and what they draw on. The adapter shares the catalog only once
-/// the view has (`nova_view`'s `SessionFlight::share_catalog`); before
-/// that, `catalog` is `None`, and the commands that read one are
-/// refused (see [`Session::apply`]). The comm's law and the boardings'
-/// rule join it as their commands cross the port
-/// (rdm:phase/view-sim-seam/phase-10-comm-escorts-boarding-on-port).
+/// and the hail read, what they draw on, and the rules the comm's and
+/// the boardings' commands are judged by. The adapter shares the catalog
+/// only once the view has (`nova_view`'s `SessionFlight::share_catalog`);
+/// before that, `catalog` is `None`, and the commands that read one are
+/// refused (see [`Session::apply`]).
 pub struct ApplyCollaborators<'a> {
-    /// The catalog the arrivals, the gates, the take-offs and the
-    /// settling read, if the view has shared it.
+    /// The catalog the arrivals, the gates, the take-offs, the settling
+    /// and the hail and its dialog's presses read, if the view has shared
+    /// it.
     pub catalog: Option<&'a dyn SimCatalog>,
-    /// What the arrivals, the gates, the take-offs, the escorts' landing
-    /// and the settling draw on.
+    /// What the arrivals, the gates, the take-offs, the escorts' landing,
+    /// the settling, the hail and its answers, the board, the plunder and
+    /// the escorts' acknowledgement draw on.
     pub chance: &'a mut dyn Chance,
+    /// What a board does to the player's legal record
+    /// ([`Session::board`]).
+    pub law: &'a dyn LegalCode,
+    /// Who repels boarders, the capture odds and the capture roll
+    /// ([`Session::board`], [`Session::plunder`]).
+    pub boarding_rule: &'a dyn BoardingRule,
+    /// The comm dialog's options ([`Session::hail_key`],
+    /// [`Session::answer`], [`Session::haggle`]).
+    pub hail_options: &'a HailOptions,
 }
 
 impl Session {
@@ -60,6 +75,11 @@ impl Session {
     ///   the jump, the land key and the gates, the arrival, the take-offs,
     ///   the escorts' landing, the settling, the fade and the end of play.
     ///   Those that read the catalog are refused without one.
+    /// - The comm's, the boarding's and the escorts' commands are answered
+    ///   as the `comm` module says: the hail and its dialog's presses
+    ///   (refused without a catalog), the board and the plunder dialog's,
+    ///   the escort keys and the escort dialog's, and the message line's
+    ///   acknowledgement and count.
     /// - The rest are never refused, and answer [`Answer::Done`]:
     ///   [`FlightCommand::SelectWeapon`] ([`Session::press_weapon_select`],
     ///   which the next pass takes; the view asks the gate first),
@@ -157,6 +177,17 @@ impl Session {
             | FlightCommand::SettleScript
             | FlightCommand::BeginFade
             | FlightCommand::EndPlay => self.apply_travel(command, collab),
+            FlightCommand::Hail { .. }
+            | FlightCommand::AnswerHail(_)
+            | FlightCommand::Haggle(_)
+            | FlightCommand::HangUp
+            | FlightCommand::Board
+            | FlightCommand::Plunder(_)
+            | FlightCommand::LetGoOfBoarding
+            | FlightCommand::CommandEscorts { .. }
+            | FlightCommand::PressEscort(_)
+            | FlightCommand::CommAcknowledged
+            | FlightCommand::CommTicked => self.apply_comm(command, collab),
         }
     }
 }
@@ -191,6 +222,9 @@ mod tests {
             &mut ApplyCollaborators {
                 catalog: None,
                 chance: &mut crate::chance::NeverFires,
+                law: &crate::legal::NovaLaw::default(),
+                boarding_rule: &crate::board::NovaBoarding::default(),
+                hail_options: &HailOptions::default(),
             },
         )
     }

@@ -37,10 +37,10 @@ use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DescMovie, DisableRule, Hover,
-    LegalCode, MapMarks, MissionId, NovaAi, NovaBoarding, NovaDisable, NovaLaw, PlayerCommand,
-    PointDefenceRule, Rules, SavedNav, Session, ShipId, SimCatalog, StellarId, StepCollaborators,
-    SystemId, TagNames, Vec2,
+    Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DescMovie, DisableRule, HailOptions,
+    Hover, LegalCode, MapMarks, MissionId, NovaAi, NovaBoarding, NovaDisable, NovaLaw,
+    PlayerCommand, PointDefenceRule, Rules, SavedNav, Session, ShipId, SimCatalog, StellarId,
+    StepCollaborators, SystemId, TagNames, Vec2,
 };
 
 use super::SharedChance;
@@ -68,6 +68,8 @@ pub struct SessionFlight<C> {
     pub(in crate::flight) law: Rc<dyn LegalCode>,
     /// Who repels boarders, the capture odds and the capture roll.
     pub(in crate::flight) boarding_rule: Rc<dyn BoardingRule>,
+    /// The comm dialog's options, which the hail and its answers list.
+    hail_options: HailOptions,
     /// The catalog the view reads, the same handle as the view's, once
     /// the view has shared it ([`SessionFlight::share_catalog`]): the
     /// map's answers that read the catalog read it. `None` before.
@@ -89,6 +91,7 @@ impl<C> Clone for SessionFlight<C> {
             defence_rule: Rc::clone(&self.defence_rule),
             law: Rc::clone(&self.law),
             boarding_rule: Rc::clone(&self.boarding_rule),
+            hail_options: self.hail_options.clone(),
             catalog: self.catalog.clone(),
             view_catalog: PhantomData,
         }
@@ -120,6 +123,7 @@ impl<C> SessionFlight<C> {
             defence_rule: Rc::new(Allegiance),
             law: Rc::new(NovaLaw::default()),
             boarding_rule: Rc::new(NovaBoarding::default()),
+            hail_options: HailOptions::default(),
             catalog: None,
             view_catalog: PhantomData,
         }
@@ -243,8 +247,9 @@ impl<C> FlightSim for SessionFlight<C> {
     }
 
     /// Forwards to `Session::apply`, handing it the catalog the view
-    /// shared ([`SessionFlight::share_catalog`]), if it has, and the
-    /// flight's chance; a failed session refuses every command.
+    /// shared ([`SessionFlight::share_catalog`]), if it has, the flight's
+    /// chance, its law, its boarding rule and its hail options; a failed
+    /// session refuses every command.
     fn apply(&mut self, command: FlightCommand) -> Answer {
         let Ok(session) = &mut self.session else {
             return Answer::Refused;
@@ -252,6 +257,9 @@ impl<C> FlightSim for SessionFlight<C> {
         let mut collab = ApplyCollaborators {
             catalog: self.catalog.as_ref().map(|shared| &*shared.0),
             chance: &mut self.chance,
+            law: &*self.law,
+            boarding_rule: &*self.boarding_rule,
+            hail_options: &self.hail_options,
         };
         session.apply(command, &mut collab)
     }

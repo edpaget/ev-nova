@@ -152,6 +152,9 @@ mod tests {
             &mut ApplyCollaborators {
                 catalog: Some(catalog),
                 chance: &mut NeverFires,
+                law: &crate::legal::NovaLaw::default(),
+                boarding_rule: &crate::board::NovaBoarding::default(),
+                hail_options: &crate::hail::HailOptions::default(),
             },
         )
     }

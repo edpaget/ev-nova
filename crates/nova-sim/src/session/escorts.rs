@@ -831,15 +831,11 @@ impl Session {
         self.space.escort_rows(&self.pilot, &self.statics)
     }
 
-    /// Whether the player has an escort flying, for the escort menu to
-    /// stay open (`_HandlePlayer` @0x6df59-0x6dfd0): any hired escort, or
-    /// a mission escort neither disabled nor breaking up (@0x6df73).
+    /// Whether the player has an escort flying
+    /// ([`Space::escorts_flying`]).
     #[must_use]
     pub fn escorts_flying(&self) -> bool {
-        !self.pilot.escorts.is_empty()
-            || self
-                .player_led()
-                .any(|npc| npc.mission_escort() && npc.condition == Condition::Intact)
+        self.space.escorts_flying(&self.pilot)
     }
 }
 
@@ -1037,6 +1033,17 @@ impl Space {
     /// each class's row ([`Space::class_row`]).
     pub(super) fn escort_rows(&self, pilot: &Pilot, statics: &Statics) -> [ClassRow; 4] {
         EscortClass::ALL.map(|class| self.class_row(pilot, statics, class))
+    }
+
+    /// Whether the player has an escort flying, for the escort menu to
+    /// stay open (`_HandlePlayer` @0x6df59-0x6dfd0): any of `pilot`'s
+    /// hired escorts, or a mission escort neither disabled nor breaking up
+    /// (@0x6df73).
+    pub(super) fn escorts_flying(&self, pilot: &Pilot) -> bool {
+        !pilot.escorts.is_empty()
+            || self
+                .player_led()
+                .any(|npc| npc.mission_escort() && npc.condition == Condition::Intact)
     }
 
     /// `class`'s row in the escort menu: whether the player leads a ship

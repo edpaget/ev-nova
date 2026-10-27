@@ -11,7 +11,8 @@ impl Session {
     /// Fills `into` with what the HUD shows now, every field written. The
     /// gauges, the cargo area, the secondary weapon and its count, the
     /// radar gear, the interference, the `Interface` government, the nav
-    /// brackets and the escort rows are each one sub-state's; the target
+    /// brackets, the escort rows and whether an escort is flying are each
+    /// one sub-state's; the target
     /// brackets read the chart and the space, so the fill is the
     /// session's.
     pub(super) fn fill_hud(&self, into: &mut FrameHud) {
@@ -27,6 +28,7 @@ impl Session {
             target_brackets,
             red_alert,
             escort_rows,
+            escorts_flying,
         } = into;
         let (pilot, statics) = (&self.pilot, &self.statics);
         *reserves = super::super::reserves(pilot);
@@ -40,6 +42,7 @@ impl Session {
         *target_brackets = self.target_brackets();
         *red_alert = self.red_alert.icon();
         *escort_rows = self.space.escort_rows(pilot, statics);
+        *escorts_flying = self.space.escorts_flying(pilot);
     }
 
     /// Fills `into` with the ship target as the target panel shows it, or
@@ -240,6 +243,26 @@ mod tests {
             })
         );
         assert_eq!(rows, session.escort_menu());
+    }
+
+    #[test]
+    fn a_fill_writes_whether_an_escort_is_flying() {
+        use crate::session::mission_escorts::tests::{escorting, flying};
+        use crate::session::mission_ships::tests::ships_catalog;
+        let alone = Session::start(&catalog()).expect("starts");
+        assert!(!filled(&alone).hud.escorts_flying, "no escort");
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut escorted = flying(&catalog);
+        assert!(filled(&escorted).hud.escorts_flying, "two mission escorts");
+        for npc in escorted.space.traffic.npcs_mut() {
+            npc.condition = crate::combat::hull::Condition::Disabled;
+        }
+        let frame = filled(&escorted);
+        assert!(
+            frame.hud.escort_rows.iter().any(|row| row.present),
+            "their row stays"
+        );
+        assert!(!frame.hud.escorts_flying, "both disabled");
     }
 
     // The target panel's target and the stellars' IFF.

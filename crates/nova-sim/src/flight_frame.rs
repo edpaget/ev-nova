@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 
 use crate::asteroid::Asteroid;
 use crate::bay::FighterNote;
-use crate::board::MissionBoardLine;
+use crate::board::{BoardRefusal, Boarding, MissionBoardLine, Take, Taken};
 use crate::brackets::{NavBrackets, TargetBrackets};
 use crate::cargo_box::CargoBox;
 use crate::catalog::{Explosion, GovtId, ShipId, StellarId, SystemId, WeaponId};
@@ -29,12 +29,13 @@ use crate::combat::report::SimDiagnostic;
 use crate::combat::ship_frames::{Drawn, FrameSpec};
 use crate::combat::shot_layer::ShotLayer;
 use crate::combat::{CombatEvent, ShipRef};
-use crate::escort::{ClassRow, EscortClass};
+use crate::escort::{ClassRow, Commanded, EscortClass, EscortCommand, EscortGroup};
+use crate::escort_dialog::{EscortButton, EscortDialogView};
 use crate::flight::{Controls, ShipState};
 use crate::gate::{GateKind, GateRefusal};
 use crate::geometry::Vec2;
 use crate::grant::Granted;
-use crate::hail::CommNote;
+use crate::hail::{CommNote, Haggle, HailRefusal, HailView};
 use crate::hire::PayNote;
 use crate::hover::{DrawnBox, DrawnShips, Hover};
 use crate::hyperspace::{JumpReadiness, JumpRefusal};
@@ -46,7 +47,7 @@ use crate::player_fate::{Drawn as ShipDrawn, PlayerCommand, PlayerFate};
 use crate::red_alert::AlertIcon;
 use crate::reserves::{Gauge, Reserves};
 use crate::session::{
-    Departure, HoverPlace, InterfaceLoad, LandPress, MapClicked, MapPress, MissionShown,
+    Departure, Hailed, HoverPlace, InterfaceLoad, LandPress, MapClicked, MapPress, MissionShown,
     PersonQuote, SavedNav, SessionEvent, Settled, StellarPick, TextBar,
 };
 use crate::ship_layer::ShipLayer;
@@ -352,14 +353,20 @@ pub struct FrameHud {
     /// (`Session::red_alert_icon`).
     pub red_alert: Option<AlertIcon>,
     /// The escort menu's class rows, in [`EscortClass::ALL`]'s order
-    /// ([`Session::escort_menu`](crate::Session::escort_menu)).
+    /// (`Space::escort_rows`).
     pub escort_rows: [ClassRow; 4],
+    /// Whether the player has an escort flying, for the escort menu to
+    /// stay open (`_HandlePlayer` @0x6df59-0x6dfd0): any hired escort, or
+    /// a mission escort neither disabled nor breaking up (@0x6df73)
+    /// (`Space::escorts_flying`).
+    pub escorts_flying: bool,
 }
 
 impl Default for FrameHud {
     /// A session that failed to start: empty reserves and cargo, no
     /// secondary, no radar gear or interference, no `Interface`
-    /// government, no brackets, no Red Alert and no escort of any class.
+    /// government, no brackets, no Red Alert and no escort of any class,
+    /// none flying.
     fn default() -> Self {
         Self {
             reserves: Reserves::default(),
@@ -377,6 +384,7 @@ impl Default for FrameHud {
                 present: false,
                 order: None,
             }),
+            escorts_flying: false,
         }
     }
 }
@@ -525,6 +533,50 @@ pub enum FlightCommand {
     /// the session's line follows it
     /// ([`Session::comm_shown`](crate::Session::comm_shown)).
     CommShown(u16),
+    /// Return (`ackComm`) cleared the message line: the session's for a
+    /// tick while a line shows
+    /// ([`Session::comm_acknowledged`](crate::Session::comm_acknowledged)).
+    CommAcknowledged,
+    /// The plunder dialog's loop counted the message line down a tick
+    /// after a take's line, as its `_HandleComm` does
+    /// ([`Session::comm_ticked`](crate::Session::comm_ticked)).
+    CommTicked,
+    /// The comm key: hail the target, or with Option held (`option`) the
+    /// navigation stellar
+    /// ([`Session::hail_key`](crate::Session::hail_key)).
+    Hail {
+        /// Whether Option was down at the press.
+        option: bool,
+    },
+    /// Press the comm dialog's `n`th option listed, from 0
+    /// ([`Session::answer`](crate::Session::answer)).
+    AnswerHail(usize),
+    /// A choice in the haggle dialog
+    /// ([`Session::haggle`](crate::Session::haggle)).
+    Haggle(Haggle),
+    /// The comm dialog closes: end the hail under way
+    /// ([`Session::hang_up`](crate::Session::hang_up)).
+    HangUp,
+    /// The Board key: board the target
+    /// ([`Session::board`](crate::Session::board)).
+    Board,
+    /// A press in the plunder dialog
+    /// ([`Session::plunder`](crate::Session::plunder)).
+    Plunder(Take),
+    /// Let the boarding under way go with no dialog shown
+    /// ([`Session::let_go_of_boarding`](crate::Session::let_go_of_boarding)).
+    LetGoOfBoarding,
+    /// An escort key: give the escorts of `group` `command`
+    /// ([`Session::command_escorts`](crate::Session::command_escorts)).
+    CommandEscorts {
+        /// The escort menu's group.
+        group: EscortGroup,
+        /// The command.
+        command: EscortCommand,
+    },
+    /// A press in the escort dialog
+    /// ([`Session::press_escort`](crate::Session::press_escort)).
+    PressEscort(EscortButton),
 }
 
 impl FlightCommand {
@@ -549,12 +601,20 @@ impl FlightCommand {
     ///   [`FlightCommand::Land`], and the gates it opens or passes
     ///   through ([`FlightCommand::OpenHypergate`],
     ///   [`FlightCommand::EnterWormhole`]), are [`PlayerCommand::Land`].
+    /// - The comm key's [`FlightCommand::Hail`] is [`PlayerCommand::Hail`],
+    ///   the Board key's [`FlightCommand::Board`] [`PlayerCommand::Board`],
+    ///   and an escort key's [`FlightCommand::CommandEscorts`]
+    ///   [`PlayerCommand::Escort`].
     /// - [`FlightCommand::EnterHypergate`] comes with the hypergate map's
     ///   close, which no key gates once the map is open, and is `None`, as
     ///   are the map's clicks, cycle and Clear Route, its marks and cue,
     ///   the nav's saves and restores, the arrival, the take-offs, the
-    ///   escorts' landing, the settling, the fade, the end of play and
-    ///   the message line's.
+    ///   escorts' landing, the settling, the fade, the end of play, the
+    ///   message line's ([`FlightCommand::CommShown`],
+    ///   [`FlightCommand::CommAcknowledged`], [`FlightCommand::CommTicked`])
+    ///   and the dialogs' presses: the comm dialog's answers, haggles and
+    ///   close, the plunder dialog's takes and its letting go, and the
+    ///   escort dialog's buttons.
     #[must_use]
     pub fn gate(&self) -> Option<PlayerCommand> {
         match self {
@@ -568,6 +628,9 @@ impl FlightCommand {
             Self::SelectWeapon { .. } => Some(PlayerCommand::SelectWeapon),
             Self::Jump => Some(PlayerCommand::Jump),
             Self::Land | Self::OpenHypergate | Self::EnterWormhole => Some(PlayerCommand::Land),
+            Self::Hail { .. } => Some(PlayerCommand::Hail),
+            Self::Board => Some(PlayerCommand::Board),
+            Self::CommandEscorts { .. } => Some(PlayerCommand::Escort),
             Self::MapClick(_)
             | Self::CycleMapSelection
             | Self::ClearRoute
@@ -587,7 +650,15 @@ impl FlightCommand {
             | Self::SettleScript
             | Self::BeginFade
             | Self::EndPlay
-            | Self::CommShown(_) => None,
+            | Self::CommShown(_)
+            | Self::CommAcknowledged
+            | Self::CommTicked
+            | Self::AnswerHail(_)
+            | Self::Haggle(_)
+            | Self::HangUp
+            | Self::Plunder(_)
+            | Self::LetGoOfBoarding
+            | Self::PressEscort(_) => None,
         }
     }
 }
@@ -696,6 +767,33 @@ pub enum Answer {
     EscortReport(Option<String>),
     /// What a [`FlightCommand::SettleScript`] settled.
     Settled(Settled),
+    /// What a [`FlightCommand::Hail`] opened, or the stellar that answered.
+    Hailed(Hailed),
+    /// Why a [`FlightCommand::Hail`] was refused. Not [`Answer::Refused`]:
+    /// a refusal beeps, and any hail under way ends.
+    HailRefused(HailRefusal),
+    /// The comm dialog's contents after a [`FlightCommand::AnswerHail`] or
+    /// a [`FlightCommand::Haggle`]; `None` when no hail is under way.
+    Hail(Option<HailView>),
+    /// What a [`FlightCommand::Board`] did, when it passed the checks.
+    Boarded(Boarding),
+    /// Why a [`FlightCommand::Board`] was refused. Not [`Answer::Refused`]:
+    /// a refusal said beeps, and the line the last board left is let go.
+    BoardRefused(BoardRefusal),
+    /// What a [`FlightCommand::Plunder`] took, and whether the plunder
+    /// dialog is still open after it.
+    Plundered {
+        /// What the press did.
+        taken: Taken,
+        /// Whether a boarding is still under way
+        /// ([`Session::boarding`](crate::Session::boarding) is some).
+        open: bool,
+    },
+    /// What a [`FlightCommand::CommandEscorts`] changed.
+    Commanded(Commanded),
+    /// What the escort dialog shows after a [`FlightCommand::PressEscort`]:
+    /// `None` once it closes, or when it was not open.
+    EscortDialog(Option<EscortDialogView>),
 }
 
 impl Answer {
@@ -1339,6 +1437,27 @@ mod tests {
             (C::BeginFade, None),
             (C::EndPlay, None),
             (C::CommShown(240), None),
+            (C::Hail { option: false }, Some(PlayerCommand::Hail)),
+            (C::Hail { option: true }, Some(PlayerCommand::Hail)),
+            (C::Board, Some(PlayerCommand::Board)),
+            (
+                C::CommandEscorts {
+                    group: crate::escort::EscortGroup::All,
+                    command: crate::escort::EscortCommand::Hold,
+                },
+                Some(PlayerCommand::Escort),
+            ),
+            (C::AnswerHail(0), None),
+            (C::Haggle(crate::hail::Haggle::Accept), None),
+            (C::HangUp, None),
+            (C::Plunder(crate::board::Take::Cargo), None),
+            (C::LetGoOfBoarding, None),
+            (
+                C::PressEscort(crate::escort_dialog::EscortButton::Close),
+                None,
+            ),
+            (C::CommAcknowledged, None),
+            (C::CommTicked, None),
         ];
         for (command, gate) in gated {
             assert_eq!(command.gate(), gate, "{command:?}");
