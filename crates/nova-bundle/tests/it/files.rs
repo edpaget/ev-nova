@@ -100,3 +100,13 @@ fn a_secret_is_readable_by_its_owner_alone() {
     let mode = fs::metadata(&file).expect("metadata").permissions().mode();
     assert_eq!(mode & 0o777, 0o600, "{mode:o}");
 }
+
+#[test]
+fn a_file_is_a_file_and_a_directory_or_missing_path_is_not() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let file = dir.path().join("nova.exe");
+    fs::write(&file, b"MZ").expect("seed");
+    assert!(StdFiles.is_file(&file));
+    assert!(!StdFiles.is_file(dir.path()));
+    assert!(!StdFiles.is_file(&dir.path().join("missing.exe")));
+}

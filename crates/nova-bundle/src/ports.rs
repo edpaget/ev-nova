@@ -153,6 +153,9 @@ pub trait Files {
     /// it if it exists, readable by its owner alone where the host has
     /// permissions.
     fn write_secret(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()>;
+
+    /// Whether the path is an existing file (not a directory).
+    fn is_file(&self, path: &Path) -> bool;
 }
 
 /// Port: the environment variables the signing inputs come from.

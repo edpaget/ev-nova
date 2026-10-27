@@ -334,7 +334,9 @@ fn file(action: &'static str, path: &Path, result: io::Result<()>) -> Result<(),
     })
 }
 
-fn execute(
+/// Runs one step through the ports. The Windows installer's plan runs
+/// through it too.
+pub(crate) fn execute(
     step: &Step,
     process: &mut impl Process,
     files: &mut impl Files,
@@ -627,6 +629,7 @@ mod tests {
         let mut files = FakeFiles {
             log: Rc::clone(&log),
             fails: Box::new(|_| false),
+            absent: Box::new(|_| false),
         };
         let result = bundle(&mut DumpUniversal(Rc::clone(&log)), &mut files, &host(None));
         let error = result.expect_err("fails").to_string();

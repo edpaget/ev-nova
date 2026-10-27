@@ -80,6 +80,10 @@ impl Files for StdFiles {
         options.open(path)?.write_all(bytes)
     }
 
+    fn is_file(&self, path: &Path) -> bool {
+        path.is_file()
+    }
+
     fn symlink(&mut self, target: &Path, link: &Path) -> io::Result<()> {
         #[cfg(unix)]
         {

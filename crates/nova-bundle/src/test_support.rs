@@ -74,10 +74,12 @@ impl Process for Recorder {
     }
 }
 
-/// Records each file operation; fails the ones `fails` picks.
+/// Records each file operation; fails the ones `fails` picks. Every
+/// path is a file unless `absent` picks it.
 pub(crate) struct FakeFiles {
     pub log: Log,
     pub fails: Box<dyn Fn(&Event) -> bool>,
+    pub absent: Box<dyn Fn(&Path) -> bool>,
 }
 
 impl FakeFiles {
@@ -110,6 +112,9 @@ impl Files for FakeFiles {
     }
     fn write_secret(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()> {
         self.record(Event::WriteSecret(path.to_owned(), bytes.to_vec()))
+    }
+    fn is_file(&self, path: &Path) -> bool {
+        !(self.absent)(path)
     }
 }
 
@@ -165,6 +170,7 @@ pub(crate) fn run(
     let mut files = FakeFiles {
         log: Rc::clone(&log),
         fails: Box::new(file_fails),
+        absent: Box::new(|_| false),
     };
     let result = bundle(&mut process, &mut files, host);
     let events = log.borrow().clone();
