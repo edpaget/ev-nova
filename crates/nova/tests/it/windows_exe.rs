@@ -1,8 +1,9 @@
 //! `nova.exe` as Windows reads it: its subsystem and its resources, read
 //! from the built file as PE structures with `object`, and its usage error
-//! with a redirected stderr. Their contents (the icon's sizes, the version
-//! numbers and strings, the manifest's settings) are nova-winres's tests;
-//! these check that the build embeds them.
+//! with a redirected stderr. The manifest reads back byte for byte, the
+//! version numbers from `VS_FIXEDFILEINFO` and the icon sizes from the
+//! group icon's directory; the rest of their contents (the version
+//! strings, the manifest's settings) are nova-winres's tests.
 
 use std::io::Read;
 use std::process::{Command, Stdio};
@@ -54,6 +55,45 @@ fn nova_exe_is_a_windows_gui_program() {
     );
 }
 
+/// The little-endian `u16` at `at` in `bytes`.
+fn u16_at(bytes: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes([bytes[at], bytes[at + 1]])
+}
+
+/// The little-endian `u32` at `at` in `bytes`.
+fn u32_at(bytes: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(bytes[at..at + 4].try_into().expect("4 bytes"))
+}
+
+/// The file and product versions of the `VS_FIXEDFILEINFO` in a
+/// `VERSIONINFO` blob, each as `[MS, LS]`: found by its signature, which
+/// is DWORD-aligned, and followed by the struct version.
+fn fixed_versions(blob: &[u8]) -> ([u32; 2], [u32; 2]) {
+    let at = (0..blob.len().saturating_sub(23))
+        .step_by(4)
+        .find(|&at| u32_at(blob, at) == 0xFEEF_04BD)
+        .expect("a VS_FIXEDFILEINFO");
+    (
+        [u32_at(blob, at + 8), u32_at(blob, at + 12)],
+        [u32_at(blob, at + 16), u32_at(blob, at + 20)],
+    )
+}
+
+/// Each entry of a `GRPICONDIR` as its width in pixels (a byte of 0 is
+/// 256) and the id of its `RT_ICON`.
+fn group_entries(group: &[u8]) -> Vec<(u32, u16)> {
+    (0..usize::from(u16_at(group, 4)))
+        .map(|n| {
+            let entry = 6 + 14 * n;
+            let width = match group[entry] {
+                0 => 256,
+                width => u32::from(width),
+            };
+            (width, u16_at(group, entry + 12))
+        })
+        .collect()
+}
+
 #[test]
 fn nova_exe_embeds_its_manifest_version_and_icon() {
     let data = exe();
@@ -63,14 +103,32 @@ fn nova_exe_embeds_its_manifest_version_and_icon() {
         include_bytes!("../../../../packaging/windows/nova.exe.manifest"),
         "packaging/windows/nova.exe.manifest, as it is"
     );
-    assert!(
-        resource(&data, pe::RT_VERSION, nova_winres::VERSION_ID).is_some(),
-        "VERSIONINFO"
+
+    let version = resource(&data, pe::RT_VERSION, nova_winres::VERSION_ID).expect("VERSIONINFO");
+    let [a, b, c, d] = nova_winres::version_quad(env!("CARGO_PKG_VERSION"))
+        .map(|quad| quad.map(u32::from))
+        .expect("the package version as four numbers");
+    let quad = [a << 16 | b, c << 16 | d];
+    assert_eq!(
+        fixed_versions(&version),
+        (quad, quad),
+        "file and product versions"
     );
-    assert!(
-        resource(&data, pe::RT_GROUP_ICON, nova_winres::ICON_ID).is_some(),
-        "the icon group the window loads"
+
+    let group = resource(&data, pe::RT_GROUP_ICON, nova_winres::ICON_ID)
+        .expect("the icon group the window loads");
+    let entries = group_entries(&group);
+    assert_eq!(
+        entries.iter().map(|&(width, _)| width).collect::<Vec<_>>(),
+        nova_winres::ICON_SIZES,
+        "the icon's sizes"
     );
+    for (width, id) in entries {
+        assert!(
+            resource(&data, pe::RT_ICON, id).is_some(),
+            "the {width} px icon, RT_ICON {id}"
+        );
+    }
 }
 
 #[test]
