@@ -13729,7 +13729,17 @@ mod tests {
         arsenal: &Arsenal,
         moves: u32,
     ) -> (Combat, Vec<Ship>) {
-        let mut combat = Combat::default();
+        a_fires_into(Combat::default(), record, others, arsenal, moves)
+    }
+
+    /// [`a_fires_and_flies`] in `combat`.
+    fn a_fires_into(
+        mut combat: Combat,
+        record: WeaponRecord,
+        others: Vec<Ship>,
+        arsenal: &Arsenal,
+        moves: u32,
+    ) -> (Combat, Vec<Ship>) {
         let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(record)];
         ships.extend(others);
         phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
@@ -14492,7 +14502,7 @@ mod tests {
     fn uncapped_by_default_the_players_129th_shot_flies() {
         let mut combat = crowded(MAX_SHOTS, false);
         assert_eq!(combat, crowded(MAX_SHOTS, false), "the default");
-        tick(&mut combat, &mut [player_with(blaster())], &NovaDisable);
+        phase::fire_player(&mut combat, &mut [player_with(blaster())], &NovaDisable);
         assert_eq!(combat.shots().len(), MAX_SHOTS + 1);
         let mut set = Combat::default();
         set.set_combat_caps(RuleSource::Bible);
@@ -14510,7 +14520,7 @@ mod tests {
             shooter.rounds = LauncherRounds::from([(WeaponId(128), 5), (WeaponId(138), 5)]);
             let mut combat = crowded(MAX_SHOTS, true);
             let mut ships = [shooter];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::fire(&mut combat, &mut ships, id, &NovaDisable);
             assert_eq!(combat.shots().len(), MAX_SHOTS, "{id:?}: nothing flies");
             let heard = sounds(&combat.take_events());
             assert_eq!(heard.len(), 1, "{id:?}: still heard");
@@ -14524,7 +14534,7 @@ mod tests {
             assert_eq!(ships[0].armament.mounts()[0].reload, reload, "{id:?}");
         }
         let mut combat = crowded(MAX_SHOTS - 1, true);
-        tick(&mut combat, &mut [player_with(blaster())], &NovaDisable);
+        phase::fire_player(&mut combat, &mut [player_with(blaster())], &NovaDisable);
         assert_eq!(combat.shots().len(), MAX_SHOTS, "the 128th flies");
     }
 
@@ -14532,7 +14542,7 @@ mod tests {
     fn under_the_caps_a_minus_999_shot_finding_the_table_full_spares_its_firer() {
         let mut combat = crowded(MAX_SHOTS, true);
         let mut ships = [player_with(self_destructing(blaster()))];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::fire_player(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(ships[0].reserves.armor.now, 30.0);
         assert_eq!(ships[0].condition, Condition::Intact);
     }
@@ -14560,12 +14570,23 @@ mod tests {
             }
             let player = player_with(laser());
             let npc = Ship::at(1, 0.0, 0.0).armed(laser()).picking(146);
-            let mut ships = [player, npc];
-            tick(&mut combat, &mut ships, &NovaDisable);
-            let fired = combat.beams().iter().filter(|beam| beam.firer != C).count();
-            assert_eq!(fired, if capped { 0 } else { 2 }, "{capped}");
-            assert_eq!(sounds(&combat.take_events()).len(), 2, "both heard");
-            assert_eq!(ships[0].armament.mounts()[0].reload, 9.0);
+            for shooter in [player, npc] {
+                let id = shooter.id;
+                let mut combat = combat.clone();
+                let mut ships = [shooter];
+                phase::fire(&mut combat, &mut ships, id, &NovaDisable);
+                let fired = combat
+                    .beams()
+                    .iter()
+                    .filter(|beam| beam.firer == id)
+                    .count();
+                assert_eq!(fired, usize::from(!capped), "{id:?} {capped}");
+                assert_eq!(sounds(&combat.take_events()).len(), 1, "{id:?}: heard");
+                // The player counts its reload down after its trigger
+                // (@0x6ae25), an NPC before its pick (@0x33896).
+                let reload = if id == ShipRef::Player { 9.0 } else { 10.0 };
+                assert_eq!(ships[0].armament.mounts()[0].reload, reload, "{id:?}");
+            }
         }
     }
 
@@ -14575,14 +14596,9 @@ mod tests {
         // 126 others, the shell and its first sub-munition: the shell holds
         // its slot as it releases them.
         for (capped, released) in [(false, 2), (true, 1)] {
-            let mut combat = crowded(MAX_SHOTS - 2, capped);
-            let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
-            let mut events = Vec::new();
-            for _ in 0..5 {
-                tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
-                ships[0].trigger = QUIET;
-                events.extend(combat.take_events());
-            }
+            let crowd = crowded(MAX_SHOTS - 2, capped);
+            let (mut combat, _) = a_fires_into(crowd, shell, Vec::new(), &arsenal, 4);
+            let events = combat.take_events();
             assert_eq!(sub_shots(&combat).len(), released, "{capped}");
             let heard = sounds(&events)
                 .into_iter()
@@ -14590,12 +14606,8 @@ mod tests {
                 .count();
             assert_eq!(heard, 1, "the release is heard: {capped}");
         }
-        let mut combat = crowded(MAX_SHOTS - 1, true);
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
-        for _ in 0..5 {
-            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
-            ships[0].trigger = QUIET;
-        }
+        let (combat, _) =
+            a_fires_into(crowded(MAX_SHOTS - 1, true), shell, Vec::new(), &arsenal, 4);
         assert_eq!(
             sub_shots(&combat),
             [] as [&Shot; 0],
@@ -14616,7 +14628,7 @@ mod tests {
             let mut ships = missile_attack(launching);
             ships[0].rounds = LauncherRounds::from([(WeaponId(133), 5)]);
             missile_in_flight(&mut combat, &mut ships);
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
             let pd = sounds(&combat.take_events())
                 .into_iter()
                 .filter(|&(weapon, _)| weapon == WeaponId(133))
@@ -14649,7 +14661,7 @@ mod tests {
                 shooter.rounds = LauncherRounds::from([(id, 5), (WeaponId(138), 5)]);
                 let mut combat = Combat::default();
                 let mut ships = [shooter];
-                tick(&mut combat, &mut ships, &NovaDisable);
+                phase::fire(&mut combat, &mut ships, ship, &NovaDisable);
                 assert_eq!(combat.shots(), [], "{ship:?} {record:?}: nothing flies");
                 let heard = sounds(&combat.take_events());
                 assert_eq!(heard.len(), 1, "{ship:?}: still heard");
@@ -14670,14 +14682,14 @@ mod tests {
             graphic: 255,
             ..blaster()
         };
-        tick(&mut combat, &mut [player_with(drawn)], &NovaDisable);
+        phase::fire_player(&mut combat, &mut [player_with(drawn)], &NovaDisable);
         assert_eq!(combat.shots().len(), 1, "Graphic 255 flies");
         let mut combat = Combat::default();
         let last = WeaponRecord {
             id: WeaponId(383),
             ..blaster()
         };
-        tick(&mut combat, &mut [player_with(last)], &NovaDisable);
+        phase::fire_player(&mut combat, &mut [player_with(last)], &NovaDisable);
         assert_eq!(combat.shots().len(), 1, "index 255 flies");
     }
 
@@ -14687,7 +14699,7 @@ mod tests {
             graphic: 256,
             ..blaster()
         }))];
-        tick(&mut Combat::default(), &mut ships, &NovaDisable);
+        phase::fire_player(&mut Combat::default(), &mut ships, &NovaDisable);
         assert_eq!(ships[0].reserves.armor.now, 30.0);
     }
 
@@ -14701,7 +14713,9 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = missile_attack(launching);
         ships[0].rounds = LauncherRounds::from([(WeaponId(133), 5)]);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        missile_in_flight(&mut combat, &mut ships);
+        combat.take_events();
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let pd = sounds(&combat.take_events())
             .into_iter()
             .filter(|&(weapon, _)| weapon == WeaponId(133))
@@ -14720,14 +14734,8 @@ mod tests {
             graphic: 256,
             ..weapon(148)
         });
-        let mut combat = Combat::default();
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
-        let mut events = Vec::new();
-        for _ in 0..5 {
-            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
-            ships[0].trigger = QUIET;
-            events.extend(combat.take_events());
-        }
+        let (mut combat, _) = a_fires_and_flies(shell, Vec::new(), &arsenal, 4);
+        let events = combat.take_events();
         assert_eq!(sub_shots(&combat), [] as [&Shot; 0], "none released");
         let heard = sounds(&events)
             .into_iter()
@@ -14752,7 +14760,8 @@ mod tests {
         combat.set_combat_caps(RuleSource::Engine);
         let mut ships = missile_attack(beam);
         missile_in_flight(&mut combat, &mut ships);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        combat.take_events();
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         assert!(
             combat.beams().iter().all(|beam| beam.firer == C),
             "none kept"
@@ -14779,26 +14788,52 @@ mod tests {
         for capped in [false, true] {
             let mut combat = crowded(MAX_SHOTS - 1, capped);
             combat.put_in_flight(Shot::launch(ending, C, C, &far, 0.0));
-            // Its move spends it this tick, nothing firing: it is still in
-            // flight, drawn at its last point.
+            // `_HandleShot`'s visit spends it: it is still in flight, drawn
+            // at its last point.
             let mut ships = [player_with(blaster()), Ship::at(1, 0.0, 300.0)];
             ships[0].trigger = QUIET;
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(combat.shots().len(), MAX_SHOTS, "spent");
-            // The player finds its slot still held; the NPC after the hit
-            // pass has ended it finds it free.
-            ships[0].trigger = PRIMARY_HELD;
-            ships[1] = Ship::at(1, 0.0, 300.0).armed(blaster()).picking(128);
-            tick(&mut combat, &mut ships, &NovaDisable);
-            let by = |ship| {
+            let by = |combat: &Combat, ship| {
                 combat
                     .shots()
                     .iter()
                     .filter(|shot| shot.firer == ship)
                     .count()
             };
-            assert_eq!(by(ShipRef::Player), usize::from(!capped), "{capped}");
-            assert_eq!(by(A), 1, "{capped}");
+            // The player's trigger finds its slot still held.
+            let mut triggered = combat.clone();
+            ships[0].trigger = PRIMARY_HELD;
+            phase::fire_player(&mut triggered, &mut ships, &NovaDisable);
+            assert_eq!(
+                by(&triggered, ShipRef::Player),
+                usize::from(!capped),
+                "{capped}"
+            );
+            // `_HandleShot`'s next visit ends it (@0x36195), and an NPC's
+            // pick after finds its slot free.
+            ships[1] = Ship::at(1, 0.0, 300.0).armed(blaster()).picking(128);
+            phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(by(&combat, A), 1, "{capped}");
+        }
+    }
+
+    /// `defender`'s point defence: the player's
+    /// ([`Combat::defend_player`]) or, for an NPC, every NPC's
+    /// ([`phase::defend_npcs`]).
+    fn defend_as(combat: &mut Combat, ships: &mut [Ship], defender: ShipRef) {
+        if defender == ShipRef::Player {
+            phase::run(
+                combat,
+                ships,
+                &NovaDisable,
+                |combat, fighters, arena, chance| {
+                    combat.defend_player(fighters, arena, chance);
+                },
+            );
+        } else {
+            phase::defend_npcs(combat, ships, &NovaDisable);
         }
     }
 
@@ -14820,29 +14855,24 @@ mod tests {
                 ships[0].id = defender;
                 ships[0].fleet = defender;
                 ships[1].target = Some(defender);
-                let (defending, attacking) = (ships[0].trigger, ships[1].trigger);
+                let defending = ships[0].trigger;
                 ships[0].trigger = Trigger {
                     point_defence: false,
                     ..QUIET
                 };
-                // The missile takes the 127th slot a tick ahead: the
-                // player's point defence fires before the NPCs do.
-                tick(&mut combat, &mut ships, &NovaDisable);
-                ships[1].trigger = Trigger {
-                    primary: false,
-                    ..attacking
-                };
-                // A shot of one tick takes the 128th, and its move spends
-                // it, nothing firing.
+                // The missile takes the 127th slot.
+                missile_in_flight(&mut combat, &mut ships);
+                // A shot of one tick takes the 128th, and `_HandleShot`'s
+                // visit spends it.
                 combat.put_in_flight(Shot::launch(ending, C, C, &far, 0.0));
-                tick(&mut combat, &mut ships, &NovaDisable);
+                phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
                 assert_eq!(combat.shots().len(), MAX_SHOTS, "spent");
                 combat.take_events();
                 // Every ship's point defence finds the spent shot still
-                // holding the 128th slot: `_HandleShot` ends it (@0x36195)
-                // after `_HandlePlayer` and `_AIDispatch` (@0x4429d).
+                // holding the 128th slot: only `_HandleShot`'s next visit
+                // ends it (@0x36195).
                 ships[0].trigger = defending;
-                tick(&mut combat, &mut ships, &NovaDisable);
+                defend_as(&mut combat, &mut ships, defender);
                 let missiles = combat.shots().iter().filter(|shot| shot.firer == B);
                 assert_eq!(missiles.count(), 1, "{defender:?} {capped}: incoming");
                 let pd = sounds(&combat.take_events())
@@ -14896,13 +14926,17 @@ mod tests {
     }
 
     #[test]
-    fn under_the_caps_the_players_point_defence_takes_the_last_slot_before_its_trigger() {
+    fn under_the_caps_the_players_trigger_finds_the_last_slot_its_point_defence_took() {
         // `_HandlePlayer` runs `_HandleShipPointDefense` @0x68c74 before
-        // `_FirePlayerWeapon` @0x6ab55: point defence takes the 128th.
+        // `_FirePlayerWeapon` @0x6ab55 (the session's order:
+        // `nova_sim::session::defence_order`): point defence takes the
+        // 128th, and the trigger finds none.
         for capped in [false, true] {
             let (mut combat, mut ships) = last_slot_left(ShipRef::Player, capped);
             ships[0].trigger = PRIMARY_HELD;
-            tick(&mut combat, &mut ships, &NovaDisable);
+            defend_as(&mut combat, &mut ships, ShipRef::Player);
+            assert_eq!(in_flight_by(&combat, ShipRef::Player), (1, 0), "{capped}");
+            phase::fire_player(&mut combat, &mut ships, &NovaDisable);
             let (pd, blaster) = in_flight_by(&combat, ShipRef::Player);
             assert_eq!(pd, 1, "{capped}: point defence flies");
             assert_eq!(blaster, usize::from(!capped), "{capped}: the blaster");
@@ -14920,17 +14954,21 @@ mod tests {
     }
 
     #[test]
-    fn under_the_caps_an_npcs_point_defence_takes_the_last_slot_before_an_npcs_pick() {
+    fn under_the_caps_an_npcs_pick_finds_the_last_slot_its_point_defence_took() {
         // Every NPC's point defence runs in `_AIDispatch`'s loop
         // (@0x4429d, `_AIFireTurret` @0x80b0d), before `_HandleShip`'s
-        // picks (`_FireAIShipWeapon` @0x34ffd, loop @0x44483).
+        // picks (`_FireAIShipWeapon` @0x34ffd, loop @0x44483; the
+        // session's order: `nova_sim::session::fighters`): point defence
+        // takes the 128th, and the pick finds none.
         for capped in [false, true] {
             let (mut combat, mut ships) = last_slot_left(A, capped);
             ships[0].trigger = Trigger {
                 only: Some(WeaponId(128)),
                 ..QUIET
             };
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(in_flight_by(&combat, A), (1, 0), "{capped}");
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
             let (pd, blaster) = in_flight_by(&combat, A);
             assert_eq!(pd, 1, "{capped}: point defence flies");
             assert_eq!(blaster, usize::from(!capped), "{capped}: the blaster");
@@ -14971,22 +15009,26 @@ mod tests {
             ));
             let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser()).picking(146)];
             ships[0].trigger = QUIET;
-            tick(&mut combat, &mut ships, &NovaDisable);
+            // `_HandleBeams` ends it, and holds its slot to the next.
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(combat.beams().len(), MAX_BEAMS - 1, "ended");
             ships[0].trigger = Trigger {
                 only: Some(WeaponId(146)),
                 ..QUIET
             };
-            tick(&mut combat, &mut ships, &NovaDisable);
-            let fired = combat.beams().iter().filter(|beam| beam.firer == A).count();
-            assert_eq!(fired, usize::from(!capped), "{capped}");
-            // A tick on, reloaded, the slot is free.
-            for _ in 0..10 {
-                ships[0].armament.reload();
-            }
-            tick(&mut combat, &mut ships, &NovaDisable);
-            let fired = combat.beams().iter().filter(|beam| beam.firer == A).count();
-            assert_eq!(fired, 2 - usize::from(capped), "{capped}: a tick later");
+            let fired =
+                |combat: &Combat| combat.beams().iter().filter(|beam| beam.firer == A).count();
+            let mut held = combat.clone();
+            let mut firing = [Ship {
+                trigger: ships[0].trigger,
+                ..Ship::at(1, 0.0, 0.0).armed(laser())
+            }];
+            phase::handle_npcs(&mut held, &mut firing, &NovaDisable);
+            assert_eq!(fired(&held), usize::from(!capped), "{capped}");
+            // The next `_HandleBeams` frees it.
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(fired(&combat), 1, "{capped}: a tick later");
         }
     }
 
