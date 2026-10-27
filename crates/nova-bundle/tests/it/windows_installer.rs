@@ -115,9 +115,8 @@ fn product_info(code: &str, attribute: &str) -> String {
 
 fn related_products() -> Vec<String> {
     powershell(&format!(
-        "$list = Get-Prop $installer 'RelatedProducts' @({})
-$count = Get-Prop $list 'Count' $null
-for ($i = 0; $i -lt $count; $i++) {{ Get-Prop $list 'Item' @($i) }}",
+        // PowerShell enumerates the returned StringList: one line per item.
+        "Get-Prop $installer 'RelatedProducts' @({}) | ForEach-Object {{ [string]$_ }}",
         quote(&format!("{{{UPGRADE_CODE}}}"))
     ))
 }
