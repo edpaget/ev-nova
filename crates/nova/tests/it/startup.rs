@@ -17,8 +17,8 @@ use nova::startup::{
 use nova_audio::SettingsStore;
 use nova_audio::recording::MemorySettings;
 
-/// Directories holding the game's data; every other one is empty. Records
-/// each directory asked for.
+/// Directories holding the game's data; every other one is empty, and
+/// holds nothing else. Records each directory asked for.
 #[derive(Default)]
 struct Disk {
     holding: Vec<PathBuf>,
@@ -35,6 +35,11 @@ impl DataSource for Disk {
         } else {
             Opened::Empty(dir.to_path_buf())
         }
+    }
+
+    fn has_entry(&self, dir: &Path, name: &str) -> bool {
+        let entry = dir.join(name);
+        self.holding.contains(&entry)
     }
 }
 
@@ -197,6 +202,21 @@ fn a_good_pick_is_remembered_and_tried_first_next_launch() {
         Vec::<String>::new(),
         "not asked again"
     );
+}
+
+#[test]
+fn a_picked_ev_nova_folder_remembers_its_nova_files() {
+    let store = MemorySettings::new();
+    let ev_nova = Path::new("/Games").join("EV Nova");
+    let nova_files = ev_nova.join("Nova Files");
+    let mut first = Machine::new(&store, &[&nova_files], &[&ev_nova]);
+    let started = first.launch().expect("starts");
+    assert_eq!(started.dir, nova_files);
+
+    let mut second = Machine::new(&store, &[&nova_files], &[]);
+    assert_eq!(second.launch().expect("starts").dir, nova_files);
+    assert_eq!(*second.disk.asked.borrow(), [nova_files]);
+    assert_eq!(second.panel.prompts, Vec::<String>::new());
 }
 
 #[test]
