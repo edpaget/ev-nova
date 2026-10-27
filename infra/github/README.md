@@ -42,8 +42,17 @@ in CI.
    Create the vault in the app (New Vault, `ev-nova-ci`), then each item with
    exactly the title, field labels and attachment name above: the config
    looks the vault up by name, items by title, fields by label and
-   attachments by name. This phase reads only the vault (by name) and
-   `opentofu-state-encryption`; the signing items are read by later phases.
+   attachments by name. Keep each label and attachment name unique within
+   its item: a duplicate fails the plan.
+
+   Provider 2.2.1 has no `section_map`/`field_map` (those are 3.x). It puts
+   a Secure Note's custom fields and attachments in an unlabelled section,
+   as `section[].field[]` (`label`, `value`) and `section[].file[]` (`name`,
+   `content_base64`), and leaves the top-level `file` list empty.
+   `modules/onepassword-item-index` indexes both across every section, and
+   the top-level `file` list too, so a field moved into a named section still
+   resolves. The attachments reach GitHub as the provider's `content_base64`
+   (standard alphabet, unwrapped), which `nova-bundle` decodes as is.
 
 ## The plan/apply loop
 
@@ -62,6 +71,78 @@ own `op` session. Nothing else in the repository calls `op`: `mise run ci`,
 Never run `tofu destroy`. `prevent_destroy` is set on the repository, and
 apply never runs with `-auto-approve` against a plan that changes anything.
 
+## The macos-signing environment
+
+`signing.tf` manages the `macos-signing` environment and the six secrets
+that `nova-bundle` reads to sign with Developer ID and notarize:
+
+| Secret | From |
+|---|---|
+| `MACOS_CERT_P12_BASE64` | `macos-developer-id-application`, attachment `nova-certs.p12` |
+| `MACOS_CERT_PASSWORD` | `macos-developer-id-application`, field `password` |
+| `MACOS_SIGNING_IDENTITY` | `macos-developer-id-application`, field `identity` |
+| `APPLE_API_KEY_P8_BASE64` | `app-store-connect-api-key`, attachment `AuthKey_<key id>.p8` |
+| `APPLE_API_KEY_ID` | `app-store-connect-api-key`, field `key id` |
+| `APPLE_API_ISSUER_ID` | `app-store-connect-api-key`, field `issuer id` |
+
+The `.p8` attachment is picked by the `key id` field, so the two must
+change together.
+
+The environment's deployment-branch policy is custom and allows `main`
+only, with no required reviewers and no wait timer, since `main`'s nightly
+runs unattended. `ci.yml`'s `build` job names the environment only on
+`main`'s macOS leg:
+
+```yaml
+environment: ${{ github.ref == 'refs/heads/main' && matrix.os == 'macos-latest' && 'macos-signing' || '' }}
+```
+
+Every other leg and every other branch names no environment, so it still
+runs. A job that names an environment its branch may not deploy to never
+starts, and naming an environment that doesn't exist creates it with no
+rules, so the expression must never name anything else. Environment secrets
+override repository secrets of the same name, so on `main` the environment's
+copies win even while the old repository-level secrets exist.
+
+Plan and apply print every value as `(sensitive value)`, and no output
+exposes one. The values do land in the encrypted state. `tofu show -json`
+of a plan prints them in clear, so never run it except straight into a
+filter that drops values.
+
+### Rotating a signing secret
+
+1. In the `ev-nova-ci` item, replace the attachment or the field value,
+   keeping the attachment name and field label. For a new App Store Connect
+   API key, the attachment becomes `AuthKey_<new id>.p8` and the `key id`
+   field changes with it (delete the old `.p8` attachment).
+2. `mise run infra-plan`: expect in-place updates to the affected
+   `github_actions_environment_secret.signing[...]` entries only.
+3. `mise run infra-apply`, check the summary matches, and type `yes`.
+
+The next `main` nightly picks the new value up. No GitHub UI is involved.
+
+### Cut-over: retiring the repository-level secrets
+
+Before this environment existed, the six secrets were set by hand as
+repository-level secrets, readable from any branch. OpenTofu never owned
+those copies, so deleting them is a one-time manual step after landing,
+owned by the rdm task `macos-signing-environment-cutover`:
+
+1. Wait for the first `main` nightly that deploys to `macos-signing`, logs
+   `nova-bundle: signing with Developer ID`, and whose `Nova.app` passes
+   `xcrun stapler validate`.
+2. Delete each repository-level copy:
+
+   ```sh
+   for name in MACOS_CERT_P12_BASE64 MACOS_CERT_PASSWORD MACOS_SIGNING_IDENTITY \
+       APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER_ID; do
+     gh secret delete "$name" --repo edpaget/ev-nova
+   done
+   ```
+
+3. Check that `gh secret list --repo edpaget/ev-nova` lists none of them.
+   From then on a dispatch from any other branch signs ad-hoc.
+
 ## State
 
 The state is local (`terraform.tfstate`, gitignored) and encrypted with
@@ -70,7 +151,25 @@ OpenTofu's native encryption: a `pbkdf2` key from the passphrase and the
 There is no `fallback` block, so an unencrypted state is refused, not read.
 
 - **Lost state:** run `mise run infra-apply`. The `import` blocks adopt the
-  existing resources again, with no change to GitHub.
+  repository again, with no change to it. The `macos-signing` environment,
+  its policy and its secrets have no `import` blocks (they were created by
+  this config), so first do one of these:
+  - Import the environment and its policy, and let the apply rewrite the
+    secrets (GitHub never returns their values):
+
+    ```sh
+    gh api repos/edpaget/ev-nova/environments/macos-signing/deployment-branch-policies \
+      --jq '.branch_policies[] | {id, name}'
+    tofu -chdir=infra/github import github_repository_environment.macos_signing ev-nova:macos-signing
+    tofu -chdir=infra/github import github_repository_environment_deployment_policy.macos_signing_main ev-nova:macos-signing:<id>
+    ```
+
+    Run both imports inside the same `op run --env-file=infra/github/op.env`
+    as the `infra-*` tasks, with `GITHUB_TOKEN=$(gh auth token)`.
+  - Or delete the environment
+    (`gh api -X DELETE repos/edpaget/ev-nova/environments/macos-signing`)
+    and apply, which recreates it. Nothing is lost: every value is in
+    1Password.
 - **Lost passphrase:** delete `terraform.tfstate` and re-apply, as above.
 - **Rotating the passphrase:** see below.
 
@@ -183,10 +282,13 @@ so the tests set `import_existing = false`, which empties the import block's
 
 ## Adding a resource
 
-Add an `import` block (with the same `for_each = var.import_existing ? ...`
-guard) and declare the resource with today's live values, so the first plan
-reads `N to import, 0 to add, 0 to change, 0 to destroy`. Only then change
-values on purpose.
+For a setting that already exists on GitHub, add an `import` block (with the
+same `for_each = var.import_existing ? ...` guard) and declare the resource
+with today's live values, so the first plan reads
+`N to import, 0 to add, 0 to change, 0 to destroy`. Only then change values
+on purpose. A resource that doesn't exist yet (like the `macos-signing`
+environment) is created instead, with no `import` block; add it to the
+"Lost state" bullet above.
 
 After changing a provider pin, regenerate and commit the lock file:
 
