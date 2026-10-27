@@ -108,7 +108,7 @@ impl Chart {
     /// its `sÿst` `Interference` less the player's anti-interference,
     /// 0..=100.
     #[must_use]
-    fn interference(&self, pilot: &Pilot, statics: &Statics) -> u8 {
+    pub(super) fn interference(&self, pilot: &Pilot, statics: &Statics) -> u8 {
         let system = self.galaxy.map().interference(pilot.system);
         iff::interference(system, radar_gear(pilot, statics).anti_interference)
     }
@@ -123,7 +123,7 @@ impl Chart {
 /// through `_ResetPlayerPrecalcedValues` (@0xc357) before the next
 /// read, so the two match.
 #[must_use]
-fn radar_gear(pilot: &Pilot, statics: &Statics) -> RadarGear {
+pub(super) fn radar_gear(pilot: &Pilot, statics: &Statics) -> RadarGear {
     RadarGear::of(&pilot.outfits, &statics.outfits)
 }
 

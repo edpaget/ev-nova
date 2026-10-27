@@ -828,7 +828,7 @@ impl Session {
     /// standing order of its first escort (`class_row`).
     #[must_use]
     pub fn escort_menu(&self) -> [ClassRow; 4] {
-        EscortClass::ALL.map(|class| self.space.class_row(&self.pilot, &self.statics, class))
+        self.space.escort_rows(&self.pilot, &self.statics)
     }
 
     /// Whether the player has an escort flying, for the escort menu to
@@ -1031,6 +1031,12 @@ impl Space {
         let npcs = self.traffic.npcs();
         self.npc(id)
             .is_some_and(|npc| Surroundings::new(&[], npcs).allied_with_player(npc))
+    }
+
+    /// The escort menu's class rows, in its order ([`EscortClass::ALL`]):
+    /// each class's row ([`Space::class_row`]).
+    pub(super) fn escort_rows(&self, pilot: &Pilot, statics: &Statics) -> [ClassRow; 4] {
+        EscortClass::ALL.map(|class| self.class_row(pilot, statics, class))
     }
 
     /// `class`'s row in the escort menu: whether the player leads a ship

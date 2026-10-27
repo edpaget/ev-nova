@@ -91,7 +91,7 @@ impl Chart {
     /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76), which
     /// `Session::iff_dominated` models.
     #[must_use]
-    fn nav_brackets(&self) -> Option<NavBrackets> {
+    pub(super) fn nav_brackets(&self) -> Option<NavBrackets> {
         let stellar = self.nav_target()?;
         let site = self.listed.iter().find(|site| site.id == stellar);
         Some(NavBrackets {

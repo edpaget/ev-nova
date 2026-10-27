@@ -214,7 +214,12 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// (@0x5cff6), changes the `ïntf` redraws the whole bar instead, as at
     /// its last change (`_EvalSetExp` @0x156c7 → `_RedrawStatus(1)`
     /// @0x739bd, [`FlightView::after_outfit_order`]).
+    ///
+    /// The kept frame is filled afresh first: the docked and travel code
+    /// that calls it, directly or through [`FlightView::redraw_whole`],
+    /// has just changed the session behind the port.
     pub(super) fn retake_radar(&mut self) {
+        self.refresh_frame();
         self.radar_scene = Some(self.radar_now());
     }
 

@@ -11,17 +11,20 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use nova_sim::JumpReadiness;
+use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, FrameAsteroid,
-    FrameBeam, FrameBox, FrameShip, MapKey, StepInput, StepReport, StepRun,
+    FrameBeam, FrameBox, FrameHud, FrameShip, MapKey, StepInput, StepReport, StepRun,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::navigation::NavMode;
+use nova_sim::status_cargo::StatusCargo;
 use nova_sim::story::OverlaidGalaxy;
+use nova_sim::{ClassRow, Gauge, RadarGear, Reserves};
 use nova_sim::{
     Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, ShipRef, StellarId, StellarPick,
     Vec2,
@@ -396,6 +399,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         double_time,
         hyper_gamma,
         traffic_ships,
+        hud,
     } = frame;
     let other_system = SystemId(if system.0 == i16::MAX { 0 } else { i16::MAX });
     FlightFrame {
@@ -458,7 +462,74 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         double_time: !double_time,
         hyper_gamma: hyper_gamma + 1.0,
         traffic_ships: one_or_none(traffic_ships, || ShipId(128)),
+        hud: unlike_hud(hud),
     }
+}
+
+/// A HUD unlike `hud` in every field. The destructuring names every
+/// field, so a field added to [`FrameHud`] doesn't compile until it is
+/// changed here.
+fn unlike_hud(hud: &FrameHud) -> FrameHud {
+    let FrameHud {
+        reserves,
+        cargo,
+        secondary,
+        secondary_line_count,
+        radar_gear,
+        interference,
+        interface_government,
+        nav_brackets,
+        target_brackets,
+        red_alert,
+        escort_rows,
+    } = hud;
+    let gauge = |gauge: Gauge| Gauge::full(if gauge.max > 1.5 { 1.0 } else { 2.0 });
+    FrameHud {
+        reserves: Reserves {
+            shield: gauge(reserves.shield),
+            armor: gauge(reserves.armor),
+            fuel: gauge(reserves.fuel),
+        },
+        cargo: StatusCargo {
+            cash: cargo.cash.wrapping_add(1),
+            ..cargo.clone()
+        },
+        secondary: toggle(secondary.as_ref(), nova_sim::WeaponId(128)),
+        secondary_line_count: toggle(secondary_line_count.as_ref(), 1),
+        radar_gear: RadarGear {
+            iff: !radar_gear.iff,
+            ..*radar_gear
+        },
+        interference: u8::from(*interference == 0),
+        interface_government: toggle(interface_government.as_ref(), nova_sim::GovtId(128)),
+        nav_brackets: toggle(
+            nav_brackets.as_ref(),
+            NavBrackets {
+                stellar: StellarId(128),
+                position: Vec2::ZERO,
+                expand: 0.0,
+                dominated: false,
+            },
+        ),
+        target_brackets: toggle(
+            target_brackets.as_ref(),
+            TargetBrackets {
+                npc: nova_sim::NpcId(0),
+                expand: 0.0,
+                standing: nova_sim::brackets::Standing::Neutral,
+            },
+        ),
+        red_alert: toggle(red_alert.as_ref(), nova_sim::AlertIcon::Red),
+        escort_rows: escort_rows.map(|row| ClassRow {
+            present: !row.present,
+            ..row
+        }),
+    }
+}
+
+/// None when `value` is some, else `some`.
+fn toggle<T>(value: Option<&T>, some: T) -> Option<T> {
+    if value.is_some() { None } else { Some(some) }
 }
 
 /// None when `records` holds any, else one of `record`'s.
@@ -1164,7 +1235,9 @@ mod tests {
                 double_time,
                 hyper_gamma,
                 traffic_ships,
+                hud,
             } = &frame;
+            assert_unlike_hud(&other.hud, hud);
             assert_ne!(other.ships, *ships);
             assert_ne!(other.drawn, *drawn);
             assert_ne!(other.shots, *shots);
@@ -1189,6 +1262,42 @@ mod tests {
             assert_ne!(other.map_key, *map_key);
             assert_ne!(other.map_key.system, map_key.system);
             assert_ne!(other.map_key.nav, map_key.nav);
+        }
+    }
+
+    /// Asserts `other` is unlike `hud` in every field.
+    fn assert_unlike_hud(other: &FrameHud, hud: &FrameHud) {
+        let FrameHud {
+            reserves,
+            cargo,
+            secondary,
+            secondary_line_count,
+            radar_gear,
+            interference,
+            interface_government,
+            nav_brackets,
+            target_brackets,
+            red_alert,
+            escort_rows,
+        } = hud;
+        assert_ne!(other.reserves, *reserves);
+        assert_ne!(other.cargo, *cargo);
+        assert_ne!(other.secondary, *secondary);
+        assert_ne!(other.secondary_line_count, *secondary_line_count);
+        assert_ne!(other.radar_gear, *radar_gear);
+        assert_ne!(other.interference, *interference);
+        assert_ne!(other.interface_government, *interface_government);
+        assert_ne!(other.nav_brackets, *nav_brackets);
+        assert_ne!(other.target_brackets, *target_brackets);
+        assert_ne!(other.red_alert, *red_alert);
+        assert_ne!(other.escort_rows, *escort_rows);
+    }
+
+    #[test]
+    fn an_unlike_hud_changes_every_field_full_or_empty() {
+        let full = unlike_hud(&FrameHud::default());
+        for hud in [FrameHud::default(), full.clone(), unlike_hud(&full)] {
+            assert_unlike_hud(&unlike_hud(&hud), &hud);
         }
     }
 

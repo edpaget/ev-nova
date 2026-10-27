@@ -17,6 +17,7 @@ use std::collections::BTreeSet;
 use crate::asteroid::Asteroid;
 use crate::bay::FighterNote;
 use crate::board::MissionBoardLine;
+use crate::brackets::{NavBrackets, TargetBrackets};
 use crate::cargo_box::CargoBox;
 use crate::catalog::{Explosion, GovtId, ShipId, StellarId, SystemId, WeaponId};
 use crate::cloak::{Area, CloakShown};
@@ -28,6 +29,7 @@ use crate::combat::report::SimDiagnostic;
 use crate::combat::ship_frames::{Drawn, FrameSpec};
 use crate::combat::shot_layer::ShotLayer;
 use crate::combat::{CombatEvent, ShipRef};
+use crate::escort::{ClassRow, EscortClass};
 use crate::flight::{Controls, ShipState};
 use crate::geometry::Vec2;
 use crate::grant::Granted;
@@ -35,17 +37,19 @@ use crate::hail::CommNote;
 use crate::hire::PayNote;
 use crate::hover::{DrawnBox, DrawnShips, Hover};
 use crate::hyperspace::JumpReadiness;
-use crate::iff::ShipIff;
+use crate::iff::{RadarGear, ShipIff};
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
 use crate::player_fate::Drawn as ShipDrawn;
-use crate::reserves::Gauge;
+use crate::red_alert::AlertIcon;
+use crate::reserves::{Gauge, Reserves};
 use crate::session::{
     HoverPlace, InterfaceLoad, MapClicked, MapPress, MissionShown, PersonQuote, SavedNav,
     SessionEvent, StellarPick, TextBar,
 };
 use crate::ship_layer::ShipLayer;
 use crate::sound::SimSound;
+use crate::status_cargo::StatusCargo;
 use crate::story::DrawnSheet;
 use crate::targeting::TargetPick;
 use crate::traffic::npc::Mode;
@@ -128,6 +132,9 @@ pub struct FlightFrame {
     /// The ship types the system's traffic can bring, whose sheets the
     /// view reads ([`Session::traffic_ships`](crate::Session::traffic_ships)).
     pub traffic_ships: Vec<ShipId>,
+    /// What the status bar and the target layer show of the player's
+    /// ship, its gear and its targets ([`FrameHud`]).
+    pub hud: FrameHud,
 }
 
 impl Default for FlightFrame {
@@ -159,6 +166,7 @@ impl Default for FlightFrame {
             double_time: false,
             hyper_gamma: 0.0,
             traffic_ships: Vec::new(),
+            hud: FrameHud::default(),
         }
     }
 }
@@ -267,6 +275,74 @@ pub struct FloatingLinks {
     pub current: Vec2,
     /// Each link the clicks test, in their order, with its map position.
     pub links: Vec<(SystemId, Vec2)>,
+}
+
+/// What the HUD shows of the player's ship, its gear and its targets,
+/// as [`FlightFrame::hud`] carries it: the status bar's gauges, cargo
+/// area, secondary weapon line and radar gear, the `ïntf` it is chosen
+/// by, and the target layer's brackets, Red Alert icon and escort menu
+/// rows. The default is a failed session's: no brackets, no alert, no
+/// escort of any class, and empty reserves and cargo.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameHud {
+    /// The ship's shield, armour and fuel
+    /// ([`Session::reserves`](crate::Session::reserves)).
+    pub reserves: Reserves,
+    /// What the status bar's cargo area lists
+    /// (`Session::status_cargo`).
+    pub cargo: StatusCargo,
+    /// The secondary weapon selected
+    /// ([`Session::secondary`](crate::Session::secondary)).
+    pub secondary: Option<WeaponId>,
+    /// The count the secondary weapon's line shows after its name
+    /// ([`Session::secondary_line_count`](crate::Session::secondary_line_count)).
+    pub secondary_line_count: Option<u32>,
+    /// What the player's outfits give the radar
+    /// (`Session::radar_gear`).
+    pub radar_gear: RadarGear,
+    /// The interference in the player's system, 0..=100
+    /// (`Session::interference`).
+    pub interference: u8,
+    /// The government whose `Interface` picks the status bar
+    /// (`Session::interface_government`).
+    pub interface_government: Option<GovtId>,
+    /// The brackets round the nav target, if there is one
+    /// (`Session::nav_brackets`).
+    pub nav_brackets: Option<NavBrackets>,
+    /// The brackets round the ship target, if there is one
+    /// ([`Session::target_brackets`](crate::Session::target_brackets)).
+    pub target_brackets: Option<TargetBrackets>,
+    /// The Red Alert icon frame shown, if any
+    /// (`Session::red_alert_icon`).
+    pub red_alert: Option<AlertIcon>,
+    /// The escort menu's class rows, in [`EscortClass::ALL`]'s order
+    /// ([`Session::escort_menu`](crate::Session::escort_menu)).
+    pub escort_rows: [ClassRow; 4],
+}
+
+impl Default for FrameHud {
+    /// A session that failed to start: empty reserves and cargo, no
+    /// secondary, no radar gear or interference, no `Interface`
+    /// government, no brackets, no Red Alert and no escort of any class.
+    fn default() -> Self {
+        Self {
+            reserves: Reserves::default(),
+            cargo: StatusCargo::default(),
+            secondary: None,
+            secondary_line_count: None,
+            radar_gear: RadarGear::default(),
+            interference: 0,
+            interface_government: None,
+            nav_brackets: None,
+            target_brackets: None,
+            red_alert: None,
+            escort_rows: EscortClass::ALL.map(|class| ClassRow {
+                class,
+                present: false,
+                order: None,
+            }),
+        }
+    }
 }
 
 /// Something the player asks of the flight, which

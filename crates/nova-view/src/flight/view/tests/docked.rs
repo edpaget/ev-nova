@@ -1138,6 +1138,8 @@ fn leaving_the_dock_drops_the_texts_pending_redraws() {
 fn desk_reserve(view: &mut View, reserve: nova_sim::Reserve, value: f32) {
     let mut desk = view.pilot_desk().expect("flying");
     desk.edit(PilotEdit::Reserve(reserve, value)).expect("set");
+    // As the app does after a desk edit.
+    view.resync();
 }
 
 /// The fuel gauge's full-colour fill the HUD draws, if any.

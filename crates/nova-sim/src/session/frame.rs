@@ -6,6 +6,7 @@
 use super::Session;
 use crate::flight_frame::{FlightFrame, MapKey};
 
+mod hud;
 mod world;
 
 impl Session {
@@ -38,6 +39,7 @@ impl Session {
             double_time,
             hyper_gamma,
             traffic_ships,
+            hud,
         } = into;
         *nav_mode = self.nav_mode();
         *system = self.system();
@@ -68,6 +70,7 @@ impl Session {
         *double_time = self.double_time();
         *hyper_gamma = self.hyper_gamma();
         *traffic_ships = self.traffic_ships();
+        self.fill_hud(hud);
     }
 }
 
@@ -178,7 +181,7 @@ pub(super) mod tests {
     }
 
     /// A frame unlike any a test session fills, in every field.
-    fn stale() -> FlightFrame {
+    pub(super) fn stale() -> FlightFrame {
         FlightFrame {
             nav_mode: NavMode::Hyperspace(Some(SystemId(999))),
             system: SystemId(999),
@@ -247,11 +250,56 @@ pub(super) mod tests {
             double_time: true,
             hyper_gamma: 9.0,
             traffic_ships: vec![ShipId(999)],
+            hud: stale_hud(),
+        }
+    }
+
+    /// A HUD unlike any a test session fills, in every field.
+    fn stale_hud() -> crate::flight_frame::FrameHud {
+        use crate::brackets::{NavBrackets, Standing, TargetBrackets};
+        use crate::escort::{ClassRow, EscortClass};
+        use crate::reserves::{Gauge, Reserves};
+        crate::flight_frame::FrameHud {
+            reserves: Reserves {
+                shield: Gauge::full(999.0),
+                armor: Gauge::full(999.0),
+                fuel: Gauge::full(999.0),
+            },
+            cargo: crate::status_cargo::StatusCargo {
+                cash: -999,
+                ..crate::status_cargo::StatusCargo::default()
+            },
+            secondary: Some(WeaponId(999)),
+            secondary_line_count: Some(999),
+            radar_gear: crate::iff::RadarGear {
+                iff: true,
+                density_scanner: true,
+                anti_interference: 999,
+            },
+            interference: 99,
+            interface_government: Some(crate::catalog::GovtId(999)),
+            nav_brackets: Some(NavBrackets {
+                stellar: StellarId(999),
+                position: Vec2::new(9.0, 9.0),
+                expand: 9.0,
+                dominated: true,
+            }),
+            target_brackets: Some(TargetBrackets {
+                npc: crate::traffic::npc::NpcId(999),
+                expand: 9.0,
+                standing: Standing::Hostile,
+            }),
+            red_alert: Some(crate::red_alert::AlertIcon::Red),
+            escort_rows: EscortClass::ALL.map(|class| ClassRow {
+                class,
+                present: true,
+                order: Some(crate::escort::EscortOrder::Hold),
+            }),
         }
     }
 
     /// `session`'s frame, filled over [`stale`].
-    fn filled(session: &Session) -> FlightFrame {
+    pub(super) fn filled(session: &Session) -> FlightFrame {
         let mut frame = stale();
         session.fill_frame(&mut frame);
         frame

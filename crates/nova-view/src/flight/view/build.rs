@@ -404,6 +404,8 @@ impl<
             .sim
             .session
             .map(|session| session.with_strings(strings));
+        // The cargo area's labels are the strings' (`FrameHud::cargo`).
+        self.refresh_frame();
         self
     }
 

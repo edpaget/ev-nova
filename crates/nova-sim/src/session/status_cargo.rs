@@ -24,7 +24,12 @@ impl PlayerShip {
     /// What the status bar's cargo area lists (see
     /// [`status_cargo::status_cargo`]).
     #[must_use]
-    fn status_cargo(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> StatusCargo {
+    pub(super) fn status_cargo(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+    ) -> StatusCargo {
         let mut commodity_tons = [0; COMMODITY_ROWS];
         let mut junk = Vec::new();
         for (good, tons) in pilot.cargo() {

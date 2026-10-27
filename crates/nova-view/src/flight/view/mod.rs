@@ -1603,6 +1603,7 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
         kept.hyper_gamma.to_bits() == fresh.hyper_gamma.to_bits(),
     );
     check("traffic_ships", kept.traffic_ships == fresh.traffic_ships);
+    check("hud", kept.hud == fresh.hud);
     differs
 }
 

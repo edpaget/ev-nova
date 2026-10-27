@@ -4926,8 +4926,7 @@ impl Session {
     /// either way the bar is `ïntf` 128.
     #[must_use]
     pub fn interface_government(&self) -> Option<GovtId> {
-        let record = self.statics.ship_record(self.ship())?;
-        record.inherent_govt.or(record.combat_govt)
+        interface_government(&self.pilot, &self.statics)
     }
 
     /// `good`'s name, as the exchange names it, if it is traded
@@ -6771,6 +6770,15 @@ fn med_date_text(pilot: &Pilot, statics: &Statics) -> String {
 #[must_use]
 fn reserves(pilot: &Pilot) -> Reserves {
     pilot.reserves
+}
+
+/// The government whose `Interface` picks the status bar
+/// ([`Session::interface_government`]): the player's ship type's
+/// attributes government, else its combat government.
+#[must_use]
+fn interface_government(pilot: &Pilot, statics: &Statics) -> Option<GovtId> {
+    let record = statics.ship_record(pilot.ship)?;
+    record.inherent_govt.or(record.combat_govt)
 }
 
 /// The system the player is in.

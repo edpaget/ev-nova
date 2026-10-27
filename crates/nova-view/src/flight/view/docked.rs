@@ -458,6 +458,8 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
             Ok(session) => session.trade(order)?,
             Err(_) => return Err(TradeRefusal::NoMarket),
         };
+        // The cargo area shows the hold traded (`FrameHud::cargo`).
+        self.refresh_frame();
         self.draw_marked_nav();
         Ok(traded)
     }
