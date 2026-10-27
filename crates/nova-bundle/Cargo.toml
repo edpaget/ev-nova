@@ -1,11 +1,14 @@
 [package]
 name = "nova-bundle"
-description = "Builds Nova.app, the Apple silicon macOS bundle, into a .dmg: Developer ID signed and notarized, or ad-hoc signed"
+description = "Packs the nightly's installers: Nova.app, the Apple silicon macOS bundle, into a .dmg (Developer ID signed and notarized, or ad-hoc signed), and the built Windows executables into a per-user MSI"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+# `mise run bundle` runs `cargo run -p nova-bundle`; nova-installer is the
+# second binary.
+default-run = "nova-bundle"
 
 [dependencies]
 # The signing variables' certificate and API key.

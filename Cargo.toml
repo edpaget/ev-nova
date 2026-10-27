@@ -39,7 +39,8 @@ tempfile = "3"
 embed-resource = "3.0.12"
 # Reads the PE nova.exe's tests check, as structures.
 object = { version = "0.37.3", default-features = false, features = ["read_core", "pe", "std"] }
-# Reads the Windows manifest back as XML in nova-winres's and nova's tests.
+# Reads the Windows manifest back as XML in nova-winres's and nova's tests,
+# and the installer's WiX source in nova-bundle's.
 roxmltree = "0.20.0"
 # nova-bundle decodes the Developer ID certificate and the notary API key
 # from base64 signing variables; the version plist already locks.

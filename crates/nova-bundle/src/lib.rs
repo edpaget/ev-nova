@@ -1,5 +1,7 @@
-//! `nova-bundle`: builds `Nova.app`, the macOS bundle of the game, and
-//! packs it into a `.dmg` for the nightly.
+//! `nova-bundle`: packs the nightly's installers. Its `nova-bundle`
+//! binary builds `Nova.app`, the macOS bundle of the game, and packs it
+//! into a `.dmg`; its `nova-installer` binary packs the built Windows
+//! executables into a per-user MSI ([`installer`]).
 //!
 //! # Usage
 //!
@@ -44,6 +46,23 @@
 //! [`ports::Files`] port, and reads the signing variables through the
 //! [`ports::Env`] port; [`system`] holds the real adapters, which `main`
 //! wires together.
+//!
+//! # The Windows installer
+//!
+//! ```text
+//! mise run build-windows
+//! mise run pack-installer -- --exes <DIR> [OUT_DIR]
+//! ```
+//!
+//! Or `mise run installer`, which runs both. On Windows only, with WiX v5
+//! installed (`dotnet tool install --global wix --version 5.0.2`). The
+//! first builds `nova.exe` and `nova-dump.exe` in release for
+//! `x86_64-pc-windows-msvc`. The second, `nova-installer`, never builds:
+//! it packs the executables in `<DIR>` (by default
+//! `target/x86_64-pc-windows-msvc/release`) as they are, with `README.txt`
+//! and `LICENSE`, into `ev-nova-x86_64-pc-windows-msvc.msi` in `OUT_DIR`
+//! (by default `target/installer/out`), so the executables can be signed
+//! between the two steps and the `.msi` after them. See [`installer`].
 
 pub mod bundle;
 pub mod host;

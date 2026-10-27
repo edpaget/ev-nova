@@ -72,6 +72,19 @@ run = "cargo run -p nova --features dev-tools --target-dir target/dev-run --lock
 description = "macOS only: build Nova.app (Apple silicon) into ev-nova-aarch64-apple-darwin.dmg, Developer ID signed and notarized when the MACOS_*/APPLE_* signing variables are set, ad-hoc otherwise; pass an output dir after -- (default target/bundle/out)"
 run = "cargo run -p nova-bundle --locked --"
 
+[tasks.build-windows]
+description = "Windows only: build nova.exe and nova-dump.exe in release for x86_64-pc-windows-msvc, the executables the installer packs"
+run = "cargo build --release --locked -p nova -p nova-dump --target x86_64-pc-windows-msvc"
+
+[tasks.pack-installer]
+description = "Windows only, needs WiX v5 (dotnet tool install --global wix --version 5.0.2): pack already-built executables into ev-nova-x86_64-pc-windows-msvc.msi; pass `--exes <DIR> [OUT_DIR]` after -- (defaults target/x86_64-pc-windows-msvc/release and target/installer/out)"
+run = "cargo run -p nova-bundle --locked --bin nova-installer --"
+
+[tasks.installer]
+description = "Windows only, needs WiX v5 (dotnet tool install --global wix --version 5.0.2): build the executables, then pack them into ev-nova-x86_64-pc-windows-msvc.msi in target/installer/out (or the dir passed after --)"
+depends = ["build-windows"]
+run = "cargo run -p nova-bundle --locked --bin nova-installer --"
+
 [tasks.mutants]
 description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g. -- --file <path>"
 run = "cargo mutants --workspace"
