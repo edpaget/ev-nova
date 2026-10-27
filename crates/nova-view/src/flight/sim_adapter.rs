@@ -12,10 +12,12 @@
 //! [`FlightSim::apply`] to `Session::apply`, whose match over the
 //! commands lives on the session's side, with the catalog the view
 //! shared, the chance, the law, the boarding rule and the hail options,
-//! [`FlightSim::drain`] to `Session::drain_events`, and [`CommSource`]'s
-//! to `Session::hailing` and `Session::boarding`. A session that failed
-//! to start fills the default frame, runs no step, refuses every command,
-//! answers nothing and drains nothing.
+//! [`FlightSim::drain`] to `Session::drain_events`, [`CommSource`]'s to
+//! `Session::hailing` and `Session::boarding`, and [`PortSource`]'s to
+//! the session's method of each name. A session that failed to start
+//! fills the default frame, runs no step, refuses every command, answers
+//! nothing open and drains nothing. [`SessionFlight::transact`], which
+//! takes a closure no command can carry, is the adapter's own API.
 //!
 //! **For the strangler's length**, the view's
 //! `FlightView<C, SessionFlight<C>>` blocks reach the session and the
@@ -40,9 +42,10 @@ use nova_sim::map_search::SearchOutcome;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
     Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DescMovie, DisableRule, HailOptions,
-    HailView, Hover, LegalCode, MapMarks, MissionId, NovaAi, NovaBoarding, NovaDisable, NovaLaw,
-    PlayerCommand, PlunderView, PointDefenceRule, Rules, SavedNav, Session, ShipId, SimCatalog,
-    StellarId, StepCollaborators, SystemId, TagNames, Vec2,
+    HailView, HireList, Hover, LegalCode, MapMarks, Market, MissionId, MissionInfo, News, NovaAi,
+    NovaBoarding, NovaDisable, NovaLaw, Outfitter, Pilot, PlayerCommand, PlunderView,
+    PointDefenceRule, Rules, SavedNav, Session, ShipId, ShipNaming, ShipRefusal, Shipyard,
+    SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, Vec2,
 };
 
 use super::SharedChance;
@@ -215,6 +218,16 @@ impl<C> SessionFlight<C> {
             hail_options,
             ..self
         }
+    }
+
+    /// Changes the pilot with `change` while landed, as
+    /// `nova_sim::Session::transact` does, and says whether it did; a
+    /// failed session changes nothing. The adapter's own API, not the
+    /// port's: a closure over the pilot is no command a sim could carry.
+    pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
+        self.session
+            .as_mut()
+            .is_ok_and(|session| session.transact(change))
     }
 }
 
@@ -429,7 +442,74 @@ impl<C> CommSource for SessionFlight<C> {
     }
 }
 
-impl<C> PortSource for SessionFlight<C> {}
+/// Each forwards to the session's method of its name, the rolled reads
+/// on the flight's chance; a failed session answers nothing open. The
+/// name prompt reads the catalog the view shared
+/// ([`SessionFlight::share_catalog`]), and has no shipyard before it is
+/// shared. The offer gap is drawn on the flight's chance whatever the
+/// session (`nova_sim::mission::offer_gap`).
+impl<C> PortSource for SessionFlight<C> {
+    fn market(&self) -> Option<Market> {
+        self.session().ok()?.market()
+    }
+
+    fn recharge_enabled(&self) -> bool {
+        self.session().is_ok_and(Session::recharge_enabled)
+    }
+
+    fn news(&self) -> Option<&News> {
+        self.session().ok()?.news()
+    }
+
+    fn news_picture(&self) -> Option<i16> {
+        self.session().ok()?.news_picture()
+    }
+
+    fn mission_info(&self) -> MissionInfo {
+        match self.session() {
+            Ok(session) => session.mission_info(),
+            Err(_) => MissionInfo {
+                rows: Vec::new(),
+                today: String::new(),
+            },
+        }
+    }
+
+    fn seen_intro(&self) -> bool {
+        self.session().is_ok_and(Session::seen_intro)
+    }
+
+    fn refusable_offer_dialog(&self, mission: MissionId) -> bool {
+        self.session()
+            .is_ok_and(|session| session.refusable_offer_dialog(mission))
+    }
+
+    fn outfitter(&mut self) -> Option<Outfitter> {
+        self.session.as_mut().ok()?.outfitter(&mut self.chance)
+    }
+
+    fn shipyard(&mut self) -> Option<Shipyard> {
+        self.session.as_mut().ok()?.shipyard(&mut self.chance)
+    }
+
+    fn escorts_for_hire(&mut self) -> Option<HireList> {
+        self.session
+            .as_mut()
+            .ok()?
+            .escorts_for_hire(&mut self.chance)
+    }
+
+    fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
+        let (Ok(session), Some(catalog)) = (&mut self.session, &self.catalog) else {
+            return Err(ShipRefusal::NoShipyard);
+        };
+        session.ship_naming(ship, &*catalog.0, &mut self.chance)
+    }
+
+    fn offer_gap(&mut self) -> u32 {
+        nova_sim::mission::offer_gap(&mut self.chance)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -534,6 +614,95 @@ mod tests {
                 "{command:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_failed_flight_refuses_the_port_commands_and_answers_nothing_open() {
+        let mut flight = failed();
+        assert_eq!(flight.market(), None);
+        assert!(!flight.recharge_enabled());
+        assert_eq!(flight.news(), None);
+        assert_eq!(flight.news_picture(), None);
+        assert_eq!(flight.mission_info().rows, []);
+        assert_eq!(flight.mission_info().today, "");
+        assert!(!flight.seen_intro());
+        assert!(!flight.refusable_offer_dialog(MissionId(130)));
+        assert_eq!(flight.outfitter(), None);
+        assert_eq!(flight.shipyard(), None);
+        assert_eq!(flight.escorts_for_hire(), None);
+        assert_eq!(
+            flight.ship_naming(ShipId(129)),
+            Err(ShipRefusal::NoShipyard)
+        );
+        assert!(!flight.transact(|pilot| pilot.cash = 1), "changes nothing");
+        let order = nova_sim::OutfitOrder {
+            outfit: nova_sim::OutfitId(128),
+            direction: nova_sim::Direction::Buy,
+        };
+        for command in [
+            FlightCommand::Trade(nova_sim::Order {
+                row: 0,
+                good: nova_sim::Good::Commodity(0),
+                direction: nova_sim::Direction::Buy,
+                lot: nova_sim::Lot::Click,
+            }),
+            FlightCommand::Recharge,
+            FlightCommand::OpenOutfitter,
+            FlightCommand::CloseOutfitter,
+            FlightCommand::Outfit { order, count: 1 },
+            FlightCommand::OutfitCounted { order, count: 1 },
+            FlightCommand::BuyShip {
+                ship: ShipId(129),
+                name: "Kestrel".to_owned(),
+            },
+            FlightCommand::DeclineShip(ShipId(129)),
+            FlightCommand::OpenBar,
+            FlightCommand::Hire(ShipId(129)),
+            FlightCommand::CloseHire,
+            FlightCommand::OpenMissionComputer,
+            FlightCommand::ShowComputerRow(MissionId(130)),
+            FlightCommand::ShowInfoRow(0),
+            FlightCommand::AcceptMission(MissionId(130)),
+            FlightCommand::RefuseMission(MissionId(130)),
+            FlightCommand::AbortMission(0),
+            FlightCommand::NextOffer(1),
+            FlightCommand::EnterOfferVenue(1),
+            FlightCommand::ReloadOfferDesc(MissionId(130)),
+            FlightCommand::PressMissionInfo,
+            FlightCommand::Jettison { all: true },
+            FlightCommand::Assign(nova_sim::Assignment::Escort),
+            FlightCommand::MarkIntroSeen,
+        ] {
+            assert_eq!(
+                flight.apply(command.clone()),
+                Answer::Refused,
+                "{command:?}"
+            );
+        }
+    }
+
+    /// Draws 7 every time, and notes each draw's range.
+    #[derive(Debug, Default)]
+    struct Sevens(Vec<u32>);
+
+    impl nova_sim::Chance for Sevens {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.0.push(n);
+            7
+        }
+    }
+
+    #[test]
+    fn the_offer_gap_is_drawn_on_the_flights_chance_whatever_the_session() {
+        let sevens = Rc::new(std::cell::RefCell::new(Sevens::default()));
+        let chance: Rc<std::cell::RefCell<dyn nova_sim::Chance>> = sevens.clone();
+        let mut flight = failed().with_chance(SharedChance::new(chance));
+        assert_eq!(flight.offer_gap(), 37, "30 and the draw of 7");
+        assert_eq!(sevens.borrow().0, [30]);
     }
 
     #[test]

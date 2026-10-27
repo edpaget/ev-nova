@@ -18,7 +18,8 @@
 //! questions, each method defaulting to "nothing open", so a sim that has
 //! none of them open needs no code. [`MapSource`] has the course map's,
 //! the floating map's and the nav area's, [`CommSource`] the hail's and
-//! the boarding's; [`PortSource`] is empty for now.
+//! the boarding's, [`PortSource`] the spaceport's screens' and the
+//! mission screens'.
 //!
 //! The `fixture` feature (and this crate's tests) exposes `fixture`:
 //! `FakeFlight`, a scripted sim for the view's component tests, and
@@ -32,9 +33,11 @@ use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
+use nova_sim::mission::screens::OFFER_GAP_TICKS;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    DescMovie, HailView, Hover, MapMarks, MissionId, PlayerCommand, PlunderView, SavedNav, ShipId,
+    DescMovie, HailView, HireList, Hover, MapMarks, Market, MissionId, MissionInfo, News,
+    Outfitter, PlayerCommand, PlunderView, SavedNav, ShipId, ShipNaming, ShipRefusal, Shipyard,
     StellarId, SystemId, Vec2,
 };
 
@@ -266,9 +269,97 @@ pub trait CommSource {
     }
 }
 
-/// The spaceport's questions of the flight. None yet: each method will
-/// default to "nothing open".
-pub trait PortSource {}
+/// The spaceport's questions of the flight: what its screens show as they
+/// open or after a command, each defaulting to "nothing open": no
+/// exchange, outfitter, shipyard, hire list or news, nothing listed, no
+/// fuel sold, no intro seen. Those that settle the day's rolls on the
+/// flight's chance or draw on it take `&mut self`, as
+/// [`FlightSim::load_description`] does. What the player does there is a
+/// command ([`FlightSim::apply`]).
+pub trait PortSource {
+    /// The exchange of the stellar landed on
+    /// (`nova_sim::Session::market`).
+    fn market(&self) -> Option<Market> {
+        None
+    }
+
+    /// Whether the spaceport's Recharge button is enabled
+    /// (`nova_sim::Session::recharge_enabled`).
+    fn recharge_enabled(&self) -> bool {
+        false
+    }
+
+    /// The news of the bar visit under way (`nova_sim::Session::news`).
+    fn news(&self) -> Option<&News> {
+        None
+    }
+
+    /// The picture the bar's news is drawn over
+    /// (`nova_sim::Session::news_picture`).
+    fn news_picture(&self) -> Option<i16> {
+        None
+    }
+
+    /// What the mission info screen lists
+    /// (`nova_sim::Session::mission_info`): nothing by default.
+    fn mission_info(&self) -> MissionInfo {
+        MissionInfo {
+            rows: Vec::new(),
+            today: String::new(),
+        }
+    }
+
+    /// Whether the pilot flying has seen the intro screen
+    /// (`nova_sim::Session::seen_intro`).
+    fn seen_intro(&self) -> bool {
+        false
+    }
+
+    /// Whether `mission`'s offer dialog has a refuse button
+    /// (`nova_sim::Session::refusable_offer_dialog`).
+    fn refusable_offer_dialog(&self, mission: MissionId) -> bool {
+        let _ = mission;
+        false
+    }
+
+    /// The outfitter of the stellar landed on, the day's rolls drawn on
+    /// the flight's chance (`nova_sim::Session::outfitter`).
+    fn outfitter(&mut self) -> Option<Outfitter> {
+        None
+    }
+
+    /// The shipyard of the stellar landed on, the day's rolls drawn on the
+    /// flight's chance (`nova_sim::Session::shipyard`).
+    fn shipyard(&mut self) -> Option<Shipyard> {
+        None
+    }
+
+    /// The ships for hire in the bar of the stellar landed on, the day's
+    /// rolls drawn on the flight's chance
+    /// (`nova_sim::Session::escorts_for_hire`).
+    fn escorts_for_hire(&mut self) -> Option<HireList> {
+        None
+    }
+
+    /// The prompt for naming a ship of class `ship` before it is bought,
+    /// its words read from the catalog, on the flight's chance
+    /// (`nova_sim::Session::ship_naming`): no shipyard by default.
+    ///
+    /// # Errors
+    ///
+    /// The [`ShipRefusal`] that applies.
+    fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
+        let _ = ship;
+        Err(ShipRefusal::NoShipyard)
+    }
+
+    /// The wait before a venue's next offer, in the Mac's ticks, drawn on
+    /// the flight's chance (`nova_sim::mission::offer_gap`): by default
+    /// the gap with no roll, [`OFFER_GAP_TICKS`].
+    fn offer_gap(&mut self) -> u32 {
+        OFFER_GAP_TICKS
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -280,6 +371,8 @@ mod tests {
     impl MapSource for NothingOpen {}
 
     impl CommSource for NothingOpen {}
+
+    impl PortSource for NothingOpen {}
 
     /// A flight with nothing to it, answering every port method it may
     /// leave to its default by that default.
@@ -354,5 +447,26 @@ mod tests {
         let source = NothingOpen;
         assert_eq!(source.hailing(), None);
         assert_eq!(source.boarding(), None);
+    }
+
+    #[test]
+    fn a_port_source_with_nothing_open_answers_nothing() {
+        let mut source = NothingOpen;
+        assert_eq!(source.market(), None);
+        assert!(!source.recharge_enabled());
+        assert_eq!(source.news(), None);
+        assert_eq!(source.news_picture(), None);
+        assert_eq!(source.mission_info().rows, []);
+        assert_eq!(source.mission_info().today, "");
+        assert!(!source.seen_intro());
+        assert!(!source.refusable_offer_dialog(MissionId(130)));
+        assert_eq!(source.outfitter(), None);
+        assert_eq!(source.shipyard(), None);
+        assert_eq!(source.escorts_for_hire(), None);
+        assert_eq!(
+            source.ship_naming(ShipId(129)),
+            Err(ShipRefusal::NoShipyard)
+        );
+        assert_eq!(source.offer_gap(), OFFER_GAP_TICKS);
     }
 }

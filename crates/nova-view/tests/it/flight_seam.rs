@@ -247,6 +247,18 @@ fn a_real_session_with_outputs_pending_meets_the_contract() {
 }
 
 #[test]
+fn a_real_session_landed_meets_the_contract() {
+    let session = SessionBuilder::flying(&OneStellar)
+        .landed_at(SystemId(130), StellarId(128))
+        .build();
+    let mut flight = SessionFlight::<OneStellar>::from(session);
+    let mut frame = FlightFrame::default();
+    flight.frame(&mut frame);
+    assert_eq!(frame.landed, Some(StellarId(128)), "docked");
+    assert_eq!(check_contract(&mut flight), Ok(()));
+}
+
+#[test]
 fn a_stellar_key_reaches_the_session_and_its_frame_shows_the_selection() {
     let mut flight = flight();
     let mut frame = FlightFrame::default();

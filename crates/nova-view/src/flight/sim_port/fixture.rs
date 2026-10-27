@@ -30,6 +30,12 @@ use nova_sim::{
 };
 use nova_sim::{JumpReadiness, PlayerFate};
 
+use nova_sim::mission::screens::OFFER_GAP_TICKS;
+use nova_sim::{
+    Direction, Good, HireList, Lot, Market, MissionInfo, News, Order, Outfitter, ShipNaming,
+    ShipRefusal, Shipyard,
+};
+
 use super::{CommSource, FlightSim, MapSource, PortSource, fresh_description};
 
 /// A scripted [`FlightSim`]: it shows the frame it was given, records
@@ -49,7 +55,8 @@ use super::{CommSource, FlightSim, MapSource, PortSource, fresh_description};
 /// pilot's once the queue is empty ([`fresh_description`]), recording
 /// each load ([`FakeFlight::descriptions_loaded`]). It gives the death
 /// `dësc`s it is given ([`FakeFlight::set_death_descs`]), and answers
-/// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]). It
+/// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]) and
+/// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]). It
 /// answers the message line's commands ([`FlightCommand::CommShown`],
 /// [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`])
 /// done without taking an answer from the queue, as the message line's
@@ -73,6 +80,7 @@ pub struct FakeFlight {
     loaded: Vec<(Option<String>, Option<DescMovie>)>,
     death_descs: Vec<i16>,
     comm: FakeComm,
+    port: FakePort,
 }
 
 /// What a [`FakeFlight`] answers the [`CommSource`] questions with, each
@@ -84,6 +92,40 @@ pub struct FakeComm {
     pub hailing: Option<HailView>,
     /// [`CommSource::boarding`]'s answer.
     pub boarding: Option<PlunderView>,
+}
+
+/// What a [`FakeFlight`] answers the [`PortSource`] questions with, each
+/// field the answer to the question of its name; a `&mut` read hands back
+/// a clone of its field. The default answers nothing open, as a
+/// [`PortSource`]'s defaults do.
+#[derive(Clone, Debug, Default)]
+pub struct FakePort {
+    /// [`PortSource::market`]'s answer.
+    pub market: Option<Market>,
+    /// [`PortSource::recharge_enabled`]'s answer.
+    pub recharge_enabled: bool,
+    /// [`PortSource::news`]'s answer.
+    pub news: Option<News>,
+    /// [`PortSource::news_picture`]'s answer.
+    pub news_picture: Option<i16>,
+    /// [`PortSource::mission_info`]'s answer; nothing listed when `None`.
+    pub mission_info: Option<MissionInfo>,
+    /// [`PortSource::seen_intro`]'s answer.
+    pub seen_intro: bool,
+    /// The missions whose offer dialog [`PortSource::refusable_offer_dialog`]
+    /// says has a refuse button.
+    pub refusable: Vec<MissionId>,
+    /// [`PortSource::outfitter`]'s answer.
+    pub outfitter: Option<Outfitter>,
+    /// [`PortSource::shipyard`]'s answer.
+    pub shipyard: Option<Shipyard>,
+    /// [`PortSource::escorts_for_hire`]'s answer.
+    pub hire_list: Option<HireList>,
+    /// [`PortSource::ship_naming`]'s answer, whatever the class; no
+    /// shipyard when `None`.
+    pub ship_naming: Option<Result<ShipNaming, ShipRefusal>>,
+    /// [`PortSource::offer_gap`]'s answer; [`OFFER_GAP_TICKS`] when `None`.
+    pub offer_gap: Option<u32>,
 }
 
 /// What a [`FakeFlight`] answers the [`MapSource`] questions with, each
@@ -277,6 +319,11 @@ impl FakeFlight {
         &mut self.comm
     }
 
+    /// What the spaceport's questions are answered with, to script.
+    pub fn port_mut(&mut self) -> &mut FakePort {
+        &mut self.port
+    }
+
     /// The map's questions asked whose arguments matter, in the order
     /// asked ([`MapAsk`]).
     #[must_use]
@@ -454,7 +501,62 @@ impl CommSource for FakeFlight {
     }
 }
 
-impl PortSource for FakeFlight {}
+impl PortSource for FakeFlight {
+    fn market(&self) -> Option<Market> {
+        self.port.market.clone()
+    }
+
+    fn recharge_enabled(&self) -> bool {
+        self.port.recharge_enabled
+    }
+
+    fn news(&self) -> Option<&News> {
+        self.port.news.as_ref()
+    }
+
+    fn news_picture(&self) -> Option<i16> {
+        self.port.news_picture
+    }
+
+    fn mission_info(&self) -> MissionInfo {
+        self.port.mission_info.clone().unwrap_or(MissionInfo {
+            rows: Vec::new(),
+            today: String::new(),
+        })
+    }
+
+    fn seen_intro(&self) -> bool {
+        self.port.seen_intro
+    }
+
+    fn refusable_offer_dialog(&self, mission: MissionId) -> bool {
+        self.port.refusable.contains(&mission)
+    }
+
+    fn outfitter(&mut self) -> Option<Outfitter> {
+        self.port.outfitter.clone()
+    }
+
+    fn shipyard(&mut self) -> Option<Shipyard> {
+        self.port.shipyard.clone()
+    }
+
+    fn escorts_for_hire(&mut self) -> Option<HireList> {
+        self.port.hire_list.clone()
+    }
+
+    fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
+        let _ = ship;
+        self.port
+            .ship_naming
+            .clone()
+            .unwrap_or(Err(ShipRefusal::NoShipyard))
+    }
+
+    fn offer_gap(&mut self) -> u32 {
+        self.port.offer_gap.unwrap_or(OFFER_GAP_TICKS)
+    }
+}
 
 /// A command every sim refuses: a stellar key for a slot no system has.
 #[must_use]
@@ -806,7 +908,15 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 /// - **no plunder without a boarding**: with no boarding under way
 ///   ([`CommSource::boarding`] none), a take in the plunder dialog
 ///   ([`FlightCommand::Plunder`]) is refused, and the frame after it
-///   equals the frame before. Checked before the jump.
+///   equals the frame before. Checked before the jump;
+/// - **the port answers only while landed**: in flight
+///   ([`FlightFrame::landed`] none), [`PortSource::market`],
+///   [`PortSource::news`] and [`PortSource::news_picture`] are none and
+///   [`PortSource::recharge_enabled`] is false;
+/// - **no trade without a market**: with no exchange
+///   ([`PortSource::market`] none), a [`FlightCommand::Trade`] is not
+///   answered [`Answer::Traded`]`(Ok(_))`, and the frame after it equals
+///   the frame before. Checked before the jump.
 ///
 /// The error says which clause failed.
 pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
@@ -861,7 +971,54 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
     check_weapon_select(sim, &once)?;
     check_travel(sim, &once)?;
     check_plunder(sim, &once)?;
+    check_port(sim, &once)?;
     check_jump(sim, &once)
+}
+
+/// The trade [`check_contract`]'s market clause sends: a ton of the first
+/// row's food.
+fn contract_trade() -> FlightCommand {
+    FlightCommand::Trade(Order {
+        row: 0,
+        good: Good::Commodity(0),
+        direction: Direction::Buy,
+        lot: Lot::Click,
+    })
+}
+
+/// [`check_contract`]'s clauses on the port, `once` the frame filled
+/// before.
+fn check_port(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String> {
+    if !once.docked() {
+        let clause = "the port answers only while landed";
+        if let Some(market) = sim.market() {
+            return Err(format!("{clause}: an exchange in flight, {market:?}"));
+        }
+        if let Some(news) = sim.news() {
+            return Err(format!("{clause}: the bar's news in flight, {news:?}"));
+        }
+        if let Some(picture) = sim.news_picture() {
+            return Err(format!("{clause}: a news picture in flight, {picture}"));
+        }
+        if sim.recharge_enabled() {
+            return Err(format!("{clause}: Recharge enabled in flight"));
+        }
+    }
+    if sim.market().is_some() {
+        return Ok(());
+    }
+    let clause = "no trade without a market";
+    let sent = format!("{:?}", contract_trade());
+    let answer = sim.apply(contract_trade());
+    if matches!(answer, Answer::Traded(Ok(_))) {
+        return Err(format!("{clause}: {sent} answered {answer:?}"));
+    }
+    let mut after = unlike(once);
+    sim.frame(&mut after);
+    if after != *once {
+        return Err(format!("{clause}: the frame was {once:?}, then {after:?}"));
+    }
+    Ok(())
 }
 
 /// [`check_contract`]'s plunder clause, `once` the frame filled before.
@@ -1354,6 +1511,18 @@ mod tests {
         PlundersNothing,
         /// A take with no boarding changes the frame.
         PlunderChangesTheFrame,
+        /// An exchange in flight.
+        MarketInFlight,
+        /// The bar's news in flight.
+        NewsInFlight,
+        /// A news picture in flight.
+        NewsPictureInFlight,
+        /// Recharge enabled in flight.
+        RechargeInFlight,
+        /// A trade with no market goes through.
+        TradesWithoutAMarket,
+        /// A trade with no market changes the frame.
+        TradeChangesTheFrame,
         /// Weapon Select is answered with a stellar.
         AnswersTheSelect,
         /// Weapon Select changes the frame.
@@ -1457,7 +1626,13 @@ mod tests {
             let end = matches!(command, FlightCommand::EndPlay);
             let jump = matches!(command, FlightCommand::Jump);
             let plunder = matches!(command, FlightCommand::Plunder(_));
+            let trade = matches!(command, FlightCommand::Trade(_));
             match self.fault {
+                Fault::TradesWithoutAMarket if trade => Answer::Traded(Ok(1)),
+                Fault::TradeChangesTheFrame if trade => {
+                    self.fake.set_frame(stellar(129));
+                    Answer::Traded(Err(nova_sim::TradeRefusal::NoMarket))
+                }
                 Fault::PlundersNothing if plunder => Answer::Plundered {
                     taken: nova_sim::Taken::Nothing,
                     open: false,
@@ -1525,7 +1700,27 @@ mod tests {
         }
     }
 
-    impl PortSource for Broken {}
+    impl PortSource for Broken {
+        fn market(&self) -> Option<Market> {
+            matches!(self.fault, Fault::MarketInFlight).then(Market::default)
+        }
+
+        fn news(&self) -> Option<&News> {
+            static NEWS: News = News {
+                commercial: String::new(),
+                story: String::new(),
+            };
+            matches!(self.fault, Fault::NewsInFlight).then_some(&NEWS)
+        }
+
+        fn news_picture(&self) -> Option<i16> {
+            matches!(self.fault, Fault::NewsPictureInFlight).then_some(9000)
+        }
+
+        fn recharge_enabled(&self) -> bool {
+            matches!(self.fault, Fault::RechargeInFlight)
+        }
+    }
 
     /// The clause `fault` breaks, as `check_contract` names it.
     fn clause(fault: Fault) -> String {
@@ -1652,6 +1847,88 @@ mod tests {
                 clause(fault)
             );
         }
+    }
+
+    #[test]
+    fn a_port_answering_in_flight_breaks_the_contract() {
+        for fault in [
+            Fault::MarketInFlight,
+            Fault::NewsInFlight,
+            Fault::NewsPictureInFlight,
+            Fault::RechargeInFlight,
+        ] {
+            let clause = clause(fault);
+            assert!(
+                clause.starts_with("the port answers only while landed"),
+                "{fault:?}: {clause}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_trade_with_no_market_answered_or_changing_the_frame_breaks_the_contract() {
+        for fault in [Fault::TradesWithoutAMarket, Fault::TradeChangesTheFrame] {
+            let clause = clause(fault);
+            assert!(
+                clause.starts_with("no trade without a market"),
+                "{fault:?}: {clause}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fake_docked_with_its_port_open_meets_the_contract() {
+        let mut docked = FakeFlight::new();
+        docked.set_frame(FlightFrame {
+            landed: Some(StellarId(128)),
+            ..stellar(128)
+        });
+        let port = docked.port_mut();
+        port.market = Some(Market::default());
+        port.news = Some(News::default());
+        port.news_picture = Some(9000);
+        port.recharge_enabled = true;
+        assert_eq!(
+            check_contract(&mut docked),
+            Ok(()),
+            "docked, with an exchange, which may trade as it will"
+        );
+    }
+
+    #[test]
+    fn the_fake_answers_nothing_of_the_port_until_scripted_then_as_scripted() {
+        let mut fake = FakeFlight::new();
+        assert_eq!(fake.market(), None);
+        assert_eq!(fake.mission_info().rows, []);
+        assert_eq!(fake.ship_naming(ShipId(129)), Err(ShipRefusal::NoShipyard));
+        assert_eq!(fake.offer_gap(), OFFER_GAP_TICKS);
+        assert!(!fake.refusable_offer_dialog(MissionId(130)));
+        let port = fake.port_mut();
+        port.market = Some(Market::default());
+        port.recharge_enabled = true;
+        port.news = Some(News::default());
+        port.news_picture = Some(9000);
+        port.seen_intro = true;
+        port.refusable = vec![MissionId(130)];
+        port.outfitter = Some(Outfitter::default());
+        port.offer_gap = Some(45);
+        let info = MissionInfo {
+            rows: Vec::new(),
+            today: "Today.".to_owned(),
+        };
+        port.mission_info = Some(info.clone());
+        assert_eq!(fake.market(), Some(Market::default()));
+        assert!(fake.recharge_enabled());
+        assert_eq!(fake.news(), Some(&News::default()));
+        assert_eq!(fake.news_picture(), Some(9000));
+        assert!(fake.seen_intro());
+        assert!(fake.refusable_offer_dialog(MissionId(130)));
+        assert!(!fake.refusable_offer_dialog(MissionId(131)));
+        assert_eq!(fake.outfitter(), Some(Outfitter::default()));
+        assert_eq!(fake.mission_info(), info);
+        assert_eq!(fake.offer_gap(), 45);
+        assert_eq!(fake.shipyard(), None);
+        assert_eq!(fake.escorts_for_hire(), None);
     }
 
     #[test]
