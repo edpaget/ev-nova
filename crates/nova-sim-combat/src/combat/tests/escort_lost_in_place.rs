@@ -33,7 +33,7 @@ pub(super) fn escort() -> Ship {
 
 /// The player at (`x`, `y`), standing there for the contact passes.
 pub(super) fn player_at(combat: &mut Combat, x: f32, y: f32) -> Ship {
-    combat.stood.insert(ShipRef::Player, Vec2::new(x, y));
+    combat.player_stood = Some(Vec2::new(x, y));
     Ship {
         id: ShipRef::Player,
         fleet: ShipRef::Player,

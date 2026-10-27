@@ -386,8 +386,10 @@ fn point_defence_passes_a_missile_that_touched_the_player_where_it_stood() {
         ..Ship::at(0, 0.0, 300.0)
     };
     let mut ships = [Ship::at(1, -300.0, 0.0), player, Ship::at(4, 300.0, 0.0)];
-    let mut combat = Combat::default();
-    combat.stood.insert(ShipRef::Player, Vec2::new(0.0, -100.0));
+    let mut combat = Combat {
+        player_stood: Some(Vec2::new(0.0, -100.0)),
+        ..Combat::default()
+    };
     fly(
         &mut combat,
         (still_missile(), A, ShotLayer::Homing),

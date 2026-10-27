@@ -15,14 +15,14 @@ fn ships() -> Vec<Ship> {
 }
 
 #[test]
-fn a_lineup_reads_each_ship_where_it_stands_and_again_where_it_is_seen() {
+fn a_lineup_reads_each_ship_where_it_is_and_again_where_it_is_seen() {
     let mut ships = ships();
     let fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     let govts = Governments::default();
     let seen_at = [Vec2::new(5.0, 5.0), Vec2::new(50.0, 50.0)];
     let lineup = Lineup::new(&fighters, &seen_at, &govts, Default::default());
     for (index, fighter) in fighters.iter().enumerate() {
-        assert_eq!(lineup.stood[index], fighter.as_target());
+        assert_eq!(lineup.world[index], fighter.as_target());
         let seen = Target {
             position: seen_at[index],
             ..fighter.as_target()
@@ -30,7 +30,7 @@ fn a_lineup_reads_each_ship_where_it_stands_and_again_where_it_is_seen() {
         assert_eq!(lineup.seen[index], seen);
         assert_eq!(lineup.sights[index], fighter.sight());
     }
-    assert_eq!(lineup.sides().targets, &lineup.stood[..]);
+    assert_eq!(lineup.sides().targets, &lineup.world[..]);
     assert_eq!(lineup.seen_sides().targets, &lineup.seen[..]);
 }
 
@@ -56,7 +56,7 @@ fn a_struck_ship_is_read_again_whole_in_each_view_at_its_own_place() {
     struck.cloaked = true;
     let before = lineup.sights[1];
     // A is changed too, but nothing struck it.
-    let unstruck = lineup.stood[0];
+    let unstruck = lineup.world[0];
     let unstruck_sight = lineup.sights[0];
     fighters[0].state.velocity = Vec2::new(7.0, 7.0);
     fighters[0].jamming = Jamming([50, 0, 0, 0]);
@@ -65,11 +65,11 @@ fn a_struck_ship_is_read_again_whole_in_each_view_at_its_own_place() {
         disabled: true,
         ..fighters[1].as_target()
     };
-    let stood = Target {
+    let world = Target {
         position: Vec2::new(0.0, -100.0),
         ..reread
     };
-    assert_eq!(lineup.stood[1], stood);
+    assert_eq!(lineup.world[1], world);
     let seen = Target {
         position: seen_at[1],
         ..reread
@@ -82,7 +82,7 @@ fn a_struck_ship_is_read_again_whole_in_each_view_at_its_own_place() {
     };
     assert_ne!(sight, before);
     assert_eq!(lineup.sights[1], sight);
-    assert_eq!(lineup.stood[0], unstruck, "A was not struck");
+    assert_eq!(lineup.world[0], unstruck, "A was not struck");
     assert_eq!(lineup.sights[0], unstruck_sight, "nor read again");
     assert_eq!(fighters[0].ship, A);
 }

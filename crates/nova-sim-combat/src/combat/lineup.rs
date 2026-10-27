@@ -28,15 +28,15 @@ use crate::govt::Governments;
 
 /// The fight's ships as a loop of landings reads them, one entry for each
 /// fighter, in the fighters' order, in two views: where the blasts, the
-/// fuses and the sub-munitions meet them (`stood`: each NPC where it stood
-/// as the last tick ran, the player where it is), and where the loop's
-/// other tests meet them (`seen`: contact meets the player where it stood
-/// last tick, `Combat::hit_pass`; `_HandleShot`'s moves and locks meet
-/// every ship where it is now, `Combat::handle_shots`). Each ship a
-/// landing strikes is read again after it ([`Lineup::refresh`]).
+/// fuses and the sub-munitions meet them (`world`: every ship where it
+/// is), and where the loop's other tests meet them (`seen`: contact meets
+/// the player where it stood as the last tick closed, `Combat::hit_pass`;
+/// `_HandleShot`'s moves and locks meet every ship where it is,
+/// `Combat::handle_shots`). Each ship a landing strikes is read again
+/// after it ([`Lineup::refresh`]).
 pub(super) struct Lineup<'a> {
-    /// Each ship where the blasts and fuses meet it.
-    pub(super) stood: Vec<Target>,
+    /// Each ship where the blasts and fuses meet it: where it is.
+    pub(super) world: Vec<Target>,
     /// Each ship where the loop's other tests meet it.
     pub(super) seen: Vec<Target>,
     /// Each ship's jamming and sight, which a homing shot reads.
@@ -50,8 +50,8 @@ pub(super) struct Lineup<'a> {
 }
 
 impl<'a> Lineup<'a> {
-    /// The ships of `fighters`, each standing where the blasts meet it,
-    /// and seen at its place among `seen_at`, by `govts`' relations,
+    /// The ships of `fighters`, each where it is for the blasts, and seen
+    /// at its place among `seen_at`, by `govts`' relations,
     /// `pass_through`'s player and `beam_planet_flag`'s beam bit.
     pub(super) fn new(
         fighters: &[Fighter],
@@ -59,8 +59,8 @@ impl<'a> Lineup<'a> {
         govts: &'a Governments,
         (pass_through, beam_planet_flag): (PassThrough, BeamPlanetFlag),
     ) -> Self {
-        let stood: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        let seen = stood
+        let world: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        let seen = world
             .iter()
             .zip(seen_at)
             .map(|(target, &position)| Target {
@@ -69,7 +69,7 @@ impl<'a> Lineup<'a> {
             })
             .collect();
         Self {
-            stood,
+            world,
             seen,
             sights: fighters.iter().map(Fighter::sight).collect(),
             govts,
@@ -78,10 +78,10 @@ impl<'a> Lineup<'a> {
         }
     }
 
-    /// The hit rules among the ships where they stand.
+    /// The hit rules among the ships where they are.
     pub(super) fn sides(&self) -> Sides<'_> {
         Sides {
-            targets: &self.stood,
+            targets: &self.world,
             govts: self.govts,
             pass_through: self.pass_through,
             beam_planet_flag: self.beam_planet_flag,
@@ -108,7 +108,7 @@ impl<'a> Lineup<'a> {
     ) {
         for (index, fighter) in fighters.iter().enumerate() {
             if struck.contains(&fighter.ship) {
-                reread(fighter, &mut self.stood[index], rule);
+                reread(fighter, &mut self.world[index], rule);
                 reread(fighter, &mut self.seen[index], rule);
                 self.sights[index] = fighter.sight();
             }

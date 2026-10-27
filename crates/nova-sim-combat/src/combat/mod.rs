@@ -95,10 +95,10 @@
 //! 2. The hit pass (`Combat::hit_pass`, [`Combat::test_hits`]): each shot
 //!    that moved in the last tick is tested on that move, as the original's next frame tests
 //!    it before `_HandleShot` moves it again; a shot fired since has not
-//!    moved, and is not tested. The pass meets each NPC where it stood as
-//!    the last tick ran and the player where it is now, but for contact
-//!    and point defence's sprites, which meet the player where it stood
-//!    too. In the original's order (see the `collision` module):
+//!    moved, and is not tested. The pass meets every ship where it is now,
+//!    but for contact and point defence's sprites, which meet the player
+//!    where it stood as the last tick closed. In the original's order (see
+//!    the `collision` module):
 //!    - The contact passes: for each shot layer in turn (the shots, the
 //!      homing missiles, then the turret shots drawn over the ships), the
 //!      ships are walked by layer, top first, and within a layer in the
@@ -1309,15 +1309,12 @@ pub struct Combat {
     /// How a proximity fuse is set off by a ship
     /// ([`RuleKey::ProximityFuse`](crate::RuleKey::ProximityFuse)).
     proximity_fuse: ProximityFuse,
-    /// Where each ship stood as the last tick ran, which the next tick's
-    /// hit pass and ends of life meet it at (see `Combat::hit_pass`). A
-    /// session that runs the traffic's motion between the fight's phases,
-    /// as `_DoPlayGameWork` does (`nova_sim::Session::game_work`), moves
-    /// no NPC between one tick's close and the next tick's hit pass, so
-    /// there each NPC's entry is where it is; the player's still differs,
-    /// as `_HandlePlayer` moves it before the passes. A session that runs
-    /// the traffic before the whole fight needs the NPCs' too.
-    stood: BTreeMap<ShipRef, Vec2>,
+    /// Where the player stood as the last tick closed, which the next
+    /// tick's contact and point defence's sprites meet it at (see
+    /// `Combat::hit_pass`): `_HandlePlayer` moves it before the collision
+    /// passes. Every NPC is met where it is, as the original reads each
+    /// ship's record live (`_HandleShot`'s blasts @0x3603c-0x3605b).
+    player_stood: Option<Vec2>,
     /// What the asteroids the shots and the beams destroyed left, since
     /// it was last taken, in the order they were destroyed
     /// ([`Combat::take_asteroid_remains`]).
@@ -2566,11 +2563,11 @@ impl Combat {
     /// Point defence's [`CombatEvent::ShotDown`] follows the contact
     /// passes' events.
     ///
-    /// The pass meets each NPC where it stood as the last tick ran, as
-    /// its last `_HandleShip` left it, and the player where it is now, as
-    /// `_HandlePlayer` has moved it; a ship not in the last tick's fight is
-    /// met where it is. Contact and the point-defence layer meet the
-    /// player where it stood last tick too: their sprites are placed
+    /// The pass meets each NPC where it is, as its last `_HandleShip` left
+    /// it (@0x3428f-0x342aa), and the player where it is now, as
+    /// `_HandlePlayer` has moved it. Contact and the point-defence layer
+    /// meet the player where it stood as the last tick closed, or where it
+    /// is if it was not in that tick's fight: their sprites are placed
     /// relative to the player as it stood when the shots moved
     /// (`_HandleShot` @0x35c48-0x35cc0), and the player's own is always
     /// at the screen's centre (@0x2cd32-0x2cd9d). The fuse, the blasts
@@ -2609,8 +2606,7 @@ impl Combat {
             asteroids: &mut none,
             types: &asteroid_walk::NO_TYPES,
         });
-        let now = self.stand_where_they_stood(fighters);
-        let player_stood = self.stood.get(&ShipRef::Player).copied();
+        let player_stood = self.player_stood;
         let touchable_at: Vec<Vec2> = fighters
             .iter()
             .map(|fighter| match player_stood {
@@ -2629,29 +2625,7 @@ impl Combat {
             chance,
             (stellars, &mut field),
         );
-        for (fighter, position) in fighters.iter_mut().zip(now) {
-            fighter.state.position = position;
-        }
         self.settle_struck(fighters, first_strike, rule);
-    }
-
-    /// Puts each NPC among `fighters` where it stood as the last tick ran
-    /// (see [`Combat::hit_pass`]), one not in the last tick's fight where
-    /// it is, and gives where every fighter is now, to put them back.
-    fn stand_where_they_stood(&self, fighters: &mut [Fighter]) -> Vec<Vec2> {
-        let now: Vec<Vec2> = fighters
-            .iter()
-            .map(|fighter| fighter.state.position)
-            .collect();
-        for fighter in fighters
-            .iter_mut()
-            .filter(|fighter| fighter.ship != ShipRef::Player)
-        {
-            if let Some(&at) = self.stood.get(&fighter.ship) {
-                fighter.state.position = at;
-            }
-        }
-        now
     }
 
     /// Each ship among `fighters` struck since `first_strike` and still
@@ -3258,7 +3232,7 @@ impl Combat {
         self.beams.clear();
         self.slots.clear();
         self.ended_beams = 0;
-        self.stood.clear();
+        self.player_stood = None;
     }
 }
 
@@ -8904,21 +8878,31 @@ mod tests {
         let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
         let mut combat = Combat::default();
         let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(planet_gun())];
-        tick_by(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
-        // A moves off, and the hit pass meets it where it stood a tick
-        // later; then the shot turns on it, out of its way.
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        // A moves off, out of the shot's way; then the shot turns on it.
         ships[0] = Ship::at(1, 0.0, 1000.0);
-        tick_by(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
         for shot in &mut combat.shots {
             shot.source = Source::Other;
             shot.target = Some(A);
             shot.aimed_at = Some(A);
         }
-        let mut strikes = Vec::new();
+        // Its sixth move, from 75 to 90, enters the stellar.
         for _ in 0..6 {
-            tick_by(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
-            strikes.extend(combat.take_stellar_strikes());
+            phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
         }
+        phase::run(
+            &mut combat,
+            &mut ships,
+            &NovaDisable,
+            |combat, fighters, arena, chance| {
+                let scenery = Scenery {
+                    stellars: &mut stellars,
+                    ..Scenery::default()
+                };
+                combat.test_hits(fighters, arena, scenery, chance);
+            },
+        );
+        let strikes = combat.take_stellar_strikes();
         assert_eq!(
             strikes,
             [StellarStrike {
@@ -14246,14 +14230,14 @@ mod tests {
             combat.slots.hold(slot);
         }
         combat.ended_beams = 5;
-        combat.stood.insert(B, Vec2::new(1.0, 2.0));
+        combat.player_stood = Some(Vec2::new(1.0, 2.0));
         let ended = combat.shots[0];
         combat.hide(ended);
         combat.clear();
         assert_eq!((combat.slots.held().count(), combat.ended_beams), (0, 0));
         assert_eq!(combat.shots(), []);
         assert_eq!(combat.hidden, [], "the shots point defence ended");
-        assert_eq!(combat.stood, BTreeMap::new(), "where the ships stood");
+        assert_eq!(combat.player_stood, None, "where the player stood");
     }
 
     // The hit pass: each move tested in the tick after it is made, as
@@ -14383,14 +14367,14 @@ mod tests {
         }
     }
 
-    /// The ships struck when, after a quiet tick with `ships` where they
-    /// stood, they move as `moved` says and the hit pass tests `shot`.
+    /// The ships struck when, after a tick's close with `ships` where
+    /// they stood, they move as `moved` says and the hit pass tests `shot`.
     fn struck_after(ships: &mut [Ship], moved: impl Fn(&mut [Ship]), shot: &Shot) -> Vec<ShipRef> {
         let mut combat = Combat::default();
-        tick(&mut combat, ships, &NovaDisable);
+        phase::close_tick(&mut combat, ships, &NovaDisable);
         moved(ships);
         combat.put_in_flight(*shot);
-        tick(&mut combat, ships, &NovaDisable);
+        phase::test_hits(&mut combat, ships, &NovaDisable);
         combat
             .take_strikes()
             .iter()
@@ -14407,19 +14391,19 @@ mod tests {
     }
 
     #[test]
-    fn the_hit_pass_meets_an_npc_where_it_stood_last_tick_and_the_player_where_it_is_now() {
+    fn the_hit_pass_meets_an_npc_where_it_is_and_the_players_touch_where_it_stood_last_tick() {
         let touching = flown_by_c(blaster(), Vec2::new(10.0, 0.0));
         let to =
             |x: f32, y: f32| move |ships: &mut [Ship]| ships[0].state.position = Vec2::new(x, y);
-        // An NPC is met where its last move left it, not where the traffic
-        // has since moved it.
+        // An NPC is met where it is, as the collision passes read its
+        // sprite where its `_HandleShip` left it (@0x3428f-0x342aa).
         assert_eq!(
             struck_after(&mut [Ship::at(2, 0.0, 0.0)], to(500.0, 0.0), &touching),
-            [B]
+            []
         );
         assert_eq!(
             struck_after(&mut [Ship::at(2, 500.0, 0.0)], to(0.0, 0.0), &touching),
-            []
+            [B]
         );
         // The player's touch is where it stood as the shot moved, its
         // sprite at the screen's centre.
@@ -14448,11 +14432,11 @@ mod tests {
             struck_after(&mut [the_player_at(10.0, 25.0)], to(500.0, 0.0), &fused),
             []
         );
-        // A ship not in the last tick's fight is met where it is.
+        // A player not in the last tick's fight is met where it is.
         let mut combat = Combat::default();
         combat.put_in_flight(touching);
-        let mut ships = [Ship::at(2, 0.0, 0.0)];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        let mut ships = [the_player_at(0.0, 0.0)];
+        phase::test_hits(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.take_strikes().len(), 1, "met where it is");
     }
 
@@ -14463,7 +14447,7 @@ mod tests {
         let meets = |stood: f32, now: f32| {
             let mut combat = Combat::default();
             let mut ships = [the_player_at(stood, 0.0)];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
             put(&mut combat, pd_shot(), A, Vec2::new(0.5, 100.0), Vec2::ZERO);
             let missile = put(
                 &mut combat,
@@ -14473,7 +14457,7 @@ mod tests {
                 Vec2::ZERO,
             );
             ships[0].state.position = Vec2::new(now, 0.0);
-            met(&mut combat, &mut ships);
+            phase::test_hits(&mut combat, &mut ships, &NovaDisable);
             flying(&combat, missile).is_none()
         };
         assert!(meets(0.6, 0.0), "seen from where it stood");

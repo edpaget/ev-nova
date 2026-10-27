@@ -326,7 +326,7 @@ impl Combat {
     /// `chance`, each live beam stamping its firer's last shot on the
     /// advance pass, point-defence beams hit their missiles, the beams'
     /// hits land, each ship they struck settles its condition (truncated
-    /// first for a newly downed player), and where each ship stands is
+    /// first for a newly downed player), and where the player stands is
     /// kept for the next tick's collision passes. As the fight's tick
     /// ends, what each ship's ion block shed is cleared
     /// ([`Ion::shed`](super::ion::Ion::shed)). Every ship has regenerated and
@@ -413,10 +413,10 @@ impl Combat {
         // the ship's next display step.
         self.settle_struck(fighters, first_strike, rule);
         self.ended_beams = beams_held.saturating_sub(self.beams.len());
-        self.stood = fighters
+        self.player_stood = fighters
             .iter()
-            .map(|fighter| (fighter.ship, fighter.state.position))
-            .collect();
+            .find(|fighter| fighter.ship == ShipRef::Player)
+            .map(|fighter| fighter.state.position);
         IonLockout::clear_shed(fighters);
     }
 

@@ -33,7 +33,7 @@
 
 use super::lineup::Lineup;
 use super::planet_type::BlastKind;
-use super::projectile::{Guide, Target};
+use super::projectile::Guide;
 use super::{Combat, Fighter, Landed, ShipRef, Sides, blasted, lock};
 use crate::chance::Chance;
 use crate::combat::CombatEvent;
@@ -43,14 +43,6 @@ use crate::combat::hull::DisableRule;
 use crate::combat::projectile::Shot;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
-
-/// Puts each of `fighters` at its place among `at`, a view of the
-/// [`Lineup`].
-fn place(fighters: &mut [Fighter], at: &[Target]) {
-    for (fighter, target) in fighters.iter_mut().zip(at) {
-        fighter.state.position = target.position;
-    }
-}
 
 impl Combat {
     /// `_HandleShot` for each shot slot in turn (see the module docs),
@@ -72,9 +64,9 @@ impl Combat {
     ///   visit, its own still held, and seeking among the ships as the
     ///   earlier visits left them; then it detonates, exploding where it
     ///   is and blasting the ships it reaches with its weapon's whole
-    ///   damage, weighing its `Reload` (@0x360a2), each NPC met where it
-    ///   stood as the last tick ran and the player where it is, as the
-    ///   collision passes meet them (`Combat::hit_pass`), or it fizzles;
+    ///   damage, weighing its `Reload` (@0x360a2), each ship met where it
+    ///   is, as the blast reads each ship's record (@0x3603c-0x3605b), or
+    ///   it fizzles;
     ///   its blast's hits land at once ([`Combat::land`]), and its slot is
     ///   freed (@0x3617c);
     /// - any other shot flies a tick ([`Shot::step`]), homing among the
@@ -102,12 +94,13 @@ impl Combat {
         asteroids: &[Option<Vec2>],
         chance: &mut dyn Chance,
     ) {
-        // Each NPC where it stood as the last tick ran, which the ends of
-        // life meet as the collision passes do, and each ship where it is
-        // now, which the moves and the locks meet.
-        let now_at = self.stand_where_they_stood(fighters);
+        // Every ship where it is, which the ends of life, the moves and the
+        // locks all meet.
+        let now_at: Vec<Vec2> = fighters
+            .iter()
+            .map(|fighter| fighter.state.position)
+            .collect();
         let mut lineup = Lineup::new(fighters, &now_at, govts, self.hit_readings());
-        place(fighters, &lineup.seen);
         let mut visit = 0;
         while visit < self.slot_bound() {
             if self.slots.is_held(visit) {
@@ -120,13 +113,13 @@ impl Combat {
                     let sides = lineup.sides();
                     let hits = self.end_life(&shot, fighters, &sides, arsenal, chance);
                     self.shots.retain(|flying| flying.slot != visit);
-                    self.land_at_visit(fighters, hits, (&mut lineup, true), rule);
+                    self.land_at_visit(fighters, hits, &mut lineup, rule);
                 } else {
                     self.move_shot(index, &lineup, asteroids, chance);
                     let sides = lineup.seen_sides();
                     let locked: Vec<Landed> =
                         lock(&self.shots[index], &sides).into_iter().collect();
-                    self.land_at_visit(fighters, locked, (&mut lineup, false), rule);
+                    self.land_at_visit(fighters, locked, &mut lineup, rule);
                 }
             }
             visit += 1;
@@ -167,15 +160,13 @@ impl Combat {
     }
 
     /// Lands `hits` among `fighters` at a visit ([`Combat::land`]), as
-    /// `rule` says, the ships standing where they stood when `standing`
-    /// (a blast's) and where they are now otherwise (a lock's); then each
-    /// ship struck settles its condition where it is now, and `lineup`
-    /// reads it again.
+    /// `rule` says, each ship where it is; then each ship struck settles
+    /// its condition, and `lineup` reads it again.
     fn land_at_visit(
         &mut self,
         fighters: &mut [Fighter],
         hits: Vec<Landed>,
-        (lineup, standing): (&mut Lineup, bool),
+        lineup: &mut Lineup,
         rule: &dyn DisableRule,
     ) {
         if hits.is_empty() {
@@ -183,11 +174,7 @@ impl Combat {
         }
         let first_strike = self.strikes.len();
         let struck: Vec<ShipRef> = hits.iter().map(|landed| landed.ship).collect();
-        if standing {
-            place(fighters, &lineup.stood);
-        }
         self.land(fighters, hits, rule);
-        place(fighters, &lineup.seen);
         self.settle_struck(fighters, first_strike, rule);
         lineup.refresh(fighters, &struck, rule);
     }
