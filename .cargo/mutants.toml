@@ -25,6 +25,9 @@ exclude_re = [
     "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace MapSource::(map_mission_systems|hypergate_cycle) -> Vec<[A-Za-z<>]+> with vec!\\[\\]$",
     "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace MapSource::floating_map_places -> FloatingLinks with Default::default\\(\\)$",
     "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace MapSource::has_explored -> bool with false$",
+    # `FlightSim::death_descs`'s default is "no sabotage": its body is
+    # already the empty list the mutant puts back.
+    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace FlightSim::death_descs -> Vec<i16> with vec!\\[\\]$",
     # An NPC's landing box widens below a turn of 8 (`npc_box`); at exactly
     # 8, trunc((9 - 8) x 8 + 32) is the plain box's 40, so `<=` gives the
     # same half-width.

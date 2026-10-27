@@ -350,6 +350,7 @@ fn beginning_the_fade_before_the_hold_expires_does_nothing() {
     let mut view = dying(PlayerFate::Holding { ticks_left: 3 }, false);
     view.begin_fade();
     assert_eq!(sent(&view), [FlightCommand::BeginFade], "refused");
+    assert!(view.death_fade.is_none(), "no fade begun");
     assert!(!view.death_frame(Duration::from_millis(1500)));
     assert_eq!(black_of(&view), None);
     assert!(!view.game_over());
@@ -576,6 +577,8 @@ fn the_fade_to_white_starts_as_the_frame_lights_the_screen_and_the_arrival_waits
         view.jump_effect().map(JumpEffect::phase),
         Some(JumpPhase::FadeOut(_))
     ));
+    view.fade_frame(TICK);
+    assert!(view.jump.is_some(), "a jump under way is no jump given up");
     if let Some(effect) = &mut view.jump {
         effect.advance(ms(750));
     }
@@ -644,6 +647,7 @@ fn a_jump_given_up_once_the_screen_is_lit_fades_back_from_white() {
 #[test]
 fn with_effects_off_the_arrival_flashes_white_once() {
     let mut view = faked(sol()).with_hyperspace_effects(false);
+    assert!(!view.hyperspace_effects());
     jump_now(&mut view);
     at_the_warps_end(&mut view, Vec::new());
     view.arrival_frame(faked_words());
@@ -658,6 +662,7 @@ fn with_effects_off_the_arrival_flashes_white_once() {
     assert_eq!(view.jump_effect(), None, "no fade in");
     let mut on = faked(sol()).with_hyperspace_effects(false);
     on.set_hyperspace_effects(true);
+    assert!(on.hyperspace_effects(), "set back on");
     jump_now(&mut on);
     lit(&mut on, 0.5);
     assert!(

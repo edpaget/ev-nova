@@ -625,6 +625,16 @@ fn a_real_flights_coming_traffic_is_the_types_its_session_brings() {
 }
 
 #[test]
+fn a_real_flights_death_descs_are_its_sessions() {
+    // Which they are: nova-sim's
+    // (`sabotage::tests::a_sessions_sabotage_death_descs_come_from_the_pilots_outfits`).
+    let mut sabotaged = multi_jumping();
+    sabotaged.outfits[0].mods[0] = (nova_sim::SABOTAGE_KILL, 5000);
+    assert_eq!(FlightView::new(sabotaged).sim.death_descs(), [5000]);
+    assert_eq!(flight().sim.death_descs(), Vec::<i16>::new());
+}
+
+#[test]
 fn npcs_stand_still_while_the_map_is_open_or_the_ship_is_landed() {
     let catalog = FakeCatalog {
         sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],

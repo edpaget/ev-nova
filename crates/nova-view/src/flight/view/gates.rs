@@ -57,14 +57,15 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             Answer::LandPress(LandPress::AtGate {
                 kind: GateKind::Hypergate,
                 ..
-            }) => match self.send(FlightCommand::OpenHypergate) {
-                Answer::Offered(offered) => {
+            }) => {
+                // Refused, a hypergate without links or no entry pending
+                // (`GateRefusal::NoLinks`, `NotAtGate`), says nothing
+                // (`FlightView::gate_refused`).
+                if let Answer::Offered(offered) = self.send(FlightCommand::OpenHypergate) {
                     self.map.offer_gates(offered);
                     self.open_map();
                 }
-                Answer::GateRefused(refusal) => self.gate_refused(refusal),
-                _ => {}
-            },
+            }
             Answer::LandPress(LandPress::AtGate {
                 kind: GateKind::Wormhole,
                 ..
