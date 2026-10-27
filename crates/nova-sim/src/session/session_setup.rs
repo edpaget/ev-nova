@@ -86,28 +86,28 @@ impl fmt::Debug for SessionSetup {
 /// ([`Session::carry_stellar_sprite_pool`]), what the traffic's berths
 /// keep ([`Session::with_kept_berths`]), and what the last galaxy refresh
 /// left hidden, for a new pilot's neighbour pass
-/// ([`Session::with_last_refresh`]). The default is a launch's: nothing
-/// carried.
+/// ([`Session::with_last_refresh`]). Each is handed on only when given:
+/// `None` leaves the session's own, and the default carries nothing. A
+/// session's [`Session::carry_over`] gives every one.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CarryOver {
     /// The ship and shot slots' layers, frames and places.
-    pub slot_sprites: SlotSprites,
+    pub slot_sprites: Option<SlotSprites>,
     /// The stellar sprite pool.
-    pub stellar_sprite_pool: StellarSpritePool,
+    pub stellar_sprite_pool: Option<StellarSpritePool>,
     /// What the traffic's berths keep.
-    pub kept_berths: KeptBerths,
+    pub kept_berths: Option<KeptBerths>,
     /// What the last galaxy refresh left hidden: handed only to a new
-    /// pilot's session, `None` for the rest and at launch. A session's
-    /// [`Session::carry_over`] always gives its own.
+    /// pilot's session.
     pub last_refresh: Option<LastRefresh>,
 }
 
 impl Session {
     /// This session set up with `setup`, as the builders set it up in the
     /// order the app's edge chained them: the disable rule, the rule set,
-    /// the slot sprites, the stellar sprite pool, the kept berths, the
-    /// hire terms, the control bits, the persons, the string lists when
-    /// given, and a new pilot's last refresh when given.
+    /// the slot sprites, the stellar sprite pool and the kept berths when
+    /// carried, the hire terms, the control bits, the persons, the string
+    /// lists when given, and a new pilot's last refresh when carried.
     #[must_use]
     pub fn set_up(self, setup: SessionSetup) -> Self {
         let SessionSetup {
@@ -119,20 +119,23 @@ impl Session {
             strings,
             carry,
         } = setup;
-        let mut session = self
-            .with_disable_rule(disable_rule)
-            .with_rules(rules)
-            .with_slot_sprites(carry.slot_sprites);
-        session.carry_stellar_sprite_pool(carry.stellar_sprite_pool);
-        let session = session
-            .with_kept_berths(carry.kept_berths)
+        let mut session = self.with_disable_rule(disable_rule).with_rules(rules);
+        if let Some(slot_sprites) = carry.slot_sprites {
+            session = session.with_slot_sprites(slot_sprites);
+        }
+        if let Some(pool) = carry.stellar_sprite_pool {
+            session.carry_stellar_sprite_pool(pool);
+        }
+        if let Some(kept) = carry.kept_berths {
+            session = session.with_kept_berths(kept);
+        }
+        session = session
             .with_hire_terms(hire_terms)
             .with_control_bits(control_bits)
             .with_person_rules(person_rules);
-        let session = match strings {
-            Some(strings) => session.with_strings(strings),
-            None => session,
-        };
+        if let Some(strings) = strings {
+            session = session.with_strings(strings);
+        }
         match carry.last_refresh {
             Some(carried) => session.with_last_refresh(carried),
             None => session,
@@ -140,16 +143,17 @@ impl Session {
     }
 
     /// What this session hands on to the next flight of the run
-    /// ([`CarryOver`]): its slot sprites ([`Session::slot_sprites`]), its
-    /// stellar sprite pool ([`Session::stellar_sprite_pool`]), its kept
-    /// berths ([`Session::kept_berths`]) and its last refresh
+    /// ([`CarryOver`]), every part of it: its slot sprites
+    /// ([`Session::slot_sprites`]), its stellar sprite pool
+    /// ([`Session::stellar_sprite_pool`]), its kept berths
+    /// ([`Session::kept_berths`]) and its last refresh
     /// ([`Session::last_refresh`]).
     #[must_use]
     pub fn carry_over(&self) -> CarryOver {
         CarryOver {
-            slot_sprites: self.slot_sprites().clone(),
-            stellar_sprite_pool: self.stellar_sprite_pool().clone(),
-            kept_berths: self.kept_berths(),
+            slot_sprites: Some(self.slot_sprites().clone()),
+            stellar_sprite_pool: Some(self.stellar_sprite_pool().clone()),
+            kept_berths: Some(self.kept_berths()),
             last_refresh: Some(self.last_refresh()),
         }
     }
@@ -203,9 +207,9 @@ mod tests {
             person_rules: Rc::new(NovaPersons::default()),
             strings: Some(Rc::new(Lists)),
             carry: CarryOver {
-                slot_sprites,
-                stellar_sprite_pool,
-                kept_berths: traffic.kept_berths(),
+                slot_sprites: Some(slot_sprites),
+                stellar_sprite_pool: Some(stellar_sprite_pool),
+                kept_berths: Some(traffic.kept_berths()),
                 last_refresh: Some(LastRefresh::hiding([SystemId(131)])),
             },
         }
@@ -214,18 +218,19 @@ mod tests {
     /// `session` set up with `setup` by the builders, one at a time, in
     /// the order the app's edge chained them.
     fn chained(session: Session, setup: SessionSetup) -> Session {
+        let carry = setup.carry;
         let mut session = session
             .with_disable_rule(setup.disable_rule)
             .with_rules(setup.rules)
-            .with_slot_sprites(setup.carry.slot_sprites);
-        session.carry_stellar_sprite_pool(setup.carry.stellar_sprite_pool);
+            .with_slot_sprites(carry.slot_sprites.expect("slot sprites"));
+        session.carry_stellar_sprite_pool(carry.stellar_sprite_pool.expect("a pool"));
         let session = session
-            .with_kept_berths(setup.carry.kept_berths)
+            .with_kept_berths(carry.kept_berths.expect("kept berths"))
             .with_hire_terms(setup.hire_terms)
             .with_control_bits(setup.control_bits)
             .with_person_rules(setup.person_rules)
             .with_strings(setup.strings.expect("lists"));
-        session.with_last_refresh(setup.carry.last_refresh.expect("a refresh"))
+        session.with_last_refresh(carry.last_refresh.expect("a refresh"))
     }
 
     #[test]
@@ -247,18 +252,19 @@ mod tests {
     }
 
     #[test]
-    fn a_setup_without_lists_or_a_refresh_leaves_the_sessions_own() {
-        let built = Session::start(&catalog()).expect("starts");
-        let set_up = built.clone().set_up(SessionSetup {
-            strings: None,
-            carry: CarryOver {
-                last_refresh: None,
-                ..CarryOver::default()
-            },
-            ..SessionSetup::default()
-        });
-        assert_eq!(set_up.setup.strings, built.setup.strings, "its own lists");
-        assert_eq!(set_up.chart.carried_refresh, None, "no refresh carried");
+    fn a_default_setup_leaves_a_built_session_as_it_was() {
+        for catalog in [catalog(), crate::session::tests::three_stellars()] {
+            let built = Session::start(&catalog).expect("starts");
+            let mut set_up = built.clone().set_up(SessionSetup::default());
+            assert_eq!(set_up.setup.strings, built.setup.strings, "its own lists");
+            assert_eq!(set_up.chart.carried_refresh, None, "no refresh carried");
+            // The ports are Nova's afresh, and compare by their handle.
+            set_up.setup.disable_rule = built.setup.disable_rule.clone();
+            set_up.setup.hire_terms = built.setup.hire_terms.clone();
+            set_up.setup.control_bits = built.setup.control_bits.clone();
+            set_up.setup.person_rules = built.setup.person_rules.clone();
+            assert_eq!(set_up, built);
+        }
     }
 
     #[test]
@@ -267,10 +273,13 @@ mod tests {
         let carried = setup.carry.clone();
         let session = Session::start(&catalog()).expect("starts").set_up(setup);
         let over = session.carry_over();
-        assert_eq!(over.slot_sprites, *session.slot_sprites());
+        assert_eq!(over.slot_sprites.as_ref(), Some(session.slot_sprites()));
         assert_eq!(over.slot_sprites, carried.slot_sprites);
-        assert_eq!(over.stellar_sprite_pool, *session.stellar_sprite_pool());
-        assert_eq!(over.kept_berths, session.kept_berths());
+        assert_eq!(
+            over.stellar_sprite_pool.as_ref(),
+            Some(session.stellar_sprite_pool())
+        );
+        assert_eq!(over.kept_berths, Some(session.kept_berths()));
         assert_eq!(over.kept_berths, carried.kept_berths);
         assert_eq!(over.last_refresh, Some(session.last_refresh()));
     }
