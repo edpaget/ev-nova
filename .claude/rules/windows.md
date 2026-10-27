@@ -22,9 +22,12 @@ On Windows, `Path::join` uses `\`, so `Path::new("/data").join("Broken")`
 displays as `/data\Broken`.
 
 - When a test compares *text* that holds a path (a warning, an error message,
-  a log line), build the expected text with `Path`/`PathBuf`: `join`, then
-  `display()`. Never write a literal `/` or `\` separator into the expected
-  string.
+  a log line, a command's args), build the expected text with
+  `Path`/`PathBuf`: `join`, then `display()`. Start from the same base the
+  code under test uses: a base it read as a string (cargo metadata, a config
+  value) keeps its `/`, so a base rebuilt with `join` won't match. See
+  `path-text-in-tests.md`. Never write a literal `/` or `\` separator into
+  the expected string.
 - Comparing a `Path` with a `Path` (`assert_eq!(x.path, Path::new("/d/one"))`)
   is fine as it is: paths compare by component, so `/` matches `\`.
 - Fix the test, not the production output, unless the output is wrong for a

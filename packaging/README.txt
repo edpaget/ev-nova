@@ -39,16 +39,14 @@ last time, else those of an `EV Nova.app` in /Applications or
 folder, and remembers your pick. It logs its startup to
 ~/Library/Logs/nova/nova.log.
 
-Nova.app is ad-hoc signed but not notarized, so macOS blocks a downloaded
-copy the first time. Try to open it once, then choose Open Anyway in
-System Settings > Privacy & Security, or run
+Nova.app and nova-dump are signed with a Developer ID and notarized by
+Apple, so Nova.app opens with a double-click, and nova-dump copied out of
+the .dmg runs from a terminal as it is.
 
-  xattr -dr com.apple.quarantine /Applications/Nova.app
-
-nova-dump still runs from a terminal; copy it out of the .dmg and clear
-its quarantine the same way:
-
-  xattr -d com.apple.quarantine nova-dump
+A build made without the signing keys (a local `mise run bundle`) is
+ad-hoc signed instead: macOS blocks a downloaded copy of it until you
+choose Open Anyway in System Settings > Privacy & Security, or run
+`xattr -dr com.apple.quarantine /Applications/Nova.app`.
 
 Windows: SmartScreen may warn about an unknown publisher. Choose
 "More info", then "Run anyway".
