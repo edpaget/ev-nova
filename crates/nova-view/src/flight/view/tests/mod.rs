@@ -98,6 +98,7 @@ mod map_borders;
 mod map_find;
 mod maps;
 mod missions;
+mod names;
 mod nav;
 mod outputs;
 mod pilot;

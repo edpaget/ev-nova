@@ -32,11 +32,11 @@ use nova_sim::{JumpReadiness, PlayerFate};
 
 use nova_sim::mission::screens::OFFER_GAP_TICKS;
 use nova_sim::{
-    Direction, Good, HireList, Lot, Market, MissionInfo, News, Order, Outfitter, ShipNaming,
-    ShipRefusal, Shipyard,
+    Direction, Good, HireList, JunkId, Lot, Market, MissionInfo, News, Order, OutfitId, Outfitter,
+    ShipNaming, ShipRefusal, Shipyard,
 };
 
-use super::{CommSource, FlightSim, MapSource, PortSource};
+use super::{CommSource, FlightSim, MapSource, NameSource, PortSource};
 
 /// A scripted [`FlightSim`]: it shows the frame it was given, records
 /// each command in the order sent, answers each from a queue
@@ -55,8 +55,9 @@ use super::{CommSource, FlightSim, MapSource, PortSource};
 /// the queue is empty, as its raw text unchanged, resolving nothing; it
 /// records each load ([`FakeFlight::descriptions_loaded`]). It gives the death
 /// `dësc`s it is given ([`FakeFlight::set_death_descs`]), and answers
-/// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]) and
-/// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]). It
+/// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]),
+/// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]) and
+/// [`NameSource`] from [`FakeNames`] ([`FakeFlight::names_mut`]). It
 /// answers the message line's commands ([`FlightCommand::CommShown`],
 /// [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`])
 /// done without taking an answer from the queue, as the message line's
@@ -81,6 +82,7 @@ pub struct FakeFlight {
     death_descs: Vec<i16>,
     comm: FakeComm,
     port: FakePort,
+    names: FakeNames,
 }
 
 /// What a [`FakeFlight`] answers the [`CommSource`] questions with, each
@@ -126,6 +128,43 @@ pub struct FakePort {
     pub ship_naming: Option<Result<ShipNaming, ShipRefusal>>,
     /// [`PortSource::offer_gap`]'s answer; [`OFFER_GAP_TICKS`] when `None`.
     pub offer_gap: Option<u32>,
+}
+
+/// What a [`FakeFlight`] answers the [`NameSource`] questions with, each
+/// field the answer to the question of its name, a list of what it names
+/// for the questions that take one. The default names nothing, as a
+/// [`NameSource`]'s defaults do.
+#[derive(Clone, Debug, Default)]
+pub struct FakeNames {
+    /// The ship classes [`NameSource::ship_name`] names, with their names.
+    pub ship_names: Vec<(ShipId, String)>,
+    /// The ship classes [`NameSource::ship_long_name`] names, with their
+    /// long names.
+    pub ship_long_names: Vec<(ShipId, String)>,
+    /// The outfits [`NameSource::outfit_name`] names, with their names.
+    pub outfit_names: Vec<(OutfitId, String)>,
+    /// The outfits [`NameSource::outfit_names`] names, with their
+    /// lower-case names and plurals.
+    pub outfit_lc_names: Vec<(OutfitId, (String, String))>,
+    /// The goods [`NameSource::good_name`] names, with their names.
+    pub good_names: Vec<(Good, String)>,
+    /// The `jünk`s [`NameSource::junk_lc_name`] names, with their
+    /// lower-case names.
+    pub junk_lc_names: Vec<(JunkId, String)>,
+    /// [`NameSource::cargo_name`]'s `STR#` 4001, by index.
+    pub cargo_names: Vec<String>,
+    /// [`NameSource::player_ship_name`]'s answer.
+    pub player_ship_name: Option<String>,
+    /// [`NameSource::long_date`]'s answer.
+    pub long_date: String,
+}
+
+/// The name `names` gives `id`, if it lists one.
+fn named<'a, K: PartialEq, V>(names: &'a [(K, V)], id: &K) -> Option<&'a V> {
+    names
+        .iter()
+        .find(|(listed, _)| listed == id)
+        .map(|(_, name)| name)
 }
 
 /// What a [`FakeFlight`] answers the [`MapSource`] questions with, each
@@ -322,6 +361,11 @@ impl FakeFlight {
     /// What the spaceport's questions are answered with, to script.
     pub fn port_mut(&mut self) -> &mut FakePort {
         &mut self.port
+    }
+
+    /// What the wording's names and date are answered with, to script.
+    pub fn names_mut(&mut self) -> &mut FakeNames {
+        &mut self.names
     }
 
     /// The map's questions asked whose arguments matter, in the order
@@ -552,6 +596,44 @@ impl PortSource for FakeFlight {
 
     fn offer_gap(&mut self) -> u32 {
         self.port.offer_gap.unwrap_or(OFFER_GAP_TICKS)
+    }
+}
+
+impl NameSource for FakeFlight {
+    fn ship_name(&self, ship: ShipId) -> Option<&str> {
+        named(&self.names.ship_names, &ship).map(String::as_str)
+    }
+
+    fn ship_long_name(&self, ship: ShipId) -> Option<&str> {
+        named(&self.names.ship_long_names, &ship).map(String::as_str)
+    }
+
+    fn outfit_name(&self, outfit: OutfitId) -> Option<&str> {
+        named(&self.names.outfit_names, &outfit).map(String::as_str)
+    }
+
+    fn outfit_names(&self, outfit: OutfitId) -> Option<(&str, &str)> {
+        named(&self.names.outfit_lc_names, &outfit).map(|(name, plural)| (&**name, &**plural))
+    }
+
+    fn good_name(&self, good: Good) -> Option<&str> {
+        named(&self.names.good_names, &good).map(String::as_str)
+    }
+
+    fn junk_lc_name(&self, junk: JunkId) -> Option<&str> {
+        named(&self.names.junk_lc_names, &junk).map(String::as_str)
+    }
+
+    fn cargo_name(&self, cargo: u8) -> Option<String> {
+        self.names.cargo_names.get(usize::from(cargo)).cloned()
+    }
+
+    fn player_ship_name(&self) -> Option<&str> {
+        self.names.player_ship_name.as_deref()
+    }
+
+    fn long_date(&self) -> String {
+        self.names.long_date.clone()
     }
 }
 
@@ -1691,6 +1773,8 @@ mod tests {
 
     impl MapSource for Broken {}
 
+    impl NameSource for Broken {}
+
     impl CommSource for Broken {
         fn boarding(&self) -> Option<PlunderView> {
             self.fake.boarding()
@@ -1890,6 +1974,39 @@ mod tests {
             Ok(()),
             "docked, with an exchange, which may trade as it will"
         );
+    }
+
+    #[test]
+    fn the_fake_names_nothing_until_scripted_then_as_scripted() {
+        let mut fake = FakeFlight::new();
+        assert_eq!(fake.ship_name(ShipId(129)), None);
+        assert_eq!(fake.long_date(), "");
+        let names = fake.names_mut();
+        names.ship_names = vec![(ShipId(129), "Viper".to_owned())];
+        names.ship_long_names = vec![(ShipId(129), "Federation Viper".to_owned())];
+        names.outfit_names = vec![(OutfitId(128), "Blaster".to_owned())];
+        names.outfit_lc_names =
+            vec![(OutfitId(128), ("blaster".to_owned(), "blasters".to_owned()))];
+        names.good_names = vec![(Good::Commodity(0), "Food".to_owned())];
+        names.junk_lc_names = vec![(JunkId(150), "bio-weapons".to_owned())];
+        names.cargo_names = vec!["Food".to_owned(), "*Passengers".to_owned()];
+        names.player_ship_name = Some("Kestrel".to_owned());
+        names.long_date = "June 23rd, 1177 NC".to_owned();
+        assert_eq!(fake.ship_name(ShipId(129)), Some("Viper"));
+        assert_eq!(fake.ship_name(ShipId(130)), None, "not listed");
+        assert_eq!(fake.ship_long_name(ShipId(129)), Some("Federation Viper"));
+        assert_eq!(fake.outfit_name(OutfitId(128)), Some("Blaster"));
+        assert_eq!(
+            fake.outfit_names(OutfitId(128)),
+            Some(("blaster", "blasters"))
+        );
+        assert_eq!(fake.good_name(Good::Commodity(0)), Some("Food"));
+        assert_eq!(fake.good_name(Good::Commodity(1)), None);
+        assert_eq!(fake.junk_lc_name(JunkId(150)), Some("bio-weapons"));
+        assert_eq!(fake.cargo_name(1).as_deref(), Some("*Passengers"));
+        assert_eq!(fake.cargo_name(2), None);
+        assert_eq!(fake.player_ship_name(), Some("Kestrel"));
+        assert_eq!(fake.long_date(), "June 23rd, 1177 NC");
     }
 
     #[test]

@@ -13,8 +13,8 @@
 //! commands lives on the session's side, with the catalog the view
 //! shared, the chance, the law, the boarding rule and the hail options,
 //! [`FlightSim::drain`] to `Session::drain_events`, [`CommSource`]'s to
-//! `Session::hailing` and `Session::boarding`, and [`PortSource`]'s to
-//! the session's method of each name. A session that failed to start
+//! `Session::hailing` and `Session::boarding`, and [`PortSource`]'s and
+//! [`NameSource`]'s to the session's method of each name. A session that failed to start
 //! fills the default frame, runs no step, refuses every command, answers
 //! nothing open and drains nothing. [`SessionFlight::transact`], which
 //! takes a closure no command can carry, is the adapter's own API.
@@ -41,15 +41,15 @@ use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::SearchOutcome;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DescMovie, DisableRule, HailOptions,
-    HailView, HireList, Hover, LegalCode, MapMarks, Market, MissionId, MissionInfo, News, NovaAi,
-    NovaBoarding, NovaDisable, NovaLaw, Outfitter, Pilot, PlayerCommand, PlunderView,
-    PointDefenceRule, Rules, SavedNav, Session, ShipId, ShipNaming, ShipRefusal, Shipyard,
-    SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, Vec2,
+    Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DescMovie, DisableRule, Good,
+    HailOptions, HailView, HireList, Hover, JunkId, LegalCode, MapMarks, Market, MissionId,
+    MissionInfo, News, NovaAi, NovaBoarding, NovaDisable, NovaLaw, OutfitId, Outfitter, Pilot,
+    PlayerCommand, PlunderView, PointDefenceRule, Rules, SavedNav, Session, ShipId, ShipNaming,
+    ShipRefusal, Shipyard, SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, Vec2,
 };
 
 use super::SharedChance;
-use super::sim_port::{CommSource, FlightSim, MapSource, PortSource};
+use super::sim_port::{CommSource, FlightSim, MapSource, NameSource, PortSource};
 
 /// The flight of a real `nova_sim::Session`, or why it could not start,
 /// with the collaborators its calls are handed (see the module docs).
@@ -506,6 +506,48 @@ impl<C> PortSource for SessionFlight<C> {
     }
 }
 
+/// Each forwards to the session's method of its name, the player's ship
+/// name to its pilot's and the cargo's to `TagNames::cargo_name`; a
+/// failed session names nothing.
+impl<C> NameSource for SessionFlight<C> {
+    fn ship_name(&self, ship: ShipId) -> Option<&str> {
+        self.session().ok()?.ship_name(ship)
+    }
+
+    fn ship_long_name(&self, ship: ShipId) -> Option<&str> {
+        self.session().ok()?.ship_long_name(ship)
+    }
+
+    fn outfit_name(&self, outfit: OutfitId) -> Option<&str> {
+        self.session().ok()?.outfit_name(outfit)
+    }
+
+    fn outfit_names(&self, outfit: OutfitId) -> Option<(&str, &str)> {
+        self.session().ok()?.outfit_names(outfit)
+    }
+
+    fn good_name(&self, good: Good) -> Option<&str> {
+        self.session().ok()?.good_name(good)
+    }
+
+    fn junk_lc_name(&self, junk: JunkId) -> Option<&str> {
+        self.session().ok()?.junk_lc_name(junk)
+    }
+
+    fn cargo_name(&self, cargo: u8) -> Option<String> {
+        TagNames::cargo_name(self.session().ok()?, cargo)
+    }
+
+    fn player_ship_name(&self) -> Option<&str> {
+        self.session().ok()?.pilot().ship_name()
+    }
+
+    fn long_date(&self) -> String {
+        self.session()
+            .map_or_else(|_| String::new(), Session::long_date_text)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use nova_sim::StellarPick;
@@ -557,6 +599,20 @@ mod tests {
         assert_eq!(flight.hover(Vec2::ZERO, &DrawnBoxes::default()), None);
         assert_eq!(flight.coming_traffic(), []);
         assert_eq!(flight.death_descs(), Vec::<i16>::new());
+    }
+
+    #[test]
+    fn a_failed_flight_names_nothing() {
+        let flight = failed();
+        assert_eq!(flight.ship_name(ShipId(128)), None);
+        assert_eq!(flight.ship_long_name(ShipId(128)), None);
+        assert_eq!(flight.outfit_name(OutfitId(128)), None);
+        assert_eq!(flight.outfit_names(OutfitId(128)), None);
+        assert_eq!(flight.good_name(Good::Commodity(0)), None);
+        assert_eq!(flight.junk_lc_name(JunkId(128)), None);
+        assert_eq!(flight.cargo_name(0), None);
+        assert_eq!(flight.player_ship_name(), None);
+        assert_eq!(flight.long_date(), "");
     }
 
     #[test]
