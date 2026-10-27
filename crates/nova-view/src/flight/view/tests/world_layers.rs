@@ -1,16 +1,25 @@
 //! The flight world drawn in `_SetupSpriteWorld`'s order
 //! ([`nova_sim::sprite_layer::WORLD_PASSES`]): each beam, effect, smoke
 //! puff, escape pod and cargo box in its layer among the ships and the
-//! shots (rdm play-feel phase 4).
+//! shots (rdm play-feel phase 4). On [`FakeFlight`]: each frame scripted,
+//! each effect raised on the view's own effects.
 
-use super::combat::{eject_a_pod, firing_at_an_npc_in, line_in, podding};
-use super::missions::{carrying, other_reading, rocky};
+use nova_sim::catalog::Explosion;
+use nova_sim::combat::ParticleBurst;
+use nova_sim::flight_frame::{FrameShip, PassReport, StepReport, StepRun};
+
+use super::combat::{line_in, podding};
+use super::faked_world::{
+    asteroid_at, beam, box_at, in_sol_with, npc_129, raise, saying, shot_of, targeting,
+    the_player_at, world, world_list, world_list_with,
+};
+use super::missions::rocky;
 use super::shots::smoking_trailing_blaster;
 use super::*;
 use crate::flight::alert::DOUBLE_TIME_CICN;
-use crate::flight::effects::{LoopedSounds, Scene};
+use crate::system::camera::Anchor;
 
-/// The orange of [`firing_with_sprays`]'s hit particles, at any alpha.
+/// The orange of [`sprays`]'s particles, at any alpha.
 fn orange_dot(command: &DrawCommand) -> bool {
     matches!(
         command,
@@ -18,22 +27,65 @@ fn orange_dot(command: &DrawCommand) -> bool {
     )
 }
 
-/// [`firing_at_an_npc_in`] where the blaster's hits also spray 5 orange
-/// particles, and the system holds an asteroid field.
-fn firing_with_sprays() -> View {
-    let mut catalog = rocky(armed(1, &[BLASTER, UNDER, OVER]));
-    catalog.weapons[0].hit_particles = 5;
-    catalog.weapons[0].hit_part_vel = 100;
-    catalog.weapons[0].hit_part_life = 30;
-    catalog.weapons[0].hit_part_color = 0x00FF_8000;
-    firing_at_an_npc_in(catalog).with_rules(other_reading(RuleKey::AsteroidRespawnRing))
+/// Five orange particles at `at`, as the blaster's hits spray.
+fn sprays(at: Vec2) -> CombatEvent {
+    CombatEvent::Particles(ParticleBurst {
+        at,
+        speed: 1.0,
+        variation: 0,
+        life: (30, 30),
+        color: 0x00FF_8000,
+        count: 5,
+        spread: 0.0,
+    })
+}
+
+/// The player at the origin and NPC 0, 100 above it.
+fn facing_an_npc() -> Vec<FrameShip> {
+    vec![
+        the_player_at(Vec2::ZERO, 0.0),
+        npc_129(0, Vec2::new(0.0, -100.0), 180.0),
+    ]
+}
+
+/// A fight in an asteroid field: the player's blaster shot between it
+/// and NPC 0 above it, its beam drawn under the ships at the NPC and its
+/// beam over them, an asteroid beside them; an explosion at the NPC and
+/// its hit's orange spray.
+fn firing_with_sprays() -> Faked {
+    let npc = Vec2::new(0.0, -100.0);
+    let frame = FlightFrame {
+        shots: vec![shot_of(0, BLASTER, Vec2::new(0.0, -50.0), 0.0)],
+        beams: vec![
+            beam(ShipRef::Player, UNDER, Vec2::ZERO, npc),
+            beam(ShipRef::Player, OVER, Vec2::new(5.0, 0.0), npc),
+        ],
+        asteroids: vec![asteroid_at(Vec2::new(-100.0, 50.0))],
+        ..in_sol_with(facing_an_npc())
+    };
+    let mut view = world(rocky(armed(1, &[BLASTER, UNDER, OVER])), frame);
+    let explosion = Explosion {
+        boom: nova_sim::BoomId(128),
+        extra: false,
+    };
+    raise(
+        &mut view,
+        &[
+            CombatEvent::Exploded {
+                at: npc,
+                explosion,
+                size: 0.0,
+            },
+            sprays(npc),
+        ],
+    );
+    view
 }
 
 #[test]
 fn a_beam_and_each_effect_is_drawn_in_its_layer() {
-    let mut view = firing_with_sprays();
-    ticks(&mut view, 2);
-    let list = drawn(&view);
+    let view = firing_with_sprays();
+    let list = world_list_with(&view, &targeting(0));
     let stellar = first(&list, sprite_of(1128));
     let under = first(&list, line_in(Color::rgba(0, 0, 255, 255)));
     let asteroid = first(&list, sprite_of(1800));
@@ -55,10 +107,11 @@ fn a_beam_and_each_effect_is_drawn_in_its_layer() {
 
 #[test]
 fn the_cursor_and_the_double_time_icon_are_drawn_after_the_brackets_and_under_the_over_beams() {
-    let mut view = firing_with_sprays().with_double_time(true);
-    view.input(&Input::PointerMoved(Point::new(40.0, 400.0)));
-    ticks(&mut view, 2);
-    let list = drawn(&view);
+    let mut view = firing_with_sprays();
+    view.sim.frame_mut().double_time = true;
+    view.refresh_frame();
+    view.cursor_input(&Input::PointerMoved(Point::new(40.0, 400.0)));
+    let list = world_list_with(&view, &targeting(0));
     let brackets = first(&list, icon_in(10008..=10023));
     let cursor = first(&list, sprite_of(651));
     let double_time = first(&list, icon_in(DOUBLE_TIME_CICN..=DOUBLE_TIME_CICN));
@@ -72,35 +125,32 @@ fn the_cursor_and_the_double_time_icon_are_drawn_after_the_brackets_and_under_th
 }
 
 /// Sets a pod adrift in `view` at `at`, as a dying ship's would be.
-fn pod_adrift(view: &mut View, at: Vec2) {
-    let scene = Scene {
-        player: Point::new(0.0, 0.0),
-        debris: false,
-        caps: false,
-        looped: LoopedSounds::Anywhere,
-    };
-    let event = CombatEvent::PodEjected {
-        ship: ShipRef::Npc(NpcId(9)),
-        at,
-        velocity: Vec2::ZERO,
-    };
-    view.effects
-        .apply(&event, &scene, &view.looks, &mut Script::default());
+fn pod_adrift(view: &mut Faked, at: Vec2) {
+    raise(
+        view,
+        &[CombatEvent::PodEjected {
+            ship: ShipRef::Npc(NpcId(9)),
+            at,
+            velocity: Vec2::ZERO,
+        }],
+    );
 }
 
 #[test]
 fn an_escape_pod_is_drawn_above_a_disabled_ship_and_below_a_flying_one() {
-    // Two NPCs, one straight above the player and one beside it, both
-    // disabled at once; the player blasts the one above until its pod
-    // comes out.
-    let mut catalog = podding();
-    catalog.hulls[1].strength = 5;
-    catalog.traffic[0].1.avg_ships = 2;
-    let draws = [placed(750, 650, 180), placed(700, 750, 0)].concat();
-    let mut view = fighting(catalog, &draws).with_disable_rule(Rc::new(DisablesTheStrong));
-    eject_a_pod(&mut view);
-    assert_eq!(npc_ids(&view).len(), 1, "one left, disabled");
-    let list = drawn(&view);
+    // A disabled NPC beside the player, drawn in the disabled ships'
+    // layer, and a pod adrift above them.
+    let mut frame = in_sol_with(vec![
+        the_player_at(Vec2::ZERO, 0.0),
+        npc_129(1, Vec2::new(-50.0, 0.0), 0.0),
+    ]);
+    frame.drawn = vec![
+        (ShipRef::Npc(NpcId(1)), nova_sim::ShipLayer::Disabled),
+        (ShipRef::Player, nova_sim::ShipLayer::Ships),
+    ];
+    let mut view = world(podding(), frame);
+    pod_adrift(&mut view, Vec2::new(0.0, -100.0));
+    let list = world_list(&view);
     let disabled = first(&list, sprite_of(2001));
     let pod = first(&list, sprite_of(1095));
     let ship = first(&list, sprite_of(2000));
@@ -111,10 +161,13 @@ fn an_escape_pod_is_drawn_above_a_disabled_ship_and_below_a_flying_one() {
 
 #[test]
 fn an_escape_pod_is_drawn_over_the_cargo_boxes() {
-    let mut view = carrying(0, true);
-    command_tap(&mut view, JETTISON_KEY, false);
+    let frame = FlightFrame {
+        cargo_boxes: vec![box_at(Vec2::new(-20.0, 20.0))],
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+    };
+    let mut view = world(trading(), frame);
     pod_adrift(&mut view, Vec2::new(30.0, 30.0));
-    let list = drawn(&view);
+    let list = world_list(&view);
     let cargo_box = first(&list, sprite_of(500));
     let pod = first(&list, sprite_of(1095));
     // The 64 boxes of `_boxData`, then the 32 pods of `_podData`
@@ -124,11 +177,30 @@ fn an_escape_pod_is_drawn_over_the_cargo_boxes() {
 
 #[test]
 fn a_smoke_puff_is_drawn_over_the_boxes_and_under_the_shots_and_ships() {
-    let mut view = fighting(smoking_trailing_blaster(), &[]);
+    let shot = shot_of(0, BLASTER, Vec2::new(0.0, -40.0), 0.0);
+    let frame = FlightFrame {
+        shots: vec![shot],
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+    };
+    let mut view = world(smoking_trailing_blaster(), frame);
     pod_adrift(&mut view, Vec2::new(30.0, 30.0));
-    view.input(&key(FIRE_KEY, true));
-    ticks(&mut view, 4);
-    let list = drawn(&view);
+    // A pass on a smoke frame with the smoking shot in flight leaves its
+    // puff and its trail's particles.
+    let pass = PassReport {
+        ships: vec![the_player_at(Vec2::ZERO, 0.0)],
+        shots: vec![shot],
+        smoke_frame: true,
+        ..PassReport::default()
+    };
+    view.sim.queue_report(StepReport {
+        steps: vec![StepRun {
+            passes: vec![pass],
+            ..StepRun::default()
+        }],
+        stopped: false,
+    });
+    view.step_frame(1, Anchor::in_flight(RuleSource::Engine));
+    let list = world_list(&view);
     let pod = first(&list, sprite_of(1095));
     let puff = first(&list, |command| {
         matches!(
@@ -139,7 +211,7 @@ fn a_smoke_puff_is_drawn_over_the_boxes_and_under_the_shots_and_ships() {
     });
     let shot = first(&list, sprite_of(3500));
     let ship = first(&list, sprite_of(2000));
-    // The trail's blue (0x1040FF), the radar's dots being green.
+    // The trail's blue (0x1040FF).
     let trail = first(&list, |command| {
         matches!(
             command,
@@ -160,12 +232,18 @@ fn floating_border_line(command: &DrawCommand) -> bool {
     !floating_border(&list).is_empty()
 }
 
+/// Shows `view`'s floating map, as H's press does, over Sol's drawing.
+fn floating_up(view: &mut Faked) {
+    view.sim.map_mut().drawing = Some(sol_drawing());
+    view.hyperspace_key(HYPERSPACE_MODE_KEY);
+    assert!(view.floating.is_up(), "shown");
+}
+
 #[test]
 fn the_floating_map_is_drawn_over_the_over_beams_and_under_the_particles() {
     let mut view = firing_with_sprays();
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    ticks(&mut view, 2);
-    let list = drawn(&view);
+    floating_up(&mut view);
+    let list = world_list(&view);
     let over = first(&list, line_in(Color::rgba(0, 255, 0, 255)));
     let floating = first(&list, floating_border_line);
     let particle = first(&list, orange_dot);
@@ -178,11 +256,9 @@ fn the_floating_map_is_drawn_over_the_over_beams_and_under_the_particles() {
 #[test]
 fn the_message_text_is_drawn_over_the_over_beams_and_under_the_floating_map() {
     let mut view = firing_with_sprays();
-    plot(&mut view, 131);
-    view.input(&key(JUMP, true));
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    ticks(&mut view, 2);
-    let list = drawn(&view);
+    saying(&mut view, TOO_CLOSE, 250);
+    floating_up(&mut view);
+    let list = world_list(&view);
     let message_box = first(&list, |command| {
         *command == fill_command(hud::message_box(VIEW_SIZE), Color::BLACK)
     });
@@ -198,44 +274,26 @@ fn the_message_text_is_drawn_over_the_over_beams_and_under_the_floating_map() {
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
 }
 
-/// [`fighters_out`] where the player's blaster's hits spray 5 orange
-/// particles, firing at the traffic ship with the escort menu open.
-fn fighters_out_firing_sprays() -> View {
-    let armed = armed(1, &[BLASTER]);
-    let mut catalog = boardable();
-    catalog.weapons = armed.weapons;
-    catalog.outfits = armed.outfits;
-    catalog.looks = armed.looks;
-    catalog.hulls[0] = hull_of(128, &[BLASTER]);
-    catalog.weapons[0].hit_particles = 5;
-    catalog.weapons[0].hit_part_vel = 100;
-    catalog.weapons[0].hit_part_life = 30;
-    catalog.weapons[0].hit_part_color = 0x00FF_8000;
-    let mut view = fighters_out_of(catalog);
-    tap(&mut view, MENU_KEY);
-    assert!(view.escort_menu().is_open());
-    tap(&mut view, Key::Tab);
-    view.input(&key(FIRE_KEY, true));
-    ticks(&mut view, 5);
-    view
-}
-
 #[test]
 fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
-    let mut view = fighters_out_firing_sprays();
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    ticks(&mut view, 1);
-    let list = drawn(&view);
+    // The menu's rows are the session's, in the world's extras
+    // (rdm:phase/view-sim-seam/phase-10-comm-escorts-boarding-on-port).
+    let mut view = firing_with_sprays();
+    let mut hud = super::super::world::WorldHud::none();
+    hud.escort_rows[0].present = true;
+    view.escort_menu.toggle(view.elapsed, &hud.escort_rows);
+    assert!(view.escort_menu.is_open());
+    floating_up(&mut view);
+    let list = world_list_with(&view, &hud);
     let floating = first(&list, floating_border_line);
     let menu = first(&list, |command| {
         *command == fill_command(escort_menu_frame(), Color::BLACK)
     });
     let particle = first(&list, orange_dot);
-    let hud = hud_at(&list);
     // `_PostDrawCallback`: `_FloaterDrawCallback` draws the floating map
     // (@0x38b95-0x38c0a), then the escort menu (@0x38c0f-0x38c5b), both
     // in the world; then `jmp _DrawParticlesOffscreen` (@0x38c9a).
-    let order = [floating, menu, particle, hud];
+    let order = [floating, menu, particle];
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
     assert_eq!(
         list.layered().nth(menu).map(|(layer, _)| layer),

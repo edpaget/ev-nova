@@ -4,6 +4,11 @@
 //! every visible-area rule measured against the widened view, and the
 //! course map in its 1024-wide frame, centred.
 
+use super::super::world::WorldHud;
+use super::faked_world::{
+    faked_ship_sprites, in_sol_with, npc_129, saying, targeting, the_player_at, world, world_list,
+    world_list_with,
+};
 use super::*;
 use crate::flight::escorts::MENU_KEY;
 use crate::flight::floating;
@@ -63,9 +68,9 @@ fn the_message_box_spans_the_widened_play_area() {
             max: at(1121.0, 763.0),
         }
     );
-    let mut view = widened(flight());
-    view.say_for("Widened", 100);
-    let list = drawn(&view);
+    let mut view = widened_world(vec![the_player_at(Vec2::ZERO, 0.0)]);
+    saying(&mut view, "Widened", 100);
+    let list = world_list(&view);
     assert!(
         list.iter().any(|command| matches!(
             command,
@@ -88,11 +93,14 @@ fn the_floating_map_and_the_escort_menu_and_double_time_icon_keep_their_rules() 
         floating::frame(WIDE),
         crate::geometry::Bounds::at(at(814.0, 150.0), 341.0, 341.0)
     );
-    let mut view = widened(fighters_out());
-    view.set_double_time(true);
-    tap(&mut view, MENU_KEY);
-    assert!(view.escort_menu().is_open());
-    let list = drawn(&view);
+    let mut view = widened_world(vec![the_player_at(Vec2::ZERO, 0.0)]);
+    view.sim.frame_mut().double_time = true;
+    view.refresh_frame();
+    let mut hud = WorldHud::none();
+    hud.escort_rows[0].present = true;
+    view.escort_menu.toggle(view.elapsed, &hud.escort_rows);
+    assert!(view.escort_menu.is_open());
+    let list = world_list_with(&view, &hud);
     assert!(list.iter().any(|command| *command
         == DrawCommand::Picture {
             image: ImageKey::icon(alert::DOUBLE_TIME_CICN),
@@ -110,40 +118,43 @@ fn the_floating_map_and_the_escort_menu_and_double_time_icon_keep_their_rules() 
 
 #[test]
 fn the_ship_is_drawn_at_the_widened_play_areas_centre() {
-    let view = widened(flight());
+    let view = widened_world(vec![the_player_at(Vec2::ZERO, 0.0)]);
     assert_eq!(
-        ship_sprites(&view),
+        faked_ship_sprites(&view),
         [(ImageKey::sprite(2000, 0), at(585.0, 384.0))]
     );
 }
 
-/// An idle NPC at (`x`, 0), the player at the play area's centre, and
-/// stellar 150 at (−500, 0).
-fn npc_at(x: i32) -> View {
-    let placed = placed(u32::try_from(x + 750).expect("in range"), 750, 0);
-    let (_, chance) = scripted(&placed);
-    let mut catalog = FakeCatalog {
+/// A widened flight of `ships` in Sol, with stellar 150 at (−500, 0)
+/// shown too.
+fn widened_world(ships: Vec<nova_sim::flight_frame::FrameShip>) -> Faked {
+    let catalog = FakeCatalog {
         sol_more: vec![stellar(150, "West", (-500, 0), 1)],
         ..trafficked(&[130], 1, 129, 3)
     };
-    catalog
-        .sites
-        .push(site(150, (-500.0, 0.0), StellarFlags::CAN_LAND));
-    let mut view = widened(
-        FlightView::new(catalog)
-            .with_chance(chance)
-            .with_behaviour(Rc::new(Still)),
-    );
-    view.tick(TICK);
+    let mut frame = in_sol_with(ships);
+    frame.stellars.push(record::stellar(StellarId(150)));
+    let mut view = world(catalog, frame);
+    view.view = WIDE;
     view
+}
+
+/// The widened flight with an idle NPC at (`x`, 0), the player at the
+/// play area's centre.
+fn npc_at(x: f32) -> Faked {
+    let mut npc = npc_129(0, Vec2::new(x, 0.0), 0.0);
+    npc.drawn.lights = Some(32);
+    npc.glow = 24;
+    widened_world(vec![the_player_at(Vec2::ZERO, 0.0), npc])
 }
 
 #[test]
 fn a_ship_and_a_stellar_500_left_of_the_player_are_drawn_on_screen() {
     // 500 left of the player is off the classic view's left edge, 415
-    // from it.
-    let mut view = npc_at(-500);
-    let list = drawn(&view);
+    // from it. Whether the session counts the ship on screen is nova-sim's
+    // (the play area it is told, `the_flight_is_told_the_widened_play_area`).
+    let view = npc_at(-500.0);
+    let list = world_list_with(&view, &targeting(0));
     let at_85: Vec<ImageKey> = sprites(&list)
         .into_iter()
         .filter(|&(_, center)| center == at(85.0, 384.0))
@@ -154,16 +165,9 @@ fn a_ship_and_a_stellar_500_left_of_the_player_are_drawn_on_screen() {
         4,
         "the stellar, and the ship with its glow and lights: {list:?}"
     );
-    let session = view.session().expect("flying");
-    assert!(
-        session.on_screen(&session.npcs()[0]),
-        "inside the widened view"
-    );
-    tap(&mut view, Key::Tab);
-    assert_eq!(target_of(&view), Some(NpcId(0)));
-    // Its brackets, flying in, are centred on it: the top-left corner's
-    // art is a corner's width further out than the top-right's.
-    let corners: Vec<Point> = drawn(&view)
+    // Its brackets are centred on it: the top-left corner's art is a
+    // corner's width further out than the top-right's.
+    let corners: Vec<Point> = list
         .iter()
         .filter_map(|command| match command {
             DrawCommand::Picture { image, top_left }
@@ -183,17 +187,17 @@ fn a_ship_and_a_stellar_500_left_of_the_player_are_drawn_on_screen() {
 }
 
 #[test]
-fn the_session_measures_the_widened_play_area() {
-    let mut view = widened(flight());
-    view.tick(TICK);
-    let area = view.session().expect("flying").play_area();
+fn the_flight_is_told_the_widened_play_area() {
+    let mut view = widened_world(vec![the_player_at(Vec2::ZERO, 0.0)]);
+    view.step_frame(0, view.anchor());
+    let area = view.sim.inputs()[0].play_area;
     assert_eq!(
         (area.left, area.top, area.right, area.bottom),
         (-585.0, -384.0, 586.0, 384.0)
     );
-    let mut classic = flight();
-    classic.tick(TICK);
-    let area = classic.session().expect("flying").play_area();
+    view.view = VIEW_SIZE;
+    view.step_frame(0, view.anchor());
+    let area = view.sim.inputs()[1].play_area;
     assert_eq!(
         (area.left, area.top, area.right, area.bottom),
         (-415.0, -384.0, 415.0, 384.0)
@@ -201,13 +205,18 @@ fn the_session_measures_the_widened_play_area() {
 }
 
 #[test]
-fn a_click_left_of_the_widened_bar_targets_and_one_on_it_does_nothing() {
-    let mut view = npc_at(1100 - 585);
-    click(&mut view, at(1100.0, 384.0));
-    assert_eq!(target_of(&view), Some(NpcId(0)), "drawn at x 1100");
-    let mut view = npc_at(1180 - 585);
-    click(&mut view, at(1180.0, 384.0));
-    assert_eq!(target_of(&view), None, "a status bar click");
+fn a_click_left_of_the_widened_bar_is_in_space_and_one_on_it_is_not() {
+    // What the click in space targets is nova-sim's
+    // (`session::apply::tests::a_click_in_space_on_a_ship_drawn_answers_the_ship_it_targets`).
+    let mut view = npc_at(1100.0 - 585.0);
+    view.click_in_space(at(1100.0, 384.0));
+    let [FlightCommand::ClickInSpace { at: clicked, .. }] = sent(&view) else {
+        panic!("{:?}", sent(&view));
+    };
+    assert_eq!(*clicked, Vec2::new(1100.0 - 585.0, 0.0), "drawn at x 1100");
+    let mut view = npc_at(1180.0 - 585.0);
+    view.click_in_space(at(1180.0, 384.0));
+    assert_eq!(sent(&view), [], "a status bar click");
 }
 
 #[test]
