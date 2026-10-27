@@ -8117,6 +8117,41 @@ mod tests {
         );
     }
 
+    /// Runs `step` among `ships` with `arsenal`, by the default rules.
+    fn run_with(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        arsenal: &Arsenal,
+        step: impl FnOnce(&mut Combat, &mut [Fighter], Arena<'_>, &mut dyn Chance),
+    ) {
+        let govts = Governments::default();
+        let arena = phase::arena(arsenal, &govts, Rules::default());
+        phase::run_in(combat, ships, arena, &mut NeverFires, step);
+    }
+
+    /// The ship loop ([`Combat::handle_npcs`]) among `ships`, with
+    /// `arsenal`.
+    fn handle_npcs_with(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
+        run_with(combat, ships, arsenal, |combat, fighters, arena, chance| {
+            combat.handle_npcs(fighters, arena, chance);
+        });
+    }
+
+    /// `_HandleShot` ([`Combat::fly_shots`]) among `ships`, with `arsenal`.
+    fn fly_shots_with(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
+        run_with(combat, ships, arsenal, |combat, fighters, arena, chance| {
+            combat.fly_shots(fighters, arena, chance);
+        });
+    }
+
+    /// The collision passes ([`Combat::test_hits`]) among `ships`, with
+    /// `arsenal`, and no stellars.
+    fn test_hits_with(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
+        run_with(combat, ships, arsenal, |combat, fighters, arena, chance| {
+            combat.test_hits(fighters, arena, Scenery::default(), chance);
+        });
+    }
+
     /// A shell like [`cluster`]'s, fired every tick, releasing 2 of `sub`
     /// at the end of its life, and that sub-munition.
     fn cluster_of(sub: WeaponRecord) -> (WeaponRecord, Arsenal) {
@@ -8155,13 +8190,14 @@ mod tests {
             },
             ..Ship::at(1, 0.0, 0.0).armed(shell)
         }];
-        tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
-        ships[0].trigger = QUIET;
+        handle_npcs_with(&mut combat, &mut ships, &arsenal);
         if leaving {
             ships.clear();
         }
+        // The shell's life spent on its fourth move, its sub-munitions
+        // released.
         for _ in 0..4 {
-            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+            fly_shots_with(&mut combat, &mut ships, &arsenal);
         }
         sub_shots(&combat).iter().map(|shot| shot.layer).collect()
     }
@@ -8184,6 +8220,15 @@ mod tests {
         assert_eq!(other, [ShotLayer::OverShips; 2]);
     }
 
+    /// `ships[0]` fires a shell in the ship loop, the shell takes its
+    /// first move, and it fires another; then both take a move.
+    fn two_shells_a_move_apart(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
+        handle_npcs_with(combat, ships, arsenal);
+        fly_shots_with(combat, ships, arsenal);
+        handle_npcs_with(combat, ships, arsenal);
+        fly_shots_with(combat, ships, arsenal);
+    }
+
     #[test]
     fn a_sub_munition_reports_its_unimplemented_flags_once_when_first_released() {
         let (shell, arsenal) = cluster_of(WeaponRecord {
@@ -8195,12 +8240,10 @@ mod tests {
         });
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
-        for _ in 0..2 {
-            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
-        }
+        two_shells_a_move_apart(&mut combat, &mut ships, &arsenal);
         assert_eq!(combat.take_diagnostics(), [], "not before it is released");
         for _ in 0..5 {
-            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+            fly_shots_with(&mut combat, &mut ships, &arsenal);
         }
         assert!(sub_shots(&combat).len() > 2, "released more than once");
         assert_eq!(
@@ -8228,12 +8271,11 @@ mod tests {
             let mut combat = Combat::default();
             let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
             let mut events = Vec::new();
-            for _ in 0..2 {
-                tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
-            }
+            two_shells_a_move_apart(&mut combat, &mut ships, &arsenal);
             assert_eq!(combat.take_diagnostics(), [], "not before it is released");
+            combat.take_events();
             for _ in 0..5 {
-                tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+                fly_shots_with(&mut combat, &mut ships, &arsenal);
                 events.extend(combat.take_events());
             }
             assert_eq!(sub_shots(&combat).len(), 0, "none in flight");
@@ -8265,7 +8307,7 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(blaster()),
             Ship::at(2, 0.0, 500.0).armed(laser()),
         ];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!((combat.shots().len(), combat.beams().len()), (1, 1));
         combat.clear();
         assert_eq!((combat.shots().len(), combat.beams().len()), (0, 0));
@@ -8286,6 +8328,41 @@ mod tests {
         Vec::new()
     }
 
+    /// The strikes of the collision passes that test the `moves`th move of
+    /// the shots `ships`' NPCs fire in a ship loop, with `arsenal`: an
+    /// NPC's shot first moves at the `_HandleShot` after its pick.
+    fn strikes_on_move(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        arsenal: &Arsenal,
+        moves: usize,
+    ) -> Vec<Strike> {
+        handle_npcs_with(combat, ships, arsenal);
+        for _ in 0..moves {
+            fly_shots_with(combat, ships, arsenal);
+        }
+        test_hits_with(combat, ships, arsenal);
+        combat.take_strikes()
+    }
+
+    /// A [`blaster`] shot of A's whose last move, from 10 to the left,
+    /// ended on B at (100, 0), for the collision passes to test.
+    fn blaster_ending_on_b() -> Shot {
+        let at = Vec2::new(100.0, 0.0);
+        Shot {
+            position: at,
+            moved_from: Some(at - Vec2::new(10.0, 0.0)),
+            age: 1,
+            ..Shot::launch(
+                WeaponSpec::new(&blaster()),
+                A,
+                A,
+                &ShipState::default(),
+                90.0,
+            )
+        }
+    }
+
     #[test]
     fn a_shot_that_hits_strikes_by_its_firer_with_the_shield_and_armour_it_took() {
         let mut combat = Combat::default();
@@ -8293,7 +8370,8 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(blaster()).targeting(B),
             Ship::at(2, 100.0, 0.0),
         ];
-        let strikes = first_strikes(&mut combat, &mut ships, &Arsenal::default());
+        // Its sixth move, from 75 to 90, reaches B.
+        let strikes = strikes_on_move(&mut combat, &mut ships, &Arsenal::default(), 6);
         assert_eq!(
             strikes,
             [Strike {
@@ -8314,9 +8392,8 @@ mod tests {
             "10 off the shield, then 4 off the armour"
         );
         assert_eq!(combat.take_strikes(), [], "taken");
-        tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(
-            combat.take_strikes(),
+            strikes_on_move(&mut combat, &mut ships, &Arsenal::default(), 6),
             [Strike {
                 ship: B,
                 by: Some(A),
@@ -8342,9 +8419,11 @@ mod tests {
         let mut target = Ship::at(2, 100.0, 0.0);
         target.reserves.shield = Gauge::full(100.0);
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser()).targeting(B), target];
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        // `_HandleBeams` lands its hit each tick of its 3.
         let mut struck = Vec::new();
         for _ in 0..5 {
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::close_tick(&mut combat, &mut ships, &NovaDisable);
             struck.push(combat.take_strikes());
         }
         let hit = vec![Strike {
@@ -8386,7 +8465,7 @@ mod tests {
             1,
         )]);
         ships[0].target = Some(B);
-        let strikes = first_strikes(&mut combat, &mut ships, &Arsenal::default());
+        let strikes = strikes_on_move(&mut combat, &mut ships, &Arsenal::default(), 6);
         let of = |ship, direct| Strike {
             ship,
             by: Some(A),
@@ -8428,7 +8507,9 @@ mod tests {
         let arsenal = Arsenal::new(&[shell, sub], Vec::new());
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell), Ship::at(2, 80.0, 0.0)];
-        let strikes = first_strikes(&mut combat, &mut ships, &arsenal);
+        // Released from the spent shell, it reaches B on the tenth move
+        // after the pick.
+        let strikes = strikes_on_move(&mut combat, &mut ships, &arsenal, 10);
         assert_eq!(
             strikes,
             [Strike {
@@ -8453,13 +8534,11 @@ mod tests {
     #[test]
     fn the_hit_that_disables_a_ship_says_so_and_the_one_that_breaks_it_up_too() {
         let mut combat = Combat::default();
-        let mut ships = [
-            Ship::at(1, 0.0, 0.0).armed(blaster()),
-            Ship::at(2, 100.0, 0.0),
-        ];
+        let mut ships = [Ship::at(1, 0.0, 0.0), Ship::at(2, 100.0, 0.0)];
         let mut struck = Vec::new();
-        for _ in 0..30 {
-            tick(&mut combat, &mut ships, &NovaDisable);
+        for _ in 0..8 {
+            combat.put_in_flight(blaster_ending_on_b());
+            phase::test_hits(&mut combat, &mut ships, &NovaDisable);
             struck.extend(combat.take_strikes());
         }
         let downed: Vec<Option<Downed>> = struck.iter().map(|strike| strike.downed).collect();
@@ -8493,7 +8572,7 @@ mod tests {
         target.reserves.shield.now = 0.0;
         target.reserves.armor.now = 3.0;
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(blaster()), target];
-        let strikes = first_strikes(&mut combat, &mut ships, &Arsenal::default());
+        let strikes = strikes_on_move(&mut combat, &mut ships, &Arsenal::default(), 6);
         assert_eq!(
             strikes
                 .iter()
@@ -8514,7 +8593,8 @@ mod tests {
             target,
             Ship::at(3, 200.0, 0.0).armed(blaster()).facing(270.0),
         ];
-        let strikes = first_strikes(&mut combat, &mut ships, &Arsenal::default());
+        // Each shot's sixth move reaches B, from either side.
+        let strikes = strikes_on_move(&mut combat, &mut ships, &Arsenal::default(), 6);
         assert_eq!(
             strikes,
             [
@@ -8558,7 +8638,10 @@ mod tests {
         let mut combat = Combat::default();
         let mut target = Ship::at(2, 0.0, 0.0);
         target.reserves.armor.now = 0.0;
-        tick(&mut combat, &mut [target], &NovaDisable);
+        let mut ships = [target];
+        // Its display destroys it (`_HandleShipDisplay` @0x444ad).
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        assert_ne!(ships[0].condition, Condition::Intact);
         assert_eq!(combat.take_strikes(), []);
     }
 
