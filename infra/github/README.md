@@ -143,6 +143,38 @@ owned by the rdm task `macos-signing-environment-cutover`:
 3. Check that `gh secret list --repo edpaget/ev-nova` lists none of them.
    From then on a dispatch from any other branch signs ad-hoc.
 
+## Actions and security settings
+
+`actions.tf`, `security.tf` and `repository.tf`'s `security_and_analysis`
+block declare the settings that decide what untrusted code can do in this
+public repository. Provider 6.13.0 can't manage every one of them; the rest
+are manual by operator choice and must never be loosened by hand.
+
+| Setting | Managed by | Value |
+|---|---|---|
+| Actions enabled | `github_actions_repository_permissions.enabled` | `true` |
+| Allowed actions | `github_actions_repository_permissions.allowed_actions` and `allowed_actions_config` | `selected`: GitHub-owned, no verified creators, `Swatinem/rust-cache@*`, `cargo-bins/cargo-binstall@*`, `jdx/mise-action@*` |
+| SHA pinning | `github_actions_repository_permissions.sha_pinning_required` | `false` until `ci.yml` pins by SHA (rdm task `pin-ci-actions-by-sha`) |
+| Default `GITHUB_TOKEN` permissions | `github_workflow_repository_permissions.default_workflow_permissions` | `read` |
+| Actions may approve PRs | `github_workflow_repository_permissions.can_approve_pull_request_reviews` | `false` |
+| Vulnerability (Dependabot) alerts | `github_repository_vulnerability_alerts.enabled` | `false` |
+| Dependabot security updates | `github_repository_dependabot_security_updates.enabled` | `false`: its bot PRs don't fit the rebase-and-fast-forward landing |
+| Secret scanning | `github_repository.security_and_analysis.secret_scanning.status` | `enabled` |
+| Push protection | `github_repository.security_and_analysis.secret_scanning_push_protection.status` | `enabled` |
+| Fork-PR contributor approval | manual by operator choice: no resource in 6.13.0 | `all_external_contributors` |
+| Secret scanning, non-provider patterns | manual by operator choice: the provider declares the attribute but never sends or reads it | `disabled` |
+| Secret scanning, AI detection | manual by operator choice: as above | not reported for this repository |
+| Secret scanning, validity checks | manual by operator choice: no repository-level attribute | `disabled` |
+
+Merge methods and `delete_branch_on_merge` are on `github_repository` too
+(see `repository.tf`).
+
+**The allowlist rule.** A workflow may use only GitHub-owned actions and the
+`patterns_allowed` entries in `actions.tf`. Before a workflow change adds a
+new third-party action, add its pattern there and apply it, or the jobs that
+use it fail at startup ("... is not allowed to be used in edpaget/ev-nova").
+A composite action's own nested `uses:` count too.
+
 ## State
 
 The state is local (`terraform.tfstate`, gitignored) and encrypted with
@@ -151,7 +183,11 @@ OpenTofu's native encryption: a `pbkdf2` key from the passphrase and the
 There is no `fallback` block, so an unencrypted state is refused, not read.
 
 - **Lost state:** run `mise run infra-apply`. The `import` blocks adopt the
-  repository again, with no change to it. The `macos-signing` environment,
+  repository, its Actions permissions (`github_actions_repository_permissions`),
+  its workflow token permissions (`github_workflow_repository_permissions`),
+  its vulnerability alerts (`github_repository_vulnerability_alerts`) and its
+  Dependabot security updates (`github_repository_dependabot_security_updates`)
+  again, with no change to them. The `macos-signing` environment,
   its policy and its secrets have no `import` blocks (they were created by
   this config), so first do one of these:
   - Import the environment and its policy, and let the apply rewrite the
