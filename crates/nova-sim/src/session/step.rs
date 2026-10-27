@@ -150,6 +150,11 @@ impl Session {
             collab.rules,
             &mut *collab.chance,
         );
+        #[cfg(test)]
+        {
+            let raised = std::mem::take(&mut self.out.second_pass_comm);
+            self.out.comm.extend(raised);
+        }
         if self.rescue_if_due(catalog, &mut *collab.chance) {
             run.rescued = Some(*self.player());
             return run;
@@ -637,23 +642,49 @@ mod tests {
         let run = &report.steps[0];
         assert_eq!(run.passes.len(), 1, "the advance pass alone");
         assert_eq!(run.rescued, Some(*session.player()));
-        let note = CommNote {
-            from: crate::traffic::npc::NpcId(0),
-            comm_name: "Ally".to_owned(),
-            ship_name: "Shuttle".to_owned(),
-            done: crate::hail::Help::Repair,
-        };
         let mut session = in_the_pod(&catalog, 2);
         steps(&mut session, &catalog, &input, 0);
         session.ship.fate.rescue_due = false;
         let mut copy = session.clone();
-        steps(&mut copy, &catalog, &input, 1);
+        copy.out.second_pass_comm.push(repaired());
+        let report = steps(&mut copy, &catalog, &input, 1);
         assert_eq!(
             copy.take_rescue_desc(),
             Some(13999),
             "rescued on the second pass"
         );
-        let _ = note;
+        assert!(report.steps[0].comm.is_empty(), "none taken");
+        assert_eq!(copy.take_comm(), [repaired()], "held for the next take");
+    }
+
+    /// An ally's note that it has repaired the player.
+    fn repaired() -> CommNote {
+        CommNote {
+            from: crate::traffic::npc::NpcId(0),
+            comm_name: "Ally".to_owned(),
+            ship_name: "Shuttle".to_owned(),
+            done: crate::hail::Help::Repair,
+        }
+    }
+
+    #[test]
+    fn comm_raised_on_the_second_pass_waits_for_the_next_steps_take() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        let input = StepInput {
+            double_time_key: true,
+            ..StepInput::default()
+        };
+        steps(&mut session, &catalog, &input, 1);
+        session.out.second_pass_comm.push(repaired());
+        let report = steps(&mut session, &catalog, &input, 1);
+        assert_eq!(report.steps[0].passes.len(), 2, "both passes");
+        assert!(
+            report.steps[0].comm.is_empty(),
+            "taken after the advance pass"
+        );
+        let report = steps(&mut session, &catalog, &input, 1);
+        assert_eq!(report.steps[0].comm, [repaired()], "the next step's take");
     }
 
     #[test]
