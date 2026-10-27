@@ -29,6 +29,9 @@ deny = [
     { crate = "nova-appkit", wrappers = ["nova"], reason = "only the game installs the macOS menu bar" },
     { crate = "objc2-app-kit", wrappers = ["nova-appkit", "rfd", "winit"], reason = "AppKit's unsafe bindings are reached, among workspace crates, only through nova-appkit's safe API" },
     { crate = "rfd", wrappers = ["nova"], reason = "only the game asks for its data and shows startup errors in a dialog" },
+    # Win32's console calls are made only through nova-win32's safe API,
+    # and that only by the game (a Windows-only dependency of nova).
+    { crate = "nova-win32", wrappers = ["nova"], reason = "Win32's unsafe calls are reached only through nova-win32's safe API, and only by the game" },
     # The layered nova-sim crates (roadmap nova-sim-layered-crates). Each
     # entry's `wrappers` lists the only crates allowed to depend on it
     # directly: the nova-sim crates above it (and, for the nova-sim facade,

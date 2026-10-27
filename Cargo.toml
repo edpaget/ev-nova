@@ -16,6 +16,7 @@ nova-view = { path = "crates/nova-view" }
 nova-render = { path = "crates/nova-render" }
 nova-metalfx = { path = "crates/nova-metalfx" }
 nova-appkit = { path = "crates/nova-appkit" }
+nova-win32 = { path = "crates/nova-win32" }
 nova-sim = { path = "crates/nova-sim" }
 nova-sim-base = { path = "crates/nova-sim-base" }
 nova-sim-catalog = { path = "crates/nova-sim-catalog" }
