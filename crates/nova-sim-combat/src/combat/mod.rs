@@ -10798,6 +10798,58 @@ mod tests {
         );
     }
 
+    /// Runs `phase` among `ships` by the default rules, with no arsenal or
+    /// governments, on the advance pass, drawing on `chance`.
+    fn drawing(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        chance: &mut dyn Chance,
+        phase: impl FnOnce(&mut Combat, &mut [Fighter], Arena<'_>, &mut dyn Chance),
+    ) {
+        let (arsenal, govts) = (Arsenal::default(), Governments::default());
+        let arena = phase::arena(&arsenal, &govts, Rules::default());
+        phase::run_in(combat, ships, arena, chance, phase);
+    }
+
+    /// The phase in which `firer` fires its trigger, drawing on `chance`:
+    /// the player's trigger or, for an NPC, the ship loop ([`phase::fire`]).
+    fn fire_drawing(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        firer: ShipRef,
+        chance: &mut dyn Chance,
+    ) {
+        drawing(combat, ships, chance, |combat, fighters, arena, chance| {
+            if firer == ShipRef::Player {
+                combat.fire_player(fighters, arena, chance);
+            } else {
+                combat.handle_npcs(fighters, arena, chance);
+            }
+        });
+    }
+
+    /// The NPCs' point defence and launches, drawing on `chance`
+    /// ([`phase::defend_npcs`]).
+    fn defend_drawing(combat: &mut Combat, ships: &mut [Ship], chance: &mut dyn Chance) {
+        drawing(combat, ships, chance, |combat, fighters, arena, chance| {
+            combat.defend_npcs(fighters, arena, None, false, chance);
+        });
+    }
+
+    /// `_HandleShot`, drawing on `chance` ([`phase::fly_shots`]).
+    fn fly_drawing(combat: &mut Combat, ships: &mut [Ship], chance: &mut dyn Chance) {
+        drawing(combat, ships, chance, |combat, fighters, arena, chance| {
+            combat.fly_shots(fighters, arena, chance);
+        });
+    }
+
+    /// The collision passes, drawing on `chance` ([`phase::test_hits`]).
+    fn test_hits_drawing(combat: &mut Combat, ships: &mut [Ship], chance: &mut dyn Chance) {
+        drawing(combat, ships, chance, |combat, fighters, arena, chance| {
+            combat.test_hits(fighters, arena, Scenery::default(), chance);
+        });
+    }
+
     /// A hull of turret miss class `class`.
     fn of_class(class: u32) -> HullSpec {
         HullSpec {
@@ -10810,9 +10862,10 @@ mod tests {
     /// `record`, on the draws `draws`, and the ranges asked.
     fn rolled_by(ship: Ship, record: WeaponRecord, draws: &[u32]) -> (Option<u32>, Vec<u32>) {
         let mut combat = Combat::default();
+        let firer = ship.id;
         let mut ships = [ship.armed(record).targeting(B), Ship::at(2, 0.0, -300.0)];
         let mut chance = nova_sim_base::fixture::Draws::of(draws);
-        tick_drawing(&mut combat, &mut ships, &mut chance);
+        fire_drawing(&mut combat, &mut ships, firer, &mut chance);
         let shot = combat.shots().first().expect("a shot");
         (shot.miss_roll, chance.asked)
     }
@@ -10873,7 +10926,7 @@ mod tests {
         let mut combat = Combat::default();
         let mut chance = nova_sim_base::fixture::Draws::of(&[60]);
         missile_in_flight(&mut combat, &mut ships);
-        tick_drawing(&mut combat, &mut ships, &mut chance);
+        defend_drawing(&mut combat, &mut ships, &mut chance);
         let defence = combat
             .shots()
             .iter()
@@ -10883,11 +10936,13 @@ mod tests {
         assert_eq!(chance.asked, [90]);
     }
 
-    /// The ships a heavy NPC's turret shot, rolling `draw` + 1, hits over
-    /// 30 ticks: a Fighter-class C, `condition` (with its armour down to 5
-    /// when disabled), 100 pixels up its path, and a Warship B 200 behind
-    /// it.
-    fn struck_through(draw: u32, condition: Condition) -> Vec<ShipRef> {
+    /// The ships a heavy NPC's turret shot, rolling `draw` + 1, strikes
+    /// with its move number `moves` ([`phase::test_hits`]), fired in the
+    /// ship loop and flown by `_HandleShot` to it: a Fighter-class C,
+    /// `condition` (with its armour down to 5 when disabled), 100 pixels up
+    /// its path, which its fifth move crosses, and a Warship B 200 behind
+    /// it, which its 15th meets.
+    fn struck_on_move(draw: u32, condition: Condition, moves: u32) -> Vec<ShipRef> {
         let mut fighter = Ship {
             condition,
             ..Ship::at(3, 0.0, -100.0).of(of_class(80))
@@ -10905,24 +10960,29 @@ mod tests {
             fighter,
         ];
         let mut chance = nova_sim_base::fixture::Draws::of(&[draw]);
-        let mut struck = Vec::new();
-        for _ in 0..30 {
-            tick_drawing(&mut combat, &mut ships, &mut chance);
-            ships[0].trigger = QUIET;
-            struck.extend(combat.take_strikes().iter().map(|strike| strike.ship));
+        fire_drawing(&mut combat, &mut ships, A, &mut chance);
+        for _ in 0..moves {
+            fly_drawing(&mut combat, &mut ships, &mut chance);
         }
-        struck
+        test_hits_drawing(&mut combat, &mut ships, &mut chance);
+        combat
+            .take_strikes()
+            .iter()
+            .map(|strike| strike.ship)
+            .collect()
     }
 
     #[test]
     fn a_heavy_turrets_shot_flies_through_an_intact_fighter_it_rolled_over() {
-        assert_eq!(struck_through(80, Condition::Intact), [B], "roll 81");
-        assert_eq!(struck_through(79, Condition::Intact), [C], "roll 80");
+        let intact = Condition::Intact;
+        assert_eq!(struck_on_move(80, intact, 5), [], "roll 81 passes C");
+        assert_eq!(struck_on_move(80, intact, 15), [B], "and meets B");
+        assert_eq!(struck_on_move(79, intact, 5), [C], "roll 80");
     }
 
     #[test]
     fn a_heavy_turrets_shot_hits_a_disabled_fighter_whatever_its_roll() {
-        assert_eq!(struck_through(99, Condition::Disabled), [C]);
+        assert_eq!(struck_on_move(99, Condition::Disabled, 5), [C]);
     }
 
     #[test]
@@ -10949,15 +11009,18 @@ mod tests {
             let mut ships = [defender.of(hull), attacker, fighter];
             let mut combat = Combat::default();
             let mut chance = nova_sim_base::fixture::Draws::of(&[draw]);
-            let mut struck = Vec::new();
             missile_in_flight(&mut combat, &mut ships);
-            for _ in 0..12 {
-                tick_drawing(&mut combat, &mut ships, &mut chance);
-                ships[0].trigger = QUIET;
-                ships[0].trigger.point_defence = false;
-                struck.extend(combat.take_strikes().iter().map(|strike| strike.ship));
+            defend_drawing(&mut combat, &mut ships, &mut chance);
+            // Its shot's sixth move brings C within its fuse's reach.
+            for _ in 0..6 {
+                fly_drawing(&mut combat, &mut ships, &mut chance);
             }
-            struck
+            test_hits_drawing(&mut combat, &mut ships, &mut chance);
+            combat
+                .take_strikes()
+                .iter()
+                .map(|strike| strike.ship)
+                .collect::<Vec<_>>()
         };
         assert_eq!(struck(80), [], "roll 81 passes the fighter");
         assert_eq!(struck(79), [C], "roll 80 hits it");
@@ -10977,10 +11040,10 @@ mod tests {
         }
     }
 
-    /// The velocity and heading, after its first move, of the shot `ship`
-    /// (moving `velocity`, facing right) fires with `record`, by `source`'s
-    /// reading of the bomb and rocket launch, on `draws`: the player's
-    /// moves on the tick it is fired, an NPC's on the next.
+    /// The velocity and heading, after its first move
+    /// ([`phase::fly_shots`]), of the shot `ship` (moving `velocity`,
+    /// facing right) fires with `record` in its own phase, by `source`'s
+    /// reading of the bomb and rocket launch, on `draws`.
     fn launched(
         ship: Ship,
         velocity: Vec2,
@@ -10997,17 +11060,12 @@ mod tests {
             },
             ..ship.armed(record)
         }];
+        let firer = ships[0].id;
         let mut draws = nova_sim_base::fixture::Draws::of(draws);
-        tick_drawing(&mut combat, &mut ships, &mut draws);
-        if combat
-            .shots()
-            .last()
-            .is_some_and(|shot| shot.moved_from.is_none())
-        {
-            ships[0].trigger = QUIET;
-            tick_drawing(&mut combat, &mut ships, &mut draws);
-        }
+        fire_drawing(&mut combat, &mut ships, firer, &mut draws);
+        fly_drawing(&mut combat, &mut ships, &mut draws);
         let shot = combat.shots().last().expect("a shot");
+        assert!(shot.moved_from.is_some(), "moved");
         (shot.velocity, shot.heading)
     }
 
@@ -11151,10 +11209,9 @@ mod tests {
                 },
                 ..Ship::at(1, 0.0, 0.0).armed(dropping(5, 0))
             }];
-            // Thrown on the first tick, it first moves on the second.
-            tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = QUIET;
-            tick(&mut combat, &mut ships, &NovaDisable);
+            // Thrown in the ship loop, it turns on its first move.
+            phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+            phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(combat.shots()[0].heading, heading, "{wrap:?}");
         }
     }
@@ -11174,7 +11231,7 @@ mod tests {
             },
             Ship::at(2, 300.0, 0.0),
         ];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         combat.shots()[0].layer
     }
 
@@ -11204,7 +11261,7 @@ mod tests {
             },
             Ship::at(2, 300.0, 0.0),
         ];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::fire_player(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(
             combat.shots()[0].layer,
             ShotLayer::OverShips,
@@ -11227,7 +11284,7 @@ mod tests {
             },
             ..Ship::at(1, 0.0, 0.0).armed(gun())
         }];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         let shot = combat.shots()[0];
         assert_eq!(shot.heading, 45.0, "trunc(45.5) (@0x3e677)");
         assert_eq!(
@@ -11255,7 +11312,7 @@ mod tests {
             0
         );
         let mut chance = nova_sim_base::fixture::Draws::of(&[4]);
-        tick_drawing(&mut combat, &mut ships, &mut chance);
+        fire_drawing(&mut combat, &mut ships, A, &mut chance);
         let shot = combat.shots()[0];
         assert_eq!(shot.heading, 355.0);
         assert_eq!(shot.velocity, trig::accel(355, 20.0));
@@ -11364,7 +11421,7 @@ mod tests {
             std::mem::replace(&mut ships[1], Ship::at(9, 0.0, 0.0)).moving(Vec2::new(15.0, 0.0));
         let target = led_target(&mut ships[1]);
         let from = ships[0].state;
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let fired = pd_shots(&combat);
         assert_eq!(fired.len(), 1, "{:?}", combat.shots());
         let shot = fired[0];
@@ -11391,14 +11448,16 @@ mod tests {
             let id = defence.id;
             let mut combat = Combat::default();
             let mut ships = fighter_attack(defence, 0.0, -100.0);
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(
                 sounds(&combat.take_events()),
                 [(id, Some(FireSound::at(PD_FIRE_PRIORITY)))],
                 "{id:?}"
             );
+            // The tail sets the whole reload; the ship loop counts it
+            // down later in the pass.
             let mount = ships[0].armament.mounts()[0];
-            assert_eq!(mount.reload, mount.spec.reload - 1.0, "{id:?}: reloading");
+            assert_eq!(mount.reload, mount.spec.reload, "{id:?}: reloading");
         }
     }
 
@@ -11414,7 +11473,7 @@ mod tests {
             Vec2::ZERO,
         );
         combat.shots[0].aimed_at = Some(A);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let fired = pd_shots(&combat);
         assert_eq!(fired.len(), 1);
         let to_missile = aim::bearing(Vec2::ZERO, flying(&combat, missile).unwrap().position);
@@ -11437,7 +11496,7 @@ mod tests {
             Vec2::ZERO,
         );
         combat.shots[0].aimed_at = Some(A);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let fired = pd_shots(&combat);
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].heading, 90.0, "at the fighter");
@@ -11455,7 +11514,7 @@ mod tests {
             defender.armament =
                 Armament::new(records.iter().map(|record| (WeaponSpec::new(record), 1)));
             let mut ships = [defender, attacker];
-            tick(&mut combat, &mut ships, &NovaDisable);
+            phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
             fired(&combat.take_events(), A)
         };
         assert_eq!(fires(&[long]), 1, "the beam reaches it");
@@ -11471,7 +11530,7 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = fighter_attack(wild, 100.0, 0.0);
         let mut chance = nova_sim_base::fixture::Draws::of(&[3]);
-        tick_drawing(&mut combat, &mut ships, &mut chance);
+        defend_drawing(&mut combat, &mut ships, &mut chance);
         assert_eq!(chance.asked.first(), Some(&20), "Rand(2i)");
         assert_eq!(pd_shots(&combat)[0].heading, 83.0, "90, then 3 - 10");
     }
