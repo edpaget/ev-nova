@@ -4,8 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Runs ci and the build legs (not publish) on any branch, e.g. to try
-  # Developer ID signing from a phase branch: gh workflow run ci.yml --ref <branch>
+  # Runs ci and the build legs (not publish) on any branch, e.g. to try a
+  # release build from a phase branch: gh workflow run ci.yml --ref <branch>
+  # Only main reaches the macos-signing environment, so once the
+  # repository-level signing secrets are deleted (infra/github/README.md,
+  # cut-over) a branch dispatch signs ad-hoc.
   workflow_dispatch:
 
 concurrency:
@@ -106,6 +109,14 @@ jobs:
             os: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
+    # The signing secrets live in the macos-signing environment, whose
+    # deployment-branch policy allows only main (infra/github/signing.tf).
+    # Only main's macOS leg enters it. Every other leg, and every other
+    # branch, names no environment and so still runs: a job that names an
+    # environment its branch can't deploy to never starts. The expression must
+    # never name anything but macos-signing, because naming an environment
+    # that doesn't exist creates it, with no protection rules.
+    environment: ${{ github.ref == 'refs/heads/main' && matrix.os == 'macos-latest' && 'macos-signing' || '' }}
     env:
       # As in `ci`: install only the Rust toolchain.
       MISE_AUTO_INSTALL: "false"
@@ -136,7 +147,10 @@ jobs:
       # under target/, so dist/ holds only the .dmg. No game data. It signs
       # with Developer ID and notarizes when the signing secrets are set,
       # ad-hoc otherwise; the secrets reach this step alone, as the
-      # variables the bundler reads.
+      # variables the bundler reads. On main they come from the
+      # macos-signing environment, whose secrets override repository secrets
+      # of the same name. Elsewhere they come from the repository-level
+      # copies until the cut-over deletes them, and then they are empty.
       - name: Package (macOS)
         if: runner.os == 'macOS'
         shell: bash
