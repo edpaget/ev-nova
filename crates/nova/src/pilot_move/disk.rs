@@ -43,19 +43,31 @@ impl MoveFiles for DiskFiles {
     }
 
     fn move_entry(&mut self, from: &Path, to: &Path) -> io::Result<()> {
-        match fs::rename(from, to) {
-            Err(error)
-                if error.kind() == io::ErrorKind::CrossesDevices
-                    && fs::symlink_metadata(from).is_ok_and(|meta| meta.is_file()) =>
-            {
-                copy_then_remove(from, to)
-            }
-            moved => moved,
-        }
+        move_with(|from, to| fs::rename(from, to), from, to)
     }
 
     fn remove_empty_dir(&mut self, dir: &Path) -> io::Result<()> {
         fs::remove_dir(dir)
+    }
+}
+
+/// Moves `from` to `to` with `rename`, or, when it can't cross to
+/// another filesystem and `from` is a file, with [`copy_then_remove`].
+/// The rename is a parameter so the tests can fail it as only a second
+/// filesystem would.
+fn move_with(
+    rename: impl FnOnce(&Path, &Path) -> io::Result<()>,
+    from: &Path,
+    to: &Path,
+) -> io::Result<()> {
+    match rename(from, to) {
+        Err(error)
+            if error.kind() == io::ErrorKind::CrossesDevices
+                && fs::symlink_metadata(from).is_ok_and(|meta| meta.is_file()) =>
+        {
+            copy_then_remove(from, to)
+        }
+        moved => moved,
     }
 }
 
@@ -192,6 +204,58 @@ mod tests {
         fs::remove_file(dir.join("Ada.json")).expect("removes");
         files.remove_empty_dir(&dir).expect("removes");
         assert!(!dir.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_cannot_be_looked_at_is_an_error_not_missing() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        let file = tmp.path().join("Ada.json");
+        fs::write(&file, "{}").expect("writes");
+        // A file can hold nothing: on Unix, "not a directory", not "not
+        // found".
+        assert!(DiskFiles.exists(&file.join("inside")).is_err());
+    }
+
+    /// A rename that fails as a move to another filesystem does.
+    fn across_devices(_: &Path, _: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::CrossesDevices.into())
+    }
+
+    #[test]
+    fn a_file_a_rename_cannot_move_across_filesystems_is_copied() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        let from = tmp.path().join("Ada.json");
+        let to = tmp.path().join("moved.json");
+        fs::write(&from, "ada").expect("writes");
+        move_with(across_devices, &from, &to).expect("moves");
+        assert_eq!(fs::read_to_string(&to).expect("reads"), "ada");
+        assert!(!from.exists());
+    }
+
+    #[test]
+    fn a_directory_a_rename_cannot_move_across_filesystems_stays() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        let from = tmp.path().join("odd");
+        fs::create_dir(&from).expect("a directory");
+        let to = tmp.path().join("moved");
+        let error = move_with(across_devices, &from, &to).expect_err("stays");
+        assert_eq!(error.kind(), io::ErrorKind::CrossesDevices);
+        assert!(from.is_dir());
+        assert!(!to.exists());
+    }
+
+    #[test]
+    fn any_other_failed_rename_is_its_error_and_copies_nothing() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        let from = tmp.path().join("Ada.json");
+        let to = tmp.path().join("moved.json");
+        fs::write(&from, "ada").expect("writes");
+        let denied = |_: &Path, _: &Path| Err(io::ErrorKind::PermissionDenied.into());
+        let error = move_with(denied, &from, &to).expect_err("fails");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(from.exists());
+        assert!(!to.exists());
     }
 
     #[test]

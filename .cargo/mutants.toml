@@ -22,6 +22,10 @@ exclude_re = [
     "nova-win32/src/console\\.rs:",
     "nova/src/platform/console\\.rs:[0-9]+:[0-9]+: replace <impl StdConsole for Win32Console>",
     "nova/src/platform/window\\.rs:[0-9]+:[0-9]+: replace with_exe_icon ",
+    # Linux- and BSD-only code: the window's app id (`with_app_id`), which
+    # winit gives no way to read back, so no test can see it even there.
+    # The hand check in packaging/README.txt covers it.
+    "nova/src/platform/window\\.rs:[0-9]+:[0-9]+: replace with_app_id ",
     # An NPC's landing box widens below a turn of 8 (`npc_box`); at exactly
     # 8, trunc((9 - 8) x 8 + 32) is the plain box's 40, so `<=` gives the
     # same half-width.
