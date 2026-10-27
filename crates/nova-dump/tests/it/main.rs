@@ -8,3 +8,5 @@ mod common;
 
 mod cli;
 mod stock_dump;
+#[cfg(windows)]
+mod windows_exe;

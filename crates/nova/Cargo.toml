@@ -72,6 +72,10 @@ tempfile.workspace = true
 # The runner tests build the wgpu errors a GPU set-up can fail with.
 wgpu.workspace = true
 
+# The Windows-only tests of the built nova.exe read its PE structures.
+[target.'cfg(windows)'.dev-dependencies]
+object.workspace = true
+
 [features]
 # The developer tools overlay (egui), toggled with the backquote key. Off by
 # default and in release builds; `mise run dev` turns it on.
