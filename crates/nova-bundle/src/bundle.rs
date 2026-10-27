@@ -409,7 +409,9 @@ mod tests {
     #[test]
     fn runs_the_whole_sequence_in_order() {
         let root = Path::new("/work").join("ev-nova");
-        let target = root.join("target");
+        // Cargo's own spelling, so the paths in each command's args (text,
+        // not paths) match on Windows, where `join` writes `\`.
+        let target = spec().target_dir;
         let staging = target.join("bundle").join("staging");
         let out = target.join("bundle").join("out");
         let app = staging.join("Nova.app");
