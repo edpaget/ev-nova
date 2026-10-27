@@ -2,10 +2,10 @@
 //! cargo area, secondary weapon line and radar gear, the government its
 //! `ïntf` is chosen by, and the target layer's brackets, Red Alert icon
 //! and escort menu rows ([`FrameHud`]), each read from the sub-state that
-//! holds it.
+//! holds it; and the target panel's target ([`FrameTarget`]).
 
 use super::super::Session;
-use crate::flight_frame::FrameHud;
+use crate::flight_frame::{FrameHud, FrameTarget};
 
 impl Session {
     /// Fills `into` with what the HUD shows now, every field written. The
@@ -41,13 +41,49 @@ impl Session {
         *red_alert = self.red_alert.icon();
         *escort_rows = self.space.escort_rows(pilot, statics);
     }
+
+    /// Fills `into` with the ship target as the target panel shows it, or
+    /// none without one: its name and subtitle as the space gives them,
+    /// a mission ship's drawn ones while it is marked
+    /// (`Space::npc_name`, `Space::npc_subtitle`), and its status line and
+    /// label, which read the statics, the missions and the disable rule
+    /// ([`Session::target_status`], [`Session::target_tag`]). A target
+    /// already filled keeps its strings' buffers, so a steady fill
+    /// doesn't allocate.
+    pub(super) fn fill_target(&self, into: &mut Option<FrameTarget>) {
+        let Some(npc) = self.target() else {
+            *into = None;
+            return;
+        };
+        let name = self
+            .space
+            .npc_name(&self.pilot, &self.statics, npc)
+            .unwrap_or_default();
+        let subtitle = self.space.npc_subtitle(&self.pilot, npc);
+        let (status, tag) = (self.target_status(npc), self.target_tag(npc));
+        let target = into.get_or_insert_with(|| FrameTarget {
+            npc: npc.id,
+            name: String::new(),
+            subtitle: None,
+            status,
+            tag,
+        });
+        target.npc = npc.id;
+        name.clone_into(&mut target.name);
+        match (subtitle, &mut target.subtitle) {
+            (Some(subtitle), Some(kept)) => subtitle.clone_into(kept),
+            (subtitle, kept) => *kept = subtitle.map(str::to_owned),
+        }
+        target.status = status;
+        target.tag = tag;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::tests::filled;
     use super::*;
-    use crate::catalog::{GovtId, OutfitId, StarSystem, SystemId};
+    use crate::catalog::{GovtId, OutfitId, StarSystem, StellarId, SystemId};
     use crate::escort::{ClassRow, EscortClass};
     use crate::iff::{MOD_ANTI_INTERFERENCE, MOD_IFF, RadarGear};
     use crate::market::Good;
@@ -55,6 +91,7 @@ mod tests {
     use crate::reserves::{Gauge, Reserves};
     use crate::session::StellarPick;
     use crate::session::tests::{ROCKET, armed, facing_an_npc, three_stellars, with_secondaries};
+    use crate::target_panel::{TargetStatus, TargetTag};
     use crate::targeting::TargetPick;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, outfit, ship};
     use crate::traffic::npc::NpcId;
@@ -203,6 +240,68 @@ mod tests {
             })
         );
         assert_eq!(rows, session.escort_menu());
+    }
+
+    // The target panel's target and the stellars' IFF.
+
+    #[test]
+    fn a_fill_writes_no_target_without_one() {
+        let catalog = armed();
+        let session = facing_an_npc(&catalog, 0);
+        assert_eq!(filled(&session).target, None);
+    }
+
+    #[test]
+    fn a_fill_writes_the_targets_name_subtitle_status_and_tag() {
+        use crate::session::mission_ships::tests::{accepted, shipping, ships_catalog, take_off};
+        let catalog = ships_catalog(shipping(-1, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        let id = session.npcs()[0].id;
+        session.space.traffic.npcs_mut()[0].govt = Some(GovtId(140));
+        session.chart.target = Some(id);
+        let npc = session.npcs()[0].clone();
+        let target = filled(&session).target.expect("a target");
+        assert_eq!(
+            target,
+            FrameTarget {
+                npc: id,
+                name: "Rover".to_owned(),
+                subtitle: Some("Bounty Hunter".to_owned()),
+                status: session.target_status(&npc),
+                tag: Some(TargetTag::Code(GovtId(140))),
+            }
+        );
+        assert_eq!(target.status, TargetStatus::Shield(100));
+    }
+
+    #[test]
+    fn an_unmarked_targets_name_is_its_ship_types_with_no_subtitle() {
+        use crate::session::mission_ships::tests::{accepted, shipping, ships_catalog, take_off};
+        let catalog = ships_catalog(shipping(-1, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        session.space.traffic.npcs_mut()[0].mission = None;
+        session.chart.target = Some(session.npcs()[0].id);
+        let target = filled(&session).target.expect("a target");
+        assert_eq!(target.name, "Ship 200");
+        assert_eq!(target.subtitle, None);
+        assert_eq!(
+            target.tag,
+            Some(TargetTag::Code(GovtId(131))),
+            "its government's"
+        );
+    }
+
+    #[test]
+    fn a_shown_stellar_has_its_iff_and_one_not_shown_none() {
+        let mut session = Session::start(&three_stellars()).expect("starts");
+        session.chart.sites.remove(0);
+        let frame = filled(&session);
+        let iff = |id| frame.stellar(StellarId(id)).expect("listed").iff;
+        assert_eq!(iff(128), session.stellar_iff(StellarId(128)));
+        assert!(iff(128).is_some());
+        assert_eq!(iff(131), None, "not shown");
     }
 
     #[test]

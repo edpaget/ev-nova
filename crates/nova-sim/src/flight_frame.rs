@@ -37,7 +37,7 @@ use crate::hail::CommNote;
 use crate::hire::PayNote;
 use crate::hover::{DrawnBox, DrawnShips, Hover};
 use crate::hyperspace::JumpReadiness;
-use crate::iff::{RadarGear, ShipIff};
+use crate::iff::{RadarGear, ShipIff, StellarIff};
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
 use crate::player_fate::Drawn as ShipDrawn;
@@ -51,6 +51,7 @@ use crate::ship_layer::ShipLayer;
 use crate::sound::SimSound;
 use crate::status_cargo::StatusCargo;
 use crate::story::DrawnSheet;
+use crate::target_panel::{TargetStatus, TargetTag};
 use crate::targeting::TargetPick;
 use crate::traffic::npc::Mode;
 use crate::traffic::npc::NpcId;
@@ -135,6 +136,9 @@ pub struct FlightFrame {
     /// What the status bar and the target layer show of the player's
     /// ship, its gear and its targets ([`FrameHud`]).
     pub hud: FrameHud,
+    /// The ship target as the target panel shows it, if there is one
+    /// ([`FrameTarget`]).
+    pub target: Option<FrameTarget>,
 }
 
 impl Default for FlightFrame {
@@ -167,6 +171,7 @@ impl Default for FlightFrame {
             hyper_gamma: 0.0,
             traffic_ships: Vec::new(),
             hud: FrameHud::default(),
+            target: None,
         }
     }
 }
@@ -343,6 +348,29 @@ impl Default for FrameHud {
             }),
         }
     }
+}
+
+/// The ship target as the target panel shows it, as
+/// [`FlightFrame::target`] carries it: which NPC, its name and subtitle,
+/// its status line and the label against the panel's bottom right. The
+/// ship type and the shield the panel's redraws follow are the target's
+/// own record's ([`FlightFrame::ship`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrameTarget {
+    /// The NPC targeted
+    /// ([`Session::target`](crate::Session::target)).
+    pub npc: NpcId,
+    /// Its name, empty when the session has none for it
+    /// (`Session::npc_name`).
+    pub name: String,
+    /// Its subtitle in place of its ship type's, if any
+    /// (`Session::npc_subtitle`).
+    pub subtitle: Option<String>,
+    /// What its status line shows (`Session::target_status`).
+    pub status: TargetStatus,
+    /// The label against the panel's bottom right, if any
+    /// (`Session::target_tag`).
+    pub tag: Option<TargetTag>,
 }
 
 /// Something the player asks of the flight, which
@@ -962,6 +990,9 @@ pub struct FrameStellar {
     /// one or isn't shown
     /// (`Session::gate_frame`).
     pub gate_frame: Option<u16>,
+    /// What IFF shows it as on the radar, or `None` for one that isn't
+    /// shown (`Session::stellar_iff`).
+    pub iff: Option<StellarIff>,
 }
 
 /// The boxes the ships are drawn in, for the hover test and a click in
@@ -1135,6 +1166,7 @@ mod tests {
             frozen: false,
             counts_none: false,
             gate_frame: None,
+            iff: None,
         };
         let frame = FlightFrame {
             stellars: vec![stellar(131, true), stellar(128, true), stellar(129, false)],

@@ -400,6 +400,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         hyper_gamma,
         traffic_ships,
         hud,
+        target,
     } = frame;
     let other_system = SystemId(if system.0 == i16::MAX { 0 } else { i16::MAX });
     FlightFrame {
@@ -463,6 +464,11 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         hyper_gamma: hyper_gamma + 1.0,
         traffic_ships: one_or_none(traffic_ships, || ShipId(128)),
         hud: unlike_hud(hud),
+        target: if target.is_some() {
+            None
+        } else {
+            Some(record::target(0))
+        },
     }
 }
 
@@ -545,8 +551,10 @@ fn one_or_none<T>(records: &[T], record: impl FnOnce() -> T) -> Vec<T> {
 /// stellar.
 pub mod record {
     use nova_sim::combat::projectile::ShotId;
-    use nova_sim::flight_frame::{FrameShip, FrameShot, FrameStellar};
-    use nova_sim::{DrawnSheet, NpcId, ShipId, ShipRef, StellarId, Vec2, WeaponId};
+    use nova_sim::flight_frame::{FrameShip, FrameShot, FrameStellar, FrameTarget};
+    use nova_sim::{
+        DrawnSheet, NpcId, ShipId, ShipRef, StellarId, StellarIff, TargetStatus, Vec2, WeaponId,
+    };
 
     /// The player's ship, of class `class`, at `at` facing `heading`,
     /// drawn in full and boxed by its own frames.
@@ -591,7 +599,21 @@ pub mod record {
         }
     }
 
-    /// Stellar `id`, shown, whole, on its `Type` sheet, no hypergate.
+    /// NPC `id` targeted, named "Target", with no subtitle, at full
+    /// shield and no label.
+    #[must_use]
+    pub fn target(id: u32) -> FrameTarget {
+        FrameTarget {
+            npc: NpcId(id),
+            name: "Target".to_owned(),
+            subtitle: None,
+            status: TargetStatus::Shield(100),
+            tag: None,
+        }
+    }
+
+    /// Stellar `id`, shown, whole, on its `Type` sheet, no hypergate,
+    /// unlandable on the radar.
     #[must_use]
     pub fn stellar(id: StellarId) -> FrameStellar {
         FrameStellar {
@@ -603,6 +625,7 @@ pub mod record {
             frozen: false,
             counts_none: false,
             gate_frame: None,
+            iff: Some(StellarIff::Unlandable),
         }
     }
 }
@@ -1236,8 +1259,10 @@ mod tests {
                 hyper_gamma,
                 traffic_ships,
                 hud,
+                target,
             } = &frame;
             assert_unlike_hud(&other.hud, hud);
+            assert_ne!(other.target, *target);
             assert_ne!(other.ships, *ships);
             assert_ne!(other.drawn, *drawn);
             assert_ne!(other.shots, *shots);

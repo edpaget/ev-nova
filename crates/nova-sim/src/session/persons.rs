@@ -457,7 +457,7 @@ impl Space {
     /// that is not empty (`_DrawStatusTarg` @0x4b6c8-0x4b6e7), else its
     /// person's, or its ship type's, if the session has either.
     #[must_use]
-    fn npc_name<'a>(
+    pub(super) fn npc_name<'a>(
         &'a self,
         pilot: &'a Pilot,
         statics: &'a Statics,
@@ -479,7 +479,7 @@ impl Space {
     /// empty, its person's never (@0x4b80f-0x4b86f); otherwise its
     /// person's, unless it has none or it is empty (@0x4b880).
     #[must_use]
-    fn npc_subtitle<'a>(&'a self, pilot: &'a Pilot, npc: &Npc) -> Option<&'a str> {
+    pub(super) fn npc_subtitle<'a>(&'a self, pilot: &'a Pilot, npc: &Npc) -> Option<&'a str> {
         if npc.mission.is_some() {
             return super::mission_ships::mission_ship_text(pilot, npc.mission, |ships| {
                 &ships.subtitle

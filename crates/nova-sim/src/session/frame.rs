@@ -40,6 +40,7 @@ impl Session {
             hyper_gamma,
             traffic_ships,
             hud,
+            target,
         } = into;
         *nav_mode = self.nav_mode();
         *system = self.system();
@@ -71,6 +72,7 @@ impl Session {
         *hyper_gamma = self.hyper_gamma();
         *traffic_ships = self.traffic_ships();
         self.fill_hud(hud);
+        self.fill_target(target);
     }
 }
 
@@ -243,6 +245,7 @@ pub(super) mod tests {
                 frozen: true,
                 counts_none: true,
                 gate_frame: Some(9),
+                iff: Some(crate::iff::StellarIff::Dominated),
             }],
             effective_murk: 99,
             system_murk: 99,
@@ -251,6 +254,13 @@ pub(super) mod tests {
             hyper_gamma: 9.0,
             traffic_ships: vec![ShipId(999)],
             hud: stale_hud(),
+            target: Some(crate::flight_frame::FrameTarget {
+                npc: crate::traffic::npc::NpcId(999),
+                name: "Stale".to_owned(),
+                subtitle: Some("Stale".to_owned()),
+                status: crate::target_panel::TargetStatus::Waiting,
+                tag: Some(crate::target_panel::TargetTag::Fighter),
+            }),
         }
     }
 
@@ -561,6 +571,7 @@ pub(super) mod tests {
             frozen: session.frame_frozen(id),
             counts_none: session.counts_no_frames(id),
             gate_frame: session.gate_frame(id),
+            iff: session.stellar_iff(id),
         }
     }
 

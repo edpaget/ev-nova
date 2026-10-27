@@ -1604,6 +1604,7 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
     );
     check("traffic_ships", kept.traffic_ships == fresh.traffic_ships);
     check("hud", kept.hud == fresh.hud);
+    check("target", kept.target == fresh.target);
     differs
 }
 
