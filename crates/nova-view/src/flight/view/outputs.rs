@@ -38,7 +38,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightEvent::MissionShown`]), whether their bars were all staged
     /// already ([`FlightView::stage_bar`]), and the nav the last noted when
     /// it was queued since the nav area was last taken
-    /// ([`FlightFrame::texts_queued`]): what the concrete
+    /// ([`FlightFrame::texts_queued`]): what
     /// [`FlightView::take_mission_texts`] redraws in flight from.
     ///
     /// [`FlightEvent::MissionShown`]: nova_sim::flight_frame::FlightEvent::MissionShown

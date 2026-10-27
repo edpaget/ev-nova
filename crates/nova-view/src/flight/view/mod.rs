@@ -497,7 +497,8 @@
 //!   none it says "You have no active missions." (`STR#` 2002 #354) after
 //!   the shared refusal beep
 //!   ([`SimSound::Refused`](nova_sim::SimSound::Refused), @0x70557). The
-//!   session decides ([`Session::press_mission_info`]), and refuses it in
+//!   session decides (`nova_sim::Session::press_mission_info`, through
+//!   [`FlightCommand::PressMissionInfo`](nova_sim::flight_frame::FlightCommand::PressMissionInfo)), and refuses it in
 //!   silence during a jump, its pre-jump stage included (+0x50,
 //!   @0x70424), in the escape pod (+0xc908, @0x7042e), while the ship
 //!   breaks up (`_IsDying` @0x70439, +0x3c @0x7044b), once it has
@@ -1063,14 +1064,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// afresh on each read, for the nav keys', the map's and the jump
     /// key's reads mid-input. The world reads the frame the view keeps
     /// ([`FlightView::frame`](FlightView#structfield.frame)) instead, but
-    /// these stay fresh: while the strangler lasts the concrete blocks still
-    /// change the session directly between two of their reads in one input
-    /// or tick (a jump begun, a landing, a boarding) without refreshing
-    /// the kept frame, which a read here would then find stale. Once every
-    /// change goes through [`FlightSim::apply`] and [`FlightSim::step`]
-    /// (rdm:phase/view-sim-seam/phase-9-travel-on-port and
-    /// rdm:phase/view-sim-seam/phase-11-spaceport-on-port), these can read
-    /// the kept frame too.
+    /// these stay fresh: while the strangler lasts, the code that still
+    /// changes the session behind the port (`FlightView::transact`, the
+    /// pilot desk and the builders) can change it between two of their
+    /// reads in one input or tick without refreshing the kept frame, which
+    /// a read here would then find stale. Once every change goes through
+    /// [`FlightSim::apply`] and [`FlightSim::step`]
+    /// (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks and
+    /// rdm:phase/view-sim-seam/phase-13-lifecycle-at-the-edge), these can
+    /// read the kept frame too.
     pub(super) fn frame_now(&self) -> FlightFrame {
         let mut frame = FlightFrame::default();
         self.sim.frame(&mut frame);
@@ -1101,9 +1103,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The player's ship's place in the frame, filled afresh first: for
-    /// the concrete code that changes the session and then draws the ship
-    /// where it is ([`FlightView::place_ship`], `FlightView::lay_out`,
-    /// `FlightView::assign`), which reads it before or without a catch-up.
+    /// the code that changes the flight and then draws the ship where it
+    /// is ([`FlightView::place_ship`], `FlightView::lay_out`,
+    /// [`FlightView::assign`]), which reads it before or without a
+    /// catch-up.
     pub(super) fn player_place_now(&mut self) -> ShipPlace {
         self.refresh_frame();
         self.frame.player().place()

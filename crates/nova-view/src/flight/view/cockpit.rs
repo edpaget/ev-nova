@@ -325,9 +325,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// edge.
     ///
     /// It draws the flight's frame filled afresh ([`FlightView::frame_now`]),
-    /// not the kept one: the docked calls that change the session
-    /// (rdm:phase/view-sim-seam/phase-11-spaceport-on-port) don't all fill
-    /// the kept frame afresh after them yet.
+    /// not the kept one: the calls that still change the session behind
+    /// the port while docked (`FlightView::transact`, the pilot desk) don't
+    /// fill the kept frame afresh after them (rdm:task/view-frame-fills-per-tick).
     pub fn draw_status_bar(&self, list: &mut DrawList) {
         if let Ok(bar) = &self.status_bar {
             self.draw_bar(list, (bar, VIEW_SIZE.0), &self.frame_now());
