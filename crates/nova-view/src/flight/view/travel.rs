@@ -10,7 +10,7 @@ use nova_sim::{
     Assigned, Assignment, AsteroidCatalog, CombatCatalog, CommCatalog, Condition, Departure,
     GateKind, GateRefusal, LandOutcome, LandPress, LandingRefusal, OutfitOrder, OutfitRefusal,
     OutfitRun, PilotCatalog, Session, Settled, ShipId, ShipPurchase, ShipRefusal, SimMessage,
-    StellarId, SystemId, TrafficCatalog,
+    StellarId, TrafficCatalog,
 };
 use nova_sim::{PlayerCommand, PlayerFate, TagNames};
 
@@ -462,7 +462,9 @@ impl<
     /// the system shown draws the ship there ([`FlightView::place_ship`]);
     /// and a rebuild point that changed which stellars are shown, with no
     /// system entered, reads the scene again with them ([`shown_scene`](super::shown_scene))
-    /// ([`FlightView::redraw_scene`]).
+    /// ([`FlightView::redraw_scene_then`], with the status bar's follow
+    /// and redraw, [`FlightView::follow_bar`] and
+    /// [`FlightView::redraw_status`], still the session's).
     ///
     /// The only place the session events are taken: each frame calls it
     /// first, so a change made outside the view's own methods (a
@@ -479,74 +481,9 @@ impl<
         if self.sim.session.is_err() {
             return Redrawn::default();
         }
-        self.catch_up_then(Self::redraw_scene)
-    }
-
-    /// [`FlightView::catch_up`]'s session-side redraws, given what the
-    /// events asked for, in their order: the ship's sheet, the bar, the
-    /// layout or the ship's place, the scene read again, the stellars'
-    /// looks, the status bar and the stars. The kept frame was filled
-    /// afresh as the events were drained ([`FlightView::catch_up_then`]),
-    /// so each reads the flight as the events left it.
-    fn redraw_scene(&mut self, redrawn: Redrawn) {
-        if self.sim.session.is_err() {
-            return;
-        }
-        let system = self.frame.system;
-        let reshown = redrawn.rebuilt
-            && !redrawn.system
-            && self.scene.as_ref().is_some_and(|scene| {
-                !scene
-                    .stellars()
-                    .iter()
-                    .map(|stellar| stellar.id)
-                    .eq(self.frame.stellars_shown())
-            });
-        if redrawn.ship {
-            self.follow_ship();
-        }
-        self.follow_bar();
-        if redrawn.system {
-            self.lay_out(system);
-        } else if redrawn.stellar {
-            self.place_ship();
-        }
-        if reshown {
-            self.show_scene();
-        }
-        if redrawn.rebuilt {
-            self.rebuild_stellars();
-        } else if redrawn.galaxy || redrawn.system {
-            self.show_destroyed();
-        }
-        if redrawn.system {
-            self.redraw_status();
-        }
-        if std::mem::take(&mut self.stars_due) || redrawn.stars {
-            self.reset_stars();
-        }
-    }
-
-    /// Lays out `system`, the session's: its scene ([`FlightView::show_scene`]),
-    /// each stellar shown before resuming its animation where it was left,
-    /// the course map's course, and the ship drawn from where the frame,
-    /// filled afresh, has it, the last system's NPCs and effects let go.
-    fn lay_out(&mut self, system: SystemId) {
-        self.show_scene();
-        if self.sim.session.is_err() {
-            return;
-        }
-        let course = self.frame_now().course_shown;
-        self.map.show_course(system, &course);
-        self.previous = self.player_place_now();
-        self.alpha = 0.0;
-        self.npc_previous.clear();
-        self.effects.clear();
-        self.flashes.clear();
-        self.held_alts.get_mut().clear();
-        self.glows.clear();
-        self.shot_looks.clear();
-        self.read_npc_sheets();
+        self.catch_up_then(|view, redrawn| {
+            view.redraw_scene_then(redrawn, Self::follow_bar, Self::redraw_status);
+        })
     }
 
     /// Shows the explosions the jump left pending, a crön's `Y` on its
@@ -579,20 +516,6 @@ impl<
     pub fn pilot_desk(&mut self) -> Option<SessionDesk<'_, C>> {
         let session = self.sim.session.as_mut().ok()?;
         Some(SessionDesk::new(session, &*self.catalog, self.map.model()))
-    }
-
-    /// Draws the ship where the session has it, not on its way from where
-    /// it was, and shows the session's course again on the course map:
-    /// after a move to another stellar of the system shown, a take-off and
-    /// a new pilot's beginning. Its place is read from the frame filled
-    /// afresh ([`FlightView::player_place_now`]).
-    pub(super) fn place_ship(&mut self) {
-        if self.sim.session.is_err() {
-            return;
-        }
-        self.previous = self.player_place_now();
-        self.show_course();
-        self.alpha = 0.0;
     }
 
     /// Catches the screen up with an edit made through the pilot desk now,
@@ -1204,25 +1127,6 @@ impl<
         self.say_for(assigned_message(assigned), assigned_ticks(assigned));
         Some(assigned)
     }
-
-    /// Reads the player's sprite sheet afresh when the session flies a
-    /// class other than the one it was read for, so a ship bought,
-    /// captured or changed by a set expression is drawn in its own
-    /// sprites; called only when the session tells the ship changed
-    /// ([`FlightView::catch_up`]), which it may tell of the class it was.
-    /// A sheet that cannot be read is kept against its class too, so it is
-    /// not tried again. The status bar follows on its own
-    /// ([`FlightView::follow_bar`]).
-    fn follow_ship(&mut self) {
-        if self.sim.session.is_err() {
-            return;
-        }
-        let ship = self.frame.player().class;
-        if self.sheet_ship != Some(ship) {
-            self.sheet = self.catalog.ship_sheet(ship);
-            self.sheet_ship = Some(ship);
-        }
-    }
 }
 
 /// The course map, over the [`FlightSim`] port: its opening, drawing,
@@ -1233,7 +1137,7 @@ impl<
 /// the session's: [`FlightView::map_input_taken`] says when it is due.
 impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::catch_up`]'s work over the port, with `redraw` the
-    /// redraws that still read the session ([`FlightView::redraw_scene`]
+    /// redraws that still read the session ([`FlightView::redraw_scene_then`]
     /// for a session's flight): drains the flight's session events
     /// ([`FlightEvent::Session`]) and folds them into what they ask for,
     /// several of a kind asking for one reaction. A change to the galaxy

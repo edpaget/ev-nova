@@ -96,6 +96,7 @@ mod port_screen_map;
 mod ship_drawing;
 mod shots;
 mod stars;
+mod stellar_looks;
 mod stellars;
 mod stepping;
 mod widescreen;
@@ -3775,58 +3776,6 @@ fn destructible() -> View {
     })
 }
 
-/// Whether stellar `id` is drawn with its `Type` sheet (1000 + `id`)
-/// and whether with its `DeadType` sheet (2000 + `id`), at any of the
-/// first 4 frames.
-fn sheets_drawn(view: &View, id: i16) -> (bool, bool) {
-    let images: Vec<ImageKey> = sprites(&drawn(view))
-        .into_iter()
-        .map(|(image, _)| image)
-        .collect();
-    let sheet = |image_id| (0..4).any(|f| images.contains(&ImageKey::sprite(image_id, f)));
-    (sheet(1000 + id), sheet(2000 + id))
-}
-
-const TYPE: (bool, bool) = (true, false);
-/// Whether graphic type 0's sheet is drawn, at any of the first 4
-/// frames: Moon (129) is the only stellar that can draw it.
-fn type_zero_drawn(view: &View) -> bool {
-    sprites(&drawn(view))
-        .into_iter()
-        .any(|(image, _)| (0..4).any(|f| image == ImageKey::sprite(TYPE_ZERO, f)))
-}
-
-/// Moon (129) is drawn with its `Type` sheet, or graphic type 0's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Moon {
-    Type,
-    TypeZero,
-}
-
-fn moon(view: &View) -> Moon {
-    match (sheets_drawn(view, 129), type_zero_drawn(view)) {
-        (TYPE, false) => Moon::Type,
-        ((false, false), true) => Moon::TypeZero,
-        other => panic!("the Moon drawn as {other:?}"),
-    }
-}
-
-/// [`destructible`] with `DeadTypeFallback` read as `reading`.
-fn reading(reading: RuleSource) -> View {
-    destructible().with_rules(Rulebook::default().with_override(RuleKey::DeadTypeFallback, reading))
-}
-
-/// A pilot loaded with the Moon destroyed, flown by `rules`.
-fn loaded(rules: Rulebook) -> View {
-    let catalog = FakeCatalog {
-        lives: vec![life(129, 0)],
-        ..catalog()
-    };
-    let mut session = Session::start(&catalog).expect("starts");
-    let destroy = nova_sim::SetExpr::parse("Y129").expect("parses");
-    session.run_set(&destroy, &mut NeverFires);
-    FlightView::with_pilot(catalog, session.pilot().clone()).with_rules(rules)
-}
 /// Grants a person's `GrantCount` of the first outfit it may.
 #[derive(Debug)]
 struct Grants;

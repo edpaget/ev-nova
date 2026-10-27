@@ -6,11 +6,14 @@
 
 use std::time::Duration;
 
+use nova_sim::SystemId;
+
+use crate::flight::catalog::{CombatLooks, ShipSprites};
 use crate::flight::sim_port::FlightSim;
 use crate::system::catalog::SystemCatalog;
 
 use super::stars;
-use super::{FlightView, look, show_destroyed, show_gate_frames, shown_scene};
+use super::{FlightView, Redrawn, look, show_destroyed, show_gate_frames, shown_scene};
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Draws each stellar of the scene shown as the frame, filled afresh,
@@ -90,5 +93,106 @@ impl<C: SystemCatalog, S: FlightSim> FlightView<C, S> {
         scene.resume(&self.kept_frames);
         show_gate_frames(&mut scene, &self.frame);
         self.scene = Some(scene);
+    }
+}
+
+/// The scene's redraws as the flight's events ask for them, over the port:
+/// the player's sheet, the layout or the ship's place, the scene read
+/// again, the stellars' looks and the stars, all from the kept frame.
+impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
+    /// [`FlightView::catch_up`]'s redraws, given what the events asked for
+    /// (`redrawn`), in their order: the ship's sheet, the bar (`bar`), the
+    /// layout or the ship's place, the scene read again, the stellars'
+    /// looks, the status bar (`status`, on a system entered) and the stars.
+    /// The kept frame was filled afresh as the events were drained
+    /// ([`FlightView::catch_up_then`]), so each reads the flight as the
+    /// events left it. `bar` and `status` are the session's still
+    /// (rdm:phase/view-sim-seam/phase-8-hud-and-target-frame), split at the
+    /// concrete callee.
+    pub(super) fn redraw_scene_then(
+        &mut self,
+        redrawn: Redrawn,
+        bar: impl FnOnce(&mut Self),
+        status: impl FnOnce(&mut Self),
+    ) {
+        let system = self.frame.system;
+        let reshown = redrawn.rebuilt
+            && !redrawn.system
+            && self.scene.as_ref().is_some_and(|scene| {
+                !scene
+                    .stellars()
+                    .iter()
+                    .map(|stellar| stellar.id)
+                    .eq(self.frame.stellars_shown())
+            });
+        if redrawn.ship {
+            self.follow_ship();
+        }
+        bar(self);
+        if redrawn.system {
+            self.lay_out(system);
+        } else if redrawn.stellar {
+            self.place_ship();
+        }
+        if reshown {
+            self.show_scene();
+        }
+        if redrawn.rebuilt {
+            self.rebuild_stellars();
+        } else if redrawn.galaxy || redrawn.system {
+            self.show_destroyed();
+        }
+        if redrawn.system {
+            status(self);
+        }
+        if std::mem::take(&mut self.stars_due) || redrawn.stars {
+            self.reset_stars();
+        }
+    }
+
+    /// Lays out `system`, the frame's: its scene ([`FlightView::show_scene`]),
+    /// each stellar shown before resuming its animation where it was left,
+    /// the course map's course, and the ship drawn from where the frame,
+    /// filled afresh, has it, the last system's NPCs and effects let go.
+    fn lay_out(&mut self, system: SystemId) {
+        self.show_scene();
+        let course = self.frame_now().course_shown;
+        self.map.show_course(system, &course);
+        self.previous = self.player_place_now();
+        self.alpha = 0.0;
+        self.npc_previous.clear();
+        self.effects.clear();
+        self.flashes.clear();
+        self.held_alts.get_mut().clear();
+        self.glows.clear();
+        self.shot_looks.clear();
+        self.read_npc_sheets();
+    }
+
+    /// Draws the ship where the flight has it, not on its way from where
+    /// it was, and shows the flight's course again on the course map:
+    /// after a move to another stellar of the system shown, a take-off and
+    /// a new pilot's beginning. Its place is read from the frame filled
+    /// afresh ([`FlightView::player_place_now`]).
+    pub(super) fn place_ship(&mut self) {
+        self.previous = self.player_place_now();
+        self.show_course();
+        self.alpha = 0.0;
+    }
+
+    /// Reads the player's sprite sheet afresh when the frame's ship is of
+    /// a class other than the one it was read for, so a ship bought,
+    /// captured or changed by a set expression is drawn in its own
+    /// sprites; called only when the flight tells the ship changed
+    /// ([`FlightView::catch_up`]), which it may tell of the class it was.
+    /// A sheet that cannot be read is kept against its class too, so it is
+    /// not tried again. The status bar follows on its own
+    /// (`FlightView::follow_bar`).
+    fn follow_ship(&mut self) {
+        let ship = self.frame.player().class;
+        if self.sheet_ship != Some(ship) {
+            self.sheet = self.catalog.ship_sheet(ship);
+            self.sheet_ship = Some(ship);
+        }
     }
 }
