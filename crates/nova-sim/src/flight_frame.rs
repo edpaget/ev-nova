@@ -470,6 +470,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_cleared_report_holds_no_step_and_no_stop() {
+        let mut report = StepReport {
+            steps: vec![StepRun::default(); 3],
+            stopped: true,
+        };
+        report.clear();
+        assert_eq!(report, StepReport::default());
+    }
+
+    #[test]
     fn only_a_refusal_is_refused() {
         assert!(Answer::Refused.is_refused());
         assert!(!Answer::Stellar(StellarId(128)).is_refused());

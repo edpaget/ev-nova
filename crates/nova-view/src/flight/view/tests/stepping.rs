@@ -443,6 +443,36 @@ fn a_ships_weapon_glow_lights_on_its_pass_and_falls_by_its_classs_decay() {
     assert!(view.glows.drawn(ShipRef::Player) <= full, "falling");
 }
 
+#[test]
+fn an_npcs_weapon_glow_falls_by_its_own_classs_decay() {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    view.sheet = Ok(ShipSheet {
+        weap_decay: 0,
+        ..sheet()
+    });
+    view.npc_sheets.insert(
+        ShipId(129),
+        Ok(ShipSheet {
+            weap_decay: 6,
+            ..sheet()
+        }),
+    );
+    let lit = CombatEvent::WeaponGlow {
+        ship: NPC,
+        late: false,
+    };
+    frame(&mut view, one_step(vec![fight(vec![lit])]));
+    let full = view.glows.drawn(NPC);
+    for _ in 0..3 {
+        frame(&mut view, one_step(vec![fight(vec![])]));
+    }
+    let fallen = view.glows.drawn(NPC);
+    assert!(
+        fallen < full,
+        "by ship 129's decay, not the player's: {full:?} {fallen:?}"
+    );
+}
+
 /// A view firing the player's looped beam, of a 3-tick sound, by `rules`.
 fn firing_looped(rules: &Rulebook) -> Faked {
     let mut catalog = armed(0, &[UNDER]);
