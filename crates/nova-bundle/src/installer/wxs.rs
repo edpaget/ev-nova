@@ -34,6 +34,45 @@ pub const PROGRAMS_FOLDER: &str = "ProgramsFolder";
 /// The icon's id, for the shortcut and `ARPPRODUCTICON`.
 pub const ICON_ID: &str = "nova.ico";
 
+/// Each component's id and GUID, in the order the source lists them.
+///
+/// A component whose key path is a registry value and which holds a file
+/// can't have a GUID WiX makes up, so each has its own. Like
+/// [`UPGRADE_CODE`], they must never change: a component's GUID is how
+/// Windows Installer knows it across versions.
+pub const COMPONENT_GUIDS: [(&str, &str); 5] = [
+    ("nova.exe", "C72B1397-18B3-4216-A8ED-CE17FB130C5F"),
+    ("nova_dump.exe", "1F8BF91A-11C9-47BA-B395-32D28D0B8DF4"),
+    ("README.txt", "72F3A3EA-9071-4305-B670-727C0221BEEF"),
+    ("LICENSE", "A7B9C55E-A439-40CF-9DCE-76D7D9D57843"),
+    ("Shortcut", "A50B207E-582B-46DA-A027-926158080927"),
+];
+
+/// A file name as a WiX identifier: each character but an ASCII letter,
+/// digit, `_` or `.` becomes `_`.
+fn identifier(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// The GUID of the component `id`.
+fn guid(id: &str) -> &'static str {
+    COMPONENT_GUIDS
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map_or_else(
+            || panic!("no GUID for the component {id}"),
+            |(_, guid)| *guid,
+        )
+}
+
 /// Text escaped for an XML attribute value.
 fn escape(text: &str) -> String {
     let mut escaped = String::with_capacity(text.len());
@@ -54,17 +93,19 @@ fn path(path: &Path) -> String {
     escape(&path.display().to_string())
 }
 
-/// A component in the install folder holding one file, its key path an
-/// `HKCU` value named after the file.
-fn file_component(doc: &mut String, id: &str, source: &Path) {
+/// A component in the install folder holding the file `name`, its key
+/// path an `HKCU` value named after the file.
+fn file_component(doc: &mut String, name: &str, source: &Path) {
+    let id = identifier(name);
     let _ = write!(
         doc,
         r#"
-      <Component Id="{id}" Directory="{INSTALL_FOLDER}">
-        <File Id="{id}" Source="{source}" KeyPath="no" />
-        <RegistryValue Root="HKCU" Key="{key}" Name="{id}" Type="integer" Value="1" KeyPath="yes" />
+      <Component Id="{id}" Guid="{guid}" Directory="{INSTALL_FOLDER}">
+        <File Id="{id}" Name="{name}" Source="{source}" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="{key}" Name="{name}" Type="integer" Value="1" KeyPath="yes" />
       </Component>"#,
-        id = escape(id),
+        guid = guid(&id),
+        name = escape(name),
         source = path(source),
         key = escape(REGISTRY_KEY),
     );
@@ -109,7 +150,7 @@ pub fn wxs(spec: &BundleSpec, layout: &InstallerLayout) -> Result<String, Instal
     let _ = write!(
         doc,
         r#"
-      <Component Id="Shortcut" Directory="ProgramMenuFolder">
+      <Component Id="Shortcut" Guid="{shortcut_guid}" Directory="ProgramMenuFolder">
         <Shortcut Id="Shortcut" Name="{shortcut}" Target="[{INSTALL_FOLDER}]{GAME_EXE}" WorkingDirectory="{INSTALL_FOLDER}" Icon="{ICON_ID}" />
         <RemoveFolder Id="RemoveInstallFolder" Directory="{INSTALL_FOLDER}" On="uninstall" />
         <RemoveFolder Id="RemoveProgramsFolder" Directory="{PROGRAMS_FOLDER}" On="uninstall" />
@@ -120,6 +161,7 @@ pub fn wxs(spec: &BundleSpec, layout: &InstallerLayout) -> Result<String, Instal
 </Wix>
 "#,
         shortcut = escape(SHORTCUT),
+        shortcut_guid = guid("Shortcut"),
         key = escape(REGISTRY_KEY),
     );
     Ok(doc)
@@ -258,6 +300,14 @@ mod tests {
                 .map(|p| p.display().to_string())
                 .collect::<Vec<_>>()
         );
+        let names: Vec<_> = all(&doc, "File")
+            .iter()
+            .map(|f| f.attribute("Name").expect("name"))
+            .collect();
+        assert_eq!(
+            names,
+            ["nova.exe", "nova-dump.exe", "README.txt", "LICENSE"]
+        );
         for file in all(&doc, "File") {
             assert_eq!(
                 component_of(file).attribute("Directory"),
@@ -336,6 +386,40 @@ mod tests {
         unique.sort_unstable();
         unique.dedup();
         assert_eq!(unique.len(), names.len(), "{names:?}");
+    }
+
+    #[test]
+    fn every_component_has_its_own_fixed_guid_and_every_id_is_legal() {
+        let text = source();
+        let doc = Document::parse(&text).expect("xml");
+        let guids: Vec<_> = all(&doc, "Component")
+            .iter()
+            .map(|c| c.attribute("Guid").expect("a Guid"))
+            .collect();
+        assert_eq!(guids, COMPONENT_GUIDS.map(|(_, guid)| guid));
+        let mut unique = guids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), guids.len());
+        assert!(!guids.contains(&UPGRADE_CODE));
+        for guid in guids {
+            let groups: Vec<_> = guid.split('-').map(str::len).collect();
+            assert_eq!(groups, [8, 4, 4, 4, 12], "{guid}");
+            assert!(guid.chars().all(|c| c == '-' || c.is_ascii_hexdigit()));
+        }
+        // WiX's identifiers: ASCII letters, digits, `_` and `.`, starting
+        // with a letter or `_`.
+        for node in doc.descendants().filter(Node::is_element) {
+            if let Some(id) = node.attribute("Id") {
+                let mut chars = id.chars();
+                let first = chars.next().expect("not empty");
+                assert!(first.is_ascii_alphabetic() || first == '_', "{id}");
+                assert!(
+                    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.'),
+                    "{id}"
+                );
+            }
+        }
     }
 
     #[test]
