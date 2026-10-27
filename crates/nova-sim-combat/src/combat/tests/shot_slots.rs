@@ -81,8 +81,12 @@ fn a_shot_fired_after_a_lower_slot_is_freed_takes_it() {
             Ship::at(1, 0.0, 0.0).armed(blaster()),
             Ship::at(2, 0.0, -200.0),
         ];
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::test_hits(&mut combat, &mut ships, &NovaDisable);
         assert!(ships[1].reserves.shield.now < 10.0, "B struck");
+        assert!(combat.slots.is_held(0), "{capped}: held till `_HandleShot`");
+        phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(slots(&combat), [1, 2], "{capped}: freed");
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(slots(&combat), [0, 1, 2], "{capped}");
         assert_eq!(combat.shots()[0].firer, A, "{capped}");
     }
@@ -242,7 +246,7 @@ fn a_point_defence_shot_fired_at_a_ship_goes_to_the_shot_layers_tail() {
         end_and_free(&mut combat, 0);
         combat.next_shot = 10;
         let mut ships = fighter_attack(quad(), 0.0, -200.0);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let fired = pd_shots(&combat);
         assert_eq!(fired.len(), 1, "{:?}", combat.shots());
         assert_eq!((fired[0].slot, fired[0].layer), (0, ShotLayer::Shots));

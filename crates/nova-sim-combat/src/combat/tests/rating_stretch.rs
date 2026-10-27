@@ -20,8 +20,8 @@ fn slow_gun() -> WeaponRecord {
     }
 }
 
-/// The reload left on NPC 1's pick after one tick in `field`, firing at
-/// `target`, among B and the player.
+/// The reload left on NPC 1's pick after its step in the ship loop in
+/// `field`, firing at `target`, among B and the player.
 fn reload_after_firing_at(target: ShipRef, field: Field) -> f32 {
     let mut combat = Combat::default();
     let mut ships = [
@@ -35,11 +35,19 @@ fn reload_after_firing_at(target: ShipRef, field: Field) -> f32 {
             ..Ship::at(9, 0.0, 100.0)
         },
     ];
-    tick_in(
+    let (arsenal, govts) = (Arsenal::default(), Governments::default());
+    let arena = Arena {
+        field,
+        ..phase::arena(&arsenal, &govts, Rules::default())
+    };
+    phase::run_in(
         &mut combat,
         &mut ships,
-        (&Arsenal::default(), field),
+        arena,
         &mut NeverFires,
+        |combat, fighters, arena, chance| {
+            combat.handle_npcs(fighters, arena, chance);
+        },
     );
     ships[0].armament.mounts()[0].reload
 }

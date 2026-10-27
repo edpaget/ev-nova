@@ -228,45 +228,44 @@ fn frail_missile() -> WeaponRecord {
 
 #[test]
 fn a_missile_a_point_defence_beam_downs_sets_off_an_asteroid_in_the_next_tick() {
-    // B fires on tick 1; on tick 2 A's beam takes it (`_AIDispatch`), the
-    // missile moves 5 pixels to (0, -195) (`_HandleShot`) and the beam
-    // downs it (`_HandleBeams` @0x30ab1); tick 3's proximity pass sets it
-    // off on the asteroid 20 pixels right of it, and `_HandleShot` frees it.
-    let mut defender = Ship::at(1, 0.0, 0.0).armed(pd_beam());
-    defender.trigger = Trigger {
-        point_defence: false,
-        ..QUIET
-    };
-    let attacker = Ship::at(2, 0.0, -200.0)
-        .armed(frail_missile())
-        .facing(180.0)
-        .targeting(A);
-    let mut ships = [defender, attacker];
+    // B's missile at A, its last move 5 pixels down to (0, -195): A's
+    // beam takes it (`_AIDispatch`) and downs it (`_HandleBeams`
+    // @0x30ab1); the next proximity pass sets it off on the asteroid 20
+    // pixels right of it, and `_HandleShot` frees it.
+    let mut ships = [
+        Ship::at(1, 0.0, 0.0).armed(pd_beam()),
+        Ship::at(2, 0.0, -200.0),
+    ];
     let mut rocks = Rocks::of([rock(0, 20.0, -195.0)]);
     let mut combat = Combat::default();
-    let tick_once = |combat: &mut Combat, ships: &mut [Ship], rocks: &mut Rocks| {
-        tick_amid(combat, ships, &Arsenal::default(), Rules::default(), rocks);
-        ships[0].trigger = QUIET;
-        ships[1].trigger = QUIET;
-        combat.take_events()
-    };
-    tick_once(&mut combat, &mut ships, &mut rocks);
-    let missile = combat.shots()[0].id;
+    let missile = put(
+        &mut combat,
+        frail_missile(),
+        B,
+        Vec2::new(0.0, -200.0),
+        Vec2::new(0.0, 5.0),
+    );
+    combat.shots[0].target = Some(A);
+    combat.shots[0].aimed_at = Some(A);
     assert!(combat.targeted_damage().contains_key(&A), "live, it counts");
-    let events = tick_once(&mut combat, &mut ships, &mut rocks);
+    phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
+    ships[0].trigger = QUIET;
+    let events = combat.take_events();
     assert_eq!(shot_down(&events).len(), 1, "{events:?}");
     assert_eq!(rocks.at(0).strength, 10, "not yet");
     assert!(!drawn_shot(&combat, missile), "hidden");
     assert_eq!(combat.targeted_damage(), BTreeMap::new());
-    let events = tick_once(&mut combat, &mut ships, &mut rocks);
+    test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
     assert_eq!(rocks.get(0), None, "set off, destroyed");
-    let at = explosions(&events);
-    assert_eq!(at.len(), 1, "{events:?}");
+    let at = explosions(&combat.take_events());
+    assert_eq!(at.len(), 1, "{at:?}");
     assert!((at[0] - Vec2::new(0.0, -195.0)).length() < 1e-3, "{at:?}");
     assert_eq!(combat.take_strikes(), [], "no ship hit");
+    fly_amid(&mut combat, &mut ships);
     let (slot, again) = rock(0, 20.0, -195.0);
     rocks.field.seat(slot, again);
-    tick_once(&mut combat, &mut ships, &mut rocks);
+    test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
     assert_eq!(rocks.at(0).strength, 10, "freed by `_HandleShot`");
 }
 

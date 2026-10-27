@@ -1,8 +1,7 @@
 //! The fight's tests of the stellar guns
 //! ([`stellar_guns`](crate::combat::stellar_guns)): a stellar's shot,
 //! launched by no ship (source -1), hits only the ship it is aimed at
-//! (`_ShotCanHitShip` @0x44a71-0x44a88), as the fight's later passes fly
-//! and test it.
+//! (`_ShotCanHitShip` @0x44a71-0x44a88), as the collision passes test it.
 
 use super::*;
 use crate::catalog::{GovtRecord, StellarId};
@@ -85,11 +84,21 @@ fn a_stellars_shot_passes_through_a_ship_in_its_way_and_strikes_its_target_by_no
     }
     assert_eq!(combat.shots().len(), 1);
     assert_eq!(combat.shots()[0].aimed_at, Some(A), "at the pirate, not B");
-    let mut strikes = Vec::new();
-    for _ in 0..20 {
-        tick_among(&mut combat, &mut ships, &arsenal, &govts, Rules::default());
-        strikes.extend(combat.take_strikes());
-    }
+    // Its last move, from (0, -90) to (0, -210), crosses B and A.
+    let shot = combat.shots_mut().first_mut().expect("in flight");
+    shot.moved_from = Some(Vec2::new(0.0, -90.0));
+    shot.position = Vec2::new(0.0, -210.0);
+    let arena = phase::arena(&arsenal, &govts, Rules::default());
+    phase::run_in(
+        &mut combat,
+        &mut ships,
+        arena,
+        &mut NeverFires,
+        |combat, fighters, arena, chance| {
+            combat.test_hits(fighters, arena, Scenery::default(), chance);
+        },
+    );
+    let strikes = combat.take_strikes();
     assert!(
         strikes.iter().all(|strike| strike.ship != B),
         "passes through B: {strikes:?}"

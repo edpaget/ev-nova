@@ -171,15 +171,12 @@ fn a_missile_lock_finishes_nothing() {
     ships[1].reserves.shield.now = 0.0;
     ships[1].reserves.armor.now = 0.5;
     let mut combat = Combat::default();
+    phase::fire_player(&mut combat, &mut ships, &NovaDisable);
+    ships[0].trigger = QUIET;
+    // The lock lands in `_HandleShot` as the missile's age passes 30.
     let mut locks = 0;
     for _ in 0..40 {
-        tick_with(
-            &mut combat,
-            &mut ships,
-            &Arsenal::default(),
-            Rules::default(),
-        );
-        ships[0].trigger = QUIET;
+        phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
         let (strikes, _, finished) = combat.take_landed();
         locks += strikes.iter().filter(|strike| strike.lock).count();
         assert_eq!(finished, []);
