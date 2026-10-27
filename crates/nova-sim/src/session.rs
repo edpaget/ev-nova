@@ -516,6 +516,8 @@ mod kept_berths;
 mod kept_rescues;
 mod killed_explosions;
 mod land_on_stellar;
+#[cfg(test)]
+mod landed_work;
 mod landing_fee;
 mod last_refresh;
 mod launch_frame;

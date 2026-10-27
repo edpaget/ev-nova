@@ -23,7 +23,7 @@ use crate::traffic::npc::{AiType, Npc};
 use crate::traffic::odds_cache::STALE;
 
 /// The Federation (class 1), whose fleet is system 130's reinforcements.
-const FED: GovtId = GovtId(128);
+pub(in crate::session) const FED: GovtId = GovtId(128);
 /// Pirates (class 2), at war with the Federation.
 const PIRATES: GovtId = GovtId(129);
 /// The Federation's allies (class 3), of another government.
@@ -32,7 +32,7 @@ const ALLIES: GovtId = GovtId(130);
 const FLEET: FleetId = FleetId(140);
 /// Its `ReinfTime`: announced on the call's 31st tick (the timer 9 < 10),
 /// arriving on its 40th.
-const TIME: i16 = 40;
+pub(in crate::session) const TIME: i16 = 40;
 /// The arriving fleet's quote list.
 const QUOTE: i16 = 7600;
 /// A global inhibitor (`ModVal` -1).
@@ -82,7 +82,7 @@ impl CommCatalog for Empty {
 /// quote, for [`TIME`] ticks every 2 days. The Federation's warships
 /// retreat outnumbered (`Flags` 0x0010) and its `MediumName` is
 /// "Federation"; the jammers inhibit as their names say.
-fn reinforced() -> FakePilotCatalog {
+pub(in crate::session) fn reinforced() -> FakePilotCatalog {
     let quiet = SystemTraffic {
         dude_types: [(-1, 0); 8],
         avg_ships: 0,
@@ -140,7 +140,7 @@ fn reinforced() -> FakePilotCatalog {
 
 /// A flight of `catalog` with the lines, its system set up and nothing
 /// raised yet.
-fn flying(catalog: &FakePilotCatalog) -> Session {
+pub(in crate::session) fn flying(catalog: &FakePilotCatalog) -> Session {
     flown(catalog, Pilot::new(catalog, "Ada").expect("a pilot"))
 }
 
@@ -175,7 +175,7 @@ fn add(session: &mut Session, govt: GovtId, strength: f32, goal: Goal) -> NpcId 
 /// A warship of `govt` and strength 100 fighting a pirate of strength
 /// `foe`, which attacks it: the odds against it `foe` / 100, and cached
 /// so, as the odds pass would have them.
-fn fight(session: &mut Session, govt: GovtId, foe: f32) -> NpcId {
+pub(in crate::session) fn fight(session: &mut Session, govt: GovtId, foe: f32) -> NpcId {
     let warship = add(session, govt, 100.0, Goal::Idle);
     let pirate = add(session, PIRATES, foe, Goal::Attack(ShipRef::Npc(warship)));
     if let Some(npc) = npc_mut(session, warship) {
@@ -349,7 +349,7 @@ impl Behaviour for Calling {
 }
 
 /// The player's system's timer.
-fn timer(session: &Session) -> i32 {
+pub(in crate::session) fn timer(session: &Session) -> i32 {
     session.clock_here().timer
 }
 

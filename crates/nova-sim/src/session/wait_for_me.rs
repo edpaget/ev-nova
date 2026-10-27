@@ -87,7 +87,7 @@ impl Session {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use crate::combat::Rules;
     use crate::testkit::{work, work_with};
     use std::rc::Rc;
@@ -106,7 +106,7 @@ mod tests {
     use crate::traffic::warp_out::WarpGoal;
 
     /// A fighter of no fuel.
-    const DART: ShipId = ShipId(145);
+    pub(in crate::session) const DART: ShipId = ShipId(145);
     /// A fighter of no fuel whose class has `Flags2` 0x0010.
     const QUIET: ShipId = ShipId(146);
 
@@ -132,7 +132,7 @@ mod tests {
     }
 
     /// [`carrying`], with the Dart and the quiet fighter, both of no fuel.
-    fn catalog() -> FakePilotCatalog {
+    pub(in crate::session) fn catalog() -> FakePilotCatalog {
         let mut catalog = carrying();
         let empty = crate::handling::ShipFields {
             fuel: 0,
@@ -164,7 +164,7 @@ mod tests {
     }
 
     /// A fighter of `ship` out of its bay.
-    fn fighter(ship: ShipId) -> Escort {
+    pub(in crate::session) fn fighter(ship: ShipId) -> Escort {
         Escort { ship, ..out() }
     }
 
