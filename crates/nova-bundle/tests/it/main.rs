@@ -9,3 +9,5 @@ mod files;
 #[cfg(target_os = "macos")]
 mod macos_tools;
 mod process;
+#[cfg(windows)]
+mod windows_installer;

@@ -4,8 +4,9 @@
 //! `mise run pack-installer -- --exes <DIR> [OUT_DIR]`, or build and pack
 //! in one go with `mise run installer`. See `nova_bundle::installer`.
 //!
-//! `$WIX` names the `wix` to run, else the one on `PATH`. It never builds
-//! the executables.
+//! `$NOVA_WIX` names the `wix` to run, else the one on `PATH`. Not `$WIX`:
+//! WiX v3's installer sets that to its own folder, which is not a program.
+//! It never builds the executables.
 //!
 //! Exits 2 on a usage error or a non-Windows host, and 1 when a step
 //! fails.
@@ -28,7 +29,7 @@ fn main() -> ExitCode {
     let host = match installer_host(
         env::args_os().skip(1).collect(),
         env::var_os("CARGO"),
-        env::var_os("WIX"),
+        env::var_os("NOVA_WIX"),
         &cwd,
         env::consts::OS,
     ) {
