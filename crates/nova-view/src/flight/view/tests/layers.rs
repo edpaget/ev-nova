@@ -94,8 +94,82 @@ fn layered_sheet() -> ShipSheet {
 
 #[test]
 fn a_fights_scene_and_its_target_layer_are_the_world_and_its_hud_and_every_text_overlay() {
+    // The whole screen, its HUD and title over the world: the concrete
+    // draw's, on a real session (the HUD is
+    // rdm:phase/view-sim-seam/phase-8-hud-and-target-frame's).
     let view = mid_fight();
     let list = drawn(&view);
+    assert_world_then_overlay(&list);
+    let world = DrawLayer::World;
+    assert_eq!(list.layered().next().map(|(layer, _)| layer), Some(world));
+    // The status bar, the title and help, and every text.
+    let overlay = DrawLayer::Overlay;
+    assert_all_in(
+        &list,
+        overlay,
+        |command| matches!(command, DrawCommand::Picture { image, .. } if *image == ImageKey::picture(700)),
+    );
+    assert_all_in(&list, overlay, is_text);
+    assert!(texts(&list).contains(&HELP.to_owned()));
+    assert!(world_end(&list) < hud_at(&list), "the world under the HUD");
+}
+
+/// A scripted fight, titled and with its help line: an explosion with
+/// its debris where NPC 0 was, NPC 1 targeted beside the player, the
+/// player's lights on, its blaster's shot in flight, the stars scattered
+/// and the pointer in space.
+fn faked_mid_fight() -> Faked {
+    let mut catalog = armed(2, &[BLASTER]);
+    catalog.sheet = Ok(layered_sheet());
+    catalog.star_sheet = Ok(star_sheet());
+    let player = nova_sim::flight_frame::FrameShip {
+        drawn: nova_sim::combat::ship_frames::Drawn {
+            lights: Some(32),
+            ..nova_sim::combat::ship_frames::Drawn::default()
+        },
+        frames: nova_sim::combat::ship_frames::FrameSpec {
+            lights: true,
+            ..nova_sim::combat::ship_frames::FrameSpec::NONE
+        },
+        ..super::faked_world::the_player_at(Vec2::ZERO, 0.0)
+    };
+    let frame = FlightFrame {
+        shots: vec![super::faked_world::shot_of(
+            0,
+            BLASTER,
+            Vec2::new(0.0, -40.0),
+            0.0,
+        )],
+        ..super::faked_world::in_sol_with(vec![
+            player,
+            super::faked_world::npc_129(1, Vec2::new(-50.0, 0.0), 0.0),
+        ])
+    };
+    let mut view = super::faked_world::world(catalog, frame);
+    view.overlays = TITLED;
+    view.reset_stars();
+    super::faked_world::raise(
+        &mut view,
+        &[CombatEvent::Destroyed {
+            ship: ShipRef::Npc(NpcId(0)),
+            ship_type: ShipId(129),
+            at: Vec2::new(0.0, -100.0),
+            velocity: Vec2::ZERO,
+            explosion: Some(nova_sim::catalog::Explosion {
+                boom: BoomId(128),
+                extra: false,
+            }),
+            size: 32.0,
+        }],
+    );
+    view.cursor_input(&Input::PointerMoved(Point::new(40.0, 400.0)));
+    view
+}
+
+#[test]
+fn a_fights_world_and_its_target_layer_are_world_and_every_text_overlay() {
+    let view = faked_mid_fight();
+    let list = super::faked_world::world_list_with(&view, &super::faked_world::targeting(1));
     assert_world_then_overlay(&list);
     let world = DrawLayer::World;
     assert_eq!(list.layered().next().map(|(layer, _)| layer), Some(world));
@@ -125,25 +199,20 @@ fn a_fights_scene_and_its_target_layer_are_the_world_and_its_hud_and_every_text_
     // area).
     assert_all_in(&list, world, icon_in(10000..=10023));
     assert_all_in(&list, world, sprite_of(651));
-    // The status bar, the title and help, and every text.
-    let overlay = DrawLayer::Overlay;
-    assert_all_in(
-        &list,
-        overlay,
-        |command| matches!(command, DrawCommand::Picture { image, .. } if *image == ImageKey::picture(700)),
-    );
-    assert_all_in(&list, overlay, is_text);
+    // The title and help, and every text.
+    assert_all_in(&list, DrawLayer::Overlay, is_text);
     assert!(texts(&list).contains(&HELP.to_owned()));
-    assert!(world_end(&list) < hud_at(&list), "the world under the HUD");
 }
 
 #[test]
 fn the_message_line_is_overlay_text_drawn_among_the_world() {
-    let mut view = FlightView::new(starry());
-    view.tick(Duration::ZERO);
-    plot(&mut view, 131);
-    view.input(&key(JUMP, true));
-    let list = drawn(&view);
+    let mut view = super::faked_world::world(
+        starry(),
+        super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    view.reset_stars();
+    super::faked_world::saying(&mut view, TOO_CLOSE, 250);
+    let list = super::faked_world::world_list(&view);
     let message = list
         .iter()
         .position(|command| *command == message_drawn(TOO_CLOSE))
@@ -180,8 +249,11 @@ fn a_placeholders_box_is_world_and_its_reason_overlay() {
         sheet: Err("no shän 128 for shïp 128".to_owned()),
         ..catalog()
     };
-    let view = FlightView::new(sheetless);
-    let list = drawn(&view);
+    let view = super::faked_world::world(
+        sheetless,
+        super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    let list = super::faked_world::world_list(&view);
     let mut placeholder = DrawList::new();
     crossed_box(&mut placeholder, PLAYER_AT, PLACEHOLDER_SIZE, PLACEHOLDER);
     for line in &placeholder {
@@ -253,11 +325,16 @@ fn the_stars_are_world_through_a_jump_and_the_jumps_fade_overlay() {
 #[test]
 fn the_floating_map_and_the_escort_menu_are_world_and_their_text_overlay() {
     use crate::flight::escorts::{MENU_AT, MENU_HEIGHT, MENU_WIDTH};
-    let mut view = fighters_out();
-    tap(&mut view, MENU_KEY);
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    view.tick(TICK);
-    let list = drawn(&view);
+    let mut view = super::faked_world::world(
+        catalog(),
+        super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    let mut hud = super::super::world::WorldHud::none();
+    hud.escort_rows[0].present = true;
+    view.escort_menu.toggle(view.elapsed, &hud.escort_rows);
+    view.sim.map_mut().drawing = Some(sol_drawing());
+    view.hyperspace_key(HYPERSPACE_MODE_KEY);
+    let list = super::faked_world::world_list_with(&view, &hud);
     let border = floating_border(&list);
     assert!(!border.is_empty(), "the floating map is up");
     for line in &border {
