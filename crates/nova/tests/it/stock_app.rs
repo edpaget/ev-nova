@@ -2,7 +2,8 @@
 //! stock data, through the recording Gpu, a course plotted from flight,
 //! and HG-Kania entered for Tichel, a new pilot offered the tutorial
 //! over the spaceport, a storyline finale's texts shown over Earth's
-//! spaceport before its `Q` leaves, and a new pilot's intro screen.
+//! spaceport before its `Q` leaves, a new pilot's intro screen, and the
+//! main screen drawn by the view and rendered with every image packed.
 //! Skips, passing, when `NOVA_DATA` is unset.
 
 use crate::common;
@@ -961,3 +962,41 @@ fn a_new_stock_pilot_sees_the_three_intro_pictures_for_45_seconds_each() {
 }
 
 crate::common::entry_harness!(Driver, click, redraw);
+
+/// The stock main screen renders whole, the view's `MainMenu` drawn by
+/// the renderer: `PICT` 8000, the logo's 654 x 1463 strip of frames cut
+/// by its clip, the six buttons and the rollover each decode and pack.
+#[test]
+fn the_stock_main_screen_renders_with_every_image_packed() {
+    use std::rc::Rc;
+
+    use nova_render::recording::GpuCall;
+    use nova_render::{ImageSource, LOGICAL, Renderer, Viewport};
+    use nova_view::menu::{MainMenu, MainScreenSource};
+    use nova_view::text::fixture::MonoMetrics;
+    use nova_view::ui::DescriptionSource;
+    use nova_view::{DrawList, ImageKind, Screen};
+
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let art = data.main_screen_art().expect("the stock art");
+    let logo = data
+        .frames(ImageKind::Pict, art.logo.picture)
+        .expect("the logo decodes");
+    assert_eq!((logo[0].width(), logo[0].height()), (654, 1463));
+    let mut menu = MainMenu::new(Some(art), data.button_style(), Rc::new(MonoMetrics));
+    // The rollover shown over New Pilot.
+    menu.input(&nova_view::Input::PointerMoved(
+        menu.press_point(nova_view::menu::MenuChoice::NewPilot),
+    ));
+    menu.tick(std::time::Duration::from_secs(1));
+    let mut list = DrawList::new();
+    menu.draw(&mut list);
+    let mut renderer = Renderer::new(&data);
+    let mut gpu = RecordingGpu::new();
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (1024, 768), 1.0), &mut gpu);
+    assert_eq!(report.new_failures, vec![]);
+    assert!(matches!(gpu.calls.last(), Some(GpuCall::Submit(_))));
+}

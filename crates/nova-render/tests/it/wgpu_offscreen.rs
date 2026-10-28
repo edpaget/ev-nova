@@ -512,7 +512,7 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
     // the first. Beside them, a hull square at (24..28, 14..18) with the
     // sheet crossfaded over it by 8 at a murk of 16, its colour halved.
     // White at (32 - t) 32nds of full alpha: a shot translucent by t.
-    let see_through = |t: u8| match t {
+    let translucent_by = |t: u8| match t {
         8 => Color::rgba(255, 255, 255, 191),
         16 => Color::rgba(255, 255, 255, 128),
         24 => Color::rgba(255, 255, 255, 64),
@@ -526,13 +526,13 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
         .sprite(ImageKey::sprite(2, 0), spots[1], tint(hull))
         .sprite(ImageKey::sprite(2, 0), Point::new(6.0, 16.0), tint(hull))
         .sprite(ImageKey::sprite(2, 0), Point::new(26.0, 16.0), tint(hull))
-        .crossfade_sprite(ImageKey::sprite(7, 0), spots[0], see_through(8))
-        .crossfade_sprite(ImageKey::sprite(7, 0), spots[1], see_through(24))
-        .crossfade_sprite(ImageKey::sprite(7, 0), spots[2], see_through(8))
+        .crossfade_sprite(ImageKey::sprite(7, 0), spots[0], translucent_by(8))
+        .crossfade_sprite(ImageKey::sprite(7, 0), spots[1], translucent_by(24))
+        .crossfade_sprite(ImageKey::sprite(7, 0), spots[2], translucent_by(8))
         .crossfade_sprite(
             ImageKey::sprite(7, 0),
             Point::new(6.0, 16.0),
-            see_through(32),
+            translucent_by(32),
         )
         .crossfade_sprite(
             ImageKey::sprite(7, 0),
@@ -543,12 +543,12 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
         .crossfade_sprite(
             ImageKey::sprite(9, 0),
             Point::new(16.0, 16.0),
-            see_through(16),
+            translucent_by(16),
         )
         .crossfade_sprite(
             ImageKey::sprite(9, 0),
             Point::new(18.0, 16.0),
-            see_through(16),
+            translucent_by(16),
         );
     let mut renderer = Renderer::new(Images);
 
