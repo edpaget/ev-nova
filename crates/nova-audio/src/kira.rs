@@ -549,9 +549,8 @@ mod tests {
 
     use ::kira::backend::mock::{MockBackend, MockBackendSettings};
     use nova_data::sound::fixture::{Header, SndBuilder, SndFormat};
-    use nova_data::store::fs::{DirLister, EntryKind, Listing};
+    use nova_data::store::fixture::{DATA_DIR, one_file_at};
     use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader};
 
     use super::*;
 
@@ -633,24 +632,6 @@ mod tests {
         assert!(decibels(Volume::new(0.0001)).0 < -60.0, "quieter still");
     }
 
-    /// One data file, `/data/Nova Sounds`, holding a fork.
-    struct OneFile(Vec<u8>);
-
-    impl DirLister for OneFile {
-        fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-            Ok(vec![Listing {
-                name: "Nova Sounds".into(),
-                kind: EntryKind::File,
-            }])
-        }
-    }
-
-    impl ForkReader for OneFile {
-        fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            Ok((fork == Fork::Data).then(|| self.0.clone()))
-        }
-    }
-
     #[test]
     fn the_game_datas_bank_is_its_snd_resources() {
         let fork = ForkBuilder::new()
@@ -658,8 +639,7 @@ mod tests {
             .resource(ResType::new(*b"PICT"), 601, None, b"not a sound")
             .build()
             .bytes;
-        let file = OneFile(fork);
-        let data = GameData::load(&file, &file, Path::new("/data"), None).expect("opens");
+        let data = one_file_at(Path::new(DATA_DIR).join("Nova Sounds"), fork).load();
         assert_eq!(data.snd(SoundId(600)), Some(mono(vec![1, 2])));
         assert_eq!(data.snd(SoundId(601)), None, "a PICT, not a snd");
         assert_eq!(data.snd(SoundId(602)), None);
