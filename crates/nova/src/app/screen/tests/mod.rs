@@ -1,5 +1,4 @@
 use std::io;
-use std::path::Path;
 use std::rc::Rc;
 
 use nova_data::graphics::RLED;
@@ -14,10 +13,9 @@ use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record, SystemId};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader};
 use nova_sim::{RuleKey, RuleSource};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::map::ENTER_BUTTON;
@@ -107,24 +105,6 @@ mod port;
 mod quit_question;
 mod wheel;
 mod widescreen;
-
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
 
 /// An independent `sÿst` at (`x`, 0) with no hyperlinks and these
 /// stellars.
@@ -437,8 +417,7 @@ fn loaded(fork: &ForkBuilder) -> Rc<GameData> {
 
 /// The game data of a built fork's `bytes`.
 fn loaded_bytes(bytes: Vec<u8>) -> Rc<GameData> {
-    let file = OneFile(bytes);
-    let data = GameData::load(&file, &file, Path::new("/data"), None).expect("opens");
+    let data = one_file(bytes).load();
     Rc::new(data)
 }
 

@@ -166,8 +166,7 @@ fn boarding_data_with(cash: i32) -> Rc<GameData> {
         )
         .build()
         .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(fork).load())
 }
 
 /// The ship comm strings: "Channel open." in every variant of the
