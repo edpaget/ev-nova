@@ -15,7 +15,7 @@ use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks,
     FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, Gates, MapKey, MarksFrom, Names,
-    ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
+    PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
 };
 use nova_sim::navigation::NavMode;
 use nova_sim::pilot_panel::PilotPanel;
@@ -989,6 +989,12 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 /// - **a screen ask changes no frame**: each of them leaves the frame
 ///   filled after it equal to the frame before, so the view fills none
 ///   after one;
+/// - **a screen ask is a read**: each of them but those that draw afresh
+///   ([`ScreenAsk::draws_afresh`]: a ship's name prompt), asked twice in a
+///   row, answers the same both times. The shops' asks may draw the
+///   day's rolls not drawn yet, which the flight keeps, as the original
+///   keeps each day's: the clause checks that an ask settles them, not
+///   that it never draws;
 /// - **a refusal changes nothing**: [`refused_command`] answers a
 ///   refusal, and the frame after it equals the frame before;
 /// - **no step asked, none run**: a frame's steps asked for none fill the
@@ -1036,15 +1042,16 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///   ship's J is refused mid-jump too), and after [`Answer::Jumped`] a
 ///   jump is under way. Checked last, as a jump begun changes the flight;
 /// - **no plunder without a boarding**: with no boarding under way
-///   ([`CommSource::boarding`] none), a take in the plunder dialog
-///   ([`FlightCommand::Plunder`]) is refused, and the frame after it
-///   equals the frame before. Checked before the jump;
+///   ([`ScreenAsk::Boarding`] answered [`ScreenAnswer::Nothing`]), a take
+///   in the plunder dialog ([`FlightCommand::Plunder`]) is refused, and
+///   the frame after it equals the frame before. Checked before the jump;
 /// - **the port answers only while landed**: in flight
-///   ([`FlightFrame::landed`] none), [`PortSource::market`],
-///   [`PortSource::news`] and [`PortSource::news_picture`] are none and
-///   [`PortSource::recharge_enabled`] is false;
+///   ([`FlightFrame::landed`] none), [`ScreenAsk::Shops`] lists no
+///   exchange, outfitter or shipyard, [`ScreenAsk::News`] is answered
+///   [`ScreenAnswer::Nothing`] and [`FlightFrame::recharge_enabled`] is
+///   false;
 /// - **no trade without a market**: with no exchange
-///   ([`PortSource::market`] none), a [`FlightCommand::Trade`] is not
+///   ([`ScreenAsk::Shops`] lists none), a [`FlightCommand::Trade`] is not
 ///   answered [`Answer::Traded`]`(Ok(_))`, and the frame after it equals
 ///   the frame before. Checked before the jump.
 ///
@@ -1225,7 +1232,9 @@ fn check_asks(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String
 
 /// [`check_contract`]'s screen clauses, `once` the frame filled before:
 /// each of [`sample_screen_asks`] is answered nothing or with its own
-/// kind, and leaves the frame as it was.
+/// kind, and leaves the frame as it was; and each but those that draw
+/// afresh ([`ScreenAsk::draws_afresh`]) is asked again at once and
+/// answers the same.
 fn check_screens(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String> {
     for ask in sample_screen_asks() {
         let sent = format!("{ask:?}");
@@ -1240,6 +1249,15 @@ fn check_screens(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), Str
         if after != *once {
             return Err(format!(
                 "a screen ask changes no frame: {sent} took the frame from {once:?} to {after:?}"
+            ));
+        }
+        if ask.draws_afresh() {
+            continue;
+        }
+        let again = sim.screen(ask);
+        if again != answer {
+            return Err(format!(
+                "a screen ask is a read: {sent} was answered {answer:?}, then {again:?}"
             ));
         }
     }
@@ -1260,22 +1278,30 @@ fn contract_trade() -> FlightCommand {
 /// [`check_contract`]'s clauses on the port, `once` the frame filled
 /// before.
 fn check_port(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String> {
+    let shops = match sim.screen(ScreenAsk::Shops) {
+        ScreenAnswer::Shops(shops) => *shops,
+        _ => PortShops::default(),
+    };
     if !once.docked() {
         let clause = "the port answers only while landed";
-        if let Some(market) = sim.market() {
+        if let Some(market) = &shops.market {
             return Err(format!("{clause}: an exchange in flight, {market:?}"));
         }
-        if let Some(news) = sim.news() {
+        if let Some(outfitter) = &shops.outfitter {
+            return Err(format!("{clause}: an outfitter in flight, {outfitter:?}"));
+        }
+        if let Some(shipyard) = &shops.shipyard {
+            return Err(format!("{clause}: a shipyard in flight, {shipyard:?}"));
+        }
+        let news = sim.screen(ScreenAsk::News);
+        if news != ScreenAnswer::Nothing {
             return Err(format!("{clause}: the bar's news in flight, {news:?}"));
         }
-        if let Some(picture) = sim.news_picture() {
-            return Err(format!("{clause}: a news picture in flight, {picture}"));
-        }
-        if sim.recharge_enabled() {
+        if once.recharge_enabled {
             return Err(format!("{clause}: Recharge enabled in flight"));
         }
     }
-    if sim.market().is_some() {
+    if shops.market.is_some() {
         return Ok(());
     }
     let clause = "no trade without a market";
@@ -1294,7 +1320,7 @@ fn check_port(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String
 
 /// [`check_contract`]'s plunder clause, `once` the frame filled before.
 fn check_plunder(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String> {
-    if sim.boarding().is_some() {
+    if sim.screen(ScreenAsk::Boarding) != ScreenAnswer::Nothing {
         return Ok(());
     }
     refused_unchanged(
@@ -2154,11 +2180,13 @@ mod tests {
         PlunderChangesTheFrame,
         /// An exchange in flight.
         MarketInFlight,
+        /// An outfitter in flight.
+        OutfitterInFlight,
+        /// A shipyard in flight.
+        ShipyardInFlight,
         /// The bar's news in flight.
         NewsInFlight,
-        /// A news picture in flight.
-        NewsPictureInFlight,
-        /// Recharge enabled in flight.
+        /// Recharge enabled in flight, in the frame.
         RechargeInFlight,
         /// A trade with no market goes through.
         TradesWithoutAMarket,
@@ -2194,19 +2222,31 @@ mod tests {
         ScreenAnswersAnotherKind,
         /// A screen ask changes the frame.
         ScreenChangesTheFrame,
+        /// The shops' answer counts the asks, so a second answers
+        /// otherwise.
+        ShopsCountAsks,
+        /// A ship's name prompt counts the asks, so a second answers
+        /// otherwise, as one that draws afresh may.
+        NamingCountsAsks,
     }
 
-    /// A [`FakeFlight`] with one [`Fault`].
+    /// A [`FakeFlight`] with one [`Fault`], counting the asks of the one
+    /// it answers otherwise each time.
     struct Broken {
         fake: FakeFlight,
         fault: Fault,
+        shops_asked: usize,
     }
 
     impl Broken {
         fn new(fault: Fault) -> Self {
             let mut fake = FakeFlight::new();
             fake.set_frame(stellar(128));
-            Self { fake, fault }
+            Self {
+                fake,
+                fault,
+                shops_asked: 0,
+            }
         }
     }
 
@@ -2251,6 +2291,7 @@ mod tests {
                 Fault::WarpsWithoutAJump => into.warping = true,
                 Fault::LeavesInFlight => into.leave_due = true,
                 Fault::ExpiresFlying => into.hold_expired = true,
+                Fault::RechargeInFlight => into.recharge_enabled = true,
                 _ => {}
             }
         }
@@ -2340,46 +2381,64 @@ mod tests {
         }
 
         fn screen(&mut self, ask: ScreenAsk) -> ScreenAnswer {
-            match self.fault {
-                Fault::ScreenAnswersAnotherKind => ScreenAnswer::PlainText(String::new()),
-                Fault::ScreenChangesTheFrame => {
+            let shops = |shops: PortShops| ScreenAnswer::Shops(Box::new(shops));
+            match (self.fault, &ask) {
+                (Fault::ScreenAnswersAnotherKind, _) => ScreenAnswer::PlainText(String::new()),
+                (Fault::ScreenChangesTheFrame, _) => {
                     self.fake.set_frame(stellar(129));
                     self.fake.screen(ask)
+                }
+                (Fault::MarketInFlight, ScreenAsk::Shops) => shops(PortShops {
+                    market: Some(Market::default()),
+                    ..PortShops::default()
+                }),
+                (Fault::OutfitterInFlight, ScreenAsk::Shops) => shops(PortShops {
+                    outfitter: Some(nova_sim::Outfitter::default()),
+                    ..PortShops::default()
+                }),
+                (Fault::ShipyardInFlight, ScreenAsk::Shops) => shops(PortShops {
+                    shipyard: Some(shipyard()),
+                    ..PortShops::default()
+                }),
+                (Fault::NewsInFlight, ScreenAsk::News) => {
+                    ScreenAnswer::News(nova_sim::flight_frame::BarNews::default())
+                }
+                (Fault::NamingCountsAsks, ScreenAsk::ShipNaming(_)) => {
+                    self.shops_asked += 1;
+                    ScreenAnswer::ShipNaming(Err(if self.shops_asked % 2 == 1 {
+                        ShipRefusal::NoShipyard
+                    } else {
+                        ShipRefusal::NotListed
+                    }))
+                }
+                (Fault::ShopsCountAsks, ScreenAsk::Shops) => {
+                    self.shops_asked += 1;
+                    shops(PortShops {
+                        can_hire_escorts: self.shops_asked % 2 == 1,
+                        ..PortShops::default()
+                    })
                 }
                 _ => self.fake.screen(ask),
             }
         }
     }
 
+    /// A shipyard listing nothing, of the player flying ship 128.
+    fn shipyard() -> nova_sim::Shipyard {
+        nova_sim::Shipyard {
+            rows: Vec::new(),
+            trade_in: 0,
+            cash: 0,
+            current: ShipId(128),
+            rules: nova_sim::Rulebook::default(),
+        }
+    }
+
     impl PilotSource for Broken {}
 
-    impl CommSource for Broken {
-        fn boarding(&self) -> Option<PlunderView> {
-            self.fake.boarding()
-        }
-    }
+    impl CommSource for Broken {}
 
-    impl PortSource for Broken {
-        fn market(&self) -> Option<Market> {
-            matches!(self.fault, Fault::MarketInFlight).then(Market::default)
-        }
-
-        fn news(&self) -> Option<&News> {
-            static NEWS: News = News {
-                commercial: String::new(),
-                story: String::new(),
-            };
-            matches!(self.fault, Fault::NewsInFlight).then_some(&NEWS)
-        }
-
-        fn news_picture(&self) -> Option<i16> {
-            matches!(self.fault, Fault::NewsPictureInFlight).then_some(9000)
-        }
-
-        fn recharge_enabled(&self) -> bool {
-            matches!(self.fault, Fault::RechargeInFlight)
-        }
-    }
+    impl PortSource for Broken {}
 
     /// The clause `fault` breaks, as `check_contract` names it.
     fn clause(fault: Fault) -> String {
@@ -2431,6 +2490,28 @@ mod tests {
             clause.contains("Galaxy was answered PlainText"),
             "the first ask: {clause}"
         );
+    }
+
+    #[test]
+    fn a_screen_ask_answered_otherwise_when_asked_again_breaks_the_contract() {
+        let clause = clause(Fault::ShopsCountAsks);
+        assert!(clause.starts_with("a screen ask is a read"), "{clause}");
+        assert!(clause.contains("Shops was answered"), "{clause}");
+    }
+
+    #[test]
+    fn a_ship_naming_answered_otherwise_when_asked_again_meets_the_contract() {
+        assert!(
+            sample_screen_asks().iter().any(ScreenAsk::draws_afresh),
+            "precondition: a ship's naming sampled"
+        );
+        let mut naming = Broken::new(Fault::NamingCountsAsks);
+        assert_eq!(
+            check_contract(&mut naming, &FlightOpening::default()),
+            Ok(()),
+            "a ship's name prompt draws afresh"
+        );
+        assert!(naming.shops_asked > 0, "precondition: the naming was asked");
     }
 
     #[test]
@@ -2558,8 +2639,9 @@ mod tests {
     fn a_port_answering_in_flight_breaks_the_contract() {
         for fault in [
             Fault::MarketInFlight,
+            Fault::OutfitterInFlight,
+            Fault::ShipyardInFlight,
             Fault::NewsInFlight,
-            Fault::NewsPictureInFlight,
             Fault::RechargeInFlight,
         ] {
             let clause = clause(fault);
@@ -2581,18 +2663,45 @@ mod tests {
         }
     }
 
+    /// Queues `fake`'s screen answers as [`check_contract`] asks a flight
+    /// that started, `docked` or not, each answered `answer(ask)`: each of
+    /// [`sample_screen_asks`] twice (once for one that draws afresh), for
+    /// the screen clauses and the read clause, then the plunder clause's
+    /// boarding, then the port's shops and, in flight, its news.
+    fn queue_contract_screens(
+        fake: &mut FakeFlight,
+        docked: bool,
+        answer: impl Fn(&ScreenAsk) -> ScreenAnswer,
+    ) {
+        for ask in sample_screen_asks() {
+            let times = if ask.draws_afresh() { 1 } else { 2 };
+            for _ in 0..times {
+                fake.queue_screen(answer(&ask));
+            }
+        }
+        fake.queue_screen(answer(&ScreenAsk::Boarding));
+        fake.queue_screen(answer(&ScreenAsk::Shops));
+        if !docked {
+            fake.queue_screen(answer(&ScreenAsk::News));
+        }
+    }
+
     #[test]
     fn a_fake_docked_with_its_port_open_meets_the_contract() {
         let mut docked = FakeFlight::new();
         docked.set_frame(FlightFrame {
             landed: Some(StellarId(128)),
+            recharge_enabled: true,
             ..stellar(128)
         });
-        let port = docked.port_mut();
-        port.market = Some(Market::default());
-        port.news = Some(News::default());
-        port.news_picture = Some(9000);
-        port.recharge_enabled = true;
+        queue_contract_screens(&mut docked, true, |ask| match ask {
+            ScreenAsk::Shops => ScreenAnswer::Shops(Box::new(PortShops {
+                market: Some(Market::default()),
+                ..PortShops::default()
+            })),
+            ScreenAsk::News => ScreenAnswer::News(nova_sim::flight_frame::BarNews::default()),
+            _ => ScreenAnswer::Nothing,
+        });
         assert_eq!(
             contract(&mut docked),
             Ok(()),
@@ -2653,7 +2762,10 @@ mod tests {
         assert_eq!(contract(&mut flying), Ok(()), "a row present");
         let mut aboard = FakeFlight::new();
         aboard.set_frame(stellar(128));
-        aboard.comm_mut().boarding = Some(boarded());
+        queue_contract_screens(&mut aboard, false, |ask| match ask {
+            ScreenAsk::Boarding => ScreenAnswer::Boarding(boarded()),
+            _ => ScreenAnswer::Nothing,
+        });
         assert_eq!(
             contract(&mut aboard),
             Ok(()),

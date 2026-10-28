@@ -746,7 +746,8 @@ mod tests {
         assert_eq!(frame.long_date, "");
         assert!(frame.explored.is_empty(), "every system unexplored");
         assert_eq!(flight.player_info(), None);
-        assert_eq!(flight.pilot_panel(), None);
+        let mut flight = flight;
+        assert_eq!(flight.screen(ScreenAsk::PilotPanel), ScreenAnswer::Nothing);
     }
 
     #[test]
@@ -785,8 +786,10 @@ mod tests {
     #[test]
     fn a_failed_flight_refuses_the_comm_commands_and_answers_no_comm() {
         let mut flight = failed();
-        assert_eq!(flight.hailing(), None);
-        assert_eq!(flight.boarding(), None);
+        for ask in [ScreenAsk::Hail, ScreenAsk::Boarding] {
+            let sent = format!("{ask:?}");
+            assert_eq!(flight.screen(ask), ScreenAnswer::Nothing, "{sent}");
+        }
         for command in [
             FlightCommand::Hail { option: false },
             FlightCommand::AnswerHail(0),
@@ -814,21 +817,26 @@ mod tests {
     #[test]
     fn a_failed_flight_refuses_the_port_commands_and_answers_nothing_open() {
         let mut flight = failed();
-        assert_eq!(flight.market(), None);
-        assert!(!flight.recharge_enabled());
-        assert_eq!(flight.news(), None);
-        assert_eq!(flight.news_picture(), None);
-        assert_eq!(flight.mission_info(), MissionInfo::default());
-        assert!(!flight.seen_intro());
-        assert!(!flight.refusable_offer_dialog(MissionId(130)));
-        assert_eq!(flight.offer_text(MissionId(130), "Run <PAY>"), None);
-        assert_eq!(flight.outfitter(), None);
-        assert_eq!(flight.shipyard(), None);
-        assert_eq!(flight.escorts_for_hire(), None);
-        assert_eq!(
-            flight.ship_naming(ShipId(129)),
-            Err(ShipRefusal::NoShipyard)
-        );
+        let mut frame = unlike(&FlightFrame::default());
+        flight.frame(&mut frame);
+        assert!(!frame.recharge_enabled, "no fuel sold");
+        assert!(!frame.seen_intro, "no intro seen");
+        for ask in [
+            ScreenAsk::Shops,
+            ScreenAsk::Outfitter,
+            ScreenAsk::HireList,
+            ScreenAsk::ShipNaming(ShipId(129)),
+            ScreenAsk::News,
+            ScreenAsk::MissionInfo,
+            ScreenAsk::RefusableOffer(MissionId(130)),
+            ScreenAsk::OfferText {
+                mission: MissionId(130),
+                raw: "Run <PAY>".to_owned(),
+            },
+        ] {
+            let sent = format!("{ask:?}");
+            assert_eq!(flight.screen(ask), ScreenAnswer::Nothing, "{sent}");
+        }
         assert!(!flight.transact(|pilot| pilot.cash = 1), "changes nothing");
         let order = nova_sim::OutfitOrder {
             outfit: nova_sim::OutfitId(128),
@@ -1080,7 +1088,7 @@ mod tests {
         assert!(!flight.deletes_pilot_on_ending_play());
         assert!(!flight.load_repaired());
         assert_eq!(flight.loaded_after_movie(), None);
-        assert!(!flight.can_hire_escorts());
+        assert_eq!(flight.screen(ScreenAsk::Shops), ScreenAnswer::Nothing);
     }
 
     #[test]
@@ -1129,9 +1137,9 @@ mod tests {
     #[test]
     fn a_flight_never_shared_a_catalog_shows_no_player_info_or_pilot_panel() {
         let session = Session::start(&nova_sim::fixture::pilot_catalog()).expect("starts");
-        let flight: SessionFlight<()> = session.into();
+        let mut flight: SessionFlight<()> = session.into();
         assert_eq!(flight.player_info(), None);
-        assert_eq!(flight.pilot_panel(), None);
+        assert_eq!(flight.screen(ScreenAsk::PilotPanel), ScreenAnswer::Nothing);
     }
 
     #[test]
@@ -1200,7 +1208,6 @@ mod tests {
         );
         assert_eq!(flight.load_repaired(), session.load_repaired());
         assert_eq!(flight.loaded_after_movie(), session.loaded_after_movie());
-        assert_eq!(flight.can_hire_escorts(), session.can_hire_escorts());
     }
 
     #[test]

@@ -16,7 +16,8 @@ use std::rc::Rc;
 use nova_sim::catalog::MissionRecord;
 use nova_sim::fixture::SessionBuilder;
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightFrame, MapClick, ScreenAnswer, ScreenAsk, StepInput, StepReport,
+    Answer, BarNews, FlightCommand, FlightFrame, MapClick, PortShops, ScreenAnswer, ScreenAsk,
+    StepInput, StepReport,
 };
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
 use nova_sim::landing::StellarFlags;
@@ -36,7 +37,7 @@ use crate::flight::fake_catalog::{
     trafficked,
 };
 use crate::flight::sim_port::fixture::check_contract;
-use crate::flight::sim_port::{CommSource, FlightSim, PilotSource, PortSource};
+use crate::flight::sim_port::{FlightSim, PilotSource, PortSource};
 use crate::flight::{Collaborators, SessionFlight, SharedChance};
 use crate::system::catalog::StellarId;
 
@@ -261,15 +262,48 @@ fn without_a_chance_given_nothing_random_happens() {
 
 // The spaceport's rolls.
 
+/// `session`'s shops, read in the order [`ScreenAsk::Shops`] reads them,
+/// on `chance`.
+fn shops_by_hand(session: &mut Session, chance: &mut dyn Chance) -> ScreenAnswer {
+    let market = session.market();
+    let outfitter = session.outfitter(chance);
+    let shipyard = session.shipyard(chance);
+    ScreenAnswer::Shops(Box::new(PortShops {
+        market,
+        outfitter,
+        shipyard,
+        can_hire_escorts: session.can_hire_escorts(),
+    }))
+}
+
 #[test]
-fn the_outfitter_and_shipyard_roll_on_the_flights_chance() {
+fn the_shops_roll_on_the_flights_chance() {
     let (always, chance) = share(Always::default());
     let catalog = shared(rolling());
     let mut session = landed(&catalog);
     let mut flight = flight_of(&catalog, session.clone(), rolling_on(chance));
     let mut own = Always::default();
-    assert_eq!(flight.outfitter(), session.outfitter(&mut own));
-    assert_eq!(flight.shipyard(), session.shipyard(&mut own));
+    assert_eq!(
+        flight.screen(ScreenAsk::Shops),
+        shops_by_hand(&mut session, &mut own)
+    );
+    assert!(!own.asked.is_empty(), "the day's rolls");
+    assert_eq!(always.borrow().asked, own.asked, "on the flight's chance");
+    assert_eq!(flight.session(), Ok(&session), "the rolls kept");
+}
+
+#[test]
+fn the_outfitter_alone_rolls_on_the_flights_chance() {
+    let (always, chance) = share(Always::default());
+    let catalog = shared(rolling());
+    let mut session = landed(&catalog);
+    let mut flight = flight_of(&catalog, session.clone(), rolling_on(chance));
+    let mut own = Always::default();
+    let outfitter = session.outfitter(&mut own).expect("an outfitter");
+    assert_eq!(
+        flight.screen(ScreenAsk::Outfitter),
+        ScreenAnswer::Outfitter(Box::new(outfitter))
+    );
     assert!(!own.asked.is_empty(), "the day's rolls");
     assert_eq!(always.borrow().asked, own.asked, "on the flight's chance");
 }
@@ -288,11 +322,15 @@ fn the_naming_is_the_sessions_on_the_flights_chance() {
     let mut own = Always::default();
     let expected = session.ship_naming(ShipId(129), &*catalog, &mut own);
     assert!(expected.is_ok(), "{expected:?}");
-    assert_eq!(flight.ship_naming(ShipId(129)), expected, "on its chance");
+    assert_eq!(
+        flight.screen(ScreenAsk::ShipNaming(ShipId(129))),
+        ScreenAnswer::ShipNaming(expected.clone()),
+        "on its chance"
+    );
     let mut never = flight_of(&catalog, landed(&catalog), Collaborators::default());
     assert_ne!(
-        never.ship_naming(ShipId(129)),
-        expected,
+        never.screen(ScreenAsk::ShipNaming(ShipId(129))),
+        ScreenAnswer::ShipNaming(expected),
         "the default name's digits are rolled"
     );
 }
@@ -304,14 +342,17 @@ fn declining_a_ship_draws_its_roll_again_on_the_flights_chance() {
     let mut session = landed(&catalog);
     let mut flight = flight_of(&catalog, session.clone(), rolling_on(chance));
     let mut own = Always::default();
-    flight.shipyard();
-    session.shipyard(&mut own);
+    flight.screen(ScreenAsk::Shops);
+    shops_by_hand(&mut session, &mut own);
     let decline = FlightCommand::DeclineShip(ShipId(129));
     assert_eq!(
         flight.apply(decline.clone()),
         by_hand(&mut session, &catalog, decline, &mut own)
     );
-    assert_eq!(flight.shipyard(), session.shipyard(&mut own));
+    assert_eq!(
+        flight.screen(ScreenAsk::Shops),
+        shops_by_hand(&mut session, &mut own)
+    );
     assert_eq!(always.borrow().asked, own.asked, "on the flight's chance");
 }
 
@@ -377,9 +418,11 @@ fn hiring_goes_through_the_session_on_the_flights_chance() {
     let mut session = landed(&catalog);
     let mut flight = flight_of(&catalog, session.clone(), rolling_on(chance));
     let mut own = Always::default();
-    let list = session.escorts_for_hire(&mut own);
-    assert!(list.is_some(), "a bar");
-    assert_eq!(flight.escorts_for_hire(), list);
+    let list = session.escorts_for_hire(&mut own).expect("a bar");
+    assert_eq!(
+        flight.screen(ScreenAsk::HireList),
+        ScreenAnswer::HireList(Box::new(list))
+    );
     let hire = FlightCommand::Hire(ShipId(129));
     assert_eq!(
         flight.apply(hire.clone()),
@@ -413,9 +456,11 @@ fn the_bars_news_is_drawn_through_the_session_on_the_flights_chance() {
     let mut own = Always::default();
     let expected = by_hand(&mut session, &catalog, FlightCommand::OpenBar, &mut own);
     assert_eq!(flight.apply(FlightCommand::OpenBar), expected);
-    assert!(session.news().is_some(), "news drawn");
-    assert_eq!(flight.news(), session.news());
-    assert_eq!(flight.news_picture(), session.news_picture());
+    let news = BarNews {
+        news: session.news().expect("news drawn").clone(),
+        picture: session.news_picture().expect("a bar's picture"),
+    };
+    assert_eq!(flight.screen(ScreenAsk::News), ScreenAnswer::News(news));
     assert_eq!(always.borrow().drawn, own.drawn, "on the flight's chance");
 }
 
@@ -465,12 +510,11 @@ fn the_hire_ports_reach_the_session() {
         .escorts_for_hire(&mut Always::default());
     let without = landed(&catalog).escorts_for_hire(&mut Always::default());
     assert_ne!(expected, without, "precondition: the ports change the list");
-    let list = flight.escorts_for_hire();
-    assert_eq!(list, expected, "as set up by hand");
-    let row = list
-        .as_ref()
-        .and_then(|list| list.row(ShipId(129)))
-        .expect("listed: no Flags3 hides it");
+    let ScreenAnswer::HireList(list) = flight.screen(ScreenAsk::HireList) else {
+        panic!("a bar");
+    };
+    assert_eq!(Some(&*list), expected.as_ref(), "as set up by hand");
+    let row = list.row(ShipId(129)).expect("listed: no Flags3 hides it");
     assert_eq!((row.fee, row.wage), (7, 3), "the terms given");
 }
 
@@ -498,11 +542,18 @@ fn landed_and_settled(
 #[test]
 fn the_offer_names_are_the_sessions() {
     let catalog = shared(errands(vec![errand(130), errand(131)]));
-    let flight = landed_and_settled(&catalog, SharedChance::default());
+    let mut flight = landed_and_settled(&catalog, SharedChance::default());
     let session = flight.session().expect("flying");
-    let munged = flight.offer_text(MissionId(130), "Run <PAY>");
-    assert!(munged.is_some(), "on offer");
-    assert_eq!(munged, session.offer_text(MissionId(130), "Run <PAY>"));
+    let munged = session
+        .offer_text(MissionId(130), "Run <PAY>")
+        .expect("on offer");
+    assert_eq!(
+        flight.screen(ScreenAsk::OfferText {
+            mission: MissionId(130),
+            raw: "Run <PAY>".to_owned(),
+        }),
+        ScreenAnswer::OfferText(munged)
+    );
 }
 
 #[test]
@@ -517,15 +568,15 @@ fn an_offers_refuse_button_is_the_sessions() {
         flight.apply(FlightCommand::NextOffer(SPACEPORT)),
         Answer::Offer(Some(VenueOffer::Prompt(_)))
     ));
-    let session = flight.session().expect("flying");
+    let session = flight.session().expect("flying").clone();
     for mission in [MissionId(130), MissionId(131)] {
         assert_eq!(
-            flight.refusable_offer_dialog(mission),
-            session.refusable_offer_dialog(mission),
+            flight.screen(ScreenAsk::RefusableOffer(mission)),
+            ScreenAnswer::RefusableOffer(session.refusable_offer_dialog(mission)),
             "{mission:?}"
         );
     }
-    assert!(flight.refusable_offer_dialog(MissionId(130)), "offered");
+    assert!(session.refusable_offer_dialog(MissionId(130)), "offered");
 }
 
 #[test]
@@ -678,16 +729,19 @@ fn opening_at_launch_restarts_the_aux_countdown_on_the_flights_chance() {
 #[test]
 fn the_pilot_panel_is_the_sessions_and_none_for_a_session_that_failed() {
     let catalog = shared(catalog());
-    let flight = flight_of(&catalog, landed(&catalog), Collaborators::default());
-    let session = flight.session().expect("flying");
-    assert_eq!(flight.pilot_panel(), Some(session.pilot_panel(&*catalog)));
+    let mut flight = flight_of(&catalog, landed(&catalog), Collaborators::default());
+    let session = flight.session().expect("flying").clone();
+    assert_eq!(
+        flight.screen(ScreenAsk::PilotPanel),
+        ScreenAnswer::PilotPanel(Box::new(session.pilot_panel(&*catalog)))
+    );
     assert_eq!(
         flight.player_info(),
         Some(session.player_info(&*catalog)),
         "the player info too"
     );
-    let broken = SessionFlight::<FakeCatalog>::new(Err("no chär".to_owned()));
-    assert_eq!(broken.pilot_panel(), None);
+    let mut broken = SessionFlight::<FakeCatalog>::new(Err("no chär".to_owned()));
+    assert_eq!(broken.screen(ScreenAsk::PilotPanel), ScreenAnswer::Nothing);
     assert_eq!(broken.player_info(), None);
 }
 
@@ -947,7 +1001,15 @@ fn the_screens_hail_options_are_listed() {
         flight.apply(FlightCommand::Hail { option: false }),
         Answer::Hailed(_)
     ));
-    let hail = flight.hailing().expect("hailed");
+    let ScreenAnswer::Hail(hail) = flight.screen(ScreenAsk::Hail) else {
+        panic!("hailed");
+    };
+    let session = flight.session().expect("flying");
+    assert_eq!(
+        Some(&*hail),
+        session.hailing(&*catalog, &HailOptions::empty()).as_ref(),
+        "the session's"
+    );
     assert_eq!(hail.options, []);
 }
 
