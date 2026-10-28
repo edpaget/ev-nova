@@ -470,6 +470,7 @@ impl FakeFlight {
     pub fn opening(&self) -> FlightOpening {
         FlightOpening {
             weapons: self.weapons.clone(),
+            names: nova_sim::flight_frame::Names::default(),
             failure: self.failure.clone(),
         }
     }

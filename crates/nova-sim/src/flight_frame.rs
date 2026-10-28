@@ -12,14 +12,16 @@
 //! starts with what the first slice moved across the seam needs, the nav
 //! mode and the stellar keys, and grows as later slices move more.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::asteroid::Asteroid;
 use crate::bay::FighterNote;
 use crate::board::{BoardRefusal, Boarding, MissionBoardLine, Take, Taken};
 use crate::brackets::{NavBrackets, TargetBrackets};
 use crate::cargo_box::CargoBox;
-use crate::catalog::{DescMovie, Explosion, GovtId, ShipId, StellarId, SystemId, WeaponId};
+use crate::catalog::{
+    DescMovie, Explosion, GovtId, JunkId, OutfitId, ShipId, StellarId, SystemId, WeaponId,
+};
 use crate::cloak::{Area, CloakShown};
 use crate::combat::beam::Beam;
 use crate::combat::hull::Condition;
@@ -41,6 +43,7 @@ use crate::hover::{DrawnBox, DrawnShips, Hover};
 use crate::hyperspace::{JumpReadiness, JumpRefusal};
 use crate::iff::{RadarGear, ShipIff, StellarIff};
 use crate::landing::LandingRefusal;
+use crate::market::Good;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
 use crate::player_fate::{Drawn as ShipDrawn, PlayerCommand, PlayerFate};
@@ -284,31 +287,131 @@ impl FlightFrame {
 }
 
 /// What the view is handed as the flight opens, fixed for the flight's
-/// life, so neither is a frame field: the weapons whose looks it reads,
-/// and why the flight could not start, if it could not
+/// life, so none is a frame field: the weapons whose looks it reads, the
+/// names it words the flight's messages with, and why the flight could
+/// not start, if it could not
 /// ([`Session::opening`](crate::Session::opening), or
 /// [`FlightOpening::failed`]). A flight that failed fills the default
-/// frame, refuses every command but a description's load, and drains
-/// nothing.
+/// frame, refuses every command but a description's load and a plain
+/// text's fill, and drains nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FlightOpening {
     /// The weapons the flight can fire, by ascending ID
     /// ([`Session::weapon_ids`](crate::Session::weapon_ids)): the
     /// session's arsenal, read-only for its life.
     pub weapons: Vec<WeaponId>,
+    /// The names of the ships, outfits, goods, `jünk`s and stellars the
+    /// session read as it started ([`Names`]).
+    pub names: Names,
     /// Why the flight could not start, or `None` for one that started.
     pub failure: Option<String>,
 }
 
 impl FlightOpening {
     /// The opening of a flight that could not start, for `reason`: no
-    /// weapons.
+    /// weapons, and nothing named.
     #[must_use]
     pub fn failed(reason: impl Into<String>) -> Self {
         Self {
             weapons: Vec::new(),
+            names: Names::default(),
             failure: Some(reason.into()),
         }
+    }
+}
+
+/// The names fixed for a flight's life, which the view words its messages
+/// with: each ship class's name and long name, each outfit's name and
+/// lower-case name and plural, each good's name as the exchange names it,
+/// each `jünk`'s lower-case name, and each stellar's `spöb` name, as the
+/// session read them when it started
+/// ([`Session::opening`](crate::Session::opening)). Plain data: a test
+/// fills it from literals. The default names nothing, a flight that could
+/// not start.
+///
+/// The names the flight decides as it runs are not here: the player's
+/// ship's name and the date are frame fields
+/// ([`FlightFrame::player_ship_name`], [`FlightFrame::long_date`]), and a
+/// mission cargo's name rides its board line
+/// ([`MissionBoardLine::Retrieved`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Names {
+    /// Each ship class's names, by ID.
+    pub ships: BTreeMap<ShipId, ShipNames>,
+    /// Each outfit's names, by ID.
+    pub outfits: BTreeMap<OutfitId, OutfitNames>,
+    /// Each good's name as the exchange names it, a `jünk` among them.
+    pub goods: BTreeMap<Good, String>,
+    /// Each `jünk`'s `LCName`, raw, by ID: what a scan that finds it calls
+    /// it.
+    pub junk: BTreeMap<JunkId, String>,
+    /// Each stellar's `spöb` name, by ID.
+    pub stellars: BTreeMap<StellarId, String>,
+}
+
+/// A ship class's names, as its `shïp` record gives them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShipNames {
+    /// Its name.
+    pub name: String,
+    /// Its shipyard long name.
+    pub long_name: String,
+}
+
+/// An outfit's names, as its `oütf` record gives them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OutfitNames {
+    /// Its name.
+    pub name: String,
+    /// Its `LCName`.
+    pub lc_name: String,
+    /// Its `LCPlural`.
+    pub lc_plural: String,
+}
+
+impl Names {
+    /// Ship class `ship`'s name.
+    #[must_use]
+    pub fn ship(&self, ship: ShipId) -> Option<&str> {
+        self.ships.get(&ship).map(|names| names.name.as_str())
+    }
+
+    /// Ship class `ship`'s shipyard long name.
+    #[must_use]
+    pub fn ship_long(&self, ship: ShipId) -> Option<&str> {
+        self.ships.get(&ship).map(|names| names.long_name.as_str())
+    }
+
+    /// Outfit `outfit`'s name.
+    #[must_use]
+    pub fn outfit(&self, outfit: OutfitId) -> Option<&str> {
+        self.outfits.get(&outfit).map(|names| names.name.as_str())
+    }
+
+    /// Outfit `outfit`'s lower-case name and plural.
+    #[must_use]
+    pub fn outfit_lc(&self, outfit: OutfitId) -> Option<(&str, &str)> {
+        self.outfits
+            .get(&outfit)
+            .map(|names| (names.lc_name.as_str(), names.lc_plural.as_str()))
+    }
+
+    /// Good `good`'s name, as the exchange names it.
+    #[must_use]
+    pub fn good(&self, good: Good) -> Option<&str> {
+        self.goods.get(&good).map(String::as_str)
+    }
+
+    /// `jünk` `junk`'s lower-case name.
+    #[must_use]
+    pub fn junk_lc(&self, junk: JunkId) -> Option<&str> {
+        self.junk.get(&junk).map(String::as_str)
+    }
+
+    /// Stellar `stellar`'s `spöb` name.
+    #[must_use]
+    pub fn stellar(&self, stellar: StellarId) -> Option<&str> {
+        self.stellars.get(&stellar).map(String::as_str)
     }
 }
 

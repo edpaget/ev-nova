@@ -7,6 +7,7 @@ use super::Session;
 use crate::flight_frame::{FlightFrame, FlightOpening, Gates, MapKey};
 
 mod hud;
+mod names;
 mod world;
 
 impl Session {
@@ -91,11 +92,15 @@ impl Session {
 
     /// What the view is handed as the flight opens ([`FlightOpening`]):
     /// the weapons of the session's arsenal, by ascending ID
-    /// ([`Session::weapon_ids`]), and no failure, as the session started.
+    /// ([`Session::weapon_ids`]), the names it read as it started
+    /// ([`Names`](crate::flight_frame::Names), built once here, as nothing
+    /// changes them for the session's life), and no failure, as the
+    /// session started.
     #[must_use]
     pub fn opening(&self) -> FlightOpening {
         FlightOpening {
             weapons: self.weapon_ids(),
+            names: self.statics.names(),
             failure: None,
         }
     }

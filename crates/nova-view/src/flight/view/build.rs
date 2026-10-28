@@ -79,7 +79,11 @@ impl<
         sim.apply(FlightCommand::SetWindowWidth(window_width(VIEW_SIZE)));
         let mut frame = nova_sim::flight_frame::FlightFrame::default();
         sim.frame(&mut frame);
-        let FlightOpening { weapons, failure } = opening;
+        let FlightOpening {
+            weapons,
+            names: _,
+            failure,
+        } = opening;
         let (scene, sheet, sheet_ship, status_bar) = match &failure {
             None => (
                 Some(opening_scene(&*catalog, &frame)),
