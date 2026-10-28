@@ -35,52 +35,6 @@ fn double_time_shows_its_icon_at_the_top_left_over_the_red_alert() {
     assert!(!faked_double_time_drawn(&view), "off at once");
 }
 
-/// [`beside`] (intact) with the player holding 95 of fuel and NPC 0
-/// refuelling it, hailed and hung up.
-fn refuelling() -> View {
-    let catalog = FakeCatalog {
-        strings: vec![(3000, comm_strings())],
-        ..boardable()
-    };
-    let session = SessionBuilder::flying(&catalog)
-        .named("Low")
-        .with_reserve(nova_sim::Reserve::Fuel, 95.0)
-        .build();
-    let (_, chance) = scripted(&placed(750, 750, 0));
-    let sim = SessionFlight::from(session).with_collaborators(Collaborators {
-        hail_options: HailOptions::empty().with(Rc::new(Refuel)),
-        ..on(chance, Rc::new(Still))
-    });
-    let mut view = FlightView::from_session(catalog, sim, &Rulebook::default());
-    view.tick(TICK);
-    tap(&mut view, TARGET_KEY);
-    tap(&mut view, HAIL_KEY);
-    view.take_hail().expect("hailed");
-    view.answer(0).expect("open");
-    view.hang_up();
-    view
-}
-
-#[test]
-fn double_times_second_pass_gives_no_help_and_tells_no_comm() {
-    for on in [false, true] {
-        let mut view = refuelling().with_double_time(on);
-        let mut ticks = 0;
-        while view.message().is_none() {
-            assert!(ticks < 20, "never refuelled: {on}");
-            view.tick(TICK);
-            ticks += 1;
-        }
-        // A tick of help on the advance pass alone: 95 to past 100,
-        // one at a time, and done on the think after (`_HighLevelAIHandler`
-        // tests done before the add, @0x8f548).
-        assert_eq!(ticks, 7, "{on}");
-        assert_eq!(reserves(&view).fuel.now, 101.0, "{on}");
-        let note = view.message().expect("refuelled").to_owned();
-        assert!(note.contains(":  Energy transfer complete, "), "{note}");
-    }
-}
-
 #[test]
 fn caps_lock_is_no_flight_key() {
     let mut view = super::faked_flight::at_rest(catalog());

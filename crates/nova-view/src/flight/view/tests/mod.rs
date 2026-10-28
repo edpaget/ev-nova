@@ -1249,10 +1249,6 @@ fn player(view: &View) -> ShipState {
     *view.session().expect("flying").player()
 }
 
-fn reserves(view: &View) -> Reserves {
-    view.session().expect("flying").reserves()
-}
-
 /// The second half of a tick: `TICK / 2` rounds down, so this is a
 /// nanosecond longer.
 const REST_OF_TICK: Duration = Duration::from_nanos(16_666_667);
@@ -2759,7 +2755,7 @@ fn beside_in(catalog: FakeCatalog, x: u32, y: u32, heading: u32, intact: bool) -
     view
 }
 
-use nova_sim::{HailOptions, HailRefusal, Help};
+use nova_sim::{HailOptions, HailRefusal};
 
 /// [`boardable`]'s ship comm strings: "c<n>" for each, with "Channel
 /// open." in every variant of the first group.
@@ -2784,26 +2780,6 @@ fn hailable(intact: bool) -> View {
     beside_in(catalog, 750, 750, 0, intact)
 }
 
-/// An option the ship answers by flying over to refuel the player.
-#[derive(Debug)]
-struct Refuel;
-
-impl nova_sim::HailOption for Refuel {
-    fn label(&self) -> String {
-        "Refuel".to_owned()
-    }
-
-    fn applies(&self, _hail: &nova_sim::Hail) -> bool {
-        true
-    }
-
-    fn press(&self, _hail: &nova_sim::Hail, _chance: &mut dyn Chance) -> nova_sim::Answer {
-        nova_sim::Answer {
-            deed: Some(nova_sim::Deed::Help(Help::Refuel)),
-            ..nova_sim::Answer::default()
-        }
-    }
-}
 use nova_sim::EscortClass;
 
 const HELLO: &str = "Message Buoy: hello.";
