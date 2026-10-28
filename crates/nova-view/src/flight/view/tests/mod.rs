@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::num::NonZeroU16;
 
 use crate::system::camera::{VIEW_CENTER, VIEW_SIZE};
+use nova_sim::Session;
 use nova_sim::flight_frame::GateFade;
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
@@ -9,7 +10,6 @@ use nova_sim::{
     GateSite, JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId,
     ShipRecord, ShipStats, SimSound, StarSystem, StartDate, StartError, SystemId, TICK, Vec2,
 };
-use nova_sim::{Session, ShipState};
 
 use super::*;
 use crate::devtools::{PilotDesk, PilotEdit};
@@ -66,6 +66,7 @@ use nova_sim::{BoardRefusal, DockKind, MissionBoardLine};
 use nova_sim::{GLOW_CRUISE, glow_level};
 use nova_sim::{RuleKey, RuleSource};
 
+mod adapter;
 mod anchor;
 mod boarding;
 mod cloak;
@@ -73,8 +74,6 @@ mod combat;
 mod comm_line;
 mod controls;
 mod dialog_map;
-mod docked;
-mod drain;
 mod edge;
 mod escorts;
 mod faked_board;
@@ -105,10 +104,8 @@ mod map_borders;
 mod map_find;
 mod maps;
 mod missions;
-mod names;
 mod nav;
 mod outputs;
-mod pilot;
 mod port_screen_map;
 mod ship_drawing;
 mod shots;
@@ -1149,77 +1146,6 @@ impl StatusBars for FakeCatalog {
     }
 }
 
-fn flight() -> View {
-    test_flight::new(catalog())
-}
-
-#[test]
-fn a_shared_catalog_shows_in_its_flights_debug() {
-    let mut flight: SessionFlight<()> = SessionFlight::new(Err("no chär".to_owned()));
-    assert!(format!("{flight:?}").contains("catalog: None"));
-    flight.share_catalog(Rc::new(catalog()));
-    assert!(format!("{flight:?}").contains("catalog: Some(SharedCatalog)"));
-}
-
-/// The flight's steps are its session's, handed the catalog the view
-/// shared: one without it runs none.
-#[test]
-fn the_flights_steps_are_its_sessions_once_its_catalog_is_shared() {
-    use nova_sim::flight_frame::{StepInput, StepReport};
-    let session = Session::start(&catalog()).expect("starts");
-    let mut flight: SessionFlight<()> = SessionFlight::from(session.clone());
-    let mut report = StepReport::default();
-    flight.step(&StepInput::default(), 2, &mut report);
-    assert_eq!(report, StepReport::default(), "no catalog shared");
-    assert_eq!(flight.session().expect("flying"), &session, "untouched");
-    flight.share_catalog(Rc::new(catalog()));
-    flight.step(&StepInput::default(), 2, &mut report);
-    assert_eq!(report.steps.len(), 2);
-    assert!(report.steps.iter().all(|run| run.passes.len() == 1));
-    let mut by_hand = session;
-    let behaviour = nova_sim::NovaAi::default();
-    let mut chance = SharedChance::default();
-    let mut collab = nova_sim::StepCollaborators {
-        catalog: &catalog(),
-        behaviour: &behaviour,
-        rules: Rules::default(),
-        chance: &mut chance,
-    };
-    let mut expected = StepReport::default();
-    by_hand.step(&StepInput::default(), 2, &mut collab, &mut expected);
-    assert_eq!(report, expected);
-    assert_eq!(flight.session().expect("flying"), &by_hand);
-}
-
-/// The flight's floating-map and mission-system answers are its
-/// session's, through the adapter.
-#[test]
-fn the_flights_map_answers_are_its_sessions() {
-    use crate::flight::sim_port::MapSource as _;
-    let mut view = flight();
-    view.sim.apply(FlightCommand::CycleMapSelection);
-    let session = view.session().expect("flying");
-    let preselection = session.floating_preselection();
-    assert!(preselection.is_some(), "the cycle noted a slot");
-    assert_eq!(view.sim.floating_preselection(), preselection);
-    let places = session.floating_map_places();
-    assert!(!places.links.is_empty());
-    assert_eq!(view.sim.floating_map_places(), places);
-}
-
-#[test]
-fn the_view_shares_its_catalog_with_its_flight() {
-    let view = flight();
-    let shared = view
-        .sim
-        .shared_catalog()
-        .expect("shared as the view is read");
-    assert!(std::ptr::addr_eq(
-        Rc::as_ptr(shared),
-        Rc::as_ptr(&view.catalog)
-    ));
-}
-
 /// Where flight draws the player's ship in Nova's own 1024 x 768 by the
 /// original's reading of [`RuleKey::FlightAnchor`]: the play area's
 /// centre, `_screenCenter`, (trunc((1024 − 194) / 2), 384).
@@ -1243,10 +1169,6 @@ fn held(key: Key) -> Input {
         pressed: true,
         repeat: true,
     }
-}
-
-fn player(view: &View) -> ShipState {
-    *view.session().expect("flying").player()
 }
 
 /// The second half of a tick: `TICK / 2` rounds down, so this is a
@@ -1486,14 +1408,6 @@ fn message_drawn(text: &str) -> DrawCommand {
     }
 }
 
-/// L pressed, a tick for the dock approach, and L pressed again:
-/// clearance, then landing.
-fn land_now(view: &mut View) {
-    tap(view, LAND);
-    ticks(view, 1);
-    tap(view, LAND);
-}
-
 const MAP: Key = Key::Char('m');
 const JUMP: Key = Key::Char('j');
 
@@ -1507,70 +1421,6 @@ fn tap(view: &mut FlightView<FakeCatalog, impl FlightSim>, k: Key) {
     view.input(&key(k, false));
 }
 
-/// Where system `id` is on the course map, brought into item 3 first: the
-/// map opens at 0.5625 on the current system and shows little of the
-/// galaxy.
-fn on_map(view: &mut View, id: i16) -> Point {
-    view.map.centre_on_system(SystemId(id));
-    let map = view.course_map();
-    let system = map.model().system(SystemId(id)).expect("on the map");
-    map.transform().world_to_screen(system.position())
-}
-
-/// Clicks the left button at `at`.
-fn click(view: &mut View, at: Point) {
-    for pressed in [true, false] {
-        view.input(&Input::PointerButton {
-            button: crate::MouseButton::Left,
-            pressed,
-            at,
-        });
-    }
-}
-
-/// Opens the map, Shift-clicks each hop of the shortest route to system
-/// `id` and closes the map again, as `_DoSystemMap` builds a course a hop
-/// at a time ([`nova_sim::RuleKey::MapPlotting`]), the close cueing its
-/// first hop. The course must come out as the route: a hop past an
-/// unexplored system to an unknown one is refused, so a flight that
-/// plots one reads the planner ([`planner`]), where each click plots the
-/// route to its system.
-fn plot(view: &mut View, id: i16) {
-    let session = view.session().expect("flying");
-    let route = session
-        .star_map()
-        .route(
-            session.system(),
-            SystemId(id),
-            nova_sim::HyperlinkRule::Engine,
-        )
-        .expect("a route");
-    tap(view, MAP);
-    view.input(&key(Key::Shift, true));
-    for &hop in &route {
-        let at = on_map(view, hop.0);
-        click(view, at);
-    }
-    view.input(&key(Key::Shift, false));
-    assert_eq!(view.session().expect("flying").course(), route, "plotted");
-    tap(view, MAP);
-    assert!(!view.map_open());
-}
-
-/// A new pilot of `catalog` flown, set up at the edge with `rules` and
-/// nothing else ([`open_flight`]).
-fn ruled(catalog: FakeCatalog, rules: Rulebook) -> View {
-    open_flight(
-        catalog,
-        FlightStart::New,
-        SessionSetup {
-            rules,
-            ..SessionSetup::default()
-        },
-        Collaborators::default(),
-    )
-}
-
 /// Nova's collaborators, rolling on `chance`, the NPCs deciding as
 /// `behaviour` says.
 fn on(chance: SharedChance, behaviour: Rc<dyn Behaviour>) -> Collaborators {
@@ -1579,44 +1429,6 @@ fn on(chance: SharedChance, behaviour: Rc<dyn Behaviour>) -> Collaborators {
         behaviour,
         ..Collaborators::default()
     }
-}
-
-/// `view` with its flight's NPCs deciding as `behaviour` says from now
-/// on: the adapter's collaborator swapped mid-flight, for a test that
-/// flies under one behaviour, then another.
-fn now_deciding(mut view: View, behaviour: Rc<dyn Behaviour>) -> View {
-    view.sim.behaviour = behaviour;
-    view
-}
-
-/// `view` with its ships disabled as `rule` says from now on, in the
-/// fight and in its session's changes of ship, as the edge's setup and
-/// the adapter would have it: swapped mid-flight.
-fn now_disabling(mut view: View, rule: Rc<dyn DisableRule>) -> View {
-    view.sim.session = view
-        .sim
-        .session
-        .map(|session| session.with_disable_rule(Rc::clone(&rule)));
-    view.sim.disable_rule = rule;
-    view
-}
-
-/// Thrusts straight up until the ship is at least the minimum jump
-/// distance from the centre, then lets go of Up.
-fn fly_out(view: &mut View) {
-    view.input(&key(Key::Up, true));
-    for _ in 0..2000 {
-        if player(view).position.length() >= MIN_JUMP_DISTANCE {
-            break;
-        }
-        view.tick(TICK);
-    }
-    view.input(&key(Key::Up, false));
-    assert!(
-        player(view).position.length() >= MIN_JUMP_DISTANCE,
-        "{:?}",
-        player(view)
-    );
 }
 
 /// The fade quad's place in the list and its colour, if drawn.
@@ -1671,98 +1483,6 @@ fn multi_jumping() -> FakeCatalog {
     }
 }
 
-/// Taps J and ticks until the jump's effect begins, as the session says the
-/// jump has begun.
-fn jump_now(view: &mut View) {
-    tap(view, JUMP);
-    for _ in 0..1000 {
-        if view.jump_effect().is_some() {
-            return;
-        }
-        view.tick(TICK);
-    }
-    panic!("the jump never began: {:?}", player(view));
-}
-
-/// Ticks until the ship has arrived in another system and the jump's
-/// effect is over.
-fn arrive_now(view: &mut View) {
-    let leaving = view.session().expect("flying").system();
-    for _ in 0..1000 {
-        let arrived = view.session().expect("flying").system() != leaving;
-        if arrived && view.jump_effect().is_none() {
-            return;
-        }
-        view.tick(TICK);
-    }
-    panic!("never arrived: {:?}", player(view));
-}
-
-/// A pilot named `name` docked at Earth: landed over a planet 128 at
-/// the centre, then flown in the stock catalog, where Earth is at
-/// (0, -600).
-fn docked_pilot(name: &str) -> Pilot {
-    let centred = FakeCatalog {
-        sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
-        ..catalog()
-    };
-    let pilot = Pilot::new(&centred, name).expect("starts");
-    let mut view = test_flight::with_pilot(centred, pilot);
-    land_now(&mut view);
-    assert_eq!(view.take_landing(), Some(StellarId(128)));
-    view.sim().pilot().expect("flying").clone()
-}
-
-/// The flight of `session`, with Nova's collaborators, rolling on
-/// `chance`.
-fn on_chance(session: Session, chance: SharedChance) -> SessionFlight<FakeCatalog> {
-    SessionFlight::from(session).with_collaborators(Collaborators {
-        chance,
-        ..Collaborators::default()
-    })
-}
-
-/// A new pilot's flight of `catalog`, with Nova's collaborators, rolling
-/// on `chance`.
-fn new_on(catalog: FakeCatalog, chance: SharedChance) -> View {
-    test_flight::flown(
-        catalog,
-        FlightStart::New,
-        Collaborators {
-            chance,
-            ..Collaborators::default()
-        },
-    )
-}
-
-/// A flight of `catalog`'s pilot Ada resumed over Earth (128), as a load
-/// resumes one last landed there: in flight at its centre, at rest.
-fn over_earth(catalog: FakeCatalog) -> View {
-    over_earth_on(catalog, SharedChance::default())
-}
-
-/// [`over_earth`], rolling on `chance`.
-fn over_earth_on(catalog: FakeCatalog, chance: SharedChance) -> View {
-    let session = SessionBuilder::flying(&catalog)
-        .named("Ada")
-        .over(StellarId(128))
-        .build();
-    FlightView::from_session(catalog, on_chance(session, chance), &Rulebook::default())
-}
-
-/// A view of Ada resumed over Earth and landed there, the landing,
-/// its sounds and its message taken, with the systems read so far
-/// forgotten.
-fn landed_view() -> View {
-    let mut view = over_earth(catalog());
-    land_now(&mut view);
-    assert_eq!(view.take_landing(), Some(StellarId(128)));
-    view.take_sounds();
-    view.message = None;
-    view.catalog().systems_read.borrow_mut().clear();
-    view
-}
-
 use nova_sim::{Chance, Direction, DisasterId, Good, Lot, Order};
 
 /// Earth at the centre, a trade center trading food at 75, the first
@@ -1796,7 +1516,7 @@ const BUY_FOOD: Order = Order {
     lot: Lot::Click,
 };
 
-use nova_sim::{OutfitOrder, OutfitRefusal};
+use nova_sim::OutfitOrder;
 
 /// Earth at the centre, an outfitter selling a fuel tank (+100 fuel,
 /// a ton, 1000 credits), the first `chär` holding 1000 credits.
@@ -1867,17 +1587,6 @@ impl Chance for Always {
         sides.saturating_sub(1)
     }
 }
-
-/// Jumps to Alpha Centauri and arrives.
-fn jump_to_alpha(view: &mut View) {
-    plot(view, 131);
-    fly_out(view);
-    view.input(&key(JUMP, true));
-    arrive_now(view);
-    assert_eq!(view.session().expect("flying").system(), SystemId(131));
-}
-
-use nova_sim::ShipRefusal;
 
 /// [`outfitting`], where Earth is a shipyard too, selling ship 129 for
 /// 900 credits: twice as fast, with a fuel tank.
@@ -1951,12 +1660,6 @@ fn rolling_one() -> SharedChance {
     SharedChance::new(Rc::new(RefCell::new(RollsOne)))
 }
 
-fn bit_set(view: &View, n: u16) -> bool {
-    let bit = nova_sim::Bit::new(n).expect("a bit");
-    view.sim()
-        .pilot()
-        .is_some_and(|pilot| pilot.control_bit(bit))
-}
 /// The texts drawn in the nav area of the port's status bar
 /// ([`FlightView::draw_status_bar`]), as [`nav`] reads flight's.
 fn port_nav(view: &FlightView<FakeCatalog, impl FlightSim>) -> Vec<String> {
@@ -1974,17 +1677,6 @@ fn port_nav(view: &FlightView<FakeCatalog, impl FlightSim>) -> Vec<String> {
 /// The nav area naming `name` in mode 2.
 fn naming(name: &str) -> Vec<String> {
     vec![hud::NAV_STELLAR.to_owned(), name.to_owned()]
-}
-
-/// The port's contract (`check_contract`) holds of `view`'s real flight,
-/// checked on a copy, as the check sends commands.
-fn meets_the_contract(view: &View, at: &str) {
-    let mut flight = view.sim.clone();
-    assert_eq!(
-        crate::flight::sim_port::fixture::check_contract(&mut flight),
-        Ok(()),
-        "{at}"
-    );
 }
 
 /// A view over a scripted flight ([`FakeFlight`]), for the component
@@ -2543,25 +2235,6 @@ fn armed(avg: i16, weapons: &[WeaponId]) -> FakeCatalog {
     }
 }
 
-/// `catalog`'s flight with its NPCs idling, placed by `draws`, after
-/// the step that populates the system.
-fn fighting(catalog: FakeCatalog, draws: &[u32]) -> View {
-    let (_, chance) = scripted(draws);
-    let mut view = test_flight::flown(catalog, FlightStart::New, on(chance, Rc::new(Still)));
-    view.tick(TICK);
-    view
-}
-
-/// How many of the shots in flight are of `weapon`.
-fn shots_of(view: &View, weapon: WeaponId) -> usize {
-    let session = view.session().expect("flying");
-    session
-        .shots()
-        .iter()
-        .filter(|shot| shot.weapon.id == weapon)
-        .count()
-}
-
 /// The first command matching `wanted`'s position in `list`.
 fn first(list: &DrawList, wanted: impl Fn(&DrawCommand) -> bool) -> usize {
     list.iter()
@@ -2617,38 +2290,6 @@ fn killed_in(death_delay: i16) -> FakeCatalog {
     catalog
 }
 
-/// Steps `view` until the player's ship explodes, calling
-/// `breaking_up` on each frame before that while it breaks up, and
-/// returns with the view on the explosion's tick.
-fn until_the_player_explodes(view: &mut View, breaking_up: impl Fn(&View)) {
-    let mut broke_up = false;
-    for _ in 0..60 {
-        view.tick(TICK);
-        match view.session().expect("flying").player_fate() {
-            PlayerFate::BreakingUp { .. } => {
-                breaking_up(view);
-                broke_up = true;
-            }
-            PlayerFate::Exploded => {
-                assert!(broke_up, "it broke up first");
-                return;
-            }
-            PlayerFate::Flying | PlayerFate::Disabled => {}
-            fate @ (PlayerFate::Holding { .. }
-            | PlayerFate::Fading
-            | PlayerFate::GameOver
-            | PlayerFate::Ejected { .. }) => {
-                panic!("past the explosion's tick unseen: {fate:?}")
-            }
-        }
-    }
-    panic!("the player's ship never exploded");
-}
-
-fn fate_of(view: &View) -> PlayerFate {
-    view.session().expect("flying").player_fate()
-}
-
 /// What the target panel's status line shows this frame, if there is
 /// a target.
 fn status_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<nova_sim::TargetStatus> {
@@ -2700,19 +2341,6 @@ fn defending() -> FakeCatalog {
     catalog.hulls = vec![hull_of(128, &[QUAD]), hull_of(129, &[IR])];
     catalog
 }
-use nova_sim::HullSpec;
-use nova_sim::reserves::Gauge;
-
-/// Disables every ship of some strength: the NPCs (ship 129, of
-/// strength 5), never the player (ship 128, of none).
-#[derive(Debug)]
-struct DisablesTheStrong;
-
-impl DisableRule for DisablesTheStrong {
-    fn disabled(&self, _armor: Gauge, hull: &HullSpec) -> bool {
-        hull.strength > 0.0
-    }
-}
 
 /// [`trafficked`] with its ship 129 (of strength 5, a crew of 3 and a
 /// `Cost` of 150,000, and no speed, so it starts at rest) carrying
@@ -2741,21 +2369,7 @@ fn boardable() -> FakeCatalog {
     catalog
 }
 
-/// [`beside`], flying over `catalog`.
-fn beside_in(catalog: FakeCatalog, x: u32, y: u32, heading: u32, intact: bool) -> View {
-    let (_, chance) = scripted(&placed(x, y, heading));
-    let mut view = test_flight::flown(catalog, FlightStart::New, on(chance, Rc::new(Still)));
-    if !intact {
-        view = now_disabling(view, Rc::new(DisablesTheStrong));
-    }
-    view.tick(TICK);
-    tap(&mut view, TARGET_KEY);
-    let session = view.session().expect("flying");
-    assert_eq!(session.target().map(|npc| npc.id), Some(NpcId(0)));
-    view
-}
-
-use nova_sim::{HailOptions, HailRefusal};
+use nova_sim::HailRefusal;
 
 /// [`boardable`]'s ship comm strings: "c<n>" for each, with "Channel
 /// open." in every variant of the first group.
@@ -2769,15 +2383,6 @@ fn comm_strings() -> Vec<String> {
             }
         })
         .collect()
-}
-
-/// [`beside`] with the ship comm strings.
-fn hailable(intact: bool) -> View {
-    let catalog = FakeCatalog {
-        strings: vec![(3000, comm_strings())],
-        ..boardable()
-    };
-    beside_in(catalog, 750, 750, 0, intact)
 }
 
 use nova_sim::EscortClass;
@@ -2851,16 +2456,6 @@ fn errand(id: i16) -> MissionRecord {
         ships: MissionShip::NONE,
         aux: nova_sim::catalog::AuxShip::NONE,
     }
-}
-
-/// Runs set expression `text` on `view`'s session.
-fn run_set(view: &mut View, text: &str) {
-    let expr = nova_sim::SetExpr::parse(text).expect("parses");
-    let session = view.sim.session.as_mut().expect("flying");
-    session.run_set(&expr, &mut NeverFires);
-    // Run behind the view's back: its kept frame follows, as the draw
-    // read the session live before the frame was kept.
-    view.refresh_frame();
 }
 
 /// The background of the status bar `view` shows.

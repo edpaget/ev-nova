@@ -1,40 +1,9 @@
 use super::*;
 use crate::flight::sim_port::fixture::MapAsk;
-use nova_sim::{MARKS_DESTINATION, MapMarks, SavedNav};
+use nova_sim::{MapMarks, SavedNav};
 
 // A mission dialog's map (`_OfferOneMission`, `_DoMissionDialog`,
 // `_DoMissionInfoDialog`, `_ShowTextDialog` for the accept's briefing).
-
-/// Errand `id` to Proxima (140, in Alpha Centauri, 131), marking its
-/// destination green (`Flags` 0x0100).
-fn to_proxima(id: i16) -> MissionRecord {
-    MissionRecord {
-        travel_stel: 140,
-        flags: MARKS_DESTINATION,
-        ..errand(id)
-    }
-}
-
-/// [`flight`] holding mission 130 [`to_proxima`] in slot 0.
-fn holding() -> View {
-    let mut catalog = catalog();
-    catalog.missions = vec![to_proxima(130)];
-    let mut view = test_flight::new(catalog);
-    run_set(&mut view, "S130");
-    view.settle_script();
-    assert_eq!(
-        view.session().expect("flying").map_mission_systems(),
-        [SystemId(131)],
-        "Alpha Centauri arrowed red"
-    );
-    view
-}
-
-#[test]
-fn the_flights_mission_systems_are_its_sessions() {
-    use crate::flight::sim_port::MapSource as _;
-    assert_eq!(holding().sim.map_mission_systems(), [SystemId(131)]);
-}
 
 /// Closes `view`'s map as M does on it, over the port.
 fn faked_press_map(view: &mut Faked) {

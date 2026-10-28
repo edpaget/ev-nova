@@ -6,7 +6,32 @@
 //! adapter's forward is `sim_adapter`'s.
 
 use super::*;
-use nova_sim::{CarryOver, HireTerms};
+use crate::text::fixture::MonoMetrics;
+use nova_sim::CarryOver;
+use nova_sim::map_borders::Next;
+
+/// A view over a real flight built at the edge, for the edge's own
+/// checks: the view's tests run on [`FakeFlight`].
+type View = FlightView<FakeCatalog>;
+
+/// A new pilot of [`catalog`] flown bare ([`test_flight::new`]).
+fn flight() -> View {
+    test_flight::new(catalog())
+}
+
+/// A new pilot of `catalog` flown, set up at the edge with `rules` and
+/// nothing else ([`open_flight`]).
+fn ruled(catalog: FakeCatalog, rules: Rulebook) -> View {
+    open_flight(
+        catalog,
+        FlightStart::New,
+        SessionSetup {
+            rules,
+            ..SessionSetup::default()
+        },
+        Collaborators::default(),
+    )
+}
 
 /// A new pilot of `catalog` flown, set up at the edge with `setup`.
 fn set_up(catalog: FakeCatalog, setup: SessionSetup) -> View {
@@ -106,56 +131,6 @@ fn the_persons_rules_reach_the_session() {
         format!("{:?}", view.session().expect("flying").person_rules()),
         format!("{rules:?}")
     );
-}
-
-/// Terms of a fee of 7 and a wage of 3 for every ship.
-#[derive(Debug)]
-struct Sevens;
-
-impl HireTerms for Sevens {
-    fn fee(&self, _ship: &ShipRecord, _site: &LandingSite, _mult: f32) -> i64 {
-        7
-    }
-
-    fn charge(&self, _ship: &ShipRecord, _site: &LandingSite, _mult: f32, _cash: i64) -> i64 {
-        7
-    }
-
-    fn wage(&self, _ship: &ShipRecord) -> i64 {
-        3
-    }
-}
-
-/// Control bits where nothing holds.
-#[derive(Debug)]
-struct Nothing;
-
-impl ControlBits for Nothing {
-    fn allows(&self, _test: &nova_sim::TestExpr, _pilot: &dyn nova_sim::PilotFacts) -> bool {
-        false
-    }
-}
-#[test]
-fn the_hire_ports_reach_the_session() {
-    let always: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
-    let mut view = open_flight(
-        hiring(),
-        FlightStart::New,
-        SessionSetup {
-            hire_terms: Rc::new(Sevens),
-            control_bits: Rc::new(Nothing),
-            ..SessionSetup::default()
-        },
-        Collaborators {
-            chance: SharedChance::new(always),
-            ..Collaborators::default()
-        },
-    );
-    land_now(&mut view);
-    let list = view.escorts_for_hire().expect("a bar");
-    let row = list.row(ShipId(129)).expect("listed: no Flags3 hides it");
-    assert_eq!((row.fee, row.wage), (7, 3));
-    assert_eq!(row.hire, Err(HireRefusal::NotForHire));
 }
 
 /// The run's history as a flight earlier in it left it: a slot's layer
@@ -334,4 +309,131 @@ fn the_slot_sprites_carried_have_the_view_read_their_ships_sheets() {
     assert!(carried.npc_sheets.contains_key(&ShipId(131)), "read");
     let bare = set_up(hidden(), SessionSetup::default());
     assert!(!bare.npc_sheets.contains_key(&ShipId(131)), "none carried");
+}
+
+// The edge's rules reach the course map's borders.
+
+/// `catalog` with Sol (130) the Federation's (128) and lived in, and
+/// Proxima Near (134, at (40, 30)) government 129's and lived in, known
+/// from the start, as Sol lists it; [`known`] explores it too.
+fn bordered() -> FakeCatalog {
+    let mut catalog = FakeCatalog {
+        sol_navs: vec![Some((StellarFlags::CAN_LAND, 0))],
+        near: true,
+        governed: vec![(130, 128), (134, 129)],
+        lived: vec![134],
+        ..catalog()
+    };
+    catalog
+        .place_names
+        .systems
+        .insert(SystemId(130), "Sol".to_owned());
+    catalog
+}
+
+/// `view` with Proxima Near explored and known.
+fn known(mut view: View) -> View {
+    let session = view.sim.session.as_mut().expect("flying");
+    session.run_set(
+        &nova_sim::SetExpr::parse("X134").expect("parses"),
+        &mut NeverFires,
+    );
+    session.mark_known([SystemId(134)]);
+    view.refresh_frame();
+    view
+}
+
+fn passes(view: &View) -> &nova_sim::map_borders::BorderPasses {
+    view.course_map().border_passes()
+}
+
+/// The edge's rulebook reaches the course map's borders: this phase's
+/// real check of the view reading its rules as it opens
+/// (rdm:phase/view-sim-seam/phase-13-lifecycle-at-the-edge). Both
+/// readings on `FakeFlight` are [`by_default_the_rules_run_the_pass_in_a_tick_and_find_runs_none`]
+/// and [`by_the_other_readings_the_pass_walks_a_tick_at_a_time_and_finds_centring_runs_the_coarse_one`].
+#[test]
+fn the_edges_rules_reach_the_course_map() {
+    let rules = Rulebook::default()
+        .with_override(RuleKey::MapBorderPace, RuleSource::Bible)
+        .with_override(RuleKey::MapFindBorders, RuleSource::Bible);
+    let mut view = known(ruled(bordered(), rules)).with_metrics(Rc::new(MonoMetrics));
+    tap(&mut view, MAP);
+    ticks(&mut view, 1);
+    assert_eq!(
+        passes(&view).next(),
+        Next::Walking { after: None },
+        "one null event a tick: the clear"
+    );
+    ticks(&mut view, 3);
+    assert_eq!(passes(&view).next(), Next::Idle);
+    view.input(&key(Key::Char('f'), true));
+    view.input(&Input::Text('f'));
+    view.input(&key(Key::Char('f'), false));
+    for c in "Sol".chars() {
+        view.input(&Input::Text(c));
+    }
+    tap(&mut view, Key::Enter);
+    assert!(!view.course_map().finding());
+    assert_eq!(
+        passes(&view).step(),
+        8,
+        "Find's centring ran the coarse pass"
+    );
+    assert_eq!(passes(&view).next(), Next::Unstarted);
+}
+
+#[test]
+fn the_view_shares_its_catalog_with_its_flight() {
+    let view = flight();
+    let shared = view
+        .sim
+        .shared_catalog()
+        .expect("shared as the view is read");
+    assert!(std::ptr::addr_eq(
+        Rc::as_ptr(shared),
+        Rc::as_ptr(&view.catalog)
+    ));
+}
+
+/// Ada, loaded from a save in Alpha Centauri (131) whose stellar, 999,
+/// no system lists.
+fn moved_and_unlisted() -> Pilot {
+    let mut pilot = SessionBuilder::flying(&catalog())
+        .named("Ada")
+        .landed_at(SystemId(130), StellarId(128))
+        .build()
+        .pilot()
+        .clone();
+    pilot.explore(SystemId(131));
+    let text = nova_sim::save::encode(&pilot)
+        .replace("\"stellar\": 128", "\"stellar\": 999")
+        .replace("\"system\": 130", "\"system\": 131");
+    nova_sim::save::decode(&text).expect("a pilot")
+}
+
+#[test]
+fn a_loaded_flight_reads_the_rules_it_is_given() {
+    // Where each reading moves the pilot is nova-sim's
+    // (`loading_an_unlisted_stellar_by_the_engines_reading_moves_to_the_lowest_system`).
+    let pilot = moved_and_unlisted();
+    let mut systems = Vec::new();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::UnlistedStellar, source);
+        let view = open_flight(
+            catalog(),
+            FlightStart::Loaded(pilot.clone()),
+            SessionSetup {
+                rules,
+                ..SessionSetup::default()
+            },
+            Collaborators::default(),
+        );
+        let expected = Session::load(&catalog(), pilot.clone(), &rules).expect("loads");
+        let system = view.session().map(Session::system);
+        assert_eq!(system, Ok(expected.system()), "{source:?}");
+        assert_eq!(view.sim().load_repaired(), expected.load_repaired());
+        systems.push(expected.system());
+    }
+    assert_ne!(systems[0], systems[1], "the readings differ here");
 }

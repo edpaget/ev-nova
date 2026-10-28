@@ -1119,6 +1119,13 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_flight_transacts_nothing() {
+        let mut flight = failed();
+        assert!(!flight.transact(|pilot| pilot.set_cash(5)));
+        assert_eq!(flight.pilot(), None);
+    }
+
+    #[test]
     fn a_failed_flight_gives_why_it_could_not_start() {
         let mut flight = failed();
         assert_eq!(flight.session().err(), Some("no chär"));

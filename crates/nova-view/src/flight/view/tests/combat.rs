@@ -254,7 +254,7 @@ fn volleying() -> FakeCatalog {
         weapon.energy_dmg = 5;
         weapon.reload = 30;
     }
-    let mut govt = damaging().govts.remove(0);
+    let mut govt = super::adapter::damaging().govts.remove(0);
     govt.penalties.shoot = 5;
     catalog.govts = vec![govt];
     catalog
@@ -586,23 +586,6 @@ fn the_warm_up_reads_the_coming_traffics_sheets_and_cards_so_the_first_step_read
     shows(&mut view, frame);
     assert_eq!(*view.catalog().sheets_asked.borrow(), sheets);
     assert_eq!(*view.catalog().cards_asked.borrow(), cards);
-}
-
-#[test]
-fn a_real_flights_coming_traffic_is_the_types_its_session_brings() {
-    // Which they are: nova-sim's (`Session::coming_traffic_ships`).
-    let view = test_flight::new(trafficked(&[130, 131], 3, 129, 1));
-    assert_eq!(view.sim.coming_traffic(), [ShipId(129)]);
-}
-
-#[test]
-fn a_real_flights_death_descs_are_its_sessions() {
-    // Which they are: nova-sim's
-    // (`sabotage::tests::a_sessions_sabotage_death_descs_come_from_the_pilots_outfits`).
-    let mut sabotaged = multi_jumping();
-    sabotaged.outfits[0].mods[0] = (nova_sim::SABOTAGE_KILL, 5000);
-    assert_eq!(test_flight::new(sabotaged).sim.death_descs(), [5000]);
-    assert_eq!(flight().sim.death_descs(), Vec::<i16>::new());
 }
 
 // Combat.
@@ -944,46 +927,6 @@ fn the_players_ship_is_drawn_whole_while_breaking_up_then_without_its_sprite_the
         [0_i16; 0],
         "nothing of it after"
     );
-}
-
-/// A flight under fire from [`killed_in`]`(1)`'s NPC, stepped to the
-/// player's explosion's tick.
-fn at_the_explosion() -> View {
-    let mut view = now_deciding(
-        fighting(killed_in(1), &placed(750, 650, 180)),
-        Rc::new(Firing),
-    );
-    until_the_player_explodes(&mut view, |_| {});
-    view
-}
-
-/// [`at_the_explosion`], stepped one tick at a time through the hold
-/// to its expiry, which the view reports.
-fn held_to_expiry() -> View {
-    let mut view = at_the_explosion();
-    for _ in 0..=nova_sim::HOLD_TICKS {
-        view.tick(TICK);
-    }
-    assert!(view.take_hold_expired());
-    view
-}
-
-#[test]
-fn a_real_flight_meets_the_contract_through_the_hold_its_expiry_and_the_fade() {
-    let mut view = at_the_explosion();
-    meets_the_contract(&view, "the explosion");
-    view.tick(TICK);
-    meets_the_contract(&view, "the hold");
-    let mut view = held_to_expiry();
-    assert!(view.frame.hold_expired);
-    assert_eq!(view.frame.fate, PlayerFate::Holding { ticks_left: 0 });
-    meets_the_contract(&view, "the expiry");
-    view.begin_fade();
-    assert_eq!(fate_of(&view), PlayerFate::Fading);
-    meets_the_contract(&view, "the fade");
-    view.tick(Duration::from_millis(1000));
-    assert!(view.game_over());
-    meets_the_contract(&view, "game over");
 }
 
 /// Whether `list` draws `run` as one unbroken run of commands.
@@ -1461,93 +1404,6 @@ fn the_help_line_names_the_combat_keys() {
 
 // Point defence.
 
-/// Says no missile is hostile, counting the times it is asked.
-#[derive(Debug, Default)]
-struct Unalarmed {
-    asked: std::cell::Cell<usize>,
-}
-
-impl nova_sim::PointDefenceRule for Unalarmed {
-    fn hostile(
-        &self,
-        _defender: nova_sim::combat::defence::Side,
-        _firer: nova_sim::combat::defence::Side,
-        _govts: &nova_sim::Governments,
-    ) -> bool {
-        self.asked.set(self.asked.get() + 1);
-        false
-    }
-}
-
-/// Every NPC idles, targets the player and holds its trigger.
-#[derive(Debug)]
-struct Attacking;
-
-impl Behaviour for Attacking {
-    fn decide(
-        &self,
-        _npc: &nova_sim::Npc,
-        _around: &nova_sim::Surroundings,
-        _chance: &mut dyn Chance,
-    ) -> Goal {
-        Goal::Idle
-    }
-
-    fn trigger(&self, _npc: &nova_sim::Npc, _around: &nova_sim::Surroundings) -> nova_sim::Trigger {
-        nova_sim::Trigger {
-            primary: true,
-            secondary: None,
-            only: None,
-            bays: false,
-            bays_after: false,
-            point_defence: false,
-            keep: None,
-        }
-    }
-
-    fn target(&self, _npc: &nova_sim::Npc, _around: &nova_sim::Surroundings) -> Option<ShipRef> {
-        Some(ShipRef::Player)
-    }
-}
-
-/// `catalog`'s flight with its NPC attacking from 200 pixels above
-/// the player, after the step that populates the system.
-fn attacked(catalog: FakeCatalog) -> View {
-    let (_, chance) = scripted(&placed(750, 550, 180));
-    let mut view = test_flight::flown(catalog, FlightStart::New, on(chance, Rc::new(Attacking)));
-    view.tick(TICK);
-    view
-}
-
-#[test]
-fn the_fight_asks_the_point_defence_rule_given_each_step_in_flight() {
-    let rule = Rc::new(Unalarmed::default());
-    let asking = Rulebook::default().with_override(RuleKey::PdHostility, RuleSource::Bible);
-    let mut view = attacked(defending());
-    // The rule set and the point defence rule, swapped mid-flight; the
-    // view's presentation reads neither.
-    view.sim.session = view.sim.session.map(|session| session.with_rules(asking));
-    view.sim.defence_rule = rule.clone();
-    view.tick(TICK);
-    assert_eq!(shots_of(&view, IR), 1, "fired at the player");
-    assert_eq!(
-        rule.asked.get(),
-        0,
-        "after the player's point defence, which runs before the NPCs fire"
-    );
-    ticks(&mut view, 2);
-    assert_eq!(rule.asked.get(), 2, "of the one missile, each step");
-    assert_eq!(shots_of(&view, QUAD), 0, "never hostile");
-    view.input(&key(MAP_KEY, true));
-    ticks(&mut view, 2);
-    assert_eq!(rule.asked.get(), 2, "not while the map is open");
-    view.input(&key(MAP_KEY, true));
-    tap(&mut view, LAND);
-    assert!(view.take_landing().is_some(), "one press, uninhabited");
-    ticks(&mut view, 2);
-    assert_eq!(rule.asked.get(), 2, "not while landed");
-}
-
 #[test]
 fn a_missile_shot_down_is_drawn_exploding_and_unheard() {
     // What point defence shoots down is the session's.
@@ -1579,145 +1435,6 @@ fn a_missile_shot_down_is_drawn_exploding_and_unheard() {
             .all(|sound| sound.sound != nova_sim::SoundId(302)),
         "{sounds:?}"
     );
-}
-
-/// [`armed`] with a blaster doing 10 energy and 10 mass damage, the
-/// warship armed with a harmless gun of unlimited ammunition (an unarmed
-/// warship is fully dry, and drops its attack at once, `_WarshipAI`
-/// @0x8c0e7-0x8c117), and govt 140 that costs 3 to disable a ship of.
-fn damaging() -> FakeCatalog {
-    let catalog = armed(1, &[BLASTER]);
-    FakeCatalog {
-        weapons: vec![
-            nova_sim::WeaponRecord {
-                reload: 5,
-                mass_dmg: 10,
-                energy_dmg: 10,
-                ..gun(BLASTER, 0, -1, -1)
-            },
-            gun(UNSEEN, 0, -1, -1),
-        ],
-        hulls: vec![hull_of(128, &[BLASTER]), hull_of(129, &[UNSEEN])],
-        govts: vec![nova_sim::GovtRecord {
-            id: GovtId(140),
-            name: String::new(),
-            flags: 0,
-            flags2: 0,
-            crime_tol: 0,
-            initial_rec: 0,
-            penalties: nova_sim::Penalties {
-                disable: 3,
-                ..nova_sim::Penalties::default()
-            },
-            max_odds: 100,
-            classes: [-1; 4],
-            allies: [-1; 4],
-            enemies: [-1; 4],
-            comm_name: String::new(),
-            medium_name: String::new(),
-            scan_mask: 0,
-            scan_fine: 0,
-            news_pic: -1,
-            require: 0,
-            inh_jam: [0; 4],
-            skill_mult: 0,
-        }],
-        ..catalog
-    }
-}
-
-#[test]
-fn by_default_npcs_fight_by_novas_ai_and_crimes_by_novas_law() {
-    // The warship 100 above, facing away: it flies on up the line of
-    // fire.
-    let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = test_flight::flown(
-        damaging(),
-        FlightStart::New,
-        Collaborators {
-            chance,
-            ..Collaborators::default()
-        },
-    );
-    view.tick(TICK);
-    // Aimed at it: a stray hit the answer flag forgives.
-    tap(&mut view, TARGET_KEY);
-    view.input(&key(FIRE_KEY, true));
-    let mut answered = false;
-    for _ in 0..120 {
-        view.tick(TICK);
-        let session = view.session().expect("flying");
-        answered |= session
-            .npcs()
-            .first()
-            .is_some_and(|npc| npc.goal == Goal::Attack(ShipRef::Player));
-        if session
-            .npcs()
-            .first()
-            .is_some_and(|npc| npc.condition == Condition::Disabled)
-        {
-            break;
-        }
-    }
-    assert!(answered, "the warship hit turned on the player");
-    let session = view.session().expect("flying");
-    assert_eq!(session.npcs()[0].condition, Condition::Disabled);
-    assert_eq!(session.pilot().legal_record(GovtId(140)), -3);
-}
-
-/// Records each crime, and changes nothing.
-#[derive(Debug, Default)]
-struct Witness {
-    seen: RefCell<Vec<nova_sim::Crime>>,
-}
-
-impl nova_sim::LegalCode for Witness {
-    fn penalties(
-        &self,
-        crime: nova_sim::Crime,
-        _victim: Option<GovtId>,
-        _govts: &nova_sim::Governments,
-    ) -> Vec<(GovtId, i32)> {
-        self.seen.borrow_mut().push(crime);
-        Vec::new()
-    }
-
-    fn system_penalties(
-        &self,
-        _crime: nova_sim::Crime,
-        _victim: Option<GovtId>,
-        _from: nova_sim::SystemId,
-        _map: &dyn nova_sim::CrimeMap,
-        _govts: &nova_sim::Governments,
-    ) -> Vec<(nova_sim::SystemId, f32)> {
-        Vec::new()
-    }
-}
-
-#[test]
-fn the_flight_convicts_by_the_law_it_is_given() {
-    let witness = Rc::new(Witness::default());
-    // 100 above, facing away: it flies on up the line of fire.
-    let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = test_flight::flown(
-        damaging(),
-        FlightStart::New,
-        Collaborators {
-            law: witness.clone(),
-            ..on(chance, Rc::new(Still))
-        },
-    );
-    view.tick(TICK);
-    view.input(&key(FIRE_KEY, true));
-    for _ in 0..120 {
-        view.tick(TICK);
-        if view.session().expect("flying").npcs()[0].condition == Condition::Disabled {
-            break;
-        }
-    }
-    assert_eq!(*witness.seen.borrow(), [nova_sim::Crime::Disable]);
-    let session = view.session().expect("flying");
-    assert_eq!(session.pilot().legal_record(GovtId(140)), 0, "as it says");
 }
 
 #[test]

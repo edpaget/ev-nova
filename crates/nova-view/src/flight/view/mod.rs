@@ -1032,6 +1032,55 @@ impl Chance for SharedChance {
     }
 }
 
+#[cfg(test)]
+mod shared_chance_tests {
+    use super::*;
+
+    /// Fires every time, draws 0 and records each `n`, and rolls the last
+    /// outcome.
+    #[derive(Default)]
+    struct Always {
+        drawn: Vec<u32>,
+    }
+
+    impl Chance for Always {
+        fn fires(&mut self, _percent: u8) -> bool {
+            true
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.drawn.push(n);
+            0
+        }
+
+        fn roll(&mut self, sides: u16) -> u16 {
+            sides.saturating_sub(1)
+        }
+    }
+
+    #[test]
+    fn a_shared_chance_draws_from_its_source() {
+        let always = Rc::new(RefCell::new(Always::default()));
+        let shared: Rc<RefCell<dyn Chance>> = always.clone();
+        let mut chance = SharedChance::new(shared);
+        assert_eq!(chance.below(7), 0);
+        assert_eq!(chance.below(500), 0);
+        assert!(chance.fires(1));
+        assert_eq!(always.borrow().drawn, [7, 500]);
+        assert_eq!(SharedChance::default().below(256), 255, "never fires");
+        assert_eq!(format!("{:?}", SharedChance::default()), "Chance");
+    }
+
+    #[test]
+    fn a_shared_chance_rolls_on_its_source() {
+        let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
+        assert_eq!(SharedChance::new(shared).roll(360), 359);
+        let mut never = SharedChance::default();
+        assert!(!never.fires(100), "the default never fires");
+        assert_eq!(never.roll(8), 0, "and rolls the first outcome");
+    }
+}
+
 /// How long the take-off's held nav lasts ([`FlightView::took_off`]): it
 /// shows in the first frame drawn after the take-off, and on to the end of
 /// the tick that frame lands in, so about one tick and never less than a

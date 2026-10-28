@@ -9,6 +9,9 @@
 //! - A new pilot's course map, opened and ticked once, shades the cells
 //!   around the start system in the Federation's `Color`, halved at a full
 //!   value.
+//!
+//! That a new pilot's sources hold no government of no influence is
+//! nova-sim's (`stock_galaxy_map`).
 
 use crate::common;
 
@@ -16,7 +19,6 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
-use nova_sim::fixture::SessionBuilder;
 use nova_sim::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
 use nova_sim::{CombatCatalog, Governments, GovtId};
 use nova_view::flight::radar::IRect;
@@ -57,29 +59,6 @@ fn the_stock_governments_hold_the_borders_flags2_bits() {
     let fed = Some(federation(&data));
     assert!(!govts.flag2(fed, NO_INFLUENCE) && !govts.flag2(fed, SMALL_INFLUENCE));
     assert_eq!(data.galaxy().govts, govts, "the map's catalog reads them");
-}
-
-#[test]
-fn a_new_pilots_sources_hold_no_government_of_no_influence() {
-    let Some(data) = open() else {
-        return;
-    };
-    let session = SessionBuilder::flying(&data).build();
-    let sources = session.map_border_sources();
-    assert!(!sources.coarse.is_empty());
-    let govts = Governments::read(&data);
-    for source in sources
-        .coarse
-        .iter()
-        .chain(sources.walk.iter().map(|(_, source)| source))
-    {
-        assert!(!govts.flag2(Some(source.govt), NO_INFLUENCE), "{source:?}");
-    }
-    let start = session.system();
-    assert!(
-        sources.coarse.iter().any(|source| source.system == start),
-        "the start system adds"
-    );
 }
 
 #[test]
