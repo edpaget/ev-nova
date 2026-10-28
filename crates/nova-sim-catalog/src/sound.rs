@@ -1,7 +1,13 @@
-//! The sounds a flight session makes, as events: what happened, not what
-//! to play. The audio side decides which `snd ` each one plays, if any.
+//! The sounds a flight session makes, as events: what happened. Each one
+//! says what it plays, if anything, as a [`SoundCue`] ([`SimSound::cue`]):
+//! the `snd ` and the priority of the original's `PlaySound` call that
+//! makes it, decided here, where the call is ported. The audio side plays
+//! the cue, and keeps only what needs its own state: the engine loop the
+//! thrust drives, the klaxon's still-playing test, the halts and an
+//! explosion's distance.
 
 use crate::catalog::SoundId;
+pub use crate::sound_cue::{NATURAL_RATE, SoundCue};
 
 /// Something a `nova_sim::Session` did that may make a sound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

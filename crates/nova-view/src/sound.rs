@@ -7,7 +7,8 @@
 //!   beeps, the course map's beeps (opening, closing, Space and Find),
 //!   and the beep of the player info
 //!   refused.
-//! - [`SimSound`]: the flight session's, re-exported from `nova_sim`.
+//! - [`SimSound`]: the flight session's, re-exported from `nova_sim`, each
+//!   with the [`SoundCue`] it plays ([`SimSound::cue`]).
 //! - [`CombatSound`]: a fight's, a `snd ` heard from where it happened.
 //! - [`Sound`]: any of them, as a screen reports it through
 //!   [`Screen::take_sounds`](crate::Screen::take_sounds).
@@ -53,7 +54,7 @@
 //! and `_TrackSingleMissionButtons` @0x28188. Open Pilot is Navigation
 //! Services (`_MyOpenDocument` @0x731c5), which plays nothing either.
 
-pub use nova_sim::{SimSound, SoundId};
+pub use nova_sim::{SimSound, SoundCue, SoundId};
 
 /// A sound the interface makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

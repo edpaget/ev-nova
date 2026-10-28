@@ -337,7 +337,8 @@
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
 //!   cargo kept and the default items fitted.
 //! - [`sound`]: the [`SimSound`] events a session emits as it thrusts,
-//!   lands, takes off and jumps; the audio side decides what they play.
+//!   lands, takes off and jumps, and the [`SoundCue`] each one plays
+//!   ([`SimSound::cue`]): its `snd ` and the original's priority.
 //! - [`stats`]: a ship's computed [`ShipStats`], from its `shïp`'s fields
 //!   and the outfits it carries: the one place its handling, reserve
 //!   capacities, fuel, shield and armour regeneration and cargo space come
@@ -615,7 +616,7 @@ pub use shipyard::{
     Rating, ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard,
     StockLine,
 };
-pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound};
+pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound, SoundCue};
 pub use stats::ShipStats;
 pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCargo};
 pub use story::DrawnSheet;
