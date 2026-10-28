@@ -103,6 +103,36 @@ fn a_click_on_the_players_own_ship_with_no_target_is_silent() {
     assert_eq!(view.drained_sounds(), []);
 }
 
+/// The last hover `view` asked of its flight
+/// ([`FlightCommand::Hover`]): its point and boxes.
+fn last_hover(view: &Faked) -> (Vec2, nova_sim::flight_frame::DrawnBoxes) {
+    view.sim
+        .asks()
+        .iter()
+        .rev()
+        .find_map(|ask| match ask {
+            FlightCommand::Hover { at, drawn } => Some((*at, drawn.clone())),
+            _ => None,
+        })
+        .expect("asked")
+}
+
+#[test]
+fn an_ask_doesnt_refill_the_kept_frame() {
+    // The cursor's hover each step is an ask
+    // (rdm:phase/view-sim-seam/phase-20-view-frame-fills-per-tick), which
+    // changes nothing the frame shows, so a tick with it fills no more
+    // than a quiet tick: the catch-up and the steps.
+    let (mut view, id) = faked_with_npc();
+    view.sim.set_hover(Some(nova_sim::Hover::Ship(id)));
+    view.cursor_input(&Input::PointerMoved(npc_on_screen(&view, id)));
+    view.tick(TICK);
+    let (asked, fills) = (view.sim.asks().len(), view.sim.fills());
+    view.tick(TICK);
+    assert_eq!(view.sim.asks().len(), asked + 1, "the tick's hover asked");
+    assert_eq!(view.sim.fills() - fills, 2, "and filled nothing");
+}
+
 #[test]
 fn the_cursor_animates_over_an_npc_and_rests_off_it() {
     // What the pointer is over is the flight's answer (`FlightSim::hover`).
@@ -181,7 +211,7 @@ fn the_players_own_ship_is_hovered_only_while_it_holds_a_target() {
     let (mut view, _) = faked_with_npc();
     view.cursor_input(&Input::PointerMoved(PLAYER_AT));
     super::faked_flight::ticked(&mut view, 2);
-    let (at, boxes) = view.sim.hovers().pop().expect("asked");
+    let (at, boxes) = last_hover(&view);
     assert_eq!(at, Vec2::ZERO, "asked at the player's ship");
     assert!(boxes.player.is_some());
     assert_eq!(
@@ -234,7 +264,7 @@ fn an_npc_of_a_cost_minus_one_type_is_not_drawn_but_is_still_hovered() {
         [(1, over)],
         "animates over where it would be drawn"
     );
-    let (_, boxes) = view.sim.hovers().pop().expect("asked");
+    let (_, boxes) = last_hover(&view);
     assert!(boxes.npcs.iter().any(|&(npc, _)| npc == id), "boxed");
 }
 

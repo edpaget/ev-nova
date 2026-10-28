@@ -1270,7 +1270,7 @@ fn cursor_frame(view: &FlightView<Rc<GameData>>) -> Option<u16> {
     })
 }
 
-/// `FlightSim::hover`: with the pointer over the trader the frame draws,
+/// `FlightCommand::Hover`: with the pointer over the trader the frame draws,
 /// the session hovers it and the view's cursor animates; off it, the
 /// cursor rests on its first frame.
 #[test]

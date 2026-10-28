@@ -636,9 +636,6 @@ exclude_re = [
     # A good-price stellar may land or trade, `Flags` 0x1 | 0x2 (@0x9148a):
     # the two bits are disjoint, so `^` makes the same 0x3.
     "nova-sim-ai/src/hail/advice\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in AdvicePort::qualifies$",
-    # `FlightSim::coming_traffic`'s default is already the empty list the
-    # mutant puts back, so the replacement is the same function.
-    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace FlightSim::coming_traffic -> Vec<ShipId> with vec!\\[\\]$",
     # `FlightSim::weapons`'s default is "no weapons": its body is already
     # the empty list the mutant puts back.
     "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace FlightSim::weapons -> Vec<WeaponId> with vec!\\[\\]$",

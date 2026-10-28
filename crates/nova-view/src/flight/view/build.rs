@@ -650,13 +650,19 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
     }
 
     /// Reads, in the warm-up frame of entering play, the sheets and target
-    /// cards of the ship types the system's traffic will bring
-    /// ([`FlightSim::coming_traffic`], `nova_sim::Session::coming_traffic_ships`),
-    /// so the first step, which fills the system, reads none: their reading
-    /// is the one-time cost of a run's first stepped frame, and the warm-up
-    /// frame is drawn under black. A flight that failed reads nothing.
+    /// cards of the ship types the system's traffic will bring, asked of
+    /// the flight ([`FlightCommand::ComingTraffic`],
+    /// `nova_sim::Session::coming_traffic_ships`), so the first step,
+    /// which fills the system, reads none: their reading is the one-time
+    /// cost of a run's first stepped frame, and the warm-up frame is drawn
+    /// under black. Any answer but
+    /// [`Answer::ComingTraffic`](nova_sim::flight_frame::Answer::ComingTraffic),
+    /// a failed flight's refusal among them, brings none.
     pub fn warm_up_traffic(&mut self) {
-        let coming = self.sim.coming_traffic();
+        let coming = match self.send(FlightCommand::ComingTraffic) {
+            nova_sim::flight_frame::Answer::ComingTraffic(ships) => ships,
+            _ => Vec::new(),
+        };
         self.read_traffic_sheets(coming);
     }
 

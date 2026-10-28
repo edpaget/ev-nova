@@ -850,11 +850,15 @@ fn the_flights_map_answers_are_its_sessions() {
 #[test]
 fn a_real_flights_coming_traffic_is_the_types_its_session_brings() {
     let catalog = shared(trafficked(&[130, 131], 3, 129, 1));
-    let flight = SessionFlight::start(&catalog);
+    let mut flight = SessionFlight::start(&catalog);
     let session = flight.session().expect("flying");
     let coming = session.coming_traffic_ships(&*catalog);
     assert!(!coming.is_empty(), "traffic to come");
-    assert_eq!(flight.coming_traffic(), coming);
+    assert_eq!(
+        flight.apply(FlightCommand::ComingTraffic),
+        Answer::ComingTraffic(coming),
+        "asked as a command, over the catalog shared"
+    );
 }
 
 #[test]

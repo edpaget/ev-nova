@@ -189,17 +189,26 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Whether the pointer, while the cursor shows, is over something the
-    /// player can target ([`FlightSim::hover`],
-    /// `nova_sim::Session::hover`), the ships boxed where they are drawn
-    /// ([`FlightView::drawn_boxes`]).
-    pub(super) fn hovering(&self) -> bool {
+    /// player can target, asked of the flight
+    /// ([`FlightCommand::Hover`](nova_sim::flight_frame::FlightCommand::Hover),
+    /// `nova_sim::Session::hover`) after the steps, the ships boxed where
+    /// the frame they left draws them ([`FlightView::drawn_boxes`]). Any
+    /// answer but [`Answer::Hovered`](nova_sim::flight_frame::Answer::Hovered)
+    /// with something under it, a failed flight's refusal among them, is
+    /// nothing hovered.
+    pub(super) fn hovering(&mut self) -> bool {
         let Some(at) = self.cursor.shown_at() else {
             return false;
         };
         let world = self.camera().screen_to_world(at);
-        self.sim
-            .hover(Vec2::new(world.x, world.y), &self.drawn_boxes())
-            .is_some()
+        let hover = nova_sim::flight_frame::FlightCommand::Hover {
+            at: Vec2::new(world.x, world.y),
+            drawn: self.drawn_boxes(),
+        };
+        matches!(
+            self.send(hover),
+            nova_sim::flight_frame::Answer::Hovered(Some(_))
+        )
     }
 
     /// The boxes the ships are drawn in, for the hover test and a click in

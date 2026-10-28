@@ -4,9 +4,7 @@
 //! the boardings' rules, and the comm dialog's options.
 //!
 //! It forwards: [`FlightSim::frame`] to `Session::fill_frame`,
-//! [`FlightSim::hover`] to `Session::hover`, [`FlightSim::coming_traffic`]
-//! to `Session::coming_traffic_ships`, [`FlightSim::weapons`] to
-//! `Session::weapon_ids`,
+//! [`FlightSim::weapons`] to `Session::weapon_ids`,
 //! [`FlightSim::step`] to `Session::step`, with its collaborators and
 //! the catalog the view shared,
 //! [`FlightSim::apply`] to `Session::apply`, whose match over the
@@ -47,8 +45,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use nova_sim::flight_frame::{
-    Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, StepInput,
-    StepReport,
+    Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, StepInput, StepReport,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
@@ -58,11 +55,10 @@ use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
     Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DescMovie, DisableRule, Good,
-    HailOptions, HailView, HireList, Hover, JunkId, LegalCode, MapMarks, Market, MissionId,
-    MissionInfo, News, NovaAi, NovaBoarding, NovaDisable, NovaLaw, OutfitId, Outfitter, Pilot,
-    PlayerInfo, PlunderView, PointDefenceRule, Rules, SavedNav, Session, ShipId, ShipNaming,
-    ShipRefusal, Shipyard, SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, Vec2,
-    WeaponId,
+    HailOptions, HailView, HireList, JunkId, LegalCode, MapMarks, Market, MissionId, MissionInfo,
+    News, NovaAi, NovaBoarding, NovaDisable, NovaLaw, OutfitId, Outfitter, Pilot, PlayerInfo,
+    PlunderView, PointDefenceRule, Rules, SavedNav, Session, ShipId, ShipNaming, ShipRefusal,
+    Shipyard, SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, WeaponId,
 };
 
 use nova_sim::{
@@ -481,25 +477,10 @@ impl<C> FlightSim for SessionFlight<C> {
         }
     }
 
-    /// Forwards to `Session::hover`; a failed session hovers nothing.
-    fn hover(&self, at: Vec2, drawn: &DrawnBoxes) -> Option<Hover> {
-        self.session().ok()?.hover(at, drawn)
-    }
-
     /// Forwards to `Session::weapon_ids`; a failed session has none.
     fn weapons(&self) -> Vec<WeaponId> {
         self.session()
             .map_or_else(|_| Vec::new(), Session::weapon_ids)
-    }
-
-    /// Forwards to `Session::coming_traffic_ships`, reading the catalog the
-    /// view shared ([`SessionFlight::share_catalog`]); a failed session, or
-    /// one never shared a catalog, brings none.
-    fn coming_traffic(&self) -> Vec<ShipId> {
-        match (self.session(), &self.catalog) {
-            (Ok(session), Some(catalog)) => session.coming_traffic_ships(&*catalog.0),
-            _ => Vec::new(),
-        }
     }
 
     /// Forwards to `Session::load_description`, drawing on the flight's
@@ -817,7 +798,8 @@ mod fake_catalog_checks;
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::StellarPick;
+    use nova_sim::flight_frame::DrawnBoxes;
+    use nova_sim::{StellarPick, Vec2};
 
     use super::*;
     use crate::flight::sim_port::fixture::unlike;
@@ -864,8 +846,7 @@ mod tests {
         assert_eq!(flight.stellar_name(StellarId(128)), None);
         assert!(!flight.has_explored(none));
         assert_eq!(flight.galaxy(), None);
-        assert_eq!(flight.hover(Vec2::ZERO, &DrawnBoxes::default()), None);
-        assert_eq!(flight.coming_traffic(), []);
+
         assert_eq!(flight.weapons(), []);
     }
 
@@ -883,6 +864,20 @@ mod tests {
         assert_eq!(flight.long_date(), "");
         assert_eq!(flight.player_info(), None);
         assert_eq!(flight.pilot_panel(), None);
+    }
+
+    #[test]
+    fn a_failed_flight_refuses_the_hover_and_the_coming_traffic() {
+        let mut flight = failed();
+        for ask in [
+            FlightCommand::Hover {
+                at: Vec2::ZERO,
+                drawn: DrawnBoxes::default(),
+            },
+            FlightCommand::ComingTraffic,
+        ] {
+            assert_eq!(flight.apply(ask.clone()), Answer::Refused, "{ask:?}");
+        }
     }
 
     #[test]

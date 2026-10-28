@@ -51,10 +51,15 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// is told to refuse ([`FakeFlight::refuse`]). It answers [`MapSource`]
 /// from [`FakeMap`]
 /// ([`FakeFlight::map_mut`]), and records the map's questions whose
-/// arguments matter ([`FakeFlight::asked`]). It answers the hover as told
-/// ([`FakeFlight::set_hover`]), recording each ask
-/// ([`FakeFlight::hovers`]), and the coming traffic from its list
-/// ([`FakeFlight::set_coming_traffic`]), and the weapons from its list
+/// arguments matter ([`FakeFlight::asked`]). It answers the asks
+/// ([`FlightCommand::is_ask`]) from what it is told for each, without the
+/// answer queue and outside [`FakeFlight::applied`], so the cursor's hover
+/// and a dialog's description never shift the answers queued for the
+/// commands a test is about, recording each in [`FakeFlight::asks`]: the
+/// hover as told ([`FakeFlight::set_hover`]) and the coming traffic from
+/// its list ([`FakeFlight::set_coming_traffic`]). A new ask is one field
+/// and setter for its answer, and one arm in `FakeFlight::answer_ask`;
+/// it is recorded with the rest. It lists the weapons from its list
 /// ([`FakeFlight::set_weapons`]), failed or not. It loads each description with
 /// the next text queued ([`FakeFlight::queue_description`]), or, once
 /// the queue is empty, as its raw text unchanged, resolving nothing; it
@@ -86,8 +91,8 @@ pub struct FakeFlight {
     refused: Vec<PlayerCommand>,
     map: FakeMap,
     asked: RefCell<Vec<MapAsk>>,
+    asks: Vec<FlightCommand>,
     hover: Option<Hover>,
-    hovers: RefCell<Vec<(Vec2, DrawnBoxes)>>,
     coming: Vec<ShipId>,
     weapons: Vec<WeaponId>,
     descriptions: VecDeque<String>,
@@ -299,18 +304,21 @@ impl FakeFlight {
         &mut self.frame
     }
 
-    /// Answers every hover ask with `hover` from now on.
+    /// Answers every hover ask ([`FlightCommand::Hover`]) with `hover`
+    /// from now on.
     pub fn set_hover(&mut self, hover: Option<Hover>) {
         self.hover = hover;
     }
 
-    /// Each hover ask's point and boxes, in the order asked.
+    /// The asks sent ([`FlightCommand::is_ask`]), in order, each as it was
+    /// sent: kept apart from [`FakeFlight::applied`].
     #[must_use]
-    pub fn hovers(&self) -> Vec<(Vec2, DrawnBoxes)> {
-        self.hovers.borrow().clone()
+    pub fn asks(&self) -> &[FlightCommand] {
+        &self.asks
     }
 
-    /// Answers the coming traffic with `ships` from now on.
+    /// Answers the coming traffic ([`FlightCommand::ComingTraffic`]) with
+    /// `ships` from now on.
     pub fn set_coming_traffic(&mut self, ships: Vec<ShipId>) {
         self.coming = ships;
     }
@@ -476,6 +484,20 @@ impl FakeFlight {
     fn ask(&self, ask: MapAsk) {
         self.asked.borrow_mut().push(ask);
     }
+
+    /// Answers the ask `ask` from what it is told for it, recording it
+    /// ([`FakeFlight::asks`]): one arm for each ask. A failed fake refuses
+    /// them.
+    fn answer_ask(&mut self, ask: FlightCommand) -> Answer {
+        let answer = match &ask {
+            _ if self.failure.is_some() => Answer::Refused,
+            FlightCommand::Hover { .. } => Answer::Hovered(self.hover),
+            FlightCommand::ComingTraffic => Answer::ComingTraffic(self.coming.clone()),
+            _ => Answer::Refused,
+        };
+        self.asks.push(ask);
+        answer
+    }
 }
 
 impl FlightSim for FakeFlight {
@@ -498,6 +520,9 @@ impl FlightSim for FakeFlight {
     }
 
     fn apply(&mut self, command: FlightCommand) -> Answer {
+        if command.is_ask() {
+            return self.answer_ask(command);
+        }
         let rides_along = matches!(
             command,
             FlightCommand::CommShown(_)
@@ -526,15 +551,6 @@ impl FlightSim for FakeFlight {
 
     fn drain(&mut self, into: &mut Vec<FlightEvent>) {
         into.append(&mut self.events);
-    }
-
-    fn hover(&self, at: Vec2, drawn: &DrawnBoxes) -> Option<Hover> {
-        self.hovers.borrow_mut().push((at, drawn.clone()));
-        self.hover
-    }
-
-    fn coming_traffic(&self) -> Vec<ShipId> {
-        self.coming.clone()
     }
 
     fn weapons(&self) -> Vec<WeaponId> {
@@ -1492,7 +1508,11 @@ fn check_world(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), Strin
         ));
     }
     let at = once.player().position;
-    if let Some(hover @ (Hover::Ship(_) | Hover::Player)) = sim.hover(at, &DrawnBoxes::default()) {
+    let hover = FlightCommand::Hover {
+        at,
+        drawn: DrawnBoxes::default(),
+    };
+    if let Answer::Hovered(Some(hover @ (Hover::Ship(_) | Hover::Player))) = sim.apply(hover) {
         return Err(format!(
             "no ship hovered without boxes: {hover:?} at {at:?}"
         ));
@@ -1596,10 +1616,6 @@ mod tests {
         }
 
         fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
-
-        fn hover(&self, _at: Vec2, _drawn: &DrawnBoxes) -> Option<Hover> {
-            None
-        }
 
         fn failure(&self) -> Option<&str> {
             Some("no chär")
@@ -2075,13 +2091,6 @@ mod tests {
             }
         }
 
-        fn hover(&self, at: Vec2, drawn: &DrawnBoxes) -> Option<Hover> {
-            if matches!(self.fault, Fault::HoversWithoutBoxes) {
-                return Some(Hover::Player);
-            }
-            self.fake.hover(at, drawn)
-        }
-
         fn step(&mut self, input: &StepInput, steps: u32, into: &mut StepReport) {
             self.fake.step(input, steps, into);
             if matches!(self.fault, Fault::StepsUnasked) {
@@ -2098,7 +2107,9 @@ mod tests {
             let jump = matches!(command, FlightCommand::Jump);
             let plunder = matches!(command, FlightCommand::Plunder(_));
             let trade = matches!(command, FlightCommand::Trade(_));
+            let hover = matches!(command, FlightCommand::Hover { .. });
             match self.fault {
+                Fault::HoversWithoutBoxes if hover => Answer::Hovered(Some(Hover::Player)),
                 Fault::TradesWithoutAMarket if trade => Answer::Traded(Ok(1)),
                 Fault::TradeChangesTheFrame if trade => {
                     self.fake.set_frame(stellar(129));
@@ -2703,6 +2714,14 @@ mod tests {
         );
     }
 
+    /// The hover at `at` with `drawn`, as the command carries it.
+    fn hover_at(at: Vec2, drawn: &DrawnBoxes) -> FlightCommand {
+        FlightCommand::Hover {
+            at,
+            drawn: drawn.clone(),
+        }
+    }
+
     #[test]
     fn the_fake_answers_the_hover_as_told_and_records_each_ask() {
         let mut fake = FakeFlight::new();
@@ -2714,27 +2733,51 @@ mod tests {
             }),
             npcs: Vec::new(),
         };
-        assert_eq!(fake.hover(Vec2::new(1.0, 2.0), &boxes), None);
+        let first = hover_at(Vec2::new(1.0, 2.0), &boxes);
+        assert_eq!(fake.apply(first.clone()), Answer::Hovered(None));
         fake.set_hover(Some(Hover::Stellar(StellarId(128))));
+        let second = hover_at(Vec2::ZERO, &DrawnBoxes::default());
         assert_eq!(
-            fake.hover(Vec2::ZERO, &DrawnBoxes::default()),
-            Some(Hover::Stellar(StellarId(128)))
+            fake.apply(second.clone()),
+            Answer::Hovered(Some(Hover::Stellar(StellarId(128))))
         );
-        assert_eq!(
-            fake.hovers(),
-            [
-                (Vec2::new(1.0, 2.0), boxes),
-                (Vec2::ZERO, DrawnBoxes::default())
-            ]
-        );
+        assert_eq!(fake.asks(), [first, second]);
     }
 
     #[test]
     fn the_fake_brings_the_coming_traffic_it_is_given() {
         let mut fake = FakeFlight::new();
-        assert_eq!(fake.coming_traffic(), []);
+        assert_eq!(
+            fake.apply(FlightCommand::ComingTraffic),
+            Answer::ComingTraffic(Vec::new())
+        );
         fake.set_coming_traffic(vec![ShipId(129)]);
-        assert_eq!(fake.coming_traffic(), [ShipId(129)]);
+        assert_eq!(
+            fake.apply(FlightCommand::ComingTraffic),
+            Answer::ComingTraffic(vec![ShipId(129)])
+        );
+    }
+
+    #[test]
+    fn the_fakes_asks_take_no_queued_answer_and_are_not_applied() {
+        let mut fake = FakeFlight::new();
+        fake.queue_answer(Answer::Stellar(StellarId(130)));
+        fake.apply(hover_at(Vec2::ZERO, &DrawnBoxes::default()));
+        fake.apply(FlightCommand::ComingTraffic);
+        assert_eq!(fake.applied(), [], "asks are kept apart");
+        assert_eq!(fake.asks().len(), 2);
+        assert_eq!(
+            fake.apply(FlightCommand::SelectStellar(StellarPick::Nearest)),
+            Answer::Stellar(StellarId(130)),
+            "the answer queued is the next command's"
+        );
+        fake.fail("no chär");
+        assert_eq!(
+            fake.apply(FlightCommand::ComingTraffic),
+            Answer::Refused,
+            "a failed fake refuses them"
+        );
+        assert_eq!(fake.asks().len(), 3, "still recorded");
     }
 
     #[test]

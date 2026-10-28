@@ -1165,7 +1165,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// input reads the frame the command left: the gates, the nav mode,
     /// whether a jump is under way. The view reads no fresh fill; this
     /// refill, the step's, the catch-up's and [`FlightView::change_sim`]'s
-    /// are what keep the frame the flight's.
+    /// are what keep the frame the flight's. An ask
+    /// ([`FlightCommand::is_ask`](nova_sim::flight_frame::FlightCommand::is_ask):
+    /// the hover, the coming traffic, a description's load) changes
+    /// nothing the frame shows, so none is filled after it, and a shown
+    /// cursor's hover each step adds no fill to the tick.
     ///
     /// Ordering against the original: a read of the kept frame differs
     /// from a fresh fill only if the flight changed since the last fill,
@@ -1177,8 +1181,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
         &mut self,
         command: nova_sim::flight_frame::FlightCommand,
     ) -> nova_sim::flight_frame::Answer {
+        let ask = command.is_ask();
         let answer = self.sim.apply(command);
-        self.refresh_frame();
+        if !ask {
+            self.refresh_frame();
+        }
         answer
     }
 

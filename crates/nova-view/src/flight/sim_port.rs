@@ -29,8 +29,7 @@
 //! `check_contract`, what every sim must honour.
 
 use nova_sim::flight_frame::{
-    Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, StepInput,
-    StepReport,
+    Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, StepInput, StepReport,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
@@ -40,9 +39,9 @@ use nova_sim::mission::screens::OFFER_GAP_TICKS;
 use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    DescMovie, Good, HailView, HireList, Hover, JunkId, MapMarks, Market, MissionId, MissionInfo,
-    News, OutfitId, Outfitter, PlayerInfo, PlunderView, SavedNav, ShipId, ShipNaming, ShipRefusal,
-    Shipyard, StellarId, SystemId, Vec2, WeaponId,
+    DescMovie, Good, HailView, HireList, JunkId, MapMarks, Market, MissionId, MissionInfo, News,
+    OutfitId, Outfitter, PlayerInfo, PlunderView, SavedNav, ShipId, ShipNaming, ShipRefusal,
+    Shipyard, StellarId, SystemId, WeaponId,
 };
 
 #[cfg(any(test, feature = "fixture"))]
@@ -69,19 +68,6 @@ pub trait FlightSim: MapSource + CommSource + PortSource + NameSource + PilotSou
     /// Moves what the flight raised since the last drain onto the end of
     /// `into`, leaving none to drain again.
     fn drain(&mut self, into: &mut Vec<FlightEvent>);
-
-    /// What the pointer at `at`, in system coordinates, is over among the
-    /// things the player can target, the ships boxed as `drawn` says they
-    /// are drawn (`nova_sim::Session::hover`): the cursor asks it each
-    /// step it shows. `None` with no box and no stellar under it.
-    fn hover(&self, at: Vec2, drawn: &DrawnBoxes) -> Option<Hover>;
-
-    /// The ship types the system's traffic will bring
-    /// (`nova_sim::Session::coming_traffic_ships`), whose sheets the view
-    /// reads as play is entered. None by default: a sim with no traffic.
-    fn coming_traffic(&self) -> Vec<ShipId> {
-        Vec::new()
-    }
 
     /// The weapons the flight can fire, by ascending ID
     /// (`nova_sim::Session::weapon_ids`), whose looks the view reads as it
@@ -488,10 +474,6 @@ mod tests {
         }
 
         fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
-
-        fn hover(&self, _at: Vec2, _drawn: &DrawnBoxes) -> Option<Hover> {
-            None
-        }
     }
 
     impl MapSource for Defaults {}
@@ -510,9 +492,7 @@ mod tests {
         let raw = "{b5 \"set\" \"clear\"}, sir.";
         assert_eq!(flight.load_description(Some(raw), None), raw, "unchanged");
         assert_eq!(flight.load_description(None, None), "");
-        assert_eq!(flight.coming_traffic(), []);
         assert_eq!(flight.weapons(), []);
-
         assert_eq!(flight.failure(), None, "started");
     }
 
