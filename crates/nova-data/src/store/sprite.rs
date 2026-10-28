@@ -312,9 +312,10 @@ mod tests {
     use super::*;
     use crate::decode::Record;
     use crate::graphics::fixture::RledBuilder;
-    use crate::store::fake::{FakeForks, FakeTree};
+    use crate::store::fixture::FakeTree;
     use crate::store::fs::EntryKind::File;
     use crate::testutil::buf;
+    use nova_rsrc::fixture::forks::MemForks;
 
     /// A `shän` with base image `image`, `sets` sprite sets and
     /// `frames_per` frames per rotation.
@@ -356,12 +357,12 @@ mod tests {
         let tree = FakeTree::new()
             .dir("/d", &[("ships", File), ("anims", File), ("sprites", File)])
             .dir("/p", &plugins);
-        let mut forks = FakeForks::new()
+        let mut forks = MemForks::new()
             .file("/d/ships", fork(&[(Ship::TYPE, 128, ship())]))
             .file("/d/anims", fork(&[(ShipAnim::TYPE, 128, anim(1000, 3, 4))]))
             .file("/d/sprites", fork(&[(RLED, 1000, sheet(12, 0x7C00))]));
         for (name, bytes) in extra {
-            forks = forks.file(&format!("/p/{name}"), bytes.clone());
+            forks = forks.file(format!("/p/{name}"), bytes.clone());
         }
         GameData::load(&tree, &forks, Path::new("/d"), Some(Path::new("/p"))).expect("opens")
     }

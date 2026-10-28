@@ -87,8 +87,40 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::store::fake::{EndlessTree, FakeTree};
+    use crate::store::fixture::FakeTree;
     use crate::store::fs::EntryKind::{Dir, File, Other, Symlink};
+    use crate::store::fs::{DirLister, EntryKind, Listing};
+
+    /// A directory tree with no bottom: every directory holds one file and
+    /// one sub-folder. Panics past `limit` calls so a walk that never stops
+    /// fails instead of hanging. [`FakeTree`] can't stand in: its trees
+    /// are finite.
+    struct EndlessTree {
+        calls: RefCell<usize>,
+        limit: usize,
+    }
+
+    impl DirLister for EndlessTree {
+        fn list(&self, _dir: &Path) -> std::io::Result<Vec<Listing>> {
+            let mut calls = self.calls.borrow_mut();
+            *calls += 1;
+            assert!(
+                *calls <= self.limit,
+                "listed more than {} directories",
+                self.limit
+            );
+            Ok(vec![
+                Listing {
+                    name: "deeper".into(),
+                    kind: EntryKind::Dir,
+                },
+                Listing {
+                    name: "plug".into(),
+                    kind: EntryKind::File,
+                },
+            ])
+        }
+    }
 
     fn walk(tree: &FakeTree, plugins: Option<&str>) -> Walk {
         load_order(tree, Path::new("/d"), plugins.map(Path::new)).expect("walks")

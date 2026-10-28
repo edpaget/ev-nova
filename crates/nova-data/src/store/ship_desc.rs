@@ -44,8 +44,9 @@ mod tests {
 
     use super::*;
     use crate::decode::Record;
-    use crate::store::fake::{FakeForks, FakeTree};
+    use crate::store::fixture::FakeTree;
     use crate::store::fs::EntryKind::File;
+    use nova_rsrc::fixture::forks::MemForks;
 
     #[test]
     fn ship_ids_map_onto_dësc_13000_onwards() {
@@ -79,7 +80,7 @@ mod tests {
             .build()
             .bytes;
         let tree = FakeTree::new().dir("/d", &[("descs", File)]);
-        let forks = FakeForks::new().file("/d/descs", fork);
+        let forks = MemForks::new().file("/d/descs", fork);
         GameData::load(&tree, &forks, Path::new("/d"), None).expect("opens")
     }
 

@@ -190,8 +190,8 @@ use crate::error::{DecodeError, DecodeWarning};
 use crate::expr::{ParseError, SetExpr, TestExpr};
 use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
 
-#[cfg(test)]
-mod fake;
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
 pub mod fs;
 mod interface;
 pub mod order;

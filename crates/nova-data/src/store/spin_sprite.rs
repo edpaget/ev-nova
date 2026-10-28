@@ -202,9 +202,10 @@ mod tests {
     use crate::decode::Record;
     use crate::graphics::fixture::{RledBuilder, rgb888_pict};
     use crate::graphics::{PICT, decode_pict};
-    use crate::store::fake::{FakeForks, FakeTree};
+    use crate::store::fixture::FakeTree;
     use crate::store::fs::EntryKind::File;
     use crate::testutil::buf;
+    use nova_rsrc::fixture::forks::MemForks;
 
     /// A `spïn` naming sprites `image`, `width` x `height` each, in a grid
     /// `x_tiles` across and `y_tiles` down.
@@ -284,14 +285,14 @@ mod tests {
         let tree = FakeTree::new()
             .dir("/d", &[("spins", File), ("sprites", File)])
             .dir("/p", &plugins);
-        let mut forks = FakeForks::new()
+        let mut forks = MemForks::new()
             .file(
                 "/d/spins",
                 fork(&[(Spin::TYPE, 3000, spin(2000, 2, 1, 6, 6))]),
             )
             .file("/d/sprites", fork(&[(RLED, 2000, sheet(36, 0x7C00))]));
         for (name, bytes) in extra {
-            forks = forks.file(&format!("/p/{name}"), bytes.clone());
+            forks = forks.file(format!("/p/{name}"), bytes.clone());
         }
         GameData::load(&tree, &forks, Path::new("/d"), Some(Path::new("/p"))).expect("opens")
     }
@@ -539,7 +540,7 @@ mod tests {
         let no_rled = FakeTree::new().dir("/d", &[("Pair", File)]);
         let no_rled = GameData::load(
             &no_rled,
-            &FakeForks::new().file("/d/Pair", fork(&pair)),
+            &MemForks::new().file("/d/Pair", fork(&pair)),
             Path::new("/d"),
             None,
         )
