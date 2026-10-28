@@ -8,11 +8,11 @@ mod build_id;
 mod env;
 mod files;
 mod flatpak_metadata;
-#[cfg(target_os = "linux")]
-mod linux_appimage;
 mod linux_desktop;
 #[cfg(target_os = "linux")]
 mod linux_flatpak;
+#[cfg(target_os = "linux")]
+mod linux_tarball;
 #[cfg(target_os = "macos")]
 mod macos_tools;
 mod process;

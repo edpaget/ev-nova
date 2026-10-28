@@ -17,7 +17,6 @@ The downloads are:
   ev-nova-x86_64-pc-windows-msvc.msi    Windows, an installer
   ev-nova-x86_64-pc-windows-msvc.zip    Windows, a portable copy
   ev-nova-x86_64-unknown-linux-gnu.tar.gz   Linux, a folder to copy
-  ev-nova-x86_64-unknown-linux-gnu.AppImage Linux, one file to run
   ev-nova-x86_64-unknown-linux-gnu.flatpak  Linux, a Flatpak to install
 
 EV Nova's data files are copyrighted and are not included. Supply your own
@@ -84,15 +83,15 @@ Linux
 -----
 
 Every Linux download is for x86-64 (64-bit Intel or AMD). There are
-three: the tarball, the AppImage and the Flatpak.
+two: the Flatpak and the tarball.
 
-The tarball and the AppImage need glibc 2.35 or newer: Ubuntu 22.04 or
-later, Debian 12 or later, or a current Fedora or openSUSE. They are
-built on Ubuntu 22.04, and the build checks that the game needs no newer
-glibc. They play sound through your system's ALSA, which PipeWire or
-PulseAudio serves on current desktops, and share one set of settings and
-pilots. The Flatpak brings its own runtime, so any distribution with
-Flatpak runs it, and keeps its own settings and pilots (see below).
+The tarball needs glibc 2.35 or newer: Ubuntu 22.04 or later, Debian 12
+or later, or a current Fedora or openSUSE. It is built on Ubuntu 22.04,
+and the build checks that the game needs no newer glibc. It plays sound
+through your system's ALSA, which PipeWire or PulseAudio serves on
+current desktops. The Flatpak brings its own runtime, so any
+distribution with Flatpak runs it, and keeps its own settings and pilots
+(see below).
 
 The tarball (.tar.gz) holds one folder with nova, nova-dump, README.txt,
 LICENSE and a share/ folder:
@@ -138,24 +137,6 @@ and logs its startup to ~/.local/state/nova/nova.log
 file, and says so in its startup log. A pilot whose name is already taken
 in the new folder is left where it was, with a warning.
 
-The AppImage
-------------
-
-The AppImage is the game in one file, with nothing to install:
-
-  chmod +x ev-nova-x86_64-unknown-linux-gnu.AppImage
-  ./ev-nova-x86_64-unknown-linux-gnu.AppImage
-
-It needs FUSE to run (fusermount3, which most desktops have; it doesn't
-need the older libfuse2). Without it, run it with
---appimage-extract-and-run. It installs nothing itself: to add it to your
-applications, use an AppImage integration tool such as Gear Lever or
-AppImageLauncher, which installs its desktop entry and icon. Without
-one, some docks (GNOME on Wayland among them) show a generic icon for its
-window. It finds the `Nova Files` and keeps its settings, pilots and log
-in the same places as the tarball above, and shares them with it.
-nova-dump is in the tarball only.
-
 The Flatpak
 -----------
 
@@ -181,8 +162,8 @@ warning boxes use the runtime's zenity.
 
 The Flatpak keeps everything in ~/.var/app/io.github.edpaget.ev-nova/:
 settings in config/nova, pilots in data/nova/Pilots and the startup log
-in .local/state/nova/nova.log. These are separate from the tarball's and
-the AppImage's: pilots are neither shared nor moved between them. To use
+in .local/state/nova/nova.log. These are separate from the tarball's:
+pilots are neither shared nor moved between them. To use
 the same pilots, copy their files from one Pilots folder to the other.
 
 Checking the icon (by hand)

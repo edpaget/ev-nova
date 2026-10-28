@@ -62,7 +62,7 @@ pub fn command(args: Vec<OsString>, cwd: &Path) -> Result<Command, UsageError> {
 mod tests {
     use super::*;
     use crate::installer;
-    use crate::linux::appimage;
+    use crate::linux;
 
     fn cwd() -> PathBuf {
         Path::new("/work").join("ev-nova")
@@ -104,11 +104,11 @@ mod tests {
             Ok(Command::ArchiveFile(archive::WINDOWS))
         );
         assert_eq!(
-            command(args(&["--archive-dir", appimage::TARGET]), &cwd()),
+            command(args(&["--archive-dir", linux::TARGET]), &cwd()),
             Ok(Command::ArchiveDir(archive::LINUX))
         );
         assert_eq!(
-            command(args(&["--archive", appimage::TARGET]), &cwd()),
+            command(args(&["--archive", linux::TARGET]), &cwd()),
             Ok(Command::ArchiveFile(archive::LINUX))
         );
         assert_eq!(
@@ -125,7 +125,7 @@ mod tests {
             vec!["--archive"],
             vec!["--archive-dir"],
             vec!["--archive", installer::TARGET, "extra"],
-            vec!["--archive-dir", appimage::TARGET, "extra"],
+            vec!["--archive-dir", linux::TARGET, "extra"],
             vec!["a", "b"],
             vec!["--help"],
             vec!["-o"],

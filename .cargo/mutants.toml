@@ -18,7 +18,7 @@ additional_cargo_args = ["--all-features"]
 exclude_re = [
     # The highest glibc version in `objdump -p`'s output: replacing the
     # highest so far with an equal one (`>=`) keeps the same version.
-    "nova-bundle/src/linux/appimage/links\\.rs:[0-9]+:[0-9]+: replace > with >= in Links::parse$",
+    "nova-bundle/src/linux/links\\.rs:[0-9]+:[0-9]+: replace > with >= in Links::parse$",
     # Windows-only code (`cfg(windows)`): off Windows it is never compiled,
     # so no mutant of it can fail a build or a test here. The windows-latest
     # CI leg runs its tests (`nova-win32/tests/it`, `nova/tests/it/windows_exe.rs`).

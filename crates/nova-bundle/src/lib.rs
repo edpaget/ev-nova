@@ -3,9 +3,8 @@
 //! into a `.dmg`; its `nova-installer` binary packs the built Windows
 //! executables into a per-user MSI ([`installer`]); its `nova-linux`
 //! binary writes the Linux desktop file, AppStream metainfo and icons
-//! ([`linux`]); and its `nova-appimage` and `nova-flatpak` binaries pack
-//! the game into the Linux AppImage and Flatpak ([`linux::appimage`],
-//! [`linux::flatpak`]); its `nova-build-id` binary prints the build ID
+//! ([`linux`]); its `nova-flatpak` binary packs the game into the Linux
+//! Flatpak ([`linux::flatpak`]); its `nova-build-id` binary prints the build ID
 //! ([`build_id`]); and its `nova-site` binary renders the download
 //! page that links them all ([`site`]).
 //!
@@ -81,24 +80,17 @@
 //! `<identifier>.metainfo.xml` and the hicolor icons as a `share/` tree
 //! in `OUT_DIR` (by default `target/linux`), which the player copies into
 //! `~/.local/share`. The nightly's Linux tarball carries it. See
-//! [`linux`].
+//! [`linux`]. The opt-in tarball test checks with `objdump -p` that the
+//! tarball's `nova` needs no glibc above [`linux::links::GLIBC_FLOOR`]
+//! and links only [`linux::links::ALLOWED_LIBRARIES`].
 //!
-//! # The AppImage and the Flatpak
+//! # The Flatpak
 //!
 //! ```text
-//! mise run appimage -- [OUT_DIR]
 //! mise run flatpak -- [OUT_DIR]
 //! ```
 //!
-//! On x86-64 Linux only. `nova-appimage` builds `nova` in release for
-//! `x86_64-unknown-linux-gnu`, lays out an AppDir with the desktop file,
-//! the icons and the metainfo, checks with `objdump -p` that the binary
-//! needs no glibc above [`linux::appimage::GLIBC_FLOOR`] and links only
-//! [`linux::appimage::ALLOWED_LIBRARIES`], and packs it with
-//! `appimagetool` (`$NOVA_APPIMAGETOOL`, else the one on `PATH`) and the
-//! type2 runtime `$NOVA_APPIMAGE_RUNTIME` names into
-//! `ev-nova-x86_64-unknown-linux-gnu.AppImage` in `OUT_DIR` (by default
-//! `target/appimage/out`). `nova-flatpak` vendors the crates, renders the
+//! On x86-64 Linux only. `nova-flatpak` vendors the crates, renders the
 //! `flatpak-builder` manifest, builds it offline on the freedesktop
 //! runtime and packs `ev-nova-x86_64-unknown-linux-gnu.flatpak` in
 //! `OUT_DIR` (by default `target/flatpak/out`); it needs `flatpak`,

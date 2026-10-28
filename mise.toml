@@ -93,10 +93,6 @@ run = "cargo run -p nova-bundle --locked --bin nova-linux --"
 description = "Any host: render the download page into index.html; pass an output dir after -- (default target/site)"
 run = "cargo run -p nova-bundle --locked --bin nova-site --"
 
-[tasks.appimage]
-description = "Linux x86_64 only, needs appimagetool (or NOVA_APPIMAGETOOL) and NOVA_APPIMAGE_RUNTIME naming a downloaded AppImage type2 runtime: build nova and pack it into ev-nova-x86_64-unknown-linux-gnu.AppImage; pass an output dir after -- (default target/appimage/out)"
-run = "cargo run -p nova-bundle --locked --bin nova-appimage --"
-
 [tasks.flatpak]
 description = "Linux x86_64 only, needs flatpak, flatpak-builder and the flathub remote added with --user: build the game from vendored sources on the freedesktop runtime into ev-nova-x86_64-unknown-linux-gnu.flatpak; pass an output dir after -- (default target/flatpak/out)"
 run = "cargo run -p nova-bundle --locked --bin nova-flatpak --"

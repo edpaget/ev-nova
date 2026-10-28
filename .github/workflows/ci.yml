@@ -131,9 +131,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Built in an ubuntu:22.04 container, so the tarball's and the
-          # AppImage's binary need no glibc newer than 2.35, the floor
-          # packaging/README.txt records. The image outlives GitHub's
+          # Built in an ubuntu:22.04 container, so the tarball's binary
+          # needs no glibc newer than 2.35, the floor packaging/README.txt
+          # records. The image outlives GitHub's
           # ubuntu-22.04 runner. The Flatpak is built in its own job below.
           - name: x86_64-unknown-linux-gnu
             os: ubuntu-latest
@@ -172,12 +172,12 @@ jobs:
       # rustup's toolchain and the C build scripts, git and curl for
       # checkout and mise, ALSA's headers (nova-audio plays through cpal,
       # which builds against ALSA on Linux), objdump (binutils) for the
-      # AppImage's glibc check, and file for appimagetool.
+      # tarball's glibc check.
       - if: runner.os == 'Linux'
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config libasound2-dev binutils git curl ca-certificates file xz-utils
+            build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v5
         with:
@@ -255,8 +255,7 @@ jobs:
       # One top-level directory holding the two binaries, README.txt and
       # LICENSE, and on Linux the share/ tree (the desktop file, the
       # AppStream metainfo and the hicolor icons) to copy into
-      # ~/.local/share. No game data. The Linux leg's AppImage is packed
-      # after it, beside the tarball in dist/. The directory's and the
+      # ~/.local/share. No game data. The directory's and the
       # archive's names come from nova-bundle (crates/nova-bundle/src/archive.rs),
       # the same constants the download page links; cargo is run directly,
       # not through mise, so stdout carries the name alone.
@@ -287,43 +286,17 @@ jobs:
             *) tar czf "$file" "$dir" ;;
           esac
           rm -rf "$dir"
-      # ev-nova-x86_64-unknown-linux-gnu.AppImage, beside the tarball in
-      # dist/; it stages under target/ (crates/nova-bundle/src/linux/appimage).
-      # appimagetool and the type2 runtime it embeds are pinned and checked
-      # (rdm phase linux-platform/phase-3-appimage-and-flatpak, Findings
-      # e). The container has no FUSE, so appimagetool, itself an
-      # AppImage, extracts itself to run. The bundler's own cargo build is
-      # a no-op after the Build step above.
-      - name: Package (AppImage)
+      # Unpacks the tarball and checks its files and its binary's glibc
+      # floor and libraries (crates/nova-bundle/tests/it/linux_tarball.rs);
+      # without NOVA_TARBALL that test skips.
+      - name: Test the tarball
         if: runner.os == 'Linux'
         shell: bash
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: "1"
-          ARCH: x86_64
         run: |
           set -euo pipefail
-          tools="$RUNNER_TEMP/appimage"
-          mkdir -p "$tools"
-          curl -fsSL -o "$tools/appimagetool" \
-            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
-          curl -fsSL -o "$tools/runtime-x86_64" \
-            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
-          sha256sum -c - <<EOF
-          ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $tools/appimagetool
-          2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  $tools/runtime-x86_64
-          EOF
-          chmod +x "$tools/appimagetool"
-          NOVA_APPIMAGETOOL="$tools/appimagetool" NOVA_APPIMAGE_RUNTIME="$tools/runtime-x86_64" \
-            mise run appimage -- dist
-      # Extracts the AppImage and checks its AppDir and its binary's glibc
-      # and libraries (crates/nova-bundle/tests/it/linux_appimage.rs);
-      # without NOVA_APPIMAGE that test skips.
-      - name: Test the AppImage
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          NOVA_APPIMAGE="$PWD/dist/ev-nova-x86_64-unknown-linux-gnu.AppImage" \
-            cargo test --locked -p nova-bundle --test it linux_appimage -- --nocapture
+          file=$(cargo run --quiet --locked -p nova-bundle --bin nova-site -- --archive "${{ matrix.target }}")
+          NOVA_TARBALL="$PWD/dist/$file" \
+            cargo test --locked -p nova-bundle --test it linux_tarball -- --nocapture
       # Only a hand-off to `publish`.
       - uses: actions/upload-artifact@v4
         with:

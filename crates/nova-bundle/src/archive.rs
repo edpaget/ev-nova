@@ -6,7 +6,7 @@
 //! them. macOS has none: the `.dmg` replaced its tarball.
 
 use crate::installer;
-use crate::linux::appimage;
+use crate::linux;
 
 /// One archive: its top-level directory and its file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,7 +34,7 @@ pub const LINUX: Archive = Archive {
 pub fn for_target(target: &str) -> Option<Archive> {
     match target {
         installer::TARGET => Some(WINDOWS),
-        appimage::TARGET => Some(LINUX),
+        linux::TARGET => Some(LINUX),
         _ => None,
     }
 }
@@ -47,7 +47,7 @@ mod tests {
     #[test]
     fn windows_and_linux_have_an_archive_and_macos_none() {
         assert_eq!(for_target(installer::TARGET), Some(WINDOWS));
-        assert_eq!(for_target(appimage::TARGET), Some(LINUX));
+        assert_eq!(for_target(linux::TARGET), Some(LINUX));
         assert_eq!(for_target(bundle::TARGET), None);
         assert_eq!(for_target("junk"), None);
         assert_eq!(for_target(""), None);
@@ -57,7 +57,7 @@ mod tests {
     fn each_directory_is_the_project_and_target_and_each_file_adds_its_format() {
         assert_eq!(WINDOWS.dir, format!("ev-nova-{}", installer::TARGET));
         assert_eq!(WINDOWS.file, format!("{}.zip", WINDOWS.dir));
-        assert_eq!(LINUX.dir, format!("ev-nova-{}", appimage::TARGET));
+        assert_eq!(LINUX.dir, format!("ev-nova-{}", linux::TARGET));
         assert_eq!(LINUX.file, format!("{}.tar.gz", LINUX.dir));
     }
 }
