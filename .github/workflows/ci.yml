@@ -197,7 +197,10 @@ jobs:
       # so egui stays out of published builds. The release build must stay on
       # the same default feature set that `mise run deny` checks in `ci`.
       # The macOS leg's bundler builds its target itself, with the same
-      # flags.
+      # flags. On Windows, nova's build script compiles NOVA_CHANNEL's
+      # update feed into nova.exe (nova::winsparkle::FEED) once the nova
+      # package commits update_public_key; until then it compiles in none,
+      # and the game runs no updater.
       - name: Build
         if: runner.os != 'macOS'
         shell: bash
@@ -255,7 +258,13 @@ jobs:
       # ev-nova-x86_64-pc-windows-msvc.msi, the per-user installer, beside
       # the zip in dist/; it stages under target/. A second pack of the same
       # executables (the same version, a new ProductCode) is the "older"
-      # build the installer test upgrades from.
+      # build the installer test upgrades from. Each pack downloads
+      # WinSparkle 0.9.4 into target/installer/downloads, checks the
+      # archive's and then the DLL's SHA-256 with certutil, and lists
+      # WinSparkle.dll and its two licences beside nova.exe
+      # (crates/nova-bundle/src/installer/winsparkle.rs). It logs which
+      # update feed the build names, from the same NOVA_CHANNEL and key the
+      # Build's nova.exe compiled in.
       - name: Package (Windows installer)
         if: runner.os == 'Windows'
         shell: bash
@@ -264,10 +273,13 @@ jobs:
           mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release dist
           mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release target/installer/previous
       # The same phase signs dist/'s .msi here, before it is tested and
-      # uploaded.
+      # uploaded, and the staged target\installer\downloads\WinSparkle.dll
+      # between its pin check and wix build (inside the packing above).
       # Installs, upgrades and uninstalls the .msi for real
-      # (crates/nova-bundle/tests/it/windows_installer.rs); without NOVA_MSI
-      # that test skips.
+      # (crates/nova-bundle/tests/it/windows_installer.rs), checking the
+      # installed WinSparkle.dll is the staged one; then loads that DLL for
+      # real (crates/nova-win32/tests/it/winsparkle.rs). Without NOVA_MSI or
+      # NOVA_WINSPARKLE_DLL each test skips.
       - name: Test the Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -275,13 +287,17 @@ jobs:
           $env:NOVA_MSI = (Resolve-Path dist\ev-nova-x86_64-pc-windows-msvc.msi).Path
           $env:NOVA_MSI_PREVIOUS = (Resolve-Path target\installer\previous\ev-nova-x86_64-pc-windows-msvc.msi).Path
           cargo test --locked -p nova-bundle --test it windows_installer -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:NOVA_WINSPARKLE_DLL = (Resolve-Path target\installer\downloads\WinSparkle.dll).Path
+          cargo test --locked -p nova-win32 --test it winsparkle -- --nocapture
       # One top-level directory holding the two binaries, README.txt and
       # LICENSE, and on Linux the share/ tree (the desktop file, the
       # AppStream metainfo and the hicolor icons) to copy into
       # ~/.local/share. No game data. The directory's and the
       # archive's names come from nova-bundle (crates/nova-bundle/src/archive.rs),
       # the same constants the download page links; cargo is run directly,
-      # not through mise, so stdout carries the name alone.
+      # not through mise, so stdout carries the name alone. The Windows zip
+      # carries no WinSparkle.dll, so the portable copy doesn't update.
       - name: Package
         if: runner.os != 'macOS'
         shell: bash

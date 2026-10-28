@@ -76,8 +76,15 @@ removes the program but keeps your settings and pilots in
 %APPDATA%\nova. Installing a newer nightly over an older one replaces it
 in place.
 
+The installed game updates itself with WinSparkle: once a day it checks
+for a newer nightly and offers it. Installing an update quits the game,
+saving the pilot you are flying, installs the new build and opens it.
+WinSparkle's licences are installed beside nova.exe, as
+WinSparkle-LICENSE.txt and WinSparkle-expat-LICENSE.txt.
+
 The zip is a portable copy: unzip it anywhere and run nova.exe. Nothing
-is installed, and deleting the folder removes it.
+is installed, deleting the folder removes it, and it doesn't update
+itself.
 
 Either way the game finds your EV Nova's `Nova Files` itself, or asks you
 for your EV Nova folder and remembers your pick.
