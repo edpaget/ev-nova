@@ -201,6 +201,14 @@ pub struct FlightFrame {
     /// to start: every system unexplored. [`FlightFrame::has_explored`]
     /// asks it.
     pub explored: Vec<SystemId>,
+    /// The floating map's places
+    /// ([`Session::floating_map_places`](crate::Session::floating_map_places)):
+    /// the current system's map position, which its draw centres on every
+    /// frame while it is up, and each link its clicks test. Filled in
+    /// place, its links cleared and pushed again, so a kept frame's fill
+    /// allocates nothing once its list has grown. No places for a flight
+    /// that failed to start.
+    pub floating: FloatingLinks,
 }
 
 impl Default for FlightFrame {
@@ -246,6 +254,7 @@ impl Default for FlightFrame {
             player_ship_name: None,
             long_date: String::new(),
             explored: Vec::new(),
+            floating: FloatingLinks::default(),
         }
     }
 }
@@ -560,7 +569,6 @@ impl Default for MapKey {
 /// The floating map's places, as its clicks and its draw read them
 /// ([`Session::floating_map_places`](crate::Session::floating_map_places)):
 /// the current system's map position, and each link its clicks test
-/// ([`Session::floating_map_links`](crate::Session::floating_map_links))
 /// with its own.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FloatingLinks {

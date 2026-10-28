@@ -54,6 +54,7 @@ impl Session {
             player_ship_name,
             long_date,
             explored,
+            floating,
         } = into;
         *nav_mode = self.nav_mode();
         *system = self.system();
@@ -97,6 +98,7 @@ impl Session {
         crate::date::write_long_date_text(long_date, self.pilot.date, &self.statics.date_affixes);
         explored.clear();
         explored.extend(self.pilot.explored());
+        self.chart.fill_floating_places(&self.pilot, floating);
     }
 
     /// What the view is handed as the flight opens ([`FlightOpening`]):
@@ -325,6 +327,10 @@ pub(super) mod tests {
             player_ship_name: Some("Stale".to_owned()),
             long_date: "A stale date".to_owned(),
             explored: vec![SystemId(997), SystemId(999)],
+            floating: crate::flight_frame::FloatingLinks {
+                current: Vec2::new(-999.0, 999.0),
+                links: vec![(SystemId(999), Vec2::new(9.0, 9.0)); 17],
+            },
         }
     }
 
@@ -393,6 +399,26 @@ pub(super) mod tests {
     fn a_fill_writes_the_current_system() {
         let session = Session::start(&catalog()).expect("starts");
         assert_eq!(filled(&session).system, SystemId(130));
+    }
+
+    #[test]
+    fn a_fill_writes_the_floating_maps_places_and_follows_a_move() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let frame = filled(&session);
+        assert!(
+            !frame.floating.links.is_empty(),
+            "precondition: 130's links"
+        );
+        assert_eq!(frame.floating, session.floating_map_places());
+        session.pilot.system = SystemId(131);
+        let moved = filled(&session);
+        assert_eq!(moved.floating, session.floating_map_places());
+        assert_ne!(moved.floating, frame.floating, "131's own");
+        assert_eq!(
+            FlightFrame::default().floating,
+            crate::flight_frame::FloatingLinks::default(),
+            "a failed flight's: no places"
+        );
     }
 
     #[test]

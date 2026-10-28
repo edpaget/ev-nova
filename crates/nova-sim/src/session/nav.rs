@@ -157,7 +157,7 @@
 //! - A click on the floating map ([`Session::select_on_floating_map`],
 //!   `_HandlePlayer` @0x6a16c-0x6a762): on the current system's centre,
 //!   mode 3 with nothing selected (@0x6a1d5-0x6a1de); on the box of one of
-//!   its links ([`Session::floating_map_links`]), mode 3 with that link
+//!   its links ([`Session::floating_map_places`]), mode 3 with that link
 //!   (@0x6a719-0x6a727). Either with [`SimSound::HyperSelected`]
 //!   (`_beepSnd[2]`, @0x6a73a-0x6a75d). The flight view shows the map and
 //!   tests the click.
@@ -518,41 +518,30 @@ impl Session {
         )
     }
 
-    /// The links the floating map's clicks test, as `_HandlePlayer` walks
-    /// them (@0x6a1e9-0x6a332): the current system's raw Con slots, in
-    /// record order, repeats and itself kept, each only when it is in the
-    /// catalog and a visible system stands at its place
-    /// (`_FindActiveCoLocatedSystem` @0x6a21f). Each is the raw slot, not
-    /// the system standing for it: its box is at the slot's own position
-    /// (@0x6a25c-0x6a2af), and mode 3 selects it raw (@0x6a719-0x6a727).
+    /// The links the floating map's clicks test ([`Chart::floating_links`]),
+    /// collected for the tests.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn floating_map_links(&self) -> Vec<SystemId> {
-        self.chart.floating_map_links(&self.pilot)
+        self.chart.floating_links(&self.pilot).collect()
     }
 
     /// The floating map's places: the current system's map position, and
-    /// each of [`Session::floating_map_links`] with its own, the origin
+    /// each link its clicks test ([`Chart::floating_links`]) with its own, the origin
     /// for a system with none, as the floating map's clicks box each link
     /// at its slot's position (@0x6a25c-0x6a2af) and its draw centres on
     /// the current system.
     #[must_use]
     pub fn floating_map_places(&self) -> FloatingLinks {
-        let galaxy = self.galaxy();
-        let at = |system| galaxy.position(system).unwrap_or_default();
-        FloatingLinks {
-            current: at(self.system()),
-            links: self
-                .floating_map_links()
-                .into_iter()
-                .map(|link| (link, at(link)))
-                .collect(),
-        }
+        let mut places = FloatingLinks::default();
+        self.chart.fill_floating_places(&self.pilot, &mut places);
+        places
     }
 
     /// The galaxy map's Tab or `\`, as `_MapFilter` cycles the hyperspace
     /// selection off the hypergate map (@0x13f0f-0x13fac): mode 3 with the
     /// next of the current system's Con slots that holds a link
-    /// ([`Session::floating_map_links`]' test), stepping on from the slot
+    /// ([`Chart::floating_links`]' test), stepping on from the slot
     /// +0x6c holds, past the 16th back to the first, the selection the
     /// slot's raw system, as the floating map's click writes it; with no
     /// such slot, mode 3 with nothing selected. Where it starts:
@@ -581,7 +570,7 @@ impl Session {
     }
 
     /// A click hit on the floating map, as `_HandlePlayer` takes it: mode
-    /// 3 with `link` selected, one of [`Session::floating_map_links`]
+    /// 3 with `link` selected, one of [`Session::floating_map_places`]' links
     /// (@0x6a719-0x6a727), or with nothing for the current system's centre
     /// (@0x6a1d5-0x6a1de), with [`SimSound::HyperSelected`] (`_beepSnd[2]`,
     /// @0x6a73a-0x6a75d). The course is kept. During a jump (pre-jump
@@ -925,14 +914,26 @@ impl Chart {
     /// (`_FindActiveCoLocatedSystem` @0x6a21f). Each is the raw slot, not
     /// the system standing for it: its box is at the slot's own position
     /// (@0x6a25c-0x6a2af), and mode 3 selects it raw (@0x6a719-0x6a727).
-    #[must_use]
-    fn floating_map_links(&self, pilot: &Pilot) -> Vec<SystemId> {
+    fn floating_links<'a>(&'a self, pilot: &Pilot) -> impl Iterator<Item = SystemId> + 'a {
         self.galaxy
             .con_slots(pilot.system)
             .iter()
             .copied()
             .filter(|&slot| self.flags(slot))
-            .collect()
+    }
+
+    /// Fills `into` with the floating map's places
+    /// ([`Session::floating_map_places`]): the current system's map
+    /// position, and each of [`Chart::floating_links`] with its own,
+    /// the origin for a system with none. The links are cleared and
+    /// pushed again, so a kept list allocates nothing once it has grown.
+    pub(super) fn fill_floating_places(&self, pilot: &Pilot, into: &mut FloatingLinks) {
+        let galaxy = &self.galaxy;
+        let at = |system| galaxy.position(system).unwrap_or_default();
+        into.current = at(pilot.system);
+        into.links.clear();
+        into.links
+            .extend(self.floating_links(pilot).map(|link| (link, at(link))));
     }
 
     /// Whether a Con slot naming `slot` is one the link cycles and the
@@ -995,7 +996,7 @@ impl Chart {
     /// The galaxy map's Tab or `\`, as `_MapFilter` cycles the hyperspace
     /// selection off the hypergate map (@0x13f0f-0x13fac): mode 3 with the
     /// next of the current system's Con slots that holds a link
-    /// ([`Session::floating_map_links`]' test), stepping on from the slot
+    /// ([`Chart::floating_links`]' test), stepping on from the slot
     /// +0x6c holds, past the 16th back to the first, the selection the
     /// slot's raw system, as the floating map's click writes it; with no
     /// such slot, mode 3 with nothing selected. Where it starts:
@@ -1050,7 +1051,7 @@ impl Chart {
     }
 
     /// A click hit on the floating map, as `_HandlePlayer` takes it: mode
-    /// 3 with `link` selected, one of [`Session::floating_map_links`]
+    /// 3 with `link` selected, one of [`Session::floating_map_places`]' links
     /// (@0x6a719-0x6a727), or with nothing for the current system's centre
     /// (@0x6a1d5-0x6a1de), with [`SimSound::HyperSelected`] (`_beepSnd[2]`,
     /// @0x6a73a-0x6a75d). The course is kept. During a jump (pre-jump

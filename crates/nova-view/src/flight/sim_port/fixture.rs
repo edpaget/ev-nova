@@ -775,6 +775,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         player_ship_name,
         long_date,
         explored,
+        floating,
     } = frame;
     let other_system = SystemId(if system.0 == i16::MAX { 0 } else { i16::MAX });
     FlightFrame {
@@ -869,6 +870,10 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             String::new()
         },
         explored: one_or_none(explored, || SystemId(128)),
+        floating: FloatingLinks {
+            current: floating.current + Vec2::new(1.0, 0.0),
+            links: one_or_none(&floating.links, || (SystemId(128), Vec2::ZERO)),
+        },
     }
 }
 
@@ -2980,6 +2985,10 @@ mod tests {
             player_ship_name: Some("Kestrel".to_owned()),
             long_date: "June 23rd, 1177 NC".to_owned(),
             explored: vec![SystemId(130)],
+            floating: FloatingLinks {
+                current: Vec2::new(5.0, 6.0),
+                links: vec![(SystemId(131), Vec2::new(7.0, 8.0))],
+            },
             map_key: MapKey {
                 system: SystemId(i16::MAX),
                 nav: NavMode::Stellar(None),
@@ -3024,6 +3033,7 @@ mod tests {
                 player_ship_name,
                 long_date,
                 explored,
+                floating,
             } = &frame;
             assert_unlike_hud(&other.hud, hud);
             assert_ne!(other.target, *target);
@@ -3058,6 +3068,8 @@ mod tests {
             assert_ne!(other.player_ship_name, *player_ship_name);
             assert_ne!(other.long_date, *long_date);
             assert_ne!(other.explored, *explored);
+            assert_ne!(other.floating.current, floating.current);
+            assert_ne!(other.floating.links, floating.links);
             assert_ne!(other.map_key, *map_key);
             assert_ne!(other.map_key.system, map_key.system);
             assert_ne!(other.map_key.nav, map_key.nav);
