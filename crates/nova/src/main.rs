@@ -91,7 +91,9 @@
 //! line on standard error and in the startup log, but with no alert.
 //!
 //! Every startup error and warning goes to standard error and to the
-//! startup log, rewritten each launch: `~/Library/Logs/nova/nova.log` on
+//! startup log, which starts with the version and the build ID `nova` was
+//! compiled with (`NOVA_BUILD_ID`), or "development build" without one.
+//! It is rewritten each launch: `~/Library/Logs/nova/nova.log` on
 //! macOS, `%LOCALAPPDATA%\nova\logs\nova.log` on Windows, and
 //! `$XDG_STATE_HOME/nova/nova.log` (or `~/.local/state/nova/nova.log`)
 //! elsewhere. When standard error is not a terminal (a double-clicked app), a

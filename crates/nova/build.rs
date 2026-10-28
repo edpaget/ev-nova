@@ -2,6 +2,10 @@
 //! to `[package.metadata.bundle] identifier` in this package's
 //! `Cargo.toml`, for every target.
 //!
+//! Reruns when `NOVA_BUILD_ID` changes, the build ID `nova::build_id`
+//! compiles in. It doesn't check the value: `nova_bundle::build_id`
+//! makes and checks it, and a build without one is a development build.
+//!
 //! Embeds `nova.exe`'s Windows resources: its icon (made from the macOS
 //! `.icns`), its version information and its application manifest
 //! (`packaging/windows/nova.exe.manifest`). For any other target it does
@@ -31,6 +35,7 @@ fn main() {
     let app_id = bundle_identifier(&manifest)
         .unwrap_or_else(|error| panic!("{}: {error}", cargo_toml.display()));
     println!("cargo:rustc-env=NOVA_APP_ID={app_id}");
+    println!("cargo:rerun-if-env-changed=NOVA_BUILD_ID");
     let packaging = crate_dir.join("..").join("..").join("packaging");
     let icns = packaging.join("macos").join("Nova.icns");
     let manifest = packaging.join("windows").join("nova.exe.manifest");

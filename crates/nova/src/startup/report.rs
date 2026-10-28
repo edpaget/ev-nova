@@ -13,6 +13,7 @@ use std::fs::{self, File};
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
+use crate::build_id::{BUILD_ID, describe};
 use crate::cli::Usage;
 use crate::exit::{Exit, OpenFailure};
 
@@ -59,6 +60,11 @@ pub enum Shown {
     Window,
 }
 
+/// The startup log's first line: the version and the build.
+pub(crate) fn header(version: &str, build: Option<&str>) -> String {
+    format!("nova {version} ({}) starting", describe(build))
+}
+
 /// The startup report: writes each line to the log and stderr, and for a
 /// window keeps the warnings for one alert and shows a fatal error in
 /// another. Writing never fails the game: a log that cannot be written is
@@ -73,7 +79,8 @@ pub struct Report {
 
 impl Report {
     /// A report that reads `terminal` once, writes to `log` (if any) and
-    /// `stderr`, and starts the log with a header naming this version.
+    /// `stderr`, and starts the log with a header naming this version and
+    /// build.
     #[must_use]
     pub fn new(
         terminal: &dyn Terminal,
@@ -92,7 +99,7 @@ impl Report {
             kept: Vec::new(),
             taken: false,
         };
-        report.log(&format!("nova {} starting", env!("CARGO_PKG_VERSION")));
+        report.log(&header(env!("CARGO_PKG_VERSION"), BUILD_ID));
         report
     }
 
@@ -333,7 +340,23 @@ mod tests {
     }
 
     fn header() -> String {
-        format!("nova {} starting", env!("CARGO_PKG_VERSION"))
+        super::header(env!("CARGO_PKG_VERSION"), BUILD_ID)
+    }
+
+    #[test]
+    fn the_header_names_the_build_id() {
+        assert_eq!(
+            super::header("0.1.0", Some("20261028123456")),
+            "nova 0.1.0 (build 20261028123456) starting"
+        );
+    }
+
+    #[test]
+    fn a_build_without_an_id_is_a_development_build() {
+        assert_eq!(
+            super::header("0.1.0", None),
+            "nova 0.1.0 (development build) starting"
+        );
     }
 
     fn report(terminal: bool, log: &Lines, stderr: &Stderr) -> Report {
@@ -345,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn the_log_starts_with_a_header_naming_the_version() {
+    fn the_log_starts_with_a_header_naming_the_version_and_build() {
         let log = Lines::default();
         let stderr = Stderr::default();
         let mut report = report(true, &log, &stderr);

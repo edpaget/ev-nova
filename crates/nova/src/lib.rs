@@ -6,6 +6,8 @@
 //!   frame's draw list to `nova-render`. No winit or wgpu types.
 //! - [`audio`]: the audio core over the device that opened, and the
 //!   music that loaded, each with a warning when it did not.
+//! - [`build_id`]: the build ID `nova` was compiled with, or none for a
+//!   development build.
 //! - [`chance`]: the real source of chance, a seeded `SplitMix64`
 //!   generator.
 //! - [`cli`]: where the game data is, from the arguments or `NOVA_DATA`.
@@ -38,6 +40,7 @@
 
 pub mod app;
 pub mod audio;
+pub mod build_id;
 pub mod chance;
 pub mod cli;
 pub mod config;
