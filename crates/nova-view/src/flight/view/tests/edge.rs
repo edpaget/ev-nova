@@ -14,6 +14,13 @@ use nova_sim::map_borders::Next;
 /// checks: the view's tests run on [`FakeFlight`].
 type View = FlightView<FakeCatalog>;
 
+/// Ticks `view` `n` times.
+fn ticks(view: &mut View, n: u32) {
+    for _ in 0..n {
+        view.tick(TICK);
+    }
+}
+
 /// A new pilot of [`catalog`] flown bare ([`test_flight::new`]).
 fn flight() -> View {
     test_flight::new(catalog())

@@ -141,38 +141,15 @@ fn opened<C: EdgeCatalog + 'static>(
 pub mod test_flight {
     use std::rc::Rc;
 
-    use nova_sim::{Pilot, Rulebook};
+    use nova_sim::Rulebook;
 
-    use super::{Collaborators, EdgeCatalog, FlightStart, FlightView, SessionFlight};
+    use super::{Collaborators, EdgeCatalog, FlightStart, FlightView};
 
     /// A new, unnamed pilot's flight over `catalog`, shown by the default
     /// rulebook, with Nova's collaborators.
     #[must_use]
     pub fn new<C: EdgeCatalog + 'static>(catalog: C) -> FlightView<C> {
         flown(catalog, FlightStart::New, Collaborators::default())
-    }
-
-    /// `pilot`'s flight over `catalog`, flown as it is: a pilot last
-    /// landed on a stellar resumes in flight over it, at rest, as
-    /// `nova_sim::Session::fly` places it.
-    #[must_use]
-    pub fn with_pilot<C: EdgeCatalog + 'static>(catalog: C, pilot: Pilot) -> FlightView<C> {
-        flown(catalog, FlightStart::Pilot(pilot), Collaborators::default())
-    }
-
-    /// `pilot`'s flight, its load's fallbacks reading `rules`
-    /// (`nova_sim::Session::load`). The rules are the load's alone: the
-    /// view, like the session, reads the default rulebook.
-    #[must_use]
-    pub fn loaded<C: EdgeCatalog + 'static>(
-        catalog: C,
-        pilot: Pilot,
-        rules: &Rulebook,
-    ) -> FlightView<C> {
-        let catalog = Rc::new(catalog);
-        let sim = SessionFlight::load(&catalog, pilot, rules);
-        let chance = sim.chance.clone();
-        FlightView::over(catalog, sim, &Rulebook::default(), chance)
     }
 
     /// The flight `start` says over `catalog`, its calls handed

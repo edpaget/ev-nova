@@ -1,3 +1,13 @@
+//! The flight view's tests. Its component tests run on [`FakeFlight`],
+//! each module over scripted frames ([`frames`]), answers and command
+//! assertions. This module holds what they share: [`FakeCatalog`] and its
+//! data builders, the fake-based helpers ([`Faked`], [`faked`], [`sent`],
+//! the `faked_map_*` helpers, ...) and the helpers generic over any
+//! [`FlightSim`]. A real `nova_sim::Session` is started only by the
+//! adapter's checks (`adapter`) and the edge's (`edge`), and, outside
+//! this module, by `tests/it/flight_seam.rs` and the stock tests
+//! (rdm:phase/view-sim-seam/phase-14-view-tests-on-port).
+
 use std::cell::RefCell;
 use std::num::NonZeroU16;
 
@@ -327,8 +337,6 @@ impl FakeCatalog {
         links
     }
 }
-
-type View = FlightView<FakeCatalog>;
 
 const FIELDS: ShipFields = ShipFields {
     speed: 300,
@@ -1182,12 +1190,6 @@ const THRUST: Controls = Controls {
     face: nova_sim::flight::Face::Off,
     afterburner: false,
 };
-
-fn ticks(view: &mut View, n: u32) {
-    for _ in 0..n {
-        view.tick(TICK);
-    }
-}
 
 impl DescriptionSource for FakeCatalog {
     fn description(&self, id: i16) -> Result<String, String> {

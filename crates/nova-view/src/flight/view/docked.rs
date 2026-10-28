@@ -2,8 +2,6 @@
 //! and plunder, trade, the outfitter, bar, hiring, news, the mission
 //! computer and offers, and the shipyard.
 
-#[cfg(any(test, feature = "fixture"))]
-use nova_sim::Pilot;
 #[cfg(any(doc, test, feature = "fixture"))]
 use nova_sim::Session;
 use nova_sim::StellarId;
@@ -328,16 +326,6 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     #[cfg(any(test, feature = "fixture"))]
     pub fn session(&self) -> Result<&Session, &str> {
         self.sim.session.as_ref().map_err(String::as_str)
-    }
-
-    /// Changes the pilot with `change` while landed, as
-    /// [`Session::transact`] does, and says whether it did: through the
-    /// adapter's own [`SessionFlight::transact`](crate::flight::SessionFlight::transact),
-    /// as a closure over the pilot is no command a sim could carry. For
-    /// tests.
-    #[cfg(any(test, feature = "fixture"))]
-    pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
-        self.sim.transact(change)
     }
 }
 

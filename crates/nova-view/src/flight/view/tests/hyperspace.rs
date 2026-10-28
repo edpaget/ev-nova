@@ -27,7 +27,7 @@ fn the_hints_name_letter_keys_as_str_129_does() {
 /// held or not and the escort menu open or shut, each of the four.
 fn taken_with(key: Key) -> [bool; 4] {
     [(false, false), (true, false), (false, true), (true, true)]
-        .map(|(option, menu_open)| View::taken_during_jump(key, option, menu_open))
+        .map(|(option, menu_open)| Faked::taken_during_jump(key, option, menu_open))
 }
 
 #[test]
