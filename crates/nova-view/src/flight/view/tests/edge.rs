@@ -204,7 +204,7 @@ fn the_runs_history_reaches_the_session_and_comes_back() {
         ghost
     );
     assert_eq!(back.kept_berths, carried.kept_berths);
-    view.begin(SessionFlight::begin);
+    begin_game(&mut view);
     assert!(
         !view
             .sim()
@@ -260,4 +260,43 @@ fn the_edge_hands_the_flight_and_the_wording_one_chance() {
     );
     assert!(Rc::ptr_eq(&view.sim().chance.0, &chance.0), "the flight's");
     assert!(Rc::ptr_eq(&view.words_chance.0, &chance.0), "the wording's");
+}
+
+/// Phase 13's fold-in: the edge's beginning pairs the view's half with the
+/// adapter's, so a new pilot's ship is drawn where the session began it
+/// and the stars are scattered afresh; a flight that begins nothing
+/// changes nothing.
+#[test]
+fn the_edges_beginning_places_the_ship_where_the_session_began_it() {
+    let mut view = test_flight::new(catalog());
+    view.stars_due = false;
+    begin_game(&mut view);
+    let begun = view.session().expect("flying").player().position;
+    assert_eq!(begun, Vec2::new(50.0, 50.0), "the session began");
+    assert_eq!(view.shown_position(), Point::new(50.0, 50.0), "drawn there");
+    assert!(view.stars_due, "the stars scattered afresh");
+    let mut failed = test_flight::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    });
+    failed.stars_due = false;
+    begin_game(&mut failed);
+    assert!(!failed.stars_due, "a flight that begins nothing");
+}
+
+/// Phase 13's fold-in: the edge's entering play pairs the view's half
+/// with the adapter's; a flight that enters nothing changes nothing.
+#[test]
+fn the_edges_entering_play_scatters_the_stars_once_the_session_entered() {
+    let mut view = test_flight::new(catalog());
+    view.stars_due = false;
+    enter_game(&mut view);
+    assert!(view.stars_due, "the stars scattered afresh");
+    let mut failed = test_flight::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    });
+    failed.stars_due = false;
+    enter_game(&mut failed);
+    assert!(!failed.stars_due, "a flight that enters nothing");
 }

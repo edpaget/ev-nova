@@ -31,7 +31,7 @@ use std::rc::Rc;
 
 use nova_data::GameData;
 use nova_sim::{LastRefresh, Pilot};
-use nova_view::flight::{FlightStart, FlightView, SessionFlight};
+use nova_view::flight::{FlightStart, FlightView, begin_game};
 
 use super::{AppScreen, Side};
 
@@ -121,7 +121,7 @@ impl AppScreen {
     }
 
     /// Holds a new pilot's `flight`, its game begun (the `chär`'s
-    /// `OnStart`, [`FlightView::begin`] with [`SessionFlight::begin`]) and
+    /// `OnStart`, the edge's [`begin_game`]) and
     /// saved with what that did, as
     /// `_DoNewPilot` (@0x18b0a) runs `OnStart` before its first save
     /// (`_SavePilotFile` @0x1935f) and returns to the main screen with the
@@ -139,7 +139,7 @@ impl AppScreen {
         replaces: Option<&str>,
     ) {
         self.remember_new_pilot_intro();
-        flight.begin(SessionFlight::begin);
+        begin_game(&mut flight);
         flight.take_save_due();
         self.hold_game(flight);
         self.save_game(replaces);

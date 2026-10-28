@@ -69,9 +69,9 @@
 use std::time::Duration;
 
 use nova_sim::{RuleKey, RuleSource};
+use nova_view::flight::enter_game;
 #[cfg(doc)]
-use nova_view::flight::FlightView;
-use nova_view::flight::SessionFlight;
+use nova_view::flight::{FlightView, SessionFlight};
 use nova_view::menu::entry::{Deferred, Entry, Verdict};
 use nova_view::menu::intro::{CharacterIntro, Intro, IntroSource};
 use nova_view::ui::DescDialog;
@@ -361,7 +361,7 @@ impl AppScreen {
 
     /// Moves the game into the flight slot and shows flight, which a
     /// return from play comes back to the main menu from; then enters play
-    /// ([`FlightView::enter_game`]), readies flight's first frame (see the
+    /// (the edge's [`enter_game`]), readies flight's first frame (see the
     /// module docs), and replays what the entry held.
     fn hand_over(&mut self) {
         self.drop_flight();
@@ -370,7 +370,7 @@ impl AppScreen {
         self.switch_to(Side::Flight);
         if let Some(flight) = &mut self.flight {
             // `_EnterGameFromMainScreen`'s refresh (@0x19f81).
-            flight.enter_game(SessionFlight::enter_game);
+            enter_game(flight);
             flight.cancel_pointer();
             flight.release_keys();
             flight.shut_escort_menu();

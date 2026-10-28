@@ -617,7 +617,7 @@ fn begin_on_an_edge_built_flight_places_the_ship_where_the_session_began_it() {
         nova_sim::SessionSetup::default(),
         Collaborators::default(),
     );
-    view.begin(SessionFlight::begin);
+    nova_view::flight::begin_game(&mut view);
     let player = view.session().expect("started").player().position;
     assert_eq!(player, nova_sim::Vec2::new(50.0, 50.0));
     assert_eq!(view.shown_position(), Point::new(50.0, 50.0));

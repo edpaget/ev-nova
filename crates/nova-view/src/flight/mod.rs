@@ -105,7 +105,7 @@ pub use catalog::{
 };
 #[cfg(any(test, feature = "fixture"))]
 pub use edge::test_flight;
-pub use edge::{EdgeCatalog, FlightStart, open_flight};
+pub use edge::{EdgeCatalog, FlightStart, begin_game, enter_game, open_flight};
 pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
 pub use sim_adapter::{Collaborators, SessionFlight};

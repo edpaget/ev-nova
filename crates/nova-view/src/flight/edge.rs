@@ -2,7 +2,9 @@
 //! it in a [`SessionFlight`] with its collaborators, hands it to the view
 //! ([`FlightView::over`]), and then sets the session up
 //! ([`SessionFlight::set_up`]) and shows the view what that changed
-//! ([`FlightView::show_set_up`]).
+//! ([`FlightView::show_set_up`]). Entering play pairs the view's half with
+//! the adapter's: [`begin_game`] for a new pilot, [`enter_game`] from the
+//! main screen.
 //!
 //! **The opening order.** The view reads the bare session as it opens, and
 //! the setup comes after, as the app's `with_*` builders came after the
@@ -91,6 +93,23 @@ pub fn open_flight<C: EdgeCatalog + 'static>(
     view.sim_mut().set_up(setup);
     view.show_set_up(slots_carried);
     view
+}
+
+/// Begins a new pilot's game on `flight`: the adapter's half
+/// ([`SessionFlight::begin`], the `chär`'s `OnStart` on the flight's
+/// chance) paired with the view's ([`FlightView::begin`]), which draws the
+/// ship where the beginning put it and scatters the stars afresh. A flight
+/// that begins nothing changes nothing.
+pub fn begin_game<C: SystemCatalog + ShipSprites + CombatLooks>(flight: &mut FlightView<C>) {
+    flight.begin(SessionFlight::begin);
+}
+
+/// Enters play from the main screen on `flight`: the adapter's half
+/// ([`SessionFlight::enter_game`]) paired with the view's
+/// ([`FlightView::enter_game`]), which scatters the stars afresh. A flight
+/// that enters nothing changes nothing.
+pub fn enter_game<C: SystemCatalog + ShipSprites + CombatLooks>(flight: &mut FlightView<C>) {
+    flight.enter_game(SessionFlight::enter_game);
 }
 
 /// The bare opening, which [`open_flight`] sets up after and the test
