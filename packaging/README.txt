@@ -53,6 +53,13 @@ Nova.app and nova-dump are signed with a Developer ID and notarized by
 Apple, so Nova.app opens with a double-click, and nova-dump copied out of
 the .dmg runs from a terminal as it is.
 
+Nova.app updates itself with Sparkle: once a day it checks for a newer
+nightly, and EV Nova > Check for Updates... checks at once. Installing an
+update quits the game, saving the pilot you are flying, and opens the new
+build. A build without an update feed (a local `mise run bundle`) greys
+the item. Sparkle's licence is in Nova.app, as
+Contents/Resources/Sparkle-LICENSE.txt.
+
 A build made without the signing keys (a local `mise run bundle`) is
 ad-hoc signed instead: macOS blocks a downloaded copy of it until you
 choose Open Anyway in System Settings > Privacy & Security, or run
