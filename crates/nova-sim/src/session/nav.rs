@@ -157,7 +157,7 @@
 //! - A click on the floating map ([`Session::select_on_floating_map`],
 //!   `_HandlePlayer` @0x6a16c-0x6a762): on the current system's centre,
 //!   mode 3 with nothing selected (@0x6a1d5-0x6a1de); on the box of one of
-//!   its links ([`Session::floating_map_places`]), mode 3 with that link
+//!   its links ([`Chart::fill_floating_places`]), mode 3 with that link
 //!   (@0x6a719-0x6a727). Either with [`SimSound::HyperSelected`]
 //!   (`_beepSnd[2]`, @0x6a73a-0x6a75d). The flight view shows the map and
 //!   tests the click.
@@ -303,7 +303,7 @@ impl Session {
     /// as `_MapFilter` sets `_selSystem` by the same rule
     /// (@0x1408c-0x140d8).
     #[must_use]
-    pub fn map_preselection(&self) -> Option<SystemId> {
+    pub(crate) fn map_preselection(&self) -> Option<SystemId> {
         self.chart.map_preselection(&self.pilot)
     }
 
@@ -344,7 +344,7 @@ impl Session {
     /// selection with the Con slot noted for it (see [`SavedNav`]). It
     /// changes nothing.
     #[must_use]
-    pub fn map_nav(&self) -> SavedNav {
+    pub(crate) fn map_nav(&self) -> SavedNav {
         self.chart.map_nav()
     }
 
@@ -526,13 +526,11 @@ impl Session {
         self.chart.floating_links(&self.pilot).collect()
     }
 
-    /// The floating map's places: the current system's map position, and
-    /// each link its clicks test ([`Chart::floating_links`]) with its own, the origin
-    /// for a system with none, as the floating map's clicks box each link
-    /// at its slot's position (@0x6a25c-0x6a2af) and its draw centres on
-    /// the current system.
+    /// The floating map's places ([`Chart::fill_floating_places`]), filled
+    /// afresh, for the tests.
+    #[cfg(test)]
     #[must_use]
-    pub fn floating_map_places(&self) -> FloatingLinks {
+    pub(crate) fn floating_map_places(&self) -> FloatingLinks {
         let mut places = FloatingLinks::default();
         self.chart.fill_floating_places(&self.pilot, &mut places);
         places
@@ -570,7 +568,7 @@ impl Session {
     }
 
     /// A click hit on the floating map, as `_HandlePlayer` takes it: mode
-    /// 3 with `link` selected, one of [`Session::floating_map_places`]' links
+    /// 3 with `link` selected, one of [`Chart::fill_floating_places`]' links
     /// (@0x6a719-0x6a727), or with nothing for the current system's centre
     /// (@0x6a1d5-0x6a1de), with [`SimSound::HyperSelected`] (`_beepSnd[2]`,
     /// @0x6a73a-0x6a75d). The course is kept. During a jump (pre-jump
@@ -922,11 +920,13 @@ impl Chart {
             .filter(|&slot| self.flags(slot))
     }
 
-    /// Fills `into` with the floating map's places
-    /// ([`Session::floating_map_places`]): the current system's map
-    /// position, and each of [`Chart::floating_links`] with its own,
-    /// the origin for a system with none. The links are cleared and
-    /// pushed again, so a kept list allocates nothing once it has grown.
+    /// Fills `into` with the floating map's places: the current system's
+    /// map position, and each link its clicks test
+    /// ([`Chart::floating_links`]) with its own, the origin for a system
+    /// with none, as the floating map's clicks box each link at its
+    /// slot's position (@0x6a25c-0x6a2af) and its draw centres on the
+    /// current system. The links are cleared and pushed again, so a kept
+    /// list allocates nothing once it has grown.
     pub(super) fn fill_floating_places(&self, pilot: &Pilot, into: &mut FloatingLinks) {
         let galaxy = &self.galaxy;
         let at = |system| galaxy.position(system).unwrap_or_default();
@@ -1051,7 +1051,7 @@ impl Chart {
     }
 
     /// A click hit on the floating map, as `_HandlePlayer` takes it: mode
-    /// 3 with `link` selected, one of [`Session::floating_map_places`]' links
+    /// 3 with `link` selected, one of [`Chart::fill_floating_places`]' links
     /// (@0x6a719-0x6a727), or with nothing for the current system's centre
     /// (@0x6a1d5-0x6a1de), with [`SimSound::HyperSelected`] (`_beepSnd[2]`,
     /// @0x6a73a-0x6a75d). The course is kept. During a jump (pre-jump

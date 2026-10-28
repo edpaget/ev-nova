@@ -165,7 +165,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     ///   silently, and putting back the bar's nav in port, as M does.
     /// - A text Find confirmed is searched as the in-flight map's Find
     ///   searches
-    ///   ([`MapSource::find_map_system`](crate::flight::sim_port::MapSource::find_map_system)),
+    ///   ([`ScreenAsk::Find`](nova_sim::flight_frame::ScreenAsk::Find)),
     ///   and the map shows what it found
     ///   ([`GalaxyMap::show_search`](crate::galaxy::GalaxyMap::show_search)).
     /// - The map's beeps (Space's and Find's) join the flight's.

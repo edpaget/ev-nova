@@ -1,11 +1,12 @@
 //! The [`FlightSim`] port: what the flight view needs of the flight it
-//! shows, in the view's own terms, in four methods. A frame to draw and
+//! shows, in the view's own terms, in five methods. A frame to draw and
 //! read from ([`FlightSim::frame`]), a frame's fixed steps
 //! ([`FlightSim::step`]), the player's commands and the view's asks
-//! ([`FlightSim::apply`]) and what the flight raised for the view to act
-//! on once ([`FlightSim::drain`]). The values it carries are `nova_sim`'s
-//! ([`flight_frame`](nova_sim::flight_frame)), so the session can build
-//! them.
+//! ([`FlightSim::apply`]), what the flight raised for the view to act on
+//! once ([`FlightSim::drain`]), and what a screen draws from, asked as it
+//! opens or as its input changes ([`FlightSim::screen`]). The values it
+//! carries are `nova_sim`'s ([`flight_frame`](nova_sim::flight_frame)), so
+//! the session can build them.
 //!
 //! [`SessionFlight`](super::sim_adapter::SessionFlight) is the adapter
 //! over a real `nova_sim::Session`, and the edge builds it
@@ -26,14 +27,33 @@
 //!   openings, a test's change). So the frame is never stale at a read: a
 //!   quiet tick fills it twice (the catch-up and the steps), a key once
 //!   for each command it sends, and a draw not at all.
-//! - **An ask doesn't.** A command that only asks
-//!   ([`FlightCommand::is_ask`]: the hover and a description's load)
-//!   changes nothing a frame shows, which nova-sim
-//!   pins (`session/apply/asks.rs`) and `fixture::check_contract`
-//!   checks, so no fill follows one. A question the view asks of the
-//!   flight between frames, with arguments it computes or drawing on the
-//!   flight's chance, is an ask: a [`FlightCommand`] variant answered in
-//!   nova-sim, with an [`Answer`] variant of its own.
+//! - **A read made at every draw or every frame is a frame field**: the
+//!   floating map's places, which its draw centres on
+//!   ([`FlightFrame::floating`](nova_sim::flight_frame::FlightFrame::floating)),
+//!   the readouts, the HUD.
+//! - **A question a screen asks as it opens or as its input changes is a
+//!   screen's ask** ([`ScreenAsk`], answered by the [`ScreenAnswer`] of its
+//!   kind through [`FlightSim::screen`]): the course map's galaxy, its
+//!   opening, each redraw, its panels after a selection change, its cycle
+//!   and Find; the floating map's show; the entry's coming traffic; a
+//!   text's fill. The asks one screen always makes together are one
+//!   answer (the course map's opening, [`MapOpen`](nova_sim::flight_frame::MapOpen);
+//!   its redraw, [`MapScreen`](nova_sim::flight_frame::MapScreen)). None
+//!   changes a frame, which nova-sim pins (`session/screen.rs`) and
+//!   `fixture::check_contract` checks, so no fill follows one; and none
+//!   is asked per frame, save the floating map's show, which comes on
+//!   every frame a key holds it up, as the original's does, and asks each
+//!   time, as the flight steps between (`ScreenAsk::FloatingMap`'s docs).
+//!   A flight that failed to start answers each [`ScreenAnswer::Nothing`],
+//!   and the screen shows what it would with nothing to show.
+//! - **An ask on `apply` is a per-frame question with arguments the view
+//!   computes, or a load that writes run state** ([`FlightCommand::is_ask`]:
+//!   the cursor's hover, with the boxes the view draws, after each tick's
+//!   steps; a description's load, which draws on the flight's chance and
+//!   writes the rank governments and the last movie). It changes nothing
+//!   a frame shows either, so no fill follows one; it is a
+//!   [`FlightCommand`] variant answered in nova-sim, with an [`Answer`]
+//!   variant of its own.
 //! - **What is fixed for the flight's life comes as it opens**: the
 //!   weapons whose looks the view reads, the names it words the flight's
 //!   messages with and why the flight could not start
@@ -57,45 +77,42 @@
 //!   [`FlightEvent`]), each filled or answered on nova-sim's side and
 //!   pinned there.
 //!
-//! The supertraits, [`MapSource`], [`CommSource`], [`PortSource`] and
-//! [`PilotSource`], hold the course map's, the comm's, the spaceport's and
-//! the pilot's screens' questions, each method defaulting to "nothing
-//! open", so a sim that has none of them open needs no code. [`MapSource`]
-//! has the course map's and the floating map's, [`CommSource`] the hail's
-//! and the boarding's, [`PortSource`] the spaceport's screens' and the
-//! mission screens', and [`PilotSource`] the player info screen's and the
-//! pilot panel's.
+//! The supertraits, [`CommSource`], [`PortSource`] and [`PilotSource`],
+//! hold the comm's, the spaceport's and the pilot's screens' questions,
+//! each method defaulting to "nothing open", so a sim that has none of
+//! them open needs no code: [`CommSource`] the hail's and the boarding's,
+//! [`PortSource`] the spaceport's screens' and the mission screens', and
+//! [`PilotSource`] the player info screen's and the pilot panel's. The
+//! maps' questions are screens' asks.
 //!
 //! The `fixture` feature (and this crate's tests) exposes `fixture`:
 //! `FakeFlight`, a scripted sim for the view's component tests, and
 //! `check_contract`, what every sim must honour. `FakeFlight` answers
-//! every ask from what a test tells it, apart from its answer queue and
-//! its log of commands applied: a new ask there is one field and setter
-//! for its answer, and one arm in its ask's match.
+//! the screens' asks from one queue, as it does the commands, and every
+//! other ask from what a test tells it, apart from its answer queues and
+//! its log of commands applied: a new ask on `apply` there is one field
+//! and setter for its answer, and one arm in its ask's match; a new
+//! screen's ask is a variant pair in nova-sim, sampled in
+//! `fixture::sample_screen_asks`.
 
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, ScreenAnswer, ScreenAsk,
-    StepInput, StepReport,
+    Answer, FlightCommand, FlightEvent, FlightFrame, ScreenAnswer, ScreenAsk, StepInput, StepReport,
 };
-use nova_sim::galaxy_map::MapDrawing;
-use nova_sim::map_borders::BorderSources;
-use nova_sim::map_panel::MapPanel;
-use nova_sim::map_search::SearchOutcome;
 use nova_sim::mission::screens::OFFER_GAP_TICKS;
 use nova_sim::pilot_panel::PilotPanel;
-use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    HailView, HireList, MapMarks, Market, MissionId, MissionInfo, News, Outfitter, PlayerInfo,
-    PlunderView, SavedNav, ShipId, ShipNaming, ShipRefusal, Shipyard, SystemId,
+    HailView, HireList, Market, MissionId, MissionInfo, News, Outfitter, PlayerInfo, PlunderView,
+    ShipId, ShipNaming, ShipRefusal, Shipyard,
 };
 
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 
-/// The flight the view shows, as the view needs it, in four methods: the
-/// frame, the steps, the commands (the asks among them) and the drain (see
-/// the module docs). The supertraits hold the screens' questions.
-pub trait FlightSim: MapSource + CommSource + PortSource + PilotSource {
+/// The flight the view shows, as the view needs it, in five methods: the
+/// frame, the steps, the commands (the asks among them), the drain and the
+/// screens' asks (see the module docs). The supertraits hold the comm's,
+/// the spaceport's and the pilot's screens' questions.
+pub trait FlightSim: CommSource + PortSource + PilotSource {
     /// Fills `into` with what the view draws now, writing every field, so
     /// a frame kept from an earlier fill shows nothing stale.
     fn frame(&self, into: &mut FlightFrame);
@@ -122,116 +139,6 @@ pub trait FlightSim: MapSource + CommSource + PortSource + PilotSource {
     /// nothing to answer. It changes nothing a frame shows, so no fill
     /// follows one.
     fn screen(&mut self, ask: ScreenAsk) -> ScreenAnswer;
-}
-
-/// The course map's questions of the flight, and the floating map's. Each
-/// defaults to "nothing open": `None` where the view
-/// does nothing without an answer, otherwise nothing found, marked or
-/// listed.
-pub trait MapSource {
-    /// What the course map draws now (`nova_sim::Session::map_drawing`):
-    /// on the hypergate map when `hypergate` holds the systems its gate
-    /// offers, with `missions` the mission systems taken as it opened and
-    /// `marks` its opener's.
-    fn map_drawing(
-        &self,
-        hypergate: Option<&[SystemId]>,
-        missions: &[SystemId],
-        marks: MapMarks,
-    ) -> Option<MapDrawing> {
-        let _ = (hypergate, missions, marks);
-        None
-    }
-
-    /// The course map's info panels for the system `selected` on it
-    /// (`nova_sim::Session::map_panel`), on the hypergate map with the
-    /// systems its gate offers.
-    fn map_panel(
-        &self,
-        selected: Option<SystemId>,
-        hypergate: Option<&[SystemId]>,
-    ) -> Option<MapPanel> {
-        let _ = (selected, hypergate);
-        None
-    }
-
-    /// What the course map's borders are painted from
-    /// (`nova_sim::Session::map_border_sources`).
-    fn map_border_sources(&self) -> Option<BorderSources> {
-        None
-    }
-
-    /// What the map's Find finds for `query`
-    /// (`nova_sim::Session::find_map_system`).
-    fn find_map_system(&self, query: &str) -> Option<SearchOutcome> {
-        let _ = query;
-        None
-    }
-
-    /// The mission systems the course map arrows as it opens
-    /// (`nova_sim::Session::map_mission_systems`).
-    fn map_mission_systems(&self) -> Vec<SystemId> {
-        Vec::new()
-    }
-
-    /// The system the course map selects as it opens, and after its
-    /// cycle (`nova_sim::Session::map_preselection`).
-    fn map_preselection(&self) -> Option<SystemId> {
-        None
-    }
-
-    /// The system the floating map selects as it shows
-    /// (`nova_sim::Session::floating_preselection`).
-    fn floating_preselection(&self) -> Option<SystemId> {
-        None
-    }
-
-    /// The destinations the hypergate map's Tab cycles through
-    /// (`nova_sim::Session::hypergate_cycle`): none with no hypergate
-    /// entry pending.
-    fn hypergate_cycle(&self) -> Vec<Option<SystemId>> {
-        Vec::new()
-    }
-
-    /// The marks an offer of `mission` gives its map
-    /// (`nova_sim::Session::offer_map_marks`).
-    fn offer_map_marks(&self, mission: MissionId) -> MapMarks {
-        let _ = mission;
-        MapMarks::NONE
-    }
-
-    /// The marks the mission computer gives its map for its row
-    /// `selected` (`nova_sim::Session::computer_map_marks`).
-    fn computer_map_marks(&self, selected: Option<MissionId>) -> MapMarks {
-        let _ = selected;
-        MapMarks::NONE
-    }
-
-    /// The marks mission info gives its map for its slot `slot`
-    /// (`nova_sim::Session::mission_info_map_marks`).
-    fn mission_info_map_marks(&self, slot: Option<u8>) -> MapMarks {
-        let _ = slot;
-        MapMarks::NONE
-    }
-
-    /// The nav as it stands, for a map's close or its opener to put back
-    /// (`nova_sim::Session::map_nav`).
-    fn map_nav(&self) -> Option<SavedNav> {
-        None
-    }
-
-    /// The floating map's places: the current system's and each link's
-    /// its clicks test (`nova_sim::Session::floating_map_places`).
-    fn floating_map_places(&self) -> FloatingLinks {
-        FloatingLinks::default()
-    }
-
-    /// The galaxy the course map is built from: the catalog's star map
-    /// with the overlay applied (`nova_sim::Session::galaxy`), read as a
-    /// `GalaxyChanged` event is caught up with.
-    fn galaxy(&self) -> Option<&OverlaidGalaxy> {
-        None
-    }
 }
 
 /// The comm's questions of the flight: the hail under way and the
@@ -386,8 +293,6 @@ mod tests {
     /// A source with nothing open: every answer its default.
     struct NothingOpen;
 
-    impl MapSource for NothingOpen {}
-
     impl CommSource for NothingOpen {}
 
     impl PortSource for NothingOpen {}
@@ -418,8 +323,6 @@ mod tests {
         }
     }
 
-    impl MapSource for Defaults {}
-
     impl CommSource for Defaults {}
 
     impl PortSource for Defaults {}
@@ -433,26 +336,6 @@ mod tests {
         flight.frame(&mut frame);
         assert_eq!(frame, FlightFrame::default());
         assert_eq!(flight.apply(FlightCommand::Jump), Answer::Refused);
-    }
-
-    #[test]
-    fn a_source_with_nothing_open_answers_nothing() {
-        let source = NothingOpen;
-        let none = SystemId(130);
-        assert_eq!(source.map_drawing(None, &[], MapMarks::NONE), None);
-        assert_eq!(source.map_panel(Some(none), None), None);
-        assert_eq!(source.map_border_sources(), None);
-        assert_eq!(source.find_map_system("sol"), None);
-        assert_eq!(source.map_mission_systems(), []);
-        assert_eq!(source.map_preselection(), None);
-        assert_eq!(source.floating_preselection(), None);
-        assert_eq!(source.hypergate_cycle(), []);
-        assert_eq!(source.offer_map_marks(MissionId(128)), MapMarks::NONE);
-        assert_eq!(source.computer_map_marks(None), MapMarks::NONE);
-        assert_eq!(source.mission_info_map_marks(Some(0)), MapMarks::NONE);
-        assert_eq!(source.map_nav(), None);
-        assert_eq!(source.floating_map_places(), FloatingLinks::default());
-        assert_eq!(source.galaxy(), None);
     }
 
     #[test]

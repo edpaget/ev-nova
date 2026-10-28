@@ -78,7 +78,7 @@ pub enum ScreenAsk {
     /// (`_DrawMapInFloatingFrame`). Its drawing can change between two
     /// held frames with no command from the view: the flight steps
     /// meanwhile, so a mission ship destroyed takes its system's red
-    /// arrow off ([`Session::map_mission_systems`](crate::Session::map_mission_systems)
+    /// arrow off (`Session::map_mission_systems`
     /// reads the ships left), a jump arrived at moves the current system
     /// and its links, and a step's script can change the mode-3 selection
     /// the preselection reads. None of those is in the frame's
@@ -109,7 +109,7 @@ pub enum MarksFrom {
     /// ([`Session::computer_map_marks`](crate::Session::computer_map_marks)).
     Computer(Option<MissionId>),
     /// Mission info, with its selected mission's slot
-    /// ([`Session::mission_info_map_marks`](crate::Session::mission_info_map_marks)).
+    /// (`Session::mission_info_map_marks`).
     MissionInfo(Option<u8>),
 }
 
@@ -131,7 +131,7 @@ impl MarksFrom {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MapOpen {
     /// The nav as it stands, which the map's close and its opener put
-    /// back ([`Session::map_nav`](crate::Session::map_nav)).
+    /// back (`Session::map_nav`).
     pub nav: SavedNav,
     /// The map's marks, as [`MarksFrom`] said.
     pub marks: MapMarks,
@@ -139,10 +139,10 @@ pub struct MapOpen {
     /// ([`Session::map_border_sources`](crate::Session::map_border_sources)).
     pub borders: BorderSources,
     /// The system the map selects as it opens
-    /// ([`Session::map_preselection`](crate::Session::map_preselection)).
+    /// (`Session::map_preselection`).
     pub preselection: Option<SystemId>,
     /// The mission systems its red arrows mark
-    /// ([`Session::map_mission_systems`](crate::Session::map_mission_systems)).
+    /// (`Session::map_mission_systems`).
     pub missions: Vec<SystemId>,
 }
 
@@ -168,7 +168,7 @@ pub struct FloatingMap {
     /// now and no marks ([`MapMarks::NONE`]).
     pub drawing: MapDrawing,
     /// The system it selects
-    /// ([`Session::floating_preselection`](crate::Session::floating_preselection)).
+    /// (`Session::floating_preselection`).
     pub preselection: Option<SystemId>,
 }
 

@@ -15,7 +15,9 @@ use std::rc::Rc;
 
 use nova_sim::catalog::MissionRecord;
 use nova_sim::fixture::SessionBuilder;
-use nova_sim::flight_frame::{Answer, FlightCommand, FlightFrame, MapClick, StepInput, StepReport};
+use nova_sim::flight_frame::{
+    Answer, FlightCommand, FlightFrame, MapClick, ScreenAnswer, ScreenAsk, StepInput, StepReport,
+};
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
 use nova_sim::landing::StellarFlags;
 use nova_sim::mission::screens::SPACEPORT;
@@ -34,7 +36,7 @@ use crate::flight::fake_catalog::{
     trafficked,
 };
 use crate::flight::sim_port::fixture::check_contract;
-use crate::flight::sim_port::{CommSource, FlightSim, MapSource, PilotSource, PortSource};
+use crate::flight::sim_port::{CommSource, FlightSim, PilotSource, PortSource};
 use crate::flight::{Collaborators, SessionFlight, SharedChance};
 use crate::system::catalog::StellarId;
 
@@ -94,6 +96,27 @@ fn by_hand(
         hail_options: &HailOptions::default(),
     };
     session.apply(command, &mut collab)
+}
+
+/// What `flight`'s session answers `ask` by hand, on a clone, handed
+/// `catalog` and Nova's law, boardings and hail options, on a chance that
+/// never fires, as the adapter hands them.
+fn screen_by_hand(
+    flight: &SessionFlight<FakeCatalog>,
+    catalog: &FakeCatalog,
+    ask: ScreenAsk,
+) -> ScreenAnswer {
+    let mut session = flight.session().expect("flying").clone();
+    session.screen(
+        ask,
+        &mut ApplyCollaborators {
+            catalog: Some(catalog),
+            chance: &mut NeverFires,
+            law: &NovaLaw::default(),
+            boarding_rule: &NovaBoarding::default(),
+            hail_options: &HailOptions::default(),
+        },
+    )
 }
 
 /// The frame `flight` fills now.
@@ -549,12 +572,15 @@ fn the_flights_mission_systems_are_its_sessions() {
     );
     let mut flight = flight_of(&catalog, session, Collaborators::default());
     flight.apply(FlightCommand::SettleScript);
-    let session = flight.session().expect("flying");
-    assert!(
-        !session.map_mission_systems().is_empty(),
-        "a mission arrowed"
-    );
-    assert_eq!(flight.map_mission_systems(), session.map_mission_systems());
+    let opening = ScreenAsk::MapOpening {
+        marks: nova_sim::flight_frame::MarksFrom::Given(nova_sim::MapMarks::NONE),
+    };
+    let expected = screen_by_hand(&flight, &catalog, opening.clone());
+    let ScreenAnswer::MapOpening(open) = &expected else {
+        panic!("an opening: {expected:?}");
+    };
+    assert!(!open.missions.is_empty(), "a mission arrowed");
+    assert_eq!(flight.screen(opening), expected);
 }
 
 // Entering play.
@@ -821,20 +847,23 @@ fn the_flights_steps_are_its_sessions_once_its_catalog_is_shared() {
     assert_eq!(flight.session().expect("flying"), &by_hand);
 }
 
-/// The flight's floating-map answers are its session's, through the
-/// adapter.
+/// The flight's floating-map show and places are its session's, through
+/// the adapter: the show's answer, and the frame's places.
 #[test]
 fn the_flights_map_answers_are_its_sessions() {
     let catalog = shared(catalog());
     let mut flight = SessionFlight::start(&catalog);
     flight.apply(FlightCommand::CycleMapSelection);
-    let session = flight.session().expect("flying");
-    let preselection = session.floating_preselection();
-    assert!(preselection.is_some(), "the cycle noted a slot");
-    assert_eq!(flight.floating_preselection(), preselection);
-    let places = session.floating_map_places();
-    assert!(!places.links.is_empty());
-    assert_eq!(flight.floating_map_places(), places);
+    let expected = screen_by_hand(&flight, &catalog, ScreenAsk::FloatingMap);
+    let ScreenAnswer::FloatingMap(shown) = &expected else {
+        panic!("a show: {expected:?}");
+    };
+    assert!(shown.preselection.is_some(), "the cycle noted a slot");
+    assert_eq!(flight.screen(ScreenAsk::FloatingMap), expected);
+    let mut places = FlightFrame::default();
+    flight.session().expect("flying").fill_frame(&mut places);
+    assert!(!places.floating.links.is_empty());
+    assert_eq!(frame_of(&flight).floating, places.floating);
 }
 
 /// Every screen ask of a real flight is answered as its session answers
@@ -846,18 +875,8 @@ fn a_real_flights_screen_answers_are_its_sessions() {
     flight.apply(FlightCommand::CycleMapSelection);
     let mut answered = 0;
     for ask in crate::flight::sim_port::fixture::sample_screen_asks() {
-        let mut session = flight.session().expect("flying").clone();
-        let expected = session.screen(
-            ask.clone(),
-            &mut ApplyCollaborators {
-                catalog: Some(&*catalog),
-                chance: &mut NeverFires,
-                law: &NovaLaw::default(),
-                boarding_rule: &NovaBoarding::default(),
-                hail_options: &HailOptions::default(),
-            },
-        );
-        if expected != nova_sim::flight_frame::ScreenAnswer::Nothing {
+        let expected = screen_by_hand(&flight, &catalog, ask.clone());
+        if expected != ScreenAnswer::Nothing {
             answered += 1;
         }
         assert_eq!(flight.screen(ask.clone()), expected, "{ask:?}");
@@ -873,8 +892,8 @@ fn a_real_flights_coming_traffic_is_the_types_its_session_brings() {
     let coming = session.coming_traffic_ships(&*catalog);
     assert!(!coming.is_empty(), "traffic to come");
     assert_eq!(
-        flight.screen(nova_sim::flight_frame::ScreenAsk::ComingTraffic),
-        nova_sim::flight_frame::ScreenAnswer::ComingTraffic(coming),
+        flight.screen(ScreenAsk::ComingTraffic),
+        ScreenAnswer::ComingTraffic(coming),
         "asked as a screen's, over the catalog shared"
     );
 }

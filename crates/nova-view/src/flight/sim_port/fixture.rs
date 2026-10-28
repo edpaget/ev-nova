@@ -7,7 +7,7 @@
 //! [`FakeFlight`]; `tests/it/flight_seam.rs` runs [`check_contract`] on a
 //! real [`SessionFlight`](crate::flight::SessionFlight).
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::VecDeque;
 
 use nova_sim::brackets::{NavBrackets, TargetBrackets};
@@ -17,17 +17,12 @@ use nova_sim::flight_frame::{
     FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, Gates, MapKey, MarksFrom, Names,
     ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
 };
-use nova_sim::galaxy_map::MapDrawing;
-use nova_sim::map_borders::BorderSources;
-use nova_sim::map_panel::MapPanel;
-use nova_sim::map_search::SearchOutcome;
 use nova_sim::navigation::NavMode;
 use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::status_cargo::StatusCargo;
-use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{ClassRow, Gauge, HailView, PlunderView, RadarGear, Reserves, Take};
 use nova_sim::{
-    EscortClass, Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, ShipRef, StellarId,
+    EscortClass, Hover, MapMarks, MissionId, PlayerCommand, ShipId, ShipRef, StellarId,
     StellarPick, Vec2, WeaponId,
 };
 use nova_sim::{JumpReadiness, PlayerFate};
@@ -40,7 +35,7 @@ use nova_sim::{
 
 use nova_sim::DeskReading;
 
-use super::{CommSource, FlightSim, MapSource, PilotSource, PortSource};
+use super::{CommSource, FlightSim, PilotSource, PortSource};
 use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 
 /// A scripted [`FlightSim`]: it shows the frame it was given, records
@@ -49,41 +44,49 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// queued for it on [`FlightSim::drain`], and reports each frame's steps
 /// from a queue (no step run once the queue is empty), recording each
 /// call's input and step count. Its frames take every gate but those it
-/// is told to refuse ([`FakeFlight::refuse`]). It answers [`MapSource`]
-/// from [`FakeMap`]
-/// ([`FakeFlight::map_mut`]), and records the map's questions whose
-/// arguments matter ([`FakeFlight::asked`]). It answers the asks
-/// ([`FlightCommand::is_ask`]) from what it is told for each, without the
-/// answer queue and outside [`FakeFlight::applied`], so the cursor's hover
-/// and a dialog's description never shift the answers queued for the
-/// commands a test is about, recording each in [`FakeFlight::asks`]: the
-/// hover as told ([`FakeFlight::set_hover`]), and each description's
-/// load with the next text queued ([`FakeFlight::queue_description`]),
-/// or, once the queue is empty, as its raw text unchanged, resolving
-/// nothing, failed or not, as a failed flight still loads one. A new ask
-/// is one field and setter for its answer, and one arm in
-/// `FakeFlight::answer_ask`; it is recorded with the rest. It lists the
-/// weapons from its list ([`FakeFlight::set_weapons`]) and the names from
-/// its table ([`FakeFlight::set_names`]) in its opening, failed or not. It
-/// answers
+/// is told to refuse ([`FakeFlight::refuse`]).
+///
+/// It answers the screens' asks ([`FlightSim::screen`]) from one queue
+/// of its own ([`FakeFlight::queue_screen`]), [`ScreenAnswer::Nothing`]
+/// once it is empty, recording each ask ([`FakeFlight::screens_asked`]):
+/// a test queues each answer in the order the view asks, and an answer
+/// that doesn't answer its ask panics, naming both, as a misordered
+/// queue. A view built by `FlightView::over` asks the galaxy first
+/// ([`ScreenAsk::Galaxy`]), so a test that builds one queues that answer,
+/// or nothing, before every other.
+///
+/// It answers the asks ([`FlightCommand::is_ask`]) from what it is told
+/// for each, without the answer queue and outside [`FakeFlight::applied`],
+/// so the cursor's hover and a dialog's description never shift the
+/// answers queued for the commands a test is about, recording each in
+/// [`FakeFlight::asks`]: the hover as told ([`FakeFlight::set_hover`]),
+/// and each description's load with the next text queued
+/// ([`FakeFlight::queue_description`]), or, once the queue is empty, as
+/// its raw text unchanged, resolving nothing, failed or not, as a failed
+/// flight still loads one. A new ask is one field and setter for its
+/// answer, and one arm in `FakeFlight::answer_ask`; it is recorded with
+/// the rest. It lists the weapons from its list
+/// ([`FakeFlight::set_weapons`]) and the names from its table
+/// ([`FakeFlight::set_names`]) in its opening, failed or not. It answers
 /// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]),
 /// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]) and
 /// [`PilotSource`] from [`FakePilot`] ([`FakeFlight::pilot_mut`]). Its
-/// player's ship's name, its date and the systems it has explored are
-/// its frame's ([`FakeFlight::set_frame`]). It
+/// player's ship's name, its date, the systems it has explored and the
+/// floating map's places are its frame's ([`FakeFlight::set_frame`]). It
 /// answers the message line's commands ([`FlightCommand::CommShown`],
 /// [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`])
 /// and the settings ([`FlightCommand::SetWindowWidth`],
 /// [`FlightCommand::SetDoubleTimeKey`], [`FlightCommand::SetSoundQuiet`])
 /// done without taking an answer from the queue, as these follow-ups
 /// ride along with the commands a test is about. Told to fail
-/// ([`FakeFlight::fail`]), its opening says why ([`FakeFlight::opening`])
-/// and it refuses every command but a description's load, still
-/// recording each. It is the developer
-/// tools' desk too ([`DevDesk`]), reading as scripted and recording each
-/// edit ([`FakeFlight::desk_mut`], [`FakeFlight::edits`]). It counts the
-/// frames it fills ([`FakeFlight::fills`]). One with nothing scripted
-/// meets [`check_contract`].
+/// ([`FakeFlight::fail`]), its opening says why ([`FakeFlight::opening`]),
+/// it refuses every command but a description's load, still recording
+/// each, and answers every screen nothing, leaving its queue as it is.
+/// It is the developer tools' desk too ([`DevDesk`]), reading as scripted
+/// and recording each edit ([`FakeFlight::desk_mut`],
+/// [`FakeFlight::edits`]). It counts the frames it fills
+/// ([`FakeFlight::fills`]). One with nothing scripted meets
+/// [`check_contract`].
 #[derive(Clone, Debug, Default)]
 pub struct FakeFlight {
     frame: FlightFrame,
@@ -93,8 +96,6 @@ pub struct FakeFlight {
     reports: VecDeque<StepReport>,
     stepped: Vec<(StepInput, u32)>,
     refused: Vec<PlayerCommand>,
-    map: FakeMap,
-    asked: RefCell<Vec<MapAsk>>,
     asks: Vec<FlightCommand>,
     screens: VecDeque<ScreenAnswer>,
     screens_asked: Vec<ScreenAsk>,
@@ -188,70 +189,6 @@ fn named<'a, K: PartialEq, V>(names: &'a [(K, V)], id: &K) -> Option<&'a V> {
         .iter()
         .find(|(listed, _)| listed == id)
         .map(|(_, name)| name)
-}
-
-/// What a [`FakeFlight`] answers the [`MapSource`] questions with, each
-/// field the answer to the question of its name. The default answers
-/// nothing, as a [`MapSource`]'s defaults do.
-#[derive(Clone, Debug, Default)]
-pub struct FakeMap {
-    /// [`MapSource::map_drawing`]'s answer, whatever it is asked.
-    pub drawing: Option<MapDrawing>,
-    /// [`MapSource::map_panel`]'s answer, whatever it is asked.
-    pub panel: Option<MapPanel>,
-    /// [`MapSource::map_border_sources`]'s answer.
-    pub border_sources: Option<BorderSources>,
-    /// [`MapSource::find_map_system`]'s answer, whatever the query.
-    pub search: Option<SearchOutcome>,
-    /// [`MapSource::map_mission_systems`]'s answer.
-    pub mission_systems: Vec<SystemId>,
-    /// [`MapSource::map_preselection`]'s answer.
-    pub map_preselection: Option<SystemId>,
-    /// [`MapSource::floating_preselection`]'s answer.
-    pub floating_preselection: Option<SystemId>,
-    /// [`MapSource::hypergate_cycle`]'s answer.
-    pub hypergate_cycle: Vec<Option<SystemId>>,
-    /// The marks each of [`MapSource::offer_map_marks`],
-    /// [`MapSource::computer_map_marks`] and
-    /// [`MapSource::mission_info_map_marks`] answers, whatever it is
-    /// asked; [`MapMarks::NONE`] when `None`.
-    pub marks: Option<MapMarks>,
-    /// [`MapSource::map_nav`]'s answer.
-    pub map_nav: Option<SavedNav>,
-    /// [`MapSource::floating_map_places`]'s answer.
-    pub floating: FloatingLinks,
-    /// [`MapSource::galaxy`]'s answer.
-    pub galaxy: Option<OverlaidGalaxy>,
-}
-
-/// A [`MapSource`] question a [`FakeFlight`] was asked whose arguments a
-/// test may check, in the order asked ([`FakeFlight::asked`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MapAsk {
-    /// [`MapSource::map_drawing`], with its arguments.
-    Drawing {
-        /// The hypergate map's offers, or `None` on the course map.
-        hypergate: Option<Vec<SystemId>>,
-        /// The mission systems.
-        missions: Vec<SystemId>,
-        /// The opener's marks.
-        marks: MapMarks,
-    },
-    /// [`MapSource::map_panel`], with its arguments.
-    Panel {
-        /// The system selected.
-        selected: Option<SystemId>,
-        /// The hypergate map's offers, or `None` on the course map.
-        hypergate: Option<Vec<SystemId>>,
-    },
-    /// [`MapSource::find_map_system`], with its query.
-    Find(String),
-    /// [`MapSource::offer_map_marks`], for its mission.
-    OfferMarks(MissionId),
-    /// [`MapSource::computer_map_marks`], for its row.
-    ComputerMarks(Option<MissionId>),
-    /// [`MapSource::mission_info_map_marks`], for its slot.
-    MissionInfoMarks(Option<u8>),
 }
 
 impl FakeFlight {
@@ -403,11 +340,6 @@ impl FakeFlight {
         self.refused.retain(|&refused| refused != gate);
     }
 
-    /// What the map's questions are answered with, to script.
-    pub fn map_mut(&mut self) -> &mut FakeMap {
-        &mut self.map
-    }
-
     /// What the comm's questions are answered with, to script.
     pub fn comm_mut(&mut self) -> &mut FakeComm {
         &mut self.comm
@@ -421,13 +353,6 @@ impl FakeFlight {
     /// What the pilot's screens are answered with, to script.
     pub fn pilot_mut(&mut self) -> &mut FakePilot {
         &mut self.pilot
-    }
-
-    /// The map's questions asked whose arguments matter, in the order
-    /// asked ([`MapAsk`]).
-    #[must_use]
-    pub fn asked(&self) -> Vec<MapAsk> {
-        self.asked.borrow().clone()
     }
 
     /// Fails for `reason` from now on, as a flight that could not start:
@@ -470,11 +395,6 @@ impl FakeFlight {
     #[must_use]
     pub fn fills(&self) -> usize {
         self.fills.get()
-    }
-
-    /// Notes `ask`.
-    fn ask(&self, ask: MapAsk) {
-        self.asked.borrow_mut().push(ask);
     }
 
     /// Answers the ask `ask` from what it is told for it, recording it
@@ -580,86 +500,6 @@ impl DevDesk for FakeFlight {
     fn edit(&mut self, edit: PilotEdit) -> Result<(), EditRefusal> {
         self.edits.push(edit);
         self.desk.refusal.map_or(Ok(()), Err)
-    }
-}
-
-impl MapSource for FakeFlight {
-    fn map_drawing(
-        &self,
-        hypergate: Option<&[SystemId]>,
-        missions: &[SystemId],
-        marks: MapMarks,
-    ) -> Option<MapDrawing> {
-        self.ask(MapAsk::Drawing {
-            hypergate: hypergate.map(<[SystemId]>::to_vec),
-            missions: missions.to_vec(),
-            marks,
-        });
-        self.map.drawing.clone()
-    }
-
-    fn map_panel(
-        &self,
-        selected: Option<SystemId>,
-        hypergate: Option<&[SystemId]>,
-    ) -> Option<MapPanel> {
-        self.ask(MapAsk::Panel {
-            selected,
-            hypergate: hypergate.map(<[SystemId]>::to_vec),
-        });
-        self.map.panel.clone()
-    }
-
-    fn map_border_sources(&self) -> Option<BorderSources> {
-        self.map.border_sources.clone()
-    }
-
-    fn find_map_system(&self, query: &str) -> Option<SearchOutcome> {
-        self.ask(MapAsk::Find(query.to_owned()));
-        self.map.search
-    }
-
-    fn map_mission_systems(&self) -> Vec<SystemId> {
-        self.map.mission_systems.clone()
-    }
-
-    fn map_preselection(&self) -> Option<SystemId> {
-        self.map.map_preselection
-    }
-
-    fn floating_preselection(&self) -> Option<SystemId> {
-        self.map.floating_preselection
-    }
-
-    fn hypergate_cycle(&self) -> Vec<Option<SystemId>> {
-        self.map.hypergate_cycle.clone()
-    }
-
-    fn offer_map_marks(&self, mission: MissionId) -> MapMarks {
-        self.ask(MapAsk::OfferMarks(mission));
-        self.map.marks.unwrap_or(MapMarks::NONE)
-    }
-
-    fn computer_map_marks(&self, selected: Option<MissionId>) -> MapMarks {
-        self.ask(MapAsk::ComputerMarks(selected));
-        self.map.marks.unwrap_or(MapMarks::NONE)
-    }
-
-    fn mission_info_map_marks(&self, slot: Option<u8>) -> MapMarks {
-        self.ask(MapAsk::MissionInfoMarks(slot));
-        self.map.marks.unwrap_or(MapMarks::NONE)
-    }
-
-    fn map_nav(&self) -> Option<SavedNav> {
-        self.map.map_nav
-    }
-
-    fn floating_map_places(&self) -> FloatingLinks {
-        self.map.floating.clone()
-    }
-
-    fn galaxy(&self) -> Option<&OverlaidGalaxy> {
-        self.map.galaxy.as_ref()
     }
 }
 
@@ -1751,8 +1591,6 @@ mod tests {
         }
     }
 
-    impl MapSource for TakesSettings {}
-
     impl CommSource for TakesSettings {}
 
     impl PortSource for TakesSettings {}
@@ -1894,8 +1732,6 @@ mod tests {
         }
     }
 
-    impl MapSource for AnswersAScreen {}
-
     impl CommSource for AnswersAScreen {}
 
     impl PortSource for AnswersAScreen {}
@@ -2005,8 +1841,6 @@ mod tests {
             sample_screen_asks().iter().map(screen_ask_kind).collect();
         assert_eq!(kinds, (0..SCREEN_ASK_KINDS).collect());
     }
-
-    impl MapSource for LoadsOnly {}
 
     impl CommSource for LoadsOnly {}
 
@@ -2238,93 +2072,6 @@ mod tests {
         assert_eq!(gates(&fake), Gates::EVERY);
         fake.frame_mut().gates = Gates::NONE;
         assert_eq!(gates(&fake), Gates::NONE, "as the frame sets them");
-    }
-
-    #[test]
-    fn the_fake_answers_nothing_on_the_map_until_scripted() {
-        let fake = FakeFlight::new();
-        assert_eq!(fake.map_drawing(None, &[], MapMarks::NONE), None);
-        assert_eq!(fake.map_panel(None, None), None);
-        assert_eq!(fake.map_border_sources(), None);
-        assert_eq!(fake.find_map_system("sol"), None);
-        assert_eq!(fake.offer_map_marks(MissionId(128)), MapMarks::NONE);
-        assert_eq!(fake.map_nav(), None);
-        assert_eq!(fake.galaxy(), None);
-    }
-
-    #[test]
-    fn the_fake_answers_the_map_as_scripted() {
-        let mut fake = FakeFlight::new();
-        let marks = MapMarks {
-            green: Some(SystemId(131)),
-            multi_arrows: false,
-        };
-        let saved = SavedNav::of(NavMode::Off);
-        let floating = FloatingLinks {
-            current: nova_sim::Vec2::new(1.0, 2.0),
-            links: vec![(SystemId(131), nova_sim::Vec2::new(3.0, 4.0))],
-        };
-        let map = fake.map_mut();
-        map.search = Some(SearchOutcome::Found(SystemId(131)));
-        map.border_sources = Some(BorderSources::default());
-        map.mission_systems = vec![SystemId(132)];
-        map.map_preselection = Some(SystemId(131));
-        map.floating_preselection = Some(SystemId(132));
-        map.hypergate_cycle = vec![None, Some(SystemId(131))];
-        map.marks = Some(marks);
-        map.map_nav = Some(saved);
-        map.floating = floating.clone();
-        let galaxy = OverlaidGalaxy::new(Vec::new(), nova_sim::story::GalaxyOverlay::default());
-        map.galaxy = Some(galaxy.clone());
-        assert_eq!(
-            fake.find_map_system("x"),
-            Some(SearchOutcome::Found(SystemId(131)))
-        );
-        assert_eq!(fake.map_border_sources(), Some(BorderSources::default()));
-        assert_eq!(fake.map_mission_systems(), [SystemId(132)]);
-        assert_eq!(fake.map_preselection(), Some(SystemId(131)));
-        assert_eq!(fake.floating_preselection(), Some(SystemId(132)));
-        assert_eq!(fake.hypergate_cycle(), [None, Some(SystemId(131))]);
-        assert_eq!(fake.offer_map_marks(MissionId(1)), marks);
-        assert_eq!(fake.computer_map_marks(None), marks);
-        assert_eq!(fake.mission_info_map_marks(Some(0)), marks);
-        assert_eq!(fake.map_nav(), Some(saved));
-        assert_eq!(fake.floating_map_places(), floating);
-        assert_eq!(fake.galaxy(), Some(&galaxy));
-    }
-
-    #[test]
-    fn the_fake_records_the_maps_questions_whose_arguments_matter() {
-        let fake = FakeFlight::new();
-        let marks = MapMarks {
-            green: Some(SystemId(131)),
-            multi_arrows: true,
-        };
-        fake.map_drawing(Some(&[SystemId(131)]), &[SystemId(132)], marks);
-        fake.map_panel(Some(SystemId(130)), None);
-        fake.find_map_system("alpha");
-        fake.offer_map_marks(MissionId(128));
-        fake.computer_map_marks(Some(MissionId(129)));
-        fake.mission_info_map_marks(Some(2));
-        fake.map_preselection();
-        assert_eq!(
-            fake.asked(),
-            [
-                MapAsk::Drawing {
-                    hypergate: Some(vec![SystemId(131)]),
-                    missions: vec![SystemId(132)],
-                    marks,
-                },
-                MapAsk::Panel {
-                    selected: Some(SystemId(130)),
-                    hypergate: None,
-                },
-                MapAsk::Find("alpha".to_owned()),
-                MapAsk::OfferMarks(MissionId(128)),
-                MapAsk::ComputerMarks(Some(MissionId(129))),
-                MapAsk::MissionInfoMarks(Some(2)),
-            ]
-        );
     }
 
     /// What a broken sim gets wrong.
@@ -2574,8 +2321,6 @@ mod tests {
             }
         }
     }
-
-    impl MapSource for Broken {}
 
     impl PilotSource for Broken {}
 

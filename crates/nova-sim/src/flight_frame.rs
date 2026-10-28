@@ -208,8 +208,8 @@ pub struct FlightFrame {
     /// to start: every system unexplored. [`FlightFrame::has_explored`]
     /// asks it.
     pub explored: Vec<SystemId>,
-    /// The floating map's places
-    /// ([`Session::floating_map_places`](crate::Session::floating_map_places)):
+    /// The floating map's places, as
+    /// [`Session::fill_frame`](crate::Session::fill_frame) works them out:
     /// the current system's map position, which its draw centres on every
     /// frame while it is up, and each link its clicks test. Filled in
     /// place, its links cleared and pushed again, so a kept frame's fill
@@ -574,9 +574,8 @@ impl Default for MapKey {
 }
 
 /// The floating map's places, as its clicks and its draw read them
-/// ([`Session::floating_map_places`](crate::Session::floating_map_places)):
-/// the current system's map position, and each link its clicks test
-/// with its own.
+/// ([`FlightFrame::floating`]): the current system's map position, and
+/// each link its clicks test with its own.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FloatingLinks {
     /// The current system's map position.

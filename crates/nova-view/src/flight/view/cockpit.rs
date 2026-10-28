@@ -570,7 +570,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// into the frame then (`_DrawMapInFloatingFrame`): the session's
     /// drawing off the hypergate map (`_hypergateMapMode` = 0, @0x114cb)
     /// with the mission systems taken now (@0x114ea), and the system
-    /// selected now ([`Session::floating_preselection`],
+    /// selected now (`Session::floating_preselection`,
     /// @0x1147b-0x114c8), whose name alone is drawn above a zoom of 1.1.
     /// It marks no green system, with multiple arrows allowed
     /// ([`MapMarks::NONE`](nova_sim::MapMarks::NONE)): it shows only from

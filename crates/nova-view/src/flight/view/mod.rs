@@ -294,13 +294,13 @@
 //!   ([`UiSound::MapClosed`], `_beepSnd[0]`, @0x6a85a); a refused M says
 //!   nothing, and the hypergate map neither opens nor closes with a beep.
 //!   As it opens it selects the system the original's
-//!   `_DoSystemMap` does ([`Session::map_preselection`]): the one
+//!   `_DoSystemMap` does (`Session::map_preselection`): the one
 //!   selected in nav mode 3, or the current system in any other mode,
 //!   and its panel shows that system. It draws the session's drawing
 //!   ([`Session::map_drawing`], [`GalaxyMap::show_drawing`]): what
 //!   `_DrawMap` draws of the known and explored systems, coloured by
 //!   `_ColorCodeSystem`, with the mission systems taken as it opens
-//!   ([`Session::map_mission_systems`]), taken again on the frame after
+//!   (`Session::map_mission_systems`), taken again on the frame after
 //!   the galaxy, the explored, charted or known systems, the course or
 //!   the nav change, and after a plot, a Tab or a hypergate map click. A
 //!   system clicked on the map becomes the destination: the session plots
@@ -1376,7 +1376,7 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     map_borders_save: Option<bool>,
     /// The mission systems the course map's red arrows mark, taken as it
     /// opens, as `_DoSystemMap` runs `_RecalcMissionSystsForMap` then
-    /// (@0x124a0; [`Session::map_mission_systems`]).
+    /// (@0x124a0; `Session::map_mission_systems`).
     map_missions: Vec<SystemId>,
     /// What the course map's drawing was last taken from
     /// ([`FlightView::redraw_map`]): while the map is open, a change to

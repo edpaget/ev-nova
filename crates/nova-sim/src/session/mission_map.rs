@@ -77,7 +77,7 @@ impl Session {
     /// and the green system's red arrow cleared whether or not there is
     /// one.
     #[must_use]
-    pub fn mission_info_map_marks(&self, slot: Option<u8>) -> MapMarks {
+    pub(crate) fn mission_info_map_marks(&self, slot: Option<u8>) -> MapMarks {
         self.chart
             .mission_info_map_marks(&self.pilot, &self.statics, slot)
     }

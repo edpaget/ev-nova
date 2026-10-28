@@ -307,7 +307,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Lets go of the flight keys and shows the course map, with the
     /// system the original's `_DoSystemMap` selects as it opens
-    /// ([`Session::map_preselection`], with the rest of its opening,
+    /// (`Session::map_preselection`, with the rest of its opening,
     /// [`ScreenAsk::MapOpening`]) selected, and the system selected in nav
     /// mode 3 drawn as its link. The hypergate map opens this way too, its
     /// pick still only an offered system.
@@ -579,7 +579,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// hyperspace selection ([`Session::cycle_map_selection`]); the map
     /// then draws the new selected link and selects the system the
     /// original's `_selSystem` names (@0x1408c-0x140d8,
-    /// [`Session::map_preselection`]), item 3 is redrawn whether a link
+    /// `Session::map_preselection`), item 3 is redrawn whether a link
     /// was picked or none (@0x14032), and the nav area is redrawn at
     /// once, as the filter runs `_DrawStatus` with nav marked
     /// (`_statusRedraw[0]`, @0x13fb2-0x1406e). Docked, as on the bar's

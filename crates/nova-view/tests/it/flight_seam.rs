@@ -4,8 +4,8 @@
 //! (rdm:phase/view-sim-seam/phase-15-integration-test-set).
 //!
 //! **The rule for adding a test here.** One test per port surface (each
-//! `FlightSim` method; each source, `MapSource`, `CommSource`,
-//! `PortSource` and `PilotSource`; the opening's names and the frame's
+//! `FlightSim` method, the screen query's maps among them; each source,
+//! `CommSource`, `PortSource` and `PilotSource`; the opening's names and the frame's
 //! wording fields; `DevDesk`; the contract)
 //! or per router handoff, never one per rule. Each test:
 //!
@@ -474,8 +474,8 @@ fn nav_mode(view: &FlightView<Rc<GameData>>) -> NavMode {
     view.session().expect("flying").nav_mode()
 }
 
-/// `MapSource`: a Shift-click on the course map plots a course the
-/// session holds and the map draws.
+/// `FlightSim::screen`, the course map: a Shift-click on the course map
+/// plots a course the session holds and the map draws.
 #[test]
 fn a_course_plotted_on_the_map_reaches_the_session_and_the_map_draws_it() {
     let mut view = view();
@@ -500,7 +500,7 @@ fn a_slot_key_reaches_the_session_on_the_next_frame() {
     assert_eq!(nav_mode(&view), NavMode::Stellar(Some(StellarId(128))));
 }
 
-/// `MapSource`, a dialog's map: a mission dialog's map writes the
+/// `FlightSim::screen`, a dialog's map: a mission dialog's map writes the
 /// session's nav, and puts back the nav it opened with as it closes.
 #[test]
 fn a_mission_dialogs_map_puts_back_the_nav_it_opened_with_as_it_closes() {
@@ -622,8 +622,8 @@ fn drawn(view: &FlightView<Rc<GameData>>) -> Vec<SystemId> {
         .unwrap_or_default()
 }
 
-/// `FlightSim::drain` and `MapSource::galaxy`: a galaxy change the
-/// session raises redraws the open map from the galaxy the flight
+/// `FlightSim::drain` and `FlightSim::screen`'s galaxy: a galaxy change
+/// the session raises redraws the open map from the galaxy the flight
 /// answers.
 #[test]
 fn a_galaxy_change_redraws_the_open_map_through_the_event_and_the_galaxy() {

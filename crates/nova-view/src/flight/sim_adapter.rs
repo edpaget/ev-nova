@@ -53,21 +53,15 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks, ScreenAnswer,
-    ScreenAsk, StepInput, StepReport,
+    Answer, FlightCommand, FlightEvent, FlightFrame, FlightOpening, ScreenAnswer, ScreenAsk,
+    StepInput, StepReport,
 };
-use nova_sim::galaxy_map::MapDrawing;
-use nova_sim::map_borders::BorderSources;
-use nova_sim::map_panel::MapPanel;
-use nova_sim::map_search::SearchOutcome;
 use nova_sim::pilot_panel::PilotPanel;
-use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
     Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DisableRule, HailOptions, HailView,
-    HireList, LegalCode, MapMarks, Market, MissionId, MissionInfo, News, NovaAi, NovaBoarding,
-    NovaDisable, NovaLaw, Outfitter, Pilot, PlayerInfo, PlunderView, PointDefenceRule, Rules,
-    SavedNav, Session, ShipId, ShipNaming, ShipRefusal, Shipyard, SimCatalog, StepCollaborators,
-    SystemId,
+    HireList, LegalCode, Market, MissionId, MissionInfo, News, NovaAi, NovaBoarding, NovaDisable,
+    NovaLaw, Outfitter, Pilot, PlayerInfo, PlunderView, PointDefenceRule, Rules, Session, ShipId,
+    ShipNaming, ShipRefusal, Shipyard, SimCatalog, StepCollaborators,
 };
 
 use nova_sim::{
@@ -76,7 +70,7 @@ use nova_sim::{
 };
 
 use super::SharedChance;
-use super::sim_port::{CommSource, FlightSim, MapSource, PilotSource, PortSource};
+use super::sim_port::{CommSource, FlightSim, PilotSource, PortSource};
 use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 
 /// The flight of a real `nova_sim::Session`, or why it could not start,
@@ -529,90 +523,6 @@ impl<C> FlightSim for SessionFlight<C> {
 }
 
 /// Each forwards to the session's method of its name; a failed session
-/// answers nothing. The panel and the hypergate cycle read the catalog the
-/// view shared ([`SessionFlight::share_catalog`]), and answer nothing
-/// before it is shared.
-impl<C> MapSource for SessionFlight<C> {
-    fn map_drawing(
-        &self,
-        hypergate: Option<&[SystemId]>,
-        missions: &[SystemId],
-        marks: MapMarks,
-    ) -> Option<MapDrawing> {
-        let session = self.session().ok()?;
-        Some(session.map_drawing(hypergate, missions, marks))
-    }
-
-    fn map_panel(
-        &self,
-        selected: Option<SystemId>,
-        hypergate: Option<&[SystemId]>,
-    ) -> Option<MapPanel> {
-        let session = self.session().ok()?;
-        let catalog = &self.catalog.as_ref()?.0;
-        Some(session.map_panel(catalog, selected, hypergate))
-    }
-
-    fn map_border_sources(&self) -> Option<BorderSources> {
-        Some(self.session().ok()?.map_border_sources())
-    }
-
-    fn find_map_system(&self, query: &str) -> Option<SearchOutcome> {
-        Some(self.session().ok()?.find_map_system(query))
-    }
-
-    fn map_mission_systems(&self) -> Vec<SystemId> {
-        self.session()
-            .map_or_else(|_| Vec::new(), Session::map_mission_systems)
-    }
-
-    fn map_preselection(&self) -> Option<SystemId> {
-        self.session().ok()?.map_preselection()
-    }
-
-    fn floating_preselection(&self) -> Option<SystemId> {
-        self.session().ok()?.floating_preselection()
-    }
-
-    fn hypergate_cycle(&self) -> Vec<Option<SystemId>> {
-        match (self.session(), &self.catalog) {
-            (Ok(session), Some(catalog)) => session.hypergate_cycle(&catalog.0),
-            _ => Vec::new(),
-        }
-    }
-
-    fn offer_map_marks(&self, mission: MissionId) -> MapMarks {
-        self.session()
-            .map_or(MapMarks::NONE, |session| session.offer_map_marks(mission))
-    }
-
-    fn computer_map_marks(&self, selected: Option<MissionId>) -> MapMarks {
-        self.session().map_or(MapMarks::NONE, |session| {
-            session.computer_map_marks(selected)
-        })
-    }
-
-    fn mission_info_map_marks(&self, slot: Option<u8>) -> MapMarks {
-        self.session().map_or(MapMarks::NONE, |session| {
-            session.mission_info_map_marks(slot)
-        })
-    }
-
-    fn map_nav(&self) -> Option<SavedNav> {
-        self.session().ok().map(Session::map_nav)
-    }
-
-    fn floating_map_places(&self) -> FloatingLinks {
-        self.session()
-            .map_or_else(|_| FloatingLinks::default(), Session::floating_map_places)
-    }
-
-    fn galaxy(&self) -> Option<&OverlaidGalaxy> {
-        self.session().ok().map(Session::galaxy)
-    }
-}
-
-/// Each forwards to the session's method of its name; a failed session
 /// answers nothing. The hail reads the catalog the view shared
 /// ([`SessionFlight::share_catalog`]) and lists the flight's hail options,
 /// and answers nothing before the catalog is shared.
@@ -771,7 +681,7 @@ mod fake_catalog_checks;
 #[cfg(test)]
 mod tests {
     use nova_sim::flight_frame::DrawnBoxes;
-    use nova_sim::{DescMovie, StellarId, StellarPick, Vec2};
+    use nova_sim::{DescMovie, StellarId, StellarPick, SystemId, Vec2};
 
     use super::*;
     use crate::flight::sim_port::fixture::unlike;
@@ -801,21 +711,11 @@ mod tests {
         let mut frame = unlike(&FlightFrame::default());
         flight.frame(&mut frame);
         assert_eq!(frame.gates, nova_sim::flight_frame::Gates::EVERY);
-        let none = SystemId(130);
-        assert_eq!(flight.map_drawing(None, &[], MapMarks::NONE), None);
-        assert_eq!(flight.map_panel(Some(none), None), None);
-        assert_eq!(flight.map_border_sources(), None);
-        assert_eq!(flight.find_map_system("sol"), None);
-        assert_eq!(flight.map_mission_systems(), []);
-        assert_eq!(flight.map_preselection(), None);
-        assert_eq!(flight.floating_preselection(), None);
-        assert_eq!(flight.hypergate_cycle(), []);
-        assert_eq!(flight.offer_map_marks(MissionId(128)), MapMarks::NONE);
-        assert_eq!(flight.computer_map_marks(None), MapMarks::NONE);
-        assert_eq!(flight.mission_info_map_marks(None), MapMarks::NONE);
-        assert_eq!(flight.map_nav(), None);
-        assert_eq!(flight.floating_map_places(), FloatingLinks::default());
-        assert_eq!(flight.galaxy(), None);
+        assert_eq!(
+            frame.floating,
+            nova_sim::flight_frame::FloatingLinks::default(),
+            "no floating map places"
+        );
 
         assert_eq!(
             flight.opening(),
