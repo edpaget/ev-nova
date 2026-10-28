@@ -371,9 +371,15 @@ fn showing_the_set_up_flight_redraws_its_stellars_and_reads_the_sheets_its_slots
         after
             .ships
             .push(record::npc(7, 131, Vec2::new(100.0, 0.0), 0.0));
-        view.sim.set_frame(after);
+        // The edge sets the flight up through `change_sim`, which fills
+        // the kept frame afresh before the view shows the set-up.
+        view.change_sim(|sim| sim.set_frame(after));
         view.show_set_up(slots_carried);
-        assert_eq!(view.frame, view.frame_now(), "the kept frame filled afresh");
+        assert_eq!(view.frame, view.frame_now(), "the kept frame the flight's");
+        assert!(
+            view.scene().expect("a scene").stellars()[1].destroyed,
+            "the stellars drawn again"
+        );
         assert_eq!(
             view.npc_sheets.contains_key(&ShipId(131)),
             slots_carried,

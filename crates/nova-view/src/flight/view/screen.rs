@@ -46,10 +46,7 @@ impl<
     /// the original reads them live, H, \`, `\` and J as their latches
     /// let them ([`FlightView::held_keys_frame`]; see the module docs).
     fn input(&mut self, input: &Input) -> ScreenAction {
-        let action = self.take_input(input);
-        // Whatever the input changed is drawn next.
-        self.refresh_frame();
-        action
+        self.take_input(input)
     }
 
     /// First catches the screen up with what the session has told since
@@ -81,8 +78,6 @@ impl<
     /// before the frame is drawn.
     fn tick(&mut self, dt: Duration) {
         self.tick_then(dt);
-        // Whatever the tick changed is drawn next.
-        self.refresh_frame();
     }
 
     /// The scene and its HUD, then the fades. With the course map open,
@@ -163,8 +158,9 @@ impl<
     S: FlightSim,
 > FlightView<C, S>
 {
-    /// [`Screen::tick`]'s work, before the kept frame is filled afresh
-    /// (see there).
+    /// [`Screen::tick`]'s work. The kept frame needs no fill at its end:
+    /// the catch-up, the steps and each command fill it where they change
+    /// the flight.
     fn tick_then(&mut self, dt: Duration) {
         self.catch_up();
         self.fade_frame(dt);
@@ -192,8 +188,8 @@ impl<
         self.advance_hud();
     }
 
-    /// [`Screen::input`]'s work, before the kept frame is filled afresh
-    /// (see there).
+    /// [`Screen::input`]'s work. The kept frame needs no fill at its end:
+    /// each command the input sends fills it ([`FlightView::send`]).
     fn take_input(&mut self, input: &Input) -> ScreenAction {
         self.cursor_input(input);
         let press = match *input {

@@ -203,10 +203,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.retake_reserves();
     }
 
-    /// Takes the gauges' snapshot afresh, the kept frame filled afresh
-    /// first, as [`FlightView::retake_radar`] fills it.
+    /// Takes the gauges' snapshot afresh, from the kept frame.
     pub(super) fn retake_reserves(&mut self) {
-        self.refresh_frame();
         self.reserves_scene = Some(self.reserves());
     }
 
@@ -221,11 +219,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// its last change (`_EvalSetExp` @0x156c7 → `_RedrawStatus(1)`
     /// @0x739bd, [`FlightView::after_outfit_order`]).
     ///
-    /// The kept frame is filled afresh first: the docked and travel code
-    /// that calls it, directly or through [`FlightView::redraw_whole`],
-    /// has just changed the session behind the port.
+    /// It reads the kept frame, which the commands of the docked and
+    /// travel code that calls it, directly or through
+    /// [`FlightView::redraw_whole`], have just filled afresh.
     pub(super) fn retake_radar(&mut self) {
-        self.refresh_frame();
         self.radar_scene = Some(self.radar_now(&self.frame));
     }
 
@@ -269,10 +266,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         })
     }
 
-    /// Takes the target panel's snapshot afresh, the kept frame filled
-    /// afresh first, as [`FlightView::retake_radar`] fills it.
+    /// Takes the target panel's snapshot afresh, from the kept frame.
     pub(super) fn retake_target(&mut self) {
-        self.refresh_frame();
         self.target_scene = Some((
             Self::target_drawn(&self.frame),
             self.target_now(&self.frame),

@@ -168,7 +168,7 @@ fn recharge_is_enabled_as_the_flight_says() {
 #[test]
 fn a_recharge_redraws_the_fuel_gauge_alone() {
     let mut view = docked_on(catalog(), at_earth(), RuleSource::Engine);
-    view.sim.frame_mut().hud.reserves = fuelled(100.0);
+    view.change_sim(|sim| sim.frame_mut().hud.reserves = fuelled(100.0));
     view.refresh_status();
     assert_eq!(
         view.reserves_shown(&view.frame_now()).fuel.now,
@@ -921,7 +921,7 @@ fn a_ship_purchases_on_purchase_intf_change_shows_the_gauges_before_the_fill() {
 fn a_ship_hooks_text_shows_before_the_purchases_own_redraw() {
     let mut view = docked_upgrading();
     let before = fuelled(1.0);
-    view.sim.frame_mut().hud.reserves = before;
+    view.change_sim(|sim| sim.frame_mut().hud.reserves = before);
     view.refresh_status();
     view.sim.queue_event(brief(1, EARTH, before));
     let filled = leaves(&view, |frame| {

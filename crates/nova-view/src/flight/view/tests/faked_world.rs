@@ -35,7 +35,7 @@ fn scripted_flight(frame: FlightFrame) -> FakeFlight {
 /// Shows `frame` from now on: the fake's, the view's kept frame filled
 /// from it, and the sheets it asks for read, as a step would leave them.
 pub(super) fn shows(view: &mut Faked, frame: FlightFrame) {
-    view.sim.set_frame(frame);
+    view.change_sim(|sim| sim.set_frame(frame));
     view.read_npc_sheets();
 }
 

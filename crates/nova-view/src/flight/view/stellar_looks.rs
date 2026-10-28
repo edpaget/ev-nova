@@ -16,22 +16,20 @@ use super::stars;
 use super::{FlightView, Redrawn, look, show_destroyed, show_gate_frames, shown_scene};
 
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// Draws each stellar of the scene shown as the frame, filled afresh,
-    /// holds it after a rebuild point
+    /// Draws each stellar of the scene shown as the kept frame holds it
+    /// after a rebuild point
     /// ([`SystemScene::rebuild`](crate::system::scene::SystemScene::rebuild)):
     /// one whose look changed shows its current frame. The scene is not
     /// laid out again.
     pub(super) fn rebuild_stellars(&mut self) {
-        self.refresh_frame();
         if let Some(scene) = &mut self.scene {
             scene.rebuild(|id| look(&self.frame, id));
         }
     }
 
-    /// Draws each stellar of the scene shown as the frame, filled afresh,
-    /// holds it ([`show_destroyed`]). The scene is not laid out again.
+    /// Draws each stellar of the scene shown as the kept frame holds it
+    /// ([`show_destroyed`]). The scene is not laid out again.
     pub(super) fn show_destroyed(&mut self) {
-        self.refresh_frame();
         if let Some(scene) = &mut self.scene {
             show_destroyed(scene, &self.frame);
         }
@@ -75,7 +73,7 @@ impl<C: SystemCatalog, S: FlightSim> FlightView<C, S> {
     /// animation state
     /// ([`KeptFrames::keep`](crate::system::kept_frames::KeptFrames::keep)),
     /// and shows the frame's in its place, read from the catalog with the
-    /// stellars the frame, filled afresh, shows ([`shown_scene`]): each
+    /// stellars the kept frame shows ([`shown_scene`]): each
     /// stellar looking as the frame holds it ([`show_destroyed`]), then each
     /// the flight has shown before resumed where it was left, on the sheet
     /// it now draws
@@ -84,7 +82,6 @@ impl<C: SystemCatalog, S: FlightSim> FlightView<C, S> {
     /// frames resume, so the rebuild or redraw that follows finds it
     /// unchanged and leaves them alone.
     pub(super) fn show_scene(&mut self) {
-        self.refresh_frame();
         if let Some(left) = &self.scene {
             self.kept_frames.keep(left);
         }
@@ -157,7 +154,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     fn lay_out(&mut self, system: SystemId) {
         self.show_scene();
         self.map.show_course(system, &self.frame.course_shown);
-        self.previous = self.player_place_now();
+        self.previous = self.player_place();
         self.alpha = 0.0;
         self.npc_previous.clear();
         self.effects.clear();
@@ -171,10 +168,10 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     /// Draws the ship where the flight has it, not on its way from where
     /// it was, and shows the flight's course again on the course map:
     /// after a move to another stellar of the system shown, a take-off and
-    /// a new pilot's beginning. Its place is read from the frame filled
-    /// afresh ([`FlightView::player_place_now`]).
+    /// a new pilot's beginning. Its place is the kept frame's
+    /// ([`FlightView::player_place`]), which the change filled afresh.
     pub(super) fn place_ship(&mut self) {
-        self.previous = self.player_place_now();
+        self.previous = self.player_place();
         self.show_course();
         self.alpha = 0.0;
     }

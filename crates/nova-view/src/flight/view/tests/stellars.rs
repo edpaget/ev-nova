@@ -138,7 +138,7 @@ fn f5_near_the_wormhole_selects_it_and_the_nav_area_names_it() {
         super::faked_screen::picks_since(&view, 0),
         [FlightCommand::SelectStellar(nova_sim::StellarPick::Nearest)]
     );
-    view.sim.frame_mut().nav_mode = NavMode::Stellar(Some(StellarId(150)));
+    view.change_sim(|sim| sim.frame_mut().nav_mode = NavMode::Stellar(Some(StellarId(150))));
     view.redraw_status();
     assert_eq!(super::faked_hud::nav_of(&view), [hud::NAV_STELLAR, "Hole"]);
 }

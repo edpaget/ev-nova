@@ -626,14 +626,13 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
     /// that has not been read yet, of each type a ship here is boxed by
     /// ([`FlightFrame::framed_types`](nova_sim::flight_frame::FlightFrame::framed_types)),
     /// such as the stale frames of a hidden ship's slot, and each NPC's
-    /// government's target code, from the frame filled afresh. The
+    /// government's target code, from the kept frame. The
     /// player's own type is read with its ship, so it is left out while
     /// its slot holds its own frames.
     ///
     /// The traffic types' target cards not read yet are asked for in one
     /// batch ([`CombatLooks::target_cards`]), and none when all are read.
     pub(super) fn read_npc_sheets(&mut self) {
-        self.refresh_frame();
         let traffic = self.frame.traffic_ships.clone();
         let framed: Vec<_> = self.frame.framed_types().collect();
         let govts: Vec<_> = self.frame.npcs().filter_map(|npc| npc.govt).collect();

@@ -1126,10 +1126,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Fills the frame the view keeps afresh from the flight
-    /// ([`FlightSim::frame`]), into its own buffers: after each step,
-    /// after each command ([`FlightView::send`]), as the flight is caught
-    /// up with, and at the end of each input and tick, so whatever is drawn
-    /// next draws the flight as it stands.
+    /// ([`FlightSim::frame`]), into its own buffers, wherever the flight
+    /// changes: after each frame's steps, after each command
+    /// ([`FlightView::send`]), as the flight is caught up with (after the
+    /// drain) and after each change behind the port
+    /// ([`FlightView::change_sim`]), so whatever is drawn or read next
+    /// reads the flight as it stands. A quiet tick fills it twice: the
+    /// catch-up and the steps.
     pub(super) fn refresh_frame(&mut self) {
         self.sim.frame(&mut self.frame);
     }
@@ -1137,8 +1140,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Checks, in this crate's tests, that the kept frame is the flight's
     /// as it stands: every point that changes the flight before a draw
     /// refreshes it ([`FlightView::refresh_frame`]). A test that changes
-    /// the session behind the view's back resyncs it first
-    /// ([`FlightView::resync`]).
+    /// the flight behind the view's back does it through
+    /// [`FlightView::change_sim`], as the view's own callers do.
     #[cfg(test)]
     pub(super) fn check_frame_kept(&self) {
         let fresh = self.frame_now();
@@ -1148,13 +1151,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// The player's ship's place in the frame, filled afresh first: for
-    /// the code that changes the flight and then draws the ship where it
-    /// is ([`FlightView::place_ship`], `FlightView::lay_out`,
-    /// [`FlightView::assign`]), which reads it before or without a
-    /// catch-up.
-    pub(super) fn player_place_now(&mut self) -> ShipPlace {
-        self.refresh_frame();
+    /// The player's ship's place in the kept frame: for the code that
+    /// changes the flight and then draws the ship where it is
+    /// ([`FlightView::place_ship`], `FlightView::lay_out`,
+    /// [`FlightView::assign`]), whose change filled the frame afresh.
+    pub(super) fn player_place(&self) -> ShipPlace {
         self.frame.player().place()
     }
 

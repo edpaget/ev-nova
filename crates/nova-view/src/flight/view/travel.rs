@@ -235,9 +235,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
             }
             self.show_course();
         }
+        // A redraw changes the flight only through a command, which fills
+        // the kept frame afresh, so it needs no fill after it.
         redraw(self, redrawn);
-        // And again after the redraws, which may have changed it.
-        self.refresh_frame();
         if self.map_open && (redrawn.galaxy || self.map_seen.as_ref() != Some(&self.frame.map_key))
         {
             self.redraw_map();

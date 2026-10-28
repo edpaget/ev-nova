@@ -7,7 +7,7 @@
 //! [`FakeFlight`]; `tests/it/flight_seam.rs` runs [`check_contract`] on a
 //! real [`SessionFlight`](crate::flight::SessionFlight).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
 use nova_sim::brackets::{NavBrackets, TargetBrackets};
@@ -73,8 +73,9 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// ([`FakeFlight::fail`]), it reports why ([`FlightSim::failure`]) and
 /// refuses every command, still recording each. It is the developer
 /// tools' desk too ([`DevDesk`]), reading as scripted and recording each
-/// edit ([`FakeFlight::desk_mut`], [`FakeFlight::edits`]). One with
-/// nothing scripted meets [`check_contract`].
+/// edit ([`FakeFlight::desk_mut`], [`FakeFlight::edits`]). It counts the
+/// frames it fills ([`FakeFlight::fills`]). One with nothing scripted
+/// meets [`check_contract`].
 #[derive(Clone, Debug, Default)]
 pub struct FakeFlight {
     frame: FlightFrame,
@@ -100,6 +101,7 @@ pub struct FakeFlight {
     failure: Option<String>,
     desk: FakeDesk,
     edits: Vec<PilotEdit>,
+    fills: Cell<usize>,
 }
 
 /// What a [`FakeFlight`] answers as the developer tools' desk
@@ -471,6 +473,13 @@ impl FakeFlight {
         &self.edits
     }
 
+    /// How many frames it has filled ([`FlightSim::frame`]): what the
+    /// view's fills per tick, per draw and per key are counted by.
+    #[must_use]
+    pub fn fills(&self) -> usize {
+        self.fills.get()
+    }
+
     /// Notes `ask`.
     fn ask(&self, ask: MapAsk) {
         self.asked.borrow_mut().push(ask);
@@ -481,6 +490,7 @@ impl FlightSim for FakeFlight {
     /// The frame scripted, each gate refused ([`FakeFlight::refuse`])
     /// refused in it whatever the frame set.
     fn frame(&self, into: &mut FlightFrame) {
+        self.fills.set(self.fills.get() + 1);
         into.clone_from(&self.frame);
         for &gate in &self.refused {
             into.gates = into.gates.refusing(gate);
@@ -1745,8 +1755,11 @@ mod tests {
         let mut fake = FakeFlight::new();
         fake.set_frame(stellar(128));
         let mut frame = FlightFrame::default();
+        assert_eq!(fake.fills(), 0);
         fake.frame(&mut frame);
         assert_eq!(frame, stellar(128));
+        fake.frame(&mut frame);
+        assert_eq!(fake.fills(), 2, "each fill counted");
     }
 
     #[test]

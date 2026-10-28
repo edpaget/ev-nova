@@ -1,9 +1,11 @@
-//! The frame the view keeps (rdm:phase/view-sim-seam/phase-7-world-frame):
-//! filled afresh at the end of each input and tick, after each command and
-//! around a catch-up's redraws, so nothing is drawn from a frame older than
-//! the flight; and read afresh where concrete code changes the session and
-//! then draws the ship where it is (a ship swapped, an arrival, a
-//! take-off), so the ship is never drawn on its way from its old place.
+//! The frame the view keeps (rdm:phase/view-sim-seam/phase-7-world-frame,
+//! phase-20-view-frame-fills-per-tick): filled afresh wherever the flight
+//! changes (after each command, each frame's steps, a catch-up's drain and
+//! each change behind the port), so nothing is drawn or read from a frame
+//! older than the flight, and nowhere else, so a quiet tick fills it
+//! twice; and read where code changes the session and then draws the ship
+//! where it is (a ship swapped, an arrival, a take-off), so the ship is
+//! never drawn on its way from its old place.
 
 use super::faked_landing::departed;
 use super::faked_travel::{jump_now, lit};
@@ -54,12 +56,14 @@ fn a_catch_up_redraws_from_the_frame_as_the_events_left_it_and_keeps_it_after() 
         .queue_event(nova_sim::flight_frame::FlightEvent::Session(
             nova_sim::SessionEvent::StellarChanged,
         ));
+    view.sim.queue_answer_showing(Answer::Done, player_at(12.0));
     let seen = std::cell::Cell::new(0.0);
     view.catch_up_then(|view, redrawn| {
         assert!(redrawn.stellar);
         seen.set(view.frame.player().position.x);
-        // A redraw that changes the flight is drawn from its change too.
-        view.sim.set_frame(player_at(12.0));
+        // A redraw changes the flight only through a command, which
+        // fills the kept frame with its change.
+        view.send(FlightCommand::CueCourse);
     });
     assert_eq!(seen.get(), 9.0, "afresh before the redraw");
     assert_eq!(view.frame.player().position.x, 12.0, "and after it");
@@ -159,23 +163,62 @@ fn a_failed_flight_keeps_the_default_frame_through_its_catch_ups() {
 }
 
 #[test]
-fn a_status_redraw_after_a_change_behind_the_port_snapshots_the_change() {
-    // A change behind the port with no resync after it, as the adapter's
-    // own API (a desk edit) makes one.
+fn a_status_redraw_snapshots_a_change_made_through_change_sim() {
+    // A change behind the port, as the adapter's own API makes one,
+    // through the view's `change_sim`, which fills the kept frame.
     let mut view = faked(sol());
     view.redraw_status();
     let before = view.reserves_scene.expect("taken");
     let mut changed = view.frame.clone();
     changed.hud.reserves.fuel = nova_sim::Gauge::full(100.0);
-    view.sim.set_frame(changed);
-    assert_eq!(view.frame.hud.reserves, before, "the kept frame, stale");
+    view.change_sim(|sim| sim.set_frame(changed));
+    assert_eq!(
+        view.reserves_scene,
+        Some(before),
+        "held until the next redraw"
+    );
     view.redraw_status();
     let taken = view.reserves_scene.expect("taken");
     assert_eq!(taken.fuel.now, 100.0, "the change");
-    assert_eq!(
-        view.frame.hud.reserves, taken,
-        "the kept frame filled first"
-    );
+    assert_eq!(view.frame.hud.reserves, taken, "the kept frame's");
+}
+
+// How often the kept frame is filled
+// (rdm:phase/view-sim-seam/phase-20-view-frame-fills-per-tick).
+
+#[test]
+fn a_quiet_tick_fills_the_kept_frame_twice() {
+    let mut view = faked(in_sol());
+    view.tick(TICK);
+    let before = view.sim.fills();
+    view.tick(TICK);
+    assert_eq!(view.sim.fills() - before, 2, "the catch-up and the steps");
+    assert_eq!(sent(&view), [], "a quiet tick sends nothing");
+}
+
+#[test]
+fn a_draw_fills_nothing() {
+    let mut view = faked(in_sol());
+    view.tick(TICK);
+    // The test build checks the kept frame against a fresh fill as it
+    // draws (`FlightView::check_frame_kept`); production has no such fill.
+    let before = view.sim.fills();
+    view.check_frame_kept();
+    let checks = view.sim.fills() - before;
+    let before = view.sim.fills();
+    let mut list = DrawList::new();
+    view.draw(&mut list);
+    assert!(!list.is_empty(), "something drawn");
+    assert_eq!(view.sim.fills() - before, checks, "none but the check's");
+}
+
+#[test]
+fn a_key_that_sends_one_command_fills_once() {
+    let mut view = faked(in_sol());
+    let before = view.sim.fills();
+    tap(&mut view, NAV_OFF_KEY);
+    assert_eq!(sent(&view).len(), 1, "one command: {:?}", sent(&view));
+    assert_eq!(view.sim.fills() - before, 1, "after it");
 }
 
 // Every change behind the port refills the kept frame where it is made

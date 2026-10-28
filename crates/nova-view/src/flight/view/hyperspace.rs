@@ -90,13 +90,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Starts the jump's effect once the frame says the jump itself has
     /// begun ([`FlightFrame::warping`]), or lights the screen, unless it is
     /// playing already; and starts its fade to white once the frame's
-    /// `_hyperGamma` is above 0 ([`FlightFrame::hyper_gamma`]), the frame
-    /// read afresh, as it follows a jump just begun.
+    /// `_hyperGamma` is above 0 ([`FlightFrame::hyper_gamma`]), as the kept
+    /// frame holds them after the steps or the jump just begun.
     ///
     /// [`FlightFrame::warping`]: nova_sim::flight_frame::FlightFrame::warping
     /// [`FlightFrame::hyper_gamma`]: nova_sim::flight_frame::FlightFrame::hyper_gamma
     pub(super) fn start_jump_effect(&mut self) {
-        self.refresh_frame();
         // `_hyperGamma` goes back to -1 on the first pass after the
         // arrival, so it lights only a jump still under way.
         let lit = self.frame.jump_under_way && self.frame.hyper_gamma > 0.0;
@@ -160,7 +159,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// sound of its own (see
     /// [`Effects::apply`](crate::flight::effects::Effects::apply)).
     fn show_arrival_explosions(&mut self, combat: &[CombatEvent]) {
-        let player = self.player_place_now().position;
+        let player = self.player_place().position;
         let scene = self.presentation.scene(player);
         let chance = &mut self.effects_chance;
         for event in combat {
