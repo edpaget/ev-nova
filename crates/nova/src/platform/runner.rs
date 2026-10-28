@@ -7,18 +7,23 @@
 //! quit and Preferences events the system sends (the Dock's Quit, logout,
 //! restart, shutdown, `osascript`'s `quit app`, and Sparkle's quit to
 //! install an update), comes back through the event loop as a
-//! [`MenuPick`] user event, which the app takes as [`WindowEvent::Menu`]
-//! or [`WindowEvent::CheckForUpdates`], and after every event the menu
-//! bar is told what the app now offers (`MenuSync`). The quit event is
-//! the menu's Quit, so it quits as Command-Q does, saving the pilot
-//! flying.
+//! [`LoopEvent::Menu`] user event, which the app takes as
+//! [`WindowEvent::Menu`] or [`WindowEvent::CheckForUpdates`], and after
+//! every event the menu bar is told what the app now offers (`MenuSync`).
+//! The quit event is the menu's Quit, so it quits as Command-Q does,
+//! saving the pilot flying.
 //!
-//! With [`Runner::with_updater_source`] (on macOS, Sparkle's), the app it
-//! opens takes the updater the source gives ([`choose`]) as the window
-//! opens, once `NSApplication` has finished launching, and starts its
-//! background checks; a bundle that names a feed but can't load its
-//! updater says so in the startup report. Without one, the app has no
-//! updater. It needs the OS, so no test runs it.
+//! With [`Runner::with_updater_source`] (on macOS, Sparkle's; on Windows,
+//! WinSparkle's), the app it opens takes the updater the source gives
+//! ([`choose`]) as the window opens, once `NSApplication` has finished
+//! launching, and starts its background checks; a bundle that names a
+//! feed but can't load its updater says so in the startup report. Without
+//! one, the app has no updater. It needs the OS, so no test runs it.
+//!
+//! WinSparkle asks the game to quit, before its installer replaces
+//! `nova.exe`, from a thread of its own: the request comes back through
+//! the event loop's proxy as [`LoopEvent::UpdaterQuit`], which the app
+//! takes on the main thread as the Quit command.
 //!
 //! The event loop's end (`ApplicationHandler::exiting`) is the backstop
 //! for a quit that never reached the game: on macOS a `terminate:` sent
@@ -75,7 +80,7 @@ use super::window::WinitWindow;
 use super::{dialogs, text_event, window_events};
 #[cfg(target_os = "macos")]
 use crate::app::MenuSync;
-use crate::app::{App, AppScreen, Control, Handled, MenuPick, UpdaterSource, WindowEvent, choose};
+use crate::app::{App, AppScreen, Control, Handled, LoopEvent, UpdaterSource, WindowEvent, choose};
 #[cfg(feature = "dev-tools")]
 use crate::devtools::DevTools;
 use crate::exit::OpenFailure;
@@ -116,7 +121,7 @@ pub struct Runner<S> {
     diagnostics: Option<Box<dyn Write>>,
     /// Where the menu bar sends its picks, until it is installed.
     #[cfg(target_os = "macos")]
-    menu_proxy: Option<EventLoopProxy<MenuPick>>,
+    menu_proxy: Option<EventLoopProxy<LoopEvent>>,
     /// What the platform offers to update with, until the app is opened.
     updates: Option<Box<dyn UpdaterSource>>,
     /// The startup report, shared with `main`, which reports the run's
@@ -158,7 +163,7 @@ impl<S: ImageSource> Runner<S> {
     /// installs it, sending each pick through `proxy` as a user event.
     #[cfg(target_os = "macos")]
     #[must_use]
-    pub fn with_menu_proxy(mut self, proxy: EventLoopProxy<MenuPick>) -> Self {
+    pub fn with_menu_proxy(mut self, proxy: EventLoopProxy<LoopEvent>) -> Self {
         self.menu_proxy = Some(proxy);
         self
     }
@@ -291,8 +296,8 @@ fn open(
 /// (`nova::platform::dialogs`): a quit there cancels the panel and ends
 /// the launch, and they are dropped before the loop launches the app. It
 /// needs the OS, so no test runs it.
-pub fn event_loop() -> Result<EventLoop<MenuPick>, EventLoopError> {
-    let mut builder = EventLoop::<MenuPick>::with_user_event();
+pub fn event_loop() -> Result<EventLoop<LoopEvent>, EventLoopError> {
+    let mut builder = EventLoop::<LoopEvent>::with_user_event();
     #[cfg(target_os = "macos")]
     {
         use winit::platform::macos::EventLoopBuilderExtMacOS;
@@ -301,7 +306,7 @@ pub fn event_loop() -> Result<EventLoop<MenuPick>, EventLoopError> {
     builder.build()
 }
 
-impl<S: ImageSource> ApplicationHandler<MenuPick> for Runner<S> {
+impl<S: ImageSource> ApplicationHandler<LoopEvent> for Runner<S> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let Some((images, screen, fonts)) = self.pending.take() else {
             return;
@@ -427,13 +432,14 @@ impl<S: ImageSource> ApplicationHandler<MenuPick> for Runner<S> {
         }
     }
 
-    /// A menu bar pick: the app takes it as its window event
-    /// ([`WindowEvent::Menu`] or [`WindowEvent::CheckForUpdates`]).
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, pick: MenuPick) {
+    /// A menu bar pick or the updater's quit: the app takes it as its
+    /// window event ([`WindowEvent::Menu`] or
+    /// [`WindowEvent::CheckForUpdates`]).
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: LoopEvent) {
         let Some(running) = &mut self.running else {
             return;
         };
-        let exit = running.handle(pick.into()).control == Control::Exit;
+        let exit = running.handle(event.into()).control == Control::Exit;
         running.after_events(event_loop, exit);
     }
 
@@ -480,11 +486,11 @@ impl<S: ImageSource> Running<S> {
     /// events sent through `proxy`. One that can't be installed is a
     /// warning, given back, and the game runs without it.
     #[cfg(target_os = "macos")]
-    fn install_menu(&mut self, proxy: &EventLoopProxy<MenuPick>) -> Vec<String> {
+    fn install_menu(&mut self, proxy: &EventLoopProxy<LoopEvent>) -> Vec<String> {
         // A closed loop drops the pick: the app is exiting.
-        let send = |proxy: EventLoopProxy<MenuPick>| {
+        let send = |proxy: EventLoopProxy<LoopEvent>| {
             move |command| {
-                let _ = proxy.send_event(super::menu_bar::pick(command));
+                let _ = proxy.send_event(LoopEvent::Menu(super::menu_bar::pick(command)));
             }
         };
         let mut warnings = Vec::new();

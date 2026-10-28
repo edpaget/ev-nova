@@ -111,6 +111,15 @@
 //! updater and greys the item; a bundle that names a feed but can't load
 //! Sparkle says so in the startup report.
 //!
+//! On Windows an installed nightly updates itself with WinSparkle, from
+//! the `WinSparkle.dll` the installer puts beside `nova.exe`: it checks
+//! its channel's feed (compiled in from `NOVA_CHANNEL`,
+//! [`nova::winsparkle::FEED`]) in the background once a day. Installing
+//! an update quits the game as the Quit command does, saving the pilot
+//! flying, runs the new installer, and relaunches the game. The portable
+//! zip (no DLL) and a development build don't update; a DLL that is there
+//! but won't load says so in the startup report.
+//!
 //! On Windows `nova.exe` is a Windows-subsystem program, so Explorer opens
 //! no console for it. Started from `cmd`, PowerShell or Windows Terminal,
 //! it attaches to that terminal's console, and its lines print there,
@@ -136,7 +145,7 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nova::app::MenuPick;
+use nova::app::LoopEvent;
 use nova::app::start_screen;
 use nova::audio::{game_audio, music_warning, voice_limit};
 use nova::chance::SplitMix;
@@ -197,11 +206,12 @@ fn run_seed() -> u64 {
 }
 
 /// Runs `runner` on `event_loop` until it exits, the menu bar's picks sent
-/// back through the loop and Sparkle offered as the updater on macOS;
-/// gives the runner back.
+/// back through the loop and Sparkle offered as the updater on macOS, and
+/// WinSparkle on Windows, its quit sent back through the loop; gives the
+/// runner back.
 fn run(
     mut runner: Runner<GameImages<Rc<GameData>>>,
-    event_loop: EventLoop<MenuPick>,
+    event_loop: EventLoop<LoopEvent>,
 ) -> (
     Runner<GameImages<Rc<GameData>>>,
     Result<(), winit::error::EventLoopError>,
@@ -211,6 +221,12 @@ fn run(
         runner = runner
             .with_menu_proxy(event_loop.create_proxy())
             .with_updater_source(Box::new(nova::platform::SparkleSource));
+    }
+    #[cfg(windows)]
+    {
+        runner = runner.with_updater_source(Box::new(nova::platform::winsparkle_source(
+            event_loop.create_proxy(),
+        )));
     }
     let result = event_loop.run_app(&mut runner);
     (runner, result)

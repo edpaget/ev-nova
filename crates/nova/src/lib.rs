@@ -34,6 +34,8 @@
 //!   the startup log and, without a terminal, an alert).
 //! - [`platform`]: the thin winit adapter: event translation, the window
 //!   port over a real window, the event-loop runner and the dialogs.
+//! - [`winsparkle`]: the Windows updater in the core's terms: WinSparkle's
+//!   calls as a port, its startup sequence, and when there is no updater.
 //!
 //! With the `dev-tools` feature (`mise run dev`), `devtools` draws the
 //! developer tools overlay with egui. Without it, egui is not linked.
@@ -57,3 +59,4 @@ pub mod rulebook;
 pub mod saves;
 pub mod settings;
 pub mod startup;
+pub mod winsparkle;

@@ -8,7 +8,7 @@ use std::rc::Rc;
 use nova_view::MenuCommand;
 
 use super::*;
-use crate::app::{MenuPick, Updater};
+use crate::app::{LoopEvent, MenuPick, Updater};
 
 /// What the recording updater was asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +118,71 @@ fn without_an_updater_check_for_updates_does_nothing_and_cannot_check() {
     );
     assert_eq!(app.screen().commands, []);
     assert_eq!(app.screen().inputs, 0);
+}
+
+/// Answers the Quit command by quitting, as the game's router does on
+/// every screen, and keeps the window open on a close, as its main menu
+/// does to ask the quit question; records what it was asked, and counts
+/// the quits it is told of.
+#[derive(Default)]
+struct QuitScreen {
+    commands: Vec<MenuCommand>,
+    closes: usize,
+    quits: usize,
+}
+
+impl Screen for QuitScreen {
+    fn input(&mut self, _input: &Input) -> ScreenAction {
+        ScreenAction::None
+    }
+
+    fn tick(&mut self, _dt: Duration) {}
+
+    fn draw(&self, _list: &mut DrawList) {}
+
+    fn menu_command(&mut self, command: MenuCommand) -> ScreenAction {
+        self.commands.push(command);
+        if command == MenuCommand::Quit {
+            ScreenAction::Quit
+        } else {
+            ScreenAction::None
+        }
+    }
+
+    fn close_requested(&mut self) -> bool {
+        self.closes += 1;
+        false
+    }
+
+    fn quit(&mut self) {
+        self.quits += 1;
+    }
+}
+
+#[test]
+fn the_updater_s_quit_ends_the_game_as_the_quit_command_does() {
+    let quit_by = |event: WindowEvent| {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = App::new(&window, NoImages, QuitScreen::default());
+        let control = app.handle(event, &mut window, &mut RecordingGpu::new());
+        let screen = app.screen();
+        (
+            control,
+            screen.commands.clone(),
+            screen.closes,
+            screen.quits,
+        )
+    };
+    let updater = quit_by(LoopEvent::UpdaterQuit.into());
+    assert_eq!(updater, quit_by(WindowEvent::Menu(MenuCommand::Quit)));
+    let (control, commands, closes, quits) = updater;
+    assert_eq!(control, Control::Exit, "it quits at once");
+    assert_eq!(commands, [MenuCommand::Quit]);
+    assert_eq!(quits, 1, "told once, so the pilot is saved");
+    assert_eq!(
+        closes, 0,
+        "never asked as a close, which keeps this window open"
+    );
 }
 
 #[test]

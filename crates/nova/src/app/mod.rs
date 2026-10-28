@@ -138,7 +138,9 @@
 //! it to check now and never reaches the screen, and the menu bar offers
 //! the item only when the updater can check ([`App::menu_enabled`]).
 //! [`choose`] picks the updater at launch from what the platform offers
-//! ([`UpdaterSource`]).
+//! ([`UpdaterSource`]). When the updater's installer needs the game gone,
+//! its request arrives as [`LoopEvent::UpdaterQuit`], which is the Quit
+//! command.
 //!
 //! # Quitting
 //!
@@ -159,12 +161,14 @@ use nova_view::{
 };
 
 mod fullscreen;
+mod loop_event;
 mod menu;
 mod scaling;
 pub mod screen;
 mod updates;
 mod wheel;
 
+pub use loop_event::LoopEvent;
 pub use menu::{MenuPick, MenuPort, MenuSync};
 pub use screen::{AppScreen, Showing, start_screen};
 pub use updates::{Chosen, NoUpdater, Updater, UpdaterSource, choose};

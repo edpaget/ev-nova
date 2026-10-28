@@ -23,7 +23,16 @@ exclude_re = [
     # so no mutant of it can fail a build or a test here. The windows-latest
     # CI leg runs its tests (`nova-win32/tests/it`, `nova/tests/it/windows_exe.rs`).
     "nova-win32/src/console\\.rs:",
+    "nova-win32/src/winsparkle\\.rs:",
     "nova/src/platform/console\\.rs:[0-9]+:[0-9]+: replace <impl StdConsole for Win32Console>",
+    # WinSparkle's Windows forwards, each one call into nova-win32: the
+    # windows-latest legs run `a_test_binary_has_no_dll_beside_it` and
+    # nova-win32's real-DLL test (`NOVA_WINSPARKLE_DLL`); the decisions are
+    # `nova::winsparkle`'s, tested on every host.
+    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace <impl WinSparkleApi for WinSparkleDll>",
+    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace <impl WinSparkleLoader for DllLoader>",
+    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace DllLoader::beside_exe ",
+    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace winsparkle_source ",
     "nova/src/platform/window\\.rs:[0-9]+:[0-9]+: replace with_exe_icon ",
     # Linux- and BSD-only code: the window's app id (`with_app_id`), which
     # winit gives no way to read back, so no test can see it even there.
@@ -280,7 +289,7 @@ exclude_re = [
     # `exit::exit`, `Report::take_alert`) are mutated and tested, and
     # `MenuBar::install` / `set_enabled` and `AppleEvents::install` run on
     # the main thread in nova-appkit's `tests/it`.
-    "impl ApplicationHandler<MenuPick> for Runner<S>>::(resumed|window_event|user_event|about_to_wait|exiting)",
+    "impl ApplicationHandler<LoopEvent> for Runner<S>>::(resumed|window_event|user_event|about_to_wait|exiting)",
     "nova/src/platform/runner\\.rs:.*replace Running<S>::(after_events|sync_menu|install_menu|print_reports) with \\(\\)$",
     "nova/src/platform/runner\\.rs:.*replace Running<S>::install_menu -> Vec<String> with ",
     # `AppleEvents`'s drop removes its handlers from `NSAppleEventManager`.
