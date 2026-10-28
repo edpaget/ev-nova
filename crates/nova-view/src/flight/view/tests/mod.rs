@@ -96,6 +96,7 @@ mod faked_travel;
 mod faked_wording;
 mod faked_world;
 mod flying;
+mod frames;
 mod hyperspace;
 mod kept_frame;
 mod landing;
@@ -117,6 +118,8 @@ mod stellars;
 mod stepping;
 mod widescreen;
 mod world_layers;
+
+use frames::*;
 
 /// The first `chär` flies ship 128 (an average ship that turns 3° a
 /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system
@@ -2259,14 +2262,6 @@ fn meets_the_contract(view: &View, at: &str) {
 /// A view over a scripted flight ([`FakeFlight`]), for the component
 /// tests of the code on the port.
 type Faked = FlightView<FakeCatalog, FakeFlight>;
-
-/// The frame of a flight in Sol (130), nav off, nothing plotted.
-fn in_sol() -> FlightFrame {
-    FlightFrame {
-        system: SystemId(130),
-        ..FlightFrame::default()
-    }
-}
 
 /// A view over a flight scripted to show `frame`, read from [`catalog`].
 fn faked(frame: FlightFrame) -> Faked {

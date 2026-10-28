@@ -9,7 +9,6 @@
 
 use super::faked_hud::barred_by;
 use super::faked_travel::{faked_lasts, sent_but_lines};
-use super::faked_world::{in_sol_with, the_player_at};
 use super::*;
 use crate::flight::radar::RadarScene;
 use crate::flight::target::TargetPanel;

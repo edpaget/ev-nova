@@ -4,7 +4,7 @@
 //! from the frame's HUD and target parts, and the keys and loads they
 //! send through the port. Kept apart from `tests/mod.rs`, which is large.
 
-use super::faked_world::{in_sol_with, npc_129, the_player_at, world, world_by};
+use super::faked_world::{world, world_by};
 use super::*;
 use crate::flight::radar::RadarShip;
 use nova_sim::flight_frame::{FrameShip, FrameTarget};
@@ -52,25 +52,6 @@ pub(super) fn npc_of_140(id: u32) -> FrameShip {
     FrameShip {
         govt: Some(GovtId(140)),
         ..npc_129(id, Vec2::new(100.0, -100.0), 0.0)
-    }
-}
-
-/// A frame in Sol holding the player and `npcs`, with ship 129's traffic,
-/// whose target cards are read.
-pub(super) fn among(npcs: Vec<FrameShip>) -> FlightFrame {
-    let mut ships = vec![the_player_at(Vec2::ZERO, 0.0)];
-    ships.extend(npcs);
-    FlightFrame {
-        traffic_ships: vec![ShipId(129)],
-        ..in_sol_with(ships)
-    }
-}
-
-/// [`among`], with the target as `target` says.
-pub(super) fn targeted(npcs: Vec<FrameShip>, target: FrameTarget) -> FlightFrame {
-    FlightFrame {
-        target: Some(target),
-        ..among(npcs)
     }
 }
 

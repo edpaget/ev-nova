@@ -6,9 +6,8 @@
 //! session does as it starts, steps and begins is nova-sim's, named in
 //! the commits that moved them.
 
-use super::faked_docked::in_system;
 use super::faked_screen::{in_flight, sent_since, warp_ends};
-use super::faked_travel::{jump_now, sol};
+use super::faked_travel::jump_now;
 use super::*;
 use nova_sim::SessionEvent;
 use nova_sim::flight_frame::FlightEvent;

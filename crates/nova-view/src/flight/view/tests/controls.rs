@@ -8,7 +8,7 @@ fn double_time_shows_its_icon_at_the_top_left_over_the_red_alert() {
     // Whether double time is on, and the alert, are the frame's
     // (`a_fill_writes_the_murk_the_background_double_time_the_gamma_and_the_traffic`,
     // `a_fill_writes_the_red_alert_icon_shown`).
-    let mut frame = super::faked_hud::among(Vec::new());
+    let mut frame = among(Vec::new());
     frame.double_time = true;
     frame.hud.red_alert = Some(nova_sim::AlertIcon::Red);
     let mut view = super::faked_world::world(catalog(), frame);
@@ -627,11 +627,8 @@ fn faked_double_time_drawn(view: &Faked) -> bool {
 /// A view over a flight showing the player at rest and NPC 0 of ship 129
 /// at (100, -100), and its id.
 fn faked_with_npc() -> (Faked, NpcId) {
-    let npc = super::faked_world::npc_129(0, Vec2::new(100.0, -100.0), 90.0);
-    let view = super::faked_world::world(
-        trafficked(&[130], 1, 129, 3),
-        super::faked_hud::among(vec![npc]),
-    );
+    let npc = npc_129(0, Vec2::new(100.0, -100.0), 90.0);
+    let view = super::faked_world::world(trafficked(&[130], 1, 129, 3), among(vec![npc]));
     (view, NpcId(0))
 }
 

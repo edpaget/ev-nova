@@ -6,19 +6,13 @@
 //! large.
 
 use super::faked_travel::{faked_lasts, sent_but_lines, shown_to_flight};
-use super::faked_world::{in_sol_with, raise, the_player_at, world};
+use super::faked_world::{raise, world};
 use super::*;
 use crate::flight::flash::ShieldFlash;
 use crate::flight::jump::{ARRIVAL_FLASH_FOR, FADE_IN_FOR, JumpPhase};
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::landing::LandOutcome;
 use nova_sim::{GateKind, GateRefusal, LandPress, LandingRefusal, SessionEvent, SimSound};
-
-/// The frame of a flight in Sol, the player of ship 128 alone at its
-/// centre.
-fn sol() -> FlightFrame {
-    in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
-}
 
 /// The answer to a press that requested clearance at `stellar`.
 fn requested(stellar: i16) -> Answer {
@@ -675,15 +669,6 @@ fn a_borders_change_on_the_hypergate_map_saves_but_one_docked_is_kept_unsaved() 
 
 // The take-off and the settling.
 
-/// [`sol`] docked at `stellar`, the player at `at`.
-fn docked_at(stellar: i16, at: Vec2) -> FlightFrame {
-    FlightFrame {
-        landed: Some(StellarId(stellar)),
-        ships: vec![the_player_at(at, 0.0)],
-        ..sol()
-    }
-}
-
 /// The answer to a take-off from `stellar`, nothing settled.
 fn departed(stellar: i16) -> Answer {
     Answer::Departed(nova_sim::Departure {
@@ -777,7 +762,7 @@ fn while_docked_the_radar_shows_only_the_player_until_the_take_off() {
 
 #[test]
 fn a_take_off_draws_its_new_traffic_with_its_sprites_and_none_from_before_the_landing() {
-    let before = super::faked_world::npc_129(0, Vec2::new(100.0, -100.0), 0.0);
+    let before = npc_129(0, Vec2::new(100.0, -100.0), 0.0);
     let mut view = world(
         armed(1, &[BLASTER]),
         FlightFrame {
@@ -785,7 +770,7 @@ fn a_take_off_draws_its_new_traffic_with_its_sprites_and_none_from_before_the_la
             ..docked_at(128, Vec2::ZERO)
         },
     );
-    let after = super::faked_world::npc_129(2, Vec2::new(-100.0, 100.0), 0.0);
+    let after = npc_129(2, Vec2::new(-100.0, 100.0), 0.0);
     view.sim.queue_answer_showing(
         departed(128),
         FlightFrame {

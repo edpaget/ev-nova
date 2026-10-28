@@ -10,8 +10,8 @@ use nova_sim::flight_frame::{FrameShip, PassReport, StepReport, StepRun};
 
 use super::combat::{line_in, podding};
 use super::faked_world::{
-    asteroid_at, beam, box_at, in_sol_with, npc_129, raise, saying, shot_of, targeting,
-    the_player_at, world, world_list, world_list_with,
+    asteroid_at, beam, box_at, raise, saying, shot_of, targeting, world, world_list,
+    world_list_with,
 };
 use super::missions::rocky;
 use super::shots::smoking_trailing_blaster;

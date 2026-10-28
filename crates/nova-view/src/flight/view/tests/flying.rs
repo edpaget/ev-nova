@@ -1,6 +1,5 @@
 use super::faked_flight::{at_rest, hold, last_controls, ship_at, tick_to, ticked};
-use super::faked_hud::{among, barred, barred_by, flown};
-use super::faked_world::in_sol_with;
+use super::faked_hud::{barred, barred_by, flown};
 use super::*;
 use nova_sim::Face;
 use nova_sim::status_cargo::StatusCargo;
@@ -1018,7 +1017,7 @@ fn the_targets_blip_blinks_bright_every_eight_ticks_under_both_readings() {
         } else {
             Rulebook::default()
         };
-        let npc = super::faked_world::npc_129(0, Vec2::new(100.0, -100.0), 90.0);
+        let npc = npc_129(0, Vec2::new(100.0, -100.0), 90.0);
         let mut view = barred_by(trafficked(&[130], 1, 129, 3), among(vec![npc]), &rules);
         ticked(&mut view, 1);
         super::faked_hud::changes(&mut view, |frame| frame.target = Some(record::target(0)));

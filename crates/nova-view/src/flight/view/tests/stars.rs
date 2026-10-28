@@ -34,8 +34,7 @@ impl Chance for Counting {
 /// A scripted flight from `catalog` of the player alone at `at` in Sol of
 /// murk `murk` as loaded, its effects rolled on a [`Counting`] chance.
 fn faked_counted(catalog: FakeCatalog, at: Vec2, murk: i16) -> Faked {
-    let mut frame =
-        super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(at, 0.0)]);
+    let mut frame = in_sol_with(vec![the_player_at(at, 0.0)]);
     frame.system_murk = murk;
     let mut view = super::faked_world::world(catalog, frame);
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Counting::default()));
@@ -75,7 +74,7 @@ fn by_the_other_reading_the_stand_in_is_drawn_and_no_star_scattered() {
     let rules = Rulebook::default().with_override(RuleKey::FlightStarfield, RuleSource::Bible);
     let mut view = super::faked_world::world_by(
         starry(),
-        super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
         &rules,
     );
     caught_up(&mut view);
@@ -126,7 +125,7 @@ fn a_system_entered_with_no_starfield_reset_keeps_the_stars() {
     let before = faked_stars(&view);
     view.sim.set_frame(FlightFrame {
         system: SystemId(131),
-        ..super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)])
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
     });
     view.sim
         .queue_event(nova_sim::flight_frame::FlightEvent::Session(

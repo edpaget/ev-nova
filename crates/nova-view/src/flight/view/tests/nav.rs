@@ -1,7 +1,7 @@
 use super::faked_hud::{
-    among, barred, barred_by, cargo_texts, changes, flown, hud_tick, nav_of, nav_texts, targeted,
+    barred, barred_by, cargo_texts, changes, flown, hud_tick, nav_of, nav_texts,
 };
-use super::faked_world::{in_sol_with, npc_129, the_player_at, world};
+use super::faked_world::world;
 use super::*;
 use nova_sim::flight_frame::FrameShip;
 use nova_sim::status_cargo::StatusCargo;
@@ -27,8 +27,7 @@ fn a_and_b() -> View {
 /// A scripted flight in Sol showing Earth and the Moon, the player at the
 /// centre.
 fn faked_sol_scene() -> Faked {
-    let mut frame =
-        super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]);
+    let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
     frame.nav_mode = NavMode::Stellar(None);
     super::faked_world::world(catalog(), frame)
 }
@@ -210,8 +209,7 @@ fn a_stellar_whose_sprite_cannot_be_read_is_bracketed_at_half_64() {
         sprite: Err("no rlëD".to_owned()),
         ..stellar(131, "Broken", (100, 0), 1)
     };
-    let mut frame =
-        super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]);
+    let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
     frame.stellars.push(record::stellar(StellarId(131)));
     let mut view = super::faked_world::world(
         FakeCatalog {
@@ -842,14 +840,6 @@ fn the_alert_icon_is_drawn_over_the_brackets() {
 
 // On a scripted flight: what the nav keys send, and what the nav area
 // shows of the frame.
-
-/// The nav mode in Sol `mode`.
-fn sol_in(mode: NavMode) -> FlightFrame {
-    FlightFrame {
-        nav_mode: mode,
-        ..in_sol()
-    }
-}
 
 /// Presses `k` as flight's input does for a key with no arm of its own
 /// ([`FlightView::nav_key`]), then lets it go.

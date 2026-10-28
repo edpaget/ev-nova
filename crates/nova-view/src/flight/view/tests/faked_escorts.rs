@@ -9,7 +9,7 @@
 //! apart from `tests/mod.rs`, which is large.
 
 use super::faked_travel::{faked_lasts, sent_but_lines};
-use super::faked_world::{in_sol_with, the_player_at, world, world_list};
+use super::faked_world::{world, world_list};
 use super::*;
 use crate::flight::escorts::{ABSENT_ROW, MENU_AT, MENU_HEIGHT, MENU_TIMEOUT, MENU_WIDTH};
 use nova_sim::flight_frame::{FlightEvent, FrameHud};
@@ -427,7 +427,7 @@ fn an_escort_key_the_flight_does_not_take_sends_nothing() {
 
 #[test]
 fn the_players_escort_or_fighter_is_bracketed_green() {
-    let mut frame = super::faked_hud::among(vec![super::faked_hud::npc_of_140(0)]);
+    let mut frame = among(vec![super::faked_hud::npc_of_140(0)]);
     frame.target = Some(record::target(0));
     frame.hud.target_brackets = Some(nova_sim::brackets::TargetBrackets {
         npc: NpcId(0),
@@ -476,7 +476,7 @@ fn labelled(tag: Option<nova_sim::TargetTag>) -> Faked {
         tag,
         ..record::target(0)
     };
-    let frame = super::faked_hud::targeted(vec![super::faked_hud::npc_of_140(0)], target);
+    let frame = targeted(vec![super::faked_hud::npc_of_140(0)], target);
     let mut view = super::faked_hud::barred(armed(1, &[]), frame);
     view.metrics = Some(super::super::Metrics(Rc::new(
         crate::text::fixture::MonoMetrics,

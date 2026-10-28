@@ -4,7 +4,7 @@
 //! scripted frame and scripted answers, the commands it sends, what it says
 //! and what it draws. Kept apart from `tests/mod.rs`, which is large.
 
-use super::faked_world::{in_sol_with, the_player_at, world};
+use super::faked_world::world;
 use super::*;
 use crate::flight::escorts::fighters_abandoned_message;
 use crate::flight::jump::{FADE_IN_FOR, FADE_OUT_FOR, JumpEffect, JumpPhase};
@@ -352,21 +352,6 @@ fn the_flight_keys_held_are_the_views() {
 }
 
 // The jump.
-
-/// The frame of an intact flight in Sol, the player of ship 128 alone at
-/// its centre.
-pub(super) fn sol() -> FlightFrame {
-    in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
-}
-
-/// [`sol`] with a jump under way, its own warp begun as `warping` says.
-pub(super) fn under_way(warping: bool) -> FlightFrame {
-    FlightFrame {
-        jump_under_way: true,
-        warping,
-        ..sol()
-    }
-}
 
 /// Shows `frame` from now on, the kept frame filled from it, as a step
 /// leaves it.

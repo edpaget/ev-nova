@@ -6,10 +6,7 @@
 //! the stand-in's dots) are placed from the same anchor. On
 //! [`FakeFlight`]: the frames are scripted.
 
-use super::faked_world::{
-    faked_ship_sprites, in_sol_with, npc_129, shows, the_player_at, world_by, world_list,
-    world_list_with,
-};
+use super::faked_world::{faked_ship_sprites, shows, world_by, world_list, world_list_with};
 use super::*;
 use crate::flight::brackets;
 

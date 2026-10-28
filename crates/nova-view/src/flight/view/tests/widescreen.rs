@@ -5,8 +5,7 @@
 //! course map in its 1024-wide frame, centred.
 
 use super::faked_world::{
-    faked_ship_sprites, in_sol_with, npc_129, saying, targeting, the_player_at, world, world_list,
-    world_list_with,
+    faked_ship_sprites, saying, targeting, world, world_list, world_list_with,
 };
 use super::*;
 use crate::flight::escorts::MENU_KEY;

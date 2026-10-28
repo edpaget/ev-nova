@@ -8,7 +8,6 @@
 //! large.
 
 use super::faked_travel::{faked_lasts, sent_but_lines};
-use super::faked_world::{in_sol_with, the_player_at};
 use super::*;
 use nova_sim::escort_dialog::{EscortButton, EscortDialogView, UpgradeLine};
 use nova_sim::flight_frame::FlightEvent;
@@ -210,7 +209,7 @@ fn answers_haggles_and_hanging_up_send_their_commands_and_give_back_the_answers(
 
 #[test]
 fn hanging_up_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
-    let mut view = super::faked_hud::barred(catalog(), super::faked_hud::among(Vec::new()));
+    let mut view = super::faked_hud::barred(catalog(), among(Vec::new()));
     for _ in 0..3 {
         super::faked_hud::hud_tick(&mut view);
     }
@@ -305,7 +304,7 @@ fn y_on_a_fleet_escort_holds_its_dialog_once_and_its_presses_send_their_buttons(
 
 #[test]
 fn the_escort_dialogs_close_redraws_the_radar_and_a_refused_press_does_not() {
-    let mut view = super::faked_hud::barred(catalog(), super::faked_hud::among(Vec::new()));
+    let mut view = super::faked_hud::barred(catalog(), among(Vec::new()));
     super::faked_hud::hud_tick(&mut view);
     let stale = RadarScene::default();
     view.radar_scene = Some(stale.clone());

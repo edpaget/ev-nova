@@ -6,7 +6,7 @@
 //! named in the commits that moved them.
 
 use super::faked_flight::last_controls;
-use super::faked_travel::{jump_now, lit, sol, under_way};
+use super::faked_travel::{jump_now, lit};
 use super::faked_world::world;
 use super::*;
 use crate::SoundPrefs;
@@ -508,16 +508,6 @@ fn i_while_disabled_is_taken() {
 }
 
 // The keys held across the arrival.
-
-/// The frame Alpha Centauri (131) shows once arrived: the player at its
-/// centre, Proxima (140) its one stellar, no jump under way.
-fn in_alpha() -> FlightFrame {
-    FlightFrame {
-        system: SystemId(131),
-        stellars: vec![record::stellar(StellarId(140))],
-        ..sol()
-    }
-}
 
 /// Brings `view`'s warp to its end: the frame says the end is due, and
 /// the flight answers the arrival showing [`in_alpha`], telling the

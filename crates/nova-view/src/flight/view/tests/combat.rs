@@ -1,5 +1,5 @@
-use super::faked_hud::{among, barred, barred_by, flown, hud_tick, targeted};
-use super::faked_world::{in_sol_with, npc_129, shows, the_player_at, world, world_list};
+use super::faked_hud::{barred, barred_by, flown, hud_tick};
+use super::faked_world::{shows, world, world_list};
 use super::*;
 use nova_sim::flight_frame::{FrameShip, FrameTarget, PassReport, ShipPlace, StepReport, StepRun};
 

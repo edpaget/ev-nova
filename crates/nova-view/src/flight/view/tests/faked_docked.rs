@@ -10,7 +10,6 @@ use super::faked_shops::{
     EARTH, PROXIMA, UNDER_129, WHOLE_BAR, at_earth, brief, docked, docked_on, docked_upgrading,
     fuelled, full, leaves, load, marked_by_the_shipyard, upgrading, writes_nav,
 };
-use super::faked_world::{in_sol_with, the_player_at};
 use super::*;
 use crate::system::SystemScene;
 use nova_sim::flight_frame::FlightEvent;
@@ -919,17 +918,6 @@ fn in_port_a_shift_click_builds_the_course_and_the_close_cues_nothing() {
 }
 
 // The settling's catch-up.
-
-/// A frame in system `system`, the player alone at the centre in ship
-/// `class`, `landed` on Earth or not.
-pub(super) fn in_system(system: i16, class: i16, landed: bool) -> FlightFrame {
-    FlightFrame {
-        system: SystemId(system),
-        landed: landed.then_some(StellarId(128)),
-        ships: vec![record::player(class, Vec2::ZERO, 0.0)],
-        ..in_sol()
-    }
-}
 
 /// Settles `view`'s flight, which tells what `events` say and leaves
 /// `after`.

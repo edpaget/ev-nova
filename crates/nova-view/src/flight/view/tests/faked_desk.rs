@@ -4,7 +4,6 @@
 //! tests) and the adapter's forwards `sim_adapter`'s; a desk edit on a
 //! real flight, then a resync, is `tests/it/flight_seam.rs`'s.
 
-use super::faked_docked::in_system;
 use super::*;
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::{DeskReading, GameDate, Reserves, SessionEvent};

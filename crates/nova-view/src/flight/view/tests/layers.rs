@@ -131,7 +131,7 @@ fn faked_mid_fight() -> Faked {
             lights: true,
             ..nova_sim::combat::ship_frames::FrameSpec::NONE
         },
-        ..super::faked_world::the_player_at(Vec2::ZERO, 0.0)
+        ..the_player_at(Vec2::ZERO, 0.0)
     };
     let frame = FlightFrame {
         shots: vec![super::faked_world::shot_of(
@@ -140,10 +140,7 @@ fn faked_mid_fight() -> Faked {
             Vec2::new(0.0, -40.0),
             0.0,
         )],
-        ..super::faked_world::in_sol_with(vec![
-            player,
-            super::faked_world::npc_129(1, Vec2::new(-50.0, 0.0), 0.0),
-        ])
+        ..in_sol_with(vec![player, npc_129(1, Vec2::new(-50.0, 0.0), 0.0)])
     };
     let mut view = super::faked_world::world(catalog, frame);
     view.overlays = TITLED;
@@ -206,10 +203,8 @@ fn a_fights_world_and_its_target_layer_are_world_and_every_text_overlay() {
 
 #[test]
 fn the_message_line_is_overlay_text_drawn_among_the_world() {
-    let mut view = super::faked_world::world(
-        starry(),
-        super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]),
-    );
+    let mut view =
+        super::faked_world::world(starry(), in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
     view.reset_stars();
     super::faked_world::saying(&mut view, TOO_CLOSE, 250);
     let list = super::faked_world::world_list(&view);
@@ -249,10 +244,8 @@ fn a_placeholders_box_is_world_and_its_reason_overlay() {
         sheet: Err("no shän 128 for shïp 128".to_owned()),
         ..catalog()
     };
-    let view = super::faked_world::world(
-        sheetless,
-        super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]),
-    );
+    let view =
+        super::faked_world::world(sheetless, in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
     let list = super::faked_world::world_list(&view);
     let mut placeholder = DrawList::new();
     crossed_box(&mut placeholder, PLAYER_AT, PLACEHOLDER_SIZE, PLACEHOLDER);
@@ -325,10 +318,8 @@ fn the_stars_are_world_through_a_jump_and_the_jumps_fade_overlay() {
 #[test]
 fn the_floating_map_and_the_escort_menu_are_world_and_their_text_overlay() {
     use crate::flight::escorts::{MENU_AT, MENU_HEIGHT, MENU_WIDTH};
-    let mut view = super::faked_world::world(
-        catalog(),
-        super::faked_world::in_sol_with(vec![super::faked_world::the_player_at(Vec2::ZERO, 0.0)]),
-    );
+    let mut view =
+        super::faked_world::world(catalog(), in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
     let mut hud = nova_sim::flight_frame::FrameHud::default();
     hud.escort_rows[0].present = true;
     view.escort_menu.toggle(view.elapsed, &hud.escort_rows);

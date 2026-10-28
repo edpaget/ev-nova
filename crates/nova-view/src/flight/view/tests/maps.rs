@@ -102,7 +102,7 @@ fn closing_the_map_after_a_tab_shows_its_selection_in_the_nav_area() {
     // Tab's selection and the cue's, with no course to cue, are nova-sim's
     // (`the_maps_cycle_selects_the_next_link_in_mode_3`,
     // `the_cue_selects_the_courses_next_hop`).
-    let mut view = super::faked_hud::barred(catalog(), super::faked_hud::among(Vec::new()));
+    let mut view = super::faked_hud::barred(catalog(), among(Vec::new()));
     view.sim.map_mut().drawing = Some(sol_drawing());
     view.open_map();
     let alpha = NavMode::Hyperspace(Some(SystemId(131)));
@@ -403,7 +403,7 @@ fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
     // The course map, closed by its key or as Escape does, both through
     // `close_map`'s port half; the hypergate map's closes are
     // `closing_the_hypergate_map_redraws_the_radar_at_once_leaving_the_timer_and_blink`'s.
-    let mut view = super::faked_hud::barred(catalog(), super::faked_hud::among(Vec::new()));
+    let mut view = super::faked_hud::barred(catalog(), among(Vec::new()));
     view.sim.map_mut().drawing = Some(sol_drawing());
     for _ in 0..3 {
         super::faked_hud::hud_tick(&mut view);
@@ -691,16 +691,6 @@ fn in_double_time_the_fade_keeps_its_ticks() {
     assert_eq!(alpha_of(&view), Some(247));
     frame(&mut view, mac_ticks(31));
     assert_eq!(alpha_of(&view), None);
-}
-
-/// A flight in Sol with a jump under way, Alpha Centauri (131)
-/// selected in mode 3.
-fn jumping_to_alpha() -> FlightFrame {
-    FlightFrame {
-        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
-        jump_under_way: true,
-        ..in_sol()
-    }
 }
 
 #[test]
@@ -1066,7 +1056,7 @@ fn a_zoom_shows_the_map_again() {
 #[test]
 fn the_map_is_drawn_after_the_double_time_icon_and_before_the_escort_menu() {
     // The escort menu's rows are the frame's.
-    let mut frame = super::faked_hud::among(Vec::new());
+    let mut frame = among(Vec::new());
     frame.double_time = true;
     frame.hud.escort_rows[0].present = true;
     let mut view = super::faked_world::world(catalog(), frame);
@@ -1853,17 +1843,6 @@ fn clear_route_button() -> Point {
     crate::galaxy::buttons::MapButtons::new(crate::galaxy::dialog::DIALOG_ORIGIN)
         .rect(crate::galaxy::buttons::MapButton::ClearRoute)
         .center()
-}
-
-/// A flight in Sol with a course to Alpha Centauri (131) plotted, its
-/// first hop selected.
-fn plotted_to_alpha() -> FlightFrame {
-    FlightFrame {
-        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
-        course_shown: vec![SystemId(131)],
-        course_plotted: true,
-        ..in_sol()
-    }
 }
 
 /// What the flight answers a plain click on the course map that selects

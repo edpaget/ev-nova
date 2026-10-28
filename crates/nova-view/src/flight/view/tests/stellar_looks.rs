@@ -11,7 +11,7 @@ use nova_sim::DrawnSheet;
 use nova_sim::SessionEvent;
 use nova_sim::flight_frame::{FlightEvent, FrameStellar};
 
-use super::faked_world::{in_sol_with, the_player_at, world, world_list};
+use super::faked_world::{world, world_list};
 use super::stellars::proxima_in_sol;
 use super::*;
 

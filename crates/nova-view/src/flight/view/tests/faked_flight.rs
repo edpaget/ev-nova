@@ -4,7 +4,7 @@
 //! player's places a step apart, and the frame's player record. Kept
 //! apart from `tests/mod.rs`, which is large.
 
-use super::faked_world::{in_sol_with, the_player_at, world};
+use super::faked_world::world;
 use super::*;
 use nova_sim::flight_frame::{FrameShip, StepReport, StepRun};
 

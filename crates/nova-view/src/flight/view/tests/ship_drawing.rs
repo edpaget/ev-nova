@@ -8,7 +8,7 @@
 //! `ship_frames`, `ship_lights` and nova-sim's `glow`, named where a test
 //! leans on them); the view draws what the record says.
 
-use super::faked_world::{in_sol_with, shows, the_player_at, world_by};
+use super::faked_world::{shows, world_by};
 use super::*;
 use crate::flight::murk::{murk_tint, sprite_murk};
 use crate::flight::ship_layers::{lights_murk, npc_glow_rolls};
@@ -134,7 +134,7 @@ fn npc_shown(heading: f32) -> FrameShip {
             ..Drawn::default()
         },
         glow: 32,
-        ..super::faked_world::npc_129(0, Vec2::new(100.0, -100.0), heading)
+        ..npc_129(0, Vec2::new(100.0, -100.0), heading)
     }
 }
 

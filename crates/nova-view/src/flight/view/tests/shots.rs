@@ -7,7 +7,7 @@
 
 use nova_sim::flight_frame::{FrameShip, FrameShot, PassReport, StepReport, StepRun};
 
-use super::faked_world::{beam, in_sol_with, npc_129, shot_of, the_player_at, world, world_by};
+use super::faked_world::{beam, shot_of, world, world_by};
 use super::*;
 use crate::flight::weapons::SPINS;
 use crate::system::camera::Anchor;

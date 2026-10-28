@@ -4,7 +4,6 @@
 //! the world it draws. Kept apart from `tests/mod.rs`, which is large.
 
 use super::*;
-use nova_sim::flight_frame::FrameShip;
 
 /// A view over a flight scripted to show `frame`, read from `catalog` by
 /// `rules` as a session's view is read: the player's sheet of the frame's
@@ -65,37 +64,6 @@ pub(super) fn faked_ship_sprites(view: &Faked) -> Vec<(ImageKey, Point)> {
         .into_iter()
         .filter(|(image, _)| (2000..2300).contains(&image.id))
         .collect()
-}
-
-/// The player's ship 128 at `at` facing `heading`.
-pub(super) fn the_player_at(at: Vec2, heading: f32) -> FrameShip {
-    record::player(128, at, heading)
-}
-
-/// NPC `id` of ship 129 at `at` facing `heading`.
-pub(super) fn npc_129(id: u32, at: Vec2, heading: f32) -> FrameShip {
-    record::npc(id, 129, at, heading)
-}
-
-/// A frame in Sol (130) holding `ships`, the player's first, each drawn
-/// in the ships' layer in their order but the player's, drawn last, and
-/// Sol's two stellars shown.
-pub(super) fn in_sol_with(ships: Vec<FrameShip>) -> FlightFrame {
-    let mut drawn: Vec<_> = ships
-        .iter()
-        .filter(|ship| ship.ship != ShipRef::Player)
-        .map(|ship| (ship.ship, nova_sim::ShipLayer::Ships))
-        .collect();
-    drawn.push((ShipRef::Player, nova_sim::ShipLayer::Ships));
-    FlightFrame {
-        ships,
-        drawn,
-        stellars: vec![
-            record::stellar(StellarId(128)),
-            record::stellar(StellarId(129)),
-        ],
-        ..in_sol()
-    }
 }
 
 /// Shows `events` on `view`'s effects, as a pass raising them would,

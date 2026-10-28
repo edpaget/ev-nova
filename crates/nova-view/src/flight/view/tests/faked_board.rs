@@ -10,7 +10,6 @@
 //! which is large.
 
 use super::faked_travel::{faked_lasts, sent_but_lines};
-use super::faked_world::{in_sol_with, the_player_at};
 use super::*;
 use nova_sim::board_repair::Recovery;
 use nova_sim::flight_frame::FlightEvent;
@@ -531,7 +530,7 @@ fn the_target_panel_is_taken_afresh_once_a_press_is_made() {
         status: nova_sim::TargetStatus::Disabled,
         ..record::target(0)
     };
-    let frame = super::faked_hud::targeted(vec![super::faked_hud::npc_of_140(0)], target);
+    let frame = targeted(vec![super::faked_hud::npc_of_140(0)], target);
     let mut view = super::faked_hud::barred(armed(1, &[]), frame);
     view.retake_target();
     if let Some((_, shown)) = &mut view.target_scene {

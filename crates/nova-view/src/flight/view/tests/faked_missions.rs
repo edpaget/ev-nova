@@ -12,7 +12,6 @@ use super::faked_shops::{
     full, leaves, load, purchase, stale, writes_nav,
 };
 use super::faked_travel::{faked_lasts, sent_but_lines};
-use super::faked_world::{in_sol_with, the_player_at};
 use super::*;
 use crate::flight::radar::RadarScene;
 use nova_sim::flight_frame::FlightEvent;
