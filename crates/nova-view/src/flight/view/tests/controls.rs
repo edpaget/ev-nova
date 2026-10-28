@@ -430,7 +430,7 @@ fn the_cursor_is_clipped_to_the_play_area_short_of_the_status_bar() {
 #[test]
 fn the_cursor_is_not_drawn_while_the_map_is_open() {
     let mut view = super::faked_flight::at_rest(catalog());
-    view.sim.map_mut().drawing = Some(sol_drawing());
+    queue_map(&mut view, None, sol_drawing());
     view.cursor_input(&Input::PointerMoved(NOWHERE));
     view.open_map();
     assert!(view.map_open);

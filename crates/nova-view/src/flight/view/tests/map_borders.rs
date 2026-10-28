@@ -20,18 +20,41 @@ pub(super) fn sources(near: bool) -> BorderSources {
     BorderSources::unfiltered(systems, nova_sim::govt::Governments::empty())
 }
 
+/// Queues on `fake` the answers to the course map's opening and its
+/// first redraw, each painting the borders from `sources`, the redraw
+/// drawing [`sol_drawing`].
+fn queue_bordered(fake: &mut FakeFlight, sources: BorderSources) {
+    let redraw = bordered_redraw(&sources);
+    fake.queue_screen(ScreenAnswer::MapOpening(MapOpen {
+        nav: nova_sim::SavedNav::of(NavMode::Off),
+        marks: nova_sim::MapMarks::NONE,
+        borders: sources,
+        preselection: None,
+        missions: Vec::new(),
+    }));
+    fake.queue_screen(redraw);
+}
+
+/// What a scripted flight answers a redraw drawing [`sol_drawing`] with
+/// the borders painted from `sources`.
+fn bordered_redraw(sources: &BorderSources) -> ScreenAnswer {
+    ScreenAnswer::Map(Box::new(MapScreen {
+        drawing: sol_drawing(),
+        borders: sources.clone(),
+        panel: blank_panel(),
+    }))
+}
+
 /// A view over a scripted flight in Sol over [`FakeCatalog::near`]'s
-/// galaxy, drawing the map as [`sol_drawing`], painting the borders from
-/// `sources`.
+/// galaxy, its course map's opening and first redraw painting the
+/// borders from `sources` ([`queue_bordered`]).
 pub(super) fn faked_bordered(sources: BorderSources) -> Faked {
     let catalog = FakeCatalog {
         near: true,
         ..catalog()
     };
     let mut view = faked_in(catalog, in_sol());
-    let map = view.sim.map_mut();
-    map.drawing = Some(sol_drawing());
-    map.border_sources = Some(sources);
+    queue_bordered(&mut view.sim, sources);
     view
 }
 
@@ -65,7 +88,8 @@ fn the_maps_next_drawing_takes_the_flights_sources_again() {
     }
     assert!(!view.map.place().expect("open").can_zoom_out());
     assert_eq!(govts_on(&view.map), [128], "Proxima Near unknown");
-    view.sim.map_mut().border_sources = Some(sources(true));
+    view.sim.queue_screen(ScreenAnswer::MapPreselection(None));
+    view.sim.queue_screen(bordered_redraw(&sources(true)));
     view.sim.queue_answer(Answer::Done);
     faked_map_tap(&mut view, Key::Tab);
     faked_map_tap(&mut view, Key::Left);
@@ -81,11 +105,11 @@ fn faked_bordered_by(rules: &Rulebook) -> Faked {
     };
     let mut fake = FakeFlight::new();
     fake.set_frame(in_sol());
-    let map = fake.map_mut();
-    map.drawing = Some(sol_drawing());
-    map.border_sources = Some(sources(true));
-    map.search = Some(nova_sim::map_search::SearchOutcome::Found(SystemId(130)));
     let mut view = scripted_over(catalog, fake, rules);
+    queue_bordered(&mut view.sim, sources(true));
+    view.sim.queue_screen(ScreenAnswer::Found(
+        nova_sim::map_search::SearchOutcome::Found(SystemId(130)),
+    ));
     view.map = view.map.clone().with_metrics(Rc::new(MonoMetrics));
     view.open_map();
     view

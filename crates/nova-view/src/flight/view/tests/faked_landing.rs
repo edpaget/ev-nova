@@ -339,7 +339,8 @@ fn landing_in_a_flight_that_never_started_does_nothing() {
 /// offers Alpha Centauri (131) and Barnard (132): the hypergate map open.
 pub(super) fn at_the_hypergate() -> Faked {
     let mut view = faked(sol());
-    view.sim.map_mut().map_preselection = Some(SystemId(130));
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
     view.sim.queue_answer(at_gate(GateKind::Hypergate));
     view.sim
         .queue_answer(Answer::Offered(vec![SystemId(131), SystemId(132)]));

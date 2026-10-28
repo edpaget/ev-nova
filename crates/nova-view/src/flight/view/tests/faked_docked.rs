@@ -794,14 +794,14 @@ fn a_text_queued_before_the_last_nav_redraw_leaves_the_nav_area_as_redrawn() {
 
 // The bar's map in port.
 
-/// [`docked`], its flight drawing the course map as [`sol_drawing`] and
-/// preselecting Sol, the nav saved as the map opens Earth's.
+/// [`docked`], its flight answering the course map's opening with
+/// Earth's nav noted and Sol preselected, and its first redraw with
+/// [`sol_drawing`].
 fn mapped() -> Faked {
     let mut view = docked();
-    let map = view.sim.map_mut();
-    map.drawing = Some(sol_drawing());
-    map.map_preselection = Some(SystemId(130));
-    map.map_nav = Some(SavedNav::of(EARTH));
+    view.sim
+        .queue_screen(opening_with(EARTH, Some(130), nova_sim::MapMarks::NONE));
+    view.sim.queue_screen(redrawn(sol_drawing()));
     view
 }
 

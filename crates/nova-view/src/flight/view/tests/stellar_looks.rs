@@ -243,7 +243,7 @@ fn a_rebuild_that_changes_the_stellars_shown_lays_the_scene_out_again() {
 #[test]
 fn with_the_map_open_a_catch_up_still_lays_out_and_reads_the_hull() {
     let mut view = faked_from(shipbuying(), showing(130, sol()));
-    view.sim.map_mut().drawing = Some(sol_drawing());
+    queue_map(&mut view, None, sol_drawing());
     view.open_map();
     assert!(view.map_open);
     view.catalog().systems_read.borrow_mut().clear();

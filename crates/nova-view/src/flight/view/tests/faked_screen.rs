@@ -17,9 +17,9 @@ use nova_sim::{MissionInfoPress, SessionEvent, StellarPick, TargetPick};
 /// course map drawing Sol and preselecting it.
 pub(super) fn in_flight() -> Faked {
     let mut view = world(catalog(), sol());
-    let map = view.sim.map_mut();
-    map.drawing = Some(sol_drawing());
-    map.map_preselection = Some(SystemId(130));
+    queue_map(&mut view, Some(130), sol_drawing());
+    // The floating map's show still reads the drawing here.
+    view.sim.map_mut().drawing = Some(sol_drawing());
     view
 }
 

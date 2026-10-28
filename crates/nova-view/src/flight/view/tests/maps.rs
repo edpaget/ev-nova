@@ -29,9 +29,9 @@ fn tab_on_the_course_map_sends_the_cycle_and_shows_what_the_flight_selects_and_d
     view.open_map();
     for (k, expected) in [(Key::Tab, 131), (Key::Char('\\'), 132), (Key::Tab, 131)] {
         view.sim.queue_answer(Answer::Done);
-        let map = view.sim.map_mut();
-        map.map_preselection = Some(SystemId(expected));
-        map.drawing = Some(cycled_to(expected));
+        view.sim
+            .queue_screen(ScreenAnswer::MapPreselection(Some(SystemId(expected))));
+        view.sim.queue_screen(redrawn(cycled_to(expected)));
         assert!(!faked_map_input(&mut view, &key(k, true)), "{k:?}");
         assert_eq!(
             sent(&view).last(),
@@ -62,7 +62,9 @@ fn tab_on_the_course_map_with_no_link_drawn_selects_what_the_flight_preselects()
     });
     view.open_map();
     view.sim.queue_answer(Answer::Done);
-    view.sim.map_mut().map_preselection = Some(SystemId(132));
+    view.sim
+        .queue_screen(ScreenAnswer::MapPreselection(Some(SystemId(132))));
+    view.sim.queue_screen(redrawn(sol_drawing()));
     faked_map_tap(&mut view, Key::Tab);
     assert_eq!(sent(&view), [FlightCommand::CycleMapSelection]);
     assert_eq!(view.map.selected(), Some(SystemId(132)));
@@ -103,7 +105,7 @@ fn closing_the_map_after_a_tab_shows_its_selection_in_the_nav_area() {
     // (`the_maps_cycle_selects_the_next_link_in_mode_3`,
     // `the_cue_selects_the_courses_next_hop`).
     let mut view = super::faked_hud::barred(catalog(), among(Vec::new()));
-    view.sim.map_mut().drawing = Some(sol_drawing());
+    queue_map(&mut view, None, sol_drawing());
     view.open_map();
     let alpha = NavMode::Hyperspace(Some(SystemId(131)));
     view.sim.frame_mut().nav_mode = alpha;
@@ -118,12 +120,12 @@ fn closing_the_map_after_a_tab_shows_its_selection_in_the_nav_area() {
 }
 
 /// A view over a scripted flight in Sol with the hypergate map open,
-/// offering Alpha Reborn (133) and Barnard (132), its flight's cycle
-/// stepping through hidden Alpha Centauri (131) and Barnard.
+/// offering Alpha Reborn (133) and Barnard (132), its flight preselecting
+/// Sol and drawing nothing.
 fn at_a_faked_gate() -> Faked {
     let mut view = faked(in_sol());
-    view.sim.map_mut().map_preselection = Some(SystemId(130));
-    view.sim.map_mut().hypergate_cycle = vec![Some(SystemId(131)), Some(SystemId(132))];
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
     view.map.offer_gates(vec![SystemId(132), SystemId(133)]);
     view.open_map();
     assert_eq!(view.map.mode(), MapMode::Hypergate);
@@ -131,15 +133,30 @@ fn at_a_faked_gate() -> Faked {
     view
 }
 
+/// Queues on `view`'s flight the answers to a Tab on its hypergate map
+/// that picks: the cycle stepping through hidden Alpha Centauri (131) and
+/// Barnard (132), then nothing to the redraw and to the panels after the
+/// pick.
+fn queue_gate_tab(view: &mut Faked) {
+    view.sim.queue_screen(ScreenAnswer::HypergateCycle(vec![
+        Some(SystemId(131)),
+        Some(SystemId(132)),
+    ]));
+    view.sim.queue_screen(ScreenAnswer::Nothing);
+    view.sim.queue_screen(ScreenAnswer::Nothing);
+}
+
 #[test]
 fn tab_on_the_hypergate_map_steps_through_the_flights_cycle_shift_reversing_and_writes_no_nav() {
     let mut view = at_a_faked_gate();
     for expected in [131, 132, 131] {
+        queue_gate_tab(&mut view);
         faked_map_tap(&mut view, Key::Tab);
         assert_eq!(view.map.selected(), Some(SystemId(expected)));
     }
     faked_map_input(&mut view, &key(Key::Shift, true));
     for expected in [132, 131] {
+        queue_gate_tab(&mut view);
         faked_map_tap(&mut view, Key::Char('\\'));
         assert_eq!(view.map.selected(), Some(SystemId(expected)));
     }
@@ -208,6 +225,7 @@ fn a_course_cycle_the_flight_takes_redraws_item_3_with_a_link_or_none() {
 fn tab_on_the_hypergate_map_redraws_item_3_as_it_picks() {
     let mut view = at_a_faked_gate();
     jiggle_map(&mut view);
+    queue_gate_tab(&mut view);
     faked_map_tap(&mut view, Key::Tab);
     assert_eq!(view.map.update(), Some(MapUpdate::Full));
 }
@@ -215,8 +233,9 @@ fn tab_on_the_hypergate_map_redraws_item_3_as_it_picks() {
 #[test]
 fn tab_on_a_hypergate_map_with_nothing_to_pick_redraws_nothing() {
     let mut view = at_a_faked_gate();
-    view.sim.map_mut().hypergate_cycle.clear();
     jiggle_map(&mut view);
+    view.sim
+        .queue_screen(ScreenAnswer::HypergateCycle(Vec::new()));
     faked_map_tap(&mut view, Key::Tab);
     assert_eq!(
         view.map.update(),
@@ -296,11 +315,11 @@ fn faked_nebulae_by(rules: &Rulebook) -> Vec<(i16, bool)> {
     };
     let mut fake = FakeFlight::new();
     fake.set_frame(in_sol());
-    fake.map_mut().drawing = Some(sol_drawing());
     fake.queue_event(FlightEvent::Session(nova_sim::SessionEvent::GalaxyChanged));
     let mut view = scripted_over(catalog, fake, rules);
     view.sim.queue_screen(ScreenAnswer::Galaxy(galaxy));
     view.catch_up_then(|_, _| {});
+    queue_map(&mut view, None, sol_drawing());
     view.open_map();
     let mut list = DrawList::new();
     view.map.draw(&mut list);
@@ -404,10 +423,10 @@ fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
     // `close_map`'s port half; the hypergate map's closes are
     // `closing_the_hypergate_map_redraws_the_radar_at_once_leaving_the_timer_and_blink`'s.
     let mut view = super::faked_hud::barred(catalog(), among(Vec::new()));
-    view.sim.map_mut().drawing = Some(sol_drawing());
     for _ in 0..3 {
         super::faked_hud::hud_tick(&mut view);
     }
+    queue_map(&mut view, None, sol_drawing());
     view.open_map();
     assert!(view.map_open);
     let stale = RadarScene::default();
@@ -525,8 +544,10 @@ fn sol_places(links: &[(i16, (f32, f32))]) -> FloatingLinks {
 /// [`sol_drawing`], with Sol's floating map places: its link to Alpha
 /// Centauri (131) at (600, 0).
 pub(super) fn floating_in(frame: FlightFrame) -> Faked {
-    let mut view = faked_sol(frame);
-    view.sim.map_mut().floating = sol_places(&[(131, (600.0, 0.0))]);
+    let mut view = faked(frame);
+    let map = view.sim.map_mut();
+    map.drawing = Some(sol_drawing());
+    map.floating = sol_places(&[(131, (600.0, 0.0))]);
     view
 }
 
@@ -1295,27 +1316,34 @@ fn gate_drawing_known() -> MapDrawing {
 }
 
 /// A view over a scripted flight in Sol with the hypergate map open,
-/// offering Barnard (132), drawn as [`gate_drawing`].
+/// offering Barnard (132), drawn as [`gate_drawing`] with Sol
+/// preselected.
 fn at_a_faked_gate_to_barnard() -> Faked {
     let mut view = faked(in_sol());
-    let map = view.sim.map_mut();
-    map.drawing = Some(gate_drawing());
-    map.map_preselection = Some(SystemId(130));
-    map.hypergate_cycle = vec![Some(SystemId(132))];
+    queue_map(&mut view, Some(130), gate_drawing());
     view.map.offer_gates(vec![SystemId(132)]);
     view.open_map();
     view
+}
+
+/// The first redraw `view`'s flight was asked for.
+fn first_redraw(view: &Faked) -> Option<&ScreenAsk> {
+    view.sim
+        .screens_asked()
+        .iter()
+        .find(|ask| matches!(ask, ScreenAsk::Map { .. }))
 }
 
 #[test]
 fn the_hypergate_map_marks_its_arrows_known_and_its_next_draw_shows_them() {
     let mut view = at_a_faked_gate_to_barnard();
     assert_eq!(
-        view.sim.asked().first(),
-        Some(&MapAsk::Drawing {
+        first_redraw(&view),
+        Some(&ScreenAsk::Map {
             hypergate: Some(vec![SystemId(132)]),
             missions: Vec::new(),
             marks: nova_sim::MapMarks::NONE,
+            selected: Some(SystemId(130)),
         })
     );
     let marked = FlightCommand::MarkKnown(vec![SystemId(132)]);
@@ -1325,7 +1353,9 @@ fn the_hypergate_map_marks_its_arrows_known_and_its_next_draw_shows_them() {
         "marked known as its arrow was drawn"
     );
     assert!(!drawn_ids(&view.map).contains(&SystemId(132)), "first draw");
-    view.sim.map_mut().drawing = Some(gate_drawing_known());
+    view.sim
+        .queue_screen(ScreenAnswer::HypergateCycle(vec![Some(SystemId(132))]));
+    view.sim.queue_screen(redrawn(gate_drawing_known()));
     faked_map_tap(&mut view, Key::Tab);
     assert!(drawn_ids(&view.map).contains(&SystemId(132)), "after Tab");
     assert_eq!(sent(&view), [marked.clone(), marked]);
@@ -1336,10 +1366,7 @@ fn the_hypergate_maps_own_mark_takes_no_redraw_a_frame_on() {
     // The gate leads to Barnard (132), which nothing has made known: the
     // map's draw marks it known, which changes the flight's map key.
     let mut view = faked(in_sol());
-    let map = view.sim.map_mut();
-    map.drawing = Some(gate_drawing());
-    map.map_preselection = Some(SystemId(130));
-    map.hypergate_cycle = vec![Some(SystemId(132))];
+    queue_map(&mut view, Some(130), gate_drawing());
     let known = FlightFrame {
         map_key: nova_sim::flight_frame::MapKey {
             known: [SystemId(132)].into(),
@@ -1350,13 +1377,7 @@ fn the_hypergate_maps_own_mark_takes_no_redraw_a_frame_on() {
     view.sim.queue_answer_showing(Answer::Done, known);
     view.map.offer_gates(vec![SystemId(132)]);
     view.open_map();
-    let drawings = |view: &Faked| {
-        view.sim
-            .asked()
-            .iter()
-            .filter(|ask| matches!(ask, MapAsk::Drawing { .. }))
-            .count()
-    };
+    let drawings = drawings_asked;
     assert_eq!(sent(&view), [FlightCommand::MarkKnown(vec![SystemId(132)])]);
     assert_eq!(drawings(&view), 1, "first draw");
     view.tick(TICK);
@@ -1389,7 +1410,7 @@ fn a_click_on_the_hypergate_map_sends_the_press_and_draws_it_again() {
     let mut view = at_a_faked_gate_to_barnard();
     let sol = faked_on_map(&mut view, 130);
     view.sim.queue_answer(gate_picked(130, None));
-    view.sim.map_mut().drawing = Some(gate_drawing_known());
+    view.sim.queue_screen(redrawn(gate_drawing_known()));
     faked_map_click(&mut view, sol);
     assert_eq!(
         sent(&view)[1],
@@ -1405,15 +1426,66 @@ fn a_click_on_the_hypergate_map_sends_the_press_and_draws_it_again() {
 }
 
 #[test]
+fn the_course_map_asks_its_screens_once_as_it_opens_and_not_each_frame() {
+    // Built as the edge builds it, so the galaxy is asked as it opens.
+    let mut fake = FakeFlight::new();
+    fake.set_frame(sol());
+    fake.queue_screen(ScreenAnswer::Galaxy(shown_without(&[])));
+    fake.queue_screen(map_opening(&sol(), Some(130)));
+    fake.queue_screen(redrawn(sol_drawing()));
+    let opening = fake.opening();
+    let mut view = FlightView::over(
+        Rc::new(catalog()),
+        fake,
+        opening,
+        &Rulebook::default(),
+        SharedChance::default(),
+    );
+    assert_eq!(
+        view.sim.screens_asked(),
+        [ScreenAsk::Galaxy],
+        "the galaxy as the view was built"
+    );
+    view.open_map();
+    assert_eq!(
+        view.sim.screens_asked()[1..],
+        [
+            ScreenAsk::MapOpening {
+                marks: MarksFrom::Given(nova_sim::MapMarks::NONE),
+            },
+            ScreenAsk::Map {
+                hypergate: None,
+                missions: Vec::new(),
+                marks: nova_sim::MapMarks::NONE,
+                selected: Some(SystemId(130)),
+            },
+        ],
+        "the opening and its redraw"
+    );
+    for _ in 0..5 {
+        view.tick(TICK);
+        let _ = drawn(&view);
+    }
+    assert!(view.map_open);
+    assert_eq!(
+        view.sim.screens_asked().len(),
+        3,
+        "nothing more over five frames: {:?}",
+        view.sim.screens_asked()
+    );
+}
+
+#[test]
 fn the_course_map_draws_the_flights_drawing() {
     let mut view = faked_sol(in_sol());
     view.open_map();
     assert_eq!(
-        view.sim.asked().first(),
-        Some(&MapAsk::Drawing {
+        first_redraw(&view),
+        Some(&ScreenAsk::Map {
             hypergate: None,
             missions: Vec::new(),
             marks: nova_sim::MapMarks::NONE,
+            selected: Some(SystemId(130)),
         })
     );
     let picture = view.map.picture().expect("drawn");
@@ -1423,12 +1495,12 @@ fn the_course_map_draws_the_flights_drawing() {
     assert_eq!(sent(&view), [], "the course map marks nothing known");
 }
 
-/// How many drawings `view`'s flight was asked for.
+/// How many redraws `view`'s flight was asked for.
 fn drawings_asked(view: &Faked) -> usize {
     view.sim
-        .asked()
+        .screens_asked()
         .iter()
-        .filter(|ask| matches!(ask, MapAsk::Drawing { .. }))
+        .filter(|ask| matches!(ask, ScreenAsk::Map { .. }))
         .count()
 }
 
@@ -1444,7 +1516,7 @@ fn a_change_to_what_the_open_map_is_drawn_from_redraws_it_at_the_catch_up() {
         132,
         nova_sim::iff::SystemColorCode::Uninhabited,
     ));
-    view.sim.map_mut().drawing = Some(explored);
+    view.sim.queue_screen(redrawn(explored));
     let mut frame = in_sol();
     frame.map_key.explored = vec![SystemId(132)];
     view.sim.set_frame(frame);
@@ -1467,7 +1539,7 @@ fn a_galaxy_event_redraws_the_open_map_though_its_key_is_the_same() {
 
 #[test]
 fn a_shut_map_is_not_redrawn_at_the_catch_up() {
-    let mut view = faked_sol(in_sol());
+    let mut view = faked(in_sol());
     view.sim
         .queue_event(FlightEvent::Session(nova_sim::SessionEvent::GalaxyChanged));
     let mut frame = in_sol();
@@ -1554,26 +1626,53 @@ fn info_panel(ports: Ports, title: &str, body: ColumnBody) -> MapPanel {
 }
 
 /// A view over a scripted flight in Sol with the course map open, its
-/// flight giving `panel` whatever is selected.
+/// flight preselecting Sol and drawing [`sol_drawing`] with `panel`.
 fn faked_panel(panel: MapPanel) -> Faked {
-    let mut view = faked_sol(in_sol());
-    view.sim.map_mut().panel = Some(panel);
+    let mut view = faked(in_sol());
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
+    view.sim.queue_screen(redrawn_with(sol_drawing(), panel));
     view.open_map();
     view
 }
 
-/// The panels `view`'s flight was asked for, in order.
-fn panels_asked(view: &Faked) -> Vec<MapAsk> {
+/// Queues on `view`'s flight the answers to a press that redraws its map
+/// and changes the selection: `drawing` with `panel` to the redraw, and
+/// `panel` to the panels asked after it.
+fn queue_redraw_and_panel(view: &mut Faked, drawing: MapDrawing, panel: &MapPanel) {
+    view.sim.queue_screen(redrawn_with(drawing, panel.clone()));
     view.sim
-        .asked()
-        .into_iter()
-        .filter(|ask| matches!(ask, MapAsk::Panel { .. }))
+        .queue_screen(ScreenAnswer::MapPanel(Box::new(panel.clone())));
+}
+
+/// The panels `view`'s flight was asked for, in order, as the panels'
+/// ask: each redraw's ([`ScreenAsk::Map`], which takes the panels with
+/// the drawing) and each asked alone ([`ScreenAsk::MapPanel`]).
+pub(super) fn panels_asked(view: &Faked) -> Vec<ScreenAsk> {
+    view.sim
+        .screens_asked()
+        .iter()
+        .filter_map(|ask| match ask {
+            ScreenAsk::Map {
+                selected,
+                hypergate,
+                ..
+            }
+            | ScreenAsk::MapPanel {
+                selected,
+                hypergate,
+            } => Some(ScreenAsk::MapPanel {
+                selected: *selected,
+                hypergate: hypergate.clone(),
+            }),
+            _ => None,
+        })
         .collect()
 }
 
-/// The panel question for `selected` on the course map.
-fn panel_for(selected: i16) -> MapAsk {
-    MapAsk::Panel {
+/// The panels' ask for `selected` on the course map.
+fn panel_for(selected: i16) -> ScreenAsk {
+    ScreenAsk::MapPanel {
         selected: Some(SystemId(selected)),
         hypergate: None,
     }
@@ -1614,11 +1713,8 @@ fn the_course_maps_panel_follows_a_click_to_the_flights_panel_for_it() {
         course_changed: false,
         nav_redraw: true,
     }));
-    view.sim.map_mut().panel = Some(info_panel(
-        Ports::Unknown,
-        "Destination System:",
-        ColumnBody::Unknown,
-    ));
+    let destination = info_panel(Ports::Unknown, "Destination System:", ColumnBody::Unknown);
+    queue_redraw_and_panel(&mut view, sol_drawing(), &destination);
     faked_map_click(&mut view, alpha);
     assert_eq!(view.map.selected(), Some(SystemId(131)));
     assert_eq!(panels_asked(&view).last(), Some(&panel_for(131)));
@@ -1647,16 +1743,15 @@ fn the_hypergate_maps_panel_is_asked_with_its_offers_and_draws_the_prompt_then_t
         },
         ..info_panel(Ports::None, "Current System:", ColumnBody::Unknown)
     };
-    let map = view.sim.map_mut();
-    map.drawing = Some(gate_drawing());
-    map.map_preselection = Some(SystemId(130));
-    map.panel = Some(prompt);
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
+    view.sim.queue_screen(redrawn_with(gate_drawing(), prompt));
     view.map.offer_gates(vec![SystemId(134)]);
     view.open_map();
     let offered = Some(vec![SystemId(134)]);
     assert_eq!(
         panels_asked(&view),
-        [MapAsk::Panel {
+        [ScreenAsk::MapPanel {
             selected: Some(SystemId(130)),
             hypergate: offered.clone(),
         }]
@@ -1671,16 +1766,17 @@ fn the_hypergate_maps_panel_is_asked_with_its_offers_and_draws_the_prompt_then_t
     assert_eq!(faked_title(&view).as_deref(), Some("Current System:"));
     let near = faked_on_map(&mut view, 134);
     view.sim.queue_answer(gate_picked(134, Some(134)));
-    view.sim.map_mut().panel = Some(info_panel(
+    let destination = info_panel(
         Ports::Unknown,
         "Hypergate Destination:",
         ColumnBody::Unknown,
-    ));
+    );
+    queue_redraw_and_panel(&mut view, gate_drawing(), &destination);
     faked_map_click(&mut view, near);
     assert_eq!(view.map.selected(), Some(SystemId(134)));
     assert_eq!(
         panels_asked(&view).last(),
-        Some(&MapAsk::Panel {
+        Some(&ScreenAsk::MapPanel {
             selected: Some(SystemId(134)),
             hypergate: offered,
         })
@@ -1857,7 +1953,7 @@ fn with_the_map_open_in_flight_the_paused_scene_is_drawn_behind_the_dialog() {
 #[test]
 fn in_port_the_map_is_drawn_alone() {
     let mut view = super::faked_shops::docked();
-    view.sim.map_mut().drawing = Some(sol_drawing());
+    queue_map(&mut view, None, sol_drawing());
     view.open_bar_map();
     let list = drawn(&view);
     assert_eq!(background_at(&list), Some(1), "the dialog's black, then it");
@@ -2099,9 +2195,7 @@ fn a_slot_key_held_during_a_jump_does_not_hold_the_zoom_back() {
 /// draws Sol, and how many panels its flight was asked for.
 fn port_map_open() -> (Faked, usize) {
     let mut view = super::faked_shops::docked();
-    let map = view.sim.map_mut();
-    map.drawing = Some(sol_drawing());
-    map.map_preselection = Some(SystemId(130));
+    queue_map(&mut view, Some(130), sol_drawing());
     view.open_bar_map();
     assert!(view.map_open());
     let asked = panels_asked(&view).len();

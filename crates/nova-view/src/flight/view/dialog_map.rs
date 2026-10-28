@@ -14,9 +14,15 @@
 //! - **Its marks**: the green mission system and the arrow flag its
 //!   opener gives it (`nova_sim::Session::offer_map_marks` and its kin;
 //!   the `mission_map` module of the session), drawn and taken by the
-//!   click as a mission system is (@0x12f82-0x12f8a). Every other map
-//!   opens with none ([`MapMarks::NONE`]), as `_InitMissions` and
-//!   `_ResetPlayer` leave them, so the marks never outlive their map.
+//!   click as a mission system is (@0x12f82-0x12f8a). They come with the
+//!   map's opening ([`ScreenAsk::MapOpening`], its [`MarksFrom`] the
+//!   opener's, [`MapOpener::marks_from`]); a flight that answers the
+//!   opening nothing (one that failed to start) marks only what the
+//!   briefing gives itself, and an offer's, the computer's and mission
+//!   info's maps none, as such a flight's marks were none
+//!   ([`MarksFrom::unanswered`]). Every other map opens with none
+//!   ([`MapMarks::NONE`]), as `_InitMissions` and `_ResetPlayer` leave
+//!   them, so the marks never outlive their map.
 //! - **No sound**: neither the opening nor the close beeps. The
 //!   [`UiSound::MapOpened`](crate::UiSound::MapOpened) and
 //!   [`UiSound::MapClosed`](crate::UiSound::MapClosed) beeps are
@@ -37,7 +43,9 @@
 //! port redraws after the map, as ours draws every frame whole; and the
 //! `_mapDialog` guards (@0x98dc0, @0x9f80a), which nothing can trip.
 
-use nova_sim::flight_frame::FlightCommand;
+#[cfg(doc)]
+use nova_sim::flight_frame::ScreenAsk;
+use nova_sim::flight_frame::{FlightCommand, MarksFrom};
 use nova_sim::{MapMarks, MissionId, SavedNav};
 
 use super::port_screen_map::{self, PortScreen};
@@ -76,6 +84,21 @@ pub enum MapOpener {
     Briefing(MapMarks),
 }
 
+impl MapOpener {
+    /// Where the map's marks come from, for its opening's ask: the
+    /// briefing's own, or the session's for the offer, the computer's row
+    /// or mission info's slot.
+    #[must_use]
+    pub fn marks_from(self) -> MarksFrom {
+        match self {
+            Self::Offer(mission) => MarksFrom::Offer(mission),
+            Self::Computer(selected) => MarksFrom::Computer(selected),
+            Self::MissionInfo(slot) => MarksFrom::MissionInfo(slot),
+            Self::Briefing(marks) => MarksFrom::Given(marks),
+        }
+    }
+}
+
 /// Who opened the map shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MapOpening {
@@ -83,29 +106,39 @@ pub(super) enum MapOpening {
     Plain,
     /// The bar (`_DoBarDialog` item 8).
     Bar,
-    /// A mission dialog, with the marks it gave.
-    Dialog(MapOpener, MapMarks),
+    /// A mission dialog.
+    Dialog(MapOpener),
     /// A port screen ([`FlightView::open_port_screen_map`]).
     Port(PortScreen),
 }
 
-/// How the map shown was opened: who opened it, and the nav as it
-/// opened, which `_DoSystemMap` saves (@0x12349) and its opener too.
-/// Taken afresh as each map opens and dropped as it closes, so neither
-/// the marks nor a restore outlives its map.
+impl MapOpening {
+    /// Where the map's marks come from: its dialog's opener, or none
+    /// given ([`MapMarks::NONE`]) for every other map.
+    pub(super) fn marks_from(self) -> MarksFrom {
+        match self {
+            Self::Dialog(opener) => opener.marks_from(),
+            Self::Plain | Self::Bar | Self::Port(_) => MarksFrom::Given(MapMarks::NONE),
+        }
+    }
+}
+
+/// How the map shown was opened: who opened it, the nav as it opened,
+/// which `_DoSystemMap` saves (@0x12349) and its opener too, and its
+/// marks, each as its opening's answer gave them. Taken afresh as each
+/// map opens and dropped as it closes, so neither the marks nor a restore
+/// outlives its map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct MapOpened {
     pub(super) by: MapOpening,
     pub(super) nav: Option<SavedNav>,
+    pub(super) marks: MapMarks,
 }
 
 impl MapOpened {
-    /// The marks of the map: its dialog's, or none.
+    /// The marks of the map: those it opened with, or none with no map.
     pub(super) fn marks(opened: Option<&Self>) -> MapMarks {
-        match opened.map(|opened| opened.by) {
-            Some(MapOpening::Dialog(_, marks)) => marks,
-            _ => MapMarks::NONE,
-        }
+        opened.map_or(MapMarks::NONE, |opened| opened.marks)
     }
 }
 
@@ -132,7 +165,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             return;
         };
         match opened.by {
-            MapOpening::Plain | MapOpening::Dialog(MapOpener::MissionInfo(_), _) => {}
+            MapOpening::Plain | MapOpening::Dialog(MapOpener::MissionInfo(_)) => {}
             MapOpening::Bar => {
                 self.send(FlightCommand::RestoreBarNav);
             }
@@ -141,7 +174,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                     self.send(command);
                 }
             }
-            MapOpening::Dialog(dialog, _) => {
+            MapOpening::Dialog(dialog) => {
                 if let Some(nav) = opened.nav {
                     self.send(FlightCommand::RestoreMapNav(nav));
                 }
@@ -152,26 +185,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// The nav as a map opens, which its close in port puts back and a
-    /// dialog's opener restores.
-    pub(super) fn opening_nav(&self) -> Option<SavedNav> {
-        self.sim.map_nav()
-    }
-
     /// Opens the course map for `opener`, as each mission dialog calls
     /// `_DoSystemMap` on its map key: in
     /// [`MapMode::Course`](crate::galaxy::MapMode::Course), as each clears
     /// the hypergate flag first (@0xa3100, @0xa3d69, @0x9e457, @0x5b161),
-    /// marked as the session says for it, silently. Its close is
+    /// marked as the session says for it with its opening
+    /// ([`MapOpener::marks_from`]), silently. Its close is
     /// [`FlightView::close_map`]'s, then the opener's restore (see the
     /// module docs).
     pub fn open_dialog_map(&mut self, opener: MapOpener) {
-        let marks = match opener {
-            MapOpener::Briefing(marks) => marks,
-            MapOpener::Offer(mission) => self.sim.offer_map_marks(mission),
-            MapOpener::Computer(selected) => self.sim.computer_map_marks(selected),
-            MapOpener::MissionInfo(slot) => self.sim.mission_info_map_marks(slot),
-        };
-        self.open_map_as(MapOpening::Dialog(opener, marks));
+        self.open_map_as(MapOpening::Dialog(opener));
     }
 }

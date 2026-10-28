@@ -1,5 +1,4 @@
 use super::*;
-use crate::flight::sim_port::fixture::MapAsk;
 use nova_sim::{MapMarks, SavedNav};
 
 // A mission dialog's map (`_OfferOneMission`, `_DoMissionDialog`,
@@ -12,14 +11,27 @@ fn faked_press_map(view: &mut Faked) {
     assert!(!view.map_open, "closed");
 }
 
-/// A view over a scripted flight in `frame`, drawing the map as
-/// [`sol_drawing`] and preselecting Sol, its dialogs' marks `marks` and
-/// its nav as a map opens `nav`.
+/// Queues on `view`'s flight the answers to the next map's opening, its
+/// nav as it opens `nav`, marked `marks` (a dialog's, or a briefing's
+/// own), preselecting Sol, with the mission systems `missions`, and to
+/// its first redraw, [`sol_drawing`].
+fn queue_opening(view: &mut Faked, marks: MapMarks, nav: NavMode, missions: &[i16]) {
+    view.sim.queue_screen(ScreenAnswer::MapOpening(MapOpen {
+        nav: SavedNav::of(nav),
+        marks,
+        borders: nova_sim::map_borders::BorderSources::default(),
+        preselection: Some(SystemId(130)),
+        missions: missions.iter().copied().map(SystemId).collect(),
+    }));
+    view.sim.queue_screen(redrawn(sol_drawing()));
+}
+
+/// A view over a scripted flight in `frame`, its next map's opening
+/// answered as [`queue_opening`] says, marked `marks`, its nav as it
+/// opens `nav`.
 fn faked_dialogs(frame: FlightFrame, marks: MapMarks, nav: NavMode) -> Faked {
-    let mut view = faked_sol(frame);
-    let map = view.sim.map_mut();
-    map.marks = Some(marks);
-    map.map_nav = Some(SavedNav::of(nav));
+    let mut view = faked(frame);
+    queue_opening(&mut view, marks, nav, &[]);
     view
 }
 
@@ -40,28 +52,26 @@ fn green_on(id: i16, multi_arrows: bool) -> MapMarks {
     }
 }
 
-/// The marks each map drawing was asked with, in order.
+/// The marks each map redraw was asked with, in order.
 fn marks_drawn(view: &Faked) -> Vec<MapMarks> {
     view.sim
-        .asked()
-        .into_iter()
+        .screens_asked()
+        .iter()
         .filter_map(|ask| match ask {
-            MapAsk::Drawing { marks, .. } => Some(marks),
+            ScreenAsk::Map { marks, .. } => Some(*marks),
             _ => None,
         })
         .collect()
 }
 
-/// The marks questions `view`'s flight was asked, in order.
-fn marks_asked(view: &Faked) -> Vec<MapAsk> {
+/// Where each map's opening asked its marks from, in order.
+fn marks_asked(view: &Faked) -> Vec<MarksFrom> {
     view.sim
-        .asked()
-        .into_iter()
-        .filter(|ask| {
-            matches!(
-                ask,
-                MapAsk::OfferMarks(_) | MapAsk::ComputerMarks(_) | MapAsk::MissionInfoMarks(_)
-            )
+        .screens_asked()
+        .iter()
+        .filter_map(|ask| match ask {
+            ScreenAsk::MapOpening { marks } => Some(*marks),
+            _ => None,
         })
         .collect()
 }
@@ -76,15 +86,16 @@ fn restore_after(view: &mut Faked) {
 #[test]
 fn an_offers_map_asks_the_offers_marks_and_draws_with_them() {
     let marks = green_on(131, false);
-    let mut view = faked_dialogs(in_sol(), marks, MOON);
+    let mut view = faked(in_sol());
     let mut drawing = sol_drawing();
     drawing.systems[1].green_arrow = true;
-    view.sim.map_mut().drawing = Some(drawing);
+    view.sim.queue_screen(opening_with(MOON, Some(130), marks));
+    view.sim.queue_screen(redrawn(drawing));
     view.open_dialog_map(MapOpener::Offer(MissionId(130)));
     assert!(view.map_open);
     assert!(view.dialog_map_open());
     assert_eq!(view.map.mode(), MapMode::Course);
-    assert_eq!(marks_asked(&view), [MapAsk::OfferMarks(MissionId(130))]);
+    assert_eq!(marks_asked(&view), [MarksFrom::Offer(MissionId(130))]);
     assert_eq!(marks_drawn(&view), [marks]);
     let alpha = view.map.picture().expect("drawn").systems[1];
     assert_eq!(
@@ -99,13 +110,13 @@ fn the_computers_map_asks_the_marks_of_its_selected_row_or_none() {
     let mut view = faked_dialogs(in_sol(), marks, MOON);
     view.open_dialog_map(MapOpener::Computer(Some(MissionId(130))));
     restore_after(&mut view);
-    view.sim.map_mut().marks = Some(MapMarks::NONE);
+    queue_opening(&mut view, MapMarks::NONE, MOON, &[]);
     view.open_dialog_map(MapOpener::Computer(None));
     assert_eq!(
         marks_asked(&view),
         [
-            MapAsk::ComputerMarks(Some(MissionId(130))),
-            MapAsk::ComputerMarks(None)
+            MarksFrom::Computer(Some(MissionId(130))),
+            MarksFrom::Computer(None)
         ]
     );
     assert_eq!(marks_drawn(&view), [marks, MapMarks::NONE]);
@@ -113,10 +124,14 @@ fn the_computers_map_asks_the_marks_of_its_selected_row_or_none() {
 
 #[test]
 fn a_briefings_map_draws_with_the_marks_its_text_carries() {
-    let mut view = faked_in_flight();
     let barnard = green_on(132, true);
+    let mut view = faked_dialogs(in_sol(), barnard, MOON);
     view.open_dialog_map(MapOpener::Briefing(barnard));
-    assert_eq!(marks_asked(&view), [], "the text carries them");
+    assert_eq!(
+        marks_asked(&view),
+        [MarksFrom::Given(barnard)],
+        "the text carries them"
+    );
     assert_eq!(marks_drawn(&view), [barnard]);
 }
 
@@ -125,24 +140,51 @@ fn mission_infos_map_asks_its_slots_marks_and_a_briefing_draws_its_own() {
     let marks = green_on(131, false);
     let mut view = faked_dialogs(in_sol(), marks, MOON);
     view.open_dialog_map(MapOpener::MissionInfo(Some(0)));
-    assert_eq!(marks_asked(&view), [MapAsk::MissionInfoMarks(Some(0))]);
+    assert_eq!(marks_asked(&view), [MarksFrom::MissionInfo(Some(0))]);
     restore_after(&mut view);
     let kept = MapMarks {
         multi_arrows: true,
         ..marks
     };
+    queue_opening(&mut view, kept, MOON, &[]);
     view.open_dialog_map(MapOpener::Briefing(kept));
     assert_eq!(marks_drawn(&view), [marks, kept]);
 }
 
 #[test]
+fn a_dialogs_map_a_flight_answers_nothing_marks_only_a_briefings_own() {
+    // A flight that answers the opening nothing, as one that failed to
+    // start does: the briefing's marks are its text's, the others none,
+    // as such a flight's marks were.
+    let barnard = green_on(132, true);
+    for (opener, marks) in [
+        (MapOpener::Offer(MissionId(130)), MapMarks::NONE),
+        (MapOpener::Computer(Some(MissionId(130))), MapMarks::NONE),
+        (MapOpener::MissionInfo(Some(0)), MapMarks::NONE),
+        (MapOpener::Briefing(barnard), barnard),
+    ] {
+        let mut view = faked(in_sol());
+        view.sim.fail("no chär");
+        view.open_dialog_map(opener);
+        assert!(view.dialog_map_open(), "{opener:?}");
+        assert_eq!(marks_drawn(&view), [marks], "{opener:?}");
+        assert_eq!(
+            view.map_opened.map(|opened| (opened.nav, opened.marks)),
+            Some((None, marks)),
+            "{opener:?}: no nav noted"
+        );
+    }
+}
+
+#[test]
 fn a_dialogs_map_sends_its_green_system_with_a_click_and_flights_map_none() {
-    let mut view = faked_in_flight();
-    view.sim.map_mut().mission_systems = vec![SystemId(131)];
+    let mut view = faked(in_sol());
+    queue_opening(&mut view, MapMarks::NONE, MOON, &[131]);
     view.open_map();
     let at = faked_on_map(&mut view, 132);
     faked_map_click(&mut view, at);
     restore_after(&mut view);
+    queue_opening(&mut view, green_on(132, true), MOON, &[131]);
     view.open_dialog_map(MapOpener::Briefing(green_on(132, true)));
     let at = faked_on_map(&mut view, 132);
     faked_map_click(&mut view, at);
@@ -249,7 +291,10 @@ fn a_dialogs_map_close_sends_back_the_nav_it_opened_with() {
             Some(saved),
             "{opener:?}: noted as it opened"
         );
-        view.sim.map_mut().map_nav = Some(SavedNav::of(NavMode::Hyperspace(Some(SystemId(131)))));
+        view.sim.set_frame(FlightFrame {
+            nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
+            ..in_sol()
+        });
         restore_after(&mut view);
         assert_eq!(
             sent(&view),
@@ -386,6 +431,7 @@ fn after_a_dialogs_map_flights_map_draws_with_no_marks() {
         view.open_dialog_map(opener);
         assert_eq!(marks_drawn(&view), [green_on(131, false)], "{opener:?}");
         restore_after(&mut view);
+        queue_opening(&mut view, MapMarks::NONE, MOON, &[]);
         view.open_map();
         assert!(!view.dialog_map_open(), "{opener:?}: flight's own");
         assert_eq!(

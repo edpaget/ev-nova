@@ -1,6 +1,5 @@
 use super::*;
 use crate::flight::PortScreen;
-use crate::flight::sim_port::fixture::MapAsk;
 use nova_sim::SavedNav;
 
 // The map opened from the spaceport, a shop, the shipyard or the hire
@@ -30,16 +29,20 @@ fn faked_press_map(view: &mut Faked) {
     assert!(!view.map_open, "closed");
 }
 
-/// A view over a scripted flight docked at Earth, drawing the map as
-/// [`sol_drawing`], its nav as a map opens Earth selected.
-fn faked_docked() -> Faked {
-    let mut view = faked_sol(FlightFrame {
+/// The frame of a flight docked at Earth with Earth selected.
+fn docked_at_earth() -> FlightFrame {
+    FlightFrame {
         landed: Some(StellarId(128)),
         nav_mode: EARTH,
         ..in_sol()
-    });
-    view.sim.map_mut().map_nav = Some(SavedNav::of(EARTH));
-    view
+    }
+}
+
+/// A view over a scripted flight [`docked_at_earth`], its map's opening
+/// answered with its nav, Earth selected, and drawn as [`sol_drawing`]
+/// ([`faked_sol`]).
+fn faked_docked() -> Faked {
+    faked_sol(docked_at_earth())
 }
 
 /// Earth (128) selected.
@@ -61,13 +64,19 @@ fn each_port_screens_map_opens_as_the_course_map_with_no_marks() {
         assert!(!view.dialog_map_open(), "{screen:?}: no mission dialog's");
         assert_eq!(view.map.mode(), MapMode::Course, "{screen:?}");
         assert_eq!(
-            view.sim.asked().first(),
-            Some(&MapAsk::Drawing {
-                hypergate: None,
-                missions: Vec::new(),
-                marks: nova_sim::MapMarks::NONE,
-            }),
-            "{screen:?}: no marks, none asked"
+            view.sim.screens_asked()[..2],
+            [
+                ScreenAsk::MapOpening {
+                    marks: MarksFrom::Given(nova_sim::MapMarks::NONE),
+                },
+                ScreenAsk::Map {
+                    hypergate: None,
+                    missions: Vec::new(),
+                    marks: nova_sim::MapMarks::NONE,
+                    selected: Some(SystemId(130)),
+                },
+            ],
+            "{screen:?}: no marks given, none of a dialog's asked"
         );
     }
 }
@@ -150,7 +159,10 @@ fn the_spaceports_shipyards_and_descriptions_map_closes_send_back_the_nav_as_the
     for screen in SAVING_BEFORE {
         let mut view = faked_docked();
         view.open_port_screen_map(screen);
-        view.sim.map_mut().map_nav = Some(SavedNav::of(NavMode::Off));
+        view.sim.set_frame(FlightFrame {
+            nav_mode: NavMode::Off,
+            ..docked_at_earth()
+        });
         restore_after(&mut view);
         assert_eq!(
             sent(&view),

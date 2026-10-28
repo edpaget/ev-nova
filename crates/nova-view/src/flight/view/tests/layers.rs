@@ -286,7 +286,7 @@ fn the_course_map_is_overlay_over_the_paused_worlds_scene() {
 #[test]
 fn the_map_in_port_and_a_flight_that_could_not_start_draw_no_world() {
     let mut view = docked();
-    view.sim.map_mut().drawing = Some(sol_drawing());
+    queue_map(&mut view, None, sol_drawing());
     view.open_bar_map();
     assert!(view.map_open());
     let list = drawn(&view);

@@ -7,7 +7,9 @@ use nova_sim::Session;
 use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 
-use nova_sim::flight_frame::{Answer, FlightCommand, MapClick, ScreenAnswer, ScreenAsk};
+use nova_sim::flight_frame::{
+    Answer, FlightCommand, MapClick, MapOpen, MapScreen, ScreenAnswer, ScreenAsk,
+};
 
 use crate::devtools::{DevDesk, FlightDesk};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
@@ -41,9 +43,10 @@ impl<C, S: FlightSim + DevDesk> FlightView<C, S> {
 
 /// The course map, over the [`FlightSim`] port: its opening, drawing,
 /// panels, input and Clear Route read the flight through the kept frame
-/// ([`FlightView::frame`](FlightView#structfield.frame)) and
-/// [`MapSource`](crate::flight::sim_port::MapSource),
-/// and send their commands through it. Its close is generic too
+/// ([`FlightView::frame`](FlightView#structfield.frame)) and the screen
+/// query ([`FlightSim::screen`]: the opening, each redraw, the panels
+/// after a selection change, a cycle and Find, each asked once when it
+/// happens, never per frame), and send their commands through it. Its close is generic too
 /// ([`FlightView::close_map`], in the `gates` module), the hypergate
 /// entry it may run a command ([`FlightCommand::EnterHypergate`]).
 /// [`FlightView::map_input_taken`] says when a close is due.
@@ -304,9 +307,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Lets go of the flight keys and shows the course map, with the
     /// system the original's `_DoSystemMap` selects as it opens
-    /// ([`Session::map_preselection`]) selected, and the system selected
-    /// in nav mode 3 drawn as its link. The hypergate map opens this way
-    /// too, its pick still only an offered system.
+    /// ([`Session::map_preselection`], with the rest of its opening,
+    /// [`ScreenAsk::MapOpening`]) selected, and the system selected in nav
+    /// mode 3 drawn as its link. The hypergate map opens this way too, its
+    /// pick still only an offered system.
     ///
     /// Clear Route is enabled off the hypergate map with a course
     /// (`showClearRouteButton`, @0x12396-0x123c3), and never on it.
@@ -317,20 +321,38 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::open_map`], opened `by` whoever opens it (flight, the
     /// bar, a port screen or a mission dialog), which gives the map its
     /// marks ([`FlightView::open_dialog_map`]) and its close's restore, and
-    /// the nav noted as it opens (`_DoSystemMap` @0x12349).
+    /// the nav noted as it opens (`_DoSystemMap` @0x12349): all of it, with
+    /// the borders, the preselection and the mission systems, one answer
+    /// to the opening's ask ([`ScreenAsk::MapOpening`]). A flight that
+    /// answers it nothing (one that failed to start) opens the map with no
+    /// nav noted, the marks the opener gives itself
+    /// ([`MarksFrom::unanswered`](nova_sim::flight_frame::MarksFrom::unanswered)),
+    /// no borders shown, nothing preselected and no mission systems.
     pub(super) fn open_map_as(&mut self, by: MapOpening) {
-        self.map_opened = Some(MapOpened {
-            by,
-            nav: self.opening_nav(),
-        });
+        let marks = by.marks_from();
+        let open = match self.sim.screen(ScreenAsk::MapOpening { marks }) {
+            ScreenAnswer::MapOpening(open) => Some(open),
+            _ => None,
+        };
+        let (nav, marks, borders, preselection, missions) = match open {
+            Some(MapOpen {
+                nav,
+                marks,
+                borders,
+                preselection,
+                missions,
+            }) => (Some(nav), marks, Some(borders), preselection, missions),
+            None => (None, marks.unanswered(), None, None, Vec::new()),
+        };
+        self.map_opened = Some(MapOpened { by, nav, marks });
         self.held.clear();
         self.map_open = true;
-        if let Some(sources) = self.sim.map_border_sources() {
+        if let Some(sources) = borders {
             self.map.show_border_sources(sources);
         }
         self.map.opened();
-        self.map.preselect(self.sim.map_preselection());
-        self.map_missions = self.sim.map_mission_systems();
+        self.map.preselect(preselection);
+        self.map_missions = missions;
         self.map
             .set_clear_route(self.map.mode() != MapMode::Hypergate && self.frame.course_plotted);
         self.redraw_map();
@@ -346,36 +368,47 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// rebuild point, shows it, as the original's next `_MapDialogUpdate`
     /// does. What the drawing was taken from is noted after the mark
     /// ([`MapKey`](nova_sim::flight_frame::MapKey)), so the mark itself
-    /// doesn't take it again. The
-    /// panels are taken with it ([`FlightView::retake_map_panel`]).
+    /// doesn't take it again. The borders and the panels for the system
+    /// selected are taken with it, all one answer to the redraw's ask
+    /// ([`ScreenAsk::Map`]), the hypergate map's borders counting the
+    /// arrows known, as the mark leaves them. A flight that answers it
+    /// nothing redraws nothing.
     pub(super) fn redraw_map(&mut self) {
         let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
-        let marks = MapOpened::marks(self.map_opened.as_ref());
-        let Some(drawing) = self
-            .sim
-            .map_drawing(offered.as_deref(), &self.map_missions, marks)
-        else {
+        let hypergate = offered.is_some();
+        let ScreenAnswer::Map(screen) = self.sim.screen(ScreenAsk::Map {
+            hypergate: offered,
+            missions: self.map_missions.clone(),
+            marks: MapOpened::marks(self.map_opened.as_ref()),
+            selected: self.map.selected(),
+        }) else {
             return;
         };
+        let MapScreen {
+            drawing,
+            borders,
+            panel,
+        } = *screen;
         self.map.show_drawing(&drawing);
-        if offered.is_some() {
-            self.send(FlightCommand::MarkKnown(drawing.gate_arrows.clone()));
+        if hypergate {
+            self.send(FlightCommand::MarkKnown(drawing.gate_arrows));
         }
-        if let Some(sources) = self.sim.map_border_sources() {
-            self.map.show_border_sources(sources);
-        }
+        self.map.show_border_sources(borders);
         self.map_seen = Some(self.frame.map_key.clone());
-        self.retake_map_panel();
+        self.map.show_panel(panel);
     }
 
     /// Takes the session's info panels onto the course map
-    /// ([`Session::map_panel`]) for the system it selects, as
-    /// `_MapDialogUpdate` draws them after `_DrawMap`: on the hypergate
-    /// map with the gate's offers, which title a destination.
+    /// ([`Session::map_panel`], [`ScreenAsk::MapPanel`]) for the system it
+    /// selects, as `_MapDialogUpdate` draws them after `_DrawMap`: on the
+    /// hypergate map with the gate's offers, which title a destination.
     pub(super) fn retake_map_panel(&mut self) {
-        let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered());
-        if let Some(panel) = self.sim.map_panel(self.map.selected(), offered) {
-            self.map.show_panel(panel);
+        let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
+        if let ScreenAnswer::MapPanel(panel) = self.sim.screen(ScreenAsk::MapPanel {
+            selected: self.map.selected(),
+            hypergate: offered,
+        }) {
+            self.map.show_panel(*panel);
         }
     }
 
@@ -427,7 +460,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.map.input(input);
         self.ui_sounds.extend(self.map.take_ui_sounds());
         if let Some(query) = self.map.take_find()
-            && let Some(found) = self.sim.find_map_system(&query)
+            && let ScreenAnswer::Found(found) = self.sim.screen(ScreenAsk::Find(query))
         {
             self.map.show_search(found);
             self.ui_sounds.extend(self.map.take_ui_sounds());
@@ -553,7 +586,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// map, nothing changes.
     fn cycle_map(&mut self, cycle: MapCycle) {
         if self.map.mode() == MapMode::Hypergate {
-            let destinations = self.sim.hypergate_cycle();
+            let destinations = match self.sim.screen(ScreenAsk::HypergateCycle) {
+                ScreenAnswer::HypergateCycle(destinations) => destinations,
+                _ => Vec::new(),
+            };
             if let Some(pick) = next_gate_pick(&destinations, self.map.selected(), cycle.back) {
                 self.map.select_gate(pick);
                 self.map.redraw();
@@ -562,7 +598,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
             return;
         }
         if !self.send(FlightCommand::CycleMapSelection).is_refused() {
-            self.map.preselect(self.sim.map_preselection());
+            let preselection = match self.sim.screen(ScreenAsk::MapPreselection) {
+                ScreenAnswer::MapPreselection(preselection) => preselection,
+                _ => None,
+            };
+            self.map.preselect(preselection);
             self.map.redraw();
             self.redraw_map();
             self.retake_nav();

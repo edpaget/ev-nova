@@ -17,10 +17,11 @@ use nova_sim::navigation::NavMode;
 use nova_sim::{EscortCommand, EscortGroup, StellarPick};
 
 /// A view of a flight whose fleet holds escorts of `present`'s classes,
-/// the course map drawing Sol.
+/// the course map's opening answered and its first redraw drawing Sol
+/// ([`queue_map`]).
 fn fleet(present: &[EscortClass]) -> Faked {
     let mut view = world(catalog(), fleet_of(present));
-    view.sim.map_mut().drawing = Some(sol_drawing());
+    queue_map(&mut view, None, sol_drawing());
     view
 }
 
@@ -495,7 +496,7 @@ fn letting_go_of_the_keys_lets_go_of_the_map_key() {
         landed: Some(StellarId(128)),
         ..in_sol()
     });
-    docked.sim.map_mut().drawing = Some(sol_drawing());
+    queue_map(&mut docked, None, sol_drawing());
     docked.open_bar_map();
     docked.port_map_input(&held(MAP));
     docked.release_keys();
@@ -573,7 +574,7 @@ fn a_fresh_flights_map_opens_on_the_current_system_at_0_5625() {
         system: SystemId(131),
         ..in_sol()
     });
-    view.sim.map_mut().drawing = Some(sol_drawing());
+    queue_map(&mut view, None, sol_drawing());
     tap(&mut view, MAP);
     assert!(view.map_open());
     assert_eq!(super::maps::place_of(view.course_map()), (0.5625, (600, 0)));
@@ -599,10 +600,9 @@ fn the_flights_metrics_measure_the_course_maps_panel() {
         hazards: String::new(),
         date: date.clone(),
     };
-    let map = view.sim.map_mut();
-    map.drawing = Some(sol_drawing());
-    map.map_preselection = Some(SystemId(130));
-    map.panel = Some(panel);
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
+    view.sim.queue_screen(redrawn_with(sol_drawing(), panel));
     tap(&mut view, MAP);
     let width =
         crate::text::fixture::MonoMetrics::advance(Font::Geneva, 9.0) * date.chars().count() as f32;
@@ -676,9 +676,7 @@ fn faked_typing(view: &mut Faked, text: &str) {
 fn faked_measured_on_the_map() -> Faked {
     let mut view = faked_in(super::map_find::named(catalog()), in_sol())
         .with_metrics(Rc::new(crate::text::fixture::MonoMetrics));
-    let map = view.sim.map_mut();
-    map.drawing = Some(sol_drawing());
-    map.map_preselection = Some(SystemId(130));
+    queue_map(&mut view, Some(130), sol_drawing());
     tap(&mut view, MAP);
     view.take_sounds();
     view
@@ -708,7 +706,7 @@ fn find_is_laid_out_from_the_template_and_style_the_flight_gives() {
     let mut view = faked_in(super::map_find::named(catalog()), in_sol())
         .with_metrics(Rc::new(crate::text::fixture::MonoMetrics))
         .with_find(Some(template), crate::ui::ButtonStyle::STOCK);
-    view.sim.map_mut().drawing = Some(sol_drawing());
+    queue_map(&mut view, None, sol_drawing());
     tap(&mut view, MAP);
     faked_typing(&mut view, "f");
     assert!(texts(&drawn(&view)).contains(&"Never mind".to_owned()));

@@ -1,6 +1,5 @@
 use super::*;
 
-use crate::flight::sim_port::fixture::MapAsk;
 use crate::galaxy::GalaxyMap;
 use crate::galaxy::find::PROMPT;
 use crate::text::fixture::MonoMetrics;
@@ -43,9 +42,7 @@ fn faked_on_the_map(frame: FlightFrame) -> Faked {
     let (docked, current) = (frame.docked(), frame.system);
     let mut view = faked_in(named(catalog()), frame);
     view.map = view.map.clone().with_metrics(Rc::new(MonoMetrics));
-    let map = view.sim.map_mut();
-    map.drawing = Some(sol_drawing());
-    map.map_preselection = Some(current);
+    queue_map(&mut view, Some(current.0), sol_drawing());
     if docked {
         view.open_bar_map();
     } else {
@@ -70,12 +67,10 @@ pub(super) fn panel_titled(title: &str) -> MapPanel {
     }
 }
 
-/// The last panel `view`'s flight was asked for.
-fn last_panel_asked(view: &Faked) -> Option<MapAsk> {
-    view.sim
-        .asked()
-        .into_iter()
-        .rfind(|ask| matches!(ask, MapAsk::Panel { .. }))
+/// The last panels `view`'s flight was asked for, as the panels' ask
+/// ([`panels_asked`](super::maps::panels_asked)).
+fn last_panel_asked(view: &Faked) -> Option<ScreenAsk> {
+    super::maps::panels_asked(view).pop()
 }
 
 /// Types `text` into `view`'s open map as the platform sends it.
@@ -117,18 +112,22 @@ fn space_on_the_course_map_beeps_centres_on_the_current_system_and_selects_it() 
     let mut view = faked_on_the_map(in_sol());
     let alpha = faked_on_map(&mut view, 131);
     view.sim.queue_answer(selects(131));
+    view.sim.queue_screen(redrawn(sol_drawing()));
+    view.sim
+        .queue_screen(ScreenAnswer::MapPanel(Box::new(blank_panel())));
     faked_map_click(&mut view, alpha);
     assert_eq!(view.map.selected(), Some(SystemId(131)));
     view.ui_sounds.clear();
     let sols = panel_titled("Current System:");
-    view.sim.map_mut().panel = Some(sols.clone());
+    view.sim
+        .queue_screen(ScreenAnswer::MapPanel(Box::new(sols.clone())));
     assert!(!faked_map_tap(&mut view, Key::Space));
     assert_eq!(view.ui_sounds, [UiSound::MapCentred]);
     assert_eq!(view.map.selected(), Some(SystemId(130)));
     assert_eq!(view.map.place().expect("in flight").scroll(), (0, 0));
     assert_eq!(
         last_panel_asked(&view),
-        Some(MapAsk::Panel {
+        Some(ScreenAsk::MapPanel {
             selected: Some(SystemId(130)),
             hypergate: None,
         })
@@ -143,11 +142,16 @@ fn f_then_a_name_then_return_selects_what_the_flights_find_found_and_its_panel()
         ..in_sol()
     });
     let sols = panel_titled("Selected System:");
-    let map = view.sim.map_mut();
-    map.search = Some(SearchOutcome::Found(SystemId(130)));
-    map.panel = Some(sols.clone());
+    view.sim
+        .queue_screen(ScreenAnswer::Found(SearchOutcome::Found(SystemId(130))));
+    view.sim
+        .queue_screen(ScreenAnswer::MapPanel(Box::new(sols.clone())));
     faked_find(&mut view, "sol");
-    assert!(view.sim.asked().contains(&MapAsk::Find("sol".to_owned())));
+    assert!(
+        view.sim
+            .screens_asked()
+            .contains(&ScreenAsk::Find("sol".to_owned()))
+    );
     assert_eq!(view.ui_sounds, [UiSound::MapSystemFound]);
     assert_eq!(view.map.selected(), Some(SystemId(130)));
     assert_eq!(view.map.place().expect("in flight").scroll(), (0, 0));
@@ -174,15 +178,16 @@ fn a_system_the_flights_find_doesnt_find_leaves_the_selection_and_panel() {
         },
     );
     view.map = view.map.clone().with_metrics(Rc::new(MonoMetrics));
-    view.sim.map_mut().search = Some(SearchOutcome::NotFound);
     view.open_map();
     let selected = view.map.selected();
     let panel = view.map.panel().cloned();
     for name in ["sol", "barnard", "zzz"] {
+        view.sim
+            .queue_screen(ScreenAnswer::Found(SearchOutcome::NotFound));
         faked_find(&mut view, name);
         assert_eq!(
-            view.sim.asked().last(),
-            Some(&MapAsk::Find(name.to_owned())),
+            view.sim.screens_asked().last(),
+            Some(&ScreenAsk::Find(name.to_owned())),
             "{name}"
         );
         assert_eq!(view.ui_sounds, [UiSound::MapSystemNotFound], "{name}");
@@ -248,7 +253,8 @@ fn a_click_on_find_opens_find_silently() {
 fn space_on_the_hypergate_map_keeps_the_destination_picked() {
     let mut view = faked_in(named(catalog()), in_sol());
     view.map = view.map.clone().with_metrics(Rc::new(MonoMetrics));
-    view.sim.map_mut().map_preselection = Some(SystemId(130));
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
     view.map.offer_gates(vec![SystemId(131)]);
     view.open_map();
     let alpha = faked_on_map(&mut view, 131);
@@ -280,14 +286,19 @@ fn find_works_on_the_bars_map_where_m_types() {
     view.sim.queue_answer(selects(131));
     faked_map_click(&mut view, alpha);
     assert_eq!(view.map.selected(), Some(SystemId(131)));
-    view.sim.map_mut().search = Some(SearchOutcome::Found(SystemId(130)));
+    view.sim
+        .queue_screen(ScreenAnswer::Found(SearchOutcome::Found(SystemId(130))));
     faked_type_in(&mut view, "f");
     assert!(view.map.finding());
     faked_type_in(&mut view, "m");
     faked_map_input(&mut view, &key(Key::Backspace, true));
     faked_type_in(&mut view, "sol");
     faked_map_input(&mut view, &key(Key::Enter, true));
-    assert!(view.sim.asked().contains(&MapAsk::Find("sol".to_owned())));
+    assert!(
+        view.sim
+            .screens_asked()
+            .contains(&ScreenAsk::Find("sol".to_owned()))
+    );
     assert_eq!(view.ui_sounds, [UiSound::MapSystemFound]);
     assert_eq!(view.map.selected(), Some(SystemId(130)));
 }

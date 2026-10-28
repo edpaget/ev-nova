@@ -51,7 +51,8 @@ use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{DrawList, ImageKey, Input, MouseButton, Screen, ScreenAction};
 use nova_sim::ShipIff;
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightFrame, MapClick, Names, ScreenAnswer, ScreenAsk,
+    Answer, FlightCommand, FlightFrame, MapClick, MapOpen, MapScreen, MarksFrom, Names,
+    ScreenAnswer, ScreenAsk,
 };
 use nova_sim::galaxy_map::GalaxyShown;
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
@@ -511,13 +512,85 @@ fn sol_drawing() -> nova_sim::galaxy_map::MapDrawing {
     }
 }
 
-/// [`faked`] in `frame`, its flight drawing the course map as
-/// [`sol_drawing`] and preselecting Sol on it.
+/// What a scripted flight in `frame` answers the course map's opening
+/// ([`ScreenAsk::MapOpening`]): `frame`'s nav noted, no marks, no border
+/// sources, `preselection` selected and no mission systems.
+fn map_opening(frame: &FlightFrame, preselection: Option<i16>) -> ScreenAnswer {
+    opening_with(frame.nav_mode, preselection, nova_sim::MapMarks::NONE)
+}
+
+/// What a scripted flight answers the course map's opening with the nav
+/// `nav` as it opens: that nav noted, `marks`, no border sources,
+/// `preselection` selected and no mission systems.
+fn opening_with(
+    nav: NavMode,
+    preselection: Option<i16>,
+    marks: nova_sim::MapMarks,
+) -> ScreenAnswer {
+    ScreenAnswer::MapOpening(MapOpen {
+        nav: nova_sim::SavedNav::of(nav),
+        marks,
+        borders: nova_sim::map_borders::BorderSources::default(),
+        preselection: preselection.map(SystemId),
+        missions: Vec::new(),
+    })
+}
+
+/// A panel that says nothing: an empty strip and column, no words.
+fn blank_panel() -> nova_sim::map_panel::MapPanel {
+    use nova_sim::map_panel::{Column, ColumnBody, MapPanel, PanelWords, Ports, Strip};
+    MapPanel {
+        strip: Strip::Info {
+            ports: Ports::None,
+            hazards: String::new(),
+            date: String::new(),
+        },
+        column: Column {
+            title: String::new(),
+            body: ColumnBody::Unknown,
+        },
+        words: PanelWords::default(),
+    }
+}
+
+/// What a scripted flight answers a course map's redraw
+/// ([`ScreenAsk::Map`]): `drawing`, no border sources and `panel`.
+fn redrawn_with(
+    drawing: nova_sim::galaxy_map::MapDrawing,
+    panel: nova_sim::map_panel::MapPanel,
+) -> ScreenAnswer {
+    ScreenAnswer::Map(Box::new(MapScreen {
+        drawing,
+        borders: nova_sim::map_borders::BorderSources::default(),
+        panel,
+    }))
+}
+
+/// [`redrawn_with`] `drawing` and a [`blank_panel`].
+fn redrawn(drawing: nova_sim::galaxy_map::MapDrawing) -> ScreenAnswer {
+    redrawn_with(drawing, blank_panel())
+}
+
+/// Queues on `view`'s flight the answers to the course map's opening,
+/// [`map_opening`] over its frame preselecting `preselection`, and to its
+/// first redraw, [`redrawn`] `drawing`: the two screen asks a map makes
+/// as it opens.
+fn queue_map(
+    view: &mut Faked,
+    preselection: Option<i16>,
+    drawing: nova_sim::galaxy_map::MapDrawing,
+) {
+    let opening = map_opening(&view.frame, preselection);
+    view.sim.queue_screen(opening);
+    view.sim.queue_screen(redrawn(drawing));
+}
+
+/// [`faked`] in `frame`, its flight answering the course map's opening by
+/// preselecting Sol and its first redraw with [`sol_drawing`]
+/// ([`queue_map`]).
 fn faked_sol(frame: FlightFrame) -> Faked {
     let mut view = faked(frame);
-    let map = view.sim.map_mut();
-    map.drawing = Some(sol_drawing());
-    map.map_preselection = Some(SystemId(130));
+    queue_map(&mut view, Some(130), sol_drawing());
     view
 }
 
