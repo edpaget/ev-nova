@@ -398,3 +398,75 @@ jobs:
                 gh release delete-asset nightly "$asset" --yes
               fi
             done
+
+  # Deploys the GitHub Pages site. A repository has one Pages deployment,
+  # and each deploy replaces the whole site.
+  #
+  # The root is the page: packaging/site/index.html, a placeholder until
+  # rdm:phase/pages-site/phase-2-download-page renders it with `mise run site`.
+  #
+  # Another job adds a subtree by uploading an artifact named `pages-<path>`
+  # whose root is the tree served at `/<path>/` (`pages-flatpak` becomes
+  # `/flatpak/`), and adding itself to this job's `needs`. `<path>` must not
+  # be empty or clash with a root file; the assembly step refuses both. If a
+  # needed producer fails, this job is skipped and the previous site stays up.
+  #
+  # Because a deploy replaces everything, a producer uploads its full tree on
+  # every main run. One that rebuilds incrementally fetches its previous tree
+  # from the live site first (rdm:phase/auto-updates/phase-6-flatpak-repo-on-pages
+  # does). A subtree no artifact provides on a run disappears from the site.
+  #
+  # This is the only job granted the pages and id-token write scopes, which
+  # deploy-pages needs. contents: read is for checkout, since a job-level
+  # permissions block sets every scope it doesn't list to none.
+  pages:
+    needs: [ci]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # On top of the workflow-level group, as deploy-pages recommends: never
+    # cancel a deploy half way. The next push redeploys everything anyway.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # Without merge-multiple, each matching artifact lands in its own
+      # `<path>/<artifact name>/`. With no match it downloads nothing and
+      # succeeds, and the assembly step deploys the root page alone.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pages-*
+          path: ${{ runner.temp }}/pages
+      - name: Assemble _site
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp packaging/site/index.html _site/
+          if [ -d "$RUNNER_TEMP/pages" ]; then
+            for dir in "$RUNNER_TEMP/pages"/pages-*/; do
+              [ -d "$dir" ] || continue
+              name=$(basename "$dir")
+              sub=${name#pages-}
+              # Refuse an empty or clashing path rather than overwrite the root.
+              if [ -z "$sub" ] || [ -e "_site/$sub" ]; then
+                echo "pages artifact $name has an empty or clashing path" >&2
+                exit 1
+              fi
+              mv "$dir" "_site/$sub"
+            done
+          fi
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
