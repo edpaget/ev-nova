@@ -222,7 +222,19 @@ impl Chance for StepRolls {
 mod tests {
     use std::collections::VecDeque;
 
+    use nova_sim::fixture::chance::check_contract;
+
     use super::*;
+
+    #[test]
+    fn a_beams_rolls_meet_the_chance_contract() {
+        for (seed, beam) in [(0, 0), (0x1234_5678_9ABC_DEF0, 1), (u64::MAX, 7)] {
+            assert_eq!(
+                check_contract(&mut StepRolls::new(seed).for_beam(beam)),
+                Ok(())
+            );
+        }
+    }
 
     /// Gives its draws in turn, then the middle of each range.
     struct Draws {
