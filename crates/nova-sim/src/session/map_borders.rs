@@ -50,15 +50,29 @@ impl Chart {
     /// governments.
     #[must_use]
     fn map_border_sources(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> BorderSources {
+        self.map_border_sources_knowing(pilot, statics, setup, &[])
+    }
+
+    /// [`Chart::map_border_sources`] with each of `also_known` counted as
+    /// known: what the hypergate map's borders add once its drawing's gate
+    /// arrows are marked known (`Session::mark_known`), read before the
+    /// mark. It changes nothing.
+    #[must_use]
+    pub(super) fn map_border_sources_knowing(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        also_known: &[SystemId],
+    ) -> BorderSources {
         let galaxy = &self.galaxy;
         let places = galaxy.map().places();
         let mut coarse = Vec::new();
         let mut walk = Vec::new();
         for system in galaxy.catalog_systems() {
-            let Some(source) = galaxy
-                .same_place(system)
-                .and_then(|stand_in| self.border_source(pilot, statics, setup, stand_in))
-            else {
+            let Some(source) = galaxy.same_place(system).and_then(|stand_in| {
+                self.border_source(pilot, statics, setup, also_known, stand_in)
+            }) else {
                 continue;
             };
             if places.head(system) == Some(system) {
@@ -74,16 +88,19 @@ impl Chart {
     }
 
     /// `system`'s source, a visible system standing for a place, when it
-    /// passes `_AddSystemInfluenceToMap`'s flag tests (@0x115b2-0x1160e).
+    /// passes `_AddSystemInfluenceToMap`'s flag tests (@0x115b2-0x1160e),
+    /// each of `also_known` counted as known.
     fn border_source(
         &self,
         pilot: &Pilot,
         statics: &Statics,
         setup: &Setup,
+        also_known: &[SystemId],
         system: SystemId,
     ) -> Option<BorderSource> {
         let galaxy = &self.galaxy;
-        if !self.known.contains(&system) || !pilot.has_explored(system) {
+        let known = self.known.contains(&system) || also_known.contains(&system);
+        if !known || !pilot.has_explored(system) {
             return None;
         }
         let govt = galaxy.govt(system)?;
@@ -259,6 +276,32 @@ mod tests {
         let sources = session.map_border_sources();
         assert_eq!(coarse(&sources), [130, 135, 138]);
         assert!(walked(&sources).iter().all(|&(_, by)| by != 131));
+    }
+
+    #[test]
+    fn a_system_counted_as_known_adds_as_a_known_one_does_and_stays_unknown() {
+        let catalog = bordered();
+        let mut session = everything_seen(&catalog, Rulebook::default());
+        let known = session.map_border_sources();
+        session.chart.known.remove(&SystemId(131));
+        let counted = session.chart.map_border_sources_knowing(
+            &session.pilot,
+            &session.statics,
+            &session.setup,
+            &[SystemId(131)],
+        );
+        assert_eq!(counted, known, "131 adds as if known");
+        assert!(!session.known().contains(&SystemId(131)), "still unknown");
+        assert_eq!(
+            session.chart.map_border_sources_knowing(
+                &session.pilot,
+                &session.statics,
+                &session.setup,
+                &[],
+            ),
+            session.map_border_sources(),
+            "none counted: the sources as they stand"
+        );
     }
 
     #[test]

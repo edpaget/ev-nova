@@ -587,6 +587,7 @@ mod reinforcements;
 mod repair_dock;
 mod rescue;
 mod sabotage;
+mod screen;
 mod script_effects;
 mod script_move;
 mod secondary_select;

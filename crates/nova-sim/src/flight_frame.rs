@@ -4,15 +4,22 @@
 //! ([`FlightCommand`]) and what the session answers ([`Answer`]), what it
 //! raised on the way ([`FlightEvent`]), and a frame's fixed steps' input and
 //! report ([`StepInput`], [`StepReport`], its [`StepRun`]s and
-//! [`PassReport`]s).
+//! [`PassReport`]s), and what a screen asks as it opens or its input
+//! changes ([`ScreenAsk`]) with the snapshot it draws from
+//! ([`ScreenAnswer`], the `screen` module).
 //!
 //! They live here, not in the view, so the session can build them:
-//! [`Session::fill_frame`](crate::Session::fill_frame) fills a frame and
-//! [`Session::apply`](crate::Session::apply) answers a command. Each
+//! [`Session::fill_frame`](crate::Session::fill_frame) fills a frame,
+//! [`Session::apply`](crate::Session::apply) answers a command and
+//! [`Session::screen`](crate::Session::screen) a screen's ask. Each
 //! starts with what the first slice moved across the seam needs, the nav
 //! mode and the stellar keys, and grows as later slices move more.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+mod screen;
+
+pub use screen::{FloatingMap, MapOpen, MapScreen, MarksFrom, ScreenAnswer, ScreenAsk};
 
 use crate::asteroid::Asteroid;
 use crate::bay::FighterNote;
