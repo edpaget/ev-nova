@@ -358,6 +358,11 @@ impl<
     /// `builder.build().into()` for Nova's collaborators
     /// ([`SessionFlight::new`]). The catalog is shared with the flight
     /// first, and the wording picks on the flight's chance.
+    ///
+    /// Wiring-only: for the integration tests that wire a real session
+    /// behind the port (`flight_seam`, the stock tests, the edge's
+    /// checks). View code and component tests never call it; they open
+    /// the view over `FakeFlight`.
     pub fn from_session(catalog: C, mut sim: SessionFlight<C>, rules: &Rulebook) -> Self {
         let catalog = Rc::new(catalog);
         sim.share_catalog(Rc::clone(&catalog) as Rc<dyn SimCatalog>);

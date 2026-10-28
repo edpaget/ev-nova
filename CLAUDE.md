@@ -230,6 +230,41 @@ and `Mode`) are stateful.
 - A new field on `Session` itself needs a reason in its doc comment, saying
   why it belongs to no sub-state.
 
+## View and sim
+
+nova-view's flight screen (`FlightView`, `crates/nova-view/src/flight/view/`)
+reaches the sim only through the `FlightSim` port and its sources
+(`MapSource`, `CommSource`, `PortSource`, `NameSource`, `PilotSource`) in
+`flight/sim_port.rs`, and the developer tools through `DevDesk`
+(`devtools/pilot.rs`). `SessionFlight` (`flight/sim_adapter.rs`) implements
+them over `Session`, and the edge (`flight/edge.rs`) builds it.
+
+- Write view code in `impl<C, S: FlightSim> FlightView<C, S>` blocks. Don't
+  name `Session` outside `sim_adapter.rs`, and don't add a block over
+  `SessionFlight<C>`. The only concrete members are two fixture-only ones
+  (`cfg(any(test, feature = "fixture"))`) for integration tests:
+  `FlightView::session()`, which reads a real session behind the port, and
+  `FlightView::from_session`, which wires a view over a session a test built.
+- Keep each adapter forward to one `Session` call. Put decisions in
+  nova-sim.
+- A new readout is a `FlightFrame` field
+  (`crates/nova-sim/src/flight_frame.rs`), filled in `session/frame.rs` and
+  pinned by a nova-sim test there.
+- A new player action is a `FlightCommand` variant, matched with its
+  `Answer` in `session/apply.rs` or a module under `session/apply/`. A new
+  one-shot output is a `FlightEvent` variant, drained in
+  `session/flight_events.rs`. The step's order lives in `session/step.rs`.
+- What a screen asks once as it opens is a source method that defaults to
+  nothing open, not a frame field.
+- Put new sim-side code for the port in those modules, not in `session.rs`.
+- Test the view on `FakeFlight` (`flight::sim_port::fixture`): set a frame
+  (the builders in `flight/view/tests/frames.rs`), script its answers and
+  events, and assert what the view draws, plays and sends.
+- In nova-view, start a real `Session` only in `tests/it/flight_seam.rs`
+  (one test per port surface or router handoff, as its module doc says),
+  the adapter's checks under `sim_adapter`, the edge's checks
+  (`flight/view/build/edge_checks.rs`) and the stock tests.
+
 ## Verification runs through cargo
 
 Write all checks and verifiers as Rust tests (unit tests, integration tests
