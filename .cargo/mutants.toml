@@ -641,6 +641,9 @@ exclude_re = [
     # `FlightSim::coming_traffic`'s default is already the empty list the
     # mutant puts back, so the replacement is the same function.
     "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace FlightSim::coming_traffic -> Vec<ShipId> with vec!\\[\\]$",
+    # `FlightSim::weapons`'s default is "no weapons": its body is already
+    # the empty list the mutant puts back.
+    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace FlightSim::weapons -> Vec<WeaponId> with vec!\\[\\]$",
     # `unlike` only needs a gamma other than the frame's: `- 1.0` differs
     # as `+ 1.0` does, and `check_contract` and the fake's tests compare
     # nothing else of it.
