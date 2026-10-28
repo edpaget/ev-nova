@@ -5,8 +5,9 @@
 //! binary writes the Linux desktop file, AppStream metainfo and icons
 //! ([`linux`]); its `nova-flatpak` binary packs the game into the Linux
 //! Flatpak ([`linux::flatpak`]); its `nova-build-id` binary prints the build ID
-//! ([`build_id`]); and its `nova-site` binary renders the download
-//! page that links them all ([`site`]).
+//! ([`build_id`]); its `nova-site` binary renders the download page that
+//! links them all ([`site`]); and its `nova-appcast` binary signs and
+//! writes the update feeds ([`appcast`]).
 //!
 //! # Usage
 //!
@@ -124,7 +125,37 @@
 //! `--archive-dir <TARGET>` print the Windows zip's or Linux tarball's
 //! file name or top-level directory ([`archive`]), which CI's packaging
 //! uses instead of spelling them. See [`site`].
+//!
+//! # The update feeds
+//!
+//! ```text
+//! mise run appcast -- publish --dist <DIR> --assets <FILE> --current <DIR> \
+//!     --feeds <DIR> --prune-list <FILE>
+//! mise run appcast -- public-key
+//! ```
+//!
+//! On any host, and in CI's `publish` job. `publish` reads the stable
+//! installers in `--dist` (`ev-nova-aarch64-apple-darwin.dmg` and
+//! `ev-nova-x86_64-pc-windows-msvc.msi`), the release's asset names in
+//! `--assets` (one per line) and its current feeds, downloaded into
+//! `--current`. When the game package's `[package.metadata.bundle]` sets
+//! `update_public_key` and `UPDATE_SIGNING_KEY` holds its seed (32 bytes,
+//! standard base64), it copies each installer to its build-ID name in
+//! `--dist` (`ev-nova-<id>-<target>.<ext>`), signs it with Ed25519, and
+//! writes `appcast-macos-nightly.xml` and `appcast-windows-nightly.xml`
+//! into `--feeds`. When either half is missing it skips the feeds and
+//! prints a `::warning::`, and the nightly publishes without them; a seed
+//! that is malformed or doesn't match the key fails. Either way it writes
+//! the release assets to delete into `--prune-list`, one per line.
+//!
+//! It refuses a build that isn't newer than a current feed's, so a
+//! clock-skewed commit can't roll installs back: an older build exits 1,
+//! and the very build the feeds already offer (a re-run) exits 3,
+//! writing nothing. The build ID is [`build_id::resolve`]'s. `public-key`
+//! prints `UPDATE_SIGNING_KEY`'s public key, the value to commit. See
+//! [`appcast`].
 
+pub mod appcast;
 pub mod archive;
 pub mod build_id;
 pub mod bundle;

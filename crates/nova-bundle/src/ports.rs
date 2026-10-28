@@ -1,11 +1,13 @@
 //! The ports the bundler's core reaches the outside world through: running
-//! a program, the files of the staging tree, and the environment the
-//! signing inputs come from.
+//! a program, the files of the staging tree, the environment the signing
+//! inputs come from, reading files back, and signing the update files.
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
 use std::path::Path;
+
+use crate::appcast::key::PublicKey;
 
 /// A program to run, with every argument and environment variable the
 /// core chose for it.
@@ -176,6 +178,27 @@ pub trait Files {
 pub trait Env {
     /// The variable's value, or `None` when it is unset.
     fn var(&self, name: &str) -> Option<OsString>;
+}
+
+/// Port: reads files back, as `nova-appcast` reads the installers, the
+/// release's asset list and the published feeds.
+pub trait ReadFiles {
+    /// The file's bytes.
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
+
+    /// The names of the files (not the directories) in the directory,
+    /// sorted.
+    fn file_names(&self, dir: &Path) -> io::Result<Vec<String>>;
+}
+
+/// Port: signs with the update-signing key. Its `Debug`, where it has one,
+/// never shows the key.
+pub trait Signer {
+    /// The Ed25519 signature of `message`.
+    fn sign(&self, message: &[u8]) -> [u8; 64];
+
+    /// The public key the signatures verify under.
+    fn public_key(&self) -> PublicKey;
 }
 
 #[cfg(test)]

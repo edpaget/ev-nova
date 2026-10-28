@@ -1,10 +1,11 @@
-//! Test doubles shared by the `bundle`, `signing`, `notary` and `build_id`
-//! tests: a recording [`Process`] and fake [`Files`] writing to one event
-//! log, so a test sees every run and file step in the order the core asked
-//! for them, and a [`FakeEnv`] of canned variables.
+//! Test doubles shared by the `bundle`, `signing`, `notary`, `build_id`
+//! and `appcast` tests: a recording [`Process`] and fake [`Files`] writing
+//! to one event log, so a test sees every run and file step in the order
+//! the core asked for them, a [`FakeEnv`] of canned variables, and a
+//! [`FakeRead`] of canned files.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ use std::rc::Rc;
 
 use crate::build_id::{BuildId, VAR};
 use crate::bundle::{BundleError, Host, bundle};
-use crate::ports::{Env, Files, Invocation, Process, RunError};
+use crate::ports::{Env, Files, Invocation, Process, ReadFiles, RunError};
 use crate::signing::{Credentials, Signing};
 use crate::spec::BundleSpec;
 use crate::spec::tests::sample_metadata;
@@ -85,6 +86,32 @@ pub(crate) struct FakeEnv(pub HashMap<&'static str, OsString>);
 impl Env for FakeEnv {
     fn var(&self, name: &str) -> Option<OsString> {
         self.0.get(name).cloned()
+    }
+}
+
+/// Files to read back, by path. A missing file is `NotFound`, and a
+/// directory lists the files directly in it (none is no error).
+#[derive(Default)]
+pub(crate) struct FakeRead(pub BTreeMap<PathBuf, Vec<u8>>);
+
+impl ReadFiles for FakeRead {
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.0
+            .get(path)
+            .cloned()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))
+    }
+
+    fn file_names(&self, dir: &Path) -> io::Result<Vec<String>> {
+        let mut names: Vec<String> = self
+            .0
+            .keys()
+            .filter(|path| path.parent() == Some(dir))
+            .filter_map(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        Ok(names)
     }
 }
 

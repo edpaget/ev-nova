@@ -33,6 +33,7 @@ fn spec(root: &Path) -> BundleSpec {
         description: "A new engine for EV Nova.".into(),
         homepage: "https://github.com/edpaget/ev-nova".into(),
         developer: "ev-nova contributors".into(),
+        update_public_key: None,
     }
 }
 

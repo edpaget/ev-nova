@@ -109,3 +109,6 @@ summary = "Play EV Nova from your own copy of its data"
 description = "A new engine for the space trading and combat game EV Nova. It plays the game from your own copy of its data files, which are not included."
 homepage = "https://github.com/edpaget/ev-nova"
 developer = "ev-nova contributors"
+# update_public_key = "<base64 Ed25519 public key>": set by the operator once
+# the signing key exists (infra/github/README.md, "The update-signing
+# environment"). Without it, publish writes no update feeds.

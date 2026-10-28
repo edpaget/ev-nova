@@ -16,7 +16,10 @@ use crate::ports::{Env, Invocation, Process, RunError};
 pub const VAR: &str = "NOVA_BUILD_ID";
 
 /// A build's ID: always 14 ASCII digits naming a valid UTC time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Its 14 fixed-width digits sort as the times they name, so `Ord` is
+/// time order: a later build compares greater.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BuildId(String);
 
 /// Why a value is not a build ID.
@@ -456,6 +459,18 @@ mod tests {
                 Ok(good.to_owned())
             );
         }
+    }
+
+    #[test]
+    fn build_ids_order_by_their_time() {
+        let id = |text| BuildId::parse(text).expect("an ID");
+        assert!(id("20261028123456") < id("20261028123457"));
+        assert!(id("20261231235959") < id("20270101000000"));
+        assert!(id("21000101000000") > id("20991231235959"));
+        assert_eq!(
+            id("20261028123456").cmp(&id("20261028123456")),
+            std::cmp::Ordering::Equal
+        );
     }
 
     #[test]

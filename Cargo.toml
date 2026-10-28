@@ -45,6 +45,9 @@ roxmltree = "0.20.0"
 # nova-bundle decodes the Developer ID certificate and the notary API key
 # from base64 signing variables; the version plist already locks.
 base64 = "0.23"
+# nova-bundle signs the update feeds' installers with Ed25519, as Sparkle's
+# and WinSparkle's `sparkle:edSignature` expects.
+ed25519-dalek = "2.2"
 binrw = "0.15"
 serde = { version = "1", features = ["derive"] }
 # nova's build script reads its own Cargo.toml (nova-winres).

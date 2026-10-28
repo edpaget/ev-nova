@@ -1,21 +1,26 @@
 [package]
 name = "nova-bundle"
-description = "Packs the nightly's installers: Nova.app, the Apple silicon macOS bundle, into a .dmg (Developer ID signed and notarized, or ad-hoc signed), the built Windows executables into a per-user MSI, the Linux desktop file, AppStream metainfo and icons into a share/ tree, and the game into a Linux Flatpak, each stamped with the commit-timestamp build ID, and renders the download page that links them"
+description = "Packs the nightly's installers: Nova.app, the Apple silicon macOS bundle, into a .dmg (Developer ID signed and notarized, or ad-hoc signed), the built Windows executables into a per-user MSI, the Linux desktop file, AppStream metainfo and icons into a share/ tree, and the game into a Linux Flatpak, each stamped with the commit-timestamp build ID, renders the download page that links them, and signs and writes the Sparkle update feeds for macOS and Windows"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 # `mise run bundle` runs `cargo run -p nova-bundle`; nova-installer,
-# nova-linux, nova-flatpak and nova-site are the other
-# binaries.
+# nova-linux, nova-flatpak, nova-site, nova-build-id and nova-appcast are
+# the other binaries.
 default-run = "nova-bundle"
 
 [dependencies]
 # The signing variables' certificate and API key.
 base64.workspace = true
+# Signs the update feeds' installers (`appcast`).
+ed25519-dalek.workspace = true
 # Info.plist, written as XML.
 plist.workspace = true
+# Reads the published update feeds back (`appcast::read_feed`), and the
+# generated WiX source in the tests.
+roxmltree.workspace = true
 # `cargo metadata`'s output, read into the bundle's spec.
 serde.workspace = true
 serde_json.workspace = true
@@ -25,8 +30,6 @@ thiserror.workspace = true
 nova-winres.workspace = true
 
 [dev-dependencies]
-# Reads the generated WiX source back as XML in the tests.
-roxmltree.workspace = true
 # Real folders for the std adapters' tests.
 tempfile.workspace = true
 
