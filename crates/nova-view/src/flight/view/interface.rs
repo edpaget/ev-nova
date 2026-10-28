@@ -90,7 +90,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
         if self.bar_held() || self.bar_government.is_none() {
             return;
         }
-        let government = self.frame_now().hud.interface_government;
+        let government = self.frame.hud.interface_government;
         self.choose_bar(government);
     }
 
@@ -116,7 +116,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// `ïntf` other than the one loaded (@0x73663-0x73672).
     pub(super) fn interface_now(&self) -> Option<Result<i16, String>> {
         self.bar_government?;
-        let government = self.frame_now().hud.interface_government;
+        let government = self.frame.hud.interface_government;
         Some(hud::interface_for(&*self.catalog, government))
     }
 

@@ -107,10 +107,10 @@ fn the_flights_failure_is_the_views_to_tell() {
 }
 
 #[test]
-fn the_stellar_landed_on_is_read_from_a_fresh_frame() {
+fn the_stellar_landed_on_is_read_from_the_frame_a_change_left() {
     let mut view = faked(in_sol());
     assert_eq!(view.landed(), None, "in flight");
-    view.sim.set_frame(in_system(130, 128, true));
+    view.change_sim(|sim| sim.set_frame(in_system(130, 128, true)));
     assert_eq!(view.landed(), Some(StellarId(128)), "the flight's now");
 }
 

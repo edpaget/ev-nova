@@ -85,7 +85,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// it. None in flight.
     #[must_use]
     pub fn landed(&self) -> Option<StellarId> {
-        self.frame_now().landed
+        self.frame.landed
     }
 
     /// `text` with its tags filled for the pilot with no mission
@@ -185,7 +185,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// its redraws. Read from the frame filled afresh
     /// ([`FlightFrame::landed`](nova_sim::flight_frame::FlightFrame::landed)).
     pub(super) fn docked(&self) -> bool {
-        self.frame_now().docked()
+        self.frame.docked()
     }
 
     /// Stages the bar's redraws for a run of docked scripts, given the

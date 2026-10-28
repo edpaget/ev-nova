@@ -89,7 +89,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// shown over it holds the leave.
     #[must_use]
     pub fn leave_due(&self) -> bool {
-        self.frame_now().leave_due
+        self.frame.leave_due
     }
 
     /// Catches the screen up with the session having taken off: the ship
@@ -229,7 +229,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// screen caught up first; `laid_out` says the system was laid out
     /// afresh since the settling, before this catches up.
     fn show_settled(&mut self, settled: Settled, laid_out: bool) {
-        let flying = !self.frame_now().docked();
+        let flying = !self.frame.docked();
         let mut said: Vec<(String, u16)> = settled
             .message
             .into_iter()

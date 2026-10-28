@@ -282,7 +282,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// calls that change them (a recharge, an outfitter order, a
     /// mission's script) read them right after.
     pub(super) fn reserves(&self) -> Reserves {
-        self.frame_now().hud.reserves
+        self.frame.hud.reserves
     }
 
     /// The escort menu's class rows, as the kept frame holds them
@@ -325,14 +325,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// wide flight's view is, so the bar is drawn at that width's right
     /// edge.
     ///
-    /// It draws the flight's frame filled afresh ([`FlightView::frame_now`]),
-    /// not the kept one: the calls that still change the session behind
-    /// the port while docked (the adapter's own `SessionFlight::transact`,
-    /// the pilot desk) don't
-    /// fill the kept frame afresh after them (rdm:task/view-frame-fills-per-tick).
+    /// It draws the kept frame ([`FlightView::frame`](FlightView#structfield.frame)),
+    /// which every change made while docked fills afresh: a command
+    /// ([`FlightView::send`]), a change behind the port
+    /// ([`FlightView::change_sim`], which the test-only `transact` goes
+    /// through), and the pilot desk's edits, which its caller resyncs.
     pub fn draw_status_bar(&self, list: &mut DrawList) {
         if let Ok(bar) = &self.status_bar {
-            self.draw_bar(list, (bar, VIEW_SIZE.0), &self.frame_now());
+            self.draw_bar(list, (bar, VIEW_SIZE.0), &self.frame);
         }
     }
 
@@ -364,8 +364,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
 }
 
 /// The nav keys, the stellar slot keys and the floating map, over the
-/// [`FlightSim`] port: they read the flight's frame
-/// ([`FlightView::frame_now`]) and send their commands through it, so any
+/// [`FlightSim`] port: they read the kept frame
+/// ([`FlightView::frame`](FlightView#structfield.frame)) and send their
+/// commands through it, so any
 /// flight drives them, a scripted one in the component tests.
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Tracks a flight key `input` presses or lets go of as held.
@@ -461,7 +462,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if key == HYPER_SELECT_KEY {
             self.select_latch = false;
             self.select_frame(true);
-            if matches!(self.frame_now().nav_mode, NavMode::Hyperspace(_)) {
+            if matches!(self.frame.nav_mode, NavMode::Hyperspace(_)) {
                 self.show_floating_map();
             }
         } else {
@@ -494,7 +495,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// included: the original's +0x50 > 0, which its key blocks test live.
     /// A jump given up is over at once, whatever its effect still shows.
     pub(super) fn jump_under_way(&self) -> bool {
-        self.frame_now().jump_under_way
+        self.frame.jump_under_way
     }
 
     /// One frame of Option-\` and the Nav Off / Hyperspace Mode block,
@@ -604,7 +605,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// it again at the same tick.
     pub(super) fn floating_frame(&mut self) {
         let jumping = self.jump_under_way();
-        let mode_3 = matches!(self.frame_now().nav_mode, NavMode::Hyperspace(_));
+        let mode_3 = matches!(self.frame.nav_mode, NavMode::Hyperspace(_));
         let h =
             self.held.contains(&HYPERSPACE_MODE_KEY) && !jumping && self.takes(PlayerCommand::Nav);
         let backslash = self.held.contains(&HYPER_SELECT_KEY)

@@ -72,12 +72,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if !self.takes_command(&FlightCommand::Jump) {
             return;
         }
-        let frame = self.frame_now();
-        if frame.jump_under_way {
+        if self.frame.jump_under_way {
             self.jump_latch = true;
             return;
         }
-        let intact = frame.player().condition == Condition::Intact;
+        let intact = self.frame.player().condition == Condition::Intact;
         if down && intact {
             if !self.jump_latch {
                 self.jump();

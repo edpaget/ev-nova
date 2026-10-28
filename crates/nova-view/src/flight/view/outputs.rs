@@ -44,7 +44,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightEvent::MissionShown`]: nova_sim::flight_frame::FlightEvent::MissionShown
     /// [`FlightFrame::texts_queued`]: nova_sim::flight_frame::FlightFrame::texts_queued
     pub(super) fn flight_texts(&mut self) -> FlightTexts {
-        let queued = self.frame_now().texts_queued;
+        let queued = self.frame.texts_queued;
         let (nav_texts, bars_staged) = (self.nav_texts, self.bars_staged);
         let inbox = self.drain();
         let noted = inbox.text_nav().filter(|_| queued > nav_texts);

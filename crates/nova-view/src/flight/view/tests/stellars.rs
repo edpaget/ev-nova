@@ -158,9 +158,11 @@ fn the_course_map_shows_the_course_the_flight_flies() {
         ..in_sol()
     });
     assert_eq!(view.map.route(), [SystemId(131)], "as the view starts");
-    view.sim.set_frame(FlightFrame {
-        course_plotted: true,
-        ..in_sol()
+    view.change_sim(|sim| {
+        sim.set_frame(FlightFrame {
+            course_plotted: true,
+            ..in_sol()
+        });
     });
     view.show_course();
     assert_eq!(view.map.route(), [], "none flown, one plotted");

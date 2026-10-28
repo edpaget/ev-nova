@@ -1114,16 +1114,11 @@ impl NavFlash {
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// The flight's frame as it stands now ([`FlightSim::frame`]), filled
-    /// afresh on each read, for the nav keys', the map's and the jump
-    /// key's reads mid-input. The world reads the frame the view keeps
-    /// ([`FlightView::frame`](FlightView#structfield.frame)) instead, but
-    /// these stay fresh: the flight still changes behind the port, through
-    /// the adapter's own API (the edge's setup, entering play, the
-    /// developer tools' desk, and `transact` in tests), between two of
-    /// their reads in one input or tick without refreshing the kept frame,
-    /// which a read here would then find stale. Once every change goes
-    /// through [`FlightSim::apply`] and [`FlightSim::step`], these can read
-    /// the kept frame too.
+    /// afresh, for this crate's tests: [`FlightView::check_frame_kept`]
+    /// compares the kept frame with it, and the tests' helpers read it.
+    /// View code reads the kept frame
+    /// ([`FlightView::frame`](FlightView#structfield.frame)).
+    #[cfg(test)]
     pub(super) fn frame_now(&self) -> FlightFrame {
         let mut frame = FlightFrame::default();
         self.sim.frame(&mut frame);
@@ -1165,7 +1160,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Sends `command` to the flight ([`FlightSim::apply`]) and gives its
     /// answer, the kept frame filled afresh after it
-    /// ([`FlightView::refresh_frame`]).
+    /// ([`FlightView::refresh_frame`]), so a key read later in the same
+    /// input reads the frame the command left: the gates, the nav mode,
+    /// whether a jump is under way. The view reads no fresh fill; this
+    /// refill, the step's, the catch-up's and [`FlightView::change_sim`]'s
+    /// are what keep the frame the flight's.
+    ///
+    /// Ordering against the original: a read of the kept frame differs
+    /// from a fresh fill only if the flight changed since the last fill,
+    /// and each change refills where it is made, so no read sees a value
+    /// the original wouldn't at that point, and no boundary the player
+    /// sees (a frame drawn, a dialog opened, a landing or jump completed,
+    /// the pilot saved) is crossed with a stale frame.
     pub(super) fn send(
         &mut self,
         command: nova_sim::flight_frame::FlightCommand,
@@ -1238,7 +1244,15 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     presentation: stepping::Presentation,
     /// The flight's frame as last filled ([`FlightView::refresh_frame`]):
     /// what the world is drawn from, its ships, shots, beams, boxes,
-    /// asteroids, stellars, murk and flags.
+    /// asteroids, stellars, murk and flags, and what every read of the
+    /// flight's state mid-input or mid-tick reads: the gates, the nav
+    /// mode, docked, the jump, the texts queued, the map's key. It is
+    /// filled afresh after each command ([`FlightView::send`]), each
+    /// frame's steps, each catch-up, and each change behind the port
+    /// ([`FlightView::change_sim`], [`FlightView::begin`],
+    /// [`FlightView::enter_game`]), so it is never stale at a read; an ask
+    /// ([`FlightCommand::is_ask`](nova_sim::flight_frame::FlightCommand::is_ask))
+    /// changes nothing it shows.
     frame: FlightFrame,
     /// The session's system, laid out; `None` when the session failed.
     scene: Option<SystemScene>,

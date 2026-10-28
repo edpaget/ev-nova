@@ -442,13 +442,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn retake_nav(&mut self) {
         self.nav_marked = false;
         self.nav_scene = Some((self.nav_mode(), self.nav_now()));
-        self.nav_texts = self.frame_now().texts_queued;
+        self.nav_texts = self.frame.texts_queued;
     }
 
     /// The player's nav mode ([`FlightFrame::nav_mode`](nova_sim::flight_frame::FlightFrame::nav_mode));
     /// off without a session.
     pub(super) fn nav_mode(&self) -> NavMode {
-        self.frame_now().nav_mode
+        self.frame.nav_mode
     }
 
     /// What the HUD's nav area shows now, for the session's nav mode
@@ -484,7 +484,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                             NavDestination::Named(system.entry.name.clone())
                         })
                 }),
-                readiness: self.frame_now().jump_readiness,
+                readiness: self.frame.jump_readiness,
             },
         }
     }

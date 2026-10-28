@@ -76,7 +76,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the router asks between frames.
     #[must_use]
     pub fn game_over(&self) -> bool {
-        self.frame_now().fate == PlayerFate::GameOver
+        self.frame.fate == PlayerFate::GameOver
     }
 
     /// Moves the death's fade on by `dt`, and ends play once it is over

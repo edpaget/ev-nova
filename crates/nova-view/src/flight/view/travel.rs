@@ -40,8 +40,9 @@ impl<C, S: FlightSim + DevDesk> FlightView<C, S> {
 }
 
 /// The course map, over the [`FlightSim`] port: its opening, drawing,
-/// panels, input and Clear Route read the flight through its frame
-/// ([`FlightView::frame_now`]) and [`MapSource`](crate::flight::sim_port::MapSource),
+/// panels, input and Clear Route read the flight through the kept frame
+/// ([`FlightView::frame`](FlightView#structfield.frame)) and
+/// [`MapSource`](crate::flight::sim_port::MapSource),
 /// and send their commands through it. Its close is generic too
 /// ([`FlightView::close_map`], in the `gates` module), the hypergate
 /// entry it may run a command ([`FlightCommand::EnterHypergate`]).
@@ -116,7 +117,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ) {
         // `_SaveMapBordersState` for a change, whatever the map's mode,
         // unless docked (@0x13c21-0x13c3f).
-        let docked = self.frame_now().docked();
+        let docked = self.frame.docked();
         if !docked && self.map.borders_changed_since_open() {
             self.map_borders_save = Some(self.map.borders_shown());
         }
@@ -247,8 +248,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Shows the course as it is flown on the course map, from the
     /// current system ([`FlightFrame::course_shown`](nova_sim::flight_frame::FlightFrame::course_shown)).
     pub(super) fn show_course(&mut self) {
-        let frame = self.frame_now();
-        self.map.show_course(frame.system, &frame.course_shown);
+        self.map
+            .show_course(self.frame.system, &self.frame.course_shown);
     }
 
     /// The input `input` as the course map takes it: in its own
@@ -292,7 +293,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`classic_offset`]), and at 0 over the spaceport, which is
     /// classic, where the bar and the docked mission dialogs open it.
     pub(super) fn map_offset(&self) -> Point {
-        let in_port = self.frame_now().docked();
+        let in_port = self.frame.docked();
         let x = if in_port {
             0.0
         } else {
@@ -330,9 +331,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.map.opened();
         self.map.preselect(self.sim.map_preselection());
         self.map_missions = self.sim.map_mission_systems();
-        self.map.set_clear_route(
-            self.map.mode() != MapMode::Hypergate && self.frame_now().course_plotted,
-        );
+        self.map
+            .set_clear_route(self.map.mode() != MapMode::Hypergate && self.frame.course_plotted);
         self.redraw_map();
     }
 
@@ -364,7 +364,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if let Some(sources) = self.sim.map_border_sources() {
             self.map.show_border_sources(sources);
         }
-        self.map_seen = Some(self.frame_now().map_key);
+        self.map_seen = Some(self.frame.map_key.clone());
         self.retake_map_panel();
     }
 
@@ -508,7 +508,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// map. A modifier is taken too: a Mac sends no key-down for one
     /// alone, so the filter never sees it.
     fn map_filter_takes(&self, key: Key) -> bool {
-        let docked = self.frame_now().docked();
+        let docked = self.frame.docked();
         match key {
             Key::Shift
             | Key::Control

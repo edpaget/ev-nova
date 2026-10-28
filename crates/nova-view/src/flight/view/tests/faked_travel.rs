@@ -406,10 +406,10 @@ fn j_acts_only_on_an_intact_frame() {
         },
     ] {
         let mut view = faked(in_sol());
-        view.sim.frame_mut().ships[0].condition = condition;
+        view.change_sim(|sim| sim.frame_mut().ships[0].condition = condition);
         view.jump_frame(true);
         assert_eq!(sent(&view), [], "{condition:?}: no J");
-        view.sim.frame_mut().ships[0].condition = Condition::Intact;
+        view.change_sim(|sim| sim.frame_mut().ships[0].condition = Condition::Intact);
         view.jump_frame(true);
         assert_eq!(sent(&view), [FlightCommand::Jump], "{condition:?}: intact");
     }
@@ -707,7 +707,7 @@ fn a_failed_flights_catch_up_redraws_nothing() {
 /// J held through `frames` frames of `view` with the frame's condition
 /// `condition`, a jump answered `answer` at each J sent.
 fn j_frames(view: &mut Faked, condition: Condition, frames: usize) {
-    view.sim.frame_mut().ships[0].condition = condition;
+    view.change_sim(|sim| sim.frame_mut().ships[0].condition = condition);
     for _ in 0..frames {
         view.jump_frame(true);
     }
@@ -742,7 +742,7 @@ fn j_let_go_while_disabled_does_nothing_on_the_repair() {
     let mut view = faked(in_sol());
     j_frames(&mut view, Condition::Disabled, 2);
     view.jump_frame(false);
-    view.sim.frame_mut().ships[0].condition = Condition::Intact;
+    view.change_sim(|sim| sim.frame_mut().ships[0].condition = Condition::Intact);
     view.jump_frame(false);
     assert_eq!(sent(&view), []);
 }

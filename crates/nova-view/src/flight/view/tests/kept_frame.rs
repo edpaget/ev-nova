@@ -243,3 +243,34 @@ fn a_port_screen_maps_close_sends_its_restore_and_fills_the_kept_frame() {
         "the frame the restore left"
     );
 }
+
+#[test]
+fn a_commands_refill_reaches_a_key_read_later_in_the_same_input() {
+    let nav_off = FlightFrame {
+        nav_mode: NavMode::Off,
+        ..in_sol()
+    };
+    let mut view = faked(nav_off.clone());
+    view.sim.queue_answer_showing(
+        Answer::System(Some(SystemId(129))),
+        FlightFrame {
+            nav_mode: NavMode::Hyperspace(Some(SystemId(129))),
+            ..nav_off.clone()
+        },
+    );
+    tap(&mut view, HYPER_SELECT_KEY);
+    assert_eq!(sent(&view), [FlightCommand::SelectNextSystem]);
+    assert!(
+        view.floating.is_up(),
+        "the key read the nav mode the command left: mode 3"
+    );
+    let mut view = faked(nav_off.clone());
+    view.sim
+        .queue_answer_showing(Answer::System(Some(SystemId(129))), nav_off);
+    tap(&mut view, HYPER_SELECT_KEY);
+    assert_eq!(sent(&view), [FlightCommand::SelectNextSystem]);
+    assert!(
+        !view.floating.is_up(),
+        "control: a frame left with the nav off keeps the map down"
+    );
+}

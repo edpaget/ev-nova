@@ -216,9 +216,9 @@ fn the_bar_lists_the_frames_cargo_and_names_its_secondary_with_its_count() {
 }
 
 #[test]
-fn the_port_bar_draws_the_flight_as_it_stands_not_the_kept_frame() {
+fn the_port_bar_draws_the_kept_frame_a_change_behind_the_port_refilled() {
     let mut view = barred(armed(1, &[]), among(Vec::new()));
-    view.sim.frame_mut().hud.cargo.cash = 777;
+    view.change_sim(|sim| sim.frame_mut().hud.cargo.cash = 777);
     let mut bar = DrawList::new();
     view.draw_status_bar(&mut bar);
     assert!(texts(&bar).contains(&"777".to_owned()), "{:?}", texts(&bar));
@@ -268,7 +268,7 @@ fn the_bar_follows_the_government_the_frame_chooses_it_by() {
         view.status_bar.as_ref().map(|bar| &bar.layout),
         Ok(&layout())
     );
-    view.sim.frame_mut().hud.interface_government = Some(GovtId(150));
+    view.change_sim(|sim| sim.frame_mut().hud.interface_government = Some(GovtId(150)));
     view.follow_bar();
     assert_eq!(
         view.status_bar.as_ref().map(|bar| &bar.layout),
@@ -277,7 +277,7 @@ fn the_bar_follows_the_government_the_frame_chooses_it_by() {
     );
     assert_eq!(view.interface_now(), Some(Ok(129)));
     let mut failed = faked(in_sol());
-    failed.sim.frame_mut().hud.interface_government = Some(GovtId(150));
+    failed.change_sim(|sim| sim.frame_mut().hud.interface_government = Some(GovtId(150)));
     failed.follow_bar();
     assert!(failed.status_bar.is_err(), "no bar chosen, none followed");
     assert_eq!(failed.interface_now(), None);

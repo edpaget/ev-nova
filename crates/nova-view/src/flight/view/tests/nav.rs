@@ -1119,9 +1119,11 @@ fn a_hyperspace_selection_is_named_once_explored_with_the_frames_readiness() {
         }
     );
     view.sim.map_mut().explored = vec![SystemId(131)];
-    view.sim.set_frame(FlightFrame {
-        jump_readiness: nova_sim::JumpReadiness::Underway,
-        ..sol_in(NavMode::Hyperspace(Some(SystemId(131))))
+    view.change_sim(|sim| {
+        sim.set_frame(FlightFrame {
+            jump_readiness: nova_sim::JumpReadiness::Underway,
+            ..sol_in(NavMode::Hyperspace(Some(SystemId(131))))
+        });
     });
     assert_eq!(
         view.nav_now(),

@@ -156,8 +156,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     /// filled afresh, has it, the last system's NPCs and effects let go.
     fn lay_out(&mut self, system: SystemId) {
         self.show_scene();
-        let course = self.frame_now().course_shown;
-        self.map.show_course(system, &course);
+        self.map.show_course(system, &self.frame.course_shown);
         self.previous = self.player_place_now();
         self.alpha = 0.0;
         self.npc_previous.clear();

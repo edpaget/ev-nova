@@ -93,7 +93,7 @@ impl<
     /// spaceport has it, for the app to draw over the spaceport.
     fn draw(&self, list: &mut DrawList) {
         if self.map_open {
-            if !self.frame_now().docked() {
+            if !self.frame.docked() {
                 self.draw_scene(list);
             }
             self.draw_open_map(list);
