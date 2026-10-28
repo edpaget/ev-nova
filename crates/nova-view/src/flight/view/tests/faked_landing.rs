@@ -840,6 +840,35 @@ fn fighters_abandoned_are_told_only_with_the_layout_of_the_move_settled() {
 }
 
 #[test]
+fn fighters_abandoned_by_a_settled_move_are_told_in_flight_and_not_docked() {
+    // Read from the kept frame the settling left
+    // (rdm:phase/view-sim-seam/phase-20-view-frame-fills-per-tick).
+    for (frame, told) in [(sol(), true), (docked_at(128, Vec2::ZERO), false)] {
+        let mut view = faked(frame.clone());
+        view.sim
+            .queue_event(FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(
+                2,
+            )));
+        view.sim.queue_answer_telling(
+            Answer::Settled(nova_sim::Settled::default()),
+            frame,
+            vec![FlightEvent::Session(nova_sim::SessionEvent::SystemChanged)],
+        );
+        view.settle_script();
+        let said = view.message().map(str::to_owned);
+        if told {
+            assert_eq!(
+                said,
+                Some(crate::flight::escorts::fighters_abandoned_message(2)),
+                "in flight"
+            );
+        } else {
+            assert_eq!(said, None, "docked");
+        }
+    }
+}
+
+#[test]
 fn docked_the_settling_stages_the_bar_as_its_scripts_ran() {
     let mut view = faked(docked_at(128, Vec2::ZERO));
     assert!(view.docked());

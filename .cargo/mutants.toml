@@ -636,6 +636,10 @@ exclude_re = [
     # A good-price stellar may land or trade, `Flags` 0x1 | 0x2 (@0x9148a):
     # the two bits are disjoint, so `^` makes the same 0x3.
     "nova-sim-ai/src/hail/advice\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in AdvicePort::qualifies$",
+    # `Gates::from_fn` folds each command's own bit in once, over
+    # `PlayerCommand::ALL`, whose bits are distinct: `^` onto a bit not yet
+    # set is `|`, so the mutant builds the same set.
+    "nova-sim/src/flight_frame\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in Gates::from_fn$",
 
     # `unlike` only needs a gamma other than the frame's: `- 1.0` differs
     # as `+ 1.0` does, and `check_contract` and the fake's tests compare
