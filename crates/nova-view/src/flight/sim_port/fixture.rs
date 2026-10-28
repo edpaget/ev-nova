@@ -1109,9 +1109,17 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 /// Checks the port's contract against `sim`:
 ///
 /// - **drain empties**: after one drain, a second adds nothing;
+/// - **a drain changes no frame**: the frame filled after the drains
+///   equals the frame filled before them, so the view keeps its frame
+///   across a drain;
 /// - **a frame fills the same twice**: two fills with no step between,
-///   the second over a frame unlike the first in every field, give equal
-///   frames, so a fill that skips a field fails;
+///   the second over a frame unlike the first in every field (the gates
+///   and the death descs among them), give equal frames, so a fill that
+///   skips a field fails;
+/// - **an ask changes no frame**: each ask ([`FlightCommand::is_ask`]: a
+///   hover at the player's ship with no boxes, the coming traffic and a
+///   description's load) leaves the frame filled after it equal to the
+///   frame before, so the view fills none after one;
 /// - **a refusal changes nothing**: [`refused_command`] answers a
 ///   refusal, and the frame after it equals the frame before;
 /// - **no step asked, none run**: a frame's steps asked for none fill the
@@ -1180,6 +1188,8 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///
 /// The error says which clause failed.
 pub fn check_contract(sim: &mut impl FlightSim, opening: &FlightOpening) -> Result<(), String> {
+    let mut undrained = FlightFrame::default();
+    sim.frame(&mut undrained);
     let mut drained = Vec::new();
     sim.drain(&mut drained);
     let first = drained.len();
@@ -1188,6 +1198,13 @@ pub fn check_contract(sim: &mut impl FlightSim, opening: &FlightOpening) -> Resu
         return Err(format!(
             "drain empties: a second drain added {:?}",
             &drained[first..]
+        ));
+    }
+    let mut after_drains = FlightFrame::default();
+    sim.frame(&mut after_drains);
+    if after_drains != undrained {
+        return Err(format!(
+            "a drain changes no frame: the frame was {undrained:?}, then {after_drains:?}"
         ));
     }
     check_failed(sim, opening, &drained)?;
@@ -1201,6 +1218,7 @@ pub fn check_contract(sim: &mut impl FlightSim, opening: &FlightOpening) -> Resu
             "a frame fills the same twice: {once:?}, then {twice:?}"
         ));
     }
+    check_asks(sim, &once)?;
 
     let answer = sim.apply(refused_command());
     if !answer.is_refused() {
@@ -1281,6 +1299,34 @@ fn check_failed(
             "{clause}: failed ({reason}), it listed weapons {:?}",
             opening.weapons
         ));
+    }
+    Ok(())
+}
+
+/// [`check_contract`]'s ask clause, `once` the frame filled before: each
+/// ask leaves the frame as it was.
+fn check_asks(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String> {
+    let asks = [
+        FlightCommand::Hover {
+            at: once.player().position,
+            drawn: DrawnBoxes::default(),
+        },
+        FlightCommand::ComingTraffic,
+        FlightCommand::LoadDescription {
+            raw: Some("A dësc.".to_owned()),
+            movie: None,
+        },
+    ];
+    for ask in asks {
+        let sent = format!("{ask:?}");
+        let _ = sim.apply(ask);
+        let mut after = unlike(once);
+        sim.frame(&mut after);
+        if after != *once {
+            return Err(format!(
+                "an ask changes no frame: {sent} took the frame from {once:?} to {after:?}"
+            ));
+        }
     }
     Ok(())
 }
@@ -1999,6 +2045,14 @@ mod tests {
     enum Fault {
         /// Every drain hands out another event.
         NeverEmpties,
+        /// A drain changes the frame.
+        DrainChangesTheFrame,
+        /// An ask changes the frame.
+        AskChangesTheFrame,
+        /// A fill leaves the gates as they were.
+        SkipsTheGates,
+        /// A fill leaves the death descs as they were.
+        SkipsTheDeathDescs,
         /// A fill leaves the nav mode as it was.
         SkipsAField,
         /// The refused command is answered.
@@ -2091,8 +2145,14 @@ mod tests {
 
     impl FlightSim for Broken {
         fn frame(&self, into: &mut FlightFrame) {
+            let (gates, descs) = (into.gates, into.death_descs.clone());
             if !matches!(self.fault, Fault::SkipsAField) {
                 self.fake.frame(into);
+            }
+            match self.fault {
+                Fault::SkipsTheGates => into.gates = gates,
+                Fault::SkipsTheDeathDescs => into.death_descs = descs,
+                _ => {}
             }
             let npc = ShipRef::Npc(nova_sim::NpcId(7));
             let brackets = |id| nova_sim::brackets::TargetBrackets {
@@ -2145,6 +2205,9 @@ mod tests {
             let plunder = matches!(command, FlightCommand::Plunder(_));
             let trade = matches!(command, FlightCommand::Trade(_));
             let hover = matches!(command, FlightCommand::Hover { .. });
+            if matches!(self.fault, Fault::AskChangesTheFrame) && command.is_ask() {
+                self.fake.set_frame(stellar(129));
+            }
             match self.fault {
                 Fault::HoversWithoutBoxes if hover => Answer::Hovered(Some(Hover::Player)),
                 Fault::TradesWithoutAMarket if trade => Answer::Traded(Ok(1)),
@@ -2185,7 +2248,7 @@ mod tests {
                     Answer::Done
                 }
                 Fault::AnswersTheRefusal => Answer::Stellar(StellarId(128)),
-                Fault::RefusalChangesTheFrame => {
+                Fault::RefusalChangesTheFrame if !command.is_ask() => {
                     self.fake.set_frame(stellar(129));
                     self.fake.apply(command)
                 }
@@ -2199,6 +2262,9 @@ mod tests {
         }
 
         fn drain(&mut self, into: &mut Vec<FlightEvent>) {
+            if matches!(self.fault, Fault::DrainChangesTheFrame) {
+                self.fake.set_frame(stellar(129));
+            }
             if matches!(self.fault, Fault::NeverEmpties) {
                 self.fake
                     .queue_event(FlightEvent::Sound(SimSound::NavSelected));
@@ -2254,6 +2320,30 @@ mod tests {
     #[test]
     fn a_fill_that_skips_a_field_breaks_the_contract() {
         assert!(clause(Fault::SkipsAField).starts_with("a frame fills the same twice"));
+    }
+
+    #[test]
+    fn a_fill_that_skips_the_gates_or_the_death_descs_breaks_the_contract() {
+        for fault in [Fault::SkipsTheGates, Fault::SkipsTheDeathDescs] {
+            let clause = clause(fault);
+            assert!(
+                clause.starts_with("a frame fills the same twice"),
+                "{fault:?}: {clause}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_drain_that_changes_the_frame_breaks_the_contract() {
+        let clause = clause(Fault::DrainChangesTheFrame);
+        assert!(clause.starts_with("a drain changes no frame"), "{clause}");
+    }
+
+    #[test]
+    fn an_ask_that_changes_the_frame_breaks_the_contract() {
+        let clause = clause(Fault::AskChangesTheFrame);
+        assert!(clause.starts_with("an ask changes no frame"), "{clause}");
+        assert!(clause.contains("Hover"), "the first ask: {clause}");
     }
 
     #[test]

@@ -1,17 +1,48 @@
 //! The [`FlightSim`] port: what the flight view needs of the flight it
-//! shows, in the view's own terms. A frame to draw from
-//! ([`FlightSim::frame`]), a frame's fixed steps ([`FlightSim::step`]), the
-//! player's commands ([`FlightSim::apply`]) and what the flight raised
-//! for the view to act on once ([`FlightSim::drain`]). The values it
-//! carries are `nova_sim`'s ([`flight_frame`](nova_sim::flight_frame)),
-//! so the session can build them.
+//! shows, in the view's own terms, in four methods. A frame to draw and
+//! read from ([`FlightSim::frame`]), a frame's fixed steps
+//! ([`FlightSim::step`]), the player's commands and the view's asks
+//! ([`FlightSim::apply`]) and what the flight raised for the view to act
+//! on once ([`FlightSim::drain`]). The values it carries are `nova_sim`'s
+//! ([`flight_frame`](nova_sim::flight_frame)), so the session can build
+//! them.
 //!
 //! [`SessionFlight`](super::sim_adapter::SessionFlight) is the adapter
-//! over a real `nova_sim::Session`. The port is the strangler's seam:
-//! the view still reaches the session itself in the
-//! `FlightView<C, SessionFlight<C>>` blocks, and later work moves that
-//! code across the port a slice at a time, growing the port and its
-//! values as it goes.
+//! over a real `nova_sim::Session`, and the edge builds it
+//! (`crate::flight::open_flight`).
+//!
+//! # How the view reads the flight
+//!
+//! - **The kept frame.** The view keeps one frame
+//!   (`FlightView::frame`) and reads every fact of the flight from it,
+//!   mid-input and mid-tick too: the gates a key is taken under
+//!   ([`FlightFrame::gates`](nova_sim::flight_frame::FlightFrame::gates)),
+//!   the nav mode, docked, the jump, the death `dësc`s. It never fills a
+//!   fresh frame to read one fact.
+//! - **Every change fills it afresh where it is made**: after each
+//!   command (`FlightView::send`), each frame's steps, a catch-up's
+//!   drain, and each change behind the port, which goes through
+//!   `FlightView::change_sim` (the edge's setup, a pilot's resume and
+//!   openings, a test's change). So the frame is never stale at a read: a
+//!   quiet tick fills it twice (the catch-up and the steps), a key once
+//!   for each command it sends, and a draw not at all.
+//! - **An ask doesn't.** A command that only asks
+//!   ([`FlightCommand::is_ask`]: the hover, the coming traffic, a
+//!   description's load) changes nothing a frame shows, which nova-sim
+//!   pins (`session/apply/asks.rs`) and `fixture::check_contract`
+//!   checks, so no fill follows one. A question the view asks of the
+//!   flight between frames, with arguments it computes or drawing on the
+//!   flight's chance, is an ask: a [`FlightCommand`] variant answered in
+//!   nova-sim, with an [`Answer`] variant of its own.
+//! - **What is fixed for the flight's life comes as it opens**: the
+//!   weapons whose looks the view reads and why the flight could not
+//!   start ([`FlightOpening`](nova_sim::flight_frame::FlightOpening)),
+//!   handed to `FlightView::over` by the edge, which reads it off the
+//!   adapter (`SessionFlight::opening`), not asked through the port.
+//! - **A readout is a frame field, an action a command, a one-shot output
+//!   an event** ([`FlightFrame`], [`FlightCommand`] with its [`Answer`],
+//!   [`FlightEvent`]), each filled or answered on nova-sim's side and
+//!   pinned there.
 //!
 //! The supertraits, [`MapSource`], [`CommSource`], [`PortSource`],
 //! [`NameSource`] and [`PilotSource`], hold the course map's, the comm's,
@@ -26,7 +57,10 @@
 //!
 //! The `fixture` feature (and this crate's tests) exposes `fixture`:
 //! `FakeFlight`, a scripted sim for the view's component tests, and
-//! `check_contract`, what every sim must honour.
+//! `check_contract`, what every sim must honour. `FakeFlight` answers
+//! every ask from what a test tells it, apart from its answer queue and
+//! its log of commands applied: a new ask there is one field and setter
+//! for its answer, and one arm in its ask's match.
 
 use nova_sim::flight_frame::{
     Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, StepInput, StepReport,
@@ -47,8 +81,9 @@ use nova_sim::{
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 
-/// The flight the view shows, as the view needs it (see the module
-/// docs).
+/// The flight the view shows, as the view needs it, in four methods: the
+/// frame, the steps, the commands (the asks among them) and the drain (see
+/// the module docs). The supertraits hold the screens' questions.
 pub trait FlightSim: MapSource + CommSource + PortSource + NameSource + PilotSource {
     /// Fills `into` with what the view draws now, writing every field, so
     /// a frame kept from an earlier fill shows nothing stale.

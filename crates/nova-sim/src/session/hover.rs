@@ -19,7 +19,7 @@ impl Session {
     /// under way, the pre-jump stage included (the player's +0x50 > 0,
     /// @0x381f2), the stellar a click there would pick ([`stellar_under`]).
     #[must_use]
-    pub fn hover(&self, at: Vec2, drawn: &impl DrawnShips) -> Option<Hover> {
+    pub(crate) fn hover(&self, at: Vec2, drawn: &impl DrawnShips) -> Option<Hover> {
         ship_under(
             self.npcs(),
             self.scanner(),
