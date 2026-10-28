@@ -235,31 +235,70 @@ fn flight() -> SessionFlight<OneStellar> {
     SessionFlight::from(SessionBuilder::flying(&OneStellar).build())
 }
 
-#[test]
-fn a_real_session_meets_the_contract() {
-    assert_eq!(check_contract(&mut flight()), Ok(()));
-}
-
-#[test]
-fn a_real_session_with_outputs_pending_meets_the_contract() {
-    let mut flight = flight();
-    assert_eq!(
-        flight.apply(FlightCommand::SelectStellar(StellarPick::Slot(0))),
-        Answer::Stellar(StellarId(128))
-    );
-    assert_eq!(check_contract(&mut flight), Ok(()));
-}
-
-#[test]
-fn a_real_session_landed_meets_the_contract() {
-    let session = SessionBuilder::flying(&OneStellar)
-        .landed_at(SystemId(130), StellarId(128))
-        .build();
-    let mut flight = SessionFlight::<OneStellar>::from(session);
+/// The frame `flight` fills now.
+fn frame_of<C>(flight: &SessionFlight<C>) -> FlightFrame {
     let mut frame = FlightFrame::default();
     flight.frame(&mut frame);
-    assert_eq!(frame.landed, Some(StellarId(128)), "docked");
-    assert_eq!(check_contract(&mut flight), Ok(()));
+    frame
+}
+
+/// Checks the port's contract on a copy of `flight` in `state`, as the
+/// check sends commands.
+fn meets_the_contract<C>(flight: &SessionFlight<C>, state: &str) {
+    assert_eq!(check_contract(&mut flight.clone()), Ok(()), "{state}");
+}
+
+#[test]
+fn a_real_session_meets_the_contract_in_each_state() {
+    let mut flying = flight();
+    meets_the_contract(&flying, "flying");
+    assert_eq!(
+        flying.apply(FlightCommand::SelectStellar(StellarPick::Slot(0))),
+        Answer::Stellar(StellarId(128))
+    );
+    meets_the_contract(&flying, "with outputs pending");
+    let landed = SessionFlight::<OneStellar>::from(
+        SessionBuilder::flying(&OneStellar)
+            .landed_at(SystemId(130), StellarId(128))
+            .build(),
+    );
+    assert_eq!(frame_of(&landed).landed, Some(StellarId(128)), "docked");
+    meets_the_contract(&landed, "landed");
+    let data = fighting_data(&[]);
+    let escort = nova_sim::fleet::Escort {
+        ship: ShipId(129),
+        reserves: nova_sim::Reserves::full(10.0, 10.0, 100.0),
+        order: None,
+        carried: false,
+        wage: Some(10),
+        person: None,
+        mark: None,
+    };
+    let escorted = SessionFlight::<Rc<GameData>>::from(
+        SessionBuilder::flying(&data)
+            .with_escorts(vec![escort])
+            .build(),
+    );
+    let frame = frame_of(&escorted);
+    assert!(frame.hud.escorts_flying, "the hired escort");
+    assert!(frame.hud.escort_rows.iter().any(|row| row.present));
+    meets_the_contract(&escorted, "with an escort flying");
+    let session = SessionBuilder::flying(&data).build();
+    let mut view = fighting(data, session);
+    tap(&mut view, Key::Tab);
+    assert!(
+        frame_of(view.sim()).target.is_some(),
+        "Tab targets the trader"
+    );
+    meets_the_contract(view.sim(), "holding a target");
+    // Option-` lets go of the target on the next frame.
+    view.input(&key(Key::Alt, true));
+    view.input(&key(Key::Char('`'), true));
+    view.tick(TICK);
+    view.input(&key(Key::Char('`'), false));
+    view.input(&key(Key::Alt, false));
+    assert!(frame_of(view.sim()).target.is_none(), "let go");
+    meets_the_contract(view.sim(), "after the target is let go");
 }
 
 #[test]
@@ -1080,29 +1119,6 @@ fn a_real_target_shows_in_the_panel_and_brackets() {
         })
         .count();
     assert_eq!(brackets, 4, "its four corners");
-}
-
-#[test]
-fn a_real_session_with_an_escort_flying_meets_the_contract() {
-    let data = fighting_data(&[]);
-    let escort = nova_sim::fleet::Escort {
-        ship: ShipId(129),
-        reserves: nova_sim::Reserves::full(10.0, 10.0, 100.0),
-        order: None,
-        carried: false,
-        wage: Some(10),
-        person: None,
-        mark: None,
-    };
-    let session = SessionBuilder::flying(&data)
-        .with_escorts(vec![escort])
-        .build();
-    let mut flight = SessionFlight::<Rc<GameData>>::from(session);
-    let mut frame = FlightFrame::default();
-    flight.frame(&mut frame);
-    assert!(frame.hud.escorts_flying, "the hired escort");
-    assert!(frame.hud.escort_rows.iter().any(|row| row.present));
-    assert_eq!(check_contract(&mut flight), Ok(()));
 }
 
 // The comm and the boarding through the port
