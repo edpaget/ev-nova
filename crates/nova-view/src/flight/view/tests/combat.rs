@@ -5,11 +5,6 @@ use nova_sim::flight_frame::{FrameShip, FrameTarget, PassReport, ShipPlace, Step
 
 // Traffic.
 
-fn npc_states(view: &View) -> Vec<ShipState> {
-    let session = view.session().expect("flying");
-    session.npcs().iter().map(|npc| npc.state).collect()
-}
-
 #[test]
 fn the_traffic_is_populated_when_the_flight_starts() {
     let (script, chance) = scripted(&placed(850, 650, 90));
@@ -636,27 +631,6 @@ fn a_real_flights_death_descs_are_its_sessions() {
     assert_eq!(flight().sim.death_descs(), Vec::<i16>::new());
 }
 
-#[test]
-fn npcs_stand_still_while_the_map_is_open_or_the_ship_is_landed() {
-    let catalog = FakeCatalog {
-        sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
-        ..trafficked(&[130], 2, 129, 1)
-    };
-    let mut view = test_flight::new(catalog);
-    ticks(&mut view, 3);
-    let before = npc_states(&view);
-    assert_eq!(before.len(), 2);
-    tap(&mut view, MAP);
-    ticks(&mut view, 10);
-    assert_eq!(npc_states(&view), before, "the map is open");
-    tap(&mut view, MAP);
-    land_now(&mut view);
-    assert!(view.take_landing().is_some());
-    let before = npc_states(&view);
-    ticks(&mut view, 10);
-    assert_eq!(npc_states(&view), before, "landed");
-}
-
 // Combat.
 
 #[test]
@@ -1046,29 +1020,6 @@ fn the_combat_keys_do_nothing_while_the_map_is_open() {
     assert_eq!(view.session().expect("flying").shots(), []);
 }
 
-#[test]
-fn the_fire_keys_pressed_and_let_go_during_a_jump_fire_nothing() {
-    let mut view = fighting(armed(0, &[BLASTER, ROCKET, MISSILE]), &[]);
-    tap(&mut view, SELECT_KEY);
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    view.input(&key(JUMP, true));
-    for k in [FIRE_KEY, SECONDARY_KEY] {
-        view.input(&key(k, true));
-    }
-    while view.jump_effect().is_none() {
-        view.tick(TICK);
-        assert_eq!(view.session().expect("flying").shots(), [], "braking");
-    }
-    for k in [FIRE_KEY, SECONDARY_KEY] {
-        view.input(&key(k, false));
-    }
-    arrive_now(&mut view);
-    ticks(&mut view, 2);
-    assert_eq!(secondary_of(&view), Some(ROCKET));
-    assert_eq!(view.session().expect("flying").shots(), []);
-}
-
 /// The combat sounds taken.
 fn combat_sounds(view: &mut View) -> Vec<CombatSound> {
     view.take_sounds()
@@ -1406,154 +1357,6 @@ fn the_players_ship_is_drawn_whole_while_breaking_up_then_without_its_sprite_the
         [0_i16; 0],
         "nothing of it after"
     );
-}
-
-fn breakup_ticks_left(view: &View) -> u32 {
-    match fate_of(view) {
-        PlayerFate::BreakingUp { ticks_left, .. } => ticks_left,
-        fate => panic!("not breaking up: {fate:?}"),
-    }
-}
-
-#[test]
-fn the_map_does_not_open_while_the_player_breaks_up() {
-    let mut view = breaking_up();
-    let before = breakup_ticks_left(&view);
-    tap(&mut view, MAP_KEY);
-    assert!(!view.map_open());
-    view.tick(TICK);
-    assert!(
-        breakup_ticks_left(&view) < before,
-        "the flight goes on, unpaused"
-    );
-}
-
-#[test]
-fn mission_info_and_landing_do_nothing_while_the_player_breaks_up() {
-    let mut view = breaking_up();
-    let nav = nav_target(&view);
-    let _ = view.take_sounds();
-    tap(&mut view, MISSION_INFO_KEY);
-    assert_eq!(view.take_sounds(), [], "silently (@0x70445, @0x7044f)");
-    tap(&mut view, LAND_KEY);
-    assert!(view.take_mission_info_request().is_none());
-    assert_eq!(view.take_landing(), None);
-    assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS));
-    assert_eq!(nav_target(&view), nav);
-}
-
-#[test]
-fn targeting_and_escort_keys_still_work_while_the_player_breaks_up() {
-    let mut view = breaking_up();
-    assert_eq!(target_of(&view), None);
-    tap(&mut view, TARGET_KEY);
-    assert_eq!(target_of(&view), Some(NpcId(0)));
-    tap(&mut view, MENU_KEY);
-    assert_eq!(
-        view.message(),
-        Some(NO_ESCORTS),
-        "the escort menu's key is taken"
-    );
-}
-
-#[test]
-fn an_exploded_player_takes_no_command() {
-    let mut view = exploded();
-    let target = target_of(&view);
-    let nav = nav_target(&view);
-    for k in [MAP_KEY, TARGET_KEY, LAND_KEY, MISSION_INFO_KEY, MENU_KEY] {
-        tap(&mut view, k);
-    }
-    assert!(!view.map_open());
-    assert_eq!(target_of(&view), target);
-    assert_eq!(nav_target(&view), nav);
-    assert!(view.take_mission_info_request().is_none());
-    assert_eq!(view.take_landing(), None);
-    assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS));
-    assert_ne!(view.message(), Some(NO_ESCORTS));
-}
-
-#[test]
-fn a_refused_nav_stops_the_held_slot_keys_once_the_player_has_exploded() {
-    for k in [
-        Key::Function(1),
-        STELLAR_SLOT_KEYS[1][0],
-        NEAREST_STELLAR_KEY,
-    ] {
-        let mut view = exploded();
-        let nav = nav_target(&view);
-        view.take_sounds();
-        view.input(&key(k, true));
-        ticks(&mut view, 3);
-        assert_eq!(nav_target(&view), nav, "{k:?} held");
-        view.input(&key(k, false));
-        tap_slot(&mut view, k);
-        assert_eq!(nav_target(&view), nav, "{k:?} tapped");
-        assert!(
-            !view
-                .take_sounds()
-                .contains(&Sound::Sim(SimSound::NavSelected)),
-            "{k:?}: no select sound"
-        );
-    }
-}
-
-/// Where `view` draws [`catalog`]'s stellar 129, checked to be in the
-/// space a click picks from, clear of the status panel.
-fn stellar_129_on_screen(view: &View) -> Point {
-    let drawn = on_screen(view, (300.0, -200.0));
-    assert!(
-        (0.0..VIEW_SIZE.0 - STATUS_BAR_WIDTH).contains(&drawn.x)
-            && (0.0..VIEW_SIZE.1).contains(&drawn.y),
-        "{drawn:?} is in space"
-    );
-    drawn
-}
-
-#[test]
-fn a_click_still_picks_a_stellar_while_the_player_breaks_up() {
-    let mut view = breaking_up();
-    assert_eq!(nav_target(&view), None);
-    let stellar = stellar_129_on_screen(&view);
-    click(&mut view, stellar);
-    assert_eq!(nav_target(&view), Some(StellarId(129)));
-}
-
-#[test]
-fn a_click_picks_no_stellar_once_the_player_has_exploded() {
-    let mut view = exploded();
-    let nav = nav_target(&view);
-    assert_ne!(nav, Some(StellarId(129)));
-    let stellar = stellar_129_on_screen(&view);
-    click(&mut view, stellar);
-    assert_eq!(nav_target(&view), nav);
-}
-
-/// Home (`Key::Other` on this platform) has no binding, so it does
-/// nothing in every state, including the dead one the original reads it
-/// in (0x6884c, `_ResetPlayer(1)`, left out). This pins the unbound key,
-/// not the dead-state lockout, which `an_exploded_player_takes_no_command`
-/// and `a_click_picks_no_stellar_once_the_player_has_exploded` cover.
-#[test]
-fn home_is_unbound_whether_flying_or_exploded() {
-    let mut flying = now_deciding(
-        fighting(killed_in(1), &placed(750, 650, 180)),
-        Rc::new(Firing),
-    );
-    assert!(matches!(fate_of(&flying), PlayerFate::Flying));
-    assert_eq!(flying.input(&key(Key::Other, true)), ScreenAction::None);
-    assert_eq!(flying.input(&key(Key::Other, false)), ScreenAction::None);
-
-    let mut view = exploded();
-    let pilot = view.sim().pilot().cloned();
-    assert_eq!(view.input(&key(Key::Other, true)), ScreenAction::None);
-    assert_eq!(view.input(&key(Key::Other, false)), ScreenAction::None);
-    assert!(matches!(fate_of(&view), PlayerFate::Holding { .. }));
-    assert!(view.take_mission_info_request().is_none());
-    assert_eq!(view.take_landing(), None);
-    assert!(view.take_hail().is_none());
-    assert!(view.take_boarding().is_none());
-    assert_eq!(view.sim().pilot().cloned(), pilot);
 }
 
 /// A flight under fire from [`killed_in`]`(1)`'s NPC, stepped to the

@@ -3135,24 +3135,6 @@ fn until_the_player_explodes(view: &mut View, breaking_up: impl Fn(&View)) {
     panic!("the player's ship never exploded");
 }
 
-/// A flight under fire from [`killed_in`]`(30)`'s NPC, stepped until
-/// the player's ship breaks up and its display has set the timer, on the
-/// frame after the hit (@0x43e29): a breakup of 90 ticks, so it is still
-/// breaking up for the test.
-fn breaking_up() -> View {
-    let mut view = now_deciding(
-        fighting(killed_in(30), &placed(750, 650, 180)),
-        Rc::new(Firing),
-    );
-    for _ in 0..60 {
-        view.tick(TICK);
-        if matches!(fate_of(&view), PlayerFate::BreakingUp { ticks_left, .. } if ticks_left > 0) {
-            return view;
-        }
-    }
-    panic!("the player's ship never broke up");
-}
-
 fn fate_of(view: &View) -> PlayerFate {
     view.session().expect("flying").player_fate()
 }

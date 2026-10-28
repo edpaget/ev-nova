@@ -1027,3 +1027,218 @@ fn backslash_let_go_and_pressed_again_during_the_jump_acts_after_arrival() {
         [FlightCommand::SelectNextSystem]
     );
 }
+
+// The player's fate's gates.
+
+/// [`in_flight`]'s view, its flight refusing `gates`, as a breakup or an
+/// explosion has the session refuse them.
+fn refusing(gates: &[PlayerCommand]) -> Faked {
+    let mut view = in_flight();
+    for &gate in gates {
+        view.sim.refuse(gate);
+    }
+    view
+}
+
+/// The gates a breakup shuts: the map, landing and mission info
+/// (`_HandlePlayer`'s breakup-timer gates at 0x6a7b3, 0x6a8cb and
+/// 0x7044b).
+const BREAKING_UP: [PlayerCommand; 3] = [
+    PlayerCommand::Map,
+    PlayerCommand::Land,
+    PlayerCommand::MissionInfo,
+];
+
+/// Every gate, shut once the player has exploded (the dead branch,
+/// 0x6870d-0x6888c).
+const EXPLODED: [PlayerCommand; 13] = [
+    PlayerCommand::Land,
+    PlayerCommand::Board,
+    PlayerCommand::Hail,
+    PlayerCommand::Map,
+    PlayerCommand::Jump,
+    PlayerCommand::Jettison,
+    PlayerCommand::Eject,
+    PlayerCommand::MissionInfo,
+    PlayerCommand::PlayerInfo,
+    PlayerCommand::SelectSystem,
+    PlayerCommand::Nav,
+    PlayerCommand::Target,
+    PlayerCommand::Escort,
+];
+
+#[test]
+fn mission_info_and_landing_do_nothing_while_the_player_breaks_up() {
+    let mut view = refusing(&BREAKING_UP);
+    view.take_sounds();
+    tap(&mut view, MISSION_INFO_KEY);
+    assert_eq!(view.take_sounds(), [], "silently (@0x70445, @0x7044f)");
+    tap(&mut view, LAND_KEY);
+    assert_eq!(sent_since(&view, 0), [], "nothing sent");
+    assert!(view.take_mission_info_request().is_none());
+    assert_eq!(view.take_landing(), None);
+    assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS));
+}
+
+#[test]
+fn an_exploded_player_takes_no_command() {
+    let mut view = refusing(&EXPLODED);
+    for k in [MAP_KEY, TARGET_KEY, LAND_KEY, MISSION_INFO_KEY, MENU_KEY] {
+        tap(&mut view, k);
+    }
+    view.tick(TICK);
+    assert_eq!(sent_since(&view, 0), [], "nothing sent");
+    assert!(!view.map_open());
+    assert!(view.take_mission_info_request().is_none());
+    assert_eq!(view.take_landing(), None);
+    assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS));
+    assert_ne!(view.message(), Some(NO_ESCORTS));
+    assert!(!view.escort_menu().is_open());
+}
+
+/// Home (`Key::Other` on this platform) has no binding, so it does
+/// nothing in every state, including the dead one the original reads it
+/// in (0x6884c, `_ResetPlayer(1)`, left out). This pins the unbound key,
+/// not the dead-state lockout, which `an_exploded_player_takes_no_command`
+/// and `a_click_picks_no_stellar_once_the_player_has_exploded` cover.
+#[test]
+fn home_is_unbound_whether_flying_or_exploded() {
+    for build in [in_flight, || refusing(&EXPLODED)] {
+        let mut view = build();
+        assert_eq!(view.input(&key(Key::Other, true)), ScreenAction::None);
+        assert_eq!(view.input(&key(Key::Other, false)), ScreenAction::None);
+        view.tick(TICK);
+        assert_eq!(sent_since(&view, 0), []);
+        assert!(view.take_mission_info_request().is_none());
+        assert_eq!(view.take_landing(), None);
+        assert!(view.take_hail().is_none());
+        assert!(view.take_boarding().is_none());
+    }
+}
+
+#[test]
+fn the_map_does_not_open_while_the_player_breaks_up() {
+    let mut view = refusing(&BREAKING_UP);
+    tap(&mut view, MAP_KEY);
+    assert!(!view.map_open());
+    let steps = view.sim.steps();
+    view.tick(TICK);
+    assert_eq!(view.sim.steps(), steps + 1, "the flight goes on, unpaused");
+}
+
+#[test]
+fn targeting_and_escort_keys_still_work_while_the_player_breaks_up() {
+    let mut view = refusing(&BREAKING_UP);
+    tap(&mut view, TARGET_KEY);
+    assert_eq!(
+        sent_since(&view, 0),
+        [FlightCommand::SelectTarget(TargetPick::Next)]
+    );
+    tap(&mut view, MENU_KEY);
+    assert_eq!(
+        view.message(),
+        Some(NO_ESCORTS),
+        "the escort menu's key is taken"
+    );
+}
+
+#[test]
+fn a_refused_nav_stops_the_held_slot_keys_once_the_player_has_exploded() {
+    for k in [
+        Key::Function(1),
+        STELLAR_SLOT_KEYS[1][0],
+        NEAREST_STELLAR_KEY,
+    ] {
+        let mut view = refusing(&EXPLODED);
+        view.input(&key(k, true));
+        for _ in 0..3 {
+            view.tick(TICK);
+        }
+        view.input(&key(k, false));
+        tap(&mut view, k);
+        view.tick(TICK);
+        assert_eq!(picks_since(&view, 0), [], "{k:?}: no pick");
+    }
+}
+
+/// A left click at `at`.
+fn faked_click(view: &mut Faked, at: Point) {
+    for pressed in [true, false] {
+        view.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        });
+    }
+}
+
+#[test]
+fn a_click_still_picks_a_stellar_while_the_player_breaks_up() {
+    let mut view = refusing(&BREAKING_UP);
+    faked_click(&mut view, Point::new(300.0, 200.0));
+    assert!(
+        matches!(
+            sent_since(&view, 0).as_slice(),
+            [FlightCommand::ClickInSpace { .. }]
+        ),
+        "the nav's gate is open: {:?}",
+        sent_since(&view, 0)
+    );
+}
+
+#[test]
+fn a_click_picks_no_stellar_once_the_player_has_exploded() {
+    let mut view = refusing(&EXPLODED);
+    faked_click(&mut view, Point::new(300.0, 200.0));
+    assert_eq!(sent_since(&view, 0), [], "the nav's gate is shut");
+}
+
+#[test]
+fn npcs_stand_still_while_the_map_is_open_or_the_ship_is_landed() {
+    let mut view = in_flight();
+    view.tick(TICK);
+    tap(&mut view, MAP);
+    let steps = view.sim.steps();
+    for _ in 0..10 {
+        view.tick(TICK);
+    }
+    assert_eq!(view.sim.steps(), steps, "the map is open: no steps");
+    tap(&mut view, MAP);
+    view.sim.frame_mut().landed = Some(StellarId(128));
+    view.refresh_frame();
+    let steps = view.sim.steps();
+    for _ in 0..10 {
+        view.tick(TICK);
+    }
+    assert_eq!(
+        view.sim.steps(),
+        steps + 10,
+        "landed, the flight's steps hold its NPCs still"
+    );
+}
+
+#[test]
+fn the_fire_keys_pressed_and_let_go_during_a_jump_fire_nothing() {
+    let mut view = braking();
+    for k in [FIRE_KEY, SECONDARY_KEY] {
+        view.input(&key(k, true));
+    }
+    view.tick(TICK);
+    assert_eq!(
+        view.sim.inputs().last().expect("a step").fire,
+        (true, true),
+        "held: the flight holds its fire through the jump"
+    );
+    for k in [FIRE_KEY, SECONDARY_KEY] {
+        view.input(&key(k, false));
+    }
+    lit(&mut view, 0.0);
+    warp_ends(&mut view);
+    view.tick(TICK);
+    view.tick(TICK);
+    assert_eq!(
+        view.sim.inputs().last().expect("a step").fire,
+        (false, false),
+        "let go before the arrival"
+    );
+}
