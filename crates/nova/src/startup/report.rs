@@ -120,11 +120,17 @@ impl Report {
     }
 
     /// Reports `fatal` ([`Report::fatal`]) and gives the exit code it
-    /// ends the program with.
+    /// ends the program with. One that shows no alert
+    /// ([`Fatal::shows_alert`]) still goes to the log and stderr.
     pub fn fail(&mut self, fatal: &Fatal, alert: &mut dyn FatalAlert) -> u8 {
         let exit = fatal.exit();
         if let Some(message) = &exit.message {
-            self.fatal(message, alert);
+            if fatal.shows_alert() {
+                self.fatal(message, alert);
+            } else {
+                self.log(message);
+                self.write_stderr(message);
+            }
         }
         exit.code
     }
@@ -205,6 +211,8 @@ pub enum Fatal {
     Usage,
     /// No `Nova Files` were found or picked.
     NotFound(NotFound),
+    /// None were found, and a quit arrived while the player was asked.
+    Quit(NotFound),
     /// The `Nova Files` named could not be listed: why.
     Unreadable(String),
     /// The event loop could not be made, or failed: why.
@@ -217,6 +225,7 @@ impl From<NotLocated> for Fatal {
     fn from(not: NotLocated) -> Self {
         match not {
             NotLocated::NotFound(not_found) => Self::NotFound(not_found),
+            NotLocated::Quit(not_found) => Self::Quit(not_found),
             NotLocated::Unreadable { error, .. } => Self::Unreadable(error),
         }
     }
@@ -233,13 +242,23 @@ impl Fatal {
         }
     }
 
+    /// Whether, with no terminal, the error is shown in an alert: every
+    /// one but a quit. The player asked to quit, and a second modal would
+    /// hold up the logout or Dock Quit that sent the quit, with no handler
+    /// left to dismiss it.
+    #[must_use]
+    pub fn shows_alert(&self) -> bool {
+        !matches!(self, Self::Quit(_))
+    }
+
     /// The exit code and message: 2 for the usage error and for no data
-    /// found, as a usage error always was; 1 for the rest.
+    /// found (cancelled or quit while asking), as a usage error always
+    /// was; 1 for the rest.
     #[must_use]
     pub fn exit(&self) -> Exit {
         let (code, message) = match self {
             Self::Usage => (2, Usage.to_string()),
-            Self::NotFound(not_found) => (2, not_found.to_string()),
+            Self::NotFound(not_found) | Self::Quit(not_found) => (2, not_found.to_string()),
             Self::Unreadable(error) | Self::EventLoop(error) => (1, format!("nova: {error}")),
             Self::Open(failure) => return crate::exit::exit(Some(failure)),
         };
@@ -455,6 +474,7 @@ mod tests {
         let cases = [
             (Fatal::Usage, 2, Usage.to_string()),
             (Fatal::NotFound(not_found.clone()), 2, not_found.to_string()),
+            (Fatal::Quit(not_found.clone()), 2, not_found.to_string()),
             (
                 Fatal::Unreadable("listing the data directory /x: gone".to_owned()),
                 1,
@@ -497,6 +517,44 @@ mod tests {
             }),
             Fatal::Unreadable("gone".to_owned())
         );
+    }
+
+    #[test]
+    fn a_quit_while_asking_maps_from_not_located() {
+        let not_found = NotFound {
+            places: vec![PathBuf::from("/usual")],
+        };
+        assert_eq!(
+            Fatal::from(NotLocated::Quit(not_found.clone())),
+            Fatal::Quit(not_found)
+        );
+    }
+
+    #[test]
+    fn a_quit_while_asking_is_logged_and_written_but_never_alerted_even_without_a_terminal() {
+        let log = Lines::default();
+        let stderr = Stderr::default();
+        let mut report = report(false, &log, &stderr);
+        let mut alerts = Alerts::default();
+        let not_found = NotFound {
+            places: vec![PathBuf::from("/usual")],
+        };
+        let message = not_found.to_string();
+        assert_eq!(report.fail(&Fatal::Quit(not_found), &mut alerts), 2);
+        assert!(alerts.0.is_empty(), "{:?}", alerts.0);
+        assert_eq!(stderr.text(), format!("{message}\n"));
+        assert_eq!(*log.lines.borrow(), [header(), message]);
+    }
+
+    #[test]
+    fn every_fatal_error_but_a_quit_shows_an_alert() {
+        let not_found = NotFound { places: Vec::new() };
+        assert!(Fatal::Usage.shows_alert());
+        assert!(Fatal::NotFound(not_found.clone()).shows_alert());
+        assert!(Fatal::Unreadable("gone".to_owned()).shows_alert());
+        assert!(Fatal::EventLoop("lost".to_owned()).shows_alert());
+        assert!(Fatal::Open(OpenFailure::NoGpu("none".to_owned())).shows_alert());
+        assert!(!Fatal::Quit(not_found).shows_alert());
     }
 
     #[test]

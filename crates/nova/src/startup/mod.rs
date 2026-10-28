@@ -23,8 +23,8 @@ use nova_sim::Rulebook;
 use nova_view::flight::FlightOverlays;
 
 pub use locate::{
-    DataSource, DiskData, Found, Located, NotFound, NotLocated, NovaFilesDialog, Opened, Remember,
-    Via, apply_remember, locate, resolve_pick, usual_places,
+    Answer, DataSource, DiskData, Found, Located, NotFound, NotLocated, NovaFilesDialog, Opened,
+    Remember, Via, answer, apply_remember, locate, resolve_pick, usual_places,
 };
 pub use report::{Fatal, FatalAlert, FileLog, Report, Shown, StartupLog, StdTerminal, Terminal};
 

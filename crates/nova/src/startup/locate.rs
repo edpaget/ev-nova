@@ -77,12 +77,35 @@ fn classify(opened: Result<GameData, OpenError>) -> Opened<GameData> {
     }
 }
 
+/// How the player answered the open panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// The path picked.
+    Picked(PathBuf),
+    /// The player cancelled (or there is no dialog on this platform).
+    Cancelled,
+    /// A quit arrived while the panel was up (on macOS, a quit Apple
+    /// event: the Dock's Quit, a logout, `osascript`'s `quit app`).
+    Quit,
+}
+
+/// The answer an open panel's adapter gives: a quit while it was up wins
+/// over anything `picked`; otherwise a pick is [`Answer::Picked`] and
+/// `None` is [`Answer::Cancelled`].
+#[must_use]
+pub fn answer(picked: Option<PathBuf>, quit: bool) -> Answer {
+    match picked {
+        _ if quit => Answer::Quit,
+        Some(path) => Answer::Picked(path),
+        None => Answer::Cancelled,
+    }
+}
+
 /// Asks the player where the `Nova Files` are: the port over the
 /// platform's open panel.
 pub trait NovaFilesDialog {
-    /// Asks with `prompt`; the path picked, or `None` when the player
-    /// cancelled (or there is no dialog on this platform).
-    fn pick(&mut self, prompt: &str) -> Option<PathBuf>;
+    /// Asks with `prompt`, and gives the player's [`Answer`].
+    fn pick(&mut self, prompt: &str) -> Answer;
 }
 
 /// The `Nova Files` inside an `EV Nova.app` at `app`.
@@ -268,6 +291,9 @@ impl fmt::Display for NotFound {
 pub enum NotLocated {
     /// Nothing named, remembered, usual or picked held the data.
     NotFound(NotFound),
+    /// A quit arrived while the player was being asked: nothing named,
+    /// remembered or usual held the data, as for [`NotLocated::NotFound`].
+    Quit(NotFound),
     /// The directory the player named could not be listed.
     Unreadable {
         /// The directory.
@@ -332,7 +358,9 @@ impl<D> Located<D> {
 ///    the first that can be listed decides: when it loads it is used and
 ///    remembered, and when it is empty the player is asked again, naming
 ///    it. When none can be listed the player is asked again, naming the
-///    last tried. A cancel is [`NotLocated::NotFound`].
+///    last tried. A cancel is [`NotLocated::NotFound`]; a quit is
+///    [`NotLocated::Quit`]. Either way a gone remembered directory is
+///    still forgotten.
 pub fn locate<S: DataSource>(
     named: Option<&Path>,
     remembered: Option<&Path>,
@@ -387,7 +415,20 @@ pub fn locate<S: DataSource>(
         }
     }
     let mut prompt = PROMPT.to_owned();
-    while let Some(pick) = dialog.pick(&prompt) {
+    let not_found = NotFound {
+        places: usual.to_vec(),
+    };
+    loop {
+        let pick = match dialog.pick(&prompt) {
+            Answer::Picked(pick) => pick,
+            Answer::Cancelled => {
+                let outcome = Err(NotLocated::NotFound(not_found));
+                return Located::ending(outcome, warnings, remember);
+            }
+            Answer::Quit => {
+                return Located::ending(Err(NotLocated::Quit(not_found)), warnings, remember);
+            }
+        };
         let mut tried = pick.clone();
         for dir in pick_dirs(&pick, source) {
             match source.open(&dir) {
@@ -408,10 +449,6 @@ pub fn locate<S: DataSource>(
         }
         prompt = format!("{} holds no EV Nova data. {PROMPT}", tried.display());
     }
-    let not_found = NotLocated::NotFound(NotFound {
-        places: usual.to_vec(),
-    });
-    Located::ending(Err(not_found), warnings, remember)
 }
 
 /// Applies the lookup's `change` to the remembered directory through
@@ -509,27 +546,36 @@ mod tests {
         }
     }
 
-    /// A dialog that gives its picks in turn, then cancels; records each
+    /// A dialog that gives its answers in turn, then cancels; records each
     /// prompt.
     #[derive(Default)]
     pub(super) struct Picks {
-        picks: VecDeque<PathBuf>,
+        answers: VecDeque<Answer>,
         pub(super) prompts: Vec<String>,
     }
 
     impl Picks {
         fn of(picks: &[&Path]) -> Self {
             Self {
-                picks: picks.iter().map(|pick| pick.to_path_buf()).collect(),
+                answers: picks
+                    .iter()
+                    .map(|pick| Answer::Picked(pick.to_path_buf()))
+                    .collect(),
                 prompts: Vec::new(),
             }
+        }
+
+        /// The same answers, then a quit.
+        fn then_quit(mut self) -> Self {
+            self.answers.push_back(Answer::Quit);
+            self
         }
     }
 
     impl NovaFilesDialog for Picks {
-        fn pick(&mut self, prompt: &str) -> Option<PathBuf> {
+        fn pick(&mut self, prompt: &str) -> Answer {
             self.prompts.push(prompt.to_owned());
-            self.picks.pop_front()
+            self.answers.pop_front().unwrap_or(Answer::Cancelled)
         }
     }
 
@@ -1045,6 +1091,64 @@ mod tests {
         assert_eq!(located.remember, Remember::Forget);
         assert_eq!(located.warnings.len(), 1);
         assert_eq!(dialog.prompts, ["Locate your EV Nova folder"]);
+    }
+
+    #[test]
+    fn a_quit_wins_over_any_pick() {
+        assert_eq!(answer(Some(path("/picked")), true), Answer::Quit);
+        assert_eq!(answer(None, true), Answer::Quit);
+    }
+
+    #[test]
+    fn without_a_quit_a_pick_is_picked_and_none_is_a_cancel() {
+        assert_eq!(
+            answer(Some(path("/picked")), false),
+            Answer::Picked(path("/picked"))
+        );
+        assert_eq!(answer(None, false), Answer::Cancelled);
+    }
+
+    #[test]
+    fn a_quit_at_the_first_ask_finds_nothing_as_quit() {
+        let dirs = Dirs::default();
+        let mut dialog = Picks::default().then_quit();
+        let located = locate(None, None, &usual(), &dirs, &mut dialog);
+        assert_eq!(
+            located.outcome,
+            Err(NotLocated::Quit(NotFound { places: usual() }))
+        );
+        assert_eq!(located.remember, Remember::Keep);
+        assert_eq!(dialog.prompts, [PROMPT]);
+    }
+
+    #[test]
+    fn a_quit_at_a_reask_ends_the_lookup() {
+        let pick = path("/empty");
+        let dirs = Dirs::default().with(&pick.join("Nova Files"), Holds::Nothing);
+        let mut dialog = Picks::of(&[&pick]).then_quit();
+        let located = locate(None, None, &usual(), &dirs, &mut dialog);
+        assert_eq!(
+            located.outcome,
+            Err(NotLocated::Quit(NotFound { places: usual() }))
+        );
+        assert_eq!(
+            dialog.prompts,
+            [PROMPT.to_owned(), reask(&pick.join("Nova Files"))]
+        );
+    }
+
+    #[test]
+    fn a_quit_still_forgets_a_gone_remembered_directory() {
+        let dirs = Dirs::default();
+        let mut dialog = Picks::default().then_quit();
+        let located = locate(None, Some(Path::new("/gone")), &usual(), &dirs, &mut dialog);
+        assert_eq!(
+            located.outcome,
+            Err(NotLocated::Quit(NotFound { places: usual() }))
+        );
+        assert_eq!(located.remember, Remember::Forget);
+        assert_eq!(located.warnings.len(), 1);
+        assert_eq!(dialog.prompts, [PROMPT]);
     }
 
     #[test]

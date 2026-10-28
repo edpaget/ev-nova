@@ -265,8 +265,11 @@ fn open(
 /// through `ApplicationHandler::exiting`, which saves the pilot. A quit
 /// event that arrives while an `AppKit` modal runs (the startup warnings
 /// sheet, a file dialog) is taken at once, but its command waits in the
-/// loop until the modal ends, as Command-Q's does. It needs the OS, so no
-/// test runs it.
+/// loop until the modal ends, as Command-Q's does. Before the loop runs,
+/// the startup's open panel installs handlers of its own around each ask
+/// (`nova::platform::dialogs`): a quit there cancels the panel and ends
+/// the launch, and they are dropped before the loop launches the app. It
+/// needs the OS, so no test runs it.
 pub fn event_loop() -> Result<EventLoop<MenuCommand>, EventLoopError> {
     let mut builder = EventLoop::<MenuCommand>::with_user_event();
     #[cfg(target_os = "macos")]

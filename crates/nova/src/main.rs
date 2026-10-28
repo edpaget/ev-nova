@@ -85,7 +85,10 @@
 //! a warning. Failing all of those, an open panel asks the player to
 //! "Locate your EV Nova folder": `EV Nova.app` or its `Nova Files` can be
 //! picked, and the pick is remembered for the next launch
-//! ([`nova::startup`]).
+//! ([`nova::startup`]). On macOS a quit (the Dock's Quit, a logout,
+//! `osascript`'s `quit app`) while the panel is up ends the launch as its
+//! Cancel does, with exit status 2 and the same "found no EV Nova data"
+//! line on standard error and in the startup log, but with no alert.
 //!
 //! Every startup error and warning goes to standard error and to the
 //! startup log, rewritten each launch: `~/Library/Logs/nova/nova.log` on

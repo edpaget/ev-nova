@@ -5,6 +5,10 @@
 //!
 //! On macOS they are rfd's: an `NSOpenPanel` that can pick a folder or a
 //! package (so both `EV Nova.app` and its `Nova Files`), and `NSAlert`s.
+//! A quit Apple event (the Dock's Quit, a logout, `osascript`'s
+//! `quit app`) while the panel is up cancels it and reads as
+//! [`Answer::Quit`]: the panel installs `nova_appkit`'s handlers for its
+//! run, as the app has none of its own until it has launched.
 //! On Windows they are rfd's too: the panel is a folder picker
 //! (`IFileOpenDialog` with `FOS_PICKFOLDERS`), and either the `EV Nova`
 //! folder or its `Nova Files` can be picked, since the lookup tries both
@@ -36,12 +40,17 @@
 //! started once the game window is up and the application is running,
 //! which needs no nested run loop.
 
-use std::path::PathBuf;
+#[cfg(target_os = "macos")]
+use std::cell::Cell;
+#[cfg(target_os = "macos")]
+use std::rc::Rc;
 
 use winit::window::Window;
 
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+use crate::startup::answer;
 use crate::startup::locate::PROMPT;
-use crate::startup::{FatalAlert, NovaFilesDialog};
+use crate::startup::{Answer, FatalAlert, NovaFilesDialog};
 
 /// The fatal alert's title.
 pub const FATAL_TITLE: &str = "EV Nova could not start";
@@ -60,11 +69,33 @@ pub struct Dialogs;
 #[cfg(target_os = "macos")]
 impl NovaFilesDialog for Dialogs {
     /// An open panel showing `prompt`, starting in `/Applications`.
-    fn pick(&mut self, prompt: &str) -> Option<PathBuf> {
-        rfd::FileDialog::new()
+    ///
+    /// A quit Apple event (the Dock's Quit, a logout, `osascript`'s
+    /// `quit app`) while it is up cancels it and reads as
+    /// [`Answer::Quit`]. The panel runs before the app has finished
+    /// launching, so `AppKit` has no handler for the event yet: this one
+    /// installs `nova_appkit::AppleEvents` for the panel's run, whose quit
+    /// aborts the modal (`nova_appkit::abort_modal`), and drops them
+    /// before returning, well before launch would replace them. Should
+    /// they not install (only off the main thread) the panel runs without
+    /// them.
+    fn pick(&mut self, prompt: &str) -> Answer {
+        let quit = Rc::new(Cell::new(false));
+        let handlers = {
+            let quit = Rc::clone(&quit);
+            nova_appkit::AppleEvents::install(move |command| {
+                if command == nova_appkit::Command::Quit {
+                    quit.set(true);
+                    nova_appkit::abort_modal();
+                }
+            })
+        };
+        let picked = rfd::FileDialog::new()
             .set_title(prompt)
             .set_directory("/Applications")
-            .pick_file_or_folder()
+            .pick_file_or_folder();
+        drop(handlers);
+        answer(picked, quit.get())
     }
 }
 
@@ -81,8 +112,11 @@ impl NovaFilesDialog for Dialogs {
     /// (`CoInitializeEx`, apartment-threaded); should that fail, as on a
     /// thread already in the multithreaded apartment, no picker shows
     /// and the call reads as a cancel.
-    fn pick(&mut self, prompt: &str) -> Option<PathBuf> {
-        rfd::FileDialog::new().set_title(prompt).pick_folder()
+    fn pick(&mut self, prompt: &str) -> Answer {
+        answer(
+            rfd::FileDialog::new().set_title(prompt).pick_folder(),
+            false,
+        )
     }
 }
 
@@ -99,7 +133,7 @@ impl NovaFilesDialog for Dialogs {
     ///
     /// It runs on the calling thread before the event loop and any window,
     /// as on the other platforms, so it has no parent window.
-    fn pick(&mut self, prompt: &str) -> Option<PathBuf> {
+    fn pick(&mut self, prompt: &str) -> Answer {
         if let Some(notice) = retry_notice(prompt) {
             let _ = rfd::MessageDialog::new()
                 .set_level(rfd::MessageLevel::Warning)
@@ -107,7 +141,10 @@ impl NovaFilesDialog for Dialogs {
                 .set_description(notice)
                 .show();
         }
-        rfd::FileDialog::new().set_title(prompt).pick_folder()
+        answer(
+            rfd::FileDialog::new().set_title(prompt).pick_folder(),
+            false,
+        )
     }
 }
 
@@ -176,8 +213,8 @@ pub fn show_warnings(_window: &Window, body: &str) {
 #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 impl NovaFilesDialog for Dialogs {
     /// No dialog: nothing is picked.
-    fn pick(&mut self, _prompt: &str) -> Option<PathBuf> {
-        None
+    fn pick(&mut self, _prompt: &str) -> Answer {
+        Answer::Cancelled
     }
 }
 

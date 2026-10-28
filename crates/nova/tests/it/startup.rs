@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use nova::platform::console::{ConsoleTerminal, StderrGoes};
 use nova::startup::{
-    DataSource, FatalAlert, Launch, NovaFilesDialog, Opened, Started, StartupLog, Terminal,
+    Answer, DataSource, FatalAlert, Launch, NovaFilesDialog, Opened, Started, StartupLog, Terminal,
     resolve_pick, run,
 };
 use nova_audio::SettingsStore;
@@ -43,17 +43,18 @@ impl DataSource for Disk {
     }
 }
 
-/// The open panel: its picks in turn, then a cancel; records each prompt.
+/// The open panel: its answers in turn, then a cancel; records each
+/// prompt.
 #[derive(Default)]
 struct Panel {
-    picks: VecDeque<PathBuf>,
+    answers: VecDeque<Answer>,
     prompts: Vec<String>,
 }
 
 impl NovaFilesDialog for Panel {
-    fn pick(&mut self, prompt: &str) -> Option<PathBuf> {
+    fn pick(&mut self, prompt: &str) -> Answer {
         self.prompts.push(prompt.to_owned());
-        self.picks.pop_front()
+        self.answers.pop_front().unwrap_or(Answer::Cancelled)
     }
 }
 
@@ -128,7 +129,10 @@ impl Machine {
                 asked: RefCell::default(),
             },
             panel: Panel {
-                picks: picks.iter().map(|pick| pick.to_path_buf()).collect(),
+                answers: picks
+                    .iter()
+                    .map(|pick| Answer::Picked(pick.to_path_buf()))
+                    .collect(),
                 prompts: Vec::new(),
             },
             alerts: Alerts::default(),
@@ -138,6 +142,13 @@ impl Machine {
             console: None,
             stderr: Written::default(),
         }
+    }
+
+    /// The same launch, its panel quit (a quit Apple event) after its
+    /// picks.
+    fn then_quit(mut self) -> Self {
+        self.panel.answers.push_back(Answer::Quit);
+        self
     }
 
     fn launch(&mut self) -> Result<Started<(), PathBuf>, u8> {
@@ -232,6 +243,82 @@ fn a_cancel_without_a_terminal_shows_the_fatal_alert() {
         "{message}"
     );
     assert_eq!(machine.log.0.borrow().last(), Some(message), "logged too");
+}
+
+/// A store remembering `dir`.
+fn remembering(dir: &Path) -> MemorySettings {
+    let store = MemorySettings::new();
+    store
+        .clone()
+        .write(&format!(
+            "{{\"nova_files\": {}}}",
+            serde_json::to_string(&dir.display().to_string()).expect("JSON")
+        ))
+        .expect("seeds");
+    store
+}
+
+/// The line a Cancel in the panel ends a launch with, from the same
+/// machine as `quit` but cancelled there: what a quit must end with too.
+fn cancel_line(store: &MemorySettings, picks: &[&Path]) -> String {
+    let mut cancelled = Machine::new(store, &[], picks);
+    cancelled.terminal = true;
+    assert_eq!(cancelled.launch().err(), Some(2));
+    cancelled.log.0.borrow().last().cloned().expect("logged")
+}
+
+#[test]
+fn a_quit_during_the_panel_ends_the_startup_with_the_no_data_status_and_no_alert() {
+    let remembered = Path::new("/Games").join("Gone");
+    let store = remembering(&remembered);
+    let mut machine = Machine::new(&store, &[], &[]).then_quit();
+    assert_eq!(machine.launch().err(), Some(2), "the no-data status");
+    assert_eq!(
+        machine.alerts.0,
+        Vec::<String>::new(),
+        "no alert, though stderr is no terminal"
+    );
+    assert_eq!(machine.panel.prompts, ["Locate your EV Nova folder"]);
+    let line = cancel_line(&remembering(&remembered), &[]);
+    assert!(
+        line.starts_with("nova: found no EV Nova data in "),
+        "{line}"
+    );
+    assert_eq!(
+        machine.log.0.borrow().last(),
+        Some(&line),
+        "the Cancel's line"
+    );
+    assert!(
+        machine.stderr.text().ends_with(&format!("{line}\n")),
+        "{}",
+        machine.stderr.text()
+    );
+    assert!(
+        !store.text().expect("saved").contains("nova_files"),
+        "a gone remembered directory is still forgotten, as a Cancel does"
+    );
+}
+
+#[test]
+fn a_quit_leaves_a_remembered_directory_it_never_tried_untouched() {
+    let store = MemorySettings::new();
+    let mut machine = Machine::new(&store, &[], &[]).then_quit();
+    assert_eq!(machine.launch().err(), Some(2));
+    assert_eq!(store.writes(), 0, "nothing saved");
+}
+
+#[test]
+fn a_quit_at_a_reask_after_an_empty_pick_ends_the_startup_too() {
+    let empty = Path::new("/Games").join("Empty");
+    let store = MemorySettings::new();
+    let mut machine = Machine::new(&store, &[], &[&empty]).then_quit();
+    assert_eq!(machine.launch().err(), Some(2));
+    assert_eq!(machine.panel.prompts.len(), 2, "asked, then asked again");
+    assert_eq!(machine.alerts.0, Vec::<String>::new());
+    let line = cancel_line(&MemorySettings::new(), &[&empty]);
+    assert_eq!(machine.log.0.borrow().last(), Some(&line));
+    assert_eq!(store.writes(), 0, "nothing remembered");
 }
 
 #[test]
