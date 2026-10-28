@@ -68,12 +68,14 @@ nova-sim-story = { workspace = true, features = ["fixture"] }
 nova-sim = { workspace = true, features = ["fixture"] }
 
 [features]
-# Exposes the test support in `fixture` (the in-memory pilot store and the
-# storyline walker) to other crates' tests and this crate's `tests/`. It
-# re-exports the catalog's `listed_stellars`, `list_also` and
-# `bits_allowing`, so it turns on the catalog's `fixture` too, and the
-# AI's, whose `Traffic` setters build the berths a traffic hands on.
-fixture = ["nova-sim-catalog/fixture", "nova-sim-ai/fixture"]
+# Exposes the test support in `fixture` (the in-memory pilot store, the
+# pilot store's `check_contract` and the storyline walker) to other crates'
+# tests and this crate's `tests/`. It re-exports the catalog's
+# `listed_stellars`, `list_also` and `bits_allowing`, so it turns on the
+# catalog's `fixture` too; the AI's, whose `Traffic` setters build the
+# berths a traffic hands on; and nova-sim-base's, whose `Chance` contract
+# it re-exports as `fixture::chance`.
+fixture = ["nova-sim-base/fixture", "nova-sim-catalog/fixture", "nova-sim-ai/fixture"]
 
 [lints]
 workspace = true

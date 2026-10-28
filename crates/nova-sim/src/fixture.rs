@@ -16,9 +16,16 @@
 //! [`listed_stellars`], a fake catalog's listed stellars derived from its
 //! landing sites; and [`SessionBuilder`], a session in a given state
 //! reached without the load's rules (see the `builder` module).
+//!
+//! Two ports' contracts live here too: [`pilot_store`]'s, which every
+//! [`PilotStore`] meets, and [`chance`]'s, nova-sim-base's `Chance`
+//! contract re-exported so the crates above reach it through this facade.
 
 mod builder;
+pub mod pilot_store;
 mod walker;
+
+pub use nova_sim_base::fixture::chance;
 
 pub use builder::SessionBuilder;
 
