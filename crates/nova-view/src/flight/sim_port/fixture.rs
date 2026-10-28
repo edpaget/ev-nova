@@ -18,24 +18,19 @@ use nova_sim::flight_frame::{
     PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
 };
 use nova_sim::navigation::NavMode;
-use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::status_cargo::StatusCargo;
-use nova_sim::{ClassRow, Gauge, HailView, PlunderView, RadarGear, Reserves, Take};
+use nova_sim::{ClassRow, Gauge, RadarGear, Reserves, Take};
 use nova_sim::{
     EscortClass, Hover, MapMarks, MissionId, PlayerCommand, ShipId, ShipRef, StellarId,
     StellarPick, Vec2, WeaponId,
 };
 use nova_sim::{JumpReadiness, PlayerFate};
 
-use nova_sim::mission::screens::OFFER_GAP_TICKS;
-use nova_sim::{
-    Direction, Good, HireList, Lot, Market, MissionInfo, News, Order, Outfitter, PlayerInfo,
-    ShipNaming, ShipRefusal, Shipyard,
-};
+use nova_sim::{Direction, Good, Lot, Order};
 
 use nova_sim::DeskReading;
 
-use super::{CommSource, FlightSim, PilotSource, PortSource};
+use super::FlightSim;
 use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 
 /// A scripted [`FlightSim`]: it shows the frame it was given, records
@@ -67,12 +62,11 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// answer, and one arm in `FakeFlight::answer_ask`; it is recorded with
 /// the rest. It lists the weapons from its list
 /// ([`FakeFlight::set_weapons`]) and the names from its table
-/// ([`FakeFlight::set_names`]) in its opening, failed or not. It answers
-/// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]),
-/// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]) and
-/// [`PilotSource`] from [`FakePilot`] ([`FakeFlight::pilot_mut`]). Its
-/// player's ship's name, its date, the systems it has explored and the
-/// floating map's places are its frame's ([`FakeFlight::set_frame`]). It
+/// ([`FakeFlight::set_names`]) in its opening, failed or not. Its
+/// player's ship's name, its date, the systems it has explored, the
+/// floating map's places and the router's facts (Recharge enabled, the
+/// intro seen) are its frame's ([`FakeFlight::set_frame`]); the port's,
+/// the comm's and the pilot's screens are screen asks like any other. It
 /// answers the message line's commands ([`FlightCommand::CommShown`],
 /// [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`])
 /// and the settings ([`FlightCommand::SetWindowWidth`],
@@ -103,9 +97,6 @@ pub struct FakeFlight {
     weapons: Vec<WeaponId>,
     opening_names: Names,
     descriptions: VecDeque<String>,
-    comm: FakeComm,
-    port: FakePort,
-    pilot: FakePilot,
     failure: Option<String>,
     desk: FakeDesk,
     edits: Vec<PilotEdit>,
@@ -120,75 +111,6 @@ pub struct FakeDesk {
     pub reading: Option<DeskReading>,
     /// What every edit is refused with while set; taken otherwise.
     pub refusal: Option<EditRefusal>,
-}
-
-/// What a [`FakeFlight`] answers the [`CommSource`] questions with, each
-/// field the answer to the question of its name. The default answers
-/// nothing, as a [`CommSource`]'s defaults do.
-#[derive(Clone, Debug, Default)]
-pub struct FakeComm {
-    /// [`CommSource::hailing`]'s answer.
-    pub hailing: Option<HailView>,
-    /// [`CommSource::boarding`]'s answer.
-    pub boarding: Option<PlunderView>,
-}
-
-/// What a [`FakeFlight`] answers the [`PortSource`] questions with, each
-/// field the answer to the question of its name; a `&mut` read hands back
-/// a clone of its field. The default answers nothing open, as a
-/// [`PortSource`]'s defaults do.
-#[derive(Clone, Debug, Default)]
-pub struct FakePort {
-    /// [`PortSource::market`]'s answer.
-    pub market: Option<Market>,
-    /// [`PortSource::recharge_enabled`]'s answer.
-    pub recharge_enabled: bool,
-    /// [`PortSource::news`]'s answer.
-    pub news: Option<News>,
-    /// [`PortSource::news_picture`]'s answer.
-    pub news_picture: Option<i16>,
-    /// [`PortSource::mission_info`]'s answer; nothing listed when `None`.
-    pub mission_info: Option<MissionInfo>,
-    /// [`PortSource::seen_intro`]'s answer.
-    pub seen_intro: bool,
-    /// The missions whose offer dialog [`PortSource::refusable_offer_dialog`]
-    /// says has a refuse button.
-    pub refusable: Vec<MissionId>,
-    /// [`PortSource::outfitter`]'s answer.
-    pub outfitter: Option<Outfitter>,
-    /// [`PortSource::shipyard`]'s answer.
-    pub shipyard: Option<Shipyard>,
-    /// [`PortSource::escorts_for_hire`]'s answer.
-    pub hire_list: Option<HireList>,
-    /// [`PortSource::ship_naming`]'s answer, whatever the class; no
-    /// shipyard when `None`.
-    pub ship_naming: Option<Result<ShipNaming, ShipRefusal>>,
-    /// [`PortSource::offer_gap`]'s answer; [`OFFER_GAP_TICKS`] when `None`.
-    pub offer_gap: Option<u32>,
-    /// The offers [`PortSource::offer_text`] fills, each with the text it
-    /// gives whatever the raw text; none for a mission not listed.
-    pub offer_texts: Vec<(MissionId, String)>,
-    /// [`PortSource::can_hire_escorts`]'s answer.
-    pub can_hire_escorts: bool,
-}
-
-/// What a [`FakeFlight`] answers the [`PilotSource`] questions with, each
-/// field the answer to the question of its name. The default shows none,
-/// as a [`PilotSource`]'s defaults do.
-#[derive(Clone, Debug, Default)]
-pub struct FakePilot {
-    /// [`PilotSource::player_info`]'s answer.
-    pub player_info: Option<PlayerInfo>,
-    /// [`PilotSource::pilot_panel`]'s answer.
-    pub pilot_panel: Option<PilotPanel>,
-}
-
-/// The name `names` gives `id`, if it lists one.
-fn named<'a, K: PartialEq, V>(names: &'a [(K, V)], id: &K) -> Option<&'a V> {
-    names
-        .iter()
-        .find(|(listed, _)| listed == id)
-        .map(|(_, name)| name)
 }
 
 impl FakeFlight {
@@ -340,21 +262,6 @@ impl FakeFlight {
         self.refused.retain(|&refused| refused != gate);
     }
 
-    /// What the comm's questions are answered with, to script.
-    pub fn comm_mut(&mut self) -> &mut FakeComm {
-        &mut self.comm
-    }
-
-    /// What the spaceport's questions are answered with, to script.
-    pub fn port_mut(&mut self) -> &mut FakePort {
-        &mut self.port
-    }
-
-    /// What the pilot's screens are answered with, to script.
-    pub fn pilot_mut(&mut self) -> &mut FakePilot {
-        &mut self.pilot
-    }
-
     /// Fails for `reason` from now on, as a flight that could not start:
     /// its opening gives it ([`FakeFlight::opening`]) and every command but
     /// a description's load is refused. The frame, the events and the
@@ -500,89 +407,6 @@ impl DevDesk for FakeFlight {
     fn edit(&mut self, edit: PilotEdit) -> Result<(), EditRefusal> {
         self.edits.push(edit);
         self.desk.refusal.map_or(Ok(()), Err)
-    }
-}
-
-impl CommSource for FakeFlight {
-    fn hailing(&self) -> Option<HailView> {
-        self.comm.hailing.clone()
-    }
-
-    fn boarding(&self) -> Option<PlunderView> {
-        self.comm.boarding
-    }
-}
-
-impl PortSource for FakeFlight {
-    fn market(&self) -> Option<Market> {
-        self.port.market.clone()
-    }
-
-    fn recharge_enabled(&self) -> bool {
-        self.port.recharge_enabled
-    }
-
-    fn news(&self) -> Option<&News> {
-        self.port.news.as_ref()
-    }
-
-    fn news_picture(&self) -> Option<i16> {
-        self.port.news_picture
-    }
-
-    fn mission_info(&self) -> MissionInfo {
-        self.port.mission_info.clone().unwrap_or_default()
-    }
-
-    fn seen_intro(&self) -> bool {
-        self.port.seen_intro
-    }
-
-    fn refusable_offer_dialog(&self, mission: MissionId) -> bool {
-        self.port.refusable.contains(&mission)
-    }
-
-    fn offer_text(&self, mission: MissionId, raw: &str) -> Option<String> {
-        let _ = raw;
-        named(&self.port.offer_texts, &mission).cloned()
-    }
-
-    fn outfitter(&mut self) -> Option<Outfitter> {
-        self.port.outfitter.clone()
-    }
-
-    fn shipyard(&mut self) -> Option<Shipyard> {
-        self.port.shipyard.clone()
-    }
-
-    fn escorts_for_hire(&mut self) -> Option<HireList> {
-        self.port.hire_list.clone()
-    }
-
-    fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
-        let _ = ship;
-        self.port
-            .ship_naming
-            .clone()
-            .unwrap_or(Err(ShipRefusal::NoShipyard))
-    }
-
-    fn offer_gap(&mut self) -> u32 {
-        self.port.offer_gap.unwrap_or(OFFER_GAP_TICKS)
-    }
-
-    fn can_hire_escorts(&self) -> bool {
-        self.port.can_hire_escorts
-    }
-}
-
-impl PilotSource for FakeFlight {
-    fn player_info(&self) -> Option<PlayerInfo> {
-        self.pilot.player_info.clone()
-    }
-
-    fn pilot_panel(&self) -> Option<PilotPanel> {
-        self.pilot.pilot_panel.clone()
     }
 }
 
@@ -1546,7 +1370,7 @@ fn check_world(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), Strin
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::{DescMovie, SimSound};
+    use nova_sim::{DescMovie, Market, ShipRefusal, SimSound};
 
     use super::*;
 
@@ -1634,12 +1458,6 @@ mod tests {
             ScreenAnswer::Nothing
         }
     }
-
-    impl CommSource for TakesSettings {}
-
-    impl PortSource for TakesSettings {}
-
-    impl PilotSource for TakesSettings {}
 
     #[test]
     fn a_failed_flight_that_takes_a_command_breaks_the_contract() {
@@ -1776,12 +1594,6 @@ mod tests {
         }
     }
 
-    impl CommSource for AnswersAScreen {}
-
-    impl PortSource for AnswersAScreen {}
-
-    impl PilotSource for AnswersAScreen {}
-
     #[test]
     fn a_failed_flight_that_answers_a_screen_ask_breaks_the_contract() {
         let clause = check_contract(
@@ -1897,12 +1709,6 @@ mod tests {
         assert_eq!(kinds, (0..SCREEN_ASK_KINDS).collect());
     }
 
-    impl CommSource for LoadsOnly {}
-
-    impl PortSource for LoadsOnly {}
-
-    impl PilotSource for LoadsOnly {}
-
     #[test]
     fn the_fake_opens_naming_what_it_is_told() {
         let mut fake = FakeFlight::new();
@@ -2003,14 +1809,6 @@ mod tests {
         };
         assert_eq!(fake.edit(to), Err(EditRefusal::InFlight));
         assert_eq!(fake.edits(), [PilotEdit::Credits(5), to]);
-    }
-
-    #[test]
-    fn the_fake_answers_the_hire_as_scripted() {
-        let mut fake = FakeFlight::new();
-        assert!(!fake.can_hire_escorts());
-        fake.port_mut().can_hire_escorts = true;
-        assert!(fake.can_hire_escorts());
     }
 
     #[test]
@@ -2434,12 +2232,6 @@ mod tests {
         }
     }
 
-    impl PilotSource for Broken {}
-
-    impl CommSource for Broken {}
-
-    impl PortSource for Broken {}
-
     /// The clause `fault` breaks, as `check_contract` names it.
     fn clause(fault: Fault) -> String {
         check_contract(&mut Broken::new(fault), &FlightOpening::default()).expect_err("broken")
@@ -2710,49 +2502,6 @@ mod tests {
     }
 
     #[test]
-    fn the_fake_answers_nothing_of_the_port_until_scripted_then_as_scripted() {
-        let mut fake = FakeFlight::new();
-        assert_eq!(fake.market(), None);
-        assert_eq!(fake.mission_info(), MissionInfo::default());
-        assert_eq!(fake.ship_naming(ShipId(129)), Err(ShipRefusal::NoShipyard));
-        assert_eq!(fake.offer_gap(), OFFER_GAP_TICKS);
-        assert!(!fake.refusable_offer_dialog(MissionId(130)));
-        assert_eq!(fake.offer_text(MissionId(130), "Run <PAY>"), None);
-        let port = fake.port_mut();
-        port.offer_texts = vec![(MissionId(130), "Run 1,000".to_owned())];
-        port.market = Some(Market::default());
-        port.recharge_enabled = true;
-        port.news = Some(News::default());
-        port.news_picture = Some(9000);
-        port.seen_intro = true;
-        port.refusable = vec![MissionId(130)];
-        port.outfitter = Some(Outfitter::default());
-        port.offer_gap = Some(45);
-        let info = MissionInfo {
-            rows: Vec::new(),
-            today: "Today.".to_owned(),
-        };
-        port.mission_info = Some(info.clone());
-        assert_eq!(fake.market(), Some(Market::default()));
-        assert!(fake.recharge_enabled());
-        assert_eq!(fake.news(), Some(&News::default()));
-        assert_eq!(fake.news_picture(), Some(9000));
-        assert!(fake.seen_intro());
-        assert!(fake.refusable_offer_dialog(MissionId(130)));
-        assert!(!fake.refusable_offer_dialog(MissionId(131)));
-        assert_eq!(
-            fake.offer_text(MissionId(130), "Run <PAY>").as_deref(),
-            Some("Run 1,000")
-        );
-        assert_eq!(fake.offer_text(MissionId(131), "Run"), None, "not offered");
-        assert_eq!(fake.outfitter(), Some(Outfitter::default()));
-        assert_eq!(fake.mission_info(), info);
-        assert_eq!(fake.offer_gap(), 45);
-        assert_eq!(fake.shipyard(), None);
-        assert_eq!(fake.escorts_for_hire(), None);
-    }
-
-    #[test]
     fn a_fake_boarding_or_with_an_escort_flying_meets_the_contract() {
         let mut flying = FakeFlight::new();
         let mut frame = stellar(128);
@@ -2774,8 +2523,8 @@ mod tests {
     }
 
     /// What is on board NPC 0, a ship 129.
-    fn boarded() -> PlunderView {
-        PlunderView {
+    fn boarded() -> nova_sim::PlunderView {
+        nova_sim::PlunderView {
             npc: nova_sim::NpcId(0),
             ship: ShipId(129),
             credits: 100,
@@ -2784,31 +2533,6 @@ mod tests {
             fuel: 0,
             odds: 0,
         }
-    }
-
-    #[test]
-    fn the_fake_answers_nothing_of_the_comm_until_scripted_then_as_scripted() {
-        let mut fake = FakeFlight::new();
-        assert_eq!(fake.hailing(), None);
-        assert_eq!(fake.boarding(), None);
-        fake.comm_mut().boarding = Some(boarded());
-        assert_eq!(fake.boarding(), Some(boarded()));
-        let hail = nova_sim::HailView {
-            npc: nova_sim::NpcId(0),
-            ship: ShipId(129),
-            first: None,
-            reply: "Hello.".to_owned(),
-            comm_name: String::new(),
-            govt_name: None,
-            hostile: false,
-            options: Vec::new(),
-            asking: None,
-            pay_me: true,
-            escort: None,
-            portrait: None,
-        };
-        fake.comm_mut().hailing = Some(hail.clone());
-        assert_eq!(fake.hailing(), Some(hail));
     }
 
     #[test]

@@ -16,23 +16,6 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
-    # `CommSource`'s defaults are "nothing open": each body is already
-    # the `None` the mutant puts back
-    # (`sim_port::tests::a_comm_source_with_nothing_open_answers_nothing`).
-    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace CommSource::(hailing|boarding) -> Option<[A-Za-z]+> with None$",
-    # `PortSource`'s defaults are "nothing open" too: its refuse button's
-    # body is already the `false` the mutant puts back
-    # (`sim_port::tests::a_port_source_with_nothing_open_answers_nothing`).
-    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace PortSource::refusable_offer_dialog -> bool with false$",
-    # Its mission info's and its offer text's bodies are already the empty
-    # value and the `None` the mutants put back (the same test).
-    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace PortSource::mission_info -> MissionInfo with Default::default\\(\\)$",
-    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace PortSource::offer_text -> Option<String> with None$",
-    # `NameSource`'s defaults are "no name": each body is already the
-    # `None` the mutant puts back, after naming its argument unused
-    # (`sim_port::tests::a_name_source_with_nothing_named_names_nothing`).
-    "nova-view/src/flight/sim_port\\.rs:[0-9]+:[0-9]+: replace NameSource::(ship_name|ship_long_name|outfit_name|outfit_names|good_name|junk_lc_name|cargo_name) -> Option<.+> with None$",
-
     # An NPC's landing box widens below a turn of 8 (`npc_box`); at exactly
     # 8, trunc((9 - 8) x 8 + 32) is the plain box's 40, so `<=` gives the
     # same half-width.

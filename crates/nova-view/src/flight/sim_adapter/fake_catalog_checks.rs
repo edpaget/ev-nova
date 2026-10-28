@@ -36,8 +36,8 @@ use crate::flight::fake_catalog::{
     multi_jumping, on, outfitting, placed, rolling_one, scripted, shipbuying, site, trading,
     trafficked,
 };
+use crate::flight::sim_port::FlightSim;
 use crate::flight::sim_port::fixture::check_contract;
-use crate::flight::sim_port::{FlightSim, PilotSource, PortSource};
 use crate::flight::{Collaborators, SessionFlight, SharedChance};
 use crate::system::catalog::StellarId;
 
@@ -579,6 +579,10 @@ fn an_offers_refuse_button_is_the_sessions() {
     assert!(session.refusable_offer_dialog(MissionId(130)), "offered");
 }
 
+/// The bar's offers are the session's, on the flight's chance. The offer
+/// here draws nothing: the wait before the next one, which did, is the
+/// router's draw now (the app's
+/// `missions::a_venues_next_offer_waits_the_gap_drawn_on_the_routers_chance`).
 #[test]
 fn the_bars_offers_go_through_the_session_on_the_flights_chance() {
     let catalog = shared(errands(vec![MissionRecord {
@@ -599,11 +603,6 @@ fn the_bars_offers_go_through_the_session_on_the_flights_chance() {
             by_hand(&mut session, &catalog, command, &mut own_chance)
         );
     }
-    assert_eq!(
-        flight.offer_gap(),
-        nova_sim::mission::offer_gap(&mut own_chance)
-    );
-    assert!(!own.borrow().asked.is_empty(), "the offer and the gap draw");
     assert_eq!(script.borrow().asked, own.borrow().asked);
 }
 
@@ -735,14 +734,8 @@ fn the_pilot_panel_is_the_sessions_and_none_for_a_session_that_failed() {
         flight.screen(ScreenAsk::PilotPanel),
         ScreenAnswer::PilotPanel(Box::new(session.pilot_panel(&*catalog)))
     );
-    assert_eq!(
-        flight.player_info(),
-        Some(session.player_info(&*catalog)),
-        "the player info too"
-    );
     let mut broken = SessionFlight::<FakeCatalog>::new(Err("no chär".to_owned()));
     assert_eq!(broken.screen(ScreenAsk::PilotPanel), ScreenAnswer::Nothing);
-    assert_eq!(broken.player_info(), None);
 }
 
 /// A pilot named Ada docked at Earth, with her stellar rewritten to 999,

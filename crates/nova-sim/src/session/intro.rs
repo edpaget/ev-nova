@@ -10,7 +10,7 @@ use crate::pilot::Pilot;
 impl Session {
     /// Whether the pilot flying has seen the intro screen.
     #[must_use]
-    pub fn seen_intro(&self) -> bool {
+    pub(crate) fn seen_intro(&self) -> bool {
         self.pilot.seen_intro
     }
 

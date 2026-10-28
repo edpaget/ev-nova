@@ -36,16 +36,42 @@
 //!   kind through [`FlightSim::screen`]): the course map's galaxy, its
 //!   opening, each redraw, its panels after a selection change, its cycle
 //!   and Find; the floating map's show; the entry's coming traffic; a
-//!   text's fill. The asks one screen always makes together are one
-//!   answer (the course map's opening, [`MapOpen`](nova_sim::flight_frame::MapOpen);
-//!   its redraw, [`MapScreen`](nova_sim::flight_frame::MapScreen)). None
-//!   changes a frame, which nova-sim pins (`session/screen.rs`) and
+//!   text's fill; and the port's, the comm's and the pilot's screens: the
+//!   spaceport's shops, the outfitter alone, the hire list, a ship's name
+//!   prompt, the bar's news, the mission info, an offer's refuse button
+//!   and its filled text, the hail, the boarding and the pilot panel. The
+//!   asks one screen always makes together are one answer (the course
+//!   map's opening, [`MapOpen`](nova_sim::flight_frame::MapOpen); its
+//!   redraw, [`MapScreen`](nova_sim::flight_frame::MapScreen); the
+//!   spaceport's shops, [`PortShops`](nova_sim::flight_frame::PortShops);
+//!   the bar's news and its picture,
+//!   [`BarNews`](nova_sim::flight_frame::BarNews)). None changes a frame,
+//!   which nova-sim pins (`session/screen.rs`) and
 //!   `fixture::check_contract` checks, so no fill follows one; and none
 //!   is asked per frame, save the floating map's show, which comes on
 //!   every frame a key holds it up, as the original's does, and asks each
 //!   time, as the flight steps between (`ScreenAsk::FloatingMap`'s docs).
-//!   A flight that failed to start answers each [`ScreenAnswer::Nothing`],
-//!   and the screen shows what it would with nothing to show.
+//!   A screen read on every menu frame keeps its answer until the flight
+//!   changes (the pilot panel, `FlightView::pilot_panel`). A flight that
+//!   failed to start answers each [`ScreenAnswer::Nothing`], and the
+//!   screen shows what it would with nothing to show.
+//! - **A screen's ask is a read**: asked twice in a row, it answers the
+//!   same (`fixture::check_contract`'s "a screen ask is a read"). The
+//!   shops' and the bar's asks settle the day's rolls not drawn yet on the
+//!   flight's chance, which the flight keeps, as the original keeps each
+//!   day's, so asked again they answer from the rolls kept. A ship's name
+//!   prompt alone draws its default name afresh at each ask and keeps
+//!   nothing ([`ScreenAsk::draws_afresh`]).
+//! - **A fact the router reads between commands is a frame field**:
+//!   whether Recharge is enabled
+//!   ([`FlightFrame::recharge_enabled`](nova_sim::flight_frame::FlightFrame::recharge_enabled))
+//!   and whether the pilot has seen the intro
+//!   ([`FlightFrame::seen_intro`](nova_sim::flight_frame::FlightFrame::seen_intro)),
+//!   which any command may change, and the refill after it keeps current.
+//! - **A draw that reads no flight state is the router's**: the wait
+//!   before a venue's next offer (`nova_sim::mission::offer_gap`) is drawn
+//!   by the router on its own chance, the one the flight shares, not asked
+//!   of the flight.
 //! - **An ask on `apply` is a per-frame question with arguments the view
 //!   computes, or a load that writes run state** ([`FlightCommand::is_ask`]:
 //!   the cursor's hover, with the boxes the view draws, after each tick's
@@ -77,13 +103,9 @@
 //!   [`FlightEvent`]), each filled or answered on nova-sim's side and
 //!   pinned there.
 //!
-//! The supertraits, [`CommSource`], [`PortSource`] and [`PilotSource`],
-//! hold the comm's, the spaceport's and the pilot's screens' questions,
-//! each method defaulting to "nothing open", so a sim that has none of
-//! them open needs no code: [`CommSource`] the hail's and the boarding's,
-//! [`PortSource`] the spaceport's screens' and the mission screens', and
-//! [`PilotSource`] the player info screen's and the pilot panel's. The
-//! maps' questions are screens' asks.
+//! The port has no supertraits: every screen's question is a screen's
+//! ask, and what the edge alone reads (the pilot to save, the saving
+//! queries, the setup) is the adapter's own API.
 //!
 //! The `fixture` feature (and this crate's tests) exposes `fixture`:
 //! `FakeFlight`, a scripted sim for the view's component tests, and
@@ -98,21 +120,14 @@
 use nova_sim::flight_frame::{
     Answer, FlightCommand, FlightEvent, FlightFrame, ScreenAnswer, ScreenAsk, StepInput, StepReport,
 };
-use nova_sim::mission::screens::OFFER_GAP_TICKS;
-use nova_sim::pilot_panel::PilotPanel;
-use nova_sim::{
-    HailView, HireList, Market, MissionId, MissionInfo, News, Outfitter, PlayerInfo, PlunderView,
-    ShipId, ShipNaming, ShipRefusal, Shipyard,
-};
 
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 
 /// The flight the view shows, as the view needs it, in five methods: the
 /// frame, the steps, the commands (the asks among them), the drain and the
-/// screens' asks (see the module docs). The supertraits hold the comm's,
-/// the spaceport's and the pilot's screens' questions.
-pub trait FlightSim: CommSource + PortSource + PilotSource {
+/// screens' asks (see the module docs).
+pub trait FlightSim {
     /// Fills `into` with what the view draws now, writing every field, so
     /// a frame kept from an earlier fill shows nothing stale.
     fn frame(&self, into: &mut FlightFrame);
@@ -141,166 +156,11 @@ pub trait FlightSim: CommSource + PortSource + PilotSource {
     fn screen(&mut self, ask: ScreenAsk) -> ScreenAnswer;
 }
 
-/// The comm's questions of the flight: the hail under way and the
-/// boarding under way, each defaulting to "nothing open". The escort
-/// dialog's contents come only with the commands' answers
-/// ([`Answer::Hailed`], [`Answer::EscortDialog`]), as the view asks
-/// nothing else of it.
-pub trait CommSource {
-    /// The comm dialog's contents while a hail is under way
-    /// (`nova_sim::Session::hailing`): none with no hail under way.
-    fn hailing(&self) -> Option<HailView> {
-        None
-    }
-
-    /// What is on board the ship being boarded while the plunder dialog
-    /// is open (`nova_sim::Session::boarding`): none with no boarding
-    /// under way, or a capture awaiting its assignment.
-    fn boarding(&self) -> Option<PlunderView> {
-        None
-    }
-}
-
-/// The spaceport's questions of the flight: what its screens show as they
-/// open or after a command, each defaulting to "nothing open": no
-/// exchange, outfitter, shipyard, hire list or news, nothing listed, no
-/// fuel sold, no intro seen. Those that settle the day's rolls on the
-/// flight's chance or draw on it take `&mut self`. What the player does
-/// there is a command ([`FlightSim::apply`]), and so is a description's
-/// load ([`FlightCommand::LoadDescription`]), an ask.
-pub trait PortSource {
-    /// The exchange of the stellar landed on
-    /// (`nova_sim::Session::market`).
-    fn market(&self) -> Option<Market> {
-        None
-    }
-
-    /// Whether the spaceport's Recharge button is enabled
-    /// (`nova_sim::Session::recharge_enabled`).
-    fn recharge_enabled(&self) -> bool {
-        false
-    }
-
-    /// The news of the bar visit under way (`nova_sim::Session::news`).
-    fn news(&self) -> Option<&News> {
-        None
-    }
-
-    /// The picture the bar's news is drawn over
-    /// (`nova_sim::Session::news_picture`).
-    fn news_picture(&self) -> Option<i16> {
-        None
-    }
-
-    /// What the mission info screen lists
-    /// (`nova_sim::Session::mission_info`): nothing by default
-    /// ([`MissionInfo::default`]).
-    fn mission_info(&self) -> MissionInfo {
-        MissionInfo::default()
-    }
-
-    /// Whether the pilot flying has seen the intro screen
-    /// (`nova_sim::Session::seen_intro`).
-    fn seen_intro(&self) -> bool {
-        false
-    }
-
-    /// Whether `mission`'s offer dialog has a refuse button
-    /// (`nova_sim::Session::refusable_offer_dialog`).
-    fn refusable_offer_dialog(&self, mission: MissionId) -> bool {
-        let _ = mission;
-        false
-    }
-
-    /// `raw` with its tags filled for `mission`'s offer on the visit under
-    /// way, as the mission computer fills a cut offer's name
-    /// (`nova_sim::Session::offer_text`): none when it is not offered, as
-    /// in flight, where no offer is open.
-    fn offer_text(&self, mission: MissionId, raw: &str) -> Option<String> {
-        let _ = (mission, raw);
-        None
-    }
-
-    /// The outfitter of the stellar landed on, the day's rolls drawn on
-    /// the flight's chance (`nova_sim::Session::outfitter`).
-    fn outfitter(&mut self) -> Option<Outfitter> {
-        None
-    }
-
-    /// The shipyard of the stellar landed on, the day's rolls drawn on the
-    /// flight's chance (`nova_sim::Session::shipyard`).
-    fn shipyard(&mut self) -> Option<Shipyard> {
-        None
-    }
-
-    /// The ships for hire in the bar of the stellar landed on, the day's
-    /// rolls drawn on the flight's chance
-    /// (`nova_sim::Session::escorts_for_hire`).
-    fn escorts_for_hire(&mut self) -> Option<HireList> {
-        None
-    }
-
-    /// The prompt for naming a ship of class `ship` before it is bought,
-    /// its words read from the catalog, on the flight's chance
-    /// (`nova_sim::Session::ship_naming`): no shipyard by default.
-    ///
-    /// # Errors
-    ///
-    /// The [`ShipRefusal`] that applies.
-    fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
-        let _ = ship;
-        Err(ShipRefusal::NoShipyard)
-    }
-
-    /// The wait before a venue's next offer, in the Mac's ticks, drawn on
-    /// the flight's chance (`nova_sim::mission::offer_gap`): by default
-    /// the gap with no roll, [`OFFER_GAP_TICKS`].
-    fn offer_gap(&mut self) -> u32 {
-        OFFER_GAP_TICKS
-    }
-
-    /// Whether the bar's hire screen may hire escorts now
-    /// (`nova_sim::Session::can_hire_escorts`, `_CanHireEscorts`): false
-    /// by default, a flight with no fleet to add to.
-    fn can_hire_escorts(&self) -> bool {
-        false
-    }
-}
-
-/// The pilot's screens' questions of the flight: what the player info
-/// screen and the main screen's pilot panel show, each none by default, a
-/// flight with no pilot to show. Opening the player info screen is a
-/// command ([`FlightCommand::OpenPlayerInfo`]), as it resets the flight
-/// first.
-pub trait PilotSource {
-    /// What the player info screen shows, changing nothing
-    /// (`nova_sim::Session::player_info`).
-    fn player_info(&self) -> Option<PlayerInfo> {
-        None
-    }
-
-    /// What the main screen's pilot panel says about the pilot, changing
-    /// nothing (`nova_sim::Session::pilot_panel`).
-    fn pilot_panel(&self) -> Option<PilotPanel> {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A source with nothing open: every answer its default.
-    struct NothingOpen;
-
-    impl CommSource for NothingOpen {}
-
-    impl PortSource for NothingOpen {}
-
-    impl PilotSource for NothingOpen {}
-
-    /// A flight with nothing to it, answering every port method it may
-    /// leave to its default by that default.
+    /// A flight with nothing to it.
     struct Defaults;
 
     impl FlightSim for Defaults {
@@ -323,12 +183,6 @@ mod tests {
         }
     }
 
-    impl CommSource for Defaults {}
-
-    impl PortSource for Defaults {}
-
-    impl PilotSource for Defaults {}
-
     #[test]
     fn a_flight_with_nothing_to_it_fills_the_default_frame_and_refuses_every_command() {
         let mut flight = Defaults;
@@ -336,41 +190,5 @@ mod tests {
         flight.frame(&mut frame);
         assert_eq!(frame, FlightFrame::default());
         assert_eq!(flight.apply(FlightCommand::Jump), Answer::Refused);
-    }
-
-    #[test]
-    fn a_pilot_source_with_no_pilot_shows_none() {
-        let source = NothingOpen;
-        assert_eq!(source.player_info(), None);
-        assert_eq!(source.pilot_panel(), None);
-    }
-
-    #[test]
-    fn a_comm_source_with_nothing_open_answers_nothing() {
-        let source = NothingOpen;
-        assert_eq!(source.hailing(), None);
-        assert_eq!(source.boarding(), None);
-    }
-
-    #[test]
-    fn a_port_source_with_nothing_open_answers_nothing() {
-        let mut source = NothingOpen;
-        assert_eq!(source.market(), None);
-        assert!(!source.recharge_enabled());
-        assert_eq!(source.news(), None);
-        assert_eq!(source.news_picture(), None);
-        assert_eq!(source.mission_info(), MissionInfo::default());
-        assert!(!source.seen_intro());
-        assert!(!source.refusable_offer_dialog(MissionId(130)));
-        assert_eq!(source.outfitter(), None);
-        assert_eq!(source.shipyard(), None);
-        assert_eq!(source.escorts_for_hire(), None);
-        assert_eq!(
-            source.ship_naming(ShipId(129)),
-            Err(ShipRefusal::NoShipyard)
-        );
-        assert_eq!(source.offer_gap(), OFFER_GAP_TICKS);
-        assert_eq!(source.offer_text(MissionId(130), "Run <PAY>"), None);
-        assert!(!source.can_hire_escorts());
     }
 }

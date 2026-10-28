@@ -11,9 +11,11 @@
 //! the catalog the view shared, the chance, the law, the boarding rule and
 //! the hail options, [`FlightSim::drain`] to `Session::drain_events`, and
 //! [`FlightSim::screen`] to `Session::screen`, with what `apply` is
-//! handed; and [`CommSource`]'s to `Session::hailing`
-//! and `Session::boarding`, and [`PortSource`]'s and [`PilotSource`]'s to
-//! the session's method of each name. The names the view words the
+//! handed, whose match over the screens' asks (the maps, the spaceport's,
+//! the comm's and the pilot's screens) lives on the session's side too.
+//! The router's facts, Recharge and the intro seen, come in the frame
+//! (`Session::fill_frame`), and the wait before a venue's next offer is
+//! the router's own draw. The names the view words the
 //! flight's messages with are no port method: the fixed ones come in the
 //! opening (`Session::opening`'s `Names`), the player's ship's name, the
 //! date and the systems explored in the frame (`Session::fill_frame`), a
@@ -21,9 +23,9 @@
 //! (`ScreenAsk::PlainText`, `Session::plain_text`). A session that failed
 //! to start fills the default frame, runs no step, refuses every command
 //! but a description's load, which it resolves for a new pilot
-//! (`Session::fresh_description`), answers every screen's ask nothing,
-//! answers nothing open and drains nothing; its opening says why and
-//! names nothing ([`SessionFlight::opening`]).
+//! (`Session::fresh_description`), answers every screen's ask nothing
+//! and drains nothing; its opening says why and names nothing
+//! ([`SessionFlight::opening`]).
 //!
 //! **The edge's API**, which the port leaves out, is the adapter's own:
 //! the constructors that build the session ([`SessionFlight::start`],
@@ -56,12 +58,10 @@ use nova_sim::flight_frame::{
     Answer, FlightCommand, FlightEvent, FlightFrame, FlightOpening, ScreenAnswer, ScreenAsk,
     StepInput, StepReport,
 };
-use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::{
-    Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DisableRule, HailOptions, HailView,
-    HireList, LegalCode, Market, MissionId, MissionInfo, News, NovaAi, NovaBoarding, NovaDisable,
-    NovaLaw, Outfitter, Pilot, PlayerInfo, PlunderView, PointDefenceRule, Rules, Session, ShipId,
-    ShipNaming, ShipRefusal, Shipyard, SimCatalog, StepCollaborators,
+    Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DisableRule, HailOptions, LegalCode,
+    NovaAi, NovaBoarding, NovaDisable, NovaLaw, Pilot, PointDefenceRule, Rules, Session,
+    SimCatalog, StepCollaborators,
 };
 
 use nova_sim::{
@@ -70,7 +70,7 @@ use nova_sim::{
 };
 
 use super::SharedChance;
-use super::sim_port::{CommSource, FlightSim, PilotSource, PortSource};
+use super::sim_port::FlightSim;
 use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 
 /// The flight of a real `nova_sim::Session`, or why it could not start,
@@ -522,111 +522,6 @@ impl<C> FlightSim for SessionFlight<C> {
     }
 }
 
-/// Each forwards to the session's method of its name; a failed session
-/// answers nothing. The hail reads the catalog the view shared
-/// ([`SessionFlight::share_catalog`]) and lists the flight's hail options,
-/// and answers nothing before the catalog is shared.
-impl<C> CommSource for SessionFlight<C> {
-    fn hailing(&self) -> Option<HailView> {
-        let session = self.session().ok()?;
-        let catalog = &self.catalog.as_ref()?.0;
-        session.hailing(&**catalog, &self.hail_options)
-    }
-
-    fn boarding(&self) -> Option<PlunderView> {
-        self.session().ok()?.boarding()
-    }
-}
-
-/// Each forwards to the session's method of its name, the rolled reads
-/// on the flight's chance; a failed session answers nothing open. The
-/// name prompt reads the catalog the view shared
-/// ([`SessionFlight::share_catalog`]), and has no shipyard before it is
-/// shared. The offer gap is drawn on the flight's chance whatever the
-/// session (`nova_sim::mission::offer_gap`).
-impl<C> PortSource for SessionFlight<C> {
-    fn market(&self) -> Option<Market> {
-        self.session().ok()?.market()
-    }
-
-    fn recharge_enabled(&self) -> bool {
-        self.session().is_ok_and(Session::recharge_enabled)
-    }
-
-    fn news(&self) -> Option<&News> {
-        self.session().ok()?.news()
-    }
-
-    fn news_picture(&self) -> Option<i16> {
-        self.session().ok()?.news_picture()
-    }
-
-    fn mission_info(&self) -> MissionInfo {
-        self.session()
-            .map_or_else(|_| MissionInfo::default(), Session::mission_info)
-    }
-
-    fn seen_intro(&self) -> bool {
-        self.session().is_ok_and(Session::seen_intro)
-    }
-
-    fn refusable_offer_dialog(&self, mission: MissionId) -> bool {
-        self.session()
-            .is_ok_and(|session| session.refusable_offer_dialog(mission))
-    }
-
-    fn offer_text(&self, mission: MissionId, raw: &str) -> Option<String> {
-        self.session().ok()?.offer_text(mission, raw)
-    }
-
-    fn outfitter(&mut self) -> Option<Outfitter> {
-        self.session.as_mut().ok()?.outfitter(&mut self.chance)
-    }
-
-    fn shipyard(&mut self) -> Option<Shipyard> {
-        self.session.as_mut().ok()?.shipyard(&mut self.chance)
-    }
-
-    fn escorts_for_hire(&mut self) -> Option<HireList> {
-        self.session
-            .as_mut()
-            .ok()?
-            .escorts_for_hire(&mut self.chance)
-    }
-
-    fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
-        let (Ok(session), Some(catalog)) = (&mut self.session, &self.catalog) else {
-            return Err(ShipRefusal::NoShipyard);
-        };
-        session.ship_naming(ship, &*catalog.0, &mut self.chance)
-    }
-
-    fn offer_gap(&mut self) -> u32 {
-        nova_sim::mission::offer_gap(&mut self.chance)
-    }
-
-    fn can_hire_escorts(&self) -> bool {
-        self.session().is_ok_and(Session::can_hire_escorts)
-    }
-}
-
-/// Each forwards to the session's method of its name, over the catalog
-/// the view shared ([`SessionFlight::share_catalog`]); a failed session,
-/// or one never shared a catalog, shows none.
-impl<C> PilotSource for SessionFlight<C> {
-    fn player_info(&self) -> Option<PlayerInfo> {
-        let session = self.session().ok()?;
-        let catalog = &self.catalog.as_ref()?.0;
-        Some(session.player_info(&**catalog))
-    }
-
-    fn pilot_panel(&self) -> Option<PilotPanel> {
-        let session = self.session().ok()?;
-        let catalog = &self.catalog.as_ref()?.0;
-        Some(session.pilot_panel(&**catalog))
-    }
-}
-
 /// The developer tools' desk: the reading is
 /// `nova_sim::Session::desk_reading`, and each [`PilotEdit`] goes to the
 /// one session method that makes it (`set_credits`, `set_reserve`,
@@ -681,7 +576,7 @@ mod fake_catalog_checks;
 #[cfg(test)]
 mod tests {
     use nova_sim::flight_frame::DrawnBoxes;
-    use nova_sim::{DescMovie, StellarId, StellarPick, SystemId, Vec2};
+    use nova_sim::{DescMovie, MissionId, ShipId, StellarId, StellarPick, SystemId, Vec2};
 
     use super::*;
     use crate::flight::sim_port::fixture::unlike;
@@ -745,7 +640,6 @@ mod tests {
         assert_eq!(frame.player_ship_name, None);
         assert_eq!(frame.long_date, "");
         assert!(frame.explored.is_empty(), "every system unexplored");
-        assert_eq!(flight.player_info(), None);
         let mut flight = flight;
         assert_eq!(flight.screen(ScreenAsk::PilotPanel), ScreenAnswer::Nothing);
     }
@@ -884,36 +778,6 @@ mod tests {
                 "{command:?}"
             );
         }
-    }
-
-    /// Draws 7 every time, and notes each draw's range.
-    #[derive(Debug, Default)]
-    struct Sevens(Vec<u32>);
-
-    impl nova_sim::Chance for Sevens {
-        fn fires(&mut self, _percent: u8) -> bool {
-            false
-        }
-
-        fn below(&mut self, n: u32) -> u32 {
-            self.0.push(n);
-            7
-        }
-    }
-
-    #[test]
-    fn the_offer_gap_is_drawn_on_the_flights_chance_whatever_the_session() {
-        let sevens = Rc::new(std::cell::RefCell::new(Sevens::default()));
-        let chance: Rc<std::cell::RefCell<dyn nova_sim::Chance>> = sevens.clone();
-        let mut flight = failed().with_collaborators(Collaborators {
-            chance: SharedChance::new(chance),
-            ..Collaborators::default()
-        });
-        let mut own = Sevens::default();
-        let expected = nova_sim::mission::offer_gap(&mut own);
-        assert_eq!(flight.offer_gap(), expected, "the gap nova-sim draws");
-        assert!(!own.0.is_empty(), "the gap draws");
-        assert_eq!(sevens.borrow().0, own.0, "on the flight's chance");
     }
 
     #[test]
@@ -1135,10 +999,9 @@ mod tests {
     }
 
     #[test]
-    fn a_flight_never_shared_a_catalog_shows_no_player_info_or_pilot_panel() {
+    fn a_flight_never_shared_a_catalog_shows_no_pilot_panel() {
         let session = Session::start(&nova_sim::fixture::pilot_catalog()).expect("starts");
         let mut flight: SessionFlight<()> = session.into();
-        assert_eq!(flight.player_info(), None);
         assert_eq!(flight.screen(ScreenAsk::PilotPanel), ScreenAnswer::Nothing);
     }
 

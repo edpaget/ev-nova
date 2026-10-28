@@ -1,12 +1,12 @@
 //! The flight view's seam wired to a real session: the [`FlightSim`]
-//! port, its sources and the edge, through [`SessionFlight`] over a real
+//! port and the edge, through [`SessionFlight`] over a real
 //! `nova_sim::Session`
 //! (rdm:phase/view-sim-seam/phase-15-integration-test-set).
 //!
 //! **The rule for adding a test here.** One test per port surface (each
-//! `FlightSim` method, the screen query's maps among them; each source,
-//! `CommSource`, `PortSource` and `PilotSource`; the opening's names and the frame's
-//! wording fields; `DevDesk`; the contract)
+//! `FlightSim` method; each group of the screen query's asks, the maps,
+//! the spaceport's, the comm's and the pilot's screens; the opening's
+//! names and the frame's wording fields; `DevDesk`; the contract)
 //! or per router handoff, never one per rule. Each test:
 //!
 //! - builds its session through a nova-sim builder
@@ -1301,7 +1301,7 @@ fn the_pointer_over_a_real_ship_hovers_it_and_the_cursor_shows_it() {
 // The comm and the boarding through the port
 // (rdm:phase/view-sim-seam/phase-10-comm-escorts-boarding-on-port).
 
-/// `CommSource` and the router's hail: a hail sent through the port opens
+/// The hail's screen ask and the router's hail: a hail sent through the port opens
 /// the comm dialog on the session's hail view, and a hang-up closes it.
 #[test]
 fn a_real_hail_opens_the_comm_dialog_with_the_sessions_hail_view() {
@@ -1398,7 +1398,7 @@ impl nova_sim::BoardingRule for Recorder {
     }
 }
 
-/// `CommSource` and `FlightSim::apply`'s collaborators: a board sent
+/// The boarding's screen ask and `FlightSim::apply`'s collaborators: a board sent
 /// through the port is judged by the law and boarding rule the view was
 /// built with, and opens the plunder dialog on the session's boarding.
 #[test]
@@ -1445,8 +1445,8 @@ fn a_real_board_opens_the_plunder_dialog_on_the_sessions_boarding() {
     );
 }
 
-// The spaceport and the missions, over a real session's `PortSource`
-// and commands.
+// The spaceport and the missions, over a real session's screen asks and
+// commands.
 
 /// A `STR#` of `strings`.
 fn str_list(strings: &[&str]) -> Vec<u8> {
@@ -1570,7 +1570,7 @@ fn a_real_trade_changes_the_market_shown() {
     );
 }
 
-/// `PortSource`, the missions: a mission accepted through the port shows
+/// The mission info's screen ask: a mission accepted through the port shows
 /// in the mission info as the session lists it.
 #[test]
 fn a_real_mission_accept_shows_in_the_mission_info() {

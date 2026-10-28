@@ -55,7 +55,7 @@ impl Session {
     /// ([`recharge::enabled`]). See the module docs for when the view is
     /// told.
     #[must_use]
-    pub fn recharge_enabled(&self) -> bool {
+    pub(crate) fn recharge_enabled(&self) -> bool {
         self.mode
             .landed()
             .and_then(|stellar| self.chart.sites.iter().find(|site| site.id == stellar))

@@ -1,8 +1,7 @@
 //! The spaceport's, the comm's and the pilot's screens' answers to
-//! [`Session::screen`]: each the session's own reads put together, as the
-//! view read them before through its `PortSource`, `CommSource` and
-//! `PilotSource`. They coordinate the port, the chart, the mode, the space
-//! and the pilot, so they are the session's.
+//! [`Session::screen`]: each the session's own reads put together. They
+//! coordinate the port, the chart, the mode, the space and the pilot, so
+//! they are the session's.
 //!
 //! The shops' and the bar's asks ([`ScreenAsk::Shops`],
 //! [`ScreenAsk::Outfitter`], [`ScreenAsk::HireList`]) draw, on the flight's
