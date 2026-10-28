@@ -53,11 +53,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
         !self.held.is_empty()
     }
 
-    /// The `dësc` IDs a sabotaged player sees as it dies
-    /// ([`FlightSim::death_descs`]); none for a flight that failed.
+    /// The `dësc` IDs a sabotaged player sees as it dies, as the kept
+    /// frame holds them
+    /// ([`FlightFrame::death_descs`](nova_sim::flight_frame::FlightFrame::death_descs)):
+    /// the router asks once the hold has expired, after the step that
+    /// expired it filled the frame. None for a flight that failed, whose
+    /// frame is the default.
     #[must_use]
     pub fn sabotage_death_descs(&self) -> Vec<i16> {
-        self.sim.death_descs()
+        self.frame.death_descs.clone()
     }
 
     /// Begins the fade to black after the hold has expired, over

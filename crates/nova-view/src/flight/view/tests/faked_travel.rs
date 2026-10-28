@@ -336,10 +336,10 @@ fn beginning_the_fade_before_the_hold_expires_does_nothing() {
 }
 
 #[test]
-fn the_sabotaged_players_death_descs_are_the_flights() {
+fn the_sabotaged_players_death_descs_are_the_frames() {
     let mut view = faked(in_sol());
     assert_eq!(view.sabotage_death_descs(), Vec::<i16>::new());
-    view.sim.set_death_descs(vec![5000]);
+    view.change_sim(|sim| sim.frame_mut().death_descs = vec![5000]);
     assert_eq!(view.sabotage_death_descs(), [5000]);
 }
 

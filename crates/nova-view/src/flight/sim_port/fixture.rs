@@ -58,8 +58,7 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// ([`FakeFlight::set_weapons`]), failed or not. It loads each description with
 /// the next text queued ([`FakeFlight::queue_description`]), or, once
 /// the queue is empty, as its raw text unchanged, resolving nothing; it
-/// records each load ([`FakeFlight::descriptions_loaded`]). It gives the death
-/// `dësc`s it is given ([`FakeFlight::set_death_descs`]), and answers
+/// records each load ([`FakeFlight::descriptions_loaded`]). It answers
 /// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]),
 /// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]),
 /// [`NameSource`] from [`FakeNames`] ([`FakeFlight::names_mut`]) and
@@ -93,7 +92,6 @@ pub struct FakeFlight {
     weapons: Vec<WeaponId>,
     descriptions: VecDeque<String>,
     loaded: Vec<(Option<String>, Option<DescMovie>)>,
-    death_descs: Vec<i16>,
     comm: FakeComm,
     port: FakePort,
     names: FakeNames,
@@ -327,12 +325,6 @@ impl FakeFlight {
         self.descriptions.push_back(text.to_owned());
     }
 
-    /// Gives `descs` as the death `dësc`s from now on
-    /// ([`FlightSim::death_descs`]).
-    pub fn set_death_descs(&mut self, descs: Vec<i16>) {
-        self.death_descs = descs;
-    }
-
     /// Each description loaded, its text and movie, in order.
     #[must_use]
     pub fn descriptions_loaded(&self) -> &[(Option<String>, Option<DescMovie>)] {
@@ -547,10 +539,6 @@ impl FlightSim for FakeFlight {
 
     fn weapons(&self) -> Vec<WeaponId> {
         self.weapons.clone()
-    }
-
-    fn death_descs(&self) -> Vec<i16> {
-        self.death_descs.clone()
     }
 
     fn load_description(&mut self, raw: Option<&str>, movie: Option<&DescMovie>) -> String {
@@ -2664,14 +2652,6 @@ mod tests {
             Answer::Jumped(SystemId(131))
         );
         assert_eq!(fake.applied(), [&line[..], &[FlightCommand::Jump]].concat());
-    }
-
-    #[test]
-    fn the_fake_gives_the_death_descs_it_is_given() {
-        let mut fake = FakeFlight::new();
-        assert_eq!(fake.death_descs(), Vec::<i16>::new());
-        fake.set_death_descs(vec![130, 131]);
-        assert_eq!(fake.death_descs(), [130, 131]);
     }
 
     #[test]

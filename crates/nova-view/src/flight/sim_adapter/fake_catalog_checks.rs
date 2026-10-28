@@ -858,14 +858,16 @@ fn a_real_flights_coming_traffic_is_the_types_its_session_brings() {
 }
 
 #[test]
-fn a_real_flights_death_descs_are_its_sessions() {
+fn a_real_flights_frame_holds_its_sessions_death_descs() {
     let mut sabotaged = multi_jumping();
     sabotaged.outfits[0].mods[0] = (nova_sim::SABOTAGE_KILL, 5000);
     let catalog = shared(sabotaged);
     let flight = SessionFlight::start(&catalog);
     let descs = flight.session().expect("flying").sabotage_death_descs();
     assert!(!descs.is_empty(), "sabotaged");
-    assert_eq!(flight.death_descs(), descs);
+    let mut frame = FlightFrame::default();
+    flight.frame(&mut frame);
+    assert_eq!(frame.death_descs, descs);
 }
 
 #[test]

@@ -6,8 +6,7 @@
 //! It forwards: [`FlightSim::frame`] to `Session::fill_frame`,
 //! [`FlightSim::hover`] to `Session::hover`, [`FlightSim::coming_traffic`]
 //! to `Session::coming_traffic_ships`, [`FlightSim::weapons`] to
-//! `Session::weapon_ids`, [`FlightSim::death_descs`] to
-//! `Session::sabotage_death_descs`,
+//! `Session::weapon_ids`,
 //! [`FlightSim::step`] to `Session::step`, with its collaborators and
 //! the catalog the view shared,
 //! [`FlightSim::apply`] to `Session::apply`, whose match over the
@@ -487,13 +486,6 @@ impl<C> FlightSim for SessionFlight<C> {
         self.session().ok()?.hover(at, drawn)
     }
 
-    /// Forwards to `Session::sabotage_death_descs`; a failed session has
-    /// none.
-    fn death_descs(&self) -> Vec<i16> {
-        self.session()
-            .map_or_else(|_| Vec::new(), Session::sabotage_death_descs)
-    }
-
     /// Forwards to `Session::weapon_ids`; a failed session has none.
     fn weapons(&self) -> Vec<WeaponId> {
         self.session()
@@ -875,7 +867,6 @@ mod tests {
         assert_eq!(flight.hover(Vec2::ZERO, &DrawnBoxes::default()), None);
         assert_eq!(flight.coming_traffic(), []);
         assert_eq!(flight.weapons(), []);
-        assert_eq!(flight.death_descs(), Vec::<i16>::new());
     }
 
     #[test]
