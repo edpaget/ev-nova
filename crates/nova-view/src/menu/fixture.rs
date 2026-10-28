@@ -10,17 +10,14 @@
 //! -3 (-2.5 truncated toward zero). [`main_screen_art`] is that art as the game
 //! data's port reads it.
 
-use std::io;
-use std::path::Path;
-
 use nova_data::graphics::fixture::{PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::colors::Colors;
 use nova_data::records::spin::Spin;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 
 use super::art::{
     BACKGROUND_PICT, BUTTON_SPINS, COLORS_ID, LOGO_SPIN, MainScreenArt, MainScreenSource,
@@ -129,29 +126,7 @@ pub fn game_data(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
         })
         .build()
         .bytes;
-    let file = OneFile(bytes);
-    GameData::load(&file, &file, Path::new("/data"), None).expect("the fixture's data opens")
-}
-
-/// One file, holding a fork, wherever it is looked for.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok(match fork {
-            Fork::Data => Some(self.0.clone()),
-            Fork::Resource => None,
-        })
-    }
+    one_file(bytes).load()
 }
 
 /// A `cölr` placing the buttons, the logo, the rollover and the slides, its button

@@ -374,37 +374,18 @@ impl EscortMenuLooks for GameData {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use std::io;
-    use std::path::Path;
 
     use nova_data::Record;
     use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
     use nova_data::graphics::{PICT, RLED};
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
-    use nova_data::store::fs::{DirLister, EntryKind, Listing};
+    use nova_data::store::fixture::one_file;
+
+    use nova_rsrc::ResType;
     use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader, ResType};
 
     use super::*;
-
-    /// One data file, `/data/Nova Data`, holding a fork.
-    struct OneFile(Vec<u8>);
-
-    impl DirLister for OneFile {
-        fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-            Ok(vec![Listing {
-                name: "Nova Data".into(),
-                kind: EntryKind::File,
-            }])
-        }
-    }
-
-    impl ForkReader for OneFile {
-        fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            Ok((fork == Fork::Data).then(|| self.0.clone()))
-        }
-    }
 
     fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
         let fork = resources
@@ -414,8 +395,7 @@ mod tests {
             })
             .build()
             .bytes;
-        let file = OneFile(fork);
-        GameData::load(&file, &file, Path::new("/data"), None).expect("opens")
+        one_file(fork).load()
     }
 
     fn put_i16(bytes: &mut [u8], at: usize, value: i16) {
@@ -823,8 +803,7 @@ mod tests {
             })
             .build()
             .bytes;
-        let file = OneFile(fork);
-        GameData::load(&file, &file, Path::new("/data"), None).expect("opens")
+        one_file(fork).load()
     }
 
     fn put_u16(bytes: &mut [u8], at: usize, value: u16) {

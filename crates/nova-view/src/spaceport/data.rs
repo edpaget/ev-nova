@@ -81,33 +81,13 @@ impl ShipBaseImages for GameData {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::path::Path;
 
     use nova_data::Record;
-    use nova_data::store::fs::{DirLister, EntryKind, Listing};
+    use nova_data::store::fixture::one_file;
+
     use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader};
 
     use super::*;
-
-    /// One data file, `/data/Nova Data`, holding a fork.
-    struct OneFile(Vec<u8>);
-
-    impl DirLister for OneFile {
-        fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-            Ok(vec![Listing {
-                name: "Nova Data".into(),
-                kind: EntryKind::File,
-            }])
-        }
-    }
-
-    impl ForkReader for OneFile {
-        fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            Ok((fork == Fork::Data).then(|| self.0.clone()))
-        }
-    }
 
     /// A `spöb` of graphic type `graphic_type`, with these `Flags`,
     /// `CustPicID`, `CustSndID` and `Flags2`.
@@ -144,8 +124,7 @@ mod tests {
             .resource(PICT, 10_003, None, &[0; 4])
             .build()
             .bytes;
-        let file = OneFile(fork);
-        GameData::load(&file, &file, Path::new("/data"), None).expect("opens")
+        one_file(fork).load()
     }
 
     #[test]
@@ -194,8 +173,7 @@ mod tests {
         for (kind, id, bytes) in resources {
             fork = fork.resource(*kind, *id, None, bytes);
         }
-        let file = OneFile(fork.build().bytes);
-        GameData::load(&file, &file, Path::new("/data"), None).expect("opens")
+        one_file(fork.build().bytes).load()
     }
 
     #[test]
@@ -283,8 +261,7 @@ mod tests {
             .resource(ShipAnim::TYPE, 130, None, &short)
             .build()
             .bytes;
-        let file = OneFile(fork);
-        let data = GameData::load(&file, &file, Path::new("/data"), None).expect("opens");
+        let data = one_file(fork).load();
         assert_eq!(
             data.ship_base_images(),
             [

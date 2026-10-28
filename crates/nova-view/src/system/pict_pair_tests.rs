@@ -3,43 +3,23 @@
 //! `spïn` with no `rlëD` from its sprites and mask `PICT`s, so a stellar
 //! whose `DeadType` names one draws it.
 
-use std::io;
 use std::num::NonZeroU16;
-use std::path::Path;
 
 use nova_data::graphics::fixture::{RledBuilder, rgb888_pict};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::DrawnSheet;
 
 use super::camera::Camera;
 use super::catalog::{StellarSheet, SystemCatalog, SystemId};
 use super::scene::{StellarLook, SystemScene, draw_stellars};
 use crate::{DrawCommand, DrawList, ImageKey, ImageKind, Point, SheetImage};
-
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
 
 fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
     let fork = resources
@@ -49,8 +29,7 @@ fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
         })
         .build()
         .bytes;
-    let file = OneFile(fork);
-    GameData::load(&file, &file, Path::new("/data"), None).expect("opens")
+    one_file(fork).load()
 }
 
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
