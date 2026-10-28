@@ -300,3 +300,38 @@ fn the_edges_entering_play_scatters_the_stars_once_the_session_entered() {
     enter_game(&mut failed);
     assert!(!failed.stars_due, "a flight that enters nothing");
 }
+
+/// Phase 13's fold-in: the slot sprites the run carried reach the view
+/// through the edge, which reads the sheets their cloned frames ask for
+/// (`show_set_up`'s). The player's ship is hidden (`Cost` −1), so its
+/// slot draws the frames it last cloned, here of a ship type no traffic
+/// carries; with none carried, the view reads none.
+#[test]
+fn the_slot_sprites_carried_have_the_view_read_their_ships_sheets() {
+    let hidden = || {
+        let mut catalog = catalog();
+        catalog.hulls[0].cost = -1;
+        catalog
+    };
+    let mut sprites = nova_sim::ship_layer::SlotSprites::default();
+    sprites
+        .frames
+        .clone_frames(nova_sim::ship_layer::Slot::Player, ShipId(131));
+    let carried = set_up(
+        hidden(),
+        SessionSetup {
+            carry: CarryOver {
+                slot_sprites: Some(sprites),
+                ..CarryOver::default()
+            },
+            ..SessionSetup::default()
+        },
+    );
+    assert!(
+        !carried.frame.traffic_ships.contains(&ShipId(131)),
+        "no traffic carries it"
+    );
+    assert!(carried.npc_sheets.contains_key(&ShipId(131)), "read");
+    let bare = set_up(hidden(), SessionSetup::default());
+    assert!(!bare.npc_sheets.contains_key(&ShipId(131)), "none carried");
+}
