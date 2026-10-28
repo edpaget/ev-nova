@@ -85,3 +85,22 @@ run "ci_vault_is_looked_up_by_name" {
     error_message = "local.ci_vault_uuid must come from the vault data source."
   }
 }
+
+run "pages_deploys_from_workflow" {
+  command = plan
+
+  assert {
+    condition     = github_repository_pages.ev_nova.repository == github_repository.ev_nova.name
+    error_message = "Pages must be configured on the ev-nova repository."
+  }
+
+  assert {
+    condition     = github_repository_pages.ev_nova.build_type == "workflow"
+    error_message = "Pages must deploy from a workflow (ci.yml's pages job)."
+  }
+
+  assert {
+    condition     = length(github_repository_pages.ev_nova.source) == 0
+    error_message = "Pages must have no source branch: no branch holds built files."
+  }
+}
