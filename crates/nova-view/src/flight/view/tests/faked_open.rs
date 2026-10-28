@@ -65,7 +65,7 @@ fn a_flight_built_from_a_session_shows_its_course_from_the_first_frame() {
         course_shown: vec![SystemId(131)],
         ..sol()
     });
-    fake.map_mut().galaxy = Some(galaxy_with(|_| {}));
+    fake.queue_screen(ScreenAnswer::Galaxy(shown_without(&[])));
     let view = opened(catalog(), fake);
     assert_eq!(view.course_map().route(), [SystemId(131)]);
     assert_eq!(view.course_map().current(), Some(SystemId(130)));

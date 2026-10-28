@@ -369,12 +369,15 @@ mod tests {
 
     /// The session's galaxy over `galaxy`'s systems: 128 inactive and
     /// explored, 129 active and unexplored, 130 active and explored.
-    fn session(galaxy: &Galaxy) -> OverlaidGalaxy {
+    fn session(galaxy: &Galaxy) -> nova_sim::galaxy_map::GalaxyShown {
         let mut overlay = GalaxyOverlay::default();
         overlay.set_nebula_active(NebulaId(128), Some(false));
         overlay.set_nebula_explored(NebulaId(128), true);
         overlay.set_nebula_explored(NebulaId(130), true);
-        OverlaidGalaxy::new(galaxy.systems.iter().map(star_system).collect(), overlay)
+        nova_sim::galaxy_map::GalaxyShown::of(&OverlaidGalaxy::new(
+            galaxy.systems.iter().map(star_system).collect(),
+            overlay,
+        ))
     }
 
     fn pictures(list: &[DrawCommand]) -> Vec<i16> {

@@ -7,7 +7,7 @@ use nova_sim::Session;
 use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
 
-use nova_sim::flight_frame::{Answer, FlightCommand, MapClick};
+use nova_sim::flight_frame::{Answer, FlightCommand, MapClick, ScreenAnswer, ScreenAsk};
 
 use crate::devtools::{DevDesk, FlightDesk};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
@@ -203,8 +203,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// for a session's flight): drains the flight's session events
     /// ([`FlightEvent::Session`]) and folds them into what they ask for,
     /// several of a kind asking for one reaction. A change to the galaxy
-    /// draws the flight's galaxy on the course map
-    /// ([`MapSource::galaxy`](crate::flight::sim_port::MapSource::galaxy),
+    /// draws the flight's galaxy on the course map, asked afresh
+    /// ([`ScreenAsk::Galaxy`],
     /// [`GalaxyMap::show_galaxy`](crate::galaxy::GalaxyMap::show_galaxy))
     /// with the course as it is flown, before anything else is drawn, only
     /// reads coming between. Then `redraw` runs, and last the open map's
@@ -230,8 +230,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             }
         }
         if redrawn.galaxy {
-            if let Some(galaxy) = self.sim.galaxy() {
-                self.map.show_galaxy(galaxy);
+            if let ScreenAnswer::Galaxy(galaxy) = self.sim.screen(ScreenAsk::Galaxy) {
+                self.map.show_galaxy(&galaxy);
             }
             self.show_course();
         }

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 #[cfg(any(test, feature = "fixture"))]
 use nova_sim::SimCatalog;
-use nova_sim::flight_frame::{FlightCommand, FlightOpening};
+use nova_sim::flight_frame::{FlightCommand, FlightOpening, ScreenAnswer, ScreenAsk};
 use nova_sim::{ALERT_CICN, FixedStep, HashedRolls, Rulebook};
 
 use crate::flight::cadence::HudCadence;
@@ -59,8 +59,8 @@ impl<
     /// it reads the flight's first frame: the scene the frame opens on,
     /// the player's sheet and the status bar for the frame's interface
     /// government, and the course map: its nebulae and borders as `rules`
-    /// say, the galaxy the flight answers
-    /// ([`MapSource::galaxy`](crate::flight::sim_port::MapSource::galaxy)), the
+    /// say, what the flight's galaxy shows, asked as the view opens
+    /// ([`ScreenAsk::Galaxy`]), the
     /// course shown and the current system, centred. The looks of every
     /// weapon the opening lists ([`FlightOpening::weapons`]) are read, and what
     /// of them, or of the Red Alert's icon, could not be. A flight that failed to start
@@ -102,9 +102,10 @@ impl<
             rules.source_for(nova_sim::RuleKey::MapBorderPace),
             rules.source_for(nova_sim::RuleKey::MapFindBorders),
         );
-        // A flight that failed to start shows no galaxy.
-        if let Some(galaxy) = sim.galaxy() {
-            map.show_galaxy(galaxy);
+        // A flight that failed to start shows no galaxy: it answers
+        // nothing.
+        if let ScreenAnswer::Galaxy(galaxy) = sim.screen(ScreenAsk::Galaxy) {
+            map.show_galaxy(&galaxy);
             map.show_course(frame.system, &frame.course_shown);
             // Entering the game draws the floating map, and a new or
             // loaded pilot sets `_mapScroll`, to the current system

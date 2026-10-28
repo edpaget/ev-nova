@@ -140,7 +140,9 @@ mod tests {
         let mut overlay = GalaxyOverlay::default();
         overlay.set_visible(SystemId(128), Some(false));
         let systems = galaxy().systems.iter().map(star_system).collect();
-        model.apply(&OverlaidGalaxy::new(systems, overlay));
+        model.apply(&nova_sim::galaxy_map::GalaxyShown::of(
+            &OverlaidGalaxy::new(systems, overlay),
+        ));
         assert_eq!(hits(&model, at, &transform), ids(&[131]), "128 hidden");
     }
 }

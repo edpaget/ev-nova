@@ -2,12 +2,12 @@
 //! flights with ([`FakeFlight::set_frame`] and the answers' frames), for
 //! the states the tests keep spelling out: in flight in Sol, among NPCs
 //! and with a target, landed, with a course or a jump under way, arrived
-//! in Alpha Centauri; and the galaxy a flight's map answers, built with
-//! no session ([`galaxy_of`]).
+//! in Alpha Centauri; and the galaxy a flight's screen answers, listed
+//! from the catalog with no session ([`shown_of`]).
 
 use super::*;
 use nova_sim::flight_frame::{FrameShip, FrameTarget};
-use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
+use nova_sim::galaxy_map::GalaxyShown;
 
 /// The frame of a flight in Sol (130), nav off, nothing plotted, on
 /// [`DATE`].
@@ -143,19 +143,25 @@ pub(super) fn in_alpha() -> FlightFrame {
     }
 }
 
-/// The galaxy of `catalog`'s systems, as a flight's map answers it
-/// (`MapSource::galaxy`), with `change` made to its overlay: built from
-/// the catalog's star map with no session.
-pub(super) fn galaxy_of(
-    catalog: &FakeCatalog,
-    change: impl FnOnce(&mut GalaxyOverlay),
-) -> OverlaidGalaxy {
-    let mut overlay = GalaxyOverlay::default();
-    change(&mut overlay);
-    OverlaidGalaxy::new(catalog.star_map(), overlay)
+/// What `catalog`'s galaxy shows with each of `hidden` hidden, as a
+/// flight's screen answers it (`ScreenAsk::Galaxy`): every other system of
+/// its star map, by ascending ID, of its catalog government, with no links
+/// and no nebulae. Listed from the catalog, with no session.
+pub(super) fn shown_of(catalog: &FakeCatalog, hidden: &[i16]) -> GalaxyShown {
+    let mut systems: Vec<_> = catalog
+        .star_map()
+        .into_iter()
+        .filter(|system| !hidden.contains(&system.id.0))
+        .map(|system| (system.id, system.govt))
+        .collect();
+    systems.sort_by_key(|&(id, _)| id);
+    GalaxyShown {
+        systems,
+        ..GalaxyShown::default()
+    }
 }
 
-/// [`galaxy_of`] [`catalog`] with `change` made.
-pub(super) fn galaxy_with(change: impl FnOnce(&mut GalaxyOverlay)) -> OverlaidGalaxy {
-    galaxy_of(&catalog(), change)
+/// [`shown_of`] [`catalog`], with each of `hidden` hidden.
+pub(super) fn shown_without(hidden: &[i16]) -> GalaxyShown {
+    shown_of(&catalog(), hidden)
 }

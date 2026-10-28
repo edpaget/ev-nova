@@ -1375,7 +1375,7 @@ fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
     // 132 hidden by the overlay, as a load's refresh may leave it.
     let mut fake = FakeFlight::new();
     fake.set_frame(sol());
-    fake.map_mut().galaxy = Some(galaxy_with(hiding(132)));
+    fake.queue_screen(ScreenAnswer::Galaxy(shown_without(&[132])));
     let opening = fake.opening();
     let view = FlightView::over(
         Rc::new(catalog()),

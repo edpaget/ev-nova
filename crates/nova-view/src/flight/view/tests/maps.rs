@@ -290,15 +290,16 @@ fn faked_nebulae_by(rules: &Rulebook) -> Vec<(i16, bool)> {
         nebula: true,
         ..catalog()
     };
-    let galaxy = galaxy_of(&catalog, |overlay| {
-        overlay.set_nebula_explored(nova_sim::NebulaId(128), true);
-    });
+    let galaxy = GalaxyShown {
+        nebulae: vec![nova_sim::NebulaId(128)],
+        ..shown_of(&catalog, &[])
+    };
     let mut fake = FakeFlight::new();
     fake.set_frame(in_sol());
     fake.map_mut().drawing = Some(sol_drawing());
-    fake.map_mut().galaxy = Some(galaxy);
     fake.queue_event(FlightEvent::Session(nova_sim::SessionEvent::GalaxyChanged));
     let mut view = scripted_over(catalog, fake, rules);
+    view.sim.queue_screen(ScreenAnswer::Galaxy(galaxy));
     view.catch_up_then(|_, _| {});
     view.open_map();
     let mut list = DrawList::new();

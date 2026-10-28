@@ -167,10 +167,10 @@ fn the_course_map_shows_the_course_the_flight_flies() {
     assert_eq!(view.map.route(), [], "none flown, one plotted");
 }
 
-/// The galaxy event, queued on `view`'s flight with its galaxy as
-/// `galaxy`.
-fn galaxy_changed(view: &mut Faked, galaxy: nova_sim::story::OverlaidGalaxy) {
-    view.sim.map_mut().galaxy = Some(galaxy);
+/// The galaxy event, queued on `view`'s flight, with `galaxy` the answer
+/// to the galaxy's next ask.
+fn galaxy_changed(view: &mut Faked, galaxy: GalaxyShown) {
+    view.sim.queue_screen(ScreenAnswer::Galaxy(galaxy));
     view.sim
         .queue_event(FlightEvent::Session(SessionEvent::GalaxyChanged));
 }
@@ -182,7 +182,8 @@ fn a_galaxy_event_draws_the_flights_galaxy_and_the_course_as_flown_before_the_re
         course_plotted: true,
         ..in_sol()
     });
-    view.sim.map_mut().galaxy = Some(galaxy_with(hiding(132)));
+    view.sim
+        .queue_screen(ScreenAnswer::Galaxy(shown_without(&[132])));
     view.sim.set_frame(FlightFrame {
         course_plotted: true,
         ..in_sol()
@@ -211,19 +212,25 @@ fn a_galaxy_event_draws_the_flights_galaxy_and_the_course_as_flown_before_the_re
 #[test]
 fn several_galaxy_changes_before_a_catch_up_draw_the_galaxy_as_it_is_then_once() {
     let mut view = faked(in_sol());
-    galaxy_changed(&mut view, galaxy_with(hiding(132)));
-    galaxy_changed(
-        &mut view,
-        galaxy_with(|overlay| {
-            overlay.set_visible(SystemId(131), Some(false));
-        }),
-    );
+    for _ in 0..2 {
+        view.sim
+            .queue_event(FlightEvent::Session(SessionEvent::GalaxyChanged));
+    }
+    // The galaxy as it is at the catch-up, after both changes.
+    view.sim
+        .queue_screen(ScreenAnswer::Galaxy(shown_without(&[131])));
+    let asked = view.sim.screens_asked().len();
     let mut told = 0;
     let redrawn = view.catch_up_then(|_, _| told += 1);
     assert!(redrawn.galaxy);
     assert_eq!(told, 1, "one reaction");
     assert!(on_the_course_map(&view, 132), "the galaxy as it is now");
     assert!(!on_the_course_map(&view, 131));
+    assert_eq!(
+        view.sim.screens_asked()[asked..],
+        [ScreenAsk::Galaxy],
+        "asked once"
+    );
     assert!(!view.catch_up_then(|_, _| {}).galaxy, "once");
 }
 
@@ -254,7 +261,7 @@ fn after_a_galaxy_event_the_nav_area_names_the_system_standing_for_a_hidden_next
         ..catalog()
     };
     let mut view = reborn_sol(NavMode::Hyperspace(Some(SystemId(133))));
-    galaxy_changed(&mut view, galaxy_of(&catalog, hiding(131)));
+    galaxy_changed(&mut view, shown_of(&catalog, &[131]));
     view.catch_up_then(|_, _| {});
     assert!(!on_the_course_map(&view, 131), "the galaxy drawn");
     assert_eq!(
@@ -273,13 +280,7 @@ fn after_a_galaxy_event_a_hop_with_no_system_at_its_place_shows_no_destination()
         ..catalog()
     };
     let mut view = reborn_sol(NavMode::Hyperspace(None));
-    galaxy_changed(
-        &mut view,
-        galaxy_of(&catalog, |overlay| {
-            overlay.set_visible(SystemId(131), Some(false));
-            overlay.set_visible(SystemId(133), Some(false));
-        }),
-    );
+    galaxy_changed(&mut view, shown_of(&catalog, &[131, 133]));
     view.catch_up_then(|_, _| {});
     assert_eq!(
         view.nav_now(),

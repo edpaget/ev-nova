@@ -50,7 +50,10 @@ use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{DrawList, ImageKey, Input, MouseButton, Screen, ScreenAction};
 use nova_sim::ShipIff;
-use nova_sim::flight_frame::{Answer, FlightCommand, FlightFrame, MapClick, Names};
+use nova_sim::flight_frame::{
+    Answer, FlightCommand, FlightFrame, MapClick, Names, ScreenAnswer, ScreenAsk,
+};
+use nova_sim::galaxy_map::GalaxyShown;
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::{
     AbortError, AcceptError, Assigned, Assignment, CombatCatalog, ComputerRefusal, Controls,
@@ -657,12 +660,6 @@ fn bar_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<i16> {
         .as_ref()
         .ok()
         .map(|bar| bar.layout.status_bkgnd)
-}
-/// Hides system `id`.
-fn hiding(id: i16) -> impl FnOnce(&mut nova_sim::story::GalaxyOverlay) {
-    move |overlay| {
-        overlay.set_visible(SystemId(id), Some(false));
-    }
 }
 /// Stellar `id` with `Strength` 100 and `DeadTime` 5, so that `Y`
 /// destroys it, and `Flags2` `flags2`.
