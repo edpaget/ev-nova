@@ -49,7 +49,7 @@ fn main() -> ExitCode {
         }
     };
     eprintln!("nova-bundle: {}", host.signing.describe());
-    match bundle(&mut StdProcess, &mut StdFiles, &host) {
+    match bundle(&mut StdProcess, &mut StdFiles, &StdEnv, &host) {
         Ok(dmg) => {
             println!("{}", dmg.display());
             ExitCode::SUCCESS

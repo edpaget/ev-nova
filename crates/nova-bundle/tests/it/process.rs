@@ -1,4 +1,6 @@
-//! `StdProcess` running real programs: cargo, which every platform has.
+//! `StdProcess` running real programs: cargo, which every platform has,
+//! and this crate's own `nova-build-id`, which prints the variable it is
+//! given.
 
 use nova_bundle::ports::{Invocation, Process, RunError};
 use nova_bundle::system::StdProcess;
@@ -47,4 +49,19 @@ fn a_missing_program_is_a_spawn_error() {
         let error = StdProcess.run(&invocation).expect_err("fails");
         assert!(matches!(error, RunError::Spawn(_)), "{error:?}");
     }
+}
+
+#[test]
+fn std_process_sets_the_invocation_s_environment() {
+    let stdout = StdProcess
+        .run(
+            &Invocation::new(env!("CARGO_BIN_EXE_nova-build-id"))
+                .env("NOVA_BUILD_ID", "20010203040506")
+                .captured(),
+        )
+        .expect("nova-build-id runs");
+    assert_eq!(
+        String::from_utf8(stdout).expect("utf-8"),
+        "20010203040506\n"
+    );
 }

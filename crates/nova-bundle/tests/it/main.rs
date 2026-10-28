@@ -4,6 +4,7 @@
 //! integration tests as a module here, not as a new `tests/*.rs` file:
 //! every `tests/*.rs` file is a separate binary to link.
 
+mod build_id;
 mod env;
 mod files;
 mod flatpak_metadata;

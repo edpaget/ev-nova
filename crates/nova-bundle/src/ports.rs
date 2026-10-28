@@ -7,7 +7,8 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
-/// A program to run, with every argument the core chose for it.
+/// A program to run, with every argument and environment variable the
+/// core chose for it.
 ///
 /// An argument added with [`Invocation::secret`] (a password) is passed to
 /// the program but shown as `***` by `Display` and `Debug`, so error
@@ -23,6 +24,10 @@ pub struct Invocation {
     pub capture: bool,
     /// The indexes in `args` of the secret arguments.
     pub secret: Vec<usize>,
+    /// Variables set for the program on top of the bundler's own
+    /// environment, in order. `Display` leaves them out: it is the command
+    /// line.
+    pub env: Vec<(OsString, OsString)>,
 }
 
 impl Invocation {
@@ -33,7 +38,15 @@ impl Invocation {
             args: Vec::new(),
             capture: false,
             secret: Vec::new(),
+            env: Vec::new(),
         }
+    }
+
+    /// Sets one environment variable for the program.
+    #[must_use]
+    pub fn env(mut self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.env.push((name.into(), value.into()));
+        self
     }
 
     /// Adds one argument.
@@ -101,6 +114,7 @@ impl fmt::Debug for Invocation {
             .field("args", &self.shown_args().collect::<Vec<_>>())
             .field("capture", &self.capture)
             .field("secret", &self.secret)
+            .field("env", &self.env)
             .finish()
     }
 }
@@ -188,5 +202,18 @@ mod tests {
         let secret = Invocation::new("security").secret("pw");
         assert_ne!(plain, secret);
         assert_eq!(secret, Invocation::new("security").secret("pw"));
+    }
+
+    #[test]
+    fn an_environment_variable_is_compared_but_not_shown() {
+        let plain = Invocation::new("cargo").arg("build");
+        let with = plain.clone().env("A", "b");
+        assert_eq!(with.env, [(OsString::from("A"), OsString::from("b"))]);
+        assert_ne!(plain, with);
+        assert_eq!(with, plain.clone().env("A", "b"));
+        assert_ne!(with, plain.clone().env("A", "c"));
+        assert_eq!(with.to_string(), "cargo build");
+        let debug = format!("{with:?}");
+        assert!(debug.contains("env"), "{debug}");
     }
 }

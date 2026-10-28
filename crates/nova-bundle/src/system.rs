@@ -10,15 +10,19 @@ use std::process::{Command, Stdio};
 
 use crate::ports::{Env, Files, Invocation, Process, RunError};
 
-/// Runs programs as child processes. A captured run's standard error
-/// still goes to the bundler's.
+/// Runs programs as child processes, with the bundler's environment plus
+/// the invocation's variables. A captured run's standard error still goes
+/// to the bundler's.
 #[derive(Debug, Default)]
 pub struct StdProcess;
 
 impl Process for StdProcess {
     fn run(&mut self, invocation: &Invocation) -> Result<Vec<u8>, RunError> {
         let mut command = Command::new(&invocation.program);
-        command.args(&invocation.args).stdin(Stdio::null());
+        command
+            .args(&invocation.args)
+            .envs(invocation.env.iter().map(|(name, value)| (name, value)))
+            .stdin(Stdio::null());
         let (status, stdout) = if invocation.capture {
             let output = command
                 .stderr(Stdio::inherit())

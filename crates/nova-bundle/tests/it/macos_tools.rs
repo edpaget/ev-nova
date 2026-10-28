@@ -7,6 +7,7 @@
 use std::fs;
 use std::path::Path;
 
+use nova_bundle::build_id::BuildId;
 use nova_bundle::bundle::{BundleError, Host, Step, check_archs, plan};
 use nova_bundle::info_plist::info_plist;
 use nova_bundle::layout::Layout;
@@ -14,6 +15,10 @@ use nova_bundle::ports::{Invocation, Process};
 use nova_bundle::signing::{self, Signing};
 use nova_bundle::spec::BundleSpec;
 use nova_bundle::system::StdProcess;
+
+fn build() -> BuildId {
+    BuildId::parse("20261028123456").expect("an ID")
+}
 
 fn spec(root: &Path) -> BundleSpec {
     BundleSpec {
@@ -41,7 +46,7 @@ fn core_runs(root: &Path) -> (Layout, Vec<Invocation>) {
         out: Some(layout.out.clone()),
         signing: Signing::AdHoc,
     };
-    let runs = plan(&spec, &layout, &host)
+    let runs = plan(&spec, &layout, &host, &build())
         .steps
         .into_iter()
         .filter_map(|step| match step {
@@ -69,7 +74,7 @@ fn find(runs: &[Invocation], program: &str, first: &str, path: &Path) -> Invocat
 fn plutil_accepts_the_generated_plist() {
     let dir = tempfile::tempdir().expect("temp dir");
     let plist = dir.path().join("Info.plist");
-    fs::write(&plist, info_plist(&spec(dir.path()), "13.0")).expect("write");
+    fs::write(&plist, info_plist(&spec(dir.path()), &build(), "13.0")).expect("write");
     StdProcess
         .run(&Invocation::new("plutil").arg("-lint").arg(&plist))
         .expect("plutil -lint passes");

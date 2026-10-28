@@ -363,23 +363,13 @@ mod tests {
     use crate::spec::BundleSpec;
     use crate::spec::tests::sample_metadata;
     use crate::test_support::{
-        self, Event, KEYCHAIN_PATHS, P8, P12, ad_hoc_host, credentials, developer_id_host, failing,
-        is, paths, run_ok_with, starts,
+        self, Event, FakeEnv, KEYCHAIN_PATHS, P8, P12, ad_hoc_host, credentials, developer_id_host,
+        failing, is, paths, run_ok_with, starts,
     };
 
-    /// The environment as a map.
-    #[derive(Default)]
-    struct MapEnv(HashMap<&'static str, OsString>);
-
-    impl Env for MapEnv {
-        fn var(&self, name: &str) -> Option<OsString> {
-            self.0.get(name).cloned()
-        }
-    }
-
     /// Every variable set, to values none of which holds another.
-    fn full() -> MapEnv {
-        MapEnv(HashMap::from([
+    fn full() -> FakeEnv {
+        FakeEnv(HashMap::from([
             (CERT_P12, STANDARD.encode(P12).into()),
             (CERT_PASSWORD, "pw-secret-value".into()),
             (IDENTITY, "Developer ID Application: Ed (TEAM123456)".into()),
@@ -403,12 +393,12 @@ mod tests {
 
     #[test]
     fn no_variables_sign_ad_hoc() {
-        assert_eq!(Signing::from_env(&MapEnv::default()), Ok(Signing::AdHoc));
+        assert_eq!(Signing::from_env(&FakeEnv::default()), Ok(Signing::AdHoc));
     }
 
     #[test]
     fn six_empty_variables_sign_ad_hoc() {
-        let env = MapEnv(VARS.iter().map(|v| (*v, OsString::new())).collect());
+        let env = FakeEnv(VARS.iter().map(|v| (*v, OsString::new())).collect());
         assert_eq!(Signing::from_env(&env), Ok(Signing::AdHoc));
     }
 
@@ -856,7 +846,7 @@ mod tests {
         let spec = BundleSpec::from_metadata(&sample_metadata()).expect("spec");
         let layout = Layout::new(&spec.target_dir, None).expect("layout");
         assert_eq!(
-            plan(&spec, &layout, &developer_id_host()).cleanup,
+            plan(&spec, &layout, &developer_id_host(), &test_support::build()).cleanup,
             teardown(&layout)
         );
         assert_eq!(

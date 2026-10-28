@@ -1,14 +1,18 @@
-//! Test doubles shared by the `bundle`, `signing` and `notary` tests: a
-//! recording [`Process`] and fake [`Files`] writing to one event log, so a
-//! test sees every run and file step in the order the core asked for them.
+//! Test doubles shared by the `bundle`, `signing`, `notary` and `build_id`
+//! tests: a recording [`Process`] and fake [`Files`] writing to one event
+//! log, so a test sees every run and file step in the order the core asked
+//! for them, and a [`FakeEnv`] of canned variables.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use crate::build_id::{BuildId, VAR};
 use crate::bundle::{BundleError, Host, bundle};
-use crate::ports::{Files, Invocation, Process, RunError};
+use crate::ports::{Env, Files, Invocation, Process, RunError};
 use crate::signing::{Credentials, Signing};
 use crate::spec::BundleSpec;
 use crate::spec::tests::sample_metadata;
@@ -72,6 +76,29 @@ impl Process for Recorder {
             _ => Vec::new(),
         })
     }
+}
+
+/// The environment as a map.
+#[derive(Default)]
+pub(crate) struct FakeEnv(pub HashMap<&'static str, OsString>);
+
+impl Env for FakeEnv {
+    fn var(&self, name: &str) -> Option<OsString> {
+        self.0.get(name).cloned()
+    }
+}
+
+/// The build ID [`build_env`] sets.
+pub(crate) const BUILD: &str = "20261028123456";
+
+/// [`BUILD`] as a build ID.
+pub(crate) fn build() -> BuildId {
+    BuildId::parse(BUILD).expect("an ID")
+}
+
+/// An environment setting `NOVA_BUILD_ID` to [`BUILD`] and nothing else.
+pub(crate) fn build_env() -> FakeEnv {
+    FakeEnv(HashMap::from([(VAR, BUILD.into())]))
 }
 
 /// Records each file operation; fails the ones `fails` picks. Every
@@ -154,8 +181,19 @@ pub(crate) fn starts(invocation: &Invocation, program: &str, leading: &[&str]) -
         && invocation.args.iter().zip(leading).all(|(a, l)| a == l)
 }
 
-/// Runs `bundle` over the doubles.
+/// Runs `bundle` over the doubles, with [`build_env`].
 pub(crate) fn run(
+    host: &Host,
+    archs: &[u8],
+    respond: impl Fn(&Invocation) -> Option<Result<Vec<u8>, RunError>> + 'static,
+    file_fails: impl Fn(&Event) -> bool + 'static,
+) -> Run {
+    run_in(&build_env(), host, archs, respond, file_fails)
+}
+
+/// Runs `bundle` over the doubles, with `env`.
+pub(crate) fn run_in(
+    env: &FakeEnv,
     host: &Host,
     archs: &[u8],
     respond: impl Fn(&Invocation) -> Option<Result<Vec<u8>, RunError>> + 'static,
@@ -172,7 +210,7 @@ pub(crate) fn run(
         fails: Box::new(file_fails),
         absent: Box::new(|_| false),
     };
-    let result = bundle(&mut process, &mut files, host);
+    let result = bundle(&mut process, &mut files, env, host);
     let events = log.borrow().clone();
     Run { result, events }
 }

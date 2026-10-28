@@ -102,6 +102,7 @@
 //! `OUT_DIR` (by default `target/flatpak/out`); it needs `flatpak`,
 //! `flatpak-builder` and the Flathub remote added with `--user`.
 
+pub mod build_id;
 pub mod bundle;
 pub mod host;
 pub mod icon;

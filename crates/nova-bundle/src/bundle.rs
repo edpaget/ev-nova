@@ -11,12 +11,13 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::build_id::{self, BuildId, ResolveError};
 use crate::icon::ICON;
 use crate::info_plist::{EXECUTABLE, info_plist};
 use crate::layout::{DUMP, Layout, LayoutError, VOLUME};
 use crate::linux::appimage::links::{Problems, check_links};
 use crate::notary::{Notarization, notarize};
-use crate::ports::{Files, Invocation, Process, RunError};
+use crate::ports::{Env, Files, Invocation, Process, RunError};
 use crate::signing::{self, SecretBytes, Signing, add_to_search_list};
 use crate::spec::{BundleSpec, GAME_PACKAGE, SpecError};
 
@@ -100,6 +101,9 @@ pub enum BundleError {
         /// How it failed.
         source: RunError,
     },
+    /// There is no build ID.
+    #[error(transparent)]
+    BuildId(#[from] ResolveError),
     /// `cargo metadata` gave no spec.
     #[error(transparent)]
     Spec(#[from] SpecError),
@@ -197,10 +201,11 @@ pub(crate) fn make_dmg(layout: &Layout) -> Step {
     )
 }
 
-/// The plan for `spec` under `layout`, signed as `host` says.
+/// The plan for `spec` under `layout`, signed as `host` says, for the
+/// build `build`.
 #[must_use]
-pub fn plan(spec: &BundleSpec, layout: &Layout, host: &Host) -> Plan {
-    let mut steps = stage(spec, layout, host);
+pub fn plan(spec: &BundleSpec, layout: &Layout, host: &Host, build: &BuildId) -> Plan {
+    let mut steps = stage(spec, layout, host, build);
     match &host.signing {
         Signing::AdHoc => {
             steps.extend(ad_hoc(layout));
@@ -241,28 +246,33 @@ fn ad_hoc(layout: &Layout) -> Vec<Step> {
     ]
 }
 
-/// The build and the staging tree, up to signing.
-fn stage(spec: &BundleSpec, layout: &Layout, host: &Host) -> Vec<Step> {
+/// The build and the staging tree, up to signing. `nova` is compiled with
+/// the ID the plist names.
+fn stage(spec: &BundleSpec, layout: &Layout, host: &Host, build: &BuildId) -> Vec<Step> {
     let release = |bin: &str| spec.target_dir.join(TARGET).join("release").join(bin);
     vec![
         // Default features only, so egui stays out of the published build.
-        Step::Run(Invocation::new(&host.cargo).args([
-            "build",
-            "--release",
-            "--locked",
-            "-p",
-            GAME_PACKAGE,
-            "-p",
-            DUMP,
-            "--target",
-            TARGET,
-        ])),
+        Step::Run(
+            Invocation::new(&host.cargo)
+                .args([
+                    "build",
+                    "--release",
+                    "--locked",
+                    "-p",
+                    GAME_PACKAGE,
+                    "-p",
+                    DUMP,
+                    "--target",
+                    TARGET,
+                ])
+                .env(build_id::VAR, build.as_str()),
+        ),
         Step::RemoveDir(layout.staging.clone()),
         Step::CreateDir(layout.macos()),
         Step::CreateDir(layout.resources()),
         Step::Write {
             path: layout.info_plist(),
-            bytes: info_plist(spec, &host.min_system),
+            bytes: info_plist(spec, build, &host.min_system),
         },
         Step::Write {
             path: layout.icon(),
@@ -294,15 +304,18 @@ fn stage(spec: &BundleSpec, layout: &Layout, host: &Host) -> Vec<Step> {
     ]
 }
 
-/// Builds the `.dmg`, returning its path.
+/// Builds the `.dmg`, returning its path. The build ID comes from `env` or
+/// the workspace's git checkout: see [`build_id::resolve`].
 pub fn bundle(
     process: &mut impl Process,
     files: &mut impl Files,
+    env: &impl Env,
     host: &Host,
 ) -> Result<PathBuf, BundleError> {
     let spec = BundleSpec::from_metadata(&run(process, &metadata(&host.cargo))?)?;
+    let build = build_id::resolve(env, process, &spec.workspace_root)?;
     let layout = Layout::new(&spec.target_dir, host.out.clone())?;
-    let plan = plan(&spec, &layout, host);
+    let plan = plan(&spec, &layout, host, &build);
     let done = plan
         .steps
         .iter()
@@ -379,8 +392,12 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::build_id::{self, committer_time};
     use crate::spec::tests::sample_metadata;
-    use crate::test_support::{self, Event, FakeFiles, Log, Run, failing, is, run_ok_with};
+    use crate::test_support::{
+        self, BUILD, Event, FakeEnv, FakeFiles, Log, Run, build, build_env, failing, is,
+        run_ok_with,
+    };
 
     fn host(out: Option<PathBuf>) -> Host {
         Host {
@@ -436,19 +453,23 @@ mod tests {
         let run = run_ok(&host(None));
 
         assert_eq!(run.result.as_ref().expect("bundled"), &dmg);
-        let expected = vec![
+        let expected =
+            vec![
             Event::Run(
                 cmd(cargo, "metadata --format-version 1 --no-deps --locked", &[]).captured(),
             ),
-            Event::Run(cmd(
-                cargo,
-                "build --release --locked -p nova -p nova-dump --target aarch64-apple-darwin",
-                &[],
-            )),
+            Event::Run(
+                cmd(
+                    cargo,
+                    "build --release --locked -p nova -p nova-dump --target aarch64-apple-darwin",
+                    &[],
+                )
+                .env("NOVA_BUILD_ID", BUILD),
+            ),
             Event::RemoveDir(staging.clone()),
             Event::CreateDir(contents.join("MacOS")),
             Event::CreateDir(contents.join("Resources")),
-            Event::Write(contents.join("Info.plist"), info_plist(&spec(), "13.0")),
+            Event::Write(contents.join("Info.plist"), info_plist(&spec(), &build(), "13.0")),
             Event::Write(contents.join("Resources").join("Nova.icns"), ICON.to_vec()),
             Event::Copy(arm("nova"), exe.clone()),
             Event::Copy(arm("nova-dump"), dump.clone()),
@@ -479,7 +500,7 @@ mod tests {
     #[test]
     fn ad_hoc_runs_no_developer_id_tool_and_cleans_nothing_up() {
         let layout = Layout::new(&spec().target_dir, None).expect("layout");
-        assert_eq!(plan(&spec(), &layout, &host(None)).cleanup, []);
+        assert_eq!(plan(&spec(), &layout, &host(None), &build()).cleanup, []);
         let run = run_ok(&host(None));
         assert!(run.result.is_ok(), "{:?}", run.result);
         for program in ["security", "xcrun", "ditto"] {
@@ -495,7 +516,7 @@ mod tests {
     #[test]
     fn the_icon_is_where_the_plist_names_it() {
         let layout = Layout::new(&spec().target_dir, None).expect("layout");
-        let all = plan(&spec(), &layout, &host(None)).steps;
+        let all = plan(&spec(), &layout, &host(None), &build()).steps;
         let plist = all
             .iter()
             .find_map(|s| match s {
@@ -542,7 +563,50 @@ mod tests {
                 _ => None,
             })
             .expect("a plist");
-        assert_eq!(plist, info_plist(&spec(), "14.1"));
+        assert_eq!(plist, info_plist(&spec(), &build(), "14.1"));
+    }
+
+    #[test]
+    fn without_the_variable_git_runs_right_after_metadata() {
+        let respond = |i: &Invocation| (i.program == "git").then(|| Ok(b"981173106\n".to_vec()));
+        let run = test_support::run_in(
+            &FakeEnv::default(),
+            &host(None),
+            b"arm64\n",
+            respond,
+            |_| false,
+        );
+        assert!(run.result.is_ok(), "{:?}", run.result);
+        let runs = run.runs();
+        assert_eq!(runs[1], committer_time(&spec().workspace_root));
+        let id = "20010203040506";
+        assert_eq!(runs[2].env, [("NOVA_BUILD_ID".into(), id.into())]);
+        let build = build_id::BuildId::parse(id).expect("an ID");
+        assert!(run.events.iter().any(|e| matches!(
+            e,
+            Event::Write(path, bytes)
+                if path.ends_with("Info.plist") && *bytes == info_plist(&spec(), &build, "13.0")
+        )));
+    }
+
+    #[test]
+    fn a_failing_build_id_stops_before_building() {
+        let env = FakeEnv(std::collections::HashMap::from([(
+            build_id::VAR,
+            "".into(),
+        )]));
+        let run = test_support::run_in(&env, &host(None), b"arm64\n", |_| None, |_| false);
+        assert!(
+            matches!(run.result, Err(BundleError::BuildId(_))),
+            "{:?}",
+            run.result
+        );
+        assert_eq!(
+            run.events.len(),
+            1,
+            "only cargo metadata ran: {:?}",
+            run.events
+        );
     }
 
     #[test]
@@ -648,7 +712,12 @@ mod tests {
             fails: Box::new(|_| false),
             absent: Box::new(|_| false),
         };
-        let result = bundle(&mut DumpUniversal(Rc::clone(&log)), &mut files, &host(None));
+        let result = bundle(
+            &mut DumpUniversal(Rc::clone(&log)),
+            &mut files,
+            &build_env(),
+            &host(None),
+        );
         let error = result.expect_err("fails").to_string();
         assert!(error.contains("nova-dump` lists `x86_64 arm64`"), "{error}");
         assert!(

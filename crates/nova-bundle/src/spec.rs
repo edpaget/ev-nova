@@ -18,8 +18,8 @@ pub struct BundleSpec {
     pub workspace_root: PathBuf,
     /// Cargo's target directory.
     pub target_dir: PathBuf,
-    /// The game package's version (`CFBundleShortVersionString` and
-    /// `CFBundleVersion`).
+    /// The game package's version (`CFBundleShortVersionString`; the
+    /// build ID is `CFBundleVersion`).
     pub version: String,
     /// The game package's SPDX licence expression.
     pub license: String,
