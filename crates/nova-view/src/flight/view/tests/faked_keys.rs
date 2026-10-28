@@ -363,7 +363,7 @@ fn p_during_a_jump_beeps_and_asks_nothing() {
 #[test]
 fn p_once_the_player_has_exploded_or_ejected_does_nothing_and_says_nothing() {
     let mut view = fleet(&[]);
-    view.sim.refuse(PlayerCommand::PlayerInfo);
+    view.change_sim(|sim| sim.refuse(PlayerCommand::PlayerInfo));
     view.take_sounds();
     tap(&mut view, PLAYER_INFO_KEY);
     assert_eq!(sent_since(&view, 0), [], "the gate shut");
@@ -529,7 +529,7 @@ fn zooms_are_taken_through_a_jump_and_refused_once_exploded() {
         assert_eq!(view.floating.zoom(), 4, "warping {warping}");
     }
     let mut view = super::maps::floating_in(in_sol());
-    view.sim.refuse(PlayerCommand::Nav);
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Nav));
     view.floating.show(sixtieths(view.elapsed));
     view.take_sounds();
     tap(&mut view, ZOOM_OUT_KEY);
@@ -703,4 +703,26 @@ fn find_is_laid_out_from_the_template_and_style_the_flight_gives() {
     tap(&mut view, MAP);
     faked_typing(&mut view, "f");
     assert!(texts(&drawn(&view)).contains(&"Never mind".to_owned()));
+}
+
+// The gates come with the frame
+// (rdm:phase/view-sim-seam/phase-20-view-frame-fills-per-tick).
+
+#[test]
+fn a_key_the_frames_gates_refuse_sends_nothing() {
+    let refusing = FlightFrame {
+        gates: nova_sim::flight_frame::Gates::EVERY.refusing(PlayerCommand::Land),
+        ..in_sol()
+    };
+    let mut view = faked(refusing);
+    tap(&mut view, LAND);
+    assert_eq!(sent(&view), [], "the frame refuses the land key");
+    assert_eq!(view.take_sounds(), [], "and says nothing");
+    let mut view = faked(in_sol());
+    tap(&mut view, LAND);
+    assert_eq!(
+        sent(&view),
+        [FlightCommand::Land],
+        "control: the gate taken, L sends the landing"
+    );
 }

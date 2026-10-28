@@ -47,9 +47,9 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// ([`Answer::Refused`] once the queue is empty), hands out the events
 /// queued for it on [`FlightSim::drain`], and reports each frame's steps
 /// from a queue (no step run once the queue is empty), recording each
-/// call's input and step count. It
-/// takes every gate but those it is told to refuse
-/// ([`FakeFlight::refuse`]), answers [`MapSource`] from [`FakeMap`]
+/// call's input and step count. Its frames take every gate but those it
+/// is told to refuse ([`FakeFlight::refuse`]). It answers [`MapSource`]
+/// from [`FakeMap`]
 /// ([`FakeFlight::map_mut`]), and records the map's questions whose
 /// arguments matter ([`FakeFlight::asked`]). It answers the hover as told
 /// ([`FakeFlight::set_hover`]), recording each ask
@@ -409,15 +409,13 @@ impl FakeFlight {
         &self.stepped
     }
 
-    /// Refuses the gate `gate` from now on ([`FlightSim::takes`]), and in
-    /// every frame it fills ([`FlightFrame::gates`]), whatever frame is
-    /// scripted later.
+    /// Refuses the gate `gate` from now on in every frame it fills
+    /// ([`FlightFrame::gates`]), whatever frame is scripted later.
     pub fn refuse(&mut self, gate: PlayerCommand) {
         self.refused.push(gate);
     }
 
-    /// Takes the gate `gate` again ([`FlightSim::takes`]), as the frame
-    /// scripted sets it.
+    /// Takes the gate `gate` again, as the frame scripted sets it.
     pub fn take(&mut self, gate: PlayerCommand) {
         self.refused.retain(|&refused| refused != gate);
     }
@@ -526,10 +524,6 @@ impl FlightSim for FakeFlight {
 
     fn drain(&mut self, into: &mut Vec<FlightEvent>) {
         into.append(&mut self.events);
-    }
-
-    fn takes(&self, gate: PlayerCommand) -> bool {
-        !self.refused.contains(&gate)
     }
 
     fn hover(&self, at: Vec2, drawn: &DrawnBoxes) -> Option<Hover> {
@@ -1605,10 +1599,6 @@ mod tests {
 
         fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
 
-        fn takes(&self, _gate: PlayerCommand) -> bool {
-            true
-        }
-
         fn hover(&self, _at: Vec2, _drawn: &DrawnBoxes) -> Option<Hover> {
             None
         }
@@ -1843,17 +1833,13 @@ mod tests {
             fake.frame(&mut frame);
             frame.gates
         };
-        assert!(fake.takes(PlayerCommand::Nav));
         assert_eq!(gates(&fake), Gates::EVERY);
         fake.refuse(PlayerCommand::Nav);
-        assert!(!fake.takes(PlayerCommand::Nav));
-        assert!(fake.takes(PlayerCommand::SelectSystem));
         let refused = Gates::EVERY.refusing(PlayerCommand::Nav);
         assert_eq!(gates(&fake), refused, "in the frame");
         fake.set_frame(stellar(128));
         assert_eq!(gates(&fake), refused, "whatever frame is scripted later");
         fake.take(PlayerCommand::Nav);
-        assert!(fake.takes(PlayerCommand::Nav));
         assert_eq!(gates(&fake), Gates::EVERY);
         fake.frame_mut().gates = Gates::NONE;
         assert_eq!(gates(&fake), Gates::NONE, "as the frame sets them");
@@ -2161,10 +2147,6 @@ mod tests {
                 }
                 _ => self.fake.apply(command),
             }
-        }
-
-        fn takes(&self, gate: PlayerCommand) -> bool {
-            self.fake.takes(gate)
         }
 
         fn drain(&mut self, into: &mut Vec<FlightEvent>) {

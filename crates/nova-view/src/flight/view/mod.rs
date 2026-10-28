@@ -1176,8 +1176,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Whether the flight takes `command` now: the player's command it is
-    /// taken under ([`FlightCommand::gate`]) taken
-    /// ([`FlightSim::takes`]), or none to ask. The one mapping from a
+    /// taken under ([`FlightCommand::gate`]) taken by the kept frame's
+    /// gates (`FlightView::takes`), or none to ask. The one mapping from a
     /// command to its gate: the travel, comm and escort commands ask it
     /// here, before they are sent ([`FlightView::send_gated`]) or before a
     /// key's latch moves (`FlightView::jump_frame`,

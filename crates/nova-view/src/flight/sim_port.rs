@@ -41,8 +41,8 @@ use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
     DescMovie, Good, HailView, HireList, Hover, JunkId, MapMarks, Market, MissionId, MissionInfo,
-    News, OutfitId, Outfitter, PlayerCommand, PlayerInfo, PlunderView, SavedNav, ShipId,
-    ShipNaming, ShipRefusal, Shipyard, StellarId, SystemId, Vec2, WeaponId,
+    News, OutfitId, Outfitter, PlayerInfo, PlunderView, SavedNav, ShipId, ShipNaming, ShipRefusal,
+    Shipyard, StellarId, SystemId, Vec2, WeaponId,
 };
 
 #[cfg(any(test, feature = "fixture"))]
@@ -69,13 +69,6 @@ pub trait FlightSim: MapSource + CommSource + PortSource + NameSource + PilotSou
     /// Moves what the flight raised since the last drain onto the end of
     /// `into`, leaving none to drain again.
     fn drain(&mut self, into: &mut Vec<FlightEvent>);
-
-    /// Whether the flight takes the player's command `gate` now
-    /// (`nova_sim::Session::takes`): the view asks before it acts on a
-    /// key, mid-input, after the commands it has sent, and does nothing
-    /// when it is refused. A flight that failed to start takes every one,
-    /// as it has nothing to refuse them with.
-    fn takes(&self, gate: PlayerCommand) -> bool;
 
     /// What the pointer at `at`, in system coordinates, is over among the
     /// things the player can target, the ships boxed as `drawn` says they
@@ -503,10 +496,6 @@ mod tests {
         }
 
         fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
-
-        fn takes(&self, _gate: PlayerCommand) -> bool {
-            true
-        }
 
         fn hover(&self, _at: Vec2, _drawn: &DrawnBoxes) -> Option<Hover> {
             None

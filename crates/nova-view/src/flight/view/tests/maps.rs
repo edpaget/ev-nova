@@ -730,7 +730,7 @@ fn backslash_held_out_of_mode_3_doesnt_show_it() {
 fn h_held_in_the_take_off_grace_shows_it() {
     // The grace refuses the map key, and only it of these.
     let mut view = floating_in(in_sol());
-    view.sim.refuse(PlayerCommand::Map);
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Map));
     floating_key(&mut view, HYPERSPACE_MODE_KEY, true);
     for _ in 0..14 {
         floating_frame_of(&mut view, TICK);
@@ -745,7 +745,7 @@ fn h_held_in_the_take_off_grace_shows_it() {
 fn exploded_in(frame: FlightFrame) -> Faked {
     let mut view = floating_in(frame);
     for gate in [PlayerCommand::Nav, PlayerCommand::SelectSystem] {
-        view.sim.refuse(gate);
+        view.change_sim(|sim| sim.refuse(gate));
     }
     view
 }

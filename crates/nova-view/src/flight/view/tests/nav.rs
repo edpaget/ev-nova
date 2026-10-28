@@ -906,7 +906,7 @@ fn f5_picks_the_nearest_stellar() {
 #[test]
 fn no_slot_key_picks_while_the_flight_refuses_the_nav_keys_or_during_a_jump() {
     let mut view = faked(in_sol());
-    view.sim.refuse(PlayerCommand::Nav);
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Nav));
     faked_tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
     assert_eq!(sent(&view), [], "refused");
     let mut view = faked(FlightFrame {
@@ -1167,7 +1167,7 @@ fn retaking_the_nav_area_notes_the_frames_text_count() {
 /// one gate the flight refuses.
 fn held_frame_sends(keys: &[Key], refused: PlayerCommand) -> Vec<FlightCommand> {
     let mut view = faked(in_sol());
-    view.sim.refuse(refused);
+    view.change_sim(|sim| sim.refuse(refused));
     for &k in keys {
         view.track_held(&key(k, true));
     }

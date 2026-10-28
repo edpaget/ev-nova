@@ -855,15 +855,15 @@ fn docked_the_settling_stages_the_bar_as_its_scripts_ran() {
 #[test]
 fn a_refused_gate_sends_no_travel_command() {
     let mut view = faked(sol());
-    view.sim.refuse(nova_sim::PlayerCommand::Land);
+    view.change_sim(|sim| sim.refuse(nova_sim::PlayerCommand::Land));
     view.land();
     assert_eq!(sent(&view), [], "L under a refused Land gate");
-    view.sim.refuse(nova_sim::PlayerCommand::Jump);
+    view.change_sim(|sim| sim.refuse(nova_sim::PlayerCommand::Jump));
     view.jump_latch = false;
     view.jump_frame(true);
     assert_eq!(sent(&view), [], "J under a refused Jump gate");
     assert!(!view.jump_latch, "its latch left as it was");
-    view.sim.take(nova_sim::PlayerCommand::Jump);
+    view.change_sim(|sim| sim.take(nova_sim::PlayerCommand::Jump));
     view.jump_frame(true);
     assert_eq!(sent(&view), [FlightCommand::Jump], "taken again");
 }
@@ -871,7 +871,7 @@ fn a_refused_gate_sends_no_travel_command() {
 #[test]
 fn a_command_sent_under_a_refused_gate_is_refused_unsent() {
     let mut view = faked(sol());
-    view.sim.refuse(nova_sim::PlayerCommand::Jump);
+    view.change_sim(|sim| sim.refuse(nova_sim::PlayerCommand::Jump));
     view.sim.queue_answer(Answer::Jumped(SystemId(131)));
     assert_eq!(view.send_gated(FlightCommand::Jump), Answer::Refused);
     assert_eq!(sent(&view), [], "nothing sent");

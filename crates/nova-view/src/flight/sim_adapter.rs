@@ -61,9 +61,9 @@ use nova_sim::{
     Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DescMovie, DisableRule, Good,
     HailOptions, HailView, HireList, Hover, JunkId, LegalCode, MapMarks, Market, MissionId,
     MissionInfo, News, NovaAi, NovaBoarding, NovaDisable, NovaLaw, OutfitId, Outfitter, Pilot,
-    PlayerCommand, PlayerInfo, PlunderView, PointDefenceRule, Rules, SavedNav, Session, ShipId,
-    ShipNaming, ShipRefusal, Shipyard, SimCatalog, StellarId, StepCollaborators, SystemId,
-    TagNames, Vec2, WeaponId,
+    PlayerInfo, PlunderView, PointDefenceRule, Rules, SavedNav, Session, ShipId, ShipNaming,
+    ShipRefusal, Shipyard, SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, Vec2,
+    WeaponId,
 };
 
 use nova_sim::{
@@ -482,10 +482,6 @@ impl<C> FlightSim for SessionFlight<C> {
         }
     }
 
-    fn takes(&self, gate: PlayerCommand) -> bool {
-        self.session().map_or(true, |session| session.takes(gate))
-    }
-
     /// Forwards to `Session::hover`; a failed session hovers nothing.
     fn hover(&self, at: Vec2, drawn: &DrawnBoxes) -> Option<Hover> {
         self.session().ok()?.hover(at, drawn)
@@ -856,8 +852,9 @@ mod tests {
     #[test]
     fn a_failed_flight_takes_every_gate_and_answers_nothing() {
         let flight = failed();
-        assert!(flight.takes(PlayerCommand::Nav));
-        assert!(flight.takes(PlayerCommand::Map));
+        let mut frame = unlike(&FlightFrame::default());
+        flight.frame(&mut frame);
+        assert_eq!(frame.gates, nova_sim::flight_frame::Gates::EVERY);
         let none = SystemId(130);
         assert_eq!(flight.map_drawing(None, &[], MapMarks::NONE), None);
         assert_eq!(flight.map_panel(Some(none), None), None);

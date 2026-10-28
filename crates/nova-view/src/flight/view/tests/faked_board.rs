@@ -371,7 +371,7 @@ fn a_held_b_while_cloaked_boards_once_the_cloak_lets_it() {
 #[test]
 fn the_board_keys_frame_while_its_gate_is_refused_sends_nothing_and_leaves_the_latch() {
     let mut view = sol();
-    view.sim.refuse(PlayerCommand::Board);
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Board));
     view.board_frame(true);
     assert_eq!(sent(&view), [], "the gate refused it");
     assert!(!view.board_latch, "B down: left clear");
@@ -381,7 +381,7 @@ fn the_board_keys_frame_while_its_gate_is_refused_sends_nothing_and_leaves_the_l
         view.board_latch,
         "B up: left set, the original's frame skipping the key"
     );
-    view.sim.take(PlayerCommand::Board);
+    view.change_sim(|sim| sim.take(PlayerCommand::Board));
     view.board_frame(false);
     assert!(!view.board_latch, "taken: cleared");
 }

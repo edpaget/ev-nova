@@ -159,7 +159,7 @@ fn a_stellar_answering_or_a_refused_hail_opens_nothing_and_says_nothing() {
 #[test]
 fn a_hail_the_flight_does_not_take_sends_nothing() {
     let mut view = sol();
-    view.sim.refuse(PlayerCommand::Hail);
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Hail));
     view.sim
         .queue_answer(Answer::Hailed(Hailed::Comm(hail_view("Channel open."))));
     view.hail();

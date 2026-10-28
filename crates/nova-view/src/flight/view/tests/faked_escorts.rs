@@ -415,7 +415,7 @@ fn a_command_the_flight_refuses_or_that_changes_no_escort_says_nothing() {
 #[test]
 fn an_escort_key_the_flight_does_not_take_sends_nothing() {
     let mut view = escorted();
-    view.sim.refuse(PlayerCommand::Escort);
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Escort));
     view.sim
         .queue_answer(commanded(EscortGroup::All, EscortCommand::Hold, false));
     press(&mut view, ESCORT_HOLD_KEY);

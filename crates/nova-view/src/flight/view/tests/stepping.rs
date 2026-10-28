@@ -219,12 +219,12 @@ fn a_command_the_flight_refuses_holds_none_of_its_keys() {
         PlayerCommand::Cloak,
         PlayerCommand::DeselectWeapon,
     ] {
-        view.sim.refuse(command);
+        view.change_sim(|sim| sim.refuse(command));
     }
     let input = view.step_input(anchor());
     assert!(!input.self_destruct && !input.eject && !input.cloak && !input.weapon_safety);
     // U needs no Command.
-    view.sim.take(PlayerCommand::Cloak);
+    view.change_sim(|sim| sim.take(PlayerCommand::Cloak));
     view.held.remove(&Key::Command);
     assert!(view.step_input(anchor()).cloak);
 }

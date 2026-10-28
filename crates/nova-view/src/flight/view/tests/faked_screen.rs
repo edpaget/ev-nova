@@ -176,7 +176,7 @@ fn the_course_map_makes_no_map_sound_on_its_own_input_or_ms_repeats() {
 #[test]
 fn a_refused_m_makes_no_map_sound() {
     let mut view = in_flight();
-    view.sim.refuse(PlayerCommand::Map);
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Map));
     view.take_sounds();
     tap(&mut view, MAP_KEY);
     assert!(!view.map_open(), "the map's gate refused");
@@ -481,7 +481,7 @@ fn i_during_a_jump_does_nothing_and_says_nothing() {
 #[test]
 fn i_in_the_escape_pod_does_nothing_and_says_nothing() {
     let mut view = in_flight();
-    view.sim.refuse(PlayerCommand::MissionInfo);
+    view.change_sim(|sim| sim.refuse(PlayerCommand::MissionInfo));
     view.take_sounds();
     tap(&mut view, MISSION_INFO_KEY);
     assert_eq!(sent_since(&view, 0), [], "the gate refused (@0x7042e)");
@@ -1025,7 +1025,7 @@ fn backslash_let_go_and_pressed_again_during_the_jump_acts_after_arrival() {
 fn refusing(gates: &[PlayerCommand]) -> Faked {
     let mut view = in_flight();
     for &gate in gates {
-        view.sim.refuse(gate);
+        view.change_sim(|sim| sim.refuse(gate));
     }
     view
 }

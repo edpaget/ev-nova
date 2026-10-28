@@ -1223,7 +1223,7 @@ fn a_real_target_shows_in_the_panel_and_brackets() {
     assert_eq!(brackets, 4, "its four corners");
 }
 
-/// `FlightSim::takes`: M opens the map while the session takes its gate,
+/// `FlightFrame::gates`: M opens the map while the session takes its gate,
 /// and a gate the session refuses keeps the view's key from acting, as a
 /// player breaking up can't open the map.
 #[test]

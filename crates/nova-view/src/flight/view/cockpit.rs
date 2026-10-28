@@ -402,11 +402,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.slot_keys_frame();
     }
 
-    /// Whether the flight takes `command` now ([`FlightSim::takes`],
-    /// [`Session::takes`]); a flight that failed to start takes every
-    /// one, as it has nothing to refuse them with.
+    /// Whether the flight takes `command` now, as the kept frame's gates
+    /// say ([`FlightFrame::gates`](nova_sim::flight_frame::FlightFrame::gates),
+    /// [`Session::takes`]): the frame the last command, step or change
+    /// left, which each of them refills, so a key read mid-input sees the
+    /// commands sent before it. A flight that failed to start takes every
+    /// one, as its default frame does.
     pub(super) fn takes(&self, command: PlayerCommand) -> bool {
-        self.sim.takes(command)
+        self.frame.gates.takes(command)
     }
 
     /// A press of `key`, if it works the stellar navigation target. 1-4,
