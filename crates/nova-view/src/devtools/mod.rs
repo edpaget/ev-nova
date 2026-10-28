@@ -21,8 +21,8 @@
 //!   [`PilotSheet`] and each [`PilotEdit`] to it, or why it was refused.
 //! - [`editor`]: the [`PilotEditor`], the sheet shown, the drafts of each
 //!   edit and the status line.
-//! - [`session`]: the port's adapter over a live `nova_sim::Session`, the
-//!   [`SessionDesk`].
+//! - [`desk`]: the port over a flight's own desk ([`DevDesk`]), the
+//!   [`FlightDesk`], which names the places from the course map's galaxy.
 //!
 //! egui draws the overlay only in the `nova` crate's `dev-tools` build,
 //! and only renders this model's strings and images.
@@ -30,23 +30,23 @@
 pub mod browser;
 pub mod catalog;
 pub mod data;
+pub mod desk;
 pub mod editor;
 pub mod frame_time;
 pub mod overlay;
 pub mod pilot;
 pub mod preview;
 pub mod search;
-pub mod session;
 
 pub use browser::{ResourceBrowser, Selection};
 pub use catalog::{
     Origin, RecordView, ResType, ResourceCatalog, ResourceDetail, ResourceSummary, SourceInfo,
     type_code,
 };
+pub use desk::FlightDesk;
 pub use editor::{Draft, NO_PILOT, PilotEditor, bit_label};
 pub use frame_time::{FRAME_WINDOW, FrameTimes};
 pub use overlay::{DevOverlay, Routing, TOGGLE_KEY};
 pub use pilot::{DevDesk, EditRefusal, PilotDesk, PilotEdit, PilotSheet, Place};
 pub use preview::{MAX_PREVIEW_SIDE, Preview, preview};
 pub use search::{Query, fold};
-pub use session::SessionDesk;

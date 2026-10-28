@@ -922,7 +922,7 @@ fn in_port_a_shift_click_builds_the_course_and_the_close_cues_nothing() {
 
 /// A frame in system `system`, the player alone at the centre in ship
 /// `class`, `landed` on Earth or not.
-fn in_system(system: i16, class: i16, landed: bool) -> FlightFrame {
+pub(super) fn in_system(system: i16, class: i16, landed: bool) -> FlightFrame {
     FlightFrame {
         system: SystemId(system),
         landed: landed.then_some(StellarId(128)),

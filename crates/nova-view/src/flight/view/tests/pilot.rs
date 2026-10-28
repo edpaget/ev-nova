@@ -19,17 +19,6 @@ fn the_intro_screen_seen_reads_and_marks_the_sessions_pilot() {
     assert!(!broken.seen_intro());
 }
 
-#[test]
-fn a_session_that_failed_has_no_pilot_desk() {
-    let mut view = test_flight::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    });
-    assert!(view.pilot_desk().is_none());
-    view.resync();
-    assert!(view.scene().is_none());
-}
-
 /// This phase's real check of the adapter's [`PilotSource`]
 /// (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks): the pilot
 /// panel and the player info are the session's, over the catalog the
@@ -60,65 +49,6 @@ fn the_pilot_panel_is_the_sessions_and_none_for_a_session_that_failed() {
     });
     assert_eq!(broken.pilot_panel(), None);
     assert_eq!(broken.player_info(), None);
-}
-
-#[test]
-fn the_pilot_desk_reads_the_session_and_names_from_the_map() {
-    let mut view = landed_view();
-    let desk = view.pilot_desk().expect("flying");
-    let sheet = desk.sheet().expect("a pilot");
-    assert_eq!(sheet.name, "Ada");
-    assert_eq!(sheet.system.name, "Sol");
-    assert_eq!(desk.systems().len(), 3);
-}
-
-#[test]
-fn after_a_move_resync_lays_out_the_new_system() {
-    let mut view = landed_view();
-    move_to(&mut view, 131, 140);
-    view.resync();
-    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
-    assert_eq!(*view.catalog().systems_read.borrow(), [SystemId(131)]);
-    assert_eq!(view.course_map().current(), Some(SystemId(131)));
-    assert_eq!(view.course_map().route(), []);
-    assert!(
-        view.session()
-            .expect("flying")
-            .pilot()
-            .has_explored(SystemId(131))
-    );
-    assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
-    assert_eq!(view.message(), None, "no arrival message");
-    view.resync();
-    assert_eq!(
-        *view.catalog().systems_read.borrow(),
-        [SystemId(131)],
-        "nothing moved, nothing read"
-    );
-}
-
-#[test]
-fn after_a_move_within_the_system_resync_drops_the_course_and_reads_nothing() {
-    let mut view = landed_view();
-    plot(&mut view, 131);
-    assert_eq!(view.course_map().route(), [SystemId(131)]);
-    view.tick(TICK / 2);
-    assert!(view.alpha() > 0.0, "between steps");
-    move_to(&mut view, 130, 129);
-    view.resync();
-    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
-    assert_eq!(view.course_map().route(), []);
-    assert_eq!(*view.catalog().systems_read.borrow(), []);
-    assert_eq!(view.alpha(), 0.0);
-    assert_eq!(view.shown_position(), Point::new(300.0, -200.0));
-}
-
-#[test]
-fn a_resync_with_nothing_moved_reads_nothing() {
-    let mut view = landed_view();
-    view.resync();
-    assert_eq!(*view.catalog().systems_read.borrow(), []);
-    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
 }
 
 #[test]

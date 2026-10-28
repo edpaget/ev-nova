@@ -575,6 +575,24 @@ fn a_galaxy_change_redraws_the_open_map_through_the_event_and_the_galaxy() {
     );
 }
 
+/// The developer tools' desk on a real flight: the adapter's `DevDesk`
+/// reads the session, the view names the places from its course map, an
+/// edit reaches the session, and a resync after it catches the view up.
+#[test]
+fn a_real_desk_reads_the_session_and_its_edit_reaches_it_before_a_resync() {
+    let mut view = view();
+    land(&mut view);
+    let mut desk = view.pilot_desk().expect("flying");
+    let sheet = desk.sheet().expect("a pilot");
+    assert_eq!(sheet.system.name, "Alpha");
+    assert_eq!(sheet.landed.map(|place| place.id), Some(StellarId(128)));
+    desk.edit(PilotEdit::Credits(77)).expect("set");
+    assert_eq!(desk.sheet().expect("a pilot").credits, 77);
+    view.resync();
+    assert_eq!(view.session().expect("flying").pilot().cash(), 77);
+    assert!(view.take_save_due(), "an edit makes a save due");
+}
+
 // The fixed steps, through a whole `FlightView` over a real session.
 
 /// Draws its script, then the last outcome, so no roll fires.

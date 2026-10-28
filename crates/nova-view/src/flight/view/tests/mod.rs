@@ -79,6 +79,7 @@ mod drain;
 mod edge;
 mod escorts;
 mod faked_board;
+mod faked_desk;
 mod faked_docked;
 mod faked_escorts;
 mod faked_flight;

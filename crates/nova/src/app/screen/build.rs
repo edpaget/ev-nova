@@ -13,9 +13,10 @@ use nova_sim::{
     NovaHire, NovaLaw, NovaPersons, PersonRules, PilotKeeper, PilotStore, PointDefenceRule,
     RuleKey, RuleSource, Rulebook, Session, SessionSetup,
 };
-use nova_view::devtools::SessionDesk;
+use nova_view::devtools::FlightDesk;
 use nova_view::flight::{
-    Collaborators, FlightOverlays, FlightStart, FlightView, SharedChance, open_flight,
+    Collaborators, FlightOverlays, FlightStart, FlightView, SessionFlight, SharedChance,
+    open_flight,
 };
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::find::FIND_DIALOG;
@@ -521,7 +522,7 @@ impl AppScreen {
 
     /// The pilot flying, as the developer tools' desk; `None` before
     /// flight is entered and when the flight could not start.
-    pub fn pilot_desk(&mut self) -> Option<SessionDesk<'_, Rc<GameData>>> {
+    pub fn pilot_desk(&mut self) -> Option<FlightDesk<'_, SessionFlight<Rc<GameData>>>> {
         self.flight.as_mut()?.pilot_desk()
     }
 

@@ -6,15 +6,13 @@
 use nova_sim::Session;
 use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
-use nova_sim::{AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, TrafficCatalog};
 
 use nova_sim::flight_frame::{Answer, FlightCommand, MapClick};
 
-use crate::devtools::SessionDesk;
+use crate::devtools::{DevDesk, FlightDesk};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
-use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::sim_port::FlightSim;
-use crate::galaxy::{GalaxyCatalog, MapCycle, MapMode, PendingPress, PressAnswer};
+use crate::galaxy::{MapCycle, MapMode, PendingPress, PressAnswer};
 use crate::system::catalog::SystemCatalog;
 use crate::view_shape::classic_offset;
 use crate::{DrawList, Input, Key, Point, Screen, UiSound};
@@ -22,26 +20,16 @@ use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 use super::dialog_map::{MapOpened, MapOpening};
 use super::{BOARD_KEY, FlightView, JUMP_KEY, MAP_KEY, Redrawn};
 
-impl<
-    C: PilotCatalog
-        + TrafficCatalog
-        + CombatCatalog
-        + AsteroidCatalog
-        + CommCatalog
-        + CombatLooks
-        + SystemCatalog
-        + ShipSprites
-        + StatusBars
-        + GalaxyCatalog
-        + EscortMenuLooks,
-> FlightView<C, crate::flight::SessionFlight<C>>
-{
-    /// The pilot flying, as the developer tools' desk: its edits reach
-    /// the session, moves read the catalog, and the course map's galaxy
-    /// names the places. `None` when the session failed.
-    pub fn pilot_desk(&mut self) -> Option<SessionDesk<'_, C>> {
-        let session = self.sim.session.as_mut().ok()?;
-        Some(SessionDesk::new(session, &*self.catalog, self.map.model()))
+impl<C, S: FlightSim + DevDesk> FlightView<C, S> {
+    /// The pilot flying, as the developer tools' desk: its reading and
+    /// edits are the flight's own desk's ([`DevDesk`]), and the course
+    /// map's galaxy names the places. `None` for a flight that could not
+    /// start ([`FlightSim::failure`]).
+    pub fn pilot_desk(&mut self) -> Option<FlightDesk<'_, S>> {
+        if self.sim.failure().is_some() {
+            return None;
+        }
+        Some(FlightDesk::new(&mut self.sim, self.map.model()))
     }
 }
 
