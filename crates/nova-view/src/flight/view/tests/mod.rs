@@ -3665,10 +3665,6 @@ fn on_screen(view: &View, (x, y): (f32, f32)) -> Point {
     view.camera().world_to_screen(at(x, y))
 }
 
-fn nav_mode(view: &View) -> NavMode {
-    view.session().expect("flying").nav_mode()
-}
-
 /// The four corners from `cïcn` `first` round `centre`, half-size
 /// `half`: top-left, top-right, bottom-right, bottom-left.
 fn corners_at(first: i16, centre: Point, half: f32) -> Vec<(i16, Point)> {
@@ -3873,7 +3869,7 @@ fn floating_border(list: &DrawList) -> Vec<DrawCommand> {
 }
 
 /// The alpha the floating map's border is drawn at, if it is drawn.
-fn floating_alpha(view: &View) -> Option<u8> {
+fn floating_alpha(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<u8> {
     floating_border(&drawn(view))
         .first()
         .map(|command| match command {

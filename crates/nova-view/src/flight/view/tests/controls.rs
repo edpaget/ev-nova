@@ -3,18 +3,6 @@ use nova_sim::DrawnShips as _;
 
 // Double time.
 
-/// Whether `view` draws the double-time icon, `cïcn` 20000 at the top
-/// left.
-fn double_time_drawn(view: &View) -> bool {
-    drawn(view).iter().any(|command| {
-        *command
-            == DrawCommand::Picture {
-                image: ImageKey::icon(20000),
-                top_left: Point::new(0.0, 0.0),
-            }
-    })
-}
-
 #[test]
 fn double_time_shows_its_icon_at_the_top_left_over_the_red_alert() {
     // Whether double time is on, and the alert, are the frame's
@@ -45,41 +33,6 @@ fn double_time_shows_its_icon_at_the_top_left_over_the_red_alert() {
     );
     super::faked_hud::changes(&mut view, |frame| frame.double_time = false);
     assert!(!faked_double_time_drawn(&view), "off at once");
-}
-
-#[test]
-fn double_time_reaches_the_session_on_the_next_tick_and_when_set() {
-    let mut view = flight();
-    view.set_double_time(true);
-    assert!(view.session().expect("flying").double_time(), "when set");
-    view.sim
-        .session
-        .as_mut()
-        .expect("flying")
-        .set_double_time_key(false);
-    view.tick(TICK);
-    assert!(view.session().expect("flying").double_time(), "each tick");
-}
-
-#[test]
-fn double_time_survives_the_events_that_let_go_of_the_flight_keys() {
-    let mut view = flight().with_double_time(true);
-    tap(&mut view, MAP);
-    tap(&mut view, MAP);
-    view.tick(TICK);
-    assert!(double_time_drawn(&view), "the map");
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    jump_now(&mut view);
-    arrive_now(&mut view);
-    view.tick(TICK);
-    assert!(double_time_drawn(&view), "a jump");
-    assert_eq!(view.session().expect("flying").system(), SystemId(131));
-    let mut hailed = hailable(true).with_double_time(true);
-    tap(&mut hailed, HAIL_KEY);
-    assert!(hailed.take_hail().is_some());
-    hailed.tick(TICK);
-    assert!(double_time_drawn(&hailed), "a hail");
 }
 
 /// [`beside`] (intact) with the player holding 95 of fuel and NPC 0
@@ -144,7 +97,7 @@ fn caps_lock_is_no_flight_key() {
 // The hover cursor (`_HandleMouse`).
 
 /// The cursor sprites in `list`: frame and centre.
-fn cursor_sprites(list: &DrawList) -> Vec<(u16, Point)> {
+pub(super) fn cursor_sprites(list: &DrawList) -> Vec<(u16, Point)> {
     sprites(list)
         .into_iter()
         .filter(|(image, _)| image.id == 651)
@@ -153,7 +106,7 @@ fn cursor_sprites(list: &DrawList) -> Vec<(u16, Point)> {
 }
 
 /// A point on screen over nothing at all.
-const NOWHERE: Point = Point::new(40.0, 400.0);
+pub(super) const NOWHERE: Point = Point::new(40.0, 400.0);
 
 #[test]
 fn a_left_click_on_a_drawn_ship_targets_it_with_the_target_beep() {
@@ -194,38 +147,6 @@ fn a_click_on_the_players_own_ship_with_no_target_is_silent() {
     view.click_in_space(PLAYER_AT);
     assert_eq!(sent(&view).len(), 1);
     assert_eq!(view.drained_sounds(), []);
-}
-
-#[test]
-fn a_click_on_a_ship_targets_it_during_a_jump() {
-    // A still NPC at (0, -750), where the ship flies out past.
-    let mut catalog = trafficked(&[130], 1, 129, 3);
-    for record in &mut catalog.ships {
-        if record.id == ShipId(129) {
-            record.fields.speed = 0;
-        }
-    }
-    let (_, chance) = scripted(&placed(750, 0, 0));
-    let mut view = test_flight::flown(catalog, FlightStart::New, on(chance, Rc::new(Still)));
-    view.tick(TICK);
-    let id = npc_ids(&view)[0];
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    view.input(&key(JUMP, true));
-    assert!(view.session().expect("flying").preparing_jump().is_some());
-    let over = npc_on_screen(&view, id);
-    assert!(
-        (0.0..VIEW_SIZE.0 - STATUS_BAR_WIDTH).contains(&over.x)
-            && (0.0..VIEW_SIZE.1).contains(&over.y),
-        "{over:?} in space"
-    );
-    view.take_sounds();
-    click(&mut view, over);
-    assert_eq!(
-        view.session().expect("flying").target().map(|npc| npc.id),
-        Some(id)
-    );
-    assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetSelected)]);
 }
 
 #[test]
@@ -444,21 +365,6 @@ fn by_the_other_reading_an_undisplayed_ship_is_hovered_and_clicked_where_it_is()
 }
 
 #[test]
-fn cancelling_the_pointer_forgets_the_cursor_until_the_next_move() {
-    let mut view = flight();
-    view.input(&Input::PointerMoved(NOWHERE));
-    assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
-    assert_eq!(view.cursor_at(), Some(NOWHERE));
-    view.cancel_pointer();
-    assert_eq!(cursor_sprites(&drawn(&view)), [], "not at the old point");
-    assert_eq!(view.cursor_at(), None);
-    let other = Point::new(60.0, 420.0);
-    view.input(&Input::PointerMoved(other));
-    assert_eq!(cursor_sprites(&drawn(&view)), [(0, other)]);
-    assert_eq!(view.cursor_at(), Some(other));
-}
-
-#[test]
 fn the_cursor_is_hidden_once_the_pointer_leaves_the_window() {
     let mut view = super::faked_flight::at_rest(catalog());
     view.cursor_input(&Input::PointerMoved(NOWHERE));
@@ -547,115 +453,8 @@ fn the_cursor_is_not_drawn_while_the_map_is_open() {
     assert_eq!(cursor_sprites(&super::faked_world::world_list(&view)), []);
 }
 
-#[test]
-fn flight_hides_the_system_pointer_unless_the_map_is_open_or_it_has_no_cursor() {
-    let mut view = flight();
-    assert!(view.hides_pointer());
-    view.input(&key(MAP_KEY, true));
-    assert!(!view.hides_pointer(), "the map");
-    let no_cursor = FakeCatalog {
-        cursor_sheet: Err("no spïn 650".to_owned()),
-        ..catalog()
-    };
-    assert!(!test_flight::new(no_cursor).hides_pointer());
-    let failed = FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    };
-    assert!(!test_flight::new(failed).hides_pointer());
-}
-
 // Keys held across a jump's end, an Option release or a repair
 // (`_HandlePlayer`'s latches 0xdee04, 0xdee48 and 0xdee44).
-
-/// A flight on to Barnard's Star ([`FakeCatalog::onward`]) with a
-/// course plotted to `to` and flown out, 300 ms into the jump's
-/// streak, its sounds let go. The planner plots it, as Barnard's Star
-/// is unknown past the unexplored Alpha Centauri.
-fn streaking_to(to: i16) -> View {
-    let mut view = planner(FakeCatalog {
-        onward: true,
-        ..catalog()
-    });
-    plot(&mut view, to);
-    fly_out(&mut view);
-    jump_now(&mut view);
-    view.tick(ms(300));
-    assert!(view.jump_effect().is_some());
-    view.take_sounds();
-    view
-}
-
-/// Ticks `view` through its arrival tick, asserting that no `sound`
-/// was raised before or on it, then once more, giving how many times
-/// that tick raised `sound`; then once more again, asserting it is not
-/// raised a second time.
-fn after_arrival(view: &mut View, sound: SimSound) -> (NavMode, usize, NavMode) {
-    tick_to_arrival(view);
-    assert_eq!(count(view, sound), 0, "not through the jump nor on arrival");
-    let arrived = nav_mode(view);
-    view.tick(TICK);
-    let acted = count(view, sound);
-    let after = nav_mode(view);
-    view.tick(TICK);
-    assert_eq!(count(view, sound), 0, "once only");
-    assert_eq!(nav_mode(view), after, "nothing more");
-    (arrived, acted, after)
-}
-
-#[test]
-fn h_pressed_before_j_and_held_through_the_jump_acts_the_tick_after_arrival() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    jump_now(&mut view);
-    view.take_sounds();
-    let (arrived, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
-    assert_eq!(arrived, NavMode::Off, "the course flown");
-    assert_eq!(acted, 1);
-    assert_eq!(after, NavMode::Hyperspace(None));
-    assert_eq!(floating_alpha(&view), Some(255), "the map up");
-}
-
-#[test]
-fn h_held_through_a_jump_that_cues_the_next_hop_only_beeps() {
-    let mut view = streaking_to(132);
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    let (arrived, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
-    assert_eq!(arrived, NavMode::Hyperspace(Some(SystemId(132))));
-    assert_eq!((acted, after), (1, arrived), "the selection kept");
-}
-
-#[test]
-fn h_first_pressed_during_the_jump_and_held_acts_after_arrival() {
-    for mut view in through_a_jump(flight) {
-        let stage = stage(&view);
-        view.input(&key(HYPERSPACE_MODE_KEY, true));
-        view.take_sounds();
-        let (_, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
-        assert_eq!((acted, after), (1, NavMode::Hyperspace(None)), "{stage}");
-    }
-}
-
-#[test]
-fn h_pressed_during_the_jump_and_let_go_before_arrival_does_nothing_after() {
-    let mut view = streaking_to(131);
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    view.tick(TICK);
-    view.input(&key(HYPERSPACE_MODE_KEY, false));
-    let (_, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
-    assert_eq!((acted, after), (0, NavMode::Off));
-}
-
-#[test]
-fn nav_off_held_through_the_jump_turns_the_nav_off_after_arrival() {
-    let mut view = streaking_to(132);
-    view.input(&key(NAV_OFF_KEY, true));
-    let (arrived, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
-    assert_eq!(arrived, NavMode::Hyperspace(Some(SystemId(132))));
-    assert_eq!((acted, after), (1, NavMode::Off));
-}
 
 #[test]
 fn option_backquote_turns_into_nav_off_when_option_is_let_go() {
@@ -736,16 +535,6 @@ fn each_fresh_press_of_h_or_nav_off_acts_with_no_tick_between() {
 }
 
 #[test]
-fn h_and_nav_off_held_through_the_jump_act_once_together_after_arrival() {
-    let mut view = streaking_to(131);
-    view.input(&key(HYPERSPACE_MODE_KEY, true));
-    view.input(&key(NAV_OFF_KEY, true));
-    let (arrived, acted, after) = after_arrival(&mut view, SimSound::NavSelected);
-    assert_eq!(arrived, NavMode::Off);
-    assert_eq!((acted, after), (1, NavMode::Hyperspace(None)));
-}
-
-#[test]
 fn option_backquote_held_lets_go_of_a_target_picked_the_next_tick() {
     // Whether a target is let go is nova-sim's
     // (`option_backquote_lets_go_of_the_target`).
@@ -795,72 +584,6 @@ fn option_backquote_held_blocks_h_but_not_its_map_nor_with_h_held_its_target() {
     assert_eq!(sent(&view).len(), picked, "the latch held by H");
 }
 
-/// The system Hyper Select picks first from Alpha Centauri (131), the
-/// first of its links.
-fn first_link_of_131() -> NavMode {
-    let mut view = flight();
-    run_set(&mut view, "M131");
-    view.settle_script();
-    tap(&mut view, HYPER_SELECT_KEY);
-    nav_mode(&view)
-}
-
-#[test]
-fn backslash_first_pressed_during_the_jump_and_held_acts_after_arrival() {
-    let first = first_link_of_131();
-    assert!(matches!(first, NavMode::Hyperspace(Some(_))));
-    for mut view in through_a_jump(flight) {
-        let stage = stage(&view);
-        view.input(&key(HYPER_SELECT_KEY, true));
-        view.take_sounds();
-        let (_, acted, after) = after_arrival(&mut view, SimSound::HyperSelected);
-        assert_eq!((acted, after), (1, first), "{stage}");
-        assert_eq!(floating_alpha(&view), Some(255), "{stage}: the map up");
-    }
-}
-
-#[test]
-fn backslash_pressed_before_j_and_held_through_does_nothing_after() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    view.input(&key(HYPER_SELECT_KEY, true));
-    assert_eq!(count(&mut view, SimSound::HyperSelected), 1);
-    jump_now(&mut view);
-    view.take_sounds();
-    let (arrived, acted, after) = after_arrival(&mut view, SimSound::HyperSelected);
-    assert_eq!((acted, after), (0, arrived));
-}
-
-#[test]
-fn backslash_let_go_and_pressed_again_during_the_jump_acts_after_arrival() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    view.input(&key(HYPER_SELECT_KEY, true));
-    jump_now(&mut view);
-    view.input(&key(HYPER_SELECT_KEY, false));
-    view.tick(TICK);
-    view.input(&key(HYPER_SELECT_KEY, true));
-    view.take_sounds();
-    let (_, acted, after) = after_arrival(&mut view, SimSound::HyperSelected);
-    assert_eq!(acted, 1);
-    assert!(matches!(after, NavMode::Hyperspace(Some(_))));
-}
-
-/// The cursor's alpha two ticks after `k` is pressed and held in `view`.
-fn cursor_alpha_holding(mut view: View, k: Key) -> Option<u8> {
-    view.input(&Input::PointerMoved(NOWHERE));
-    view.input(&key(k, true));
-    ticks(&mut view, 2);
-    drawn(&view)
-        .iter()
-        .find_map(|command| match *unclipped(command) {
-            DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
-            _ => None,
-        })
-}
-
 #[test]
 fn a_slot_key_held_fades_the_cursor_while_the_slot_block_polls_it() {
     let pressed_only = faked_alpha_holding(Key::Char('q'));
@@ -887,21 +610,6 @@ fn a_slot_key_held_fades_the_cursor_while_the_slot_block_polls_it() {
         pressed_only,
         "the menu's 2: its loop sets no fade"
     );
-}
-
-#[test]
-fn a_slot_key_held_during_a_jump_fades_the_cursor_only_by_its_press() {
-    for (view, other) in through_a_jump(flight)
-        .into_iter()
-        .zip(through_a_jump(flight))
-    {
-        let stage = stage(&view);
-        assert_eq!(
-            cursor_alpha_holding(*view, STELLAR_SLOT_KEYS[1][1]),
-            cursor_alpha_holding(*other, Key::Char('q')),
-            "{stage}"
-        );
-    }
 }
 
 /// Whether `view`'s world draws the double-time icon, `cïcn` 20000 at the

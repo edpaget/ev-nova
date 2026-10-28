@@ -720,3 +720,310 @@ fn the_stellars_go_on_animating_while_the_jump_plays() {
     assert_eq!(moon(&view), (before + 3) % 4);
     assert!(view.jump_effect().is_some());
 }
+
+// Double time and the pointer.
+
+/// Whether the last step was given the double-time key on.
+fn double_time_stepped(view: &Faked) -> bool {
+    view.sim.inputs().last().expect("a step").double_time_key
+}
+
+#[test]
+fn double_time_reaches_the_session_on_the_next_tick_and_when_set() {
+    let mut view = in_flight();
+    view.set_double_time(true);
+    assert_eq!(sent_count(&view), 1, "the setting sent when set");
+    assert_eq!(view.sim.applied(), [FlightCommand::SetDoubleTimeKey(true)]);
+    view.tick(TICK);
+    assert!(double_time_stepped(&view), "and on each tick's steps");
+}
+
+#[test]
+fn double_time_survives_the_events_that_let_go_of_the_flight_keys() {
+    let mut view = in_flight().with_double_time(true);
+    tap(&mut view, MAP);
+    tap(&mut view, MAP);
+    view.tick(TICK);
+    assert!(double_time_stepped(&view), "the map");
+    jump_now(&mut view);
+    warp_ends(&mut view);
+    view.tick(TICK);
+    view.tick(TICK);
+    assert!(double_time_stepped(&view), "a jump");
+    view.sim
+        .queue_answer(Answer::Hailed(nova_sim::Hailed::Stellar(StellarId(140))));
+    tap(&mut view, HAIL_KEY);
+    view.tick(TICK);
+    assert!(double_time_stepped(&view), "a hail");
+    assert!(view.double_time());
+}
+
+#[test]
+fn cancelling_the_pointer_forgets_the_cursor_until_the_next_move() {
+    use super::controls::{NOWHERE, cursor_sprites};
+    let mut view = in_flight();
+    view.input(&Input::PointerMoved(NOWHERE));
+    assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+    assert_eq!(view.cursor_at(), Some(NOWHERE));
+    view.cancel_pointer();
+    assert_eq!(cursor_sprites(&drawn(&view)), [], "not at the old point");
+    assert_eq!(view.cursor_at(), None);
+    let other = Point::new(60.0, 420.0);
+    view.input(&Input::PointerMoved(other));
+    assert_eq!(cursor_sprites(&drawn(&view)), [(0, other)]);
+    assert_eq!(view.cursor_at(), Some(other));
+}
+
+#[test]
+fn flight_hides_the_system_pointer_unless_the_map_is_open_or_it_has_no_cursor() {
+    let mut view = in_flight();
+    assert!(view.hides_pointer());
+    view.input(&key(MAP_KEY, true));
+    assert!(!view.hides_pointer(), "the map");
+    let no_cursor = FakeCatalog {
+        cursor_sheet: Err("no spïn 650".to_owned()),
+        ..catalog()
+    };
+    assert!(!world(no_cursor, sol()).hides_pointer());
+    let mut fake = FakeFlight::new();
+    fake.fail("no chär to start from");
+    let failed = FlightView::over(
+        Rc::new(catalog()),
+        fake,
+        &Rulebook::default(),
+        SharedChance::default(),
+    );
+    assert!(!failed.hides_pointer(), "a flight that never started");
+}
+
+#[test]
+fn a_click_on_a_ship_targets_it_during_a_jump() {
+    let mut view = braking();
+    let from = sent_count(&view);
+    let over = Point::new(300.0, 200.0);
+    for pressed in [true, false] {
+        view.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: over,
+        });
+    }
+    assert!(
+        matches!(
+            sent_since(&view, from).as_slice(),
+            [FlightCommand::ClickInSpace { .. }]
+        ),
+        "the click reaches the flight, which targets the ship under it: {:?}",
+        sent_since(&view, from)
+    );
+}
+
+#[test]
+fn a_slot_key_held_during_a_jump_fades_the_cursor_only_by_its_press() {
+    use super::controls::NOWHERE;
+    /// The cursor's alpha two ticks after `k` is pressed and held.
+    fn alpha_holding(mut view: Faked, k: Key) -> Option<u8> {
+        view.input(&Input::PointerMoved(NOWHERE));
+        view.input(&key(k, true));
+        view.tick(TICK);
+        view.tick(TICK);
+        drawn(&view)
+            .iter()
+            .find_map(|command| match *unclipped(command) {
+                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+                _ => None,
+            })
+    }
+    for (view, other) in faked_through_a_jump()
+        .into_iter()
+        .zip(faked_through_a_jump())
+    {
+        let stage = faked_stage(&view);
+        assert_eq!(
+            alpha_holding(*view, STELLAR_SLOT_KEYS[1][1]),
+            alpha_holding(*other, Key::Char('q')),
+            "{stage}"
+        );
+    }
+}
+
+// The nav keys held across the arrival.
+
+/// The nav blocks `view` sent since `from` of its commands.
+fn nav_blocks_since(view: &Faked, from: usize) -> Vec<FlightCommand> {
+    sent_since(view, from)
+        .into_iter()
+        .filter(|command| {
+            matches!(
+                command,
+                FlightCommand::NavModeKeys { .. } | FlightCommand::SelectNextSystem
+            )
+        })
+        .collect()
+}
+
+/// Ticks `view` through its warp's end, asserting that no nav block was
+/// sent before or on the arrival's tick, then once more, giving what that
+/// tick sent; then once more again, asserting it sends nothing more.
+fn faked_after_arrival(view: &mut Faked) -> Vec<FlightCommand> {
+    faked_after_arrival_answering(view, |_| {})
+}
+
+/// [`faked_after_arrival`], `answer` queuing the flight's answers to the
+/// commands after the arrival's.
+fn faked_after_arrival_answering(
+    view: &mut Faked,
+    answer: impl FnOnce(&mut Faked),
+) -> Vec<FlightCommand> {
+    let from = sent_count(view);
+    view.tick(TICK);
+    warp_ends(view);
+    answer(view);
+    view.tick(TICK);
+    assert_eq!(
+        nav_blocks_since(view, from),
+        [],
+        "not through the jump nor on arrival"
+    );
+    let acted_from = sent_count(view);
+    view.tick(TICK);
+    let acted = nav_blocks_since(view, acted_from);
+    let again = sent_count(view);
+    view.tick(TICK);
+    assert_eq!(nav_blocks_since(view, again), [], "once only");
+    acted
+}
+
+const H: FlightCommand = FlightCommand::NavModeKeys {
+    nav_off: false,
+    h: true,
+};
+
+#[test]
+fn h_pressed_before_j_and_held_through_the_jump_acts_the_tick_after_arrival() {
+    let mut view = in_flight();
+    view.input(&key(HYPERSPACE_MODE_KEY, true));
+    view.tick(TICK);
+    assert_eq!(nav_blocks_since(&view, 0), [H], "before the jump");
+    jump_now(&mut view);
+    assert_eq!(faked_after_arrival(&mut view), [H]);
+}
+
+#[test]
+fn h_held_through_a_jump_that_cues_the_next_hop_only_beeps() {
+    // What the block does after the arrival, the cue kept and its beep,
+    // is the session's; the view sends it once, the tick after.
+    let mut view = streaking();
+    view.input(&key(HYPERSPACE_MODE_KEY, true));
+    assert_eq!(faked_after_arrival(&mut view), [H]);
+}
+
+#[test]
+fn h_first_pressed_during_the_jump_and_held_acts_after_arrival() {
+    for mut view in faked_through_a_jump() {
+        let stage = faked_stage(&view);
+        if stage == "braking" {
+            // The jump itself begins under the key held.
+            view.input(&key(HYPERSPACE_MODE_KEY, true));
+            lit(&mut view, 0.0);
+        } else {
+            view.input(&key(HYPERSPACE_MODE_KEY, true));
+        }
+        assert_eq!(faked_after_arrival(&mut view), [H], "{stage}");
+    }
+}
+
+#[test]
+fn h_pressed_during_the_jump_and_let_go_before_arrival_does_nothing_after() {
+    let mut view = streaking();
+    view.input(&key(HYPERSPACE_MODE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(HYPERSPACE_MODE_KEY, false));
+    assert_eq!(faked_after_arrival(&mut view), []);
+}
+
+#[test]
+fn nav_off_held_through_the_jump_turns_the_nav_off_after_arrival() {
+    let mut view = streaking();
+    view.input(&key(NAV_OFF_KEY, true));
+    assert_eq!(
+        faked_after_arrival(&mut view),
+        [FlightCommand::NavModeKeys {
+            nav_off: true,
+            h: false
+        }]
+    );
+}
+
+#[test]
+fn h_and_nav_off_held_through_the_jump_act_once_together_after_arrival() {
+    let mut view = streaking();
+    view.input(&key(HYPERSPACE_MODE_KEY, true));
+    view.input(&key(NAV_OFF_KEY, true));
+    assert_eq!(
+        faked_after_arrival(&mut view),
+        [FlightCommand::NavModeKeys {
+            nav_off: true,
+            h: true
+        }]
+    );
+}
+
+/// Answers `view`'s next command, Hyper Select's, with Alpha Centauri's
+/// first link selected in mode 3, which shows the floating map while `\`
+/// is held.
+fn hyper_selects(view: &mut Faked) {
+    view.sim.queue_answer_showing(
+        Answer::System(Some(SystemId(130))),
+        FlightFrame {
+            nav_mode: NavMode::Hyperspace(Some(SystemId(130))),
+            ..in_alpha()
+        },
+    );
+}
+
+#[test]
+fn backslash_first_pressed_during_the_jump_and_held_acts_after_arrival() {
+    for mut view in faked_through_a_jump() {
+        let stage = faked_stage(&view);
+        view.input(&key(HYPER_SELECT_KEY, true));
+        if stage == "braking" {
+            lit(&mut view, 0.0);
+        }
+        assert_eq!(
+            faked_after_arrival_answering(&mut view, hyper_selects),
+            [FlightCommand::SelectNextSystem],
+            "{stage}"
+        );
+        assert_eq!(floating_alpha(&view), Some(255), "{stage}: the map up");
+    }
+}
+
+#[test]
+fn backslash_pressed_before_j_and_held_through_does_nothing_after() {
+    let mut view = in_flight();
+    view.input(&key(HYPER_SELECT_KEY, true));
+    view.tick(TICK);
+    assert_eq!(
+        nav_blocks_since(&view, 0),
+        [FlightCommand::SelectNextSystem],
+        "before the jump"
+    );
+    jump_now(&mut view);
+    assert_eq!(faked_after_arrival(&mut view), [], "latched through it");
+}
+
+#[test]
+fn backslash_let_go_and_pressed_again_during_the_jump_acts_after_arrival() {
+    let mut view = in_flight();
+    view.input(&key(HYPER_SELECT_KEY, true));
+    view.tick(TICK);
+    jump_now(&mut view);
+    view.input(&key(HYPER_SELECT_KEY, false));
+    view.tick(TICK);
+    view.input(&key(HYPER_SELECT_KEY, true));
+    assert_eq!(
+        faked_after_arrival_answering(&mut view, hyper_selects),
+        [FlightCommand::SelectNextSystem]
+    );
+}
