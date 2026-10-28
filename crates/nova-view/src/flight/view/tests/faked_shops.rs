@@ -12,7 +12,7 @@ use super::faked_travel::{faked_lasts, sent_but_lines};
 use super::*;
 use crate::flight::radar::RadarScene;
 use crate::flight::target::TargetPanel;
-use nova_sim::flight_frame::FlightEvent;
+use nova_sim::flight_frame::{FlightEvent, PortShops};
 use nova_sim::navigation::NavMode;
 use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::status_cargo::CommodityRow;
@@ -89,12 +89,63 @@ pub(super) fn leaves(view: &Faked, change: impl FnOnce(&mut FlightFrame)) -> Fli
 
 // The exchange.
 
+/// A shipyard listing nothing, of the player flying ship 128.
+fn empty_shipyard() -> nova_sim::Shipyard {
+    nova_sim::Shipyard {
+        rows: Vec::new(),
+        trade_in: 5000,
+        cash: 1000,
+        current: ShipId(128),
+        rules: Rulebook::default(),
+    }
+}
+
 #[test]
-fn the_exchange_is_the_flights() {
+fn the_shops_are_the_flights_asked_once_and_not_each_frame() {
     let mut view = docked();
-    assert_eq!(view.market(), None);
-    view.sim.port_mut().market = Some(nova_sim::Market::default());
-    assert_eq!(view.market(), Some(nova_sim::Market::default()));
+    let shops = PortShops {
+        market: Some(nova_sim::Market::default()),
+        outfitter: Some(nova_sim::Outfitter::default()),
+        shipyard: Some(empty_shipyard()),
+        can_hire_escorts: true,
+    };
+    view.sim
+        .queue_screen(ScreenAnswer::Shops(Box::new(shops.clone())));
+    let fills = view.sim.fills();
+    assert_eq!(view.shops(), shops);
+    assert_eq!(view.sim.screens_asked(), [ScreenAsk::Shops], "asked once");
+    assert_eq!(view.sim.fills(), fills, "a screen's ask: no refill");
+    for _ in 0..5 {
+        view.tick(TICK);
+    }
+    assert_eq!(
+        view.sim.screens_asked(),
+        [ScreenAsk::Shops],
+        "not each frame"
+    );
+}
+
+#[test]
+fn with_nothing_answered_each_shop_shows_the_empty_screen() {
+    let mut view = docked();
+    assert_eq!(view.shops(), PortShops::default(), "no shops, no room");
+    assert_eq!(view.outfitter(), None);
+    assert_eq!(view.escorts_for_hire(), None);
+    assert_eq!(view.ship_naming(ShipId(129)), Err(ShipRefusal::NoShipyard));
+    assert_eq!(view.news(), None);
+    assert!(!view.recharge_enabled(), "the default frame's");
+    assert!(!view.seen_intro(), "the default frame's");
+    assert_eq!(
+        view.sim.screens_asked(),
+        [
+            ScreenAsk::Shops,
+            ScreenAsk::Outfitter,
+            ScreenAsk::HireList,
+            ScreenAsk::ShipNaming(ShipId(129)),
+            ScreenAsk::News,
+        ],
+        "each asked, the router's facts read off the frame"
+    );
 }
 
 #[test]
@@ -157,11 +208,12 @@ fn a_recharge_sends_its_command_and_hands_back_the_flights_answer() {
 }
 
 #[test]
-fn recharge_is_enabled_as_the_flight_says() {
+fn recharge_is_enabled_as_the_kept_frame_says() {
     let mut view = docked();
     assert!(!view.recharge_enabled());
-    view.sim.port_mut().recharge_enabled = true;
+    view.change_sim(|sim| sim.frame_mut().recharge_enabled = true);
     assert!(view.recharge_enabled());
+    assert_eq!(view.sim.screens_asked(), [], "a frame's fact, never asked");
 }
 
 #[test]
@@ -351,30 +403,34 @@ const ORDERS: [(&str, Ordered); 3] = [
 ];
 
 #[test]
-fn the_outfitter_and_the_shipyard_are_the_flights() {
+fn the_outfitter_alone_and_a_ships_naming_are_the_flights() {
     let mut view = docked();
-    assert_eq!(view.outfitter(), None);
-    assert_eq!(view.shipyard(), None);
-    assert_eq!(view.ship_naming(ShipId(129)), Err(ShipRefusal::NoShipyard));
     let naming = ShipNaming {
         ship: ShipId(129),
         prompt: "Name her.".to_owned(),
         default: "Kestrel 123".to_owned(),
     };
-    let shipyard = nova_sim::Shipyard {
-        rows: Vec::new(),
-        trade_in: 5000,
-        cash: 1000,
-        current: ShipId(128),
-        rules: Rulebook::default(),
-    };
-    let port = view.sim.port_mut();
-    port.outfitter = Some(nova_sim::Outfitter::default());
-    port.shipyard = Some(shipyard.clone());
-    port.ship_naming = Some(Ok(naming.clone()));
+    view.sim
+        .queue_screen(ScreenAnswer::Outfitter(Box::default()));
+    view.sim
+        .queue_screen(ScreenAnswer::ShipNaming(Ok(naming.clone())));
+    view.sim
+        .queue_screen(ScreenAnswer::ShipNaming(Err(ShipRefusal::AlreadyFlown)));
     assert_eq!(view.outfitter(), Some(nova_sim::Outfitter::default()));
-    assert_eq!(view.shipyard(), Some(shipyard));
     assert_eq!(view.ship_naming(ShipId(129)), Ok(naming));
+    assert_eq!(
+        view.ship_naming(ShipId(128)),
+        Err(ShipRefusal::AlreadyFlown),
+        "the flight's refusal"
+    );
+    assert_eq!(
+        view.sim.screens_asked(),
+        [
+            ScreenAsk::Outfitter,
+            ScreenAsk::ShipNaming(ShipId(129)),
+            ScreenAsk::ShipNaming(ShipId(128)),
+        ]
+    );
 }
 
 #[test]
@@ -1008,12 +1064,12 @@ fn opening_the_bar_sends_its_command_and_says_whether_it_opened() {
 #[test]
 fn the_bars_news_its_picture_and_its_hire_list_are_the_flights() {
     let mut view = docked();
-    assert_eq!(view.news(), None);
-    assert_eq!(view.news_picture(), None);
-    assert_eq!(view.escorts_for_hire(), None);
-    let news = nova_sim::News {
-        commercial: "C2".to_owned(),
-        story: "G2".to_owned(),
+    let news = nova_sim::flight_frame::BarNews {
+        news: nova_sim::News {
+            commercial: "C2".to_owned(),
+            story: "G2".to_owned(),
+        },
+        picture: 9000,
     };
     let list = nova_sim::HireList {
         rows: Vec::new(),
@@ -1021,13 +1077,15 @@ fn the_bars_news_its_picture_and_its_hire_list_are_the_flights() {
         room: true,
         rules: Rulebook::default(),
     };
-    let port = view.sim.port_mut();
-    port.news = Some(news.clone());
-    port.news_picture = Some(9000);
-    port.hire_list = Some(list.clone());
-    assert_eq!(view.news(), Some(&news));
-    assert_eq!(view.news_picture(), Some(9000));
+    view.sim.queue_screen(ScreenAnswer::News(news.clone()));
+    view.sim
+        .queue_screen(ScreenAnswer::HireList(Box::new(list.clone())));
+    assert_eq!(view.news(), Some(news));
     assert_eq!(view.escorts_for_hire(), Some(list));
+    assert_eq!(
+        view.sim.screens_asked(),
+        [ScreenAsk::News, ScreenAsk::HireList]
+    );
 }
 
 #[test]
@@ -1273,10 +1331,10 @@ fn use_as_my_ship_draws_the_captured_ship_where_it_is_reading_its_sheet_once() {
 // The intro.
 
 #[test]
-fn the_intro_seen_is_the_flights_and_its_mark_is_sent() {
+fn the_intro_seen_is_the_kept_frames_and_its_mark_is_sent() {
     let mut view = faked(in_sol());
     assert!(!view.seen_intro());
-    view.sim.port_mut().seen_intro = true;
+    view.change_sim(|sim| sim.frame_mut().seen_intro = true);
     assert!(view.seen_intro());
     view.mark_intro_seen();
     assert_eq!(sent(&view), [FlightCommand::MarkIntroSeen]);

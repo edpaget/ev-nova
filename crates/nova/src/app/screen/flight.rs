@@ -48,13 +48,20 @@ impl AppScreen {
         };
         let mut spaceport =
             SpaceportView::new(self.data.as_ref(), stellar, template(SPACEPORT_DIALOG));
-        if let Some(market) = self.flight.as_ref().and_then(FlightView::market) {
+        // The exchange, the outfitter, the shipyard and the room to hire,
+        // read together as the spaceport opens.
+        let shops = self
+            .flight
+            .as_mut()
+            .map(FlightView::shops)
+            .unwrap_or_default();
+        if let Some(market) = shops.market {
             let trade = template(TRADE_DIALOG).map(|(template, _)| template);
             let quantity = template(QUANTITY_DIALOG).map(|(template, _)| template);
             let colors = self.data.list_colors();
             spaceport = spaceport.with_trade(trade, quantity, market, colors);
         }
-        if let Some(outfitter) = self.flight.as_mut().and_then(FlightView::outfitter) {
+        if let Some(outfitter) = shops.outfitter {
             let outfit = template(OUTFIT_DIALOG).map(|(template, _)| template);
             let quantity = template(QUANTITY_DIALOG).map(|(template, _)| template);
             let art: Rc<dyn OutfitterCatalog> = Rc::clone(&self.data) as Rc<dyn OutfitterCatalog>;
@@ -66,7 +73,7 @@ impl AppScreen {
             plain: template_of(SHIP_INFO_DIALOG),
             picture: template_of(SHIP_PICTURE_INFO_DIALOG),
         };
-        if let Some(shipyard) = self.flight.as_mut().and_then(FlightView::shipyard) {
+        if let Some(shipyard) = shops.shipyard {
             let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
             spaceport = spaceport.with_shipyard(
                 template_of(SHIPYARD_DIALOG),
@@ -76,10 +83,10 @@ impl AppScreen {
                 art,
             );
         }
-        if let Some(flight) = self
+        if self
             .flight
             .as_ref()
-            .filter(|flight| flight.failure().is_none())
+            .is_some_and(|flight| flight.failure().is_none())
         {
             let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
             spaceport = spaceport
@@ -93,7 +100,7 @@ impl AppScreen {
                     info_templates(),
                     art,
                     // `_CanHireEscorts`, as the hire itself reads it.
-                    flight.can_hire_escorts(),
+                    shops.can_hire_escorts,
                 )
                 .with_missions(
                     template_of(COMPUTER_DIALOG),

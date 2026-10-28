@@ -1543,12 +1543,12 @@ fn docked_view() -> FlightView<Rc<GameData>> {
     view
 }
 
-/// `PortSource`: a trade through the port changes the market the view
-/// shows to the session's.
+/// The shops' screen ask: a trade through the port changes the market the
+/// view shows to the session's.
 #[test]
 fn a_real_trade_changes_the_market_shown() {
     let mut view = docked_view();
-    let before = view.market().expect("an exchange");
+    let before = view.shops().market.expect("an exchange");
     let food = before
         .rows
         .iter()
@@ -1561,7 +1561,7 @@ fn a_real_trade_changes_the_market_shown() {
         lot: Lot::Click,
     };
     assert_eq!(view.trade(order), Ok(10), "the hold filled");
-    let after = view.market().expect("still an exchange");
+    let after = view.shops().market.expect("still an exchange");
     assert_ne!(after, before, "the hold traded shows");
     assert_eq!(
         Some(after),

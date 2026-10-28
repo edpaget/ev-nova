@@ -126,18 +126,20 @@ pub(super) fn refresh_status_bar(
 }
 
 /// Shows `spaceport` the exchange, outfitter and shipyard as `flight`
-/// now has them.
+/// now has them, asked together ([`FlightView::shops`]); the room to hire
+/// the bar was told as it opened stays as it is.
 pub(super) fn refresh_spaceport(
     spaceport: &mut SpaceportView,
     flight: &mut FlightView<Rc<GameData>>,
 ) {
-    if let Some(market) = flight.market() {
+    let shops = flight.shops();
+    if let Some(market) = shops.market {
         spaceport.set_market(market);
     }
-    if let Some(outfitter) = flight.outfitter() {
+    if let Some(outfitter) = shops.outfitter {
         spaceport.set_outfitter(outfitter);
     }
-    if let Some(shipyard) = flight.shipyard() {
+    if let Some(shipyard) = shops.shipyard {
         spaceport.set_shipyard(shipyard);
     }
 }

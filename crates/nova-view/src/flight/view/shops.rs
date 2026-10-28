@@ -4,15 +4,18 @@
 //! Each sends its command
 //! ([`FlightCommand`]) and hands back the flight's answer, a flight that
 //! refuses it (one that never started) answering as today's failed
-//! session did; what a screen shows is read through
-//! [`PortSource`](crate::flight::sim_port::PortSource). The bar's
-//! redraws around each command stay the view's.
+//! session did. What a screen shows is the flight's answer to its screen
+//! ask ([`ScreenAsk`]), and a flight with nothing to answer
+//! ([`ScreenAnswer::Nothing`]) shows the empty screen: no shops, no
+//! outfitter, no hire list, no shipyard to name a ship in, no news. The
+//! router's facts, Recharge and the intro seen, are the kept frame's.
+//! The bar's redraws around each command stay the view's.
 
-use nova_sim::flight_frame::{Answer, FlightCommand};
+use nova_sim::flight_frame::{Answer, BarNews, FlightCommand, PortShops, ScreenAnswer, ScreenAsk};
 use nova_sim::{
-    Assigned, Assignment, HireList, HireRefusal, Hired, Market, News, Order, OutfitOrder,
-    OutfitRefusal, OutfitRun, Outfitter, RechargeRefusal, ShipId, ShipNaming, ShipPurchase,
-    ShipRefusal, Shipyard, TradeRefusal,
+    Assigned, Assignment, HireList, HireRefusal, Hired, Order, OutfitOrder, OutfitRefusal,
+    OutfitRun, Outfitter, RechargeRefusal, ShipId, ShipNaming, ShipPurchase, ShipRefusal,
+    TradeRefusal,
 };
 
 use crate::Key;
@@ -23,12 +26,16 @@ use crate::system::catalog::SystemCatalog;
 use super::{FlightView, Then, assigned_message, assigned_ticks, no_outfitter};
 
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// The exchange of the stellar landed on
-    /// ([`PortSource::market`](crate::flight::sim_port::PortSource::market)):
-    /// none for a flight that never started.
-    #[must_use]
-    pub fn market(&self) -> Option<Market> {
-        self.sim.market()
+    /// The spaceport's shops, the day's rolls not drawn yet drawn on the
+    /// flight's chance ([`ScreenAsk::Shops`]): the exchange, the
+    /// outfitter, the shipyard and the room to hire, asked as the
+    /// spaceport opens and at each refresh. None of them, and no room to
+    /// hire, for a flight with nothing to answer.
+    pub fn shops(&mut self) -> PortShops {
+        match self.sim.screen(ScreenAsk::Shops) {
+            ScreenAnswer::Shops(shops) => *shops,
+            _ => PortShops::default(),
+        }
     }
 
     /// Trades `order` in the exchange ([`FlightCommand::Trade`],
@@ -78,20 +85,24 @@ impl<C, S: FlightSim> FlightView<C, S> {
         Ok(paid)
     }
 
-    /// Whether the spaceport's Recharge button is enabled
-    /// ([`PortSource::recharge_enabled`](crate::flight::sim_port::PortSource::recharge_enabled)):
+    /// Whether the spaceport's Recharge button is enabled, as the kept
+    /// frame says
+    /// ([`FlightFrame::recharge_enabled`](nova_sim::flight_frame::FlightFrame::recharge_enabled)):
     /// false for a flight that never started.
     #[must_use]
     pub fn recharge_enabled(&self) -> bool {
-        self.sim.recharge_enabled()
+        self.frame.recharge_enabled
     }
 
-    /// The outfitter of the stellar landed on, the day's rolls drawn on
-    /// the flight's chance
-    /// ([`PortSource::outfitter`](crate::flight::sim_port::PortSource::outfitter)):
-    /// none for a flight that never started.
+    /// The outfitter of the stellar landed on alone, the day's rolls
+    /// drawn on the flight's chance ([`ScreenAsk::Outfitter`]), asked as
+    /// its dialog opens: none where there is none, or for a flight that
+    /// never started.
     pub fn outfitter(&mut self) -> Option<Outfitter> {
-        self.sim.outfitter()
+        match self.sim.screen(ScreenAsk::Outfitter) {
+            ScreenAnswer::Outfitter(outfitter) => Some(*outfitter),
+            _ => None,
+        }
     }
 
     /// The outfitter opens ([`FlightCommand::OpenOutfitter`],
@@ -106,24 +117,20 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.send(FlightCommand::CloseOutfitter);
     }
 
-    /// The shipyard of the stellar landed on, the day's rolls drawn on the
-    /// flight's chance
-    /// ([`PortSource::shipyard`](crate::flight::sim_port::PortSource::shipyard)):
-    /// none for a flight that never started.
-    pub fn shipyard(&mut self) -> Option<Shipyard> {
-        self.sim.shipyard()
-    }
-
     /// The prompt for naming a ship of class `ship` before it is bought,
-    /// its words read from the flight's catalog, on the flight's chance
-    /// ([`PortSource::ship_naming`](crate::flight::sim_port::PortSource::ship_naming)).
+    /// its words read from the flight's catalog, its default name drawn
+    /// afresh on the flight's chance ([`ScreenAsk::ShipNaming`]), asked
+    /// once as its prompt opens.
     ///
     /// # Errors
     ///
-    /// The [`ShipRefusal`] that applies; a flight that never started has
-    /// no shipyard.
+    /// The [`ShipRefusal`] that applies; a flight with nothing to answer
+    /// has no shipyard ([`ShipRefusal::NoShipyard`]).
     pub fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
-        self.sim.ship_naming(ship)
+        match self.sim.screen(ScreenAsk::ShipNaming(ship)) {
+            ScreenAnswer::ShipNaming(naming) => naming,
+            _ => Err(ShipRefusal::NoShipyard),
+        }
     }
 
     /// Declines to buy a ship of class `ship` ([`FlightCommand::DeclineShip`],
@@ -141,28 +148,25 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.send(FlightCommand::OpenBar) == Answer::Done
     }
 
-    /// The news of the bar visit under way
-    /// ([`PortSource::news`](crate::flight::sim_port::PortSource::news)):
-    /// none for a flight that never started.
-    #[must_use]
-    pub fn news(&self) -> Option<&News> {
-        self.sim.news()
-    }
-
-    /// The picture the bar's news is drawn over
-    /// ([`PortSource::news_picture`](crate::flight::sim_port::PortSource::news_picture)):
-    /// none for a flight that never started.
-    #[must_use]
-    pub fn news_picture(&self) -> Option<i16> {
-        self.sim.news_picture()
+    /// The news of the bar visit under way, as drawn, and the picture it
+    /// is drawn over ([`ScreenAsk::News`]), asked as News is pressed: none
+    /// with no bar visit under way, or for a flight that never started.
+    pub fn news(&mut self) -> Option<BarNews> {
+        match self.sim.screen(ScreenAsk::News) {
+            ScreenAnswer::News(news) => Some(news),
+            _ => None,
+        }
     }
 
     /// The ships for hire in the bar of the stellar landed on, the day's
-    /// rolls drawn on the flight's chance
-    /// ([`PortSource::escorts_for_hire`](crate::flight::sim_port::PortSource::escorts_for_hire)):
-    /// none for a flight that never started.
+    /// rolls drawn on the flight's chance ([`ScreenAsk::HireList`]), asked
+    /// as Hire Escort opens and after each hire: none where there is no
+    /// bar, or for a flight that never started.
     pub fn escorts_for_hire(&mut self) -> Option<HireList> {
-        self.sim.escorts_for_hire()
+        match self.sim.screen(ScreenAsk::HireList) {
+            ScreenAnswer::HireList(list) => Some(*list),
+            _ => None,
+        }
     }
 
     /// Hires a ship of class `ship` ([`FlightCommand::Hire`],
@@ -200,12 +204,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.say_messages();
     }
 
-    /// Whether the pilot flying has seen the intro screen
-    /// ([`PortSource::seen_intro`](crate::flight::sim_port::PortSource::seen_intro));
+    /// Whether the pilot flying has seen the intro screen, as the kept
+    /// frame says
+    /// ([`FlightFrame::seen_intro`](nova_sim::flight_frame::FlightFrame::seen_intro));
     /// false for a flight that never started.
     #[must_use]
     pub fn seen_intro(&self) -> bool {
-        self.sim.seen_intro()
+        self.frame.seen_intro
     }
 
     /// Marks the pilot flying as having seen the intro screen

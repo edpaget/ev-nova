@@ -100,13 +100,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
             _ => text.to_owned(),
         }
     }
-
-    /// Whether the bar's hire screen may hire escorts now
-    /// ([`PortSource::can_hire_escorts`](crate::flight::sim_port::PortSource::can_hire_escorts)).
-    #[must_use]
-    pub fn can_hire_escorts(&self) -> bool {
-        self.sim.can_hire_escorts()
-    }
 }
 
 /// The docked bar's staging and the mission texts' redraws, over the

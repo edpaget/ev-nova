@@ -69,11 +69,10 @@ impl AppScreen {
         if spaceport.take_bar_opened() {
             self.flight.as_mut().expect(ENTERED).open_bar();
         }
-        if spaceport.take_news_request() {
-            let flight = self.flight.as_ref().expect(ENTERED);
-            if let (Some(news), Some(picture)) = (flight.news(), flight.news_picture()) {
-                spaceport.open_news(news, picture);
-            }
+        if spaceport.take_news_request()
+            && let Some(shown) = self.flight.as_mut().expect(ENTERED).news()
+        {
+            spaceport.open_news(&shown.news, shown.picture);
         }
         if let Some(ship) = spaceport.take_ship_request()
             && let Ok(naming) = self.flight.as_mut().expect(ENTERED).ship_naming(ship)

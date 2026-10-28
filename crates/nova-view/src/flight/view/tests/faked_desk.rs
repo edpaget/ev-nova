@@ -126,7 +126,7 @@ fn the_stellar_landed_on_is_read_from_the_frame_a_change_left() {
 }
 
 #[test]
-fn the_plain_text_and_the_hire_are_the_flights() {
+fn the_plain_text_is_the_flights() {
     let mut view = faked(in_sol());
     let fills = view.sim.fills();
     view.sim
@@ -138,9 +138,6 @@ fn the_plain_text_and_the_hire_are_the_flights() {
         "asked"
     );
     assert_eq!(view.sim.fills(), fills, "a screen's ask: no refill");
-    assert!(!view.can_hire_escorts());
-    view.sim.port_mut().can_hire_escorts = true;
-    assert!(view.can_hire_escorts());
 }
 
 #[test]
