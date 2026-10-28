@@ -151,6 +151,18 @@ impl HintedFace {
         self.hinter
     }
 
+    /// Drops the hinting instance of every size drawn, so the cache holds
+    /// only the sizes drawn after.
+    pub fn forget_sizes(&mut self) {
+        self.instances.clear();
+    }
+
+    /// How many sizes the face holds a hinting set-up for.
+    #[cfg(test)]
+    pub(crate) fn sizes_hinted(&self) -> usize {
+        self.instances.len()
+    }
+
     /// `glyph` at `ppem` pixels per em, hinted; `None` for a glyph the face
     /// has no outline for.
     pub fn rasterise(&mut self, glyph: u16, ppem: f32) -> Option<GlyphRaster> {

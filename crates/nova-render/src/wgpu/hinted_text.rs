@@ -7,7 +7,7 @@
 //! through the same mask atlas, colour, shader and clip as text. So the
 //! renderer still lays each run out with
 //! [`lay_out_text`](super::layout::lay_out_text), then turns the buffer's
-//! glyphs into custom glyphs ([`HintedGlyphs::custom_glyphs`]) and hands
+//! glyphs into custom glyphs ([`HintedGlyphs::frame`]) and hands
 //! glyphon an empty buffer beside them.
 //!
 //! Each glyph lands exactly where glyphon puts a text glyph
@@ -19,10 +19,16 @@
 //!
 //! A raster is keyed by its face, glyph and physical size ([`RasterKey`]).
 //! [`GlyphIds`] hands each key the custom-glyph ID glyphon caches it by,
-//! unique for the renderer's life, and [`HintedGlyphs`] keeps every raster
-//! it has made, since glyphon asks for them again when its atlas grows.
-//! Once every ID is taken, a glyph with a new key is not drawn: never
-//! another glyph's raster in its place.
+//! unique within a generation, and [`HintedGlyphs`] keeps every raster the
+//! generation has made, since glyphon asks for them again when its atlas
+//! grows. The physical size follows the window's height, so each new
+//! height brings new keys. When a frame finds every ID taken, and some by
+//! keys it doesn't draw, the generation starts over
+//! ([`HintedGlyphs::frame`]): IDs, rasters and hinting state are dropped,
+//! and the renderer draws that frame into a new glyphon atlas, so a reused
+//! ID never draws the raster glyphon cached for its old key. A glyph past
+//! the last ID of a fresh generation is not drawn: never another glyph's
+//! raster in its place.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -67,16 +73,35 @@ pub(super) fn place(
     }
 }
 
-/// Custom-glyph IDs for raster keys: one per key, never reused.
+/// The IDs one generation hands out before it starts over
+/// ([`HintedGlyphs::frame`]).
+///
+/// The stock game draws a few hundred glyphs at a few sizes, so one window
+/// size takes a few thousand keys at most. Each new window height gives
+/// every glyph a new size, and so a new key, so a generation fills after a
+/// few window sizes and is started over, which bounds the raster cache
+/// (8 192 rasters, a few megabytes even at fullscreen sizes) and glyphon's
+/// atlas with it.
+const IDS_PER_GENERATION: usize = 8192;
+
+/// Custom-glyph IDs for raster keys: one per key, unique within a
+/// generation. Each ID records the last frame that drew it, so a full
+/// generation knows whether starting over would free any.
 pub(super) struct GlyphIds {
     ids: HashMap<RasterKey, CustomGlyphId>,
     capacity: usize,
+    /// The frame being drawn, counted from 1.
+    frame: u64,
+    /// The last frame that asked for each ID, by ID.
+    last_asked: Vec<u64>,
+    /// How many IDs this frame has asked for.
+    asked: usize,
 }
 
 impl GlyphIds {
-    /// Every ID glyphon has room for.
+    /// [`IDS_PER_GENERATION`] IDs.
     pub(super) fn new() -> Self {
-        Self::with_capacity(usize::from(CustomGlyphId::MAX) + 1)
+        Self::with_capacity(IDS_PER_GENERATION)
     }
 
     /// At most `capacity` IDs (and never more than glyphon has room for).
@@ -84,23 +109,80 @@ impl GlyphIds {
         Self {
             ids: HashMap::new(),
             capacity: capacity.min(usize::from(CustomGlyphId::MAX) + 1),
+            frame: 1,
+            last_asked: Vec::new(),
+            asked: 0,
         }
+    }
+
+    /// Starts a frame: no ID has been asked for in it yet.
+    fn begin_frame(&mut self) {
+        self.frame += 1;
+        self.asked = 0;
     }
 
     /// The ID of `key`, handed out the first time it is asked for; `None`
     /// once every ID is taken by another key.
     pub(super) fn id(&mut self, key: RasterKey) -> Option<CustomGlyphId> {
-        if let Some(&id) = self.ids.get(&key) {
-            return Some(id);
+        let id = if let Some(&id) = self.ids.get(&key) {
+            id
+        } else {
+            if self.ids.len() >= self.capacity {
+                return None;
+            }
+            let id = CustomGlyphId::try_from(self.ids.len()).ok()?;
+            self.ids.insert(key, id);
+            self.last_asked.push(0);
+            id
+        };
+        let last = &mut self.last_asked[usize::from(id)];
+        if *last != self.frame {
+            *last = self.frame;
+            self.asked += 1;
         }
-        if self.ids.len() >= self.capacity {
-            return None;
-        }
-        let id = CustomGlyphId::try_from(self.ids.len()).ok()?;
-        self.ids.insert(key, id);
         Some(id)
     }
+
+    /// Whether some ID belongs to a key this frame has not asked for, so
+    /// starting over would free it.
+    fn any_idle(&self) -> bool {
+        self.asked < self.ids.len()
+    }
+
+    /// Forgets every key: the next key asked for gets ID 0 again.
+    fn clear(&mut self) {
+        self.ids.clear();
+        self.last_asked.clear();
+        self.asked = 0;
+    }
 }
+
+/// A laid-out buffer to draw: its origin in physical pixels, its scale in
+/// pixels per unit, and the clip's top and bottom rows in physical pixels.
+#[derive(Clone, Copy)]
+pub(super) struct GlyphRun<'a> {
+    pub(super) buffer: &'a Buffer,
+    pub(super) origin: (f32, f32),
+    pub(super) scale: f32,
+    pub(super) rows: (i32, i32),
+}
+
+/// A frame's custom glyphs, one list per run, and whether the IDs started
+/// over for it.
+///
+/// When they did, an ID may now name another raster than the one glyphon
+/// cached under it, so the caller draws this frame into a fresh glyphon
+/// atlas (and fresh renderers made with it): glyphon caches a custom glyph
+/// by its ID and size alone.
+#[derive(Debug, PartialEq)]
+pub(super) struct FrameGlyphs {
+    pub(super) runs: Vec<Vec<CustomGlyph>>,
+    pub(super) restarted: bool,
+}
+
+/// Every ID of the generation is taken.
+#[derive(Debug)]
+struct OutOfIds;
 
 /// A [`HintedFace`] for each face `families` loaded, by its fontdb ID.
 fn hinted_faces(families: &Families) -> Vec<(ID, HintedFace)> {
@@ -137,11 +219,14 @@ impl HintedGlyphs {
         }
     }
 
-    /// The ID and raster of `key`, rasterised the first time; `None` for a
-    /// face this holds no file for, a glyph with no outline, or once every
-    /// ID is taken.
-    fn raster(&mut self, (face, glyph, ppem): RasterKey) -> Option<(CustomGlyphId, &GlyphRaster)> {
-        let id = self.ids.id((face, glyph, ppem))?;
+    /// The ID and raster of `key`, rasterised the first time: `Err` once
+    /// every ID is taken, `Ok(None)` for a face this holds no file for or a
+    /// glyph with no outline.
+    fn raster(
+        &mut self,
+        (face, glyph, ppem): RasterKey,
+    ) -> Result<Option<(CustomGlyphId, &GlyphRaster)>, OutOfIds> {
+        let id = self.ids.id((face, glyph, ppem)).ok_or(OutOfIds)?;
         let at = usize::from(id);
         if self.rasters.len() <= at {
             self.rasters.resize(at + 1, None);
@@ -149,20 +234,67 @@ impl HintedGlyphs {
             self.rasters[at] =
                 hinted.and_then(|(_, hinted)| hinted.rasterise(glyph, f32::from_bits(ppem)));
         }
-        Some((id, self.rasters[at].as_ref()?))
+        Ok(self.rasters[at].as_ref().map(|raster| (id, raster)))
     }
 
-    /// The custom glyphs that draw `buffer` with its origin at `origin`
-    /// physical pixels and `scale` pixels per unit: one per glyph with ink,
-    /// on the lines glyphon would draw inside `rows` (the clip's top and
-    /// bottom, in physical pixels).
-    pub(super) fn custom_glyphs(
-        &mut self,
-        buffer: &Buffer,
-        origin: (f32, f32),
-        scale: f32,
-        rows: (i32, i32),
-    ) -> Vec<CustomGlyph> {
+    /// The custom glyphs that draw each of `runs`.
+    ///
+    /// When this generation's IDs run out and some belong to keys this
+    /// frame doesn't draw, the IDs, the rasters and the faces' hinting
+    /// state start over and the frame is built again from ID 0
+    /// ([`FrameGlyphs::restarted`]). A frame that needs more IDs than a
+    /// generation has leaves out each glyph past the last ID: never
+    /// another glyph's raster in its place.
+    pub(super) fn frame(&mut self, runs: &[GlyphRun<'_>]) -> FrameGlyphs {
+        self.ids.begin_frame();
+        let (glyphs, out_of_ids) = self.runs_glyphs(runs);
+        if !(out_of_ids && self.ids.any_idle()) {
+            return FrameGlyphs {
+                runs: glyphs,
+                restarted: false,
+            };
+        }
+        self.restart();
+        FrameGlyphs {
+            runs: self.runs_glyphs(runs).0,
+            restarted: true,
+        }
+    }
+
+    /// Forgets every ID, raster and hinting instance.
+    fn restart(&mut self) {
+        self.ids.clear();
+        self.rasters.clear();
+        for (_, face) in &mut self.faces {
+            face.forget_sizes();
+        }
+    }
+
+    /// The custom glyphs for each of `runs`, and whether any glyph was left
+    /// out for want of an ID.
+    fn runs_glyphs(&mut self, runs: &[GlyphRun<'_>]) -> (Vec<Vec<CustomGlyph>>, bool) {
+        let mut out_of_ids = false;
+        let glyphs = runs
+            .iter()
+            .map(|run| {
+                let (glyphs, short) = self.custom_glyphs(run);
+                out_of_ids |= short;
+                glyphs
+            })
+            .collect();
+        (glyphs, out_of_ids)
+    }
+
+    /// The custom glyphs that draw `run`: one per glyph with ink, on the
+    /// lines glyphon would draw inside its rows; and whether any glyph was
+    /// left out for want of an ID.
+    fn custom_glyphs(&mut self, run: &GlyphRun<'_>) -> (Vec<CustomGlyph>, bool) {
+        let GlyphRun {
+            buffer,
+            origin,
+            scale,
+            rows,
+        } = *run;
         // glyphon's own test for a line it draws.
         let visible = |run: &glyphon::LayoutRun<'_>| {
             let start = (origin.1 + run.line_top * scale) as i32;
@@ -170,13 +302,18 @@ impl HintedGlyphs {
             start <= rows.1 && rows.0 <= end
         };
         let mut glyphs = Vec::new();
+        let mut out_of_ids = false;
         let runs = buffer.layout_runs().skip_while(|run| !visible(run));
         for run in runs.take_while(visible) {
             for glyph in run.glyphs {
                 let physical = glyph.physical(origin, scale);
                 let key = physical.cache_key;
                 let raster_key = (key.font_id, key.glyph_id, key.font_size_bits);
-                let Some((id, raster)) = self.raster(raster_key) else {
+                let Ok(found) = self.raster(raster_key) else {
+                    out_of_ids = true;
+                    continue;
+                };
+                let Some((id, raster)) = found else {
                     continue;
                 };
                 if raster.is_empty() {
@@ -196,7 +333,7 @@ impl HintedGlyphs {
                 });
             }
         }
-        glyphs
+        (glyphs, out_of_ids)
     }
 
     /// The coverage glyphon asks for: the raster made for `request`'s ID,
@@ -321,12 +458,29 @@ mod tests {
 
     const ALL_ROWS: (i32, i32) = (i32::MIN, i32::MAX);
 
+    /// The custom glyphs of a frame drawing only `buffer`.
+    fn draw(
+        glyphs: &mut HintedGlyphs,
+        buffer: &Buffer,
+        origin: (f32, f32),
+        scale: f32,
+        rows: (i32, i32),
+    ) -> Vec<CustomGlyph> {
+        let run = GlyphRun {
+            buffer,
+            origin,
+            scale,
+            rows,
+        };
+        glyphs.frame(&[run]).runs.remove(0)
+    }
+
     #[test]
     fn a_buffer_gives_one_custom_glyph_per_glyph_with_ink() {
         let (mut system, families, mut glyphs) = bundled();
         let buffer =
             lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "ab c").expect("laid");
-        let custom = glyphs.custom_glyphs(&buffer, (4.0, 6.0), 2.0, ALL_ROWS);
+        let custom = draw(&mut glyphs, &buffer, (4.0, 6.0), 2.0, ALL_ROWS);
         assert_eq!(custom.len(), 3, "{custom:?}");
         let mut lefts: Vec<f32> = custom.iter().map(|glyph| glyph.left).collect();
         lefts.dedup();
@@ -353,7 +507,7 @@ mod tests {
         )
         .expect("laid");
         let (origin, scale) = ((3.5, 7.25), 1.40625);
-        let custom = glyphs.custom_glyphs(&buffer, origin, scale, ALL_ROWS);
+        let custom = draw(&mut glyphs, &buffer, origin, scale, ALL_ROWS);
         let mut want = Vec::new();
         for run in buffer.layout_runs() {
             for glyph in run.glyphs {
@@ -361,6 +515,7 @@ mod tests {
                 let key = physical.cache_key;
                 let (_, raster) = glyphs
                     .raster((key.font_id, key.glyph_id, key.font_size_bits))
+                    .expect("an id")
                     .expect("a raster");
                 if raster.is_empty() {
                     continue;
@@ -385,8 +540,8 @@ mod tests {
         let (mut system, families, mut glyphs) = bundled();
         let buffer =
             lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "l").expect("laid");
-        let one = glyphs.custom_glyphs(&buffer, (0.0, 0.0), 1.0, ALL_ROWS);
-        let two = glyphs.custom_glyphs(&buffer, (0.0, 0.0), 2.0, ALL_ROWS);
+        let one = draw(&mut glyphs, &buffer, (0.0, 0.0), 1.0, ALL_ROWS);
+        let two = draw(&mut glyphs, &buffer, (0.0, 0.0), 2.0, ALL_ROWS);
         assert_ne!(one[0].id, two[0].id);
         assert!(
             two[0].height >= 2.0 * one[0].height - 1.0,
@@ -423,7 +578,7 @@ mod tests {
         );
         // The middle line's last row and the one above it: only "bb".
         let clip = (rows[1].1 - 1, rows[1].1);
-        assert_eq!(glyphs.custom_glyphs(&buffer, origin, scale, clip).len(), 2);
+        assert_eq!(draw(&mut glyphs, &buffer, origin, scale, clip).len(), 2);
     }
 
     #[test]
@@ -431,15 +586,10 @@ mod tests {
         let (mut system, families, mut glyphs) = bundled();
         let buffer =
             lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "a").expect("laid");
+        assert_eq!(draw(&mut glyphs, &buffer, (0.0, 100.0), 1.0, (0, 50)), []);
+        assert_eq!(draw(&mut glyphs, &buffer, (0.0, 0.0), 1.0, (50, 90)), []);
         assert_eq!(
-            glyphs.custom_glyphs(&buffer, (0.0, 100.0), 1.0, (0, 50)),
-            []
-        );
-        assert_eq!(glyphs.custom_glyphs(&buffer, (0.0, 0.0), 1.0, (50, 90)), []);
-        assert_eq!(
-            glyphs
-                .custom_glyphs(&buffer, (0.0, 40.0), 1.0, (0, 50))
-                .len(),
+            draw(&mut glyphs, &buffer, (0.0, 40.0), 1.0, (0, 50)).len(),
             1
         );
     }
@@ -453,7 +603,7 @@ mod tests {
         let attrs = Attrs::new().family(family).color(red);
         buffer.set_text("a", &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut system, false);
-        let custom = glyphs.custom_glyphs(&buffer, (0.0, 0.0), 1.0, ALL_ROWS);
+        let custom = draw(&mut glyphs, &buffer, (0.0, 0.0), 1.0, ALL_ROWS);
         assert_eq!(custom[0].color, Some(red));
     }
 
@@ -463,20 +613,38 @@ mod tests {
         let mut glyphs = HintedGlyphs::new(Vec::new());
         let buffer =
             lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "ab").expect("laid");
-        assert_eq!(glyphs.custom_glyphs(&buffer, (0.0, 0.0), 1.0, ALL_ROWS), []);
+        assert_eq!(draw(&mut glyphs, &buffer, (0.0, 0.0), 1.0, ALL_ROWS), []);
+    }
+
+    /// Glyphs from the bundled faces with a generation of `capacity` IDs.
+    fn with_capacity(families: &Families, capacity: usize) -> HintedGlyphs {
+        HintedGlyphs::with_ids(hinted_faces(families), GlyphIds::with_capacity(capacity))
     }
 
     #[test]
-    fn with_every_id_taken_a_new_glyph_is_left_out_not_drawn_as_another() {
+    fn a_frame_needing_more_ids_than_a_generation_has_leaves_the_rest_out_without_starting_over() {
+        // Every ID is the frame's own, so starting over would free none: the
+        // glyph past the last ID is left out, frame after frame, and never
+        // drawn as another.
         let (mut system, families, _) = bundled();
-        let mut glyphs =
-            HintedGlyphs::with_ids(hinted_faces(&families), GlyphIds::with_capacity(1));
+        let mut glyphs = with_capacity(&families, 1);
         let buffer =
             lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "ab").expect("laid");
-        let custom = glyphs.custom_glyphs(&buffer, (0.0, 0.0), 1.0, ALL_ROWS);
-        assert_eq!(custom.len(), 1, "{custom:?}");
+        let run = GlyphRun {
+            buffer: &buffer,
+            origin: (0.0, 0.0),
+            scale: 1.0,
+            rows: ALL_ROWS,
+        };
+        let first = glyphs.frame(&[run]);
+        assert!(!first.restarted);
+        assert_eq!(first.runs[0].len(), 1, "{first:?}");
+        assert_eq!(glyphs.frame(&[run]), first);
         let a = lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "a").expect("laid");
-        assert_eq!(glyphs.custom_glyphs(&a, (0.0, 0.0), 1.0, ALL_ROWS), custom);
+        assert_eq!(
+            draw(&mut glyphs, &a, (0.0, 0.0), 1.0, ALL_ROWS),
+            first.runs[0]
+        );
     }
 
     fn request(id: CustomGlyphId, width: u16, height: u16) -> RasterizeCustomGlyphRequest {
@@ -490,12 +658,139 @@ mod tests {
         }
     }
 
+    /// What `glyphs` hands glyphon for each of `custom`, by its ID and size.
+    fn handed(glyphs: &HintedGlyphs, custom: &[CustomGlyph]) -> Vec<Option<Vec<u8>>> {
+        let handed = |glyph: &CustomGlyph| {
+            let (w, h) = (glyph.width as u16, glyph.height as u16);
+            Some(glyphs.rasterize(request(glyph.id, w, h))?.data)
+        };
+        custom.iter().map(handed).collect()
+    }
+
+    /// Each of `custom`'s place, size and the coverage handed to glyphon
+    /// for it: what it draws, whatever its ID.
+    fn drawn(glyphs: &HintedGlyphs, custom: &[CustomGlyph]) -> Vec<(f32, f32, f32, f32)> {
+        let looks = custom.iter().map(|g| (g.left, g.top, g.width, g.height));
+        assert!(handed(glyphs, custom).iter().all(Option::is_some));
+        looks.collect()
+    }
+
+    #[test]
+    fn the_same_text_at_more_sizes_than_a_generation_holds_keeps_drawing() {
+        // "ab" takes two IDs at each scale, so a generation of four holds
+        // two scales: each third scale starts the IDs over.
+        let (mut system, families, _) = bundled();
+        let mut glyphs = with_capacity(&families, 4);
+        let buffer =
+            lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "ab").expect("laid");
+        for step in 0..20u8 {
+            let scale = 1.0 + f32::from(step) * 0.25;
+            let run = GlyphRun {
+                buffer: &buffer,
+                origin: (0.0, 0.0),
+                scale,
+                rows: ALL_ROWS,
+            };
+            let frame = glyphs.frame(&[run]);
+            assert_eq!(frame.restarted, step > 0 && step % 2 == 0, "step {step}");
+            let custom = &frame.runs[0];
+            assert_eq!(custom.len(), 2, "step {step}: {custom:?}");
+            // What each glyph draws, against a renderer that never drew
+            // another size.
+            let mut fresh = HintedGlyphs::new(hinted_faces(&families));
+            let want = draw(&mut fresh, &buffer, (0.0, 0.0), scale, ALL_ROWS);
+            assert_eq!(drawn(&glyphs, custom), drawn(&fresh, &want), "step {step}");
+            assert_eq!(
+                handed(&glyphs, custom),
+                handed(&fresh, &want),
+                "step {step}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reused_id_hands_glyphon_its_new_keys_raster_never_the_old_one() {
+        let (mut system, families, _) = bundled();
+        let mut glyphs = with_capacity(&families, 1);
+        let l = lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "l").expect("laid");
+        let small = draw(&mut glyphs, &l, (0.0, 0.0), 1.0, ALL_ROWS)[0];
+        let run = GlyphRun {
+            buffer: &l,
+            origin: (0.0, 0.0),
+            scale: 3.0,
+            rows: ALL_ROWS,
+        };
+        let frame = glyphs.frame(&[run]);
+        assert!(frame.restarted);
+        let large = frame.runs[0][0];
+        assert_eq!(large.id, small.id);
+        assert_ne!((large.width, large.height), (small.width, small.height));
+        let mut fresh = HintedGlyphs::new(hinted_faces(&families));
+        let want = draw(&mut fresh, &l, (0.0, 0.0), 3.0, ALL_ROWS);
+        assert_eq!(handed(&glyphs, &[large]), handed(&fresh, &want));
+        assert_eq!(handed(&glyphs, &[small]), [None]);
+    }
+
+    #[test]
+    fn a_frame_that_starts_over_builds_every_run_again_from_the_first_id() {
+        let (mut system, families, _) = bundled();
+        let mut glyphs = with_capacity(&families, 3);
+        let ab =
+            lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "ab").expect("laid");
+        let at = |scale| GlyphRun {
+            buffer: &ab,
+            origin: (0.0, 0.0),
+            scale,
+            rows: ALL_ROWS,
+        };
+        assert!(!glyphs.frame(&[at(1.0)]).restarted);
+        // The first run finds one ID left; only after it does the frame
+        // start over, and both runs take their IDs afresh.
+        let frame = glyphs.frame(&[at(2.0), at(3.0)]);
+        assert!(frame.restarted);
+        let lens: Vec<usize> = frame.runs.iter().map(Vec::len).collect();
+        assert_eq!(lens, [2, 1]);
+        let mut ids: Vec<CustomGlyphId> = frame.runs.iter().flatten().map(|g| g.id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [0, 1, 2]);
+        for (run, scale) in frame.runs.iter().zip([2.0, 3.0]) {
+            let mut fresh = HintedGlyphs::new(hinted_faces(&families));
+            let want = draw(&mut fresh, &ab, (0.0, 0.0), scale, ALL_ROWS);
+            let want = &want[..run.len()];
+            assert_eq!(handed(&glyphs, run), handed(&fresh, want), "{scale}");
+        }
+    }
+
+    #[test]
+    fn starting_over_drops_every_faces_hinting_sizes() {
+        let (mut system, families, _) = bundled();
+        let mut glyphs = with_capacity(&families, 1);
+        let l = lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "l").expect("laid");
+        draw(&mut glyphs, &l, (0.0, 0.0), 1.0, ALL_ROWS);
+        let sizes = |glyphs: &HintedGlyphs| -> usize {
+            glyphs
+                .faces
+                .iter()
+                .map(|(_, face)| face.sizes_hinted())
+                .sum()
+        };
+        assert_eq!(sizes(&glyphs), 1);
+        let run = GlyphRun {
+            buffer: &l,
+            origin: (0.0, 0.0),
+            scale: 2.0,
+            rows: ALL_ROWS,
+        };
+        assert!(glyphs.frame(&[run]).restarted);
+        assert_eq!(sizes(&glyphs), 1);
+    }
+
     #[test]
     fn glyphon_is_handed_the_raster_made_for_an_id() {
         let (mut system, families, mut glyphs) = bundled();
         let buffer =
             lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "lW").expect("laid");
-        let custom = glyphs.custom_glyphs(&buffer, (0.0, 0.0), 2.0, ALL_ROWS);
+        let custom = draw(&mut glyphs, &buffer, (0.0, 0.0), 2.0, ALL_ROWS);
         for glyph in custom {
             let (w, h) = (glyph.width as u16, glyph.height as u16);
             let raster = glyphs.rasterize(request(glyph.id, w, h)).expect("made");
@@ -510,7 +805,7 @@ mod tests {
         let (mut system, families, mut glyphs) = bundled();
         let buffer =
             lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "l").expect("laid");
-        let glyph = glyphs.custom_glyphs(&buffer, (0.0, 0.0), 1.0, ALL_ROWS)[0];
+        let glyph = draw(&mut glyphs, &buffer, (0.0, 0.0), 1.0, ALL_ROWS)[0];
         let (w, h) = (glyph.width as u16, glyph.height as u16);
         assert!(glyphs.rasterize(request(glyph.id + 1, w, h)).is_none());
         assert!(glyphs.rasterize(request(glyph.id, w + 1, h)).is_none());
@@ -523,7 +818,10 @@ mod tests {
         let (_, families, _) = bundled();
         let mut glyphs = HintedGlyphs::new(hinted_faces(&families));
         let face = families.sources()[0].0;
-        assert!(glyphs.raster((face, u16::MAX, 12.0f32.to_bits())).is_none());
+        assert!(matches!(
+            glyphs.raster((face, u16::MAX, 12.0f32.to_bits())),
+            Ok(None)
+        ));
         assert!(glyphs.rasterize(request(0, 1, 1)).is_none());
     }
 }

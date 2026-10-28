@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use glyphon::{
-    Buffer, Cache, ColorMode, CustomGlyph, FontSystem, Resolution, SwashCache, TextArea, TextAtlas,
-    TextBounds, TextRenderer,
+    Buffer, Cache, ColorMode, FontSystem, Resolution, SwashCache, TextArea, TextAtlas, TextBounds,
+    TextRenderer,
 };
 use nova_data::graphics::Image;
 use wgpu::util::DeviceExt;
@@ -15,7 +15,7 @@ use nova_view::{Blend, Color, DrawLayer};
 
 use super::fonts::{Families, font_system};
 use super::frame_commands::{DeviceEncoders, WgpuCommands};
-use super::hinted_text::HintedGlyphs;
+use super::hinted_text::{GlyphRun, HintedGlyphs};
 use super::layout::lay_out_text;
 use super::upscale::{Upscale, abilities, upscale_for};
 use crate::fonts::FontFaces;
@@ -142,6 +142,9 @@ pub struct WgpuRenderer {
     /// glyphs alone.
     empty_buffer: Buffer,
     swash_cache: SwashCache,
+    /// The pipelines every text atlas shares, kept to make a new atlas
+    /// when the glyph IDs start over.
+    text_cache: Cache,
     text_atlas: TextAtlas,
     text_viewport: glyphon::Viewport,
     text_renderers: Vec<TextRenderer>,
@@ -239,8 +242,7 @@ impl WgpuRenderer {
             ..Default::default()
         });
         let cache = Cache::new(device);
-        let text_atlas =
-            TextAtlas::with_color_mode(device, queue, &cache, SCENE_FORMAT, ColorMode::Web);
+        let text_atlas = text_atlas(device, queue, &cache);
         let text_viewport = glyphon::Viewport::new(device, &cache);
         let (font_system, families) = font_system(faces);
         let glyphs = HintedGlyphs::of(&families);
@@ -269,6 +271,7 @@ impl WgpuRenderer {
             glyphs,
             empty_buffer,
             swash_cache: SwashCache::new(),
+            text_cache: cache,
             text_atlas,
             text_viewport,
             text_renderers: Vec::new(),
@@ -669,6 +672,50 @@ impl WgpuRenderer {
                 height: target.1,
             },
         );
+        // Each run is laid out at its logical size, as `GlyphonMetrics`
+        // measures it, and drawn at its scale. A run with no face to draw
+        // in is skipped (shaping it would find no font at all).
+        let laid: Vec<Vec<(&TextRun, TextBounds, Buffer)>> = batches
+            .iter()
+            .map(|runs| {
+                runs.iter()
+                    .filter_map(|run| {
+                        let buffer = lay_out_text(
+                            &mut self.font_system,
+                            &self.families,
+                            run.font,
+                            run.size,
+                            run.wrap,
+                            &run.text,
+                        )?;
+                        let bounds = TextBounds {
+                            left: run.clip.x as i32,
+                            top: run.clip.y as i32,
+                            right: (run.clip.x + run.clip.w) as i32,
+                            bottom: (run.clip.y + run.clip.h) as i32,
+                        };
+                        Some((run, bounds, buffer))
+                    })
+                    .collect()
+            })
+            .collect();
+        let glyph_runs: Vec<GlyphRun<'_>> = laid
+            .iter()
+            .flatten()
+            .map(|(run, bounds, buffer)| GlyphRun {
+                buffer,
+                origin: run.origin_px,
+                scale: run.scale,
+                rows: (bounds.top, bounds.bottom),
+            })
+            .collect();
+        let frame = self.glyphs.frame(&glyph_runs);
+        if frame.restarted {
+            // glyphon caches a custom glyph by its ID and size, so a reused
+            // ID would draw its old key's raster from the old atlas.
+            self.text_atlas = text_atlas(&self.device, &self.queue, &self.text_cache);
+            self.text_renderers.clear();
+        }
         // Grow the pool to one renderer per batch; a bounded loop.
         let missing = batches.len().saturating_sub(self.text_renderers.len());
         for _ in 0..missing {
@@ -679,49 +726,26 @@ impl WgpuRenderer {
                 None,
             ));
         }
-        let families = &self.families;
-        for (renderer, runs) in self.text_renderers.iter_mut().zip(batches) {
-            // Each run is laid out at its logical size, as `GlyphonMetrics`
-            // measures it, and drawn at its scale. A run with no face to
-            // draw in is skipped (shaping it would find no font at all).
-            let drawn: Vec<(&TextRun, TextBounds, Vec<CustomGlyph>)> = runs
+        let mut frame_glyphs = frame.runs.iter();
+        for (renderer, runs) in self.text_renderers.iter_mut().zip(&laid) {
+            let areas: Vec<TextArea<'_>> = runs
                 .iter()
-                .filter_map(|run| {
-                    let buffer = lay_out_text(
-                        &mut self.font_system,
-                        families,
-                        run.font,
-                        run.size,
-                        run.wrap,
-                        &run.text,
-                    )?;
-                    let bounds = TextBounds {
-                        left: run.clip.x as i32,
-                        top: run.clip.y as i32,
-                        right: (run.clip.x + run.clip.w) as i32,
-                        bottom: (run.clip.y + run.clip.h) as i32,
-                    };
-                    let rows = (bounds.top, bounds.bottom);
-                    let glyphs = self
-                        .glyphs
-                        .custom_glyphs(&buffer, run.origin_px, run.scale, rows);
-                    Some((run, bounds, glyphs))
+                .zip(frame_glyphs.by_ref())
+                .map(|((run, bounds, _), glyphs)| TextArea {
+                    buffer: &self.empty_buffer,
+                    left: 0.0,
+                    top: 0.0,
+                    scale: 1.0,
+                    bounds: *bounds,
+                    default_color: glyphon::Color::rgba(
+                        run.color.r,
+                        run.color.g,
+                        run.color.b,
+                        run.color.a,
+                    ),
+                    custom_glyphs: glyphs,
                 })
                 .collect();
-            let areas = drawn.iter().map(|(run, bounds, glyphs)| TextArea {
-                buffer: &self.empty_buffer,
-                left: 0.0,
-                top: 0.0,
-                scale: 1.0,
-                bounds: *bounds,
-                default_color: glyphon::Color::rgba(
-                    run.color.r,
-                    run.color.g,
-                    run.color.b,
-                    run.color.a,
-                ),
-                custom_glyphs: glyphs,
-            });
             let glyphs = &self.glyphs;
             // A failed prepare draws no text this frame; the frame goes on.
             let _ = renderer.prepare_with_custom(
@@ -748,6 +772,11 @@ impl WgpuRenderer {
                 usage: wgpu::BufferUsages::VERTEX,
             })
     }
+}
+
+/// A text atlas on `device`, in the scene's format, made with `cache`.
+fn text_atlas(device: &wgpu::Device, queue: &wgpu::Queue, cache: &Cache) -> TextAtlas {
+    TextAtlas::with_color_mode(device, queue, cache, SCENE_FORMAT, ColorMode::Web)
 }
 
 /// The projection uniform's layout.
