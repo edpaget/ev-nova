@@ -11,7 +11,8 @@
 //! Both packs carry WinSparkle: the test checks the installed
 //! `WinSparkle.dll` is the one the last pack staged in
 //! `target\installer\downloads` (the file `wix build` packed, which the
-//! signing phase will sign there), that the upgrade leaves one, and the
+//! signing phase will sign there), that both packs hold it in the same
+//! component, which after the upgrade only the new product holds, and the
 //! relaunch custom action's rows. It doesn't run the relaunch: that would
 //! start the game on the runner.
 //!
@@ -30,6 +31,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nova_bundle::bundle::metadata;
 use nova_bundle::installer::layout::InstallerLayout;
 use nova_bundle::installer::winsparkle::{DLL, LICENCES};
+use nova_bundle::installer::wxs::COMPONENT_GUIDS;
 use nova_bundle::installer::{
     DUMP_EXE, EXES, GAME_EXE, INSTALL_DIR, RELAUNCH_ACTION, RELAUNCH_PROPERTY, SHORTCUT,
     UPGRADE_CODE, msi_version,
@@ -225,6 +227,41 @@ fn product_icon(code: &str) -> PathBuf {
     ))))
 }
 
+/// The products Windows Installer has the component `guid` installed for.
+fn component_clients(guid: &str) -> Vec<String> {
+    powershell(&format!(
+        "Get-Prop $installer 'ComponentClients' @({}) | ForEach-Object {{ [string]$_ }}",
+        quote(guid)
+    ))
+}
+
+/// The `ComponentId` of the component the package installs `WinSparkle.dll`
+/// with, checking the `File` row names it. WiX gives the file and its
+/// component the file's name as their ids.
+fn dll_component(msi: &Path) -> String {
+    let row = msi_row(
+        msi,
+        &format!(
+            "SELECT `Component`.`ComponentId`, `File`.`FileName` FROM `File`, `Component` \
+             WHERE `File`.`Component_` = `Component`.`Component` AND `File`.`File` = '{DLL}'"
+        ),
+        2,
+    )
+    .unwrap_or_else(|| panic!("{} packs no {DLL}", msi.display()));
+    // `short|long`, or the long name alone when it is already 8.3.
+    assert_eq!(row[1].rsplit('|').next(), Some(DLL), "{row:?}");
+    row[0].clone()
+}
+
+/// [`DLL`]'s component's GUID, as the `Component` table holds it.
+fn dll_guid() -> String {
+    let (_, guid) = COMPONENT_GUIDS
+        .iter()
+        .find(|(id, _)| *id == DLL)
+        .expect("the DLL's component");
+    format!("{{{guid}}}")
+}
+
 fn related_products() -> Vec<String> {
     powershell(&format!(
         // PowerShell enumerates the returned StringList: one line per item.
@@ -367,6 +404,11 @@ fn installs_for_the_user_alone_upgrades_in_place_and_uninstalls_keeping_settings
     assert_ne!(word_count(&msi) & NO_ELEVATION, 0, "elevation not required");
     assert_eq!(msi_property(&msi, "ALLUSERS"), NONE);
     check_relaunch(&msi);
+    assert_eq!(dll_component(&msi), dll_guid());
+    // The upgrade replaces the DLL with the DLL, in the same component.
+    if let Some(previous) = &previous {
+        assert_eq!(dll_component(previous), dll_guid(), "the previous pack");
+    }
     let code = msi_property(&msi, "ProductCode");
     let previous_code = previous.as_ref().map(|p| msi_property(p, "ProductCode"));
     if let Some(previous_code) = &previous_code {
@@ -424,18 +466,18 @@ fn installs_for_the_user_alone_upgrades_in_place_and_uninstalls_keeping_settings
     {
         assert!(folder.join(file).is_file(), "{file}");
     }
-    // The DLL wix packed, byte for byte, and only one, after the upgrade.
+    // The DLL wix packed, byte for byte, its component the new product's
+    // alone after the upgrade.
     assert_eq!(
         fs::read(folder.join(DLL)).expect("the installed DLL"),
         fs::read(staged_dll()).expect("the staged DLL"),
         "the installed {DLL} is the one packed"
     );
-    let dlls = fs::read_dir(&folder)
-        .expect("the install folder")
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_name().eq_ignore_ascii_case(DLL))
-        .count();
-    assert_eq!(dlls, 1);
+    assert_eq!(
+        component_clients(&dll_guid()),
+        std::slice::from_ref(&code),
+        "{DLL}'s component is installed for the new product alone"
+    );
     StdProcess
         .run(
             &Invocation::new(folder.join(DUMP_EXE))
