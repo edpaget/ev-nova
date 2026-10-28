@@ -1,18 +1,27 @@
 //! The flight view's seam wired to a real session: the [`FlightSim`]
-//! port through [`SessionFlight`], over a session a
-//! `nova_sim::fixture::SessionBuilder` built.
+//! port, its sources and the edge, through [`SessionFlight`] over a real
+//! `nova_sim::Session`
+//! (rdm:phase/view-sim-seam/phase-15-integration-test-set).
 //!
-//! **What belongs here.** Wiring through a real `SessionFlight`: that a
-//! command the view sends reaches the session and its answer and frame
-//! come back, and that what it raises comes back drained. One to three
-//! tests per area the port carries (the contract, the nav keys, the
-//! one-shot outputs, the fixed steps, and each area later work moves
-//! across). A
-//! test of what the view does with a frame, an answer or an event is a
-//! component test, and runs on a `FakeFlight` in the view's own tests
-//! instead.
+//! **The rule for adding a test here.** One test per port surface (each
+//! `FlightSim` method; each source, `MapSource`, `CommSource`,
+//! `PortSource`, `NameSource` and `PilotSource`; `DevDesk`; the contract)
+//! or per router handoff, never one per rule. Each test:
+//!
+//! - builds its session through a nova-sim builder
+//!   (`nova_sim::fixture::SessionBuilder` and the fixture's setters) or
+//!   the load path it tests (`open_flight`), never by stepping a
+//!   `Session` by hand;
+//! - names the surface it wires in its first doc line.
+//!
+//! What goes elsewhere: an adapter forward (that `SessionFlight` hands the
+//! session an argument or a collaborator, or answers with the session's
+//! own) is one of `sim_adapter`'s checks; what the view does with a frame,
+//! an answer or an event is a component test on a `FakeFlight` in the
+//! view's own tests; what the session decides is nova-sim's.
 //!
 //! The catalog is built here, in code, so the tests need no `NOVA_DATA`.
+//! `stock_flight_seam` is the stock variant.
 
 use std::io;
 use std::path::Path;
@@ -248,6 +257,9 @@ fn meets_the_contract<C>(flight: &SessionFlight<C>, state: &str) {
     assert_eq!(check_contract(&mut flight.clone()), Ok(()), "{state}");
 }
 
+/// The contract on `SessionFlight`: a real session meets the port's
+/// contract flying, with outputs pending, landed, with an escort flying,
+/// holding a target and after letting it go (phase 8's review, tests-1).
 #[test]
 fn a_real_session_meets_the_contract_in_each_state() {
     let mut flying = flight();
@@ -301,6 +313,8 @@ fn a_real_session_meets_the_contract_in_each_state() {
     meets_the_contract(view.sim(), "after the target is let go");
 }
 
+/// `FlightSim::apply` then `frame`, at the adapter: a stellar key's
+/// command reaches the session and the next frame shows the selection.
 #[test]
 fn a_stellar_key_reaches_the_session_and_its_frame_shows_the_selection() {
     let mut flight = flight();
@@ -455,6 +469,8 @@ fn nav_mode(view: &FlightView<Rc<GameData>>) -> NavMode {
     view.session().expect("flying").nav_mode()
 }
 
+/// `MapSource`: a Shift-click on the course map plots a course the
+/// session holds and the map draws.
 #[test]
 fn a_course_plotted_on_the_map_reaches_the_session_and_the_map_draws_it() {
     let mut view = view();
@@ -468,6 +484,8 @@ fn a_course_plotted_on_the_map_reaches_the_session_and_the_map_draws_it() {
     assert_eq!(view.course_map().route(), [MapSystemId(129)]);
 }
 
+/// `FlightSim::apply` from the view's keys: a slot key's press reaches
+/// the session at the next frame's step.
 #[test]
 fn a_slot_key_reaches_the_session_on_the_next_frame() {
     let mut view = view();
@@ -477,6 +495,8 @@ fn a_slot_key_reaches_the_session_on_the_next_frame() {
     assert_eq!(nav_mode(&view), NavMode::Stellar(Some(StellarId(128))));
 }
 
+/// `MapSource`, a dialog's map: a mission dialog's map writes the
+/// session's nav, and puts back the nav it opened with as it closes.
 #[test]
 fn a_mission_dialogs_map_puts_back_the_nav_it_opened_with_as_it_closes() {
     let mut view = view();
@@ -513,6 +533,8 @@ fn land(view: &mut FlightView<Rc<GameData>>) {
     tap(view, Key::Char('l'));
 }
 
+/// `FlightSim::drain`: a landing request's sound and line, and the
+/// landing's save due, come back through the drain.
 #[test]
 fn a_real_landing_plays_its_sound_and_shows_its_line_through_the_drain() {
     let mut view = view();
@@ -536,6 +558,8 @@ fn a_real_landing_plays_its_sound_and_shows_its_line_through_the_drain() {
 // The jump, the landing and the take-off, through a whole `FlightView`
 // over a real session (rdm:phase/view-sim-seam/phase-9-travel-on-port).
 
+/// `FlightSim::step`, the warp: a jump stepped through the port arrives
+/// in the next system, which the map and the arrival line show.
 #[test]
 fn a_real_jump_arrives_in_the_next_system() {
     let mut view = view();
@@ -570,6 +594,9 @@ fn a_real_jump_arrives_in_the_next_system() {
     assert!(line.contains(&date), "on the session's date: {line:?}");
 }
 
+/// The router's landing, leave, land-escorts and take-off handoffs: a
+/// landing hands the router the stellar, with no leave held and no escort
+/// to settle, and a take-off gives it back.
 #[test]
 fn a_real_landing_hands_the_router_the_stellar_and_a_take_off_gives_it_back() {
     let mut view = view();
@@ -590,6 +617,9 @@ fn drawn(view: &FlightView<Rc<GameData>>) -> Vec<SystemId> {
         .unwrap_or_default()
 }
 
+/// `FlightSim::drain` and `MapSource::galaxy`: a galaxy change the
+/// session raises redraws the open map from the galaxy the flight
+/// answers.
 #[test]
 fn a_galaxy_change_redraws_the_open_map_through_the_event_and_the_galaxy() {
     let mut view = view();
@@ -614,9 +644,9 @@ fn a_galaxy_change_redraws_the_open_map_through_the_event_and_the_galaxy() {
     );
 }
 
-/// A flight built at the edge (`open_flight`) opens on its start, and
-/// its session is set up with what the edge was given after the view read
-/// it: the rules, which the view shows by too.
+/// The edge, `open_flight`: a flight built at the edge opens on its
+/// start, and its session is set up with what the edge was given after
+/// the view read it: the rules, which the view shows by too.
 #[test]
 fn a_flight_built_at_the_edge_opens_on_its_start_and_reads_its_setup() {
     let rules = Rulebook::default()
@@ -646,8 +676,9 @@ fn a_flight_built_at_the_edge_opens_on_its_start_and_reads_its_setup() {
     );
 }
 
-/// Entering play on an edge-built flight: the adapter begins the session
-/// and the view draws the ship where the beginning put it.
+/// The edge, `begin_game`: entering play on an edge-built flight, the
+/// adapter begins the session and the view draws the ship where the
+/// beginning put it.
 #[test]
 fn begin_on_an_edge_built_flight_places_the_ship_where_the_session_began_it() {
     let mut view = open_flight(
@@ -662,9 +693,9 @@ fn begin_on_an_edge_built_flight_places_the_ship_where_the_session_began_it() {
     assert_eq!(view.shown_position(), Point::new(50.0, 50.0));
 }
 
-/// The developer tools' desk on a real flight: the adapter's `DevDesk`
-/// reads the session, the view names the places from its course map, an
-/// edit reaches the session, and a resync after it catches the view up.
+/// `DevDesk`: the developer tools' desk on a real flight reads the
+/// session, the view names the places from its course map, an edit
+/// reaches the session, and a resync after it catches the view up.
 #[test]
 fn a_real_desk_reads_the_session_and_its_edit_reaches_it_before_a_resync() {
     let mut view = view();
@@ -934,6 +965,8 @@ fn fighting_with(
     view
 }
 
+/// `FlightSim::step`'s report: a real fight's hit comes back in the step
+/// report, and the view shows its debris.
 #[test]
 fn a_real_fights_hit_shows_its_effect() {
     let data = fighting_data(&[]);
@@ -956,6 +989,8 @@ fn a_real_fights_hit_shows_its_effect() {
     );
 }
 
+/// `FlightSim::step`'s stop and the router's rescue desc: a rescue in the
+/// pod stops the stepping, and its desc reaches the router.
 #[test]
 fn a_rescue_in_the_pod_stops_the_step_and_opens_its_desc() {
     let data = fighting_data(&[(188, 1), (187, 1)]);
@@ -1013,6 +1048,8 @@ fn near(centres: &[Point], at: Point) -> bool {
         .any(|c| (c.x - at.x).abs() < 0.01 && (c.y - at.y).abs() < 0.01)
 }
 
+/// `FlightSim::frame`, the world: a real fight's ship and shot are drawn
+/// where the frame puts them.
 #[test]
 fn a_real_fights_ship_and_shot_are_drawn_where_its_frame_puts_them() {
     let data = fighting_data(&[]);
@@ -1054,6 +1091,8 @@ fn a_real_fights_ship_and_shot_are_drawn_where_its_frame_puts_them() {
     );
 }
 
+/// `FlightSim::apply` through `ClickInSpace`: a click over the box the
+/// view draws a ship in targets it.
 #[test]
 fn a_real_click_in_space_targets_the_ship_drawn_under_it() {
     let data = fighting_data(&[]);
@@ -1106,6 +1145,8 @@ fn texts(list: &nova_view::DrawList) -> Vec<String> {
         .collect()
 }
 
+/// `FlightSim::frame`, the HUD: the status bar shows the session's
+/// reserves and credits.
 #[test]
 fn a_real_sessions_status_bar_shows_its_reserves_and_cargo() {
     let data = fighting_data(&[]);
@@ -1134,6 +1175,8 @@ fn a_real_sessions_status_bar_shows_its_reserves_and_cargo() {
     );
 }
 
+/// `FlightSim::frame`, the target: Tab's target shows in the target panel
+/// and its brackets.
 #[test]
 fn a_real_target_shows_in_the_panel_and_brackets() {
     let data = fighting_data(&[]);
@@ -1230,6 +1273,8 @@ fn the_pointer_over_a_real_ship_hovers_it_and_the_cursor_shows_it() {
 // The comm and the boarding through the port
 // (rdm:phase/view-sim-seam/phase-10-comm-escorts-boarding-on-port).
 
+/// `CommSource` and the router's hail: a hail sent through the port opens
+/// the comm dialog on the session's hail view, and a hang-up closes it.
 #[test]
 fn a_real_hail_opens_the_comm_dialog_with_the_sessions_hail_view() {
     let data = fighting_data(&[]);
@@ -1325,6 +1370,9 @@ impl nova_sim::BoardingRule for Recorder {
     }
 }
 
+/// `CommSource` and `FlightSim::apply`'s collaborators: a board sent
+/// through the port is judged by the law and boarding rule the view was
+/// built with, and opens the plunder dialog on the session's boarding.
 #[test]
 fn a_real_board_opens_the_plunder_dialog_on_the_sessions_boarding() {
     let data = fighting_data(&[]);
@@ -1465,6 +1513,8 @@ fn docked_view() -> FlightView<Rc<GameData>> {
     view
 }
 
+/// `PortSource`: a trade through the port changes the market the view
+/// shows to the session's.
 #[test]
 fn a_real_trade_changes_the_market_shown() {
     let mut view = docked_view();
@@ -1490,6 +1540,8 @@ fn a_real_trade_changes_the_market_shown() {
     );
 }
 
+/// `PortSource`, the missions: a mission accepted through the port shows
+/// in the mission info as the session lists it.
 #[test]
 fn a_real_mission_accept_shows_in_the_mission_info() {
     let mut view = docked_view();
@@ -1515,6 +1567,8 @@ fn a_real_mission_accept_shows_in_the_mission_info() {
 // `FlightView` over a real session
 // (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks).
 
+/// `NameSource`: the take-off's greeting names its stellar and the
+/// session's long date.
 #[test]
 fn a_real_take_off_greets_naming_its_stellar_and_the_sessions_long_date() {
     let mut view = view();
@@ -1530,6 +1584,8 @@ fn a_real_take_off_greets_naming_its_stellar_and_the_sessions_long_date() {
     );
 }
 
+/// `PilotSource` and the router's player-info request: P opens the
+/// session's player info, and the pilot panel is the session's.
 #[test]
 fn a_real_p_opens_the_sessions_player_info_and_the_pilot_panel_is_the_sessions() {
     let data = data();
