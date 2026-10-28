@@ -42,13 +42,18 @@
 //! which takes a closure no command can carry, is for tests. The adapter
 //! is the developer tools' desk too ([`DevDesk`]).
 //!
-//! **For the strangler's length**, the adapter's fields are visible to
-//! `crate::flight`: the fixture's view over a session it built
-//! (`FlightView::from_session`) and the test conveniences read the
-//! chance and share the catalog through them, and the view's tests put
-//! the session and the collaborators into the state they need. Other
-//! code reads the session through [`SessionFlight::session`]; tests change
-//! it through `SessionFlight::session_mut`.
+//! **Each forward is one `Session` call.** The session decides; the
+//! adapter hands it the collaborators and maps a failed session to its
+//! answer. A decision found here belongs in nova-sim, pinned by its tests.
+//!
+//! **Three fields are visible to `crate::flight`**: `session`, which
+//! the fixture-only `FlightView::session` and the edge's checks read;
+//! `chance`, which the fixture-only `FlightView::from_session` shares
+//! with the view it wires; and `disable_rule`, which the edge's checks
+//! (`flight/view/build/edge_checks.rs`) compare with the setup's rule to
+//! show the fight and the session read one. Other code reads the session
+//! through [`SessionFlight::session`]; tests change it through
+//! `SessionFlight::session_mut`. The other fields are private.
 
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -85,17 +90,17 @@ pub struct SessionFlight<C> {
     /// What each day's events and the traffic are rolled on.
     pub(in crate::flight) chance: SharedChance,
     /// How the NPCs decide.
-    pub(in crate::flight) behaviour: Rc<dyn Behaviour>,
+    behaviour: Rc<dyn Behaviour>,
     /// When a ship in the fight is disabled.
     pub(in crate::flight) disable_rule: Rc<dyn DisableRule>,
     /// Which missiles the ships' point defence engages.
-    pub(in crate::flight) defence_rule: Rc<dyn PointDefenceRule>,
+    defence_rule: Rc<dyn PointDefenceRule>,
     /// What the player's crimes do to its legal record.
-    pub(in crate::flight) law: Rc<dyn LegalCode>,
+    law: Rc<dyn LegalCode>,
     /// Who repels boarders, the capture odds and the capture roll.
-    pub(in crate::flight) boarding_rule: Rc<dyn BoardingRule>,
+    boarding_rule: Rc<dyn BoardingRule>,
     /// The comm dialog's options, which the hail and its answers list.
-    pub(in crate::flight) hail_options: HailOptions,
+    hail_options: HailOptions,
     /// The catalog the view reads, the same handle as the view's, once
     /// the view has shared it ([`SessionFlight::share_catalog`]): the
     /// map's answers that read the catalog read it. `None` before.
