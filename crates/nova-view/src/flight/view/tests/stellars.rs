@@ -148,24 +148,6 @@ fn the_course_map_shows_the_course_the_flight_flies() {
     assert_eq!(view.map.route(), [], "none flown, one plotted");
 }
 
-/// The galaxy of a flight of [`catalog`] with `change` made: what a
-/// scripted flight's galaxy answers after its `GalaxyChanged`.
-fn galaxy_with(
-    change: impl FnOnce(&mut nova_sim::story::GalaxyOverlay),
-) -> nova_sim::story::OverlaidGalaxy {
-    galaxy_of(&catalog(), change)
-}
-
-/// The galaxy of a flight of `catalog` with `change` made.
-fn galaxy_of(
-    catalog: &FakeCatalog,
-    change: impl FnOnce(&mut nova_sim::story::GalaxyOverlay),
-) -> nova_sim::story::OverlaidGalaxy {
-    let mut session = SessionBuilder::flying(catalog).build();
-    assert!(session.change_galaxy(catalog, change));
-    session.galaxy().clone()
-}
-
 /// The galaxy event, queued on `view`'s flight with its galaxy as
 /// `galaxy`.
 fn galaxy_changed(view: &mut Faked, galaxy: nova_sim::story::OverlaidGalaxy) {

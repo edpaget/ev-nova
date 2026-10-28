@@ -1364,20 +1364,12 @@ fn a_missing_alert_icon_draws_nothing_and_says_so_once() {
 
 #[test]
 fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
-    // 132 hidden by its `Visibility`, as the load evaluates it.
-    let hiding = FakeCatalog {
-        visibility: vec![nova_sim::catalog::SystemVisibility {
-            id: SystemId(132),
-            visibility: nova_sim::Test::parse("b50"),
-        }],
-        ..catalog()
-    };
-    let galaxy = SessionBuilder::flying(&hiding).build().galaxy().clone();
+    // 132 hidden by the overlay, as a load's refresh may leave it.
     let mut fake = FakeFlight::new();
     fake.set_frame(sol());
-    fake.map_mut().galaxy = Some(galaxy);
+    fake.map_mut().galaxy = Some(galaxy_with(hiding(132)));
     let view = FlightView::over(
-        Rc::new(hiding),
+        Rc::new(catalog()),
         fake,
         &Rulebook::default(),
         SharedChance::default(),

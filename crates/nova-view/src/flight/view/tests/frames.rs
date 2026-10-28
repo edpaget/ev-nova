@@ -2,10 +2,12 @@
 //! flights with ([`FakeFlight::set_frame`] and the answers' frames), for
 //! the states the tests keep spelling out: in flight in Sol, among NPCs
 //! and with a target, landed, with a course or a jump under way, arrived
-//! in Alpha Centauri.
+//! in Alpha Centauri; and the galaxy a flight's map answers, built with
+//! no session ([`galaxy_of`]).
 
 use super::*;
 use nova_sim::flight_frame::{FrameShip, FrameTarget};
+use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
 /// The frame of a flight in Sol (130), nav off, nothing plotted.
 pub(super) fn in_sol() -> FlightFrame {
@@ -137,4 +139,21 @@ pub(super) fn in_alpha() -> FlightFrame {
         stellars: vec![record::stellar(StellarId(140))],
         ..sol()
     }
+}
+
+/// The galaxy of `catalog`'s systems, as a flight's map answers it
+/// (`MapSource::galaxy`), with `change` made to its overlay: built from
+/// the catalog's star map with no session.
+pub(super) fn galaxy_of(
+    catalog: &FakeCatalog,
+    change: impl FnOnce(&mut GalaxyOverlay),
+) -> OverlaidGalaxy {
+    let mut overlay = GalaxyOverlay::default();
+    change(&mut overlay);
+    OverlaidGalaxy::new(catalog.star_map(), overlay)
+}
+
+/// [`galaxy_of`] [`catalog`] with `change` made.
+pub(super) fn galaxy_with(change: impl FnOnce(&mut GalaxyOverlay)) -> OverlaidGalaxy {
+    galaxy_of(&catalog(), change)
 }
