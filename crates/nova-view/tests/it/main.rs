@@ -11,6 +11,7 @@ mod hyperlink_graphs;
 mod stock_combat_effects;
 mod stock_dialogs;
 mod stock_flight_hud;
+mod stock_flight_seam;
 mod stock_galaxy_map;
 mod stock_main_screen;
 mod stock_map_borders;
