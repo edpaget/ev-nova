@@ -12,12 +12,13 @@
 //!   ([`nova_sim::Session::load`]), as `_OpenLastPilotFile` sweeps
 //!   (@0x765a2-0x765ce). The original sweeps after the load; both settle
 //!   before the menu's first frame;
-//! - its ship facing a drawn heading and the offers' rolls drawn
-//!   ([`SessionFlight::resume`](nova_view::flight::SessionFlight::resume));
-//! - every active mission's auxiliary ships restarted in the unguarded
+//! - its ship facing a drawn heading and the offers' rolls drawn, then
+//!   every active mission's auxiliary ships restarted in the unguarded
 //!   form the take-off uses, and the player's system explored, as
 //!   `_OpenLastPilotFile`'s loop (@0x765d4-0x76637) and `_DoMainScreen`'s
-//!   once-a-launch setup (@0x1affe) do ([`SessionFlight::open_at_launch`](nova_view::flight::SessionFlight::open_at_launch)).
+//!   once-a-launch setup (@0x1affe) do, in one call
+//!   ([`SessionFlight::open_saved`](nova_view::flight::SessionFlight::open_saved)
+//!   with [`SavedOpening::AtLaunch`]).
 //!
 //! What its hooks then make due is settled at once, and any save they make
 //! due is dropped: the original saves nothing at launch.
@@ -41,6 +42,8 @@
 //! session is built per load), `_MissionPostLoadValidCheck` (crash logging
 //! only, @0x9b8f2) and the port clears (the engine redraws every frame).
 
+use nova_sim::SavedOpening;
+
 use super::AppScreen;
 
 impl AppScreen {
@@ -58,10 +61,7 @@ impl AppScreen {
         if flight.failure().is_some() || flight.sim().load_repaired() {
             return self;
         }
-        flight.change_sim(|sim| {
-            sim.resume();
-            sim.open_at_launch();
-        });
+        flight.change_sim(|sim| sim.open_saved(SavedOpening::AtLaunch));
         self.hold_game(flight);
         let _ = self.settle_game();
         // Before the first frame, which no input or tick precedes.

@@ -193,7 +193,7 @@ impl Session {
     /// engine's generator isn't the original's).
     ///
     /// [`AuxShips::restart_from_main_screen`]: crate::mission::aux_ships::AuxShips::restart_from_main_screen
-    pub fn restart_aux_from_main_screen(&mut self, chance: &mut dyn Chance) {
+    pub(crate) fn restart_aux_from_main_screen(&mut self, chance: &mut dyn Chance) {
         let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
         for slot in slots {
             let Some(active) = self.pilot.missions.get(slot) else {
@@ -226,7 +226,7 @@ impl Session {
     /// frame.
     ///
     /// [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
-    pub fn open_at_launch(&mut self, chance: &mut dyn Chance) {
+    pub(crate) fn open_at_launch(&mut self, chance: &mut dyn Chance) {
         self.run
             .open_at_launch(&mut self.pilot, &self.statics, chance);
     }

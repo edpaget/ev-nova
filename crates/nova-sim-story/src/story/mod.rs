@@ -431,7 +431,7 @@
 //! systems, the launch's load of the last pilot too (main-screen phase 4,
 //! `nova_sim::PilotKeeper::open_last`); the launch then explores the
 //! player's system once, as `_DoMainScreen` does
-//! (`nova_sim::Session::open_at_launch`); and the Rulebook keys
+//! (`nova_sim::Session::open_saved` at launch); and the Rulebook keys
 //! [`nebula_explore_once`](crate::RuleKey::NebulaExploreOnce) and
 //! [`nebula_new_pilot`](crate::RuleKey::NebulaNewPilot) offer the other
 //! readings (see the session's `nebulae` module).

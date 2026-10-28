@@ -1363,7 +1363,7 @@ impl Session {
     /// `_OpenPilotFile` @0x7673e). The table is not in the pilot file. A
     /// docked pilot's landing roll draws it again on its `Landed` effect,
     /// as the original's dock request does.
-    pub fn resume(&mut self, chance: &mut dyn Chance) {
+    pub(crate) fn resume(&mut self, chance: &mut dyn Chance) {
         self.face_on_load(chance);
         self.run.draw_offer_rolls(chance);
     }

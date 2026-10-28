@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use nova_sim::new_pilot::{kept_name, name_defaults};
-use nova_sim::{OpenError, Pilot, RuleKey, RuleSource, pilot_key};
+use nova_sim::{OpenError, Pilot, RuleKey, RuleSource, SavedOpening, pilot_key};
 #[cfg(doc)]
 use nova_view::flight::FlightView;
 use nova_view::menu::{Chosen, ChosenBy, MenuChoice, PilotList, PilotListOutcome};
@@ -362,11 +362,12 @@ impl AppScreen {
 
     /// The saved pilots' list's input. The pilot chosen is opened as
     /// `_MainScreenChoice(1)` opens it and held on the main menu, not
-    /// flying, in place of any game held: its ship faces a drawn heading
-    /// ([`SessionFlight::resume`](nova_view::flight::SessionFlight::resume)), its explored systems' nebulae are swept
-    /// as its session is built ([`nova_sim::Session::load`]), and its
-    /// active missions' auxiliary ships restart
-    /// ([`SessionFlight::open_on_main_screen`](nova_view::flight::SessionFlight::open_on_main_screen), @0x1a918-0x1a982). The engine
+    /// flying, in place of any game held: its explored systems' nebulae are
+    /// swept as its session is built ([`nova_sim::Session::load`]), then its
+    /// ship faces a drawn heading and its active missions' auxiliary ships
+    /// restart (@0x1a918-0x1a982), in one call
+    /// ([`SessionFlight::open_saved`](nova_view::flight::SessionFlight::open_saved)
+    /// with [`SavedOpening::OpenPilot`]). The engine
     /// sweeps as it builds the session, before the note below, where the
     /// original sweeps after it (@0x1a8d4, after @0x1a85b); nothing the
     /// sweep changes shows on the main screen.
@@ -406,10 +407,7 @@ impl AppScreen {
                     Ok(pilot) => {
                         let mut flight = self.pilot_flight(pilot, true, None);
                         // The load's heading, before any frame is drawn.
-                        flight.change_sim(|sim| {
-                            sim.resume();
-                            sim.open_on_main_screen();
-                        });
+                        flight.change_sim(|sim| sim.open_saved(SavedOpening::OpenPilot));
                         let repaired = flight.sim().load_repaired();
                         let held_before = self.game.is_some();
                         self.hold_game(flight);

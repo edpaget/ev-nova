@@ -25,8 +25,8 @@ use nova_sim::mission::screens::SPACEPORT;
 use nova_sim::{
     ApplyCollaborators, Behaviour, Chance, ControlBits, DisasterId, DisasterRecord, Goal, Good,
     HailOptions, JunkRecord, LandingSite, MissionId, NeverFires, NovaBoarding, NovaLaw, OutfitId,
-    Pilot, PlayerFate, RuleKey, RuleSource, Rulebook, Rules, Session, SessionSetup, ShipId,
-    ShipRecord, ShipRef, SimCatalog, StellarPick, SystemId, VenueOffer,
+    Pilot, PlayerFate, RuleKey, RuleSource, Rulebook, Rules, SavedOpening, Session, SessionSetup,
+    ShipId, ShipRecord, ShipRef, SimCatalog, StellarPick, SystemId, VenueOffer,
 };
 
 use crate::flight::catalog::GovtId;
@@ -636,31 +636,12 @@ fn the_flights_mission_systems_are_its_sessions() {
 // Entering play.
 
 #[test]
-fn resuming_faces_the_heading_drawn_on_the_flights_chance() {
-    let (script, chance) = scripted(&[123]);
-    let catalog = shared(catalog());
-    let session = SessionBuilder::flying(&*catalog)
-        .named("Ada")
-        .over(StellarId(128))
-        .build();
-    let mut flight = flight_of(&catalog, session.clone(), rolling_on(chance));
-    flight.resume();
-    let mut by_hand = session;
-    let (own, mut own_chance) = scripted(&[123]);
-    by_hand.resume(&mut own_chance);
-    assert_eq!(flight.session(), Ok(&by_hand));
-    assert_eq!(script.borrow().asked, own.borrow().asked, "on its chance");
-    assert!(!own.borrow().asked.is_empty());
-}
-
-#[test]
-fn a_failed_flight_resumes_nothing() {
+fn a_failed_flight_opens_no_saved_pilot() {
     let (script, chance) = scripted(&[123]);
     let mut broken = SessionFlight::<FakeCatalog>::new(Err("no chär".to_owned()))
         .with_collaborators(rolling_on(chance));
-    broken.resume();
-    broken.open_on_main_screen();
-    broken.open_at_launch();
+    broken.open_saved(SavedOpening::AtLaunch);
+    broken.open_saved(SavedOpening::OpenPilot);
     assert_eq!(broken.pilot(), None);
     assert!(script.borrow().asked.is_empty(), "nothing drawn");
 }
@@ -695,32 +676,30 @@ fn aux_errand() -> (Rc<FakeCatalog>, Session) {
     (catalog, session)
 }
 
-#[test]
-fn opening_on_the_main_screen_restarts_the_aux_countdown_on_the_flights_chance() {
+/// Checks that [`SessionFlight::open_saved`] forwards `opening` to
+/// `Session::open_saved` on the flight's chance, over [`aux_errand`]'s
+/// session: the same session and the same draws as the call by hand.
+fn opens_saved_on_the_flights_chance(opening: SavedOpening) {
     let (catalog, session) = aux_errand();
-    let (script, chance) = scripted(&[9]);
+    let (script, chance) = scripted(&[123, 9]);
     let mut flight = flight_of(&catalog, session.clone(), rolling_on(chance));
-    flight.open_on_main_screen();
+    flight.open_saved(opening);
     let mut by_hand = session;
-    let (own, mut own_chance) = scripted(&[9]);
-    by_hand.restart_aux_from_main_screen(&mut own_chance);
+    let (own, mut own_chance) = scripted(&[123, 9]);
+    by_hand.open_saved(opening, &mut own_chance);
     assert_eq!(flight.session(), Ok(&by_hand));
     assert_eq!(script.borrow().asked, own.borrow().asked, "on its chance");
     assert!(!own.borrow().asked.is_empty());
 }
 
 #[test]
-fn opening_at_launch_restarts_the_aux_countdown_on_the_flights_chance() {
-    let (catalog, session) = aux_errand();
-    let (script, chance) = scripted(&[4]);
-    let mut flight = flight_of(&catalog, session.clone(), rolling_on(chance));
-    flight.open_at_launch();
-    let mut by_hand = session;
-    let (own, mut own_chance) = scripted(&[4]);
-    by_hand.open_at_launch(&mut own_chance);
-    assert_eq!(flight.session(), Ok(&by_hand));
-    assert_eq!(script.borrow().asked, own.borrow().asked, "on its chance");
-    assert!(!own.borrow().asked.is_empty());
+fn opening_a_saved_pilot_at_launch_forwards_on_the_flights_chance() {
+    opens_saved_on_the_flights_chance(SavedOpening::AtLaunch);
+}
+
+#[test]
+fn opening_a_saved_pilot_from_open_pilot_forwards_on_the_flights_chance() {
+    opens_saved_on_the_flights_chance(SavedOpening::OpenPilot);
 }
 
 // The pilot, its load and its transactions.

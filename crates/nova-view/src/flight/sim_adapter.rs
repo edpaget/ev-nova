@@ -33,8 +33,7 @@
 //! handed as it opens ([`SessionFlight::opening`]), its setup and the
 //! run's history ([`SessionFlight::set_up`], [`SessionFlight::carry_over`],
 //! one `Session` call each), entering play ([`SessionFlight::begin`],
-//! [`SessionFlight::enter_game`], [`SessionFlight::resume`],
-//! [`SessionFlight::open_on_main_screen`], [`SessionFlight::open_at_launch`]),
+//! [`SessionFlight::enter_game`], [`SessionFlight::open_saved`]),
 //! saving ([`SessionFlight::may_save`], [`SessionFlight::is_dying`],
 //! [`SessionFlight::deletes_pilot_on_ending_play`],
 //! [`SessionFlight::load_repaired`], [`SessionFlight::loaded_after_movie`])
@@ -60,8 +59,8 @@ use nova_sim::flight_frame::{
 };
 use nova_sim::{
     Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DisableRule, HailOptions, LegalCode,
-    NovaAi, NovaBoarding, NovaDisable, NovaLaw, Pilot, PointDefenceRule, Rules, Session,
-    SimCatalog, StepCollaborators,
+    NovaAi, NovaBoarding, NovaDisable, NovaLaw, Pilot, PointDefenceRule, Rules, SavedOpening,
+    Session, SimCatalog, StepCollaborators,
 };
 
 use nova_sim::{
@@ -330,29 +329,13 @@ impl<C> SessionFlight<C> {
         true
     }
 
-    /// Resumes a pilot opened from a save (`nova_sim::Session::resume`)
-    /// on the flight's chance; a failed session resumes nothing.
-    pub fn resume(&mut self) {
+    /// Opens a pilot from a save as `opening` says
+    /// (`nova_sim::Session::open_saved`), on the flight's chance: it
+    /// resumes the pilot, then runs the launch's setup or Open Pilot's
+    /// restart of the auxiliary ships. A failed session opens nothing.
+    pub fn open_saved(&mut self, opening: SavedOpening) {
         if let Ok(session) = &mut self.session {
-            session.resume(&mut self.chance);
-        }
-    }
-
-    /// Opens a pilot just loaded on the main screen: every active
-    /// mission's auxiliary ships restart
-    /// (`nova_sim::Session::restart_aux_from_main_screen`) on the flight's
-    /// chance. A failed session opens nothing.
-    pub fn open_on_main_screen(&mut self) {
-        if let Ok(session) = &mut self.session {
-            session.restart_aux_from_main_screen(&mut self.chance);
-        }
-    }
-
-    /// Opens the last pilot at launch (`nova_sim::Session::open_at_launch`)
-    /// on the flight's chance. A failed session opens nothing.
-    pub fn open_at_launch(&mut self) {
-        if let Ok(session) = &mut self.session {
-            session.open_at_launch(&mut self.chance);
+            session.open_saved(opening, &mut self.chance);
         }
     }
 
@@ -943,9 +926,8 @@ mod tests {
         assert_eq!(flight.carry_over(), None);
         assert!(!flight.begin());
         assert!(!flight.enter_game());
-        flight.resume();
-        flight.open_on_main_screen();
-        flight.open_at_launch();
+        flight.open_saved(SavedOpening::AtLaunch);
+        flight.open_saved(SavedOpening::OpenPilot);
         assert_eq!(flight.session().err(), Some("no chär"), "still failed");
         assert!(!flight.may_save());
         assert!(!flight.is_dying());
