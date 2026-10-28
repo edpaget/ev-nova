@@ -301,7 +301,7 @@ fn a_quit_during_the_panel_ends_the_startup_with_the_no_data_status_and_no_alert
 }
 
 #[test]
-fn a_quit_leaves_a_remembered_directory_it_never_tried_untouched() {
+fn a_quit_with_nothing_remembered_saves_nothing() {
     let store = MemorySettings::new();
     let mut machine = Machine::new(&store, &[], &[]).then_quit();
     assert_eq!(machine.launch().err(), Some(2));
