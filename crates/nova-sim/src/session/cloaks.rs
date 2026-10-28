@@ -74,8 +74,11 @@ impl Session {
 
     /// Whether `npc`'s cloak lets the player see it, leaving aside a gate
     /// it waits at, which [`Session::sees`] holds unseen.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn sees_past_cloak(&self, npc: &Npc) -> bool {
+    pub(crate) fn sees_past_cloak(&self, npc: &Npc) -> bool {
         self.ship.sees_past_cloak(&self.pilot, &self.statics, npc)
     }
 
@@ -135,8 +138,11 @@ impl Session {
 
     /// The play area the view shows about the player, or
     /// [`DEFAULT_PLAY_AREA`](crate::cloak::DEFAULT_PLAY_AREA) until it says.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn play_area(&self) -> Area {
+    pub(crate) fn play_area(&self) -> Area {
         self.space.play_area()
     }
 
@@ -196,6 +202,9 @@ impl Space {
 
     /// The play area the view shows about the player, or
     /// [`DEFAULT_PLAY_AREA`](crate::cloak::DEFAULT_PLAY_AREA) until it says.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     fn play_area(&self) -> Area {
         self.play_area

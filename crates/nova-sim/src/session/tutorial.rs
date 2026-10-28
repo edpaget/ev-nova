@@ -18,12 +18,16 @@ use crate::message::SimMessage;
 use crate::navigation::NavMode;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
+#[cfg(test)]
 use crate::tutorial::Tutorial;
 
 impl Session {
     /// How far through the first-flight tutorial the pilot is.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn tutorial(&self) -> Tutorial {
+    pub(crate) fn tutorial(&self) -> Tutorial {
         self.tutorial
     }
 

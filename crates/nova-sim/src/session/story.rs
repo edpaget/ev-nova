@@ -429,7 +429,10 @@ impl Session {
     /// Unregisters the subscription `id`, and clears its once-fired entry,
     /// so one registered under the same id again starts fresh: whether one
     /// was registered. Clearing a fired entry makes a save due.
-    pub fn unregister_story(&mut self, id: SubscriptionId) -> bool {
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
+    pub(crate) fn unregister_story(&mut self, id: SubscriptionId) -> bool {
         self.run
             .unregister_story(&mut self.pilot, &mut self.out, id)
     }

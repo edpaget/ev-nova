@@ -29,7 +29,7 @@
 //! **The loop's pass.** Each press that leaves the dialog open (a take, a
 //! miss, a full fleet) ends at @0x9499c: `_PlunderDialogUpdate`, then
 //! `_HandleComm` (@0x949a1), which counts the message line down one tick
-//! ([`Session::comm_line`]) and hides the floating map once it has been
+//! (`Session::comm_line`) and hides the floating map once it has been
 //! up 500 ticks (the flight view's). So the line loses a tick a press,
 //! not a frame. Abort, a self-destruct, a failed capture and a capture
 //! close the dialog first and count nothing.

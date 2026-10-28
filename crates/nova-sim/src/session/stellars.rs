@@ -57,7 +57,7 @@
 //! player's system (`_HandleStellarSystemVisibility` @0x32aa5) at its
 //! rebuild points, and the session keeps which stellars shown that rebuild
 //! found destroyed until a flight frame finds them whole
-//! ([`Session::dead_since_rebuild`]; see the `story` module's "Built by
+//! (`Session::dead_since_rebuild`; see the `story` module's "Built by
 //! phase 9" and `story::rebuild`), with the stellar masters loaded and
 //! the sprite slots left with no frame, which the player's landing
 //! distance reads ([`Session::land`], by
@@ -164,8 +164,11 @@ impl Session {
     /// module docs). A stellar with no `DeadType` sheet draws graphic type
     /// 0 while this holds, by
     /// [`RuleKey::DeadTypeFallback`]'s engine reading.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn dead_since_rebuild(&self, stellar: StellarId) -> bool {
+    pub(crate) fn dead_since_rebuild(&self, stellar: StellarId) -> bool {
         self.space.dead_since_rebuild(stellar)
     }
 
@@ -544,6 +547,9 @@ impl Space {
     /// module docs). A stellar with no `DeadType` sheet draws graphic type
     /// 0 while this holds, by
     /// [`RuleKey::DeadTypeFallback`]'s engine reading.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     fn dead_since_rebuild(&self, stellar: StellarId) -> bool {
         self.rebuilt.dead(stellar)

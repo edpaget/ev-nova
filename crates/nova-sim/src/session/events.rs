@@ -30,7 +30,7 @@
 //!   shoot a stellar down (story-runtime phase 8).
 //! - [`SessionEvent::StellarsRebuilt`]: a rebuild point changed which
 //!   stellars shown are dead since the last rebuild
-//!   ([`Session::dead_since_rebuild`]; see the `stellars` module). It is
+//!   (`Session::dead_since_rebuild`; see the `stellars` module). It is
 //!   told only on a change, as `GalaxyChanged` is, after the transition's
 //!   own events: the flight view draws each stellar of the scene shown
 //!   again, with no new layout (story-runtime phase 9).

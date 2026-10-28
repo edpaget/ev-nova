@@ -101,7 +101,7 @@ pub(super) struct Space {
     /// which the fight's interfered shots circle by ([`Field::frame`](crate::combat::Field::frame)).
     pub(super) pass_frame: i16,
     /// Each ship slot's draw layer and when it entered it (see
-    /// [`Session::draw_order`](super::Session::draw_order)), and the frames it last cloned (see
+    /// `Session::draw_order`), and the frames it last cloned (see
     /// [`Session::framed_by`](super::Session::framed_by)): kept from the session's start, across
     /// every system entry and every ship leaving; never saved.
     pub(super) slot_sprites: crate::ship_layer::SlotSprites,

@@ -84,8 +84,11 @@ impl Session {
 
     /// The dock request, if any: the stellar requested and its counter
     /// (see the `clearance` module).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn dock_request(&self) -> Option<crate::clearance::DockRequest> {
+    pub(crate) fn dock_request(&self) -> Option<crate::clearance::DockRequest> {
         self.port.dock_request()
     }
 
@@ -233,6 +236,9 @@ impl Port {
 
     /// The dock request, if any: the stellar requested and its counter
     /// (see the `clearance` module).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     fn dock_request(&self) -> Option<crate::clearance::DockRequest> {
         self.dock

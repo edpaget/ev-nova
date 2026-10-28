@@ -109,9 +109,9 @@ impl Session {
 
     /// Selects the next secondary weapon, or the one before it when
     /// `backwards`, at once, with its sound, as a Weapon Select press does
-    /// on the next pass: for tests and fixtures.
-    #[cfg(any(test, feature = "fixture"))]
-    pub fn select_secondary(&mut self, backwards: bool) {
+    /// on the next pass: for the tests, as no production code calls it.
+    #[cfg(test)]
+    pub(crate) fn select_secondary(&mut self, backwards: bool) {
         self.ship
             .select_secondary(&mut self.pilot, &self.statics, &mut self.out, backwards);
     }

@@ -59,7 +59,7 @@
 //! **Drawn.** `_HandleShipDisplay` treats a ship the player leads apart
 //! in three branches. It draws it in the escorts' layer, under the other
 //! ships and the player and over the disabled ones (@0x2bd24-0x2bd47,
-//! [`Session::draw_order`]; see [`ship_layer`](crate::ship_layer)), in
+//! `Session::draw_order`; see [`ship_layer`](crate::ship_layer)), in
 //! the order each ship entered it, so a ship that stops being led goes
 //! on top of the other ships and the player, as `_PutSpriteInLayer`
 //! leaves it (@0x766c; [`RuleKey::ShipOverlap`] chooses). At a
@@ -102,15 +102,18 @@ impl Session {
     /// sprites are hidden until then, unless [`RuleKey::UndisplayedShips`]
     /// reads otherwise (`Space::is_displayed`; see the
     /// `slot_visibility` module).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn draw_order(&self) -> Vec<ShipRef> {
+    pub(crate) fn draw_order(&self) -> Vec<ShipRef> {
         self.draw_layers()
             .into_iter()
             .map(|(ship, _)| ship)
             .collect()
     }
 
-    /// The ships in [`Session::draw_order`], each with the layer it is
+    /// The ships in `Session::draw_order`, each with the layer it is
     /// drawn in, which the view stacks the shots among
     /// ([`sprite_layer`](crate::sprite_layer)).
     #[must_use]
@@ -207,7 +210,7 @@ impl Session {
     }
 
     /// Each ship slot's draw layer and when it entered it, as the last
-    /// flight tick laid them out ([`Session::draw_order`]), and the frames
+    /// flight tick laid them out (`Session::draw_order`), and the frames
     /// it last cloned ([`Session::framed_by`]): the history to hand a
     /// session loaded later in the same run
     /// ([`Session::with_slot_sprites`]).
@@ -337,7 +340,7 @@ impl Space {
     }
 
     /// Each ship slot's draw layer and when it entered it, as the last
-    /// flight tick laid them out ([`Session::draw_order`]), and the frames
+    /// flight tick laid them out (`Session::draw_order`), and the frames
     /// it last cloned ([`Session::framed_by`]): the history to hand a
     /// session loaded later in the same run
     /// ([`Session::with_slot_sprites`]).

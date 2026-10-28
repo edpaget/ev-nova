@@ -933,7 +933,7 @@ pub const NAV_OFF_KEY: Key = Key::Char('`');
 pub const HYPER_SELECT_KEY: Key = Key::Char('\\');
 
 /// The Hyperspace Mode key, which puts the nav system in hyperspace mode
-/// and selects the course's next hop ([`Session::hyperspace_mode`]): the
+/// and selects the course's next hop (`nova_sim::Session::hyperspace_mode`): the
 /// original's default, H (`_loadKeys` @0xcd5f8 `hyperMode`, keycode
 /// 0x04, handled in `_HandlePlayer` @0x69b76-0x69b89). Held outside a
 /// jump, it shows the floating map (@0x69b8e-0x69ba8; see the

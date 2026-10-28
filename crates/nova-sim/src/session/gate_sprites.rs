@@ -45,8 +45,11 @@ impl Session {
 
     /// Whether hypergate `gate` is open: on its open frame or past it
     /// ([`GateSprite::is_open`](crate::gate_sprite::GateSprite::is_open)).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn gate_open(&self, gate: StellarId) -> bool {
+    pub(crate) fn gate_open(&self, gate: StellarId) -> bool {
         self.chart.gate_site(gate).is_some_and(|site| {
             self.space
                 .gate_sprites

@@ -56,8 +56,11 @@ impl Session {
 
     /// The player's ionization factor, `_ShipIonizationFactor`: its charge
     /// over its capacity ([`factor`]).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn ion_factor(&self) -> f32 {
+    pub(crate) fn ion_factor(&self) -> f32 {
         self.ship.ion_factor()
     }
 
@@ -549,17 +552,6 @@ mod tests {
         );
         assert_eq!(session.player_ion_tint(), None);
         assert_eq!(session.ion(), crate::combat::ion::Ion::default());
-    }
-
-    #[test]
-    fn the_murk_colour_rule_reaches_the_view_through_the_session() {
-        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-        let session = flying(&ionizing(), 0.0);
-        assert_eq!(session.ion_tint_murk_colour(), RuleSource::Engine);
-        let bible = session.with_rules(
-            Rulebook::default().with_override(RuleKey::IonTintMurkColour, RuleSource::Bible),
-        );
-        assert_eq!(bible.ion_tint_murk_colour(), RuleSource::Bible);
     }
 
     // The lockout.

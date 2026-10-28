@@ -106,6 +106,7 @@ use crate::ai::CommCall;
 use crate::ai::call_for_help::{DistressFacts, calls_for_help, threatens_player};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
+#[cfg(any(test, doc))]
 use crate::comm_line::CommLine;
 use crate::hail::{Help, QUIET, likes_player};
 use crate::legal::LegalCode;
@@ -149,8 +150,11 @@ impl Session {
     }
 
     /// The message line's countdown, as the calls read it.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn comm_line(&self) -> CommLine {
+    pub(crate) fn comm_line(&self) -> CommLine {
         self.space.comm_line()
     }
 
@@ -314,6 +318,9 @@ impl Space {
     }
 
     /// The message line's countdown, as the calls read it.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     fn comm_line(&self) -> CommLine {
         self.comm_line

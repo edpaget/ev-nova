@@ -34,7 +34,7 @@
 //! - Option-backquote ([`Session::clear_target`], @0x69a17-0x69a90): the
 //!   ship target let go, with [`SimSound::TargetCleared`] when there was
 //!   one (@0x69a7d). The nav mode is untouched.
-//! - Hyperspace Mode, H ([`Session::hyperspace_mode`], @0x69b76-0x69b89):
+//! - Hyperspace Mode, H (`Session::hyperspace_mode`, @0x69b76-0x69b89):
 //!   the beep and the dock request dropped, then, unless the mode is 3 already, mode 3 with nothing
 //!   selected and the course cued.
 //! - The cue ([`Session::cue_course`], `_CueNextHyperRouteDest`
@@ -431,7 +431,10 @@ impl Session {
     /// unless the mode is 3 already, mode 3 with nothing selected and the
     /// course's next hop cued ([`Session::cue_course`]). During a jump
     /// (pre-jump stage too) nothing changes and it says so.
-    pub fn hyperspace_mode(&mut self) -> bool {
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
+    pub(crate) fn hyperspace_mode(&mut self) -> bool {
         self.nav_mode_keys(false, true)
     }
 

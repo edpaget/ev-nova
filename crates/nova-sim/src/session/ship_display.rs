@@ -204,13 +204,6 @@ impl Session {
         self.ship.player_ion_tint()
     }
 
-    /// How a murk-colorized ionized ship's tint takes its colour
-    /// ([`RuleKey::IonTintMurkColour`]), which the view reads.
-    #[must_use]
-    pub fn ion_tint_murk_colour(&self) -> RuleSource {
-        self.setup.ion_tint_murk_colour()
-    }
-
     /// Ship class `ship`'s own `Shield` as the original loads it (class
     /// +0x5c: a negative one 5 times its size,
     /// [`shield_points`](crate::reserves::shield_points)), none of its
@@ -232,13 +225,6 @@ impl Setup {
             alt_held: self.rules.source_for(RuleKey::DisabledAltHeld),
             lights_zeroed: self.rules.source_for(RuleKey::LightsOutZeroesBlink),
         }
-    }
-
-    /// How a murk-colorized ionized ship's tint takes its colour
-    /// ([`RuleKey::IonTintMurkColour`]), which the view reads.
-    #[must_use]
-    fn ion_tint_murk_colour(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::IonTintMurkColour)
     }
 }
 

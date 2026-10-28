@@ -37,13 +37,13 @@
 //! The player plots a course to a system on the star map: the fewest
 //! jumps along the hyperlinks, which the
 //! session's [`HyperlinkRule`] (the engine's, one way along each system's
-//! own links, unless [`Session::with_hyperlinks`] says otherwise) lets it
+//! own links, unless `Session::with_hyperlinks` says otherwise) lets it
 //! follow. J
 //! ([`Session::begin_jump`]) is accepted when the
 //! [`hyperspace`](crate::hyperspace) rules allow a jump to the next system
 //! on it, with the no-jump zone applying where the session's
 //! [`JumpZoneRule`] says (the engine's, only in a system with a stellar
-//! that is no gate, unless [`Session::with_jump_zone`] says otherwise).
+//! that is no gate, unless `Session::with_jump_zone` says otherwise).
 //! The ship then flies the pre-jump stage on its own, the player's
 //! controls ignored: it brakes and turns to the map bearing of that system
 //! as [`pre_jump`] says ([`Session::preparing_jump`]), and the jump begins
@@ -54,7 +54,7 @@
 //! the rest of the course still ahead. A ship with a multi-jump outfit
 //! passes on along the course in the same jump, as many systems as
 //! [`hops_per_jump`] gives, and enters only the last; the session's
-//! [`MultiJumpRule`] (the engine's unless [`Session::with_multi_jump`]
+//! [`MultiJumpRule`] (the engine's unless `Session::with_multi_jump`
 //! says otherwise) decides whether the chain costs one jump's fuel and
 //! days or each hop's. An arrival that made no hop clears the course, or
 //! drops its first hop when that stands at the arrival, and each rebuild
@@ -89,7 +89,7 @@
 //! clicking it, as the [`navigation`](crate::navigation) rules say;
 //! turns the nav system off with Nav Off ([`Session::nav_off`]), the
 //! course kept; selects the course's next hop with Hyperspace Mode
-//! ([`Session::hyperspace_mode`]); or presses the land key
+//! (`Session::hyperspace_mode`); or presses the land key
 //! ([`Session::land`]), which selects the nearest stellar with the can-land flag when
 //! none is selected and lands on the one selected when there is one.
 //! Landing keeps the selection, and the take-off lets go of it. The mode
@@ -98,7 +98,7 @@
 //! Hyper Select ([`Session::select_next_system`], the original's `\`
 //! key) cycles the selection through the systems linked with the one the
 //! ship is in, as the session's [`HyperSelectRule`] says (the engine's
-//! unless [`Session::with_hyper_select`] says otherwise). By the engine's
+//! unless `Session::with_hyper_select` says otherwise). By the engine's
 //! reading each press moves only the selection and keeps the course; by
 //! [`HyperSelectRule::OneJumpCourse`] it leaves a one-jump course.
 //!
@@ -708,9 +708,10 @@ use crate::control::ScriptNote;
 use crate::date::{self, GameDate};
 use crate::flight::{Controls, FlightRules, ShipState, player_step};
 use crate::fuel::regenerate;
+#[cfg(any(test, doc))]
+use crate::gate::WormholeRule;
 use crate::gate::{
-    self, GateArrivalRule, GateKind, GateRefusal, WormholeRule, emerge, has_links, hypergate_exit,
-    wormhole_exit,
+    self, GateArrivalRule, GateKind, GateRefusal, emerge, has_links, hypergate_exit, wormhole_exit,
 };
 use crate::geometry::Vec2;
 use crate::glow::step_glow;
@@ -718,9 +719,11 @@ use crate::govt::{Governments, HALF_JAMMING};
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::handling::Handling;
 use crate::hyperspace::{
-    CoLocated, HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
-    MultiJumpRule, RouteError, StarMap, arrival, check_jump, hold_jump, hops_per_jump, jump_zone,
+    CoLocated, JUMP_FUEL, JumpReadiness, JumpRefusal, RouteError, StarMap, arrival, check_jump,
+    hold_jump, hops_per_jump, jump_zone,
 };
+#[cfg(any(test, doc))]
+use crate::hyperspace::{HyperSelectRule, HyperlinkRule, JumpZoneRule, MultiJumpRule};
 use crate::landing::{LandOutcome, LandingRefusal, Standing, land_or_select};
 use crate::legal::{self, Crime, LegalCode};
 use crate::market::{
@@ -753,6 +756,7 @@ use crate::story::day::Stay;
 use crate::story::{Fate, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
 use crate::top_speed;
+#[cfg(test)]
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
 use crate::traffic::table::SpawnTable;
@@ -1485,48 +1489,66 @@ impl Session {
 
     /// This session with multi-jumps following `rule`; the engine's by
     /// default.
+    ///
+    /// For the tests: no production code calls it, so only they set this reading.
+    #[cfg(test)]
     #[must_use]
-    pub fn with_multi_jump(mut self, rule: MultiJumpRule) -> Self {
+    pub(crate) fn with_multi_jump(mut self, rule: MultiJumpRule) -> Self {
         self.setup.multi_jump = rule;
         self
     }
 
     /// This session with Hyper Select following `rule`; the engine's by
     /// default.
+    ///
+    /// For the tests: no production code calls it, so only they set this reading.
+    #[cfg(test)]
     #[must_use]
-    pub fn with_hyper_select(mut self, rule: HyperSelectRule) -> Self {
+    pub(crate) fn with_hyper_select(mut self, rule: HyperSelectRule) -> Self {
         self.setup.hyper_select = rule;
         self
     }
 
     /// This session with jumps following the hyperlinks under `rule`; the
     /// engine's by default.
+    ///
+    /// For the tests: no production code calls it, so only they set this reading.
+    #[cfg(test)]
     #[must_use]
-    pub fn with_hyperlinks(mut self, rule: HyperlinkRule) -> Self {
+    pub(crate) fn with_hyperlinks(mut self, rule: HyperlinkRule) -> Self {
         self.setup.hyperlinks = rule;
         self
     }
 
     /// This session with the no-jump zone applying where `rule` says; the
     /// engine's by default, only in a system with an ordinary stellar.
+    ///
+    /// For the tests: no production code calls it, so only they set this reading.
+    #[cfg(test)]
     #[must_use]
-    pub fn with_jump_zone(mut self, rule: JumpZoneRule) -> Self {
+    pub(crate) fn with_jump_zone(mut self, rule: JumpZoneRule) -> Self {
         self.setup.jump_zone = rule;
         self
     }
 
     /// This session with ships coming out of hypergates and wormholes as
     /// `rule` says; the engine's by default.
+    ///
+    /// For the tests: no production code calls it, so only they set this reading.
+    #[cfg(test)]
     #[must_use]
-    pub fn with_gate_arrival(mut self, rule: GateArrivalRule) -> Self {
+    pub(crate) fn with_gate_arrival(mut self, rule: GateArrivalRule) -> Self {
         self.setup.gate_arrival = rule;
         self
     }
 
     /// This session with unlinked wormholes leading where `rule` says; the
     /// engine's by default.
+    ///
+    /// For the tests: no production code calls it, so only they set this reading.
+    #[cfg(test)]
     #[must_use]
-    pub fn with_wormholes(mut self, rule: WormholeRule) -> Self {
+    pub(crate) fn with_wormholes(mut self, rule: WormholeRule) -> Self {
         self.setup.wormholes = rule;
         self
     }
@@ -2683,8 +2705,11 @@ impl Session {
     }
 
     /// The NPCs that left on the last traffic tick, and how.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn departed(&self) -> &[(NpcId, Outcome)] {
+    pub(crate) fn departed(&self) -> &[(NpcId, Outcome)] {
         self.space.departed()
     }
 
@@ -2797,7 +2822,7 @@ impl Session {
     /// no braking. Through the warp stage the ship moves off toward the
     /// bearing and the world runs on (see the `warp_stage` module) until
     /// the warp ends ([`Session::warp_end_due`]); the scans are held past
-    /// the warp's lead-in ([`Session::in_warp_lead_in`]).
+    /// the warp's lead-in (`Session::in_warp_lead_in`).
     /// Only this first hop of a multi-jump turns and slows: the rest are
     /// made in hyperspace, on arrival.
     ///
@@ -2927,8 +2952,11 @@ impl Session {
     /// warp: past it, until the ship arrives, `_ScanPlayer` holds every
     /// scan. A disabled player's warp never ends its lead-in (see the
     /// `warp` module).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn in_warp_lead_in(&self) -> bool {
+    pub(crate) fn in_warp_lead_in(&self) -> bool {
         self.ship
             .in_warp_lead_in(&self.pilot, &self.statics, self.mode.jump())
     }
@@ -3618,14 +3646,14 @@ impl Session {
     /// Enters the wormhole whose entry is pending and gives the system the
     /// ship comes out in: through the wormhole [`wormhole_exit`] rolls on
     /// `chance`, under the session's [`WormholeRule`] (the engine's unless
-    /// [`Session::with_wormholes`] says otherwise), read from `catalog`.
+    /// `Session::with_wormholes` says otherwise), read from `catalog`.
     /// Any outcome ends the entry and lets go of the nav selection, the
     /// mode kept, as the take-off's tail the original's wormhole joins
     /// does (@0x66edb-0x66f40, @0x674d2); a refusal changes nothing else.
     ///
     /// Out of a hypergate or wormhole the ship comes out as the session's
     /// [`GateArrivalRule`] says (the engine's unless
-    /// [`Session::with_gate_arrival`] says otherwise): by the engine's at
+    /// `Session::with_gate_arrival` says otherwise): by the engine's at
     /// the exit gate, as [`emerge`] says, with no day passing; like a jump,
     /// where a jump between the two systems arrives, with a jump's days
     /// passing, each stepping the planetary events on `chance`. Either way
@@ -4229,7 +4257,7 @@ impl Session {
     /// module). When the ship is not landed at an outfitter, or the order
     /// is refused, nothing changes and the refusal says why. It is the
     /// order loop with a count of 1, as a plain click is (@0x5c69f; see
-    /// [`outfit_counted`](Self::outfit_counted)).
+    /// [`outfit_counted_run`](Self::outfit_counted_run)).
     pub fn outfit(
         &mut self,
         order: OutfitOrder,
@@ -4251,7 +4279,7 @@ impl Session {
     }
 
     /// Buys or sells up to `count` of an outfit as
-    /// [`outfit_counted`](Self::outfit_counted) does, and gives the whole
+    /// [`outfit_counted_run`](Self::outfit_counted_run) does, and gives the whole
     /// run: the passes done, the first refusal and its pass, and the
     /// alert that refused pass shows, if any ([`Outfitter::sale_alert`],
     /// asked of the outfitter that pass was checked against, so its names
@@ -4295,7 +4323,7 @@ impl Session {
     ///
     /// A `count` of none runs no pass and moves nothing; it asks the
     /// outfitter whether its button passes, drawing any roll not drawn
-    /// yet; [`outfit_counted`](Self::outfit_counted) is the one that
+    /// yet; [`outfit_counted_run`](Self::outfit_counted_run) is the one that
     /// counts a Cancel's outfit day.
     ///
     /// A sale need not lower a count owned: an `OnSell` can grant the
@@ -4608,7 +4636,10 @@ impl Session {
     /// the count it gives is every sale the order made. What the order
     /// leaves the selection at is [`outfit_order`](Self::outfit_order)'s
     /// `after`.
-    pub fn outfit_counted(
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
+    pub(crate) fn outfit_counted(
         &mut self,
         order: OutfitOrder,
         count: u32,
@@ -4617,7 +4648,8 @@ impl Session {
         self.outfit_counted_run(order, count, chance).run.counted()
     }
 
-    /// [`outfit_counted`](Self::outfit_counted)'s whole run, as
+    /// Buys or sells up to `count` of an outfit, the order loop the
+    /// tests' `outfit_counted` describes, and gives its whole run, as
     /// [`outfit_order`](Self::outfit_order) gives it: a Cancel's count of
     /// none whose button passed its own check
     /// ([`OutfitRun::button_passed`]) counts the outfit day too.
@@ -4839,8 +4871,11 @@ impl Session {
 
     /// Whether the ship flew its last tick under thrust. Landing and
     /// beginning a jump stop it, as they stop the thrust sound.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn thrusting(&self) -> bool {
+    pub(crate) fn thrusting(&self) -> bool {
         self.ship.thrusting()
     }
 
@@ -6228,6 +6263,9 @@ impl PlayerShip {
     /// warp: past it, until the ship arrives, `_ScanPlayer` holds every
     /// scan. A disabled player's warp never ends its lead-in (see the
     /// `warp` module).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     fn in_warp_lead_in(&self, pilot: &Pilot, statics: &Statics, jump: Option<Jump>) -> bool {
         jumping(jump).is_some() && !self.warp_holds_scans(pilot, statics, jump)
@@ -6266,6 +6304,9 @@ impl PlayerShip {
 
     /// Whether the ship flew its last tick under thrust. Landing and
     /// beginning a jump stop it, as they stop the thrust sound.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     fn thrusting(&self) -> bool {
         self.thrusting
@@ -6477,6 +6518,9 @@ impl Space {
     }
 
     /// The NPCs that left on the last traffic tick, and how.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     fn departed(&self) -> &[(NpcId, Outcome)] {
         self.traffic.departed()

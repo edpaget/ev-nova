@@ -5,7 +5,7 @@
 //! slot order in the pass (see the `comm_calls` module).
 //!
 //! - **A dock with the player** ([`PirateEvent::PlayerDockedWith`]): the
-//!   player is boarded ([`Session::player_boarded`], its slot's +0xb9,
+//!   player is boarded (`Session::player_boarded`, its slot's +0xb9,
 //!   `_LowLevelAIHandler` @0x86fc7), so pirates pass it over or wait on it
 //!   ([`PlayerSide::boarded`](crate::ai::PlayerSide::boarded)). It is
 //!   cleared at the head of each pass the player isn't disabled
@@ -93,8 +93,11 @@ impl Session {
 
     /// Whether a pirate has docked with the player's ship (+0xb9), while it
     /// is disabled (see the module docs).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn player_boarded(&self) -> bool {
+    pub(crate) fn player_boarded(&self) -> bool {
         self.ship.player_boarded()
     }
 
@@ -187,6 +190,9 @@ impl PlayerShip {
 
     /// Whether a pirate has docked with the player's ship (+0xb9), while it
     /// is disabled (see the module docs).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     fn player_boarded(&self) -> bool {
         self.fate.player_boarded
