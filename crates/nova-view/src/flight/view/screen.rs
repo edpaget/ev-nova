@@ -3,10 +3,11 @@
 use std::time::Duration;
 
 use nova_sim::PlayerCommand;
-use nova_sim::{AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Steps, TrafficCatalog};
+use nova_sim::Steps;
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
+use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyCatalog;
 use crate::system::catalog::SystemCatalog;
 use crate::ui::mission_info::MISSION_INFO_KEY;
@@ -22,18 +23,9 @@ use super::{
 };
 
 impl<
-    C: PilotCatalog
-        + TrafficCatalog
-        + CombatCatalog
-        + AsteroidCatalog
-        + CommCatalog
-        + CombatLooks
-        + SystemCatalog
-        + ShipSprites
-        + StatusBars
-        + GalaxyCatalog
-        + EscortMenuLooks,
-> Screen for FlightView<C, crate::flight::SessionFlight<C>>
+    C: CombatLooks + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog + EscortMenuLooks,
+    S: FlightSim,
+> Screen for FlightView<C, S>
 {
     /// Never quits: Escape is the router's. While a jump is under way,
     /// the pre-jump stage included, P is refused with its beep, and a press
@@ -145,7 +137,7 @@ impl<
     /// window), unless the map is open, the flight never started or the
     /// cursor's sheet could not be read.
     fn hides_pointer(&self) -> bool {
-        !self.map_open && self.sim.session.is_ok() && self.looks.cursor_sheet().is_some()
+        !self.map_open && self.sim.failure().is_none() && self.looks.cursor_sheet().is_some()
     }
 
     /// What could not be read of the looks, then the session's
@@ -167,18 +159,9 @@ impl<
 }
 
 impl<
-    C: PilotCatalog
-        + TrafficCatalog
-        + CombatCatalog
-        + AsteroidCatalog
-        + CommCatalog
-        + CombatLooks
-        + SystemCatalog
-        + ShipSprites
-        + StatusBars
-        + GalaxyCatalog
-        + EscortMenuLooks,
-> FlightView<C, crate::flight::SessionFlight<C>>
+    C: CombatLooks + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog + EscortMenuLooks,
+    S: FlightSim,
+> FlightView<C, S>
 {
     /// [`Screen::tick`]'s work, before the kept frame is filled afresh
     /// (see there).
@@ -307,6 +290,6 @@ impl<
     fn draw_scene(&self, list: &mut DrawList) -> bool {
         #[cfg(test)]
         self.check_frame_kept();
-        self.draw_flight(list, || self.session().err().unwrap_or_default().to_owned())
+        self.draw_flight(list, || self.sim.failure().unwrap_or_default().to_owned())
     }
 }

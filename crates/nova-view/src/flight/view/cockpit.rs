@@ -53,7 +53,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 }
 
-impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
+impl<C, S: FlightSim> FlightView<C, S> {
     /// The HUD's status bar, or why it cannot be shown.
     pub fn status_bar(&self) -> Result<&StatusBar, &str> {
         self.status_bar.as_ref().map_err(String::as_str)
