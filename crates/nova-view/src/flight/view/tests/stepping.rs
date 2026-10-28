@@ -35,7 +35,7 @@ fn stepping_by(catalog: FakeCatalog, rules: &Rulebook) -> Faked {
     let npc = catalog.ship_sheet(ShipId(129));
     let mut fake = FakeFlight::new();
     fake.set_frame(in_sol());
-    let mut view = FlightView::scripted(catalog, fake, rules);
+    let mut view = scripted_over(catalog, fake, rules);
     view.looks = looks;
     view.sheet = sheet;
     view.npc_sheets.insert(ShipId(129), npc);

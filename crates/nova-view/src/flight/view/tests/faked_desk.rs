@@ -128,12 +128,17 @@ fn the_stellar_landed_on_is_read_from_the_frame_a_change_left() {
 #[test]
 fn the_plain_text_and_the_hire_are_the_flights() {
     let mut view = faked(in_sol());
+    let fills = view.sim.fills();
     assert_eq!(view.plain_text("Hi <PN>."), "Hi <PN>.", "unfilled");
+    assert_eq!(
+        view.sim.asks(),
+        [FlightCommand::PlainText("Hi <PN>.".to_owned())],
+        "asked"
+    );
+    assert_eq!(view.sim.fills(), fills, "an ask: no refill");
     assert!(!view.can_hire_escorts());
     view.sim
-        .names_mut()
-        .plain_texts
-        .push(("Hi <PN>.".to_owned(), "Hi Ada.".to_owned()));
+        .set_plain_texts(vec![("Hi <PN>.".to_owned(), "Hi Ada.".to_owned())]);
     view.sim.port_mut().can_hire_escorts = true;
     assert_eq!(view.plain_text("Hi <PN>."), "Hi Ada.");
     assert!(view.can_hire_escorts());

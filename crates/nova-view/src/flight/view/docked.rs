@@ -5,6 +5,7 @@
 #[cfg(any(doc, test, feature = "fixture"))]
 use nova_sim::Session;
 use nova_sim::StellarId;
+use nova_sim::flight_frame::{Answer, FlightCommand};
 use nova_sim::{InterfaceLoad, MissionId, MissionShown};
 
 use crate::Point;
@@ -88,12 +89,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.frame.landed
     }
 
-    /// `text` with its tags filled for the pilot with no mission
-    /// ([`NameSource::plain_text`](crate::flight::sim_port::NameSource::plain_text)):
-    /// the main screen's descriptions.
-    #[must_use]
-    pub fn plain_text(&self, text: &str) -> String {
-        self.sim.plain_text(text)
+    /// `text` with its tags filled for the pilot with no mission, asked of
+    /// the flight ([`FlightCommand::PlainText`], an ask, so the kept frame
+    /// stays as it is): the main screen's descriptions. The text comes
+    /// back unchanged when the flight answers otherwise.
+    pub fn plain_text(&mut self, text: &str) -> String {
+        match self.send(FlightCommand::PlainText(text.to_owned())) {
+            Answer::PlainText(filled) => filled,
+            _ => text.to_owned(),
+        }
     }
 
     /// Whether the bar's hire screen may hire escorts now

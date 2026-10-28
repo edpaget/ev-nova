@@ -1,36 +1,105 @@
 //! The words of the flight's messages over a scripted flight's names
-//! ([`FakeFlight::names_mut`], rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks):
-//! the session's messages (`sim_message_text`), a mission ship's board
-//! lines (`mission_board_message`) and the lines that name a stellar
-//! (`message_text`), each naming what the flight names. That the session
-//! names each as its records do is nova-sim's; that the adapter forwards
-//! the session's names is `tests/names.rs`'.
+//! (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks,
+//! rdm:phase/view-sim-seam/phase-21-names-off-the-port): the session's
+//! messages (`sim_message_text`), a mission ship's board lines
+//! (`mission_board_message`) and the lines that name a stellar
+//! (`message_text`), each naming what the flight names: the fixed names
+//! its opening hands the view ([`FakeFlight::set_names`]) and the
+//! player's ship's name and the date its frame holds. That the session
+//! names each as its records do is nova-sim's (`session/frame/names.rs`,
+//! `session/frame.rs`); that the adapter hands the session's on is
+//! `sim_adapter/fake_catalog_checks.rs`'.
 
 use super::*;
 use nova_sim::SelfDestructLine;
-use nova_sim::flight_frame::FlightEvent;
+use nova_sim::flight_frame::{FlightEvent, OutfitNames, ShipNames};
 
-/// The words `message` says over `names`, millions by the engine.
-fn text(message: &SimMessage, names: &FakeFlight) -> Option<String> {
-    sim_message_text(message, names, RuleSource::Engine)
+/// What `fake` words its messages with: its opening's names, and its
+/// frame's player's ship's name and date.
+fn wording_of(fake: &FakeFlight) -> (Names, FlightFrame) {
+    let mut frame = FlightFrame::default();
+    fake.frame(&mut frame);
+    (fake.opening().names, frame)
 }
 
-/// A flight naming the player's ship Kestrel, ship class 128 Shuttle and
-/// 129 Viper (long name Federation Viper), outfit 275 "bomb", "bombs",
-/// `jünk` 150 "bio-weapons", and `STR#` 4001's cargoes Food and
-/// *Passengers.
+/// The words `message` says over `fake`'s names, millions by `millions`.
+fn text_by(message: &SimMessage, fake: &FakeFlight, millions: RuleSource) -> Option<String> {
+    let (names, frame) = wording_of(fake);
+    sim_message_text(message, Wording::of(&names, &frame), millions)
+}
+
+/// The words `message` says over `fake`'s names, millions by the engine.
+fn text(message: &SimMessage, fake: &FakeFlight) -> Option<String> {
+    text_by(message, fake, RuleSource::Engine)
+}
+
+/// What the comm line says of `line` over `fake`'s names.
+fn board_text(line: MissionBoardLine, fake: &FakeFlight) -> String {
+    let (names, frame) = wording_of(fake);
+    mission_board_message(line, Wording::of(&names, &frame))
+}
+
+/// What the message line says of `message` over `fake`'s names, with no
+/// scene, the picks on `chance`, millions by the engine.
+fn stellar_text(
+    message: &SimMessage,
+    fake: &FakeFlight,
+    chance: &mut dyn nova_sim::Chance,
+) -> Option<String> {
+    let (names, frame) = wording_of(fake);
+    message_text(
+        message,
+        Wording::of(&names, &frame),
+        None,
+        chance,
+        RuleSource::Engine,
+    )
+}
+
+/// The names of a ship class.
+fn ship_names(name: &str, long_name: &str) -> ShipNames {
+    ShipNames {
+        name: name.to_owned(),
+        long_name: long_name.to_owned(),
+    }
+}
+
+/// The lower-case names of an outfit, with no name of its own.
+fn outfit_lc(lc_name: &str, lc_plural: &str) -> OutfitNames {
+    OutfitNames {
+        name: String::new(),
+        lc_name: lc_name.to_owned(),
+        lc_plural: lc_plural.to_owned(),
+    }
+}
+
+/// A flight naming the player's ship Kestrel in its frame, and in its
+/// opening ship class 128 Shuttle and 129 Viper (long name Federation
+/// Viper), outfit 275 "bomb", "bombs" and `jünk` 150 "bio-weapons".
 fn naming() -> FakeFlight {
+    let mut names = Names::default();
+    names.ships.insert(ShipId(128), ship_names("Shuttle", ""));
+    names
+        .ships
+        .insert(ShipId(129), ship_names("Viper", "Federation Viper"));
+    names
+        .outfits
+        .insert(OutfitId(275), outfit_lc("bomb", "bombs"));
+    names
+        .junk
+        .insert(nova_sim::JunkId(150), "bio-weapons".to_owned());
     let mut fake = FakeFlight::new();
-    let names = fake.names_mut();
-    names.player_ship_name = Some("Kestrel".to_owned());
-    names.ship_names = vec![
-        (ShipId(128), "Shuttle".to_owned()),
-        (ShipId(129), "Viper".to_owned()),
-    ];
-    names.ship_long_names = vec![(ShipId(129), "Federation Viper".to_owned())];
-    names.outfit_lc_names = vec![(OutfitId(275), ("bomb".to_owned(), "bombs".to_owned()))];
-    names.junk_lc_names = vec![(nova_sim::JunkId(150), "bio-weapons".to_owned())];
-    names.cargo_names = vec!["Food".to_owned(), "*Passengers".to_owned()];
+    fake.set_names(names);
+    fake.frame_mut().player_ship_name = Some("Kestrel".to_owned());
+    fake
+}
+
+/// [`naming`], its opening's names changed by `change`.
+fn naming_with(change: impl FnOnce(&mut Names)) -> FakeFlight {
+    let mut fake = naming();
+    let mut names = fake.opening().names;
+    change(&mut names);
+    fake.set_names(names);
     fake
 }
 
@@ -213,11 +282,11 @@ fn a_mission_ship_boarded_on_the_assist_path_says_its_line() {
     );
     let names = naming();
     assert_eq!(
-        mission_board_message(MissionBoardLine::Boarded, &names),
+        board_text(MissionBoardLine::Boarded, &names),
         TARGET_BOARDED
     );
     assert_eq!(
-        mission_board_message(MissionBoardLine::Refuelled { ship: ShipId(129) }, &names),
+        board_text(MissionBoardLine::Refuelled { ship: ShipId(129) }, &names),
         "Viper:  Energy transfer complete, Kestrel.",
         "the ship's class and the player's ship as the flight names them"
     );
@@ -227,7 +296,7 @@ fn a_mission_ship_boarded_on_the_assist_path_says_its_line() {
 fn a_pickup_ships_line_says_the_cargo_name_it_carries() {
     let names = naming();
     let said = |cargo: Option<&str>| {
-        mission_board_message(
+        board_text(
             MissionBoardLine::Retrieved {
                 cargo: cargo.map(str::to_owned),
             },
@@ -319,9 +388,11 @@ fn the_deadline_message_is_str_2002_285() {
 /// the outfit or `jünk` as the flight names them.
 #[test]
 fn a_contraband_notice_reads_its_names_from_the_flight() {
-    let mut names = naming();
-    names.names_mut().outfit_lc_names =
-        vec![(OutfitId(275), ("blaster".to_owned(), "blasters".to_owned()))];
+    let names = naming_with(|names| {
+        names
+            .outfits
+            .insert(OutfitId(275), outfit_lc("blaster", "blasters"));
+    });
     let outfit = |person: Option<&str>| SimMessage::IllegalOutfit {
         scanner: ShipId(128),
         person: person.map(str::to_owned),
@@ -395,11 +466,11 @@ fn a_plunders_lines_are_its_cargo_and_its_stolen_ship() {
         credits: 1_234_567,
     };
     assert_eq!(
-        sim_message_text(&stolen, &names, RuleSource::Engine).as_deref(),
+        text_by(&stolen, &names, RuleSource::Engine).as_deref(),
         Some("2 tons of cargo and 1.23M credits stolen!")
     );
     assert_eq!(
-        sim_message_text(&stolen, &names, RuleSource::Bible).as_deref(),
+        text_by(&stolen, &names, RuleSource::Bible).as_deref(),
         Some("2 tons of cargo and 1,234,567 credits stolen!")
     );
     assert_eq!(
@@ -464,22 +535,20 @@ fn the_self_destructs_lines_say_its_stock_words() {
 }
 
 /// The messages that name a stellar name one the scene doesn't hold by
-/// the flight's name for it ([`MapSource::stellar_name`]), as the nav
-/// readout and the refusals do: a dock request and a land hint at "Hole",
-/// which another system owns.
-///
-/// [`MapSource::stellar_name`]: crate::flight::sim_port::MapSource::stellar_name
+/// the opening's name for it ([`Names::stellar`]), as the nav readout and
+/// the refusals do: a dock request and a land hint at "Hole", which
+/// another system owns.
 #[test]
 fn a_dock_request_and_a_land_hint_name_an_unseen_stellar_by_its_spob_name() {
-    let mut names = naming();
-    names.map_mut().stellar_names = vec![(StellarId(150), "Hole".to_owned())];
+    let names = naming_with(|names| {
+        names.stellars.insert(StellarId(150), "Hole".to_owned());
+    });
     let (_, mut chance) = scripted(&[0, 0]);
     let request = SimMessage::DockRequested {
         stellar: StellarId(150),
         kind: DockKind::Planet,
     };
-    let said = message_text(&request, &names, None, &mut chance, RuleSource::Engine)
-        .expect("a dock request is worded");
+    let said = stellar_text(&request, &names, &mut chance).expect("a dock request is worded");
     assert_eq!(
         said,
         request_line(
@@ -497,7 +566,7 @@ fn a_dock_request_and_a_land_hint_name_an_unseen_stellar_by_its_spob_name() {
         station: false,
     });
     assert_eq!(
-        message_text(&hint, &names, None, &mut chance, RuleSource::Engine),
+        stellar_text(&hint, &names, &mut chance),
         Some(land_hint(false, "Hole", "L"))
     );
 }
@@ -510,10 +579,12 @@ fn a_dock_request_and_a_land_hint_name_an_unseen_stellar_by_its_spob_name() {
 fn worded_by(millions: RuleSource) -> Faked {
     let rules = Rulebook::default().with_override(RuleKey::PayMillions, millions);
     let mut fake = FakeFlight::new();
-    fake.set_frame(in_sol());
-    fake.names_mut().player_ship_name = Some("Kestrel".to_owned());
-    fake.map_mut().stellar_names = vec![(StellarId(128), "Earth".to_owned())];
-    FlightView::scripted(catalog(), fake, &rules)
+    fake.set_frame(FlightFrame {
+        player_ship_name: Some("Kestrel".to_owned()),
+        ..in_sol()
+    });
+    fake.set_names(stellar_names(&[(128, "Earth")]));
+    scripted_over(catalog(), fake, &rules)
 }
 
 #[test]

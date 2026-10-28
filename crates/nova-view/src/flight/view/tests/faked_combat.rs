@@ -272,7 +272,7 @@ fn only_a_living_pilot_may_be_saved() {
     // fades and ends nothing.
     let mut fake = FakeFlight::new();
     fake.fail("no chär to start from");
-    let mut failed = FlightView::scripted(catalog(), fake, &Rulebook::default());
+    let mut failed = scripted_over(catalog(), fake, &Rulebook::default());
     assert!(!failed.take_hold_expired());
     assert!(!failed.game_over());
     failed.begin_fade();

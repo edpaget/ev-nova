@@ -226,10 +226,9 @@ fn the_hud_names_an_unseen_selection() {
     let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
     frame.nav_mode = NavMode::Stellar(Some(StellarId(150)));
     let mut view = barred(catalog(), frame);
-    view.sim
-        .map_mut()
-        .stellar_names
-        .push((StellarId(150), "Hole".to_owned()));
+    renamed(&mut view, |names| {
+        names.stellars.insert(StellarId(150), "Hole".to_owned());
+    });
     view.redraw_status();
     assert_eq!(nav_of(&view), [hud::NAV_STELLAR, "Hole"]);
 }
@@ -433,7 +432,7 @@ fn the_nav_area_holds_its_text_until_its_next_refresh() {
     while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
         hud_tick(&mut view);
     }
-    view.sim.map_mut().explored = vec![SystemId(131)];
+    changes(&mut view, |frame| frame.explored = vec![SystemId(131)]);
     assert_eq!(nav_of(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
     for _ in 1..NAV_PERIOD_TICKS - 1 {
         hud_tick(&mut view);
@@ -455,7 +454,7 @@ fn read_the_bibles_way_the_nav_area_follows_every_frame() {
     while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
         hud_tick(&mut view);
     }
-    view.sim.map_mut().explored = vec![SystemId(131)];
+    changes(&mut view, |frame| frame.explored = vec![SystemId(131)]);
     assert_eq!(nav_of(&view), [hud::NAV_HYPERSPACE, "Alpha Centauri"]);
 }
 
@@ -489,7 +488,7 @@ fn redrawing_the_status_retakes_the_nav_area() {
     while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
         hud_tick(&mut view);
     }
-    view.sim.map_mut().explored = vec![SystemId(131)];
+    changes(&mut view, |frame| frame.explored = vec![SystemId(131)]);
     assert_eq!(nav_of(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
     view.redraw_status();
     assert_eq!(nav_of(&view), [hud::NAV_HYPERSPACE, "Alpha Centauri"]);
@@ -1081,7 +1080,9 @@ fn with_the_nav_off_the_nav_area_says_nav_system_off() {
 fn a_stellar_the_scene_doesnt_hold_is_named_as_the_flight_names_it_or_not_at_all() {
     let mut view = faked(sol_in(NavMode::Stellar(Some(StellarId(150)))));
     assert_eq!(view.nav_now(), NavDisplay::Stellar(None), "no name");
-    view.sim.map_mut().stellar_names = vec![(StellarId(150), "Vega Prime".to_owned())];
+    renamed(&mut view, |names| {
+        *names = stellar_names(&[(150, "Vega Prime")]);
+    });
     assert_eq!(
         view.nav_now(),
         NavDisplay::Stellar(Some("Vega Prime".to_owned()))
@@ -1097,7 +1098,9 @@ fn the_nav_area_names_a_stellar_by_its_name_in_the_scene() {
         SystemId(130),
         &shown,
     ));
-    view.sim.map_mut().stellar_names = vec![(StellarId(129), "Luna".to_owned())];
+    renamed(&mut view, |names| {
+        *names = stellar_names(&[(129, "Luna")]);
+    });
     assert_eq!(
         view.nav_now(),
         NavDisplay::Stellar(Some("Moon".to_owned())),
@@ -1118,10 +1121,10 @@ fn a_hyperspace_selection_is_named_once_explored_with_the_frames_readiness() {
             readiness: nova_sim::JumpReadiness::Blocked,
         }
     );
-    view.sim.map_mut().explored = vec![SystemId(131)];
     view.change_sim(|sim| {
         sim.set_frame(FlightFrame {
             jump_readiness: nova_sim::JumpReadiness::Underway,
+            explored: vec![SystemId(131)],
             ..sol_in(NavMode::Hyperspace(Some(SystemId(131))))
         });
     });

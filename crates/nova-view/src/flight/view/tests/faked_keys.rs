@@ -416,9 +416,18 @@ fn p_through_the_screen_asks_once_and_a_repeat_does_not() {
 #[test]
 fn a_scan_in_the_warps_lead_in_is_said_under_the_streak() {
     let mut view = fleet_jumping(&[], true);
-    let names = view.sim.names_mut();
-    names.ship_names.push((ShipId(129), "Ship 129".to_owned()));
-    names.player_ship_name = Some("Kestrel".to_owned());
+    renamed(&mut view, |names| {
+        names.ships.insert(
+            ShipId(129),
+            nova_sim::flight_frame::ShipNames {
+                name: "Ship 129".to_owned(),
+                long_name: String::new(),
+            },
+        );
+    });
+    faked_hud::changes(&mut view, |frame| {
+        frame.player_ship_name = Some("Kestrel".to_owned());
+    });
     view.sim
         .queue_event(FlightEvent::Message(SimMessage::Smuggling {
             scanner: ShipId(129),

@@ -13,8 +13,8 @@ use crate::flight::sim_port::FlightSim;
 use crate::{Diagnostic, Sound};
 
 use super::{
-    FlightView, MESSAGE_TICKS, Message, SCRIPT_MESSAGE_TICKS, Said, comm_message, message_text,
-    pay_said,
+    FlightView, MESSAGE_TICKS, Message, SCRIPT_MESSAGE_TICKS, Said, Wording, comm_message,
+    message_text, pay_said,
 };
 use nova_sim::flight_frame::FlightCommand;
 
@@ -203,21 +203,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The words of `message`, as the original words it
-    /// ([`message_text`]): the names the flight's ([`NameSource`]), the
-    /// stellars named from the scene or by the flight for one it doesn't
-    /// hold ([`MapSource::stellar_name`]), the dock request's and the
+    /// ([`message_text`]): the names the flight's ([`Wording`]: the
+    /// opening's and the kept frame's), the stellars named from the scene
+    /// or by the opening's names for one it doesn't hold, the dock
+    /// request's and the
     /// approach greeting's picks rolled on the flight's chance
     /// ([`FlightView::words_chance`](FlightView#structfield.words_chance)),
     /// and the numbers' millions by the view's held reading
     /// ([`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)). None
     /// only for an arrival's lead.
-    ///
-    /// [`NameSource`]: crate::flight::sim_port::NameSource
-    /// [`MapSource::stellar_name`]: crate::flight::sim_port::MapSource::stellar_name
     pub(super) fn text_of(&mut self, message: &SimMessage) -> Option<String> {
         message_text(
             message,
-            &self.sim,
+            Wording::of(&self.names, &self.frame),
             self.scene.as_ref(),
             &mut self.words_chance,
             self.presentation.millions,

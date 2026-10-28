@@ -5,7 +5,7 @@
 //! ([`FlightCommand::Arrive`]) and catches up with, its pending
 //! explosions from the answer ([`Answer::Arrived`]). The arrival's words
 //! name what the flight names ([`FlightView::word`], the date
-//! [`NameSource::long_date`](crate::flight::sim_port::NameSource::long_date)).
+//! [`FlightFrame::long_date`](nova_sim::flight_frame::FlightFrame::long_date)).
 
 use nova_sim::flight_frame::{Answer, FlightCommand};
 use nova_sim::{CombatEvent, Condition, SimMessage};
@@ -208,8 +208,9 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// ([`FlightView::catch_up`], which lays it out from the flight's
     /// event, drawn from where the ship arrives), and shows the flight's
     /// arrival message, led as the original leads it, naming the scene
-    /// laid out and the flight's date
-    /// ([`NameSource::long_date`](crate::flight::sim_port::NameSource::long_date)),
+    /// laid out and the flight's date as the frame the catch-up refilled
+    /// holds it
+    /// ([`FlightFrame::long_date`](nova_sim::flight_frame::FlightFrame::long_date)),
     /// or the system's message buoy in its place ([`SimMessage::Buoy`],
     /// its text as the flight gives it), followed by the flight's other
     /// messages ([`FlightView::word`]), then how
@@ -226,7 +227,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
         // (`_PlayerEnterWormhole` @0x64307).
         self.map.recentre();
         let (fighters, pay, drained) = self.arrival_outputs();
-        let date = self.sim.long_date();
+        let date = self.frame.long_date.clone();
         let mut messages = std::mem::take(&mut self.pending_leads);
         messages.extend(drained);
         let worded: Vec<(String, u16)> = messages

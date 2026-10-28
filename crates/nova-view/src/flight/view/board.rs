@@ -3,7 +3,8 @@
 //! the plunder dialog's presses. What boarding does and what a press takes
 //! are the flight's (`nova_sim::Session::board`,
 //! `nova_sim::Session::plunder`). The board's and the plunder's names are
-//! the flight's ([`NameSource`](crate::flight::sim_port::NameSource)).
+//! the flight's: the opening's ([`FlightView::names`]) and the kept
+//! frame's ([`Wording`]).
 
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use crate::ui::PlunderShown;
 
 use super::{
     BOARD_LINE_TICKS, BOARD_REFUSAL_TICKS, FlightView, GRANT_TICKS, MESSAGE_TICKS, REPELLED,
-    board_refusal_message, grant_message, mission_board_message, names, plunder_message,
+    Wording, board_refusal_message, grant_message, mission_board_message, names, plunder_message,
 };
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -29,14 +30,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightEvent::BoardLine`](nova_sim::flight_frame::FlightEvent::BoardLine)),
     /// and a grant its retrieval
     /// ([`FlightEvent::Grant`](nova_sim::flight_frame::FlightEvent::Grant)),
-    /// each named by the flight ([`NameSource`](crate::flight::sim_port::NameSource)). Whether the attempt sets
+    /// each named by the flight ([`Wording`]). Whether the attempt sets
     /// the board latch
     /// ([`BoardRefusal::latches`](nova_sim::board::BoardRefusal::latches);
     /// every board that passes does, and one the flight refused does not).
     pub(super) fn board(&mut self) -> bool {
         let answer = self.send(FlightCommand::Board);
         if let Some(line) = self.board_line_drained() {
-            let said = mission_board_message(line, &self.sim);
+            let said = mission_board_message(line, Wording::of(&self.names, &self.frame));
             self.say_for(said, BOARD_LINE_TICKS);
         }
         match answer {
@@ -61,7 +62,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 self.pending_boarding = true;
                 self.held.clear();
                 if let Some(granted) = self.grant_drained() {
-                    let (name, plural) = self.sim.outfit_names(granted.outfit).unwrap_or_default();
+                    let (name, plural) = self.names.outfit_lc(granted.outfit).unwrap_or_default();
                     let said = grant_message(granted.count, name, plural);
                     self.say_for(said, GRANT_TICKS);
                 }
@@ -69,7 +70,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             Boarding::Repelled => self.say_for(REPELLED, MESSAGE_TICKS),
             Boarding::Offered(offer) => self.hold_offer(offer),
             Boarding::MissionShip(Some(line)) => {
-                let said = mission_board_message(line, &self.sim);
+                let said = mission_board_message(line, Wording::of(&self.names, &self.frame));
                 self.say_for(said, BOARD_LINE_TICKS);
             }
             // Its line is the flight's message (`FlightEvent::Message`).
@@ -124,13 +125,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// What the plunder dialog shows while it is open:
     /// [`FlightView::boarding`] with its cargo's good and its ammunition's
-    /// outfit named by the flight ([`NameSource`](crate::flight::sim_port::NameSource)), as
+    /// outfit named by the flight's opening ([`FlightView::names`]), as
     /// [`FlightView::plunder`]'s messages name them.
     #[must_use]
     pub fn plunder_shown(&self) -> Option<PlunderShown> {
         let view = self.boarding()?;
         let (good, outfit) = names(
-            &self.sim,
+            &self.names,
             view.cargo.map(|(good, _)| good),
             view.ammo.map(|(outfit, _)| outfit),
         );
@@ -167,8 +168,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             _ => (Taken::Nothing, false),
         };
         let (good, outfit) = match taken {
-            Taken::Cargo { good, .. } => names(&self.sim, Some(good), None),
-            Taken::Ammo { outfit, .. } => names(&self.sim, None, Some(outfit)),
+            Taken::Cargo { good, .. } => names(&self.names, Some(good), None),
+            Taken::Ammo { outfit, .. } => names(&self.names, None, Some(outfit)),
             _ => (None, None),
         };
         if let Some(text) = plunder_message(taken, good, outfit) {

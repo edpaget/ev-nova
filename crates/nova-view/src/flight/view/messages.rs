@@ -1,8 +1,13 @@
 //! The flight screen's player-facing message text. The words that name
-//! something the flight read (a ship, an outfit, a good, a stellar, the
-//! player's ship, the date) read it through the port's [`NameSource`]
-//! (and [`MapSource::stellar_name`] for a stellar), so any flight, a
-//! scripted one in the component tests, words them.
+//! something the flight read read it from a [`Wording`]: a ship, an
+//! outfit, a good, a `jünk` or a stellar from the names fixed for the
+//! flight's life, which its opening handed the view
+//! ([`FlightOpening::names`](nova_sim::flight_frame::FlightOpening::names)),
+//! and the player's ship and the date from the kept frame
+//! ([`FlightFrame::player_ship_name`], [`FlightFrame::long_date`]), so any
+//! flight, a scripted one in the component tests, words them. A mission
+//! cargo's name rides its board line
+//! ([`MissionBoardLine::Retrieved`](nova_sim::MissionBoardLine::Retrieved)).
 
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
@@ -13,9 +18,10 @@ use nova_sim::{
 };
 use nova_sim::{MissionBoardLine, PayNote, RuleSource, TutorialHint};
 
+use nova_sim::flight_frame::{FlightFrame, Names};
+
 use crate::Key;
 use crate::flight::escorts::NUMBER_WORDS;
-use crate::flight::sim_port::{MapSource, NameSource};
 use crate::spaceport::credits::{TON, TONS};
 use crate::system::scene::SystemScene;
 use crate::ui::comm::grouped;
@@ -343,11 +349,39 @@ pub fn illegal_outfit_message(
     )
 }
 
+/// What the flight's messages are worded with: the names fixed for the
+/// flight's life, as its opening handed them, and the names the flight
+/// decides, as the kept frame holds them: the player's ship's name, empty
+/// for none, and the date as the arrival line and the take-off greeting
+/// say it. A wording point reads it after the frame's refill (a command's,
+/// the steps', a catch-up's), so it says what the flight says then.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Wording<'a> {
+    /// The ships', outfits', goods', `jünk`s' and stellars' names.
+    pub(super) names: &'a Names,
+    /// The player's ship's name ([`FlightFrame::player_ship_name`]), empty
+    /// for none.
+    pub(super) player_ship: &'a str,
+    /// The date ([`FlightFrame::long_date`]).
+    pub(super) date: &'a str,
+}
+
+impl<'a> Wording<'a> {
+    /// The wording of `names` and the names `frame` holds.
+    pub(super) fn of(names: &'a Names, frame: &'a FlightFrame) -> Self {
+        Self {
+            names,
+            player_ship: frame.player_ship_name.as_deref().unwrap_or_default(),
+            date: &frame.long_date,
+        }
+    }
+}
+
 /// The ejected player's line: "Escaping in", a space, the escape ship's
 /// long name as `names` gives it and a full stop (`_HandlePlayer`
 /// @0x6f5ad-0x6f5f3).
-fn escaping_in_text(ship: ShipId, names: &(impl NameSource + ?Sized)) -> String {
-    let name = names.ship_long_name(ship).unwrap_or_default();
+fn escaping_in_text(ship: ShipId, names: &Names) -> String {
+    let name = names.ship_long(ship).unwrap_or_default();
     format!("{ESCAPING_IN} {name}.")
 }
 
@@ -366,7 +400,7 @@ fn self_destruct_text(line: SelfDestructLine) -> String {
 }
 
 /// What the message line says of `message`, a session's message other
-/// than an arrival's, the names read from `names` and the numbers'
+/// than an arrival's, the names read from `words` and the numbers'
 /// millions as `millions` reads
 /// ([`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)): none for an
 /// arrival's, which [`arrival_lead`] leads the arrival message with, and
@@ -375,7 +409,7 @@ fn self_destruct_text(line: SelfDestructLine) -> String {
 /// stellar's name.
 pub(super) fn sim_message_text(
     message: &SimMessage,
-    names: &(impl NameSource + ?Sized),
+    words: Wording<'_>,
     millions: RuleSource,
 ) -> Option<String> {
     let text = match message {
@@ -422,14 +456,14 @@ pub(super) fn sim_message_text(
         | SimMessage::ReinforcementsApproaching(text) => return Some(text.clone()),
         SimMessage::JumpCollapsed => JUMP_COLLAPSED,
         SimMessage::SelfDestruct(line) => return Some(self_destruct_text(*line)),
-        SimMessage::EscapingIn { ship } => return Some(escaping_in_text(*ship, names)),
+        SimMessage::EscapingIn { ship } => return Some(escaping_in_text(*ship, words.names)),
         SimMessage::Sabotaged { outfit: None } => BOMB_EXPLODED_ONBOARD,
         SimMessage::BombSetUp => BOMB_SET_UP,
         SimMessage::Sabotaged {
             outfit: Some((outfit, one)),
         }
         | SimMessage::BombExploded { outfit, one } => {
-            let (lc_name, lc_plural) = names.outfit_names(*outfit).unwrap_or_default();
+            let (lc_name, lc_plural) = words.names.outfit_lc(*outfit).unwrap_or_default();
             return Some(exploded_message(*one, lc_name, lc_plural));
         }
         SimMessage::Smuggling {
@@ -440,9 +474,9 @@ pub(super) fn sim_message_text(
             return Some(smuggling_message(
                 ship_name
                     .as_deref()
-                    .or_else(|| names.ship_name(*scanner))
+                    .or_else(|| words.names.ship(*scanner))
                     .unwrap_or_default(),
-                names.player_ship_name().unwrap_or_default(),
+                words.player_ship,
                 *fine,
             ));
         }
@@ -453,9 +487,9 @@ pub(super) fn sim_message_text(
             fine,
         } => {
             return Some(illegal_junk_message(
-                scanner_name(person.as_deref(), *scanner, names),
-                names.player_ship_name().unwrap_or_default(),
-                names.junk_lc_name(*junk).unwrap_or_default(),
+                scanner_name(person.as_deref(), *scanner, words.names),
+                words.player_ship,
+                words.names.junk_lc(*junk).unwrap_or_default(),
                 *fine,
             ));
         }
@@ -466,10 +500,10 @@ pub(super) fn sim_message_text(
             one,
             fine,
         } => {
-            let (lc_name, lc_plural) = names.outfit_names(*outfit).unwrap_or_default();
+            let (lc_name, lc_plural) = words.names.outfit_lc(*outfit).unwrap_or_default();
             return Some(illegal_outfit_message(
-                scanner_name(person.as_deref(), *scanner, names),
-                names.player_ship_name().unwrap_or_default(),
+                scanner_name(person.as_deref(), *scanner, words.names),
+                words.player_ship,
                 *one,
                 lc_name,
                 lc_plural,
@@ -483,14 +517,8 @@ pub(super) fn sim_message_text(
 /// What a scan's contraband notice calls the scanner: its person's name
 /// when it is one, else its ship class's name (`_ScanPlayer`
 /// @0x7ebd1-0x7ec0c, @0x7f024-0x7f05f), as `names` gives it.
-fn scanner_name<'a>(
-    person: Option<&'a str>,
-    scanner: ShipId,
-    names: &'a (impl NameSource + ?Sized),
-) -> &'a str {
-    person
-        .or_else(|| names.ship_name(scanner))
-        .unwrap_or_default()
+fn scanner_name<'a>(person: Option<&'a str>, scanner: ShipId, names: &'a Names) -> &'a str {
+    person.or_else(|| names.ship(scanner)).unwrap_or_default()
 }
 
 /// `STR#` 2002 #53.
@@ -544,17 +572,14 @@ pub fn retrieved_message(cargo: &str) -> String {
     }
 }
 
-/// What the comm line says of `line`, the names read from `names` and the
+/// What the comm line says of `line`, the names read from `words` and the
 /// cargo's as the line carries it.
-pub(super) fn mission_board_message(
-    line: MissionBoardLine,
-    names: &(impl NameSource + ?Sized),
-) -> String {
+pub(super) fn mission_board_message(line: MissionBoardLine, words: Wording<'_>) -> String {
     match line {
         MissionBoardLine::Boarded => TARGET_BOARDED.to_owned(),
         MissionBoardLine::Refuelled { ship } => refuelled_message(
-            names.ship_name(ship).unwrap_or_default(),
-            names.player_ship_name().unwrap_or_default(),
+            words.names.ship(ship).unwrap_or_default(),
+            words.player_ship,
         ),
         MissionBoardLine::Retrieved { cargo } => {
             retrieved_message(cargo.as_deref().unwrap_or_default())
@@ -674,7 +699,7 @@ pub(super) type Said = Vec<(String, u16)>;
 /// The name of stellar `id`: its name in `scene` if the scene holds it,
 /// or, for one the scene doesn't hold, such as one another system owns or
 /// a landed `M`'s in another system, its `spöb` name as `spob_name` reads
-/// it (the flight's [`MapSource::stellar_name`]),
+/// it (the opening's [`Names::stellar`]),
 /// as the original reads a stellar's name with no check of the system
 /// (`_DrawStatusNav` @0x4a0fd-0x4a149). None for a stellar with neither.
 /// The nav readout, the landing refusals and [`message_text`] all name a
@@ -691,7 +716,7 @@ pub(super) fn stellar_name(
 }
 
 /// What the message line says of `message`, the names read from
-/// `source` and the stellars' from `scene`, or `source` for one the scene
+/// `words` and the stellars' from `scene`, or `words` for one the scene
 /// doesn't hold ([`stellar_name`]): as [`sim_message_text`]
 /// says, and the take-off greeting, the land hint, the dock request's
 /// line and the dock approach's greeting, which name a stellar, the
@@ -699,14 +724,20 @@ pub(super) fn stellar_name(
 /// millions as `millions` reads. None only for an arrival's.
 pub(super) fn message_text(
     message: &SimMessage,
-    source: &(impl NameSource + MapSource + ?Sized),
+    words: Wording<'_>,
     scene: Option<&SystemScene>,
     chance: &mut dyn Chance,
     millions: RuleSource,
 ) -> Option<String> {
-    let ship = || source.player_ship_name().unwrap_or_default();
-    let named =
-        |stellar| stellar_name(scene, |id| source.stellar_name(id), stellar).unwrap_or_default();
+    let ship = || words.player_ship;
+    let named = |stellar| {
+        stellar_name(
+            scene,
+            |id| words.names.stellar(id).map(str::to_owned),
+            stellar,
+        )
+        .unwrap_or_default()
+    };
     match message {
         SimMessage::DockRequested { stellar, kind } => Some(request_line(
             *kind,
@@ -722,17 +753,15 @@ pub(super) fn message_text(
             *fee,
             millions,
         )),
-        SimMessage::TookOff { stellar, lead } => Some(take_off_greeting(
-            *lead,
-            &named(*stellar),
-            &source.long_date(),
-        )),
+        SimMessage::TookOff { stellar, lead } => {
+            Some(take_off_greeting(*lead, &named(*stellar), words.date))
+        }
         SimMessage::Tutorial(TutorialHint::Land { stellar, station }) => Some(land_hint(
             *station,
             &named(*stellar),
             &key_label(LAND_KEY).unwrap_or_default(),
         )),
-        _ => sim_message_text(message, source, millions),
+        _ => sim_message_text(message, words, millions),
     }
 }
 
@@ -1310,17 +1339,17 @@ pub fn grant_message(count: u16, lc_name: &str, lc_plural: &str) -> String {
     format!("{RETRIEVED}{number} {name} {FROM_THIS_SHIP}")
 }
 
-/// The names `source` gives `good` and `outfit`: one rule for the
+/// The names `names` gives `good` and `outfit`: one rule for the
 /// plunder dialog ([`FlightView::plunder_shown`](super::FlightView::plunder_shown)) and the messages
 /// ([`FlightView::plunder`](super::FlightView::plunder)).
 pub(super) fn names(
-    source: &(impl NameSource + ?Sized),
+    names: &Names,
     good: Option<Good>,
     outfit: Option<OutfitId>,
 ) -> (Option<&str>, Option<&str>) {
     (
-        good.and_then(|good| source.good_name(good)),
-        outfit.and_then(|outfit| source.outfit_name(outfit)),
+        good.and_then(|good| names.good(good)),
+        outfit.and_then(|outfit| names.outfit(outfit)),
     )
 }
 

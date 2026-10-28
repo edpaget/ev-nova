@@ -3,7 +3,8 @@
 //! (rdm:phase/view-sim-seam/phase-10-comm-escorts-boarding-on-port): the
 //! commands B and the dialog's presses send, the Board key's latch over
 //! the flight's answers, what the view holds for the router and what it
-//! says, named by the flight's names ([`FakeFlight::names_mut`]). What
+//! says, named by the flight's names (its opening's,
+//! [`FakeFlight::set_names`]). What
 //! boarding does and what a press
 //! takes are nova-sim's (`session::board_attempt`, `session::plunder_loop`
 //! and the session's boarding tests). Kept apart from `tests/mod.rs`,
@@ -19,12 +20,27 @@ use nova_sim::{Boarding, MissionBoardLine, PlunderView, VenueOffer};
 /// commodity 0 Food, outfit 310 Rockets, and outfit 200 "rocket",
 /// "rockets".
 fn sol() -> Faked {
-    let mut view = faked(in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
-    let names = view.sim.names_mut();
-    names.good_names = vec![(Good::Commodity(0), "Food".to_owned())];
-    names.outfit_names = vec![(OutfitId(310), "Rockets".to_owned())];
-    names.outfit_lc_names = vec![(OutfitId(200), ("rocket".to_owned(), "rockets".to_owned()))];
-    view
+    let mut names = Names::default();
+    names.goods.insert(Good::Commodity(0), "Food".to_owned());
+    names.outfits.insert(
+        OutfitId(310),
+        nova_sim::flight_frame::OutfitNames {
+            name: "Rockets".to_owned(),
+            ..Default::default()
+        },
+    );
+    names.outfits.insert(
+        OutfitId(200),
+        nova_sim::flight_frame::OutfitNames {
+            name: "Rocket".to_owned(),
+            lc_name: "rocket".to_owned(),
+            lc_plural: "rockets".to_owned(),
+        },
+    );
+    let mut fake = FakeFlight::new();
+    fake.set_frame(in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
+    fake.set_names(names);
+    scripted_over(catalog(), fake, &Rulebook::default())
 }
 
 /// What is on board NPC 0, a ship 129: 5,750 credits, 13 tons of food and

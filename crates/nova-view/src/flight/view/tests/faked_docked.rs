@@ -651,6 +651,41 @@ fn the_take_offs_held_nav_shows_in_the_first_frame_drawn_after_it_whatever_the_r
     }
 }
 
+/// A take-off's held nav in mode 3 ([`FlightEvent::TakeoffNav`]) names
+/// its system by its map name while the frame's explored set holds it, and
+/// as unexplored while it doesn't, though the flight's own mode is mode 2
+/// by then: the frame holds every system explored, not only the current
+/// mode's, as `_DrawStatusNav` reads the held system's flag as it draws
+/// (rdm:phase/view-sim-seam/phase-21-names-off-the-port).
+#[test]
+fn a_take_offs_held_mode_3_nav_names_its_system_as_the_frames_exploration_stands() {
+    let alpha = NavMode::Hyperspace(Some(SystemId(131)));
+    for (explored, destination) in [
+        (
+            vec![SystemId(130), SystemId(131)],
+            hud::NavDestination::Named("Alpha Centauri".to_owned()),
+        ),
+        (vec![SystemId(130)], hud::NavDestination::Unexplored),
+    ] {
+        let frame = FlightFrame {
+            explored: explored.clone(),
+            ..at_earth()
+        };
+        let mut view = docked_on(catalog(), frame, RuleSource::Engine);
+        writes_nav(&mut view, alpha);
+        take_off_from(&mut view, alpha, LET_GO, LEAVES[0].1);
+        assert_eq!(view.nav_mode(), LET_GO, "{explored:?}: not mode 3 now");
+        assert_eq!(
+            view.nav_shown(&view.frame_now()),
+            NavDisplay::Hyperspace {
+                destination: destination.clone(),
+                readiness: view.frame.jump_readiness,
+            },
+            "{explored:?}: held"
+        );
+    }
+}
+
 #[test]
 fn a_take_off_with_nothing_let_go_holds_nothing() {
     let mut view = docked();

@@ -47,9 +47,9 @@ impl<
 > FlightView<C, S>
 {
     /// The view of `sim`, a flight built at the edge, over `catalog`, the
-    /// handle the flight shares, opening as `opening` says (its weapons
-    /// and its failure, fixed for the flight's life, which the edge reads
-    /// off the adapter, `SessionFlight::opening`), shown by `rules` and
+    /// handle the flight shares, opening as `opening` says (its weapons,
+    /// its names and its failure, fixed for the flight's life, which the
+    /// edge reads off the adapter, `SessionFlight::opening`), shown by `rules` and
     /// wording its picks on `words_chance`, which the edge hands the
     /// flight too, so the wording's picks draw on the flight's own
     /// sequence.
@@ -81,7 +81,7 @@ impl<
         sim.frame(&mut frame);
         let FlightOpening {
             weapons,
-            names: _,
+            names,
             failure,
         } = opening;
         let (scene, sheet, sheet_ship, status_bar) = match &failure {
@@ -146,6 +146,7 @@ impl<
                 presentation: super::stepping::Presentation::of(rules),
                 words_chance,
                 failure,
+                names,
             },
         )
     }
@@ -400,7 +401,8 @@ impl<
 /// and the flight: the course map, the scene, the player's sheet and bar,
 /// the flight's first frame, the looks and what of them could not be read,
 /// the escort menu's colours, the alert icon's width, the presentation
-/// rules, the wording's chance and why the flight could not start.
+/// rules, the wording's chance, why the flight could not start and the
+/// names its messages are worded with.
 struct Opening {
     map: GalaxyMap,
     scene: Option<crate::system::SystemScene>,
@@ -416,6 +418,7 @@ struct Opening {
     presentation: super::stepping::Presentation,
     words_chance: SharedChance,
     failure: Option<String>,
+    names: nova_sim::flight_frame::Names,
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -582,6 +585,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             presentation: opening.presentation,
             frame: opening.frame,
             failure: opening.failure,
+            names: Rc::new(opening.names),
             radar_static: None,
             cursor: HoverCursor::default(),
         }
@@ -592,11 +596,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// as `rules` say, showing the frame's course; the scene the frame
     /// opens on, read from the catalog with the stellars it shows, each as
     /// it holds it ([`opening_scene`]); with no sheet or status bar, as the
-    /// port gives none yet, nor looks; the wording's picks rolled on a
-    /// chance that never fires.
+    /// port gives none yet, nor looks; the messages worded with `names`,
+    /// as an opening hands them (a `FakeFlight`'s opening's); the
+    /// wording's picks rolled on a chance that never fires.
     #[cfg(any(test, feature = "fixture"))]
     #[must_use]
-    pub fn scripted(catalog: C, sim: S, rules: &Rulebook) -> Self
+    pub fn scripted(
+        catalog: C,
+        sim: S,
+        names: nova_sim::flight_frame::Names,
+        rules: &Rulebook,
+    ) -> Self
     where
         C: GalaxyCatalog + EscortMenuLooks + SystemCatalog,
     {
@@ -631,6 +641,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 presentation: super::stepping::Presentation::of(rules),
                 words_chance: SharedChance::default(),
                 failure: None,
+                names,
             },
         )
     }

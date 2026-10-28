@@ -50,7 +50,7 @@ use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{DrawList, ImageKey, Input, MouseButton, Screen, ScreenAction};
 use nova_sim::ShipIff;
-use nova_sim::flight_frame::{Answer, FlightCommand, FlightFrame, MapClick};
+use nova_sim::flight_frame::{Answer, FlightCommand, FlightFrame, MapClick, Names};
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::{
     AbortError, AcceptError, Assigned, Assignment, CombatCatalog, ComputerRefusal, Controls,
@@ -383,12 +383,39 @@ fn faked(frame: FlightFrame) -> Faked {
 }
 
 /// A view over a flight scripted to show `frame`, read from `catalog`,
-/// the flight saying the date as [`DATE`] and naming nothing else.
+/// the flight naming nothing.
 fn faked_in(catalog: FakeCatalog, frame: FlightFrame) -> Faked {
     let mut fake = FakeFlight::new();
     fake.set_frame(frame);
-    fake.names_mut().long_date = DATE.to_owned();
-    FlightView::scripted(catalog, fake, &Rulebook::default())
+    scripted_over(catalog, fake, &Rulebook::default())
+}
+
+/// The view of `fake` over `catalog` by `rules`
+/// ([`FlightView::scripted`]), opening on the names `fake`'s opening
+/// names ([`FakeFlight::set_names`]).
+fn scripted_over(catalog: FakeCatalog, fake: FakeFlight, rules: &Rulebook) -> Faked {
+    let names = fake.opening().names;
+    FlightView::scripted(catalog, fake, names, rules)
+}
+
+/// Changes the names `view` opened on with `change`, as an opening naming
+/// them would have: for a test whose view a shared helper built before
+/// the test says what the flight names. The view reads the opening once,
+/// so the table it kept is the one to change.
+fn renamed(view: &mut Faked, change: impl FnOnce(&mut Names)) {
+    let mut names = (*view.names).clone();
+    change(&mut names);
+    view.names = Rc::new(names);
+}
+
+/// The names of the stellars of `stellars`, each with its name, and
+/// nothing else.
+fn stellar_names(stellars: &[(i16, &str)]) -> Names {
+    let mut names = Names::default();
+    for &(id, name) in stellars {
+        names.stellars.insert(StellarId(id), name.to_owned());
+    }
+    names
 }
 
 /// The commands `view` sent its flight, in order.
@@ -498,7 +525,7 @@ fn a_view_over_a_scripted_flight_shows_its_frame() {
         jump_readiness: nova_sim::JumpReadiness::Clear,
         ..in_sol()
     });
-    view.sim.map_mut().explored = vec![SystemId(131)];
+    faked_hud::changes(&mut view, |frame| frame.explored = vec![SystemId(131)]);
     let scene = view.scene.as_ref().expect("the frame's scene");
     assert_eq!(scene.name(), "Sol", "the frame's system");
     assert_eq!(

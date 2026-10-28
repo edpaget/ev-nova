@@ -85,7 +85,7 @@ fn faked_bordered_by(rules: &Rulebook) -> Faked {
     map.drawing = Some(sol_drawing());
     map.border_sources = Some(sources(true));
     map.search = Some(nova_sim::map_search::SearchOutcome::Found(SystemId(130)));
-    let mut view = FlightView::scripted(catalog, fake, rules);
+    let mut view = scripted_over(catalog, fake, rules);
     view.map = view.map.clone().with_metrics(Rc::new(MonoMetrics));
     view.open_map();
     view

@@ -11,7 +11,7 @@ use super::*;
 /// and codes the frame asks for.
 pub(super) fn world_by(catalog: FakeCatalog, frame: FlightFrame, rules: &Rulebook) -> Faked {
     let looks = Looks::read(&catalog, catalog.weapons().iter().map(|weapon| weapon.id));
-    let mut view = FlightView::scripted(catalog, scripted_flight(frame), rules);
+    let mut view = scripted_over(catalog, scripted_flight(frame), rules);
     let class = view.frame.player().class;
     view.sheet = view.catalog.ship_sheet(class);
     view.sheet_ship = Some(class);

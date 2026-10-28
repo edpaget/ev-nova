@@ -460,18 +460,28 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// for none, or one with no name); in mode 3 the system selected, by
     /// its name on the map if the pilot has explored it ("No Destination"
     /// for none), with whether the ship can jump there now; with the nav
-    /// system off, "Nav System Off". Each read through the flight
-    /// ([`MapSource::stellar_name`](crate::flight::sim_port::MapSource::stellar_name), [`MapSource::has_explored`](crate::flight::sim_port::MapSource::has_explored),
+    /// system off, "Nav System Off". Each read from what the flight gave:
+    /// the opening's names ([`Names::stellar`](nova_sim::flight_frame::Names::stellar))
+    /// and the kept frame
+    /// ([`FlightFrame::has_explored`](nova_sim::flight_frame::FlightFrame::has_explored),
     /// [`FlightFrame::jump_readiness`](nova_sim::flight_frame::FlightFrame::jump_readiness)).
+    /// `mode` may be held or noted from before (a take-off's, a text's, an
+    /// interface load's): its system reads as explored or not as the
+    /// frame's set stands now, as `_DrawStatusNav` reads the flag as it
+    /// draws.
     pub(super) fn nav_display(&self, mode: NavMode) -> NavDisplay {
         match mode {
             NavMode::Off => NavDisplay::Off,
             NavMode::Stellar(target) => NavDisplay::Stellar(target.and_then(|target| {
-                stellar_name(self.scene.as_ref(), |id| self.sim.stellar_name(id), target)
+                stellar_name(
+                    self.scene.as_ref(),
+                    |id| self.names.stellar(id).map(str::to_owned),
+                    target,
+                )
             })),
             NavMode::Hyperspace(next) => NavDisplay::Hyperspace {
                 destination: next.map_or(NavDestination::None, |next| {
-                    self.sim
+                    self.frame
                         .has_explored(next)
                         .then(|| self.map.model().system(next))
                         .flatten()

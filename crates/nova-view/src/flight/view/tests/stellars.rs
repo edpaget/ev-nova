@@ -88,10 +88,9 @@ fn sol_with_gates() -> Faked {
         .stellars
         .extend([150, 151].map(|id| record::stellar(StellarId(id))));
     let mut view = super::faked_hud::barred(catalog, frame);
-    view.sim
-        .map_mut()
-        .stellar_names
-        .push((StellarId(150), "Hole".to_owned()));
+    renamed(&mut view, |names| {
+        names.stellars.insert(StellarId(150), "Hole".to_owned());
+    });
     view
 }
 
@@ -242,7 +241,9 @@ fn reborn_sol(nav: NavMode) -> Faked {
             ..in_sol()
         },
     );
-    view.sim.map_mut().explored = vec![SystemId(130), SystemId(133)];
+    faked_hud::changes(&mut view, |frame| {
+        frame.explored = vec![SystemId(130), SystemId(133)];
+    });
     view
 }
 

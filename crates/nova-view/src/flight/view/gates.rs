@@ -85,7 +85,11 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
                 let name = refusal
                     .stellar()
                     .and_then(|stellar| {
-                        stellar_name(self.scene.as_ref(), |id| self.sim.stellar_name(id), stellar)
+                        stellar_name(
+                            self.scene.as_ref(),
+                            |id| self.names.stellar(id).map(str::to_owned),
+                            stellar,
+                        )
                     })
                     .unwrap_or_default();
                 if let Some(text) = refusal_message(&refusal, gate, &name) {

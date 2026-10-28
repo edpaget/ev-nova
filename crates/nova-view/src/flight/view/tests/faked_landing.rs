@@ -211,10 +211,9 @@ fn each_refusal_says_why_in_the_originals_words_for_its_ticks() {
     for (refusal, gate, text, ticks) in cases {
         let mut view = faked(sol());
         // A stellar the scene doesn't hold, named by the flight.
-        view.sim
-            .map_mut()
-            .stellar_names
-            .push((hole, "Hole".to_owned()));
+        renamed(&mut view, |names| {
+            names.stellars.insert(hole, "Hole".to_owned());
+        });
         press_l(&mut view, refused(refusal, gate));
         assert_eq!(view.take_landing(), None, "{refusal:?}");
         faked_lasts(&mut view, text, ticks);
@@ -919,9 +918,10 @@ fn a_command_sent_under_a_refused_gate_is_refused_unsent() {
 /// [`sol`]'s flight, which shows Earth (128) and the Moon (129), naming
 /// the player's ship Kestrel.
 fn sol_named() -> Faked {
-    let mut view = faked(sol());
-    view.sim.names_mut().player_ship_name = Some("Kestrel".to_owned());
-    view
+    faked(FlightFrame {
+        player_ship_name: Some("Kestrel".to_owned()),
+        ..sol()
+    })
 }
 
 #[test]

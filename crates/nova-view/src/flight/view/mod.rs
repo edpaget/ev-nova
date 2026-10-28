@@ -639,7 +639,7 @@ use std::time::Duration;
 use nova_sim::DrawnBox;
 #[cfg(doc)]
 use nova_sim::Session;
-use nova_sim::flight_frame::{FlightFrame, FrameShip, GateFade, ShipPlace, StepReport};
+use nova_sim::flight_frame::{FlightFrame, FrameShip, GateFade, Names, ShipPlace, StepReport};
 use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::gate_entry::enter_level;
@@ -1268,6 +1268,12 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// fixed for the flight's life, so no frame field. Such a flight
     /// shows only the reason.
     failure: Option<String>,
+    /// The names fixed for the flight's life, as it opened
+    /// ([`FlightOpening::names`](nova_sim::flight_frame::FlightOpening::names)):
+    /// the ships', outfits', goods', `jünk`s' and stellars' names the
+    /// messages are worded with. Behind an `Rc`, as a clone of the view
+    /// shares the one table.
+    names: Rc<Names>,
     /// The session's system, laid out; `None` when the session failed.
     scene: Option<SystemScene>,
     /// Each stellar's animation state as the scene that last showed it

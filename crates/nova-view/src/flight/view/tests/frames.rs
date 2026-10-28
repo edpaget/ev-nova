@@ -9,10 +9,12 @@ use super::*;
 use nova_sim::flight_frame::{FrameShip, FrameTarget};
 use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
-/// The frame of a flight in Sol (130), nav off, nothing plotted.
+/// The frame of a flight in Sol (130), nav off, nothing plotted, on
+/// [`DATE`].
 pub(super) fn in_sol() -> FlightFrame {
     FlightFrame {
         system: SystemId(130),
+        long_date: DATE.to_owned(),
         ..FlightFrame::default()
     }
 }

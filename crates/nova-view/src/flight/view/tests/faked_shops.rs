@@ -56,10 +56,9 @@ pub(super) fn at_earth() -> FlightFrame {
 pub(super) fn docked_on(catalog: FakeCatalog, frame: FlightFrame, cadence: RuleSource) -> Faked {
     let rules = Rulebook::default().with_override(RuleKey::HudCadence, cadence);
     let mut view = barred_by(catalog, frame, &rules);
-    view.sim.map_mut().stellar_names = vec![
-        (StellarId(128), "Earth".to_owned()),
-        (StellarId(140), "Proxima".to_owned()),
-    ];
+    renamed(&mut view, |names| {
+        *names = stellar_names(&[(128, "Earth"), (140, "Proxima")]);
+    });
     view.redraw_status();
     view
 }
