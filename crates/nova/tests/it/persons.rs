@@ -611,11 +611,12 @@ impl Game {
             .collect()
     }
 
-    /// The comm dialog's reply, as the flight gives it.
-    fn reply(&self) -> String {
+    /// The comm dialog's reply, as the flight gives it, asked through the
+    /// view.
+    fn reply(&mut self) -> String {
         self.app
-            .screen()
-            .flight_view()
+            .screen_mut()
+            .flight_view_mut()
             .expect("flying")
             .hailing()
             .expect("hailing")

@@ -51,6 +51,10 @@ nova-rsrc = { workspace = true, features = ["fixture"] }
 nova-view = { workspace = true, features = ["fixture"] }
 # The router and integration tests save pilots in the in-memory store.
 nova-sim = { workspace = true, features = ["fixture"] }
+# This crate's own `fixture` feature, for its integration tests under
+# `tests/`, which build the library without `cfg(test)`: the mutable
+# screen their harnesses ask the flight's screens through.
+nova = { path = ".", features = ["fixture"] }
 # The pilot file adapter's tests write into a temporary directory.
 tempfile.workspace = true
 # The runner tests build the wgpu errors a GPU set-up can fail with.
@@ -60,6 +64,11 @@ wgpu.workspace = true
 # The developer tools overlay (egui), toggled with the backquote key. Off by
 # default and in release builds; `mise run dev` turns it on.
 dev-tools = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit", "dep:wgpu"]
+# Exposes the test support this crate's integration tests reach the app
+# through: the current screen to change (`App::screen_mut`) and the
+# flight screen to ask (`AppScreen::flight_view_mut`), as a screen's ask
+# of the flight takes `&mut`.
+fixture = []
 
 [lints]
 workspace = true

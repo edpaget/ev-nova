@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use nova_sim::flight_frame::{Answer, FlightCommand};
+use nova_sim::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
 use nova_sim::{Boarding, PlunderView, Take, Taken};
 
 use crate::flight::sim_port::FlightSim;
@@ -117,18 +117,21 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// What is on board the ship being boarded, while the plunder dialog
-    /// is open ([`CommSource::boarding`](crate::flight::sim_port::CommSource::boarding)).
-    #[must_use]
-    pub fn boarding(&self) -> Option<PlunderView> {
-        self.sim.boarding()
+    /// is open ([`ScreenAsk::Boarding`]), asked as it opens and after each
+    /// take: none with no boarding under way, a capture awaiting its
+    /// assignment, or a flight with nothing to answer.
+    pub fn boarding(&mut self) -> Option<PlunderView> {
+        match self.sim.screen(ScreenAsk::Boarding) {
+            ScreenAnswer::Boarding(view) => Some(view),
+            _ => None,
+        }
     }
 
     /// What the plunder dialog shows while it is open:
     /// [`FlightView::boarding`] with its cargo's good and its ammunition's
     /// outfit named by the flight's opening ([`FlightView::names`]), as
     /// [`FlightView::plunder`]'s messages name them.
-    #[must_use]
-    pub fn plunder_shown(&self) -> Option<PlunderShown> {
+    pub fn plunder_shown(&mut self) -> Option<PlunderShown> {
         let view = self.boarding()?;
         let (good, outfit) = names(
             &self.names,

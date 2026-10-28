@@ -56,11 +56,12 @@ const ON_BOARD: PlunderView = PlunderView {
 };
 
 /// The answer to a board that opened the plunder dialog on [`ON_BOARD`],
-/// the boarding then under way.
+/// the boarding then under way: the board's, and the boarding's as the
+/// dialog opens ([`FlightView::take_boarding`]).
 pub(super) fn opened(view: &mut Faked) {
     view.sim
         .queue_answer(Answer::Boarded(Boarding::Opened(ON_BOARD)));
-    view.sim.comm_mut().boarding = Some(ON_BOARD);
+    view.sim.queue_screen(ScreenAnswer::Boarding(ON_BOARD));
 }
 
 /// The answer to a take that did `taken`, the dialog open after or not.
@@ -89,6 +90,12 @@ fn b_sends_the_board_and_holds_the_plunder_dialog_once_letting_go_of_the_keys() 
     let shown = view.take_boarding().expect("held for the router");
     assert_eq!(shown.view, ON_BOARD);
     assert_eq!(view.take_boarding(), None, "once");
+    assert_eq!(
+        view.sim.screens_asked(),
+        [ScreenAsk::Boarding],
+        "asked as it opened"
+    );
+    view.sim.queue_screen(ScreenAnswer::Boarding(ON_BOARD));
     assert_eq!(view.boarding(), Some(ON_BOARD), "still under way");
     assert_eq!(view.message(), None);
     assert!(view.held.is_empty(), "the flight keys let go");
@@ -105,16 +112,16 @@ fn the_plunder_dialog_names_its_good_and_outfit_as_the_flight_names_them() {
         (shown.good.as_deref(), shown.outfit.as_deref()),
         (Some("Food"), Some("Rockets"))
     );
+    view.sim.queue_screen(ScreenAnswer::Boarding(ON_BOARD));
     assert_eq!(view.plunder_shown(), Some(shown));
-    view.sim.comm_mut().boarding = Some(PlunderView {
+    view.sim.queue_screen(ScreenAnswer::Boarding(PlunderView {
         cargo: None,
         ammo: None,
         ..ON_BOARD
-    });
+    }));
     let shown = view.plunder_shown().expect("under way");
     assert_eq!((shown.good, shown.outfit), (None, None), "nothing to name");
-    view.sim.comm_mut().boarding = None;
-    assert_eq!(view.plunder_shown(), None, "over");
+    assert_eq!(view.plunder_shown(), None, "over: nothing answered");
 }
 
 #[test]

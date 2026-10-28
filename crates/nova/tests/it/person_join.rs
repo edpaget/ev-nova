@@ -740,12 +740,13 @@ impl Game {
         panic!("never targeted {id}");
     }
 
-    /// The comm dialog's options and reply, as the flight gives them.
-    fn hailing(&self) -> (Vec<String>, String) {
+    /// The comm dialog's options and reply, as the flight gives them,
+    /// asked through the view.
+    fn hailing(&mut self) -> (Vec<String>, String) {
         let view = self
             .app
-            .screen()
-            .flight_view()
+            .screen_mut()
+            .flight_view_mut()
             .expect("flying")
             .hailing()
             .expect("hailing");

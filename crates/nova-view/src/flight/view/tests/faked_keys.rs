@@ -315,8 +315,9 @@ fn the_escort_menu_times_out_during_the_streak() {
 
 #[test]
 fn a_tap_of_b_still_boards() {
-    // Pressed and released before the next frame, through the press.
-    let mut view = fleet(&[]);
+    // Pressed and released before the next frame, through the press. No
+    // map is opened, so none is queued before the boarding's answer.
+    let mut view = world(catalog(), fleet_of(&[]));
     super::faked_board::opened(&mut view);
     tap(&mut view, BOARD_KEY);
     assert_eq!(sent_since(&view, 0), [FlightCommand::Board]);

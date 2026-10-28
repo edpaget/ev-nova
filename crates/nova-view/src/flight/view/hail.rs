@@ -6,7 +6,7 @@
 //! `nova_sim::Session::haggle`).
 
 use nova_sim::escort_dialog::{EscortButton, EscortDialogView};
-use nova_sim::flight_frame::{Answer, FlightCommand};
+use nova_sim::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
 use nova_sim::{Haggle, HailView, Hailed, VenueOffer};
 
 use crate::Key;
@@ -88,10 +88,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The comm dialog's contents while a hail is under way
-    /// ([`CommSource::hailing`](crate::flight::sim_port::CommSource::hailing)).
-    #[must_use]
-    pub fn hailing(&self) -> Option<HailView> {
-        self.sim.hailing()
+    /// ([`ScreenAsk::Hail`]), asked after the haggle dialog closes: none
+    /// with no hail under way, or for a flight with nothing to answer.
+    pub fn hailing(&mut self) -> Option<HailView> {
+        match self.sim.screen(ScreenAsk::Hail) {
+            ScreenAnswer::Hail(view) => Some(*view),
+            _ => None,
+        }
     }
 
     /// Presses the `pick`th option listed ([`FlightCommand::AnswerHail`]):

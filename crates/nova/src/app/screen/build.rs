@@ -817,6 +817,15 @@ impl AppScreen {
         self.flight.as_ref()
     }
 
+    /// The flight screen to ask, shown or not, once flight has been
+    /// entered: for the integration tests' harnesses, as a screen's ask of
+    /// the flight takes `&mut` ([`FlightView::hailing`]).
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn flight_view_mut(&mut self) -> Option<&mut FlightView<Rc<GameData>>> {
+        self.flight.as_mut()
+    }
+
     /// The game in progress the main menu holds, not flying, if any: a
     /// pilot created or opened there, or back from play.
     #[must_use]

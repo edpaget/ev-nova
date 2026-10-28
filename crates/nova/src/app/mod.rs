@@ -603,6 +603,14 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         &self.screen
     }
 
+    /// The current screen, to change: for this crate's integration tests,
+    /// whose harnesses ask the flight's screens through the view, as a
+    /// screen's ask takes `&mut` (`FlightView::hailing`).
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn screen_mut(&mut self) -> &mut C {
+        &mut self.screen
+    }
+
     /// The image source.
     pub fn images(&self) -> &S {
         self.renderer.images()

@@ -93,9 +93,11 @@ fn y_sends_the_hail_and_holds_the_comm_dialog_answered_once_letting_go_of_the_ke
 #[test]
 fn the_comm_dialogs_contents_are_the_flights_hail_under_way() {
     let mut view = sol();
-    assert_eq!(view.hailing(), None);
-    view.sim.comm_mut().hailing = Some(hail_view("Channel open."));
+    assert_eq!(view.hailing(), None, "nothing answered");
+    view.sim
+        .queue_screen(ScreenAnswer::Hail(Box::new(hail_view("Channel open."))));
     assert_eq!(view.hailing(), Some(hail_view("Channel open.")));
+    assert_eq!(view.sim.screens_asked(), [ScreenAsk::Hail, ScreenAsk::Hail]);
 }
 
 #[test]

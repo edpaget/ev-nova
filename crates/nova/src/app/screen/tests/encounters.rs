@@ -363,7 +363,7 @@ fn a_miss_keeps_the_plunder_dialog_open() {
     let sounds = plunder_click(&mut screen, 5);
     assert_eq!(sounds, []);
     assert_eq!(screen.showing(), Showing::Plunder, "the text");
-    assert!(flight(&screen).boarding().is_some());
+    assert!(flight_mut(&mut screen).boarding().is_some());
     for pressed in [true, false] {
         screen.input(&Input::PointerButton {
             button: MouseButton::Left,
@@ -372,7 +372,7 @@ fn a_miss_keeps_the_plunder_dialog_open() {
         });
     }
     assert_eq!(screen.showing(), Showing::Plunder, "outside its frame");
-    assert!(flight(&screen).boarding().is_some());
+    assert!(flight_mut(&mut screen).boarding().is_some());
 }
 
 #[test]
@@ -381,7 +381,7 @@ fn abort_closes_the_dialog_back_into_flight() {
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::Flight);
     assert!(screen.plunder().is_none());
-    assert_eq!(flight(&screen).boarding(), None);
+    assert_eq!(flight_mut(&mut screen).boarding(), None);
     screen.input(&key(Key::Escape, false));
     assert_eq!(
         screen.showing(),
@@ -447,7 +447,7 @@ fn without_any_metrics_a_boarding_is_let_go() {
     fly(&mut screen);
     board(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
-    assert_eq!(flight(&screen).boarding(), None, "aborted");
+    assert_eq!(flight_mut(&mut screen).boarding(), None, "aborted");
     assert!(
         !screen
             .take_sounds()
@@ -560,7 +560,7 @@ fn the_overlays_take_the_pointer_cancels_and_the_key_releases() {
         at,
     });
     assert_eq!(
-        flight(&screen).boarding().map(|view| view.credits),
+        flight_mut(&mut screen).boarding().map(|view| view.credits),
         Some(5750),
         "abandoned"
     );
@@ -623,8 +623,8 @@ fn tap(screen: &mut AppScreen, k: Key) {
     screen.input(&key(k, false));
 }
 
-fn reply(screen: &AppScreen) -> String {
-    flight(screen).hailing().expect("hailing").reply
+fn reply(screen: &mut AppScreen) -> String {
+    flight_mut(screen).hailing().expect("hailing").reply
 }
 
 #[test]
@@ -777,7 +777,7 @@ fn close_channel_hangs_up_and_resumes_flight() {
     assert_eq!(sounds, []);
     assert_eq!(screen.showing(), Showing::Flight);
     assert!(screen.comm().is_none());
-    assert_eq!(flight(screen).hailing(), None, "hung up");
+    assert_eq!(flight_mut(screen).hailing(), None, "hung up");
     let alpha = flight(screen).alpha();
     screen.tick(TICK / 2);
     assert_ne!(flight(screen).alpha().to_bits(), alpha.to_bits(), "resumed");
@@ -876,7 +876,7 @@ fn without_any_metrics_a_hail_is_hung_up() {
     fly(&mut screen);
     hail(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
-    assert_eq!(flight(&screen).hailing(), None, "hung up");
+    assert_eq!(flight_mut(&mut screen).hailing(), None, "hung up");
     assert_eq!(
         screen.take_warnings(),
         ["nova: cannot show the comm dialog: no metrics to lay it out"]
@@ -1042,5 +1042,8 @@ fn the_routers_hail_options_reach_every_flight() {
         .with_hail_options(HailOptions::empty());
     fly(&mut screen);
     hail(&mut screen);
-    assert_eq!(flight(&screen).hailing().expect("hailing").options, []);
+    assert_eq!(
+        flight_mut(&mut screen).hailing().expect("hailing").options,
+        []
+    );
 }

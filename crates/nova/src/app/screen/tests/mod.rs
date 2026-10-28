@@ -1012,6 +1012,11 @@ fn flight(screen: &AppScreen) -> &FlightView<Rc<GameData>> {
     screen.flight_view().expect("flight entered")
 }
 
+/// The flight entered, to ask its screens, which take `&mut`.
+fn flight_mut(screen: &mut AppScreen) -> &mut FlightView<Rc<GameData>> {
+    screen.flight.as_mut().expect("flight entered")
+}
+
 fn ship(screen: &AppScreen) -> nova_sim::ShipState {
     *flight(screen).session().expect("flying").player()
 }
