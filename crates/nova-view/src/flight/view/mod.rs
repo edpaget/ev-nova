@@ -127,10 +127,11 @@
 //! Each day a jump takes rolls the planetary events on the screen's
 //! [`SharedChance`] ([`Collaborators::chance`](crate::flight::Collaborators::chance)); without one, nothing
 //! random happens. Landed at a trade center, the session's exchange can be
-//! read ([`FlightView::market`]) and traded on ([`FlightView::trade`]);
-//! landed at an outfitter, so can its outfitter ([`FlightView::outfitter`],
-//! [`FlightView::outfit`]); and landed at a shipyard, a new ship can be
-//! bought ([`FlightView::shipyard`], [`FlightView::buy_ship`]), whose
+//! read ([`FlightView::shops`]) and traded on ([`FlightView::trade`]);
+//! landed at an outfitter, so can its outfitter ([`FlightView::shops`],
+//! [`FlightView::outfitter`] alone, [`FlightView::outfit`]); and landed
+//! at a shipyard, a new ship can be bought ([`FlightView::shops`],
+//! [`FlightView::buy_ship`]), whose
 //! sprite sheet is read then.
 //!
 //! The screen redraws from what the session tells it
@@ -480,7 +481,7 @@
 //! - P ([`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), a press), outside the map, asks the router
 //!   for the player info screen over the paused flight
 //!   ([`FlightView::take_player_info_request`], with
-//!   [`FlightView::player_info`]), letting go of the flight keys, as
+//!   [`FlightView::open_player_info`]), letting go of the flight keys, as
 //!   `_HandlePlayer` does (@0x702bf-0x703c9). During a jump, its pre-jump
 //!   stage included, while the ship breaks up, and for
 //!   [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
@@ -543,7 +544,7 @@
 //!   ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)); fighters abandoned in a jump
 //!   are told on arrival ([`fighters_abandoned_message`](super::escorts::fighters_abandoned_message)).
 //! - Landed at an outfitter or a shipyard, the router asks the flight
-//!   for its list ([`FlightView::outfitter`], [`FlightView::shipyard`])
+//!   for its list ([`FlightView::shops`], [`FlightView::outfitter`])
 //!   and trades through it ([`FlightView::outfit`],
 //!   [`FlightView::outfit_counted`], [`FlightView::buy_ship`]), each item's roll for the day drawn on the
 //!   flight's chance; the router tells the flight each time the
