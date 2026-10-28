@@ -1835,6 +1835,7 @@ dependencies = [
 name = "nova-win32"
 version = "0.1.0"
 dependencies = [
+ "libloading",
  "windows-sys 0.61.2",
 ]
 

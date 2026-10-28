@@ -37,6 +37,9 @@ tempfile = "3"
 # Compiles nova.exe's resource script (its icon, version information and
 # manifest) on Windows; for any other target it does nothing.
 embed-resource = "3.0.12"
+# nova-win32 loads WinSparkle.dll at run time; the version wgpu-hal
+# already locks.
+libloading = "0.8"
 # Reads the PE nova.exe's tests check, as structures.
 object = { version = "0.37.3", default-features = false, features = ["read_core", "pe", "std"] }
 # Reads the Windows manifest back as XML in nova-winres's and nova's tests,
