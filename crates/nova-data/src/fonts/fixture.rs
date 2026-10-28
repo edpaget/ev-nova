@@ -107,7 +107,13 @@ pub fn block_font(family: &str) -> Vec<u8> {
 /// [`block_font`]'s tables, to add to, replace or remove before building.
 #[must_use]
 pub fn block_sfnt(family: &str) -> SfntBuilder {
-    let mut glyf = block_glyph();
+    instructed_block_sfnt(family, &[])
+}
+
+/// [`block_sfnt`] with `instructions` as its glyph's own program.
+#[must_use]
+pub fn instructed_block_sfnt(family: &str, instructions: &[u8]) -> SfntBuilder {
+    let mut glyf = block_glyph(instructions);
     glyf.resize(glyf.len().next_multiple_of(4), 0);
     let loca = [0u16, 0, (glyf.len() / 2) as u16];
     SfntBuilder::new(&[0, 1, 0, 0])
@@ -117,7 +123,7 @@ pub fn block_sfnt(family: &str) -> SfntBuilder {
         .table(b"hhea", block_hhea())
         .table(b"hmtx", be16(&[1000, 0, 1000, 100]))
         .table(b"loca", be16(&loca))
-        .table(b"maxp", block_maxp())
+        .table(b"maxp", block_maxp(instructions.len() as u16))
         .table(b"name", block_name(family))
         .table(b"post", block_post())
 }
@@ -182,18 +188,21 @@ fn block_hhea() -> Vec<u8> {
     hhea
 }
 
-/// `maxp` version 1.0: two glyphs, at most four points in one contour.
-fn block_maxp() -> Vec<u8> {
+/// `maxp` version 1.0: two glyphs, at most four points in one contour, and
+/// a glyph program of at most `instructions` bytes.
+fn block_maxp(instructions: u16) -> Vec<u8> {
     let mut maxp = 0x0001_0000u32.to_be_bytes().to_vec();
-    maxp.extend(be16(&[2, 4, 1, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0]));
+    maxp.extend(be16(&[2, 4, 1, 0, 0, 2, 0, 0, 0, 0, 0, instructions, 0, 0]));
     maxp
 }
 
 /// Glyph 1: one clockwise contour round (100, 0), (100, 700), (900, 700),
-/// (900, 0), every point on the curve with word-sized deltas.
-fn block_glyph() -> Vec<u8> {
+/// (900, 0), every point on the curve with word-sized deltas, and
+/// `instructions` as its program.
+fn block_glyph(instructions: &[u8]) -> Vec<u8> {
     let mut glyph = be16(&[1, 100, 0, 900, 700]); // contours and bounds
-    glyph.extend(be16(&[3, 0])); // endPtsOfContours, no instructions
+    glyph.extend(be16(&[3, instructions.len() as u16])); // endPtsOfContours, instructionLength
+    glyph.extend(instructions);
     glyph.extend([1; 4]); // ON_CURVE_POINT
     glyph.extend(be16(&[100, 0, 800, 0])); // x deltas
     glyph.extend(be16(&[0, 700, 0, (-700i16) as u16])); // y deltas
@@ -299,6 +308,34 @@ mod tests {
         fn close(&mut self) {
             self.0.push("Z".to_owned());
         }
+    }
+
+    #[test]
+    fn an_instructed_block_font_holds_its_glyphs_program_and_the_same_outline() {
+        let program = [0xB0, 0x00, 0x21];
+        let bytes = instructed_block_sfnt("Block", &program).build();
+        let face = Face::parse(&bytes, 0).expect("parses");
+        let glyf = face.raw_face().table(ttf_parser::Tag::from_bytes(b"glyf"));
+        let glyf = glyf.expect("a glyf table");
+        // After the header (10 bytes) and the one contour's end point: the
+        // program's length, then the program.
+        assert_eq!(&glyf[12..14], &[0, 3]);
+        assert_eq!(&glyf[14..17], &program);
+        let (max_ins, _) = table_u16(&face, *b"maxp", 26);
+        assert_eq!(max_ins, 3);
+        let mut path = Path::default();
+        face.outline_glyph(GlyphId(1), &mut path)
+            .expect("an outline");
+        let mut plain = Path::default();
+        Face::parse(&block_font("Block"), 0)
+            .expect("parses")
+            .outline_glyph(GlyphId(1), &mut plain)
+            .expect("an outline");
+        assert_eq!(path.0, plain.0);
+        assert_eq!(
+            block_sfnt("Block").build(),
+            instructed_block_sfnt("Block", &[]).build()
+        );
     }
 
     #[test]

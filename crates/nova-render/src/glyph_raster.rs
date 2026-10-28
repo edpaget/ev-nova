@@ -29,8 +29,13 @@
 //! - A face with no programs (the bundled Noto Serif) takes the autohinter
 //!   with [`AUTOHINT_TARGET`].
 //!
-//! A glyph the interpreter fails on is drawn from its unhinted outline; a
-//! glyph with no outline draws nothing. Coverage stays antialiased (8-bit
+//! A glyph the interpreter fails on is drawn from its unhinted outline: at
+//! a size whose font or control program (`fpgm`, `prep`) fails, every
+//! glyph is, and that size is not set up again. An error in a glyph's own
+//! program is not a failure: skrifa's interpreter runs it not pedantic, as
+//! `FreeType` does without `FT_LOAD_PEDANTIC`, so the error is dropped and
+//! the glyph keeps its points as far as the program moved them. A glyph
+//! with no outline draws nothing. Coverage stays antialiased (8-bit
 //! area coverage of the hinted outline): stems on the grid fill whole
 //! columns while curves and diagonals stay smooth. Whether the original's
 //! text was smoothed was the host's text-smoothing preference, not a game
@@ -271,7 +276,7 @@ mod tests {
     use glyphon::cosmic_text::{CacheKey, CacheKeyFlags};
     use glyphon::fontdb::{Database, Source, Weight};
     use glyphon::{FontSystem, SwashCache};
-    use nova_data::fonts::fixture::block_sfnt;
+    use nova_data::fonts::fixture::{block_sfnt, instructed_block_sfnt};
 
     /// `face`'s glyph for `c`.
     fn glyph(face: &[u8], c: char) -> u16 {
@@ -415,6 +420,90 @@ mod tests {
         assert_eq!(face.hinter(), Hinter::Instructions);
         let raster = face.rasterise(glyph(&block_sfnt("Block").build(), 'A'), 12.0);
         assert!(!raster.expect("an outline").is_empty());
+    }
+
+    /// A program that fails in skrifa's interpreter whether or not it is
+    /// pedantic: PUSHB[1] 1 0, DIV (1 / 0). POP on an empty stack fails
+    /// only a pedantic run, which pops a 0 instead.
+    const DIVIDE_BY_ZERO: [u8; 4] = [0xB1, 0x01, 0x00, 0x62];
+
+    /// A program that runs: PUSHB[0] 0, POP.
+    const PUSH_AND_POP: [u8; 3] = [0xB0, 0x00, 0x21];
+
+    /// The block font's one glyph with an outline.
+    fn block_glyph() -> u16 {
+        glyph(&block_sfnt("Block").build(), 'A')
+    }
+
+    fn face_of(sfnt: &nova_data::fonts::fixture::SfntBuilder) -> HintedFace {
+        HintedFace::new(sfnt.build().into(), 0).expect("loads")
+    }
+
+    #[test]
+    fn a_face_whose_font_or_control_program_fails_draws_its_unhinted_outline() {
+        let block = block_glyph();
+        for table in [b"fpgm", b"prep"] {
+            let mut face = face_of(&block_sfnt("Block").table(table, DIVIDE_BY_ZERO));
+            assert_eq!(face.hinter(), Hinter::Instructions);
+            for ppem in [12.0, 14.5] {
+                let raster = face.rasterise(block, ppem);
+                assert!(!raster.as_ref().expect("an outline").is_empty());
+                assert_eq!(raster, face.rasterise_unhinted(block, ppem), "{table:?}");
+            }
+        }
+        // A program that runs draws on the hinting grid instead, which at a
+        // fractional size is the whole ppem's.
+        let mut runs = face_of(&block_sfnt("Block").table(b"fpgm", PUSH_AND_POP));
+        assert_ne!(
+            runs.rasterise(block, 14.5),
+            runs.rasterise_unhinted(block, 14.5)
+        );
+    }
+
+    #[test]
+    fn a_size_whose_program_failed_is_not_set_up_again_for_each_glyph() {
+        let mut face = face_of(&block_sfnt("Block").table(b"prep", DIVIDE_BY_ZERO));
+        for glyph in [block_glyph(), 0, block_glyph()] {
+            face.rasterise(glyph, 12.0);
+        }
+        assert_eq!(face.sizes_hinted(), 1);
+        assert!(face.instances[0].1.is_none());
+        face.rasterise(block_glyph(), 9.0);
+        assert_eq!(face.sizes_hinted(), 2);
+    }
+
+    #[test]
+    fn a_glyph_whose_own_program_fails_still_draws_its_outline() {
+        // skrifa's interpreter, run (as FreeType runs it without
+        // `FT_LOAD_PEDANTIC`) not pedantic, drops an error in a glyph's own
+        // program and keeps the points as far as the program moved them:
+        // here, before it moved any, the outline as a glyph with no program
+        // draws it. The draw never fails, so it is not drawn unhinted.
+        let block = block_glyph();
+        let mut failing = face_of(&instructed_block_sfnt("Block", &DIVIDE_BY_ZERO));
+        assert_eq!(failing.hinter(), Hinter::Instructions);
+        let mut plain = face_of(&block_sfnt("Block").table(b"fpgm", PUSH_AND_POP));
+        for ppem in [12.0, 14.5] {
+            let raster = failing.rasterise(block, ppem);
+            assert!(!raster.as_ref().expect("an outline").is_empty());
+            assert_eq!(raster, plain.rasterise(block, ppem), "{ppem}");
+        }
+        assert_ne!(
+            failing.rasterise(block, 14.5),
+            failing.rasterise_unhinted(block, 14.5)
+        );
+    }
+
+    #[test]
+    fn forgetting_its_sizes_empties_a_faces_hinting_cache() {
+        let mut face = noto();
+        face.rasterise(glyph(FALLBACK_FONT, 'l'), 12.0);
+        face.rasterise(glyph(FALLBACK_FONT, 'l'), 9.0);
+        assert_eq!(face.sizes_hinted(), 2);
+        face.forget_sizes();
+        assert_eq!(face.sizes_hinted(), 0);
+        assert!(face.rasterise(glyph(FALLBACK_FONT, 'l'), 12.0).is_some());
+        assert_eq!(face.sizes_hinted(), 1);
     }
 
     #[test]
