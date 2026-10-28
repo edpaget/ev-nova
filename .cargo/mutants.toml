@@ -276,11 +276,11 @@ exclude_re = [
     # warnings' sheet once the loop waits. It needs a real window, display
     # and, for the menu bar, the handlers and the sheet, `NSApplication` on
     # the main thread. The decisions it forwards to (`translate`,
-    # `App::handle`, `App::exiting`, `MenuSync`, `gpu_failure`,
+    # `App::handle`, `App::exiting`, `MenuSync`, `choose`, `gpu_failure`,
     # `exit::exit`, `Report::take_alert`) are mutated and tested, and
     # `MenuBar::install` / `set_enabled` and `AppleEvents::install` run on
     # the main thread in nova-appkit's `tests/it`.
-    "impl ApplicationHandler<MenuCommand> for Runner<S>>::(resumed|window_event|user_event|about_to_wait|exiting)",
+    "impl ApplicationHandler<MenuPick> for Runner<S>>::(resumed|window_event|user_event|about_to_wait|exiting)",
     "nova/src/platform/runner\\.rs:.*replace Running<S>::(after_events|sync_menu|install_menu|print_reports) with \\(\\)$",
     "nova/src/platform/runner\\.rs:.*replace Running<S>::install_menu -> Vec<String> with ",
     # `AppleEvents`'s drop removes its handlers from `NSAppleEventManager`.
@@ -302,6 +302,21 @@ exclude_re = [
     # with both answers.
     "nova/src/startup/report\\.rs:.*replace <impl Terminal for StdTerminal>::stderr_is_terminal -> bool with ",
     "nova/src/platform/menu_bar\\.rs:.*replace <impl MenuPort for MenuBar>::set_enabled with \\(\\)$",
+    # Sparkle's updater started and asked to check: each one message to its
+    # controller, which starts Sparkle's network checks and windows, so no
+    # hermetic test sends it. The decisions (when to start, when to check,
+    # which updater) are `nova::app`'s, tested over a recording updater;
+    # the real controller is made in nova-appkit's opt-in `updater` test,
+    # and the phase's After-landing check installs an update. Its `Debug`
+    # needs that real controller too.
+    "nova-appkit/src/updater\\.rs:.*replace SparkleUpdater::(start|check_now) with \\(\\)$",
+    "nova-appkit/src/updater\\.rs:.*replace <impl fmt::Debug for SparkleUpdater>::fmt ",
+    "nova/src/platform/updater\\.rs:.*replace <impl Updater for SparkleUpdater>::(start|check_now) with \\(\\)$",
+    # A test binary has no bundle, so it names no feed: `false` is what it
+    # answers. nova-appkit's tests read a bundle that names one through
+    # `names_feed`, which `feed_configured` asks of the app's bundle.
+    "nova-appkit/src/updater\\.rs:.*replace feed_configured -> bool with false$",
+    "nova/src/platform/updater\\.rs:.*replace <impl UpdaterSource for SparkleSource>::feed_configured -> bool with false$",
     # The developer tools' window glue (the `dev-tools` feature): egui-winit's
     # input state over a real winit window, which tests cannot build. Each
     # forwards to tested parts: the panel (`DevPanel`), the painter

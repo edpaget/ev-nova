@@ -76,7 +76,12 @@ impl std::error::Error for UpdaterError {}
 /// test binary) names none.
 #[must_use]
 pub fn feed_configured() -> bool {
-    let bundle = NSBundle::mainBundle();
+    names_feed(&NSBundle::mainBundle())
+}
+
+/// Whether `bundle`'s `Info.plist` names a feed, as [`feed_configured`]
+/// asks of the app's.
+fn names_feed(bundle: &NSBundle) -> bool {
     FEED_KEYS.iter().all(|key| {
         bundle
             .objectForInfoDictionaryKey(&NSString::from_str(key))
@@ -163,7 +168,58 @@ fn load_in(_mtm: MainThreadMarker, frameworks: &Path) -> Result<SparkleUpdater, 
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
+
+    /// A bundle in a new temporary folder whose `Info.plist` holds
+    /// `entries` (each a key and its plist value).
+    fn bundle_with(entries: &[(&str, &str)]) -> (tempfile::TempDir, Retained<NSBundle>) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let contents = dir.path().join("Test.app").join("Contents");
+        fs::create_dir_all(&contents).expect("seed");
+        let mut body = String::new();
+        for (key, value) in entries {
+            body.push_str("<key>");
+            body.push_str(key);
+            body.push_str("</key>");
+            body.push_str(value);
+        }
+        fs::write(
+            contents.join("Info.plist"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>io.example.feed-test</string>{body}</dict></plist>"#
+            ),
+        )
+        .expect("seed");
+        let path = dir.path().join("Test.app");
+        let bundle = NSBundle::bundleWithPath(&NSString::from_str(&path.to_string_lossy()))
+            .expect("a bundle");
+        (dir, bundle)
+    }
+
+    #[test]
+    fn a_bundle_names_a_feed_only_with_both_keys_as_strings_that_arent_empty() {
+        let url = (
+            "SUFeedURL",
+            "<string>https://example.com/appcast.xml</string>",
+        );
+        let key = ("SUPublicEDKey", "<string>AAAA</string>");
+        let (_dir, both) = bundle_with(&[url, key]);
+        assert!(names_feed(&both));
+        for entries in [
+            vec![url],
+            vec![key],
+            vec![],
+            vec![url, ("SUPublicEDKey", "<string></string>")],
+            vec![("SUFeedURL", "<string></string>"), key],
+            vec![url, ("SUPublicEDKey", "<true/>")],
+        ] {
+            let (_dir, bundle) = bundle_with(&entries);
+            assert!(!names_feed(&bundle), "{entries:?}");
+        }
+    }
 
     #[test]
     fn off_the_main_thread_nothing_is_loaded() {

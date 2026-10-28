@@ -19,8 +19,8 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSWindow"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-# Folders with no framework, or one that won't load, for the updater's
-# tests.
+# Folders with no framework, one that won't load, and bundles that name a
+# feed or not, for the updater's tests.
 tempfile.workspace = true
 
 # Builds the real menu bar on the process's main thread: `harness = false`,

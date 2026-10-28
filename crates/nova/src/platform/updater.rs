@@ -9,9 +9,10 @@
 //! new build. A modal that holds the game's quit (the startup warnings
 //! sheet, a file dialog) holds Sparkle's too, which then offers to retry.
 //!
-//! It needs the app bundle and Sparkle loaded, so no unit test runs it:
-//! nova-appkit's `updater` tests load the framework for real, and the
-//! phase's After-landing check installs an update.
+//! Starting and checking need the app bundle and Sparkle loaded, and
+//! reach the network, so no unit test runs them: nova-appkit's `updater`
+//! tests load the framework for real, and the phase's After-landing check
+//! installs an update.
 
 use nova_appkit::SparkleUpdater;
 
@@ -41,5 +42,15 @@ impl UpdaterSource for SparkleSource {
         SparkleUpdater::load()
             .map(|updater| Box::new(updater) as Box<dyn Updater>)
             .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_test_binary_names_no_feed() {
+        assert!(!SparkleSource.feed_configured(), "it has no bundle");
     }
 }
