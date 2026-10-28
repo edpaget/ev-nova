@@ -819,7 +819,7 @@ fn interface() -> Vec<u8> {
 /// (128), whose one `düde` flies the "Trader" (ship 129: no shield, 10
 /// armour, no speed, a crew of 3). The escape pod is ship 895; `oütf` 188 is an
 /// escape pod (`ModType` 11) and 187 an auto-eject (20). The status bar
-/// is [`interface`]'s.
+/// is [`interface`]'s, and the mouse cursor `spïn` 650 is [`cursor`]'s.
 fn fighting_data(items: &[(i16, i16)]) -> Rc<GameData> {
     let mut trader = armed_ship(0, 10, &[], &[]);
     put_i16s(&mut trader, 0x06, &[0]);
@@ -869,10 +869,37 @@ fn fighting_data(items: &[(i16, i16)]) -> Rc<GameData> {
             Some(b"Traders"),
             &traders(),
         )
+        .resource(
+            nova_data::records::spin::Spin::TYPE,
+            650,
+            None,
+            &cursor_spin(),
+        )
+        .resource(nova_data::graphics::RLED, CURSOR, None, &cursor())
         .build()
         .bytes;
     let file = OneFile(fork);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+}
+
+/// The mouse cursor's `rlëD`.
+const CURSOR: i16 = 651;
+
+/// `spïn` 650, the mouse cursor: [`cursor`]'s four frames in a row.
+fn cursor_spin() -> Vec<u8> {
+    let mut bytes = vec![0; nova_data::records::spin::Spin::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[CURSOR, -1, 3, 2, 4, 1]);
+    bytes
+}
+
+/// The mouse cursor's sheet: four 3 x 2 frames.
+fn cursor() -> Vec<u8> {
+    (0..4)
+        .fold(
+            nova_data::graphics::fixture::RledBuilder::new(3, 2),
+            |b, _| b.frame(|f| f.line().pixels(&[0x7C00; 3]).line().pixels(&[0x7C00; 3])),
+        )
+        .build()
 }
 
 /// The draws that place the trader 100 pixels above the player.
@@ -1136,6 +1163,68 @@ fn a_real_target_shows_in_the_panel_and_brackets() {
         })
         .count();
     assert_eq!(brackets, 4, "its four corners");
+}
+
+/// `FlightSim::takes`: a gate the session refuses keeps the view's key
+/// from acting, as a player breaking up can't open the map.
+#[test]
+fn a_gate_the_session_refuses_keeps_the_views_key_from_acting() {
+    let data = fighting_data(&[]);
+    let session = SessionBuilder::flying(&data).build();
+    let mut view = fighting(data, session);
+    let session = view.sim_mut().session_mut().expect("flying");
+    nova_sim::fixture::set_player_condition(
+        session,
+        nova_sim::Condition::Dying {
+            ticks_left: 100,
+            starting: false,
+        },
+    );
+    assert!(
+        !session.takes(nova_sim::PlayerCommand::Map),
+        "precondition: the session refuses the map"
+    );
+    tap(&mut view, Key::Char('m'));
+    assert!(!view.map_open(), "the map key refused");
+}
+
+/// The frame of the mouse cursor `view` draws, if it draws one.
+fn cursor_frame(view: &FlightView<Rc<GameData>>) -> Option<u16> {
+    let mut list = nova_view::DrawList::new();
+    view.draw(&mut list);
+    list.iter().find_map(|command| {
+        let mut command = command;
+        while let nova_view::DrawCommand::Clipped { command: inner, .. } = command {
+            command = inner;
+        }
+        match command {
+            nova_view::DrawCommand::Sprite { image, .. } if image.id == CURSOR => Some(image.frame),
+            _ => None,
+        }
+    })
+}
+
+/// `FlightSim::hover`: with the pointer over the trader the frame draws,
+/// the session hovers it and the view's cursor animates; off it, the
+/// cursor rests on its first frame.
+#[test]
+fn the_pointer_over_a_real_ship_hovers_it_and_the_cursor_shows_it() {
+    let data = fighting_data(&[]);
+    let session = SessionBuilder::flying(&data).build();
+    let mut view = fighting(data, session);
+    let trader = frame_of(view.sim()).ships[1].position;
+    let over = view
+        .camera()
+        .world_to_screen(Point::new(trader.x, trader.y));
+    view.input(&Input::PointerMoved(over));
+    for _ in 0..4 {
+        view.tick(TICK);
+    }
+    assert_ne!(cursor_frame(&view), Some(0), "animating over the trader");
+    assert!(cursor_frame(&view).is_some(), "the cursor drawn");
+    view.input(&Input::PointerMoved(Point::new(100.0, 600.0)));
+    view.tick(TICK);
+    assert_eq!(cursor_frame(&view), Some(0), "at rest off it");
 }
 
 // The comm and the boarding through the port
