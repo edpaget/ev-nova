@@ -254,7 +254,11 @@ fn frame_of<C>(flight: &SessionFlight<C>) -> FlightFrame {
 /// Checks the port's contract on a copy of `flight` in `state`, as the
 /// check sends commands.
 fn meets_the_contract<C>(flight: &SessionFlight<C>, state: &str) {
-    assert_eq!(check_contract(&mut flight.clone()), Ok(()), "{state}");
+    assert_eq!(
+        check_contract(&mut flight.clone(), &flight.opening()),
+        Ok(()),
+        "{state}"
+    );
 }
 
 /// The contract on `SessionFlight`: a real session meets the port's
@@ -965,7 +969,7 @@ fn fighting_with(
     view
 }
 
-/// `FlightSim::weapons`: the looks of a real flight's weapons are read as
+/// `FlightOpening::weapons`: the looks of a real flight's weapons are read as
 /// the view opens, so the blaster's unreadable shot sheet is reported.
 #[test]
 fn a_real_flights_weapon_looks_are_read_as_the_view_opens() {

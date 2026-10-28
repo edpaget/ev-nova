@@ -39,9 +39,11 @@ fn the_pilot_desk_is_the_flights_desk_named_from_the_course_maps_galaxy() {
 fn a_flight_that_failed_has_no_pilot_desk() {
     let mut fake = FakeFlight::new();
     fake.fail("no chär");
+    let opening = fake.opening();
     let mut view = FlightView::over(
         Rc::new(catalog()),
         fake,
+        opening,
         &Rulebook::default(),
         SharedChance::default(),
     );
@@ -99,10 +101,19 @@ fn a_resync_with_nothing_moved_reads_nothing() {
 // The router's reads of the flight, after an edit and on the main screen.
 
 #[test]
-fn the_flights_failure_is_the_views_to_tell() {
-    let mut view = faked(in_sol());
+fn the_flights_failure_is_the_views_to_tell_as_it_opened() {
+    let view = faked(in_sol());
     assert_eq!(view.failure(), None, "started");
-    view.sim.fail("no chär");
+    let mut fake = FakeFlight::new();
+    fake.fail("no chär");
+    let opening = fake.opening();
+    let view = FlightView::over(
+        Rc::new(catalog()),
+        fake,
+        opening,
+        &Rulebook::default(),
+        SharedChance::default(),
+    );
     assert_eq!(view.failure(), Some("no chär"));
 }
 

@@ -355,9 +355,11 @@ fn a_load_shows_every_stellar_from_frame_0() {
     let opened = || {
         let mut fake = FakeFlight::new();
         fake.set_frame(sol());
+        let opening = fake.opening();
         FlightView::over(
             Rc::new(catalog()),
             fake,
+            opening,
             &Rulebook::default(),
             SharedChance::default(),
         )

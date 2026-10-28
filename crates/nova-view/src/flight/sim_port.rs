@@ -41,7 +41,7 @@ use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
     Good, HailView, HireList, JunkId, MapMarks, Market, MissionId, MissionInfo, News, OutfitId,
     Outfitter, PlayerInfo, PlunderView, SavedNav, ShipId, ShipNaming, ShipRefusal, Shipyard,
-    StellarId, SystemId, WeaponId,
+    StellarId, SystemId,
 };
 
 #[cfg(any(test, feature = "fixture"))]
@@ -68,22 +68,6 @@ pub trait FlightSim: MapSource + CommSource + PortSource + NameSource + PilotSou
     /// Moves what the flight raised since the last drain onto the end of
     /// `into`, leaving none to drain again.
     fn drain(&mut self, into: &mut Vec<FlightEvent>);
-
-    /// The weapons the flight can fire, by ascending ID
-    /// (`nova_sim::Session::weapon_ids`), whose looks the view reads as it
-    /// opens. None by default: a sim with no weapons.
-    fn weapons(&self) -> Vec<WeaponId> {
-        Vec::new()
-    }
-
-    /// Why the flight could not start, if it could not: the view then
-    /// draws only the reason, and the router opens no game on it. Such a
-    /// flight fills the default frame, refuses every command and drains
-    /// nothing (`fixture::check_contract`). `None` by
-    /// default: a flight that started.
-    fn failure(&self) -> Option<&str> {
-        None
-    }
 }
 
 /// The course map's questions of the flight, and the floating map's and
@@ -473,10 +457,12 @@ mod tests {
     impl PilotSource for Defaults {}
 
     #[test]
-    fn by_default_a_flight_lists_no_weapons_and_started() {
-        let flight = Defaults;
-        assert_eq!(flight.weapons(), []);
-        assert_eq!(flight.failure(), None, "started");
+    fn a_flight_with_nothing_to_it_fills_the_default_frame_and_refuses_every_command() {
+        let mut flight = Defaults;
+        let mut frame = crate::flight::sim_port::fixture::unlike(&FlightFrame::default());
+        flight.frame(&mut frame);
+        assert_eq!(frame, FlightFrame::default());
+        assert_eq!(flight.apply(FlightCommand::Jump), Answer::Refused);
     }
 
     #[test]

@@ -13,7 +13,8 @@
 //! HUD's status bar for the player's government, through the
 //! [`StatusBars`](super::catalog::StatusBars) port, the galaxy for its course map, through the
 //! [`GalaxyCatalog`](crate::galaxy::GalaxyCatalog) port, and the look of every weapon the flight lists
-//! ([`FlightSim::weapons`]) and of every explosion type, through the
+//! ([`FlightOpening::weapons`](nova_sim::flight_frame::FlightOpening::weapons))
+//! and of every explosion type, through the
 //! [`CombatLooks`](super::catalog::CombatLooks) port. After that it reads only when the
 //! session tells it entered a system afresh: that system, and when the
 //! player's ship changes class: its sprite sheet, and when the system's NPC
@@ -1262,6 +1263,11 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// ([`FlightCommand::is_ask`](nova_sim::flight_frame::FlightCommand::is_ask))
     /// changes nothing it shows.
     frame: FlightFrame,
+    /// Why the flight could not start, if it could not, as it opened
+    /// ([`FlightOpening::failure`](nova_sim::flight_frame::FlightOpening::failure)):
+    /// fixed for the flight's life, so no frame field. Such a flight
+    /// shows only the reason.
+    failure: Option<String>,
     /// The session's system, laid out; `None` when the session failed.
     scene: Option<SystemScene>,
     /// Each stellar's animation state as the scene that last showed it

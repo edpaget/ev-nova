@@ -777,9 +777,11 @@ fn flight_hides_the_system_pointer_unless_the_map_is_open_or_it_has_no_cursor() 
     assert!(!world(no_cursor, sol()).hides_pointer());
     let mut fake = FakeFlight::new();
     fake.fail("no chär to start from");
+    let opening = fake.opening();
     let failed = FlightView::over(
         Rc::new(catalog()),
         fake,
+        opening,
         &Rulebook::default(),
         SharedChance::default(),
     );
@@ -1239,9 +1241,11 @@ fn the_fire_keys_pressed_and_let_go_during_a_jump_fire_nothing() {
 fn tab_in_a_flight_that_never_started_does_nothing() {
     let mut fake = FakeFlight::new();
     fake.fail("no chär to start from");
+    let opening = fake.opening();
     let mut view = FlightView::over(
         Rc::new(catalog()),
         fake,
+        opening,
         &Rulebook::default(),
         SharedChance::default(),
     );
@@ -1331,9 +1335,11 @@ fn a_missing_alert_icon_draws_nothing_and_says_so_once() {
     };
     let mut fake = FakeFlight::new();
     fake.set_frame(sol());
+    let opening = fake.opening();
     let mut view = FlightView::over(
         Rc::new(iconless),
         fake,
+        opening,
         &Rulebook::default(),
         SharedChance::default(),
     )
@@ -1353,9 +1359,11 @@ fn a_missing_alert_icon_draws_nothing_and_says_so_once() {
     assert_eq!(told(&mut view), 0, "once");
     let mut whole_fake = FakeFlight::new();
     whole_fake.set_frame(sol());
+    let opening = whole_fake.opening();
     let mut whole = FlightView::over(
         Rc::new(catalog()),
         whole_fake,
+        opening,
         &Rulebook::default(),
         SharedChance::default(),
     );
@@ -1368,9 +1376,11 @@ fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
     let mut fake = FakeFlight::new();
     fake.set_frame(sol());
     fake.map_mut().galaxy = Some(galaxy_with(hiding(132)));
+    let opening = fake.opening();
     let view = FlightView::over(
         Rc::new(catalog()),
         fake,
+        opening,
         &Rulebook::default(),
         SharedChance::default(),
     );

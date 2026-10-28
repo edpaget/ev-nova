@@ -132,7 +132,7 @@ impl<
     /// window), unless the map is open, the flight never started or the
     /// cursor's sheet could not be read.
     fn hides_pointer(&self) -> bool {
-        !self.map_open && self.sim.failure().is_none() && self.looks.cursor_sheet().is_some()
+        !self.map_open && self.failure.is_none() && self.looks.cursor_sheet().is_some()
     }
 
     /// What could not be read of the looks, then the session's
@@ -286,6 +286,6 @@ impl<
     fn draw_scene(&self, list: &mut DrawList) -> bool {
         #[cfg(test)]
         self.check_frame_kept();
-        self.draw_flight(list, || self.sim.failure().unwrap_or_default().to_owned())
+        self.draw_flight(list, || self.failure.clone().unwrap_or_default())
     }
 }

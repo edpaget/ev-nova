@@ -3,24 +3,25 @@
 //! handed: the chance, the NPCs' behaviour and the fight's, the law's and
 //! the boardings' rules, and the comm dialog's options.
 //!
-//! It forwards: [`FlightSim::frame`] to `Session::fill_frame`,
-//! [`FlightSim::weapons`] to `Session::weapon_ids`,
-//! [`FlightSim::step`] to `Session::step`, with its collaborators and
-//! the catalog the view shared,
-//! [`FlightSim::apply`] to `Session::apply`, whose match over the
-//! commands lives on the session's side, with the catalog the view
-//! shared, the chance, the law, the boarding rule and the hail options,
-//! [`FlightSim::drain`] to `Session::drain_events`, [`CommSource`]'s to
-//! `Session::hailing` and `Session::boarding`, and [`PortSource`]'s,
-//! [`NameSource`]'s and [`PilotSource`]'s to the session's method of each
-//! name. A session that failed to start
-//! fills the default frame, runs no step, refuses every command, answers
-//! nothing open and drains nothing, and says why
-//! ([`FlightSim::failure`]).
+//! It forwards the port's four: [`FlightSim::frame`] to
+//! `Session::fill_frame`, [`FlightSim::step`] to `Session::step`, with its
+//! collaborators and the catalog the view shared, [`FlightSim::apply`] to
+//! `Session::apply`, whose match over the commands (the asks among them:
+//! the hover, the coming traffic, a description's load) lives on the
+//! session's side, with the catalog the view shared, the chance, the law,
+//! the boarding rule and the hail options, and [`FlightSim::drain`] to
+//! `Session::drain_events`; and [`CommSource`]'s to `Session::hailing`
+//! and `Session::boarding`, and [`PortSource`]'s, [`NameSource`]'s and
+//! [`PilotSource`]'s to the session's method of each name. A session that
+//! failed to start fills the default frame, runs no step, refuses every
+//! command but a description's load, which it resolves for a new pilot
+//! (`Session::fresh_description`), answers nothing open and drains
+//! nothing; its opening says why ([`SessionFlight::opening`]).
 //!
 //! **The edge's API**, which the port leaves out, is the adapter's own:
 //! the constructors that build the session ([`SessionFlight::start`],
-//! [`SessionFlight::fly`], [`SessionFlight::load`]), its setup and the
+//! [`SessionFlight::fly`], [`SessionFlight::load`]), what the view is
+//! handed as it opens ([`SessionFlight::opening`]), its setup and the
 //! run's history ([`SessionFlight::set_up`], [`SessionFlight::carry_over`],
 //! one `Session` call each), entering play ([`SessionFlight::begin`],
 //! [`SessionFlight::enter_game`], [`SessionFlight::resume`],
@@ -45,7 +46,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, StepInput, StepReport,
+    Answer, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks, StepInput,
+    StepReport,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
@@ -58,7 +60,7 @@ use nova_sim::{
     HailView, HireList, JunkId, LegalCode, MapMarks, Market, MissionId, MissionInfo, News, NovaAi,
     NovaBoarding, NovaDisable, NovaLaw, OutfitId, Outfitter, Pilot, PlayerInfo, PlunderView,
     PointDefenceRule, Rules, SavedNav, Session, ShipId, ShipNaming, ShipRefusal, Shipyard,
-    SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, WeaponId,
+    SimCatalog, StellarId, StepCollaborators, SystemId, TagNames,
 };
 
 use nova_sim::{
@@ -393,6 +395,20 @@ impl<C> SessionFlight<C> {
         self.session().ok().and_then(Session::loaded_after_movie)
     }
 
+    /// What the view is handed as the flight opens, for the edge to pass
+    /// to `FlightView::over`: the session's opening
+    /// (`nova_sim::Session::opening`, its weapons and no failure), or for a
+    /// session that could not start the reason
+    /// ([`FlightOpening::failed`]). The adapter's own API, not the port's,
+    /// as it is fixed for the flight's life.
+    #[must_use]
+    pub fn opening(&self) -> FlightOpening {
+        match &self.session {
+            Ok(session) => session.opening(),
+            Err(reason) => FlightOpening::failed(reason.as_str()),
+        }
+    }
+
     /// The pilot flying, if the flight started: the adapter's own API, not
     /// the port's, for the app's save and the name it shows.
     #[must_use]
@@ -483,17 +499,6 @@ impl<C> FlightSim for SessionFlight<C> {
         if let Ok(session) = &mut self.session {
             session.drain_events(into);
         }
-    }
-
-    /// Forwards to `Session::weapon_ids`; a failed session has none.
-    fn weapons(&self) -> Vec<WeaponId> {
-        self.session()
-            .map_or_else(|_| Vec::new(), Session::weapon_ids)
-    }
-
-    /// Why the session could not start, if it could not.
-    fn failure(&self) -> Option<&str> {
-        self.session().err()
     }
 }
 
@@ -845,7 +850,11 @@ mod tests {
         assert!(!flight.has_explored(none));
         assert_eq!(flight.galaxy(), None);
 
-        assert_eq!(flight.weapons(), []);
+        assert_eq!(
+            flight.opening(),
+            FlightOpening::failed("no chär"),
+            "no weapons"
+        );
     }
 
     #[test]
@@ -1140,7 +1149,7 @@ mod tests {
         let mut flight = failed();
         assert_eq!(flight.session().err(), Some("no chär"));
         assert_eq!(flight.session_mut().err(), Some("no chär"));
-        assert_eq!(flight.failure(), Some("no chär"));
+        assert_eq!(flight.opening().failure.as_deref(), Some("no chär"));
     }
 
     #[test]
@@ -1166,7 +1175,9 @@ mod tests {
 
     #[test]
     fn a_failed_flight_meets_the_contract() {
-        crate::flight::sim_port::fixture::check_contract(&mut failed()).expect("meets it");
+        let mut flight = failed();
+        let opening = flight.opening();
+        crate::flight::sim_port::fixture::check_contract(&mut flight, &opening).expect("meets it");
     }
 
     #[test]
@@ -1229,7 +1240,7 @@ mod tests {
         });
         let flight = SessionFlight::start(&catalog);
         let why = Session::start(&*catalog).expect_err("no chär").to_string();
-        assert_eq!(flight.failure(), Some(why.as_str()));
+        assert_eq!(flight.opening(), FlightOpening::failed(why));
     }
 
     #[test]

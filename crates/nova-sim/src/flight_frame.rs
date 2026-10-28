@@ -283,6 +283,35 @@ impl FlightFrame {
     }
 }
 
+/// What the view is handed as the flight opens, fixed for the flight's
+/// life, so neither is a frame field: the weapons whose looks it reads,
+/// and why the flight could not start, if it could not
+/// ([`Session::opening`](crate::Session::opening), or
+/// [`FlightOpening::failed`]). A flight that failed fills the default
+/// frame, refuses every command but a description's load, and drains
+/// nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FlightOpening {
+    /// The weapons the flight can fire, by ascending ID
+    /// ([`Session::weapon_ids`](crate::Session::weapon_ids)): the
+    /// session's arsenal, read-only for its life.
+    pub weapons: Vec<WeaponId>,
+    /// Why the flight could not start, or `None` for one that started.
+    pub failure: Option<String>,
+}
+
+impl FlightOpening {
+    /// The opening of a flight that could not start, for `reason`: no
+    /// weapons.
+    #[must_use]
+    pub fn failed(reason: impl Into<String>) -> Self {
+        Self {
+            weapons: Vec::new(),
+            failure: Some(reason.into()),
+        }
+    }
+}
+
 /// The player's commands the session takes now, as a set
 /// ([`FlightFrame::gates`], filled from
 /// [`Session::takes`](crate::Session::takes)): one bit for each

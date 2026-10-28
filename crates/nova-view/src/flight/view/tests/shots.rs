@@ -99,9 +99,11 @@ fn opened_listing(weapons: Vec<WeaponId>) -> Faked {
         ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
     });
     fake.set_weapons(weapons);
+    let opening = fake.opening();
     FlightView::over(
         Rc::new(catalog),
         fake,
+        opening,
         &Rulebook::default(),
         SharedChance::default(),
     )
@@ -109,7 +111,7 @@ fn opened_listing(weapons: Vec<WeaponId>) -> Faked {
 
 #[test]
 fn a_shot_draws_with_the_look_of_a_weapon_the_flight_lists() {
-    // The looks are read from the flight's list (`FlightSim::weapons`),
+    // The looks are read from the opening's list (`FlightOpening::weapons`),
     // not the catalog's: the catalog lists the blaster in both.
     let listed = opened_listing(vec![BLASTER]);
     assert!(

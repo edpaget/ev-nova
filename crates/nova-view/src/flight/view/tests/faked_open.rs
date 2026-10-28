@@ -15,9 +15,11 @@ use nova_sim::flight_frame::FlightEvent;
 /// The view `FlightView::over` reads of `fake` over `catalog`, by the
 /// default rules.
 fn opened(catalog: FakeCatalog, fake: FakeFlight) -> Faked {
+    let opening = fake.opening();
     FlightView::over(
         Rc::new(catalog),
         fake,
+        opening,
         &Rulebook::default(),
         SharedChance::default(),
     )

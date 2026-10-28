@@ -138,7 +138,11 @@ fn jump_to_alpha(flight: &mut SessionFlight<FakeCatalog>) {
         step(flight, &thrust);
     }
     let contract = |flight: &SessionFlight<FakeCatalog>, at: &str| {
-        assert_eq!(check_contract(&mut flight.clone()), Ok(()), "{at}");
+        assert_eq!(
+            check_contract(&mut flight.clone(), &flight.opening()),
+            Ok(()),
+            "{at}"
+        );
     };
     contract(flight, "ready");
     assert_eq!(flight.apply(FlightCommand::Jump), Answer::Jumped(alpha));
@@ -880,7 +884,8 @@ fn a_real_flights_weapons_are_its_sessions() {
     let flight = SessionFlight::start(&catalog);
     let ids = flight.session().expect("flying").weapon_ids();
     assert!(!ids.is_empty(), "armed");
-    assert_eq!(flight.weapons(), ids);
+    assert_eq!(flight.opening().weapons, ids, "the opening lists them");
+    assert_eq!(flight.opening().failure, None, "started");
 }
 
 // The comm dialog.
@@ -1108,7 +1113,11 @@ fn the_fight_asks_the_point_defence_rule_given_each_step_in_flight() {
 /// The port's contract holds of `flight` at `at`, checked on a copy, as
 /// the check sends commands.
 fn meets_the_contract(flight: &SessionFlight<FakeCatalog>, at: &str) {
-    assert_eq!(check_contract(&mut flight.clone()), Ok(()), "{at}");
+    assert_eq!(
+        check_contract(&mut flight.clone(), &flight.opening()),
+        Ok(()),
+        "{at}"
+    );
 }
 
 /// Phase 15's contract in states: a real flight meets the port's

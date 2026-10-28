@@ -9,7 +9,7 @@ use std::time::Duration;
 
 #[cfg(any(test, feature = "fixture"))]
 use nova_sim::SimCatalog;
-use nova_sim::flight_frame::FlightCommand;
+use nova_sim::flight_frame::{FlightCommand, FlightOpening};
 use nova_sim::{ALERT_CICN, FixedStep, HashedRolls, Rulebook};
 
 use crate::flight::cadence::HudCadence;
@@ -36,19 +36,23 @@ use super::{
 };
 
 /// The view's construction over any flight: [`FlightView::over`] reads it
-/// as it opens, through the [`FlightSim`] port, and the edge builds the
-/// flight it is handed (`crate::flight::open_flight`). Only the view's own
-/// catalogs are asked for: the weapons whose looks are read are the
-/// flight's list ([`FlightSim::weapons`]), not a catalog's.
+/// as it opens, through the [`FlightSim`] port and the opening the edge
+/// hands it ([`FlightOpening`]), and the edge builds the flight it is
+/// handed (`crate::flight::open_flight`). Only the view's own catalogs are
+/// asked for: the weapons whose looks are read are the opening's list
+/// ([`FlightOpening::weapons`]), not a catalog's.
 impl<
     C: CombatLooks + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog + EscortMenuLooks,
     S: FlightSim,
 > FlightView<C, S>
 {
     /// The view of `sim`, a flight built at the edge, over `catalog`, the
-    /// handle the flight shares, shown by `rules` and wording its picks on
-    /// `words_chance`, which the edge hands the flight too, so the
-    /// wording's picks draw on the flight's own sequence.
+    /// handle the flight shares, opening as `opening` says (its weapons
+    /// and its failure, fixed for the flight's life, which the edge reads
+    /// off the adapter, `SessionFlight::opening`), shown by `rules` and
+    /// wording its picks on `words_chance`, which the edge hands the
+    /// flight too, so the wording's picks draw on the flight's own
+    /// sequence.
     ///
     /// It tells the flight the view's width first
     /// ([`FlightCommand::SetWindowWidth`]), before any frame is read. Then
@@ -58,18 +62,24 @@ impl<
     /// say, the galaxy the flight answers
     /// ([`MapSource::galaxy`](crate::flight::sim_port::MapSource::galaxy)), the
     /// course shown and the current system, centred. The looks of every
-    /// weapon the flight lists ([`FlightSim::weapons`]) are read, and what
+    /// weapon the opening lists ([`FlightOpening::weapons`]) are read, and what
     /// of them, or of the Red Alert's icon, could not be. A flight that failed to start
-    /// ([`FlightSim::failure`]) shows only why: no scene, sheet, bar,
+    /// ([`FlightOpening::failure`]) shows only why: no scene, sheet, bar,
     /// galaxy or looks. No flight starts landed, so flight's first frame
     /// redraws the bar, as `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
     #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
-    pub fn over(catalog: Rc<C>, mut sim: S, rules: &Rulebook, words_chance: SharedChance) -> Self {
+    pub fn over(
+        catalog: Rc<C>,
+        mut sim: S,
+        opening: FlightOpening,
+        rules: &Rulebook,
+        words_chance: SharedChance,
+    ) -> Self {
         // Sized as the view starts, before anything reads its field.
         sim.apply(FlightCommand::SetWindowWidth(window_width(VIEW_SIZE)));
         let mut frame = nova_sim::flight_frame::FlightFrame::default();
         sim.frame(&mut frame);
-        let failure = sim.failure().map(str::to_owned);
+        let FlightOpening { weapons, failure } = opening;
         let (scene, sheet, sheet_ship, status_bar) = match &failure {
             None => (
                 Some(opening_scene(&*catalog, &frame)),
@@ -99,7 +109,7 @@ impl<
             map.recentre();
         }
         let looks = match &failure {
-            None => Looks::read(&*catalog, sim.weapons()),
+            None => Looks::read(&*catalog, weapons),
             Some(_) => Looks::default(),
         };
         let escort_colors = catalog.escort_menu_colors();
@@ -131,6 +141,7 @@ impl<
                 alert_width,
                 presentation: super::stepping::Presentation::of(rules),
                 words_chance,
+                failure,
             },
         )
     }
@@ -376,7 +387,8 @@ impl<
         let catalog = Rc::new(catalog);
         sim.share_catalog(Rc::clone(&catalog) as Rc<dyn SimCatalog>);
         let chance = sim.chance.clone();
-        Self::over(catalog, sim, rules, chance)
+        let opening = sim.opening();
+        Self::over(catalog, sim, opening, rules, chance)
     }
 }
 
@@ -384,7 +396,7 @@ impl<
 /// and the flight: the course map, the scene, the player's sheet and bar,
 /// the flight's first frame, the looks and what of them could not be read,
 /// the escort menu's colours, the alert icon's width, the presentation
-/// rules and the wording's chance.
+/// rules, the wording's chance and why the flight could not start.
 struct Opening {
     map: GalaxyMap,
     scene: Option<crate::system::SystemScene>,
@@ -399,6 +411,7 @@ struct Opening {
     alert_width: Option<u32>,
     presentation: super::stepping::Presentation,
     words_chance: SharedChance,
+    failure: Option<String>,
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -564,6 +577,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             step_report: nova_sim::flight_frame::StepReport::default(),
             presentation: opening.presentation,
             frame: opening.frame,
+            failure: opening.failure,
             radar_static: None,
             cursor: HoverCursor::default(),
         }
@@ -612,6 +626,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 alert_width: None,
                 presentation: super::stepping::Presentation::of(rules),
                 words_chance: SharedChance::default(),
+                failure: None,
             },
         )
     }

@@ -149,9 +149,11 @@ fn an_arrival_draws_the_ship_where_it_arrives_and_the_new_systems_stellars_as_it
 fn a_failed_flight_keeps_the_default_frame_through_its_catch_ups() {
     let mut fake = FakeFlight::new();
     fake.fail("no chär to start from");
+    let opening = fake.opening();
     let mut view = FlightView::over(
         Rc::new(catalog()),
         fake,
+        opening,
         &Rulebook::default(),
         SharedChance::default(),
     );

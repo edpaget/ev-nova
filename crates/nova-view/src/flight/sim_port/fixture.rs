@@ -13,8 +13,9 @@ use std::collections::VecDeque;
 use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
-    Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, FrameAsteroid,
-    FrameBeam, FrameBox, FrameHud, FrameShip, Gates, MapKey, StepInput, StepReport, StepRun,
+    Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks,
+    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, Gates, MapKey, StepInput, StepReport,
+    StepRun,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
@@ -75,8 +76,9 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// [`FlightCommand::SetDoubleTimeKey`], [`FlightCommand::SetSoundQuiet`])
 /// done without taking an answer from the queue, as these follow-ups
 /// ride along with the commands a test is about. Told to fail
-/// ([`FakeFlight::fail`]), it reports why ([`FlightSim::failure`]) and
-/// refuses every command, still recording each. It is the developer
+/// ([`FakeFlight::fail`]), its opening says why ([`FakeFlight::opening`])
+/// and it refuses every command but a description's load, still
+/// recording each. It is the developer
 /// tools' desk too ([`DevDesk`]), reading as scripted and recording each
 /// edit ([`FakeFlight::desk_mut`], [`FakeFlight::edits`]). It counts the
 /// frames it fills ([`FakeFlight::fills`]). One with nothing scripted
@@ -323,7 +325,8 @@ impl FakeFlight {
         self.coming = ships;
     }
 
-    /// Lists `weapons` from now on ([`FlightSim::weapons`]).
+    /// Lists `weapons` in its opening from now on
+    /// ([`FakeFlight::opening`]).
     pub fn set_weapons(&mut self, weapons: Vec<WeaponId>) {
         self.weapons = weapons;
     }
@@ -450,11 +453,25 @@ impl FakeFlight {
     }
 
     /// Fails for `reason` from now on, as a flight that could not start:
-    /// [`FlightSim::failure`] gives it and every command is refused. The
-    /// frame, the events and the answers stay as scripted, for a test of
-    /// [`check_contract`]'s clause on a failed flight.
+    /// its opening gives it ([`FakeFlight::opening`]) and every command but
+    /// a description's load is refused. The frame, the events and the
+    /// answers stay as scripted, for a test of [`check_contract`]'s clause
+    /// on a failed flight.
     pub fn fail(&mut self, reason: &str) {
         self.failure = Some(reason.to_owned());
+    }
+
+    /// What the view is handed as it opens, as scripted
+    /// ([`FlightOpening`]): the weapons it lists
+    /// ([`FakeFlight::set_weapons`]) and why it failed
+    /// ([`FakeFlight::fail`]), for `FlightView::over` and
+    /// [`check_contract`].
+    #[must_use]
+    pub fn opening(&self) -> FlightOpening {
+        FlightOpening {
+            weapons: self.weapons.clone(),
+            failure: self.failure.clone(),
+        }
     }
 
     /// What the desk answers, to script.
@@ -551,14 +568,6 @@ impl FlightSim for FakeFlight {
 
     fn drain(&mut self, into: &mut Vec<FlightEvent>) {
         into.append(&mut self.events);
-    }
-
-    fn weapons(&self) -> Vec<WeaponId> {
-        self.weapons.clone()
-    }
-
-    fn failure(&self) -> Option<&str> {
-        self.failure.as_deref()
     }
 }
 
@@ -1162,15 +1171,15 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///   answered [`Answer::Traded`]`(Ok(_))`, and the frame after it equals
 ///   the frame before. Checked before the jump.
 ///
-/// - **a failed flight shows nothing**: a flight that reports why it
-///   could not start ([`FlightSim::failure`]) fills the default frame,
-///   refuses every command but a description's load
+/// - **a failed flight shows nothing**: a flight whose `opening` says why
+///   it could not start ([`FlightOpening::failure`]) lists no weapons in
+///   it ([`FlightOpening::weapons`]), fills the default frame, refuses
+///   every command but a description's load
 ///   ([`FlightCommand::LoadDescription`]), which it answers with
-///   [`Answer::Description`], drains nothing and lists no weapons
-///   ([`FlightSim::weapons`]). Checked first.
+///   [`Answer::Description`], and drains nothing. Checked first.
 ///
 /// The error says which clause failed.
-pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
+pub fn check_contract(sim: &mut impl FlightSim, opening: &FlightOpening) -> Result<(), String> {
     let mut drained = Vec::new();
     sim.drain(&mut drained);
     let first = drained.len();
@@ -1181,7 +1190,7 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
             &drained[first..]
         ));
     }
-    check_failed(sim, &drained)?;
+    check_failed(sim, opening, &drained)?;
 
     let mut once = FlightFrame::default();
     sim.frame(&mut once);
@@ -1227,13 +1236,18 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
     check_jump(sim, &once)
 }
 
-/// [`check_contract`]'s clause on a flight that could not start, `drained`
-/// what its first drain gave: it fills the default frame, refuses every
-/// command (a setting, which a flight that started always takes, among
-/// them) but a description's load, which it answers with a text, drains
-/// nothing and lists no weapons.
-fn check_failed(sim: &mut impl FlightSim, drained: &[FlightEvent]) -> Result<(), String> {
-    let Some(reason) = sim.failure().map(str::to_owned) else {
+/// [`check_contract`]'s clause on a flight whose `opening` says it could
+/// not start, `drained` what its first drain gave: the opening lists no
+/// weapons, and the flight fills the default frame, refuses every command
+/// (a setting, which a flight that started always takes, among them) but
+/// a description's load, which it answers with a text, and drains
+/// nothing.
+fn check_failed(
+    sim: &mut impl FlightSim,
+    opening: &FlightOpening,
+    drained: &[FlightEvent],
+) -> Result<(), String> {
+    let Some(reason) = opening.failure.clone() else {
         return Ok(());
     };
     let clause = "a failed flight shows nothing";
@@ -1262,10 +1276,10 @@ fn check_failed(sim: &mut impl FlightSim, drained: &[FlightEvent]) -> Result<(),
             "{clause}: failed ({reason}), a description's load was answered {answer:?}"
         ));
     }
-    let weapons = sim.weapons();
-    if !weapons.is_empty() {
+    if !opening.weapons.is_empty() {
         return Err(format!(
-            "{clause}: failed ({reason}), it listed weapons {weapons:?}"
+            "{clause}: failed ({reason}), it listed weapons {:?}",
+            opening.weapons
         ));
     }
     Ok(())
@@ -1559,6 +1573,12 @@ mod tests {
         assert_eq!(ship.framed, Some(ShipId(129)));
     }
 
+    /// [`check_contract`] on `fake`, with the opening it scripts.
+    fn contract(fake: &mut FakeFlight) -> Result<(), String> {
+        let opening = fake.opening();
+        check_contract(fake, &opening)
+    }
+
     fn stellar(id: i16) -> FlightFrame {
         FlightFrame {
             nav_mode: NavMode::Stellar(Some(StellarId(id))),
@@ -1568,14 +1588,14 @@ mod tests {
 
     #[test]
     fn a_fake_with_nothing_scripted_meets_the_contract() {
-        assert_eq!(check_contract(&mut FakeFlight::new()), Ok(()));
+        assert_eq!(contract(&mut FakeFlight::new()), Ok(()));
     }
 
     #[test]
     fn a_failed_fake_with_nothing_else_scripted_meets_the_contract() {
         let mut fake = FakeFlight::new();
         fake.fail("no chär");
-        assert_eq!(check_contract(&mut fake), Ok(()));
+        assert_eq!(contract(&mut fake), Ok(()));
     }
 
     #[test]
@@ -1583,7 +1603,7 @@ mod tests {
         let mut showing = FakeFlight::new();
         showing.fail("no chär");
         showing.set_frame(stellar(128));
-        let clause = check_contract(&mut showing).expect_err("broken");
+        let clause = contract(&mut showing).expect_err("broken");
         assert!(
             clause.starts_with("a failed flight shows nothing"),
             "{clause}"
@@ -1592,7 +1612,7 @@ mod tests {
         let mut draining = FakeFlight::new();
         draining.fail("no chär");
         draining.queue_event(FlightEvent::Sound(SimSound::NavSelected));
-        let clause = check_contract(&mut draining).expect_err("broken");
+        let clause = contract(&mut draining).expect_err("broken");
         assert!(
             clause.starts_with("a failed flight shows nothing"),
             "{clause}"
@@ -1622,10 +1642,6 @@ mod tests {
         }
 
         fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
-
-        fn failure(&self) -> Option<&str> {
-            Some("no chär")
-        }
     }
 
     impl MapSource for TakesSettings {}
@@ -1640,7 +1656,8 @@ mod tests {
 
     #[test]
     fn a_failed_flight_that_takes_a_command_breaks_the_contract() {
-        let clause = check_contract(&mut TakesSettings(true)).expect_err("broken");
+        let clause = check_contract(&mut TakesSettings(true), &FlightOpening::failed("no chär"))
+            .expect_err("broken");
         assert!(
             clause.starts_with("a failed flight shows nothing"),
             "{clause}"
@@ -1650,7 +1667,8 @@ mod tests {
 
     #[test]
     fn a_failed_flight_that_refuses_a_descriptions_load_breaks_the_contract() {
-        let clause = check_contract(&mut TakesSettings(false)).expect_err("broken");
+        let clause = check_contract(&mut TakesSettings(false), &FlightOpening::failed("no chär"))
+            .expect_err("broken");
         assert!(
             clause.starts_with("a failed flight shows nothing"),
             "{clause}"
@@ -1666,7 +1684,7 @@ mod tests {
         let mut fake = FakeFlight::new();
         fake.fail("no chär");
         fake.set_weapons(vec![WeaponId(128)]);
-        let clause = check_contract(&mut fake).expect_err("broken");
+        let clause = contract(&mut fake).expect_err("broken");
         assert!(
             clause.starts_with("a failed flight shows nothing"),
             "{clause}"
@@ -1677,10 +1695,10 @@ mod tests {
     #[test]
     fn a_failed_fake_says_why_and_refuses_every_command_recording_it() {
         let mut fake = FakeFlight::new();
-        assert_eq!(fake.failure(), None);
+        assert_eq!(fake.opening().failure, None);
         fake.queue_answer(Answer::Done);
         fake.fail("no chär");
-        assert_eq!(fake.failure(), Some("no chär"));
+        assert_eq!(fake.opening(), FlightOpening::failed("no chär"));
         for command in [
             FlightCommand::CueCourse,
             FlightCommand::CommTicked,
@@ -1770,7 +1788,7 @@ mod tests {
         let mut fake = FakeFlight::new();
         fake.set_frame(stellar(128));
         fake.queue_event(FlightEvent::Sound(SimSound::NavSelected));
-        assert_eq!(check_contract(&mut fake), Ok(()));
+        assert_eq!(contract(&mut fake), Ok(()));
     }
 
     #[test]
@@ -2225,7 +2243,7 @@ mod tests {
 
     /// The clause `fault` breaks, as `check_contract` names it.
     fn clause(fault: Fault) -> String {
-        check_contract(&mut Broken::new(fault)).expect_err("broken")
+        check_contract(&mut Broken::new(fault), &FlightOpening::default()).expect_err("broken")
     }
 
     #[test]
@@ -2266,7 +2284,7 @@ mod tests {
     fn a_second_player_record_breaks_the_contract() {
         let mut fake = FakeFlight::new();
         fake.frame_mut().ships.push(FrameShip::default());
-        let clause = check_contract(&mut fake).expect_err("broken");
+        let clause = contract(&mut fake).expect_err("broken");
         assert!(
             clause.starts_with("the player's record first, once"),
             "{clause}"
@@ -2390,7 +2408,7 @@ mod tests {
         port.news_picture = Some(9000);
         port.recharge_enabled = true;
         assert_eq!(
-            check_contract(&mut docked),
+            contract(&mut docked),
             Ok(()),
             "docked, with an exchange, which may trade as it will"
         );
@@ -2479,12 +2497,12 @@ mod tests {
         frame.hud.escorts_flying = true;
         frame.hud.escort_rows[0].present = true;
         flying.set_frame(frame);
-        assert_eq!(check_contract(&mut flying), Ok(()), "a row present");
+        assert_eq!(contract(&mut flying), Ok(()), "a row present");
         let mut aboard = FakeFlight::new();
         aboard.set_frame(stellar(128));
         aboard.comm_mut().boarding = Some(boarded());
         assert_eq!(
-            check_contract(&mut aboard),
+            contract(&mut aboard),
             Ok(()),
             "a boarding under way may answer a take as it will"
         );
@@ -2644,7 +2662,7 @@ mod tests {
         ] {
             let mut fake = FakeFlight::new();
             fake.set_frame(frame.clone());
-            assert_eq!(check_contract(&mut fake), Ok(()), "{frame:?}");
+            assert_eq!(contract(&mut fake), Ok(()), "{frame:?}");
         }
     }
 
@@ -2685,11 +2703,13 @@ mod tests {
     }
 
     #[test]
-    fn the_fake_lists_the_weapons_it_is_given() {
+    fn the_fake_opens_listing_the_weapons_it_is_given_and_why_it_failed() {
         let mut fake = FakeFlight::new();
-        assert_eq!(fake.weapons(), []);
+        assert_eq!(fake.opening(), FlightOpening::default(), "none, started");
         fake.set_weapons(vec![WeaponId(128)]);
-        assert_eq!(fake.weapons(), [WeaponId(128)]);
+        assert_eq!(fake.opening().weapons, [WeaponId(128)]);
+        fake.fail("no chär");
+        assert_eq!(fake.opening().failure.as_deref(), Some("no chär"));
     }
 
     #[test]
@@ -2706,7 +2726,7 @@ mod tests {
         frame.hud.interference = 100;
         frame.stellars = vec![record::stellar(StellarId(128))];
         fake.set_frame(frame);
-        assert_eq!(check_contract(&mut fake), Ok(()));
+        assert_eq!(contract(&mut fake), Ok(()));
     }
 
     #[test]

@@ -33,8 +33,11 @@ fn a_stock_new_pilot_meets_the_contract_and_is_drawn_where_its_first_frame_puts_
         SessionSetup::default(),
         Collaborators::default(),
     );
-    assert!(view.sim().failure().is_none(), "the stock pilot starts");
-    assert_eq!(check_contract(&mut view.sim().clone()), Ok(()));
+    assert!(view.failure().is_none(), "the stock pilot starts");
+    assert_eq!(
+        check_contract(&mut view.sim().clone(), &view.sim().opening()),
+        Ok(())
+    );
     let mut frame = FlightFrame::default();
     view.sim().frame(&mut frame);
     let at = frame.player().position;

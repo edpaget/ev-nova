@@ -4,7 +4,7 @@
 //! the world's ships, shots and stellars in the `world` module.
 
 use super::Session;
-use crate::flight_frame::{FlightFrame, Gates, MapKey};
+use crate::flight_frame::{FlightFrame, FlightOpening, Gates, MapKey};
 
 mod hud;
 mod world;
@@ -87,6 +87,17 @@ impl Session {
         self.fill_hud(hud);
         self.fill_target(target);
         *death_descs = self.sabotage_death_descs();
+    }
+
+    /// What the view is handed as the flight opens ([`FlightOpening`]):
+    /// the weapons of the session's arsenal, by ascending ID
+    /// ([`Session::weapon_ids`]), and no failure, as the session started.
+    #[must_use]
+    pub fn opening(&self) -> FlightOpening {
+        FlightOpening {
+            weapons: self.weapon_ids(),
+            failure: None,
+        }
     }
 }
 
@@ -914,6 +925,29 @@ pub(super) mod tests {
         let after = filled(&session);
         assert_eq!(after.texts_queued, before.texts_queued, "a running count");
         assert_eq!(after, before);
+    }
+
+    #[test]
+    fn a_sessions_opening_lists_its_weapons_by_ascending_id_and_no_failure() {
+        let catalog = crate::testkit::FakePilotCatalog {
+            weapons: vec![
+                crate::catalog::WeaponRecord {
+                    id: WeaponId(140),
+                    ..crate::session::tests::blaster()
+                },
+                crate::session::tests::blaster(),
+            ],
+            ..crate::session::tests::armed()
+        };
+        let session = Session::start(&catalog).expect("starts");
+        let opening = session.opening();
+        assert_eq!(opening.weapons, session.weapon_ids());
+        assert!(opening.weapons.len() >= 2, "{:?}", opening.weapons);
+        assert!(opening.weapons.is_sorted(), "by ascending ID");
+        assert_eq!(opening.failure, None);
+        let failed = FlightOpening::failed("no chär");
+        assert_eq!(failed.weapons, [], "a failed flight lists none");
+        assert_eq!(failed.failure.as_deref(), Some("no chär"));
     }
 
     #[test]

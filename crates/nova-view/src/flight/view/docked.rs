@@ -71,12 +71,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.pending_landing.take()
     }
 
-    /// Why the flight could not start, if it could not
-    /// ([`FlightSim::failure`]): the router opens no game on such a flight
-    /// and builds no bar for it.
+    /// Why the flight could not start, if it could not, as it opened
+    /// ([`FlightOpening::failure`](nova_sim::flight_frame::FlightOpening::failure)):
+    /// the router opens no game on such a flight and builds no bar for it.
     #[must_use]
     pub fn failure(&self) -> Option<&str> {
-        self.sim.failure()
+        self.failure.as_deref()
     }
 
     /// The stellar the ship is landed on now, read from a fresh frame

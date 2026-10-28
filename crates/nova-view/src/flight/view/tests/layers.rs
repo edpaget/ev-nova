@@ -295,9 +295,11 @@ fn the_map_in_port_and_a_flight_that_could_not_start_draw_no_world() {
 
     let mut fake = FakeFlight::new();
     fake.fail("no chär to start from");
+    let opening = fake.opening();
     let failed = FlightView::over(
         Rc::new(catalog()),
         fake,
+        opening,
         &Rulebook::default(),
         SharedChance::default(),
     );

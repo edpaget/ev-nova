@@ -61,9 +61,11 @@ fn a_look_whose_sheet_cannot_be_read_still_sounds_and_is_reported_once() {
     let mut fake = FakeFlight::new();
     fake.set_frame(in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
     fake.set_weapons(vec![BLASTER, UNSEEN]);
+    let opening = fake.opening();
     let mut view = FlightView::over(
         Rc::new(catalog),
         fake,
+        opening,
         &Rulebook::default(),
         SharedChance::default(),
     );

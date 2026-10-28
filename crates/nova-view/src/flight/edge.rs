@@ -130,7 +130,8 @@ fn opened<C: EdgeCatalog + 'static>(
         FlightStart::Loaded(pilot) => SessionFlight::load(&catalog, pilot, rules),
     }
     .with_collaborators(collaborators);
-    FlightView::over(catalog, sim, rules, chance)
+    let opening = sim.opening();
+    FlightView::over(catalog, sim, opening, rules, chance)
 }
 
 /// Conveniences for tests: a bare flight, built as the view's constructors
