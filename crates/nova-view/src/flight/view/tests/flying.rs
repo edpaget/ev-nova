@@ -7,34 +7,6 @@ use nova_sim::status_cargo::StatusCargo;
 
 // Building.
 
-#[test]
-fn it_starts_the_session_in_its_system_at_rest() {
-    let view = flight();
-    let session = view.session().expect("flying");
-    assert_eq!(session.ship(), ShipId(128));
-    assert_eq!(session.system(), SystemId(130));
-    assert_eq!(session.handling(), handling());
-    assert_eq!(*session.player(), start());
-    let scene = view.scene().expect("a scene");
-    assert_eq!(scene.id(), SystemId(130));
-    assert_eq!(scene.stellars().len(), 2);
-    assert_eq!(view.camera().center(), at(0.0, 0.0));
-    assert_eq!(view.shown_position(), at(0.0, 0.0));
-    assert_eq!(view.frame(), Some(0));
-}
-
-#[test]
-fn a_flight_built_from_a_session_shows_its_course_from_the_first_frame() {
-    let catalog = catalog();
-    let session = SessionBuilder::flying(&catalog)
-        .with_course([SystemId(131)])
-        .build();
-    let view = FlightView::from_session(catalog, session.into(), &Rulebook::default());
-    assert_eq!(view.course_map().route(), [SystemId(131)]);
-    assert_eq!(view.course_map().current(), Some(SystemId(130)));
-    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
-}
-
 /// [`catalog`] with `dësc`s 3000 "{b5 "set" "clear"}, sir.", 3001
 /// "<SRK128>" and 3002 "{G "<SRK128>" "x"}".
 fn described() -> FakeCatalog {
@@ -126,48 +98,6 @@ fn with_no_session_a_loaded_description_reads_a_new_pilot() {
     });
     assert_eq!(view.load_description(3000).as_deref(), Ok("clear, sir."));
     assert_eq!(view.load_description(3002).as_deref(), Ok("x "));
-}
-
-#[test]
-fn a_session_that_cannot_start_says_why_and_draws_nothing_else() {
-    let failed = FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    };
-    let mut view = test_flight::new(failed);
-    assert_eq!(view.session().err(), Some("no chär to start from"));
-    assert!(view.scene().is_none());
-    assert_eq!(view.frame(), None);
-    view.input(&key(Key::Up, true));
-    ticks(&mut view, 3);
-    assert_eq!(
-        drawn(&view).iter().cloned().collect::<Vec<_>>(),
-        [DrawCommand::Text {
-            text: "Cannot start flight: no chär to start from".to_owned(),
-            font: Font::Geneva,
-            origin: TITLE,
-            size: TITLE_SIZE,
-            wrap_width: None,
-            color: Color::ERROR,
-        },]
-    );
-}
-
-#[test]
-fn the_unstarted_flight_shows_help_only_when_turned_on() {
-    let failed = FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    };
-    let view = test_flight::new(failed).with_overlays(FlightOverlays {
-        title: false,
-        help: true,
-        cheats: false,
-    });
-    let list = drawn(&view);
-    let help = overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM);
-    assert_eq!(list.iter().last(), Some(&help));
-    assert_eq!(list.iter().count(), 2, "the error line and the help");
 }
 
 // Flying.
@@ -307,50 +237,12 @@ fn down_turns_the_ship_against_its_motion() {
 }
 
 #[test]
-fn repeats_hold_a_key_and_releasing_the_keys_stops_the_thrust() {
-    let mut view = flight();
-    view.input(&held(Key::Up));
-    ticks(&mut view, 5);
-    assert_eq!(player(&view), launched(THRUST, 5));
-    view.release_keys();
-    let coasting = player(&view);
-    ticks(&mut view, 5);
-    assert_eq!(player(&view), stepped(coasting, Controls::default(), 5));
-}
-
-#[test]
 fn a_release_without_a_press_does_nothing() {
     let mut view = at_rest(catalog());
     hold(&mut view, Key::Up, false);
     ticked(&mut view, 1);
     assert!(view.held.is_empty());
     assert_eq!(last_controls(&view), Controls::default());
-}
-
-#[test]
-fn other_input_changes_nothing_and_never_quits() {
-    let mut view = flight();
-    let others = [
-        key(Key::Escape, true),
-        key(Key::Space, true),
-        key(Key::Tab, true),
-        key(Key::Space, true),
-        key(Key::Enter, true),
-        key(Key::Char('w'), true),
-        key(Key::Char('w'), true),
-        key(Key::Other, true),
-        Input::PointerMoved(at(1.0, 2.0)),
-        Input::PointerButton {
-            button: crate::MouseButton::Left,
-            pressed: true,
-            at: at(1.0, 2.0),
-        },
-    ];
-    for input in others {
-        assert_eq!(view.input(&input), ScreenAction::None, "{input:?}");
-    }
-    ticks(&mut view, 5);
-    assert_eq!(player(&view), start());
 }
 
 // Interpolation.
@@ -813,27 +705,6 @@ const SHUTTLE: Blink = Blink {
     d: 20,
 };
 
-/// The tints the lights, `rlëD` 2200, are drawn by OR with.
-fn lights_tints(view: &View) -> Vec<Color> {
-    drawn(view)
-        .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Sprite {
-                image,
-                tint,
-                blend: Blend::Or,
-                ..
-            } if image.id == 2200 => Some(*tint),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The lights' alphas drawn: one, or none when they are off.
-fn lights_alphas(view: &View) -> Vec<u8> {
-    lights_tints(view).iter().map(|tint| tint.a).collect()
-}
-
 #[test]
 fn the_shuttles_lights_blink_with_game_time() {
     // When the Shuttle's lights are lit is nova-sim's
@@ -919,38 +790,7 @@ fn the_glow_still_shows_while_the_lights_are_off() {
     assert_eq!(glow, Some(lights_tint(level)));
 }
 
-#[test]
-fn the_blink_pauses_while_the_map_is_open() {
-    let mut view = test_flight::new(blinking(SHUTTLE));
-    ticks(&mut view, 3);
-    assert_eq!(lights_alphas(&view), [255], "tick 3");
-    view.input(&key(MAP_KEY, true));
-    assert!(view.map_open());
-    // Tick 103 would be dark.
-    ticks(&mut view, 100);
-    view.close_map();
-    assert_eq!(lights_alphas(&view), [255], "still tick 3");
-    ticks(&mut view, 1);
-    assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 4");
-}
-
 // The HUD.
-
-#[test]
-fn a_new_pilot_shows_the_default_status_bar() {
-    let view = flight();
-    assert_eq!(
-        view.status_bar(),
-        Ok(&StatusBar {
-            layout: layout(),
-            background: Some(hud::Background {
-                id: 700,
-                width: 194.0,
-                height: 767.0,
-            }),
-        })
-    );
-}
 
 #[test]
 fn the_status_bar_alone_is_flights_bar_and_nothing_else() {
@@ -1169,27 +1009,6 @@ fn by_the_other_reading_the_radar_follows_the_ship_every_frame() {
 }
 
 #[test]
-fn a_new_system_shows_on_the_radar_at_once_leaving_the_timer_and_blink() {
-    let mut view = landed_view();
-    ticks(&mut view, 3);
-    let cadence = view.hud_cadence;
-    move_to(&mut view, 131, 140);
-    view.resync();
-    assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
-    let shown = view.radar_shown(&view.frame_now());
-    assert_eq!(shown.player, view.shown_position());
-    let stellars: Vec<Point> = shown.stellars.iter().map(|s| s.position).collect();
-    let scene: Vec<Point> = view
-        .scene()
-        .expect("a scene")
-        .stellars()
-        .iter()
-        .map(|s| s.position)
-        .collect();
-    assert_eq!(stellars, scene, "Alpha Centauri's");
-}
-
-#[test]
 fn the_targets_blip_blinks_bright_every_eight_ticks_under_both_readings() {
     // Which ship Tab picks is nova-sim's
     // (`a_target_key_answers_the_target_it_picks`).
@@ -1266,87 +1085,7 @@ fn an_unreadable_status_bar_says_why_and_flight_goes_on() {
     assert_eq!(sprites(&list).len(), 3, "stellars and ship");
 }
 
-#[test]
-fn a_ship_type_whose_government_has_its_own_interface_shows_that_bar() {
-    let view = test_flight::new(governed(catalog(), 128, 129));
-    assert_eq!(
-        view.status_bar(),
-        Ok(&StatusBar {
-            layout: bar_129(),
-            background: Some(hud::Background {
-                id: 705,
-                width: 194.0,
-                height: 767.0,
-            }),
-        })
-    );
-    let list = drawn(&view);
-    assert!(
-        list.iter().any(|c| *c
-            == DrawCommand::Picture {
-                image: ImageKey::picture(705),
-                top_left: at(830.0, 0.0),
-            }),
-        "{list:?}"
-    );
-    for interface in [127, 0, -1] {
-        let view = test_flight::new(governed(catalog(), 128, interface));
-        assert_eq!(
-            view.status_bar().map(|bar| &bar.layout),
-            Ok(&layout()),
-            "{interface}"
-        );
-    }
-}
-
-#[test]
-fn a_session_that_cannot_start_has_no_status_bar() {
-    let failed = FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    };
-    let view = test_flight::new(failed);
-    assert_eq!(view.status_bar(), Err("no chär to start from"));
-}
-
 // Frame rate.
-
-/// Flies a script for three seconds of frames at `fps`, each redraw at
-/// `n / fps` seconds to the nanosecond: thrust for a second, turn
-/// right for half a second, reverse for a second, then coast.
-fn fly(fps: u64) -> ShipState {
-    let mut view = flight();
-    let script = [
-        (0, Key::Up, true),
-        (2, Key::Up, false),
-        (2, Key::Right, true),
-        (3, Key::Right, false),
-        (3, Key::Down, true),
-        (5, Key::Down, false),
-    ];
-    let mut last = 0;
-    for frame in 1..=3 * fps {
-        let half_second = (frame - 1) * 2 / fps;
-        if (frame - 1) * 2 % fps == 0 {
-            for &(_, k, pressed) in script.iter().filter(|(at, ..)| *at == half_second) {
-                view.input(&key(k, pressed));
-            }
-        }
-        let now = frame * 1_000_000_000 / fps;
-        view.tick(Duration::from_nanos(now - last));
-        last = now;
-    }
-    player(&view)
-}
-
-#[test]
-fn the_same_keys_fly_the_same_at_30_60_and_120_fps() {
-    let at_30 = fly(30);
-    assert!(at_30.heading > 0.0, "{at_30:?}");
-    assert!(at_30.position.y < 0.0, "{at_30:?}");
-    assert_eq!(fly(60), at_30);
-    assert_eq!(fly(120), at_30);
-}
 
 /// `view` with its player's record lit as `lights` says and glowing at
 /// `glow`, shown from now on.

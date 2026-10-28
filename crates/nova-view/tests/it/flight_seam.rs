@@ -43,7 +43,7 @@ use nova_view::devtools::{PilotDesk, PilotEdit};
 use nova_view::flight::FlightView;
 use nova_view::flight::MapOpener;
 use nova_view::flight::sim_port::fixture::check_contract;
-use nova_view::flight::{Collaborators, FlightSim, SessionFlight};
+use nova_view::flight::{Collaborators, FlightSim, FlightStart, SessionFlight, open_flight};
 use nova_view::galaxy::SystemId as MapSystemId;
 use nova_view::{Input, Key, MouseButton, Point, Screen, Sound};
 
@@ -573,6 +573,54 @@ fn a_galaxy_change_redraws_the_open_map_through_the_event_and_the_galaxy() {
         !drawn(&view).contains(&SystemId(129)),
         "the open map redrawn"
     );
+}
+
+/// A flight built at the edge (`open_flight`) opens on its start, and
+/// its session is set up with what the edge was given after the view read
+/// it: the rules, which the view shows by too.
+#[test]
+fn a_flight_built_at_the_edge_opens_on_its_start_and_reads_its_setup() {
+    let rules = Rulebook::default()
+        .with_override(nova_sim::RuleKey::PayMillions, nova_sim::RuleSource::Bible);
+    let view = open_flight(
+        data(),
+        FlightStart::New,
+        nova_sim::SessionSetup {
+            rules,
+            ..nova_sim::SessionSetup::default()
+        },
+        Collaborators::default(),
+    );
+    let session = view.session().expect("started");
+    assert_eq!(session.system(), SystemId(128));
+    assert_eq!(session.rules(), &rules, "set up");
+    assert_eq!(
+        view.scene().map(nova_view::system::SystemScene::id),
+        Some(SystemId(128)),
+        "the scene it opens on"
+    );
+    let at = session.player().position;
+    assert_eq!(
+        view.shown_position(),
+        Point::new(at.x, at.y),
+        "drawn at rest where it starts"
+    );
+}
+
+/// Entering play on an edge-built flight: the adapter begins the session
+/// and the view draws the ship where the beginning put it.
+#[test]
+fn begin_on_an_edge_built_flight_places_the_ship_where_the_session_began_it() {
+    let mut view = open_flight(
+        data(),
+        FlightStart::New,
+        nova_sim::SessionSetup::default(),
+        Collaborators::default(),
+    );
+    view.begin(SessionFlight::begin);
+    let player = view.session().expect("started").player().position;
+    assert_eq!(player, nova_sim::Vec2::new(50.0, 50.0));
+    assert_eq!(view.shown_position(), Point::new(50.0, 50.0));
 }
 
 /// The developer tools' desk on a real flight: the adapter's `DevDesk`

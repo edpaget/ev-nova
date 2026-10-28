@@ -7,25 +7,6 @@
 use super::*;
 
 #[test]
-fn beginning_runs_on_start_once_and_explores_what_it_sets() {
-    let catalog = starting_with("R(b5 b6) ^b7 X131");
-    let mut view = flying_as_on(catalog, "Ada", rolling_one());
-    assert!(!bit_set(&view, 7), "flying runs nothing");
-    view.begin(SessionFlight::begin);
-    assert!(bit_set(&view, 5), "on the flight's chance");
-    assert!(bit_set(&view, 7), "once");
-    let explored: Vec<SystemId> = view.session().expect("flying").pilot().explored().collect();
-    assert_eq!(explored, [SystemId(130), SystemId(131)]);
-    let broken = FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..starting_with("b5")
-    };
-    let mut broken = test_flight::new(broken);
-    broken.begin(SessionFlight::begin);
-    assert_eq!(broken.sim().pilot(), None);
-}
-
-#[test]
 fn resuming_faces_the_heading_drawn_on_the_flights_chance() {
     let (script, chance) = scripted(&[123]);
     let mut view = over_earth_on(catalog(), chance);
@@ -39,29 +20,6 @@ fn resuming_faces_the_heading_drawn_on_the_flights_chance() {
         [100; nova_sim::mission::ROLLED],
         "then the offers' roll table, on the same chance"
     );
-}
-
-#[test]
-fn beginning_draws_the_offer_roll_table_on_the_flights_chance() {
-    let (script, chance) = scripted(&[]);
-    let catalog = catalog();
-    let mut view = flying_as_on(catalog, "Ada", chance);
-    view.begin(SessionFlight::begin);
-    let asked = &script.borrow().asked;
-    assert!(asked.len() >= nova_sim::mission::ROLLED);
-    assert_eq!(
-        asked[asked.len() - nova_sim::mission::ROLLED..],
-        [100; nova_sim::mission::ROLLED]
-    );
-}
-
-#[test]
-fn beginning_a_new_pilot_leaves_it_facing_up() {
-    let (_, chance) = scripted(&[123]);
-    let catalog = catalog();
-    let mut view = flying_as_on(catalog, "Ada", chance);
-    view.begin(SessionFlight::begin);
-    assert_eq!(player(&view).heading, 0.0);
 }
 
 #[test]

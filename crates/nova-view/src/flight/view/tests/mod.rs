@@ -2,14 +2,13 @@ use std::cell::RefCell;
 use std::num::NonZeroU16;
 
 use crate::system::camera::{VIEW_CENTER, VIEW_SIZE};
-use nova_sim::flight::player_step;
 use nova_sim::flight_frame::GateFade;
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
     Behaviour, CharacterStart, CommodityStrings, DateAffixes, DisableRule, DisasterRecord,
-    FlightRules, GateSite, Handling, JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves,
-    ShipFields, ShipId, ShipRecord, ShipStats, SimDiagnostic, SimSound, StarSystem, StartDate,
-    StartError, SystemId, TICK, Vec2,
+    GateSite, JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId,
+    ShipRecord, ShipStats, SimDiagnostic, SimSound, StarSystem, StartDate, StartError, SystemId,
+    TICK, Vec2,
 };
 use nova_sim::{Session, ShipState};
 
@@ -87,6 +86,7 @@ mod faked_hud;
 mod faked_keys;
 mod faked_landing;
 mod faked_missions;
+mod faked_open;
 mod faked_player;
 mod faked_screen;
 mod faked_shops;
@@ -1264,10 +1264,6 @@ fn player(view: &View) -> ShipState {
     *view.session().expect("flying").player()
 }
 
-fn handling() -> Handling {
-    ShipStats::new(FIELDS, &[]).handling
-}
-
 /// The ship as it starts: at rest at the centre, facing up.
 fn start() -> ShipState {
     ShipState::default()
@@ -1275,45 +1271,6 @@ fn start() -> ShipState {
 
 fn reserves(view: &View) -> Reserves {
     view.session().expect("flying").reserves()
-}
-
-/// `state` after `ticks` of the player's steps under `controls`, capped
-/// at the top speed of a pilot without Strict Play (the speed a jump
-/// arrives at).
-fn stepped(mut state: ShipState, controls: Controls, ticks: u32) -> ShipState {
-    let top = handling().max_speed * nova_sim::top_speed::NON_STRICT_SPEED;
-    for _ in 0..ticks {
-        player_step(
-            &mut state,
-            &handling(),
-            controls,
-            None,
-            nova_sim::flight::Caps::top(top),
-            FlightRules::default(),
-        );
-    }
-    state
-}
-
-/// The ship after `ticks` of the player's steps under `controls` from a
-/// new session's start: the first held at rest by the session's box of
-/// none (see `nova_sim::afterburner::MaxVel::START`), the rest as
-/// [`stepped`].
-fn launched(controls: Controls, ticks: u32) -> ShipState {
-    let mut state = start();
-    let rest = nova_sim::flight::Caps {
-        thrust_top: handling().max_speed,
-        max_vel: 0.0,
-    };
-    player_step(
-        &mut state,
-        &handling(),
-        controls,
-        None,
-        rest,
-        FlightRules::default(),
-    );
-    stepped(state, controls, ticks.saturating_sub(1))
 }
 
 /// The second half of a tick: `TICK / 2` rounds down, so this is a
@@ -1954,12 +1911,6 @@ fn docked_pilot(name: &str) -> Pilot {
     view.sim().pilot().expect("flying").clone()
 }
 
-/// [`flying_as`], rolling on `chance`.
-fn flying_as_on(catalog: FakeCatalog, name: &str, chance: SharedChance) -> View {
-    let session = SessionBuilder::flying(&catalog).named(name).build();
-    FlightView::from_session(catalog, on_chance(session, chance), &Rulebook::default())
-}
-
 /// The flight of `session`, with Nova's collaborators, rolling on
 /// `chance`.
 fn on_chance(session: Session, chance: SharedChance) -> SessionFlight<FakeCatalog> {
@@ -2475,17 +2426,6 @@ fn retaken(view: &FlightView<FakeCatalog, impl FlightSim>) -> [bool; 4] {
         *view.target_shown(&view.frame_now()) == view.target_now(&view.frame_now()),
         view.radar_scene == Some(view.radar_now(&view.frame_now())),
     ]
-}
-/// The first `chär`'s `OnStart` is `on_start`.
-fn starting_with(on_start: &str) -> FakeCatalog {
-    let base = catalog();
-    FakeCatalog {
-        character: Ok(CharacterStart {
-            on_start: nova_sim::Script::parse(on_start),
-            ..base.character.clone().expect("a chär")
-        }),
-        ..base
-    }
 }
 use std::collections::VecDeque;
 

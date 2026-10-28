@@ -395,6 +395,13 @@ impl FakeFlight {
         self.stepped.iter().map(|&(input, _)| input).collect()
     }
 
+    /// Each call of [`FlightSim::step`], its input and its step count, in
+    /// order.
+    #[must_use]
+    pub fn stepped_calls(&self) -> &[(StepInput, u32)] {
+        &self.stepped
+    }
+
     /// Refuses the gate `gate` from now on ([`FlightSim::takes`]).
     pub fn refuse(&mut self, gate: PlayerCommand) {
         self.refused.push(gate);
