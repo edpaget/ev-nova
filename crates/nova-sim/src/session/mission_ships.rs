@@ -5189,6 +5189,42 @@ pub(super) mod tests {
         }
     }
 
+    /// `STR#` 4001 of 300 cargoes, "Cargo 0" to "Cargo 299": long enough
+    /// that a cargo type wrapped into a byte would find an entry.
+    #[derive(Debug)]
+    struct ManyCargoNames;
+
+    impl crate::catalog::CommCatalog for ManyCargoNames {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            match id {
+                crate::news::CARGO_NAMES => (0..300).map(|n| format!("Cargo {n}")).collect(),
+                _ => Vec::new(),
+            }
+        }
+    }
+
+    /// A pickup's line names no cargo for a cargo type no byte holds,
+    /// however long `STR#` 4001 is: types 256 and 999, which the offer
+    /// keeps (0 to 999), and whose low bytes would read entries 0 and 231;
+    /// nor for a mission of no cargo type (-1, which the offer drops).
+    #[test]
+    fn a_pickup_ships_line_names_no_cargo_for_a_type_no_byte_holds_or_none() {
+        for cargo_type in [256, 999, -1] {
+            let mut catalog = picking_up(2, 1, 0);
+            catalog.missions[0].cargo_type = cargo_type;
+            let mut session =
+                in_flight_with(&catalog, 1).with_strings(std::rc::Rc::new(ManyCargoNames));
+            let (boarding, _) = board_first(&mut session);
+            assert_eq!(
+                boarding,
+                Ok(crate::board::Boarding::MissionShip(Some(
+                    MissionBoardLine::Retrieved { cargo: None }
+                ))),
+                "cargo type {cargo_type}"
+            );
+        }
+    }
+
     /// The original re-runs the pickup for each ship of the mission
     /// boarded, its cargo aboard already counted against the free space:
     /// a second ship boarded with room for both tons counts again.
