@@ -1223,13 +1223,21 @@ fn a_real_target_shows_in_the_panel_and_brackets() {
     assert_eq!(brackets, 4, "its four corners");
 }
 
-/// `FlightSim::takes`: a gate the session refuses keeps the view's key
-/// from acting, as a player breaking up can't open the map.
+/// `FlightSim::takes`: M opens the map while the session takes its gate,
+/// and a gate the session refuses keeps the view's key from acting, as a
+/// player breaking up can't open the map.
 #[test]
 fn a_gate_the_session_refuses_keeps_the_views_key_from_acting() {
     let data = fighting_data(&[]);
     let session = SessionBuilder::flying(&data).build();
     let mut view = fighting(data, session);
+    tap(&mut view, Key::Char('m'));
+    assert!(
+        view.map_open(),
+        "control: M opens the map while the session takes the gate"
+    );
+    view.close_map();
+    assert!(!view.map_open());
     let session = view.sim_mut().session_mut().expect("flying");
     nova_sim::fixture::set_player_condition(
         session,
