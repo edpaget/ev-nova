@@ -80,8 +80,8 @@ pub(super) fn place(
 /// size takes a few thousand keys at most. Each new window height gives
 /// every glyph a new size, and so a new key, so a generation fills after a
 /// few window sizes and is started over, which bounds the raster cache
-/// (8 192 rasters, a few megabytes even at fullscreen sizes) and glyphon's
-/// atlas with it.
+/// (8 192 rasters: a few megabytes at the usual sizes, a few tens at the
+/// largest) and glyphon's atlas with it.
 const IDS_PER_GENERATION: usize = 8192;
 
 /// Custom-glyph IDs for raster keys: one per key, unique within a
@@ -90,7 +90,8 @@ const IDS_PER_GENERATION: usize = 8192;
 pub(super) struct GlyphIds {
     ids: HashMap<RasterKey, CustomGlyphId>,
     capacity: usize,
-    /// The frame being drawn, counted from 1.
+    /// The frame being drawn, counted up by each frame from 1, so never
+    /// 0: the mark of an ID no frame has asked for yet.
     frame: u64,
     /// The last frame that asked for each ID, by ID.
     last_asked: Vec<u64>,
