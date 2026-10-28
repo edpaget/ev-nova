@@ -12334,6 +12334,29 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn an_outfit_order_stopped_by_the_cash_reports_its_run_and_the_pass_it_stopped_at() {
+        let mut session = outfitted(&outfitting());
+        session.pilot.cash = 3500;
+        assert_eq!(
+            session.outfit_order(buy(SPEED), 5, &mut NeverFires),
+            OutfitRun {
+                run: OrderRun {
+                    done: 3,
+                    stopped: Some(Stopped {
+                        pass: 3,
+                        refusal: OutfitRefusal::CannotAfford,
+                    }),
+                },
+                alert: None,
+                after: Reselection::Kept,
+                button_passed: true,
+            }
+        );
+        assert_eq!(session.pilot().owned(SPEED), 3);
+        assert_eq!(session.pilot().cash(), 500);
+    }
+
+    #[test]
     fn a_counted_buy_stops_at_the_max() {
         let mut session = outfitted(&outfitting());
         assert_eq!(

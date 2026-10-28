@@ -58,6 +58,23 @@ fn a_flight_built_from_a_session_shows_its_course_from_the_first_frame() {
 }
 
 #[test]
+fn a_pilot_saved_at_a_stellar_resumes_in_flight_over_it_silently() {
+    // Where a resumed pilot flies, and that nothing lands, is the
+    // session's: the view shows the opening frame's place at once.
+    let mut view = opened(
+        catalog(),
+        showing(in_sol_with(vec![the_player_at(
+            Vec2::new(0.0, -600.0),
+            0.0,
+        )])),
+    );
+    assert_eq!(view.take_landing(), None, "nothing lands");
+    assert_eq!(view.shown_position(), Point::new(0.0, -600.0));
+    assert_eq!(view.take_sounds(), [], "no landing sound");
+    assert!(!view.take_save_due());
+}
+
+#[test]
 fn a_session_that_cannot_start_says_why_and_draws_nothing_else() {
     let mut view = opened(catalog(), failed("no chär to start from"));
     assert_eq!(view.failure(), Some("no chär to start from"));

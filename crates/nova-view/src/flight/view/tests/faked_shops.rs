@@ -1282,3 +1282,127 @@ fn the_intro_seen_is_the_flights_and_its_mark_is_sent() {
     view.mark_intro_seen();
     assert_eq!(sent(&view), [FlightCommand::MarkIntroSeen]);
 }
+
+// A purchase seen through the take-off (pilot.rs's, on a real session
+// once: what the session buys and changes is its own).
+
+/// The flight docked at Earth over [`shipbuying`], the player's ship 128
+/// lit.
+fn docked_shipbuying(catalog: FakeCatalog) -> Faked {
+    let mut frame = at_earth();
+    frame.ships[0] = lit(frame.ships[0]);
+    docked_on(catalog, frame, RuleSource::Engine)
+}
+
+/// `ship` with its lights on, as the frame draws a lit hull.
+fn lit(ship: nova_sim::flight_frame::FrameShip) -> nova_sim::flight_frame::FrameShip {
+    nova_sim::flight_frame::FrameShip {
+        drawn: nova_sim::combat::ship_frames::Drawn {
+            lights: Some(32),
+            ..nova_sim::combat::ship_frames::Drawn::default()
+        },
+        frames: nova_sim::combat::ship_frames::FrameSpec {
+            lights: true,
+            ..nova_sim::combat::ship_frames::FrameSpec::NONE
+        },
+        ..ship
+    }
+}
+
+/// Buys ship `class` on `view`'s flight, which answers with the player
+/// in a lit ship of `class`, then takes off, the flight answering the
+/// departure from Earth in flight.
+fn bought_and_off(view: &mut Faked, class: i16) {
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::ShipChanged));
+    let new_hull = leaves(view, |frame| {
+        frame.ships = vec![lit(record::player(class, Vec2::ZERO, 0.0))];
+    });
+    view.sim
+        .queue_answer_showing(Answer::ShipBought(Ok(purchase())), new_hull.clone());
+    view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+    let flying = FlightFrame {
+        landed: None,
+        ..new_hull
+    };
+    view.sim
+        .queue_answer_showing(super::faked_landing::departed(128), flying);
+    view.take_off().expect("took off");
+    view.tick(TICK);
+}
+
+#[test]
+fn the_shipyard_is_the_sessions_and_a_purchase_reloads_the_ships_sheet() {
+    let mut view = docked_shipbuying(shipbuying());
+    assert_eq!(*view.catalog().sheets_asked.borrow(), [ShipId(128)]);
+    bought_and_off(&mut view, 129);
+    assert_eq!(
+        *view.catalog().sheets_asked.borrow(),
+        [ShipId(128), ShipId(129)],
+        "read once"
+    );
+    let ids: Vec<_> = super::faked_world::faked_ship_sprites(&view)
+        .iter()
+        .map(|(image, _)| image.id)
+        .collect();
+    assert_eq!(ids, [2001, 2201], "the new hull, and its lights");
+}
+
+#[test]
+fn a_ships_on_purchase_h_reads_only_the_final_class_sheet_once() {
+    let mut view = docked_shipbuying(shipbuying());
+    bought_and_off(&mut view, 130);
+    assert_eq!(
+        *view.catalog().sheets_asked.borrow(),
+        [ShipId(128), ShipId(130)],
+        "a failed read is not tried again"
+    );
+    assert_eq!(view.frame(), None, "no sheet for 130");
+}
+
+#[test]
+fn a_ship_bought_with_iff_shows_it_at_once() {
+    let mut view = docked_shipbuying(shipbuying());
+    assert!(view.hud_waits(), "the engine's reading");
+    assert!(!view.radar_shown(&view.frame_now()).iff, "landing's");
+    view.sim
+        .queue_answer(Answer::ShipBought(Err(ShipRefusal::NotListed)));
+    assert!(view.buy_ship(ShipId(999), "Kestrel").is_err());
+    assert!(!view.radar_shown(&view.frame_now()).iff, "refused");
+    let with_iff = leaves(&view, |frame| frame.hud.radar_gear.iff = true);
+    view.sim
+        .queue_answer_showing(Answer::ShipBought(Ok(purchase())), with_iff);
+    view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+    assert!(view.radar_shown(&view.frame_now()).iff, "its IFF, at once");
+}
+
+#[test]
+fn a_ship_bought_redraws_the_nav_area_and_the_target_panel() {
+    // The bought half: a_ship_bought_redraws_the_whole_bar_on_an_intf_change_and_all_but_the_gauges_otherwise.
+    let mut view = docked_shipbuying(shipbuying());
+    let stale_nav = NavDisplay::Stellar(Some("Stale".to_owned()));
+    let stale_target = TargetPanel {
+        name: "Stale".to_owned(),
+        subtitle: String::new(),
+        picture: None,
+        status: nova_sim::TargetStatus::Hidden,
+        tag: None,
+    };
+    view.nav_scene = Some((view.nav_mode(), stale_nav.clone()));
+    view.target_scene = Some((None, Some(stale_target.clone())));
+    assert_eq!(view.nav_shown(&view.frame_now()), stale_nav, "held");
+    assert_eq!(
+        *view.target_shown(&view.frame_now()),
+        Some(stale_target),
+        "held"
+    );
+    view.sim
+        .queue_answer(Answer::ShipBought(Err(ShipRefusal::NotListed)));
+    assert!(view.buy_ship(ShipId(999), "Kestrel").is_err());
+    assert_eq!(
+        view.nav_shown(&view.frame_now()),
+        view.nav_now(),
+        "the prompt's close"
+    );
+    assert_eq!(*view.target_shown(&view.frame_now()), None, "redrawn");
+}

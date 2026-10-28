@@ -1249,11 +1249,6 @@ fn player(view: &View) -> ShipState {
     *view.session().expect("flying").player()
 }
 
-/// The ship as it starts: at rest at the centre, facing up.
-fn start() -> ShipState {
-    ShipState::default()
-}
-
 fn reserves(view: &View) -> Reserves {
     view.session().expect("flying").reserves()
 }
@@ -1416,14 +1411,6 @@ fn layer(image_id: i16, frames: u16) -> LayerSheet {
         frames: NonZeroU16::new(frames).expect("non-zero"),
         solid: false,
     }
-}
-
-/// The ship's sprites drawn: those from `rlëD`s 2000 to 2299.
-fn ship_sprites(view: &View) -> Vec<(ImageKey, Point)> {
-    sprites(&drawn(view))
-        .into_iter()
-        .filter(|(image, _)| (2000..2300).contains(&image.id))
-        .collect()
 }
 
 /// [`layered`], with the lights blinking by `blink`.
@@ -1780,7 +1767,7 @@ fn landed_view() -> View {
     view
 }
 
-use nova_sim::{Chance, Direction, DisasterId, Good, Lot, Order, TradeRefusal};
+use nova_sim::{Chance, Direction, DisasterId, Good, Lot, Order};
 
 /// Earth at the centre, a trade center trading food at 75, the first
 /// `chär` holding 1000 credits, and its ship 10 tons.
@@ -1813,8 +1800,7 @@ const BUY_FOOD: Order = Order {
     lot: Lot::Click,
 };
 
-use nova_sim::order_loop::{OrderRun, Stopped};
-use nova_sim::{OutfitOrder, OutfitRefusal, OutfitRun, Reselection};
+use nova_sim::{OutfitOrder, OutfitRefusal};
 
 /// Earth at the centre, an outfitter selling a fuel tank (+100 fuel,
 /// a ton, 1000 credits), the first `chär` holding 1000 credits.
@@ -2985,51 +2971,6 @@ fn drawn_at(list: &DrawList, at: Point) -> usize {
         })
         .unwrap_or_else(|| panic!("nothing drawn at {at:?}"))
 }
-/// IFF, a density scanner and anti-interference 30 as outfits 300-302.
-fn radar_outfits() -> Vec<OutfitRecord> {
-    let outfit = |id: i16, mod_type: i16, mod_val: i16| {
-        let mut mods = [(0, 0); 4];
-        mods[1] = (mod_type, mod_val);
-        OutfitRecord {
-            id: OutfitId(id),
-            name: format!("Outfit {id}"),
-            short_name: String::new(),
-            disp_weight: 0,
-            mass: 0,
-            tech_level: 1,
-            max: 10,
-            flags: 0,
-            cost: 1,
-            mods,
-            contribute: 0,
-            require: 0,
-            require_govt: -1,
-            buy_random: 100,
-            availability: nova_sim::Test::default(),
-            on_purchase: nova_sim::Script::default(),
-            on_sell: nova_sim::Script::default(),
-            item_class: 0,
-            lc_name: String::new(),
-            lc_plural: String::new(),
-            scan_mask: 0,
-        }
-    };
-    vec![
-        outfit(300, nova_sim::iff::MOD_IFF, 0),
-        outfit(301, nova_sim::iff::MOD_DENSITY_SCANNER, 0),
-        outfit(302, nova_sim::iff::MOD_ANTI_INTERFERENCE, 30),
-    ]
-}
-
-/// Whether the radar shown has IFF's black fill.
-fn radar_filled(view: &View) -> bool {
-    radar_marks(view).first()
-        == Some(&RadarMark::Fill {
-            rect: STOCK_RADAR,
-            color: RadarColor::Black,
-        })
-}
-
 /// Quiet sound preferences: effects at level 1.
 const QUIET: SoundPrefs = SoundPrefs {
     sound: true,

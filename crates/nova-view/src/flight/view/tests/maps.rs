@@ -2093,3 +2093,39 @@ fn a_slot_key_held_during_a_jump_does_not_hold_the_zoom_back() {
     floating_tap(&mut view, ZOOM_OUT_KEY);
     assert_eq!(view.floating.zoom(), 4, "F3 is not polled");
 }
+
+/// The port's course map, open over a flight docked at Earth whose map
+/// draws Sol, and how many panels its flight was asked for.
+fn port_map_open() -> (Faked, usize) {
+    let mut view = super::faked_shops::docked();
+    let map = view.sim.map_mut();
+    map.drawing = Some(sol_drawing());
+    map.map_preselection = Some(SystemId(130));
+    view.open_bar_map();
+    assert!(view.map_open());
+    let asked = panels_asked(&view).len();
+    assert!(asked > 0, "asked as it opens");
+    view.tick(TICK);
+    assert_eq!(panels_asked(&view).len(), asked, "nothing changed");
+    (view, asked)
+}
+
+#[test]
+fn the_open_maps_panel_follows_a_system_explored_between_frames() {
+    // What the panel says of a system explored is the session's.
+    let (mut view, asked) = port_map_open();
+    view.sim.frame_mut().map_key.explored.push(SystemId(131));
+    assert_eq!(panels_asked(&view).len(), asked, "not yet");
+    view.tick(TICK);
+    assert_eq!(panels_asked(&view).len(), asked + 1, "the next frame");
+}
+
+#[test]
+fn the_open_maps_panel_follows_a_system_charted_between_frames() {
+    // What the panel lists of a system charted is the session's.
+    let (mut view, asked) = port_map_open();
+    view.sim.frame_mut().map_key.charted.push(SystemId(130));
+    assert_eq!(panels_asked(&view).len(), asked, "not yet");
+    view.tick(TICK);
+    assert_eq!(panels_asked(&view).len(), asked + 1, "the next frame");
+}
