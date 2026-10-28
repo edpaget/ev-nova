@@ -983,33 +983,51 @@ pub(super) fn damaging() -> FakeCatalog {
 
 #[test]
 fn the_flight_convicts_by_the_law_it_is_given() {
-    // The step hands the fight the flight's law; the board's is
-    // `Session::apply`'s (phase 15's).
+    // The step hands the fight the flight's law, which hears what the
+    // session's own step tells the law it is handed; the board's is
+    // `Session::apply`'s (phase 15's). Which crimes the fight commits is
+    // nova-sim's.
     let witness = Rc::new(Witness::default());
     // 100 above, facing away: it flies on up the line of fire.
-    let (_, chance) = scripted(&placed(750, 650, 0));
+    let draws = placed(750, 650, 0);
+    let (_, chance) = scripted(&draws);
     let catalog = shared(damaging());
     let session = SessionBuilder::flying(&*catalog).build();
     let mut flight = flight_of(
         &catalog,
-        session,
+        session.clone(),
         Collaborators {
             law: witness.clone(),
             ..on(chance, Rc::new(Still))
         },
     );
-    step(&mut flight, &StepInput::default());
+    let heard = Witness::default();
+    let (_, mut own_chance) = scripted(&draws);
+    let mut by_hand = session;
     let firing = StepInput {
         fire: (true, false),
         ..StepInput::default()
     };
-    for _ in 0..120 {
-        step(&mut flight, &firing);
+    let inputs = std::iter::once(StepInput::default()).chain(std::iter::repeat_n(firing, 120));
+    for input in inputs {
+        step(&mut flight, &input);
+        let mut collab = nova_sim::StepCollaborators {
+            catalog: &*catalog,
+            behaviour: &Still,
+            rules: Rules {
+                disable: &nova_sim::NovaDisable,
+                defence: &nova_sim::Allegiance,
+                law: &heard,
+            },
+            chance: &mut own_chance,
+        };
+        by_hand.step(&input, 1, &mut collab, &mut StepReport::default());
         if !witness.seen.borrow().is_empty() {
             break;
         }
     }
-    assert_eq!(*witness.seen.borrow(), [nova_sim::Crime::Disable]);
+    assert!(!witness.seen.borrow().is_empty(), "a crime heard");
+    assert_eq!(*witness.seen.borrow(), *heard.seen.borrow(), "as by hand");
 }
 
 /// Says no missile is hostile, counting the times it is asked.
