@@ -171,12 +171,18 @@ pub struct FlightFrame {
     /// The ship target as the target panel shows it, if there is one
     /// ([`FrameTarget`]).
     pub target: Option<FrameTarget>,
+    /// The `dësc` IDs a sabotaged player sees as it dies, none unsabotaged
+    /// ([`Session::sabotage_death_descs`](crate::Session::sabotage_death_descs)):
+    /// what the router reads once the hold after the explosion has run
+    /// out. They change with the outfits owned and the sabotage flag the
+    /// last refresh cached, so they are a frame's, not the opening's.
+    pub death_descs: Vec<i16>,
 }
 
 impl Default for FlightFrame {
     /// A session that failed to start: nav off, no course, in flight, no
     /// jump, the player flying, no hold and no leave due, every gate taken
-    /// ([`Gates::EVERY`]); the player alone, drawn in full in the ships' layer at the
+    /// ([`Gates::EVERY`]), and no death `dësc`s; the player alone, drawn in full in the ships' layer at the
     /// default place, with no NPCs, shots, beams, boxes, asteroids or
     /// stellars; no murk and no background.
     fn default() -> Self {
@@ -211,6 +217,7 @@ impl Default for FlightFrame {
             traffic_ships: Vec::new(),
             hud: FrameHud::default(),
             target: None,
+            death_descs: Vec::new(),
         }
     }
 }

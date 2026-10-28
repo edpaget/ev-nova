@@ -47,6 +47,7 @@ impl Session {
             traffic_ships,
             hud,
             target,
+            death_descs,
         } = into;
         *nav_mode = self.nav_mode();
         *system = self.system();
@@ -85,6 +86,7 @@ impl Session {
         *traffic_ships = self.traffic_ships();
         self.fill_hud(hud);
         self.fill_target(target);
+        *death_descs = self.sabotage_death_descs();
     }
 }
 
@@ -282,6 +284,7 @@ pub(super) mod tests {
                 status: crate::target_panel::TargetStatus::Waiting,
                 tag: Some(crate::target_panel::TargetTag::Fighter),
             }),
+            death_descs: vec![999],
         }
     }
 
@@ -848,9 +851,28 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_fill_writes_a_sabotaged_players_death_descs_and_none_unsabotaged() {
+        use crate::catalog::OutfitId;
+        use crate::session::sabotage::tests::{KILL, sabotaged};
+        let catalog = sabotaged();
+        let mut session = crate::session::tests::facing_an_npc(&catalog, 180);
+        assert_eq!(
+            filled(&session).death_descs,
+            Vec::<i16>::new(),
+            "unsabotaged"
+        );
+        session.pilot.outfits.insert(OutfitId(KILL), 1);
+        session.reset_precalced();
+        let frame = filled(&session);
+        assert_eq!(frame.death_descs, [4100], "over the stale list");
+        assert_eq!(frame.death_descs, session.sabotage_death_descs());
+    }
+
+    #[test]
     fn a_failed_sessions_default_frame_holds_the_player_alone_in_full() {
         let frame = FlightFrame::default();
         assert_eq!(frame.gates, Gates::EVERY, "nothing to refuse with");
+        assert_eq!(frame.death_descs, Vec::<i16>::new());
         assert_eq!(frame.ships, [FrameShip::default()]);
         assert_eq!(frame.player().shown, ShipDrawn::Full);
         assert_eq!(frame.player().hover, HoverPlace::Own);

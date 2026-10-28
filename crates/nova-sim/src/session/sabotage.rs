@@ -182,7 +182,7 @@ impl PlayerShip {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::OutfitId;
     use crate::catalog::{BoomId, ShipId, SoundId, SystemId};
@@ -200,11 +200,11 @@ mod tests {
     use crate::testkit::{Passive, work_with};
 
     /// A kill outfit and a bomb outfit.
-    const KILL: i16 = 261;
+    pub(in crate::session) const KILL: i16 = 261;
     const BOMB: i16 = crate::testkit::BOMB;
 
     /// `armed`'s catalog with [`KILL`] and [`BOMB`].
-    fn sabotaged() -> FakePilotCatalog {
+    pub(in crate::session) fn sabotaged() -> FakePilotCatalog {
         let mut catalog = armed();
         catalog.outfits.extend([
             outfit(KILL, &[(SABOTAGE_KILL, 4100)]),

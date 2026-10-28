@@ -836,6 +836,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         traffic_ships,
         hud,
         target,
+        death_descs,
     } = frame;
     let other_system = SystemId(if system.0 == i16::MAX { 0 } else { i16::MAX });
     FlightFrame {
@@ -922,6 +923,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         } else {
             Some(record::target(0))
         },
+        death_descs: one_or_none(death_descs, || 128),
     }
 }
 
@@ -2784,6 +2786,7 @@ mod tests {
             jump_readiness: JumpReadiness::Underway,
             texts_queued: u64::MAX,
             gates: Gates::EVERY.refusing(PlayerCommand::Map),
+            death_descs: vec![130],
             map_key: MapKey {
                 system: SystemId(i16::MAX),
                 nav: NavMode::Stellar(None),
@@ -2824,6 +2827,7 @@ mod tests {
                 traffic_ships,
                 hud,
                 target,
+                death_descs,
             } = &frame;
             assert_unlike_hud(&other.hud, hud);
             assert_ne!(other.target, *target);
@@ -2854,6 +2858,7 @@ mod tests {
             assert_ne!(other.jump_readiness, *jump_readiness);
             assert_ne!(other.texts_queued, *texts_queued);
             assert_ne!(other.gates, *gates);
+            assert_ne!(other.death_descs, *death_descs);
             assert_ne!(other.map_key, *map_key);
             assert_ne!(other.map_key.system, map_key.system);
             assert_ne!(other.map_key.nav, map_key.nav);
