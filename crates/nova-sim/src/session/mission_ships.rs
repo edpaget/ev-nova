@@ -1070,7 +1070,8 @@ impl Session {
     /// the pickup path (@0x652ee-0x65570): its cargo is picked up
     /// ([`Session::pick_up_boarded_cargo`]), and once aboard its slot
     /// counts the ship boarded, whatever its goal (@0x653a7), and the
-    /// comm line names the cargo; a pickup refused refuses the board
+    /// comm line names the cargo, its `STR#` 4001 name resolved here, as
+    /// the session holds the string lists; a pickup refused refuses the board
     /// ([`BoardRefusal::CantBoard`], @0x65fdb), its dialog shown and
     /// nothing else changed. Any other takes the assist path
     /// ([`assists`]), on which its slot counts it boarded, the comm line
@@ -1103,6 +1104,9 @@ impl Session {
                 if !self.pick_up_boarded_cargo(mark.slot) {
                     return Some(Err(BoardRefusal::CantBoard));
                 }
+                let cargo = cargo
+                    .and_then(|cargo| u8::try_from(cargo).ok())
+                    .and_then(|cargo| crate::text_tags::TagNames::cargo_name(self, cargo));
                 line = Some(MissionBoardLine::Retrieved { cargo });
                 true
             } else {
@@ -5107,7 +5111,7 @@ pub(super) mod tests {
             assert_eq!(
                 boarding,
                 Ok(crate::board::Boarding::MissionShip(Some(
-                    MissionBoardLine::Retrieved { cargo: Some(1) }
+                    MissionBoardLine::Retrieved { cargo: None }
                 ))),
                 "{goal}"
             );
@@ -5137,12 +5141,51 @@ pub(super) mod tests {
             assert_eq!(
                 boarding,
                 Ok(crate::board::Boarding::MissionShip(Some(
-                    MissionBoardLine::Retrieved { cargo: Some(1) }
+                    MissionBoardLine::Retrieved { cargo: None }
                 ))),
                 "{goal} {flags:#x}"
             );
             assert_eq!(ships_of(&session).boarded, 1, "{goal} {flags:#x}");
             assert!(cargo_aboard(&session), "{goal} {flags:#x}");
+        }
+    }
+
+    /// `STR#` 4001, the cargo names, holding `names`.
+    #[derive(Debug)]
+    struct CargoNames(&'static [&'static str]);
+
+    impl crate::catalog::CommCatalog for CargoNames {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            match id {
+                crate::news::CARGO_NAMES => self.0.iter().map(|&s| s.to_owned()).collect(),
+                _ => Vec::new(),
+            }
+        }
+    }
+
+    /// The pickup's line names its cargo as the session resolves it where
+    /// the line is raised, by `STR#` 4001 (@0x653fb-0x65543), its `*`
+    /// kept: the cargo type 1's entry, or none when the list has no entry
+    /// for it.
+    #[test]
+    fn a_pickup_ships_line_names_its_cargo_by_str_4001_or_none_for_a_missing_entry() {
+        let catalog = picking_up(2, 1, 0);
+        for (names, cargo) in [
+            (&["Food", "*Passengers"][..], Some("*Passengers")),
+            (&["Food"][..], None),
+        ] {
+            let mut session =
+                in_flight_with(&catalog, 1).with_strings(std::rc::Rc::new(CargoNames(names)));
+            let (boarding, _) = board_first(&mut session);
+            assert_eq!(
+                boarding,
+                Ok(crate::board::Boarding::MissionShip(Some(
+                    MissionBoardLine::Retrieved {
+                        cargo: cargo.map(str::to_owned)
+                    }
+                ))),
+                "{names:?}"
+            );
         }
     }
 
@@ -5159,7 +5202,7 @@ pub(super) mod tests {
         assert_eq!(
             second,
             Ok(crate::board::Boarding::MissionShip(Some(
-                MissionBoardLine::Retrieved { cargo: Some(1) }
+                MissionBoardLine::Retrieved { cargo: None }
             )))
         );
         assert_eq!(ships_of(&session).boarded, 2);

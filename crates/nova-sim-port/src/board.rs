@@ -572,8 +572,8 @@ pub enum Boarding {
 
 /// What the comm line says as a mission's special ship is boarded on the
 /// pickup path or the assist path (see the session's `mission_ships`
-/// module).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// module). Not `Copy`: the pickup's line carries its cargo's name.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MissionBoardLine {
     /// `STR#` 2002 #126, "Target ship has been boarded."
     Boarded,
@@ -589,8 +589,11 @@ pub enum MissionBoardLine {
     /// cargo's name starts with `*`, the name without its `*`, a space,
     /// #108 (@0x653fb-0x65543).
     Retrieved {
-        /// The cargo type, raw, whose `STR#` 4001 name the line says.
-        cargo: Option<i16>,
+        /// The cargo's `STR#` 4001 name, raw, a leading `*` kept, as the
+        /// session resolved it from the mission's cargo type where the
+        /// line is raised: none for a cargo of no type or a type the list
+        /// has no entry for.
+        cargo: Option<String>,
     },
 }
 

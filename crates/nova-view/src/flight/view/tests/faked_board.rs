@@ -16,15 +16,14 @@ use nova_sim::flight_frame::FlightEvent;
 use nova_sim::{Boarding, MissionBoardLine, PlunderView, VenueOffer};
 
 /// A view over a flight in Sol, the player alone, the flight naming
-/// commodity 0 Food, outfit 310 Rockets, outfit 200 "rocket",
-/// "rockets", and `STR#` 4001's first cargo Gems.
+/// commodity 0 Food, outfit 310 Rockets, and outfit 200 "rocket",
+/// "rockets".
 fn sol() -> Faked {
     let mut view = faked(in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
     let names = view.sim.names_mut();
     names.good_names = vec![(Good::Commodity(0), "Food".to_owned())];
     names.outfit_names = vec![(OutfitId(310), "Rockets".to_owned())];
     names.outfit_lc_names = vec![(OutfitId(200), ("rocket".to_owned(), "rockets".to_owned()))];
-    names.cargo_names = vec!["Gems".to_owned()];
     view
 }
 
@@ -225,7 +224,9 @@ fn boarding_a_person_that_grants_nothing_says_nothing() {
 #[test]
 fn b_on_a_pickup_ship_says_its_line_for_250_frames_with_no_plunder() {
     let mut view = sol();
-    let line = MissionBoardLine::Retrieved { cargo: Some(0) };
+    let line = MissionBoardLine::Retrieved {
+        cargo: Some("Gems".to_owned()),
+    };
     view.sim
         .queue_answer(Answer::Boarded(Boarding::MissionShip(Some(line))));
     assert!(view.board());
@@ -244,7 +245,9 @@ fn b_on_a_pickup_ship_says_its_line_for_250_frames_with_no_plunder() {
 #[test]
 fn b_on_a_failed_missions_pickup_ship_says_its_line_first_and_opens_the_plunder() {
     let mut view = sol();
-    let line = MissionBoardLine::Retrieved { cargo: Some(0) };
+    let line = MissionBoardLine::Retrieved {
+        cargo: Some("Gems".to_owned()),
+    };
     view.sim.queue_event(FlightEvent::BoardLine(line));
     opened(&mut view);
     view.board();

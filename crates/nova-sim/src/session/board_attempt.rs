@@ -639,7 +639,7 @@ mod tests {
         assert_eq!(ships_of(&session).boarded, 1, "@0x653a7");
         assert_eq!(
             session.take_board_line(),
-            Some(MissionBoardLine::Retrieved { cargo: Some(1) })
+            Some(MissionBoardLine::Retrieved { cargo: None })
         );
         assert_eq!(session.ship.player.velocity, DRIFT);
         assert_eq!(session.npcs()[0].mode, Mode::Flying, "no hold");

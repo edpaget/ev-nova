@@ -245,7 +245,7 @@ fn a_drained_board_line_and_grant_are_each_taken_once_and_leave_the_rest() {
     for event in [
         FlightEvent::BoardLine(MissionBoardLine::Boarded),
         FlightEvent::Grant(granted),
-        FlightEvent::BoardLine(refuelled),
+        FlightEvent::BoardLine(refuelled.clone()),
         FlightEvent::SaveDue,
     ] {
         view.sim.queue_event(event);

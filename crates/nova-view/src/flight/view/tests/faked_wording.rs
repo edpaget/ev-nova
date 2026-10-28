@@ -224,18 +224,25 @@ fn a_mission_ship_boarded_on_the_assist_path_says_its_line() {
 }
 
 #[test]
-fn a_pickup_ships_line_reads_the_cargo_name_from_str_4001() {
+fn a_pickup_ships_line_says_the_cargo_name_it_carries() {
     let names = naming();
-    let said = |cargo| mission_board_message(MissionBoardLine::Retrieved { cargo }, &names);
-    assert_eq!(said(Some(0)), "You retrieved  the Food from this ship.");
-    assert_eq!(said(Some(1)), "You retrieved  Passengers from this ship.");
-    assert_eq!(said(Some(2)), "You retrieved  the  from this ship.");
-    assert_eq!(said(None), "You retrieved  the  from this ship.");
+    let said = |cargo: Option<&str>| {
+        mission_board_message(
+            MissionBoardLine::Retrieved {
+                cargo: cargo.map(str::to_owned),
+            },
+            &names,
+        )
+    };
     assert_eq!(
-        said(Some(256)),
-        "You retrieved  the  from this ship.",
-        "no cargo past 255"
+        said(Some("Food")),
+        "You retrieved  the Food from this ship."
     );
+    assert_eq!(
+        said(Some("*Passengers")),
+        "You retrieved  Passengers from this ship."
+    );
+    assert_eq!(said(None), "You retrieved  the  from this ship.");
 }
 
 #[test]

@@ -406,7 +406,7 @@ mod tests {
         let nav = NavMode::Stellar(Some(StellarId(128)));
         inbox.receive(vec![
             FlightEvent::Grant(later),
-            FlightEvent::BoardLine(refuelled),
+            FlightEvent::BoardLine(refuelled.clone()),
             FlightEvent::TakeoffNav(nav),
             FlightEvent::RescueDesc(14000),
             FlightEvent::LeaveMessage("second".to_owned()),

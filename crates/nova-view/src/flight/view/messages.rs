@@ -544,7 +544,8 @@ pub fn retrieved_message(cargo: &str) -> String {
     }
 }
 
-/// What the comm line says of `line`, the names read from `names`.
+/// What the comm line says of `line`, the names read from `names` and the
+/// cargo's as the line carries it.
 pub(super) fn mission_board_message(
     line: MissionBoardLine,
     names: &(impl NameSource + ?Sized),
@@ -555,12 +556,9 @@ pub(super) fn mission_board_message(
             names.ship_name(ship).unwrap_or_default(),
             names.player_ship_name().unwrap_or_default(),
         ),
-        MissionBoardLine::Retrieved { cargo } => retrieved_message(
-            &cargo
-                .and_then(|cargo| u8::try_from(cargo).ok())
-                .and_then(|cargo| names.cargo_name(cargo))
-                .unwrap_or_default(),
-        ),
+        MissionBoardLine::Retrieved { cargo } => {
+            retrieved_message(cargo.as_deref().unwrap_or_default())
+        }
     }
 }
 
