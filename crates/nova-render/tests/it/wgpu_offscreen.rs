@@ -1203,6 +1203,24 @@ impl Picture {
             .collect()
     }
 
+    /// The partly covered pixels (lit, but under 250) along the row with
+    /// the most ink: the soft edges of every stem in it, together.
+    pub(crate) fn row_partials(&self) -> usize {
+        self.inkiest_row()
+            .into_iter()
+            .filter(|&c| partial(c))
+            .count()
+    }
+
+    /// The partly covered pixels of each of [`Picture::stems`], left to
+    /// right.
+    pub(crate) fn stem_partials(&self) -> Vec<usize> {
+        let stems = self.stems().into_iter();
+        stems
+            .map(|stem| stem.into_iter().filter(|&c| partial(c)).count())
+            .collect()
+    }
+
     /// The coverage along the row with the most lit pixels.
     fn inkiest_row(&self) -> Vec<u8> {
         let mut rows: Vec<Vec<u8>> = Vec::new();
@@ -1216,6 +1234,11 @@ impl Picture {
             .max_by_key(|row| row.iter().filter(|&&c| c > 0).count())
             .unwrap_or_default()
     }
+}
+
+/// Whether `coverage` is a soft edge: lit, but short of full (250 and up).
+fn partial(coverage: u8) -> bool {
+    coverage > 0 && coverage < 250
 }
 
 /// Twelve `l`s: twelve identical stems in one row.

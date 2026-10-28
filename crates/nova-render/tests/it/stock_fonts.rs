@@ -6,8 +6,11 @@ use crate::common;
 use crate::text_layout::whole_and_split;
 use crate::wgpu_offscreen::{STEMS, assert_stems_alike, draw_text};
 
-use nova_data::fonts::{charcoal_path, open_charcoal};
+use std::sync::Arc;
+
+use nova_data::fonts::{DeviceWidths, charcoal_path, open_charcoal};
 use nova_render::fonts::FontFaces;
+use nova_render::glyph_raster::{HintedFace, Hinter};
 use nova_render::wgpu::{GlyphonMetrics, InitError, OffscreenGpu};
 use nova_render::{ImageError, ImageSource, LogicalSize, Renderer, Viewport};
 use nova_view::text::TextMetrics;
@@ -146,5 +149,65 @@ fn the_games_charcoal_measures_and_draws_by_its_device_widths() {
             };
             assert_eq!(whole, split, "Charcoal {size}pt at {scale}x");
         }
+    }
+}
+
+#[test]
+fn the_games_charcoal_draws_whole_stems_at_9_and_12pt_at_1x_and_2x() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    if !charcoal_path(&dir).is_file() {
+        eprintln!("skipping: no {}", charcoal_path(&dir).display());
+        return;
+    }
+    let faces = FontFaces::bundled().with_charcoal(open_charcoal(&dir).expect("Charcoal loads"));
+    for size in [9.0, 12.0] {
+        for scale in [1, 2] {
+            let at = Point::new(2.0, 4.0);
+            let Some(picture) = draw_text(&faces, Font::Charcoal, STEMS, at, size, scale) else {
+                return;
+            };
+            let case = format!("Charcoal {size}pt at {scale}x");
+            let stems = picture.stems();
+            assert_eq!(picture.row_partials(), 0, "{case}: {stems:?}");
+            if stems.len() == STEMS.len() {
+                let mut widths: Vec<usize> = stems.iter().map(Vec::len).collect();
+                widths.dedup();
+                assert_eq!(widths.len(), 1, "{case}: {stems:?}");
+            }
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn the_games_charcoal_hinted_advances_are_its_device_widths() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    if !charcoal_path(&dir).is_file() {
+        eprintln!("skipping: no {}", charcoal_path(&dir).display());
+        return;
+    }
+    let bytes: Arc<[u8]> = open_charcoal(&dir).expect("Charcoal loads").into();
+    let widths = DeviceWidths::read(&bytes);
+    let mut face = HintedFace::new(Arc::clone(&bytes), 0).expect("a face");
+    assert_eq!(face.hinter(), Hinter::Instructions);
+    for ppem in [9u8, 10, 12] {
+        let mut checked = 0;
+        for glyph in 0..=u16::MAX {
+            let Some(width) = widths.width(ppem, glyph) else {
+                continue;
+            };
+            let raster = face.rasterise(glyph, f32::from(ppem)).expect("an outline");
+            assert_eq!(
+                raster.advance,
+                Some(f32::from(width)),
+                "glyph {glyph} at {ppem} ppem"
+            );
+            checked += 1;
+        }
+        assert!(checked > 200, "{checked} glyphs at {ppem} ppem");
     }
 }

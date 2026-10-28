@@ -13,6 +13,11 @@
 //! widths off: [`whole_advance`] gives a glyph its face's device width
 //! ([`device_width`], from the face's `hdmx`) when there is one, else its
 //! linear advance rounded.
+//!
+//! Glyphs are rasterised with full hints, in both directions, by
+//! [`glyph_raster`](crate::glyph_raster): Charcoal through its own
+//! TrueType instructions, as the system's scaler drew it for QuickDraw, so
+//! its stems fill whole pixel columns.
 
 use std::sync::Arc;
 

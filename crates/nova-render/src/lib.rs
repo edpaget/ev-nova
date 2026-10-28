@@ -14,6 +14,9 @@
 //! - [`fonts`]: the font files text is drawn in ([`FontFaces`], with the
 //!   bundled [`FALLBACK_FONT`] and [`SERIF_FONT`]) and which face draws
 //!   each font ([`face_for`]).
+//! - [`glyph_raster`]: rasterises each glyph with full hints in both
+//!   directions ([`glyph_raster::HintedFace`]): Charcoal through its own
+//!   TrueType instructions, as the original's system scaler did.
 //! - [`batch`]: the [`Renderer`], which packs images into the atlas lazily
 //!   and turns a draw list into batches in draw order, keeping flight's
 //!   world layer ([`nova_view::DrawLayer`]) apart from the overlay: no
@@ -82,6 +85,7 @@ pub mod atlas;
 pub mod batch;
 pub mod enlarge;
 pub mod fonts;
+pub mod glyph_raster;
 pub mod gpu;
 pub mod images;
 pub mod present;

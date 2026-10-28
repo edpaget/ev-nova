@@ -58,6 +58,10 @@ ttf-parser = "0.25.1"
 # together.
 wgpu = "30.0.1"
 glyphon = "0.12.0"
+# nova-render's own glyph rasteriser, which hints Charcoal in both
+# directions: the versions swash 0.2.10 (under glyphon) already locks.
+skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
+zeno = { version = "0.3.3", default-features = false, features = ["eval", "std"] }
 winit = "0.30.13"
 pollster = "1.0.1"
 # The open panel that asks for the Nova Files and the startup alerts

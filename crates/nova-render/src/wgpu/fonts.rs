@@ -3,11 +3,13 @@
 //! measures it the same way. Both lay text out through
 //! [`lay_out_text`](super::layout::lay_out_text), with the attributes
 //! [`attrs`] gives and each face's [`DeviceWidths`], which [`Families`]
-//! keeps by the face's fontdb ID.
+//! keeps by the face's fontdb ID, beside the face's font file, which the
+//! renderer rasterises its glyphs from
+//! ([`hinted_text`](super::hinted_text)).
 
 use std::sync::Arc;
 
-use glyphon::cosmic_text::{CacheKeyFlags, FeatureTag, FontFeatures};
+use glyphon::cosmic_text::{FeatureTag, FontFeatures};
 use glyphon::fontdb::{Database, ID, Source};
 use glyphon::{Attrs, Family, FontSystem};
 use nova_data::fonts::DeviceWidths;
@@ -24,6 +26,8 @@ pub(super) struct Families {
     /// Each loaded face's fontdb ID and the widths its `hdmx` records
     /// (none for a face with no `hdmx`).
     widths: Vec<(ID, DeviceWidths)>,
+    /// Each loaded face's fontdb ID, its font file and its index in it.
+    sources: Vec<(ID, Arc<[u8]>, u32)>,
 }
 
 impl Families {
@@ -56,6 +60,12 @@ impl Families {
             .find(|(face, _)| *face == id)
             .map(|(_, widths)| widths)
     }
+
+    /// Each loaded face's fontdb ID, its font file and its index in that
+    /// file.
+    pub(super) fn sources(&self) -> &[(ID, Arc<[u8]>, u32)] {
+        &self.sources
+    }
 }
 
 /// The attributes both text users shape `family` with, so text is measured
@@ -65,22 +75,16 @@ impl Families {
 /// character and advances each by its own width: a pair is as wide as its
 /// two characters apart.
 ///
-/// Each glyph is rasterised starting on a whole physical pixel, as
-/// QuickDraw draws every glyph from a whole-pixel pen. The flag is read
-/// only when a glyph is rasterised. The layout already puts each glyph on
-/// a whole logical unit, so at a whole scale the flag moves nothing; at a
-/// fractional one it moves a glyph by at most half a pixel, never
-/// cumulatively.
+/// No cache-key flags are set: the renderer rasterises every glyph itself
+/// and starts it on a whole physical pixel, as QuickDraw draws every glyph
+/// from a whole-pixel pen ([`hinted_text`](super::hinted_text)).
 pub(super) fn attrs(family: Family<'_>) -> Attrs<'_> {
     let mut features = FontFeatures::new();
     features
         .disable(FeatureTag::KERNING)
         .disable(FeatureTag::STANDARD_LIGATURES)
         .disable(FeatureTag::CONTEXTUAL_LIGATURES);
-    Attrs::new()
-        .family(family)
-        .cache_key_flags(CacheKeyFlags::PIXEL_FONT)
-        .font_features(features)
+    Attrs::new().family(family).font_features(features)
 }
 
 /// A font system holding only `faces`, with the fallback as its
@@ -89,10 +93,15 @@ pub(super) fn attrs(family: Family<'_>) -> Attrs<'_> {
 pub(super) fn font_system(faces: &FontFaces) -> (FontSystem, Families) {
     let mut db = Database::new();
     let mut widths = Vec::new();
+    let mut sources = Vec::new();
     let mut load = |bytes: &Arc<[u8]>| {
         let ids = db.load_font_source(Source::Binary(Arc::new(Arc::clone(bytes))));
         let device = DeviceWidths::read(bytes);
         widths.extend(ids.iter().map(|&id| (id, device.clone())));
+        sources.extend(ids.iter().filter_map(|&id| {
+            let index = db.face(id)?.index;
+            Some((id, Arc::clone(bytes), index))
+        }));
         ids.first()
             .and_then(|&id| db.face(id))
             .and_then(|face| face.families.first())
@@ -112,6 +121,7 @@ pub(super) fn font_system(faces: &FontFaces) -> (FontSystem, Families) {
             fallback,
             serif,
             widths,
+            sources,
         },
     )
 }

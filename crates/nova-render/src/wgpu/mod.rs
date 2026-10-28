@@ -50,6 +50,10 @@
 //! through, so MetalFX's scale goes between the world's passes and the
 //! overlay's.
 //!
+//! Text is drawn as glyphon custom glyphs, rasterised with full hints by
+//! [`glyph_raster`](crate::glyph_raster) rather than by glyphon's own
+//! rasteriser, whose hinting ignores TrueType instructions in X.
+//!
 //! [`GlyphonMetrics`] is `nova_view`'s text-metrics port over the same
 //! font system the renderer draws with, so the widgets lay text out by the
 //! widths it will be drawn at. It needs no GPU.
@@ -62,6 +66,7 @@
 mod data;
 mod fonts;
 mod frame_commands;
+mod hinted_text;
 mod layout;
 #[cfg(target_os = "macos")]
 mod metal_fx;
