@@ -19,6 +19,8 @@
 //! - [`APPLE_EVENTS`]: the Apple events the game handles as plain data,
 //!   each event's class and ID and the [`Command`] it sends, and
 //!   [`AppleEvents`], their real handlers ([`AppleEvents::install`]).
+//! - [`abort_modal`]: ends the modal `AppKit` is running, such as the
+//!   startup's open panel, for a quit event that arrives while it is up.
 //!
 //! The adapters only build items, register handlers and forward picks and
 //! events. Quit, from the menu or as the quit Apple event (the Dock's
@@ -42,6 +44,7 @@ mod apple_event_handler;
 mod apple_events;
 mod bar;
 mod items;
+mod modal;
 
 pub use apple_event_handler::AppleEvents;
 pub use apple_events::{APPLE_EVENTS, AppleEvent, command_for, four_char_code};
@@ -50,3 +53,4 @@ pub use items::{
     Action, Command, Item, KeyEquivalent, MENUS, Menu, Modifiers, Role, Shortcut, Title,
     key_equivalents,
 };
+pub use modal::abort_modal;

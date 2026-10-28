@@ -94,11 +94,14 @@ impl AppleEvents {
     /// Registers a handler for each of [`APPLE_EVENTS`], calling
     /// `on_command` with each event's command.
     ///
-    /// It needs the main thread, after `NSApplication` has finished
-    /// launching (winit's `resumed`): `finishLaunching` installs `AppKit`'s
-    /// own handlers, the quit event's calling `terminate:`, so one
-    /// registered before then is replaced. Off the main thread it
-    /// registers nothing.
+    /// It needs the main thread. For the whole run, install it after
+    /// `NSApplication` has finished launching (winit's `resumed`):
+    /// `finishLaunching` installs `AppKit`'s own handlers, the quit
+    /// event's calling `terminate:`, so one registered before then is
+    /// replaced. Before launch there are no handlers at all, so one
+    /// installed for a while there (around the startup's open panel) works
+    /// until it is dropped, which should be before the app launches. Off
+    /// the main thread it registers nothing.
     ///
     /// `on_command` runs inside `AppKit`'s event dispatch: it should only
     /// pass the command on (to an event loop proxy, say), never run the
