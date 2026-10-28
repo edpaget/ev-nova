@@ -5,7 +5,8 @@
 //!
 //! It forwards: [`FlightSim::frame`] to `Session::fill_frame`,
 //! [`FlightSim::hover`] to `Session::hover`, [`FlightSim::coming_traffic`]
-//! to `Session::coming_traffic_ships`, [`FlightSim::death_descs`] to
+//! to `Session::coming_traffic_ships`, [`FlightSim::weapons`] to
+//! `Session::weapon_ids`, [`FlightSim::death_descs`] to
 //! `Session::sabotage_death_descs`,
 //! [`FlightSim::step`] to `Session::step`, with its collaborators and
 //! the catalog the view shared,
@@ -62,7 +63,7 @@ use nova_sim::{
     MissionInfo, News, NovaAi, NovaBoarding, NovaDisable, NovaLaw, OutfitId, Outfitter, Pilot,
     PlayerCommand, PlayerInfo, PlunderView, PointDefenceRule, Rules, SavedNav, Session, ShipId,
     ShipNaming, ShipRefusal, Shipyard, SimCatalog, StellarId, StepCollaborators, SystemId,
-    TagNames, Vec2,
+    TagNames, Vec2, WeaponId,
 };
 
 use nova_sim::{
@@ -497,6 +498,12 @@ impl<C> FlightSim for SessionFlight<C> {
             .map_or_else(|_| Vec::new(), Session::sabotage_death_descs)
     }
 
+    /// Forwards to `Session::weapon_ids`; a failed session has none.
+    fn weapons(&self) -> Vec<WeaponId> {
+        self.session()
+            .map_or_else(|_| Vec::new(), Session::weapon_ids)
+    }
+
     /// Forwards to `Session::coming_traffic_ships`, reading the catalog the
     /// view shared ([`SessionFlight::share_catalog`]); a failed session, or
     /// one never shared a catalog, brings none.
@@ -870,6 +877,7 @@ mod tests {
         assert_eq!(flight.galaxy(), None);
         assert_eq!(flight.hover(Vec2::ZERO, &DrawnBoxes::default()), None);
         assert_eq!(flight.coming_traffic(), []);
+        assert_eq!(flight.weapons(), []);
         assert_eq!(flight.death_descs(), Vec::<i16>::new());
     }
 

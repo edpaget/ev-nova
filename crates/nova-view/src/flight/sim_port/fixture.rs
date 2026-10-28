@@ -27,7 +27,7 @@ use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{ClassRow, Gauge, HailView, PlunderView, RadarGear, Reserves, Take};
 use nova_sim::{
     DescMovie, EscortClass, Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, ShipRef,
-    StellarId, StellarPick, Vec2,
+    StellarId, StellarPick, Vec2, WeaponId,
 };
 use nova_sim::{JumpReadiness, PlayerFate};
 
@@ -54,7 +54,8 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// arguments matter ([`FakeFlight::asked`]). It answers the hover as told
 /// ([`FakeFlight::set_hover`]), recording each ask
 /// ([`FakeFlight::hovers`]), and the coming traffic from its list
-/// ([`FakeFlight::set_coming_traffic`]). It loads each description with
+/// ([`FakeFlight::set_coming_traffic`]), and the weapons from its list
+/// ([`FakeFlight::set_weapons`]), failed or not. It loads each description with
 /// the next text queued ([`FakeFlight::queue_description`]), or, once
 /// the queue is empty, as its raw text unchanged, resolving nothing; it
 /// records each load ([`FakeFlight::descriptions_loaded`]). It gives the death
@@ -88,6 +89,7 @@ pub struct FakeFlight {
     hover: Option<Hover>,
     hovers: RefCell<Vec<(Vec2, DrawnBoxes)>>,
     coming: Vec<ShipId>,
+    weapons: Vec<WeaponId>,
     descriptions: VecDeque<String>,
     loaded: Vec<(Option<String>, Option<DescMovie>)>,
     death_descs: Vec<i16>,
@@ -313,6 +315,11 @@ impl FakeFlight {
         self.coming = ships;
     }
 
+    /// Lists `weapons` from now on ([`FlightSim::weapons`]).
+    pub fn set_weapons(&mut self, weapons: Vec<WeaponId>) {
+        self.weapons = weapons;
+    }
+
     /// Loads the next description not yet loaded as `text`.
     pub fn queue_description(&mut self, text: &str) {
         self.descriptions.push_back(text.to_owned());
@@ -524,6 +531,10 @@ impl FlightSim for FakeFlight {
 
     fn coming_traffic(&self) -> Vec<ShipId> {
         self.coming.clone()
+    }
+
+    fn weapons(&self) -> Vec<WeaponId> {
+        self.weapons.clone()
     }
 
     fn death_descs(&self) -> Vec<i16> {
@@ -1136,7 +1147,8 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///
 /// - **a failed flight shows nothing**: a flight that reports why it
 ///   could not start ([`FlightSim::failure`]) fills the default frame,
-///   refuses every command and drains nothing. Checked first.
+///   refuses every command, drains nothing and lists no weapons
+///   ([`FlightSim::weapons`]). Checked first.
 ///
 /// The error says which clause failed.
 pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
@@ -1199,7 +1211,7 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
 /// [`check_contract`]'s clause on a flight that could not start, `drained`
 /// what its first drain gave: it fills the default frame, refuses every
 /// command (a setting, which a flight that started always takes, among
-/// them) and drains nothing.
+/// them), drains nothing and lists no weapons.
 fn check_failed(sim: &mut impl FlightSim, drained: &[FlightEvent]) -> Result<(), String> {
     let Some(reason) = sim.failure().map(str::to_owned) else {
         return Ok(());
@@ -1219,6 +1231,12 @@ fn check_failed(sim: &mut impl FlightSim, drained: &[FlightEvent]) -> Result<(),
     if !answer.is_refused() {
         return Err(format!(
             "{clause}: failed ({reason}), a setting was answered {answer:?}"
+        ));
+    }
+    let weapons = sim.weapons();
+    if !weapons.is_empty() {
+        return Err(format!(
+            "{clause}: failed ({reason}), it listed weapons {weapons:?}"
         ));
     }
     Ok(())
@@ -1602,6 +1620,19 @@ mod tests {
             "{clause}"
         );
         assert!(clause.contains("answered Done"), "{clause}");
+    }
+
+    #[test]
+    fn a_failed_flight_that_lists_weapons_breaks_the_contract() {
+        let mut fake = FakeFlight::new();
+        fake.fail("no chär");
+        fake.set_weapons(vec![WeaponId(128)]);
+        let clause = check_contract(&mut fake).expect_err("broken");
+        assert!(
+            clause.starts_with("a failed flight shows nothing"),
+            "{clause}"
+        );
+        assert!(clause.contains("128"), "{clause}");
     }
 
     #[test]
@@ -2617,6 +2648,14 @@ mod tests {
         assert_eq!(fake.death_descs(), Vec::<i16>::new());
         fake.set_death_descs(vec![130, 131]);
         assert_eq!(fake.death_descs(), [130, 131]);
+    }
+
+    #[test]
+    fn the_fake_lists_the_weapons_it_is_given() {
+        let mut fake = FakeFlight::new();
+        assert_eq!(fake.weapons(), []);
+        fake.set_weapons(vec![WeaponId(128)]);
+        assert_eq!(fake.weapons(), [WeaponId(128)]);
     }
 
     #[test]

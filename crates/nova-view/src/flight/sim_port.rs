@@ -42,7 +42,7 @@ use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
     DescMovie, Good, HailView, HireList, Hover, JunkId, MapMarks, Market, MissionId, MissionInfo,
     News, OutfitId, Outfitter, PlayerCommand, PlayerInfo, PlunderView, SavedNav, ShipId,
-    ShipNaming, ShipRefusal, Shipyard, StellarId, SystemId, Vec2,
+    ShipNaming, ShipRefusal, Shipyard, StellarId, SystemId, Vec2, WeaponId,
 };
 
 #[cfg(any(test, feature = "fixture"))]
@@ -95,6 +95,13 @@ pub trait FlightSim: MapSource + CommSource + PortSource + NameSource + PilotSou
     /// (`nova_sim::Session::coming_traffic_ships`), whose sheets the view
     /// reads as play is entered. None by default: a sim with no traffic.
     fn coming_traffic(&self) -> Vec<ShipId> {
+        Vec::new()
+    }
+
+    /// The weapons the flight can fire, by ascending ID
+    /// (`nova_sim::Session::weapon_ids`), whose looks the view reads as it
+    /// opens. None by default: a sim with no weapons.
+    fn weapons(&self) -> Vec<WeaponId> {
         Vec::new()
     }
 
@@ -523,6 +530,7 @@ mod tests {
         assert_eq!(flight.load_description(Some(raw), None), raw, "unchanged");
         assert_eq!(flight.load_description(None, None), "");
         assert_eq!(flight.coming_traffic(), []);
+        assert_eq!(flight.weapons(), []);
         assert_eq!(flight.death_descs(), Vec::<i16>::new());
         assert_eq!(flight.failure(), None, "started");
     }

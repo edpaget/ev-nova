@@ -28,9 +28,10 @@ use nova_sim::{
 
 use crate::flight::catalog::GovtId;
 use crate::flight::fake_catalog::{
-    Always, BUY_TANK, FakeCatalog, Firing, ROCKET, RollsOne, Still, THRUST, boardable, catalog,
-    comm_strings, damaging, defending, errand, hiring, holding, killed_in, multi_jumping, on,
-    outfitting, placed, rolling_one, scripted, shipbuying, site, trading, trafficked,
+    Always, BLASTER, BUY_TANK, FakeCatalog, Firing, ROCKET, RollsOne, Still, THRUST, armed,
+    boardable, catalog, comm_strings, damaging, defending, errand, hiring, holding, killed_in,
+    multi_jumping, on, outfitting, placed, rolling_one, scripted, shipbuying, site, trading,
+    trafficked,
 };
 use crate::flight::sim_port::fixture::check_contract;
 use crate::flight::sim_port::{
@@ -865,6 +866,15 @@ fn a_real_flights_death_descs_are_its_sessions() {
     let descs = flight.session().expect("flying").sabotage_death_descs();
     assert!(!descs.is_empty(), "sabotaged");
     assert_eq!(flight.death_descs(), descs);
+}
+
+#[test]
+fn a_real_flights_weapons_are_its_sessions() {
+    let catalog = shared(armed(0, &[BLASTER]));
+    let flight = SessionFlight::start(&catalog);
+    let ids = flight.session().expect("flying").weapon_ids();
+    assert!(!ids.is_empty(), "armed");
+    assert_eq!(flight.weapons(), ids);
 }
 
 // The comm dialog.
