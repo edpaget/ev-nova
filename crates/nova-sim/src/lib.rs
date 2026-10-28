@@ -606,9 +606,9 @@ pub use session::{
     Departure, DeskReading, ESCAPE_POD_SHIP, Hailed, HookRules, HoverPlace, InfoRow, InterfaceLoad,
     LandPress, LastRefresh, MapClicked, MapPress, MissionComputer, MissionInfo, MissionInfoPress,
     MissionShown, MissionText, MissionTextKind, NotOffered, OfferPrompt, PersonQuote, RefuseShown,
-    RelocateRefusal, SavedNav, ScriptEffectRules, Session, SessionEvent, SessionSetup, Settled,
-    ShipChangeRules, SimCatalog, StellarPick, StepCollaborators, TAKEOFF_GRACE_TICKS, TextBar,
-    VenueOffer,
+    RelocateRefusal, SavedNav, SavedOpening, ScriptEffectRules, Session, SessionEvent,
+    SessionSetup, Settled, ShipChangeRules, SimCatalog, StellarPick, StepCollaborators,
+    TAKEOFF_GRACE_TICKS, TextBar, VenueOffer,
 };
 pub use ship_layer::ShipLayer;
 pub use shipyard::{
