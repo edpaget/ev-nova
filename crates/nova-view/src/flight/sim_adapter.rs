@@ -1031,8 +1031,11 @@ mod tests {
             chance: SharedChance::new(chance),
             ..Collaborators::default()
         });
-        assert_eq!(flight.offer_gap(), 37, "30 and the draw of 7");
-        assert_eq!(sevens.borrow().0, [30]);
+        let mut own = Sevens::default();
+        let expected = nova_sim::mission::offer_gap(&mut own);
+        assert_eq!(flight.offer_gap(), expected, "the gap nova-sim draws");
+        assert!(!own.0.is_empty(), "the gap draws");
+        assert_eq!(sevens.borrow().0, own.0, "on the flight's chance");
     }
 
     #[test]
@@ -1048,12 +1051,16 @@ mod tests {
     #[test]
     fn a_failed_flight_loads_a_description_for_a_new_pilot() {
         let mut flight = failed();
+        let raw = Some("{b5 \"set\" \"clear\"}, sir.");
         assert_eq!(
-            flight.load_description(Some("{b5 \"set\" \"clear\"}, sir."), None),
-            "clear, sir.",
+            flight.load_description(raw, None),
+            Session::fresh_description(raw),
             "resolved by nova-sim"
         );
-        assert_eq!(flight.load_description(None, None), "");
+        assert_eq!(
+            flight.load_description(None, None),
+            Session::fresh_description(None)
+        );
     }
 
     /// Strings that turn the `l33t` mode on, whose letters a loaded
@@ -1221,10 +1228,8 @@ mod tests {
             ..nova_sim::fixture::pilot_catalog()
         });
         let flight = SessionFlight::start(&catalog);
-        assert_eq!(
-            flight.failure(),
-            Some(nova_sim::StartError::NoCharacter.to_string().as_str())
-        );
+        let why = Session::start(&*catalog).expect_err("no chär").to_string();
+        assert_eq!(flight.failure(), Some(why.as_str()));
     }
 
     #[test]
@@ -1278,14 +1283,13 @@ mod tests {
     fn beginning_begins_the_session_on_the_catalog_shared() {
         let catalog = shared();
         let mut flight = SessionFlight::start(&catalog);
-        let mut expected = flight.session().expect("started").clone();
+        let before = flight.session().expect("started").clone();
+        let mut expected = before.clone();
+        // The flight's chance by default never fires, as `NeverFires`.
         expected.begin(&*catalog, &mut nova_sim::NeverFires);
+        assert_ne!(expected, before, "beginning changes the session");
         assert!(flight.begin());
-        assert_eq!(flight.session().expect("started").pilot(), expected.pilot());
-        assert_eq!(
-            flight.session().expect("started").player().position,
-            Vec2::new(50.0, 50.0)
-        );
+        assert_eq!(flight.session().ok(), Some(&expected), "as by hand");
         assert!(flight.enter_game());
     }
 
@@ -1294,9 +1298,8 @@ mod tests {
         let catalog = shared();
         let flight = SessionFlight::start(&catalog);
         let session = flight.session().expect("started");
-        assert!(flight.may_save());
         assert_eq!(flight.may_save(), session.may_save());
-        assert!(!flight.is_dying());
+        assert_eq!(flight.is_dying(), !session.may_save());
         assert_eq!(
             flight.deletes_pilot_on_ending_play(),
             session.deletes_pilot_on_ending_play()
@@ -1315,9 +1318,13 @@ mod tests {
         let catalog = nova_sim::fixture::pilot_catalog();
         let mut session = Session::start(&catalog).expect("starts");
         nova_sim::fixture::set_player_condition(&mut session, nova_sim::Condition::Destroyed);
-        let flight: SessionFlight<()> = session.into();
-        assert!(!flight.may_save());
-        assert!(flight.is_dying());
+        assert!(
+            !session.may_save(),
+            "precondition: the session may not save"
+        );
+        let flight: SessionFlight<()> = session.clone().into();
+        assert_eq!(flight.may_save(), session.may_save(), "the session's");
+        assert!(flight.is_dying(), "dying where the session may not save");
     }
 
     #[test]
@@ -1355,16 +1362,20 @@ mod tests {
     fn a_move_is_the_sessions_relocation_with_its_refusal_mapped() {
         let catalog = shared();
         let mut flight = SessionFlight::start(&catalog);
-        let before = flight.session().expect("started").clone();
+        let mut by_hand = flight.session().expect("started").clone();
+        let expected = by_hand
+            .relocate(&*catalog, SystemId(131), StellarId(140))
+            .map_err(refusal);
+        assert!(expected.is_err(), "precondition: the session refuses it");
         assert_eq!(
             flight.edit(PilotEdit::MoveTo {
                 system: SystemId(131),
                 stellar: StellarId(140)
             }),
-            Err(EditRefusal::InFlight),
-            "in flight"
+            expected,
+            "the session's refusal, mapped"
         );
-        assert_eq!(flight.session().ok(), Some(&before), "unchanged");
+        assert_eq!(flight.session().ok(), Some(&by_hand));
     }
 
     #[test]

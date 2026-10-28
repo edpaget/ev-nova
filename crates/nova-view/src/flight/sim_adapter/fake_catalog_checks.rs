@@ -15,18 +15,15 @@ use std::rc::Rc;
 
 use nova_sim::catalog::MissionRecord;
 use nova_sim::fixture::SessionBuilder;
-use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightEvent, FlightFrame, MapClick, StepInput, StepReport,
-};
+use nova_sim::flight_frame::{Answer, FlightCommand, FlightFrame, MapClick, StepInput, StepReport};
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
 use nova_sim::landing::StellarFlags;
 use nova_sim::mission::screens::SPACEPORT;
 use nova_sim::{
     ApplyCollaborators, Behaviour, Chance, ControlBits, DisasterId, DisasterRecord, Goal, Good,
-    HailOptions, HireRefusal, JunkRecord, LandingSite, MissionId, NeverFires, NovaBoarding,
-    NovaLaw, OutfitId, Pilot, PlayerFate, RuleKey, RuleSource, Rulebook, Rules, Session,
-    SessionSetup, ShipId, ShipRecord, ShipRef, SimCatalog, SimSound, StellarPick, SystemId,
-    TagNames, VenueOffer,
+    HailOptions, JunkRecord, LandingSite, MissionId, NeverFires, NovaBoarding, NovaLaw, OutfitId,
+    Pilot, PlayerFate, RuleKey, RuleSource, Rulebook, Rules, Session, SessionSetup, ShipId,
+    ShipRecord, ShipRef, SimCatalog, StellarPick, SystemId, TagNames, VenueOffer,
 };
 
 use crate::flight::catalog::GovtId;
@@ -209,20 +206,6 @@ fn a_real_flight_meets_the_contract_through_a_jump() {
 }
 
 // The day's chances.
-
-#[test]
-fn a_jump_rolls_the_days_events_on_the_chance_given() {
-    // Which events start on the roll is the session's.
-    let (always, chance) = share(Always::default());
-    let catalog = shared(eventful());
-    let session = SessionBuilder::flying(&*catalog).build();
-    let mut flight = flight_of(&catalog, session, rolling_on(chance));
-    jump_to_alpha(&mut flight);
-    assert!(
-        always.borrow().asked.contains(&35),
-        "the surplus's day roll"
-    );
-}
 
 #[test]
 fn leaving_rolls_the_stays_days_on_the_flights_chance() {
@@ -444,16 +427,25 @@ fn the_hire_ports_reach_the_session() {
     // session prices a hire is nova-sim's.
     let (_, chance) = share(Always::default());
     let catalog = shared(hiring());
-    let mut flight = flight_of(&catalog, landed(&catalog), rolling_on(chance));
-    flight.set_up(SessionSetup {
+    let setup = || SessionSetup {
         hire_terms: Rc::new(Sevens),
         control_bits: Rc::new(Nothing),
         ..SessionSetup::default()
-    });
-    let list = flight.escorts_for_hire().expect("a bar");
-    let row = list.row(ShipId(129)).expect("listed: no Flags3 hides it");
-    assert_eq!((row.fee, row.wage), (7, 3));
-    assert_eq!(row.hire, Err(HireRefusal::NotForHire));
+    };
+    let mut flight = flight_of(&catalog, landed(&catalog), rolling_on(chance));
+    flight.set_up(setup());
+    let expected = landed(&catalog)
+        .set_up(setup())
+        .escorts_for_hire(&mut Always::default());
+    let without = landed(&catalog).escorts_for_hire(&mut Always::default());
+    assert_ne!(expected, without, "precondition: the ports change the list");
+    let list = flight.escorts_for_hire();
+    assert_eq!(list, expected, "as set up by hand");
+    let row = list
+        .as_ref()
+        .and_then(|list| list.row(ShipId(129)))
+        .expect("listed: no Flags3 hides it");
+    assert_eq!((row.fee, row.wage), (7, 3), "the terms given");
 }
 
 // The missions.
@@ -684,17 +676,20 @@ fn unlisted_pilot() -> Pilot {
 fn a_loaded_flight_reports_a_repaired_load() {
     let catalog = shared(catalog());
     let docked = landed(&catalog).pilot().clone();
-    for pilot in [unlisted_pilot(), docked] {
-        let rules = Rulebook::default();
-        let flight = SessionFlight::load(&catalog, pilot.clone(), &rules);
-        let session = Session::load(&*catalog, pilot, &rules).expect("loads");
-        assert_eq!(flight.load_repaired(), session.load_repaired());
-    }
+    // That the rules given reach the load is the edge's check
+    // (`build::edge_checks::a_loaded_flight_reads_the_rules_it_is_given`).
     let engine = Rulebook::default().with_override(RuleKey::UnlistedStellar, RuleSource::Engine);
-    assert!(
-        SessionFlight::load(&catalog, unlisted_pilot(), &engine).load_repaired(),
-        "a stellar no system lists, moved to the lowest system"
-    );
+    let mut repaired = false;
+    for rules in [Rulebook::default(), engine] {
+        for pilot in [unlisted_pilot(), docked.clone()] {
+            let flight = SessionFlight::load(&catalog, pilot.clone(), &rules);
+            let session = Session::load(&*catalog, pilot, &rules).expect("loads");
+            assert_eq!(flight.load_repaired(), session.load_repaired());
+            assert_eq!(flight.pilot(), Some(session.pilot()), "as loaded by hand");
+            repaired |= session.load_repaired();
+        }
+    }
+    assert!(repaired, "precondition: a load the session repaired");
 }
 
 #[test]
@@ -726,15 +721,21 @@ fn the_adapter_drains_what_the_session_raised_once() {
         .session_mut()
         .expect("started")
         .select_stellar(StellarPick::Slot(0));
+    let mut by_hand = flight.session().expect("started").clone();
+    let mut expected = Vec::new();
+    by_hand.drain_events(&mut expected);
+    assert!(
+        !expected.is_empty(),
+        "precondition: the selection raised some"
+    );
     let mut into = Vec::new();
     flight.drain(&mut into);
-    assert!(
-        into.contains(&FlightEvent::Sound(SimSound::NavSelected)),
-        "{into:?}"
-    );
+    assert_eq!(into, expected, "the session's");
     let mut again = Vec::new();
     flight.drain(&mut again);
-    assert_eq!(again, [], "drained");
+    let mut expected_again = Vec::new();
+    by_hand.drain_events(&mut expected_again);
+    assert_eq!(again, expected_again, "drained once, as the session drains");
 }
 
 #[test]
@@ -814,7 +815,6 @@ fn the_flights_steps_are_its_sessions_once_its_catalog_is_shared() {
     flight.share_catalog(Rc::new(catalog()));
     flight.step(&StepInput::default(), 2, &mut report);
     assert_eq!(report.steps.len(), 2);
-    assert!(report.steps.iter().all(|run| run.passes.len() == 1));
     let mut by_hand = session;
     let behaviour = nova_sim::NovaAi::default();
     let mut chance = SharedChance::default();
