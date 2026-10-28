@@ -63,10 +63,9 @@ mod tests {
         let (core, warning) = game_audio::<_, String>(Ok(audio));
         assert_eq!(warning, None);
         let mut core = core.expect("a core");
-        core.update(
-            Some(Showing::MainMenu),
-            &[Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 })],
-        );
+        let jump = SimSound::JumpBegan { rate: 0x1_0000 };
+        let cue = jump.cue().expect("the warp-up plays");
+        core.update(Some(Showing::MainMenu), &[Sound::Sim(jump)]);
         assert_eq!(
             *log.borrow(),
             [
@@ -74,9 +73,9 @@ mod tests {
                     volume: AudioSettings::default().music_volume
                 },
                 AudioCommand::Play {
-                    sound: nova_data::SoundId(128),
+                    sound: cue.sound,
                     volume: AudioSettings::default().effects_volume,
-                    priority: nova_audio::priority::JUMP,
+                    priority: nova_audio::Priority::new(cue.priority),
                 },
             ]
         );

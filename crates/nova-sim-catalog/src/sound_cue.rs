@@ -94,6 +94,12 @@ impl SimSound {
     /// `snd ` is an engine sound, and the original thrusts in silence); the
     /// take-off, silent in the original; and the halts. The `snd ` names
     /// are the stock resources' own (all 227 are in `Nova Sounds.ndat`).
+    /// The community *EV Nova Resource ID Guide* (github.com/andrews05/evstuff,
+    /// `guides/resourceidguide.html`, "snd IDs"), which lists the engine's
+    /// fixed sounds, agrees: "128 Warp up", "130 Warp out" and "151 Beep 2:
+    /// ... request/grant landing clearance" (the clearance beeps are
+    /// [`SimSound::TrafficControl`]'s), and it reserves no ID for an engine
+    /// or a take-off sound.
     ///
     /// Every variant has its arm, with no wildcard: a new sound decides
     /// here what it plays.

@@ -2364,6 +2364,20 @@ mod tests {
         }
     }
 
+    /// What `sound` plays at the default effects volume: its cue's `snd `
+    /// at its priority.
+    fn cued(sound: Sound) -> AudioCommand {
+        let cue = match sound {
+            Sound::Sim(sim) => sim.cue(),
+            Sound::Ui(_) | Sound::Combat(_) => None,
+        }
+        .unwrap_or_else(|| panic!("{sound:?} plays a cue"));
+        play(cue.sound.0, nova_audio::Priority::new(cue.priority))
+    }
+
+    /// The warp-up the sounding screen raises.
+    const JUMPED: Sound = Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 });
+
     /// The music started at its default volume.
     fn music() -> AudioCommand {
         AudioCommand::StartMusic {
@@ -2375,7 +2389,7 @@ mod tests {
     fn sounding(window: &FakeWindow) -> (App<NoImages, SoundingScreen>, AudioLog) {
         let screen = SoundingScreen {
             showing: Showing::MainMenu,
-            sounds: vec![Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 })],
+            sounds: vec![JUMPED],
         };
         let audio = RecordingAudio::new();
         let log = audio.log();
@@ -2387,10 +2401,7 @@ mod tests {
     fn attaching_audio_takes_in_the_screen_and_its_sounds_at_once() {
         let window = FakeWindow::new((1024, 768), 1.0);
         let (app, log) = sounding(&window);
-        assert_eq!(
-            *log.borrow(),
-            [music(), play(128, nova_audio::priority::JUMP)]
-        );
+        assert_eq!(*log.borrow(), [music(), cued(JUMPED)]);
         assert_eq!(app.screen().sounds, [], "taken");
     }
 
@@ -2481,8 +2492,7 @@ mod tests {
             if std::mem::take(&mut self.held) {
                 self.ran += 1;
                 self.logged_when_run = self.log.borrow().clone();
-                self.sounds
-                    .push(Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 }));
+                self.sounds.push(JUMPED);
             }
         }
 
@@ -2547,7 +2557,7 @@ mod tests {
             [
                 play(600, nova_audio::priority::BUTTON),
                 play(601, nova_audio::priority::BUTTON),
-                play(128, nova_audio::priority::JUMP)
+                cued(JUMPED)
             ],
             "what it ran sounded in the same pass"
         );

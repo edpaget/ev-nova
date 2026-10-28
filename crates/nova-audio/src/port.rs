@@ -44,8 +44,9 @@ impl Default for Volume {
 ///
 /// The original's callers use 1 (most beeps) to 32000 (the warp-up and
 /// the spaceport ambient's param blocks); [`crate::priority`] holds each
-/// event's. A priority of 0 is 1, as `ST_PlaySoundParam` makes it
-/// (@0xe3df1-0xe3df8).
+/// interface event's, and a flight session's sound carries its own
+/// ([`SimSound::cue`](nova_view::sound::SimSound::cue)). A priority of 0
+/// is 1, as `ST_PlaySoundParam` makes it (@0xe3df1-0xe3df8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Priority(u16);
 

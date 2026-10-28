@@ -5,10 +5,14 @@
 //! - [`port`]: the [`Audio`] port, which takes [`AudioCommand`]s (play a
 //!   `snd ` once, loop the engine, start or stop the music, change a
 //!   [`Volume`]).
-//! - [`table`]: the [`SoundTable`] of which `snd ` each event plays, and
-//!   the original game's, [`SoundTable::ORIGINAL`].
-//! - [`priority`]: the [`Priority`] each sound event plays at, the
-//!   original's own from its call site.
+//! - [`table`]: the [`SoundTable`] of which `snd ` each interface event
+//!   plays and the engine loop, and the original game's,
+//!   [`SoundTable::ORIGINAL`].
+//! - [`priority`]: the [`Priority`] each interface event plays at, the
+//!   original's own from its call site. A flight session's sound says its
+//!   own `snd ` and priority
+//!   ([`SimSound::cue`](nova_view::sound::SimSound::cue)), and the core
+//!   plays that.
 //! - [`voices`]: the [`VoiceList`](voices::VoiceList), which decides which
 //!   sounds play when more are asked for than there are voices, by the
 //!   original's priority and loudness.

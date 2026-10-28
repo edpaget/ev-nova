@@ -68,6 +68,7 @@ use nova_view::galaxy::buttons::DONE_LABEL;
 use nova_view::galaxy::dialog::map_area;
 use nova_view::galaxy::map::{BRIGHT_GREEN, ENTER_LABEL};
 use nova_view::menu::MenuChoice;
+use nova_view::sound::SimSound;
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::{Key, MouseButton, Point};
 
@@ -1060,23 +1061,27 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
     assert_eq!(plays, [warp_up(), warp_out(), warp_out()]);
 }
 
-/// The warp-up, `snd ` 128, pitched by the fixture ship's warp factor,
-/// 1.3: at 65536 / 1.3 (`_AdjustWarpSoundSpeed` @0x5ecc).
+/// The warp-up's cue, pitched by the fixture ship's warp factor, 1.3: at
+/// 65536 / 1.3 (`_AdjustWarpSoundSpeed` @0x5ecc).
 fn warp_up() -> AudioCommand {
+    let cue = SimSound::JumpBegan { rate: 50_412 }
+        .cue()
+        .expect("the warp-up plays");
     AudioCommand::PlayAtRate {
-        sound: nova_data::SoundId(128),
+        sound: cue.sound,
         volume: AudioSettings::default().effects_volume,
-        priority: nova_audio::priority::JUMP,
-        rate: nova_audio::port::PlaybackRate::from_fixed(50_412),
+        priority: nova_audio::Priority::new(cue.priority),
+        rate: nova_audio::port::PlaybackRate::from_fixed(cue.rate),
     }
 }
 
-/// The warp-out, `snd ` 130.
+/// The warp-out's cue.
 fn warp_out() -> AudioCommand {
+    let cue = SimSound::Arrived.cue().expect("the warp-out plays");
     AudioCommand::Play {
-        sound: nova_data::SoundId(130),
+        sound: cue.sound,
         volume: AudioSettings::default().effects_volume,
-        priority: nova_audio::priority::ARRIVAL,
+        priority: nova_audio::Priority::new(cue.priority),
     }
 }
 

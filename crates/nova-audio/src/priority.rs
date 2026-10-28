@@ -1,34 +1,20 @@
-//! The priority each sound event plays at: the original's own, from the
-//! call site that plays it (`_PlaySound`'s and `ST_PlaySound`'s second
+//! The priority each interface sound plays at: the original's own, from
+//! the call site that plays it (`_PlaySound`'s and `ST_PlaySound`'s second
 //! argument, or a param block's +0x14), pinned by tests. The voice list
 //! ([`crate::voices`]) plays by it.
 //!
 //! [`SoundTable`](crate::SoundTable) says which `snd ` each event plays;
 //! this says how much it matters. A fight's sounds carry their own
-//! priority ([`CombatSound::priority`](nova_view::sound::CombatSound)).
+//! priority ([`CombatSound::priority`](nova_view::sound::CombatSound)),
+//! and a flight session's sounds their own cue
+//! ([`SimSound::cue`](nova_view::sound::SimSound::cue)).
 //!
-//! Two events model sites that disagree, and play at the priority of the
-//! site they model most often: [`REFUSED`] and [`PORT_AMBIENT`] (rdm task
+//! [`PORT_AMBIENT`] models sites that disagree, and plays at the priority
+//! of the site it models most often (rdm task
 //! `refused-and-port-ambient-priorities-by-site`).
 
 use crate::port::Priority;
 
-/// The landing beep, `_beepSnd[1]` at 1: `_PlayerLandOnStellar`'s at an
-/// uninhabited stellar (@0x632ef) alone. The dock request's @0x67a69 and
-/// @0x67ec6 are [`TRAFFIC_CONTROL`]'s, and @0x676aa, @0x676fe and
-/// @0x67e8f are [`REFUSED`]'s.
-pub const LANDING: Priority = Priority::new(1);
-/// A take-off sound. The original takes off in silence, so no site gives
-/// one: the lowest.
-pub const TAKE_OFF: Priority = Priority::new(1);
-/// The warp-up, `_warpUpSnd[0]` or `[1]`: the warp param block
-/// `_LoadSounds` fills with 0x7d00 (@0x1c18e), played by
-/// `ST_PlaySoundParam` @0x6b690.
-pub const JUMP: Priority = Priority::new(32_000);
-/// The warp-out, `_warpOutSnd`: `_HandlePlayer` @0x6bc08 and @0x6c706,
-/// the hypergate @0x63e61, the wormhole @0x64447, and `_WarpUpCallback`
-/// @0x32049.
-pub const ARRIVAL: Priority = Priority::new(50);
 /// A main-menu button's click, 600 and 601: `_PlayMainScreenClickSound`
 /// @0x177d9, @0x17812, and `_TrackMainScreenButtons` @0x19687, @0x19974,
 /// @0x19ac4, @0x19c38.
@@ -40,18 +26,9 @@ pub const ROW_SLIDE: Priority = Priority::new(50);
 /// The alert. The original's is `SysBeep`, outside the voice list, so no
 /// site gives one: the lowest.
 pub const ALERT: Priority = Priority::new(1);
-/// A `Q`'s message in flight, `_beepSnd[4]`: `_PlayGame` @0x4657a.
-pub const SCRIPT_MESSAGE: Priority = Priority::new(1);
-/// A `P` set operator's sound: `_PlayGame` plays it on the one mission
-/// handle with `PlaySound(.., 0x32, ..)` @0x46343. The Bible's reading,
-/// played at once over the rest, has no site of its own and plays the
-/// same sound at the same priority.
-pub const SCRIPT: Priority = Priority::new(50);
 /// The escort menu opening or closing, `_beepSnd[0]`: `_HandlePlayer`
 /// @0x6deb4, @0x6e04d.
 pub const ESCORT_MENU: Priority = Priority::new(1);
-/// New escort orders, `_beepSnd[1]`: `_IssueNewEscortCommand` @0x665e1.
-pub const ESCORTS_COMMANDED: Priority = Priority::new(1);
 /// An escort group selected, `_beepSnd[2]`: `_HandlePlayer` @0x6e149.
 pub const ESCORT_GROUP: Priority = Priority::new(1);
 /// "You don't have any escorts.", `_beepSnd[3]`: `_HandlePlayer`
@@ -63,24 +40,6 @@ pub const BUY_REFUSED: Priority = Priority::new(1);
 /// The main screen's E refused, `_beepSnd[3]`: `_MainScreenChoice`
 /// @0x1aaac.
 pub const ENTER_REFUSED: Priority = Priority::new(10);
-/// An escort repaired, `_beepSnd[4]`: `_HandleShip` @0x33bd4.
-pub const ESCORT_REPAIRED: Priority = Priority::new(8);
-/// The player's propulsion repaired, `_beepSnd[4]`: `_HandlePlayer`'s
-/// `PlaySound(.., 1, ..)` @0x68c4c, played @0x68c67.
-pub const PROPULSION_REPAIRED: Priority = Priority::new(1);
-/// The Red Alert, `_redAlertSnd`: `_HandlePlayer` @0x68cff.
-pub const RED_ALERT: Priority = Priority::new(5);
-/// The player cloaking or uncloaking, `cloakSnd[1]` / `cloakSnd[0]`:
-/// `_DoShipCloak` @0xdef3, `_DoShipUncloak` @0xdfd0.
-pub const CLOAK: Priority = Priority::new(8);
-/// Cargo jettisoned, `_beepSnd[4]`: `_JettisonCargo` @0x3e33d.
-pub const JETTISON: Priority = Priority::new(1);
-/// A scan failing a mission, `_beepSnd[1]`: `_ScanPlayer`'s
-/// `ST_PlaySound(.., 1, ..)` @0x7e740.
-pub const SCAN_FAILED: Priority = Priority::new(1);
-/// A scan catching the player smuggling, `_beepSnd[4]`: `_ScanPlayer`'s
-/// `ST_PlaySound(.., 1, ..)` @0x7ea5d, @0x7ee95, @0x7f356.
-pub const SMUGGLING: Priority = Priority::new(1);
 /// The news dialog or the mission info screen opening, `_beepSnd[1]`:
 /// `_DoNewsDialog` @0x47f36, `_DoMissionInfoDialog` @0x9e1d5.
 pub const NEWS_OPEN: Priority = Priority::new(1);
@@ -90,114 +49,6 @@ pub const NEWS_CLOSE: Priority = Priority::new(1);
 /// A floating map zoom, `_beepSnd[0]`: `_HandlePlayer` @0x7103a,
 /// @0x710bc.
 pub const FLOATING_MAP_ZOOM: Priority = Priority::new(1);
-/// A fleet's arrival quote, `_beepSnd[4]`: `_HyperSpawnFleet` @0x426bb.
-pub const FLEET_QUOTE: Priority = Priority::new(1);
-/// A ship's distress call, `_beepSnd[4]`: `_AICallForHelp`'s
-/// `PlaySound(.., 1, ..)` @0x83109.
-pub const CALL_FOR_HELP: Priority = Priority::new(1);
-/// An interceptor's pre-scan hail, `_beepSnd[4]`: `_InterceptorAI`'s
-/// `ST_PlaySound(.., 1, ..)` @0x8cfbc.
-pub const SCAN_HAIL: Priority = Priority::new(1);
-/// A reinforcement fleet approaching, `_beepSnd[4]`:
-/// `_HandleReinforcements`' `PlaySound(.., 1, ..)` @0x3924b.
-pub const REINFORCEMENTS: Priority = Priority::new(1);
-/// A person's offer on its hail, `_beepSnd[4]`:
-/// `_HandlePlayerCommunication` @0x6223d.
-pub const HAIL_OFFER: Priority = Priority::new(1);
-/// A person's hail quote, `_beepSnd[4]`: `_ShowPersonHailQuote`
-/// @0x445ad.
-pub const HAIL_QUOTE: Priority = Priority::new(1);
-/// The escort dialog opened, `_beepSnd[4]`: `_DoEscortDialog` @0x9524b.
-pub const ESCORT_DIALOG_OPENED: Priority = Priority::new(1);
-/// The escort dialog closed, `_beepSnd[2]`: `_DoEscortDialog` @0x955fc.
-pub const ESCORT_DIALOG_CLOSED: Priority = Priority::new(1);
-/// A nav key, `_beepSnd[0]`: `_HandlePlayer` @0x69b19, @0x69ebc,
-/// @0x6a6c1.
-pub const NAV_SELECTED: Priority = Priority::new(1);
-/// Hyper Select, or a click on the floating map, `_beepSnd[2]`:
-/// `_HandlePlayer` @0x69c89, @0x6a75d.
-pub const HYPER_SELECTED: Priority = Priority::new(1);
-/// A target key or click, `_beepSnd[2]`: `_HandlePlayer` @0x69f6f,
-/// @0x6aa55, @0x6a585.
-pub const TARGET_SELECTED: Priority = Priority::new(1);
-/// The ship target let go, `_beepSnd[0]`: `_HandlePlayer` @0x69a7d,
-/// @0x6a585.
-pub const TARGET_CLEARED: Priority = Priority::new(1);
-/// Weapon Select picking a secondary, or Weapon Safety letting go of one,
-/// `_beepSnd[2]`: `_HandlePlayer` @0x6acf1, @0x6ae1b.
-pub const SECONDARY_SELECTED: Priority = Priority::new(1);
-/// A tutorial hint, `_beepSnd[4]`: `_HandlePlayer` @0x70a1c, @0x70c12,
-/// @0x70dab, @0x70e59.
-pub const TUTORIAL_HINT: Priority = Priority::new(1);
-/// The player's ship downed, `_beepSnd[1]`: `_DamageShip` @0x3b11e,
-/// @0x3b221.
-pub const SHIP_DOWNED: Priority = Priority::new(1);
-/// A mission failed by the player's ship downed, `_beepSnd[1]`:
-/// `_DamageShip` @0x3b04e, @0x3b2f1.
-pub const DOWNED_MISSION_FAILED: Priority = Priority::new(1);
-/// A pirate's cargo line, `_beepSnd[1]`: `_AIPlunderShipContents`
-/// @0x84758.
-pub const CARGO_STOLEN: Priority = Priority::new(1);
-/// A pirate's stolen-escort line, `_beepSnd[1]`: `_AIPlunderShipContents`
-/// @0x84908.
-pub const SHIP_STOLEN: Priority = Priority::new(1);
-/// A press in the plunder dialog that does something, `_beepSnd[2]`:
-/// `_DoPlunderDialog` @0x935cb, @0x93681, @0x937a0, @0x939b9, @0x93b3b,
-/// @0x93f10, @0x93f77, @0x94095, @0x94368, @0x933fe.
-pub const PLUNDER_BEEP: Priority = Priority::new(1);
-/// Either assignment button, `_beepSnd[1]`:
-/// `_DoCapturedShipAssignmentDialog` @0x5b56b, @0x5b66b.
-pub const CAPTURE_ASSIGNED: Priority = Priority::new(1);
-/// A repairer's "Repairs complete" line, `_beepSnd[1]`:
-/// `_LowLevelAIHandler` @0x86e0a.
-pub const REPAIRS_COMPLETE: Priority = Priority::new(1);
-/// A refueller's "Energy transfer complete" line, `_beepSnd[1]`:
-/// `_HighLevelAIHandler` @0x8f5b0.
-pub const ENERGY_TRANSFER_COMPLETE: Priority = Priority::new(1);
-/// A mission's special ship lost, `_beepSnd[1]`: `_HandleShipDisplay`
-/// @0x2db5a, `_DamageShip` @0x3af11.
-pub const MISSION_SHIP_LOST: Priority = Priority::new(1);
-/// A mission's special ship boarded, `_beepSnd[4]`:
-/// `_HandlePlayerBoardAttempt` @0x6556b, @0x656ee.
-pub const MISSION_SHIP_BOARDED: Priority = Priority::new(8);
-/// Traffic control's line, `_beepSnd[1]`: `_HandlePlayerDockRequest`
-/// @0x67a69, @0x67ec6, `_HandlePlayerDockApproach` @0x649a9.
-pub const TRAFFIC_CONTROL: Priority = Priority::new(1);
-/// The klaxon, `_klaxxonSnd`: `_HandlePlayer` @0x6f227.
-pub const KLAXON: Priority = Priority::new(15);
-/// An escort's voice clip: `_HandleVoiceSound`'s `PlaySound(handle, 15,
-/// …)` @0x31f7a.
-pub const VOICE: Priority = Priority::new(15);
-/// The eject, `_escapePodSnd`: `_HandlePlayer` @0x6f920.
-pub const EJECT: Priority = Priority::new(50);
-/// A sabotage outfit going off, `_explodSnd[0]`: `_HandlePlayer`
-/// @0x69375.
-pub const ONBOARD_EXPLOSION: Priority = Priority::new(100);
-/// The fighters' "Wait for me!", `_beepSnd[4]`: `_HandlePlayer`'s
-/// `PlaySound(.., 50, ..)` @0x6b542-0x6b565.
-pub const WAIT_FOR_ME: Priority = Priority::new(50);
-/// A collapsed pre-jump, `_beepSnd[1]`: `_HandlePlayer` @0x68aaf.
-pub const JUMP_COLLAPSED: Priority = Priority::new(50);
-/// The shared refusal beep, `_beepSnd[3]`. Most of the sites the event
-/// models play it at 1: the mission info key (@0x70557), the jump key
-/// (@0x6b89f, @0x6b9cc, @0x6ba72), two of the hail refusals (@0x62671,
-/// and @0x626f2 from @0x626cf), the land key (@0x676aa, @0x676fe,
-/// @0x67e8f) and Closest Target (@0x6aadb). The player info key
-/// (@0x703bd) and two hail refusals (@0x6263f, and @0x626f2 from
-/// @0x6206c) play it at 5.
-pub const REFUSED: Priority = Priority::new(1);
-/// The self-destruct's start, `_beepSnd[3]`: `_HandlePlayer` @0x6fe33.
-pub const SELF_DESTRUCT_STARTED: Priority = Priority::new(15);
-/// The self-destruct's countdown lines, `_beepSnd[2]`: `_HandlePlayer`
-/// @0x70065.
-pub const SELF_DESTRUCT_COUNTDOWN: Priority = Priority::new(15);
-/// The self-destruct let go, `_beepSnd[1]`: `_HandlePlayer` @0x700de.
-pub const SELF_DESTRUCT_CANCELLED: Priority = Priority::new(15);
-/// The self-destruct run out, `_beepSnd[1]`: `_HandlePlayer` @0x701fb.
-pub const SELF_DESTRUCTED: Priority = Priority::new(15);
-/// The airlock, `snd ` 390: `_HandlePlayerBoardAttempt` @0x65907,
-/// @0x659b3, @0x65f00.
-pub const AIRLOCK: Priority = Priority::new(8);
 /// The course map opening, `_beepSnd[2]`: `_HandlePlayer` @0x6a809.
 pub const MAP_OPEN: Priority = Priority::new(1);
 /// The course map closing, `_beepSnd[0]`: `_HandlePlayer` @0x6a85a.
@@ -228,66 +79,17 @@ mod tests {
     #[test]
     fn each_events_priority_is_pinned() {
         let pinned = [
-            (LANDING, 1, "landing"),
-            (TAKE_OFF, 1, "take-off"),
-            (JUMP, 32_000, "warp-up"),
-            (ARRIVAL, 50, "warp-out"),
             (BUTTON, 10, "button"),
             (ROW_SLIDE, 50, "row slide"),
             (ALERT, 1, "alert"),
-            (SCRIPT_MESSAGE, 1, "Q message"),
-            (SCRIPT, 50, "P sound"),
             (ESCORT_MENU, 1, "escort menu"),
-            (ESCORTS_COMMANDED, 1, "escorts commanded"),
             (ESCORT_GROUP, 1, "escort group"),
             (NO_ESCORTS, 1, "no escorts"),
             (BUY_REFUSED, 1, "buy refused"),
             (ENTER_REFUSED, 10, "enter refused"),
-            (ESCORT_REPAIRED, 8, "escort repaired"),
-            (PROPULSION_REPAIRED, 1, "propulsion repaired"),
-            (RED_ALERT, 5, "red alert"),
-            (CLOAK, 8, "cloak"),
-            (JETTISON, 1, "jettison"),
-            (SCAN_FAILED, 1, "scan failed"),
-            (SMUGGLING, 1, "smuggling"),
             (NEWS_OPEN, 1, "news open"),
             (NEWS_CLOSE, 1, "news close"),
             (FLOATING_MAP_ZOOM, 1, "floating map zoom"),
-            (FLEET_QUOTE, 1, "fleet quote"),
-            (CALL_FOR_HELP, 1, "call for help"),
-            (SCAN_HAIL, 1, "scan hail"),
-            (REINFORCEMENTS, 1, "reinforcements"),
-            (HAIL_OFFER, 1, "hail offer"),
-            (ESCORT_DIALOG_OPENED, 1, "escort dialog opened"),
-            (ESCORT_DIALOG_CLOSED, 1, "escort dialog closed"),
-            (HAIL_QUOTE, 1, "hail quote"),
-            (NAV_SELECTED, 1, "nav selected"),
-            (HYPER_SELECTED, 1, "hyper selected"),
-            (TARGET_SELECTED, 1, "target selected"),
-            (TARGET_CLEARED, 1, "target cleared"),
-            (SECONDARY_SELECTED, 1, "secondary selected"),
-            (TUTORIAL_HINT, 1, "tutorial hint"),
-            (SHIP_DOWNED, 1, "ship downed"),
-            (DOWNED_MISSION_FAILED, 1, "downed mission failed"),
-            (CARGO_STOLEN, 1, "cargo stolen"),
-            (SHIP_STOLEN, 1, "ship stolen"),
-            (PLUNDER_BEEP, 1, "plunder beep"),
-            (CAPTURE_ASSIGNED, 1, "capture assigned"),
-            (REPAIRS_COMPLETE, 1, "repairs complete"),
-            (ENERGY_TRANSFER_COMPLETE, 1, "energy transfer complete"),
-            (MISSION_SHIP_LOST, 1, "mission ship lost"),
-            (MISSION_SHIP_BOARDED, 8, "mission ship boarded"),
-            (TRAFFIC_CONTROL, 1, "traffic control"),
-            (KLAXON, 15, "klaxon"),
-            (EJECT, 50, "eject"),
-            (ONBOARD_EXPLOSION, 100, "onboard explosion"),
-            (JUMP_COLLAPSED, 50, "jump collapsed"),
-            (REFUSED, 1, "refused"),
-            (SELF_DESTRUCT_STARTED, 15, "self-destruct started"),
-            (SELF_DESTRUCT_COUNTDOWN, 15, "self-destruct countdown"),
-            (SELF_DESTRUCT_CANCELLED, 15, "self-destruct cancelled"),
-            (SELF_DESTRUCTED, 15, "self-destructed"),
-            (AIRLOCK, 8, "airlock"),
             (MAP_OPEN, 1, "map open"),
             (MAP_CLOSE, 1, "map close"),
             (MAP_CENTRE, 1, "map centre"),

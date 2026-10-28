@@ -22,7 +22,9 @@ use nova::settings::{
 };
 use nova_audio::recording::{AudioLog, MemorySettings, RecordingAudio};
 use nova_audio::settings::{effects_level_volume, music_level_volume};
-use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings, SettingsStore, SoundTable};
+use nova_audio::{
+    Audio, AudioCommand, AudioCore, AudioSettings, Priority, SettingsStore, SoundTable,
+};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -40,6 +42,7 @@ use nova_render::{Batch, FontFaces, Frame};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_view::geometry::Point;
+use nova_view::sound::SimSound;
 use nova_view::text::TextMetrics;
 use nova_view::ui::PrefsDialog;
 use nova_view::ui::prefs::OK_ITEM;
@@ -164,9 +167,6 @@ fn sheet(frames: u16) -> Vec<u8> {
 
 /// Alpha Prime's ambient sound, its `CustSndID`.
 const LANDING_SOUND: i16 = 10_032;
-
-/// The original table's landing sound.
-const LANDING_BEEP: i16 = 151;
 
 /// The pilot flies ship 128 in Alpha (128), over Alpha Prime (128) at
 /// (0, 0), which can be landed on; with Nova's button pictures and the
@@ -495,15 +495,18 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     harness.land();
     assert_eq!(harness.showing(), Showing::Spaceport);
     let five = effects_level_volume(5);
+    let beep = SimSound::TrafficControl
+        .cue()
+        .expect("traffic control beeps");
     assert_eq!(
         harness.played(),
         [
             // Traffic control's greeting; an inhabited stellar's
             // touchdown is silent (`_PlayerLandOnStellar` @0x632be).
             AudioCommand::Play {
-                sound: SoundId(LANDING_BEEP),
+                sound: beep.sound,
                 volume: five,
-                priority: nova_audio::priority::TRAFFIC_CONTROL,
+                priority: Priority::new(beep.priority),
             },
         ]
     );
