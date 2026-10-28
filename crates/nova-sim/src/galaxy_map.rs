@@ -96,7 +96,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::catalog::SystemId;
+use crate::catalog::{GovtId, NebulaId, SystemId};
 use crate::flight::facing;
 use crate::geometry::Vec2;
 use crate::iff::SystemColorCode;
@@ -219,6 +219,70 @@ pub struct MapDrawing {
     /// The systems that may be named, by ascending ID: every visible,
     /// explored one.
     pub named: Vec<SystemId>,
+}
+
+/// What the galaxy map's model shows of the galaxy as overlaid, as plain
+/// data ([`GalaxyShown::of`]): which systems are drawn and hit, each
+/// one's government, so its colour, the hyperlinks and the nebulae drawn.
+/// The places are the catalog's, which the view's model is built from,
+/// so it holds none. The default shows nothing: a flight that failed to
+/// start answers no galaxy.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GalaxyShown {
+    /// The visible systems by ascending ID, each with its overlaid
+    /// government ([`OverlaidGalaxy::govt`]), `None` for an independent
+    /// one.
+    pub systems: Vec<(SystemId, Option<GovtId>)>,
+    /// The overlaid map's links, as
+    /// [`StarMap::links`](crate::StarMap::links) gives them: every pair
+    /// once, lower ID first, sorted.
+    pub links: Vec<(SystemId, SystemId)>,
+    /// The nebulae shown, active and explored, by ascending ID
+    /// ([`OverlaidGalaxy::shown_nebulae`]).
+    pub nebulae: Vec<NebulaId>,
+}
+
+impl GalaxyShown {
+    /// What the map shows of `galaxy` (see [`GalaxyShown`]).
+    #[must_use]
+    pub fn of(galaxy: &OverlaidGalaxy) -> Self {
+        Self {
+            systems: galaxy
+                .catalog_systems()
+                .filter(|&id| galaxy.visible(id))
+                .map(|id| (id, galaxy.govt(id)))
+                .collect(),
+            links: galaxy.map().links(),
+            nebulae: galaxy.shown_nebulae().collect(),
+        }
+    }
+
+    /// Whether `system` is drawn: whether it is among the visible
+    /// systems.
+    #[must_use]
+    pub fn visible(&self, system: SystemId) -> bool {
+        self.find(system).is_some()
+    }
+
+    /// `system`'s government as overlaid: `None` when it is independent
+    /// or not drawn.
+    #[must_use]
+    pub fn govt(&self, system: SystemId) -> Option<GovtId> {
+        self.find(system).and_then(|at| self.systems[at].1)
+    }
+
+    /// Whether `nebula` is drawn: active and explored.
+    #[must_use]
+    pub fn nebula_shown(&self, nebula: NebulaId) -> bool {
+        self.nebulae.binary_search(&nebula).is_ok()
+    }
+
+    /// Where `system` stands among the visible systems, if it does.
+    fn find(&self, system: SystemId) -> Option<usize> {
+        self.systems
+            .binary_search_by_key(&system, |&(id, _)| id)
+            .ok()
+    }
 }
 
 /// What [`draw_map`] reads: the galaxy, the player and the map.
@@ -826,5 +890,77 @@ mod tests {
             "not 132, known, nor 133, hidden"
         );
         assert_eq!(drawn_ids(&drawing), ids(&[130, 131, 132]));
+    }
+
+    // What the map's model shows of the galaxy.
+
+    /// 130, 131 and 132, linked in a ring, of governments 128, none and
+    /// 128 in the catalog; 133 alone, of 128.
+    fn governed_systems() -> Vec<crate::catalog::StarSystem> {
+        let govern = |system: crate::catalog::StarSystem, govt| crate::catalog::StarSystem {
+            govt,
+            ..system
+        };
+        vec![
+            govern(star(130, (0.0, 0.0), &[131, 132]), Some(GovtId(128))),
+            govern(star(131, (10.0, 0.0), &[132]), None),
+            govern(star(132, (20.0, 0.0), &[130]), Some(GovtId(128))),
+            govern(star(133, (30.0, 0.0), &[]), Some(GovtId(128))),
+        ]
+    }
+
+    #[test]
+    fn the_galaxy_shown_leaves_out_a_hidden_system_and_takes_the_overlays_governments() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(131), Some(false));
+        overlay.set_govt(SystemId(130), Some(Some(GovtId(129))));
+        overlay.set_govt(SystemId(132), Some(None));
+        let galaxy = OverlaidGalaxy::new(governed_systems(), overlay);
+        let shown = GalaxyShown::of(&galaxy);
+        assert_eq!(
+            shown.systems,
+            [
+                (SystemId(130), Some(GovtId(129))),
+                (SystemId(132), None),
+                (SystemId(133), Some(GovtId(128))),
+            ],
+            "131 hidden; 130 and 132 the overlay's, 133 the catalog's"
+        );
+        assert!(shown.visible(SystemId(130)));
+        assert!(!shown.visible(SystemId(131)), "hidden");
+        assert!(!shown.visible(SystemId(140)), "not in the catalog");
+        assert_eq!(shown.govt(SystemId(130)), Some(GovtId(129)));
+        assert_eq!(shown.govt(SystemId(132)), None, "made independent");
+        assert_eq!(shown.govt(SystemId(131)), None, "not drawn");
+    }
+
+    #[test]
+    fn the_galaxy_shown_lists_the_overlaid_maps_links() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(131), Some(false));
+        let galaxy = OverlaidGalaxy::new(governed_systems(), overlay);
+        let links = galaxy.map().links();
+        assert_eq!(
+            links,
+            [(SystemId(130), SystemId(132))],
+            "precondition: 131's links gone with it"
+        );
+        assert_eq!(GalaxyShown::of(&galaxy).links, links);
+    }
+
+    #[test]
+    fn the_galaxy_shown_lists_a_nebula_only_once_explored_and_while_active() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_nebula_explored(NebulaId(128), true);
+        overlay.set_nebula_explored(NebulaId(129), true);
+        overlay.set_nebula_active(NebulaId(129), Some(false));
+        overlay.set_nebula_active(NebulaId(130), Some(true));
+        let galaxy = OverlaidGalaxy::new(governed_systems(), overlay);
+        let shown = GalaxyShown::of(&galaxy);
+        assert_eq!(shown.nebulae, [NebulaId(128)]);
+        assert!(shown.nebula_shown(NebulaId(128)));
+        assert!(!shown.nebula_shown(NebulaId(129)), "inactive");
+        assert!(!shown.nebula_shown(NebulaId(130)), "unexplored");
+        assert_eq!(GalaxyShown::default().nebulae, [], "the default none");
     }
 }
