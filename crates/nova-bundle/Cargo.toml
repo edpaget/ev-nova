@@ -1,6 +1,6 @@
 [package]
 name = "nova-bundle"
-description = "Packs the nightly's installers: Nova.app, the Apple silicon macOS bundle, into a .dmg (Developer ID signed and notarized, or ad-hoc signed), the built Windows executables into a per-user MSI, the Linux desktop file, AppStream metainfo and icons into a share/ tree, and the game into a Linux AppImage and Flatpak"
+description = "Packs the nightly's installers: Nova.app, the Apple silicon macOS bundle, into a .dmg (Developer ID signed and notarized, or ad-hoc signed), the built Windows executables into a per-user MSI, the Linux desktop file, AppStream metainfo and icons into a share/ tree, and the game into a Linux AppImage and Flatpak, each stamped with the commit-timestamp build ID"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

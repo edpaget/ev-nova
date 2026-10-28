@@ -19,7 +19,7 @@ use std::process::ExitCode;
 use nova_bundle::linux::appimage::host::appimage_host;
 use nova_bundle::linux::appimage::plan::build_appimage;
 use nova_bundle::linux::appimage::{RUNTIME_VAR, TOOL_VAR};
-use nova_bundle::system::{StdFiles, StdProcess};
+use nova_bundle::system::{StdEnv, StdFiles, StdProcess};
 
 fn main() -> ExitCode {
     let cwd = match env::current_dir() {
@@ -44,7 +44,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match build_appimage(&mut StdProcess, &mut StdFiles, &host) {
+    match build_appimage(&mut StdProcess, &mut StdFiles, &StdEnv, &host) {
         Ok(appimage) => {
             println!("{}", appimage.display());
             ExitCode::SUCCESS

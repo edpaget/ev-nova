@@ -16,11 +16,20 @@ use nova_bundle::linux::desktop::desktop_file_name;
 use nova_bundle::linux::host::LinuxHost;
 use nova_bundle::linux::metainfo::metainfo_file_name;
 use nova_bundle::linux::share::write_share;
-use nova_bundle::ports::{Invocation, Process};
+use nova_bundle::ports::{Env, Invocation, Process};
 use nova_bundle::spec::BundleSpec;
 use nova_bundle::system::{StdFiles, StdProcess};
 
 const VARIABLE: &str = "NOVA_LINUX_VALIDATORS";
+
+/// An environment setting only the build ID, so no git runs.
+struct BuildIdOnly;
+
+impl Env for BuildIdOnly {
+    fn var(&self, name: &str) -> Option<OsString> {
+        (name == nova_bundle::build_id::VAR).then(|| "20010203040506".into())
+    }
+}
 
 #[test]
 fn the_rendered_desktop_file_and_metainfo_pass_the_validators() {
@@ -34,7 +43,8 @@ fn the_rendered_desktop_file_and_metainfo_pass_the_validators() {
         cargo: cargo.clone(),
         out: Some(tmp.path().to_owned()),
     };
-    let out = write_share(&mut StdProcess, &mut StdFiles, &host).expect("the share tree");
+    let out =
+        write_share(&mut StdProcess, &mut StdFiles, &BuildIdOnly, &host).expect("the share tree");
     let json = StdProcess
         .run(&nova_bundle::bundle::metadata(&cargo))
         .expect("cargo metadata");

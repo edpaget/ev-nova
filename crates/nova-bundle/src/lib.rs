@@ -5,7 +5,8 @@
 //! binary writes the Linux desktop file, AppStream metainfo and icons
 //! ([`linux`]); and its `nova-appimage` and `nova-flatpak` binaries pack
 //! the game into the Linux AppImage and Flatpak ([`linux::appimage`],
-//! [`linux::flatpak`]).
+//! [`linux::flatpak`]). Its `nova-build-id` binary prints the build ID
+//! ([`build_id`]).
 //!
 //! # Usage
 //!
@@ -101,6 +102,21 @@
 //! runtime and packs `ev-nova-x86_64-unknown-linux-gnu.flatpak` in
 //! `OUT_DIR` (by default `target/flatpak/out`); it needs `flatpak`,
 //! `flatpak-builder` and the Flathub remote added with `--user`.
+//!
+//! # The build ID
+//!
+//! ```text
+//! mise run build-id
+//! ```
+//!
+//! Every package names its build by HEAD's committer time in UTC,
+//! `YYYYMMDDHHMMSS` ([`build_id::BuildId`]), or by `NOVA_BUILD_ID` when it
+//! is set, which is how CI gives every leg of a run the same one
+//! ([`build_id::resolve`]). It is `Info.plist`'s `CFBundleVersion` and the
+//! AppStream metainfo's `<release>`, and each bundler compiles `nova` with
+//! it in `NOVA_BUILD_ID`, so the game reports the build it is.
+//! `nova-build-id` prints it, and exits 1 when it has none (no variable
+//! and no git checkout).
 
 pub mod build_id;
 pub mod bundle;

@@ -12,9 +12,10 @@ use super::host::FlatpakHost;
 use super::layout::FlatpakLayout;
 use super::manifest::{cargo_config, render};
 use super::{FlatpakError, REMOTE, RUNTIME_REPO};
+use crate::build_id::{self, BuildId};
 use crate::bundle::{self, BundleError, Step, execute, metadata};
 use crate::linux::share;
-use crate::ports::{Files, Invocation, Process};
+use crate::ports::{Env, Files, Invocation, Process};
 use crate::spec::BundleSpec;
 
 /// `cargo vendor` of the workspace's locked crates into the staging,
@@ -64,9 +65,15 @@ pub fn build_bundle(spec: &BundleSpec, layout: &FlatpakLayout) -> Invocation {
         .arg(&spec.identifier)
 }
 
-/// The steps that build `spec`'s Flatpak under `layout` with `cargo`.
+/// The steps that build `spec`'s Flatpak, the build `build`, under
+/// `layout` with `cargo`.
 #[must_use]
-pub fn plan(spec: &BundleSpec, layout: &FlatpakLayout, cargo: &OsStr) -> Vec<Step> {
+pub fn plan(
+    spec: &BundleSpec,
+    layout: &FlatpakLayout,
+    cargo: &OsStr,
+    build: &BuildId,
+) -> Vec<Step> {
     let mut steps = vec![
         Step::RemoveDir(layout.staging.clone()),
         Step::CreateDir(layout.staging.clone()),
@@ -76,11 +83,11 @@ pub fn plan(spec: &BundleSpec, layout: &FlatpakLayout, cargo: &OsStr) -> Vec<Ste
             bytes: cargo_config().into_bytes(),
         },
     ];
-    steps.extend(share::steps(spec, &layout.staging));
+    steps.extend(share::steps(spec, build, &layout.staging));
     steps.extend([
         Step::Write {
             path: layout.manifest(spec),
-            bytes: render(spec, layout).into_bytes(),
+            bytes: render(spec, layout, build).into_bytes(),
         },
         Step::Run(flatpak_builder(spec, layout)),
         Step::CreateDir(layout.out.clone()),
@@ -89,16 +96,19 @@ pub fn plan(spec: &BundleSpec, layout: &FlatpakLayout, cargo: &OsStr) -> Vec<Ste
     steps
 }
 
-/// Builds the Flatpak bundle, returning its path.
+/// Builds the Flatpak bundle, returning its path, with the build ID from
+/// `env` or git ([`build_id::resolve`]).
 pub fn build_flatpak(
     process: &mut impl Process,
     files: &mut impl Files,
+    env: &impl Env,
     host: &FlatpakHost,
 ) -> Result<PathBuf, FlatpakError> {
     let json = bundle::run(process, &metadata(&host.cargo))?;
     let spec = BundleSpec::from_metadata(&json).map_err(BundleError::from)?;
+    let build = build_id::resolve(env, process, &spec.workspace_root).map_err(BundleError::from)?;
     let layout = FlatpakLayout::new(&spec.target_dir, host.out.clone())?;
-    for step in plan(&spec, &layout, &host.cargo) {
+    for step in plan(&spec, &layout, &host.cargo, &build) {
         execute(&step, process, files)?;
     }
     Ok(layout.bundle())
@@ -114,7 +124,9 @@ mod tests {
     use crate::linux::OutputOverlapsWork;
     use crate::ports::RunError;
     use crate::spec::tests::sample_metadata;
-    use crate::test_support::{Event, FakeFiles, Log, Recorder, failing, is, starts};
+    use crate::test_support::{
+        Event, FakeEnv, FakeFiles, Log, Recorder, build, build_env, failing, is, starts,
+    };
 
     fn spec() -> BundleSpec {
         BundleSpec::from_metadata(&sample_metadata()).expect("spec")
@@ -164,7 +176,7 @@ mod tests {
             fails: Box::new(file_fails),
             absent: Box::new(|_| false),
         };
-        let result = build_flatpak(&mut process, &mut files, host);
+        let result = build_flatpak(&mut process, &mut files, &build_env(), host);
         let events = log.borrow().clone();
         Built { result, events }
     }
@@ -200,17 +212,18 @@ mod tests {
                 cargo_config().into_bytes(),
             ),
         ];
-        expected.extend(
-            share::steps(&spec, &staging)
-                .into_iter()
-                .map(|step| match step {
-                    Step::CreateDir(dir) => Event::CreateDir(dir),
-                    Step::Write { path, bytes } => Event::Write(path, bytes),
-                    other => panic!("an unexpected step: {other:?}"),
-                }),
-        );
+        expected.extend(share::steps(&spec, &build(), &staging).into_iter().map(
+            |step| match step {
+                Step::CreateDir(dir) => Event::CreateDir(dir),
+                Step::Write { path, bytes } => Event::Write(path, bytes),
+                other => panic!("an unexpected step: {other:?}"),
+            },
+        ));
         expected.extend([
-            Event::Write(manifest.clone(), render(&spec, &layout).into_bytes()),
+            Event::Write(
+                manifest.clone(),
+                render(&spec, &layout, &build()).into_bytes(),
+            ),
             Event::Run(
                 Invocation::new("flatpak-builder")
                     .args([
@@ -245,8 +258,8 @@ mod tests {
     fn the_share_tree_is_staged_where_the_manifest_takes_it_from() {
         let spec = spec();
         let layout = FlatpakLayout::new(&spec.target_dir, None).expect("layout");
-        let steps = plan(&spec, &layout, OsStr::new("cargo"));
-        for (path, _) in share::files(&spec, &layout.staging) {
+        let steps = plan(&spec, &layout, OsStr::new("cargo"), &build());
+        for (path, _) in share::files(&spec, &build(), &layout.staging) {
             assert!(path.starts_with(layout.share()), "{}", path.display());
             assert!(
                 steps
@@ -256,6 +269,31 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    #[test]
+    fn a_failing_build_id_stages_nothing() {
+        let log = Log::default();
+        let mut process = Recorder {
+            log: Rc::clone(&log),
+            archs: Vec::new(),
+            respond: Box::new(|_| None),
+        };
+        let mut files = FakeFiles {
+            log: Rc::clone(&log),
+            fails: Box::new(|_| false),
+            absent: Box::new(|_| false),
+        };
+        let env = FakeEnv(std::collections::HashMap::from([(
+            crate::build_id::VAR,
+            "".into(),
+        )]));
+        let result = build_flatpak(&mut process, &mut files, &env, &host());
+        assert!(
+            matches!(result, Err(FlatpakError::Step(BundleError::BuildId(_)))),
+            "{result:?}"
+        );
+        assert_eq!(log.borrow().len(), 1, "only cargo metadata ran");
     }
 
     #[test]

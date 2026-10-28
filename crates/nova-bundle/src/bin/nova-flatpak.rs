@@ -19,7 +19,7 @@ use std::process::ExitCode;
 
 use nova_bundle::linux::flatpak::host::flatpak_host;
 use nova_bundle::linux::flatpak::plan::build_flatpak;
-use nova_bundle::system::{StdFiles, StdProcess};
+use nova_bundle::system::{StdEnv, StdFiles, StdProcess};
 
 fn main() -> ExitCode {
     let cwd = match env::current_dir() {
@@ -42,7 +42,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match build_flatpak(&mut StdProcess, &mut StdFiles, &host) {
+    match build_flatpak(&mut StdProcess, &mut StdFiles, &StdEnv, &host) {
         Ok(bundle) => {
             println!("{}", bundle.display());
             ExitCode::SUCCESS

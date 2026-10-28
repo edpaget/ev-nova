@@ -8,7 +8,9 @@
 //! test owns, which needs no FUSE, and checks the AppDir: `AppRun`, the
 //! desktop file and icon at its root, an executable `usr/bin/nova`, and
 //! phase 1's `usr/share` tree, each file as the workspace's own spec
-//! renders it. Then it runs the extracted `nova` through the same
+//! renders it for the build ID the bundler resolves (`NOVA_BUILD_ID`,
+//! which CI's `build` job sets for every step, else HEAD's committer
+//! time). Then it runs the extracted `nova` through the same
 //! `objdump -p` check the build ran ([`check_links`]).
 
 use std::env;
@@ -18,6 +20,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use nova_bundle::build_id::resolve;
 use nova_bundle::bundle::metadata;
 use nova_bundle::linux::EXECUTABLE;
 use nova_bundle::linux::appimage::links::check_links;
@@ -26,7 +29,7 @@ use nova_bundle::linux::icons::ICON_256;
 use nova_bundle::linux::share;
 use nova_bundle::ports::Process;
 use nova_bundle::spec::BundleSpec;
-use nova_bundle::system::StdProcess;
+use nova_bundle::system::{StdEnv, StdProcess};
 
 const VARIABLE: &str = "NOVA_APPIMAGE";
 
@@ -85,7 +88,8 @@ fn the_appimage_holds_the_app_dir_and_a_binary_within_the_floor() {
         Path::new(&icon)
     );
 
-    for (path, bytes) in share::files(&spec, &root.join("usr")) {
+    let id = resolve(&StdEnv, &mut StdProcess, &spec.workspace_root).expect("a build ID");
+    for (path, bytes) in share::files(&spec, &id, &root.join("usr")) {
         assert_eq!(read(&path), bytes, "{}", path.display());
     }
 

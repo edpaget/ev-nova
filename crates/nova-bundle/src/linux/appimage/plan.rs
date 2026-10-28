@@ -10,27 +10,31 @@ use std::path::{Path, PathBuf};
 use super::host::AppImageHost;
 use super::layout::AppImageLayout;
 use super::{AppImageError, TARGET};
+use crate::build_id::{self, BuildId};
 use crate::bundle::{self, BundleError, Step, execute, metadata};
 use crate::linux::desktop::{desktop_entry, desktop_file_name};
 use crate::linux::icons::ICON_256;
 use crate::linux::{EXECUTABLE, share};
-use crate::ports::{Files, Invocation, Process};
+use crate::ports::{Env, Files, Invocation, Process};
 use crate::spec::{BundleSpec, GAME_PACKAGE};
 
 /// `cargo build` of `nova` alone, in release, for [`TARGET`], with the
 /// default features only (so egui stays out), as the nightly's `Build`
-/// step builds it: after that step this is a no-op.
+/// step builds it: after that step, with the same `NOVA_BUILD_ID`, this
+/// is a no-op. `nova` is compiled with `id`, the one the metainfo names.
 #[must_use]
-pub fn build(cargo: &OsStr) -> Invocation {
-    Invocation::new(cargo).args([
-        "build",
-        "--release",
-        "--locked",
-        "-p",
-        GAME_PACKAGE,
-        "--target",
-        TARGET,
-    ])
+pub fn build(cargo: &OsStr, id: &BuildId) -> Invocation {
+    Invocation::new(cargo)
+        .args([
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            GAME_PACKAGE,
+            "--target",
+            TARGET,
+        ])
+        .env(build_id::VAR, id.as_str())
 }
 
 /// `appimagetool` packing the AppDir into the AppImage, embedding
@@ -44,19 +48,21 @@ pub fn appimagetool(tool: &OsStr, runtime: &Path, layout: &AppImageLayout) -> In
         .arg(layout.appimage())
 }
 
-/// The steps that build `spec`'s AppImage under `layout`, with the
-/// `cargo` and `appimagetool` of `host` and the `runtime` to embed.
+/// The steps that build `spec`'s AppImage, the build `id`, under
+/// `layout`, with the `cargo` and `appimagetool` of `host` and the
+/// `runtime` to embed.
 #[must_use]
 pub fn plan(
     spec: &BundleSpec,
     layout: &AppImageLayout,
     host: &AppImageHost,
     runtime: &Path,
+    id: &BuildId,
 ) -> Vec<Step> {
     let app_dir = layout.app_dir();
     let icon = format!("{}.png", spec.identifier);
     let mut steps = vec![
-        Step::Run(build(&host.cargo)),
+        Step::Run(build(&host.cargo, id)),
         Step::RemoveDir(layout.staging.clone()),
         Step::CreateDir(layout.usr().join("bin")),
         Step::Copy {
@@ -86,7 +92,7 @@ pub fn plan(
             link: app_dir.join(".DirIcon"),
         },
     ];
-    steps.extend(share::steps(spec, &layout.usr()));
+    steps.extend(share::steps(spec, id, &layout.usr()));
     steps.extend([
         Step::CheckLinks(layout.executable()),
         Step::CreateDir(layout.out.clone()),
@@ -95,11 +101,13 @@ pub fn plan(
     steps
 }
 
-/// Builds the AppImage, returning its path. Fails before running
-/// anything when no runtime is given or it is missing.
+/// Builds the AppImage, returning its path, with the build ID from `env`
+/// or git ([`build_id::resolve`]). Fails before running anything when no
+/// runtime is given or it is missing.
 pub fn build_appimage(
     process: &mut impl Process,
     files: &mut impl Files,
+    env: &impl Env,
     host: &AppImageHost,
 ) -> Result<PathBuf, AppImageError> {
     let runtime = host.runtime.as_ref().ok_or(AppImageError::NoRuntime)?;
@@ -108,8 +116,9 @@ pub fn build_appimage(
     }
     let json = bundle::run(process, &metadata(&host.cargo))?;
     let spec = BundleSpec::from_metadata(&json).map_err(BundleError::from)?;
+    let id = build_id::resolve(env, process, &spec.workspace_root).map_err(BundleError::from)?;
     let layout = AppImageLayout::new(&spec.target_dir, host.out.clone())?;
-    for step in plan(&spec, &layout, host, runtime) {
+    for step in plan(&spec, &layout, host, runtime, &id) {
         execute(&step, process, files)?;
     }
     Ok(layout.appimage())
@@ -127,7 +136,9 @@ mod tests {
     use crate::linux::metainfo::{metainfo, metainfo_file_name};
     use crate::ports::RunError;
     use crate::spec::tests::sample_metadata;
-    use crate::test_support::{Event, FakeFiles, Log, Recorder, failing, is, starts};
+    use crate::test_support::{
+        BUILD, Event, FakeEnv, FakeFiles, Log, Recorder, build, build_env, failing, is, starts,
+    };
 
     fn spec() -> BundleSpec {
         BundleSpec::from_metadata(&sample_metadata()).expect("spec")
@@ -191,7 +202,7 @@ mod tests {
             fails: Box::new(file_fails),
             absent: Box::new(absent),
         };
-        let result = build_appimage(&mut process, &mut files, host);
+        let result = build_appimage(&mut process, &mut files, &build_env(), host);
         let events = log.borrow().clone();
         Built { result, events }
     }
@@ -219,10 +230,12 @@ mod tests {
         let mut expected = vec![
             Event::Run(metadata(&OsString::from("/rust/bin/cargo"))),
             Event::Run(
-                Invocation::new("/rust/bin/cargo").args(
-                    "build --release --locked -p nova --target x86_64-unknown-linux-gnu"
-                        .split_whitespace(),
-                ),
+                Invocation::new("/rust/bin/cargo")
+                    .args(
+                        "build --release --locked -p nova --target x86_64-unknown-linux-gnu"
+                            .split_whitespace(),
+                    )
+                    .env("NOVA_BUILD_ID", BUILD),
             ),
             Event::RemoveDir(staging.clone()),
             Event::CreateDir(usr.join("bin")),
@@ -248,7 +261,7 @@ mod tests {
             ),
         ];
         expected.extend(
-            share::steps(&spec, &usr)
+            share::steps(&spec, &build(), &usr)
                 .into_iter()
                 .map(|step| match step {
                     Step::CreateDir(dir) => Event::CreateDir(dir),
@@ -274,7 +287,7 @@ mod tests {
     fn the_app_dir_holds_phase_1_s_share_tree_under_usr() {
         let spec = spec();
         let layout = AppImageLayout::new(&spec.target_dir, None).expect("layout");
-        let steps = plan(&spec, &layout, &host(), &runtime());
+        let steps = plan(&spec, &layout, &host(), &runtime(), &build());
         let share = layout.usr().join("share");
         for (path, bytes) in [
             (
@@ -283,7 +296,7 @@ mod tests {
             ),
             (
                 share.join("metainfo").join(metainfo_file_name(&spec)),
-                metainfo(&spec).into_bytes(),
+                metainfo(&spec, &build()).into_bytes(),
             ),
         ] {
             assert!(
@@ -301,7 +314,7 @@ mod tests {
     fn the_root_icon_is_the_one_the_desktop_file_names() {
         let spec = spec();
         let layout = AppImageLayout::new(&spec.target_dir, None).expect("layout");
-        let steps = plan(&spec, &layout, &host(), &runtime());
+        let steps = plan(&spec, &layout, &host(), &runtime(), &build());
         let entry = desktop_entry(&spec);
         let icon = entry
             .lines()
@@ -392,6 +405,31 @@ mod tests {
             Err(AppImageError::Step(BundleError::Run { .. }))
         ));
         assert_eq!(built.events.len(), 1);
+    }
+
+    #[test]
+    fn a_failing_build_id_stops_before_building() {
+        let log = Log::default();
+        let mut process = Recorder {
+            log: Rc::clone(&log),
+            archs: Vec::new(),
+            respond: Box::new(|_| None),
+        };
+        let mut files = FakeFiles {
+            log: Rc::clone(&log),
+            fails: Box::new(|_| false),
+            absent: Box::new(|_| false),
+        };
+        let env = FakeEnv(std::collections::HashMap::from([(
+            crate::build_id::VAR,
+            "".into(),
+        )]));
+        let result = build_appimage(&mut process, &mut files, &env, &host());
+        assert!(
+            matches!(result, Err(AppImageError::Step(BundleError::BuildId(_)))),
+            "{result:?}"
+        );
+        assert_eq!(log.borrow().len(), 1, "only cargo metadata ran");
     }
 
     #[test]
