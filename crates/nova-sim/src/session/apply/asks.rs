@@ -1,8 +1,9 @@
-//! [`Session::apply`]'s asks ([`FlightCommand::is_ask`]): the hover, the
-//! coming traffic, a description's load and a plain text's fill, each matched to the session
-//! method that answers it, as [`Session::apply_ask`] says. None changes
-//! anything a frame shows, which the tests here pin, so the view keeps
-//! its frame across them.
+//! [`Session::apply`]'s asks ([`FlightCommand::is_ask`]): the hover and a
+//! description's load, each matched to the session method that answers
+//! it, as [`Session::apply_ask`] says. Neither changes anything a frame
+//! shows, which the tests here pin, so the view keeps its frame across
+//! them. The coming traffic and a plain text's fill, asked once by a
+//! screen, are screen asks (`session/screen.rs`).
 
 use super::ApplyCollaborators;
 use crate::flight_frame::{Answer, FlightCommand};
@@ -13,15 +14,9 @@ impl Session {
     ///
     /// - [`FlightCommand::Hover`] runs [`Session::hover`]:
     ///   [`Answer::Hovered`], `None` over nothing.
-    /// - [`FlightCommand::ComingTraffic`] runs
-    ///   [`Session::coming_traffic_ships`] over the catalog:
-    ///   [`Answer::ComingTraffic`]; refused without a catalog, as the
-    ///   spawn table it resolves while traffic is due reads one.
     /// - [`FlightCommand::LoadDescription`] runs
     ///   [`Session::load_description`] on `collab`'s chance:
     ///   [`Answer::Description`], empty for a missing `dësc`.
-    /// - [`FlightCommand::PlainText`] runs [`Session::plain_text`]:
-    ///   [`Answer::PlainText`].
     #[allow(clippy::needless_pass_by_value)] // the commands come by value, as `Session::apply` takes them
     pub(super) fn apply_ask(
         &mut self,
@@ -30,14 +25,9 @@ impl Session {
     ) -> Answer {
         match command {
             FlightCommand::Hover { at, drawn } => Answer::Hovered(self.hover(at, &drawn)),
-            FlightCommand::ComingTraffic => match collab.catalog {
-                Some(catalog) => Answer::ComingTraffic(self.coming_traffic_ships(catalog)),
-                None => Answer::Refused,
-            },
             FlightCommand::LoadDescription { raw, movie } => Answer::Description(
                 self.load_description(raw.as_deref(), movie.as_ref(), collab.chance),
             ),
-            FlightCommand::PlainText(text) => Answer::PlainText(self.plain_text(&text)),
             _ => Answer::Refused,
         }
     }
@@ -119,34 +109,6 @@ mod tests {
     }
 
     #[test]
-    fn the_coming_traffic_answers_the_ships_due_and_then_those_the_system_was_filled_with() {
-        let trafficked = crate::session::tests::trafficked(130, 2, 1);
-        let mut session = Session::start(&trafficked).expect("starts");
-        let due = session.coming_traffic_ships(&trafficked);
-        assert!(!due.is_empty(), "precondition: the table's ships");
-        assert_ne!(due, session.traffic_ships(), "precondition: not yet filled");
-        assert_eq!(
-            apply_with(&mut session, &trafficked, FlightCommand::ComingTraffic),
-            Answer::ComingTraffic(due.clone())
-        );
-        session.populate(&trafficked, &mut NeverFires);
-        assert_eq!(
-            apply_with(&mut session, &catalog(), FlightCommand::ComingTraffic),
-            Answer::ComingTraffic(session.traffic_ships()),
-            "once filled, the system's own"
-        );
-    }
-
-    #[test]
-    fn the_coming_traffic_is_refused_without_a_catalog() {
-        let mut session = Session::start(&catalog()).expect("starts");
-        assert_eq!(
-            apply(&mut session, FlightCommand::ComingTraffic),
-            Answer::Refused
-        );
-    }
-
-    #[test]
     fn a_description_loads_as_the_session_loads_it_and_a_missing_one_is_empty() {
         let mut session = Session::start(&catalog()).expect("starts");
         let raw = "{b5 \"set\" \"clear\"}, sir.";
@@ -182,26 +144,12 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_text_is_filled_as_the_session_fills_it_for_the_pilot() {
-        let mut session = Session::start(&catalog()).expect("starts");
-        session.pilot.ship_name = Some("Kestrel".to_owned());
-        let raw = "Hello, <PSN>.";
-        let expected = session.plain_text(raw);
-        assert_eq!(expected, "Hello, Kestrel.", "precondition: a tag filled");
-        assert_eq!(
-            apply(&mut session, FlightCommand::PlainText(raw.to_owned())),
-            Answer::PlainText(expected)
-        );
-    }
-
-    #[test]
     fn an_ask_changes_nothing_a_frame_shows() {
         let trafficked = crate::session::tests::trafficked(130, 2, 1);
         let mut session = Session::start(&trafficked).expect("starts");
         session.select_stellar(crate::session::StellarPick::Slot(0));
         let asks = [
             hover(OVER_128, &DrawnBoxes::default()),
-            FlightCommand::ComingTraffic,
             FlightCommand::LoadDescription {
                 raw: Some("{b5 \"set\" \"clear\"}, sir.".to_owned()),
                 movie: DescMovie::from_desc("Port.mov", 0x0001),
@@ -210,7 +158,6 @@ mod tests {
                 raw: None,
                 movie: None,
             },
-            FlightCommand::PlainText("Hello, <PSN>.".to_owned()),
         ];
         for ask in asks {
             let before: FlightFrame = filled(&session);
@@ -223,15 +170,13 @@ mod tests {
     }
 
     #[test]
-    fn only_the_hover_the_coming_traffic_a_descriptions_load_and_a_plain_text_are_asks() {
+    fn only_the_hover_and_a_descriptions_load_are_asks() {
         for command in [
             hover(Vec2::ZERO, &DrawnBoxes::default()),
-            FlightCommand::ComingTraffic,
             FlightCommand::LoadDescription {
                 raw: None,
                 movie: None,
             },
-            FlightCommand::PlainText(String::new()),
         ] {
             assert!(command.is_ask(), "{command:?}");
             assert_eq!(command.gate(), None, "{command:?}: no key gates it");

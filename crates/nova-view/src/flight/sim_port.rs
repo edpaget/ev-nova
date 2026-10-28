@@ -27,8 +27,8 @@
 //!   quiet tick fills it twice (the catch-up and the steps), a key once
 //!   for each command it sends, and a draw not at all.
 //! - **An ask doesn't.** A command that only asks
-//!   ([`FlightCommand::is_ask`]: the hover, the coming traffic, a
-//!   description's load) changes nothing a frame shows, which nova-sim
+//!   ([`FlightCommand::is_ask`]: the hover and a description's load)
+//!   changes nothing a frame shows, which nova-sim
 //!   pins (`session/apply/asks.rs`) and `fixture::check_contract`
 //!   checks, so no fill follows one. A question the view asks of the
 //!   flight between frames, with arguments it computes or drawing on the
@@ -50,8 +50,8 @@
 //!   [`FlightFrame::explored`](nova_sim::flight_frame::FlightFrame::explored)),
 //!   **or rides the value that carries it** (a mission cargo's, on
 //!   [`MissionBoardLine::Retrieved`](nova_sim::MissionBoardLine::Retrieved)).
-//!   A text filled for the pilot is an ask
-//!   ([`FlightCommand::PlainText`]).
+//!   A text filled for the pilot is a screen's ask
+//!   ([`ScreenAsk::PlainText`]).
 //! - **A readout is a frame field, an action a command, a one-shot output
 //!   an event** ([`FlightFrame`], [`FlightCommand`] with its [`Answer`],
 //!   [`FlightEvent`]), each filled or answered on nova-sim's side and

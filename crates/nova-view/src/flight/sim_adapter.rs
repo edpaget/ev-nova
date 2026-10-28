@@ -3,27 +3,27 @@
 //! handed: the chance, the NPCs' behaviour and the fight's, the law's and
 //! the boardings' rules, and the comm dialog's options.
 //!
-//! It forwards the port's four: [`FlightSim::frame`] to
+//! It forwards the port's five: [`FlightSim::frame`] to
 //! `Session::fill_frame`, [`FlightSim::step`] to `Session::step`, with its
 //! collaborators and the catalog the view shared, [`FlightSim::apply`] to
 //! `Session::apply`, whose match over the commands (the asks among them:
-//! the hover, the coming traffic, a description's load) lives on the
-//! session's side, with the catalog the view shared, the chance, the law,
-//! the boarding rule and the hail options, and [`FlightSim::drain`] to
-//! `Session::drain_events`; and [`CommSource`]'s to `Session::hailing`
+//! the hover and a description's load) lives on the session's side, with
+//! the catalog the view shared, the chance, the law, the boarding rule and
+//! the hail options, [`FlightSim::drain`] to `Session::drain_events`, and
+//! [`FlightSim::screen`] to `Session::screen`, with what `apply` is
+//! handed; and [`CommSource`]'s to `Session::hailing`
 //! and `Session::boarding`, and [`PortSource`]'s and [`PilotSource`]'s to
 //! the session's method of each name. The names the view words the
 //! flight's messages with are no port method: the fixed ones come in the
 //! opening (`Session::opening`'s `Names`), the player's ship's name, the
 //! date and the systems explored in the frame (`Session::fill_frame`), a
-//! cargo's on its board line, and a plain text's fill is an ask
-//! (`FlightCommand::PlainText`, `Session::plain_text`). A session that
-//! failed to start fills the default frame, runs no step, refuses every
-//! command but a description's load, which it resolves for a new pilot
-//! (`Session::fresh_description`), and a plain text's fill, which it
-//! answers with the text unchanged, answers nothing open and drains
-//! nothing; its opening says why and names nothing
-//! ([`SessionFlight::opening`]).
+//! cargo's on its board line, and a plain text's fill is a screen's ask
+//! (`ScreenAsk::PlainText`, `Session::plain_text`). A session that failed
+//! to start fills the default frame, runs no step, refuses every command
+//! but a description's load, which it resolves for a new pilot
+//! (`Session::fresh_description`), answers every screen's ask nothing,
+//! answers nothing open and drains nothing; its opening says why and
+//! names nothing ([`SessionFlight::opening`]).
 //!
 //! **The edge's API**, which the port leaves out, is the adapter's own:
 //! the constructors that build the session ([`SessionFlight::start`],
@@ -480,16 +480,13 @@ impl<C> FlightSim for SessionFlight<C> {
     /// session refuses every command but a description's load
     /// ([`FlightCommand::LoadDescription`]), which it answers with the
     /// conditional text resolved for a new pilot
-    /// (`Session::fresh_description`), and a plain text's fill
-    /// ([`FlightCommand::PlainText`]), which it answers with the text
-    /// unchanged, as it has no pilot to fill it for.
+    /// (`Session::fresh_description`).
     fn apply(&mut self, command: FlightCommand) -> Answer {
         let Ok(session) = &mut self.session else {
             return match command {
                 FlightCommand::LoadDescription { raw, .. } => {
                     Answer::Description(Session::fresh_description(raw.as_deref()))
                 }
-                FlightCommand::PlainText(text) => Answer::PlainText(text),
                 _ => Answer::Refused,
             };
         };
@@ -853,17 +850,13 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_flight_refuses_the_hover_and_the_coming_traffic() {
+    fn a_failed_flight_refuses_the_hover() {
         let mut flight = failed();
-        for ask in [
-            FlightCommand::Hover {
-                at: Vec2::ZERO,
-                drawn: DrawnBoxes::default(),
-            },
-            FlightCommand::ComingTraffic,
-        ] {
-            assert_eq!(flight.apply(ask.clone()), Answer::Refused, "{ask:?}");
-        }
+        let hover = FlightCommand::Hover {
+            at: Vec2::ZERO,
+            drawn: DrawnBoxes::default(),
+        };
+        assert_eq!(flight.apply(hover), Answer::Refused);
     }
 
     #[test]
@@ -1049,12 +1042,15 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_flight_fills_a_plain_text_as_it_is() {
-        assert_eq!(
-            failed().apply(FlightCommand::PlainText("Hello, <PSN>.".to_owned())),
-            Answer::PlainText("Hello, <PSN>.".to_owned()),
-            "no pilot to fill it for"
-        );
+    fn a_failed_flight_fills_no_plain_text_and_brings_no_traffic() {
+        let mut flight = failed();
+        for ask in [
+            ScreenAsk::PlainText("Hello, <PSN>.".to_owned()),
+            ScreenAsk::ComingTraffic,
+        ] {
+            let sent = format!("{ask:?}");
+            assert_eq!(flight.screen(ask), ScreenAnswer::Nothing, "{sent}");
+        }
     }
 
     /// Strings that turn the `l33t` mode on, whose letters a loaded
@@ -1316,8 +1312,8 @@ mod tests {
             .expect("started")
             .plain_text("Hello, <PN>.");
         assert_eq!(
-            flight.apply(FlightCommand::PlainText("Hello, <PN>.".to_owned())),
-            Answer::PlainText(expected)
+            flight.screen(ScreenAsk::PlainText("Hello, <PN>.".to_owned())),
+            ScreenAnswer::PlainText(expected)
         );
     }
 

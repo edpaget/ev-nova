@@ -129,17 +129,36 @@ fn the_stellar_landed_on_is_read_from_the_frame_a_change_left() {
 fn the_plain_text_and_the_hire_are_the_flights() {
     let mut view = faked(in_sol());
     let fills = view.sim.fills();
-    assert_eq!(view.plain_text("Hi <PN>."), "Hi <PN>.", "unfilled");
+    view.sim
+        .queue_screen(ScreenAnswer::PlainText("Hi Ada.".to_owned()));
+    assert_eq!(view.plain_text("Hi <PN>."), "Hi Ada.");
     assert_eq!(
-        view.sim.asks(),
-        [FlightCommand::PlainText("Hi <PN>.".to_owned())],
+        view.sim.screens_asked(),
+        [ScreenAsk::PlainText("Hi <PN>.".to_owned())],
         "asked"
     );
-    assert_eq!(view.sim.fills(), fills, "an ask: no refill");
+    assert_eq!(view.sim.fills(), fills, "a screen's ask: no refill");
     assert!(!view.can_hire_escorts());
-    view.sim
-        .set_plain_texts(vec![("Hi <PN>.".to_owned(), "Hi Ada.".to_owned())]);
     view.sim.port_mut().can_hire_escorts = true;
-    assert_eq!(view.plain_text("Hi <PN>."), "Hi Ada.");
     assert!(view.can_hire_escorts());
+}
+
+#[test]
+fn a_plain_text_the_flight_answers_nothing_to_comes_back_unchanged() {
+    let mut view = faked(in_sol());
+    assert_eq!(
+        view.plain_text("Hi <PN>."),
+        "Hi <PN>.",
+        "nothing queued: nothing answered"
+    );
+    view.sim.fail("no chär");
+    assert_eq!(view.plain_text("Hi <PN>."), "Hi <PN>.", "a failed flight's");
+    assert_eq!(
+        view.sim.screens_asked(),
+        [
+            ScreenAsk::PlainText("Hi <PN>.".to_owned()),
+            ScreenAsk::PlainText("Hi <PN>.".to_owned()),
+        ],
+        "each asked, the failed flight's too"
+    );
 }

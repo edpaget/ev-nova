@@ -873,9 +873,9 @@ fn a_real_flights_coming_traffic_is_the_types_its_session_brings() {
     let coming = session.coming_traffic_ships(&*catalog);
     assert!(!coming.is_empty(), "traffic to come");
     assert_eq!(
-        flight.apply(FlightCommand::ComingTraffic),
-        Answer::ComingTraffic(coming),
-        "asked as a command, over the catalog shared"
+        flight.screen(nova_sim::flight_frame::ScreenAsk::ComingTraffic),
+        nova_sim::flight_frame::ScreenAnswer::ComingTraffic(coming),
+        "asked as a screen's, over the catalog shared"
     );
 }
 

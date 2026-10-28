@@ -566,7 +566,8 @@ fn the_warm_up_reads_the_coming_traffics_sheets_and_cards_so_the_first_step_read
         trafficked(&[130, 131], 3, 129, 1),
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
     );
-    view.sim.set_coming_traffic(vec![ShipId(129)]);
+    view.sim
+        .queue_screen(ScreenAnswer::ComingTraffic(vec![ShipId(129)]));
     assert!(!view.has_read_traffic(ShipId(129)), "nothing read yet");
     view.warm_up_traffic();
     assert!(view.has_read_traffic(ShipId(129)), "its sheet and card");

@@ -970,21 +970,6 @@ pub enum FlightCommand {
         /// Where the ships are drawn.
         drawn: DrawnBoxes,
     },
-    /// An ask ([`FlightCommand::is_ask`]): the ship types the system's
-    /// traffic will bring, whose sheets the view reads as play is entered
-    /// ([`Session::coming_traffic_ships`](crate::Session::coming_traffic_ships)),
-    /// answered [`Answer::ComingTraffic`], and refused without a catalog.
-    ///
-    /// The view asks it once, at entry's warm-up, which the convention
-    /// would make a screen's source method, asked as it opens and
-    /// defaulting to nothing. It is a command instead, on purpose: the
-    /// port's screen query (view-sim-seam phase 22,
-    /// `rdm:phase/view-sim-seam/phase-22-screen-query-and-maps`) will
-    /// absorb it, and a source method added now would be removed there. It isn't a frame field: while traffic is due the answer
-    /// resolves the spawn table from the catalog, which a fill doesn't
-    /// read, and once it isn't the answer is
-    /// [`FlightFrame::traffic_ships`].
-    ComingTraffic,
     /// An ask ([`FlightCommand::is_ask`]): loads `raw`, a `dësc` the view
     /// read that may be missing, naming `movie`, as `_LoadDescription`
     /// loads one ([`Session::load_description`](crate::Session::load_description)),
@@ -998,16 +983,6 @@ pub enum FlightCommand {
         /// The movie it names.
         movie: Option<DescMovie>,
     },
-    /// An ask ([`FlightCommand::is_ask`]): the text with its tags filled
-    /// for the pilot with no mission, as the main screen's descriptions
-    /// are ([`Session::plain_text`](crate::Session::plain_text)), answered
-    /// [`Answer::PlainText`]. It reads the pilot and the remembered rank
-    /// governments and changes nothing, so it is an ask. Like
-    /// [`FlightCommand::ComingTraffic`], the port's screen query
-    /// (view-sim-seam phase 22,
-    /// `rdm:phase/view-sim-seam/phase-22-screen-query-and-maps`) may
-    /// absorb it.
-    PlainText(String),
 }
 
 impl FlightCommand {
@@ -1128,27 +1103,23 @@ impl FlightCommand {
             | Self::SetDoubleTimeKey(_)
             | Self::SetSoundQuiet(_)
             | Self::Hover { .. }
-            | Self::ComingTraffic
-            | Self::LoadDescription { .. }
-            | Self::PlainText(_) => None,
+            | Self::LoadDescription { .. } => None,
         }
     }
 
-    /// Whether the command only asks: [`FlightCommand::Hover`],
-    /// [`FlightCommand::ComingTraffic`], [`FlightCommand::LoadDescription`]
-    /// and [`FlightCommand::PlainText`]. An ask changes nothing a frame
+    /// Whether the command only asks: [`FlightCommand::Hover`] and
+    /// [`FlightCommand::LoadDescription`]. An ask changes nothing a frame
     /// shows (`Session::fill_frame` fills the same frame after it, pinned
     /// in `session/apply/asks.rs`), so the view doesn't refill the frame
-    /// it keeps after one (`nova_view`'s `FlightView::send`).
+    /// it keeps after one (`nova_view`'s `FlightView::send`). The hover is
+    /// asked after each tick's steps with the boxes the view draws, a
+    /// per-frame question, and a description's load writes the run's
+    /// rank governments and its last movie and draws on the chance, so
+    /// neither is a screen's ask ([`ScreenAsk`]); a question a screen asks
+    /// as it opens is.
     #[must_use]
     pub fn is_ask(&self) -> bool {
-        matches!(
-            self,
-            Self::Hover { .. }
-                | Self::ComingTraffic
-                | Self::LoadDescription { .. }
-                | Self::PlainText(_)
-        )
+        matches!(self, Self::Hover { .. } | Self::LoadDescription { .. })
     }
 }
 
@@ -1330,14 +1301,9 @@ pub enum Answer {
     /// What a [`FlightCommand::Hover`] found under the pointer, `None` for
     /// nothing.
     Hovered(Option<Hover>),
-    /// The ship types a [`FlightCommand::ComingTraffic`] says the traffic
-    /// will bring.
-    ComingTraffic(Vec<ShipId>),
     /// The text a [`FlightCommand::LoadDescription`] loaded, empty for a
     /// missing `dësc`.
     Description(String),
-    /// The text a [`FlightCommand::PlainText`] filled.
-    PlainText(String),
 }
 
 impl Answer {
