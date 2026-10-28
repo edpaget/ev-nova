@@ -43,7 +43,7 @@ fn held_in_the_next_step(view: &mut Faked) -> ((bool, bool), bool) {
 
 #[test]
 fn a_look_whose_sheet_cannot_be_read_still_sounds_and_is_reported_once() {
-    // The weapons whose looks are read are the catalog's list.
+    // The weapons whose looks are read are the flight's list.
     let mut catalog = armed(0, &[BLASTER]);
     catalog.looks[0].1 = Ok(WeaponLook {
         sheet: Some(Err("no spïn 3005".to_owned())),
@@ -60,6 +60,7 @@ fn a_look_whose_sheet_cannot_be_read_still_sounds_and_is_reported_once() {
     catalog.star_sheet = Ok(star_sheet());
     let mut fake = FakeFlight::new();
     fake.set_frame(in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
+    fake.set_weapons(vec![BLASTER, UNSEEN]);
     let mut view = FlightView::over(
         Rc::new(catalog),
         fake,

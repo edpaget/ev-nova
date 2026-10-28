@@ -40,6 +40,24 @@ fn failed(reason: &str) -> FakeFlight {
 // The opening read.
 
 #[test]
+fn the_looks_read_are_the_flights_weapons_not_the_catalogs() {
+    // The catalog lists the unseen weapon, which has no look; the flight
+    // lists one the catalog doesn't hold.
+    let mut fake = showing(sol());
+    fake.set_weapons(vec![WeaponId(199)]);
+    let mut view = opened(armed(0, &[]), fake);
+    let diagnostics = view.take_diagnostics();
+    assert!(
+        diagnostics.contains(&Diagnostic::Unreadable("no wëap 199".to_owned())),
+        "{diagnostics:?}"
+    );
+    assert!(
+        !diagnostics.contains(&Diagnostic::Unreadable("no wëap 150".to_owned())),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn a_flight_built_from_a_session_shows_its_course_from_the_first_frame() {
     let mut fake = showing(FlightFrame {
         course_shown: vec![SystemId(131)],

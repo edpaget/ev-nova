@@ -54,7 +54,7 @@ use nova_view::flight::MapOpener;
 use nova_view::flight::sim_port::fixture::check_contract;
 use nova_view::flight::{Collaborators, FlightSim, FlightStart, SessionFlight, open_flight};
 use nova_view::galaxy::SystemId as MapSystemId;
-use nova_view::{Input, Key, MouseButton, Point, Screen, Sound};
+use nova_view::{Diagnostic, Input, Key, MouseButton, Point, Screen, Sound};
 
 /// One `chär` flying from system 130, whose one stellar, 128, is in the
 /// nav defaults' first slot.
@@ -963,6 +963,21 @@ fn fighting_with(
     view.tick(TICK);
     assert_eq!(view.session().expect("flying").npcs().len(), 1);
     view
+}
+
+/// `FlightSim::weapons`: the looks of a real flight's weapons are read as
+/// the view opens, so the blaster's unreadable shot sheet is reported.
+#[test]
+fn a_real_flights_weapon_looks_are_read_as_the_view_opens() {
+    let data = fighting_data(&[]);
+    let session = SessionBuilder::flying(&data).build();
+    let mut view =
+        FlightView::from_session(data, SessionFlight::from(session), &Rulebook::default());
+    let diagnostics = view.take_diagnostics();
+    assert!(
+        diagnostics.contains(&Diagnostic::Unreadable("wëap 128: no spïn 3000".to_owned())),
+        "{diagnostics:?}"
+    );
 }
 
 /// `FlightSim::step`'s report: a real fight's hit comes back in the step

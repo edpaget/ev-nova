@@ -12,8 +12,9 @@
 //! port, the ship's sprite sheet, through the [`ShipSprites`](super::catalog::ShipSprites) port, the
 //! HUD's status bar for the player's government, through the
 //! [`StatusBars`](super::catalog::StatusBars) port, the galaxy for its course map, through the
-//! [`GalaxyCatalog`](crate::galaxy::GalaxyCatalog) port, and the look of every weapon and explosion type,
-//! through the [`CombatLooks`](super::catalog::CombatLooks) port. After that it reads only when the
+//! [`GalaxyCatalog`](crate::galaxy::GalaxyCatalog) port, and the look of every weapon the flight lists
+//! ([`FlightSim::weapons`]) and of every explosion type, through the
+//! [`CombatLooks`](super::catalog::CombatLooks) port. After that it reads only when the
 //! session tells it entered a system afresh: that system, and when the
 //! player's ship changes class: its sprite sheet, and when the system's NPC
 //! traffic is populated: its traffic, through the [`TrafficCatalog`](nova_sim::TrafficCatalog)

@@ -10,7 +10,7 @@ use std::time::Duration;
 #[cfg(any(test, feature = "fixture"))]
 use nova_sim::SimCatalog;
 use nova_sim::flight_frame::FlightCommand;
-use nova_sim::{ALERT_CICN, CombatCatalog, FixedStep, HashedRolls, Rulebook};
+use nova_sim::{ALERT_CICN, FixedStep, HashedRolls, Rulebook};
 
 use crate::flight::cadence::HudCadence;
 use crate::flight::catalog::{CombatLooks, Looks, ShipSprites, StatusBars};
@@ -38,16 +38,10 @@ use super::{
 /// The view's construction over any flight: [`FlightView::over`] reads it
 /// as it opens, through the [`FlightSim`] port, and the edge builds the
 /// flight it is handed (`crate::flight::open_flight`). Only the view's own
-/// catalogs are asked for, the weapons' list among them, which the looks
-/// are read for.
+/// catalogs are asked for: the weapons whose looks are read are the
+/// flight's list ([`FlightSim::weapons`]), not a catalog's.
 impl<
-    C: CombatCatalog
-        + CombatLooks
-        + SystemCatalog
-        + ShipSprites
-        + StatusBars
-        + GalaxyCatalog
-        + EscortMenuLooks,
+    C: CombatLooks + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog + EscortMenuLooks,
     S: FlightSim,
 > FlightView<C, S>
 {
@@ -64,8 +58,8 @@ impl<
     /// say, the galaxy the flight answers
     /// ([`MapSource::galaxy`](crate::flight::sim_port::MapSource::galaxy)), the
     /// course shown and the current system, centred. The looks of every
-    /// weapon are read, and what of them, or of the Red Alert's icon,
-    /// could not be. A flight that failed to start
+    /// weapon the flight lists ([`FlightSim::weapons`]) are read, and what
+    /// of them, or of the Red Alert's icon, could not be. A flight that failed to start
     /// ([`FlightSim::failure`]) shows only why: no scene, sheet, bar,
     /// galaxy or looks. No flight starts landed, so flight's first frame
     /// redraws the bar, as `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
@@ -105,7 +99,7 @@ impl<
             map.recentre();
         }
         let looks = match &failure {
-            None => Looks::read(&*catalog, catalog.weapons().iter().map(|weapon| weapon.id)),
+            None => Looks::read(&*catalog, sim.weapons()),
             Some(_) => Looks::default(),
         };
         let escort_colors = catalog.escort_menu_colors();
@@ -347,7 +341,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
 #[cfg(any(test, feature = "fixture"))]
 impl<
     C: SimCatalog
-        + CombatCatalog
         + CombatLooks
         + SystemCatalog
         + ShipSprites
