@@ -629,11 +629,15 @@ pub(in crate::session) mod tests {
         let drawn = chance.draws;
         let first = asked(&mut session, None, &mut chance, ScreenAsk::Shops);
         assert!(chance.draws > drawn, "precondition: the decline's redraw");
+        // `FirstFires` decides every draw after its first the same way, so
+        // a second redraw would answer the same: count the draws instead.
+        let redrawn = chance.draws;
         assert_eq!(
             asked(&mut session, None, &mut chance, ScreenAsk::Shops),
             first,
             "the redraw applied once"
         );
+        assert_eq!(chance.draws, redrawn, "the third ask drew nothing");
     }
 
     #[test]
