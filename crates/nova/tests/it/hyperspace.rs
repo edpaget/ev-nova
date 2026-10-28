@@ -36,6 +36,7 @@ use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
 use nova_data::records::disaster::Disaster;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::interface::Interface;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -114,19 +115,27 @@ fn ship() -> Vec<u8> {
 /// [`ship`], with a `FuelRegen` of `regen`: a unit of fuel every `regen`
 /// ticks, its `Flags` 0x0008 letting the player's hull regenerate.
 fn ship_with_regen(regen: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 1500, 1000, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[45]);
-    put_i16s(&mut bytes, 0x4A, &[0x0008]);
-    put_i16s(&mut bytes, 0x5E, &[regen]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(1500)
+        .speed(1000)
+        .maneuver(30)
+        .fuel(300)
+        .armor(45)
+        .flags(0x0008)
+        .fuel_regen(regen)
+        .build()
 }
 
 /// [`ship`], with a `Fuel` of `fuel`.
 fn ship_with_fuel(fuel: i16) -> Vec<u8> {
-    let mut bytes = ship();
-    put_i16s(&mut bytes, 0x02, &[30, 1500, 1000, 30, fuel]);
-    bytes
+    ShipBuilder::from_bytes(ship())
+        .shield(30)
+        .accel(1500)
+        .speed(1000)
+        .maneuver(30)
+        .fuel(fuel)
+        .build()
 }
 
 /// Stock `ïntf` 128's areas and font, over background `PICT` 700.
@@ -170,10 +179,11 @@ fn button_picture(width: i16) -> Vec<u8> {
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
 fn ship_anim() -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// An independent `sÿst` at map (`x`, 0) with these hyperlinks and one

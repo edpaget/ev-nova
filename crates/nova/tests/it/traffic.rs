@@ -27,6 +27,7 @@ use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuil
 use nova_data::graphics::{CICN, PICT, RLED};
 use nova_data::records::character::Character;
 use nova_data::records::dude::Dude;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::interface::Interface;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -87,20 +88,24 @@ fn character() -> Vec<u8> {
 /// A `shïp` with this `Shield`, `Accel`, `Speed`, `Maneuver` and `Fuel`,
 /// 45 `Armor`, and `InherentAI` 1, a wimpy trader.
 fn ship(accel: i16, speed: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, accel, speed, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[45]);
-    put_i16s(&mut bytes, 0x42, &[1]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(accel)
+        .speed(speed)
+        .maneuver(30)
+        .fuel(300)
+        .armor(45)
+        .inherent_ai(1)
+        .build()
 }
 
 /// A trader's `shïp`: as [`ship`], carrying one `wëap` 181 in its first
 /// weapon slot (the rest 0, none).
 fn trader() -> Vec<u8> {
-    let mut bytes = ship(600, 600);
-    put_i16s(&mut bytes, 0x12, &[181]);
-    put_i16s(&mut bytes, 0x1A, &[1]);
-    bytes
+    ShipBuilder::from_bytes(ship(600, 600))
+        .weap_types(&[181])
+        .weap_counts(&[1])
+        .build()
 }
 
 /// An exclusive `wëap`: unguided, 10 pixels a tick for 12 ticks, every
@@ -116,10 +121,11 @@ fn exclusive_gun() -> Vec<u8> {
 
 /// A `shän` whose base image is `rlëD` `image`, one set of 36 rotations.
 fn ship_anim(image: i16) -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[image, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(image)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// An `rlëD` of `frames` frames of `size` x `size`.

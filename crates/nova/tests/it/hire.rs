@@ -59,6 +59,7 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::interface::Interface;
 use nova_data::records::mission::Mission;
 use nova_data::records::ship::Ship;
@@ -130,28 +131,31 @@ fn character() -> Vec<u8> {
 /// A `shïp` of 30 shield and 45 armour, slow and steady, unarmed, of tech
 /// level 1, costing `cost`, for hire `hire_random` % of days.
 fn ship(cost: i32, hire_random: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 300, 300, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[45]);
-    put_i16s(&mut bytes, 0x12, &[-1; 4]);
-    put_i16s(&mut bytes, 0x1A, &[1; 4]);
-    put_i16s(&mut bytes, 0x2E, &[1]);
-    bytes[0x30..0x34].copy_from_slice(&cost.to_be_bytes());
-    put_i16s(&mut bytes, 0x38, &[-1, 0]);
-    put_i16s(&mut bytes, 0x42, &[1]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    put_i16s(&mut bytes, 0x38A, &[hire_random]);
-    put_i16s(&mut bytes, 0x6CE, &[-1; 4]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .armor(45)
+        .weap_types(&[-1; 8])
+        .weap_counts(&[1; 4])
+        .tech_level(1)
+        .cost(cost)
+        .explode1(-1)
+        .inherent_ai(1)
+        .default_items(&[-1; 8])
+        .hire_random(hire_random)
+        .build()
 }
 
 /// A `shän` whose base image is `rlëD` `image`, one set of 36 rotations.
 fn ship_anim(image: i16) -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[image, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(image)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// A `spïn` naming `rlëD` `image`, one frame across.
@@ -271,8 +275,9 @@ fn game_data_around(
     let mut hireling = ship(10_000, 100);
     let mut pilot = desc("A steady hand.");
     if pictured {
-        let long_name = b"The Steady Hireling";
-        hireling[0x62E..0x62E + long_name.len()].copy_from_slice(long_name);
+        hireling = ShipBuilder::from_bytes(hireling)
+            .long_name("The Steady Hireling")
+            .build();
         let at = "A steady hand.".len() + 1;
         pilot[at..at + 2].copy_from_slice(&20_129_i16.to_be_bytes());
     }

@@ -9,6 +9,7 @@ use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::interface::Interface;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -61,10 +62,14 @@ fn character() -> Vec<u8> {
 /// tick at most, 0.1 more a tick, 3° a tick. Its `Shield` is 30, `Fuel`
 /// 300 and `Armor` 45.
 fn ship() -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 300, 300, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[45]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .armor(45)
+        .build()
 }
 
 /// Writes 24-bit colours from `at`.
@@ -116,14 +121,17 @@ fn status_picture() -> Vec<u8> {
 /// with an engine glow, `rlëD` 2100, and (if `lights`) lights, `rlëD`
 /// 2200.
 fn ship_anim(lights: bool) -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut bytes, 0x16, &[2100]);
+    let anim = ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .glow_image_id(2100)
+        .frames_per(36);
     if lights {
-        put_i16s(&mut bytes, 0x1E, &[2200]);
+        anim.light_image_id(2200)
+    } else {
+        anim
     }
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    .build()
 }
 
 /// An independent `sÿst` at map (`x`, 0) with these stellars; every other

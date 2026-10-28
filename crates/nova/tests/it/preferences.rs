@@ -26,6 +26,7 @@ use nova_audio::{
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -153,11 +154,18 @@ const LANDING_SOUND: i16 = 10_032;
 fn game_data() -> Rc<GameData> {
     let mut character = vec![0; Character::SIZE.expect("fixed")];
     put_i16s(&mut character, 0x04, &[128, 128, -1, -1, -1]);
-    let mut ship = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut ship, 0x02, &[30, 300, 300, 30, 300]);
-    let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut anim, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut anim, 0x34, &[36]);
+    let ship = ShipBuilder::new()
+        .shield(30)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .build();
+    let anim = ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build();
     let mut system = vec![0; System::SIZE.expect("fixed")];
     put_i16s(&mut system, 0x04, &[-1; 32]);
     put_i16s(&mut system, 0x24, &[128]);

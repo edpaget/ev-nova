@@ -36,6 +36,7 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -132,24 +133,25 @@ fn ship(
     short_name: &str,
     defaults: &[(i16, i16)],
 ) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(
-        &mut bytes,
-        0x00,
-        &[holds, 30, 300, speed, 30, 300, free_mass, 45],
-    );
-    put_i16s(&mut bytes, 0x2E, &[1]);
-    bytes[0x30..0x34].copy_from_slice(&cost.to_be_bytes());
-    put_i16s(&mut bytes, 0x3E, &[mass]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    for (slot, &(id, count)) in defaults.iter().enumerate() {
-        put_i16s(&mut bytes, 0x4E + 2 * slot, &[id]);
-        put_i16s(&mut bytes, 0x56 + 2 * slot, &[count]);
-    }
-    put_i16s(&mut bytes, 0x388, &[100]);
-    bytes[0x5CE..0x5CE + short_name.len()].copy_from_slice(short_name.as_bytes());
-    bytes
+    let (ids, counts): (Vec<i16>, Vec<i16>) = defaults.iter().copied().unzip();
+    ShipBuilder::new()
+        .holds(holds)
+        .shield(30)
+        .accel(300)
+        .speed(speed)
+        .maneuver(30)
+        .fuel(300)
+        .free_mass(free_mass)
+        .armor(45)
+        .tech_level(1)
+        .cost(cost)
+        .mass(mass)
+        .default_items(&[-1; 8])
+        .default_items(&ids)
+        .item_counts(&counts)
+        .buy_random(100)
+        .short_name(short_name)
+        .build()
 }
 
 /// The Shuttle: 10 tons of cargo space, speed 300, 8 tons free, mass 15,
@@ -162,9 +164,10 @@ fn shuttle() -> Vec<u8> {
 /// mass 25, 17,500 credits, carrying a fuel tank, whose Long Name is
 /// "Heavy Shuttle".
 fn heavy_shuttle() -> Vec<u8> {
-    let mut bytes = ship(15, 600, 12, 25, 17_500, "Heavy\\nShuttle", &[(128, 1)]);
-    bytes[0x62E..0x62E + 13].copy_from_slice(b"Heavy Shuttle");
-    bytes
+    let bytes = ship(15, 600, 12, 25, 17_500, "Heavy\\nShuttle", &[(128, 1)]);
+    ShipBuilder::from_bytes(bytes)
+        .long_name("Heavy Shuttle")
+        .build()
 }
 
 /// The Shuttle and the Heavy Shuttle.
@@ -186,10 +189,11 @@ fn tank() -> Vec<u8> {
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
 fn ship_anim() -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// An `rlëD` of `frames` frames of `size` x `size`.

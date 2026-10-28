@@ -10,6 +10,7 @@ use std::time::Duration;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::RLED;
 use nova_data::graphics::fixture::RledBuilder;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::system::System;
@@ -42,10 +43,11 @@ fn put_i16(bytes: &mut [u8], at: usize, value: i16) {
 /// Ship 128, the Shuttle, whose `shän` names a 4-frame 8x8 `rlëD`, and
 /// system 128, Alpha, alone at (0, 0) with no hyperlinks or stellars.
 fn data() -> Rc<GameData> {
-    let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16(&mut anim, 0x00, 1000);
-    put_i16(&mut anim, 0x04, 1);
-    put_i16(&mut anim, 0x34, 4);
+    let anim = ShipAnimBuilder::new()
+        .base_image_id(1000)
+        .base_set_count(1)
+        .frames_per(4)
+        .build();
     let sheet = (0..4)
         .fold(RledBuilder::new(8, 8), |sheet, _| {
             sheet.frame(|f| (0..8).fold(f, |f, _| f.line().pixels(&[0x7C00; 8])))
@@ -62,7 +64,7 @@ fn data() -> Rc<GameData> {
             Ship::TYPE,
             128,
             Some(b"Shuttle"),
-            &vec![0; Ship::SIZE.expect("fixed")],
+            &ShipBuilder::new().build(),
         )
         .resource(ShipAnim::TYPE, 128, None, &anim)
         .resource(RLED, 1000, None, &sheet)

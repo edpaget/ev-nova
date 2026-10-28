@@ -1,9 +1,10 @@
 //! Byte builders for the records tests hand-build most: `shän` and `shïp`.
 //!
 //! Available to this crate's tests and, through the `fixture` feature, to
-//! other crates' tests. Each builder starts from a zeroed record and writes
-//! big-endian fields by name, so a test says which field it sets instead of
-//! where the field lives. The setters are named after the decoded record's
+//! other crates' tests. Each builder starts from a zeroed record (or, with
+//! `from_bytes`, from a record a test already built) and writes big-endian
+//! fields by name, so a test says which field it sets instead of where the
+//! field lives. The setters are named after the decoded record's
 //! fields ([`ShipAnim`], [`Ship`]), whose docs give each offset; this
 //! module's tests decode every setter's bytes to check them. A setter is
 //! added only when a test needs it.
@@ -19,6 +20,12 @@ struct Bytes(Vec<u8>);
 impl Bytes {
     fn zeroed<T: Record>() -> Self {
         Self(vec![0; T::SIZE.expect("a fixed-size record")])
+    }
+
+    fn of<T: Record>(bytes: Vec<u8>) -> Self {
+        let size = T::SIZE.expect("a fixed-size record");
+        assert_eq!(bytes.len(), size, "a record is {size} bytes");
+        Self(bytes)
     }
 
     fn put(&mut self, at: usize, value: &[u8]) {
@@ -43,9 +50,11 @@ impl Bytes {
         }
     }
 
-    /// Writes `text`'s bytes at `at`, in a C-string field `len` long.
+    /// Writes `text`'s bytes at `at`, in a C-string field `len` long, and
+    /// zeroes the rest of the field.
     fn text(&mut self, at: usize, len: usize, text: &str) {
         assert!(text.len() < len, "{text:?} doesn't fit in {len} bytes");
+        self.0[at..at + len].fill(0);
         self.put(at, text.as_bytes());
     }
 }
@@ -82,6 +91,16 @@ impl ShipAnimBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self(Bytes::zeroed::<ShipAnim>())
+    }
+
+    /// The `shän` `bytes`, to change some of its fields.
+    ///
+    /// # Panics
+    ///
+    /// If `bytes` isn't a whole `shän`.
+    #[must_use]
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self(Bytes::of::<ShipAnim>(bytes))
     }
 
     /// The record's bytes.
@@ -124,6 +143,16 @@ impl ShipBuilder {
         Self(Bytes::zeroed::<Ship>())
     }
 
+    /// The `shïp` `bytes`, to change some of its fields.
+    ///
+    /// # Panics
+    ///
+    /// If `bytes` isn't a whole `shïp`.
+    #[must_use]
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self(Bytes::of::<Ship>(bytes))
+    }
+
     /// The record's bytes.
     #[must_use]
     pub fn build(self) -> Vec<u8> {
@@ -149,6 +178,7 @@ impl ShipBuilder {
         fuel_regen @ 0x5E,
         buy_random @ 0x388,
         hire_random @ 0x38A,
+        escort_type @ 0x732,
     }
 
     /// Sets [`Ship::cost`] (offset 0x30, i32).
@@ -189,6 +219,14 @@ impl ShipBuilder {
         self
     }
 
+    /// Sets the ammunition loads from slot 0: [`Ship::ammo_load1_4`]
+    /// (offset 0x22) then [`Ship::ammo_load5_8`] (offset 0x6DE).
+    #[must_use]
+    pub fn ammo_loads(mut self, loads: &[i16]) -> Self {
+        self.0.slots(0x22, 0x6DE, loads);
+        self
+    }
+
     /// Sets the default items from slot 0: [`Ship::default_items1_4`]
     /// (offset 0x4E) then [`Ship::default_items5_8`] (offset 0x370).
     #[must_use]
@@ -202,6 +240,13 @@ impl ShipBuilder {
     #[must_use]
     pub fn item_counts(mut self, counts: &[i16]) -> Self {
         self.0.slots(0x56, 0x378, counts);
+        self
+    }
+
+    /// Sets [`Ship::on_purchase`] (offset 0x26A, 256 bytes).
+    #[must_use]
+    pub fn on_purchase(mut self, script: &str) -> Self {
+        self.0.text(0x26A, 256, script);
         self
     }
 
@@ -330,7 +375,7 @@ mod tests {
 
     #[test]
     fn every_i16_ship_setter_writes_its_field() {
-        let cases: [ShipCase; 18] = [
+        let cases: [ShipCase; 19] = [
             ("holds", ShipBuilder::holds, |s| s.holds),
             ("shield", ShipBuilder::shield, |s| s.shield),
             ("accel", ShipBuilder::accel, |s| s.accel),
@@ -349,6 +394,7 @@ mod tests {
             ("fuel_regen", ShipBuilder::fuel_regen, |s| s.fuel_regen),
             ("buy_random", ShipBuilder::buy_random, |s| s.buy_random),
             ("hire_random", ShipBuilder::hire_random, |s| s.hire_random),
+            ("escort_type", ShipBuilder::escort_type, |s| s.escort_type),
         ];
         for (name, set, get) in cases {
             assert_eq!(
@@ -379,7 +425,8 @@ mod tests {
                 .weap_types(&[128, 129, 130, 131, 132, 133, 134, 135])
                 .weap_counts(&[1, 2, 3, 4, 5, 6, 7, 8])
                 .default_items(&[140, 141, 142, 143, 144, 145, 146, 147])
-                .item_counts(&[11, 12, 13, 14, 15, 16, 17, 18]),
+                .item_counts(&[11, 12, 13, 14, 15, 16, 17, 18])
+                .ammo_loads(&[21, 22, 23, 24, 25, 26, 27, 28]),
         );
         assert_eq!(
             decoded.weap_type1_4,
@@ -401,6 +448,8 @@ mod tests {
         );
         assert_eq!(decoded.item_count1_4, [11, 12, 13, 14]);
         assert_eq!(decoded.item_count5_8, [15, 16, 17, 18]);
+        assert_eq!(decoded.ammo_load1_4, [21, 22, 23, 24]);
+        assert_eq!(decoded.ammo_load5_8, [25, 26, 27, 28]);
     }
 
     #[test]
@@ -431,12 +480,41 @@ mod tests {
                 .short_name("Shuttle")
                 .comm_name("Shuttle Kestrel")
                 .long_name("A long shuttle name")
-                .subtitle("Light courier"),
+                .subtitle("Light courier")
+                .on_purchase("b12 !b13"),
         );
         assert_eq!(decoded.short_name.as_str(), "Shuttle");
         assert_eq!(decoded.comm_name.as_str(), "Shuttle Kestrel");
         assert_eq!(decoded.long_name.as_str(), "A long shuttle name");
         assert_eq!(decoded.subtitle.as_str(), "Light courier");
+        assert_eq!(decoded.on_purchase.as_str(), "b12 !b13");
+    }
+
+    #[test]
+    fn a_name_replaces_the_whole_field() {
+        let decoded = ship(ShipBuilder::new().short_name("Second").short_name("Thd"));
+        assert_eq!(decoded.short_name.as_str(), "Thd");
+    }
+
+    #[test]
+    fn from_bytes_changes_only_the_fields_it_sets() {
+        let base = ShipBuilder::new().shield(30).armor(45).build();
+        let changed = ShipBuilder::from_bytes(base).armor(50).build();
+        assert_eq!(changed, ShipBuilder::new().shield(30).armor(50).build());
+        let anim = ShipAnimBuilder::new().frames_per(36).build();
+        assert_eq!(
+            ShipAnimBuilder::from_bytes(anim).base_image_id(7).build(),
+            ShipAnimBuilder::new()
+                .base_image_id(7)
+                .frames_per(36)
+                .build()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "a record is")]
+    fn from_bytes_wants_a_whole_record() {
+        let _ = ShipBuilder::from_bytes(vec![0; 3]);
     }
 
     #[test]

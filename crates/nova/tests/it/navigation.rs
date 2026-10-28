@@ -24,6 +24,7 @@ use nova::platform;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::interface::Interface;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -85,10 +86,14 @@ fn character() -> Vec<u8> {
 /// A fast `shïp`: `Accel` 1500, `Speed` 1000 and `Maneuver` 30, with
 /// `Shield` 30, `Fuel` 300 (three jumps) and `Armor` 45.
 fn ship() -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 1500, 1000, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[45]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(1500)
+        .speed(1000)
+        .maneuver(30)
+        .fuel(300)
+        .armor(45)
+        .build()
 }
 
 /// Stock `ïntf` 128's areas and font, over background `PICT` 700: its
@@ -124,10 +129,11 @@ fn status_picture() -> Vec<u8> {
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
 fn ship_anim() -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// An independent `sÿst` at map (`x`, 0) with these hyperlinks and these

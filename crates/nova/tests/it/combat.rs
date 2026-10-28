@@ -90,6 +90,7 @@ use nova_data::graphics::{PICT, RLED};
 use nova_data::records::boom::Boom;
 use nova_data::records::character::Character;
 use nova_data::records::dude::Dude;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::govt::Govt;
 use nova_data::records::interface::Interface;
 use nova_data::records::outfit::Outfit;
@@ -188,29 +189,29 @@ fn snd(frames: usize) -> Vec<u8> {
 /// `weapons` (one of each) and `items` (each with its count), destroyed at
 /// once in explosion type 0, `bööm` 128.
 fn ship(shield: i16, armor: i16, weapons: &[i16], items: &[(i16, i16)]) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[shield, 300, 300, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[armor]);
-    put_i16s(&mut bytes, 0x12, &[-1; 4]);
-    put_i16s(&mut bytes, 0x12, weapons);
-    put_i16s(&mut bytes, 0x1A, &[1; 4]);
-    put_i16s(&mut bytes, 0x38, &[-1, 0]);
-    put_i16s(&mut bytes, 0x42, &[1]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    put_i16s(&mut bytes, 0x6CE, &[-1; 4]);
-    for (slot, &(item, count)) in items.iter().enumerate() {
-        put_i16s(&mut bytes, 0x4E + 2 * slot, &[item]);
-        put_i16s(&mut bytes, 0x56 + 2 * slot, &[count]);
-    }
-    bytes
+    let (ids, counts): (Vec<i16>, Vec<i16>) = items.iter().copied().unzip();
+    ShipBuilder::new()
+        .shield(shield)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .armor(armor)
+        .weap_types(&[-1; 8])
+        .weap_types(weapons)
+        .weap_counts(&[1; 4])
+        .explode1(-1)
+        .inherent_ai(1)
+        .default_items(&[-1; 8])
+        .default_items(&ids)
+        .item_counts(&counts)
+        .build()
 }
 
 /// `bytes`, a `shïp`, of no `Speed`: setup starts it at rest, and it
 /// never moves.
-fn still(mut bytes: Vec<u8>) -> Vec<u8> {
-    put_i16s(&mut bytes, 0x06, &[0]);
-    bytes
+fn still(bytes: Vec<u8>) -> Vec<u8> {
+    ShipBuilder::from_bytes(bytes).speed(0).build()
 }
 
 /// An unguided `wëap` firing every `reload` ticks, 20 pixels a tick for
@@ -256,10 +257,11 @@ fn rockets() -> Vec<u8> {
 
 /// A `shän` whose base image is `rlëD` `image`, one set of 36 rotations.
 fn ship_anim(image: i16) -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[image, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(image)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// A `spïn` naming `rlëD` `image`, in a grid `tiles` across.
@@ -1300,12 +1302,14 @@ fn pict(width: i16, height: i16, rgb: [u8; 3]) -> Vec<u8> {
 /// bar, Nova's button pictures and the plunder and assignment dialogs'
 /// pictures (`PICT` 8515 and 8516) are there.
 fn boarding_data() -> Rc<GameData> {
-    let mut boarder = ship(30, 45, &[128], &[]);
-    put_i16s(&mut boarder, 0x44, &[10]);
-    let mut trader = ship(0, 40, &[], &[]);
-    put_i16s(&mut trader, 0x00, &[20]);
-    put_i16s(&mut trader, 0x06, &[100]);
-    put_i16s(&mut trader, 0x44, &[1]);
+    let boarder = ShipBuilder::from_bytes(ship(30, 45, &[128], &[]))
+        .crew(10)
+        .build();
+    let trader = ShipBuilder::from_bytes(ship(0, 40, &[], &[]))
+        .holds(20)
+        .speed(100)
+        .crew(1)
+        .build();
     let mut dude = dude();
     put_i16s(&mut dude, 0x04, &[0x0041]);
     let mut fork = holding(ForkBuilder::new(), &[128])
@@ -1903,9 +1907,9 @@ fn hailed_govt(flags: u16, name: &str) -> Vec<u8> {
 /// A `shïp` with this `Shield`, `Armor` and `weapons`, named `name` when
 /// hailed.
 fn hailed_ship(shield: i16, armor: i16, weapons: &[i16], name: &str) -> Vec<u8> {
-    let mut bytes = ship(shield, armor, weapons, &[]);
-    bytes[0x60E..0x60E + name.len()].copy_from_slice(name.as_bytes());
-    bytes
+    ShipBuilder::from_bytes(ship(shield, armor, weapons, &[]))
+        .comm_name(name)
+        .build()
 }
 
 /// The first `chär` flies the "Hailer" (ship 128: 30 shield, 45 armour,
@@ -2352,18 +2356,21 @@ fn more_comm_strings() -> Vec<String> {
 /// for you?" (group 4) for an escort.
 fn escort_data(alpha_dudes: &[i16]) -> Rc<GameData> {
     use nova_data::records::string_list::StrList;
-    let mut boarder = ship(30, 45, &[128], &[]);
-    put_i16s(&mut boarder, 0x44, &[10]);
-    let mut trader = ship(0, 40, &[], &[]);
-    put_i16s(&mut trader, 0x00, &[20]);
-    put_i16s(&mut trader, 0x06, &[100]);
-    put_i16s(&mut trader, 0x44, &[1]);
-    put_i16s(&mut trader, 0x732, &[3]);
+    let boarder = ShipBuilder::from_bytes(ship(30, 45, &[128], &[]))
+        .crew(10)
+        .build();
+    let trader = ShipBuilder::from_bytes(ship(0, 40, &[], &[]))
+        .holds(20)
+        .speed(100)
+        .crew(1)
+        .escort_type(3)
+        .build();
     let mut gun = weapon(10, 5, -1, 0, 8, 0);
     put_i16s(&mut gun, 0x06, &[10]);
-    let mut warship = ship(30, 45, &[129], &[]);
-    put_i16s(&mut warship, 0x42, &[3]);
-    put_i16s(&mut warship, 0x732, &[2]);
+    let warship = ShipBuilder::from_bytes(ship(30, 45, &[129], &[]))
+        .inherent_ai(3)
+        .escort_type(2)
+        .build();
     let mut traders = dude();
     put_i16s(&mut traders, 0x04, &[0x0041]);
     let mut replies = comm_strings();
@@ -2903,9 +2910,9 @@ const FIGHTER: f32 = 5.0;
 fn fighter_data(alpha_dudes: &[i16]) -> Rc<GameData> {
     use nova_data::records::string_list::StrList;
     let carrier_of = |weapons: &[i16], items: &[(i16, i16)]| {
-        let mut bytes = ship(30, 45, weapons, items);
-        put_i16s(&mut bytes, 0x44, &[10]);
-        bytes
+        ShipBuilder::from_bytes(ship(30, 45, weapons, items))
+            .crew(10)
+            .build()
     };
     let boarder = carrier_of(&[128, 130], &[(128, 2)]);
     let mut bay = weapon(30, 0, 132, 0, 8, 0x0002);
@@ -2913,13 +2920,15 @@ fn fighter_data(alpha_dudes: &[i16]) -> Rc<GameData> {
     put_i16s(&mut bay, 0x6C, &[4]);
     let mut gun = weapon(10, 5, -1, 0, 8, 0);
     put_i16s(&mut gun, 0x06, &[10]);
-    let mut fighter = ship(20, 30, &[129], &[]);
-    put_i16s(&mut fighter, 0x42, &[4]);
-    put_i16s(&mut fighter, 0x732, &[0]);
-    let mut carrier = carrier_of(&[130], &[]);
-    put_i16s(&mut carrier, 0x22, &[2]);
-    put_i16s(&mut carrier, 0x42, &[3]);
-    put_i16s(&mut carrier, 0x732, &[2]);
+    let fighter = ShipBuilder::from_bytes(ship(20, 30, &[129], &[]))
+        .inherent_ai(4)
+        .escort_type(0)
+        .build();
+    let carrier = ShipBuilder::from_bytes(carrier_of(&[130], &[]))
+        .ammo_loads(&[2])
+        .inherent_ai(3)
+        .escort_type(2)
+        .build();
     let mut fighters = vec![0; Outfit::SIZE.expect("fixed")];
     put_i16s(&mut fighters, 0x06, &[3, 130, 9999]);
     put_i16s(&mut fighters, 0x3F0, &[100]);

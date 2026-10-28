@@ -5,6 +5,7 @@ use nova_data::graphics::RLED;
 use nova_data::graphics::fixture::RledBuilder;
 use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::mission::Mission;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
@@ -310,10 +311,7 @@ fn game_data_fork(
             sheet.frame(|f| f.line().pixels(&[0x7C00]))
         })
         .build();
-    let mut average = vec![0; Ship::SIZE.expect("fixed")];
-    for (at, value) in [(0x04, 300_i16), (0x06, 300), (0x08, 10)] {
-        average[at..at + 2].copy_from_slice(&value.to_be_bytes());
-    }
+    let mut average = ShipBuilder::new().accel(300).speed(300).maneuver(10);
     let mut character = vec![0; Character::SIZE.expect("fixed")];
     character[0x32..0x32 + on_start.len()].copy_from_slice(on_start);
     let mut stellar = landable();
@@ -322,7 +320,7 @@ fn game_data_fork(
     beta[0x1A..0x1C].copy_from_slice(&BETA_AMBIENT.to_be_bytes());
     let mut fork = ForkBuilder::new();
     if trading {
-        average[0x00..0x02].copy_from_slice(&10_i16.to_be_bytes());
+        average = average.holds(10);
         character[0x00..0x04].copy_from_slice(&1000_i32.to_be_bytes());
         stellar[0x06..0x0A].copy_from_slice(&0x2000_0043_u32.to_be_bytes());
         fork = fork
@@ -332,7 +330,7 @@ fn game_data_fork(
     if outfitting {
         stellar[0x09] |= 0x04;
         stellar[0x0C..0x0E].copy_from_slice(&1_i16.to_be_bytes());
-        average[0x0C..0x0E].copy_from_slice(&10_i16.to_be_bytes());
+        average = average.free_mass(10);
         let mut booster = booster_record(on_purchase);
         if !on_purchase.is_empty() {
             let leave = str_list(&["Off you go, <PSN>."]);
@@ -355,7 +353,7 @@ fn game_data_fork(
         fork = fork.resource(StrList::TYPE, 2002, None, &str_list(&prompts));
         second_ship(buy_random)
     } else {
-        vec![0; Ship::SIZE.expect("fixed")]
+        ShipBuilder::new().build()
     };
     character[0x04..0x06].copy_from_slice(&128_i16.to_be_bytes());
     character[0x06..0x08].copy_from_slice(&128_i16.to_be_bytes());
@@ -367,7 +365,7 @@ fn game_data_fork(
     spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
     with_main_screen(fork)
         .resource(Ship::TYPE, 129, Some(b"Second"), &ship)
-        .resource(Ship::TYPE, 128, Some(b"First"), &average)
+        .resource(Ship::TYPE, 128, Some(b"First"), &average.build())
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
         .resource(ShipAnim::TYPE, 128, None, &anim)
         .resource(ShipAnim::TYPE, 129, None, &anim)
@@ -454,50 +452,40 @@ fn self_hiding_data() -> Rc<GameData> {
 /// The `shän` every fixture ship shares: one 1 x 1 frame of `rlë8`
 /// 1000.
 fn ship_anim() -> Vec<u8> {
-    let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
-    anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
-    anim[0x04..0x06].copy_from_slice(&1_i16.to_be_bytes());
-    anim[0x34..0x36].copy_from_slice(&4_i16.to_be_bytes());
-    anim
+    ShipAnimBuilder::new()
+        .base_image_id(1000)
+        .base_set_count(1)
+        .frames_per(4)
+        .build()
 }
 
 /// `shïp` 129, "Second": 800 credits, for sale on a `BuyRandom` of
 /// `buy_random`, carrying a booster.
 fn second_ship(buy_random: i16) -> Vec<u8> {
-    let mut ship = vec![0; Ship::SIZE.expect("fixed")];
-    for (at, value) in [
-        (0x00, 20_i16),
-        (0x04, 300),
-        (0x06, 600),
-        (0x08, 10),
-        (0x0C, 12),
-        (0x2E, 1),
-        (0x388, buy_random),
-    ] {
-        ship[at..at + 2].copy_from_slice(&value.to_be_bytes());
-    }
-    ship[0x30..0x34].copy_from_slice(&800_i32.to_be_bytes());
-    for (slot, (id, count)) in [(128_i16, 1_i16), (-1, 0), (-1, 0), (-1, 0)]
-        .into_iter()
-        .enumerate()
-    {
-        let at = 0x4E + 2 * slot;
-        ship[at..at + 2].copy_from_slice(&id.to_be_bytes());
-        ship[at + 8..at + 10].copy_from_slice(&count.to_be_bytes());
-        ship[0x370 + 2 * slot..0x372 + 2 * slot].copy_from_slice(&(-1_i16).to_be_bytes());
-    }
-    ship[0x5CE..0x5D4].copy_from_slice(b"Second");
-    ship[0x62E..0x63D].copy_from_slice(b"Second Shipyard");
-    ship
+    ShipBuilder::new()
+        .holds(20)
+        .accel(300)
+        .speed(600)
+        .maneuver(10)
+        .free_mass(12)
+        .tech_level(1)
+        .buy_random(buy_random)
+        .cost(800)
+        .default_items(&[128, -1, -1, -1, -1, -1, -1, -1])
+        .item_counts(&[1])
+        .short_name("Second")
+        .long_name("Second Shipyard")
+        .build()
 }
 
 /// [`shipbuying_data`], where the shipyard also sells `shïp` 130,
 /// "Third", [`second_ship`] at 5,000 credits: more than the pilot's
 /// cash and any trade-in cover.
 fn dear_shipbuying_data() -> Rc<GameData> {
-    let mut third = second_ship(100);
-    third[0x30..0x34].copy_from_slice(&5000_i32.to_be_bytes());
-    third[0x5CE..0x5D4].copy_from_slice(b"Third\0");
+    let third = ShipBuilder::from_bytes(second_ship(100))
+        .cost(5000)
+        .short_name("Third")
+        .build();
     loaded(
         &game_data_fork(true, true, true, 100, b"", b"", None)
             .resource(Ship::TYPE, 130, Some(b"Third"), &third)

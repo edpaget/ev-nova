@@ -112,6 +112,7 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::interface::Interface;
 use nova_data::records::mission::Mission;
 use nova_data::records::outfit::Outfit;
@@ -181,26 +182,29 @@ fn character() -> Vec<u8> {
 
 /// A `shïp` of 30 shield and 45 armour, slow and steady, unarmed.
 fn ship() -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 300, 300, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[45]);
-    put_i16s(&mut bytes, 0x12, &[-1; 4]);
-    put_i16s(&mut bytes, 0x1A, &[1; 4]);
-    put_i16s(&mut bytes, 0x2E, &[1]);
-    put_i16s(&mut bytes, 0x38, &[-1, 0]);
-    put_i16s(&mut bytes, 0x42, &[1]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    put_i16s(&mut bytes, 0x6CE, &[-1; 4]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .armor(45)
+        .weap_types(&[-1; 8])
+        .weap_counts(&[1; 4])
+        .tech_level(1)
+        .explode1(-1)
+        .inherent_ai(1)
+        .default_items(&[-1; 8])
+        .build()
 }
 
 /// A `shän` whose base image is `rlëD` `image`, one set of 36 rotations.
 fn ship_anim(image: i16) -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[image, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(image)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// A `spïn` naming `rlëD` `image`, one frame across.
@@ -1771,13 +1775,12 @@ fn shopping_pad() -> Vec<u8> {
 /// (130), for sale every day at 1,000 credits; and a fuel pod (128),
 /// massless, at 100 credits, up to 10.
 fn shop_goods() -> ForkBuilder {
-    let mut racer = ship();
-    racer[0x30..0x34].copy_from_slice(&1000_i32.to_be_bytes());
-    put_i16s(&mut racer, 0x388, &[100, 100]);
-    let on_purchase = b"M129\0";
-    let mut scout = racer.clone();
-    put_i16s(&mut scout, 0x388, &[100, 0]);
-    racer[0x26A..0x26A + on_purchase.len()].copy_from_slice(on_purchase);
+    let racer = ShipBuilder::from_bytes(ship())
+        .cost(1000)
+        .buy_random(100)
+        .hire_random(100);
+    let scout = racer.clone().hire_random(0).build();
+    let racer = racer.on_purchase("M129").build();
     let mut pod = vec![0; Outfit::SIZE.expect("fixed")];
     put_i16s(&mut pod, 0x00, &[10, 0, 1, 0, 0, 10]);
     pod[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());

@@ -29,6 +29,7 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -113,21 +114,28 @@ fn character(cash: i32) -> Vec<u8> {
 /// tick, a tick), speed 300, maneuver 300 (30° a tick), 300 fuel and no
 /// fuel regeneration, armour 45.
 fn ship() -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[20, 30, 3000, 300, 300, 300, 10, 45]);
-    put_i16s(&mut bytes, 0x2E, &[1]);
-    put_i16s(&mut bytes, 0x3E, &[20]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    bytes
+    ShipBuilder::new()
+        .holds(20)
+        .shield(30)
+        .accel(3000)
+        .speed(300)
+        .maneuver(300)
+        .fuel(300)
+        .free_mass(10)
+        .armor(45)
+        .tech_level(1)
+        .mass(20)
+        .default_items(&[-1; 8])
+        .build()
 }
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
 fn ship_anim() -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// An `rlëD` of `frames` frames of `size` x `size`.

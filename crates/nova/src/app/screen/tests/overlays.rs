@@ -64,12 +64,7 @@ fn start_up_text_only(id: i16, text: &str) -> Rc<GameData> {
     loaded(
         &ForkBuilder::new()
             .resource(Desc::TYPE, id, None, &desc_of(text))
-            .resource(
-                Ship::TYPE,
-                128,
-                Some(b"First"),
-                &vec![0; Ship::SIZE.expect("fixed")],
-            ),
+            .resource(Ship::TYPE, 128, Some(b"First"), &ShipBuilder::new().build()),
     )
 }
 

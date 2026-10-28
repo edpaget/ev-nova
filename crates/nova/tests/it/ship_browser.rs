@@ -12,6 +12,7 @@ use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::RLED;
 use nova_data::graphics::fixture::RledBuilder;
 use nova_data::records::desc::Desc;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::store::fixture::one_file;
@@ -36,30 +37,26 @@ impl WindowPort for FakeWindow {
     fn request_redraw(&mut self) {}
 }
 
-fn put(bytes: &mut [u8], at: usize, value: &[u8]) {
-    bytes[at..at + value.len()].copy_from_slice(value);
-}
-
 /// A `shïp` costing 12,000 credits with speed 300, armour 40, shields 80.
 fn ship() -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put(&mut bytes, 0x02, &80_i16.to_be_bytes());
-    put(&mut bytes, 0x06, &300_i16.to_be_bytes());
-    put(&mut bytes, 0x0E, &40_i16.to_be_bytes());
-    put(&mut bytes, 0x30, &12_000_i32.to_be_bytes());
-    bytes
+    ShipBuilder::new()
+        .shield(80)
+        .speed(300)
+        .armor(40)
+        .cost(12_000)
+        .build()
 }
 
 /// A `shän` with base image `base` (one set of 4 rotations) and glow and
 /// lights images `glow` and `lights`.
 fn anim(base: i16, glow: i16, lights: i16) -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put(&mut bytes, 0x00, &base.to_be_bytes());
-    put(&mut bytes, 0x04, &1_i16.to_be_bytes());
-    put(&mut bytes, 0x16, &glow.to_be_bytes());
-    put(&mut bytes, 0x1E, &lights.to_be_bytes());
-    put(&mut bytes, 0x34, &4_i16.to_be_bytes());
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(base)
+        .base_set_count(1)
+        .glow_image_id(glow)
+        .light_image_id(lights)
+        .frames_per(4)
+        .build()
 }
 
 /// An `rlëD` of 4 `size` x `size` frames, each a different colour.
@@ -98,10 +95,13 @@ fn data() -> Rc<GameData> {
 /// blinking as the Shuttle's do (`BlinkMode` 1, A=4 B=1 C=2 D=20): lit at
 /// ticks 1-3 and 10-12 of every 40.
 fn blinking_data() -> Rc<GameData> {
-    let mut shan = anim(1000, 1100, 1200);
-    for (at, value) in [(0x36, 1_i16), (0x38, 4), (0x3A, 1), (0x3C, 2), (0x3E, 20)] {
-        put(&mut shan, at, &value.to_be_bytes());
-    }
+    let shan = ShipAnimBuilder::from_bytes(anim(1000, 1100, 1200))
+        .blink_mode(1)
+        .blink_val_a(4)
+        .blink_val_b(1)
+        .blink_val_c(2)
+        .blink_val_d(20)
+        .build();
     let fork = ForkBuilder::new()
         .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship())
         .resource(ShipAnim::TYPE, 128, None, &shan)

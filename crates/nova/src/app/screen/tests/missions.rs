@@ -830,18 +830,23 @@ fn person_offer_fork(fit: impl FnOnce(&mut Vec<u8>)) -> ForkBuilder {
         }
     };
     let ship = |crew| {
-        let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-        put(&mut bytes, 0x00, &[0, 0, 300, 300, 10, 300, 0, 100]);
-        put(&mut bytes, 0x12, &[-1; 4]);
-        put(&mut bytes, 0x42, &[1, crew]);
-        put(&mut bytes, 0x4E, &[-1; 4]);
-        put(&mut bytes, 0x370, &[-1; 4]);
-        put(&mut bytes, 0x6CE, &[-1; 4]);
-        bytes
+        ShipBuilder::new()
+            .accel(300)
+            .speed(300)
+            .maneuver(10)
+            .fuel(300)
+            .armor(100)
+            .weap_types(&[-1; 8])
+            .inherent_ai(1)
+            .crew(crew)
+            .default_items(&[-1; 8])
+            .build()
     };
-    let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put(&mut anim, 0x00, &[1000, 0, 1]);
-    put(&mut anim, 0x34, &[4]);
+    let anim = ShipAnimBuilder::new()
+        .base_image_id(1000)
+        .base_set_count(1)
+        .frames_per(4)
+        .build();
     let sheet = (0..4)
         .fold(RledBuilder::new(1, 1), |sheet, _| {
             sheet.frame(|f| f.line().pixels(&[0x7C00]))

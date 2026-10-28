@@ -38,6 +38,7 @@ use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::govt::Govt;
 use nova_data::records::interface::Interface;
 use nova_data::records::outfit::Outfit;
@@ -103,19 +104,21 @@ fn character() -> Vec<u8> {
 /// A `shïp` with this `Shield` and `Armor`, slow and steady, carrying
 /// `weapons` (one of each), destroyed at once, named `name` when hailed.
 fn ship(shield: i16, armor: i16, weapons: &[i16], name: &str) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[shield, 300, 300, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[armor]);
-    put_i16s(&mut bytes, 0x12, &[-1; 4]);
-    put_i16s(&mut bytes, 0x12, weapons);
-    put_i16s(&mut bytes, 0x1A, &[1; 4]);
-    put_i16s(&mut bytes, 0x38, &[-1, 0]);
-    put_i16s(&mut bytes, 0x42, &[1]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    put_i16s(&mut bytes, 0x6CE, &[-1; 4]);
-    bytes[0x60E..0x60E + name.len()].copy_from_slice(name.as_bytes());
-    bytes
+    ShipBuilder::new()
+        .shield(shield)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .armor(armor)
+        .weap_types(&[-1; 8])
+        .weap_types(weapons)
+        .weap_counts(&[1; 4])
+        .explode1(-1)
+        .inherent_ai(1)
+        .default_items(&[-1; 8])
+        .comm_name(name)
+        .build()
 }
 
 /// An unguided `wëap` firing every 10 ticks, 20 pixels a tick for 30
@@ -158,10 +161,11 @@ fn person(govt: i16, ship: i16, flags: u16, (comm, hail): (i16, i16), subtitle: 
 
 /// A `shän` whose base image is `rlëD` `image`, one set of 36 rotations.
 fn ship_anim(image: i16) -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[image, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(image)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// A `spïn` naming `rlëD` `image`, one frame across.

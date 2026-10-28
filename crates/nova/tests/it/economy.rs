@@ -29,6 +29,7 @@ use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -133,24 +134,25 @@ fn ship(
     require: u64,
     defaults: &[(i16, i16)],
 ) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(
-        &mut bytes,
-        0x00,
-        &[holds, 30, 3000, speed, 300, 300, free_mass, 45],
-    );
-    put_i16s(&mut bytes, 0x2E, &[1]);
-    bytes[0x30..0x34].copy_from_slice(&cost.to_be_bytes());
-    put_i16s(&mut bytes, 0x3E, &[mass]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    for (slot, &(id, count)) in defaults.iter().enumerate() {
-        put_i16s(&mut bytes, 0x4E + 2 * slot, &[id]);
-        put_i16s(&mut bytes, 0x56 + 2 * slot, &[count]);
-    }
-    bytes[0x380..0x388].copy_from_slice(&require.to_be_bytes());
-    put_i16s(&mut bytes, 0x388, &[buy_random]);
-    bytes
+    let (ids, counts): (Vec<i16>, Vec<i16>) = defaults.iter().copied().unzip();
+    ShipBuilder::new()
+        .holds(holds)
+        .shield(30)
+        .accel(3000)
+        .speed(speed)
+        .maneuver(300)
+        .fuel(300)
+        .free_mass(free_mass)
+        .armor(45)
+        .tech_level(1)
+        .cost(cost)
+        .mass(mass)
+        .default_items(&[-1; 8])
+        .default_items(&ids)
+        .item_counts(&counts)
+        .require(require)
+        .buy_random(buy_random)
+        .build()
 }
 
 /// The ship flown first: 20 tons of cargo space, speed 300, 10 tons free,
@@ -193,10 +195,11 @@ fn outfit(
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
 fn ship_anim() -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// An `rlëD` of `frames` frames of `size` x `size`.
