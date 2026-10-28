@@ -94,9 +94,16 @@ impl ShipAnimBuilder {
         base_image_id @ 0x00,
         base_mask_id @ 0x02,
         base_set_count @ 0x04,
+        base_x_size @ 0x06,
+        base_y_size @ 0x08,
         glow_image_id @ 0x16,
         light_image_id @ 0x1E,
         frames_per @ 0x34,
+        blink_mode @ 0x36,
+        blink_val_a @ 0x38,
+        blink_val_b @ 0x3A,
+        blink_val_c @ 0x3C,
+        blink_val_d @ 0x3E,
     }
 }
 
@@ -257,7 +264,7 @@ mod tests {
 
     #[test]
     fn every_shan_setter_writes_its_field() {
-        let cases: [AnimCase; 6] = [
+        let cases: [AnimCase; 13] = [
             ("base_image_id", ShipAnimBuilder::base_image_id, |a| {
                 a.base_image_id
             }),
@@ -267,6 +274,12 @@ mod tests {
             ("base_set_count", ShipAnimBuilder::base_set_count, |a| {
                 a.base_set_count
             }),
+            ("base_x_size", ShipAnimBuilder::base_x_size, |a| {
+                a.base_x_size
+            }),
+            ("base_y_size", ShipAnimBuilder::base_y_size, |a| {
+                a.base_y_size
+            }),
             ("glow_image_id", ShipAnimBuilder::glow_image_id, |a| {
                 a.glow_image_id
             }),
@@ -274,6 +287,19 @@ mod tests {
                 a.light_image_id
             }),
             ("frames_per", ShipAnimBuilder::frames_per, |a| a.frames_per),
+            ("blink_mode", ShipAnimBuilder::blink_mode, |a| a.blink_mode),
+            ("blink_val_a", ShipAnimBuilder::blink_val_a, |a| {
+                a.blink_val_a
+            }),
+            ("blink_val_b", ShipAnimBuilder::blink_val_b, |a| {
+                a.blink_val_b
+            }),
+            ("blink_val_c", ShipAnimBuilder::blink_val_c, |a| {
+                a.blink_val_c
+            }),
+            ("blink_val_d", ShipAnimBuilder::blink_val_d, |a| {
+                a.blink_val_d
+            }),
         ];
         for (name, set, get) in cases {
             let decoded = anim(set(ShipAnimBuilder::new(), 0x1234));
