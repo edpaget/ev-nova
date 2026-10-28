@@ -6,6 +6,7 @@
 use super::Session;
 use crate::flight_frame::{FlightFrame, FlightOpening, Gates, MapKey};
 
+mod facts;
 mod hud;
 mod names;
 mod world;
@@ -31,6 +32,8 @@ impl Session {
             fate,
             hold_expired,
             leave_due,
+            recharge_enabled,
+            seen_intro,
             jump_readiness,
             texts_queued,
             gates,
@@ -67,6 +70,7 @@ impl Session {
         *fate = self.ship.player_fate(self.player_end, self.pod);
         *hold_expired = self.ship.hold_expired(self.player_end);
         *leave_due = self.run.leave_due(self.mode.landed());
+        self.fill_router_facts(recharge_enabled, seen_intro);
         *jump_readiness = self.jump_readiness();
         *texts_queued = self.texts_queued();
         *gates = Gates::from_fn(|command| self.takes(command));
@@ -251,6 +255,8 @@ pub(super) mod tests {
             fate: crate::player_fate::PlayerFate::GameOver,
             hold_expired: true,
             leave_due: true,
+            recharge_enabled: true,
+            seen_intro: true,
             jump_readiness: JumpReadiness::Underway,
             texts_queued: u64::MAX,
             // Only the cloak taken: no state of the player's gives it.

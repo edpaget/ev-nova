@@ -657,6 +657,8 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         fate,
         hold_expired,
         leave_due,
+        recharge_enabled,
+        seen_intro,
         jump_readiness,
         texts_queued,
         gates,
@@ -707,6 +709,8 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         },
         hold_expired: !hold_expired,
         leave_due: !leave_due,
+        recharge_enabled: !recharge_enabled,
+        seen_intro: !seen_intro,
         jump_readiness: if *jump_readiness == JumpReadiness::Blocked {
             JumpReadiness::Clear
         } else {
@@ -2970,6 +2974,8 @@ mod tests {
             fate: PlayerFate::Fading,
             hold_expired: true,
             leave_due: true,
+            recharge_enabled: true,
+            seen_intro: true,
             jump_readiness: JumpReadiness::Underway,
             texts_queued: u64::MAX,
             gates: Gates::EVERY.refusing(PlayerCommand::Map),
@@ -3002,6 +3008,8 @@ mod tests {
                 fate,
                 hold_expired,
                 leave_due,
+                recharge_enabled,
+                seen_intro,
                 jump_readiness,
                 texts_queued,
                 gates,
@@ -3053,6 +3061,8 @@ mod tests {
             assert_ne!(other.fate, *fate);
             assert_ne!(other.hold_expired, *hold_expired);
             assert_ne!(other.leave_due, *leave_due);
+            assert_ne!(other.recharge_enabled, *recharge_enabled);
+            assert_ne!(other.seen_intro, *seen_intro);
             assert_ne!(other.jump_readiness, *jump_readiness);
             assert_ne!(other.texts_queued, *texts_queued);
             assert_ne!(other.gates, *gates);

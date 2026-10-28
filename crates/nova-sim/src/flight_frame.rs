@@ -122,6 +122,17 @@ pub struct FlightFrame {
     /// Whether a `Q` run while landed waits for the take-off
     /// ([`Session::leave_due`](crate::Session::leave_due)).
     pub leave_due: bool,
+    /// Whether the spaceport's Recharge button is enabled
+    /// ([`Session::recharge_enabled`](crate::Session::recharge_enabled)):
+    /// a router's fact, read after every spaceport input and as the
+    /// spaceport opens, which any command may change. False in flight,
+    /// and for a flight that failed to start.
+    pub recharge_enabled: bool,
+    /// Whether the pilot flying has seen the intro screen
+    /// ([`Session::seen_intro`](crate::Session::seen_intro)): a router's
+    /// fact, read as the game held is entered from the main menu. False
+    /// for a flight that failed to start.
+    pub seen_intro: bool,
     /// Whether the ship can jump to the system selected, as the nav area
     /// draws it ([`Session::jump_readiness`](crate::Session::jump_readiness)).
     pub jump_readiness: JumpReadiness,
@@ -220,7 +231,8 @@ pub struct FlightFrame {
 
 impl Default for FlightFrame {
     /// A session that failed to start: nav off, no course, in flight, no
-    /// jump, the player flying, no hold and no leave due, every gate taken
+    /// jump, the player flying, no hold and no leave due, no Recharge and
+    /// no intro seen, every gate taken
     /// ([`Gates::EVERY`]), and no death `dësc`s; the player alone, drawn in
     /// full in the ships' layer at the default place, with no NPCs, shots,
     /// beams, boxes, asteroids or stellars; no murk and no background; no
@@ -238,6 +250,8 @@ impl Default for FlightFrame {
             fate: PlayerFate::Flying,
             hold_expired: false,
             leave_due: false,
+            recharge_enabled: false,
+            seen_intro: false,
             jump_readiness: JumpReadiness::Blocked,
             texts_queued: 0,
             gates: Gates::EVERY,

@@ -1716,6 +1716,11 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
     check("hold_expired", kept.hold_expired == fresh.hold_expired);
     check("leave_due", kept.leave_due == fresh.leave_due);
     check(
+        "recharge_enabled",
+        kept.recharge_enabled == fresh.recharge_enabled,
+    );
+    check("seen_intro", kept.seen_intro == fresh.seen_intro);
+    check(
         "jump_readiness",
         kept.jump_readiness == fresh.jump_readiness,
     );
