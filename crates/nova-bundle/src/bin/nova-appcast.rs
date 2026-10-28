@@ -5,9 +5,11 @@
 //! `--feeds`, when the public key is committed and `UPDATE_SIGNING_KEY`
 //! holds its seed; otherwise it prints a `::warning::` and writes none.
 //! Either way it writes the release assets to delete into `--prune-list`.
-//! Run it through cargo, as `mise run appcast -- publish ...`: it reads
-//! the spec with `$CARGO metadata`, and the build ID from `NOVA_BUILD_ID`
-//! (else HEAD's committer time). See `nova_bundle::appcast`.
+//! Run it through cargo, as `mise run appcast -- publish ...`, or run the
+//! built binary with cargo on `PATH`, as CI's signing step does so that
+//! nothing compiles beside the seed: it reads the spec with `$CARGO
+//! metadata` (else `cargo metadata`), and the build ID from
+//! `NOVA_BUILD_ID` (else HEAD's committer time). See `nova_bundle::appcast`.
 //!
 //! `nova-appcast public-key` prints the public key of the seed in
 //! `UPDATE_SIGNING_KEY`, as base64, for the operator to commit.

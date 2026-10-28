@@ -362,7 +362,7 @@ jobs:
 
   # Moves the `nightly` tag to this commit and replaces the prerelease's
   # assets, and publishes the signed Sparkle update feeds the apps read
-  # (`mise run appcast`, crates/nova-bundle/src/appcast), on pushes to main
+  # (nova-appcast, crates/nova-bundle/src/appcast), on pushes to main
   # only. All or nothing: it needs every `build` leg and the Flatpak, so a
   # failed leg on any platform skips publishing and leaves the previous
   # nightly untouched.
@@ -407,7 +407,7 @@ jobs:
       NOVA_BUILD_ID: ${{ needs.build-id.outputs.id }}
     steps:
       - uses: actions/checkout@v5
-      # Rust for `mise run appcast`; nova-bundle needs no system libraries.
+      # Rust for nova-appcast; nova-bundle needs no system libraries.
       - uses: jdx/mise-action@v5
         with:
           install: false
@@ -417,21 +417,23 @@ jobs:
         with:
           key: publish
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Built here, with no secret in the environment, because compiling
+      # runs every dependency's build scripts and proc macros. The signing
+      # step runs the built binary and compiles nothing.
+      - name: Build nova-appcast
+        shell: bash
+        run: mise exec -- cargo build -q -p nova-bundle --locked --bin nova-appcast
       - uses: actions/download-artifact@v4
         with:
           pattern: dist-*
           merge-multiple: true
           path: dist
-      # Every build leg's dist/ is merged into dist/ above. nova-appcast reads
-      # the release's asset list and its current feeds, and, when signing,
-      # copies the .dmg and .msi to their build-ID names in dist/ and writes
-      # the feeds to feeds/. It always writes prune.txt, the assets to
-      # delete. The signing secret reaches this step alone.
-      - name: Sign the update feeds
+      # nova-appcast reads the release's asset list and its current feeds,
+      # which this step fetches, so the signing step needs no token.
+      - name: Fetch the nightly's assets and feeds
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
           gh release view nightly >/dev/null 2>&1 ||
@@ -441,8 +443,21 @@ jobs:
           if grep -qx 'appcast-.*\.xml' "$RUNNER_TEMP/assets.txt"; then
             gh release download nightly --pattern 'appcast-*.xml' --dir "$RUNNER_TEMP/current"
           fi
+      # Every build leg's dist/ is merged into dist/ above. When signing,
+      # nova-appcast copies the .dmg and .msi to their build-ID names in
+      # dist/ and writes the feeds to feeds/. It always writes prune.txt, the
+      # assets to delete. The signing secret reaches this step alone, which
+      # has no GH_TOKEN and compiles nothing: it runs the binary built above,
+      # which spawns only `cargo metadata` (no build scripts). mise exec puts
+      # that cargo on PATH.
+      - name: Sign the update feeds
+        shell: bash
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
           status=0
-          mise run appcast -- publish --dist dist --assets "$RUNNER_TEMP/assets.txt" \
+          mise exec -- target/debug/nova-appcast publish --dist dist --assets "$RUNNER_TEMP/assets.txt" \
             --current "$RUNNER_TEMP/current" --feeds "$RUNNER_TEMP/feeds" \
             --prune-list "$RUNNER_TEMP/prune.txt" || status=$?
           if [ "$status" -eq 3 ]; then

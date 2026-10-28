@@ -102,7 +102,7 @@ description = "Print the build ID: NOVA_BUILD_ID when it is set, else HEAD's com
 run = "cargo run -q -p nova-bundle --locked --bin nova-build-id"
 
 [tasks.appcast]
-description = "CI's publish job: sign the nightly's installers and write the Sparkle update feeds and the prune list (publish --dist <DIR> --assets <FILE> --current <DIR> --feeds <DIR> --prune-list <FILE>), or print UPDATE_SIGNING_KEY's public key (public-key)"
+description = "What CI's publish job runs, prebuilt: sign the nightly's installers and write the Sparkle update feeds and the prune list (publish --dist <DIR> --assets <FILE> --current <DIR> --feeds <DIR> --prune-list <FILE>), or print UPDATE_SIGNING_KEY's public key (public-key)"
 run = "cargo run -q -p nova-bundle --locked --bin nova-appcast --"
 
 [tasks.mutants]
