@@ -102,6 +102,7 @@ pub mod target_picture;
 pub mod text;
 mod time;
 pub mod ui;
+mod ui_sound_cue;
 pub mod upscaler;
 pub mod video_mode;
 pub mod view_shape;

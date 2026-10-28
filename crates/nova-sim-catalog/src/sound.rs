@@ -7,7 +7,7 @@
 //! explosion's distance.
 
 use crate::catalog::SoundId;
-pub use crate::sound_cue::{NATURAL_RATE, SoundCue};
+pub use crate::sound_cue::{BEEP, NATURAL_RATE, SoundCue};
 
 /// Something a `nova_sim::Session` did that may make a sound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

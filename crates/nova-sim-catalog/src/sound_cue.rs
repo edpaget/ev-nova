@@ -58,8 +58,9 @@ impl SoundCue {
 
 /// `_beepSnd[0..=4]`, the five beeps `_LoadSounds` loads from `snd ` 150 to
 /// 154 (@0x1c174): "Beep1" to "Beep5". `_LoadSounds` fills them before the
-/// main screen runs (`_InitEVNova` @0x47196, @0x47428).
-const BEEP: [SoundId; 5] = [
+/// main screen runs (`_InitEVNova` @0x47196, @0x47428). The interface's
+/// beeps play them too (`nova_view::UiSound::cue`).
+pub const BEEP: [SoundId; 5] = [
     SoundId(150),
     SoundId(151),
     SoundId(152),
