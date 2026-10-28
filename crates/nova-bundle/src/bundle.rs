@@ -1,6 +1,6 @@
 //! The bundler's sequence: read the spec, build for Apple silicon, stage
-//! `Nova.app` with the binaries, check they are arm64, sign, verify, and
-//! make the `.dmg`.
+//! `Nova.app` with the binaries, check they are arm64, put Sparkle in it
+//! ([`sparkle::stage`]), sign, verify, and make the `.dmg`.
 //!
 //! [`plan`] is the whole sequence as data, a function of the spec, the
 //! layout and the signing mode: the steps, and the cleanup that runs after
@@ -11,7 +11,9 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::appcast::{Channel, Platform};
 use crate::build_id::{self, BuildId, ResolveError};
+use crate::channel::{self, FeedStatus};
 use crate::icon::ICON;
 use crate::info_plist::{EXECUTABLE, info_plist};
 use crate::layout::{DUMP, Layout, LayoutError, VOLUME};
@@ -19,6 +21,7 @@ use crate::linux::links::Problems;
 use crate::notary::{Notarization, notarize};
 use crate::ports::{Env, Files, Invocation, Process, RunError};
 use crate::signing::{self, SecretBytes, Signing, add_to_search_list};
+use crate::sparkle;
 use crate::spec::{BundleSpec, GAME_PACKAGE, SpecError};
 
 /// The one target built: Apple silicon. Intel Macs are not supported.
@@ -37,12 +40,25 @@ pub struct Host {
     pub out: Option<PathBuf>,
     /// How the bundle is signed.
     pub signing: Signing,
+    /// The release channel it is built for ([`channel::from_env`]); `None`
+    /// for a development bundle.
+    pub channel: Option<Channel>,
+}
+
+/// A built bundle: the `.dmg`, and whether it names an update feed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bundled {
+    /// The `.dmg`.
+    pub dmg: PathBuf,
+    /// The update feed its `Info.plist` names, or why it names none.
+    pub feed: FeedStatus,
 }
 
 /// One step of the sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
-    /// Removes a directory, if present.
+    /// Removes a directory, if present. On a symbolic link it removes the
+    /// link alone, dangling or not.
     RemoveDir(PathBuf),
     /// Creates a directory and its parents.
     CreateDir(PathBuf),
@@ -78,6 +94,14 @@ pub enum Step {
     Run(Invocation),
     /// Fails unless the binary is [`ARCH`] alone: see [`check_archs`].
     CheckArchs(PathBuf),
+    /// Fails unless the file's SHA-256 is `sha256`: see
+    /// [`sparkle::check_sha256`].
+    CheckSha256 {
+        /// The file.
+        path: PathBuf,
+        /// Its digest, lower-case hex.
+        sha256: &'static str,
+    },
     /// Puts the keychain first in the user's keychain search list, so
     /// `codesign` and `security` find its identity: see
     /// [`add_to_search_list`].
@@ -122,6 +146,20 @@ pub enum BundleError {
         /// The `lipo -archs` command line.
         command: String,
         /// What it listed.
+        found: String,
+    },
+    /// A download isn't the file pinned.
+    #[error(
+        "{} has SHA-256 `{found}`, not `{expected}`, the pinned Sparkle {}'s",
+        path.display(),
+        sparkle::VERSION
+    )]
+    Checksum {
+        /// The file.
+        path: PathBuf,
+        /// The digest pinned.
+        expected: String,
+        /// The digest `shasum` printed.
         found: String,
     },
     /// A Linux binary needs a glibc above the floor or links a library
@@ -221,9 +259,10 @@ pub fn plan(spec: &BundleSpec, layout: &Layout, host: &Host, build: &BuildId) ->
 }
 
 /// Ad-hoc signatures, so Apple silicon runs the binaries, then the
-/// `.dmg`. Not `--deep`: the bundle holds one executable and no nested
-/// code, and Apple discourages `--deep` for signing. Verifying is
-/// `--deep`.
+/// `.dmg`. Sparkle's code is signed inside out first
+/// ([`sparkle::nested_code`]), then `nova-dump`, then the app, which seals
+/// the framework. Not `--deep`, which Apple discourages for signing.
+/// Verifying is `--deep`, so it walks the framework too.
 fn ad_hoc(layout: &Layout) -> Vec<Step> {
     let sign = |path: PathBuf| {
         Step::Run(
@@ -232,21 +271,26 @@ fn ad_hoc(layout: &Layout) -> Vec<Step> {
                 .arg(path),
         )
     };
-    vec![
+    let mut steps: Vec<Step> = sparkle::nested_code(&layout.sparkle_framework())
+        .into_iter()
+        .map(sign)
+        .collect();
+    steps.extend([
         sign(layout.dump()),
         sign(layout.app()),
         verify(layout.app()),
         verify(layout.dump()),
         Step::CreateDir(layout.out.clone()),
         make_dmg(layout),
-    ]
+    ]);
+    steps
 }
 
 /// The build and the staging tree, up to signing. `nova` is compiled with
 /// the ID the plist names.
 fn stage(spec: &BundleSpec, layout: &Layout, host: &Host, build: &BuildId) -> Vec<Step> {
     let release = |bin: &str| spec.target_dir.join(TARGET).join("release").join(bin);
-    vec![
+    let mut steps = vec![
         // Default features only, so egui stays out of the published build.
         Step::Run(
             Invocation::new(&host.cargo)
@@ -268,7 +312,12 @@ fn stage(spec: &BundleSpec, layout: &Layout, host: &Host, build: &BuildId) -> Ve
         Step::CreateDir(layout.resources()),
         Step::Write {
             path: layout.info_plist(),
-            bytes: info_plist(spec, build, &host.min_system),
+            bytes: info_plist(
+                spec,
+                build,
+                &host.min_system,
+                channel::feed_status(spec, host.channel, Platform::Macos).feed(),
+            ),
         },
         Step::Write {
             path: layout.icon(),
@@ -284,6 +333,9 @@ fn stage(spec: &BundleSpec, layout: &Layout, host: &Host, build: &BuildId) -> Ve
         },
         Step::CheckArchs(layout.executable()),
         Step::CheckArchs(layout.dump()),
+    ];
+    steps.extend(sparkle::stage(layout));
+    steps.extend([
         Step::Copy {
             from: spec.workspace_root.join("packaging").join("README.txt"),
             to: layout.staging.join("README.txt"),
@@ -297,17 +349,19 @@ fn stage(spec: &BundleSpec, layout: &Layout, host: &Host, build: &BuildId) -> Ve
             target: PathBuf::from("/Applications"),
             link: layout.staging.join("Applications"),
         },
-    ]
+    ]);
+    steps
 }
 
-/// Builds the `.dmg`, returning its path. The build ID comes from `env` or
-/// the workspace's git checkout: see [`build_id::resolve`].
+/// Builds the `.dmg`, returning its path and what its `Info.plist` says of
+/// the update feed ([`channel::feed_status`]). The build ID comes from
+/// `env` or the workspace's git checkout: see [`build_id::resolve`].
 pub fn bundle(
     process: &mut impl Process,
     files: &mut impl Files,
     env: &impl Env,
     host: &Host,
-) -> Result<PathBuf, BundleError> {
+) -> Result<Bundled, BundleError> {
     let spec = BundleSpec::from_metadata(&run(process, &metadata(&host.cargo))?)?;
     let build = build_id::resolve(env, process, &spec.workspace_root)?;
     let layout = Layout::new(&spec.target_dir, host.out.clone())?;
@@ -322,7 +376,10 @@ pub fn bundle(
             cleaned = cleaned.and(Err(e));
         }
     }
-    done.and(cleaned).map(|()| layout.dmg())
+    done.and(cleaned).map(|()| Bundled {
+        dmg: layout.dmg(),
+        feed: channel::feed_status(&spec, host.channel, Platform::Macos),
+    })
 }
 
 /// Runs `lipo -archs` on `binary` and fails unless it lists [`ARCH`] and
@@ -377,6 +434,7 @@ pub(crate) fn execute(
         Step::Symlink { target, link } => file("link", link, files.symlink(target, link)),
         Step::Run(invocation) => run(process, invocation).map(drop),
         Step::CheckArchs(binary) => check_archs(process, binary),
+        Step::CheckSha256 { path, sha256 } => sparkle::check_sha256(process, path, sha256),
         Step::AddToSearchList(keychain) => add_to_search_list(process, keychain),
         Step::Notarize(notarization) => notarize(process, notarization),
     }
@@ -387,11 +445,13 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::appcast::key::PublicKey;
     use crate::build_id::{self, committer_time};
+    use crate::channel::UpdateFeed;
     use crate::spec::tests::sample_metadata;
     use crate::test_support::{
         self, BUILD, Event, FakeEnv, FakeFiles, Log, Run, build, build_env, failing, is,
-        run_ok_with,
+        run_ok_with, starts,
     };
 
     fn host(out: Option<PathBuf>) -> Host {
@@ -400,7 +460,65 @@ mod tests {
             min_system: "13.0".into(),
             out,
             signing: Signing::AdHoc,
+            channel: None,
         }
+    }
+
+    fn nightly(mut host: Host) -> Host {
+        host.channel = Some(Channel::Nightly);
+        host
+    }
+
+    /// The plist a run of `plan` writes.
+    fn planned_plist(spec: &BundleSpec, host: &Host) -> Vec<u8> {
+        let layout = Layout::new(&spec.target_dir, None).expect("layout");
+        plan(spec, &layout, host, &build())
+            .steps
+            .into_iter()
+            .find_map(|s| match s {
+                Step::Write { path, bytes } if path == layout.info_plist() => Some(bytes),
+                _ => None,
+            })
+            .expect("the plist is written")
+    }
+
+    #[test]
+    fn a_nightly_host_with_a_committed_key_writes_the_feed_into_the_plist() {
+        let key = PublicKey([9; 32]);
+        let spec = BundleSpec {
+            update_public_key: Some(key),
+            ..spec()
+        };
+        let feed = UpdateFeed {
+            url: channel::feed_url(Platform::Macos, Channel::Nightly),
+            public_key: key,
+        };
+        assert_eq!(
+            planned_plist(&spec, &nightly(host(None))),
+            info_plist(&spec, &build(), "13.0", Some(&feed))
+        );
+        assert_eq!(
+            planned_plist(&spec, &host(None)),
+            info_plist(&spec, &build(), "13.0", None),
+            "a development bundle names no feed, key or not"
+        );
+    }
+
+    #[test]
+    fn a_nightly_host_without_a_key_writes_no_feed_and_says_why() {
+        let run = run_ok(&nightly(host(None)));
+        assert!(run.result.is_ok(), "{:?}", run.result);
+        assert_eq!(run.feed, Some(FeedStatus::NoKey(Channel::Nightly)));
+        let plist = run
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::Write(path, bytes) if path.ends_with("Info.plist") => Some(bytes.clone()),
+                _ => None,
+            })
+            .expect("a plist");
+        assert_eq!(plist, info_plist(&spec(), &build(), "13.0", None));
+        assert_eq!(run_ok(&host(None)).feed, Some(FeedStatus::Development));
     }
 
     fn run_with(
@@ -427,6 +545,69 @@ mod tests {
             .args(paths)
     }
 
+    /// Sparkle's staging events under the target dir `target`: downloaded,
+    /// checked, unpacked, trimmed, thinned, checked again and copied in.
+    fn sparkle_events(target: &Path) -> Vec<Event> {
+        let downloads = target.join("bundle").join("downloads");
+        let archive = downloads.join("Sparkle-2.10.1.tar.xz");
+        let unpacked = downloads.join("Sparkle.framework");
+        let b = unpacked.join("Versions").join("B");
+        let bins = [
+            b.join("Sparkle"),
+            b.join("Autoupdate"),
+            b.join("Updater.app")
+                .join("Contents")
+                .join("MacOS")
+                .join("Updater"),
+        ];
+        let contents = target
+            .join("bundle")
+            .join("staging")
+            .join("Nova.app")
+            .join("Contents");
+        let frameworks = contents.join("Frameworks");
+        let url = "https://github.com/sparkle-project/Sparkle/releases/download/2.10.1/Sparkle-2.10.1.tar.xz";
+        let curl = "--fail --silent --show-error --location --proto =https --retry 3 --output";
+        let mut events = vec![
+            Event::RemoveDir(downloads.clone()),
+            Event::CreateDir(downloads.clone()),
+            Event::Run(cmd("curl", curl, &[&archive]).arg(url)),
+            Event::Run(cmd("shasum", "-a 256", &[&archive]).captured()),
+            Event::Run(
+                cmd("tar", "-xJf", &[&archive])
+                    .arg("-C")
+                    .arg(&downloads)
+                    .args(["./Sparkle.framework", "./LICENSE"]),
+            ),
+            Event::RemoveDir(b.join("XPCServices")),
+            Event::RemoveDir(unpacked.join("XPCServices")),
+        ];
+        events.extend(bins.iter().map(|bin| {
+            Event::Run(
+                cmd("lipo", "", &[bin])
+                    .args(["-thin", "arm64", "-output"])
+                    .arg(bin),
+            )
+        }));
+        events.extend(
+            bins.iter()
+                .map(|bin| Event::Run(cmd("lipo", "-archs", &[bin]).captured())),
+        );
+        events.extend([
+            Event::CreateDir(frameworks.clone()),
+            Event::Run(cmd(
+                "ditto",
+                "",
+                &[&unpacked, &frameworks.join("Sparkle.framework")],
+            )),
+            Event::Copy(
+                downloads.join("LICENSE"),
+                contents.join("Resources").join("Sparkle-LICENSE.txt"),
+            ),
+        ]);
+        events
+    }
+
     #[test]
     fn runs_the_whole_sequence_in_order() {
         let root = Path::new("/work").join("ev-nova");
@@ -444,11 +625,13 @@ mod tests {
         let cargo = "/rust/bin/cargo";
         let sign = "--force --sign -";
         let verify = "--verify --deep --strict --verbose=2";
+        let framework = contents.join("Frameworks").join("Sparkle.framework");
+        let staged_b = framework.join("Versions").join("B");
 
         let run = run_ok(&host(None));
 
         assert_eq!(run.result.as_ref().expect("bundled"), &dmg);
-        let expected =
+        let mut expected =
             vec![
             Event::Run(
                 cmd(cargo, "metadata --format-version 1 --no-deps --locked", &[]).captured(),
@@ -464,18 +647,24 @@ mod tests {
             Event::RemoveDir(staging.clone()),
             Event::CreateDir(contents.join("MacOS")),
             Event::CreateDir(contents.join("Resources")),
-            Event::Write(contents.join("Info.plist"), info_plist(&spec(), &build(), "13.0")),
+            Event::Write(contents.join("Info.plist"), info_plist(&spec(), &build(), "13.0", None)),
             Event::Write(contents.join("Resources").join("Nova.icns"), ICON.to_vec()),
             Event::Copy(arm("nova"), exe.clone()),
             Event::Copy(arm("nova-dump"), dump.clone()),
             Event::Run(cmd("lipo", "-archs", &[&exe]).captured()),
             Event::Run(cmd("lipo", "-archs", &[&dump]).captured()),
+        ];
+        expected.extend(sparkle_events(&target));
+        expected.extend([
             Event::Copy(
                 root.join("packaging").join("README.txt"),
                 staging.join("README.txt"),
             ),
             Event::Copy(root.join("LICENSE"), staging.join("LICENSE")),
             Event::Symlink(PathBuf::from("/Applications"), staging.join("Applications")),
+            Event::Run(cmd("codesign", sign, &[&staged_b.join("Autoupdate")])),
+            Event::Run(cmd("codesign", sign, &[&staged_b.join("Updater.app")])),
+            Event::Run(cmd("codesign", sign, &[&framework])),
             Event::Run(cmd("codesign", sign, &[&dump])),
             Event::Run(cmd("codesign", sign, &[&app])),
             Event::Run(cmd("codesign", verify, &[&app])),
@@ -488,7 +677,7 @@ mod tests {
                     .args(["-fs", "HFS+", "-format", "UDZO", "-ov"])
                     .arg(&dmg),
             ),
-        ];
+        ]);
         assert_eq!(run.events, expected);
     }
 
@@ -498,9 +687,13 @@ mod tests {
         assert_eq!(plan(&spec(), &layout, &host(None), &build()).cleanup, []);
         let run = run_ok(&host(None));
         assert!(run.result.is_ok(), "{:?}", run.result);
-        for program in ["security", "xcrun", "ditto"] {
+        for program in ["security", "xcrun"] {
             assert!(!run.ran(program), "{program}");
         }
+        assert!(
+            !run.ran_args("ditto", &["-c"]),
+            "nothing zipped for the notary"
+        );
         assert!(
             !run.events
                 .iter()
@@ -558,7 +751,7 @@ mod tests {
                 _ => None,
             })
             .expect("a plist");
-        assert_eq!(plist, info_plist(&spec(), &build(), "14.1"));
+        assert_eq!(plist, info_plist(&spec(), &build(), "14.1", None));
     }
 
     #[test]
@@ -580,7 +773,7 @@ mod tests {
         assert!(run.events.iter().any(|e| matches!(
             e,
             Event::Write(path, bytes)
-                if path.ends_with("Info.plist") && *bytes == info_plist(&spec(), &build, "13.0")
+                if path.ends_with("Info.plist") && *bytes == info_plist(&spec(), &build, "13.0", None)
         )));
     }
 
@@ -720,6 +913,93 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::Run(i) if i.program == "codesign"))
         );
+    }
+
+    /// Answers `shasum` with another digest than the pin's.
+    fn another_digest(i: &Invocation) -> Option<Result<Vec<u8>, RunError>> {
+        (i.program == "shasum").then(|| Ok(format!("{}  x\n", "0".repeat(64)).into_bytes()))
+    }
+
+    #[test]
+    fn a_sparkle_archive_with_another_digest_stops_before_unpacking_or_signing() {
+        let run = test_support::run(&host(None), b"arm64", another_digest, |_| false);
+        assert!(
+            matches!(run.result, Err(BundleError::Checksum { .. })),
+            "{:?}",
+            run.result
+        );
+        for program in ["tar", "ditto", "codesign", "hdiutil"] {
+            assert!(!run.ran(program), "{program}");
+        }
+        assert!(!run.ran_args("lipo", &["-thin"]) && run.ran("shasum"));
+    }
+
+    #[test]
+    fn a_failing_download_stops_before_the_digest_check() {
+        let run = run_with(&host(None), b"arm64", |i| i.program == "curl", |_| false);
+        let Err(BundleError::Run { command, .. }) = &run.result else {
+            panic!("{:?}", run.result);
+        };
+        assert!(command.starts_with("curl --fail"), "{command}");
+        assert!(!run.ran("shasum"));
+        assert!(!run.ran("tar"));
+        assert!(!run.ran("codesign"));
+    }
+
+    #[test]
+    fn every_sparkle_binary_must_be_arm64_alone_after_thinning() {
+        let layout = Layout::new(&spec().target_dir, None).expect("layout");
+        let autoupdate = layout
+            .downloads()
+            .join("Sparkle.framework")
+            .join("Versions")
+            .join("B")
+            .join("Autoupdate");
+        let universal = autoupdate.clone();
+        let run = test_support::run(
+            &host(None),
+            b"arm64",
+            move |i| {
+                (starts(i, "lipo", &["-archs"]) && i.args.last() == Some(&universal.clone().into()))
+                    .then(|| Ok(b"x86_64 arm64\n".to_vec()))
+            },
+            |_| false,
+        );
+        let error = run.result.as_ref().expect_err("fails").to_string();
+        let command = Invocation::new("lipo")
+            .arg("-archs")
+            .arg(&autoupdate)
+            .to_string();
+        assert_eq!(
+            error,
+            format!("`{command}` lists `x86_64 arm64`, not arm64 alone")
+        );
+        assert!(!run.ran("ditto"));
+        assert!(!run.ran("codesign"));
+    }
+
+    #[test]
+    fn the_sparkle_helpers_are_signed_before_the_framework_and_the_framework_before_the_app() {
+        let layout = Layout::new(&spec().target_dir, None).expect("layout");
+        let [autoupdate, updater, framework] = sparkle::nested_code(&layout.sparkle_framework());
+        for host in [host(None), test_support::developer_id_host()] {
+            let signs: Vec<OsString> = run_ok(&host)
+                .runs()
+                .into_iter()
+                .filter(|i| starts(i, "codesign", &["--force"]))
+                .filter_map(|i| i.args.last().cloned())
+                .collect();
+            let at = |path: &Path| {
+                signs
+                    .iter()
+                    .position(|signed| Path::new(signed) == path)
+                    .unwrap_or_else(|| panic!("{} is signed", path.display()))
+            };
+            assert!(at(&autoupdate) < at(&updater), "{:?}", host.signing);
+            assert!(at(&updater) < at(&framework));
+            assert!(at(&framework) < at(&layout.dump()));
+            assert!(at(&layout.dump()) < at(&layout.app()));
+        }
     }
 
     #[test]

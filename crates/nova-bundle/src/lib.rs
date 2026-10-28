@@ -21,10 +21,33 @@
 //! from the `nova` package's version and `[package.metadata.bundle]`
 //! table, and its icon) with `nova-dump`, `README.txt`, `LICENSE` and an
 //! `Applications` link beside it, checks with `lipo -archs` that both
-//! binaries are arm64 alone, signs and verifies both, and writes
-//! `ev-nova-aarch64-apple-darwin.dmg` to `OUT_DIR` (by default
-//! `target/bundle/out`). The layout is [`layout`]'s, and the sequence
-//! [`bundle::plan`].
+//! binaries are arm64 alone, puts Sparkle in the app (below), signs and
+//! verifies them all, and writes `ev-nova-aarch64-apple-darwin.dmg` to
+//! `OUT_DIR` (by default `target/bundle/out`). The layout is [`layout`]'s,
+//! and the sequence [`bundle::plan`].
+//!
+//! # Updates (Sparkle)
+//!
+//! Every bundle carries Sparkle [`sparkle::VERSION`] in
+//! `Contents/Frameworks`, so the bundle has one shape and every run signs
+//! it. The bundler downloads the release archive with `curl` (bundling
+//! needs the network), checks its SHA-256 against [`sparkle::SHA256`]
+//! before unpacking it, removes the XPC services (the game isn't
+//! sandboxed), thins each Mach-O to arm64 and checks it, copies the
+//! framework in with its links, and ships Sparkle's licence as
+//! `Contents/Resources/Sparkle-LICENSE.txt`. Both signing modes sign its
+//! code inside out ([`sparkle::nested_code`]) before `nova-dump` and the
+//! app. See [`sparkle`].
+//!
+//! `NOVA_CHANNEL` names the channel the bundle is for ([`channel`]): CI
+//! sets `nightly`, and unset is a development bundle; any other value
+//! exits 2. When there is a channel and the game package commits
+//! `update_public_key`, `Info.plist` gains Sparkle's three keys:
+//! `SUFeedURL` (the channel's macOS appcast, [`channel::feed_url`]),
+//! `SUPublicEDKey` (the key, standard base64) and
+//! `SUEnableAutomaticChecks`. Otherwise it holds no `SU*` key, so a bundle
+//! never names a feed it couldn't verify, and the app runs no updater. The
+//! bundler prints which on standard error ([`channel::FeedStatus`]).
 //!
 //! # Signing
 //!
@@ -43,7 +66,9 @@
 //! With all six set, the bundler signs with Developer ID and the hardened
 //! runtime from a temporary keychain, notarizes and staples `Nova.app`,
 //! then makes the `.dmg` from it and signs, notarizes and staples that
-//! ([`signing::developer_id`], [`notary`]). With none set (a local build,
+//! ([`signing::developer_id`], [`notary`]). Gatekeeper then assesses the
+//! stapled app and `.dmg` (`spctl --assess`), and a rejection fails the
+//! bundle. With none set (a local build,
 //! a fork's pull request) it signs ad-hoc and notarizes nothing. Any other
 //! mix is an error naming the missing variables.
 //!
@@ -159,6 +184,7 @@ pub mod appcast;
 pub mod archive;
 pub mod build_id;
 pub mod bundle;
+pub mod channel;
 pub mod host;
 pub mod icon;
 pub mod info_plist;
@@ -169,6 +195,7 @@ pub mod notary;
 pub mod ports;
 pub mod signing;
 pub mod site;
+pub mod sparkle;
 pub mod spec;
 pub mod system;
 #[cfg(test)]

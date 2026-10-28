@@ -1,8 +1,9 @@
 //! The macOS tools the bundler drives, run for real through `StdProcess`
 //! with the argument lists the core builds: `plutil` on the generated
 //! plist, the `lipo -archs` arm64 check and `codesign` on a binary, and
-//! `hdiutil` on the staging folder, and a read of the keychain search list.
-//! Each works in a temporary directory it owns.
+//! `hdiutil` on the staging folder, Sparkle's `shasum` check, `tar` unpack
+//! and `ditto` copy, and a read of the keychain search list. Each works in
+//! a temporary directory it owns.
 
 use std::fs;
 use std::path::Path;
@@ -13,6 +14,7 @@ use nova_bundle::info_plist::info_plist;
 use nova_bundle::layout::Layout;
 use nova_bundle::ports::{Invocation, Process};
 use nova_bundle::signing::{self, Signing};
+use nova_bundle::sparkle;
 use nova_bundle::spec::BundleSpec;
 use nova_bundle::system::StdProcess;
 
@@ -46,6 +48,7 @@ fn core_runs(root: &Path) -> (Layout, Vec<Invocation>) {
         min_system: "13.0".into(),
         out: Some(layout.out.clone()),
         signing: Signing::AdHoc,
+        channel: None,
     };
     let runs = plan(&spec, &layout, &host, &build())
         .steps
@@ -75,7 +78,11 @@ fn find(runs: &[Invocation], program: &str, first: &str, path: &Path) -> Invocat
 fn plutil_accepts_the_generated_plist() {
     let dir = tempfile::tempdir().expect("temp dir");
     let plist = dir.path().join("Info.plist");
-    fs::write(&plist, info_plist(&spec(dir.path()), &build(), "13.0")).expect("write");
+    fs::write(
+        &plist,
+        info_plist(&spec(dir.path()), &build(), "13.0", None),
+    )
+    .expect("write");
     StdProcess
         .run(&Invocation::new("plutil").arg("-lint").arg(&plist))
         .expect("plutil -lint passes");
@@ -121,6 +128,100 @@ fn hdiutil_makes_a_dmg_of_the_staging_folder() {
         .run(&find(&runs, "hdiutil", "create", &layout.dmg()))
         .expect("hdiutil create");
     assert!(layout.dmg().is_file());
+}
+
+#[test]
+fn shasum_digests_a_file_as_the_check_reads_it() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let file = dir.path().join("abc");
+    fs::write(&file, b"abc").expect("seed");
+    let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    sparkle::check_sha256(&mut StdProcess, &file, abc).expect("the digest of abc");
+    let error =
+        sparkle::check_sha256(&mut StdProcess, &file, sparkle::SHA256).expect_err("another digest");
+    assert!(
+        matches!(&error, BundleError::Checksum { found, .. } if found == abc),
+        "{error:?}"
+    );
+}
+
+/// A `.tar.xz` shaped as Sparkle's release: `./`-prefixed entries, the
+/// framework with a `Versions/Current` link, the licence, and a `bin/`
+/// the bundler doesn't want, written to `archive`.
+fn fixture_archive(scratch: &Path, archive: &Path) {
+    let source = scratch.join("source");
+    let b = source.join("Sparkle.framework").join("Versions").join("B");
+    fs::create_dir_all(&b).expect("seed");
+    fs::write(b.join("x"), b"code").expect("seed");
+    std::os::unix::fs::symlink("B", b.with_file_name("Current")).expect("seed");
+    fs::write(source.join("LICENSE"), b"licence").expect("seed");
+    fs::create_dir_all(source.join("bin")).expect("seed");
+    fs::write(source.join("bin").join("y"), b"tool").expect("seed");
+    fs::create_dir_all(archive.parent().expect("a folder")).expect("seed");
+    StdProcess
+        .run(
+            &Invocation::new("tar")
+                .arg("-cJf")
+                .arg(archive)
+                .arg("-C")
+                .arg(&source)
+                .args(["./Sparkle.framework", "./LICENSE", "./bin"]),
+        )
+        .expect("tar -cJf");
+}
+
+#[test]
+fn tar_unpacks_the_framework_and_licence_keeping_links() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (layout, runs) = core_runs(dir.path());
+    fixture_archive(dir.path(), &layout.sparkle_archive());
+    StdProcess
+        .run(&find(&runs, "tar", "-xJf", &layout.sparkle_archive()))
+        .expect("tar -xJf");
+    let unpacked = layout.downloads().join("Sparkle.framework");
+    let current = unpacked.join("Versions").join("Current");
+    assert!(
+        fs::symlink_metadata(&current)
+            .expect("Current")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read(current.join("x")).expect("through the link"),
+        b"code"
+    );
+    assert_eq!(
+        fs::read(layout.downloads().join("LICENSE")).expect("licence"),
+        b"licence"
+    );
+    assert!(!layout.downloads().join("bin").exists(), "only what ships");
+}
+
+#[test]
+fn ditto_copies_the_framework_keeping_links() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (layout, runs) = core_runs(dir.path());
+    fixture_archive(dir.path(), &layout.sparkle_archive());
+    StdProcess
+        .run(&find(&runs, "tar", "-xJf", &layout.sparkle_archive()))
+        .expect("tar -xJf");
+    fs::create_dir_all(layout.frameworks()).expect("Frameworks");
+    let unpacked = layout.downloads().join("Sparkle.framework");
+    let first = unpacked.to_str().expect("a UTF-8 path");
+    StdProcess
+        .run(&find(&runs, "ditto", first, &layout.sparkle_framework()))
+        .expect("ditto");
+    let current = layout.sparkle_framework().join("Versions").join("Current");
+    assert!(
+        fs::symlink_metadata(&current)
+            .expect("Current")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read(current.join("x")).expect("through the link"),
+        b"code"
+    );
 }
 
 /// Read-only: the core's `list-keychains` run, parsed as the core parses

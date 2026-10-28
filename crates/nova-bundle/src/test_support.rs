@@ -13,8 +13,10 @@ use std::rc::Rc;
 
 use crate::build_id::{BuildId, VAR};
 use crate::bundle::{BundleError, Host, bundle};
+use crate::channel::FeedStatus;
 use crate::ports::{Env, Files, Invocation, Process, ReadFiles, RunError};
 use crate::signing::{Credentials, Signing};
+use crate::sparkle;
 use crate::spec::BundleSpec;
 use crate::spec::tests::sample_metadata;
 
@@ -47,7 +49,8 @@ pub(crate) const KEYCHAIN_PATHS: [&str; 2] = [
 
 /// Records each run. Answers with `respond`'s outcome when it gives one,
 /// else with canned output: the spec for `cargo metadata`, `archs` for
-/// `lipo -archs`, [`KEYCHAINS`] for `security list-keychains -d user`,
+/// `lipo -archs`, the pinned Sparkle digest for `shasum -a 256`,
+/// [`KEYCHAINS`] for `security list-keychains -d user`,
 /// `{"id":"abc"}` for `notarytool submit` and `{"status":"Accepted"}` for
 /// `notarytool info`.
 pub(crate) struct Recorder {
@@ -71,6 +74,7 @@ impl Process for Recorder {
         Ok(match args.as_slice() {
             ["metadata", ..] => sample_metadata(),
             ["-archs", ..] => self.archs.clone(),
+            ["-a", "256", path] => format!("{}  {path}\n", sparkle::SHA256).into_bytes(),
             ["list-keychains", "-d", "user"] => KEYCHAINS.to_vec(),
             ["notarytool", "submit", ..] => br#"{"id":"abc","message":"ok"}"#.to_vec(),
             ["notarytool", "info", ..] => br#"{"id":"abc","status":"Accepted"}"#.to_vec(),
@@ -174,7 +178,10 @@ impl Files for FakeFiles {
 
 /// A finished `bundle` run.
 pub(crate) struct Run {
+    /// The `.dmg`, or why there is none.
     pub result: Result<PathBuf, BundleError>,
+    /// What the bundle said of its update feed, when it was built.
+    pub feed: Option<FeedStatus>,
     pub events: Vec<Event>,
 }
 
@@ -237,9 +244,14 @@ pub(crate) fn run_in(
         fails: Box::new(file_fails),
         absent: Box::new(|_| false),
     };
-    let result = bundle(&mut process, &mut files, env, host);
+    let bundled = bundle(&mut process, &mut files, env, host);
     let events = log.borrow().clone();
-    Run { result, events }
+    let feed = bundled.as_ref().ok().map(|bundled| bundled.feed.clone());
+    Run {
+        result: bundled.map(|bundled| bundled.dmg),
+        feed,
+        events,
+    }
 }
 
 /// A [`Respond`] failing, with exit code 1, the runs `fails` picks.
@@ -285,6 +297,7 @@ pub(crate) fn developer_id_host() -> Host {
         min_system: "13.0".into(),
         out: None,
         signing: Signing::DeveloperId(credentials()),
+        channel: None,
     }
 }
 
@@ -299,6 +312,7 @@ pub(crate) fn ad_hoc_host() -> Host {
 /// The paths a run of [`developer_id_host`] uses, under `/work/ev-nova`.
 pub(crate) struct Paths {
     pub app: PathBuf,
+    pub framework: PathBuf,
     pub dump: PathBuf,
     pub dmg: PathBuf,
     pub out: PathBuf,
@@ -321,6 +335,11 @@ pub(crate) fn paths() -> Paths {
     let out = bundle.join("out");
     Paths {
         app: staging.join("Nova.app"),
+        framework: staging
+            .join("Nova.app")
+            .join("Contents")
+            .join("Frameworks")
+            .join("Sparkle.framework"),
         dump: staging.join("nova-dump"),
         dmg: out.join("ev-nova-aarch64-apple-darwin.dmg"),
         out,

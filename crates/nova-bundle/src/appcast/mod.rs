@@ -111,6 +111,15 @@ pub enum Channel {
 }
 
 impl Channel {
+    /// Every channel.
+    pub const ALL: [Self; 1] = [Self::Nightly];
+
+    /// The channel named `name` ([`Channel::name`]), if any.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|channel| channel.name() == name)
+    }
+
     /// Its name, in a feed's name and title.
     #[must_use]
     pub fn name(self) -> &'static str {

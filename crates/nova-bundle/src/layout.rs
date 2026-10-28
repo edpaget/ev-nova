@@ -6,7 +6,9 @@
 //! <target>/bundle/staging/
 //!   Nova.app/Contents/Info.plist
 //!   Nova.app/Contents/MacOS/nova
+//!   Nova.app/Contents/Frameworks/Sparkle.framework
 //!   Nova.app/Contents/Resources/Nova.icns
+//!   Nova.app/Contents/Resources/Sparkle-LICENSE.txt
 //!   nova-dump
 //!   README.txt
 //!   LICENSE
@@ -28,12 +30,24 @@
 //!   nova-signing.keychain-db  the temporary keychain
 //!   Nova.zip                  the app as sent to the notary
 //! ```
+//!
+//! Every run downloads Sparkle afresh into a third directory beside
+//! staging, which it empties first, and the output directory never
+//! overlaps it either:
+//!
+//! ```text
+//! <target>/bundle/downloads/
+//!   Sparkle-<version>.tar.xz  the release archive, checked
+//!   Sparkle.framework         unpacked, trimmed and thinned
+//!   LICENSE                   Sparkle's licence
+//! ```
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::icon::ICON_FILE;
 use crate::info_plist::EXECUTABLE;
+use crate::sparkle;
 
 /// The bundle's file name. Not `EV Nova.app`: dragged into
 /// `/Applications`, that would replace the original game, where the game
@@ -53,6 +67,8 @@ pub struct Layout {
     pub staging: PathBuf,
     /// Where a Developer ID run keeps its secrets and scratch files.
     signing: PathBuf,
+    /// Where Sparkle is downloaded and unpacked.
+    downloads: PathBuf,
     /// Where the `.dmg` is written.
     pub out: PathBuf,
 }
@@ -85,6 +101,19 @@ pub enum LayoutError {
         /// The output directory asked for.
         out: PathBuf,
     },
+    /// It is, holds or lies in the downloads directory, which each run
+    /// empties.
+    #[error(
+        "the output directory {} overlaps the downloads directory {}: choose another",
+        out.display(),
+        downloads.display()
+    )]
+    OutputInDownloads {
+        /// The downloads directory.
+        downloads: PathBuf,
+        /// The output directory asked for.
+        out: PathBuf,
+    },
 }
 
 impl Layout {
@@ -94,6 +123,7 @@ impl Layout {
         let bundle = target_dir.join("bundle");
         let staging = bundle.join("staging");
         let signing = bundle.join("signing");
+        let downloads = bundle.join("downloads");
         let out = out.unwrap_or_else(|| bundle.join("out"));
         if staging.starts_with(&out) {
             return Err(LayoutError::StagingInOutput { staging, out });
@@ -101,9 +131,13 @@ impl Layout {
         if signing.starts_with(&out) || out.starts_with(&signing) {
             return Err(LayoutError::OutputInSigning { signing, out });
         }
+        if downloads.starts_with(&out) || out.starts_with(&downloads) {
+            return Err(LayoutError::OutputInDownloads { downloads, out });
+        }
         Ok(Self {
             staging,
             signing,
+            downloads,
             out,
         })
     }
@@ -182,6 +216,38 @@ impl Layout {
     #[must_use]
     pub fn executable(&self) -> PathBuf {
         self.macos().join(EXECUTABLE)
+    }
+
+    /// Where the bundler downloads and unpacks what it ships but doesn't
+    /// build (Sparkle), beside staging.
+    #[must_use]
+    pub fn downloads(&self) -> PathBuf {
+        self.downloads.clone()
+    }
+
+    /// The Sparkle release archive, downloaded.
+    #[must_use]
+    pub fn sparkle_archive(&self) -> PathBuf {
+        self.downloads.join(sparkle::ARCHIVE)
+    }
+
+    /// `Nova.app/Contents/Frameworks`.
+    #[must_use]
+    pub fn frameworks(&self) -> PathBuf {
+        self.contents().join("Frameworks")
+    }
+
+    /// `Sparkle.framework` in `Contents/Frameworks`.
+    #[must_use]
+    pub fn sparkle_framework(&self) -> PathBuf {
+        self.frameworks().join(sparkle::FRAMEWORK)
+    }
+
+    /// Sparkle's licence, which its notice asks copies to carry, in
+    /// `Contents/Resources`.
+    #[must_use]
+    pub fn sparkle_license(&self) -> PathBuf {
+        self.resources().join("Sparkle-LICENSE.txt")
     }
 
     /// `nova-dump`, at the volume's root.
@@ -267,6 +333,42 @@ mod tests {
         assert_eq!(layout.app_zip(), signing.join("Nova.zip"));
         assert!(!layout.signing().starts_with(&layout.staging));
         assert!(!layout.signing().starts_with(&layout.out));
+        let downloads = target().join("bundle").join("downloads");
+        assert_eq!(layout.downloads(), downloads);
+        assert_eq!(
+            layout.sparkle_archive(),
+            downloads.join("Sparkle-2.10.1.tar.xz")
+        );
+    }
+
+    #[test]
+    fn the_downloads_dir_is_beside_staging_and_never_in_the_output() {
+        let dist = Path::new("/work").join("dist");
+        for out in [None, Some(dist)] {
+            let layout = Layout::new(&target(), out).expect("layout");
+            assert_eq!(layout.downloads().parent(), layout.staging.parent());
+            assert!(!layout.downloads().starts_with(&layout.staging));
+            assert!(!layout.downloads().starts_with(&layout.out));
+            assert!(!layout.downloads().starts_with(layout.signing()));
+        }
+    }
+
+    #[test]
+    fn an_output_dir_in_or_at_the_downloads_dir_is_refused() {
+        let downloads = target().join("bundle").join("downloads");
+        for out in [downloads.clone(), downloads.join("out")] {
+            let refused = Layout::new(&target(), Some(out.clone()));
+            assert_eq!(
+                refused,
+                Err(LayoutError::OutputInDownloads {
+                    downloads: downloads.clone(),
+                    out: out.clone(),
+                })
+            );
+            let text = refused.expect_err("refused").to_string();
+            assert!(text.contains(&out.display().to_string()), "{text}");
+            assert!(text.contains(&downloads.display().to_string()), "{text}");
+        }
     }
 
     #[test]
@@ -282,5 +384,15 @@ mod tests {
         assert_eq!(layout.resources(), contents.join("Resources"));
         assert_eq!(layout.icon(), contents.join("Resources").join("Nova.icns"));
         assert_eq!(layout.dump(), layout.staging.join("nova-dump"));
+        let frameworks = contents.join("Frameworks");
+        assert_eq!(layout.frameworks(), frameworks);
+        assert_eq!(
+            layout.sparkle_framework(),
+            frameworks.join("Sparkle.framework")
+        );
+        assert_eq!(
+            layout.sparkle_license(),
+            contents.join("Resources").join("Sparkle-LICENSE.txt")
+        );
     }
 }

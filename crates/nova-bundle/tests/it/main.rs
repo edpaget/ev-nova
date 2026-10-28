@@ -15,6 +15,8 @@ mod linux_flatpak;
 #[cfg(target_os = "linux")]
 mod linux_tarball;
 #[cfg(target_os = "macos")]
+mod macos_dmg;
+#[cfg(target_os = "macos")]
 mod macos_tools;
 mod process;
 mod signer;

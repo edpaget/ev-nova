@@ -70,6 +70,29 @@ fn makes_a_symbolic_link() {
     );
 }
 
+/// Sparkle's trim removes `Sparkle.framework/XPCServices`, a link left
+/// dangling once `Versions/B/XPCServices` is gone, with `remove_dir_all`.
+#[cfg(unix)]
+#[test]
+fn removing_a_link_removes_the_link_and_not_its_target() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let target = dir.path().join("target");
+    fs::create_dir_all(&target).expect("seed");
+    fs::write(target.join("kept"), b"x").expect("seed");
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&target, &link).expect("seed");
+    StdFiles.remove_dir_all(&link).expect("remove the link");
+    assert!(fs::symlink_metadata(&link).is_err(), "the link is gone");
+    assert!(target.join("kept").is_file(), "its target is kept");
+
+    let dangling = dir.path().join("dangling");
+    std::os::unix::fs::symlink(dir.path().join("gone"), &dangling).expect("seed");
+    StdFiles
+        .remove_dir_all(&dangling)
+        .expect("remove the dangling link");
+    assert!(fs::symlink_metadata(&dangling).is_err(), "the link is gone");
+}
+
 #[cfg(not(unix))]
 #[test]
 fn a_symbolic_link_is_unsupported_off_unix() {
