@@ -12,6 +12,15 @@
 //! no more. Every decision is `nova_winres`'s; this only reads and writes
 //! the files and runs the resource compiler.
 //!
+//! For Windows targets it also compiles in the update feed WinSparkle
+//! checks (`nova::winsparkle::FEED` and `PUBLIC_KEY`): with `NOVA_CHANNEL`
+//! set to a channel and `[package.metadata.bundle] update_public_key`
+//! committed, it sets `NOVA_UPDATE_FEED` to the channel's Windows appcast
+//! and `NOVA_UPDATE_PUBLIC_KEY` to the key. Without either it sets
+//! neither, and the build doesn't update. An unknown channel fails the
+//! build, as the bundler refuses it. The decision is
+//! `nova_winres::windows_update_feed`'s; the key is public.
+//!
 //! On a Windows host the resources must compile, so a Windows build
 //! always carries them. Cross-checking from another host (`mise run
 //! lint-windows`) usually finds no resource compiler, which is fine: a
@@ -20,7 +29,10 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
-use nova_winres::{Resources, bundle_identifier, ico_from_icns, link_args, resource_script};
+use nova_winres::{
+    CHANNEL_VAR, Resources, bundle_identifier, ico_from_icns, link_args, resource_script,
+    windows_update_feed,
+};
 
 /// The product's name, as `[package.metadata.bundle] name` gives it to
 /// the macOS bundle.
@@ -30,9 +42,9 @@ fn main() {
     let crate_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let cargo_toml = crate_dir.join("Cargo.toml");
     println!("cargo:rerun-if-changed={}", cargo_toml.display());
-    let manifest = fs::read_to_string(&cargo_toml)
+    let manifest_text = fs::read_to_string(&cargo_toml)
         .unwrap_or_else(|error| panic!("{}: {error}", cargo_toml.display()));
-    let app_id = bundle_identifier(&manifest)
+    let app_id = bundle_identifier(&manifest_text)
         .unwrap_or_else(|error| panic!("{}: {error}", cargo_toml.display()));
     println!("cargo:rustc-env=NOVA_APP_ID={app_id}");
     println!("cargo:rerun-if-env-changed=NOVA_BUILD_ID");
@@ -45,6 +57,14 @@ fn main() {
     // The target's, not `cfg!(windows)`: the script runs on the host.
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
+    }
+    println!("cargo:rerun-if-env-changed={CHANNEL_VAR}");
+    let channel = env::var(CHANNEL_VAR).ok();
+    let feed = windows_update_feed(&manifest_text, channel.as_deref())
+        .unwrap_or_else(|error| panic!("{}: {error}", cargo_toml.display()));
+    if let Some(feed) = feed {
+        println!("cargo:rustc-env=NOVA_UPDATE_FEED={}", feed.url);
+        println!("cargo:rustc-env=NOVA_UPDATE_PUBLIC_KEY={}", feed.public_key);
     }
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     let ico = out.join("nova.ico");

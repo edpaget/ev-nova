@@ -218,6 +218,60 @@ mod tests {
         );
     }
 
+    /// nova's build script works out the feed `nova.exe` compiles in with
+    /// `nova_winres::windows_update_feed`; the installer that ships it
+    /// reports this crate's [`feed_status`]. They must agree for every
+    /// channel and key, and refuse the same unknown names.
+    #[test]
+    fn the_build_script_s_windows_feed_is_the_bundler_s() {
+        let key = PublicKey([9; 32]);
+        for committed in [None, Some(String::new()), Some(key.to_base64())] {
+            let line = committed
+                .as_ref()
+                .map_or(String::new(), |k| format!("update_public_key = \"{k}\"\n"));
+            let manifest = format!(
+                "[package]\nname = \"nova\"\n\n[package.metadata.bundle]\nidentifier = \
+                 \"io.example.nova\"\n{line}"
+            );
+            let parsed = committed
+                .as_deref()
+                .filter(|k| !k.is_empty())
+                .map(|k| PublicKey::from_base64(k).expect("key"));
+            for channel in Channel::ALL {
+                let built = nova_winres::windows_update_feed(&manifest, Some(channel.name()))
+                    .expect("the build script's feed");
+                match feed_status(&spec(parsed), Some(channel), Platform::Windows) {
+                    FeedStatus::Feed(feed) => assert_eq!(
+                        built,
+                        Some(nova_winres::UpdateFeed {
+                            url: feed.url,
+                            public_key: feed.public_key.to_base64(),
+                        }),
+                        "{channel:?}, {committed:?}"
+                    ),
+                    FeedStatus::NoKey(_) => {
+                        assert_eq!(built, None, "{channel:?}, {committed:?}");
+                    }
+                    FeedStatus::Development => panic!("{channel:?} is a channel"),
+                }
+            }
+            assert_eq!(
+                nova_winres::windows_update_feed(&manifest, None),
+                Ok(None),
+                "{committed:?}"
+            );
+            for unknown in ["Nightly", "stable", "beta "] {
+                assert_eq!(Channel::from_name(unknown), None, "{unknown:?}");
+                assert_eq!(
+                    nova_winres::windows_update_feed(&manifest, Some(unknown))
+                        .map_err(|error| error.to_string()),
+                    Err(ChannelError::Unknown(unknown.to_owned()).to_string()),
+                    "{unknown:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn each_feed_status_describes_itself() {
         let feed = UpdateFeed {
