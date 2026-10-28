@@ -1483,48 +1483,6 @@ fn governed(mut catalog: FakeCatalog, ship: i16, interface: i16) -> FakeCatalog 
     catalog.other_bars = vec![(129, bar_129())];
     catalog
 }
-/// The fake catalog with system 130 holding just `sites`.
-fn flight_among(sites: Vec<LandingSite>) -> View {
-    test_flight::new(FakeCatalog { sites, ..catalog() })
-}
-
-/// A flight in Sol, which lists `unseen`, stellar 150 named "Hole", after
-/// Earth: system 128 lists it too and, the lowest visible lister, owns
-/// it, so Sol doesn't show it.
-fn flight_with_unseen(unseen: LandingSite) -> View {
-    assert_eq!(unseen.id, StellarId(150));
-    let mut catalog = FakeCatalog {
-        home: true,
-        gate_listers: vec![(SystemId(128), StellarId(150))],
-        sites: vec![site(128, (0.0, -600.0), StellarFlags::CAN_LAND), unseen],
-        ..catalog()
-    };
-    catalog
-        .place_names
-        .stellars
-        .insert(StellarId(150), "Hole".to_owned());
-    let view = test_flight::new(catalog);
-    let session = view.session().expect("flying");
-    assert_eq!(
-        session.stellars_shown().collect::<Vec<_>>(),
-        [StellarId(128)]
-    );
-    view
-}
-
-/// A wormhole as stock ones are (`Flags` 0x21, `Flags2` 0x2000), 300
-/// below the centre the ship starts at: within L's 500 pixels.
-fn unseen_wormhole() -> LandingSite {
-    LandingSite {
-        flags2: 0x2000,
-        ..site(
-            150,
-            (0.0, 300.0),
-            StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
-        )
-    }
-}
-
 const LAND: Key = Key::Char('l');
 
 /// Where the message's first line is drawn: the message box's
@@ -1591,13 +1549,6 @@ fn tap(view: &mut FlightView<FakeCatalog, impl FlightSim>, k: Key) {
     view.input(&key(k, false));
 }
 
-/// Taps `k`, one of the stellar slot keys, then runs the frame whose slot
-/// block takes it.
-fn tap_slot(view: &mut View, k: Key) {
-    tap(view, k);
-    ticks(view, 1);
-}
-
 /// Where system `id` is on the course map, brought into item 3 first: the
 /// map opens at 0.5625 on the current system and shows little of the
 /// galaxy.
@@ -1646,18 +1597,6 @@ fn plot(view: &mut View, id: i16) {
     assert_eq!(view.session().expect("flying").course(), route, "plotted");
     tap(view, MAP);
     assert!(!view.map_open());
-}
-
-/// `view` reading [`nova_sim::RuleKey::MapPlotting`]'s other reading, the
-/// planner: a click on the map plots the shortest course to its system
-/// and cues its first hop at once: a new pilot of `catalog` flown, set
-/// up by that rulebook at the edge.
-fn planner(catalog: FakeCatalog) -> View {
-    ruled(
-        catalog,
-        Rulebook::default()
-            .with_override(nova_sim::RuleKey::MapPlotting, nova_sim::RuleSource::Bible),
-    )
 }
 
 /// A new pilot of `catalog` flown, set up at the edge with `rules` and
@@ -1720,16 +1659,6 @@ fn fly_out(view: &mut View) {
         "{:?}",
         player(view)
     );
-}
-
-/// `view` begun as a new pilot's, ticked once past the land hint, its
-/// message and sounds let go.
-fn new_pilot(mut view: View) -> View {
-    view.begin(SessionFlight::begin);
-    ticks(&mut view, 1);
-    view.message = None;
-    view.take_sounds();
-    view
 }
 
 /// The fade quad's place in the list and its colour, if drawn.
@@ -1811,69 +1740,6 @@ fn arrive_now(view: &mut View) {
     panic!("never arrived: {:?}", player(view));
 }
 
-/// Two of `build`'s flights, each with its course to Alpha Centauri
-/// plotted and flown out: the first braking and turning for the jump
-/// on a tap of J, the second 300 ms into the jump's warp. Boxed: two flights
-/// are too large for the stack together.
-fn through_a_jump(build: impl Fn() -> View) -> [Box<View>; 2] {
-    let mut braking = Box::new(build());
-    plot(&mut braking, 131);
-    fly_out(&mut braking);
-    tap(&mut braking, JUMP);
-    assert!(braking.preparing_jump(), "braking");
-    let mut warping = Box::new(build());
-    plot(&mut warping, 131);
-    fly_out(&mut warping);
-    jump_now(&mut warping);
-    warping.tick(ms(300));
-    assert!(warping.jump_effect().is_some(), "warping");
-    [braking, warping]
-}
-
-/// Ticks `view` until its session's `_hyperGamma` is above 0, and gives
-/// how many ticks that took.
-fn tick_until_lit(view: &mut View) -> u32 {
-    for n in 1..2000 {
-        view.tick(TICK);
-        if view.session().expect("flying").hyper_gamma() > 0.0 {
-            return n;
-        }
-    }
-    panic!("never lit: {:?}", player(view));
-}
-
-/// Ticks until the ship has arrived in another system, the jump's
-/// fade-in yet to play.
-fn tick_to_arrival(view: &mut View) {
-    let leaving = view.session().expect("flying").system();
-    for _ in 0..1000 {
-        if view.session().expect("flying").system() != leaving {
-            return;
-        }
-        view.tick(TICK);
-    }
-    panic!("never arrived: {:?}", player(view));
-}
-
-/// Jumps from Sol to Alpha Centauri, on a course on to Barnard, and
-/// stops 50 ms into the arrival's fade-in.
-fn fading_in_on_course_to_barnard() -> View {
-    let mut view = planner(FakeCatalog {
-        onward: true,
-        ..catalog()
-    });
-    plot(&mut view, 132);
-    fly_out(&mut view);
-    jump_now(&mut view);
-    tick_to_arrival(&mut view);
-    view.tick(ms(50));
-    assert_eq!(system_of(&view), SystemId(131));
-    assert!(matches!(
-        view.jump_effect().map(JumpEffect::phase),
-        Some(JumpPhase::FadeIn(_))
-    ));
-    view
-}
 /// A pilot named `name` docked at Earth: landed over a planet 128 at
 /// the centre, then flown in the stock catalog, where Earth is at
 /// (0, -600).
@@ -1939,14 +1805,6 @@ fn landed_view() -> View {
     view
 }
 
-fn move_to(view: &mut View, system: i16, stellar: i16) {
-    let mut desk = view.pilot_desk().expect("flying");
-    desk.edit(PilotEdit::MoveTo {
-        system: SystemId(system),
-        stellar: StellarId(stellar),
-    })
-    .expect("moves");
-}
 use nova_sim::{Chance, Direction, DisasterId, Good, Lot, Order, TradeRefusal};
 
 /// Earth at the centre, a trade center trading food at 75, the first
@@ -2159,66 +2017,6 @@ fn port_nav(view: &FlightView<FakeCatalog, impl FlightSim>) -> Vec<String> {
 /// The nav area naming `name` in mode 2.
 fn naming(name: &str) -> Vec<String> {
     vec![hud::NAV_STELLAR.to_owned(), name.to_owned()]
-}
-
-/// [`shipbuying`]'s Earth, a trade center too selling food, the ship
-/// holding 10 tons; ship 130 under gövt 150, whose `Interface` is 129
-/// ([`governed`]); the fuel tank's `OnPurchase` an `H130`, and outfit
-/// 201 a tank with none; missions 130 and 131, errands at the mission
-/// computer, 131 with a `BriefText`; Barnard (132), with no stellar;
-/// and Proxima (140), Alpha Centauri's first stellar, named by the
-/// session alone, as the flight scene is Sol's while docked.
-fn port() -> FakeCatalog {
-    let mut catalog = governed(shipbuying(), 130, 129);
-    catalog.sites[0].flags |= trading().sites[0].flags;
-    catalog.fields.holds = 10;
-    catalog.commodities = trading().commodities;
-    let plain = OutfitRecord {
-        id: OutfitId(201),
-        ..catalog.outfits[0].clone()
-    };
-    catalog.outfits[0].on_purchase = nova_sim::Script::parse("H130");
-    catalog.outfits.push(plain);
-    catalog.missions = vec![errand(130), errand(131)];
-    catalog.mission_texts = vec![MissionTexts {
-        brief: Some("Go.".to_owned()),
-        ..MissionTexts::named(MissionId(131), "Walk")
-    }];
-    catalog.onward = true;
-    catalog.place_names.stellars = BTreeMap::from([(StellarId(140), "Proxima".to_owned())]);
-    catalog
-}
-
-/// [`port`] with a bar on Earth, a view of it landed there by the
-/// engine's reading (as [`docked_at_earth`]), with `course` plotted
-/// in flight first if given, and the bar opened.
-fn in_the_bar(course: Option<i16>) -> View {
-    in_the_bar_of(port(), course)
-}
-
-/// [`in_the_bar`] over `catalog`, a [`port`] changed.
-fn in_the_bar_of(mut catalog: FakeCatalog, course: Option<i16>) -> View {
-    catalog.sites[0].flags |= StellarFlags::BAR;
-    let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Engine);
-    let mut view = ruled(catalog, rules);
-    if let Some(to) = course {
-        view.sim
-            .session
-            .as_mut()
-            .expect("flying")
-            .plot_course(SystemId(to))
-            .expect("a route");
-    }
-    land_now(&mut view);
-    view.settle_script();
-    assert_eq!(
-        view.session().map(Session::nav_mode),
-        Ok(NavMode::Stellar(Some(StellarId(128)))),
-        "the land key put mode 2 over any cue"
-    );
-    assert_eq!(port_nav(&view), naming("Earth"));
-    assert!(view.open_bar());
-    view
 }
 
 /// The port's contract (`check_contract`) holds of `view`'s real flight,
@@ -2797,15 +2595,6 @@ fn fighting(catalog: FakeCatalog, draws: &[u32]) -> View {
     view
 }
 
-/// NPC 0 at (100, -100) and NPC 1 at (-50, 0), nearer the player.
-fn two_npcs() -> Vec<u32> {
-    [placed(850, 650, 90), placed(700, 750, 0)].concat()
-}
-
-fn target_of(view: &View) -> Option<NpcId> {
-    view.session().expect("flying").target().map(|npc| npc.id)
-}
-
 /// How many of the shots in flight are of `weapon`.
 fn shots_of(view: &View, weapon: WeaponId) -> usize {
     let session = view.session().expect("flying");
@@ -3084,7 +2873,7 @@ fn hiring() -> FakeCatalog {
     catalog
 }
 use nova_sim::MissionTextKind;
-use nova_sim::catalog::{MissionRecord, MissionShip, MissionTexts};
+use nova_sim::catalog::{MissionRecord, MissionShip};
 use nova_sim::control::{Script as SetScript, Test};
 
 /// Mission `id`, offered at the mission computer of any stellar on
@@ -3137,10 +2926,6 @@ fn run_set(view: &mut View, text: &str) {
     view.refresh_frame();
 }
 
-fn systems_read(view: &View) -> Vec<SystemId> {
-    view.catalog().systems_read.borrow().clone()
-}
-
 /// The background of the status bar `view` shows.
 fn bar_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<i16> {
     view.status_bar
@@ -3168,21 +2953,6 @@ fn life(id: i16, flags2: u16) -> nova_sim::StellarLife {
     }
 }
 
-/// A flight in Sol whose Earth (128, `DeadType` sheet 2128), Moon
-/// (129, no different graphic) and Proxima (140, `DeadType` sheet
-/// 2140) can be destroyed.
-fn destructible() -> View {
-    test_flight::new(FakeCatalog {
-        lives: vec![life(128, 0), life(129, 0), life(140, 0)],
-        ..catalog()
-    })
-}
-
-/// Where `view` draws the system point `(x, y)`.
-fn on_screen(view: &View, (x, y): (f32, f32)) -> Point {
-    view.camera().world_to_screen(at(x, y))
-}
-
 /// The four corners from `cïcn` `first` round `centre`, half-size
 /// `half`: top-left, top-right, bottom-right, bottom-left.
 fn corners_at(first: i16, centre: Point, half: f32) -> Vec<(i16, Point)> {
@@ -3193,22 +2963,6 @@ fn corners_at(first: i16, centre: Point, half: f32) -> Vec<(i16, Point)> {
         (first + 2, at(centre.x + far, centre.y + far)),
         (first + 3, at(centre.x + near, centre.y + far)),
     ]
-}
-
-fn nav_target(view: &View) -> Option<StellarId> {
-    view.session().expect("flying").nav_target()
-}
-
-/// The texts drawn in the HUD's nav area, the stock bar's at (830, 0).
-fn nav(view: &View) -> Vec<String> {
-    let area = layout().nav.offset(at(830.0, 0.0));
-    drawn(view)
-        .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Text { text, origin, .. } if area.contains(*origin) => Some(text.clone()),
-            _ => None,
-        })
-        .collect()
 }
 
 /// The engine tick `view` has reached.
@@ -3255,10 +3009,6 @@ fn gated() -> FakeCatalog {
         gate_listers: vec![(SystemId(131), StellarId(310))],
         ..catalog()
     }
-}
-
-fn system_of(view: &View) -> SystemId {
-    view.session().expect("flying").system()
 }
 
 /// The course map's sounds `view` holds, taken with the rest.

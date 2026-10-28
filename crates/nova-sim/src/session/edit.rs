@@ -755,6 +755,19 @@ mod tests {
     }
 
     #[test]
+    fn a_move_within_the_system_clears_the_course_and_its_start() {
+        let catalog = atlas();
+        let mut session = landed(&catalog);
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.pilot().course_start(), Some(SystemId(130)));
+        session
+            .relocate(&catalog, SystemId(130), StellarId(129))
+            .expect("moves");
+        assert_eq!(session.course(), []);
+        assert_eq!(session.pilot().course_start(), None, "the start cleared");
+    }
+
+    #[test]
     fn a_move_tells_whether_the_system_or_only_the_stellar_changed() {
         let catalog = atlas();
         for ((system, stellar), told) in [

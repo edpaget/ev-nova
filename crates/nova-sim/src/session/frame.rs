@@ -663,6 +663,26 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_fill_writes_the_systems_wormhole_and_hypergate_shown_in_nav_order() {
+        use crate::session::stellar_picks::tests::{hypergate, wormhole};
+        let mut catalog = catalog();
+        catalog.sites[0].1 = vec![
+            crate::testkit::planet(128, 30.0, -40.0),
+            wormhole(150, 0.0, 300.0),
+            hypergate(151, 0.0, -300.0),
+        ];
+        let session = Session::start(&catalog).expect("starts");
+        let frame = filled(&session);
+        let gates = [StellarId(128), StellarId(150), StellarId(151)];
+        assert!(frame.stellars_shown().eq(gates), "{:?}", frame.stellars);
+        let expected: Vec<FrameStellar> = gates
+            .iter()
+            .map(|&id| stellar_record(&session, id, true))
+            .collect();
+        assert_eq!(frame.stellars, expected);
+    }
+
+    #[test]
     fn a_stellar_its_system_lists_but_doesnt_show_is_recorded_unshown_after_those_shown() {
         let mut session = Session::start(&three_stellars()).expect("starts");
         session.chart.sites.remove(0);

@@ -628,7 +628,7 @@ fn faked_fade_alpha(view: &Faked) -> Option<u8> {
 
 /// [`streaking`]'s view arrived in Alpha Centauri, 50 ms into the
 /// arrival's fade-in.
-fn fading_in() -> Faked {
+pub(super) fn fading_in() -> Faked {
     let mut view = streaking();
     lit(&mut view, 1.0);
     warp_ends(&mut view);

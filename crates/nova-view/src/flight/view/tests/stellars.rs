@@ -5,14 +5,16 @@ use nova_sim::flight_frame::FlightEvent;
 
 // Session events.
 
-fn bars_read(view: &View) -> Vec<i16> {
+fn bars_read<S: FlightSim>(view: &FlightView<FakeCatalog, S>) -> Vec<i16> {
     view.catalog().bars_asked.borrow().clone()
 }
 
 #[test]
 fn a_new_ship_types_missing_bar_keeps_the_layout_over_picture_128() {
-    let mut view = test_flight::new(governed(shipbuying(), 129, 131));
-    run_set(&mut view, "H129");
+    // Which government a new ship type's bar is chosen by is the session's.
+    let mut view = super::faked_hud::barred(governed(catalog(), 129, 131), among(Vec::new()));
+    assert_eq!(bars_read(&view), [128]);
+    view.sim.frame_mut().hud.interface_government = Some(GovtId(150));
     view.tick(TICK);
     assert_eq!(bars_read(&view), [128, 131]);
     assert_eq!(
@@ -31,7 +33,7 @@ fn a_new_ship_types_missing_bar_keeps_the_layout_over_picture_128() {
 // The stellars shown.
 
 /// The IDs of the stellars `view`'s scene draws.
-fn scene_ids(view: &View) -> Vec<StellarId> {
+fn scene_ids<S: FlightSim>(view: &FlightView<FakeCatalog, S>) -> Vec<StellarId> {
     view.scene()
         .expect("laid out")
         .stellars()
@@ -54,7 +56,7 @@ pub(super) fn proxima_in_sol() -> FakeCatalog {
 /// starts at, and a hypergate, Gate (151), 300 above it, each a square
 /// on the radar as the data adapter reads them, after Earth and the
 /// Moon.
-fn sol_with_gates() -> View {
+fn sol_with_gates() -> Faked {
     let mut catalog = catalog();
     catalog.sites.extend([
         LandingSite {
@@ -80,7 +82,17 @@ fn sol_with_gates() -> View {
             ..stellar(151, "Gate", (0, -300), 1)
         },
     ];
-    test_flight::new(catalog)
+    // Which the session shows is its own: both, in nav order.
+    let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
+    frame
+        .stellars
+        .extend([150, 151].map(|id| record::stellar(StellarId(id))));
+    let mut view = super::faked_hud::barred(catalog, frame);
+    view.sim
+        .map_mut()
+        .stellar_names
+        .push((StellarId(150), "Hole".to_owned()));
+    view
 }
 
 /// `_HandleStellarSprites` draws every active stellar the system owns,
@@ -97,8 +109,7 @@ fn the_flight_scene_draws_the_systems_wormhole_and_hypergate() {
 /// (@0x498a0-0x49a8e): no gate test.
 #[test]
 fn the_radar_shows_the_systems_wormhole_and_hypergate_as_squares() {
-    let mut view = sol_with_gates();
-    ticks(&mut view, 1);
+    let view = sol_with_gates();
     let radar = view.radar_shown(&view.frame_now());
     let gates: Vec<(Point, bool)> = radar
         .stellars
@@ -119,10 +130,17 @@ fn the_radar_shows_the_systems_wormhole_and_hypergate_as_squares() {
 /// within 500 pixels selects the wormhole, and the nav area names it.
 #[test]
 fn f5_near_the_wormhole_selects_it_and_the_nav_area_names_it() {
+    // That F5 within 500 pixels picks the wormhole is the session's.
     let mut view = sol_with_gates();
-    tap_slot(&mut view, NEAREST_STELLAR_KEY);
-    assert_eq!(nav_target(&view), Some(StellarId(150)));
-    assert_eq!(nav(&view), [hud::NAV_STELLAR, "Hole"]);
+    tap(&mut view, NEAREST_STELLAR_KEY);
+    view.tick(TICK);
+    assert_eq!(
+        super::faked_screen::picks_since(&view, 0),
+        [FlightCommand::SelectStellar(nova_sim::StellarPick::Nearest)]
+    );
+    view.sim.frame_mut().nav_mode = NavMode::Stellar(Some(StellarId(150)));
+    view.redraw_status();
+    assert_eq!(super::faked_hud::nav_of(&view), [hud::NAV_STELLAR, "Hole"]);
 }
 
 // The galaxy overlay.
@@ -324,26 +342,36 @@ fn each_event_asks_for_its_own_redraw() {
 // FakeFlight.
 
 /// The Moon's frame shown.
-fn moon_frame(view: &View) -> u16 {
+fn moon_frame<S: FlightSim>(view: &FlightView<FakeCatalog, S>) -> u16 {
     sprites(&drawn(view))[1].0.frame
 }
 
 #[test]
 fn a_load_shows_every_stellar_from_frame_0() {
-    let mut view = flight();
-    ticks(&mut view, 2);
-    assert_eq!(moon_frame(&view), 2);
-    let pilot = view.sim().pilot().expect("flying").clone();
-    let mut loaded = test_flight::loaded(catalog(), pilot.clone(), &Rulebook::default());
+    // Whatever the flight held: the view's stellars start at frame 0 as
+    // it is read, and go on a frame a tick.
+    let opened = || {
+        let mut fake = FakeFlight::new();
+        fake.set_frame(sol());
+        FlightView::over(
+            Rc::new(catalog()),
+            fake,
+            &Rulebook::default(),
+            SharedChance::default(),
+        )
+    };
+    let mut flown = opened();
+    flown.tick(TICK);
+    flown.tick(TICK);
+    assert_eq!(moon_frame(&flown), 2);
+    let mut loaded = opened();
     assert_eq!(moon_frame(&loaded), 0, "loaded");
     loaded.tick(TICK);
     assert_eq!(moon_frame(&loaded), 1, "loaded, then on");
-    let mut resumed = test_flight::with_pilot(catalog(), pilot);
-    assert_eq!(moon_frame(&resumed), 0, "resumed");
-    resumed.tick(TICK);
-    assert_eq!(moon_frame(&resumed), 1, "resumed, then on");
-    // A new pilot's flight is ticked once past the land hint.
-    let mut new = new_pilot(test_flight::new(catalog()));
+    // A new pilot's flight is begun, then ticked once past the land hint.
+    let mut new = opened();
+    new.begin(|_| true);
+    new.tick(TICK);
     assert_eq!(moon_frame(&new), 1, "a new pilot's, one tick in");
     new.tick(TICK);
     assert_eq!(moon_frame(&new), 2, "a new pilot's, then on");
@@ -351,20 +379,36 @@ fn a_load_shows_every_stellar_from_frame_0() {
 
 #[test]
 fn a_desk_move_redraws_with_no_extra_call() {
-    let mut view = landed_view();
-    move_to(&mut view, 131, 140);
+    // Where the desk's move puts the pilot, and that a move within the
+    // system clears the course, are the session's.
+    let mut view = super::faked_world::world(catalog(), in_system(130, 128, true));
+    view.catalog().systems_read.borrow_mut().clear();
+    let mut moved = in_system(131, 128, true);
+    moved.landed = Some(StellarId(140));
+    view.sim.set_frame(moved);
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::SystemChanged));
     view.tick(TICK);
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
-    assert_eq!(systems_read(&view), [SystemId(131)]);
+    assert_eq!(*view.catalog().systems_read.borrow(), [SystemId(131)]);
     assert_eq!(view.course_map().current(), Some(SystemId(131)));
     assert_eq!(view.shown_position(), Point::new(0.0, 0.0), "at Proxima");
 
-    let mut view = landed_view();
-    plot(&mut view, 131);
-    move_to(&mut view, 130, 129);
+    let mut plotted = in_system(130, 128, true);
+    plotted.course_shown = vec![SystemId(131)];
+    plotted.course_plotted = true;
+    let mut view = super::faked_world::world(catalog(), plotted);
+    view.catalog().systems_read.borrow_mut().clear();
+    assert_eq!(view.course_map().route(), [SystemId(131)]);
+    let mut moved = in_system(130, 128, true);
+    moved.landed = Some(StellarId(129));
+    moved.ships = vec![record::player(128, Vec2::new(300.0, -200.0), 0.0)];
+    view.sim.set_frame(moved);
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::StellarChanged));
     view.tick(TICK);
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
-    assert_eq!(systems_read(&view), [], "the scene kept");
+    assert_eq!(*view.catalog().systems_read.borrow(), [], "the scene kept");
     assert_eq!(view.course_map().route(), [], "the course cleared");
     assert_eq!(
         view.shown_position(),

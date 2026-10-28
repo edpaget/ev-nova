@@ -670,7 +670,7 @@ fn a_borders_change_on_the_hypergate_map_saves_but_one_docked_is_kept_unsaved() 
 // The take-off and the settling.
 
 /// The answer to a take-off from `stellar`, nothing settled.
-fn departed(stellar: i16) -> Answer {
+pub(super) fn departed(stellar: i16) -> Answer {
     Answer::Departed(nova_sim::Departure {
         stellar: StellarId(stellar),
         settled: nova_sim::Settled::default(),

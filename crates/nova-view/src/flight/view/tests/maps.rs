@@ -1332,16 +1332,43 @@ fn the_hypergate_map_marks_its_arrows_known_and_its_next_draw_shows_them() {
 
 #[test]
 fn the_hypergate_maps_own_mark_takes_no_redraw_a_frame_on() {
-    // The gate leads to Barnard (132), which nothing has made known.
-    let mut view = test_flight::new(FakeCatalog {
-        gate_listers: vec![(SystemId(132), StellarId(310))],
-        ..gated()
-    });
-    land_now(&mut view);
-    let drawn = |view: &View| drawn_ids(view.course_map());
-    assert!(!drawn(&view).contains(&SystemId(132)), "first draw");
+    // The gate leads to Barnard (132), which nothing has made known: the
+    // map's draw marks it known, which changes the flight's map key.
+    let mut view = faked(in_sol());
+    let map = view.sim.map_mut();
+    map.drawing = Some(gate_drawing());
+    map.map_preselection = Some(SystemId(130));
+    map.hypergate_cycle = vec![Some(SystemId(132))];
+    let known = FlightFrame {
+        map_key: nova_sim::flight_frame::MapKey {
+            known: [SystemId(132)].into(),
+            ..in_sol().map_key
+        },
+        ..in_sol()
+    };
+    view.sim.queue_answer_showing(Answer::Done, known);
+    view.map.offer_gates(vec![SystemId(132)]);
+    view.open_map();
+    let drawings = |view: &Faked| {
+        view.sim
+            .asked()
+            .iter()
+            .filter(|ask| matches!(ask, MapAsk::Drawing { .. }))
+            .count()
+    };
+    assert_eq!(sent(&view), [FlightCommand::MarkKnown(vec![SystemId(132)])]);
+    assert_eq!(drawings(&view), 1, "first draw");
     view.tick(TICK);
-    assert!(!drawn(&view).contains(&SystemId(132)), "a frame on");
+    assert_eq!(drawings(&view), 1, "a frame on: no redraw for its own mark");
+    view.sim.set_frame(FlightFrame {
+        map_key: nova_sim::flight_frame::MapKey {
+            known: [SystemId(131), SystemId(132)].into(),
+            ..in_sol().map_key
+        },
+        ..in_sol()
+    });
+    view.tick(TICK);
+    assert_eq!(drawings(&view), 2, "while a change behind it redraws");
 }
 
 /// What the flight answers a press on the hypergate map that selects
@@ -1810,7 +1837,7 @@ fn background_at(list: &DrawList) -> Option<usize> {
 
 #[test]
 fn with_the_map_open_in_flight_the_paused_scene_is_drawn_behind_the_dialog() {
-    let mut view = flight();
+    let mut view = super::faked_screen::in_flight();
     let shut = drawn(&view);
     tap(&mut view, MAP);
     let list = drawn(&view);
@@ -1828,7 +1855,8 @@ fn with_the_map_open_in_flight_the_paused_scene_is_drawn_behind_the_dialog() {
 
 #[test]
 fn in_port_the_map_is_drawn_alone() {
-    let mut view = in_the_bar(None);
+    let mut view = super::faked_shops::docked();
+    view.sim.map_mut().drawing = Some(sol_drawing());
     view.open_bar_map();
     let list = drawn(&view);
     assert_eq!(background_at(&list), Some(1), "the dialog's black, then it");

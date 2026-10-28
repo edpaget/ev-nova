@@ -9,21 +9,6 @@ use nova_sim::{AlertIcon, JumpReadiness};
 
 // The navigation target.
 
-/// Two stellars the ship starts over, at rest: A (128), small and
-/// nearest, then B (129), wide and a little further off, in that nav
-/// order; and C (130), drawn where the status panel covers it.
-fn a_and_b() -> View {
-    let wide = LandingSite {
-        frame_size: Some((200, 200)),
-        ..site(129, (40.0, 0.0), StellarFlags::CAN_LAND)
-    };
-    flight_among(vec![
-        site(128, (10.0, 0.0), StellarFlags::CAN_LAND),
-        wide,
-        site(130, (427.0, 0.0), StellarFlags::CAN_LAND),
-    ])
-}
-
 /// A scripted flight in Sol showing Earth and the Moon, the player at the
 /// centre.
 fn faked_sol_scene() -> Faked {
@@ -71,8 +56,8 @@ fn a_click_in_space_sends_the_world_point_drawn_under_it() {
 
 #[test]
 fn a_right_click_or_a_release_selects_nothing() {
-    let mut view = a_and_b();
-    let b = on_screen(&view, (40.0, 0.0));
+    let mut view = faked_sol_scene();
+    let earth = faked_on_screen(&view, (0.0, -600.0));
     for (button, pressed) in [
         (crate::MouseButton::Right, true),
         (crate::MouseButton::Left, false),
@@ -80,9 +65,13 @@ fn a_right_click_or_a_release_selects_nothing() {
         view.input(&Input::PointerButton {
             button,
             pressed,
-            at: b,
+            at: earth,
         });
-        assert_eq!(nav_target(&view), None, "{button:?} {pressed}");
+        assert_eq!(
+            super::faked_screen::sent_since(&view, 0),
+            [],
+            "{button:?} {pressed}"
+        );
     }
 }
 
@@ -122,36 +111,21 @@ fn far_from_the_centre_nav_off_with_a_course_lets_the_arrow_show() {
 
 // The nav target's brackets.
 
-/// The nav bracket `cïcn`s drawn (10000-10007), and where.
-fn nav_icons(view: &View) -> Vec<(i16, Point)> {
-    drawn(view)
-        .iter()
-        .filter_map(|command| match command {
-            DrawCommand::Picture { image, top_left } if icon_in(10000..=10007)(command) => {
-                Some((image.id, *top_left))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 #[test]
 fn selecting_a_stellar_draws_cicn_10000_to_10003_flying_in_then_settled() {
-    let mut view = flight();
-    assert_eq!(nav_icons(&view), []);
-    tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
-    // Earth (128), 20 x 20: half 10.
-    let earth = on_screen(&view, (0.0, -600.0));
+    // How far out each tick draws them is the session's.
+    let mut view = faked_sol_scene();
+    assert_eq!(faked_nav_icons(&mut view, None), []);
+    faked_tap_slot(&mut view, STELLAR_SLOT_KEYS[0][0]);
     assert_eq!(
-        nav_icons(&view),
-        corners_at(10000, earth, 10.0 + 196.0),
-        "the frame of the pick"
+        sent(&view),
+        [FlightCommand::SelectStellar(nova_sim::StellarPick::Slot(0))]
     );
-    for expand in [136.0, 76.0, 16.0, 0.0, 0.0] {
-        view.tick(TICK);
-        let earth = on_screen(&view, (0.0, -600.0));
+    // Earth (128), 20 x 20: half 10.
+    let earth = faked_on_screen(&view, (0.0, -600.0));
+    for expand in [196.0, 136.0, 76.0, 16.0, 0.0] {
         assert_eq!(
-            nav_icons(&view),
+            faked_nav_icons(&mut view, Some(nav_at(128, (0.0, -600.0), expand))),
             corners_at(10000, earth, 10.0 + expand),
             "{expand}"
         );
@@ -248,9 +222,16 @@ fn an_unseen_selection_is_bracketed_at_its_spot_at_half_64() {
 /// (@0x4a0fd-0x4a149).
 #[test]
 fn the_hud_names_an_unseen_selection() {
-    let mut view = flight_with_unseen(unseen_wormhole());
-    tap(&mut view, LAND);
-    assert_eq!(nav(&view), [hud::NAV_STELLAR, "Hole"]);
+    // That L selects it is the session's.
+    let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
+    frame.nav_mode = NavMode::Stellar(Some(StellarId(150)));
+    let mut view = barred(catalog(), frame);
+    view.sim
+        .map_mut()
+        .stellar_names
+        .push((StellarId(150), "Hole".to_owned()));
+    view.redraw_status();
+    assert_eq!(nav_of(&view), [hud::NAV_STELLAR, "Hole"]);
 }
 
 #[test]

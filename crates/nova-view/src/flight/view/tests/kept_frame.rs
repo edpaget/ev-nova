@@ -5,8 +5,12 @@
 //! then draws the ship where it is (a ship swapped, an arrival, a
 //! take-off), so the ship is never drawn on its way from its old place.
 
+use super::faked_landing::departed;
+use super::faked_travel::{jump_now, lit};
+use super::faked_world::world;
 use super::*;
-use nova_sim::flight_frame::FrameShip;
+use nova_sim::SessionEvent;
+use nova_sim::flight_frame::{FlightEvent, FrameShip, FrameStellar, ShipPlace};
 
 /// The fake's frame with the player's ship at `x`.
 fn player_at(x: f32) -> FlightFrame {
@@ -63,12 +67,9 @@ fn a_catch_up_redraws_from_the_frame_as_the_events_left_it_and_keeps_it_after() 
 
 #[test]
 fn a_take_off_draws_the_ship_where_it_leaves_the_stellar_not_from_its_place_before_landing() {
-    let mut view = over_earth(catalog());
-    view.tick(TICK);
-    land_now(&mut view);
-    assert!(view.take_landing().is_some(), "landed");
+    let mut view = faked(docked_at(128, Vec2::new(6.0, -8.0)));
     // Where the ship was drawn from, and kept, before it landed.
-    let before = nova_sim::flight_frame::ShipPlace {
+    let before = ShipPlace {
         position: Vec2::new(-40.0, 30.0),
         heading: 90.0,
     };
@@ -76,11 +77,19 @@ fn a_take_off_draws_the_ship_where_it_leaves_the_stellar_not_from_its_place_befo
     view.frame.ships[0].position = before.position;
     view.frame.ships[0].heading = before.heading;
     view.alpha = 0.5;
-    view.take_off();
-    let now = *view.session().expect("flying").player();
-    assert_eq!(view.previous, now.into(), "not from the old place");
+    let flying = FlightFrame {
+        landed: None,
+        ..docked_at(128, Vec2::new(6.0, -8.0))
+    };
+    view.sim.queue_answer_showing(departed(128), flying);
+    assert_eq!(view.take_off(), Some(StellarId(128)));
+    let now = ShipPlace {
+        position: Vec2::new(6.0, -8.0),
+        heading: 0.0,
+    };
+    assert_eq!(view.previous, now, "not from the old place");
     assert_eq!(view.alpha(), 0.0);
-    assert_eq!(view.shown_position(), at(now.position.x, now.position.y));
+    assert_eq!(view.shown_position(), at(6.0, -8.0));
     assert_eq!(
         view.frame.player().position,
         now.position,
@@ -90,21 +99,41 @@ fn a_take_off_draws_the_ship_where_it_leaves_the_stellar_not_from_its_place_befo
 
 #[test]
 fn an_arrival_draws_the_ship_where_it_arrives_and_the_new_systems_stellars_as_it_holds_them() {
-    let mut view = destructible();
-    run_set(&mut view, "Y140");
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    view.input(&key(JUMP, true));
-    while view.session().expect("flying").system() == SystemId(130) {
-        view.tick(TICK);
-    }
-    let arrived = *view.session().expect("flying").player();
-    assert_eq!(view.alpha(), 0.0, "drawn where it arrived");
-    assert_eq!(view.previous.position, arrived.position);
-    assert_eq!(
-        view.shown_position(),
-        at(arrived.position.x, arrived.position.y)
+    let catalog = FakeCatalog {
+        lives: vec![life(128, 0), life(129, 0), life(140, 0)],
+        ..catalog()
+    };
+    let mut view = world(catalog, sol());
+    jump_now(&mut view);
+    lit(&mut view, 1.0);
+    view.sim.set_frame(FlightFrame {
+        warp_end_due: true,
+        ..under_way(true)
+    });
+    view.refresh_frame();
+    let arrived = Vec2::new(-300.0, 200.0);
+    let in_alpha = FlightFrame {
+        system: SystemId(131),
+        ships: vec![the_player_at(arrived, 45.0)],
+        stellars: vec![FrameStellar {
+            destroyed: true,
+            ..record::stellar(StellarId(140))
+        }],
+        ..sol()
+    };
+    view.sim.queue_answer_telling(
+        Answer::Arrived {
+            system: SystemId(131),
+            combat: Vec::new(),
+        },
+        in_alpha,
+        vec![FlightEvent::Session(SessionEvent::SystemChanged)],
     );
+    view.tick(TICK);
+    assert!(sent(&view).contains(&FlightCommand::Arrive), "arrived");
+    assert_eq!(view.alpha(), 0.0, "drawn where it arrived");
+    assert_eq!(view.previous.position, arrived);
+    assert_eq!(view.shown_position(), at(arrived.x, arrived.y));
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
     let record = view.frame.stellar(StellarId(140)).expect("Proxima's");
     assert!(record.destroyed, "the new system's record");
@@ -113,21 +142,15 @@ fn an_arrival_draws_the_ship_where_it_arrives_and_the_new_systems_stellars_as_it
 }
 
 #[test]
-fn a_new_pilots_beginning_draws_the_ship_where_it_begins() {
-    let mut view = flight();
-    view.begin(SessionFlight::begin);
-    let begun = *view.session().expect("flying").player();
-    assert_eq!(begun.position, Vec2::new(50.0, 50.0), "where begin puts it");
-    assert_eq!(view.previous.position, begun.position);
-    assert_eq!(view.frame.player().position, begun.position);
-}
-
-#[test]
 fn a_failed_flight_keeps_the_default_frame_through_its_catch_ups() {
-    let mut view = test_flight::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    });
+    let mut fake = FakeFlight::new();
+    fake.fail("no chär to start from");
+    let mut view = FlightView::over(
+        Rc::new(catalog()),
+        fake,
+        &Rulebook::default(),
+        SharedChance::default(),
+    );
     assert_eq!(view.frame, FlightFrame::default());
     view.catch_up();
     view.tick(TICK);
@@ -137,14 +160,14 @@ fn a_failed_flight_keeps_the_default_frame_through_its_catch_ups() {
 
 #[test]
 fn a_status_redraw_after_a_change_behind_the_port_snapshots_the_change() {
-    // A desk edit with no resync after it: the session changed behind
-    // the port, as the concrete docked and travel code changes it.
-    let mut view = flight();
+    // A change behind the port with no resync after it, as the adapter's
+    // own API (a desk edit) makes one.
+    let mut view = faked(sol());
     view.redraw_status();
     let before = view.reserves_scene.expect("taken");
-    let mut desk = view.pilot_desk().expect("flying");
-    desk.edit(PilotEdit::Reserve(nova_sim::Reserve::Fuel, 100.0))
-        .expect("set");
+    let mut changed = view.frame.clone();
+    changed.hud.reserves.fuel = nova_sim::Gauge::full(100.0);
+    view.sim.set_frame(changed);
     assert_eq!(view.frame.hud.reserves, before, "the kept frame, stale");
     view.redraw_status();
     let taken = view.reserves_scene.expect("taken");

@@ -1,3 +1,5 @@
+use super::faked_screen::{fading_in, in_flight, streaking};
+use super::faked_shops::docked;
 use super::*;
 use crate::DrawLayer;
 
@@ -54,35 +56,6 @@ fn assert_all_in(list: &DrawList, layer: DrawLayer, wanted: impl Fn(&DrawCommand
     assert!(found.iter().all(|&found| found == layer), "{found:?}");
 }
 
-/// A fight, titled and with its help line, where the player has blasted
-/// NPC 0 (straight above it) into an explosion and targets NPC 1, its
-/// lights on, its blaster still firing and the pointer in space.
-fn mid_fight() -> View {
-    let mut catalog = armed(2, &[BLASTER]);
-    catalog.weapons[0].mass_dmg = 1000;
-    catalog.weapons[0].flags = 0x0020;
-    catalog.weapons[0].explod_type = -1;
-    catalog.sheet = Ok(layered_sheet());
-    catalog.star_sheet = Ok(star_sheet());
-    let draws = [placed(750, 650, 180), placed(700, 750, 0)].concat();
-    let mut view = fighting(catalog, &draws).with_overlays(TITLED);
-    view.input(&key(Key::Up, true));
-    view.tick(TICK);
-    view.input(&key(Key::Up, false));
-    view.input(&key(FIRE_KEY, true));
-    for _ in 0..10 {
-        view.tick(TICK);
-        if view.session().expect("flying").npcs().len() == 1 {
-            break;
-        }
-    }
-    assert_eq!(view.effects().explosions().len(), 1, "NPC 0 exploded");
-    tap(&mut view, Key::Tab);
-    assert!(target_of(&view).is_some(), "NPC 1 targeted");
-    view.input(&Input::PointerMoved(Point::new(40.0, 400.0)));
-    view
-}
-
 /// [`sheet`] with a glow and lights.
 fn layered_sheet() -> ShipSheet {
     ShipSheet {
@@ -90,28 +63,6 @@ fn layered_sheet() -> ShipSheet {
         lights: Some(layer(2200, 12)),
         ..sheet()
     }
-}
-
-#[test]
-fn a_fights_scene_and_its_target_layer_are_the_world_and_its_hud_and_every_text_overlay() {
-    // The whole screen, its HUD and title over the world: the concrete
-    // draw's, on a real session (the HUD is
-    // rdm:phase/view-sim-seam/phase-8-hud-and-target-frame's).
-    let view = mid_fight();
-    let list = drawn(&view);
-    assert_world_then_overlay(&list);
-    let world = DrawLayer::World;
-    assert_eq!(list.layered().next().map(|(layer, _)| layer), Some(world));
-    // The status bar, the title and help, and every text.
-    let overlay = DrawLayer::Overlay;
-    assert_all_in(
-        &list,
-        overlay,
-        |command| matches!(command, DrawCommand::Picture { image, .. } if *image == ImageKey::picture(700)),
-    );
-    assert_all_in(&list, overlay, is_text);
-    assert!(texts(&list).contains(&HELP.to_owned()));
-    assert!(world_end(&list) < hud_at(&list), "the world under the HUD");
 }
 
 /// A scripted fight, titled and with its help line: an explosion with
@@ -261,61 +212,6 @@ fn a_placeholders_box_is_world_and_its_reason_overlay() {
 }
 
 #[test]
-fn the_course_map_is_overlay_over_the_paused_worlds_scene() {
-    let mut view = flight();
-    tap(&mut view, MAP_KEY);
-    assert!(view.map_open());
-    let list = drawn(&view);
-    let mut map = DrawList::new();
-    view.map.draw(&mut map);
-    let map_at = list.len() - map.len();
-    assert!(world_end(&list) > 0, "the scene's world is still marked");
-    assert!(world_end(&list) <= map_at, "the map over it");
-    assert!(
-        list.layered()
-            .skip(map_at)
-            .all(|(layer, _)| layer == DrawLayer::Overlay)
-    );
-    assert_world_then_overlay(&list);
-}
-
-#[test]
-fn the_map_in_port_and_a_flight_that_could_not_start_draw_no_world() {
-    let mut view = in_the_bar(None);
-    view.open_bar_map();
-    assert!(view.map_open());
-    let list = drawn(&view);
-    assert!(!list.is_empty());
-    assert_eq!(world_end(&list), 0, "the map alone");
-
-    let failed = test_flight::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    });
-    assert_eq!(world_end(&drawn(&failed)), 0);
-}
-
-#[test]
-fn the_stars_are_world_through_a_jump_and_the_jumps_fade_overlay() {
-    let [_, jumping] = through_a_jump(flight);
-    let list = drawn(&jumping);
-    assert_eq!(
-        list.layered().next().map(|(layer, _)| layer),
-        Some(DrawLayer::World),
-        "the stars"
-    );
-    assert_world_then_overlay(&list);
-
-    let view = fading_in_on_course_to_barnard();
-    let list = drawn(&view);
-    let (at, _) = fade(&list).expect("fading in");
-    let layers: Vec<DrawLayer> = list.layered().map(|(layer, _)| layer).collect();
-    assert_eq!(layers[at], DrawLayer::Overlay);
-    assert!(world_end(&list) > 0);
-    assert_world_then_overlay(&list);
-}
-
-#[test]
 fn the_floating_map_and_the_escort_menu_are_world_and_their_text_overlay() {
     use crate::flight::escorts::{MENU_AT, MENU_HEIGHT, MENU_WIDTH};
     let mut view =
@@ -339,5 +235,91 @@ fn the_floating_map_and_the_escort_menu_are_world_and_their_text_overlay() {
         |command| matches!(command, DrawCommand::Text { text, .. } if text == "Escort Commands"),
     );
     assert_all_in(&list, DrawLayer::Overlay, is_text);
+    assert_world_then_overlay(&list);
+}
+
+#[test]
+fn a_fights_scene_and_its_target_layer_are_the_world_and_its_hud_and_every_text_overlay() {
+    // The whole screen, its HUD and title over the world.
+    let mut view = faked_mid_fight();
+    view.status_bar = hud::choose_status_bar(&*view.catalog, None);
+    view.bar_government = Some(super::super::BarFor(None));
+    let mut frame = view.frame.clone();
+    frame.target = Some(record::target(1));
+    frame.hud = super::faked_world::targeting(1);
+    super::faked_world::shows(&mut view, frame);
+    let list = drawn(&view);
+    assert_world_then_overlay(&list);
+    let world = DrawLayer::World;
+    assert_eq!(list.layered().next().map(|(layer, _)| layer), Some(world));
+    // The status bar, the title and help, and every text.
+    let overlay = DrawLayer::Overlay;
+    assert_all_in(
+        &list,
+        overlay,
+        |command| matches!(command, DrawCommand::Picture { image, .. } if *image == ImageKey::picture(700)),
+    );
+    assert_all_in(&list, overlay, is_text);
+    assert!(texts(&list).contains(&HELP.to_owned()));
+    assert!(world_end(&list) < hud_at(&list), "the world under the HUD");
+}
+
+#[test]
+fn the_course_map_is_overlay_over_the_paused_worlds_scene() {
+    let mut view = in_flight();
+    tap(&mut view, MAP_KEY);
+    assert!(view.map_open());
+    let list = drawn(&view);
+    let mut map = DrawList::new();
+    view.map.draw(&mut map);
+    let map_at = list.len() - map.len();
+    assert!(world_end(&list) > 0, "the scene's world is still marked");
+    assert!(world_end(&list) <= map_at, "the map over it");
+    assert!(
+        list.layered()
+            .skip(map_at)
+            .all(|(layer, _)| layer == DrawLayer::Overlay)
+    );
+    assert_world_then_overlay(&list);
+}
+
+#[test]
+fn the_map_in_port_and_a_flight_that_could_not_start_draw_no_world() {
+    let mut view = docked();
+    view.sim.map_mut().drawing = Some(sol_drawing());
+    view.open_bar_map();
+    assert!(view.map_open());
+    let list = drawn(&view);
+    assert!(!list.is_empty());
+    assert_eq!(world_end(&list), 0, "the map alone");
+
+    let mut fake = FakeFlight::new();
+    fake.fail("no chär to start from");
+    let failed = FlightView::over(
+        Rc::new(catalog()),
+        fake,
+        &Rulebook::default(),
+        SharedChance::default(),
+    );
+    assert_eq!(world_end(&drawn(&failed)), 0);
+}
+
+#[test]
+fn the_stars_are_world_through_a_jump_and_the_jumps_fade_overlay() {
+    let jumping = streaking();
+    let list = drawn(&jumping);
+    assert_eq!(
+        list.layered().next().map(|(layer, _)| layer),
+        Some(DrawLayer::World),
+        "the stars"
+    );
+    assert_world_then_overlay(&list);
+
+    let view = fading_in();
+    let list = drawn(&view);
+    let (at, _) = fade(&list).expect("fading in");
+    let layers: Vec<DrawLayer> = list.layered().map(|(layer, _)| layer).collect();
+    assert_eq!(layers[at], DrawLayer::Overlay);
+    assert!(world_end(&list) > 0);
     assert_world_then_overlay(&list);
 }

@@ -150,14 +150,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.jump.as_ref().or(self.fade_in.as_ref())
     }
 
-    /// Whether the ship is braking and turning before a jump: a jump under
-    /// way, its own warp not yet begun, as the frame says.
-    #[cfg(test)]
-    pub(super) fn preparing_jump(&self) -> bool {
-        let frame = self.frame_now();
-        frame.jump_under_way && !frame.warping
-    }
-
     /// Shows the explosions the jump left pending, `combat` as the
     /// arrival's answer carries them ([`Answer::Arrived`]), a crön's `Y`
     /// on its days among them, in the scene just laid out, so they are on
