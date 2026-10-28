@@ -41,12 +41,12 @@ mod tests {
     use std::path::Path;
 
     use nova_rsrc::fixture::ForkBuilder;
+    use nova_rsrc::fixture::forks::MemForks;
 
     use super::*;
     use crate::decode::Record;
     use crate::store::fixture::FakeTree;
     use crate::store::fs::EntryKind::File;
-    use nova_rsrc::fixture::forks::MemForks;
 
     #[test]
     fn ship_ids_map_onto_dësc_13000_onwards() {

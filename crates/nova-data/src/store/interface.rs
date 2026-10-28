@@ -146,6 +146,7 @@ impl InterfaceData {
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use nova_rsrc::fixture::forks::MemForks;
     use nova_rsrc::fixture::{ForkBuilder, RezBuilder};
     use nova_rsrc::{LoadError, ResType};
 
@@ -160,7 +161,6 @@ mod tests {
     use crate::store::fixture::FakeTree;
     use crate::store::fs::EntryKind::File;
     use crate::wire::id::{DitlId, PictId};
-    use nova_rsrc::fixture::forks::MemForks;
 
     const PATH: &str = "/game/Nova-DF.rsrc";
 
@@ -377,7 +377,10 @@ mod tests {
             "{message}"
         );
         assert!(message.contains(&format!("); {windows} (")), "{message}");
-        assert!(message.contains("is unreadable"), "{message}");
+        assert!(
+            message.contains(nova_rsrc::fixture::forks::UNREADABLE),
+            "{message}"
+        );
     }
 
     #[test]

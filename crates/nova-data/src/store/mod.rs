@@ -43,6 +43,10 @@
 //! # Ok::<(), nova_data::store::OpenError>(())
 //! ```
 //!
+//! That shows the ports' shape. Tests needn't write their own: the
+//! `fixture` feature's `store::fixture` has the shared fake of both ports
+//! and one-file stores built on it.
+//!
 //! On disk, [`GameData::open`] wires in the std adapters:
 //!
 //! ```no_run

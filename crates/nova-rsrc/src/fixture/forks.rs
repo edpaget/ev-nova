@@ -73,7 +73,7 @@ impl MemForks {
     }
 
     /// Makes reading either of `path`'s forks fail with an error of kind
-    /// [`io::ErrorKind::Other`]. A later [`file`](Self::file),
+    /// [`io::ErrorKind::Other`] whose message is [`UNREADABLE`]. A later [`file`](Self::file),
     /// [`resource`](Self::resource) or [`no_data_fork`](Self::no_data_fork)
     /// replaces the failure on that fork.
     #[must_use]
@@ -141,14 +141,15 @@ impl ForkReader for MemForks {
         match (canned, fork) {
             (Some(Canned::Bytes(bytes)), _) => Ok(Some(bytes.clone())),
             (Some(Canned::Absent), _) | (None, Fork::Resource) => Ok(None),
-            (Some(Canned::Fails), _) => Err(io::Error::other(format!(
-                "fake {fork:?} fork of {} is unreadable",
-                path.display()
-            ))),
+            (Some(Canned::Fails), _) => Err(io::Error::other(UNREADABLE)),
             (None, Fork::Data) => Ok(Some(Vec::new())),
         }
     }
 }
+
+/// The message of the error an [`unreadable`](MemForks::unreadable) fork
+/// fails with.
+pub const UNREADABLE: &str = "the fake fork is unreadable";
 
 /// The data fork of the contract's [`DATA`] file.
 pub const CONTRACT_BYTES: &[u8] = b"contract fork \x00\x01\xFF";
@@ -410,6 +411,7 @@ mod tests {
         for fork in [Fork::Data, Fork::Resource] {
             let error = forks.read_fork(Path::new("u"), fork).expect_err("fails");
             assert_eq!(error.kind(), io::ErrorKind::Other, "{fork:?}");
+            assert_eq!(error.to_string(), UNREADABLE, "{fork:?}");
         }
     }
 

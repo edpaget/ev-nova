@@ -10,6 +10,8 @@ pub mod dialog;
 pub mod dialog_items;
 pub mod disaster;
 pub mod dude;
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
 pub mod fleet;
 pub mod govt;
 pub mod interface;

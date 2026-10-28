@@ -213,8 +213,7 @@ fn take<const N: usize>(bytes: &[u8], at: usize) -> Result<[u8; N], SfntError> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-
+    use nova_rsrc::fixture::forks::{MemForks, UNREADABLE};
     use ttf_parser::FaceParsingError;
 
     use super::fixture::{REQUIRED, SfntBuilder, block_font, block_sfnt};
@@ -499,27 +498,9 @@ mod tests {
         assert_eq!(Tag([0, 1, b'a', 0xFF]).to_string(), "\\x00\\x01a\\xff");
     }
 
-    /// A fork reader with one canned answer for every data fork, recording
-    /// the paths it is asked for.
-    struct OneFile {
-        answer: fn() -> io::Result<Option<Vec<u8>>>,
-        asked: RefCell<Vec<(PathBuf, Fork)>>,
-    }
-
-    impl OneFile {
-        fn new(answer: fn() -> io::Result<Option<Vec<u8>>>) -> Self {
-            Self {
-                answer,
-                asked: RefCell::new(Vec::new()),
-            }
-        }
-    }
-
-    impl ForkReader for OneFile {
-        fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            self.asked.borrow_mut().push((path.to_path_buf(), fork));
-            (self.answer)()
-        }
+    /// Forks holding `fork` as the data fork of `charcoal_path(DATA_DIR)`.
+    fn charcoal_file(fork: Vec<u8>) -> MemForks {
+        MemForks::new().file(charcoal_path(Path::new(DATA_DIR)), fork)
     }
 
     const DATA_DIR: &str = "/games/EV Nova/Nova Files";
@@ -537,32 +518,29 @@ mod tests {
 
     #[test]
     fn a_valid_font_is_read_from_its_data_fork_unchanged() {
-        let forks = OneFile::new(|| Ok(Some(block_font("Charcoal"))));
+        let forks = charcoal_file(block_font("Charcoal"));
         let bytes = load_charcoal(&forks, Path::new(DATA_DIR)).expect("loads");
         assert_eq!(bytes, block_font("Charcoal"));
-        assert_eq!(
-            forks.asked.into_inner(),
-            [(PathBuf::from(CHARCOAL), Fork::Data)]
-        );
+        assert_eq!(forks.reads(), [(PathBuf::from(CHARCOAL), Fork::Data)]);
     }
 
     #[test]
     fn a_missing_file_is_missing() {
-        let not_found = OneFile::new(|| Err(io::Error::from(io::ErrorKind::NotFound)));
+        let not_found = MemForks::new();
         let err = load_charcoal(&not_found, Path::new(DATA_DIR)).expect_err("fails");
         assert!(
             matches!(&err, FontError::Missing { path } if path == Path::new(CHARCOAL)),
             "{err:?}"
         );
         assert_eq!(err.to_string(), format!("no font at {}", charcoal_shown()));
-        let no_fork = OneFile::new(|| Ok(None));
+        let no_fork = MemForks::new().no_data_fork(charcoal_path(Path::new(DATA_DIR)));
         let err = load_charcoal(&no_fork, Path::new(DATA_DIR)).expect_err("fails");
         assert!(matches!(err, FontError::Missing { .. }), "{err:?}");
     }
 
     #[test]
     fn an_unreadable_file_is_an_io_error() {
-        let forks = OneFile::new(|| Err(io::Error::other("disk on fire")));
+        let forks = MemForks::new().unreadable(charcoal_path(Path::new(DATA_DIR)));
         let err = load_charcoal(&forks, Path::new(DATA_DIR)).expect_err("fails");
         assert!(
             matches!(&err, FontError::Io { path, .. } if path == Path::new(CHARCOAL)),
@@ -570,13 +548,13 @@ mod tests {
         );
         assert_eq!(
             err.to_string(),
-            format!("reading the font {}: disk on fire", charcoal_shown())
+            format!("reading the font {}: {UNREADABLE}", charcoal_shown())
         );
     }
 
     #[test]
     fn a_font_whose_tables_do_not_parse_is_invalid() {
-        let forks = OneFile::new(|| Ok(Some(SfntBuilder::truetype().build())));
+        let forks = charcoal_file(SfntBuilder::truetype().build());
         let err = load_charcoal(&forks, Path::new(DATA_DIR)).expect_err("fails");
         assert!(
             matches!(
@@ -592,7 +570,7 @@ mod tests {
 
     #[test]
     fn invalid_bytes_are_invalid() {
-        let forks = OneFile::new(|| Ok(Some(b"ttcf and then nothing".to_vec())));
+        let forks = charcoal_file(b"ttcf and then nothing".to_vec());
         let err = load_charcoal(&forks, Path::new(DATA_DIR)).expect_err("fails");
         assert!(
             matches!(

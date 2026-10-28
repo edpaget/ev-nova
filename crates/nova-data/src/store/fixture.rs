@@ -9,6 +9,10 @@
 //! writes to disk and [`FakeTree::contract`] builds in memory. It runs
 //! against [`FakeTree`] here and against
 //! [`StdDirLister`](super::fs::StdDirLister) in `store::fs`'s tests.
+//!
+//! Most tests want one data file: [`one_file`] (or [`one_file_at`]) builds
+//! that tree, [`FakeTree::load`] opens it as a [`GameData`], and
+//! [`store_of`] does both for a list of resources.
 
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -16,11 +20,54 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::fixture::forks::MemForks;
-use nova_rsrc::{Fork, ForkReader};
+use nova_rsrc::{Fork, ForkReader, ResType};
 
 use super::fs::{DirLister, EntryKind, Listing};
 use super::order::finder_cmp;
+use super::{GameData, OpenError};
+
+/// Where [`one_file`] puts its file, and the data directory
+/// [`FakeTree::load`] opens.
+pub const DATA_DIR: &str = "/data";
+
+/// The plug-ins directory [`FakeTree::load`] opens when a file is under it.
+pub const PLUGINS_DIR: &str = "/plugins";
+
+/// The name of [`one_file`]'s file.
+pub const DATA_FILE: &str = "Nova Data";
+
+/// A tree of one file, [`DATA_DIR`]`/`[`DATA_FILE`], holding the data fork
+/// `fork`.
+#[must_use]
+pub fn one_file(fork: impl Into<Vec<u8>>) -> FakeTree {
+    one_file_at(Path::new(DATA_DIR).join(DATA_FILE), fork)
+}
+
+/// A tree of one file at `path`, holding the data fork `fork`.
+#[must_use]
+pub fn one_file_at(path: impl AsRef<Path>, fork: impl Into<Vec<u8>>) -> FakeTree {
+    FakeTree::new().file(path, fork)
+}
+
+/// A [`GameData`] of one file holding `resources` (type, ID, data), each
+/// unnamed: [`one_file`] of their fork, [`loaded`](FakeTree::load).
+///
+/// # Panics
+///
+/// If the store doesn't open.
+#[must_use]
+pub fn store_of(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
+    let fork = resources
+        .iter()
+        .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
+            fork.resource(*ty, *id, None, data)
+        })
+        .build()
+        .bytes;
+    one_file(fork).load()
+}
 
 /// An in-memory directory tree, and the forks of its files.
 ///
@@ -120,6 +167,34 @@ impl FakeTree {
                 root.join(CONTRACT_PLUGINS).join(CONTRACT_PATCH),
                 CONTRACT_PATCH,
             )
+    }
+
+    /// Opens the tree as a store: [`DATA_DIR`], and [`PLUGINS_DIR`] too when
+    /// a file is under it.
+    ///
+    /// # Panics
+    ///
+    /// If the store doesn't open.
+    #[must_use]
+    pub fn load(&self) -> GameData {
+        let plugins = Path::new(PLUGINS_DIR);
+        let plugins = self
+            .files
+            .iter()
+            .any(|file| file.starts_with(plugins))
+            .then_some(plugins);
+        self.load_from(Path::new(DATA_DIR), plugins)
+            .expect("the fake store opens")
+    }
+
+    /// Opens the tree as a store whose data directory is `data`, with the
+    /// plug-ins directory `plugins`, if any.
+    ///
+    /// # Errors
+    ///
+    /// As [`GameData::load`].
+    pub fn load_from(&self, data: &Path, plugins: Option<&Path>) -> Result<GameData, OpenError> {
+        GameData::load(self, self, data, plugins)
     }
 
     fn with_file(mut self, path: &Path, add: impl FnOnce(MemForks) -> MemForks) -> Self {
@@ -298,6 +373,7 @@ pub fn check_contract(lister: &impl DirLister, root: &Path) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decode::Record;
     use crate::store::fs::EntryKind::{Dir, File, Symlink};
 
     fn names(tree: &FakeTree, dir: &str) -> Vec<OsString> {
@@ -404,6 +480,55 @@ mod tests {
             tree.forks().reads(),
             ["/d/f", "/d/u", "/d/n"].map(|path| (PathBuf::from(path), Fork::Data))
         );
+    }
+
+    const MISN: ResType = crate::records::mission::Mission::TYPE;
+
+    fn mission_bytes() -> Vec<u8> {
+        vec![0; crate::records::mission::Mission::SIZE.expect("fixed")]
+    }
+
+    #[test]
+    fn store_of_holds_its_resources() {
+        let data = store_of(&[(MISN, 128, mission_bytes())]);
+        assert_eq!(data.ids(MISN), [128]);
+        let mission = data
+            .get::<crate::records::mission::Mission>(128)
+            .expect("present")
+            .expect("decodes");
+        assert_eq!(mission.source.path, Path::new(DATA_DIR).join(DATA_FILE));
+    }
+
+    fn fork_of(id: i16) -> Vec<u8> {
+        ForkBuilder::new()
+            .resource(MISN, id, None, &mission_bytes())
+            .build()
+            .bytes
+    }
+
+    #[test]
+    fn load_opens_the_plugins_only_when_a_file_is_under_them() {
+        let alone = one_file(fork_of(128));
+        assert_eq!(alone.load().ids(MISN), [128]);
+        assert_eq!(alone.listed(), [PathBuf::from(DATA_DIR)]);
+        let with_plugin =
+            one_file(fork_of(128)).file(Path::new(PLUGINS_DIR).join("Plug"), fork_of(129));
+        assert_eq!(with_plugin.load().ids(MISN), [128, 129]);
+        assert!(with_plugin.listed().contains(&PathBuf::from(PLUGINS_DIR)));
+    }
+
+    #[test]
+    fn load_from_opens_the_directories_it_is_given() {
+        let tree = one_file_at("/game/Nova Files/Nova Data", fork_of(128))
+            .file("/game/Plug-ins/Plug", fork_of(129));
+        let data = tree
+            .load_from(
+                Path::new("/game/Nova Files"),
+                Some(Path::new("/game/Plug-ins")),
+            )
+            .expect("opens");
+        assert_eq!(data.ids(MISN), [128, 129]);
+        assert!(tree.load_from(Path::new("/elsewhere"), None).is_err());
     }
 
     fn root() -> PathBuf {

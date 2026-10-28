@@ -147,37 +147,14 @@ pub fn check_expressions(data: &GameData) -> Vec<ExprError> {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::path::Path;
-
     use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader};
 
     use super::*;
-    use crate::store::fs::{DirLister, EntryKind, Listing};
+    use crate::store::fixture::one_file;
     use crate::testutil::{Buf, buf};
 
-    /// One data file, `/data/Nova Data`, holding a fork.
-    struct OneFile(Vec<u8>);
-
-    impl DirLister for OneFile {
-        fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-            Ok(vec![Listing {
-                name: "Nova Data".into(),
-                kind: EntryKind::File,
-            }])
-        }
-    }
-
-    impl ForkReader for OneFile {
-        fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            Ok((fork == Fork::Data).then(|| self.0.clone()))
-        }
-    }
-
     fn load(file: &ForkBuilder) -> GameData {
-        let file = OneFile(file.build().bytes);
-        GameData::load(&file, &file, Path::new("/data"), None).expect("opens")
+        one_file(file.build().bytes).load()
     }
 
     /// Writes `text` as a C string at `offset`.

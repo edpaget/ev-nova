@@ -197,6 +197,7 @@ mod tests {
 
     use nova_rsrc::ResType;
     use nova_rsrc::fixture::ForkBuilder;
+    use nova_rsrc::fixture::forks::MemForks;
 
     use super::*;
     use crate::decode::Record;
@@ -205,7 +206,6 @@ mod tests {
     use crate::store::fixture::FakeTree;
     use crate::store::fs::EntryKind::File;
     use crate::testutil::buf;
-    use nova_rsrc::fixture::forks::MemForks;
 
     /// A `spïn` naming sprites `image`, `width` x `height` each, in a grid
     /// `x_tiles` across and `y_tiles` down.

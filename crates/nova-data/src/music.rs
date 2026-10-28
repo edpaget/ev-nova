@@ -60,32 +60,9 @@ pub fn load_music(forks: &impl ForkReader, data_dir: &Path) -> Result<Vec<u8>, M
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use nova_rsrc::fixture::forks::{MemForks, UNREADABLE};
 
     use super::*;
-
-    /// A fork reader with one canned answer for every data fork, recording
-    /// the paths it is asked for.
-    struct OneFile {
-        answer: fn() -> io::Result<Option<Vec<u8>>>,
-        asked: RefCell<Vec<(PathBuf, Fork)>>,
-    }
-
-    impl OneFile {
-        fn new(answer: fn() -> io::Result<Option<Vec<u8>>>) -> Self {
-            Self {
-                answer,
-                asked: RefCell::new(Vec::new()),
-            }
-        }
-    }
-
-    impl ForkReader for OneFile {
-        fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            self.asked.borrow_mut().push((path.to_path_buf(), fork));
-            (self.answer)()
-        }
-    }
 
     const DATA_DIR: &str = "/games/EV Nova/Nova Files";
 
@@ -100,15 +77,15 @@ mod tests {
 
     #[test]
     fn the_music_is_read_from_its_data_fork_unchanged() {
-        let forks = OneFile::new(|| Ok(Some(b"ID3 not checked".to_vec())));
+        let forks = MemForks::new().file(music(), b"ID3 not checked".to_vec());
         let bytes = load_music(&forks, Path::new(DATA_DIR)).expect("loads");
         assert_eq!(bytes, b"ID3 not checked");
-        assert_eq!(forks.asked.into_inner(), [(music(), Fork::Data)]);
+        assert_eq!(forks.reads(), [(music(), Fork::Data)]);
     }
 
     #[test]
     fn a_missing_file_is_missing() {
-        let not_found = OneFile::new(|| Err(io::Error::from(io::ErrorKind::NotFound)));
+        let not_found = MemForks::new();
         let err = load_music(&not_found, Path::new(DATA_DIR)).expect_err("fails");
         assert!(
             matches!(&err, MusicError::Missing { path } if *path == music()),
@@ -118,7 +95,7 @@ mod tests {
             err.to_string(),
             format!("no music at {}", music().display())
         );
-        let no_fork = OneFile::new(|| Ok(None));
+        let no_fork = MemForks::new().no_data_fork(music());
         let err = load_music(&no_fork, Path::new(DATA_DIR)).expect_err("fails");
         assert!(
             matches!(&err, MusicError::Missing { path } if *path == music()),
@@ -128,7 +105,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_file_is_an_io_error() {
-        let forks = OneFile::new(|| Err(io::Error::other("disk on fire")));
+        let forks = MemForks::new().unreadable(music());
         let err = load_music(&forks, Path::new(DATA_DIR)).expect_err("fails");
         assert!(
             matches!(&err, MusicError::Io { path, .. } if *path == music()),
@@ -136,7 +113,7 @@ mod tests {
         );
         assert_eq!(
             err.to_string(),
-            format!("reading the music {}: disk on fire", music().display())
+            format!("reading the music {}: {UNREADABLE}", music().display())
         );
     }
 

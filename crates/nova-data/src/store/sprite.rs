@@ -308,23 +308,26 @@ mod tests {
 
     use nova_rsrc::ResType;
     use nova_rsrc::fixture::ForkBuilder;
+    use nova_rsrc::fixture::forks::MemForks;
 
     use super::*;
     use crate::decode::Record;
     use crate::graphics::fixture::RledBuilder;
+    use crate::records::fixture::{ShipAnimBuilder, ShipBuilder};
     use crate::store::fixture::FakeTree;
     use crate::store::fs::EntryKind::File;
-    use crate::testutil::buf;
-    use nova_rsrc::fixture::forks::MemForks;
 
     /// A `shän` with base image `image`, `sets` sprite sets and
     /// `frames_per` frames per rotation.
     fn anim(image: i16, sets: i16, frames_per: i16) -> Vec<u8> {
-        buf::<ShipAnim>()
-            .i16(0x00, image)
-            .i16(0x04, sets)
-            .i16(0x34, frames_per)
-            .0
+        anim_builder(image, sets, frames_per).build()
+    }
+
+    fn anim_builder(image: i16, sets: i16, frames_per: i16) -> ShipAnimBuilder {
+        ShipAnimBuilder::new()
+            .base_image_id(image)
+            .base_set_count(sets)
+            .frames_per(frames_per)
     }
 
     /// An `rlëD` of `frames` 2x1 frames whose pixels are `color`.
@@ -347,7 +350,7 @@ mod tests {
     }
 
     fn ship() -> Vec<u8> {
-        buf::<Ship>().0
+        ShipBuilder::new().build()
     }
 
     /// Ship 128 with its `shïp`, `shän` (base image 1000, 3 sets of 4
@@ -465,10 +468,10 @@ mod tests {
     }
 
     fn layered_anim(glow: i16, lights: i16) -> Vec<u8> {
-        let mut bytes = anim(1000, 3, 4);
-        bytes[0x16..0x18].copy_from_slice(&glow.to_be_bytes());
-        bytes[0x1E..0x20].copy_from_slice(&lights.to_be_bytes());
-        bytes
+        anim_builder(1000, 3, 4)
+            .glow_image_id(glow)
+            .light_image_id(lights)
+            .build()
     }
 
     /// Glow 1100 (one set of 4 frames) and lights 1200 (3 sets of 4).
