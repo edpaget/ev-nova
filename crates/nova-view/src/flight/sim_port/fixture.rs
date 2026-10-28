@@ -14,8 +14,8 @@ use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks,
-    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, Gates, MapKey, StepInput, StepReport,
-    StepRun,
+    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, Gates, MapKey, Names, StepInput,
+    StepReport, StepRun,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
@@ -61,10 +61,13 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// its list ([`FakeFlight::set_coming_traffic`]), and each description's
 /// load with the next text queued ([`FakeFlight::queue_description`]),
 /// or, once the queue is empty, as its raw text unchanged, resolving
-/// nothing, failed or not, as a failed flight still loads one. A new ask
+/// nothing, failed or not, as a failed flight still loads one, and each
+/// plain text's fill as told ([`FakeFlight::set_plain_texts`]), or the
+/// text unchanged, failed or not. A new ask
 /// is one field and setter for its answer, and one arm in
 /// `FakeFlight::answer_ask`; it is recorded with the rest. It lists the
-/// weapons from its list ([`FakeFlight::set_weapons`]), failed or not. It
+/// weapons from its list ([`FakeFlight::set_weapons`]) and the names from
+/// its table ([`FakeFlight::set_names`]) in its opening, failed or not. It
 /// answers
 /// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]),
 /// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]),
@@ -98,6 +101,8 @@ pub struct FakeFlight {
     hover: Option<Hover>,
     coming: Vec<ShipId>,
     weapons: Vec<WeaponId>,
+    opening_names: Names,
+    plain_texts: Vec<(String, String)>,
     descriptions: VecDeque<String>,
     comm: FakeComm,
     port: FakePort,
@@ -331,6 +336,19 @@ impl FakeFlight {
         self.weapons = weapons;
     }
 
+    /// Names what `names` names in its opening from now on
+    /// ([`FakeFlight::opening`]), failed or not, for a test of
+    /// [`check_contract`]'s clause on a failed flight.
+    pub fn set_names(&mut self, names: Names) {
+        self.opening_names = names;
+    }
+
+    /// Fills each text of `texts` ([`FlightCommand::PlainText`]) as the
+    /// text paired with it from now on; any other comes back unchanged.
+    pub fn set_plain_texts(&mut self, texts: Vec<(String, String)>) {
+        self.plain_texts = texts;
+    }
+
     /// Loads the next description not yet loaded
     /// ([`FlightCommand::LoadDescription`]) as `text`.
     pub fn queue_description(&mut self, text: &str) {
@@ -463,14 +481,15 @@ impl FakeFlight {
 
     /// What the view is handed as it opens, as scripted
     /// ([`FlightOpening`]): the weapons it lists
-    /// ([`FakeFlight::set_weapons`]) and why it failed
-    /// ([`FakeFlight::fail`]), for `FlightView::over` and
-    /// [`check_contract`].
+    /// ([`FakeFlight::set_weapons`]), the names it names
+    /// ([`FakeFlight::set_names`]) and why it failed
+    /// ([`FakeFlight::fail`]), for `FlightView::over`,
+    /// `FlightView::scripted` and [`check_contract`].
     #[must_use]
     pub fn opening(&self) -> FlightOpening {
         FlightOpening {
             weapons: self.weapons.clone(),
-            names: nova_sim::flight_frame::Names::default(),
+            names: self.opening_names.clone(),
             failure: self.failure.clone(),
         }
     }
@@ -500,13 +519,17 @@ impl FakeFlight {
 
     /// Answers the ask `ask` from what it is told for it, recording it
     /// ([`FakeFlight::asks`]): one arm for each ask. A failed fake refuses
-    /// them but a description's load, as a failed flight does.
+    /// them but a description's load and a plain text's fill, as a failed
+    /// flight does.
     fn answer_ask(&mut self, ask: FlightCommand) -> Answer {
         let answer = match &ask {
             FlightCommand::LoadDescription { raw, .. } => Answer::Description(
                 self.descriptions
                     .pop_front()
                     .unwrap_or_else(|| raw.clone().unwrap_or_default()),
+            ),
+            FlightCommand::PlainText(text) => Answer::PlainText(
+                named(&self.plain_texts, text).map_or_else(|| text.clone(), Clone::clone),
             ),
             _ if self.failure.is_some() => Answer::Refused,
             FlightCommand::Hover { .. } => Answer::Hovered(self.hover),
@@ -1128,9 +1151,9 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///   and the death descs among them), give equal frames, so a fill that
 ///   skips a field fails;
 /// - **an ask changes no frame**: each ask ([`FlightCommand::is_ask`]: a
-///   hover at the player's ship with no boxes, the coming traffic and a
-///   description's load) leaves the frame filled after it equal to the
-///   frame before, so the view fills none after one;
+///   hover at the player's ship with no boxes, the coming traffic, a
+///   description's load and a plain text's fill) leaves the frame filled
+///   after it equal to the frame before, so the view fills none after one;
 /// - **a refusal changes nothing**: [`refused_command`] answers a
 ///   refusal, and the frame after it equals the frame before;
 /// - **no step asked, none run**: a frame's steps asked for none fill the
@@ -1192,10 +1215,13 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///
 /// - **a failed flight shows nothing**: a flight whose `opening` says why
 ///   it could not start ([`FlightOpening::failure`]) lists no weapons in
-///   it ([`FlightOpening::weapons`]), fills the default frame, refuses
-///   every command but a description's load
-///   ([`FlightCommand::LoadDescription`]), which it answers with
-///   [`Answer::Description`], and drains nothing. Checked first.
+///   it ([`FlightOpening::weapons`]) and names nothing
+///   ([`FlightOpening::names`]), fills the default frame (no player's ship
+///   name, an empty date and no system explored among it), refuses every
+///   command but a description's load ([`FlightCommand::LoadDescription`]),
+///   which it answers with [`Answer::Description`], and a plain text's
+///   fill ([`FlightCommand::PlainText`]), which it answers with the text
+///   unchanged, and drains nothing. Checked first.
 ///
 /// The error says which clause failed.
 pub fn check_contract(sim: &mut impl FlightSim, opening: &FlightOpening) -> Result<(), String> {
@@ -1267,10 +1293,11 @@ pub fn check_contract(sim: &mut impl FlightSim, opening: &FlightOpening) -> Resu
 
 /// [`check_contract`]'s clause on a flight whose `opening` says it could
 /// not start, `drained` what its first drain gave: the opening lists no
-/// weapons, and the flight fills the default frame, refuses every command
-/// (a setting, which a flight that started always takes, among them) but
-/// a description's load, which it answers with a text, and drains
-/// nothing.
+/// weapons and names nothing, and the flight fills the default frame,
+/// refuses every command (a setting, which a flight that started always
+/// takes, among them) but a description's load, which it answers with a
+/// text, and a plain text's fill, which it answers with the text
+/// unchanged, and drains nothing.
 fn check_failed(
     sim: &mut impl FlightSim,
     opening: &FlightOpening,
@@ -1305,14 +1332,30 @@ fn check_failed(
             "{clause}: failed ({reason}), a description's load was answered {answer:?}"
         ));
     }
+    let answer = sim.apply(FlightCommand::PlainText(CONTRACT_TEXT.to_owned()));
+    if answer != Answer::PlainText(CONTRACT_TEXT.to_owned()) {
+        return Err(format!(
+            "{clause}: failed ({reason}), a plain text's fill was answered {answer:?}"
+        ));
+    }
     if !opening.weapons.is_empty() {
         return Err(format!(
             "{clause}: failed ({reason}), it listed weapons {:?}",
             opening.weapons
         ));
     }
+    if opening.names != Names::default() {
+        return Err(format!(
+            "{clause}: failed ({reason}), it named {:?}",
+            opening.names
+        ));
+    }
     Ok(())
 }
+
+/// The text [`check_contract`] asks a fill of ([`FlightCommand::PlainText`]):
+/// a tag a failed flight, with no pilot, leaves as it is.
+const CONTRACT_TEXT: &str = "Hello, <PSN>.";
 
 /// [`check_contract`]'s ask clause, `once` the frame filled before: each
 /// ask leaves the frame as it was.
@@ -1327,6 +1370,7 @@ fn check_asks(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String
             raw: Some("A dësc.".to_owned()),
             movie: None,
         },
+        FlightCommand::PlainText(CONTRACT_TEXT.to_owned()),
     ];
     for ask in asks {
         let sent = format!("{ask:?}");
@@ -1737,6 +1781,117 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_flight_that_names_something_breaks_the_contract() {
+        let mut fake = FakeFlight::new();
+        fake.fail("no chär");
+        let mut names = Names::default();
+        names.stellars.insert(StellarId(128), "Earth".to_owned());
+        fake.set_names(names);
+        let clause = contract(&mut fake).expect_err("broken");
+        assert!(
+            clause.starts_with("a failed flight shows nothing"),
+            "{clause}"
+        );
+        assert!(clause.contains("Earth"), "{clause}");
+    }
+
+    #[test]
+    fn a_failed_flight_that_fills_a_plain_text_breaks_the_contract() {
+        let mut fake = FakeFlight::new();
+        fake.fail("no chär");
+        fake.set_plain_texts(vec![(
+            CONTRACT_TEXT.to_owned(),
+            "Hello, Kestrel.".to_owned(),
+        )]);
+        let clause = contract(&mut fake).expect_err("broken");
+        assert!(
+            clause.starts_with("a failed flight shows nothing"),
+            "{clause}"
+        );
+        assert!(
+            clause.contains("a plain text's fill was answered PlainText(\"Hello, Kestrel.\")"),
+            "{clause}"
+        );
+    }
+
+    #[test]
+    fn a_failed_flight_that_refuses_a_plain_text_breaks_the_contract() {
+        let clause = check_contract(&mut RefusesPlainText, &FlightOpening::failed("no chär"))
+            .expect_err("broken");
+        assert!(
+            clause.contains("a plain text's fill was answered Refused"),
+            "{clause}"
+        );
+    }
+
+    /// A flight that failed and loads a description, but refuses every
+    /// other command, a plain text's fill among them.
+    struct RefusesPlainText;
+
+    impl FlightSim for RefusesPlainText {
+        fn frame(&self, into: &mut FlightFrame) {
+            *into = FlightFrame::default();
+        }
+
+        fn step(&mut self, _input: &StepInput, _steps: u32, into: &mut StepReport) {
+            into.clear();
+        }
+
+        fn apply(&mut self, command: FlightCommand) -> Answer {
+            match command {
+                FlightCommand::LoadDescription { .. } => Answer::Description(String::new()),
+                _ => Answer::Refused,
+            }
+        }
+
+        fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
+    }
+
+    impl MapSource for RefusesPlainText {}
+
+    impl CommSource for RefusesPlainText {}
+
+    impl PortSource for RefusesPlainText {}
+
+    impl NameSource for RefusesPlainText {}
+
+    impl PilotSource for RefusesPlainText {}
+
+    #[test]
+    fn the_fake_opens_naming_what_it_is_told_and_fills_plain_texts_as_told() {
+        let mut fake = FakeFlight::new();
+        assert_eq!(fake.opening().names, Names::default(), "nothing named");
+        let mut names = Names::default();
+        names.stellars.insert(StellarId(128), "Earth".to_owned());
+        fake.set_names(names.clone());
+        assert_eq!(fake.opening().names, names);
+        let fill = |fake: &mut FakeFlight, text: &str| {
+            fake.apply(FlightCommand::PlainText(text.to_owned()))
+        };
+        assert_eq!(
+            fill(&mut fake, "Hi <PN>."),
+            Answer::PlainText("Hi <PN>.".to_owned())
+        );
+        fake.set_plain_texts(vec![("Hi <PN>.".to_owned(), "Hi Ada.".to_owned())]);
+        assert_eq!(
+            fill(&mut fake, "Hi <PN>."),
+            Answer::PlainText("Hi Ada.".to_owned())
+        );
+        assert_eq!(
+            fill(&mut fake, "Bye."),
+            Answer::PlainText("Bye.".to_owned())
+        );
+        fake.fail("no chär");
+        assert_eq!(
+            fill(&mut fake, "Hi <PN>."),
+            Answer::PlainText("Hi Ada.".to_owned()),
+            "failed too"
+        );
+        assert_eq!(fake.asks().len(), 4, "each recorded as an ask");
+        assert_eq!(fake.applied(), [], "none applied");
+    }
+
+    #[test]
     fn a_failed_flight_that_lists_weapons_breaks_the_contract() {
         let mut fake = FakeFlight::new();
         fake.fail("no chär");
@@ -2060,6 +2215,8 @@ mod tests {
         DrainChangesTheFrame,
         /// An ask changes the frame.
         AskChangesTheFrame,
+        /// A plain text's fill changes the frame.
+        PlainTextChangesTheFrame,
         /// A fill leaves the gates as they were.
         SkipsTheGates,
         /// A fill leaves the death descs as they were.
@@ -2216,7 +2373,10 @@ mod tests {
             let plunder = matches!(command, FlightCommand::Plunder(_));
             let trade = matches!(command, FlightCommand::Trade(_));
             let hover = matches!(command, FlightCommand::Hover { .. });
-            if matches!(self.fault, Fault::AskChangesTheFrame) && command.is_ask() {
+            if matches!(self.fault, Fault::AskChangesTheFrame) && command.is_ask()
+                || matches!(self.fault, Fault::PlainTextChangesTheFrame)
+                    && matches!(command, FlightCommand::PlainText(_))
+            {
                 self.fake.set_frame(stellar(129));
             }
             match self.fault {
@@ -2355,6 +2515,13 @@ mod tests {
         let clause = clause(Fault::AskChangesTheFrame);
         assert!(clause.starts_with("an ask changes no frame"), "{clause}");
         assert!(clause.contains("Hover"), "the first ask: {clause}");
+    }
+
+    #[test]
+    fn a_plain_texts_fill_that_changes_the_frame_breaks_the_contract() {
+        let clause = clause(Fault::PlainTextChangesTheFrame);
+        assert!(clause.starts_with("an ask changes no frame"), "{clause}");
+        assert!(clause.contains("PlainText"), "{clause}");
     }
 
     #[test]

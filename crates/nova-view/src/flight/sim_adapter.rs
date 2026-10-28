@@ -473,13 +473,16 @@ impl<C> FlightSim for SessionFlight<C> {
     /// session refuses every command but a description's load
     /// ([`FlightCommand::LoadDescription`]), which it answers with the
     /// conditional text resolved for a new pilot
-    /// (`Session::fresh_description`).
+    /// (`Session::fresh_description`), and a plain text's fill
+    /// ([`FlightCommand::PlainText`]), which it answers with the text
+    /// unchanged, as it has no pilot to fill it for.
     fn apply(&mut self, command: FlightCommand) -> Answer {
         let Ok(session) = &mut self.session else {
             return match command {
                 FlightCommand::LoadDescription { raw, .. } => {
                     Answer::Description(Session::fresh_description(raw.as_deref()))
                 }
+                FlightCommand::PlainText(text) => Answer::PlainText(text),
                 _ => Answer::Refused,
             };
         };
@@ -1066,6 +1069,15 @@ mod tests {
         assert_eq!(
             flight.apply(load(None, None)),
             Answer::Description(Session::fresh_description(None))
+        );
+    }
+
+    #[test]
+    fn a_failed_flight_fills_a_plain_text_as_it_is() {
+        assert_eq!(
+            failed().apply(FlightCommand::PlainText("Hello, <PSN>.".to_owned())),
+            Answer::PlainText("Hello, <PSN>.".to_owned()),
+            "no pilot to fill it for"
         );
     }
 
