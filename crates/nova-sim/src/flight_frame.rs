@@ -118,6 +118,11 @@ pub struct FlightFrame {
     /// How many mission texts the session has queued, never reset
     /// ([`Session::texts_queued`](crate::Session::texts_queued)).
     pub texts_queued: u64,
+    /// The player's commands the session takes now
+    /// ([`Session::takes`](crate::Session::takes)): what the view asks
+    /// before it acts on a key, mid-input, reading the frame the last
+    /// command or step left.
+    pub gates: Gates,
     /// What the course map's drawing is taken from ([`MapKey`]).
     pub map_key: MapKey,
     /// Each ship in the system as the world draws it: the player's first,
@@ -170,7 +175,8 @@ pub struct FlightFrame {
 
 impl Default for FlightFrame {
     /// A session that failed to start: nav off, no course, in flight, no
-    /// jump, the player flying, no hold and no leave due; the player alone, drawn in full in the ships' layer at the
+    /// jump, the player flying, no hold and no leave due, every gate taken
+    /// ([`Gates::EVERY`]); the player alone, drawn in full in the ships' layer at the
     /// default place, with no NPCs, shots, beams, boxes, asteroids or
     /// stellars; no murk and no background.
     fn default() -> Self {
@@ -188,6 +194,7 @@ impl Default for FlightFrame {
             leave_due: false,
             jump_readiness: JumpReadiness::Blocked,
             texts_queued: 0,
+            gates: Gates::EVERY,
             map_key: MapKey::default(),
             ships: vec![FrameShip::default()],
             drawn: vec![(ShipRef::Player, ShipLayer::Ships)],
@@ -266,6 +273,78 @@ impl FlightFrame {
             .iter()
             .filter(|stellar| stellar.shown)
             .map(|stellar| stellar.id)
+    }
+}
+
+/// The player's commands the session takes now, as a set
+/// ([`FlightFrame::gates`], filled from
+/// [`Session::takes`](crate::Session::takes)): one bit for each
+/// [`PlayerCommand`], so a fill writes it without allocating. The default
+/// takes every one, as a flight that failed to start has nothing to refuse
+/// them with.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Gates(u32);
+
+impl Gates {
+    /// Every command taken.
+    pub const EVERY: Self = {
+        let mut bits = 0;
+        let mut i = 0;
+        while i < PlayerCommand::ALL.len() {
+            let bit = PlayerCommand::ALL[i] as u32;
+            assert!(bit < u32::BITS, "a gate's bit fits in the set");
+            bits |= 1 << bit;
+            i += 1;
+        }
+        Self(bits)
+    };
+
+    /// No command taken.
+    pub const NONE: Self = Self(0);
+
+    /// The commands `taken` says are taken.
+    #[must_use]
+    pub fn from_fn(taken: impl Fn(PlayerCommand) -> bool) -> Self {
+        let bits = PlayerCommand::ALL
+            .into_iter()
+            .filter(|&command| taken(command))
+            .fold(0, |bits, command| bits | Self::bit(command));
+        Self(bits)
+    }
+
+    /// Whether `command` is taken.
+    #[must_use]
+    pub fn takes(self, command: PlayerCommand) -> bool {
+        self.0 & Self::bit(command) != 0
+    }
+
+    /// These gates with `command` refused, the rest as they are.
+    #[must_use]
+    pub fn refusing(self, command: PlayerCommand) -> Self {
+        Self(self.0 & !Self::bit(command))
+    }
+
+    /// `command`'s bit.
+    fn bit(command: PlayerCommand) -> u32 {
+        1 << command as u32
+    }
+}
+
+impl Default for Gates {
+    /// [`Gates::EVERY`]: a flight that failed to start refuses nothing.
+    fn default() -> Self {
+        Self::EVERY
+    }
+}
+
+impl std::fmt::Debug for Gates {
+    /// The commands refused, as the rest are taken.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let refused: Vec<PlayerCommand> = PlayerCommand::ALL
+            .into_iter()
+            .filter(|&command| !self.takes(command))
+            .collect();
+        f.debug_struct("Gates").field("refused", &refused).finish()
     }
 }
 
@@ -1554,6 +1633,33 @@ mod tests {
             stale.framed_types().collect::<Vec<_>>(),
             [ShipId(150), ShipId(129), ShipId(128)],
             "the player's slot first when it holds another type's frames"
+        );
+    }
+
+    #[test]
+    fn every_gate_is_taken_by_every_and_none_by_none() {
+        for command in PlayerCommand::ALL {
+            assert!(Gates::EVERY.takes(command), "{command:?}");
+            assert!(!Gates::NONE.takes(command), "{command:?}");
+        }
+        assert_eq!(Gates::default(), Gates::EVERY);
+        assert_eq!(Gates::from_fn(|_| true), Gates::EVERY);
+        assert_eq!(Gates::from_fn(|_| false), Gates::NONE);
+    }
+
+    #[test]
+    fn refusing_a_gate_refuses_it_alone() {
+        for refused in PlayerCommand::ALL {
+            let gates = Gates::EVERY.refusing(refused);
+            for command in PlayerCommand::ALL {
+                assert_eq!(gates.takes(command), command != refused, "{command:?}");
+            }
+            assert_eq!(gates, Gates::from_fn(|command| command != refused));
+            assert_eq!(gates.refusing(refused), gates, "refused once is enough");
+        }
+        assert_eq!(
+            format!("{:?}", Gates::EVERY.refusing(PlayerCommand::Land)),
+            "Gates { refused: [Land] }"
         );
     }
 

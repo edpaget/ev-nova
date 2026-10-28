@@ -4,7 +4,7 @@
 //! the world's ships, shots and stellars in the `world` module.
 
 use super::Session;
-use crate::flight_frame::{FlightFrame, MapKey};
+use crate::flight_frame::{FlightFrame, Gates, MapKey};
 
 mod hud;
 mod world;
@@ -30,6 +30,7 @@ impl Session {
             leave_due,
             jump_readiness,
             texts_queued,
+            gates,
             map_key,
             ships,
             drawn,
@@ -60,6 +61,7 @@ impl Session {
         *leave_due = self.run.leave_due(self.mode.landed());
         *jump_readiness = self.jump_readiness();
         *texts_queued = self.texts_queued();
+        *gates = Gates::from_fn(|command| self.takes(command));
         *map_key = MapKey {
             system: self.system(),
             explored: self.pilot.explored().collect(),
@@ -94,6 +96,7 @@ pub(super) mod tests {
     use crate::catalog::{ShipId, StellarId, SystemId, WeaponId};
     use crate::cloak::CloakShown;
     use crate::combat::ShipRef;
+    use crate::combat::hull::Condition;
     use crate::combat::projectile::ShotId;
     use crate::combat::ship_frames::FrameSpec;
     use crate::combat::shot_layer::ShotLayer;
@@ -106,6 +109,7 @@ pub(super) mod tests {
     use crate::iff::ShipIff;
     use crate::navigation::NavMode;
     use crate::player_fate::Drawn as ShipDrawn;
+    use crate::player_fate::PlayerCommand;
     use crate::session::HoverPlace;
     use crate::session::StellarPick;
     use crate::session::tests::three_stellars;
@@ -208,6 +212,8 @@ pub(super) mod tests {
             leave_due: true,
             jump_readiness: JumpReadiness::Underway,
             texts_queued: u64::MAX,
+            // Only the cloak taken: no state of the player's gives it.
+            gates: Gates::from_fn(|command| command == PlayerCommand::Cloak),
             map_key: MapKey {
                 system: SystemId(999),
                 explored: vec![SystemId(997)],
@@ -712,9 +718,139 @@ pub(super) mod tests {
         assert!(!frame.traffic_ships.is_empty(), "the system's traffic");
     }
 
+    // The gates (rdm:phase/view-sim-seam/phase-20-view-frame-fills-per-tick).
+
+    /// Breaks the player up, as a ship whose armour has gone does.
+    fn breaking_up(session: &mut Session) {
+        session.set_player_condition(Condition::Dying {
+            ticks_left: 30,
+            starting: false,
+        });
+    }
+
+    /// Explodes the player's ship.
+    fn exploded(session: &mut Session) {
+        session.set_player_condition(Condition::Destroyed);
+    }
+
+    /// Whether `gate` is taken in `session`'s frame, filled over
+    /// [`stale`], checked against [`Session::takes`].
+    fn gate_filled(session: &Session, gate: PlayerCommand) -> bool {
+        let taken = filled(session).gates.takes(gate);
+        assert_eq!(taken, session.takes(gate), "{gate:?}: the session's");
+        taken
+    }
+
+    /// Pins `gate` in the frame: taken while flying, and refused once
+    /// `refuse` has put the session in the first state that refuses it.
+    fn pins_gate(gate: PlayerCommand, refuse: fn(&mut Session)) {
+        let mut session = Session::start(&catalog()).expect("starts");
+        assert!(gate_filled(&session, gate), "{gate:?}: taken flying");
+        refuse(&mut session);
+        assert!(!gate_filled(&session, gate), "{gate:?}: refused");
+    }
+
+    /// Pins `gate`, which a breaking-up player still takes, in the frame:
+    /// taken while flying and breaking up, refused once exploded.
+    fn pins_gate_to_the_explosion(gate: PlayerCommand) {
+        let mut session = Session::start(&catalog()).expect("starts");
+        assert!(gate_filled(&session, gate), "{gate:?}: taken flying");
+        breaking_up(&mut session);
+        assert!(gate_filled(&session, gate), "{gate:?}: taken breaking up");
+        exploded(&mut session);
+        assert!(!gate_filled(&session, gate), "{gate:?}: refused exploded");
+    }
+
+    #[test]
+    fn the_map_gate_is_refused_under_the_take_off_grace_and_breaking_up() {
+        pins_gate(PlayerCommand::Map, Session::start_takeoff_grace);
+        pins_gate(PlayerCommand::Map, breaking_up);
+    }
+
+    #[test]
+    fn the_land_gate_is_refused_breaking_up() {
+        pins_gate(PlayerCommand::Land, breaking_up);
+    }
+
+    #[test]
+    fn the_mission_info_gate_is_refused_breaking_up() {
+        pins_gate(PlayerCommand::MissionInfo, breaking_up);
+    }
+
+    #[test]
+    fn the_cloak_gate_is_refused_breaking_up() {
+        pins_gate(PlayerCommand::Cloak, breaking_up);
+    }
+
+    #[test]
+    fn the_jump_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::Jump);
+    }
+
+    #[test]
+    fn the_hail_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::Hail);
+    }
+
+    #[test]
+    fn the_board_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::Board);
+    }
+
+    #[test]
+    fn the_jettison_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::Jettison);
+    }
+
+    #[test]
+    fn the_target_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::Target);
+    }
+
+    #[test]
+    fn the_nav_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::Nav);
+    }
+
+    #[test]
+    fn the_select_system_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::SelectSystem);
+    }
+
+    #[test]
+    fn the_select_weapon_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::SelectWeapon);
+    }
+
+    #[test]
+    fn the_deselect_weapon_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::DeselectWeapon);
+    }
+
+    #[test]
+    fn the_escort_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::Escort);
+    }
+
+    #[test]
+    fn the_eject_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::Eject);
+    }
+
+    #[test]
+    fn the_player_info_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::PlayerInfo);
+    }
+
+    #[test]
+    fn the_self_destruct_gate_is_refused_once_exploded() {
+        pins_gate_to_the_explosion(PlayerCommand::SelfDestruct);
+    }
+
     #[test]
     fn a_failed_sessions_default_frame_holds_the_player_alone_in_full() {
         let frame = FlightFrame::default();
+        assert_eq!(frame.gates, Gates::EVERY, "nothing to refuse with");
         assert_eq!(frame.ships, [FrameShip::default()]);
         assert_eq!(frame.player().shown, ShipDrawn::Full);
         assert_eq!(frame.player().hover, HoverPlace::Own);

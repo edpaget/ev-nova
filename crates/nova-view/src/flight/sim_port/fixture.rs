@@ -14,7 +14,7 @@ use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, FrameAsteroid,
-    FrameBeam, FrameBox, FrameHud, FrameShip, MapKey, StepInput, StepReport, StepRun,
+    FrameBeam, FrameBox, FrameHud, FrameShip, Gates, MapKey, StepInput, StepReport, StepRun,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
@@ -409,12 +409,15 @@ impl FakeFlight {
         &self.stepped
     }
 
-    /// Refuses the gate `gate` from now on ([`FlightSim::takes`]).
+    /// Refuses the gate `gate` from now on ([`FlightSim::takes`]), and in
+    /// every frame it fills ([`FlightFrame::gates`]), whatever frame is
+    /// scripted later.
     pub fn refuse(&mut self, gate: PlayerCommand) {
         self.refused.push(gate);
     }
 
-    /// Takes the gate `gate` again ([`FlightSim::takes`]).
+    /// Takes the gate `gate` again ([`FlightSim::takes`]), as the frame
+    /// scripted sets it.
     pub fn take(&mut self, gate: PlayerCommand) {
         self.refused.retain(|&refused| refused != gate);
     }
@@ -477,8 +480,13 @@ impl FakeFlight {
 }
 
 impl FlightSim for FakeFlight {
+    /// The frame scripted, each gate refused ([`FakeFlight::refuse`])
+    /// refused in it whatever the frame set.
     fn frame(&self, into: &mut FlightFrame) {
         into.clone_from(&self.frame);
+        for &gate in &self.refused {
+            into.gates = into.gates.refusing(gate);
+        }
     }
 
     fn step(&mut self, input: &StepInput, steps: u32, into: &mut StepReport) {
@@ -811,6 +819,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         leave_due,
         jump_readiness,
         texts_queued,
+        gates,
         map_key,
         ships,
         drawn,
@@ -859,6 +868,11 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             JumpReadiness::Blocked
         },
         texts_queued: texts_queued.wrapping_add(1),
+        gates: if *gates == Gates::EVERY {
+            Gates::NONE
+        } else {
+            Gates::EVERY
+        },
         map_key: MapKey {
             system: if map_key.system == other_system {
                 SystemId(other_system.0 - 1)
@@ -1822,12 +1836,25 @@ mod tests {
     #[test]
     fn the_fake_takes_every_gate_but_those_refused() {
         let mut fake = FakeFlight::new();
+        let gates = |fake: &FakeFlight| {
+            let mut frame = FlightFrame::default();
+            fake.frame(&mut frame);
+            frame.gates
+        };
         assert!(fake.takes(PlayerCommand::Nav));
+        assert_eq!(gates(&fake), Gates::EVERY);
         fake.refuse(PlayerCommand::Nav);
         assert!(!fake.takes(PlayerCommand::Nav));
         assert!(fake.takes(PlayerCommand::SelectSystem));
+        let refused = Gates::EVERY.refusing(PlayerCommand::Nav);
+        assert_eq!(gates(&fake), refused, "in the frame");
+        fake.set_frame(stellar(128));
+        assert_eq!(gates(&fake), refused, "whatever frame is scripted later");
         fake.take(PlayerCommand::Nav);
         assert!(fake.takes(PlayerCommand::Nav));
+        assert_eq!(gates(&fake), Gates::EVERY);
+        fake.frame_mut().gates = Gates::NONE;
+        assert_eq!(gates(&fake), Gates::NONE, "as the frame sets them");
     }
 
     #[test]
@@ -2756,6 +2783,7 @@ mod tests {
             leave_due: true,
             jump_readiness: JumpReadiness::Underway,
             texts_queued: u64::MAX,
+            gates: Gates::EVERY.refusing(PlayerCommand::Map),
             map_key: MapKey {
                 system: SystemId(i16::MAX),
                 nav: NavMode::Stellar(None),
@@ -2779,6 +2807,7 @@ mod tests {
                 leave_due,
                 jump_readiness,
                 texts_queued,
+                gates,
                 map_key,
                 ships,
                 drawn,
@@ -2824,6 +2853,7 @@ mod tests {
             assert_ne!(other.leave_due, *leave_due);
             assert_ne!(other.jump_readiness, *jump_readiness);
             assert_ne!(other.texts_queued, *texts_queued);
+            assert_ne!(other.gates, *gates);
             assert_ne!(other.map_key, *map_key);
             assert_ne!(other.map_key.system, map_key.system);
             assert_ne!(other.map_key.nav, map_key.nav);

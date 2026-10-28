@@ -1686,6 +1686,7 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
         kept.jump_readiness == fresh.jump_readiness,
     );
     check("texts_queued", kept.texts_queued == fresh.texts_queued);
+    check("gates", kept.gates == fresh.gates);
     check("map_key", kept.map_key == fresh.map_key);
     check("ships", kept.ships == fresh.ships);
     check("drawn", kept.drawn == fresh.drawn);
