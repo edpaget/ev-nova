@@ -78,7 +78,7 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 pub struct FakeFlight {
     frame: FlightFrame,
     applied: Vec<FlightCommand>,
-    answers: VecDeque<(Answer, Option<FlightFrame>)>,
+    answers: VecDeque<(Answer, Option<FlightFrame>, Vec<FlightEvent>)>,
     events: Vec<FlightEvent>,
     reports: VecDeque<StepReport>,
     stepped: Vec<(StepInput, u32)>,
@@ -336,14 +336,27 @@ impl FakeFlight {
     /// take none, and are answered done, so the answers a test queues line
     /// up with the commands it is about.
     pub fn queue_answer(&mut self, answer: Answer) {
-        self.answers.push_back((answer, None));
+        self.answers.push_back((answer, None, Vec::new()));
     }
 
     /// Answers the next command not yet answered with `answer`, as
     /// [`FakeFlight::queue_answer`] does, and shows `frame` from then on,
     /// as a command that changes the flight leaves it.
     pub fn queue_answer_showing(&mut self, answer: Answer, frame: FlightFrame) {
-        self.answers.push_back((answer, Some(frame)));
+        self.answers.push_back((answer, Some(frame), Vec::new()));
+    }
+
+    /// Answers the next command not yet answered with `answer` and shows
+    /// `frame`, as [`FakeFlight::queue_answer_showing`] does, and hands
+    /// out `events` on the drains after it, as a command raises what it
+    /// tells: none is drained before the command.
+    pub fn queue_answer_telling(
+        &mut self,
+        answer: Answer,
+        frame: FlightFrame,
+        events: Vec<FlightEvent>,
+    ) {
+        self.answers.push_back((answer, Some(frame), events));
     }
 
     /// Hands out `event` on the next drain.
@@ -479,12 +492,13 @@ impl FlightSim for FakeFlight {
         if rides_along {
             return Answer::Done;
         }
-        let Some((answer, frame)) = self.answers.pop_front() else {
+        let Some((answer, frame, mut events)) = self.answers.pop_front() else {
             return Answer::Refused;
         };
         if let Some(frame) = frame {
             self.frame = frame;
         }
+        self.events.append(&mut events);
         answer
     }
 
@@ -1598,6 +1612,22 @@ mod tests {
             assert_eq!(fake.apply(command.clone()), Answer::Refused, "{command:?}");
         }
         assert_eq!(fake.applied().len(), 3);
+    }
+
+    #[test]
+    fn the_fake_tells_an_answers_events_only_once_the_command_is_answered() {
+        let mut fake = FakeFlight::new();
+        let told = FlightEvent::Sound(SimSound::NavSelected);
+        fake.queue_answer_telling(Answer::Done, stellar(128), vec![told.clone()]);
+        let mut drained = Vec::new();
+        fake.drain(&mut drained);
+        assert_eq!(drained, [], "not before the command");
+        assert_eq!(fake.apply(refused_command()), Answer::Done);
+        let mut shown = FlightFrame::default();
+        fake.frame(&mut shown);
+        assert_eq!(shown, stellar(128));
+        fake.drain(&mut drained);
+        assert_eq!(drained, [told], "after it");
     }
 
     #[test]

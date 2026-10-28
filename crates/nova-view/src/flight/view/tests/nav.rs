@@ -270,17 +270,6 @@ fn a_dominated_stellar_is_bracketed_green() {
     );
 }
 
-#[test]
-fn with_the_map_open_a_click_goes_to_the_map_not_the_stellars() {
-    let mut view = a_and_b();
-    let b = on_screen(&view, (40.0, 0.0));
-    tap(&mut view, MAP);
-    click(&mut view, b);
-    tap(&mut view, MAP);
-    assert!(!view.map_open());
-    assert_eq!(nav_target(&view), None);
-}
-
 /// `text` from `x` right of the stock cargo area's left, (8, 458) at
 /// (830, 0), on `baseline` below its top, in Geneva 12.
 fn cargo_line(text: &str, x: f32, baseline: f32) -> (String, Point) {
@@ -547,16 +536,6 @@ fn once_j_is_accepted_the_label_turns_bright_at_the_next_refresh() {
     assert_eq!(label(&view), Color::WHITE, "tick {}", now_tick(&view));
 }
 
-#[test]
-fn tab_in_a_flight_that_never_started_does_nothing() {
-    let mut view = test_flight::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    });
-    assert_eq!(view.input(&key(Key::Tab, true)), ScreenAction::None);
-    assert!(view.session().is_err());
-}
-
 // The radar's IFF, density scanner, centre arrow and static.
 
 #[test]
@@ -784,48 +763,10 @@ fn anti_interference_lowers_the_level_static_is_rolled_against() {
     assert_eq!(view.radar_shown(&view.frame).static_pattern, None);
 }
 
-#[test]
-fn the_hud_cadence_and_blink_advance_through_a_jumps_warp() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    jump_now(&mut view);
-    let streaking = |view: &View| {
-        matches!(
-            view.jump_effect().map(JumpEffect::phase),
-            Some(JumpPhase::Warp)
-        )
-    };
-    assert!(streaking(&view));
-    // Mark the snapshot, then tick through the streak: the radar is
-    // taken afresh, and the blink flips, every 8 ticks.
-    let marker = RadarScene {
-        player: at(-1.0, -1.0),
-        ..RadarScene::default()
-    };
-    let mut refreshes = Vec::new();
-    let mut tick = 0;
-    while streaking(&view) {
-        view.radar_scene = Some(marker.clone());
-        let blink = view.hud_cadence.blink_on();
-        view.tick(TICK);
-        tick += 1;
-        let retaken = view.radar_scene.as_ref() != Some(&marker);
-        assert_eq!(retaken, view.hud_cadence.blink_on() != blink, "tick {tick}");
-        if retaken {
-            refreshes.push(tick);
-        }
-    }
-    assert!(tick >= 24, "the streak lasts a second: {tick}");
-    assert!(refreshes.len() >= 3, "{refreshes:?}");
-    let gaps: Vec<u32> = refreshes.windows(2).map(|pair| pair[1] - pair[0]).collect();
-    assert!(gaps.iter().all(|&gap| gap == 8), "{refreshes:?}");
-}
-
 // The Red Alert.
 
 /// The Red Alert `cïcn`s drawn, and where.
-fn icons_drawn(view: &View) -> Vec<(i16, Point)> {
+pub(super) fn icons_drawn(view: &FlightView<FakeCatalog, impl FlightSim>) -> Vec<(i16, Point)> {
     drawn(view)
         .iter()
         .filter_map(|command| match command {
@@ -865,22 +806,6 @@ fn no_alert_icon_is_drawn_for_a_loud_player() {
 }
 
 #[test]
-fn the_sound_prefs_reach_the_session_when_set() {
-    let mut view = threatened(SoundPrefs::default());
-    view.set_sound_prefs(QUIET);
-    assert!(view.alert_quiet());
-    ticks(&mut view, 60);
-    assert_eq!(icons_drawn(&view).len(), 1);
-    view.set_sound_prefs(SoundPrefs {
-        sound: false,
-        ..SoundPrefs::default()
-    });
-    assert!(view.alert_quiet(), "sound off is quiet");
-    view.set_sound_prefs(SoundPrefs::default());
-    assert!(!view.alert_quiet());
-}
-
-#[test]
 fn the_red_alert_sounds_once_through_the_view() {
     // That a threat sounds it once is nova-sim's (`staying_threatened_sounds_once`).
     let mut view = faked(in_sol());
@@ -913,33 +838,6 @@ fn the_alert_icon_is_drawn_over_the_brackets() {
         "the brackets' bottom-left corner just before it: {:?}",
         commands[icon - 1]
     );
-}
-
-#[test]
-fn a_missing_alert_icon_draws_nothing_and_says_so_once() {
-    let catalog = FakeCatalog {
-        alert_icon: None,
-        ..armed(2, &[])
-    };
-    let (_, chance) = scripted(&two_npcs());
-    let mut view = test_flight::flown(catalog, FlightStart::New, on(chance, Rc::new(Threatening)))
-        .with_sound_prefs(QUIET);
-    let missing =
-        Diagnostic::Unreadable("no cïcn 18000: the Red Alert icon is not drawn".to_owned());
-    let told = |view: &mut View| {
-        let diagnostics = view.take_diagnostics();
-        diagnostics.iter().filter(|&d| *d == missing).count()
-    };
-    assert_eq!(told(&mut view), 1);
-    let mut blinked = false;
-    for _ in 0..200 {
-        view.tick(TICK);
-        blinked |= view.session().expect("flying").red_alert_icon().is_some();
-        assert_eq!(icons_drawn(&view), []);
-    }
-    assert!(blinked, "the session blinked it");
-    assert_eq!(told(&mut view), 0, "once");
-    assert_eq!(told(&mut flight()), 0, "the default catalog has it");
 }
 
 // On a scripted flight: what the nav keys send, and what the nav area

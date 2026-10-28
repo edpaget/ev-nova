@@ -10,37 +10,6 @@ fn bars_read(view: &View) -> Vec<i16> {
 }
 
 #[test]
-fn the_status_bar_follows_the_ship_type_on_the_next_frame() {
-    let mut view = test_flight::new(governed(shipbuying(), 129, 129));
-    run_set(&mut view, "H129");
-    settle_session(&mut view);
-    assert_eq!(bar_shown(&view), Some(700), "not before the frame");
-    view.tick(TICK);
-    assert_eq!(bar_shown(&view), Some(705), "a set expression");
-    view.tick(TICK);
-    assert_eq!(bars_read(&view), [128, 129], "once");
-
-    let mut view = captured_in(governed(boardable(), 129, 129));
-    let session = view.sim.session.as_mut().expect("flying");
-    assert_eq!(
-        session.assign(Assignment::MyShip, &mut NeverFires),
-        Some(Assigned::MyShip)
-    );
-    assert_eq!(bar_shown(&view), Some(700), "not before the frame");
-    view.tick(TICK);
-    assert_eq!(bar_shown(&view), Some(705), "a capture");
-
-    let mut view = test_flight::new(governed(shipbuying(), 129, 129));
-    land_now(&mut view);
-    let session = view.sim.session.as_mut().expect("flying");
-    session
-        .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
-        .expect("bought");
-    view.tick(TICK);
-    assert_eq!(bar_shown(&view), Some(705), "a purchase");
-}
-
-#[test]
 fn a_new_ship_types_missing_bar_keeps_the_layout_over_picture_128() {
     let mut view = test_flight::new(governed(shipbuying(), 129, 131));
     run_set(&mut view, "H129");
@@ -161,23 +130,6 @@ fn f5_near_the_wormhole_selects_it_and_the_nav_area_names_it() {
 /// Whether `view`'s course map draws system `id`.
 fn on_the_course_map<S: FlightSim>(view: &FlightView<FakeCatalog, S>, id: i16) -> bool {
     view.map.model().system(SystemId(id)).is_some()
-}
-
-#[test]
-fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
-    // 132 hidden by its `Visibility`, as the load evaluates it.
-    let catalog = FakeCatalog {
-        visibility: vec![nova_sim::catalog::SystemVisibility {
-            id: SystemId(132),
-            visibility: nova_sim::Test::parse("b50"),
-        }],
-        ..catalog()
-    };
-    let session = SessionBuilder::flying(&catalog).build();
-    assert!(!session.galaxy().visible(SystemId(132)));
-    let view = FlightView::from_session(catalog, session.into(), &Rulebook::default());
-    assert!(!on_the_course_map(&view, 132));
-    assert!(on_the_course_map(&view, 131));
 }
 
 #[test]
@@ -392,47 +344,6 @@ fn each_event_asks_for_its_own_redraw() {
 /// The Moon's frame shown.
 fn moon_frame(view: &View) -> u16 {
     sprites(&drawn(view))[1].0.frame
-}
-
-/// The Moon's animation state as `view` keeps it while Sol is not shown.
-fn moon_kept(view: &View) -> Option<u16> {
-    view.kept_frames
-        .get(StellarId(129))
-        .map(|frames| frames.shown())
-}
-
-#[test]
-fn a_real_jump_away_and_back_resumes_the_frame_shown_on_leaving() {
-    let mut view = flight();
-    plot(&mut view, 131);
-    fly_out(&mut view);
-    jump_now(&mut view);
-    let mut last = moon_frame(&view);
-    while view.session().map(Session::system) == Ok(SystemId(130)) {
-        last = moon_frame(&view);
-        view.tick(TICK);
-    }
-    // The tick the jump ends in steps the stellars before the session
-    // arrives (`step_stellars` runs before the steps): one frame on from
-    // the last drawn in Sol.
-    let left = moon_kept(&view).expect("kept as Sol was let go");
-    assert_eq!(left, (last + 1) % 4);
-    assert_ne!(left, 0, "a frame a fresh layout would not show");
-    while view.jump_effect().is_some() {
-        view.tick(TICK);
-    }
-    plot(&mut view, 130);
-    fly_out(&mut view);
-    jump_now(&mut view);
-    assert_eq!(moon_kept(&view), Some(left), "still while away");
-    while view.session().map(Session::system) == Ok(SystemId(131)) {
-        view.tick(TICK);
-    }
-    // Sol is laid out on the tick the jump ends, after that tick's step:
-    // the frame drawn on arrival is the one it was left on.
-    assert_eq!(moon_frame(&view), left, "resumed on arrival");
-    view.tick(TICK);
-    assert_eq!(moon_frame(&view), (left + 1) % 4, "and on from there");
 }
 
 #[test]

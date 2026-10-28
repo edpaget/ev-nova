@@ -6,10 +6,10 @@ use nova_sim::flight::player_step;
 use nova_sim::flight_frame::GateFade;
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
-    Behaviour, BoardingRule, CharacterStart, CommodityStrings, DateAffixes, DisableRule,
-    DisasterRecord, FlightRules, GateSite, Handling, JunkRecord, LandingSite, OutfitId,
-    OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats, SimDiagnostic, SimSound,
-    StarSystem, StartDate, StartError, SystemId, TICK, Vec2,
+    Behaviour, CharacterStart, CommodityStrings, DateAffixes, DisableRule, DisasterRecord,
+    FlightRules, GateSite, Handling, JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves,
+    ShipFields, ShipId, ShipRecord, ShipStats, SimDiagnostic, SimSound, StarSystem, StartDate,
+    StartError, SystemId, TICK, Vec2,
 };
 use nova_sim::{Session, ShipState};
 
@@ -2908,25 +2908,6 @@ fn alt_tap(view: &mut View, k: Key) {
     view.input(&key(Key::Alt, false));
 }
 
-/// NPC 0 attacks the player; the rest idle.
-#[derive(Debug)]
-struct Threatening;
-
-impl Behaviour for Threatening {
-    fn decide(
-        &self,
-        npc: &nova_sim::Npc,
-        _around: &nova_sim::Surroundings,
-        _chance: &mut dyn Chance,
-    ) -> Goal {
-        if npc.id == NpcId(0) {
-            Goal::Attack(ShipRef::Player)
-        } else {
-            Goal::Idle
-        }
-    }
-}
-
 /// How many of the shots in flight are of `weapon`.
 fn shots_of(view: &View, weapon: WeaponId) -> usize {
     let session = view.session().expect("flying");
@@ -3177,40 +3158,6 @@ impl DisableRule for DisablesTheStrong {
     }
 }
 
-/// Never repels, always gives odds of 75 and always captures; a person
-/// carries its `Credits`, and grants nothing.
-#[derive(Debug)]
-struct Sure;
-
-impl BoardingRule for Sure {
-    fn repels(&self, _booty: u16) -> bool {
-        false
-    }
-
-    fn capture_odds(&self, _crew: &nova_sim::board::CaptureCrew, _chance: &mut dyn Chance) -> u8 {
-        75
-    }
-
-    fn captures(&self, _odds: u8, _chance: &mut dyn Chance) -> bool {
-        true
-    }
-
-    fn person_credits(&self, credits: i32, _chance: &mut dyn Chance) -> i64 {
-        i64::from(credits)
-    }
-
-    fn grant(
-        &self,
-        _grant: &nova_sim::grant::PersonGrant,
-        _stock: &[nova_sim::grant::GrantStock],
-        _free_mass: i64,
-        _grant_max: nova_sim::RuleSource,
-        _chance: &mut dyn Chance,
-    ) -> Option<nova_sim::grant::Granted> {
-        None
-    }
-}
-
 /// [`trafficked`] with its ship 129 (of strength 5, a crew of 3 and a
 /// `Cost` of 150,000, and no speed, so it starts at rest) carrying
 /// money (`Booty` 0x0040), and the player's ship 128 a crew of 10.
@@ -3252,27 +3199,6 @@ fn beside_in(catalog: FakeCatalog, x: u32, y: u32, heading: u32, intact: bool) -
     view
 }
 
-/// [`captured`], from `catalog`, a [`boardable`] one.
-fn captured_in(catalog: FakeCatalog) -> View {
-    let (_, chance) = scripted(&placed(750, 750, 0));
-    let view = test_flight::flown(
-        catalog,
-        FlightStart::New,
-        Collaborators {
-            boarding_rule: Rc::new(Sure),
-            ..on(chance, Rc::new(Still))
-        },
-    );
-    let mut view = now_disabling(view, Rc::new(DisablesTheStrong));
-    view.tick(TICK);
-    tap(&mut view, TARGET_KEY);
-    tap(&mut view, BOARD_KEY);
-    let boarding = view.take_boarding().expect("boarded").view;
-    assert_eq!(boarding.odds, 75, "by the rule given");
-    assert_eq!(view.plunder(Take::Capture), Taken::Captured);
-    assert_eq!(view.message(), None, "the assignment dialog says it");
-    view
-}
 use nova_sim::{HailOptions, HailRefusal, Help};
 
 /// [`boardable`]'s ship comm strings: "c<n>" for each, with "Channel
@@ -3403,12 +3329,6 @@ fn run_set(view: &mut View, text: &str) {
 
 fn systems_read(view: &View) -> Vec<SystemId> {
     view.catalog().systems_read.borrow().clone()
-}
-
-/// Settles `view`'s session by itself, not through the view.
-fn settle_session(view: &mut View) {
-    let session = view.sim.session.as_mut().expect("flying");
-    let _ = session.settle_script(&view.catalog, &mut NeverFires);
 }
 
 /// The background of the status bar `view` shows.
@@ -3621,12 +3541,6 @@ const QUIET: SoundPrefs = SoundPrefs {
     music_level: 7,
 };
 
-/// Two NPCs, NPC 0 turning on the player at the first tick after the
-/// flight's first (frame 0), sound `prefs`: the Red Alert's check at
-/// frame 60 is the 60th tick from here.
-fn threatened(prefs: SoundPrefs) -> View {
-    now_deciding(fighting(armed(2, &[]), &two_npcs()), Rc::new(Threatening)).with_sound_prefs(prefs)
-}
 use crate::flight::floating;
 use crate::galaxy::map::{
     BRIGHT_GREEN, CLEARED, CYAN, DARK_GREY, DENIED, DIM_GREEN, HOSTILE, LESS_DARK_GREY, LIGHT_GREY,

@@ -9,6 +9,7 @@ use super::faked_flight::last_controls;
 use super::faked_travel::{jump_now, lit, sol, under_way};
 use super::faked_world::world;
 use super::*;
+use crate::SoundPrefs;
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::{MissionInfoPress, SessionEvent, StellarPick, TargetPick};
 
@@ -520,22 +521,21 @@ fn in_alpha() -> FlightFrame {
 
 /// Brings `view`'s warp to its end: the frame says the end is due, and
 /// the flight answers the arrival showing [`in_alpha`], telling the
-/// system entered.
+/// system entered as it arrives.
 pub(super) fn warp_ends(view: &mut Faked) {
     view.sim.set_frame(FlightFrame {
         warp_end_due: true,
         ..under_way(true)
     });
     view.refresh_frame();
-    view.sim.queue_answer_showing(
+    view.sim.queue_answer_telling(
         Answer::Arrived {
             system: SystemId(131),
             combat: Vec::new(),
         },
         in_alpha(),
+        vec![FlightEvent::Session(SessionEvent::SystemChanged)],
     );
-    view.sim
-        .queue_event(FlightEvent::Session(SessionEvent::SystemChanged));
 }
 
 /// The stellar picks `view` sent since `from` of its commands.
@@ -1241,4 +1241,239 @@ fn the_fire_keys_pressed_and_let_go_during_a_jump_fire_nothing() {
         (false, false),
         "let go before the arrival"
     );
+}
+
+// The nav area, the HUD and the stellars.
+
+#[test]
+fn tab_in_a_flight_that_never_started_does_nothing() {
+    let mut fake = FakeFlight::new();
+    fake.fail("no chär to start from");
+    let mut view = FlightView::over(
+        Rc::new(catalog()),
+        fake,
+        &Rulebook::default(),
+        SharedChance::default(),
+    );
+    assert_eq!(view.input(&key(Key::Tab, true)), ScreenAction::None);
+    assert_eq!(view.failure(), Some("no chär to start from"));
+    assert!(view.scene().is_none());
+}
+
+#[test]
+fn with_the_map_open_a_click_goes_to_the_map_not_the_stellars() {
+    let mut view = in_flight();
+    tap(&mut view, MAP);
+    let from = sent_count(&view);
+    faked_click(&mut view, Point::new(415.0 + 40.0, 384.0));
+    tap(&mut view, MAP);
+    assert!(!view.map_open());
+    assert!(
+        !sent_since(&view, from)
+            .iter()
+            .any(|command| matches!(command, FlightCommand::ClickInSpace { .. })),
+        "no click in space: {:?}",
+        sent_since(&view, from)
+    );
+}
+
+#[test]
+fn the_hud_cadence_and_blink_advance_through_a_jumps_warp() {
+    let mut view = in_flight();
+    jump_now(&mut view);
+    // Mark the snapshot, then tick through the streak: the radar is
+    // taken afresh, and the blink flips, every 8 ticks.
+    let marker = crate::flight::radar::RadarScene {
+        player: Point::new(-1.0, -1.0),
+        ..crate::flight::radar::RadarScene::default()
+    };
+    let mut refreshes = Vec::new();
+    for tick in 1..=32 {
+        view.radar_scene = Some(marker.clone());
+        let blink = view.hud_cadence.blink_on();
+        view.tick(TICK);
+        let retaken = view.radar_scene.as_ref() != Some(&marker);
+        assert_eq!(retaken, view.hud_cadence.blink_on() != blink, "tick {tick}");
+        if retaken {
+            refreshes.push(tick);
+        }
+    }
+    assert!(
+        matches!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::Warp)
+        ),
+        "still streaking"
+    );
+    assert!(refreshes.len() >= 3, "{refreshes:?}");
+    let gaps: Vec<u32> = refreshes.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    assert!(gaps.iter().all(|&gap| gap == 8), "{refreshes:?}");
+}
+
+#[test]
+fn the_sound_prefs_reach_the_session_when_set() {
+    let mut view = in_flight();
+    view.set_sound_prefs(QUIET);
+    assert!(view.alert_quiet());
+    view.set_sound_prefs(SoundPrefs {
+        sound: false,
+        ..SoundPrefs::default()
+    });
+    assert!(view.alert_quiet(), "sound off is quiet");
+    view.set_sound_prefs(SoundPrefs::default());
+    assert!(!view.alert_quiet());
+    assert_eq!(
+        view.sim.applied(),
+        [
+            FlightCommand::SetSoundQuiet(true),
+            FlightCommand::SetSoundQuiet(true),
+            FlightCommand::SetSoundQuiet(false),
+        ],
+        "each told the flight"
+    );
+}
+
+#[test]
+fn a_missing_alert_icon_draws_nothing_and_says_so_once() {
+    let iconless = FakeCatalog {
+        alert_icon: None,
+        ..armed(2, &[])
+    };
+    let mut fake = FakeFlight::new();
+    fake.set_frame(sol());
+    let mut view = FlightView::over(
+        Rc::new(iconless),
+        fake,
+        &Rulebook::default(),
+        SharedChance::default(),
+    )
+    .with_sound_prefs(QUIET);
+    let missing =
+        Diagnostic::Unreadable("no cïcn 18000: the Red Alert icon is not drawn".to_owned());
+    let told = |view: &mut Faked| {
+        let diagnostics = view.take_diagnostics();
+        diagnostics.iter().filter(|&d| *d == missing).count()
+    };
+    assert_eq!(told(&mut view), 1);
+    view.sim.frame_mut().hud.red_alert = Some(nova_sim::AlertIcon::Red);
+    for _ in 0..10 {
+        view.tick(TICK);
+        assert_eq!(super::nav::icons_drawn(&view), []);
+    }
+    assert_eq!(told(&mut view), 0, "once");
+    let mut whole_fake = FakeFlight::new();
+    whole_fake.set_frame(sol());
+    let mut whole = FlightView::over(
+        Rc::new(catalog()),
+        whole_fake,
+        &Rulebook::default(),
+        SharedChance::default(),
+    );
+    assert_eq!(told(&mut whole), 0, "the default catalog has it");
+}
+
+#[test]
+fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
+    // 132 hidden by its `Visibility`, as the load evaluates it.
+    let hiding = FakeCatalog {
+        visibility: vec![nova_sim::catalog::SystemVisibility {
+            id: SystemId(132),
+            visibility: nova_sim::Test::parse("b50"),
+        }],
+        ..catalog()
+    };
+    let galaxy = SessionBuilder::flying(&hiding).build().galaxy().clone();
+    let mut fake = FakeFlight::new();
+    fake.set_frame(sol());
+    fake.map_mut().galaxy = Some(galaxy);
+    let view = FlightView::over(
+        Rc::new(hiding),
+        fake,
+        &Rulebook::default(),
+        SharedChance::default(),
+    );
+    let on_the_course_map = |id| view.course_map().model().system(SystemId(id)).is_some();
+    assert!(!on_the_course_map(132), "the overlay's");
+    assert!(on_the_course_map(131));
+}
+
+#[test]
+fn the_status_bar_follows_the_ship_type_on_the_next_frame() {
+    let mut view = super::faked_hud::barred(governed(catalog(), 128, 129), sol());
+    assert_eq!(bar_shown(&view), Some(700));
+    view.sim.frame_mut().hud.interface_government = Some(nova_sim::GovtId(150));
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::ShipChanged));
+    assert_eq!(bar_shown(&view), Some(700), "not before the frame");
+    view.tick(TICK);
+    assert_eq!(bar_shown(&view), Some(705), "the ship's change caught up");
+    view.tick(TICK);
+    assert_eq!(
+        *view.catalog().bars_asked.borrow(),
+        [128, 129],
+        "129's read once"
+    );
+}
+
+/// The Moon's frame shown.
+fn moon_shown(view: &Faked) -> u16 {
+    sprites(&drawn(view))[1].0.frame
+}
+
+/// The Moon's animation state as `view` keeps it while Sol is not shown.
+fn moon_kept(view: &Faked) -> Option<u16> {
+    view.kept_frames
+        .get(StellarId(129))
+        .map(|frames| frames.shown())
+}
+
+/// `view`'s flight arriving back in Sol from Alpha Centauri, its warp
+/// ended and the system entered told.
+fn back_in_sol(view: &mut Faked) {
+    view.sim.set_frame(FlightFrame {
+        warp_end_due: true,
+        system: SystemId(131),
+        stellars: vec![record::stellar(StellarId(140))],
+        ..under_way(true)
+    });
+    view.refresh_frame();
+    view.sim.queue_answer_telling(
+        Answer::Arrived {
+            system: SystemId(130),
+            combat: Vec::new(),
+        },
+        sol(),
+        vec![FlightEvent::Session(SessionEvent::SystemChanged)],
+    );
+}
+
+#[test]
+fn a_real_jump_away_and_back_resumes_the_frame_shown_on_leaving() {
+    let mut view = in_flight();
+    jump_now(&mut view);
+    for _ in 0..5 {
+        view.tick(TICK);
+    }
+    let last = moon_shown(&view);
+    warp_ends(&mut view);
+    view.tick(TICK);
+    // The tick the jump ends in steps the stellars before the flight
+    // arrives (`step_stellars` runs before the steps): one frame on from
+    // the last drawn in Sol.
+    let left = moon_kept(&view).expect("kept as Sol was let go");
+    assert_eq!(left, (last + 1) % 4);
+    view.tick(crate::flight::jump::FADE_IN_FOR);
+    view.tick(TICK);
+    lit(&mut view, 0.0);
+    for _ in 0..3 {
+        view.tick(TICK);
+    }
+    assert_eq!(moon_kept(&view), Some(left), "still while away");
+    back_in_sol(&mut view);
+    view.tick(TICK);
+    // Sol is laid out on the tick the jump ends, after that tick's step:
+    // the frame drawn on arrival is the one it was left on.
+    assert_eq!(moon_shown(&view), left, "resumed on arrival");
+    view.tick(TICK);
+    assert_eq!(moon_shown(&view), (left + 1) % 4, "and on from there");
 }
