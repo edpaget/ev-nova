@@ -307,6 +307,7 @@ pub struct Handled {
 /// The program runs `App<S>`, whose screen is the [`AppScreen`] router.
 /// The screen stays a type parameter only so the app's own tests can drive
 /// it with a screen that records what reaches it.
+#[allow(clippy::struct_excessive_bools)] // Each a separate thing tracked.
 pub struct App<S, C = AppScreen> {
     renderer: Renderer<S>,
     viewport: Viewport,
@@ -336,6 +337,9 @@ pub struct App<S, C = AppScreen> {
     display_offered: bool,
     /// The Scaling running, and the switches a pick left to make.
     scaling: ScalingChoice,
+    /// Whether the screen has been told the app is quitting: it is told
+    /// once, however many ways the quit arrives ([`App::exiting`]).
+    quit: bool,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -364,6 +368,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             chosen_fullscreen: None,
             display_offered: false,
             scaling: ScalingChoice::default(),
+            quit: false,
         }
     }
 
@@ -1035,8 +1040,28 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         Control::Continue
     }
 
-    /// Tells the screen the app is quitting, and keeps what it reports.
+    /// The event loop is ending (on macOS, `terminate:`, a quit that never
+    /// reached the game): tells the screen the app is quitting, so it puts
+    /// the pilot away, keeps what it reports, and leaves an exclusive mode,
+    /// as a quit through [`App::handle_routed`] does.
+    ///
+    /// The event loop ends after every quit, the app's own included, so
+    /// this also follows those: after the app has quit it does nothing.
+    pub fn exiting(&mut self, window: &mut impl WindowPort) {
+        if self.quit {
+            return;
+        }
+        self.quit();
+        self.fullscreen.exiting(window);
+    }
+
+    /// Tells the screen the app is quitting, and keeps what it reports;
+    /// after the first time, nothing.
     fn quit(&mut self) {
+        if self.quit {
+            return;
+        }
+        self.quit = true;
         self.screen.quit();
         self.take_screen_warnings();
     }
@@ -1266,6 +1291,7 @@ mod tests {
     type TestApp = App<NoImages, RecordingScreen>;
 
     mod display_shapes;
+    mod exiting;
     mod menu;
     mod pointer_release;
     mod wheel;
