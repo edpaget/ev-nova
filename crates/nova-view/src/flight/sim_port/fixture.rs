@@ -26,8 +26,8 @@ use nova_sim::status_cargo::StatusCargo;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{ClassRow, Gauge, HailView, PlunderView, RadarGear, Reserves, Take};
 use nova_sim::{
-    DescMovie, EscortClass, Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, ShipRef,
-    StellarId, StellarPick, Vec2, WeaponId,
+    EscortClass, Hover, MapMarks, MissionId, PlayerCommand, SavedNav, ShipId, ShipRef, StellarId,
+    StellarPick, Vec2, WeaponId,
 };
 use nova_sim::{JumpReadiness, PlayerFate};
 
@@ -56,14 +56,15 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// answer queue and outside [`FakeFlight::applied`], so the cursor's hover
 /// and a dialog's description never shift the answers queued for the
 /// commands a test is about, recording each in [`FakeFlight::asks`]: the
-/// hover as told ([`FakeFlight::set_hover`]) and the coming traffic from
-/// its list ([`FakeFlight::set_coming_traffic`]). A new ask is one field
-/// and setter for its answer, and one arm in `FakeFlight::answer_ask`;
-/// it is recorded with the rest. It lists the weapons from its list
-/// ([`FakeFlight::set_weapons`]), failed or not. It loads each description with
-/// the next text queued ([`FakeFlight::queue_description`]), or, once
-/// the queue is empty, as its raw text unchanged, resolving nothing; it
-/// records each load ([`FakeFlight::descriptions_loaded`]). It answers
+/// hover as told ([`FakeFlight::set_hover`]), the coming traffic from
+/// its list ([`FakeFlight::set_coming_traffic`]), and each description's
+/// load with the next text queued ([`FakeFlight::queue_description`]),
+/// or, once the queue is empty, as its raw text unchanged, resolving
+/// nothing, failed or not, as a failed flight still loads one. A new ask
+/// is one field and setter for its answer, and one arm in
+/// `FakeFlight::answer_ask`; it is recorded with the rest. It lists the
+/// weapons from its list ([`FakeFlight::set_weapons`]), failed or not. It
+/// answers
 /// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]),
 /// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]),
 /// [`NameSource`] from [`FakeNames`] ([`FakeFlight::names_mut`]) and
@@ -96,7 +97,6 @@ pub struct FakeFlight {
     coming: Vec<ShipId>,
     weapons: Vec<WeaponId>,
     descriptions: VecDeque<String>,
-    loaded: Vec<(Option<String>, Option<DescMovie>)>,
     comm: FakeComm,
     port: FakePort,
     names: FakeNames,
@@ -328,15 +328,10 @@ impl FakeFlight {
         self.weapons = weapons;
     }
 
-    /// Loads the next description not yet loaded as `text`.
+    /// Loads the next description not yet loaded
+    /// ([`FlightCommand::LoadDescription`]) as `text`.
     pub fn queue_description(&mut self, text: &str) {
         self.descriptions.push_back(text.to_owned());
-    }
-
-    /// Each description loaded, its text and movie, in order.
-    #[must_use]
-    pub fn descriptions_loaded(&self) -> &[(Option<String>, Option<DescMovie>)] {
-        &self.loaded
     }
 
     /// Answers the next command not yet answered with `answer`: the
@@ -487,9 +482,14 @@ impl FakeFlight {
 
     /// Answers the ask `ask` from what it is told for it, recording it
     /// ([`FakeFlight::asks`]): one arm for each ask. A failed fake refuses
-    /// them.
+    /// them but a description's load, as a failed flight does.
     fn answer_ask(&mut self, ask: FlightCommand) -> Answer {
         let answer = match &ask {
+            FlightCommand::LoadDescription { raw, .. } => Answer::Description(
+                self.descriptions
+                    .pop_front()
+                    .unwrap_or_else(|| raw.clone().unwrap_or_default()),
+            ),
             _ if self.failure.is_some() => Answer::Refused,
             FlightCommand::Hover { .. } => Answer::Hovered(self.hover),
             FlightCommand::ComingTraffic => Answer::ComingTraffic(self.coming.clone()),
@@ -555,13 +555,6 @@ impl FlightSim for FakeFlight {
 
     fn weapons(&self) -> Vec<WeaponId> {
         self.weapons.clone()
-    }
-
-    fn load_description(&mut self, raw: Option<&str>, movie: Option<&DescMovie>) -> String {
-        self.loaded.push((raw.map(str::to_owned), movie.cloned()));
-        self.descriptions
-            .pop_front()
-            .unwrap_or_else(|| raw.map(str::to_owned).unwrap_or_default())
     }
 
     fn failure(&self) -> Option<&str> {
@@ -1171,7 +1164,9 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///
 /// - **a failed flight shows nothing**: a flight that reports why it
 ///   could not start ([`FlightSim::failure`]) fills the default frame,
-///   refuses every command, drains nothing and lists no weapons
+///   refuses every command but a description's load
+///   ([`FlightCommand::LoadDescription`]), which it answers with
+///   [`Answer::Description`], drains nothing and lists no weapons
 ///   ([`FlightSim::weapons`]). Checked first.
 ///
 /// The error says which clause failed.
@@ -1235,7 +1230,8 @@ pub fn check_contract(sim: &mut impl FlightSim) -> Result<(), String> {
 /// [`check_contract`]'s clause on a flight that could not start, `drained`
 /// what its first drain gave: it fills the default frame, refuses every
 /// command (a setting, which a flight that started always takes, among
-/// them), drains nothing and lists no weapons.
+/// them) but a description's load, which it answers with a text, drains
+/// nothing and lists no weapons.
 fn check_failed(sim: &mut impl FlightSim, drained: &[FlightEvent]) -> Result<(), String> {
     let Some(reason) = sim.failure().map(str::to_owned) else {
         return Ok(());
@@ -1255,6 +1251,15 @@ fn check_failed(sim: &mut impl FlightSim, drained: &[FlightEvent]) -> Result<(),
     if !answer.is_refused() {
         return Err(format!(
             "{clause}: failed ({reason}), a setting was answered {answer:?}"
+        ));
+    }
+    let answer = sim.apply(FlightCommand::LoadDescription {
+        raw: Some("A dësc.".to_owned()),
+        movie: None,
+    });
+    if !matches!(answer, Answer::Description(_)) {
+        return Err(format!(
+            "{clause}: failed ({reason}), a description's load was answered {answer:?}"
         ));
     }
     let weapons = sim.weapons();
@@ -1540,7 +1545,7 @@ fn check_world(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), Strin
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::SimSound;
+    use nova_sim::{DescMovie, SimSound};
 
     use super::*;
 
@@ -1595,8 +1600,9 @@ mod tests {
         assert!(clause.contains("drained"), "{clause}");
     }
 
-    /// A flight that failed but takes the settings.
-    struct TakesSettings;
+    /// A flight that failed but takes the settings, or, when its `0` is
+    /// false, refuses every command, a description's load among them.
+    struct TakesSettings(bool);
 
     impl FlightSim for TakesSettings {
         fn frame(&self, into: &mut FlightFrame) {
@@ -1608,7 +1614,7 @@ mod tests {
         }
 
         fn apply(&mut self, command: FlightCommand) -> Answer {
-            if matches!(command, FlightCommand::SetWindowWidth(_)) {
+            if self.0 && matches!(command, FlightCommand::SetWindowWidth(_)) {
                 Answer::Done
             } else {
                 Answer::Refused
@@ -1634,12 +1640,25 @@ mod tests {
 
     #[test]
     fn a_failed_flight_that_takes_a_command_breaks_the_contract() {
-        let clause = check_contract(&mut TakesSettings).expect_err("broken");
+        let clause = check_contract(&mut TakesSettings(true)).expect_err("broken");
         assert!(
             clause.starts_with("a failed flight shows nothing"),
             "{clause}"
         );
         assert!(clause.contains("answered Done"), "{clause}");
+    }
+
+    #[test]
+    fn a_failed_flight_that_refuses_a_descriptions_load_breaks_the_contract() {
+        let clause = check_contract(&mut TakesSettings(false)).expect_err("broken");
+        assert!(
+            clause.starts_with("a failed flight shows nothing"),
+            "{clause}"
+        );
+        assert!(
+            clause.contains("a description's load was answered Refused"),
+            "{clause}"
+        );
     }
 
     #[test]
@@ -2700,17 +2719,33 @@ mod tests {
             double_size: false,
             cinematic: false,
         };
-        assert_eq!(fake.load_description(Some("raw"), Some(&movie)), "scripted");
+        let load = |raw: Option<&str>, movie: Option<DescMovie>| FlightCommand::LoadDescription {
+            raw: raw.map(str::to_owned),
+            movie,
+        };
         let plain = "{b5 \"set\" \"clear\"}";
-        assert_eq!(fake.load_description(Some(plain), None), plain, "unchanged");
-        assert_eq!(fake.load_description(None, None), "");
+        let loads = [
+            load(Some("raw"), Some(movie)),
+            load(Some(plain), None),
+            load(None, None),
+        ];
+        let answers: Vec<Answer> = loads.iter().map(|ask| fake.apply(ask.clone())).collect();
         assert_eq!(
-            fake.descriptions_loaded(),
+            answers,
             [
-                (Some("raw".to_owned()), Some(movie)),
-                (Some(plain.to_owned()), None),
-                (None, None),
-            ]
+                Answer::Description("scripted".to_owned()),
+                Answer::Description(plain.to_owned()),
+                Answer::Description(String::new()),
+            ],
+            "queued, then the raw text unchanged, and a missing one empty"
+        );
+        assert_eq!(fake.asks(), loads, "each recorded");
+        assert_eq!(fake.applied(), [], "apart from the commands");
+        fake.fail("no chär");
+        assert_eq!(
+            fake.apply(load(Some(plain), None)),
+            Answer::Description(plain.to_owned()),
+            "a failed fake still loads one"
         );
     }
 

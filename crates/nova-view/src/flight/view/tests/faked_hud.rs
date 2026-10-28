@@ -72,8 +72,17 @@ fn a_description_is_read_from_the_catalog_and_loaded_through_the_flight() {
         "a missing one"
     );
     assert_eq!(
-        view.sim.descriptions_loaded(),
-        [(Some("raw".to_owned()), Some(movie)), (None, None)],
+        view.sim.asks(),
+        [
+            FlightCommand::LoadDescription {
+                raw: Some("raw".to_owned()),
+                movie: Some(movie),
+            },
+            FlightCommand::LoadDescription {
+                raw: None,
+                movie: None,
+            }
+        ],
         "the missing one loaded as missing"
     );
 }

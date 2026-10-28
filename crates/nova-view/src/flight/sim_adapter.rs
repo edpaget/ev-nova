@@ -54,11 +54,11 @@ use nova_sim::map_search::SearchOutcome;
 use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DescMovie, DisableRule, Good,
-    HailOptions, HailView, HireList, JunkId, LegalCode, MapMarks, Market, MissionId, MissionInfo,
-    News, NovaAi, NovaBoarding, NovaDisable, NovaLaw, OutfitId, Outfitter, Pilot, PlayerInfo,
-    PlunderView, PointDefenceRule, Rules, SavedNav, Session, ShipId, ShipNaming, ShipRefusal,
-    Shipyard, SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, WeaponId,
+    Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DisableRule, Good, HailOptions,
+    HailView, HireList, JunkId, LegalCode, MapMarks, Market, MissionId, MissionInfo, News, NovaAi,
+    NovaBoarding, NovaDisable, NovaLaw, OutfitId, Outfitter, Pilot, PlayerInfo, PlunderView,
+    PointDefenceRule, Rules, SavedNav, Session, ShipId, ShipNaming, ShipRefusal, Shipyard,
+    SimCatalog, StellarId, StepCollaborators, SystemId, TagNames, WeaponId,
 };
 
 use nova_sim::{
@@ -453,11 +453,19 @@ impl<C> FlightSim for SessionFlight<C> {
 
     /// Forwards to `Session::apply`, handing it the catalog the view
     /// shared ([`SessionFlight::share_catalog`]), if it has, the flight's
-    /// chance, its law, its boarding rule and its hail options; a failed
-    /// session refuses every command.
+    /// chance, its law, its boarding rule and its hail options. A failed
+    /// session refuses every command but a description's load
+    /// ([`FlightCommand::LoadDescription`]), which it answers with the
+    /// conditional text resolved for a new pilot
+    /// (`Session::fresh_description`).
     fn apply(&mut self, command: FlightCommand) -> Answer {
         let Ok(session) = &mut self.session else {
-            return Answer::Refused;
+            return match command {
+                FlightCommand::LoadDescription { raw, .. } => {
+                    Answer::Description(Session::fresh_description(raw.as_deref()))
+                }
+                _ => Answer::Refused,
+            };
         };
         let mut collab = ApplyCollaborators {
             catalog: self.catalog.as_ref().map(|shared| &*shared.0),
@@ -481,16 +489,6 @@ impl<C> FlightSim for SessionFlight<C> {
     fn weapons(&self) -> Vec<WeaponId> {
         self.session()
             .map_or_else(|_| Vec::new(), Session::weapon_ids)
-    }
-
-    /// Forwards to `Session::load_description`, drawing on the flight's
-    /// chance; a failed session resolves only the conditional text, for a
-    /// new pilot (`Session::fresh_description`).
-    fn load_description(&mut self, raw: Option<&str>, movie: Option<&DescMovie>) -> String {
-        match &mut self.session {
-            Ok(session) => session.load_description(raw, movie, &mut self.chance),
-            Err(_) => Session::fresh_description(raw),
-        }
     }
 
     /// Why the session could not start, if it could not.
@@ -799,7 +797,7 @@ mod fake_catalog_checks;
 #[cfg(test)]
 mod tests {
     use nova_sim::flight_frame::DrawnBoxes;
-    use nova_sim::{StellarPick, Vec2};
+    use nova_sim::{DescMovie, StellarPick, Vec2};
 
     use super::*;
     use crate::flight::sim_port::fixture::unlike;
@@ -1039,18 +1037,26 @@ mod tests {
         assert_eq!(report, StepReport::default());
     }
 
+    /// The load of `raw`, naming `movie`, as the view sends it.
+    fn load(raw: Option<&str>, movie: Option<DescMovie>) -> FlightCommand {
+        FlightCommand::LoadDescription {
+            raw: raw.map(str::to_owned),
+            movie,
+        }
+    }
+
     #[test]
     fn a_failed_flight_loads_a_description_for_a_new_pilot() {
         let mut flight = failed();
         let raw = Some("{b5 \"set\" \"clear\"}, sir.");
         assert_eq!(
-            flight.load_description(raw, None),
-            Session::fresh_description(raw),
+            flight.apply(load(raw, None)),
+            Answer::Description(Session::fresh_description(raw)),
             "resolved by nova-sim"
         );
         assert_eq!(
-            flight.load_description(None, None),
-            Session::fresh_description(None)
+            flight.apply(load(None, None)),
+            Answer::Description(Session::fresh_description(None))
         );
     }
 
@@ -1101,7 +1107,10 @@ mod tests {
         let mut session = flight.session().expect("started").clone();
         let mut drawn = Counted::default();
         let expected = session.load_description(Some(raw), movie.as_ref(), &mut drawn);
-        assert_eq!(flight.load_description(Some(raw), movie.as_ref()), expected);
+        assert_eq!(
+            flight.apply(load(Some(raw), movie)),
+            Answer::Description(expected)
+        );
         assert!(drawn.0 > 0, "the l33t letters draw");
         assert_eq!(chance.borrow().0, drawn.0, "on the flight's chance");
         assert_eq!(flight.loaded_after_movie(), session.loaded_after_movie());

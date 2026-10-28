@@ -39,9 +39,9 @@ use nova_sim::mission::screens::OFFER_GAP_TICKS;
 use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    DescMovie, Good, HailView, HireList, JunkId, MapMarks, Market, MissionId, MissionInfo, News,
-    OutfitId, Outfitter, PlayerInfo, PlunderView, SavedNav, ShipId, ShipNaming, ShipRefusal,
-    Shipyard, StellarId, SystemId, WeaponId,
+    Good, HailView, HireList, JunkId, MapMarks, Market, MissionId, MissionInfo, News, OutfitId,
+    Outfitter, PlayerInfo, PlunderView, SavedNav, ShipId, ShipNaming, ShipRefusal, Shipyard,
+    StellarId, SystemId, WeaponId,
 };
 
 #[cfg(any(test, feature = "fixture"))]
@@ -74,20 +74,6 @@ pub trait FlightSim: MapSource + CommSource + PortSource + NameSource + PilotSou
     /// opens. None by default: a sim with no weapons.
     fn weapons(&self) -> Vec<WeaponId> {
         Vec::new()
-    }
-
-    /// Loads `raw`, a `dësc` the view read that may be missing, naming
-    /// `movie`, as `_LoadDescription` loads one
-    /// (`nova_sim::Session::load_description`): taken in for the pilot,
-    /// its `l33t` letters drawn on the flight's chance, its movie the last
-    /// loaded. A port method rather than a command, as it draws on the
-    /// flight's chance. By default the raw text unchanged, and a missing
-    /// one empty: how a flight resolves the text is its own
-    /// (`nova_sim::Session::fresh_description` for one that failed to
-    /// start).
-    fn load_description(&mut self, raw: Option<&str>, movie: Option<&DescMovie>) -> String {
-        let _ = movie;
-        raw.map(str::to_owned).unwrap_or_default()
     }
 
     /// Why the flight could not start, if it could not: the view then
@@ -248,9 +234,9 @@ pub trait CommSource {
 /// open or after a command, each defaulting to "nothing open": no
 /// exchange, outfitter, shipyard, hire list or news, nothing listed, no
 /// fuel sold, no intro seen. Those that settle the day's rolls on the
-/// flight's chance or draw on it take `&mut self`, as
-/// [`FlightSim::load_description`] does. What the player does there is a
-/// command ([`FlightSim::apply`]).
+/// flight's chance or draw on it take `&mut self`. What the player does
+/// there is a command ([`FlightSim::apply`]), and so is a description's
+/// load ([`FlightCommand::LoadDescription`]), an ask.
 pub trait PortSource {
     /// The exchange of the stellar landed on
     /// (`nova_sim::Session::market`).
@@ -487,11 +473,8 @@ mod tests {
     impl PilotSource for Defaults {}
 
     #[test]
-    fn by_default_a_description_loads_as_its_raw_text_and_a_missing_one_is_empty() {
-        let mut flight = Defaults;
-        let raw = "{b5 \"set\" \"clear\"}, sir.";
-        assert_eq!(flight.load_description(Some(raw), None), raw, "unchanged");
-        assert_eq!(flight.load_description(None, None), "");
+    fn by_default_a_flight_lists_no_weapons_and_started() {
+        let flight = Defaults;
         assert_eq!(flight.weapons(), []);
         assert_eq!(flight.failure(), None, "started");
     }

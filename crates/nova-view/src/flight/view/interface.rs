@@ -1,7 +1,7 @@
 //! [`FlightView`]'s status bar and description reads.
 
-use nova_sim::GovtId;
-use nova_sim::InterfaceLoad;
+use nova_sim::flight_frame::{Answer, FlightCommand};
+use nova_sim::{GovtId, InterfaceLoad};
 
 use crate::flight::catalog::StatusBars;
 use crate::flight::hud::{self};
@@ -11,17 +11,20 @@ use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use super::{BarFor, FlightView, Then};
 
 /// The descriptions, over the [`FlightSim`] port: read from the catalog
-/// here, taken in by the flight ([`FlightSim::load_description`]).
+/// here, taken in by the flight ([`FlightCommand::LoadDescription`]).
 impl<C: DescriptionSource + DescriptionGraphics, S: FlightSim> FlightView<C, S> {
     /// `dësc` `id`, loaded as `_LoadDescription` loads one for a screen
     /// that shows it now: read from the catalog, then taken in by the
-    /// flight ([`FlightSim::load_description`],
-    /// `nova_sim::Session::load_description`), its conditional text
+    /// flight ([`FlightCommand::LoadDescription`], an ask, so the kept
+    /// frame isn't filled after it; `nova_sim::Session::load_description`),
+    /// its conditional text
     /// resolved for the pilot, the remembered rank governments reset and
     /// parsed, its movie the last loaded ([`SessionFlight::loaded_after_movie`](crate::flight::SessionFlight::loaded_after_movie)),
     /// and in the `l33t` mode its letters drawn on the flight's chance.
     /// With a session that failed, only its conditional text is resolved,
     /// for a new pilot ([`Gate::FRESH`](nova_sim::control::Gate::FRESH)).
+    /// Any answer but [`Answer::Description`] is the raw text unchanged,
+    /// and a missing one empty.
     ///
     /// # Errors
     ///
@@ -32,12 +35,22 @@ impl<C: DescriptionSource + DescriptionGraphics, S: FlightSim> FlightView<C, S> 
         let raw = match self.catalog.description(id) {
             Ok(raw) => raw,
             Err(reason) => {
-                let _ = self.sim.load_description(None, None);
+                let _ = self.send(FlightCommand::LoadDescription {
+                    raw: None,
+                    movie: None,
+                });
                 return Err(reason);
             }
         };
         let movie = self.catalog.description_movie(id);
-        Ok(self.sim.load_description(Some(&raw), movie.as_ref()))
+        let answer = self.send(FlightCommand::LoadDescription {
+            raw: Some(raw.clone()),
+            movie,
+        });
+        Ok(match answer {
+            Answer::Description(text) => text,
+            _ => raw,
+        })
     }
 }
 
