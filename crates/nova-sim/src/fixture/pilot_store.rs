@@ -160,10 +160,12 @@ mod tests {
         ReadsAGhost,
         HasALastPilot,
         ForgetsWrites,
+        MangledText,
         KeepsTheFirstWrite,
         ListsOneKey,
         ListsTheRecord,
         IgnoresTheLastPilot,
+        NamesTheWrongLastPilot,
         KeepsDeletes,
         FailsASecondDelete,
         DeletesTheRecord,
@@ -193,6 +195,7 @@ mod tests {
             let text = self.inner.read(key)?;
             Ok(match self.flaw {
                 Flaw::ReadsAGhost if text.is_none() => Some("ghost".to_owned()),
+                Flaw::MangledText => text.map(|text| text.replace('\n', " ")),
                 _ => text,
             })
         }
@@ -232,6 +235,7 @@ mod tests {
         fn set_last_pilot(&self, key: &str) -> io::Result<()> {
             match self.flaw {
                 Flaw::IgnoresTheLastPilot => Ok(()),
+                Flaw::NamesTheWrongLastPilot => self.inner.set_last_pilot(ALPHA),
                 _ => self.inner.set_last_pilot(key),
             }
         }
@@ -259,10 +263,12 @@ mod tests {
             (Flaw::ReadsAGhost, "an empty store reads"),
             (Flaw::HasALastPilot, "an empty store's last pilot"),
             (Flaw::ForgetsWrites, "after a write, the read"),
+            (Flaw::MangledText, "after a write, the read"),
             (Flaw::KeepsTheFirstWrite, "doesn't replace"),
             (Flaw::ListsOneKey, "two keys list"),
             (Flaw::ListsTheRecord, "with a last-pilot record"),
             (Flaw::IgnoresTheLastPilot, "the last pilot is"),
+            (Flaw::NamesTheWrongLastPilot, "the last pilot is"),
             (Flaw::KeepsDeletes, "a deleted save"),
             (Flaw::FailsASecondDelete, "deleting again failed"),
             (Flaw::DeletesTheRecord, "changed the last-pilot record"),
