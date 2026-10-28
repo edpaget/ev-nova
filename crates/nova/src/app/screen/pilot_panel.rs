@@ -37,7 +37,7 @@ impl AppScreen {
         let Some(menu) = &mut self.menu else {
             return;
         };
-        let pilot = match &self.game {
+        let pilot = match &mut self.game {
             _ if self.note_hides_game => PanelPilot::None,
             None => PanelPilot::None,
             Some(game) => shown(game),
@@ -46,8 +46,10 @@ impl AppScreen {
     }
 }
 
-/// What the panel shows of the held `game`.
-fn shown(game: &FlightView<Rc<GameData>>) -> PanelPilot {
+/// What the panel shows of the held `game`: its pilot panel is asked of
+/// the flight once per change of it, and read from what the view kept
+/// until then ([`FlightView::pilot_panel`]).
+fn shown(game: &mut FlightView<Rc<GameData>>) -> PanelPilot {
     if game.sim().is_dying() {
         return game.sim().pilot().map_or(PanelPilot::Blank, |pilot| {
             PanelPilot::Dying(pilot.name().to_owned())

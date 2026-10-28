@@ -42,14 +42,6 @@ fn screen() -> PlayerInfo {
     }
 }
 
-/// The view's player info screen marked with the cheats setting.
-fn cheating(info: PlayerInfo) -> PlayerInfo {
-    PlayerInfo {
-        cheats: true,
-        ..info
-    }
-}
-
 /// A view over a flight in Sol with the cheats setting `cheats`.
 fn faked_cheats(cheats: bool) -> Faked {
     faked(in_sol()).with_overlays(FlightOverlays {
@@ -101,7 +93,6 @@ fn in_a_flight_that_never_started_p_asks_the_router_which_opens_nothing() {
         "a refused press is taken, as a failed session's always was"
     );
     assert_eq!(view.open_player_info(), None, "and nothing opens");
-    assert_eq!(view.player_info(), None);
 }
 
 #[test]
@@ -140,17 +131,12 @@ fn open_player_info_carries_the_cheats_setting() {
             .queue_answer(Answer::PlayerInfo(Some(Box::new(screen()))));
         let opened = view.open_player_info().expect("opens");
         assert_eq!(opened.cheats, cheats, "opened");
-        view.sim.pilot_mut().player_info = Some(screen());
-        assert_eq!(view.player_info().map(|info| info.cheats), Some(cheats));
     }
 }
 
-#[test]
-fn the_player_info_and_the_pilot_panel_are_the_flights() {
-    let mut view = faked_cheats(true);
-    assert_eq!(view.player_info(), None, "none shown");
-    assert_eq!(view.pilot_panel(), None);
-    let panel = PilotPanel {
+/// Ada's pilot panel, flying a shuttle named Bitsy.
+fn panel() -> PilotPanel {
+    PilotPanel {
         pilot_name: "Ada".to_owned(),
         ship_name: "Bitsy".to_owned(),
         ship_class: "Shuttle".to_owned(),
@@ -158,10 +144,42 @@ fn the_player_info_and_the_pilot_panel_are_the_flights() {
         legal_status: "Citizen".to_owned(),
         combat_rating: "Average".to_owned(),
         date: "Jun 23, 1177".to_owned(),
-    };
-    view.sim.pilot_mut().player_info = Some(screen());
-    view.sim.pilot_mut().pilot_panel = Some(panel.clone());
-    assert_eq!(view.player_info(), Some(cheating(screen())), "marked");
-    assert_eq!(view.pilot_panel(), Some(panel));
-    assert_eq!(sent_but_lines(&view), [], "reading them sends nothing");
+    }
+}
+
+#[test]
+fn the_pilot_panel_is_the_flights() {
+    let mut view = faked_cheats(true);
+    assert_eq!(view.pilot_panel(), None, "nothing answered");
+    view.change_sim(|_| {});
+    view.sim
+        .queue_screen(ScreenAnswer::PilotPanel(Box::new(panel())));
+    assert_eq!(view.pilot_panel(), Some(panel()));
+    assert_eq!(sent_but_lines(&view), [], "reading it sends nothing");
+}
+
+#[test]
+fn the_menus_pilot_panel_is_asked_once_until_the_flight_changes() {
+    let mut view = faked(in_sol());
+    view.sim
+        .queue_screen(ScreenAnswer::PilotPanel(Box::new(panel())));
+    for _ in 0..3 {
+        assert_eq!(view.pilot_panel(), Some(panel()));
+    }
+    assert_eq!(view.sim.screens_asked(), [ScreenAsk::PilotPanel], "once");
+    view.send(FlightCommand::CueCourse);
+    assert_eq!(view.pilot_panel(), None, "asked afresh: nothing answered");
+    for _ in 0..3 {
+        assert_eq!(view.pilot_panel(), None, "nothing kept, not asked again");
+    }
+    assert_eq!(
+        view.sim.screens_asked(),
+        [ScreenAsk::PilotPanel, ScreenAsk::PilotPanel],
+        "once more after the command, the answer of nothing kept too"
+    );
+    view.tick(TICK);
+    view.sim
+        .queue_screen(ScreenAnswer::PilotPanel(Box::new(panel())));
+    assert_eq!(view.pilot_panel(), Some(panel()), "after the frame's steps");
+    assert_eq!(view.sim.screens_asked().len(), 3);
 }

@@ -548,6 +548,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             pending_escort_dialog: None,
             pending_mission_info: None,
             pending_player_info: false,
+            kept_panel: super::player::KeptPanel::Unasked,
             pending_offer: None,
             pending_leads: Vec::new(),
             glow_rolls: HashedRolls::new(1),

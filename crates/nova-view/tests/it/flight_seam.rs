@@ -1614,8 +1614,9 @@ fn a_real_take_off_greets_naming_its_stellar_and_the_sessions_long_date() {
     );
 }
 
-/// `PilotSource` and the router's player-info request: P opens the
-/// session's player info, and the pilot panel is the session's.
+/// The router's player-info request and the pilot panel's screen ask: P
+/// opens the session's player info, and the pilot panel is the
+/// session's.
 #[test]
 fn a_real_p_opens_the_sessions_player_info_and_the_pilot_panel_is_the_sessions() {
     let data = data();
@@ -1629,7 +1630,6 @@ fn a_real_p_opens_the_sessions_player_info_and_the_pilot_panel_is_the_sessions()
     let session = view.session().expect("flying");
     let shown = session.player_info(&*data);
     let panel = session.pilot_panel(&*data);
-    assert_eq!(view.player_info(), Some(shown.clone()));
     assert_eq!(view.pilot_panel(), Some(panel));
     assert_eq!(view.open_player_info(), Some(shown), "it opens");
 }

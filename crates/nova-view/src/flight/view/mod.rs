@@ -1133,9 +1133,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// drain) and after each change behind the port
     /// ([`FlightView::change_sim`]), so whatever is drawn or read next
     /// reads the flight as it stands. A quiet tick fills it twice: the
-    /// catch-up and the steps.
+    /// catch-up and the steps. The pilot panel kept is forgotten with it
+    /// ([`player::KeptPanel`]), so the next read asks the flight afresh.
     pub(super) fn refresh_frame(&mut self) {
         self.sim.frame(&mut self.frame);
+        self.kept_panel = player::KeptPanel::Unasked;
     }
 
     /// Checks, in this crate's tests, that the kept frame is the flight's
@@ -1352,6 +1354,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen, for
     /// the router.
     pending_player_info: bool,
+    /// The main screen's pilot panel as last answered, until the frame
+    /// is next refilled ([`player::KeptPanel`]).
+    kept_panel: player::KeptPanel,
     /// The mission a person hailed or boarded just offered, for the
     /// router.
     pending_offer: Option<OfferPrompt>,

@@ -1,12 +1,14 @@
 //! [`FlightView`]'s player info screen and the main screen's pilot panel,
-//! over the [`FlightSim`] port: what each shows is the flight's
-//! ([`PilotSource`](crate::flight::sim_port::PilotSource)), the player info key's press and the screen's opening
-//! its commands ([`FlightCommand::PressPlayerInfo`],
-//! [`FlightCommand::OpenPlayerInfo`]), and the view marks the screen
-//! with its own cheats setting.
+//! over the [`FlightSim`] port: the player info key's press and the
+//! screen's opening are commands ([`FlightCommand::PressPlayerInfo`],
+//! [`FlightCommand::OpenPlayerInfo`], whose answer carries the screen),
+//! and the view marks the screen with its own cheats setting; the pilot
+//! panel is the flight's answer to its screen ask
+//! ([`ScreenAsk::PilotPanel`]), kept until the flight next changes
+//! ([`KeptPanel`]).
 
 use nova_sim::PlayerCommand;
-use nova_sim::flight_frame::{Answer, FlightCommand};
+use nova_sim::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
 use nova_sim::{PlayerInfo, pilot_panel::PilotPanel};
 
 use crate::ScreenAction;
@@ -14,31 +16,49 @@ use crate::flight::sim_port::FlightSim;
 
 use super::FlightView;
 
+/// The pilot panel the view keeps between two refills of its frame
+/// ([`FlightView::pilot_panel`]), so the menu, which reads the panel after
+/// every input and tick, asks the flight once per change. The deferral
+/// never crosses a boundary the player sees: every change of the flight
+/// refills the frame ([`FlightView::refresh_frame`]: a command, a frame's
+/// steps, a catch-up, a change behind the port), which forgets the panel
+/// before the next frame reads it. Unlike the floating map's, the panel
+/// can't change between two menu frames with no such change.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) enum KeptPanel {
+    /// Not asked since the frame was last refilled.
+    #[default]
+    Unasked,
+    /// Asked, and what the flight answered: none for nothing to answer.
+    Answered(Option<PilotPanel>),
+}
+
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
     /// asked for the player info screen since this was last taken, once:
-    /// the router opens it on [`FlightView::player_info`] over the paused
-    /// flight.
+    /// the router opens it on [`FlightView::open_player_info`] over the
+    /// paused flight.
     pub fn take_player_info_request(&mut self) -> bool {
         std::mem::take(&mut self.pending_player_info)
     }
 
-    /// What the player info screen shows, as the flight gives it
-    /// ([`PilotSource::player_info`](crate::flight::sim_port::PilotSource::player_info)), marked with the cheats setting,
-    /// changing nothing; `None` for a flight with no pilot to show, one
-    /// that failed. An opening of the screen is
-    /// [`FlightView::open_player_info`].
-    #[must_use]
-    pub fn player_info(&self) -> Option<PlayerInfo> {
-        Some(self.marked(self.sim.player_info()?))
-    }
-
     /// What the main screen's pilot panel says about the pilot, as the
-    /// flight gives it ([`PilotSource::pilot_panel`](crate::flight::sim_port::PilotSource::pilot_panel)), changing nothing;
-    /// `None` for a flight that failed.
-    #[must_use]
-    pub fn pilot_panel(&self) -> Option<PilotPanel> {
-        self.sim.pilot_panel()
+    /// flight gives it ([`ScreenAsk::PilotPanel`]), changing nothing;
+    /// `None` for a flight with nothing to answer. The menu reads it after
+    /// every input and tick, but the panel changes only with the flight,
+    /// and every change refills the kept frame, which forgets the panel
+    /// kept ([`KeptPanel`]): so it is asked once per change, and read from
+    /// what was kept until then, whatever the answer was.
+    pub fn pilot_panel(&mut self) -> Option<PilotPanel> {
+        if let KeptPanel::Answered(panel) = &self.kept_panel {
+            return panel.clone();
+        }
+        let panel = match self.sim.screen(ScreenAsk::PilotPanel) {
+            ScreenAnswer::PilotPanel(panel) => Some(*panel),
+            _ => None,
+        };
+        self.kept_panel = KeptPanel::Answered(panel.clone());
+        panel
     }
 
     /// The player info dialog opens ([`FlightCommand::OpenPlayerInfo`],
