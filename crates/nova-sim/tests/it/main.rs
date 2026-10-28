@@ -10,7 +10,6 @@ mod passes;
 mod asteroids;
 mod fleet_escorts;
 mod frame_rate;
-mod headless;
 mod idle_block;
 mod landing;
 mod lost_sight;

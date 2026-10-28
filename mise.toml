@@ -30,8 +30,8 @@ description = "Clippy over every crate and target, warnings are errors"
 run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
 
 [tasks.deny]
-description = "cargo-deny's bans over the default build's dependency graph (deny.toml)"
-run = "cargo deny --locked check bans"
+description = "cargo-deny's bans over the default build's dependency graph (deny.toml); stale `wrappers` are errors"
+run = "cargo deny --locked check -D unused-wrapper bans"
 
 [tasks.doc]
 description = "Rustdoc over every crate, private items included, with broken intra-doc links denied"
