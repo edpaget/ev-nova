@@ -355,12 +355,12 @@ fn the_flight_keys_held_are_the_views() {
 
 /// The frame of an intact flight in Sol, the player of ship 128 alone at
 /// its centre.
-fn sol() -> FlightFrame {
+pub(super) fn sol() -> FlightFrame {
     in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
 }
 
 /// [`sol`] with a jump under way, its own warp begun as `warping` says.
-fn under_way(warping: bool) -> FlightFrame {
+pub(super) fn under_way(warping: bool) -> FlightFrame {
     FlightFrame {
         jump_under_way: true,
         warping,
@@ -370,7 +370,7 @@ fn under_way(warping: bool) -> FlightFrame {
 
 /// Shows `frame` from now on, the kept frame filled from it, as a step
 /// leaves it.
-fn now_shows(view: &mut Faked, frame: FlightFrame) {
+pub(super) fn now_shows(view: &mut Faked, frame: FlightFrame) {
     view.sim.set_frame(frame);
     view.refresh_frame();
 }
@@ -480,14 +480,14 @@ fn the_jump_effect_waits_for_the_jump_itself_and_starts_at_once_when_it_has() {
 }
 
 /// A view whose flight warps to Alpha Centauri, its effect begun.
-fn warping() -> Faked {
+pub(super) fn warping() -> Faked {
     let mut view = faked(sol());
     jump_now(&mut view);
     view
 }
 
 /// Presses J on `view`'s flight, which begins its jump at once.
-fn jump_now(view: &mut Faked) {
+pub(super) fn jump_now(view: &mut Faked) {
     view.sim
         .queue_answer_showing(Answer::Jumped(SystemId(131)), under_way(true));
     view.jump_frame(true);
@@ -495,7 +495,7 @@ fn jump_now(view: &mut Faked) {
 }
 
 /// [`warping`]'s view with the frame's `_hyperGamma` at `gamma`.
-fn lit(view: &mut Faked, gamma: f32) {
+pub(super) fn lit(view: &mut Faked, gamma: f32) {
     now_shows(
         view,
         FlightFrame {
@@ -508,7 +508,7 @@ fn lit(view: &mut Faked, gamma: f32) {
 
 /// The frame of the flight arrived in Alpha Centauri (131), its jump
 /// over, and the session's event of the system entered drained next.
-fn arrived_in_alpha(view: &mut Faked) {
+pub(super) fn arrived_in_alpha(view: &mut Faked) {
     view.sim.set_frame(FlightFrame {
         system: SystemId(131),
         stellars: Vec::new(),
@@ -522,7 +522,7 @@ fn arrived_in_alpha(view: &mut Faked) {
 
 /// The warp's end: the frame says it is due, and the flight answers the
 /// arrival with `combat`.
-fn at_the_warps_end(view: &mut Faked, combat: Vec<CombatEvent>) {
+pub(super) fn at_the_warps_end(view: &mut Faked, combat: Vec<CombatEvent>) {
     now_shows(
         view,
         FlightFrame {

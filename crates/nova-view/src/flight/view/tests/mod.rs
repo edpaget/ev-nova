@@ -88,6 +88,7 @@ mod faked_hud;
 mod faked_landing;
 mod faked_missions;
 mod faked_player;
+mod faked_screen;
 mod faked_shops;
 mod faked_travel;
 mod faked_wording;
@@ -1359,7 +1360,7 @@ impl DescriptionGraphics for FakeCatalog {
             .map(|(_, movie)| movie.clone())
     }
 }
-fn drawn(view: &View) -> DrawList {
+fn drawn(view: &FlightView<FakeCatalog, impl FlightSim>) -> DrawList {
     let mut list = DrawList::new();
     view.draw(&mut list);
     list
@@ -1643,7 +1644,7 @@ fn ms(millis: u64) -> Duration {
 }
 
 /// Presses and releases `k`.
-fn tap(view: &mut View, k: Key) {
+fn tap(view: &mut FlightView<FakeCatalog, impl FlightSim>, k: Key) {
     view.input(&key(k, true));
     view.input(&key(k, false));
 }
@@ -3182,16 +3183,6 @@ fn status_now(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<nova_sim
     view.target_now(&view.frame_now()).map(|panel| panel.status)
 }
 
-/// Disables every ship.
-#[derive(Debug)]
-struct Disabling;
-
-impl DisableRule for Disabling {
-    fn disabled(&self, _armor: nova_sim::Gauge, _hull: &nova_sim::HullSpec) -> bool {
-        true
-    }
-}
-
 const QUAD: WeaponId = WeaponId(133);
 const IR: WeaponId = WeaponId(134);
 
@@ -3511,7 +3502,7 @@ fn orders(view: &View) -> Vec<Option<EscortOrder>> {
 }
 
 /// The interface sounds `view` holds, taken.
-fn ui_sounds(view: &mut View) -> Vec<UiSound> {
+fn ui_sounds(view: &mut FlightView<FakeCatalog, impl FlightSim>) -> Vec<UiSound> {
     view.take_sounds()
         .into_iter()
         .filter_map(|sound| match sound {
@@ -3592,10 +3583,6 @@ fn command_tap(view: &mut View, k: Key, option: bool) {
     view.input(&key(Key::Command, false));
 }
 
-fn cargo_aboard(view: &View) -> i64 {
-    view.sim().pilot().expect("flying").total_cargo()
-}
-
 /// Inspects the player until its flag is set; then it has looked the
 /// player over, and goes on to its goal.
 #[derive(Debug)]
@@ -3673,24 +3660,6 @@ fn destructible() -> View {
     })
 }
 
-/// A flight under fire from an NPC whose every hit disables, stepped
-/// until the player's ship is disabled.
-fn disabled_player() -> View {
-    let mut catalog = armed(1, &[]);
-    catalog.hulls[1] = hull_of(129, &[BLASTER]);
-    let mut view = now_disabling(
-        now_deciding(fighting(catalog, &placed(750, 650, 180)), Rc::new(Firing)),
-        Rc::new(Disabling),
-    );
-    for _ in 0..40 {
-        if fate_of(&view) == PlayerFate::Disabled {
-            return view;
-        }
-        view.tick(TICK);
-    }
-    panic!("the player's ship was never disabled");
-}
-
 /// Where `view` draws the system point `(x, y)`.
 fn on_screen(view: &View, (x, y): (f32, f32)) -> Point {
     view.camera().world_to_screen(at(x, y))
@@ -3734,9 +3703,6 @@ fn now_tick(view: &FlightView<FakeCatalog, impl FlightSim>) -> u64 {
 }
 const HYPER_SELECT: Key = Key::Char('\\');
 
-fn course(view: &View) -> Vec<SystemId> {
-    view.session().expect("flying").course().to_vec()
-}
 use nova_sim::GateKind;
 
 /// Stellar `id` at (`x`, `y`), with `flags2`, `links` and
@@ -3782,7 +3748,7 @@ fn system_of(view: &View) -> SystemId {
 }
 
 /// The course map's sounds `view` holds, taken with the rest.
-fn map_sounds(view: &mut View) -> Vec<UiSound> {
+fn map_sounds(view: &mut FlightView<FakeCatalog, impl FlightSim>) -> Vec<UiSound> {
     ui_sounds(view)
         .into_iter()
         .filter(|sound| matches!(sound, UiSound::MapOpened | UiSound::MapClosed))

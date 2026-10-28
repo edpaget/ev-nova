@@ -55,7 +55,7 @@ fn press_l(view: &mut Faked, answer: Answer) {
 /// The frame of the flight come out in Alpha Centauri (131), and the
 /// session's events of the system entered and its arrival's `message`
 /// drained next.
-fn came_out_in_alpha(view: &mut Faked, message: SimMessage) {
+pub(super) fn came_out_in_alpha(view: &mut Faked, message: SimMessage) {
     view.sim.set_frame(FlightFrame {
         system: SystemId(131),
         stellars: Vec::new(),
@@ -67,7 +67,7 @@ fn came_out_in_alpha(view: &mut Faked, message: SimMessage) {
 }
 
 /// The answer to a gate's entry that came out in Alpha Centauri.
-fn arrived() -> Answer {
+pub(super) fn arrived() -> Answer {
     Answer::Arrived {
         system: SystemId(131),
         combat: Vec::new(),
@@ -344,7 +344,7 @@ fn landing_in_a_flight_that_never_started_does_nothing() {
 
 /// [`faked`] in Sol with L pressed over its cleared hypergate, which
 /// offers Alpha Centauri (131) and Barnard (132): the hypergate map open.
-fn at_the_hypergate() -> Faked {
+pub(super) fn at_the_hypergate() -> Faked {
     let mut view = faked(sol());
     view.sim.map_mut().map_preselection = Some(SystemId(130));
     view.sim.queue_answer(at_gate(GateKind::Hypergate));
@@ -391,7 +391,7 @@ fn a_hypergate_without_links_says_nothing_and_opens_no_map() {
 
 /// Closes `view`'s hypergate map on `pick`, its flight answering the
 /// entry `answer`.
-fn close_on(view: &mut Faked, pick: Option<SystemId>, answer: Answer) {
+pub(super) fn close_on(view: &mut Faked, pick: Option<SystemId>, answer: Answer) {
     if pick.is_some() {
         view.map.select_gate(pick);
     }
