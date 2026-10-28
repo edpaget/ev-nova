@@ -25,6 +25,12 @@ impl<C, S: FlightSim + DevDesk> FlightView<C, S> {
     /// edits are the flight's own desk's ([`DevDesk`]), and the course
     /// map's galaxy names the places. `None` for a flight that could not
     /// start ([`FlightSim::failure`]).
+    ///
+    /// The desk's edits change the flight behind the port, and the kept
+    /// frame isn't filled afresh after them here: its caller resyncs the
+    /// view after every edit ([`FlightView::resync`], whose catch-up fills
+    /// it), as the app does (`App::pilot_desk_frame` runs
+    /// `AppScreen::after_pilot_edit`, whose first act is the resync).
     pub fn pilot_desk(&mut self) -> Option<FlightDesk<'_, S>> {
         if self.sim.failure().is_some() {
             return None;

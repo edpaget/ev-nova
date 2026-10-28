@@ -137,8 +137,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 self.send(FlightCommand::RestoreBarNav);
             }
             MapOpening::Port(screen) => {
-                port_screen_map::restore_nav(&mut self.sim, screen, &opened);
-                self.refresh_frame();
+                if let Some(command) = port_screen_map::restore_command(screen, &opened) {
+                    self.send(command);
+                }
             }
             MapOpening::Dialog(dialog, _) => {
                 if let Some(nav) = opened.nav {

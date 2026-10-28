@@ -177,3 +177,69 @@ fn a_status_redraw_after_a_change_behind_the_port_snapshots_the_change() {
         "the kept frame filled first"
     );
 }
+
+// Every change behind the port refills the kept frame where it is made
+// (rdm:phase/view-sim-seam/phase-20-view-frame-fills-per-tick).
+
+#[test]
+fn a_change_made_through_change_sim_is_in_the_kept_frame_at_once() {
+    let mut view = faked(player_at(5.0));
+    let given = view.change_sim(|sim| {
+        sim.set_frame(player_at(9.0));
+        7
+    });
+    assert_eq!(given, 7, "what the change gives");
+    assert_eq!(view.frame.player().position.x, 9.0);
+}
+
+#[test]
+fn entering_play_or_beginning_a_game_fills_the_kept_frame_after_the_flights_half() {
+    let mut view = faked(player_at(5.0));
+    view.enter_game(|sim| {
+        sim.set_frame(player_at(9.0));
+        true
+    });
+    assert_eq!(view.frame.player().position.x, 9.0, "entered");
+    view.enter_game(|sim| {
+        sim.set_frame(player_at(11.0));
+        false
+    });
+    assert_eq!(view.frame.player().position.x, 11.0, "entered nothing");
+    view.begin(|sim| {
+        sim.set_frame(player_at(13.0));
+        false
+    });
+    assert_eq!(view.frame.player().position.x, 13.0, "began nothing");
+}
+
+#[test]
+fn a_change_of_sound_preferences_is_sent_and_fills_the_kept_frame() {
+    let mut view = faked(player_at(5.0));
+    view.sim.set_frame(player_at(9.0));
+    view.set_sound_prefs(crate::SoundPrefs::default());
+    assert_eq!(
+        sent(&view).last(),
+        Some(&FlightCommand::SetSoundQuiet(
+            crate::SoundPrefs::default().alert_quiet()
+        ))
+    );
+    assert_eq!(view.frame.player().position.x, 9.0);
+}
+
+#[test]
+fn a_port_screen_maps_close_sends_its_restore_and_fills_the_kept_frame() {
+    let docked = |x| FlightFrame {
+        landed: Some(StellarId(128)),
+        ..player_at(x)
+    };
+    let mut view = faked(docked(5.0));
+    view.open_port_screen_map(crate::flight::PortScreen::Exchange);
+    view.sim.queue_answer_showing(Answer::Done, docked(9.0));
+    view.close_map();
+    assert_eq!(sent(&view).last(), Some(&FlightCommand::PutBackPortNav));
+    assert_eq!(
+        view.frame.player().position.x,
+        9.0,
+        "the frame the restore left"
+    );
+}

@@ -58,8 +58,10 @@ impl AppScreen {
         if flight.failure().is_some() || flight.sim().load_repaired() {
             return self;
         }
-        flight.sim_mut().resume();
-        flight.sim_mut().open_at_launch();
+        flight.change_sim(|sim| {
+            sim.resume();
+            sim.open_at_launch();
+        });
         self.hold_game(flight);
         let _ = self.settle_game();
         // Before the first frame, which no input or tick precedes.

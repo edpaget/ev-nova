@@ -1238,18 +1238,18 @@ fn a_gate_the_session_refuses_keeps_the_views_key_from_acting() {
     );
     view.close_map();
     assert!(!view.map_open());
-    let session = view.sim_mut().session_mut().expect("flying");
-    nova_sim::fixture::set_player_condition(
-        session,
-        nova_sim::Condition::Dying {
-            ticks_left: 100,
-            starting: false,
-        },
-    );
-    assert!(
-        !session.takes(nova_sim::PlayerCommand::Map),
-        "precondition: the session refuses the map"
-    );
+    let takes_the_map = view.change_sim(|flight| {
+        let session = flight.session_mut().expect("flying");
+        nova_sim::fixture::set_player_condition(
+            session,
+            nova_sim::Condition::Dying {
+                ticks_left: 100,
+                starting: false,
+            },
+        );
+        session.takes(nova_sim::PlayerCommand::Map)
+    });
+    assert!(!takes_the_map, "precondition: the session refuses the map");
     tap(&mut view, Key::Char('m'));
     assert!(!view.map_open(), "the map key refused");
 }
@@ -1412,10 +1412,12 @@ fn a_real_board_opens_the_plunder_dialog_on_the_sessions_boarding() {
             ..Collaborators::default()
         },
     );
-    let session = view.sim_mut().session_mut().expect("flying");
-    let trader = session.npcs()[0].id;
-    nova_sim::fixture::disable(session, trader);
-    nova_sim::fixture::put_player_over(session, trader);
+    view.change_sim(|flight| {
+        let session = flight.session_mut().expect("flying");
+        let trader = session.npcs()[0].id;
+        nova_sim::fixture::disable(session, trader);
+        nova_sim::fixture::put_player_over(session, trader);
+    });
     tap(&mut view, Key::Char('b'));
     let shown = view.take_boarding().expect("the plunder dialog opens");
     assert!(

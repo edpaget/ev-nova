@@ -517,7 +517,7 @@ impl AppScreen {
     pub fn transact(&mut self, change: impl FnOnce(&mut nova_sim::Pilot)) -> bool {
         self.flight
             .as_mut()
-            .is_some_and(|flight| flight.sim_mut().transact(change))
+            .is_some_and(|flight| flight.change_sim(|sim| sim.transact(change)))
     }
 
     /// The pilot flying, as the developer tools' desk; `None` before

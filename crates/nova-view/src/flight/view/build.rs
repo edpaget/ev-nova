@@ -160,10 +160,12 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     /// The ship, which the beginning puts at (50, 50), is drawn there from
     /// the first frame, not on its way from where the view was read, and
     /// the stars are scattered afresh about it when the flight is next
-    /// caught up with, as `_ResetGameData` scatters them (@0x1df5e). A
-    /// flight that begins nothing changes nothing here.
+    /// caught up with, as `_ResetGameData` scatters them (@0x1df5e). The
+    /// kept frame is filled afresh after `begin`, as after any change
+    /// behind the port ([`FlightView::change_sim`]). A flight that begins
+    /// nothing changes nothing else here.
     pub fn begin(&mut self, begin: impl FnOnce(&mut S) -> bool) {
-        if begin(&mut self.sim) {
+        if self.change_sim(begin) {
             self.place_ship();
             self.stars_due = true;
         }
@@ -172,10 +174,11 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     /// Enters play from the main screen, `enter` the flight's half (a
     /// `SessionFlight`'s `enter_game`), which says whether it entered: the
     /// stars are scattered afresh when the flight is next caught up with,
-    /// as `_EnterGameFromMainScreen` scatters them (@0x19f7c). A flight
-    /// that enters nothing changes nothing here.
+    /// as `_EnterGameFromMainScreen` scatters them (@0x19f7c). The kept
+    /// frame is filled afresh after `enter` ([`FlightView::change_sim`]).
+    /// A flight that enters nothing changes nothing else here.
     pub fn enter_game(&mut self, enter: impl FnOnce(&mut S) -> bool) {
-        if enter(&mut self.sim) {
+        if self.change_sim(enter) {
             self.stars_due = true;
         }
     }
@@ -190,12 +193,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
         &self.sim
     }
 
-    /// The flight the view shows, to change through the adapter's own API
-    /// ([`FlightView::sim`]): the edge's setup, and a pilot's resume and
-    /// openings. A change made here the view sees at its next frame, or at
-    /// once after [`FlightView::resync`].
-    pub fn sim_mut(&mut self) -> &mut S {
-        &mut self.sim
+    /// Changes the flight the view shows with `change`, through the
+    /// adapter's own API ([`FlightView::sim`]): the edge's setup, a
+    /// pilot's resume and openings, and a test's change behind the port.
+    /// Gives what `change` gives. The kept frame is filled afresh after
+    /// it, as after a command ([`FlightView::send`]) or a step, so no read
+    /// of the view's finds it stale; what the change raised the view
+    /// takes at its next catch-up ([`FlightView::resync`]).
+    pub fn change_sim<T>(&mut self, change: impl FnOnce(&mut S) -> T) -> T {
+        let changed = change(&mut self.sim);
+        self.refresh_frame();
+        changed
     }
 
     /// The flight with the HUD's text, and the course map's panels',
@@ -297,11 +305,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Sets the player's sound preferences, as
     /// [`FlightView::with_sound_prefs`] does: the view keeps them, and the
     /// flight is told whether the sound is quiet
-    /// ([`FlightCommand::SetSoundQuiet`]).
+    /// ([`FlightCommand::SetSoundQuiet`]), which the Red Alert's blink in
+    /// the HUD reads, so it is sent as any command is
+    /// ([`FlightView::send`]), the kept frame filled afresh after it.
     pub fn set_sound_prefs(&mut self, prefs: SoundPrefs) {
         self.sound_prefs = prefs;
-        self.sim
-            .apply(FlightCommand::SetSoundQuiet(prefs.alert_quiet()));
+        self.send(FlightCommand::SetSoundQuiet(prefs.alert_quiet()));
     }
 
     /// The flight with double time on or off, as `on` says (see the
@@ -315,11 +324,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Turns double time on or off, as `on` says, for the flight flown
     /// now and every one after it: the view keeps it, and the flight is
     /// told the key's state ([`FlightCommand::SetDoubleTimeKey`]), which
-    /// it latches at once, so the frame is filled afresh.
+    /// it latches at once, sent as any command is ([`FlightView::send`]),
+    /// the kept frame filled afresh after it.
     pub fn set_double_time(&mut self, on: bool) {
         self.double_time = on;
-        self.sim.apply(FlightCommand::SetDoubleTimeKey(on));
-        self.refresh_frame();
+        self.send(FlightCommand::SetDoubleTimeKey(on));
     }
 
     /// Whether double time is on, as the screen was last told.

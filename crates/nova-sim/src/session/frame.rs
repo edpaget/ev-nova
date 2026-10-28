@@ -868,6 +868,54 @@ pub(super) mod tests {
         assert_eq!(frame.death_descs, session.sabotage_death_descs());
     }
 
+    // What changes the session behind the port without a command
+    // (rdm:phase/view-sim-seam/phase-20-view-frame-fills-per-tick): the view
+    // keeps its frame across these, so none may change a fill.
+
+    #[test]
+    fn the_ports_rolling_reads_leave_the_frame_as_it_was() {
+        use crate::chance::NeverFires;
+        let catalog = crate::session::tests::shipbuying();
+        let mut session = crate::session::tests::outfitted(&catalog);
+        let before = filled(&session);
+        assert!(session.outfitter(&mut NeverFires).is_some(), "an outfitter");
+        assert_eq!(filled(&session), before, "the outfitter's rolls");
+        assert!(session.shipyard(&mut NeverFires).is_some(), "a shipyard");
+        assert_eq!(filled(&session), before, "the shipyard's rolls");
+        let _ = session.escorts_for_hire(&mut NeverFires);
+        assert_eq!(filled(&session), before, "the hire list's rolls");
+        let _ = session.ship_naming(ShipId(129), &catalog, &mut NeverFires);
+        assert_eq!(filled(&session), before, "the name prompt");
+        let _ = session.load_description(Some("{b5 \"set\" \"clear\"}"), None, &mut NeverFires);
+        assert_eq!(filled(&session), before, "a description's load");
+    }
+
+    #[test]
+    fn a_drain_leaves_the_frame_as_it_was() {
+        let mut session = Session::start(&three_stellars()).expect("starts");
+        session.select_stellar(StellarPick::Slot(0));
+        session.space.say(
+            &mut session.out,
+            crate::message::SimMessage::Buoy("Welcome.".to_owned()),
+        );
+        session
+            .out
+            .emit(crate::session::SessionEvent::GalaxyChanged);
+        session.out.save_due = true;
+        session.out.hold_expiry_due = true;
+        session.out.texts_queued += 1;
+        let before = filled(&session);
+        let mut drained = Vec::new();
+        session.drain_events(&mut drained);
+        assert!(
+            drained.len() >= 5,
+            "a sound, a message, an event, the save and the hold: {drained:?}"
+        );
+        let after = filled(&session);
+        assert_eq!(after.texts_queued, before.texts_queued, "a running count");
+        assert_eq!(after, before);
+    }
+
     #[test]
     fn a_failed_sessions_default_frame_holds_the_player_alone_in_full() {
         let frame = FlightFrame::default();

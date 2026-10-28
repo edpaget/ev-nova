@@ -495,10 +495,12 @@ fn led_berth_1() -> SlotSprites {
 fn carry_on(screen: &mut AppScreen, carry: nova_sim::CarryOver) {
     let rules = screen.rules;
     if let Some(flight) = screen.flight.as_mut() {
-        flight.sim_mut().set_up(nova_sim::SessionSetup {
-            rules,
-            carry,
-            ..nova_sim::SessionSetup::default()
+        flight.change_sim(|sim| {
+            sim.set_up(nova_sim::SessionSetup {
+                rules,
+                carry,
+                ..nova_sim::SessionSetup::default()
+            });
         });
     }
 }

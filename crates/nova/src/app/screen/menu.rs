@@ -406,8 +406,10 @@ impl AppScreen {
                     Ok(pilot) => {
                         let mut flight = self.pilot_flight(pilot, true, None);
                         // The load's heading, before any frame is drawn.
-                        flight.sim_mut().resume();
-                        flight.sim_mut().open_on_main_screen();
+                        flight.change_sim(|sim| {
+                            sim.resume();
+                            sim.open_on_main_screen();
+                        });
                         let repaired = flight.sim().load_repaired();
                         let held_before = self.game.is_some();
                         self.hold_game(flight);

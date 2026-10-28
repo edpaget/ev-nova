@@ -67,20 +67,19 @@ pub enum PortScreen {
     ShipDescription,
 }
 
-/// The restore of a port screen's map, after its close, through `sim`:
-/// the exchange's and the outfitter's put back their open-time save
-/// ([`FlightCommand::PutBackPortNav`], [`Session::put_back_port_nav`](nova_sim::Session::put_back_port_nav)),
-/// and the others the nav as the map opened
-/// ([`FlightCommand::RestoreMapNav`], [`Session::restore_map_nav`](nova_sim::Session::restore_map_nav)).
-pub(super) fn restore_nav(sim: &mut impl FlightSim, screen: PortScreen, opened: &MapOpened) {
+/// The command that restores a port screen's map after its close, for the
+/// view to send: the exchange's and the outfitter's put back their
+/// open-time save ([`FlightCommand::PutBackPortNav`],
+/// [`Session::put_back_port_nav`](nova_sim::Session::put_back_port_nav)),
+/// and the others the nav as the map `opened` with
+/// ([`FlightCommand::RestoreMapNav`],
+/// [`Session::restore_map_nav`](nova_sim::Session::restore_map_nav)), none
+/// when it saved none.
+pub(super) fn restore_command(screen: PortScreen, opened: &MapOpened) -> Option<FlightCommand> {
     match screen {
-        PortScreen::Exchange | PortScreen::Outfitter => {
-            sim.apply(FlightCommand::PutBackPortNav);
-        }
+        PortScreen::Exchange | PortScreen::Outfitter => Some(FlightCommand::PutBackPortNav),
         PortScreen::Spaceport | PortScreen::Shipyard | PortScreen::ShipDescription => {
-            if let Some(nav) = opened.nav {
-                sim.apply(FlightCommand::RestoreMapNav(nav));
-            }
+            opened.nav.map(FlightCommand::RestoreMapNav)
         }
     }
 }

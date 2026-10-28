@@ -90,7 +90,7 @@ pub fn open_flight<C: EdgeCatalog + 'static>(
 ) -> FlightView<C> {
     let slots_carried = setup.carry.slot_sprites.is_some();
     let mut view = opened(Rc::new(catalog), start, &setup.rules, collaborators);
-    view.sim_mut().set_up(setup);
+    view.change_sim(|flight| flight.set_up(setup));
     view.show_set_up(slots_carried);
     view
 }
