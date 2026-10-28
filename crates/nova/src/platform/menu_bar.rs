@@ -1,5 +1,7 @@
 //! The macOS menu bar's adapter: `nova_appkit`'s commands as the game's
-//! [`MenuCommand`]s, and its `MenuBar` as the core's [`MenuPort`].
+//! [`MenuCommand`]s, and its `MenuBar` as the core's [`MenuPort`]. The
+//! Apple events `nova_appkit` handles send the same commands, mapped the
+//! same way: the quit event is the menu's Quit.
 //!
 //! The menu bar takes its key equivalents before the window sees their
 //! press, so each one must be the chord of the command it sends, or a
@@ -67,6 +69,21 @@ mod tests {
         assert_eq!(menu_command(Command::Quit), MenuCommand::Quit);
         assert_eq!(menu_command(Command::Preferences), MenuCommand::Preferences);
         assert_eq!(menu_command(Command::About), MenuCommand::About);
+    }
+
+    #[test]
+    fn the_quit_apple_event_is_the_menus_quit_and_pref_its_preferences() {
+        let sent: Vec<_> = nova_appkit::APPLE_EVENTS
+            .iter()
+            .map(|event| (event.id, menu_command(event.command)))
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                (*b"quit", MenuCommand::Quit),
+                (*b"pref", MenuCommand::Preferences)
+            ]
+        );
     }
 
     /// The key a chord presses, as the menu bar's key equivalents name
