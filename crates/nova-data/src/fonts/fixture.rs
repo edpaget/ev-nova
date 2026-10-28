@@ -122,6 +122,26 @@ pub fn block_sfnt(family: &str) -> SfntBuilder {
         .table(b"post", block_post())
 }
 
+/// An `hdmx` table for a font of `glyphs` glyphs, with one device record
+/// per `(ppem, widths)`: each record's widths are one byte per glyph
+/// (missing ones 0), and records are padded to a multiple of four bytes.
+#[must_use]
+pub fn hdmx(glyphs: u16, records: &[(u8, &[u8])]) -> Vec<u8> {
+    let size = (2 + usize::from(glyphs)).next_multiple_of(4);
+    let mut table = be16(&[0, records.len() as u16]);
+    table.extend((size as u32).to_be_bytes());
+    for &(ppem, widths) in records {
+        let mut record = vec![0; size];
+        record[0] = ppem;
+        record[1] = widths.iter().copied().max().unwrap_or(0);
+        for (at, &width) in widths.iter().take(usize::from(glyphs)).enumerate() {
+            record[2 + at] = width;
+        }
+        table.extend(record);
+    }
+    table
+}
+
 /// Big-endian `u16`s.
 fn be16(words: &[u16]) -> Vec<u8> {
     words.iter().flat_map(|w| w.to_be_bytes()).collect()
