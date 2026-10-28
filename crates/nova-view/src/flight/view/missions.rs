@@ -4,15 +4,14 @@
 //! a person's offer held for the router. Each sends its command
 //! ([`FlightCommand`]) and hands back the flight's answer, a flight that
 //! refuses it (one that never started) answering as today's failed
-//! session did; what a screen lists is read through
-//! [`PortSource`](crate::flight::sim_port::PortSource). The bar's
+//! session did; what a screen lists is the flight's answer to its screen
+//! ask ([`ScreenAsk::MissionInfo`], [`ScreenAsk::RefusableOffer`]), the
+//! empty screen when the flight has nothing to answer. The bar's
 //! redraws around an accept, a refusal, an abort and an offer accepted at
 //! once are staged as their scripts ran ([`FlightView::stage_bar`]).
 
-use std::time::Duration;
-
-use nova_sim::flight_frame::{Answer, FlightCommand};
-use nova_sim::mission::screens::{NO_ACTIVE_MISSIONS, mac_ticks};
+use nova_sim::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
+use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, MissionComputer, MissionId, MissionInfo,
     MissionInfoPress, NotOffered, OfferPrompt, RefuseShown, VenueOffer,
@@ -69,24 +68,20 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// The mission info screen's view
-    /// ([`PortSource::mission_info`](crate::flight::sim_port::PortSource::mission_info)):
-    /// nothing listed for a flight that never started.
-    pub fn mission_info(&self) -> MissionInfo {
-        self.sim.mission_info()
+    /// The mission info screen's view ([`ScreenAsk::MissionInfo`]), asked
+    /// as the screen opens and after an abort: nothing listed for a flight
+    /// with nothing to answer.
+    pub fn mission_info(&mut self) -> MissionInfo {
+        match self.sim.screen(ScreenAsk::MissionInfo) {
+            ScreenAnswer::MissionInfo(info) => info,
+            _ => MissionInfo::default(),
+        }
     }
 
     /// Enters venue `loc` for its offers ([`FlightCommand::EnterOfferVenue`],
     /// `nova_sim::Session::enter_offer_venue`).
     pub fn enter_offer_venue(&mut self, loc: i16) {
         self.send(FlightCommand::EnterOfferVenue(loc));
-    }
-
-    /// The wait before a venue's next offer, drawn on the flight's chance
-    /// ([`PortSource::offer_gap`](crate::flight::sim_port::PortSource::offer_gap),
-    /// `nova_sim::mission::offer_gap`).
-    pub fn offer_gap(&mut self) -> Duration {
-        mac_ticks(self.sim.offer_gap())
     }
 
     /// The mission a person hailed or boarded just offered, once: the
@@ -205,14 +200,17 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// The offer dialog with a refuse button hides and redraws the whole
     /// bar before it answers (`_OfferOneMission` @0xa2df8 before the
     /// accept, @0xa2e93 before a refusal's `RefuseText`;
-    /// [`PortSource::refusable_offer_dialog`](crate::flight::sim_port::PortSource::refusable_offer_dialog));
+    /// `nova_sim::Session::refusable_offer_dialog`);
     /// the one-button dialog and the mission computer redraw nothing
     /// before theirs (@0xa2f52-0xa2fba, @0xa3b37-0xa3bb4). A refusal with
     /// no `RefuseText` skips the redraw (@0xa2e70-0xa2e78), but nothing
     /// shows before the dialog's own redraw after it, so ours redraws
-    /// either way.
+    /// either way. Which dialog it is, the flight answers
+    /// ([`ScreenAsk::RefusableOffer`]); a flight with nothing to answer
+    /// has no refuse button, so nothing is redrawn.
     fn redraw_before_answer(&mut self, mission: MissionId) {
-        if self.sim.refusable_offer_dialog(mission) {
+        if self.sim.screen(ScreenAsk::RefusableOffer(mission)) == ScreenAnswer::RefusableOffer(true)
+        {
             self.redraw_status();
         }
     }

@@ -331,10 +331,17 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
 }
 
 /// The mission computer's cut offer names are filled by the flight
-/// ([`PortSource::offer_text`](crate::flight::sim_port::PortSource::offer_text),
-/// [`Session::offer_text`]); a flight that failed fills none.
+/// ([`ScreenAsk::OfferText`], [`Session::offer_text`]), asked as a row is
+/// shown; none for a mission no longer offered, or a flight with nothing
+/// to answer.
 impl<C, S: FlightSim> crate::spaceport::OfferNames for FlightView<C, S> {
-    fn munged(&self, mission: MissionId, raw: &str) -> Option<String> {
-        self.sim.offer_text(mission, raw)
+    fn munged(&mut self, mission: MissionId, raw: &str) -> Option<String> {
+        match self.sim.screen(ScreenAsk::OfferText {
+            mission,
+            raw: raw.to_owned(),
+        }) {
+            ScreenAnswer::OfferText(filled) => Some(filled),
+            _ => None,
+        }
     }
 }

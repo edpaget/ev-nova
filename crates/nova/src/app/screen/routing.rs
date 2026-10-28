@@ -58,7 +58,7 @@ impl AppScreen {
         let accepted = spaceport.take_mission_accept();
         open_port_dialogs(spaceport, self.flight.as_mut().expect(ENTERED));
         if spaceport.take_mission_info_request() {
-            let info = self.flight.as_ref().expect(ENTERED).mission_info();
+            let info = self.flight.as_mut().expect(ENTERED).mission_info();
             spaceport.open_mission_info(info);
         }
         // An abort frees the slot, and the info goes back, closing once
@@ -176,7 +176,7 @@ impl AppScreen {
         if let Some(mission) = spaceport.take_computer_text_request()
             && let Some(row) = flight.show_computer_row(mission)
         {
-            spaceport.show_computer_row(&row, &*flight);
+            spaceport.show_computer_row(&row, &mut *flight);
         }
         load_info_text(spaceport, flight);
         if let Some(mission) = spaceport.take_offer_reload() {
@@ -265,22 +265,29 @@ impl AppScreen {
     /// answer showing the texts it queued and rearming the venue with a
     /// gap drawn on the router's chance (the spaceport never asks again);
     /// an accept changes the cash, so the shops are handed back.
+    ///
+    /// The gap is nova-sim's draw (`nova_sim::mission::offer_gap`), which
+    /// reads and writes nothing of the flight's: the router draws it on
+    /// its own chance, the one the flight's calls share
+    /// ([`AppScreen::with_chance`]), so it is the draw the flight made
+    /// before, on the same generator.
     pub(super) fn serve_offers(&mut self) {
         let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
             return;
         };
+        let chance = &mut self.chance;
         if spaceport.take_offer_restart() {
-            spaceport.rearm_offers(flight.offer_gap());
+            spaceport.rearm_offers(offer_gap(chance));
         }
         if let Some(venue) = spaceport.take_offer_request() {
             match flight.next_offer(venue) {
                 Some(VenueOffer::Prompt(prompt)) => spaceport.open_offer(prompt),
                 Some(VenueOffer::Accepted { .. }) => {
                     spaceport.show_mission_texts(flight.take_mission_texts());
-                    spaceport.rearm_offers(flight.offer_gap());
+                    spaceport.rearm_offers(offer_gap(chance));
                     refresh_spaceport(spaceport, flight);
                 }
-                None => spaceport.rearm_offers(flight.offer_gap()),
+                None => spaceport.rearm_offers(offer_gap(chance)),
             }
         }
         if let Some((mission, choice)) = spaceport.take_offer_choice() {
@@ -300,7 +307,7 @@ impl AppScreen {
                 }
             }
             spaceport.show_mission_texts(flight.take_mission_texts());
-            spaceport.rearm_offers(flight.offer_gap());
+            spaceport.rearm_offers(offer_gap(chance));
             refresh_spaceport(spaceport, flight);
         }
     }
@@ -610,4 +617,11 @@ pub(super) enum Overlay {
     OpenPilot,
     LoadNote,
     Question,
+}
+
+/// The wait before a venue's next offer, drawn on `chance`
+/// (`nova_sim::mission::offer_gap`, `_BarFilter` @0x47be0,
+/// `_OfferMissionFromPort` @0xa37a3), in the Mac's ticks as a duration.
+fn offer_gap(chance: &mut dyn nova_sim::Chance) -> std::time::Duration {
+    nova_sim::mission::screens::mac_ticks(nova_sim::mission::offer_gap(chance))
 }

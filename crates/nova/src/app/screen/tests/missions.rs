@@ -614,6 +614,69 @@ fn offer_a_moment_after_a_long_offer(clock: RuleSource) -> Option<MissionId> {
     offered(&screen)
 }
 
+/// A chance that never fires and draws the first outcome of every
+/// range.
+struct FirstOutcomes;
+
+impl Chance for FirstOutcomes {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, _n: u32) -> u32 {
+        0
+    }
+}
+
+/// The trade center's offer at a stellar offering missions 130 and 131,
+/// the router rolling on `chance` if given: 130 refused, then whether 131
+/// is offered 700 ms later (42 of the Mac's ticks), and 1.1 s later.
+fn offered_after_a_refusal(chance: Option<SharedChance>) -> [Option<MissionId>; 2] {
+    let store = MemoryPilots::new();
+    let mut screen = AppScreen::new(venue_data_of(TRADE_CENTER, &[130, 131]));
+    if let Some(chance) = chance {
+        screen = screen.with_chance(chance);
+    }
+    let mut screen = screen
+        .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
+    create(&mut screen, "Ada");
+    land_twice(&mut screen);
+    click_port_item(&mut screen, 7);
+    let offered = |screen: &AppScreen| {
+        offered_mission(
+            spaceport(screen)
+                .open_trade()
+                .and_then(TradeScreen::offer_dialog),
+        )
+    };
+    assert_eq!(offered(&screen), Some(MissionId(130)), "precondition");
+    screen.input(&key(Key::Char('n'), true));
+    screen.tick(Duration::from_millis(700));
+    let early = offered(&screen);
+    screen.tick(Duration::from_millis(400));
+    [early, offered(&screen)]
+}
+
+#[test]
+fn a_venues_next_offer_waits_the_gap_drawn_on_the_routers_chance() {
+    // `OFFER_GAP_TICKS` (30) plus a draw below 30: never firing, the
+    // draw is its last outcome, 29, so 59 ticks; drawing first outcomes,
+    // 0, so 30 ticks.
+    assert_eq!(
+        offered_after_a_refusal(None),
+        [None, Some(MissionId(131))],
+        "the default chance's long gap"
+    );
+    let first = SharedChance::new(Rc::new(RefCell::new(FirstOutcomes)));
+    assert_eq!(
+        offered_after_a_refusal(Some(first)),
+        [Some(MissionId(131)), Some(MissionId(131))],
+        "the short gap the router's chance drew"
+    );
+}
+
 #[test]
 fn the_routers_offer_clock_reaches_the_venues() {
     assert_eq!(

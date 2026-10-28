@@ -15,7 +15,7 @@ use super::faked_travel::{faked_lasts, sent_but_lines};
 use super::*;
 use crate::flight::radar::RadarScene;
 use nova_sim::flight_frame::FlightEvent;
-use nova_sim::mission::screens::{mac_ticks, offer_labels};
+use nova_sim::mission::screens::offer_labels;
 use nova_sim::navigation::NavMode;
 use nova_sim::{
     ComputerRow, Gauge, InfoRow, MissionComputer, MissionInfo, MissionInfoPress, OfferPrompt,
@@ -115,17 +115,6 @@ fn entering_a_venue_and_its_next_offer_go_through_the_flight() {
             FlightCommand::NextOffer(1),
         ]
     );
-}
-
-#[test]
-fn the_wait_before_a_venues_next_offer_is_the_flights_in_mac_ticks() {
-    let mut view = docked();
-    assert_eq!(
-        view.offer_gap(),
-        mac_ticks(nova_sim::mission::screens::OFFER_GAP_TICKS)
-    );
-    view.sim.port_mut().offer_gap = Some(37);
-    assert_eq!(view.offer_gap(), mac_ticks(37));
 }
 
 #[test]
@@ -263,7 +252,7 @@ fn a_brief_text_shows_over_the_bar_as_on_accept_left_it() {
             let what = format!("changes {changes}, {how:?}");
             let mut view = docked_upgrading();
             if how == Accepted::Offer {
-                view.sim.port_mut().refusable = vec![MissionId(131)];
+                view.sim.queue_screen(ScreenAnswer::RefusableOffer(true));
             }
             let before = view.reserves();
             stale(&mut view);
@@ -307,7 +296,7 @@ fn a_brief_text_shows_over_the_bar_as_on_accept_left_it() {
 fn a_refuse_text_shows_over_the_bar_from_before_the_refusal() {
     for government in [None, UNDER_129] {
         let mut view = docked_upgrading();
-        view.sim.port_mut().refusable = vec![MissionId(130)];
+        view.sim.queue_screen(ScreenAnswer::RefusableOffer(true));
         let before = view.reserves();
         // The `RefuseText` noting the bar before `OnRefuse`, whose load
         // and `M` follow it.
@@ -472,9 +461,13 @@ fn a_docked_on_abort_intf_change_redraws_the_whole_bar_at_the_operator() {
 #[test]
 fn the_mission_info_its_rows_and_an_abort_go_through_the_flight() {
     let mut view = docked();
-    assert_eq!(view.mission_info().rows, []);
-    view.sim.port_mut().mission_info = Some(info());
+    assert_eq!(view.mission_info().rows, [], "nothing answered");
+    view.sim.queue_screen(ScreenAnswer::MissionInfo(info()));
     assert_eq!(view.mission_info(), info());
+    assert_eq!(
+        view.sim.screens_asked(),
+        [ScreenAsk::MissionInfo, ScreenAsk::MissionInfo]
+    );
     view.sim
         .queue_answer(Answer::InfoRow(Some("Quick.".to_owned())));
     assert_eq!(view.show_info_row(0).as_deref(), Some("Quick."));
@@ -593,10 +586,11 @@ const FLIGHT_ANSWERS: [(&str, bool, bool); 3] = [
 ];
 
 /// A view over a flight in Sol, the HUD's cadence read as `cadence`
-/// says, its bar drawn, with an offer of mission 130 (refusable unless
-/// `unrefusable`) taken, and the answer the flight gives queued: its
-/// script's tank and its text, and the Moon (129) selected after it.
-fn offered_in_flight(cadence: RuleSource, unrefusable: bool, refuse: bool) -> Faked {
+/// says, its bar drawn, with an offer of mission 130 taken, and the
+/// answer the flight gives queued: its script's tank and its text, and
+/// the Moon (129) selected after it. Over flight, the dialog's refuse
+/// button isn't asked: both dialogs redraw the bar before the answer.
+fn offered_in_flight(cadence: RuleSource, refuse: bool) -> Faked {
     let frame = FlightFrame {
         nav_mode: NavMode::Stellar(Some(StellarId(129))),
         ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
@@ -604,9 +598,6 @@ fn offered_in_flight(cadence: RuleSource, unrefusable: bool, refuse: bool) -> Fa
     let mut frame = frame;
     frame.hud.reserves = full();
     let mut view = docked_on(catalog(), frame, cadence);
-    if !unrefusable {
-        view.sim.port_mut().refusable = vec![MissionId(130)];
-    }
     view.pending_offer = Some(offer());
     view.take_offer().expect("offered");
     let tanked = Reserves {
@@ -638,11 +629,16 @@ fn answer_offer(view: &mut Faked, refuse: bool, what: &str) {
 
 #[test]
 fn an_offer_answered_over_flight_shows_its_text_over_the_pre_answer_bar() {
-    for (what, unrefusable, refuse) in FLIGHT_ANSWERS {
-        let mut view = offered_in_flight(RuleSource::Engine, unrefusable, refuse);
+    for (what, _one_button, refuse) in FLIGHT_ANSWERS {
+        let mut view = offered_in_flight(RuleSource::Engine, refuse);
         let before = view.reserves();
         let nav = view.nav_shown(&view.frame_now());
         answer_offer(&mut view, refuse, what);
+        assert_eq!(
+            view.sim.screens_asked(),
+            [],
+            "{what}: no refuse button asked"
+        );
         assert_eq!(
             view.reserves().fuel.max,
             before.fuel.max + 100.0,
@@ -680,8 +676,8 @@ fn an_offer_answered_over_flight_shows_its_text_over_the_pre_answer_bar() {
 
 #[test]
 fn under_the_bible_cadence_flights_gauges_stay_live_under_an_offers_text() {
-    for (what, unrefusable, refuse) in FLIGHT_ANSWERS {
-        let mut view = offered_in_flight(RuleSource::Bible, unrefusable, refuse);
+    for (what, _one_button, refuse) in FLIGHT_ANSWERS {
+        let mut view = offered_in_flight(RuleSource::Bible, refuse);
         answer_offer(&mut view, refuse, what);
         assert_eq!(view.take_mission_texts().len(), 1, "{what}: its text");
         assert_eq!(
@@ -730,19 +726,23 @@ fn the_offer_names_are_the_flights() {
     use crate::spaceport::OfferNames;
     let mut view = faked(in_sol());
     assert_eq!(
-        OfferNames::munged(&view, MissionId(130), "Run <PAY>"),
+        OfferNames::munged(&mut view, MissionId(130), "Run <PAY>"),
         None,
-        "nothing offered"
+        "nothing answered"
     );
-    view.sim.port_mut().offer_texts = vec![(MissionId(130), "Run 1,000".to_owned())];
+    view.sim
+        .queue_screen(ScreenAnswer::OfferText("Run 1,000".to_owned()));
     assert_eq!(
-        OfferNames::munged(&view, MissionId(130), "Run <PAY>").as_deref(),
+        OfferNames::munged(&mut view, MissionId(130), "Run <PAY>").as_deref(),
         Some("Run 1,000"),
         "the flight's munge"
     );
+    let offer = |mission: i16, raw: &str| ScreenAsk::OfferText {
+        mission: MissionId(mission),
+        raw: raw.to_owned(),
+    };
     assert_eq!(
-        OfferNames::munged(&view, MissionId(999), "Run"),
-        None,
-        "not offered"
+        view.sim.screens_asked(),
+        [offer(130, "Run <PAY>"), offer(130, "Run <PAY>")]
     );
 }
