@@ -136,8 +136,20 @@ impl PilotStore for FilePilots {
 #[cfg(test)]
 mod tests {
     use nova_sim::PilotKeeper;
+    use nova_sim::fixture::pilot_store::check_contract;
 
     use super::*;
+
+    #[test]
+    fn file_pilots_meet_the_pilot_store_contract() {
+        // The directory doesn't exist yet: a missing directory holds no
+        // pilots, and the first write makes it.
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        assert_eq!(
+            check_contract(&FilePilots::new(dir.path().join("Pilots"))),
+            Ok(())
+        );
+    }
 
     fn names(dir: &Path) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(dir)

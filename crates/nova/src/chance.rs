@@ -52,7 +52,16 @@ impl Chance for SplitMix {
 
 #[cfg(test)]
 mod tests {
+    use nova_sim::fixture::chance::check_contract;
+
     use super::*;
+
+    #[test]
+    fn splitmix_meets_the_chance_contract() {
+        for seed in [0, 1, u64::MAX] {
+            assert_eq!(check_contract(&mut SplitMix::new(seed)), Ok(()));
+        }
+    }
 
     #[test]
     fn a_seed_gives_splitmix64s_sequence() {

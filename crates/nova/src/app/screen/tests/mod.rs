@@ -22,6 +22,7 @@ use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::map::ENTER_BUTTON;
 use nova_view::geometry::Bounds;
 use nova_view::menu::fixture::main_screen_resources;
+use nova_view::movie::fixture::{Call, MockMoviePlayer};
 use nova_view::ships::{ShipBrowser, ShipId};
 use nova_view::sound::SimSound;
 use nova_view::spaceport::layout::LEAVE_ITEM;
@@ -2037,35 +2038,14 @@ fn active(screen: &AppScreen) -> Vec<MissionId> {
         .collect()
 }
 
-/// A movie player logging each start and stop, whose movies end on
-/// their second advance.
-#[derive(Default)]
-struct Reel {
-    log: std::cell::RefCell<Vec<String>>,
-    advanced: std::cell::Cell<u32>,
-}
-
-impl MoviePlayer for Reel {
-    fn start(&self, file: &str) -> Option<(u32, u32)> {
-        self.log.borrow_mut().push(format!("start {file}"));
-        self.advanced.set(0);
-        Some((160, 120))
-    }
-
-    fn advance(&self, _dt: Duration) -> bool {
-        self.advanced.set(self.advanced.get() + 1);
-        self.advanced.get() < 2
-    }
-
-    fn stop(&self) {
-        self.log.borrow_mut().push("stop".to_owned());
-    }
-
-    fn draw_frame(&self, _rect: Bounds, _list: &mut DrawList) {}
-}
-
-fn reeled(reel: &Reel) -> Vec<String> {
-    reel.log.borrow().clone()
+/// The starts and stops a movie player was asked for, in order: a
+/// [`MockMoviePlayer`] whose movies, 160 x 120, end on their second
+/// advance.
+fn reeled(reel: &MockMoviePlayer) -> Vec<Call> {
+    reel.calls()
+        .into_iter()
+        .filter(|call| *call != Call::Advance)
+        .collect()
 }
 
 // The status bar in port.

@@ -50,13 +50,13 @@ fn a_pilot_desk_move_offers_the_new_stellars_spaceport_mission() {
 /// The router landed at Alpha Prime, whose spaceport offers mission
 /// 130 of `Flags` `flags`, its offer `dësc` of `text` naming the movie
 /// "Offer.mov" played as `movie` says, with movies played through a
-/// new [`Reel`] and `prefs`.
+/// new [`MockMoviePlayer`] and `prefs`.
 pub(super) fn landed_filmed(
     flags: u16,
     text: &str,
     movie: u16,
     prefs: Prefs,
-) -> (AppScreen, Rc<Reel>) {
+) -> (AppScreen, Rc<MockMoviePlayer>) {
     let (mut screen, reel) = filmed(flags, text, movie, prefs);
     create(&mut screen, "Ada");
     land_twice(&mut screen);
@@ -64,14 +64,14 @@ pub(super) fn landed_filmed(
 }
 
 /// [`landed_filmed`], before any pilot is made.
-fn filmed(flags: u16, text: &str, movie: u16, prefs: Prefs) -> (AppScreen, Rc<Reel>) {
+fn filmed(flags: u16, text: &str, movie: u16, prefs: Prefs) -> (AppScreen, Rc<MockMoviePlayer>) {
     let mut mission = venue_mission(SPACEPORT);
     mission[0x50..0x52].copy_from_slice(&flags.to_be_bytes());
     let offer = filmed_desc_of(text, "Offer.mov", movie);
     let fork = game_data_fork(true, true, true, 100, b"", b"", None)
         .resource(Mission::TYPE, 130, Some(b"Venue job"), &mission)
         .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &offer);
-    let reel = Rc::new(Reel::default());
+    let reel = MockMoviePlayer::playing((160, 120), 2);
     let store = MemoryPilots::new();
     let screen = AppScreen::new(loaded(&fork))
         .with_prefs(prefs)
@@ -119,13 +119,21 @@ fn quicktime_movies_turned_on_in_the_dialog_play_again() {
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     screen.tick(Duration::from_millis(16));
-    assert_eq!(reeled(&reel), ["start Offer.mov"], "before the dialog");
+    assert_eq!(
+        reeled(&reel),
+        [Call::Start("Offer.mov".into())],
+        "before the dialog"
+    );
     let (mut screen, reel) = filmed(0, "Job.", 0x0001, off);
     toggle_movies(&mut screen);
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     screen.input(&key(Key::Enter, true));
-    assert_eq!(reeled(&reel), ["start Offer.mov"], "after the answer");
+    assert_eq!(
+        reeled(&reel),
+        [Call::Start("Offer.mov".into())],
+        "after the answer"
+    );
 }
 
 #[test]
@@ -135,10 +143,14 @@ fn the_spaceports_offer_plays_its_after_movie_once_answered() {
     assert!(reeled(&reel).is_empty(), "not before the dialog");
     screen.input(&key(Key::Enter, true));
     assert_eq!(active(&screen), [MissionId(130)]);
-    assert_eq!(reeled(&reel), ["start Offer.mov"], "after the answer");
+    assert_eq!(
+        reeled(&reel),
+        [Call::Start("Offer.mov".into())],
+        "after the answer"
+    );
     screen.tick(Duration::from_millis(16));
     screen.tick(Duration::from_millis(16));
-    assert_eq!(reeled(&reel), ["start Offer.mov", "stop"]);
+    assert_eq!(reeled(&reel), [Call::Start("Offer.mov".into()), Call::Stop]);
 }
 
 #[test]
@@ -146,18 +158,22 @@ fn the_spaceports_offer_plays_its_before_movie_and_a_refusal_after_it_plays_none
     let (mut screen, reel) = landed_filmed(0, "Job.", 0, Prefs::default());
     assert!(reeled(&reel).is_empty(), "staged until the spaceport ticks");
     screen.tick(Duration::from_millis(16));
-    assert_eq!(reeled(&reel), ["start Offer.mov"]);
+    assert_eq!(reeled(&reel), [Call::Start("Offer.mov".into())]);
     screen.tick(Duration::from_millis(16));
     screen.input(&key(Key::Char('n'), true));
     assert_eq!(active(&screen), []);
-    assert_eq!(reeled(&reel), ["start Offer.mov", "stop"], "none after");
+    assert_eq!(
+        reeled(&reel),
+        [Call::Start("Offer.mov".into()), Call::Stop],
+        "none after"
+    );
 }
 
 /// The router landed at Alpha Prime, whose spaceport offers mission
 /// 130 of the `mïsn` bytes `mission`, its offer `dësc` "Job." naming
 /// "Offer.mov" played after, with the `dësc`s `descs` too, movies
-/// played through a new [`Reel`].
-fn landed_offering(mission: &[u8], descs: &[(i16, Vec<u8>)]) -> (AppScreen, Rc<Reel>) {
+/// played through a new [`MockMoviePlayer`].
+fn landed_offering(mission: &[u8], descs: &[(i16, Vec<u8>)]) -> (AppScreen, Rc<MockMoviePlayer>) {
     let mut fork = game_data_fork(true, true, true, 100, b"", b"", None)
         .resource(Mission::TYPE, 130, Some(b"Venue job"), mission)
         .resource(
@@ -169,7 +185,7 @@ fn landed_offering(mission: &[u8], descs: &[(i16, Vec<u8>)]) -> (AppScreen, Rc<R
     for (id, desc) in descs {
         fork = fork.resource(Desc::TYPE, *id, None, desc);
     }
-    let reel = Rc::new(Reel::default());
+    let reel = MockMoviePlayer::playing((160, 120), 2);
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(loaded(&fork))
         .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
@@ -205,7 +221,12 @@ fn a_no_room_text_replays_the_spaceport_offers_after_movie() {
     ticked(&mut screen, 6);
     assert_eq!(
         reeled(&reel),
-        ["start Offer.mov", "stop", "start Offer.mov", "stop"],
+        [
+            Call::Start("Offer.mov".into()),
+            Call::Stop,
+            Call::Start("Offer.mov".into()),
+            Call::Stop
+        ],
         "the STR# text's after-check reads the offer's (@0x5b40b), and the offer's \
          after-check plays it again (@0xa3580)"
     );
@@ -232,7 +253,12 @@ fn a_refuse_texts_after_movie_plays_twice_and_the_offers_not_at_all() {
     ticked(&mut screen, 6);
     assert_eq!(
         reeled(&reel),
-        ["start Refuse.mov", "stop", "start Refuse.mov", "stop"],
+        [
+            Call::Start("Refuse.mov".into()),
+            Call::Stop,
+            Call::Start("Refuse.mov".into()),
+            Call::Stop
+        ],
         "nothing reloads the offer after the refuse text (@0xa2eb5-0xa2f4d)"
     );
 }
@@ -252,13 +278,13 @@ fn a_refused_spaceport_offer_without_a_refuse_text_stays_drawn_under_its_after_m
     let (mut screen, reel) = landed_offering(&venue_mission(SPACEPORT), &[]);
     assert!(texts_drawn(&screen).contains(&"Job.".to_owned()));
     screen.input(&key(Key::Char('n'), true));
-    assert_eq!(reeled(&reel), ["start Offer.mov"]);
+    assert_eq!(reeled(&reel), [Call::Start("Offer.mov".into())]);
     assert!(
         texts_drawn(&screen).contains(&"Job.".to_owned()),
         "not hidden (@0xa2e70-0xa2e78): under its after-movie until @0xa361e"
     );
     ticked(&mut screen, 3);
-    assert_eq!(reeled(&reel), ["start Offer.mov", "stop"]);
+    assert_eq!(reeled(&reel), [Call::Start("Offer.mov".into()), Call::Stop]);
     assert!(
         !texts_drawn(&screen).contains(&"Job.".to_owned()),
         "disposed"
@@ -312,7 +338,7 @@ fn closing_the_mission_info_over_the_spaceport_offer_reloads_the_offers_after_mo
             Some(b"Offer"),
             &filmed_desc_of("Job.", "Offer.mov", 0x0001),
         );
-    let reel = Rc::new(Reel::default());
+    let reel = MockMoviePlayer::playing((160, 120), 2);
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(loaded(&fork))
         .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
@@ -347,7 +373,7 @@ fn closing_the_mission_info_over_the_spaceport_offer_reloads_the_offers_after_mo
     ticked(&mut screen, 3);
     assert_eq!(
         reeled(&reel),
-        ["start Offer.mov", "stop"],
+        [Call::Start("Offer.mov".into()), Call::Stop],
         "the info screen loaded the QuickBrief's, and its close loaded the offer's \
          again (@0xa335c)"
     );
@@ -361,7 +387,7 @@ fn the_mission_computers_refusal_plays_the_last_descs_after_movie() {
         None,
         &filmed_desc_of("A port.", "Port.mov", 0x0001),
     );
-    let reel = Rc::new(Reel::default());
+    let reel = MockMoviePlayer::playing((160, 120), 2);
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(loaded(&fork))
         .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
@@ -379,7 +405,7 @@ fn the_mission_computers_refusal_plays_the_last_descs_after_movie() {
     screen.input(&key(Key::Enter, true));
     assert_eq!(
         reeled(&reel),
-        ["start Port.mov"],
+        [Call::Start("Port.mov".into())],
         "the stellar's dësc was the last loaded (@0x5f96b), and the refusal's \
          after-check reads it (@0xa3956, @0x5b40b)"
     );
@@ -405,7 +431,7 @@ fn a_persons_offer_opened_over_a_mission_text_over_flight_waits_for_its_movie() 
     ticked(&mut screen, 4);
     assert_eq!(
         reeled(&reel),
-        ["start Text.mov", "stop"],
+        [Call::Start("Text.mov".into()), Call::Stop],
         "`_PlayQTMovie` is modal: the offer's movie waits for the text and its movie"
     );
     assert_eq!(screen.showing(), Showing::MissionText);
@@ -418,11 +444,15 @@ fn a_persons_offer_opened_over_a_mission_text_over_flight_waits_for_its_movie() 
     );
     screen.input(&key(Key::Enter, true));
     assert!(screen.flight_mission_text().is_none(), "Return closes it");
-    assert_eq!(reeled(&reel), ["start Text.mov", "stop"]);
+    assert_eq!(reeled(&reel), [Call::Start("Text.mov".into()), Call::Stop]);
     screen.tick(Duration::from_millis(16));
     assert_eq!(
         reeled(&reel),
-        ["start Text.mov", "stop", "start Offer.mov"],
+        [
+            Call::Start("Text.mov".into()),
+            Call::Stop,
+            Call::Start("Offer.mov".into())
+        ],
         "then the offer's, as its first tick comes"
     );
     assert_eq!(screen.showing(), Showing::Movie);
@@ -432,7 +462,7 @@ fn a_persons_offer_opened_over_a_mission_text_over_flight_waits_for_its_movie() 
 fn a_spaceport_offer_accepted_at_once_plays_its_movie() {
     let (screen, reel) = landed_filmed(0x0004, "", 0x0004, Prefs::default());
     assert_eq!(active(&screen), [MissionId(130)]);
-    assert_eq!(reeled(&reel), ["start Offer.mov"]);
+    assert_eq!(reeled(&reel), [Call::Start("Offer.mov".into())]);
     assert!(!screen.hides_pointer(), "during the fade out");
 }
 
@@ -455,7 +485,11 @@ fn command_comma_over_a_spaceport_movie_opens_no_preferences_and_the_movie_plays
     for _ in 0..8 {
         screen.tick(Duration::from_secs(1));
     }
-    assert_eq!(reeled(&reel), ["start Offer.mov", "stop"], "played on");
+    assert_eq!(
+        reeled(&reel),
+        [Call::Start("Offer.mov".into()), Call::Stop],
+        "played on"
+    );
     assert!(
         spaceport(&screen)
             .offer_dialog()

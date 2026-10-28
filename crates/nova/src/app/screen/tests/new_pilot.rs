@@ -356,6 +356,11 @@ fn without_the_yes_no_dialog_a_name_already_saved_is_refused() {
 /// A store whose keys ignore case, as the Mac's file names do: one file
 /// for "shane" and "Shane". A write keeps the spelling already saved
 /// when `keeps_spelling`, or renames it to the key written.
+///
+/// It differs from nova-sim's shared `MemoryPilots::ignoring_case`, which
+/// folds case the same way, in keeping no last-pilot record: setting one
+/// does nothing and there never is one. So it doesn't meet the pilot store
+/// contract, and isn't meant to.
 #[derive(Clone, Default)]
 struct CaseBlind {
     keeps_spelling: bool,

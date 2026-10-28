@@ -282,7 +282,7 @@ fn the_rescues_desc_plays_its_movie_over_flight() {
         None,
         &filmed_desc_of(RESCUE_TEXT, "Rescue.mov", 0),
     ));
-    let reel = Rc::new(Reel::default());
+    let reel = MockMoviePlayer::playing((160, 120), 2);
     let screen = with_dialogs(data).with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
     let mut screen = ejected_from(&store, screen, create);
     assert!(reeled(&reel).is_empty());
@@ -290,12 +290,15 @@ fn the_rescues_desc_plays_its_movie_over_flight() {
         screen.showing() != Showing::Flight
     });
     assert_eq!(screen.showing(), Showing::Movie, "before its text");
-    assert_eq!(reeled(&reel), ["start Rescue.mov"]);
+    assert_eq!(reeled(&reel), [Call::Start("Rescue.mov".into())]);
     assert_eq!(fate(&screen), nova_sim::PlayerFate::Flying);
     tick_until(&mut screen, 10, |screen| {
         screen.showing() == Showing::MissionText
     });
-    assert_eq!(reeled(&reel), ["start Rescue.mov", "stop"]);
+    assert_eq!(
+        reeled(&reel),
+        [Call::Start("Rescue.mov".into()), Call::Stop]
+    );
     assert_eq!(shown_text(&screen).as_deref(), Some(RESCUE_TEXT));
     screen.input(&key(Key::Enter, true));
     assert_eq!(screen.showing(), Showing::Flight, "flying on");
@@ -1049,9 +1052,9 @@ fn with_no_sabotage_desc_to_read_the_fade_begins_on_the_expirys_tick() {
 
 /// The router sabotaged by one outfit, 128, whose `dësc` 5000,
 /// "Sabotaged.", names the movie "Sabotage.mov" of `Flags` `flags`,
-/// its movies played through a new [`Reel`], taken off and ticked
+/// its movies played through a new [`MockMoviePlayer`], taken off and ticked
 /// until the player's ship has exploded.
-fn filmed_sabotage(store: &MemoryPilots, flags: u16) -> (AppScreen, Rc<Reel>) {
+fn filmed_sabotage(store: &MemoryPilots, flags: u16) -> (AppScreen, Rc<MockMoviePlayer>) {
     let data = loaded(
         &deadly_fork(&[(128, [nova_sim::SABOTAGE_KILL, 5000, 1])]).resource(
             Desc::TYPE,
@@ -1060,7 +1063,7 @@ fn filmed_sabotage(store: &MemoryPilots, flags: u16) -> (AppScreen, Rc<Reel>) {
             &filmed_desc_of("Sabotaged.", "Sabotage.mov", flags),
         ),
     );
-    let reel = Rc::new(Reel::default());
+    let reel = MockMoviePlayer::playing((160, 120), 2);
     let screen = with_dialogs(data).with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
     let mut screen = took_off_over(store, screen);
     until_exploded(&mut screen);
@@ -1078,7 +1081,7 @@ fn a_sabotage_descs_movie_starts_as_the_hold_expires_and_the_fade_waits_for_it_a
     screen.tick(TICK);
     assert_eq!(
         reeled(&reel),
-        ["start Sabotage.mov"],
+        [Call::Start("Sabotage.mov".into())],
         "on the expiry's tick"
     );
     assert_eq!(screen.showing(), Showing::Movie, "before its text");
@@ -1087,7 +1090,10 @@ fn a_sabotage_descs_movie_starts_as_the_hold_expires_and_the_fade_waits_for_it_a
     tick_until(&mut screen, 10, |screen| {
         screen.showing() == Showing::MissionText
     });
-    assert_eq!(reeled(&reel), ["start Sabotage.mov", "stop"]);
+    assert_eq!(
+        reeled(&reel),
+        [Call::Start("Sabotage.mov".into()), Call::Stop]
+    );
     assert_eq!(shown_text(&screen).as_deref(), Some("Sabotaged."));
     assert_eq!(fate(&screen), held, "nor under the text");
     screen.input(&key(Key::Enter, true));
@@ -1109,7 +1115,7 @@ fn a_sabotage_descs_after_movie_holds_the_fade_until_the_tick_it_ends() {
     assert_eq!(shown_text(&screen).as_deref(), Some("Sabotaged."));
     assert!(reeled(&reel).is_empty(), "after its text");
     screen.input(&key(Key::Enter, true));
-    assert_eq!(reeled(&reel), ["start Sabotage.mov"]);
+    assert_eq!(reeled(&reel), [Call::Start("Sabotage.mov".into())]);
     assert_eq!(screen.showing(), Showing::Movie);
     let held = nova_sim::PlayerFate::Holding { ticks_left: 0 };
     for _ in 0..10 {
@@ -1119,7 +1125,10 @@ fn a_sabotage_descs_after_movie_holds_the_fade_until_the_tick_it_ends() {
         assert_eq!(fate(&screen), held, "not while it plays");
         screen.tick(TICK);
     }
-    assert_eq!(reeled(&reel), ["start Sabotage.mov", "stop"]);
+    assert_eq!(
+        reeled(&reel),
+        [Call::Start("Sabotage.mov".into()), Call::Stop]
+    );
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(
         fate(&screen),

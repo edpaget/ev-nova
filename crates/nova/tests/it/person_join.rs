@@ -75,6 +75,7 @@ use nova_view::flight::SharedChance;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::movie::MoviePlayer;
+use nova_view::movie::fixture::{Call, MockMoviePlayer};
 use nova_view::text::fixture::MonoMetrics;
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
@@ -1078,38 +1079,11 @@ fn boarding_wreck_says_what_it_retrieved_and_adds_it() {
 
 // A dësc's movie around a person's offer and its texts.
 
-/// A movie player whose movies, 160 x 120, end on their third advance;
-/// it logs each start and stop.
-#[derive(Default)]
-struct Projector {
-    log: RefCell<Vec<String>>,
-    advanced: std::cell::Cell<u32>,
-}
-
-impl MoviePlayer for Projector {
-    fn start(&self, file: &str) -> Option<(u32, u32)> {
-        self.log.borrow_mut().push(format!("start {file}"));
-        self.advanced.set(0);
-        Some((160, 120))
-    }
-
-    fn advance(&self, _dt: Duration) -> bool {
-        self.advanced.set(self.advanced.get() + 1);
-        self.advanced.get() < 3
-    }
-
-    fn stop(&self) {
-        self.log.borrow_mut().push("stop".to_owned());
-    }
-
-    fn draw_frame(&self, _rect: nova_view::geometry::Bounds, _list: &mut nova_view::DrawList) {}
-}
-
 /// Merchant hailed, with `knobs` and movies played through a new
-/// [`Projector`].
-fn hailed_with_movies(knobs: Knobs) -> (Game, Rc<Projector>) {
+/// [`MockMoviePlayer`].
+fn hailed_with_movies(knobs: Knobs) -> (Game, Rc<MockMoviePlayer>) {
     let store = MemoryPilots::new();
-    let projector = Rc::new(Projector::default());
+    let projector = MockMoviePlayer::playing((160, 120), 3);
     let player: Rc<dyn MoviePlayer> = Rc::clone(&projector) as Rc<dyn MoviePlayer>;
     let mut game = Game::opened_playing(knobs, &store, &BOTH, Showing::Flight, "{}", Some(player));
     game.target_person(128);
@@ -1117,8 +1091,15 @@ fn hailed_with_movies(knobs: Knobs) -> (Game, Rc<Projector>) {
     (game, projector)
 }
 
-fn log(projector: &Projector) -> Vec<String> {
-    projector.log.borrow().clone()
+/// The starts and stops the movie player was asked for, in order: a
+/// [`MockMoviePlayer`] whose movies, 160 x 120, end on their third
+/// advance.
+fn log(projector: &MockMoviePlayer) -> Vec<Call> {
+    projector
+        .calls()
+        .into_iter()
+        .filter(|call| *call != Call::Advance)
+        .collect()
 }
 
 impl Game {
@@ -1141,7 +1122,7 @@ fn a_persons_offer_over_flight_plays_its_movie_before_the_dialog() {
         offer_movie: Some(0),
         ..PLAIN
     });
-    assert_eq!(log(&projector), ["start Offer.mov"]);
+    assert_eq!(log(&projector), [Call::Start("Offer.mov".into())]);
     assert_eq!(game.showing(), Showing::Movie, "over the paused flight");
     let alpha = game.alpha();
     let shown = texts(&game.frame());
@@ -1152,7 +1133,10 @@ fn a_persons_offer_over_flight_plays_its_movie_before_the_dialog() {
     game.frame();
     assert_eq!(game.alpha().to_bits(), alpha.to_bits(), "flight is paused");
     game.frame();
-    assert_eq!(log(&projector), ["start Offer.mov", "stop"]);
+    assert_eq!(
+        log(&projector),
+        [Call::Start("Offer.mov".into()), Call::Stop]
+    );
     assert_eq!(game.showing(), Showing::Offer, "then the dialog");
     assert!(texts(&game.frame()).iter().any(|text| text == "Yes"));
     game.tap(Key::Enter);
@@ -1172,7 +1156,10 @@ fn n_pressed_under_a_persons_offer_movie_refuses_it_on_the_frame_the_movie_ends(
     game.frame();
     assert_eq!(game.showing(), Showing::Movie);
     game.frame();
-    assert_eq!(log(&projector), ["start Offer.mov", "stop"]);
+    assert_eq!(
+        log(&projector),
+        [Call::Start("Offer.mov".into()), Call::Stop]
+    );
     assert_eq!(
         game.showing(),
         Showing::MissionText,
@@ -1196,7 +1183,7 @@ fn a_persons_offer_over_flight_plays_its_after_movie_after_the_brief() {
     assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
     assert!(log(&projector).is_empty(), "not before the brief");
     game.click_done();
-    assert_eq!(log(&projector), ["start Offer.mov"]);
+    assert_eq!(log(&projector), [Call::Start("Offer.mov".into())]);
     assert_eq!(game.showing(), Showing::Movie);
     let alpha = game.alpha();
     game.frame();
@@ -1218,7 +1205,7 @@ fn a_persons_offer_refused_without_a_text_stays_under_its_after_movie_over_fligh
     });
     assert_eq!(game.showing(), Showing::Offer);
     game.tap(Key::Char('n'));
-    assert_eq!(log(&projector), ["start Offer.mov"]);
+    assert_eq!(log(&projector), [Call::Start("Offer.mov".into())]);
     assert_eq!(game.showing(), Showing::Movie);
     assert!(
         texts(&game.frame()).iter().any(|text| text == "Yes"),
@@ -1228,7 +1215,7 @@ fn a_persons_offer_refused_without_a_text_stays_under_its_after_movie_over_fligh
     game.frame();
     assert_eq!(
         log(&projector),
-        ["start Offer.mov", "stop"],
+        [Call::Start("Offer.mov".into()), Call::Stop],
         "the movie runs on"
     );
     assert_eq!(game.showing(), Showing::Flight);
@@ -1296,7 +1283,7 @@ fn an_offer_accepted_at_once_over_flight_plays_its_movie_before_its_brief() {
     });
     assert_eq!(game.active(), [128]);
     assert_eq!(game.showing(), Showing::Movie, "the offer's movie first");
-    assert_eq!(log(&projector), ["start Offer.mov"]);
+    assert_eq!(log(&projector), [Call::Start("Offer.mov".into())]);
     for _ in 0..(2 * 60 + 3 + 2 * 60 + 2) {
         game.frame();
     }
@@ -1305,7 +1292,11 @@ fn an_offer_accepted_at_once_over_flight_plays_its_movie_before_its_brief() {
     game.click_done();
     assert_eq!(
         log(&projector),
-        ["start Offer.mov", "stop", "start Brief.mov"],
+        [
+            Call::Start("Offer.mov".into()),
+            Call::Stop,
+            Call::Start("Brief.mov".into())
+        ],
         "the brief's own after-movie"
     );
 }
@@ -1318,12 +1309,12 @@ fn the_return_that_closes_the_brief_skips_the_after_movie_as_it_is_let_go() {
     });
     game.tap(Key::Enter);
     game.key(Key::Enter, true);
-    assert_eq!(log(&projector), ["start Offer.mov"]);
+    assert_eq!(log(&projector), [Call::Start("Offer.mov".into())]);
     assert_eq!(game.showing(), Showing::Movie);
     game.key(Key::Enter, false);
     assert_eq!(
         log(&projector),
-        ["start Offer.mov", "stop"],
+        [Call::Start("Offer.mov".into()), Call::Stop],
         "Return still down as the movie starts skips it (KeyCheck 0x24 @0x55e6c)"
     );
     assert_eq!(game.showing(), Showing::Flight);
