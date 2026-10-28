@@ -14,6 +14,7 @@ use std::rc::Rc;
 use crate::build_id::{BuildId, VAR};
 use crate::bundle::{BundleError, Host, bundle};
 use crate::channel::FeedStatus;
+use crate::installer::winsparkle;
 use crate::ports::{Env, Files, Invocation, Process, ReadFiles, RunError};
 use crate::signing::{Credentials, Signing};
 use crate::sparkle;
@@ -49,7 +50,8 @@ pub(crate) const KEYCHAIN_PATHS: [&str; 2] = [
 
 /// Records each run. Answers with `respond`'s outcome when it gives one,
 /// else with canned output: the spec for `cargo metadata`, `archs` for
-/// `lipo -archs`, the pinned Sparkle digest for `shasum -a 256`,
+/// `lipo -archs`, the pinned Sparkle digest for `shasum -a 256`, the
+/// pinned WinSparkle digests for `certutil -hashfile`,
 /// [`KEYCHAINS`] for `security list-keychains -d user`,
 /// `{"id":"abc"}` for `notarytool submit` and `{"status":"Accepted"}` for
 /// `notarytool info`.
@@ -75,12 +77,29 @@ impl Process for Recorder {
             ["metadata", ..] => sample_metadata(),
             ["-archs", ..] => self.archs.clone(),
             ["-a", "256", path] => format!("{}  {path}\n", sparkle::SHA256).into_bytes(),
+            ["-hashfile", path, "SHA256"] => certutil_output(path),
             ["list-keychains", "-d", "user"] => KEYCHAINS.to_vec(),
             ["notarytool", "submit", ..] => br#"{"id":"abc","message":"ok"}"#.to_vec(),
             ["notarytool", "info", ..] => br#"{"id":"abc","status":"Accepted"}"#.to_vec(),
             _ => Vec::new(),
         })
     }
+}
+
+/// What `certutil -hashfile <path> SHA256` prints for the WinSparkle
+/// file at `path`: the pinned archive's digest or the pinned DLL's, by
+/// name, with `certutil`'s CRLF lines around it.
+fn certutil_output(path: &str) -> Vec<u8> {
+    let digest = if Path::new(path).ends_with(winsparkle::DLL) {
+        winsparkle::DLL_SHA256
+    } else {
+        winsparkle::ARCHIVE_SHA256
+    };
+    format!(
+        "SHA256 hash of {path}:\r\n{digest}\r\nCertUtil: -hashfile command completed \
+         successfully.\r\n"
+    )
+    .into_bytes()
 }
 
 /// The environment as a map.

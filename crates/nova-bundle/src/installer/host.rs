@@ -4,6 +4,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use crate::appcast::Channel;
+
 /// The packer's usage line.
 pub const USAGE: &str = "usage: nova-installer [--exes <DIR>] [OUT_DIR]   \
      (run it as `mise run pack-installer -- --exes <DIR> [OUT_DIR]`)";
@@ -21,6 +23,11 @@ pub struct InstallerHost {
     pub exes: Option<PathBuf>,
     /// The output directory asked for, if any.
     pub out: Option<PathBuf>,
+    /// The release channel the executables were built for
+    /// (`crate::channel::from_env`, as nova's build script reads it);
+    /// `None` for a development build. [`installer_host`] leaves it `None`,
+    /// and `main` sets it.
+    pub channel: Option<Channel>,
 }
 
 /// Why the environment gave no [`InstallerHost`].
@@ -71,6 +78,7 @@ pub fn installer_host(
             .unwrap_or_else(|| OsString::from("wix")),
         exes,
         out,
+        channel: None,
     })
 }
 
@@ -99,6 +107,7 @@ mod tests {
                 wix: "wix".into(),
                 exes: None,
                 out: None,
+                channel: None,
             })
         );
     }

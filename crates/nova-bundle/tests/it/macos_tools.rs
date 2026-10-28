@@ -10,6 +10,7 @@ use std::path::Path;
 
 use nova_bundle::build_id::BuildId;
 use nova_bundle::bundle::{BundleError, Host, Step, check_archs, plan};
+use nova_bundle::digest::{DigestTool, Pin, check_sha256};
 use nova_bundle::info_plist::info_plist;
 use nova_bundle::layout::Layout;
 use nova_bundle::ports::{Invocation, Process};
@@ -136,9 +137,13 @@ fn shasum_digests_a_file_as_the_check_reads_it() {
     let file = dir.path().join("abc");
     fs::write(&file, b"abc").expect("seed");
     let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-    sparkle::check_sha256(&mut StdProcess, &file, abc).expect("the digest of abc");
-    let error =
-        sparkle::check_sha256(&mut StdProcess, &file, sparkle::SHA256).expect_err("another digest");
+    let pin = Pin {
+        what: "abc",
+        sha256: abc,
+    };
+    check_sha256(&mut StdProcess, &file, pin, DigestTool::Shasum).expect("the digest of abc");
+    let error = check_sha256(&mut StdProcess, &file, sparkle::PIN, DigestTool::Shasum)
+        .expect_err("another digest");
     assert!(
         matches!(&error, BundleError::Checksum { found, .. } if found == abc),
         "{error:?}"

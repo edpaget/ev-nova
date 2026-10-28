@@ -32,7 +32,7 @@ use base64::engine::general_purpose::STANDARD;
 
 use crate::build_id::{BuildId, BuildIdError};
 use crate::bundle;
-use crate::installer;
+use crate::installer::{self, RELAUNCH_PROPERTY};
 use crate::layout;
 use crate::ports::Signer;
 use crate::site::{self, REPO};
@@ -92,13 +92,15 @@ impl Platform {
         }
     }
 
-    /// The arguments the updater runs the installer with:
-    /// `/passive` for the MSI, so it upgrades without the wizard.
+    /// The arguments the updater runs the installer with: for the MSI,
+    /// `/passive`, so it upgrades without the wizard, and
+    /// [`RELAUNCH_PROPERTY`]`=1`, so it relaunches the game once it is
+    /// done.
     #[must_use]
-    pub fn installer_arguments(self) -> Option<&'static str> {
+    pub fn installer_arguments(self) -> Option<String> {
         match self {
             Self::Macos => None,
-            Self::Windows => Some("/passive"),
+            Self::Windows => Some(format!("/passive {RELAUNCH_PROPERTY}=1")),
         }
     }
 }
@@ -242,7 +244,7 @@ pub fn render(feed: &Feed) -> String {
         .platform
         .installer_arguments()
         .map_or_else(String::new, |a| {
-            format!(" sparkle:installerArguments=\"{}\"", escape(a))
+            format!(" sparkle:installerArguments=\"{}\"", escape(&a))
         });
     format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
@@ -505,15 +507,17 @@ pub(crate) mod tests {
             assert!(!verifies(signature, b"altered bytes"), "{platform:?}");
             assert_eq!(
                 enclosure.attribute((SPARKLE_NS, "installerArguments")),
-                platform.installer_arguments()
+                platform.installer_arguments().as_deref()
             );
         }
         let windows = render(&feed(Platform::Windows, b"x"));
         let doc = Document::parse(&windows).expect("XML");
+        // Quietly, and relaunching the game (the installer's custom action).
         assert_eq!(
             enclosure(&doc).attribute((SPARKLE_NS, "installerArguments")),
-            Some("/passive")
+            Some(format!("/passive {}=1", installer::RELAUNCH_PROPERTY).as_str())
         );
+        assert_eq!(installer::RELAUNCH_PROPERTY, "NOVA_RELAUNCH");
         assert_eq!(
             enclosure(&doc).attribute((SPARKLE_NS, "os")),
             Some("windows")

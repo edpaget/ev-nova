@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use crate::appcast::{Channel, Platform};
 use crate::build_id::{self, BuildId, ResolveError};
 use crate::channel::{self, FeedStatus};
+use crate::digest::{self, DigestTool, Pin};
 use crate::icon::ICON;
 use crate::info_plist::{EXECUTABLE, info_plist};
 use crate::layout::{DUMP, Layout, LayoutError, VOLUME};
@@ -94,13 +95,15 @@ pub enum Step {
     Run(Invocation),
     /// Fails unless the binary is [`ARCH`] alone: see [`check_archs`].
     CheckArchs(PathBuf),
-    /// Fails unless the file's SHA-256 is `sha256`: see
-    /// [`sparkle::check_sha256`].
+    /// Fails unless the file's SHA-256, as `tool` prints it, is `pin`'s:
+    /// see [`digest::check_sha256`].
     CheckSha256 {
         /// The file.
         path: PathBuf,
-        /// Its digest, lower-case hex.
-        sha256: &'static str,
+        /// The digest it must have.
+        pin: Pin,
+        /// The host's tool that digests it.
+        tool: DigestTool,
     },
     /// Puts the keychain first in the user's keychain search list, so
     /// `codesign` and `security` find its identity: see
@@ -150,17 +153,18 @@ pub enum BundleError {
     },
     /// A download isn't the file pinned.
     #[error(
-        "{} has SHA-256 `{found}`, not `{expected}`, the pinned Sparkle {}'s",
-        path.display(),
-        sparkle::VERSION
+        "{} has SHA-256 `{found}`, not `{expected}`, the pinned {pinned}'s",
+        path.display()
     )]
     Checksum {
         /// The file.
         path: PathBuf,
         /// The digest pinned.
         expected: String,
-        /// The digest `shasum` printed.
+        /// The digest the tool printed.
         found: String,
+        /// What is pinned ([`Pin::what`]).
+        pinned: &'static str,
     },
     /// A Linux binary needs a glibc above the floor or links a library
     /// outside the allowed list.
@@ -434,7 +438,7 @@ pub(crate) fn execute(
         Step::Symlink { target, link } => file("link", link, files.symlink(target, link)),
         Step::Run(invocation) => run(process, invocation).map(drop),
         Step::CheckArchs(binary) => check_archs(process, binary),
-        Step::CheckSha256 { path, sha256 } => sparkle::check_sha256(process, path, sha256),
+        Step::CheckSha256 { path, pin, tool } => digest::check_sha256(process, path, *pin, *tool),
         Step::AddToSearchList(keychain) => add_to_search_list(process, keychain),
         Step::Notarize(notarization) => notarize(process, notarization),
     }

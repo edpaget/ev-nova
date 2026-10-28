@@ -23,3 +23,5 @@ mod signer;
 mod site;
 #[cfg(windows)]
 mod windows_installer;
+#[cfg(windows)]
+mod windows_tools;

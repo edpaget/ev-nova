@@ -4,7 +4,8 @@
 //!
 //! [`stage`] downloads the release archive with `curl` into the downloads
 //! directory, beside staging ([`Layout::downloads`]), checks its SHA-256
-//! against [`SHA256`] ([`check_sha256`]) before anything unpacks it,
+//! against [`PIN`] with `shasum` ([`crate::digest::check_sha256`]) before
+//! anything unpacks it,
 //! unpacks the framework and its licence, removes the XPC services (the
 //! game isn't sandboxed, and Sparkle uses them only when
 //! `SUEnableInstallerLauncherService` or `SUEnableDownloaderService` is
@@ -29,9 +30,10 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::bundle::{ARCH, BundleError, Step, run};
+use crate::bundle::{ARCH, Step};
+use crate::digest::{DigestTool, Pin};
 use crate::layout::Layout;
-use crate::ports::{Invocation, Process};
+use crate::ports::Invocation;
 
 /// The pinned Sparkle release.
 pub const VERSION: &str = "2.10.1";
@@ -42,6 +44,11 @@ pub const URL: &str =
     "https://github.com/sparkle-project/Sparkle/releases/download/2.10.1/Sparkle-2.10.1.tar.xz";
 /// The archive's SHA-256, lower-case hex.
 pub const SHA256: &str = "1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27";
+/// The archive's pin, as the check names it.
+pub const PIN: Pin = Pin {
+    what: "Sparkle 2.10.1",
+    sha256: SHA256,
+};
 /// The framework's directory name.
 pub const FRAMEWORK: &str = "Sparkle.framework";
 
@@ -96,7 +103,8 @@ pub fn stage(layout: &Layout) -> Vec<Step> {
         ),
         Step::CheckSha256 {
             path: archive.clone(),
-            sha256: SHA256,
+            pin: PIN,
+            tool: DigestTool::Shasum,
         },
         Step::Run(
             Invocation::new("tar")
@@ -148,146 +156,14 @@ pub fn nested_code(framework: &Path) -> [PathBuf; 3] {
     ]
 }
 
-/// `shasum -a 256 <path>`, captured: the digest the check reads.
-#[must_use]
-pub fn shasum(path: &Path) -> Invocation {
-    Invocation::new("shasum")
-        .args(["-a", "256"])
-        .arg(path)
-        .captured()
-}
-
-/// Runs [`shasum`] on `path` and fails unless the digest it prints first
-/// is `expected`, ignoring case: a download that isn't the pinned archive
-/// stops the run before anything unpacks it.
-pub fn check_sha256(
-    process: &mut impl Process,
-    path: &Path,
-    expected: &str,
-) -> Result<(), BundleError> {
-    let stdout = run(process, &shasum(path))?;
-    let text = String::from_utf8_lossy(&stdout);
-    let found = text
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if found == expected.to_ascii_lowercase() {
-        Ok(())
-    } else {
-        Err(BundleError::Checksum {
-            path: path.to_owned(),
-            expected: expected.to_owned(),
-            found,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::RunError;
-
-    /// Answers every run with `stdout`, recording each.
-    struct Prints {
-        stdout: Vec<u8>,
-        runs: Vec<Invocation>,
-    }
-
-    impl Process for Prints {
-        fn run(&mut self, invocation: &Invocation) -> Result<Vec<u8>, RunError> {
-            self.runs.push(invocation.clone());
-            Ok(self.stdout.clone())
-        }
-    }
-
-    fn prints(stdout: &str) -> Prints {
-        Prints {
-            stdout: stdout.as_bytes().to_vec(),
-            runs: Vec::new(),
-        }
-    }
-
-    fn archive() -> PathBuf {
-        Path::new("/d").join(ARCHIVE)
-    }
-
-    #[test]
-    fn a_matching_digest_passes_however_shasum_spaces_it() {
-        let upper = SHA256.to_ascii_uppercase();
-        for stdout in [
-            format!("{SHA256}  /d/{ARCHIVE}\n"),
-            format!("{SHA256}\n"),
-            format!("  {SHA256} *x"),
-            format!("{upper}  x\n"),
-        ] {
-            let mut process = prints(&stdout);
-            check_sha256(&mut process, &archive(), SHA256).expect(&stdout);
-            assert_eq!(process.runs, [shasum(&archive())]);
-        }
-        assert_eq!(
-            shasum(&archive()),
-            Invocation::new("shasum")
-                .args(["-a", "256"])
-                .arg(archive())
-                .captured()
-        );
-    }
-
-    #[test]
-    fn another_digest_is_an_error_naming_the_file_and_both_digests() {
-        let other = "0".repeat(64);
-        let mut process = prints(&format!("{other}  x\n"));
-        let error = check_sha256(&mut process, &archive(), SHA256).expect_err("mismatch");
-        let BundleError::Checksum {
-            path,
-            expected,
-            found,
-        } = &error
-        else {
-            panic!("{error:?}");
-        };
-        assert_eq!(path, &archive());
-        assert_eq!(expected, SHA256);
-        assert_eq!(found, &other);
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "{} has SHA-256 `{other}`, not `{SHA256}`, the pinned Sparkle 2.10.1's",
-                archive().display()
-            )
-        );
-    }
-
-    #[test]
-    fn an_empty_shasum_output_is_an_error() {
-        for stdout in ["", "  \n"] {
-            let error =
-                check_sha256(&mut prints(stdout), &archive(), SHA256).expect_err("no digest");
-            assert!(
-                matches!(&error, BundleError::Checksum { found, .. } if found.is_empty()),
-                "{error:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_failing_shasum_is_its_run_error() {
-        struct Fails;
-        impl Process for Fails {
-            fn run(&mut self, _invocation: &Invocation) -> Result<Vec<u8>, RunError> {
-                Err(RunError::Failed(Some(1)))
-            }
-        }
-        let error = check_sha256(&mut Fails, &archive(), SHA256).expect_err("fails");
-        assert!(
-            matches!(&error, BundleError::Run { command, .. } if *command == shasum(&archive()).to_string()),
-            "{error:?}"
-        );
-    }
 
     #[test]
     fn the_pin_downloads_the_version_s_release_archive() {
+        assert_eq!(PIN.what, format!("Sparkle {VERSION}"));
+        assert_eq!(PIN.sha256, SHA256);
         assert!(
             URL.ends_with(&format!("/releases/download/{VERSION}/{ARCHIVE}")),
             "{URL}"

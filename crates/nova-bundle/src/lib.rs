@@ -94,6 +94,15 @@
 //! and `LICENSE`, into `ev-nova-x86_64-pc-windows-msvc.msi` in `OUT_DIR`
 //! (by default `target/installer/out`), so the executables can be signed
 //! between the two steps and the `.msi` after them. See [`installer`].
+//!
+//! Every installer carries WinSparkle [`installer::winsparkle::VERSION`]
+//! beside `nova.exe`, with its two licence files: the packer downloads the
+//! release archive with `curl` (packing needs the network), checks its
+//! SHA-256 with `certutil` before unpacking it with `tar`, and checks the
+//! DLL's before `wix build` packs it ([`digest`]). An update's install
+//! relaunches the game when the feed passes
+//! [`installer::RELAUNCH_PROPERTY`]. `NOVA_CHANNEL` is read as for the
+//! macOS bundle, and the packer prints which feed the build names.
 
 //!
 //! # The Linux desktop files
@@ -185,6 +194,7 @@ pub mod archive;
 pub mod build_id;
 pub mod bundle;
 pub mod channel;
+pub mod digest;
 pub mod host;
 pub mod icon;
 pub mod info_plist;

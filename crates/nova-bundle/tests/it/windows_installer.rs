@@ -8,6 +8,13 @@
 //! the same version, another `ProductCode`), it installs that one first and
 //! checks the current one replaces it in place.
 //!
+//! Both packs carry WinSparkle: the test checks the installed
+//! `WinSparkle.dll` is the one the last pack staged in
+//! `target\installer\downloads` (the file `wix build` packed, which the
+//! signing phase will sign there), that the upgrade leaves one, and the
+//! relaunch custom action's rows. It doesn't run the relaunch: that would
+//! start the game on the runner.
+//!
 //! The Windows Installer's state is read through its COM object
 //! (`WindowsInstaller.Installer`) and the shortcut through
 //! `WScript.Shell`, each in a small PowerShell script printing one value
@@ -21,8 +28,11 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nova_bundle::bundle::metadata;
+use nova_bundle::installer::layout::InstallerLayout;
+use nova_bundle::installer::winsparkle::{DLL, LICENCES};
 use nova_bundle::installer::{
-    DUMP_EXE, EXES, GAME_EXE, INSTALL_DIR, SHORTCUT, UPGRADE_CODE, msi_version,
+    DUMP_EXE, EXES, GAME_EXE, INSTALL_DIR, RELAUNCH_ACTION, RELAUNCH_PROPERTY, SHORTCUT,
+    UPGRADE_CODE, msi_version,
 };
 use nova_bundle::ports::{Invocation, Process};
 use nova_bundle::spec::BundleSpec;
@@ -86,6 +96,91 @@ if ($null -eq $record) {{ '{NONE}' }} else {{ Get-Prop $record 'StringData' @(1)
         msi = quote_path(msi),
         query = quote(&query),
     )))
+}
+
+/// The first row `query` selects from the package's tables, each column's
+/// text in order, or `None` when it selects none.
+fn msi_row(msi: &Path, query: &str) -> Option<Vec<String>> {
+    let lines = powershell(&format!(
+        "$db = Invoke-Com $installer 'OpenDatabase' @({msi}, 0)
+$view = Invoke-Com $db 'OpenView' @({query})
+Invoke-Com $view 'Execute' $null | Out-Null
+$record = Invoke-Com $view 'Fetch' $null
+if ($null -eq $record) {{ '{NONE}' }} else {{
+  1..(Get-Prop $record 'FieldCount' $null) | ForEach-Object {{ 'field=' + (Get-Prop $record 'StringData' @($_)) }}
+}}",
+        msi = quote_path(msi),
+        query = quote(query),
+    ));
+    if lines == [NONE] {
+        return None;
+    }
+    Some(
+        lines
+            .iter()
+            .map(|line| {
+                line.strip_prefix("field=")
+                    .unwrap_or_else(|| panic!("{query}: {lines:?}"))
+                    .to_owned()
+            })
+            .collect(),
+    )
+}
+
+/// `msidbCustomActionTypeExe` with `msidbCustomActionTypeSourceFile`
+/// (0x12, 18: an executable the package installs), run asynchronously
+/// without waiting (`msidbCustomActionTypeAsync |
+/// msidbCustomActionTypeContinue`, 0xC0): WiX's `FileRef`, `ExeCommand`
+/// and `Return="asyncNoWait"`.
+const EXE_IN_FILE_NO_WAIT: u32 = 0x12 | 0xC0;
+
+/// The relaunch after an update, as the built package holds it: a custom
+/// action that starts the installed `nova.exe` without arguments, without
+/// waiting, after `InstallFinalize`, when the feed's arguments set
+/// [`RELAUNCH_PROPERTY`] and the run isn't an uninstall.
+fn check_relaunch(msi: &Path) {
+    let action = msi_row(
+        msi,
+        &format!(
+            "SELECT `Type`, `Source`, `Target` FROM `CustomAction` WHERE `Action` = \
+             '{RELAUNCH_ACTION}'"
+        ),
+    )
+    .expect("the relaunch action");
+    assert_eq!(
+        action,
+        [
+            EXE_IN_FILE_NO_WAIT.to_string(),
+            GAME_EXE.to_owned(),
+            String::new()
+        ]
+    );
+    let sequence = |action: &str| {
+        msi_row(
+            msi,
+            &format!(
+                "SELECT `Sequence`, `Condition` FROM `InstallExecuteSequence` WHERE `Action` = \
+                 '{action}'"
+            ),
+        )
+        .unwrap_or_else(|| panic!("{action} is sequenced"))
+    };
+    let relaunch = sequence(RELAUNCH_ACTION);
+    let finalize = sequence("InstallFinalize");
+    let number = |row: &[String]| row[0].parse::<u32>().expect("a sequence number");
+    assert!(
+        number(&relaunch) > number(&finalize),
+        "{relaunch:?} {finalize:?}"
+    );
+    assert_eq!(
+        relaunch[1],
+        format!("{RELAUNCH_PROPERTY} = \"1\" AND NOT REMOVE")
+    );
+    let secure = msi_property(msi, "SecureCustomProperties");
+    assert!(
+        secure.split(';').any(|p| p == RELAUNCH_PROPERTY),
+        "{RELAUNCH_PROPERTY} reaches the server side: {secure}"
+    );
 }
 
 fn word_count(msi: &Path) -> u32 {
@@ -231,13 +326,25 @@ fn var_path(name: &str) -> Option<PathBuf> {
         .map(|v| std::path::absolute(PathBuf::from(v)).expect("an absolute path"))
 }
 
-/// The installer's version, read through the spec from `cargo metadata`.
-fn expected_version() -> String {
+/// The spec, read from `cargo metadata` as the packer reads it.
+fn spec() -> BundleSpec {
     let json = StdProcess
         .run(&metadata(&OsString::from(env!("CARGO"))))
         .expect("cargo metadata");
-    let spec = BundleSpec::from_metadata(&json).expect("spec");
-    msi_version(&spec.version).expect("version")
+    BundleSpec::from_metadata(&json).expect("spec")
+}
+
+/// The installer's version, read through the spec.
+fn expected_version() -> String {
+    msi_version(&spec().version).expect("version")
+}
+
+/// The `WinSparkle.dll` the last pack staged and `wix build` packed: the
+/// pinned DLL, or, once the signing phase signs it there, that signed DLL.
+fn staged_dll() -> PathBuf {
+    InstallerLayout::new(&spec().target_dir, None, None)
+        .expect("layout")
+        .winsparkle_dll()
 }
 
 #[test]
@@ -251,6 +358,7 @@ fn installs_for_the_user_alone_upgrades_in_place_and_uninstalls_keeping_settings
     // No admin needed: per-user, with no ALLUSERS to make it per-machine.
     assert_ne!(word_count(&msi) & NO_ELEVATION, 0, "elevation not required");
     assert_eq!(msi_property(&msi, "ALLUSERS"), NONE);
+    check_relaunch(&msi);
     let code = msi_property(&msi, "ProductCode");
     let previous_code = previous.as_ref().map(|p| msi_property(p, "ProductCode"));
     if let Some(previous_code) = &previous_code {
@@ -300,9 +408,26 @@ fn installs_for_the_user_alone_upgrades_in_place_and_uninstalls_keeping_settings
         .expect("LOCALAPPDATA")
         .join("Programs")
         .join(INSTALL_DIR);
-    for file in EXES.iter().chain(&["README.txt", "LICENSE"]) {
+    let licences = LICENCES.map(|(_, installed)| installed);
+    for file in EXES
+        .iter()
+        .chain(&["README.txt", "LICENSE", DLL])
+        .chain(&licences)
+    {
         assert!(folder.join(file).is_file(), "{file}");
     }
+    // The DLL wix packed, byte for byte, and only one, after the upgrade.
+    assert_eq!(
+        fs::read(folder.join(DLL)).expect("the installed DLL"),
+        fs::read(staged_dll()).expect("the staged DLL"),
+        "the installed {DLL} is the one packed"
+    );
+    let dlls = fs::read_dir(&folder)
+        .expect("the install folder")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().eq_ignore_ascii_case(DLL))
+        .count();
+    assert_eq!(dlls, 1);
     StdProcess
         .run(
             &Invocation::new(folder.join(DUMP_EXE))
