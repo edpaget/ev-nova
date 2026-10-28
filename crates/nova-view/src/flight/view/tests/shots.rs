@@ -87,6 +87,43 @@ fn blaster_frames(view: &Faked) -> Vec<u16> {
         .collect()
 }
 
+/// A view opened as the edge opens one ([`FlightView::over`]) on
+/// [`armed`]'s catalog, over a fake flight that lists `weapons` and
+/// shows the player at the centre and a blaster shot above it.
+fn opened_listing(weapons: Vec<WeaponId>) -> Faked {
+    let mut catalog = armed(0, &[BLASTER]);
+    catalog.star_sheet = Ok(star_sheet());
+    let mut fake = FakeFlight::new();
+    fake.set_frame(FlightFrame {
+        shots: vec![shot_of(0, BLASTER, Vec2::new(0.0, -50.0), 0.0)],
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+    });
+    fake.set_weapons(weapons);
+    FlightView::over(
+        Rc::new(catalog),
+        fake,
+        &Rulebook::default(),
+        SharedChance::default(),
+    )
+}
+
+#[test]
+fn a_shot_draws_with_the_look_of_a_weapon_the_flight_lists() {
+    // The looks are read from the flight's list (`FlightSim::weapons`),
+    // not the catalog's: the catalog lists the blaster in both.
+    let listed = opened_listing(vec![BLASTER]);
+    assert!(
+        !blaster_frames(&listed).is_empty(),
+        "the blaster's shot drawn with its sheet"
+    );
+    let unlisted = opened_listing(Vec::new());
+    assert_eq!(
+        blaster_frames(&unlisted),
+        Vec::<u16>::new(),
+        "control: a flight listing no weapons reads no blaster look"
+    );
+}
+
 #[test]
 fn a_spinning_shot_starts_on_the_index_drawn_on_the_effects_chance() {
     let catalog = with_blaster(|look| {
