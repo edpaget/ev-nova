@@ -10,8 +10,8 @@ use super::super::Statics;
 impl Statics {
     /// The names of every ship class, outfit, good traded, `jünk` and
     /// stellar the session read, each as the session's own lookup gives it
-    /// (`Session::ship_name`, `Session::outfit_names`, `Session::good_name`,
-    /// `Session::junk_lc_name`, `TagNames::stellar_name`): the first
+    /// (`Session::ship_name`, `Statics::outfit_names`, `Statics::good_name`,
+    /// `Statics::junk_lc_name`, `TagNames::stellar_name`): the first
     /// record of an ID names it, as those lookups find the first.
     pub(in crate::session) fn names(&self) -> Names {
         let mut names = Names::default();
@@ -111,7 +111,7 @@ mod tests {
             assert_eq!(names.ship(ship), session.ship_name(ship), "{ship:?}");
             assert_eq!(
                 names.ship_long(ship),
-                session.ship_long_name(ship),
+                session.statics.ship_long_name(ship),
                 "{ship:?}"
             );
         }
@@ -122,8 +122,11 @@ mod tests {
             .into_iter()
             .chain(catalog.outfits.iter().map(|record| record.id));
         for outfit in outfits {
-            assert_eq!(names.outfit(outfit), session.outfit_name(outfit));
-            assert_eq!(names.outfit_lc(outfit), session.outfit_names(outfit));
+            assert_eq!(names.outfit(outfit), session.statics.outfit_name(outfit));
+            assert_eq!(
+                names.outfit_lc(outfit),
+                session.statics.outfit_names(outfit)
+            );
         }
         assert_eq!(
             names.outfit_lc(OutfitId(150)),
@@ -133,12 +136,16 @@ mod tests {
             .map(Good::Commodity)
             .chain([Good::Junk(JunkId(150)), Good::Junk(JunkId(999))]);
         for good in goods {
-            assert_eq!(names.good(good), session.good_name(good), "{good:?}");
+            assert_eq!(
+                names.good(good),
+                session.statics.good_name(good),
+                "{good:?}"
+            );
         }
         assert_eq!(names.good(Good::Junk(JunkId(150))), Some("Bio-weapons"));
         assert!(names.good(Good::Commodity(0)).is_some(), "food is traded");
         for junk in [JunkId(150), JunkId(999)] {
-            assert_eq!(names.junk_lc(junk), session.junk_lc_name(junk));
+            assert_eq!(names.junk_lc(junk), session.statics.junk_lc_name(junk));
         }
         assert_eq!(names.junk_lc(JunkId(150)), Some("bio-weapons"));
         for stellar in [StellarId(128), StellarId(129), StellarId(999)] {

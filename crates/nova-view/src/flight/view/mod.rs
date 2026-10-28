@@ -289,7 +289,7 @@
 //!   ([`Session::cycle_map_selection`]): the map draws the new selected
 //!   link and selects its system, and the nav area is redrawn at once; on
 //!   the hypergate map it steps the pick through the gate's destinations,
-//!   Shift stepping back ([`Session::hypergate_cycle`]); docked, it does
+//!   Shift stepping back (`nova_sim::Session::hypergate_cycle`); docked, it does
 //!   nothing. It beeps as M opens it ([`UiSound::MapOpened`],
 //!   `_beepSnd[2]`, `_HandlePlayer` @0x6a809) and as it closes
 //!   ([`UiSound::MapClosed`], `_beepSnd[0]`, @0x6a85a); a refused M says

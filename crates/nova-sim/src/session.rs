@@ -729,9 +729,7 @@ use crate::hyperspace::{
 use crate::hyperspace::{HyperSelectRule, HyperlinkRule, JumpZoneRule, MultiJumpRule};
 use crate::landing::{LandOutcome, LandingRefusal, Standing, land_or_select};
 use crate::legal::{self, Crime, LegalCode};
-use crate::market::{
-    self, Direction, EscortHolds, Good, Goods, Market, Markup, Order, TradeRefusal,
-};
+use crate::market::{self, Direction, EscortHolds, Goods, Market, Markup, Order, TradeRefusal};
 use crate::message::SimMessage;
 use crate::mission::StellarMarks;
 use crate::navigation::NavMode;
@@ -2762,25 +2760,11 @@ impl Session {
         ships
     }
 
-    /// Ship type `ship`'s shipyard long name, as its [`ShipRecord`] gives
-    /// it, if the session has its record.
-    #[must_use]
-    pub fn ship_long_name(&self, ship: ShipId) -> Option<&str> {
-        self.statics.ship_long_name(ship)
-    }
-
     /// Ship type `ship`'s name, as its [`ShipRecord`] gives it, if the
     /// session has its record.
     #[must_use]
-    pub fn ship_name(&self, ship: ShipId) -> Option<&str> {
+    pub(crate) fn ship_name(&self, ship: ShipId) -> Option<&str> {
         self.statics.ship_name(ship)
-    }
-
-    /// `jünk` `id`'s `LCName`, raw, if the session has its record: what a
-    /// scan that finds it calls it.
-    #[must_use]
-    pub fn junk_lc_name(&self, id: JunkId) -> Option<&str> {
-        self.statics.junk_lc_name(id)
     }
 
     /// Plots a course from the system the ship is in to `to`, replacing any
@@ -3585,7 +3569,7 @@ impl Session {
     /// listing it, unresolved by place, or `None` when none lists it.
     /// Empty with no hypergate entry pending.
     #[must_use]
-    pub fn hypergate_cycle(&self, catalog: &impl PilotCatalog) -> Vec<Option<SystemId>> {
+    pub(crate) fn hypergate_cycle(&self, catalog: &impl PilotCatalog) -> Vec<Option<SystemId>> {
         let Some(here) = self
             .ship
             .warp
@@ -4985,27 +4969,6 @@ impl Session {
         interface_government(&self.pilot, &self.statics)
     }
 
-    /// `good`'s name, as the exchange names it, if it is traded
-    /// ([`Goods::name`](crate::market::Goods::name)).
-    #[must_use]
-    pub fn good_name(&self, good: Good) -> Option<&str> {
-        self.statics.good_name(good)
-    }
-
-    /// Outfit `outfit`'s name, as its [`OutfitRecord`] gives it, if the
-    /// session has its record.
-    #[must_use]
-    pub fn outfit_name(&self, outfit: OutfitId) -> Option<&str> {
-        self.statics.outfit_name(outfit)
-    }
-
-    /// Outfit `outfit`'s lower-case names, its `LCName` and `LCPlural`, if
-    /// the session has its record.
-    #[must_use]
-    pub fn outfit_names(&self, outfit: OutfitId) -> Option<(&str, &str)> {
-        self.statics.outfit_names(outfit)
-    }
-
     /// Boards the player's target, if it is not landed and the
     /// [`board`](crate::board) checks allow it, and gives what is on
     /// board: the player matches the target's velocity, `law` convicts it
@@ -5834,6 +5797,7 @@ impl Statics {
 
     /// Ship type `ship`'s shipyard long name, as its [`ShipRecord`] gives
     /// it, if the session has its record.
+    #[cfg(test)]
     #[must_use]
     fn ship_long_name(&self, ship: ShipId) -> Option<&str> {
         let record = self.ships.iter().find(|record| record.id == ship)?;
@@ -5875,13 +5839,15 @@ impl Statics {
 
     /// `good`'s name, as the exchange names it, if it is traded
     /// ([`Goods::name`](crate::market::Goods::name)).
+    #[cfg(test)]
     #[must_use]
-    fn good_name(&self, good: Good) -> Option<&str> {
+    fn good_name(&self, good: crate::market::Good) -> Option<&str> {
         self.goods.name(good)
     }
 
     /// Outfit `outfit`'s name, as its [`OutfitRecord`] gives it, if the
     /// session has its record.
+    #[cfg(test)]
     #[must_use]
     fn outfit_name(&self, outfit: OutfitId) -> Option<&str> {
         let record = self.outfits.iter().find(|record| record.id == outfit)?;
@@ -5890,6 +5856,7 @@ impl Statics {
 
     /// Outfit `outfit`'s lower-case names, its `LCName` and `LCPlural`, if
     /// the session has its record.
+    #[cfg(test)]
     #[must_use]
     fn outfit_names(&self, outfit: OutfitId) -> Option<(&str, &str)> {
         let record = self.outfits.iter().find(|record| record.id == outfit)?;
@@ -10335,8 +10302,8 @@ pub(super) mod tests {
         catalog.commodities.name_patches[0] = crate::StringPatch::Text("Grain".into());
         let mut session = Session::start(&catalog).expect("starts");
         land_now(&mut session).expect("lands");
-        assert_eq!(session.good_name(FOOD), Some("Grain"));
-        assert_eq!(session.good_name(METAL), Some("Metal"));
+        assert_eq!(session.statics.good_name(FOOD), Some("Grain"));
+        assert_eq!(session.statics.good_name(METAL), Some("Metal"));
         let market = session.market().expect("an exchange");
         let food: Vec<_> = market
             .rows
@@ -25904,14 +25871,28 @@ pub(super) mod tests {
         }];
         catalog.outfits.push(outfit(310, &[]));
         let session = Session::start(&catalog).expect("starts");
-        assert_eq!(session.good_name(Good::Commodity(0)), Some("Food"));
-        assert_eq!(session.good_name(Good::Commodity(4)), Some("Metal"));
-        assert_eq!(session.good_name(Good::Commodity(5)), Some(""), "no name");
-        assert_eq!(session.good_name(Good::Commodity(6)), None, "not standard");
-        assert_eq!(session.good_name(Good::Junk(JunkId(146))), Some("Ice"));
-        assert_eq!(session.good_name(Good::Junk(JunkId(147))), None);
-        assert_eq!(session.outfit_name(OutfitId(310)), Some("Outfit 310"));
-        assert_eq!(session.outfit_name(OutfitId(311)), None);
+        assert_eq!(session.statics.good_name(Good::Commodity(0)), Some("Food"));
+        assert_eq!(session.statics.good_name(Good::Commodity(4)), Some("Metal"));
+        assert_eq!(
+            session.statics.good_name(Good::Commodity(5)),
+            Some(""),
+            "no name"
+        );
+        assert_eq!(
+            session.statics.good_name(Good::Commodity(6)),
+            None,
+            "not standard"
+        );
+        assert_eq!(
+            session.statics.good_name(Good::Junk(JunkId(146))),
+            Some("Ice")
+        );
+        assert_eq!(session.statics.good_name(Good::Junk(JunkId(147))), None);
+        assert_eq!(
+            session.statics.outfit_name(OutfitId(310)),
+            Some("Outfit 310")
+        );
+        assert_eq!(session.statics.outfit_name(OutfitId(311)), None);
     }
 
     /// [`boardable`] with rockets (weapon 140, firing rounds of their own,
@@ -27676,10 +27657,10 @@ pub(super) mod tests {
         let catalog = granting();
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(
-            session.outfit_names(OutfitId(200)),
+            session.statics.outfit_names(OutfitId(200)),
             Some(("shield booster", "shield boosters"))
         );
-        assert_eq!(session.outfit_names(OutfitId(999)), None);
+        assert_eq!(session.statics.outfit_names(OutfitId(999)), None);
     }
 
     /// [`boardable`] with `others` police besides the trader in the

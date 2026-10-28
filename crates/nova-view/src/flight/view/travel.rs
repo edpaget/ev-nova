@@ -570,7 +570,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// A Tab or `\` on the map ([`MapCycle`]), as `_MapFilter` takes it
     /// off a planet (@0x13d0c-0x140d8). On the hypergate map, the map's
     /// selection steps to the next of the pending hypergate's
-    /// destinations ([`Session::hypergate_cycle`],
+    /// destinations (`nova_sim::Session::hypergate_cycle`,
     /// [`next_gate_pick`](nova_sim::gate::next_gate_pick)), back with
     /// Shift, held as it is so a hidden one steps on too; no nav mode is
     /// written and the nav area isn't redrawn, as the original's mode 4 is

@@ -1951,10 +1951,10 @@ mod tests {
             }]
         );
         assert_eq!(
-            session.ship_long_name(ShipId(VIPER)),
+            session.statics.ship_long_name(ShipId(VIPER)),
             Some("Federation Viper")
         );
-        assert_eq!(session.ship_long_name(ShipId(999)), None);
+        assert_eq!(session.statics.ship_long_name(ShipId(999)), None);
     }
 
     #[test]

@@ -1688,10 +1688,16 @@ mod tests {
     fn the_session_names_a_junk_and_an_outfit_by_their_records() {
         let catalog = contraband_catalog(0);
         let session = Session::start(&catalog).expect("starts");
-        assert_eq!(session.junk_lc_name(BIO_WEAPONS), Some("bio-weapons"));
-        assert_eq!(session.junk_lc_name(JunkId(151)), None);
-        assert_eq!(session.outfit_names(BLASTER), Some(("blaster", "blasters")));
-        assert_eq!(session.outfit_names(OutfitId(151)), None);
+        assert_eq!(
+            session.statics.junk_lc_name(BIO_WEAPONS),
+            Some("bio-weapons")
+        );
+        assert_eq!(session.statics.junk_lc_name(JunkId(151)), None);
+        assert_eq!(
+            session.statics.outfit_names(BLASTER),
+            Some(("blaster", "blasters"))
+        );
+        assert_eq!(session.statics.outfit_names(OutfitId(151)), None);
     }
 
     #[test]

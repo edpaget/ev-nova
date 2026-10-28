@@ -8,7 +8,7 @@
 //!   (`_shipName` 0x293d80), as the pilot holds them; a ship with no name
 //!   reads empty.
 //! - **The ship's class** (`shipClass[type]`+0x6c), the name the player
-//!   info's Ship Class row shows (`nova_sim::Session::ship_name`), and the
+//!   info's Ship Class row shows (`Session::ship_name`), and the
 //!   type flown, which the view reads the subtitle (+0xac, the `shïp`'s
 //!   Subtitle, which `_LoadObjectData` copies from the resource's 0x6E6
 //!   @0x7b0e7-0x7b10a) and the picture of.
