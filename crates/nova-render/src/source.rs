@@ -91,8 +91,6 @@ impl ImageSource for GameData {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::path::Path;
 
     use nova_data::Record;
     use nova_data::graphics::GraphicsError;
@@ -100,40 +98,14 @@ mod tests {
         Cicn, Ctab, DirectBits, PictBuilder, Ppat, RledBuilder, rgb888_pict,
     };
     use nova_data::records::spin::Spin;
-    use nova_data::store::fs::{DirLister, EntryKind, Listing};
-    use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader, ResType};
+    use nova_data::store::fixture::store_of;
+
+    use nova_rsrc::ResType;
 
     use super::*;
 
-    /// One data file, `/data/Nova Data`, holding a fork of `resources`.
-    struct OneFile(Vec<u8>);
-
-    impl DirLister for OneFile {
-        fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-            Ok(vec![Listing {
-                name: "Nova Data".into(),
-                kind: EntryKind::File,
-            }])
-        }
-    }
-
-    impl ForkReader for OneFile {
-        fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            Ok((fork == Fork::Data).then(|| self.0.clone()))
-        }
-    }
-
     fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
-        let fork = resources
-            .iter()
-            .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
-                fork.resource(*ty, *id, None, data)
-            })
-            .build()
-            .bytes;
-        let file = OneFile(fork);
-        GameData::load(&file, &file, Path::new("/data"), None).unwrap()
+        store_of(resources)
     }
 
     /// A 3x2 picture: red, green, blue over white, black, grey.
