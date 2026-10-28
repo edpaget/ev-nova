@@ -3,12 +3,26 @@
 //! setup, after the view's opening read, and the run's history comes back
 //! through the adapter's one read (`SessionFlight::carry_over`). The
 //! setup's nova-sim side is `nova_sim::Session::set_up`'s tests; the
-//! adapter's forward is `sim_adapter`'s.
+//! adapter's forward is `sim_adapter`'s. They sit beside the build, out of
+//! the component tests' tree, so that tree knows only `FakeFlight`
+//! (rdm:phase/view-sim-seam/phase-15-integration-test-set).
 
-use super::*;
-use crate::text::fixture::MonoMetrics;
-use nova_sim::CarryOver;
+use std::rc::Rc;
+
+use nova_sim::fixture::SessionBuilder;
+use nova_sim::landing::StellarFlags;
 use nova_sim::map_borders::Next;
+use nova_sim::{
+    CarryOver, DisableRule, NeverFires, Pilot, RuleKey, RuleSource, Rulebook, Session,
+    SessionSetup, ShipId, SimMessage, StartError, SystemId, TICK, Vec2,
+};
+
+use crate::flight::fake_catalog::{Counting, FakeCatalog, MAP, catalog, key, rolling_one, tap};
+use crate::flight::view::FlightView;
+use crate::flight::{Collaborators, FlightStart, begin_game, enter_game, open_flight, test_flight};
+use crate::system::catalog::StellarId;
+use crate::text::fixture::MonoMetrics;
+use crate::{Input, Key, Point, Screen};
 
 /// A view over a real flight built at the edge, for the edge's own
 /// checks: the view's tests run on [`FakeFlight`].

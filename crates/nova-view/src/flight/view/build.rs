@@ -680,3 +680,6 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
         }
     }
 }
+
+#[cfg(test)]
+mod edge_checks;

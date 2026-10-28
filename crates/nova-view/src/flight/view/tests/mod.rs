@@ -4,22 +4,21 @@
 //! adapter's checks share come from `flight::fake_catalog`. This module
 //! holds the rest of what the component tests share: the fake-based
 //! helpers ([`Faked`], [`faked`], [`sent`], the `faked_map_*` helpers,
-//! ...) and the helpers generic over any [`FlightSim`]. A real
-//! `nova_sim::Session` is started only by the edge's checks (`edge`), and,
-//! outside this module, by the adapter's checks (`sim_adapter`'s),
+//! ...) and the helpers generic over any [`FlightSim`]. No test here
+//! starts a real `nova_sim::Session` or imports a real-session type: the
+//! adapter's checks are `sim_adapter`'s, the edge's are
+//! `build::edge_checks`, and the integration set is
 //! `tests/it/flight_seam.rs` and the stock tests
-//! (rdm:phase/view-sim-seam/phase-14-view-tests-on-port).
+//! (rdm:phase/view-sim-seam/phase-15-integration-test-set).
 
 use std::cell::RefCell;
 use std::num::NonZeroU16;
 
 use crate::system::camera::{VIEW_CENTER, VIEW_SIZE};
-use nova_sim::Session;
 use nova_sim::flight_frame::GateFade;
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
-    DisableRule, LandingSite, OutfitId, Reserves, ShipId, ShipStats, SimSound, StartError,
-    SystemId, TICK, Vec2,
+    LandingSite, OutfitId, Reserves, ShipId, ShipStats, SimSound, SystemId, TICK, Vec2,
 };
 
 use super::*;
@@ -42,7 +41,6 @@ use crate::flight::sim_port::fixture::{FakeFlight, record};
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::Tag;
 use crate::flight::weapons;
-use crate::flight::{Collaborators, FlightStart, begin_game, enter_game, open_flight, test_flight};
 use crate::galaxy::MapMode;
 use crate::sound::Sound;
 use crate::spaceport::PortDialog;
@@ -51,14 +49,12 @@ use crate::system::{scene, starfield};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{DrawList, ImageKey, Input, MouseButton, Screen, ScreenAction};
-use nova_sim::SessionSetup;
 use nova_sim::ShipIff;
-use nova_sim::fixture::SessionBuilder;
 use nova_sim::flight_frame::{Answer, FlightCommand, FlightFrame, MapClick};
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::{
     AbortError, AcceptError, Assigned, Assignment, CombatCatalog, ComputerRefusal, Controls,
-    FighterNote, MissionId, MissionShown, NotOffered, Pilot, PilotCatalog, PlayerCommand, Rulebook,
+    FighterNote, MissionId, MissionShown, NotOffered, PilotCatalog, PlayerCommand, Rulebook,
     StellarIff, StellarPick, Take, Taken, Turn, VenueOffer,
 };
 
@@ -75,7 +71,6 @@ mod combat;
 mod comm_line;
 mod controls;
 mod dialog_map;
-mod edge;
 mod escorts;
 mod faked_board;
 mod faked_combat;

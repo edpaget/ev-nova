@@ -591,7 +591,7 @@ fn a_dominated_stellars_or_a_hypergates_greeting_states_no_fee() {
 
 /// A hypergate's greeting is one of its own, picked on the view's
 /// wording's chance, which the edge makes the flight's
-/// (`edge::the_edge_hands_the_flight_and_the_wording_one_chance`); when
+/// (`build::edge_checks::the_edge_hands_the_flight_and_the_wording_one_chance`); when
 /// the flight greets is its own.
 #[test]
 fn a_hypergates_greeting_is_one_of_its_own_by_a_roll() {
