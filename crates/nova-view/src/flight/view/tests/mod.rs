@@ -7,8 +7,7 @@ use nova_sim::landing::StellarFlags;
 use nova_sim::{
     Behaviour, CharacterStart, CommodityStrings, DateAffixes, DisableRule, DisasterRecord,
     GateSite, JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId,
-    ShipRecord, ShipStats, SimDiagnostic, SimSound, StarSystem, StartDate, StartError, SystemId,
-    TICK, Vec2,
+    ShipRecord, ShipStats, SimSound, StarSystem, StartDate, StartError, SystemId, TICK, Vec2,
 };
 use nova_sim::{Session, ShipState};
 
@@ -79,6 +78,7 @@ mod drain;
 mod edge;
 mod escorts;
 mod faked_board;
+mod faked_combat;
 mod faked_desk;
 mod faked_docked;
 mod faked_escorts;
@@ -1153,26 +1153,6 @@ fn flight() -> View {
     test_flight::new(catalog())
 }
 
-/// `session`'s ships, shots and beams, its smoke frame, murk, player and
-/// double time as a pass's report holds them
-/// (`nova_sim::Session::step`), with no fight events or quotes: for a
-/// test of a step of the view's own that reads a pass.
-fn pass_of(session: &Session) -> nova_sim::flight_frame::PassReport {
-    use nova_sim::flight_frame::{FrameShot, PassReport};
-    let mut frame = FlightFrame::default();
-    session.fill_frame(&mut frame);
-    PassReport {
-        ships: frame.ships,
-        shots: session.shots().iter().map(FrameShot::of).collect(),
-        beam_weapons: session.beams().iter().map(|beam| beam.weapon.id).collect(),
-        smoke_frame: session.smoke_frame(),
-        system_murk: session.system_murk(),
-        player_position: session.player().position,
-        double_time: session.double_time(),
-        ..PassReport::default()
-    }
-}
-
 #[test]
 fn a_shared_catalog_shows_in_its_flights_debug() {
     let mut flight: SessionFlight<()> = SessionFlight::new(Err("no chär".to_owned()));
@@ -1614,13 +1594,6 @@ fn tap(view: &mut FlightView<FakeCatalog, impl FlightSim>, k: Key) {
 /// Taps `k`, one of the stellar slot keys, then runs the frame whose slot
 /// block takes it.
 fn tap_slot(view: &mut View, k: Key) {
-    tap(view, k);
-    ticks(view, 1);
-}
-
-/// Taps `k`, then runs the step whose secondary block takes it (see
-/// `nova_sim::session`'s `secondary_select`).
-fn tap_and_step(view: &mut View, k: Key) {
     tap(view, k);
     ticks(view, 1);
 }
@@ -2552,11 +2525,6 @@ fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCatalog
     }
 }
 
-fn npc_ids(view: &View) -> Vec<NpcId> {
-    let session = view.session().expect("flying");
-    session.npcs().iter().map(|npc| npc.id).collect()
-}
-
 /// Says no ship is disabled, counting the times it is asked.
 #[derive(Debug, Default)]
 struct Counting {
@@ -2838,13 +2806,6 @@ fn target_of(view: &View) -> Option<NpcId> {
     view.session().expect("flying").target().map(|npc| npc.id)
 }
 
-/// Taps R while holding Alt (Option).
-fn alt_tap(view: &mut View, k: Key) {
-    view.input(&key(Key::Alt, true));
-    tap(view, k);
-    view.input(&key(Key::Alt, false));
-}
-
 /// How many of the shots in flight are of `weapon`.
 fn shots_of(view: &View, weapon: WeaponId) -> usize {
     let session = view.session().expect("flying");
@@ -2853,10 +2814,6 @@ fn shots_of(view: &View, weapon: WeaponId) -> usize {
         .iter()
         .filter(|shot| shot.weapon.id == weapon)
         .count()
-}
-
-fn secondary_of(view: &View) -> Option<WeaponId> {
-    view.session().expect("flying").secondary()
 }
 
 /// The first command matching `wanted`'s position in `list`.
@@ -2912,90 +2869,6 @@ fn killed_in(death_delay: i16) -> FakeCatalog {
     catalog.hulls[0].death_delay = death_delay;
     catalog.hulls[1] = hull_of(129, &[BLASTER]);
     catalog
-}
-
-/// [`killed_in`] (the player's `DeathDelay` `death_delay`) where the
-/// player starts with each of `outfits` (188, `ModType` 11, the escape
-/// pod; 187, `ModType` 20, auto-eject), with records of its ship and
-/// of the pod.
-fn ejecting_in(death_delay: i16, outfits: &[i16]) -> FakeCatalog {
-    let mut catalog = killed_in(death_delay);
-    let fitted = |id, mod_type| OutfitRecord {
-        mods: [(mod_type, 0), (0, 0), (0, 0), (0, 0)],
-        ..holding(id, WeaponId(128))
-    };
-    catalog.outfits.extend([fitted(188, 11), fitted(187, 20)]);
-    catalog.defaults = outfits.iter().map(|&id| (OutfitId(id), 1)).collect();
-    catalog.ships.extend([ship_class(128), ship_class(895)]);
-    catalog
-}
-
-/// `shïp` `id`'s record, of [`FIELDS`].
-fn ship_class(id: i16) -> ShipRecord {
-    ShipRecord {
-        id: ShipId(id),
-        name: format!("Ship {id}"),
-        short_name: format!("Ship {id}"),
-        long_name: String::new(),
-        fields: FIELDS,
-        defaults: Vec::new(),
-        default_slots: [None; 8],
-        strength: 0,
-        cost: 900,
-        tech_level: 1,
-        buy_random: 100,
-        hire_random: 0,
-        require: 0,
-        availability: nova_sim::Test::default(),
-        appear_on: nova_sim::Test::default(),
-        flags: 0,
-        flags3: 0,
-        disp_weight: 0,
-        max_gun: 0,
-        max_tur: 0,
-        length: 0,
-        crew: 0,
-        inherent_ai: 1,
-        comm_name: String::new(),
-        inherent_govt: None,
-        combat_govt: None,
-        escort_type: -1,
-        skill_var: 0,
-        subtitle: String::new(),
-        upgrade_to: None,
-        esc_upgrd_cost: 0,
-        esc_sell_value: 0,
-        on_capture: nova_sim::Script::default(),
-        on_purchase: nova_sim::Script::default(),
-        on_retire: nova_sim::Script::default(),
-    }
-}
-
-/// `catalog`'s view under its NPC's fire, holding each of `keys`.
-fn ejecting_view(catalog: FakeCatalog, keys: &[Key]) -> View {
-    let mut view = now_deciding(fighting(catalog, &placed(750, 650, 180)), Rc::new(Firing));
-    for &held in keys {
-        view.input(&key(held, true));
-    }
-    view
-}
-
-/// Ticks `view` until the player is in the escape pod, or for 60
-/// ticks: whether it got there, and whether it was seen breaking up with
-/// its countdown begun. The frame of the hit that breaks it up shows it
-/// dying with the timer unset; the next frame's eject check (@0x6f22c)
-/// comes before its display sets the timer (@0x43e29).
-fn until_ejected(view: &mut View) -> (bool, bool) {
-    let mut broke_up = false;
-    for _ in 0..60 {
-        view.tick(TICK);
-        match view.session().expect("flying").player_fate() {
-            PlayerFate::Ejected { .. } => return (true, broke_up),
-            PlayerFate::BreakingUp { ticks_left, .. } if ticks_left > 0 => broke_up = true,
-            _ => {}
-        }
-    }
-    (false, broke_up)
 }
 
 /// Steps `view` until the player's ship explodes, calling
@@ -3507,18 +3380,4 @@ fn floating_alpha(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<u8> 
             DrawCommand::Line { color, .. } => color.a,
             _ => unreachable!(),
         })
-}
-
-fn sims(view: &mut View) -> Vec<SimSound> {
-    view.take_sounds()
-        .into_iter()
-        .filter_map(|sound| match sound {
-            Sound::Sim(sound) => Some(sound),
-            _ => None,
-        })
-        .collect()
-}
-/// The times `view` raised `sound` since its sounds were last taken.
-fn count(view: &mut View, sound: SimSound) -> usize {
-    sims(view).into_iter().filter(|&s| s == sound).count()
 }

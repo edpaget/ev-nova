@@ -22829,6 +22829,32 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn letting_go_of_the_fire_keys_stops_the_players_shots() {
+        let catalog = with_secondaries(catalog());
+        let mut session = Session::start(&catalog).expect("starts");
+        session.select_secondary(false);
+        session.hold_fire(true, true);
+        let mut fired = Vec::new();
+        for _ in 0..30 {
+            work(&mut session, &catalog, Controls::default());
+            fired.extend(fired_by_the_player(&session.take_combat_events()));
+        }
+        assert!(
+            fired.contains(&WeaponId(128)) && fired.contains(&ROCKET),
+            "{fired:?}"
+        );
+        session.hold_fire(false, false);
+        for _ in 0..30 {
+            work(&mut session, &catalog, Controls::default());
+            assert_eq!(
+                fired_by_the_player(&session.take_combat_events()),
+                [],
+                "let go"
+            );
+        }
+    }
+
+    #[test]
     fn the_secondary_lines_count_is_its_ammunitions_rounds_unless_hidden() {
         let catalog = with_secondaries(catalog());
         let mut session = Session::start(&catalog).expect("starts");
