@@ -24,7 +24,7 @@
 
 use std::rc::Rc;
 
-use nova_sim::{AsteroidCatalog, CombatCatalog, Pilot, SessionSetup, SimCatalog};
+use nova_sim::{AsteroidCatalog, CombatCatalog, Pilot, Rulebook, SessionSetup, SimCatalog};
 
 use super::catalog::{CombatLooks, ShipSprites, StatusBars};
 use super::escorts::EscortMenuLooks;
@@ -86,20 +86,32 @@ pub fn open_flight<C: EdgeCatalog + 'static>(
     setup: SessionSetup,
     collaborators: Collaborators,
 ) -> FlightView<C> {
-    let catalog = Rc::new(catalog);
-    let rules = setup.rules;
-    let chance = collaborators.chance.clone();
     let slots_carried = setup.carry.slot_sprites.is_some();
-    let sim = match start {
-        FlightStart::New => SessionFlight::start(&catalog),
-        FlightStart::Pilot(pilot) => SessionFlight::fly(&catalog, pilot),
-        FlightStart::Loaded(pilot) => SessionFlight::load(&catalog, pilot, &rules),
-    }
-    .with_collaborators(collaborators);
-    let mut view = FlightView::over(catalog, sim, &rules, chance);
+    let mut view = opened(Rc::new(catalog), start, &setup.rules, collaborators);
     view.sim_mut().set_up(setup);
     view.show_set_up(slots_carried);
     view
+}
+
+/// The bare opening, which [`open_flight`] sets up after and the test
+/// flights leave bare: the [`SessionFlight`] `start` says over `catalog`,
+/// a load's fallbacks reading `rules`, its calls handed `collaborators`,
+/// read by the view ([`FlightView::over`]) by `rules`, its wording on the
+/// collaborators' chance.
+fn opened<C: EdgeCatalog + 'static>(
+    catalog: Rc<C>,
+    start: FlightStart,
+    rules: &Rulebook,
+    collaborators: Collaborators,
+) -> FlightView<C> {
+    let chance = collaborators.chance.clone();
+    let sim = match start {
+        FlightStart::New => SessionFlight::start(&catalog),
+        FlightStart::Pilot(pilot) => SessionFlight::fly(&catalog, pilot),
+        FlightStart::Loaded(pilot) => SessionFlight::load(&catalog, pilot, rules),
+    }
+    .with_collaborators(collaborators);
+    FlightView::over(catalog, sim, rules, chance)
 }
 
 /// Conveniences for tests: a bare flight, built as the view's constructors
@@ -154,15 +166,6 @@ pub mod test_flight {
         start: FlightStart,
         collaborators: Collaborators,
     ) -> FlightView<C> {
-        let catalog = Rc::new(catalog);
-        let rules = Rulebook::default();
-        let chance = collaborators.chance.clone();
-        let sim = match start {
-            FlightStart::New => SessionFlight::start(&catalog),
-            FlightStart::Pilot(pilot) => SessionFlight::fly(&catalog, pilot),
-            FlightStart::Loaded(pilot) => SessionFlight::load(&catalog, pilot, &rules),
-        }
-        .with_collaborators(collaborators);
-        FlightView::over(catalog, sim, &rules, chance)
+        super::opened(Rc::new(catalog), start, &Rulebook::default(), collaborators)
     }
 }
