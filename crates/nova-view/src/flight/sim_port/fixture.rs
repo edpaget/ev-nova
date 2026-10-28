@@ -34,13 +34,13 @@ use nova_sim::{JumpReadiness, PlayerFate};
 
 use nova_sim::mission::screens::OFFER_GAP_TICKS;
 use nova_sim::{
-    Direction, Good, HireList, JunkId, Lot, Market, MissionInfo, News, Order, OutfitId, Outfitter,
-    PlayerInfo, ShipNaming, ShipRefusal, Shipyard,
+    Direction, Good, HireList, Lot, Market, MissionInfo, News, Order, Outfitter, PlayerInfo,
+    ShipNaming, ShipRefusal, Shipyard,
 };
 
 use nova_sim::DeskReading;
 
-use super::{CommSource, FlightSim, MapSource, NameSource, PilotSource, PortSource};
+use super::{CommSource, FlightSim, MapSource, PilotSource, PortSource};
 use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 
 /// A scripted [`FlightSim`]: it shows the frame it was given, records
@@ -70,9 +70,10 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// its table ([`FakeFlight::set_names`]) in its opening, failed or not. It
 /// answers
 /// [`CommSource`] from [`FakeComm`] ([`FakeFlight::comm_mut`]),
-/// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]),
-/// [`NameSource`] from [`FakeNames`] ([`FakeFlight::names_mut`]) and
-/// [`PilotSource`] from [`FakePilot`] ([`FakeFlight::pilot_mut`]). It
+/// [`PortSource`] from [`FakePort`] ([`FakeFlight::port_mut`]) and
+/// [`PilotSource`] from [`FakePilot`] ([`FakeFlight::pilot_mut`]). Its
+/// player's ship's name, its date and the systems it has explored are
+/// its frame's ([`FakeFlight::set_frame`]). It
 /// answers the message line's commands ([`FlightCommand::CommShown`],
 /// [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`])
 /// and the settings ([`FlightCommand::SetWindowWidth`],
@@ -106,7 +107,6 @@ pub struct FakeFlight {
     descriptions: VecDeque<String>,
     comm: FakeComm,
     port: FakePort,
-    names: FakeNames,
     pilot: FakePilot,
     failure: Option<String>,
     desk: FakeDesk,
@@ -174,38 +174,6 @@ pub struct FakePort {
     pub can_hire_escorts: bool,
 }
 
-/// What a [`FakeFlight`] answers the [`NameSource`] questions with, each
-/// field the answer to the question of its name, a list of what it names
-/// for the questions that take one. The default names nothing, as a
-/// [`NameSource`]'s defaults do.
-#[derive(Clone, Debug, Default)]
-pub struct FakeNames {
-    /// The ship classes [`NameSource::ship_name`] names, with their names.
-    pub ship_names: Vec<(ShipId, String)>,
-    /// The ship classes [`NameSource::ship_long_name`] names, with their
-    /// long names.
-    pub ship_long_names: Vec<(ShipId, String)>,
-    /// The outfits [`NameSource::outfit_name`] names, with their names.
-    pub outfit_names: Vec<(OutfitId, String)>,
-    /// The outfits [`NameSource::outfit_names`] names, with their
-    /// lower-case names and plurals.
-    pub outfit_lc_names: Vec<(OutfitId, (String, String))>,
-    /// The goods [`NameSource::good_name`] names, with their names.
-    pub good_names: Vec<(Good, String)>,
-    /// The `jünk`s [`NameSource::junk_lc_name`] names, with their
-    /// lower-case names.
-    pub junk_lc_names: Vec<(JunkId, String)>,
-    /// [`NameSource::cargo_name`]'s `STR#` 4001, by index.
-    pub cargo_names: Vec<String>,
-    /// [`NameSource::player_ship_name`]'s answer.
-    pub player_ship_name: Option<String>,
-    /// [`NameSource::long_date`]'s answer.
-    pub long_date: String,
-    /// The texts [`NameSource::plain_text`] fills, each with what it
-    /// gives; any other comes back unchanged.
-    pub plain_texts: Vec<(String, String)>,
-}
-
 /// What a [`FakeFlight`] answers the [`PilotSource`] questions with, each
 /// field the answer to the question of its name. The default shows none,
 /// as a [`PilotSource`]'s defaults do.
@@ -255,10 +223,6 @@ pub struct FakeMap {
     pub map_nav: Option<SavedNav>,
     /// [`MapSource::floating_map_places`]'s answer.
     pub floating: FloatingLinks,
-    /// The stellars [`MapSource::stellar_name`] names, with their names.
-    pub stellar_names: Vec<(StellarId, String)>,
-    /// The systems [`MapSource::has_explored`] says are explored.
-    pub explored: Vec<SystemId>,
     /// [`MapSource::galaxy`]'s answer.
     pub galaxy: Option<OverlaidGalaxy>,
 }
@@ -451,11 +415,6 @@ impl FakeFlight {
     /// What the spaceport's questions are answered with, to script.
     pub fn port_mut(&mut self) -> &mut FakePort {
         &mut self.port
-    }
-
-    /// What the wording's names and date are answered with, to script.
-    pub fn names_mut(&mut self) -> &mut FakeNames {
-        &mut self.names
     }
 
     /// What the pilot's screens are answered with, to script.
@@ -681,18 +640,6 @@ impl MapSource for FakeFlight {
         self.map.floating.clone()
     }
 
-    fn stellar_name(&self, stellar: StellarId) -> Option<String> {
-        self.map
-            .stellar_names
-            .iter()
-            .find(|(id, _)| *id == stellar)
-            .map(|(_, name)| name.clone())
-    }
-
-    fn has_explored(&self, system: SystemId) -> bool {
-        self.map.explored.contains(&system)
-    }
-
     fn galaxy(&self) -> Option<&OverlaidGalaxy> {
         self.map.galaxy.as_ref()
     }
@@ -768,52 +715,6 @@ impl PortSource for FakeFlight {
 
     fn can_hire_escorts(&self) -> bool {
         self.port.can_hire_escorts
-    }
-}
-
-impl NameSource for FakeFlight {
-    fn ship_name(&self, ship: ShipId) -> Option<&str> {
-        named(&self.names.ship_names, &ship).map(String::as_str)
-    }
-
-    fn ship_long_name(&self, ship: ShipId) -> Option<&str> {
-        named(&self.names.ship_long_names, &ship).map(String::as_str)
-    }
-
-    fn outfit_name(&self, outfit: OutfitId) -> Option<&str> {
-        named(&self.names.outfit_names, &outfit).map(String::as_str)
-    }
-
-    fn outfit_names(&self, outfit: OutfitId) -> Option<(&str, &str)> {
-        named(&self.names.outfit_lc_names, &outfit).map(|(name, plural)| (&**name, &**plural))
-    }
-
-    fn good_name(&self, good: Good) -> Option<&str> {
-        named(&self.names.good_names, &good).map(String::as_str)
-    }
-
-    fn junk_lc_name(&self, junk: JunkId) -> Option<&str> {
-        named(&self.names.junk_lc_names, &junk).map(String::as_str)
-    }
-
-    fn cargo_name(&self, cargo: u8) -> Option<String> {
-        self.names.cargo_names.get(usize::from(cargo)).cloned()
-    }
-
-    fn player_ship_name(&self) -> Option<&str> {
-        self.names.player_ship_name.as_deref()
-    }
-
-    fn long_date(&self) -> String {
-        self.names.long_date.clone()
-    }
-
-    fn plain_text(&self, text: &str) -> String {
-        self.names
-            .plain_texts
-            .iter()
-            .find(|(raw, _)| raw == text)
-            .map_or_else(|| text.to_owned(), |(_, filled)| filled.clone())
     }
 }
 
@@ -1751,8 +1652,6 @@ mod tests {
 
     impl PortSource for TakesSettings {}
 
-    impl NameSource for TakesSettings {}
-
     impl PilotSource for TakesSettings {}
 
     #[test]
@@ -1852,8 +1751,6 @@ mod tests {
     impl CommSource for RefusesPlainText {}
 
     impl PortSource for RefusesPlainText {}
-
-    impl NameSource for RefusesPlainText {}
 
     impl PilotSource for RefusesPlainText {}
 
@@ -1982,16 +1879,10 @@ mod tests {
     }
 
     #[test]
-    fn the_fake_fills_the_plain_texts_and_answers_the_hire_as_scripted() {
+    fn the_fake_answers_the_hire_as_scripted() {
         let mut fake = FakeFlight::new();
-        assert_eq!(fake.plain_text("Hi <PN>."), "Hi <PN>.");
         assert!(!fake.can_hire_escorts());
-        fake.names_mut()
-            .plain_texts
-            .push(("Hi <PN>.".to_owned(), "Hi Ada.".to_owned()));
         fake.port_mut().can_hire_escorts = true;
-        assert_eq!(fake.plain_text("Hi <PN>."), "Hi Ada.");
-        assert_eq!(fake.plain_text("Bye."), "Bye.");
         assert!(fake.can_hire_escorts());
     }
 
@@ -2120,8 +2011,6 @@ mod tests {
         assert_eq!(fake.find_map_system("sol"), None);
         assert_eq!(fake.offer_map_marks(MissionId(128)), MapMarks::NONE);
         assert_eq!(fake.map_nav(), None);
-        assert_eq!(fake.stellar_name(StellarId(128)), None);
-        assert!(!fake.has_explored(SystemId(130)));
         assert_eq!(fake.galaxy(), None);
     }
 
@@ -2147,8 +2036,6 @@ mod tests {
         map.marks = Some(marks);
         map.map_nav = Some(saved);
         map.floating = floating.clone();
-        map.stellar_names = vec![(StellarId(128), "Earth".to_owned())];
-        map.explored = vec![SystemId(130)];
         let galaxy = OverlaidGalaxy::new(Vec::new(), nova_sim::story::GalaxyOverlay::default());
         map.galaxy = Some(galaxy.clone());
         assert_eq!(
@@ -2165,10 +2052,6 @@ mod tests {
         assert_eq!(fake.mission_info_map_marks(Some(0)), marks);
         assert_eq!(fake.map_nav(), Some(saved));
         assert_eq!(fake.floating_map_places(), floating);
-        assert_eq!(fake.stellar_name(StellarId(128)).as_deref(), Some("Earth"));
-        assert_eq!(fake.stellar_name(StellarId(129)), None);
-        assert!(fake.has_explored(SystemId(130)));
-        assert!(!fake.has_explored(SystemId(131)));
         assert_eq!(fake.galaxy(), Some(&galaxy));
     }
 
@@ -2446,8 +2329,6 @@ mod tests {
 
     impl MapSource for Broken {}
 
-    impl NameSource for Broken {}
-
     impl PilotSource for Broken {}
 
     impl CommSource for Broken {
@@ -2680,39 +2561,6 @@ mod tests {
             Ok(()),
             "docked, with an exchange, which may trade as it will"
         );
-    }
-
-    #[test]
-    fn the_fake_names_nothing_until_scripted_then_as_scripted() {
-        let mut fake = FakeFlight::new();
-        assert_eq!(fake.ship_name(ShipId(129)), None);
-        assert_eq!(fake.long_date(), "");
-        let names = fake.names_mut();
-        names.ship_names = vec![(ShipId(129), "Viper".to_owned())];
-        names.ship_long_names = vec![(ShipId(129), "Federation Viper".to_owned())];
-        names.outfit_names = vec![(OutfitId(128), "Blaster".to_owned())];
-        names.outfit_lc_names =
-            vec![(OutfitId(128), ("blaster".to_owned(), "blasters".to_owned()))];
-        names.good_names = vec![(Good::Commodity(0), "Food".to_owned())];
-        names.junk_lc_names = vec![(JunkId(150), "bio-weapons".to_owned())];
-        names.cargo_names = vec!["Food".to_owned(), "*Passengers".to_owned()];
-        names.player_ship_name = Some("Kestrel".to_owned());
-        names.long_date = "June 23rd, 1177 NC".to_owned();
-        assert_eq!(fake.ship_name(ShipId(129)), Some("Viper"));
-        assert_eq!(fake.ship_name(ShipId(130)), None, "not listed");
-        assert_eq!(fake.ship_long_name(ShipId(129)), Some("Federation Viper"));
-        assert_eq!(fake.outfit_name(OutfitId(128)), Some("Blaster"));
-        assert_eq!(
-            fake.outfit_names(OutfitId(128)),
-            Some(("blaster", "blasters"))
-        );
-        assert_eq!(fake.good_name(Good::Commodity(0)), Some("Food"));
-        assert_eq!(fake.good_name(Good::Commodity(1)), None);
-        assert_eq!(fake.junk_lc_name(JunkId(150)), Some("bio-weapons"));
-        assert_eq!(fake.cargo_name(1).as_deref(), Some("*Passengers"));
-        assert_eq!(fake.cargo_name(2), None);
-        assert_eq!(fake.player_ship_name(), Some("Kestrel"));
-        assert_eq!(fake.long_date(), "June 23rd, 1177 NC");
     }
 
     #[test]

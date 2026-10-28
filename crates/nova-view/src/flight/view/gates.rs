@@ -31,8 +31,8 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// opens offering its links ([`FlightCommand::OpenHypergate`]), and
     /// over a wormhole the ship passes through at once
     /// ([`FlightCommand::EnterWormhole`]). A refusal names its stellar from
-    /// the scene, or by the flight's name for one the scene doesn't hold
-    /// ([`MapSource::stellar_name`](crate::flight::sim_port::MapSource::stellar_name)),
+    /// the scene, or by the opening's name for one the scene doesn't hold
+    /// ([`Names::stellar`](nova_sim::flight_frame::Names::stellar)),
     /// and says the gate's line when the flight says the stellar is one
     /// ([`Answer::LandRefused`]'s `gate`). Each command is sent under its
     /// gate ([`FlightView::send_gated`]), so a press the flight doesn't take

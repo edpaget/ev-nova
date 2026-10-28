@@ -23,7 +23,7 @@ use nova_sim::{
     ApplyCollaborators, Behaviour, Chance, ControlBits, DisasterId, DisasterRecord, Goal, Good,
     HailOptions, JunkRecord, LandingSite, MissionId, NeverFires, NovaBoarding, NovaLaw, OutfitId,
     Pilot, PlayerFate, RuleKey, RuleSource, Rulebook, Rules, Session, SessionSetup, ShipId,
-    ShipRecord, ShipRef, SimCatalog, StellarPick, SystemId, TagNames, VenueOffer,
+    ShipRecord, ShipRef, SimCatalog, StellarPick, SystemId, VenueOffer,
 };
 
 use crate::flight::catalog::GovtId;
@@ -34,9 +34,7 @@ use crate::flight::fake_catalog::{
     trafficked,
 };
 use crate::flight::sim_port::fixture::check_contract;
-use crate::flight::sim_port::{
-    CommSource, FlightSim, MapSource, NameSource, PilotSource, PortSource,
-};
+use crate::flight::sim_port::{CommSource, FlightSim, MapSource, PilotSource, PortSource};
 use crate::flight::{Collaborators, SessionFlight, SharedChance};
 use crate::system::catalog::StellarId;
 
@@ -744,7 +742,7 @@ fn the_adapter_drains_what_the_session_raised_once() {
 }
 
 #[test]
-fn the_flights_names_and_date_are_its_sessions() {
+fn the_flights_opening_names_and_its_frames_ship_name_and_date_are_its_sessions() {
     let mut data = trading();
     data.ships = shipbuying().ships;
     data.ships[0].long_name = "Federation Fast".to_owned();
@@ -762,40 +760,28 @@ fn the_flights_names_and_date_are_its_sessions() {
         scan_mask: 0,
         lc_name: "bio-weapons".to_owned(),
     }];
-    let strings = FakeCatalog {
-        strings: vec![(4001, vec!["Food".to_owned(), "*Passengers".to_owned()])],
-        ..catalog()
-    };
     let session = SessionBuilder::flying(&data)
         .with_ship_name("Kestrel")
-        .build()
-        .set_up(SessionSetup {
-            strings: Some(Rc::new(strings)),
-            ..SessionSetup::default()
-        });
+        .build();
     let flight = SessionFlight::<FakeCatalog>::from(session);
     let session = flight.session().expect("flying");
+    let names = flight.opening().names;
+    assert_eq!(names, session.opening().names, "the session's");
     let ship = ShipId(129);
-    assert_eq!(flight.ship_name(ship), Some("Fast"));
-    assert_eq!(flight.ship_name(ship), session.ship_name(ship));
-    assert_eq!(flight.ship_long_name(ship), Some("Federation Fast"));
-    assert_eq!(flight.ship_long_name(ship), session.ship_long_name(ship));
-    let outfit = OutfitId(200);
-    assert_eq!(flight.outfit_name(outfit), Some("Gun 200"));
-    assert_eq!(flight.outfit_name(outfit), session.outfit_name(outfit));
-    assert_eq!(flight.outfit_names(outfit), Some(("gun 200", "guns 200")));
-    assert_eq!(flight.outfit_names(outfit), session.outfit_names(outfit));
-    let food = Good::Commodity(0);
-    assert_eq!(flight.good_name(food), Some("Food"));
-    assert_eq!(flight.good_name(food), session.good_name(food));
-    let junk = nova_sim::JunkId(150);
-    assert_eq!(flight.junk_lc_name(junk), Some("bio-weapons"));
-    assert_eq!(flight.junk_lc_name(junk), session.junk_lc_name(junk));
-    assert_eq!(flight.cargo_name(1).as_deref(), Some("*Passengers"));
-    assert_eq!(flight.cargo_name(1), TagNames::cargo_name(session, 1));
-    assert_eq!(flight.player_ship_name(), Some("Kestrel"));
-    assert_eq!(flight.long_date(), session.long_date_text());
-    assert!(!flight.long_date().is_empty(), "the date is said");
+    assert_eq!(names.ship(ship), Some("Fast"));
+    assert_eq!(names.ship_long(ship), Some("Federation Fast"));
+    assert_eq!(names.outfit(OutfitId(200)), Some("Gun 200"));
+    assert_eq!(
+        names.outfit_lc(OutfitId(200)),
+        Some(("gun 200", "guns 200"))
+    );
+    assert_eq!(names.good(Good::Commodity(0)), Some("Food"));
+    assert_eq!(names.junk_lc(nova_sim::JunkId(150)), Some("bio-weapons"));
+    let mut frame = FlightFrame::default();
+    flight.frame(&mut frame);
+    assert_eq!(frame.player_ship_name.as_deref(), Some("Kestrel"));
+    assert_eq!(frame.long_date, session.long_date_text());
+    assert!(!frame.long_date.is_empty(), "the date is said");
 }
 
 /// A shared catalog shows in the flight's `Debug`.

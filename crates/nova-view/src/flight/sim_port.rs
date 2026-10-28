@@ -35,25 +35,36 @@
 //!   flight's chance, is an ask: a [`FlightCommand`] variant answered in
 //!   nova-sim, with an [`Answer`] variant of its own.
 //! - **What is fixed for the flight's life comes as it opens**: the
-//!   weapons whose looks the view reads and why the flight could not
-//!   start ([`FlightOpening`](nova_sim::flight_frame::FlightOpening)),
-//!   handed to `FlightView::over` by the edge, which reads it off the
-//!   adapter (`SessionFlight::opening`), not asked through the port.
+//!   weapons whose looks the view reads, the names it words the flight's
+//!   messages with and why the flight could not start
+//!   ([`FlightOpening`](nova_sim::flight_frame::FlightOpening)), handed to
+//!   `FlightView::over` by the edge, which reads it off the adapter
+//!   (`SessionFlight::opening`), not asked through the port.
+//! - **A name fixed for the flight's life comes in the opening's
+//!   [`Names`](nova_sim::flight_frame::Names)** (a ship's, an outfit's, a
+//!   good's, a `jünk`'s, a stellar's); **a name the flight decides is a
+//!   frame field** (the player's ship's,
+//!   [`FlightFrame::player_ship_name`](nova_sim::flight_frame::FlightFrame::player_ship_name);
+//!   the date, [`FlightFrame::long_date`](nova_sim::flight_frame::FlightFrame::long_date);
+//!   whether a system is explored,
+//!   [`FlightFrame::explored`](nova_sim::flight_frame::FlightFrame::explored)),
+//!   **or rides the value that carries it** (a mission cargo's, on
+//!   [`MissionBoardLine::Retrieved`](nova_sim::MissionBoardLine::Retrieved)).
+//!   A text filled for the pilot is an ask
+//!   ([`FlightCommand::PlainText`]).
 //! - **A readout is a frame field, an action a command, a one-shot output
 //!   an event** ([`FlightFrame`], [`FlightCommand`] with its [`Answer`],
 //!   [`FlightEvent`]), each filled or answered on nova-sim's side and
 //!   pinned there.
 //!
-//! The supertraits, [`MapSource`], [`CommSource`], [`PortSource`],
-//! [`NameSource`] and [`PilotSource`], hold the course map's, the comm's,
-//! the spaceport's, the wording's and the pilot's screens' questions,
-//! each method defaulting to "nothing open" or "no name", so a sim that
-//! has none of them open needs no code. [`MapSource`] has the course
-//! map's, the floating map's and the nav area's, [`CommSource`] the hail's
+//! The supertraits, [`MapSource`], [`CommSource`], [`PortSource`] and
+//! [`PilotSource`], hold the course map's, the comm's, the spaceport's and
+//! the pilot's screens' questions, each method defaulting to "nothing
+//! open", so a sim that has none of them open needs no code. [`MapSource`]
+//! has the course map's and the floating map's, [`CommSource`] the hail's
 //! and the boarding's, [`PortSource`] the spaceport's screens' and the
-//! mission screens', [`NameSource`] the names and the date the view words
-//! the flight's messages with, and [`PilotSource`] the player info
-//! screen's and the pilot panel's.
+//! mission screens', and [`PilotSource`] the player info screen's and the
+//! pilot panel's.
 //!
 //! The `fixture` feature (and this crate's tests) exposes `fixture`:
 //! `FakeFlight`, a scripted sim for the view's component tests, and
@@ -73,9 +84,8 @@ use nova_sim::mission::screens::OFFER_GAP_TICKS;
 use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    Good, HailView, HireList, JunkId, MapMarks, Market, MissionId, MissionInfo, News, OutfitId,
-    Outfitter, PlayerInfo, PlunderView, SavedNav, ShipId, ShipNaming, ShipRefusal, Shipyard,
-    StellarId, SystemId,
+    HailView, HireList, MapMarks, Market, MissionId, MissionInfo, News, Outfitter, PlayerInfo,
+    PlunderView, SavedNav, ShipId, ShipNaming, ShipRefusal, Shipyard, SystemId,
 };
 
 #[cfg(any(test, feature = "fixture"))]
@@ -84,7 +94,7 @@ pub mod fixture;
 /// The flight the view shows, as the view needs it, in four methods: the
 /// frame, the steps, the commands (the asks among them) and the drain (see
 /// the module docs). The supertraits hold the screens' questions.
-pub trait FlightSim: MapSource + CommSource + PortSource + NameSource + PilotSource {
+pub trait FlightSim: MapSource + CommSource + PortSource + PilotSource {
     /// Fills `into` with what the view draws now, writing every field, so
     /// a frame kept from an earlier fill shows nothing stale.
     fn frame(&self, into: &mut FlightFrame);
@@ -105,8 +115,8 @@ pub trait FlightSim: MapSource + CommSource + PortSource + NameSource + PilotSou
     fn drain(&mut self, into: &mut Vec<FlightEvent>);
 }
 
-/// The course map's questions of the flight, and the floating map's and
-/// the nav area's. Each defaults to "nothing open": `None` where the view
+/// The course map's questions of the flight, and the floating map's. Each
+/// defaults to "nothing open": `None` where the view
 /// does nothing without an answer, otherwise nothing found, marked or
 /// listed.
 pub trait MapSource {
@@ -205,20 +215,6 @@ pub trait MapSource {
     /// its clicks test (`nova_sim::Session::floating_map_places`).
     fn floating_map_places(&self) -> FloatingLinks {
         FloatingLinks::default()
-    }
-
-    /// Stellar `stellar`'s name as the session read it, for the nav area
-    /// to name one its scene doesn't hold (`nova_sim::TagNames`).
-    fn stellar_name(&self, stellar: StellarId) -> Option<String> {
-        let _ = stellar;
-        None
-    }
-
-    /// Whether the pilot has explored `system`, which the nav area names
-    /// only then (`nova_sim::Pilot::has_explored`).
-    fn has_explored(&self, system: SystemId) -> bool {
-        let _ = system;
-        false
     }
 
     /// The galaxy the course map is built from: the catalog's star map
@@ -355,76 +351,6 @@ pub trait PortSource {
     }
 }
 
-/// The names and the date the view words the flight's messages with, as
-/// the flight read them, each defaulting to "no name": none, or an empty
-/// date. They are asked as a message is worded, not each frame, so none
-/// is a frame field. A stellar's name is [`MapSource::stellar_name`]: the
-/// wording that names a stellar asks both.
-pub trait NameSource {
-    /// Ship class `ship`'s name (`nova_sim::Session::ship_name`).
-    fn ship_name(&self, ship: ShipId) -> Option<&str> {
-        let _ = ship;
-        None
-    }
-
-    /// Ship class `ship`'s long name
-    /// (`nova_sim::Session::ship_long_name`).
-    fn ship_long_name(&self, ship: ShipId) -> Option<&str> {
-        let _ = ship;
-        None
-    }
-
-    /// Outfit `outfit`'s name (`nova_sim::Session::outfit_name`).
-    fn outfit_name(&self, outfit: OutfitId) -> Option<&str> {
-        let _ = outfit;
-        None
-    }
-
-    /// Outfit `outfit`'s lower-case name and plural
-    /// (`nova_sim::Session::outfit_names`).
-    fn outfit_names(&self, outfit: OutfitId) -> Option<(&str, &str)> {
-        let _ = outfit;
-        None
-    }
-
-    /// Good `good`'s name (`nova_sim::Session::good_name`).
-    fn good_name(&self, good: Good) -> Option<&str> {
-        let _ = good;
-        None
-    }
-
-    /// `jünk` `junk`'s lower-case name
-    /// (`nova_sim::Session::junk_lc_name`).
-    fn junk_lc_name(&self, junk: JunkId) -> Option<&str> {
-        let _ = junk;
-        None
-    }
-
-    /// Cargo `cargo`'s name in `STR#` 4001 (`nova_sim::TagNames::cargo_name`).
-    fn cargo_name(&self, cargo: u8) -> Option<String> {
-        let _ = cargo;
-        None
-    }
-
-    /// The name of the player's ship (`nova_sim::Pilot::ship_name`).
-    fn player_ship_name(&self) -> Option<&str> {
-        None
-    }
-
-    /// The date as the arrival line and the take-off greeting say it
-    /// (`nova_sim::Session::long_date_text`): empty by default.
-    fn long_date(&self) -> String {
-        String::new()
-    }
-
-    /// `text` with its tags filled for the pilot with no mission, as the
-    /// main screen's descriptions are (`nova_sim::Session::plain_text`):
-    /// unchanged by default, a flight with no pilot to fill them for.
-    fn plain_text(&self, text: &str) -> String {
-        text.to_owned()
-    }
-}
-
 /// The pilot's screens' questions of the flight: what the player info
 /// screen and the main screen's pilot panel show, each none by default, a
 /// flight with no pilot to show. Opening the player info screen is a
@@ -457,8 +383,6 @@ mod tests {
 
     impl PortSource for NothingOpen {}
 
-    impl NameSource for NothingOpen {}
-
     impl PilotSource for NothingOpen {}
 
     /// A flight with nothing to it, answering every port method it may
@@ -486,8 +410,6 @@ mod tests {
     impl CommSource for Defaults {}
 
     impl PortSource for Defaults {}
-
-    impl NameSource for Defaults {}
 
     impl PilotSource for Defaults {}
 
@@ -517,28 +439,7 @@ mod tests {
         assert_eq!(source.mission_info_map_marks(Some(0)), MapMarks::NONE);
         assert_eq!(source.map_nav(), None);
         assert_eq!(source.floating_map_places(), FloatingLinks::default());
-        assert_eq!(source.stellar_name(StellarId(128)), None);
-        assert!(!source.has_explored(none));
         assert_eq!(source.galaxy(), None);
-    }
-
-    #[test]
-    fn a_name_source_with_nothing_named_names_nothing() {
-        let source = NothingOpen;
-        assert_eq!(source.ship_name(ShipId(128)), None);
-        assert_eq!(source.ship_long_name(ShipId(128)), None);
-        assert_eq!(source.outfit_name(OutfitId(128)), None);
-        assert_eq!(source.outfit_names(OutfitId(128)), None);
-        assert_eq!(source.good_name(Good::Commodity(0)), None);
-        assert_eq!(source.junk_lc_name(JunkId(128)), None);
-        assert_eq!(source.cargo_name(0), None);
-        assert_eq!(source.player_ship_name(), None);
-        assert_eq!(source.long_date(), "");
-        assert_eq!(
-            source.plain_text("Hello <PSN>."),
-            "Hello <PSN>.",
-            "unchanged"
-        );
     }
 
     #[test]

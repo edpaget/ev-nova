@@ -5,7 +5,8 @@
 //!
 //! **The rule for adding a test here.** One test per port surface (each
 //! `FlightSim` method; each source, `MapSource`, `CommSource`,
-//! `PortSource`, `NameSource` and `PilotSource`; `DevDesk`; the contract)
+//! `PortSource` and `PilotSource`; the opening's names and the frame's
+//! wording fields; `DevDesk`; the contract)
 //! or per router handoff, never one per rule. Each test:
 //!
 //! - builds its session through a nova-sim builder
@@ -1596,8 +1597,8 @@ fn a_real_mission_accept_shows_in_the_mission_info() {
 // `FlightView` over a real session
 // (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks).
 
-/// `NameSource`: the take-off's greeting names its stellar and the
-/// session's long date.
+/// The wording's names: the take-off's greeting names its stellar and
+/// the session's long date, from the opening's names and the frame.
 #[test]
 fn a_real_take_off_greets_naming_its_stellar_and_the_sessions_long_date() {
     let mut view = view();

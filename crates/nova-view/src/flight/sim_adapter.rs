@@ -11,12 +11,19 @@
 //! session's side, with the catalog the view shared, the chance, the law,
 //! the boarding rule and the hail options, and [`FlightSim::drain`] to
 //! `Session::drain_events`; and [`CommSource`]'s to `Session::hailing`
-//! and `Session::boarding`, and [`PortSource`]'s, [`NameSource`]'s and
-//! [`PilotSource`]'s to the session's method of each name. A session that
+//! and `Session::boarding`, and [`PortSource`]'s and [`PilotSource`]'s to
+//! the session's method of each name. The names the view words the
+//! flight's messages with are no port method: the fixed ones come in the
+//! opening (`Session::opening`'s `Names`), the player's ship's name, the
+//! date and the systems explored in the frame (`Session::fill_frame`), a
+//! cargo's on its board line, and a plain text's fill is an ask
+//! (`FlightCommand::PlainText`, `Session::plain_text`). A session that
 //! failed to start fills the default frame, runs no step, refuses every
 //! command but a description's load, which it resolves for a new pilot
-//! (`Session::fresh_description`), answers nothing open and drains
-//! nothing; its opening says why ([`SessionFlight::opening`]).
+//! (`Session::fresh_description`), and a plain text's fill, which it
+//! answers with the text unchanged, answers nothing open and drains
+//! nothing; its opening says why and names nothing
+//! ([`SessionFlight::opening`]).
 //!
 //! **The edge's API**, which the port leaves out, is the adapter's own:
 //! the constructors that build the session ([`SessionFlight::start`],
@@ -56,11 +63,11 @@ use nova_sim::map_search::SearchOutcome;
 use nova_sim::pilot_panel::PilotPanel;
 use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{
-    Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DisableRule, Good, HailOptions,
-    HailView, HireList, JunkId, LegalCode, MapMarks, Market, MissionId, MissionInfo, News, NovaAi,
-    NovaBoarding, NovaDisable, NovaLaw, OutfitId, Outfitter, Pilot, PlayerInfo, PlunderView,
-    PointDefenceRule, Rules, SavedNav, Session, ShipId, ShipNaming, ShipRefusal, Shipyard,
-    SimCatalog, StellarId, StepCollaborators, SystemId, TagNames,
+    Allegiance, ApplyCollaborators, Behaviour, BoardingRule, DisableRule, HailOptions, HailView,
+    HireList, LegalCode, MapMarks, Market, MissionId, MissionInfo, News, NovaAi, NovaBoarding,
+    NovaDisable, NovaLaw, Outfitter, Pilot, PlayerInfo, PlunderView, PointDefenceRule, Rules,
+    SavedNav, Session, ShipId, ShipNaming, ShipRefusal, Shipyard, SimCatalog, StepCollaborators,
+    SystemId,
 };
 
 use nova_sim::{
@@ -69,7 +76,7 @@ use nova_sim::{
 };
 
 use super::SharedChance;
-use super::sim_port::{CommSource, FlightSim, MapSource, NameSource, PilotSource, PortSource};
+use super::sim_port::{CommSource, FlightSim, MapSource, PilotSource, PortSource};
 use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 
 /// The flight of a real `nova_sim::Session`, or why it could not start,
@@ -397,10 +404,10 @@ impl<C> SessionFlight<C> {
 
     /// What the view is handed as the flight opens, for the edge to pass
     /// to `FlightView::over`: the session's opening
-    /// (`nova_sim::Session::opening`, its weapons and no failure), or for a
-    /// session that could not start the reason
-    /// ([`FlightOpening::failed`]). The adapter's own API, not the port's,
-    /// as it is fixed for the flight's life.
+    /// (`nova_sim::Session::opening`, its weapons, its names and no
+    /// failure), or for a session that could not start the reason, with
+    /// nothing named ([`FlightOpening::failed`]). The adapter's own API,
+    /// not the port's, as it is fixed for the flight's life.
     #[must_use]
     pub fn opening(&self) -> FlightOpening {
         match &self.session {
@@ -584,15 +591,6 @@ impl<C> MapSource for SessionFlight<C> {
             .map_or_else(|_| FloatingLinks::default(), Session::floating_map_places)
     }
 
-    fn stellar_name(&self, stellar: StellarId) -> Option<String> {
-        TagNames::stellar_name(self.session().ok()?, stellar)
-    }
-
-    fn has_explored(&self, system: SystemId) -> bool {
-        self.session()
-            .is_ok_and(|session| session.pilot().has_explored(system))
-    }
-
     fn galaxy(&self) -> Option<&OverlaidGalaxy> {
         self.session().ok().map(Session::galaxy)
     }
@@ -686,54 +684,6 @@ impl<C> PortSource for SessionFlight<C> {
     }
 }
 
-/// Each forwards to the session's method of its name, the player's ship
-/// name to its pilot's and the cargo's to `TagNames::cargo_name`; a
-/// failed session names nothing.
-impl<C> NameSource for SessionFlight<C> {
-    fn ship_name(&self, ship: ShipId) -> Option<&str> {
-        self.session().ok()?.ship_name(ship)
-    }
-
-    fn ship_long_name(&self, ship: ShipId) -> Option<&str> {
-        self.session().ok()?.ship_long_name(ship)
-    }
-
-    fn outfit_name(&self, outfit: OutfitId) -> Option<&str> {
-        self.session().ok()?.outfit_name(outfit)
-    }
-
-    fn outfit_names(&self, outfit: OutfitId) -> Option<(&str, &str)> {
-        self.session().ok()?.outfit_names(outfit)
-    }
-
-    fn good_name(&self, good: Good) -> Option<&str> {
-        self.session().ok()?.good_name(good)
-    }
-
-    fn junk_lc_name(&self, junk: JunkId) -> Option<&str> {
-        self.session().ok()?.junk_lc_name(junk)
-    }
-
-    fn cargo_name(&self, cargo: u8) -> Option<String> {
-        TagNames::cargo_name(self.session().ok()?, cargo)
-    }
-
-    fn player_ship_name(&self) -> Option<&str> {
-        self.session().ok()?.pilot().ship_name()
-    }
-
-    fn long_date(&self) -> String {
-        self.session()
-            .map_or_else(|_| String::new(), Session::long_date_text)
-    }
-
-    /// A failed session fills nothing: the text comes back unchanged.
-    fn plain_text(&self, text: &str) -> String {
-        self.session()
-            .map_or_else(|_| text.to_owned(), |session| session.plain_text(text))
-    }
-}
-
 /// Each forwards to the session's method of its name, over the catalog
 /// the view shared ([`SessionFlight::share_catalog`]); a failed session,
 /// or one never shared a catalog, shows none.
@@ -805,7 +755,7 @@ mod fake_catalog_checks;
 #[cfg(test)]
 mod tests {
     use nova_sim::flight_frame::DrawnBoxes;
-    use nova_sim::{DescMovie, StellarPick, Vec2};
+    use nova_sim::{DescMovie, StellarId, StellarPick, Vec2};
 
     use super::*;
     use crate::flight::sim_port::fixture::unlike;
@@ -849,8 +799,6 @@ mod tests {
         assert_eq!(flight.mission_info_map_marks(None), MapMarks::NONE);
         assert_eq!(flight.map_nav(), None);
         assert_eq!(flight.floating_map_places(), FloatingLinks::default());
-        assert_eq!(flight.stellar_name(StellarId(128)), None);
-        assert!(!flight.has_explored(none));
         assert_eq!(flight.galaxy(), None);
 
         assert_eq!(
@@ -861,17 +809,17 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_flight_names_nothing() {
+    fn a_failed_flight_names_nothing_says_no_date_and_has_explored_nothing() {
         let flight = failed();
-        assert_eq!(flight.ship_name(ShipId(128)), None);
-        assert_eq!(flight.ship_long_name(ShipId(128)), None);
-        assert_eq!(flight.outfit_name(OutfitId(128)), None);
-        assert_eq!(flight.outfit_names(OutfitId(128)), None);
-        assert_eq!(flight.good_name(Good::Commodity(0)), None);
-        assert_eq!(flight.junk_lc_name(JunkId(128)), None);
-        assert_eq!(flight.cargo_name(0), None);
-        assert_eq!(flight.player_ship_name(), None);
-        assert_eq!(flight.long_date(), "");
+        assert_eq!(
+            flight.opening().names,
+            nova_sim::flight_frame::Names::default()
+        );
+        let mut frame = unlike(&FlightFrame::default());
+        flight.frame(&mut frame);
+        assert_eq!(frame.player_ship_name, None);
+        assert_eq!(frame.long_date, "");
+        assert!(frame.explored.is_empty(), "every system unexplored");
         assert_eq!(flight.player_info(), None);
         assert_eq!(flight.pilot_panel(), None);
     }
@@ -1209,7 +1157,6 @@ mod tests {
         assert!(!flight.load_repaired());
         assert_eq!(flight.loaded_after_movie(), None);
         assert!(!flight.can_hire_escorts());
-        assert_eq!(flight.plain_text("Hi <PSN>."), "Hi <PSN>.", "unchanged");
     }
 
     #[test]
@@ -1330,9 +1277,19 @@ mod tests {
         assert_eq!(flight.load_repaired(), session.load_repaired());
         assert_eq!(flight.loaded_after_movie(), session.loaded_after_movie());
         assert_eq!(flight.can_hire_escorts(), session.can_hire_escorts());
+    }
+
+    #[test]
+    fn a_plain_text_is_filled_as_the_session_fills_it() {
+        let catalog = shared();
+        let mut flight = SessionFlight::start(&catalog);
+        let expected = flight
+            .session()
+            .expect("started")
+            .plain_text("Hello, <PN>.");
         assert_eq!(
-            flight.plain_text("Hello, <PN>."),
-            session.plain_text("Hello, <PN>.")
+            flight.apply(FlightCommand::PlainText("Hello, <PN>.".to_owned())),
+            Answer::PlainText(expected)
         );
     }
 
