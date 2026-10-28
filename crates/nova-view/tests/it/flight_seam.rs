@@ -875,14 +875,31 @@ fn fighting_data(items: &[(i16, i16)]) -> Rc<GameData> {
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
+/// The draws that place the trader 100 pixels above the player.
+const TRADER_ABOVE: [u32; 8] = [6, 6, 0, 0, 750, 650, 180, 2];
+
 /// A whole flight view over a real session of `data`, its chance
 /// placing the trader 100 pixels above the player, idling.
 fn fighting(data: Rc<GameData>, session: nova_sim::Session) -> FlightView<Rc<GameData>> {
-    let sim = SessionFlight::from(session).with_collaborators(Collaborators {
-        chance: drawing(&[6, 6, 0, 0, 750, 650, 180, 2]),
-        behaviour: Rc::new(Idle),
-        ..Collaborators::default()
-    });
+    fighting_with(
+        data,
+        session,
+        Collaborators {
+            chance: drawing(&TRADER_ABOVE),
+            behaviour: Rc::new(Idle),
+            ..Collaborators::default()
+        },
+    )
+}
+
+/// [`fighting`], its flight handed `collaborators`, whose chance places
+/// the trader.
+fn fighting_with(
+    data: Rc<GameData>,
+    session: nova_sim::Session,
+    collaborators: Collaborators,
+) -> FlightView<Rc<GameData>> {
+    let sim = SessionFlight::from(session).with_collaborators(collaborators);
     let mut view = FlightView::from_session(data, sim, &Rulebook::default());
     // The first step sets the system up.
     view.tick(TICK);
@@ -1148,41 +1165,105 @@ fn a_real_hail_opens_the_comm_dialog_with_the_sessions_hail_view() {
     assert_eq!(view.hailing(), None, "hung up through the port");
 }
 
-/// `session` of `data` stepped once, as a view's first frame steps it:
-/// its trader brought in 100 pixels above the player.
-fn trader_in(data: &Rc<GameData>, mut session: nova_sim::Session) -> nova_sim::Session {
-    let mut chance = drawing(&[6, 6, 0, 0, 750, 650, 180, 2]);
-    let mut collab = nova_sim::StepCollaborators {
-        catalog: data,
-        behaviour: &Idle,
-        rules: nova_sim::Rules::default(),
-        chance: &mut chance,
-    };
-    let mut report = nova_sim::flight_frame::StepReport::default();
-    session.step(
-        &nova_sim::flight_frame::StepInput::default(),
-        1,
-        &mut collab,
-        &mut report,
-    );
-    assert_eq!(session.npcs().len(), 1, "the trader is in");
-    session
+/// Records each crime, and changes nothing.
+#[derive(Debug, Default)]
+struct Witness {
+    seen: std::cell::RefCell<Vec<nova_sim::Crime>>,
+}
+
+impl nova_sim::LegalCode for Witness {
+    fn penalties(
+        &self,
+        crime: nova_sim::Crime,
+        _victim: Option<nova_sim::GovtId>,
+        _govts: &nova_sim::Governments,
+    ) -> Vec<(nova_sim::GovtId, i32)> {
+        self.seen.borrow_mut().push(crime);
+        Vec::new()
+    }
+
+    fn system_penalties(
+        &self,
+        _crime: nova_sim::Crime,
+        _victim: Option<nova_sim::GovtId>,
+        _from: SystemId,
+        _map: &dyn nova_sim::CrimeMap,
+        _govts: &nova_sim::Governments,
+    ) -> Vec<(SystemId, f32)> {
+        Vec::new()
+    }
+}
+
+/// Nova's boarding rules, noting each time it is asked whether a ship
+/// repels its boarders.
+#[derive(Debug, Default)]
+struct Recorder {
+    nova: nova_sim::NovaBoarding,
+    repels: std::cell::Cell<usize>,
+}
+
+impl nova_sim::BoardingRule for Recorder {
+    fn repels(&self, booty: u16) -> bool {
+        self.repels.set(self.repels.get() + 1);
+        self.nova.repels(booty)
+    }
+
+    fn capture_odds(
+        &self,
+        crew: &nova_sim::board::CaptureCrew,
+        chance: &mut dyn nova_sim::Chance,
+    ) -> u8 {
+        self.nova.capture_odds(crew, chance)
+    }
+
+    fn captures(&self, odds: u8, chance: &mut dyn nova_sim::Chance) -> bool {
+        self.nova.captures(odds, chance)
+    }
+
+    fn person_credits(&self, credits: i32, chance: &mut dyn nova_sim::Chance) -> i64 {
+        self.nova.person_credits(credits, chance)
+    }
+
+    fn grant(
+        &self,
+        grant: &nova_sim::PersonGrant,
+        stock: &[nova_sim::GrantStock],
+        free_mass: i64,
+        grant_max: nova_sim::RuleSource,
+        chance: &mut dyn nova_sim::Chance,
+    ) -> Option<nova_sim::Granted> {
+        self.nova.grant(grant, stock, free_mass, grant_max, chance)
+    }
 }
 
 #[test]
 fn a_real_board_opens_the_plunder_dialog_on_the_sessions_boarding() {
     let data = fighting_data(&[]);
-    let mut session = trader_in(&data, SessionBuilder::flying(&data).build());
+    let witness = Rc::new(Witness::default());
+    let recorder = Rc::new(Recorder::default());
+    let mut view = fighting_with(
+        Rc::clone(&data),
+        SessionBuilder::flying(&data).build(),
+        Collaborators {
+            chance: drawing(&TRADER_ABOVE),
+            law: witness.clone(),
+            boarding_rule: recorder.clone(),
+            behaviour: Rc::new(Idle),
+            ..Collaborators::default()
+        },
+    );
+    let session = view.sim_mut().session_mut().expect("flying");
     let trader = session.npcs()[0].id;
-    nova_sim::fixture::disable(&mut session, trader);
-    nova_sim::fixture::put_player_over(&mut session, trader);
-    let sim = SessionFlight::from(session).with_collaborators(Collaborators {
-        behaviour: Rc::new(Idle),
-        ..Collaborators::default()
-    });
-    let mut view = FlightView::from_session(data, sim, &Rulebook::default());
+    nova_sim::fixture::disable(session, trader);
+    nova_sim::fixture::put_player_over(session, trader);
     tap(&mut view, Key::Char('b'));
     let shown = view.take_boarding().expect("the plunder dialog opens");
+    assert!(
+        witness.seen.borrow().contains(&nova_sim::Crime::Board),
+        "judged by the view's law: {:?}",
+        witness.seen.borrow()
+    );
+    assert!(recorder.repels.get() > 0, "the view's boarding rule asked");
     let boarding = view.session().expect("flying").boarding();
     assert_eq!(Some(shown.view), boarding, "the session's boarding");
     assert_eq!(view.boarding(), boarding);
