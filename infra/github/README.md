@@ -38,6 +38,7 @@ in CI.
    | `macos-developer-id-application` | Secure Note | `password`: concealed, `identity`: text (`Developer ID Application: <name> (<TEAMID>)`) | `nova-certs.p12` | `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MACOS_SIGNING_IDENTITY` |
    | `app-store-connect-api-key` | Secure Note | `key id`: text, `issuer id`: text | `AuthKey_<KEYID>.p8` | `APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` |
    | `opentofu-state-encryption` | Password | `password`: concealed, random, at least 16 characters (`pbkdf2`'s minimum) | none | the state passphrase, through `op.env` |
+   | `update-signing-key` | Password | `password`: concealed, standard base64 of 32 random bytes (`openssl rand -base64 32`) | none | `UPDATE_SIGNING_KEY` |
 
    Create the vault in the app (New Vault, `ev-nova-ci`), then each item with
    exactly the title, field labels and attachment name above: the config
@@ -150,6 +151,103 @@ notarized and stapled `Nova.app`. The six repository-level secrets are
 deleted, so the environment's copies are the only ones and a branch dispatch
 signs ad-hoc. The steps above stay as the record; to recover a deleted copy,
 re-add it from the 1Password item `ev-nova-ci`, not by following them.
+
+## The update-signing environment
+
+`update_signing.tf` manages the `update-signing` environment, its one
+secret, and a repository variable:
+
+| Name | Kind | From |
+|---|---|---|
+| `UPDATE_SIGNING_KEY` | environment secret | `update-signing-key`, field `password` |
+| `UPDATE_SIGNING_ENVIRONMENT` | repository Actions variable | the environment's name, `update-signing` |
+
+`UPDATE_SIGNING_KEY` is the Ed25519 seed `nova-appcast` signs the Sparkle
+update feeds with (`crates/nova-bundle/src/appcast`): 32 random bytes as
+standard base64. Its public key is committed as `update_public_key` in
+`crates/nova/Cargo.toml`'s `[package.metadata.bundle]`, where the app
+builds read it to embed it.
+
+The environment's deployment-branch policy is custom and allows `main`
+only, with no required reviewers and no wait timer, as for
+`macos-signing`. `ci.yml`'s `publish` job, which runs only on pushes to
+`main`, is the only job that enters it:
+
+```yaml
+environment: ${{ vars.UPDATE_SIGNING_ENVIRONMENT == 'update-signing' && 'update-signing' || '' }}
+```
+
+The variable is created after the environment, its policy and its secret
+(`depends_on`), so the job names the environment only once it exists with
+its main-only policy. Before that apply the job names no environment, which
+never creates one, and runs with an empty `UPDATE_SIGNING_KEY`.
+
+`publish` signs only when both halves are in place, so the steps below can
+happen in any order:
+
+| `update_public_key` | `UPDATE_SIGNING_KEY` | `publish` |
+|---|---|---|
+| not committed | any | skips the feeds with a warning; the nightly publishes as before |
+| committed | empty | skips the feeds with a warning |
+| committed | malformed, or another key's seed | fails before the tag moves |
+| committed | its seed | signs and uploads both feeds and the build-ID update files |
+
+`nova-appcast` also refuses a build that isn't newer than the one the
+current feeds offer. An older build fails the job and leaves the release
+as it was. The same build (a re-run of a `publish` whose feeds already went
+up) exits 3, which the job reports as a notice and carries on from, leaving
+the feeds as they are.
+
+`mise run infra-plan` and `infra-apply` fail until the
+`update-signing-key` item exists, because its data source can't find it.
+Create the item first. `mise run infra-check` mocks 1Password and passes
+without it.
+
+### Setting up the key
+
+No agent or CI job makes, prints or stores the seed. The operator does
+this once, on their own machine:
+
+1. Create the item in the `ev-nova-ci` vault:
+
+   ```sh
+   op item create --vault ev-nova-ci --category password --title update-signing-key \
+     "password=$(openssl rand -base64 32)"
+   ```
+
+   Or create a Password item titled `update-signing-key` in the app and
+   paste the output of `openssl rand -base64 32` (44 characters).
+2. Print the public key, with the seed passed to that process alone:
+
+   ```sh
+   UPDATE_SIGNING_KEY=op://ev-nova-ci/update-signing-key/password \
+     op run -- mise run appcast -- public-key
+   ```
+
+   Optionally record it in the item as a text field `public key`.
+3. Set `update_public_key = "<printed value>"` in `crates/nova/Cargo.toml`'s
+   `[package.metadata.bundle]`, in a `chore(nova): ...` commit, and land it.
+4. `mise run infra-plan`: expect 4 to add,
+   `github_repository_environment.update_signing`,
+   `github_repository_environment_deployment_policy.update_signing_main`,
+   `github_actions_environment_secret.update_signing_key` and
+   `github_actions_variable.update_signing_environment`. Then
+   `mise run infra-apply`.
+5. The first `main` nightly after steps 1 to 4 deploys `publish` to
+   `update-signing`, prints both feed paths and no "Update feeds not
+   published" warning, and serves
+   `releases/download/nightly/appcast-macos-nightly.xml` and
+   `appcast-windows-nightly.xml`, each naming that run's build ID.
+
+### Rotating the update key
+
+Only after a compromise. Every installed copy embeds the old public key,
+so it rejects feeds signed with a new one and stops updating until the
+player reinstalls from the download page. To rotate, replace the item's
+password, then repeat steps 2 to 4 above: commit the new public key and
+apply, which updates `github_actions_environment_secret.update_signing_key`
+in place. Until both land, `publish` fails on the mismatch rather than sign
+feeds no install accepts.
 
 ## Actions and security settings
 
@@ -268,6 +366,24 @@ There is no `fallback` block, so an unencrypted state is refused, not read.
     (`gh api -X DELETE repos/edpaget/ev-nova/environments/macos-signing`)
     and apply, which recreates it. Nothing is lost: every value is in
     1Password.
+- **The `update-signing` environment**, its policy, its secret and the
+  `UPDATE_SIGNING_ENVIRONMENT` variable have no `import` blocks either
+  (they were created by this config). Import the environment, its policy
+  and the variable, and let the apply rewrite the secret:
+
+  ```sh
+  gh api repos/edpaget/ev-nova/environments/update-signing/deployment-branch-policies \
+    --jq '.branch_policies[] | {id, name}'
+  tofu -chdir=infra/github import github_repository_environment.update_signing ev-nova:update-signing
+  tofu -chdir=infra/github import github_repository_environment_deployment_policy.update_signing_main ev-nova:update-signing:<id>
+  tofu -chdir=infra/github import github_actions_variable.update_signing_environment ev-nova:UPDATE_SIGNING_ENVIRONMENT
+  ```
+
+  inside the same `op run` and `GITHUB_TOKEN` wrapping. Or delete the
+  environment and the variable
+  (`gh api -X DELETE repos/edpaget/ev-nova/environments/update-signing`,
+  `gh variable delete UPDATE_SIGNING_ENVIRONMENT --repo edpaget/ev-nova`)
+  and apply, which recreates them.
 - **The main ruleset** has no `import` block either. Before applying after a
   lost state, import it inside the same `op run` and `GITHUB_TOKEN` wrapping,
   or the apply creates a second `protect-main`:
@@ -396,8 +512,8 @@ For a setting that already exists on GitHub, add an `import` block (with the
 same `for_each = var.import_existing ? ...` guard) and declare the resource
 with today's live values, so the first plan reads
 `N to import, 0 to add, 0 to change, 0 to destroy`. Only then change values
-on purpose. A resource that doesn't exist yet (like the `macos-signing`
-environment) is created instead, with no `import` block; add it to the
+on purpose. A resource that doesn't exist yet (like the `macos-signing` and
+`update-signing` environments) is created instead, with no `import` block; add it to the
 "Lost state" bullet above.
 
 After changing a provider pin, regenerate and commit the lock file:
