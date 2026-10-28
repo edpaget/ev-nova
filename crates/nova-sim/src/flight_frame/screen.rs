@@ -12,16 +12,27 @@
 //!
 //! The asks one screen always makes together are merged into one answer:
 //! the course map's opening ([`ScreenAsk::MapOpening`], [`MapOpen`]), its
-//! redraw ([`ScreenAsk::Map`], [`MapScreen`]) and the floating map's show
-//! ([`ScreenAsk::FloatingMap`], [`FloatingMap`]).
+//! redraw ([`ScreenAsk::Map`], [`MapScreen`]), the floating map's show
+//! ([`ScreenAsk::FloatingMap`], [`FloatingMap`]), the spaceport's shops
+//! ([`ScreenAsk::Shops`], [`PortShops`]) and the bar's news
+//! ([`ScreenAsk::News`], [`BarNews`]).
+//!
+//! An ask is a read: asked twice in a row, it answers the same, but for
+//! one that draws afresh at each ask ([`ScreenAsk::draws_afresh`]). The
+//! shops' and the bar's asks draw the day's rolls not drawn yet on the
+//! flight's chance and keep them, as the original keeps each day's, so
+//! asked again they answer from the rolls kept.
 
-use crate::MissionId;
+use super::port_screens::{BarNews, PortShops};
 use crate::catalog::{ShipId, SystemId};
 use crate::galaxy_map::{GalaxyShown, MapDrawing, MapMarks};
+use crate::hail::HailView;
 use crate::map_borders::BorderSources;
 use crate::map_panel::MapPanel;
 use crate::map_search::SearchOutcome;
+use crate::pilot_panel::PilotPanel;
 use crate::session::SavedNav;
+use crate::{HireList, MissionId, MissionInfo, Outfitter, PlunderView, ShipNaming, ShipRefusal};
 
 /// What a screen asks the session as it opens or as its input changes
 /// ([`Session::screen`](crate::Session::screen)), answered by the
@@ -93,6 +104,71 @@ pub enum ScreenAsk {
     /// The text with its tags filled for the pilot flying, asked as a
     /// screen's text is filled ([`ScreenAnswer::PlainText`]).
     PlainText(String),
+    /// The spaceport's shops, asked as it opens and at each refresh
+    /// ([`ScreenAnswer::Shops`]): the day's rolls not drawn yet are drawn
+    /// on the flight's chance and kept, and the shipyard's build first
+    /// redraws the classes bought or declined since its last.
+    Shops,
+    /// The outfitter alone, asked as its dialog opens after
+    /// `FlightCommand::OpenOutfitter` ([`ScreenAnswer::Outfitter`]), so
+    /// the shipyard isn't built again and its redraws stay where they
+    /// are. Answered nothing where there is no outfitter.
+    Outfitter,
+    /// The ships for hire in the bar, asked as Hire Escort opens and
+    /// after each hire ([`ScreenAnswer::HireList`]). Answered nothing
+    /// where there is no bar.
+    HireList,
+    /// The prompt for naming a ship of the class before it is bought,
+    /// asked as its name prompt opens ([`ScreenAnswer::ShipNaming`]): its
+    /// default name's digits are drawn afresh at each ask
+    /// ([`ScreenAsk::draws_afresh`]). Answered nothing without a catalog,
+    /// whose strings word it.
+    ShipNaming(ShipId),
+    /// The bar's news and its picture, asked as News is pressed
+    /// ([`ScreenAnswer::News`]). Answered nothing with no bar visit under
+    /// way.
+    News,
+    /// What the mission info screen lists, asked as it opens and after
+    /// an abort ([`ScreenAnswer::MissionInfo`]).
+    MissionInfo,
+    /// Whether the mission's offer dialog has a refuse button, asked
+    /// before a docked offer is answered ([`ScreenAnswer::RefusableOffer`]).
+    RefusableOffer(MissionId),
+    /// The text with its tags filled for the mission's offer on the visit
+    /// under way, asked as the mission computer shows a row
+    /// ([`ScreenAnswer::OfferText`]). Answered nothing when it is not
+    /// offered.
+    OfferText {
+        /// The mission offered.
+        mission: MissionId,
+        /// The text to fill.
+        raw: String,
+    },
+    /// The comm dialog's contents while a hail is under way, asked after
+    /// the haggle dialog closes ([`ScreenAnswer::Hail`]). Answered nothing
+    /// with no hail under way, or without a catalog.
+    Hail,
+    /// What is on board the ship being boarded, asked as the plunder
+    /// dialog opens and after each take ([`ScreenAnswer::Boarding`]).
+    /// Answered nothing with no boarding under way.
+    Boarding,
+    /// What the main screen's pilot panel says about the pilot, asked for
+    /// the game held once it changes ([`ScreenAnswer::PilotPanel`]).
+    /// Answered nothing without a catalog.
+    PilotPanel,
+}
+
+impl ScreenAsk {
+    /// Whether the ask draws afresh at each ask, so two asks in a row may
+    /// answer differently: only a ship's name prompt
+    /// ([`ScreenAsk::ShipNaming`]), whose default name's digits are drawn
+    /// each time it opens and kept nowhere, as the original draws them as
+    /// its prompt opens. Every other ask is a read, and the shops' rolls
+    /// it draws are kept.
+    #[must_use]
+    pub fn draws_afresh(&self) -> bool {
+        matches!(self, Self::ShipNaming(_))
+    }
 }
 
 /// Where a course map's marks come from ([`ScreenAsk::MapOpening`]): the
@@ -206,6 +282,29 @@ pub enum ScreenAnswer {
     ComingTraffic(Vec<ShipId>),
     /// [`ScreenAsk::PlainText`]'s.
     PlainText(String),
+    /// [`ScreenAsk::Shops`]'s.
+    Shops(Box<PortShops>),
+    /// [`ScreenAsk::Outfitter`]'s.
+    Outfitter(Box<Outfitter>),
+    /// [`ScreenAsk::HireList`]'s.
+    HireList(Box<HireList>),
+    /// [`ScreenAsk::ShipNaming`]'s: the prompt, or why the class can't be
+    /// bought.
+    ShipNaming(Result<ShipNaming, ShipRefusal>),
+    /// [`ScreenAsk::News`]'s.
+    News(BarNews),
+    /// [`ScreenAsk::MissionInfo`]'s.
+    MissionInfo(MissionInfo),
+    /// [`ScreenAsk::RefusableOffer`]'s.
+    RefusableOffer(bool),
+    /// [`ScreenAsk::OfferText`]'s.
+    OfferText(String),
+    /// [`ScreenAsk::Hail`]'s.
+    Hail(Box<HailView>),
+    /// [`ScreenAsk::Boarding`]'s.
+    Boarding(PlunderView),
+    /// [`ScreenAsk::PilotPanel`]'s.
+    PilotPanel(Box<PilotPanel>),
 }
 
 impl ScreenAnswer {
@@ -227,6 +326,17 @@ impl ScreenAnswer {
             ScreenAsk::FloatingMap => matches!(self, Self::FloatingMap(_)),
             ScreenAsk::ComingTraffic => matches!(self, Self::ComingTraffic(_)),
             ScreenAsk::PlainText(_) => matches!(self, Self::PlainText(_)),
+            ScreenAsk::Shops => matches!(self, Self::Shops(_)),
+            ScreenAsk::Outfitter => matches!(self, Self::Outfitter(_)),
+            ScreenAsk::HireList => matches!(self, Self::HireList(_)),
+            ScreenAsk::ShipNaming(_) => matches!(self, Self::ShipNaming(_)),
+            ScreenAsk::News => matches!(self, Self::News(_)),
+            ScreenAsk::MissionInfo => matches!(self, Self::MissionInfo(_)),
+            ScreenAsk::RefusableOffer(_) => matches!(self, Self::RefusableOffer(_)),
+            ScreenAsk::OfferText { .. } => matches!(self, Self::OfferText(_)),
+            ScreenAsk::Hail => matches!(self, Self::Hail(_)),
+            ScreenAsk::Boarding => matches!(self, Self::Boarding(_)),
+            ScreenAsk::PilotPanel => matches!(self, Self::PilotPanel(_)),
         }
     }
 }
@@ -258,6 +368,20 @@ mod tests {
             ScreenAsk::FloatingMap,
             ScreenAsk::ComingTraffic,
             ScreenAsk::PlainText("Hi.".to_owned()),
+            ScreenAsk::Shops,
+            ScreenAsk::Outfitter,
+            ScreenAsk::HireList,
+            ScreenAsk::ShipNaming(ShipId(129)),
+            ScreenAsk::News,
+            ScreenAsk::MissionInfo,
+            ScreenAsk::RefusableOffer(MissionId(128)),
+            ScreenAsk::OfferText {
+                mission: MissionId(128),
+                raw: "Run <PAY>".to_owned(),
+            },
+            ScreenAsk::Hail,
+            ScreenAsk::Boarding,
+            ScreenAsk::PilotPanel,
         ]
     }
 
@@ -314,7 +438,63 @@ mod tests {
             })),
             ScreenAnswer::ComingTraffic(Vec::new()),
             ScreenAnswer::PlainText(String::new()),
+            ScreenAnswer::Shops(Box::default()),
+            ScreenAnswer::Outfitter(Box::default()),
+            ScreenAnswer::HireList(Box::new(HireList {
+                rows: Vec::new(),
+                cash: 0,
+                room: false,
+                rules: crate::rulebook::Rulebook::default(),
+            })),
+            ScreenAnswer::ShipNaming(Err(ShipRefusal::NoShipyard)),
+            ScreenAnswer::News(BarNews::default()),
+            ScreenAnswer::MissionInfo(MissionInfo::default()),
+            ScreenAnswer::RefusableOffer(false),
+            ScreenAnswer::OfferText(String::new()),
+            ScreenAnswer::Hail(Box::new(HailView {
+                npc: crate::NpcId(0),
+                ship: ShipId(129),
+                first: None,
+                reply: String::new(),
+                comm_name: String::new(),
+                govt_name: None,
+                hostile: false,
+                options: Vec::new(),
+                asking: None,
+                pay_me: true,
+                escort: None,
+                portrait: None,
+            })),
+            ScreenAnswer::Boarding(PlunderView {
+                npc: crate::NpcId(0),
+                ship: ShipId(129),
+                credits: 0,
+                cargo: None,
+                ammo: None,
+                fuel: 0,
+                odds: 0,
+            }),
+            ScreenAnswer::PilotPanel(Box::new(PilotPanel {
+                pilot_name: String::new(),
+                ship_name: String::new(),
+                ship_class: String::new(),
+                ship: ShipId(128),
+                legal_status: String::new(),
+                combat_rating: String::new(),
+                date: String::new(),
+            })),
         ]
+    }
+
+    #[test]
+    fn only_a_ship_naming_draws_afresh() {
+        for ask in asks() {
+            assert_eq!(
+                ask.draws_afresh(),
+                matches!(ask, ScreenAsk::ShipNaming(_)),
+                "{ask:?}"
+            );
+        }
     }
 
     #[test]

@@ -630,6 +630,20 @@ pub fn sample_screen_asks() -> Vec<ScreenAsk> {
         ScreenAsk::FloatingMap,
         ScreenAsk::ComingTraffic,
         ScreenAsk::PlainText(CONTRACT_TEXT.to_owned()),
+        ScreenAsk::Shops,
+        ScreenAsk::Outfitter,
+        ScreenAsk::HireList,
+        ScreenAsk::ShipNaming(ShipId(129)),
+        ScreenAsk::News,
+        ScreenAsk::MissionInfo,
+        ScreenAsk::RefusableOffer(MissionId(128)),
+        ScreenAsk::OfferText {
+            mission: MissionId(128),
+            raw: CONTRACT_TEXT.to_owned(),
+        },
+        ScreenAsk::Hail,
+        ScreenAsk::Boarding,
+        ScreenAsk::PilotPanel,
     ]
 }
 
@@ -1819,7 +1833,7 @@ mod tests {
 
     /// How many kinds of [`ScreenAsk`] there are: `screen_ask_kind`'s
     /// numbers are those below it.
-    const SCREEN_ASK_KINDS: usize = 10;
+    const SCREEN_ASK_KINDS: usize = 21;
 
     /// `ask`'s kind, a number below [`SCREEN_ASK_KINDS`]: the match names
     /// every kind, so a new one must be numbered, and then sampled
@@ -1836,6 +1850,17 @@ mod tests {
             ScreenAsk::FloatingMap => 7,
             ScreenAsk::ComingTraffic => 8,
             ScreenAsk::PlainText(_) => 9,
+            ScreenAsk::Shops => 10,
+            ScreenAsk::Outfitter => 11,
+            ScreenAsk::HireList => 12,
+            ScreenAsk::ShipNaming(_) => 13,
+            ScreenAsk::News => 14,
+            ScreenAsk::MissionInfo => 15,
+            ScreenAsk::RefusableOffer(_) => 16,
+            ScreenAsk::OfferText { .. } => 17,
+            ScreenAsk::Hail => 18,
+            ScreenAsk::Boarding => 19,
+            ScreenAsk::PilotPanel => 20,
         }
     }
 

@@ -7,6 +7,8 @@
 //! changes anything a frame shows, which the tests here pin, so the view
 //! keeps its frame across them.
 
+mod port;
+
 use super::Session;
 use super::apply::ApplyCollaborators;
 use crate::flight_frame::{FloatingMap, MapOpen, MapScreen, MarksFrom, ScreenAnswer, ScreenAsk};
@@ -37,11 +39,31 @@ impl Session {
     ///   and [`Session::floating_preselection`].
     /// - To [`ScreenAsk::ComingTraffic`], [`Session::coming_traffic_ships`].
     /// - To [`ScreenAsk::PlainText`], [`Session::plain_text`].
+    /// - To [`ScreenAsk::Shops`], the exchange ([`Session::market`]), the
+    ///   outfitter ([`Session::outfitter`]) and the shipyard
+    ///   ([`Session::shipyard`]), in that order, the day's rolls not drawn
+    ///   yet drawn on `collab`'s chance, and the room to hire
+    ///   ([`Session::can_hire_escorts`]).
+    /// - To [`ScreenAsk::Outfitter`], [`Session::outfitter`] alone.
+    /// - To [`ScreenAsk::HireList`], [`Session::escorts_for_hire`].
+    /// - To [`ScreenAsk::ShipNaming`], [`Session::ship_naming`].
+    /// - To [`ScreenAsk::News`], [`Session::news`] over
+    ///   [`Session::news_picture`].
+    /// - To [`ScreenAsk::MissionInfo`], [`Session::mission_info`].
+    /// - To [`ScreenAsk::RefusableOffer`],
+    ///   [`Session::refusable_offer_dialog`].
+    /// - To [`ScreenAsk::OfferText`], [`Session::offer_text`].
+    /// - To [`ScreenAsk::Hail`], [`Session::hailing`] with `collab`'s hail
+    ///   options.
+    /// - To [`ScreenAsk::Boarding`], [`Session::boarding`].
+    /// - To [`ScreenAsk::PilotPanel`], [`Session::pilot_panel`].
     ///
-    /// The map's redraw and panels, the hypergate cycle and the coming
-    /// traffic read `collab`'s catalog, and answer
-    /// [`ScreenAnswer::Nothing`] without one. It takes `&mut self` and
-    /// the apply collaborators for the screens whose reads roll on the
+    /// The map's redraw and panels, the hypergate cycle, the coming
+    /// traffic, a ship's name prompt, the hail and the pilot panel read
+    /// `collab`'s catalog, and answer [`ScreenAnswer::Nothing`] without
+    /// one; so does an ask with nothing to show (no outfitter, no bar, no
+    /// bar visit, no offer, no hail, no boarding). It takes `&mut self`
+    /// and the apply collaborators for the screens whose reads roll on the
     /// chance or list the hail's options; the maps read only the catalog.
     #[allow(clippy::needless_pass_by_value)] // the asks come by value, as the port hands them on
     pub fn screen(&mut self, ask: ScreenAsk, collab: &mut ApplyCollaborators<'_>) -> ScreenAnswer {
@@ -108,6 +130,17 @@ impl Session {
                 ScreenAnswer::ComingTraffic(self.coming_traffic_ships(catalog))
             }),
             ScreenAsk::PlainText(text) => ScreenAnswer::PlainText(self.plain_text(&text)),
+            ScreenAsk::Shops => self.shops_screen(collab.chance),
+            ScreenAsk::Outfitter => self.outfitter_screen(collab.chance),
+            ScreenAsk::HireList => self.hire_list_screen(collab.chance),
+            ScreenAsk::ShipNaming(ship) => self.ship_naming_screen(ship, catalog, collab.chance),
+            ScreenAsk::News => self.news_screen(),
+            ScreenAsk::MissionInfo => self.mission_info_screen(),
+            ScreenAsk::RefusableOffer(mission) => self.refusable_offer_screen(mission),
+            ScreenAsk::OfferText { mission, raw } => self.offer_text_screen(mission, &raw),
+            ScreenAsk::Hail => self.hail_screen(catalog, collab.hail_options),
+            ScreenAsk::Boarding => self.boarding_screen(),
+            ScreenAsk::PilotPanel => self.pilot_panel_screen(catalog),
         }
     }
 
@@ -127,7 +160,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{GovtId, MissionId, StarSystem, SystemId};
+    use crate::catalog::{GovtId, MissionId, ShipId, StarSystem, SystemId};
     use crate::chance::NeverFires;
     use crate::flight_frame::FlightFrame;
     use crate::hail::HailOptions;
@@ -507,6 +540,9 @@ mod tests {
             },
             ScreenAsk::HypergateCycle,
             ScreenAsk::ComingTraffic,
+            ScreenAsk::ShipNaming(ShipId(128)),
+            ScreenAsk::Hail,
+            ScreenAsk::PilotPanel,
         ] {
             let sent = format!("{ask:?}");
             assert_eq!(

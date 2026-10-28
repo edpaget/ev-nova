@@ -17,8 +17,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+mod port_screens;
 mod screen;
 
+pub use port_screens::{BarNews, PortShops};
 pub use screen::{FloatingMap, MapOpen, MapScreen, MarksFrom, ScreenAnswer, ScreenAsk};
 
 use crate::asteroid::Asteroid;
