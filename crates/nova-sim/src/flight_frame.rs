@@ -180,14 +180,36 @@ pub struct FlightFrame {
     /// out. They change with the outfits owned and the sabotage flag the
     /// last refresh cached, so they are a frame's, not the opening's.
     pub death_descs: Vec<i16>,
+    /// The name of the player's ship, if it has one
+    /// ([`Pilot::ship_name`](crate::Pilot::ship_name)), which the messages
+    /// that greet or name the player's ship say: a frame's, as buying a
+    /// ship renames it.
+    pub player_ship_name: Option<String>,
+    /// Today's date as the arrival line and the take-off greeting say it
+    /// ([`Session::long_date_text`](crate::Session::long_date_text)):
+    /// a frame's, as landing and jumping move it on. Empty for a flight
+    /// that failed to start.
+    pub long_date: String,
+    /// Every system the pilot has explored, by ascending ID
+    /// ([`Pilot::explored`](crate::Pilot::explored)), which the nav area
+    /// asks of the system it names, whichever nav mode it draws: the
+    /// current one, or one held or noted before (a take-off's, a text's,
+    /// an interface load's). The whole set, not one answer for the
+    /// current mode, so a held mode's system reads as the pilot's
+    /// exploration stands when it is drawn, as `_DrawStatusNav` reads the
+    /// system's explored flag as it draws. Empty for a flight that failed
+    /// to start: every system unexplored. [`FlightFrame::has_explored`]
+    /// asks it.
+    pub explored: Vec<SystemId>,
 }
 
 impl Default for FlightFrame {
     /// A session that failed to start: nav off, no course, in flight, no
     /// jump, the player flying, no hold and no leave due, every gate taken
-    /// ([`Gates::EVERY`]), and no death `dësc`s; the player alone, drawn in full in the ships' layer at the
-    /// default place, with no NPCs, shots, beams, boxes, asteroids or
-    /// stellars; no murk and no background.
+    /// ([`Gates::EVERY`]), and no death `dësc`s; the player alone, drawn in
+    /// full in the ships' layer at the default place, with no NPCs, shots,
+    /// beams, boxes, asteroids or stellars; no murk and no background; no
+    /// ship's name, an empty date and no system explored.
     fn default() -> Self {
         Self {
             nav_mode: NavMode::Off,
@@ -221,6 +243,9 @@ impl Default for FlightFrame {
             hud: FrameHud::default(),
             target: None,
             death_descs: Vec::new(),
+            player_ship_name: None,
+            long_date: String::new(),
+            explored: Vec::new(),
         }
     }
 }
@@ -274,6 +299,13 @@ impl FlightFrame {
     #[must_use]
     pub fn stellar(&self, id: StellarId) -> Option<&FrameStellar> {
         self.stellars.iter().find(|stellar| stellar.id == id)
+    }
+
+    /// Whether the pilot has explored `system` ([`FlightFrame::explored`]
+    /// holds it).
+    #[must_use]
+    pub fn has_explored(&self, system: SystemId) -> bool {
+        self.explored.contains(&system)
     }
 
     /// The stellars shown, in nav order

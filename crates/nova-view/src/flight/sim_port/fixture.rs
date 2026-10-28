@@ -848,6 +848,9 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         hud,
         target,
         death_descs,
+        player_ship_name,
+        long_date,
+        explored,
     } = frame;
     let other_system = SystemId(if system.0 == i16::MAX { 0 } else { i16::MAX });
     FlightFrame {
@@ -935,6 +938,13 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             Some(record::target(0))
         },
         death_descs: one_or_none(death_descs, || 128),
+        player_ship_name: toggle(player_ship_name.as_ref(), "Unlike".to_owned()),
+        long_date: if long_date.is_empty() {
+            "Unlike".to_owned()
+        } else {
+            String::new()
+        },
+        explored: one_or_none(explored, || SystemId(128)),
     }
 }
 
@@ -2927,6 +2937,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one assertion for each of the frame's fields
     fn a_fill_over_an_unlike_frame_changes_every_field() {
         let busy = FlightFrame {
             ships: Vec::new(),
@@ -2951,6 +2962,9 @@ mod tests {
             texts_queued: u64::MAX,
             gates: Gates::EVERY.refusing(PlayerCommand::Map),
             death_descs: vec![130],
+            player_ship_name: Some("Kestrel".to_owned()),
+            long_date: "June 23rd, 1177 NC".to_owned(),
+            explored: vec![SystemId(130)],
             map_key: MapKey {
                 system: SystemId(i16::MAX),
                 nav: NavMode::Stellar(None),
@@ -2992,6 +3006,9 @@ mod tests {
                 hud,
                 target,
                 death_descs,
+                player_ship_name,
+                long_date,
+                explored,
             } = &frame;
             assert_unlike_hud(&other.hud, hud);
             assert_ne!(other.target, *target);
@@ -3023,6 +3040,9 @@ mod tests {
             assert_ne!(other.texts_queued, *texts_queued);
             assert_ne!(other.gates, *gates);
             assert_ne!(other.death_descs, *death_descs);
+            assert_ne!(other.player_ship_name, *player_ship_name);
+            assert_ne!(other.long_date, *long_date);
+            assert_ne!(other.explored, *explored);
             assert_ne!(other.map_key, *map_key);
             assert_ne!(other.map_key.system, map_key.system);
             assert_ne!(other.map_key.nav, map_key.nav);

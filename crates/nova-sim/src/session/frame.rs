@@ -15,7 +15,9 @@ impl Session {
     /// written, so a frame kept from an earlier fill, or from another
     /// session, shows nothing stale: the destructuring names every field,
     /// so a field added to [`FlightFrame`] doesn't compile until it is
-    /// filled here.
+    /// filled here. The player's ship's name, the date and the systems
+    /// explored are written into the strings and the list the frame kept,
+    /// not fresh ones.
     pub fn fill_frame(&self, into: &mut FlightFrame) {
         let FlightFrame {
             nav_mode,
@@ -49,6 +51,9 @@ impl Session {
             hud,
             target,
             death_descs,
+            player_ship_name,
+            long_date,
+            explored,
         } = into;
         *nav_mode = self.nav_mode();
         *system = self.system();
@@ -88,6 +93,10 @@ impl Session {
         self.fill_hud(hud);
         self.fill_target(target);
         *death_descs = self.sabotage_death_descs();
+        write_name(player_ship_name, self.pilot.ship_name());
+        crate::date::write_long_date_text(long_date, self.pilot.date, &self.statics.date_affixes);
+        explored.clear();
+        explored.extend(self.pilot.explored());
     }
 
     /// What the view is handed as the flight opens ([`FlightOpening`]):
@@ -103,6 +112,18 @@ impl Session {
             names: self.statics.names(),
             failure: None,
         }
+    }
+}
+
+/// Writes `name` into `into`, reusing the name it kept when both are some,
+/// so a kept frame's fill allocates nothing for an unchanged name.
+fn write_name(into: &mut Option<String>, name: Option<&str>) {
+    match (name, into.as_mut()) {
+        (Some(name), Some(kept)) => {
+            kept.clear();
+            kept.push_str(name);
+        }
+        (name, _) => *into = name.map(str::to_owned),
     }
 }
 
@@ -301,6 +322,9 @@ pub(super) mod tests {
                 tag: Some(crate::target_panel::TargetTag::Fighter),
             }),
             death_descs: vec![999],
+            player_ship_name: Some("Stale".to_owned()),
+            long_date: "A stale date".to_owned(),
+            explored: vec![SystemId(997), SystemId(999)],
         }
     }
 
@@ -884,6 +908,60 @@ pub(super) mod tests {
         assert_eq!(frame.death_descs, session.sabotage_death_descs());
     }
 
+    // The names the flight decides
+    // (rdm:phase/view-sim-seam/phase-21-names-off-the-port).
+
+    #[test]
+    fn a_fill_writes_the_players_ship_name_and_none_unnamed() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.pilot.ship_name = Some("Kestrel".to_owned());
+        let frame = filled(&session);
+        assert_eq!(frame.player_ship_name.as_deref(), Some("Kestrel"));
+        assert_eq!(
+            frame.player_ship_name.as_deref(),
+            session.pilot().ship_name()
+        );
+        session.pilot.ship_name = None;
+        assert_eq!(filled(&session).player_ship_name, None, "over a stale one");
+    }
+
+    #[test]
+    fn a_fill_writes_the_long_date_and_moves_on_with_the_date() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let frame = filled(&session);
+        assert_eq!(frame.long_date, session.long_date_text());
+        assert!(!frame.long_date.is_empty(), "the date is said");
+        session.pilot.date = session.pilot.date.next_day();
+        let moved = filled(&session);
+        assert_ne!(moved.long_date, frame.long_date, "the date moved on");
+        assert_eq!(moved.long_date, session.long_date_text());
+    }
+
+    #[test]
+    fn a_fill_writes_every_system_explored_one_the_nav_doesnt_select_among_them() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.pilot.explore(SystemId(131));
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
+        session.pilot.explore(SystemId(133));
+        let frame = filled(&session);
+        let explored: Vec<SystemId> = session.pilot().explored().collect();
+        assert_eq!(frame.explored, explored);
+        assert!(
+            frame.has_explored(SystemId(133)),
+            "one the nav doesn't select"
+        );
+        assert!(frame.has_explored(SystemId(131)), "the nav's own");
+        assert!(!frame.has_explored(SystemId(132)), "not yet explored");
+        assert!(!frame.has_explored(SystemId(999)), "over the stale set");
+        let explore = crate::control::SetExpr::parse("X132").expect("parses");
+        session.run_set(&explore, &mut crate::testkit::Scripted::default());
+        assert!(
+            filled(&session).has_explored(SystemId(132)),
+            "explored by X"
+        );
+    }
+
     // What changes the session behind the port without a command
     // (rdm:phase/view-sim-seam/phase-20-view-frame-fills-per-tick): the view
     // keeps its frame across these, so none may change a fill.
@@ -967,5 +1045,9 @@ pub(super) mod tests {
         assert!(frame.shots.is_empty() && frame.stellars.is_empty());
         assert_eq!(frame.effective_murk, 0);
         assert_eq!(frame.system_background, None);
+        assert_eq!(frame.player_ship_name, None);
+        assert_eq!(frame.long_date, "");
+        assert!(frame.explored.is_empty(), "every system unexplored");
+        assert!(!frame.has_explored(SystemId(130)));
     }
 }
