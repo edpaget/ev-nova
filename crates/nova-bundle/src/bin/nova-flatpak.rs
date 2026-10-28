@@ -11,12 +11,18 @@
 //! SDK and Rust extension are installed from when missing. It vendors the
 //! crates with the network, then builds without it.
 //!
-//! Prints the bundle's path. Exits 2 on a usage error or a host other
-//! than x86-64 Linux, and 1 when a step fails.
+//! `NOVA_CHANNEL` names the channel whose branch it exports onto
+//! (`nightly` in CI); unset, it builds flatpak's default branch,
+//! `master`, as a development build.
+//!
+//! Prints the bundle's path. Exits 2 on a usage error, an unknown
+//! `NOVA_CHANNEL` or a host other than x86-64 Linux, and 1 when a step
+//! fails.
 
 use std::env;
 use std::process::ExitCode;
 
+use nova_bundle::channel;
 use nova_bundle::linux::flatpak::host::flatpak_host;
 use nova_bundle::linux::flatpak::plan::build_flatpak;
 use nova_bundle::system::{StdEnv, StdFiles, StdProcess};
@@ -29,9 +35,17 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let channel = match channel::from_env(&StdEnv) {
+        Ok(channel) => channel,
+        Err(e) => {
+            eprintln!("nova-flatpak: {e}");
+            return ExitCode::from(2);
+        }
+    };
     let host = match flatpak_host(
         env::args_os().skip(1).collect(),
         env::var_os("CARGO"),
+        channel,
         &cwd,
         env::consts::OS,
         env::consts::ARCH,

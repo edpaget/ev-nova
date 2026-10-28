@@ -36,6 +36,7 @@ pub mod layout;
 pub mod manifest;
 pub mod plan;
 
+use crate::appcast::Channel;
 use crate::bundle::BundleError;
 use crate::linux::OutputOverlapsWork;
 
@@ -102,6 +103,15 @@ pub const RUNTIME_REPO: &str = "https://dl.flathub.org/repo/flathub.flatpakrepo"
 /// The bundle's file name: the nightly's per-target asset name.
 pub const ASSET: &str = "ev-nova-x86_64-unknown-linux-gnu.flatpak";
 
+/// The branch flatpak builds for: the channel's name, or flatpak's own
+/// default, `master`, for a development build. `flatpak-builder
+/// --default-branch` exports onto it, and `flatpak build-bundle` must be
+/// told it, or it looks for `master`.
+#[must_use]
+pub fn branch(channel: Option<Channel>) -> &'static str {
+    channel.map_or("master", Channel::name)
+}
+
 /// Why the Flatpak could not be built.
 #[derive(Debug, thiserror::Error)]
 pub enum FlatpakError {
@@ -112,4 +122,15 @@ pub enum FlatpakError {
     /// or `flatpak build-bundle` failed.
     #[error(transparent)]
     Step(#[from] BundleError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_branch_is_the_channel_s_name_or_flatpak_s_default() {
+        assert_eq!(branch(Some(Channel::Nightly)), "nightly");
+        assert_eq!(branch(None), "master");
+    }
 }

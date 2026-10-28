@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use super::host::FlatpakHost;
 use super::layout::FlatpakLayout;
 use super::manifest::{cargo_config, render};
-use super::{FlatpakError, REMOTE, RUNTIME_REPO};
+use super::{FlatpakError, REMOTE, RUNTIME_REPO, branch};
+use crate::appcast::Channel;
 use crate::build_id::{self, BuildId};
 use crate::bundle::{self, BundleError, Step, execute, metadata};
 use crate::linux::share;
@@ -32,20 +33,29 @@ pub fn vendor(cargo: &OsStr, spec: &BundleSpec, layout: &FlatpakLayout) -> Invoc
 }
 
 /// `flatpak-builder` building the manifest and exporting it to the
-/// repository. It installs the runtime, SDK and Rust extension from the
-/// user's [`REMOTE`] remote when they are missing, starts from a clean
-/// build directory, keeps its cache in the layout's state directory, and
-/// needs no FUSE (`--disable-rofiles-fuse`).
+/// repository, onto `channel`'s branch when there is one
+/// (`--default-branch`; the manifest names none). It installs the
+/// runtime, SDK and Rust extension from the user's [`REMOTE`] remote when
+/// they are missing, starts from a clean build directory, keeps its cache
+/// in the layout's state directory, and needs no FUSE
+/// (`--disable-rofiles-fuse`).
 #[must_use]
-pub fn flatpak_builder(spec: &BundleSpec, layout: &FlatpakLayout) -> Invocation {
-    Invocation::new("flatpak-builder")
-        .args([
-            "--user",
-            &format!("--install-deps-from={REMOTE}"),
-            "--disable-rofiles-fuse",
-            "--force-clean",
-            "--state-dir",
-        ])
+pub fn flatpak_builder(
+    spec: &BundleSpec,
+    layout: &FlatpakLayout,
+    channel: Option<Channel>,
+) -> Invocation {
+    let mut invocation = Invocation::new("flatpak-builder").args([
+        "--user",
+        &format!("--install-deps-from={REMOTE}"),
+        "--disable-rofiles-fuse",
+        "--force-clean",
+    ]);
+    if let Some(channel) = channel {
+        invocation = invocation.arg(format!("--default-branch={}", channel.name()));
+    }
+    invocation
+        .arg("--state-dir")
         .arg(&layout.state)
         .arg("--repo")
         .arg(&layout.repo)
@@ -53,26 +63,34 @@ pub fn flatpak_builder(spec: &BundleSpec, layout: &FlatpakLayout) -> Invocation 
         .arg(layout.manifest(spec))
 }
 
-/// `flatpak build-bundle`: the app from the repository into one file,
-/// naming Flathub as where its runtime comes from.
+/// `flatpak build-bundle`: the app on `channel`'s [`branch`] from the
+/// repository into one file, naming Flathub as where its runtime comes
+/// from. It names no repository, so the bundle can't update: the signed
+/// repo's own bundle does (`super::repo`).
 #[must_use]
-pub fn build_bundle(spec: &BundleSpec, layout: &FlatpakLayout) -> Invocation {
+pub fn build_bundle(
+    spec: &BundleSpec,
+    layout: &FlatpakLayout,
+    channel: Option<Channel>,
+) -> Invocation {
     Invocation::new("flatpak")
         .arg("build-bundle")
         .arg(format!("--runtime-repo={RUNTIME_REPO}"))
         .arg(&layout.repo)
         .arg(layout.bundle())
         .arg(&spec.identifier)
+        .arg(branch(channel))
 }
 
-/// The steps that build `spec`'s Flatpak, the build `build`, under
-/// `layout` with `cargo`.
+/// The steps that build `spec`'s Flatpak, the build `build` for
+/// `channel`, under `layout` with `cargo`.
 #[must_use]
 pub fn plan(
     spec: &BundleSpec,
     layout: &FlatpakLayout,
     cargo: &OsStr,
     build: &BuildId,
+    channel: Option<Channel>,
 ) -> Vec<Step> {
     let mut steps = vec![
         Step::RemoveDir(layout.staging.clone()),
@@ -89,9 +107,9 @@ pub fn plan(
             path: layout.manifest(spec),
             bytes: render(spec, layout, build).into_bytes(),
         },
-        Step::Run(flatpak_builder(spec, layout)),
+        Step::Run(flatpak_builder(spec, layout, channel)),
         Step::CreateDir(layout.out.clone()),
-        Step::Run(build_bundle(spec, layout)),
+        Step::Run(build_bundle(spec, layout, channel)),
     ]);
     steps
 }
@@ -108,7 +126,7 @@ pub fn build_flatpak(
     let spec = BundleSpec::from_metadata(&json).map_err(BundleError::from)?;
     let build = build_id::resolve(env, process, &spec.workspace_root).map_err(BundleError::from)?;
     let layout = FlatpakLayout::new(&spec.target_dir, host.out.clone())?;
-    for step in plan(&spec, &layout, &host.cargo, &build) {
+    for step in plan(&spec, &layout, &host.cargo, &build, host.channel) {
         execute(&step, process, files)?;
     }
     Ok(layout.bundle())
@@ -121,6 +139,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::appcast::Channel;
     use crate::linux::OutputOverlapsWork;
     use crate::ports::RunError;
     use crate::spec::tests::sample_metadata;
@@ -136,6 +155,14 @@ mod tests {
         FlatpakHost {
             cargo: "/rust/bin/cargo".into(),
             out: None,
+            channel: None,
+        }
+    }
+
+    fn nightly() -> FlatpakHost {
+        FlatpakHost {
+            channel: Some(Channel::Nightly),
+            ..host()
         }
     }
 
@@ -248,17 +275,67 @@ mod tests {
                     ])
                     .arg(flatpak.join("repo"))
                     .arg(&bundle)
-                    .arg("io.example.nova"),
+                    .arg("io.example.nova")
+                    .arg("master"),
             ),
         ]);
         assert_eq!(built.events, expected);
     }
 
     #[test]
+    fn a_nightly_host_builds_onto_the_nightly_branch_and_bundles_it() {
+        let built = build_with(&nightly(), |_| None, |_| false);
+        assert!(built.result.is_ok(), "{:?}", built.result);
+        let runs = built.runs();
+        let builder = runs
+            .iter()
+            .find(|i| i.program == "flatpak-builder")
+            .expect("flatpak-builder ran");
+        assert_eq!(
+            builder.args[..6],
+            [
+                "--user",
+                "--install-deps-from=flathub",
+                "--disable-rofiles-fuse",
+                "--force-clean",
+                "--default-branch=nightly",
+                "--state-dir",
+            ]
+        );
+        let bundle = runs.last().expect("a run");
+        assert!(starts(bundle, "flatpak", &["build-bundle"]), "{bundle}");
+        assert_eq!(
+            bundle.args[bundle.args.len() - 2..],
+            ["io.example.nova", "nightly"]
+        );
+    }
+
+    #[test]
+    fn a_development_host_names_no_default_branch() {
+        let built = build_with(&host(), |_| None, |_| false);
+        let runs = built.runs();
+        let builder = runs
+            .iter()
+            .find(|i| i.program == "flatpak-builder")
+            .expect("flatpak-builder ran");
+        assert!(
+            !builder
+                .args
+                .iter()
+                .any(|a| a.to_string_lossy().starts_with("--default-branch")),
+            "{builder}"
+        );
+        assert_eq!(
+            runs.last().and_then(|i| i.args.last()),
+            Some(&"master".into())
+        );
+    }
+
+    #[test]
     fn the_share_tree_is_staged_where_the_manifest_takes_it_from() {
         let spec = spec();
         let layout = FlatpakLayout::new(&spec.target_dir, None).expect("layout");
-        let steps = plan(&spec, &layout, OsStr::new("cargo"), &build());
+        let steps = plan(&spec, &layout, OsStr::new("cargo"), &build(), None);
         for (path, _) in share::files(&spec, &build(), &layout.staging) {
             assert!(path.starts_with(layout.share()), "{}", path.display());
             assert!(

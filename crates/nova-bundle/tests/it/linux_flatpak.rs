@@ -10,7 +10,8 @@
 //!
 //! Every `flatpak` it runs has `HOME` and the `XDG_*` directories pointed
 //! into a temporary directory, so the user's own installation, remotes
-//! and app data are never touched. It checks that the installed app has
+//! and app data are never touched. It checks that the installed app is on
+//! the channel's branch (`NOVA_CHANNEL`, as the build read it), has
 //! exactly the recorded permissions ([`FINISH_ARGS`], as the host's
 //! flatpak stores them: see `flatpak_metadata`), that zenity runs in
 //! its sandbox, and that it exports `applications/<id>.desktop` (passing
@@ -26,11 +27,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use nova_bundle::bundle::metadata;
-use nova_bundle::linux::flatpak::{FINISH_ARGS, REMOTE, RUNTIME_REPO};
+use nova_bundle::channel;
+use nova_bundle::linux::flatpak::{FINISH_ARGS, REMOTE, RUNTIME_REPO, branch};
 use nova_bundle::linux::icons::ICONS;
 use nova_bundle::ports::Process;
 use nova_bundle::spec::BundleSpec;
-use nova_bundle::system::StdProcess;
+use nova_bundle::system::{StdEnv, StdProcess};
 
 use crate::flatpak_metadata::{expected_permissions, flatpak_version, permissions};
 
@@ -170,6 +172,17 @@ fn installs_with_exactly_the_recorded_permissions_zenity_and_the_exports() {
     let mut install = os(&["install", "--user", "-y", "--noninteractive", "--bundle"]);
     install.push(bundle.into_os_string());
     home.flatpak(&refs(&install));
+
+    // On the channel's branch: `nightly` in CI, `master` for a
+    // development build.
+    let channel = channel::from_env(&StdEnv).expect("NOVA_CHANNEL");
+    let shown_ref = home.flatpak(&refs(&os(&["info", "--show-ref", &id])));
+    assert!(
+        shown_ref
+            .trim()
+            .ends_with(&format!("/x86_64/{}", branch(channel))),
+        "{shown_ref}"
+    );
 
     // Exactly the recorded permissions, as this flatpak (which finished
     // the build) stores them, and nothing beyond [Context].
