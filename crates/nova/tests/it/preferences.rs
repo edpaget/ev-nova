@@ -7,8 +7,6 @@
 //! kept in the in-memory store, so the test sees what plays and what is
 //! saved, and "restarts" by reading the store back.
 
-use std::io;
-use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -33,14 +31,14 @@ use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record, SoundId};
 use nova_render::WorldSpace;
 use nova_render::recording::{GpuCall, RecordingGpu};
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_view::geometry::Point;
 use nova_view::sound::{SimSound, UiSound};
 use nova_view::text::TextMetrics;
@@ -111,33 +109,14 @@ fn raw_modes() -> Vec<MonitorMode> {
     .collect()
 }
 
-/// One file, holding a fork, wherever it is looked for.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
-fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> OneFile {
-    let bytes = resources
+fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {
+    resources
         .iter()
         .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
             fork.resource(*ty, *id, None, data)
         })
         .build()
-        .bytes;
-    OneFile(bytes)
+        .bytes
 }
 
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
@@ -211,7 +190,7 @@ fn game_data() -> Rc<GameData> {
         resources.push((PICT, state + 102, pict(13, 25, [0, 0, 0])));
     }
     let file = fork(&resources);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(file).load())
 }
 
 /// The settings saved before the game starts: music on, the effects at

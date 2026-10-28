@@ -5,8 +5,6 @@
 // Sizes here are small powers of two, exact in floating point.
 #![allow(clippy::float_cmp)]
 
-use std::io;
-use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -20,12 +18,11 @@ use nova_data::graphics::fixture::RledBuilder;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, PixelRect};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader};
 use nova_view::{FullscreenKind, Key, MonitorMode, MouseButton, Point, VideoMode};
 
 /// A window of settable size, on a monitor of settable modes and name,
@@ -78,24 +75,6 @@ impl WindowPort for FakeWindow {
     }
 }
 
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
 fn put_i16(bytes: &mut [u8], at: usize, value: i16) {
     bytes[at..at + 2].copy_from_slice(&value.to_be_bytes());
 }
@@ -130,8 +109,7 @@ fn data() -> Rc<GameData> {
         .resource(System::TYPE, 128, Some(b"Alpha"), &system)
         .build()
         .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(fork).load())
 }
 
 struct Harness {

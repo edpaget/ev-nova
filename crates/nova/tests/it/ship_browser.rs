@@ -5,8 +5,6 @@
 // point.
 #![allow(clippy::float_cmp)]
 
-use std::io;
-use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -16,12 +14,11 @@ use nova_data::graphics::fixture::RledBuilder;
 use nova_data::records::desc::Desc;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, QuadInstance};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader};
 use nova_view::{Blend, Key};
 
 /// A 1024x768 window at scale 1.
@@ -37,24 +34,6 @@ impl WindowPort for FakeWindow {
     }
 
     fn request_redraw(&mut self) {}
-}
-
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
 }
 
 fn put(bytes: &mut [u8], at: usize, value: &[u8]) {
@@ -112,8 +91,7 @@ fn data() -> Rc<GameData> {
         .resource(Desc::TYPE, 13000, Some(b"Shuttle"), &desc)
         .build()
         .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(fork).load())
 }
 
 /// Ship 128 alone, with base, glow and lights sheets, its lights
@@ -132,8 +110,7 @@ fn blinking_data() -> Rc<GameData> {
         .resource(RLED, 1200, None, &sheet(16))
         .build()
         .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(fork).load())
 }
 
 struct Harness {

@@ -14,7 +14,6 @@
 //! date, in the same ship and with the same cash; Quit exits.
 
 use crate::common::text_input_items;
-use std::io;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -35,13 +34,13 @@ use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record, SoundId};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::{Pilot, PilotKeeper, PilotStore, ShipId, StellarId, SystemId};
 use nova_view::geometry::Point;
@@ -66,33 +65,14 @@ impl WindowPort for FakeWindow {
     fn request_redraw(&mut self) {}
 }
 
-/// One file, holding a fork, wherever it is looked for.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
-fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> OneFile {
-    let bytes = resources
+fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {
+    resources
         .iter()
         .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
             fork.resource(*ty, *id, None, data)
         })
         .build()
-        .bytes;
-    OneFile(bytes)
+        .bytes
 }
 
 fn be(values: &[i16]) -> Vec<u8> {
@@ -233,7 +213,7 @@ fn game_data_of(character: Vec<u8>, extra: Vec<(ResType, i16, Vec<u8>)>) -> Rc<G
     resources.extend(main_screen_resources());
     resources.extend(extra);
     let file = fork(&resources);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(file).load())
 }
 
 /// One `DITL` item: (left, top, right, bottom), its type byte and data.
@@ -353,7 +333,8 @@ fn interface_with(extra: &[(ResType, i16, Vec<u8>)]) -> InterfaceData {
     ];
     resources.extend_from_slice(extra);
     let file = fork(&resources);
-    InterfaceData::load(&file, Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, file), path).expect("loads")
 }
 
 pub(crate) struct Harness {

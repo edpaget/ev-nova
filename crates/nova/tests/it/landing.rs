@@ -14,7 +14,6 @@
 
 use crate::bracket_art;
 
-use std::io;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -34,13 +33,13 @@ use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame, Rect};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::{ShipState, StellarId, Vec2};
 use nova_view::MouseButton;
 use nova_view::flight::FlightOverlays;
@@ -64,24 +63,6 @@ impl WindowPort for FakeWindow {
     }
 
     fn request_redraw(&mut self) {}
-}
-
-/// One file, holding a fork, wherever it is looked for.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
 }
 
 fn be(values: &[i16]) -> Vec<u8> {
@@ -226,8 +207,7 @@ fn game_data(y: i16) -> Rc<GameData> {
         .fold(ForkBuilder::new(), |fork, (ty, id, name, data)| {
             fork.resource(*ty, *id, *name, data)
         });
-    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// One `DITL` user item: (left, top, width, height), enabled or not.
@@ -316,7 +296,8 @@ fn interface() -> InterfaceData {
     })
     .build()
     .bytes;
-    InterfaceData::load(&OneFile(bytes), Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, bytes), path).expect("loads")
 }
 
 /// Where the dialog is: (1024 - 618) / 2, (768 - 517) / 2, floored.

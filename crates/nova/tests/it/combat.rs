@@ -78,7 +78,6 @@ use crate::bracket_art;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::io;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -101,12 +100,12 @@ use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::fixture::{Header, SndBuilder, SndFormat};
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, Record, SoundId};
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, Rect, TextRun};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::combat::defence::Side;
 use nova_sim::{
     Behaviour, Chance, DisableRule, Gauge, Goal, HullSpec, Npc, NpcId, PointDefenceRule, Session,
@@ -130,24 +129,6 @@ impl WindowPort for FakeWindow {
     }
 
     fn request_redraw(&mut self) {}
-}
-
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
 }
 
 /// No dialogs: the router is given them only for their text metrics.
@@ -453,8 +434,7 @@ fn data_arming(player: &[i16], trader: &[i16]) -> Rc<GameData> {
             &interface(),
         )
         .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
-    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// Draws its script, then the last outcome, so no roll fires; records
@@ -1080,8 +1060,7 @@ fn patrolled() -> Rc<GameData> {
             &interface(),
         )
         .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
-    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 #[test]
@@ -1376,8 +1355,7 @@ fn boarding_data() -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// A `STR#` of one string.
@@ -1465,7 +1443,8 @@ fn interface_of(resources: &[(ResType, i16, Vec<u8>)]) -> InterfaceData {
         })
         .build()
         .bytes;
-    InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, fork), path).expect("loads")
 }
 
 /// The load's heading (0, facing up), then the traffic's setup draws (the trader 100 above the player,
@@ -2014,12 +1993,12 @@ fn hailing_data(ai_type: i16, govt: i16, ship: i16) -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(
+    let file = one_file(
         bracket_art::with_bracket_art(hailing_strings(fork))
             .build()
             .bytes,
     );
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(file.load())
 }
 
 /// `fork` with the strings hailing reads: `STR#` 3000's replies, 2002's
@@ -2452,8 +2431,7 @@ fn escort_data(alpha_dudes: &[i16]) -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// The interface file's plunder, assignment, comm and haggle dialogs.
@@ -3009,8 +2987,7 @@ fn fighter_data(alpha_dudes: &[i16]) -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// Attacks the player as soon as it can, firing as any ship does: the

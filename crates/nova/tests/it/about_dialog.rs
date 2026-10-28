@@ -4,7 +4,6 @@
 //! glyphon metrics, drawn through the renderer into the recording Gpu and
 //! driven only by window events.
 
-use std::io;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -15,13 +14,13 @@ use nova_data::graphics::fixture::{DirectBits, PictBuilder};
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame, Rect, TextRun};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_view::geometry::{Bounds, Point};
 use nova_view::ui::desc::{DONE_ITEM, TEXT_ITEM};
 use nova_view::{Key, MouseButton};
@@ -44,33 +43,14 @@ impl WindowPort for FakeWindow {
     fn request_redraw(&mut self) {}
 }
 
-/// One file, holding a fork, wherever it is looked for.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
-fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> OneFile {
-    let bytes = resources
+fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {
+    resources
         .iter()
         .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
             fork.resource(*ty, *id, None, data)
         })
         .build()
-        .bytes;
-    OneFile(bytes)
+        .bytes
 }
 
 /// A `width` x `height` picture of one colour.
@@ -109,7 +89,7 @@ fn game_data() -> Rc<GameData> {
         resources.push((PICT, frame, pict(4, 2, [60, 60, 60])));
     }
     let file = fork(&resources);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(file).load())
 }
 
 fn be(values: &[i16]) -> Vec<u8> {
@@ -143,7 +123,8 @@ fn interface() -> InterfaceData {
     let mut ditl = be(&[items.len() as i16 - 1]);
     ditl.extend(items.concat());
     let file = fork(&[(Dlog::TYPE, 3003, dlog), (Ditl::TYPE, 3003, ditl)]);
-    InterfaceData::load(&file, Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, file), path).expect("loads")
 }
 
 /// Where the dialog is: (1024 - 441) / 2, (768 - 313) / 2, floored.
