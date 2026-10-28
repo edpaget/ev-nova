@@ -23,6 +23,7 @@ use nova_render::{Batch, FontFaces, Frame, Rect, TextRun};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_view::geometry::{Bounds, Point};
+use nova_view::text::LINE_HEIGHT;
 use nova_view::ui::desc::{DONE_ITEM, TEXT_ITEM};
 use nova_view::{Key, MouseButton};
 
@@ -304,10 +305,10 @@ fn i_shows_the_about_text_with_its_button_and_text_where_recorded() {
             assert!(x >= text_box.x && x < text_box.x + text_box.w, "{run:?}");
             assert!(y >= text_box.y, "{run:?}");
             assert!(
-                y + run.line_height_px <= text_box.y + text_box.h + 0.01,
+                y + LINE_HEIGHT * run.size * run.scale <= text_box.y + text_box.h + 0.01,
                 "{run:?}"
             );
-            assert_eq!(run.wrap_px, None);
+            assert_eq!(run.wrap, None);
         }
         assert!(texts(&frame).iter().any(|run| run.text == "Done"));
     }

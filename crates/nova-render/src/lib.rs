@@ -57,8 +57,11 @@
 //! turns each OR tint into exact
 //! levels and keeps overlapping OR quads in separate batches. [`wgpu::GlyphonMetrics`] is
 //! `nova_view`'s text-metrics port over the same glyphon font system, with
-//! no GPU: the widgets lay text out by the widths it is drawn at, and the
-//! batcher spaces lines by `nova_view`'s shared line-height rule.
+//! no GPU. Both lay text out the same way, at its logical size with every
+//! glyph advancing a whole unit as QuickDraw's do, so the widgets lay text
+//! out by the widths it is drawn at; lines are spaced by `nova_view`'s
+//! shared line-height rule, and the renderer draws each run at the scale
+//! the batcher gives it.
 //!
 //! The adapters are handed their fonts ([`FontFaces`]) when they are made.
 //! They load those faces alone, never the system's fonts, so text draws the

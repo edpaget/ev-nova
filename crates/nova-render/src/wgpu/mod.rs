@@ -62,6 +62,7 @@
 mod data;
 mod fonts;
 mod frame_commands;
+mod layout;
 #[cfg(target_os = "macos")]
 mod metal_fx;
 mod metrics;

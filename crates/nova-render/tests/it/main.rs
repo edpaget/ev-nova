@@ -15,5 +15,6 @@ mod stock_fonts;
 mod stock_render;
 mod stock_super_xbr;
 mod stock_super_xbr_cost;
+mod text_layout;
 mod wgpu_offscreen;
 mod world_layer;

@@ -3,12 +3,14 @@
 //! it, or with no GPU adapter.
 
 use crate::common;
+use crate::text_layout::whole_and_split;
 use crate::wgpu_offscreen::{STEMS, assert_stems_alike, draw_text};
 
 use nova_data::fonts::{charcoal_path, open_charcoal};
 use nova_render::fonts::FontFaces;
-use nova_render::wgpu::{InitError, OffscreenGpu};
+use nova_render::wgpu::{GlyphonMetrics, InitError, OffscreenGpu};
 use nova_render::{ImageError, ImageSource, LogicalSize, Renderer, Viewport};
+use nova_view::text::TextMetrics;
 use nova_view::{Color, DrawList, Font, ImageKind, Point};
 
 /// No images: the frames here are text alone.
@@ -107,5 +109,42 @@ fn the_games_charcoal_draws_every_stem_alike_at_1x_and_2x() {
             return;
         };
         assert_stems_alike(&picture, &format!("Charcoal {size}pt at {scale}x"));
+    }
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn the_games_charcoal_measures_and_draws_by_its_device_widths() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    if !charcoal_path(&dir).is_file() {
+        eprintln!("skipping: no {}", charcoal_path(&dir).display());
+        return;
+    }
+    let faces = FontFaces::bundled().with_charcoal(open_charcoal(&dir).expect("Charcoal loads"));
+    let metrics = GlyphonMetrics::new(&faces);
+    // Its `hdmx` widths, not the linear advances rounded (5, 7 and 6).
+    for (size, text, want) in [
+        (12.0, "s", 7.0),
+        (12.0, "a", 8.0),
+        (10.0, "a", 5.0),
+        (12.0, "sass", 29.0),
+    ] {
+        assert_eq!(
+            metrics.width(Font::Charcoal, size, text),
+            want,
+            "{text:?} at {size}"
+        );
+    }
+    for size in [9.0, 10.0, 12.0] {
+        for scale in [1, 2] {
+            let Some((whole, split)) =
+                whole_and_split(&faces, Font::Charcoal, size, "Kestrel sass", scale)
+            else {
+                return;
+            };
+            assert_eq!(whole, split, "Charcoal {size}pt at {scale}x");
+        }
     }
 }

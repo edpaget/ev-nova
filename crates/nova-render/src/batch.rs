@@ -247,13 +247,16 @@ impl<S: ImageSource> Renderer<S> {
                 let (across, down) = scale;
                 // Glyphs are sized by the height: the axes' scales differ
                 // only in a widened view, by under half a unit's width.
-                let size_px = size * down;
-                let line_height_px = LINE_HEIGHT * size_px;
+                let drawable = |line_height: f32| line_height.is_finite() && line_height > 0.0;
                 // Text with nothing in it draws nothing. Nor does text
-                // whose size is zero, negative, NaN or too big to give
-                // a finite line height in pixels, and the text shaper
-                // would panic on some of those, so skip both.
-                if text.is_empty() || !(line_height_px.is_finite() && line_height_px > 0.0) {
+                // whose size is zero, negative, NaN or too big to give a
+                // finite line height, in logical units (where it is
+                // shaped) or in pixels (where it is drawn), and the text
+                // shaper would panic on some of those, so skip both.
+                if text.is_empty()
+                    || !drawable(LINE_HEIGHT * size)
+                    || !drawable(LINE_HEIGHT * (size * down))
+                {
                     return;
                 }
                 let Some(clip) = clip.map_or(Some(rect), |clip| pixel_clip(rect, scale, clip))
@@ -273,9 +276,9 @@ impl<S: ImageSource> Renderer<S> {
                         (rect.x as f32 + origin.x * across).round(),
                         (rect.y as f32 + origin.y * down - 0.5).ceil(),
                     ),
-                    size_px,
-                    line_height_px,
-                    wrap_px: wrap_width.map(|w| w * across),
+                    size,
+                    wrap: wrap_width,
+                    scale: down,
                     color,
                     clip,
                 };
@@ -1886,14 +1889,14 @@ mod tests {
                 },
             );
         let frame = render_one(&list, &viewport);
-        let across = 1920.0 / 1365.0;
         let Batch::Text(runs) = &frame.batches[0] else {
             panic!("{frame:?}");
         };
         // Whole window pixels: 1905.9 and 140.6 round to the nearer.
         assert_eq!(runs[0].origin_px, (1906.0, 141.0));
-        assert_eq!(runs[0].size_px, 12.0 * 1.406_25, "sized by the height");
-        assert_eq!(runs[0].wrap_px, Some(100.0 * across));
+        assert_eq!(runs[0].size, 12.0);
+        assert_eq!(runs[0].scale, 1.406_25, "sized by the height");
+        assert_eq!(runs[0].wrap, Some(100.0));
         // The GPU projects quads from the logical space onto the content.
         let dot = solid_quads(&frame)[0].corners;
         let dot_centre = f32::midpoint(dot[0].x, dot[2].x);
@@ -1928,7 +1931,7 @@ mod tests {
     }
 
     #[test]
-    fn text_is_converted_to_physical_pixels() {
+    fn text_is_placed_in_physical_pixels_and_sized_in_logical_units() {
         let color = Color::rgba(1, 2, 3, 4);
         let mut list = DrawList::new();
         list.text_in(
@@ -1950,9 +1953,9 @@ mod tests {
                     text: "Hello".to_owned(),
                     font: Font::Charcoal,
                     origin_px: (3.0, 4.0),
-                    size_px: 20.0,
-                    line_height_px: 1.2 * 20.0,
-                    wrap_px: Some(40.0),
+                    size: 10.0,
+                    wrap: Some(20.0),
+                    scale: 2.0,
                     color,
                     clip: rect(0, 0, 128, 96),
                 },
@@ -1960,9 +1963,9 @@ mod tests {
                     text: "Unwrapped".to_owned(),
                     font: Font::Geneva,
                     origin_px: (0.0, 0.0),
-                    size_px: 16.0,
-                    line_height_px: 1.2 * 16.0,
-                    wrap_px: None,
+                    size: 8.0,
+                    wrap: None,
+                    scale: 2.0,
                     color: Color::WHITE,
                     clip: rect(0, 0, 128, 96),
                 },
@@ -2351,14 +2354,33 @@ mod tests {
                     text: "ok".to_owned(),
                     font: Font::Geneva,
                     origin_px: (0.0, 0.0),
-                    size_px: 16.0,
-                    line_height_px: 1.2 * 16.0,
-                    wrap_px: None,
+                    size: 8.0,
+                    wrap: None,
+                    scale: 2.0,
                     color: white,
                     clip: rect(0, 0, 128, 96),
                 }]),
             ]
         );
+    }
+
+    #[test]
+    fn text_whose_logical_line_height_is_not_finite_is_skipped_though_its_pixels_are() {
+        // Half a pixel a unit: the run's line height is finite in pixels
+        // but not in the logical units it is shaped in.
+        let half = Viewport::new(SMALL, (32, 24), 1.0);
+        let size = f32::MAX / 1.1;
+        assert!((LINE_HEIGHT * (size * 0.5)).is_finite());
+        let mut list = DrawList::new();
+        list.text("wide", at(0.0, 0.0), size, None, Color::WHITE)
+            .text("ok", at(0.0, 0.0), 8.0, None, Color::WHITE);
+        let frame = render_one(&list, &half);
+        let [Batch::Text(runs)] = frame.batches.as_slice() else {
+            panic!("one text batch: {frame:?}");
+        };
+        let texts: Vec<&str> = runs.iter().map(|run| run.text.as_str()).collect();
+        assert_eq!(texts, ["ok"]);
+        assert_eq!(runs[0].scale, 0.5);
     }
 
     #[test]

@@ -89,7 +89,10 @@ pub struct SolidQuad {
     pub color: [f32; 4],
 }
 
-/// One run of text, already in physical pixels.
+/// One run of text: placed and clipped in physical pixels, sized and
+/// wrapped in logical units. The renderer shapes it at its logical size,
+/// so every glyph advances a whole logical unit, and draws it at `scale`:
+/// glyph positions, raster size and line tops are multiplied by it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextRun {
     /// The text.
@@ -100,12 +103,14 @@ pub struct TextRun {
     /// across rounded as a clip's edges are, down to the first row a quad's
     /// top edge there fills.
     pub origin_px: (f32, f32),
-    /// The font size in pixels.
-    pub size_px: f32,
-    /// The distance between lines in pixels.
-    pub line_height_px: f32,
-    /// The wrap width in pixels, if it wraps.
-    pub wrap_px: Option<f32>,
+    /// The font size in logical units, which the run is shaped at. Lines
+    /// are `nova_view::text::LINE_HEIGHT` times it apart.
+    pub size: f32,
+    /// The wrap width in logical units, if it wraps.
+    pub wrap: Option<f32>,
+    /// Physical pixels per logical unit the run is drawn at: the view's
+    /// scale down, as glyphs are sized by the height.
+    pub scale: f32,
     /// The text colour.
     pub color: Color,
     /// Nothing is drawn outside this rectangle (the viewport).

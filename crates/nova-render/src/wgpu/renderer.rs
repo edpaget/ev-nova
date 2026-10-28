@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use glyphon::{
-    Buffer, Cache, ColorMode, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
-    TextArea, TextAtlas, TextBounds, TextRenderer,
+    Buffer, Cache, ColorMode, FontSystem, Resolution, SwashCache, TextArea, TextAtlas, TextBounds,
+    TextRenderer,
 };
 use nova_data::graphics::Image;
 use wgpu::util::DeviceExt;
@@ -13,8 +13,9 @@ use wgpu::util::DeviceExt;
 use super::data::{SolidVertex, SpriteInstance, globals, solid_vertices};
 use nova_view::{Blend, Color, DrawLayer};
 
-use super::fonts::{Families, attrs, font_system};
+use super::fonts::{Families, font_system};
 use super::frame_commands::{DeviceEncoders, WgpuCommands};
+use super::layout::lay_out_text;
 use super::upscale::{Upscale, abilities, upscale_for};
 use crate::fonts::FontFaces;
 use crate::gpu::{Batch, Frame, PageId, TextRun, WorldSpace};
@@ -664,47 +665,42 @@ impl WgpuRenderer {
         }
         let families = &self.families;
         for (renderer, runs) in self.text_renderers.iter_mut().zip(batches) {
-            // A run with no face to draw in is skipped (shaping it would
-            // find no font at all).
-            let drawn: Vec<(&TextRun, Family<'_>)> = runs
+            // Each run is laid out at its logical size, as `GlyphonMetrics`
+            // measures it, and drawn at its scale. A run with no face to
+            // draw in is skipped (shaping it would find no font at all).
+            let drawn: Vec<(&TextRun, Buffer)> = runs
                 .iter()
-                .filter_map(|run| Some((run, families.family(run.font)?)))
-                .collect();
-            let buffers: Vec<Buffer> = drawn
-                .iter()
-                .map(|&(run, family)| {
-                    let mut buffer = Buffer::new(
+                .filter_map(|run| {
+                    let buffer = lay_out_text(
                         &mut self.font_system,
-                        Metrics::new(run.size_px, run.line_height_px),
-                    );
-                    buffer.set_size(run.wrap_px, None);
-                    buffer.set_text(&run.text, &attrs(family), Shaping::Advanced, None);
-                    buffer.shape_until_scroll(&mut self.font_system, false);
-                    buffer
+                        families,
+                        run.font,
+                        run.size,
+                        run.wrap,
+                        &run.text,
+                    )?;
+                    Some((run, buffer))
                 })
                 .collect();
-            let areas = drawn
-                .iter()
-                .zip(&buffers)
-                .map(|(&(run, _), buffer)| TextArea {
-                    buffer,
-                    left: run.origin_px.0,
-                    top: run.origin_px.1,
-                    scale: 1.0,
-                    bounds: TextBounds {
-                        left: run.clip.x as i32,
-                        top: run.clip.y as i32,
-                        right: (run.clip.x + run.clip.w) as i32,
-                        bottom: (run.clip.y + run.clip.h) as i32,
-                    },
-                    default_color: glyphon::Color::rgba(
-                        run.color.r,
-                        run.color.g,
-                        run.color.b,
-                        run.color.a,
-                    ),
-                    custom_glyphs: &[],
-                });
+            let areas = drawn.iter().map(|(run, buffer)| TextArea {
+                buffer,
+                left: run.origin_px.0,
+                top: run.origin_px.1,
+                scale: run.scale,
+                bounds: TextBounds {
+                    left: run.clip.x as i32,
+                    top: run.clip.y as i32,
+                    right: (run.clip.x + run.clip.w) as i32,
+                    bottom: (run.clip.y + run.clip.h) as i32,
+                },
+                default_color: glyphon::Color::rgba(
+                    run.color.r,
+                    run.color.g,
+                    run.color.b,
+                    run.color.a,
+                ),
+                custom_glyphs: &[],
+            });
             // A failed prepare draws no text this frame; the frame goes on.
             let _ = renderer.prepare(
                 &self.device,
@@ -1194,9 +1190,9 @@ mod tests {
             text: text.to_owned(),
             font: nova_view::Font::Geneva,
             origin_px: (0.0, 0.0),
-            size_px: 16.0,
-            line_height_px: 19.2,
-            wrap_px: None,
+            size: 8.0,
+            wrap: None,
+            scale: 2.0,
             color: Color::WHITE,
             clip: PixelRect {
                 x: 0,

@@ -1086,7 +1086,7 @@ const LINE: LogicalSize = LogicalSize { w: 128, h: 32 };
 const SAMPLE: &str = "EV Nova";
 
 /// Where the font tests' text starts, in logical units.
-const TEXT_AT: (f32, f32) = (2.0, 4.0);
+pub(crate) const TEXT_AT: (f32, f32) = (2.0, 4.0);
 
 /// [`SAMPLE`] in `font` at `size` points, drawn with `faces` into a
 /// [`LINE`]-sized window at `scale` physical pixels per unit, as RGBA8
@@ -1107,12 +1107,18 @@ pub(crate) fn draw_text(
     size: f32,
     scale: u32,
 ) -> Option<Picture> {
-    let (w, h) = (LINE.w * scale, LINE.h * scale);
-    let mut gpu = gpu_with(w, h, faces)?;
     let mut list = DrawList::new();
     list.text_in(font, text, at, size, None, Color::WHITE);
+    draw_list(faces, &list, scale)
+}
+
+/// `list` drawn with `faces` into a [`LINE`]-sized window at `scale`
+/// physical pixels per unit; `None` with no GPU adapter.
+pub(crate) fn draw_list(faces: &FontFaces, list: &DrawList, scale: u32) -> Option<Picture> {
+    let (w, h) = (LINE.w * scale, LINE.h * scale);
+    let mut gpu = gpu_with(w, h, faces)?;
     let report = Renderer::new(Images).render(
-        &list,
+        list,
         &Viewport::new(LINE, (w, h), f64::from(scale)),
         &mut gpu,
     );
@@ -1148,7 +1154,7 @@ impl Picture {
     }
 
     /// Every pixel any glyph touches.
-    fn lit(&self) -> Vec<(u32, u32)> {
+    pub(crate) fn lit(&self) -> Vec<(u32, u32)> {
         self.coverage()
             .filter(|&(_, c)| c > 0)
             .map(|(at, _)| at)
@@ -1180,6 +1186,25 @@ impl Picture {
     /// The coverage of each run of lit pixels along the row with the most
     /// ink, left to right: one run per stem in a row of `l`s.
     pub(crate) fn stems(&self) -> Vec<Vec<u8>> {
+        self.inkiest_row()
+            .split(|&c| c == 0)
+            .filter(|stem| !stem.is_empty())
+            .map(<[u8]>::to_vec)
+            .collect()
+    }
+
+    /// The column each run of lit pixels starts at along the row with the
+    /// most ink, left to right: where each stem of a row of `l`s starts.
+    pub(crate) fn stem_columns(&self) -> Vec<u32> {
+        let row = self.inkiest_row();
+        (0..row.len())
+            .filter(|&x| row[x] > 0 && (x == 0 || row[x - 1] == 0))
+            .map(|x| x as u32)
+            .collect()
+    }
+
+    /// The coverage along the row with the most lit pixels.
+    fn inkiest_row(&self) -> Vec<u8> {
         let mut rows: Vec<Vec<u8>> = Vec::new();
         for ((x, _), c) in self.coverage() {
             if x == 0 {
@@ -1187,15 +1212,9 @@ impl Picture {
             }
             rows.last_mut().expect("a row").push(c);
         }
-        let inkiest = rows
-            .into_iter()
+        rows.into_iter()
             .max_by_key(|row| row.iter().filter(|&&c| c > 0).count())
-            .unwrap_or_default();
-        inkiest
-            .split(|&c| c == 0)
-            .filter(|stem| !stem.is_empty())
-            .map(<[u8]>::to_vec)
-            .collect()
+            .unwrap_or_default()
     }
 }
 
