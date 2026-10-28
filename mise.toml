@@ -97,6 +97,10 @@ run = "cargo run -p nova-bundle --locked --bin nova-appimage --"
 description = "Linux x86_64 only, needs flatpak, flatpak-builder and the flathub remote added with --user: build the game from vendored sources on the freedesktop runtime into ev-nova-x86_64-unknown-linux-gnu.flatpak; pass an output dir after -- (default target/flatpak/out)"
 run = "cargo run -p nova-bundle --locked --bin nova-flatpak --"
 
+[tasks.build-id]
+description = "Print the build ID: NOVA_BUILD_ID when it is set, else HEAD's committer time in UTC as YYYYMMDDHHMMSS"
+run = "cargo run -q -p nova-bundle --locked --bin nova-build-id"
+
 [tasks.mutants]
 description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g. -- --file <path>"
 run = "cargo mutants --workspace"

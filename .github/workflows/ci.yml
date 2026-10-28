@@ -88,6 +88,35 @@ jobs:
       - run: mise install opentofu
       - run: mise run infra-check
 
+  # The run's build ID, HEAD's committer time in UTC as YYYYMMDDHHMMSS
+  # (crates/nova-bundle/src/build_id.rs), computed once here and handed to
+  # `build` and `flatpak` as NOVA_BUILD_ID, so every leg names the same
+  # build. Reading it per leg would rely on each leg's checkout (in a
+  # container, with git's safe.directory quirks) giving the same time.
+  # `publish` can read the same output.
+  build-id:
+    needs: ci
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    env:
+      MISE_AUTO_INSTALL: "false"
+    outputs:
+      id: ${{ steps.build-id.outputs.id }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v5
+        with:
+          install: false
+      - run: mise install rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build-id
+      - id: build-id
+        run: |
+          set -euo pipefail
+          id=$(mise run build-id)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
   # Release builds of `nova` and `nova-dump` for the rolling `nightly`
   # prerelease, on pushes to main and on manual dispatches (which `publish`
   # skips), after the `ci` gate. The `ci` Windows
@@ -95,7 +124,7 @@ jobs:
   # Windows test leg doesn't stop this job: the Windows archive ships as long
   # as its own release build succeeds. Revisit once Windows CI is a hard gate.
   build:
-    needs: ci
+    needs: [ci, build-id]
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     strategy:
       # So every platform's build failure is reported in one run.
@@ -134,6 +163,10 @@ jobs:
     env:
       # As in `ci`: install only the Rust toolchain.
       MISE_AUTO_INSTALL: "false"
+      # The run's one build ID, for every step: `cargo build` compiles it
+      # into nova, and the bundlers stamp it on Info.plist and the
+      # metainfo.
+      NOVA_BUILD_ID: ${{ needs.build-id.outputs.id }}
     steps:
       # The container starts bare and as root (no sudo): a compiler for
       # rustup's toolchain and the C build scripts, git and curl for
@@ -302,11 +335,13 @@ jobs:
   # an unprivileged Docker container doesn't allow. Its binary is built in
   # the runtime's SDK, so the container's glibc floor doesn't apply.
   flatpak:
-    needs: ci
+    needs: [ci, build-id]
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     env:
       MISE_AUTO_INSTALL: "false"
+      # As in `build`; the manifest passes it into the sandboxed build.
+      NOVA_BUILD_ID: ${{ needs.build-id.outputs.id }}
     steps:
       - uses: actions/checkout@v5
       # xvfb gives the installed app's zenity a display for the test.
