@@ -55,7 +55,7 @@ impl AppScreen {
             return self;
         };
         let mut flight = self.pilot_flight(pilot, true, None);
-        if flight.session().is_err() || flight.sim().load_repaired() {
+        if flight.failure().is_some() || flight.sim().load_repaired() {
             return self;
         }
         flight.sim_mut().resume();

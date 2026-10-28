@@ -96,3 +96,35 @@ fn a_resync_with_nothing_moved_reads_nothing() {
     assert_eq!(*view.catalog().systems_read.borrow(), []);
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
 }
+
+// The router's reads of the flight, after an edit and on the main screen.
+
+#[test]
+fn the_flights_failure_is_the_views_to_tell() {
+    let mut view = faked(in_sol());
+    assert_eq!(view.failure(), None, "started");
+    view.sim.fail("no chär");
+    assert_eq!(view.failure(), Some("no chär"));
+}
+
+#[test]
+fn the_stellar_landed_on_is_read_from_a_fresh_frame() {
+    let mut view = faked(in_sol());
+    assert_eq!(view.landed(), None, "in flight");
+    view.sim.set_frame(in_system(130, 128, true));
+    assert_eq!(view.landed(), Some(StellarId(128)), "the flight's now");
+}
+
+#[test]
+fn the_plain_text_and_the_hire_are_the_flights() {
+    let mut view = faked(in_sol());
+    assert_eq!(view.plain_text("Hi <PN>."), "Hi <PN>.", "unfilled");
+    assert!(!view.can_hire_escorts());
+    view.sim
+        .names_mut()
+        .plain_texts
+        .push(("Hi <PN>.".to_owned(), "Hi Ada.".to_owned()));
+    view.sim.port_mut().can_hire_escorts = true;
+    assert_eq!(view.plain_text("Hi <PN>."), "Hi Ada.");
+    assert!(view.can_hire_escorts());
+}

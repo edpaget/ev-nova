@@ -4,8 +4,10 @@
 
 #[cfg(any(test, feature = "fixture"))]
 use nova_sim::Pilot;
+#[cfg(any(doc, test, feature = "fixture"))]
+use nova_sim::Session;
+use nova_sim::StellarId;
 use nova_sim::{InterfaceLoad, MissionId, MissionShown};
-use nova_sim::{Session, StellarId};
 
 use crate::Point;
 use crate::flight::catalog::StatusBars;
@@ -69,6 +71,38 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// to show the spaceport.
     pub fn take_landing(&mut self) -> Option<StellarId> {
         self.pending_landing.take()
+    }
+
+    /// Why the flight could not start, if it could not
+    /// ([`FlightSim::failure`]): the router opens no game on such a flight
+    /// and builds no bar for it.
+    #[must_use]
+    pub fn failure(&self) -> Option<&str> {
+        self.sim.failure()
+    }
+
+    /// The stellar the ship is landed on now, read from a fresh frame
+    /// ([`FlightFrame::landed`](nova_sim::flight_frame::FlightFrame::landed)):
+    /// for the router after a developer tools' edit, which may have moved
+    /// it. None in flight.
+    #[must_use]
+    pub fn landed(&self) -> Option<StellarId> {
+        self.frame_now().landed
+    }
+
+    /// `text` with its tags filled for the pilot with no mission
+    /// ([`NameSource::plain_text`](crate::flight::sim_port::NameSource::plain_text)):
+    /// the main screen's descriptions.
+    #[must_use]
+    pub fn plain_text(&self, text: &str) -> String {
+        self.sim.plain_text(text)
+    }
+
+    /// Whether the bar's hire screen may hire escorts now
+    /// ([`PortSource::can_hire_escorts`](crate::flight::sim_port::PortSource::can_hire_escorts)).
+    #[must_use]
+    pub fn can_hire_escorts(&self) -> bool {
+        self.sim.can_hire_escorts()
     }
 }
 
@@ -289,7 +323,9 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
 }
 
 impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
-    /// The flight, or why it could not start.
+    /// The flight, or why it could not start: for tests, which read the
+    /// session's state behind the port.
+    #[cfg(any(test, feature = "fixture"))]
     pub fn session(&self) -> Result<&Session, &str> {
         self.sim.session.as_ref().map_err(String::as_str)
     }

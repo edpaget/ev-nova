@@ -96,11 +96,9 @@ impl AppScreen {
     /// the player globals of the pilot loaded; with none, as before any
     /// pilot ([`start_up_words`]).
     pub(super) fn main_screen_words(&mut self, id: i16) -> Result<String, String> {
-        if let Some(game) = self.game.as_mut().filter(|game| game.session().is_ok()) {
+        if let Some(game) = self.game.as_mut().filter(|game| game.failure().is_none()) {
             let text = game.load_description(id)?;
-            return Ok(game
-                .session()
-                .map_or_else(|_| text.clone(), |session| session.plain_text(&text)));
+            return Ok(game.plain_text(&text));
         }
         let rules = nova_sim::text_parse::ParseRules::from_rulebook(&self.rules);
         self.data

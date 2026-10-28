@@ -76,10 +76,10 @@ impl AppScreen {
                 art,
             );
         }
-        if let Some(session) = self
+        if let Some(flight) = self
             .flight
             .as_ref()
-            .and_then(|flight| flight.session().ok())
+            .filter(|flight| flight.failure().is_none())
         {
             let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
             spaceport = spaceport
@@ -93,7 +93,7 @@ impl AppScreen {
                     info_templates(),
                     art,
                     // `_CanHireEscorts`, as the hire itself reads it.
-                    session.can_hire_escorts(),
+                    flight.can_hire_escorts(),
                 )
                 .with_missions(
                     template_of(COMPUTER_DIALOG),

@@ -11,7 +11,7 @@ use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CarryOver, CommCatalog, ControlBits, DisableRule,
     HailOptions, HireTerms, LastRefresh, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable,
     NovaHire, NovaLaw, NovaPersons, PersonRules, PilotKeeper, PilotStore, PointDefenceRule,
-    RuleKey, RuleSource, Rulebook, Session, SessionSetup,
+    RuleKey, RuleSource, Rulebook, SessionSetup,
 };
 use nova_view::devtools::FlightDesk;
 use nova_view::flight::{
@@ -541,7 +541,7 @@ impl AppScreen {
             return;
         };
         flight.resync();
-        let landed = flight.session().ok().and_then(Session::landed);
+        let landed = flight.landed();
         if let Some(spaceport) = &mut self.spaceport {
             match landed {
                 Some(stellar) if stellar != spaceport.stellar() => {

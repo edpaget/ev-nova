@@ -4,7 +4,8 @@
 //! The editor never sees the session: it reads a [`PilotSheet`], lists the
 //! [`Place`]s it can move the pilot to, and sends one [`PilotEdit`] at a
 //! time, which the desk carries out or refuses ([`EditRefusal`]). The
-//! adapter over a live session is [`super::session`].
+//! desk over a flight is [`super::desk`], over the flight's own
+//! [`DevDesk`].
 
 use std::fmt;
 
