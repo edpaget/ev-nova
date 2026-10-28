@@ -177,6 +177,20 @@ are manual by operator choice and must never be loosened by hand.
 Merge methods and `delete_branch_on_merge` are on `github_repository` too
 (see `repository.tf`).
 
+## Pages
+
+`pages.tf` enables GitHub Pages (`github_repository_pages.ev_nova`) with
+`build_type = "workflow"` and no `source` branch: the site is deployed from
+an Actions artifact, so no branch holds built files. It is a resource of its
+own, not a `pages` block on `github_repository`, because provider 6.13.0
+deprecates that block. `ci.yml`'s `pages` job is the only deployer; its
+comment is the contract for jobs that add a subtree (an artifact named
+`pages-<path>`).
+
+Enabling Pages makes GitHub create the `github-pages` environment. This
+config doesn't manage it: GitHub gives it a default branch policy, and the
+`pages` job runs only on pushes to `main` anyway.
+
 **The allowlist rule.** A workflow may use only GitHub-owned actions and the
 `patterns_allowed` entries in `actions.tf`. Before a workflow change adds a
 new third-party action, add its pattern there and apply it, or the jobs that
@@ -262,6 +276,10 @@ There is no `fallback` block, so an unencrypted state is refused, not read.
   gh api repos/edpaget/ev-nova/rulesets --jq '.[] | {id, name}'
   tofu -chdir=infra/github import github_repository_ruleset.main ev-nova:<id>
   ```
+- **Pages** (`github_repository_pages.ev_nova`) has no `import` block
+  either: it was created by this config. After a lost state, import it the
+  same way before applying (the import ID format is in the provider's
+  `github_repository_pages` docs), or the apply tries to enable Pages again.
 - **Lost passphrase:** delete `terraform.tfstate` and re-apply, as above.
 - **Rotating the passphrase:** see below.
 

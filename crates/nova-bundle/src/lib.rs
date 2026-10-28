@@ -5,8 +5,9 @@
 //! binary writes the Linux desktop file, AppStream metainfo and icons
 //! ([`linux`]); and its `nova-appimage` and `nova-flatpak` binaries pack
 //! the game into the Linux AppImage and Flatpak ([`linux::appimage`],
-//! [`linux::flatpak`]). Its `nova-build-id` binary prints the build ID
-//! ([`build_id`]).
+//! [`linux::flatpak`]); its `nova-build-id` binary prints the build ID
+//! ([`build_id`]); and its `nova-site` binary renders the download
+//! page that links them all ([`site`]).
 //!
 //! # Usage
 //!
@@ -117,7 +118,22 @@
 //! it in `NOVA_BUILD_ID`, so the game reports the build it is.
 //! `nova-build-id` prints it, and exits 1 when it has none (no variable
 //! and no git checkout).
+//!
+//! # The download page
+//!
+//! ```text
+//! mise run site -- [OUT_DIR]
+//! ```
+//!
+//! On any host: `nova-site` writes the download page, `index.html`, into
+//! `OUT_DIR` (by default `target/site`), linking each nightly asset by the
+//! name its packer gives it. CI's `pages` job deploys it at the GitHub
+//! Pages site's root. `nova-site --archive <TARGET>` and
+//! `--archive-dir <TARGET>` print the Windows zip's or Linux tarball's
+//! file name or top-level directory ([`archive`]), which CI's packaging
+//! uses instead of spelling them. See [`site`].
 
+pub mod archive;
 pub mod build_id;
 pub mod bundle;
 pub mod host;
@@ -129,6 +145,7 @@ pub mod linux;
 pub mod notary;
 pub mod ports;
 pub mod signing;
+pub mod site;
 pub mod spec;
 pub mod system;
 #[cfg(test)]

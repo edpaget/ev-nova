@@ -16,5 +16,6 @@ mod linux_flatpak;
 #[cfg(target_os = "macos")]
 mod macos_tools;
 mod process;
+mod site;
 #[cfg(windows)]
 mod windows_installer;
