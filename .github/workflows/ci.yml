@@ -223,33 +223,37 @@ jobs:
       # LICENSE, and on Linux the share/ tree (the desktop file, the
       # AppStream metainfo and the hicolor icons) to copy into
       # ~/.local/share. No game data. The Linux leg's AppImage is packed
-      # after it, beside the tarball in dist/.
+      # after it, beside the tarball in dist/. The directory's and the
+      # archive's names come from nova-bundle (crates/nova-bundle/src/archive.rs),
+      # the same constants the download page links; cargo is run directly,
+      # not through mise, so stdout carries the name alone.
       - name: Package
         if: runner.os != 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-          name="ev-nova-${{ matrix.name }}"
+          dir=$(cargo run --quiet --locked -p nova-bundle --bin nova-site -- --archive-dir "${{ matrix.target }}")
+          file=$(cargo run --quiet --locked -p nova-bundle --bin nova-site -- --archive "${{ matrix.target }}")
           release="target/${{ matrix.target }}/release"
-          mkdir -p "dist/$name"
+          mkdir -p "dist/$dir"
           case "${{ matrix.os }}" in
             windows-*)
-              cp "$release/nova.exe" "$release/nova-dump.exe" "dist/$name/"
+              cp "$release/nova.exe" "$release/nova-dump.exe" "dist/$dir/"
               ;;
             *)
-              cp "$release/nova" "$release/nova-dump" "dist/$name/"
+              cp "$release/nova" "$release/nova-dump" "dist/$dir/"
               ;;
           esac
           if [ "${{ runner.os }}" = Linux ]; then
-            mise run linux-desktop -- "dist/$name"
+            mise run linux-desktop -- "dist/$dir"
           fi
-          cp packaging/README.txt LICENSE "dist/$name/"
+          cp packaging/README.txt LICENSE "dist/$dir/"
           cd dist
           case "${{ matrix.os }}" in
-            windows-*) 7z a "$name.zip" "$name" ;;
-            *) tar czf "$name.tar.gz" "$name" ;;
+            windows-*) 7z a "$file" "$dir" ;;
+            *) tar czf "$file" "$dir" ;;
           esac
-          rm -rf "$name"
+          rm -rf "$dir"
       # ev-nova-x86_64-unknown-linux-gnu.AppImage, beside the tarball in
       # dist/; it stages under target/ (crates/nova-bundle/src/linux/appimage).
       # appimagetool and the type2 runtime it embeds are pinned and checked
@@ -402,14 +406,19 @@ jobs:
   # Deploys the GitHub Pages site. A repository has one Pages deployment,
   # and each deploy replaces the whole site.
   #
-  # The root is the page: packaging/site/index.html, a placeholder until
-  # rdm:phase/pages-site/phase-2-download-page renders it with `mise run site`.
+  # The root is the download page rendered by `mise run site`
+  # (crates/nova-bundle/src/site), whose links name each nightly asset as
+  # its packer does. It needs `publish` as well as `ci`, both of which run
+  # on exactly the pushes to main this job does, so the page deploys only
+  # after the nightly assets it links have been uploaded. If `publish`
+  # fails or is skipped, so is this job, and the previous site stays up.
   #
   # Another job adds a subtree by uploading an artifact named `pages-<path>`
   # whose root is the tree served at `/<path>/` (`pages-flatpak` becomes
   # `/flatpak/`), and adding itself to this job's `needs`. `<path>` must not
-  # be empty or clash with a root file; the assembly step refuses both. If a
-  # needed producer fails, this job is skipped and the previous site stays up.
+  # be empty or clash with a root file (index.html included); the assembly
+  # step refuses both. If a needed producer fails, this job is skipped and
+  # the previous site stays up.
   #
   # Because a deploy replaces everything, a producer uploads its full tree on
   # every main run. One that rebuilds incrementally fetches its previous tree
@@ -420,7 +429,7 @@ jobs:
   # deploy-pages needs. contents: read is for checkout, since a job-level
   # permissions block sets every scope it doesn't list to none.
   pages:
-    needs: [ci]
+    needs: [ci, publish]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -440,10 +449,23 @@ jobs:
     concurrency:
       group: pages
       cancel-in-progress: false
+    env:
+      # As in `ci`: install only the Rust toolchain.
+      MISE_AUTO_INSTALL: "false"
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      # Rust for `mise run site`; nova-bundle needs no system libraries.
+      - uses: jdx/mise-action@v5
+        with:
+          install: false
+      - run: mise install rust
+        shell: bash
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pages
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Without merge-multiple, each matching artifact lands in its own
       # `<path>/<artifact name>/`. With no match it downloads nothing and
       # succeeds, and the assembly step deploys the root page alone.
@@ -455,8 +477,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p _site
-          cp packaging/site/index.html _site/
+          mise run site -- _site
           if [ -d "$RUNNER_TEMP/pages" ]; then
             for dir in "$RUNNER_TEMP/pages"/pages-*/; do
               [ -d "$dir" ] || continue
