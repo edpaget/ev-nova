@@ -43,7 +43,7 @@ const ON_BOARD: PlunderView = PlunderView {
 
 /// The answer to a board that opened the plunder dialog on [`ON_BOARD`],
 /// the boarding then under way.
-fn opened(view: &mut Faked) {
+pub(super) fn opened(view: &mut Faked) {
     view.sim
         .queue_answer(Answer::Boarded(Boarding::Opened(ON_BOARD)));
     view.sim.comm_mut().boarding = Some(ON_BOARD);

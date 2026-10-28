@@ -24,14 +24,6 @@ fn the_credits_message_says_no_amount() {
 }
 
 #[test]
-fn a_tap_of_b_still_boards() {
-    // Pressed and released before the next frame, through the press.
-    let mut view = beside(750, 750, 0, false);
-    tap(&mut view, BOARD_KEY);
-    assert!(view.take_boarding().is_some());
-}
-
-#[test]
 fn the_plunder_messages_are_the_originals() {
     let food = Some("Food");
     let message = |taken| plunder_message(taken, food, Some("Rockets"));

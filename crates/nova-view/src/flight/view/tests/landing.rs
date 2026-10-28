@@ -67,29 +67,3 @@ fn the_picks_roll_their_ranges_and_decide_only_their_words() {
     assert!(greeting(1).ends_with("Welcome to Earth. "));
     assert!(greeting(2).ends_with("Welcome to Earth. "));
 }
-
-#[test]
-fn a_repeat_or_release_of_l_does_nothing() {
-    let mut view = flight_among(vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)]);
-    view.input(&held(LAND));
-    view.input(&key(LAND, false));
-    assert_eq!(view.take_landing(), None);
-    assert_eq!(view.session().expect("flying").landed(), None);
-    assert_eq!(nav_target(&view), None, "nothing selected");
-    let mut far = flight();
-    far.input(&held(LAND));
-    assert_eq!(far.message(), None, "no refusal either");
-}
-
-#[test]
-fn a_message_waits_out_the_map() {
-    let mut view = flight();
-    view.say_for("A", 240);
-    ticks(&mut view, 40);
-    tap(&mut view, MAP_KEY);
-    assert!(view.map_open());
-    ticks(&mut view, 300);
-    tap(&mut view, MAP_KEY);
-    assert!(!view.map_open());
-    assert_lasts(&mut view, "A", 200);
-}

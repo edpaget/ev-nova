@@ -17,7 +17,7 @@ use nova_sim::{Commanded, EscortCommand, EscortGroup, EscortOrder, SimSound, Tar
 
 /// A frame in Sol, the player alone, the escort rows of `present` shown
 /// and an escort flying when there are any.
-fn fleet_of(present: &[EscortClass]) -> FlightFrame {
+pub(super) fn fleet_of(present: &[EscortClass]) -> FlightFrame {
     let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
     for row in &mut frame.hud.escort_rows {
         row.present = present.contains(&row.class);
@@ -62,7 +62,7 @@ fn menu_tick(view: &mut Faked, dt: Duration) {
 }
 
 /// The answer to a command that went to `group` as `command`.
-fn commanded(group: EscortGroup, command: EscortCommand, targeted: bool) -> Answer {
+pub(super) fn commanded(group: EscortGroup, command: EscortCommand, targeted: bool) -> Answer {
     Answer::Commanded(Commanded {
         group,
         command,
@@ -72,7 +72,7 @@ fn commanded(group: EscortGroup, command: EscortCommand, targeted: bool) -> Answ
 }
 
 /// The command an escort key sends `group`.
-fn command(group: EscortGroup, command: EscortCommand) -> FlightCommand {
+pub(super) fn command(group: EscortGroup, command: EscortCommand) -> FlightCommand {
     FlightCommand::CommandEscorts { group, command }
 }
 

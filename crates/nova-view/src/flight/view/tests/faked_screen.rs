@@ -14,7 +14,7 @@ use nova_sim::{MissionInfoPress, SessionEvent, StellarPick, TargetPick};
 
 /// A view of Sol's flight, its ship alone and intact at the centre, the
 /// course map drawing Sol and preselecting it.
-fn in_flight() -> Faked {
+pub(super) fn in_flight() -> Faked {
     let mut view = world(catalog(), sol());
     let map = view.sim.map_mut();
     map.drawing = Some(sol_drawing());
@@ -23,7 +23,7 @@ fn in_flight() -> Faked {
 }
 
 /// [`in_flight`]'s view braking and turning for a jump its J began.
-fn braking() -> Faked {
+pub(super) fn braking() -> Faked {
     let mut view = in_flight();
     view.sim
         .queue_answer_showing(Answer::Jumped(SystemId(131)), under_way(false));
@@ -36,7 +36,7 @@ fn braking() -> Faked {
 }
 
 /// [`in_flight`]'s view 300 ms into its jump's warp.
-fn streaking() -> Faked {
+pub(super) fn streaking() -> Faked {
     let mut view = in_flight();
     jump_now(&mut view);
     view.tick(ms(300));
@@ -47,12 +47,12 @@ fn streaking() -> Faked {
 /// The view braking for a jump and the one 300 ms into its warp, as
 /// [`through_a_jump`] has them over a real flight. Boxed: two views are
 /// too large for the stack together.
-fn faked_through_a_jump() -> [Box<Faked>; 2] {
+pub(super) fn faked_through_a_jump() -> [Box<Faked>; 2] {
     [Box::new(braking()), Box::new(streaking())]
 }
 
 /// Which stage of the jump `view` is in, for a failing assertion.
-fn faked_stage(view: &Faked) -> &'static str {
+pub(super) fn faked_stage(view: &Faked) -> &'static str {
     if view.jump_effect().is_none() {
         "braking"
     } else {
@@ -62,7 +62,7 @@ fn faked_stage(view: &Faked) -> &'static str {
 
 /// The commands `view` sent since `from` of them, the message line's
 /// and the settings' left out.
-fn sent_since(view: &Faked, from: usize) -> Vec<FlightCommand> {
+pub(super) fn sent_since(view: &Faked, from: usize) -> Vec<FlightCommand> {
     view.sim.applied()[from..]
         .iter()
         .filter(|command| {
@@ -81,7 +81,7 @@ fn sent_since(view: &Faked, from: usize) -> Vec<FlightCommand> {
 }
 
 /// How many commands `view` has sent.
-fn sent_count(view: &Faked) -> usize {
+pub(super) fn sent_count(view: &Faked) -> usize {
     view.sim.applied().len()
 }
 
@@ -521,7 +521,7 @@ fn in_alpha() -> FlightFrame {
 /// Brings `view`'s warp to its end: the frame says the end is due, and
 /// the flight answers the arrival showing [`in_alpha`], telling the
 /// system entered.
-fn warp_ends(view: &mut Faked) {
+pub(super) fn warp_ends(view: &mut Faked) {
     view.sim.set_frame(FlightFrame {
         warp_end_due: true,
         ..under_way(true)
@@ -539,7 +539,7 @@ fn warp_ends(view: &mut Faked) {
 }
 
 /// The stellar picks `view` sent since `from` of its commands.
-fn picks_since(view: &Faked, from: usize) -> Vec<FlightCommand> {
+pub(super) fn picks_since(view: &Faked, from: usize) -> Vec<FlightCommand> {
     sent_since(view, from)
         .into_iter()
         .filter(|command| matches!(command, FlightCommand::SelectStellar(_)))
@@ -1162,7 +1162,7 @@ fn a_refused_nav_stops_the_held_slot_keys_once_the_player_has_exploded() {
 }
 
 /// A left click at `at`.
-fn faked_click(view: &mut Faked, at: Point) {
+pub(super) fn faked_click(view: &mut Faked, at: Point) {
     for pressed in [true, false] {
         view.input(&Input::PointerButton {
             button: MouseButton::Left,

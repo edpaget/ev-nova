@@ -85,6 +85,7 @@ mod faked_escorts;
 mod faked_flight;
 mod faked_hail;
 mod faked_hud;
+mod faked_keys;
 mod faked_landing;
 mod faked_missions;
 mod faked_player;
@@ -2629,24 +2630,6 @@ fn npc_ids(view: &View) -> Vec<NpcId> {
     session.npcs().iter().map(|npc| npc.id).collect()
 }
 
-/// Turns east at rest, then drifts out slowly that way until far
-/// enough to jump: facing Alpha Centauri and slow enough, J streaks at
-/// once.
-fn ready_to_jump(view: &mut View) {
-    view.input(&key(Key::Right, true));
-    ticks(view, 30);
-    view.input(&key(Key::Right, false));
-    view.input(&key(Key::Up, true));
-    ticks(view, 10);
-    view.input(&key(Key::Up, false));
-    for _ in 0..2000 {
-        if player(view).position.length() >= MIN_JUMP_DISTANCE {
-            break;
-        }
-        view.tick(TICK);
-    }
-    assert_eq!(player(view).heading, 90.0);
-}
 /// Says no ship is disabled, counting the times it is asked.
 #[derive(Debug, Default)]
 struct Counting {
@@ -3277,13 +3260,6 @@ fn boardable() -> FakeCatalog {
     catalog
 }
 
-/// [`boardable`]'s flight with its one NPC placed at (`x` - 750,
-/// `y` - 750) facing `heading`, disabled by [`DisablesTheStrong`] on
-/// the first tick unless `intact`, and targeted.
-fn beside(x: u32, y: u32, heading: u32, intact: bool) -> View {
-    beside_in(boardable(), x, y, heading, intact)
-}
-
 /// [`beside`], flying over `catalog`.
 fn beside_in(catalog: FakeCatalog, x: u32, y: u32, heading: u32, intact: bool) -> View {
     let (_, chance) = scripted(&placed(x, y, heading));
@@ -3364,124 +3340,9 @@ impl nova_sim::HailOption for Refuel {
         }
     }
 }
-use nova_sim::{EscortClass, EscortGroup, EscortOrder};
-
-/// An escort of ship `ship`, full, a fighter out of a bay when
-/// `carried`, hired at `wage` if any.
-fn escort(ship: i16, carried: bool, wage: Option<i64>) -> nova_sim::fleet::Escort {
-    nova_sim::fleet::Escort {
-        ship: ShipId(ship),
-        reserves: Reserves::full(40.0, 60.0, 250.0),
-        order: None,
-        carried,
-        wage,
-        person: None,
-        mark: None,
-    }
-}
-
-/// A fleet of `ships`, each full, and fighters out of a bay when
-/// `carried`.
-fn fleet(ships: &[i16], carried: bool) -> Vec<nova_sim::fleet::Escort> {
-    ships
-        .iter()
-        .map(|&ship| escort(ship, carried, None))
-        .collect()
-}
-
-/// A flight of `catalog`'s pilot `name`, its fleet `escorts`, which its
-/// first tick places, its calls handed `collaborators`.
-fn escorted_flight(
-    catalog: FakeCatalog,
-    name: &str,
-    escorts: Vec<nova_sim::fleet::Escort>,
-    collaborators: Collaborators,
-) -> View {
-    let session = SessionBuilder::flying(&catalog)
-        .named(name)
-        .with_escorts(escorts)
-        .build();
-    let sim = SessionFlight::from(session).with_collaborators(collaborators);
-    FlightView::from_session(catalog, sim, &Rulebook::default())
-}
-
-/// [`boardable`] with ship 130 a fighter (`EscortType` 0) holding
-/// no fuel, and two of them out of the player's bays; its traffic
-/// ship (NPC 0) placed 100 above the player. A tick has placed the
-/// fighters (NPCs 1 and 2).
-fn fighters_out() -> View {
-    fighters_out_of(boardable())
-}
-
-/// [`fighters_out`] from `catalog`, a [`boardable`] one.
-fn fighters_out_of(mut catalog: FakeCatalog) -> View {
-    for record in &mut catalog.ships {
-        if record.id == ShipId(130) {
-            record.escort_type = 0;
-            record.fields.fuel = 0;
-        }
-    }
-    let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = escorted_flight(
-        catalog,
-        "Carrier",
-        fleet(&[130, 130], true),
-        on(chance, Rc::new(Still)),
-    );
-    view.tick(TICK);
-    assert!(view.session().expect("flying").is_escort(NpcId(2)));
-    view
-}
-
-/// Taps `key` with Alt (Option) held.
-fn option(view: &mut View, key_: Key) {
-    view.input(&key(Key::Alt, true));
-    tap(view, key_);
-    view.input(&key(Key::Alt, false));
-}
+use nova_sim::EscortClass;
 
 const HELLO: &str = "Message Buoy: hello.";
-
-/// [`boardable`] with ship 130, a warship escort (`EscortType` 2,
-/// `InherentAI` 3), whose sheet cannot be read, and the pilot's fleet
-/// one of them; its traffic ship (NPC 0) placed 100 above the player;
-/// all idle. A tick has placed the escort (NPC 1).
-fn escorted() -> View {
-    escorted_with_traffic(750, 650)
-}
-
-/// [`escorted`] with its traffic ship (NPC 0) placed as
-/// [`placed`]`(x, y, 0)` places it.
-fn escorted_with_traffic(x: u32, y: u32) -> View {
-    let mut catalog = boardable();
-    for record in &mut catalog.ships {
-        if record.id == ShipId(130) {
-            record.escort_type = 2;
-            record.inherent_ai = 3;
-        }
-    }
-    let (_, chance) = scripted(&placed(x, y, 0));
-    let mut view = escorted_flight(
-        catalog,
-        "Escorted",
-        fleet(&[130], false),
-        on(chance, Rc::new(Still)),
-    );
-    view.tick(TICK);
-    let session = view.session().expect("flying");
-    assert!(session.is_escort(NpcId(1)), "{:?}", session.npcs());
-    view
-}
-
-fn orders(view: &View) -> Vec<Option<EscortOrder>> {
-    view.sim()
-        .pilot()
-        .expect("flying")
-        .escorts()
-        .iter()
-        .map(|escort| escort.order)
-        .collect()
-}
 
 /// The interface sounds `view` holds, taken.
 fn ui_sounds(view: &mut FlightView<FakeCatalog, impl FlightSim>) -> Vec<UiSound> {
@@ -3549,39 +3410,6 @@ fn errand(id: i16) -> MissionRecord {
         date_post_inc: 0,
         ships: MissionShip::NONE,
         aux: nova_sim::catalog::AuxShip::NONE,
-    }
-}
-
-/// Holds Command (and Alt with `option`), taps `k`, and lets go.
-fn command_tap(view: &mut View, k: Key, option: bool) {
-    view.input(&key(Key::Command, true));
-    if option {
-        view.input(&key(Key::Alt, true));
-    }
-    tap(view, k);
-    if option {
-        view.input(&key(Key::Alt, false));
-    }
-    view.input(&key(Key::Command, false));
-}
-
-/// Inspects the player until its flag is set; then it has looked the
-/// player over, and goes on to its goal.
-#[derive(Debug)]
-struct InspectingUntil(Rc<std::cell::Cell<bool>>, Goal);
-
-impl Behaviour for InspectingUntil {
-    fn decide(
-        &self,
-        _npc: &nova_sim::Npc,
-        _around: &nova_sim::Surroundings,
-        _chance: &mut dyn Chance,
-    ) -> Goal {
-        if self.0.get() {
-            self.1
-        } else {
-            Goal::Inspect(ShipRef::Player)
-        }
     }
 }
 
