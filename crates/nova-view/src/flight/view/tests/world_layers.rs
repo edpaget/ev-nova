@@ -234,7 +234,7 @@ fn floating_border_line(command: &DrawCommand) -> bool {
 
 /// Shows `view`'s floating map, as H's press does, over Sol's drawing.
 fn floating_up(view: &mut Faked) {
-    view.sim.map_mut().drawing = Some(sol_drawing());
+    view.sim.queue_screen(floating_shown(sol_drawing(), None));
     view.hyperspace_key(HYPERSPACE_MODE_KEY);
     assert!(view.floating.is_up(), "shown");
 }

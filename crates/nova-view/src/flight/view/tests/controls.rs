@@ -482,7 +482,8 @@ fn h_held_blocks_a_press_of_nav_off() {
 
 #[test]
 fn nav_off_held_blocks_a_press_of_h_which_still_shows_the_map() {
-    let mut view = faked_sol(in_sol());
+    let mut view = faked(in_sol());
+    view.sim.queue_screen(floating_shown(sol_drawing(), None));
     faked_press(&mut view, NAV_OFF_KEY);
     view.nav_held_frame();
     assert_eq!(block_presses(&view), 1, "`'s");
@@ -553,7 +554,8 @@ fn another_key_pressed_while_option_backquote_is_held_leaves_the_target_to_the_t
 
 #[test]
 fn option_backquote_held_blocks_h_but_not_its_map_nor_with_h_held_its_target() {
-    let mut view = faked_sol(in_sol());
+    let mut view = faked(in_sol());
+    view.sim.queue_screen(floating_shown(sol_drawing(), None));
     view.track_held(&key(Key::Alt, true));
     faked_press(&mut view, NAV_OFF_KEY);
     view.nav_held_frame();

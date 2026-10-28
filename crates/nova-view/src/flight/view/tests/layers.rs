@@ -219,7 +219,7 @@ fn the_floating_map_and_the_escort_menu_are_world_and_their_text_overlay() {
     let mut hud = nova_sim::flight_frame::FrameHud::default();
     hud.escort_rows[0].present = true;
     view.escort_menu.toggle(view.elapsed, &hud.escort_rows);
-    view.sim.map_mut().drawing = Some(sol_drawing());
+    view.sim.queue_screen(floating_shown(sol_drawing(), None));
     view.hyperspace_key(HYPERSPACE_MODE_KEY);
     let list = super::faked_world::world_list_with(&mut view, &hud);
     let border = floating_border(&list);

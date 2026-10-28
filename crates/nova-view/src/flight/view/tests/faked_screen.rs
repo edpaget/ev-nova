@@ -13,14 +13,9 @@ use crate::SoundPrefs;
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::{MissionInfoPress, SessionEvent, StellarPick, TargetPick};
 
-/// A view of Sol's flight, its ship alone and intact at the centre, the
-/// course map drawing Sol and preselecting it.
+/// A view of Sol's flight, its ship alone and intact at the centre.
 pub(super) fn in_flight() -> Faked {
-    let mut view = world(catalog(), sol());
-    queue_map(&mut view, Some(130), sol_drawing());
-    // The floating map's show still reads the drawing here.
-    view.sim.map_mut().drawing = Some(sol_drawing());
-    view
+    world(catalog(), sol())
 }
 
 /// [`in_flight`]'s view braking and turning for a jump its J began.
@@ -977,6 +972,7 @@ fn hyper_selects(view: &mut Faked) {
 #[test]
 fn backslash_first_pressed_during_the_jump_and_held_acts_after_arrival() {
     for mut view in faked_through_a_jump() {
+        view.sim.queue_screen(floating_shown(sol_drawing(), None));
         let stage = faked_stage(&view);
         view.input(&key(HYPER_SELECT_KEY, true));
         if stage == "braking" {

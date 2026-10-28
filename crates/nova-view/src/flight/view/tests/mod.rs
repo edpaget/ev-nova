@@ -585,6 +585,18 @@ fn queue_map(
     view.sim.queue_screen(redrawn(drawing));
 }
 
+/// What a scripted flight answers the floating map's show
+/// ([`ScreenAsk::FloatingMap`]): `drawing`, selecting `preselection`.
+fn floating_shown(
+    drawing: nova_sim::galaxy_map::MapDrawing,
+    preselection: Option<i16>,
+) -> ScreenAnswer {
+    ScreenAnswer::FloatingMap(Box::new(nova_sim::flight_frame::FloatingMap {
+        drawing,
+        preselection: preselection.map(SystemId),
+    }))
+}
+
 /// [`faked`] in `frame`, its flight answering the course map's opening by
 /// preselecting Sol and its first redraw with [`sol_drawing`]
 /// ([`queue_map`]).

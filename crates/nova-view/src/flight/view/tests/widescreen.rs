@@ -296,7 +296,7 @@ fn a_classic_size_draws_flight_exactly_as_before() {
         frame.hud.escort_rows[0].present = true;
         frame.hud.escorts_flying = true;
         let mut view = world(armed(2, &[]), frame);
-        view.sim.map_mut().drawing = Some(sol_drawing());
+        view.sim.queue_screen(floating_shown(sol_drawing(), None));
         tap(&mut view, crate::flight::escorts::MENU_KEY);
         view.say_for("Hello", 100);
         view.hyperspace_key(HYPERSPACE_MODE_KEY);

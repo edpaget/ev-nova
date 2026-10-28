@@ -1,5 +1,4 @@
 use super::*;
-use crate::flight::sim_port::fixture::MapAsk;
 use crate::galaxy::update::MapUpdate;
 use nova_sim::MapClicked;
 use nova_sim::flight_frame::{FlightEvent, FloatingLinks};
@@ -540,29 +539,49 @@ fn sol_places(links: &[(i16, (f32, f32))]) -> FloatingLinks {
     }
 }
 
-/// A view over a scripted flight in `frame`, drawing the map as
-/// [`sol_drawing`], with Sol's floating map places: its link to Alpha
-/// Centauri (131) at (600, 0).
+/// A view over a scripted flight in `frame` over `catalog`, its frame
+/// giving the floating map `places`, its shows answered with nothing
+/// until a test queues their answers.
+fn floating_over(catalog: FakeCatalog, frame: FlightFrame, places: FloatingLinks) -> Faked {
+    faked_in(
+        catalog,
+        FlightFrame {
+            floating: places,
+            ..frame
+        },
+    )
+}
+
+/// A view over a scripted flight in `frame`, with Sol's floating map
+/// places, its link to Alpha Centauri (131) at (600, 0), its first show
+/// answered with [`sol_drawing`] and nothing selected, and every later
+/// one with nothing, so it shows that drawing until a test says
+/// otherwise.
 pub(super) fn floating_in(frame: FlightFrame) -> Faked {
-    let mut view = faked(frame);
-    let map = view.sim.map_mut();
-    map.drawing = Some(sol_drawing());
-    map.floating = sol_places(&[(131, (600.0, 0.0))]);
+    let mut view = floating_over(catalog(), frame, sol_places(&[(131, (600.0, 0.0))]));
+    view.sim.queue_screen(floating_shown(sol_drawing(), None));
     view
 }
 
-/// [`floating_in`] over [`FakeCatalog::near`]'s galaxy, drawing it as
-/// [`near_drawing`], Proxima Near (134) linked at (40, 30) too.
-fn floating_near(frame: FlightFrame) -> Faked {
-    let catalog = FakeCatalog {
+/// The catalog [`FakeCatalog::near`] gives: Proxima Near (134) near Sol.
+fn near_catalog() -> FakeCatalog {
+    FakeCatalog {
         near: true,
         ..catalog()
-    };
-    let mut view = faked_in(catalog, frame);
-    let map = view.sim.map_mut();
-    map.drawing = Some(near_drawing());
-    map.map_preselection = Some(SystemId(130));
-    map.floating = sol_places(&[(131, (600.0, 0.0)), (134, (40.0, 30.0))]);
+    }
+}
+
+/// The floating map's places in Sol over [`near_catalog`]: Alpha
+/// Centauri (131) at (600, 0) and Proxima Near (134) at (40, 30).
+fn near_places() -> FloatingLinks {
+    sol_places(&[(131, (600.0, 0.0)), (134, (40.0, 30.0))])
+}
+
+/// [`floating_in`] over [`near_catalog`], its first show drawing
+/// [`near_drawing`], Proxima Near (134) linked at (40, 30) too.
+fn floating_near(frame: FlightFrame) -> Faked {
+    let mut view = floating_over(near_catalog(), frame, near_places());
+    view.sim.queue_screen(floating_shown(near_drawing(), None));
     view
 }
 
@@ -655,6 +674,71 @@ fn holding_h_shows_the_floating_map_bordered_and_centred_on_the_current_system()
             DrawCommand::Line { color, .. } if *color == CYAN)),
         "the current system's dot in it"
     );
+}
+
+/// How many times `view`'s flight was asked for the floating map's show.
+fn floating_shows_asked(view: &Faked) -> usize {
+    view.sim
+        .screens_asked()
+        .iter()
+        .filter(|ask| **ask == ScreenAsk::FloatingMap)
+        .count()
+}
+
+#[test]
+fn holding_h_asks_the_floating_maps_show_on_each_frame_it_is_held() {
+    // Each held frame shows the map again (`_ShowFloatingMap`), and the
+    // flight steps between them, so each show asks what it draws.
+    let mut view = floating_in(in_sol());
+    floating_key(&mut view, HYPERSPACE_MODE_KEY, true);
+    assert_eq!(floating_shows_asked(&view), 1, "the press's show");
+    for held in 1..=5 {
+        floating_frame_of(&mut view, TICK);
+        assert_eq!(floating_shows_asked(&view), 1 + held, "{held} held");
+    }
+    floating_key(&mut view, HYPERSPACE_MODE_KEY, false);
+    for _ in 0..3 {
+        floating_frame_of(&mut view, TICK);
+    }
+    assert_eq!(floating_shows_asked(&view), 6, "none once let go");
+    assert_eq!(alpha_of(&view), Some(255), "still up");
+}
+
+#[test]
+fn a_floating_map_left_up_asks_nothing_and_draws_on_the_frames_current_place() {
+    let mut view = floating_over(
+        near_catalog(),
+        FlightFrame {
+            system: SystemId(134),
+            ..in_sol()
+        },
+        FloatingLinks {
+            current: Vec2::new(40.0, 30.0),
+            links: vec![(SystemId(130), Vec2::ZERO)],
+        },
+    );
+    let mut drawing = near_drawing();
+    drawing.current = SystemId(134);
+    view.sim.queue_screen(floating_shown(drawing, None));
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    let asked = view.sim.screens_asked().len();
+    for _ in 0..5 {
+        floating_frame_of(&mut view, TICK);
+        assert_eq!(alpha_of(&view), Some(255), "up");
+    }
+    assert_eq!(view.sim.screens_asked().len(), asked, "no ask while up");
+    assert_eq!(
+        floating_dots(&floating_drawn(&view))[1],
+        FRAME_CENTRE,
+        "Proxima Near, the frame's current place, at the centre"
+    );
+    view.change_sim(|sim| sim.frame_mut().floating.current = Vec2::ZERO);
+    assert_eq!(
+        floating_dots(&floating_drawn(&view))[0],
+        FRAME_CENTRE,
+        "Sol at the centre once the frame's place moves there"
+    );
+    assert_eq!(view.sim.screens_asked().len(), asked, "read, not asked");
 }
 
 #[test]
@@ -841,18 +925,20 @@ fn a_click_in_a_links_box_sends_it_in_mode_3() {
 
 #[test]
 fn away_from_the_origin_the_map_centres_on_the_current_system_and_clicks_follow() {
-    let mut view = floating_near(FlightFrame {
-        system: SystemId(134),
-        ..in_sol()
-    });
+    let mut view = floating_over(
+        near_catalog(),
+        FlightFrame {
+            system: SystemId(134),
+            ..in_sol()
+        },
+        FloatingLinks {
+            current: Vec2::new(40.0, 30.0),
+            links: vec![(SystemId(130), Vec2::ZERO)],
+        },
+    );
     let mut drawing = near_drawing();
     drawing.current = SystemId(134);
-    let map = view.sim.map_mut();
-    map.drawing = Some(drawing);
-    map.floating = FloatingLinks {
-        current: Vec2::new(40.0, 30.0),
-        links: vec![(SystemId(130), Vec2::ZERO)],
-    };
+    view.sim.queue_screen(floating_shown(drawing, None));
     floating_tap(&mut view, HYPERSPACE_MODE_KEY);
     // Sol, 40 left and 30 up at 16/9: (614.9, 224.7).
     let sol = Point::new(
@@ -1084,7 +1170,7 @@ fn the_map_is_drawn_after_the_double_time_icon_and_before_the_escort_menu() {
     view.escort_menu
         .toggle(view.elapsed, &view.frame.hud.escort_rows);
     assert!(view.escort_menu.is_open());
-    view.sim.map_mut().drawing = Some(sol_drawing());
+    view.sim.queue_screen(floating_shown(sol_drawing(), None));
     view.hyperspace_key(HYPERSPACE_MODE_KEY);
     let list = super::faked_world::world_list(&view);
     let commands: Vec<&DrawCommand> = list.iter().collect();
@@ -1149,11 +1235,16 @@ fn drawn_to_alpha(course: bool) -> MapDrawing {
 
 #[test]
 fn the_floating_map_draws_the_flights_selection_clipped_to_the_frame() {
-    let mut view = floating_in(FlightFrame {
-        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
-        ..in_sol()
-    });
-    view.sim.map_mut().drawing = Some(drawn_to_alpha(false));
+    let mut view = floating_over(
+        catalog(),
+        FlightFrame {
+            nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
+            ..in_sol()
+        },
+        sol_places(&[(131, (600.0, 0.0))]),
+    );
+    view.sim
+        .queue_screen(floating_shown(drawn_to_alpha(false), None));
     view.sim.queue_answer(Answer::System(Some(SystemId(131))));
     floating_tap(&mut view, HYPER_SELECT_KEY);
     assert_eq!(sent(&view), [FlightCommand::SelectNextSystem]);
@@ -1173,14 +1264,16 @@ fn the_floating_map_draws_the_flights_selection_clipped_to_the_frame() {
 
 #[test]
 fn the_floating_map_draws_the_course_as_its_show_took_it() {
-    let mut view = floating_in(in_sol());
+    let mut view = floating_over(catalog(), in_sol(), sol_places(&[(131, (600.0, 0.0))]));
     view.sim.set_frame(FlightFrame {
         nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
         course_shown: vec![SystemId(131)],
         course_plotted: true,
+        floating: sol_places(&[(131, (600.0, 0.0))]),
         ..in_sol()
     });
-    view.sim.map_mut().drawing = Some(drawn_to_alpha(true));
+    view.sim
+        .queue_screen(floating_shown(drawn_to_alpha(true), None));
     assert_eq!(view.map.route(), [], "the course map never shown it");
     floating_tap(&mut view, HYPERSPACE_MODE_KEY);
     let course = rects_of(&floating_drawn(&view), BRIGHT_GREEN);
@@ -1197,7 +1290,8 @@ fn the_floating_map_draws_the_course_as_its_show_took_it() {
          over it, and over its own grey"
     );
     assert_eq!(rects_of(&floating_drawn(&view), LESS_DARK_GREY), []);
-    view.sim.map_mut().drawing = Some(sol_drawing());
+    // What the flight would draw now, were it asked: no show asks it.
+    view.sim.queue_screen(floating_shown(sol_drawing(), None));
     assert_eq!(
         rects_of(&floating_drawn(&view), BRIGHT_GREEN),
         course,
@@ -1220,15 +1314,21 @@ fn floating_names(list: &DrawList) -> Vec<String> {
 
 #[test]
 fn above_a_zoom_of_1_1_the_floating_map_names_only_the_system_its_show_selected() {
-    let mut view = floating_near(FlightFrame {
-        nav_mode: NavMode::Hyperspace(Some(SystemId(134))),
-        ..in_sol()
-    });
+    let mut view = floating_over(
+        near_catalog(),
+        FlightFrame {
+            nav_mode: NavMode::Hyperspace(Some(SystemId(134))),
+            ..in_sol()
+        },
+        near_places(),
+    );
     let mut drawing = near_drawing();
     drawing.named.push(SystemId(134));
-    let map = view.sim.map_mut();
-    map.drawing = Some(drawing);
-    map.floating_preselection = Some(SystemId(134));
+    // Hyper Select's show, then the three zooms', each selecting 134.
+    for _ in 0..4 {
+        view.sim
+            .queue_screen(floating_shown(drawing.clone(), Some(134)));
+    }
     floating_tap(&mut view, HYPER_SELECT_KEY);
     assert_eq!(
         floating_names(&floating_drawn(&view)),
@@ -1243,7 +1343,7 @@ fn above_a_zoom_of_1_1_the_floating_map_names_only_the_system_its_show_selected(
         ["Proxima Near"],
         "at 3/4"
     );
-    view.sim.map_mut().floating_preselection = None;
+    view.sim.queue_screen(floating_shown(drawing, None));
     floating_tap(&mut view, HYPERSPACE_MODE_KEY);
     assert_eq!(
         floating_names(&floating_drawn(&view)),
@@ -1264,25 +1364,22 @@ fn the_floating_map_takes_its_mission_arrows_as_it_shows() {
             .iter()
             .any(|system| system.id == SystemId(131) && system.red_arrow)
     };
-    let asked = |missions: Vec<SystemId>| MapAsk::Drawing {
-        hypergate: None,
-        missions,
-        marks: nova_sim::MapMarks::NONE,
+    let shows = |view: &Faked| {
+        view.sim
+            .screens_asked()
+            .iter()
+            .filter(|ask| **ask == ScreenAsk::FloatingMap)
+            .count()
     };
-    assert_eq!(view.sim.asked().last(), Some(&asked(Vec::new())));
+    assert_eq!(shows(&view), 1);
     assert!(!red(&view), "no mission");
+    // The flight's mission systems arrow Alpha Centauri now.
     let mut arrowed = sol_drawing();
     arrowed.systems[1].red_arrow = true;
-    let map = view.sim.map_mut();
-    map.mission_systems = vec![SystemId(131)];
-    map.drawing = Some(arrowed);
+    view.sim.queue_screen(floating_shown(arrowed, None));
     assert!(!red(&view), "not until the next show");
     floating_tap(&mut view, HYPERSPACE_MODE_KEY);
-    assert_eq!(
-        view.sim.asked().last(),
-        Some(&asked(vec![SystemId(131)])),
-        "the mission systems taken as it shows"
-    );
+    assert_eq!(shows(&view), 2, "the drawing taken afresh as it shows");
     assert!(red(&view), "Alpha Centauri, the mission's system, arrowed");
 }
 

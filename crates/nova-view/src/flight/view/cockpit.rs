@@ -6,7 +6,7 @@
 use nova_sim::PlayerCommand;
 #[cfg(doc)]
 use nova_sim::Session;
-use nova_sim::flight_frame::{Answer, FlightFrame};
+use nova_sim::flight_frame::{Answer, FlightFrame, ScreenAnswer, ScreenAsk};
 use nova_sim::{
     ClassRow, Condition, EscortCommand, NavMode, Reserves, StellarPick, SystemId, TargetPick,
 };
@@ -565,11 +565,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Shows the floating map, restarting its clock, as
     /// `_ShowFloatingMap` does.
     ///
-    /// Each show takes the map's drawing afresh, as `_ShowFloatingMap`
-    /// draws it into the frame then (`_DrawMapInFloatingFrame`): the
-    /// session's drawing off the hypergate map (`_hypergateMapMode` = 0,
-    /// @0x114cb) with the mission systems taken now (@0x114ea), and the
-    /// system selected now ([`Session::floating_preselection`],
+    /// Each show takes the map's drawing afresh, one answer to the show's
+    /// ask ([`ScreenAsk::FloatingMap`]), as `_ShowFloatingMap` draws it
+    /// into the frame then (`_DrawMapInFloatingFrame`): the session's
+    /// drawing off the hypergate map (`_hypergateMapMode` = 0, @0x114cb)
+    /// with the mission systems taken now (@0x114ea), and the system
+    /// selected now ([`Session::floating_preselection`],
     /// @0x1147b-0x114c8), whose name alone is drawn above a zoom of 1.1.
     /// It marks no green system, with multiple arrows allowed
     /// ([`MapMarks::NONE`](nova_sim::MapMarks::NONE)): it shows only from
@@ -578,19 +579,23 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// mode-3 link are those of the last show, not live, as the
     /// original's frame image is drawn only then (at a show, Hyper Select,
     /// a click and a zoom, each of which shows it again here).
+    ///
+    /// So it asks at every show, and a show comes on every frame while H
+    /// or `\` is held ([`FlightView::floating_frame`]): the flight steps
+    /// between two held frames, and what it draws can change with no
+    /// command from the view (a mission ship destroyed, a jump arrived
+    /// at, a script's nav), which the frame's map key doesn't follow. A
+    /// flight that answers nothing (one that failed to start) changes
+    /// neither the picture nor the preselection.
     fn show_floating_map(&mut self) {
         self.floating.show(self.mac_now());
         // `_DrawMapInFloatingFrame` sets `_mapScroll` to the current
         // system as it draws (@0x11338-0x1136d), so the course map opens
         // there next.
         self.map.recentre();
-        let missions = self.sim.map_mission_systems();
-        if let Some(drawing) = self
-            .sim
-            .map_drawing(None, &missions, nova_sim::MapMarks::NONE)
-        {
-            self.floating.preselect(self.sim.floating_preselection());
-            self.floating_picture = Some(MapPicture::of(&drawing));
+        if let ScreenAnswer::FloatingMap(shown) = self.sim.screen(ScreenAsk::FloatingMap) {
+            self.floating.preselect(shown.preselection);
+            self.floating_picture = Some(MapPicture::of(&shown.drawing));
         }
     }
 
@@ -620,8 +625,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// A left click at `at`, if the floating map takes it, as
     /// `_HandlePlayer` does (@0x6a130-0x6a762): while the map is up, faded
     /// out or not, inside its frame. A hit on the current system's centre
-    /// or a link's box, each at its place on the map
-    /// ([`MapSource::floating_map_places`](crate::flight::sim_port::MapSource::floating_map_places)), selects through the flight
+    /// or a link's box, each at its place on the map (the kept frame's,
+    /// [`FlightFrame::floating`](nova_sim::flight_frame::FlightFrame::floating)), selects through the flight
     /// ([`FlightCommand::SelectOnFloatingMap`],
     /// [`Session::select_on_floating_map`]) and shows the map again
     /// (@0x6a735); a miss is swallowed (@0x6a342). Whether it took it.
@@ -633,7 +638,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if !self.floating.is_up() || !floating::contains(frame, at) {
             return false;
         }
-        let places = self.sim.floating_map_places();
+        let places = &self.frame.floating;
         let links: Vec<(SystemId, Point)> = places
             .links
             .iter()
@@ -703,7 +708,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Draws the floating map while it is up: centred on the current
-    /// system at its zoom, the drawing its last show took
+    /// system at its zoom (the kept frame's place for it,
+    /// [`FlightFrame::floating`](nova_sim::flight_frame::FlightFrame::floating),
+    /// read at every draw, never asked), the drawing its last show took
     /// ([`FlightView::show_floating_map`]) through the course map's
     /// [`GalaxyMap::draw_marks`](crate::galaxy::GalaxyMap::draw_marks), with no brackets or second names, as
     /// `_DrawMapInFloatingFrame` runs `_DrawMap` alone, in its frame
@@ -716,7 +723,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let Some(picture) = &self.floating_picture else {
             return;
         };
-        let current = self.sim.floating_map_places().current;
+        let current = self.frame.floating.current;
         let at = Point::new(current.x, current.y);
         let frame = floating::frame(self.view);
         let transform = floating::transform(frame, at, self.floating.zoom());
