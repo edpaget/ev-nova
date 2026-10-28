@@ -19,7 +19,7 @@ use crate::bay::FighterNote;
 use crate::board::{BoardRefusal, Boarding, MissionBoardLine, Take, Taken};
 use crate::brackets::{NavBrackets, TargetBrackets};
 use crate::cargo_box::CargoBox;
-use crate::catalog::{Explosion, GovtId, ShipId, StellarId, SystemId, WeaponId};
+use crate::catalog::{DescMovie, Explosion, GovtId, ShipId, StellarId, SystemId, WeaponId};
 use crate::cloak::{Area, CloakShown};
 use crate::combat::beam::Beam;
 use crate::combat::hull::Condition;
@@ -779,6 +779,46 @@ pub enum FlightCommand {
     /// ([`Session::set_sound_quiet`](crate::Session::set_sound_quiet)): a
     /// setting the view sends as the sound preferences change.
     SetSoundQuiet(bool),
+    /// An ask ([`FlightCommand::is_ask`]): what the pointer at `at`, in
+    /// system coordinates, is over among the things the player can
+    /// target, the ships boxed as `drawn` says they are drawn
+    /// ([`Session::hover`](crate::Session::hover)), answered
+    /// [`Answer::Hovered`]. The view's cursor asks it each step it shows,
+    /// after the steps, with the boxes drawn from the frame they left.
+    Hover {
+        /// The pointer, in system coordinates.
+        at: Vec2,
+        /// Where the ships are drawn.
+        drawn: DrawnBoxes,
+    },
+    /// An ask ([`FlightCommand::is_ask`]): the ship types the system's
+    /// traffic will bring, whose sheets the view reads as play is entered
+    /// ([`Session::coming_traffic_ships`](crate::Session::coming_traffic_ships)),
+    /// answered [`Answer::ComingTraffic`], and refused without a catalog.
+    ///
+    /// The view asks it once, at entry's warm-up, which the convention
+    /// would make a screen's source method, asked as it opens and
+    /// defaulting to nothing. It is a command instead, on purpose: the
+    /// port's screen query (view-sim-seam phase 22,
+    /// `rdm:phase/view-sim-seam/phase-22-screen-query-and-maps`) will
+    /// absorb it, and a source method added now would be removed there. It isn't a frame field: while traffic is due the answer
+    /// resolves the spawn table from the catalog, which a fill doesn't
+    /// read, and once it isn't the answer is
+    /// [`FlightFrame::traffic_ships`].
+    ComingTraffic,
+    /// An ask ([`FlightCommand::is_ask`]): loads `raw`, a `dësc` the view
+    /// read that may be missing, naming `movie`, as `_LoadDescription`
+    /// loads one ([`Session::load_description`](crate::Session::load_description)),
+    /// answered [`Answer::Description`]: taken in for the pilot, its
+    /// `l33t` letters drawn on the flight's chance, its movie the last
+    /// loaded. It changes the run's rank governments and its last movie,
+    /// none of which a frame shows, so it is an ask.
+    LoadDescription {
+        /// The `dësc`'s text, or `None` when the view could not read it.
+        raw: Option<String>,
+        /// The movie it names.
+        movie: Option<DescMovie>,
+    },
 }
 
 impl FlightCommand {
@@ -897,8 +937,25 @@ impl FlightCommand {
             | Self::OpenPlayerInfo
             | Self::SetWindowWidth(_)
             | Self::SetDoubleTimeKey(_)
-            | Self::SetSoundQuiet(_) => None,
+            | Self::SetSoundQuiet(_)
+            | Self::Hover { .. }
+            | Self::ComingTraffic
+            | Self::LoadDescription { .. } => None,
         }
+    }
+
+    /// Whether the command only asks: [`FlightCommand::Hover`],
+    /// [`FlightCommand::ComingTraffic`] and
+    /// [`FlightCommand::LoadDescription`]. An ask changes nothing a frame
+    /// shows (`Session::fill_frame` fills the same frame after it, pinned
+    /// in `session/apply/asks.rs`), so the view doesn't refill the frame
+    /// it keeps after one (`nova_view`'s `FlightView::send`).
+    #[must_use]
+    pub fn is_ask(&self) -> bool {
+        matches!(
+            self,
+            Self::Hover { .. } | Self::ComingTraffic | Self::LoadDescription { .. }
+        )
     }
 }
 
@@ -1077,6 +1134,15 @@ pub enum Answer {
     PlayerInfo(Option<Box<PlayerInfo>>),
     /// What a [`FlightCommand::Assign`] did with the ship captured.
     Assigned(Assigned),
+    /// What a [`FlightCommand::Hover`] found under the pointer, `None` for
+    /// nothing.
+    Hovered(Option<Hover>),
+    /// The ship types a [`FlightCommand::ComingTraffic`] says the traffic
+    /// will bring.
+    ComingTraffic(Vec<ShipId>),
+    /// The text a [`FlightCommand::LoadDescription`] loaded, empty for a
+    /// missing `dësc`.
+    Description(String),
 }
 
 impl Answer {

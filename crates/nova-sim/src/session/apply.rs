@@ -8,8 +8,9 @@
 //! shops', bar's, jettison's, assignment's and intro's in the `port`
 //! module, the mission screens' and the mission info key's in the
 //! `missions` module, the player info key's and its dialog's in the
-//! `player_info` module, and the view's settings' in the `settings`
-//! module.
+//! `player_info` module, the view's settings' in the `settings` module,
+//! and the asks' (the hover, the coming traffic and a description's
+//! load) in the `asks` module.
 
 use super::Session;
 use crate::board::BoardingRule;
@@ -19,6 +20,7 @@ use crate::hail::HailOptions;
 use crate::legal::LegalCode;
 use crate::session::SimCatalog;
 
+mod asks;
 mod comm;
 mod missions;
 mod player_info;
@@ -105,6 +107,10 @@ impl Session {
     /// - The settings are answered as the `settings` module says: the
     ///   window's width, the double-time key and the sound's quiet, each
     ///   [`Answer::Done`].
+    /// - The asks ([`FlightCommand::is_ask`]) are answered as the `asks`
+    ///   module says: the hover, the coming traffic (refused without a
+    ///   catalog) and a description's load, none changing anything a
+    ///   frame shows.
     /// - The rest are never refused, and answer [`Answer::Done`]:
     ///   [`FlightCommand::SelectWeapon`] ([`Session::press_weapon_select`],
     ///   which the next pass takes; the view asks the gate first),
@@ -244,6 +250,9 @@ impl Session {
             FlightCommand::SetWindowWidth(_)
             | FlightCommand::SetDoubleTimeKey(_)
             | FlightCommand::SetSoundQuiet(_) => self.apply_setting(command),
+            FlightCommand::Hover { .. }
+            | FlightCommand::ComingTraffic
+            | FlightCommand::LoadDescription { .. } => self.apply_ask(command, collab),
         }
     }
 }

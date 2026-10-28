@@ -16301,7 +16301,7 @@ pub(super) mod tests {
 
     /// [`catalog`] with `avg` ships on average in `system`, all of düde
     /// 128: ship 129 (fast) with AI `ai_type`, for govt 140.
-    fn trafficked(system: i16, avg: i16, ai_type: i16) -> FakePilotCatalog {
+    pub(super) fn trafficked(system: i16, avg: i16, ai_type: i16) -> FakePilotCatalog {
         let mut dude_types = [(-1, 0); 8];
         dude_types[0] = (128, 100);
         FakePilotCatalog {

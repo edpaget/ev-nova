@@ -334,7 +334,7 @@ pub(super) mod tests {
     }
 
     /// `session`'s frame, filled over [`stale`].
-    pub(super) fn filled(session: &Session) -> FlightFrame {
+    pub(in crate::session) fn filled(session: &Session) -> FlightFrame {
         let mut frame = stale();
         session.fill_frame(&mut frame);
         frame
