@@ -1,14 +1,17 @@
 //! What `nova-site` reads from its arguments, turned into a [`Command`]:
-//! write the page, or print one portable archive's name for `ci.yml`.
+//! write the page (with the `.flatpakref` link when `--flatpakref` says
+//! the deploy serves the Flatpak repo), or print one portable archive's
+//! name for `ci.yml`.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use super::FlatpakRepo;
 use crate::archive::{self, Archive};
 
 /// The tool's usage line.
-pub const USAGE: &str = "usage: nova-site [OUT_DIR] | --archive <TARGET> | --archive-dir <TARGET>   \
-     (run it as `mise run site -- [OUT_DIR]`)";
+pub const USAGE: &str = "usage: nova-site [--flatpakref] [OUT_DIR] | --archive <TARGET> | \
+     --archive-dir <TARGET>   (run it as `mise run site -- [OUT_DIR]`)";
 
 /// What `nova-site` is asked to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +20,8 @@ pub enum Command {
     Write {
         /// The output directory.
         out: PathBuf,
+        /// Whether the deploy serves the Flatpak repo (`--flatpakref`).
+        flatpak_repo: FlatpakRepo,
     },
     /// Print this archive's file name.
     ArchiveFile(Archive),
@@ -33,10 +38,16 @@ pub struct UsageError;
 /// directory, which a relative output directory, and the default
 /// `target/site`, are taken against.
 pub fn command(args: Vec<OsString>, cwd: &Path) -> Result<Command, UsageError> {
-    let mut args = args.into_iter();
+    let mut args = args.into_iter().peekable();
+    let flatpak_repo = if args.next_if(|a| a == "--flatpakref").is_some() {
+        FlatpakRepo::Published
+    } else {
+        FlatpakRepo::Absent
+    };
     let Some(first) = args.next() else {
         return Ok(Command::Write {
             out: cwd.join("target").join("site"),
+            flatpak_repo,
         });
     };
     let archive_of = |target: Option<OsString>| {
@@ -45,11 +56,16 @@ pub fn command(args: Vec<OsString>, cwd: &Path) -> Result<Command, UsageError> {
             .ok_or(UsageError)
     };
     let command = match first.to_str() {
-        Some("--archive") => Command::ArchiveFile(archive_of(args.next())?),
-        Some("--archive-dir") => Command::ArchiveDir(archive_of(args.next())?),
+        Some("--archive") if flatpak_repo == FlatpakRepo::Absent => {
+            Command::ArchiveFile(archive_of(args.next())?)
+        }
+        Some("--archive-dir") if flatpak_repo == FlatpakRepo::Absent => {
+            Command::ArchiveDir(archive_of(args.next())?)
+        }
         _ if first.to_string_lossy().starts_with('-') => return Err(UsageError),
         _ => Command::Write {
             out: cwd.join(first),
+            flatpak_repo,
         },
     };
     if args.next().is_some() {
@@ -78,6 +94,7 @@ mod tests {
             command(Vec::new(), &cwd()),
             Ok(Command::Write {
                 out: cwd().join("target").join("site"),
+                flatpak_repo: FlatpakRepo::Absent,
             })
         );
     }
@@ -88,13 +105,43 @@ mod tests {
             command(args(&["_site"]), &cwd()),
             Ok(Command::Write {
                 out: cwd().join("_site"),
+                flatpak_repo: FlatpakRepo::Absent,
             })
         );
         let absolute = cwd().join("abs");
         assert_eq!(
             command(vec![absolute.clone().into()], &cwd()),
-            Ok(Command::Write { out: absolute })
+            Ok(Command::Write {
+                out: absolute,
+                flatpak_repo: FlatpakRepo::Absent,
+            })
         );
+    }
+
+    #[test]
+    fn flatpakref_links_the_published_repo_with_or_without_an_output_dir() {
+        assert_eq!(
+            command(args(&["--flatpakref", "_site"]), &cwd()),
+            Ok(Command::Write {
+                out: cwd().join("_site"),
+                flatpak_repo: FlatpakRepo::Published,
+            })
+        );
+        assert_eq!(
+            command(args(&["--flatpakref"]), &cwd()),
+            Ok(Command::Write {
+                out: cwd().join("target").join("site"),
+                flatpak_repo: FlatpakRepo::Published,
+            })
+        );
+        for bad in [
+            &["--flatpakref", "a", "b"][..],
+            &["--flatpakref", "--flatpakref"],
+            &["--flatpakref", "--archive", "x"],
+            &["_site", "--flatpakref"],
+        ] {
+            assert_eq!(command(args(bad), &cwd()), Err(UsageError), "{bad:?}");
+        }
     }
 
     #[test]

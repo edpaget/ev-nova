@@ -6,7 +6,8 @@
 //! [`stock`] builds the nightly's page from the same constants that name
 //! the release assets ([`layout::DMG`], [`installer::MSI`],
 //! [`flatpak::ASSET`] and [`archive`]'s), so a renamed asset renames its
-//! link. Each [`Link`] holds a full URL, so a channel whose files live
+//! link. When the deploy serves the signed Flatpak repo ([`FlatpakRepo`]),
+//! the Linux row leads with the nightly's `.flatpakref` on [`PAGES`]. Each [`Link`] holds a full URL, so a channel whose files live
 //! elsewhere (a `.flatpakref` served from Pages, a `beta` release) is more
 //! data, not a new template. [`write_site`] writes the page through the
 //! [`Files`] port, and [`host`] reads `nova-site`'s arguments.
@@ -16,6 +17,7 @@ pub mod host;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::appcast::Channel as AppChannel;
 use crate::archive;
 use crate::installer;
 use crate::layout;
@@ -129,10 +131,44 @@ pub fn release_asset(repo: &str, tag: &str, asset: &str) -> String {
     format!("{repo}/releases/download/{tag}/{asset}")
 }
 
+/// Whether this deploy serves the signed Flatpak repo
+/// ([`flatpak::repo`]), which `ci.yml` knows from the `flatpak-repo`
+/// job's output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlatpakRepo {
+    /// It doesn't: the Linux row leads with the plain bundle.
+    Absent,
+    /// It does: the Linux row leads with the `.flatpakref`, which installs
+    /// from the repo and updates, then the bundle, which follows it too.
+    Published,
+}
+
+/// The Linux row: the `.flatpakref` first when the repo is published.
+fn linux(repo: FlatpakRepo, nightly: impl Fn(&str) -> String) -> Download {
+    let bundle = Link::new("flatpak", nightly(flatpak::ASSET));
+    let tarball = Link::new("tar.gz", nightly(archive::LINUX.file));
+    let (primary, extras) = match repo {
+        FlatpakRepo::Absent => (bundle, vec![tarball]),
+        FlatpakRepo::Published => (
+            Link::new(
+                "flatpakref",
+                flatpak::repo::flatpakref_url(AppChannel::Nightly),
+            ),
+            vec![bundle, tarball],
+        ),
+    };
+    Download {
+        platform: "Linux".to_owned(),
+        primary,
+        extras,
+    }
+}
+
 /// The page the `pages` job deploys: the nightly's downloads, linked by
-/// the names the packers give them.
+/// the names the packers give them, and the `.flatpakref` when `repo` is
+/// published.
 #[must_use]
-pub fn stock() -> Site {
+pub fn stock(repo: FlatpakRepo) -> Site {
     let nightly = |asset: &str| release_asset(REPO, NIGHTLY, asset);
     Site {
         name: NAME.to_owned(),
@@ -150,11 +186,7 @@ pub fn stock() -> Site {
                     primary: Link::new("msi", nightly(installer::MSI)),
                     extras: vec![Link::new("zip", nightly(archive::WINDOWS.file))],
                 },
-                Download {
-                    platform: "Linux".to_owned(),
-                    primary: Link::new("flatpak", nightly(flatpak::ASSET)),
-                    extras: vec![Link::new("tar.gz", nightly(archive::LINUX.file))],
-                },
+                linux(repo, nightly),
             ],
         }],
         links: vec![
@@ -248,6 +280,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::linux::flatpak::repo;
     use crate::test_support::{Event, FakeFiles, Log};
 
     /// Every `href` value in `html`, in order.
@@ -315,6 +348,75 @@ mod tests {
         release_asset(REPO, NIGHTLY, asset)
     }
 
+    const BOTH: [FlatpakRepo; 2] = [FlatpakRepo::Absent, FlatpakRepo::Published];
+
+    /// The stock page's Linux row.
+    fn linux_row(repo: FlatpakRepo) -> Download {
+        let site = stock(repo);
+        site.channels[0]
+            .downloads
+            .iter()
+            .find(|d| d.platform == "Linux")
+            .expect("a Linux row")
+            .clone()
+    }
+
+    #[test]
+    fn a_published_repo_puts_the_flatpakref_first_in_the_linux_row() {
+        let href = format!(
+            "{PAGES}/{}/{}",
+            repo::PAGES_DIR,
+            repo::flatpakref_name(AppChannel::Nightly)
+        );
+        assert_eq!(
+            href,
+            "https://edpaget.github.io/ev-nova/flatpak/ev-nova-nightly.flatpakref"
+        );
+        assert_eq!(
+            linux_row(FlatpakRepo::Published),
+            Download {
+                platform: "Linux".into(),
+                primary: Link::new("flatpakref", href.clone()),
+                extras: vec![
+                    Link::new("flatpak", nightly(flatpak::ASSET)),
+                    Link::new("tar.gz", nightly(archive::LINUX.file)),
+                ],
+            }
+        );
+        assert!(hrefs(&render(&stock(FlatpakRepo::Published))).contains(&href));
+    }
+
+    #[test]
+    fn without_the_repo_the_linux_row_is_unchanged() {
+        assert_eq!(
+            linux_row(FlatpakRepo::Absent),
+            Download {
+                platform: "Linux".into(),
+                primary: Link::new("flatpak", nightly(flatpak::ASSET)),
+                extras: vec![Link::new("tar.gz", nightly(archive::LINUX.file))],
+            }
+        );
+        assert!(
+            !render(&stock(FlatpakRepo::Absent)).contains("flatpakref"),
+            "no .flatpakref link without the repo"
+        );
+    }
+
+    #[test]
+    fn only_the_linux_row_differs_with_the_repo() {
+        let (absent, published) = (stock(FlatpakRepo::Absent), stock(FlatpakRepo::Published));
+        assert_eq!(absent.links, published.links);
+        let others = |site: &Site| -> Vec<Download> {
+            site.channels[0]
+                .downloads
+                .iter()
+                .filter(|d| d.platform != "Linux")
+                .cloned()
+                .collect()
+        };
+        assert_eq!(others(&absent), others(&published));
+    }
+
     #[test]
     fn a_release_asset_is_under_its_tags_download_path() {
         assert_eq!(
@@ -329,22 +431,24 @@ mod tests {
 
     #[test]
     fn the_stock_page_links_every_nightly_asset_by_its_packed_name() {
-        let links = hrefs(&render(&stock()));
-        for asset in [
-            layout::DMG,
-            installer::MSI,
-            flatpak::ASSET,
-            archive::WINDOWS.file,
-            archive::LINUX.file,
-        ] {
-            let url = escape(&nightly(asset));
-            assert!(links.contains(&url), "no link to {url} in {links:?}");
+        for repo in BOTH {
+            let links = hrefs(&render(&stock(repo)));
+            for asset in [
+                layout::DMG,
+                installer::MSI,
+                flatpak::ASSET,
+                archive::WINDOWS.file,
+                archive::LINUX.file,
+            ] {
+                let url = escape(&nightly(asset));
+                assert!(links.contains(&url), "no link to {url} in {links:?}");
+            }
         }
     }
 
     #[test]
     fn the_stock_page_links_the_releases_the_repository_and_the_readme() {
-        let links = hrefs(&render(&stock()));
+        let links = hrefs(&render(&stock(FlatpakRepo::Absent)));
         for url in [
             format!("{REPO}/releases"),
             REPO.to_owned(),
@@ -356,7 +460,7 @@ mod tests {
 
     #[test]
     fn each_platform_has_its_installer_first_and_its_archive_beside_it() {
-        let site = stock();
+        let site = stock(FlatpakRepo::Absent);
         let [nightly_channel] = site.channels.as_slice() else {
             panic!("one channel: {:?}", site.channels);
         };
@@ -392,25 +496,29 @@ mod tests {
 
     #[test]
     fn the_page_has_no_script_and_nothing_external_but_its_links() {
-        let html = render(&stock()).to_lowercase();
-        for banned in ["<script", "<link", "@import", "@font-face", "url("] {
-            assert!(!html.contains(banned), "{banned} in {html}");
-        }
-        let links = hrefs(&html);
-        assert!(!links.is_empty());
-        for link in links {
-            assert!(link.starts_with("https://"), "{link} is not absolute");
+        for repo in BOTH {
+            let html = render(&stock(repo)).to_lowercase();
+            for banned in ["<script", "<link", "@import", "@font-face", "url("] {
+                assert!(!html.contains(banned), "{banned} in {html}");
+            }
+            let links = hrefs(&html);
+            assert!(!links.is_empty());
+            for link in links {
+                assert!(link.starts_with("https://"), "{link} is not absolute");
+            }
         }
     }
 
     #[test]
     fn the_page_says_at_most_two_sentences_besides_its_links() {
-        let html = render(&stock());
-        let copy = body_copy(&html);
-        assert!(sentences(&copy) <= 2, "{copy}");
-        // The one line under the heading is there.
-        assert!(copy.contains("Nova Files"), "{copy}");
-        assert!(html.contains("<h1>EV Nova</h1>"), "{html}");
+        for repo in BOTH {
+            let html = render(&stock(repo));
+            let copy = body_copy(&html);
+            assert!(sentences(&copy) <= 2, "{copy}");
+            // The one line under the heading is there.
+            assert!(copy.contains("Nova Files"), "{copy}");
+            assert!(html.contains("<h1>EV Nova</h1>"), "{html}");
+        }
     }
 
     #[test]
@@ -503,7 +611,7 @@ mod tests {
 
     #[test]
     fn the_page_fits_a_phone_and_follows_the_systems_colour_scheme() {
-        let html = render(&stock());
+        let html = render(&stock(FlatpakRepo::Absent));
         for needle in [
             "<!doctype html>",
             "<meta charset=\"utf-8\">",
@@ -529,7 +637,7 @@ mod tests {
     fn writing_the_site_makes_the_directory_then_the_page() {
         let log = Log::default();
         let out = Path::new("/work").join("ev-nova").join("_site");
-        let site = stock();
+        let site = stock(FlatpakRepo::Absent);
         let page = write_site(&mut files(&log, false), &out, &site).expect("written");
         assert_eq!(page, out.join(INDEX));
         assert_eq!(
@@ -545,7 +653,8 @@ mod tests {
     fn a_failed_write_is_the_error() {
         let log = Log::default();
         let out = Path::new("/work").join("_site");
-        let error = write_site(&mut files(&log, true), &out, &stock()).expect_err("fails");
+        let error = write_site(&mut files(&log, true), &out, &stock(FlatpakRepo::Absent))
+            .expect_err("fails");
         assert_eq!(error.to_string(), "disk full");
     }
 }
