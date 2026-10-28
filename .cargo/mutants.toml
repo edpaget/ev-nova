@@ -16,6 +16,19 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The highest glibc version in `objdump -p`'s output: replacing the
+    # highest so far with an equal one (`>=`) keeps the same version.
+    "nova-bundle/src/linux/appimage/links\\.rs:[0-9]+:[0-9]+: replace > with >= in Links::parse$",
+    # Windows-only code (`cfg(windows)`): off Windows it is never compiled,
+    # so no mutant of it can fail a build or a test here. The windows-latest
+    # CI leg runs its tests (`nova-win32/tests/it`, `nova/tests/it/windows_exe.rs`).
+    "nova-win32/src/console\\.rs:",
+    "nova/src/platform/console\\.rs:[0-9]+:[0-9]+: replace <impl StdConsole for Win32Console>",
+    "nova/src/platform/window\\.rs:[0-9]+:[0-9]+: replace with_exe_icon ",
+    # Linux- and BSD-only code: the window's app id (`with_app_id`), which
+    # winit gives no way to read back, so no test can see it even there.
+    # The hand check in packaging/README.txt covers it.
+    "nova/src/platform/window\\.rs:[0-9]+:[0-9]+: replace with_app_id ",
     # An NPC's landing box widens below a turn of 8 (`npc_box`); at exactly
     # 8, trunc((9 - 8) x 8 + 32) is the plain box's 40, so `<=` gives the
     # same half-width.
@@ -255,19 +268,27 @@ exclude_re = [
     # tested on their own.
     "replace main -> ExitCode",
     # The winit event-loop glue: opening the window and its surface (or
-    # recording why it could not), installing the macOS menu bar, and
-    # forwarding each window event and menu pick to `App::handle`
-    # (including acting on its `Control`) and the screen's offers to the
-    # menu bar, and starting the startup warnings' sheet once the loop
-    # waits. It needs a real window, display and, for the menu bar and the
-    # sheet, `NSApplication` on the main thread. The decisions it forwards
-    # to (`translate`, `App::handle`, `MenuSync`, `gpu_failure`,
+    # recording why it could not), installing the macOS menu bar and the
+    # Apple event handlers, forwarding each window event and menu pick to
+    # `App::handle` (including acting on its `Control`) and the screen's
+    # offers to the menu bar, telling the app the loop is ending
+    # (`exiting`) and printing what it reports, and starting the startup
+    # warnings' sheet once the loop waits. It needs a real window, display
+    # and, for the menu bar, the handlers and the sheet, `NSApplication` on
+    # the main thread. The decisions it forwards to (`translate`,
+    # `App::handle`, `App::exiting`, `MenuSync`, `gpu_failure`,
     # `exit::exit`, `Report::take_alert`) are mutated and tested, and
-    # `MenuBar::install` / `set_enabled` run on the main thread in
-    # nova-appkit's `tests/it`.
-    "impl ApplicationHandler<MenuCommand> for Runner<S>>::(resumed|window_event|user_event|about_to_wait)",
-    "nova/src/platform/runner\\.rs:.*replace Running<S>::(after_events|sync_menu|install_menu) with \\(\\)$",
-    "nova/src/platform/runner\\.rs:.*replace Running<S>::install_menu -> Option<String> with ",
+    # `MenuBar::install` / `set_enabled` and `AppleEvents::install` run on
+    # the main thread in nova-appkit's `tests/it`.
+    "impl ApplicationHandler<MenuCommand> for Runner<S>>::(resumed|window_event|user_event|about_to_wait|exiting)",
+    "nova/src/platform/runner\\.rs:.*replace Running<S>::(after_events|sync_menu|install_menu|print_reports) with \\(\\)$",
+    "nova/src/platform/runner\\.rs:.*replace Running<S>::install_menu -> Vec<String> with ",
+    # `AppleEvents`'s drop removes its handlers from `NSAppleEventManager`.
+    # The manager's reference to the handler goes nil once the target is
+    # freed, so an event sent after the drop goes unhandled either way:
+    # nova-appkit's `tests/it` checks that, and can't tell the removal
+    # from its absence. It is kept so nothing relies on that.
+    "nova-appkit/src/apple_event_handler\\.rs:.*replace <impl Drop for AppleEvents>::drop with \\(\\)$",
     # The startup dialogs (`platform/dialogs.rs`): rfd's open panel, error
     # alert and warnings sheet, which need a display and `NSApplication`
     # (and a person to dismiss them). The decisions around them (when to

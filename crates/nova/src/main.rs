@@ -9,11 +9,15 @@
 //! and P the Preferences dialog, which turns sound and music on or off and
 //! sets their volumes.
 //!
-//! Pilots are saved, one JSON file each, in a `Pilots` directory beside
-//! the settings file (below): on landing, on taking off, after each change
-//! in the spaceport (each trade in the Trade Center among them), on going
-//! back to the menu and on quitting. Without a place to save them, the
-//! game runs with a warning and saves nothing.
+//! Pilots are saved, one JSON file each, in a `Pilots` directory: on
+//! landing, on taking off, after each change in the spaceport (each trade
+//! in the Trade Center among them), on going back to the menu and on
+//! quitting. On macOS and Windows it is beside the settings file (below),
+//! and elsewhere it is `$XDG_DATA_HOME/nova/Pilots` (or
+//! `~/.local/share/nova/Pilots`). Pilots an earlier version saved beside
+//! the settings there are moved into it at launch, keeping every file,
+//! with a notice in the startup report ([`nova::pilot_move`]). Without a
+//! place to save them, the game runs with a warning and saves nothing.
 //!
 //! Planetary events start at random, and NPC traffic comes and goes at
 //! random, on a generator seeded from the clock when the game starts; the
@@ -47,10 +51,11 @@
 //! device. Without the music the game plays none, with a warning; without
 //! an audio device it runs silently, with a warning.
 //!
-//! The settings (sound, and Hyperspace Effects) are saved in `settings.json` in a `nova` directory
-//! under the platform's configuration directory: `~/Library/Application
-//! Support` on macOS, `%APPDATA%` on Windows, and `$XDG_CONFIG_HOME` (or
-//! `~/.config`) elsewhere. Missing settings start at the defaults, and so
+//! The settings (sound, and Hyperspace Effects) are saved in
+//! `settings.json` in a `nova` directory under the platform's
+//! configuration directory: `~/Library/Application Support` on macOS,
+//! `%APPDATA%` on Windows, and `$XDG_CONFIG_HOME` (or `~/.config`)
+//! elsewhere, where only the settings are. Missing settings start at the defaults, and so
 //! do settings that cannot be read, with a warning.
 //!
 //! The same file chooses, for each rule where the Nova Bible and the
@@ -80,18 +85,38 @@
 //! a warning. Failing all of those, an open panel asks the player to
 //! "Locate your EV Nova folder": `EV Nova.app` or its `Nova Files` can be
 //! picked, and the pick is remembered for the next launch
-//! ([`nova::startup`]).
+//! ([`nova::startup`]). On macOS a quit (the Dock's Quit, a logout,
+//! `osascript`'s `quit app`) while the panel is up ends the launch as its
+//! Cancel does, with exit status 2 and the same "found no EV Nova data"
+//! line on standard error and in the startup log, but with no alert.
 //!
 //! Every startup error and warning goes to standard error and to the
-//! startup log, `~/Library/Logs/nova/nova.log` on macOS, rewritten each
-//! launch. When standard error is not a terminal (a double-clicked app), a
+//! startup log, rewritten each launch: `~/Library/Logs/nova/nova.log` on
+//! macOS, `%LOCALAPPDATA%\nova\logs\nova.log` on Windows, and
+//! `$XDG_STATE_HOME/nova/nova.log` (or `~/.local/state/nova/nova.log`)
+//! elsewhere. When standard error is not a terminal (a double-clicked app), a
 //! fatal startup error is shown in an alert too, and the startup warnings
 //! are listed in one sheet over the game window once it opens. The
 //! simulation's diagnostics while the game runs stay on standard error.
 //!
+//! On Windows `nova.exe` is a Windows-subsystem program, so Explorer opens
+//! no console for it. Started from `cmd`, PowerShell or Windows Terminal,
+//! it attaches to that terminal's console, and its lines print there,
+//! after the prompt, which comes back at once
+//! ([`nova::platform::console`]). There the alert and the warnings box are
+//! message boxes, shown only when standard error goes nowhere: a file or a
+//! pipe it was given counts as read. The executable carries its icon,
+//! version and manifest (`packaging/windows/nova.exe.manifest`: per-monitor
+//! DPI awareness, the UTF-8 code page and long paths).
+//!
 //! Exits 2 on a usage error and when no `Nova Files` are found or picked,
 //! and 1 when the data named cannot be listed or the window cannot be
 //! opened.
+
+// No console window from Explorer; started from a terminal, the game
+// attaches to its console (`nova::platform::console`). Not in tests, so a
+// test harness built from this file still prints.
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -102,14 +127,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nova::app::start_screen;
 use nova::audio::{game_audio, music_warning, voice_limit};
 use nova::chance::SplitMix;
-use nova::config::{Os, log_path, pilots_dir, settings_path};
+use nova::config::{Os, legacy_pilots_dir, log_path, pilots_dir, settings_path};
 use nova::fonts::game_fonts;
 use nova::load::data_warnings;
+use nova::pilot_move::{DiskFiles, move_pilots, report_lines};
 use nova::platform::{Dialogs, Runner, event_loop};
 use nova::rulebook::eight_bit_reading;
 use nova::saves::FilePilots;
 use nova::startup::{
-    DiskData, Fatal, FileLog, Launch, Report, Started, StartupLog, StdTerminal, usual_places,
+    DiskData, Fatal, FileLog, Launch, Report, Started, StartupLog, Terminal, usual_places,
 };
 use nova_audio::{Audio, AudioCore, FileSettings, KiraAudio, SettingsStore};
 use nova_data::fonts::open_charcoal;
@@ -175,14 +201,30 @@ fn run(
     (runner, result)
 }
 
+/// Where the startup report says stderr goes: on Windows, once stderr is
+/// connected to a console if it can be, before anything is written.
+#[cfg(windows)]
+fn stderr_terminal() -> impl Terminal {
+    use nova::platform::console::{ConsoleTerminal, Win32Console, connect_stderr};
+    ConsoleTerminal(connect_stderr(&mut Win32Console))
+}
+
+/// Where the startup report says stderr goes: the real stderr's word.
+#[cfg(not(windows))]
+fn stderr_terminal() -> impl Terminal {
+    nova::startup::StdTerminal
+}
+
 fn main() -> ExitCode {
+    // First: on Windows nothing reaches a console before it is attached.
+    let terminal = stderr_terminal();
     let env = |name: &str| std::env::var_os(name);
     let started = nova::startup::run(
         Launch {
             args: std::env::args_os().skip(1).collect(),
             nova_data: env("NOVA_DATA"),
             usual: usual_places(Os::current(), env),
-            terminal: &StdTerminal,
+            terminal: &terminal,
             log: log_path(Os::current(), env)
                 .map(|path| Box::new(FileLog::new(path)) as Box<dyn StartupLog>),
             stderr: Box::new(std::io::stderr()),
@@ -219,6 +261,16 @@ fn main() -> ExitCode {
     let data = Rc::new(data);
     // Dialog and menu text is laid out by the faces the window draws it in.
     let metrics: Rc<dyn TextMetrics> = Rc::new(GlyphonMetrics::new(&fonts));
+    // Before the keeper reads any, so the last pilot opens from the new
+    // place.
+    if let (Some(old), Some(new)) = (
+        legacy_pilots_dir(Os::current(), env),
+        pilots_dir(Os::current(), env),
+    ) {
+        for line in report_lines(&move_pilots(&mut DiskFiles, &old, &new)) {
+            report.warn(&line);
+        }
+    }
     let pilots = pilots_dir(Os::current(), env)
         .map(|dir| PilotKeeper::new(Box::new(FilePilots::new(dir)) as Box<dyn PilotStore>));
     if pilots.is_none() {

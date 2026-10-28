@@ -31,6 +31,7 @@ mod news;
 mod outfitter;
 mod person_join;
 mod persons;
+mod pilot_move;
 mod pilots;
 mod preferences;
 mod recharge;
@@ -43,4 +44,6 @@ mod system_view;
 mod trade;
 mod traffic;
 mod widescreen;
+#[cfg(windows)]
+mod windows_exe;
 mod world_layer;

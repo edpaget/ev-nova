@@ -18,17 +18,24 @@ deny = [
     # only from the renderer (a macOS-only dependency of each).
     { crate = "nova-metalfx", wrappers = ["nova-render"], reason = "only the renderer draws the world with MetalFX" },
     { crate = "objc2-metal-fx", wrappers = ["nova-metalfx"], reason = "MetalFX's unsafe bindings are reached only through nova-metalfx's safe API" },
-    # The macOS menu bar is built only through nova-appkit's safe API, and
-    # that only by the game itself (a macOS-only dependency of nova). The
+    # The macOS menu bar and the Apple event handlers are built only through
+    # nova-appkit's safe API, and that only by the game itself (a
+    # macOS-only dependency of nova). The
     # ban on AppKit's bindings is about workspace crates: two third-party
     # crates in the default build bind AppKit themselves, winit for the
     # windowing and rfd for the startup dialogs (the open panel and the
-    # alerts, a macOS-only dependency of nova). (Cargo.lock also lists
+    # alerts, a dependency of nova on macOS, Windows and Linux; only its
+    # macOS backend binds AppKit). (Cargo.lock also lists
     # objc2-link-presentation as depending on them, but only through a
     # feature the default build leaves off, so it is not in this graph.)
-    { crate = "nova-appkit", wrappers = ["nova"], reason = "only the game installs the macOS menu bar" },
+    { crate = "nova-appkit", wrappers = ["nova"], reason = "only the game installs the macOS menu bar and its Apple event handlers" },
     { crate = "objc2-app-kit", wrappers = ["nova-appkit", "rfd", "winit"], reason = "AppKit's unsafe bindings are reached, among workspace crates, only through nova-appkit's safe API" },
+    # rfd: the game's startup dialogs on macOS, Windows and Linux (the
+    # XDG portal and zenity there).
     { crate = "rfd", wrappers = ["nova"], reason = "only the game asks for its data and shows startup errors in a dialog" },
+    # Win32's console calls are made only through nova-win32's safe API,
+    # and that only by the game (a Windows-only dependency of nova).
+    { crate = "nova-win32", wrappers = ["nova"], reason = "Win32's unsafe calls are reached only through nova-win32's safe API, and only by the game" },
     # The layered nova-sim crates (roadmap nova-sim-layered-crates). Each
     # entry's `wrappers` lists the only crates allowed to depend on it
     # directly: the nova-sim crates above it (and, for the nova-sim facade,

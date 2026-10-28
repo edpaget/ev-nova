@@ -49,6 +49,42 @@ pub(crate) fn offers_exclusive(raw: Option<RawWindowHandle>) -> bool {
     !matches!(raw, Some(RawWindowHandle::Wayland(_)))
 }
 
+/// `attributes` with the executable's own icon (the resource
+/// `nova_winres::ICON_ID`, which `build.rs` embeds) in the title bar,
+/// Alt+Tab and the taskbar, rather than Windows' generic one: Explorer
+/// reads the icon from the file, but a window has only the icon it is
+/// given. An icon that cannot be loaded leaves Windows' own.
+#[cfg(windows)]
+pub(crate) fn with_exe_icon(
+    attributes: winit::window::WindowAttributes,
+) -> winit::window::WindowAttributes {
+    use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
+    use winit::window::Icon;
+    let icon = Icon::from_resource(nova_winres::ICON_ID, None).ok();
+    attributes
+        .with_window_icon(icon.clone())
+        .with_taskbar_icon(icon)
+}
+
+/// `attributes` with the game's app id ([`APP_ID`](super::APP_ID)) as
+/// the window's Wayland app id and X11 `WM_CLASS` (class and instance),
+/// so the desktop file of that name gives the dock and task switcher the
+/// game's icon and name. The X11 and Wayland traits' `with_name` set the
+/// same field, so the one call covers both.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+pub(crate) fn with_app_id(
+    attributes: winit::window::WindowAttributes,
+) -> winit::window::WindowAttributes {
+    use winit::platform::wayland::WindowAttributesExtWayland;
+    WindowAttributesExtWayland::with_name(attributes, super::APP_ID, super::APP_ID)
+}
+
 /// A [`WindowPort`] over a winit window.
 #[derive(Clone, Debug)]
 pub struct WinitWindow(pub Arc<Window>);

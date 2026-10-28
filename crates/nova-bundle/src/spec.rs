@@ -1,6 +1,8 @@
 //! What the bundle is made of, read from `cargo metadata`: the workspace's
 //! paths, and the game package's version, licence and
-//! `[package.metadata.bundle]` table.
+//! `[package.metadata.bundle]` table, which every platform's packaging
+//! reads its identity from (the macOS `Info.plist`, the Windows MSI, the
+//! Linux desktop file and AppStream metainfo).
 
 use std::path::PathBuf;
 
@@ -27,6 +29,15 @@ pub struct BundleSpec {
     pub name: String,
     /// `LSApplicationCategoryType`.
     pub category: String,
+    /// A line saying what the game is: the Linux desktop file's
+    /// `Comment` and the AppStream `summary`.
+    pub summary: String,
+    /// A paragraph saying what the game is: the AppStream `description`.
+    pub description: String,
+    /// The project's web page: the AppStream homepage `url`.
+    pub homepage: String,
+    /// Who makes it: the AppStream `developer`.
+    pub developer: String,
 }
 
 /// Why `cargo metadata`'s output gave no spec.
@@ -75,6 +86,10 @@ struct BundleTable {
     identifier: Option<String>,
     name: Option<String>,
     category: Option<String>,
+    summary: Option<String>,
+    description: Option<String>,
+    homepage: Option<String>,
+    developer: Option<String>,
 }
 
 impl BundleSpec {
@@ -101,6 +116,12 @@ impl BundleSpec {
                 .ok_or(SpecError::MissingKey("identifier"))?,
             name: table.name.ok_or(SpecError::MissingKey("name"))?,
             category: table.category.ok_or(SpecError::MissingKey("category"))?,
+            summary: table.summary.ok_or(SpecError::MissingKey("summary"))?,
+            description: table
+                .description
+                .ok_or(SpecError::MissingKey("description"))?,
+            homepage: table.homepage.ok_or(SpecError::MissingKey("homepage"))?,
+            developer: table.developer.ok_or(SpecError::MissingKey("developer"))?,
         })
     }
 }
@@ -139,6 +160,10 @@ pub(crate) mod tests {
             "identifier": "io.example.nova",
             "name": "EV Nova",
             "category": "public.app-category.role-playing-games",
+            "summary": "Fly the stars",
+            "description": "A space trading and combat game.",
+            "homepage": "https://example.com/nova",
+            "developer": "the nova authors",
         })
     }
 
@@ -163,6 +188,10 @@ pub(crate) mod tests {
                 identifier: "io.example.nova".into(),
                 name: "EV Nova".into(),
                 category: "public.app-category.role-playing-games".into(),
+                summary: "Fly the stars".into(),
+                description: "A space trading and combat game.".into(),
+                homepage: "https://example.com/nova".into(),
+                developer: "the nova authors".into(),
             }
         );
     }
@@ -185,7 +214,15 @@ pub(crate) mod tests {
 
     #[test]
     fn each_bundle_key_is_required() {
-        for key in ["identifier", "name", "category"] {
+        for key in [
+            "identifier",
+            "name",
+            "category",
+            "summary",
+            "description",
+            "homepage",
+            "developer",
+        ] {
             let mut bundle = full_bundle();
             bundle.as_object_mut().expect("object").remove(key);
             assert_eq!(

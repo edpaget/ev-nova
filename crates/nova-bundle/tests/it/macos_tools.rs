@@ -1,15 +1,17 @@
 //! The macOS tools the bundler drives, run for real through `StdProcess`
 //! with the argument lists the core builds: `plutil` on the generated
 //! plist, the `lipo -archs` arm64 check and `codesign` on a binary, and
-//! `hdiutil` on the staging folder. Each works in a temporary directory it owns.
+//! `hdiutil` on the staging folder, and a read of the keychain search list.
+//! Each works in a temporary directory it owns.
 
 use std::fs;
 use std::path::Path;
 
-use nova_bundle::bundle::{BundleError, Host, Step, check_archs, steps};
+use nova_bundle::bundle::{BundleError, Host, Step, check_archs, plan};
 use nova_bundle::info_plist::info_plist;
 use nova_bundle::layout::Layout;
 use nova_bundle::ports::{Invocation, Process};
+use nova_bundle::signing::{self, Signing};
 use nova_bundle::spec::BundleSpec;
 use nova_bundle::system::StdProcess;
 
@@ -22,6 +24,10 @@ fn spec(root: &Path) -> BundleSpec {
         identifier: "io.github.edpaget.ev-nova".into(),
         name: "EV Nova".into(),
         category: "public.app-category.role-playing-games".into(),
+        summary: "Play EV Nova from your own copy of its data".into(),
+        description: "A new engine for EV Nova.".into(),
+        homepage: "https://github.com/edpaget/ev-nova".into(),
+        developer: "ev-nova contributors".into(),
     }
 }
 
@@ -33,8 +39,10 @@ fn core_runs(root: &Path) -> (Layout, Vec<Invocation>) {
         cargo: "cargo".into(),
         min_system: "13.0".into(),
         out: Some(layout.out.clone()),
+        signing: Signing::AdHoc,
     };
-    let runs = steps(&spec, &layout, &host)
+    let runs = plan(&spec, &layout, &host)
+        .steps
         .into_iter()
         .filter_map(|step| match step {
             Step::Run(invocation) => Some(invocation),
@@ -107,4 +115,19 @@ fn hdiutil_makes_a_dmg_of_the_staging_folder() {
         .run(&find(&runs, "hdiutil", "create", &layout.dmg()))
         .expect("hdiutil create");
     assert!(layout.dmg().is_file());
+}
+
+/// Read-only: the core's `list-keychains` run, parsed as the core parses
+/// it. Nothing here creates, imports or deletes a keychain, which would
+/// change the developer's search list.
+#[test]
+fn the_user_s_keychain_search_list_parses_into_paths() {
+    let listed = StdProcess
+        .run(&signing::list_keychains())
+        .expect("security list-keychains");
+    let paths = signing::search_list(&listed);
+    assert!(!paths.is_empty(), "{}", String::from_utf8_lossy(&listed));
+    for path in paths {
+        assert!(path.is_absolute(), "{}", path.display());
+    }
 }

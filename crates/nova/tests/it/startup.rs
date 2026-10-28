@@ -9,15 +9,16 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use nova::platform::console::{ConsoleTerminal, StderrGoes};
 use nova::startup::{
-    DataSource, FatalAlert, Launch, NovaFilesDialog, Opened, Started, StartupLog, Terminal,
+    Answer, DataSource, FatalAlert, Launch, NovaFilesDialog, Opened, Started, StartupLog, Terminal,
     resolve_pick, run,
 };
 use nova_audio::SettingsStore;
 use nova_audio::recording::MemorySettings;
 
-/// Directories holding the game's data; every other one is empty. Records
-/// each directory asked for.
+/// Directories holding the game's data; every other one is empty, and
+/// holds nothing else. Records each directory asked for.
 #[derive(Default)]
 struct Disk {
     holding: Vec<PathBuf>,
@@ -35,19 +36,25 @@ impl DataSource for Disk {
             Opened::Empty(dir.to_path_buf())
         }
     }
+
+    fn has_entry(&self, dir: &Path, name: &str) -> bool {
+        let entry = dir.join(name);
+        self.holding.contains(&entry)
+    }
 }
 
-/// The open panel: its picks in turn, then a cancel; records each prompt.
+/// The open panel: its answers in turn, then a cancel; records each
+/// prompt.
 #[derive(Default)]
 struct Panel {
-    picks: VecDeque<PathBuf>,
+    answers: VecDeque<Answer>,
     prompts: Vec<String>,
 }
 
 impl NovaFilesDialog for Panel {
-    fn pick(&mut self, prompt: &str) -> Option<PathBuf> {
+    fn pick(&mut self, prompt: &str) -> Answer {
         self.prompts.push(prompt.to_owned());
-        self.picks.pop_front()
+        self.answers.pop_front().unwrap_or(Answer::Cancelled)
     }
 }
 
@@ -71,6 +78,27 @@ impl StartupLog for Log {
     }
 }
 
+/// A stderr whose bytes the test can read.
+#[derive(Clone, Default)]
+struct Written(Rc<RefCell<Vec<u8>>>);
+
+impl Written {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.borrow().clone()).expect("UTF-8")
+    }
+}
+
+impl io::Write for Written {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct Alerts(Vec<String>);
 
@@ -88,6 +116,9 @@ struct Machine {
     log: Log,
     store: MemorySettings,
     terminal: bool,
+    /// Where a Windows console says stderr goes, over `terminal`.
+    console: Option<StderrGoes>,
+    stderr: Written,
 }
 
 impl Machine {
@@ -98,28 +129,45 @@ impl Machine {
                 asked: RefCell::default(),
             },
             panel: Panel {
-                picks: picks.iter().map(|pick| pick.to_path_buf()).collect(),
+                answers: picks
+                    .iter()
+                    .map(|pick| Answer::Picked(pick.to_path_buf()))
+                    .collect(),
                 prompts: Vec::new(),
             },
             alerts: Alerts::default(),
             log: Log::default(),
             store: store.clone(),
             terminal: false,
+            console: None,
+            stderr: Written::default(),
         }
     }
 
+    /// The same launch, its panel quit (a quit Apple event) after its
+    /// picks.
+    fn then_quit(mut self) -> Self {
+        self.panel.answers.push_back(Answer::Quit);
+        self
+    }
+
     fn launch(&mut self) -> Result<Started<(), PathBuf>, u8> {
-        let terminal = Stderr {
+        let stderr = Stderr {
             terminal: self.terminal,
+        };
+        let console = self.console.map(ConsoleTerminal);
+        let terminal: &dyn Terminal = match &console {
+            Some(console) => console,
+            None => &stderr,
         };
         run(
             Launch {
                 args: Vec::<OsString>::new(),
                 nova_data: None,
                 usual: usual(),
-                terminal: &terminal,
+                terminal,
                 log: Some(Box::new(self.log.clone())),
-                stderr: Box::new(io::sink()),
+                stderr: Box::new(self.stderr.clone()),
                 settings: Some(Box::new(self.store.clone()) as Box<dyn SettingsStore>),
                 source: &self.disk,
                 dialog: &mut self.panel,
@@ -168,6 +216,21 @@ fn a_good_pick_is_remembered_and_tried_first_next_launch() {
 }
 
 #[test]
+fn a_picked_ev_nova_folder_remembers_its_nova_files() {
+    let store = MemorySettings::new();
+    let ev_nova = Path::new("/Games").join("EV Nova");
+    let nova_files = ev_nova.join("Nova Files");
+    let mut first = Machine::new(&store, &[&nova_files], &[&ev_nova]);
+    let started = first.launch().expect("starts");
+    assert_eq!(started.dir, nova_files);
+
+    let mut second = Machine::new(&store, &[&nova_files], &[]);
+    assert_eq!(second.launch().expect("starts").dir, nova_files);
+    assert_eq!(*second.disk.asked.borrow(), [nova_files]);
+    assert_eq!(second.panel.prompts, Vec::<String>::new());
+}
+
+#[test]
 fn a_cancel_without_a_terminal_shows_the_fatal_alert() {
     let mut machine = Machine::new(&MemorySettings::new(), &[], &[]);
     let code = machine.launch().err().expect("fails");
@@ -182,12 +245,113 @@ fn a_cancel_without_a_terminal_shows_the_fatal_alert() {
     assert_eq!(machine.log.0.borrow().last(), Some(message), "logged too");
 }
 
+/// A store remembering `dir`.
+fn remembering(dir: &Path) -> MemorySettings {
+    let store = MemorySettings::new();
+    store
+        .clone()
+        .write(&format!(
+            "{{\"nova_files\": {}}}",
+            serde_json::to_string(&dir.display().to_string()).expect("JSON")
+        ))
+        .expect("seeds");
+    store
+}
+
+/// The line a Cancel in the panel ends a launch with, from the same
+/// machine as `quit` but cancelled there: what a quit must end with too.
+fn cancel_line(store: &MemorySettings, picks: &[&Path]) -> String {
+    let mut cancelled = Machine::new(store, &[], picks);
+    cancelled.terminal = true;
+    assert_eq!(cancelled.launch().err(), Some(2));
+    cancelled.log.0.borrow().last().cloned().expect("logged")
+}
+
+#[test]
+fn a_quit_during_the_panel_ends_the_startup_with_the_no_data_status_and_no_alert() {
+    let remembered = Path::new("/Games").join("Gone");
+    let store = remembering(&remembered);
+    let mut machine = Machine::new(&store, &[], &[]).then_quit();
+    assert_eq!(machine.launch().err(), Some(2), "the no-data status");
+    assert_eq!(
+        machine.alerts.0,
+        Vec::<String>::new(),
+        "no alert, though stderr is no terminal"
+    );
+    assert_eq!(machine.panel.prompts, ["Locate your EV Nova folder"]);
+    let line = cancel_line(&remembering(&remembered), &[]);
+    assert!(
+        line.starts_with("nova: found no EV Nova data in "),
+        "{line}"
+    );
+    assert_eq!(
+        machine.log.0.borrow().last(),
+        Some(&line),
+        "the Cancel's line"
+    );
+    assert!(
+        machine.stderr.text().ends_with(&format!("{line}\n")),
+        "{}",
+        machine.stderr.text()
+    );
+    assert!(
+        !store.text().expect("saved").contains("nova_files"),
+        "a gone remembered directory is still forgotten, as a Cancel does"
+    );
+}
+
+#[test]
+fn a_quit_with_nothing_remembered_saves_nothing() {
+    let store = MemorySettings::new();
+    let mut machine = Machine::new(&store, &[], &[]).then_quit();
+    assert_eq!(machine.launch().err(), Some(2));
+    assert_eq!(store.writes(), 0, "nothing saved");
+}
+
+#[test]
+fn a_quit_at_a_reask_after_an_empty_pick_ends_the_startup_too() {
+    let empty = Path::new("/Games").join("Empty");
+    let store = MemorySettings::new();
+    let mut machine = Machine::new(&store, &[], &[&empty]).then_quit();
+    assert_eq!(machine.launch().err(), Some(2));
+    assert_eq!(machine.panel.prompts.len(), 2, "asked, then asked again");
+    assert_eq!(machine.alerts.0, Vec::<String>::new());
+    let line = cancel_line(&MemorySettings::new(), &[&empty]);
+    assert_eq!(machine.log.0.borrow().last(), Some(&line));
+    assert_eq!(store.writes(), 0, "nothing remembered");
+}
+
 #[test]
 fn a_cancel_from_a_terminal_shows_no_alert() {
     let mut machine = Machine::new(&MemorySettings::new(), &[], &[]);
     machine.terminal = true;
     assert_eq!(machine.launch().err(), Some(2));
     assert_eq!(machine.alerts.0, Vec::<String>::new());
+}
+
+#[test]
+fn a_windows_stderr_going_nowhere_shows_the_fatal_error_in_the_box_and_the_log() {
+    let mut machine = Machine::new(&MemorySettings::new(), &[], &[]);
+    machine.console = Some(StderrGoes::Nowhere);
+    assert_eq!(machine.launch().err(), Some(2));
+    let [message] = machine.alerts.0.as_slice() else {
+        panic!("one box: {:?}", machine.alerts.0);
+    };
+    assert!(message.starts_with("nova: found no EV Nova data in "));
+    assert_eq!(machine.log.0.borrow().last(), Some(message), "logged too");
+}
+
+#[test]
+fn a_windows_stderr_given_or_attached_gets_the_fatal_error_and_no_box() {
+    for goes in [StderrGoes::Redirected, StderrGoes::Attached] {
+        let mut machine = Machine::new(&MemorySettings::new(), &[], &[]);
+        machine.console = Some(goes);
+        assert_eq!(machine.launch().err(), Some(2), "{goes:?}");
+        assert_eq!(machine.alerts.0, Vec::<String>::new(), "{goes:?}");
+        let logged = machine.log.0.borrow().last().cloned().expect("logged");
+        assert!(logged.starts_with("nova: found no EV Nova data in "));
+        assert_eq!(machine.stderr.text(), format!("{logged}\n"), "{goes:?}");
+    }
 }
 
 #[test]

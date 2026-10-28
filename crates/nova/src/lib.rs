@@ -9,8 +9,8 @@
 //! - [`chance`]: the real source of chance, a seeded `SplitMix64`
 //!   generator.
 //! - [`cli`]: where the game data is, from the arguments or `NOVA_DATA`.
-//! - [`config`]: where the player's settings and pilots are saved, for
-//!   each operating system.
+//! - [`config`]: where the player's settings and pilots are saved, and
+//!   the startup log written, for each operating system.
 //! - [`developer`]: the developer settings, the port's own flight
 //!   overlays, as the settings file turns them on.
 //! - [`exit`]: how the program ends: its exit code and message when the
@@ -19,6 +19,8 @@
 //!   game's Charcoal.
 //! - [`load`]: what loading the game data found wrong: the files it
 //!   skipped and the control-bit expressions that do not parse.
+//! - [`pilot_move`]: moving the pilots, once, from where earlier
+//!   versions saved them on Linux to where they are saved now.
 //! - [`rulebook`]: which rules follow the original engine and which the
 //!   Nova Bible, as the settings file chooses.
 //! - [`saves`]: the pilot files, one JSON file per pilot in a directory.
@@ -46,6 +48,7 @@ pub mod exit;
 pub mod fonts;
 pub mod load;
 pub mod movie;
+pub mod pilot_move;
 pub mod platform;
 pub mod rulebook;
 pub mod saves;

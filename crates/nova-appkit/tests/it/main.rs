@@ -12,14 +12,32 @@
 use std::process::ExitCode;
 
 #[cfg(target_os = "macos")]
+mod apple_events;
+#[cfg(target_os = "macos")]
 mod menu_bar;
+#[cfg(target_os = "macos")]
+mod modal;
 
 /// Every test, by name. Each panics on failure.
 #[cfg(target_os = "macos")]
-const TESTS: &[(&str, fn())] = &[(
-    "menu_bar::the_installed_bar_is_the_applications_and_sends_the_games_commands",
-    menu_bar::the_installed_bar_is_the_applications_and_sends_the_games_commands,
-)];
+const TESTS: &[(&str, fn())] = &[
+    (
+        "apple_events::the_installed_handlers_send_the_games_commands_until_dropped",
+        apple_events::the_installed_handlers_send_the_games_commands_until_dropped,
+    ),
+    (
+        "menu_bar::the_installed_bar_is_the_applications_and_sends_the_games_commands",
+        menu_bar::the_installed_bar_is_the_applications_and_sends_the_games_commands,
+    ),
+    (
+        "modal::with_no_modal_running_it_does_nothing",
+        modal::with_no_modal_running_it_does_nothing,
+    ),
+    (
+        "modal::it_aborts_a_running_modal_session",
+        modal::it_aborts_a_running_modal_session,
+    ),
+];
 
 #[cfg(not(target_os = "macos"))]
 const TESTS: &[(&str, fn())] = &[];

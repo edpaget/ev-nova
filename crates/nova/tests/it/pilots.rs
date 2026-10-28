@@ -44,10 +44,10 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::{Pilot, PilotKeeper, PilotStore, ShipId, StellarId, SystemId};
-use nova_view::MouseButton;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::menu::fixture::main_screen_resources;
+use nova_view::{MenuCommand, MouseButton};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -984,6 +984,64 @@ fn the_main_menu_plays_the_music_until_a_pilot_enters_the_game() {
     assert_eq!(game.showing(), Showing::MainMenu);
     game.frame();
     assert_eq!(game.music(), [], "spent for the rest of the run");
+}
+
+/// A new pilot named `name`, flying, and one frame drawn.
+fn flying(store: &MemoryPilots, name: &str) -> Harness {
+    let mut game = Harness::opening(store);
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    game.type_name(name);
+    game.press(KeyCode::Enter);
+    // The ship's christening, confirmed with its default.
+    game.press(KeyCode::Enter);
+    game.enter_ship();
+    assert_eq!(game.showing(), Showing::Flight);
+    game.frame();
+    game
+}
+
+/// The event loop ending under the game (macOS's `terminate:`, a quit
+/// that never reached it) saves the pilot flying, once.
+#[test]
+fn the_event_loops_end_in_flight_saves_the_pilot_once() {
+    let store = MemoryPilots::new();
+    let mut game = flying(&store, "Ada");
+    let writes = store.writes();
+    let flown = game.pilot();
+    game.app.exiting(&mut FakeWindow);
+    assert_eq!(store.writes(), writes + 1, "saved as the app quits");
+    assert_eq!(saved(&store, "Ada"), flown);
+    assert_eq!(game.app.take_warnings(), Vec::<String>::new());
+    game.app.exiting(&mut FakeWindow);
+    assert_eq!(store.writes(), writes + 1, "once");
+}
+
+/// The menu's Quit (and so the quit Apple event, which sends it) saves the
+/// pilot flying; the event loop's end after it saves nothing more.
+#[test]
+fn after_the_menus_quit_in_flight_the_event_loops_end_saves_nothing_more() {
+    let store = MemoryPilots::new();
+    let mut game = flying(&store, "Ada");
+    let writes = store.writes();
+    if game.handle(WindowEvent::Menu(MenuCommand::Quit)) != Control::Exit {
+        game.frames_until_exit();
+    }
+    assert_eq!(store.writes(), writes + 1, "saved by the quit");
+    game.app.exiting(&mut FakeWindow);
+    assert_eq!(store.writes(), writes + 1, "not saved twice");
+}
+
+/// On the main menu, with no pilot flying, the event loop's end saves
+/// nothing, as the original's quit event saves nothing there.
+#[test]
+fn the_event_loops_end_on_the_main_menu_saves_nothing() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    game.frame();
+    game.app.exiting(&mut FakeWindow);
+    assert_eq!(store.writes(), 0);
+    assert_eq!(game.app.take_warnings(), Vec::<String>::new());
 }
 
 crate::common::entry_harness!(Harness, click, frame);

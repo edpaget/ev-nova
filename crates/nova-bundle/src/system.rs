@@ -1,12 +1,14 @@
 //! The real adapters: [`StdProcess`] runs programs with
-//! `std::process::Command`, and [`StdFiles`] works on the real filesystem.
+//! `std::process::Command`, [`StdFiles`] works on the real filesystem, and
+//! [`StdEnv`] reads the process's environment.
 
+use std::ffi::OsString;
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::ports::{Files, Invocation, Process, RunError};
+use crate::ports::{Env, Files, Invocation, Process, RunError};
 
 /// Runs programs as child processes. A captured run's standard error
 /// still goes to the bundler's.
@@ -34,6 +36,16 @@ impl Process for StdProcess {
     }
 }
 
+/// The process's environment variables.
+#[derive(Debug, Default)]
+pub struct StdEnv;
+
+impl Env for StdEnv {
+    fn var(&self, name: &str) -> Option<OsString> {
+        std::env::var_os(name)
+    }
+}
+
 /// The real filesystem.
 #[derive(Debug, Default)]
 pub struct StdFiles;
@@ -56,6 +68,20 @@ impl Files for StdFiles {
 
     fn copy(&mut self, from: &Path, to: &Path) -> io::Result<()> {
         fs::copy(from, to).map(drop)
+    }
+
+    /// Mode `0600` on Unix applies when the file is created; the bundler
+    /// writes its secrets into a directory it has just made.
+    fn write_secret(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        let mut options = fs::OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        options.open(path)?.write_all(bytes)
+    }
+
+    fn is_file(&self, path: &Path) -> bool {
+        path.is_file()
     }
 
     fn symlink(&mut self, target: &Path, link: &Path) -> io::Result<()> {

@@ -17,17 +17,18 @@ use objc2_foundation::{NSObject, NSString};
 
 use crate::items::{Action, Command, Item, MENUS, Role, Shortcut};
 
-/// Why the menu bar could not be installed.
+/// Why the menu bar or the Apple event handlers could not be installed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallError {
-    /// It was asked for off the main thread, where `AppKit` can't be used.
+    /// They were asked for off the main thread, where `AppKit` can't be
+    /// used.
     NotMainThread,
 }
 
 impl fmt::Display for InstallError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotMainThread => f.write_str("the menu bar can only be built on the main thread"),
+            Self::NotMainThread => f.write_str("AppKit can only be used on the main thread"),
         }
     }
 }
@@ -239,7 +240,7 @@ mod tests {
         assert_eq!(result, Err(InstallError::NotMainThread));
         assert_eq!(
             InstallError::NotMainThread.to_string(),
-            "the menu bar can only be built on the main thread"
+            "AppKit can only be used on the main thread"
         );
     }
 }

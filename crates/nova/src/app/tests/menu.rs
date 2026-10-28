@@ -78,6 +78,19 @@ fn a_command_the_screen_answers_with_quit_tells_it_and_exits() {
 }
 
 #[test]
+fn after_a_menu_quit_the_event_loops_end_tells_the_screen_nothing_more() {
+    let mut window = FakeWindow::new((1024, 768), 1.0);
+    let screen = MenuScreen {
+        answer: Some(ScreenAction::Quit),
+        ..MenuScreen::default()
+    };
+    let mut app = menu_app(&window, screen);
+    pick(&mut app, &mut window, MenuCommand::Quit);
+    app.exiting(&mut window);
+    assert_eq!(app.screen().quits, 1, "told once");
+}
+
+#[test]
 fn a_command_the_screen_takes_carries_on() {
     let mut window = FakeWindow::new((1024, 768), 1.0);
     let mut app = menu_app(&window, MenuScreen::default());

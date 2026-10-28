@@ -2,10 +2,22 @@
 //! then forwards every event to the [`App`].
 //!
 //! On macOS, with `Runner::with_menu_proxy`, it installs the game's menu
-//! bar (`nova_appkit::MenuBar`) once the window opens: each pick comes
-//! back through the event loop as a [`MenuCommand`] user event, which the
-//! app takes as [`WindowEvent::Menu`], and after every event the menu
-//! bar is told what the screen now offers (`MenuSync`).
+//! bar (`nova_appkit::MenuBar`) and its Apple event handlers
+//! (`nova_appkit::AppleEvents`) once the window opens: each pick, and the
+//! quit and Preferences events the system sends (the Dock's Quit, logout,
+//! restart, shutdown, `osascript`'s `quit app`), comes back through the
+//! event loop as a [`MenuCommand`] user event, which the app takes as
+//! [`WindowEvent::Menu`], and after every event the menu bar is told what
+//! the screen now offers (`MenuSync`). The quit event is the menu's Quit,
+//! so it quits as Command-Q does, saving the pilot flying.
+//!
+//! The event loop's end (`ApplicationHandler::exiting`) is the backstop
+//! for a quit that never reached the game: on macOS a `terminate:` sent
+//! before the handlers are installed, or by something else, which ends the
+//! process from `applicationWillTerminate:`. It tells the app to quit
+//! ([`App::exiting`]), so the pilot is saved, and prints what the app
+//! reports. winit ends every run through it, so it follows the game's own
+//! quits too, and then does nothing more.
 //!
 //! With [`Runner::with_audio`], the app it opens plays sound, with
 //! [`Runner::with_settings`] it saves the player's settings, and with
@@ -73,6 +85,10 @@ struct Running<S> {
     /// it), and what it was last told; none until it is installed.
     #[cfg(target_os = "macos")]
     menu: Option<(nova_appkit::MenuBar, MenuSync)>,
+    /// The quit and Preferences Apple event handlers, kept for the whole
+    /// run (their target lives in them); none until they are installed.
+    #[cfg(target_os = "macos")]
+    apple_events: Option<nova_appkit::AppleEvents>,
     window: WinitWindow,
 }
 
@@ -203,6 +219,16 @@ fn open(
         .with_title("EV Nova")
         .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0))
         .with_resizable(true);
+    #[cfg(windows)]
+    let attributes = super::window::with_exe_icon(attributes);
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    let attributes = super::window::with_app_id(attributes);
     let window = event_loop
         .create_window(attributes)
         .map_err(|error| OpenFailure::Window(error.to_string()))?;
@@ -231,7 +257,19 @@ fn open(
 /// pilot flying is not saved. The game's own menu bar comes from
 /// `nova_appkit` instead, installed in `resumed` once the window opens:
 /// its Quit sends the game's quit (Command-Q's, which saves), never
-/// `terminate:`. It needs the OS, so no test runs it.
+/// `terminate:`. So do the Dock's Quit, logout and `osascript`'s `quit
+/// app`: their quit Apple event, which `AppKit` would answer with
+/// `terminate:`, is handled by `nova_appkit::AppleEvents`, installed with
+/// the menu bar, and sends the menu's Quit. A `terminate:` that still
+/// comes (a quit event before the handlers are installed) ends the loop
+/// through `ApplicationHandler::exiting`, which saves the pilot. A quit
+/// event that arrives while an `AppKit` modal runs (the startup warnings
+/// sheet, a file dialog) is taken at once, but its command waits in the
+/// loop until the modal ends, as Command-Q's does. Before the loop runs,
+/// the startup's open panel installs handlers of its own around each ask
+/// (`nova::platform::dialogs`): a quit there cancels the panel and ends
+/// the launch, and they are dropped before the loop launches the app. It
+/// needs the OS, so no test runs it.
 pub fn event_loop() -> Result<EventLoop<MenuCommand>, EventLoopError> {
     let mut builder = EventLoop::<MenuCommand>::with_user_event();
     #[cfg(target_os = "macos")]
@@ -286,13 +324,15 @@ impl<S: ImageSource> ApplicationHandler<MenuCommand> for Runner<S> {
                     dev_tools,
                     #[cfg(target_os = "macos")]
                     menu: None,
+                    #[cfg(target_os = "macos")]
+                    apple_events: None,
                     window,
                 };
                 #[cfg(target_os = "macos")]
-                if let Some(proxy) = self.menu_proxy.take()
-                    && let Some(warning) = running.install_menu(proxy)
-                {
-                    startup_warning(self.report.as_ref(), &warning);
+                if let Some(proxy) = self.menu_proxy.take() {
+                    for warning in running.install_menu(&proxy) {
+                        startup_warning(self.report.as_ref(), &warning);
+                    }
                 }
                 running.sync_menu();
                 self.running = Some(running);
@@ -362,6 +402,22 @@ impl<S: ImageSource> ApplicationHandler<MenuCommand> for Runner<S> {
         let exit = running.handle(WindowEvent::Menu(command)).control == Control::Exit;
         running.after_events(event_loop, exit);
     }
+
+    /// The event loop is ending: tells the app, which quits unless it
+    /// already has (saving the pilot flying), and prints what it reports.
+    ///
+    /// winit ends every run here, after the game's own quit too, when the
+    /// app has nothing more to do. On macOS a `terminate:` that bypassed
+    /// the game also ends here, inside `applicationWillTerminate:`, and
+    /// `AppKit` ends the process right after: `main`'s report never runs,
+    /// so a failed save goes to stderr only.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        let Some(running) = &mut self.running else {
+            return;
+        };
+        running.app.exiting(&mut running.window);
+        running.print_reports();
+    }
 }
 
 impl<S: ImageSource> Running<S> {
@@ -369,34 +425,44 @@ impl<S: ImageSource> Running<S> {
     /// the warnings the app kept, tells the menu bar what the screen now
     /// offers, and ends the event loop when the app exits.
     fn after_events(&mut self, event_loop: &ActiveEventLoop, exit: bool) {
-        for (key, error) in self.app.take_failures() {
-            eprintln!("nova: image {key:?}: {error}");
-        }
-        for warning in self.app.take_warnings() {
-            eprintln!("{warning}");
-        }
+        self.print_reports();
         self.sync_menu();
         if exit {
             event_loop.exit();
         }
     }
 
-    /// Installs the menu bar, its picks sent through `proxy`. One that
-    /// can't be installed is a warning, given back, and the game runs
-    /// without it.
-    #[cfg(target_os = "macos")]
-    fn install_menu(&mut self, proxy: EventLoopProxy<MenuCommand>) -> Option<String> {
-        let installed = nova_appkit::MenuBar::install("EV Nova", move |command| {
-            // A closed loop drops the pick: the app is exiting.
-            let _ = proxy.send_event(super::menu_bar::menu_command(command));
-        });
-        match installed {
-            Ok(bar) => {
-                self.menu = Some((bar, MenuSync::new()));
-                None
-            }
-            Err(error) => Some(format!("nova: no menu bar: {error}")),
+    /// Prints the image failures and the warnings the app kept.
+    fn print_reports(&mut self) {
+        for (key, error) in self.app.take_failures() {
+            eprintln!("nova: image {key:?}: {error}");
         }
+        for warning in self.app.take_warnings() {
+            eprintln!("{warning}");
+        }
+    }
+
+    /// Installs the menu bar and the Apple event handlers, their picks and
+    /// events sent through `proxy`. One that can't be installed is a
+    /// warning, given back, and the game runs without it.
+    #[cfg(target_os = "macos")]
+    fn install_menu(&mut self, proxy: &EventLoopProxy<MenuCommand>) -> Vec<String> {
+        // A closed loop drops the command: the app is exiting.
+        let send = |proxy: EventLoopProxy<MenuCommand>| {
+            move |command| {
+                let _ = proxy.send_event(super::menu_bar::menu_command(command));
+            }
+        };
+        let mut warnings = Vec::new();
+        match nova_appkit::MenuBar::install("EV Nova", send(proxy.clone())) {
+            Ok(bar) => self.menu = Some((bar, MenuSync::new())),
+            Err(error) => warnings.push(format!("nova: no menu bar: {error}")),
+        }
+        match nova_appkit::AppleEvents::install(send(proxy.clone())) {
+            Ok(events) => self.apple_events = Some(events),
+            Err(error) => warnings.push(format!("nova: no quit event handler: {error}")),
+        }
+        warnings
     }
 
     /// Tells the menu bar, if any, what the screen now offers.

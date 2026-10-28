@@ -19,6 +19,8 @@ use crate::cli::Usage;
 use crate::config::Os;
 use crate::settings::{GameSettings, SettingsKeeper};
 
+mod linux;
+
 /// What the open panel asks first.
 pub const PROMPT: &str = "Locate your EV Nova folder";
 
@@ -41,6 +43,9 @@ pub trait DataSource {
 
     /// Opens `dir`.
     fn open(&self, dir: &Path) -> Opened<Self::Data>;
+
+    /// Whether `dir` holds an entry, a file or a folder, called `name`.
+    fn has_entry(&self, dir: &Path, name: &str) -> bool;
 }
 
 /// The game's data on disk: a directory is opened with
@@ -57,6 +62,10 @@ impl DataSource for DiskData {
     fn open(&self, dir: &Path) -> Opened<GameData> {
         classify(GameData::open(dir, None))
     }
+
+    fn has_entry(&self, dir: &Path, name: &str) -> bool {
+        std::fs::symlink_metadata(dir.join(name)).is_ok()
+    }
 }
 
 /// What opening the data gave, as the lookup sees it.
@@ -68,12 +77,35 @@ fn classify(opened: Result<GameData, OpenError>) -> Opened<GameData> {
     }
 }
 
+/// How the player answered the open panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// The path picked.
+    Picked(PathBuf),
+    /// The player cancelled (or there is no dialog on this platform).
+    Cancelled,
+    /// A quit arrived while the panel was up (on macOS, a quit Apple
+    /// event: the Dock's Quit, a logout, `osascript`'s `quit app`).
+    Quit,
+}
+
+/// The answer an open panel's adapter gives: a quit while it was up wins
+/// over anything `picked`; otherwise a pick is [`Answer::Picked`] and
+/// `None` is [`Answer::Cancelled`].
+#[must_use]
+pub fn answer(picked: Option<PathBuf>, quit: bool) -> Answer {
+    match picked {
+        _ if quit => Answer::Quit,
+        Some(path) => Answer::Picked(path),
+        None => Answer::Cancelled,
+    }
+}
+
 /// Asks the player where the `Nova Files` are: the port over the
 /// platform's open panel.
 pub trait NovaFilesDialog {
-    /// Asks with `prompt`; the path picked, or `None` when the player
-    /// cancelled (or there is no dialog on this platform).
-    fn pick(&mut self, prompt: &str) -> Option<PathBuf>;
+    /// Asks with `prompt`, and gives the player's [`Answer`].
+    fn pick(&mut self, prompt: &str) -> Answer;
 }
 
 /// The `Nova Files` inside an `EV Nova.app` at `app`.
@@ -89,8 +121,16 @@ fn inside_app(app: PathBuf) -> PathBuf {
 /// - macOS: `/Applications/EV Nova.app/Contents/Resources/Nova Files`,
 ///   then the same under `$HOME/Applications` (left out when `HOME` is
 ///   unset or empty).
-/// - Elsewhere: none yet. The Windows and Linux platform roadmaps add
-///   theirs here.
+/// - Windows ([`windows_places`]): the `Nova Files` of an `EV Nova`
+///   folder in `%ProgramFiles%`, then `%ProgramFiles(x86)%`, then under
+///   `Ambrosia Software` in each, then in `%LOCALAPPDATA%\Programs`. A
+///   missing or empty variable drops its places, and a place named twice
+///   (`ProgramFiles(x86)` the same as `ProgramFiles`) is tried once.
+/// - Linux and any other XDG system (`linux::linux_places`): the
+///   Windows release's `Nova Files` in the Wine prefixes (`$WINEPREFIX`,
+///   `~/.wine`, Lutris's `~/Games/ev-nova`), then a copy in
+///   `$XDG_DATA_HOME/nova/Nova Files`, then in
+///   `~/Games/EV Nova/Nova Files`.
 pub fn usual_places(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
     match os {
         Os::MacOs => {
@@ -100,21 +140,102 @@ pub fn usual_places(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Vec<PathB
                 .map(|home| inside_app(Path::new(&home).join("Applications").join("EV Nova.app")));
             std::iter::once(system).chain(user).collect()
         }
-        Os::Windows | Os::Other => Vec::new(),
+        Os::Windows => windows_places(env),
+        Os::Other => linux::linux_places(env),
     }
 }
 
-/// The directory a pick names: an `EV Nova.app` (any `.app`, in any case)
-/// is its `Contents/Resources/Nova Files`; anything else is used as it is.
+/// Windows' usual places, from `env`.
+///
+/// Each is the `Nova Files` folder, never the `EV Nova` folder above it:
+/// the loader reads only the top level of the folder it is given, so the
+/// `EV Nova` folder would "load" its interface file, `Nova.rez`, as the
+/// game's data. EV Nova CE unzips to an `EV Nova` folder, which the
+/// community keeps in `Program Files`; Ambrosia's own 32-bit installer's
+/// folder isn't known, so its vendor folder is a guess, under both
+/// `Program Files` roots. `%LOCALAPPDATA%\Programs` is Windows' place for
+/// a program installed without an administrator.
+fn windows_places(env: impl Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
+    let var = |name: &str| {
+        env(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let program_files: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)"]
+        .into_iter()
+        .filter_map(var)
+        .collect();
+    let per_user = var("LOCALAPPDATA").map(|local| local.join("Programs"));
+    nova_files_in(installs_in(&program_files).into_iter().chain(per_user))
+}
+
+/// The folders an installer may put an `EV Nova` folder in, under the
+/// `Program Files` folders `roots`: each root, then `Ambrosia Software`
+/// in each (Ambrosia's own installer's folder isn't known).
+fn installs_in(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let vendors: [&[&str]; 2] = [&[], &["Ambrosia Software"]];
+    vendors
+        .into_iter()
+        .flat_map(|vendor| {
+            roots.iter().map(move |root| {
+                let mut dir = root.clone();
+                dir.extend(vendor);
+                dir
+            })
+        })
+        .collect()
+}
+
+/// The `Nova Files` of an `EV Nova` folder in each of `dirs`, in order,
+/// each tried once.
+fn nova_files_in(dirs: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut places = Vec::new();
+    for mut dir in dirs {
+        dir.extend(["EV Nova", "Nova Files"]);
+        if !places.contains(&dir) {
+            places.push(dir);
+        }
+    }
+    places
+}
+
+/// Whether `path` names an app bundle: any `.app`, in any case.
+fn is_app(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
+}
+
+/// The directory a pick names, before the folder levels of
+/// [`pick_dirs`]: an `EV Nova.app` (any `.app`, in any case) is its
+/// `Contents/Resources/Nova Files`; anything else is used as it is.
 #[must_use]
 pub fn resolve_pick(path: &Path) -> PathBuf {
-    let is_app = path
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("app"));
-    if is_app {
+    if is_app(path) {
         inside_app(path.to_path_buf())
     } else {
         path.to_path_buf()
+    }
+}
+
+/// The directories a pick may name, in the order they are tried:
+///
+/// - An app ([`resolve_pick`]): its `Nova Files`, alone.
+/// - A folder: its `Nova Files`, so the `EV Nova` folder above them can
+///   be picked; then the folder itself, so the `Nova Files` can be. The
+///   folder itself is left out when it holds a `Nova Files` or the
+///   interface file `Nova.rez`: it is then an `EV Nova` folder, and the
+///   loader, which reads only the top level of the folder it is given,
+///   would "load" `Nova.rez` as the game's data.
+fn pick_dirs(pick: &Path, source: &impl DataSource) -> Vec<PathBuf> {
+    if is_app(pick) {
+        return vec![resolve_pick(pick)];
+    }
+    let nova_files = pick.join("Nova Files");
+    let ev_nova = source.has_entry(pick, "Nova Files") || source.has_entry(pick, "Nova.rez");
+    if ev_nova {
+        vec![nova_files]
+    } else {
+        vec![nova_files, pick.to_path_buf()]
     }
 }
 
@@ -170,6 +291,9 @@ impl fmt::Display for NotFound {
 pub enum NotLocated {
     /// Nothing named, remembered, usual or picked held the data.
     NotFound(NotFound),
+    /// A quit arrived while the player was being asked: nothing named,
+    /// remembered or usual held the data, as for [`NotLocated::NotFound`].
+    Quit(NotFound),
     /// The directory the player named could not be listed.
     Unreadable {
         /// The directory.
@@ -228,10 +352,15 @@ impl<D> Located<D> {
 /// 3. The first of the `usual` places that loads. A usual place is a
 ///    guess, so one that doesn't load is skipped silently, and the one
 ///    found is not remembered: it is found again next launch.
-/// 4. The player, through `dialog`: a pick is resolved
-///    ([`resolve_pick`]) and, when it loads, remembered. A pick that
-///    doesn't load asks again, naming it; a cancel is
-///    [`NotLocated::NotFound`].
+/// 4. The player, through `dialog`. A pick names one or two directories
+///    ([`pick_dirs`]: an app's `Nova Files`, or a folder's `Nova Files`
+///    and then, unless it is an `EV Nova` folder, the folder itself), and
+///    the first that can be listed decides: when it loads it is used and
+///    remembered, and when it is empty the player is asked again, naming
+///    it. When none can be listed the player is asked again, naming the
+///    last tried. A cancel is [`NotLocated::NotFound`]; a quit is
+///    [`NotLocated::Quit`]. Either way a gone remembered directory is
+///    still forgotten.
 pub fn locate<S: DataSource>(
     named: Option<&Path>,
     remembered: Option<&Path>,
@@ -286,22 +415,40 @@ pub fn locate<S: DataSource>(
         }
     }
     let mut prompt = PROMPT.to_owned();
-    while let Some(pick) = dialog.pick(&prompt) {
-        let dir = resolve_pick(&pick);
-        if let Opened::Loaded(data) = source.open(&dir) {
-            let found = Found {
-                dir: dir.clone(),
-                data,
-                via: Via::Picked,
-            };
-            return Located::ending(Ok(found), warnings, Remember::Remember(dir));
-        }
-        prompt = format!("{} holds no EV Nova data. {PROMPT}", dir.display());
-    }
-    let not_found = NotLocated::NotFound(NotFound {
+    let not_found = NotFound {
         places: usual.to_vec(),
-    });
-    Located::ending(Err(not_found), warnings, remember)
+    };
+    loop {
+        let pick = match dialog.pick(&prompt) {
+            Answer::Picked(pick) => pick,
+            Answer::Cancelled => {
+                let outcome = Err(NotLocated::NotFound(not_found));
+                return Located::ending(outcome, warnings, remember);
+            }
+            Answer::Quit => {
+                return Located::ending(Err(NotLocated::Quit(not_found)), warnings, remember);
+            }
+        };
+        let mut tried = pick.clone();
+        for dir in pick_dirs(&pick, source) {
+            match source.open(&dir) {
+                Opened::Loaded(data) => {
+                    let found = Found {
+                        dir: dir.clone(),
+                        data,
+                        via: Via::Picked,
+                    };
+                    return Located::ending(Ok(found), warnings, Remember::Remember(dir));
+                }
+                Opened::Empty(_) => {
+                    tried = dir;
+                    break;
+                }
+                Opened::Unreadable(_) => tried = dir,
+            }
+        }
+        prompt = format!("{} holds no EV Nova data. {PROMPT}", tried.display());
+    }
 }
 
 /// Applies the lookup's `change` to the remembered directory through
@@ -336,13 +483,12 @@ pub fn apply_remember<S: SettingsStore>(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::HashMap;
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, HashSet, VecDeque};
     use std::fs;
 
     use nova_audio::recording::MemorySettings;
     use nova_rsrc::ResType;
-    use nova_rsrc::fixture::ForkBuilder;
+    use nova_rsrc::fixture::{ForkBuilder, RezBuilder};
 
     use super::*;
 
@@ -354,17 +500,24 @@ mod tests {
         Unlistable,
     }
 
-    /// Directories with canned contents; any other is unlistable. Records
-    /// each directory it is asked to open. The data is the directory.
+    /// Directories with canned contents, and files; any other directory is
+    /// missing, so unlistable. Records each directory it is asked to open.
+    /// The data is the directory.
     #[derive(Default)]
     struct Dirs {
         holding: HashMap<PathBuf, Holds>,
+        files: HashSet<PathBuf>,
         asked: RefCell<Vec<PathBuf>>,
     }
 
     impl Dirs {
         fn with(mut self, dir: &Path, holds: Holds) -> Self {
             self.holding.insert(dir.to_path_buf(), holds);
+            self
+        }
+
+        fn file(mut self, path: &Path) -> Self {
+            self.files.insert(path.to_path_buf());
             self
         }
 
@@ -386,29 +539,43 @@ mod tests {
                 }
             }
         }
+
+        fn has_entry(&self, dir: &Path, name: &str) -> bool {
+            let entry = dir.join(name);
+            self.holding.contains_key(&entry) || self.files.contains(&entry)
+        }
     }
 
-    /// A dialog that gives its picks in turn, then cancels; records each
+    /// A dialog that gives its answers in turn, then cancels; records each
     /// prompt.
     #[derive(Default)]
-    struct Picks {
-        picks: VecDeque<PathBuf>,
-        prompts: Vec<String>,
+    pub(super) struct Picks {
+        answers: VecDeque<Answer>,
+        pub(super) prompts: Vec<String>,
     }
 
     impl Picks {
         fn of(picks: &[&Path]) -> Self {
             Self {
-                picks: picks.iter().map(|pick| pick.to_path_buf()).collect(),
+                answers: picks
+                    .iter()
+                    .map(|pick| Answer::Picked(pick.to_path_buf()))
+                    .collect(),
                 prompts: Vec::new(),
             }
+        }
+
+        /// The same answers, then a quit.
+        fn then_quit(mut self) -> Self {
+            self.answers.push_back(Answer::Quit);
+            self
         }
     }
 
     impl NovaFilesDialog for Picks {
-        fn pick(&mut self, prompt: &str) -> Option<PathBuf> {
+        fn pick(&mut self, prompt: &str) -> Answer {
             self.prompts.push(prompt.to_owned());
-            self.picks.pop_front()
+            self.answers.pop_front().unwrap_or(Answer::Cancelled)
         }
     }
 
@@ -421,7 +588,7 @@ mod tests {
     }
 
     /// An environment holding `vars`, and nothing else.
-    fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+    pub(super) fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
         let vars: Vec<(String, OsString)> = vars
             .iter()
             .map(|(name, value)| ((*name).to_owned(), OsString::from(value)))
@@ -487,13 +654,98 @@ mod tests {
     }
 
     #[test]
-    fn elsewhere_there_are_no_usual_places_yet() {
-        for os in [Os::Windows, Os::Other] {
+    fn on_other_systems_the_usual_places_are_linuxs() {
+        let vars = [("HOME", "/home/p"), ("WINEPREFIX", "/prefix")];
+        let places = usual_places(Os::Other, env(&vars));
+        assert!(!places.is_empty());
+        assert_eq!(places, linux::linux_places(env(&vars)));
+    }
+
+    /// The `Nova Files` of an `EV Nova` folder at `parts` under `root`.
+    fn windows_place(root: &str, parts: &[&str]) -> PathBuf {
+        let mut dir = Path::new(root).to_path_buf();
+        dir.extend(parts);
+        dir.extend(["EV Nova", "Nova Files"]);
+        dir
+    }
+
+    const PROGRAM_FILES: (&str, &str) = ("ProgramFiles", "/pf");
+    const PROGRAM_FILES_X86: (&str, &str) = ("ProgramFiles(x86)", "/pf86");
+    const LOCAL_APP_DATA: (&str, &str) = ("LOCALAPPDATA", "/local");
+
+    #[test]
+    fn on_windows_the_usual_places_are_the_program_files_folders_then_the_users() {
+        assert_eq!(
+            usual_places(
+                Os::Windows,
+                env(&[PROGRAM_FILES, PROGRAM_FILES_X86, LOCAL_APP_DATA])
+            ),
+            [
+                windows_place("/pf", &[]),
+                windows_place("/pf86", &[]),
+                windows_place("/pf", &["Ambrosia Software"]),
+                windows_place("/pf86", &["Ambrosia Software"]),
+                windows_place("/local", &["Programs"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn on_windows_a_missing_or_empty_variable_drops_its_places() {
+        for vars in [
+            env(&[PROGRAM_FILES_X86, LOCAL_APP_DATA]),
+            env(&[("ProgramFiles", ""), PROGRAM_FILES_X86, LOCAL_APP_DATA]),
+        ] {
             assert_eq!(
-                usual_places(os, env(&[("HOME", "/home/p")])),
-                Vec::<PathBuf>::new()
+                usual_places(Os::Windows, vars),
+                [
+                    windows_place("/pf86", &[]),
+                    windows_place("/pf86", &["Ambrosia Software"]),
+                    windows_place("/local", &["Programs"]),
+                ]
             );
         }
+        assert_eq!(
+            usual_places(
+                Os::Windows,
+                env(&[
+                    PROGRAM_FILES,
+                    ("ProgramFiles(x86)", ""),
+                    ("LOCALAPPDATA", "")
+                ])
+            ),
+            [
+                windows_place("/pf", &[]),
+                windows_place("/pf", &["Ambrosia Software"]),
+            ]
+        );
+        assert_eq!(
+            usual_places(Os::Windows, env(&[LOCAL_APP_DATA])),
+            [windows_place("/local", &["Programs"])]
+        );
+    }
+
+    #[test]
+    fn on_32_bit_windows_the_one_program_files_folder_is_tried_once() {
+        assert_eq!(
+            usual_places(
+                Os::Windows,
+                env(&[PROGRAM_FILES, ("ProgramFiles(x86)", "/pf"), LOCAL_APP_DATA])
+            ),
+            [
+                windows_place("/pf", &[]),
+                windows_place("/pf", &["Ambrosia Software"]),
+                windows_place("/local", &["Programs"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn on_windows_with_no_variables_there_are_no_usual_places() {
+        assert_eq!(
+            usual_places(Os::Windows, env(&[("HOME", "/home/p")])),
+            Vec::<PathBuf>::new()
+        );
     }
 
     #[test]
@@ -698,6 +950,135 @@ mod tests {
         );
     }
 
+    /// `X/EV Nova` and its `Nova Files`.
+    fn ev_nova_folder() -> (PathBuf, PathBuf) {
+        let ev_nova = Path::new("/X").join("EV Nova");
+        let nova_files = ev_nova.join("Nova Files");
+        (ev_nova, nova_files)
+    }
+
+    fn reask(dir: &Path) -> String {
+        format!(
+            "{} holds no EV Nova data. Locate your EV Nova folder",
+            dir.display()
+        )
+    }
+
+    #[test]
+    fn picking_the_ev_nova_folder_finds_and_remembers_its_nova_files() {
+        let (ev_nova, nova_files) = ev_nova_folder();
+        let dirs = Dirs::default()
+            .with(&ev_nova, Holds::Data)
+            .with(&nova_files, Holds::Data)
+            .file(&ev_nova.join("Nova.rez"));
+        let mut dialog = Picks::of(&[&ev_nova]);
+        let located = locate(None, None, &[], &dirs, &mut dialog);
+        assert_eq!(
+            located,
+            Located {
+                outcome: Ok(Found {
+                    dir: nova_files.clone(),
+                    data: nova_files.clone(),
+                    via: Via::Picked,
+                }),
+                warnings: Vec::new(),
+                remember: Remember::Remember(nova_files.clone()),
+            }
+        );
+        assert_eq!(dirs.asked(), [nova_files]);
+    }
+
+    #[test]
+    fn picking_the_nova_files_folder_itself_still_finds_it() {
+        let (_, nova_files) = ev_nova_folder();
+        let dirs = Dirs::default().with(&nova_files, Holds::Data);
+        let mut dialog = Picks::of(&[&nova_files]);
+        let located = locate(None, None, &[], &dirs, &mut dialog);
+        assert_eq!(
+            located.outcome,
+            Ok(Found {
+                dir: nova_files.clone(),
+                data: nova_files.clone(),
+                via: Via::Picked,
+            })
+        );
+        assert_eq!(located.remember, Remember::Remember(nova_files.clone()));
+        assert_eq!(
+            dirs.asked(),
+            [nova_files.join("Nova Files"), nova_files.clone()]
+        );
+    }
+
+    #[test]
+    fn an_ev_nova_folder_whose_nova_files_are_empty_asks_again_naming_them() {
+        let (ev_nova, nova_files) = ev_nova_folder();
+        let dirs = Dirs::default()
+            .with(&ev_nova, Holds::Data)
+            .with(&nova_files, Holds::Nothing);
+        let mut dialog = Picks::of(&[&ev_nova]);
+        let located = locate(None, None, &[], &dirs, &mut dialog);
+        assert_eq!(
+            located.outcome,
+            Err(NotLocated::NotFound(NotFound { places: Vec::new() }))
+        );
+        assert_eq!(located.remember, Remember::Keep);
+        assert_eq!(dialog.prompts, [PROMPT.to_owned(), reask(&nova_files)]);
+        assert_eq!(dirs.asked(), [nova_files]);
+    }
+
+    #[test]
+    fn an_ev_nova_folder_with_its_interface_file_but_no_nova_files_asks_again() {
+        let (ev_nova, nova_files) = ev_nova_folder();
+        let dirs = Dirs::default()
+            .with(&ev_nova, Holds::Data)
+            .file(&ev_nova.join("Nova.rez"));
+        let mut dialog = Picks::of(&[&ev_nova]);
+        let located = locate(None, None, &[], &dirs, &mut dialog);
+        assert_eq!(
+            located.outcome,
+            Err(NotLocated::NotFound(NotFound { places: Vec::new() }))
+        );
+        assert_eq!(located.remember, Remember::Keep);
+        assert_eq!(dialog.prompts, [PROMPT.to_owned(), reask(&nova_files)]);
+        assert_eq!(
+            dirs.asked(),
+            [nova_files],
+            "the EV Nova folder isn't opened"
+        );
+    }
+
+    #[test]
+    fn an_ev_nova_folder_whose_nova_files_cannot_be_listed_asks_again() {
+        let (ev_nova, nova_files) = ev_nova_folder();
+        let dirs = Dirs::default()
+            .with(&ev_nova, Holds::Data)
+            .with(&nova_files, Holds::Unlistable);
+        let mut dialog = Picks::of(&[&ev_nova]);
+        let located = locate(None, None, &[], &dirs, &mut dialog);
+        assert_eq!(
+            located.outcome,
+            Err(NotLocated::NotFound(NotFound { places: Vec::new() }))
+        );
+        assert_eq!(located.remember, Remember::Keep);
+        assert_eq!(dialog.prompts, [PROMPT.to_owned(), reask(&nova_files)]);
+        assert_eq!(
+            dirs.asked(),
+            [nova_files],
+            "the EV Nova folder isn't opened"
+        );
+    }
+
+    #[test]
+    fn a_pick_that_cannot_be_listed_asks_again_naming_it() {
+        let pick = Path::new("/Games").join("Gone");
+        let dirs = Dirs::default();
+        let mut dialog = Picks::of(&[&pick]);
+        let located = locate(None, None, &[], &dirs, &mut dialog);
+        assert!(located.outcome.is_err());
+        assert_eq!(dialog.prompts, [PROMPT.to_owned(), reask(&pick)]);
+        assert_eq!(dirs.asked(), [pick.join("Nova Files"), pick]);
+    }
+
     #[test]
     fn a_cancel_finds_nothing_and_still_forgets_a_gone_remembered_directory() {
         let dirs = Dirs::default();
@@ -710,6 +1091,64 @@ mod tests {
         assert_eq!(located.remember, Remember::Forget);
         assert_eq!(located.warnings.len(), 1);
         assert_eq!(dialog.prompts, ["Locate your EV Nova folder"]);
+    }
+
+    #[test]
+    fn a_quit_wins_over_any_pick() {
+        assert_eq!(answer(Some(path("/picked")), true), Answer::Quit);
+        assert_eq!(answer(None, true), Answer::Quit);
+    }
+
+    #[test]
+    fn without_a_quit_a_pick_is_picked_and_none_is_a_cancel() {
+        assert_eq!(
+            answer(Some(path("/picked")), false),
+            Answer::Picked(path("/picked"))
+        );
+        assert_eq!(answer(None, false), Answer::Cancelled);
+    }
+
+    #[test]
+    fn a_quit_at_the_first_ask_finds_nothing_as_quit() {
+        let dirs = Dirs::default();
+        let mut dialog = Picks::default().then_quit();
+        let located = locate(None, None, &usual(), &dirs, &mut dialog);
+        assert_eq!(
+            located.outcome,
+            Err(NotLocated::Quit(NotFound { places: usual() }))
+        );
+        assert_eq!(located.remember, Remember::Keep);
+        assert_eq!(dialog.prompts, [PROMPT]);
+    }
+
+    #[test]
+    fn a_quit_at_a_reask_ends_the_lookup() {
+        let pick = path("/empty");
+        let dirs = Dirs::default().with(&pick.join("Nova Files"), Holds::Nothing);
+        let mut dialog = Picks::of(&[&pick]).then_quit();
+        let located = locate(None, None, &usual(), &dirs, &mut dialog);
+        assert_eq!(
+            located.outcome,
+            Err(NotLocated::Quit(NotFound { places: usual() }))
+        );
+        assert_eq!(
+            dialog.prompts,
+            [PROMPT.to_owned(), reask(&pick.join("Nova Files"))]
+        );
+    }
+
+    #[test]
+    fn a_quit_still_forgets_a_gone_remembered_directory() {
+        let dirs = Dirs::default();
+        let mut dialog = Picks::default().then_quit();
+        let located = locate(None, Some(Path::new("/gone")), &usual(), &dirs, &mut dialog);
+        assert_eq!(
+            located.outcome,
+            Err(NotLocated::Quit(NotFound { places: usual() }))
+        );
+        assert_eq!(located.remember, Remember::Forget);
+        assert_eq!(located.warnings.len(), 1);
+        assert_eq!(dialog.prompts, [PROMPT]);
     }
 
     #[test]
@@ -736,7 +1175,7 @@ mod tests {
 
     /// A data file the loader reads: a flattened fork, as data-fork files
     /// are.
-    fn data_file() -> Vec<u8> {
+    pub(super) fn data_file() -> Vec<u8> {
         ForkBuilder::new()
             .resource(ResType(*b"STR#"), 128, None, &[0, 0])
             .build()
@@ -774,6 +1213,115 @@ mod tests {
             }
             other => panic!("unreadable: {:?}", kind(&other)),
         }
+    }
+
+    /// A Windows `.rez` file the loader reads.
+    pub(super) fn rez_file() -> Vec<u8> {
+        RezBuilder::new()
+            .resource(ResType(*b"STR#"), 128, None, &[0, 0])
+            .build()
+            .bytes
+    }
+
+    /// Lays out an `EV Nova` folder as EV Nova CE unzips it, under `root`:
+    /// its interface file, and a `Nova Files` holding `files`.
+    pub(super) fn ce_install(root: &Path, files: &[(&str, Vec<u8>)]) -> PathBuf {
+        let ev_nova = root.join("EV Nova");
+        let nova_files = ev_nova.join("Nova Files");
+        fs::create_dir_all(&nova_files).expect("makes the folders");
+        fs::write(ev_nova.join("Nova.rez"), rez_file()).expect("writes");
+        for (name, bytes) in files {
+            fs::write(nova_files.join(name), bytes).expect("writes");
+        }
+        nova_files
+    }
+
+    /// A fake Windows environment whose three roots are in `tmp`.
+    fn windows_env(tmp: &Path) -> impl Fn(&str) -> Option<OsString> + use<> {
+        let roots = [
+            ("ProgramFiles", tmp.join("pf")),
+            ("ProgramFiles(x86)", tmp.join("pf86")),
+            ("LOCALAPPDATA", tmp.join("local")),
+        ];
+        move |name| {
+            roots
+                .iter()
+                .find(|(var, _)| *var == name)
+                .map(|(_, dir)| dir.clone().into_os_string())
+        }
+    }
+
+    #[test]
+    fn a_ce_install_in_program_files_x86_is_found_on_disk_without_asking() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        fs::create_dir_all(tmp.path().join("pf")).expect("makes the folder");
+        let nova_files = ce_install(&tmp.path().join("pf86"), &[("Nova Data 1.rez", rez_file())]);
+        let usual = usual_places(Os::Windows, windows_env(tmp.path()));
+        let mut dialog = Picks::default();
+        let located = locate(None, None, &usual, &DiskData, &mut dialog);
+        let found = located.outcome.expect("found");
+        assert_eq!((found.dir, found.via), (nova_files, Via::Usual));
+        assert_eq!(found.data.files().len(), 1);
+        assert_eq!(located.remember, Remember::Keep);
+        assert_eq!(dialog.prompts, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_nova_files_with_only_music_and_movies_is_not_a_usual_place() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        ce_install(
+            &tmp.path().join("pf86"),
+            &[
+                ("Nova Music.mp3", b"ID3\x04\0\0\0\0\0\0".to_vec()),
+                ("Race 1.mov", b"\0\0\0\x14ftypqt  ".to_vec()),
+            ],
+        );
+        let per_user = ce_install(
+            &tmp.path().join("local").join("Programs"),
+            &[("Nova Data 1.rez", rez_file())],
+        );
+        let usual = usual_places(Os::Windows, windows_env(tmp.path()));
+        let mut dialog = Picks::default();
+        let located = locate(None, None, &usual, &DiskData, &mut dialog);
+        let found = located.outcome.expect("found");
+        assert_eq!((found.dir, found.via), (per_user, Via::Usual));
+        assert_eq!(dialog.prompts, Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_entry_on_disk_is_there_whether_a_file_or_a_folder() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        fs::write(tmp.path().join("Nova.rez"), b"").expect("writes");
+        fs::create_dir(tmp.path().join("Nova Files")).expect("makes the folder");
+        assert!(DiskData.has_entry(tmp.path(), "Nova.rez"));
+        assert!(DiskData.has_entry(tmp.path(), "Nova Files"));
+        assert!(!DiskData.has_entry(tmp.path(), "Plug-ins"));
+        assert!(!DiskData.has_entry(&tmp.path().join("gone"), "Nova Files"));
+    }
+
+    #[test]
+    fn a_picked_ce_folder_on_disk_gives_its_nova_files() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        let nova_files = ce_install(tmp.path(), &[("Nova Data 1.rez", rez_file())]);
+        let ev_nova = tmp.path().join("EV Nova");
+        let mut dialog = Picks::of(&[&ev_nova]);
+        let located = locate(None, None, &[], &DiskData, &mut dialog);
+        assert_eq!(located.remember, Remember::Remember(nova_files.clone()));
+        assert_eq!(located.outcome.map(|found| found.dir), Ok(nova_files));
+    }
+
+    #[test]
+    fn a_picked_ce_folder_on_disk_with_no_nova_files_is_not_loaded() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        let ev_nova = tmp.path().join("EV Nova");
+        fs::create_dir(&ev_nova).expect("makes the folder");
+        fs::write(ev_nova.join("Nova.rez"), rez_file()).expect("writes");
+        assert_eq!(kind(&DiskData.open(&ev_nova)), "loaded", "the trap");
+        let mut dialog = Picks::of(&[&ev_nova]);
+        let located = locate(None, None, &[], &DiskData, &mut dialog);
+        assert!(located.outcome.is_err());
+        assert_eq!(located.remember, Remember::Keep);
+        assert_eq!(dialog.prompts.len(), 2, "asked again");
     }
 
     fn kind<D>(opened: &Opened<D>) -> &'static str {

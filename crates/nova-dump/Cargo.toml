@@ -23,5 +23,9 @@ nova-rsrc = { workspace = true, features = ["fixture"] }
 # Real folders for the std adapter and binary tests.
 tempfile.workspace = true
 
+# The Windows-only test of the built nova-dump.exe's PE header.
+[target.'cfg(windows)'.dev-dependencies]
+object.workspace = true
+
 [lints]
 workspace = true

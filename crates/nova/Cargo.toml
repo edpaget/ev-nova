@@ -31,11 +31,35 @@ egui-wgpu = { workspace = true, optional = true }
 egui-winit = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 
-# The macOS menu bar, built behind nova-appkit's safe API, and the open
-# panel and alerts startup shows without a terminal, from rfd.
+# The macOS menu bar, built behind nova-appkit's safe API.
 [target.'cfg(target_os = "macos")'.dependencies]
 nova-appkit.workspace = true
+
+# The open panel and the alerts startup shows when nobody reads stderr,
+# from rfd: on macOS `NSOpenPanel` and `NSAlert`s, on Windows a folder
+# picker and `MessageBoxW`s, on Linux the XDG file-chooser portal (zenity
+# without it) and zenity's alerts.
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 rfd.workspace = true
+
+# rfd's Linux backend: the FileChooser portal over a `dlopen`ed libdbus,
+# falling back to zenity, with no GTK or Wayland crates. Turned on here, for
+# Linux only, so the macOS and Windows builds keep their feature sets.
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { workspace = true, features = ["xdg-portal"] }
+
+# The console calls behind nova-win32's safe API: attaching to the
+# terminal's console, as `nova.exe` is a Windows-subsystem program; and
+# the icon's resource id, which the window loads its icon by.
+[target.'cfg(windows)'.dependencies]
+nova-win32.workspace = true
+nova-winres.workspace = true
+
+# `build.rs`: nova.exe's icon, version information and manifest, made by
+# nova-winres and compiled by embed-resource, for Windows targets only.
+[build-dependencies]
+embed-resource.workspace = true
+nova-winres.workspace = true
 
 [dev-dependencies]
 # The app and integration tests record Audio commands with the `recording`
@@ -60,6 +84,10 @@ tempfile.workspace = true
 # The runner tests build the wgpu errors a GPU set-up can fail with.
 wgpu.workspace = true
 
+# The Windows-only tests of the built nova.exe read its PE structures.
+[target.'cfg(windows)'.dev-dependencies]
+object.workspace = true
+
 [features]
 # The developer tools overlay (egui), toggled with the backquote key. Off by
 # default and in release builds; `mise run dev` turns it on.
@@ -73,11 +101,20 @@ fixture = []
 [lints]
 workspace = true
 
-# Nova.app's identity, which nova-bundle reads through `cargo metadata` into
-# its Info.plist (the version is this package's). The bundle file is
+# The game's identity, which nova-bundle reads through `cargo metadata` into
+# Nova.app's Info.plist, the Windows installer, and the Linux desktop file
+# and AppStream metainfo (the version is this package's). The bundle file is
 # `Nova.app`, so it never replaces an `EV Nova.app` (the original game) in
 # /Applications, but the app menu and Finder name it `name`.
+#
+# `identifier` is also the window's Wayland app id and X11 WM_CLASS, which
+# build.rs reads from here (`nova::platform::APP_ID`), so the desktop file
+# named after it matches the running window.
 [package.metadata.bundle]
 identifier = "io.github.edpaget.ev-nova"
 name = "EV Nova"
 category = "public.app-category.role-playing-games"
+summary = "Play EV Nova from your own copy of its data"
+description = "A new engine for the space trading and combat game EV Nova. It plays the game from your own copy of its data files, which are not included."
+homepage = "https://github.com/edpaget/ev-nova"
+developer = "ev-nova contributors"

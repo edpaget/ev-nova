@@ -2,10 +2,10 @@
 //! `Nova.app` with the binaries, check they are arm64, sign, verify, and
 //! make the `.dmg`.
 //!
-//! [`steps`] is the whole sequence as data, a function of the spec and the
-//! layout, so a new signing mode or notarization step is another entry,
-//! and [`bundle`] runs it through the ports, stopping at the first
-//! failure.
+//! [`plan`] is the whole sequence as data, a function of the spec, the
+//! layout and the signing mode: the steps, and the cleanup that runs after
+//! them whether they succeed or not. [`bundle`] runs the steps through the
+//! ports, stopping at the first failure, then every cleanup step.
 
 use std::ffi::OsString;
 use std::io;
@@ -13,8 +13,11 @@ use std::path::{Path, PathBuf};
 
 use crate::icon::ICON;
 use crate::info_plist::{EXECUTABLE, info_plist};
-use crate::layout::{DUMP, Layout, StagingInOutput, VOLUME};
+use crate::layout::{DUMP, Layout, LayoutError, VOLUME};
+use crate::linux::appimage::links::{Problems, check_links};
+use crate::notary::{Notarization, notarize};
 use crate::ports::{Files, Invocation, Process, RunError};
+use crate::signing::{self, SecretBytes, Signing, add_to_search_list};
 use crate::spec::{BundleSpec, GAME_PACKAGE, SpecError};
 
 /// The one target built: Apple silicon. Intel Macs are not supported.
@@ -31,6 +34,8 @@ pub struct Host {
     pub min_system: String,
     /// The output directory asked for, if any.
     pub out: Option<PathBuf>,
+    /// How the bundle is signed.
+    pub signing: Signing,
 }
 
 /// One step of the sequence.
@@ -61,10 +66,27 @@ pub enum Step {
         /// The link.
         link: PathBuf,
     },
+    /// Writes a secret file, readable by its owner alone.
+    WriteSecret {
+        /// The file.
+        path: PathBuf,
+        /// Its contents, which `Debug` never shows.
+        bytes: SecretBytes,
+    },
     /// Runs a program.
     Run(Invocation),
     /// Fails unless the binary is [`ARCH`] alone: see [`check_archs`].
     CheckArchs(PathBuf),
+    /// Puts the keychain first in the user's keychain search list, so
+    /// `codesign` and `security` find its identity: see
+    /// [`add_to_search_list`].
+    AddToSearchList(PathBuf),
+    /// Notarizes a file: see [`notarize`].
+    Notarize(Notarization),
+    /// Fails unless the Linux binary needs no glibc above the floor and
+    /// links only the allowed libraries: see
+    /// [`check_links`](crate::linux::appimage::links::check_links).
+    CheckLinks(PathBuf),
 }
 
 /// Why bundling stopped.
@@ -83,7 +105,7 @@ pub enum BundleError {
     Spec(#[from] SpecError),
     /// The output directory can't be used.
     #[error(transparent)]
-    Layout(#[from] StagingInOutput),
+    Layout(#[from] LayoutError),
     /// A file step failed.
     #[error("could not {action} {}: {source}", path.display())]
     File {
@@ -102,6 +124,39 @@ pub enum BundleError {
         /// What it listed.
         found: String,
     },
+    /// A Linux binary needs a glibc above the floor or links a library
+    /// outside the allowed list.
+    #[error(
+        "`{command}` shows a binary that won't run on every Linux the AppImage is for: {problems}"
+    )]
+    NotPortable {
+        /// The `objdump -p` command line.
+        command: String,
+        /// What it showed that the floor or the list refuses.
+        problems: Problems,
+    },
+    /// `notarytool` printed output the core can't read.
+    #[error("`{command}` printed no {reason}")]
+    NotaryOutput {
+        /// The `notarytool` command line.
+        command: String,
+        /// What its output lacked.
+        reason: String,
+    },
+    /// The notary service did not accept the file.
+    #[error(
+        "the notary service did not accept {} (submission {id}): {status}. \
+         Its log is printed above",
+        path.display()
+    )]
+    NotNotarized {
+        /// The file submitted.
+        path: PathBuf,
+        /// The submission's id.
+        id: String,
+        /// The submission's status.
+        status: String,
+    },
 }
 
 /// `cargo metadata`, whose output is the spec.
@@ -112,10 +167,63 @@ pub fn metadata(cargo: &OsString) -> Invocation {
         .captured()
 }
 
-/// Every step after `cargo metadata`, in order.
+/// Every step after `cargo metadata`, and the cleanup after them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plan {
+    /// The sequence, in order; the first failure stops it.
+    pub steps: Vec<Step>,
+    /// What runs after the steps, whether they succeeded or not, each step
+    /// whatever the one before it did.
+    pub cleanup: Vec<Step>,
+}
+
+/// `codesign --verify --deep --strict` on a bundle or binary.
+pub(crate) fn verify(path: PathBuf) -> Step {
+    Step::Run(
+        Invocation::new("codesign")
+            .args(["--verify", "--deep", "--strict", "--verbose=2"])
+            .arg(path),
+    )
+}
+
+/// `hdiutil create`: the staging tree into the `.dmg`.
+pub(crate) fn make_dmg(layout: &Layout) -> Step {
+    Step::Run(
+        Invocation::new("hdiutil")
+            .args(["create", "-volname", VOLUME, "-srcfolder"])
+            .arg(&layout.staging)
+            .args(["-fs", "HFS+", "-format", "UDZO", "-ov"])
+            .arg(layout.dmg()),
+    )
+}
+
+/// The plan for `spec` under `layout`, signed as `host` says.
 #[must_use]
-pub fn steps(spec: &BundleSpec, layout: &Layout, host: &Host) -> Vec<Step> {
-    let release = |bin: &str| spec.target_dir.join(TARGET).join("release").join(bin);
+pub fn plan(spec: &BundleSpec, layout: &Layout, host: &Host) -> Plan {
+    let mut steps = stage(spec, layout, host);
+    match &host.signing {
+        Signing::AdHoc => {
+            steps.extend(ad_hoc(layout));
+            Plan {
+                steps,
+                cleanup: Vec::new(),
+            }
+        }
+        Signing::DeveloperId(credentials) => {
+            steps.extend(signing::developer_id(credentials, layout));
+            Plan {
+                steps,
+                cleanup: signing::teardown(layout),
+            }
+        }
+    }
+}
+
+/// Ad-hoc signatures, so Apple silicon runs the binaries, then the
+/// `.dmg`. Not `--deep`: the bundle holds one executable and no nested
+/// code, and Apple discourages `--deep` for signing. Verifying is
+/// `--deep`.
+fn ad_hoc(layout: &Layout) -> Vec<Step> {
     let sign = |path: PathBuf| {
         Step::Run(
             Invocation::new("codesign")
@@ -123,13 +231,19 @@ pub fn steps(spec: &BundleSpec, layout: &Layout, host: &Host) -> Vec<Step> {
                 .arg(path),
         )
     };
-    let verify = |path: PathBuf| {
-        Step::Run(
-            Invocation::new("codesign")
-                .args(["--verify", "--deep", "--strict", "--verbose=2"])
-                .arg(path),
-        )
-    };
+    vec![
+        sign(layout.dump()),
+        sign(layout.app()),
+        verify(layout.app()),
+        verify(layout.dump()),
+        Step::CreateDir(layout.out.clone()),
+        make_dmg(layout),
+    ]
+}
+
+/// The build and the staging tree, up to signing.
+fn stage(spec: &BundleSpec, layout: &Layout, host: &Host) -> Vec<Step> {
+    let release = |bin: &str| spec.target_dir.join(TARGET).join("release").join(bin);
     vec![
         // Default features only, so egui stays out of the published build.
         Step::Run(Invocation::new(&host.cargo).args([
@@ -177,22 +291,6 @@ pub fn steps(spec: &BundleSpec, layout: &Layout, host: &Host) -> Vec<Step> {
             target: PathBuf::from("/Applications"),
             link: layout.staging.join("Applications"),
         },
-        // Ad-hoc signatures, so Apple silicon runs the binaries. Not
-        // `--deep`: the bundle holds one executable and no nested code,
-        // and Apple discourages `--deep` for signing. Verifying is
-        // `--deep`.
-        sign(layout.dump()),
-        sign(layout.app()),
-        verify(layout.app()),
-        verify(layout.dump()),
-        Step::CreateDir(layout.out.clone()),
-        Step::Run(
-            Invocation::new("hdiutil")
-                .args(["create", "-volname", VOLUME, "-srcfolder"])
-                .arg(&layout.staging)
-                .args(["-fs", "HFS+", "-format", "UDZO", "-ov"])
-                .arg(layout.dmg()),
-        ),
     ]
 }
 
@@ -204,10 +302,18 @@ pub fn bundle(
 ) -> Result<PathBuf, BundleError> {
     let spec = BundleSpec::from_metadata(&run(process, &metadata(&host.cargo))?)?;
     let layout = Layout::new(&spec.target_dir, host.out.clone())?;
-    for step in steps(&spec, &layout, host) {
-        execute(&step, process, files)?;
+    let plan = plan(&spec, &layout, host);
+    let done = plan
+        .steps
+        .iter()
+        .try_for_each(|step| execute(step, process, files));
+    let mut cleaned = Ok(());
+    for step in &plan.cleanup {
+        if let Err(e) = execute(step, process, files) {
+            cleaned = cleaned.and(Err(e));
+        }
     }
-    Ok(layout.dmg())
+    done.and(cleaned).map(|()| layout.dmg())
 }
 
 /// Runs `lipo -archs` on `binary` and fails unless it lists [`ARCH`] and
@@ -226,7 +332,10 @@ pub fn check_archs(process: &mut impl Process, binary: &Path) -> Result<(), Bund
     }
 }
 
-fn run(process: &mut impl Process, invocation: &Invocation) -> Result<Vec<u8>, BundleError> {
+pub(crate) fn run(
+    process: &mut impl Process,
+    invocation: &Invocation,
+) -> Result<Vec<u8>, BundleError> {
     process.run(invocation).map_err(|source| BundleError::Run {
         command: invocation.to_string(),
         source,
@@ -241,7 +350,9 @@ fn file(action: &'static str, path: &Path, result: io::Result<()>) -> Result<(),
     })
 }
 
-fn execute(
+/// Runs one step through the ports. The Windows installer's plan runs
+/// through it too.
+pub(crate) fn execute(
     step: &Step,
     process: &mut impl Process,
     files: &mut impl Files,
@@ -250,119 +361,33 @@ fn execute(
         Step::RemoveDir(path) => file("remove", path, files.remove_dir_all(path)),
         Step::CreateDir(path) => file("create", path, files.create_dir_all(path)),
         Step::Write { path, bytes } => file("write", path, files.write(path, bytes)),
+        Step::WriteSecret { path, bytes } => {
+            file("write", path, files.write_secret(path, &bytes.0))
+        }
         Step::Copy { from, to } => file("copy to", to, files.copy(from, to)),
         Step::Symlink { target, link } => file("link", link, files.symlink(target, link)),
         Step::Run(invocation) => run(process, invocation).map(drop),
         Step::CheckArchs(binary) => check_archs(process, binary),
+        Step::AddToSearchList(keychain) => add_to_search_list(process, keychain),
+        Step::Notarize(notarization) => notarize(process, notarization),
+        Step::CheckLinks(binary) => check_links(process, binary),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::rc::Rc;
 
     use super::*;
     use crate::spec::tests::sample_metadata;
-
-    /// Everything the ports were asked to do, in order.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    enum Event {
-        Run(Invocation),
-        RemoveDir(PathBuf),
-        CreateDir(PathBuf),
-        Write(PathBuf, Vec<u8>),
-        Copy(PathBuf, PathBuf),
-        Symlink(PathBuf, PathBuf),
-    }
-
-    type Log = Rc<RefCell<Vec<Event>>>;
-
-    /// Records each run; answers `cargo metadata` and `lipo -archs` with
-    /// canned output, and fails the runs `fails` picks.
-    struct Recorder {
-        log: Log,
-        archs: Vec<u8>,
-        fails: Box<dyn Fn(&Invocation) -> bool>,
-    }
-
-    impl Process for Recorder {
-        fn run(&mut self, invocation: &Invocation) -> Result<Vec<u8>, RunError> {
-            self.log.borrow_mut().push(Event::Run(invocation.clone()));
-            if (self.fails)(invocation) {
-                return Err(RunError::Failed(Some(1)));
-            }
-            let first = invocation.args.first().and_then(|a| a.to_str());
-            Ok(match first {
-                Some("metadata") => sample_metadata(),
-                Some("-archs") => self.archs.clone(),
-                _ => Vec::new(),
-            })
-        }
-    }
-
-    /// Records each file operation; fails the ones `fails` picks.
-    struct FakeFiles {
-        log: Log,
-        fails: Box<dyn Fn(&Event) -> bool>,
-    }
-
-    impl FakeFiles {
-        fn record(&self, event: Event) -> io::Result<()> {
-            let failed = (self.fails)(&event);
-            self.log.borrow_mut().push(event);
-            if failed {
-                Err(io::Error::other("disk full"))
-            } else {
-                Ok(())
-            }
-        }
-    }
-
-    impl Files for FakeFiles {
-        fn remove_dir_all(&mut self, path: &Path) -> io::Result<()> {
-            self.record(Event::RemoveDir(path.to_owned()))
-        }
-        fn create_dir_all(&mut self, path: &Path) -> io::Result<()> {
-            self.record(Event::CreateDir(path.to_owned()))
-        }
-        fn write(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()> {
-            self.record(Event::Write(path.to_owned(), bytes.to_vec()))
-        }
-        fn copy(&mut self, from: &Path, to: &Path) -> io::Result<()> {
-            self.record(Event::Copy(from.to_owned(), to.to_owned()))
-        }
-        fn symlink(&mut self, target: &Path, link: &Path) -> io::Result<()> {
-            self.record(Event::Symlink(target.to_owned(), link.to_owned()))
-        }
-    }
-
-    struct Run {
-        result: Result<PathBuf, BundleError>,
-        events: Vec<Event>,
-    }
-
-    impl Run {
-        fn runs(&self) -> Vec<Invocation> {
-            self.events
-                .iter()
-                .filter_map(|e| match e {
-                    Event::Run(invocation) => Some(invocation.clone()),
-                    _ => None,
-                })
-                .collect()
-        }
-
-        fn ran(&self, program: &str) -> bool {
-            self.runs().iter().any(|i| i.program == program)
-        }
-    }
+    use crate::test_support::{self, Event, FakeFiles, Log, Run, failing, is, run_ok_with};
 
     fn host(out: Option<PathBuf>) -> Host {
         Host {
             cargo: OsString::from("/rust/bin/cargo"),
             min_system: "13.0".into(),
             out,
+            signing: Signing::AdHoc,
         }
     }
 
@@ -372,27 +397,11 @@ mod tests {
         process_fails: impl Fn(&Invocation) -> bool + 'static,
         file_fails: impl Fn(&Event) -> bool + 'static,
     ) -> Run {
-        let log = Log::default();
-        let mut process = Recorder {
-            log: Rc::clone(&log),
-            archs: archs.to_vec(),
-            fails: Box::new(process_fails),
-        };
-        let mut files = FakeFiles {
-            log: Rc::clone(&log),
-            fails: Box::new(file_fails),
-        };
-        let result = bundle(&mut process, &mut files, host);
-        let events = log.borrow().clone();
-        Run { result, events }
+        test_support::run(host, archs, failing(process_fails), file_fails)
     }
 
     fn run_ok(host: &Host) -> Run {
-        run_with(host, b"arm64\n", |_| false, |_| false)
-    }
-
-    fn is(program: &'static str, first: &'static str) -> impl Fn(&Invocation) -> bool {
-        move |i| i.program == program && i.args.first().is_some_and(|a| a == first)
+        run_ok_with(host)
     }
 
     fn spec() -> BundleSpec {
@@ -409,7 +418,9 @@ mod tests {
     #[test]
     fn runs_the_whole_sequence_in_order() {
         let root = Path::new("/work").join("ev-nova");
-        let target = root.join("target");
+        // Cargo's own spelling, so the paths in each command's args (text,
+        // not paths) match on Windows, where `join` writes `\`.
+        let target = spec().target_dir;
         let staging = target.join("bundle").join("staging");
         let out = target.join("bundle").join("out");
         let app = staging.join("Nova.app");
@@ -466,9 +477,25 @@ mod tests {
     }
 
     #[test]
+    fn ad_hoc_runs_no_developer_id_tool_and_cleans_nothing_up() {
+        let layout = Layout::new(&spec().target_dir, None).expect("layout");
+        assert_eq!(plan(&spec(), &layout, &host(None)).cleanup, []);
+        let run = run_ok(&host(None));
+        assert!(run.result.is_ok(), "{:?}", run.result);
+        for program in ["security", "xcrun", "ditto"] {
+            assert!(!run.ran(program), "{program}");
+        }
+        assert!(
+            !run.events
+                .iter()
+                .any(|e| matches!(e, Event::WriteSecret(..))),
+        );
+    }
+
+    #[test]
     fn the_icon_is_where_the_plist_names_it() {
         let layout = Layout::new(&spec().target_dir, None).expect("layout");
-        let all = steps(&spec(), &layout, &host(None));
+        let all = plan(&spec(), &layout, &host(None)).steps;
         let plist = all
             .iter()
             .find_map(|s| match s {
@@ -619,6 +646,7 @@ mod tests {
         let mut files = FakeFiles {
             log: Rc::clone(&log),
             fails: Box::new(|_| false),
+            absent: Box::new(|_| false),
         };
         let result = bundle(&mut DumpUniversal(Rc::clone(&log)), &mut files, &host(None));
         let error = result.expect_err("fails").to_string();

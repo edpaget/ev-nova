@@ -1,11 +1,17 @@
 [tools]
 rust = { version = "1.98.1", components = "rustfmt,clippy" }
 "cargo:cargo-workspaces" = "0.4.2"
-"cargo:cargo-nextest" = "0.9.146"
+# nextest and cargo-deny are prebuilt release binaries that aqua's registry
+# names with their checksums, so installing them never compiles (CI installs
+# these two). The cargo backend went through cargo-binstall, whose probing
+# of GitHub releases can time out and fall back to building from source.
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.146"
 "cargo:cargo-mutants" = "27.1.0"
-"cargo:cargo-deny" = "0.19.9"
+"aqua:EmbarkStudios/cargo-deny" = "0.19.9"
 hk = "2.4.0"
 pkl = "0.32.1"
+# infra/github's config (the infra-* tasks); CI installs it only in the infra job.
+opentofu = "1.13.2"
 
 [env]
 RDM_ROOT = "{{env.HOME | default(value=env.USERPROFILE | default(value=''))}}/Projects/rdm-atlas-repo"
@@ -31,6 +37,13 @@ run = "cargo deny --locked check bans"
 description = "Rustdoc over every crate, private items included, with broken intra-doc links denied"
 env = { RUSTDOCFLAGS = "-D rustdoc::broken_intra_doc_links" }
 run = "cargo doc --workspace --no-deps --document-private-items --locked"
+
+# Not in `ci`: CI's own Windows leg lints natively. Needs
+# `rustup target add x86_64-pc-windows-msvc`; its own target directory keeps
+# the host build warm.
+[tasks.lint-windows]
+description = "Clippy over every crate and target for Windows (x86_64-pc-windows-msvc), from any host, warnings are errors"
+run = "cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc --target-dir target/windows --locked -- -D warnings"
 
 [tasks.lint-lib]
 description = "Clippy over every crate's libs and bins without dev-dependency features (so no `fixture`), warnings are errors"
@@ -60,8 +73,37 @@ description = "Run the viewer with the developer tools; backquote (`) shows and 
 run = "cargo run -p nova --features dev-tools --target-dir target/dev-run --locked --"
 
 [tasks.bundle]
-description = "macOS only: build Nova.app (Apple silicon, ad-hoc signed) into ev-nova-aarch64-apple-darwin.dmg; pass an output dir after -- (default target/bundle/out)"
+description = "macOS only: build Nova.app (Apple silicon) into ev-nova-aarch64-apple-darwin.dmg, Developer ID signed and notarized when the MACOS_*/APPLE_* signing variables are set, ad-hoc otherwise; pass an output dir after -- (default target/bundle/out)"
 run = "cargo run -p nova-bundle --locked --"
+
+[tasks.build-windows]
+description = "Windows only: build nova.exe and nova-dump.exe in release for x86_64-pc-windows-msvc, the executables the installer packs"
+run = "cargo build --release --locked -p nova -p nova-dump --target x86_64-pc-windows-msvc"
+
+[tasks.pack-installer]
+description = "Windows only, needs WiX v5 (dotnet tool install --global wix --version 5.0.2): pack already-built executables into ev-nova-x86_64-pc-windows-msvc.msi; pass `--exes <DIR> [OUT_DIR]` after -- (defaults target/x86_64-pc-windows-msvc/release and target/installer/out)"
+run = "cargo run -p nova-bundle --locked --bin nova-installer --"
+
+[tasks.installer]
+description = "Windows only, needs WiX v5 (dotnet tool install --global wix --version 5.0.2): build the executables, then pack them into ev-nova-x86_64-pc-windows-msvc.msi in target/installer/out (or the dir passed after --)"
+depends = ["build-windows"]
+run = "cargo run -p nova-bundle --locked --bin nova-installer --"
+
+[tasks.linux-desktop]
+description = "Any host: write the Linux desktop file, AppStream metainfo and hicolor icons as a share/ tree to install into ~/.local/share; pass an output dir after -- (default target/linux)"
+run = "cargo run -p nova-bundle --locked --bin nova-linux --"
+
+[tasks.site]
+description = "Any host: render the download page into index.html; pass an output dir after -- (default target/site)"
+run = "cargo run -p nova-bundle --locked --bin nova-site --"
+
+[tasks.appimage]
+description = "Linux x86_64 only, needs appimagetool (or NOVA_APPIMAGETOOL) and NOVA_APPIMAGE_RUNTIME naming a downloaded AppImage type2 runtime: build nova and pack it into ev-nova-x86_64-unknown-linux-gnu.AppImage; pass an output dir after -- (default target/appimage/out)"
+run = "cargo run -p nova-bundle --locked --bin nova-appimage --"
+
+[tasks.flatpak]
+description = "Linux x86_64 only, needs flatpak, flatpak-builder and the flathub remote added with --user: build the game from vendored sources on the freedesktop runtime into ev-nova-x86_64-unknown-linux-gnu.flatpak; pass an output dir after -- (default target/flatpak/out)"
+run = "cargo run -p nova-bundle --locked --bin nova-flatpak --"
 
 [tasks.mutants]
 description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g. -- --file <path>"
@@ -70,3 +112,45 @@ run = "cargo mutants --workspace"
 [tasks.ci]
 description = "Everything CI would run; `hk check` runs this, and it gates review and landing"
 depends = ["fmt", "lint", "lint-lib", "deny", "doc", "test", "lint-dev-tools", "test-dev-tools"]
+
+# CI's macOS and Windows legs run this, and only the Linux leg runs all of
+# `ci`. These steps build each target's own `cfg` code (the resource-fork
+# adapter, AppKit, MetalFX, Win32). fmt and deny read the same files on
+# every host, and lint-lib and the dev-tools legs repeat a whole build for
+# code that has no platform-specific branch of its own. On a 3-core runner
+# those extra builds made macOS the slowest leg. Locally, `ci` still runs
+# everything.
+[tasks.ci-platform]
+description = "The gate steps whose result depends on the target (lint, doc, test); CI's macOS and Windows legs run it"
+depends = ["lint", "doc", "test"]
+
+# OpenTofu over infra/github, the repository's GitHub settings (README.md
+# there). infra-plan and infra-apply act on the live repository with the
+# operator's `gh` token and 1Password, so they are never part of `ci` or the
+# hk hooks. infra-check needs no credentials and is the one exception to
+# "verification runs through cargo": cargo can't test HCL, and a Rust wrapper
+# would need tofu and the network, which would break hermetic tests. It runs
+# only here and in CI's `infra` job, never in `ci` or hk.
+# Even `tofu init` evaluates the encryption block, so it needs the passphrase
+# and runs inside the same `op run` as plan/apply: one 1Password approval for
+# the passphrase per run, not two.
+[tasks.infra-plan]
+description = "Plan infra/github against the LIVE repository (gh token, 1Password approvals); kept out of ci and hk on purpose"
+run = "GITHUB_TOKEN=$(gh auth token) op run --env-file=infra/github/op.env -- sh -c 'tofu -chdir=infra/github init -input=false -lockfile=readonly && tofu -chdir=infra/github plan'"
+
+[tasks.infra-apply]
+description = "Apply infra/github to the LIVE repository, interactively (gh token, 1Password approvals); kept out of ci and hk on purpose"
+run = "GITHUB_TOKEN=$(gh auth token) op run --env-file=infra/github/op.env -- sh -c 'tofu -chdir=infra/github init -input=false -lockfile=readonly && tofu -chdir=infra/github apply'"
+
+[tasks.infra-check]
+description = "fmt, validate, mocked-provider tests and the state-encryption guard for infra/github, with no credentials. The one non-cargo check: cargo can't test HCL, and a Rust wrapper would need tofu and the network (not hermetic). Runs only here and in CI's infra job, never in ci or hk"
+# Evaluating the encryption block needs some passphrase. No state exists
+# where this runs, so the value protects nothing.
+env = { TF_VAR_state_passphrase = "check-only-not-a-secret" }
+run = [
+  "tofu -chdir=infra/github fmt -check -recursive",
+  "tofu -chdir=infra/github init -backend=false -input=false -lockfile=readonly",
+  "tofu -chdir=infra/github validate",
+  "tofu -chdir=infra/github test",
+  "sh infra/github/check-encryption.sh",
+]
