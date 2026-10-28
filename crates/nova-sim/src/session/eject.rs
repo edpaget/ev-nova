@@ -1129,6 +1129,40 @@ mod tests {
     }
 
     #[test]
+    fn a_first_tick_ejects_frame_fills_the_hulk_breaking_up_from_its_start_and_the_player_as_the_pod()
+     {
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_first_check(&mut session, &catalog, false);
+        let left = hulk(&session).id;
+        let mut frame = crate::flight_frame::FlightFrame::default();
+        session.fill_frame(&mut frame);
+        let player = frame
+            .ships
+            .iter()
+            .find(|ship| ship.ship == ShipRef::Player)
+            .expect("the player's record");
+        assert_eq!(
+            (player.class, player.condition),
+            (ESCAPE_POD_SHIP, Condition::Intact),
+            "the pod, intact"
+        );
+        let hulk = frame
+            .ships
+            .iter()
+            .find(|ship| ship.ship == ShipRef::Npc(left))
+            .expect("the hulk's record");
+        assert_eq!(hulk.class, ShipId(128), "the old class");
+        assert_eq!(
+            hulk.condition,
+            Condition::Dying {
+                ticks_left: 100,
+                starting: true
+            }
+        );
+    }
+
+    #[test]
     fn the_chord_held_on_the_first_dying_tick_ejects_before_any_breakup() {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD]);
