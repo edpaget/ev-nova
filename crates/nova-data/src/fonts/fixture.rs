@@ -347,6 +347,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_hdmx_record_is_its_ppem_its_widest_and_a_width_a_glyph_padded_to_four() {
+        let table = hdmx(5, &[(10, &[1, 7, 3]), (12, &[2; 5])]);
+        assert_eq!(
+            table,
+            [
+                &[0, 0, 0, 2, 0, 0, 0, 8][..],
+                &[10, 7, 1, 7, 3, 0, 0, 0],
+                &[12, 2, 2, 2, 2, 2, 2, 0],
+            ]
+            .concat()
+        );
+    }
+
     /// The big-endian `u16` at byte `at` of table `tag` in `face`, and the
     /// table's length.
     fn table_u16(face: &Face<'_>, tag: [u8; 4], at: usize) -> (u16, usize) {

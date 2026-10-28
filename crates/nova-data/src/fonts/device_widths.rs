@@ -167,6 +167,23 @@ mod tests {
     }
 
     #[test]
+    fn a_record_holds_one_width_per_glyph_the_maxp_counts() {
+        // Five glyphs (a `maxp` version 0.5): records of 2 + 5 bytes,
+        // padded to 8.
+        let bytes = block_sfnt("Charcoal")
+            .table(b"maxp", [0, 0, 0x50, 0, 0, 5])
+            .table(
+                b"hdmx",
+                hdmx(5, &[(10, &[1, 2, 3, 4, 5]), (12, &[6, 7, 8, 9, 10])]),
+            )
+            .build();
+        let widths = DeviceWidths::read(&bytes);
+        assert_eq!(widths.width(10, 4), Some(5));
+        assert_eq!(widths.width(12, 4), Some(10));
+        assert_eq!(widths.width(12, 5), None, "past the glyphs");
+    }
+
+    #[test]
     fn records_are_read_by_the_record_size_not_the_glyph_count() {
         // A wider record than the glyphs need: the padding is skipped.
         let mut table = hdmx(2, &[]);
