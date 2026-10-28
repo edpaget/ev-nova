@@ -325,3 +325,25 @@ fn an_arrival_after_beginning_is_laid_out_as_any_other() {
     assert!(sent_since(&view, 0).contains(&FlightCommand::Arrive));
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
 }
+
+// The edge's follow-ups once it has set the session up.
+
+#[test]
+fn showing_the_set_up_flight_redraws_its_stellars_and_reads_the_sheets_its_slots_ask_for() {
+    for slots_carried in [false, true] {
+        let mut view = super::faked_world::world(catalog(), sol());
+        let mut after = sol();
+        after.stellars[1].destroyed = true;
+        after
+            .ships
+            .push(record::npc(7, 131, Vec2::new(100.0, 0.0), 0.0));
+        view.sim.set_frame(after);
+        view.show_set_up(slots_carried);
+        assert_eq!(view.frame, view.frame_now(), "the kept frame filled afresh");
+        assert_eq!(
+            view.npc_sheets.contains_key(&ShipId(131)),
+            slots_carried,
+            "the sheets read only for slots carried"
+        );
+    }
+}

@@ -268,6 +268,23 @@ mod tests {
     }
 
     #[test]
+    fn a_setup_debugs_its_parts_and_names_the_lists_it_holds() {
+        let shown = format!("{:?}", unlike_setup());
+        assert!(shown.starts_with("SessionSetup {"), "{shown}");
+        for part in [
+            "rules",
+            "disable_rule",
+            "hire_terms",
+            "carry",
+            "Some(\"Strings\")",
+        ] {
+            assert!(shown.contains(part), "{part}: {shown}");
+        }
+        let none = format!("{:?}", SessionSetup::default());
+        assert!(none.contains("strings: None"), "{none}");
+    }
+
+    #[test]
     fn the_carry_over_is_the_sessions_history() {
         let setup = unlike_setup();
         let carried = setup.carry.clone();

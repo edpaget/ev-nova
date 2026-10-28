@@ -1074,6 +1074,27 @@ mod tests {
     }
 
     #[test]
+    fn the_collaborators_given_replace_every_one_the_flight_had() {
+        let given = Collaborators {
+            behaviour: Rc::new(NovaAi::default()),
+            defence_rule: Rc::new(Allegiance),
+            law: Rc::new(NovaLaw::default()),
+            boarding_rule: Rc::new(NovaBoarding::default()),
+            hail_options: HailOptions::empty(),
+            ..Collaborators::default()
+        };
+        let flight = failed().with_collaborators(given.clone());
+        assert!(Rc::ptr_eq(&flight.behaviour, &given.behaviour));
+        assert!(Rc::ptr_eq(&flight.defence_rule, &given.defence_rule));
+        assert!(Rc::ptr_eq(&flight.law, &given.law));
+        assert!(Rc::ptr_eq(&flight.boarding_rule, &given.boarding_rule));
+        assert_eq!(
+            format!("{:?}", flight.hail_options),
+            format!("{:?}", given.hail_options)
+        );
+    }
+
+    #[test]
     fn a_failed_flight_meets_the_contract() {
         crate::flight::sim_port::fixture::check_contract(&mut failed()).expect("meets it");
     }
