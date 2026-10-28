@@ -35,6 +35,20 @@ When building a component:
 3. Wire real adapters together at the edge of the program (`main`, or a
    top-level constructor).
 
+When a UI drives core logic, it reaches it through a port the UI defines,
+small enough to fake by hand:
+
+- Grow the port with data, not methods: a new readout is a field of the frame
+  the port fills, a new action a command variant, a new one-shot output an
+  event variant, and a question a screen asks a variant of the screen's ask.
+  Don't add a method per question.
+- Keep each adapter forward to one call into the core. The decisions live in
+  the core and are pinned by the core's tests.
+- Test the UI's components on the hand-written fake. Run the few integration
+  tests over the real core only where the port's module docs say.
+- The port's module docs say where each kind of addition goes and where it is
+  pinned.
+
 ## Porting the original's behaviour
 
 Work that reads `EV Nova.app` to match the original follows these rules, so a
@@ -229,41 +243,6 @@ and `Mode`) are stateful.
   borrows disjoint fields, where two `&mut self` calls wouldn't compile.
 - A new field on `Session` itself needs a reason in its doc comment, saying
   why it belongs to no sub-state.
-
-## View and sim
-
-nova-view's flight screen (`FlightView`, `crates/nova-view/src/flight/view/`)
-reaches the sim only through the `FlightSim` port and its sources
-(`MapSource`, `CommSource`, `PortSource`, `NameSource`, `PilotSource`) in
-`flight/sim_port.rs`, and the developer tools through `DevDesk`
-(`devtools/pilot.rs`). `SessionFlight` (`flight/sim_adapter.rs`) implements
-them over `Session`, and the edge (`flight/edge.rs`) builds it.
-
-- Write view code in `impl<C, S: FlightSim> FlightView<C, S>` blocks. Don't
-  name `Session` outside `sim_adapter.rs`, and don't add a block over
-  `SessionFlight<C>`. The only concrete members are two fixture-only ones
-  (`cfg(any(test, feature = "fixture"))`) for integration tests:
-  `FlightView::session()`, which reads a real session behind the port, and
-  `FlightView::from_session`, which wires a view over a session a test built.
-- Keep each adapter forward to one `Session` call. Put decisions in
-  nova-sim.
-- A new readout is a `FlightFrame` field
-  (`crates/nova-sim/src/flight_frame.rs`), filled in `session/frame.rs` and
-  pinned by a nova-sim test there.
-- A new player action is a `FlightCommand` variant, matched with its
-  `Answer` in `session/apply.rs` or a module under `session/apply/`. A new
-  one-shot output is a `FlightEvent` variant, drained in
-  `session/flight_events.rs`. The step's order lives in `session/step.rs`.
-- What a screen asks once as it opens is a source method that defaults to
-  nothing open, not a frame field.
-- Put new sim-side code for the port in those modules, not in `session.rs`.
-- Test the view on `FakeFlight` (`flight::sim_port::fixture`): set a frame
-  (the builders in `flight/view/tests/frames.rs`), script its answers and
-  events, and assert what the view draws, plays and sends.
-- In nova-view, start a real `Session` only in `tests/it/flight_seam.rs`
-  (one test per port surface or router handoff, as its module doc says),
-  the adapter's checks under `sim_adapter`, the edge's checks
-  (`flight/view/build/edge_checks.rs`) and the stock tests.
 
 ## Verification runs through cargo
 
