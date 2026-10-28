@@ -12,14 +12,22 @@
 use std::process::ExitCode;
 
 #[cfg(target_os = "macos")]
+mod apple_events;
+#[cfg(target_os = "macos")]
 mod menu_bar;
 
 /// Every test, by name. Each panics on failure.
 #[cfg(target_os = "macos")]
-const TESTS: &[(&str, fn())] = &[(
-    "menu_bar::the_installed_bar_is_the_applications_and_sends_the_games_commands",
-    menu_bar::the_installed_bar_is_the_applications_and_sends_the_games_commands,
-)];
+const TESTS: &[(&str, fn())] = &[
+    (
+        "apple_events::the_installed_handlers_send_the_games_commands_until_dropped",
+        apple_events::the_installed_handlers_send_the_games_commands_until_dropped,
+    ),
+    (
+        "menu_bar::the_installed_bar_is_the_applications_and_sends_the_games_commands",
+        menu_bar::the_installed_bar_is_the_applications_and_sends_the_games_commands,
+    ),
+];
 
 #[cfg(not(target_os = "macos"))]
 const TESTS: &[(&str, fn())] = &[];
