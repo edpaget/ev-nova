@@ -430,8 +430,13 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    # On top of the workflow-level group, as deploy-pages recommends: never
-    # cancel a deploy half way. The next push redeploys everything anyway.
+    # A newer push to main can still cancel this deploy half way: the
+    # workflow-level group cancels the whole older run, this job included.
+    # That's accepted, because deploy-pages cancels its deployment cleanly, so
+    # the previous site stays up, and the newer run redeploys everything. A
+    # producer must not assume a started deploy always finishes. This
+    # job-level group, which deploy-pages recommends, only keeps two deploys
+    # from running at once; it never protects one from that cancel.
     concurrency:
       group: pages
       cancel-in-progress: false
