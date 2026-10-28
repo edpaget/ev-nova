@@ -837,6 +837,34 @@ fn the_flights_map_answers_are_its_sessions() {
     assert_eq!(flight.floating_map_places(), places);
 }
 
+/// Every screen ask of a real flight is answered as its session answers
+/// it, handed the catalog the view shared and the flight's collaborators.
+#[test]
+fn a_real_flights_screen_answers_are_its_sessions() {
+    let catalog = shared(trafficked(&[130, 131], 3, 129, 1));
+    let mut flight = SessionFlight::start(&catalog);
+    flight.apply(FlightCommand::CycleMapSelection);
+    let mut answered = 0;
+    for ask in crate::flight::sim_port::fixture::sample_screen_asks() {
+        let mut session = flight.session().expect("flying").clone();
+        let expected = session.screen(
+            ask.clone(),
+            &mut ApplyCollaborators {
+                catalog: Some(&*catalog),
+                chance: &mut NeverFires,
+                law: &NovaLaw::default(),
+                boarding_rule: &NovaBoarding::default(),
+                hail_options: &HailOptions::default(),
+            },
+        );
+        if expected != nova_sim::flight_frame::ScreenAnswer::Nothing {
+            answered += 1;
+        }
+        assert_eq!(flight.screen(ask.clone()), expected, "{ask:?}");
+    }
+    assert!(answered > 0, "the session answers them");
+}
+
 #[test]
 fn a_real_flights_coming_traffic_is_the_types_its_session_brings() {
     let catalog = shared(trafficked(&[130, 131], 3, 129, 1));

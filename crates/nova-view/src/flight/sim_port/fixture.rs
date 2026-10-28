@@ -14,8 +14,8 @@ use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks,
-    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, Gates, MapKey, Names, StepInput,
-    StepReport, StepRun,
+    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, Gates, MapKey, MarksFrom, Names,
+    ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
@@ -99,6 +99,8 @@ pub struct FakeFlight {
     map: FakeMap,
     asked: RefCell<Vec<MapAsk>>,
     asks: Vec<FlightCommand>,
+    screens: VecDeque<ScreenAnswer>,
+    screens_asked: Vec<ScreenAsk>,
     hover: Option<Hover>,
     coming: Vec<ShipId>,
     weapons: Vec<WeaponId>,
@@ -286,6 +288,22 @@ impl FakeFlight {
     #[must_use]
     pub fn asks(&self) -> &[FlightCommand] {
         &self.asks
+    }
+
+    /// Answers the next screen ask not yet answered ([`FlightSim::screen`])
+    /// with `answer`; once the queue is empty, every ask is answered
+    /// [`ScreenAnswer::Nothing`]. A screen ask whose answer queued doesn't
+    /// answer it ([`ScreenAnswer::answers`]) panics, naming both: with one
+    /// queue for every screen, that is a test that queued out of order.
+    pub fn queue_screen(&mut self, answer: ScreenAnswer) {
+        self.screens.push_back(answer);
+    }
+
+    /// The screen asks made ([`FlightSim::screen`]), in order, failed or
+    /// not.
+    #[must_use]
+    pub fn screens_asked(&self) -> &[ScreenAsk] {
+        &self.screens_asked
     }
 
     /// Answers the coming traffic ([`FlightCommand::ComingTraffic`]) with
@@ -552,6 +570,28 @@ impl FlightSim for FakeFlight {
     fn drain(&mut self, into: &mut Vec<FlightEvent>) {
         into.append(&mut self.events);
     }
+
+    /// The next answer queued ([`FakeFlight::queue_screen`]), or
+    /// [`ScreenAnswer::Nothing`] once none is; a failed fake answers
+    /// nothing and leaves its queue as it is. Each ask is recorded
+    /// ([`FakeFlight::screens_asked`]).
+    ///
+    /// # Panics
+    ///
+    /// When the answer queued doesn't answer `ask`
+    /// ([`ScreenAnswer::answers`]).
+    fn screen(&mut self, ask: ScreenAsk) -> ScreenAnswer {
+        self.screens_asked.push(ask.clone());
+        if self.failure.is_some() {
+            return ScreenAnswer::Nothing;
+        }
+        let answer = self.screens.pop_front().unwrap_or(ScreenAnswer::Nothing);
+        assert!(
+            answer.answers(&ask),
+            "FakeFlight: the screen answer queued, {answer:?}, doesn't answer {ask:?}"
+        );
+        answer
+    }
 }
 
 impl DevDesk for FakeFlight {
@@ -726,6 +766,53 @@ impl PilotSource for FakeFlight {
     fn pilot_panel(&self) -> Option<PilotPanel> {
         self.pilot.pilot_panel.clone()
     }
+}
+
+/// One screen ask of each kind ([`ScreenAsk`]), for a check of every one:
+/// [`check_contract`]'s screen clauses and the adapter's. This module's
+/// tests number every kind in a match that names each, so a new kind
+/// doesn't compile until it is numbered, and check the sample holds every
+/// number.
+#[must_use]
+pub fn sample_screen_asks() -> Vec<ScreenAsk> {
+    let course = [SystemId(131), SystemId(132)];
+    vec![
+        ScreenAsk::Galaxy,
+        ScreenAsk::MapOpening {
+            marks: MarksFrom::Given(MapMarks::NONE),
+        },
+        ScreenAsk::MapOpening {
+            marks: MarksFrom::Offer(MissionId(128)),
+        },
+        ScreenAsk::MapOpening {
+            marks: MarksFrom::Computer(None),
+        },
+        ScreenAsk::MapOpening {
+            marks: MarksFrom::MissionInfo(Some(0)),
+        },
+        ScreenAsk::Map {
+            hypergate: None,
+            missions: course.to_vec(),
+            marks: MapMarks::NONE,
+            selected: Some(SystemId(131)),
+        },
+        ScreenAsk::Map {
+            hypergate: Some(course.to_vec()),
+            missions: Vec::new(),
+            marks: MapMarks::NONE,
+            selected: None,
+        },
+        ScreenAsk::MapPanel {
+            selected: Some(SystemId(131)),
+            hypergate: None,
+        },
+        ScreenAsk::MapPreselection,
+        ScreenAsk::HypergateCycle,
+        ScreenAsk::Find("Sol".to_owned()),
+        ScreenAsk::FloatingMap,
+        ScreenAsk::ComingTraffic,
+        ScreenAsk::PlainText(CONTRACT_TEXT.to_owned()),
+    ]
 }
 
 /// A command every sim refuses: a stellar key for a slot no system has.
@@ -1060,6 +1147,12 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///   hover at the player's ship with no boxes, the coming traffic, a
 ///   description's load and a plain text's fill) leaves the frame filled
 ///   after it equal to the frame before, so the view fills none after one;
+/// - **a screen's answer is its ask's kind**: each of
+///   [`sample_screen_asks`] is answered [`ScreenAnswer::Nothing`] or with
+///   the answer of its own kind ([`ScreenAnswer::answers`]);
+/// - **a screen ask changes no frame**: each of them leaves the frame
+///   filled after it equal to the frame before, so the view fills none
+///   after one;
 /// - **a refusal changes nothing**: [`refused_command`] answers a
 ///   refusal, and the frame after it equals the frame before;
 /// - **no step asked, none run**: a frame's steps asked for none fill the
@@ -1127,7 +1220,8 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///   command but a description's load ([`FlightCommand::LoadDescription`]),
 ///   which it answers with [`Answer::Description`], and a plain text's
 ///   fill ([`FlightCommand::PlainText`]), which it answers with the text
-///   unchanged, and drains nothing. Checked first.
+///   unchanged, answers every one of [`sample_screen_asks`]
+///   [`ScreenAnswer::Nothing`], and drains nothing. Checked first.
 ///
 /// The error says which clause failed.
 pub fn check_contract(sim: &mut impl FlightSim, opening: &FlightOpening) -> Result<(), String> {
@@ -1162,6 +1256,7 @@ pub fn check_contract(sim: &mut impl FlightSim, opening: &FlightOpening) -> Resu
         ));
     }
     check_asks(sim, &once)?;
+    check_screens(sim, &once)?;
 
     let answer = sim.apply(refused_command());
     if !answer.is_refused() {
@@ -1203,7 +1298,7 @@ pub fn check_contract(sim: &mut impl FlightSim, opening: &FlightOpening) -> Resu
 /// refuses every command (a setting, which a flight that started always
 /// takes, among them) but a description's load, which it answers with a
 /// text, and a plain text's fill, which it answers with the text
-/// unchanged, and drains nothing.
+/// unchanged, answers every screen ask nothing, and drains nothing.
 fn check_failed(
     sim: &mut impl FlightSim,
     opening: &FlightOpening,
@@ -1243,6 +1338,15 @@ fn check_failed(
         return Err(format!(
             "{clause}: failed ({reason}), a plain text's fill was answered {answer:?}"
         ));
+    }
+    for ask in sample_screen_asks() {
+        let sent = format!("{ask:?}");
+        let answer = sim.screen(ask);
+        if answer != ScreenAnswer::Nothing {
+            return Err(format!(
+                "{clause}: failed ({reason}), the screen ask {sent} was answered {answer:?}"
+            ));
+        }
     }
     if !opening.weapons.is_empty() {
         return Err(format!(
@@ -1286,6 +1390,29 @@ fn check_asks(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String
         if after != *once {
             return Err(format!(
                 "an ask changes no frame: {sent} took the frame from {once:?} to {after:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// [`check_contract`]'s screen clauses, `once` the frame filled before:
+/// each of [`sample_screen_asks`] is answered nothing or with its own
+/// kind, and leaves the frame as it was.
+fn check_screens(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String> {
+    for ask in sample_screen_asks() {
+        let sent = format!("{ask:?}");
+        let answer = sim.screen(ask.clone());
+        if !answer.answers(&ask) {
+            return Err(format!(
+                "a screen's answer is its ask's kind: {sent} was answered {answer:?}"
+            ));
+        }
+        let mut after = unlike(once);
+        sim.frame(&mut after);
+        if after != *once {
+            return Err(format!(
+                "a screen ask changes no frame: {sent} took the frame from {once:?} to {after:?}"
             ));
         }
     }
@@ -1649,6 +1776,10 @@ mod tests {
         }
 
         fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
+
+        fn screen(&mut self, _ask: ScreenAsk) -> ScreenAnswer {
+            ScreenAnswer::Nothing
+        }
     }
 
     impl MapSource for TakesSettings {}
@@ -1749,6 +1880,150 @@ mod tests {
         }
 
         fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
+
+        fn screen(&mut self, _ask: ScreenAsk) -> ScreenAnswer {
+            ScreenAnswer::Nothing
+        }
+    }
+
+    /// A flight that failed and answers its commands as a failed flight
+    /// does, but answers the preselection's screen ask.
+    struct AnswersAScreen;
+
+    impl FlightSim for AnswersAScreen {
+        fn frame(&self, into: &mut FlightFrame) {
+            *into = FlightFrame::default();
+        }
+
+        fn step(&mut self, _input: &StepInput, _steps: u32, into: &mut StepReport) {
+            into.clear();
+        }
+
+        fn apply(&mut self, command: FlightCommand) -> Answer {
+            match command {
+                FlightCommand::LoadDescription { .. } => Answer::Description(String::new()),
+                FlightCommand::PlainText(text) => Answer::PlainText(text),
+                _ => Answer::Refused,
+            }
+        }
+
+        fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
+
+        fn screen(&mut self, ask: ScreenAsk) -> ScreenAnswer {
+            match ask {
+                ScreenAsk::MapPreselection => ScreenAnswer::MapPreselection(None),
+                _ => ScreenAnswer::Nothing,
+            }
+        }
+    }
+
+    impl MapSource for AnswersAScreen {}
+
+    impl CommSource for AnswersAScreen {}
+
+    impl PortSource for AnswersAScreen {}
+
+    impl PilotSource for AnswersAScreen {}
+
+    #[test]
+    fn a_failed_flight_that_answers_a_screen_ask_breaks_the_contract() {
+        let clause = check_contract(&mut AnswersAScreen, &FlightOpening::failed("no chär"))
+            .expect_err("broken");
+        assert!(
+            clause.starts_with("a failed flight shows nothing"),
+            "{clause}"
+        );
+        assert!(
+            clause.contains("the screen ask MapPreselection was answered MapPreselection(None)"),
+            "{clause}"
+        );
+    }
+
+    #[test]
+    fn the_fake_answers_the_screens_from_its_queue_then_nothing_recording_each_ask() {
+        let mut fake = FakeFlight::new();
+        fake.queue_screen(ScreenAnswer::MapPreselection(Some(SystemId(131))));
+        fake.queue_screen(ScreenAnswer::Nothing);
+        fake.queue_screen(ScreenAnswer::PlainText("Hi Ada.".to_owned()));
+        let asks = [
+            ScreenAsk::MapPreselection,
+            ScreenAsk::Galaxy,
+            ScreenAsk::PlainText("Hi <PN>.".to_owned()),
+            ScreenAsk::HypergateCycle,
+        ];
+        let answers: Vec<_> = asks.iter().map(|ask| fake.screen(ask.clone())).collect();
+        assert_eq!(
+            answers,
+            [
+                ScreenAnswer::MapPreselection(Some(SystemId(131))),
+                ScreenAnswer::Nothing,
+                ScreenAnswer::PlainText("Hi Ada.".to_owned()),
+                ScreenAnswer::Nothing,
+            ],
+            "queued, then nothing once empty"
+        );
+        assert_eq!(fake.screens_asked(), asks);
+        assert_eq!(fake.applied(), [], "apart from the commands");
+        assert_eq!(fake.asks(), [], "and from the asks");
+    }
+
+    #[test]
+    fn a_failed_fake_answers_every_screen_nothing_keeping_its_queue() {
+        let mut fake = FakeFlight::new();
+        fake.queue_screen(ScreenAnswer::MapPreselection(None));
+        fake.fail("no chär");
+        assert_eq!(
+            fake.screen(ScreenAsk::MapPreselection),
+            ScreenAnswer::Nothing
+        );
+        assert_eq!(
+            fake.screens_asked(),
+            [ScreenAsk::MapPreselection],
+            "recorded"
+        );
+        fake.failure = None;
+        assert_eq!(
+            fake.screen(ScreenAsk::MapPreselection),
+            ScreenAnswer::MapPreselection(None),
+            "the queue kept"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "doesn't answer Galaxy")]
+    fn a_screen_answer_queued_out_of_order_panics_naming_both() {
+        let mut fake = FakeFlight::new();
+        fake.queue_screen(ScreenAnswer::MapPreselection(None));
+        let _ = fake.screen(ScreenAsk::Galaxy);
+    }
+
+    /// How many kinds of [`ScreenAsk`] there are: `screen_ask_kind`'s
+    /// numbers are those below it.
+    const SCREEN_ASK_KINDS: usize = 10;
+
+    /// `ask`'s kind, a number below [`SCREEN_ASK_KINDS`]: the match names
+    /// every kind, so a new one must be numbered, and then sampled
+    /// ([`sample_screen_asks`]).
+    fn screen_ask_kind(ask: &ScreenAsk) -> usize {
+        match ask {
+            ScreenAsk::Galaxy => 0,
+            ScreenAsk::MapOpening { .. } => 1,
+            ScreenAsk::Map { .. } => 2,
+            ScreenAsk::MapPanel { .. } => 3,
+            ScreenAsk::MapPreselection => 4,
+            ScreenAsk::HypergateCycle => 5,
+            ScreenAsk::Find(_) => 6,
+            ScreenAsk::FloatingMap => 7,
+            ScreenAsk::ComingTraffic => 8,
+            ScreenAsk::PlainText(_) => 9,
+        }
+    }
+
+    #[test]
+    fn the_sample_screen_asks_hold_every_kind() {
+        let kinds: std::collections::BTreeSet<usize> =
+            sample_screen_asks().iter().map(screen_ask_kind).collect();
+        assert_eq!(kinds, (0..SCREEN_ASK_KINDS).collect());
     }
 
     impl MapSource for RefusesPlainText {}
@@ -2183,6 +2458,10 @@ mod tests {
         RefusalJumps,
         /// A jump answered as begun leaves none under way.
         JumpsNowhere,
+        /// A screen ask is answered with a plain text, whatever it asks.
+        ScreenAnswersAnotherKind,
+        /// A screen ask changes the frame.
+        ScreenChangesTheFrame,
     }
 
     /// A [`FakeFlight`] with one [`Fault`].
@@ -2330,6 +2609,17 @@ mod tests {
             }
             self.fake.drain(into);
         }
+
+        fn screen(&mut self, ask: ScreenAsk) -> ScreenAnswer {
+            match self.fault {
+                Fault::ScreenAnswersAnotherKind => ScreenAnswer::PlainText(String::new()),
+                Fault::ScreenChangesTheFrame => {
+                    self.fake.set_frame(stellar(129));
+                    self.fake.screen(ask)
+                }
+                _ => self.fake.screen(ask),
+            }
+        }
     }
 
     impl MapSource for Broken {}
@@ -2408,6 +2698,28 @@ mod tests {
         let clause = clause(Fault::PlainTextChangesTheFrame);
         assert!(clause.starts_with("an ask changes no frame"), "{clause}");
         assert!(clause.contains("PlainText"), "{clause}");
+    }
+
+    #[test]
+    fn a_screen_answered_with_another_kind_breaks_the_contract() {
+        let clause = clause(Fault::ScreenAnswersAnotherKind);
+        assert!(
+            clause.starts_with("a screen's answer is its ask's kind"),
+            "{clause}"
+        );
+        assert!(
+            clause.contains("Galaxy was answered PlainText"),
+            "the first ask: {clause}"
+        );
+    }
+
+    #[test]
+    fn a_screen_ask_that_changes_the_frame_breaks_the_contract() {
+        let clause = clause(Fault::ScreenChangesTheFrame);
+        assert!(
+            clause.starts_with("a screen ask changes no frame"),
+            "{clause}"
+        );
     }
 
     #[test]

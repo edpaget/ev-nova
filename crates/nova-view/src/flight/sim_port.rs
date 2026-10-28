@@ -74,7 +74,8 @@
 //! for its answer, and one arm in its ask's match.
 
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, StepInput, StepReport,
+    Answer, FlightCommand, FlightEvent, FlightFrame, FloatingLinks, ScreenAnswer, ScreenAsk,
+    StepInput, StepReport,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
@@ -113,6 +114,14 @@ pub trait FlightSim: MapSource + CommSource + PortSource + PilotSource {
     /// Moves what the flight raised since the last drain onto the end of
     /// `into`, leaving none to drain again.
     fn drain(&mut self, into: &mut Vec<FlightEvent>);
+
+    /// Answers a screen's `ask`, made as the screen opens or as its input
+    /// changes, never per frame, with the snapshot it draws from: the
+    /// [`ScreenAnswer`] of the ask's kind
+    /// ([`ScreenAnswer::answers`]), or [`ScreenAnswer::Nothing`] with
+    /// nothing to answer. It changes nothing a frame shows, so no fill
+    /// follows one.
+    fn screen(&mut self, ask: ScreenAsk) -> ScreenAnswer;
 }
 
 /// The course map's questions of the flight, and the floating map's. Each
@@ -403,6 +412,10 @@ mod tests {
         }
 
         fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
+
+        fn screen(&mut self, _ask: ScreenAsk) -> ScreenAnswer {
+            ScreenAnswer::Nothing
+        }
     }
 
     impl MapSource for Defaults {}

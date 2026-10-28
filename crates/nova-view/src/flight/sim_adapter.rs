@@ -53,8 +53,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use nova_sim::flight_frame::{
-    Answer, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks, StepInput,
-    StepReport,
+    Answer, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks, ScreenAnswer,
+    ScreenAsk, StepInput, StepReport,
 };
 use nova_sim::galaxy_map::MapDrawing;
 use nova_sim::map_borders::BorderSources;
@@ -510,6 +510,25 @@ impl<C> FlightSim for SessionFlight<C> {
             session.drain_events(into);
         }
     }
+
+    /// Forwards to `Session::screen`, handing it what
+    /// [`FlightSim::apply`] hands `Session::apply`: the catalog the view
+    /// shared, if it has, the flight's chance, its law, its boarding rule
+    /// and its hail options. A failed session answers every ask
+    /// [`ScreenAnswer::Nothing`].
+    fn screen(&mut self, ask: ScreenAsk) -> ScreenAnswer {
+        let Ok(session) = &mut self.session else {
+            return ScreenAnswer::Nothing;
+        };
+        let mut collab = ApplyCollaborators {
+            catalog: self.catalog.as_ref().map(|shared| &*shared.0),
+            chance: &mut self.chance,
+            law: &*self.law,
+            boarding_rule: &*self.boarding_rule,
+            hail_options: &self.hail_options,
+        };
+        session.screen(ask, &mut collab)
+    }
 }
 
 /// Each forwards to the session's method of its name; a failed session
@@ -806,6 +825,15 @@ mod tests {
             FlightOpening::failed("no chär"),
             "no weapons"
         );
+    }
+
+    #[test]
+    fn a_failed_flight_answers_every_screen_nothing() {
+        let mut flight = failed();
+        for ask in crate::flight::sim_port::fixture::sample_screen_asks() {
+            let sent = format!("{ask:?}");
+            assert_eq!(flight.screen(ask), ScreenAnswer::Nothing, "{sent}");
+        }
     }
 
     #[test]
