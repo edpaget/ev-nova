@@ -107,6 +107,39 @@
 //! ask, and what the edge alone reads (the pilot to save, the saving
 //! queries, the setup) is the adapter's own API.
 //!
+//! # Adding to the port
+//!
+//! The port grows with data, not methods: each addition is a field or a
+//! variant of nova-sim's, answered and pinned on nova-sim's side, and
+//! each adapter forward stays one `Session` call. nova-sim's `session`
+//! module is private, so its paths here are inline code.
+//!
+//! - **A readout** is a [`FlightFrame`] field, filled in nova-sim's
+//!   `session/frame.rs` (or a module under `session/frame/`) and pinned by
+//!   a test there, one test per field, each filling over a stale frame.
+//! - **An action** is a [`FlightCommand`] variant, answered with its
+//!   [`Answer`] in `session/apply.rs` or a module under `session/apply/`.
+//! - **A one-shot output** is a [`FlightEvent`] variant, drained in
+//!   `session/flight_events.rs`.
+//! - **A screen's question** is a [`ScreenAsk`] and [`ScreenAnswer`]
+//!   pair, answered in `session/screen.rs` or a module under
+//!   `session/screen/`, pinned there, and sampled in
+//!   `fixture::sample_screen_asks`.
+//! - **The step's order** lives in `session/step.rs`.
+//!
+//! New sim-side code for the port goes in those modules, not in
+//! `session.rs`. What the edge alone needs goes on the adapter, not the
+//! port.
+//!
+//! # Testing the view
+//!
+//! View code goes in `impl<C, S: FlightSim> FlightView<C, S>` blocks,
+//! names no `Session` and adds no block over `SessionFlight<C>`. The
+//! only concrete members are two fixture-only ones
+//! (`cfg(any(test, feature = "fixture"))`): `FlightView::session`, which
+//! reads a real session behind the port, and `FlightView::from_session`,
+//! which wires a view over a session a test built.
+//!
 //! The `fixture` feature (and this crate's tests) exposes `fixture`:
 //! `FakeFlight`, a scripted sim for the view's component tests, and
 //! `check_contract`, what every sim must honour. `FakeFlight` answers
@@ -116,6 +149,21 @@
 //! and setter for its answer, and one arm in its ask's match; a new
 //! screen's ask is a variant pair in nova-sim, sampled in
 //! `fixture::sample_screen_asks`.
+//!
+//! The view's component tests run on `FakeFlight`: they set a frame (the
+//! builders in `flight/view/tests/frames.rs`), script its answers and
+//! events, and assert what the view draws, plays and sends. A real
+//! `Session` starts in nova-view only in:
+//!
+//! - `tests/it/flight_seam.rs`, one test per port surface or router
+//!   handoff, as its module doc says;
+//! - the adapter's checks, `sim_adapter`'s tests and
+//!   `sim_adapter/fake_catalog_checks.rs`;
+//! - the edge's checks, `flight/view/build/edge_checks.rs`;
+//! - the `stock_*` tests.
+//!
+//! The developer tools reach the flight through
+//! [`DevDesk`](crate::devtools::DevDesk), not this port.
 
 use nova_sim::flight_frame::{
     Answer, FlightCommand, FlightEvent, FlightFrame, ScreenAnswer, ScreenAsk, StepInput, StepReport,
