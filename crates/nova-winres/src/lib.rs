@@ -4,7 +4,8 @@
 //!
 //! It also works out the update feed a Windows build compiles in, from
 //! `NOVA_CHANNEL` and the committed public key
-//! ([`windows_update_feed`]).
+//! ([`windows_update_feed`]), and the version WinSparkle compares the
+//! feed's with ([`windows_build_version`]).
 //!
 //! The Windows resources are the icon (an `.ico` made from the macOS
 //! `.icns`, [`ico_from_icns`]), the version numbers ([`version_quad`]),
@@ -23,6 +24,7 @@
 //! information is `VS_VERSION_INFO`.
 
 mod app_id;
+mod build_version;
 mod ico;
 mod link;
 mod script;
@@ -30,6 +32,7 @@ mod update_feed;
 mod version;
 
 pub use app_id::{AppIdError, bundle_identifier};
+pub use build_version::windows_build_version;
 pub use ico::{ICON_SIZES, IconError, ico_from_icns};
 pub use link::{MAIN_STACK_BYTES, link_args};
 pub use script::{Resources, escape, resource_script};

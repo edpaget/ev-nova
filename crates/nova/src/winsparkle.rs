@@ -14,9 +14,12 @@
 //! A Windows build compiles in its channel's feed and the key its updates
 //! are checked with ([`FEED`], [`PUBLIC_KEY`]): nova's build script works
 //! them out from `NOVA_CHANNEL` and the committed `update_public_key`
-//! (`nova_winres::windows_update_feed`). A build updates only with a feed,
-//! a key and a build ID ([`WinSparkleConfig::new`]); a development build
-//! has none of them and looks for nothing. A build that has them but no
+//! (`nova_winres::windows_update_feed`). It compiles in its build version
+//! beside them ([`BUILD_VERSION`]): the build ID as `YYYYMMDD.HHMMSS`, the
+//! form WinSparkle can compare (`nova_winres::windows_build_version`). A
+//! build updates only with a feed, a key and a build version
+//! ([`WinSparkleConfig::new`]); a development build has none of them and
+//! looks for nothing. A build that has them but no
 //! `WinSparkle.dll` beside it (the portable zip, a `cargo run`) runs the
 //! no-op updater quietly. A DLL that is there but won't load, lacks a call
 //! or refuses the key is a broken install, and the game says so
@@ -54,6 +57,18 @@ pub const PUBLIC_KEY: Option<&str> = option_env!("NOVA_UPDATE_PUBLIC_KEY");
 #[cfg(not(windows))]
 pub const PUBLIC_KEY: Option<&str> = None;
 
+/// The version WinSparkle compares with the feed's `sparkle:version`: the
+/// build ID as `YYYYMMDD.HHMMSS`, compiled in by nova's build script when
+/// it has a build ID (`nova_winres::windows_build_version`). WinSparkle
+/// reads each part with `atoi`, which saturates the 14-digit ID, so the
+/// ID itself would never compare older than a newer build's. The startup
+/// log names the ID (`crate::build_id::BUILD_ID`).
+#[cfg(windows)]
+pub const BUILD_VERSION: Option<&str> = option_env!("NOVA_UPDATE_BUILD_VERSION");
+/// The version WinSparkle compares; never compiled in off Windows.
+#[cfg(not(windows))]
+pub const BUILD_VERSION: Option<&str> = None;
+
 /// The company WinSparkle names: the installer's Manufacturer. With
 /// [`APP`] it names WinSparkle's registry key,
 /// `HKCU\Software\<company>\<app>\WinSparkle`.
@@ -80,8 +95,8 @@ pub trait WinSparkleApi {
     /// version it displays.
     fn set_app_details(&mut self, company: &str, app: &str, version: &str);
 
-    /// `win_sparkle_set_app_build_version`: the build ID, compared with
-    /// the feed's `sparkle:version`.
+    /// `win_sparkle_set_app_build_version`: the build version
+    /// ([`BUILD_VERSION`]), compared with the feed's `sparkle:version`.
     fn set_app_build_version(&mut self, build: &str);
 
     /// `win_sparkle_set_automatic_check_for_updates`: whether it checks in
@@ -103,33 +118,34 @@ pub trait WinSparkleApi {
     fn check_update_with_ui(&mut self);
 }
 
-/// What WinSparkle is configured with: the feed, its key, the build ID and
-/// the version.
+/// What WinSparkle is configured with: the feed, its key, the build
+/// version and the version it displays.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WinSparkleConfig {
     appcast_url: String,
     public_key: String,
-    build: String,
+    build_version: String,
     version: String,
 }
 
 impl WinSparkleConfig {
-    /// The configuration of a build with `feed`, `key` and `build` (its
-    /// build ID) at `version`: `None` unless the feed, the key and the
-    /// build ID are all there and non-empty, and nothing holds a NUL,
-    /// which the DLL's strings can't carry.
+    /// The configuration of a build with `feed`, `key` and
+    /// `build_version` ([`BUILD_VERSION`]) at `version`: `None` unless
+    /// the feed, the key and the build version are all there and
+    /// non-empty, and nothing holds a NUL, which the DLL's strings can't
+    /// carry.
     #[must_use]
     pub fn new(
         feed: Option<&str>,
         key: Option<&str>,
-        build: Option<&str>,
+        build_version: Option<&str>,
         version: &str,
     ) -> Option<Self> {
         fn given(value: Option<&str>) -> Option<&str> {
             value.filter(|value| !value.is_empty())
         }
-        let (feed, key, build) = (given(feed)?, given(key)?, given(build)?);
-        if [feed, key, build, version]
+        let (feed, key, build_version) = (given(feed)?, given(key)?, given(build_version)?);
+        if [feed, key, build_version, version]
             .iter()
             .any(|value| value.contains('\0'))
         {
@@ -138,7 +154,7 @@ impl WinSparkleConfig {
         Some(Self {
             appcast_url: feed.to_owned(),
             public_key: key.to_owned(),
-            build: build.to_owned(),
+            build_version: build_version.to_owned(),
             version: version.to_owned(),
         })
     }
@@ -146,7 +162,7 @@ impl WinSparkleConfig {
 
 /// Configures `api` with `config` and `on_shutdown`, in the order
 /// WinSparkle needs, all before `init`: the feed, the key, the app's
-/// details, the build ID, background checks on (as macOS's
+/// details, the build version, background checks on (as macOS's
 /// `SUEnableAutomaticChecks`), and the shutdown request. It doesn't start
 /// it: [`Updater::start`] does.
 ///
@@ -163,7 +179,7 @@ pub fn configure(
         return Err("WinSparkle refused the build's update public key".to_owned());
     }
     api.set_app_details(COMPANY, APP, &config.version);
-    api.set_app_build_version(&config.build);
+    api.set_app_build_version(&config.build_version);
     api.set_automatic_check_for_updates(true);
     api.set_shutdown_request_callback(on_shutdown);
     Ok(WinSparkleUpdater {
@@ -389,7 +405,8 @@ mod tests {
     const FEED_URL: &str =
         "https://github.com/edpaget/ev-nova/releases/download/nightly/appcast-windows-nightly.xml";
     const KEY: &str = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
-    const BUILD: &str = "20261028123456";
+    /// The build version of the build ID `20261028123456`.
+    const BUILD: &str = "20261028.123456";
 
     fn config() -> WinSparkleConfig {
         WinSparkleConfig::new(Some(FEED_URL), Some(KEY), Some(BUILD), "0.1.0").expect("a config")
@@ -424,6 +441,21 @@ mod tests {
         (updater, calls)
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn the_build_version_is_the_build_id_s_windows_version() {
+        assert_eq!(
+            BUILD_VERSION.map(str::to_owned),
+            crate::build_id::BUILD_ID.and_then(nova_winres::windows_build_version)
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn off_windows_there_is_no_build_version() {
+        assert_eq!(BUILD_VERSION, None);
+    }
+
     #[test]
     fn a_config_needs_a_feed_a_key_and_a_build_id() {
         assert!(WinSparkleConfig::new(Some(FEED_URL), Some(KEY), Some(BUILD), "0.1.0").is_some());
@@ -432,7 +464,7 @@ mod tests {
             (Some(""), Some(KEY), Some(BUILD)),
             (Some(FEED_URL), None, Some(BUILD)),
             (Some(FEED_URL), Some(""), Some(BUILD)),
-            // A development build: no build ID.
+            // A development build: no build ID, so no build version.
             (Some(FEED_URL), Some(KEY), None),
             (Some(FEED_URL), Some(KEY), Some("")),
             // A build without a channel, or without a committed key.

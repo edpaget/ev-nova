@@ -393,7 +393,7 @@ fn current_feeds(
         })?;
         let feed = std::str::from_utf8(&bytes)
             .map_err(|e| FeedError::Xml(e.to_string()))
-            .and_then(read_feed)
+            .and_then(|text| read_feed(platform, text))
             .map_err(|source| AppcastError::BadFeed {
                 feed: name.clone(),
                 source,

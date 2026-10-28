@@ -6,7 +6,11 @@
 //! Each feed's item names its update file by the build ID
 //! ([`update_asset`], `ev-nova-<id>-<target>.<ext>`), a copy of the
 //! stable-named installer ([`Platform::stable_asset`]), so a feed never
-//! points at a file a later upload replaces mid-download. [`render`]
+//! points at a file a later upload replaces mid-download. Its
+//! `sparkle:version` is the build in the form the platform's app reports
+//! its own in ([`Platform::sparkle_version`]): the 14 digits for Sparkle,
+//! `YYYYMMDD.HHMMSS` for `WinSparkle`, whose `atoi` can't read them.
+//! [`render`]
 //! writes a feed and [`read_feed`] reads a published one back.
 //! [`publish`] is `nova-appcast publish`'s whole decision: whether to sign
 //! ([`publish::FeedSigning`]), refusing a build that isn't newer than the
@@ -89,6 +93,32 @@ impl Platform {
         match self {
             Self::Macos => "macos",
             Self::Windows => "windows",
+        }
+    }
+
+    /// The `sparkle:version` its feed offers `build` as: the form its app
+    /// reports its own build in, as its updater compares them. Sparkle
+    /// reads `Nova.app`'s `CFBundleVersion`, the 14 digits, a part at a
+    /// time as a `long long`; WinSparkle reads `nova.exe`'s build version,
+    /// [`BuildId::windows_version`], a part at a time with `atoi`.
+    #[must_use]
+    pub fn sparkle_version(self, build: &BuildId) -> String {
+        match self {
+            Self::Macos => build.as_str().to_owned(),
+            Self::Windows => build.windows_version(),
+        }
+    }
+
+    /// Reads [`Platform::sparkle_version`]'s form back.
+    ///
+    /// # Errors
+    ///
+    /// [`BuildIdError::Malformed`] for text that isn't this platform's
+    /// form of a build ID.
+    pub fn parse_sparkle_version(self, text: &str) -> Result<BuildId, BuildIdError> {
+        match self {
+            Self::Macos => BuildId::parse(text),
+            Self::Windows => BuildId::parse_windows_version(text),
         }
     }
 
@@ -176,7 +206,8 @@ pub struct Feed {
     pub channel: Channel,
     /// The game's name, as `EV Nova`.
     pub name: String,
-    /// The build it offers: `sparkle:version`.
+    /// The build it offers: `sparkle:version`, in the platform's form
+    /// ([`Platform::sparkle_version`]).
     pub build: BuildId,
     /// The build's semver: `sparkle:shortVersionString`.
     pub version: String,
@@ -237,7 +268,7 @@ pub fn render(feed: &Feed) -> String {
     let title = escape(&format!("{} {}", feed.name, feed.channel.name()));
     let link = escape(&format!("{REPO}/releases/tag/{tag}"));
     let item_title = escape(&format!("{} {} ({})", feed.name, feed.version, feed.build));
-    let build = escape(feed.build.as_str());
+    let build = escape(&feed.platform.sparkle_version(&feed.build));
     let version = escape(&feed.version);
     let url = escape(&site::release_asset(REPO, tag, &feed.asset));
     let arguments = feed
@@ -271,7 +302,7 @@ pub fn render(feed: &Feed) -> String {
 /// enclosure names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurrentFeed {
-    /// Its `sparkle:version`.
+    /// Its `sparkle:version`, read back to the build ID.
     pub build: BuildId,
     /// The last path segment of its enclosure's URL.
     pub file: String,
@@ -286,7 +317,7 @@ pub enum FeedError {
     /// Its item has no `sparkle:version`.
     #[error("its item has no sparkle:version")]
     NoVersion,
-    /// Its `sparkle:version` is not a build ID.
+    /// Its `sparkle:version` is not a build ID in its platform's form.
     #[error("its sparkle:version: {0}")]
     BadVersion(BuildIdError),
     /// Its item has no enclosure with a URL.
@@ -294,13 +325,13 @@ pub enum FeedError {
     NoEnclosure,
 }
 
-/// Reads a published feed's build and file.
+/// Reads a published feed of `platform`'s: its build and file.
 ///
 /// # Errors
 ///
-/// Text that isn't XML, or a feed whose item lacks a build ID or an
-/// enclosure URL.
-pub fn read_feed(text: &str) -> Result<CurrentFeed, FeedError> {
+/// Text that isn't XML, or a feed whose item lacks a build ID in the
+/// platform's form ([`Platform::sparkle_version`]) or an enclosure URL.
+pub fn read_feed(platform: Platform, text: &str) -> Result<CurrentFeed, FeedError> {
     let doc = roxmltree::Document::parse(text).map_err(|e| FeedError::Xml(e.to_string()))?;
     let item = doc
         .descendants()
@@ -311,7 +342,9 @@ pub fn read_feed(text: &str) -> Result<CurrentFeed, FeedError> {
         .find(|n| n.has_tag_name((SPARKLE_NS, "version")))
         .and_then(|n| n.text())
         .ok_or(FeedError::NoVersion)?;
-    let build = BuildId::parse(version.trim()).map_err(FeedError::BadVersion)?;
+    let build = platform
+        .parse_sparkle_version(version.trim())
+        .map_err(FeedError::BadVersion)?;
     let url = item
         .children()
         .find(|n| n.has_tag_name("enclosure"))
@@ -464,16 +497,18 @@ pub(crate) mod tests {
 
     #[test]
     fn a_fixed_builds_feeds_hold_its_id_semver_url_length_and_a_verifying_signature() {
-        for (platform, bytes, url) in [
+        for (platform, bytes, url, version) in [
             (
                 Platform::Macos,
                 &b"dmg bytes"[..],
                 "https://github.com/edpaget/ev-nova/releases/download/nightly/ev-nova-20261028123456-aarch64-apple-darwin.dmg",
+                "20261028123456",
             ),
             (
                 Platform::Windows,
                 &b"msi bytes, longer"[..],
                 "https://github.com/edpaget/ev-nova/releases/download/nightly/ev-nova-20261028123456-x86_64-pc-windows-msvc.msi",
+                "20261028.123456",
             ),
         ] {
             let text = render(&feed(platform, bytes));
@@ -482,7 +517,7 @@ pub(crate) mod tests {
             assert_eq!(rss.tag_name().name(), "rss");
             assert_eq!(rss.attribute("version"), Some("2.0"));
             let item = item(&doc);
-            assert_eq!(sparkle(item, "version"), "20261028123456");
+            assert_eq!(sparkle(item, "version"), version, "{platform:?}");
             assert_eq!(sparkle(item, "shortVersionString"), "0.1.0");
             let title = item
                 .children()
@@ -529,6 +564,41 @@ pub(crate) mod tests {
             None
         );
         assert_eq!(enclosure(&doc).attribute((SPARKLE_NS, "os")), Some("macos"));
+    }
+
+    #[test]
+    fn each_platform_s_sparkle_version_is_the_one_its_app_reports() {
+        // Nova.app's CFBundleVersion: Sparkle reads each part as a long long.
+        assert_eq!(Platform::Macos.sparkle_version(&build()), build().as_str());
+        // nova.exe's WinSparkle build version: atoi reads each part.
+        assert_eq!(
+            Platform::Windows.sparkle_version(&build()),
+            build().windows_version()
+        );
+        for platform in Platform::ALL {
+            assert_eq!(
+                platform.parse_sparkle_version(&platform.sparkle_version(&build())),
+                Ok(build()),
+                "{platform:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_feed_in_the_other_platform_s_form_is_a_bad_version() {
+        assert_eq!(
+            Platform::Windows.parse_sparkle_version("20261028123456"),
+            Err(BuildIdError::Malformed("20261028123456".into()))
+        );
+        assert_eq!(
+            Platform::Macos.parse_sparkle_version("20261028.123456"),
+            Err(BuildIdError::Malformed("20261028.123456".into()))
+        );
+        let macos = render(&feed(Platform::Macos, b"x"));
+        assert!(matches!(
+            read_feed(Platform::Windows, &macos),
+            Err(FeedError::BadVersion(_))
+        ));
     }
 
     #[test]
@@ -580,7 +650,7 @@ pub(crate) mod tests {
     fn a_rendered_feed_reads_back_as_its_build_and_file() {
         for platform in Platform::ALL {
             assert_eq!(
-                read_feed(&render(&feed(platform, b"x"))),
+                read_feed(platform, &render(&feed(platform, b"x"))),
                 Ok(CurrentFeed {
                     build: build(),
                     file: update_asset(platform, &build()),
@@ -598,32 +668,44 @@ pub(crate) mod tests {
             format!("{}{}", &good[..start], &good[end..])
         };
         assert_eq!(
-            read_feed(&without("<sparkle:version>", "</sparkle:version>")),
+            read_feed(
+                Platform::Macos,
+                &without("<sparkle:version>", "</sparkle:version>")
+            ),
             Err(FeedError::NoVersion)
         );
         assert_eq!(
-            read_feed(&without("<enclosure", "/>")),
+            read_feed(Platform::Macos, &without("<enclosure", "/>")),
             Err(FeedError::NoEnclosure)
         );
         assert_eq!(
-            read_feed(&without("<item>", "</item>")),
+            read_feed(Platform::Macos, &without("<item>", "</item>")),
             Err(FeedError::NoVersion)
         );
         assert_eq!(
-            read_feed(&good.replace("https://github.com", "https://github.com/x/")),
+            read_feed(
+                Platform::Macos,
+                &good.replace("https://github.com", "https://github.com/x/")
+            ),
             Ok(CurrentFeed {
                 build: build(),
                 file: update_asset(Platform::Macos, &build()),
             })
         );
         let trailing = good.replace(".dmg\"", ".dmg/\"");
-        assert_eq!(read_feed(&trailing), Err(FeedError::NoEnclosure));
         assert_eq!(
-            read_feed(&good.replace(">20261028123456<", ">2026<")),
+            read_feed(Platform::Macos, &trailing),
+            Err(FeedError::NoEnclosure)
+        );
+        assert_eq!(
+            read_feed(Platform::Macos, &good.replace(">20261028123456<", ">2026<")),
             Err(FeedError::BadVersion(BuildIdError::Malformed(
                 "2026".into()
             )))
         );
-        assert!(matches!(read_feed("not xml"), Err(FeedError::Xml(_))));
+        assert!(matches!(
+            read_feed(Platform::Macos, "not xml"),
+            Err(FeedError::Xml(_))
+        ));
     }
 }

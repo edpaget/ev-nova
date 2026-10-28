@@ -89,10 +89,9 @@ mod windows {
     use winit::event_loop::EventLoopProxy;
 
     use crate::app::LoopEvent;
-    use crate::build_id::BUILD_ID;
     use crate::winsparkle::{
-        FEED, PUBLIC_KEY, ShutdownRequest, WinSparkleApi, WinSparkleConfig, WinSparkleLoader,
-        WinSparkleSource,
+        BUILD_VERSION, FEED, PUBLIC_KEY, ShutdownRequest, WinSparkleApi, WinSparkleConfig,
+        WinSparkleLoader, WinSparkleSource,
     };
 
     impl WinSparkleApi for WinSparkleDll {
@@ -168,7 +167,8 @@ mod windows {
     /// its shutdown request sent through `proxy`.
     #[must_use]
     pub fn winsparkle_source(proxy: EventLoopProxy<LoopEvent>) -> WinSparkleSource<DllLoader> {
-        let config = WinSparkleConfig::new(FEED, PUBLIC_KEY, BUILD_ID, env!("CARGO_PKG_VERSION"));
+        let config =
+            WinSparkleConfig::new(FEED, PUBLIC_KEY, BUILD_VERSION, env!("CARGO_PKG_VERSION"));
         WinSparkleSource::new(
             config,
             DllLoader::beside_exe(),

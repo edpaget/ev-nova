@@ -19,7 +19,10 @@
 //! and `NOVA_UPDATE_PUBLIC_KEY` to the key. Without either it sets
 //! neither, and the build doesn't update. An unknown channel fails the
 //! build, as the bundler refuses it. The decision is
-//! `nova_winres::windows_update_feed`'s; the key is public.
+//! `nova_winres::windows_update_feed`'s; the key is public. With
+//! `NOVA_BUILD_ID` set it also sets `NOVA_UPDATE_BUILD_VERSION`
+//! (`nova::winsparkle::BUILD_VERSION`), the form of the ID WinSparkle
+//! compares, `nova_winres::windows_build_version`'s.
 //!
 //! On a Windows host the resources must compile, so a Windows build
 //! always carries them. Cross-checking from another host (`mise run
@@ -31,7 +34,7 @@ use std::{env, fs};
 
 use nova_winres::{
     CHANNEL_VAR, Resources, bundle_identifier, ico_from_icns, link_args, resource_script,
-    windows_update_feed,
+    windows_build_version, windows_update_feed,
 };
 
 /// The product's name, as `[package.metadata.bundle] name` gives it to
@@ -65,6 +68,10 @@ fn main() {
     if let Some(feed) = feed {
         println!("cargo:rustc-env=NOVA_UPDATE_FEED={}", feed.url);
         println!("cargo:rustc-env=NOVA_UPDATE_PUBLIC_KEY={}", feed.public_key);
+    }
+    let build_version = env::var("NOVA_BUILD_ID").ok();
+    if let Some(version) = build_version.as_deref().and_then(windows_build_version) {
+        println!("cargo:rustc-env=NOVA_UPDATE_BUILD_VERSION={version}");
     }
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     let ico = out.join("nova.ico");

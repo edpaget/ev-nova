@@ -95,6 +95,31 @@ impl BuildId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The version WinSparkle compares, `YYYYMMDD.HHMMSS`: the Windows
+    /// feed's `sparkle:version`, as `nova.exe` reports its own
+    /// (`nova_winres::windows_build_version`, which explains why the 14
+    /// digits won't do there). Asset names, the startup log and the
+    /// feeds' order keep the 14 digits.
+    #[must_use]
+    pub fn windows_version(&self) -> String {
+        nova_winres::windows_build_version(&self.0).expect("a build ID is 14 ASCII digits")
+    }
+
+    /// Reads [`BuildId::windows_version`]'s form back.
+    ///
+    /// # Errors
+    ///
+    /// [`BuildIdError::Malformed`] for anything but `YYYYMMDD.HHMMSS`
+    /// naming a valid UTC time.
+    pub fn parse_windows_version(text: &str) -> Result<Self, BuildIdError> {
+        let malformed = || BuildIdError::Malformed(text.to_owned());
+        let (date, time) = text.split_once('.').ok_or_else(malformed)?;
+        if date.len() != 8 || time.len() != 6 {
+            return Err(malformed());
+        }
+        Self::parse(&format!("{date}{time}")).map_err(|_| malformed())
+    }
 }
 
 /// The days in `month` (1 to 12) of the Gregorian `year`.
@@ -471,6 +496,49 @@ mod tests {
             id("20261028123456").cmp(&id("20261028123456")),
             std::cmp::Ordering::Equal
         );
+    }
+
+    #[test]
+    fn the_windows_version_splits_the_id_at_the_day() {
+        let id = BuildId::parse("20261028091500").expect("an ID");
+        assert_eq!(id.windows_version(), "20261028.091500");
+        assert_eq!(
+            Some(id.windows_version()),
+            nova_winres::windows_build_version(id.as_str()),
+            "the one nova.exe compiles in"
+        );
+    }
+
+    #[test]
+    fn the_windows_version_parses_back() {
+        for secs in [0, 981_173_106, 1_709_251_199, 253_402_300_799] {
+            let id = BuildId::from_unix(secs).expect("in range");
+            assert_eq!(
+                BuildId::parse_windows_version(&id.windows_version()),
+                Ok(id)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_each_malformed_windows_version() {
+        for bad in [
+            "",
+            "20261028091500",
+            "20261028.0915000",
+            "2026102.8091500",
+            "20261028.09150",
+            "20261328.091500",
+            "20261028.240000",
+            "20261028-091500",
+            "20261028..91500",
+        ] {
+            assert_eq!(
+                BuildId::parse_windows_version(bad),
+                Err(BuildIdError::Malformed(bad.to_owned())),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]
