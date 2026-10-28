@@ -378,6 +378,7 @@ mod tests {
     use nova_data::Record;
     use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
     use nova_data::graphics::{PICT, RLED};
+    use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::store::fixture::one_file;
@@ -411,13 +412,13 @@ mod tests {
     /// A `shän` like [`anim`]'s, with glow image `glow` and lights image
     /// `lights`.
     fn layered(base: i16, sets: i16, frames_per: i16, glow: i16, lights: i16) -> Vec<u8> {
-        let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-        put_i16(&mut bytes, 0x00, base);
-        put_i16(&mut bytes, 0x04, sets);
-        put_i16(&mut bytes, 0x16, glow);
-        put_i16(&mut bytes, 0x1E, lights);
-        put_i16(&mut bytes, 0x34, frames_per);
-        bytes
+        ShipAnimBuilder::new()
+            .base_image_id(base)
+            .base_set_count(sets)
+            .glow_image_id(glow)
+            .light_image_id(lights)
+            .frames_per(frames_per)
+            .build()
     }
 
     fn layer(image_id: i16, frames: u16) -> LayerSheet {
@@ -438,7 +439,7 @@ mod tests {
     }
 
     fn ship() -> Vec<u8> {
-        vec![0; Ship::SIZE.expect("fixed")]
+        ShipBuilder::new().build()
     }
 
     #[test]

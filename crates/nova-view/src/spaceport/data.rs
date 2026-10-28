@@ -83,6 +83,7 @@ impl ShipBaseImages for GameData {
 mod tests {
 
     use nova_data::Record;
+    use nova_data::records::fixture::ShipAnimBuilder;
     use nova_data::store::fixture::one_file;
 
     use nova_rsrc::fixture::ForkBuilder;
@@ -245,9 +246,7 @@ mod tests {
 
     /// A `shän` whose base image is `rlëD` `base`.
     fn ship_anim(base: i16) -> Vec<u8> {
-        let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-        bytes[0x00..0x02].copy_from_slice(&base.to_be_bytes());
-        bytes
+        ShipAnimBuilder::new().base_image_id(base).build()
     }
 
     #[test]

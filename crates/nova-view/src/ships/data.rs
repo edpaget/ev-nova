@@ -99,6 +99,7 @@ mod tests {
     use nova_data::graphics::RLED;
     use nova_data::graphics::fixture::RledBuilder;
     use nova_data::records::desc::Desc;
+    use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::store::fixture::one_file;
@@ -130,25 +131,25 @@ mod tests {
 
     /// A `shïp` with these stats and shipyard name.
     fn ship(stats: ShipStats, short_name: &str) -> Vec<u8> {
-        let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-        put(&mut bytes, 0x02, &stats.shield.to_be_bytes());
-        put(&mut bytes, 0x06, &stats.speed.to_be_bytes());
-        put(&mut bytes, 0x0E, &stats.armor.to_be_bytes());
-        put(&mut bytes, 0x30, &stats.cost.to_be_bytes());
-        put(&mut bytes, 0x5CE, short_name.as_bytes());
-        bytes
+        ShipBuilder::new()
+            .shield(stats.shield)
+            .speed(stats.speed)
+            .armor(stats.armor)
+            .cost(stats.cost)
+            .short_name(short_name)
+            .build()
     }
 
     /// A `shän` with base image `base` (`frames_per` frames, one set) and
     /// glow and lights images `glow` and `lights`.
     fn anim(base: i16, frames_per: i16, glow: i16, lights: i16) -> Vec<u8> {
-        let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-        put(&mut bytes, 0x00, &base.to_be_bytes());
-        put(&mut bytes, 0x04, &1_i16.to_be_bytes());
-        put(&mut bytes, 0x16, &glow.to_be_bytes());
-        put(&mut bytes, 0x1E, &lights.to_be_bytes());
-        put(&mut bytes, 0x34, &frames_per.to_be_bytes());
-        bytes
+        ShipAnimBuilder::new()
+            .base_image_id(base)
+            .base_set_count(1)
+            .glow_image_id(glow)
+            .light_image_id(lights)
+            .frames_per(frames_per)
+            .build()
     }
 
     /// An `rlëD` of `frames` 2x2 frames.

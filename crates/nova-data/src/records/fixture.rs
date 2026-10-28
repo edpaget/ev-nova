@@ -219,6 +219,13 @@ impl ShipBuilder {
         self
     }
 
+    /// Sets [`Ship::subtitle`] (offset 0x6E6, 64 bytes).
+    #[must_use]
+    pub fn subtitle(mut self, text: &str) -> Self {
+        self.0.text(0x6E6, 64, text);
+        self
+    }
+
     /// Sets [`Ship::long_name`] (offset 0x62E, 128 bytes).
     #[must_use]
     pub fn long_name(mut self, name: &str) -> Self {
@@ -423,11 +430,13 @@ mod tests {
             ShipBuilder::new()
                 .short_name("Shuttle")
                 .comm_name("Shuttle Kestrel")
-                .long_name("A long shuttle name"),
+                .long_name("A long shuttle name")
+                .subtitle("Light courier"),
         );
         assert_eq!(decoded.short_name.as_str(), "Shuttle");
         assert_eq!(decoded.comm_name.as_str(), "Shuttle Kestrel");
         assert_eq!(decoded.long_name.as_str(), "A long shuttle name");
+        assert_eq!(decoded.subtitle.as_str(), "Light courier");
     }
 
     #[test]

@@ -27,6 +27,7 @@
 use std::rc::Rc;
 
 use nova_data::records::character::Character;
+use nova_data::records::fixture::ShipBuilder;
 use nova_data::records::mission::Mission;
 use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
@@ -350,9 +351,13 @@ fn character() -> Vec<u8> {
 
 /// A ship that flies.
 fn ship() -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 300, 300, 30, 300]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .build()
 }
 
 /// A `sÿst` at map (`x`, 0) with these `Con` links and `NavDefs`.
@@ -736,22 +741,23 @@ impl nova_sim::Behaviour for Idle {
 /// each) and `items` (each with its count), destroyed at once in
 /// explosion type 0, `bööm` 128.
 fn armed_ship(shield: i16, armor: i16, weapons: &[i16], items: &[(i16, i16)]) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[shield, 300, 300, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[armor]);
-    put_i16s(&mut bytes, 0x12, &[-1; 4]);
-    put_i16s(&mut bytes, 0x12, weapons);
-    put_i16s(&mut bytes, 0x1A, &[1; 4]);
-    put_i16s(&mut bytes, 0x38, &[-1, 0]);
-    put_i16s(&mut bytes, 0x42, &[1]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    put_i16s(&mut bytes, 0x6CE, &[-1; 4]);
-    for (slot, &(item, count)) in items.iter().enumerate() {
-        put_i16s(&mut bytes, 0x4E + 2 * slot, &[item]);
-        put_i16s(&mut bytes, 0x56 + 2 * slot, &[count]);
-    }
-    bytes
+    let (ids, counts): (Vec<i16>, Vec<i16>) = items.iter().copied().unzip();
+    ShipBuilder::new()
+        .shield(shield)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .armor(armor)
+        .weap_types(&[-1; 8])
+        .weap_types(weapons)
+        .weap_counts(&[1; 4])
+        .explode1(-1)
+        .inherent_ai(1)
+        .default_items(&[-1; 8])
+        .default_items(&ids)
+        .item_counts(&counts)
+        .build()
 }
 
 /// The blaster, `wëap` 128: unguided, firing every tick, 20 pixels a
