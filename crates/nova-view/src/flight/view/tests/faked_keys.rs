@@ -10,7 +10,10 @@ use super::faked_screen::{faked_stage, picks_since, sent_count, sent_since};
 use super::faked_travel::{jump_now, lit};
 use super::faked_world::world;
 use super::*;
+use crate::flight::floating;
+use crate::time::sixtieths;
 use nova_sim::flight_frame::FlightEvent;
+use nova_sim::navigation::NavMode;
 use nova_sim::{EscortCommand, EscortGroup, StellarPick};
 
 /// A view of a flight whose fleet holds escorts of `present`'s classes,
@@ -465,4 +468,239 @@ fn a_message_waits_out_the_map() {
     assert_eq!(view.message(), Some("A"), "still shown after 199 ticks");
     view.tick(TICK);
     assert_eq!(view.message(), None, "gone after 200 ticks");
+}
+
+// The course map and the floating map.
+
+#[test]
+fn letting_go_of_the_keys_lets_go_of_the_map_key() {
+    // The window loses focus with M still down, so its release never
+    // arrives: the next key the map doesn't take leaves it open.
+    let mut view = fleet(&[]);
+    view.input(&key(MAP, true));
+    assert!(view.map_open());
+    view.release_keys();
+    tap(&mut view, LAND);
+    assert!(view.map_open(), "in flight");
+    let mut docked = faked(FlightFrame {
+        landed: Some(StellarId(128)),
+        ..in_sol()
+    });
+    docked.sim.map_mut().drawing = Some(sol_drawing());
+    docked.open_bar_map();
+    docked.port_map_input(&held(MAP));
+    docked.release_keys();
+    docked.port_map_input(&key(Key::Tab, true));
+    assert!(docked.map_open(), "in port");
+}
+
+/// [`maps::floating_in`]'s view in mode 3, braking for a jump or 300 ms
+/// into its warp as `warping` says, `\` held a tick so the floating map
+/// shows.
+fn floating_through_a_jump(warping: bool) -> Faked {
+    let frame = FlightFrame {
+        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
+        jump_under_way: true,
+        warping,
+        ..in_sol()
+    };
+    let mut view = super::maps::floating_in(frame);
+    if warping {
+        view.start_jump_effect();
+    }
+    view.input(&key(HYPER_SELECT_KEY, true));
+    view.tick(TICK);
+    view.input(&key(HYPER_SELECT_KEY, false));
+    assert!(view.jump_under_way());
+    view
+}
+
+#[test]
+fn zooms_are_taken_through_a_jump_and_refused_once_exploded() {
+    for warping in [false, true] {
+        let mut view = floating_through_a_jump(warping);
+        view.take_sounds();
+        tap(&mut view, ZOOM_OUT_KEY);
+        assert!(
+            view.take_sounds()
+                .contains(&Sound::Ui(UiSound::FloatingMapZoomed)),
+            "warping {warping}"
+        );
+        assert_eq!(view.floating.zoom(), 4, "warping {warping}");
+    }
+    let mut view = super::maps::floating_in(in_sol());
+    view.sim.refuse(PlayerCommand::Nav);
+    view.floating.show(sixtieths(view.elapsed));
+    view.take_sounds();
+    tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(view.floating.zoom(), floating::START_ZOOM);
+    assert!(
+        !view
+            .take_sounds()
+            .contains(&Sound::Ui(UiSound::FloatingMapZoomed))
+    );
+}
+
+#[test]
+fn return_hides_it_through_a_jump_too() {
+    let mut view = super::maps::floating_in(in_sol());
+    view.input(&key(HYPERSPACE_MODE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(HYPERSPACE_MODE_KEY, false));
+    assert_eq!(super::maps::alpha_of(&view), Some(255), "H shows it");
+    tap(&mut view, MENU_CLOSE_KEY);
+    assert_eq!(super::maps::alpha_of(&view), None);
+    for warping in [false, true] {
+        let mut view = floating_through_a_jump(warping);
+        assert_eq!(super::maps::alpha_of(&view), Some(255), "warping {warping}");
+        tap(&mut view, MENU_CLOSE_KEY);
+        assert_eq!(super::maps::alpha_of(&view), None, "warping {warping}");
+    }
+}
+
+#[test]
+fn a_fresh_flights_map_opens_on_the_current_system_at_0_5625() {
+    let mut view = faked(FlightFrame {
+        system: SystemId(131),
+        ..in_sol()
+    });
+    view.sim.map_mut().drawing = Some(sol_drawing());
+    tap(&mut view, MAP);
+    assert!(view.map_open());
+    assert_eq!(super::maps::place_of(view.course_map()), (0.5625, (600, 0)));
+    assert_eq!(view.course_map_zoom(), Some(0.5625));
+}
+
+#[test]
+fn a_zoom_given_to_the_flight_is_the_maps() {
+    let view = faked(in_sol()).with_course_map_zoom(1.777_776);
+    assert_eq!(view.course_map_zoom(), Some(1.777_776));
+    assert_eq!(super::maps::place_of(view.course_map()).0, 1.777_776);
+}
+
+#[test]
+fn the_flights_metrics_measure_the_course_maps_panel() {
+    use nova_sim::map_panel::Strip;
+    // The date set against the strip's right edge: 1016 − width − 5.
+    let mut view = faked(in_sol()).with_metrics(Rc::new(crate::text::fixture::MonoMetrics));
+    let date = "6/23/1177".to_owned();
+    let mut panel = super::map_find::panel_titled("Sol");
+    panel.strip = Strip::Info {
+        ports: nova_sim::map_panel::Ports::Unknown,
+        hazards: String::new(),
+        date: date.clone(),
+    };
+    let map = view.sim.map_mut();
+    map.drawing = Some(sol_drawing());
+    map.map_preselection = Some(SystemId(130));
+    map.panel = Some(panel);
+    tap(&mut view, MAP);
+    let width =
+        crate::text::fixture::MonoMetrics::advance(Font::Geneva, 9.0) * date.chars().count() as f32;
+    let drawn_date = drawn(&view).iter().find_map(|command| match command {
+        DrawCommand::Text {
+            text, origin, size, ..
+        } if *size == 9.0 && *origin == Point::new(801.0 - width, 600.0 - 9.0) => {
+            Some(text.clone())
+        }
+        _ => None,
+    });
+    assert_eq!(drawn_date, Some(date));
+}
+
+#[test]
+fn the_course_map_runs_its_pass_on_flights_ticks() {
+    use super::map_borders::{faked_bordered, govts_on, sources};
+    let mut view = faked_bordered(sources(true));
+    tap(&mut view, MAP);
+    view.tick(TICK);
+    assert!(view.map_open());
+    assert_eq!(
+        view.course_map().border_passes().next(),
+        nova_sim::map_borders::Next::Idle,
+        "the map ticked"
+    );
+    assert_eq!(view.course_map().border_passes().step(), 1);
+    assert_eq!(govts_on(view.course_map()), [128, 129], "the fine cells");
+}
+
+#[test]
+fn the_map_opens_with_the_borders_setting_it_is_given() {
+    use super::map_borders::{faked_bordered, govts_on, sources};
+    use crate::galaxy::buttons::{HIDE_BORDERS_LABEL, SHOW_BORDERS_LABEL};
+    let labelled = |view: &Faked, label: &str| {
+        let mut list = DrawList::new();
+        view.course_map().draw(&mut list);
+        list.iter()
+            .any(|command| matches!(command, DrawCommand::Text { text, .. } if text == label))
+    };
+    let mut view = faked_bordered(sources(true)).with_map_borders(false);
+    assert!(!view.map_borders_shown());
+    tap(&mut view, MAP);
+    assert!(!view.course_map().borders_shown());
+    assert!(labelled(&view, SHOW_BORDERS_LABEL));
+    view.tick(TICK);
+    assert_eq!(view.course_map().border_cells(), [], "none drawn");
+    tap(&mut view, Key::Char('b'));
+    assert!(labelled(&view, HIDE_BORDERS_LABEL));
+    assert_eq!(govts_on(view.course_map()), [128, 129]);
+    tap(&mut view, MAP);
+    assert_eq!(view.take_map_borders_save(), Some(true));
+}
+
+/// Types `text` into `view` as the platform sends it.
+fn faked_typing(view: &mut Faked, text: &str) {
+    for c in text.chars() {
+        let k = if c == ' ' {
+            Key::Space
+        } else {
+            Key::Char(c.to_ascii_lowercase())
+        };
+        view.input(&key(k, true));
+        view.input(&Input::Text(c));
+        view.input(&key(k, false));
+    }
+}
+
+/// A measured view over a flight in Sol over [`map_find::named`]'s
+/// catalog, its map drawing Sol, with the course map open by M.
+fn faked_measured_on_the_map() -> Faked {
+    let mut view = faked_in(super::map_find::named(catalog()), in_sol())
+        .with_metrics(Rc::new(crate::text::fixture::MonoMetrics));
+    let map = view.sim.map_mut();
+    map.drawing = Some(sol_drawing());
+    map.map_preselection = Some(SystemId(130));
+    tap(&mut view, MAP);
+    view.take_sounds();
+    view
+}
+
+#[test]
+fn with_find_open_m_types_into_it_and_leaves_the_map_open() {
+    let mut view = faked_measured_on_the_map();
+    faked_typing(&mut view, "f");
+    faked_typing(&mut view, "m");
+    assert!(view.map_open(), "M typed");
+    let typed = view
+        .course_map()
+        .find_dialog()
+        .expect("open")
+        .field()
+        .text();
+    assert_eq!(typed, "m");
+}
+
+#[test]
+fn find_is_laid_out_from_the_template_and_style_the_flight_gives() {
+    use crate::galaxy::find::CANCEL_ITEM;
+    use crate::ui::dialog::ItemSpec;
+    let mut template = crate::galaxy::find::fallback();
+    template.items[CANCEL_ITEM - 1].kind = ItemSpec::Button("Never mind".to_owned());
+    let mut view = faked_in(super::map_find::named(catalog()), in_sol())
+        .with_metrics(Rc::new(crate::text::fixture::MonoMetrics))
+        .with_find(Some(template), crate::ui::ButtonStyle::STOCK);
+    view.sim.map_mut().drawing = Some(sol_drawing());
+    tap(&mut view, MAP);
+    faked_typing(&mut view, "f");
+    assert!(texts(&drawn(&view)).contains(&"Never mind".to_owned()));
 }

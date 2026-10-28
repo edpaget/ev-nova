@@ -40,7 +40,6 @@ use crate::sound::Sound;
 use crate::spaceport::PortDialog;
 use crate::system::scene::PLACEHOLDER;
 use crate::system::{scene, starfield};
-use crate::time::sixtieths;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
@@ -1896,15 +1895,6 @@ fn through_a_jump(build: impl Fn() -> View) -> [Box<View>; 2] {
     [braking, warping]
 }
 
-/// Which stage of the jump `view` is in, for a failing assertion.
-fn stage(view: &View) -> &'static str {
-    if view.preparing_jump() {
-        "braking"
-    } else {
-        "warping"
-    }
-}
-
 /// Ticks `view` until its session's `_hyperGamma` is above 0, and gives
 /// how many ticks that took.
 fn tick_until_lit(view: &mut View) -> u32 {
@@ -3122,18 +3112,6 @@ fn fate_of(view: &View) -> PlayerFate {
     view.session().expect("flying").player_fate()
 }
 
-/// A flight under fire from [`killed_in`]`(1)`'s NPC, stepped to the
-/// player's explosion and one tick past it.
-fn exploded() -> View {
-    let mut view = now_deciding(
-        fighting(killed_in(1), &placed(750, 650, 180)),
-        Rc::new(Firing),
-    );
-    until_the_player_explodes(&mut view, |_| {});
-    view.tick(TICK);
-    view
-}
-
 /// What the target panel's status line shows this frame, if there is
 /// a target.
 fn status_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<nova_sim::TargetStatus> {
@@ -3655,14 +3633,6 @@ use crate::galaxy::map::{
 };
 use crate::geometry::Bounds;
 use nova_sim::mission::screens::mac_ticks;
-
-/// [`catalog`] with Proxima Near ([`FakeCatalog::near`]).
-fn near() -> View {
-    test_flight::new(FakeCatalog {
-        near: true,
-        ..catalog()
-    })
-}
 
 /// The floating map's border lines in `list`: those in the
 /// `FloatingMap` colour on the frame's edges, whatever their alpha.

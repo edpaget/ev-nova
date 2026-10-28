@@ -1,7 +1,6 @@
 use super::*;
 
 use crate::galaxy::GalaxyMap;
-use crate::galaxy::buttons::{HIDE_BORDERS_LABEL, SHOW_BORDERS_LABEL};
 use crate::text::fixture::MonoMetrics;
 use nova_sim::GovtId;
 use nova_sim::map_borders::{BorderSources, Next};
@@ -39,35 +38,14 @@ fn known(mut view: View) -> View {
     view
 }
 
-/// The governments of the cells the course map shows, once each.
-fn govts_shown(view: &View) -> Vec<i16> {
-    let mut govts: Vec<i16> = view
-        .course_map()
-        .border_cells()
-        .iter()
-        .map(|cell| cell.govt.0)
-        .collect();
-    govts.sort_unstable();
-    govts.dedup();
-    govts
-}
-
 fn passes(view: &View) -> &nova_sim::map_borders::BorderPasses {
     view.course_map().border_passes()
-}
-
-/// Whether the course map draws `label` on its Borders button.
-fn labelled(view: &View, label: &str) -> bool {
-    let mut list = DrawList::new();
-    view.course_map().draw(&mut list);
-    list.iter()
-        .any(|command| matches!(command, DrawCommand::Text { text, .. } if text == label))
 }
 
 /// The sources a flight in Sol paints the borders from: Sol (130, at the
 /// origin) the Federation's (128), and with `near`, Proxima Near (134,
 /// at (40, 30)) government 129's.
-fn sources(near: bool) -> BorderSources {
+pub(super) fn sources(near: bool) -> BorderSources {
     let mut systems = vec![(SystemId(130), (0, 0), Some(GovtId(128)))];
     if near {
         systems.push((SystemId(134), (40, 30), Some(GovtId(129))));
@@ -78,7 +56,7 @@ fn sources(near: bool) -> BorderSources {
 /// A view over a scripted flight in Sol over [`FakeCatalog::near`]'s
 /// galaxy, drawing the map as [`sol_drawing`], painting the borders from
 /// `sources`.
-fn faked_bordered(sources: BorderSources) -> Faked {
+pub(super) fn faked_bordered(sources: BorderSources) -> Faked {
     let catalog = FakeCatalog {
         near: true,
         ..catalog()
@@ -91,7 +69,7 @@ fn faked_bordered(sources: BorderSources) -> Faked {
 }
 
 /// The governments of the cells `map` shows, once each.
-fn govts_on(map: &GalaxyMap) -> Vec<i16> {
+pub(super) fn govts_on(map: &GalaxyMap) -> Vec<i16> {
     let mut govts: Vec<i16> = map.border_cells().iter().map(|cell| cell.govt.0).collect();
     govts.sort_unstable();
     govts.dedup();
@@ -141,17 +119,6 @@ fn the_edges_rules_reach_the_course_map() {
         "Find's centring ran the coarse pass"
     );
     assert_eq!(passes(&view).next(), Next::Unstarted);
-}
-
-#[test]
-fn the_course_map_runs_its_pass_on_flights_ticks() {
-    let mut view = known(test_flight::new(bordered()));
-    tap(&mut view, MAP);
-    ticks(&mut view, 1);
-    assert!(view.map_open());
-    assert_eq!(passes(&view).next(), Next::Idle, "the map ticked");
-    assert_eq!(passes(&view).step(), 1);
-    assert_eq!(govts_shown(&view), [128, 129], "the fine cells");
 }
 
 #[test]
@@ -228,19 +195,3 @@ fn by_the_other_readings_the_pass_walks_a_tick_at_a_time_and_finds_centring_runs
 }
 
 // The setting and its save.
-
-#[test]
-fn the_map_opens_with_the_borders_setting_it_is_given() {
-    let mut view = known(test_flight::new(bordered())).with_map_borders(false);
-    assert!(!view.map_borders_shown());
-    tap(&mut view, MAP);
-    assert!(!view.course_map().borders_shown());
-    assert!(labelled(&view, SHOW_BORDERS_LABEL));
-    ticks(&mut view, 1);
-    assert_eq!(view.course_map().border_cells(), [], "none drawn");
-    tap(&mut view, Key::Char('b'));
-    assert!(labelled(&view, HIDE_BORDERS_LABEL));
-    assert_eq!(govts_shown(&view), [128, 129]);
-    tap(&mut view, MAP);
-    assert_eq!(view.take_map_borders_save(), Some(true));
-}

@@ -368,24 +368,6 @@ fn a_key_down_the_map_doesnt_take_closes_it_while_the_map_key_is_held() {
 }
 
 #[test]
-fn letting_go_of_the_keys_lets_go_of_the_map_key() {
-    // The window loses focus with M still down, so its release never
-    // arrives: the next key the map doesn't take leaves it open.
-    let mut view = flight();
-    view.input(&key(MAP, true));
-    assert!(view.map_open());
-    view.release_keys();
-    tap(&mut view, LAND);
-    assert!(view.map_open(), "in flight");
-    let mut view = in_the_bar(None);
-    view.open_bar_map();
-    view.port_map_input(&held(MAP));
-    view.release_keys();
-    view.port_map_input(&key(Key::Tab, true));
-    assert!(view.map_open(), "in port");
-}
-
-#[test]
 fn a_modifier_is_no_key_down_and_never_closes_the_map() {
     // A Mac sends no key-down for a modifier alone, so `_MapFilter`
     // never sees one.
@@ -542,7 +524,7 @@ fn sol_places(links: &[(i16, (f32, f32))]) -> FloatingLinks {
 /// A view over a scripted flight in `frame`, drawing the map as
 /// [`sol_drawing`], with Sol's floating map places: its link to Alpha
 /// Centauri (131) at (600, 0).
-fn floating_in(frame: FlightFrame) -> Faked {
+pub(super) fn floating_in(frame: FlightFrame) -> Faked {
     let mut view = faked_sol(frame);
     view.sim.map_mut().floating = sol_places(&[(131, (600.0, 0.0))]);
     view
@@ -608,7 +590,7 @@ fn floating_drawn(view: &Faked) -> DrawList {
 }
 
 /// The alpha the floating map's border is drawn at, if it is drawn.
-fn alpha_of(view: &Faked) -> Option<u8> {
+pub(super) fn alpha_of(view: &Faked) -> Option<u8> {
     floating_border(&floating_drawn(view))
         .first()
         .map(|command| match command {
@@ -813,24 +795,6 @@ fn it_hides_once_more_than_500_ticks_have_passed() {
         !view.click_floating_map(FRAME_MISS),
         "hidden at 501: passed on to space"
     );
-}
-
-#[test]
-fn return_hides_it_through_a_jump_too() {
-    let mut view = flight();
-    tap(&mut view, HYPERSPACE_MODE_KEY);
-    tap(&mut view, MENU_CLOSE_KEY);
-    assert_eq!(floating_alpha(&view), None);
-    for mut view in through_a_jump(flight) {
-        let stage = stage(&view);
-        tap(&mut view, HYPER_SELECT_KEY);
-        view.input(&key(HYPER_SELECT_KEY, true));
-        view.tick(TICK);
-        view.input(&key(HYPER_SELECT_KEY, false));
-        assert_eq!(floating_alpha(&view), Some(255), "{stage}");
-        tap(&mut view, MENU_CLOSE_KEY);
-        assert_eq!(floating_alpha(&view), None, "{stage}");
-    }
 }
 
 #[test]
@@ -1097,34 +1061,6 @@ fn a_zoom_shows_the_map_again() {
     floating_tap(&mut view, ZOOM_OUT_KEY);
     floating_frame_of(&mut view, mac_ticks(118));
     assert_eq!(alpha_of(&view), Some(255));
-}
-
-#[test]
-fn zooms_are_taken_through_a_jump_and_refused_once_exploded() {
-    for mut view in through_a_jump(near) {
-        let stage = stage(&view);
-        view.input(&key(HYPER_SELECT_KEY, true));
-        view.tick(TICK);
-        view.input(&key(HYPER_SELECT_KEY, false));
-        view.take_sounds();
-        tap(&mut view, ZOOM_OUT_KEY);
-        assert!(
-            view.take_sounds()
-                .contains(&Sound::Ui(UiSound::FloatingMapZoomed)),
-            "{stage}"
-        );
-        assert_eq!(view.floating.zoom(), 4, "{stage}");
-    }
-    let mut view = exploded();
-    view.floating.show(sixtieths(view.elapsed));
-    view.take_sounds();
-    tap(&mut view, ZOOM_OUT_KEY);
-    assert_eq!(view.floating.zoom(), floating::START_ZOOM);
-    assert!(
-        !view
-            .take_sounds()
-            .contains(&Sound::Ui(UiSound::FloatingMapZoomed))
-    );
 }
 
 #[test]
@@ -1551,24 +1487,6 @@ fn panel_strings() -> (i16, Vec<String>) {
     (nova_sim::news::MISC_STRINGS, list)
 }
 
-/// A new pilot of [`catalog`] flown with the panel's words among its
-/// string lists, set up at the edge.
-fn worded() -> View {
-    let strings = FakeCatalog {
-        strings: vec![panel_strings()],
-        ..catalog()
-    };
-    open_flight(
-        catalog(),
-        FlightStart::New,
-        SessionSetup {
-            strings: Some(Rc::new(strings)),
-            ..SessionSetup::default()
-        },
-        Collaborators::default(),
-    )
-}
-
 /// The Geneva 9 text drawn with its baseline at (`x`, `baseline`), if
 /// any: the panels' lines.
 fn panel_text(list: &DrawList, (x, baseline): (f32, f32)) -> Option<String> {
@@ -1792,20 +1710,6 @@ fn the_course_maps_panel_draws_goods_and_services_unknown_or_listed_as_the_fligh
 }
 
 #[test]
-fn the_flights_metrics_measure_the_course_maps_panel() {
-    // The date set against the strip's right edge: 1016 − width − 5.
-    let mut view = worded().with_metrics(Rc::new(crate::text::fixture::MonoMetrics));
-    tap(&mut view, MAP);
-    let date = view.session().expect("flying").med_date_text();
-    let width =
-        crate::text::fixture::MonoMetrics::advance(Font::Geneva, 9.0) * date.chars().count() as f32;
-    assert_eq!(
-        panel_text(&drawn(&view), (801.0 - width, 600.0)),
-        Some(date)
-    );
-}
-
-#[test]
 fn a_click_on_empty_space_drags_and_keeps_the_selection_and_its_panel() {
     // A press that selects nothing drags (`_DoSystemMap` @0x137e9),
     // leaving `_selSystem` as it was.
@@ -1830,13 +1734,8 @@ fn a_click_on_empty_space_drags_and_keeps_the_selection_and_its_panel() {
 // Where the in-flight maps look (`_mapZoom`, `_mapScroll`), and what is
 // drawn behind their dialog.
 
-/// The course map's zoom and scroll.
-fn map_place(view: &View) -> (f64, (i32, i32)) {
-    place_of(view.course_map())
-}
-
 /// `map`'s zoom and scroll.
-fn place_of(map: &GalaxyMap) -> (f64, (i32, i32)) {
+pub(super) fn place_of(map: &GalaxyMap) -> (f64, (i32, i32)) {
     let place = map.place().expect("an in-flight map");
     (place.zoom(), place.scroll())
 }
@@ -1845,22 +1744,6 @@ fn place_of(map: &GalaxyMap) -> (f64, (i32, i32)) {
 fn scroll_on(map: &GalaxyMap, id: i16) -> (i32, i32) {
     let at = map.model().position(SystemId(id)).expect("on the map");
     (at.x as i32, at.y as i32)
-}
-
-#[test]
-fn a_fresh_flights_map_opens_on_the_current_system_at_0_5625() {
-    let in_alpha = FakeCatalog {
-        character: Ok(CharacterStart {
-            systems: [Some(SystemId(131)), None, None, None],
-            ..catalog().character.expect("a chär")
-        }),
-        ..catalog()
-    };
-    let mut view = test_flight::new(in_alpha);
-    tap(&mut view, MAP);
-    assert!(view.map_open());
-    assert_eq!(map_place(&view), (0.5625, (600, 0)));
-    assert_eq!(view.course_map_zoom(), Some(0.5625));
 }
 
 #[test]
@@ -1878,13 +1761,6 @@ fn the_maps_zoom_and_scroll_are_kept_between_opens() {
         (0.421_875, (20, 0)),
         "where it was left"
     );
-}
-
-#[test]
-fn a_zoom_given_to_the_flight_is_the_maps() {
-    let view = flight().with_course_map_zoom(1.777_776);
-    assert_eq!(view.course_map_zoom(), Some(1.777_776));
-    assert_eq!(map_place(&view).0, 1.777_776);
 }
 
 #[test]

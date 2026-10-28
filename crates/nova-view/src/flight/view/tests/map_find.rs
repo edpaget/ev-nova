@@ -2,10 +2,8 @@ use super::*;
 
 use crate::flight::sim_port::fixture::MapAsk;
 use crate::galaxy::GalaxyMap;
-use crate::galaxy::find::{CANCEL_ITEM, PROMPT};
+use crate::galaxy::find::PROMPT;
 use crate::text::fixture::MonoMetrics;
-use crate::ui::ButtonStyle;
-use crate::ui::dialog::ItemSpec;
 use nova_sim::MapClicked;
 use nova_sim::map_panel::{Column, ColumnBody, MapPanel, PanelWords, Ports, Strip};
 use nova_sim::map_search::SearchOutcome;
@@ -15,7 +13,7 @@ use nova_sim::map_search::SearchOutcome;
 
 /// `catalog` with Sol (130), Alpha Centauri (131) and Barnard (132) named
 /// as the session names them.
-fn named(mut catalog: FakeCatalog) -> FakeCatalog {
+pub(super) fn named(mut catalog: FakeCatalog) -> FakeCatalog {
     for (id, name) in [(130, "Sol"), (131, "Alpha Centauri"), (132, "Barnard")] {
         catalog
             .place_names
@@ -23,33 +21,6 @@ fn named(mut catalog: FakeCatalog) -> FakeCatalog {
             .insert(SystemId(id), name.to_owned());
     }
     catalog
-}
-
-fn measured(view: View) -> View {
-    view.with_metrics(Rc::new(MonoMetrics))
-}
-
-/// A measured flight from Sol over [`named`]'s [`catalog`], with the
-/// course map open and its sounds taken.
-fn on_the_map() -> View {
-    let mut view = measured(test_flight::new(named(catalog())));
-    tap(&mut view, MAP);
-    view.take_sounds();
-    view
-}
-
-/// Types `text` into the map as the platform sends it.
-fn type_in(view: &mut View, text: &str) {
-    for c in text.chars() {
-        let k = if c == ' ' {
-            Key::Space
-        } else {
-            Key::Char(c.to_ascii_lowercase())
-        };
-        view.input(&key(k, true));
-        view.input(&Input::Text(c));
-        view.input(&key(k, false));
-    }
 }
 
 /// Where the map's Done or Find button is.
@@ -84,7 +55,7 @@ fn faked_on_the_map(frame: FlightFrame) -> Faked {
 }
 
 /// A panel titled `title` with nothing else known.
-fn panel_titled(title: &str) -> MapPanel {
+pub(super) fn panel_titled(title: &str) -> MapPanel {
     MapPanel {
         strip: Strip::Info {
             ports: Ports::Unknown,
@@ -257,21 +228,6 @@ fn with_find_open_m_types_and_closes_nothing() {
 }
 
 #[test]
-fn with_find_open_m_types_into_it_and_leaves_the_map_open() {
-    let mut view = on_the_map();
-    type_in(&mut view, "f");
-    type_in(&mut view, "m");
-    assert!(view.map_open(), "M typed");
-    let typed = view
-        .course_map()
-        .find_dialog()
-        .expect("open")
-        .field()
-        .text();
-    assert_eq!(typed, "m");
-}
-
-#[test]
 fn a_click_on_done_closes_the_course_map() {
     let mut view = faked_on_the_map(in_sol());
     assert!(faked_map_click(&mut view, map_button(true)));
@@ -372,17 +328,4 @@ fn closing_the_map_with_find_open_drops_it() {
     view.open_map();
     assert!(view.map_open);
     assert!(!view.map.finding(), "dropped by the close");
-}
-
-#[test]
-fn find_is_laid_out_from_the_template_and_style_the_flight_gives() {
-    let mut template = crate::galaxy::find::fallback();
-    template.items[CANCEL_ITEM - 1].kind = ItemSpec::Button("Never mind".to_owned());
-    let view = measured(test_flight::new(named(catalog())));
-    let mut view = view.with_find(Some(template), ButtonStyle::STOCK);
-    tap(&mut view, MAP);
-    type_in(&mut view, "f");
-    let mut list = DrawList::new();
-    view.draw(&mut list);
-    assert!(texts(&list).contains(&"Never mind".to_owned()));
 }
