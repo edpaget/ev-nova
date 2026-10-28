@@ -589,6 +589,40 @@ fn a_dominated_stellars_or_a_hypergates_greeting_states_no_fee() {
     assert!(!said[1].0.contains('['), "{}", said[1].0);
 }
 
+/// A hypergate's greeting is one of its own, picked on the view's
+/// wording's chance, which the edge makes the flight's
+/// (`edge::the_edge_hands_the_flight_and_the_wording_one_chance`); when
+/// the flight greets is its own.
+#[test]
+fn a_hypergates_greeting_is_one_of_its_own_by_a_roll() {
+    let greeting = SimMessage::DockCleared {
+        stellar: StellarId(128),
+        kind: DockKind::Hypergate,
+        fee: None,
+    };
+    let mut first = worded_by(RuleSource::Engine);
+    assert_eq!(
+        first.word(vec![greeting.clone()]),
+        [(
+            "Cleared for hypergate entry, Kestrel. ".to_owned(),
+            greeting.ticks()
+        )],
+        "the first outcome"
+    );
+    let mut last = worded_by(RuleSource::Engine);
+    let always: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
+    last.words_chance = SharedChance::new(always);
+    assert_eq!(
+        last.word(vec![greeting.clone()]),
+        [(
+            "You are cleared for hypergate entry. ".to_owned(),
+            greeting.ticks()
+        )],
+        "the last"
+    );
+    assert_eq!(greeting.ticks(), 250);
+}
+
 #[test]
 fn a_scan_that_fails_a_mission_says_so_on_the_message_line() {
     let mut view = worded_by(RuleSource::Engine);

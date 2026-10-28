@@ -1503,22 +1503,6 @@ fn message_drawn(text: &str) -> DrawCommand {
     }
 }
 
-/// Asserts the message line says `text` now, for `n` ticks of flight
-/// in all, and not after.
-#[track_caller]
-fn assert_lasts(view: &mut View, text: &str, n: u16) {
-    assert_eq!(view.message(), Some(text));
-    ticks(view, u32::from(n) - 1);
-    assert_eq!(
-        view.message(),
-        Some(text),
-        "still shown after {} ticks",
-        n - 1
-    );
-    ticks(view, 1);
-    assert_eq!(view.message(), None, "gone after {n} ticks");
-}
-
 /// L pressed, a tick for the dock approach, and L pressed again:
 /// clearance, then landing.
 fn land_now(view: &mut View) {
@@ -1527,15 +1511,6 @@ fn land_now(view: &mut View) {
     tap(view, LAND);
 }
 
-/// The name of the ship `view` flies, as traffic control says it.
-fn ship_name(view: &View) -> String {
-    view.session()
-        .expect("flying")
-        .pilot()
-        .ship_name()
-        .unwrap_or_default()
-        .to_owned()
-}
 const MAP: Key = Key::Char('m');
 const JUMP: Key = Key::Char('j');
 
@@ -2972,44 +2947,6 @@ fn now_tick(view: &FlightView<FakeCatalog, impl FlightSim>) -> u64 {
 const HYPER_SELECT: Key = Key::Char('\\');
 
 use nova_sim::GateKind;
-
-/// Stellar `id` at (`x`, `y`), with `flags2`, `links` and
-/// `exit_angle`.
-fn gate_site(id: i16, (x, y): (f32, f32), flags2: u16, links: &[i16], exit_angle: i16) -> GateSite {
-    let mut slots = [None; 8];
-    for (slot, &link) in slots.iter_mut().zip(links) {
-        *slot = Some(StellarId(link));
-    }
-    GateSite {
-        id: StellarId(id),
-        position: Vec2::new(x, y),
-        flags2,
-        links: slots,
-        exit_angle,
-    }
-}
-
-/// Sol holds hypergate 300 (a station) at its centre, over the ship,
-/// linked to 310 in Alpha Centauri at (100, 200), heading ships out on
-/// 90°.
-fn gated() -> FakeCatalog {
-    FakeCatalog {
-        sites: vec![LandingSite {
-            flags2: 0x1200,
-            ..site(
-                300,
-                (0.0, 0.0),
-                StellarFlags::CAN_LAND | StellarFlags::STATION,
-            )
-        }],
-        gates: RefCell::new(vec![
-            gate_site(300, (0.0, 0.0), 0x1200, &[310], 120),
-            gate_site(310, (100.0, 200.0), 0x1000, &[300], 90),
-        ]),
-        gate_listers: vec![(SystemId(131), StellarId(310))],
-        ..catalog()
-    }
-}
 
 /// The course map's sounds `view` holds, taken with the rest.
 fn map_sounds(view: &mut FlightView<FakeCatalog, impl FlightSim>) -> Vec<UiSound> {

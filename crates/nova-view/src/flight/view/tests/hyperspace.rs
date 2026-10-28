@@ -147,19 +147,3 @@ fn the_gate_messages_read_as_the_original() {
     assert_eq!(HYPERGATE_CANCELLED, "Hypergate jump cancelled.");
     assert_eq!(HYPERGATE_DENIED, "Hypergate usage denied.");
 }
-
-#[test]
-fn a_hypergates_greeting_is_one_of_its_own_by_a_roll() {
-    let mut view = test_flight::new(gated());
-    tap(&mut view, LAND);
-    assert_eq!(view.message(), None, "requested over it: silent");
-    ticks(&mut view, 1);
-    let ship = ship_name(&view);
-    let first = format!("Cleared for hypergate entry, {ship}. ");
-    assert_eq!(view.message(), Some(first.as_str()), "the first outcome");
-    let last: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
-    let mut view = new_on(gated(), SharedChance::new(last));
-    tap(&mut view, LAND);
-    ticks(&mut view, 1);
-    assert_lasts(&mut view, "You are cleared for hypergate entry. ", 250);
-}

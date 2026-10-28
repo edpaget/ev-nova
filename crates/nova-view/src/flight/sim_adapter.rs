@@ -1053,6 +1053,59 @@ mod tests {
         assert_eq!(flight.load_description(None, None), "");
     }
 
+    /// Strings that turn the `l33t` mode on, whose letters a loaded
+    /// `dësc` draws on its chance.
+    #[derive(Debug)]
+    struct Leet;
+
+    impl nova_sim::CommCatalog for Leet {
+        fn string_list(&self, _id: i16) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn leet_mode(&self) -> bool {
+            true
+        }
+    }
+
+    /// A chance that counts its draws, and never fires.
+    #[derive(Debug, Default)]
+    struct Counted(u32);
+
+    impl nova_sim::Chance for Counted {
+        fn fires(&mut self, _percent: u8) -> bool {
+            self.0 += 1;
+            false
+        }
+
+        fn below(&mut self, _n: u32) -> u32 {
+            self.0 += 1;
+            0
+        }
+    }
+
+    #[test]
+    fn a_started_flights_description_is_the_sessions_on_the_flights_chance() {
+        let chance = Rc::new(std::cell::RefCell::new(Counted::default()));
+        let mut flight = SessionFlight::start(&shared()).with_collaborators(Collaborators {
+            chance: SharedChance::new(chance.clone()),
+            ..Collaborators::default()
+        });
+        flight.set_up(SessionSetup {
+            strings: Some(Rc::new(Leet)),
+            ..SessionSetup::default()
+        });
+        let raw = "{b5 \"set\" \"clear\"}, sir.";
+        let movie = DescMovie::from_desc("Port.mov", 0x0001);
+        let mut session = flight.session().expect("started").clone();
+        let mut drawn = Counted::default();
+        let expected = session.load_description(Some(raw), movie.as_ref(), &mut drawn);
+        assert_eq!(flight.load_description(Some(raw), movie.as_ref()), expected);
+        assert!(drawn.0 > 0, "the l33t letters draw");
+        assert_eq!(chance.borrow().0, drawn.0, "on the flight's chance");
+        assert_eq!(flight.loaded_after_movie(), session.loaded_after_movie());
+    }
+
     #[test]
     fn a_failed_flight_drains_nothing() {
         let mut into = vec![FlightEvent::SaveDue];

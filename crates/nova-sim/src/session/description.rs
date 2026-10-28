@@ -35,6 +35,11 @@ mod tests {
             "bit 5 is clear for a new pilot"
         );
         assert_eq!(Session::fresh_description(Some("plain")), "plain");
+        assert_eq!(
+            Session::fresh_description(Some("{G \"x\" \"<SRK128>\"} ")),
+            "x ",
+            "a new pilot's gender test, its other string never scanned"
+        );
         assert_eq!(Session::fresh_description(None), "", "a missing one");
     }
 }
