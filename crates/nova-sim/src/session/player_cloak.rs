@@ -72,7 +72,7 @@ impl Session {
     /// Holds the cloak key, `cloakKey`, down or lets it go: what the next
     /// pass's key reads. The session takes it only while the player's
     /// fate takes [`PlayerCommand::Cloak`](crate::PlayerCommand::Cloak).
-    pub fn hold_cloak(&mut self, held: bool) {
+    pub(crate) fn hold_cloak(&mut self, held: bool) {
         self.ship.cloak.held = held;
     }
 

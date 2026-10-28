@@ -130,7 +130,7 @@ impl Session {
     /// module), and every asteroid stepped and culled in the play area
     /// (see the module docs). Nothing while
     /// landed; on a frame a kill holds through, the field is emptied.
-    pub fn tick_asteroids(&mut self, chance: &mut (impl Chance + ?Sized)) {
+    pub(crate) fn tick_asteroids(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.asteroid_pass(
             GamePass::Advance {
                 double_time: self.ship.warp.double_time,
@@ -183,7 +183,7 @@ impl Session {
     /// [`RuleKey::AsteroidEntryField`]; by the engine, and once docked,
     /// it places none (see the module docs). The view runs it before it
     /// draws a frame; [`Session::tick_asteroids`] runs it too.
-    pub fn settle_asteroid_field(&mut self, chance: &mut (impl Chance + ?Sized)) {
+    pub(crate) fn settle_asteroid_field(&mut self, chance: &mut (impl Chance + ?Sized)) {
         if !std::mem::take(&mut self.space.asteroid_field_due) || self.mode.landed().is_some() {
             return;
         }

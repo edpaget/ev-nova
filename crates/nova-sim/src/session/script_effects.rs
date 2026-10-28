@@ -402,7 +402,7 @@ impl Session {
     /// others; see the module docs). The leave waits for the texts and
     /// dialogs shown over the spaceport, which never read it.
     #[must_use]
-    pub fn leave_due(&self) -> bool {
+    pub(crate) fn leave_due(&self) -> bool {
         self.run.leave_due(self.mode.landed())
     }
 

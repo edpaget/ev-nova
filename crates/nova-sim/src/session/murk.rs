@@ -31,7 +31,7 @@ impl Session {
     /// clears the starfield (`_RandomizeStars` @0x0b168-0x0b18d), and
     /// otherwise 0..=100, which dims it (`_HandleStars` @0x2f8cc-0x2f913).
     #[must_use]
-    pub fn system_murk(&self) -> i16 {
+    pub(crate) fn system_murk(&self) -> i16 {
         self.chart.system_murk(&self.pilot, &self.setup)
     }
 }

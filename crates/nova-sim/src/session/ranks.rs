@@ -131,7 +131,7 @@ impl Session {
     /// with; by the other, those of the ranks and the docked stellar's
     /// government now.
     #[must_use]
-    pub fn price_mults(&self) -> PriceMults {
+    pub(crate) fn price_mults(&self) -> PriceMults {
         let reach = self.setup.rules.source_for(RuleKey::RankGovtReach);
         let (active, govt) = match self.setup.rules.source_for(RuleKey::RankPriceTiming) {
             RuleSource::Engine => (&self.port.port_ranks.active, self.port.port_ranks.govt),
@@ -166,7 +166,7 @@ impl Session {
     /// ranks the last reset took; by the other, from the active ranks
     /// now.
     #[must_use]
-    pub fn blessing(&self) -> Blessing {
+    pub(crate) fn blessing(&self) -> Blessing {
         self.ship.blessing(&self.pilot, &self.statics, &self.setup)
     }
 

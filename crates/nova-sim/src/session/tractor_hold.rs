@@ -40,7 +40,7 @@ impl Session {
     /// Whether a ship other than the player holds it in a tractor beam
     /// ([`held_by_other`]): its jump is refused.
     #[must_use]
-    pub fn held_by_other(&self) -> bool {
+    pub(crate) fn held_by_other(&self) -> bool {
         self.ship.held_by_other()
     }
 

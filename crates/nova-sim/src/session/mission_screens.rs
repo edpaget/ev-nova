@@ -328,7 +328,7 @@ impl Session {
     /// What the screens show of mission `id`, as the session read it as
     /// it started: `None` for a `mïsn` it has no texts of.
     #[must_use]
-    pub fn mission_texts(&self, id: MissionId) -> Option<&MissionTexts> {
+    pub(crate) fn mission_texts(&self, id: MissionId) -> Option<&MissionTexts> {
         self.statics.mission_texts(id)
     }
 
@@ -389,7 +389,7 @@ impl Session {
     /// never reset: a view that notes it at each of its redraws can tell
     /// whether the last text was queued after its last redraw.
     #[must_use]
-    pub fn texts_queued(&self) -> u64 {
+    pub(crate) fn texts_queued(&self) -> u64 {
         self.out.texts_queued()
     }
 

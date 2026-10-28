@@ -64,7 +64,7 @@ impl Session {
     /// What the player's handling reads of its ionization now: its
     /// charge, its factor, and its jump under way from J on.
     #[must_use]
-    pub fn ionization(&self) -> Ionization {
+    pub(crate) fn ionization(&self) -> Ionization {
         self.ship.ionization(self.mode.jump())
     }
 

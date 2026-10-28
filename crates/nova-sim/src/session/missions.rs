@@ -1397,7 +1397,7 @@ impl Session {
     /// reading the remembered rank governments: a free slot's mission
     /// tags read [`UNSET`](text_tags::UNSET).
     #[must_use]
-    pub fn mission_text(&self, slot: u8, text: &str) -> String {
+    pub(crate) fn mission_text(&self, slot: u8, text: &str) -> String {
         self.mission_text_reading(slot, text, self.run.rank_govts)
     }
 

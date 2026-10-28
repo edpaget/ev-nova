@@ -62,7 +62,7 @@ impl Session {
     /// lets it go: what the next pass's countdown reads. The session takes
     /// it only while the player's fate takes
     /// [`PlayerCommand::SelfDestruct`](crate::PlayerCommand::SelfDestruct).
-    pub fn hold_self_destruct(&mut self, held: bool) {
+    pub(crate) fn hold_self_destruct(&mut self, held: bool) {
         self.ship.hold_self_destruct(held);
     }
 

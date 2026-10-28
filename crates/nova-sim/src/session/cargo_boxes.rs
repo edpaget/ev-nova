@@ -76,7 +76,7 @@ impl Session {
     /// hold the step just filled, or passes over one it just freed room
     /// for, until the next reset. The engine reads the hold as it is.
     #[must_use]
-    pub fn player_scoops(&self) -> bool {
+    pub(crate) fn player_scoops(&self) -> bool {
         self.ship.player_scoops(&self.pilot, &self.statics)
     }
 

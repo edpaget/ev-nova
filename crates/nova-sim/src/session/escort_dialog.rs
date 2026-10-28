@@ -80,7 +80,7 @@ impl Session {
 
     /// What the escort dialog shows, while it is open.
     #[must_use]
-    pub fn escort_dialog(&self) -> Option<EscortDialogView> {
+    pub(crate) fn escort_dialog(&self) -> Option<EscortDialogView> {
         let dialog = self.space.escorts.dialog?;
         let escort = self
             .pilot

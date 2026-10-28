@@ -81,7 +81,7 @@ use crate::traffic::npc::Npc;
 impl Session {
     /// The ships the player leads, in ship-table order (see the module
     /// docs).
-    pub fn player_led(&self) -> impl Iterator<Item = &Npc> + '_ {
+    pub(crate) fn player_led(&self) -> impl Iterator<Item = &Npc> + '_ {
         self.space.player_led()
     }
 
@@ -166,7 +166,7 @@ impl Session {
     /// of the frames its slot last cloned ([`Session::framed_by`]). A
     /// ship that is not here is not hidden.
     #[must_use]
-    pub fn is_hidden(&self, ship: ShipRef) -> bool {
+    pub(crate) fn is_hidden(&self, ship: ShipRef) -> bool {
         let hull = match ship {
             ShipRef::Player => Some(self.ship.fit.hull),
             ShipRef::Npc(id) => self.space.npc(id).map(|npc| npc.hull),

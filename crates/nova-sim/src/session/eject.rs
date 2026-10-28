@@ -205,7 +205,7 @@ impl Session {
     /// lets it go: what the next fight tick's eject check reads. The
     /// session takes it only while the player's fate takes
     /// [`PlayerCommand::Eject`].
-    pub fn hold_eject(&mut self, held: bool) {
+    pub(crate) fn hold_eject(&mut self, held: bool) {
         self.ship.hold_eject(held);
     }
 

@@ -336,7 +336,7 @@ impl Session {
     /// [`NovaDisable`] by default. The fight's own rule is given each
     /// pass ([`Session::game_work`]).
     #[must_use]
-    pub fn with_disable_rule(mut self, rule: Rc<dyn DisableRule>) -> Self {
+    pub(crate) fn with_disable_rule(mut self, rule: Rc<dyn DisableRule>) -> Self {
         self.setup.disable_rule = Shared(rule);
         self
     }

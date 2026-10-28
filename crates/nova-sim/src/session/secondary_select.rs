@@ -103,7 +103,7 @@ impl Session {
 
     /// Holds the Weapon Safety key down or lets it go: what each pass's
     /// secondary block reads (see the module docs).
-    pub fn hold_weapon_safety(&mut self, held: bool) {
+    pub(crate) fn hold_weapon_safety(&mut self, held: bool) {
         self.ship.weapon_keys.safety_held = held;
     }
 

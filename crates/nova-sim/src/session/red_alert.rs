@@ -36,7 +36,7 @@ impl Session {
     ///
     /// [`Npc::threatens_player_among`]: crate::traffic::npc::Npc::threatens_player_among
     #[must_use]
-    pub fn player_threatened(&self) -> bool {
+    pub(crate) fn player_threatened(&self) -> bool {
         self.space.player_threatened()
     }
 

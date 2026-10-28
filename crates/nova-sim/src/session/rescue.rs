@@ -193,7 +193,7 @@ impl Session {
     /// out, reading `catalog` and drawing on `chance` (see the module
     /// docs); whether it did. The flight view asks after each tick and
     /// stops stepping when it did, so the dësc opens before the next.
-    pub fn rescue_if_due(
+    pub(crate) fn rescue_if_due(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),

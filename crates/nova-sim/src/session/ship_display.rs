@@ -193,14 +193,14 @@ impl Session {
     /// The sets the player's ship was last drawn on: its hull's, and its
     /// alt layer's while it is drawn (see `nova_sim::combat::ship_frames`).
     #[must_use]
-    pub fn player_drawn(&self) -> Drawn {
+    pub(crate) fn player_drawn(&self) -> Drawn {
         self.ship.player_drawn()
     }
 
     /// The player's ion tint as its last display left it, if it glows
     /// (see `nova_sim::combat::ion_tint`).
     #[must_use]
-    pub fn player_ion_tint(&self) -> Option<IonTint> {
+    pub(crate) fn player_ion_tint(&self) -> Option<IonTint> {
         self.ship.player_ion_tint()
     }
 
@@ -218,7 +218,7 @@ impl Session {
     /// (`_HandleShipDisplay` @0x2c8aa); none for a class the session has
     /// no record of.
     #[must_use]
-    pub fn class_shield(&self, ship: crate::catalog::ShipId) -> Option<f32> {
+    pub(crate) fn class_shield(&self, ship: crate::catalog::ShipId) -> Option<f32> {
         self.statics.class_shield(ship)
     }
 }

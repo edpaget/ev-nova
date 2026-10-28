@@ -208,7 +208,11 @@ impl Session {
     /// tick: ours moves it once a frame in place of `TickCount`, and
     /// double time's second pass reads it unmoved
     /// ([`Session::tick_quotes_again`]).
-    pub fn tick_quotes(&mut self, catalog: &(impl CommCatalog + ?Sized), chance: &mut dyn Chance) {
+    pub(crate) fn tick_quotes(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        chance: &mut dyn Chance,
+    ) {
         if self.mode.landed().is_some() {
             return;
         }
@@ -229,7 +233,7 @@ impl Session {
     /// move on a tick or two between the passes, which only shifts the
     /// personal gap ([`QUOTE_GAP_TICKS`]) by less than a frame, so no
     /// player can see it. While the ship is landed nothing happens.
-    pub fn tick_quotes_again(
+    pub(crate) fn tick_quotes_again(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
         chance: &mut dyn Chance,

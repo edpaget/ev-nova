@@ -62,13 +62,13 @@ use crate::traffic::npc::Npc;
 impl Session {
     /// What the player's cloak scanners give, from the outfits it owns.
     #[must_use]
-    pub fn scanner(&self) -> Scanner {
+    pub(crate) fn scanner(&self) -> Scanner {
         scanner(&self.pilot, &self.statics)
     }
 
     /// Whether the player sees `npc` (see the module docs).
     #[must_use]
-    pub fn sees(&self, npc: &Npc) -> bool {
+    pub(crate) fn sees(&self, npc: &Npc) -> bool {
         self.ship.sees(&self.pilot, &self.statics, npc)
     }
 
@@ -99,14 +99,14 @@ impl Session {
     /// Whether `npc` shows on the player's radar: uncloaked, its cloak
     /// showing there, or the player scanning for cloaked ships there.
     #[must_use]
-    pub fn on_radar(&self, npc: &Npc) -> bool {
+    pub(crate) fn on_radar(&self, npc: &Npc) -> bool {
         !npc.cloak.is_cloaked() || npc.cloak_gear.on_radar || self.scanner().on_radar
     }
 
     /// Whether `npc` is on the player's screen (see the module docs). A
     /// ship with no sprite counts as a point.
     #[must_use]
-    pub fn on_screen(&self, npc: &Npc) -> bool {
+    pub(crate) fn on_screen(&self, npc: &Npc) -> bool {
         self.npc_in_play_area(npc, cloak::on_screen)
     }
 
@@ -129,7 +129,7 @@ impl Session {
 
     /// Says what the view shows of space, about the player's ship: the
     /// play area, as world units from the player (x right, y down).
-    pub fn set_play_area(&mut self, area: Area) {
+    pub(crate) fn set_play_area(&mut self, area: Area) {
         self.space.set_play_area(area);
     }
 

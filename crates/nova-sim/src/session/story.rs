@@ -386,7 +386,7 @@ impl Session {
     /// ship no longer in the system is forgotten, and populating the
     /// system or resetting its traffic forgets every one, its ships
     /// replaced (see the `story` module's findings).
-    pub fn watch_ship(&mut self, ship: NpcId) {
+    pub(crate) fn watch_ship(&mut self, ship: NpcId) {
         self.run.watch_ship(ship);
     }
 
@@ -565,7 +565,11 @@ impl Session {
     /// systems' `Visibility` ([`GalaxyOverlay::refresh_visibility`]), at
     /// a landing, a jump's arrival, a new pilot's start or a load, which
     /// overwrites every system's.
-    pub fn change_galaxy<C>(&mut self, catalog: &C, change: impl FnOnce(&mut GalaxyOverlay)) -> bool
+    pub(crate) fn change_galaxy<C>(
+        &mut self,
+        catalog: &C,
+        change: impl FnOnce(&mut GalaxyOverlay),
+    ) -> bool
     where
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {

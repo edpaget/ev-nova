@@ -55,8 +55,8 @@
 //! drains the fight's events after it as after the advance pass
 //! (`_HandleExplods` runs on both, @0x444e1). The second pass answers
 //! its hits as they land and what its close struck after it
-//! ([`Session::answer_strikes`]), and says the attack quotes they
-//! raise, then rolls the hail quotes ([`Session::tick_quotes_again`]),
+//! (`nova_sim::Session::answer_strikes`), and says the attack quotes they
+//! raise, then rolls the hail quotes (`nova_sim::Session::tick_quotes_again`),
 //! as `_HandleShot` (@0x44385) and `_HandleShip` (@0x44483) run on both
 //! passes; it gives no help and tells no comm. The mode is the screen's own
 //! and outlives the hails, the map, the jumps and the sessions it flies;
@@ -217,11 +217,11 @@
 //! then, at the same centre and on the same frame (modulo the layer's
 //! frame count), its engine glow and its running lights. The glow is
 //! drawn at the level [`nova_sim::glow_level`] gives for the session's
-//! glow base ([`Session::engine_glow`]) at the flight's time in ticks: it
+//! glow base (`nova_sim::Session::engine_glow`) at the flight's time in ticks: it
 //! fades in over 24 ticks of thrust, flickers, and fades out over 24
 //! ticks after Up is released, and landing and beginning a jump put it
 //! out. The lights are drawn at the level the session's display drew
-//! them ([`Session::player_drawn`]'s, and each NPC's `drawn`), its
+//! them (`nova_sim::Session::player_drawn`'s, and each NPC's `drawn`), its
 //! ported lights state stepped each display (`nova_sim::combat::ship_lights`,
 //! random lights rolling on the flight's chance). Each is
 //! drawn at [`lights_tint`](crate::draw::lights_tint) of its level, or not at all while it is hidden
@@ -253,7 +253,7 @@
 //!   249 pixels it says nothing. On the ticks after, the dock approach
 //!   greets the pilot ([`approach_greeting`]) as its own message, and a
 //!   second L lands. While L is held the approach waits
-//!   ([`Session::set_land_key`]), as the original's does. An uninhabited
+//!   (`nova_sim::Session::set_land_key`), as the original's does. An uninhabited
 //!   stellar answers every press "No response." ([`NO_RESPONSE`]) and
 //!   lands in that press when it can; a refusal in the same press
 //!   replaces it on the message line. The router takes the landing
@@ -339,7 +339,7 @@
 //!   does with none. They share one latch and are polled once a frame, as
 //!   the original's block is (the `slot_block` module): one pick a frame, by
 //!   the block's order, and none while another of them is held. A left click in space
-//!   ([`Session::click_in_space`]) picks a ship first: one under it
+//!   (`nova_sim::Session::click_in_space`) picks a ship first: one under it
 //!   becomes the target, a click on the player's own ship lets go of the
 //!   target, and only a click that leaves the target as it was selects
 //!   the stellar under it. Neither the status panel, the right
@@ -565,19 +565,19 @@
 //!   person's own name and subtitle, a person hailed says its comm quote
 //!   as the session's rule set says ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)), and
 //!   each step a person may
-//!   say its hail quote ([`Session::tick_quotes`], right after the
-//!   fight and the answer to its hits, [`Session::answer_strikes`]),
+//!   say its hail quote (`nova_sim::Session::tick_quotes`, right after the
+//!   fight and the answer to its hits, `nova_sim::Session::answer_strikes`),
 //!   shown in the message line for
 //!   the session's count ([`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)),
 //!   the last one said winning.
 //! - Each step ends with the asteroid field's work
-//!   ([`Session::tick_asteroids`], which [`Session::game_work`] runs
+//!   (`nova_sim::Session::tick_asteroids`, which [`Session::game_work`] runs
 //!   after the fight): a spawn at the field's edge and the field stepped,
 //!   on the flight's chance, so the next step's shots meet the asteroids
 //!   where they are drawn. Before any step, and so
 //!   before the first frame is drawn, a session started or loaded in
 //!   flight places its field as its rules say
-//!   ([`Session::settle_asteroid_field`]).
+//!   (`nova_sim::Session::settle_asteroid_field`).
 //! - Return ([`MENU_CLOSE_KEY`], the original's `ackComm`) clears the
 //!   message line, closes the escort menu and hides the floating map.
 //! - While the player's ship breaks up, M, L and I do nothing, saying
@@ -816,7 +816,7 @@ pub const SELECT_KEY: Key = Key::Char('w');
 /// `_loadKeys` falls back to when the defaults hold none
 /// (@0xcdde9-0xcde0c). Held, it lets go of the secondary selected, on
 /// every pass with one selected (`_HandlePlayer` @0x6adc2-0x6ae1b; see
-/// [`Session::hold_weapon_safety`](nova_sim::Session::hold_weapon_safety)).
+/// `nova_sim::Session::hold_weapon_safety`).
 pub const DESELECT_KEY: Key = Key::Char('s');
 /// The target select key: the original's default (`targSel`), which
 /// picks the next ship in turn.
@@ -1465,7 +1465,7 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// (`_statusRedraw[0]` @0x5f8fe; see [`FlightView::close_port_dialog`]).
     nav_marked: bool,
     /// How many mission texts the session had queued when the nav area
-    /// was last taken ([`Session::texts_queued`]): a text queued since is
+    /// was last taken (`nova_sim::Session::texts_queued`): a text queued since is
     /// newer than that redraw ([`FlightView::take_mission_texts`]).
     nav_texts: u64,
     /// What the target panel showed at its last redraw, and what it drew

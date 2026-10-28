@@ -78,7 +78,7 @@ impl Session {
     /// Takes the land key's state: `on` while it is held, which holds the
     /// dock approach back (the original's `_dockTryFlag`, see the
     /// `clearance` module). Up until it says otherwise.
-    pub fn set_land_key(&mut self, on: bool) {
+    pub(crate) fn set_land_key(&mut self, on: bool) {
         self.port.set_land_key(on);
     }
 

@@ -1345,7 +1345,7 @@ impl Session {
     /// not, with `Rand(0x168)` (@0x7535b-0x75372). For a pilot opened from
     /// a save, after [`Session::fly`]; a new pilot keeps facing up. Taking
     /// off keeps the heading.
-    pub fn face_on_load(&mut self, chance: &mut dyn Chance) {
+    pub(crate) fn face_on_load(&mut self, chance: &mut dyn Chance) {
         self.ship.face_on_load(chance);
     }
 
@@ -2001,7 +2001,7 @@ impl Session {
     /// that never calls this). While the ship is landed, or before
     /// the system is set up, nothing is answered; the world runs through a
     /// jump, so a hit in it is answered.
-    pub fn answer_strikes(&mut self, behaviour: &(impl Behaviour + ?Sized)) {
+    pub(crate) fn answer_strikes(&mut self, behaviour: &(impl Behaviour + ?Sized)) {
         if self.mode.landed().is_some() || self.space.traffic_due {
             return;
         }
@@ -2621,7 +2621,7 @@ impl Session {
 
     /// How the player's ship is holding up.
     #[must_use]
-    pub fn player_condition(&self) -> Condition {
+    pub(crate) fn player_condition(&self) -> Condition {
         self.ship.player_condition()
     }
 
@@ -2659,7 +2659,7 @@ impl Session {
 
     /// The beams being fired.
     #[must_use]
-    pub fn beams(&self) -> &[Beam] {
+    pub(crate) fn beams(&self) -> &[Beam] {
         self.space.beams()
     }
 
@@ -2692,7 +2692,7 @@ impl Session {
     /// fly, and the fighters the player's bays and theirs launch, by
     /// ascending ID, so a view can read their sprites up front.
     #[must_use]
-    pub fn traffic_ships(&self) -> Vec<ShipId> {
+    pub(crate) fn traffic_ships(&self) -> Vec<ShipId> {
         self.with_escorts_and_fighters(self.space.traffic.ship_types())
     }
 
@@ -2863,7 +2863,7 @@ impl Session {
     /// clear when J would be accepted now, and blocked when it would be
     /// refused. The nav area draws the destination by this.
     #[must_use]
-    pub fn jump_readiness(&self) -> JumpReadiness {
+    pub(crate) fn jump_readiness(&self) -> JumpReadiness {
         if self.mode.jump().is_some() {
             JumpReadiness::Underway
         } else if self.check_next_jump().is_ok() {
@@ -3298,7 +3298,7 @@ impl Session {
     /// date with the first `chär`'s prefix and suffix
     /// ([`date::med_date_text`]): for example "June 23rd, 1177 NC".
     #[must_use]
-    pub fn med_date_text(&self) -> String {
+    pub(crate) fn med_date_text(&self) -> String {
         med_date_text(&self.pilot, &self.statics)
     }
 
@@ -4410,7 +4410,11 @@ impl Session {
     /// outfitter. It draws any roll not drawn yet and changes nothing
     /// else. An order of none (the quantity dialog's Cancel) runs what
     /// follows its loop only when this passed.
-    pub fn outfit_button_passes(&mut self, order: OutfitOrder, chance: &mut dyn Chance) -> bool {
+    pub(crate) fn outfit_button_passes(
+        &mut self,
+        order: OutfitOrder,
+        chance: &mut dyn Chance,
+    ) -> bool {
         let asked = self
             .port
             .outfit_reselected
@@ -4848,7 +4852,7 @@ impl Session {
     /// back to 0. The base drawn: none below none
     /// ([`drawn_base`](crate::glow::drawn_base)).
     #[must_use]
-    pub fn engine_glow(&self) -> u8 {
+    pub(crate) fn engine_glow(&self) -> u8 {
         self.ship.engine_glow()
     }
 

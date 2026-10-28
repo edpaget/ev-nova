@@ -105,7 +105,7 @@ impl Session {
     /// pickup's checks: whether it is aboard now. False for a free slot,
     /// or a mission of another `PickupMode`. [`Session::board`] calls it
     /// as it boards the mission's special ship.
-    pub fn pick_up_boarded_cargo(&mut self, slot: u8) -> bool {
+    pub(crate) fn pick_up_boarded_cargo(&mut self, slot: u8) -> bool {
         let Some(mission) = self.pilot.missions.get(slot).map(|active| active.mission) else {
             return false;
         };

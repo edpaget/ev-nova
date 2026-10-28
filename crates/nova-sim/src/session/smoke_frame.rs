@@ -18,7 +18,7 @@ impl Session {
     /// the negative counts after a take-off qualify by the same rule (see
     /// the module docs).
     #[must_use]
-    pub fn smoke_frame(&self) -> bool {
+    pub(crate) fn smoke_frame(&self) -> bool {
         self.space.smoke_frame()
     }
 }

@@ -176,7 +176,7 @@ impl Session {
     /// (@0x2d088-0x2d17e): the step reads only its own ship, so one pass
     /// over the traffic is the slot loop's. See the module docs for where
     /// it runs.
-    pub fn prepare_all_sprites(&mut self) {
+    pub(crate) fn prepare_all_sprites(&mut self) {
         let mut slots = vec![(
             ShipRef::Player,
             Slot::Player,

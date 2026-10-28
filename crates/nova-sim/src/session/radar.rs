@@ -33,7 +33,7 @@ impl Session {
     /// for a fighter of the player's escort, whose parent's parent is the
     /// player.
     #[must_use]
-    pub fn ship_iff(&self, npc: &Npc) -> ShipIff {
+    pub(crate) fn ship_iff(&self, npc: &Npc) -> ShipIff {
         self.space.ship_iff(npc)
     }
 
