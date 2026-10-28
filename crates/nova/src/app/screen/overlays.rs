@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use nova_sim::{HailView, OfferPrompt, RuleKey, RuleSource, Taken};
-use nova_view::flight::{FlightView, MapOpener};
+use nova_view::flight::{FlightStart, FlightView, MapOpener};
 use nova_view::spaceport::missions::INFO_DIALOG;
 use nova_view::spaceport::offer::{
     OFFER_DIALOG, OfferChoice, OfferDialog, OfferTemplates, PICTURE_OFFER_DIALOG,
@@ -42,7 +42,7 @@ impl AppScreen {
     /// go back to.
     pub(super) fn enter_flight(&mut self) {
         if self.flight.is_none() {
-            self.flight = Some(self.flight(FlightView::new));
+            self.flight = Some(self.flight(FlightStart::New, None));
         }
         self.return_to = self.side;
         self.switch_to(Side::Flight);

@@ -135,7 +135,8 @@ fn the_help_line_names_board() {
 #[test]
 fn the_screens_hail_options_are_listed() {
     let mut view = hailable(true);
-    view = view.with_hail_options(HailOptions::empty());
+    // The comm dialog's options, swapped before the hail.
+    view.sim.hail_options = HailOptions::empty();
     tap(&mut view, HAIL_KEY);
     assert_eq!(view.take_hail().expect("hailed").options, []);
 }

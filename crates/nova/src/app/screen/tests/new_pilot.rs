@@ -92,6 +92,7 @@ fn held(screen: &AppScreen) -> &nova_sim::Pilot {
         .game
         .as_ref()
         .expect("a game held")
+        .sim()
         .pilot()
         .expect("a pilot")
 }

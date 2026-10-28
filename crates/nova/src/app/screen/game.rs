@@ -31,24 +31,28 @@ use std::rc::Rc;
 
 use nova_data::GameData;
 use nova_sim::{LastRefresh, Pilot};
-use nova_view::flight::FlightView;
+use nova_view::flight::{FlightStart, FlightView, SessionFlight};
 
 use super::{AppScreen, Side};
 
 impl AppScreen {
     /// `pilot`'s flight, built as every flight is ([`AppScreen::flight`])
     /// and shown nowhere: one `loaded` from a save reads its load's
-    /// fallbacks from the router's rules ([`FlightView::loaded`]), a new
-    /// one is flown as it is ([`FlightView::with_pilot`]).
-    pub(super) fn pilot_flight(&self, pilot: Pilot, loaded: bool) -> FlightView<Rc<GameData>> {
-        let rules = self.rules;
-        self.flight(|data| {
-            if loaded {
-                FlightView::loaded(data, pilot, rules)
-            } else {
-                FlightView::with_pilot(data, pilot)
-            }
-        })
+    /// fallbacks from the router's rules ([`FlightStart::Loaded`]), a new
+    /// one is flown as it is ([`FlightStart::Pilot`]), its neighbour pass
+    /// reading `last_refresh`, the run's as the pilot was made
+    /// ([`AppScreen::run_refresh`]); a loaded one is handed none.
+    pub(super) fn pilot_flight(
+        &self,
+        pilot: Pilot,
+        loaded: bool,
+        last_refresh: Option<LastRefresh>,
+    ) -> FlightView<Rc<GameData>> {
+        if loaded {
+            self.flight(FlightStart::Loaded(pilot), None)
+        } else {
+            self.flight(FlightStart::Pilot(pilot), last_refresh)
+        }
     }
 
     /// Holds `flight` as the game in progress, in place of any game held
@@ -66,7 +70,8 @@ impl AppScreen {
     pub(super) fn run_refresh(&self) -> Option<LastRefresh> {
         self.game
             .as_ref()
-            .and_then(FlightView::last_refresh)
+            .and_then(|game| game.sim().carry_over())
+            .and_then(|carry| carry.last_refresh)
             .or_else(|| self.last_refresh.clone())
     }
 
@@ -116,7 +121,8 @@ impl AppScreen {
     }
 
     /// Holds a new pilot's `flight`, its game begun (the `chär`'s
-    /// `OnStart`, [`FlightView::begin`]) and saved with what that did, as
+    /// `OnStart`, [`FlightView::begin`] with [`SessionFlight::begin`]) and
+    /// saved with what that did, as
     /// `_DoNewPilot` (@0x18b0a) runs `OnStart` before its first save
     /// (`_SavePilotFile` @0x1935f) and returns to the main screen with the
     /// pilot loaded; choice 0 runs no sweep after it (@0x1a795-0x1a7d2).
@@ -125,18 +131,15 @@ impl AppScreen {
     /// (`nova_sim::saves::PilotKeeper::save_replacing`).
     /// Its intro is remembered for the entry
     /// ([`AppScreen::remember_new_pilot_intro`]). Its neighbour pass
-    /// reads the run's last refresh ([`AppScreen::run_refresh`]).
+    /// reads the run's last refresh, which it was built with
+    /// ([`AppScreen::pilot_flight`]).
     pub(super) fn hold_new_pilot(
         &mut self,
-        flight: FlightView<Rc<GameData>>,
+        mut flight: FlightView<Rc<GameData>>,
         replaces: Option<&str>,
     ) {
-        let mut flight = match self.run_refresh() {
-            Some(carried) => flight.with_last_refresh(carried),
-            None => flight,
-        };
         self.remember_new_pilot_intro();
-        flight.begin();
+        flight.begin(SessionFlight::begin);
         flight.take_save_due();
         self.hold_game(flight);
         self.save_game(replaces);

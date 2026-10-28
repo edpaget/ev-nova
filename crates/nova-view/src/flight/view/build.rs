@@ -1,20 +1,16 @@
-//! [`FlightView`]'s construction: reading the session and catalog, the
-//! builders, the hail, player and mission info requests, and the
-//! preferences.
+//! [`FlightView`]'s construction: the generic read of a flight as it
+//! opens, the view's halves of the edge's setup and of entering play, the
+//! view's own builders and settings, and a test's view over a session it
+//! built.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{
-    ALERT_CICN, AsteroidCatalog, Behaviour, BoardingRule, CombatCatalog, CommCatalog, DisableRule,
-    FixedStep, HailOptions, HashedRolls, LegalCode, Pilot, PilotCatalog, PointDefenceRule,
-    Rulebook, Session, StartError, TrafficCatalog,
-};
-use nova_sim::{
-    ControlBits, HireTerms, KeptBerths, LastRefresh, PersonRules, ship_layer::SlotSprites,
-    story::sprite_pool::StellarSpritePool,
-};
+#[cfg(any(test, feature = "fixture"))]
+use nova_sim::SimCatalog;
+use nova_sim::flight_frame::FlightCommand;
+use nova_sim::{ALERT_CICN, CombatCatalog, FixedStep, HashedRolls, Rulebook};
 
 use crate::flight::cadence::HudCadence;
 use crate::flight::catalog::{CombatLooks, Looks, ShipSprites, StatusBars};
@@ -23,8 +19,9 @@ use crate::flight::effects::Effects;
 use crate::flight::escorts::{EscortMenu, EscortMenuLooks};
 use crate::flight::floating::FloatingMap;
 use crate::flight::hud::{self};
+#[cfg(any(test, feature = "fixture"))]
 use crate::flight::sim_adapter::SessionFlight;
-use crate::flight::sim_port::{FlightSim, MapSource};
+use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::camera::VIEW_SIZE;
 use crate::system::catalog::SystemCatalog;
@@ -38,185 +35,67 @@ use super::{
     BarFor, FlightOverlays, FlightView, Metrics, SharedChance, opening_scene, window_width,
 };
 
+/// The view's construction over any flight: [`FlightView::over`] reads it
+/// as it opens, through the [`FlightSim`] port, and the edge builds the
+/// flight it is handed (`crate::flight::open_flight`). Only the view's own
+/// catalogs are asked for, the weapons' list among them, which the looks
+/// are read for.
 impl<
-    C: PilotCatalog
-        + TrafficCatalog
-        + CombatCatalog
-        + AsteroidCatalog
-        + CommCatalog
+    C: CombatCatalog
         + CombatLooks
         + SystemCatalog
         + ShipSprites
         + StatusBars
         + GalaxyCatalog
         + EscortMenuLooks,
-> FlightView<C, crate::flight::SessionFlight<C>>
+    S: FlightSim,
+> FlightView<C, S>
 {
-    /// A new, unnamed pilot's flight, read from `catalog`, which the
-    /// screen keeps.
-    pub fn new(catalog: C) -> Self
-    where
-        C: 'static,
-    {
-        let session = Session::start(&catalog);
-        Self::flying(catalog, session, &Rulebook::default())
-    }
-
-    /// `pilot`'s flight, read from `catalog`, which the screen keeps. A
-    /// pilot last landed on a stellar resumes in flight over it, at rest,
-    /// as [`Session::fly`] places it: nothing lands, so no landing is
-    /// reported ([`FlightView::take_landing`]) and nothing sounds.
-    pub fn with_pilot(catalog: C, pilot: Pilot) -> Self
-    where
-        C: 'static,
-    {
-        let session = Session::fly(&catalog, pilot);
-        Self::flying(catalog, session, &Rulebook::default())
-    }
-
-    /// `pilot`'s flight as [`FlightView::with_pilot`] builds it, its load's
-    /// fallbacks reading `rules` ([`Session::load`]): for a pilot opened
-    /// from a save, whose repair [`FlightView::load_repaired`] reports.
-    /// The rules are the load's alone: the view, like the session, reads
-    /// the default rulebook until [`FlightView::with_rules`] gives it
-    /// another.
-    pub fn loaded(catalog: C, pilot: Pilot, rules: Rulebook) -> Self
-    where
-        C: 'static,
-    {
-        let session = Session::load(&catalog, pilot, &rules);
-        Self::flying(catalog, session, &Rulebook::default())
-    }
-
-    /// The flight of `sim`, read from `catalog` as a loaded session is
-    /// read, but reached without the load: for a test whose session a
-    /// builder put into the state it needs
-    /// (`nova_sim::fixture::SessionBuilder`), passed as
-    /// `builder.build().into()` for Nova's collaborators
-    /// ([`SessionFlight::new`]). The view reads the default rulebook, as
-    /// the session's constructors do, until [`FlightView::with_rules`].
-    #[cfg(any(test, feature = "fixture"))]
-    pub fn from_session(catalog: C, sim: SessionFlight<C>) -> Self
-    where
-        C: 'static,
-    {
-        Self::read(catalog, sim, &Rulebook::default())
-    }
-
-    /// Begins a new pilot's game as [`Session::begin`] does, on the
-    /// flight's chance: for a pilot just created, before its first save.
-    /// The
-    /// ship, which the beginning puts at (50, 50), is drawn there from the
-    /// first frame, not on its way from where the view was read, and the
-    /// stars are scattered afresh about it when the flight is next caught
-    /// up with, as `_ResetGameData` scatters them (@0x1df5e). A session
-    /// that failed begins nothing.
-    pub fn begin(&mut self) {
-        if let Ok(session) = &mut self.sim.session {
-            session.begin(&*self.catalog, &mut self.sim.chance);
-            self.place_ship();
-            self.stars_due = true;
-        }
-    }
-
-    /// Enters play from the main screen as [`Session::enter_game`] does:
-    /// the refresh a later new pilot reads is taken afresh, and the stars
-    /// are scattered afresh when the flight is next caught up with, as
-    /// `_EnterGameFromMainScreen` scatters them (@0x19f7c). A session that
-    /// failed enters nothing.
-    pub fn enter_game(&mut self) {
-        if let Ok(session) = &mut self.sim.session {
-            session.enter_game();
-            self.stars_due = true;
-        }
-    }
-
-    /// Resumes a pilot opened from a save as [`Session::resume`] does, on
-    /// the flight's chance: its ship faces a drawn heading, as
-    /// `_LoadPilotData` faces every pilot it loads (@0x7535b-0x75372), and
-    /// the offers' roll table is drawn, as the load's `_ResetPlayer` draws
-    /// it (@0x76502, @0x7673e). A session that failed resumes nothing.
-    pub fn resume(&mut self) {
-        if let Ok(session) = &mut self.sim.session {
-            session.resume(&mut self.sim.chance);
-        }
-    }
-
-    /// Opens a pilot just loaded on the main screen, as Open Pilot's
-    /// `_MainScreenChoice(1)` does once it is loaded: every active
-    /// mission's auxiliary ships restart
-    /// ([`Session::restart_aux_from_main_screen`], @0x1a918-0x1a982) on
-    /// the flight's chance. A session that failed opens nothing.
-    pub fn open_on_main_screen(&mut self) {
-        if let Ok(session) = &mut self.sim.session {
-            session.restart_aux_from_main_screen(&mut self.sim.chance);
-        }
-    }
-
-    /// Opens the last pilot at launch, once it is loaded, as
-    /// `_OpenLastPilotFile` and `_DoMainScreen`'s once-a-launch setup do
-    /// ([`Session::open_at_launch`]) on the flight's chance: every active
-    /// mission's auxiliary ships restart in the unguarded form
-    /// (@0x765d4-0x76637), and the player's system is explored (@0x1affe).
-    /// A session that failed opens nothing.
-    pub fn open_at_launch(&mut self) {
-        if let Ok(session) = &mut self.sim.session {
-            session.open_at_launch(&mut self.sim.chance);
-        }
-    }
-
-    /// The flight of `session`, or why it could not start, shown by
-    /// `rules`. No session starts landed, so flight's first frame redraws
-    /// the bar, as `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
-    fn flying(catalog: C, session: Result<Session, StartError>, rules: &Rulebook) -> Self
-    where
-        C: 'static,
-    {
-        Self::read(
-            catalog,
-            SessionFlight::new(session.map_err(|err| err.to_string())),
-            rules,
-        )
-    }
-
-    /// The flight of `sim` as [`FlightView::flying`] reads it, shown by
-    /// `rules`: the course map's nebulae and borders, and the presentation
-    /// rules the view holds ([`Presentation`](super::stepping::Presentation)),
-    /// as `FlightView::scripted` reads them.
+    /// The view of `sim`, a flight built at the edge, over `catalog`, the
+    /// handle the flight shares, shown by `rules` and wording its picks on
+    /// `words_chance`, which the edge hands the flight too, so the
+    /// wording's picks draw on the flight's own sequence.
+    ///
+    /// It tells the flight the view's width first
+    /// ([`FlightCommand::SetWindowWidth`]), before any frame is read. Then
+    /// it reads the flight's first frame: the scene the frame opens on,
+    /// the player's sheet and the status bar for the frame's interface
+    /// government, and the course map: its nebulae and borders as `rules`
+    /// say, the galaxy the flight answers
+    /// ([`MapSource::galaxy`](crate::flight::sim_port::MapSource::galaxy)), the
+    /// course shown and the current system, centred. The looks of every
+    /// weapon are read, and what of them, or of the Red Alert's icon,
+    /// could not be. A flight that failed to start
+    /// ([`FlightSim::failure`]) shows only why: no scene, sheet, bar,
+    /// galaxy or looks. No flight starts landed, so flight's first frame
+    /// redraws the bar, as `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
     #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
-    fn read(catalog: C, mut sim: SessionFlight<C>, rules: &Rulebook) -> Self
-    where
-        C: 'static,
-    {
-        if let Ok(session) = sim.session_mut() {
-            // Sized as the view starts, before anything reads its field.
-            session.set_window_width(window_width(VIEW_SIZE));
-        }
+    pub fn over(catalog: Rc<C>, mut sim: S, rules: &Rulebook, words_chance: SharedChance) -> Self {
+        // Sized as the view starts, before anything reads its field.
+        sim.apply(FlightCommand::SetWindowWidth(window_width(VIEW_SIZE)));
         let mut frame = nova_sim::flight_frame::FlightFrame::default();
         sim.frame(&mut frame);
-        let session = &sim.session;
-        let (scene, sheet, sheet_ship, status_bar) = match &session {
-            Ok(_) => (
-                Some(opening_scene(&catalog, &frame)),
+        let failure = sim.failure().map(str::to_owned);
+        let (scene, sheet, sheet_ship, status_bar) = match &failure {
+            None => (
+                Some(opening_scene(&*catalog, &frame)),
                 catalog.ship_sheet(frame.player().class),
                 Some(frame.player().class),
-                hud::choose_status_bar(&catalog, frame.hud.interface_government),
+                hud::choose_status_bar(&*catalog, frame.hud.interface_government),
             ),
-            Err(reason) => (None, Err(reason.clone()), None, Err(reason.clone())),
+            Some(reason) => (None, Err(reason.clone()), None, Err(reason.clone())),
         };
-        let bar_government = session
-            .as_ref()
-            .ok()
-            .map(|_| BarFor(frame.hud.interface_government));
-        let mut map = GalaxyMap::course(&catalog);
-        // A flight that failed to start shows no galaxy, and its map keeps
-        // the readings it was made with.
+        let bar_government = failure
+            .is_none()
+            .then_some(BarFor(frame.hud.interface_government));
+        let mut map = GalaxyMap::course(&*catalog);
+        map.set_nebula_pick(rules.source_for(nova_sim::RuleKey::NebulaPicture));
+        map.set_border_rules(
+            rules.source_for(nova_sim::RuleKey::MapBorderPace),
+            rules.source_for(nova_sim::RuleKey::MapFindBorders),
+        );
+        // A flight that failed to start shows no galaxy.
         if let Some(galaxy) = sim.galaxy() {
-            map.set_nebula_pick(rules.source_for(nova_sim::RuleKey::NebulaPicture));
-            map.set_border_rules(
-                rules.source_for(nova_sim::RuleKey::MapBorderPace),
-                rules.source_for(nova_sim::RuleKey::MapFindBorders),
-            );
             map.show_galaxy(galaxy);
             map.show_course(frame.system, &frame.course_shown);
             // Entering the game draws the floating map, and a new or
@@ -225,9 +104,9 @@ impl<
             // @0x19054, `_LoadPilotData` @0x7537b).
             map.recentre();
         }
-        let looks = match &session {
-            Ok(_) => Looks::read(&catalog, catalog.weapons().iter().map(|weapon| weapon.id)),
-            Err(_) => Looks::default(),
+        let looks = match &failure {
+            None => Looks::read(&*catalog, catalog.weapons().iter().map(|weapon| weapon.id)),
+            Some(_) => Looks::default(),
         };
         let escort_colors = catalog.escort_menu_colors();
         let alert_width = catalog.icon_size(ALERT_CICN).map(|(width, _)| width);
@@ -236,18 +115,11 @@ impl<
             .into_iter()
             .map(Diagnostic::Unreadable)
             .collect();
-        if session.is_ok() && alert_width.is_none() {
+        if failure.is_none() && alert_width.is_none() {
             unread_looks.push(Diagnostic::Unreadable(format!(
                 "no cïcn {ALERT_CICN}: the Red Alert icon is not drawn"
             )));
         }
-        let presentation = super::stepping::Presentation::of(rules);
-        // The wording's picks draw on the flight's own chance.
-        let words_chance = sim.chance.clone();
-        // One handle, the view's and the flight's: the flight's answers
-        // that read the catalog read the one the view draws from.
-        let catalog = Rc::new(catalog);
-        sim.share_catalog(Rc::clone(&catalog) as Rc<dyn nova_sim::SimCatalog>);
         Self::assembled(
             catalog,
             sim,
@@ -263,164 +135,73 @@ impl<
                 unread_looks,
                 escort_colors,
                 alert_width,
-                presentation,
+                presentation: super::stepping::Presentation::of(rules),
                 words_chance,
             },
         )
     }
+}
 
-    /// The flight with every disputed rule reading as `rules` says
-    /// ([`Session::with_rules`]). The stellars of the scene shown are
-    /// drawn again by the new rules, which say how a destroyed stellar
-    /// with no `DeadType` sheet draws, but not laid out again; the course
-    /// map's nebulae take their picture by the new
-    /// [`RuleKey::NebulaPicture`](nova_sim::RuleKey::NebulaPicture), and
-    /// its borders their pace and Find's pass by
-    /// [`RuleKey::MapBorderPace`](nova_sim::RuleKey::MapBorderPace) and
-    /// [`RuleKey::MapFindBorders`](nova_sim::RuleKey::MapFindBorders); the
-    /// steps' effects and stars are shown by them too
-    /// ([`Presentation`](super::stepping::Presentation)).
-    #[must_use]
-    pub fn with_rules(mut self, rules: Rulebook) -> Self {
-        let pick = rules.source_for(nova_sim::RuleKey::NebulaPicture);
-        let pace = rules.source_for(nova_sim::RuleKey::MapBorderPace);
-        let find = rules.source_for(nova_sim::RuleKey::MapFindBorders);
-        self.presentation = super::stepping::Presentation::of(&rules);
-        self.sim.session = self.sim.session.map(|session| session.with_rules(rules));
-        self.map.set_nebula_pick(pick);
-        self.map.set_border_rules(pace, find);
+/// The view's halves of the edge's setup and of entering play, and its
+/// own settings and builders, over any flight.
+impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
+    /// Shows the flight as the edge left it once it set the session up
+    /// after the view's opening read, as the builders' follow-ups did: the
+    /// scene's stellars drawn again by the session's rules, which say how
+    /// a destroyed stellar with no `DeadType` sheet draws, but not laid
+    /// out again (`with_rules`'), and, when the run's slot sprites were
+    /// carried over (`slots_carried`), the NPC sheets their frames ask for
+    /// (`with_slot_sprites`'). The kept frame is filled afresh, the cargo
+    /// area's labels with it (`with_strings`').
+    pub fn show_set_up(&mut self, slots_carried: bool) {
         self.show_destroyed();
-        self
-    }
-
-    /// The flight with its ship slots' draw layers and cloned frames
-    /// starting from `slot_sprites`, the history an earlier flight of the
-    /// same run left ([`Session::with_slot_sprites`]).
-    #[must_use]
-    pub fn with_slot_sprites(mut self, slot_sprites: SlotSprites) -> Self {
-        self.sim.session = self
-            .sim
-            .session
-            .map(|session| session.with_slot_sprites(slot_sprites));
-        self.read_npc_sheets();
-        self
-    }
-
-    /// The ship slots' draw-layer and cloned-frame history as the flight
-    /// leaves it ([`Session::slot_sprites`]), or `None` when its session
-    /// never started.
-    #[must_use]
-    pub fn slot_sprites(&self) -> Option<&SlotSprites> {
-        self.sim.session.as_ref().ok().map(Session::slot_sprites)
-    }
-
-    /// The flight with its stellar sprite pool carried from `pool`, the
-    /// one an earlier flight of the same run left
-    /// ([`Session::carry_stellar_sprite_pool`]): the original never clears
-    /// a stellar's sprite pointer between pilots.
-    #[must_use]
-    pub fn with_stellar_sprite_pool(mut self, pool: StellarSpritePool) -> Self {
-        if let Ok(session) = &mut self.sim.session {
-            session.carry_stellar_sprite_pool(pool);
+        if slots_carried {
+            self.read_npc_sheets();
         }
-        self
     }
 
-    /// The stellar sprite pool as the flight leaves it
-    /// ([`Session::stellar_sprite_pool`]), or `None` when its session never
-    /// started.
-    #[must_use]
-    pub fn stellar_sprite_pool(&self) -> Option<&StellarSpritePool> {
-        self.sim
-            .session
-            .as_ref()
-            .ok()
-            .map(Session::stellar_sprite_pool)
+    /// Begins a new pilot's game, `begin` the flight's half (a
+    /// `SessionFlight`'s `begin`, on the flight's chance), which says
+    /// whether it began: for a pilot just created, before its first save.
+    /// The ship, which the beginning puts at (50, 50), is drawn there from
+    /// the first frame, not on its way from where the view was read, and
+    /// the stars are scattered afresh about it when the flight is next
+    /// caught up with, as `_ResetGameData` scatters them (@0x1df5e). A
+    /// flight that begins nothing changes nothing here.
+    pub fn begin(&mut self, begin: impl FnOnce(&mut S) -> bool) {
+        if begin(&mut self.sim) {
+            self.place_ship();
+            self.stars_due = true;
+        }
     }
 
-    /// The flight with its traffic's berths starting from `kept`, what an
-    /// earlier flight of the same run left ([`Session::with_kept_berths`]).
+    /// Enters play from the main screen, `enter` the flight's half (a
+    /// `SessionFlight`'s `enter_game`), which says whether it entered: the
+    /// stars are scattered afresh when the flight is next caught up with,
+    /// as `_EnterGameFromMainScreen` scatters them (@0x19f7c). A flight
+    /// that enters nothing changes nothing here.
+    pub fn enter_game(&mut self, enter: impl FnOnce(&mut S) -> bool) {
+        if enter(&mut self.sim) {
+            self.stars_due = true;
+        }
+    }
+}
+
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// The flight the view shows: the edge's way to the adapter's own API
+    /// (a `SessionFlight`'s saving and entering play, the pilot it saves),
+    /// which the view keeps off the port.
     #[must_use]
-    pub fn with_kept_berths(mut self, kept: KeptBerths) -> Self {
-        self.sim.session = self
-            .sim
-            .session
-            .map(|session| session.with_kept_berths(kept));
-        self
+    pub fn sim(&self) -> &S {
+        &self.sim
     }
 
-    /// What the flight's traffic's berths keep for the next flight
-    /// ([`Session::kept_berths`]), or `None` when its session never
-    /// started.
-    #[must_use]
-    pub fn kept_berths(&self) -> Option<KeptBerths> {
-        self.sim.session.as_ref().ok().map(Session::kept_berths)
-    }
-
-    /// The flight with a new pilot's neighbour pass reading `carried`,
-    /// what an earlier flight of the same run left
-    /// ([`Session::with_last_refresh`]).
-    #[must_use]
-    pub fn with_last_refresh(mut self, carried: LastRefresh) -> Self {
-        self.sim.session = self
-            .sim
-            .session
-            .map(|session| session.with_last_refresh(carried));
-        self
-    }
-
-    /// What the flight's last galaxy refresh left hidden, for a new pilot
-    /// made later in the run ([`Session::last_refresh`]), or `None` when
-    /// its session never started.
-    #[must_use]
-    pub fn last_refresh(&self) -> Option<LastRefresh> {
-        self.sim.session.as_ref().ok().map(Session::last_refresh)
-    }
-
-    /// The flight with `terms` giving the fee and wage of a hire
-    /// ([`Session::with_hire_terms`]).
-    #[must_use]
-    pub fn with_hire_terms(mut self, terms: Rc<dyn HireTerms>) -> Self {
-        self.sim.session = self
-            .sim
-            .session
-            .map(|session| session.with_hire_terms(terms));
-        self
-    }
-
-    /// The flight with `rules` deciding how persons appear
-    /// ([`Session::with_person_rules`]).
-    #[must_use]
-    pub fn with_person_rules(mut self, rules: Rc<dyn PersonRules>) -> Self {
-        self.sim.session = self
-            .sim
-            .session
-            .map(|session| session.with_person_rules(rules));
-        self
-    }
-
-    /// The flight with the `T` set operator naming the ship from
-    /// `strings`' string lists ([`Session::with_strings`]).
-    #[must_use]
-    pub fn with_strings(mut self, strings: Rc<dyn CommCatalog>) -> Self {
-        self.sim.session = self
-            .sim
-            .session
-            .map(|session| session.with_strings(strings));
-        // The cargo area's labels are the strings' (`FrameHud::cargo`).
-        self.refresh_frame();
-        self
-    }
-
-    /// The flight with `bits` testing a ship's `Availability` for hire
-    /// ([`Session::with_control_bits`]).
-    #[must_use]
-    pub fn with_control_bits(mut self, bits: Rc<dyn ControlBits>) -> Self {
-        self.sim.session = self
-            .sim
-            .session
-            .map(|session| session.with_control_bits(bits));
-        self
+    /// The flight the view shows, to change through the adapter's own API
+    /// ([`FlightView::sim`]): the edge's setup, and a pilot's resume and
+    /// openings. A change made here the view sees at its next frame, or at
+    /// once after [`FlightView::resync`].
+    pub fn sim_mut(&mut self) -> &mut S {
+        &mut self.sim
     }
 
     /// The flight with the HUD's text, and the course map's panels',
@@ -461,77 +242,6 @@ impl<
     pub fn with_find(self, template: Option<DialogTemplate>, style: ButtonStyle) -> Self {
         Self {
             map: self.map.with_find(template, style),
-            ..self
-        }
-    }
-
-    /// The flight with its NPCs deciding as `behaviour` says.
-    #[must_use]
-    pub fn with_behaviour(self, behaviour: Rc<dyn Behaviour>) -> Self {
-        Self {
-            sim: self.sim.with_behaviour(behaviour),
-            ..self
-        }
-    }
-
-    /// The flight with its ships disabled as `rule` says: in the fight,
-    /// and in its session's changes of ship
-    /// ([`Session::with_disable_rule`]).
-    #[must_use]
-    pub fn with_disable_rule(self, disable_rule: Rc<dyn DisableRule>) -> Self {
-        Self {
-            sim: self.sim.with_disable_rule(disable_rule),
-            ..self
-        }
-    }
-
-    /// The flight with its ships' point defence engaging the missiles
-    /// `rule` calls hostile.
-    #[must_use]
-    pub fn with_point_defence_rule(self, defence_rule: Rc<dyn PointDefenceRule>) -> Self {
-        Self {
-            sim: self.sim.with_point_defence_rule(defence_rule),
-            ..self
-        }
-    }
-
-    /// The flight with the player's crimes judged by `law`.
-    #[must_use]
-    pub fn with_law(self, law: Rc<dyn LegalCode>) -> Self {
-        Self {
-            sim: self.sim.with_law(law),
-            ..self
-        }
-    }
-
-    /// The flight with its boardings by `rule`: who repels boarders, the
-    /// capture odds and the capture roll.
-    #[must_use]
-    pub fn with_boarding_rule(self, boarding_rule: Rc<dyn BoardingRule>) -> Self {
-        Self {
-            sim: self.sim.with_boarding_rule(boarding_rule),
-            ..self
-        }
-    }
-
-    /// The flight with the comm dialog listing `hail_options`
-    /// ([`SessionFlight::with_hail_options`]).
-    #[must_use]
-    pub fn with_hail_options(self, hail_options: HailOptions) -> Self {
-        Self {
-            sim: self.sim.with_hail_options(hail_options),
-            ..self
-        }
-    }
-
-    /// The flight with each day's events and the traffic rolled on
-    /// `chance`, and the wording's picks with them
-    /// ([`FlightView::text_of`]).
-    #[must_use]
-    pub fn with_chance(self, chance: SharedChance) -> Self {
-        Self {
-            words_chance: chance.clone(),
-            sim: self.sim.with_chance(chance),
             ..self
         }
     }
@@ -583,7 +293,7 @@ impl<
 
     /// The flight with the player's sound preferences `prefs`, which say
     /// whether the Red Alert blinks its icon ([`SoundPrefs::alert_quiet`],
-    /// [`Session::set_sound_quiet`]).
+    /// [`FlightCommand::SetSoundQuiet`]).
     #[must_use]
     pub fn with_sound_prefs(mut self, prefs: SoundPrefs) -> Self {
         self.set_sound_prefs(prefs);
@@ -591,12 +301,13 @@ impl<
     }
 
     /// Sets the player's sound preferences, as
-    /// [`FlightView::with_sound_prefs`] does.
+    /// [`FlightView::with_sound_prefs`] does: the view keeps them, and the
+    /// flight is told whether the sound is quiet
+    /// ([`FlightCommand::SetSoundQuiet`]).
     pub fn set_sound_prefs(&mut self, prefs: SoundPrefs) {
         self.sound_prefs = prefs;
-        if let Ok(session) = &mut self.sim.session {
-            session.set_sound_quiet(prefs.alert_quiet());
-        }
+        self.sim
+            .apply(FlightCommand::SetSoundQuiet(prefs.alert_quiet()));
     }
 
     /// The flight with double time on or off, as `on` says (see the
@@ -607,13 +318,13 @@ impl<
         self
     }
 
-    /// Turns double time on or off, as `on` says, for the session flown
-    /// now and every one after it.
+    /// Turns double time on or off, as `on` says, for the flight flown
+    /// now and every one after it: the view keeps it, and the flight is
+    /// told the key's state ([`FlightCommand::SetDoubleTimeKey`]), which
+    /// it latches at once, so the frame is filled afresh.
     pub fn set_double_time(&mut self, on: bool) {
         self.double_time = on;
-        if let Ok(session) = &mut self.sim.session {
-            session.set_double_time_key(on);
-        }
+        self.sim.apply(FlightCommand::SetDoubleTimeKey(on));
         self.refresh_frame();
     }
 
@@ -628,6 +339,37 @@ impl<
     #[must_use]
     pub fn alert_quiet(&self) -> bool {
         self.sound_prefs.alert_quiet()
+    }
+}
+
+/// The view of a [`SessionFlight`] that a test built itself, for the
+/// tests whose session a builder put into the state they need.
+#[cfg(any(test, feature = "fixture"))]
+impl<
+    C: SimCatalog
+        + CombatCatalog
+        + CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks
+        + 'static,
+> FlightView<C, SessionFlight<C>>
+{
+    /// The view of `sim` over `catalog`, read as the edge reads a flight
+    /// ([`FlightView::over`]) and shown by `rules`, the rulebook its
+    /// session was built with (`nova_sim::fixture::SessionBuilder`), so
+    /// the view and the session read one: for a test whose session a
+    /// builder put into the state it needs, passed as
+    /// `builder.build().into()` for Nova's collaborators
+    /// ([`SessionFlight::new`]). The catalog is shared with the flight
+    /// first, and the wording picks on the flight's chance.
+    pub fn from_session(catalog: C, mut sim: SessionFlight<C>, rules: &Rulebook) -> Self {
+        let catalog = Rc::new(catalog);
+        sim.share_catalog(Rc::clone(&catalog) as Rc<dyn SimCatalog>);
+        let chance = sim.chance.clone();
+        Self::over(catalog, sim, rules, chance)
     }
 }
 

@@ -549,7 +549,7 @@ fn once_j_is_accepted_the_label_turns_bright_at_the_next_refresh() {
 
 #[test]
 fn tab_in_a_flight_that_never_started_does_nothing() {
-    let mut view = FlightView::new(FakeCatalog {
+    let mut view = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..catalog()
     });
@@ -922,9 +922,7 @@ fn a_missing_alert_icon_draws_nothing_and_says_so_once() {
         ..armed(2, &[])
     };
     let (_, chance) = scripted(&two_npcs());
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Threatening))
+    let mut view = test_flight::flown(catalog, FlightStart::New, on(chance, Rc::new(Threatening)))
         .with_sound_prefs(QUIET);
     let missing =
         Diagnostic::Unreadable("no cïcn 18000: the Red Alert icon is not drawn".to_owned());

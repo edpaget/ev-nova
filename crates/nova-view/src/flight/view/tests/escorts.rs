@@ -88,9 +88,12 @@ fn with_the_escort_menu_open_command_5_picks_freighters_not_a_stellar() {
         }
     }
     let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = escorted_flight(catalog, "Freighted", fleet(&[130], false))
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
+    let mut view = escorted_flight(
+        catalog,
+        "Freighted",
+        fleet(&[130], false),
+        on(chance, Rc::new(Still)),
+    );
     view.tick(TICK);
     tap(&mut view, MENU_KEY);
     assert!(view.escort_menu().is_open());
@@ -265,7 +268,14 @@ fn the_help_line_names_the_escort_keys() {
 fn hiring_goes_through_the_session_on_the_flights_chance() {
     let always = Rc::new(RefCell::new(Always::default()));
     let shared: Rc<RefCell<dyn Chance>> = always.clone();
-    let mut view = FlightView::new(hiring()).with_chance(SharedChance::new(shared));
+    let mut view = test_flight::flown(
+        hiring(),
+        FlightStart::New,
+        Collaborators {
+            chance: SharedChance::new(shared),
+            ..Collaborators::default()
+        },
+    );
     assert_eq!(view.escorts_for_hire(), None, "in flight");
     assert_eq!(view.hire(ShipId(129)), Err(HireRefusal::NoBar));
     land_now(&mut view);
@@ -276,8 +286,11 @@ fn hiring_goes_through_the_session_on_the_flights_chance() {
     assert_eq!(always.borrow().asked, [50]);
     let hired = view.hire(ShipId(129)).expect("hired");
     assert_eq!((hired.fee, hired.wage), (90, 9));
-    assert_eq!(view.pilot().map(Pilot::cash), Some(1000 - 90));
-    assert_eq!(view.pilot().expect("flying").escorts()[0].wage, Some(9));
+    assert_eq!(view.sim().pilot().map(Pilot::cash), Some(1000 - 90));
+    assert_eq!(
+        view.sim().pilot().expect("flying").escorts()[0].wage,
+        Some(9)
+    );
     assert!(view.take_save_due());
 }
 
@@ -294,9 +307,18 @@ fn the_bars_news_is_drawn_through_the_session_on_the_flights_chance() {
         ],
         ..catalog()
     };
-    let mut view = FlightView::new(hiring())
-        .with_chance(SharedChance::new(shared))
-        .with_strings(Rc::new(strings));
+    let mut view = open_flight(
+        hiring(),
+        FlightStart::New,
+        SessionSetup {
+            strings: Some(Rc::new(strings)),
+            ..SessionSetup::default()
+        },
+        Collaborators {
+            chance: SharedChance::new(shared),
+            ..Collaborators::default()
+        },
+    );
     assert!(!view.open_bar(), "in flight");
     assert_eq!(view.news(), None);
     assert_eq!(view.news_picture(), None, "in flight");

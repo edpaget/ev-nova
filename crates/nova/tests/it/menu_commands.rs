@@ -34,7 +34,7 @@ fn quit_from_the_menu_bar_in_flight_exits_and_saves_the_pilot() {
         .app
         .screen()
         .flight_view()
-        .and_then(|flight| flight.pilot())
+        .and_then(|flight| flight.sim().pilot())
         .expect("a pilot")
         .clone();
     let writes = store.writes();

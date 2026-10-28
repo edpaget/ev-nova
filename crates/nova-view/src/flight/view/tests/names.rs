@@ -34,8 +34,9 @@ fn named() -> View {
     };
     let session = SessionBuilder::flying(&data)
         .with_ship_name("Kestrel")
-        .build();
-    FlightView::from_session(data, session.into()).with_strings(Rc::new(strings))
+        .build()
+        .with_strings(Rc::new(strings));
+    FlightView::from_session(data, session.into(), &Rulebook::default())
 }
 
 #[test]

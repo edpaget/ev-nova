@@ -12,7 +12,7 @@ fn the_offer_names_are_the_sessions() {
     let mut errands = catalog();
     errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
     errands.missions = vec![errand(130), errand(131)];
-    let mut view = FlightView::new(errands);
+    let mut view = test_flight::new(errands);
     land_now(&mut view);
     view.settle_script();
     let munged = view.sim.offer_text(MissionId(130), "Run <PAY>");
@@ -137,24 +137,26 @@ fn smuggling(flags: u16, fine: i16) -> View {
     let mut draws = placed(750, 750, 0).to_vec();
     draws.push(0);
     let (_, chance) = scripted(&draws);
-    FlightView::from_session(catalog, session.into())
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Inspector::default()))
+    let sim =
+        SessionFlight::from(session).with_collaborators(on(chance, Rc::new(Inspector::default())));
+    FlightView::from_session(catalog, sim, &Rulebook::default())
 }
 
 #[test]
 fn a_scan_in_the_warps_lead_in_is_said_under_the_streak() {
     let done = Rc::new(std::cell::Cell::new(false));
-    let mut view =
-        smuggling(0, 500).with_behaviour(Rc::new(InspectingUntil(Rc::clone(&done), Goal::Idle)));
+    let mut view = now_deciding(
+        smuggling(0, 500),
+        Rc::new(InspectingUntil(Rc::clone(&done), Goal::Idle)),
+    );
     plot(&mut view, 131);
     ready_to_jump(&mut view);
     view.input(&key(JUMP, true));
     assert!(view.jump_effect().is_some(), "streaking on J");
-    assert_eq!(view.pilot().expect("flying").cash(), 1200, "not yet");
+    assert_eq!(view.sim().pilot().expect("flying").cash(), 1200, "not yet");
     done.set(true);
     view.tick(TICK);
-    assert_eq!(view.pilot().expect("flying").cash(), 700, "convicted");
+    assert_eq!(view.sim().pilot().expect("flying").cash(), 700, "convicted");
     assert_eq!(
         view.message(),
         Some(
@@ -178,7 +180,7 @@ fn an_offers_refuse_button_is_the_sessions() {
         avail_loc: SPACEPORT,
         ..errand(130)
     }];
-    let mut view = FlightView::new(errands);
+    let mut view = test_flight::new(errands);
     land_now(&mut view);
     view.settle_script();
     view.enter_offer_venue(SPACEPORT);
@@ -206,7 +208,7 @@ fn the_bars_offers_go_through_the_session_on_the_flights_chance() {
         ..errand(141)
     }];
     let (script, chance) = scripted(&[]);
-    let mut view = FlightView::new(errands).with_chance(chance);
+    let mut view = new_on(errands, chance);
     assert_eq!(view.next_offer(1), None, "in flight");
     land_now(&mut view);
     view.settle_script();
@@ -221,52 +223,7 @@ fn the_bars_offers_go_through_the_session_on_the_flights_chance() {
     assert_eq!(script.borrow().asked, [30]);
 }
 
-/// Terms of a fee of 7 and a wage of 3 for every ship.
-#[derive(Debug)]
-struct Sevens;
-
-impl HireTerms for Sevens {
-    fn fee(&self, _ship: &ShipRecord, _site: &LandingSite, _mult: f32) -> i64 {
-        7
-    }
-
-    fn charge(&self, _ship: &ShipRecord, _site: &LandingSite, _mult: f32, _cash: i64) -> i64 {
-        7
-    }
-
-    fn wage(&self, _ship: &ShipRecord) -> i64 {
-        3
-    }
-}
-
-#[test]
-fn the_hire_ports_reach_the_session() {
-    let always: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
-    let mut view = FlightView::new(hiring())
-        .with_chance(SharedChance::new(always))
-        .with_hire_terms(Rc::new(Sevens))
-        .with_control_bits(Rc::new(Nothing));
-    land_now(&mut view);
-    let list = view.escorts_for_hire().expect("a bar");
-    let row = list.row(ShipId(129)).expect("listed: no Flags3 hides it");
-    assert_eq!((row.fee, row.wage), (7, 3));
-    assert_eq!(row.hire, Err(HireRefusal::NotForHire));
-}
-
 // Persons.
-
-#[test]
-fn the_persons_rules_reach_the_session() {
-    let rules = nova_sim::NovaPersons {
-        odds: RuleSource::Bible,
-        ..nova_sim::NovaPersons::default()
-    };
-    let view = flight().with_person_rules(Rc::new(rules));
-    assert_eq!(
-        format!("{:?}", view.session().expect("flying").person_rules()),
-        format!("{rules:?}")
-    );
-}
 
 // Persons' mission offers.
 

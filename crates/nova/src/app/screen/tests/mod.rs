@@ -221,6 +221,7 @@ fn hiding_beta_data() -> Rc<GameData> {
 /// Whether the pilot of `flight` has explored Beta (129).
 fn explored_beta(flight: &FlightView<Rc<GameData>>) -> bool {
     flight
+        .sim()
         .pilot()
         .expect("a pilot")
         .has_explored(nova_sim::SystemId(129))
@@ -1507,7 +1508,7 @@ pub(crate) fn through_entry(screen: &mut AppScreen) {
 }
 
 fn pilot(screen: &AppScreen) -> &nova_sim::Pilot {
-    flight(screen).pilot().expect("flying")
+    flight(screen).sim().pilot().expect("flying")
 }
 
 /// `pilot` as its last save has it, from before entering play marked
@@ -1912,7 +1913,7 @@ fn hail(screen: &mut AppScreen) {
 }
 
 fn cash(screen: &AppScreen) -> i64 {
-    flight(screen).pilot().expect("a pilot").cash()
+    flight(screen).sim().pilot().expect("a pilot").cash()
 }
 
 // Pilot edits.

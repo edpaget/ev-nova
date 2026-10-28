@@ -29,7 +29,7 @@ fn a_flight_built_from_a_session_shows_its_course_from_the_first_frame() {
     let session = SessionBuilder::flying(&catalog)
         .with_course([SystemId(131)])
         .build();
-    let view = FlightView::from_session(catalog, session.into());
+    let view = FlightView::from_session(catalog, session.into(), &Rulebook::default());
     assert_eq!(view.course_map().route(), [SystemId(131)]);
     assert_eq!(view.course_map().current(), Some(SystemId(130)));
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
@@ -50,7 +50,7 @@ fn described() -> FakeCatalog {
 
 #[test]
 fn a_loaded_description_reads_the_pilot_as_it_is_now() {
-    let mut view = FlightView::new(described());
+    let mut view = test_flight::new(described());
     assert_eq!(view.load_description(3000).as_deref(), Ok("clear, sir."));
     view.sim
         .session
@@ -62,7 +62,7 @@ fn a_loaded_description_reads_the_pilot_as_it_is_now() {
 
 #[test]
 fn a_loaded_description_resets_and_parses_the_rank_governments() {
-    let mut view = FlightView::new(described());
+    let mut view = test_flight::new(described());
     let srk = |view: &View| view.session().expect("flying").plain_text("<SRK128>");
     assert_eq!(srk(&view), "<SRK128>", "no government remembered");
     assert_eq!(view.load_description(3001).as_deref(), Ok("<SRK128>"));
@@ -84,25 +84,25 @@ fn a_loaded_description_resets_and_parses_the_rank_governments() {
 #[test]
 fn load_description_records_the_descs_movie() {
     let movie = nova_sim::DescMovie::from_desc("Port.mov", 0x0001).expect("named");
-    let mut view = FlightView::new(FakeCatalog {
+    let mut view = test_flight::new(FakeCatalog {
         desc_movies: vec![(3000, movie.clone())],
         ..described()
     });
-    assert_eq!(view.loaded_after_movie(), None, "none loaded yet");
+    assert_eq!(view.sim().loaded_after_movie(), None, "none loaded yet");
     let _ = view.load_description(3000);
     assert_eq!(
-        view.loaded_after_movie(),
+        view.sim().loaded_after_movie(),
         Some(movie),
         "a STR# text shown now plays it after (@0x5b40b)"
     );
     let _ = view.load_description(3001);
-    assert_eq!(view.loaded_after_movie(), None, "a dësc naming none");
+    assert_eq!(view.sim().loaded_after_movie(), None, "a dësc naming none");
 }
 
 #[test]
 fn an_unreadable_desc_empties_it() {
     let movie = nova_sim::DescMovie::from_desc("Port.mov", 0x0001).expect("named");
-    let mut view = FlightView::new(FakeCatalog {
+    let mut view = test_flight::new(FakeCatalog {
         desc_movies: vec![(3000, movie)],
         ..described()
     });
@@ -110,7 +110,7 @@ fn an_unreadable_desc_empties_it() {
     let _ = view.load_description(3000);
     assert!(view.load_description(9999).is_err());
     assert_eq!(
-        view.loaded_after_movie(),
+        view.sim().loaded_after_movie(),
         None,
         "as a missing dësc empties the MovieFile (@0x71a67-0x71a77)"
     );
@@ -120,7 +120,7 @@ fn an_unreadable_desc_empties_it() {
 
 #[test]
 fn with_no_session_a_loaded_description_reads_a_new_pilot() {
-    let mut view = FlightView::new(FakeCatalog {
+    let mut view = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..described()
     });
@@ -134,7 +134,7 @@ fn a_session_that_cannot_start_says_why_and_draws_nothing_else() {
         character: Err(StartError::NoCharacter),
         ..catalog()
     };
-    let mut view = FlightView::new(failed);
+    let mut view = test_flight::new(failed);
     assert_eq!(view.session().err(), Some("no chär to start from"));
     assert!(view.scene().is_none());
     assert_eq!(view.frame(), None);
@@ -159,7 +159,7 @@ fn the_unstarted_flight_shows_help_only_when_turned_on() {
         character: Err(StartError::NoCharacter),
         ..catalog()
     };
-    let view = FlightView::new(failed).with_overlays(FlightOverlays {
+    let view = test_flight::new(failed).with_overlays(FlightOverlays {
         title: false,
         help: true,
         cheats: false,
@@ -921,7 +921,7 @@ fn the_glow_still_shows_while_the_lights_are_off() {
 
 #[test]
 fn the_blink_pauses_while_the_map_is_open() {
-    let mut view = FlightView::new(blinking(SHUTTLE));
+    let mut view = test_flight::new(blinking(SHUTTLE));
     ticks(&mut view, 3);
     assert_eq!(lights_alphas(&view), [255], "tick 3");
     view.input(&key(MAP_KEY, true));
@@ -1268,7 +1268,7 @@ fn an_unreadable_status_bar_says_why_and_flight_goes_on() {
 
 #[test]
 fn a_ship_type_whose_government_has_its_own_interface_shows_that_bar() {
-    let view = FlightView::new(governed(catalog(), 128, 129));
+    let view = test_flight::new(governed(catalog(), 128, 129));
     assert_eq!(
         view.status_bar(),
         Ok(&StatusBar {
@@ -1290,7 +1290,7 @@ fn a_ship_type_whose_government_has_its_own_interface_shows_that_bar() {
         "{list:?}"
     );
     for interface in [127, 0, -1] {
-        let view = FlightView::new(governed(catalog(), 128, interface));
+        let view = test_flight::new(governed(catalog(), 128, interface));
         assert_eq!(
             view.status_bar().map(|bar| &bar.layout),
             Ok(&layout()),
@@ -1305,7 +1305,7 @@ fn a_session_that_cannot_start_has_no_status_bar() {
         character: Err(StartError::NoCharacter),
         ..catalog()
     };
-    let view = FlightView::new(failed);
+    let view = test_flight::new(failed);
     assert_eq!(view.status_bar(), Err("no chär to start from"));
 }
 

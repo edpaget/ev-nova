@@ -596,6 +596,7 @@ impl Harness {
             .screen()
             .flight_view()
             .expect("flying")
+            .sim()
             .pilot()
             .expect("a pilot")
             .clone()
@@ -853,7 +854,7 @@ fn a_new_app_opens_holding_the_last_pilot_saved_and_enter_ship_flies_it() {
     let mut game = Harness::launching(&store);
     assert_eq!(game.showing(), Showing::MainMenu);
     let held = game.app.screen().game_in_progress().expect("a game held");
-    assert_eq!(held.pilot().expect("a pilot").name(), "Ada");
+    assert_eq!(held.sim().pilot().expect("a pilot").name(), "Ada");
     assert_menu_drawn(&mut game);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);

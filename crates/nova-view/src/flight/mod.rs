@@ -68,6 +68,7 @@ pub mod catalog;
 pub mod cloak_fade;
 pub mod cursor;
 pub mod data;
+pub mod edge;
 pub mod effects;
 pub mod escorts;
 pub mod flash;
@@ -102,9 +103,12 @@ pub use catalog::{
     BoomLook, CombatLooks, EffectSheet, LayerSheet, Looks, ShipSheet, ShipSprites, StarSheet,
     StatusBarLayout, StatusBars, TargetCard, WeaponLook,
 };
+#[cfg(any(test, feature = "fixture"))]
+pub use edge::test_flight;
+pub use edge::{EdgeCatalog, FlightStart, open_flight};
 pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
-pub use sim_adapter::SessionFlight;
+pub use sim_adapter::{Collaborators, SessionFlight};
 pub use sim_port::FlightSim;
 pub use sprite::rotation_frame;
 pub use view::{FlightOverlays, FlightView, MapOpener, PortScreen, SharedChance};

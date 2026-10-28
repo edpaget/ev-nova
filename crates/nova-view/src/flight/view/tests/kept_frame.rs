@@ -115,7 +115,7 @@ fn an_arrival_draws_the_ship_where_it_arrives_and_the_new_systems_stellars_as_it
 #[test]
 fn a_new_pilots_beginning_draws_the_ship_where_it_begins() {
     let mut view = flight();
-    view.begin();
+    view.begin(SessionFlight::begin);
     let begun = *view.session().expect("flying").player();
     assert_eq!(begun.position, Vec2::new(50.0, 50.0), "where begin puts it");
     assert_eq!(view.previous.position, begun.position);
@@ -124,7 +124,7 @@ fn a_new_pilots_beginning_draws_the_ship_where_it_begins() {
 
 #[test]
 fn a_failed_flight_keeps_the_default_frame_through_its_catch_ups() {
-    let mut view = FlightView::new(FakeCatalog {
+    let mut view = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..catalog()
     });

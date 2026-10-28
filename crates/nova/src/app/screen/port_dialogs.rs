@@ -66,7 +66,7 @@ pub(super) fn open_port_dialogs(
 ) {
     if spaceport.take_mission_computer_request() {
         let computer = flight.open_mission_computer();
-        spaceport.open_mission_computer_after(computer, flight.loaded_after_movie());
+        spaceport.open_mission_computer_after(computer, flight.sim().loaded_after_movie());
     }
     if spaceport.take_hire_request()
         && let Some(list) = flight.escorts_for_hire()

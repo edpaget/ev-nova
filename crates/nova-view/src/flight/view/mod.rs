@@ -3,10 +3,12 @@
 //! camera following the ship, and jumping through hyperspace along the
 //! course plotted on the galaxy map.
 //!
-//! The screen owns a [`nova_sim::Session`], flying a new pilot
-//! ([`FlightView::new`]) or a given one ([`FlightView::with_pilot`]), and
-//! its catalog. It reads, once
-//! when it is built: the session's system, through the [`SystemCatalog`]
+//! The screen shows a flight it is handed built (by default a
+//! [`SessionFlight`] over a [`nova_sim::Session`], which the edge builds,
+//! [`open_flight`](crate::flight::open_flight)), flying a new pilot
+//! ([`FlightStart::New`](crate::flight::FlightStart::New)) or a given one
+//! ([`FlightStart::Pilot`](crate::flight::FlightStart::Pilot)), and holds
+//! its catalog ([`FlightView::over`]). It reads, once when it is built: the session's system, through the [`SystemCatalog`]
 //! port, the ship's sprite sheet, through the [`ShipSprites`](super::catalog::ShipSprites) port, the
 //! HUD's status bar for the player's government, through the
 //! [`StatusBars`](super::catalog::StatusBars) port, the galaxy for its course map, through the
@@ -26,16 +28,16 @@
 //! advance pass in the original's order ([`Session::game_work`]): the
 //! player's fire and move, the fight's collision passes, the traffic's AI,
 //! its NPCs deciding as the screen's [`Behaviour`](nova_sim::Behaviour) says
-//! ([`FlightView::with_behaviour`]; [`NovaAi`](nova_sim::NovaAi) by default), the shots,
+//! ([`Collaborators::behaviour`](crate::flight::Collaborators::behaviour); [`NovaAi`](nova_sim::NovaAi) by default), the shots,
 //! the traffic's motion, the NPCs' fire and the beams, the fight's ships
 //! disabled as the screen's
-//! [`DisableRule`](nova_sim::DisableRule) says ([`FlightView::with_disable_rule`];
+//! [`DisableRule`](nova_sim::DisableRule) says ([`SessionSetup::disable_rule`](nova_sim::SessionSetup::disable_rule);
 //! [`NovaDisable`](nova_sim::NovaDisable) by default), their point defence engaging every
 //! missile fired at them, or by the other reading of the `pd_hostility`
 //! rule those its [`PointDefenceRule`](nova_sim::PointDefenceRule) calls hostile
-//! ([`FlightView::with_point_defence_rule`]; [`Allegiance`](nova_sim::Allegiance) by default),
+//! ([`Collaborators::defence_rule`](crate::flight::Collaborators::defence_rule); [`Allegiance`](nova_sim::Allegiance) by default),
 //! and the player's crimes judged by its [`LegalCode`](nova_sim::LegalCode)
-//! ([`FlightView::with_law`]; [`NovaLaw`](nova_sim::NovaLaw) by default). What could not be read of the looks
+//! ([`Collaborators::law`](crate::flight::Collaborators::law); [`NovaLaw`](nova_sim::NovaLaw) by default). What could not be read of the looks
 //! (each once, when the screen is built), then the session's diagnostics
 //! about game data it does not handle yet, pass through
 //! [`Screen::take_diagnostics`](crate::Screen::take_diagnostics) for the app to write out. Each NPC is
@@ -121,7 +123,7 @@
 //! Landing and arriving clear the effects.
 //!
 //! Each day a jump takes rolls the planetary events on the screen's
-//! [`SharedChance`] ([`FlightView::with_chance`]); without one, nothing
+//! [`SharedChance`] ([`Collaborators::chance`](crate::flight::Collaborators::chance)); without one, nothing
 //! random happens. Landed at a trade center, the session's exchange can be
 //! read ([`FlightView::market`]) and traded on ([`FlightView::trade`]);
 //! landed at an outfitter, so can its outfitter ([`FlightView::outfitter`],
@@ -428,7 +430,7 @@
 //!   @0x6ab75).
 //! - B (a press) boards the target when the session allows it
 //!   ([`Session::board`]), by the screen's [`BoardingRule`](nova_sim::BoardingRule)
-//!   ([`FlightView::with_boarding_rule`]; [`NovaBoarding`](nova_sim::NovaBoarding) by default),
+//!   ([`Collaborators::boarding_rule`](crate::flight::Collaborators::boarding_rule); [`NovaBoarding`](nova_sim::NovaBoarding) by default),
 //!   and otherwise says why in the original's words (`STR#` 2002
 //!   #130-132), or nothing when there is no target or the player does not
 //!   face it. A boarding lets go of the flight keys and is held for the
@@ -457,7 +459,7 @@
 //!   mission that cannot be refused, with no offer text, is accepted at
 //!   once and shows nothing. Any other hail opens the comm dialog,
 //!   listing the screen's [`HailOptions`](nova_sim::HailOptions)
-//!   ([`FlightView::with_hail_options`]; Nova's by default), its replies
+//!   ([`Collaborators::hail_options`](crate::flight::Collaborators::hail_options); Nova's by default), its replies
 //!   read through the [`CommCatalog`](nova_sim::CommCatalog) port, and otherwise says why in the
 //!   original's words (`STR#` 2002 #53-54), or nothing with no target. A
 //!   hail answered lets go of the flight keys and is held for the router
@@ -524,7 +526,7 @@
 //!   ([`TargetPick::NextEscort`](nova_sim::TargetPick::NextEscort)), and Shift-Option-Tab the one before
 //!   ([`TargetPick::PreviousEscort`](nova_sim::TargetPick::PreviousEscort)), as for a hail. The escorts' standing
 //!   orders reset, or not, on entering a system as the session's rule
-//!   set says ([`FlightView::with_rules`]). While a jump is under way,
+//!   set says ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)). While a jump is under way,
 //!   the ship braking and turning for it or warping, the
 //!   escort menu's keys are taken, among the few that are (see J above),
 //!   as the original runs its escort block on every frame of a jump but
@@ -536,7 +538,7 @@
 //!   the system launches have their sheets read with the traffic's. What
 //!   a fighter launched does first, and what becomes of the fighters out
 //!   as the player leaves a system, follow the session's rule set
-//!   ([`FlightView::with_rules`]); fighters abandoned in a jump
+//!   ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)); fighters abandoned in a jump
 //!   are told on arrival ([`fighters_abandoned_message`](super::escorts::fighters_abandoned_message)).
 //! - Landed at an outfitter or a shipyard, the router asks the flight
 //!   for its list ([`FlightView::outfitter`], [`FlightView::shipyard`])
@@ -546,21 +548,21 @@
 //!   outfitter opens ([`FlightView::open_outfitter`]). Where the shops,
 //!   the exchange and the tribbles and perishables in flight follow a
 //!   disputed rule, they read it from the session's rule set
-//!   ([`FlightView::with_rules`]).
+//!   ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
 //!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance,
 //!   and has it draw the visit's news as the bar opens
 //!   ([`FlightView::open_bar`], [`FlightView::news`]);
 //!   the session's hire terms and control bits are set on the screen
-//!   ([`FlightView::with_hire_terms`], [`FlightView::with_control_bits`]),
+//!   ([`SessionSetup::hire_terms`](nova_sim::SessionSetup::hire_terms), [`SessionSetup::control_bits`](nova_sim::SessionSetup::control_bits)),
 //!   and its disputed hiring rules come from its rule set
-//!   ([`FlightView::with_rules`]). Hired escorts who defect unpaid
+//!   ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)). Hired escorts who defect unpaid
 //!   on arrival or at take-off are told ([`defection_message`]).
 //! - Persons appear as the session's rules say
-//!   ([`FlightView::with_person_rules`]); the target panel shows a
+//!   ([`SessionSetup::person_rules`](nova_sim::SessionSetup::person_rules)); the target panel shows a
 //!   person's own name and subtitle, a person hailed says its comm quote
-//!   as the session's rule set says ([`FlightView::with_rules`]), and
+//!   as the session's rule set says ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)), and
 //!   each step a person may
 //!   say its hail quote ([`Session::tick_quotes`], right after the
 //!   fight and the answer to its hits, [`Session::answer_strikes`]),
@@ -1357,7 +1359,7 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// What the wording's picks are rolled on (the dock request's line
     /// and the approach greeting, [`FlightView::text_of`]): the flight's
     /// own chance, the same handle, shared as the view is built
-    /// ([`FlightView::with_chance`] gives both), as the catalog is. It is a
+    /// ([`Collaborators::chance`](crate::flight::Collaborators::chance) gives both), as the catalog is. It is a
     /// collaborator handed in at construction, like the catalog, so the
     /// picks draw on the flight's chance in the order they always have,
     /// with no pick type of the view's on the port. The view's own

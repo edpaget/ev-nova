@@ -107,9 +107,45 @@ fn the_course_map_opens_on_the_flights_sources_with_the_coarse_pass() {
     assert_eq!(view.map.border_passes().next(), Next::Unstarted);
 }
 
+/// The edge's rulebook reaches the course map's borders: this phase's
+/// real check of the view reading its rules as it opens
+/// (rdm:phase/view-sim-seam/phase-13-lifecycle-at-the-edge). Both
+/// readings on `FakeFlight` are [`by_default_the_rules_run_the_pass_in_a_tick_and_find_runs_none`]
+/// and [`by_the_other_readings_the_pass_walks_a_tick_at_a_time_and_finds_centring_runs_the_coarse_one`].
+#[test]
+fn the_edges_rules_reach_the_course_map() {
+    let rules = Rulebook::default()
+        .with_override(RuleKey::MapBorderPace, RuleSource::Bible)
+        .with_override(RuleKey::MapFindBorders, RuleSource::Bible);
+    let mut view = known(ruled(bordered(), rules)).with_metrics(Rc::new(MonoMetrics));
+    tap(&mut view, MAP);
+    ticks(&mut view, 1);
+    assert_eq!(
+        passes(&view).next(),
+        Next::Walking { after: None },
+        "one null event a tick: the clear"
+    );
+    ticks(&mut view, 3);
+    assert_eq!(passes(&view).next(), Next::Idle);
+    view.input(&key(Key::Char('f'), true));
+    view.input(&Input::Text('f'));
+    view.input(&key(Key::Char('f'), false));
+    for c in "Sol".chars() {
+        view.input(&Input::Text(c));
+    }
+    tap(&mut view, Key::Enter);
+    assert!(!view.course_map().finding());
+    assert_eq!(
+        passes(&view).step(),
+        8,
+        "Find's centring ran the coarse pass"
+    );
+    assert_eq!(passes(&view).next(), Next::Unstarted);
+}
+
 #[test]
 fn the_course_map_runs_its_pass_on_flights_ticks() {
-    let mut view = known(FlightView::new(bordered()));
+    let mut view = known(test_flight::new(bordered()));
     tap(&mut view, MAP);
     ticks(&mut view, 1);
     assert!(view.map_open());
@@ -136,43 +172,6 @@ fn the_maps_next_drawing_takes_the_flights_sources_again() {
     faked_map_tap(&mut view, Key::Tab);
     faked_map_tap(&mut view, Key::Left);
     assert_eq!(govts_on(&view.map), [128, 129], "Proxima Near's blocks too");
-}
-
-/// This phase's real check of `with_rules`' hand-off to the course map's
-/// borders (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks): both
-/// readings on `FakeFlight` are [`by_default_the_rules_run_the_pass_in_a_tick_and_find_runs_none`]
-/// and [`by_the_other_readings_the_pass_walks_a_tick_at_a_time_and_finds_centring_runs_the_coarse_one`].
-#[test]
-fn the_rules_reach_the_course_map() {
-    let rules = Rulebook::default()
-        .with_override(RuleKey::MapBorderPace, RuleSource::Bible)
-        .with_override(RuleKey::MapFindBorders, RuleSource::Bible);
-    let mut view = known(FlightView::new(bordered()))
-        .with_rules(rules)
-        .with_metrics(Rc::new(MonoMetrics));
-    tap(&mut view, MAP);
-    ticks(&mut view, 1);
-    assert_eq!(
-        passes(&view).next(),
-        Next::Walking { after: None },
-        "one null event a tick: the clear"
-    );
-    ticks(&mut view, 3);
-    assert_eq!(passes(&view).next(), Next::Idle);
-    view.input(&key(Key::Char('f'), true));
-    view.input(&Input::Text('f'));
-    view.input(&key(Key::Char('f'), false));
-    for c in "Sol".chars() {
-        view.input(&Input::Text(c));
-    }
-    tap(&mut view, Key::Enter);
-    assert!(!view.course_map().finding());
-    assert_eq!(
-        passes(&view).step(),
-        8,
-        "Find's centring ran the coarse pass"
-    );
-    assert_eq!(passes(&view).next(), Next::Unstarted);
 }
 
 /// [`faked_bordered`] by `rules`, measured, its course map open, its
@@ -232,7 +231,7 @@ fn by_the_other_readings_the_pass_walks_a_tick_at_a_time_and_finds_centring_runs
 
 #[test]
 fn the_map_opens_with_the_borders_setting_it_is_given() {
-    let mut view = known(FlightView::new(bordered())).with_map_borders(false);
+    let mut view = known(test_flight::new(bordered())).with_map_borders(false);
     assert!(!view.map_borders_shown());
     tap(&mut view, MAP);
     assert!(!view.course_map().borders_shown());

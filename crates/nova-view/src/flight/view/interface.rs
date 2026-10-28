@@ -18,7 +18,7 @@ impl<C: DescriptionSource + DescriptionGraphics, S: FlightSim> FlightView<C, S> 
     /// flight ([`FlightSim::load_description`],
     /// `nova_sim::Session::load_description`), its conditional text
     /// resolved for the pilot, the remembered rank governments reset and
-    /// parsed, its movie the last loaded ([`FlightView::loaded_after_movie`]),
+    /// parsed, its movie the last loaded ([`SessionFlight::loaded_after_movie`](crate::flight::SessionFlight::loaded_after_movie)),
     /// and in the `l33t` mode its letters drawn on the flight's chance.
     /// With a session that failed, only its conditional text is resolved,
     /// for a new pilot ([`Gate::FRESH`](nova_sim::control::Gate::FRESH)).

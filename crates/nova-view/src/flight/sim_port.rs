@@ -115,7 +115,7 @@ pub trait FlightSim: MapSource + CommSource + PortSource + NameSource + PilotSou
     /// Why the flight could not start, if it could not: the view then
     /// draws only the reason, and the router opens no game on it. Such a
     /// flight fills the default frame, refuses every command and drains
-    /// nothing ([`check_contract`](fixture::check_contract)). `None` by
+    /// nothing (`fixture::check_contract`). `None` by
     /// default: a flight that started.
     fn failure(&self) -> Option<&str> {
         None

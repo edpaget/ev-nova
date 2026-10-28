@@ -2,8 +2,10 @@
 //! and plunder, trade, the outfitter, bar, hiring, news, the mission
 //! computer and offers, and the shipyard.
 
+#[cfg(any(test, feature = "fixture"))]
+use nova_sim::Pilot;
 use nova_sim::{InterfaceLoad, MissionId, MissionShown};
-use nova_sim::{Pilot, Session, StellarId};
+use nova_sim::{Session, StellarId};
 
 use crate::Point;
 use crate::flight::catalog::StatusBars;
@@ -292,39 +294,14 @@ impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
         self.sim.session.as_ref().map_err(String::as_str)
     }
 
-    /// Whether the pilot's load had to fall back for data the save
-    /// references and the catalog lacks ([`Session::load_repaired`]):
-    /// false for a session that failed.
-    #[must_use]
-    pub fn load_repaired(&self) -> bool {
-        self.sim.session.as_ref().is_ok_and(Session::load_repaired)
-    }
-
-    /// The pilot flying, if the flight started, through the adapter's own
-    /// [`SessionFlight::pilot`](crate::flight::SessionFlight::pilot).
-    #[must_use]
-    pub fn pilot(&self) -> Option<&Pilot> {
-        self.sim.pilot()
-    }
-
     /// Changes the pilot with `change` while landed, as
     /// [`Session::transact`] does, and says whether it did: through the
     /// adapter's own [`SessionFlight::transact`](crate::flight::SessionFlight::transact),
-    /// as a closure over the pilot is no command a sim could carry.
+    /// as a closure over the pilot is no command a sim could carry. For
+    /// tests.
+    #[cfg(any(test, feature = "fixture"))]
     pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
         self.sim.transact(change)
-    }
-
-    /// The after-movie a `STR#` text shown now plays, as
-    /// [`Session::loaded_after_movie`] gives it; none for a session that
-    /// failed.
-    #[must_use]
-    pub fn loaded_after_movie(&self) -> Option<nova_sim::DescMovie> {
-        self.sim
-            .session
-            .as_ref()
-            .ok()
-            .and_then(Session::loaded_after_movie)
     }
 }
 

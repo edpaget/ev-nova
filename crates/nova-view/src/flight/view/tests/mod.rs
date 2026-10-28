@@ -33,6 +33,7 @@ use crate::flight::sim_port::fixture::{FakeFlight, record};
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::Tag;
 use crate::flight::weapons;
+use crate::flight::{Collaborators, FlightStart, SessionFlight, open_flight, test_flight};
 use crate::galaxy::GalaxyCatalog;
 use crate::galaxy::{Galaxy, MapMode, SystemEntry};
 use crate::sound::Sound;
@@ -45,11 +46,11 @@ use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{DrawList, ImageKey, Input, MouseButton, Screen, ScreenAction};
 use nova_sim::CommCatalog;
+use nova_sim::SessionSetup;
 use nova_sim::ShipIff;
 use nova_sim::fixture::SessionBuilder;
 use nova_sim::flight_frame::{Answer, FlightCommand, FlightFrame, MapClick};
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
-use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
     ALERT_CICN, AbortError, AcceptError, Assigned, Assignment, AsteroidCatalog, CombatCatalog,
     ComputerRefusal, Controls, FighterNote, MissionId, MissionShown, NotOffered, Pilot,
@@ -75,6 +76,7 @@ mod controls;
 mod dialog_map;
 mod docked;
 mod drain;
+mod edge;
 mod escorts;
 mod faked_board;
 mod faked_docked;
@@ -1141,7 +1143,7 @@ impl StatusBars for FakeCatalog {
 }
 
 fn flight() -> View {
-    FlightView::new(catalog())
+    test_flight::new(catalog())
 }
 
 /// `session`'s ships, shots and beams, its smoke frame, murk, player and
@@ -1539,7 +1541,7 @@ fn governed(mut catalog: FakeCatalog, ship: i16, interface: i16) -> FakeCatalog 
 }
 /// The fake catalog with system 130 holding just `sites`.
 fn flight_among(sites: Vec<LandingSite>) -> View {
-    FlightView::new(FakeCatalog { sites, ..catalog() })
+    test_flight::new(FakeCatalog { sites, ..catalog() })
 }
 
 /// A flight in Sol, which lists `unseen`, stellar 150 named "Hole", after
@@ -1557,7 +1559,7 @@ fn flight_with_unseen(unseen: LandingSite) -> View {
         .place_names
         .stellars
         .insert(StellarId(150), "Hole".to_owned());
-    let view = FlightView::new(catalog);
+    let view = test_flight::new(catalog);
     let session = view.session().expect("flying");
     assert_eq!(
         session.stellars_shown().collect::<Vec<_>>(),
@@ -1711,14 +1713,58 @@ fn plot(view: &mut View, id: i16) {
 
 /// `view` reading [`nova_sim::RuleKey::MapPlotting`]'s other reading, the
 /// planner: a click on the map plots the shortest course to its system
-/// and cues its first hop at once.
-fn planner(view: View) -> View {
-    let rules = view
-        .session()
-        .expect("flying")
-        .rules()
-        .with_override(nova_sim::RuleKey::MapPlotting, nova_sim::RuleSource::Bible);
-    view.with_rules(rules)
+/// and cues its first hop at once: a new pilot of `catalog` flown, set
+/// up by that rulebook at the edge.
+fn planner(catalog: FakeCatalog) -> View {
+    ruled(
+        catalog,
+        Rulebook::default()
+            .with_override(nova_sim::RuleKey::MapPlotting, nova_sim::RuleSource::Bible),
+    )
+}
+
+/// A new pilot of `catalog` flown, set up at the edge with `rules` and
+/// nothing else ([`open_flight`]).
+fn ruled(catalog: FakeCatalog, rules: Rulebook) -> View {
+    open_flight(
+        catalog,
+        FlightStart::New,
+        SessionSetup {
+            rules,
+            ..SessionSetup::default()
+        },
+        Collaborators::default(),
+    )
+}
+
+/// Nova's collaborators, rolling on `chance`, the NPCs deciding as
+/// `behaviour` says.
+fn on(chance: SharedChance, behaviour: Rc<dyn Behaviour>) -> Collaborators {
+    Collaborators {
+        chance,
+        behaviour,
+        ..Collaborators::default()
+    }
+}
+
+/// `view` with its flight's NPCs deciding as `behaviour` says from now
+/// on: the adapter's collaborator swapped mid-flight, for a test that
+/// flies under one behaviour, then another.
+fn now_deciding(mut view: View, behaviour: Rc<dyn Behaviour>) -> View {
+    view.sim.behaviour = behaviour;
+    view
+}
+
+/// `view` with its ships disabled as `rule` says from now on, in the
+/// fight and in its session's changes of ship, as the edge's setup and
+/// the adapter would have it: swapped mid-flight.
+fn now_disabling(mut view: View, rule: Rc<dyn DisableRule>) -> View {
+    view.sim.session = view
+        .sim
+        .session
+        .map(|session| session.with_disable_rule(Rc::clone(&rule)));
+    view.sim.disable_rule = rule;
+    view
 }
 
 /// Thrusts straight up until the ship is at least the minimum jump
@@ -1742,7 +1788,7 @@ fn fly_out(view: &mut View) {
 /// `view` begun as a new pilot's, ticked once past the land hint, its
 /// message and sounds let go.
 fn new_pilot(mut view: View) -> View {
-    view.begin();
+    view.begin(SessionFlight::begin);
     ticks(&mut view, 1);
     view.message = None;
     view.take_sounds();
@@ -1884,10 +1930,10 @@ fn tick_to_arrival(view: &mut View) {
 /// Jumps from Sol to Alpha Centauri, on a course on to Barnard, and
 /// stops 50 ms into the arrival's fade-in.
 fn fading_in_on_course_to_barnard() -> View {
-    let mut view = planner(FlightView::new(FakeCatalog {
+    let mut view = planner(FakeCatalog {
         onward: true,
         ..catalog()
-    }));
+    });
     plot(&mut view, 132);
     fly_out(&mut view);
     jump_now(&mut view);
@@ -1909,27 +1955,53 @@ fn docked_pilot(name: &str) -> Pilot {
         ..catalog()
     };
     let pilot = Pilot::new(&centred, name).expect("starts");
-    let mut view = FlightView::with_pilot(centred, pilot);
+    let mut view = test_flight::with_pilot(centred, pilot);
     land_now(&mut view);
     assert_eq!(view.take_landing(), Some(StellarId(128)));
-    view.pilot().expect("flying").clone()
+    view.sim().pilot().expect("flying").clone()
 }
 
-/// A flight of a new pilot of `catalog` named `name`, flying at the
-/// centre.
-fn flying_as(catalog: FakeCatalog, name: &str) -> View {
+/// [`flying_as`], rolling on `chance`.
+fn flying_as_on(catalog: FakeCatalog, name: &str, chance: SharedChance) -> View {
     let session = SessionBuilder::flying(&catalog).named(name).build();
-    FlightView::from_session(catalog, session.into())
+    FlightView::from_session(catalog, on_chance(session, chance), &Rulebook::default())
+}
+
+/// The flight of `session`, with Nova's collaborators, rolling on
+/// `chance`.
+fn on_chance(session: Session, chance: SharedChance) -> SessionFlight<FakeCatalog> {
+    SessionFlight::from(session).with_collaborators(Collaborators {
+        chance,
+        ..Collaborators::default()
+    })
+}
+
+/// A new pilot's flight of `catalog`, with Nova's collaborators, rolling
+/// on `chance`.
+fn new_on(catalog: FakeCatalog, chance: SharedChance) -> View {
+    test_flight::flown(
+        catalog,
+        FlightStart::New,
+        Collaborators {
+            chance,
+            ..Collaborators::default()
+        },
+    )
 }
 
 /// A flight of `catalog`'s pilot Ada resumed over Earth (128), as a load
 /// resumes one last landed there: in flight at its centre, at rest.
 fn over_earth(catalog: FakeCatalog) -> View {
+    over_earth_on(catalog, SharedChance::default())
+}
+
+/// [`over_earth`], rolling on `chance`.
+fn over_earth_on(catalog: FakeCatalog, chance: SharedChance) -> View {
     let session = SessionBuilder::flying(&catalog)
         .named("Ada")
         .over(StellarId(128))
         .build();
-    FlightView::from_session(catalog, session.into())
+    FlightView::from_session(catalog, on_chance(session, chance), &Rulebook::default())
 }
 
 /// A view of Ada resumed over Earth and landed there, the landing,
@@ -2144,7 +2216,9 @@ fn rolling_one() -> SharedChance {
 
 fn bit_set(view: &View, n: u16) -> bool {
     let bit = nova_sim::Bit::new(n).expect("a bit");
-    view.pilot().is_some_and(|pilot| pilot.control_bit(bit))
+    view.sim()
+        .pilot()
+        .is_some_and(|pilot| pilot.control_bit(bit))
 }
 /// The texts drawn in the nav area of the port's status bar
 /// ([`FlightView::draw_status_bar`]), as [`nav`] reads flight's.
@@ -2204,7 +2278,7 @@ fn in_the_bar(course: Option<i16>) -> View {
 fn in_the_bar_of(mut catalog: FakeCatalog, course: Option<i16>) -> View {
     catalog.sites[0].flags |= StellarFlags::BAR;
     let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Engine);
-    let mut view = FlightView::new(catalog).with_rules(rules);
+    let mut view = ruled(catalog, rules);
     if let Some(to) = course {
         view.sim
             .session
@@ -2838,9 +2912,7 @@ fn armed(avg: i16, weapons: &[WeaponId]) -> FakeCatalog {
 /// the step that populates the system.
 fn fighting(catalog: FakeCatalog, draws: &[u32]) -> View {
     let (_, chance) = scripted(draws);
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
+    let mut view = test_flight::flown(catalog, FlightStart::New, on(chance, Rc::new(Still)));
     view.tick(TICK);
     view
 }
@@ -3008,7 +3080,7 @@ fn ship_class(id: i16) -> ShipRecord {
 
 /// `catalog`'s view under its NPC's fire, holding each of `keys`.
 fn ejecting_view(catalog: FakeCatalog, keys: &[Key]) -> View {
-    let mut view = fighting(catalog, &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+    let mut view = now_deciding(fighting(catalog, &placed(750, 650, 180)), Rc::new(Firing));
     for &held in keys {
         view.input(&key(held, true));
     }
@@ -3066,7 +3138,10 @@ fn until_the_player_explodes(view: &mut View, breaking_up: impl Fn(&View)) {
 /// frame after the hit (@0x43e29): a breakup of 90 ticks, so it is still
 /// breaking up for the test.
 fn breaking_up() -> View {
-    let mut view = fighting(killed_in(30), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+    let mut view = now_deciding(
+        fighting(killed_in(30), &placed(750, 650, 180)),
+        Rc::new(Firing),
+    );
     for _ in 0..60 {
         view.tick(TICK);
         if matches!(fate_of(&view), PlayerFate::BreakingUp { ticks_left, .. } if ticks_left > 0) {
@@ -3083,7 +3158,10 @@ fn fate_of(view: &View) -> PlayerFate {
 /// A flight under fire from [`killed_in`]`(1)`'s NPC, stepped to the
 /// player's explosion and one tick past it.
 fn exploded() -> View {
-    let mut view = fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+    let mut view = now_deciding(
+        fighting(killed_in(1), &placed(750, 650, 180)),
+        Rc::new(Firing),
+    );
     until_the_player_explodes(&mut view, |_| {});
     view.tick(TICK);
     view
@@ -3235,11 +3313,9 @@ fn beside(x: u32, y: u32, heading: u32, intact: bool) -> View {
 /// [`beside`], flying over `catalog`.
 fn beside_in(catalog: FakeCatalog, x: u32, y: u32, heading: u32, intact: bool) -> View {
     let (_, chance) = scripted(&placed(x, y, heading));
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
+    let mut view = test_flight::flown(catalog, FlightStart::New, on(chance, Rc::new(Still)));
     if !intact {
-        view = view.with_disable_rule(Rc::new(DisablesTheStrong));
+        view = now_disabling(view, Rc::new(DisablesTheStrong));
     }
     view.tick(TICK);
     tap(&mut view, TARGET_KEY);
@@ -3251,11 +3327,15 @@ fn beside_in(catalog: FakeCatalog, x: u32, y: u32, heading: u32, intact: bool) -
 /// [`captured`], from `catalog`, a [`boardable`] one.
 fn captured_in(catalog: FakeCatalog) -> View {
     let (_, chance) = scripted(&placed(750, 750, 0));
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still))
-        .with_disable_rule(Rc::new(DisablesTheStrong))
-        .with_boarding_rule(Rc::new(Sure));
+    let view = test_flight::flown(
+        catalog,
+        FlightStart::New,
+        Collaborators {
+            boarding_rule: Rc::new(Sure),
+            ..on(chance, Rc::new(Still))
+        },
+    );
+    let mut view = now_disabling(view, Rc::new(DisablesTheStrong));
     view.tick(TICK);
     tap(&mut view, TARGET_KEY);
     tap(&mut view, BOARD_KEY);
@@ -3336,17 +3416,19 @@ fn fleet(ships: &[i16], carried: bool) -> Vec<nova_sim::fleet::Escort> {
 }
 
 /// A flight of `catalog`'s pilot `name`, its fleet `escorts`, which its
-/// first tick places.
+/// first tick places, its calls handed `collaborators`.
 fn escorted_flight(
     catalog: FakeCatalog,
     name: &str,
     escorts: Vec<nova_sim::fleet::Escort>,
+    collaborators: Collaborators,
 ) -> View {
     let session = SessionBuilder::flying(&catalog)
         .named(name)
         .with_escorts(escorts)
         .build();
-    FlightView::from_session(catalog, session.into())
+    let sim = SessionFlight::from(session).with_collaborators(collaborators);
+    FlightView::from_session(catalog, sim, &Rulebook::default())
 }
 
 /// [`boardable`] with ship 130 a fighter (`EscortType` 0) holding
@@ -3366,9 +3448,12 @@ fn fighters_out_of(mut catalog: FakeCatalog) -> View {
         }
     }
     let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = escorted_flight(catalog, "Carrier", fleet(&[130, 130], true))
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
+    let mut view = escorted_flight(
+        catalog,
+        "Carrier",
+        fleet(&[130, 130], true),
+        on(chance, Rc::new(Still)),
+    );
     view.tick(TICK);
     assert!(view.session().expect("flying").is_escort(NpcId(2)));
     view
@@ -3402,9 +3487,12 @@ fn escorted_with_traffic(x: u32, y: u32) -> View {
         }
     }
     let (_, chance) = scripted(&placed(x, y, 0));
-    let mut view = escorted_flight(catalog, "Escorted", fleet(&[130], false))
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
+    let mut view = escorted_flight(
+        catalog,
+        "Escorted",
+        fleet(&[130], false),
+        on(chance, Rc::new(Still)),
+    );
     view.tick(TICK);
     let session = view.session().expect("flying");
     assert!(session.is_escort(NpcId(1)), "{:?}", session.npcs());
@@ -3412,7 +3500,8 @@ fn escorted_with_traffic(x: u32, y: u32) -> View {
 }
 
 fn orders(view: &View) -> Vec<Option<EscortOrder>> {
-    view.pilot()
+    view.sim()
+        .pilot()
         .expect("flying")
         .escorts()
         .iter()
@@ -3431,7 +3520,7 @@ fn ui_sounds(view: &mut View) -> Vec<UiSound> {
         .collect()
 }
 use nova_sim::hire::DEFECTED_ONE;
-use nova_sim::{ControlBits, HireRefusal, HireTerms};
+use nova_sim::{ControlBits, HireRefusal};
 
 /// [`shipbuying`] with its stellar a bar too, and ship 129 (`Cost`
 /// 900) for hire half the days.
@@ -3503,7 +3592,7 @@ fn command_tap(view: &mut View, k: Key, option: bool) {
 }
 
 fn cargo_aboard(view: &View) -> i64 {
-    view.pilot().expect("flying").total_cargo()
+    view.sim().pilot().expect("flying").total_cargo()
 }
 
 /// Inspects the player until its flag is set; then it has looked the
@@ -3526,15 +3615,6 @@ impl Behaviour for InspectingUntil {
     }
 }
 
-/// Control bits where nothing holds.
-#[derive(Debug)]
-struct Nothing;
-
-impl ControlBits for Nothing {
-    fn allows(&self, _test: &nova_sim::TestExpr, _pilot: &dyn nova_sim::PilotFacts) -> bool {
-        false
-    }
-}
 /// Runs set expression `text` on `view`'s session.
 fn run_set(view: &mut View, text: &str) {
     let expr = nova_sim::SetExpr::parse(text).expect("parses");
@@ -3562,12 +3642,6 @@ fn bar_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<i16> {
         .ok()
         .map(|bar| bar.layout.status_bkgnd)
 }
-/// Changes `view`'s galaxy by itself, not through the view.
-fn change_galaxy(view: &mut View, change: impl FnOnce(&mut nova_sim::story::GalaxyOverlay)) {
-    let session = view.sim.session.as_mut().expect("flying");
-    assert!(session.change_galaxy(&view.catalog, change));
-}
-
 /// Hides system `id`.
 fn hiding(id: i16) -> impl FnOnce(&mut nova_sim::story::GalaxyOverlay) {
     move |overlay| {
@@ -3592,7 +3666,7 @@ fn life(id: i16, flags2: u16) -> nova_sim::StellarLife {
 /// (129, no different graphic) and Proxima (140, `DeadType` sheet
 /// 2140) can be destroyed.
 fn destructible() -> View {
-    FlightView::new(FakeCatalog {
+    test_flight::new(FakeCatalog {
         lives: vec![life(128, 0), life(129, 0), life(140, 0)],
         ..catalog()
     })
@@ -3603,9 +3677,10 @@ fn destructible() -> View {
 fn disabled_player() -> View {
     let mut catalog = armed(1, &[]);
     catalog.hulls[1] = hull_of(129, &[BLASTER]);
-    let mut view = fighting(catalog, &placed(750, 650, 180))
-        .with_behaviour(Rc::new(Firing))
-        .with_disable_rule(Rc::new(Disabling));
+    let mut view = now_disabling(
+        now_deciding(fighting(catalog, &placed(750, 650, 180)), Rc::new(Firing)),
+        Rc::new(Disabling),
+    );
     for _ in 0..40 {
         if fate_of(&view) == PlayerFate::Disabled {
             return view;
@@ -3799,9 +3874,7 @@ const QUIET: SoundPrefs = SoundPrefs {
 /// flight's first (frame 0), sound `prefs`: the Red Alert's check at
 /// frame 60 is the 60th tick from here.
 fn threatened(prefs: SoundPrefs) -> View {
-    fighting(armed(2, &[]), &two_npcs())
-        .with_behaviour(Rc::new(Threatening))
-        .with_sound_prefs(prefs)
+    now_deciding(fighting(armed(2, &[]), &two_npcs()), Rc::new(Threatening)).with_sound_prefs(prefs)
 }
 use crate::flight::floating;
 use crate::galaxy::map::{
@@ -3812,7 +3885,7 @@ use nova_sim::mission::screens::mac_ticks;
 
 /// [`catalog`] with Proxima Near ([`FakeCatalog::near`]).
 fn near() -> View {
-    FlightView::new(FakeCatalog {
+    test_flight::new(FakeCatalog {
         near: true,
         ..catalog()
     })

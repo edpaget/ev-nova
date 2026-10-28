@@ -1450,7 +1450,7 @@ impl SpaceportView {
     /// `after`, the movie a `STR#` text plays once it closes: the last
     /// `dësc` loaded's after-movie, as `_ShowTextDialog`'s after-check
     /// reads it (@0xa3956, then @0x5b40b-0x5b44f; see
-    /// [`FlightView::loaded_after_movie`](crate::flight::FlightView::loaded_after_movie)).
+    /// [`SessionFlight::loaded_after_movie`](crate::flight::SessionFlight::loaded_after_movie)).
     pub fn open_mission_computer_after(
         &mut self,
         computer: Result<MissionComputer, ComputerRefusal>,

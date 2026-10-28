@@ -282,11 +282,6 @@ fn nebulae_in(list: &DrawList) -> Vec<(i16, bool)> {
         .collect()
 }
 
-/// The nebulae `view`'s open course map draws ([`nebulae_in`]).
-fn map_nebulae(view: &View) -> Vec<(i16, bool)> {
-    nebulae_in(&drawn(view))
-}
-
 /// A view over a scripted flight in Sol by `rules`, over Sol's nebula,
 /// the flight's galaxy holding it explored, with the course map open: at
 /// 0.5625 its rect is 106 pixels a side. The nebulae its map draws.
@@ -325,29 +320,6 @@ fn the_course_map_draws_a_nebula_from_the_largest_picture_that_fits() {
 fn by_the_other_reading_the_course_map_draws_the_smallest_picture_that_covers() {
     let rules = Rulebook::default().with_override(RuleKey::NebulaPicture, RuleSource::Bible);
     assert_eq!(faked_nebulae_by(&rules), [(9502, true)]);
-}
-
-/// This phase's real check of `with_rules`' hand-off to the course map's
-/// nebulae (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks): both
-/// readings on `FakeFlight` are
-/// [`the_course_map_draws_a_nebula_from_the_largest_picture_that_fits`]
-/// and [`by_the_other_reading_the_course_map_draws_the_smallest_picture_that_covers`].
-#[test]
-fn with_rules_switches_the_nebula_picture_back() {
-    let bible = Rulebook::default().with_override(RuleKey::NebulaPicture, RuleSource::Bible);
-    let view = FlightView::new(FakeCatalog {
-        nebula: true,
-        ..catalog()
-    })
-    .with_rules(bible)
-    .with_rules(Rulebook::default());
-    let mut view = view;
-    change_galaxy(&mut view, |overlay| {
-        overlay.set_nebula_explored(nova_sim::NebulaId(128), true);
-    });
-    view.tick(TICK);
-    tap(&mut view, MAP);
-    assert_eq!(map_nebulae(&view), [(9500, true)]);
 }
 
 #[test]
@@ -1436,7 +1408,7 @@ fn the_hypergate_map_marks_its_arrows_known_and_its_next_draw_shows_them() {
 #[test]
 fn the_hypergate_maps_own_mark_takes_no_redraw_a_frame_on() {
     // The gate leads to Barnard (132), which nothing has made known.
-    let mut view = FlightView::new(FakeCatalog {
+    let mut view = test_flight::new(FakeCatalog {
         gate_listers: vec![(SystemId(132), StellarId(310))],
         ..gated()
     });
@@ -1579,13 +1551,22 @@ fn panel_strings() -> (i16, Vec<String>) {
     (nova_sim::news::MISC_STRINGS, list)
 }
 
-/// `view` with the panel's words among its string lists.
-fn worded(view: View) -> View {
+/// A new pilot of [`catalog`] flown with the panel's words among its
+/// string lists, set up at the edge.
+fn worded() -> View {
     let strings = FakeCatalog {
         strings: vec![panel_strings()],
         ..catalog()
     };
-    view.with_strings(Rc::new(strings))
+    open_flight(
+        catalog(),
+        FlightStart::New,
+        SessionSetup {
+            strings: Some(Rc::new(strings)),
+            ..SessionSetup::default()
+        },
+        Collaborators::default(),
+    )
 }
 
 /// The Geneva 9 text drawn with its baseline at (`x`, `baseline`), if
@@ -1813,7 +1794,7 @@ fn the_course_maps_panel_draws_goods_and_services_unknown_or_listed_as_the_fligh
 #[test]
 fn the_flights_metrics_measure_the_course_maps_panel() {
     // The date set against the strip's right edge: 1016 − width − 5.
-    let mut view = worded(flight()).with_metrics(Rc::new(crate::text::fixture::MonoMetrics));
+    let mut view = worded().with_metrics(Rc::new(crate::text::fixture::MonoMetrics));
     tap(&mut view, MAP);
     let date = view.session().expect("flying").med_date_text();
     let width =
@@ -1875,7 +1856,7 @@ fn a_fresh_flights_map_opens_on_the_current_system_at_0_5625() {
         }),
         ..catalog()
     };
-    let mut view = FlightView::new(in_alpha);
+    let mut view = test_flight::new(in_alpha);
     tap(&mut view, MAP);
     assert!(view.map_open());
     assert_eq!(map_place(&view), (0.5625, (600, 0)));

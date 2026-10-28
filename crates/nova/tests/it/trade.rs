@@ -507,6 +507,7 @@ impl Harness {
             .screen()
             .flight_view()
             .expect("flying")
+            .sim()
             .pilot()
             .expect("a pilot")
             .clone()

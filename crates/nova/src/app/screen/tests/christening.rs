@@ -165,6 +165,7 @@ fn the_name_confirmed_culled_is_the_ships_and_is_saved() {
     let held = screen
         .game_in_progress()
         .expect("held")
+        .sim()
         .pilot()
         .expect("a pilot");
     assert_eq!(held.ship_name(), Some("Raven"));
@@ -207,6 +208,7 @@ fn cancelling_the_christening_keeps_the_game_held_before() {
     let held = screen
         .game_in_progress()
         .expect("held")
+        .sim()
         .pilot()
         .expect("a pilot");
     assert_eq!(held.name(), "Ada", "the game held before");
@@ -249,6 +251,7 @@ fn the_chärs_on_start_runs_after_the_christening() {
     let held = screen
         .game_in_progress()
         .expect("held")
+        .sim()
         .pilot()
         .expect("a pilot");
     assert_eq!(held.ship_name(), Some("Renamed"), "OnStart renames it");

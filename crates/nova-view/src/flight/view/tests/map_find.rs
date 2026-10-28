@@ -32,7 +32,7 @@ fn measured(view: View) -> View {
 /// A measured flight from Sol over [`named`]'s [`catalog`], with the
 /// course map open and its sounds taken.
 fn on_the_map() -> View {
-    let mut view = measured(FlightView::new(named(catalog())));
+    let mut view = measured(test_flight::new(named(catalog())));
     tap(&mut view, MAP);
     view.take_sounds();
     view
@@ -378,7 +378,7 @@ fn closing_the_map_with_find_open_drops_it() {
 fn find_is_laid_out_from_the_template_and_style_the_flight_gives() {
     let mut template = crate::galaxy::find::fallback();
     template.items[CANCEL_ITEM - 1].kind = ItemSpec::Button("Never mind".to_owned());
-    let view = measured(FlightView::new(named(catalog())));
+    let view = measured(test_flight::new(named(catalog())));
     let mut view = view.with_find(Some(template), ButtonStyle::STOCK);
     tap(&mut view, MAP);
     type_in(&mut view, "f");

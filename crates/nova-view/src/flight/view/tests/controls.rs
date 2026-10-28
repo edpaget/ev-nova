@@ -94,10 +94,11 @@ fn refuelling() -> View {
         .with_reserve(nova_sim::Reserve::Fuel, 95.0)
         .build();
     let (_, chance) = scripted(&placed(750, 750, 0));
-    let mut view = FlightView::from_session(catalog, session.into())
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still))
-        .with_hail_options(HailOptions::empty().with(Rc::new(Refuel)));
+    let sim = SessionFlight::from(session).with_collaborators(Collaborators {
+        hail_options: HailOptions::empty().with(Rc::new(Refuel)),
+        ..on(chance, Rc::new(Still))
+    });
+    let mut view = FlightView::from_session(catalog, sim, &Rulebook::default());
     view.tick(TICK);
     tap(&mut view, TARGET_KEY);
     tap(&mut view, HAIL_KEY);
@@ -205,9 +206,7 @@ fn a_click_on_a_ship_targets_it_during_a_jump() {
         }
     }
     let (_, chance) = scripted(&placed(750, 0, 0));
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
+    let mut view = test_flight::flown(catalog, FlightStart::New, on(chance, Rc::new(Still)));
     view.tick(TICK);
     let id = npc_ids(&view)[0];
     plot(&mut view, 131);
@@ -445,112 +444,6 @@ fn by_the_other_reading_an_undisplayed_ship_is_hovered_and_clicked_where_it_is()
 }
 
 #[test]
-fn a_flight_hands_its_stellar_sprite_pool_to_its_session_and_back() {
-    use nova_sim::story::sprite_pool::{SlotSprite, StellarSpritePool};
-    let mut pool = StellarSpritePool::default();
-    pool.rebuild((2000..2016).map(nova_sim::StellarId));
-    pool.place(nova_sim::StellarId(2015), (-7, 9));
-    pool.rebuild([]);
-    let view = flight().with_stellar_sprite_pool(pool);
-    let ghost = SlotSprite::Ghost { top_left: (-7, 9) };
-    let carried = view.stellar_sprite_pool().expect("flying");
-    assert_eq!(carried.sprite_of(nova_sim::StellarId(2015), false), ghost);
-    assert_eq!(
-        view.session()
-            .expect("flying")
-            .stellar_sprite_pool()
-            .sprite_of(nova_sim::StellarId(2015), false),
-        ghost
-    );
-    let failed = FlightView::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    })
-    .with_stellar_sprite_pool(StellarSpritePool::default());
-    assert_eq!(failed.stellar_sprite_pool(), None);
-}
-
-#[test]
-fn a_flight_hands_its_kept_berths_to_its_session_and_back() {
-    let mut traffic = nova_sim::Traffic::new();
-    traffic.set_berth_person(2, "Ace");
-    let kept = traffic.kept_berths();
-    let view = flight().with_kept_berths(kept.clone());
-    assert_eq!(view.session().expect("flying").kept_berths(), kept);
-    assert_eq!(view.kept_berths(), Some(kept.clone()));
-    let failed = FlightView::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    })
-    .with_kept_berths(kept);
-    assert_eq!(failed.kept_berths(), None);
-}
-
-/// A new pilot of [`catalog`] begun, with `carried` handed on, if any:
-/// whether it explored Alpha Centauri (131), Sol's neighbour.
-fn begun_explores_131(carried: Option<nova_sim::LastRefresh>) -> bool {
-    let catalog = catalog();
-    let view = flying_as(catalog, "Ada");
-    let mut view = match carried {
-        Some(carried) => view.with_last_refresh(carried),
-        None => view,
-    };
-    view.begin();
-    view.session()
-        .expect("flying")
-        .pilot()
-        .has_explored(SystemId(131))
-}
-
-#[test]
-fn a_flight_hands_the_last_refresh_to_its_new_pilots_neighbour_pass_and_back() {
-    let hiding = nova_sim::LastRefresh::hiding([SystemId(131)]);
-    assert!(begun_explores_131(None), "the launch's");
-    assert!(!begun_explores_131(Some(hiding.clone())), "the one carried");
-    // 131 hidden until the `OnStart` sets bit 50.
-    let mut shown_on_start = starting_with("b50");
-    shown_on_start
-        .visibility
-        .push(nova_sim::catalog::SystemVisibility {
-            id: SystemId(131),
-            visibility: nova_sim::control::Test::parse("b50"),
-        });
-    let mut view = flying_as(shown_on_start, "Ada");
-    view.begin();
-    assert_eq!(view.last_refresh(), Some(hiding.clone()), "before OnStart");
-    view.enter_game();
-    assert_eq!(view.last_refresh(), Some(nova_sim::LastRefresh::default()));
-    let mut failed = FlightView::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    })
-    .with_last_refresh(hiding);
-    failed.enter_game();
-    assert_eq!(failed.last_refresh(), None);
-}
-
-#[test]
-fn a_flight_hands_its_slot_sprites_to_its_session_and_back() {
-    let mut sprites = SlotSprites::default();
-    sprites.layers.put(
-        nova_sim::ship_layer::Slot::Berth(2),
-        nova_sim::ship_layer::ShipLayer::Led,
-    );
-    sprites
-        .frames
-        .clone_frames(nova_sim::ship_layer::Slot::Berth(2), ShipId(140));
-    let view = flight().with_slot_sprites(sprites.clone());
-    assert_eq!(view.session().expect("flying").slot_sprites(), &sprites);
-    assert_eq!(view.slot_sprites(), Some(&sprites));
-    let failed = FlightView::new(FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    })
-    .with_slot_sprites(sprites);
-    assert_eq!(failed.slot_sprites(), None);
-}
-
-#[test]
 fn cancelling_the_pointer_forgets_the_cursor_until_the_next_move() {
     let mut view = flight();
     view.input(&Input::PointerMoved(NOWHERE));
@@ -664,12 +557,12 @@ fn flight_hides_the_system_pointer_unless_the_map_is_open_or_it_has_no_cursor() 
         cursor_sheet: Err("no spïn 650".to_owned()),
         ..catalog()
     };
-    assert!(!FlightView::new(no_cursor).hides_pointer());
+    assert!(!test_flight::new(no_cursor).hides_pointer());
     let failed = FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..catalog()
     };
-    assert!(!FlightView::new(failed).hides_pointer());
+    assert!(!test_flight::new(failed).hides_pointer());
 }
 
 // Keys held across a jump's end, an Option release or a repair
@@ -680,10 +573,10 @@ fn flight_hides_the_system_pointer_unless_the_map_is_open_or_it_has_no_cursor() 
 /// streak, its sounds let go. The planner plots it, as Barnard's Star
 /// is unknown past the unexplored Alpha Centauri.
 fn streaking_to(to: i16) -> View {
-    let mut view = planner(FlightView::new(FakeCatalog {
+    let mut view = planner(FakeCatalog {
         onward: true,
         ..catalog()
-    }));
+    });
     plot(&mut view, to);
     fly_out(&mut view);
     jump_now(&mut view);

@@ -9,9 +9,9 @@ use super::*;
 #[test]
 fn beginning_runs_on_start_once_and_explores_what_it_sets() {
     let catalog = starting_with("R(b5 b6) ^b7 X131");
-    let mut view = flying_as(catalog, "Ada").with_chance(rolling_one());
+    let mut view = flying_as_on(catalog, "Ada", rolling_one());
     assert!(!bit_set(&view, 7), "flying runs nothing");
-    view.begin();
+    view.begin(SessionFlight::begin);
     assert!(bit_set(&view, 5), "on the flight's chance");
     assert!(bit_set(&view, 7), "once");
     let explored: Vec<SystemId> = view.session().expect("flying").pilot().explored().collect();
@@ -20,17 +20,17 @@ fn beginning_runs_on_start_once_and_explores_what_it_sets() {
         character: Err(StartError::NoCharacter),
         ..starting_with("b5")
     };
-    let mut broken = FlightView::new(broken);
-    broken.begin();
-    assert_eq!(broken.pilot(), None);
+    let mut broken = test_flight::new(broken);
+    broken.begin(SessionFlight::begin);
+    assert_eq!(broken.sim().pilot(), None);
 }
 
 #[test]
 fn resuming_faces_the_heading_drawn_on_the_flights_chance() {
     let (script, chance) = scripted(&[123]);
-    let mut view = over_earth(catalog()).with_chance(chance);
+    let mut view = over_earth_on(catalog(), chance);
     assert_eq!(player(&view).heading, 0.0, "flying alone faces up");
-    view.resume();
+    view.sim_mut().resume();
     assert_eq!(player(&view).heading, 123.0);
     let asked = &script.borrow().asked;
     assert_eq!(asked[0], 360, "the heading first");
@@ -45,8 +45,8 @@ fn resuming_faces_the_heading_drawn_on_the_flights_chance() {
 fn beginning_draws_the_offer_roll_table_on_the_flights_chance() {
     let (script, chance) = scripted(&[]);
     let catalog = catalog();
-    let mut view = flying_as(catalog, "Ada").with_chance(chance);
-    view.begin();
+    let mut view = flying_as_on(catalog, "Ada", chance);
+    view.begin(SessionFlight::begin);
     let asked = &script.borrow().asked;
     assert!(asked.len() >= nova_sim::mission::ROLLED);
     assert_eq!(
@@ -59,8 +59,8 @@ fn beginning_draws_the_offer_roll_table_on_the_flights_chance() {
 fn beginning_a_new_pilot_leaves_it_facing_up() {
     let (_, chance) = scripted(&[123]);
     let catalog = catalog();
-    let mut view = flying_as(catalog, "Ada").with_chance(chance);
-    view.begin();
+    let mut view = flying_as_on(catalog, "Ada", chance);
+    view.begin(SessionFlight::begin);
     assert_eq!(player(&view).heading, 0.0);
 }
 
@@ -71,9 +71,9 @@ fn a_failed_flight_resumes_nothing() {
         character: Err(StartError::NoCharacter),
         ..catalog()
     };
-    let mut broken = FlightView::new(broken).with_chance(chance);
-    broken.resume();
-    assert_eq!(broken.pilot(), None);
+    let mut broken = new_on(broken, chance);
+    broken.sim_mut().resume();
+    assert_eq!(broken.sim().pilot(), None);
     assert!(script.borrow().asked.is_empty(), "nothing drawn");
 }
 
@@ -94,11 +94,11 @@ fn aux_errand() -> (impl Fn() -> FakeCatalog, nova_sim::mission::ActiveMission) 
         errands
     };
     let accepted = {
-        let mut view = FlightView::new(errands());
+        let mut view = test_flight::new(errands());
         land_now(&mut view);
         view.settle_script();
         assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
-        let pilot = view.pilot().expect("flying");
+        let pilot = view.sim().pilot().expect("flying");
         pilot.missions().get(0).expect("held").clone()
     };
     (errands, accepted)
@@ -113,12 +113,13 @@ fn aux_flight(chance: SharedChance) -> View {
         .over(StellarId(128))
         .with_mission(0, accepted)
         .build();
-    FlightView::from_session(catalog, session.into()).with_chance(chance)
+    FlightView::from_session(catalog, on_chance(session, chance), &Rulebook::default())
 }
 
 /// Mission 130's auxiliary ships in `view`.
 fn aux_of(view: &View) -> nova_sim::mission::aux_ships::AuxShips {
-    view.pilot()
+    view.sim()
+        .pilot()
         .expect("flying")
         .missions()
         .get(0)
@@ -132,7 +133,7 @@ fn broken_flight(chance: SharedChance) -> View {
         character: Err(StartError::NoCharacter),
         ..catalog()
     };
-    FlightView::new(broken).with_chance(chance)
+    new_on(broken, chance)
 }
 
 #[test]
@@ -140,7 +141,7 @@ fn opening_on_the_main_screen_restarts_the_aux_countdown_on_the_flights_chance()
     let (script, chance) = scripted(&[9]);
     let mut view = aux_flight(chance);
     assert_eq!(aux_of(&view).countdown, 139, "the accept's draw");
-    view.open_on_main_screen();
+    view.sim_mut().open_on_main_screen();
     assert_eq!(
         aux_of(&view),
         nova_sim::mission::aux_ships::AuxShips {
@@ -151,7 +152,7 @@ fn opening_on_the_main_screen_restarts_the_aux_countdown_on_the_flights_chance()
     );
     assert_eq!(script.borrow().asked, [70]);
     let (script, chance) = scripted(&[]);
-    broken_flight(chance).open_on_main_screen();
+    broken_flight(chance).sim_mut().open_on_main_screen();
     assert!(
         script.borrow().asked.is_empty(),
         "a failed flight draws nothing"
@@ -162,7 +163,7 @@ fn opening_on_the_main_screen_restarts_the_aux_countdown_on_the_flights_chance()
 fn opening_at_launch_restarts_the_aux_countdown_on_the_flights_chance() {
     let (script, chance) = scripted(&[4]);
     let mut view = aux_flight(chance);
-    view.open_at_launch();
+    view.sim_mut().open_at_launch();
     assert_eq!(
         aux_of(&view),
         nova_sim::mission::aux_ships::AuxShips {
@@ -173,7 +174,7 @@ fn opening_at_launch_restarts_the_aux_countdown_on_the_flights_chance() {
     );
     assert_eq!(script.borrow().asked, [70]);
     let (script, chance) = scripted(&[]);
-    broken_flight(chance).open_at_launch();
+    broken_flight(chance).sim_mut().open_at_launch();
     assert!(
         script.borrow().asked.is_empty(),
         "a failed flight draws nothing"

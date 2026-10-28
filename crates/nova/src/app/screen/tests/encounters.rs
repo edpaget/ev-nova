@@ -326,7 +326,7 @@ fn b_held_before_a_target_is_taken_opens_the_plunder_dialog_on_the_next_frame() 
 #[test]
 fn each_take_goes_through_the_flight_and_refreshes_the_dialog() {
     let mut screen = boarded();
-    let cash = flight(&screen).pilot().expect("a pilot").cash();
+    let cash = flight(&screen).sim().pilot().expect("a pilot").cash();
     let sounds = plunder_click(&mut screen, 3);
     assert_eq!(
         sounds,
@@ -334,7 +334,7 @@ fn each_take_goes_through_the_flight_and_refreshes_the_dialog() {
         "the take's beep, the click itself silent"
     );
     assert_eq!(
-        flight(&screen).pilot().expect("a pilot").cash(),
+        flight(&screen).sim().pilot().expect("a pilot").cash(),
         cash + 5750
     );
     assert_eq!(
@@ -344,7 +344,7 @@ fn each_take_goes_through_the_flight_and_refreshes_the_dialog() {
     assert_eq!(screen.showing(), Showing::Plunder, "still open");
     let sounds = plunder_click(&mut screen, 3);
     assert_eq!(
-        flight(&screen).pilot().expect("a pilot").cash(),
+        flight(&screen).sim().pilot().expect("a pilot").cash(),
         cash + 5750,
         "greyed: taken once"
     );

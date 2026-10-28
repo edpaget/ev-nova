@@ -310,7 +310,7 @@ fn hail_is_refused_silently_through_a_jump() {
 
 /// [`trading`]'s flight, its hold bought full of food and taken off.
 fn laden() -> View {
-    let mut view = FlightView::new(trading());
+    let mut view = test_flight::new(trading());
     land_now(&mut view);
     view.settle_script();
     assert!(view.trade(BUY_FOOD).is_ok());
@@ -605,7 +605,7 @@ fn cancelling_the_pointer_abandons_a_drag_on_the_open_map() {
 
 /// A flight from Sol, which lists Alpha Centauri then Barnard.
 fn fanned() -> View {
-    FlightView::new(FakeCatalog {
+    test_flight::new(FakeCatalog {
         fan: true,
         ..catalog()
     })
@@ -708,7 +708,7 @@ fn a_refused_m_makes_no_map_sound() {
 
 #[test]
 fn a_hypergates_greeting_is_one_of_its_own_by_a_roll() {
-    let mut view = FlightView::new(gated());
+    let mut view = test_flight::new(gated());
     tap(&mut view, LAND);
     assert_eq!(view.message(), None, "requested over it: silent");
     ticks(&mut view, 1);
@@ -716,7 +716,7 @@ fn a_hypergates_greeting_is_one_of_its_own_by_a_roll() {
     let first = format!("Cleared for hypergate entry, {ship}. ");
     assert_eq!(view.message(), Some(first.as_str()), "the first outcome");
     let last: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
-    let mut view = FlightView::new(gated()).with_chance(SharedChance::new(last));
+    let mut view = new_on(gated(), SharedChance::new(last));
     tap(&mut view, LAND);
     ticks(&mut view, 1);
     assert_lasts(&mut view, "You are cleared for hypergate entry. ", 250);
@@ -767,7 +767,7 @@ fn i_while_disabled_is_taken() {
 
 #[test]
 fn the_ship_flies_under_a_hypergates_fade_in() {
-    let mut view = FlightView::new(gated());
+    let mut view = test_flight::new(gated());
     land_now(&mut view);
     let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);

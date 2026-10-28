@@ -295,7 +295,7 @@ fn the_map_in_port_and_a_flight_that_could_not_start_draw_no_world() {
     assert!(!list.is_empty());
     assert_eq!(world_end(&list), 0, "the map alone");
 
-    let failed = FlightView::new(FakeCatalog {
+    let failed = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..catalog()
     });

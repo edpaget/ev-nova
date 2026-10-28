@@ -13,11 +13,11 @@
 //!   (@0x765a2-0x765ce). The original sweeps after the load; both settle
 //!   before the menu's first frame;
 //! - its ship facing a drawn heading and the offers' rolls drawn
-//!   ([`FlightView::resume`](nova_view::flight::FlightView::resume));
+//!   ([`SessionFlight::resume`](nova_view::flight::SessionFlight::resume));
 //! - every active mission's auxiliary ships restarted in the unguarded
 //!   form the take-off uses, and the player's system explored, as
 //!   `_OpenLastPilotFile`'s loop (@0x765d4-0x76637) and `_DoMainScreen`'s
-//!   once-a-launch setup (@0x1affe) do ([`FlightView::open_at_launch`](nova_view::flight::FlightView::open_at_launch)).
+//!   once-a-launch setup (@0x1affe) do ([`SessionFlight::open_at_launch`](nova_view::flight::SessionFlight::open_at_launch)).
 //!
 //! What its hooks then make due is settled at once, and any save they make
 //! due is dropped: the original saves nothing at launch.
@@ -29,7 +29,7 @@
 //! `_DeletePilotFile` never touches the alias, @0x72e6b-0x72ef6), a save
 //! that can't be read or is from a newer version, a pilot whose session
 //! can't start on this game data, and a load that had to
-//! fall back ([`FlightView::load_repaired`](nova_view::flight::FlightView::load_repaired)), which `_LoadPilotData`
+//! fall back ([`SessionFlight::load_repaired`](nova_view::flight::SessionFlight::load_repaired)), which `_LoadPilotData`
 //! reports as -46 (@0x7648b-0x76498) and `_OpenLastPilotFile` treats as a
 //! failure; Open Pilot's note `STR#` 140 #52 is `_MainScreenChoice`'s, not
 //! the launch's. The original's player globals then hold the repaired or
@@ -54,12 +54,12 @@ impl AppScreen {
         let Some(pilot) = self.keeper().and_then(|keeper| keeper.open_last()) else {
             return self;
         };
-        let mut flight = self.pilot_flight(pilot, true);
-        if flight.session().is_err() || flight.load_repaired() {
+        let mut flight = self.pilot_flight(pilot, true, None);
+        if flight.session().is_err() || flight.sim().load_repaired() {
             return self;
         }
-        flight.resume();
-        flight.open_at_launch();
+        flight.sim_mut().resume();
+        flight.sim_mut().open_at_launch();
         self.hold_game(flight);
         let _ = self.settle_game();
         // Before the first frame, which no input or tick precedes.

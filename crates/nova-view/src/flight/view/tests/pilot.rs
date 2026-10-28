@@ -11,7 +11,7 @@ fn the_intro_screen_seen_reads_and_marks_the_sessions_pilot() {
     view.mark_intro_seen();
     assert!(view.seen_intro());
     assert!(view.session().expect("flying").seen_intro());
-    let mut broken = FlightView::new(FakeCatalog {
+    let mut broken = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..catalog()
     });
@@ -21,7 +21,7 @@ fn the_intro_screen_seen_reads_and_marks_the_sessions_pilot() {
 
 #[test]
 fn a_session_that_failed_has_no_pilot_desk() {
-    let mut view = FlightView::new(FakeCatalog {
+    let mut view = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..catalog()
     });
@@ -54,7 +54,7 @@ fn the_pilot_panel_is_the_sessions_and_none_for_a_session_that_failed() {
         view.pilot_panel().map(|panel| panel.pilot_name),
         Some("Ada".to_owned())
     );
-    let broken = FlightView::new(FakeCatalog {
+    let broken = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..catalog()
     });
@@ -125,8 +125,8 @@ fn a_resync_with_nothing_moved_reads_nothing() {
 fn a_pilot_saved_at_a_stellar_resumes_in_flight_over_it_silently() {
     let pilot = docked_pilot("Ada");
     assert_eq!(pilot.stellar(), Some(StellarId(128)));
-    let mut view = FlightView::with_pilot(catalog(), pilot.clone());
-    assert_eq!(view.pilot(), Some(&pilot));
+    let mut view = test_flight::with_pilot(catalog(), pilot.clone());
+    assert_eq!(view.sim().pilot(), Some(&pilot));
     assert_eq!(view.take_landing(), None, "nothing lands");
     assert_eq!(view.session().map(Session::landed), Ok(None));
     assert_eq!(player(&view).position, Vec2::new(0.0, -600.0));
@@ -138,7 +138,7 @@ fn a_pilot_saved_at_a_stellar_resumes_in_flight_over_it_silently() {
 #[test]
 fn a_new_pilots_ship_is_first_shown_at_50_50() {
     let mut view = flight();
-    view.begin();
+    view.begin(SessionFlight::begin);
     assert_eq!(player(&view).position, Vec2::new(50.0, 50.0));
     assert_eq!(
         view.shown_position(),
@@ -152,10 +152,10 @@ fn a_new_pilots_ship_is_first_shown_at_50_50() {
 #[test]
 fn a_pilot_in_flight_resumes_at_the_centre() {
     let pilot = Pilot::new(&catalog(), "Bob").expect("starts");
-    let mut view = FlightView::with_pilot(catalog(), pilot);
+    let mut view = test_flight::with_pilot(catalog(), pilot);
     assert_eq!(view.take_landing(), None);
     assert_eq!(player(&view), start());
-    assert_eq!(view.pilot().map(Pilot::name), Some("Bob"));
+    assert_eq!(view.sim().pilot().map(Pilot::name), Some("Bob"));
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn a_pilot_whose_system_is_gone_flies_in_the_lowest_that_exists() {
     pilot.explore(SystemId(132));
     let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 132");
     let moved = nova_sim::save::decode(&text).expect("a pilot");
-    let view = FlightView::with_pilot(catalog(), moved);
+    let view = test_flight::with_pilot(catalog(), moved);
     let session = view.session().expect("flies");
     assert_eq!(session.system(), SystemId(130));
     assert!(session.load_repaired());
@@ -184,17 +184,24 @@ fn unlisted_pilot() -> Pilot {
 
 #[test]
 fn a_loaded_flight_reports_a_repaired_load() {
-    let view = FlightView::loaded(catalog(), unlisted_pilot(), Rulebook::default());
-    assert!(view.load_repaired());
-    assert_eq!(view.pilot().and_then(Pilot::stellar), None);
-    let docked = FlightView::loaded(catalog(), docked_pilot("Ada"), Rulebook::default());
-    assert!(!docked.load_repaired());
-    assert!(!FlightView::with_pilot(catalog(), docked_pilot("Ada")).load_repaired());
-    let failed = FlightView::new(FakeCatalog {
+    let view = test_flight::loaded(catalog(), unlisted_pilot(), &Rulebook::default());
+    assert!(view.sim().load_repaired());
+    assert_eq!(view.sim().pilot().and_then(Pilot::stellar), None);
+    let docked = test_flight::loaded(catalog(), docked_pilot("Ada"), &Rulebook::default());
+    assert!(!docked.sim().load_repaired());
+    assert!(
+        !test_flight::with_pilot(catalog(), docked_pilot("Ada"))
+            .sim()
+            .load_repaired()
+    );
+    let failed = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..catalog()
     });
-    assert!(!failed.load_repaired(), "a failed session repaired nothing");
+    assert!(
+        !failed.sim().load_repaired(),
+        "a failed session repaired nothing"
+    );
 }
 
 #[test]
@@ -203,12 +210,12 @@ fn a_loaded_flight_reads_the_rules_it_is_given() {
     pilot.explore(SystemId(131));
     let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 131");
     let moved = nova_sim::save::decode(&text).expect("a pilot");
-    let kept = FlightView::loaded(catalog(), moved.clone(), Rulebook::default());
+    let kept = test_flight::loaded(catalog(), moved.clone(), &Rulebook::default());
     assert_eq!(kept.session().map(Session::system), Ok(SystemId(131)));
     let engine = Rulebook::default().with_override(RuleKey::UnlistedStellar, RuleSource::Engine);
-    let lowest = FlightView::loaded(catalog(), moved, engine);
+    let lowest = test_flight::loaded(catalog(), moved, &engine);
     assert_eq!(lowest.session().map(Session::system), Ok(SystemId(130)));
-    assert!(lowest.load_repaired());
+    assert!(lowest.sim().load_repaired());
 }
 
 #[test]
@@ -217,13 +224,13 @@ fn a_loaded_flight_keeps_the_saved_course_as_the_rules_it_is_given_read() {
     pilot.course = vec![SystemId(131)];
     pilot.course_start = Some(pilot.system);
     let engine = Rulebook::default().with_override(RuleKey::LoadedCourse, RuleSource::Engine);
-    let cleared = FlightView::loaded(catalog(), pilot.clone(), engine);
+    let cleared = test_flight::loaded(catalog(), pilot.clone(), &engine);
     assert_eq!(
         cleared.session().map(|session| session.course().to_vec()),
         Ok(vec![])
     );
     let other = Rulebook::default().with_override(RuleKey::LoadedCourse, RuleSource::Bible);
-    let kept = FlightView::loaded(catalog(), pilot, other);
+    let kept = test_flight::loaded(catalog(), pilot, &other);
     assert_eq!(
         kept.session().map(|session| session.course().to_vec()),
         Ok(vec![SystemId(131)])
@@ -236,13 +243,13 @@ fn landing_taking_off_and_transactions_make_a_save_due() {
         sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
         ..catalog()
     };
-    let mut view = FlightView::new(centred);
+    let mut view = test_flight::new(centred);
     assert!(!view.take_save_due());
     assert!(!view.transact(|pilot| pilot.set_cash(5)), "in flight");
     land_now(&mut view);
     assert!(view.take_save_due(), "landed");
     assert!(view.transact(|pilot| pilot.set_cash(5)));
-    assert_eq!(view.pilot().map(Pilot::cash), Some(5));
+    assert_eq!(view.sim().pilot().map(Pilot::cash), Some(5));
     assert!(view.take_save_due(), "a transaction");
     assert!(!view.take_save_due(), "taken");
     view.take_off();
@@ -255,8 +262,8 @@ fn a_view_that_cannot_fly_has_no_pilot_and_saves_nothing() {
         character: Err(StartError::NoCharacter),
         ..catalog()
     };
-    let mut view = FlightView::new(broken);
-    assert_eq!(view.pilot(), None);
+    let mut view = test_flight::new(broken);
+    assert_eq!(view.sim().pilot(), None);
     assert!(!view.transact(|pilot| pilot.set_cash(5)));
     assert!(!view.take_save_due());
 }
@@ -286,7 +293,7 @@ fn the_open_maps_panel_follows_a_system_explored_between_frames() {
         sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
         ..catalog()
     };
-    let mut view = FlightView::new(centred);
+    let mut view = test_flight::new(centred);
     land_now(&mut view);
     view.open_bar_map();
     let at = on_map(&mut view, 131);
@@ -330,7 +337,7 @@ fn the_open_maps_panel_follows_a_system_explored_between_frames() {
 fn the_open_maps_panel_follows_a_system_charted_between_frames() {
     // Sol, explored at level 1 by the new pilot, lists Earth with food.
     let earth = StellarFlags::CAN_LAND | 0x0002 | 0x0004 | 0x1000_0000;
-    let mut view = FlightView::new(FakeCatalog {
+    let mut view = test_flight::new(FakeCatalog {
         sites: vec![site(128, (0.0, 0.0), earth)],
         sol_navs: vec![Some((earth, 0))],
         ..catalog()
@@ -366,7 +373,7 @@ fn the_open_maps_panel_follows_a_system_charted_between_frames() {
 
 #[test]
 fn the_exchange_is_the_sessions_and_a_trade_goes_through_it() {
-    let mut view = FlightView::new(trading());
+    let mut view = test_flight::new(trading());
     assert_eq!(view.market(), None, "in flight");
     assert_eq!(view.trade(BUY_FOOD), Err(TradeRefusal::NoMarket));
     land_now(&mut view);
@@ -377,7 +384,7 @@ fn the_exchange_is_the_sessions_and_a_trade_goes_through_it() {
         Some(75)
     );
     assert_eq!(view.trade(BUY_FOOD), Ok(10), "a click buys up to 10");
-    assert_eq!(view.pilot().map(Pilot::cash), Some(1000 - 10 * 75));
+    assert_eq!(view.sim().pilot().map(Pilot::cash), Some(1000 - 10 * 75));
     assert!(view.take_save_due(), "a trade");
     assert_eq!(
         view.market()
@@ -388,14 +395,14 @@ fn the_exchange_is_the_sessions_and_a_trade_goes_through_it() {
         character: Err(StartError::NoCharacter),
         ..trading()
     };
-    let mut broken = FlightView::new(broken);
+    let mut broken = test_flight::new(broken);
     assert_eq!(broken.market(), None);
     assert_eq!(broken.trade(BUY_FOOD), Err(TradeRefusal::NoMarket));
 }
 
 #[test]
 fn the_outfitter_is_the_sessions_and_an_order_goes_through_it() {
-    let mut view = FlightView::new(outfitting());
+    let mut view = test_flight::new(outfitting());
     assert_eq!(view.outfitter(), None, "in flight");
     assert_eq!(view.outfit(BUY_TANK), Err(OutfitRefusal::NoOutfitter));
     land_now(&mut view);
@@ -406,7 +413,7 @@ fn the_outfitter_is_the_sessions_and_an_order_goes_through_it() {
         Some(1000)
     );
     assert_eq!(view.outfit(BUY_TANK), Ok(()));
-    assert_eq!(view.pilot().map(Pilot::cash), Some(0));
+    assert_eq!(view.sim().pilot().map(Pilot::cash), Some(0));
     assert!(view.take_save_due(), "a purchase");
     assert_eq!(
         view.outfitter()
@@ -418,7 +425,7 @@ fn the_outfitter_is_the_sessions_and_an_order_goes_through_it() {
         character: Err(StartError::NoCharacter),
         ..outfitting()
     };
-    let mut broken = FlightView::new(broken);
+    let mut broken = test_flight::new(broken);
     assert_eq!(broken.outfitter(), None);
     assert_eq!(broken.outfit(BUY_TANK), Err(OutfitRefusal::NoOutfitter));
 }
@@ -430,7 +437,7 @@ fn a_counted_order_goes_through_the_session() {
         cash: 3000,
         ..catalog.character.expect("a chär")
     });
-    let mut view = FlightView::new(catalog);
+    let mut view = test_flight::new(catalog);
     assert_eq!(
         view.outfit_counted(BUY_TANK, 2),
         Err(OutfitRefusal::NoOutfitter),
@@ -439,13 +446,13 @@ fn a_counted_order_goes_through_the_session() {
     land_now(&mut view);
     view.take_save_due();
     assert_eq!(view.outfit_counted(BUY_TANK, 2), Ok(2));
-    assert_eq!(view.pilot().map(Pilot::cash), Some(1000));
+    assert_eq!(view.sim().pilot().map(Pilot::cash), Some(1000));
     assert!(view.take_save_due(), "a purchase");
     let broken = FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..outfitting()
     };
-    let mut broken = FlightView::new(broken);
+    let mut broken = test_flight::new(broken);
     assert_eq!(
         broken.outfit_counted(BUY_TANK, 2),
         Err(OutfitRefusal::NoOutfitter)
@@ -468,7 +475,7 @@ fn an_outfit_order_goes_through_the_session_with_its_run() {
         after: Reselection::Kept,
         button_passed: false,
     };
-    let mut view = FlightView::new(catalog);
+    let mut view = test_flight::new(catalog);
     assert_eq!(
         view.outfit_order(BUY_TANK, 2),
         refused(OutfitRefusal::NoOutfitter),
@@ -491,13 +498,13 @@ fn an_outfit_order_goes_through_the_session_with_its_run() {
             button_passed: true,
         }
     );
-    assert_eq!(view.pilot().map(Pilot::cash), Some(0));
+    assert_eq!(view.sim().pilot().map(Pilot::cash), Some(0));
     assert!(view.take_save_due(), "a purchase");
     let broken = FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..outfitting()
     };
-    let mut broken = FlightView::new(broken);
+    let mut broken = test_flight::new(broken);
     assert_eq!(
         broken.outfit_order(BUY_TANK, 2),
         refused(OutfitRefusal::NoOutfitter)
@@ -529,13 +536,13 @@ fn pod_outfitting(heavy: i16) -> FakeCatalog {
 #[test]
 fn a_counted_sale_refused_part_way_goes_through_the_session_with_its_alert() {
     let pod = OutfitId(201);
-    let mut probe = FlightView::new(pod_outfitting(0));
+    let mut probe = test_flight::new(pod_outfitting(0));
     land_now(&mut probe);
     let free = probe.outfitter().expect("open").free_mass;
     // Three pods and the heavy outfit leave ten tons free: one pod
     // sold leaves none, and the next is refused at pass 1.
     let heavy = i16::try_from(free).expect("small") + 20;
-    let mut view = FlightView::new(pod_outfitting(heavy));
+    let mut view = test_flight::new(pod_outfitting(heavy));
     land_now(&mut view);
     let buy = |outfit| OutfitOrder {
         outfit,
@@ -563,7 +570,7 @@ fn a_counted_sale_refused_part_way_goes_through_the_session_with_its_alert() {
     let alert = order.alert.expect("an alert");
     assert_eq!(alert.refusal, OutfitRefusal::NegativeFreeMass);
     assert!(alert.plural, "a pass remains");
-    assert_eq!(view.pilot().map(|pilot| pilot.owned(pod)), Some(2));
+    assert_eq!(view.sim().pilot().map(|pilot| pilot.owned(pod)), Some(2));
     assert!(view.take_save_due(), "a sale");
 }
 
@@ -575,7 +582,7 @@ fn opening_the_outfitter_lifts_the_sessions_once_an_opening_limit() {
         ..catalog.character.expect("a chär")
     });
     catalog.outfits[0].mods[0] = (nova_sim::outfitter::EXPLORES_MAP, 5);
-    let mut view = FlightView::new(catalog);
+    let mut view = test_flight::new(catalog);
     land_now(&mut view);
     assert_eq!(view.outfit(BUY_TANK), Ok(()));
     assert_eq!(view.outfit(BUY_TANK), Err(OutfitRefusal::BoughtThisOpening));
@@ -585,12 +592,12 @@ fn opening_the_outfitter_lifts_the_sessions_once_an_opening_limit() {
         character: Err(StartError::NoCharacter),
         ..outfitting()
     };
-    FlightView::new(broken).open_outfitter();
+    test_flight::new(broken).open_outfitter();
 }
 
 #[test]
 fn recharge_is_enabled_as_the_session_says() {
-    let mut view = FlightView::new(outfitting());
+    let mut view = test_flight::new(outfitting());
     assert!(!view.recharge_enabled(), "in flight");
     land_now(&mut view);
     assert!(!view.recharge_enabled(), "a full tank");
@@ -602,13 +609,13 @@ fn recharge_is_enabled_as_the_session_says() {
         character: Err(StartError::NoCharacter),
         ..outfitting()
     };
-    assert!(!FlightView::new(broken).recharge_enabled());
+    assert!(!test_flight::new(broken).recharge_enabled());
 }
 
 #[test]
 fn recharging_goes_through_the_session() {
     use nova_sim::RechargeRefusal;
-    let mut view = FlightView::new(outfitting());
+    let mut view = test_flight::new(outfitting());
     assert_eq!(view.recharge(), Err(RechargeRefusal::NoFuel), "in flight");
     land_now(&mut view);
     view.take_save_due();
@@ -618,7 +625,7 @@ fn recharging_goes_through_the_session() {
         character: Err(StartError::NoCharacter),
         ..outfitting()
     };
-    let mut broken = FlightView::new(broken);
+    let mut broken = test_flight::new(broken);
     assert_eq!(broken.recharge(), Err(RechargeRefusal::NoFuel));
 }
 
@@ -654,10 +661,10 @@ fn eventful() -> FakeCatalog {
 fn a_jump_rolls_the_days_events_on_the_chance_given() {
     let always = Rc::new(RefCell::new(Always::default()));
     let shared: Rc<RefCell<dyn Chance>> = always.clone();
-    let mut view = FlightView::new(eventful()).with_chance(SharedChance::new(shared));
+    let mut view = new_on(eventful(), SharedChance::new(shared));
     jump_to_alpha(&mut view);
     assert_eq!(always.borrow().asked, [35]);
-    let events: Vec<_> = view.pilot().expect("a pilot").events().collect();
+    let events: Vec<_> = view.sim().pilot().expect("a pilot").events().collect();
     assert_eq!(events, [(DisasterId(128), 30)]);
     assert_eq!(format!("{:?}", SharedChance::default()), "Chance");
 }
@@ -666,7 +673,7 @@ fn a_jump_rolls_the_days_events_on_the_chance_given() {
 fn leaving_rolls_the_stays_days_on_the_flights_chance() {
     let always = Rc::new(RefCell::new(Always::default()));
     let shared: Rc<RefCell<dyn Chance>> = always.clone();
-    let mut view = over_earth(eventful()).with_chance(SharedChance::new(shared));
+    let mut view = over_earth_on(eventful(), SharedChance::new(shared));
     land_now(&mut view);
     assert_eq!(view.take_landing(), Some(StellarId(128)));
     always.borrow_mut().asked.clear();
@@ -678,9 +685,9 @@ fn leaving_rolls_the_stays_days_on_the_flights_chance() {
 
 #[test]
 fn without_a_chance_given_nothing_random_happens() {
-    let mut view = FlightView::new(eventful());
+    let mut view = test_flight::new(eventful());
     jump_to_alpha(&mut view);
-    assert_eq!(view.pilot().expect("a pilot").events().count(), 0);
+    assert_eq!(view.sim().pilot().expect("a pilot").events().count(), 0);
     let mut shared = SharedChance::default();
     assert!(!shared.fires(100));
     assert_eq!(shared.roll(8), 0);
@@ -694,7 +701,7 @@ fn a_shared_chance_rolls_on_its_source() {
 
 #[test]
 fn the_shipyard_is_the_sessions_and_a_purchase_reloads_the_ships_sheet() {
-    let mut view = FlightView::new(shipbuying());
+    let mut view = test_flight::new(shipbuying());
     assert_eq!(view.shipyard(), None, "in flight");
     assert_eq!(
         view.buy_ship(ShipId(129), "Kestrel"),
@@ -714,13 +721,13 @@ fn the_shipyard_is_the_sessions_and_a_purchase_reloads_the_ships_sheet() {
     let bought = view.buy_ship(ShipId(129), "The Kestrel").expect("bought");
     assert_eq!(bought.price, 900);
     assert_eq!(
-        view.pilot().and_then(Pilot::ship_name),
+        view.sim().pilot().and_then(Pilot::ship_name),
         Some("Kestrel"),
         "named as confirmed"
     );
     assert!(view.take_save_due(), "a purchase");
-    assert_eq!(view.pilot().map(Pilot::ship), Some(ShipId(129)));
-    assert_eq!(view.pilot().map(Pilot::cash), Some(1000 - 900));
+    assert_eq!(view.sim().pilot().map(Pilot::ship), Some(ShipId(129)));
+    assert_eq!(view.sim().pilot().map(Pilot::cash), Some(1000 - 900));
     assert_eq!(
         *view.catalog().sheets_asked.borrow(),
         [ShipId(128), ShipId(129)]
@@ -755,7 +762,7 @@ fn the_shipyard_is_the_sessions_and_a_purchase_reloads_the_ships_sheet() {
         character: Err(StartError::NoCharacter),
         ..shipbuying()
     };
-    let mut broken = FlightView::new(broken);
+    let mut broken = test_flight::new(broken);
     assert_eq!(broken.shipyard(), None);
     assert_eq!(
         broken.buy_ship(ShipId(129), "Kestrel"),
@@ -774,7 +781,7 @@ fn rolling() -> FakeCatalog {
 
 #[test]
 fn the_outfitter_and_shipyard_roll_on_the_flights_chance() {
-    let mut view = FlightView::new(rolling()).with_chance(SharedChance::default());
+    let mut view = new_on(rolling(), SharedChance::default());
     land_now(&mut view);
     let outfitter = view.outfitter().expect("an outfitter");
     assert!(outfitter.row(OutfitId(200)).is_none(), "off today");
@@ -787,7 +794,7 @@ fn the_outfitter_and_shipyard_roll_on_the_flights_chance() {
     );
     let always = Rc::new(RefCell::new(Always::default()));
     let shared: Rc<RefCell<dyn Chance>> = always.clone();
-    let mut view = FlightView::new(rolling()).with_chance(SharedChance::new(shared));
+    let mut view = new_on(rolling(), SharedChance::new(shared));
     land_now(&mut view);
     always.borrow_mut().asked.clear();
     let outfitter = view.outfitter().expect("an outfitter");
@@ -808,7 +815,7 @@ fn the_naming_is_the_sessions_on_the_flights_chance() {
         strings: vec![(2002, prompts)],
         ..shipbuying()
     };
-    let mut view = FlightView::new(catalog).with_chance(SharedChance::new(shared));
+    let mut view = new_on(catalog, SharedChance::new(shared));
     assert_eq!(view.ship_naming(ShipId(129)), Err(ShipRefusal::NoShipyard));
     land_now(&mut view);
     view.take_save_due();
@@ -821,7 +828,7 @@ fn the_naming_is_the_sessions_on_the_flights_chance() {
     );
     assert_eq!(naming.default, "Fast 999", "each digit the last of nine");
     assert!(!view.take_save_due());
-    let mut broken = FlightView::new(FakeCatalog {
+    let mut broken = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..shipbuying()
     });
@@ -836,7 +843,7 @@ fn the_naming_is_the_sessions_on_the_flights_chance() {
 fn declining_a_ship_draws_its_roll_again_on_the_flights_chance() {
     let always = Rc::new(RefCell::new(Always::default()));
     let shared: Rc<RefCell<dyn Chance>> = always.clone();
-    let mut view = FlightView::new(rolling()).with_chance(SharedChance::new(shared));
+    let mut view = new_on(rolling(), SharedChance::new(shared));
     land_now(&mut view);
     view.take_save_due();
     view.shipyard().expect("a shipyard");
@@ -849,56 +856,13 @@ fn declining_a_ship_draws_its_roll_again_on_the_flights_chance() {
     assert_eq!(always.borrow().asked, [50], "drawn again");
 }
 
-#[test]
-fn every_rule_reaches_the_session_through_the_flight() {
-    let every = RuleKey::ALL
-        .into_iter()
-        .fold(Rulebook::default(), |book, key| {
-            book.with_override(key, RuleSource::Bible)
-        });
-    assert_eq!(
-        flight().session().map(Session::rules),
-        Ok(&Rulebook::default())
-    );
-    let view = flight().with_rules(every);
-    let rules = view.session().expect("flying").rules();
-    assert_eq!(rules, &every);
-    for key in RuleKey::ALL {
-        assert_eq!(rules.source_for(key), RuleSource::Bible, "{key:?}");
-    }
-}
-
-/// This phase's real check of the app's path
-/// (rdm:phase/view-sim-seam/phase-12-view-rules-and-leaks): `with_rules`
-/// hands the view's wording the millions reading it holds, which the
-/// session's own rules no longer decide.
-#[test]
-fn with_rules_hands_the_wording_its_millions_reading() {
-    let stolen = SimMessage::CargoStolen {
-        tons: 2,
-        credits: 1_234_567,
-    };
-    let mut view = flight();
-    let said = view.word(vec![stolen.clone()]);
-    assert_eq!(said[0].0, "2 tons of cargo and 1.23M credits stolen!");
-    let bible = Rulebook::default().with_override(RuleKey::PayMillions, RuleSource::Bible);
-    let mut view = flight().with_rules(bible);
-    // The session's own rules put back: the wording reads the view's.
-    view.sim.session = view
-        .sim
-        .session
-        .map(|session| session.with_rules(Rulebook::default()));
-    let said = view.word(vec![stolen]);
-    assert_eq!(said[0].0, "2 tons of cargo and 1,234,567 credits stolen!");
-}
-
 // The set-expression hooks.
 
 #[test]
 fn an_outfits_on_purchase_runs_on_the_flights_chance() {
     let mut catalog = outfitting();
     catalog.outfits[0].on_purchase = nova_sim::Script::parse("R(b1 b2)");
-    let mut view = FlightView::new(catalog).with_chance(rolling_one());
+    let mut view = new_on(catalog, rolling_one());
     land_now(&mut view);
     assert_eq!(view.outfit(BUY_TANK), Ok(()));
     assert!(bit_set(&view, 1));
@@ -909,7 +873,7 @@ fn an_outfits_on_purchase_runs_on_the_flights_chance() {
 fn a_ships_on_purchase_runs_on_the_flights_chance() {
     let mut catalog = shipbuying();
     catalog.ships[0].on_purchase = nova_sim::Script::parse("R(b3 b4)");
-    let mut view = FlightView::new(catalog).with_chance(rolling_one());
+    let mut view = new_on(catalog, rolling_one());
     land_now(&mut view);
     view.buy_ship(ShipId(129), "Kestrel").expect("bought");
     assert!(bit_set(&view, 3));
@@ -925,7 +889,7 @@ fn a_ships_on_purchase_h_reads_only_the_final_class_sheet_once() {
         ..catalog.ships[0].clone()
     };
     catalog.ships.push(other);
-    let mut view = FlightView::new(catalog);
+    let mut view = test_flight::new(catalog);
     land_now(&mut view);
     view.buy_ship(ShipId(129), "Kestrel").expect("bought");
     assert_eq!(view.session().map(Session::ship), Ok(ShipId(130)));
@@ -951,7 +915,7 @@ fn landed_shipyard_with_iff() -> View {
     let mut catalog = shipbuying();
     catalog.outfits.extend(radar_outfits());
     catalog.ships[0].defaults.push((OutfitId(300), 1));
-    let mut view = FlightView::new(catalog);
+    let mut view = test_flight::new(catalog);
     land_now(&mut view);
     view
 }

@@ -509,7 +509,9 @@ fn a_pilot_that_landed_took_off_and_died_is_saved_by_the_landing_and_take_off_on
     let mut screen = deadly_menu(&store);
     open_held(&mut screen);
     assert_eq!(
-        screen.game_in_progress().and_then(FlightView::pilot),
+        screen
+            .game_in_progress()
+            .and_then(|game| game.sim().pilot()),
         Some(&last),
         "reopened as at the take-off"
     );
@@ -633,8 +635,8 @@ fn after_the_ships_destruction_the_menu_holds_the_dead_pilot() {
     assert!(screen.flight_view().is_none(), "no flight shown");
     assert!(screen.spaceport_view().is_none());
     let held = screen.game_in_progress().expect("the dead pilot held");
-    assert_eq!(held.pilot().expect("a pilot").name(), "Ada");
-    assert!(held.is_dying());
+    assert_eq!(held.sim().pilot().expect("a pilot").name(), "Ada");
+    assert!(held.sim().is_dying());
     returned(&mut screen);
     screen.take_sounds();
     choose(&mut screen, MenuChoice::EnterShip);
@@ -699,7 +701,11 @@ fn escape_during_the_breakup_writes_no_save_and_holds_the_dying_pilot() {
     assert_eq!(store.writes(), writes, "no save");
     assert!(screen.flight_view().is_none(), "no flight shown");
     assert!(screen.spaceport_view().is_none());
-    assert!(screen.game_in_progress().is_some_and(FlightView::is_dying));
+    assert!(
+        screen
+            .game_in_progress()
+            .is_some_and(|game| game.sim().is_dying())
+    );
 }
 
 #[test]
@@ -764,7 +770,7 @@ fn a_strict_pilot_destroyed_is_deleted_before_the_main_menu_shows() {
     assert!(
         screen
             .game_in_progress()
-            .and_then(FlightView::pilot)
+            .and_then(|game| game.sim().pilot())
             .is_some_and(|pilot| pilot.name() == "Ada"),
         "deleted and still held"
     );

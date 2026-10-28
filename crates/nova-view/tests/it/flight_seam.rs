@@ -28,6 +28,7 @@ use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, Record};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
+use nova_sim::Rulebook;
 use nova_sim::fixture::SessionBuilder;
 use nova_sim::flight_frame::{Answer, FlightCommand, FlightFrame};
 use nova_sim::navigation::NavMode;
@@ -42,7 +43,7 @@ use nova_view::devtools::{PilotDesk, PilotEdit};
 use nova_view::flight::FlightView;
 use nova_view::flight::MapOpener;
 use nova_view::flight::sim_port::fixture::check_contract;
-use nova_view::flight::{FlightSim, SessionFlight};
+use nova_view::flight::{Collaborators, FlightSim, SessionFlight};
 use nova_view::galaxy::SystemId as MapSystemId;
 use nova_view::{Input, Key, MouseButton, Point, Screen, Sound};
 
@@ -377,7 +378,7 @@ fn data() -> Rc<GameData> {
 fn view() -> FlightView<Rc<GameData>> {
     let data = data();
     let session = SessionBuilder::flying(&data).build();
-    FlightView::from_session(data, session.into())
+    FlightView::from_session(data, session.into(), &Rulebook::default())
 }
 
 fn key(key: Key, pressed: bool) -> Input {
@@ -772,9 +773,12 @@ fn fighting_data(items: &[(i16, i16)]) -> Rc<GameData> {
 /// A whole flight view over a real session of `data`, its chance
 /// placing the trader 100 pixels above the player, idling.
 fn fighting(data: Rc<GameData>, session: nova_sim::Session) -> FlightView<Rc<GameData>> {
-    let mut view = FlightView::from_session(data, session.into())
-        .with_chance(drawing(&[6, 6, 0, 0, 750, 650, 180, 2]))
-        .with_behaviour(Rc::new(Idle));
+    let sim = SessionFlight::from(session).with_collaborators(Collaborators {
+        chance: drawing(&[6, 6, 0, 0, 750, 650, 180, 2]),
+        behaviour: Rc::new(Idle),
+        ..Collaborators::default()
+    });
+    let mut view = FlightView::from_session(data, sim, &Rulebook::default());
     // The first step sets the system up.
     view.tick(TICK);
     assert_eq!(view.session().expect("flying").npcs().len(), 1);
@@ -957,7 +961,7 @@ fn texts(list: &nova_view::DrawList) -> Vec<String> {
 fn a_real_sessions_status_bar_shows_its_reserves_and_cargo() {
     let data = fighting_data(&[]);
     let full = SessionBuilder::flying(&data).with_credits(12_345).build();
-    let view = FlightView::from_session(Rc::clone(&data), full.into());
+    let view = FlightView::from_session(Rc::clone(&data), full.into(), &Rulebook::default());
     let layout = view.status_bar().expect("ïntf 128").layout.clone();
     for color in [layout.shield_color, layout.armor_color, layout.fuel_full] {
         assert_eq!(bar_lines(&view, color).len(), 1, "a gauge in {color:?}");
@@ -973,7 +977,7 @@ fn a_real_sessions_status_bar_shows_its_reserves_and_cargo() {
     let low = SessionBuilder::flying(&data)
         .with_reserve(nova_sim::Reserve::Fuel, 50.0)
         .build();
-    let view = FlightView::from_session(data, low.into());
+    let view = FlightView::from_session(data, low.into(), &Rulebook::default());
     let low_fuel = bar_lines(&view, layout.fuel_full);
     assert!(
         low_fuel.len() == 1 && low_fuel[0].1 < full_fuel.1,
@@ -1090,7 +1094,11 @@ fn a_real_board_opens_the_plunder_dialog_on_the_sessions_boarding() {
     let trader = session.npcs()[0].id;
     nova_sim::fixture::disable(&mut session, trader);
     nova_sim::fixture::put_player_over(&mut session, trader);
-    let mut view = FlightView::from_session(data, session.into()).with_behaviour(Rc::new(Idle));
+    let sim = SessionFlight::from(session).with_collaborators(Collaborators {
+        behaviour: Rc::new(Idle),
+        ..Collaborators::default()
+    });
+    let mut view = FlightView::from_session(data, sim, &Rulebook::default());
     tap(&mut view, Key::Char('b'));
     let shown = view.take_boarding().expect("the plunder dialog opens");
     let boarding = view.session().expect("flying").boarding();
@@ -1200,7 +1208,7 @@ fn docked_view() -> FlightView<Rc<GameData>> {
     let session = SessionBuilder::flying(&data)
         .landed_at(SystemId(128), StellarId(128))
         .build();
-    let mut view = FlightView::from_session(data, session.into());
+    let mut view = FlightView::from_session(data, session.into(), &Rulebook::default());
     view.settle_script();
     view
 }
@@ -1274,7 +1282,7 @@ fn a_real_take_off_greets_naming_its_stellar_and_the_sessions_long_date() {
 fn a_real_p_opens_the_sessions_player_info_and_the_pilot_panel_is_the_sessions() {
     let data = data();
     let session = SessionBuilder::flying(&data).build();
-    let mut view = FlightView::from_session(Rc::clone(&data), session.into());
+    let mut view = FlightView::from_session(Rc::clone(&data), session.into(), &Rulebook::default());
     tap(&mut view, nova_view::ui::player_info::PLAYER_INFO_KEY);
     assert!(
         view.take_player_info_request(),

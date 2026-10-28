@@ -19,8 +19,8 @@ use nova_data::GameData;
 use nova_sim::fixture::SessionBuilder;
 use nova_sim::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
 use nova_sim::{CombatCatalog, Governments, GovtId};
-use nova_view::flight::FlightView;
 use nova_view::flight::radar::IRect;
+use nova_view::flight::test_flight;
 use nova_view::galaxy::borders::{draw_cells, shade};
 use nova_view::galaxy::dialog::map_area;
 use nova_view::galaxy::{GalaxyCatalog, GalaxyMap};
@@ -89,7 +89,7 @@ fn a_new_pilots_course_map_shades_the_start_in_the_federations_colour() {
     };
     let fed = federation(&data);
     let data = Rc::new(data);
-    let mut view = FlightView::new(Rc::clone(&data));
+    let mut view = test_flight::new(Rc::clone(&data));
     let map_key = Input::Key {
         key: Key::Char('m'),
         pressed: true,

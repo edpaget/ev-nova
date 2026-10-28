@@ -2,11 +2,11 @@
 //! its steps, arrival, take-off, landing, the shipyard and outfitter
 //! orders.
 
+#[cfg(doc)]
+use nova_sim::Session;
 use nova_sim::SessionEvent;
 use nova_sim::gate::next_gate_pick;
-use nova_sim::{
-    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Session, TrafficCatalog,
-};
+use nova_sim::{AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, TrafficCatalog};
 
 use nova_sim::flight_frame::{Answer, FlightCommand, MapClick};
 
@@ -36,32 +36,6 @@ impl<
         + EscortMenuLooks,
 > FlightView<C, crate::flight::SessionFlight<C>>
 {
-    /// Whether the pilot may be saved now, as [`Session::may_save`] says:
-    /// not while the player is dying or dead, nor without a session.
-    #[must_use]
-    pub fn may_save(&self) -> bool {
-        self.sim.session.as_ref().is_ok_and(Session::may_save)
-    }
-
-    /// Whether the pilot is dying, as `_IsDying` (@0x253d) says: its ship
-    /// breaking up or destroyed, which [`FlightView::may_save`] answers.
-    /// Enter Ship refuses such a pilot. Never without a session.
-    #[must_use]
-    pub fn is_dying(&self) -> bool {
-        self.sim.session.is_ok() && !self.may_save()
-    }
-
-    /// Whether ending play now deletes the pilot, as
-    /// [`Session::deletes_pilot_on_ending_play`] says: a strict-play pilot
-    /// dying outside the escape pod. Never without a session.
-    #[must_use]
-    pub fn deletes_pilot_on_ending_play(&self) -> bool {
-        self.sim
-            .session
-            .as_ref()
-            .is_ok_and(Session::deletes_pilot_on_ending_play)
-    }
-
     /// The pilot flying, as the developer tools' desk: its edits reach
     /// the session, moves read the catalog, and the course map's galaxy
     /// names the places. `None` when the session failed.

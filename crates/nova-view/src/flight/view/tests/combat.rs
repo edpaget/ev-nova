@@ -13,9 +13,11 @@ fn npc_states(view: &View) -> Vec<ShipState> {
 #[test]
 fn the_traffic_is_populated_when_the_flight_starts() {
     let (script, chance) = scripted(&placed(850, 650, 90));
-    let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still));
+    let mut view = test_flight::flown(
+        trafficked(&[130], 1, 129, 3),
+        FlightStart::New,
+        on(chance, Rc::new(Still)),
+    );
     assert_eq!(npc_ids(&view), [], "not until the first tick");
     view.tick(TICK);
     let session = view.session().expect("flying");
@@ -620,7 +622,7 @@ fn the_warm_up_reads_the_coming_traffics_sheets_and_cards_so_the_first_step_read
 #[test]
 fn a_real_flights_coming_traffic_is_the_types_its_session_brings() {
     // Which they are: nova-sim's (`Session::coming_traffic_ships`).
-    let view = FlightView::new(trafficked(&[130, 131], 3, 129, 1));
+    let view = test_flight::new(trafficked(&[130, 131], 3, 129, 1));
     assert_eq!(view.sim.coming_traffic(), [ShipId(129)]);
 }
 
@@ -630,7 +632,7 @@ fn a_real_flights_death_descs_are_its_sessions() {
     // (`sabotage::tests::a_sessions_sabotage_death_descs_come_from_the_pilots_outfits`).
     let mut sabotaged = multi_jumping();
     sabotaged.outfits[0].mods[0] = (nova_sim::SABOTAGE_KILL, 5000);
-    assert_eq!(FlightView::new(sabotaged).sim.death_descs(), [5000]);
+    assert_eq!(test_flight::new(sabotaged).sim.death_descs(), [5000]);
     assert_eq!(flight().sim.death_descs(), Vec::<i16>::new());
 }
 
@@ -640,7 +642,7 @@ fn npcs_stand_still_while_the_map_is_open_or_the_ship_is_landed() {
         sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
         ..trafficked(&[130], 2, 129, 1)
     };
-    let mut view = FlightView::new(catalog);
+    let mut view = test_flight::new(catalog);
     ticks(&mut view, 3);
     let before = npc_states(&view);
     assert_eq!(before.len(), 2);
@@ -661,8 +663,10 @@ fn npcs_stand_still_while_the_map_is_open_or_the_ship_is_landed() {
 fn the_fight_asks_the_disable_rule_given_each_step_in_flight() {
     let rule = Rc::new(Counting::default());
     let uninhabited = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
-    let mut view =
-        flight_among(vec![site(140, (0.0, 0.0), uninhabited)]).with_disable_rule(rule.clone());
+    let mut view = now_disabling(
+        flight_among(vec![site(140, (0.0, 0.0), uninhabited)]),
+        rule.clone(),
+    );
     view.tick(TICK);
     assert_eq!(rule.asked.get(), 1, "the player, the only ship");
     ticks(&mut view, 2);
@@ -757,9 +761,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         star_sheet: Ok(star_sheet()),
         ..trafficked(&[130], 1, 129, 3)
     };
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Firing));
+    let mut view = test_flight::flown(catalog, FlightStart::New, on(chance, Rc::new(Firing)));
     assert_eq!(view.take_diagnostics(), []);
     ticks(&mut view, 3);
     assert_eq!(
@@ -1534,13 +1536,16 @@ fn a_click_picks_no_stellar_once_the_player_has_exploded() {
 /// and `a_click_picks_no_stellar_once_the_player_has_exploded` cover.
 #[test]
 fn home_is_unbound_whether_flying_or_exploded() {
-    let mut flying = fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+    let mut flying = now_deciding(
+        fighting(killed_in(1), &placed(750, 650, 180)),
+        Rc::new(Firing),
+    );
     assert!(matches!(fate_of(&flying), PlayerFate::Flying));
     assert_eq!(flying.input(&key(Key::Other, true)), ScreenAction::None);
     assert_eq!(flying.input(&key(Key::Other, false)), ScreenAction::None);
 
     let mut view = exploded();
-    let pilot = view.pilot().cloned();
+    let pilot = view.sim().pilot().cloned();
     assert_eq!(view.input(&key(Key::Other, true)), ScreenAction::None);
     assert_eq!(view.input(&key(Key::Other, false)), ScreenAction::None);
     assert!(matches!(fate_of(&view), PlayerFate::Holding { .. }));
@@ -1548,13 +1553,16 @@ fn home_is_unbound_whether_flying_or_exploded() {
     assert_eq!(view.take_landing(), None);
     assert!(view.take_hail().is_none());
     assert!(view.take_boarding().is_none());
-    assert_eq!(view.pilot().cloned(), pilot);
+    assert_eq!(view.sim().pilot().cloned(), pilot);
 }
 
 /// A flight under fire from [`killed_in`]`(1)`'s NPC, stepped to the
 /// player's explosion's tick.
 fn at_the_explosion() -> View {
-    let mut view = fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+    let mut view = now_deciding(
+        fighting(killed_in(1), &placed(750, 650, 180)),
+        Rc::new(Firing),
+    );
     until_the_player_explodes(&mut view, |_| {});
     view
 }
@@ -1590,27 +1598,33 @@ fn a_real_flight_meets_the_contract_through_the_hold_its_expiry_and_the_fade() {
 
 #[test]
 fn only_a_pilot_with_a_session_whose_ship_is_breaking_up_or_destroyed_is_dying() {
-    let flying = fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
-    assert!(!flying.is_dying(), "alive");
-    assert!(at_the_explosion().is_dying(), "destroyed");
-    let failed = FlightView::new(FakeCatalog {
+    let flying = now_deciding(
+        fighting(killed_in(1), &placed(750, 650, 180)),
+        Rc::new(Firing),
+    );
+    assert!(!flying.sim().is_dying(), "alive");
+    assert!(at_the_explosion().sim().is_dying(), "destroyed");
+    let failed = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..killed_in(1)
     });
-    assert!(!failed.is_dying(), "no session, no pilot dying");
+    assert!(!failed.sim().is_dying(), "no session, no pilot dying");
 }
 
 #[test]
 fn only_a_living_pilot_may_be_saved() {
-    let flying = fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
-    assert!(flying.may_save());
-    assert!(!at_the_explosion().may_save());
-    let mut failed = FlightView::new(FakeCatalog {
+    let flying = now_deciding(
+        fighting(killed_in(1), &placed(750, 650, 180)),
+        Rc::new(Firing),
+    );
+    assert!(flying.sim().may_save());
+    assert!(!at_the_explosion().sim().may_save());
+    let mut failed = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..killed_in(1)
     });
     assert!(failed.session().is_err());
-    assert!(!failed.may_save(), "no session, no pilot to save");
+    assert!(!failed.sim().may_save(), "no session, no pilot to save");
     assert!(!failed.take_hold_expired());
     assert!(!failed.game_over());
     failed.begin_fade();
@@ -1626,26 +1640,25 @@ fn only_a_strict_pilot_ending_play_dying_is_deleted() {
             .strict_play()
             .build();
         let (_, chance) = scripted(&placed(750, 650, 180));
-        let mut view = FlightView::from_session(catalog, session.into())
-            .with_chance(chance)
-            .with_behaviour(Rc::new(Firing));
+        let sim = SessionFlight::from(session).with_collaborators(on(chance, Rc::new(Firing)));
+        let mut view = FlightView::from_session(catalog, sim, &Rulebook::default());
         view.tick(TICK);
         view
     };
     let mut view = strict(killed_in(1));
-    assert!(!view.deletes_pilot_on_ending_play(), "flying");
+    assert!(!view.sim().deletes_pilot_on_ending_play(), "flying");
     until_the_player_explodes(&mut view, |_| {});
-    assert!(view.deletes_pilot_on_ending_play(), "exploded");
+    assert!(view.sim().deletes_pilot_on_ending_play(), "exploded");
     assert!(
-        !at_the_explosion().deletes_pilot_on_ending_play(),
+        !at_the_explosion().sim().deletes_pilot_on_ending_play(),
         "not a strict pilot"
     );
-    let failed = FlightView::new(FakeCatalog {
+    let failed = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..killed_in(1)
     });
     assert!(
-        !failed.deletes_pilot_on_ending_play(),
+        !failed.sim().deletes_pilot_on_ending_play(),
         "no session, no pilot to delete"
     );
 }
@@ -2178,9 +2191,7 @@ impl Behaviour for Attacking {
 /// the player, after the step that populates the system.
 fn attacked(catalog: FakeCatalog) -> View {
     let (_, chance) = scripted(&placed(750, 550, 180));
-    let mut view = FlightView::new(catalog)
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Attacking));
+    let mut view = test_flight::flown(catalog, FlightStart::New, on(chance, Rc::new(Attacking)));
     view.tick(TICK);
     view
 }
@@ -2189,9 +2200,11 @@ fn attacked(catalog: FakeCatalog) -> View {
 fn the_fight_asks_the_point_defence_rule_given_each_step_in_flight() {
     let rule = Rc::new(Unalarmed::default());
     let asking = Rulebook::default().with_override(RuleKey::PdHostility, RuleSource::Bible);
-    let mut view = attacked(defending())
-        .with_rules(asking)
-        .with_point_defence_rule(rule.clone());
+    let mut view = attacked(defending());
+    // The rule set and the point defence rule, swapped mid-flight; the
+    // view's presentation reads neither.
+    view.sim.session = view.sim.session.map(|session| session.with_rules(asking));
+    view.sim.defence_rule = rule.clone();
     view.tick(TICK);
     assert_eq!(shots_of(&view, IR), 1, "fired at the player");
     assert_eq!(
@@ -2295,7 +2308,14 @@ fn by_default_npcs_fight_by_novas_ai_and_crimes_by_novas_law() {
     // The warship 100 above, facing away: it flies on up the line of
     // fire.
     let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = FlightView::new(damaging()).with_chance(chance);
+    let mut view = test_flight::flown(
+        damaging(),
+        FlightStart::New,
+        Collaborators {
+            chance,
+            ..Collaborators::default()
+        },
+    );
     view.tick(TICK);
     // Aimed at it: a stray hit the answer flag forgives.
     tap(&mut view, TARGET_KEY);
@@ -2356,10 +2376,14 @@ fn the_flight_convicts_by_the_law_it_is_given() {
     let witness = Rc::new(Witness::default());
     // 100 above, facing away: it flies on up the line of fire.
     let (_, chance) = scripted(&placed(750, 650, 0));
-    let mut view = FlightView::new(damaging())
-        .with_chance(chance)
-        .with_behaviour(Rc::new(Still))
-        .with_law(witness.clone());
+    let mut view = test_flight::flown(
+        damaging(),
+        FlightStart::New,
+        Collaborators {
+            law: witness.clone(),
+            ..on(chance, Rc::new(Still))
+        },
+    );
     view.tick(TICK);
     view.input(&key(FIRE_KEY, true));
     for _ in 0..120 {

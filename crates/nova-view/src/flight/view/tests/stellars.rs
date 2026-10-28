@@ -11,7 +11,7 @@ fn bars_read(view: &View) -> Vec<i16> {
 
 #[test]
 fn the_status_bar_follows_the_ship_type_on_the_next_frame() {
-    let mut view = FlightView::new(governed(shipbuying(), 129, 129));
+    let mut view = test_flight::new(governed(shipbuying(), 129, 129));
     run_set(&mut view, "H129");
     settle_session(&mut view);
     assert_eq!(bar_shown(&view), Some(700), "not before the frame");
@@ -30,7 +30,7 @@ fn the_status_bar_follows_the_ship_type_on_the_next_frame() {
     view.tick(TICK);
     assert_eq!(bar_shown(&view), Some(705), "a capture");
 
-    let mut view = FlightView::new(governed(shipbuying(), 129, 129));
+    let mut view = test_flight::new(governed(shipbuying(), 129, 129));
     land_now(&mut view);
     let session = view.sim.session.as_mut().expect("flying");
     session
@@ -42,7 +42,7 @@ fn the_status_bar_follows_the_ship_type_on_the_next_frame() {
 
 #[test]
 fn a_new_ship_types_missing_bar_keeps_the_layout_over_picture_128() {
-    let mut view = FlightView::new(governed(shipbuying(), 129, 131));
+    let mut view = test_flight::new(governed(shipbuying(), 129, 131));
     run_set(&mut view, "H129");
     view.tick(TICK);
     assert_eq!(bars_read(&view), [128, 131]);
@@ -111,7 +111,7 @@ fn sol_with_gates() -> View {
             ..stellar(151, "Gate", (0, -300), 1)
         },
     ];
-    FlightView::new(catalog)
+    test_flight::new(catalog)
 }
 
 /// `_HandleStellarSprites` draws every active stellar the system owns,
@@ -175,7 +175,7 @@ fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
     };
     let session = SessionBuilder::flying(&catalog).build();
     assert!(!session.galaxy().visible(SystemId(132)));
-    let view = FlightView::from_session(catalog, session.into());
+    let view = FlightView::from_session(catalog, session.into(), &Rulebook::default());
     assert!(!on_the_course_map(&view, 132));
     assert!(on_the_course_map(&view, 131));
 }
@@ -440,17 +440,17 @@ fn a_load_shows_every_stellar_from_frame_0() {
     let mut view = flight();
     ticks(&mut view, 2);
     assert_eq!(moon_frame(&view), 2);
-    let pilot = view.pilot().expect("flying").clone();
-    let mut loaded = FlightView::loaded(catalog(), pilot.clone(), Rulebook::default());
+    let pilot = view.sim().pilot().expect("flying").clone();
+    let mut loaded = test_flight::loaded(catalog(), pilot.clone(), &Rulebook::default());
     assert_eq!(moon_frame(&loaded), 0, "loaded");
     loaded.tick(TICK);
     assert_eq!(moon_frame(&loaded), 1, "loaded, then on");
-    let mut resumed = FlightView::with_pilot(catalog(), pilot);
+    let mut resumed = test_flight::with_pilot(catalog(), pilot);
     assert_eq!(moon_frame(&resumed), 0, "resumed");
     resumed.tick(TICK);
     assert_eq!(moon_frame(&resumed), 1, "resumed, then on");
     // A new pilot's flight is ticked once past the land hint.
-    let mut new = new_pilot(FlightView::new(catalog()));
+    let mut new = new_pilot(test_flight::new(catalog()));
     assert_eq!(moon_frame(&new), 1, "a new pilot's, one tick in");
     new.tick(TICK);
     assert_eq!(moon_frame(&new), 2, "a new pilot's, then on");
@@ -477,32 +477,6 @@ fn a_desk_move_redraws_with_no_extra_call() {
         view.shown_position(),
         Point::new(300.0, -200.0),
         "at the Moon"
-    );
-}
-
-#[test]
-fn the_disable_rule_reaches_the_session_too() {
-    let rule = Rc::new(Counting::default());
-    let view = flight().with_disable_rule(rule.clone());
-    let session = view.session().expect("flying");
-    assert!(
-        !session
-            .disable_rule()
-            .disabled(nova_sim::Gauge::full(10.0), &session.hull())
-    );
-    assert_eq!(rule.asked.get(), 1, "the session asks the rule given");
-}
-
-#[test]
-fn the_string_lists_reach_the_session() {
-    let strings = FakeCatalog {
-        strings: vec![(25040, vec!["Kestrel".to_owned()])],
-        ..catalog()
-    };
-    let view = flight().with_strings(Rc::new(strings));
-    assert_eq!(
-        view.session().expect("flying").strings().string_list(25040),
-        ["Kestrel"]
     );
 }
 

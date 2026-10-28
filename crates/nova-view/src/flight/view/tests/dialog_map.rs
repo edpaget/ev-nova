@@ -19,7 +19,7 @@ fn to_proxima(id: i16) -> MissionRecord {
 fn holding() -> View {
     let mut catalog = catalog();
     catalog.missions = vec![to_proxima(130)];
-    let mut view = FlightView::new(catalog);
+    let mut view = test_flight::new(catalog);
     run_set(&mut view, "S130");
     view.settle_script();
     assert_eq!(

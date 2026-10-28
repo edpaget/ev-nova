@@ -37,25 +37,26 @@ use super::{
     STELLAR_SLOT_KEYS, TARGET_KEY, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, window_width,
 };
 
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// Sets the view's size, `view` logical units: the app's widened size
+    /// ([`Screen::set_widened_size`](crate::Screen::set_widened_size)).
+    /// The camera, the HUD's places, the play area the flight is told
+    /// at the next steps, the starfield and the fades all take it from
+    /// the next frame on (see the module docs). Nova's own 1024 x 768
+    /// draws as flight always has. The flight's game window takes its
+    /// width at once ([`FlightCommand::SetWindowWidth`]), so a course map
+    /// opened before the next step reads its asteroids stored by it.
+    pub fn set_view_size(&mut self, view: (f32, f32)) {
+        self.view = view;
+        self.sim
+            .apply(FlightCommand::SetWindowWidth(window_width(view)));
+    }
+}
+
 impl<C> FlightView<C, crate::flight::SessionFlight<C>> {
     /// The HUD's status bar, or why it cannot be shown.
     pub fn status_bar(&self) -> Result<&StatusBar, &str> {
         self.status_bar.as_ref().map_err(String::as_str)
-    }
-
-    /// Sets the view's size, `view` logical units: the app's widened size
-    /// ([`Screen::set_widened_size`](crate::Screen::set_widened_size)).
-    /// The camera, the HUD's places, the play area the session is told
-    /// at the next steps, the starfield and the fades all take it from
-    /// the next frame on (see the module docs). Nova's own 1024 x 768
-    /// draws as flight always has. The session's game window takes its
-    /// width at once ([`Session::set_window_width`]), so a course map
-    /// opened before the next step reads its asteroids stored by it.
-    pub fn set_view_size(&mut self, view: (f32, f32)) {
-        self.view = view;
-        if let Ok(session) = &mut self.sim.session {
-            session.set_window_width(window_width(view));
-        }
     }
 
     /// The [`PlayerCommand`] a press of `key` sends, as [`Screen::input`](crate::Screen::input)

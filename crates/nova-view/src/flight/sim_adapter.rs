@@ -17,9 +17,23 @@
 //! [`NameSource`]'s and [`PilotSource`]'s to the session's method of each
 //! name. A session that failed to start
 //! fills the default frame, runs no step, refuses every command, answers
-//! nothing open and drains nothing. [`SessionFlight::transact`], which
-//! takes a closure no command can carry, and [`SessionFlight::pilot`],
-//! the pilot the app saves and names, are the adapter's own API.
+//! nothing open and drains nothing, and says why
+//! ([`FlightSim::failure`]).
+//!
+//! **The edge's API**, which the port leaves out, is the adapter's own:
+//! the constructors that build the session ([`SessionFlight::start`],
+//! [`SessionFlight::fly`], [`SessionFlight::load`]), its setup and the
+//! run's history ([`SessionFlight::set_up`], [`SessionFlight::carry_over`],
+//! one `Session` call each), entering play ([`SessionFlight::begin`],
+//! [`SessionFlight::enter_game`], [`SessionFlight::resume`],
+//! [`SessionFlight::open_on_main_screen`], [`SessionFlight::open_at_launch`]),
+//! saving ([`SessionFlight::may_save`], [`SessionFlight::is_dying`],
+//! [`SessionFlight::deletes_pilot_on_ending_play`],
+//! [`SessionFlight::load_repaired`], [`SessionFlight::loaded_after_movie`])
+//! and the pilot the app saves and names ([`SessionFlight::pilot`]). The
+//! app reaches them through `FlightView::sim`. `SessionFlight::transact`,
+//! which takes a closure no command can carry, is for tests. The adapter
+//! is the developer tools' desk too ([`DevDesk`]).
 //!
 //! **For the strangler's length**, the view's
 //! `FlightView<C, SessionFlight<C>>` blocks reach the session and the
@@ -84,7 +98,7 @@ pub struct SessionFlight<C> {
     /// Who repels boarders, the capture odds and the capture roll.
     pub(in crate::flight) boarding_rule: Rc<dyn BoardingRule>,
     /// The comm dialog's options, which the hail and its answers list.
-    hail_options: HailOptions,
+    pub(in crate::flight) hail_options: HailOptions,
     /// The catalog the view reads, the same handle as the view's, once
     /// the view has shared it ([`SessionFlight::share_catalog`]): the
     /// map's answers that read the catalog read it. `None` before.
@@ -109,6 +123,45 @@ impl<C> Clone for SessionFlight<C> {
             hail_options: self.hail_options.clone(),
             catalog: self.catalog.clone(),
             view_catalog: PhantomData,
+        }
+    }
+}
+
+/// What a [`SessionFlight`]'s calls are handed besides the catalog, as
+/// the edge gives them ([`SessionFlight::with_collaborators`]): what each
+/// day's events and the traffic are rolled on, how the NPCs decide, which
+/// missiles point defence engages, the law, the boardings' rules and the
+/// comm dialog's options. The fight's disable rule is the session's setup's
+/// (`nova_sim::SessionSetup::disable_rule`, [`SessionFlight::set_up`]),
+/// so the two read one. The default is Nova's: the never-firing chance,
+/// Nova's AI, law and boardings, point defence by allegiance, and the
+/// default hail options.
+#[derive(Clone, Debug)]
+pub struct Collaborators {
+    /// What each day's events and the traffic are rolled on, and the
+    /// view's wording with them.
+    pub chance: SharedChance,
+    /// How the NPCs decide.
+    pub behaviour: Rc<dyn Behaviour>,
+    /// Which missiles the ships' point defence engages.
+    pub defence_rule: Rc<dyn PointDefenceRule>,
+    /// What the player's crimes do to its legal record.
+    pub law: Rc<dyn LegalCode>,
+    /// Who repels boarders, the capture odds and the capture roll.
+    pub boarding_rule: Rc<dyn BoardingRule>,
+    /// The comm dialog's options.
+    pub hail_options: HailOptions,
+}
+
+impl Default for Collaborators {
+    fn default() -> Self {
+        Self {
+            chance: SharedChance::default(),
+            behaviour: Rc::new(NovaAi::default()),
+            defence_rule: Rc::new(Allegiance),
+            law: Rc::new(NovaLaw::default()),
+            boarding_rule: Rc::new(NovaBoarding::default()),
+            hail_options: HailOptions::default(),
         }
     }
 }
@@ -168,15 +221,23 @@ impl<C> SessionFlight<C> {
     /// law and boardings, and point defence by allegiance.
     #[must_use]
     pub fn new(session: Result<Session, String>) -> Self {
+        let Collaborators {
+            chance,
+            behaviour,
+            defence_rule,
+            law,
+            boarding_rule,
+            hail_options,
+        } = Collaborators::default();
         Self {
             session,
-            chance: SharedChance::default(),
-            behaviour: Rc::new(NovaAi::default()),
+            chance,
+            behaviour,
             disable_rule: Rc::new(NovaDisable),
-            defence_rule: Rc::new(Allegiance),
-            law: Rc::new(NovaLaw::default()),
-            boarding_rule: Rc::new(NovaBoarding::default()),
-            hail_options: HailOptions::default(),
+            defence_rule,
+            law,
+            boarding_rule,
+            hail_options,
             catalog: None,
             view_catalog: PhantomData,
         }
@@ -206,63 +267,24 @@ impl<C> SessionFlight<C> {
         self.session.as_mut().map_err(|reason| reason.as_str())
     }
 
-    /// The flight with each day's events and the traffic rolled on
-    /// `chance`.
+    /// The flight with `collaborators` handed to its session's calls in
+    /// place of the ones it has: the edge's.
     #[must_use]
-    pub fn with_chance(self, chance: SharedChance) -> Self {
-        Self { chance, ..self }
-    }
-
-    /// The flight with its NPCs deciding as `behaviour` says.
-    #[must_use]
-    pub fn with_behaviour(self, behaviour: Rc<dyn Behaviour>) -> Self {
-        Self { behaviour, ..self }
-    }
-
-    /// The flight with its ships disabled as `rule` says: in the fight,
-    /// and in its session's changes of ship
-    /// (`nova_sim::Session::with_disable_rule`).
-    #[must_use]
-    pub fn with_disable_rule(self, disable_rule: Rc<dyn DisableRule>) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_disable_rule(Rc::clone(&disable_rule))),
-            disable_rule,
-            ..self
-        }
-    }
-
-    /// The flight with its ships' point defence engaging the missiles
-    /// `rule` calls hostile.
-    #[must_use]
-    pub fn with_point_defence_rule(self, defence_rule: Rc<dyn PointDefenceRule>) -> Self {
-        Self {
+    pub fn with_collaborators(self, collaborators: Collaborators) -> Self {
+        let Collaborators {
+            chance,
+            behaviour,
             defence_rule,
-            ..self
-        }
-    }
-
-    /// The flight with the player's crimes judged by `law`.
-    #[must_use]
-    pub fn with_law(self, law: Rc<dyn LegalCode>) -> Self {
-        Self { law, ..self }
-    }
-
-    /// The flight with its boardings by `rule`: who repels boarders, the
-    /// capture odds and the capture roll.
-    #[must_use]
-    pub fn with_boarding_rule(self, boarding_rule: Rc<dyn BoardingRule>) -> Self {
-        Self {
+            law,
             boarding_rule,
-            ..self
-        }
-    }
-
-    /// The flight with its comm dialog listing `hail_options`.
-    #[must_use]
-    pub fn with_hail_options(self, hail_options: HailOptions) -> Self {
+            hail_options,
+        } = collaborators;
         Self {
+            chance,
+            behaviour,
+            defence_rule,
+            law,
+            boarding_rule,
             hail_options,
             ..self
         }
@@ -383,8 +405,9 @@ impl<C> SessionFlight<C> {
 
     /// Changes the pilot with `change` while landed, as
     /// `nova_sim::Session::transact` does, and says whether it did; a
-    /// failed session changes nothing. The adapter's own API, not the
-    /// port's: a closure over the pilot is no command a sim could carry.
+    /// failed session changes nothing. The adapter's own API, for tests:
+    /// a closure over the pilot is no command a sim could carry.
+    #[cfg(any(test, feature = "fixture"))]
     pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
         self.session
             .as_mut()
@@ -1000,7 +1023,10 @@ mod tests {
     fn the_offer_gap_is_drawn_on_the_flights_chance_whatever_the_session() {
         let sevens = Rc::new(std::cell::RefCell::new(Sevens::default()));
         let chance: Rc<std::cell::RefCell<dyn nova_sim::Chance>> = sevens.clone();
-        let mut flight = failed().with_chance(SharedChance::new(chance));
+        let mut flight = failed().with_collaborators(Collaborators {
+            chance: SharedChance::new(chance),
+            ..Collaborators::default()
+        });
         assert_eq!(flight.offer_gap(), 37, "30 and the draw of 7");
         assert_eq!(sevens.borrow().0, [30]);
     }

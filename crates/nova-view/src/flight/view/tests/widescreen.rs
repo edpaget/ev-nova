@@ -262,9 +262,8 @@ fn the_course_map_in_flight_is_its_1024_frame_centred_and_takes_clicks_there() {
 fn a_classic_size_draws_flight_exactly_as_before() {
     let build = || {
         let (_, chance) = scripted(&two_npcs());
-        let mut view = FlightView::new(armed(2, &[]))
-            .with_chance(chance)
-            .with_behaviour(Rc::new(Still));
+        let mut view =
+            test_flight::flown(armed(2, &[]), FlightStart::New, on(chance, Rc::new(Still)));
         view.tick(TICK);
         tap(&mut view, Key::Tab);
         tap(&mut view, MENU_KEY);
@@ -309,7 +308,8 @@ fn placed_before_any_step(mut view: View) -> usize {
 #[test]
 fn a_widened_views_session_stores_its_asteroids_by_the_widened_width() {
     let placed = || {
-        FlightView::new(rocky(catalog(), 3)).with_rules(
+        ruled(
+            rocky(catalog(), 3),
             Rulebook::default().with_override(RuleKey::AsteroidEntryField, RuleSource::Bible),
         )
     };
@@ -342,7 +342,17 @@ fn a_map_opened_before_any_step_reads_the_asteroids_stored_by_the_views_width() 
         ..catalog()
     };
     let words: Rc<dyn nova_sim::CommCatalog> = Rc::new(words);
-    let view = || FlightView::new(rocky(catalog(), 2)).with_strings(Rc::clone(&words));
+    let view = || {
+        open_flight(
+            rocky(catalog(), 2),
+            FlightStart::New,
+            SessionSetup {
+                strings: Some(Rc::clone(&words)),
+                ..SessionSetup::default()
+            },
+            Collaborators::default(),
+        )
+    };
     assert_eq!(hazards_on_opening(view()), "#313 #316");
     assert_eq!(hazards_on_opening(widened(view())), "#314 #316");
 }
