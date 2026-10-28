@@ -594,7 +594,7 @@ impl Session {
     /// `rules`, drawing on `chance`: gravity pulls and the deadly stellars
     /// kill (`_HandleGravity` @0x44509, `_HandleDeadlyStellars` @0x4450e;
     /// [`Combat::hazards`]), then the beams' step and the late steps
-    /// ([`Combat::close_tick`]), among one set of fighters, so a ship a
+    /// ([`Combat::close_tick_in`]), among one set of fighters, so a ship a
     /// deadly stellar kills is out of the beams. The kills' hold starts
     /// before the beams' hits settle (see the `deadly_stellars` module),
     /// as a phase that lands hits settles ([`Session::settle_landed`]).

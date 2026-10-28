@@ -273,7 +273,9 @@ fn a_beam_glows_never_on_double_times_second_pass() {
         &mut combat,
         &mut ships,
         GamePass::Again,
-        |combat, fighters, arena, chance| combat.close_tick(fighters, arena, &mut [], chance),
+        |combat, fighters, arena, chance| {
+            combat.close_tick_in(fighters, arena, &mut [], None, chance);
+        },
     );
     assert_eq!(combat.beams().len(), 1, "still live");
     assert_eq!(glows(&combat.take_events()), []);

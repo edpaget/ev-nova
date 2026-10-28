@@ -245,7 +245,7 @@
 //!    @0x44509 and `_HandleDeadlyStellars` @0x4450e, [`Combat::hazards`]),
 //!    before every beam step, so a ship a deadly stellar kills is out of
 //!    the beams. Then, in `_HandleBeams` (@0x4453d,
-//!    [`Combat::close_tick`]), each beam spends a tick of its life, or
+//!    [`Combat::close_tick_in`]), each beam spends a tick of its life, or
 //!    fades a tick at its end ([`Beam::live`]), one that has ended going
 //!    before it hits or is drawn again. The rest follow their firers
 //!    ([`Beam::follow`]), each from its exit on the frame its firer is
@@ -5561,10 +5561,10 @@ mod tests {
     }
 
     /// `_HandleBeams` and the late steps among `ships` on `pass`
-    /// ([`Combat::close_tick`]).
+    /// ([`Combat::close_tick_in`]).
     fn close_tick_on(combat: &mut Combat, ships: &mut [Ship], pass: GamePass) {
         phase::run_on(combat, ships, pass, |combat, fighters, arena, chance| {
-            combat.close_tick(fighters, arena, &mut [], chance);
+            combat.close_tick_in(fighters, arena, &mut [], None, chance);
         });
     }
 
@@ -7263,7 +7263,7 @@ mod tests {
                 &mut ships,
                 DOUBLE_TIME,
                 |combat, fighters, arena, chance| {
-                    combat.close_tick(fighters, arena, &mut [], chance);
+                    combat.close_tick_in(fighters, arena, &mut [], None, chance);
                 },
             );
             seen.push(missile_durability(&combat));
@@ -7278,7 +7278,7 @@ mod tests {
         missile_in_flight(&mut combat, &mut ships);
         let beams = |combat: &mut Combat, ships: &mut [Ship], pass| {
             phase::run_on(combat, ships, pass, |combat, fighters, arena, chance| {
-                combat.close_tick(fighters, arena, &mut [], chance);
+                combat.close_tick_in(fighters, arena, &mut [], None, chance);
             });
         };
         phase::run_on(
@@ -9352,7 +9352,7 @@ mod tests {
                 &mut ships,
                 &NovaDisable,
                 |combat, fighters, arena, chance| {
-                    combat.close_tick(fighters, arena, &mut stellars, chance);
+                    combat.close_tick_in(fighters, arena, &mut stellars, None, chance);
                 },
             );
         }
@@ -11933,7 +11933,7 @@ mod tests {
             arena,
             &mut chance,
             |c, f, a, ch| {
-                c.close_tick(f, a, &mut [], ch);
+                c.close_tick_in(f, a, &mut [], None, ch);
             },
         );
         let beam = combat.beams()[0];

@@ -15,7 +15,7 @@
 //! Here each loop reads the ships through one [`Lineup`], whose
 //! [`Lineup::refresh`] reads each struck ship again whole ([`reread`]),
 //! keeping it at the place each view meets it. A beam's loop
-//! (`_HandleBeams` @0x316a1, `Combat::close_tick`) reads its one view the
+//! (`_HandleBeams` @0x316a1, `Combat::close_tick_in`) reads its one view the
 //! same way.
 
 use super::hull::DisableRule;

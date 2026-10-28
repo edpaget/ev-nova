@@ -620,7 +620,7 @@ fn beamed(
             &mut ships,
             &NovaDisable,
             |combat, fighters, arena, chance| {
-                combat.close_tick(fighters, arena, stellars, chance);
+                combat.close_tick_in(fighters, arena, stellars, None, chance);
             },
         );
         events.extend(combat.take_events());

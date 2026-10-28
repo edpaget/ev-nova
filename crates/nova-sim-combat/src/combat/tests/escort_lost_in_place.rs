@@ -374,7 +374,7 @@ fn beamed(e: Ship) -> Vec<(ShipRef, Option<ShipRef>)> {
         field: Field::default(),
     };
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.close_tick(&mut fighters, arena, &mut [], &mut NeverFires);
+    combat.close_tick_in(&mut fighters, arena, &mut [], None, &mut NeverFires);
     combat
         .take_strikes()
         .iter()
@@ -435,7 +435,7 @@ fn each_beams_hit_lands_before_the_next_beam_is_tested() {
         field: Field::default(),
     };
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.close_tick(&mut fighters, arena, &mut [], &mut NeverFires);
+    combat.close_tick_in(&mut fighters, arena, &mut [], None, &mut NeverFires);
     let kinds: Vec<&str> = combat
         .take_events()
         .iter()
@@ -469,7 +469,7 @@ fn beamed_from_both_sides(e: Ship) -> (Vec<(ShipRef, Option<ShipRef>)>, Vec<Esco
         field: Field::default(),
     };
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.close_tick(&mut fighters, arena, &mut [], &mut NeverFires);
+    combat.close_tick_in(&mut fighters, arena, &mut [], None, &mut NeverFires);
     let (strikes, losses, _) = combat.take_landed();
     let struck = strikes
         .iter()
@@ -519,7 +519,7 @@ fn taking_the_strikes_alone_drops_the_escort_losses_with_them() {
         field: Field::default(),
     };
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.close_tick(&mut fighters, arena, &mut [], &mut NeverFires);
+    combat.close_tick_in(&mut fighters, arena, &mut [], None, &mut NeverFires);
     assert_eq!(combat.take_strikes().len(), 1);
     assert_eq!(combat.take_landed(), (Vec::new(), Vec::new(), Vec::new()));
 }

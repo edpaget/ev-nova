@@ -1569,10 +1569,10 @@ fn handle_npcs(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) 
 }
 
 /// `_HandleBeams` and the late steps, with no stellars
-/// ([`Combat::close_tick`]).
+/// ([`Combat::close_tick_in`]).
 fn close_tick(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
     run(combat, ships, arsenal, |combat, fighters, arena, chance| {
-        combat.close_tick(fighters, arena, &mut [], chance);
+        combat.close_tick_in(fighters, arena, &mut [], None, chance);
     });
 }
 
@@ -3827,7 +3827,7 @@ fn the_stock_thunderhead_lance_and_ion_cannon_jitter_every_tick() {
                 ground,
                 &mut Drawing(draw),
                 |combat, fighters, arena, chance| {
-                    combat.close_tick(fighters, arena, &mut [], chance);
+                    combat.close_tick_in(fighters, arena, &mut [], None, chance);
                 },
             );
             let beam = combat.beams().first().copied().expect("a beam");

@@ -146,10 +146,10 @@ pub(super) fn handle_npcs(combat: &mut Combat, ships: &mut [Ship], rule: &dyn Di
 }
 
 /// `_HandleBeams` and the late steps, with no stellars
-/// ([`Combat::close_tick`]).
+/// ([`Combat::close_tick_in`]).
 pub(super) fn close_tick(combat: &mut Combat, ships: &mut [Ship], rule: &dyn DisableRule) {
     run(combat, ships, rule, |combat, fighters, arena, chance| {
-        combat.close_tick(fighters, arena, &mut [], chance);
+        combat.close_tick_in(fighters, arena, &mut [], None, chance);
     });
 }
 
