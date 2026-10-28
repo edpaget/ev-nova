@@ -29,10 +29,10 @@ exclude_re = [
     # windows-latest legs run `a_test_binary_has_no_dll_beside_it` and
     # nova-win32's real-DLL test (`NOVA_WINSPARKLE_DLL`); the decisions are
     # `nova::winsparkle`'s, tested on every host.
-    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace <impl WinSparkleApi for WinSparkleDll>",
-    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace <impl WinSparkleLoader for DllLoader>",
-    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace DllLoader::beside_exe ",
-    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace winsparkle_source ",
+    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace windows::<impl WinSparkleApi for WinSparkleDll>",
+    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace windows::<impl WinSparkleLoader for DllLoader>",
+    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace windows::DllLoader::beside_exe ",
+    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace windows::winsparkle_source ",
     "nova/src/platform/window\\.rs:[0-9]+:[0-9]+: replace with_exe_icon ",
     # Linux- and BSD-only code: the window's app id (`with_app_id`), which
     # winit gives no way to read back, so no test can see it even there.
@@ -320,12 +320,12 @@ exclude_re = [
     # needs that real controller too.
     "nova-appkit/src/updater\\.rs:.*replace SparkleUpdater::(start|check_now) with \\(\\)$",
     "nova-appkit/src/updater\\.rs:.*replace <impl fmt::Debug for SparkleUpdater>::fmt ",
-    "nova/src/platform/updater\\.rs:.*replace <impl Updater for SparkleUpdater>::(start|check_now) with \\(\\)$",
+    "nova/src/platform/updater\\.rs:.*replace (macos::)?<impl Updater for SparkleUpdater>::(start|check_now) with \\(\\)$",
     # A test binary has no bundle, so it names no feed: `false` is what it
     # answers. nova-appkit's tests read a bundle that names one through
     # `names_feed`, which `feed_configured` asks of the app's bundle.
     "nova-appkit/src/updater\\.rs:.*replace feed_configured -> bool with false$",
-    "nova/src/platform/updater\\.rs:.*replace <impl UpdaterSource for SparkleSource>::feed_configured -> bool with false$",
+    "nova/src/platform/updater\\.rs:.*replace (macos::)?<impl UpdaterSource for SparkleSource>::feed_configured -> bool with false$",
     # The developer tools' window glue (the `dev-tools` feature): egui-winit's
     # input state over a real winit window, which tests cannot build. Each
     # forwards to tested parts: the panel (`DevPanel`), the painter

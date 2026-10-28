@@ -20,7 +20,7 @@ use std::env;
 use std::process::ExitCode;
 
 use nova_bundle::channel;
-use nova_bundle::installer::host::{InstallerHost, installer_host};
+use nova_bundle::installer::host::installer_host;
 use nova_bundle::installer::plan::pack;
 use nova_bundle::system::{StdEnv, StdFiles, StdProcess};
 
@@ -46,7 +46,7 @@ fn main() -> ExitCode {
         }
     };
     let host = match channel::from_env(&StdEnv) {
-        Ok(channel) => InstallerHost { channel, ..host },
+        Ok(channel) => host.for_channel(channel),
         Err(e) => {
             eprintln!("nova-installer: {e}");
             return ExitCode::from(2);

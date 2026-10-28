@@ -26,8 +26,16 @@ pub struct InstallerHost {
     /// The release channel the executables were built for
     /// (`crate::channel::from_env`, as nova's build script reads it);
     /// `None` for a development build. [`installer_host`] leaves it `None`,
-    /// and `main` sets it.
+    /// and `main` sets it ([`InstallerHost::for_channel`]).
     pub channel: Option<Channel>,
+}
+
+impl InstallerHost {
+    /// The host packing executables built for `channel`.
+    #[must_use]
+    pub fn for_channel(self, channel: Option<Channel>) -> Self {
+        Self { channel, ..self }
+    }
 }
 
 /// Why the environment gave no [`InstallerHost`].
@@ -110,6 +118,21 @@ mod tests {
                 channel: None,
             })
         );
+    }
+
+    #[test]
+    fn the_channel_is_set_on_the_host_and_nothing_else_changes() {
+        let host = parse(&["dist"]).expect("host");
+        let nightly = host.clone().for_channel(Some(Channel::Nightly));
+        assert_eq!(nightly.channel, Some(Channel::Nightly));
+        assert_eq!(
+            InstallerHost {
+                channel: None,
+                ..nightly.clone()
+            },
+            host
+        );
+        assert_eq!(nightly.for_channel(None).channel, None);
     }
 
     #[test]
