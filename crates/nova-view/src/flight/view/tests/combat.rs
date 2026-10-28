@@ -254,7 +254,7 @@ fn volleying() -> FakeCatalog {
         weapon.energy_dmg = 5;
         weapon.reload = 30;
     }
-    let mut govt = super::adapter::damaging().govts.remove(0);
+    let mut govt = damaging().govts.remove(0);
     govt.penalties.shoot = 5;
     catalog.govts = vec![govt];
     catalog
