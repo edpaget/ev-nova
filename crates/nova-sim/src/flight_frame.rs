@@ -983,6 +983,16 @@ pub enum FlightCommand {
         /// The movie it names.
         movie: Option<DescMovie>,
     },
+    /// An ask ([`FlightCommand::is_ask`]): the text with its tags filled
+    /// for the pilot with no mission, as the main screen's descriptions
+    /// are ([`Session::plain_text`](crate::Session::plain_text)), answered
+    /// [`Answer::PlainText`]. It reads the pilot and the remembered rank
+    /// governments and changes nothing, so it is an ask. Like
+    /// [`FlightCommand::ComingTraffic`], the port's screen query
+    /// (view-sim-seam phase 22,
+    /// `rdm:phase/view-sim-seam/phase-22-screen-query-and-maps`) may
+    /// absorb it.
+    PlainText(String),
 }
 
 impl FlightCommand {
@@ -1104,13 +1114,14 @@ impl FlightCommand {
             | Self::SetSoundQuiet(_)
             | Self::Hover { .. }
             | Self::ComingTraffic
-            | Self::LoadDescription { .. } => None,
+            | Self::LoadDescription { .. }
+            | Self::PlainText(_) => None,
         }
     }
 
     /// Whether the command only asks: [`FlightCommand::Hover`],
-    /// [`FlightCommand::ComingTraffic`] and
-    /// [`FlightCommand::LoadDescription`]. An ask changes nothing a frame
+    /// [`FlightCommand::ComingTraffic`], [`FlightCommand::LoadDescription`]
+    /// and [`FlightCommand::PlainText`]. An ask changes nothing a frame
     /// shows (`Session::fill_frame` fills the same frame after it, pinned
     /// in `session/apply/asks.rs`), so the view doesn't refill the frame
     /// it keeps after one (`nova_view`'s `FlightView::send`).
@@ -1118,7 +1129,10 @@ impl FlightCommand {
     pub fn is_ask(&self) -> bool {
         matches!(
             self,
-            Self::Hover { .. } | Self::ComingTraffic | Self::LoadDescription { .. }
+            Self::Hover { .. }
+                | Self::ComingTraffic
+                | Self::LoadDescription { .. }
+                | Self::PlainText(_)
         )
     }
 }
@@ -1307,6 +1321,8 @@ pub enum Answer {
     /// The text a [`FlightCommand::LoadDescription`] loaded, empty for a
     /// missing `dësc`.
     Description(String),
+    /// The text a [`FlightCommand::PlainText`] filled.
+    PlainText(String),
 }
 
 impl Answer {

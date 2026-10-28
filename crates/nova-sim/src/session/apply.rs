@@ -109,8 +109,8 @@ impl Session {
     ///   [`Answer::Done`].
     /// - The asks ([`FlightCommand::is_ask`]) are answered as the `asks`
     ///   module says: the hover, the coming traffic (refused without a
-    ///   catalog) and a description's load, none changing anything a
-    ///   frame shows.
+    ///   catalog), a description's load and a plain text's fill, none
+    ///   changing anything a frame shows.
     /// - The rest are never refused, and answer [`Answer::Done`]:
     ///   [`FlightCommand::SelectWeapon`] ([`Session::press_weapon_select`],
     ///   which the next pass takes; the view asks the gate first),
@@ -252,7 +252,8 @@ impl Session {
             | FlightCommand::SetSoundQuiet(_) => self.apply_setting(command),
             FlightCommand::Hover { .. }
             | FlightCommand::ComingTraffic
-            | FlightCommand::LoadDescription { .. } => self.apply_ask(command, collab),
+            | FlightCommand::LoadDescription { .. }
+            | FlightCommand::PlainText(_) => self.apply_ask(command, collab),
         }
     }
 }

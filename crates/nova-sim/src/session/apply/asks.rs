@@ -1,5 +1,5 @@
 //! [`Session::apply`]'s asks ([`FlightCommand::is_ask`]): the hover, the
-//! coming traffic and a description's load, each matched to the session
+//! coming traffic, a description's load and a plain text's fill, each matched to the session
 //! method that answers it, as [`Session::apply_ask`] says. None changes
 //! anything a frame shows, which the tests here pin, so the view keeps
 //! its frame across them.
@@ -20,6 +20,8 @@ impl Session {
     /// - [`FlightCommand::LoadDescription`] runs
     ///   [`Session::load_description`] on `collab`'s chance:
     ///   [`Answer::Description`], empty for a missing `dësc`.
+    /// - [`FlightCommand::PlainText`] runs [`Session::plain_text`]:
+    ///   [`Answer::PlainText`].
     #[allow(clippy::needless_pass_by_value)] // the commands come by value, as `Session::apply` takes them
     pub(super) fn apply_ask(
         &mut self,
@@ -35,6 +37,7 @@ impl Session {
             FlightCommand::LoadDescription { raw, movie } => Answer::Description(
                 self.load_description(raw.as_deref(), movie.as_ref(), collab.chance),
             ),
+            FlightCommand::PlainText(text) => Answer::PlainText(self.plain_text(&text)),
             _ => Answer::Refused,
         }
     }
@@ -179,6 +182,19 @@ mod tests {
     }
 
     #[test]
+    fn a_plain_text_is_filled_as_the_session_fills_it_for_the_pilot() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.pilot.ship_name = Some("Kestrel".to_owned());
+        let raw = "Hello, <PSN>.";
+        let expected = session.plain_text(raw);
+        assert_eq!(expected, "Hello, Kestrel.", "precondition: a tag filled");
+        assert_eq!(
+            apply(&mut session, FlightCommand::PlainText(raw.to_owned())),
+            Answer::PlainText(expected)
+        );
+    }
+
+    #[test]
     fn an_ask_changes_nothing_a_frame_shows() {
         let trafficked = crate::session::tests::trafficked(130, 2, 1);
         let mut session = Session::start(&trafficked).expect("starts");
@@ -194,6 +210,7 @@ mod tests {
                 raw: None,
                 movie: None,
             },
+            FlightCommand::PlainText("Hello, <PSN>.".to_owned()),
         ];
         for ask in asks {
             let before: FlightFrame = filled(&session);
@@ -206,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_hover_the_coming_traffic_and_a_descriptions_load_are_asks() {
+    fn only_the_hover_the_coming_traffic_a_descriptions_load_and_a_plain_text_are_asks() {
         for command in [
             hover(Vec2::ZERO, &DrawnBoxes::default()),
             FlightCommand::ComingTraffic,
@@ -214,6 +231,7 @@ mod tests {
                 raw: None,
                 movie: None,
             },
+            FlightCommand::PlainText(String::new()),
         ] {
             assert!(command.is_ask(), "{command:?}");
             assert_eq!(command.gate(), None, "{command:?}: no key gates it");
