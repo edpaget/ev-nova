@@ -361,33 +361,100 @@ jobs:
           retention-days: 1
 
   # Moves the `nightly` tag to this commit and replaces the prerelease's
-  # assets. All or nothing: it needs every `build` leg and the Flatpak, so
-  # a failed leg on any platform skips publishing and leaves the previous
+  # assets, and publishes the signed Sparkle update feeds the apps read
+  # (`mise run appcast`, crates/nova-bundle/src/appcast), on pushes to main
+  # only. All or nothing: it needs every `build` leg and the Flatpak, so a
+  # failed leg on any platform skips publishing and leaves the previous
   # nightly untouched.
+  #
+  # The update-signing seed lives in the update-signing environment, whose
+  # deployment-branch policy allows only main (infra/github/update_signing.tf).
+  # The job names it only once the repository variable
+  # UPDATE_SIGNING_ENVIRONMENT holds its name, which OpenTofu sets after it has
+  # made the environment, its policy and its secret. Until that apply the job
+  # names no environment, UPDATE_SIGNING_KEY is empty, and nova-appcast skips
+  # the feeds with a warning while the nightly publishes as before. The
+  # expression must never name anything but update-signing, because naming an
+  # environment that doesn't exist creates it, with no protection rules.
+  #
+  # The order matters. nova-appcast checks the build against the current
+  # feeds before the tag moves, so a refusal leaves the release untouched. The
+  # installers and their build-ID copies go up before the feeds that name
+  # them, so a feed never names a file that isn't up, and the deletes come
+  # last.
+  #
+  # Re-running a run whose feeds already went up is fine: nova-appcast exits 3
+  # (the feeds already offer this build) and writes nothing, so the job
+  # re-uploads the stable installers and leaves the feeds and every other
+  # asset as they are. A build older than the current feeds' fails the job.
   publish:
-    needs: [build, flatpak]
+    needs: [build-id, build, flatpak]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    environment: ${{ vars.UPDATE_SIGNING_ENVIRONMENT == 'update-signing' && 'update-signing' || '' }}
     # On top of the workflow-level group, so two quick pushes can't race on
     # the tag or the assets. A cancelled older run is harmless: the newer run
     # re-uploads every asset.
     concurrency:
       group: nightly-release
       cancel-in-progress: true
+    env:
+      # As in `ci`: install only the Rust toolchain.
+      MISE_AUTO_INSTALL: "false"
+      # The run's one build ID, which the feeds offer.
+      NOVA_BUILD_ID: ${{ needs.build-id.outputs.id }}
     steps:
       - uses: actions/checkout@v5
+      # Rust for `mise run appcast`; nova-bundle needs no system libraries.
+      - uses: jdx/mise-action@v5
+        with:
+          install: false
+      - run: mise install rust
+        shell: bash
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: publish
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/download-artifact@v4
         with:
           pattern: dist-*
           merge-multiple: true
           path: dist
-      # Every build leg's dist/ is merged into dist/ above, so dist/ holds
-      # every asset this run made. --clobber replaces each one in place;
-      # then any asset not in dist/ (a renamed or dropped one, such as the
-      # macOS tarball the .dmg replaced) is deleted. Uploading first means
-      # the release is never without an asset this run makes.
+      # Every build leg's dist/ is merged into dist/ above. nova-appcast reads
+      # the release's asset list and its current feeds, and, when signing,
+      # copies the .dmg and .msi to their build-ID names in dist/ and writes
+      # the feeds to feeds/. It always writes prune.txt, the assets to
+      # delete. The signing secret reaches this step alone.
+      - name: Sign the update feeds
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          gh release view nightly >/dev/null 2>&1 ||
+            gh release create nightly --prerelease --title "Nightly build" --notes "Tester build of main."
+          gh release view nightly --json assets --jq '.assets[].name' > "$RUNNER_TEMP/assets.txt"
+          mkdir -p "$RUNNER_TEMP/current" "$RUNNER_TEMP/feeds"
+          if grep -qx 'appcast-.*\.xml' "$RUNNER_TEMP/assets.txt"; then
+            gh release download nightly --pattern 'appcast-*.xml' --dir "$RUNNER_TEMP/current"
+          fi
+          status=0
+          mise run appcast -- publish --dist dist --assets "$RUNNER_TEMP/assets.txt" \
+            --current "$RUNNER_TEMP/current" --feeds "$RUNNER_TEMP/feeds" \
+            --prune-list "$RUNNER_TEMP/prune.txt" || status=$?
+          if [ "$status" -eq 3 ]; then
+            echo "::notice title=Update feeds already published::The nightly's feeds already offer build $NOVA_BUILD_ID: re-uploading the installers only."
+          elif [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+      # --clobber replaces each asset in place. The feeds go up only after
+      # the files they name, then the assets nova-appcast listed (renamed or
+      # dropped ones, and build-ID copies past the newest few that no feed
+      # names) are deleted. Uploading first means the release is never
+      # without an asset this run makes.
       - name: Publish the nightly prerelease
         shell: bash
         env:
@@ -400,16 +467,18 @@ jobs:
           notes="Tester build of \`main\` at $GITHUB_SHA ($commit_url).
 
           No EV Nova game data is included: supply your own \`Nova Files\` directory. See README.txt in each download for how to run the game."
-          gh release view nightly >/dev/null 2>&1 ||
-            gh release create nightly --prerelease --title "Nightly build" --notes "$notes"
           gh release edit nightly --prerelease --notes "$notes"
           gh release upload nightly dist/* --clobber
-          gh release view nightly --json assets --jq '.assets[].name' |
+          shopt -s nullglob
+          feeds=("$RUNNER_TEMP"/feeds/*)
+          if [ ${#feeds[@]} -gt 0 ]; then
+            gh release upload nightly "${feeds[@]}" --clobber
+          fi
+          if [ -f "$RUNNER_TEMP/prune.txt" ]; then
             while IFS= read -r asset; do
-              if [ ! -e "dist/$asset" ]; then
-                gh release delete-asset nightly "$asset" --yes
-              fi
-            done
+              gh release delete-asset nightly "$asset" --yes < /dev/null
+            done < "$RUNNER_TEMP/prune.txt"
+          fi
 
   # Deploys the GitHub Pages site. A repository has one Pages deployment,
   # and each deploy replaces the whole site.
