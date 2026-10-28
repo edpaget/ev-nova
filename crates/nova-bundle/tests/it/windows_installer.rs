@@ -98,19 +98,25 @@ if ($null -eq $record) {{ '{NONE}' }} else {{ Get-Prop $record 'StringData' @(1)
     )))
 }
 
-/// The first row `query` selects from the package's tables, each column's
-/// text in order, or `None` when it selects none.
-fn msi_row(msi: &Path, query: &str) -> Option<Vec<String>> {
+/// The first row `query` selects from the package's tables, the text of
+/// each of its `columns` columns in order, or `None` when it selects none.
+fn msi_row(msi: &Path, query: &str, columns: usize) -> Option<Vec<String>> {
+    // Each field by a literal index: a pipeline's `$_` reaches COM wrapped,
+    // which `InvokeMember` refuses as a type mismatch.
+    let fields: Vec<String> = (1..=columns)
+        .map(|i| format!("  'field=' + (Get-Prop $record 'StringData' @({i}))"))
+        .collect();
     let lines = powershell(&format!(
         "$db = Invoke-Com $installer 'OpenDatabase' @({msi}, 0)
 $view = Invoke-Com $db 'OpenView' @({query})
 Invoke-Com $view 'Execute' $null | Out-Null
 $record = Invoke-Com $view 'Fetch' $null
 if ($null -eq $record) {{ '{NONE}' }} else {{
-  1..(Get-Prop $record 'FieldCount' $null) | ForEach-Object {{ 'field=' + (Get-Prop $record 'StringData' @($_)) }}
+{fields}
 }}",
         msi = quote_path(msi),
         query = quote(query),
+        fields = fields.join("\n"),
     ));
     if lines == [NONE] {
         return None;
@@ -145,6 +151,7 @@ fn check_relaunch(msi: &Path) {
             "SELECT `Type`, `Source`, `Target` FROM `CustomAction` WHERE `Action` = \
              '{RELAUNCH_ACTION}'"
         ),
+        3,
     )
     .expect("the relaunch action");
     assert_eq!(
@@ -162,6 +169,7 @@ fn check_relaunch(msi: &Path) {
                 "SELECT `Sequence`, `Condition` FROM `InstallExecuteSequence` WHERE `Action` = \
                  '{action}'"
             ),
+            2,
         )
         .unwrap_or_else(|| panic!("{action} is sequenced"))
     };
