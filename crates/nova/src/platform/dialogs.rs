@@ -84,10 +84,7 @@ impl NovaFilesDialog for Dialogs {
         let handlers = {
             let quit = Rc::clone(&quit);
             nova_appkit::AppleEvents::install(move |command| {
-                if command == nova_appkit::Command::Quit {
-                    quit.set(true);
-                    nova_appkit::abort_modal();
-                }
+                on_panel_command(command, &quit, nova_appkit::abort_modal);
             })
         };
         let picked = rfd::FileDialog::new()
@@ -96,6 +93,17 @@ impl NovaFilesDialog for Dialogs {
             .pick_file_or_folder();
         drop(handlers);
         answer(picked, quit.get())
+    }
+}
+
+/// What an Apple event's `command` does while the open panel is up: a
+/// quit is noted in `quit` and ends the panel through `abort`; anything
+/// else (the system's Preferences) is ignored, as there is no game yet.
+#[cfg(target_os = "macos")]
+fn on_panel_command(command: nova_appkit::Command, quit: &Cell<bool>, abort: impl FnOnce()) {
+    if command == nova_appkit::Command::Quit {
+        quit.set(true);
+        abort();
     }
 }
 
@@ -253,5 +261,30 @@ mod tests {
     fn a_re_ask_shows_its_prompt_as_the_notice() {
         let prompt = format!("/home/p/Games holds no EV Nova data. {PROMPT}");
         assert_eq!(retry_notice(&prompt), Some(prompt.as_str()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn during_the_panel_a_quit_is_noted_and_aborts_it() {
+        let quit = Cell::new(false);
+        let mut aborts = 0;
+        on_panel_command(nova_appkit::Command::Quit, &quit, || aborts += 1);
+        assert!(quit.get(), "noted");
+        assert_eq!(aborts, 1, "the panel aborted");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn during_the_panel_any_other_command_is_ignored() {
+        for command in [
+            nova_appkit::Command::Preferences,
+            nova_appkit::Command::About,
+        ] {
+            let quit = Cell::new(false);
+            let mut aborts = 0;
+            on_panel_command(command, &quit, || aborts += 1);
+            assert!(!quit.get(), "{command:?}");
+            assert_eq!(aborts, 0, "{command:?}");
+        }
     }
 }
