@@ -40,6 +40,7 @@ fn queue_bordered(fake: &mut FakeFlight, sources: BorderSources) {
 fn bordered_redraw(sources: &BorderSources) -> ScreenAnswer {
     ScreenAnswer::Map(Box::new(MapScreen {
         drawing: sol_drawing(),
+        marks_known: Vec::new(),
         borders: sources.clone(),
         panel: blank_panel(),
     }))

@@ -163,6 +163,12 @@ impl MapBorders {
         self.sources = sources;
     }
 
+    /// The sources shown ([`MapBorders::show_sources`]).
+    #[must_use]
+    pub fn sources(&self) -> &BorderSources {
+        &self.sources
+    }
+
     /// Sets the readings of [`RuleKey::MapBorderPace`] and
     /// [`RuleKey::MapFindBorders`].
     ///

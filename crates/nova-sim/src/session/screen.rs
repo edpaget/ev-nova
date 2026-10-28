@@ -24,10 +24,10 @@ impl Session {
     ///   the preselection ([`Session::map_preselection`]) and the mission
     ///   systems ([`Session::map_mission_systems`]).
     /// - To [`ScreenAsk::Map`], the drawing ([`Session::map_drawing`]), the
-    ///   border sources, on the hypergate map with the drawing's gate
-    ///   arrows counted as known, as the view marks them known
-    ///   ([`Session::mark_known`]) before it shows the borders, and the
-    ///   panels ([`Session::map_panel`]).
+    ///   systems drawing it makes known (on the hypergate map its gate
+    ///   arrows, which the view forwards to [`Session::mark_known`] before
+    ///   it shows the borders), the border sources with those counted as
+    ///   known, and the panels ([`Session::map_panel`]).
     /// - To [`ScreenAsk::MapPanel`], the panels alone.
     /// - To [`ScreenAsk::MapPreselection`], [`Session::map_preselection`].
     /// - To [`ScreenAsk::HypergateCycle`], [`Session::hypergate_cycle`].
@@ -65,15 +65,19 @@ impl Session {
                     return ScreenAnswer::Nothing;
                 };
                 let drawing = self.map_drawing(hypergate.as_deref(), &missions, marks);
+                // Drawing a gate arrow marks its system known; off the
+                // hypergate map the drawing has none.
+                let marks_known = drawing.gate_arrows.clone();
                 let borders = self.chart.map_border_sources_knowing(
                     &self.pilot,
                     &self.statics,
                     &self.setup,
-                    &drawing.gate_arrows,
+                    &marks_known,
                 );
                 let panel = self.map_panel(&catalog, selected, hypergate.as_deref());
                 ScreenAnswer::Map(Box::new(MapScreen {
                     drawing,
+                    marks_known,
                     borders,
                     panel,
                 }))
@@ -253,6 +257,7 @@ mod tests {
         let selected = Some(SystemId(131));
         let expected = MapScreen {
             drawing: session.map_drawing(None, &missions, marks),
+            marks_known: Vec::new(),
             borders: session.map_border_sources(),
             panel: session.map_panel(&catalog, selected, None),
         };
@@ -291,15 +296,17 @@ mod tests {
     }
 
     #[test]
-    fn the_hypergate_maps_redraw_counts_its_gate_arrows_known_and_marks_none() {
+    fn the_hypergate_maps_redraw_names_its_gate_arrows_to_mark_known_and_counts_them_known() {
         let catalog = gated_federation();
         let mut session = at_gate(&catalog);
         session.pilot.explore(SystemId(131));
         session.chart.known.remove(&SystemId(131));
         let offers = vec![SystemId(131), SystemId(132)];
         let drawing = session.map_drawing(Some(&offers), &[], MapMarks::NONE);
+        assert!(!drawing.gate_arrows.is_empty(), "precondition: arrows");
+        let marks_known = drawing.gate_arrows.clone();
         let mut marked = session.clone();
-        marked.mark_known(drawing.gate_arrows.clone());
+        marked.mark_known(marks_known.clone());
         assert_ne!(
             marked.map_border_sources(),
             session.map_border_sources(),
@@ -308,6 +315,7 @@ mod tests {
         let selected = Some(SystemId(131));
         let expected = MapScreen {
             drawing,
+            marks_known,
             borders: marked.map_border_sources(),
             panel: marked.map_panel(&catalog, selected, Some(&offers)),
         };

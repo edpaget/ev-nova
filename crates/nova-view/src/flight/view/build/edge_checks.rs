@@ -458,3 +458,45 @@ fn a_loaded_flight_reads_the_rules_it_is_given() {
     }
     assert_ne!(systems[0], systems[1], "the readings differ here");
 }
+
+// The hypergate map's borders over a real flight.
+
+/// [`bordered`] with Barnard (132), which no system the player can see
+/// from Sol lists, government 129's and lived in, so its borders add once
+/// it is known.
+fn gated_to_barnard() -> FakeCatalog {
+    FakeCatalog {
+        governed: vec![(130, 128), (134, 129), (132, 129)],
+        lived: vec![134, 132],
+        ..bordered()
+    }
+}
+
+/// The seam of the hypergate map's mark: its redraw over a real flight
+/// shows the borders the session paints once the drawing's arrows are
+/// marked known, the mark the view sends for the session's answer.
+#[test]
+fn the_hypergate_maps_borders_are_the_sessions_once_its_arrows_are_marked_known() {
+    let mut view = test_flight::new(gated_to_barnard());
+    view.sim.session.as_mut().expect("flying").run_set(
+        &nova_sim::SetExpr::parse("X132").expect("parses"),
+        &mut NeverFires,
+    );
+    view.refresh_frame();
+    let session = view.sim.session().expect("flying");
+    assert!(
+        !session.known().contains(&SystemId(132)),
+        "precondition: Barnard explored, not known"
+    );
+    let unknown = session.map_border_sources();
+    view.map.offer_gates(vec![SystemId(132)]);
+    view.open_map();
+    let session = view.sim.session().expect("flying");
+    assert!(
+        session.known().contains(&SystemId(132)),
+        "the arrow's system marked known"
+    );
+    let known = session.map_border_sources();
+    assert_ne!(known, unknown, "precondition: Barnard adds once known");
+    assert_eq!(view.course_map().border_sources(), &known);
+}

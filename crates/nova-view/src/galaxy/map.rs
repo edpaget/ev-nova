@@ -1187,6 +1187,13 @@ impl GalaxyMap {
         self.borders.passes()
     }
 
+    /// What an in-flight map's borders add from now on, as last shown
+    /// ([`GalaxyMap::show_border_sources`]).
+    #[must_use]
+    pub fn border_sources(&self) -> &BorderSources {
+        self.borders.sources()
+    }
+
     /// The border cells a full update draws, as last taken.
     #[must_use]
     pub fn border_cells(&self) -> &[PaintedCell] {

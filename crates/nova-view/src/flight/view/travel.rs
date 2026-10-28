@@ -370,12 +370,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`MapKey`](nova_sim::flight_frame::MapKey)), so the mark itself
     /// doesn't take it again. The borders and the panels for the system
     /// selected are taken with it, all one answer to the redraw's ask
-    /// ([`ScreenAsk::Map`]), the hypergate map's borders counting the
-    /// arrows known, as the mark leaves them. A flight that answers it
-    /// nothing redraws nothing.
+    /// ([`ScreenAsk::Map`]). Which systems the drawing marks known is the
+    /// answer's ([`MapScreen::marks_known`]), and the borders are painted
+    /// as the mark leaves them: the view forwards the mark, sending none
+    /// when the answer names none, and decides nothing of it. A flight
+    /// that answers nothing redraws nothing.
     pub(super) fn redraw_map(&mut self) {
         let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered().to_vec());
-        let hypergate = offered.is_some();
         let ScreenAnswer::Map(screen) = self.sim.screen(ScreenAsk::Map {
             hypergate: offered,
             missions: self.map_missions.clone(),
@@ -386,12 +387,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
         };
         let MapScreen {
             drawing,
+            marks_known,
             borders,
             panel,
         } = *screen;
         self.map.show_drawing(&drawing);
-        if hypergate {
-            self.send(FlightCommand::MarkKnown(drawing.gate_arrows));
+        if !marks_known.is_empty() {
+            self.send(FlightCommand::MarkKnown(marks_known));
         }
         self.map.show_border_sources(borders);
         self.map_seen = Some(self.frame.map_key.clone());

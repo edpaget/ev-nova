@@ -152,9 +152,16 @@ pub struct MapScreen {
     /// What it draws
     /// ([`Session::map_drawing`](crate::Session::map_drawing)).
     pub drawing: MapDrawing,
-    /// What its borders are painted from. On the hypergate map the
-    /// drawing's gate arrows count as known, as the view marks them known
-    /// (`FlightCommand::MarkKnown`) before it shows the borders.
+    /// The systems drawing it makes known, for the view to mark known
+    /// (`FlightCommand::MarkKnown`) right after it shows the drawing, as
+    /// `_DrawMap` marks each hypergate arrow's system known as it draws
+    /// it (@0xf457-0xf45f): on the hypergate map the drawing's gate
+    /// arrows, otherwise none. The session decides them; the view only
+    /// forwards them, and sends no mark when there are none.
+    pub marks_known: Vec<SystemId>,
+    /// What its borders are painted from: the known set counting
+    /// [`MapScreen::marks_known`] as known, as the borders are shown after
+    /// the mark.
     pub borders: BorderSources,
     /// Its info panels for the system selected
     /// ([`Session::map_panel`](crate::Session::map_panel)).
@@ -293,6 +300,7 @@ mod tests {
             }),
             ScreenAnswer::Map(Box::new(MapScreen {
                 drawing: drawing(),
+                marks_known: Vec::new(),
                 borders: BorderSources::default(),
                 panel: panel.clone(),
             })),

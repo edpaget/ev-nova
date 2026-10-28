@@ -554,12 +554,15 @@ fn blank_panel() -> nova_sim::map_panel::MapPanel {
 }
 
 /// What a scripted flight answers a course map's redraw
-/// ([`ScreenAsk::Map`]): `drawing`, no border sources and `panel`.
+/// ([`ScreenAsk::Map`]): `drawing`, marking its gate arrows known as a
+/// session does (none off the hypergate map), no border sources and
+/// `panel`.
 fn redrawn_with(
     drawing: nova_sim::galaxy_map::MapDrawing,
     panel: nova_sim::map_panel::MapPanel,
 ) -> ScreenAnswer {
     ScreenAnswer::Map(Box::new(MapScreen {
+        marks_known: drawing.gate_arrows.clone(),
         drawing,
         borders: nova_sim::map_borders::BorderSources::default(),
         panel,

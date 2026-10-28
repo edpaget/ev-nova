@@ -1490,6 +1490,33 @@ fn the_hypergate_maps_own_mark_takes_no_redraw_a_frame_on() {
     assert_eq!(drawings(&view), 2, "while a change behind it redraws");
 }
 
+#[test]
+fn the_redraw_marks_known_what_the_flights_answer_names_and_nothing_else() {
+    // Which systems a drawing marks known is the session's
+    // (`the_hypergate_maps_redraw_names_its_gate_arrows_to_mark_known_and_counts_them_known`):
+    // the view forwards the answer's, whatever the drawing arrows.
+    for (marks_known, sent_marks) in [
+        (
+            vec![SystemId(134)],
+            vec![FlightCommand::MarkKnown(vec![SystemId(134)])],
+        ),
+        (Vec::new(), Vec::new()),
+    ] {
+        let mut view = faked(in_sol());
+        let opening = map_opening(&view.frame, Some(130));
+        view.sim.queue_screen(opening);
+        view.sim.queue_screen(ScreenAnswer::Map(Box::new(MapScreen {
+            drawing: gate_drawing(),
+            marks_known: marks_known.clone(),
+            borders: nova_sim::map_borders::BorderSources::default(),
+            panel: blank_panel(),
+        })));
+        view.map.offer_gates(vec![SystemId(132)]);
+        view.open_map();
+        assert_eq!(sent(&view), sent_marks, "{marks_known:?}");
+    }
+}
+
 /// What the flight answers a press on the hypergate map that selects
 /// `selected` and picks `pick` (`None` for no pick).
 fn gate_picked(selected: i16, pick: Option<i16>) -> Answer {
