@@ -395,6 +395,38 @@ mod tests {
     }
 
     #[test]
+    fn only_the_lines_glyphon_would_draw_inside_the_clip_rows_give_glyphs() {
+        let (mut system, families, mut glyphs) = bundled();
+        let buffer = lay_out_text(
+            &mut system,
+            &families,
+            Font::Geneva,
+            12.0,
+            None,
+            "a\nbb\nccc",
+        )
+        .expect("laid");
+        let (origin, scale) = ((0.0, 10.0), 2.0);
+        // glyphon's rows for each line: its top, and its top plus its
+        // height, each truncated.
+        let rows: Vec<(i32, i32)> = buffer
+            .layout_runs()
+            .map(|run| {
+                let top = (origin.1 + run.line_top * scale) as i32;
+                (top, top + (run.line_height * scale) as i32)
+            })
+            .collect();
+        assert_eq!(rows.len(), 3);
+        assert!(
+            rows[0].1 < rows[1].1 - 1 && rows[1].1 < rows[2].0,
+            "{rows:?}"
+        );
+        // The middle line's last row and the one above it: only "bb".
+        let clip = (rows[1].1 - 1, rows[1].1);
+        assert_eq!(glyphs.custom_glyphs(&buffer, origin, scale, clip).len(), 2);
+    }
+
+    #[test]
     fn a_line_outside_the_clip_rows_gives_no_glyphs() {
         let (mut system, families, mut glyphs) = bundled();
         let buffer =

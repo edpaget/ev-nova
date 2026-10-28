@@ -643,4 +643,8 @@ exclude_re = [
     # `unlike_hud` likewise only needs gauges other than the HUD's: one
     # less than the given differs as one more does.
     "nova-view/src/flight/sim_port/fixture\\.rs:[0-9]+:[0-9]+: replace \\+ with - in unlike_hud$",
+    # The glyph rasteriser's pen closing a contour: zeno fills every
+    # contour as closed whether or not the path closes it, so dropping the
+    # close changes no coverage.
+    "nova-render/src/glyph_raster\\.rs:[0-9]+:[0-9]+: replace <impl OutlinePen for Path>::close with \\(\\)$",
 ]

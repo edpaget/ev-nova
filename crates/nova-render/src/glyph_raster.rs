@@ -189,22 +189,15 @@ impl HintedFace {
     }
 }
 
-/// An outline as zeno path commands, closed as swash closes its own: each
-/// contour before the next begins, and the last at the end.
+/// An outline as zeno path commands. zeno fills every contour as closed,
+/// whether or not the outline closes it.
 #[derive(Default)]
 struct Path(Vec<Command>);
 
 impl Path {
-    fn close_open(&mut self) {
-        if self.0.last().is_some_and(|last| *last != Command::Close) {
-            self.0.push(Command::Close);
-        }
-    }
-
     /// The path's coverage, placed with its origin at the bottom left as
     /// swash renders an outline.
-    fn fill(mut self, advance: Option<f32>) -> GlyphRaster {
-        self.close_open();
+    fn fill(self, advance: Option<f32>) -> GlyphRaster {
         if self.0.is_empty() {
             return GlyphRaster {
                 left: 0,
@@ -234,7 +227,6 @@ impl Path {
 
 impl OutlinePen for Path {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.close_open();
         self.0.push(Command::MoveTo(Point::new(x, y)));
     }
 
@@ -411,6 +403,37 @@ mod tests {
         assert_eq!(face.hinter(), Hinter::Instructions);
         let raster = face.rasterise(glyph(&block_sfnt("Block").build(), 'A'), 12.0);
         assert!(!raster.expect("an outline").is_empty());
+    }
+
+    #[test]
+    fn a_raster_with_no_width_or_no_height_is_empty() {
+        let raster = |width, height| GlyphRaster {
+            left: 0,
+            top: 0,
+            width,
+            height,
+            coverage: vec![255; (width * height) as usize],
+            advance: None,
+        };
+        assert!(raster(0, 0).is_empty());
+        assert!(raster(3, 0).is_empty());
+        assert!(raster(0, 3).is_empty());
+        assert!(!raster(1, 1).is_empty());
+    }
+
+    #[test]
+    fn a_cubic_contour_fills_as_its_curve_bounds_it() {
+        // A TrueType face never draws a cubic (a CFF face would): a square
+        // 8 pixels wide whose top is one cubic from right to left.
+        let mut path = Path::default();
+        path.move_to(0.0, 0.0);
+        path.line_to(8.0, 0.0);
+        path.curve_to(8.0, 4.0, 0.0, 4.0, 0.0, 0.0);
+        path.close();
+        let raster = path.fill(None);
+        // zeno bounds the raster by the curve's control points.
+        assert_eq!((raster.width, raster.height), (8, 4));
+        assert!(raster.coverage.contains(&255), "{raster:?}");
     }
 
     #[test]
