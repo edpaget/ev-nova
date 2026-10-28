@@ -76,7 +76,7 @@ impl AppleEventTarget {
 /// never `AppKit`'s `terminate:`, which would end the process with no
 /// chance to save.
 ///
-/// `NSAppleEventManager` doesn't retain a handler, so this keeps the
+/// `NSAppleEventManager` holds a handler only weakly, so this keeps the
 /// target: keep it for the whole run. Dropping it removes the handlers,
 /// and the events then go unhandled (`AppKit`'s own handlers aren't put
 /// back).
@@ -113,7 +113,8 @@ impl AppleEvents {
             // SAFETY: the target responds to
             // `handleAppleEvent:withReplyEvent:`, the selector given, and
             // `AppleEvents` keeps it alive while it is registered (its drop
-            // removes it first). The class and ID are `UInt32`s.
+            // removes it before the target goes). The class and ID are
+            // `UInt32`s.
             unsafe {
                 let () = msg_send![
                     &*manager,
