@@ -145,5 +145,7 @@ mod tests {
         assert_eq!(murk_tint(base, 31), Color::rgba(7, 4, 0, 200));
         assert_eq!(murk_tint(base, 32), Color::rgba(0, 0, 0, 200));
         assert_eq!(murk_tint(base, 255), Color::rgba(0, 0, 0, 200));
+        let shot = Color::rgba(255, 255, 255, 191); // `see_through(8)`
+        assert_eq!(murk_tint(shot, 16), Color::rgba(127, 127, 127, 191));
     }
 }
