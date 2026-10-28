@@ -42,7 +42,7 @@ use nova_render::{Batch, FontFaces, Frame};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_view::geometry::Point;
-use nova_view::sound::SimSound;
+use nova_view::sound::{SimSound, UiSound};
 use nova_view::text::TextMetrics;
 use nova_view::ui::PrefsDialog;
 use nova_view::ui::prefs::OK_ITEM;
@@ -255,27 +255,27 @@ impl Harness {
     /// read through it start the audio core and the router. It runs as on
     /// Windows, whatever the host, so its monitor offers exclusive modes.
     fn new(store: &MemorySettings) -> Self {
-        Self::with_table(store, &SoundTable::ORIGINAL)
+        Self::with_table(store, SoundTable::ORIGINAL)
     }
 
     /// The game started over `store` as [`Harness::new`] starts it, but
     /// running on `os`.
     fn on_os(store: &MemorySettings, os: Os) -> Self {
-        Self::build(store, &SoundTable::ORIGINAL, false, os)
+        Self::build(store, SoundTable::ORIGINAL, false, os)
     }
 
     /// The game started over `store`, its audio core playing `table`.
-    fn with_table(store: &MemorySettings, table: &SoundTable) -> Self {
+    fn with_table(store: &MemorySettings, table: SoundTable) -> Self {
         Self::build(store, table, false, Os::Windows)
     }
 
     /// The game started over `store` on the main menu, where the music
     /// plays.
     fn on_main_menu(store: &MemorySettings) -> Self {
-        Self::build(store, &SoundTable::ORIGINAL, true, Os::Windows)
+        Self::build(store, SoundTable::ORIGINAL, true, Os::Windows)
     }
 
-    fn build(store: &MemorySettings, table: &SoundTable, main_menu: bool, os: Os) -> Self {
+    fn build(store: &MemorySettings, table: SoundTable, main_menu: bool, os: Os) -> Self {
         let data = game_data();
         let (keeper, settings, warning) =
             game_settings(Some(Box::new(store.clone()) as Box<dyn SettingsStore>));
@@ -294,7 +294,7 @@ impl Harness {
             .with_prefs(settings.prefs());
         let audio = RecordingAudio::new();
         let log = audio.log();
-        let core = AudioCore::with_table(Box::new(audio) as Box<dyn Audio>, *table)
+        let core = AudioCore::with_table(Box::new(audio) as Box<dyn Audio>, table)
             .with_settings(settings.audio);
         let window = FakeWindow {
             fullscreen: Vec::new(),
@@ -571,16 +571,19 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     harness.press(Key::Enter);
     assert_eq!(harness.showing(), Showing::MainMenu);
     harness.frame();
-    let click = |id| AudioCommand::Play {
-        sound: SoundId(id),
-        volume: effects_level_volume(4),
-        priority: nova_audio::priority::BUTTON,
+    let click = |sound: UiSound| {
+        let cue = sound.cue().expect("a click plays");
+        AudioCommand::Play {
+            sound: cue.sound,
+            volume: effects_level_volume(4),
+            priority: Priority::new(cue.priority),
+        }
     };
     assert_eq!(
         harness.played(),
         [
-            click(600),
-            click(601),
+            click(UiSound::ButtonDown),
+            click(UiSound::ButtonUp),
             AudioCommand::SetMusicVolume(music_level_volume(5))
         ],
         "P's keyed click, at the seeded effects level, then the new music level"
@@ -596,7 +599,11 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     harness.frame();
     assert_eq!(
         harness.played(),
-        [click(600), click(601), AudioCommand::StopMusic]
+        [
+            click(UiSound::ButtonDown),
+            click(UiSound::ButtonUp),
+            AudioCommand::StopMusic
+        ]
     );
 }
 
@@ -631,9 +638,8 @@ fn the_preferences_pause_flight_and_stop_the_engine_until_a_fresh_thrust() {
     let store = seeded();
     let table = SoundTable {
         engine: Some(SoundId(ENGINE)),
-        ..SoundTable::ORIGINAL
     };
-    let mut harness = Harness::with_table(&store, &table);
+    let mut harness = Harness::with_table(&store, table);
     let effects = effects_level_volume(4);
     let engine = AudioCommand::StartLoop {
         sound: SoundId(ENGINE),

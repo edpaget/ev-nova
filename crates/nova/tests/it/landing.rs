@@ -45,7 +45,7 @@ use nova_sim::{ShipState, StellarId, Vec2};
 use nova_view::MouseButton;
 use nova_view::flight::FlightOverlays;
 use nova_view::geometry::{Bounds, Point};
-use nova_view::sound::SimSound;
+use nova_view::sound::{SimSound, Sound, UiSound};
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::layout::{LANDSCAPE_ITEM, LEAVE_ITEM};
 use winit::event::ElementState;
@@ -652,10 +652,15 @@ fn drain(log: &AudioLog) -> Vec<AudioCommand> {
     std::mem::take(&mut *log.borrow_mut())
 }
 
-/// What the sim's `sound` plays at the default effects volume: its cue's
-/// `snd ` at its priority.
-fn cued(sound: SimSound) -> AudioCommand {
-    let cue = sound.cue().expect("it plays a cue");
+/// What `sound` plays at the default effects volume: its cue's `snd ` at
+/// its priority.
+fn cued(sound: Sound) -> AudioCommand {
+    let cue = match sound {
+        Sound::Sim(sim) => sim.cue(),
+        Sound::Ui(ui) => ui.cue(),
+        Sound::Combat(_) => None,
+    }
+    .expect("it plays a cue");
     play(cue.sound.0, nova_audio::Priority::new(cue.priority))
 }
 
@@ -686,7 +691,7 @@ fn landing_and_leaving_play_their_sounds_and_space_has_no_music() {
     harness.approach();
     assert_eq!(
         drain(&log),
-        [cued(SimSound::TrafficControl)],
+        [cued(Sound::Sim(SimSound::TrafficControl))],
         "traffic control"
     );
     // An inhabited planet's touchdown is silent (`_PlayerLandOnStellar`
@@ -698,7 +703,10 @@ fn landing_and_leaving_play_their_sounds_and_space_has_no_music() {
     harness.frame();
     assert_eq!(
         drain(&log),
-        [play(LANDING_SOUND, nova_audio::priority::PORT_AMBIENT)]
+        [cued(Sound::Ui(UiSound::PortAmbient {
+            sound: nova_data::SoundId(LANDING_SOUND),
+            until_stopped: false,
+        }))]
     );
     harness.frame();
     assert_eq!(drain(&log), [], "not again until its wait is out");

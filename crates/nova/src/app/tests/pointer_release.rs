@@ -115,10 +115,9 @@ fn a_main_screen_press_let_go_of_off_the_window_holds_nothing() {
     ] {
         app.handle(event, &mut window, &mut gpu);
     }
-    let button_sound = |id| play(id, nova_audio::priority::BUTTON);
     assert_eq!(
         log.borrow()[log.borrow().len() - 2..],
-        [button_sound(600), button_sound(601)],
+        [cued(DOWN), cued(UP)],
         "pressed on New Pilot, then dragged off the window"
     );
     log.borrow_mut().clear();

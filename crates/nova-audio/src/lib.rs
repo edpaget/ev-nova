@@ -5,14 +5,12 @@
 //! - [`port`]: the [`Audio`] port, which takes [`AudioCommand`]s (play a
 //!   `snd ` once, loop the engine, start or stop the music, change a
 //!   [`Volume`]).
-//! - [`table`]: the [`SoundTable`] of which `snd ` each interface event
-//!   plays and the engine loop, and the original game's,
-//!   [`SoundTable::ORIGINAL`].
-//! - [`priority`]: the [`Priority`] each interface event plays at, the
-//!   original's own from its call site. A flight session's sound says its
-//!   own `snd ` and priority
-//!   ([`SimSound::cue`](nova_view::sound::SimSound::cue)), and the core
-//!   plays that.
+//! - [`table`]: the [`SoundTable`], the engine loop's `snd `, and the
+//!   original game's, [`SoundTable::ORIGINAL`]. Every event says what it
+//!   plays itself, at what [`Priority`]: a flight session's sound
+//!   ([`SimSound::cue`](nova_view::sound::SimSound::cue)) and the
+//!   interface's ([`UiSound::cue`](nova_view::sound::UiSound::cue)), each
+//!   the original's own from its call site, and the core plays that.
 //! - [`voices`]: the [`VoiceList`](voices::VoiceList), which decides which
 //!   sounds play when more are asked for than there are voices, by the
 //!   original's priority and loudness.
@@ -38,7 +36,6 @@ pub mod core;
 pub mod file;
 pub mod kira;
 pub mod port;
-pub mod priority;
 #[cfg(any(test, feature = "recording"))]
 pub mod recording;
 pub mod settings;
