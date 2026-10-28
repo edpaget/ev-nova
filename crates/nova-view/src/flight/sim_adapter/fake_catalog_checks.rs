@@ -6,16 +6,41 @@
 //! sent: each check drives the flight through the port and its own API,
 //! and compares its answer with the session's own, or with what the
 //! collaborator saw. What the session does with them is nova-sim's. The
-//! checks over nova-sim's own fixture catalog are `sim_adapter`'s.
+//! checks over nova-sim's own fixture catalog are the parent's `tests`;
+//! together they are the adapter's one home
+//! (rdm:phase/view-sim-seam/phase-15-integration-test-set).
 
-use super::*;
-use crate::flight::sim_port::fixture::check_contract;
-use crate::flight::sim_port::{CommSource, MapSource, NameSource, PilotSource, PortSource};
-use nova_sim::flight_frame::{FlightEvent, MapClick, StepInput, StepReport};
-use nova_sim::{
-    ApplyCollaborators, HailOptions, NovaBoarding, NovaLaw, PlayerFate, SimCatalog, TagNames,
-    VenueOffer,
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use nova_sim::catalog::MissionRecord;
+use nova_sim::fixture::SessionBuilder;
+use nova_sim::flight_frame::{
+    Answer, FlightCommand, FlightEvent, FlightFrame, MapClick, StepInput, StepReport,
 };
+use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
+use nova_sim::landing::StellarFlags;
+use nova_sim::mission::screens::SPACEPORT;
+use nova_sim::{
+    ApplyCollaborators, Behaviour, Chance, ControlBits, DisasterId, DisasterRecord, Goal, Good,
+    HailOptions, HireRefusal, JunkRecord, LandingSite, MissionId, NeverFires, NovaBoarding,
+    NovaLaw, OutfitId, Pilot, PlayerFate, RuleKey, RuleSource, Rulebook, Rules, Session,
+    SessionSetup, ShipId, ShipRecord, ShipRef, SimCatalog, SimSound, StellarPick, SystemId,
+    TagNames, VenueOffer,
+};
+
+use crate::flight::catalog::GovtId;
+use crate::flight::fake_catalog::{
+    Always, BUY_TANK, FakeCatalog, Firing, ROCKET, RollsOne, Still, THRUST, boardable, catalog,
+    comm_strings, damaging, defending, errand, hiring, holding, killed_in, multi_jumping, on,
+    outfitting, placed, rolling_one, scripted, shipbuying, site, trading, trafficked,
+};
+use crate::flight::sim_port::fixture::check_contract;
+use crate::flight::sim_port::{
+    CommSource, FlightSim, MapSource, NameSource, PilotSource, PortSource,
+};
+use crate::flight::{Collaborators, SessionFlight, SharedChance};
+use crate::system::catalog::StellarId;
 
 /// `catalog`, shared as the edge shares it.
 fn shared(catalog: FakeCatalog) -> Rc<FakeCatalog> {

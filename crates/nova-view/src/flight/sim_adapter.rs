@@ -818,6 +818,9 @@ fn refusal(refusal: RelocateRefusal) -> EditRefusal {
 }
 
 #[cfg(test)]
+mod fake_catalog_checks;
+
+#[cfg(test)]
 mod tests {
     use nova_sim::StellarPick;
 

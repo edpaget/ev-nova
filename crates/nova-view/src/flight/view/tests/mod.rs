@@ -4,9 +4,10 @@
 //! adapter's checks share come from `flight::fake_catalog`. This module
 //! holds the rest of what the component tests share: the fake-based
 //! helpers ([`Faked`], [`faked`], [`sent`], the `faked_map_*` helpers,
-//! ...) and the helpers generic over any [`FlightSim`]. A real `nova_sim::Session` is started only by the
-//! adapter's checks (`adapter`) and the edge's (`edge`), and, outside
-//! this module, by `tests/it/flight_seam.rs` and the stock tests
+//! ...) and the helpers generic over any [`FlightSim`]. A real
+//! `nova_sim::Session` is started only by the edge's checks (`edge`), and,
+//! outside this module, by the adapter's checks (`sim_adapter`'s),
+//! `tests/it/flight_seam.rs` and the stock tests
 //! (rdm:phase/view-sim-seam/phase-14-view-tests-on-port).
 
 use std::cell::RefCell;
@@ -17,8 +18,8 @@ use nova_sim::Session;
 use nova_sim::flight_frame::GateFade;
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
-    Behaviour, DisableRule, DisasterRecord, JunkRecord, LandingSite, OutfitId, Reserves, ShipId,
-    ShipRecord, ShipStats, SimSound, StartError, SystemId, TICK, Vec2,
+    DisableRule, LandingSite, OutfitId, Reserves, ShipId, ShipStats, SimSound, StartError,
+    SystemId, TICK, Vec2,
 };
 
 use super::*;
@@ -41,9 +42,7 @@ use crate::flight::sim_port::fixture::{FakeFlight, record};
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::Tag;
 use crate::flight::weapons;
-use crate::flight::{
-    Collaborators, FlightStart, SessionFlight, begin_game, enter_game, open_flight, test_flight,
-};
+use crate::flight::{Collaborators, FlightStart, begin_game, enter_game, open_flight, test_flight};
 use crate::galaxy::MapMode;
 use crate::sound::Sound;
 use crate::spaceport::PortDialog;
@@ -60,17 +59,15 @@ use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::{
     AbortError, AcceptError, Assigned, Assignment, CombatCatalog, ComputerRefusal, Controls,
     FighterNote, MissionId, MissionShown, NotOffered, Pilot, PilotCatalog, PlayerCommand, Rulebook,
-    Rules, StellarIff, StellarPick, Take, Taken, Turn, VenueOffer,
+    StellarIff, StellarPick, Take, Taken, Turn, VenueOffer,
 };
 
 use crate::system::catalog::{StellarContents, StellarId, StellarSheet};
 use crate::{Blend, DrawCommand, Font};
-use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
 use nova_sim::{BoardRefusal, DockKind, MissionBoardLine};
 use nova_sim::{GLOW_CRUISE, glow_level};
 use nova_sim::{RuleKey, RuleSource};
 
-mod adapter;
 mod anchor;
 mod boarding;
 mod cloak;
@@ -353,7 +350,7 @@ fn hud_at(list: &DrawList) -> usize {
         .expect("the HUD")
 }
 
-use nova_sim::{Chance, Direction, DisasterId, Good, Lot, Order};
+use nova_sim::{Chance, Direction, Good, Lot, Order};
 
 const BUY_FOOD: Order = Order {
     row: 0,
@@ -547,7 +544,7 @@ fn retaken(view: &FlightView<FakeCatalog, impl FlightSim>) -> [bool; 4] {
     ]
 }
 
-use nova_sim::{Goal, NpcId};
+use nova_sim::NpcId;
 
 use nova_sim::{BoomId, Condition, PlayerFate, WeaponId};
 
@@ -629,10 +626,8 @@ fn ui_sounds(view: &mut FlightView<FakeCatalog, impl FlightSim>) -> Vec<UiSound>
         .collect()
 }
 use nova_sim::hire::DEFECTED_ONE;
-use nova_sim::{ControlBits, HireRefusal};
 
 use nova_sim::MissionTextKind;
-use nova_sim::catalog::MissionRecord;
 
 /// The background of the status bar `view` shows.
 fn bar_shown(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<i16> {
