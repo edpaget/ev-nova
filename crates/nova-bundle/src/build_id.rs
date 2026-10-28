@@ -115,7 +115,8 @@ impl BuildId {
     pub fn parse_windows_version(text: &str) -> Result<Self, BuildIdError> {
         let malformed = || BuildIdError::Malformed(text.to_owned());
         let (date, time) = text.split_once('.').ok_or_else(malformed)?;
-        if date.len() != 8 || time.len() != 6 {
+        // The period after the day; `parse` then needs 6 digits after it.
+        if date.len() != 8 {
             return Err(malformed());
         }
         Self::parse(&format!("{date}{time}")).map_err(|_| malformed())
