@@ -384,6 +384,20 @@ mod tests {
     }
 
     #[test]
+    fn the_ends_of_centuries_and_of_400_year_cycles_are_formatted() {
+        for (secs, want) in [
+            (951_825_600, "20000229120000"),
+            (4_102_444_799, "20991231235959"),
+            (4_107_542_399, "21000228235959"),
+            (4_107_542_400, "21000301000000"),
+            (13_574_563_200, "24000229000000"),
+            (13_574_649_600, "24000301000000"),
+        ] {
+            assert_eq!(id(secs), want, "{secs}");
+        }
+    }
+
+    #[test]
     fn parses_what_from_unix_formats() {
         for secs in [0, 981_173_106, 1_709_251_199, 951_868_800, 253_402_300_799] {
             let made = BuildId::from_unix(secs).expect("in range");
