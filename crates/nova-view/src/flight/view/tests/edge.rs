@@ -242,3 +242,22 @@ fn a_view_from_a_session_words_by_the_rules_the_session_was_built_with() {
     let said = view.word(vec![stolen]);
     assert_eq!(said[0].0, "2 tons of cargo and 1,234,567 credits stolen!");
 }
+
+/// One chance by construction: the edge hands the flight and the view's
+/// wording the collaborators' one chance, so the wording's picks draw on
+/// the flight's own sequence.
+#[test]
+fn the_edge_hands_the_flight_and_the_wording_one_chance() {
+    let chance = rolling_one();
+    let view = open_flight(
+        catalog(),
+        FlightStart::New,
+        SessionSetup::default(),
+        Collaborators {
+            chance: chance.clone(),
+            ..Collaborators::default()
+        },
+    );
+    assert!(Rc::ptr_eq(&view.sim().chance.0, &chance.0), "the flight's");
+    assert!(Rc::ptr_eq(&view.words_chance.0, &chance.0), "the wording's");
+}

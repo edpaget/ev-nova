@@ -1067,14 +1067,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// afresh on each read, for the nav keys', the map's and the jump
     /// key's reads mid-input. The world reads the frame the view keeps
     /// ([`FlightView::frame`](FlightView#structfield.frame)) instead, but
-    /// these stay fresh: while the strangler lasts, the code that still
-    /// changes the session behind the port (`FlightView::transact`, the
-    /// pilot desk and the builders) can change it between two of their
-    /// reads in one input or tick without refreshing the kept frame, which
-    /// a read here would then find stale. Once every change goes through
-    /// [`FlightSim::apply`] and [`FlightSim::step`]
-    /// (rdm:phase/view-sim-seam/phase-13-lifecycle-at-the-edge), these can
-    /// read the kept frame too.
+    /// these stay fresh: the flight still changes behind the port, through
+    /// the adapter's own API (the edge's setup, entering play, the
+    /// developer tools' desk, and `transact` in tests), between two of
+    /// their reads in one input or tick without refreshing the kept frame,
+    /// which a read here would then find stale. Once every change goes
+    /// through [`FlightSim::apply`] and [`FlightSim::step`], these can read
+    /// the kept frame too.
     pub(super) fn frame_now(&self) -> FlightFrame {
         let mut frame = FlightFrame::default();
         self.sim.frame(&mut frame);

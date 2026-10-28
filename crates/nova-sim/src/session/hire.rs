@@ -104,7 +104,7 @@ impl Session {
     /// the module docs): Nova's ([`NovaHire`](crate::NovaHire)) by
     /// default.
     #[must_use]
-    pub fn with_hire_terms(mut self, terms: Rc<dyn HireTerms>) -> Self {
+    pub(crate) fn with_hire_terms(mut self, terms: Rc<dyn HireTerms>) -> Self {
         self.setup.hire_terms = Shared(terms);
         self
     }
@@ -113,7 +113,7 @@ impl Session {
     /// and a person's `ActiveOn` against the pilot: Nova's
     /// ([`NovaBits`](crate::NovaBits)) by default.
     #[must_use]
-    pub fn with_control_bits(mut self, bits: Rc<dyn ControlBits>) -> Self {
+    pub(crate) fn with_control_bits(mut self, bits: Rc<dyn ControlBits>) -> Self {
         self.setup.control_bits = Shared(bits);
         self
     }

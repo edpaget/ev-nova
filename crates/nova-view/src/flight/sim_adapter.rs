@@ -35,14 +35,13 @@
 //! which takes a closure no command can carry, is for tests. The adapter
 //! is the developer tools' desk too ([`DevDesk`]).
 //!
-//! **For the strangler's length**, the view's
-//! `FlightView<C, SessionFlight<C>>` blocks reach the session and the
-//! collaborators through this adapter's fields, which are visible to
-//! `crate::flight` only: a call such as `session.board(&*self.sim.law,
-//! .., &mut self.sim.chance)` borrows the fields apart, where a
-//! [`SessionFlight::session_mut`] beside `&mut self.sim.chance` would
-//! borrow all of `self.sim` twice. Code outside the concrete blocks uses
-//! [`SessionFlight::session`] and [`SessionFlight::session_mut`].
+//! **For the strangler's length**, the adapter's fields are visible to
+//! `crate::flight`: the fixture's view over a session it built
+//! (`FlightView::from_session`) and the test conveniences read the
+//! chance and share the catalog through them, and the view's tests put
+//! the session and the collaborators into the state they need. Other
+//! code reads the session through [`SessionFlight::session`]; tests change
+//! it through `SessionFlight::session_mut`.
 
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -262,7 +261,9 @@ impl<C> SessionFlight<C> {
         self.session.as_ref().map_err(String::as_str)
     }
 
-    /// The flight to change, or why it could not start.
+    /// The flight to change, or why it could not start: for tests, which
+    /// put the session into a state behind the port.
+    #[cfg(any(test, feature = "fixture"))]
     pub fn session_mut(&mut self) -> Result<&mut Session, &str> {
         self.session.as_mut().map_err(|reason| reason.as_str())
     }

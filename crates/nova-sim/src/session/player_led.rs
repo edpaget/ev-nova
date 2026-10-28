@@ -212,7 +212,7 @@ impl Session {
     /// session loaded later in the same run
     /// ([`Session::with_slot_sprites`]).
     #[must_use]
-    pub fn slot_sprites(&self) -> &SlotSprites {
+    pub(crate) fn slot_sprites(&self) -> &SlotSprites {
         self.space.slot_sprites()
     }
 
@@ -225,7 +225,7 @@ impl Session {
     /// and nothing between pilots re-lays or rebuilds a slot's sprites
     /// (see [`ship_layer`](crate::ship_layer)).
     #[must_use]
-    pub fn with_slot_sprites(mut self, slot_sprites: SlotSprites) -> Self {
+    pub(crate) fn with_slot_sprites(mut self, slot_sprites: SlotSprites) -> Self {
         self.space.combat.set_shot_slots(slot_sprites.shots.clone());
         self.space.slot_sprites = slot_sprites;
         self

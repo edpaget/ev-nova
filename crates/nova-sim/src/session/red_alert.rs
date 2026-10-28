@@ -54,7 +54,7 @@ impl Session {
     /// level 1 or less, which by [`RuleKey::AlertBlink`]'s engine reading
     /// is when a Red Alert blinks its icon. Not quiet until it says, as
     /// the default preferences play sound at full level.
-    pub fn set_sound_quiet(&mut self, quiet: bool) {
+    pub(crate) fn set_sound_quiet(&mut self, quiet: bool) {
         self.setup.sound_quiet = quiet;
     }
 
