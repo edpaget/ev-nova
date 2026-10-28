@@ -1,7 +1,10 @@
 //! Test support for the nova-sim crates' tests, behind the `fixture`
 //! feature: [`Chance`] mocks and a ship class's fields. [`Scripted`]
 //! follows a script, [`Draws`] draws from a queue, and [`Ranged`] draws by
-//! the range asked. [`FAST`] is a fast, light ship class.
+//! the range asked. [`FAST`] is a fast, light ship class. [`chance`] holds
+//! the port's contract, which every source must meet.
+
+pub mod chance;
 
 use std::collections::VecDeque;
 
