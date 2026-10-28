@@ -35,6 +35,7 @@ pub mod host;
 pub mod layout;
 pub mod manifest;
 pub mod plan;
+pub mod repo;
 
 use crate::appcast::Channel;
 use crate::bundle::BundleError;

@@ -26,6 +26,11 @@ use crate::xml::escape;
 /// The repository the releases are published from.
 pub const REPO: &str = "https://github.com/edpaget/ev-nova";
 
+/// The Pages site's root: the repository's project site
+/// (`infra/github/pages.tf` sets no custom domain). The download page is
+/// served at it, and the Flatpak repo under it.
+pub const PAGES: &str = "https://edpaget.github.io/ev-nova";
+
 /// The rolling prerelease's tag.
 pub const NIGHTLY: &str = "nightly";
 
