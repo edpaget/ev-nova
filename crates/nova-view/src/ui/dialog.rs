@@ -3,7 +3,9 @@
 //! A [`DialogTemplate`] is the dialog's window and items in the core's own
 //! terms, as [`DialogResources`](super::DialogResources) reads them. A
 //! [`Dialog`] places it on the screen and gives its items life: standard
-//! buttons and static text work as they are, and the caller gives each
+//! buttons and static text work as they are, picture items draw their
+//! interface-file `PICT` stretched over their rectangle (and nothing when
+//! the interface file lacks it, as stock 1431), and the caller gives each
 //! application-drawn (user) item its meaning with a [`Role`]. Items are
 //! numbered from 1, as the Dialog Manager numbers them.
 //!

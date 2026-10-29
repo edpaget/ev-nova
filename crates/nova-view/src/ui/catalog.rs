@@ -12,7 +12,11 @@ use super::dialog::DialogTemplate;
 /// The dialogs the interface file defines.
 pub trait DialogResources {
     /// `DLOG` `id` with the items of the `DITL` it names; an error is a
-    /// message ready to display.
+    /// message ready to display. A picture item is
+    /// [`ItemSpec::Picture`](super::dialog::ItemSpec::Picture) when the
+    /// interface file holds its `PICT`, and
+    /// [`ItemSpec::MissingPicture`](super::dialog::ItemSpec::MissingPicture)
+    /// when it does not.
     fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String>;
 }
 
