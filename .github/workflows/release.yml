@@ -268,7 +268,12 @@ jobs:
       # records.
       NOVA_COMMIT: ${{ inputs.sha }}
     steps:
+      # The job holds contents: write, so the checkout persists no
+      # credentials: the build and signing steps run with no token on disk,
+      # and the push step sets up its own.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       # Rust for nova-appcast; nova-bundle needs no system libraries.
       - uses: jdx/mise-action@v5
         with:
@@ -315,7 +320,7 @@ jobs:
       # dist/, writes the build's commit file beside them, and writes the
       # channel's feeds to feeds/. It always writes prune.txt, the assets to
       # delete. The signing secret reaches this step alone, which has no
-      # GH_TOKEN and compiles nothing: it runs the binary built above, which
+      # GH_TOKEN (and no token is on disk) and compiles nothing: it runs the binary built above, which
       # spawns only `cargo metadata` (no build scripts).
       # mise exec puts that cargo on PATH.
       - name: Sign the update feeds
@@ -334,7 +339,9 @@ jobs:
             exit "$status"
           fi
       # The tag moves to `sha` (NOVA_COMMIT), which the checkout (main's
-      # HEAD) may not hold, so it is fetched first. --clobber replaces each
+      # HEAD) may not hold, so it is fetched first. The checkout keeps no
+      # credentials, so the fetch and push authenticate through gh's
+      # credential helper with this step's GH_TOKEN. --clobber replaces each
       # asset in place. The feeds go up only after the files they name, then
       # the assets nova-appcast listed (renamed or dropped ones, and build-ID
       # copies past the newest few that no feed names, with their builds'
@@ -346,6 +353,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          gh auth setup-git
           git fetch --no-tags --depth=1 origin "$NOVA_COMMIT"
           git tag -f "$NOVA_CHANNEL" "$NOVA_COMMIT"
           git push -f origin "refs/tags/$NOVA_CHANNEL"
