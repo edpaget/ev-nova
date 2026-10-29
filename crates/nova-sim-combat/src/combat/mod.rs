@@ -221,7 +221,7 @@
 //!    turned on its firer is by no ship ([`Strike::by`]). Before it moves,
 //!    any shot but point defence whose ship has gone (destroyed, or out of
 //!    the fight) is lost ([`Jam::Lost`](projectile::Jam::Lost)), and hits
-//!    no ship from then on. A player's homing missile not lost, aimed at
+//!    no ship from then on. A player's homing missile not jammed, aimed at
 //!    an NPC outside the player's fleet, locks on it as its age passes
 //!    [`LOCK_AGE`](projectile::LOCK_AGE): a strike of no damage the NPC
 //!    answers ([`Strike::lock`]), landing at once (@0x35855). Each shot of
@@ -3660,6 +3660,7 @@ mod tests {
     mod fold_stamp;
     mod hidden_shots;
     mod idle_bays;
+    mod interfered_hits;
     mod ion_lockout_tick;
     mod lineup;
     mod phase;

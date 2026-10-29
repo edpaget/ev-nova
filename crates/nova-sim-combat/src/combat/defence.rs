@@ -696,6 +696,12 @@ mod tests {
             ..missile(1, 0.0, -100.0, Some(DEFENDER))
         };
         assert_eq!(picked(&[lost], 0, 0), None, "lost");
+        // Its own jam-0 test (@0x393e9), not `_ShotCanHitShip`'s.
+        let interfered = Shot {
+            jam: Jam::Interfered,
+            ..missile(1, 0.0, -100.0, Some(DEFENDER))
+        };
+        assert_eq!(picked(&[interfered], 0, 0), None, "interfered");
         let mut immune = missile(1, 0.0, -100.0, Some(DEFENDER));
         immune.weapon.flags = 0x0080;
         assert_eq!(picked(&[immune], 0, 0), None, "0x0080");

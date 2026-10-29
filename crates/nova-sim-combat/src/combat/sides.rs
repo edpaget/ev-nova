@@ -19,10 +19,18 @@
 //! 1. a ship of class 0x2ff (shïp 895, the escape pod) or after it
 //!    (@0x447b3-0x447d9): the shot passes through it unspent;
 //! 2. its firer (@0x447df-0x447f1);
-//! 3. as a jammed shot ([`Jam`], +0x30 not 0, @0x447f7), any ship: a shot
-//!    whose ship has gone is lost, jam 998
-//!    ([`projectile`](super::projectile)); as a homing shot, any ship but
-//!    its target, unless `Flags2` 0x0008 (@0x44812-0x44836);
+//! 3. as a lost shot ([`Jam::Lost`], +0x30 = 998, @0x447f7, the
+//!    function's only read of the jam), any ship: a shot whose ship has
+//!    gone is lost ([`projectile`](super::projectile)). An interfered one
+//!    (999) is tested as a clear one. A shot locked on an asteroid
+//!    ([`Jam::Asteroid`], jam 1) hits no ship here, though the original
+//!    lets it on (rdm:phase/asteroids-fidelity/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot).
+//!    As a homing shot, jammed or not, it never hits any ship but its
+//!    target, unless `Flags2` 0x0008 (@0x44812-0x44836). The jam-0 tests
+//!    that keep an interfered shot out of the missile lock (`_HandleShot`
+//!    @0x35756), point defence's pick (@0x393e9) and
+//!    `_CalculateTargetedDamage` (@0x3a1bd) are those callers' own, made in
+//!    their own code, not here;
 //! 4. as a shot no ship fired ([`Source::Other`]), any ship but the one it
 //!    is aimed at, when it is aimed at one (@0x44a71-0x44a88); of the
 //!    rules below only rule 8 applies to it, as the branch jumps there,
@@ -216,7 +224,9 @@ impl Sides<'_> {
     pub fn shot_can_hit(&self, shot: &Shot, target: &Target) -> bool {
         if !target.condition.active()
             || target.ship_type >= ESCAPE_POD_SHIP
-            || shot.jam != Jam::Clear
+            // Lost (998) is @0x447f7's only reject; an asteroid lock is
+            // left to rdm:phase/asteroids-fidelity/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot.
+            || matches!(shot.jam, Jam::Lost | Jam::Asteroid(_))
         {
             return false;
         }
@@ -479,6 +489,63 @@ mod tests {
                 ..shot
             };
             assert!(!sides.shot_can_hit(&lost, target), "{:?}", target.ship);
+        }
+    }
+
+    /// A shot of a weapon of `guidance` and `flags2`, NPC 1's, aimed at
+    /// NPC 2, its jam `jam`.
+    fn jammed(guidance: i16, flags2: u16, jam: Jam) -> Shot {
+        let aimed = npc(2);
+        Shot {
+            target: Some(aimed),
+            aimed_at: Some(aimed),
+            jam,
+            ..Shot::launch(
+                WeaponSpec::new(&crate::catalog::WeaponRecord {
+                    guidance,
+                    flags2,
+                    ..weapon(128)
+                }),
+                npc(1),
+                npc(1),
+                &ShipState::default(),
+                0.0,
+            )
+        }
+    }
+
+    #[test]
+    fn an_interfered_shot_is_tested_as_a_clear_one() {
+        // `_ShotCanHitShip` rejects only jam 998 (@0x447f7); the homing
+        // test follows (@0x44812-0x44836).
+        let targets = [ship(npc(2), None), ship(npc(3), None)];
+        let sides = among(&targets);
+        let [aimed, other] = &targets;
+        for jam in [Jam::Interfered, Jam::Clear] {
+            let homing = jammed(1, 0, jam);
+            assert!(sides.shot_can_hit(&homing, aimed), "{jam:?}: its target");
+            assert!(!sides.shot_can_hit(&homing, other), "{jam:?}: another");
+            let by_others = jammed(1, 0x0008, jam);
+            assert!(sides.shot_can_hit(&by_others, other), "{jam:?}: 0x0008");
+            let unguided = jammed(-1, 0, jam);
+            assert!(sides.shot_can_hit(&unguided, aimed), "{jam:?}");
+            assert!(sides.shot_can_hit(&unguided, other), "{jam:?}");
+        }
+    }
+
+    #[test]
+    fn a_shot_locked_on_an_asteroid_still_hits_no_ship() {
+        // Left to rdm:phase/asteroids-fidelity/phase-1-locked-shot-reads-
+        // asteroid-slot-as-ship-slot.
+        let targets = [ship(npc(2), None), ship(npc(3), None)];
+        let sides = among(&targets);
+        for jam in [Jam::Asteroid(Some(0)), Jam::Asteroid(None)] {
+            for guidance in [1, -1] {
+                let shot = jammed(guidance, 0x0008, jam);
+                for target in &targets {
+                    assert!(!sides.shot_can_hit(&shot, target), "{jam:?}");
+                }
+            }
         }
     }
 
