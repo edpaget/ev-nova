@@ -661,6 +661,35 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_bomb_hits_the_players_own_tough_hull() {
+        let catalog = armoured(true);
+        let mut session = lit(&catalog, &[(BOMB, 1)]);
+        // The bomb as nova-sim-combat sets it off on the player's own hull,
+        // on the same draw.
+        let rule = Rules::default().disable;
+        let hull = session.ship.fit.hull;
+        let mut expected = session.pilot.reserves;
+        bomb_goes_off(&mut expected, &hull, rule, &mut Draws::of(&[0]));
+        let mut untough = session.pilot.reserves;
+        bomb_goes_off(
+            &mut untough,
+            &HullSpec::default(),
+            rule,
+            &mut Draws::of(&[0]),
+        );
+        assert_ne!(expected, untough, "the tough hull must change the hit");
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut Draws::of(&[0]),
+        );
+        assert_eq!(session.pilot.reserves, expected);
+    }
+
+    #[test]
     fn a_second_bomb_finds_the_player_as_the_first_left_it() {
         /// Calls a ship disabled below 200 armour.
         #[derive(Debug)]
