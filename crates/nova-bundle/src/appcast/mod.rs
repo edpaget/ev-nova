@@ -140,11 +140,27 @@ impl Platform {
 pub enum Channel {
     /// The rolling prerelease of `main`.
     Nightly,
+    /// The rolling prerelease of nightlies promoted by hand
+    /// (`promote-beta`): each the same commit and build ID as its nightly,
+    /// rebuilt for this channel.
+    Beta,
 }
 
 impl Channel {
     /// Every channel.
-    pub const ALL: [Self; 1] = [Self::Nightly];
+    pub const ALL: [Self; 2] = [Self::Nightly, Self::Beta];
+
+    /// The channel this one's builds are promoted from: the nightly for
+    /// beta, nothing for the nightly, which builds `main` itself. The
+    /// Flatpak publish copies a promoted channel's commit from this
+    /// channel's branch instead of importing a bundle.
+    #[must_use]
+    pub fn promoted_from(self) -> Option<Self> {
+        match self {
+            Self::Nightly => None,
+            Self::Beta => Some(Self::Nightly),
+        }
+    }
 
     /// The channel named `name` ([`Channel::name`]), if any.
     #[must_use]
@@ -157,6 +173,7 @@ impl Channel {
     pub fn name(self) -> &'static str {
         match self {
             Self::Nightly => "nightly",
+            Self::Beta => "beta",
         }
     }
 
@@ -165,6 +182,7 @@ impl Channel {
     pub fn tag(self) -> &'static str {
         match self {
             Self::Nightly => site::NIGHTLY,
+            Self::Beta => site::BETA,
         }
     }
 }
@@ -493,6 +511,62 @@ pub(crate) mod tests {
             "appcast-windows-nightly.xml"
         );
         assert_eq!(Channel::Nightly.tag(), site::NIGHTLY);
+        assert_eq!(
+            feed_name(Platform::Macos, Channel::Beta),
+            "appcast-macos-beta.xml"
+        );
+        assert_eq!(
+            feed_name(Platform::Windows, Channel::Beta),
+            "appcast-windows-beta.xml"
+        );
+    }
+
+    #[test]
+    fn a_beta_feed_links_the_beta_release_and_keeps_each_platform_s_version_form() {
+        for (platform, url, version) in [
+            (
+                Platform::Macos,
+                "https://github.com/edpaget/ev-nova/releases/download/beta/ev-nova-20261028123456-aarch64-apple-darwin.dmg",
+                "20261028123456",
+            ),
+            (
+                Platform::Windows,
+                "https://github.com/edpaget/ev-nova/releases/download/beta/ev-nova-20261028123456-x86_64-pc-windows-msvc.msi",
+                "20261028.123456",
+            ),
+        ] {
+            let feed = Feed {
+                channel: Channel::Beta,
+                ..feed(platform, b"x")
+            };
+            let text = render(&feed);
+            let doc = Document::parse(&text).expect("XML");
+            let channel = doc
+                .descendants()
+                .find(|n| n.has_tag_name("channel"))
+                .expect("a channel");
+            let child = |name| {
+                channel
+                    .children()
+                    .find(|n| n.has_tag_name(name))
+                    .and_then(|n| n.text())
+            };
+            assert_eq!(child("title"), Some("EV Nova beta"), "{platform:?}");
+            assert_eq!(
+                child("link"),
+                Some("https://github.com/edpaget/ev-nova/releases/tag/beta"),
+                "{platform:?}"
+            );
+            assert_eq!(enclosure(&doc).attribute("url"), Some(url), "{platform:?}");
+            assert_eq!(sparkle(item(&doc), "version"), version, "{platform:?}");
+            assert_eq!(
+                read_feed(platform, &text),
+                Ok(CurrentFeed {
+                    build: build(),
+                    file: update_asset(platform, &build()),
+                })
+            );
+        }
     }
 
     #[test]

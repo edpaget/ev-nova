@@ -137,15 +137,25 @@ mod tests {
     }
 
     #[test]
-    fn channel_names_round_trip_and_nightly_is_the_only_one() {
-        assert_eq!(Channel::ALL, [Channel::Nightly]);
+    fn channel_names_round_trip_and_nightly_and_beta_are_the_only_ones() {
+        assert_eq!(Channel::ALL, [Channel::Nightly, Channel::Beta]);
         for channel in Channel::ALL {
             assert_eq!(Channel::from_name(channel.name()), Some(channel));
         }
         assert_eq!(Channel::from_name("nightly"), Some(Channel::Nightly));
-        for other in ["Nightly", "beta", "", " nightly"] {
+        assert_eq!(Channel::from_name("beta"), Some(Channel::Beta));
+        assert_eq!(Channel::Beta.name(), "beta");
+        assert_eq!(Channel::Beta.tag(), crate::site::BETA);
+        assert_eq!(crate::site::BETA, "beta");
+        for other in ["Nightly", "Beta", "beta ", "", " nightly", "stable"] {
             assert_eq!(Channel::from_name(other), None, "{other:?}");
         }
+    }
+
+    #[test]
+    fn beta_is_promoted_from_the_nightly_and_the_nightly_from_nothing() {
+        assert_eq!(Channel::Beta.promoted_from(), Some(Channel::Nightly));
+        assert_eq!(Channel::Nightly.promoted_from(), None);
     }
 
     #[test]
@@ -155,8 +165,9 @@ mod tests {
     }
 
     #[test]
-    fn nightly_reads_as_the_nightly_channel() {
+    fn nightly_and_beta_read_as_their_channels() {
         assert_eq!(from_env(&env("nightly")), Ok(Some(Channel::Nightly)));
+        assert_eq!(from_env(&env("beta")), Ok(Some(Channel::Beta)));
     }
 
     #[test]
@@ -167,8 +178,8 @@ mod tests {
             assert_eq!(
                 error.to_string(),
                 format!(
-                    "NOVA_CHANNEL is `{value}`: set it to nightly, or leave it unset for a \
-                     development bundle"
+                    "NOVA_CHANNEL is `{value}`: set it to nightly or beta, or leave it unset \
+                     for a development bundle"
                 )
             );
         }
@@ -184,6 +195,42 @@ mod tests {
             feed_url(Platform::Windows, Channel::Nightly),
             "https://github.com/edpaget/ev-nova/releases/download/nightly/appcast-windows-nightly.xml"
         );
+    }
+
+    #[test]
+    fn the_beta_feeds_are_the_beta_release_s_appcasts() {
+        assert_eq!(
+            feed_url(Platform::Macos, Channel::Beta),
+            "https://github.com/edpaget/ev-nova/releases/download/beta/appcast-macos-beta.xml"
+        );
+        assert_eq!(
+            feed_url(Platform::Windows, Channel::Beta),
+            "https://github.com/edpaget/ev-nova/releases/download/beta/appcast-windows-beta.xml"
+        );
+    }
+
+    #[test]
+    fn a_beta_bundle_names_the_beta_feed_only_with_a_key() {
+        let key = PublicKey([7; 32]);
+        assert_eq!(
+            feed_status(&spec(None), Some(Channel::Beta), Platform::Macos),
+            FeedStatus::NoKey(Channel::Beta)
+        );
+        assert_eq!(
+            FeedStatus::NoKey(Channel::Beta).describe(),
+            "no update feed: NOVA_CHANNEL is beta but the nova package commits no \
+             update_public_key"
+        );
+        for platform in Platform::ALL {
+            assert_eq!(
+                feed_status(&spec(Some(key)), Some(Channel::Beta), platform),
+                FeedStatus::Feed(UpdateFeed {
+                    url: feed_url(platform, Channel::Beta),
+                    public_key: key,
+                }),
+                "{platform:?}"
+            );
+        }
     }
 
     #[test]

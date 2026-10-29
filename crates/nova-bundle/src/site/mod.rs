@@ -36,6 +36,9 @@ pub const PAGES: &str = "https://edpaget.github.io/ev-nova";
 /// The rolling prerelease's tag.
 pub const NIGHTLY: &str = "nightly";
 
+/// The rolling beta prerelease's tag: nightlies promoted by hand.
+pub const BETA: &str = "beta";
+
 /// The page's file, at the output directory's root.
 pub const INDEX: &str = "index.html";
 
