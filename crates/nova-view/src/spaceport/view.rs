@@ -6446,6 +6446,48 @@ pub(in crate::spaceport) mod tests {
         assert!(broken.player_info().is_none(), "no spaceport, no screen");
     }
 
+    /// The ring given after the missions, as the app gives it, reaches the
+    /// spaceport's mission texts, its mission info screen and its landing
+    /// offer.
+    #[test]
+    fn the_missions_given_before_the_focus_ring_take_it() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut view = missioned().with_focus_ring(ring);
+            view.show_text("Nothing here.");
+            assert_eq!(
+                view.mission_text().map(|text| text.dialog().focus_ring()),
+                Some(ring),
+                "the mission text"
+            );
+            view.input(&key(Key::Enter));
+            assert!(view.mission_text().is_none());
+            view.open_mission_info(actives(1));
+            assert_eq!(
+                view.mission_info()
+                    .and_then(MissionInfoScreen::dialog)
+                    .map(Dialog::focus_ring),
+                Some(ring),
+                "the mission info screen"
+            );
+            let mut view = missioned().with_focus_ring(ring);
+            view.open_offer(crate::spaceport::offer::fixture::prompt());
+            assert_eq!(
+                view.offer_dialog()
+                    .and_then(OfferDialog::dialog)
+                    .map(Dialog::focus_ring),
+                Some(ring),
+                "the landing offer"
+            );
+            view.input(&key(Key::Tab));
+            view.input(&key(Key::Space));
+            assert_eq!(
+                view.take_offer_choice().is_some(),
+                ring == FocusRing::Tab,
+                "Tab then Space on the landing offer, {ring:?}"
+            );
+        }
+    }
+
     /// The spaceport passes its focus ring to the mission computer and
     /// the player info screen it opens, down to its Jettison question
     /// (whose keys `ui::player_info`'s own tests drive).
