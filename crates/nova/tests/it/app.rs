@@ -165,7 +165,8 @@ fn text_size(frame: &Frame) -> f32 {
         .batches
         .iter()
         .find_map(|batch| match batch {
-            Batch::Text(runs) => Some(runs[0].size_px),
+            // The size it draws at, in pixels.
+            Batch::Text(runs) => Some(runs[0].size * runs[0].scale),
             _ => None,
         })
         .expect("a text batch")

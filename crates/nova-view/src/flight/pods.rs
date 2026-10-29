@@ -237,6 +237,7 @@ mod tests {
                 image: crate::SheetImage::Rled(1095),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
+                frame_height: 0,
             })),
             ..Looks::default()
         }

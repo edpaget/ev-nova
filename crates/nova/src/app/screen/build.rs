@@ -60,6 +60,7 @@ impl AppScreen {
             stellar_sprites: StellarSpritePool::default(),
             kept_berths: KeptBerths::default(),
             last_refresh: None,
+            release_comm_escort: false,
             course_map_zoom: None,
             map_borders: true,
             dialogs: None,
@@ -90,6 +91,7 @@ impl AppScreen {
             boarding_rule: Rc::new(NovaBoarding::default()),
             plunder: None,
             assignment: None,
+            capture_naming: None,
             hail_options: HailOptions::default(),
             rules: Rulebook::default(),
             flight_overlays: FlightOverlays::default(),
@@ -106,6 +108,7 @@ impl AppScreen {
                 Rc::new(crate::movie::NoMoviePlayer),
                 Prefs::default().quicktime_movies,
             ),
+            keyboard_access: Rc::new(crate::app::NoKeyboardAccessSetting),
             fade_in: None,
             appear: None,
             entry: None,
@@ -327,6 +330,12 @@ impl AppScreen {
         self.assignment.as_ref()
     }
 
+    /// Use As My Ship's rename, while the ship captured awaits its name.
+    #[must_use]
+    pub fn capture_naming(&self) -> Option<&TextInputDialog> {
+        self.capture_naming.as_ref()
+    }
+
     /// The flight `start` says over the game data, built at the edge
     /// ([`open_flight`]): rolling on the router's chance, deciding as its
     /// behaviour says, engaging missiles and judging crimes and boardings
@@ -364,6 +373,7 @@ impl AppScreen {
                 stellar_sprite_pool: Some(self.stellar_sprites.clone()),
                 kept_berths: Some(self.kept_berths.clone()),
                 last_refresh,
+                release_comm_escort: Some(self.release_comm_escort),
             },
         }
     }
@@ -629,6 +639,17 @@ impl AppScreen {
         Self { movies, ..self }
     }
 
+    /// The router asking `access`, each time Preferences opens, whether
+    /// the player has turned on keyboard access to every control, which
+    /// Preferences' focus ring follows.
+    #[must_use]
+    pub fn with_keyboard_access(self, access: Rc<dyn crate::app::KeyboardAccess>) -> Self {
+        Self {
+            keyboard_access: access,
+            ..self
+        }
+    }
+
     /// The player's preferences, as last chosen.
     #[must_use]
     pub fn prefs(&self) -> Prefs {
@@ -696,11 +717,14 @@ impl AppScreen {
                 Showing::Offer
             };
         }
-        if self.plunder.is_some() {
-            return Showing::Plunder;
+        if self.capture_naming.is_some() {
+            return Showing::CaptureNaming;
         }
         if self.assignment.is_some() {
             return Showing::Assignment;
+        }
+        if self.plunder.is_some() {
+            return Showing::Plunder;
         }
         if self.new_pilot.is_some() {
             return Showing::NewPilot;

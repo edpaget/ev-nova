@@ -161,6 +161,7 @@ use nova_view::{
 };
 
 mod fullscreen;
+pub mod keyboard_access;
 mod loop_event;
 mod menu;
 mod scaling;
@@ -168,6 +169,7 @@ pub mod screen;
 mod updates;
 mod wheel;
 
+pub use keyboard_access::{KeyboardAccess, NoKeyboardAccessSetting};
 pub use loop_event::LoopEvent;
 pub use menu::{MenuPick, MenuPort, MenuSync};
 pub use screen::{AppScreen, Showing, start_screen};

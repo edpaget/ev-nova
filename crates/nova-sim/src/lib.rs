@@ -64,6 +64,9 @@
 //!   [`AsteroidCatalog`] port, the `röid`s and each `sÿst`'s asteroid
 //!   field; and the [`CommCatalog`] port, the string lists a hailed ship's words come
 //!   from.
+//! - [`capture_naming`]: renaming a captured ship the player takes over,
+//!   as `_DoPlunderDialog` asks: the prompt and its default
+//!   ([`CaptureNaming`](capture_naming::CaptureNaming)).
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
@@ -403,6 +406,8 @@ pub use nova_sim_combat::comm_line;
 pub use nova_sim_port::auto_refuel;
 pub use nova_sim_port::board;
 pub use nova_sim_port::board_repair;
+pub use nova_sim_port::capture_naming;
+pub use nova_sim_port::captured_loadout;
 pub use nova_sim_port::christening;
 pub use nova_sim_state::clearance;
 pub mod course;

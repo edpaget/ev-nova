@@ -32,7 +32,7 @@ use crate::geometry::{Bounds, Point};
 use crate::text::TextMetrics;
 
 use super::button::ButtonStyle;
-use super::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
+use super::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement, STOCK_WORD};
 use super::edit_dialog::{Confirm, EditDialog, EditItems};
 use super::text_field::TextField;
 
@@ -167,7 +167,7 @@ fn fallback_template() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 360.0, 138.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(TEXT_INPUT_DIALOG, Some(STOCK_WORD)),
         items: vec![
             item(
                 at(252.0, 106.0, 70.0, 20.0),
@@ -547,6 +547,24 @@ mod tests {
         assert_eq!(
             format!("{dialog:?}"),
             format!("TextInputDialog {{ text: {DEFAULT:?}, outcome: None, .. }}")
+        );
+    }
+
+    #[test]
+    fn the_built_in_text_input_dialog_keeps_the_window_managers_centring_as_dlog_3001_does() {
+        let template = fallback_template();
+        assert_eq!(template.placement, crate::ui::dialog::Placement::Center);
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::for_dlog(
+                TEXT_INPUT_DIALOG,
+                Some(crate::ui::dialog::STOCK_WORD)
+            ),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            crate::geometry::Point::new(332.0, 315.0)
         );
     }
 }

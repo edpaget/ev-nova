@@ -236,6 +236,7 @@ mod tests {
     use crate::flight::Controls;
     use crate::pilot::Escort;
     use crate::rulebook::Rulebook;
+    use crate::session::capture_naming::tests::use_as_my_ship;
     use crate::sound::SimSound;
     use crate::stats::ShipStats;
     use crate::testkit::work_with;
@@ -462,7 +463,7 @@ mod tests {
         );
         let mut session = captured(&catalog);
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut Ranged::of(&[(2, 1)])),
+            use_as_my_ship(&mut session, "Prize", &mut Ranged::of(&[(2, 1)])),
             Some(Assigned::MyShip)
         );
         let old = fleet_npcs(&session).pop().expect("the old ship kept");

@@ -158,6 +158,17 @@ pub enum SimSound {
     /// `_beepSnd[2]`, `snd ` 152, at priority 1 (`_DoEscortDialog`
     /// @0x955d9-0x955fc).
     EscortDialogClosed,
+    /// The comm dialog opened for a ship hailed that gets neither the
+    /// escort dialog nor a person's offer: `_beepSnd[4]`, `snd ` 154, at
+    /// priority 1 (`_DoCommDialog` @0x95b34, before `_LoadAdvice`).
+    CommDialogOpened,
+    /// A comm dialog button was pressed, the middle one (`_DoCommDialog`
+    /// @0x9601f) or Greetings (@0x96698), before anything it does:
+    /// `_beepSnd[1]`, `snd ` 151, at priority 1.
+    CommPressed,
+    /// The comm dialog closed: `_beepSnd[2]`, `snd ` 152, at priority 1
+    /// (`_DoCommDialog` @0x96843), before Release's release.
+    CommDialogClosed,
     /// A person's hail quote was said in flight, by its own filters
     /// (`_HandleShip` @0x33f9e) or as it turned on the player
     /// (`_AIMakeShipAttackPlayer` @0x89ce1): `_beepSnd[4]`, `snd ` 154

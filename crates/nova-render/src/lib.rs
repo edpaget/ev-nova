@@ -14,6 +14,9 @@
 //! - [`fonts`]: the font files text is drawn in ([`FontFaces`], with the
 //!   bundled [`FALLBACK_FONT`] and [`SERIF_FONT`]) and which face draws
 //!   each font ([`face_for`]).
+//! - [`glyph_raster`]: rasterises each glyph with full hints in both
+//!   directions ([`glyph_raster::HintedFace`]): Charcoal through its own
+//!   TrueType instructions, as the original's system scaler did.
 //! - [`batch`]: the [`Renderer`], which packs images into the atlas lazily
 //!   and turns a draw list into batches in draw order, keeping flight's
 //!   world layer ([`nova_view::DrawLayer`]) apart from the overlay: no
@@ -57,8 +60,11 @@
 //! turns each OR tint into exact
 //! levels and keeps overlapping OR quads in separate batches. [`wgpu::GlyphonMetrics`] is
 //! `nova_view`'s text-metrics port over the same glyphon font system, with
-//! no GPU: the widgets lay text out by the widths it is drawn at, and the
-//! batcher spaces lines by `nova_view`'s shared line-height rule.
+//! no GPU. Both lay text out the same way, at its logical size with every
+//! glyph advancing a whole unit as QuickDraw's do, so the widgets lay text
+//! out by the widths it is drawn at; lines are spaced by `nova_view`'s
+//! shared line-height rule, and the renderer draws each run at the scale
+//! the batcher gives it.
 //!
 //! The adapters are handed their fonts ([`FontFaces`]) when they are made.
 //! They load those faces alone, never the system's fonts, so text draws the
@@ -79,6 +85,7 @@ pub mod atlas;
 pub mod batch;
 pub mod enlarge;
 pub mod fonts;
+pub mod glyph_raster;
 pub mod gpu;
 pub mod images;
 pub mod present;

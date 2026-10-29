@@ -16,6 +16,12 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The full keyboard access adapters forward the real macOS setting;
+    # no test may read it (hermetic tests), so none can see what they
+    # return. The port's decision is tested on fakes (`nova::app`'s
+    # `keyboard_access` and the app-screen Preferences tests).
+    "nova/src/platform/keyboard_access\\.rs:[0-9]+:[0-9]+: replace <impl KeyboardAccess for AppKitKeyboardAccess>::full_keyboard_access ",
+    "nova-appkit/src/keyboard\\.rs:[0-9]+:[0-9]+: replace full_keyboard_access ",
     # The highest glibc version in `objdump -p`'s output: replacing the
     # highest so far with an equal one (`>=`) keeps the same version.
     "nova-bundle/src/linux/links\\.rs:[0-9]+:[0-9]+: replace > with >= in Links::parse$",
@@ -667,4 +673,8 @@ exclude_re = [
     # `unlike_hud` likewise only needs gauges other than the HUD's: one
     # less than the given differs as one more does.
     "nova-view/src/flight/sim_port/fixture\\.rs:[0-9]+:[0-9]+: replace \\+ with - in unlike_hud$",
+    # The glyph rasteriser's pen closing a contour: zeno fills every
+    # contour as closed whether or not the path closes it, so dropping the
+    # close changes no coverage.
+    "nova-render/src/glyph_raster\\.rs:[0-9]+:[0-9]+: replace <impl OutlinePen for Path>::close with \\(\\)$",
 ]

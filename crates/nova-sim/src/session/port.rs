@@ -57,13 +57,21 @@ pub(super) struct Port {
     /// [`RuleKey::DayRolls`](crate::rulebook::RuleKey::DayRolls)). Not saved.
     pub(super) ship_rolls: DayRolls<ShipId>,
     /// The ship classes whose roll is drawn again the next time the
-    /// shipyard's list is built: each one bought or declined since it was
-    /// last built. The original builds the list once each time the
-    /// shipyard opens (`_SetupPortAvailableShipTypes`, called only
-    /// @0x5e68f), so a roll drawn again shows only then. A landing with
-    /// no day passing forgets their rolls, and a day's draw, which draws
-    /// them afresh, empties it.
+    /// shipyard opens ([`Session::open_shipyard`](super::Session::open_shipyard)):
+    /// each one bought or declined since it last opened. The original
+    /// builds the list once each time the shipyard opens
+    /// (`_SetupPortAvailableShipTypes`, called only @0x5e68f), so a roll
+    /// drawn again shows only then. A landing with no day passing forgets
+    /// their rolls, and a day's draw, which draws them afresh, empties it.
     pub(super) ship_redraws: BTreeSet<ShipId>,
+    /// The classes the shipyard listed when it last opened, in display
+    /// order, while it may still be open: the original's `*0x3b5014`,
+    /// which `_SetupPortAvailableShipTypes` (@0xbbe3-0xbeda) writes only
+    /// on `_DoShipyardDialog`'s entry (@0x5e68f). The shipyard relists
+    /// them, every other value read afresh (see the `shipyard_listing`
+    /// module). The next opening replaces it, and a landing, a relocation
+    /// and a take-off forget it. It is not saved.
+    pub(super) shipyard_listing: Option<Vec<ShipId>>,
     /// The dock request the land key made, if any: the original's
     /// `_dockTarget` and `_dockPermission` (see the `clearance` module);
     /// not saved, as a flight start sets both to −1.
@@ -93,7 +101,7 @@ pub(super) struct Port {
 
 impl Port {
     /// The port as a session starts or loads: nothing rolled, no news, no
-    /// outfitter visit or stay under way, no dock request, the land key
+    /// outfitter visit, shipyard listing or stay under way, no dock request, the land key
     /// up, no take-off grace, the ship free to move as it takes off, and
     /// `touchdown`, where the ship resumes, as where it touched down.
     pub(super) fn new(touchdown: Vec2) -> Self {
@@ -106,6 +114,7 @@ impl Port {
             stay: Stay::default(),
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
+            shipyard_listing: None,
             dock: None,
             land_key: false,
             takeoff_grace: 0,

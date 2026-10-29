@@ -97,7 +97,7 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
 use crate::ui::quantity::QuantityDialog;
@@ -282,6 +282,8 @@ pub struct TradeScreen {
     closed: bool,
     /// The buttons' style, for the offer dialog.
     style: ButtonStyle,
+    /// Whether its dialogs' buttons take the keyboard focus.
+    focus_ring: FocusRing,
     sounds: Vec<Sound>,
 }
 
@@ -326,6 +328,7 @@ impl TradeScreen {
             order: None,
             closed: false,
             style,
+            focus_ring: FocusRing::default(),
             sounds: Vec::new(),
         };
         let first = positions(&screen.market).into_iter().flatten().next();
@@ -339,6 +342,19 @@ impl TradeScreen {
         Self { colors, ..self }
     }
 
+    /// The trade center with its dialogs' buttons taking the keyboard focus
+    /// as `ring` says (the `dialog_focus_ring` rule), its own and each it
+    /// opens after it.
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.focus_ring = ring;
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self.offering = self.offering.map(|offering| offering.with_focus_ring(ring));
+        self
+    }
+
     /// The trade center with mission offers, each shown in the offer dialog of
     /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed
@@ -346,7 +362,7 @@ impl TradeScreen {
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(templates)),
+            offering: Some(VenueOffers::asking(templates).with_focus_ring(self.focus_ring)),
             ..self
         }
     }
@@ -2684,6 +2700,25 @@ mod tests {
                 });
             }
             assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
+        }
+    }
+
+    /// The trade center's mission offers take its focus ring, given before the
+    /// offers as the spaceport gives it.
+    #[test]
+    fn its_offer_takes_tab_then_space_only_with_the_focus_ring() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = screen()
+                .with_focus_ring(ring)
+                .with_offers(offer_templates());
+            screen.open_offer(crate::spaceport::offer::fixture::prompt());
+            press(&mut screen, Key::Tab);
+            press(&mut screen, Key::Space);
+            assert_eq!(
+                screen.take_offer_choice().is_some(),
+                ring == FocusRing::Tab,
+                "{ring:?}"
+            );
         }
     }
 }

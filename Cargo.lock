@@ -1722,8 +1722,10 @@ dependencies = [
  "nova-rsrc",
  "nova-view",
  "pollster 1.0.1",
+ "skrifa 0.44.0",
  "thiserror 2.0.21",
  "wgpu",
+ "zeno",
 ]
 
 [[package]]

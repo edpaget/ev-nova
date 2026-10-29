@@ -72,7 +72,7 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
 
 /// Hire Escort's item: the shipyard's Buy Ship.
 pub const HIRE_ITEM: usize = BUY_ITEM;
@@ -150,6 +150,8 @@ pub struct HireScreen {
     /// Each listed ship's cell picture, read once when there is a dialog.
     pictures: Vec<Option<i16>>,
     style: ButtonStyle,
+    /// Whether its dialogs' buttons take the keyboard focus.
+    focus_ring: FocusRing,
     /// The grid, its selection as `_ShipyardFilter` keeps it.
     grid: ShipyardGrid,
     /// The info panel, while it is open.
@@ -226,6 +228,7 @@ impl HireScreen {
             catalog: CatalogHandle(catalog),
             pictures,
             style,
+            focus_ring: FocusRing::default(),
             grid,
             panel: None,
             order: None,
@@ -235,6 +238,18 @@ impl HireScreen {
         };
         screen.selected_changed();
         screen
+    }
+
+    /// The hire screen with its dialogs' buttons taking the keyboard focus
+    /// as `ring` says (the `dialog_focus_ring` rule), its own and each it
+    /// opens after it.
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.focus_ring = ring;
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self
     }
 
     /// The ships shown.
@@ -398,7 +413,8 @@ impl HireScreen {
             &row.specs,
             &laid.metrics.0,
             self.style,
-        );
+        )
+        .map(|panel| panel.with_focus_ring(self.focus_ring));
     }
 
     /// Activates dialog item `item`: Done closes, Hire Escort asks, Info
@@ -1184,6 +1200,22 @@ mod tests {
         }
     }
 
+    /// `_ShipDescFilter` @0x510e5, which the hire screen's panel runs
+    /// too, maps Space to Done on a keyDown only.
+    #[test]
+    fn space_closes_the_hire_panel_but_not_its_repeats() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = screen().with_focus_ring(ring);
+            screen.input(&key(INFO_KEY, false));
+            assert!(screen.info_panel().is_some(), "the press that opened it");
+            screen.input(&key(Key::Space, true));
+            assert!(screen.info_panel().is_some(), "a repeat, {ring:?}");
+            screen.input(&key(Key::Space, false));
+            assert!(screen.info_panel().is_none(), "{ring:?}");
+            assert!(!screen.closed());
+        }
+    }
+
     #[test]
     fn the_hire_panel_draws_the_two_columns_and_the_stock_weapons() {
         let mut armed = row(128, 970, 100, Ok(()));
@@ -1850,5 +1882,40 @@ mod tests {
         };
         assert_eq!(arrowed(clamped(), 3, &[Key::Down]), (Some(5), true));
         assert_eq!(arrowed(clamped(), 5, &[Key::Up, Key::Up]), (Some(0), true));
+    }
+
+    /// The hire screen's buttons take Tab's focus only with the focus
+    /// ring. Space is its Info key ([`INFO_KEY`]) under both readings, so
+    /// what the ring changes here is Tab's focus.
+    #[test]
+    fn tab_focuses_hire_escort_only_with_the_focus_ring() {
+        let mut ringed = screen();
+        ringed.input(&key(Key::Tab, false));
+        assert_eq!(ringed.dialog().and_then(Dialog::focus), Some(HIRE_ITEM));
+        let mut off = screen().with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab, false));
+        assert_eq!(off.dialog().and_then(Dialog::focus), None);
+        assert!(!off.closed());
+        assert_eq!(off.take_order(), None);
+        assert_eq!(off.take_sounds(), [], "nothing pressed");
+    }
+
+    /// The hire screen's Info panel's Done takes its focus ring.
+    #[test]
+    fn the_info_panel_takes_tab_only_with_the_focus_ring() {
+        for (ring, focus) in [
+            (
+                FocusRing::Tab,
+                Some(super::super::shipyard::PANEL_DONE_ITEM),
+            ),
+            (FocusRing::Off, None),
+        ] {
+            let mut screen = screen().with_focus_ring(ring);
+            screen.input(&key(INFO_KEY, false));
+            screen.input(&key(Key::Tab, false));
+            let panel = screen.info_panel().expect("open");
+            assert_eq!(panel.focus_ring(), ring);
+            assert_eq!(panel.focus(), focus, "{ring:?}");
+        }
     }
 }

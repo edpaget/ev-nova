@@ -1185,10 +1185,8 @@ fn the_map_is_drawn_after_the_double_time_icon_and_before_the_escort_menu() {
         .expect("the floating map");
     let menu = commands
         .iter()
-        .position(
-            |command| matches!(command, DrawCommand::Line { color, .. } if *color == Color::BLACK),
-        )
-        .expect("the escort menu's black");
+        .position(|command| escort_menu_top(command))
+        .expect("the escort menu's border");
     assert!(icon < map && map < menu, "{icon} < {map} < {menu}");
 }
 

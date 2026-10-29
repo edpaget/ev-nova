@@ -97,6 +97,7 @@ fn the_plunder_messages_are_the_originals() {
             ASSIGNED_ESCORT,
             RETAINED_OLD_SHIP,
             LOST_OLD_SHIP,
+            CAPTURE_DECLINED,
         ],
         [
             "You couldn't store any of the cargo you plundered from this ship.",
@@ -110,11 +111,18 @@ fn the_plunder_messages_are_the_originals() {
             "You assigned this ship to your fleet of escorts.",
             "You retained your old ship as an escort.",
             "You were unable to retain your old ship as an escort.",
+            "You decided not to capture this ship after all.",
         ]
     );
     assert_eq!(assigned_message(Assigned::Escort), ASSIGNED_ESCORT);
     assert_eq!(assigned_message(Assigned::MyShip), RETAINED_OLD_SHIP);
     assert_eq!(assigned_message(Assigned::Abandoned), LOST_OLD_SHIP);
+    assert_eq!(assigned_message(Assigned::Declined), CAPTURE_DECLINED);
+    assert_eq!(assigned_message(Assigned::Naming), "", "says nothing");
+    assert_eq!(assigned_ticks(Assigned::Declined), MESSAGE_TICKS);
+    assert_eq!(assigned_ticks(Assigned::Escort), MESSAGE_TICKS);
+    assert_eq!(assigned_ticks(Assigned::MyShip), OLD_SHIP_TICKS);
+    assert_eq!(assigned_ticks(Assigned::Abandoned), OLD_SHIP_TICKS);
 }
 
 #[test]

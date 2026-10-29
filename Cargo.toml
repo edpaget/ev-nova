@@ -61,9 +61,17 @@ thiserror = "2"
 # version glyphon's font stack already locks.
 ttf-parser = "0.25.1"
 # Rendering and windowing. glyphon 0.12 is built on wgpu 30, so the two move
-# together.
-wgpu = "30.0.1"
+# together. `counters` keeps wgpu's live resource counts, which
+# nova-render's tests read to pin that no frame builds a render pipeline;
+# it is on for every build, not just nova-render's tests, so the
+# wgpu-dependent crates build once rather than twice. It costs an atomic
+# add on each resource made or dropped, not on each draw.
+wgpu = { version = "30.0.1", features = ["counters"] }
 glyphon = "0.12.0"
+# nova-render's own glyph rasteriser, which hints Charcoal in both
+# directions: the versions swash 0.2.10 (under glyphon) already locks.
+skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
+zeno = { version = "0.3.3", default-features = false, features = ["eval", "std"] }
 winit = "0.30.13"
 pollster = "1.0.1"
 # The open panel that asks for the Nova Files and the startup alerts

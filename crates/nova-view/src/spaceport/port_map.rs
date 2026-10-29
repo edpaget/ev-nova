@@ -38,7 +38,7 @@ mod tests {
     use crate::screen::Screen;
     use crate::spaceport::view::tests::{
         actives, click_item, drinking_with_info, hiring, in_the_shipyards_panel, informed, key,
-        missioned, offered, pilot_info, tanks, venues, without_its_dialog,
+        missioned, offered, pilot_info, serve_openings, venues, without_its_dialog,
     };
     use crate::spaceport::{BarScreen, SpaceportView};
 
@@ -113,9 +113,7 @@ mod tests {
         ] {
             let mut view = venues();
             click_item(&mut view, item);
-            if view.take_outfitter_opened() {
-                view.set_opened_outfitter(tanks(1));
-            }
+            serve_openings(&mut view);
             assert_eq!(
                 asked(&mut view),
                 Some(PortMap::Screen(screen)),

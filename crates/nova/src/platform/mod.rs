@@ -14,6 +14,7 @@
 
 pub mod console;
 pub mod dialogs;
+mod keyboard_access;
 #[cfg(target_os = "macos")]
 mod menu_bar;
 mod runner;
@@ -22,6 +23,7 @@ mod updater;
 mod window;
 
 pub use dialogs::Dialogs;
+pub use keyboard_access::system_keyboard_access;
 pub use runner::{Runner, event_loop};
 #[cfg(target_os = "macos")]
 pub use updater::SparkleSource;

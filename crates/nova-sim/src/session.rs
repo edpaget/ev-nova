@@ -445,6 +445,9 @@ mod board_repair;
 mod brackets;
 mod buoys;
 mod capture;
+mod capture_naming;
+#[cfg(test)]
+mod captured_loadout;
 mod captured_mission_ship;
 mod cargo_boxes;
 #[cfg(test)]
@@ -481,6 +484,8 @@ mod escort_hits;
 mod escort_land;
 #[cfg(test)]
 mod escort_loss;
+#[cfg(test)]
+mod escort_rounds;
 mod escorts;
 mod events;
 mod exchange_events;
@@ -599,6 +604,7 @@ mod setup;
 mod ship_change;
 mod ship_display;
 mod ship_loop;
+mod shipyard_listing;
 mod shot_slots;
 #[cfg(test)]
 mod slot_search;
@@ -627,6 +633,7 @@ mod target_panel;
 mod thrust;
 mod tractor_hold;
 mod trade_dialog;
+mod trip_days;
 mod tutorial;
 #[cfg(test)]
 mod vacated_berths;
@@ -686,6 +693,7 @@ use crate::board::{
     HeldRounds, MARINES, Plunder, PlunderView, Prize, SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE,
     TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken, check_board,
 };
+use crate::captured_loadout::{Captured, captured_outfits};
 use crate::catalog::{
     AsteroidCatalog, CombatCatalog, CronRecord, EscortClass, GateSite, GovtId, JunkId, LandingSite,
     ListedStellar, OutfitId, OutfitRecord, PersonId, PilotCatalog, RankRecord, ShipId, ShipRecord,
@@ -693,7 +701,7 @@ use crate::catalog::{
 };
 use crate::chance::Chance;
 use crate::combat::ai_fire::PlayerRating;
-use crate::combat::armament::{Armament, Arsenal, Trigger, fit_stock, outfit_rounds};
+use crate::combat::armament::{Armament, Arsenal, Trigger, outfit_rounds};
 use crate::combat::asteroid_hit::AsteroidFuse;
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Breakup, Condition, HullSpec};
@@ -747,7 +755,6 @@ use crate::rating;
 use crate::red_alert::RedAlert;
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::shipyard::{
     self, Purchase, Quote, Sale, ShipNaming, ShipPurchase, ShipRefusal, Shipyard, Yard,
 };
@@ -3250,12 +3257,19 @@ impl Session {
         Some(self.pilot.system)
     }
 
-    /// Lets the days the stats give a jump go by through the daily step
+    /// Lets a jump's days go by through the daily step
     /// ([`Session::pass_days`]), the events rolled on `chance`, then pays
-    /// the hired escorts their wages for them, once.
+    /// the hired escorts their wages for them, once: the trip of the
+    /// slowest of the player and the ships that follow it
+    /// ([`Session::trip_days`], `_IncrementGameTime` @0x6c140-0x6c151 and
+    /// `_DoEscortPayment(trip)` @0x6c620; see the `trip_days` module).
+    /// A gate's exit taking a jump's days by
+    /// [`GateArrivalRule::LikeJump`] takes the same trip, as the escorts
+    /// come along there as on a jump.
     fn pass_jump_days(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.pass_days(self.ship.fit.stats.jump_days, chance);
-        self.pay_escorts(self.ship.fit.stats.jump_days);
+        let trip = self.trip_days();
+        self.pass_days(trip, chance);
+        self.pay_escorts(trip);
     }
 
     /// The sounds emitted since they were last taken, in order; taking
@@ -3821,6 +3835,7 @@ impl Session {
         self.space.escorts.dialog = None;
         self.leave_with_fighters(true);
         self.port.land_day_rolls(&self.setup);
+        self.port.forget_shipyard_listing();
         self.port.open_outfit_visit(&self.pilot);
         self.port.stay = Stay::default();
         self.out.save_due = true;
@@ -3960,6 +3975,7 @@ impl Session {
         self.run.depart();
         let stay = std::mem::take(&mut self.port.stay);
         self.port.bar_news = None;
+        self.port.forget_shipyard_listing();
         self.chart.bar_nav = None;
         let stay_days = self.setup.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
         if stay_days {
@@ -4655,25 +4671,22 @@ impl Session {
 
     /// The shipyard of the stellar the ship is docked at, if it has landed
     /// at one, drawing on `chance` each class's roll for the day not drawn
-    /// yet (see [`shipyard`]). This builds its list
-    /// afresh: the roll of each class bought or declined since it was last
-    /// built is drawn again first.
+    /// yet (see [`shipyard`]). While the classes its last opening listed
+    /// are kept ([`Session::open_shipyard`]), it relists exactly those,
+    /// every other value read now; otherwise it builds its list afresh.
+    /// Either way each class bought or declined keeps its roll until the
+    /// next opening or landing (see the `shipyard_listing` module).
     pub fn shipyard(&mut self, chance: &mut dyn Chance) -> Option<Shipyard> {
-        for ship in std::mem::take(&mut self.port.ship_redraws) {
-            self.port.ship_rolls.redraw(&ship);
-        }
         self.listed_shipyard(chance)
     }
 
-    /// The shipyard as its list was last built, each class bought or
-    /// declined since keeping its roll, the rolls not drawn yet drawn on
-    /// `chance`.
+    /// The shipyard as [`shipyard`](Self::shipyard) gives it.
     fn listed_shipyard(&mut self, chance: &mut dyn Chance) -> Option<Shipyard> {
         let stellar = self.mode.landed()?;
         let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
         // Out of the session while the gate reads it.
         let mut rolls = std::mem::take(&mut self.port.ship_rolls);
-        let shipyard = Yard {
+        let yard = Yard {
             ships: &self.statics.ships,
             outfits: &self.statics.outfits,
             crons: &self.statics.crons,
@@ -4684,8 +4697,11 @@ impl Session {
             mults: self.price_mults(),
             rules: self.setup.rules,
             gate: self.gate(),
-        }
-        .shipyard(&self.pilot, &mut rolls, chance);
+        };
+        let shipyard = match self.port.shipyard_listing() {
+            Some(listing) => yard.relisted(&self.pilot, listing),
+            None => yard.shipyard(&self.pilot, &mut rolls, chance),
+        };
         self.port.ship_rolls = rolls;
         shipyard
     }
@@ -4731,9 +4747,9 @@ impl Session {
     /// Declines to buy a ship of class `ship`, as cancelling its name
     /// prompt does: nothing is bought, but the class's roll is drawn
     /// again, as the original does (`_DoShipyardDialog` @0x5ebc2 to
-    /// @0x5f0d5-0x5f0f8), the next time the shipyard's list is built
-    /// ([`shipyard`](Self::shipyard)); until then it can be named and
-    /// bought again. Nothing about the pilot changes, so no save is due.
+    /// @0x5f0d5-0x5f0f8), the next time the shipyard opens
+    /// ([`open_shipyard`](Self::open_shipyard)) or the ship lands; until
+    /// then it can be named and bought again. Nothing about the pilot changes, so no save is due.
     pub(crate) fn decline_ship(&mut self, ship: ShipId) {
         self.port.decline_ship(ship);
     }
@@ -4755,7 +4771,8 @@ impl Session {
     /// drawn yet are drawn on
     /// `chance`, and a purchase draws the class's roll again, as the
     /// original does (`_DoShipyardDialog` @0x5f0d5-0x5f0f8), the next time
-    /// the shipyard's list is built ([`shipyard`](Self::shipyard)). A
+    /// the shipyard opens ([`open_shipyard`](Self::open_shipyard)) or the
+    /// ship lands. A
     /// purchase tells [`SessionEvent::ShipChanged`] before `OnPurchase`
     /// runs, which may tell it again; a refused one tells nothing.
     pub fn buy_ship(
@@ -5118,7 +5135,7 @@ impl Session {
             npc: npc.id,
             ship: npc.ship,
             plunder,
-            captured: false,
+            stage: Stage::Plunder,
         };
         self.space.escorts.aboard = Some(aboard);
         Ok(Boarding::Opened(aboard.view()))
@@ -5308,7 +5325,12 @@ impl Session {
         rule: &dyn BoardingRule,
         chance: &mut dyn Chance,
     ) -> Taken {
-        let Some(mut aboard) = self.space.escorts.aboard.filter(|aboard| !aboard.captured) else {
+        let Some(mut aboard) = self
+            .space
+            .escorts
+            .aboard
+            .filter(|aboard| aboard.stage == Stage::Plunder)
+        else {
             return Taken::Nothing;
         };
         if take == Take::Abort {
@@ -5487,7 +5509,7 @@ impl Session {
             return self.space.keep_plunder_open(aboard, Taken::FleetFull);
         }
         if self.statics.crew(self.pilot.ship) > 0 {
-            aboard.captured = true;
+            aboard.stage = Stage::Assignment;
             self.space.escorts.aboard = Some(aboard);
             return Taken::Captured;
         }
@@ -5630,21 +5652,62 @@ impl Session {
     /// fleet, its person living on or gone as [`RuleKey::CapturedPerson`]
     /// reads, a mission's special ship keeping its mark as a mission
     /// escort with no escort record (see the `captured_mission_ship`
-    /// module); "Use As My Ship" swaps the player into it, the old ship
-    /// joining the fleet and its person gone for good, unless no ship slot
-    /// is free in the system for the old ship, when the prize is lost and
-    /// nothing else changes. The player keeps its persistent outfits and
-    /// gets the captured class's default items, then its stock weapons and
-    /// their `AmmoLoad`, topped up as after a purchase. Either change
-    /// makes a save due. The captured class's `OnCapture` runs on `chance`
-    /// before it joins the fleet; on "Use As My Ship" the old class's
-    /// `OnRetire` runs first, both before the fuel draw and, as
+    /// module), and closes the plunder dialog. "Use As My Ship" changes
+    /// nothing else yet: the ship awaits its new name
+    /// ([`Assigned::Naming`]; [`Session::capture_naming`] asks it and
+    /// [`Session::name_capture`] gives it, see the `capture_naming`
+    /// module), the plunder dialog staying open under the rename.
+    pub fn assign(&mut self, choice: Assignment, chance: &mut dyn Chance) -> Option<Assigned> {
+        let aboard = self
+            .space
+            .escorts
+            .aboard
+            .filter(|aboard| aboard.stage == Stage::Assignment)?;
+        // Either button's beep, before anything else
+        // (`_DoCapturedShipAssignmentDialog` @0x5b56b, @0x5b66b).
+        self.out.sounds.push(SimSound::CaptureAssigned);
+        if choice == Assignment::MyShip {
+            if !self.npcs().iter().any(|npc| npc.id == aboard.npc) {
+                self.close_plunder();
+                return None;
+            }
+            self.space.escorts.aboard = Some(Aboard {
+                stage: Stage::Naming,
+                ..aboard
+            });
+            return Some(Assigned::Naming);
+        }
+        self.space.escorts.aboard = None;
+        let Some(npc) = self.npcs().iter().find(|npc| npc.id == aboard.npc).cloned() else {
+            self.close_plunder();
+            return None;
+        };
+        self.ship_hook(npc.ship, ShipHook::Capture, chance);
+        self.join_fleet(npc.id, chance);
+        self.close_plunder();
+        Some(Assigned::Escort)
+    }
+
+    /// Swaps the player into the ship `aboard` captured, once it is
+    /// named (`_DoShipCapture(target, 0)` @0x94515, called from
+    /// [`Session::name_capture`]), and gives what it did: none when the
+    /// ship has gone. The old ship joins the fleet and the captured
+    /// ship's person is gone for good, unless no ship slot is free in the
+    /// system for the old ship, when the prize is lost and nothing else
+    /// changes. The player keeps its persistent outfits and the weapon
+    /// slots they name, takes the captured ship's live weapons and rounds
+    /// into the slots left empty, and gets the captured class's default
+    /// items on top, with no stock top-up
+    /// ([`captured_outfits`](crate::captured_loadout::captured_outfits)).
+    /// The swap makes a
+    /// save due. The old class's `OnRetire` and then the captured class's
+    /// `OnCapture` run on `chance`, both before the fuel draw and, as
     /// [`HookRules::capture_hook_order`] says, before or after the outfit
     /// swap (see the `hooks` module). The change of class is applied by
     /// [`Session::become_class`], with the reserves held.
     ///
-    /// "Use As My Ship" takes the captured ship's place, velocity and
-    /// heading (`_DoShipCapture` @0x416e3-0x41722) and lets go of the nav
+    /// The player takes the captured ship's place, velocity and heading
+    /// (`_DoShipCapture` @0x416e3-0x41722) and lets go of the nav
     /// selection, the ship target and the secondary (@0x4172e-0x4173e);
     /// "Use As Escort" leaves them as they are. Its fuel is drawn on
     /// `chance` below the old ship's capacity while the cache holds it,
@@ -5664,22 +5727,12 @@ impl Session {
     /// (@0x94a0b), each trim cutting the commodities to the new fleet's
     /// holds while they are past them; every other assignment resets once,
     /// as the dialog closes (see the `precalced` module).
-    pub fn assign(&mut self, choice: Assignment, chance: &mut dyn Chance) -> Option<Assigned> {
-        let aboard = self.space.escorts.aboard.filter(|aboard| aboard.captured)?;
-        // Either button's beep, before anything else
-        // (`_DoCapturedShipAssignmentDialog` @0x5b56b, @0x5b66b).
-        self.out.sounds.push(SimSound::CaptureAssigned);
+    fn take_over_captured(&mut self, aboard: Aboard, chance: &mut dyn Chance) -> Option<Assigned> {
         self.space.escorts.aboard = None;
         let Some(npc) = self.npcs().iter().find(|npc| npc.id == aboard.npc).cloned() else {
             self.close_plunder();
             return None;
         };
-        if choice == Assignment::Escort {
-            self.ship_hook(npc.ship, ShipHook::Capture, chance);
-            self.join_fleet(npc.id, chance);
-            self.close_plunder();
-            return Some(Assigned::Escort);
-        }
         let record = self.statics.ship_record(npc.ship).cloned();
         let reserve = self.setup.spawn_reserve(CAPTURE_RESERVE);
         let Some(record) = record.filter(|_| self.space.traffic.free_berth(reserve).is_some())
@@ -5715,22 +5768,19 @@ impl Session {
         // ship's) or the one worked out afresh from the old outfits, read
         // before they change (@0x41786).
         let fuel = self.ship.capture_fuel(&self.pilot, &self.statics, &record);
-        let records = &self.statics.outfits;
         // Capture keeps by 0x0004 alone and holds nothing to its `Max`,
-        // whatever the ship-change rules say, and tops the stock weapons
-        // up rather than adding them.
-        let mut outfits = carried_outfits(
+        // whatever the ship-change rules say, and merges the captured
+        // ship's live weapons and rounds rather than its class's stock.
+        let outfits = captured_outfits(
             &self.pilot.outfits,
-            OutfitCarry::Persistent {
-                mask: OutfitFlags::PERSISTENT,
+            Captured {
+                armament: &npc.armament,
+                rounds: &npc.rounds,
             },
             &defaults,
-            None,
-            None,
-            records,
+            &self.statics.arsenal,
+            &self.statics.outfits,
         );
-        let fits = self.statics.arsenal.stock_fits(record.id, records);
-        fit_stock(&mut outfits, &fits, records);
         let share = if self.statics.arsenal.hull(record.id).tough {
             TOUGH_TAKEOVER_ARMOR_SHARE
         } else {
@@ -6535,7 +6585,7 @@ impl Space {
     fn boarding(&self) -> Option<PlunderView> {
         self.escorts
             .aboard
-            .filter(|aboard| !aboard.captured)
+            .filter(|aboard| aboard.stage == Stage::Plunder)
             .map(|aboard| aboard.view())
     }
 }
@@ -6752,15 +6802,13 @@ impl Port {
     /// What a landing, or a relocation, does to the day rolls, as
     /// [`RuleKey::DayRolls`] reads. By the engine, it keeps them, as no
     /// landing path in the original writes one, and only the classes
-    /// bought or declined since the shipyard was last listed are
+    /// bought or declined since the shipyard last opened are
     /// forgotten, to be drawn again when next asked: the original draws
     /// them again at once (`_DoShipyardDialog` @0x5f0f8). By the other
     /// reading, it forgets every roll.
     fn land_day_rolls(&mut self, setup: &Setup) {
         if setup.rules.source_for(RuleKey::DayRolls) == RuleSource::Engine {
-            for ship in std::mem::take(&mut self.ship_redraws) {
-                self.ship_rolls.redraw(&ship);
-            }
+            self.redraw_ships();
         } else {
             self.hire_rolls.clear();
             self.outfit_rolls.clear();
@@ -6783,9 +6831,10 @@ impl Port {
     /// Declines to buy a ship of class `ship`, as cancelling its name
     /// prompt does: nothing is bought, but the class's roll is drawn
     /// again, as the original does (`_DoShipyardDialog` @0x5ebc2 to
-    /// @0x5f0d5-0x5f0f8), the next time the shipyard's list is built
-    /// ([`shipyard`](Session::shipyard)); until then it can be named and
-    /// bought again. Nothing about the pilot changes, so no save is due.
+    /// @0x5f0d5-0x5f0f8), the next time the shipyard opens
+    /// ([`open_shipyard`](Session::open_shipyard)) or the ship lands; until
+    /// then it can be named and bought again. Nothing about the pilot
+    /// changes, so no save is due.
     fn decline_ship(&mut self, ship: ShipId) {
         self.ship_redraws.insert(ship);
     }
@@ -6913,13 +6962,26 @@ impl NpcBefore {
 }
 
 /// A boarding under way: the NPC boarded, its ship class, the plunder
-/// rolled for it, and whether a capture awaits its assignment.
+/// rolled for it, and how far `_DoPlunderDialog` has got.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Aboard {
     npc: NpcId,
     ship: ShipId,
     plunder: Plunder,
-    captured: bool,
+    stage: Stage,
+}
+
+/// How far a boarding's plunder dialog has got: its buttons, a capture's
+/// assignment dialog, or Use As My Ship's rename (see the
+/// `capture_naming` module).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stage {
+    /// The plunder dialog's buttons take.
+    Plunder,
+    /// The ship is captured and awaits its assignment.
+    Assignment,
+    /// Use As My Ship was chosen, and the ship awaits its new name.
+    Naming,
 }
 
 impl Aboard {
@@ -6962,7 +7024,7 @@ impl Session {
             npc,
             ship: ShipId(129),
             plunder: Plunder::default(),
-            captured: false,
+            stage: Stage::Plunder,
         });
         self.space.escorts.talk = Some(hail::Talk::opened(npc));
     }
@@ -7246,6 +7308,7 @@ fn fill_in(
 pub(super) mod tests {
     use crate::combat::Rules;
     use crate::flight::Controls;
+    use crate::session::capture_naming::tests::use_as_my_ship;
     use crate::testkit::{Passive, work, work_with};
 
     #[test]
@@ -15825,7 +15888,7 @@ pub(super) mod tests {
 
     /// [`shipbuying`], with the speed booster for sale on a `BuyRandom` of
     /// `outfit_random` and ship 129 on one of `ship_random`.
-    fn rolling(outfit_random: i16, ship_random: i16) -> FakePilotCatalog {
+    pub(super) fn rolling(outfit_random: i16, ship_random: i16) -> FakePilotCatalog {
         let mut catalog = shipbuying();
         catalog.outfits[0].buy_random = outfit_random;
         catalog.ship_records[1].buy_random = ship_random;
@@ -16032,7 +16095,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn buying_a_ship_draws_its_class_roll_again() {
+    fn buying_a_ship_draws_its_class_roll_again_at_the_next_opening() {
         let mut session = outfitted(&rolling(100, 50));
         let mut firing = Scripted::answering(&[true]);
         session
@@ -16040,12 +16103,13 @@ pub(super) mod tests {
             .expect("bought");
         assert_eq!(firing.asked, [50]);
         let mut missing = Scripted::answering(&[false]);
-        assert!(!lists_new(&mut session, &mut missing), "drawn again");
+        let shipyard = session.open_shipyard(&mut missing).expect("a shipyard");
+        assert_eq!(shipyard.row(NEW), None, "drawn again");
         assert_eq!(missing.asked, [50]);
     }
 
     #[test]
-    fn declining_draws_the_classs_roll_again_and_changes_nothing() {
+    fn declining_draws_the_classs_roll_again_at_the_next_opening_and_changes_nothing() {
         let mut session = outfitted(&rolling(100, 50));
         let mut firing = Scripted::answering(&[true]);
         assert!(lists_new(&mut session, &mut firing));
@@ -16054,30 +16118,34 @@ pub(super) mod tests {
         assert_eq!(session.pilot(), &before);
         assert!(!session.take_save_due());
         let mut missing = Scripted::answering(&[false]);
-        assert!(!lists_new(&mut session, &mut missing), "drawn again");
+        let shipyard = session.open_shipyard(&mut missing).expect("a shipyard");
+        assert_eq!(shipyard.row(NEW), None, "drawn again");
         assert_eq!(missing.asked, [50]);
     }
 
     #[test]
-    fn a_declined_class_keeps_its_roll_until_the_shipyard_is_listed_again() {
+    fn a_declined_class_keeps_its_roll_until_the_shipyard_is_opened_again() {
         let mut session = outfitted(&rolling(100, 50));
         let mut firing = Scripted::answering(&[true]);
-        assert!(lists_new(&mut session, &mut firing));
+        assert!(session.open_shipyard(&mut firing).is_some());
         session.decline_ship(NEW);
         let mut missing = Scripted::answering(&[false]);
         assert!(
             session.ship_naming(NEW, &NameLists, &mut missing).is_ok(),
             "named again"
         );
+        assert!(lists_new(&mut session, &mut missing), "still listed");
         assert!(missing.asked.is_empty(), "the list's roll is kept");
-        assert!(!lists_new(&mut session, &mut missing), "drawn again");
+        let shipyard = session.open_shipyard(&mut missing).expect("a shipyard");
+        assert_eq!(shipyard.row(NEW), None, "drawn again");
         assert_eq!(missing.asked, [50]);
     }
 
     #[test]
-    fn a_bought_class_keeps_its_roll_until_the_shipyard_is_listed_again() {
+    fn a_bought_class_keeps_its_roll_until_the_shipyard_is_opened_again() {
         let mut session = outfitted(&rolling(100, 50));
         let mut firing = Scripted::answering(&[true]);
+        assert!(session.open_shipyard(&mut firing).is_some());
         session
             .buy_ship(NEW, "Kestrel", &mut firing)
             .expect("bought");
@@ -22978,9 +23046,12 @@ pub(super) mod tests {
                 take(&mut session, Take::Capture, &[43, 1]).0,
                 Taken::Captured
             );
-            session
-                .assign(choice, &mut Draws::of(&[0]))
-                .expect("assigned");
+            let mut chance = Draws::of(&[0]);
+            match choice {
+                Assignment::MyShip => use_as_my_ship(&mut session, "Prize", &mut chance),
+                Assignment::Escort => session.assign(choice, &mut chance),
+            }
+            .expect("assigned");
             session.secondary()
         };
         assert_eq!(
@@ -23360,9 +23431,7 @@ pub(super) mod tests {
             take(&mut session, Take::Capture, &[43, 1]).0,
             Taken::Captured
         );
-        session
-            .assign(Assignment::MyShip, &mut Draws::of(&[0]))
-            .expect("assigned");
+        use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0])).expect("assigned");
         assert_eq!(session.secondary(), None, "a ship captured");
     }
 
@@ -26604,7 +26673,7 @@ pub(super) mod tests {
                 .put(0, crate::testkit::carrying(140, 3));
             convicted(&mut session);
             assert_eq!(
-                session.assign(Assignment::MyShip, &mut Draws::of(&[0])),
+                use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0])),
                 Some(Assigned::MyShip)
             );
             assert_eq!(session.capacity(), 40, "the new 20 and the old ship's 20");
@@ -26670,7 +26739,7 @@ pub(super) mod tests {
                     .missions
                     .put(0, crate::testkit::carrying(140, 3));
                 assert_eq!(
-                    session.assign(Assignment::MyShip, &mut Draws::of(&[0])),
+                    use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0])),
                     Some(Assigned::MyShip)
                 );
                 assert!(
@@ -26751,7 +26820,7 @@ pub(super) mod tests {
         full.pilot.missions.put(0, crate::testkit::carrying(140, 3));
         convicted(&mut full);
         assert_eq!(
-            full.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            use_as_my_ship(&mut full, "Prize", &mut Draws::of(&[])),
             Some(Assigned::Abandoned)
         );
         assert_eq!(full.capacity(), 20);
@@ -26787,13 +26856,13 @@ pub(super) mod tests {
         let held = session.pilot().cargo().collect::<Vec<_>>();
         let mut chance = Draws::default().keyed(300, 123);
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut chance),
+            use_as_my_ship(&mut session, "Prize", &mut chance),
             Some(Assigned::MyShip)
         );
         assert_eq!(chance.times_asked(300), 1, "the fuel drawn below its Fuel");
         assert!(session.npcs()[1].voice.is_some(), "the old ship's voice");
         assert_eq!(session.ship(), ShipId(129));
-        assert_eq!(session.pilot().ship_name(), Some("Kestrel"), "unrenamed");
+        assert_eq!(session.pilot().ship_name(), Some("Prize"), "named as typed");
         assert_eq!(
             *session.player(),
             ShipState {
@@ -26867,7 +26936,7 @@ pub(super) mod tests {
     #[test]
     fn a_captured_ship_keeps_its_stock_weapons() {
         // The trader stocks two blasters (held by 250) and a homing
-        // missile (252) with 6 rounds of its own (403).
+        // missile (252) with 6 rounds (403).
         let mut catalog = kitted();
         for hull in &mut catalog.hulls {
             if hull.id == ShipId(129) {
@@ -26889,19 +26958,15 @@ pub(super) mod tests {
         let mut session = captured(&catalog);
         assert_eq!(mounted(&session), [(128, 1), (133, 1)], "its own");
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut Draws::of(&[0])),
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0])),
             Some(Assigned::MyShip)
         );
         assert_eq!(mounted(&session), [(128, 2), (134, 1)]);
         assert_eq!(
             session.pilot().outfits().collect::<Vec<_>>(),
-            [
-                (OutfitId(250), 2),
-                (OutfitId(252), 1),
-                (OutfitId(402), 1),
-                (OutfitId(403), 6)
-            ],
-            "its default item, then its stock weapons and rounds"
+            [(OutfitId(250), 2), (OutfitId(252), 1), (OutfitId(402), 1)],
+            "its weapons, then its default item; 134 being of `AmmoType` -1, \
+             its rounds go nowhere (_DoShipCapture @0x41983)"
         );
         assert_eq!(
             session.ship.fit.stock,
@@ -26931,7 +26996,7 @@ pub(super) mod tests {
         take(&mut session, Take::Capture, &[43, 1]);
         let mut chance = Draws::of(&[]);
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut chance),
+            use_as_my_ship(&mut session, "Prize", &mut chance),
             Some(Assigned::MyShip)
         );
         // No fuel drawn: no draw but the old ship's voice, Rand(2) (see
@@ -27118,7 +27183,7 @@ pub(super) mod tests {
         session.space.traffic.npcs_mut()[0].hull.tough = true;
         board_by(&mut session, &NovaLaw::default()).expect("boards");
         take(&mut session, Take::Capture, &[43, 1]);
-        session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+        use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0]));
         assert!((session.reserves().armor.now - 6.5).abs() < 1e-4);
         assert_eq!(session.reserves().fuel.now, 0.0);
     }
@@ -27145,7 +27210,7 @@ pub(super) mod tests {
             let rules = Rulebook::default().with_override(RuleKey::ShipChangePersistence, source);
             let mut session = captured(&catalog).with_rules(rules);
             session.pilot.outfits = BTreeMap::from([(OutfitId(400), 1), (OutfitId(404), 1)]);
-            session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0]));
             assert_eq!(owned_ids(&session), [(400, 1), (402, 1)], "{source:?}");
         }
     }
@@ -27169,14 +27234,14 @@ pub(super) mod tests {
             let rules = Rulebook::default().with_override(RuleKey::ShipChangeMax, source);
             let mut session = captured(&catalog).with_rules(rules);
             session.pilot.outfits = BTreeMap::from([(OutfitId(400), 1)]);
-            session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0]));
             assert_eq!(owned_ids(&session), [(400, 2), (402, 3)], "{source:?}");
         }
     }
 
     #[test]
-    fn a_capture_tops_the_stock_weapons_up_rather_than_adding_them() {
-        // The trader stocks two blasters (held by 250, here persistent)
+    fn a_capture_keeps_a_persistent_weapons_slot_and_adds_the_defaults_after_the_merge() {
+        // The trader carries two blasters (held by 250, here persistent)
         // and a homing missile (252) with 6 rounds (403); the player owns
         // a blaster, and the trader's default items hold 4 rounds.
         let mut catalog = kitted();
@@ -27209,11 +27274,14 @@ pub(super) mod tests {
         }
         let mut session = captured(&catalog);
         session.pilot.outfits = BTreeMap::from([(OutfitId(250), 1)]);
-        session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+        use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0]));
         assert_eq!(
             owned_ids(&session),
-            [(250, 2), (252, 1), (402, 1), (403, 6)],
-            "what is held already counts: no blaster or round doubled"
+            [(250, 1), (252, 1), (402, 1), (403, 4)],
+            "250 names slot 128, which keeps the player's 1 over the captured \
+             2; the missile is taken, but its 6 rounds go nowhere, 134 being \
+             of `AmmoType` -1 (@0x41983); the 4 default rounds come after the \
+             fold, and nothing tops the stock up (_DoShipCapture @0x41849-0x41a3e)"
         );
     }
 
@@ -27230,7 +27298,7 @@ pub(super) mod tests {
             let rules = Rulebook::default().with_override(RuleKey::ShipChangeReserves, source);
             let mut session = captured(&catalog).with_rules(rules);
             session.pilot.outfits = BTreeMap::from([(OutfitId(404), 1)]);
-            session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0]));
             assert_eq!(
                 session.reserves().armor,
                 Gauge::full(10.0),
@@ -27705,19 +27773,20 @@ pub(super) mod tests {
     #[test]
     fn use_as_my_ship_abandons_the_old_ship_with_sixty_two_ships_in_the_system() {
         let mut full = crowded(61);
-        let pilot = full.pilot().clone();
+        let mut pilot = full.pilot().clone();
+        pilot.ship_name = Some("Prize".to_owned());
         assert_eq!(
-            full.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            use_as_my_ship(&mut full, "Prize", &mut Draws::of(&[])),
             Some(Assigned::Abandoned),
             "62 NPCs: slots 1-62 taken, slot 63 held back"
         );
-        assert_eq!(full.pilot(), &pilot, "nothing changes");
+        assert_eq!(full.pilot(), &pilot, "nothing changes but the name");
         assert_eq!(full.npcs().len(), 62);
         assert_eq!(full.boarding(), None, "the prize is lost");
         assert!(!full.take_save_due());
         let mut roomy = crowded(60);
         assert_eq!(
-            roomy.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            use_as_my_ship(&mut roomy, "Prize", &mut Draws::of(&[])),
             Some(Assigned::MyShip),
             "61 NPCs: slot 62 free"
         );
@@ -27725,7 +27794,7 @@ pub(super) mod tests {
         bible.setup.rules =
             Rulebook::default().with_override(RuleKey::SpawnReserve, RuleSource::Bible);
         assert_eq!(
-            bible.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            use_as_my_ship(&mut bible, "Prize", &mut Draws::of(&[])),
             Some(Assigned::MyShip),
             "by the Bible, slot 63"
         );
@@ -27733,7 +27802,7 @@ pub(super) mod tests {
         bible.setup.rules =
             Rulebook::default().with_override(RuleKey::SpawnReserve, RuleSource::Bible);
         assert_eq!(
-            bible.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            use_as_my_ship(&mut bible, "Prize", &mut Draws::of(&[])),
             Some(Assigned::Abandoned),
             "by the Bible, the table full"
         );
@@ -27760,7 +27829,7 @@ pub(super) mod tests {
         );
         assert_eq!(full.npcs().len(), 61, "one slot, but for the one left");
         assert_eq!(
-            full.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            use_as_my_ship(&mut full, "Prize", &mut Draws::of(&[])),
             Some(Assigned::Abandoned),
             "61 NPCs and one left behind: no slot below 63"
         );
@@ -27776,14 +27845,14 @@ pub(super) mod tests {
         let mut mine = captured(&catalog);
         mine.take_events();
         assert_eq!(
-            mine.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            use_as_my_ship(&mut mine, "Prize", &mut Draws::of(&[])),
             Some(Assigned::MyShip)
         );
         assert_eq!(mine.take_events(), [SessionEvent::ShipChanged], "my ship");
         let mut full = crowded(61);
         full.take_events();
         assert_eq!(
-            full.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            use_as_my_ship(&mut full, "Prize", &mut Draws::of(&[])),
             Some(Assigned::Abandoned)
         );
         assert_eq!(full.take_events(), [], "abandoned");
@@ -29228,7 +29297,7 @@ pub(super) mod tests {
 
     /// The session's string lists for the ship name prompt: `STR#` 2002
     /// with #120, and no other.
-    struct NameLists;
+    pub(super) struct NameLists;
 
     impl CommCatalog for NameLists {
         fn string_list(&self, id: i16) -> Vec<String> {

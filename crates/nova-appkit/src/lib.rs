@@ -1,7 +1,8 @@
 //! The macOS menu bar, Apple event handlers and updater, built with
 //! `AppKit` and Sparkle behind a safe API: the app menu, View and Window,
 //! as a Mac game's standard menus, the quit and Preferences events the
-//! system sends, and Sparkle's standard updater, loaded at run time.
+//! system sends, the full keyboard access setting, and Sparkle's standard
+//! updater, loaded at run time.
 //!
 //! The workspace forbids unsafe code; this crate is one of the places it
 //! lives (its three FFI modules, `bar`, `apple_event_handler` and
@@ -24,6 +25,8 @@
 //!   [`AppleEvents`], their real handlers ([`AppleEvents::install`]).
 //! - [`abort_modal`]: ends the modal `AppKit` is running, such as the
 //!   startup's open panel, for a quit event that arrives while it is up.
+//! - [`full_keyboard_access`]: whether the player has turned on full
+//!   keyboard access, which the game's Preferences focus ring follows.
 //! - [`SparkleUpdater`]: Sparkle's standard updater, from the
 //!   `Sparkle.framework` the app bundle ships ([`SparkleUpdater::load`]),
 //!   made but not started, and [`feed_configured`], whether the app's
@@ -54,6 +57,7 @@ mod apple_event_handler;
 mod apple_events;
 mod bar;
 mod items;
+mod keyboard;
 mod modal;
 mod updater;
 
@@ -64,5 +68,6 @@ pub use items::{
     Action, Command, Item, KeyEquivalent, MENUS, Menu, Modifiers, Role, Shortcut, Title,
     key_equivalents,
 };
+pub use keyboard::full_keyboard_access;
 pub use modal::abort_modal;
 pub use updater::{FEED_KEYS, FRAMEWORK, SparkleUpdater, UpdaterError, feed_configured};

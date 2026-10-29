@@ -211,6 +211,79 @@ fn with_the_escort_menu_open_command_5_picks_freighters_not_a_stellar() {
     );
 }
 
+/// `view`'s escort menu past its timeout and 10 steps into its fade.
+fn fading(view: &mut Faked) {
+    view.step_stellars(crate::flight::escorts::MENU_TIMEOUT + TICK);
+    view.update_escort_menu(10);
+    assert_eq!(view.escort_menu().level(), Some(22), "fading");
+}
+
+#[test]
+fn while_the_escort_menu_fades_1_to_4_pick_groups_not_stellars() {
+    // `_QuickKeyCheck` hides 1-5 while the counter is above 0
+    // (@0xa106-0xa124), the fade included.
+    let mut view = fleet(&[EscortClass::Warship]);
+    tap(&mut view, MENU_KEY);
+    fading(&mut view);
+    assert_eq!(
+        view.slot_key_polled(Key::Char('1'), false),
+        Some(false),
+        "hidden from the slot block while it fades"
+    );
+    assert_eq!(
+        view.slot_key_polled(Key::Char('1'), true),
+        Some(true),
+        "the menu's own loop polls it"
+    );
+    tap(&mut view, Key::Char('2'));
+    view.tick(TICK);
+    assert_eq!(picks_since(&view, 0), [], "the menu took it");
+    assert_eq!(view.escort_menu().level(), Some(22), "no fighters: held");
+    tap(&mut view, Key::Char('4'));
+    assert_eq!(
+        view.escort_menu().group(),
+        EscortGroup::Class(EscortClass::Warship)
+    );
+    assert_eq!(view.escort_menu().level(), Some(32), "shown in full");
+    view.tick(TICK);
+    assert_eq!(picks_since(&view, 0), [], "no stellar");
+}
+
+#[test]
+fn while_the_escort_menu_fades_command_5_picks_freighters_not_a_stellar() {
+    let mut view = fleet(&[EscortClass::Freighter]);
+    tap(&mut view, MENU_KEY);
+    fading(&mut view);
+    view.take_sounds();
+    command_tap_faked(&mut view, NEAREST_STELLAR_COMMAND_KEY);
+    view.tick(TICK);
+    assert_eq!(
+        view.escort_menu().group(),
+        EscortGroup::Class(EscortClass::Freighter)
+    );
+    assert_eq!(picks_since(&view, 0), [], "no stellar");
+    assert_eq!(ui_heard(&mut view), [UiSound::EscortGroupSelected]);
+}
+
+#[test]
+fn a_row_click_is_taken_while_the_ship_brakes_and_while_the_jump_plays() {
+    // The row click reads no +0x50 (@0x6a000-0x6a12b).
+    use super::faked_escorts::{click, row_at};
+    for warping in [false, true] {
+        let mut view = fleet_jumping(&[EscortClass::Warship], warping);
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open(), "warping {warping}");
+        let from = sent_count(&view);
+        click(&mut view, row_at(3));
+        assert_eq!(
+            view.escort_menu().group(),
+            EscortGroup::Class(EscortClass::Warship),
+            "warping {warping}"
+        );
+        assert_eq!(sent_since(&view, from), [], "warping {warping}");
+    }
+}
+
 #[test]
 fn escort_keys_are_taken_while_the_jump_plays() {
     let mut view = fleet_jumping(&[EscortClass::Warship], true);
@@ -316,13 +389,16 @@ fn the_escort_menu_times_out_during_the_streak() {
     view.tick(wait);
     jump_now(&mut view);
     assert!(view.escort_menu().is_open(), "open as the streak begins");
-    for _ in 0..30 {
+    let mut faded = false;
+    for _ in 0..60 {
         if !view.escort_menu().is_open() {
             break;
         }
+        faded |= view.escort_menu().level() < Some(32);
         assert!(view.jump_under_way(), "shut before the ship arrives");
         view.tick(TICK);
     }
+    assert!(faded, "it fades through the streak");
     assert!(!view.escort_menu().is_open(), "timed out");
     assert!(view.jump_under_way(), "shut within the streak");
 }

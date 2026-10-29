@@ -1248,10 +1248,17 @@ impl Boarder {
     /// The centre of the open plunder or assignment dialog's item.
     fn item(&self, item: usize) -> Point {
         let screen = self.app.screen();
-        let dialog = match (screen.plunder(), screen.assignment()) {
-            (Some(plunder), _) => plunder.dialog(),
-            (None, Some(assignment)) => assignment.dialog(),
-            (None, None) => panic!("no boarding dialog is open"),
+        // The one in front: the rename, then the assignment, over the
+        // plunder dialog kept under them.
+        let dialog = match (
+            screen.capture_naming(),
+            screen.assignment(),
+            screen.plunder(),
+        ) {
+            (Some(rename), _, _) => rename.dialog(),
+            (None, Some(assignment), _) => assignment.dialog(),
+            (None, None, Some(plunder)) => plunder.dialog(),
+            (None, None, None) => panic!("no boarding dialog is open"),
         };
         dialog.item_bounds(item).expect("an item").center()
     }
@@ -1934,6 +1941,36 @@ impl Boarder {
             .find(|npc| npc.id == id)
             .expect("in the system")
             .clone()
+    }
+}
+
+/// The escort dialog takes the rulebook's `dialog_focus_ring` as it
+/// opens: on by default, off under the engine's reading.
+#[test]
+fn the_escort_dialog_opens_with_the_rulebooks_focus_ring() {
+    use nova_view::ui::FocusRing;
+    for (rules, ring) in [
+        (nova_sim::Rulebook::default(), FocusRing::Tab),
+        (
+            nova_sim::Rulebook::default()
+                .with_override(nova_sim::RuleKey::DialogFocusRing, RuleSource::Engine),
+            FocusRing::Off,
+        ),
+    ] {
+        let store = MemoryPilots::new();
+        let mut game = escorted(&store, &[], &[129], |screen| screen.with_rules(rules));
+        game.key(Key::Alt, true);
+        game.tap(Key::Tab);
+        game.key(Key::Alt, false);
+        game.tap(Key::Char('y'));
+        assert_eq!(game.showing(), Showing::EscortDialog);
+        assert_eq!(
+            game.app
+                .screen()
+                .escort_dialog()
+                .map(|dialog| dialog.dialog().focus_ring()),
+            Some(ring)
+        );
     }
 }
 

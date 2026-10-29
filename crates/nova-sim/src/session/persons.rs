@@ -610,6 +610,7 @@ mod tests {
     use crate::pilot::Pilot;
     use crate::rulebook::RuleSource;
     use crate::rulebook::{RuleKey, Rulebook};
+    use crate::session::capture_naming::tests::use_as_my_ship;
     use crate::testkit::{FAST, FakePilotCatalog, person, ship};
 
     #[test]
@@ -986,7 +987,7 @@ mod tests {
             npc: NpcId(0),
             ship: ShipId(129),
             plunder: crate::board::Plunder::default(),
-            captured: true,
+            stage: super::super::Stage::Assignment,
         });
         session
     }
@@ -1049,15 +1050,10 @@ mod tests {
 
     #[test]
     fn a_person_whose_ship_the_player_takes_is_gone_for_good_by_either_reading() {
-        use crate::board::Assignment;
         for source in [RuleSource::Engine, RuleSource::Bible] {
             let catalog = duel(ESCAPE_POD, 0);
             let mut session = captured_by(&catalog, source);
-            assert!(
-                session
-                    .assign(Assignment::MyShip, &mut NeverFires)
-                    .is_some()
-            );
+            assert!(use_as_my_ship(&mut session, "Prize", &mut NeverFires).is_some());
             assert!(session.pilot().gone(PersonId(600)), "{source:?}");
             assert!(!session.pilot().grudge(PersonId(600)), "{source:?}");
             assert!(
@@ -1818,6 +1814,35 @@ mod tests {
         }
         let quote = session.npcs()[0].person.expect("Ace");
         assert!(quote.quoted);
+    }
+
+    #[test]
+    fn hanging_up_a_persons_hail_marks_it_quoted() {
+        // `_DoCommDialog` sets the hailed ship's +0xbc as it closes
+        // (@0x9691d), which the attack quote reads as said (@0x33d38).
+        let said_after_a_hail = |hung_up: bool| {
+            let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
+            session.space.traffic.npcs_mut()[1].person = None;
+            session.chart.target = Some(session.npcs()[0].id);
+            session
+                .hail(
+                    &catalog,
+                    &crate::hail::HailOptions::default(),
+                    &mut NeverFires,
+                )
+                .expect("answered");
+            if hung_up {
+                session.hang_up();
+            }
+            session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+            quote_tick(&catalog, &mut session, &[77]).0
+        };
+        assert_eq!(said_after_a_hail(true), Vec::<String>::new());
+        assert_eq!(
+            said_after_a_hail(false),
+            ["Ace: Prepare to die, Stock!"],
+            "the control: the hail still open"
+        );
     }
 
     #[test]

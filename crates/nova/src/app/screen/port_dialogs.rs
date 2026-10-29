@@ -9,7 +9,7 @@ use nova_view::flight::FlightView;
 use nova_view::spaceport::{PortMap, SpaceportView};
 use nova_view::ui::desc::DESC_DIALOG;
 use nova_view::ui::mission_dialogs::MissionDialogs;
-use nova_view::ui::{DescDialog, DescriptionSource};
+use nova_view::ui::{DescDialog, DescriptionSource, FocusRing};
 
 use super::{Dialogs, ENTERED};
 
@@ -30,6 +30,22 @@ pub(super) fn open_outfitter(spaceport: &mut SpaceportView, flight: &mut FlightV
     }
     if spaceport.take_empty_outfitter() {
         flight.empty_outfitter_returned();
+    }
+}
+
+/// Shows `spaceport`'s shipyard as `flight` lists it as it opens, once it
+/// has opened ([`SpaceportView::take_shipyard_opened`]): `flight` builds
+/// the list and keeps it for the visit first ([`FlightView::open_shipyard`]).
+/// Listing nothing, the shipyard says so and never opens
+/// ([`SpaceportView::set_opened_shipyard`]), before any port dialog's
+/// opening is told.
+pub(super) fn open_shipyard(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if !spaceport.take_shipyard_opened() {
+        return;
+    }
+    flight.open_shipyard();
+    if let Some(shipyard) = flight.shops().shipyard {
+        spaceport.set_opened_shipyard(shipyard);
     }
 }
 
@@ -82,8 +98,9 @@ pub(super) fn open_port_dialogs(
 /// ([`FlightView::close_port_dialog`]): its `_RefreshSAT`, then the nav's
 /// restore, as each of the original's dialogs closes, the bar's hire
 /// screen among them; after the input's last order, and before any frame
-/// is drawn. A mission computer that closed under mission texts is told
-/// once they have closed.
+/// is drawn. A mission computer that closed under mission texts, or a
+/// shipyard that closes after its purchase's texts, is told once they
+/// have closed.
 pub(super) fn close_port_dialogs(
     spaceport: &mut SpaceportView,
     flight: &mut FlightView<Rc<GameData>>,
@@ -228,11 +245,12 @@ pub(super) fn load_info_text(
 }
 
 /// "Desc Dialog" showing `text`, from the dialogs, in the game data's
-/// button style.
+/// button style, its Done taking the keyboard focus as `ring` says.
 pub(super) fn desc_dialog(
     dialogs: &Dialogs,
     data: &GameData,
     text: &str,
+    ring: FocusRing,
 ) -> Result<DescDialog, String> {
     let template = dialogs.resources.dialog_template(DESC_DIALOG)?;
     Ok(DescDialog::new(
@@ -240,7 +258,8 @@ pub(super) fn desc_dialog(
         text,
         data.button_style(),
         Rc::clone(&dialogs.metrics),
-    ))
+    )
+    .with_focus_ring(ring))
 }
 
 /// The about text or the main menu's X text `raw` as the original loads

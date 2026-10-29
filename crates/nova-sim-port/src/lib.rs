@@ -27,6 +27,12 @@
 //! - [`board_repair`]: boarding the player's own disabled escorts and
 //!   fighters back: which own-ship path a board takes
 //!   ([`recovery`](board_repair::recovery)).
+//! - [`capture_naming`]: renaming a captured ship the player takes over:
+//!   the prompt ([`CaptureNaming`](capture_naming::CaptureNaming)).
+//! - [`captured_loadout`]: taking over a captured ship: the outfits
+//!   Use As My Ship leaves the player, `_DoShipCapture`'s merge of the
+//!   persistent outfits with the captured ship's live weapons and rounds
+//!   ([`captured_outfits`](captured_loadout::captured_outfits)).
 //! - [`christening`]: christening a new pilot's ship: the prompt and
 //!   default `_DoNewPilot` asks with
 //!   ([`Christening`](christening::Christening)) and the name kept
@@ -126,6 +132,8 @@ use nova_sim_story::{exploration, mission, person, pilot, rank, story, text_tags
 pub mod auto_refuel;
 pub mod board;
 pub mod board_repair;
+pub mod capture_naming;
+pub mod captured_loadout;
 pub mod christening;
 pub mod escape;
 pub mod escort_dialog;

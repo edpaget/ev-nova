@@ -642,9 +642,10 @@ pub struct FrameHud {
     /// The escort menu's class rows, in [`EscortClass::ALL`]'s order
     /// (`Space::escort_rows`).
     pub escort_rows: [ClassRow; 4],
-    /// Whether the player has an escort flying, for the escort menu to
-    /// stay open (`_HandlePlayer` @0x6df59-0x6dfd0): any hired escort, or
-    /// a mission escort neither disabled nor breaking up (@0x6df73)
+    /// Whether the player has an escort flying, which the escort menu
+    /// counts each frame it shows (`_HandlePlayer` @0x6df59-0x6dfa7): a
+    /// ship the player leads, hired, captured, a mission escort or a
+    /// launched fighter, neither disabled nor breaking up
     /// (`Space::escorts_flying`).
     pub escorts_flying: bool,
 }
@@ -892,6 +893,9 @@ pub enum FlightCommand {
         /// How many to buy or sell.
         count: u32,
     },
+    /// The shipyard opens, its list built and kept for the visit
+    /// ([`Session::open_shipyard`](crate::Session::open_shipyard)).
+    OpenShipyard,
     /// The name prompt's OK: buy a ship of class `ship` named `name`
     /// ([`Session::buy_ship`](crate::Session::buy_ship)).
     BuyShip {
@@ -956,6 +960,9 @@ pub enum FlightCommand {
     /// Assign the ship captured
     /// ([`Session::assign`](crate::Session::assign)).
     Assign(Assignment),
+    /// Answer Use As My Ship's rename: the name typed, or none for Cancel
+    /// ([`Session::name_capture`](crate::Session::name_capture)).
+    NameCapture(Option<String>),
     /// The intro screen was shown
     /// ([`Session::mark_intro_seen`](crate::Session::mark_intro_seen)).
     MarkIntroSeen,
@@ -1096,6 +1103,7 @@ impl FlightCommand {
             | Self::CloseOutfitter
             | Self::Outfit { .. }
             | Self::OutfitCounted { .. }
+            | Self::OpenShipyard
             | Self::BuyShip { .. }
             | Self::DeclineShip(_)
             | Self::OpenBar
@@ -1112,6 +1120,7 @@ impl FlightCommand {
             | Self::ReloadOfferDesc(_)
             | Self::Jettison { .. }
             | Self::Assign(_)
+            | Self::NameCapture(_)
             | Self::MarkIntroSeen
             | Self::OpenPlayerInfo
             | Self::SetWindowWidth(_)
@@ -2041,6 +2050,7 @@ mod tests {
             C::CloseOutfitter,
             C::Outfit { order, count: 1 },
             C::OutfitCounted { order, count: 1 },
+            C::OpenShipyard,
             C::BuyShip {
                 ship: ShipId(129),
                 name: "Kestrel".to_owned(),
@@ -2060,6 +2070,7 @@ mod tests {
             C::ReloadOfferDesc(crate::MissionId(130)),
             C::Jettison { all: true },
             C::Assign(crate::Assignment::Escort),
+            C::NameCapture(None),
             C::MarkIntroSeen,
         ];
         for command in port {

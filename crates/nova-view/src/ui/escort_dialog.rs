@@ -61,7 +61,10 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::comm::{CLOSE_CHANNEL, LABEL_COLOR, TEXT_COLOR, TEXT_SIZE, backdrop, ship_picture};
-use super::dialog::{Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role};
+use super::dialog::{
+    Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, ItemTemplate, Placement, Role,
+    STOCK_WORD,
+};
 
 /// The escort dialog's `DLOG` (and `DITL`) ID.
 pub const ESCORT_DIALOG: i16 = 1022;
@@ -307,13 +310,22 @@ impl EscortDialog {
 
     /// Shows `view`: its lines and its buttons' labels and greying.
     pub fn set_view(&mut self, view: &EscortDialogView) {
-        self.dialog = layout(&self.template, view, self.style, &self.metrics);
+        let ring = self.dialog.focus_ring();
+        self.dialog = layout(&self.template, view, self.style, &self.metrics).with_focus_ring(ring);
         self.view = view.clone();
     }
 
     /// The press the player made, once.
     pub fn take_press(&mut self) -> Option<EscortButton> {
         self.press.take()
+    }
+
+    /// The escort dialog with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.dialog.set_focus_ring(ring);
+        self
     }
 
     /// The dialog itself, for its layout.
@@ -388,7 +400,7 @@ fn escort_template() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 424.0, 259.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(ESCORT_DIALOG, Some(STOCK_WORD)),
         items: vec![
             user(at(29.0, 225.0, 146.0, 26.0), true),
             user(at(29.0, 197.0, 146.0, 26.0), true),
@@ -811,5 +823,41 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn the_built_in_escort_dialog_is_placed_as_center_window_places_dlog_1022() {
+        let template = escort_template();
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::CenterWindow
+        );
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::for_dlog(
+                ESCORT_DIALOG,
+                Some(crate::ui::dialog::STOCK_WORD)
+            ),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            crate::geometry::Point::new(300.0, 255.0)
+        );
+    }
+
+    /// `_EscortFilter` @0x950e9 maps no Tab or Space.
+    #[test]
+    fn tab_then_space_presses_the_focused_button_only_with_the_focus_ring() {
+        let mut ringed = dialog(&captured());
+        ringed.input(&key(Key::Tab, false));
+        ringed.input(&key(Key::Space, false));
+        assert!(ringed.take_press().is_some(), "by default");
+        let mut off = dialog(&captured()).with_focus_ring(FocusRing::Off);
+        off.set_view(&captured());
+        off.input(&key(Key::Tab, false));
+        off.input(&key(Key::Space, false));
+        assert_eq!(off.take_press(), None, "kept over set_view");
+        assert_eq!(off.dialog().focus(), None);
     }
 }

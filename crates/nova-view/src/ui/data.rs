@@ -38,15 +38,16 @@ impl DialogResources for InterfaceData {
             Some(Err(err)) => return Err(err.to_string()),
             Some(Ok((items, _))) => items.record.items,
         };
-        Ok(template(&dlog, items))
+        Ok(template(id, &dlog, items))
     }
 }
 
-/// `dlog` with `items`, in the core's terms.
-fn template(dlog: &Dlog, items: Vec<DialogItem>) -> DialogTemplate {
+/// `DLOG` `id` (`dlog`) with `items`, in the core's terms, placed as
+/// [`Placement::for_dlog`] decides from its id and positioning word.
+fn template(id: i16, dlog: &Dlog, items: Vec<DialogItem>) -> DialogTemplate {
     DialogTemplate {
         bounds: bounds(dlog.bounds),
-        placement: Placement::from_word(dlog.position),
+        placement: Placement::for_dlog(id, dlog.position),
         items: items.into_iter().map(item).collect(),
     }
 }
@@ -235,7 +236,7 @@ mod tests {
         let ui = interface(&desc_dialog());
         let template = ui.dialog_template(3003).expect("converts");
         assert_eq!(template.bounds, rect(18.0, 24.0, 441.0, 313.0));
-        assert_eq!(template.placement, Placement::Center);
+        assert_eq!(template.placement, Placement::CenterWindow);
         let item = |bounds, enabled, kind| ItemTemplate {
             bounds,
             enabled,
@@ -265,6 +266,49 @@ mod tests {
                 item(small, true, ItemSpec::Icon(128)),
                 item(small, true, ItemSpec::Other),
             ]
+        );
+    }
+
+    /// `DLOG` `id`, `width` x `height` at (24, 18) with word 0xA80A,
+    /// and its empty `DITL`.
+    fn centred(id: i16, width: i16, height: i16) -> Vec<(ResType, i16, Vec<u8>)> {
+        let ditl_type = nova_data::records::dialog_items::Ditl::TYPE;
+        vec![
+            (
+                Dlog::TYPE,
+                id,
+                dlog([24, 18, 24 + height, 18 + width], id, &[0, 0xA8, 0x0A]),
+            ),
+            (ditl_type, id, ditl(&[])),
+        ]
+    }
+
+    #[test]
+    fn a_dlog_center_window_moves_is_placed_as_it_places_it() {
+        let port = interface(&centred(1000, 618, 517))
+            .dialog_template(1000)
+            .expect("converts");
+        assert_eq!(port.placement, Placement::CenterWindow);
+        assert_eq!(port.placement.origin(port.bounds), Point::new(203.0, 126.0));
+        let offer = interface(&centred(1020, 651, 244))
+            .dialog_template(1020)
+            .expect("converts");
+        assert_eq!(offer.placement, Placement::CenterWindow);
+        assert_eq!(
+            offer.placement.origin(offer.bounds),
+            Point::new(187.0, 262.0)
+        );
+    }
+
+    #[test]
+    fn a_dlog_no_caller_moves_is_centred_by_its_word() {
+        let yes_no = interface(&centred(3002, 355, 109))
+            .dialog_template(3002)
+            .expect("converts");
+        assert_eq!(yes_no.placement, Placement::Center);
+        assert_eq!(
+            yes_no.placement.origin(yes_no.bounds),
+            Point::new(334.0, 329.0)
         );
     }
 

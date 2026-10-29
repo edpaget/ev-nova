@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use glyphon::{
-    Buffer, Cache, ColorMode, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
-    TextArea, TextAtlas, TextBounds, TextRenderer,
+    Buffer, Cache, ColorMode, FontSystem, Resolution, SwashCache, TextArea, TextAtlas, TextBounds,
+    TextRenderer,
 };
 use nova_data::graphics::Image;
 use wgpu::util::DeviceExt;
@@ -13,8 +13,10 @@ use wgpu::util::DeviceExt;
 use super::data::{SolidVertex, SpriteInstance, globals, solid_vertices};
 use nova_view::{Blend, Color, DrawLayer};
 
-use super::fonts::{Families, attrs, font_system};
+use super::fonts::{Families, font_system};
 use super::frame_commands::{DeviceEncoders, WgpuCommands};
+use super::hinted_text::{GlyphRun, HintedGlyphs};
+use super::layout::lay_out_text;
 use super::upscale::{Upscale, abilities, upscale_for};
 use crate::fonts::FontFaces;
 use crate::gpu::{Batch, Frame, PageId, TextRun, WorldSpace};
@@ -134,9 +136,25 @@ pub struct WgpuRenderer {
     pages: HashMap<PageId, Page>,
     font_system: FontSystem,
     families: Families,
+    /// Every glyph text is drawn with, rasterised with full hints.
+    glyphs: HintedGlyphs,
+    /// The buffer every text area holds: text is drawn as its custom
+    /// glyphs alone.
+    empty_buffer: Buffer,
     swash_cache: SwashCache,
+    /// The pipelines every text atlas shares, kept to make a new atlas
+    /// when the glyph IDs start over.
+    text_cache: Cache,
     text_atlas: TextAtlas,
     text_viewport: glyphon::Viewport,
+    /// One text renderer per text batch, grown as frames need more. The
+    /// first is made with the renderer: glyphon builds its render
+    /// pipeline (into `text_cache`) in the first `TextRenderer::new`,
+    /// which compiles its shader, 70-110 ms when macOS's Metal shader
+    /// cache is cold. Making it here puts that at start-up, beside our own
+    /// pipelines, rather than on the main menu's first frame; every later
+    /// renderer, those made after a glyph-ID restart included, takes the
+    /// pipeline from the cache.
     text_renderers: Vec<TextRenderer>,
     upscale: Box<dyn Upscale>,
     /// What its device can draw the world with, found once.
@@ -232,10 +250,12 @@ impl WgpuRenderer {
             ..Default::default()
         });
         let cache = Cache::new(device);
-        let text_atlas =
-            TextAtlas::with_color_mode(device, queue, &cache, SCENE_FORMAT, ColorMode::Web);
+        let mut text_atlas = text_atlas(device, queue, &cache);
+        let first_text = text_renderer(&mut text_atlas, device);
         let text_viewport = glyphon::Viewport::new(device, &cache);
         let (font_system, families) = font_system(faces);
+        let glyphs = HintedGlyphs::of(&families);
+        let empty_buffer = Buffer::new_empty(glyphon::Metrics::new(1.0, 1.0));
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -257,14 +277,25 @@ impl WgpuRenderer {
             pages: HashMap::new(),
             font_system,
             families,
+            glyphs,
+            empty_buffer,
             swash_cache: SwashCache::new(),
+            text_cache: cache,
             text_atlas,
             text_viewport,
-            text_renderers: Vec::new(),
+            text_renderers: vec![first_text],
             upscale,
             abilities: abilities(device),
             warnings: Vec::new(),
         }
+    }
+
+    /// Starts its glyphs over with ID generations of `ids` rather than
+    /// 8,192: the seam that lets a test make the IDs start over, and the
+    /// text atlas be rebuilt, in a few frames.
+    #[cfg(test)]
+    pub(super) fn set_glyph_generation(&mut self, ids: usize) {
+        self.glyphs = HintedGlyphs::with_generation(&self.families, ids);
     }
 
     /// The warnings its frames raised since it was last asked, oldest
@@ -488,19 +519,21 @@ impl WgpuRenderer {
             };
             let mut render = begin_pass(encoder, &target.canvas.view, load);
             let draws = &layout.draws[pass.draws.clone()];
-            self.encode(&mut render, frame, draws, buffers, target);
+            let scissors = &layout.scissors[pass.draws.clone()];
+            self.encode(&mut render, frame, (draws, scissors), buffers, target);
         }
     }
 
-    /// Encodes `draws` into `pass`, reading sprite instances and solid
-    /// vertices from `buffers`, sprites and solids projected onto the
-    /// target's content rectangle and an OR batch's backdrop read from its
-    /// canvas. Text is drawn in target pixels.
+    /// Encodes `draws` into `pass`, each cut to its scissor (index for
+    /// index), reading sprite instances and solid vertices from `buffers`,
+    /// sprites and solids projected onto the target's content rectangle
+    /// and an OR batch's backdrop read from its canvas. Text is drawn in
+    /// target pixels.
     fn encode(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         frame: &Frame,
-        draws: &[Draw],
+        (draws, scissors): (&[Draw], &[PixelRect]),
         (instance_buffer, vertex_buffer): (&wgpu::Buffer, &wgpu::Buffer),
         target: &PassTarget<'_>,
     ) {
@@ -511,7 +544,8 @@ impl WgpuRenderer {
             w: frame.target.0,
             h: frame.target.1,
         };
-        for draw in draws {
+        for (draw, scissor) in draws.iter().zip(scissors) {
+            pass.set_scissor_rect(scissor.x, scissor.y, scissor.w, scissor.h);
             match draw {
                 Draw::Sprites {
                     page,
@@ -644,6 +678,12 @@ impl WgpuRenderer {
     }
 
     /// Shapes every text batch and prepares one glyphon renderer for each.
+    ///
+    /// Each run is laid out as `GlyphonMetrics` measures it, then drawn as
+    /// glyphon custom glyphs rasterised with full hints and placed where
+    /// glyphon would draw the buffer's own glyphs
+    /// ([`hinted_text`](super::hinted_text)); glyphon itself is handed an
+    /// empty buffer beside them.
     fn prepare_text(&mut self, target: (u32, u32), batches: &[&[TextRun]]) {
         self.text_viewport.update(
             &self.queue,
@@ -652,61 +692,79 @@ impl WgpuRenderer {
                 height: target.1,
             },
         );
+        // Each run is laid out at its logical size, as `GlyphonMetrics`
+        // measures it, and drawn at its scale. A run with no face to draw
+        // in is skipped (shaping it would find no font at all).
+        let laid: Vec<Vec<(&TextRun, TextBounds, Buffer)>> = batches
+            .iter()
+            .map(|runs| {
+                runs.iter()
+                    .filter_map(|run| {
+                        let buffer = lay_out_text(
+                            &mut self.font_system,
+                            &self.families,
+                            run.font,
+                            run.size,
+                            run.wrap,
+                            &run.text,
+                        )?;
+                        let bounds = TextBounds {
+                            left: run.clip.x as i32,
+                            top: run.clip.y as i32,
+                            right: (run.clip.x + run.clip.w) as i32,
+                            bottom: (run.clip.y + run.clip.h) as i32,
+                        };
+                        Some((run, bounds, buffer))
+                    })
+                    .collect()
+            })
+            .collect();
+        let glyph_runs: Vec<GlyphRun<'_>> = laid
+            .iter()
+            .flatten()
+            .map(|(run, bounds, buffer)| GlyphRun {
+                buffer,
+                origin: run.origin_px,
+                scale: run.scale,
+                rows: (bounds.top, bounds.bottom),
+            })
+            .collect();
+        let frame = self.glyphs.frame(&glyph_runs);
+        if frame.restarted {
+            // glyphon caches a custom glyph by its ID and size, so a reused
+            // ID would draw its old key's raster from the old atlas.
+            self.text_atlas = text_atlas(&self.device, &self.queue, &self.text_cache);
+            self.text_renderers.clear();
+        }
         // Grow the pool to one renderer per batch; a bounded loop.
         let missing = batches.len().saturating_sub(self.text_renderers.len());
         for _ in 0..missing {
-            self.text_renderers.push(TextRenderer::new(
-                &mut self.text_atlas,
-                &self.device,
-                wgpu::MultisampleState::default(),
-                None,
-            ));
+            self.text_renderers
+                .push(text_renderer(&mut self.text_atlas, &self.device));
         }
-        let families = &self.families;
-        for (renderer, runs) in self.text_renderers.iter_mut().zip(batches) {
-            // A run with no face to draw in is skipped (shaping it would
-            // find no font at all).
-            let drawn: Vec<(&TextRun, Family<'_>)> = runs
+        let mut frame_glyphs = frame.runs.iter();
+        for (renderer, runs) in self.text_renderers.iter_mut().zip(&laid) {
+            let areas: Vec<TextArea<'_>> = runs
                 .iter()
-                .filter_map(|run| Some((run, families.family(run.font)?)))
-                .collect();
-            let buffers: Vec<Buffer> = drawn
-                .iter()
-                .map(|&(run, family)| {
-                    let mut buffer = Buffer::new(
-                        &mut self.font_system,
-                        Metrics::new(run.size_px, run.line_height_px),
-                    );
-                    buffer.set_size(run.wrap_px, None);
-                    buffer.set_text(&run.text, &attrs(family), Shaping::Advanced, None);
-                    buffer.shape_until_scroll(&mut self.font_system, false);
-                    buffer
-                })
-                .collect();
-            let areas = drawn
-                .iter()
-                .zip(&buffers)
-                .map(|(&(run, _), buffer)| TextArea {
-                    buffer,
-                    left: run.origin_px.0,
-                    top: run.origin_px.1,
+                .zip(frame_glyphs.by_ref())
+                .map(|((run, bounds, _), glyphs)| TextArea {
+                    buffer: &self.empty_buffer,
+                    left: 0.0,
+                    top: 0.0,
                     scale: 1.0,
-                    bounds: TextBounds {
-                        left: run.clip.x as i32,
-                        top: run.clip.y as i32,
-                        right: (run.clip.x + run.clip.w) as i32,
-                        bottom: (run.clip.y + run.clip.h) as i32,
-                    },
+                    bounds: *bounds,
                     default_color: glyphon::Color::rgba(
                         run.color.r,
                         run.color.g,
                         run.color.b,
                         run.color.a,
                     ),
-                    custom_glyphs: &[],
-                });
+                    custom_glyphs: glyphs,
+                })
+                .collect();
+            let glyphs = &self.glyphs;
             // A failed prepare draws no text this frame; the frame goes on.
-            let _ = renderer.prepare(
+            let _ = renderer.prepare_with_custom(
                 &self.device,
                 &self.queue,
                 &mut self.font_system,
@@ -714,6 +772,7 @@ impl WgpuRenderer {
                 &self.text_viewport,
                 areas,
                 &mut self.swash_cache,
+                |request| glyphs.rasterize(request),
             );
         }
     }
@@ -729,6 +788,18 @@ impl WgpuRenderer {
                 usage: wgpu::BufferUsages::VERTEX,
             })
     }
+}
+
+/// A text renderer drawing from `atlas` on `device`. Every one is made
+/// alike, so glyphon finds the pipeline the first one built in the
+/// atlas's cache.
+fn text_renderer(atlas: &mut TextAtlas, device: &wgpu::Device) -> TextRenderer {
+    TextRenderer::new(atlas, device, wgpu::MultisampleState::default(), None)
+}
+
+/// A text atlas on `device`, in the scene's format, made with `cache`.
+fn text_atlas(device: &wgpu::Device, queue: &wgpu::Queue, cache: &Cache) -> TextAtlas {
+    TextAtlas::with_color_mode(device, queue, cache, SCENE_FORMAT, ColorMode::Web)
 }
 
 /// The projection uniform's layout.
@@ -902,6 +973,10 @@ struct Layout<'a> {
     text: Vec<&'a [TextRun]>,
     /// What to draw for each batch, in order.
     draws: Vec<Draw>,
+    /// The scissor each of `draws` is encoded with, index for index, in
+    /// its canvas's pixels: [`Frame::world_scissor`] for a world draw of a
+    /// clipped world, and the whole canvas for every other draw.
+    scissors: Vec<PixelRect>,
     /// For a world drawn into a texture of its own, the render passes its
     /// draws are split into, in order: the first clears the texture, and
     /// each OR batch opens another. None for a world drawn into the
@@ -915,10 +990,18 @@ struct Layout<'a> {
 
 impl<'a> Layout<'a> {
     /// Lays out the batch at `index` of `frame` at the end of `passes`,
-    /// opening a pass for an OR batch, which is left out when it covers
-    /// no pixel in its layer.
-    fn push(&mut self, frame: &'a Frame, index: usize, passes: &mut Vec<Pass>) {
+    /// scissored to `scissors`' rect for its layer, opening a pass for an
+    /// OR batch. It is left out when its scissor is empty, and an OR batch
+    /// is when it covers no pixel in its layer.
+    fn push(&mut self, frame: &'a Frame, index: usize, scissors: Scissors, passes: &mut Vec<Pass>) {
         let batch = &frame.batches[index];
+        let scissor = match frame.layer(index) {
+            DrawLayer::World => scissors.world,
+            DrawLayer::Overlay => scissors.overlay,
+        };
+        if scissor.w == 0 || scissor.h == 0 {
+            return;
+        }
         if let Batch::Sprites { blend, quads, .. } = batch
             && blend.reads_backdrop()
         {
@@ -956,6 +1039,7 @@ impl<'a> Layout<'a> {
             }
         };
         self.draws.push(draw);
+        self.scissors.push(scissor);
         if let Some(pass) = passes.last_mut() {
             pass.draws.end = self.draws.len();
         }
@@ -966,6 +1050,40 @@ impl<'a> Layout<'a> {
         Pass {
             backdrop: None,
             draws: self.draws.len()..self.draws.len(),
+        }
+    }
+}
+
+/// The scissors a frame's draws are encoded with, in their canvas's
+/// pixels.
+#[derive(Clone, Copy)]
+struct Scissors {
+    /// A world draw's: [`Frame::world_scissor`] when the world is clipped,
+    /// and otherwise the whole canvas it is drawn into (the target, or the
+    /// world's texture).
+    world: PixelRect,
+    /// An overlay draw's: the whole target, as the overlay is never
+    /// clipped.
+    overlay: PixelRect,
+}
+
+impl Scissors {
+    /// `frame`'s.
+    fn of(frame: &Frame) -> Self {
+        let target = PixelRect {
+            x: 0,
+            y: 0,
+            w: frame.target.0,
+            h: frame.target.1,
+        };
+        let world = match (frame.world_clip, frame.world_space) {
+            (Some(_), _) => frame.world_scissor(),
+            (None, WorldSpace::Texture { size: (w, h) }) => PixelRect { x: 0, y: 0, w, h },
+            (None, WorldSpace::Target) => target,
+        };
+        Self {
+            world,
+            overlay: target,
         }
     }
 }
@@ -995,8 +1113,16 @@ impl<'a> Layout<'a> {
 /// tracks it). Text is never world (the batcher keeps it in the overlay),
 /// so it is always laid out with the overlay; no rule here singles it
 /// out.
+///
+/// Each world draw of a clipped world (`nova_view::DrawList::world_in`)
+/// is scissored to [`Frame::world_scissor`], in target pixels or texels
+/// as the world is drawn, and one whose scissor is empty is left out, its
+/// OR pass with it. Every other draw, the overlay's text included, has the
+/// whole canvas it is drawn into, which also resets a world draw's
+/// scissor before the overlay over it.
 fn lay_out(frame: &Frame) -> Layout<'_> {
     let mut layout = Layout::default();
+    let scissors = Scissors::of(frame);
     let indices = 0..frame.batches.len();
     let textured = matches!(frame.world_space, WorldSpace::Texture { .. });
     let in_world = |&index: &usize| textured && frame.layer(index) == DrawLayer::World;
@@ -1004,12 +1130,12 @@ fn lay_out(frame: &Frame) -> Layout<'_> {
     if indices.clone().any(|index| in_world(&index)) {
         world.push(layout.fresh_pass());
         for index in indices.clone().filter(in_world) {
-            layout.push(frame, index, &mut world);
+            layout.push(frame, index, scissors, &mut world);
         }
     }
     let mut passes = vec![layout.fresh_pass()];
     for index in indices.filter(|index| !in_world(index)) {
-        layout.push(frame, index, &mut passes);
+        layout.push(frame, index, scissors, &mut passes);
     }
     layout.world = world;
     layout.passes = passes;
@@ -1194,9 +1320,9 @@ mod tests {
             text: text.to_owned(),
             font: nova_view::Font::Geneva,
             origin_px: (0.0, 0.0),
-            size_px: 16.0,
-            line_height_px: 19.2,
-            wrap_px: None,
+            size: 8.0,
+            wrap: None,
+            scale: 2.0,
             color: Color::WHITE,
             clip: PixelRect {
                 x: 0,
@@ -1223,6 +1349,7 @@ mod tests {
             clear: Color::BLACK,
             world_space: WorldSpace::Target,
             world: Vec::new(),
+            world_clip: None,
             batches: vec![
                 Batch::Sprites {
                     page: PageId(0),
@@ -1455,6 +1582,7 @@ mod tests {
             world_space: WorldSpace::Target,
             batches,
             world: Vec::new(),
+            world_clip: None,
         }
     }
 
@@ -1466,6 +1594,7 @@ mod tests {
         assert_eq!(a.vertices, b.vertices);
         assert_eq!(a.text, b.text);
         assert_eq!(a.draws, b.draws);
+        assert_eq!(a.scissors, b.scissors);
         assert_eq!(a.world, b.world);
         assert_eq!(a.passes, b.passes);
     }
@@ -1682,6 +1811,171 @@ mod tests {
         );
     }
 
+    fn pixels(x: u32, y: u32, w: u32, h: u32) -> PixelRect {
+        PixelRect { x, y, w, h }
+    }
+
+    /// `frame` with its world clipped to the logical (`x`, 0)-(`x` + `w`,
+    /// 32).
+    fn clipped_to(frame: Frame, x: f32, w: f32) -> Frame {
+        Frame {
+            world_clip: Some(Rect {
+                x,
+                y: 0.0,
+                w,
+                h: 32.0,
+            }),
+            ..frame
+        }
+    }
+
+    /// The scissor each draw of `passes` is encoded with, in order.
+    fn scissored(layout: &Layout<'_>, passes: &[Pass]) -> Vec<PixelRect> {
+        passes
+            .iter()
+            .flat_map(|pass| layout.scissors[pass.draws.clone()].iter().copied())
+            .collect()
+    }
+
+    /// The 64x64 target, the scene's whole canvas.
+    const WHOLE_TARGET: PixelRect = PixelRect {
+        x: 0,
+        y: 0,
+        w: 64,
+        h: 64,
+    };
+
+    #[test]
+    fn a_clipped_native_worlds_draws_are_scissored_and_the_overlays_have_the_whole_target() {
+        for frame in layered_frames() {
+            let frame = clipped_to(frame, 0.0, 24.0);
+            assert_eq!(frame.world_scissor(), pixels(0, 0, 48, 64));
+            let layout = lay_out(&frame);
+            // Laid out in the frame's order, none left out.
+            assert_eq!(layout.draws.len(), frame.batches.len());
+            assert_eq!(layout.scissors.len(), frame.batches.len());
+            let expected: Vec<PixelRect> = (0..frame.batches.len())
+                .map(|at| match frame.layer(at) {
+                    DrawLayer::World => frame.world_scissor(),
+                    DrawLayer::Overlay => WHOLE_TARGET,
+                })
+                .collect();
+            assert_eq!(
+                scissored(&layout, &layout.passes),
+                expected,
+                "{:?}",
+                frame.world
+            );
+        }
+    }
+
+    #[test]
+    fn a_clipped_textured_worlds_draws_are_scissored_to_texels_and_the_overlays_have_the_whole_target()
+     {
+        for frame in layered_frames() {
+            let frame = textured(clipped_to(frame, 0.0, 24.0));
+            assert_eq!(frame.world_scissor(), pixels(0, 0, 24, 32));
+            let layout = lay_out(&frame);
+            let world = frame.world.len();
+            assert_eq!(
+                scissored(&layout, &layout.world),
+                vec![frame.world_scissor(); world]
+            );
+            assert_eq!(
+                scissored(&layout, &layout.passes),
+                vec![WHOLE_TARGET; frame.batches.len() - world]
+            );
+        }
+    }
+
+    #[test]
+    fn a_world_clipped_to_nothing_lays_out_none_of_its_draws_nor_their_or_passes() {
+        for frame in layered_frames() {
+            let overlay = frame.batches.len() - frame.world.len();
+            let ors = |passes: &[Pass]| passes.iter().filter(|p| p.backdrop.is_some()).count();
+            let overlay_ors = frame
+                .batches
+                .iter()
+                .enumerate()
+                .filter(|&(at, batch)| {
+                    frame.layer(at) == DrawLayer::Overlay
+                        && matches!(
+                            batch,
+                            Batch::Sprites {
+                                blend: Blend::Or,
+                                ..
+                            }
+                        )
+                })
+                .count();
+
+            // Right of the logical space, and below it.
+            let nowhere = [
+                Rect {
+                    x: 40.0,
+                    y: 0.0,
+                    w: 8.0,
+                    h: 32.0,
+                },
+                Rect {
+                    x: 0.0,
+                    y: 40.0,
+                    w: 32.0,
+                    h: 8.0,
+                },
+            ];
+            for clip in nowhere {
+                let native = Frame {
+                    world_clip: Some(clip),
+                    ..frame.clone()
+                };
+                let layout = lay_out(&native);
+                assert_eq!(layout.draws.len(), overlay, "{:?} {clip:?}", frame.world);
+                assert_eq!(
+                    scissored(&layout, &layout.passes),
+                    vec![WHOLE_TARGET; overlay]
+                );
+                assert_eq!(ors(&layout.passes), overlay_ors, "{:?}", frame.world);
+
+                let texture = textured(native);
+                let layout = lay_out(&texture);
+                assert_eq!(drawn(&layout, &layout.world), Vec::<&Draw>::new());
+                assert_eq!(ors(&layout.world), 0, "{:?} {clip:?}", frame.world);
+                assert_eq!(layout.draws.len(), overlay);
+            }
+        }
+    }
+
+    #[test]
+    fn an_unclipped_world_lays_out_every_draw_with_its_whole_canvas() {
+        for frame in layered_frames() {
+            // Letterboxed, so the viewport isn't the whole target.
+            let frame = Frame {
+                viewport: pixels(0, 16, 64, 32),
+                logical: LogicalSize { w: 64, h: 32 },
+                ..frame
+            };
+            let native = lay_out(&frame);
+            assert_eq!(
+                scissored(&native, &native.passes),
+                vec![WHOLE_TARGET; native.draws.len()]
+            );
+            let texture = Frame {
+                world_space: WorldSpace::Texture { size: (64, 32) },
+                ..frame.clone()
+            };
+            let layout = lay_out(&texture);
+            assert_eq!(
+                scissored(&layout, &layout.world),
+                vec![pixels(0, 0, 64, 32); frame.world.len()]
+            );
+            assert_eq!(
+                scissored(&layout, &layout.passes),
+                vec![WHOLE_TARGET; frame.batches.len() - frame.world.len()]
+            );
+        }
+    }
+
     #[test]
     fn a_textured_world_or_batch_covering_no_texel_is_left_out() {
         let frame = textured(Frame {
@@ -1807,5 +2101,119 @@ mod tests {
         assert!(!reuse_canvas(Some((64, 64)), (32, 64)));
         assert!(!reuse_canvas(Some((64, 64)), (64, 32)));
         assert!(!reuse_canvas(None, (64, 64)));
+    }
+
+    /// A 64 x 64 frame of `text` alone, in the bundled fallback at 8pt and
+    /// `scale`.
+    fn text_frame(text: &str, scale: f32) -> Frame {
+        frame_of(vec![Batch::Text(vec![TextRun { scale, ..run(text) }])])
+    }
+
+    /// `frames` drawn in turn by an offscreen renderer whose glyph IDs come
+    /// in generations of `ids`, and the last one's pixels; `None` with no
+    /// GPU adapter.
+    fn last_drawn(ids: usize, frames: &[Frame]) -> Option<Vec<u8>> {
+        use crate::gpu::Gpu;
+        let mut gpu = crate::wgpu::OffscreenGpu::new(64, 64, &FontFaces::bundled()).ok()?;
+        gpu.set_glyph_generation(ids);
+        for frame in frames {
+            gpu.submit(frame);
+        }
+        Some(gpu.read_pixels().expect("read back"))
+    }
+
+    #[test]
+    fn text_drawn_after_the_glyph_ids_start_over_draws_as_on_a_fresh_renderer() {
+        // Two IDs a generation: "ac" at 2x takes both, "ac" at 3x starts
+        // them over, and "ca" at 2x starts them over again, giving `c` the
+        // ID `a` had at 2x. glyphon caches a custom glyph by its ID and
+        // size, and `a` and `c` both rasterise 8 x 10 at 2x, so an atlas
+        // kept across the restart would draw `a` where `c` goes.
+        let last = text_frame("ca", 2.0);
+        let frames = [text_frame("ac", 2.0), text_frame("ac", 3.0), last.clone()];
+        let (Some(after), Some(fresh)) = (last_drawn(2, &frames), last_drawn(2, &[last])) else {
+            return;
+        };
+        assert!(fresh.as_chunks::<4>().0.iter().any(|p| p[0] > 0), "no ink");
+        assert!(
+            after == fresh,
+            "the last frame draws unlike a fresh renderer's"
+        );
+    }
+
+    /// A 64 x 64 frame of sprites in every blend, then a solid, all on
+    /// page 0.
+    fn every_blend_frame() -> Frame {
+        let mut batches: Vec<Batch> = [
+            Blend::Normal,
+            Blend::Additive,
+            Blend::Or,
+            Blend::Max,
+            Blend::OrCrossfade,
+            Blend::OrTranslucent,
+        ]
+        .into_iter()
+        .map(|blend| sprites(blend, vec![quad(1.0)]))
+        .collect();
+        batches.push(Batch::Solid(vec![solid(2.0)]));
+        frame_of(batches)
+    }
+
+    /// Submits `frame` and asserts it left `gpu` holding the `made`
+    /// render pipelines it held before.
+    #[track_caller]
+    fn assert_builds_no_pipeline(
+        gpu: &mut crate::wgpu::OffscreenGpu,
+        made: isize,
+        frame: &Frame,
+        what: &str,
+    ) {
+        use crate::gpu::Gpu;
+        gpu.submit(frame);
+        assert_eq!(
+            gpu.render_pipelines(),
+            made,
+            "{what} built a render pipeline"
+        );
+    }
+
+    #[test]
+    fn no_frame_builds_a_render_pipeline() {
+        use crate::gpu::Gpu;
+        let Ok(mut gpu) = crate::wgpu::OffscreenGpu::new(64, 64, &FontFaces::bundled()) else {
+            return;
+        };
+        let made = gpu.render_pipelines();
+        // Every wgpu-hal backend counts its pipelines, so a renderer that
+        // has made its own holds some; the checks below can't pass for a
+        // count that stays at nothing.
+        assert!(made > 0, "the renderer made no render pipeline");
+        // Two text batches, as the main menu's first frame draws.
+        let menu = frame_of(vec![
+            Batch::Text(vec![run("a")]),
+            Batch::Text(vec![run("b")]),
+        ]);
+        assert_builds_no_pipeline(&mut gpu, made, &menu, "the first text frame");
+        let more = frame_of((0..4).map(|_| Batch::Text(vec![run("c")])).collect());
+        assert_builds_no_pipeline(&mut gpu, made, &more, "a frame growing the text renderers");
+        gpu.set_glyph_generation(2);
+        for frame in [
+            text_frame("ac", 2.0),
+            text_frame("ac", 3.0),
+            text_frame("ca", 2.0),
+        ] {
+            assert_builds_no_pipeline(&mut gpu, made, &frame, "a frame across a glyph-ID restart");
+        }
+        gpu.create_page(PageId(0), 16);
+        let blends = every_blend_frame();
+        assert_builds_no_pipeline(&mut gpu, made, &blends, "a frame of every blend");
+        // Setting an upscaler is a set-up step, which may build its own.
+        gpu.set_upscaler(Upscaler::SharpBilinear);
+        let made = gpu.render_pipelines();
+        let world = Frame {
+            world: (0..blends.batches.len()).collect(),
+            ..textured(blends)
+        };
+        assert_builds_no_pipeline(&mut gpu, made, &world, "a sharp-bilinear world");
     }
 }

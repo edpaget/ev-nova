@@ -307,7 +307,7 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
     let list = flown(&view);
     let mut expected = DrawList::new();
     // The stars, the stellars and the ship are the world, the HUD over it.
-    expected.world(|expected| {
+    expected.world_in(view.play_rect(), |expected| {
         for star in faked_stars(&view) {
             expected.push(star);
         }

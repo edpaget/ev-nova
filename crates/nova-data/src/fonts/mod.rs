@@ -22,6 +22,10 @@
 //! renderer draws Charcoal text in its bundled substitute font instead.
 //! The font is the player's copy and is never committed.
 //!
+//! [`DeviceWidths`] reads a face's `hdmx` device widths: the whole-pixel
+//! advances QuickDraw gives each glyph at the sizes the table records,
+//! which the renderer advances glyphs by.
+//!
 //! The `fixture` feature exposes the `fixture` module, synthetic font
 //! builders, to other crates' tests.
 
@@ -33,8 +37,11 @@ use nova_rsrc::{Fork, ForkReader, StdForkReader};
 use ttf_parser::name::Name;
 use ttf_parser::{Face, PlatformId, name_id};
 
+mod device_widths;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+
+pub use device_widths::DeviceWidths;
 
 /// A four-byte sfnt tag, shown as text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

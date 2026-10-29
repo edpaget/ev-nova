@@ -30,7 +30,8 @@
 //!   itself with no target of its own (@0x3f3c3): so it reads the shot's
 //!   leftover miss roll (below) and its interference jam
 //!   ([`Jam::Interfered`](super::projectile::Jam::Interfered), rolled as
-//!   it is seated, @0x3eab2-0x3eb43), with which it can hit no ship. Two
+//!   it is seated, @0x3eab2-0x3eb43), which doesn't stop the seek, as
+//!   `_ShotCanHitShip` rejects only jam 998 (@0x6a75 -> @0x447f7). Two
 //!   sub-munitions of one release can seek different ships. The nearest
 //!   is measured in whole pixels, each coordinate truncated toward zero
 //!   (@0x6a7e-0x6ad4), and of two equally near the lower ship slot wins
@@ -357,16 +358,35 @@ mod tests {
     }
 
     #[test]
-    fn an_interfered_sub_munition_seeks_nothing_and_takes_the_given_target() {
-        // Jammed at its spawn (+0x30 = 999, @0x3eb43), it can hit no ship
-        // (@0x447f7): it falls back to the given target (@0x3f3ec-0x3f3f0)
-        // and heads at it.
+    fn an_interfered_sub_munition_seeks_as_a_clear_one() {
+        // Jammed at its spawn (+0x30 = 999, @0x3eb43), it still seeks:
+        // `_ShotCanHitShip` rejects only jam 998 (@0x6a75 -> @0x447f7).
         let targets = [ship(NEAR, 100.0, 60.0), ship(HIT, 100.0, 450.0)];
         let at = Vec2::new(100.0, 50.0);
-        let shot = seated(at, (None, Jam::Interfered), Some(HIT), &targets);
-        assert_eq!((shot.target, shot.heading), (Some(HIT), 180.0));
-        let shot = seated(at, (None, Jam::Clear), Some(HIT), &targets);
-        assert_eq!(shot.target, Some(NEAR), "unjammed, the nearest");
+        for jam in [Jam::Interfered, Jam::Clear] {
+            let shot = seated(at, (None, jam), Some(HIT), &targets);
+            assert_eq!(shot.target, Some(NEAR), "{jam:?}: the nearest");
+        }
+        // A homing child, aimed at no ship as it seeks (@0x3f3c3), may hit
+        // none without `Flags2` 0x0008 (@0x44812-0x44836): interfered or
+        // clear, it falls back to the given target (@0x3f3ec-0x3f3f0).
+        let seeking = Shot {
+            position: at,
+            ..parent(-1, 1, 0, 0, 0x0010)
+        };
+        for jam in [Jam::Interfered, Jam::Clear] {
+            let [shot] = release(&seeking, &sub(1), (Some(HIT), false))[..] else {
+                panic!("one sub-munition");
+            };
+            let shot = aim(
+                &seeking,
+                Shot { jam, ..shot },
+                0,
+                &among(&targets),
+                &mut Draws::of(&[]),
+            );
+            assert_eq!(shot.target, Some(HIT), "{jam:?}: homing, the given");
+        }
     }
 
     #[test]

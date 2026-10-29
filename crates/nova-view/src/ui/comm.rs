@@ -6,9 +6,14 @@
 //! the `EV Nova` executable).
 //!
 //! **The comm dialog** shows a [`HailView`]: the ship's reply in item 10,
-//! its picture (`PICT` 5000 + its ID - 128) in item 11, and in item 12
-//! "Class: <ship> (<government>)" (`STR#` 2002 #195), all in Geneva 9
-//! ([`TEXT_SIZE`]). Below the class, on the baseline 40 pixels under
+//! its picture (`PICT` 5000 + its ID - 128) in item 11, all in Geneva 9
+//! ([`TEXT_SIZE`]). Item 12's class line (`_CommDialogUpdate`
+//! @0x90505-0x905f0) is unwrapped runs: "Class:" (`STR#` 2002 #195) in
+//! grey at the item's left, on the baseline 12 pixels under its top, the
+//! ship's name in white 35 pixels right of the left on the same baseline,
+//! and, when its government has a name, "(<government>)" in white below
+//! the name, on the baseline 25 pixels under the top. Below the class, on
+//! the baseline 40 pixels under
 //! item 12's top, the status line (`_CommDialogUpdate` @0x905f5-0x90704)
 //! is two runs: "Status:" (#196) in grey at the item's left, then the
 //! value. For a ship the player leads it is "Hired Escort" (#166) or
@@ -33,11 +38,31 @@
 //! the first such option. The router passes each press to the flight and
 //! shows what came of it ([`CommDialog::set_hail`]).
 //!
-//! **The haggle dialog** asks "Pay me <price> credits." in item 3 (`STR#`
-//! 2002 #187, or "Pay us", #188, for a planet), with "Accept Price"
-//! (item 1, `STR#` 150 #30) and "Lower Price" (item 2, #31). Return,
-//! Enter and A accept, and L lowers; Escape does nothing, as in the
-//! original (`_HaggleFilter`).
+//! **The haggle dialog** asks its price ([`price_text`]) in item 3, with
+//! "Accept Price" (item 1, `STR#` 150 #30) and "Lower Price" (item 2,
+//! #31). `_HaggleDialogUpdate` draws the price in white (`ForeColor(30)`
+//! @0x91c0a) from [`PRICE_INDENT`] right of item 3's left, on the
+//! baseline [`PRICE_BASELINE`] below its top (`MoveTo` @0x91c16-0x91c2d),
+//! unwrapped. It draws the opening, the price, " ", the unit and "." as
+//! separate `DrawString` runs from the pen; the dialog draws them as one
+//! run, which lands the same, as text advances are whole pixels.
+//!
+//! The opening hangs on the haggle's kind, `_haggleMode` (0x31b234,
+//! behind 0xdef60), which `_DoHaggleDialog` sets to 1 when its first
+//! argument is non-zero and to 2 otherwise (@0x91e74-0x91e8b). Both of
+//! its callers, `_DoShipCommPayment` (@0x92117) and `_DoPlanetCommDialog`
+//! (@0x970ae), pass 0, so the kind is always 2:
+//! - kind 2 (@0x91c5e-0x91c7e) opens "Pay me" (`STR#` 2002 #187), or
+//!   "Pay us" (#188) when the player's ship's target (its word at +0x70)
+//!   is -1 (@0x91c65). The engine haggles only with a ship the player
+//!   hailed, and so targeted; `pay_me` stands in for that test.
+//! - kind 0 (@0x91c3f, "The pay for having completed this mission is ",
+//!   the Pascal string at 0xdade0) and kind 1 (@0x91c4e, "I'll pay you",
+//!   #189) are dead in the original: nothing writes 0, and no caller
+//!   passes a non-zero argument. They are not built.
+//!
+//! Return, Enter and A accept, and L lowers; Escape does nothing, as in
+//! the original (`_HaggleFilter`).
 //!
 //! Without the interface file, [`CommDialog::fallback`] and
 //! [`HaggleDialog::fallback`] lay out the same items themselves, over a
@@ -46,6 +71,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::escort_dialog::{CREDIT, CREDITS};
 use nova_sim::hire::{ESCORT, HIRED_ESCORT};
 use nova_sim::{Haggle, HailView, ShipId};
 
@@ -60,8 +86,8 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, TextBacking,
-    outline,
+    Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, ItemTemplate, Placement, Role,
+    STOCK_WORD, TextBacking, outline,
 };
 use super::prefs::{BACKDROP, BORDER};
 
@@ -103,15 +129,21 @@ pub const HOSTILE_COLOR: Color = Color::rgba(0xFF, 0x00, 0x00, 255);
 /// (0, 0xFFFF, 0), which `_CommDialogUpdate` sets with `RGBForeColor`
 /// (@0x906ce).
 pub const ESCORT_COLOR: Color = Color::rgba(0x00, 0xFF, 0x00, 255);
-/// The colour of the "Status:" label: `_rgbMedGrey` (0x8000 in each
-/// channel), which `_CommDialogUpdate` sets with `RGBForeColor`
-/// (@0x9060d).
+/// The colour of the "Class:" and "Status:" labels: `_rgbMedGrey`
+/// (0x8000 in each channel), which `_CommDialogUpdate` sets with
+/// `RGBForeColor` (@0x90532 and @0x9060d).
 pub const LABEL_COLOR: Color = Color::rgba(128, 128, 128, 255);
+/// How far below item 12's top the class line's baseline stands: 0x0c
+/// (@0x90532-0x905a9).
+pub const CLASS_BASELINE: f32 = 12.0;
+/// How far below item 12's top the government's baseline stands: 0x19
+/// (@0x905ae-0x905f0).
+pub const GOVT_BASELINE: f32 = 25.0;
 /// How far below item 12's top the status line's baseline stands: 0x28
 /// (@0x905f9).
 pub const STATUS_BASELINE: f32 = 40.0;
-/// How far right of item 12's left an escort's status stands: 0x23
-/// (@0x906be).
+/// How far right of item 12's left the ship's name, its government and an
+/// escort's status stand: 0x23 (@0x9055e and @0x906be).
 pub const VALUE_COLUMN: f32 = 35.0;
 /// What `_CommDialogUpdate` draws between "Status:" and "Hostile": the
 /// Pascal string at 0xd97c7, two spaces (@0x90642), in the label's grey,
@@ -140,6 +172,11 @@ pub const ACCEPT_ITEM: usize = 1;
 pub const LOWER_ITEM: usize = 2;
 /// The price asked.
 pub const PRICE_ITEM: usize = 3;
+/// How far right of item 3's left the price starts: 4 (@0x91c26).
+pub const PRICE_INDENT: f32 = 4.0;
+/// How far below item 3's top the price's baseline stands: 0x0c
+/// (@0x91c1a).
+pub const PRICE_BASELINE: f32 = 12.0;
 /// `STR#` 150 #30.
 pub const ACCEPT_PRICE: &str = "Accept Price";
 /// `STR#` 150 #31.
@@ -179,22 +216,29 @@ pub fn grouped(credits: i64) -> String {
     out
 }
 
-/// What the haggle dialog asks: "Pay me <price> credits." for a ship, or
-/// "Pay us …" for a planet.
+/// What the haggle dialog asks: "Pay me <price> credits." when `pay_me`,
+/// or "Pay us …" (kind 2's openings, see the module docs), the price
+/// grouped by thousands. The unit is "credits" ([`CREDITS`], `STR#` 2002
+/// #33) for a price above 1 and "credit" ([`CREDIT`], #32) for 1, 0 or
+/// less: `_HaggleDialogUpdate` tests the price signed (@0x91cb2).
 #[must_use]
 pub fn price_text(price: i64, pay_me: bool) -> String {
     let who = if pay_me { PAY_ME } else { PAY_US };
-    format!("{who} {} credits.", grouped(price))
+    let unit = if price > 1 { CREDITS } else { CREDIT };
+    format!("{who} {} {unit}.", grouped(price))
 }
 
-/// Item 12's class line for `view`: "Class: <ship> (<government>)", or
-/// the ship alone for an independent.
+/// The government line under item 12's class for `view`: "(<government>)",
+/// or `None` for an independent or a government with an empty name (the
+/// original tests the name's length, @0x905ae). The original draws "(",
+/// the name and ")" as three runs on; one run is the same, as text
+/// advances are whole pixels and the pen runs on.
 #[must_use]
-pub fn class_text(view: &HailView) -> String {
-    match &view.govt_name {
-        Some(govt) => format!("{CLASS_LABEL} {} ({govt})", view.comm_name),
-        None => format!("{CLASS_LABEL} {}", view.comm_name),
-    }
+pub fn government_text(view: &HailView) -> Option<String> {
+    view.govt_name
+        .as_deref()
+        .filter(|govt| !govt.is_empty())
+        .map(|govt| format!("({govt})"))
 }
 
 /// Where a status line's value stands on its baseline.
@@ -263,17 +307,6 @@ pub(super) fn backdrop(list: &mut DrawList, bounds: Bounds, picture: Option<Imag
     } else {
         fill_rect(list, bounds, BACKDROP);
         outline(list, bounds, BORDER);
-    }
-}
-
-/// The scrolling text role of `text`, straight on the dialog.
-fn text_role(text: String) -> Role {
-    Role::ScrollText {
-        text,
-        font: Font::Geneva,
-        size: TEXT_SIZE,
-        color: TEXT_COLOR,
-        backing: None,
     }
 }
 
@@ -376,7 +409,8 @@ impl CommDialog {
     /// Shows `view`: the reply, the class and status, and the column of
     /// buttons rebuilt for its options.
     pub fn set_hail(&mut self, view: &HailView) {
-        self.dialog = layout(&self.template, view, self.style, &self.metrics);
+        let ring = self.dialog.focus_ring();
+        self.dialog = layout(&self.template, view, self.style, &self.metrics).with_focus_ring(ring);
         self.keys = view.options.iter().map(|option| option.key).collect();
         self.view = view.clone();
     }
@@ -384,6 +418,14 @@ impl CommDialog {
     /// The press the player made, once.
     pub fn take_press(&mut self) -> Option<CommPress> {
         self.press.take()
+    }
+
+    /// The comm dialog with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.dialog.set_focus_ring(ring);
+        self
     }
 
     /// The dialog itself, for its layout.
@@ -493,7 +535,6 @@ fn layout(
     let mut roles = vec![
         (CLOSE_ITEM, Role::Button(CLOSE_CHANNEL.to_owned())),
         (REPLY_ITEM, reply_role(view.reply.clone())),
-        (CLASS_ITEM, text_role(class_text(view))),
     ];
     let mut buttons = [CLOSE_ITEM].to_vec();
     for (place, option) in view.options.iter().enumerate() {
@@ -529,7 +570,7 @@ fn comm_template() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 423.0, 215.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(COMM_DIALOG, Some(STOCK_WORD)),
         items: vec![
             user(at(21.0, 181.0, 166.0, 26.0), true),
             user(at(21.0, 153.0, 166.0, 26.0), true),
@@ -552,6 +593,35 @@ fn comm_template() -> DialogTemplate {
 }
 
 impl CommDialog {
+    /// The class line in item 12 at `at`, as `_CommDialogUpdate` draws it
+    /// (@0x90505-0x905f0): "Class:" in grey at its left and the ship's
+    /// name in white at [`VALUE_COLUMN`], on the baseline
+    /// [`CLASS_BASELINE`] below its top, then its government
+    /// ([`government_text`]) in white at [`VALUE_COLUMN`] on the baseline
+    /// [`GOVT_BASELINE`], all unwrapped.
+    fn draw_class(&self, list: &mut DrawList, at: Bounds) {
+        let top = at.min.y + CLASS_BASELINE - TEXT_SIZE;
+        let value = at.min.x + VALUE_COLUMN;
+        list.text(
+            CLASS_LABEL,
+            Point::new(at.min.x, top),
+            TEXT_SIZE,
+            None,
+            LABEL_COLOR,
+        );
+        list.text(
+            &self.view.comm_name,
+            Point::new(value, top),
+            TEXT_SIZE,
+            None,
+            TEXT_COLOR,
+        );
+        if let Some(govt) = government_text(&self.view) {
+            let top = at.min.y + GOVT_BASELINE - TEXT_SIZE;
+            list.text(&govt, Point::new(value, top), TEXT_SIZE, None, TEXT_COLOR);
+        }
+    }
+
     /// The status line ([`status_line`]) in item 12 at `at`, as
     /// `_CommDialogUpdate` draws it (@0x905f5-0x90704): on the baseline
     /// [`STATUS_BASELINE`] below the item's top, "Status:" (`STR#` 2002
@@ -633,8 +703,9 @@ impl Screen for CommDialog {
     fn tick(&mut self, _dt: Duration) {}
 
     /// The picture (or the backdrop), the ship's picture (a person's
-    /// `HailPict` in its place), then the dialog and the ship's status
-    /// line ([`CommDialog::draw_status`]).
+    /// `HailPict` in its place), then the dialog, the ship's class line
+    /// ([`CommDialog::draw_class`]) and its status line
+    /// ([`CommDialog::draw_status`]).
     fn draw(&self, list: &mut DrawList) {
         backdrop(list, self.dialog.bounds(), self.picture);
         if let Some(at) = self.dialog.item_bounds(PICTURE_ITEM) {
@@ -646,6 +717,7 @@ impl Screen for CommDialog {
         }
         self.dialog.draw(list);
         if let Some(at) = self.dialog.item_bounds(CLASS_ITEM) {
+            self.draw_class(list, at);
             self.draw_status(list, at);
         }
     }
@@ -661,6 +733,10 @@ pub struct HaggleDialog {
     dialog: Dialog,
     picture: Option<ImageKey>,
     choice: Option<Haggle>,
+    /// The price asked.
+    price: i64,
+    /// Whether a ship asks it ("Pay me"), not "Pay us".
+    pay_me: bool,
 }
 
 impl HaggleDialog {
@@ -718,7 +794,6 @@ impl HaggleDialog {
         let roles = [
             (ACCEPT_ITEM, Role::Button(ACCEPT_PRICE.to_owned())),
             (LOWER_ITEM, Role::Button(LOWER_PRICE.to_owned())),
-            (PRICE_ITEM, text_role(price_text(price, pay_me))),
         ];
         let mut enabled = template.clone();
         for item in [ACCEPT_ITEM, LOWER_ITEM] {
@@ -732,17 +807,45 @@ impl HaggleDialog {
             dialog,
             picture,
             choice: None,
+            price,
+            pay_me,
         })
     }
 
     /// Shows `price` asked, of a ship when `pay_me`.
     pub fn set_asking(&mut self, price: i64, pay_me: bool) {
-        self.dialog.set_text(PRICE_ITEM, &price_text(price, pay_me));
+        self.price = price;
+        self.pay_me = pay_me;
+    }
+
+    /// The price ([`HaggleDialog::asking`]) in item 3 at `at`, as
+    /// `_HaggleDialogUpdate` draws it (@0x91c0a-0x91ccb): one white run,
+    /// unwrapped, from [`PRICE_INDENT`] right of the item's left on the
+    /// baseline [`PRICE_BASELINE`] below its top.
+    fn draw_price(&self, list: &mut DrawList, at: Bounds) {
+        list.text(
+            self.asking(),
+            Point::new(
+                at.min.x + PRICE_INDENT,
+                at.min.y + PRICE_BASELINE - TEXT_SIZE,
+            ),
+            TEXT_SIZE,
+            None,
+            TEXT_COLOR,
+        );
     }
 
     /// What the player chose, once.
     pub fn take_choice(&mut self) -> Option<Haggle> {
         self.choice.take()
+    }
+
+    /// The haggle dialog with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.dialog.set_focus_ring(ring);
+        self
     }
 
     /// The dialog itself, for its layout.
@@ -751,12 +854,10 @@ impl HaggleDialog {
         &self.dialog
     }
 
-    /// The text shown, a line each.
+    /// The line asked ([`price_text`]).
     #[must_use]
-    pub fn lines(&self) -> &[String] {
-        self.dialog
-            .scroll_text()
-            .map_or(&[], super::scroll_text::ScrollText::lines)
+    pub fn asking(&self) -> String {
+        price_text(self.price, self.pay_me)
     }
 }
 
@@ -770,7 +871,7 @@ fn haggle_template() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 262.0, 107.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(HAGGLE_DIALOG, Some(STOCK_WORD)),
         items: vec![
             user(at(58.0, 74.0, 146.0, 26.0), true),
             user(at(58.0, 39.0, 146.0, 26.0), true),
@@ -813,10 +914,14 @@ impl Screen for HaggleDialog {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
-    /// The picture (or the backdrop), then the dialog.
+    /// The picture (or the backdrop), the dialog, then the price
+    /// ([`HaggleDialog::draw_price`]).
     fn draw(&self, list: &mut DrawList) {
         backdrop(list, self.dialog.bounds(), self.picture);
         self.dialog.draw(list);
+        if let Some(at) = self.dialog.item_bounds(PRICE_ITEM) {
+            self.draw_price(list, at);
+        }
     }
 
     fn cancel_pointer(&mut self) {
@@ -1180,11 +1285,9 @@ mod tests {
         let dialog = dialog(&view());
         let shown = texts(&dialog);
         assert!(shown.contains(&"Channel open.".to_owned()), "{shown:?}");
-        assert_eq!(class_text(&view()), "Class: Cruiser (Federation)");
-        assert!(
-            shown.contains(&"Class: Cruiser (Federation)".to_owned()),
-            "on one line at 9 points: {shown:?}"
-        );
+        for run in [CLASS_LABEL, "Cruiser", "(Federation)"] {
+            assert!(shown.contains(&run.to_owned()), "{run}: {shown:?}");
+        }
         assert!(
             !shown.iter().any(|text| text.contains(HOSTILE)),
             "{shown:?}"
@@ -1217,7 +1320,8 @@ mod tests {
             govt_name: None,
             ..view()
         };
-        assert_eq!(class_text(&independent), "Class: Cruiser");
+        assert_eq!(government_text(&independent), None);
+        assert_eq!(government_text(&view()).as_deref(), Some("(Federation)"));
     }
 
     #[test]
@@ -1270,13 +1374,17 @@ mod tests {
                 } => Some((text, font, size)),
                 _ => None,
             })
-            .filter(|(text, ..)| text == "Channel open." || text.starts_with(CLASS_LABEL))
+            .filter(|(text, ..)| {
+                ["Channel open.", CLASS_LABEL, "Cruiser", "(Federation)"].contains(&text.as_str())
+            })
             .collect();
         assert_eq!(
             sizes,
             [
                 ("Channel open.".to_owned(), Font::Geneva, 9.0),
-                ("Class: Cruiser (Federation)".to_owned(), Font::Geneva, 9.0),
+                (CLASS_LABEL.to_owned(), Font::Geneva, 9.0),
+                ("Cruiser".to_owned(), Font::Geneva, 9.0),
+                ("(Federation)".to_owned(), Font::Geneva, 9.0),
             ],
             "the reply and the class line"
         );
@@ -1385,6 +1493,80 @@ mod tests {
             [
                 run(STATUS_LABEL, 60.0, 121.0, LABEL_COLOR),
                 run(ESCORT, 95.0, 121.0, ESCORT_COLOR),
+            ]
+        );
+    }
+
+    /// The class runs `dialog` draws in item 12: "Class:", the ship's
+    /// name and its government in parentheses.
+    fn class_runs(dialog: &CommDialog) -> Vec<Run> {
+        let name = dialog.view.comm_name.clone();
+        drawn(dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    color,
+                    size,
+                    wrap_width,
+                    ..
+                } if text == CLASS_LABEL || text == name || text.starts_with('(') => {
+                    Some((text, origin, color, size, wrap_width))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_class_line_is_a_grey_label_then_the_name_and_the_government_below_it() {
+        // Item 12 at (40, 73): baselines 85 and 98, so tops 76 and 89.
+        assert_eq!(
+            class_runs(&dialog(&view())),
+            [
+                run(CLASS_LABEL, 40.0, 76.0, LABEL_COLOR),
+                run("Cruiser", 75.0, 76.0, TEXT_COLOR),
+                run("(Federation)", 75.0, 89.0, TEXT_COLOR),
+            ]
+        );
+        let shown = texts(&dialog(&view()));
+        assert!(
+            !shown.iter().any(|text| text.contains("Class: Cruiser")),
+            "no wrapped class line: {shown:?}"
+        );
+    }
+
+    #[test]
+    fn an_independent_ship_draws_no_government_line() {
+        for govt_name in [None, Some(String::new())] {
+            let independent = HailView {
+                govt_name: govt_name.clone(),
+                ..view()
+            };
+            assert_eq!(
+                class_runs(&dialog(&independent)),
+                [
+                    run(CLASS_LABEL, 40.0, 76.0, LABEL_COLOR),
+                    run("Cruiser", 75.0, 76.0, TEXT_COLOR),
+                ],
+                "{govt_name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_class_line_follows_item_12_where_it_stands() {
+        let mut moved = stock();
+        moved.items[CLASS_ITEM - 1].bounds = Bounds::at(Point::new(60.0, 90.0), 134.0, 46.0);
+        let dialog = CommDialog::new(&moved, &view(), ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        assert_eq!(
+            class_runs(&dialog),
+            [
+                run(CLASS_LABEL, 60.0, 93.0, LABEL_COLOR),
+                run("Cruiser", 95.0, 93.0, TEXT_COLOR),
+                run("(Federation)", 95.0, 106.0, TEXT_COLOR),
             ]
         );
     }
@@ -1498,7 +1680,11 @@ mod tests {
         assert!(err.contains("11 items"), "{err}");
         let fallback = CommDialog::fallback(&view(), ButtonStyle::STOCK, Rc::new(MonoMetrics));
         let bounds = fallback.dialog().bounds();
-        assert_eq!(bounds.min, Point::new(300.0, 276.0));
+        assert_eq!(
+            bounds.min,
+            Point::new(301.0, 277.0),
+            "as _CenterWindow centres it"
+        );
         assert!(drawn(&fallback)
             .iter()
             .all(|command| !matches!(command, DrawCommand::StretchedPicture { image, .. } if *image == COMM_PICTURE)));
@@ -1521,6 +1707,18 @@ mod tests {
         assert_eq!(grouped(-1500), "-1,500");
         assert_eq!(price_text(3000, true), "Pay me 3,000 credits.");
         assert_eq!(price_text(2200, false), "Pay us 2,200 credits.");
+    }
+
+    /// `_HaggleDialogUpdate` @0x91cb2 tests the price signed: "credits"
+    /// above 1, "credit" for 1, 0 or less.
+    #[test]
+    fn a_price_of_one_or_less_is_in_credit() {
+        assert_eq!(price_text(1, true), "Pay me 1 credit.");
+        assert_eq!(price_text(0, true), "Pay me 0 credit.");
+        assert_eq!(price_text(-5, true), "Pay me -5 credit.");
+        assert_eq!(price_text(2, true), "Pay me 2 credits.");
+        assert_eq!(price_text(2200, false), "Pay us 2,200 credits.");
+        assert_eq!((CREDIT, CREDITS), ("credit", "credits"));
     }
 
     #[test]
@@ -1546,10 +1744,75 @@ mod tests {
         .expect("builds")
     }
 
+    /// The price runs `dialog` draws: every text that opens with "Pay me"
+    /// or "Pay us".
+    fn price_runs(dialog: &HaggleDialog) -> Vec<Run> {
+        drawn(dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    color,
+                    size,
+                    wrap_width,
+                    ..
+                } if text.starts_with(PAY_ME) || text.starts_with(PAY_US) => {
+                    Some((text, origin, color, size, wrap_width))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Stock item 3 is (7, 6, 248, 25): the pen starts 4 in, on the
+    /// baseline 12 under the top, so the run's top is 6 + 12 - 9.
+    #[test]
+    fn the_price_is_one_white_unwrapped_run_at_item_3_plus_4_12() {
+        assert_eq!(
+            price_runs(&haggle(3000)),
+            [run("Pay me 3,000 credits.", 11.0, 9.0, Color::WHITE)],
+            "once, not as a ScrollText"
+        );
+        assert_eq!((PRICE_INDENT, PRICE_BASELINE), (4.0, 12.0));
+    }
+
+    #[test]
+    fn the_price_follows_item_3_where_it_stands() {
+        let mut moved = DialogTemplate {
+            placement: Placement::Fixed,
+            ..haggle_template()
+        };
+        moved.items[PRICE_ITEM - 1].bounds = Bounds::at(Point::new(30.0, 50.0), 200.0, 25.0);
+        let dialog =
+            HaggleDialog::new(&moved, 3000, true, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+                .expect("builds");
+        assert_eq!(
+            price_runs(&dialog),
+            [run("Pay me 3,000 credits.", 34.0, 53.0, Color::WHITE)]
+        );
+    }
+
+    #[test]
+    fn a_lowered_price_redraws_the_run() {
+        let mut dialog = haggle(3000);
+        dialog.set_asking(2200, true);
+        assert_eq!(
+            price_runs(&dialog),
+            [run("Pay me 2,200 credits.", 11.0, 9.0, Color::WHITE)]
+        );
+        dialog.set_asking(1, false);
+        assert_eq!(
+            price_runs(&dialog),
+            [run("Pay us 1 credit.", 11.0, 9.0, Color::WHITE)]
+        );
+        assert_eq!(dialog.asking(), "Pay us 1 credit.");
+    }
+
     #[test]
     fn the_haggle_dialog_asks_the_price_with_its_two_buttons() {
         let dialog = haggle(3000);
-        assert_eq!(dialog.lines(), ["Pay me 3,000 credits."]);
+        assert_eq!(dialog.asking(), "Pay me 3,000 credits.");
         let sizes: Vec<(Font, f32)> = drawn(&dialog)
             .into_iter()
             .filter_map(|command| match command {
@@ -1573,7 +1836,7 @@ mod tests {
         );
         let mut lowered = haggle(3000);
         lowered.set_asking(2200, true);
-        assert_eq!(lowered.lines(), ["Pay me 2,200 credits."]);
+        assert_eq!(lowered.asking(), "Pay me 2,200 credits.");
     }
 
     #[test]
@@ -1713,7 +1976,18 @@ mod tests {
     fn the_haggle_fallback_is_built_in() {
         let fallback =
             HaggleDialog::fallback(3000, false, ButtonStyle::STOCK, Rc::new(MonoMetrics));
-        assert_eq!(fallback.lines(), ["Pay us 3,000 credits."]);
+        assert_eq!(fallback.asking(), "Pay us 3,000 credits.");
+        let item = fallback.dialog().item_bounds(PRICE_ITEM).expect("item 3");
+        assert_eq!(
+            price_runs(&fallback),
+            [run(
+                "Pay us 3,000 credits.",
+                item.min.x + 4.0,
+                item.min.y + 3.0,
+                Color::WHITE
+            )],
+            "kind 2's other opening, at the fallback's item 3"
+        );
         let short = DialogTemplate {
             items: haggle_template().items[..2].to_vec(),
             ..haggle_template()
@@ -1721,5 +1995,72 @@ mod tests {
         assert!(
             HaggleDialog::new(&short, 1, true, ButtonStyle::STOCK, Rc::new(MonoMetrics)).is_err()
         );
+    }
+
+    #[test]
+    fn the_built_in_comm_dialog_is_placed_as_center_window_places_dlog_1007() {
+        let template = comm_template();
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::CenterWindow
+        );
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::for_dlog(
+                COMM_DIALOG,
+                Some(crate::ui::dialog::STOCK_WORD)
+            ),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            crate::geometry::Point::new(301.0, 277.0)
+        );
+    }
+
+    #[test]
+    fn the_built_in_haggle_dialog_is_placed_as_center_window_places_dlog_1008() {
+        let template = haggle_template();
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::CenterWindow
+        );
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::for_dlog(
+                HAGGLE_DIALOG,
+                Some(crate::ui::dialog::STOCK_WORD)
+            ),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            crate::geometry::Point::new(381.0, 331.0)
+        );
+    }
+
+    /// `_CommFilter` @0x908ed and `_HaggleFilter` @0x91d9d map no Tab or
+    /// Space: under the original's reading they press nothing.
+    #[test]
+    fn tab_then_space_presses_the_focused_button_only_with_the_focus_ring() {
+        let mut ringed = dialog(&view());
+        ringed.input(&key(Key::Tab));
+        ringed.input(&key(Key::Space));
+        assert!(ringed.take_press().is_some(), "by default");
+        let mut off = dialog(&view()).with_focus_ring(FocusRing::Off);
+        off.set_hail(&view());
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert_eq!(off.take_press(), None, "kept over set_hail");
+        assert_eq!(off.dialog().focus(), None);
+        let mut ringed = haggle(3000);
+        ringed.input(&key(Key::Tab));
+        ringed.input(&key(Key::Space));
+        assert!(ringed.take_choice().is_some(), "haggle by default");
+        let mut off = haggle(3000).with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert_eq!(off.take_choice(), None);
+        assert_eq!(off.dialog().focus(), None);
     }
 }

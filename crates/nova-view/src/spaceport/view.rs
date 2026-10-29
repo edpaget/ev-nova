@@ -37,7 +37,9 @@
 //! whoever flies the ship answers with its name prompt
 //! ([`SpaceportView::open_ship_naming`]), and the ship named at the
 //! prompt is taken through the spaceport ([`SpaceportView::take_ship`]),
-//! or the ship declined there ([`SpaceportView::take_declined_ship`]). The Bar's opens the stellar's bar
+//! closing the shipyard once the purchase's texts have closed, or the ship
+//! declined there ([`SpaceportView::take_declined_ship`]), the shipyard
+//! staying open. The Bar's opens the stellar's bar
 //! likewise, a [`BarScreen`] over it, when given one
 //! ([`SpaceportView::with_bar`]): its Hire Escort asks for the ships for
 //! hire ([`SpaceportView::take_hire_request`]), whoever flies the ship
@@ -142,7 +144,11 @@
 //! #206, #223, #224) and returns before its nav save or its close
 //! (@0x5bbf7 → @0x5dbd6, @0x5e8df → @0x5f906), so nothing redraws or is
 //! restored ([`SpaceportView::set_opened_outfitter`],
-//! [`SpaceportView::open_hire`]). The closings the original redraws at
+//! [`SpaceportView::set_opened_shipyard`], [`SpaceportView::open_hire`]).
+//! The outfitter and the shipyard decide that from the list their opening
+//! builds, which whoever flies the ship hands back once each opens
+//! ([`SpaceportView::take_outfitter_opened`],
+//! [`SpaceportView::take_shipyard_opened`]). The closings the original redraws at
 //! that ours can't reach:
 //!
 //! - The bar's Gamble text (`_ShowTextDialog` @0x4918c, then
@@ -207,7 +213,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog, DescTemplates};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, TextBacking};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
 use crate::ui::mission_dialogs::{DescShown, MissionDialogs};
 use crate::ui::mission_info::is_mission_info_press;
 #[cfg(doc)]
@@ -234,6 +240,9 @@ struct Port {
     description_problem: Option<String>,
     style: ButtonStyle,
     metrics: MetricsHandle,
+    /// Whether its dialogs' buttons take the keyboard focus, and each
+    /// screen's opened over it.
+    focus_ring: FocusRing,
 }
 
 /// The metrics, shared, with a `Debug` that shows nothing of them.
@@ -504,6 +513,17 @@ pub struct SpaceportView {
     /// no offer, as `_DoOutfitDialog` builds its list before it offers
     /// anything, and with nothing listed never offers.
     outfitter_unlisted: bool,
+    /// Whether the shipyard has opened since this was last taken.
+    shipyard_opened: bool,
+    /// Whether the shipyard open has yet to be shown its listing
+    /// ([`SpaceportView::set_opened_shipyard`]): until then it asks for no
+    /// offer, as `_DoShipyardDialog` builds its list before it offers
+    /// anything (@0x5e68f), and with nothing listed never offers.
+    shipyard_unlisted: bool,
+    /// Whether the shipyard open has had its order taken
+    /// ([`SpaceportView::take_ship`]) and closes once no mission text is
+    /// queued ([`SpaceportView::show_mission_texts`]).
+    shipyard_bought: bool,
     /// The port dialog opened since this was last taken.
     port_dialog_opened: Option<PortDialog>,
     /// The port dialog closed since this was last taken.
@@ -585,6 +605,7 @@ impl SpaceportView {
                 description_problem,
                 style,
                 metrics: MetricsHandle(metrics),
+                focus_ring: FocusRing::default(),
             })
         });
         let description_request = port
@@ -613,6 +634,9 @@ impl SpaceportView {
             recharge: false,
             outfitter_opened: false,
             outfitter_unlisted: false,
+            shipyard_opened: false,
+            shipyard_unlisted: false,
+            shipyard_bought: false,
             empty_outfitter: false,
             port_dialog_opened: None,
             port_dialog_closed: None,
@@ -920,6 +944,7 @@ impl SpaceportView {
     /// ([`SpaceportView::take_outfitter_closed`]) and the bar's, laid
     /// out ([`SpaceportView::take_status_refresh`]).
     fn close_open(&mut self) {
+        self.shipyard_bought = false;
         match &self.open {
             Some(Open::Outfitter(_)) => self.outfitter_closed = true,
             Some(Open::Bar(bar)) if bar.problem().is_none() => self.status_refresh = true,
@@ -1035,11 +1060,32 @@ impl SpaceportView {
     }
 
     /// The ship the shipyard open ordered at its name prompt, with its
-    /// name, since it was last taken, once.
+    /// name, since it was last taken, once. Whoever flies the ship buys it,
+    /// with no further check, as `_DoShipyardDialog` buys once OK closes
+    /// the prompt (@0x5ebc0-0x5ebc2). Then the shipyard closes, as the
+    /// original's loop leaves after a purchase (`-0x335` set @0x5f0ce, read
+    /// at the loop's foot @0x5f6bd-0x5f6cf) through the close tail Done
+    /// runs (@0x5f6d4): once the texts the purchase's hooks show have
+    /// closed (`OnPurchase` @0x5f00d shows them inside the purchase), at
+    /// the first [`SpaceportView::show_mission_texts`] that leaves none
+    /// queued. It asks for no offer meanwhile.
     pub fn take_ship(&mut self) -> Option<ShipOrder> {
-        match &mut self.open {
+        let order = match &mut self.open {
             Some(Open::Shipyard(screen)) => screen.take_order(),
             _ => None,
+        };
+        self.shipyard_bought |= order.is_some();
+        order
+    }
+
+    /// Closes the shipyard whose order was taken
+    /// ([`SpaceportView::take_ship`]) once no mission text is queued.
+    fn close_bought_shipyard(&mut self) {
+        if self.shipyard_bought && !self.texts_queued() {
+            self.shipyard_bought = false;
+            if matches!(self.open, Some(Open::Shipyard(_))) {
+                self.close_open();
+            }
         }
     }
 
@@ -1052,7 +1098,35 @@ impl SpaceportView {
         }
     }
 
-    /// Shows `shipyard`, the shipyard after a purchase: the shipyard open
+    /// Whether the shipyard given has opened since this was last asked,
+    /// once each time it opens: whoever flies the ship has the flight build
+    /// and keep its list, then shows it with
+    /// [`SpaceportView::set_opened_shipyard`].
+    pub fn take_shipyard_opened(&mut self) -> bool {
+        std::mem::take(&mut self.shipyard_opened)
+    }
+
+    /// Shows `shipyard`, the shipyard as it opens
+    /// ([`SpaceportView::take_shipyard_opened`]), as
+    /// [`SpaceportView::set_shipyard`] does. With nothing listed, the
+    /// shipyard never opens: `_DoShipyardDialog` builds its list first
+    /// (@0x5e68f) and, with nothing in it, shows `STR#` 2002 #223
+    /// ([`NO_SHIPS`]) in "Desc Dialog" and returns before its nav save,
+    /// its dialog and its offer (@0x5e694-0x5e6be → @0x5e8da → @0x5f906).
+    /// The shipyard asks for no offer until its listing is shown here, so
+    /// its ask is dropped with it.
+    pub fn set_opened_shipyard(&mut self, shipyard: Shipyard) {
+        self.shipyard_unlisted = false;
+        let empty = shipyard.rows.is_empty();
+        self.set_shipyard(shipyard);
+        if empty && matches!(self.open, Some(Open::Shipyard(_))) {
+            self.open = None;
+            self.port_dialog_opened = None;
+            self.show_text(NO_SHIPS);
+        }
+    }
+
+    /// Shows `shipyard`, the shipyard after an order: the shipyard open
     /// shows it, and so does the shipyard opened next.
     pub fn set_shipyard(&mut self, shipyard: Shipyard) {
         if let Some(Open::Shipyard(screen)) = &mut self.open {
@@ -1279,8 +1353,13 @@ impl SpaceportView {
         let dialogs = self.port.as_ref().ok().map(|port| {
             MissionDialogs::new(text, info, Rc::clone(&port.metrics.0), port.style)
                 .with_movies(self.movies.clone())
+                .with_focus_ring(port.focus_ring)
         });
-        let mut landing = VenueOffers::asking(offer.clone());
+        let ring = self
+            .port
+            .as_ref()
+            .map_or(FocusRing::default(), |port| port.focus_ring);
+        let mut landing = VenueOffers::asking(offer.clone()).with_focus_ring(ring);
         landing.set_movies(self.movies.clone());
         Self {
             missioning: Some(Missioning {
@@ -1326,6 +1405,22 @@ impl SpaceportView {
         }
     }
 
+    /// The spaceport with its dialogs' buttons taking the keyboard focus
+    /// as `ring` says (the `dialog_focus_ring` rule): its own, its
+    /// mission texts and offers, and each screen opened after it.
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        if let Ok(port) = &mut self.port {
+            port.focus_ring = ring;
+            port.dialog.set_focus_ring(ring);
+        }
+        self.dialogs = self.dialogs.map(|dialogs| dialogs.with_focus_ring(ring));
+        if let Some(missioning) = &mut self.missioning {
+            missioning.landing = missioning.landing.clone().with_focus_ring(ring);
+        }
+        self
+    }
+
     /// Whether the venue open restarted its offer timer since this was
     /// last asked, as the bar's hire screen opening does by the engine:
     /// whoever flies the ship rearms it
@@ -1341,14 +1436,20 @@ impl SpaceportView {
     /// by its `AvailLoc`: the screen open's ([`BAR`], [`TRADE_CENTER`],
     /// [`OUTFITTER`] or [`SHIPYARD`]), or, with nothing open, the
     /// spaceport's ([`SPACEPORT`]); never the mission computer's or a
-    /// placeholder's; nor the outfitter's before its listing is shown
-    /// ([`SpaceportView::set_opened_outfitter`]), its ask kept until then.
+    /// placeholder's; nor the outfitter's or the shipyard's before its
+    /// listing is shown ([`SpaceportView::set_opened_outfitter`],
+    /// [`SpaceportView::set_opened_shipyard`]), its ask kept until then;
+    /// nor the shipyard's once its order is taken, as it closes after the
+    /// purchase ([`SpaceportView::take_ship`]).
     /// Whoever flies the ship answers with
     /// [`SpaceportView::open_offer`], or rearms it
     /// ([`SpaceportView::rearm_offers`]).
     pub fn take_offer_request(&mut self) -> Option<i16> {
         let (asked, venue) = match &mut self.open {
             Some(Open::Outfitter(_)) if self.outfitter_unlisted => return None,
+            Some(Open::Shipyard(_)) if self.shipyard_unlisted || self.shipyard_bought => {
+                return None;
+            }
             Some(Open::Bar(screen)) => (screen.take_offer_request(), BAR),
             Some(Open::Trade(screen)) => (screen.take_offer_request(), TRADE_CENTER),
             Some(Open::Outfitter(screen)) => (screen.take_offer_request(), OUTFITTER),
@@ -1478,9 +1579,10 @@ impl SpaceportView {
             .computer
             .clone()
             .map(|template| (template, Rc::clone(&port.metrics.0)));
-        self.open = Some(Open::Computer(Box::new(MissionComputerScreen::new(
-            layout, computer, port.style,
-        ))));
+        self.open = Some(Open::Computer(Box::new(
+            MissionComputerScreen::new(layout, computer, port.style)
+                .with_focus_ring(port.focus_ring),
+        )));
         self.port_dialog_opened = Some(PortDialog::MissionComputer);
     }
 
@@ -1552,7 +1654,10 @@ impl SpaceportView {
     /// Shows each of `texts` in "Desc Dialog", one after another as Done
     /// closes each, over whatever is open, each taking every input until
     /// it closes (`_ShowTextDialog` @0x5a752), and each offer movie among
-    /// them in its place ([`MissionDialogs::show_texts`]).
+    /// them in its place ([`MissionDialogs::show_texts`]). With none
+    /// queued once they are shown, a shipyard whose order was taken
+    /// closes ([`SpaceportView::take_ship`]): whoever flies the ship hands
+    /// over the texts after every input and tick, none among them.
     pub fn show_mission_texts(&mut self, texts: impl IntoIterator<Item = impl Into<MissionShown>>) {
         match &mut self.dialogs {
             Some(dialogs) => dialogs.show_texts(texts),
@@ -1565,6 +1670,7 @@ impl SpaceportView {
             }
         }
         self.dispose_answered_offer();
+        self.close_bought_shipyard();
     }
 
     /// Lets go of the offer dialog answered and left drawn under what its
@@ -1682,13 +1788,16 @@ impl SpaceportView {
         let layout = dialogs
             .template
             .map(|template| (template, Rc::clone(&port.metrics.0)));
-        self.player_info = Some(PlayerInfoScreen::new(
-            layout,
-            dialogs.confirm,
-            info,
-            port.style,
-            dialogs.background,
-        ));
+        self.player_info = Some(
+            PlayerInfoScreen::new(
+                layout,
+                dialogs.confirm,
+                info,
+                port.style,
+                dialogs.background,
+            )
+            .with_focus_ring(port.focus_ring),
+        );
     }
 
     /// The player info screen open, if it is.
@@ -1957,7 +2066,12 @@ impl SpaceportView {
     /// Anything else does nothing.
     /// Opens the bar, laid out with `metrics` and its buttons in `style`,
     /// when it is given, and true; false, opening nothing, without it.
-    fn open_bar_screen(&mut self, metrics: Rc<dyn TextMetrics>, style: ButtonStyle) -> bool {
+    fn open_bar_screen(
+        &mut self,
+        metrics: Rc<dyn TextMetrics>,
+        style: ButtonStyle,
+        ring: FocusRing,
+    ) -> bool {
         let Some(barkeeping) = &mut self.barkeeping else {
             return false;
         };
@@ -1969,7 +2083,7 @@ impl SpaceportView {
             style,
             barkeeping.room,
         );
-        bar = bar.with_news(barkeeping.news.clone());
+        bar = bar.with_news(barkeeping.news.clone()).with_focus_ring(ring);
         if let Some(missioning) = &self.missioning {
             bar = bar
                 .with_offers(missioning.offer.clone())
@@ -2002,11 +2116,8 @@ impl SpaceportView {
         }
         let style = port.style;
         let metrics = Rc::clone(&port.metrics.0);
-        if service == Service::Bar && self.open_bar_screen(Rc::clone(&metrics), style) {
-            return;
-        }
-        if lists_no_ships(self.shipbuying.as_ref(), service) {
-            self.show_text(NO_SHIPS);
+        let ring = port.focus_ring;
+        if service == Service::Bar && self.open_bar_screen(Rc::clone(&metrics), style, ring) {
             return;
         }
         let offer = self
@@ -2019,13 +2130,16 @@ impl SpaceportView {
                 (Some((template, quantity, market, colors)), _, _, Service::TradeCenter) => {
                     let layout = template.clone().map(|template| (template, metrics));
                     let screen = TradeScreen::new(layout, quantity.clone(), market.clone(), style)
-                        .with_colors(*colors);
+                        .with_colors(*colors)
+                        .with_focus_ring(ring);
                     Open::Trade(Box::new(match offer {
                         Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
                     }))
                 }
                 (_, _, Some(shipbuying), Service::Shipyard) => {
+                    self.shipyard_opened = true;
+                    self.shipyard_unlisted = true;
                     let layout = shipbuying
                         .template
                         .clone()
@@ -2037,7 +2151,8 @@ impl SpaceportView {
                         shipbuying.shipyard.clone(),
                         Rc::clone(&shipbuying.catalog),
                         style,
-                    );
+                    )
+                    .with_focus_ring(ring);
                     Open::Shipyard(Box::new(match offer {
                         Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
@@ -2057,7 +2172,8 @@ impl SpaceportView {
                         outfitting.outfitter.clone(),
                         Rc::clone(&outfitting.catalog),
                         style,
-                    );
+                    )
+                    .with_focus_ring(ring);
                     Open::Outfitter(Box::new(match offer {
                         Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
@@ -2080,16 +2196,6 @@ impl SpaceportView {
             _ => {}
         }
     }
-}
-
-/// Whether `service` is the shipyard of `shipbuying` listing nothing:
-/// then `_DoShipyardDialog` shows `STR#` 2002 #223 ([`NO_SHIPS`]) in "Desc
-/// Dialog" and returns before its nav save, its dialog and its offer
-/// (@0x5e694-0x5e6be → @0x5e8da → @0x5f906), so the Shipyard opens
-/// nothing.
-fn lists_no_ships(shipbuying: Option<&Shipbuying>, service: Service) -> bool {
-    service == Service::Shipyard
-        && shipbuying.is_some_and(|shipbuying| shipbuying.shipyard.rows.is_empty())
 }
 
 impl Screen for SpaceportView {
@@ -3382,6 +3488,26 @@ pub(in crate::spaceport) mod tests {
     }
 
     #[test]
+    fn the_focus_ring_reaches_the_spaceport_and_each_screen_opened_over_it() {
+        let ringed = trading(Ok(trade_template()));
+        assert_eq!(
+            ringed.dialog().map(Dialog::focus_ring),
+            Some(FocusRing::Tab),
+            "by default"
+        );
+        let mut off = trading(Ok(trade_template())).with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        assert_eq!(off.dialog().and_then(Dialog::focus), None);
+        click_item(&mut off, 7);
+        assert_eq!(
+            off.open_trade()
+                .and_then(TradeScreen::dialog)
+                .map(Dialog::focus_ring),
+            Some(FocusRing::Off)
+        );
+    }
+
+    #[test]
     fn the_exchange_is_laid_out_by_its_own_dialog_or_says_why_not() {
         let mut view = trading(Err("no DLOG 1001".to_owned()));
         click_item(&mut view, 7);
@@ -4042,6 +4168,18 @@ pub(in crate::spaceport) mod tests {
         }
     }
 
+    /// Hands `view` the listing of the outfitter or the shipyard just
+    /// opened, as whoever flies the ship does: one outfit owned, or ship
+    /// 129 for 17,500.
+    pub(in crate::spaceport) fn serve_openings(view: &mut SpaceportView) {
+        if view.take_outfitter_opened() {
+            view.set_opened_outfitter(tanks(1));
+        }
+        if view.take_shipyard_opened() {
+            view.set_opened_shipyard(yard(17_500));
+        }
+    }
+
     /// A shipyard selling ship 129 for `price`, the player flying 128.
     fn yard(price: i64) -> Shipyard {
         Shipyard {
@@ -4558,9 +4696,7 @@ pub(in crate::spaceport) mod tests {
                     _ => 9,
                 };
                 click_item(&mut view, item);
-                if view.take_outfitter_opened() {
-                    view.set_opened_outfitter(tanks(1));
-                }
+                serve_openings(&mut view);
                 view.tick(FIRST_OFFER_DELAY);
                 assert_eq!(view.take_offer_request(), Some(venue));
             }
@@ -4926,6 +5062,79 @@ pub(in crate::spaceport) mod tests {
         bare.show_mission_texts(vec![text("Lost."), text("Gone.")]);
         assert_eq!(bare.take_texts_closed(), 2, "dropped, so closed at once");
         assert_eq!(bare.take_texts_closed(), 0, "once");
+    }
+
+    /// [`shopping`] with its shipyard open and listed, ship 129 named at
+    /// its prompt and the order taken.
+    fn ordered() -> SpaceportView {
+        let mut view = shopping();
+        click_item(&mut view, 9);
+        serve_openings(&mut view);
+        view.input(&key(Key::Right));
+        view.input(&key(Key::Char('b')));
+        assert_eq!(view.take_ship_request(), Some(ShipId(129)));
+        view.open_ship_naming(&naming());
+        view.input(&key(Key::Enter));
+        assert!(view.take_ship().is_some(), "ordered");
+        assert_eq!(view.take_port_dialog_opened(), Some(PortDialog::Shipyard));
+        view
+    }
+
+    #[test]
+    fn a_purchase_with_no_texts_closes_the_shipyard_once_they_are_handed_over() {
+        let mut view = ordered();
+        assert!(view.open_shipyard().is_some(), "the purchase is made first");
+        assert_eq!(view.take_port_dialog_closed(), None);
+        assert_eq!(view.take_offer_request(), None, "no offer meanwhile");
+        view.show_mission_texts(Vec::<MissionText>::new());
+        assert!(view.open_shipyard().is_none(), "closed");
+        assert_eq!(view.take_port_dialog_closed(), Some(PortDialog::Shipyard));
+        assert_eq!(view.take_port_dialog_closed(), None, "once");
+        assert!(!view.left(), "back at the spaceport");
+    }
+
+    #[test]
+    fn a_purchase_closes_the_shipyard_once_its_texts_have_closed() {
+        let mut view = ordered();
+        let text = MissionText {
+            kind: MissionTextKind::Brief,
+            mission: MissionId(130),
+            text: "Bought.".to_owned(),
+            graphic: None,
+            movie: None,
+            map: None,
+        };
+        view.show_mission_texts(vec![text]);
+        assert!(view.open_shipyard().is_some(), "under its text");
+        assert_eq!(view.take_port_dialog_closed(), None);
+        done(&mut view);
+        view.show_mission_texts(Vec::<MissionText>::new());
+        assert!(view.open_shipyard().is_none(), "closed");
+        assert_eq!(view.take_port_dialog_closed(), Some(PortDialog::Shipyard));
+    }
+
+    #[test]
+    fn a_decline_keeps_the_shipyard_open_once_the_texts_are_handed_over() {
+        let mut view = shopping();
+        click_item(&mut view, 9);
+        serve_openings(&mut view);
+        view.input(&key(Key::Right));
+        view.input(&key(Key::Char('b')));
+        assert_eq!(view.take_ship_request(), Some(ShipId(129)));
+        view.open_ship_naming(&naming());
+        let cancel = view
+            .open_shipyard()
+            .and_then(ShipyardScreen::naming)
+            .and_then(|prompt| prompt.dialog().item_bounds(6))
+            .expect("Cancel")
+            .center();
+        click(&mut view, cancel);
+        assert_eq!(view.take_declined_ship(), Some(ShipId(129)));
+        assert_eq!(view.take_ship(), None);
+        view.show_mission_texts(Vec::<MissionText>::new());
+        assert!(view.open_shipyard().is_some(), "still open");
+        let _ = view.take_port_dialog_opened();
+        assert_eq!(view.take_port_dialog_closed(), None);
     }
 
     #[test]
@@ -5317,6 +5526,18 @@ pub(in crate::spaceport) mod tests {
             ships,
         );
         click_item(&mut view, 9);
+        assert!(view.take_shipyard_opened());
+        assert!(!view.take_shipyard_opened(), "once");
+        assert_eq!(shown_text(&view), None, "not until it is shown");
+        assert_eq!(
+            view.take_offer_request(),
+            None,
+            "no offer until its listing is shown"
+        );
+        view.set_opened_shipyard(Shipyard {
+            rows: Vec::new(),
+            ..yard(17_500)
+        });
         assert!(view.open_shipyard().is_none());
         assert_eq!(
             shown_text(&view),
@@ -5324,6 +5545,63 @@ pub(in crate::spaceport) mod tests {
         );
         nothing_opened(&mut view, "the shipyard");
         assert!(!view.take_empty_outfitter());
+    }
+
+    #[test]
+    fn the_shipyards_own_listing_decides_whether_it_opens() {
+        // The list cached by the spaceport is empty, but the opening's own
+        // listing is not: it opens.
+        let ships: Rc<dyn ShipyardCatalog> = Rc::new(shipyard_port());
+        let mut view = shopping().with_shipyard(
+            Ok(shipyard_template()),
+            no_info(),
+            Err("no DLOG 3001".to_owned()),
+            Shipyard {
+                rows: Vec::new(),
+                ..yard(17_500)
+            },
+            ships,
+        );
+        click_item(&mut view, 9);
+        assert!(view.take_shipyard_opened());
+        assert_eq!(view.take_offer_request(), None, "not yet listed");
+        view.set_opened_shipyard(yard(5_000));
+        assert_eq!(
+            view.take_offer_request(),
+            Some(SHIPYARD),
+            "a listing shown asks"
+        );
+        assert_eq!(
+            view.open_shipyard()
+                .map(|open| open.shipyard().rows[0].price),
+            Some(5_000),
+            "the opening's listing shown"
+        );
+        assert_eq!(view.take_port_dialog_opened(), Some(PortDialog::Shipyard));
+        assert_eq!(shown_text(&view), None);
+    }
+
+    #[test]
+    fn opening_the_shipyard_is_reported_once_each_time() {
+        let mut view = venues();
+        assert!(!view.take_shipyard_opened(), "nothing open");
+        click_item(&mut view, 9);
+        assert!(view.take_shipyard_opened());
+        assert!(!view.take_shipyard_opened(), "once");
+        view.input(&key(Key::Escape));
+        assert!(!view.take_shipyard_opened(), "closing is not opening");
+        click_item(&mut view, 11);
+        assert!(!view.take_shipyard_opened(), "the bar is not it");
+        view.input(&key(Key::Escape));
+        click_item(&mut view, 8);
+        assert!(!view.take_shipyard_opened(), "the outfitter is not it");
+        view.input(&key(Key::Escape));
+        click_item(&mut view, 9);
+        assert!(view.take_shipyard_opened(), "opened again");
+        // The placeholder shipyard is not it.
+        let mut view = view_of(&outfitting_port());
+        click_item(&mut view, 9);
+        assert!(!view.take_shipyard_opened());
     }
 
     #[test]
@@ -5354,9 +5632,7 @@ pub(in crate::spaceport) mod tests {
             let mut view = venues();
             assert_eq!(view.take_offer_request(), Some(SPACEPORT));
             click_item(&mut view, item);
-            if view.take_outfitter_opened() {
-                view.set_opened_outfitter(tanks(1));
-            }
+            serve_openings(&mut view);
             assert_eq!(view.take_offer_request(), Some(venue), "{venue}");
             assert_eq!(view.take_offer_request(), None, "{venue}: once");
             view.open_offer(offered());
@@ -5684,9 +5960,7 @@ pub(in crate::spaceport) mod tests {
                     _ => 9,
                 };
                 click_item(&mut view, item);
-                if view.take_outfitter_opened() {
-                    view.set_opened_outfitter(tanks(1));
-                }
+                serve_openings(&mut view);
                 view.tick(FIRST_OFFER_DELAY);
                 assert_eq!(view.take_offer_request(), Some(venue));
             }
@@ -5920,9 +6194,7 @@ pub(in crate::spaceport) mod tests {
                 _ => 9,
             };
             click_item(&mut view, item);
-            if view.take_outfitter_opened() {
-                view.set_opened_outfitter(tanks(1));
-            }
+            serve_openings(&mut view);
             view.tick(FIRST_OFFER_DELAY);
             assert_eq!(view.take_offer_request(), Some(venue));
             view.open_offer(offered());
@@ -6108,9 +6380,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = venues().with_movies(movies_of(player));
         assert_eq!(view.take_offer_request(), Some(SPACEPORT));
         click_item(&mut view, venue_item(venue));
-        if view.take_outfitter_opened() {
-            view.set_opened_outfitter(tanks(1));
-        }
+        serve_openings(&mut view);
         view.tick(FIRST_OFFER_DELAY);
         assert_eq!(view.take_offer_request(), Some(venue));
         view.open_offer(offered());
@@ -6226,9 +6496,7 @@ pub(in crate::spaceport) mod tests {
                 _ => 9,
             };
             click_item(&mut view, item);
-            if view.take_outfitter_opened() {
-                view.set_opened_outfitter(tanks(1));
-            }
+            serve_openings(&mut view);
             view.tick(FIRST_OFFER_DELAY);
             assert_eq!(view.take_offer_request(), Some(venue));
             view.open_offer(filmed_offer(0));
@@ -6388,6 +6656,85 @@ pub(in crate::spaceport) mod tests {
         assert!(broken.player_info().is_none(), "no spaceport, no screen");
     }
 
+    /// The ring given after the missions, as the app gives it, reaches the
+    /// spaceport's mission texts, its mission info screen and its landing
+    /// offer.
+    #[test]
+    fn the_missions_given_before_the_focus_ring_take_it() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut view = missioned().with_focus_ring(ring);
+            view.show_text("Nothing here.");
+            assert_eq!(
+                view.mission_text().map(|text| text.dialog().focus_ring()),
+                Some(ring),
+                "the mission text"
+            );
+            view.input(&key(Key::Enter));
+            assert!(view.mission_text().is_none());
+            view.open_mission_info(actives(1));
+            assert_eq!(
+                view.mission_info()
+                    .and_then(MissionInfoScreen::dialog)
+                    .map(Dialog::focus_ring),
+                Some(ring),
+                "the mission info screen"
+            );
+            let mut view = missioned().with_focus_ring(ring);
+            view.open_offer(crate::spaceport::offer::fixture::prompt());
+            assert_eq!(
+                view.offer_dialog()
+                    .and_then(OfferDialog::dialog)
+                    .map(Dialog::focus_ring),
+                Some(ring),
+                "the landing offer"
+            );
+            view.input(&key(Key::Tab));
+            view.input(&key(Key::Space));
+            assert_eq!(
+                view.take_offer_choice().is_some(),
+                ring == FocusRing::Tab,
+                "Tab then Space on the landing offer, {ring:?}"
+            );
+        }
+    }
+
+    /// The spaceport passes its focus ring to the mission computer and
+    /// the player info screen it opens, down to its Jettison question
+    /// (whose keys `ui::player_info`'s own tests drive).
+    #[test]
+    fn the_computer_and_the_player_info_opened_take_the_spaceports_focus_ring() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut view = informed(missioned()).with_focus_ring(ring);
+            click_item(&mut view, 10);
+            view.open_mission_computer(Ok(offers()));
+            assert_eq!(
+                view.mission_computer()
+                    .and_then(MissionComputerScreen::dialog)
+                    .map(Dialog::focus_ring),
+                Some(ring),
+                "the computer"
+            );
+            view.open_player_info(pilot_info());
+            let at = |view: &SpaceportView, button| {
+                view.player_info()
+                    .and_then(|screen| screen.button_bounds(button))
+                    .expect("laid out")
+                    .center()
+            };
+            let cargo = at(&view, PlayerInfoButton::Tab(Tab::Cargo));
+            click(&mut view, cargo);
+            let jettison = at(&view, PlayerInfoButton::Jettison);
+            click(&mut view, jettison);
+            assert_eq!(
+                view.player_info()
+                    .and_then(InfoScreen::confirm)
+                    .map(Dialog::focus_ring),
+                Some(ring),
+                "the Jettison question"
+            );
+        }
+    }
+
     #[test]
     fn its_jettison_is_taken_through_the_spaceport_once() {
         let mut view = informed(missioned());
@@ -6471,9 +6818,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = informed(venues()).with_offer_clock(clock);
         assert_eq!(view.take_offer_request(), Some(SPACEPORT));
         click_item(&mut view, venue_item(venue));
-        if view.take_outfitter_opened() {
-            view.set_opened_outfitter(tanks(1));
-        }
+        serve_openings(&mut view);
         view.tick(FIRST_OFFER_DELAY);
         assert_eq!(view.take_offer_request(), Some(venue));
         view
@@ -6609,9 +6954,7 @@ pub(in crate::spaceport) mod tests {
             assert_eq!(view.take_offer_request(), Some(SPACEPORT));
             view = view.with_offer_clock(RuleSource::Bible);
             click_item(&mut view, venue_item(venue));
-            if view.take_outfitter_opened() {
-                view.set_opened_outfitter(tanks(1));
-            }
+            serve_openings(&mut view);
             view.tick(FIRST_OFFER_DELAY);
             assert_eq!(view.take_offer_request(), Some(venue));
             view.rearm_offers(ms(500));

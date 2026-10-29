@@ -42,7 +42,7 @@ impl Session {
         *target_brackets = self.target_brackets();
         *red_alert = self.red_alert.icon();
         *escort_rows = self.space.escort_rows(pilot, statics);
-        *escorts_flying = self.space.escorts_flying(pilot);
+        *escorts_flying = self.space.escorts_flying();
     }
 
     /// Fills `into` with the ship target as the target panel shows it, or

@@ -1,6 +1,7 @@
 //! The dialogs [`AppScreen`] opens over the screens and over flight:
 //! About, the texts, Preferences, the mission dialogs, player info, offers,
-//! comm, haggle, plunder and assignment.
+//! comm, haggle, plunder and assignment (and the rename after it, in the
+//! `capture_naming` module).
 
 use std::rc::Rc;
 
@@ -19,15 +20,22 @@ use nova_view::ui::player_info::{
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
 use nova_view::ui::{
-    AssignmentDialog, CommDialog, CommPress, DescriptionSource, DialogResources, HaggleDialog,
-    PlunderDialog, PlunderShown, PrefsDialog,
+    AssignmentDialog, CommDialog, CommPress, DescriptionSource, DialogResources, FocusRing,
+    HaggleDialog, PlunderDialog, PlunderShown, PrefsDialog,
 };
 use nova_view::{FullscreenKind, Input, Key, Screen, ScreenAction, VideoMode};
 
 use super::port_dialogs::{abort_and_refresh, desc_dialog, start_up_words};
 use super::{ABOUT_TEXT, AppScreen, ENTERED, MENU_X_TEXT, NO_INTERFACE, Side};
+use crate::app::keyboard_access::prefs_focus_ring;
 
 impl AppScreen {
+    /// Whether the in-game dialogs' buttons take the keyboard focus, as
+    /// the rulebook reads `dialog_focus_ring`: by default they do.
+    pub(super) fn dialog_focus_ring(&self) -> FocusRing {
+        FocusRing::from_rulebook(&self.rules)
+    }
+
     /// Hides the side shown, first cancelling its pointer gesture and
     /// letting go of its keys (their releases will go elsewhere), and shows
     /// `side`.
@@ -73,7 +81,8 @@ impl AppScreen {
         let Some(dialogs) = &self.dialogs else {
             return;
         };
-        let dialog = text.and_then(|text| desc_dialog(dialogs, &self.data, &text));
+        let ring = self.dialog_focus_ring();
+        let dialog = text.and_then(|text| desc_dialog(dialogs, &self.data, &text, ring));
         match dialog {
             Ok(dialog) => {
                 let below = self.shown_mut();
@@ -108,7 +117,8 @@ impl AppScreen {
 
     /// Opens the Preferences dialog over the side shown, on the player's
     /// preferences, listing the Scaling offered (native and Super-xBR
-    /// before an offer), first cancelling the side's pointer gesture and
+    /// before an offer), its focus ring as the keyboard access port
+    /// answers now ([`prefs_focus_ring`]), first cancelling the side's pointer gesture and
     /// letting go of its keys. With no dialogs, nothing opens; when the
     /// dialog cannot be built, nothing opens and the reason goes to stderr.
     pub(super) fn open_preferences(&mut self) {
@@ -126,7 +136,12 @@ impl AppScreen {
                     Rc::clone(&dialogs.metrics),
                 )
             })
-            .map(|dialog| dialog.with_scaling(&self.scaling))
+            .map(|dialog| {
+                let access = self.keyboard_access.full_keyboard_access();
+                dialog
+                    .with_scaling(&self.scaling)
+                    .with_focus_ring(prefs_focus_ring(access))
+            })
             .map(|dialog| {
                 if self.weapon_effects_wait() {
                     dialog.with_launch_weapon_effects(self.launch_weapon_effects)
@@ -246,10 +261,13 @@ impl AppScreen {
         if let Some(dialog) = &mut self.offer {
             return Some(dialog);
         }
-        if let Some(dialog) = &mut self.plunder {
+        if let Some(dialog) = &mut self.capture_naming {
             return Some(dialog);
         }
         if let Some(dialog) = &mut self.assignment {
+            return Some(dialog);
+        }
+        if let Some(dialog) = &mut self.plunder {
             return Some(dialog);
         }
         if let Some(dialog) = &mut self.new_pilot {
@@ -377,7 +395,8 @@ impl AppScreen {
                     Rc::clone(&dialogs.metrics),
                     self.data.button_style(),
                 )
-                .with_movies(self.movies.clone()),
+                .with_movies(self.movies.clone())
+                .with_focus_ring(self.dialog_focus_ring()),
             );
         }
         self.missions.as_mut()
@@ -397,6 +416,18 @@ impl AppScreen {
         if let (Some(missions), Some(flight)) = (&mut self.missions, &mut self.flight) {
             for _ in 0..missions.take_texts_closed() {
                 flight.close_mission_text();
+            }
+            // The mission info's close over a person's offer loads the
+            // offer's `dësc` again (`_OfferOneMission` @0xa335c), as the
+            // port's does; the port-only `PortDialogUpdate`
+            // (@0xa3377-0xa33d1) has nothing to do over flight. Taken
+            // whatever opened it, so a close of flight's own I never
+            // reaches a later offer.
+            if missions.take_info_closed()
+                && let Some(offer) = self.offer.as_ref().filter(|offer| !offer.answered())
+            {
+                flight.reload_offer_desc(offer.prompt().mission);
+                self.release_keys();
             }
         }
         if let Some(missions) = &mut self.missions
@@ -464,13 +495,16 @@ impl AppScreen {
         let confirm = dialogs.resources.dialog_template(YES_NO_DIALOG);
         self.cancel_pointer();
         self.release_keys();
-        self.player_info = Some(PlayerInfoScreen::new(
-            layout,
-            confirm,
-            info,
-            self.data.button_style(),
-            BackgroundSizes::read(&self.data),
-        ));
+        self.player_info = Some(
+            PlayerInfoScreen::new(
+                layout,
+                confirm,
+                info,
+                self.data.button_style(),
+                BackgroundSizes::read(&self.data),
+            )
+            .with_focus_ring(self.dialog_focus_ring()),
+        );
     }
 
     /// The player info screen's input over flight: a confirmed Jettison
@@ -526,7 +560,9 @@ impl AppScreen {
             _ => Err(NO_INTERFACE.to_owned()),
         };
         self.offer = Some(
-            OfferDialog::new(layout, prompt, self.data.button_style()).with_movies(&self.movies),
+            OfferDialog::new(layout, prompt, self.data.button_style())
+                .with_focus_ring(self.dialog_focus_ring())
+                .with_movies(&self.movies),
         );
     }
 
@@ -542,7 +578,9 @@ impl AppScreen {
 
     /// Acts on what the offer dialog over flight asked for, after an input
     /// or a tick (the keys pressed under its movie reach it as the movie
-    /// ends, on a tick): the player info screen opens over it; or the
+    /// ends, on a tick): the player info screen opens over it; the
+    /// mission info screen opens over it, with no map, when a mission is
+    /// shown there ([`AppScreen::open_offer_mission_info`]); or the
     /// choice goes through flight, and the dialog closes, keeping its
     /// sounds, and flight resumes. The texts the answer queued show over
     /// flight at once, the offer's after-movie among them where the
@@ -561,6 +599,10 @@ impl AppScreen {
         };
         if dialog.take_player_info_request() {
             self.open_flight_player_info();
+            return;
+        }
+        if dialog.take_info_request() {
+            self.open_offer_mission_info();
             return;
         }
         if dialog.take_map_request() {
@@ -592,6 +634,31 @@ impl AppScreen {
         if self.missions.is_none() {
             self.offer = None;
         }
+    }
+
+    /// Opens the mission info screen over the person's offer open over
+    /// flight, as `_OfferOneMission`'s item 7 does whoever offers
+    /// (@0xa32b6, no test of `_offeringFromShip` or `_playerIsLanded`).
+    /// With no active mission that is not hidden (the count
+    /// @0xa32c1-0xa32ee), nothing happens: no flush, no sound, and the
+    /// offer takes the next event. Otherwise the held keys and the
+    /// pointer are let go (the four `FlushEvents` @0xa32f4-0xa333f) and
+    /// the screen opens (@0xa3344) with no map, as `_missionDialog`
+    /// holds the offer (`_DoMissionInfoDialog` @0x9e3c6-0x9e3cd). Its
+    /// close reloads the offer's `dësc` ([`AppScreen::drop_closed_missions`]).
+    fn open_offer_mission_info(&mut self) {
+        let info = self.flight.as_mut().expect(ENTERED).mission_info();
+        if info.rows.is_empty() {
+            return;
+        }
+        if let Some(dialog) = &mut self.offer {
+            dialog.cancel_pointer();
+        }
+        self.release_keys();
+        if let Some(missions) = self.flight_missions() {
+            missions.open_info_with_map(info, false);
+        }
+        self.load_flight_info_text();
     }
 
     /// Opens flight's course map for `opener`, a mission dialog over
@@ -636,7 +703,7 @@ impl AppScreen {
                 CommDialog::fallback(view, style, metrics)
             }
         };
-        self.comm = Some(dialog);
+        self.comm = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
     }
 
     /// The comm dialog's input: each option pressed goes through flight,
@@ -696,7 +763,7 @@ impl AppScreen {
                 HaggleDialog::fallback(price, pay_me, style, metrics)
             }
         };
-        self.haggle = Some(dialog);
+        self.haggle = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
     }
 
     /// The haggle dialog's input: the choice goes through flight; a price
@@ -765,14 +832,15 @@ impl AppScreen {
                 PlunderDialog::fallback(shown, style, metrics)
             }
         };
-        self.plunder = Some(dialog);
+        self.plunder = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
     }
 
     /// The plunder dialog's input: each press goes through flight, a
     /// miss of every enabled button included, with the time the dialog
     /// has been open, and the dialog shows what is still on board, or
     /// closes once the boarding is over; a capture awaiting its
-    /// assignment opens the assignment dialog. Every pointer event goes
+    /// assignment opens the assignment dialog over it, the plunder dialog
+    /// staying drawn under it (see the `capture_naming` module). Every pointer event goes
     /// to the dialog, so a click outside its frame is a miss too, as
     /// `_PlunderFilter` takes every mouse-down (@0x92f20).
     pub(super) fn plunder_input(&mut self, input: &Input) -> ScreenAction {
@@ -784,20 +852,17 @@ impl AppScreen {
         let held = dialog.held();
         let flight = self.flight.as_mut().expect(ENTERED);
         let taken = flight.plunder_held(take, held);
+        if taken == Taken::Captured {
+            self.open_assignment();
+            return ScreenAction::None;
+        }
         match flight.plunder_shown() {
             Some(shown) => {
                 if let Some(dialog) = &mut self.plunder {
                     dialog.set_plunder(&shown);
                 }
             }
-            None => {
-                if let Some(mut dialog) = self.plunder.take() {
-                    self.sounds.extend(dialog.take_sounds());
-                }
-            }
-        }
-        if taken == Taken::Captured {
-            self.open_assignment();
+            None => self.close_plunder(),
         }
         ScreenAction::None
     }
@@ -826,18 +891,25 @@ impl AppScreen {
                 AssignmentDialog::fallback(style, metrics)
             }
         };
-        self.assignment = Some(dialog);
+        self.assignment = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
     }
 
     /// The assignment dialog's input: the choice goes through flight, and
-    /// the dialog closes, keeping its sounds.
+    /// the dialog closes, keeping its sounds. Use As My Ship opens the
+    /// rename over the plunder dialog, the key that chose it typing
+    /// nothing into it; otherwise the plunder dialog closes too.
     pub(super) fn assignment_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.assignment.as_mut().expect("open");
         dialog.input(input);
         if let Some(choice) = dialog.take_choice() {
             self.sounds.extend(dialog.take_sounds());
             self.assignment = None;
-            self.flight.as_mut().expect(ENTERED).assign(choice);
+            let assigned = self.flight.as_mut().expect(ENTERED).assign(choice);
+            if assigned == Some(nova_sim::Assigned::Naming) {
+                self.open_capture_naming(matches!(input, Input::Key { .. }));
+            } else {
+                self.close_plunder();
+            }
         }
         ScreenAction::None
     }

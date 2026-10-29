@@ -88,6 +88,24 @@ impl OffscreenGpu {
         })
     }
 
+    /// Its renderer's glyph IDs in generations of `ids`
+    /// ([`WgpuRenderer::set_glyph_generation`]), for tests.
+    #[cfg(test)]
+    pub(super) fn set_glyph_generation(&mut self, ids: usize) {
+        self.renderer.set_glyph_generation(ids);
+    }
+
+    /// How many render pipelines its device holds, from wgpu's counters:
+    /// for tests that pin when pipelines are built.
+    #[cfg(test)]
+    pub(super) fn render_pipelines(&self) -> isize {
+        self.device
+            .get_internal_counters()
+            .hal
+            .render_pipelines
+            .read()
+    }
+
     /// How many font faces the text renderer loaded.
     #[must_use]
     pub fn font_faces(&self) -> usize {

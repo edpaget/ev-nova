@@ -402,7 +402,7 @@ fn one_sub() -> (WeaponRecord, Arsenal) {
 }
 
 /// A shell of `record` whose last move, its third, spent it, at (0, 300).
-fn spent_shell(record: WeaponRecord) -> Shot {
+pub(super) fn spent_shell(record: WeaponRecord) -> Shot {
     let at = Vec2::new(0.0, 300.0);
     Shot {
         position: at,
@@ -554,7 +554,7 @@ fn a_sub_munition_after_a_shot_of_no_roll_or_in_a_slot_never_used_carries_none()
 
 /// A shell whose `count` sub-munitions of `sub` (weapon 148) seek the
 /// nearest ship (`Flags2` 0x0010) unspread, and the arsenal with them.
-fn seeking_shell(count: i16, sub: WeaponRecord) -> (WeaponRecord, Arsenal) {
+pub(super) fn seeking_shell(count: i16, sub: WeaponRecord) -> (WeaponRecord, Arsenal) {
     let (shell, _) = one_sub();
     let shell = WeaponRecord {
         sub_count: count,
@@ -566,7 +566,7 @@ fn seeking_shell(count: i16, sub: WeaponRecord) -> (WeaponRecord, Arsenal) {
 }
 
 /// An unguided sub-munition, 148.
-fn unguided_sub() -> WeaponRecord {
+pub(super) fn unguided_sub() -> WeaponRecord {
     WeaponRecord {
         guidance: -1,
         count: 50,
@@ -654,12 +654,12 @@ fn a_disabled_near_ship_draws_every_sub_munition_whatever_its_roll() {
 }
 
 #[test]
-fn an_interfered_homing_sub_munition_seeks_nothing_and_takes_the_given_target() {
+fn an_interfered_homing_sub_munition_seeks_as_a_clear_one() {
     // A homing `Seeker` 0x0008 sub-munition rolls interference as
-    // `_SpawnShot` seats it (@0x3eab2-0x3eb43): jammed, it can hit no
-    // ship (@0x447f7), so it takes the given target, C, the shell's, and
-    // heads at it. With no interference it takes the nearest, B, here of
-    // a class its slot's leftover roll of 90 is under. Slot 0, behind the
+    // `_SpawnShot` seats it (@0x3eab2-0x3eb43). Jammed or not, it seeks
+    // as a clear one, as `_ShotCanHitShip` rejects only jam 998 (@0x6a75 ->
+    // @0x447f7): of `Flags2` 0x0008, it takes the nearest, B, here of a
+    // class its slot's leftover roll of 90 is under. Slot 0, behind the
     // visit, sits out the tick.
     let homing = WeaponRecord {
         guidance: 1,
@@ -667,7 +667,7 @@ fn an_interfered_homing_sub_munition_seeks_nothing_and_takes_the_given_target() 
         flags2: PROXIMITY_BY_OTHERS,
         ..unguided_sub()
     };
-    for (interference, seen) in [(100, (0, Some(C), 90.0)), (0, (0, Some(B), 180.0))] {
+    for (interference, seen) in [(100, (0, Some(B), 180.0)), (0, (0, Some(B), 180.0))] {
         let mut ships = near_and_far(Condition::Intact);
         ships[0].hull.miss_class = 100;
         let shell = seeking_shell(1, homing);
@@ -722,7 +722,7 @@ fn handle_among(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
 
 /// `_HandleShot`'s pass among `ships` in `field`, sub-munitions read from
 /// `arsenal`.
-fn handle_in(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal, field: Field) {
+pub(super) fn handle_in(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal, field: Field) {
     let govts = Governments::default();
     let arena = Arena {
         pass: GamePass::Advance { double_time: false },

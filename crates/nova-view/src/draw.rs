@@ -336,6 +336,10 @@ impl DrawCommand {
 /// Everything else (the HUD, every text, the course map, the dialogs and
 /// the fades) is overlay, and so is all of every other screen's drawing.
 ///
+/// The world may be clipped ([`DrawList::world_in`]): flight clips it to
+/// the play area, the window less the status bar's column, as the
+/// original's sprite world ends there. The overlay is never clipped by it.
+///
 /// A renderer may draw the world at the logical resolution and enlarge it
 /// (a frame upscaler), drawing the overlay over it at the window's own.
 /// Drawn at the window's own resolution, the layers change nothing: the
@@ -356,6 +360,10 @@ pub struct DrawList {
     commands: Vec<DrawCommand>,
     /// Each command's layer, index for index.
     layers: Vec<DrawLayer>,
+    /// Where the world may draw, if it is clipped ([`DrawList::world_in`]).
+    /// One clip serves the whole list: only flight draws a world, and it
+    /// draws one, clipped to its play area.
+    world_clip: Option<Bounds>,
 }
 
 impl DrawList {
@@ -386,6 +394,21 @@ impl DrawList {
             }
         }
         self
+    }
+
+    /// Has `draw` append the world's commands as [`DrawList::world`] does,
+    /// and clips the world to `clip`: no world command draws outside it.
+    /// Flight clips its world to the play area so. Text drawn in `draw`
+    /// stays in the overlay and isn't clipped by it.
+    pub fn world_in(&mut self, clip: Bounds, draw: impl FnOnce(&mut Self)) -> &mut Self {
+        self.world_clip = Some(clip);
+        self.world(draw)
+    }
+
+    /// Where the world may draw, if it is clipped ([`DrawList::world_in`]).
+    #[must_use]
+    pub fn world_clip(&self) -> Option<Bounds> {
+        self.world_clip
     }
 
     /// The commands, in draw order.
@@ -531,11 +554,15 @@ impl DrawList {
     /// point, each rectangle and each clip, and a tiled picture's tiling
     /// origin with its area, so what `other` draws looks the same, `by`
     /// further on. A frame drawn for Nova's 1024x768 is drawn centred in a
-    /// widened view so. Each keeps its layer.
+    /// widened view so. Each keeps its layer. `other`'s world clip, moved
+    /// by `by`, replaces this list's if `other` has one.
     pub fn extend_translated(&mut self, other: &Self, by: Point) -> &mut Self {
         self.commands
             .extend(other.iter().map(|command| command.translated(by)));
         self.layers.extend(&other.layers);
+        if let Some(clip) = other.world_clip {
+            self.world_clip = Some(clip.offset(by));
+        }
         self
     }
 
@@ -1353,6 +1380,66 @@ mod tests {
             list.extend_translated(&other, at(0.0, 0.0));
         });
         assert_eq!(layers(&world), [DrawLayer::World; 2]);
+    }
+
+    /// A clip for the world tests.
+    fn play_area() -> Bounds {
+        Bounds {
+            min: at(0.0, 0.0),
+            max: at(830.0, 768.0),
+        }
+    }
+
+    #[test]
+    fn a_world_drawn_in_a_clip_is_world_but_for_its_text_and_records_the_clip() {
+        let mut list = DrawList::new();
+        list.dot(at(0.0, 0.0), 1.0, Color::WHITE);
+        list.world_in(play_area(), |list| {
+            list.dot(at(1.0, 0.0), 1.0, Color::WHITE).text(
+                "message",
+                at(0.0, 0.0),
+                10.0,
+                None,
+                Color::WHITE,
+            );
+        });
+        assert_eq!(
+            layers(&list),
+            [DrawLayer::Overlay, DrawLayer::World, DrawLayer::Overlay]
+        );
+        assert_eq!(list.world_clip(), Some(play_area()));
+    }
+
+    #[test]
+    fn a_fresh_list_and_a_world_drawn_unclipped_have_no_clip() {
+        assert_eq!(DrawList::new().world_clip(), None);
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.dot(at(1.0, 0.0), 1.0, Color::WHITE);
+        });
+        assert_eq!(list.world_clip(), None);
+    }
+
+    #[test]
+    fn a_list_extended_translated_takes_the_others_clip_moved() {
+        let mut other = DrawList::new();
+        other.world_in(play_area(), |list| {
+            list.dot(at(1.0, 0.0), 1.0, Color::WHITE);
+        });
+        let mut list = DrawList::new();
+        list.world_in(Bounds::at(at(0.0, 0.0), 5.0, 5.0), |_| {});
+        list.extend_translated(&other, at(170.0, -5.0));
+        assert_eq!(list.world_clip(), Some(play_area().offset(at(170.0, -5.0))));
+    }
+
+    #[test]
+    fn a_list_extended_by_an_unclipped_one_keeps_its_own_clip() {
+        let mut other = DrawList::new();
+        other.dot(at(1.0, 0.0), 1.0, Color::WHITE);
+        let mut list = DrawList::new();
+        list.world_in(play_area(), |_| {});
+        list.extend_translated(&other, at(170.0, -5.0));
+        assert_eq!(list.world_clip(), Some(play_area()));
     }
 
     #[test]

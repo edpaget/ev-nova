@@ -8,7 +8,7 @@ use nova_view::{Input, Key, MenuCommand, MouseButton, Point, Screen, ScreenActio
 
 use super::port_dialogs::{
     abort_and_refresh, close_mission_texts, close_port_dialogs, load_info_text, open_outfitter,
-    open_port_dialogs, open_port_map, refresh_spaceport, refresh_status_bar,
+    open_port_dialogs, open_port_map, open_shipyard, refresh_spaceport, refresh_status_bar,
 };
 use nova_view::menu::MenuChoice;
 
@@ -19,11 +19,12 @@ impl AppScreen {
     /// flight and shows its outfitter afresh; the bar opening has the
     /// flight draw the visit's news, which the bar's News then shows; an order on its exchange trades,
     /// and one in its outfitter buys or sells, and the exchange and the
-    /// outfitter as they then are go back to it. A ship asked for in its
-    /// shipyard opens the prompt for its name, when it can be bought; the
-    /// ship named there is bought, and one declined there draws its roll
-    /// again when the shipyard's list is next built, changing nothing
-    /// else. Once it is left, the ship takes off
+    /// outfitter as they then are go back to it. The shipyard opening has
+    /// the flight build its list and keep it while it stays open. A ship
+    /// asked for in its shipyard opens the prompt for its name, when it can
+    /// be bought; the ship named there is bought, closing the shipyard once
+    /// the purchase's texts have closed, and one declined there draws its
+    /// roll again when the shipyard next opens, changing nothing else. Once it is left, the ship takes off
     /// and flight shows. Otherwise the input ends by redrawing the status
     /// bar when a closing the original ends in `_RefreshSAT` came
     /// (`refresh_status_bar`). Mission BBS and Hire Escort are answered
@@ -50,6 +51,9 @@ impl AppScreen {
         // nothing, says so and never opens, the port's `_DrawStatus` after
         // it still drawing a marked nav.
         open_outfitter(spaceport, self.flight.as_mut().expect(ENTERED));
+        // The shipyard likewise builds its list as it opens, and keeps it
+        // for the visit; listing nothing, it says so and never opens.
+        open_shipyard(spaceport, self.flight.as_mut().expect(ENTERED));
         let trade = spaceport.take_trade();
         let outfit = spaceport.take_outfit();
         let ship = spaceport.take_ship();
@@ -79,8 +83,9 @@ impl AppScreen {
         {
             spaceport.open_ship_naming(&naming);
         }
-        // The list is kept for the visit, as the original keeps it; the
-        // roll is drawn again when it is next built.
+        // The list built as the shipyard opened is kept while it stays
+        // open, as the original keeps it; the roll is drawn again when the
+        // shipyard next opens.
         if let Some(ship) = spaceport.take_declined_ship() {
             self.flight.as_mut().expect(ENTERED).decline_ship(ship);
         }
@@ -113,6 +118,8 @@ impl AppScreen {
                 }
                 spaceport.outfit_ordered(run.after);
             }
+            // The shipyard closes after the purchase, once the texts its
+            // hooks show have closed (`SpaceportView::take_ship`).
             if let Some(order) = ship {
                 let _ = flight.buy_ship(order.ship, &order.name);
             }
@@ -397,8 +404,9 @@ impl AppScreen {
             (self.flight_dialog_map_open(), Overlay::DialogMap),
             (self.missions.is_some(), Overlay::Missions),
             (self.offer.is_some(), Overlay::Offer),
-            (self.plunder.is_some(), Overlay::Plunder),
+            (self.capture_naming.is_some(), Overlay::CaptureNaming),
             (self.assignment.is_some(), Overlay::Assignment),
+            (self.plunder.is_some(), Overlay::Plunder),
             (self.new_pilot.is_some(), Overlay::NewPilot),
             (self.christening.is_some(), Overlay::Christening),
             (self.open_pilot.is_some(), Overlay::OpenPilot),
@@ -459,6 +467,7 @@ impl AppScreen {
             Overlay::Offer => self.offer_input(moved),
             Overlay::Plunder => self.plunder_input(moved),
             Overlay::Assignment => self.assignment_input(moved),
+            Overlay::CaptureNaming => self.capture_naming_input(moved),
             Overlay::NewPilot => self.new_pilot_input(moved),
             Overlay::Christening => self.christening_input(moved),
             Overlay::OpenPilot => self.open_pilot_input(moved),
@@ -610,8 +619,9 @@ pub(super) enum Overlay {
     DialogMap,
     Missions,
     Offer,
-    Plunder,
+    CaptureNaming,
     Assignment,
+    Plunder,
     NewPilot,
     Christening,
     OpenPilot,

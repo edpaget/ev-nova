@@ -281,16 +281,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// (`_HandlePlayer` @0x6a000-0x6a764): one in the status panel, the
     /// right [`STATUS_BAR_WIDTH`] (0xc2) of the view at any width, x ≥
     /// width − 194 (@0x6a046-0x6a065), radar included, is
-    /// no click in space and does nothing (@0x6a065, @0x6a36d); nor does
-    /// one in the open escort menu's frame, which the original's menu
-    /// branch takes and ends (@0x6a060-0x6a12b; its row selection is left
-    /// out, task escorts-follow-up). Any other goes to the flight
+    /// no click in space and does nothing (@0x6a065, @0x6a36d). One the
+    /// escort menu took never gets here ([`FlightView::click_escort_menu`],
+    /// @0x6a060-0x6a12b). Any other goes to the flight
     /// ([`FlightCommand::ClickInSpace`], `nova_sim::Session::click_in_space`),
     /// the ships boxed where they are drawn ([`FlightView::drawn_boxes`]): a
     /// ship under it is targeted, during a jump too, and otherwise the
     /// stellar under it selected.
     pub(super) fn click_in_space(&mut self, at: Point) {
-        if at.x >= self.view.0 - STATUS_BAR_WIDTH || self.escort_menu.holds_click(at) {
+        if at.x >= self.view.0 - STATUS_BAR_WIDTH {
             return;
         }
         let world = self.camera().screen_to_world(at);

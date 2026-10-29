@@ -54,11 +54,23 @@ fn ui_heard(view: &mut Faked) -> Vec<UiSound> {
         .collect()
 }
 
-/// `dt` of flight time, the escort menu updated after it, as a frame's
-/// tick runs it.
+/// `dt` of flight time, then the escort menu's frame of one flight step,
+/// as a frame's tick runs it.
 fn menu_tick(view: &mut Faked, dt: Duration) {
     view.step_stellars(dt);
-    view.update_escort_menu();
+    view.update_escort_menu(1);
+}
+
+/// Runs the escort menu's frames, one flight step each, until it shuts:
+/// how many it took, at most 40.
+fn steps_to_shut(view: &mut Faked) -> u32 {
+    for steps in 1..=40 {
+        view.update_escort_menu(1);
+        if !view.escort_menu().is_open() {
+            return steps;
+        }
+    }
+    panic!("still open: {:?}", view.escort_menu().level());
 }
 
 /// The answer to a command that went to `group` as `command`.
@@ -151,8 +163,74 @@ fn the_escort_menus_keys_beep_as_the_original_does() {
     press(&mut view, MENU_KEY);
     ui_heard(&mut view);
     menu_tick(&mut view, MENU_TIMEOUT + TICK);
+    assert_eq!(view.escort_menu().level(), Some(31), "fading");
+    assert_eq!(steps_to_shut(&mut view), 31);
+    assert_eq!(ui_heard(&mut view), [], "it fades out silently");
+}
+
+#[test]
+fn the_menu_fades_over_32_steps_once_timed_out_then_shuts_silently() {
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    ui_heard(&mut view);
+    menu_tick(&mut view, MENU_TIMEOUT);
+    assert_eq!(view.escort_menu().level(), Some(32), "480 ticks: not yet");
+    view.step_stellars(TICK);
+    view.update_escort_menu(0);
+    assert_eq!(view.escort_menu().level(), Some(32), "no step, no drop");
+    view.update_escort_menu(2);
+    assert_eq!(view.escort_menu().level(), Some(30), "a level a step");
+    assert_eq!(steps_to_shut(&mut view), 30);
+    assert_eq!(ui_heard(&mut view), []);
+}
+
+#[test]
+fn with_e_held_through_the_timeout_the_fades_end_beeps_once() {
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    view.held.insert(MENU_KEY);
+    ui_heard(&mut view);
+    menu_tick(&mut view, MENU_TIMEOUT + TICK);
+    assert_eq!(ui_heard(&mut view), [], "fading: no beep yet");
+    steps_to_shut(&mut view);
+    assert_eq!(
+        ui_heard(&mut view),
+        [UiSound::EscortMenuToggled],
+        "the close beeps while E is down (@0x6e01e-0x6e04d)"
+    );
+    view.update_escort_menu(1);
+    assert_eq!(ui_heard(&mut view), [], "once");
+}
+
+#[test]
+fn return_closes_it_at_once_silent_and_beeps_with_e_held() {
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    menu_tick(&mut view, MENU_TIMEOUT + TICK);
+    assert_eq!(view.escort_menu().level(), Some(31), "fading");
+    ui_heard(&mut view);
+    press(&mut view, MENU_CLOSE_KEY);
+    assert!(!view.escort_menu().is_open(), "at once");
+    assert_eq!(ui_heard(&mut view), [], "silent");
+    press(&mut view, MENU_KEY);
+    view.held.insert(MENU_KEY);
+    ui_heard(&mut view);
+    press(&mut view, MENU_CLOSE_KEY);
     assert!(!view.escort_menu().is_open());
-    assert_eq!(ui_heard(&mut view), [], "it fades silently");
+    assert_eq!(ui_heard(&mut view), [UiSound::EscortMenuToggled], "E held");
+    press(&mut view, MENU_CLOSE_KEY);
+    assert_eq!(ui_heard(&mut view), [], "shut already: nothing to close");
+}
+
+#[test]
+fn e_during_the_fade_closes_it_with_its_beep() {
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    menu_tick(&mut view, MENU_TIMEOUT + TICK);
+    ui_heard(&mut view);
+    press(&mut view, MENU_KEY);
+    assert!(!view.escort_menu().is_open());
+    assert_eq!(ui_heard(&mut view), [UiSound::EscortMenuToggled]);
 }
 
 #[test]
@@ -165,9 +243,13 @@ fn a_press_of_an_absent_class_keeps_the_menu_open_another_8_seconds_in_silence()
     assert_eq!(ui_heard(&mut view), [], "silent");
     assert_eq!(view.escort_menu().group(), EscortGroup::All, "kept");
     menu_tick(&mut view, Duration::from_secs(7));
-    assert!(view.escort_menu().is_open(), "12 s after it opened");
+    assert_eq!(view.escort_menu().level(), Some(32), "12 s after it opened");
     menu_tick(&mut view, Duration::from_secs(1) + TICK);
-    assert!(!view.escort_menu().is_open(), "8 s after the press");
+    assert_eq!(
+        view.escort_menu().level(),
+        Some(31),
+        "fading 8 s after the press"
+    );
 }
 
 #[test]
@@ -179,9 +261,26 @@ fn the_menu_closes_8_seconds_after_its_last_command() {
         .queue_answer(commanded(EscortGroup::All, EscortCommand::Hold, false));
     press(&mut view, ESCORT_HOLD_KEY);
     menu_tick(&mut view, Duration::from_secs(6));
-    assert!(view.escort_menu().is_open(), "the command kept it open");
+    assert_eq!(
+        view.escort_menu().level(),
+        Some(32),
+        "the command kept it in full"
+    );
     menu_tick(&mut view, Duration::from_secs(3));
-    assert!(!view.escort_menu().is_open());
+    assert_eq!(view.escort_menu().level(), Some(31), "fading");
+}
+
+#[test]
+fn a_command_during_the_fade_shows_the_menu_in_full_again() {
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    menu_tick(&mut view, MENU_TIMEOUT + TICK);
+    view.update_escort_menu(9);
+    assert_eq!(view.escort_menu().level(), Some(22));
+    view.sim
+        .queue_answer(commanded(EscortGroup::All, EscortCommand::Hold, false));
+    press(&mut view, ESCORT_HOLD_KEY);
+    assert_eq!(view.escort_menu().level(), Some(32));
 }
 
 #[test]
@@ -193,16 +292,21 @@ fn a_command_the_flight_answers_without_a_change_keeps_the_menus_time() {
         view.sim.queue_answer(answer.clone());
         press(&mut view, ESCORT_HOLD_KEY);
         menu_tick(&mut view, Duration::from_secs(2) + TICK);
-        assert!(!view.escort_menu().is_open(), "{answer:?}: not touched");
+        assert_eq!(
+            view.escort_menu().level(),
+            Some(31),
+            "{answer:?}: not touched, so fading"
+        );
     }
 }
 
 #[test]
-fn the_menu_closes_once_no_escort_is_flying_though_its_row_stays() {
+fn with_no_escort_flying_the_menu_fades_at_once_on_all_ships_though_its_row_stays() {
     let mut view = escorted();
     press(&mut view, MENU_KEY);
+    press(&mut view, GROUP_KEYS[3]);
     menu_tick(&mut view, TICK);
-    assert!(view.escort_menu().is_open(), "an escort flying");
+    assert_eq!(view.escort_menu().level(), Some(32), "an escort flying");
     view.sim.frame_mut().hud.escorts_flying = false;
     view.refresh_frame();
     menu_tick(&mut view, TICK);
@@ -210,13 +314,38 @@ fn the_menu_closes_once_no_escort_is_flying_though_its_row_stays() {
         view.frame.hud.escort_rows.iter().any(|row| row.present),
         "its row stays"
     );
-    assert!(!view.escort_menu().is_open(), "no escort is flying");
+    assert_eq!(view.escort_menu().level(), Some(31), "fading at once");
+    assert_eq!(view.escort_menu().group(), EscortGroup::All);
+    assert_eq!(steps_to_shut(&mut view), 31);
     let mut view = escorted();
     press(&mut view, MENU_KEY);
     view.sim.frame_mut().hud = FrameHud::default();
     view.refresh_frame();
     menu_tick(&mut view, TICK);
-    assert!(!view.escort_menu().is_open(), "the fleet is empty");
+    assert_eq!(
+        view.escort_menu().level(),
+        Some(31),
+        "the fleet empty, on its first frame"
+    );
+}
+
+#[test]
+fn pressing_1_while_none_is_flying_shows_the_menu_in_full_again() {
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    view.sim.frame_mut().hud.escorts_flying = false;
+    view.refresh_frame();
+    menu_tick(&mut view, TICK);
+    menu_tick(&mut view, TICK);
+    assert_eq!(view.escort_menu().level(), Some(30));
+    assert!(press(&mut view, GROUP_KEYS[0]));
+    assert_eq!(view.escort_menu().level(), Some(32), "with no escorts");
+    menu_tick(&mut view, TICK);
+    assert_eq!(
+        view.escort_menu().level(),
+        Some(32),
+        "the fade not restarted"
+    );
 }
 
 #[test]
@@ -276,23 +405,138 @@ fn return_clears_the_message_closes_the_menu_and_hides_the_floating_map() {
     assert_eq!(view.message(), None, "with the menu shut too");
 }
 
+/// A left press at `at`, through the screen's input.
+pub(super) fn click(view: &mut Faked, at: Point) {
+    view.input(&Input::PointerButton {
+        button: crate::MouseButton::Left,
+        pressed: true,
+        at,
+    });
+}
+
+/// Whether `view` sent a click in space.
+fn clicked_in_space(view: &Faked) -> bool {
+    sent(view)
+        .iter()
+        .any(|command| matches!(command, FlightCommand::ClickInSpace { .. }))
+}
+
+/// The top-left corner of the menu's row `n`, from 0.
+pub(super) fn row_at(n: usize) -> Point {
+    Point::new(MENU_AT.x + 4.0, MENU_AT.y + 30.0 + 18.0 * n as f32)
+}
+
 #[test]
-fn a_click_in_the_open_escort_menu_does_nothing_and_shut_goes_to_space() {
+fn a_click_in_the_open_escort_menu_never_reaches_space_and_shut_it_does() {
     let mut view = escorted();
     let menu = Point::new(MENU_AT.x + MENU_WIDTH / 2.0, MENU_AT.y + MENU_HEIGHT / 2.0);
     press(&mut view, MENU_KEY);
-    view.click_in_space(menu);
-    assert_eq!(sent_but_lines(&view), [], "the menu takes it");
+    click(&mut view, menu);
+    assert!(!clicked_in_space(&view), "the menu takes it");
     press(&mut view, MENU_KEY);
-    view.click_in_space(menu);
+    click(&mut view, menu);
+    assert!(clicked_in_space(&view), "shut, it goes to space");
+}
+
+#[test]
+fn a_click_on_the_menus_right_edge_reaches_space() {
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    click(
+        &mut view,
+        Point::new(MENU_AT.x + MENU_WIDTH, MENU_AT.y + 40.0),
+    );
+    assert!(clicked_in_space(&view), "PtInRect leaves it out");
+}
+
+#[test]
+fn a_row_click_selects_its_group_silently_and_the_next_command_goes_to_it() {
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    ui_heard(&mut view);
+    click(&mut view, row_at(3));
+    let warships = EscortGroup::Class(EscortClass::Warship);
+    assert_eq!(view.escort_menu().group(), warships);
+    assert_eq!(ui_heard(&mut view), [], "no sound (@0x6a0fc-0x6a119)");
+    view.sim
+        .queue_answer(commanded(warships, EscortCommand::Hold, false));
+    press(&mut view, ESCORT_HOLD_KEY);
+    assert!(sent_but_lines(&view).contains(&command(warships, EscortCommand::Hold)));
+    click(&mut view, row_at(1));
+    assert_eq!(
+        view.escort_menu().group(),
+        EscortGroup::Class(EscortClass::Fighter),
+        "no fighters, selected all the same"
+    );
+}
+
+#[test]
+fn the_menu_is_asked_for_a_click_before_the_floating_map() {
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    let now = crate::time::sixtieths(view.elapsed);
+    view.floating.show(now);
+    let before = sent(&view).len();
+    click(&mut view, row_at(3));
+    assert_eq!(
+        view.escort_menu().group(),
+        EscortGroup::Class(EscortClass::Warship)
+    );
+    assert_eq!(sent(&view)[before..], [], "nothing to the map or space");
+}
+
+// The closes with no fade (`_HandlePlayer` @0x6c50e,
+// `_HandlePlayerDockRequest` @0x6705a).
+
+/// [`escorted`] with the menu open, its sounds taken.
+fn menu_up() -> Faked {
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    assert!(view.escort_menu().is_open());
+    ui_heard(&mut view);
+    view
+}
+
+#[test]
+fn a_jumps_arrival_shuts_the_menu_open_through_the_warp_silently() {
+    use super::faked_travel::{at_the_warps_end, jump_now};
+    let mut view = menu_up();
+    jump_now(&mut view);
+    assert!(view.escort_menu().is_open(), "open through the warp");
+    at_the_warps_end(&mut view, Vec::new());
+    view.arrival_frame();
     assert!(
-        matches!(
-            sent_but_lines(&view)[..],
-            [FlightCommand::ClickInSpace { .. }]
-        ),
-        "shut, it goes to space: {:?}",
+        sent(&view).contains(&FlightCommand::Arrive),
+        "it arrived: {:?}",
         sent(&view)
     );
+    assert!(!view.escort_menu().is_open(), "shut on the arrival's frame");
+    assert_eq!(ui_heard(&mut view), [], "silent");
+}
+
+#[test]
+fn a_gates_exit_shuts_the_menu_silently() {
+    use super::faked_landing::{arrived, at_gate, came_out_in_alpha};
+    let mut view = menu_up();
+    view.sim.queue_answer(at_gate(nova_sim::GateKind::Wormhole));
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    view.sim.queue_answer(arrived());
+    view.land();
+    assert!(sent(&view).contains(&FlightCommand::EnterWormhole));
+    assert!(!view.escort_menu().is_open());
+    assert_eq!(ui_heard(&mut view), []);
+}
+
+#[test]
+fn a_take_off_shuts_the_menu_silently() {
+    let mut view = menu_up();
+    view.sim.queue_answer(Answer::Departed(nova_sim::Departure {
+        stellar: StellarId(128),
+        settled: nova_sim::Settled::default(),
+    }));
+    assert_eq!(view.take_off(), Some(StellarId(128)));
+    assert!(!view.escort_menu().is_open());
+    assert_eq!(ui_heard(&mut view), []);
 }
 
 // The escort keys.
@@ -545,6 +789,21 @@ fn the_target_key_walks_back_with_shift_and_through_the_escorts_with_option() {
 
 // The menu drawn.
 
+/// The texts drawn in `list`, those clipped to a frame among them, as the
+/// menu's are.
+fn drawn_texts(list: &DrawList) -> Vec<(String, Color)> {
+    list.iter()
+        .filter_map(|command| match command {
+            DrawCommand::Clipped { command, .. } => match &**command {
+                DrawCommand::Text { text, color, .. } => Some((text.clone(), *color)),
+                _ => None,
+            },
+            DrawCommand::Text { text, color, .. } => Some((text.clone(), *color)),
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
 fn the_menu_shows_return_to_hangar_for_a_class_ordered_home() {
     let mut frame = fleet_of(&[EscortClass::Fighter]);
@@ -555,8 +814,11 @@ fn the_menu_shows_return_to_hangar_for_a_class_ordered_home() {
     }
     let mut view = world(catalog(), frame);
     press(&mut view, MENU_KEY);
-    let drawn = texts(&world_list(&view));
-    assert!(drawn.contains(&"Return to Hangar".to_owned()), "{drawn:?}");
+    let drawn = drawn_texts(&world_list(&view));
+    assert!(
+        drawn.iter().any(|(text, _)| text == "Return to Hangar"),
+        "{drawn:?}"
+    );
 }
 
 #[test]
@@ -568,7 +830,12 @@ fn the_open_menu_is_drawn_over_the_flight_under_the_hud() {
     let commands: Vec<_> = open.iter().collect();
     let title = commands
         .iter()
-        .position(|command| matches!(command, DrawCommand::Text { text, .. } if text == "Escort Commands"))
+        .position(|command| match command {
+            DrawCommand::Clipped { command, .. } => {
+                matches!(&**command, DrawCommand::Text { text, .. } if text == "Escort Commands")
+            }
+            _ => false,
+        })
         .expect("the menu");
     let frame = commands
         .iter()
@@ -590,15 +857,44 @@ fn the_open_menu_is_drawn_over_the_flight_under_the_hud() {
     );
     assert_eq!(
         open.len() - shut.len(),
-        1 + 4 + 1 + 5 + 1 + 1,
-        "fill, border, title, rows, bar, order"
+        4 + 1 + 5 + 1 + 1,
+        "border, title, rows, bar, order: no black fill"
     );
-    assert!(commands.iter().any(|command| matches!(
-        command,
-        DrawCommand::Text { text, color, .. } if text == "2) Fighters" && *color == ABSENT_ROW
-    )));
-    assert!(commands.iter().any(|command| matches!(
-        command,
-        DrawCommand::Line { from, .. } if from.x == MENU_AT.x && from.y == MENU_AT.y + MENU_HEIGHT / 2.0
-    )), "filled across {MENU_WIDTH}");
+    assert!(
+        drawn_texts(&open)
+            .iter()
+            .any(|(text, color)| text == "2) Fighters" && *color == ABSENT_ROW)
+    );
+    assert!(
+        !commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Line { color, .. } if *color == Color::BLACK
+        )),
+        "its black ORs in nothing"
+    );
+}
+
+/// The alpha of the escort menu's title as `view` draws it.
+fn title_alpha(view: &Faked) -> Option<u8> {
+    let list = super::faked_hud::flown(view);
+    list.iter().find_map(|command| match command {
+        DrawCommand::Clipped { command, .. } => match &**command {
+            DrawCommand::Text { text, color, .. } if text == "Escort Commands" => Some(color.a),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+#[test]
+fn the_menu_is_drawn_at_its_fades_level() {
+    let mut view = world(catalog(), fleet_of(&[EscortClass::Warship])).with_overlays(TITLED);
+    press(&mut view, MENU_KEY);
+    assert_eq!(title_alpha(&view), Some(255), "in full");
+    view.step_stellars(MENU_TIMEOUT + TICK);
+    view.update_escort_menu(16);
+    assert_eq!(view.escort_menu().level(), Some(16));
+    assert_eq!(title_alpha(&view), Some(128), "at 16/32");
+    view.update_escort_menu(16);
+    assert_eq!(title_alpha(&view), None, "shut");
 }

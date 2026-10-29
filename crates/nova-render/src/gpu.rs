@@ -3,7 +3,8 @@
 //! A [`Frame`] is everything the GPU needs to draw one frame, already
 //! decided by the core: the letterboxed viewport, the draw list as
 //! batches in strict draw order, which of them are the world layer
-//! ([`DrawLayer`]) and where that layer is drawn ([`WorldSpace`]).
+//! ([`DrawLayer`]), where that layer is drawn ([`WorldSpace`]) and
+//! what it may draw into ([`Frame::world_clip`], flight's play area).
 //! Positions are logical; the adapter only projects the logical space
 //! onto the viewport rectangle.
 
@@ -89,7 +90,10 @@ pub struct SolidQuad {
     pub color: [f32; 4],
 }
 
-/// One run of text, already in physical pixels.
+/// One run of text: placed and clipped in physical pixels, sized and
+/// wrapped in logical units. The renderer shapes it at its logical size,
+/// so every glyph advances a whole logical unit, and draws it at `scale`:
+/// glyph positions, raster size and line tops are multiplied by it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextRun {
     /// The text.
@@ -100,19 +104,23 @@ pub struct TextRun {
     /// across rounded as a clip's edges are, down to the first row a quad's
     /// top edge there fills.
     pub origin_px: (f32, f32),
-    /// The font size in pixels.
-    pub size_px: f32,
-    /// The distance between lines in pixels.
-    pub line_height_px: f32,
-    /// The wrap width in pixels, if it wraps.
-    pub wrap_px: Option<f32>,
+    /// The font size in logical units, which the run is shaped at. Lines
+    /// are `nova_view::text::LINE_HEIGHT` times it apart.
+    pub size: f32,
+    /// The wrap width in logical units, if it wraps.
+    pub wrap: Option<f32>,
+    /// Physical pixels per logical unit the run is drawn at: the view's
+    /// scale down, as glyphs are sized by the height.
+    pub scale: f32,
     /// The text colour.
     pub color: Color,
     /// Nothing is drawn outside this rectangle (the viewport).
     pub clip: PixelRect,
 }
 
-/// A run of same-kind draws, drawn in one go.
+/// A run of same-kind draws, drawn in one go. A world batch draws only
+/// inside [`Frame::world_scissor`], which cuts its sprites, lines and dots
+/// at the pixel edge; an overlay batch may draw anywhere.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Batch {
     /// Textured quads from one atlas page, all combined with what is
@@ -170,6 +178,11 @@ pub struct Frame {
     /// Which of `batches` are in the world layer, by index, ascending;
     /// the rest are overlay. Empty on every screen but flight.
     pub world: Vec<usize>,
+    /// Where the world layer may draw, in logical units, if it is clipped
+    /// (`nova_view::DrawList::world_in`): flight's play area, which ends
+    /// at the status bar's column. The overlay is never clipped by it.
+    /// [`Frame::world_scissor`] gives it in the world layer's pixels.
+    pub world_clip: Option<Rect>,
 }
 
 impl Frame {
@@ -192,6 +205,59 @@ impl Frame {
             .map(|(_, batch)| batch)
     }
 
+    /// The pixels of the world layer the world may touch: its clip
+    /// ([`Frame::world_clip`]) projected as [`Frame::pixels_covered`]
+    /// projects, onto the viewport in target pixels when the world is
+    /// drawn into the target ([`WorldSpace::Target`]) and onto the texture
+    /// in texels when it is drawn into one ([`WorldSpace::Texture`]). Each
+    /// edge is rounded to the nearest pixel, as a [`DrawCommand::Clipped`]
+    /// text or crop's edges are, so the two meet on the same column at a
+    /// fractional scale. Clamped to the layer's pixels, and all of them
+    /// with no clip. It may be empty (no width or no height): a clip
+    /// outside the logical space lets the world touch nothing.
+    ///
+    /// [`DrawCommand::Clipped`]: nova_view::DrawCommand::Clipped
+    #[must_use]
+    pub fn world_scissor(&self) -> PixelRect {
+        let onto = self.world_pixels();
+        let Some(clip) = self.world_clip else {
+            return onto;
+        };
+        let sx = onto.w as f32 / self.logical.w as f32;
+        let sy = onto.h as f32 / self.logical.h as f32;
+        let (x0, x1) = (onto.x as f32, (onto.x + onto.w) as f32);
+        let (y0, y1) = (onto.y as f32, (onto.y + onto.h) as f32);
+        let to_px = |origin: f32, logical: f32, scale: f32, lo: f32, hi: f32| {
+            (origin + logical * scale).round().clamp(lo, hi)
+        };
+        let left = to_px(x0, clip.x, sx, x0, x1);
+        let right = to_px(x0, clip.x + clip.w, sx, left, x1);
+        let top = to_px(y0, clip.y, sy, y0, y1);
+        let bottom = to_px(y0, clip.y + clip.h, sy, top, y1);
+        PixelRect {
+            x: left as u32,
+            y: top as u32,
+            w: (right - left) as u32,
+            h: (bottom - top) as u32,
+        }
+    }
+
+    /// The pixels `layer`'s logical space fills: the viewport, in target
+    /// pixels, but for a world drawn into a texture, which fills it whole.
+    fn layer_pixels(&self, layer: DrawLayer) -> PixelRect {
+        match (layer, self.world_space) {
+            (DrawLayer::World, WorldSpace::Texture { size: (w, h) }) => {
+                PixelRect { x: 0, y: 0, w, h }
+            }
+            _ => self.viewport,
+        }
+    }
+
+    /// The pixels the world layer's logical space fills.
+    fn world_pixels(&self) -> PixelRect {
+        self.layer_pixels(DrawLayer::World)
+    }
+
     /// The pixels `quads` drawn in `layer` can touch, in that layer's
     /// pixels: the union of their rectangles projected onto the pixels
     /// the layer's logical space fills, widened to whole pixels (a
@@ -206,12 +272,7 @@ impl Frame {
     /// once it is enlarged into the target.
     #[must_use]
     pub fn pixels_covered(&self, layer: DrawLayer, quads: &[QuadInstance]) -> Option<PixelRect> {
-        let onto = match (layer, self.world_space) {
-            (DrawLayer::World, WorldSpace::Texture { size: (w, h) }) => {
-                PixelRect { x: 0, y: 0, w, h }
-            }
-            _ => self.viewport,
-        };
+        let onto = self.layer_pixels(layer);
         let (vx, vy) = (onto.x as f32, onto.y as f32);
         let sx = onto.w as f32 / self.logical.w as f32;
         let sy = onto.h as f32 / self.logical.h as f32;
@@ -274,6 +335,7 @@ mod tests {
             world_space: WorldSpace::Target,
             batches: Vec::new(),
             world: Vec::new(),
+            world_clip: None,
         }
     }
 
@@ -447,6 +509,71 @@ mod tests {
             frame.pixels_covered(OVERLAY, &[one]),
             Some(rect(140, 140, 15, 15))
         );
+    }
+
+    /// `frame` with its world clipped to the logical (`x`, `y`, `w`, `h`).
+    fn clipped(frame: Frame, x: f32, y: f32, w: f32, h: f32) -> Frame {
+        Frame {
+            world_clip: Some(Rect { x, y, w, h }),
+            ..frame
+        }
+    }
+
+    #[test]
+    fn an_unclipped_world_may_touch_all_its_pixels() {
+        assert_eq!(letterboxed().world_scissor(), rect(0, 8, 64, 48));
+        assert_eq!(textured().world_scissor(), rect(0, 0, 32, 24));
+    }
+
+    #[test]
+    fn a_clipped_world_drawn_into_the_target_is_scissored_to_the_clip_on_the_viewport() {
+        let frame = clipped(letterboxed(), 0.0, 0.0, 28.0, 24.0);
+        assert_eq!(frame.world_scissor(), rect(0, 8, 56, 48));
+        let inner = clipped(letterboxed(), 2.0, 3.0, 10.0, 5.0);
+        assert_eq!(inner.world_scissor(), rect(4, 14, 20, 10));
+    }
+
+    #[test]
+    fn a_clipped_world_drawn_into_a_texture_is_scissored_to_the_clips_texels() {
+        let frame = clipped(textured(), 0.0, 0.0, 28.0, 24.0);
+        assert_eq!(frame.world_scissor(), rect(0, 0, 28, 24));
+        let inner = clipped(textured(), 2.0, 3.0, 10.0, 5.0);
+        assert_eq!(inner.world_scissor(), rect(2, 3, 10, 5));
+    }
+
+    #[test]
+    fn a_clips_edges_are_rounded_to_the_nearest_pixel_at_a_fractional_scale() {
+        // 32x24 at 1.875 in a 60x45 target: 3 and 23 across are 5.625 and
+        // 43.125, rounded to 6 and 43; 2 and 13 down are 3.75 and 24.375,
+        // rounded to 4 and 24.
+        let frame = Frame {
+            target: (60, 45),
+            viewport: rect(0, 0, 60, 45),
+            ..letterboxed()
+        };
+        let clip = clipped(frame, 3.0, 2.0, 20.0, 11.0);
+        assert_eq!(clip.world_scissor(), rect(6, 4, 37, 20));
+    }
+
+    #[test]
+    fn a_clip_spilling_past_the_logical_space_is_clamped_to_it() {
+        let target = clipped(letterboxed(), -4.0, -4.0, 40.0, 40.0);
+        assert_eq!(target.world_scissor(), rect(0, 8, 64, 48));
+        let texture = clipped(textured(), 20.0, -4.0, 40.0, 10.0);
+        assert_eq!(texture.world_scissor(), rect(20, 0, 12, 6));
+    }
+
+    #[test]
+    fn a_clip_outside_the_logical_space_lets_the_world_touch_nothing() {
+        for frame in [letterboxed(), textured()] {
+            let right = clipped(frame.clone(), 40.0, 0.0, 8.0, 8.0);
+            let below = clipped(frame.clone(), 0.0, 30.0, 8.0, 8.0);
+            let left = clipped(frame, -20.0, 0.0, 8.0, 8.0);
+            for outside in [right, below, left] {
+                let scissor = outside.world_scissor();
+                assert!(scissor.w == 0 || scissor.h == 0, "{scissor:?}");
+            }
+        }
     }
 
     #[test]

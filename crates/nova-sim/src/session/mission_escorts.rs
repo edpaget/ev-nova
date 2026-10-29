@@ -1629,7 +1629,7 @@ pub(super) mod tests {
         }
         session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires);
         assert_eq!(row(&session, class).order, Some(EscortOrder::Hold));
-        assert!(session.space.escorts_flying(&session.pilot));
+        assert!(session.space.escorts_flying());
     }
 
     #[test]
@@ -1657,21 +1657,52 @@ pub(super) mod tests {
             npc.condition = Condition::Disabled;
         }
         assert!(row(&session, class).present);
-        assert!(!session.space.escorts_flying(&session.pilot));
+        assert!(!session.space.escorts_flying());
         session.space.traffic.npcs_mut()[1].condition = Condition::Intact;
-        assert!(session.space.escorts_flying(&session.pilot));
+        assert!(session.space.escorts_flying());
     }
 
     #[test]
-    fn a_hired_escort_alone_is_flying() {
+    fn a_hired_escort_alone_is_flying_until_it_is_disabled() {
+        // `_HandlePlayer`'s count (@0x6df59-0x6dfa7): every ship led by
+        // the player, neither `_IsDisabled` nor `_IsDying`.
         let catalog = ships_catalog(escorting(-1, 0));
         let (mut session, ids) = flying_with_escorts(&catalog);
         for id in &ids {
             session.space.npc_mut(*id).expect("here").condition = Condition::Disabled;
         }
-        assert!(session.space.escorts_flying(&session.pilot));
-        session.pilot.escorts.clear();
-        assert!(!session.space.escorts_flying(&session.pilot));
+        assert!(session.space.escorts_flying());
+        let hired = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(hired).expect("here").condition = Condition::Disabled;
+        assert!(
+            !session.space.escorts_flying(),
+            "every hired escort disabled"
+        );
+        assert_eq!(session.pilot.escorts.len(), 1, "still hired");
+    }
+
+    #[test]
+    fn a_hired_escort_breaking_up_is_not_flying() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let (mut session, ids) = flying_with_escorts(&catalog);
+        for id in &ids {
+            session.space.npc_mut(*id).expect("here").condition = Condition::Disabled;
+        }
+        let hired = session.space.escorts.fleet[0].expect("placed");
+        session.space.npc_mut(hired).expect("here").condition = Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        };
+        assert!(!session.space.escorts_flying());
+    }
+
+    #[test]
+    fn a_launched_fighter_alone_is_flying() {
+        use crate::session::fighters::tests::{carrying, fleet, out};
+        let catalog = carrying();
+        let session = fleet(&catalog, 0, vec![out()]);
+        assert!(session.player_led().all(|npc| npc.carrier.is_some()));
+        assert!(session.space.escorts_flying(), "the fighter out");
     }
 
     #[test]
@@ -1836,9 +1867,6 @@ pub(super) mod tests {
             (npc.reserves.shield.now, npc.reserves.armor.now),
             (0.0, 1.0)
         );
-        assert!(
-            session.space.escorts_flying(&session.pilot),
-            "the other is intact"
-        );
+        assert!(session.space.escorts_flying(), "the other is intact");
     }
 }

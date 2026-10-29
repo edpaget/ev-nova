@@ -9,6 +9,7 @@ use nova_sim::combat::ParticleBurst;
 use nova_sim::flight_frame::{FrameShip, PassReport, StepReport, StepRun};
 
 use super::combat::{line_in, podding};
+use super::faked_hud::barred;
 use super::faked_world::{
     asteroid_at, beam, box_at, raise, saying, shot_of, targeting, world, world_list,
     world_list_with,
@@ -286,9 +287,7 @@ fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
     floating_up(&mut view);
     let list = world_list_with(&mut view, &hud);
     let floating = first(&list, floating_border_line);
-    let menu = first(&list, |command| {
-        *command == fill_command(escort_menu_frame(), Color::BLACK)
-    });
+    let menu = first(&list, escort_menu_top);
     let particle = first(&list, orange_dot);
     // `_PostDrawCallback`: `_FloaterDrawCallback` draws the floating map
     // (@0x38b95-0x38c0a), then the escort menu (@0x38c0f-0x38c5b), both
@@ -299,12 +298,6 @@ fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
         list.layered().nth(menu).map(|(layer, _)| layer),
         Some(crate::DrawLayer::World)
     );
-}
-
-/// The escort menu's frame.
-fn escort_menu_frame() -> Bounds {
-    use crate::flight::escorts::{MENU_AT, MENU_HEIGHT, MENU_WIDTH};
-    Bounds::at(MENU_AT, MENU_WIDTH, MENU_HEIGHT)
 }
 
 #[test]
@@ -429,4 +422,46 @@ fn a_shield_flash_shows_from_the_frame_after_its_hit_until_it_runs_out() {
     }
     flash.step(100.0, 100.0, true);
     assert_eq!(view.shield_flash(ShipRef::Player), None, "run out");
+}
+
+/// The play area in a view `view` in size: the view less the status
+/// bar's 194-pixel column at the right (`_SetupSpriteWorld`'s
+/// `subw $0xc2` @0x21b66).
+fn play_area_in(view: (f32, f32)) -> Bounds {
+    Bounds {
+        min: at(0.0, 0.0),
+        max: at(view.0 - 194.0, view.1),
+    }
+}
+
+#[test]
+fn the_world_is_clipped_to_the_play_area() {
+    let mut view = barred(catalog(), in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
+    assert!(view.status_bar.is_ok(), "a status bar");
+    assert_eq!(view.view, (1024.0, 768.0));
+    assert_eq!(
+        world_list(&view).world_clip(),
+        Some(Bounds {
+            min: at(0.0, 0.0),
+            max: at(830.0, 768.0),
+        })
+    );
+    view.view = (1365.0, 768.0);
+    assert_eq!(
+        world_list(&view).world_clip(),
+        Some(Bounds {
+            min: at(0.0, 0.0),
+            max: at(1171.0, 768.0),
+        })
+    );
+}
+
+#[test]
+fn the_world_is_clipped_to_the_play_area_with_no_status_bar() {
+    let view = world(catalog(), in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
+    assert!(view.status_bar.is_err(), "no status bar");
+    assert_eq!(
+        world_list(&view).world_clip(),
+        Some(play_area_in(view.view))
+    );
 }

@@ -1453,8 +1453,10 @@ fn bought_the_racer(store: &MemoryPilots) -> Game {
     );
     game.tap(Key::Enter);
     assert_eq!(game.session().ship(), nova_sim::ShipId(129), "bought");
-    game.tap(Key::Escape);
-    assert!(game.spaceport().open_shipyard().is_none(), "closed");
+    assert!(
+        game.spaceport().open_shipyard().is_none(),
+        "the purchase closes it"
+    );
     let bar = port_bar_texts(&game);
     assert!(bar.contains(&"Dock".to_owned()), "the close's: {bar:?}");
     game

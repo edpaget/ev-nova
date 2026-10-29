@@ -60,8 +60,10 @@
 //!   @0x3eab2-0x3eb66). Confused, it flies straight for its
 //!   [`HOMING_DELAY`] ticks, then turns `GuidedTurn` a tick, back for 150
 //!   frames of the frame counter and on for 150 ([`CIRCLE_FRAMES`]),
-//!   whatever its target; it hits nothing, and under 0x8000 clears and
-//!   turns on its firer at one in [`BLINDED_TURNS_ON_FIRER`] each tick.
+//!   whatever its target, and under 0x8000 clears and turns on its firer
+//!   at one in [`BLINDED_TURNS_ON_FIRER`] each tick. It hits as a clear
+//!   homing shot does, its target or, with `Flags2` 0x0008, any ship it
+//!   meets: `_ShotCanHitShip` rejects only jam 998 (@0x447f7).
 //!   Neither function plays a sound.
 //! - Any shot but point defence whose ship ([`Shot::aimed_at`]) is gone
 //!   (destroyed, or out of the fight as it landed or jumped) is lost
@@ -289,9 +291,11 @@ pub struct Meeting {
     pub fuse: Fuse,
 }
 
-/// How a shot is jammed off its ship: the original's shot +0x30, which
-/// `_ShotCanHitShip` (@0x447f7) and `_CalculateTargetedDamage` read as
-/// "jammed" whenever it is not 0.
+/// How a shot is jammed off its ship: the original's shot +0x30.
+/// `_ShotCanHitShip` (@0x447f7) rejects only 998 ([`Jam::Lost`]), while
+/// `_CalculateTargetedDamage` (@0x3a1bd), the missile lock (@0x35756) and
+/// point defence's pick (@0x393e9) read it as "jammed" whenever it is not
+/// 0.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Jam {
     /// Not jammed (0).
@@ -3453,15 +3457,20 @@ mod tests {
     }
 
     #[test]
-    fn an_interfered_missile_hits_nothing_its_target_included() {
-        let shot = Shot {
-            jam: Jam::Interfered,
-            ..passing_homing(0x0008, Some(TARGET))
+    fn an_interfered_missile_hits_its_target_and_passes_through_any_other() {
+        // `_ShotCanHitShip` rejects only jam 998 (@0x447f7).
+        let met = |flags2, target| {
+            Shot {
+                jam: Jam::Interfered,
+                ..passing_homing(flags2, Some(target))
+            }
+            .hit(Vec2::ZERO, &among(&in_its_path()), ProximityFuse::Swept)
+            .map(|met| met.ship)
         };
-        assert_eq!(
-            shot.hit(Vec2::ZERO, &among(&in_its_path()), ProximityFuse::Swept),
-            None
-        );
+        let three = ShipRef::Npc(NpcId(3));
+        assert_eq!(met(0, TARGET), Some(TARGET), "past ship 3 to its target");
+        assert_eq!(met(0, three), Some(three));
+        assert_eq!(met(0x0008, TARGET), Some(three), "set off by others");
     }
 
     #[test]

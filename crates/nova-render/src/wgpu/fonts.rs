@@ -1,21 +1,33 @@
 //! The glyphon font system both text users build: the renderer, which
 //! draws text, and [`GlyphonMetrics`](super::GlyphonMetrics), which
-//! measures it the same way.
+//! measures it the same way. Both lay text out through
+//! [`lay_out_text`](super::layout::lay_out_text), with the attributes
+//! [`attrs`] gives and each face's [`DeviceWidths`], which [`Families`]
+//! keeps by the face's fontdb ID, beside the face's font file, which the
+//! renderer rasterises its glyphs from
+//! ([`hinted_text`](super::hinted_text)).
 
 use std::sync::Arc;
 
-use glyphon::cosmic_text::CacheKeyFlags;
-use glyphon::fontdb::{Database, Source};
+use glyphon::cosmic_text::{FeatureTag, FontFeatures};
+use glyphon::fontdb::{Database, ID, Source};
 use glyphon::{Attrs, Family, FontSystem};
+use nova_data::fonts::DeviceWidths;
 use nova_view::Font;
 
 use crate::fonts::{Face, FontFaces, Loaded, face_for};
 
-/// The family name of each loaded face, as fontdb read it.
+/// The family name of each loaded face, as fontdb read it, and the device
+/// widths of every face loaded.
 pub(super) struct Families {
     charcoal: Option<String>,
     fallback: Option<String>,
     serif: Option<String>,
+    /// Each loaded face's fontdb ID and the widths its `hdmx` records
+    /// (none for a face with no `hdmx`).
+    widths: Vec<(ID, DeviceWidths)>,
+    /// Each loaded face's fontdb ID, its font file and its index in it.
+    sources: Vec<(ID, Arc<[u8]>, u32)>,
 }
 
 impl Families {
@@ -39,31 +51,57 @@ impl Families {
     pub(super) fn charcoal_loaded(&self) -> bool {
         self.charcoal.is_some()
     }
+
+    /// The device widths of the loaded face `id`; `None` for a face this
+    /// system did not load.
+    pub(super) fn device_widths(&self, id: ID) -> Option<&DeviceWidths> {
+        self.widths
+            .iter()
+            .find(|(face, _)| *face == id)
+            .map(|(_, widths)| widths)
+    }
+
+    /// Each loaded face's fontdb ID, its font file and its index in that
+    /// file.
+    pub(super) fn sources(&self) -> &[(ID, Arc<[u8]>, u32)] {
+        &self.sources
+    }
 }
 
 /// The attributes both text users shape `family` with, so text is measured
 /// exactly as it is drawn.
 ///
-/// Each glyph is rasterised starting on a whole physical pixel, as
-/// QuickDraw draws every glyph from a whole-pixel pen. Left to the
-/// shaper's fractional advances, consecutive glyphs of one run fall in
-/// different quarter-pixel bins and the same stem smears over a different
-/// split of columns each time. The flag is read only when a glyph is
-/// rasterised: advances, line widths and wrapping are unchanged, and a
-/// glyph moves by at most half a pixel, never cumulatively.
+/// Kerning and ligatures are off, as QuickDraw draws one glyph per
+/// character and advances each by its own width: a pair is as wide as its
+/// two characters apart.
+///
+/// No cache-key flags are set: the renderer rasterises every glyph itself
+/// and starts it on a whole physical pixel, as QuickDraw draws every glyph
+/// from a whole-pixel pen ([`hinted_text`](super::hinted_text)).
 pub(super) fn attrs(family: Family<'_>) -> Attrs<'_> {
-    Attrs::new()
-        .family(family)
-        .cache_key_flags(CacheKeyFlags::PIXEL_FONT)
+    let mut features = FontFeatures::new();
+    features
+        .disable(FeatureTag::KERNING)
+        .disable(FeatureTag::STANDARD_LIGATURES)
+        .disable(FeatureTag::CONTEXTUAL_LIGATURES);
+    Attrs::new().family(family).font_features(features)
 }
 
 /// A font system holding only `faces`, with the fallback as its
-/// sans-serif family, and each face's family name: the fallback's,
-/// Charcoal's and the serif's.
+/// sans-serif family, and each face's family name (the fallback's,
+/// Charcoal's and the serif's) and device widths.
 pub(super) fn font_system(faces: &FontFaces) -> (FontSystem, Families) {
     let mut db = Database::new();
+    let mut widths = Vec::new();
+    let mut sources = Vec::new();
     let mut load = |bytes: &Arc<[u8]>| {
         let ids = db.load_font_source(Source::Binary(Arc::new(Arc::clone(bytes))));
+        let device = DeviceWidths::read(bytes);
+        widths.extend(ids.iter().map(|&id| (id, device.clone())));
+        sources.extend(ids.iter().filter_map(|&id| {
+            let index = db.face(id)?.index;
+            Some((id, Arc::clone(bytes), index))
+        }));
         ids.first()
             .and_then(|&id| db.face(id))
             .and_then(|face| face.families.first())
@@ -82,6 +120,8 @@ pub(super) fn font_system(faces: &FontFaces) -> (FontSystem, Families) {
             charcoal,
             fallback,
             serif,
+            widths,
+            sources,
         },
     )
 }

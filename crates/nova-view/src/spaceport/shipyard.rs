@@ -59,13 +59,8 @@
 //! @0x4f6f5-0x4f6fc; the original has no words for why). B with no ship
 //! selected, or one that cannot be bought, beeps
 //! ([`UiSound::BuyRefused`], `_beepSnd[3]`, @0x5f22a-0x5f256). B acts
-//! on a press only, never a key repeat, unlike the Outfitter's. A held B
-//! no longer re-buys the class just bought, which is now the class flown
-//! and refused ([`ShipRefusal::AlreadyFlown`](nova_sim::shipyard::ShipRefusal::AlreadyFlown)),
-//! but the purchase draws that class's roll again, and when the shipyard
-//! given back no longer lists it, the selection falls on another class,
-//! which a held B would otherwise trade the new ship and its outfits
-//! for. The screen only records the request
+//! on a press only, never a key repeat, unlike the Outfitter's, so a held
+//! B never re-buys. The screen only records the request
 //! ([`ShipyardScreen::take_request`]): whoever holds the session asks for
 //! the new ship's name ([`ShipNaming`]) and opens the "Text Input" prompt
 //! with it ([`ShipyardScreen::open_naming`], [`TextInputDialog`]), as the
@@ -73,10 +68,19 @@
 //! prompt takes every input while it is open; when B asked, the B typed
 //! is dropped, as the original flushes it. OK records the order, the ship
 //! and the name confirmed ([`ShipyardScreen::take_order`]): whoever holds
-//! the session makes it and gives back the shipyard as it now is
-//! ([`ShipyardScreen::set_shipyard`]). Cancel records the ship declined
-//! ([`ShipyardScreen::take_declined`]), whose roll the session draws
-//! again. Without the "Text Input" dialog, the prompt is laid out by
+//! the session makes it, and the spaceport then closes the shipyard, as
+//! `_DoShipyardDialog` leaves its loop after a purchase (@0x5f0ce,
+//! @0x5f6bd-0x5f6cf), once the texts the purchase's hooks show have
+//! closed (`SpaceportView::take_ship`). Cancel records the ship declined
+//! ([`ShipyardScreen::take_declined`]), and the shipyard stays open over
+//! the same list (@0x5ebc2 → @0x5f0d5 skips @0x5f0ce): the list built as
+//! it opened is kept while it stays open, its prices, trade-in, cash,
+//! class flown and Buy Ship's greying given back afresh after each
+//! refresh ([`ShipyardScreen::set_shipyard`]), and the class's roll the
+//! session draws again shows only the next time it opens
+//! (`nova_sim::Session::open_shipyard`). It asks for no offer until that
+//! list is shown (`SpaceportView::set_opened_shipyard`). Without the
+//! "Text Input" dialog, the prompt is laid out by
 //! [`TextInputDialog::fallback`].
 //!
 //! Info, clicked or with Space ([`INFO_KEY`]), opens the "Shipyard Info" panel (`DLOG`/`DITL`
@@ -94,8 +98,10 @@
 //! "No standard weapons" (#241-243), all in white. A text whose top is at
 //! or below item 5's bottom is not drawn, as the original clips to it.
 //! The values are worked out in the core ([`ShipSpecs`]). Its Done,
-//! Return and Escape close the panel alone. Without that dialog, Info is
-//! greyed.
+//! Return, Escape and a press of Space close the panel alone, as
+//! `_ShipDescFilter` maps them (@0x51189-0x511be); the Space press that
+//! opened it doesn't, nor a held Space's repeats. Without that dialog,
+//! Info is greyed.
 //!
 //! Which "Shipyard Info" opens follows the class's description `Graphic`
 //! (`_LoadDescription` @0x7186b-0x71892, read here when Info opens), as
@@ -177,7 +183,7 @@ use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::{VariantTemplates, shown_graphic};
 use crate::ui::player_info::is_player_info_press;
@@ -781,14 +787,31 @@ impl Panel {
         }
     }
 
+    /// It with Done taking the keyboard focus as `ring` says.
+    pub(super) fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.dialog.set_focus_ring(ring);
+        self
+    }
+
     /// Its dialog.
     pub(super) fn dialog(&self) -> &Dialog {
         &self.dialog
     }
 
     /// Its input, silent under the pointer as `_TrackShipyardButtons`
-    /// @0x2a54e: whether Done, Return or Escape closed it.
+    /// @0x2a54e: whether Done, Return, Escape or Space closed it. Space is
+    /// Done as `_ShipDescFilter` maps it (@0x511a6-0x511b9), whatever the
+    /// focus ring, and on a keyDown only (@0x510f4), so its repeats do
+    /// nothing.
     pub(super) fn input(&mut self, input: &Input) -> bool {
+        if let Input::Key {
+            key: Key::Space,
+            pressed: true,
+            repeat,
+        } = *input
+        {
+            return !repeat;
+        }
         self.dialog.input(input) == Some(DialogEvent::Item(PANEL_DONE_ITEM))
     }
 
@@ -952,6 +975,8 @@ pub struct ShipyardScreen {
     /// the dialog).
     pictures: Vec<Option<i16>>,
     style: ButtonStyle,
+    /// Whether its dialogs' buttons take the keyboard focus.
+    focus_ring: FocusRing,
     /// The grid, its selection as `_ShipyardFilter` keeps it.
     grid: ShipyardGrid,
     /// The info panel, while it is open.
@@ -1040,6 +1065,7 @@ impl ShipyardScreen {
             bases,
             pictures: Vec::new(),
             style,
+            focus_ring: FocusRing::default(),
             grid,
             panel: None,
             request: None,
@@ -1058,6 +1084,19 @@ impl ShipyardScreen {
         screen
     }
 
+    /// The shipyard with its dialogs' buttons taking the keyboard focus
+    /// as `ring` says (the `dialog_focus_ring` rule), its own and each it
+    /// opens after it.
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.focus_ring = ring;
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self.offering = self.offering.map(|offering| offering.with_focus_ring(ring));
+        self
+    }
+
     /// The shipyard with mission offers, each shown in the offer dialog of
     /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed ([`ShipyardScreen::rearm`]), as
@@ -1065,7 +1104,7 @@ impl ShipyardScreen {
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(templates)),
+            offering: Some(VenueOffers::asking(templates).with_focus_ring(self.focus_ring)),
             ..self
         }
     }
@@ -1440,7 +1479,8 @@ impl ShipyardScreen {
             &row.specs,
             &laid.metrics.0,
             self.style,
-        );
+        )
+        .map(|panel| panel.with_focus_ring(self.focus_ring));
     }
 
     /// Activates dialog item `item`: Done closes, Buy Ship asks, Info
@@ -1492,7 +1532,7 @@ impl ShipyardScreen {
         self.grid.cells().cell_under(grid, at)
     }
 
-    /// The info panel's input: Done, Return and Escape close it.
+    /// The info panel's input: Done, Return, Escape and Space close it.
     fn panel_input(&mut self, input: &Input) {
         let Some(panel) = &mut self.panel else {
             return;
@@ -3827,6 +3867,25 @@ mod tests {
         screen().with_offers(crate::spaceport::offer::fixture::templates())
     }
 
+    /// `_ShipDescFilter` @0x510e5 maps Space to Done (@0x511a6-0x511b9),
+    /// on a keyDown only (@0x510f4), so a held Space's repeats do nothing.
+    #[test]
+    fn space_closes_the_panel_but_not_the_press_that_opened_it_nor_its_repeats() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = screen().with_focus_ring(ring);
+            press(&mut screen, INFO_KEY);
+            assert!(screen.info_panel().is_some(), "the press that opened it");
+            screen.input(&key(Key::Space, true, true));
+            assert!(screen.info_panel().is_some(), "a repeat, {ring:?}");
+            screen.input(&key(Key::Space, false, false));
+            assert!(screen.info_panel().is_some(), "a release, {ring:?}");
+            press(&mut screen, Key::Space);
+            assert!(screen.info_panel().is_none(), "Space is Done, {ring:?}");
+            assert!(!screen.closed());
+            assert_eq!(screen.take_sounds(), [], "silent");
+        }
+    }
+
     #[test]
     fn return_and_escape_close_the_panel_alone_and_it_takes_every_input() {
         for k in [Key::Enter, Key::Escape] {
@@ -4706,6 +4765,41 @@ mod tests {
                 refused,
                 "{k:?} makes no click; B on the class flown beeps"
             );
+        }
+    }
+
+    /// The shipyard's mission offers take its focus ring, given before the
+    /// offers as the spaceport gives it.
+    #[test]
+    fn its_offer_takes_tab_then_space_only_with_the_focus_ring() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = screen()
+                .with_focus_ring(ring)
+                .with_offers(offer_templates());
+            screen.open_offer(crate::spaceport::offer::fixture::prompt());
+            press(&mut screen, Key::Tab);
+            press(&mut screen, Key::Space);
+            assert_eq!(
+                screen.take_offer_choice().is_some(),
+                ring == FocusRing::Tab,
+                "{ring:?}"
+            );
+        }
+    }
+
+    /// The Info panel's Done takes the shipyard's focus ring.
+    #[test]
+    fn the_info_panel_takes_tab_only_with_the_focus_ring() {
+        for (ring, focus) in [
+            (FocusRing::Tab, Some(PANEL_DONE_ITEM)),
+            (FocusRing::Off, None),
+        ] {
+            let mut screen = screen().with_focus_ring(ring);
+            press(&mut screen, INFO_KEY);
+            press(&mut screen, Key::Tab);
+            let panel = screen.info_panel().expect("open");
+            assert_eq!(panel.focus_ring(), ring);
+            assert_eq!(panel.focus(), focus, "{ring:?}");
         }
     }
 }

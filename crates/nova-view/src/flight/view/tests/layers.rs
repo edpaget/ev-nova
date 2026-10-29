@@ -213,7 +213,6 @@ fn a_placeholders_box_is_world_and_its_reason_overlay() {
 
 #[test]
 fn the_floating_map_and_the_escort_menu_are_world_and_their_text_overlay() {
-    use crate::flight::escorts::{MENU_AT, MENU_HEIGHT, MENU_WIDTH};
     let mut view =
         super::faked_world::world(catalog(), in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
     let mut hud = nova_sim::flight_frame::FrameHud::default();
@@ -227,12 +226,12 @@ fn the_floating_map_and_the_escort_menu_are_world_and_their_text_overlay() {
     for line in &border {
         assert_all_in(&list, DrawLayer::World, |command| command == line);
     }
-    let menu = fill_command(Bounds::at(MENU_AT, MENU_WIDTH, MENU_HEIGHT), Color::BLACK);
-    assert_all_in(&list, DrawLayer::World, |command| *command == menu);
+    assert!(list.iter().any(escort_menu_top), "the escort menu is up");
+    assert_all_in(&list, DrawLayer::World, escort_menu_top);
     assert_all_in(
         &list,
         DrawLayer::Overlay,
-        |command| matches!(command, DrawCommand::Text { text, .. } if text == "Escort Commands"),
+        |command| matches!(unclipped(command), DrawCommand::Text { text, .. } if text == "Escort Commands"),
     );
     assert_all_in(&list, DrawLayer::Overlay, is_text);
     assert_world_then_overlay(&list);

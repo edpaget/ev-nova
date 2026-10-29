@@ -38,7 +38,8 @@ impl Session {
     /// `npc`, if anything (see [`target_panel::tag`]): the player leads an
     /// escort hired or captured, a fighter the player launched, and a
     /// mission escort; a fighter the player launched is one whose carrier
-    /// is the player.
+    /// is the player. A former escort, disabled or breaking up and out of
+    /// the fleet (`Npc::former`), is tagged by what it was.
     #[must_use]
     pub(crate) fn target_tag(&self, npc: &Npc) -> Option<TargetTag> {
         target_panel::tag(&TagFacts {
@@ -55,6 +56,7 @@ impl Session {
                 .statics
                 .ship_record(npc.ship)
                 .map_or(0, |record| record.fields.mass),
+            former: npc.former.map(|former| former.kind()),
         })
     }
 }
@@ -63,8 +65,14 @@ impl Session {
 mod tests {
     use super::*;
     use crate::catalog::GovtId;
+    use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::mission::ships::ShipBehav;
+    use crate::pilot::Escort;
+    use crate::reserves::Reserves;
+    use crate::self_repair::FormerEscort;
+    use crate::session::escorts::{fall_in, reset_released};
     use crate::session::mission_ships::tests::{goal_catalog, in_flight};
     use crate::testkit::{FAST, ship};
     use crate::traffic::npc::{MissionMark, NpcPerson};
@@ -276,5 +284,86 @@ mod tests {
         npcs[1].govt = None;
         npcs[1].carrier = Some(carried_by(ShipRef::Npc(escort)));
         assert_eq!(tags(&session), [Some(TargetTag::Escort), None]);
+    }
+
+    /// The fleet record of an escort, `carried` a fighter, of `wage`.
+    fn record(carried: bool, wage: Option<i64>) -> Escort {
+        Escort {
+            ship: crate::ShipId(300),
+            reserves: Reserves::full(30.0, 45.0, 300.0),
+            order: None,
+            carried,
+            wage,
+            person: None,
+            mark: None,
+        }
+    }
+
+    /// `typed(fields)` with both NPCs disabled former escorts of no
+    /// government, out of the fleet, their records `records`.
+    fn former(fields: ShipFields, records: [Escort; 2]) -> Session {
+        let mut session = typed(fields);
+        for (npc, record) in session.space.traffic.npcs_mut().iter_mut().zip(records) {
+            npc.govt = None;
+            npc.escort = None;
+            npc.carrier = None;
+            npc.condition = Condition::Disabled;
+            npc.former = Some(FormerEscort { record });
+        }
+        session
+    }
+
+    #[test]
+    fn a_disabled_former_hired_or_captured_escort_is_an_escort() {
+        let session = former(
+            ShipFields { mass: 10, ..FAST },
+            [record(false, Some(30)), record(false, None)],
+        );
+        assert_eq!(tags(&session), [Some(TargetTag::Escort); 2]);
+    }
+
+    #[test]
+    fn a_disabled_former_fighter_of_99_tons_is_a_fighter_and_of_100_an_escort() {
+        for (mass, expected) in [(99, TargetTag::Fighter), (100, TargetTag::Escort)] {
+            let session = former(ShipFields { mass, ..FAST }, [record(true, None); 2]);
+            assert_eq!(tags(&session), [Some(expected); 2], "{mass}");
+        }
+    }
+
+    #[test]
+    fn a_ship_never_an_escort_or_one_that_forgot_shows_nothing() {
+        let mut never = typed(ShipFields { mass: 10, ..FAST });
+        for npc in never.space.traffic.npcs_mut() {
+            npc.govt = None;
+        }
+        assert_eq!(tags(&never), [None; 2]);
+
+        let mut intact = former(ShipFields { mass: 10, ..FAST }, [record(true, None); 2]);
+        for npc in intact.space.traffic.npcs_mut() {
+            npc.condition = Condition::Intact;
+        }
+        intact.self_repair(Rules::default(), &mut NeverFires);
+        assert_eq!(tags(&intact), [None; 2]);
+
+        let mut released = former(
+            ShipFields { mass: 10, ..FAST },
+            [record(false, Some(30)); 2],
+        );
+        for npc in released.space.traffic.npcs_mut() {
+            reset_released(npc);
+            npc.govt = None;
+        }
+        assert_eq!(tags(&released), [None; 2]);
+    }
+
+    #[test]
+    fn a_ship_boarded_back_into_the_fleet_is_tagged_as_a_led_ship() {
+        let mut session = former(ShipFields { mass: 10, ..FAST }, [record(false, None); 2]);
+        for npc in session.space.traffic.npcs_mut() {
+            fall_in(npc, None);
+            npc.escort = Some(duty());
+        }
+        assert!(session.npcs().iter().all(|npc| npc.former.is_none()));
+        assert_eq!(tags(&session), [Some(TargetTag::Escort); 2]);
     }
 }

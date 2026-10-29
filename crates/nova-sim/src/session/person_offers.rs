@@ -912,6 +912,18 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn an_offer_on_the_hail_leaves_the_comm_dialogs_release_flag_set() {
+        // The offer replaces the comm dialog before it opens, so nothing
+        // clears `_releaseCommEscort` (@0x9576a).
+        let catalog = talking();
+        let mut session = targeting_ace(&catalog);
+        session.space.escorts.release_comm_escort = true;
+        let (hailed, _) = hail(&mut session, &catalog);
+        assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
+        assert!(session.space.escorts.release_comm_escort);
+    }
+
+    #[test]
     fn an_unrefusable_mission_with_no_offer_text_is_accepted_at_once_on_the_hail() {
         let mut catalog = linked(0);
         catalog.missions[0].flags = 0x0004;

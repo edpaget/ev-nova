@@ -126,7 +126,10 @@ impl<S: ImageSource> Renderer<S> {
     /// overlay's around it, so no batch holds both, and its batches are
     /// marked world ([`Frame::world`]). The world is drawn where `gpu`'s
     /// resolution for it says ([`world_space`]). Text is never world, so
-    /// every text run is in target pixels.
+    /// every text run is in target pixels. The list's world clip
+    /// ([`DrawList::world_in`]) is the frame's ([`Frame::world_clip`]): the
+    /// batches are the same with it or without, and the GPU cuts the
+    /// world's draws to it ([`Frame::world_scissor`]).
     ///
     /// A frame drawn after [`Renderer::set_enlarger`] first starts the
     /// atlas afresh; a zero-area viewport leaves that to the next frame.
@@ -156,6 +159,12 @@ impl<S: ImageSource> Renderer<S> {
             world_space: world_space(gpu.world_resolution(), viewport),
             batches,
             world,
+            world_clip: list.world_clip().map(|clip| Rect {
+                x: clip.min.x,
+                y: clip.min.y,
+                w: clip.width(),
+                h: clip.height(),
+            }),
         });
         report
     }
@@ -247,13 +256,16 @@ impl<S: ImageSource> Renderer<S> {
                 let (across, down) = scale;
                 // Glyphs are sized by the height: the axes' scales differ
                 // only in a widened view, by under half a unit's width.
-                let size_px = size * down;
-                let line_height_px = LINE_HEIGHT * size_px;
+                let drawable = |line_height: f32| line_height.is_finite() && line_height > 0.0;
                 // Text with nothing in it draws nothing. Nor does text
-                // whose size is zero, negative, NaN or too big to give
-                // a finite line height in pixels, and the text shaper
-                // would panic on some of those, so skip both.
-                if text.is_empty() || !(line_height_px.is_finite() && line_height_px > 0.0) {
+                // whose size is zero, negative, NaN or too big to give a
+                // finite line height, in logical units (where it is
+                // shaped) or in pixels (where it is drawn), and the text
+                // shaper would panic on some of those, so skip both.
+                if text.is_empty()
+                    || !drawable(LINE_HEIGHT * size)
+                    || !drawable(LINE_HEIGHT * (size * down))
+                {
                     return;
                 }
                 let Some(clip) = clip.map_or(Some(rect), |clip| pixel_clip(rect, scale, clip))
@@ -273,9 +285,9 @@ impl<S: ImageSource> Renderer<S> {
                         (rect.x as f32 + origin.x * across).round(),
                         (rect.y as f32 + origin.y * down - 0.5).ceil(),
                     ),
-                    size_px,
-                    line_height_px,
-                    wrap_px: wrap_width.map(|w| w * across),
+                    size,
+                    wrap: wrap_width,
+                    scale: down,
                     color,
                     clip,
                 };
@@ -946,6 +958,7 @@ mod tests {
                         quads: expected_quads,
                     }],
                     world: Vec::new(),
+                    world_clip: None,
                 }),
             ]
         );
@@ -1899,14 +1912,14 @@ mod tests {
                 },
             );
         let frame = render_one(&list, &viewport);
-        let across = 1920.0 / 1365.0;
         let Batch::Text(runs) = &frame.batches[0] else {
             panic!("{frame:?}");
         };
         // Whole window pixels: 1905.9 and 140.6 round to the nearer.
         assert_eq!(runs[0].origin_px, (1906.0, 141.0));
-        assert_eq!(runs[0].size_px, 12.0 * 1.406_25, "sized by the height");
-        assert_eq!(runs[0].wrap_px, Some(100.0 * across));
+        assert_eq!(runs[0].size, 12.0);
+        assert_eq!(runs[0].scale, 1.406_25, "sized by the height");
+        assert_eq!(runs[0].wrap, Some(100.0));
         // The GPU projects quads from the logical space onto the content.
         let dot = solid_quads(&frame)[0].corners;
         let dot_centre = f32::midpoint(dot[0].x, dot[2].x);
@@ -1941,7 +1954,7 @@ mod tests {
     }
 
     #[test]
-    fn text_is_converted_to_physical_pixels() {
+    fn text_is_placed_in_physical_pixels_and_sized_in_logical_units() {
         let color = Color::rgba(1, 2, 3, 4);
         let mut list = DrawList::new();
         list.text_in(
@@ -1963,9 +1976,9 @@ mod tests {
                     text: "Hello".to_owned(),
                     font: Font::Charcoal,
                     origin_px: (3.0, 4.0),
-                    size_px: 20.0,
-                    line_height_px: 1.2 * 20.0,
-                    wrap_px: Some(40.0),
+                    size: 10.0,
+                    wrap: Some(20.0),
+                    scale: 2.0,
                     color,
                     clip: rect(0, 0, 128, 96),
                 },
@@ -1973,9 +1986,9 @@ mod tests {
                     text: "Unwrapped".to_owned(),
                     font: Font::Geneva,
                     origin_px: (0.0, 0.0),
-                    size_px: 16.0,
-                    line_height_px: 1.2 * 16.0,
-                    wrap_px: None,
+                    size: 8.0,
+                    wrap: None,
+                    scale: 2.0,
                     color: Color::WHITE,
                     clip: rect(0, 0, 128, 96),
                 },
@@ -2376,14 +2389,33 @@ mod tests {
                     text: "ok".to_owned(),
                     font: Font::Geneva,
                     origin_px: (0.0, 0.0),
-                    size_px: 16.0,
-                    line_height_px: 1.2 * 16.0,
-                    wrap_px: None,
+                    size: 8.0,
+                    wrap: None,
+                    scale: 2.0,
                     color: white,
                     clip: rect(0, 0, 128, 96),
                 }]),
             ]
         );
+    }
+
+    #[test]
+    fn text_whose_logical_line_height_is_not_finite_is_skipped_though_its_pixels_are() {
+        // Half a pixel a unit: the run's line height is finite in pixels
+        // but not in the logical units it is shaped in.
+        let half = Viewport::new(SMALL, (32, 24), 1.0);
+        let size = f32::MAX / 1.1;
+        assert!((LINE_HEIGHT * (size * 0.5)).is_finite());
+        let mut list = DrawList::new();
+        list.text("wide", at(0.0, 0.0), size, None, Color::WHITE)
+            .text("ok", at(0.0, 0.0), 8.0, None, Color::WHITE);
+        let frame = render_one(&list, &half);
+        let [Batch::Text(runs)] = frame.batches.as_slice() else {
+            panic!("one text batch: {frame:?}");
+        };
+        let texts: Vec<&str> = runs.iter().map(|run| run.text.as_str()).collect();
+        assert_eq!(texts, ["ok"]);
+        assert_eq!(runs[0].scale, 0.5);
     }
 
     #[test]
@@ -2649,6 +2681,89 @@ mod tests {
                 ("text", 1, OVERLAY),
             ]
         );
+    }
+
+    /// The world's clip in the clip tests: the 64x48 logical space less a
+    /// 16-unit column at the right, as flight's play area leaves the
+    /// status bar's.
+    fn play_area() -> Bounds {
+        Bounds {
+            min: at(0.0, 0.0),
+            max: at(48.0, 48.0),
+        }
+    }
+
+    /// A world of a sprite, a line and a dot, all inside [`play_area`],
+    /// clipped to it when `clipped`, under an overlay "bar" (the red
+    /// picture) in the column.
+    fn world_under_a_bar(clipped: bool) -> DrawList {
+        let world = |list: &mut DrawList| {
+            list.sprite(sprite(0), at(10.0, 10.0), Color::WHITE)
+                .line(at(2.0, 2.0), at(8.0, 2.0), 1.0, Color::WHITE)
+                .dot(at(3.0, 3.0), 1.0, Color::WHITE);
+        };
+        let mut list = DrawList::new();
+        if clipped {
+            list.world_in(play_area(), world);
+        } else {
+            list.world(world);
+        }
+        list.picture(ImageKey::picture(128), at(50.0, 0.0));
+        list
+    }
+
+    #[test]
+    fn a_clipped_world_submits_its_clip_and_scissor_in_each_world_space() {
+        let clip = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 48.0,
+            h: 48.0,
+        });
+        let target = render_through(&world_under_a_bar(true), &mut RecordingGpu::new());
+        assert_eq!(target.world_space, WorldSpace::Target);
+        assert_eq!(target.world_clip, clip);
+        // Twice the clip, on the 128x96 viewport.
+        assert_eq!(target.world_scissor(), rect(0, 0, 96, 96));
+        let mut logical = RecordingGpu::answering(WorldResolution::Logical);
+        let texture = render_through(&world_under_a_bar(true), &mut logical);
+        assert_eq!(texture.world_space, WorldSpace::Texture { size: (64, 48) });
+        assert_eq!(texture.world_clip, clip);
+        // The clip's texels, one a unit.
+        assert_eq!(texture.world_scissor(), rect(0, 0, 48, 48));
+    }
+
+    #[test]
+    fn an_unclipped_world_submits_no_clip() {
+        let frame = render_through(&world_under_a_bar(false), &mut RecordingGpu::new());
+        assert_eq!(frame.world_clip, None);
+        assert_eq!(frame.world_scissor(), frame.viewport);
+    }
+
+    #[test]
+    fn a_clip_no_world_command_crosses_changes_nothing_but_the_frames_clip() {
+        let resolutions = [WorldResolution::Native, WorldResolution::Logical];
+        for resolution in resolutions {
+            let clipped = render_through(
+                &world_under_a_bar(true),
+                &mut RecordingGpu::answering(resolution),
+            );
+            let unclipped = render_through(
+                &world_under_a_bar(false),
+                &mut RecordingGpu::answering(resolution),
+            );
+            assert!(clipped.world_clip.is_some(), "{resolution:?}");
+            assert_eq!(clipped.batches, unclipped.batches, "{resolution:?}");
+            assert_eq!(clipped.world, unclipped.world, "{resolution:?}");
+            assert_eq!(
+                Frame {
+                    world_clip: None,
+                    ..clipped
+                },
+                unclipped,
+                "{resolution:?}"
+            );
+        }
     }
 
     /// An OR sprite (5x6, so at (7.5, 7)) in the world, and the same in

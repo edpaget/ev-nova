@@ -858,6 +858,12 @@ fn person_offer_data() -> Rc<GameData> {
 
 /// [`person_offer_data`]'s fork, its `mïsn` 128 fitted by `fit`.
 fn person_offer_fork(fit: impl FnOnce(&mut Vec<u8>)) -> ForkBuilder {
+    person_offer_fork_of(fit, 1)
+}
+
+/// [`person_offer_fork`] with the system's first `persons` Person slots
+/// at 100 %, slot n holding Person 128 + n.
+fn person_offer_fork_of(fit: impl FnOnce(&mut Vec<u8>), persons: usize) -> ForkBuilder {
     let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
         for (i, value) in values.iter().enumerate() {
             bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
@@ -893,8 +899,11 @@ fn person_offer_fork(fit: impl FnOnce(&mut Vec<u8>)) -> ForkBuilder {
     put(&mut system, 0x04, &[-1; 32]);
     put(&mut system, 0x44, &[-1; 8]);
     put(&mut system, 0x64, &[0, -1]);
-    put(&mut system, 0x6E, &[128, -1, -1, -1, -1, -1, -1, -1]);
-    put(&mut system, 0x7E, &[100]);
+    let slots: Vec<i16> = (0..8)
+        .map(|n| if n < persons { 128 + n as i16 } else { -1 })
+        .collect();
+    put(&mut system, 0x6E, &slots);
+    put(&mut system, 0x7E, &vec![100; persons]);
     let mut person = vec![0; Person::SIZE.expect("fixed")];
     put(&mut person, 0x00, &[-2, -1, 3, 2, 0, 129]);
     put(&mut person, 0x0C, &[-1; 4]);
@@ -1078,4 +1087,266 @@ fn a_bar_desc_whose_graphic_is_above_127_and_whose_pict_exists_opens_in_1021() {
         Some(picture_bar_template().bounds),
         "laid out by DLOG 1021"
     );
+}
+
+/// A person's offer and a mission text over flight take the rulebook's
+/// `dialog_focus_ring` as they open.
+#[test]
+fn an_offer_and_a_mission_text_open_with_the_rulebooks_focus_ring() {
+    for (rules, ring) in focus_ring_readings() {
+        let mut screen = AppScreen::new(person_offer_data())
+            .with_dialogs(Rc::new(PictureDialogs), Rc::new(MonoMetrics))
+            .with_behaviour(Rc::new(Idle))
+            .with_rules(rules);
+        fly(&mut screen);
+        hail(&mut screen);
+        assert_eq!(
+            screen
+                .offer()
+                .and_then(OfferDialog::dialog)
+                .map(nova_view::ui::Dialog::focus_ring),
+            Some(ring),
+            "the offer"
+        );
+        let (screen, _) = filmed(0, "Job.", 0, Prefs::default());
+        let mut screen = screen.with_rules(rules);
+        create(&mut screen, "Ada");
+        screen.show_over_flight(vec![DescShown {
+            text: "Well done.".to_owned(),
+            graphic: None,
+            movie: None,
+        }]);
+        assert_eq!(
+            screen
+                .flight_mission_text()
+                .map(|text| text.dialog().focus_ring()),
+            Some(ring),
+            "the mission text"
+        );
+    }
+}
+
+/// A router in flight holding the merchant's mission 128, whose
+/// `QuickBrief` names "Quick.mov", hailing a second merchant, Person 129:
+/// its offer of mission 130 open over flight, whose `dësc` names
+/// "Offer.mov" as its after-movie; and the reel the movies play on.
+fn holding_and_offered_in_flight() -> (AppScreen, Rc<MockMoviePlayer>) {
+    let mut person = vec![0; Person::SIZE.expect("fixed")];
+    put_i16s(&mut person, 0x00, &[-2, -1, 3, 2, 0, 129]);
+    put_i16s(&mut person, 0x0C, &[-1; 4]);
+    put_i16s(&mut person, 0x2A, &[-1, -1, -1, 130]);
+    person[0x32..0x34].copy_from_slice(&0x0040_u16.to_be_bytes());
+    let mut offered = vec![0; Mission::SIZE.expect("fixed")];
+    put_i16s(&mut offered, 0x04, &[2]);
+    put_i16s(&mut offered, 0x0A, &[100]);
+    put_i16s(&mut offered, 0x34, &[-1]);
+    put_i16s(&mut offered, 0x58, &[-1]);
+    let fork = person_offer_fork_of(|held| put_i16s(held, 0x36, &[6001]), 2)
+        .resource(Person::TYPE, 129, Some(b"Second"), &person)
+        .resource(Mission::TYPE, 130, Some(b"Second job"), &offered)
+        .resource(
+            Desc::TYPE,
+            130 + 3872,
+            Some(b"Offer"),
+            &filmed_desc_of("Job.", "Offer.mov", 0x0001),
+        )
+        .resource(
+            Desc::TYPE,
+            6001,
+            Some(b"Quick"),
+            &filmed_desc_of("Quick.", "Quick.mov", 0x0001),
+        );
+    let reel = MockMoviePlayer::playing((160, 120), 2);
+    let mut screen = AppScreen::new(loaded(&fork))
+        .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
+        .with_dialogs(Rc::new(InfoOverEveryOpener), Rc::new(MonoMetrics))
+        .with_behaviour(Rc::new(Idle));
+    fly(&mut screen);
+    hail_person(&mut screen, 128);
+    assert_eq!(
+        screen.offer().map(|o| o.prompt().mission),
+        Some(MissionId(128))
+    );
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    assert_eq!(active(&screen), [MissionId(128)], "held");
+    assert_eq!(screen.showing(), Showing::Flight);
+    hail_person(&mut screen, 129);
+    assert_eq!(
+        screen.offer().map(|o| o.prompt().mission),
+        Some(MissionId(130)),
+        "the second merchant's offer"
+    );
+    reel.log.borrow_mut().clear();
+    (screen, reel)
+}
+
+/// Tabs to Person `id` and hails it.
+fn hail_person(screen: &mut AppScreen, id: i16) {
+    screen.tick(TICK);
+    for _ in 0..4 {
+        screen.input(&key(Key::Tab, true));
+        screen.input(&key(Key::Tab, false));
+        let targeted = flight(screen)
+            .session()
+            .ok()
+            .and_then(|session| session.target())
+            .and_then(|npc| npc.person)
+            .map(|person| person.id.0);
+        if targeted == Some(id) {
+            screen.take_sounds();
+            screen.input(&key(Key::Char('y'), true));
+            screen.input(&key(Key::Char('y'), false));
+            return;
+        }
+    }
+    panic!("never targeted {id}");
+}
+
+fn press_mission_info(screen: &mut AppScreen) {
+    screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, true));
+    screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, false));
+}
+
+#[test]
+fn i_on_a_persons_offer_over_flight_opens_mission_info_over_it_with_no_map() {
+    let (mut screen, _reel) = holding_and_offered_in_flight();
+    let still = ship(&screen);
+    press_mission_info(&mut screen);
+    assert!(
+        screen.flight_mission_info().is_some(),
+        "info open (@0xa3344)"
+    );
+    assert!(screen.offer().is_some(), "over the offer");
+    assert_eq!(screen.showing(), Showing::MissionInfo);
+    ticked(&mut screen, 5);
+    assert_eq!(ship(&screen), still, "flight paused");
+    screen.take_sounds();
+    screen.input(&key(Key::Char('m'), true));
+    screen.input(&key(Key::Char('m'), false));
+    assert!(!flight(&screen).dialog_map_open(), "no map (@0x9e3c6)");
+    assert!(screen.flight_mission_info().is_some(), "info still open");
+    assert!(
+        !screen
+            .take_sounds()
+            .iter()
+            .any(|sound| matches!(sound, Sound::Ui(UiSound::MapOpened))),
+        "no map sound"
+    );
+}
+
+#[test]
+fn closing_the_mission_info_over_a_flight_offer_reloads_the_offers_after_movie() {
+    let (mut screen, reel) = holding_and_offered_in_flight();
+    press_mission_info(&mut screen);
+    assert!(screen.flight_mission_info().is_some(), "info open");
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    assert!(screen.flight_mission_info().is_none(), "info closed");
+    assert_eq!(screen.showing(), Showing::Offer, "back to the offer");
+    assert!(
+        screen.offer().is_some_and(|offer| !offer.answered()),
+        "unanswered"
+    );
+    screen.input(&key(Key::Char('n'), true));
+    ticked(&mut screen, 3);
+    assert_eq!(
+        reeled(&reel),
+        [Call::Start("Offer.mov".into()), Call::Stop],
+        "the info screen loaded the QuickBrief's, and its close loaded the offer's \
+         again (@0xa335c)"
+    );
+}
+
+#[test]
+fn i_on_a_persons_offer_over_flight_with_no_mission_held_does_nothing() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    screen.open_offer(nova_sim::OfferPrompt {
+        mission: MissionId(130),
+        text: "Job.".to_owned(),
+        labels: nova_sim::mission::offer_labels("", "", true),
+        graphic: None,
+        movie: None,
+    });
+    screen.take_sounds();
+    screen.input(&key(Key::Command, true));
+    press_mission_info(&mut screen);
+    assert!(screen.flight_mission_info().is_none(), "nothing (@0xa32ee)");
+    assert!(screen.missions.is_none(), "no dialogs built");
+    assert_eq!(screen.showing(), Showing::Offer);
+    assert_eq!(screen.take_sounds(), [], "no sound");
+    // No flush either: Command is still held, so Command-Q quits.
+    assert_eq!(
+        screen.input(&key(Key::Char('q'), true)),
+        ScreenAction::Quit,
+        "Command still held"
+    );
+    screen.input(&key(Key::Char('q'), false));
+    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    assert!(screen.offer().is_none(), "answered");
+}
+
+#[test]
+fn the_mission_info_opening_over_a_flight_offer_lets_go_of_the_keys_held() {
+    // Command held as I opens the info is let go (`FlushEvents`
+    // @0xa32f4-0xa333f), so a Q alone after doesn't quit.
+    let (mut screen, _reel) = holding_and_offered_in_flight();
+    screen.input(&key(Key::Command, true));
+    press_mission_info(&mut screen);
+    assert!(screen.flight_mission_info().is_some(), "info open");
+    assert_ne!(
+        screen.input(&key(Key::Char('q'), true)),
+        ScreenAction::Quit,
+        "Command let go"
+    );
+}
+
+#[test]
+fn the_mission_info_closing_over_a_flight_offer_lets_go_of_the_keys_held() {
+    // As the port's close does (`note_info_closed`).
+    let (mut screen, _reel) = holding_and_offered_in_flight();
+    press_mission_info(&mut screen);
+    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::Escape, true));
+    assert!(screen.flight_mission_info().is_none(), "info closed");
+    assert_ne!(
+        screen.input(&key(Key::Char('q'), true)),
+        ScreenAction::Quit,
+        "Command let go"
+    );
+}
+
+#[test]
+fn the_mission_info_opening_over_a_flight_offer_lets_go_of_the_pointer_held() {
+    // A press on the offer's Refuse held as I opens the info is let go
+    // (`FlushEvents` @0xa32f4-0xa333f), so its release after the close
+    // clicks nothing.
+    let (mut screen, _reel) = holding_and_offered_in_flight();
+    let at = screen
+        .offer()
+        .and_then(|offer| offer.dialog())
+        .and_then(|dialog| dialog.item_bounds(nova_view::spaceport::offer::REFUSE_ITEM))
+        .expect("the Refuse button")
+        .center();
+    let pointer = |pressed| Input::PointerButton {
+        button: MouseButton::Left,
+        pressed,
+        at,
+    };
+    screen.input(&pointer(true));
+    press_mission_info(&mut screen);
+    assert!(screen.flight_mission_info().is_some(), "info open");
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    assert!(screen.flight_mission_info().is_none(), "info closed");
+    screen.take_sounds();
+    screen.input(&pointer(false));
+    assert!(
+        screen.offer().is_some_and(|offer| !offer.answered()),
+        "the offer still open and unanswered"
+    );
+    assert_eq!(screen.take_sounds(), [], "no click or button sound");
 }

@@ -177,7 +177,7 @@ impl<
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
         self.run_steps(steps);
-        self.update_escort_menu();
+        self.update_escort_menu(steps);
         self.alpha = alpha;
         self.step_cursor(steps);
         self.start_jump_effect();
@@ -219,6 +219,7 @@ impl<
             at,
         } = *input
             && self.takes(PlayerCommand::Nav)
+            && !self.click_escort_menu(at)
             && !self.click_floating_map(at)
         {
             self.click_in_space(at);

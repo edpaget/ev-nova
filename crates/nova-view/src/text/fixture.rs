@@ -50,8 +50,11 @@ const SAMPLE: &str = "Kestrel MMM iii";
 ///   `"aaa"`);
 /// - the line height is [`LINE_HEIGHT`] times the size, and the same on
 ///   every call;
-/// - width and line height at twice the size are twice those at the size
-///   (within 1%), so text scales with the UI;
+/// - width at twice the size is twice that at the size, within 1% plus
+///   one unit per character (an adapter whose widths are whole units, as
+///   QuickDraw's are, rounds each character on its own), and line height
+///   at twice the size is twice that at the size within 1%, so text
+///   scales with the UI;
 /// - Charcoal and Geneva measure a sample text differently, so the font is
 ///   honoured (given faces that differ).
 ///
@@ -85,7 +88,9 @@ pub fn check_contract(metrics: &impl TextMetrics) -> Result<(), String> {
             metrics.width(font, SIZE, SAMPLE),
             metrics.width(font, 2.0 * SIZE, SAMPLE),
         );
-        if !close(doubled, 2.0 * width, 0.01) {
+        // One unit of slack a character, for each one's rounding.
+        let slack = SAMPLE.chars().count() as f32;
+        if !close_within(doubled, 2.0 * width, 0.01, slack) {
             return Err(format!(
                 "{font:?}: the width at twice the size is {doubled}, not twice {width}"
             ));
@@ -110,7 +115,13 @@ pub fn check_contract(metrics: &impl TextMetrics) -> Result<(), String> {
 /// Whether `value` is within `tolerance` (a fraction) of `expected`; never
 /// for NaN.
 fn close(value: f32, expected: f32, tolerance: f32) -> bool {
-    (value - expected).abs() <= tolerance * expected.abs()
+    close_within(value, expected, tolerance, 0.0)
+}
+
+/// Whether `value` is within `tolerance` (a fraction) of `expected` plus
+/// `slack` units; never for NaN.
+fn close_within(value: f32, expected: f32, tolerance: f32, slack: f32) -> bool {
+    (value - expected).abs() <= tolerance * expected.abs() + slack
 }
 
 #[cfg(test)]
@@ -256,16 +267,32 @@ mod tests {
             err,
             Err("Geneva: the width at twice the size is 75, not twice 75".to_owned())
         );
+        // The sample is 15 characters, 150 wide at twice the size in
+        // Geneva: 1% and a unit a character allow 16.5 either way.
         let near = broken_width(|font, size, text| {
             let width = mono_width(font, size, text);
-            if size > SIZE { width * 1.009 } else { width }
+            if size > SIZE { width + 16.4 } else { width }
         });
-        assert_eq!(near, Ok(()), "within 1%");
+        assert_eq!(near, Ok(()), "within 1% and a unit a character");
+        let under = broken_width(|font, size, text| {
+            let width = mono_width(font, size, text);
+            if size > SIZE { width - 16.4 } else { width }
+        });
+        assert_eq!(under, Ok(()), "within 1% and a unit a character, under");
         let off = broken_width(|font, size, text| {
             let width = mono_width(font, size, text);
-            if size > SIZE { width * 1.011 } else { width }
+            if size > SIZE { width + 16.6 } else { width }
         });
-        assert!(off.is_err(), "past 1%");
+        assert_eq!(
+            off,
+            Err("Geneva: the width at twice the size is 166.6, not twice 75".to_owned()),
+            "past 1% and a unit a character"
+        );
+        let short = broken_width(|font, size, text| {
+            let width = mono_width(font, size, text);
+            if size > SIZE { width - 16.6 } else { width }
+        });
+        assert!(short.is_err(), "past it, under");
     }
 
     #[test]
