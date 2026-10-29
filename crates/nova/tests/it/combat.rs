@@ -1637,10 +1637,17 @@ impl Boarder {
     /// The centre of the open plunder or assignment dialog's item.
     fn item(&self, item: usize) -> Point {
         let screen = self.app.screen();
-        let dialog = match (screen.plunder(), screen.assignment()) {
-            (Some(plunder), _) => plunder.dialog(),
-            (None, Some(assignment)) => assignment.dialog(),
-            (None, None) => panic!("no boarding dialog is open"),
+        // The one in front: the rename, then the assignment, over the
+        // plunder dialog kept under them.
+        let dialog = match (
+            screen.capture_naming(),
+            screen.assignment(),
+            screen.plunder(),
+        ) {
+            (Some(rename), _, _) => rename.dialog(),
+            (None, Some(assignment), _) => assignment.dialog(),
+            (None, None, Some(plunder)) => plunder.dialog(),
+            (None, None, None) => panic!("no boarding dialog is open"),
         };
         dialog.item_bounds(item).expect("an item").center()
     }
@@ -1851,8 +1858,25 @@ fn use_as_my_ship_flies_the_captured_trader_and_keeps_the_old_ship() {
     game.click(game.item(7));
     assert_eq!(game.showing(), Showing::Assignment);
     game.click(game.item(1));
+    assert_eq!(game.showing(), Showing::CaptureNaming, "the rename");
+    let default = game
+        .app
+        .screen()
+        .capture_naming()
+        .expect("open")
+        .field()
+        .text()
+        .to_owned();
+    let digits = default.strip_prefix("Trader ").expect("the class's Name");
+    assert!(
+        digits.len() == 3 && digits.chars().all(|c| ('1'..='9').contains(&c)),
+        "{default:?}"
+    );
+    // Return keeps the default.
+    game.tap(Key::Enter);
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.session().ship(), nova_sim::ShipId(129));
+    assert_eq!(game.pilot().ship_name(), Some(default.as_str()));
     let shown = run_texts(&game.frame());
     assert!(
         shown
@@ -1867,6 +1891,34 @@ fn use_as_my_ship_flies_the_captured_trader_and_keeps_the_old_ship() {
             .map(|escort| escort.ship)
             .collect::<Vec<_>>(),
         [nova_sim::ShipId(128)]
+    );
+}
+
+#[test]
+fn cancelling_the_rename_loses_the_prize() {
+    let store = MemoryPilots::new();
+    let mut game = boarded(&store);
+    game.click(game.item(3));
+    game.click(game.item(7));
+    game.click(game.item(1));
+    assert_eq!(game.showing(), Showing::CaptureNaming);
+    game.click(game.item(nova_view::ui::text_input::CANCEL_ITEM));
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.session().ship(), nova_sim::ShipId(128));
+    assert!(game.pilot().escorts().is_empty());
+    let shown = run_texts(&game.frame());
+    assert!(
+        shown
+            .iter()
+            .any(|text| text == "You decided not to capture this ship after all."),
+        "{shown:?}"
+    );
+    assert!(
+        game.session()
+            .npcs()
+            .iter()
+            .any(|npc| npc.condition == nova_sim::Condition::Disabled),
+        "the trader left disabled"
     );
 }
 

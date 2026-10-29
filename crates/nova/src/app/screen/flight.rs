@@ -163,6 +163,7 @@ impl AppScreen {
         self.drop_spaceport();
         self.plunder = None;
         self.assignment = None;
+        self.capture_naming = None;
         self.comm = None;
         self.escort_dialog = None;
         self.haggle = None;

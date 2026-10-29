@@ -273,6 +273,7 @@ mod tests {
     use crate::outfitter::{FIRST_OUTFIT, OutfitFlags, OutfitRefusal, Reselection};
     use crate::pilot::Pilot;
     use crate::reserves::Reserves;
+    use crate::session::capture_naming::tests::use_as_my_ship;
     use crate::session::control::SetOpObserver;
     use crate::session::tests::{
         BLASTER, NEW, aboard, boardable, buy, captured, kitted, outfitted, outfitting,
@@ -1043,7 +1044,7 @@ mod tests {
     fn use_as_my_ship_retires_the_old_class_then_captures_the_new_before_the_swap() {
         let (mut session, probe) = captured_kitted("S222", "S223", Rulebook::default());
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[])),
             Some(Assigned::MyShip)
         );
         assert_eq!(tags(&probe), [222, 223]);
@@ -1066,7 +1067,7 @@ mod tests {
     fn by_the_other_reading_use_as_my_ship_runs_its_hooks_after_the_swap() {
         let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, RuleSource::Bible);
         let (mut session, probe) = captured_kitted("S222", "S223", rules);
-        session.assign(Assignment::MyShip, &mut Draws::of(&[]));
+        use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[]));
         assert_eq!(tags(&probe), [222, 223]);
         for snap in probe.0.borrow().iter() {
             assert_eq!(snap.ship, ShipId(128), "the class not yet changed");
@@ -1086,7 +1087,7 @@ mod tests {
             let (mut session, _) = captured_kitted("", "G401 G400", rules);
             session.pilot.outfits.remove(&OutfitId(401));
             session.pilot.outfits.remove(&OutfitId(400));
-            session.assign(Assignment::MyShip, &mut Draws::of(&[]));
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[]));
             assert_eq!(session.pilot().owned(OutfitId(401)), kept, "{source:?}");
             assert_eq!(
                 session.pilot().owned(OutfitId(400)),
@@ -1104,7 +1105,7 @@ mod tests {
             .ships
             .retain(|record| record.id != ShipId(129));
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[])),
             Some(Assigned::Abandoned)
         );
         assert!(tags(&probe).is_empty());
@@ -1114,7 +1115,7 @@ mod tests {
     fn on_capture_draws_before_the_fuel() {
         let (mut session, _) = captured_kitted("", "R(b1 b2)", Rulebook::default());
         let mut chance = Draws::default().keyed(2, 1).keyed(300, 7);
-        session.assign(Assignment::MyShip, &mut chance);
+        use_as_my_ship(&mut session, "Prize", &mut chance);
         assert_roll_then_fuel(&session, &chance);
     }
 
@@ -1123,7 +1124,7 @@ mod tests {
         let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, RuleSource::Bible);
         let (mut session, _) = captured_kitted("", "R(b1 b2)", rules);
         let mut chance = Draws::default().keyed(2, 1).keyed(300, 7);
-        session.assign(Assignment::MyShip, &mut chance);
+        use_as_my_ship(&mut session, "Prize", &mut chance);
         assert_roll_then_fuel(&session, &chance);
     }
 

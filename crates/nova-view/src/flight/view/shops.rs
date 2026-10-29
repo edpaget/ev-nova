@@ -1,6 +1,7 @@
 //! [`FlightView`]'s spaceport shops over the [`FlightSim`] port: the
 //! exchange, the recharge, the outfitter, the shipyard and the bar; and
-//! the cargo's jettison, the capture's assignment and the intro's mark.
+//! the cargo's jettison, the capture's assignment and rename, and the
+//! intro's mark.
 //! Each sends its command
 //! ([`FlightCommand`]) and hands back the flight's answer, a flight that
 //! refuses it (one that never started) answering as today's failed
@@ -11,6 +12,7 @@
 //! router's facts, Recharge and the intro seen, are the kept frame's.
 //! The bar's redraws around each command stay the view's.
 
+use nova_sim::capture_naming::CaptureNaming;
 use nova_sim::flight_frame::{Answer, BarNews, FlightCommand, PortShops, ScreenAnswer, ScreenAsk};
 use nova_sim::{
     Assigned, Assignment, HireList, HireRefusal, Hired, Order, OutfitOrder, OutfitRefusal,
@@ -412,12 +414,11 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     }
 
     /// Assigns the ship captured ([`FlightCommand::Assign`],
-    /// `nova_sim::Session::assign`), and says what it did; after "Use As
-    /// My Ship" it is drawn where it is, not on its way from the old
-    /// ship, and the change of ship the flight tells is caught up with
-    /// ([`SessionEvent::ShipChanged`](nova_sim::SessionEvent::ShipChanged)),
-    /// reading the new ship's sprite sheet, once. `None` when no capture
-    /// awaits its assignment.
+    /// `nova_sim::Session::assign`), and says what it did, as
+    /// [`FlightView::assigned`] does; "Use As My Ship" says nothing yet,
+    /// the ship awaiting its name ([`Assigned::Naming`],
+    /// [`FlightView::capture_naming`], [`FlightView::name_capture`]).
+    /// `None` when no capture awaits its assignment.
     pub fn assign(&mut self, choice: Assignment) -> Option<Assigned>
     where
         C: SystemCatalog + ShipSprites + CombatLooks,
@@ -425,6 +426,49 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
         let Answer::Assigned(assigned) = self.send(FlightCommand::Assign(choice)) else {
             return None;
         };
+        if assigned == Assigned::Naming {
+            return Some(assigned);
+        }
+        self.assigned(assigned);
+        Some(assigned)
+    }
+
+    /// The prompt for renaming the ship captured, its words read from the
+    /// flight's catalog and its default name drawn afresh on the flight's
+    /// chance ([`ScreenAsk::CaptureNaming`]), asked once as the rename
+    /// opens: `None` when no name is awaited, or the flight has nothing to
+    /// answer.
+    pub fn capture_naming(&mut self) -> Option<CaptureNaming> {
+        match self.sim.screen(ScreenAsk::CaptureNaming) {
+            ScreenAnswer::CaptureNaming(naming) => naming,
+            _ => None,
+        }
+    }
+
+    /// Answers the rename of the ship captured with the name `typed`, or
+    /// none for Cancel ([`FlightCommand::NameCapture`],
+    /// `nova_sim::Session::name_capture`), and says what it did, as
+    /// [`FlightView::assigned`] does. `None` when no name is awaited.
+    pub fn name_capture(&mut self, typed: Option<String>) -> Option<Assigned>
+    where
+        C: SystemCatalog + ShipSprites + CombatLooks,
+    {
+        let Answer::Assigned(assigned) = self.send(FlightCommand::NameCapture(typed)) else {
+            return None;
+        };
+        self.assigned(assigned);
+        Some(assigned)
+    }
+
+    /// Says what an assignment or a rename did: after a takeover the new
+    /// ship is drawn where it is, not on its way from the old ship, and
+    /// the change of ship the flight tells is caught up with
+    /// ([`SessionEvent::ShipChanged`](nova_sim::SessionEvent::ShipChanged)),
+    /// reading the new ship's sprite sheet, once.
+    fn assigned(&mut self, assigned: Assigned)
+    where
+        C: SystemCatalog + ShipSprites + CombatLooks,
+    {
         if assigned == Assigned::MyShip {
             // Where the new ship is, in the frame the assignment leaves,
             // before the catch-up that follows it.
@@ -433,6 +477,5 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
         }
         self.catch_up();
         self.say_for(assigned_message(assigned), assigned_ticks(assigned));
-        Some(assigned)
     }
 }

@@ -90,6 +90,7 @@ impl AppScreen {
             boarding_rule: Rc::new(NovaBoarding::default()),
             plunder: None,
             assignment: None,
+            capture_naming: None,
             hail_options: HailOptions::default(),
             rules: Rulebook::default(),
             flight_overlays: FlightOverlays::default(),
@@ -326,6 +327,12 @@ impl AppScreen {
     #[must_use]
     pub fn assignment(&self) -> Option<&AssignmentDialog> {
         self.assignment.as_ref()
+    }
+
+    /// Use As My Ship's rename, while the ship captured awaits its name.
+    #[must_use]
+    pub fn capture_naming(&self) -> Option<&TextInputDialog> {
+        self.capture_naming.as_ref()
     }
 
     /// The flight `start` says over the game data, built at the edge
@@ -708,11 +715,14 @@ impl AppScreen {
                 Showing::Offer
             };
         }
-        if self.plunder.is_some() {
-            return Showing::Plunder;
+        if self.capture_naming.is_some() {
+            return Showing::CaptureNaming;
         }
         if self.assignment.is_some() {
             return Showing::Assignment;
+        }
+        if self.plunder.is_some() {
+            return Showing::Plunder;
         }
         if self.new_pilot.is_some() {
             return Showing::NewPilot;

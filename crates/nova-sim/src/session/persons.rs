@@ -610,6 +610,7 @@ mod tests {
     use crate::pilot::Pilot;
     use crate::rulebook::RuleSource;
     use crate::rulebook::{RuleKey, Rulebook};
+    use crate::session::capture_naming::tests::use_as_my_ship;
     use crate::testkit::{FAST, FakePilotCatalog, person, ship};
 
     #[test]
@@ -986,7 +987,7 @@ mod tests {
             npc: NpcId(0),
             ship: ShipId(129),
             plunder: crate::board::Plunder::default(),
-            captured: true,
+            stage: super::super::Stage::Assignment,
         });
         session
     }
@@ -1049,15 +1050,10 @@ mod tests {
 
     #[test]
     fn a_person_whose_ship_the_player_takes_is_gone_for_good_by_either_reading() {
-        use crate::board::Assignment;
         for source in [RuleSource::Engine, RuleSource::Bible] {
             let catalog = duel(ESCAPE_POD, 0);
             let mut session = captured_by(&catalog, source);
-            assert!(
-                session
-                    .assign(Assignment::MyShip, &mut NeverFires)
-                    .is_some()
-            );
+            assert!(use_as_my_ship(&mut session, "Prize", &mut NeverFires).is_some());
             assert!(session.pilot().gone(PersonId(600)), "{source:?}");
             assert!(!session.pilot().grudge(PersonId(600)), "{source:?}");
             assert!(

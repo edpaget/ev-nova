@@ -232,6 +232,7 @@ impl Session {
             | FlightCommand::CloseHire
             | FlightCommand::Jettison { .. }
             | FlightCommand::Assign(_)
+            | FlightCommand::NameCapture(_)
             | FlightCommand::MarkIntroSeen => self.apply_port(command, collab),
             FlightCommand::OpenMissionComputer
             | FlightCommand::ShowComputerRow(_)

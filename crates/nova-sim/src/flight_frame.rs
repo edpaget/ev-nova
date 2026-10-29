@@ -957,6 +957,9 @@ pub enum FlightCommand {
     /// Assign the ship captured
     /// ([`Session::assign`](crate::Session::assign)).
     Assign(Assignment),
+    /// Answer Use As My Ship's rename: the name typed, or none for Cancel
+    /// ([`Session::name_capture`](crate::Session::name_capture)).
+    NameCapture(Option<String>),
     /// The intro screen was shown
     /// ([`Session::mark_intro_seen`](crate::Session::mark_intro_seen)).
     MarkIntroSeen,
@@ -1113,6 +1116,7 @@ impl FlightCommand {
             | Self::ReloadOfferDesc(_)
             | Self::Jettison { .. }
             | Self::Assign(_)
+            | Self::NameCapture(_)
             | Self::MarkIntroSeen
             | Self::OpenPlayerInfo
             | Self::SetWindowWidth(_)
@@ -2061,6 +2065,7 @@ mod tests {
             C::ReloadOfferDesc(crate::MissionId(130)),
             C::Jettison { all: true },
             C::Assign(crate::Assignment::Escort),
+            C::NameCapture(None),
             C::MarkIntroSeen,
         ];
         for command in port {

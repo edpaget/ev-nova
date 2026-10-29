@@ -12,6 +12,7 @@ use super::faked_travel::{faked_lasts, sent_but_lines};
 use super::*;
 use crate::flight::radar::RadarScene;
 use crate::flight::target::TargetPanel;
+use nova_sim::capture_naming::CaptureNaming;
 use nova_sim::flight_frame::{FlightEvent, PortShops};
 use nova_sim::navigation::NavMode;
 use nova_sim::order_loop::{OrderRun, Stopped};
@@ -1326,6 +1327,105 @@ fn use_as_my_ship_draws_the_captured_ship_where_it_is_reading_its_sheet_once() {
         "refused: nothing awaits"
     );
     faked_lasts(&mut view, RETAINED_OLD_SHIP, OLD_SHIP_TICKS);
+}
+
+#[test]
+fn use_as_my_ship_awaiting_its_name_says_nothing_and_changes_nothing_drawn() {
+    let mut view = super::faked_world::world(
+        boardable(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    view.alpha = 0.5;
+    view.sim.queue_answer(Answer::Assigned(Assigned::Naming));
+    assert_eq!(view.assign(Assignment::MyShip), Some(Assigned::Naming));
+    assert_eq!(sent(&view), [FlightCommand::Assign(Assignment::MyShip)]);
+    assert_eq!(view.message(), None, "nothing said");
+    assert_eq!(view.alpha(), 0.5, "the old ship flies on");
+}
+
+#[test]
+fn a_capture_naming_is_the_flights() {
+    let mut view = docked();
+    let naming = CaptureNaming {
+        prompt: "Now rename this captured ship:".to_owned(),
+        default: "Shuttle 123".to_owned(),
+    };
+    view.sim
+        .queue_screen(ScreenAnswer::CaptureNaming(Some(naming.clone())));
+    assert_eq!(view.capture_naming(), Some(naming));
+    assert_eq!(view.capture_naming(), None, "nothing answered");
+    assert_eq!(
+        view.sim.screens_asked(),
+        [ScreenAsk::CaptureNaming, ScreenAsk::CaptureNaming]
+    );
+}
+
+#[test]
+fn naming_the_capture_flies_it_where_it_is_reading_its_sheet_once() {
+    let mut view = super::faked_world::world(
+        boardable(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    view.alpha = 0.5;
+    view.previous = nova_sim::flight_frame::ShipPlace {
+        position: Vec2::new(-40.0, 30.0),
+        heading: 90.0,
+    };
+    view.sim
+        .queue_event(FlightEvent::Session(SessionEvent::ShipChanged));
+    let taken = leaves(&view, |frame| {
+        frame.ships[0] = record::player(129, Vec2::new(60.0, -10.0), 45.0);
+    });
+    view.sim
+        .queue_answer_showing(Answer::Assigned(Assigned::MyShip), taken);
+    assert_eq!(
+        view.name_capture(Some("The Prize".to_owned())),
+        Some(Assigned::MyShip)
+    );
+    assert_eq!(
+        sent_but_lines(&view),
+        [FlightCommand::NameCapture(Some("The Prize".to_owned()))]
+    );
+    assert_eq!(view.alpha(), 0.0, "drawn where it is");
+    assert_eq!(view.shown_position(), at(60.0, -10.0));
+    assert_eq!(view.frame.player().class, ShipId(129));
+    assert_eq!(view.sheet_ship, Some(ShipId(129)), "its sheet read");
+    assert_eq!(view.name_capture(None), None, "refused: nothing awaits");
+    faked_lasts(&mut view, RETAINED_OLD_SHIP, OLD_SHIP_TICKS);
+}
+
+#[test]
+fn naming_the_capture_with_no_slot_says_the_old_ship_is_lost() {
+    let mut view = super::faked_world::world(
+        boardable(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    view.alpha = 0.5;
+    view.sim.queue_answer(Answer::Assigned(Assigned::Abandoned));
+    assert_eq!(
+        view.name_capture(Some("Kite".to_owned())),
+        Some(Assigned::Abandoned)
+    );
+    assert_eq!(view.alpha(), 0.5, "the old ship flies on");
+    faked_lasts(&mut view, LOST_OLD_SHIP, OLD_SHIP_TICKS);
+}
+
+#[test]
+fn cancelling_the_rename_says_so_for_240_ticks() {
+    let mut view = super::faked_world::world(
+        boardable(),
+        in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
+    );
+    view.alpha = 0.5;
+    view.sim.queue_answer(Answer::Assigned(Assigned::Declined));
+    assert_eq!(view.name_capture(None), Some(Assigned::Declined));
+    assert_eq!(sent_but_lines(&view), [FlightCommand::NameCapture(None)]);
+    assert_eq!(view.alpha(), 0.5, "the old ship flies on");
+    faked_lasts(
+        &mut view,
+        "You decided not to capture this ship after all.",
+        240,
+    );
 }
 
 // The intro.

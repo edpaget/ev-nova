@@ -137,7 +137,8 @@ impl<A: Audio> AudioCore<A> {
         {
             self.spend_music();
         }
-        // The Preferences dialog, the boarding dialogs, the comm dialogs,
+        // The Preferences dialog, the boarding dialogs (the rename among
+        // them), the comm dialogs,
         // a person's offer dialog, the mission dialogs and the player info
         // screen pause flight
         // below them, and flight lets go of its keys, so the thrust is
@@ -148,6 +149,7 @@ impl<A: Audio> AudioCore<A> {
                 Showing::Preferences
                     | Showing::Plunder
                     | Showing::Assignment
+                    | Showing::CaptureNaming
                     | Showing::Comm
                     | Showing::EscortDialog
                     | Showing::Haggle
@@ -505,7 +507,7 @@ pub fn distance_gain(offset: (i32, i32)) -> f32 {
 /// below it: the About text, the Preferences dialog, the new pilot's name
 /// entry and its ship's christening, the saved pilots' list, a note and a question over the main
 /// menu, and the plunder,
-/// assignment, comm, haggle and offer dialogs, the mission texts and the
+/// assignment, rename, comm, haggle and offer dialogs, the mission texts and the
 /// mission info screen over flight.
 fn is_overlay(showing: Showing) -> bool {
     matches!(
@@ -519,6 +521,7 @@ fn is_overlay(showing: Showing) -> bool {
             | Showing::Question
             | Showing::Plunder
             | Showing::Assignment
+            | Showing::CaptureNaming
             | Showing::Comm
             | Showing::EscortDialog
             | Showing::Haggle
@@ -2279,6 +2282,7 @@ mod tests {
         for overlay in [
             Showing::Plunder,
             Showing::Assignment,
+            Showing::CaptureNaming,
             Showing::Comm,
             Showing::EscortDialog,
             Showing::Haggle,

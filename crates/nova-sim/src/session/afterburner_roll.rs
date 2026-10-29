@@ -81,6 +81,7 @@ mod tests {
     use crate::flight::Controls;
     use crate::pilot::{Escort, Pilot};
     use crate::rulebook::{RuleSource, Rulebook};
+    use crate::session::capture_naming::tests::use_as_my_ship;
     use crate::session::{Assigned, Assignment};
     use crate::testkit::work_with;
     use crate::testkit::{
@@ -294,7 +295,7 @@ mod tests {
         let catalog = boardable_burning();
         let mut session = captured(&catalog);
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut Ranged::of(&[])),
+            use_as_my_ship(&mut session, "Prize", &mut Ranged::of(&[])),
             Some(Assigned::MyShip)
         );
         let old = last_escort(&session).expect("the old ship kept");

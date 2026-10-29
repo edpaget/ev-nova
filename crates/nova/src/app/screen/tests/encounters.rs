@@ -239,7 +239,7 @@ pub(super) fn boarded() -> AppScreen {
     screen
 }
 
-fn plunder_click(screen: &mut AppScreen, item: usize) -> Vec<Sound> {
+pub(super) fn plunder_click(screen: &mut AppScreen, item: usize) -> Vec<Sound> {
     let at = screen
         .plunder()
         .expect("the plunder dialog is open")
@@ -259,7 +259,7 @@ fn plunder_click(screen: &mut AppScreen, item: usize) -> Vec<Sound> {
     sounds
 }
 
-fn assignment_click(screen: &mut AppScreen, item: usize) {
+pub(super) fn assignment_click(screen: &mut AppScreen, item: usize) {
     let at = screen
         .assignment()
         .expect("the assignment dialog is open")
@@ -463,15 +463,19 @@ fn without_any_metrics_a_boarding_is_let_go() {
 /// The router over [`boarding_data`] with dialogs and pilots kept in
 /// `store`, capturing surely, flying the new pilot "Ada", boarded and
 /// captured.
-fn captured(store: &MemoryPilots) -> AppScreen {
+pub(super) fn captured(store: &MemoryPilots) -> AppScreen {
     captured_by(store, Rulebook::default())
 }
 
 /// [`captured`], the router's rule set `rules`.
 fn captured_by(store: &MemoryPilots, rules: Rulebook) -> AppScreen {
+    captured_over(store, with_dialogs(boarding_data()).with_rules(rules))
+}
+
+/// [`captured`] from `screen`, a router over [`boarding_data`].
+pub(super) fn captured_over(store: &MemoryPilots, screen: AppScreen) -> AppScreen {
     let mut screen = boardable(
-        with_dialogs(boarding_data())
-            .with_rules(rules)
+        screen
             .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
             .appeared(),
     )
@@ -482,8 +486,40 @@ fn captured_by(store: &MemoryPilots, rules: Rulebook) -> AppScreen {
     assert_eq!(screen.showing(), Showing::Plunder);
     plunder_click(&mut screen, 7);
     assert_eq!(screen.showing(), Showing::Assignment);
-    assert!(screen.plunder().is_none());
     screen
+}
+
+/// Where in `screen`'s draw list a text starting `start` is first drawn.
+pub(super) fn drawn_at(screen: &AppScreen, start: &str) -> Option<usize> {
+    drawn(screen).iter().position(
+        |command| matches!(command, DrawCommand::Text { text, .. } if text.starts_with(start)),
+    )
+}
+
+#[test]
+fn a_capture_keeps_the_plunder_dialog_drawn_under_the_assignment_in_front() {
+    let store = MemoryPilots::new();
+    let mut screen = captured(&store);
+    assert!(screen.plunder().is_some(), "kept");
+    assert_eq!(screen.showing(), Showing::Assignment, "in front");
+    let plunder = drawn_at(&screen, "Select what to plunder").expect("the plunder drawn");
+    let question = drawn_at(&screen, "Do you want").expect("the question drawn");
+    assert!(plunder < question, "the assignment over it");
+    // Escape, the plunder's Abort, goes to the assignment, which takes
+    // nothing of it.
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    assert_eq!(screen.showing(), Showing::Assignment, "the plunder inert");
+    assert!(screen.plunder().is_some());
+}
+
+#[test]
+fn use_as_escort_closes_the_plunder_dialog_under_it() {
+    let store = MemoryPilots::new();
+    let mut screen = captured(&store);
+    assignment_click(&mut screen, ESCORT_ITEM);
+    assert!(screen.plunder().is_none());
+    assert_eq!(screen.showing(), Showing::Flight);
 }
 
 #[test]
@@ -509,10 +545,12 @@ fn a_capture_asks_its_assignment_and_use_as_escort_joins_the_fleet_and_saves() {
 }
 
 #[test]
-fn use_as_my_ship_flies_the_captured_ship() {
+fn use_as_my_ship_flies_the_captured_ship_once_named() {
     let store = MemoryPilots::new();
     let mut screen = captured(&store);
     assignment_click(&mut screen, MY_SHIP_ITEM);
+    assert_eq!(screen.showing(), Showing::CaptureNaming);
+    screen.input(&key(Key::Enter, true));
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(pilot(&screen).ship(), nova_sim::ShipId(129));
     assert_eq!(

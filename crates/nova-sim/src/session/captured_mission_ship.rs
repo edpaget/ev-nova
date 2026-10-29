@@ -140,6 +140,7 @@ mod tests {
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
     use crate::session::Session;
+    use crate::session::capture_naming::tests::use_as_my_ship;
     use crate::session::mission_ships::tests::{
         accepted, destroy, goal_catalog, in_flight, jump_to, marked, settle, ships_of, take_off,
     };
@@ -574,12 +575,12 @@ mod tests {
             npc: id,
             ship,
             plunder: crate::board::Plunder::default(),
-            captured: true,
+            stage: crate::session::Stage::Assignment,
         });
         let _ = session.take_sounds();
         let _ = session.take_messages();
         assert_eq!(
-            session.assign(crate::board::Assignment::MyShip, &mut NeverFires),
+            use_as_my_ship(&mut session, "Prize", &mut NeverFires),
             Some(crate::board::Assigned::MyShip)
         );
         assert!(session.space.npc(id).is_none(), "taken out (@0x41a46)");

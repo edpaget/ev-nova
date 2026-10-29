@@ -112,7 +112,9 @@
 //! **A ship captured** ([`Assignment`]) joins the fleet with its armour at
 //! [`ESCORT_ARMOR_SHARE`] of its most, its person living on by the engine
 //! reading of [`RuleKey::CapturedPerson`]; or, "Use As My Ship", the
-//! player takes it over and its person is gone, while a ship slot below
+//! ship is first renamed ([`capture_naming`](crate::capture_naming): OK
+//! names it unculled, Cancel loses the prize), then the player takes it
+//! over and its person is gone, while a ship slot below
 //! the last of the [`MAX_SHIPS_IN_SYSTEM`] is free for the old ship
 //! (`_DoShipCapture` leaves 1 free @0x41136, as [`RuleKey::SpawnReserve`]
 //! reads), which comes in where the player was and flies into formation
@@ -653,6 +655,12 @@ pub enum Assigned {
     /// No ship slot was free for the old ship, so the swap was dropped and
     /// the prize lost (#305).
     Abandoned,
+    /// Use As My Ship was chosen, and the ship awaits its new name before it
+    /// is taken over ([`crate::capture_naming`]); nothing is said yet.
+    Naming,
+    /// The rename was cancelled: nothing was taken over and the prize is
+    /// lost (`STR#` 2002 #122).
+    Declined,
 }
 
 /// The share of each warship or interceptor escort's crew and strength

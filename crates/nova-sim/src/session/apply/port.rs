@@ -30,6 +30,9 @@ impl Session {
     /// - [`FlightCommand::Assign`] runs [`Session::assign`]:
     ///   [`Answer::Assigned`], or refused with no capture awaiting its
     ///   assignment, changing nothing.
+    /// - [`FlightCommand::NameCapture`] runs [`Session::name_capture`]:
+    ///   [`Answer::Assigned`], or refused with no name awaited, changing
+    ///   nothing.
     /// - [`FlightCommand::OpenOutfitter`], [`FlightCommand::CloseOutfitter`],
     ///   [`FlightCommand::CloseHire`], [`FlightCommand::DeclineShip`],
     ///   [`FlightCommand::Jettison`] and [`FlightCommand::MarkIntroSeen`] run
@@ -87,6 +90,9 @@ impl Session {
             FlightCommand::Assign(choice) => self
                 .assign(choice, chance)
                 .map_or(Answer::Refused, Answer::Assigned),
+            FlightCommand::NameCapture(typed) => self
+                .name_capture(typed.as_deref(), chance)
+                .map_or(Answer::Refused, Answer::Assigned),
             FlightCommand::MarkIntroSeen => {
                 self.mark_intro_seen();
                 Answer::Done
@@ -99,7 +105,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::Assignment;
+    use crate::board::{Assigned, Assignment};
     use crate::catalog::{OutfitId, ShipId};
     use crate::chance::NeverFires;
     use crate::landing::StellarFlags;
@@ -313,5 +319,39 @@ mod tests {
             "nothing awaits"
         );
         assert_eq!(session, before);
+    }
+
+    #[test]
+    fn a_rename_answers_what_it_did_and_with_none_awaited_is_refused() {
+        let catalog = boardable();
+        for (typed, assigned) in [
+            (Some("The Prize"), Assigned::MyShip),
+            (None, Assigned::Declined),
+        ] {
+            let mut session = captured(&catalog);
+            assert_eq!(
+                apply(&mut session, FlightCommand::Assign(Assignment::MyShip)),
+                Answer::Assigned(Assigned::Naming)
+            );
+            runs(
+                &mut session,
+                FlightCommand::NameCapture(typed.map(str::to_owned)),
+                |session| {
+                    Answer::Assigned(
+                        session
+                            .name_capture(typed, &mut NeverFires)
+                            .expect("awaits"),
+                    )
+                },
+            );
+            assert_eq!(session.pilot().ship_name() == typed, typed.is_some());
+            let before = session.clone();
+            assert_eq!(
+                apply(&mut session, FlightCommand::NameCapture(None)),
+                Answer::Refused,
+                "nothing awaits: {assigned:?}"
+            );
+            assert_eq!(session, before);
+        }
     }
 }

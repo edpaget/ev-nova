@@ -1,6 +1,7 @@
 //! The dialogs [`AppScreen`] opens over the screens and over flight:
 //! About, the texts, Preferences, the mission dialogs, player info, offers,
-//! comm, haggle, plunder and assignment.
+//! comm, haggle, plunder and assignment (and the rename after it, in the
+//! `capture_naming` module).
 
 use std::rc::Rc;
 
@@ -260,10 +261,13 @@ impl AppScreen {
         if let Some(dialog) = &mut self.offer {
             return Some(dialog);
         }
-        if let Some(dialog) = &mut self.plunder {
+        if let Some(dialog) = &mut self.capture_naming {
             return Some(dialog);
         }
         if let Some(dialog) = &mut self.assignment {
+            return Some(dialog);
+        }
+        if let Some(dialog) = &mut self.plunder {
             return Some(dialog);
         }
         if let Some(dialog) = &mut self.new_pilot {
@@ -792,7 +796,8 @@ impl AppScreen {
     /// miss of every enabled button included, with the time the dialog
     /// has been open, and the dialog shows what is still on board, or
     /// closes once the boarding is over; a capture awaiting its
-    /// assignment opens the assignment dialog. Every pointer event goes
+    /// assignment opens the assignment dialog over it, the plunder dialog
+    /// staying drawn under it (see the `capture_naming` module). Every pointer event goes
     /// to the dialog, so a click outside its frame is a miss too, as
     /// `_PlunderFilter` takes every mouse-down (@0x92f20).
     pub(super) fn plunder_input(&mut self, input: &Input) -> ScreenAction {
@@ -804,20 +809,17 @@ impl AppScreen {
         let held = dialog.held();
         let flight = self.flight.as_mut().expect(ENTERED);
         let taken = flight.plunder_held(take, held);
+        if taken == Taken::Captured {
+            self.open_assignment();
+            return ScreenAction::None;
+        }
         match flight.plunder_shown() {
             Some(shown) => {
                 if let Some(dialog) = &mut self.plunder {
                     dialog.set_plunder(&shown);
                 }
             }
-            None => {
-                if let Some(mut dialog) = self.plunder.take() {
-                    self.sounds.extend(dialog.take_sounds());
-                }
-            }
-        }
-        if taken == Taken::Captured {
-            self.open_assignment();
+            None => self.close_plunder(),
         }
         ScreenAction::None
     }
@@ -850,14 +852,21 @@ impl AppScreen {
     }
 
     /// The assignment dialog's input: the choice goes through flight, and
-    /// the dialog closes, keeping its sounds.
+    /// the dialog closes, keeping its sounds. Use As My Ship opens the
+    /// rename over the plunder dialog, the key that chose it typing
+    /// nothing into it; otherwise the plunder dialog closes too.
     pub(super) fn assignment_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.assignment.as_mut().expect("open");
         dialog.input(input);
         if let Some(choice) = dialog.take_choice() {
             self.sounds.extend(dialog.take_sounds());
             self.assignment = None;
-            self.flight.as_mut().expect(ENTERED).assign(choice);
+            let assigned = self.flight.as_mut().expect(ENTERED).assign(choice);
+            if assigned == Some(nova_sim::Assigned::Naming) {
+                self.open_capture_naming(matches!(input, Input::Key { .. }));
+            } else {
+                self.close_plunder();
+            }
         }
         ScreenAction::None
     }

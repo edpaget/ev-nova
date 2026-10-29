@@ -89,6 +89,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 mod appear;
+mod capture_naming;
 mod christening;
 mod death;
 mod dialog_maps;

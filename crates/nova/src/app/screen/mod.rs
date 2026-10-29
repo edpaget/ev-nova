@@ -264,9 +264,13 @@
 //! no metrics to lay it out the boarding is let go, with a warning. Each
 //! take goes through flight, which says what it took, and the dialog
 //! shows what is still on board, or closes once the boarding is over. A
-//! capture that awaits its assignment opens the assignment dialog the
-//! same way, and the choice goes through flight; the pilot is saved after
-//! the input that captured or assigned, as after a change in the
+//! capture that awaits its assignment opens the assignment dialog over
+//! the plunder dialog, which stays drawn under it, and the choice goes
+//! through flight. Use As My Ship then opens the rename, the Text Input
+//! dialog asking the ship's new name, whose OK or Cancel goes through
+//! flight (see the `capture_naming` module); Use As Escort, or the
+//! rename answered, closes the plunder dialog. The pilot is saved after
+//! the input that captured, assigned or named, as after a change in the
 //! spaceport.
 //!
 //! I, outside flight and the spaceport, opens the About text in the game's "Desc Dialog"
@@ -337,6 +341,7 @@ use nova_view::ui::mission_dialogs::MissionDialogs;
 use nova_view::ui::new_pilot::NewPilotDialog;
 use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
+use nova_view::ui::text_input::TextInputDialog;
 use nova_view::ui::{
     AssignmentDialog, CommDialog, DescDialog, DialogResources, HaggleDialog, PlunderDialog,
     PrefsDialog, YesNoDialog,
@@ -346,6 +351,7 @@ use nova_view::{FullscreenKind, Scaling};
 
 mod appear;
 mod build;
+mod capture_naming;
 mod christening;
 mod entry;
 mod escort_dialog;
@@ -599,6 +605,9 @@ pub struct AppScreen {
     plunder: Option<PlunderDialog>,
     /// The captured-ship assignment dialog, while a capture awaits it.
     assignment: Option<AssignmentDialog>,
+    /// Use As My Ship's rename, the Text Input dialog over the plunder
+    /// dialog, while the ship captured awaits its name.
+    capture_naming: Option<TextInputDialog>,
     /// The options each flight's comm dialog lists.
     hail_options: HailOptions,
     /// How each disputed rule reads in each flight.

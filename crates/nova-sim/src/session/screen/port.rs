@@ -11,13 +11,15 @@
 //! asked again, each answers from the rolls kept. The shops' shipyard is
 //! built afresh, applying the redraws of the classes bought or declined
 //! since its last build, at the points it was built before. A ship's name
-//! prompt ([`ScreenAsk::ShipNaming`]) draws its default's digits afresh
-//! at each ask and keeps nothing ([`ScreenAsk::draws_afresh`]).
+//! prompt ([`ScreenAsk::ShipNaming`]) and a captured ship's rename
+//! ([`ScreenAsk::CaptureNaming`]) draw their default's digits afresh at
+//! each ask and keep nothing ([`ScreenAsk::draws_afresh`]).
 //!
 //! [`ScreenAsk::Shops`]: crate::flight_frame::ScreenAsk::Shops
 //! [`ScreenAsk::Outfitter`]: crate::flight_frame::ScreenAsk::Outfitter
 //! [`ScreenAsk::HireList`]: crate::flight_frame::ScreenAsk::HireList
 //! [`ScreenAsk::ShipNaming`]: crate::flight_frame::ScreenAsk::ShipNaming
+//! [`ScreenAsk::CaptureNaming`]: crate::flight_frame::ScreenAsk::CaptureNaming
 //! [`ScreenAsk::draws_afresh`]: crate::flight_frame::ScreenAsk::draws_afresh
 
 use super::super::Session;
@@ -72,6 +74,19 @@ impl Session {
     ) -> ScreenAnswer {
         catalog.map_or(ScreenAnswer::Nothing, |catalog| {
             ScreenAnswer::ShipNaming(self.ship_naming(ship, catalog, chance))
+        })
+    }
+
+    /// The rename prompt for the ship captured
+    /// ([`Session::capture_naming`]), worded from `catalog` and drawn on
+    /// `chance`; nothing without a catalog.
+    pub(super) fn capture_naming_screen(
+        &self,
+        catalog: Option<&dyn SimCatalog>,
+        chance: &mut dyn Chance,
+    ) -> ScreenAnswer {
+        catalog.map_or(ScreenAnswer::Nothing, |catalog| {
+            ScreenAnswer::CaptureNaming(self.capture_naming(catalog, chance))
         })
     }
 
@@ -392,6 +407,38 @@ pub(in crate::session) mod tests {
                 ScreenAnswer::ShipNaming(Err(ShipRefusal::AlreadyFlown))
             ),
             "precondition: a refusal, of the class flown"
+        );
+    }
+
+    #[test]
+    fn a_capture_naming_is_the_sessions_prompt_drawn_afresh() {
+        let catalog = boardable();
+        let mut session = crate::session::capture_naming::tests::naming(&catalog);
+        let by_hand = session.clone();
+        let mut chance = FirstFires::default();
+        let expected = by_hand.capture_naming(&catalog, &mut chance);
+        assert!(expected.is_some(), "precondition: a name awaited");
+        let mut own = FirstFires::default();
+        assert_eq!(
+            asked(
+                &mut session,
+                Some(&catalog),
+                &mut own,
+                ScreenAsk::CaptureNaming
+            ),
+            ScreenAnswer::CaptureNaming(expected)
+        );
+        assert_eq!((own, &session), (chance, &by_hand));
+        let mut aboard = aboard(&catalog);
+        assert_eq!(
+            asked(
+                &mut aboard,
+                Some(&catalog),
+                &mut NeverFires,
+                ScreenAsk::CaptureNaming
+            ),
+            ScreenAnswer::CaptureNaming(None),
+            "no name awaited"
         );
     }
 
