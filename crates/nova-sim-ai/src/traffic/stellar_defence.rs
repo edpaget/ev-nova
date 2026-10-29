@@ -9,22 +9,29 @@
 //! **The counts.** `_LoadObjectData` keeps a stellar's raw `DefCount` at
 //! +0x468 (@0x775eb) and decodes the ships it starts with into +0x466
 //! ([`initial_left`], @0x776a6-0x776fb); a wave is `DefCount % 10`
-//! ([`wave`], @0x43cd3-0x43cfe). [`StellarDefences`] holds the ships left
-//! of each stellar once one is spent or given back, reading the decode
-//! until then, and which stellars are under attack (+0x47).
+//! ([`wave`], @0x43cd3-0x43cfe). [`DefenceShips`] holds the ships left of
+//! each stellar once one is spent, given back, regrown or set, reading the
+//! decode until then; [`StellarDefences`] holds them beside which
+//! stellars are under attack (+0x47).
 //!
-//! **Where the state lives.** [`StellarDefences`] is a field of the
-//! [`Traffic`], so the respawn inside
+//! **Where the state lives.** The ships left are saved state, as the
+//! original's `_WritePilotData` writes +0x466 (@0x7282d, @0x7285e), so
+//! they rest on the pilot (`nova_sim::Pilot::defence_ships`). The session
+//! lends them to the [`Traffic`] for each step and refund
+//! ([`Traffic::swap_defence_ships`]) and takes them back after, so the
+//! respawn inside
 //! [`Traffic::enter_more_ships`](super::Traffic::enter_more_ships) reads
-//! it on every caller, the gate exit's extra pass among them, with no
-//! parameter threaded through. A traffic lasts across systems until a
-//! traffic Reset, which hands it on
-//! ([`Traffic::take_defences`](super::Traffic::take_defences)), so the
-//! counts are galaxy-wide, as the original's stellar records are. They are
-//! never saved: the original's `_WritePilotData` writes +0x466 (@0x7282d,
-//! @0x7285e), which rdm:phase/play-feel-4/phase-3-domination-readers
-//! adds; until then a loaded pilot's stellars start with their decoded
-//! counts.
+//! them on every caller, the gate exit's extra pass among them, with no
+//! parameter threaded through, and two passes in one step see each
+//! other's spend. [`StellarDefences`] is a field of the traffic: its
+//! under-attack marks are never saved, and a traffic Reset hands it on
+//! ([`Traffic::take_defences`](super::Traffic::take_defences)), the ships
+//! left empty then, as the pilot holds them between steps.
+//!
+//! **The regrowth** ([`DefenceShips::regrow`]): each day an active
+//! dominated stellar below its [`regrowth_cap`] regrows one on
+//! `Rand(450)`'s 0 (`_IncrementGameTime` @0xb5fc-0xb64c), which the
+//! session's daily step runs.
 //!
 //! **Under attack (+0x47)** is stored, not derived, to keep the
 //! original's frame order: the defence ship's spawn sets it (@0x3d4a8);
@@ -65,7 +72,7 @@
 //! (`_AIMakeShipAttackPlayer` @0x3d498, whose quote gate it fails, having
 //! no person), and its stellar marked under attack.
 //!
-//! **The refund** ([`StellarDefences::refund`]): each defender dropped
+//! **The refund** ([`DefenceShips::refund`]): each defender dropped
 //! with its system's ships gives one back, capped at the raw `DefCount`,
 //! so above 1000 the cap is out of reach as in the original. A defender
 //! that lands keeps its slot and its stellar (see
@@ -407,7 +414,7 @@ impl Traffic {
     /// Gives back one defence ship to its stellar for each of its
     /// defenders among the NPCs not in `kept`, as their system's ships are
     /// dropped (`_DeleteAllComputerShips` @0x3c02a-0x3c06f; see
-    /// [`StellarDefences::refund`]). A ship marked as a mission's
+    /// [`DefenceShips::refund`]). A ship marked as a mission's
     /// auxiliary ship gives its slot one back instead, as the original's
     /// branch for +0x8a comes first (@0x3bfce-0x3c028).
     pub fn refund_defenders(&mut self, kept: &BTreeSet<NpcId>) {

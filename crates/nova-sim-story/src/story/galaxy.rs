@@ -67,11 +67,10 @@
 //! - the dominated byte +0x46, set for an active stellar with `Flags2`
 //!   0x0020 (@0x32ce5-0x32ceb): [`OverlaidGalaxy::dominated`] reads the
 //!   bit with the domination the planet comm dialog writes
-//!   ([`GalaxyOverlay::set_dominated`]). The dialog reads it; the other
-//!   readers still read the bit directly (`landing::cleared`,
-//!   `mission::dominated`, `Chart::markup`) until
-//!   rdm:phase/play-feel-4/phase-3-domination-readers switches them and
-//!   saves it, and phase 4 switches Recharge;
+//!   ([`GalaxyOverlay::set_dominated`]), and [`OverlaidGalaxy::site`]
+//!   stamps the run-time domination on each site, so every reader goes
+//!   through the one rule ([`domination`](crate::domination)); the save
+//!   keeps it. Recharge is rdm:phase/play-feel-4/phase-4-run-time-domination-free-refuel's;
 //! - +0x47, a defence ship of the stellar in the system, set and
 //!   cleared each frame (`_DoPlayGameWork` @0x443d4-0x4444f) and cleared
 //!   for every stellar here (@0x32d5d), which `_IsThreatToStellar` reads
@@ -131,9 +130,8 @@ pub struct StellarOverride {
     /// not.
     pub destroyed: Option<Countdown>,
     /// Whether the player dominated it by Demand Tribute, until a Release
-    /// (+0x46, `_DoPlanetCommDialog` @0x978fa, cleared @0x9740f). Not
-    /// saved yet: rdm:phase/play-feel-4/phase-3-domination-readers saves
-    /// it.
+    /// (+0x46, `_DoPlanetCommDialog` @0x978fa, cleared @0x9740f), kept by
+    /// the save (`_WritePilotData` @0x72576-0x72580).
     pub dominated: bool,
 }
 

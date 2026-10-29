@@ -16,13 +16,13 @@ pub enum Participant {
     /// The active missions' days left (@0xb590-0xb5b6): missions phase 2.
     MissionDays,
     /// The dominated stellars' tribute (`_DoStellarTimePassage` @0xb5b8):
-    /// rdm task planet-domination.
+    /// `nova_sim`'s session `dominated_stellars` module.
     Tribute,
     /// The day's `öops` events (`_DisasterHandler` @0xb5bf).
     Events,
     /// The stellars (@0xb5c4-0xb71e): a destroyed one's regeneration,
     /// built by story-runtime phase 5, and a dominated one's defence
-    /// regrowing, by rdm task planet-domination.
+    /// regrowing (`nova_sim`'s session `dominated_stellars` module).
     Stellars,
     /// The reinforcement countdowns (@0xb724-0xb759): each visible
     /// system's goes down by one, built by combat-ai-fidelity phase 5

@@ -73,8 +73,9 @@
 //!    `MinStatus` ≤ −32767, red below 0 and orange from 0.
 //!
 //! The [`Standing`] the caller passes carries both. The session fills
-//! the blessing from its rank blessing table (`Session::blessing`);
-//! domination by tribute has no state yet (rdm:task/planet-domination).
+//! the blessing from its rank blessing table (`Session::blessing`), and
+//! the domination from the one rule (`nova_sim::domination::dominated`),
+//! by `Flags2` 0x0020 or by Demand Tribute.
 //!
 //! # Systems on the galaxy map ([`system_color_code`], `_ColorCodeSystem` @0xd672-0xd941)
 //!

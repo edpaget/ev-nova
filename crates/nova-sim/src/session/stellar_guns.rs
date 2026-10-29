@@ -16,7 +16,7 @@
 //!
 //! **What each reads** ([`StellarGun`]):
 //!
-//! - dominated (+0x46, @0x9f0c): by its `Flags2` [`DOMINATED`] bit or
+//! - dominated (+0x46, @0x9f0c): by its `Flags2` [`DOMINATED`](crate::market::DOMINATED) bit or
 //!   by Demand Tribute ([`crate::domination::dominated`]);
 //! - defended (+0x47): whether it is under attack, as this frame's +0x47
 //!   pass left it, just before the guns: one of its defence ships is in
