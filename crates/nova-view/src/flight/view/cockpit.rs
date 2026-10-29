@@ -242,23 +242,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Runs the escort menu's frame for the `steps` flight steps the tick
-    /// ran ([`EscortMenu::update`]): one level of its fade for each, as
+    /// ran ([`EscortMenu::run_steps`]): one level of its fade for each, as
     /// `_HandlePlayer` drops one a frame, every frame, the warp's
     /// included, as the original runs it on every frame of a jump
     /// (@0x6df4a), with the escorts flying as the kept frame shows them
-    /// ([`FrameHud::escorts_flying`](nova_sim::flight_frame::FrameHud::escorts_flying)):
+    /// ([`FrameHud::escorts_flying`](nova_sim::flight_frame::FrameHud::escorts_flying)),
+    /// and shown in full again after each step of the tick's report that
+    /// cleared an escort class's kept order
+    /// (`nova_sim::flight_frame::StepRun::class_orders_cleared`):
     /// `Screen::tick` calls it right after the frame's steps, which fill
     /// the kept frame afresh. The fade's end beeps as Return's close does
     /// ([`FlightView::shut_escort_menu_by_key`]).
-    ///
-    /// When a step of the tick's report cleared an escort class's kept
-    /// order (`nova_sim::flight_frame::StepRun::class_orders_cleared`),
-    /// the menu shows in full again after that step's drop, its stamp kept
-    /// ([`EscortMenu::reshow`]), and the later steps drop from there: each
-    /// `_HandlePlayer` fades the menu (@0x6dfec) before its class-order
-    /// bookkeeping (@0x6e2e8) shows it again. A fade that reached 0 on that
-    /// step has shut the menu already, which the bookkeeping leaves shut
-    /// (`jle` @0x6e386, @0x6e444).
     ///
     /// In double time the original fades a level on each pass:
     /// `_DoPlayGameWork` calls `_HandlePlayer` on both (@0x43e19) with no
@@ -271,18 +265,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .step_report
             .steps
             .iter()
-            .rposition(|run| run.class_orders_cleared)
-            .map(|at| u32::try_from(at + 1).unwrap_or(u32::MAX));
-        let (before, after) = match cleared {
-            Some(through) => (through, steps.saturating_sub(through)),
-            None => (steps, 0),
-        };
-        let mut closed = self.escort_menu.update(self.elapsed, before, flying);
-        if cleared.is_some() {
-            self.escort_menu.reshow();
-            closed |= self.escort_menu.update(self.elapsed, after, flying);
-        }
-        if closed {
+            .map(|run| run.class_orders_cleared);
+        if self
+            .escort_menu
+            .run_steps(self.elapsed, steps, cleared, flying)
+        {
             self.shut_escort_menu_by_key();
         }
     }

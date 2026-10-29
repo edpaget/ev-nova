@@ -950,6 +950,17 @@ fn a_clear_shows_the_menu_in_full_after_its_own_steps_fade() {
 }
 
 #[test]
+fn every_clear_of_a_tick_shows_the_menu_in_full_again() {
+    // At 2: step 1 drops to 1 and shows it again, steps 2 and 3 drop to
+    // 30, and step 3's clear shows it again. Its fade never reaches 0.
+    let mut view = faded_to(2);
+    view.held.insert(MENU_KEY);
+    steps_clearing(&mut view, &[true, false, true]);
+    assert_eq!(view.escort_menu().level(), Some(32));
+    assert_eq!(ui_heard(&mut view), [], "it never shut");
+}
+
+#[test]
 fn a_clear_leaves_a_shut_menu_shut() {
     let mut view = escorted();
     steps_clearing(&mut view, &[true]);
