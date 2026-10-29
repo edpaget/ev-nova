@@ -2855,6 +2855,9 @@ mod tests {
         fn stellar_lives(&self) -> Vec<crate::catalog::StellarLife> {
             unreachable!("Goods::read reads no stellar's life")
         }
+        fn stellar_scripts(&self) -> Vec<crate::catalog::StellarScripts> {
+            unreachable!("Goods::read reads no stellar's scripts")
+        }
         fn fallback_frame_size(&self) -> Option<(u32, u32)> {
             unreachable!("Goods::read reads no graphic")
         }

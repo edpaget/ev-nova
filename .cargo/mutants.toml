@@ -47,9 +47,6 @@ exclude_re = [
     # The trait's default `boom_sounds` is empty already: `vec![]` is the
     # same empty list as `Vec::new()`.
     "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::boom_sounds -> Vec<\\(BoomId, SoundId\\)> with vec!\\[\\]$",
-    # The trait's default `stellar_scripts` is empty already: `vec![]` is
-    # the same empty list as `Vec::new()`.
-    "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::stellar_scripts -> Vec<StellarScripts> with vec!\\[\\]$",
     # `wave_on_demand`'s overdraft: with none left over (`after` 0) the
     # wave shrinks by 0 and 0 are left, as the other branch gives, so
     # `after < 0` and `after <= 0` answer the same.

@@ -606,6 +606,10 @@ impl PilotCatalog for FakeCatalog {
         self.lives.clone()
     }
 
+    fn stellar_scripts(&self) -> Vec<nova_sim::StellarScripts> {
+        Vec::new()
+    }
+
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         Some(
             self.moon

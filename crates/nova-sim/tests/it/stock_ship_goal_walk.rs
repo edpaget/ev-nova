@@ -673,6 +673,10 @@ impl PilotCatalog for Probed<'_> {
         self.data.stellar_lives()
     }
 
+    fn stellar_scripts(&self) -> Vec<cat::StellarScripts> {
+        self.data.stellar_scripts()
+    }
+
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         self.data.fallback_frame_size()
     }

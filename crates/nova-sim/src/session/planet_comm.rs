@@ -337,7 +337,10 @@ impl Session {
 #[cfg(test)]
 pub(in crate::session) mod tests {
     use super::*;
-    use crate::catalog::{GovtId, GovtRecord, StellarScripts, SystemId};
+    use crate::catalog::{
+        AsteroidCatalog, CombatCatalog, GovtId, GovtRecord, PilotCatalog, StellarScripts, SystemId,
+        TrafficCatalog,
+    };
     use crate::chance::NeverFires;
     use crate::control::{Bit, Script};
     use crate::govt::Governments;
@@ -346,6 +349,16 @@ pub(in crate::session) mod tests {
     use crate::session::Hailed;
     use crate::testkit::{Draws, FakePilotCatalog, catalog, govt};
     use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// What a session in these tests is started over: the fake, or the
+    /// fake shared as the app shares its catalog.
+    pub(in crate::session) trait Over:
+        PilotCatalog + CombatCatalog + AsteroidCatalog + TrafficCatalog + CommCatalog
+    {
+    }
+
+    impl<T: PilotCatalog + CombatCatalog + AsteroidCatalog + TrafficCatalog + CommCatalog> Over for T {}
 
     const EARTH: StellarId = StellarId(128);
     const FED: GovtId = GovtId(128);
@@ -389,11 +402,7 @@ pub(in crate::session) mod tests {
     /// `catalog`'s session in flight, its system populated, with Earth its
     /// nav target and no ship target, holding `cash`, Earth's `MinStatus`
     /// `min_status`.
-    pub(in crate::session) fn at_earth(
-        catalog: &FakePilotCatalog,
-        cash: i64,
-        min_status: i16,
-    ) -> Session {
+    pub(in crate::session) fn at_earth(catalog: &impl Over, cash: i64, min_status: i16) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         crate::testkit::work(&mut session, catalog, crate::flight::Controls::default());
         session.chart.target = None;
@@ -425,7 +434,7 @@ pub(in crate::session) mod tests {
     /// sounds.
     fn hail(
         session: &mut Session,
-        catalog: &FakePilotCatalog,
+        catalog: &impl CommCatalog,
         variant: u32,
         roll: u32,
     ) -> (PlanetCommView, Vec<u32>, Vec<SimSound>) {
@@ -706,7 +715,7 @@ pub(in crate::session) mod tests {
     /// `catalog`'s session at Earth of `MinStatus` 5 with a record of 10
     /// in the system and with the Federation, holding rank 200, the
     /// player's rating `rating`, the dialog open.
-    fn demanding(catalog: &FakePilotCatalog, rating: i64) -> Session {
+    fn demanding(catalog: &impl Over, rating: i64) -> Session {
         let mut session = at_earth(catalog, 1_000_000, 5);
         let system = session.pilot.system;
         session.pilot.set_system_record(system, 10);
@@ -840,6 +849,18 @@ pub(in crate::session) mod tests {
             "OnDominate"
         );
         assert!(session.pilot.ranks.is_empty());
+    }
+
+    #[test]
+    fn a_session_over_a_shared_catalog_runs_on_dominate() {
+        // The app starts its session over an `Rc<GameData>`.
+        let catalog = Rc::new(ranked());
+        let mut session = demanding(&catalog, 12_800);
+        demand(&mut session, &catalog, &Slaps::default());
+        assert!(
+            session.control_bit(Bit::new(100).expect("a bit")),
+            "OnDominate, read through the Rc"
+        );
     }
 
     #[test]

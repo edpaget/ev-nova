@@ -2047,10 +2047,8 @@ pub trait PilotCatalog {
     fn stellar_lives(&self) -> Vec<StellarLife>;
     /// Every `spöb` that can be read, by ascending ID, with the scripts the
     /// planet comm dialog runs as it dominates and releases it (see the
-    /// `nova_sim::planet_comm` module). None unless overridden.
-    fn stellar_scripts(&self) -> Vec<StellarScripts> {
-        Vec::new()
-    }
+    /// `nova_sim::planet_comm` module).
+    fn stellar_scripts(&self) -> Vec<StellarScripts>;
     /// The frame width and height of graphic type 0's sheet (`spïn`
     /// 1000), or `None` when it cannot be read: the frames the original's
     /// rebuild gives a sprite slot it left empty.
@@ -2224,6 +2222,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).stellar_lives()
     }
 
+    fn stellar_scripts(&self) -> Vec<StellarScripts> {
+        (**self).stellar_scripts()
+    }
+
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         (**self).fallback_frame_size()
     }
@@ -2370,6 +2372,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn stellar_lives(&self) -> Vec<StellarLife> {
         (**self).stellar_lives()
+    }
+
+    fn stellar_scripts(&self) -> Vec<StellarScripts> {
+        (**self).stellar_scripts()
     }
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
@@ -2872,6 +2878,16 @@ mod tests {
             }]
         }
 
+        /// Stellar 128 sets bit 100 as it is dominated and clears it as it
+        /// is released.
+        fn stellar_scripts(&self) -> Vec<StellarScripts> {
+            vec![StellarScripts {
+                id: StellarId(128),
+                on_dominate: Script::parse("b100"),
+                on_release: Script::parse("!b100"),
+            }]
+        }
+
         /// `spïn` 1000's frames are 7 by 9.
         fn fallback_frame_size(&self) -> Option<(u32, u32)> {
             Some((7, 9))
@@ -3049,6 +3065,7 @@ mod tests {
             format!("{:?}", catalog.boom_sounds()),
             format!("{:?}", catalog.voices()),
             format!("{:?}", catalog.stellar_weapons()),
+            format!("{:?}", catalog.stellar_scripts()),
         ]
     }
 
@@ -3138,6 +3155,10 @@ mod tests {
         }
 
         fn stellar_lives(&self) -> Vec<StellarLife> {
+            Vec::new()
+        }
+
+        fn stellar_scripts(&self) -> Vec<StellarScripts> {
             Vec::new()
         }
 
@@ -3267,6 +3288,10 @@ mod tests {
             "forwarded, not a default: {direct:?}"
         );
         assert_eq!(direct[38], "[(StellarId(128), WeaponId(196))]");
+        assert!(
+            direct[39].contains("StellarScripts { id: StellarId(128)"),
+            "forwarded, not a default: {direct:?}"
+        );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }
