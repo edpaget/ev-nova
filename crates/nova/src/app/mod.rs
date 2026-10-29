@@ -76,6 +76,8 @@
 //!   saved mode is entered and saved.
 //! - **Focus.** Losing focus while exclusive leaves the mode until focus
 //!   comes back ([`WindowEvent::FocusGained`]), when it is entered again.
+//!   Focus coming back is told to the screen too
+//!   ([`Screen::focus_gained`](nova_view::Screen::focus_gained)).
 //! - **Exit.** Before every exit, an exclusive mode is left, so the
 //!   display gets its own mode back. Nothing is saved on the way out.
 //!
@@ -732,6 +734,13 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         handled
     }
 
+    /// The window came back to the front: an exclusive mode left on
+    /// losing focus is entered again, and the screen is told.
+    fn focus_gained(&mut self, window: &mut impl WindowPort) {
+        self.fullscreen.focus_gained(window);
+        self.screen.focus_gained();
+    }
+
     /// Handles one window event as [`App::handle_routed`] does, before its
     /// after-event steps.
     fn dispatch(
@@ -780,7 +789,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 game(Control::Continue)
             }
             WindowEvent::FocusGained => {
-                self.fullscreen.focus_gained(window);
+                self.focus_gained(window);
                 game(Control::Continue)
             }
             WindowEvent::FullscreenChanged { fullscreen } => {
@@ -1241,6 +1250,8 @@ mod tests {
         ticks: Vec<Duration>,
         quit_on: Option<Key>,
         releases: usize,
+        /// How many times it was told the window came back to the front.
+        focuses: usize,
         cancels: usize,
         quits: usize,
         warnings: Vec<String>,
@@ -1290,6 +1301,10 @@ mod tests {
 
         fn release_keys(&mut self) {
             self.releases += 1;
+        }
+
+        fn focus_gained(&mut self) {
+            self.focuses += 1;
         }
 
         fn cancel_pointer(&mut self) {
@@ -1718,6 +1733,19 @@ mod tests {
         );
         assert_eq!(app.screen().releases, 1);
         assert_eq!(app.screen().inputs.len(), 1, "no input for it");
+    }
+
+    #[test]
+    fn gaining_focus_tells_the_screen_and_carries_on() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        assert_eq!(
+            handle(&mut app, &mut window, WindowEvent::FocusGained),
+            Control::Continue
+        );
+        assert_eq!(app.screen().focuses, 1);
+        assert_eq!(app.screen().inputs, [], "no input for it");
+        assert_eq!(app.screen().releases, 0);
     }
 
     #[test]

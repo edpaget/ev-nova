@@ -122,6 +122,7 @@ impl AppScreen {
             quit_in: None,
             quit_due: false,
             double_time: false,
+            frame_rate_shown: false,
             widened: CLASSIC_VIEW,
             pointer: None,
         }
@@ -411,6 +412,7 @@ impl AppScreen {
         .with_weapon_effects(self.flight_weapon_effects())
         .with_sound_prefs(self.prefs.sound)
         .with_double_time(self.double_time)
+        .with_frame_rate_shown(self.frame_rate_shown)
         .with_find(self.find_template(), self.data.button_style())
         .with_map_borders(self.map_borders);
         let flight = match self.course_map_zoom {

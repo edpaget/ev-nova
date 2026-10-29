@@ -999,6 +999,44 @@ fn a_toggle_made_on_another_screen_reaches_a_flight_built_later() {
     assert!(flight_double_time(&screen), "the developer's flight");
 }
 
+fn flight_frame_rate(screen: &AppScreen) -> bool {
+    screen.flight_view().expect("flying").frame_rate_shown()
+}
+
+#[test]
+fn the_frame_rate_readout_toggled_in_flight_reaches_the_next_flight() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    assert!(!flight_frame_rate(&screen), "off at launch");
+    screen.input(&key(nova_view::flight::view::FRAME_RATE_KEY, true));
+    screen.input(&key(nova_view::flight::view::FRAME_RATE_KEY, false));
+    assert!(flight_frame_rate(&screen), "toggled");
+    escape_to_menu(&mut screen);
+    create(&mut screen, "Bea");
+    assert_eq!(screen.showing(), Showing::Flight);
+    assert_eq!(pilot(&screen).name(), "Bea", "a flight built afresh");
+    assert!(flight_frame_rate(&screen), "the next flight");
+}
+
+#[test]
+fn coming_back_to_the_front_has_the_flight_say_calculating_again() {
+    use nova_view::flight::frame_rate::CALCULATING_FPS;
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    screen.input(&key(nova_view::flight::view::FRAME_RATE_KEY, true));
+    screen.input(&key(nova_view::flight::view::FRAME_RATE_KEY, false));
+    let sixtieth = Duration::from_secs(1) / 60;
+    for _ in 0..130 {
+        screen.tick(sixtieth);
+    }
+    assert_ne!(flight(&screen).message(), Some(CALCULATING_FPS), "a rate");
+    screen.focus_gained();
+    screen.tick(sixtieth);
+    assert_eq!(flight(&screen).message(), Some(CALCULATING_FPS));
+}
+
 #[test]
 fn a_new_pilot_flies_with_the_routers_hyperspace_effects() {
     let store = MemoryPilots::new();

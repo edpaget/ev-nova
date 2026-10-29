@@ -299,6 +299,16 @@ impl Screen for AppScreen {
         }
     }
 
+    /// Tells every flight held, shown or not, that the window came back
+    /// to the front: the original's `_SwitchedIn` (@0x513cc-0x513dc)
+    /// zeroes the frame-rate readout's counters wherever the game is.
+    /// No other screen keeps time across the switch.
+    fn focus_gained(&mut self) {
+        for flight in self.flights_mut() {
+            flight.focus_gained();
+        }
+    }
+
     /// Runs the main-menu action held for its keyed click, if any (E's
     /// wait is left alone), then replays what arrived meanwhile, in
     /// order, through [`Screen::input`]: a replayed key that holds again
@@ -515,11 +525,13 @@ impl Screen for AppScreen {
 
 impl AppScreen {
     /// `input` routed as the router routes it with nothing holding it:
-    /// Caps Lock's double time, the route, then what the set expressions
-    /// queued settled and a save that is due made.
+    /// Caps Lock's double time, the route and the frame-rate readout
+    /// kept ([`AppScreen::keep_frame_rate`]), then what the set
+    /// expressions queued settled and a save that is due made.
     pub(super) fn routed_input(&mut self, input: &Input) -> ScreenAction {
         self.double_time_key(input);
         let action = self.route(input);
+        self.keep_frame_rate();
         self.settle_script();
         self.save_if_due();
         action

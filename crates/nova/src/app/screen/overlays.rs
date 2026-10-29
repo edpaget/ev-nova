@@ -185,6 +185,16 @@ impl AppScreen {
         }
     }
 
+    /// Keeps whether the frame-rate readout is shown, as the flight
+    /// entered, if any, has it after an input, for the flights built
+    /// later ([`FlightView::with_frame_rate_shown`]): only flight's own
+    /// F12 changes it.
+    pub(super) fn keep_frame_rate(&mut self) {
+        if let Some(flight) = &self.flight {
+            self.frame_rate_shown = flight.frame_rate_shown();
+        }
+    }
+
     /// Offers the open Preferences dialog `modes` for its display picker,
     /// on `current`, which the player's preferences take as the kind the
     /// game runs fullscreen in, the player having chosen `chosen`. With no
