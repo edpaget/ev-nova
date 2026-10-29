@@ -3243,6 +3243,59 @@ pub(super) mod tests {
         );
     }
 
+    /// [`escorting`]'s ship made the player's launched fighter (AI type 5),
+    /// as `the_players_launched_fighter_opens_what_can_i_do_for_you_sir`
+    /// sets it up.
+    fn launched_fighter(catalog: &FakePilotCatalog) -> Session {
+        let mut session = escorting(catalog);
+        session.pilot.escorts[0].carried = true;
+        if let Some(npc) = session.space.npc_mut(NpcId(0)) {
+            npc.carrier = Some(crate::bay::Carrier {
+                ship: ShipRef::Player,
+                window: 100.0,
+                reach: 40.0,
+            });
+        }
+        session
+    }
+
+    #[test]
+    fn the_players_launched_fighter_busy_in_formation_is_just_an_escort() {
+        // Group 22 for a busy ship of AI type above 4 (`_DoCommDialog`'s
+        // Request Assistance), busy in formation to `_AIIsShipBusy`
+        // (@0x82fac).
+        let catalog = hailable();
+        let mut session = launched_fighter(&catalog);
+        npc(&mut session).goal = Goal::Formation { guard: None };
+        hail(&mut session, &catalog);
+        assert_eq!(
+            press(&mut session, &catalog, 1, 99).reply,
+            said(reply::JUST_AN_ESCORT)
+        );
+    }
+
+    #[test]
+    fn the_players_launched_fighter_idle_answers_as_a_non_busy_escort() {
+        let catalog = hailable();
+        let mut session = launched_fighter(&catalog);
+        npc(&mut session).goal = Goal::Idle;
+        hail(&mut session, &catalog);
+        assert_eq!(
+            press(&mut session, &catalog, 1, 99).reply,
+            "You're not in any trouble.",
+            "no need"
+        );
+        let mut session = launched_fighter(&catalog);
+        npc(&mut session).goal = Goal::Idle;
+        session.pilot.reserves.fuel.now = 40.0;
+        hail(&mut session, &catalog);
+        assert_eq!(
+            press(&mut session, &catalog, 1, 99).reply,
+            said(reply::CANT_DO_THAT),
+            "an escort AI can't give fuel"
+        );
+    }
+
     #[test]
     fn an_escort_of_a_mute_ship_type_is_hailed_all_the_same() {
         let mut catalog = hailable();
