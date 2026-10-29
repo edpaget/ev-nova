@@ -42,9 +42,10 @@ pub(crate) struct Streams {
 }
 
 impl Streams {
-    /// Whether any page has been created.
+    /// Whether any page has been created: each slot's page is, as the slot
+    /// is first taken.
     pub(crate) fn has_pages(&self) -> bool {
-        self.slots.iter().any(|slot| slot.side > 0)
+        !self.slots.is_empty()
     }
 
     /// Where `frame` is on its page, uploading it first if the page doesn't
@@ -605,17 +606,19 @@ mod tests {
 
     #[test]
     fn a_frame_with_no_pixels_draws_and_uploads_nothing() {
-        let mut screen = MovieScreen::new();
-        assert!(screen.show(0, 0, Vec::new()));
-        let frame = screen.frame().expect("shown");
-        let mut gpu = RecordingGpu::new();
-        renderer().render(
-            &drawing(&[(&frame, area(0.0, 0.0, 4.0, 2.0))]),
-            &viewport(),
-            &mut gpu,
-        );
-        assert_eq!(last_frame(&gpu).batches, []);
-        assert_eq!(uploads(&mut gpu), []);
+        for (w, h) in [(0, 0), (0, 2), (2, 0)] {
+            let mut screen = MovieScreen::new();
+            assert!(screen.show(w, h, Vec::new()));
+            let frame = screen.frame().expect("shown");
+            let mut gpu = RecordingGpu::new();
+            renderer().render(
+                &drawing(&[(&frame, area(0.0, 0.0, 4.0, 2.0))]),
+                &viewport(),
+                &mut gpu,
+            );
+            assert_eq!(last_frame(&gpu).batches, [], "{w} x {h}");
+            assert_eq!(uploads(&mut gpu), [], "{w} x {h}");
+        }
     }
 
     #[test]
