@@ -258,11 +258,20 @@ pub enum PlayerCommand {
     /// the dead branch and the pod's frames reach no key handler, so the
     /// other rows refuse it too (`nova_sim::Session::hold_cloak`).
     Cloak,
+    /// The frame-rate readout: `framerateKey` (slot 0x68, default F12),
+    /// toggled once a press (`_HandlePlayer` @0x6e454-0x6e4bd). Nothing
+    /// around the key reads the condition, the breakup timer or a jump's
+    /// state (+0x50), so flying, disabled and breaking-up players take it,
+    /// during a jump too. Only the early returns to 0x71113 that skip every
+    /// key handler keep it from running: the dead branch (@0x68853,
+    /// @0x6888c) and the pod's frames (@0x68ddd), so the other rows refuse
+    /// it. The readout itself is the view's.
+    FrameRate,
 }
 
 impl PlayerCommand {
     /// Every command, for tests that go over them all.
-    pub const ALL: [PlayerCommand; 17] = [
+    pub const ALL: [PlayerCommand; 18] = [
         Self::Map,
         Self::Land,
         Self::Jump,
@@ -280,6 +289,7 @@ impl PlayerCommand {
         Self::PlayerInfo,
         Self::SelfDestruct,
         Self::Cloak,
+        Self::FrameRate,
     ];
 }
 
@@ -779,6 +789,30 @@ mod tests {
             );
         }
         assert!(PlayerCommand::ALL.contains(&PlayerCommand::DeselectWeapon));
+    }
+
+    #[test]
+    fn only_flying_disabled_and_breaking_up_players_take_the_frame_rate_key() {
+        // `_HandlePlayer` reads no condition, breakup timer or jump state
+        // around the key (@0x6e454-0x6e4bd); only the early returns that
+        // skip every key handler (the dead branch @0x68853, the pod's
+        // frames @0x68ddd) keep it from running.
+        for fate in [PlayerFate::Flying, PlayerFate::Disabled]
+            .into_iter()
+            .chain(BREAKING_UP)
+        {
+            assert!(fate.row().input.takes(PlayerCommand::FrameRate), "{fate:?}");
+        }
+        for fate in [PlayerFate::Exploded, PlayerFate::Ejected { ticks_left: 9 }]
+            .into_iter()
+            .chain(AFTER_THE_EXPLOSION)
+        {
+            assert!(
+                !fate.row().input.takes(PlayerCommand::FrameRate),
+                "{fate:?}"
+            );
+        }
+        assert!(PlayerCommand::ALL.contains(&PlayerCommand::FrameRate));
     }
 
     #[test]
