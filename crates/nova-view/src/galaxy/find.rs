@@ -8,7 +8,10 @@
 //! prompt "Enter the name of a system to find:" (item 4) and the field
 //! (item 5). The original centres it over the map dialog
 //! (`_CenterWindow` @0x11cf1), itself centred on the game window
-//! (@0x12534), so this dialog takes its own centred placement.
+//! (@0x12534), whose centre is the screen's (212 + 300, 128 + 256), so
+//! this dialog takes
+//! [`Placement::CenterWindow`](crate::ui::Placement::CenterWindow) on the
+//! screen: (370, 332).
 //!
 //! The field starts empty (@0x11d72-0x11d92), and the events pending as
 //! it opens are flushed (`FlushEvents` @0x11da6), so the key that opened

@@ -147,8 +147,9 @@ fn interface() -> InterfaceData {
     InterfaceData::load(&file, Path::new("/Nova-DF.rsrc")).expect("loads")
 }
 
-/// Where the dialog is: (1024 - 441) / 2, (768 - 313) / 2, floored.
-const ORIGIN: Point = Point::new(291.0, 227.0);
+/// Where the dialog is: `_CenterWindow` centres DLOG 3003 at
+/// 512 - trunc(441 / 2), 384 - trunc(313 / 2).
+const ORIGIN: Point = Point::new(292.0, 228.0);
 
 fn logical(x: f32, y: f32, w: f32, h: f32) -> Bounds {
     Bounds::at(Point::new(x + ORIGIN.x, y + ORIGIN.y), w, h)

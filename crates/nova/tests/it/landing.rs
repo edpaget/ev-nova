@@ -319,8 +319,9 @@ fn interface() -> InterfaceData {
     InterfaceData::load(&OneFile(bytes), Path::new("/Nova-DF.rsrc")).expect("loads")
 }
 
-/// Where the dialog is: (1024 - 618) / 2, (768 - 517) / 2, floored.
-const ORIGIN: Point = Point::new(203.0, 125.0);
+/// Where the dialog is: `_CenterWindow` centres DLOG 1000 at
+/// 512 - trunc(618 / 2), 384 - trunc(517 / 2).
+const ORIGIN: Point = Point::new(203.0, 126.0);
 
 struct Harness {
     app: App<Rc<GameData>>,
@@ -504,7 +505,7 @@ fn l_over_the_planet_shows_its_spaceport_with_every_button() {
     let landscape = harness.item(LANDSCAPE_ITEM);
     assert_eq!(
         landscape,
-        Bounds::at(Point::new(206.0, 128.0), 612.0, 285.0)
+        Bounds::at(Point::new(206.0, 129.0), 612.0, 285.0)
     );
     assert!(quads.contains(&rect(landscape)), "{quads:?}");
     assert!(

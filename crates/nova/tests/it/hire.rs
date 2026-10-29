@@ -1315,7 +1315,7 @@ fn info_on_a_pilot_whose_description_has_a_graphic_opens_the_picture_panel() {
         .bounds();
     assert_eq!(
         (bounds.min.x, bounds.min.y, bounds.width(), bounds.height()),
-        (205.0, 115.0, 614.0, 537.0),
+        (205.0, 116.0, 614.0, 537.0),
         "DLOG 1019"
     );
     let frame = game.frame();
@@ -1329,13 +1329,13 @@ fn info_on_a_pilot_whose_description_has_a_graphic_opens_the_picture_panel() {
         .collect();
     let background = Rect {
         x: 205.0,
-        y: 115.0,
+        y: 116.0,
         w: 7.0,
         h: 6.0,
     };
     let graphic = Rect {
         x: 212.0,
-        y: 121.0,
+        y: 122.0,
         w: 600.0,
         h: 400.0,
     };
