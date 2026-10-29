@@ -8,22 +8,24 @@
 //! translation. Pilots are kept in the in-memory store, so the test sees
 //! what is saved, and "restarts" with a new app over the same store.
 //!
-//! A new pilot lands, opens the Trade Center, which lists only the goods
-//! the planet trades at its prices, and fills the hold with one press of
-//! B, a plain buy moving up to ten tons; each trade saves the pilot. In a
-//! new app, where a plain trade moves a ton (the `trade_lot` rule's other
-//! reading), the pilot resumes docked with its cargo: S sells a ton at
-//! the local price and Alt-S, confirming the quantity dialog's default,
-//! the rest, then holding B buys a ton a repeat and Alt-B, confirmed
-//! likewise, fills the hold again. The Trade Center lists in the colours
-//! of the game data's `cölr` 128.
+//! A new pilot lands, opens the Trade Center, and buys with B, which
+//! writes the pilot to the store; closing the window saves its cargo. In a
+//! new app, whose router chooses the `trade_lot` rule's other reading (a
+//! plain trade moves a ton), the pilot resumes with its cargo, and S sells
+//! a ton of it. The Trade Center lists in the colours of the game data's
+//! `cölr` 128.
+//!
+//! What the exchange lists, its prices, how much a trade moves, the
+//! quantity dialog and held keys are nova-sim's and nova-view's, pinned
+//! there.
 
+use crate::bracket_art;
 use crate::common::text_input_items;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::common::EntryHarness;
+use crate::common::{EntryHarness, Frames};
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
@@ -43,7 +45,7 @@ use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
-use nova_render::{Batch, FontFaces, Frame};
+use nova_render::{FontFaces, Frame};
 use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
 use nova_sim::fixture::MemoryPilots;
@@ -266,8 +268,12 @@ fn game_data() -> Rc<GameData> {
         let rgb24 = u32::from_be_bytes([0, color.r, color.g, color.b]);
         colors[at..at + 4].copy_from_slice(&rgb24.to_be_bytes());
     }
-    let file = fork(&resources);
-    Rc::new(one_file(file).load())
+    let fork = resources
+        .iter()
+        .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
+            fork.resource(*ty, *id, None, data)
+        });
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// One `DITL` item: (left, top, right, bottom), its type byte and data.
@@ -459,10 +465,17 @@ impl Harness {
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
-    /// a few frames let the dock approach clear it, and the second lands.
+    /// the dock approach clears it, and the second lands.
     fn land(&mut self) {
         self.press(KeyCode::KeyL);
-        self.approach();
+        self.settle();
+        self.settle_until("the dock approach's clearance", |game| {
+            game.app
+                .screen()
+                .flight_view()
+                .and_then(|flight| flight.session().ok())
+                .is_some_and(nova_sim::Session::dock_cleared)
+        });
         self.press(KeyCode::KeyL);
     }
 
@@ -511,30 +524,6 @@ impl Harness {
         assert_eq!(self.app.take_warnings(), Vec::<String>::new());
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
-
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request. The nav brackets' corners (`cicn`
-    /// 10000-10003), which the press's selection draws, may be missing
-    /// from the fixture, so the frames' image failures are not checked.
-    fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frames += 1;
-            let elapsed = Duration::from_millis(16 * self.frames);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        let _ = self.app.take_failures();
-    }
-}
-
-fn texts(frame: &Frame) -> Vec<String> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Text(runs) => runs.iter().map(|run| run.text.clone()).collect(),
-            _ => Vec::new(),
-        })
-        .collect()
 }
 
 fn saved(store: &MemoryPilots, key: &str) -> Pilot {
@@ -544,17 +533,6 @@ fn saved(store: &MemoryPilots, key: &str) -> Pilot {
 const FOOD: Good = Good::Commodity(0);
 
 impl Harness {
-    /// Sends the physical key `code` going down (a repeat when `repeat`)
-    /// or, when not `pressed`, up.
-    fn key(&mut self, code: KeyCode, pressed: bool, repeat: bool) {
-        let state = if pressed {
-            ElementState::Pressed
-        } else {
-            ElementState::Released
-        };
-        self.send(platform::key_event(PhysicalKey::Code(code), state, repeat));
-    }
-
     /// Where spaceport item `number` is.
     fn spaceport_item(&self, number: usize) -> Point {
         self.app
@@ -587,25 +565,8 @@ impl Harness {
     }
 }
 
-/// The header's labels, in `STR#` 2002's words, for a ship alone.
-const HEADER: [&str; 3] = ["Commodity:", "In Hold:", "Price:"];
-
-/// The cargo summary's free-space line for `free` tons, a ship alone.
-fn free_space(free: u32) -> String {
-    format!("Free cargo space: {free} tons")
-}
-
-impl Harness {
-    /// Asserts the Trade Center shows `free` tons free in its cargo
-    /// summary and the exchange holds `cash` credits.
-    fn assert_shows(&mut self, free: u32, cash: i64) {
-        assert!(texts(&self.frame()).contains(&free_space(free)));
-        assert_eq!(self.trade().market().cash, cash);
-    }
-}
-
 #[test]
-fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
+fn a_buy_in_the_trade_center_is_saved_and_a_new_apps_trade_lot_reaches_the_exchange() {
     let store = MemoryPilots::new();
     let mut game = Harness::opening(&store, RuleSource::Engine);
     let new_pilot = game.menu_button(MenuChoice::NewPilot);
@@ -616,40 +577,17 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
-    game.frame();
     game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
 
-    // The Trade Center lists only what the planet trades, at its levels.
+    // B buys, and the pilot is saved with its cargo.
     game.open_trade_center();
-    let cash = i64::from(CASH);
-    let shown = texts(&game.frame());
-    for text in HEADER
-        .iter()
-        .chain(&["Food", "75", "Metal", "160", "Buy", "Sell", "Done"])
-    {
-        assert!(shown.contains(&(*text).to_owned()), "{text}: {shown:?}");
-    }
-    game.assert_shows(10, cash);
-    for untraded in [
-        "Industrial",
-        "Medical Supplies",
-        "Luxury Goods",
-        "Equipment",
-    ] {
-        assert!(!shown.contains(&untraded.to_owned()), "{untraded}");
-    }
-
-    // B buys up to ten tons, here filling the hold, and the pilot is saved.
     let writes = store.writes();
     game.press(KeyCode::KeyB);
-    assert_eq!(game.pilot().held(FOOD), 10);
-    let full = cash - 10 * 75;
-    assert_eq!(game.pilot().cash(), full);
+    let bought = game.pilot().held(FOOD);
+    assert!(bought > 1, "bought: {bought}");
     assert_eq!(store.writes(), writes + 1);
-    assert_eq!(saved(&store, "Ada").held(FOOD), 10);
-    game.assert_shows(0, full);
-    assert_eq!(game.trade().market().free, 0);
+    assert_eq!(saved(&store, "Ada").held(FOOD), bought);
 
     // Done closes the exchange; closing the window saves the cargo.
     game.press(KeyCode::Escape);
@@ -665,66 +603,24 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
     assert_eq!(saved(&store, "Ada"), landed);
 
-    // A new app, a plain trade there moving a ton (the `trade_lot` rule's
-    // other reading), resumes the pilot in space over the stellar, with
-    // its cargo, and it lands there again.
+    // A new app, whose router has a plain trade move a ton, resumes the
+    // pilot with its cargo; landed again, S sells a ton.
     let mut game = Harness::opening(&store, RuleSource::Bible);
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
-    game.frame();
+    assert_eq!(game.pilot().held(FOOD), bought);
     game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
-    assert_eq!(game.pilot().held(FOOD), 10);
     game.open_trade_center();
-    assert_eq!(
-        game.trade().market().row(FOOD).map(|row| row.held),
-        Some(10)
-    );
-    game.assert_shows(0, full);
-
-    // Selling pays the local price: S sells a ton, and Alt-S asks how
-    // many, the quantity dialog opening at everything left, which Return
-    // sells.
     game.press(KeyCode::KeyS);
-    assert_eq!(game.pilot().held(FOOD), 9);
-    assert_eq!(game.pilot().cash(), full + 75);
-    game.key(KeyCode::AltRight, true, false);
-    game.press(KeyCode::KeyS);
-    game.key(KeyCode::AltRight, false, false);
     assert_eq!(
-        game.trade().quantity().map(|asking| asking.field().text()),
-        Some("9"),
-        "the S typed nothing"
+        game.pilot().held(FOOD),
+        bought - 1,
+        "the router's trade lot"
     );
-    assert_eq!(game.pilot().held(FOOD), 9, "nothing sold yet");
-    game.press(KeyCode::Enter);
-    assert_eq!(game.pilot().held(FOOD), 0, "everything left is sold");
-    assert_eq!(game.pilot().cash(), cash);
-    game.assert_shows(10, cash);
-    assert_eq!(saved(&store, "Ada").held(FOOD), 0);
-
-    // Holding B buys a ton on the press and a ton on each repeat.
-    game.key(KeyCode::KeyB, true, false);
-    for _ in 0..3 {
-        game.key(KeyCode::KeyB, true, true);
-    }
-    game.key(KeyCode::KeyB, false, false);
-    assert_eq!(game.pilot().held(FOOD), 4, "the press and three repeats");
-    assert_eq!(game.pilot().cash(), cash - 4 * 75);
-
-    // Alt-B asks how many, opening at the most: here the six tons of
-    // space left, which Return buys.
-    game.key(KeyCode::AltLeft, true, false);
-    game.press(KeyCode::KeyB);
-    game.key(KeyCode::AltLeft, false, false);
-    game.press(KeyCode::Enter);
-    assert_eq!(game.pilot().held(FOOD), 10, "the hold is full");
-    assert_eq!(game.pilot().cash(), full);
-    game.assert_shows(0, full);
-    assert_eq!(saved(&store, "Ada").held(FOOD), 10);
 }
 
 crate::common::entry_harness!(Harness, click, frame);
@@ -740,7 +636,6 @@ fn the_trade_center_lists_in_the_game_datas_list_colours() {
     // The ship's christening, confirmed with its default.
     game.press(KeyCode::Enter);
     game.enter_ship();
-    game.frame();
     game.land();
     game.open_trade_center();
     assert_ne!(LIST_COLORS, ListColors::STOCK);
