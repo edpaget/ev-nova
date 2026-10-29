@@ -1,6 +1,6 @@
 [package]
 name = "nova-appkit"
-description = "The macOS menu bar and Apple event handlers, built with AppKit behind a safe API, for macOS only"
+description = "The macOS menu bar, Apple event handlers and full keyboard access setting, built with AppKit behind a safe API, for macOS only"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
