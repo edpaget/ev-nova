@@ -62,7 +62,7 @@
 //! clock-seeded, which can't be replicated
 //! (rdm:phase/play-feel-4/phase-2-planet-comm-dialog's findings).
 
-use super::{Chart, Session};
+use super::{Chart, Outbox, Session, Setup};
 use crate::SimSound;
 use crate::board::BOUNTY_HUNTER;
 use crate::catalog::{CommCatalog, LandingSite, StellarId};
@@ -73,6 +73,7 @@ use crate::hail::{GREEDY, Haggle};
 use crate::landing::StellarFlags;
 use crate::legal::{Crime, LegalCode};
 use crate::message::SimMessage;
+use crate::pilot::Pilot;
 use crate::planet_comm::{
     ALWAYS_DOMINATED, BRIBE_PERMISSION, Bribery, Demand, DemandFacts, Opening, PLANETS_TAKE_BRIBES,
     PlanetComm, PlanetCommItem, PlanetCommView, Pressed, Standing, record_after_offence,
@@ -88,6 +89,46 @@ impl Chart {
     pub(super) fn forget_bribe_roll(&mut self) {
         self.bribe_roll = None;
     }
+
+    /// Closes the planet comm dialog, beeping into `out`, when it is open.
+    pub(super) fn close_planet_comm(&mut self, out: &mut Outbox) {
+        if self.planet_comm.take().is_some() {
+            out.sounds.push(SimSound::PlanetCommClosed);
+        }
+    }
+
+    /// `stellar` as the player's system shows it now.
+    fn planet_site(&self, stellar: StellarId) -> Option<LandingSite> {
+        self.sites.iter().find(|site| site.id == stellar).copied()
+    }
+
+    /// What a press reads of `site`, and the view shows, `pilot`'s record
+    /// there read as `setup` says.
+    fn planet_standing(&self, pilot: &Pilot, setup: &Setup, site: &LandingSite) -> Standing {
+        Standing {
+            dominated: self.galaxy.dominated(site),
+            always_dominated: site.flags2 & ALWAYS_DOMINATED != 0,
+            station: site.flags & StellarFlags::STATION != 0,
+            record: self.landing_record(pilot, setup, site),
+        }
+    }
+
+    /// Writes the record a Release or a Demand Tribute leaves at `site`
+    /// into both of `pilot`'s stores, each by its own value: with the
+    /// stellar's government, or the system's for one of none (see the
+    /// module docs).
+    fn write_offence_record(&self, pilot: &mut Pilot, site: &LandingSite) {
+        let system = pilot.system;
+        if let Some(record) = record_after_offence(pilot.system_record(system), site.min_status) {
+            pilot.set_system_record(system, record);
+        }
+        let govt = site.govt.or(self.galaxy.govt(system));
+        if let Some(govt) = govt
+            && let Some(record) = record_after_offence(pilot.legal_record(govt), site.min_status)
+        {
+            pilot.set_legal_record(govt, record);
+        }
+    }
 }
 
 impl Session {
@@ -101,7 +142,7 @@ impl Session {
         catalog: &(impl CommCatalog + ?Sized),
         chance: &mut dyn Chance,
     ) -> Option<PlanetCommView> {
-        let site = self.planet_site(stellar)?;
+        let site = self.chart.planet_site(stellar)?;
         let govts = &self.statics.govts;
         let facts = Opening {
             min_status: site.min_status,
@@ -137,7 +178,7 @@ impl Session {
         catalog: &(impl CommCatalog + ?Sized),
     ) -> Option<PlanetCommView> {
         let comm = self.chart.planet_comm?;
-        let site = self.planet_site(comm.stellar())?;
+        let site = self.chart.planet_site(comm.stellar())?;
         let name = self
             .statics
             .place_names
@@ -148,7 +189,7 @@ impl Session {
         Some(comm.view(
             &name,
             type_label(site.graphic, catalog),
-            self.planet_standing(&site),
+            self.chart.planet_standing(&self.pilot, &self.setup, &site),
             catalog,
         ))
     }
@@ -165,7 +206,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Option<PlanetCommView> {
         let mut comm = self.chart.planet_comm?;
-        let site = self.planet_site(comm.stellar())?;
+        let site = self.chart.planet_site(comm.stellar())?;
         let defences = self.space.traffic.defences();
         let facts = DemandFacts {
             rating: self.pilot.combat_rating(),
@@ -174,11 +215,16 @@ impl Session {
             defenders_left: defences.left(&site),
             under_attack: defences.under_attack(site.id),
         };
-        let pressed = comm.press(item, self.planet_standing(&site), facts, chance)?;
+        let pressed = comm.press(
+            item,
+            self.chart.planet_standing(&self.pilot, &self.setup, &site),
+            facts,
+            chance,
+        )?;
         self.chart.planet_comm = Some(comm);
         match pressed {
             Pressed::Closed => {
-                self.close_planet_comm();
+                self.chart.close_planet_comm(&mut self.out);
                 return None;
             }
             Pressed::Said | Pressed::Asked(_) => self.out.sounds.push(SimSound::PlanetCommPressed),
@@ -213,6 +259,7 @@ impl Session {
         self.out.sounds.push(SimSound::PlanetCommHaggled);
         if let Settled::Paid(price) = settled {
             let station = self
+                .chart
                 .planet_site(comm.stellar())
                 .is_some_and(|site| site.flags & StellarFlags::STATION != 0);
             self.port.dock = Some(DockRequest {
@@ -222,36 +269,10 @@ impl Session {
             self.space
                 .say(&mut self.out, SimMessage::BribeCleared { station });
             self.pilot.cash -= price;
-            self.close_planet_comm();
+            self.chart.close_planet_comm(&mut self.out);
             return None;
         }
         self.planet_comm(catalog)
-    }
-
-    /// Closes the planet comm dialog, beeping, when it is open.
-    pub(crate) fn close_planet_comm(&mut self) {
-        if self.chart.planet_comm.take().is_some() {
-            self.out.sounds.push(SimSound::PlanetCommClosed);
-        }
-    }
-
-    /// `stellar` as the player's system shows it now.
-    fn planet_site(&self, stellar: StellarId) -> Option<LandingSite> {
-        self.chart
-            .sites
-            .iter()
-            .find(|site| site.id == stellar)
-            .copied()
-    }
-
-    /// What a press reads of `site`, and the view shows.
-    fn planet_standing(&self, site: &LandingSite) -> Standing {
-        Standing {
-            dominated: self.chart.galaxy.dominated(site),
-            always_dominated: site.flags2 & ALWAYS_DOMINATED != 0,
-            station: site.flags & StellarFlags::STATION != 0,
-            record: self.chart.landing_record(&self.pilot, &self.setup, site),
-        }
     }
 
     /// Release's deeds at `site` (see the module docs), drawing on
@@ -263,7 +284,7 @@ impl Session {
                 overlay.set_dominated(site.id, false);
             });
         self.space.traffic.defences_mut().reset(site);
-        self.write_offence_record(site);
+        self.chart.write_offence_record(&mut self.pilot, site);
         if let Some(scripts) = self.statics.stellar_scripts.get(&site.id).cloned() {
             self.run_script(&scripts.on_release, chance);
         }
@@ -278,7 +299,7 @@ impl Session {
         law: &dyn LegalCode,
         chance: &mut dyn Chance,
     ) {
-        self.write_offence_record(site);
+        self.chart.write_offence_record(&mut self.pilot, site);
         for _ in 0..demand.slaps() {
             self.chart
                 .convict_of(&mut self.pilot, &self.statics, law, Crime::Kill, site.govt);
@@ -311,25 +332,6 @@ impl Session {
                     self.run_script(&scripts.on_dominate, chance);
                 }
             }
-        }
-    }
-
-    /// Writes the record a Release or a Demand Tribute leaves at `site`
-    /// into both of the pilot's stores, each by its own value (see the
-    /// module docs).
-    fn write_offence_record(&mut self, site: &LandingSite) {
-        let system = self.pilot.system;
-        if let Some(record) =
-            record_after_offence(self.pilot.system_record(system), site.min_status)
-        {
-            self.pilot.set_system_record(system, record);
-        }
-        let govt = site.govt.or(self.chart.galaxy.govt(system));
-        if let Some(govt) = govt
-            && let Some(record) =
-                record_after_offence(self.pilot.legal_record(govt), site.min_status)
-        {
-            self.pilot.set_legal_record(govt, record);
         }
     }
 }
@@ -864,7 +866,7 @@ pub(in crate::session) mod tests {
             session
                 .chart
                 .galaxy
-                .dominated(&session.planet_site(EARTH).expect("shown"))
+                .dominated(&session.chart.planet_site(EARTH).expect("shown"))
         );
         assert_eq!(session.port.dock, None, "the dock request dropped");
         assert!(!session.pilot.gone(BOUNTY_HUNTER), "person 1150 alive");
@@ -899,6 +901,82 @@ pub(in crate::session) mod tests {
     }
 
     #[test]
+    fn the_offence_record_of_a_stellar_of_no_government_is_written_with_the_systems() {
+        let mut catalog = planet_catalog();
+        for system in &mut catalog.star_map {
+            system.govt = Some(GovtId(129));
+        }
+        let mut session = at_earth(&catalog, 1_000_000, 5);
+        let system = session.pilot.system;
+        session.pilot.set_system_record(system, 10);
+        session.pilot.set_legal_record(GovtId(129), 10);
+        session.pilot.set_legal_record(FED, 10);
+        let earth = session.chart.planet_site(EARTH).expect("shown");
+        let site = LandingSite {
+            govt: None,
+            ..earth
+        };
+        session
+            .chart
+            .write_offence_record(&mut session.pilot, &site);
+        assert_eq!(session.pilot.system_record(system), 4, "MinStatus - 1");
+        assert_eq!(session.pilot.legal_record(GovtId(129)), 4, "the system's");
+        assert_eq!(session.pilot.legal_record(FED), 10);
+        session.pilot.set_legal_record(GovtId(129), 3);
+        session
+            .chart
+            .write_offence_record(&mut session.pilot, &earth);
+        assert_eq!(session.pilot.legal_record(FED), 4, "the stellar's own");
+        assert_eq!(
+            session.pilot.legal_record(GovtId(129)),
+            3,
+            "left, as the stellar has a government"
+        );
+    }
+
+    #[test]
+    fn the_standing_reads_the_domination_the_flags_and_the_landing_record() {
+        let catalog = planet_catalog();
+        let mut session = at_earth(&catalog, 1_000_000, 0);
+        session.pilot.set_system_record(session.pilot.system, 7);
+        let earth = session.chart.planet_site(EARTH).expect("shown");
+        let standing = |session: &Session, site: &LandingSite| {
+            session
+                .chart
+                .planet_standing(&session.pilot, &session.setup, site)
+        };
+        assert_eq!(
+            standing(&session, &earth),
+            Standing {
+                dominated: false,
+                always_dominated: false,
+                station: false,
+                record: 7,
+            }
+        );
+        session
+            .chart
+            .write_galaxy(&mut session.pilot, &mut session.out, |overlay| {
+                overlay.set_dominated(EARTH, true);
+            });
+        let site = LandingSite {
+            flags: earth.flags | StellarFlags::STATION,
+            flags2: ALWAYS_DOMINATED,
+            ..earth
+        };
+        assert_eq!(
+            standing(&session, &site),
+            Standing {
+                dominated: true,
+                always_dominated: true,
+                station: true,
+                record: 7,
+            }
+        );
+        assert_eq!(session.chart.planet_site(StellarId(999)), None);
+    }
+
+    #[test]
     fn release_releases_a_dominated_stellar_running_its_on_release() {
         let mut catalog = ranked();
         for (_, sites) in &mut catalog.sites {
@@ -907,7 +985,7 @@ pub(in crate::session) mod tests {
             }
         }
         let mut session = demanding(&catalog, 12_800);
-        let earth = session.planet_site(EARTH).expect("shown");
+        let earth = session.chart.planet_site(EARTH).expect("shown");
         session.space.traffic.defences_mut().set_left(&earth, 0);
         demand(&mut session, &catalog, &Slaps::default());
         assert!(
@@ -938,7 +1016,7 @@ pub(in crate::session) mod tests {
             !session
                 .chart
                 .galaxy
-                .dominated(&session.planet_site(EARTH).expect("shown"))
+                .dominated(&session.chart.planet_site(EARTH).expect("shown"))
         );
         assert_eq!(session.defence_ships_left(EARTH), Some(8), "the decode");
         assert_eq!(session.pilot.system_record(system), 4, "the record write");
@@ -967,7 +1045,7 @@ pub(in crate::session) mod tests {
         let (view, sounds) = press(&mut session, &catalog, PlanetCommItem::Second, 0);
         assert_eq!((view, sounds), (None, vec![]));
         assert_eq!(session.haggle_bribe(Haggle::Accept, &catalog), None);
-        session.close_planet_comm();
+        session.chart.close_planet_comm(&mut session.out);
         assert_eq!(session.take_sounds(), [], "closing nothing beeps nothing");
     }
 
