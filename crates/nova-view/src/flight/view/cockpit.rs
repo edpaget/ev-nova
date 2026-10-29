@@ -250,9 +250,33 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `Screen::tick` calls it right after the frame's steps, which fill
     /// the kept frame afresh. The fade's end beeps as Return's close does
     /// ([`FlightView::shut_escort_menu_by_key`]).
+    ///
+    /// When a step of the tick's report cleared an escort class's kept
+    /// order (`nova_sim::flight_frame::StepRun::class_orders_cleared`),
+    /// the menu shows in full again after that step's drop, its stamp kept
+    /// ([`EscortMenu::reshow`]), and the later steps drop from there: each
+    /// `_HandlePlayer` fades the menu (@0x6dfec) before its class-order
+    /// bookkeeping (@0x6e2e8) shows it again. A fade that reached 0 on that
+    /// step has shut the menu already, which the bookkeeping leaves shut
+    /// (`jle` @0x6e386, @0x6e444).
     pub(super) fn update_escort_menu(&mut self, steps: u32) {
         let flying = self.frame.hud.escorts_flying;
-        if self.escort_menu.update(self.elapsed, steps, flying) {
+        let cleared = self
+            .step_report
+            .steps
+            .iter()
+            .rposition(|run| run.class_orders_cleared)
+            .map(|at| u32::try_from(at + 1).unwrap_or(u32::MAX));
+        let (before, after) = match cleared {
+            Some(through) => (through, steps.saturating_sub(through)),
+            None => (steps, 0),
+        };
+        let mut closed = self.escort_menu.update(self.elapsed, before, flying);
+        if cleared.is_some() {
+            self.escort_menu.reshow();
+            closed |= self.escort_menu.update(self.elapsed, after, flying);
+        }
+        if closed {
             self.shut_escort_menu_by_key();
         }
     }

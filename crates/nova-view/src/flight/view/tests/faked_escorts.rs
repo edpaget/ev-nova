@@ -12,7 +12,7 @@ use super::faked_travel::{faked_lasts, sent_but_lines};
 use super::faked_world::{world, world_list};
 use super::*;
 use crate::flight::escorts::{ABSENT_ROW, MENU_AT, MENU_HEIGHT, MENU_TIMEOUT, MENU_WIDTH};
-use nova_sim::flight_frame::{FlightEvent, FrameHud};
+use nova_sim::flight_frame::{FlightEvent, FrameHud, StepReport, StepRun};
 use nova_sim::{Commanded, EscortCommand, EscortGroup, EscortOrder, SimSound, TargetPick};
 
 /// A frame in Sol, the player alone, the escort rows of `present` shown
@@ -884,6 +884,100 @@ fn title_alpha(view: &Faked) -> Option<u8> {
         },
         _ => None,
     })
+}
+
+// The menu shown again as the flight clears a class's kept order
+// (`_ShowEscortMenu` @0x5664a, from `_HandlePlayer` @0x6e388, @0x6e446).
+
+/// A tick's flight steps as `Screen::tick` runs them, the flight
+/// reporting one step for each of `cleared`, which says whether that
+/// step cleared an escort class's kept order: the steps, then the escort
+/// menu's frame.
+fn steps_clearing(view: &mut Faked, cleared: &[bool]) {
+    let steps = cleared
+        .iter()
+        .map(|&class_orders_cleared| StepRun {
+            class_orders_cleared,
+            ..StepRun::default()
+        })
+        .collect();
+    view.sim.queue_report(StepReport {
+        steps,
+        stopped: false,
+    });
+    let count = u32::try_from(cleared.len()).expect("a few steps");
+    view.run_steps(count);
+    view.update_escort_menu(count);
+}
+
+/// A view whose escort menu is open, past its timeout and faded to
+/// `level`.
+fn faded_to(level: u8) -> Faked {
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    menu_tick(&mut view, MENU_TIMEOUT + TICK);
+    view.update_escort_menu(u32::from(31 - level));
+    assert_eq!(view.escort_menu().level(), Some(level));
+    ui_heard(&mut view);
+    view
+}
+
+#[test]
+fn a_class_cleared_during_the_fade_shows_the_menu_in_full_with_its_old_stamp() {
+    let mut view = faded_to(22);
+    steps_clearing(&mut view, &[true]);
+    assert_eq!(view.escort_menu().level(), Some(32), "in full again");
+    assert_eq!(ui_heard(&mut view), [], "silently");
+    steps_clearing(&mut view, &[false]);
+    assert_eq!(
+        view.escort_menu().level(),
+        Some(31),
+        "the timeout still runs from the old stamp"
+    );
+}
+
+#[test]
+fn a_clear_shows_the_menu_in_full_after_its_own_steps_fade() {
+    for (cleared, level) in [
+        ([true, false, false], 30),
+        ([false, true, false], 31),
+        ([false, false, true], 32),
+    ] {
+        let mut view = faded_to(22);
+        steps_clearing(&mut view, &cleared);
+        assert_eq!(view.escort_menu().level(), Some(level), "{cleared:?}");
+    }
+}
+
+#[test]
+fn a_clear_leaves_a_shut_menu_shut() {
+    let mut view = escorted();
+    steps_clearing(&mut view, &[true]);
+    assert!(!view.escort_menu().is_open());
+    assert_eq!(ui_heard(&mut view), []);
+}
+
+#[test]
+fn a_fade_that_starts_again_and_ends_in_the_same_tick_beeps_with_e_held() {
+    let mut view = faded_to(22);
+    view.held.insert(MENU_KEY);
+    let mut cleared = vec![false; 34];
+    cleared[1] = true;
+    steps_clearing(&mut view, &cleared);
+    assert!(!view.escort_menu().is_open(), "32 steps after the clear");
+    assert_eq!(
+        ui_heard(&mut view),
+        [UiSound::EscortMenuToggled],
+        "the close beeps while E is down (@0x6e01e-0x6e04d)"
+    );
+}
+
+#[test]
+fn a_fade_that_ends_on_the_step_that_cleared_stays_shut() {
+    let mut view = faded_to(1);
+    steps_clearing(&mut view, &[true, false]);
+    assert!(!view.escort_menu().is_open(), "shut before the clear");
+    assert_eq!(ui_heard(&mut view), [], "it faded out silently");
 }
 
 #[test]

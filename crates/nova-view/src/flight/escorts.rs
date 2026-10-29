@@ -24,6 +24,11 @@
 //!   at 0 ([`EscortMenu::update`]). On a frame no escort is flying, and
 //!   one was on the last, or on its first frame shown, the group becomes
 //!   All Ships and the fade starts at once (@0x6dfb3-0x6dfcb).
+//! - When the flight clears an escort class's kept order
+//!   (`nova_sim::flight_frame::StepRun::class_orders_cleared`,
+//!   `_HandlePlayer` @0x6e388, @0x6e446), the menu, if it shows, comes
+//!   back to full with its old stamp ([`EscortMenu::reshow`]), so a fade
+//!   under way starts again from 32 and runs on from the next step.
 //! - A jump's arrival, a gate's exit and a take-off shut it at once and
 //!   silently (`_HandlePlayer` @0x6c50e, `_HandlePlayerDockRequest`
 //!   @0x6705a), as play entered from the main screen does (@0x1a3a3).
@@ -206,8 +211,13 @@ impl Shown {
     /// Shown in full, stamped at `now`: `_ShowEscortMenu` (@0x5664a) and
     /// the stamp after it.
     fn show(&mut self, now: Duration) {
-        self.level = FULL_LEVEL;
+        self.reshow();
         self.stamp(now);
+    }
+
+    /// Shown in full, its stamp kept: `_ShowEscortMenu` (@0x5664a) alone.
+    fn reshow(&mut self) {
+        self.level = FULL_LEVEL;
     }
 
     /// Stamped at `now`, its level kept.
@@ -340,6 +350,19 @@ impl EscortMenu {
     pub fn touch(&mut self, now: Duration) {
         if let Some(shown) = &mut self.open {
             shown.show(now);
+        }
+    }
+
+    /// The flight cleared an escort class's kept order
+    /// (`nova_sim::flight_frame::StepRun::class_orders_cleared`): the menu,
+    /// if it shows, shows in full again, its stamp and group kept, as
+    /// `_ShowEscortMenu` (@0x5664a) writes 32 to the counter and draws,
+    /// with no stamp and no sound. A fade under way starts again from 32,
+    /// its timeout still running from the old stamp. A shut menu stays
+    /// shut.
+    pub fn reshow(&mut self) {
+        if let Some(shown) = &mut self.open {
+            shown.reshow();
         }
     }
 
@@ -655,6 +678,38 @@ mod tests {
         let mut shut = EscortMenu::default();
         shut.touch(AT);
         assert!(!shut.is_open(), "a command does not open it");
+    }
+
+    #[test]
+    fn a_reshow_during_a_fade_shows_it_in_full_keeping_its_stamp() {
+        // `_ShowEscortMenu` (@0x5664a) writes 32 and draws, and stamps
+        // nothing: the next step past the old timeout drops a level again.
+        let mut menu = opened();
+        let late = after(AT, 600);
+        menu.update(late, 10, true);
+        assert!(menu.select(3, late, &rows()), "4: warships");
+        menu.update(after(late, 481), 10, true);
+        assert_eq!(menu.level(), Some(22));
+        menu.reshow();
+        assert_eq!(menu.level(), Some(32));
+        assert_eq!(
+            menu.group(),
+            EscortGroup::Class(EscortClass::Warship),
+            "the group kept"
+        );
+        assert!(!menu.update(after(late, 481), 1, true));
+        assert_eq!(menu.level(), Some(31), "the old stamp's timeout");
+    }
+
+    #[test]
+    fn a_reshow_of_a_shut_menu_leaves_it_shut() {
+        let mut menu = EscortMenu::default();
+        menu.reshow();
+        assert!(!menu.is_open());
+        let mut menu = opened();
+        menu.close();
+        menu.reshow();
+        assert!(!menu.is_open());
     }
 
     #[test]
