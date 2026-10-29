@@ -233,6 +233,12 @@ fn the_about_text_scrolls_in_desc_dialog_and_return_closes_it() {
 
         assert_eq!(desc.input(&key(Key::Down)), nova_view::ScreenAction::None);
         assert_eq!(desc.first_line(), 1);
+        // `_TextDialogFilter`'s End and Home reach either end of it.
+        desc.input(&key(Key::End));
+        let last = desc.lines().len() - desc.dialog().scroll_text().expect("text").visible();
+        assert_eq!(desc.first_line(), last);
+        desc.input(&key(Key::Home));
+        assert_eq!(desc.first_line(), 0);
         desc.input(&key(Key::Enter));
         assert!(desc.closed());
     }
