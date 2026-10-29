@@ -101,8 +101,31 @@ impl RowList {
         }
     }
 
+    /// Steps the selection a row forward or back, wrapping from the last
+    /// row to the first and from the first to the last, and scrolls to
+    /// show it, as the mission computer's Tab, Down and Up do
+    /// (`_MissionFilter` @0x9f8cc, @0x9faf2, @0x9fce3). The original's
+    /// forward step from no selection selects the first row and its back
+    /// step the last (@0x9f949, @0x9fcfa); the list always has a row
+    /// selected while it has rows, so it never starts from none. Returns
+    /// whether the selection changed: never with no rows or one.
+    pub fn step_wrapping(&mut self, forward: bool) -> bool {
+        let count = self.rows.len();
+        let Some(index) = self.selected else {
+            return false;
+        };
+        let next = if forward {
+            (index + 1) % count
+        } else {
+            (index + count - 1) % count
+        };
+        self.select(next);
+        next != index
+    }
+
     /// A press on a row shown selects it; Up and Down, repeats included,
-    /// move the selection. Returns whether the selection changed.
+    /// move the selection, stopping at the ends. Returns whether the
+    /// selection changed.
     pub fn input(&mut self, input: &Input) -> bool {
         let before = self.selected;
         match *input {
@@ -322,6 +345,39 @@ mod tests {
                 if text == "Row 0" && *color == ROW_COLOR && *size == ROW_SIZE
         ));
         assert_eq!(commands.len(), 3);
+    }
+
+    #[test]
+    fn step_wrapping_moves_forward_and_back_and_wraps() {
+        let mut rows = list(3);
+        assert!(rows.step_wrapping(true));
+        assert_eq!(rows.selected(), Some(1));
+        assert!(rows.step_wrapping(true));
+        assert_eq!(rows.selected(), Some(2));
+        assert!(rows.step_wrapping(true), "wraps to the first");
+        assert_eq!(rows.selected(), Some(0));
+        assert!(rows.step_wrapping(false), "wraps to the last");
+        assert_eq!(rows.selected(), Some(2));
+        assert!(rows.step_wrapping(false));
+        assert_eq!(rows.selected(), Some(1));
+        let mut long = list(8);
+        assert!(long.step_wrapping(false));
+        assert_eq!(long.selected(), Some(7));
+        assert_eq!(long.first(), 8 - long.visible(), "the last row shown");
+        assert!(long.step_wrapping(true));
+        assert_eq!((long.selected(), long.first()), (Some(0), 0));
+    }
+
+    #[test]
+    fn step_wrapping_with_one_row_or_none_changes_nothing() {
+        let mut empty = list(0);
+        assert!(!empty.step_wrapping(true));
+        assert!(!empty.step_wrapping(false));
+        assert_eq!(empty.selected(), None);
+        let mut one = list(1);
+        assert!(!one.step_wrapping(true));
+        assert!(!one.step_wrapping(false));
+        assert_eq!(one.selected(), Some(0));
     }
 
     #[test]
