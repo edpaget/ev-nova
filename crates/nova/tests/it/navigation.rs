@@ -3,18 +3,13 @@
 //! window events, with every key made by the platform's own translation
 //! of a physical key.
 //!
-//! Alpha's navigation defaults are Alpha Minor, then Alpha Prime. With
-//! nothing selected and no course the nav area says "Nav System Off". A
-//! course plotted on flight's map to Beta, not yet explored, shows
-//! "Hyperspace" over "Unexplored System". Tab, the original's Target
-//! Select for ships, selects no stellar and leaves the course shown.
-//! Arriving in Beta clears the course; a course back to Alpha, explored,
-//! shows its name. Backquote, Nav Off, turns the nav system off with the
-//! course kept, so J goes nowhere until H, Hyperspace Mode, selects the
-//! course's next hop again.
-//!
-//! The date reads "June 23, 1177 NC" and moves on a day with each jump;
-//! the cargo area lists the hold.
+//! A course plotted with Shift-clicks on flight's map reaches the session,
+//! and the HUD's navigation area, drawn from the `ïntf`'s area, reaches
+//! the Gpu and changes with it. What the nav area says, the date, the
+//! cargo area, and Tab, Nav Off and Hyperspace Mode's effects on the
+//! course are nova-view's and nova-sim's, pinned there.
+
+use crate::common::Frames;
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -36,11 +31,9 @@ use nova_data::{GameData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_sim::flight::{heading_of, shortest_turn};
-use nova_sim::hyperspace::{HyperlinkRule, MIN_JUMP_DISTANCE};
-use nova_sim::{Session, ShipState, SystemId};
+use nova_sim::hyperspace::HyperlinkRule;
+use nova_sim::{Session, SystemId};
 use nova_view::flight::FlightView;
-use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_OFF, NAV_UNEXPLORED};
 use nova_view::{MouseButton, Point};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -216,8 +209,6 @@ struct Harness {
     gpu: RecordingGpu,
     /// Frames sent, at 60 a second.
     frames: u64,
-    /// The flight keys held.
-    held: Vec<KeyCode>,
 }
 
 impl Harness {
@@ -229,7 +220,6 @@ impl Harness {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
             frames: 0,
-            held: Vec::new(),
         };
         harness.press(KeyCode::KeyF);
         assert_eq!(harness.app.screen().showing(), Showing::Flight);
@@ -260,22 +250,6 @@ impl Harness {
         self.key(code, false, false);
     }
 
-    /// Holds exactly `keys` of the flight keys, pressing and releasing
-    /// only those that change.
-    fn hold(&mut self, keys: &[KeyCode]) {
-        for code in self.held.clone() {
-            if !keys.contains(&code) {
-                self.key(code, false, false);
-            }
-        }
-        for &code in keys {
-            if !self.held.contains(&code) {
-                self.key(code, true, false);
-            }
-        }
-        self.held = keys.to_vec();
-    }
-
     /// Clicks the left button at `at` (window pixels are logical units).
     fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
@@ -295,10 +269,6 @@ impl Harness {
 
     fn session(&self) -> &Session {
         self.flight().session().expect("flying")
-    }
-
-    fn ship(&self) -> ShipState {
-        *self.session().player()
     }
 
     /// Plots a course to system `id` on flight's map: M, a Shift-click on
@@ -335,54 +305,11 @@ impl Harness {
         frame
     }
 
-    /// Presses J and sends redraws while the ship turns and slows to jump,
-    /// jumps and arrives in system `id`, until the jump's effect is over.
-    fn jump_into(&mut self, id: i16) {
-        self.press(KeyCode::KeyJ);
-        for _ in 0..1200 {
-            self.frame();
-            if self.session().system() == SystemId(id) && self.flight().jump_effect().is_none() {
-                return;
-            }
-        }
-        panic!("never arrived in {id}: {:?}", self.ship());
-    }
-
-    /// Flies out from the centre until the ship is at least the minimum
-    /// jump distance from it, then lets go: first Down, to face away from
-    /// the centre while drifting in, then Up.
-    fn fly_out(&mut self) {
-        for _ in 0..600 {
-            let ship = self.ship();
-            if ship.position.length() >= MIN_JUMP_DISTANCE {
-                self.hold(&[]);
-                return;
-            }
-            let moving_in =
-                ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y < 0.0;
-            let facing_out = ship.position.length() == 0.0
-                || shortest_turn(ship.heading, heading_of(ship.position)).abs() < 1e-3;
-            if moving_in && !facing_out {
-                self.hold(&[KeyCode::ArrowDown]);
-            } else {
-                self.hold(&[KeyCode::ArrowUp]);
-            }
-            self.frame();
-        }
-        panic!("never got out: {:?}", self.ship());
-    }
-
     /// The texts the next frame draws in the nav area: stock `ïntf` 128's
     /// (8, 254)-(184, 286), on the bar against the right edge of the
     /// 1024-wide window, 194 wide.
     fn nav(&mut self) -> Vec<String> {
         self.texts_on_bar(254.0..=286.0)
-    }
-
-    /// The texts the next frame draws in the cargo area: stock `ïntf`
-    /// 128's (8, 458)-(184, 552), on the bar.
-    fn cargo_area(&mut self) -> Vec<String> {
-        self.texts_on_bar(458.0..=552.0)
     }
 
     /// The texts the next frame draws starting across the bar's areas
@@ -407,88 +334,17 @@ impl Harness {
 }
 
 #[test]
-fn the_course_map_sets_what_the_hud_navigation_area_shows() {
+fn a_course_plotted_on_flights_map_reaches_the_hud_navigation_area() {
     let mut game = Harness::flying();
-    assert_eq!(game.nav(), [NAV_OFF]);
+    let before = game.nav();
+    assert!(!before.is_empty(), "the nav area drawn");
 
     game.plot(129);
-    assert_eq!(game.nav(), [NAV_HYPERSPACE, NAV_UNEXPLORED]);
-
-    // Tab is the original's Target Select, for ships: it selects no
-    // stellar, and the course stays shown.
-    game.press(KeyCode::Tab);
-    assert_eq!(game.nav(), [NAV_HYPERSPACE, NAV_UNEXPLORED]);
-    assert_eq!(game.session().nav_target(), None);
-    assert_eq!(
-        game.session().course(),
-        [SystemId(129)],
-        "the course is kept"
-    );
-    assert_eq!(game.app.screen().showing(), Showing::Flight);
-
-    // Arriving clears the target, and the course is done.
-    game.fly_out();
-    game.jump_into(129);
-    assert_eq!(game.session().system(), SystemId(129));
-    assert_eq!(game.nav(), [NAV_OFF]);
-
-    // A course back to Alpha, explored, names it.
-    game.plot(128);
-    assert_eq!(game.nav(), [NAV_HYPERSPACE, "Alpha"]);
+    game.settle();
+    assert_eq!(game.session().course(), [SystemId(129)]);
+    let after = game.nav();
+    assert!(!after.is_empty(), "the nav area drawn");
+    assert_ne!(after, before, "the course shown");
 }
 
-#[test]
-fn nav_off_keeps_the_course_but_j_goes_nowhere_until_h_selects_it_again() {
-    let mut game = Harness::flying();
-    game.plot(129);
-    assert_eq!(game.nav(), [NAV_HYPERSPACE, NAV_UNEXPLORED]);
-
-    game.press(KeyCode::Backquote);
-    assert_eq!(game.nav(), [NAV_OFF]);
-    assert_eq!(
-        game.flight().course_map().route(),
-        [SystemId(129)],
-        "still on the map"
-    );
-
-    game.fly_out();
-    game.press(KeyCode::KeyJ);
-    for _ in 0..120 {
-        game.frame();
-    }
-    assert_eq!(game.session().system(), SystemId(128), "no jump");
-    assert_eq!(game.flight().jump_effect(), None);
-
-    game.press(KeyCode::KeyH);
-    assert_eq!(game.nav(), [NAV_HYPERSPACE, NAV_UNEXPLORED]);
-    game.jump_into(129);
-    assert_eq!(game.session().system(), SystemId(129));
-}
-
-/// The date the session shows.
-fn date(game: &Harness) -> String {
-    game.session().date_text()
-}
-
-#[test]
-fn the_date_moves_on_a_day_with_each_jump_and_the_cargo_area_lists_the_hold() {
-    let mut game = Harness::flying();
-    assert_eq!(
-        game.cargo_area(),
-        ["Free:", "0", "Credits:", "0"],
-        "the empty hold and the cash"
-    );
-    assert_eq!(date(&game), "June 23, 1177 NC");
-
-    game.plot(129);
-    game.fly_out();
-    game.jump_into(129);
-    assert_eq!(game.session().system(), SystemId(129));
-    assert_eq!(date(&game), "June 24, 1177 NC");
-
-    game.plot(128);
-    game.fly_out();
-    game.jump_into(128);
-    assert_eq!(game.session().system(), SystemId(128));
-    assert_eq!(date(&game), "June 25, 1177 NC");
-}
+crate::common::frames!(Harness, frame);
