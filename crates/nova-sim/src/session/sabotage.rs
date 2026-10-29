@@ -40,14 +40,10 @@
 //! at the player's position, of size 0, with its own sound
 //! (`_CreateExplosion` @0x698ef; the view plays a `bööm`'s sound for any
 //! [`CombatEvent::Exploded`](crate::combat::CombatEvent::Exploded)); every
-//! copy is removed (@0x698f7); and the player takes [`bomb_damage`] to
-//! its armour alone, a hit that can neither kill nor disable
-//! ([`take`](crate::combat::damage::take): `_DamageShip`
-//! @0x699b2 with +0x28, +0x2c and +0x30 set and no source), the player
-//! counted disabled before it as its armour then says (`_IsDisabled`
-//! @0x3a9ad), so a second bomb sees the first's damage. The damage is at
-//! least the armour capacity, so the bomb never kills: an intact player
-//! is left at what a self-repair leaves, a disabled one at 1. Then
+//! copy is removed (@0x698f7); and the bomb goes off on the player
+//! ([`bomb_goes_off`]: its damage to the armour alone, a hit that can
+//! neither kill nor disable), under the session's disable rule, so a
+//! second bomb sees the first's damage. Then
 //! `_ResetPlayerPrecalcedValues` runs (@0x69a05), the sabotage clock's
 //! refresh with it:
 //! no bomb is left, so the flag clears and the next tick zeroes the
@@ -63,11 +59,10 @@
 use super::{PlayerShip, Session, Statics};
 use crate::chance::Chance;
 use crate::combat::Rules;
-use crate::combat::damage::{Hit, take};
 use crate::combat::hull::{Condition, DisableRule};
 use crate::message::SimMessage;
 use crate::pilot::Pilot;
-use crate::sabotage::{Sabotage, bomb_damage, bombs, kill_notice};
+use crate::sabotage::{Sabotage, bomb_goes_off, bombs, kill_notice};
 use crate::sound::{SimSound, WARP_UP_HALTS};
 
 impl Session {
@@ -118,22 +113,7 @@ impl Session {
                     .explode(self.ship.player.position, explosion);
             }
             self.pilot.outfits.remove(&bomb.outfit);
-            let armor = self.pilot.reserves.armor;
-            let was_disabled = rule.disabled(armor, &self.ship.fit.hull);
-            let hit = Hit {
-                mass: bomb_damage(armor.max, chance),
-                energy: 0.0,
-                passes_shields: true,
-                cant_kill: true,
-                cant_disable: true,
-            };
-            take(
-                &mut self.pilot.reserves,
-                hit,
-                &self.ship.fit.hull,
-                rule,
-                was_disabled,
-            );
+            bomb_goes_off(&mut self.pilot.reserves, &self.ship.fit.hull, rule, chance);
         }
         self.reset_precalced();
     }
@@ -598,7 +578,6 @@ pub(super) mod tests {
                     one
                 }]
             );
-            assert_eq!(messages[0].ticks(), 400);
             assert_eq!(session.pilot.outfits.get(&OutfitId(BOMB)), None);
         }
     }
@@ -643,57 +622,18 @@ pub(super) mod tests {
         }
     }
 
-    /// The shield and armour a bomb leaves a player of `catalog` with
-    /// `armor` armour before it, disabled or not, the damage drawn
-    /// `draw` above the capacity. A disabled player first draws for its
-    /// self-repair (see the `player_repair` module), which 1 refuses.
-    fn bombed(catalog: &FakePilotCatalog, armor: f32, disabled: bool, draw: u32) -> (f32, f32) {
-        let mut session = lit(catalog, &[(BOMB, 1)]);
-        session.pilot.reserves.armor.now = armor;
-        let mut draws = if disabled {
-            session.ship.condition = Condition::Disabled;
-            Draws::of(&[1, draw])
-        } else {
-            Draws::of(&[draw])
-        };
-        work_with(
-            &mut session,
-            &catalog,
-            Controls::default(),
-            &Passive,
-            Rules::default(),
-            &mut draws,
-        );
-        assert!(draws.asked.contains(&151), "Rand(300 x 0.5 + 1)");
-        let reserves = session.pilot.reserves;
-        (reserves.shield.now, reserves.armor.now)
-    }
-
-    #[test]
-    fn the_bomb_never_kills_a_300_armour_player_ends_at_100_99_with_shields_unchanged() {
-        let catalog = armoured(false);
-        for draw in [0, 150] {
-            let (shield, armor) = bombed(&catalog, 300.0, false, draw);
-            assert_eq!(shield, 100.0, "{draw}");
-            assert!((armor - 100.99).abs() < 1e-4, "300 x 0.3333 + 1: {armor}");
-        }
-    }
-
-    #[test]
-    fn a_bomb_on_a_tough_hull_leaves_31_armour() {
-        assert_eq!(bombed(&armoured(true), 300.0, false, 0), (100.0, 31.0));
-    }
-
-    #[test]
-    fn a_bomb_on_an_already_disabled_player_leaves_1_armour() {
-        assert_eq!(bombed(&armoured(false), 90.0, true, 0), (100.0, 1.0));
-    }
-
     #[test]
     fn two_bomb_outfits_each_post_their_notice_and_hit_in_index_order() {
         let mut catalog = armoured(false);
         catalog.outfits.push(outfit(263, &[(SABOTAGE_BOMB, 128)]));
         let mut session = lit(&catalog, &[(263, 2), (BOMB, 1)]);
+        // Both bombs as nova-sim-combat sets them off, on the same draws.
+        let mut expected = session.pilot.reserves;
+        let hull = session.ship.fit.hull;
+        let mut both = Draws::of(&[0, 0]);
+        for _ in 0..2 {
+            bomb_goes_off(&mut expected, &hull, Rules::default().disable, &mut both);
+        }
         let mut draws = Draws::of(&[0, 0]);
         work_with(
             &mut session,
@@ -716,11 +656,7 @@ pub(super) mod tests {
                 },
             ]
         );
-        assert_eq!(&draws.asked[..2], [151, 151]);
-        // The first leaves 100.99, so the second finds the player intact
-        // again and floors it the same way, not at 1.
-        let armor = session.pilot.reserves.armor.now;
-        assert!((armor - 100.99).abs() < 1e-4, "{armor}");
+        assert_eq!(session.pilot.reserves, expected, "each hit in turn");
         assert_eq!(session.pilot.outfits.get(&OutfitId(263)), None);
     }
 

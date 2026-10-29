@@ -42,8 +42,8 @@
 //!
 //! What goes off: [`kill_notice`] names the outfit a [`Sabotage::Kill`]
 //! blames, and [`bombs`] lists what a [`Sabotage::Bomb`] sets off, each
-//! bomb's damage drawn by [`bomb_damage`]. The session does the rest (see
-//! its `sabotage` module).
+//! bomb's damage drawn by [`bomb_damage`] and taken by [`bomb_goes_off`].
+//! The session does the rest (see its `sabotage` module).
 //!
 //! ## Left out
 //!
@@ -70,7 +70,10 @@ use std::ops::RangeInclusive;
 
 use crate::catalog::{OutfitId, OutfitRecord};
 use crate::chance::Chance;
+use crate::combat::damage::{Hit, take};
+use crate::combat::hull::{DisableRule, HullSpec};
 use crate::combat::weapon::Explosion;
+use crate::reserves::Reserves;
 
 /// The count past which the sabotage clock goes off (the float
 /// @0xdd95c, `_HandlePlayer` @0x69342-0x6934d).
@@ -327,6 +330,33 @@ pub fn bomb_damage(capacity: f32, chance: &mut dyn Chance) -> f32 {
     (draw + capacity).trunc()
 }
 
+/// A bomb going off on a ship of `hull` holding `reserves`, `rule` saying
+/// when a ship is disabled, its damage drawn on `chance` (`_HandlePlayer`
+/// @0x698ff-0x699b2): [`bomb_damage`] to the armour alone, a hit that can
+/// neither kill nor disable ([`take`]: `_DamageShip` @0x699b2 with +0x28,
+/// +0x2c and +0x30 set and no source), the ship counted disabled before it
+/// as its armour then says (`_IsDisabled` @0x3a9ad). The damage is at least
+/// the armour capacity, so the bomb never kills: an intact ship is left at
+/// what a self-repair leaves, a disabled one at 1. A second bomb sees the
+/// first's damage.
+pub fn bomb_goes_off(
+    reserves: &mut Reserves,
+    hull: &HullSpec,
+    rule: &dyn DisableRule,
+    chance: &mut dyn Chance,
+) {
+    let armor = reserves.armor;
+    let was_disabled = rule.disabled(armor, hull);
+    let hit = Hit {
+        mass: bomb_damage(armor.max, chance),
+        energy: 0.0,
+        passes_shields: true,
+        cant_kill: true,
+        cant_disable: true,
+    };
+    take(reserves, hit, hull, rule, was_disabled);
+}
+
 /// Whether `record` has a slot of `mod_type`.
 fn has_slot(record: &OutfitRecord, mod_type: i16) -> bool {
     record.mods.iter().any(|&(kind, _)| kind == mod_type)
@@ -357,6 +387,7 @@ fn held<'a>(
 mod tests {
     use super::*;
     use crate::catalog::BoomId;
+    use crate::combat::hull::NovaDisable;
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::outfit;
 
@@ -728,5 +759,60 @@ mod tests {
         assert_eq!(bomb_damage(0.0, &mut draws), 0.0);
         assert_eq!(draws.asked, [1]);
         assert_eq!((DAMAGE_SHARE, DAMAGE_PLUS), (0.5, 1.0));
+    }
+
+    /// The shield and armour a bomb leaves a ship of 300 armour and 100
+    /// shields with, its armour `armor` before it, of `hull`, under Nova's
+    /// rule, the damage drawn `draw` above the capacity; and the sides
+    /// each draw was asked for.
+    fn bombed(armor: f32, hull: &HullSpec, draw: u32) -> ((f32, f32), Vec<u32>) {
+        let mut reserves = Reserves::full(100.0, 300.0, 0.0);
+        reserves.armor.now = armor;
+        let mut draws = Draws::of(&[draw]);
+        bomb_goes_off(&mut reserves, hull, &NovaDisable, &mut draws);
+        ((reserves.shield.now, reserves.armor.now), draws.asked)
+    }
+
+    #[test]
+    fn a_bomb_never_kills_a_300_armour_ship_leaving_100_99_and_its_shields() {
+        for draw in [0, 150] {
+            let ((shield, armor), asked) = bombed(300.0, &HullSpec::default(), draw);
+            assert_eq!(asked, [151], "Rand(300 x 0.5 + 1)");
+            assert_eq!(shield, 100.0, "{draw}");
+            assert!((armor - 100.99).abs() < 1e-4, "300 x 0.3333 + 1: {armor}");
+        }
+    }
+
+    #[test]
+    fn a_bomb_on_a_tough_hull_leaves_31_armour() {
+        let tough = HullSpec {
+            tough: true,
+            ..HullSpec::default()
+        };
+        assert_eq!(bombed(300.0, &tough, 0).0, (100.0, 31.0));
+    }
+
+    #[test]
+    fn a_bomb_on_an_already_disabled_ship_leaves_1_armour() {
+        assert_eq!(bombed(90.0, &HullSpec::default(), 0).0, (100.0, 1.0));
+    }
+
+    #[test]
+    fn a_second_bomb_finds_the_ship_as_the_first_left_it() {
+        let mut reserves = Reserves::full(100.0, 300.0, 0.0);
+        let mut draws = Draws::of(&[0, 0]);
+        for _ in 0..2 {
+            bomb_goes_off(
+                &mut reserves,
+                &HullSpec::default(),
+                &NovaDisable,
+                &mut draws,
+            );
+        }
+        // The first leaves 100.99, so the second finds it intact again and
+        // floors it the same way, not at 1.
+        let armor = reserves.armor.now;
+        assert!((armor - 100.99).abs() < 1e-4, "{armor}");
+        assert_eq!(draws.asked, [151, 151]);
     }
 }
