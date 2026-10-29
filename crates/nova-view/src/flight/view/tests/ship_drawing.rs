@@ -145,7 +145,7 @@ fn npc_shown(heading: f32) -> FrameShip {
 /// A scripted flight from `catalog` by `rules`: the player and NPC 0 as
 /// [`player_shown`] and [`npc_shown`] have them, the NPC facing
 /// `heading`, in a system of effective murk `murk`, a tick in.
-fn shown_by(catalog: FakeCatalog, heading: f32, murk: u8, rules: &Rulebook) -> Faked {
+pub(super) fn shown_by(catalog: FakeCatalog, heading: f32, murk: u8, rules: &Rulebook) -> Faked {
     let mut frame = in_sol_with(vec![player_shown(), npc_shown(heading)]);
     frame.effective_murk = murk;
     let mut view = world_by(catalog, frame, rules);

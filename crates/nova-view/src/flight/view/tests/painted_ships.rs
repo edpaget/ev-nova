@@ -6,10 +6,11 @@
 //! the session's (nova-sim's `session::ship_paint` tests); the view draws
 //! what the record says.
 
-use super::ship_drawing::{NPC_0, display, flying_with, npc_sheet, redrawn, shown};
+use super::ship_drawing::{NPC_0, display, flying_with, npc_sheet, redrawn, shown, shown_by};
 use super::*;
 use crate::draw::{Blend, lights_tint_by_channel, translucent_tint_by_channel};
 use crate::flight::cloak_fade::{full_fade_factor, hull_factor};
+use crate::flight::murk::{murk_tint, sprite_murk};
 use crate::flight::paint::{painted_hull, translucency};
 use crate::flight::ship_layers::base_alpha;
 use nova_sim::Rgb15;
@@ -145,6 +146,40 @@ fn a_painted_npc_is_drawn_in_its_paint_even_at_its_gate() {
             Blend::OrTranslucent
         ))
     );
+}
+
+#[test]
+fn a_murky_painted_npcs_paint_is_murked_and_its_translucency_kept() {
+    // Effective murk 67 at (100, -100): 20,000 × 67 × 1.2e-5 = 16.08.
+    // A `BaseTransp` of 10, so its translucency writes a destination
+    // factor a murked alpha would change. (Not a gate's: a gate's
+    // colorize stands in for the murk.)
+    let sheet = ShipSheet {
+        base_transp: 10,
+        ..npc_sheet()
+    };
+    let view = shown_by(
+        shown(display(0, 1, 0), display(0, 1, 0), Some(sheet)),
+        0.0,
+        67,
+        &Rulebook::default(),
+    );
+    let npc = FrameShip {
+        paint: Some(PAINT),
+        ..npc_record(&view, NPC_0)
+    };
+    assert_eq!(sprite_murk(npc.position, Vec2::ZERO, 67), 16, "half murked");
+    let t = translucency(base_alpha(10));
+    assert!(t > 4, "faded past the blue: {t}");
+    // The paint's source factors, then halved by the murk; the
+    // destination factor t untouched.
+    let source = translucent_tint_by_channel([31, 16, 4].map(|c: u8| c.saturating_sub(t)), t);
+    let murked = Color::rgba(source.r / 2, source.g / 2, source.b / 2, source.a);
+    assert_eq!(
+        murked,
+        murk_tint(painted_hull(Some(PAINT), t).expect("painted"), 16)
+    );
+    assert_eq!(npc_hull(&view, &npc), Some((murked, Blend::OrTranslucent)));
 }
 
 /// The hull tint a cloak at `shown` draws a ship painted [`PAINT`] at.
