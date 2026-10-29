@@ -60,6 +60,7 @@ use crate::hail::{Conversation, HailOptions, HailRefusal, HailView};
 use crate::mission::VenueOffer;
 use crate::mission::{self, Offer, Venue};
 use crate::person::{GONE_ON_ACCEPT, LEAVES_ON_ACCEPT, MISSION_ON_BOARD, swaps_for_mission_ship};
+use crate::planet_comm::PlanetCommView;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
 use crate::traffic::npc::{Npc, NpcId};
@@ -112,11 +113,9 @@ pub enum Hailed {
     /// (`_OfferOneMission` @0x62293): the offer dialog, or the mission
     /// accepted at once.
     Offer(VenueOffer),
-    /// The navigation stellar, which answers: the original opens its comm
-    /// dialog here (`_DoPlanetCommDialog` @0x6204b). The engine has no
-    /// planet comm dialog yet (rdm:task/planet-domination), so this is
-    /// the seam where it opens. No sound plays.
-    Stellar(StellarId),
+    /// The navigation stellar, which answers: the planet comm dialog
+    /// (`_DoPlanetCommDialog` @0x6204b; see the `planet_comm` module).
+    Stellar(PlanetCommView),
 }
 
 impl Session {
@@ -185,9 +184,10 @@ impl Session {
     /// Hails as the original's comm key does, with Option held as
     /// `option` says (`_HandlePlayerCommunication` @0x61f48; see the
     /// module docs). With no ship target, or with Option held, it hails
-    /// the navigation stellar ([`Hailed::Stellar`]) when that answers
-    /// ([`landing::answers_hail`](crate::landing::answers_hail)),
-    /// drawing nothing and making no sound. Otherwise it hails the ship
+    /// the navigation stellar when that answers
+    /// ([`landing::answers_hail`](crate::landing::answers_hail)), opening
+    /// the planet comm dialog ([`Hailed::Stellar`]), which draws on
+    /// `chance` and beeps (see the `planet_comm` module). Otherwise it hails the ship
     /// target: a person whose mission is offered on its hail offers it,
     /// drawing on `chance`, in place of the comm dialog, and no
     /// conversation opens; one of the fleet's escorts opens the escort
@@ -218,9 +218,13 @@ impl Session {
     ) -> Result<Hailed, HailRefusal> {
         self.space.escorts.talk = None;
         self.space.escorts.dialog = None;
+        self.chart.planet_comm = None;
         // Beeps here once: once answering, it answers in `hail` too.
         if let HailTarget::Stellar(stellar) = self.out.beep_unanswered(self.hail_target(option))? {
-            return Ok(Hailed::Stellar(stellar));
+            return self
+                .open_planet_comm(stellar, catalog, chance)
+                .map(Hailed::Stellar)
+                .ok_or(HailRefusal::NoTarget);
         }
         let linked = self.space.linked_ship(self.answering()?, OfferedBy::Hail);
         // The hail names a linked person's ship before it checks the

@@ -55,6 +55,7 @@ use crate::landing::LandingRefusal;
 use crate::market::Good;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
+use crate::planet_comm::{PlanetCommItem, PlanetCommView};
 use crate::player_fate::{Drawn as ShipDrawn, PlayerCommand, PlayerFate};
 use crate::player_info::PlayerInfo;
 use crate::red_alert::AlertIcon;
@@ -864,6 +865,12 @@ pub enum FlightCommand {
     /// A press in the escort dialog
     /// ([`Session::press_escort`](crate::Session::press_escort)).
     PressEscort(EscortButton),
+    /// A press in the planet comm dialog
+    /// ([`Session::press_planet_comm`](crate::Session::press_planet_comm)).
+    PressPlanetComm(PlanetCommItem),
+    /// A choice in the planet comm dialog's bribe haggle
+    /// ([`Session::haggle_bribe`](crate::Session::haggle_bribe)).
+    HaggleBribe(Haggle),
     /// An order in the exchange
     /// ([`Session::trade`](crate::Session::trade)).
     Trade(Order),
@@ -1090,6 +1097,8 @@ impl FlightCommand {
             | Self::Plunder(_)
             | Self::LetGoOfBoarding
             | Self::PressEscort(_)
+            | Self::PressPlanetComm(_)
+            | Self::HaggleBribe(_)
             | Self::Trade(_)
             | Self::Recharge
             | Self::OpenOutfitter
@@ -1269,6 +1278,11 @@ pub enum Answer {
     /// What the escort dialog shows after a [`FlightCommand::PressEscort`]:
     /// `None` once it closes, or when it was not open.
     EscortDialog(Option<EscortDialogView>),
+    /// What the planet comm dialog shows after a
+    /// [`FlightCommand::PressPlanetComm`] or a [`FlightCommand::HaggleBribe`]:
+    /// `None` once it closes (Close Channel, or a bribe paid), or when it
+    /// was not open.
+    PlanetComm(Option<PlanetCommView>),
     /// What a [`FlightCommand::Trade`] traded, or why it was refused.
     Traded(Result<u32, TradeRefusal>),
     /// What a [`FlightCommand::Recharge`] cost, or why it was refused.
@@ -2008,6 +2022,8 @@ mod tests {
                 C::PressEscort(crate::escort_dialog::EscortButton::Close),
                 None,
             ),
+            (C::PressPlanetComm(PlanetCommItem::Close), None),
+            (C::HaggleBribe(Haggle::Accept), None),
             (C::CommAcknowledged, None),
             (C::CommTicked, None),
             (C::PressMissionInfo, Some(PlayerCommand::MissionInfo)),

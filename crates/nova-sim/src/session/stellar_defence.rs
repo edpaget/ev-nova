@@ -19,8 +19,7 @@
 //!   Reset, which hands the counts on to the next traffic.
 //! - **The spawn** ([`Session::spawn_stellar_defender`]): one defence
 //!   ship sent up at once, the planet comm dialog's Demand Tribute's
-//!   (`_DoPlanetCommDialog` @0x97814,
-//!   rdm:phase/play-feel-4/phase-2-planet-comm-dialog).
+//!   (`_DoPlanetCommDialog` @0x97814; see the `planet_comm` module).
 //!
 //! A defender captured stops defending (`Session::join_fleet`, @0x9470d).
 //! The counts are never saved here (phase 3 saves them). Nothing here
@@ -53,14 +52,6 @@ impl Session {
     /// `nova_sim_ai::traffic::Traffic::spawn_defender`): its number, or
     /// none when the player's system lists no such stellar, it has no
     /// `DefenseDude` or no slot is free.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the planet comm dialog's Demand Tribute calls it \
-                      (rdm:phase/play-feel-4/phase-2-planet-comm-dialog)"
-        )
-    )]
     pub(crate) fn spawn_stellar_defender(
         &mut self,
         stellar: StellarId,

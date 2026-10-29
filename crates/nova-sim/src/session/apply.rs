@@ -217,6 +217,8 @@ impl Session {
             | FlightCommand::LetGoOfBoarding
             | FlightCommand::CommandEscorts { .. }
             | FlightCommand::PressEscort(_)
+            | FlightCommand::PressPlanetComm(_)
+            | FlightCommand::HaggleBribe(_)
             | FlightCommand::CommAcknowledged
             | FlightCommand::CommTicked => self.apply_comm(command, collab),
             FlightCommand::Trade(_)

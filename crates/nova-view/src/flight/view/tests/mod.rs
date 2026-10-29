@@ -126,6 +126,21 @@ use frames::*;
 /// centre, `_screenCenter`, (trunc((1024 − 194) / 2), 384).
 const PLAYER_AT: Point = Point::new(415.0, 384.0);
 
+/// The planet comm dialog open on stellar `id`, "Earth", greeting.
+fn planet_view(id: i16) -> nova_sim::planet_comm::PlanetCommView {
+    use nova_sim::planet_comm::{PlanetCommButton, PlanetCommView};
+    PlanetCommView {
+        stellar: nova_sim::StellarId(id),
+        name: "Earth".to_owned(),
+        type_label: "[Earth/Luna System]".to_owned(),
+        reply: "Channel open to Earth.".to_owned(),
+        second: PlanetCommButton::Greetings,
+        third: Some(PlanetCommButton::DemandTribute),
+        status: None,
+        asking: None,
+    }
+}
+
 fn held(key: Key) -> Input {
     Input::Key {
         key,

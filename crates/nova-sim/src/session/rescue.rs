@@ -328,6 +328,8 @@ impl Session {
         // The system died in: its timer cancelled and its countdown
         // cleared (@0x1db17-0x1db30; see the `reinforcements` module).
         self.space.reset_reinforcements_here(&mut self.pilot);
+        // The bribe roll forgotten (@0x1d7ae; see the `planet_comm` module).
+        self.chart.forget_bribe_roll();
         self.reset_precalced();
     }
 

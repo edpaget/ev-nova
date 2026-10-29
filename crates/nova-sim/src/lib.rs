@@ -438,6 +438,7 @@ pub use nova_sim_ai::hover;
 pub use nova_sim_ai::hyperspace;
 pub use nova_sim_ai::jump_arrival;
 pub use nova_sim_ai::navigation;
+pub use nova_sim_ai::planet_comm;
 pub use nova_sim_base::handling;
 pub use nova_sim_base::inertialess;
 pub use nova_sim_base::player_turn;

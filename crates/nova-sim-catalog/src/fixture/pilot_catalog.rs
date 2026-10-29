@@ -13,8 +13,8 @@ use crate::catalog::{
     DudeRecord, FleetRecord, GateSite, GovtRecord, HullRecord, JunkRecord, LandingSite,
     ListedStellar, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonRecord,
     PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemReinforcements,
-    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
+    StartError, StellarId, StellarLife, StellarMark, StellarScripts, StringPatch, SystemId,
+    SystemReinforcements, SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::handling::ShipFields;
 use crate::voice::Voices;
@@ -89,6 +89,8 @@ pub struct FakePilotCatalog {
     pub lives: Vec<StellarLife>,
     /// How many times the stellars' lives were read.
     pub life_reads: RefCell<usize>,
+    /// Every stellar's `OnDominate` and `OnRelease`: none, by default.
+    pub scripts: Vec<StellarScripts>,
     /// Graphic type 0's sheet's frame size, or `None` when it does not
     /// read: 100 square, by default.
     pub fallback_frame: Option<(u32, u32)>,
@@ -214,6 +216,7 @@ pub fn catalog() -> FakePilotCatalog {
         gate_listers: Vec::new(),
         lives: Vec::new(),
         life_reads: RefCell::default(),
+        scripts: Vec::new(),
         fallback_frame: Some((100, 100)),
         fallback_counts: true,
         missions: Vec::new(),
@@ -356,6 +359,10 @@ impl PilotCatalog for FakePilotCatalog {
     fn stellar_lives(&self) -> Vec<StellarLife> {
         *self.life_reads.borrow_mut() += 1;
         self.lives.clone()
+    }
+
+    fn stellar_scripts(&self) -> Vec<StellarScripts> {
+        self.scripts.clone()
     }
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {

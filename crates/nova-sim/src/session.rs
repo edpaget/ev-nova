@@ -562,6 +562,7 @@ mod person_offers;
 mod persons;
 mod pilot_panel;
 mod pirate_plunder;
+mod planet_comm;
 #[cfg(test)]
 mod planet_weapons;
 mod player_cloak;
@@ -1248,6 +1249,11 @@ impl Session {
                 .map(|life| life.id)
                 .collect(),
             lives,
+            stellar_scripts: catalog
+                .stellar_scripts()
+                .into_iter()
+                .map(|s| (s.id, s))
+                .collect(),
             fallback_frame: catalog.fallback_frame_size(),
             fallback_counts: catalog.fallback_counts_frames(),
             uniform_dudes: mission_ships::uniform_dudes(&missions, catalog),
@@ -3213,6 +3219,8 @@ impl Session {
         let left = self.pilot.system;
         self.chart
             .jump_refresh_move(&mut self.pilot, &self.setup, &mut self.out, left);
+        // The bribe roll forgotten (@0x6bfd3; see the `planet_comm` module).
+        self.chart.forget_bribe_roll();
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.space.arm_strength_timer(chance);

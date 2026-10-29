@@ -65,6 +65,10 @@ pub(super) struct Statics {
     /// and the daily step read of a stellar's destruction and
     /// regeneration (see the `stellars` module).
     pub(super) lives: BTreeMap<StellarId, StellarLife>,
+    /// Every stellar's `OnDominate` and `OnRelease`, by ID, read when the
+    /// session starts: what the planet comm dialog runs (see the
+    /// `planet_comm` module).
+    pub(super) stellar_scripts: BTreeMap<StellarId, crate::catalog::StellarScripts>,
     /// The stellars shots can shoot down, those of [`lives`](Self::lives)
     /// of `Strength` above 0
     /// ([`wreck::destroyable`](crate::story::wreck::destroyable)), among
