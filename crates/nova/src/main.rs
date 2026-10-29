@@ -163,13 +163,12 @@ use nova::startup::{
 use nova_audio::{Audio, AudioCore, FileSettings, KiraAudio, SettingsStore};
 use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
-use nova_data::{GameData, open_interface};
+use nova_data::{GameData, InterfaceData, open_interface};
 use nova_render::GameImages;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_sim::{Chance, PilotKeeper, PilotStore, Rulebook};
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
-use nova_view::ui::DialogResources;
 use winit::event_loop::EventLoop;
 
 /// The audio core over the default device, playing `data`'s sounds and
@@ -192,6 +191,15 @@ fn open_audio(
         report.warn(&warning);
     }
     audio
+}
+
+/// The interface file beside the data in `dir`, shared by the dialogs and
+/// the renderer; none, with a warning to `report`, when it did not open.
+fn open_interface_file(dir: &Path, report: &mut Report) -> Option<Rc<InterfaceData>> {
+    open_interface(dir)
+        .map_err(|error| report.warn(&format!("nova: running without dialogs: {error}")))
+        .ok()
+        .map(Rc::new)
 }
 
 /// Nanoseconds since 1970, wrapped: a different seed each run.
@@ -324,20 +332,21 @@ fn main() -> ExitCode {
         .with_keyboard_access(system_keyboard_access())
         // Every disputed rule as the settings' rulebook chooses.
         .with_rulebook(&rulebook);
-    match open_interface(&dir) {
-        Ok(interface) => {
-            let dialogs: Rc<dyn DialogResources> = Rc::new(interface);
-            screen = screen.with_dialogs(dialogs, metrics);
-        }
-        Err(error) => report.warn(&format!("nova: running without dialogs: {error}")),
+    let interface = open_interface_file(&dir, &mut report);
+    if let Some(interface) = &interface {
+        screen = screen.with_dialogs(Rc::<InterfaceData>::clone(interface), metrics);
     }
     // Last, once the rules and the chance its load reads are given.
     let screen = screen.open_last_pilot();
     let audio = open_audio(&data, &dir, &rulebook, &mut report);
     let report = Rc::new(RefCell::new(report));
     // The simulation's diagnostics are the running game's, not startup's.
-    // The game's images, 8-bit sheets read as the rulebook says.
-    let images = GameImages::new(Rc::clone(&data), eight_bit_reading(&rulebook));
+    // The game's images, 8-bit sheets read as the rulebook says, and the
+    // interface file's pictures.
+    let images = interface.into_iter().fold(
+        GameImages::new(Rc::clone(&data), eight_bit_reading(&rulebook)),
+        GameImages::with_interface,
+    );
     let runner = Runner::new(images, screen, fonts)
         .with_diagnostics(Box::new(std::io::stderr()))
         .with_report(Rc::clone(&report));
