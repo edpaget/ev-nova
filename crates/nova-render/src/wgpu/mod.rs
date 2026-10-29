@@ -54,6 +54,12 @@
 //! [`glyph_raster`](crate::glyph_raster) rather than by glyphon's own
 //! rasteriser, whose hinting ignores TrueType instructions in X.
 //!
+//! Every render pipeline, glyphon's included, is built when the renderer
+//! is made or its upscaler is set, never on a frame: building one compiles
+//! its shader, which takes tens of milliseconds when macOS's Metal shader
+//! cache is cold. MetalFX's scaler, which is no wgpu pipeline, is made on
+//! the first frame of each pair of sizes it scales between.
+//!
 //! [`GlyphonMetrics`] is `nova_view`'s text-metrics port over the same
 //! font system the renderer draws with, so the widgets lay text out by the
 //! widths it will be drawn at. It needs no GPU.

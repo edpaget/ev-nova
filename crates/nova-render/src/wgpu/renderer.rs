@@ -147,6 +147,14 @@ pub struct WgpuRenderer {
     text_cache: Cache,
     text_atlas: TextAtlas,
     text_viewport: glyphon::Viewport,
+    /// One text renderer per text batch, grown as frames need more. The
+    /// first is made with the renderer: glyphon builds its render
+    /// pipeline (into `text_cache`) in the first `TextRenderer::new`,
+    /// which compiles its shader, 70-110 ms when macOS's Metal shader
+    /// cache is cold. Making it here puts that at start-up, beside our own
+    /// pipelines, rather than on the main menu's first frame; every later
+    /// renderer, those made after a glyph-ID restart included, takes the
+    /// pipeline from the cache.
     text_renderers: Vec<TextRenderer>,
     upscale: Box<dyn Upscale>,
     /// What its device can draw the world with, found once.
@@ -242,7 +250,8 @@ impl WgpuRenderer {
             ..Default::default()
         });
         let cache = Cache::new(device);
-        let text_atlas = text_atlas(device, queue, &cache);
+        let mut text_atlas = text_atlas(device, queue, &cache);
+        let first_text = text_renderer(&mut text_atlas, device);
         let text_viewport = glyphon::Viewport::new(device, &cache);
         let (font_system, families) = font_system(faces);
         let glyphs = HintedGlyphs::of(&families);
@@ -274,7 +283,7 @@ impl WgpuRenderer {
             text_cache: cache,
             text_atlas,
             text_viewport,
-            text_renderers: Vec::new(),
+            text_renderers: vec![first_text],
             upscale,
             abilities: abilities(device),
             warnings: Vec::new(),
@@ -727,12 +736,8 @@ impl WgpuRenderer {
         // Grow the pool to one renderer per batch; a bounded loop.
         let missing = batches.len().saturating_sub(self.text_renderers.len());
         for _ in 0..missing {
-            self.text_renderers.push(TextRenderer::new(
-                &mut self.text_atlas,
-                &self.device,
-                wgpu::MultisampleState::default(),
-                None,
-            ));
+            self.text_renderers
+                .push(text_renderer(&mut self.text_atlas, &self.device));
         }
         let mut frame_glyphs = frame.runs.iter();
         for (renderer, runs) in self.text_renderers.iter_mut().zip(&laid) {
@@ -780,6 +785,13 @@ impl WgpuRenderer {
                 usage: wgpu::BufferUsages::VERTEX,
             })
     }
+}
+
+/// A text renderer drawing from `atlas` on `device`. Every one is made
+/// alike, so glyphon finds the pipeline the first one built in the
+/// atlas's cache.
+fn text_renderer(atlas: &mut TextAtlas, device: &wgpu::Device) -> TextRenderer {
+    TextRenderer::new(atlas, device, wgpu::MultisampleState::default(), None)
 }
 
 /// A text atlas on `device`, in the scene's format, made with `cache`.
@@ -1901,5 +1913,81 @@ mod tests {
             after == fresh,
             "the last frame draws unlike a fresh renderer's"
         );
+    }
+
+    /// A 64 x 64 frame of sprites in every blend, then a solid, all on
+    /// page 0.
+    fn every_blend_frame() -> Frame {
+        let mut batches: Vec<Batch> = [
+            Blend::Normal,
+            Blend::Additive,
+            Blend::Or,
+            Blend::Max,
+            Blend::OrCrossfade,
+            Blend::OrTranslucent,
+        ]
+        .into_iter()
+        .map(|blend| sprites(blend, vec![quad(1.0)]))
+        .collect();
+        batches.push(Batch::Solid(vec![solid(2.0)]));
+        frame_of(batches)
+    }
+
+    /// Submits `frame` and asserts it left `gpu` holding the `made`
+    /// render pipelines it held before.
+    #[track_caller]
+    fn assert_builds_no_pipeline(
+        gpu: &mut crate::wgpu::OffscreenGpu,
+        made: isize,
+        frame: &Frame,
+        what: &str,
+    ) {
+        use crate::gpu::Gpu;
+        gpu.submit(frame);
+        assert_eq!(
+            gpu.render_pipelines(),
+            made,
+            "{what} built a render pipeline"
+        );
+    }
+
+    #[test]
+    fn no_frame_builds_a_render_pipeline() {
+        use crate::gpu::Gpu;
+        let Ok(mut gpu) = crate::wgpu::OffscreenGpu::new(64, 64, &FontFaces::bundled()) else {
+            return;
+        };
+        let made = gpu.render_pipelines();
+        // Every wgpu-hal backend counts its pipelines, so a renderer that
+        // has made its own holds some; the checks below can't pass for a
+        // count that stays at nothing.
+        assert!(made > 0, "the renderer made no render pipeline");
+        // Two text batches, as the main menu's first frame draws.
+        let menu = frame_of(vec![
+            Batch::Text(vec![run("a")]),
+            Batch::Text(vec![run("b")]),
+        ]);
+        assert_builds_no_pipeline(&mut gpu, made, &menu, "the first text frame");
+        let more = frame_of((0..4).map(|_| Batch::Text(vec![run("c")])).collect());
+        assert_builds_no_pipeline(&mut gpu, made, &more, "a frame growing the text renderers");
+        gpu.set_glyph_generation(2);
+        for frame in [
+            text_frame("ac", 2.0),
+            text_frame("ac", 3.0),
+            text_frame("ca", 2.0),
+        ] {
+            assert_builds_no_pipeline(&mut gpu, made, &frame, "a frame across a glyph-ID restart");
+        }
+        gpu.create_page(PageId(0), 16);
+        let blends = every_blend_frame();
+        assert_builds_no_pipeline(&mut gpu, made, &blends, "a frame of every blend");
+        // Setting an upscaler is a set-up step, which may build its own.
+        gpu.set_upscaler(Upscaler::SharpBilinear);
+        let made = gpu.render_pipelines();
+        let world = Frame {
+            world: (0..blends.batches.len()).collect(),
+            ..textured(blends)
+        };
+        assert_builds_no_pipeline(&mut gpu, made, &world, "a sharp-bilinear world");
     }
 }
