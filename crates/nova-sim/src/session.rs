@@ -760,6 +760,7 @@ use crate::top_speed;
 #[cfg(test)]
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::stellar_defence::DEFENCE_RESERVE;
 use crate::traffic::table::SpawnTable;
 use crate::traffic::{CAPTURE_RESERVE, SPAWN_RESERVE, Traffic, World, strength};
 use crate::trig::intercept_angle;
@@ -2052,6 +2053,7 @@ impl Session {
         let type_widths = self.gate_type_widths();
         let world = World {
             sites: &self.chart.sites,
+            listed: &self.chart.listed,
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
@@ -2078,6 +2080,7 @@ impl Session {
             targeted: &targeted,
             type_widths: &type_widths,
             spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
+            defence_reserve: self.setup.spawn_reserve(DEFENCE_RESERVE),
             arrival_hits: self.setup.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.setup.rules.source_for(RuleKey::SnipeBrakeLead),
             hit_focus: self.setup.rules.source_for(RuleKey::HitFocus),
@@ -2147,6 +2150,7 @@ impl Session {
         let system_govt = self.chart.galaxy.govt(system);
         World {
             sites: &self.chart.sites,
+            listed: &self.chart.listed,
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
@@ -2173,6 +2177,7 @@ impl Session {
             targeted: &crate::ai::NO_AIMED_DAMAGE,
             type_widths: &crate::traffic::NO_TYPE_WIDTHS,
             spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
+            defence_reserve: self.setup.spawn_reserve(DEFENCE_RESERVE),
             arrival_hits: self.setup.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.setup.rules.source_for(RuleKey::SnipeBrakeLead),
             hit_focus: self.setup.rules.source_for(RuleKey::HitFocus),

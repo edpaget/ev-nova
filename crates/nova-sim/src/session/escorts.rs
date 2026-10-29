@@ -392,6 +392,7 @@ impl Session {
             // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
             odds: crate::traffic::odds_cache::STALE,
             no_ai: false,
+            defends: None,
         };
         npc.independent();
         // A carried fighter holds a fighter's capacities, keeping what its

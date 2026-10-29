@@ -259,6 +259,7 @@ mod skill_rolls;
 pub mod snipe;
 pub mod spawn;
 pub mod stellar_attack;
+pub mod stellar_defence;
 #[cfg(test)]
 mod stop_tests;
 pub mod strength;
@@ -552,6 +553,10 @@ fn starting_cloak(cloaked: bool, gear: cloak::CloakGear, shield: &mut f32) -> Cl
 pub struct World<'a> {
     /// The system's stellars.
     pub sites: &'a [LandingSite],
+    /// Every stellar the system's `NavDefs` list, in order, shown or not
+    /// (the original's system +0x2a): what the defence respawn walks
+    /// ([`stellar_defence`]). [`World::new`] gives `sites`.
+    pub listed: &'a [LandingSite],
     /// The player's ship, while it flies in the system.
     pub player: Option<PlayerSide>,
     /// Every government and their relations.
@@ -587,6 +592,11 @@ pub struct World<'a> {
     /// 0 by the Bible
     /// ([`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve)).
     pub spawn_reserve: u32,
+    /// The ship-table slots a stellar's defence ship leaves free as it
+    /// spawns: [`DEFENCE_RESERVE`](stellar_defence::DEFENCE_RESERVE) by
+    /// the engine, 0 by the Bible
+    /// ([`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve)).
+    pub defence_reserve: u32,
     /// Which ships answer a hit ([`Traffic::tick_in`]'s reactions): every
     /// intact one by the engine, as `_DamageShip` has it, or only those
     /// that have arrived ([`Npc::arrived`]) by the other reading
@@ -736,11 +746,12 @@ static NOVA_DISABLE: NovaDisable = NovaDisable;
 pub static NO_TYPE_WIDTHS: BTreeMap<StellarId, TypeWidth> = BTreeMap::new();
 
 impl<'a> World<'a> {
-    /// `sites` alone: no player, no governments, no record, no person
+    /// `sites` alone, every one listed: no player, no governments, no record, no person
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
     /// factor on the led ships' top speed, the original's flight rules,
     /// no damage aimed, no gate's
-    /// width known, the engine's [`SPAWN_RESERVE`], the engine's readings,
+    /// width known, the engine's [`SPAWN_RESERVE`] and
+    /// [`DEFENCE_RESERVE`](stellar_defence::DEFENCE_RESERVE), the engine's readings,
     /// no cloak scanner, no asteroid in slot 0, no cargo boxes, no
     /// reinforcements coming,
     /// no government marked by an IFF scrambler, Nova's disable rule,
@@ -753,6 +764,7 @@ impl<'a> World<'a> {
         let bare = Surroundings::new(sites, &[]);
         Self {
             sites,
+            listed: sites,
             player: None,
             govts: bare.govts,
             system_govt: None,
@@ -764,6 +776,7 @@ impl<'a> World<'a> {
             targeted: bare.targeted,
             type_widths: &NO_TYPE_WIDTHS,
             spawn_reserve: SPAWN_RESERVE,
+            defence_reserve: stellar_defence::DEFENCE_RESERVE,
             arrival_hits: RuleSource::Engine,
             snipe_brake_lead: RuleSource::Engine,
             hit_focus: RuleSource::Engine,
@@ -953,6 +966,11 @@ pub struct Traffic {
     /// Each think's voice cue since they were last taken, in the order
     /// the ships thought ([`Traffic::take_voice_cues`]).
     voice_cues: Vec<(NpcId, crate::escort_voice::VoiceCue)>,
+    /// The stellars' defence ships left and which are under attack, kept
+    /// here so the defence respawn in [`Traffic::enter_more_ships`] reads
+    /// it on every caller, and handed on across a traffic Reset
+    /// ([`Traffic::take_defences`]; see [`stellar_defence`]).
+    defences: stellar_defence::StellarDefences,
 }
 
 /// The docks the ships started and the repairs they completed in one
@@ -1036,6 +1054,7 @@ impl Traffic {
             launch_room: None,
             fuel_given: 0.0,
             voice_cues: Vec::new(),
+            defences: stellar_defence::StellarDefences::default(),
         }
     }
 
@@ -1621,11 +1640,12 @@ impl Traffic {
     /// exit, before the first frame (`_HandlePlayerDockRequest`
     /// @0x672f2), which its session runs.
     ///
-    /// Two steps of the pass are left out: the stellar defence respawn
-    /// between them (@0x43c45-0x43d10, `_SpawnStellarDefenseShip`
-    /// @0x43c11), as no stellar holds defence ships here, and
-    /// `_SpawnNagShip` (@0x43d15), the shareware nag. The pass's
-    /// mission-slot loop (@0x434a2-0x43b0e) is its session's.
+    /// Between them it runs the stellar defence respawn (@0x43c45-0x43d10):
+    /// at most one defence ship for the first stellar of the world's
+    /// listed stellars that is due one ([`stellar_defence`]). One step of
+    /// the pass is left out: `_SpawnNagShip` (@0x43d15), the shareware
+    /// nag. The pass's mission-slot loop (@0x434a2-0x43b0e) is its
+    /// session's.
     pub fn enter_more_ships(&mut self, world: World, chance: &mut (impl Chance + ?Sized)) {
         let mut draw = PersonDraw {
             world: world.persons,
@@ -1647,6 +1667,7 @@ impl Traffic {
             world.flight.npc_formation,
             &mut *chance,
         );
+        self.respawn_defender(&world, draw.world.gate(), &mut *chance);
         self.escort_strength(&world, draw.world.gate(), chance);
     }
 
@@ -2859,6 +2880,7 @@ impl Traffic {
                 display,
                 odds: odds_cache::STALE,
                 no_ai: false,
+                defends: None,
             };
             npc.join_govt(ship.govt, govts);
             self.write_berth_person(berth, name);

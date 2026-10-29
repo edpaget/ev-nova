@@ -374,6 +374,12 @@ pub struct Npc {
     /// system's ships are dropped (see the `nova_sim::mission::aux_ships`
     /// module); none for any other ship.
     pub aux: Option<u8>,
+    /// The stellar it defends, the original's ship +0x8c: set only by
+    /// the defence fleet's spawn (`_SpawnStellarDefenseShip` @0x3d387, see
+    /// [`stellar_defence`](crate::traffic::stellar_defence)), and cleared
+    /// by a capture, a pirate taking it into its fleet and the disabled
+    /// reset; none for every other ship.
+    pub defends: Option<StellarId>,
     /// Its cloak: how far it has faded, and which way (see
     /// [`cloak`](crate::cloak)). A mission's special ship set up cloaked
     /// (`ShipStart` 2) starts fading in.

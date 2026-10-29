@@ -853,7 +853,7 @@ fn mission_dude_ship(
 
 /// Where a ship type is drawn from when none of a `düde`'s may appear.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Fallback {
+pub(super) enum Fallback {
     /// From all of them (`_MissionDudeSpawn`'s second draw, @0x3ce1b).
     AllShips,
     /// None: the spawn fails (`_SpecificDudeSpawn` @0x3d146-0x3d14c).
@@ -868,8 +868,9 @@ enum Fallback {
 /// `fallback` says. It carries the `düde`'s government, `Booty` and
 /// `InfoTypes`, and the `düde`'s `AIType` above 0 or else its ship's
 /// `InherentAI`, and no mark. `None`, after the place's draws, when the
-/// `düde` has no record or no ship comes of it.
-fn specific_dude_ship(
+/// `düde` has no record or no ship comes of it. The defence fleets' spawn
+/// draws theirs here too ([`stellar_defence`](super::stellar_defence)).
+pub(super) fn specific_dude_ship(
     table: &SpawnTable,
     dude: DudeId,
     preset: Option<ShipId>,

@@ -96,6 +96,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         display: crate::traffic::ship_display::NpcDisplay::default(),
         odds: 0.0,
         no_ai: false,
+        defends: None,
     }
 }
 
