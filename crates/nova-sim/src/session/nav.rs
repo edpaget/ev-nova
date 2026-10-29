@@ -1328,7 +1328,9 @@ mod tests {
         let mut session = Session::start(&hub()).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         session.chart.nav = hyperspace(135);
+        let course = session.course().to_vec();
         assert_eq!(session.select_next_system(), Some(SystemId(134)), "wraps");
+        assert_eq!(session.course(), course, "the course kept");
     }
 
     #[test]

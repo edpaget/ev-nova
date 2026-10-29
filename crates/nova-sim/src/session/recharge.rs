@@ -101,6 +101,14 @@ mod tests {
     }
 
     #[test]
+    fn with_no_cash_a_recharge_fills_nothing_and_makes_no_save_due() {
+        let mut session = half_empty_at_port();
+        session.pilot.cash = 0;
+        session.pilot.reserves.fuel.now = 150.0;
+        recharged(session, 0, 150.0, 0, false);
+    }
+
+    #[test]
     fn a_part_unit_is_truncated_even_with_no_cash() {
         let mut session = half_empty_at_port();
         session.pilot.reserves.fuel.now = 149.25;

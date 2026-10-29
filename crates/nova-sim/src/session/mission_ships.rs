@@ -4637,6 +4637,25 @@ pub(super) mod tests {
             .collect()
     }
 
+    #[test]
+    fn a_mission_of_no_ship_goal_landed_home_unmet_shows_its_ship_done_text_then_its_comp_text() {
+        // Held unmet, as a pilot saved before its goal check holds it: the
+        // landing's own check meets it, then completes it.
+        let (catalog, mut session) = launched(
+            vec![back_home(140, 0, "")],
+            vec![texts(140, Some("140 met."), Some("140 paid."))],
+            &[140],
+        );
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.goals_met = false;
+        }
+        land_home(&mut session, &catalog);
+        assert_eq!(
+            shown(&mut session),
+            [ship_done("140 met."), comp("140 paid.")]
+        );
+    }
+
     /// Slot 0's 140 completes at 128 with `OnSuccess` `S141 S142`: 141
     /// fills the slot just freed, 142 slot 1.
     fn two_started() -> (FakePilotCatalog, Session) {
