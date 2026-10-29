@@ -219,13 +219,13 @@ impl DefenceShips {
         self.left.insert(stellar, Count { left, def_count });
     }
 
-    /// Each stellar's ships left whose count has been read or changed, by
-    /// ascending ID: what a save writes. A stellar not here has its
-    /// decode.
-    pub fn counts(&self) -> impl Iterator<Item = (StellarId, i16)> + '_ {
+    /// Each stellar's ships left whose count has been read or changed,
+    /// with its raw `DefCount`, by ascending ID: what a save writes. A
+    /// stellar not here has its decode.
+    pub fn saved(&self) -> impl Iterator<Item = (StellarId, i16, i16)> + '_ {
         self.left
             .iter()
-            .map(|(&stellar, count)| (stellar, count.left))
+            .map(|(&stellar, count)| (stellar, count.left, count.def_count))
     }
 
     /// Restores `site`'s count to its decoded `DefCount`

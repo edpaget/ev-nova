@@ -1152,11 +1152,12 @@ impl Session {
         for kept in nebula::kept(&pilot.story_fired) {
             pilot.galaxy.set_nebula_explored(kept, true);
         }
+        let listed = catalog.listed_stellars();
+        stellar_defence::keep_on_load(&mut pilot, &listed);
         // Built first, from the star map and the saved overlay alone: the
         // resume reads the saved visibility, as `leave_hidden` does, both
         // standing in for the load's first refresh (@0x751ca, @0x751cf).
         let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
-        let listed = catalog.listed_stellars();
         let saved = pilot.system;
         let mut load_repaired = false;
         if let Some(stellar) = pilot.stellar {

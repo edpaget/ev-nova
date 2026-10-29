@@ -20,17 +20,39 @@
 //! - **The spawn** ([`Session::spawn_stellar_defender`]): one defence
 //!   ship sent up at once, the planet comm dialog's Demand Tribute's
 //!   (`_DoPlanetCommDialog` @0x97814; see the `planet_comm` module).
+//! - **The lend** ([`Session::lend_defence_ships`]): the defence ships
+//!   left rest on the pilot (`Pilot::defence_ships`), where the save sees
+//!   them; `Session::step_traffic` and [`Session::refund_defenders`] lend
+//!   them to the traffic for the step and take them back, so every
+//!   respawn, spawn and refund writes the one store. Outside a step the
+//!   planet comm dialog and the daily regrowth change the pilot's.
+//! - **The load** ([`keep_on_load`]): `_LoadPilotData` runs after
+//!   `_ResetPlayerRecord` and sets each stellar's +0x46 to the saved byte
+//!   for a stellar whose record exists (+0x45), else 0
+//!   (@0x75963-0x75991), then +0x466 to the saved count for a stellar that
+//!   exists and is not dominated, else 0 (@0x75d70-0x75db0). Here a saved
+//!   domination or count for a stellar the data no longer lists is
+//!   dropped, every stellar dominated by the one rule (at run time or by
+//!   `Flags2` 0x0020) gets 0 left, and each kept count takes its
+//!   `DefCount` from the data, for the refund's cap. +0x45 is the
+//!   record-loaded byte, not "not destroyed" (destruction is +0x3c and
+//!   +0x47c), so a destroyed stellar keeps its saved count. The load runs
+//!   for a new pilot too, where it zeroes only a `Flags2` 0x0020
+//!   stellar's count, which nothing reads: such a stellar offers no
+//!   Demand Tribute, so it never launches.
 //!
 //! A defender captured stops defending (`Session::join_fleet`, @0x9470d).
-//! The counts are never saved here (phase 3 saves them). Nothing here
-//! plays a sound.
+//! Nothing here plays a sound.
 
 use std::collections::BTreeSet;
 
 use super::Session;
-use crate::catalog::StellarId;
+use crate::catalog::{ListedStellar, StellarId};
 use crate::chance::Chance;
+use crate::domination;
+use crate::pilot::Pilot;
 use crate::traffic::npc::NpcId;
+use crate::traffic::stellar_defence::DefenceShips;
 
 impl Session {
     /// The frame's +0x47 pass (see the module docs).
@@ -71,6 +93,40 @@ impl Session {
         let site = *self.chart.listed.iter().find(|site| site.id == stellar)?;
         self.step_traffic(|traffic, world| traffic.spawn_defender(&site, &world, chance))
     }
+}
+
+/// What a load keeps of `pilot`'s saved domination and defence ships left,
+/// with `listed` the stellars the data lists, as `_LoadPilotData` does
+/// after `_ResetPlayerRecord` (see the module docs' "The load").
+pub(super) fn keep_on_load(pilot: &mut Pilot, listed: &[ListedStellar]) {
+    let find = |stellar: StellarId| {
+        listed
+            .binary_search_by_key(&stellar, |listed| listed.id)
+            .ok()
+            .map(|at| &listed[at])
+    };
+    let unlisted: Vec<StellarId> = pilot
+        .galaxy
+        .stellars()
+        .filter(|&(id, change)| change.dominated && find(id).is_none())
+        .map(|(id, _)| id)
+        .collect();
+    for stellar in unlisted {
+        pilot.galaxy.set_dominated(stellar, false);
+    }
+    let saved = std::mem::take(&mut pilot.defence_ships);
+    let mut kept = DefenceShips::default();
+    for (stellar, left, _) in saved.saved() {
+        if let Some(listed) = find(stellar) {
+            kept.set_left_of(stellar, listed.def_count, left);
+        }
+    }
+    for listed in listed {
+        if domination::dominated_by(pilot.galaxy.stellar(listed.id).dominated, listed.flags2) {
+            kept.set_left_of(listed.id, listed.def_count, 0);
+        }
+    }
+    pilot.defence_ships = kept;
 }
 
 /// The fixture's reach into the defences (`crate::fixture::alarm_stellar`,
@@ -321,6 +377,101 @@ mod tests {
         assert_eq!(
             session.space.traffic.defences().ships(),
             &crate::traffic::stellar_defence::DefenceShips::default()
+        );
+    }
+
+    /// `session`'s pilot saved and loaded into a session of `catalog`.
+    fn reloaded(session: &Session, catalog: &FakePilotCatalog) -> Session {
+        let text = crate::save::encode(session.pilot());
+        let pilot = crate::save::decode(&text).expect("loads");
+        Session::fly(catalog, pilot).expect("flies")
+    }
+
+    #[test]
+    fn a_stellar_dominated_at_run_time_stays_so_across_a_save_with_its_fee_waived() {
+        let mut catalog = defended(3);
+        catalog.sites[0].1[0].fee = 100;
+        let mut session = flying(&catalog);
+        session
+            .chart
+            .set_dominated(&mut session.pilot, &mut session.out, EARTH, true);
+        let session = reloaded(&session, &catalog);
+        let site = earth(&session);
+        assert!(crate::domination::dominated(&site), "@0x7597b");
+        assert_eq!(crate::landing::fee_due(&site), None);
+    }
+
+    #[test]
+    fn a_spent_count_survives_a_save_and_a_dominated_stellars_loads_as_0() {
+        let catalog = defended(3);
+        let mut session = flying(&catalog);
+        let site = earth(&session);
+        session.pilot.defence_ships.set_left(&site, 1);
+        let back = reloaded(&session, &catalog);
+        assert_eq!(back.pilot().defence_ships.left(&site), 1, "kept");
+        session
+            .chart
+            .set_dominated(&mut session.pilot, &mut session.out, EARTH, true);
+        let back = reloaded(&session, &catalog);
+        assert_eq!(
+            back.pilot().defence_ships.left(&site),
+            0,
+            "dominated: 0 (@0x75d76, @0x75da7)"
+        );
+        let mut always = defended(3);
+        always.sites[0].1[0].flags2 = crate::market::DOMINATED;
+        let mut session = flying(&always);
+        let site = earth(&session);
+        session.pilot.defence_ships.set_left(&site, 2);
+        let back = reloaded(&session, &always);
+        assert_eq!(back.pilot().defence_ships.left(&site), 0, "Flags2 0x0020");
+    }
+
+    #[test]
+    fn a_destroyed_stellar_keeps_its_saved_count() {
+        // The load's test is +0x45, the record loaded (@0x75d70), not
+        // destruction (+0x3c, +0x47c).
+        let catalog = defended(3);
+        let mut session = flying(&catalog);
+        let site = earth(&session);
+        session.pilot.defence_ships.set_left(&site, 1);
+        session.chart.set_stellar_state(
+            &mut session.pilot,
+            &mut session.out,
+            EARTH,
+            Some(crate::story::Countdown { days_left: 5 }),
+        );
+        let back = reloaded(&session, &catalog);
+        assert_eq!(back.pilot().defence_ships.left(&site), 1);
+    }
+
+    #[test]
+    fn what_a_save_keeps_of_a_stellar_the_data_no_longer_has_is_dropped() {
+        let catalog = defended(3);
+        let mut session = flying(&catalog);
+        let gone = StellarId(999);
+        session.pilot.defence_ships.set_left_of(gone, 3, 1);
+        session.pilot.galaxy.set_dominated(gone, true);
+        let back = reloaded(&session, &catalog);
+        assert_eq!(
+            back.pilot().defence_ships,
+            crate::traffic::stellar_defence::DefenceShips::default(),
+            "@0x75d70"
+        );
+        assert!(!back.pilot().galaxy.stellar(gone).dominated, "@0x75980");
+    }
+
+    #[test]
+    fn a_kept_count_takes_its_def_count_from_the_data_for_the_refund() {
+        let catalog = defended(3);
+        let mut session = flying(&catalog);
+        session.pilot.defence_ships.set_left_of(EARTH, 1000, 3);
+        let mut back = reloaded(&session, &catalog);
+        back.pilot.defence_ships.refund(EARTH);
+        assert_eq!(
+            back.pilot().defence_ships.left_of(EARTH, 3),
+            3,
+            "capped at the data's DefCount 3"
         );
     }
 
