@@ -142,11 +142,11 @@
 //! #206, #223, #224) and returns before its nav save or its close
 //! (@0x5bbf7 → @0x5dbd6, @0x5e8df → @0x5f906), so nothing redraws or is
 //! restored ([`SpaceportView::set_opened_outfitter`],
-//! [`SpaceportView::open_hire`]). The closings the original redraws at
-//! that ours can't reach:
+//! [`SpaceportView::open_hire`]). The bar's Gamble with no cash shows
+//! `STR#` 2002 #361 there too, and its close redraws the status bar
+//! (`_ShowTextDialog` @0x4918c, then `_RefreshSAT` @0x49191; the `gamble`
+//! module). The closings the original redraws at that ours can't reach:
 //!
-//! - The bar's Gamble text (`_ShowTextDialog` @0x4918c, then
-//!   `_RefreshSAT` @0x49191): ours' Gamble isn't built and shows greyed.
 //! - Mission info's Abort with nothing selected (@0x9e51d-0x9e557): ours
 //!   greys Abort unless the selected mission can be aborted.
 //! - A screen whose dialog is missing: the original never shows the bar,
