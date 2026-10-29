@@ -13,7 +13,9 @@ use nova_render::{
     Frame, Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Viewport, WorldSpace,
 };
 use nova_view::geometry::Bounds;
-use nova_view::{Blend, Color, Colorize, DrawCommand, DrawList, Font, ImageKey, ImageKind, Point};
+use nova_view::{
+    Blend, Color, Colorize, DrawCommand, DrawList, Font, ImageKey, ImageKind, MovieScreen, Point,
+};
 
 use super::common::fill;
 
@@ -233,6 +235,45 @@ fn a_known_frame_draws_the_expected_pixels() {
     assert_near(&pixels, (47, 36), BLACK, 0);
     assert_near(&pixels, (5, 45), BLACK, 0);
     assert_near(&pixels, (5, 50), BLACK, 0);
+}
+
+#[test]
+fn a_movie_frame_draws_its_pixels_and_a_new_frame_replaces_them() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let viewport = Viewport::new(LOGICAL, (SIZE, SIZE), 2.0);
+    let mut screen = MovieScreen::new();
+    let mut renderer = Renderer::new(Images);
+    let area = Bounds::at(Point::new(2.0, 2.0), 4.0, 2.0);
+    let draw = |screen: &MovieScreen| {
+        let mut list = DrawList::new();
+        list.movie_frame(screen.frame().expect("shown"), area);
+        list
+    };
+
+    assert!(screen.show(4, 2, patterned(4, 2).into_pixels()));
+    renderer.render(&draw(&screen), &viewport, &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+    // Logical (2..6, 2..4) is pixels (4..12, 12..16), each texel a 2x2
+    // block, upright and unmirrored.
+    assert_patterned(&pixels, (4, 12), (4, 2));
+    assert_near(&pixels, (12, 13), BLACK, 0);
+    assert_near(&pixels, (5, 16), BLACK, 0);
+
+    // The next frame: every texel turned half way round.
+    let turned: Vec<u8> = (0..2)
+        .flat_map(|y| (0..4).map(move |x| texel(4, 3 - x, 1 - y)))
+        .flatten()
+        .collect();
+    assert!(screen.show(4, 2, turned));
+    renderer.render(&draw(&screen), &viewport, &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+    for y in 0..2 {
+        for x in 0..4 {
+            assert_near(&pixels, (4 + 2 * x, 12 + 2 * y), texel(4, 3 - x, 1 - y), 0);
+        }
+    }
 }
 
 #[test]

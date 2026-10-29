@@ -2581,6 +2581,7 @@ mod tests {
             DrawCommand::Line { .. } => "line",
             DrawCommand::Dot { .. } => "dot",
             DrawCommand::Clipped { .. } => "clipped",
+            DrawCommand::MovieFrame { .. } => "movie",
         }
     }
 

@@ -15,14 +15,22 @@ pub use crate::atlas::{PageId, Uv};
 use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::{LogicalSize, PixelRect};
 
+/// wgpu's default maximum 2D texture side, which the adapters request: no
+/// page is made bigger.
+pub const MAX_TEXTURE_SIDE: u32 = 8192;
+
 /// What the core needs from a GPU.
 pub trait Gpu {
-    /// Creates atlas page `page`, `size` x `size` transparent texels.
+    /// Creates page `page`, `size` x `size` transparent texels, replacing
+    /// any page of that id. A page is an atlas page, numbered up from 0, or
+    /// a page a movie's frames are streamed onto ([`crate::streams`]),
+    /// numbered down from `PageId(u32::MAX)`.
     fn create_page(&mut self, page: PageId, size: u32);
-    /// Copies `image` onto page `page` at `at` (the image's size).
+    /// Copies `image` onto page `page` at `at` (the image's size): an
+    /// atlas image once, or a stream page's frame each time it changes.
     fn upload(&mut self, page: PageId, at: PixelRect, image: &Image);
-    /// Drops every atlas page, for an atlas started afresh: the next page
-    /// created is page 0 again.
+    /// Drops every page, atlas and stream pages alike, for an atlas started
+    /// afresh: the next page created is page 0 again.
     fn clear_pages(&mut self);
     /// Draws `frame` to the window or target.
     fn submit(&mut self, frame: &Frame);
