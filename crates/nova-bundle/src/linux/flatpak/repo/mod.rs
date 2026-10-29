@@ -7,12 +7,14 @@
 //! <work>/                      (--work: scratch, never uploaded)
 //!   gnupg/                     the gpg home: the key's checks, then the secret
 //!   secret/key.gpg             the decoded secret key, removed once imported
-//!   src/                       the tested plain bundle, imported (archive mode)
+//!   src/                       the tested plain bundle, imported (archive mode),
+//!                              or, for beta, the nightly commit copied in
 //! <pages>/                     (--pages: the `pages-flatpak` artifact, /flatpak/)
 //!   repo/                      the OSTree repository, every channel's branch
 //!   ev-nova-nightly.flatpakref the one-click install of the nightly
+//!   ev-nova-beta.flatpakref    the beta's, once the repo holds a beta branch
 //! <dist>/                      (--dist: replaces the flatpak job's dist-* hand-off)
-//!   ev-nova-x86_64-unknown-linux-gnu.flatpak   follows the repo
+//!   ev-nova-x86_64-unknown-linux-gnu.flatpak   the channel's, follows the repo
 //! ```
 //!
 //! # The two steps
@@ -40,6 +42,22 @@
 //! `--gpg-keys`, from the signed repo, so an install of it follows the
 //! repo, drops ostree's scratch `tmp/`, and checks the tree fits Pages
 //! ([`probe::check_size`]).
+//!
+//! Every `sign` lists the repo's refs after the commit and writes the
+//! `.flatpakref` of each channel whose branch the repo holds
+//! ([`promote::served_channels`]), so a deploy never drops another
+//! channel's.
+//!
+//! # Promotion
+//!
+//! A promoted channel (beta, [`Channel::promoted_from`]) is never built.
+//! `stage` takes no `--bundle-dir` ([`bundle_dir_refusal`]): it mirrors the
+//! live repo and imports nothing, and a `404` for the live repo is an
+//! error, since there is no nightly branch to promote from. `sign` finds
+//! the nightly branch's commit whose subject names the build
+//! (`NOVA_BUILD_ID`), copies it into the work tree's repo, and commits it
+//! onto the beta branch with `flatpak build-commit-from`, so the beta
+//! commit's tree is the nightly's. See [`promote`].
 //!
 //! # When nothing is published
 //!

@@ -4,16 +4,35 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Runs ci and the build legs (not publish) on any branch, e.g. to try a
-  # release build from a phase branch: gh workflow run ci.yml --ref <branch>
-  # Only main reaches the macos-signing environment, so once the
-  # repository-level signing secrets are deleted (infra/github/README.md,
-  # cut-over) a branch dispatch signs ad-hoc.
+  # Runs ci and the build legs (never the release) on any branch, e.g. to
+  # try a release build from a phase branch: gh workflow run ci.yml --ref
+  # <branch>. Add -f channel=beta to build and test the beta packaging (the
+  # build legs with NOVA_CHANNEL=beta; the Flatpak stays the nightly's,
+  # since a beta Flatpak is never built, only promoted). Only main reaches
+  # the macos-signing environment, so once the repository-level signing
+  # secrets are deleted (infra/github/README.md, cut-over) a branch dispatch
+  # signs ad-hoc.
   workflow_dispatch:
+    inputs:
+      channel:
+        description: The channel the build legs package for (NOVA_CHANNEL). A dispatch never publishes.
+        type: choice
+        options: [nightly, beta]
+        default: nightly
 
+# On main, ci.yml and promote-beta.yml share the one `release-main` group,
+# never cancelled in progress: both read the live Flatpak repo from Pages
+# and then replace the whole site (release.yml), so a nightly and a
+# promotion must run one at a time, or the later deploy would drop the
+# other's new commit, or the whole beta branch. GitHub keeps at most one
+# pending run per group and cancels an older pending one when a newer one
+# queues, so a burst of pushes queues one nightly behind the running one
+# rather than many; a pending promotion a push replaces shows as cancelled,
+# and the operator dispatches it again. Pull requests and other branches
+# keep their own groups, where a newer push cancels the older run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.ref == 'refs/heads/main' && 'release-main' || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   ci:
@@ -93,7 +112,8 @@ jobs:
   # `build` and `flatpak` as NOVA_BUILD_ID, so every leg names the same
   # build. Reading it per leg would rely on each leg's checkout (in a
   # container, with git's safe.directory quirks) giving the same time.
-  # `publish` can read the same output.
+  # `release` reads the same output. A promotion (promote-beta.yml) finds a
+  # nightly's commit again by this time.
   build-id:
     needs: ci
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
@@ -117,232 +137,20 @@ jobs:
           id=$(mise run build-id)
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
-  # Release builds of `nova` and `nova-dump` for the rolling `nightly`
-  # prerelease, on pushes to main and on manual dispatches (which `publish`
-  # skips), after the `ci` gate. The `ci` Windows
-  # leg is continue-on-error (rdm task windows-path-portable-tests), so a red
-  # Windows test leg doesn't stop this job: the Windows archive ships as long
-  # as its own release build succeeds. Revisit once Windows CI is a hard gate.
+  # The release build legs (build.yml), for the rolling `nightly`
+  # prerelease, on pushes to main and on manual dispatches (which
+  # `release` skips), after the `ci` gate. A dispatch's channel input picks
+  # the channel they package for; a push builds the nightly. Every leg,
+  # its macos-signing gate and its hand-off are in build.yml.
   build:
     needs: [ci, build-id]
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    strategy:
-      # So every platform's build failure is reported in one run.
-      fail-fast: false
-      matrix:
-        include:
-          # Built in an ubuntu:22.04 container, so the tarball's binary
-          # needs no glibc newer than 2.35, the floor packaging/README.txt
-          # records. The image outlives GitHub's
-          # ubuntu-22.04 runner. The Flatpak is built in its own job below.
-          - name: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            container: ubuntu:22.04
-            target: x86_64-unknown-linux-gnu
-          # Nova.app for Apple silicon, in a .dmg: `mise run bundle` builds
-          # on the arm64 runner and packs the bundle (crates/nova-bundle).
-          # It signs with Developer ID and notarizes when the signing
-          # secrets are set, ad-hoc otherwise. Intel Macs are not supported.
-          - name: aarch64-apple-darwin
-            os: macos-latest
-            target: aarch64-apple-darwin
-          - name: x86_64-pc-windows-msvc
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.os }}
-    # Only the Linux leg names one; empty, a leg runs on the runner itself.
-    container: ${{ matrix.container }}
-    # The signing secrets live in the macos-signing environment, whose
-    # deployment-branch policy allows only main (infra/github/signing.tf).
-    # Only main's macOS leg enters it. Every other leg, and every other
-    # branch, names no environment and so still runs: a job that names an
-    # environment its branch can't deploy to never starts. The expression must
-    # never name anything but macos-signing, because naming an environment
-    # that doesn't exist creates it, with no protection rules.
-    environment: ${{ github.ref == 'refs/heads/main' && matrix.os == 'macos-latest' && 'macos-signing' || '' }}
-    env:
-      # As in `ci`: install only the Rust toolchain.
-      MISE_AUTO_INSTALL: "false"
-      # The run's one build ID, for every step: `cargo build` compiles it
-      # into nova, and the bundlers stamp it on Info.plist and the
-      # metainfo.
-      NOVA_BUILD_ID: ${{ needs.build-id.outputs.id }}
-      # The channel the bundlers bake in (crates/nova-bundle/src/channel.rs):
-      # Nova.app's Info.plist names its feed once the nova package commits
-      # update_public_key. A dispatched branch build is the build main
-      # would make, and is never published. The beta promotion (phase 7)
-      # sets beta.
-      NOVA_CHANNEL: nightly
-    steps:
-      # The container starts bare and as root (no sudo): a compiler for
-      # rustup's toolchain and the C build scripts, git and curl for
-      # checkout and mise, ALSA's headers (nova-audio plays through cpal,
-      # which builds against ALSA on Linux), objdump (binutils) for the
-      # tarball's glibc check.
-      - if: runner.os == 'Linux'
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils
-      - uses: actions/checkout@v5
-      - uses: jdx/mise-action@v5
-        with:
-          install: false
-      - run: mise install rust
-        shell: bash
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-      # Default features only: never --features dev-tools or --all-features,
-      # so egui stays out of published builds. The release build must stay on
-      # the same default feature set that `mise run deny` checks in `ci`.
-      # The macOS leg's bundler builds its target itself, with the same
-      # flags. On Windows, nova's build script compiles NOVA_CHANNEL's
-      # update feed into nova.exe (nova::winsparkle::FEED) once the nova
-      # package commits update_public_key; until then it compiles in none,
-      # and the game runs no updater.
-      - name: Build
-        if: runner.os != 'macOS'
-        shell: bash
-        run: cargo build --release --locked -p nova -p nova-dump --target "${{ matrix.target }}"
-      # ev-nova-aarch64-apple-darwin.dmg, holding Nova.app (with Sparkle,
-      # downloaded at its pinned version and checked, in
-      # Contents/Frameworks), nova-dump, README.txt, LICENSE and an
-      # Applications link. The bundler stages under target/, so dist/ holds
-      # only the .dmg. No game data. It signs with Developer ID, notarizes
-      # and has Gatekeeper assess (spctl) the app and the .dmg when the
-      # signing secrets are set, which is on main alone, and signs ad-hoc
-      # otherwise; the secrets reach this step alone, as the
-      # variables the bundler reads. On main they come from the
-      # macos-signing environment, whose secrets override repository secrets
-      # of the same name. Elsewhere they come from the repository-level
-      # copies until the cut-over deletes them, and then they are empty.
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
-          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-        run: mise run bundle -- dist
-      # The .dmg as built, mounted (crates/nova-bundle/tests/it/macos_dmg.rs:
-      # the trimmed arm64 Sparkle, the signature, the channel's Info.plist),
-      # and the staged Sparkle.framework loaded for real
-      # (crates/nova-appkit/tests/it/updater.rs). Each skips without its
-      # variable.
-      - name: Test the dmg (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          NOVA_DMG="$PWD/dist/ev-nova-aarch64-apple-darwin.dmg" \
-            cargo test --locked -p nova-bundle --test it macos_dmg -- --nocapture
-          NOVA_SPARKLE_FRAMEWORKS="$PWD/target/bundle/staging/Nova.app/Contents/Frameworks" \
-            cargo test --locked -p nova-appkit --test it updater
-      # The signing seam (rdm phase
-      # windows-platform-cross-roadmap/phase-2-sign-windows-builds-in-ci):
-      # sign target/x86_64-pc-windows-msvc/release's nova.exe and
-      # nova-dump.exe here, between the Build above and the packing below,
-      # which takes the executables as they are and never rebuilds them.
-      # WiX v5, pinned: v6 and later need an Open Source Maintenance Fee
-      # EULA flag.
-      - name: Install WiX (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          dotnet tool install --global wix --version 5.0.2
-          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      # ev-nova-x86_64-pc-windows-msvc.msi, the per-user installer, beside
-      # the zip in dist/; it stages under target/. A second pack of the same
-      # executables (the same version, a new ProductCode) is the "older"
-      # build the installer test upgrades from. Each pack downloads
-      # WinSparkle 0.9.4 into target/installer/downloads, checks the
-      # archive's and then the DLL's SHA-256 with certutil, and lists
-      # WinSparkle.dll and its two licences beside nova.exe
-      # (crates/nova-bundle/src/installer/winsparkle.rs). It logs which
-      # update feed the build names, from the same NOVA_CHANNEL and key the
-      # Build's nova.exe compiled in.
-      - name: Package (Windows installer)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release dist
-          mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release target/installer/previous
-      # The same phase signs dist/'s .msi here, before it is tested and
-      # uploaded, and the staged target\installer\downloads\WinSparkle.dll
-      # between its pin check and wix build (inside the packing above).
-      # Installs, upgrades and uninstalls the .msi for real
-      # (crates/nova-bundle/tests/it/windows_installer.rs), checking the
-      # installed WinSparkle.dll is the staged one; then loads that DLL for
-      # real (crates/nova-win32/tests/it/winsparkle.rs). Without NOVA_MSI or
-      # NOVA_WINSPARKLE_DLL each test skips.
-      - name: Test the Windows installer
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $env:NOVA_MSI = (Resolve-Path dist\ev-nova-x86_64-pc-windows-msvc.msi).Path
-          $env:NOVA_MSI_PREVIOUS = (Resolve-Path target\installer\previous\ev-nova-x86_64-pc-windows-msvc.msi).Path
-          cargo test --locked -p nova-bundle --test it windows_installer -- --nocapture
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $env:NOVA_WINSPARKLE_DLL = (Resolve-Path target\installer\downloads\WinSparkle.dll).Path
-          cargo test --locked -p nova-win32 --test it winsparkle -- --nocapture
-      # One top-level directory holding the two binaries, README.txt and
-      # LICENSE, and on Linux the share/ tree (the desktop file, the
-      # AppStream metainfo and the hicolor icons) to copy into
-      # ~/.local/share. No game data. The directory's and the
-      # archive's names come from nova-bundle (crates/nova-bundle/src/archive.rs),
-      # the same constants the download page links; cargo is run directly,
-      # not through mise, so stdout carries the name alone. The Windows zip
-      # carries no WinSparkle.dll, so the portable copy doesn't update.
-      - name: Package
-        if: runner.os != 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          dir=$(cargo run --quiet --locked -p nova-bundle --bin nova-site -- --archive-dir "${{ matrix.target }}")
-          file=$(cargo run --quiet --locked -p nova-bundle --bin nova-site -- --archive "${{ matrix.target }}")
-          release="target/${{ matrix.target }}/release"
-          mkdir -p "dist/$dir"
-          case "${{ matrix.os }}" in
-            windows-*)
-              cp "$release/nova.exe" "$release/nova-dump.exe" "dist/$dir/"
-              ;;
-            *)
-              cp "$release/nova" "$release/nova-dump" "dist/$dir/"
-              ;;
-          esac
-          if [ "${{ runner.os }}" = Linux ]; then
-            mise run linux-desktop -- "dist/$dir"
-          fi
-          cp packaging/README.txt LICENSE "dist/$dir/"
-          cd dist
-          case "${{ matrix.os }}" in
-            windows-*) 7z a "$file" "$dir" ;;
-            *) tar czf "$file" "$dir" ;;
-          esac
-          rm -rf "$dir"
-      # Unpacks the tarball and checks its files and its binary's glibc
-      # floor and libraries (crates/nova-bundle/tests/it/linux_tarball.rs);
-      # without NOVA_TARBALL that test skips.
-      - name: Test the tarball
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          file=$(cargo run --quiet --locked -p nova-bundle --bin nova-site -- --archive "${{ matrix.target }}")
-          NOVA_TARBALL="$PWD/dist/$file" \
-            cargo test --locked -p nova-bundle --test it linux_tarball -- --nocapture
-      # Only a hand-off to `publish`.
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist-${{ matrix.name }}
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 1
+    uses: ./.github/workflows/build.yml
+    with:
+      build-id: ${{ needs.build-id.outputs.id }}
+      channel: ${{ inputs.channel || 'nightly' }}
+      ref: ${{ github.sha }}
+    secrets: inherit
 
   # ev-nova-x86_64-unknown-linux-gnu.flatpak, built from vendored sources
   # on the freedesktop runtime by `mise run flatpak`
@@ -358,10 +166,13 @@ jobs:
       MISE_AUTO_INSTALL: "false"
       # As in `build`; the manifest passes it into the sandboxed build.
       NOVA_BUILD_ID: ${{ needs.build-id.outputs.id }}
-      # As in `build`: the channel whose branch flatpak-builder exports onto
+      # The channel whose branch flatpak-builder exports onto
       # (crates/nova-bundle/src/linux/flatpak), and which the bundle and the
-      # tests name. A dispatched branch build is the build main would make,
-      # and is never published. The beta promotion (phase 7) sets beta.
+      # tests name: always the nightly, whatever a dispatch's channel input
+      # says. A beta Flatpak is never built: a promotion copies the
+      # nightly's commit onto the beta branch (release.yml's flatpak-repo),
+      # which the repo test below does for real. A dispatched branch build is
+      # the build main would make, and is never published.
       NOVA_CHANNEL: nightly
     steps:
       - uses: actions/checkout@v5
@@ -396,15 +207,18 @@ jobs:
       # (linux_flatpak_repo.rs) publishes it with nova-flatpak-repo's stage
       # and sign into a repo the test owns, signed with a throwaway key and
       # served from 127.0.0.1, then installs, updates and prunes it, and
-      # installs the bundle sign builds; gpg_repo_key.rs checks the key
-      # checks against the real gpg. Without NOVA_FLATPAK and NOVA_GPG
-      # those tests skip.
+      # installs the bundle sign builds; then it promotes nightly builds onto
+      # beta, installs the beta .flatpakref and follows a second promotion,
+      # and checks a later nightly keeps the beta branch. gpg_repo_key.rs
+      # checks the key checks against the real gpg. Without NOVA_FLATPAK and
+      # NOVA_GPG those tests skip.
       - name: Test the Flatpak
         run: |
           NOVA_FLATPAK="$PWD/dist/ev-nova-x86_64-unknown-linux-gnu.flatpak" NOVA_GPG=1 \
             xvfb-run -a cargo test --locked -p nova-bundle --test it -- --nocapture linux_flatpak gpg_repo_key
-      # The hand-off to `publish`, which ships this plain bundle unless
-      # `flatpak-repo` replaces it with the repo-following one.
+      # The hand-off to release.yml's `publish`, which ships this plain
+      # bundle unless its `flatpak-repo` replaces it with the
+      # repo-following one.
       - uses: actions/upload-artifact@v4
         with:
           name: dist-x86_64-unknown-linux-gnu-flatpak
@@ -412,375 +226,23 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Publishes the GPG-signed Flatpak repository the Pages site serves at
-  # /flatpak/, on pushes to main only (nova-flatpak-repo,
-  # crates/nova-bundle/src/linux/flatpak/repo): the nightly's branch of the
-  # repo, the ev-nova-nightly.flatpakref beside it, and a .flatpak bundle
-  # that follows the repo once installed.
-  #
-  # It is its own job, apart from `flatpak` (which compiles the whole game,
-  # runs every build script under flatpak-builder, and runs on branches),
-  # so the signing key never shares a job with a build. It holds no write
-  # token at all: contents: read is for checkout. Its one hand-off to Pages
-  # is the pages-flatpak artifact, which `pages` deploys.
-  #
-  # The key lives in the update-signing environment, which allows only main
-  # (infra/github/update_signing.tf), named only once the repository
-  # variable UPDATE_SIGNING_ENVIRONMENT holds its name, exactly as for
-  # `publish`. The expression must never name anything but update-signing,
-  # because naming an environment that doesn't exist creates it, with no
-  # protection rules.
-  #
-  # Stage holds no secret and does all the network I/O: it mirrors the live
-  # repo from Pages, GPG-verified against the committed
-  # packaging/linux/flatpak/repo-key.asc, because a Pages deploy replaces
-  # the whole site. A 404 for the live repo is the first publish; any other
-  # answer fails the job, so an outage never drops the other branches. It
-  # learns only whether the secret is set. Sign holds the key alone, with
-  # no token and no network, and compiles nothing: it runs the binary built
-  # above, which spawns only `cargo metadata`, gpg, ostree and flatpak.
-  #
-  # Without NOVA_CHANNEL, the committed key or the secret, stage prints one
-  # "Flatpak repo not published" warning and exits 4, which the step turns
-  # into staged=false, and no later step runs: the job succeeds, `pages`
-  # deploys the page without the .flatpakref link, and `publish` ships the
-  # plain bundle, exactly as before. Sign's own exit 4 is a guard that maps
-  # to published=false without a second warning. A committed key holding a
-  # secret key, or a secret that isn't the committed key's, fails the job.
-  #
-  # When it publishes, it uploads dist-x86_64-unknown-linux-gnu-flatpak
-  # again with overwrite: true, so the bundle `publish` ships is the one
-  # that follows the repo, built from the signed repo.
-  flatpak-repo:
-    needs: [build-id, flatpak]
+  # Publishes the nightly (release.yml): the Flatpak repo's nightly branch,
+  # the `nightly` tag moved to this commit, the prerelease's assets and
+  # signed update feeds, then the Pages site. On pushes to main only, after
+  # every build leg and the Flatpak, so a failed leg on any platform
+  # publishes nothing. The job grants the most any release job needs; each
+  # job there narrows it, and its gates (update-signing, github-pages) are
+  # in release.yml.
+  release:
+    needs: [ci, build-id, build, flatpak]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    environment: ${{ vars.UPDATE_SIGNING_ENVIRONMENT == 'update-signing' && 'update-signing' || '' }}
-    outputs:
-      published: ${{ steps.sign.outputs.published }}
-    env:
-      # As in `ci`: install only the Rust toolchain.
-      MISE_AUTO_INSTALL: "false"
-      # The run's one build ID, which the commit's subject names.
-      NOVA_BUILD_ID: ${{ needs.build-id.outputs.id }}
-      # The branch it publishes, as the `flatpak` job built it.
-      NOVA_CHANNEL: nightly
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      # gpg and curl are on the runner.
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak ostree
-      - uses: jdx/mise-action@v5
-        with:
-          install: false
-      - run: mise install rust
-        shell: bash
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: flatpak-repo
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Built here, with no secret in the environment.
-      - name: Build nova-flatpak-repo
-        shell: bash
-        run: mise exec -- cargo build -q -p nova-bundle --locked --bin nova-flatpak-repo
-      # The plain bundle the `flatpak` job built and tested.
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist-x86_64-unknown-linux-gnu-flatpak
-          path: ${{ runner.temp }}/plain
-      - name: Stage the Flatpak repo
-        id: stage
-        shell: bash
-        env:
-          # Whether sign will hold the key; never the key itself.
-          FLATPAK_SIGNING_KEY_SET: ${{ secrets.FLATPAK_SIGNING_KEY != '' }}
-        run: |
-          set -euo pipefail
-          status=0
-          mise exec -- target/debug/nova-flatpak-repo stage --bundle-dir "$RUNNER_TEMP/plain" \
-            --work "$RUNNER_TEMP/fr-work" --pages "$RUNNER_TEMP/fr-pages" || status=$?
-          if [ "$status" -eq 0 ]; then
-            echo "staged=true" >> "$GITHUB_OUTPUT"
-          elif [ "$status" -eq 4 ]; then
-            echo "staged=false" >> "$GITHUB_OUTPUT"
-          else
-            exit "$status"
-          fi
-      - name: Sign the Flatpak repo
-        id: sign
-        if: steps.stage.outputs.staged == 'true'
-        shell: bash
-        env:
-          FLATPAK_SIGNING_KEY: ${{ secrets.FLATPAK_SIGNING_KEY }}
-        run: |
-          set -euo pipefail
-          status=0
-          mise exec -- target/debug/nova-flatpak-repo sign --work "$RUNNER_TEMP/fr-work" \
-            --pages "$RUNNER_TEMP/fr-pages" --dist "$RUNNER_TEMP/fr-dist" || status=$?
-          if [ "$status" -eq 0 ]; then
-            echo "published=true" >> "$GITHUB_OUTPUT"
-          elif [ "$status" -eq 4 ]; then
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          else
-            exit "$status"
-          fi
-      # /flatpak/ on the site: the repo and the .flatpakref.
-      - if: steps.sign.outputs.published == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pages-flatpak
-          path: ${{ runner.temp }}/fr-pages
-          if-no-files-found: error
-          retention-days: 1
-      # Replaces the `flatpak` job's plain bundle, so `publish` ships this one.
-      - if: steps.sign.outputs.published == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-x86_64-unknown-linux-gnu-flatpak
-          path: ${{ runner.temp }}/fr-dist/*
-          if-no-files-found: error
-          retention-days: 1
-          overwrite: true
-
-  # Moves the `nightly` tag to this commit and replaces the prerelease's
-  # assets, and publishes the signed Sparkle update feeds the apps read
-  # (nova-appcast, crates/nova-bundle/src/appcast), on pushes to main
-  # only. All or nothing: it needs every `build` leg, the Flatpak and the
-  # Flatpak repo, so a failed leg on any platform skips publishing and
-  # leaves the previous nightly untouched. Its dist-* download picks up the
-  # repo-following Flatpak bundle when `flatpak-repo` published one, and
-  # the `flatpak` job's plain bundle otherwise.
-  #
-  # The update-signing seed lives in the update-signing environment, whose
-  # deployment-branch policy allows only main (infra/github/update_signing.tf).
-  # The job names it only once the repository variable
-  # UPDATE_SIGNING_ENVIRONMENT holds its name, which OpenTofu sets after it has
-  # made the environment, its policy and its secret. Until that apply the job
-  # names no environment, UPDATE_SIGNING_KEY is empty, and nova-appcast skips
-  # the feeds with a warning while the nightly publishes as before. The
-  # expression must never name anything but update-signing, because naming an
-  # environment that doesn't exist creates it, with no protection rules.
-  #
-  # The order matters. nova-appcast checks the build against the current
-  # feeds before the tag moves, so a refusal leaves the release untouched. The
-  # installers and their build-ID copies go up before the feeds that name
-  # them, so a feed never names a file that isn't up, and the deletes come
-  # last.
-  #
-  # Re-running a run whose feeds already went up is fine: nova-appcast exits 3
-  # (the feeds already offer this build) and writes nothing, so the job
-  # re-uploads the stable installers and leaves the feeds and every other
-  # asset as they are. A build older than the current feeds' fails the job.
-  publish:
-    needs: [build-id, build, flatpak, flatpak-repo]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
     permissions:
       contents: write
-    environment: ${{ vars.UPDATE_SIGNING_ENVIRONMENT == 'update-signing' && 'update-signing' || '' }}
-    # On top of the workflow-level group, so two quick pushes can't race on
-    # the tag or the assets. A cancelled older run is harmless: the newer run
-    # re-uploads every asset.
-    concurrency:
-      group: nightly-release
-      cancel-in-progress: true
-    env:
-      # As in `ci`: install only the Rust toolchain.
-      MISE_AUTO_INSTALL: "false"
-      # The run's one build ID, which the feeds offer.
-      NOVA_BUILD_ID: ${{ needs.build-id.outputs.id }}
-    steps:
-      - uses: actions/checkout@v5
-      # Rust for nova-appcast; nova-bundle needs no system libraries.
-      - uses: jdx/mise-action@v5
-        with:
-          install: false
-      - run: mise install rust
-        shell: bash
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: publish
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Built here, with no secret in the environment, because compiling
-      # runs every dependency's build scripts and proc macros. The signing
-      # step runs the built binary and compiles nothing.
-      - name: Build nova-appcast
-        shell: bash
-        run: mise exec -- cargo build -q -p nova-bundle --locked --bin nova-appcast
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: dist-*
-          merge-multiple: true
-          path: dist
-      # nova-appcast reads the release's asset list and its current feeds,
-      # which this step fetches, so the signing step needs no token.
-      - name: Fetch the nightly's assets and feeds
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh release view nightly >/dev/null 2>&1 ||
-            gh release create nightly --prerelease --title "Nightly build" --notes "Tester build of main."
-          gh release view nightly --json assets --jq '.assets[].name' > "$RUNNER_TEMP/assets.txt"
-          mkdir -p "$RUNNER_TEMP/current" "$RUNNER_TEMP/feeds"
-          if grep -qx 'appcast-.*\.xml' "$RUNNER_TEMP/assets.txt"; then
-            gh release download nightly --pattern 'appcast-*.xml' --dir "$RUNNER_TEMP/current"
-          fi
-      # Every build leg's dist/ is merged into dist/ above. When signing,
-      # nova-appcast copies the .dmg and .msi to their build-ID names in
-      # dist/ and writes the feeds to feeds/. It always writes prune.txt, the
-      # assets to delete. The signing secret reaches this step alone, which
-      # has no GH_TOKEN and compiles nothing: it runs the binary built above,
-      # which spawns only `cargo metadata` (no build scripts). mise exec puts
-      # that cargo on PATH.
-      - name: Sign the update feeds
-        shell: bash
-        env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        run: |
-          set -euo pipefail
-          status=0
-          mise exec -- target/debug/nova-appcast publish --dist dist --assets "$RUNNER_TEMP/assets.txt" \
-            --current "$RUNNER_TEMP/current" --feeds "$RUNNER_TEMP/feeds" \
-            --prune-list "$RUNNER_TEMP/prune.txt" || status=$?
-          if [ "$status" -eq 3 ]; then
-            echo "::notice title=Update feeds already published::The nightly's feeds already offer build $NOVA_BUILD_ID: re-uploading the installers only."
-          elif [ "$status" -ne 0 ]; then
-            exit "$status"
-          fi
-      # --clobber replaces each asset in place. The feeds go up only after
-      # the files they name, then the assets nova-appcast listed (renamed or
-      # dropped ones, and build-ID copies past the newest few that no feed
-      # names) are deleted. Uploading first means the release is never
-      # without an asset this run makes.
-      - name: Publish the nightly prerelease
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          git tag -f nightly "$GITHUB_SHA"
-          git push -f origin nightly
-          commit_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA"
-          notes="Tester build of \`main\` at $GITHUB_SHA ($commit_url).
-
-          No EV Nova game data is included: supply your own \`Nova Files\` directory. See README.txt in each download for how to run the game."
-          gh release edit nightly --prerelease --notes "$notes"
-          gh release upload nightly dist/* --clobber
-          shopt -s nullglob
-          feeds=("$RUNNER_TEMP"/feeds/*)
-          if [ ${#feeds[@]} -gt 0 ]; then
-            gh release upload nightly "${feeds[@]}" --clobber
-          fi
-          if [ -f "$RUNNER_TEMP/prune.txt" ]; then
-            while IFS= read -r asset; do
-              gh release delete-asset nightly "$asset" --yes < /dev/null
-            done < "$RUNNER_TEMP/prune.txt"
-          fi
-
-  # Deploys the GitHub Pages site. A repository has one Pages deployment,
-  # and each deploy replaces the whole site.
-  #
-  # The root is the download page rendered by `mise run site`
-  # (crates/nova-bundle/src/site), whose links name each nightly asset as
-  # its packer does. It needs `publish` as well as `ci`, both of which run
-  # on exactly the pushes to main this job does, so the page deploys only
-  # after the nightly assets it links have been uploaded. If `publish`
-  # fails or is skipped, so is this job, and the previous site stays up.
-  #
-  # With the Flatpak repo published, the page's Linux row leads with the
-  # .flatpakref (nova-site --flatpakref).
-  #
-  # Another job adds a subtree by uploading an artifact named `pages-<path>`
-  # whose root is the tree served at `/<path>/` (`pages-flatpak` becomes
-  # `/flatpak/`), and adding itself to this job's `needs`. `<path>` must not
-  # be empty or clash with a root file (index.html included); the assembly
-  # step refuses both. If a needed producer fails, this job is skipped and
-  # the previous site stays up.
-  #
-  # Because a deploy replaces everything, a producer uploads its full tree on
-  # every main run. One that rebuilds incrementally fetches its previous tree
-  # from the live site first. A subtree no artifact provides on a run
-  # disappears from the site.
-  #
-  # The one producer is `flatpak-repo`, whose pages-flatpak is /flatpak/:
-  # it mirrors the live repo before committing onto it. It always runs on
-  # main and succeeds when it skips, so this job isn't skipped with it.
-  #
-  # This is the only job granted the pages and id-token write scopes, which
-  # deploy-pages needs. contents: read is for checkout, since a job-level
-  # permissions block sets every scope it doesn't list to none.
-  pages:
-    needs: [ci, publish, flatpak-repo]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
       pages: write
       id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    # A newer push to main can still cancel this deploy half way: the
-    # workflow-level group cancels the whole older run, this job included.
-    # That's accepted, because deploy-pages cancels its deployment cleanly, so
-    # the previous site stays up, and the newer run redeploys everything. A
-    # producer must not assume a started deploy always finishes. This
-    # job-level group, which deploy-pages recommends, only keeps two deploys
-    # from running at once; it never protects one from that cancel.
-    concurrency:
-      group: pages
-      cancel-in-progress: false
-    env:
-      # As in `ci`: install only the Rust toolchain.
-      MISE_AUTO_INSTALL: "false"
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      # Rust for `mise run site`; nova-bundle needs no system libraries.
-      - uses: jdx/mise-action@v5
-        with:
-          install: false
-      - run: mise install rust
-        shell: bash
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: pages
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Without merge-multiple, each matching artifact lands in its own
-      # `<path>/<artifact name>/`. With no match it downloads nothing and
-      # succeeds, and the assembly step deploys the root page alone.
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: pages-*
-          path: ${{ runner.temp }}/pages
-      - name: Assemble _site
-        shell: bash
-        run: |
-          set -euo pipefail
-          mise run site -- ${{ needs.flatpak-repo.outputs.published == 'true' && '--flatpakref' || '' }} _site
-          if [ -d "$RUNNER_TEMP/pages" ]; then
-            for dir in "$RUNNER_TEMP/pages"/pages-*/; do
-              [ -d "$dir" ] || continue
-              name=$(basename "$dir")
-              sub=${name#pages-}
-              # Refuse an empty or clashing path rather than overwrite the root.
-              if [ -z "$sub" ] || [ -e "_site/$sub" ]; then
-                echo "pages artifact $name has an empty or clashing path" >&2
-                exit 1
-              fi
-              mv "$dir" "_site/$sub"
-            done
-          fi
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: _site
-      - id: deployment
-        uses: actions/deploy-pages@v4
+    uses: ./.github/workflows/release.yml
+    with:
+      channel: nightly
+      build-id: ${{ needs.build-id.outputs.id }}
+      sha: ${{ github.sha }}
+    secrets: inherit

@@ -1,7 +1,11 @@
 //! The update feeds: one Sparkle appcast per platform per channel
-//! (`appcast-macos-nightly.xml`, `appcast-windows-nightly.xml`), each
-//! offering one build, signed with Ed25519, which Sparkle on macOS and
-//! `WinSparkle` on Windows read.
+//! (`appcast-macos-nightly.xml`, `appcast-windows-nightly.xml`, and the
+//! same for `beta`), each offering one build, signed with Ed25519, which
+//! Sparkle on macOS and `WinSparkle` on Windows read. Each channel's feeds
+//! are assets of its own rolling prerelease ([`Channel::tag`]). The beta
+//! channel is promoted from the nightly ([`Channel::promoted_from`]):
+//! [`promote`] is `nova-appcast check-promotion`'s decision, which build may
+//! be promoted and which commit of `main` it was built from.
 //!
 //! Each feed's item names its update file by the build ID
 //! ([`update_asset`], `ev-nova-<id>-<target>.<ext>`), a copy of the
@@ -12,7 +16,8 @@
 //! `YYYYMMDD.HHMMSS` for `WinSparkle`, whose `atoi` can't read them.
 //! [`render`]
 //! writes a feed and [`read_feed`] reads a published one back.
-//! [`publish`] is `nova-appcast publish`'s whole decision: whether to sign
+//! [`publish`] is `nova-appcast publish`'s whole decision, for the channel
+//! `NOVA_CHANNEL` names: whether to sign
 //! ([`publish::FeedSigning`]), refusing a build that isn't newer than the
 //! feeds already offer, and which release assets to delete ([`prune`]).
 //! [`host`] reads `nova-appcast`'s arguments.

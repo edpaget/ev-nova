@@ -1,4 +1,4 @@
-//! `nova-bundle`: packs the nightly's installers. Its `nova-bundle`
+//! `nova-bundle`: packs the nightly's and the beta's installers. Its `nova-bundle`
 //! binary builds `Nova.app`, the macOS bundle of the game, and packs it
 //! into a `.dmg`; its `nova-installer` binary packs the built Windows
 //! executables into a per-user MSI ([`installer`]); its `nova-linux`
@@ -7,7 +7,7 @@
 //! Flatpak ([`linux::flatpak`]); its `nova-build-id` binary prints the build ID
 //! ([`build_id`]); its `nova-site` binary renders the download page that
 //! links them all ([`site`]); and its `nova-appcast` binary signs and
-//! writes the update feeds ([`appcast`]).
+//! writes the update feeds and checks a promotion ([`appcast`]).
 //!
 //! # Usage
 //!
@@ -40,8 +40,8 @@
 //! app. See [`sparkle`].
 //!
 //! `NOVA_CHANNEL` names the channel the bundle is for ([`channel`]): CI
-//! sets `nightly`, and unset is a development bundle; any other value
-//! exits 2. When there is a channel and the game package commits
+//! sets `nightly`, or `beta` for a promotion, and unset is a development
+//! bundle; any other value exits 2. When there is a channel and the game package commits
 //! `update_public_key`, `Info.plist` gains Sparkle's three keys:
 //! `SUFeedURL` (the channel's macOS appcast, [`channel::feed_url`]),
 //! `SUPublicEDKey` (the key, standard base64) and
@@ -136,19 +136,23 @@
 //! # The Flatpak repository
 //!
 //! ```text
-//! mise run flatpak-repo -- stage --bundle-dir <DIR> --work <DIR> --pages <DIR>
+//! mise run flatpak-repo -- stage [--bundle-dir <DIR>] --work <DIR> --pages <DIR>
 //! mise run flatpak-repo -- sign --work <DIR> --pages <DIR> --dist <DIR>
 //! ```
 //!
 //! On x86-64 Linux, and in CI's main-only `flatpak-repo` job, which runs
 //! the built binary. `stage` mirrors the live repo from the Pages site,
 //! GPG-verified against the committed
-//! `packaging/linux/flatpak/repo-key.asc`, and imports the plain bundle;
-//! `sign`, which alone holds `FLATPAK_SIGNING_KEY`, commits it onto the
-//! channel's branch, signs, prunes and makes static deltas, and writes
-//! `ev-nova-nightly.flatpakref` and a bundle that follows the repo. Without
-//! the channel, the committed key or the secret, `stage` warns and exits 4,
-//! and the nightly publishes as before. See [`linux::flatpak::repo`].
+//! `packaging/linux/flatpak/repo-key.asc`, and, for the nightly, imports
+//! the plain bundle in `--bundle-dir`; `sign`, which alone holds
+//! `FLATPAK_SIGNING_KEY`, commits it onto the channel's branch, signs,
+//! prunes and makes static deltas, and writes every channel's
+//! `ev-nova-<channel>.flatpakref` the repo holds and a bundle that follows
+//! the repo. For beta, `stage` imports nothing and `sign` copies the
+//! nightly branch's commit of the build instead (see "Promotion" below).
+//! Without the channel, the committed key or the secret, `stage` warns and
+//! exits 4, and the nightly publishes as before. See
+//! [`linux::flatpak::repo`].
 //!
 //! # The build ID
 //!
@@ -173,8 +177,10 @@
 //!
 //! On any host: `nova-site` writes the download page, `index.html`, into
 //! `OUT_DIR` (by default `target/site`), linking each nightly asset by the
-//! name its packer gives it. CI's `pages` job deploys it at the GitHub
-//! Pages site's root. `nova-site --archive <TARGET>` and
+//! name its packer gives it, and, with `--beta-assets <FILE>`, each asset
+//! the beta release holds; with `--pages-flatpak <DIR>`, each channel's
+//! served `.flatpakref`. CI's `pages` job deploys it at the GitHub Pages
+//! site's root. `nova-site --archive <TARGET>` and
 //! `--archive-dir <TARGET>` print the Windows zip's or Linux tarball's
 //! file name or top-level directory ([`archive`]), which CI's packaging
 //! uses instead of spelling them. See [`site`].
@@ -187,7 +193,8 @@
 //! mise run appcast -- public-key
 //! ```
 //!
-//! On any host, and in CI's `publish` job. `publish` reads the stable
+//! On any host, and in CI's `publish` job. `publish` writes the feeds of
+//! the channel `NOVA_CHANNEL` names, which it requires. It reads the stable
 //! installers in `--dist` (`ev-nova-aarch64-apple-darwin.dmg` and
 //! `ev-nova-x86_64-pc-windows-msvc.msi`), the release's asset names in
 //! `--assets` (one per line) and its current feeds, downloaded into
@@ -195,7 +202,7 @@
 //! `update_public_key` and `UPDATE_SIGNING_KEY` holds its seed (32 bytes,
 //! standard base64), it copies each installer to its build-ID name in
 //! `--dist` (`ev-nova-<id>-<target>.<ext>`), signs it with Ed25519, and
-//! writes `appcast-macos-nightly.xml` and `appcast-windows-nightly.xml`
+//! writes `appcast-macos-<channel>.xml` and `appcast-windows-<channel>.xml`
 //! into `--feeds`. When either half is missing it skips the feeds and
 //! prints a `::warning::`, and the nightly publishes without them; a seed
 //! that is malformed or doesn't match the key fails. Either way it writes
@@ -207,6 +214,25 @@
 //! writing nothing. The build ID is [`build_id::resolve`]'s. `public-key`
 //! prints `UPDATE_SIGNING_KEY`'s public key, the value to commit. See
 //! [`appcast`].
+//!
+//! # Promotion
+//!
+//! ```text
+//! mise run appcast -- check-promotion --build <ID> --repo <DIR> \
+//!     --nightly-assets <FILE> --beta-assets <FILE> --beta-current <DIR>
+//! ```
+//!
+//! A beta is a nightly promoted by hand (`promote-beta.yml`): the
+//! nightly's commit rebuilt with the same build ID and `NOVA_CHANNEL=beta`,
+//! so its `Info.plist` and `nova.exe` name the beta feeds. `check-promotion`
+//! is the workflow's first job. It refuses a run whose `GITHUB_REF` isn't
+//! `main`, a malformed ID, a build the nightly release's asset list doesn't
+//! hold both update files of, or one not newer than the beta feeds in
+//! `--beta-current`, naming the IDs (exit 1); then it finds the one commit
+//! in `--repo`'s history whose committer time is the build ID and prints
+//! `build=<id>` and `commit=<sha>` ([`appcast::promote`]). The Flatpak is
+//! not rebuilt: `nova-flatpak-repo` copies the nightly branch's commit onto
+//! `beta` ([`linux::flatpak::repo::promote`]).
 
 pub mod appcast;
 pub mod archive;

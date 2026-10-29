@@ -1,8 +1,9 @@
-ev-nova nightly build
-=====================
+ev-nova tester build
+====================
 
-A tester build of the latest `main` of https://github.com/edpaget/ev-nova.
-Each download holds:
+A tester build of https://github.com/edpaget/ev-nova: a nightly, built
+from the latest `main`, or a beta, a nightly promoted by hand once it has
+been tried. Each download holds:
 
   nova        the game: opens the game data in a window
               (Nova.app on macOS, nova.exe on Windows)
@@ -21,6 +22,19 @@ The downloads are:
 
 EV Nova's data files are copyrighted and are not included. Supply your own
 copy of the game's `Nova Files` directory.
+
+Nightly and beta
+----------------
+
+The nightly is on the `nightly` release, and the beta on the `beta`
+release; the download page links both. A beta is the same code and build
+ID as the nightly it was promoted from.
+
+Each installed build follows its own channel: a nightly updates to newer
+nightlies, and a beta to newer betas (on macOS and Windows through the
+updater, on Linux through `flatpak update` from the channel's
+.flatpakref). To switch channels, uninstall the game and install the other
+channel's download; your settings and pilots stay where they are.
 
 Running
 -------
@@ -54,7 +68,7 @@ Apple, so Nova.app opens with a double-click, and nova-dump copied out of
 the .dmg runs from a terminal as it is.
 
 Nova.app updates itself with Sparkle: once a day it checks for a newer
-nightly, and EV Nova > Check for Updates... checks at once. Installing an
+build of its channel, and EV Nova > Check for Updates... checks at once. Installing an
 update quits the game, saving the pilot you are flying, and opens the new
 build. A build without an update feed (a local `mise run bundle`) greys
 the item. Sparkle's licence is in Nova.app, as
@@ -73,11 +87,11 @@ administrator rights, into %LOCALAPPDATA%\Programs\Nova. It adds a "Nova"
 entry to the Start menu and an "EV Nova" entry to Settings > Apps >
 Installed apps (Apps & features), where you uninstall it. Uninstalling
 removes the program but keeps your settings and pilots in
-%APPDATA%\nova. Installing a newer nightly over an older one replaces it
+%APPDATA%\nova. Installing a newer build over an older one replaces it
 in place.
 
 The installed game updates itself with WinSparkle: once a day it checks
-for a newer nightly and offers it. Installing an update quits the game,
+for a newer build of its channel and offers it. Installing an update quits the game,
 saving the pilot you are flying, installs the new build and opens it.
 WinSparkle's licences are installed beside nova.exe, as
 WinSparkle-LICENSE.txt and WinSparkle-expat-LICENSE.txt.
@@ -166,7 +180,8 @@ start "EV Nova" from your applications, or run
 
 Installed from the download page's ev-nova-nightly.flatpakref instead
 (`flatpak install --user --from <it>`, or open it in Discover or GNOME
-Software), it updates to each new nightly with `flatpak update`.
+Software), it updates to each new nightly with `flatpak update`; from
+ev-nova-beta.flatpakref, to each new beta.
 
 The sandbox lets it show its window (Wayland, or X11 where there is no
 Wayland) and use your GPU and sound. It can read, and not change, three

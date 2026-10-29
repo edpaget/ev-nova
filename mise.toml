@@ -90,7 +90,7 @@ description = "Any host: write the Linux desktop file, AppStream metainfo and hi
 run = "cargo run -p nova-bundle --locked --bin nova-linux --"
 
 [tasks.site]
-description = "Any host: render the download page into index.html; pass an output dir after -- (default target/site)"
+description = "Any host: render the download page into index.html; pass an output dir after -- (default target/site), and --pages-flatpak <DIR> and --beta-assets <FILE> for the served .flatpakrefs and the Beta row"
 run = "cargo run -p nova-bundle --locked --bin nova-site --"
 
 [tasks.flatpak]
@@ -102,7 +102,7 @@ description = "Print the build ID: NOVA_BUILD_ID when it is set, else HEAD's com
 run = "cargo run -q -p nova-bundle --locked --bin nova-build-id"
 
 [tasks.flatpak-repo]
-description = "What CI's flatpak-repo job runs, prebuilt (x86_64 Linux, needs gpg, ostree, flatpak and curl): mirror the live Pages repo and import the plain bundle (stage --bundle-dir <DIR> --work <DIR> --pages <DIR>), then sign it onto NOVA_CHANNEL's branch with FLATPAK_SIGNING_KEY and write the .flatpakref and the repo-following bundle (sign --work <DIR> --pages <DIR> --dist <DIR>)"
+description = "What CI's flatpak-repo job runs, prebuilt (x86_64 Linux, needs gpg, ostree, flatpak and curl): mirror the live Pages repo and, for the nightly, import the plain bundle (stage [--bundle-dir <DIR>] --work <DIR> --pages <DIR>), then sign it onto NOVA_CHANNEL's branch with FLATPAK_SIGNING_KEY (for beta, copy the nightly branch's commit of NOVA_BUILD_ID) and write every served channel's .flatpakref and the repo-following bundle (sign --work <DIR> --pages <DIR> --dist <DIR>)"
 run = "cargo run -q -p nova-bundle --locked --bin nova-flatpak-repo --"
 
 [tasks.appcast]

@@ -172,8 +172,9 @@ builds read it to embed it.
 
 The environment's deployment-branch policy is custom and allows `main`
 only, with no required reviewers and no wait timer, as for
-`macos-signing`. `ci.yml`'s `publish` and `flatpak-repo` jobs, which run
-only on pushes to `main`, are the only jobs that enter it:
+`macos-signing`. `release.yml`'s `publish` and `flatpak-repo` jobs, which
+`ci.yml` calls on pushes to `main` and `promote-beta.yml` on a promotion
+dispatched on `main`, are the only jobs that enter it:
 
 ```yaml
 environment: ${{ vars.UPDATE_SIGNING_ENVIRONMENT == 'update-signing' && 'update-signing' || '' }}
@@ -265,7 +266,7 @@ the `.flatpakref` and the repo-following bundle carry, so every install
 trusts it. The key has no passphrase, because pinentry can't run in CI:
 the environment's main-only policy is its protection.
 
-`ci.yml`'s `flatpak-repo` job runs `stage` with no secret (it only learns
+`release.yml`'s `flatpak-repo` job runs `stage` with no secret (it only learns
 whether the secret is set), then `sign` in a step that holds the key alone,
 with no token and no network. It publishes only when the channel, the
 committed key and the secret are all in place:
@@ -331,6 +332,50 @@ If the key or the secret is removed once the repo is live, a run skips and
 its deploy drops `/flatpak/`: installs can't update until it returns, and
 the next publish sees a `404` and starts fresh, which drops every other
 channel's branch.
+
+Every publish, nightly or beta, writes the `.flatpakref` of each channel
+whose branch the repo holds, so a nightly's deploy keeps
+`ev-nova-beta.flatpakref` and a promotion's keeps the nightly's.
+
+## Promoting a nightly to beta
+
+A beta is a nightly promoted by hand. `promote-beta.yml` rebuilds the
+nightly's commit with the same build ID and `NOVA_CHANNEL=beta` (so the
+app names the beta feeds), copies the nightly's Flatpak commit onto the
+`beta` branch without a rebuild, and publishes the rolling `beta`
+prerelease, its signed beta feeds and the Pages site:
+
+```sh
+gh workflow run promote-beta.yml --ref main -f build-id=<YYYYMMDDHHMMSS>
+```
+
+The build ID is a nightly's (its release notes and update file names carry
+it). The workflow's `check` job refuses, before anything is built or
+published, a run off `main`, a malformed ID, a build the `nightly` release
+no longer holds (both its `.dmg` and `.msi` update files), or one not newer
+than the current beta, each naming the IDs.
+
+Preconditions:
+
+- The update-signing setup above is in place: without it no nightly holds
+  update files, and every promotion is refused as "isn't on the nightly
+  release". The Flatpak repository key is needed for a beta Flatpak; without
+  it the beta publishes macOS and Windows only, as the nightly does.
+- The nightly was built after promotion support landed, and is still among
+  the newest three the nightly release keeps. An older commit's own code
+  refuses `NOVA_CHANNEL=beta`, which fails its build legs before anything is
+  published.
+
+The `beta` tag moves only in `publish`, after every check and build leg, so
+a refused or failed promotion leaves the beta as it was. The nightly's
+release, feeds and Flatpak branch are never written.
+
+Nightlies and promotions on `main` share one concurrency group,
+`release-main`, which never cancels a running run: they run one at a time.
+A push while a promotion is pending replaces it, and it shows as cancelled:
+dispatch it again. To finish a promotion that failed after `check` (a flaky
+leg, say), use "Re-run failed jobs", which keeps `check`'s result;
+`publish` exits 3 for feeds that already went up and carries on.
 
 **Rotating the Flatpak key.** Only after a compromise. Every
 `.flatpakref` install trusts the old key and stops updating, and the next
