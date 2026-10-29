@@ -9,10 +9,11 @@ use std::path::{Path, PathBuf};
 
 use super::key::{self, CommittedKey, Primary};
 use super::probe::{self, Live};
+use super::promote::{self, copy_steps, find_build, parse_refs, served_channels};
 use super::{
     MIRROR_DEPTH, PRUNE_DEPTH, PUBLIC_KEY, RepoError, RepoHost, SECRET_SET_VAR, SECRET_VAR,
-    SignPaths, StagePaths, TITLE, app_ref, flatpakref, flatpakref_name, gnupg, repo, secret_dir,
-    src,
+    SignPaths, StagePaths, TITLE, app_ref, bundle_dir_refusal, flatpakref, flatpakref_name, gnupg,
+    repo, secret_dir, src,
 };
 use crate::appcast::Channel;
 use crate::build_id::{self, BuildId};
@@ -114,8 +115,9 @@ pub enum Outcome {
     },
     /// `sign` published.
     Published {
-        /// The `.flatpakref` written.
-        flatpakref: PathBuf,
+        /// The `.flatpakref`s written: one for each channel whose branch the
+        /// repo holds, in [`Channel::ALL`]'s order.
+        flatpakrefs: Vec<PathBuf>,
         /// The repo-following bundle.
         bundle: PathBuf,
     },
@@ -129,7 +131,7 @@ fn opt(name: &str, path: &Path) -> OsString {
 }
 
 /// `ostree --repo=<repo>` with these words.
-fn ostree(repo: &Path, words: &[&str]) -> Invocation {
+pub(crate) fn ostree(repo: &Path, words: &[&str]) -> Invocation {
     Invocation::new("ostree").arg(opt("repo", repo)).args(words)
 }
 
@@ -179,12 +181,13 @@ pub fn import_bundle(src: &Path, bundle: &Path) -> Invocation {
 }
 
 /// `stage`'s steps once the live repo is probed: the pages repo (an
-/// empty one, then the mirror when one is `live`), then the plain bundle
-/// imported into the work tree's own repo.
+/// empty one, then the mirror when one is `live`), then, when
+/// `paths.bundle_dir` names one, the plain bundle imported into the work
+/// tree's own repo. A promoted channel imports nothing: `sign` copies its
+/// commit from the mirror.
 #[must_use]
 pub fn stage_steps(host: &RepoHost, paths: &StagePaths, key_file: &Path, live: Live) -> Vec<Step> {
     let repo = repo(&paths.pages);
-    let src = src(&paths.work);
     let mut steps = vec![
         Step::RemoveDir(repo.clone()),
         Step::CreateDir(paths.pages.clone()),
@@ -197,40 +200,50 @@ pub fn stage_steps(host: &RepoHost, paths: &StagePaths, key_file: &Path, live: L
             Step::Run(remote_delete(&repo)),
         ]);
     }
-    steps.extend([
-        Step::RemoveDir(src.clone()),
-        Step::Run(init(&src)),
-        Step::Run(import_bundle(&src, &paths.bundle_dir.join(ASSET))),
-    ]);
+    if let Some(bundle_dir) = &paths.bundle_dir {
+        let src = src(&paths.work);
+        steps.extend([
+            Step::RemoveDir(src.clone()),
+            Step::Run(init(&src)),
+            Step::Run(import_bundle(&src, &bundle_dir.join(ASSET))),
+        ]);
+    }
     steps
 }
 
-/// The new build onto `channel`'s branch of the pages repo, a child of
-/// its head, signed by `fingerprint`. Without `--force`, a build whose
-/// content is the head's commits nothing.
+/// A commit's subject on `channel`'s branch: `EV Nova <channel> build
+/// <id>`. A promotion finds its nightly commit by it.
+#[must_use]
+pub fn subject(channel: Channel, build: &BuildId) -> String {
+    format!("{TITLE} {} build {build}", channel.name())
+}
+
+/// The build on `from`'s app ref in the work tree's repo onto `channel`'s
+/// branch of the pages repo, a child of its head, signed by
+/// `fingerprint`. The nightly commits its own imported build (`from` is
+/// the nightly); a promotion commits the copied nightly commit (`from` is
+/// [`Channel::promoted_from`]). Without `--force`, a build whose content
+/// is the head's commits nothing.
 #[must_use]
 pub fn commit_from(
     spec: &BundleSpec,
+    from: Channel,
     channel: Channel,
     work: &Path,
     pages: &Path,
     fingerprint: &str,
     build: &BuildId,
 ) -> Invocation {
-    let app = app_ref(spec, channel);
     Invocation::new("flatpak")
         .arg("build-commit-from")
         .arg(opt("src-repo", &src(work)))
-        .arg(format!("--src-ref={app}"))
+        .arg(format!("--src-ref={}", app_ref(spec, from)))
         .arg(format!("--gpg-sign={fingerprint}"))
         .arg(opt("gpg-homedir", &gnupg(work)))
-        .arg(format!(
-            "--subject={TITLE} {} build {build}",
-            channel.name()
-        ))
+        .arg(format!("--subject={}", subject(channel, build)))
         .arg("--no-update-summary")
         .arg(repo(pages))
-        .arg(app)
+        .arg(app_ref(spec, channel))
 }
 
 /// The signed summary, pruned to [`PRUNE_DEPTH`] parents per branch, with
@@ -374,14 +387,16 @@ fn finish<T>(
 }
 
 /// `stage`: decides whether to publish, then probes the live repo,
-/// mirrors it when there is one, and imports the plain bundle. The
+/// mirrors it when there is one, and imports the plain bundle (none for a
+/// promoted channel, which needs the live repo it copies from). The
 /// secret's availability is [`SECRET_VAR`] being set, or
 /// [`SECRET_SET_VAR`] being `true`: `stage` itself never holds it.
 ///
 /// # Errors
 ///
-/// A refused committed key, a failed probe, or a failed program or file
-/// step.
+/// A refused committed key, a bundle directory given for a promoted
+/// channel or missing for another, a failed probe, no live repo to
+/// promote from, or a failed program or file step.
 pub fn stage_repo(
     process: &mut impl Process,
     files: &mut impl Files,
@@ -401,8 +416,17 @@ pub fn stage_repo(
     );
     let staged = decision.and_then(|decision| match decision {
         Decision::Skip(skip) => Ok(Outcome::Skipped(skip)),
-        Decision::Publish { .. } => {
+        Decision::Publish { channel, .. } => {
+            if let Some(refusal) = bundle_dir_refusal(Some(channel), paths.bundle_dir.is_some()) {
+                return Err(RepoError::BundleDir(refusal));
+            }
             let live = probe::live_from_probe(&host.url, process.run(&probe::probe(&host.url)))?;
+            if let (Some(from), Live::Absent) = (channel.promoted_from(), live) {
+                return Err(RepoError::NoLiveRepo {
+                    url: host.url.clone(),
+                    from,
+                });
+            }
             run_steps(&stage_steps(host, paths, &key_file, live), process, files)?;
             Ok(Outcome::Staged {
                 url: host.url.clone(),
@@ -418,15 +442,18 @@ pub fn stage_repo(
 }
 
 /// `sign`: decides again, imports the secret, checks it is the committed
-/// key's, commits the staged build onto the channel's branch, signs,
-/// prunes and makes deltas, writes the `.flatpakref` and the
-/// repo-following bundle, then checks the tree fits Pages. Any failure
+/// key's, commits the staged build onto the channel's branch (for a
+/// promoted channel, the commit of the build on the branch it is promoted
+/// from, copied with no build: [`promote`]), signs, prunes and makes
+/// deltas, writes the `.flatpakref` of every channel the repo serves and
+/// the repo-following bundle, then checks the tree fits Pages. Any failure
 /// fails the job, so nothing it wrote is uploaded.
 ///
 /// # Errors
 ///
 /// A refused committed key or secret, a secret that isn't the committed
-/// key's, a tree too large for Pages, or a failed program or file step.
+/// key's, a promoted build the branch it comes from doesn't hold, a tree
+/// too large for Pages, or a failed program or file step.
 pub fn sign_repo(
     process: &mut impl Process,
     files: &mut impl Files,
@@ -485,12 +512,24 @@ fn publish(
             secret: fingerprint,
         });
     }
-    let flatpakref = paths.pages.join(flatpakref_name(channel));
-    let bundle = paths.dist.join(ASSET);
+    let from = match channel.promoted_from() {
+        None => channel,
+        Some(from) => {
+            let log = bundle::run(process, &promote::log(spec, from, &paths.pages))?;
+            let checksum = find_build(&String::from_utf8_lossy(&log), from, build)?;
+            run_steps(
+                &copy_steps(spec, from, &paths.work, &paths.pages, &checksum),
+                process,
+                files,
+            )?;
+            from
+        }
+    };
     run_steps(
         &[
             Step::Run(commit_from(
                 spec,
+                from,
                 channel,
                 &paths.work,
                 &paths.pages,
@@ -498,30 +537,52 @@ fn publish(
                 build,
             )),
             Step::Run(update_repo(&paths.work, &paths.pages, &fingerprint)),
-            Step::Write {
-                path: flatpakref.clone(),
-                bytes: flatpakref::render(spec, channel, &host.url, key).into_bytes(),
-            },
-            Step::CreateDir(paths.dist.clone()),
-            Step::Run(build_bundle(
-                spec,
-                channel,
-                &host.url,
-                key_file,
-                &paths.pages,
-                &paths.dist,
-            )),
-            // ostree's scratch space, not published. ostree can't open a
-            // repo without it, so it goes after the last tool that opens
-            // the repo.
-            Step::RemoveDir(repo(&paths.pages).join("tmp")),
         ],
+        process,
+        files,
+    )?;
+    let listed = bundle::run(process, &promote::refs(&paths.pages))?;
+    let listed = String::from_utf8_lossy(&listed);
+    let mut flatpakrefs = Vec::new();
+    let mut steps = Vec::new();
+    for served in served_channels(spec, &parse_refs(&listed), channel) {
+        let path = paths.pages.join(flatpakref_name(served));
+        steps.push(Step::Write {
+            path: path.clone(),
+            bytes: flatpakref::render(spec, served, &host.url, key).into_bytes(),
+        });
+        flatpakrefs.push(path);
+    }
+    let bundle = paths.dist.join(ASSET);
+    steps.extend([Step::CreateDir(paths.dist.clone())]);
+    run_steps(
+        &[
+            steps,
+            vec![
+                Step::Run(build_bundle(
+                    spec,
+                    channel,
+                    &host.url,
+                    key_file,
+                    &paths.pages,
+                    &paths.dist,
+                )),
+                // ostree's scratch space, not published. ostree can't open a
+                // repo without it, so it goes after the last tool that opens
+                // the repo.
+                Step::RemoveDir(repo(&paths.pages).join("tmp")),
+            ],
+        ]
+        .concat(),
         process,
         files,
     )?;
     let tree = bundle::run(process, &probe::listing(&paths.pages))?;
     probe::check_size(&probe::parse_listing(&tree)?)?;
-    Ok(Outcome::Published { flatpakref, bundle })
+    Ok(Outcome::Published {
+        flatpakrefs,
+        bundle,
+    })
 }
 
 #[cfg(test)]
@@ -570,7 +631,7 @@ mod tests {
 
     fn stage_paths() -> StagePaths {
         StagePaths {
-            bundle_dir: base().join("plain"),
+            bundle_dir: Some(base().join("plain")),
             work: base().join("fr-work"),
             pages: base().join("fr-pages"),
         }
@@ -885,8 +946,8 @@ mod tests {
                     .args(["build-import-bundle", "--no-update-summary"])
                     .arg(&src)
                     .arg(
-                        paths
-                            .bundle_dir
+                        base()
+                            .join("plain")
                             .join("ev-nova-x86_64-unknown-linux-gnu.flatpak"),
                     ),
             ),
@@ -1096,7 +1157,7 @@ mod tests {
                 Invocation::new("flatpak")
                     .args(["build-import-bundle", "--no-update-summary"])
                     .arg(&src)
-                    .arg(paths.bundle_dir.join(ASSET)),
+                    .arg(base().join("plain").join(ASSET)),
                 "`flatpak build-import-bundle --no-update-summary",
             ),
         ];
@@ -1169,6 +1230,7 @@ mod tests {
                     ])
                     .arg(&repo),
             ),
+            Event::Run(ostree_at(&repo, &["refs"]).captured()),
             Event::Write(
                 paths.pages.join("ev-nova-nightly.flatpakref"),
                 flatpakref::render(&spec, Channel::Nightly, URL, &committed()).into_bytes(),
@@ -1200,11 +1262,367 @@ mod tests {
         assert_eq!(
             ran.result.as_ref().expect("published"),
             &Outcome::Published {
-                flatpakref: paths.pages.join("ev-nova-nightly.flatpakref"),
+                flatpakrefs: vec![paths.pages.join("ev-nova-nightly.flatpakref")],
                 bundle: paths.dist.join(ASSET),
             }
         );
         assert_eq!(ran.events, sign_events());
+    }
+
+    // Every channel's .flatpakref, on every publish.
+
+    /// `answers`, with `ostree refs` printing `refs` and `ostree log`
+    /// printing `log`.
+    fn answers_with(
+        refs: &'static str,
+        log: &'static str,
+    ) -> impl Fn(&Invocation) -> Option<Result<Vec<u8>, RunError>> + 'static {
+        let base = answers("200", FPR);
+        move |i| {
+            let has = |word: &str| i.args.iter().any(|a| a == word);
+            if i.program == "ostree" && has("refs") && i.args.len() == 2 {
+                Some(Ok(refs.as_bytes().to_vec()))
+            } else if i.program == "ostree" && has("log") {
+                Some(Ok(log.as_bytes().to_vec()))
+            } else {
+                base(i)
+            }
+        }
+    }
+
+    const BOTH_REFS: &str = "appstream/x86_64\napp/io.example.nova/x86_64/beta\n\
+                             app/io.example.nova/x86_64/nightly\nappstream2/x86_64\n";
+
+    fn written_refs(ran: &Ran) -> Vec<(PathBuf, Vec<u8>)> {
+        ran.events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Write(path, bytes)
+                    if path.extension().is_some_and(|x| x == "flatpakref") =>
+                {
+                    Some((path.clone(), bytes.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_nightly_publish_over_a_repo_with_beta_keeps_both_flatpakrefs() {
+        let paths = sign_paths();
+        let ran = sign(doubles(answers_with(BOTH_REFS, "")), &sign_env(), &host());
+        let nightly = paths.pages.join("ev-nova-nightly.flatpakref");
+        let beta = paths.pages.join("ev-nova-beta.flatpakref");
+        assert_eq!(
+            ran.result.as_ref().expect("published"),
+            &Outcome::Published {
+                flatpakrefs: vec![nightly.clone(), beta.clone()],
+                bundle: paths.dist.join(ASSET),
+            }
+        );
+        assert_eq!(
+            written_refs(&ran),
+            [
+                (
+                    nightly,
+                    flatpakref::render(&spec(), Channel::Nightly, URL, &committed()).into_bytes()
+                ),
+                (
+                    beta,
+                    flatpakref::render(&spec(), Channel::Beta, URL, &committed()).into_bytes()
+                ),
+            ]
+        );
+        // The nightly's own sequence is unchanged by beta's ref.
+        assert!(
+            !ran.ran("ostree", "log")
+                && !ran
+                    .runs()
+                    .iter()
+                    .any(|i| starts(i, "ostree", &["pull-local"]))
+        );
+    }
+
+    #[test]
+    fn a_nightly_publish_over_a_repo_without_beta_writes_only_its_own() {
+        let refs = "app/io.example.nova/x86_64/nightly\nappstream/x86_64\n";
+        let ran = sign(doubles(answers_with(refs, "")), &sign_env(), &host());
+        assert_eq!(
+            written_refs(&ran)
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect::<Vec<_>>(),
+            [sign_paths().pages.join("ev-nova-nightly.flatpakref")]
+        );
+    }
+
+    // A promotion onto beta.
+
+    const PROMOTED: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+
+    /// The nightly branch's log: the head (build 20261029000000), `BUILD`'s
+    /// commit, and an older one.
+    const NIGHTLY_LOG: &str = "commit 1111111111111111111111111111111111111111111111111111111111111111\n\
+         Parent:  2222222222222222222222222222222222222222222222222222222222222222\n\
+         ContentChecksum:  aaaa\n\
+         Date:  2026-10-29 00:00:00 +0000\n\
+         \n    EV Nova nightly build 20261029000000\n\n\
+         commit 2222222222222222222222222222222222222222222222222222222222222222\n\
+         Parent:  3333333333333333333333333333333333333333333333333333333333333333\n\
+         Date:  2026-10-28 12:34:56 +0000\n\
+         \n    EV Nova nightly build 20261028123456\n\n\
+         commit 3333333333333333333333333333333333333333333333333333333333333333\n\
+         Date:  2026-10-27 00:00:00 +0000\n\
+         \n    EV Nova nightly build 20261027000000\n\n\
+         << History beyond this commit not fetched >>\n";
+
+    fn beta_host() -> RepoHost {
+        RepoHost {
+            channel: Some(Channel::Beta),
+            ..host()
+        }
+    }
+
+    fn beta_stage_paths() -> StagePaths {
+        StagePaths {
+            bundle_dir: None,
+            ..stage_paths()
+        }
+    }
+
+    #[test]
+    fn a_beta_stage_mirrors_the_live_repo_and_imports_nothing() {
+        let paths = beta_stage_paths();
+        let ran = run_with(doubles(answers("200", FPR)), |p, f| {
+            stage_repo(p, f, &stage_env(), &beta_host(), &paths)
+        });
+        assert_eq!(
+            ran.result.as_ref().expect("staged"),
+            &Outcome::Staged {
+                url: URL.into(),
+                live: Live::Present
+            }
+        );
+        let repo = paths.pages.join("repo");
+        let mut expected = vec![metadata_event()];
+        expected.extend(key_events(&paths.work));
+        expected.extend([
+            Event::Run(probe::probe(URL)),
+            Event::RemoveDir(repo.clone()),
+            Event::CreateDir(paths.pages.clone()),
+            Event::Run(ostree_at(&repo, &["init", "--mode=archive"])),
+            Event::Run(
+                ostree_at(&repo, &["remote", "add"])
+                    .arg(flag("gpg-import", &key_file()))
+                    .args(["--set=gpg-verify-summary=true", "live", URL]),
+            ),
+            Event::Run(ostree_at(&repo, &["pull", "--mirror", "--depth=2", "live"])),
+            Event::Run(ostree_at(&repo, &["remote", "delete", "live"])),
+        ]);
+        expected.extend(cleanup_events(&paths.work, false));
+        assert_eq!(ran.events, expected);
+        assert!(!ran.ran("flatpak", "build-import-bundle"));
+    }
+
+    #[test]
+    fn a_beta_stage_with_no_live_repo_is_an_error() {
+        let paths = beta_stage_paths();
+        let ran = run_with(doubles(answers("404", FPR)), |p, f| {
+            stage_repo(p, f, &stage_env(), &beta_host(), &paths)
+        });
+        assert!(
+            matches!(&ran.result, Err(RepoError::NoLiveRepo { url, from: Channel::Nightly }) if url == URL),
+            "{:?}",
+            ran.result
+        );
+        assert!(
+            ran.message().contains("no live Flatpak repo"),
+            "{}",
+            ran.message()
+        );
+        assert!(!ran.runs().iter().any(|i| i.program == "ostree"));
+        assert_eq!(
+            ran.events[ran.events.len() - 2..],
+            cleanup_events(&paths.work, false)[..]
+        );
+    }
+
+    #[test]
+    fn a_stage_whose_bundle_dir_doesnt_fit_the_channel_stages_nothing() {
+        for (host, paths, refusal) in [
+            (beta_host(), stage_paths(), super::super::BUNDLE_DIR_REFUSED),
+            (host(), beta_stage_paths(), super::super::BUNDLE_DIR_NEEDED),
+        ] {
+            let ran = run_with(doubles(answers("200", FPR)), |p, f| {
+                stage_repo(p, f, &stage_env(), &host, &paths)
+            });
+            assert!(
+                matches!(ran.result, Err(RepoError::BundleDir(r)) if r == refusal),
+                "{:?}",
+                ran.result
+            );
+            assert!(!ran.ran("curl", "--fail") && !ran.runs().iter().any(|i| i.program == "curl"));
+        }
+    }
+
+    fn beta_sign(
+        respond: impl Fn(&Invocation) -> Option<Result<Vec<u8>, RunError>> + 'static,
+    ) -> Ran {
+        sign(doubles(respond), &sign_env(), &beta_host())
+    }
+
+    #[test]
+    fn a_beta_sign_copies_the_nightly_commit_onto_beta_without_building() {
+        let spec = spec();
+        let paths = sign_paths();
+        let home = paths.work.join("gnupg");
+        let secret = paths.work.join("secret");
+        let repo = paths.pages.join("repo");
+        let src = paths.work.join("src");
+        let ran = beta_sign(answers_with(BOTH_REFS, NIGHTLY_LOG));
+        let nightly_ref = "app/io.example.nova/x86_64/nightly";
+        let beta_ref = "app/io.example.nova/x86_64/beta";
+        let mut expected = vec![metadata_event()];
+        expected.extend(key_events(&paths.work));
+        expected.extend([
+            Event::RemoveDir(secret.clone()),
+            Event::CreateDir(secret.clone()),
+            Event::WriteSecret(secret.join("key.gpg"), SECRET.to_vec()),
+            Event::Run(gpg_at(&home, &["--import"]).arg(secret.join("key.gpg"))),
+            Event::RemoveDir(secret.clone()),
+            Event::Run(gpg_at(&home, &["--with-colons", "--list-secret-keys"]).captured()),
+            Event::Run(ostree_at(&repo, &["log", nightly_ref]).captured()),
+            Event::RemoveDir(src.clone()),
+            Event::Run(ostree_at(&src, &["init", "--mode=archive"])),
+            Event::Run(ostree_at(&src, &["pull-local"]).arg(&repo).arg(PROMOTED)),
+            Event::Run(ostree_at(
+                &src,
+                &["refs", &format!("--create={nightly_ref}"), PROMOTED],
+            )),
+            Event::Run(
+                Invocation::new("flatpak")
+                    .arg("build-commit-from")
+                    .arg(flag("src-repo", &src))
+                    .arg(format!("--src-ref={nightly_ref}"))
+                    .arg(format!("--gpg-sign={FPR}"))
+                    .arg(flag("gpg-homedir", &home))
+                    .arg(format!("--subject=EV Nova beta build {BUILD}"))
+                    .arg("--no-update-summary")
+                    .arg(&repo)
+                    .arg(beta_ref),
+            ),
+            Event::Run(
+                Invocation::new("flatpak")
+                    .arg("build-update-repo")
+                    .arg(format!("--gpg-sign={FPR}"))
+                    .arg(flag("gpg-homedir", &home))
+                    .args([
+                        "--generate-static-deltas",
+                        "--prune",
+                        "--prune-depth=2",
+                        "--title=EV Nova",
+                    ])
+                    .arg(&repo),
+            ),
+            Event::Run(ostree_at(&repo, &["refs"]).captured()),
+            Event::Write(
+                paths.pages.join("ev-nova-nightly.flatpakref"),
+                flatpakref::render(&spec, Channel::Nightly, URL, &committed()).into_bytes(),
+            ),
+            Event::Write(
+                paths.pages.join("ev-nova-beta.flatpakref"),
+                flatpakref::render(&spec, Channel::Beta, URL, &committed()).into_bytes(),
+            ),
+            Event::CreateDir(paths.dist.clone()),
+            Event::Run(
+                Invocation::new("flatpak")
+                    .args([
+                        "build-bundle",
+                        "--runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo",
+                        &format!("--repo-url={URL}"),
+                    ])
+                    .arg(flag("gpg-keys", &key_file()))
+                    .arg(&repo)
+                    .arg(paths.dist.join("ev-nova-x86_64-unknown-linux-gnu.flatpak"))
+                    .args(["io.example.nova", "beta"]),
+            ),
+            Event::RemoveDir(repo.join("tmp")),
+            Event::Run(probe::listing(&paths.pages)),
+        ]);
+        expected.extend(cleanup_events(&paths.work, true));
+        assert_eq!(ran.events, expected);
+        assert_eq!(
+            ran.result.as_ref().expect("published"),
+            &Outcome::Published {
+                flatpakrefs: vec![
+                    paths.pages.join("ev-nova-nightly.flatpakref"),
+                    paths.pages.join("ev-nova-beta.flatpakref"),
+                ],
+                bundle: paths.dist.join(ASSET),
+            }
+        );
+        for (program, first) in [
+            ("flatpak-builder", ""),
+            ("flatpak", "build-import-bundle"),
+            ("flatpak", "build-export"),
+        ] {
+            assert!(
+                !ran.runs().iter().any(|i| i.program == program
+                    && (first.is_empty() || i.args.first().is_some_and(|a| a == first))),
+                "{program} {first} ran"
+            );
+        }
+    }
+
+    #[test]
+    fn a_beta_sign_of_a_build_the_nightly_branch_lacks_names_what_it_holds() {
+        let ran = sign(
+            doubles(answers_with(BOTH_REFS, NIGHTLY_LOG)),
+            &env(&[
+                (SECRET_VAR, &secret_text()),
+                (build_id::VAR, "20261025000000"),
+            ]),
+            &beta_host(),
+        );
+        assert_eq!(
+            ran.message(),
+            "the nightly branch holds no build 20261025000000; it holds 20261027000000, \
+             20261028123456 and 20261029000000"
+        );
+        assert!(!ran.runs().iter().any(|i| i.program == "flatpak"));
+        assert!(!ran.ran_pull_local());
+        assert_eq!(
+            ran.events[ran.events.len() - 3..],
+            cleanup_events(&sign_paths().work, true)[..]
+        );
+    }
+
+    #[test]
+    fn a_failing_beta_copy_stops_before_committing_naming_its_command() {
+        for (first, shown) in [("log", "`ostree --repo="), ("pull-local", "pull-local")] {
+            let base = answers_with(BOTH_REFS, NIGHTLY_LOG);
+            let ran = beta_sign(move |i| {
+                if i.program == "ostree" && i.args.iter().any(|a| a == first) {
+                    Some(Err(RunError::Failed(Some(1))))
+                } else {
+                    base(i)
+                }
+            });
+            let message = ran.message();
+            assert!(message.contains(shown), "{first}: {message}");
+            assert!(
+                !ran.runs().iter().any(|i| i.program == "flatpak"),
+                "{first}"
+            );
+        }
+    }
+
+    impl Ran {
+        fn ran_pull_local(&self) -> bool {
+            self.runs()
+                .iter()
+                .any(|i| i.program == "ostree" && i.args.iter().any(|a| a == "pull-local"))
+        }
     }
 
     #[test]

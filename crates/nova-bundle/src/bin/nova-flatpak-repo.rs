@@ -1,17 +1,21 @@
-//! `nova-flatpak-repo stage --bundle-dir <DIR> --work <DIR> --pages <DIR>`
-//! and `nova-flatpak-repo sign --work <DIR> --pages <DIR> --dist <DIR>`:
+//! `nova-flatpak-repo stage --work <DIR> --pages <DIR>`, with
+//! `--bundle-dir <DIR>` for the nightly, and
+//! `nova-flatpak-repo sign --work <DIR> --pages <DIR> --dist <DIR>`:
 //! CI's `flatpak-repo` job, which publishes the GPG-signed Flatpak
 //! repository the Pages site serves at `/flatpak/`, on x86-64 Linux only.
 //! See `nova_bundle::linux::flatpak::repo`.
 //!
 //! `stage` holds no secret and does all the network I/O: it mirrors the
 //! live repo from Pages, GPG-verified against the committed
-//! `packaging/linux/flatpak/repo-key.asc`, and imports the plain bundle in
-//! `--bundle-dir`. `sign` holds the secret key (`FLATPAK_SIGNING_KEY`)
-//! alone: it commits the build onto `NOVA_CHANNEL`'s branch, signs,
-//! prunes and makes static deltas, writes `ev-nova-<channel>.flatpakref`
-//! beside the repo in `--pages`, and the repo-following bundle into
-//! `--dist`. Run the built binary with cargo on `PATH`, as CI does, so
+//! `packaging/linux/flatpak/repo-key.asc`, and, for the nightly, imports
+//! the plain bundle in `--bundle-dir`. For beta (`NOVA_CHANNEL=beta`) it
+//! takes no `--bundle-dir` and imports nothing. `sign` holds the secret
+//! key (`FLATPAK_SIGNING_KEY`) alone: it commits the build onto
+//! `NOVA_CHANNEL`'s branch (for beta, the nightly branch's commit of the
+//! build `NOVA_BUILD_ID` names, copied with no rebuild), signs, prunes and
+//! makes static deltas, writes `ev-nova-<channel>.flatpakref` for every
+//! channel the repo holds beside the repo in `--pages`, and the
+//! repo-following bundle into `--dist`. Run the built binary with cargo on `PATH`, as CI does, so
 //! nothing compiles beside the key: it reads the spec with `$CARGO
 //! metadata` (else `cargo metadata`), and the build ID from
 //! `NOVA_BUILD_ID` (else HEAD's committer time). `mise run flatpak-repo
@@ -43,20 +47,21 @@ fn main() -> ExitCode {
             return ExitCode::from(USAGE_STATUS);
         }
     };
-    let command = match command(
-        env::args_os().skip(1).collect(),
-        &cwd,
-        env::consts::OS,
-        env::consts::ARCH,
-    ) {
-        Ok(command) => command,
+    let channel = match channel::from_env(&StdEnv) {
+        Ok(channel) => channel,
         Err(e) => {
             eprintln!("nova-flatpak-repo: {e}");
             return ExitCode::from(USAGE_STATUS);
         }
     };
-    let channel = match channel::from_env(&StdEnv) {
-        Ok(channel) => channel,
+    let command = match command(
+        env::args_os().skip(1).collect(),
+        &cwd,
+        env::consts::OS,
+        env::consts::ARCH,
+        channel,
+    ) {
+        Ok(command) => command,
         Err(e) => {
             eprintln!("nova-flatpak-repo: {e}");
             return ExitCode::from(USAGE_STATUS);

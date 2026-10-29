@@ -63,12 +63,14 @@ pub mod host;
 pub mod key;
 pub mod plan;
 pub mod probe;
+pub mod promote;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use self::key::KeyError;
 use self::probe::{ProbeError, SizeError};
+use self::promote::NotOnBranch;
 use crate::appcast::Channel;
 use crate::appcast::prune::KEEP_BUILDS;
 use crate::bundle::BundleError;
@@ -228,6 +230,48 @@ pub enum RepoError {
     /// The tree doesn't fit Pages.
     #[error(transparent)]
     Size(#[from] SizeError),
+    /// `stage`'s bundle directory doesn't fit the channel
+    /// ([`bundle_dir_refusal`]).
+    #[error("{0}")]
+    BundleDir(&'static str),
+    /// A promotion found no live repo to copy its commit from.
+    #[error(
+        "no live Flatpak repo at {url} to promote from: {} publishes onto it first",
+        from.name()
+    )]
+    NoLiveRepo {
+        /// The repo's URL.
+        url: String,
+        /// The channel promoted from.
+        from: Channel,
+    },
+    /// The branch a promotion copies from holds no commit of the build.
+    #[error(transparent)]
+    NotOnBranch(#[from] NotOnBranch),
+}
+
+/// `stage` imports the plain bundle for a channel built from `main` (the
+/// nightly, or none), so it needs `--bundle-dir`.
+pub const BUNDLE_DIR_NEEDED: &str = "stage needs --bundle-dir <DIR> for a channel built from \
+     main (the nightly): it imports the plain bundle the flatpak job built";
+
+/// `stage` imports nothing for a promoted channel, so it refuses
+/// `--bundle-dir`.
+pub const BUNDLE_DIR_REFUSED: &str = "stage takes no --bundle-dir for a promoted channel \
+     (beta): sign copies the nightly's commit, and nothing is imported";
+
+/// Why `stage`'s bundle directory doesn't fit `channel`, if it doesn't:
+/// a promoted channel ([`Channel::promoted_from`]) takes none, and every
+/// other (the nightly, or no channel) needs one. `given` is whether one
+/// was.
+#[must_use]
+pub fn bundle_dir_refusal(channel: Option<Channel>, given: bool) -> Option<&'static str> {
+    let promoted = channel.and_then(Channel::promoted_from).is_some();
+    match (promoted, given) {
+        (true, true) => Some(BUNDLE_DIR_REFUSED),
+        (false, false) => Some(BUNDLE_DIR_NEEDED),
+        _ => None,
+    }
 }
 
 /// What the edge supplies to both steps.
@@ -258,8 +302,9 @@ impl RepoHost {
 /// `stage`'s directories.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StagePaths {
-    /// Where the `flatpak` job's plain bundle is.
-    pub bundle_dir: PathBuf,
+    /// Where the `flatpak` job's plain bundle is: `None` for a promoted
+    /// channel, which imports nothing ([`bundle_dir_refusal`]).
+    pub bundle_dir: Option<PathBuf>,
     /// The scratch tree.
     pub work: PathBuf,
     /// The tree served at `/flatpak/`.
@@ -307,6 +352,36 @@ mod tests {
             app_ref(&spec, Channel::Nightly),
             "app/io.example.nova/x86_64/nightly"
         );
+        assert_eq!(
+            app_ref(&spec, Channel::Beta),
+            "app/io.example.nova/x86_64/beta"
+        );
+    }
+
+    #[test]
+    fn the_beta_flatpakref_is_named_for_its_channel_beside_the_nightly_s() {
+        assert_eq!(flatpakref_name(Channel::Beta), "ev-nova-beta.flatpakref");
+        assert_eq!(
+            flatpakref_url(Channel::Beta),
+            "https://edpaget.github.io/ev-nova/flatpak/ev-nova-beta.flatpakref"
+        );
+    }
+
+    #[test]
+    fn only_a_promoted_channel_stages_without_a_bundle_dir() {
+        assert_eq!(bundle_dir_refusal(Some(Channel::Beta), false), None);
+        assert_eq!(
+            bundle_dir_refusal(Some(Channel::Beta), true),
+            Some(BUNDLE_DIR_REFUSED)
+        );
+        for channel in [None, Some(Channel::Nightly)] {
+            assert_eq!(bundle_dir_refusal(channel, true), None, "{channel:?}");
+            assert_eq!(
+                bundle_dir_refusal(channel, false),
+                Some(BUNDLE_DIR_NEEDED),
+                "{channel:?}"
+            );
+        }
     }
 
     #[test]

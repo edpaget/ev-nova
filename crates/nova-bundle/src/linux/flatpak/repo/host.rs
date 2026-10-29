@@ -7,13 +7,14 @@ use std::path::{Path, PathBuf};
 
 use super::plan::Outcome;
 use super::probe::Live;
-use super::{NOT_PUBLISHED, RepoError, SignPaths, StagePaths};
+use super::{NOT_PUBLISHED, RepoError, SignPaths, StagePaths, bundle_dir_refusal};
+use crate::appcast::Channel;
 use crate::linux::host::{PackHostError, check_platform};
 
 /// The tool's usage line.
-pub const USAGE: &str = "usage: nova-flatpak-repo stage --bundle-dir <DIR> --work <DIR> \
+pub const USAGE: &str = "usage: nova-flatpak-repo stage [--bundle-dir <DIR>] --work <DIR> \
      --pages <DIR> | nova-flatpak-repo sign --work <DIR> --pages <DIR> --dist <DIR>   \
-     (run it as `mise run flatpak-repo -- ...`)";
+     (--bundle-dir for the nightly, none for beta; run it as `mise run flatpak-repo -- ...`)";
 
 /// The tool's name in a refusal.
 const TOOL: &str = "the Flatpak repo publisher (flatpak, ostree)";
@@ -39,25 +40,35 @@ pub enum Command {
 
 /// The command from the arguments after the program name and the working
 /// directory, which relative paths are taken against, on the host `os`
-/// and `arch` (`std::env::consts`), which must be x86-64 Linux.
+/// and `arch` (`std::env::consts`), which must be x86-64 Linux, for
+/// `channel` (`NOVA_CHANNEL`): `stage` takes `--bundle-dir` for a channel
+/// built from `main` and refuses it for a promoted one
+/// ([`bundle_dir_refusal`]).
 ///
 /// # Errors
 ///
-/// The wrong host, an unknown subcommand, or a missing, repeated or
-/// unknown option.
+/// The wrong host, an unknown subcommand, a missing, repeated or unknown
+/// option, or a `--bundle-dir` that doesn't fit the channel.
 pub fn command(
     args: Vec<OsString>,
     cwd: &Path,
     os: &str,
     arch: &str,
+    channel: Option<Channel>,
 ) -> Result<Command, PackHostError> {
     check_platform(TOOL, os, arch)?;
     let mut args = args.into_iter();
     let usage = PackHostError::Usage(USAGE);
     match args.next().as_ref().and_then(|a| a.to_str()) {
         Some("stage") => {
-            let [bundle_dir, work, pages] =
-                options(args, cwd, ["--bundle-dir", "--work", "--pages"]).ok_or(usage)?;
+            let [bundle_dir, Some(work), Some(pages)] =
+                options(args, cwd, ["--bundle-dir", "--work", "--pages"]).ok_or(usage)?
+            else {
+                return Err(PackHostError::Usage(USAGE));
+            };
+            if let Some(refusal) = bundle_dir_refusal(channel, bundle_dir.is_some()) {
+                return Err(PackHostError::Usage(refusal));
+            }
             Ok(Command::Stage(StagePaths {
                 bundle_dir,
                 work,
@@ -65,21 +76,25 @@ pub fn command(
             }))
         }
         Some("sign") => {
-            let [work, pages, dist] =
-                options(args, cwd, ["--work", "--pages", "--dist"]).ok_or(usage)?;
+            let [Some(work), Some(pages), Some(dist)] =
+                options(args, cwd, ["--work", "--pages", "--dist"]).ok_or(usage)?
+            else {
+                return Err(PackHostError::Usage(USAGE));
+            };
             Ok(Command::Sign(SignPaths { work, pages, dist }))
         }
         _ => Err(usage),
     }
 }
 
-/// Each of `names`, exactly once, in any order, with a path taken
-/// against `cwd`; `None` for anything else.
+/// Each of `names` given at most once, in any order, with a path taken
+/// against `cwd`; `None` for a repeated or unknown option or a missing
+/// value. The caller says which are required.
 fn options<const N: usize>(
     mut args: impl Iterator<Item = OsString>,
     cwd: &Path,
     names: [&str; N],
-) -> Option<[PathBuf; N]> {
+) -> Option<[Option<PathBuf>; N]> {
     let mut given: [Option<PathBuf>; N] = std::array::from_fn(|_| None);
     while let Some(option) = args.next() {
         let index = names.iter().position(|n| option.to_str() == Some(n))?;
@@ -88,8 +103,7 @@ fn options<const N: usize>(
             return None;
         }
     }
-    let all: Vec<PathBuf> = given.into_iter().collect::<Option<_>>()?;
-    all.try_into().ok()
+    Some(given)
 }
 
 /// What `main` prints and exits with.
@@ -143,10 +157,17 @@ pub fn report(command: &Command, result: &Result<Outcome, RepoError>) -> Report 
             )],
             Live::Present => vec![format!("mirrored {url}")],
         }),
-        (_, Ok(Outcome::Published { flatpakref, bundle })) => ok(vec![
-            flatpakref.display().to_string(),
-            bundle.display().to_string(),
-        ]),
+        (
+            _,
+            Ok(Outcome::Published {
+                flatpakrefs,
+                bundle,
+            }),
+        ) => ok(flatpakrefs
+            .iter()
+            .chain([bundle])
+            .map(|path| path.display().to_string())
+            .collect()),
     }
 }
 
@@ -161,13 +182,17 @@ mod tests {
     }
 
     fn parse(args: &[&str]) -> Result<Command, PackHostError> {
+        parse_for(args, Some(Channel::Nightly))
+    }
+
+    fn parse_for(args: &[&str], channel: Option<Channel>) -> Result<Command, PackHostError> {
         let args = args.iter().map(OsString::from).collect();
-        command(args, &cwd(), "linux", "x86_64")
+        command(args, &cwd(), "linux", "x86_64", channel)
     }
 
     fn stage_paths() -> StagePaths {
         StagePaths {
-            bundle_dir: cwd().join("plain"),
+            bundle_dir: Some(cwd().join("plain")),
             work: cwd().join("w"),
             pages: cwd().join("p"),
         }
@@ -206,11 +231,55 @@ mod tests {
             "plain".into(),
         ];
         assert_eq!(
-            command(args, &cwd(), "linux", "x86_64"),
+            command(args, &cwd(), "linux", "x86_64", Some(Channel::Nightly)),
             Ok(Command::Stage(StagePaths {
                 work: absolute,
                 ..stage_paths()
             }))
+        );
+    }
+
+    #[test]
+    fn stage_needs_the_bundle_dir_for_the_nightly_and_refuses_it_for_beta() {
+        let with = [
+            "stage",
+            "--bundle-dir",
+            "plain",
+            "--work",
+            "w",
+            "--pages",
+            "p",
+        ];
+        let without = ["stage", "--work", "w", "--pages", "p"];
+        for channel in [None, Some(Channel::Nightly)] {
+            assert_eq!(
+                parse_for(&with, channel),
+                Ok(Command::Stage(stage_paths())),
+                "{channel:?}"
+            );
+            assert_eq!(
+                parse_for(&without, channel),
+                Err(PackHostError::Usage(super::super::BUNDLE_DIR_NEEDED)),
+                "{channel:?}"
+            );
+        }
+        assert_eq!(
+            parse_for(&without, Some(Channel::Beta)),
+            Ok(Command::Stage(StagePaths {
+                bundle_dir: None,
+                ..stage_paths()
+            }))
+        );
+        let refused = parse_for(&with, Some(Channel::Beta)).expect_err("refused");
+        assert_eq!(
+            refused,
+            PackHostError::Usage(super::super::BUNDLE_DIR_REFUSED)
+        );
+        assert!(refused.to_string().contains("beta"), "{refused}");
+        assert!(
+            super::super::BUNDLE_DIR_NEEDED.contains("--bundle-dir"),
+            "{}",
+            super::super::BUNDLE_DIR_NEEDED
         );
     }
 
@@ -228,7 +297,8 @@ mod tests {
             &[][..],
             &["publish"],
             &["stage"],
-            &["stage", "--work", "w", "--pages", "p"],
+            &["stage", "--bundle-dir", "b", "--pages", "p"],
+            &["stage", "--bundle-dir", "b", "--work", "w"],
             &[
                 "stage",
                 "--bundle-dir",
@@ -266,14 +336,14 @@ mod tests {
     fn a_host_other_than_x86_64_linux_is_refused() {
         let args = || vec!["sign".into()];
         assert_eq!(
-            command(args(), &cwd(), "macos", "aarch64"),
+            command(args(), &cwd(), "macos", "aarch64", None),
             Err(PackHostError::NotLinux {
                 tool: TOOL,
                 os: "macos".to_owned(),
             })
         );
         assert_eq!(
-            command(args(), &cwd(), "linux", "aarch64"),
+            command(args(), &cwd(), "linux", "aarch64", None),
             Err(PackHostError::NotX86_64 {
                 tool: TOOL,
                 arch: "aarch64".to_owned(),
@@ -353,13 +423,14 @@ mod tests {
     }
 
     #[test]
-    fn a_publish_prints_the_ref_and_the_bundle() {
-        let flatpakref = cwd().join("p").join("ev-nova-nightly.flatpakref");
+    fn a_publish_prints_each_ref_and_the_bundle() {
+        let nightly = cwd().join("p").join("ev-nova-nightly.flatpakref");
+        let beta = cwd().join("p").join("ev-nova-beta.flatpakref");
         let bundle = cwd().join("d").join("x.flatpak");
         let report = report(
             &Command::Sign(sign_paths()),
             &Ok(Outcome::Published {
-                flatpakref: flatpakref.clone(),
+                flatpakrefs: vec![nightly.clone(), beta.clone()],
                 bundle: bundle.clone(),
             }),
         );
@@ -367,7 +438,8 @@ mod tests {
         assert_eq!(
             report.stdout,
             [
-                flatpakref.display().to_string(),
+                nightly.display().to_string(),
+                beta.display().to_string(),
                 bundle.display().to_string()
             ]
         );

@@ -26,7 +26,20 @@
 //!    `KEPT_COMMITS` commits after the last;
 //! 5. installs, in a second home, the bundle `sign` built for the first
 //!    changed build, checks its origin remote is the repo's URL, and that
-//!    `flatpak update` takes it to the current head.
+//!    `flatpak update` takes it to the current head;
+//! 6. promotes a held nightly build that isn't the head onto beta, with a
+//!    beta host and no bundle (`nova_bundle::linux::flatpak::repo::promote`),
+//!    and checks the beta head has the nightly commit's tree (`ostree
+//!    diff` prints nothing), its subject names the build, and the nightly
+//!    branch is untouched;
+//! 7. installs `ev-nova-beta.flatpakref` in a third home, onto the `beta`
+//!    branch at its head;
+//! 8. promotes the newer nightly head, and checks `flatpak update` takes
+//!    the beta install to it while the nightly install sees nothing new;
+//! 9. publishes another nightly build after the promotions, and checks the
+//!    mirror kept the `beta` branch and both `.flatpakref`s were written;
+//! 10. promotes a build the nightly branch no longer holds, which fails
+//!     naming the builds it does hold.
 //!
 //! What it finds about flatpak's behaviour (its version, the prune depth,
 //! whether an identical build commits, the bundle's origin) is printed as
@@ -53,8 +66,8 @@ use nova_bundle::channel;
 use nova_bundle::linux::flatpak::repo::plan::{Outcome, sign_repo, stage_repo};
 use nova_bundle::linux::flatpak::repo::probe::Live;
 use nova_bundle::linux::flatpak::repo::{
-    KEPT_COMMITS, PAGES_DIR, REMOTE_NAME, RepoHost, SECRET_SET_VAR, SECRET_VAR, SignPaths,
-    StagePaths, app_ref, flatpakref_name, repo,
+    KEPT_COMMITS, PAGES_DIR, REMOTE_NAME, RepoError, RepoHost, SECRET_SET_VAR, SECRET_VAR,
+    SignPaths, StagePaths, app_ref, flatpakref_name, repo,
 };
 use nova_bundle::linux::flatpak::{ASSET, REMOTE, RUNTIME_REPO};
 use nova_bundle::ports::{Env, Process};
@@ -230,12 +243,52 @@ struct Publisher<'a> {
     runs: usize,
 }
 
+/// What one publish found and wrote.
+struct Published {
+    /// How `stage` found the live repo.
+    live: Live,
+    /// The bundle `sign` built.
+    bundle: PathBuf,
+    /// The `.flatpakref`s `sign` wrote, by file name.
+    flatpakrefs: Vec<String>,
+}
+
 impl Publisher<'_> {
     /// `stage` then `sign` of the bundle in `bundle_dir`, as the build
-    /// `build`, then the deploy: the pages tree becomes the served
-    /// `flatpak/`. Returns how `stage` found the live repo and the bundle
-    /// `sign` built.
+    /// `build`, on the host's channel, then the deploy.
     fn publish(&mut self, bundle_dir: &Path, build: &str) -> (Live, PathBuf) {
+        let host = self.host.clone();
+        let published = self
+            .run(&host, Some(bundle_dir), build)
+            .unwrap_or_else(|e| panic!("publish {}: {e}", self.runs));
+        let own = flatpakref_name(host.channel.expect("a channel"));
+        assert!(
+            published.flatpakrefs.contains(&own),
+            "{own}: {:?}",
+            published.flatpakrefs
+        );
+        (published.live, published.bundle)
+    }
+
+    /// The promotion of `build` onto `channel`: `stage` with no bundle,
+    /// then `sign`, then the deploy; or the error that stopped it, with
+    /// nothing deployed.
+    fn promote(&mut self, channel: Channel, build: &str) -> Result<Published, RepoError> {
+        let host = RepoHost {
+            channel: Some(channel),
+            ..self.host.clone()
+        };
+        self.run(&host, None, build)
+    }
+
+    /// `stage` then `sign` for `host`, as the build `build`, then the
+    /// deploy: the pages tree becomes the served `flatpak/`.
+    fn run(
+        &mut self,
+        host: &RepoHost,
+        bundle_dir: Option<&Path>,
+        build: &str,
+    ) -> Result<Published, RepoError> {
         self.runs += 1;
         let run = self.tmp.join(format!("run-{}", self.runs));
         let (work, pages, dist) = (run.join("work"), run.join("pages"), run.join("dist"));
@@ -245,12 +298,11 @@ impl Publisher<'_> {
             (SECRET_SET_VAR, OsString::from("true")),
         ]));
         let stage = StagePaths {
-            bundle_dir: bundle_dir.to_owned(),
+            bundle_dir: bundle_dir.map(Path::to_owned),
             work: work.clone(),
             pages: pages.clone(),
         };
-        let staged = stage_repo(&mut StdProcess, &mut StdFiles, &env, &self.host, &stage)
-            .unwrap_or_else(|e| panic!("stage {}: {e}", self.runs));
+        let staged = stage_repo(&mut StdProcess, &mut StdFiles, &env, host, &stage)?;
         let Outcome::Staged { live, .. } = staged else {
             panic!("stage {}: {staged:?}", self.runs);
         };
@@ -259,15 +311,20 @@ impl Publisher<'_> {
             pages: pages.clone(),
             dist,
         };
-        let signed = sign_repo(&mut StdProcess, &mut StdFiles, &env, &self.host, &sign)
-            .unwrap_or_else(|e| panic!("sign {}: {e}", self.runs));
-        let Outcome::Published { bundle, flatpakref } = signed else {
+        let signed = sign_repo(&mut StdProcess, &mut StdFiles, &env, host, &sign)?;
+        let Outcome::Published {
+            bundle,
+            flatpakrefs,
+        } = signed
+        else {
             panic!("sign {}: {signed:?}", self.runs);
         };
         // The pages-flatpak artifact's layout: the signed repo, without its
-        // scratch tmp/, beside the ref.
-        assert_eq!(flatpakref, pages.join(flatpakref_name(Channel::Nightly)));
-        assert!(flatpakref.is_file(), "{}", flatpakref.display());
+        // scratch tmp/, beside the refs.
+        for flatpakref in &flatpakrefs {
+            assert_eq!(flatpakref.parent(), Some(pages.as_path()));
+            assert!(flatpakref.is_file(), "{}", flatpakref.display());
+        }
         assert!(repo(&pages).join("config").is_file());
         assert!(repo(&pages).join("summary.sig").is_file());
         assert!(!repo(&pages).join("tmp").exists(), "tmp/ is not published");
@@ -277,7 +334,20 @@ impl Publisher<'_> {
             fs::remove_dir_all(&served).expect("the old deploy removed");
         }
         fs::rename(&pages, &served).expect("deployed");
-        (live, bundle)
+        let flatpakrefs = flatpakrefs
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .expect("a file")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        Ok(Published {
+            live,
+            bundle,
+            flatpakrefs,
+        })
     }
 
     /// The served repo.
@@ -588,6 +658,268 @@ fn publishes_a_signed_repo_that_installs_updates_and_prunes() {
     // follows the repo to build 4.
     the_bundle_follows_the_repo(&bundles[0], &id, &url, &current, &mut problems);
 
+    // 6 to 10. The promotions onto the channel promoted from this one.
+    promotions(&mut publisher, &home, &bundle, &mut problems);
+
     assert!(problems.is_empty(), "{problems:#?}");
     drop(server);
+}
+
+/// Steps 6 to 10, once the publisher's channel's branch holds
+/// `KEPT_COMMITS` builds (`2026102800001{2,3,4}`) and `nightly_home` holds
+/// an install from its `.flatpakref`: run when a channel is promoted from
+/// it, and printed as a finding when none is.
+fn promotions(
+    publisher: &mut Publisher<'_>,
+    nightly_home: &Dirs,
+    bundle: &Path,
+    problems: &mut Vec<String>,
+) {
+    let channel = publisher.host.channel.expect("a channel");
+    let Some(promoted) = Channel::ALL
+        .into_iter()
+        .find(|c| c.promoted_from() == Some(channel))
+    else {
+        eprintln!(
+            "finding: promotion: no channel is promoted from {}",
+            channel.name()
+        );
+        return;
+    };
+    let spec = spec();
+    let id = spec.identifier.clone();
+    let from_app = app_ref(&spec, channel);
+    let served = publisher.repo();
+    let from_head = head(&served, &from_app);
+    let (_, from_log) = commits(&served, &from_app);
+    // The nightly install is current before any promotion.
+    nightly_home.flatpak(&refs(&os(&[
+        "update",
+        "--user",
+        "-y",
+        "--noninteractive",
+        &id,
+    ])));
+    assert_eq!(installed(nightly_home, &id), from_head);
+    let mut p = Promotion {
+        to_app: app_ref(&spec, promoted),
+        publisher,
+        spec,
+        bundle,
+        nightly_home,
+        channel,
+        promoted,
+        id,
+        from_app,
+        from_head,
+        from_log,
+    };
+    let promoted_head = p.promote_a_held_build(problems);
+    let beta_home = home_with_flathub();
+    let _guard = Guard::new(&beta_home, &p.id);
+    p.install_the_promoted_ref(&beta_home, &promoted_head, problems);
+    let newer_head = p.promote_the_newer_head(&beta_home, &promoted_head, problems);
+    p.publish_a_nightly_after(&newer_head);
+    p.promote_a_pruned_build();
+}
+
+/// What the promotions share.
+struct Promotion<'p, 'a> {
+    publisher: &'p mut Publisher<'a>,
+    spec: BundleSpec,
+    /// The plain bundle under test.
+    bundle: &'p Path,
+    /// The home holding the install from the channel's own `.flatpakref`.
+    nightly_home: &'p Dirs,
+    /// The channel the builds were published on.
+    channel: Channel,
+    /// The channel promoted from it.
+    promoted: Channel,
+    id: String,
+    from_app: String,
+    to_app: String,
+    /// The channel's head and log before any promotion.
+    from_head: String,
+    from_log: String,
+}
+
+impl Promotion<'_, '_> {
+    /// Both channels' `.flatpakref` names, in `Channel::ALL`'s order.
+    fn both(&self) -> Vec<String> {
+        [self.channel, self.promoted].map(flatpakref_name).to_vec()
+    }
+
+    /// Step 6: a held build that isn't the head, promoted: the same tree, a
+    /// subject naming it, and the channel's own branch untouched. Returns
+    /// the promoted head.
+    fn promote_a_held_build(&mut self, problems: &mut Vec<String>) -> String {
+        let held = "20261028000013";
+        let published = self
+            .publisher
+            .promote(self.promoted, held)
+            .unwrap_or_else(|e| panic!("promoting {held}: {e}"));
+        eprintln!(
+            "finding: promotion: {held} onto {} wrote {:?}",
+            self.promoted.name(),
+            published.flatpakrefs
+        );
+        assert_eq!(published.live, Live::Present);
+        let served = self.publisher.repo();
+        let promoted_head = head(&served, &self.to_app);
+        let source = commit_with_subject(
+            &self.from_log,
+            &format!("EV Nova {} build {held}", self.channel.name()),
+        );
+        let diff = ostree(&served, &["diff", &source, &promoted_head]);
+        eprintln!("finding: promotion: ostree diff {source} {promoted_head}: {diff:?}");
+        if !diff.trim().is_empty() {
+            problems.push(format!(
+                "the promoted commit's tree differs from {source}: {diff}"
+            ));
+        }
+        let (_, promoted_log) = commits(&served, &self.to_app);
+        let subject = format!("EV Nova {} build {held}", self.promoted.name());
+        if !promoted_log.contains(&subject) {
+            problems.push(format!(
+                "the {} head's subject isn't {subject:?}: {promoted_log}",
+                self.to_app
+            ));
+        }
+        assert_eq!(
+            head(&served, &self.from_app),
+            self.from_head,
+            "the nightly head is untouched"
+        );
+        assert_eq!(
+            commits(&served, &self.from_app).1,
+            self.from_log,
+            "the nightly log is untouched"
+        );
+        assert_eq!(published.flatpakrefs, self.both());
+        promoted_head
+    }
+
+    /// Step 7: installed from the promoted channel's `.flatpakref` in
+    /// `beta_home`: on its branch, at `promoted_head`.
+    fn install_the_promoted_ref(
+        &self,
+        beta_home: &Dirs,
+        promoted_head: &str,
+        problems: &mut Vec<String>,
+    ) {
+        let flatpakref = self
+            .publisher
+            .site
+            .join(PAGES_DIR)
+            .join(flatpakref_name(self.promoted));
+        let url = self.publisher.host.url.clone();
+        install_from_the_ref(
+            beta_home,
+            &flatpakref,
+            &self.id,
+            &url,
+            promoted_head,
+            problems,
+        );
+        let installed_ref = beta_home
+            .flatpak(&refs(&os(&["info", "--user", "--show-ref", &self.id])))
+            .trim()
+            .to_owned();
+        eprintln!("finding: promotion: the beta install is {installed_ref}");
+        assert!(
+            installed_ref.ends_with(&format!("/x86_64/{}", self.promoted.name())),
+            "{installed_ref}"
+        );
+    }
+
+    /// Step 8: the channel's head promoted: the beta install follows, the
+    /// nightly install sees nothing new. Returns the new promoted head.
+    fn promote_the_newer_head(
+        &mut self,
+        beta_home: &Dirs,
+        promoted_head: &str,
+        problems: &mut Vec<String>,
+    ) -> String {
+        let newer = "20261028000014";
+        self.publisher
+            .promote(self.promoted, newer)
+            .unwrap_or_else(|e| panic!("promoting {newer}: {e}"));
+        let newer_head = head(&self.publisher.repo(), &self.to_app);
+        assert_ne!(
+            newer_head, promoted_head,
+            "the newer promotion is a new head"
+        );
+        let update = os(&["update", "--user", "-y", "--noninteractive", &self.id]);
+        beta_home.flatpak(&refs(&update));
+        if installed(beta_home, &self.id) != newer_head {
+            problems.push(
+                "flatpak update didn't take the beta install to the newer promotion".to_owned(),
+            );
+        }
+        self.nightly_home.flatpak(&refs(&update));
+        if installed(self.nightly_home, &self.id) != self.from_head {
+            problems.push("the nightly install moved after a promotion".to_owned());
+        }
+        newer_head
+    }
+
+    /// Step 9: a nightly publish after the promotions keeps the beta branch at
+    /// `newer_head` and both `.flatpakref`s.
+    fn publish_a_nightly_after(&mut self, newer_head: &str) {
+        let dir = self.publisher.tmp.join("build-5");
+        changed_build(
+            self.bundle,
+            &dir,
+            &self.from_app,
+            &self.spec,
+            self.channel.name(),
+            "build 5",
+        );
+        let host = self.publisher.host.clone();
+        let after = self
+            .publisher
+            .run(&host, Some(&dir.join("out")), "20261028000015")
+            .unwrap_or_else(|e| panic!("the nightly after the promotions: {e}"));
+        assert_eq!(
+            after.flatpakrefs,
+            self.both(),
+            "a nightly keeps the beta ref"
+        );
+        assert_eq!(
+            head(&self.publisher.repo(), &self.to_app),
+            newer_head,
+            "the mirror kept the beta branch"
+        );
+    }
+
+    /// Step 10: a build the channel's branch no longer holds is refused,
+    /// naming the builds it does hold.
+    fn promote_a_pruned_build(&mut self) {
+        let pruned = "20261028000001";
+        match self.publisher.promote(self.promoted, pruned) {
+            Err(e @ RepoError::NotOnBranch(_)) => {
+                let message = e.to_string();
+                eprintln!("finding: promotion: {message}");
+                assert!(
+                    message.contains(pruned) && message.contains("20261028000015"),
+                    "{message}"
+                );
+            }
+            other => panic!("promoting {pruned}: {:?}", other.map(|p| p.flatpakrefs)),
+        }
+    }
+}
+
+/// The checksum of the commit in `log` (`ostree log`'s output) whose
+/// subject is `subject`.
+fn commit_with_subject(log: &str, subject: &str) -> String {
+    let mut current = None;
+    for line in log.lines() {
+        if let Some(checksum) = line.strip_prefix("commit ") {
+            current = Some(checksum.trim().to_owned());
+        } else if line.trim() == subject {
+            return current.unwrap_or_else(|| panic!("no commit before {subject:?}"));
+        }
+    }
+    panic!("no commit {subject:?} in:\n{log}");
 }

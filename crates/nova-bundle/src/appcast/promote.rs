@@ -139,11 +139,20 @@ pub enum PromoteError {
 
 /// "holds builds A, B and C", or "holds no builds".
 fn holds(held: &[BuildId]) -> String {
-    let names: Vec<String> = held.iter().map(ToString::to_string).collect();
-    match names.as_slice() {
+    match held {
         [] => "holds no builds".to_owned(),
         [one] => format!("holds build {one}"),
-        [rest @ .., last] => format!("holds builds {} and {last}", rest.join(", ")),
+        _ => format!("holds builds {}", and_list(held)),
+    }
+}
+
+/// `builds` as prose: "A", "A and B", "A, B and C"; empty for none.
+pub(crate) fn and_list(builds: &[BuildId]) -> String {
+    let names: Vec<String> = builds.iter().map(ToString::to_string).collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 

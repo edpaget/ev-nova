@@ -92,6 +92,18 @@ mod tests {
     }
 
     #[test]
+    fn the_beta_ref_names_the_beta_branch_and_shares_the_nightly_s_remote_and_key() {
+        let spec = spec();
+        let (_, beta) = parse(&render(&spec, Channel::Beta, &url(), &key()));
+        let (_, nightly) = parse(&render(&spec, Channel::Nightly, &url(), &key()));
+        assert_eq!(beta["Branch"], "beta");
+        assert_eq!(beta["Title"], format!("{} (beta)", spec.name));
+        for same in ["Url", "Name", "GPGKey", "SuggestRemoteName", "RuntimeRepo"] {
+            assert_eq!(beta[same], nightly[same], "{same}");
+        }
+    }
+
+    #[test]
     fn the_runtime_comes_from_flathub() {
         let text = render(&spec(), Channel::Nightly, &url(), &key());
         assert_eq!(
