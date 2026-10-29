@@ -467,10 +467,8 @@ pub struct Standing {
     pub always_dominated: bool,
     /// Whether it is a station (`Flags` 0x10).
     pub station: bool,
-    /// The player's legal record there.
+    /// The player's legal record there, which the status line reads.
     pub record: i16,
-    /// Its `MinStatus`.
-    pub min_status: i16,
 }
 
 /// What a press came to, for the session to apply.
@@ -482,20 +480,12 @@ pub enum Pressed {
     Said,
     /// The bribe's price is asked: the haggle dialog opens on it.
     Asked(i64),
-    /// Release: the stellar is released, the record written when `record`
-    /// is some.
-    Released {
-        /// The record to write ([`record_after_offence`]).
-        record: Option<i16>,
-    },
-    /// Demand Tribute came to `demand`, the record written when `record`
-    /// is some.
-    Demanded {
-        /// What it came to.
-        demand: Demand,
-        /// The record to write ([`record_after_offence`]).
-        record: Option<i16>,
-    },
+    /// Release: the stellar is released, and the records written
+    /// ([`record_after_offence`]).
+    Released,
+    /// Demand Tribute came to this, the records written first
+    /// ([`record_after_offence`]).
+    Demanded(Demand),
 }
 
 /// The dialog open, what lasts for it (see the module docs).
@@ -634,13 +624,10 @@ impl PlanetComm {
                 self.reply = PlanetReply::Released {
                     station: standing.station,
                 };
-                Pressed::Released {
-                    record: record_after_offence(standing.record, standing.min_status),
-                }
+                Pressed::Released
             }
             PlanetCommItem::Third => {
                 self.hates = true;
-                let record = record_after_offence(standing.record, standing.min_status);
                 let demand = demand(DemandFacts {
                     demanded: self.demanded,
                     ..demand_facts
@@ -653,7 +640,7 @@ impl PlanetComm {
                     },
                 };
                 self.demanded = true;
-                Pressed::Demanded { demand, record }
+                Pressed::Demanded(demand)
             }
         })
     }
@@ -1117,10 +1104,7 @@ mod tests {
     }
 
     fn refused() -> Standing {
-        Standing {
-            min_status: 1,
-            ..standing(0)
-        }
+        standing(0)
     }
 
     #[test]
@@ -1206,20 +1190,11 @@ mod tests {
     }
 
     #[test]
-    fn demand_tribute_refuses_landing_writes_the_record_and_marks_the_dialog() {
+    fn demand_tribute_refuses_landing_and_marks_the_dialog() {
         let (mut comm, _) = opened(&opening(10), false, &mut Some(0), 0, 0);
-        let at = Standing {
-            min_status: 5,
-            ..standing(10)
-        };
+        let at = standing(10);
         let pressed = press(&mut comm, PlanetCommItem::Third, at, facts(0), 0);
-        assert_eq!(
-            pressed,
-            Some(Pressed::Demanded {
-                demand: Demand::Laugh,
-                record: Some(4),
-            })
-        );
+        assert_eq!(pressed, Some(Pressed::Demanded(Demand::Laugh)));
         assert!(comm.hates());
         assert!(comm.demanded());
         assert_eq!(comm.reply(), PlanetReply::Laugh);
@@ -1227,10 +1202,7 @@ mod tests {
         let again = press(&mut comm, PlanetCommItem::Third, at, strong, 0);
         assert_eq!(
             again,
-            Some(Pressed::Demanded {
-                demand: Demand::Fight { send_wave: true },
-                record: Some(4),
-            }),
+            Some(Pressed::Demanded(Demand::Fight { send_wave: true })),
             "demanded already in this dialog"
         );
         assert_eq!(comm.reply(), PlanetReply::Fight);
@@ -1245,13 +1217,7 @@ mod tests {
                 ..standing(0)
             };
             let pressed = press(&mut comm, PlanetCommItem::Third, at, facts(12_800), 0);
-            assert_eq!(
-                pressed,
-                Some(Pressed::Demanded {
-                    demand: Demand::Dominate,
-                    record: Some(-1),
-                })
-            );
+            assert_eq!(pressed, Some(Pressed::Demanded(Demand::Dominate)));
             assert_eq!(comm.reply(), PlanetReply::Dominated { station });
         }
     }
@@ -1265,7 +1231,7 @@ mod tests {
             ..standing(-5)
         };
         let pressed = press(&mut comm, PlanetCommItem::Third, at, facts(0), 0);
-        assert_eq!(pressed, Some(Pressed::Released { record: None }));
+        assert_eq!(pressed, Some(Pressed::Released));
         assert_eq!(comm.reply(), PlanetReply::Released { station: true });
         assert!(!comm.demanded());
         assert!(!comm.hates(), "Release leaves the refusal as it was");
