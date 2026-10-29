@@ -188,7 +188,7 @@ impl<'a> Resource<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixture::forks::MemForks;
+    use crate::fixture::forks::{MemForks, UNREADABLE};
     use crate::fixture::{ForkBuilder, RezBuilder};
     use crate::{Fork, LoadError};
     use std::path::Path;
@@ -488,6 +488,7 @@ mod tests {
                 Err(LoadError::Io { path: p, source }) => {
                     assert_eq!(p, path());
                     assert_eq!(source.kind(), std::io::ErrorKind::Other);
+                    assert_eq!(source.to_string(), UNREADABLE);
                 }
                 other => panic!("expected Io, got {other:?}"),
             }
