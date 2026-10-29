@@ -366,6 +366,7 @@ mod port_dialogs;
 mod quit_question;
 mod routing;
 mod screen_impl;
+mod ship_name_dialog;
 
 /// The hint the router draws over every screen, where it goes, its size and
 /// its colour. Every screen leaves that corner free. The hint offers I

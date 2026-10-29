@@ -17,12 +17,8 @@
 //! `_DisposeDialogNoFlash` @0x949f1): after Use As Escort, or once the
 //! rename is answered either way ([`AppScreen::close_plunder`]).
 
-use std::rc::Rc;
-
-use nova_sim::shipyard::SHIP_NAME_CHARS;
 use nova_view::flight::FlightView;
-use nova_view::ui::text_input::{TEXT_INPUT_DIALOG, TextInputDialog, TextInputOutcome};
-use nova_view::ui::{DescriptionSource, DialogResources};
+use nova_view::ui::text_input::TextInputOutcome;
 use nova_view::{Input, Screen, ScreenAction};
 
 use super::{AppScreen, ENTERED};
@@ -47,42 +43,7 @@ impl AppScreen {
                 prompt: String::new(),
                 default: String::new(),
             });
-        let style = self.data.button_style();
-        let built = self.dialogs.as_ref().map(|dialogs| {
-            dialogs
-                .resources
-                .dialog_template(TEXT_INPUT_DIALOG)
-                .and_then(|template| {
-                    TextInputDialog::new(
-                        &template,
-                        &asked.prompt,
-                        &asked.default,
-                        SHIP_NAME_CHARS,
-                        style,
-                        Rc::clone(&metrics),
-                    )
-                })
-        });
-        let mut dialog = match built {
-            Some(Ok(dialog)) => dialog,
-            other => {
-                if let Some(Err(reason)) = other {
-                    self.warnings.push(format!(
-                        "nova: using the built-in Text Input dialog: {reason}"
-                    ));
-                }
-                TextInputDialog::fallback(
-                    &asked.prompt,
-                    &asked.default,
-                    SHIP_NAME_CHARS,
-                    style,
-                    metrics,
-                )
-            }
-        };
-        if by_key {
-            dialog.flush_typed_key();
-        }
+        let dialog = self.ship_name_dialog(&asked.prompt, &asked.default, by_key, |_| metrics);
         self.capture_naming = Some(dialog);
     }
 
