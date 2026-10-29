@@ -1,20 +1,22 @@
 //! The bar's Gamble through the whole app: synthetic game data (a `chär`
 //! flying the "Boarder" from Alpha, whose one stellar, a pad at the
 //! centre with a bar, `spöb` flags 0x41; the bar's text; the race's
-//! result `dësc`s 32760-32763 and its Help, 32764) and a synthetic
-//! interface file holding the stock "Spaceport", "Bar", "Race" (`DLOG`
-//! 1023) and "Desc Dialog" dialogs, driven only by window events, with
-//! pilots kept in the in-memory store. The app draws on a [`Dial`] the
-//! test turns, so each draw gives the outcome the dial is set to.
+//! result `dësc`s 32760-32763 and its Help, 32764, which names an
+//! after-movie) and a synthetic interface file holding the stock
+//! "Spaceport", "Bar", "Race" (`DLOG` 1023) and "Desc Dialog" dialogs,
+//! driven only by window events, with pilots kept in the in-memory store.
+//! The app draws on a [`Dial`] the test turns, so each draw gives the
+//! outcome the dial is set to.
 //!
 //! Wiring only: with no cash, G shows `STR#` 2002 #361 over the bar and
 //! its close returns to it; with cash, G opens the race, a racer's click
 //! bets, the result text shows with the cash less the bet, and the
 //! winnings are credited once it and the movie after it are done, on the
 //! tick that ends the movie, after which an Option click asks the bet up
-//! to the cash credited. Which keys press Gamble, how the race draws and
-//! tracks, the draw and the payout are nova-view's and nova-sim's,
-//! pinned there.
+//! to the cash credited; and Help shows `dësc` 32764 over the race with
+//! the after-movie its load left. Which keys press Gamble, how the race
+//! draws and tracks, the draw and the payout are nova-view's and
+//! nova-sim's, pinned there.
 
 use crate::bracket_art;
 
@@ -230,7 +232,6 @@ fn game_data(cash: i32) -> Rc<GameData> {
         .resource(Spin::TYPE, 1004, None, &spin(1000))
         .resource(RLED, 1000, None, &sheet(1, 40))
         .resource(Desc::TYPE, 10_000, None, &desc("Smoke and quiet talk."))
-        .resource(Desc::TYPE, 32_764, None, &desc("Pick a racer."))
         .resource(
             Interface::TYPE,
             128,
@@ -238,6 +239,14 @@ fn game_data(cash: i32) -> Rc<GameData> {
             &status_bar(),
         )
         .resource(PICT, 700, Some(b"Status Bar"), &pict(194, 16, [66, 66, 66]));
+    // The race's Help plays its movie after its text, the load's
+    // after-movie.
+    fork = fork.resource(
+        Desc::TYPE,
+        32_764,
+        None,
+        &desc_with_after_movie("Pick a racer.", "Race help.mov"),
+    );
     // Racer 1's result plays its movie after its text, so the winnings
     // are credited only once that movie is over.
     fork = fork.resource(
@@ -659,6 +668,43 @@ fn after_a_win_an_option_click_asks_the_bet_up_to_the_cash_credited() {
         .and_then(|ask| ask.dialog())
         .map(|dialog| dialog.field().text().to_owned());
     assert_eq!(field.as_deref(), Some("4000"), "min(4,000, 10,000)");
+}
+
+#[test]
+fn help_shows_its_text_over_the_race_with_its_after_movie_and_the_race_stays() {
+    let mut game = Game::flying_with(25_000);
+    game.land();
+    game.open_bar();
+    game.tap(Key::Char('g'));
+    let help = game
+        .bar()
+        .and_then(|bar| bar.race_screen())
+        .and_then(|race| race.dialog())
+        .and_then(|dialog| dialog.item_bounds(nova_view::spaceport::race::HELP_ITEM))
+        .expect("the race over the bar")
+        .center();
+    game.click(help);
+    assert_eq!(game.text_shown().as_deref(), Some("Pick a racer."));
+    assert!(
+        game.bar().is_some_and(|bar| bar.race_screen().is_some()),
+        "over the race"
+    );
+    game.tap(Key::Enter);
+    assert_eq!(game.text_shown(), None, "closed");
+    assert!(
+        game.player
+            .calls()
+            .contains(&Call::Start("Race help.mov".to_owned())),
+        "the after-movie its load left"
+    );
+    for _ in 0..10 {
+        game.frame();
+    }
+    assert!(
+        game.bar().is_some_and(|bar| bar.race_screen().is_some()),
+        "the race stays open"
+    );
+    assert_eq!(game.cash(), 25_000, "no bet");
 }
 
 crate::common::entry_harness!(Game, click, frame);
