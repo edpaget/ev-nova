@@ -373,6 +373,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.frame_rate.shown()
     }
 
+    /// The frame-rate readout's meter, for the router's tests to see a
+    /// [`Screen::focus_gained`](crate::Screen::focus_gained) reach the
+    /// flight without pinning the meter's own rules.
+    #[must_use]
+    pub fn frame_rate(&self) -> &crate::flight::frame_rate::FrameRate {
+        &self.frame_rate
+    }
+
     /// Whether the player's sound is quiet enough for the Red Alert to
     /// blink its icon, as the sound preferences last said.
     #[must_use]

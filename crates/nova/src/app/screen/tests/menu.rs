@@ -1019,22 +1019,45 @@ fn the_frame_rate_readout_toggled_in_flight_reaches_the_next_flight() {
     assert!(flight_frame_rate(&screen), "the next flight");
 }
 
+/// `meter` as the flight's own switch-in leaves it: what the router's
+/// [`Screen::focus_gained`](nova_view::Screen::focus_gained) must reach.
+/// The meter's rules are nova-view's; the check that it changes keeps the
+/// tests below from passing on a flight never told.
+fn switched_in(
+    meter: &nova_view::flight::frame_rate::FrameRate,
+) -> nova_view::flight::frame_rate::FrameRate {
+    let mut told = meter.clone();
+    told.switched_in();
+    assert_ne!(&told, meter, "a switch-in the flight can see");
+    told
+}
+
 #[test]
-fn coming_back_to_the_front_has_the_flight_say_calculating_again() {
-    use nova_view::flight::frame_rate::CALCULATING_FPS;
+fn coming_back_to_the_front_reaches_the_flight_shown() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     create(&mut screen, "Ada");
-    screen.input(&key(nova_view::flight::view::FRAME_RATE_KEY, true));
-    screen.input(&key(nova_view::flight::view::FRAME_RATE_KEY, false));
-    let sixtieth = Duration::from_secs(1) / 60;
-    for _ in 0..130 {
-        screen.tick(sixtieth);
-    }
-    assert_ne!(flight(&screen).message(), Some(CALCULATING_FPS), "a rate");
+    let told = switched_in(flight(&screen).frame_rate());
     screen.focus_gained();
-    screen.tick(sixtieth);
-    assert_eq!(flight(&screen).message(), Some(CALCULATING_FPS));
+    assert_eq!(flight(&screen).frame_rate(), &told);
+}
+
+#[test]
+fn coming_back_to_the_front_reaches_the_game_held_on_the_main_screen() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    escape_to_menu(&mut screen);
+    let held = |screen: &AppScreen| {
+        screen
+            .game_in_progress()
+            .expect("held")
+            .frame_rate()
+            .clone()
+    };
+    let told = switched_in(&held(&screen));
+    screen.focus_gained();
+    assert_eq!(held(&screen), told);
 }
 
 #[test]
