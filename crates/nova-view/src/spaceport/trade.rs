@@ -36,8 +36,10 @@
 //! There is no status line: the original shows the free space in the
 //! summary and the credits on the status bar beside the port.
 //!
-//! One row is selected, by a click on its slot or with Up and Down, which
-//! step over empty slots and stop at the ends. The original has one row a
+//! One row is selected, by a click on its slot or with Up and Down (key
+//! repeats too), which step over empty slots and wrap round at the ends,
+//! as `_TradeDialogTabKey` @0x4cd81 does for `_TradeFilter`'s arrows
+//! (@0x4e19c, @0x4e1ba). The original has one row a
 //! slot; the engine can list more than one `jünk` a side, whose extra rows
 //! follow their slot, and the list then scrolls with the selection. Buy and Sell, clicked or with B and S (key repeats too, so
 //! holding a key keeps trading), ask for a plain trade of the selected
@@ -548,16 +550,25 @@ impl TradeScreen {
     }
 
     /// Selects the row of the next filled list position after the
-    /// selected one (`forward`) or before it, if there is one.
+    /// selected one (`forward`) or before it, wrapping round the list's
+    /// ends and skipping empty slots, as `_TradeDialogTabKey` @0x4cd81
+    /// does: it lands on the selected row itself when it is the only one.
+    /// Nothing with no rows (the original hangs, @0x4cdc7-0x4cdf1).
     fn step(&mut self, forward: bool) {
         let positions = positions(&self.market);
         let Some(at) = positions.iter().position(|&row| row == Some(self.selected)) else {
             return;
         };
+        let (after, before) = (&positions[at + 1..], &positions[..at]);
         let next = if forward {
-            positions[at + 1..].iter().flatten().next()
+            after.iter().chain(before).flatten().next()
         } else {
-            positions[..at].iter().rev().flatten().next()
+            before
+                .iter()
+                .rev()
+                .chain(after.iter().rev())
+                .flatten()
+                .next()
         };
         if let Some(&row) = next {
             self.select(row);
@@ -1647,16 +1658,16 @@ mod tests {
     }
 
     #[test]
-    fn up_and_down_move_the_selection_and_stop_at_the_ends() {
+    fn up_and_down_move_the_selection_and_wrap_at_the_ends() {
         let mut screen = screen();
         press(&mut screen, Key::Up);
-        assert_eq!(screen.selected(), Some(0));
+        assert_eq!(screen.selected(), Some(2), "wraps to the last");
+        press(&mut screen, Key::Down);
+        assert_eq!(screen.selected(), Some(0), "wraps to the first");
         press(&mut screen, Key::Down);
         assert_eq!(screen.selected(), Some(1));
         screen.input(&key(Key::Down, true, true));
         assert_eq!(screen.selected(), Some(2), "repeats too");
-        press(&mut screen, Key::Down);
-        assert_eq!(screen.selected(), Some(2));
         screen.input(&key(Key::Up, false, false));
         assert_eq!(screen.selected(), Some(2), "not on release");
         press(&mut screen, Key::Up);
@@ -1684,7 +1695,9 @@ mod tests {
             press(&mut screen, Key::Down);
             visited.push(screen.selected());
         }
-        assert_eq!(visited, [Some(0), Some(1), Some(3), Some(2), Some(2)]);
+        assert_eq!(visited, [Some(0), Some(1), Some(3), Some(2), Some(0)]);
+        press(&mut screen, Key::Up);
+        assert_eq!(screen.selected(), Some(2), "back round to slot 7");
         press(&mut screen, Key::Up);
         assert_eq!(screen.selected(), Some(3), "back to slot 6");
     }
@@ -1762,8 +1775,6 @@ mod tests {
         ));
         press(&mut screen, Key::Down);
         assert_eq!((screen.selected(), screen.top()), (Some(3), 2));
-        press(&mut screen, Key::Down);
-        assert_eq!((screen.selected(), screen.top()), (Some(3), 2), "the end");
         click_item(&mut screen, 4);
         assert_eq!(screen.selected(), Some(3), "slot 2, scrolled, is empty");
         click_item(&mut screen, 8);
@@ -1771,9 +1782,26 @@ mod tests {
         press(&mut screen, Key::Up);
         assert_eq!(
             (screen.selected(), screen.top()),
-            (Some(0), 2),
-            "no row above"
+            (Some(3), 2),
+            "round to the last, shown"
         );
+        press(&mut screen, Key::Down);
+        assert_eq!(
+            (screen.selected(), screen.top()),
+            (Some(0), 2),
+            "round to the first, shown"
+        );
+    }
+
+    #[test]
+    fn a_wrapped_step_scrolls_to_show_the_row_it_lands_on() {
+        // 6 empty slots, goods 0-10 at positions 6-16, empty slot 7.
+        let mut screen = screen_of(long(11));
+        assert_eq!((screen.selected(), screen.top()), (Some(0), 0));
+        press(&mut screen, Key::Up);
+        assert_eq!((screen.selected(), screen.top()), (Some(10), 9));
+        press(&mut screen, Key::Down);
+        assert_eq!((screen.selected(), screen.top()), (Some(0), 6));
     }
 
     #[test]
