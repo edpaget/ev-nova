@@ -4763,4 +4763,39 @@ mod tests {
             );
         }
     }
+
+    /// The shipyard's mission offers take its focus ring, given before the
+    /// offers as the spaceport gives it.
+    #[test]
+    fn its_offer_takes_tab_then_space_only_with_the_focus_ring() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = screen()
+                .with_focus_ring(ring)
+                .with_offers(offer_templates());
+            screen.open_offer(crate::spaceport::offer::fixture::prompt());
+            press(&mut screen, Key::Tab);
+            press(&mut screen, Key::Space);
+            assert_eq!(
+                screen.take_offer_choice().is_some(),
+                ring == FocusRing::Tab,
+                "{ring:?}"
+            );
+        }
+    }
+
+    /// The Info panel's Done takes the shipyard's focus ring.
+    #[test]
+    fn the_info_panel_takes_tab_only_with_the_focus_ring() {
+        for (ring, focus) in [
+            (FocusRing::Tab, Some(PANEL_DONE_ITEM)),
+            (FocusRing::Off, None),
+        ] {
+            let mut screen = screen().with_focus_ring(ring);
+            press(&mut screen, INFO_KEY);
+            press(&mut screen, Key::Tab);
+            let panel = screen.info_panel().expect("open");
+            assert_eq!(panel.focus_ring(), ring);
+            assert_eq!(panel.focus(), focus, "{ring:?}");
+        }
+    }
 }

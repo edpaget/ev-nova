@@ -2702,4 +2702,23 @@ mod tests {
             assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
         }
     }
+
+    /// The trade center's mission offers take its focus ring, given before the
+    /// offers as the spaceport gives it.
+    #[test]
+    fn its_offer_takes_tab_then_space_only_with_the_focus_ring() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = screen()
+                .with_focus_ring(ring)
+                .with_offers(offer_templates());
+            screen.open_offer(crate::spaceport::offer::fixture::prompt());
+            press(&mut screen, Key::Tab);
+            press(&mut screen, Key::Space);
+            assert_eq!(
+                screen.take_offer_choice().is_some(),
+                ring == FocusRing::Tab,
+                "{ring:?}"
+            );
+        }
+    }
 }

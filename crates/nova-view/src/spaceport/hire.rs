@@ -1899,4 +1899,23 @@ mod tests {
         assert_eq!(off.take_order(), None);
         assert_eq!(off.take_sounds(), [], "nothing pressed");
     }
+
+    /// The hire screen's Info panel's Done takes its focus ring.
+    #[test]
+    fn the_info_panel_takes_tab_only_with_the_focus_ring() {
+        for (ring, focus) in [
+            (
+                FocusRing::Tab,
+                Some(super::super::shipyard::PANEL_DONE_ITEM),
+            ),
+            (FocusRing::Off, None),
+        ] {
+            let mut screen = screen().with_focus_ring(ring);
+            screen.input(&key(INFO_KEY, false));
+            screen.input(&key(Key::Tab, false));
+            let panel = screen.info_panel().expect("open");
+            assert_eq!(panel.focus_ring(), ring);
+            assert_eq!(panel.focus(), focus, "{ring:?}");
+        }
+    }
 }
