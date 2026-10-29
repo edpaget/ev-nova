@@ -114,6 +114,26 @@ pub const fn wave(def_count: i16) -> i16 {
     def_count % 10
 }
 
+/// The wave a Demand Tribute fought sends up at once from a stellar of
+/// `DefCount` `def_count` with `left` ships left, and the ships left
+/// after (`_DoPlanetCommDialog` @0x97746-0x977f7): up to a `DefCount` of
+/// 1000, every ship left, leaving none; above, [`wave`] ships, taken from
+/// those left, the wave shrunk by any overdraft so that none are left
+/// below 0. A wave of 0 or less sends none.
+#[must_use]
+pub const fn wave_on_demand(def_count: i16, left: i16) -> (i16, i16) {
+    if def_count <= 1000 {
+        return (left, 0);
+    }
+    let sent = wave(def_count);
+    let after = left.saturating_sub(sent);
+    if after < 0 {
+        (sent.saturating_add(after), 0)
+    } else {
+        (sent, after)
+    }
+}
+
 /// How many of `npcs` defend `stellar`.
 #[must_use]
 pub fn defenders_of(stellar: StellarId, npcs: &[Npc]) -> usize {
@@ -164,6 +184,13 @@ impl StellarDefences {
                 def_count: site.def_count,
             },
         );
+    }
+
+    /// Restores `site`'s count to its decoded `DefCount`
+    /// ([`initial_left`]), as the planet comm dialog's Release does
+    /// (@0x97422-0x9747e).
+    pub fn reset(&mut self, site: &LandingSite) {
+        self.set_left(site, initial_left(site.def_count));
     }
 
     /// Keeps `site`'s count, its decode while it has none, so a refund
@@ -439,6 +466,37 @@ mod tests {
         for (def_count, wave_size) in [(5, 5), (20, 0), (1082, 2), (-3, -3)] {
             assert_eq!(wave(def_count), wave_size, "{def_count}");
         }
+    }
+
+    #[test]
+    fn a_demands_wave_is_every_ship_left_up_to_1000_else_the_def_count_mod_10() {
+        for (def_count, left, sent) in [
+            (5, 3, (3, 0)),
+            (1000, 1000, (1000, 0)),
+            (5, -2, (-2, 0)),
+            (1082, 8, (2, 6)),
+            (1082, 1, (1, 0)),
+            (1082, -4, (-4, 0)),
+            (1080, 8, (0, 8)),
+            (-3, -3, (-3, 0)),
+        ] {
+            assert_eq!(
+                wave_on_demand(def_count, left),
+                sent,
+                "{def_count} with {left} left"
+            );
+        }
+    }
+
+    #[test]
+    fn a_release_restores_the_decoded_count() {
+        let mut defences = StellarDefences::default();
+        let earth = site(128, 1082);
+        defences.set_left(&earth, 0);
+        defences.reset(&earth);
+        assert_eq!(defences.left(&earth), 8);
+        defences.refund(earth.id);
+        assert_eq!(defences.left(&earth), 9, "the count kept");
     }
 
     #[test]
