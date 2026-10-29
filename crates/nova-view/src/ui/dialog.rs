@@ -194,6 +194,12 @@ pub enum ItemSpec {
     EditText(String),
     /// A picture: this interface-file `PICT`.
     Picture(i16),
+    /// A picture item whose `PICT` the interface file does not hold, as
+    /// stock "Desc Dialog"'s item 2 names `PICT` 1431: laid out and
+    /// hit-tested, but drawing nothing, as `DrawPicture` of a nil handle
+    /// draws nothing. The absence is the original's normal behaviour, not
+    /// a fault, so it is never reported.
+    MissingPicture(i16),
     /// An icon with this ID.
     Icon(i16),
     /// A control from this `CNTL`.
@@ -308,6 +314,8 @@ enum Widget {
         scrolls: bool,
         fill: Option<(Bounds, Color)>,
     },
+    /// A picture stretched over the item.
+    Picture(ImageKey),
     /// Laid out and hit-tested, but not drawn.
     Blank,
 }
@@ -406,9 +414,14 @@ impl Dialog {
     /// items given meaning by `roles` (item number, from 1, and role) and
     /// its text measured by `metrics`.
     ///
-    /// Standard buttons become buttons with their titles and static text
-    /// is wrapped in Geneva. [`Role::Hidden`] hides an item of any kind,
-    /// and [`Role::Greyed`] greys one. Pictures, check boxes, radio buttons, edit
+    /// Standard buttons become buttons with their titles, static text is
+    /// wrapped in Geneva, and a picture draws its interface-file `PICT`
+    /// ([`ImageKey::interface_picture`]) stretched over its rectangle, as
+    /// `DrawDialog` `DrawPicture`s each picture item into its rect; a
+    /// greyed picture draws the same, as the Dialog Manager doesn't dim
+    /// pictures. [`Role::Hidden`] hides an item of any kind, and
+    /// [`Role::Greyed`] greys one. Pictures the interface file lacks
+    /// ([`ItemSpec::MissingPicture`]), check boxes, radio buttons, edit
     /// text, controls, icons, other kinds and user items with no role are
     /// laid out and hit-tested but draw nothing. Items wholly outside the
     /// dialog's bounds, where stock dialogs park unused items, are hidden.
@@ -797,6 +810,10 @@ impl Dialog {
                     }
                     text.draw(list);
                 }
+                Widget::Picture(image) => {
+                    let at = item.bounds;
+                    list.stretched_picture(*image, at.min, at.width(), at.height());
+                }
                 Widget::Blank => {}
             }
         }
@@ -820,6 +837,7 @@ fn widget(
     };
     match (kind, role) {
         (ItemSpec::Button(title), _) => button(title),
+        (ItemSpec::Picture(id), _) => Widget::Picture(ImageKey::interface_picture(*id)),
         (ItemSpec::StaticText(text), _) => Widget::Text {
             text: ScrollText::new(
                 text,
@@ -1276,12 +1294,96 @@ mod tests {
                     wrap_width: None,
                     color: STATIC_TEXT_COLOR,
                 },
+                interface_picture(130, rect(334.0 + 7.0, 329.0 + 5.0, 32.0, 32.0)),
                 picture(normal.left, cancel.min.x, 13.0),
                 picture(normal.middle, cancel.min.x + 13.0, 44.0),
                 picture(normal.right, cancel.max.x - 13.0, 13.0),
                 label("Cancel", cancel),
             ]
         );
+    }
+
+    /// A 100 x 50 dialog at the origin holding `items`.
+    fn fixed(items: Vec<ItemTemplate>) -> DialogTemplate {
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 100.0, 50.0),
+            placement: Placement::Fixed,
+            items,
+        }
+    }
+
+    /// The interface file's `PICT` `id` stretched over `bounds`.
+    fn interface_picture(id: i16, bounds: Bounds) -> DrawCommand {
+        DrawCommand::StretchedPicture {
+            image: ImageKey::interface_picture(id),
+            top_left: bounds.min,
+            width: bounds.width(),
+            height: bounds.height(),
+        }
+    }
+
+    #[test]
+    fn a_picture_item_draws_its_interface_pict_stretched_over_it() {
+        let at = rect(7.0, 5.0, 40.0, 20.0);
+        let dialog = dialog(&fixed(vec![item(at, false, ItemSpec::Picture(130))]), &[]);
+        assert_eq!(drawn(&dialog), [interface_picture(130, at)]);
+    }
+
+    #[test]
+    fn pictures_draw_in_item_order_among_the_other_items() {
+        let (first, text, last) = (
+            rect(0.0, 0.0, 10.0, 10.0),
+            rect(20.0, 0.0, 30.0, 20.0),
+            rect(60.0, 0.0, 10.0, 10.0),
+        );
+        let dialog = dialog(
+            &fixed(vec![
+                item(first, false, ItemSpec::Picture(129)),
+                item(text, false, ItemSpec::StaticText("Hi".into())),
+                item(last, false, ItemSpec::Picture(130)),
+            ]),
+            &[],
+        );
+        let commands = drawn(&dialog);
+        assert_eq!(commands.len(), 3);
+        assert_eq!(commands[0], interface_picture(129, first));
+        assert!(matches!(commands[1], DrawCommand::Text { .. }));
+        assert_eq!(commands[2], interface_picture(130, last));
+    }
+
+    #[test]
+    fn hidden_and_parked_pictures_draw_nothing() {
+        let parked = dialog(&yes_no(), &[(4, Role::Hidden)]);
+        assert!(
+            !drawn(&parked).iter().any(
+                |command| matches!(command, DrawCommand::StretchedPicture { image, .. }
+                    if image.kind == crate::ImageKind::InterfacePict)
+            ),
+            "item 2 is parked outside, item 4 hidden"
+        );
+    }
+
+    #[test]
+    fn a_greyed_picture_still_draws() {
+        let at = rect(7.0, 5.0, 40.0, 20.0);
+        let dialog = dialog(
+            &fixed(vec![item(at, true, ItemSpec::Picture(130))]),
+            &[(1, Role::Greyed)],
+        );
+        assert_eq!(drawn(&dialog), [interface_picture(130, at)]);
+    }
+
+    #[test]
+    fn a_picture_the_interface_file_lacks_is_laid_out_but_draws_nothing() {
+        let at = rect(7.0, 5.0, 40.0, 20.0);
+        let mut dialog = dialog(
+            &fixed(vec![item(at, true, ItemSpec::MissingPicture(1431))]),
+            &[],
+        );
+        assert_eq!(drawn(&dialog), []);
+        assert!(dialog.item_shown(1));
+        assert_eq!(dialog.item_bounds(1), Some(at));
+        assert_eq!(click(&mut dialog, at.center()), Some(DialogEvent::Item(1)));
     }
 
     #[test]
@@ -1380,10 +1482,11 @@ mod tests {
         assert_eq!(first_picture(&dialog), ButtonSkin::NOVA.normal.left);
         dialog.input(&Input::PointerMoved(ok));
         assert_eq!(first_picture(&dialog), pressed_left);
-        // Cancel draws normally while OK is held.
+        // Cancel draws normally while OK is held (after OK's four
+        // commands, the text and the picture).
         let commands = drawn(&dialog);
         assert!(matches!(
-            commands[5],
+            commands[6],
             DrawCommand::StretchedPicture { image, .. } if image == ButtonSkin::NOVA.normal.left
         ));
         dialog.cancel_pointer();
@@ -1846,7 +1949,7 @@ mod tests {
             ItemSpec::CheckBox("Check".into()),
             ItemSpec::Radio("Radio".into()),
             ItemSpec::EditText("Edit".into()),
-            ItemSpec::Picture(5),
+            ItemSpec::MissingPicture(5),
             ItemSpec::Icon(6),
             ItemSpec::Control(7),
             ItemSpec::Other,
@@ -1896,11 +1999,11 @@ mod tests {
         let commands = drawn(&dialog);
         let disabled = ButtonSkin::NOVA.disabled;
         assert!(matches!(
-            commands[5],
+            commands[6],
             DrawCommand::StretchedPicture { image, .. } if image == disabled.left
         ));
         assert!(matches!(
-            &commands[8],
+            &commands[9],
             DrawCommand::Text { text, color, .. }
                 if text == "Cancel" && *color == ButtonStyle::STOCK.grey
         ));
