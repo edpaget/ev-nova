@@ -2,7 +2,8 @@
 //! module).
 
 use super::*;
-use nova_sim::planet_comm::PlanetCommButton;
+use nova_sim::planet_comm::{PlanetCommButton, PlanetCommItem};
+use nova_view::ui::planet_comm::PLANET_COMM_DIALOG;
 
 /// Every draw its last outcome, no percentage firing: a bribe roll of
 /// 99, and a haggle roll of 99, which loses.
@@ -74,16 +75,21 @@ fn tap(screen: &mut AppScreen, k: Key) {
     screen.input(&key(k, false));
 }
 
+/// Flies `screen`, then selects and hails Alpha Prime, taking the sounds.
+fn hail_alpha(screen: &mut AppScreen) {
+    fly(screen);
+    tap(screen, Key::Char('1'));
+    screen.tick(TICK);
+    tap(screen, Key::Char('y'));
+    let _ = screen.take_sounds();
+}
+
 /// The router over [`planet_data`] with dialogs, in flight, Alpha Prime
 /// selected and hailed, its sounds taken.
 fn hailing(min_status: i16) -> AppScreen {
     let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Last));
     let mut screen = with_dialogs(planet_data(min_status)).with_chance(SharedChance::new(shared));
-    fly(&mut screen);
-    tap(&mut screen, Key::Char('1'));
-    screen.tick(TICK);
-    tap(&mut screen, Key::Char('y'));
-    let _ = screen.take_sounds();
+    hail_alpha(&mut screen);
     screen
 }
 
@@ -155,4 +161,38 @@ fn a_lost_bribe_haggle_returns_to_the_planet_comm_dialog() {
         "STR# 3002 #(4 + 31)"
     );
     assert_eq!(cash(screen), 1_000_000, "nothing paid");
+}
+
+#[test]
+fn without_the_interface_files_dialog_the_built_in_one_opens_with_a_warning() {
+    let screen = &mut hailing(0);
+    assert_eq!(screen.showing(), Showing::Comm);
+    assert_eq!(
+        screen.planet_comm().expect("open").view().name,
+        "Alpha Prime"
+    );
+    assert_eq!(
+        screen.take_warnings(),
+        [format!(
+            "nova: using the built-in planet comm dialog: no DLOG {PLANET_COMM_DIALOG}"
+        )],
+        "the test dialogs hold no planet comm DLOG"
+    );
+}
+
+#[test]
+fn without_any_metrics_a_planet_hail_is_closed() {
+    let screen = &mut AppScreen::new(planet_data(0));
+    hail_alpha(screen);
+    assert_eq!(screen.showing(), Showing::Flight);
+    assert!(screen.planet_comm().is_none());
+    assert_eq!(
+        flight_mut(screen).press_planet_comm(PlanetCommItem::Second),
+        None,
+        "the flight's planet comm dialog is closed"
+    );
+    assert_eq!(
+        screen.take_warnings(),
+        ["nova: cannot show the planet comm dialog: no metrics to lay it out"]
+    );
 }
