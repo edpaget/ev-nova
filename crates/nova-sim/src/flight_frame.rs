@@ -55,6 +55,7 @@ use crate::landing::LandingRefusal;
 use crate::market::Good;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
+use crate::outfit_effects::Rgb15;
 use crate::planet_comm::{PlanetCommItem, PlanetCommView};
 use crate::player_fate::{Drawn as ShipDrawn, PlayerCommand, PlayerFate};
 use crate::player_info::PlayerInfo;
@@ -1548,6 +1549,12 @@ pub struct FrameShip {
     pub cloak: CloakShown,
     /// Its ion tint as its last display left it, if it glows.
     pub ion_tint: Option<IonTint>,
+    /// Its paint, `_GetShipPaintColor`'s (@0x7d0c-0x7dc0) result: the
+    /// pilot's for the player, an NPC's person's `Color`, or else its
+    /// government's `ShipColor`; `None` unpainted (see the
+    /// `session::ship_paint` module). The view draws its hull and alt
+    /// layer in it.
+    pub paint: Option<Rgb15>,
     /// Its fade at a gate it comes out of or enters ([`GateFade`]).
     pub gate: GateFade,
     /// Where its hover and click box is
@@ -1591,6 +1598,7 @@ impl Default for FrameShip {
             glow: 0,
             cloak: CloakShown::Opaque,
             ion_tint: None,
+            paint: None,
             gate: GateFade::None,
             hover: HoverPlace::Own,
             framed: None,

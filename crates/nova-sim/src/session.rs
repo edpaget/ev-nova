@@ -601,6 +601,7 @@ mod setup;
 mod ship_change;
 mod ship_display;
 mod ship_loop;
+mod ship_paint;
 mod shot_slots;
 #[cfg(test)]
 mod slot_search;
