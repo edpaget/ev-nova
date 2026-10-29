@@ -46,6 +46,7 @@ mod stock_news;
 mod stock_npc_escape;
 mod stock_npc_skill;
 mod stock_pirates;
+mod stock_planet_comm;
 mod stock_player_cloak;
 mod stock_plunder;
 mod stock_pursuit;
