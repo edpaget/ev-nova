@@ -356,6 +356,7 @@ mod menu;
 mod menu_commands;
 mod overlays;
 mod pilot_panel;
+mod planet_comm;
 mod port_dialogs;
 mod quit_question;
 mod routing;
@@ -616,6 +617,9 @@ pub struct AppScreen {
     comm: Option<CommDialog>,
     /// The escort dialog, while a fleet escort hailed is talked to.
     escort_dialog: Option<nova_view::ui::escort_dialog::EscortDialog>,
+    /// The planet comm dialog, while a stellar hailed is talked to (see
+    /// the `planet_comm` module).
+    planet_comm: Option<nova_view::ui::planet_comm::PlanetCommDialog>,
     /// Whether the port's Leave waits for the report of the escorts sold
     /// and upgraded, shown over the spaceport, to close (see the
     /// `escort_dialog` module).

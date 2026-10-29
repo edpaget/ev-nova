@@ -240,6 +240,9 @@ impl AppScreen {
         if let Some(dialog) = &mut self.escort_dialog {
             return Some(dialog);
         }
+        if let Some(dialog) = &mut self.planet_comm {
+            return Some(dialog);
+        }
         if let Some(dialogs) = &mut self.missions {
             return Some(dialogs);
         }
@@ -337,6 +340,9 @@ impl AppScreen {
             .and_then(FlightView::take_escort_dialog)
         {
             self.open_escort_dialog(&view);
+        }
+        if let Some(view) = self.flight.as_mut().and_then(FlightView::take_planet_comm) {
+            self.open_planet_comm(&view);
         }
         if let Some(prompt) = self.flight.as_mut().and_then(FlightView::take_offer) {
             self.open_offer(prompt);
@@ -673,7 +679,7 @@ impl AppScreen {
 
     /// Opens the haggle dialog asking `price` over the comm dialog: the
     /// interface file's, or the built-in one without it.
-    fn open_haggle(&mut self, price: i64, pay_me: bool) {
+    pub(super) fn open_haggle(&mut self, price: i64, pay_me: bool) {
         let Some(metrics) = self.metrics() else {
             return;
         };
@@ -701,13 +707,19 @@ impl AppScreen {
 
     /// The haggle dialog's input: the choice goes through flight; a price
     /// lowered is shown, and otherwise the dialog closes, keeping its
-    /// sounds, and the comm dialog shows what came of it.
+    /// sounds, and the comm dialog shows what came of it. Over the planet
+    /// comm dialog it is the bribe's haggle (see the `planet_comm`
+    /// module).
     pub(super) fn haggle_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.haggle.as_mut().expect("open");
         dialog.input(input);
         let Some(choice) = dialog.take_choice() else {
             return ScreenAction::None;
         };
+        if self.planet_comm.is_some() {
+            self.bribe_haggled(choice);
+            return ScreenAction::None;
+        }
         let flight = self.flight.as_mut().expect(ENTERED);
         let shown = flight.haggle(choice);
         if let Some(price) = shown.as_ref().and_then(|view| view.asking) {

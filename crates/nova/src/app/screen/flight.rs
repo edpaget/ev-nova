@@ -164,6 +164,7 @@ impl AppScreen {
         self.assignment = None;
         self.comm = None;
         self.escort_dialog = None;
+        self.planet_comm = None;
         self.haggle = None;
         self.offer = None;
         self.missions = None;

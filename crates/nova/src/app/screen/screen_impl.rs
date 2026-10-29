@@ -219,6 +219,9 @@ impl Screen for AppScreen {
             self.escort_dialog
                 .as_ref()
                 .map(|dialog| dialog as &dyn Screen),
+            self.planet_comm
+                .as_ref()
+                .map(|dialog| dialog as &dyn Screen),
             self.offer.as_ref().map(|dialog| dialog as &dyn Screen),
             self.player_info
                 .as_ref()
@@ -369,6 +372,9 @@ impl Screen for AppScreen {
                 .map(|dialog| dialog as &mut dyn Screen),
             self.comm.as_mut().map(|dialog| dialog as &mut dyn Screen),
             self.escort_dialog
+                .as_mut()
+                .map(|dialog| dialog as &mut dyn Screen),
+            self.planet_comm
                 .as_mut()
                 .map(|dialog| dialog as &mut dyn Screen),
             self.haggle.as_mut().map(|dialog| dialog as &mut dyn Screen),

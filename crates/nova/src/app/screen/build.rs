@@ -98,6 +98,7 @@ impl AppScreen {
             person_rules: Rc::new(NovaPersons::default()),
             comm: None,
             escort_dialog: None,
+            planet_comm: None,
             leave_held: false,
             haggle: None,
             offer: None,
@@ -283,6 +284,12 @@ impl AppScreen {
     #[must_use]
     pub fn escort_dialog(&self) -> Option<&nova_view::ui::escort_dialog::EscortDialog> {
         self.escort_dialog.as_ref()
+    }
+
+    /// The planet comm dialog, while a stellar hailed is talked to.
+    #[must_use]
+    pub fn planet_comm(&self) -> Option<&nova_view::ui::planet_comm::PlanetCommDialog> {
+        self.planet_comm.as_ref()
     }
 
     /// The haggle dialog, while a price is asked.
@@ -670,7 +677,8 @@ impl AppScreen {
         if self.haggle.is_some() {
             return Showing::Haggle;
         }
-        if self.comm.is_some() {
+        // The planet comm dialog shows as the comm dialog does.
+        if self.comm.is_some() || self.planet_comm.is_some() {
             return Showing::Comm;
         }
         if self.escort_dialog.is_some() {
