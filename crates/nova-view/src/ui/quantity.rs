@@ -31,7 +31,7 @@ use crate::geometry::{Bounds, Point};
 use crate::text::TextMetrics;
 
 use super::button::ButtonStyle;
-use super::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement, Role};
+use super::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, STOCK_WORD};
 use super::edit_dialog::{Confirm, EditDialog, EditItems};
 use super::text_field::TextField;
 
@@ -206,7 +206,7 @@ fn fallback_template() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 172.0, 72.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(QUANTITY_DIALOG, Some(STOCK_WORD)),
         items: vec![
             item(
                 at(92.0, 42.0, 70.0, 20.0),
@@ -675,6 +675,27 @@ mod tests {
         assert_eq!(
             format!("{dialog:?}"),
             "QuantityDialog { text: \"12\", max: 12, outcome: None, .. }"
+        );
+    }
+
+    #[test]
+    fn the_built_in_quantity_dialog_is_placed_as_center_window_places_dlog_1003() {
+        let template = fallback_template();
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::CenterWindow
+        );
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::for_dlog(
+                QUANTITY_DIALOG,
+                Some(crate::ui::dialog::STOCK_WORD)
+            ),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            crate::geometry::Point::new(426.0, 348.0)
         );
     }
 }

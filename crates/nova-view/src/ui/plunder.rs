@@ -45,8 +45,8 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, TextBacking,
-    outline,
+    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, STOCK_WORD,
+    TextBacking, outline,
 };
 use super::prefs::{BACKDROP, BORDER};
 
@@ -294,7 +294,7 @@ fn plunder_template() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 309.0, 198.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(PLUNDER_DIALOG, Some(STOCK_WORD)),
         items: vec![
             user(at(91.0, 166.0, 126.0, 25.0), true),
             user(at(110.0, 110.0, 89.0, 25.0), true),
@@ -448,7 +448,7 @@ fn assignment_template() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 257.0, 114.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(ASSIGNMENT_DIALOG, Some(STOCK_WORD)),
         items: vec![
             user(at(55.0, 51.0, 146.0, 26.0)),
             user(at(55.0, 83.0, 146.0, 26.0)),
@@ -781,7 +781,11 @@ mod tests {
             PlunderDialog::fallback(&shown(loaded()), ButtonStyle::STOCK, Rc::new(MonoMetrics));
         let bounds = fallback.dialog().bounds();
         assert_eq!((bounds.width(), bounds.height()), (309.0, 198.0));
-        assert_eq!(bounds.min, Point::new(357.0, 285.0), "centred");
+        assert_eq!(
+            bounds.min,
+            Point::new(358.0, 285.0),
+            "as _CenterWindow centres it"
+        );
         let commands = drawn(&fallback);
         assert!(
             matches!(commands[0], DrawCommand::Line { color, .. } if color == BACKDROP),
@@ -1023,5 +1027,47 @@ mod tests {
         });
         dialog.tick(Duration::from_secs(1));
         assert_eq!(dialog.take_choice(), None, "the click was abandoned");
+    }
+
+    #[test]
+    fn the_built_in_plunder_dialog_is_placed_as_center_window_places_dlog_1011() {
+        let template = plunder_template();
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::CenterWindow
+        );
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::for_dlog(
+                PLUNDER_DIALOG,
+                Some(crate::ui::dialog::STOCK_WORD)
+            ),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            crate::geometry::Point::new(358.0, 285.0)
+        );
+    }
+
+    #[test]
+    fn the_built_in_assignment_dialog_is_placed_as_center_window_places_dlog_1018() {
+        let template = assignment_template();
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::CenterWindow
+        );
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::for_dlog(
+                ASSIGNMENT_DIALOG,
+                Some(crate::ui::dialog::STOCK_WORD)
+            ),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            crate::geometry::Point::new(384.0, 327.0)
+        );
     }
 }

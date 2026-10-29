@@ -60,8 +60,8 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, TextBacking,
-    outline,
+    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, STOCK_WORD,
+    TextBacking, outline,
 };
 use super::prefs::{BACKDROP, BORDER};
 
@@ -529,7 +529,7 @@ fn comm_template() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 423.0, 215.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(COMM_DIALOG, Some(STOCK_WORD)),
         items: vec![
             user(at(21.0, 181.0, 166.0, 26.0), true),
             user(at(21.0, 153.0, 166.0, 26.0), true),
@@ -770,7 +770,7 @@ fn haggle_template() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 262.0, 107.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(HAGGLE_DIALOG, Some(STOCK_WORD)),
         items: vec![
             user(at(58.0, 74.0, 146.0, 26.0), true),
             user(at(58.0, 39.0, 146.0, 26.0), true),
@@ -1498,7 +1498,11 @@ mod tests {
         assert!(err.contains("11 items"), "{err}");
         let fallback = CommDialog::fallback(&view(), ButtonStyle::STOCK, Rc::new(MonoMetrics));
         let bounds = fallback.dialog().bounds();
-        assert_eq!(bounds.min, Point::new(300.0, 276.0));
+        assert_eq!(
+            bounds.min,
+            Point::new(301.0, 277.0),
+            "as _CenterWindow centres it"
+        );
         assert!(drawn(&fallback)
             .iter()
             .all(|command| !matches!(command, DrawCommand::StretchedPicture { image, .. } if *image == COMM_PICTURE)));
@@ -1720,6 +1724,48 @@ mod tests {
         };
         assert!(
             HaggleDialog::new(&short, 1, true, ButtonStyle::STOCK, Rc::new(MonoMetrics)).is_err()
+        );
+    }
+
+    #[test]
+    fn the_built_in_comm_dialog_is_placed_as_center_window_places_dlog_1007() {
+        let template = comm_template();
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::CenterWindow
+        );
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::for_dlog(
+                COMM_DIALOG,
+                Some(crate::ui::dialog::STOCK_WORD)
+            ),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            crate::geometry::Point::new(301.0, 277.0)
+        );
+    }
+
+    #[test]
+    fn the_built_in_haggle_dialog_is_placed_as_center_window_places_dlog_1008() {
+        let template = haggle_template();
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::CenterWindow
+        );
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::for_dlog(
+                HAGGLE_DIALOG,
+                Some(crate::ui::dialog::STOCK_WORD)
+            ),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            crate::geometry::Point::new(381.0, 331.0)
         );
     }
 }

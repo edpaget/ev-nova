@@ -51,7 +51,7 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, outline,
+    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, STOCK_WORD, outline,
 };
 use super::prefs::{BACKDROP, BORDER};
 use super::text_field::TextField;
@@ -422,7 +422,7 @@ fn fallback_template() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 326.0, 213.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(NEW_PILOT_DIALOG, Some(STOCK_WORD)),
         items,
     }
 }
@@ -1238,6 +1238,27 @@ mod tests {
             format!(
                 "NewPilotDialog {{ name: \"Ada\", nickname: \"\", gender: Male, strict_play: false, outcome: None, refusal: Some({NAME_TAKEN:?}), .. }}"
             )
+        );
+    }
+
+    #[test]
+    fn the_built_in_new_pilot_dialog_is_placed_as_center_window_places_dlog_3102() {
+        let template = fallback_template();
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::CenterWindow
+        );
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::for_dlog(
+                NEW_PILOT_DIALOG,
+                Some(crate::ui::dialog::STOCK_WORD)
+            ),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            crate::geometry::Point::new(349.0, 278.0)
         );
     }
 }

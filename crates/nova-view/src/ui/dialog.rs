@@ -96,6 +96,12 @@ pub const CENTER_WINDOW_DLOGS: [i16; 28] = [
     1018, 1019, 1020, 1021, 1022, 1023, 2000, 3003, 3004, 3005, 3101, 3102,
 ];
 
+/// The positioning word every stock `DLOG` carries (0xA80A, centred on
+/// the main screen). A built-in template, used when the interface file
+/// has no usable `DLOG`, is placed with [`Placement::for_dlog`] from its
+/// `DLOG`'s id and this word, so it lands where the loaded one would.
+pub const STOCK_WORD: u16 = 0xA80A;
+
 impl Placement {
     /// Where `DLOG` `id` with positioning `word` goes:
     /// [`Placement::CenterWindow`] for a `DLOG` in

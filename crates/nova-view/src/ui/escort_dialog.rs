@@ -61,7 +61,9 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::comm::{CLOSE_CHANNEL, LABEL_COLOR, TEXT_COLOR, TEXT_SIZE, backdrop, ship_picture};
-use super::dialog::{Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role};
+use super::dialog::{
+    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, STOCK_WORD,
+};
 
 /// The escort dialog's `DLOG` (and `DITL`) ID.
 pub const ESCORT_DIALOG: i16 = 1022;
@@ -388,7 +390,7 @@ fn escort_template() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 424.0, 259.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(ESCORT_DIALOG, Some(STOCK_WORD)),
         items: vec![
             user(at(29.0, 225.0, 146.0, 26.0), true),
             user(at(29.0, 197.0, 146.0, 26.0), true),
@@ -810,6 +812,27 @@ mod tests {
                 Rc::new(MonoMetrics)
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn the_built_in_escort_dialog_is_placed_as_center_window_places_dlog_1022() {
+        let template = escort_template();
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::CenterWindow
+        );
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::for_dlog(
+                ESCORT_DIALOG,
+                Some(crate::ui::dialog::STOCK_WORD)
+            ),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            crate::geometry::Point::new(300.0, 255.0)
         );
     }
 }

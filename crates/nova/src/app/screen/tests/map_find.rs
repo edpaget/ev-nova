@@ -121,7 +121,7 @@ fn the_flights_find_is_laid_out_in_the_datas_button_style() {
     let bounds = dialog.dialog().bounds();
     assert_eq!(
         (bounds.min, bounds.max),
-        (Point::new(370.0, 331.0), Point::new(654.0, 436.0)),
+        (Point::new(370.0, 332.0), Point::new(654.0, 437.0)),
         "the fallback, centred, as the dialogs have no DLOG 3005"
     );
     let mut list = DrawList::new();
