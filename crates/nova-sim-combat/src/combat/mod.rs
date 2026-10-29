@@ -6258,12 +6258,13 @@ mod tests {
 
     #[test]
     fn diagnostics_are_taken_once() {
-        let exclusive = WeaponRecord {
-            flags3: 0x0020,
+        // An undocumented guidance, reported as it fails to fire.
+        let undocumented = WeaponRecord {
+            guidance: 11,
             ..blaster()
         };
         let mut combat = Combat::default();
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(exclusive)];
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(undocumented)];
         for _ in 0..3 {
             phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         }
@@ -8291,7 +8292,9 @@ mod tests {
     }
 
     #[test]
-    fn a_sub_munition_reports_its_unimplemented_flags_once_when_first_released() {
+    fn a_released_simultaneous_sub_munition_reports_nothing() {
+        // `Flags` 0x0040 is read only by a ship's fire, never by a release,
+        // so it is no diagnostic either.
         let (shell, arsenal) = cluster_of(WeaponRecord {
             guidance: 1,
             count: 50,
@@ -8302,19 +8305,11 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
         two_shells_a_move_apart(&mut combat, &mut ships, &arsenal);
-        assert_eq!(combat.take_diagnostics(), [], "not before it is released");
         for _ in 0..5 {
             fly_shots_with(&mut combat, &mut ships, &arsenal);
         }
         assert!(sub_shots(&combat).len() > 2, "released more than once");
-        assert_eq!(
-            combat.take_diagnostics(),
-            [SimDiagnostic::UnimplementedWeaponFlag {
-                weapon: WeaponId(148),
-                field: flags::FlagField::Flags,
-                bit: 0x0040,
-            }]
-        );
+        assert_eq!(combat.take_diagnostics(), []);
     }
 
     #[test]

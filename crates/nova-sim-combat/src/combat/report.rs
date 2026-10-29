@@ -98,8 +98,6 @@ impl Reports {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::WeaponRecord;
-    use nova_sim_catalog::fixture::weapon;
 
     fn flag(weapon: i16, field: FlagField, bit: u16) -> SimDiagnostic {
         SimDiagnostic::UnimplementedWeaponFlag {
@@ -161,26 +159,5 @@ mod tests {
         assert_eq!(reports.take(), [], "taken");
         reports.report(flag(181, FlagField::Flags2, 0x8000));
         assert_eq!(reports.take(), [], "made before");
-    }
-
-    #[test]
-    fn a_weapon_firing_reports_each_unimplemented_flag_it_sets() {
-        let mining = WeaponSpec::new(&WeaponRecord {
-            flags: 0x0140,
-            flags3: 0x0020,
-            ..weapon(181)
-        });
-        let mut reports = Reports::default();
-        reports.fired(&mining);
-        reports.fired(&mining);
-        assert_eq!(
-            reports.take(),
-            [
-                flag(181, FlagField::Flags, 0x0040),
-                flag(181, FlagField::Flags3, 0x0020)
-            ]
-        );
-        reports.fired(&WeaponSpec::new(&weapon(128)));
-        assert_eq!(reports.take(), []);
     }
 }

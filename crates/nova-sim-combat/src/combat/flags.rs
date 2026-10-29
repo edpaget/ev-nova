@@ -116,9 +116,10 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags, 0x0010, Any, Presentation),
     // Passes through shields.
     (Flags, 0x0020, Any, Implemented),
-    // Copies fire simultaneously: an NPC's pick (`Armament::fire_pick`);
-    // the player's is weapons-fidelity phase 15, so it is still reported.
-    (Flags, 0x0040, Any, Unimplemented),
+    // Copies fire simultaneously: `ai_fire::copies`, `ai_fire::reload`,
+    // `burst_interval` and `Armament::burst_step`, for the player
+    // (`Armament::fire_player`) and an NPC (`Armament::fire_pick`).
+    (Flags, 0x0040, Any, Implemented),
     // Homing: point defence can't target it.
     (Flags, 0x0080, Guided, Implemented),
     // Blast doesn't hurt the player.
@@ -196,9 +197,9 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags3, 0x0004, Shots, Implemented),
     // Fires from the exit point nearest the target (`exits`).
     (Flags3, 0x0010, Any, Implemented),
-    // Exclusive: an NPC's pick (`Armament::fire_pick`); the player's is
-    // weapons-fidelity phase 15, so it is still reported.
-    (Flags3, 0x0020, Any, Unimplemented),
+    // Exclusive: `Armament::hold_others`, from `Armament::fire_player`,
+    // `Armament::fire_pick` and the bay launch (`Armament::launch_bay`).
+    (Flags3, 0x0020, Any, Implemented),
 ];
 
 /// What the simulation does with `field`'s `bit` on a weapon of
@@ -257,7 +258,7 @@ mod tests {
         (Flags, 0x0008, [NA, NA, Implemented, NA]),
         (Flags, 0x0010, [Presentation; 4]),
         (Flags, 0x0020, [Implemented; 4]),
-        (Flags, 0x0040, [Unimplemented; 4]),
+        (Flags, 0x0040, [Implemented; 4]),
         (Flags, 0x0080, [NA, NA, Implemented, NA]),
         (Flags, 0x0100, [Implemented; 4]),
         (Flags, 0x0200, [Presentation; 4]),
@@ -294,7 +295,7 @@ mod tests {
         (Flags3, 0x0002, [Presentation; 4]),
         (Flags3, 0x0004, [Implemented, NA, Implemented, Implemented]),
         (Flags3, 0x0010, [Implemented; 4]),
-        (Flags3, 0x0020, [Unimplemented; 4]),
+        (Flags3, 0x0020, [Implemented; 4]),
     ];
 
     const KINDS: [Guidance; 4] = [
@@ -408,27 +409,6 @@ mod tests {
         // A Wraith Graviton Beam, and the Winter Tempest.
         assert_eq!(unimplemented(&spec(0, 0x0010, 0x8200, 0)), []);
         assert_eq!(unimplemented(&spec(0, 0x0032, 0x0200, 0)), []);
-    }
-
-    #[test]
-    fn every_unimplemented_bit_set_is_listed_in_the_tables_order() {
-        assert_eq!(
-            unimplemented(&spec(-1, 0x0048, 0x0480, 0x0034)),
-            [(Flags, 0x0040), (Flags3, 0x0020),],
-            "the guided-only 0x0008 left out"
-        );
-        assert_eq!(unimplemented(&spec(-1, 0, 0, 0)), []);
-        let seeking = WeaponSpec::new(&WeaponRecord {
-            guidance: 1,
-            seeker: 0xc03b,
-            ..weapon(131)
-        });
-        assert_eq!(
-            unimplemented(&seeking),
-            [],
-            "asteroids, the asteroid lock, jamming, interference, the ion lockout and the 0x4000 \
-             lock are done"
-        );
     }
 
     #[test]

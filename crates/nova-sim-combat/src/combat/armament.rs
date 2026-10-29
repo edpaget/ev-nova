@@ -1964,7 +1964,6 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::NpcId;
     use crate::combat::ShipRef;
-    use crate::combat::flags::FlagField;
     use crate::combat::projectile::ShotId;
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::{hull, outfit, weapon};
@@ -2874,23 +2873,27 @@ mod tests {
     }
 
     #[test]
-    fn each_unimplemented_flag_is_reported_once_however_often_it_fires() {
-        let exclusive = WeaponRecord {
-            flags3: 0x0020,
-            ..blaster(181, 0)
-        };
-        let mut armament = mounted(exclusive, 1);
-        let mut supplies = Supplies::none();
-        assert_eq!(supplies.reports.take(), [], "not before it fires");
-        assert_eq!(supplies.firing(&mut armament, PRIMARY, 5).len(), 5);
-        assert_eq!(
-            supplies.reports.take(),
-            [SimDiagnostic::UnimplementedWeaponFlag {
-                weapon: WeaponId(181),
-                field: FlagField::Flags3,
-                bit: 0x0020
-            }]
-        );
+    fn an_exclusive_or_simultaneous_weapon_fires_with_no_diagnostic() {
+        // `Flags` 0x0040 (copies fire together) and `Flags3` 0x0020
+        // (exclusive) are both built, for the player and an NPC alike.
+        for (flags, flags3) in [(0x0040, 0), (0, 0x0020)] {
+            let record = WeaponRecord {
+                flags,
+                flags3,
+                ..blaster(181, 0)
+            };
+            let mut player = Supplies::none();
+            assert_eq!(
+                player.firing(&mut mounted(record, 2), PRIMARY, 5).len(),
+                5,
+                "{flags:#x} {flags3:#x}: the player's fire"
+            );
+            assert_eq!(player.reports.take(), [], "{flags:#x} {flags3:#x}");
+            let mut npc = npc_supplies(LauncherRounds::default(), 100.0);
+            let volley = npc.pick(&mut mounted(record, 2), 181, RuleSource::Engine, &mut ahead);
+            assert!(volley.is_some(), "{flags:#x} {flags3:#x}: an NPC's pick");
+            assert_eq!(npc.reports.take(), [], "{flags:#x} {flags3:#x}");
+        }
     }
 
     #[test]
@@ -3666,7 +3669,7 @@ mod tests {
     }
 
     #[test]
-    fn point_defence_reports_its_flags_as_it_fires() {
+    fn exclusive_point_defence_fires_with_no_diagnostic() {
         let mut armament = mounted(
             WeaponRecord {
                 flags3: 0x0020,
@@ -3675,22 +3678,15 @@ mod tests {
             1,
         );
         let mut supplies = Supplies::none();
-        defend(
-            &mut armament,
-            &mut supplies,
-            &mut NeverFires,
-            None,
-            &mut Vec::new(),
-        );
-        assert_eq!(supplies.reports.take(), [], "not before it fires");
-        defend(
+        let fired = defend(
             &mut armament,
             &mut supplies,
             &mut NeverFires,
             Some((0.0, ShotId(0))),
             &mut Vec::new(),
         );
-        assert_eq!(supplies.reports.take().len(), 1);
+        assert!(fired.is_some());
+        assert_eq!(supplies.reports.take(), []);
     }
 
     /// The ticks of `ticks` on which `armament`'s point defence fires at a

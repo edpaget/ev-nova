@@ -22321,22 +22321,17 @@ pub(super) mod tests {
 
     #[test]
     fn diagnostics_are_drained_once() {
+        // A weapon the fight reports: a fighter bay with no ship to carry.
         let mut catalog = armed();
-        catalog.weapons[0].flags3 = 0x0020;
+        catalog.weapons[0].guidance = 99;
+        catalog.weapons[0].ammo_type = -1;
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
         for _ in 0..5 {
             work(&mut session, &catalog, Controls::default());
         }
-        assert_eq!(
-            session.take_diagnostics(),
-            [SimDiagnostic::UnimplementedWeaponFlag {
-                weapon: WeaponId(128),
-                field: crate::combat::flags::FlagField::Flags3,
-                bit: 0x0020
-            }]
-        );
-        assert_eq!(session.take_diagnostics(), []);
+        assert_ne!(session.take_diagnostics(), [], "made while firing");
+        assert_eq!(session.take_diagnostics(), [], "drained");
     }
 
     #[test]
