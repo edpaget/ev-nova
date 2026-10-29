@@ -164,10 +164,13 @@ pub(super) struct Escorts {
     /// Each escort of the fleet's NPC in the system, lined up with the
     /// pilot's escorts while in flight; none for one not placed.
     pub(super) fleet: Vec<Option<NpcId>>,
-    /// Whether the person escorts are restocked full to their fitted
-    /// ships as they are placed next: after a take-off, and when a pilot
-    /// is flown.
-    pub(super) restock_persons: bool,
+    /// Whether the escorts placed next are restocked, `_RespawnEscort`'s
+    /// argument (@0x3d4b8): after a take-off, and when a pilot is flown
+    /// (restock 1 @0x674c2, @0x1937a, @0x1a8c5, @0x1afeb), not at a jump's
+    /// arrival or a gate's exit (0 @0x6c1f9, @0x672e0). Restocked, each
+    /// takes its class's stock weapons and rounds, and a person escort its
+    /// fitted ship's reserves full (see `Session::enter_escorts`).
+    pub(super) restock: bool,
     /// The last order the player gave each escort class, in
     /// [`EscortClass::ALL`](crate::escort::EscortClass::ALL) order: the
     /// original's one order per class (0x3b5394), which a ship joining
@@ -223,7 +226,7 @@ impl Space {
                 dialog: None,
                 release_comm_escort: false,
                 fleet: Vec::new(),
-                restock_persons: false,
+                restock: false,
                 class_orders: [None; 4],
                 quote_clock: persons::QuoteClock::default(),
             },

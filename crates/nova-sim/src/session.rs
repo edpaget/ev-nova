@@ -481,6 +481,8 @@ mod escort_hits;
 mod escort_land;
 #[cfg(test)]
 mod escort_loss;
+#[cfg(test)]
+mod escort_rounds;
 mod escorts;
 mod events;
 mod exchange_events;

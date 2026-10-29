@@ -132,6 +132,7 @@ mod idle_bays;
 #[cfg(test)]
 mod rating_stretch;
 mod reloading;
+mod respawn;
 mod secondary_select;
 
 use std::collections::BTreeMap;

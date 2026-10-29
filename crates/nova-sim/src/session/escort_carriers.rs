@@ -19,7 +19,7 @@ use crate::traffic::npc::NpcId;
 
 /// [`carrying`], the warship escort's class carrying a Viper Bay with two
 /// Vipers aboard.
-fn escort_carrying() -> FakePilotCatalog {
+pub(super) fn escort_carrying() -> FakePilotCatalog {
     let mut catalog = carrying();
     let hull = catalog
         .hulls
@@ -37,7 +37,7 @@ fn escort_carrying() -> FakePilotCatalog {
 /// A session with the warship escort following `order`, and a pirate
 /// 200 above the player attacking it, `pirates` more far off; the
 /// session, the escort and the pirate.
-fn raided_escort(
+pub(super) fn raided_escort(
     catalog: &FakePilotCatalog,
     order: EscortOrder,
     pirates: u32,
@@ -62,7 +62,7 @@ fn raided_escort(
 }
 
 /// The Vipers aboard NPC `carrier`.
-fn aboard(session: &Session, carrier: NpcId) -> i32 {
+pub(super) fn aboard(session: &Session, carrier: NpcId) -> i32 {
     session
         .space
         .npc(carrier)
@@ -70,7 +70,11 @@ fn aboard(session: &Session, carrier: NpcId) -> i32 {
 }
 
 /// Fights until a Viper is out, at most `limit` ticks: whether one is.
-fn until_launched(session: &mut Session, catalog: &FakePilotCatalog, limit: u32) -> bool {
+pub(super) fn until_launched(
+    session: &mut Session,
+    catalog: &FakePilotCatalog,
+    limit: u32,
+) -> bool {
     (0..limit).any(|_| {
         fight(session, catalog, &sitting_ai());
         !vipers(session).is_empty()

@@ -12,9 +12,16 @@
 //! the mission escorts, then on a jump's arrival pushed back to glide in,
 //! and after a take-off or a pilot flown moved onto its final slot (see
 //! [`escort_arrival`](super::escort_arrival)). It is of no
-//! government, its AI type its `InherentAI`, carrying its class's stock
-//! weapons and rounds, with its record's shield, armour and fuel and its
-//! standing order. Its record follows its reserves as it fights. Every
+//! government, its AI type its `InherentAI`, with its record's shield,
+//! armour and fuel and its standing order. It carries the weapons and
+//! rounds its NPC held, each weapon's reload too, through a jump's
+//! arrival and a gate's exit; a take-off and a pilot flown give it its
+//! class's stock weapons and rounds, each weapon's reload still its NPC's
+//! (`_RespawnEscort`'s restock @0x3d5a7-0x3d600, see
+//! [`Session::enter_escorts`]); one with no NPC takes its class's stock.
+//! A mission escort is never respawned so (it is marked, `_SetupShipsInSystem`
+//! @0x42c30), and keeps the mission path's spawn (see
+//! [`mission_escorts`](super::mission_escorts)). Its record follows its reserves as it fights. Every
 //! escort follows the player through a jump with no check of its own
 //! (`_MakeEscortsHyperWithParent` @0x3fd54) and arrives with its shield
 //! and armour as they were, the slowest of them setting the jump's days
@@ -137,8 +144,8 @@ use crate::catalog::ShipId;
 use crate::chance::Chance;
 use crate::cloak::Cloak;
 use crate::combat::ShipRef;
-use crate::combat::armament::Fold;
 use crate::combat::armament::Trigger;
+use crate::combat::armament::{Armament, Fold, LauncherRounds, NEVER_FIRED};
 use crate::combat::hull::Condition;
 use crate::combat::ion::Ion;
 use crate::combat::ship_frames::ShipFrames;
@@ -160,7 +167,7 @@ use crate::traffic::table::ShipKind;
 
 /// What an escort keeps from its old NPC when the fleet enters a system
 /// ([`Space::fleet_kept`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct KeptEscort {
     /// Its aux mark ([`Npc::aux`]).
     pub(super) aux: Option<u8>,
@@ -186,6 +193,12 @@ pub(super) struct KeptEscort {
     /// is unset, and it rolls one at its first think (see the `voices`
     /// module).
     pub(super) voice: Option<crate::voice::VoiceVariant>,
+    /// Its weapons and rounds, each weapon entry's count, rounds and reload
+    /// as its slot held them: kept whole with no restock, and only the
+    /// reloads with one (`_RespawnEscort` @0x3d5a7-0x3d600; see
+    /// [`Armament::respawned`] and [`Armament::restocked_from`]); none
+    /// with no NPC, and it takes its class's stock.
+    pub(super) arms: Option<(Armament, LauncherRounds)>,
 }
 
 impl Session {
@@ -195,9 +208,15 @@ impl Session {
     /// slot, escort `i` at berth `berths[i]` ([`Space::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Space::fleet_kept`]): its aux
     /// mark, its skill, its afterburner, its voice, its cloak, and its
-    /// display and fold, with no ionization, or a loaded pilot's fold set
-    /// with none kept
+    /// display and fold, the fold timed as never fired (`_RespawnEscort`
+    /// zeroes the stamp +0xa8, @0x3d50e), with no ionization, or a loaded
+    /// pilot's fold set with none kept
     /// ([`PlayerShip::loaded_escort_set`](super::PlayerShip::loaded_escort_set)).
+    /// Its weapons and rounds are its slot's unless the entry restocks
+    /// ([`Escorts::restock`](super::space::Escorts), a take-off or a pilot
+    /// flown), which gives it its class's stock, each weapon's reload
+    /// still the slot's (`_RespawnEscort` @0x3d5a7-0x3d600, see
+    /// [`KeptEscort::arms`]).
     /// One that kept no skill rolls one on `chance`, and one that kept no afterburner, having no NPC (a
     /// loaded pilot's), rolls it on `chance`, as `_LoadPilotData`'s
     /// `_SpawnEscort` does (@0x75a25; see the `afterburner_roll` module).
@@ -218,9 +237,10 @@ impl Session {
             }
             self.space.escorts.class_orders = [None; 4];
         }
+        let restock = self.space.escorts.restock;
         self.space.escorts.fleet = (0..self.pilot.escorts.len())
             .map(|index| {
-                let kept = kept.get(index).copied().unwrap_or_default();
+                let kept = kept.get(index).cloned().unwrap_or_default();
                 let id = self.place_escort_at(
                     index,
                     berths.get(index).copied(),
@@ -238,11 +258,25 @@ impl Session {
                     npc.cloak = kept.cloak;
                     // `_RespawnEscort` clears its glow (@0x3d505).
                     npc.display.glow = 0;
+                    match kept.arms {
+                        Some((armament, _)) if restock => {
+                            npc.armament = armament.restocked_from(npc.armament.clone());
+                        }
+                        Some((armament, rounds)) => {
+                            npc.armament = armament.respawned();
+                            npc.rounds = rounds;
+                        }
+                        None => {}
+                    }
                     match kept.display {
                         Some((frames, fold, anim)) => {
                             npc.display.frames = frames;
                             npc.display.rolls.anim = anim;
-                            *npc.armament.fold_mut() = fold;
+                            // Its stamp zeroed (+0xa8 = 0, @0x3d50e).
+                            *npc.armament.fold_mut() = Fold {
+                                since_fire: NEVER_FIRED,
+                                ..fold
+                            };
                         }
                         None => npc.armament.fold_mut().set = loaded.unwrap_or(0),
                     }
@@ -259,7 +293,7 @@ impl Session {
             })
             .collect();
         self.space.traffic.reserve(BTreeSet::new());
-        self.space.escorts.restock_persons = false;
+        self.space.escorts.restock = false;
     }
 
     /// Escort `index` as an NPC in the system at the first free berth, its
@@ -297,7 +331,7 @@ impl Session {
             Some((kind, person)) => (kind, Some(person)),
             None => (self.setup.ship_kind(&self.statics, record), None),
         };
-        if self.space.escorts.restock_persons && person.is_some() {
+        if self.space.escorts.restock && person.is_some() {
             restock(&mut escort.reserves, &kind);
             self.pilot.escorts[index].reserves = escort.reserves;
         }
@@ -932,6 +966,7 @@ impl Space {
                     afterburner: Some(npc.afterburner),
                     voice: npc.voice,
                     cloak: npc.cloak,
+                    arms: Some((npc.armament.clone(), npc.rounds.clone())),
                 })
             })
             .collect()
@@ -950,7 +985,9 @@ impl Space {
     /// Each escort's shield, armour and fuel, full as its class holds
     /// them, the fuel as recorded no more than it holds.
     /// A person escort, whose fitted ship only the system's traffic knows,
-    /// is restocked to it as it is placed next.
+    /// is restocked to it as it is placed next, and every escort placed
+    /// next takes its class's stock weapons and rounds
+    /// ([`Session::enter_escorts`]).
     pub(super) fn restock_fleet(&mut self, pilot: &mut Pilot, statics: &Statics, setup: &Setup) {
         for index in 0..pilot.escorts.len() {
             let ship = pilot.escorts[index].ship;
@@ -960,7 +997,7 @@ impl Space {
             let kind = setup.ship_kind(statics, record);
             restock(&mut pilot.escorts[index].reserves, &kind);
         }
-        self.escorts.restock_persons = true;
+        self.escorts.restock = true;
     }
 
     /// Each escort's record takes its NPC's shield, armour and fuel.
@@ -3515,10 +3552,7 @@ pub(super) mod tests {
             60.0,
             "restocked before it is placed"
         );
-        assert!(
-            !session.space.escorts.restock_persons,
-            "the restock consumed"
-        );
+        assert!(!session.space.escorts.restock, "the restock consumed");
     }
 
     #[test]
