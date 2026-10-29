@@ -214,7 +214,8 @@ impl<T: StatusBars + ?Sized> StatusBars for Rc<T> {
 }
 
 /// An effect's sprite sheet: the image its frames come from, how many
-/// frames it holds and how wide each is.
+/// frames it holds and each frame's width and height, which a sprite
+/// placed as the original places one goes by (`Camera::sprite_top_left`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EffectSheet {
     /// The image its frames come from: its `rlëD`, or its `spïn`'s `PICT`

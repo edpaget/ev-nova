@@ -26,8 +26,10 @@
 //!
 //! - `world_to_screen(p) = anchor + (p - center) x WORLD_SCALE`
 //! - `screen_to_world(s) = center + (s - anchor) / WORLD_SCALE`
+//! - a sprite placed as the original places one, at whole pixels from
+//!   the center: [`Camera::sprite_top_left`] and [`Camera::sprite_centre`]
 
-use nova_sim::RuleSource;
+use nova_sim::{RuleSource, Vec2};
 
 use crate::Point;
 use crate::geometry::Bounds;
@@ -181,6 +183,55 @@ impl Camera {
         Point::new(
             (s.x - anchor.x).mul_add(per_logical_unit, self.center.x),
             (s.y - anchor.y).mul_add(per_logical_unit, self.center.y),
+        )
+    }
+
+    /// Where a sprite whose frame is `size` (width, height) has its top
+    /// left when it stands at world point `at`, placed as the original
+    /// places one: `trunc(at - center) + anchor - size / 2` on each axis,
+    /// the offset truncated toward zero and the half size halved toward
+    /// zero, so an odd size's extra pixel falls right and below. The rule
+    /// is `nova_sim::story::sprite_pool::offset`, not forked here.
+    ///
+    /// `_HandleExplods` places an explosion this way (@0x2f6a1-0x2f73c),
+    /// as `_HandleStellarSprites` (@0x2eeab-0x2ef1a) and
+    /// `_HandleShipDisplay` (@0x2cd1c-0x2ce31) place stellars and ships,
+    /// which rdm:phase/play-feel-4/phase-12-whole-pixel-sprite-placement
+    /// moves onto this helper.
+    ///
+    /// The original takes the player's position at the step; flight's
+    /// camera follows the player's shown position, interpolated between
+    /// steps and equal to the step's at alpha 0. Taking the camera's
+    /// center lets the whole-pixel offset move with the drawn world between
+    /// steps rather than jump a pixel against it; no frame boundary sees
+    /// the difference.
+    #[must_use]
+    pub fn sprite_top_left(&self, at: Point, size: (u32, u32)) -> Point {
+        let (dx, dy) = nova_sim::story::sprite_pool::offset(
+            Vec2::new(at.x, at.y),
+            Vec2::new(self.center.x, self.center.y),
+            size,
+        );
+        let anchor = self.anchor();
+        // A screen offset is far within an `f32`'s whole numbers.
+        #[allow(clippy::cast_precision_loss)]
+        Point::new(
+            (dx as f32).mul_add(WORLD_SCALE, anchor.x),
+            (dy as f32).mul_add(WORLD_SCALE, anchor.y),
+        )
+    }
+
+    /// The point a sprite placed by [`Camera::sprite_top_left`] is
+    /// centred on, as [`DrawCommand::Sprite`](crate::DrawCommand::Sprite)
+    /// takes it: the top left plus half the size.
+    #[must_use]
+    pub fn sprite_centre(&self, at: Point, size: (u32, u32)) -> Point {
+        let top_left = self.sprite_top_left(at, size);
+        // A sprite's frame is far within an `f32`'s whole numbers.
+        #[allow(clippy::cast_precision_loss)]
+        Point::new(
+            top_left.x + size.0 as f32 / 2.0,
+            top_left.y + size.1 as f32 / 2.0,
         )
     }
 
@@ -395,5 +446,52 @@ mod tests {
         assert_eq!(camera.world_to_screen(at(0.0, 0.0)), VIEW_CENTER);
         camera.move_by(-50.0, 25.0);
         assert_eq!(camera.center(), at(-50.0, 25.0), "the limits are kept");
+    }
+
+    /// A camera on (100, 200) drawing it at `anchor`.
+    fn on_100_200(anchor: Anchor) -> Camera {
+        Camera::centred_on(at(100.0, 200.0)).with_anchor(anchor)
+    }
+
+    #[test]
+    fn a_sprites_top_left_is_its_offset_truncated_toward_zero_less_half_its_size() {
+        let camera = on_100_200(Anchor::PlayAreaCentre);
+        assert_eq!(camera.anchor(), at(415.0, 384.0));
+        // (10.7, -4.6) truncates to (10, -4); a 7 x 5 frame's half is (3, 2).
+        assert_eq!(
+            camera.sprite_top_left(at(110.7, 195.4), (7, 5)),
+            at(422.0, 378.0)
+        );
+        // (-10.7, 4.6) truncates to (-10, 4), toward zero, not floored.
+        assert_eq!(
+            camera.sprite_top_left(at(89.3, 204.6), (7, 5)),
+            at(402.0, 386.0)
+        );
+    }
+
+    #[test]
+    fn a_sprites_top_left_is_taken_from_the_cameras_anchor() {
+        let camera = on_100_200(Anchor::ViewCentre);
+        assert_eq!(
+            camera.sprite_top_left(at(110.7, 195.4), (7, 5)),
+            at(519.0, 378.0)
+        );
+        assert_eq!(
+            camera.sprite_top_left(at(89.3, 204.6), (7, 5)),
+            at(499.0, 386.0)
+        );
+    }
+
+    #[test]
+    fn a_sprites_centre_draws_its_rect_from_the_whole_pixel_top_left() {
+        let camera = on_100_200(Anchor::PlayAreaCentre);
+        let centre = camera.sprite_centre(at(110.7, 195.4), (7, 5));
+        assert_eq!(centre, at(425.5, 380.5));
+        // The rect a sprite centred there draws starts at the top left.
+        assert_eq!(at(centre.x - 3.5, centre.y - 2.5), at(422.0, 378.0));
+        assert_eq!(
+            camera.sprite_centre(at(89.3, 204.6), (8, 6)),
+            at(405.0, 388.0)
+        );
     }
 }

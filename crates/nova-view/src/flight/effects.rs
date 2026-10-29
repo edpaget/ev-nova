@@ -32,14 +32,15 @@
 //!     (@0x2f741-0x2f784), but overwrites it with 0x20 (@0x2f7e2) before
 //!     any draw: a dead store, as in `_HandleSmoke`, never seen, and not
 //!     built.
-//!   - Left out: the original places an explosion's top left at
-//!     `trunc(at - player) + centre - trunc(size / 2)` on each axis, whole
-//!     pixels from the player (@0x2f6a1-0x2f73c), where the view draws it
-//!     centred at its float screen point, up to a pixel off; it needs each
-//!     sheet's frame height (`_GetSpriteYSize`), which
-//!     [`EffectSheet`](super::catalog::EffectSheet) does not carry
-//!     (rdm:phase/play-feel-2-followups/phase-2-explosions-at-whole-pixels).
-//!     The 8-bit blits
+//!   - Placed as `_HandleExplods` places it (@0x2f6a1-0x2f73c): its top
+//!     left at `trunc(at - player) + centre - size / 2` on each axis,
+//!     whole pixels from the player, the half size halved toward zero so
+//!     an odd size's extra pixel falls right and below, through
+//!     [`Camera::sprite_top_left`]. The size is the current frame's
+//!     (`_GetSpriteXSize`/`_GetSpriteYSize` @0x26d4-0x2731), each
+//!     [`EffectSheet`](super::catalog::EffectSheet)'s frame width and
+//!     height; their 32-pixel fallback can't happen for a shown explosion.
+//!   - Left out: the 8-bit blits
 //!     (@0xbb5a9-0xbb88b), as the engine draws at 16 bits only
 //!     (rdm:phase/stellar-fidelity-cross-roadmap/phase-1-translucent-8-bit-sheets).
 //!     The frozen flag `*0x3b523c`'s gates on the delay countdown
@@ -708,7 +709,8 @@ impl Effects {
                 let frame = sheet.image.frame(explosion.frame as u16);
                 let at = Vec2::new(explosion.at.x, explosion.at.y);
                 let tint = murk_tint(lights_tint(EXPLOSION_LEVEL), sprite_murk(at, viewer, murk));
-                list.or_sprite(frame, camera.world_to_screen(explosion.at), tint);
+                let size = (sheet.frame_width, sheet.frame_height);
+                list.or_sprite(frame, camera.sprite_centre(explosion.at, size), tint);
             }
         }
     }
@@ -2162,6 +2164,55 @@ mod tests {
         let mut chance = Script::of(&[0, 0, 0]);
         effects.apply(&destroyed(None, 0.0), &scene(), &looks(), &mut chance);
         effects
+    }
+
+    #[test]
+    fn an_explosion_is_placed_with_its_top_left_at_whole_pixels_from_the_player() {
+        let sheeted = |image_id: i16, size: (u32, u32)| {
+            Ok(BoomLook {
+                sheet: Ok(EffectSheet {
+                    frame_width: size.0,
+                    frame_height: size.1,
+                    image: crate::SheetImage::Rled(image_id),
+                    frames: NonZeroU16::new(2).expect("non-zero"),
+                }),
+                advance: 1.0,
+                sound: None,
+            })
+        };
+        let mut sized = looks();
+        sized.booms.insert(BoomId(131), sheeted(403, (7, 5)));
+        sized.booms.insert(BoomId(132), sheeted(404, (6, 5)));
+        let centre = |boom: i16| {
+            let mut effects = Effects::default();
+            effects.explode(
+                blast(boom, false),
+                at(PLAYER.x + 10.7, PLAYER.y - 4.6),
+                0.0,
+                &scene(),
+                &sized,
+                &mut Script::default(),
+            );
+            let mut list = DrawList::new();
+            effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &sized, VIEWER, 0);
+            let commands: Vec<DrawCommand> = list.iter().cloned().collect();
+            match commands.as_slice() {
+                [
+                    DrawCommand::Sprite {
+                        center,
+                        blend: crate::Blend::Or,
+                        ..
+                    },
+                ] => *center,
+                _ => panic!("one or-blended sprite: {commands:?}"),
+            }
+        };
+        // Top left (512 + 10 - 3, 384 - 4 - 2) = (519, 378): the 7 x 5
+        // frame's extra pixel falls right and below.
+        assert_eq!(centre(131), at(519.0 + 3.5, 378.0 + 2.5));
+        // A 6 x 5 frame: (512 + 10 - 3, 378), its width and height each
+        // read from its own side.
+        assert_eq!(centre(132), at(519.0 + 3.0, 378.0 + 2.5));
     }
 
     #[test]
