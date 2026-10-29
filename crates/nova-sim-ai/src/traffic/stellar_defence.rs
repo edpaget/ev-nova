@@ -627,6 +627,18 @@ mod tests {
     }
 
     #[test]
+    fn a_save_reads_each_kept_count_with_its_def_count_by_id() {
+        let mut ships = DefenceShips::default();
+        assert_eq!(ships.saved().count(), 0, "every count its decode");
+        ships.set_left(&site(140, 7006), 3);
+        ships.set_left(&site(128, 5), 0);
+        assert_eq!(
+            ships.saved().collect::<Vec<_>>(),
+            [(StellarId(128), 0, 5), (StellarId(140), 3, 7006)]
+        );
+    }
+
+    #[test]
     fn a_release_restores_the_decoded_count() {
         let mut defences = DefenceShips::default();
         let earth = site(128, 1082);
@@ -1056,6 +1068,21 @@ mod tests {
         let mut next = traffic_of(defence_table("", false));
         next.keep_defences(taken);
         assert_eq!(next.defences().ships().left(&earth(3)), 4);
+    }
+
+    #[test]
+    fn the_pilots_ships_are_lent_to_the_traffic_and_taken_back() {
+        let mut traffic = traffic_of(defence_table("", false));
+        let mut ships = DefenceShips::default();
+        ships.set_left(&earth(3), 1);
+        let lent = ships.clone();
+        traffic.swap_defence_ships(&mut ships);
+        assert_eq!(traffic.defences().ships(), &lent);
+        assert_eq!(ships, DefenceShips::default(), "the traffic's, empty");
+        traffic.defences_mut().ships_mut().spend(&earth(3));
+        traffic.swap_defence_ships(&mut ships);
+        assert_eq!(ships.left(&earth(3)), 0, "the spend comes back");
+        assert_eq!(traffic.defences().ships(), &DefenceShips::default());
     }
 
     #[test]
