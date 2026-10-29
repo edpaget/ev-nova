@@ -133,8 +133,12 @@ fn merge(arrays: &mut Arrays, captured: Captured<'_>, arsenal: &Arsenal) {
             .filter(|mount| mount.spec.id == weapon)
             .map(|mount| mount.count)
             .sum();
+        // The original copies when `c > 0` and the player's count is none
+        // or below (@0x41907, @0x4191f). The player's counts come from
+        // `u16` outfit counts, never below none, so copying a count of
+        // none too writes none over none.
         let have = arrays.weapons.entry(weapon).or_default();
-        if count > 0 && *have <= 0 {
+        if *have <= 0 {
             *have = i64::from(count);
         }
         let rounds = captured.rounds.slot(weapon);
@@ -357,6 +361,19 @@ mod tests {
         assert_eq!(
             merged(&records, &[(406, 2)], &[(140, 1)], &[(140, 3)], &[]),
             [(257, 1), (406, 2)]
+        );
+    }
+
+    #[test]
+    fn rounds_owned_at_none_block_no_copy() {
+        // 407 protects 140, and the player holds 140's rounds (406) at
+        // none: 140's 3 still go to 134's slot.
+        let mut records = base();
+        records.push(persistent(406, &[(MOD_AMMO, 140)]));
+        records.push(persistent(407, &[(MOD_WEAPON, 140)]));
+        assert_eq!(
+            merged(&records, &[(406, 0)], &[(140, 1)], &[(140, 3)], &[]),
+            [(257, 1), (403, 3)]
         );
     }
 
