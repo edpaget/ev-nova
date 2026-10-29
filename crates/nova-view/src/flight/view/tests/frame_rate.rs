@@ -187,6 +187,25 @@ fn the_readout_goes_on_once_the_hold_has_expired() {
 }
 
 #[test]
+fn nothing_is_said_while_docked() {
+    let mut view = shown();
+    view.sim.set_frame(FlightFrame {
+        landed: Some(StellarId(128)),
+        ..in_sol()
+    });
+    view.refresh_frame();
+    let from = sent_count(&view);
+    tick_sixtieths(&mut view, 200);
+    assert_eq!(view.message(), None, "no readout line");
+    assert!(
+        !sent(&view)[from..]
+            .iter()
+            .any(|command| matches!(command, FlightCommand::CommShown(_))),
+        "no line shown to the flight"
+    );
+}
+
+#[test]
 fn a_flight_built_with_it_shown_says_a_number_not_calculating() {
     let mut view = faked(in_sol()).with_frame_rate_shown(true);
     assert!(view.frame_rate_shown());
