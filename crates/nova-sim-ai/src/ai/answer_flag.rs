@@ -32,14 +32,24 @@
 //! | Docking | @0x3bab7-0x3bb1a | an NPC's hit on a ship docking (`_AIShipIsDocking` @0x83f95, substate 0xf), here a pirate docking with or docked to a ship it plunders, or one docking with or docked to the player it repairs ([`Goal::Assist`] with [`Help::Repair`]), its [`Npc::docking`] in [`DockSub::Dock`], is not answered |
 //! | Entry test | @0x3bb20-0x3bb74 | a fighter-class attacker (ship class +0xe, [`EscortClass::Fighter`]), the player's ship included, on a ship that isn't one, has a target and attacks (`_IsShipAttacking` @0x82f6a, goal 4: [`Goal::attacking`]), is not answered |
 //!
+//! **Defence ships** (+0x8c, the stellar a ship defends,
+//! [`Npc::defends`]) take two branches of their own, each of which leaves
+//! the flag as the rows above already do, so nothing reads
+//! [`Npc::defends`] here:
+//!
+//! - a defender's self-hit (@0x3b411-0x3b4c8) clears the flag (@0x3b4b5)
+//!   and jumps to the docking test (@0x3bab7), where any other self-hit
+//!   leaves at the entry gate (@0x3b453): either way a ship hitting
+//!   itself never answers and adds no stray provocation;
+//! - a hit by a defender sharing the victim's leader (@0x3b68e-0x3b6ec)
+//!   clears the flag, as the same-leader row clears it for any ship of
+//!   that leader. A defender has no leader, as its spawn writes -1 and a
+//!   capture or a pirate's take clears its +0x8c, so it never arises.
+//!
 //! Left out, for want of what they read (weapons-fidelity phase 37
 //! records each; the plunder docking of the table above, once among
 //! them, is built):
 //!
-//! - **Defence ships** (+0x8c, the stellar a ship defends): a self-hit by
-//!   one (@0x3b408-0x3b4c8; either way a ship hitting itself never
-//!   answers), fleetmates (@0x3b68e-0x3b6ec). Noted on rdm task
-//!   planet-domination, with the reaction block's defence-ship branches.
 //! - **The jump-out stage** (+0x50 above 0): the entry gate's test
 //!   (@0x3b46a), arriving (@0x3b97e, dead code after the gate) and a
 //!   victim whose leader jumps out (@0x3bab7-0x3bae4). They read the
@@ -542,6 +552,30 @@ mod tests {
         };
         assert_eq!(scene.judge(&own, &[]), (Verdict::default(), vec![]));
         assert_eq!(scene.judge(&astray(own), &[]), (Verdict::default(), vec![]));
+    }
+
+    #[test]
+    fn a_defence_ships_own_hit_and_a_defending_fleetmates_go_unanswered() {
+        let govts = govts(0, 0);
+        let defending = |mut npc: Npc| {
+            npc.defends = Some(crate::catalog::StellarId(128));
+            npc
+        };
+        let npcs = [
+            defending(led(of(1, Some(TRADERS)), 9)),
+            defending(led(of(2, Some(PIRATES)), 9)),
+            of(9, Some(PIRATES)),
+        ];
+        let scene = Scene::new(&npcs, &govts);
+        assert_eq!(
+            scene.judge(&strike(n(1), n(1)), &[]),
+            (Verdict::default(), vec![]),
+            "the defender's self-hit (@0x3b411-0x3b4c8)"
+        );
+        assert!(
+            !scene.answers(&strike(n(1), n(2))),
+            "a defender of the same leader (@0x3b6d5)"
+        );
     }
 
     // Kin and leaders.

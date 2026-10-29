@@ -2518,7 +2518,9 @@ impl Session {
     /// breaking one up, which is disabling it too
     /// when it `was` intact before (as `_DamageShip` slaps both). Each
     /// victim's condition, government and mission mark are as it `was`
-    /// before the fight's tick. A mission's special ship, of any mark,
+    /// before the fight's tick. A stellar's defence ship is convicted of
+    /// neither, as `_DamageShip`'s target gate skips the block for it
+    /// (@0x3ad81-0x3ad89). A mission's special ship, of any mark,
     /// is convicted of neither: `_DamageShip` passes the ship's mark
     /// (@0x3adb3, @0x3ae08), and `_SlapWithPenalty` slaps only for none
     /// (@0x9c10; see the [`legal`] module's "Crimes"). Each conviction
@@ -2549,6 +2551,7 @@ impl Session {
                 condition,
                 govt,
                 marked: false,
+                defends: false,
                 ..
             }) = was.iter().find(|before| before.id == id)
             else {
@@ -6433,7 +6436,8 @@ impl Space {
     /// [`rating`](crate::rating)): the player answers for the hit
     /// ([`Space::players_hit`], which reads the escorts the strikes lost,
     /// `losses`), and the victim's government, from `was`, is not
-    /// derelict. As the original's `_DamageShip` (@0x3ad4f-0x3ae53), the
+    /// derelict, and it defended no stellar (@0x3ad81-0x3ad89). As the
+    /// original's `_DamageShip` (@0x3ad4f-0x3ae53), the
     /// credit comes with the hit, before the victim is taken out.
     fn credit_kills(
         &mut self,
@@ -6449,7 +6453,7 @@ impl Space {
             };
             let Some(govt) = was
                 .iter()
-                .find(|before| before.id == id)
+                .find(|before| before.id == id && !before.defends)
                 .map(|before| before.govt)
             else {
                 continue;
@@ -6927,6 +6931,10 @@ struct NpcBefore {
     govt: Option<GovtId>,
     /// Whether it carried a mission's mark, of any slot.
     marked: bool,
+    /// Whether it defended a stellar: the player's hits on it are no
+    /// crime and no kill (`_DamageShip` @0x3ad81-0x3ad89, see the
+    /// `players_hits` module).
+    defends: bool,
 }
 
 impl NpcBefore {
@@ -6936,6 +6944,7 @@ impl NpcBefore {
             condition: npc.condition,
             govt: npc.govt,
             marked: npc.mission.is_some(),
+            defends: npc.defends.is_some(),
         }
     }
 }
@@ -19419,6 +19428,7 @@ pub(super) mod tests {
             condition: Condition::Disabled,
             govt: Some(GovtId(140)),
             marked: false,
+            defends: false,
         }];
         let broken_up_by = |by| Strike {
             ship: ShipRef::Npc(NpcId(0)),
@@ -19486,6 +19496,7 @@ pub(super) mod tests {
             condition: Condition::Disabled,
             govt: Some(GovtId(140)),
             marked: false,
+            defends: false,
         }];
         session.space.credit_kills(
             &mut session.pilot,
@@ -19526,6 +19537,7 @@ pub(super) mod tests {
                 condition: Condition::Disabled,
                 govt: Some(GovtId(140)),
                 marked: false,
+                defends: false,
             }];
             let own_blast = Strike {
                 ship: ShipRef::Npc(NpcId(0)),
@@ -19565,6 +19577,7 @@ pub(super) mod tests {
             condition: Condition::Intact,
             govt: Some(GovtId(140)),
             marked: false,
+            defends: false,
         }];
         let strike = |ship, downed| Strike {
             ship,
@@ -20276,6 +20289,7 @@ pub(super) mod tests {
             condition: Condition::Intact,
             govt: Some(GovtId(140)),
             marked: false,
+            defends: false,
         }];
         let rating = session.pilot().combat_rating();
         let witness = Witness::default();
