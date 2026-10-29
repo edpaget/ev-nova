@@ -12,9 +12,8 @@
 //!    can't see is no threat, nor is the player's own escort (@0x81b9f);
 //!    a ship attacking the player or a ship it leads (@0x81c2e-0x81c4a),
 //!    one whose hit's target is the player, and a lead whose escort
-//!    fights the player (@0x81cdd-0x81dbe) are. Its stellar-defender
-//!    clause (+0x8c, @0x81bd3) is left out, as the engine has no defence
-//!    ships (rdm:task/planet-domination).
+//!    fights the player (@0x81cdd-0x81dbe) are, and so is a seen stellar
+//!    defender with any target (+0x8c, @0x81bd3).
 //! 2. The player's escorts do, hired or mission escorts (leader 0,
 //!    @0x82199). So does a ship whose government blesses the player with
 //!    peace (rank `Flags` 0x0100, `_PlayerBlessedByGovt(G, 0)` @0x821b9,

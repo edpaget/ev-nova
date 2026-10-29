@@ -313,9 +313,8 @@ impl<'a> Hail<'a> {
     /// `_ExtendedIsThreatToPlayer` holds for (@0x824b8,
     /// [`Npc::threatens_player_extended`], read whole with the player's
     /// sight) and `_IsShipMyEnemy` (@0x8196c) finds the ship's enemy
-    /// (@0x824cf). Two branches are left out: the extended test's stellar
-    /// defender (+0x8c, @0x81bd3), as the engine has no defence ships
-    /// (rdm:task/planet-domination), and `_IsShipMyEnemy`'s test that the
+    /// (@0x824cf), the extended test's stellar defender (+0x8c, @0x81bd3)
+    /// among them. One branch is left out: `_IsShipMyEnemy`'s test that the
     /// other is not the shareware nag ship (`+0xc8d0 != 0x3ff` @0x819a4,
     /// `_SpawnNagShip` @0x61b5), as the engine has none. Nothing plays a
     /// sound.

@@ -71,7 +71,9 @@
 //! - +0x47, a defence ship of the stellar in the system, set and
 //!   cleared each frame (`_DoPlayGameWork` @0x443d4-0x4444f) and cleared
 //!   for every stellar here (@0x32d5d), which `_IsThreatToStellar` reads
-//!   for a `Flags2` 0x0200 stellar (@0x9f36): task planet-domination;
+//!   for a `Flags2` 0x0200 stellar (@0x9f36): the traffic's
+//!   (`nova_sim_ai::traffic::stellar_defence`), which the session clears
+//!   at each rebuild point;
 //! - unloading the master sprites no longer needed (@0x32d74-0x32e4e):
 //!   nothing observable, not modelled;
 //! - the sprite slots and their fallback frames (@0x32e54-0x33331): the

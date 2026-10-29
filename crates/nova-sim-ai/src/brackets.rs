@@ -38,9 +38,9 @@
 //! Neither routine plays a sound: the selection sounds are
 //! `_HandlePlayer`'s.
 //!
-//! Left out: the defender case of the ship frame (+0x8c != −1 with the
-//! player as parent, @0x2ffd3), as ours has no ship led by the player
-//! that defends a stellar; and `_SWIsSpriteInRect`'s per-frame insets
+//! Never reached: the defender case of the ship frame (+0x8c != −1 with
+//! the player as parent, @0x2ffd3), as a defence ship has no leader (its spawn writes -1) and a capture or a pirate's take clears its stellar. Left out:
+//! `_SWIsSpriteInRect`'s per-frame insets
 //! (frame +0x2e-+0x34), as ours has no trimmed frame bounds and uses the
 //! whole sprite.
 

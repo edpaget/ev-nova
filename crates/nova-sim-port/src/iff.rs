@@ -50,8 +50,9 @@
 //! (an escort's fighter, which `Space::join_carrier` leads by the
 //! escort and gives no escort duty).
 //!
-//! Left out: the escort test's defender case (@0x4b52-0x4b7c), a ship
-//! led by the player that defends a stellar. Ours has no such ship.
+//! Never reached: the escort test's defender case (@0x4b52-0x4b7c), a
+//! ship led by the player that defends a stellar, as a defence ship has no leader (its spawn writes -1) and a capture or a pirate's take clears its stellar (see
+//! `nova_sim_ai::traffic::stellar_defence`).
 //!
 //! # Stellars ([`stellar_iff`], `_ColorCodeStellar` @0xaa26)
 //!

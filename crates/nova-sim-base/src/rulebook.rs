@@ -199,7 +199,7 @@
 //! | [`PatrolUninhabited`](RuleKey::PatrolUninhabited) | `patrol_uninhabited` | an interceptor's patrol, picking plain stellars only, can pick an uninhabited one: the count that lets it pick needs an inhabited one, but the pick does not test for one (`_SelectRandomStellarDest` @0x808b6, @0x80911-0x80940; see `nova_sim::traffic::destination`) | it leaves uninhabited stellars out too\* |
 //! | [`GateExitCounts`](RuleKey::GateExitCounts) | `gate_exit_counts` | a mission ship that leaves through a hypergate or wormhole counts nothing, and comes back at the next setup: `_HandleShipDisplay` frees its slot (@0x2c078) without the end of a warp out's count (`_LowLevelAIHandler` @0x85960-0x859aa; see `nova_sim::traffic::gate_entry`) | it is counted as one that jumped out\* |
 //! | [`MoveLeftBehind`](RuleKey::MoveLeftBehind) | `move_left_behind` | the ships an in-flight `M` or `N` leaves behind stay in the ship table until that frame's display pass frees them (`_EvalSetExp` @0x15807, @0x1590b; `_HandleShipDisplay` @0x2ded6-0x2dee7): through the next traffic tick they hold their berths and persons, a move back brings them back as they were, and no aux ship of theirs is given back (`nova_sim::Traffic::retarget`) | they are dropped at the move, their aux ships given back as a setup gives them back (`_DeleteAllComputerShips` @0x3bfce-0x3c028)\* |
-//! | [`SpawnReserve`](RuleKey::SpawnReserve) | `spawn_reserve` | a spawn searches only the slots below its reserve: the system's traffic, the fighters, the mission ships and the hired escorts stop at 55 NPCs, the old ship of a capture at 62 (`_GenericRandomShipSpawn` @0x3c8b1-0x3c8f0, @0x41ce9, @0x3d648, @0x3cd50, @0x3fe73, @0x41136; `nova_sim::Traffic::free_berth`) | no slot is held back: each may take any of slots 1-63, as "Max Ships In System" is 64 |
+//! | [`SpawnReserve`](RuleKey::SpawnReserve) | `spawn_reserve` | a spawn searches only the slots below its reserve: the system's traffic, the fighters, the mission ships and the hired escorts stop at 55 NPCs, a stellar's defence ships at 61, the old ship of a capture at 62 (`_GenericRandomShipSpawn` @0x3c8b1-0x3c8f0, @0x41ce9, @0x3d648, @0x3cd50, @0x3fe73, @0x3d309, @0x41136; `nova_sim::Traffic::free_berth`) | no slot is held back: each may take any of slots 1-63, as "Max Ships In System" is 64 |
 //! | [`ArrivalHits`](RuleKey::ArrivalHits) | `arrival_hits` | a ship gliding in, waiting in a gate or bursting out of one answers a hit as a flying ship does: it takes the attacker as its target and the damage as provocation, a wait in a gate is cut to 20, and the player's hit on a ship waiting in a gate holds it there, seen, attacking the player (`_DamageShip` @0x3b4b0-0x3b4c2, @0x3be66-0x3be7c; `_AIMakeShipAttackPlayer` @0x89d3e-0x89d4d; see `nova_sim::Traffic::tick_in`) | it ignores every hit until it has arrived\* |
 //! | [`HireNoSlot`](RuleKey::HireNoSlot) | `hire_no_slot` | a hire that finds no ship-table slot below the spawn reserve still takes the fee and draws the class's roll again, and no escort joins, as `_DoShipyardDialog` ignores `_SpawnEscort`'s -1 (@0x5f1f1-0x5f221; `nova_sim::Session::hire`) | the hire is refused and nothing changes\* |
 //! | [`AsteroidEntryField`](RuleKey::AsteroidEntryField) | `asteroid_entry_field` | every way into a system kills the asteroid field, a jump's arrival as well, as each caller of `_CreateAsteroids` sets `_killAsteroids` first (@0x6c4fc, @0x3fa05): the field fills one asteroid a tick from the edges (see `nova_sim::asteroid`) | a jump's arrival, and a session starting or loading in flight, keeps the field `_CreateAsteroids` places\* |
@@ -2789,9 +2789,11 @@ rule_keys! {
     /// fighters launched, the mission ships (`_MissionDudeSpawn`) and the
     /// hired escorts (`_SpawnEscort`) leave 8 free, so they stop at 55
     /// NPCs (@0x41ce9, @0x421a5, @0x43297, @0x42990, @0x435a8, @0x40cba,
-    /// @0x3d648, @0x3cd50, @0x3fe73), and the old ship of a "Use As My Ship" capture leaves 1
-    /// (@0x41136). By the Bible, which gives "Max Ships In System" as 64
-    /// and holds none back, each may take any of slots 1-63.
+    /// @0x3d648, @0x3cd50, @0x3fe73), a stellar's defence ships leave 2,
+    /// so they stop at 61 (`_SpawnStellarDefenseShip` @0x3d309), and the
+    /// old ship of a "Use As My Ship" capture leaves 1 (@0x41136). By the
+    /// Bible, which gives "Max Ships In System" as 64 and holds none back,
+    /// each may take any of slots 1-63.
     SpawnReserve => "spawn_reserve",
     /// Whether a ship still coming into the system answers a hit (see
     /// `nova_sim::Traffic::tick_in`). By the engine, as

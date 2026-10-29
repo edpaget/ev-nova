@@ -3280,11 +3280,11 @@
 //!   `Flags2` 0x0200. None is disable-only, planet-type or bursting; the
 //!   Enormous Ion Turret (198) is massless.
 //! - **Left out**, each with its owner:
-//!   - +0x47, the defence ship in the system (@0x9f30-0x9f5c; set
-//!     @0x44411-0x4444f, @0x3d4a8): the engine spawns no stellar defence
-//!     ships, so it is always clear and the four stock 0x0200 stellars
-//!     never fire; the gate is built and fed false. Task
-//!     `planet-domination`.
+//!   - none for +0x47, the defence ship in the system (@0x9f30-0x9f5c;
+//!     set @0x44411-0x4444f, @0x3d4a8): the traffic keeps it
+//!     (`nova_sim_ai::traffic::stellar_defence`) and the session feeds it
+//!     to the gate, so the four stock 0x0200 stellars fire while one of
+//!     their defence ships is in the system.
 //!   - +0x46, domination by a hail (@0x9f0c): the engine has only
 //!     `Flags2` 0x0020, which is fed. Task `planet-domination`.
 //!   - a `Weapon` past the last `wëap` (@0x777a9): a read past the table,

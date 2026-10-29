@@ -14,7 +14,7 @@
 //! until then, and which stellars are under attack (+0x47).
 //!
 //! **Where the state lives.** [`StellarDefences`] is a field of the
-//! [`Traffic`](super::Traffic), so the respawn inside
+//! [`Traffic`], so the respawn inside
 //! [`Traffic::enter_more_ships`](super::Traffic::enter_more_ships) reads
 //! it on every caller, the gate exit's extra pass among them, with no
 //! parameter threaded through. A traffic lasts across systems until a

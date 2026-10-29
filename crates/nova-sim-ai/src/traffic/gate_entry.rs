@@ -81,8 +81,8 @@
 //!   decides nothing, so every entry starts at 16.
 //! - **The 16-bit wraps** of dx and dy (`cwtl` @0x8dbb3, @0x8dbd5) and of
 //!   the reach (@0x8dbfa): wider numbers are kept.
-//! - **The release's +0x8c = -1** (@0x8dd08). The engine has no defence
-//!   ships (`task/planet-domination`).
+//! - **The release's +0x8c = -1** (@0x8dd08), never reached: the
+//!   ships released are led by this one, and a defence ship has no leader (its spawn writes -1) and a capture or a pirate's take clears its stellar.
 //! - **Ships 1-63 only** (@0x8dc97-0x8dd58). The engine takes every NPC.
 //! - **The 16-bit blit** (+0xb0/+0xb4, @0x2c010-0x2c05c). It is drawn as
 //!   an alpha fade, as the emerge's is.

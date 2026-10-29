@@ -49,7 +49,10 @@
 //! - **Not yet read: Demand Tribute** (`_DoPlanetCommDialog`, rating read
 //!   @0x975d5-0x975ea): below 12,800, cheats off, the planet laughs off
 //!   the demand (`STR#` 3002 #`_responseRandom` + 6). The engine has no
-//!   planet comm dialog; rdm:task/planet-domination ports it whole.
+//!   planet comm dialog; rdm:phase/play-feel-4/phase-2-planet-comm-dialog
+//!   ports it whole. The player's hits on a defence ship it sends up
+//!   earn no kill (`_DamageShip` @0x3ad81-0x3ad89, see the session's
+//!   `players_hits` module).
 
 /// The most a rating is set back to once it is over it.
 pub const RATING_CAP: i64 = 10_000_000;
