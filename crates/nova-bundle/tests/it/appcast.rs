@@ -14,7 +14,7 @@ use nova_bundle::appcast::host::{ALREADY_PUBLISHED, FAILURE_STATUS, exit_status}
 use nova_bundle::appcast::publish::{
     AppcastError, FeedSigning, PublishPaths, Published, SEED_VAR, publish,
 };
-use nova_bundle::appcast::{Platform, SPARKLE_NS, update_asset};
+use nova_bundle::appcast::{Channel, Platform, SPARKLE_NS, update_asset};
 use nova_bundle::build_id::BuildId;
 use nova_bundle::spec::BundleSpec;
 use nova_bundle::system::{Ed25519Signer, StdFiles};
@@ -93,6 +93,7 @@ fn publish_real(root: &Path, paths: &PublishPaths, build: &str) -> Result<Publis
         &mut StdFiles,
         &spec(root),
         &id(build),
+        Channel::Nightly,
         &FeedSigning::Sign(signer()),
         paths,
     )
@@ -208,6 +209,7 @@ fn nova_appcast(args: &[&std::ffi::OsStr], seed: Option<&str>) -> Output {
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .env("CARGO", env!("CARGO"))
         .env("NOVA_BUILD_ID", BUILD)
+        .env("NOVA_CHANNEL", "nightly")
         .env_remove(SEED_VAR);
     if let Some(seed) = seed {
         command.env(SEED_VAR, seed);

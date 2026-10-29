@@ -503,8 +503,50 @@ mod tests {
     }
 
     #[test]
-    fn a_nightly_pack_with_a_key_names_the_windows_feed() {
-        let key = PublicKey([5; 32]);
+    fn a_beta_pack_without_a_key_says_it_has_no_feed() {
+        let host = InstallerHost {
+            channel: Some(Channel::Beta),
+            ..host()
+        };
+        let packed = pack_with(&host, |_| None, |_| false);
+        assert_eq!(
+            packed.result.expect("packed").feed.describe(),
+            "no update feed: NOVA_CHANNEL is beta but the nova package commits no \
+             update_public_key"
+        );
+    }
+
+    #[test]
+    fn a_pack_with_a_key_names_its_channel_s_windows_feed() {
+        for channel in Channel::ALL {
+            let key = PublicKey([5; 32]);
+            let json = metadata_with_key(key);
+            let host = InstallerHost {
+                channel: Some(channel),
+                ..host()
+            };
+            let packed = pack_with(
+                &host,
+                move |i| starts_metadata(i).then(|| Ok(json.clone())),
+                |_| false,
+            );
+            assert_eq!(
+                packed.result.expect("packed").feed,
+                FeedStatus::Feed(UpdateFeed {
+                    url: feed_url(Platform::Windows, channel),
+                    public_key: key,
+                }),
+                "{channel:?}"
+            );
+        }
+        assert_eq!(
+            feed_url(Platform::Windows, Channel::Beta),
+            "https://github.com/edpaget/ev-nova/releases/download/beta/appcast-windows-beta.xml"
+        );
+    }
+
+    /// `cargo metadata` whose game package commits `key`.
+    fn metadata_with_key(key: PublicKey) -> Vec<u8> {
         let mut metadata: serde_json::Value =
             serde_json::from_slice(&sample_metadata()).expect("json");
         let game = metadata["packages"]
@@ -514,22 +556,6 @@ mod tests {
             .find(|p| p["name"] == "nova")
             .expect("the game");
         game["metadata"]["bundle"]["update_public_key"] = key.to_base64().into();
-        let json = serde_json::to_vec(&metadata).expect("json");
-        let host = InstallerHost {
-            channel: Some(Channel::Nightly),
-            ..host()
-        };
-        let packed = pack_with(
-            &host,
-            move |i| starts_metadata(i).then(|| Ok(json.clone())),
-            |_| false,
-        );
-        assert_eq!(
-            packed.result.expect("packed").feed,
-            FeedStatus::Feed(UpdateFeed {
-                url: feed_url(Platform::Windows, Channel::Nightly),
-                public_key: key,
-            })
-        );
+        serde_json::to_vec(&metadata).expect("json")
     }
 }

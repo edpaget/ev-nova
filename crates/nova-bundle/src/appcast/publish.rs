@@ -18,6 +18,7 @@ use super::prune::{KEEP_BUILDS, LiveFeed, prune};
 use super::{Channel, CurrentFeed, Feed, FeedError, Platform, feed_name, read_feed, render};
 use crate::build_id::{self, BuildId, ResolveError};
 use crate::bundle::metadata;
+use crate::channel::{self, ChannelError};
 use crate::ports::{Env, Files, Process, ReadFiles, RunError, Signer};
 use crate::spec::{BundleSpec, SpecError};
 
@@ -26,9 +27,6 @@ use crate::spec::{BundleSpec, SpecError};
 /// GitHub gives a job without the secret an empty value, which counts as
 /// unset.
 pub const SEED_VAR: &str = "UPDATE_SIGNING_KEY";
-
-/// The channel `publish` writes feeds for.
-pub const CHANNEL: Channel = Channel::Nightly;
 
 /// Why `publish` writes no feeds this run. The nightly still publishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +78,17 @@ pub enum AppcastError {
     /// There is no build ID.
     #[error(transparent)]
     BuildId(#[from] ResolveError),
+    /// `NOVA_CHANNEL` is unset or empty: a publish names its channel, and
+    /// never defaults to the nightly.
+    #[error(
+        "{} is unset or empty: set it to the channel to publish (the nightly's \
+         publish sets nightly, promote-beta's sets beta)",
+        channel::VAR
+    )]
+    NoChannel,
+    /// `NOVA_CHANNEL` names no channel.
+    #[error(transparent)]
+    Channel(#[from] ChannelError),
     /// A program failed.
     #[error("`{command}` failed: {source}")]
     Run {
@@ -246,7 +255,8 @@ pub struct Published {
     pub prune: Vec<String>,
 }
 
-/// Publishes `build` of `spec` as `signing` says, over `paths`.
+/// Publishes `build` of `spec` on `channel` as `signing` says, over
+/// `paths`: `channel`'s feeds are the ones compared against and written.
 ///
 /// # Errors
 ///
@@ -258,17 +268,12 @@ pub fn publish<S: Signer>(
     files: &mut impl Files,
     spec: &BundleSpec,
     build: &BuildId,
+    channel: Channel,
     signing: &FeedSigning<S>,
     paths: &PublishPaths,
 ) -> Result<Published, AppcastError> {
-    let listed = read_at(read, &paths.assets)?;
-    let assets: Vec<String> = String::from_utf8_lossy(&listed)
-        .lines()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .collect();
-    let current = current_feeds(read, &assets, &paths.current)?;
+    let assets = read_asset_list(read, &paths.assets)?;
+    let current = current_feeds(read, &assets, &paths.current, channel)?;
     let mut live: Vec<LiveFeed> = current
         .iter()
         .map(|(name, feed)| LiveFeed {
@@ -291,7 +296,7 @@ pub fn publish<S: Signer>(
             for (platform, path, bytes) in &installers {
                 let feed = Feed::signed(
                     *platform,
-                    CHANNEL,
+                    channel,
                     &spec.name,
                     build,
                     &spec.version,
@@ -309,7 +314,7 @@ pub fn publish<S: Signer>(
                 .create_dir_all(&paths.feeds)
                 .map_err(|source| file_error("create", &paths.feeds, source))?;
             for feed in &feeds {
-                let name = feed_name(feed.platform, CHANNEL);
+                let name = feed_name(feed.platform, channel);
                 let path = paths.feeds.join(&name);
                 files
                     .write(&path, render(feed).as_bytes())
@@ -360,23 +365,39 @@ fn file_error(action: &'static str, path: &Path, source: io::Error) -> AppcastEr
     }
 }
 
-fn read_at(read: &impl ReadFiles, path: &Path) -> Result<Vec<u8>, AppcastError> {
+pub(crate) fn read_at(read: &impl ReadFiles, path: &Path) -> Result<Vec<u8>, AppcastError> {
     read.read(path).map_err(|source| AppcastError::Read {
         path: path.to_owned(),
         source,
     })
 }
 
-/// Each feed the release lists, by its asset name, read from its download
-/// in `dir`.
-fn current_feeds(
+/// A release's asset list at `path`: one name per line, blank lines and
+/// surrounding spaces ignored.
+pub(crate) fn read_asset_list(
+    read: &impl ReadFiles,
+    path: &Path,
+) -> Result<Vec<String>, AppcastError> {
+    let listed = read_at(read, path)?;
+    Ok(String::from_utf8_lossy(&listed)
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Each of `channel`'s feeds the release lists, by its asset name, read
+/// from its download in `dir`.
+pub(crate) fn current_feeds(
     read: &impl ReadFiles,
     assets: &[String],
     dir: &Path,
+    channel: Channel,
 ) -> Result<Vec<(String, CurrentFeed)>, AppcastError> {
     let mut feeds = Vec::new();
     for platform in Platform::ALL {
-        let name = feed_name(platform, CHANNEL);
+        let name = feed_name(platform, channel);
         if !assets.contains(&name) {
             continue;
         }
@@ -424,13 +445,14 @@ fn refuse_unless_newer(
     Ok(())
 }
 
-/// The whole of `nova-appcast publish`: the build ID (from
+/// The whole of `nova-appcast publish`: the channel (from
+/// [`channel::VAR`], which must name one), the build ID (from
 /// [`build_id::VAR`], else HEAD in `cwd`), the spec from `cargo metadata`,
 /// the signing decision from [`SEED_VAR`], then [`publish`].
 ///
 /// # Errors
 ///
-/// As [`publish`], or no build ID, no spec, or a bad seed.
+/// As [`publish`], or no channel, no build ID, no spec, or a bad seed.
 #[allow(clippy::too_many_arguments)]
 pub fn run<S: Signer>(
     process: &mut impl Process,
@@ -442,6 +464,7 @@ pub fn run<S: Signer>(
     paths: &PublishPaths,
     make: impl FnOnce(&str) -> Result<S, KeyError>,
 ) -> Result<Published, AppcastError> {
+    let channel = channel::from_env(env)?.ok_or(AppcastError::NoChannel)?;
     let build = build_id::resolve(env, process, cwd)?;
     let invocation = metadata(cargo);
     let json = process
@@ -453,7 +476,7 @@ pub fn run<S: Signer>(
     let spec = BundleSpec::from_metadata(&json)?;
     let seed = env.var(SEED_VAR);
     let signing = FeedSigning::decide(spec.update_public_key.as_ref(), seed.as_deref(), make)?;
-    publish(read, files, &spec, &build, &signing, paths)
+    publish(read, files, &spec, &build, channel, &signing, paths)
 }
 
 /// `nova-appcast public-key`: the public key of the seed in
@@ -486,9 +509,20 @@ mod tests {
     use crate::appcast::{SPARKLE_NS, update_asset};
     use crate::archive;
     use crate::bundle::metadata as metadata_run;
+    use crate::channel;
     use crate::spec::tests::{full_bundle, metadata_with, sample_metadata};
     use crate::system::Ed25519Signer;
-    use crate::test_support::{Event, FakeEnv, FakeFiles, FakeRead, Log, Recorder, build_env};
+    use crate::test_support::{Event, FakeEnv, FakeFiles, FakeRead, Log, Recorder};
+
+    /// The channel most tests publish.
+    const CHANNEL: Channel = Channel::Nightly;
+
+    /// An environment pinning the build ID and naming the nightly channel.
+    fn build_env() -> FakeEnv {
+        let mut env = crate::test_support::build_env();
+        env.0.insert(channel::VAR, "nightly".into());
+        env
+    }
 
     /// A public key no test seed derives.
     fn other_key() -> PublicKey {
@@ -671,9 +705,15 @@ mod tests {
 
     /// A current feed for `platform` offering `build`, downloaded.
     fn current_feed(read: &mut FakeRead, platform: Platform, build: &str) {
+        current_feed_of(read, CHANNEL, platform, build);
+    }
+
+    /// A current feed of `channel`'s for `platform` offering `build`,
+    /// downloaded.
+    fn current_feed_of(read: &mut FakeRead, channel: Channel, platform: Platform, build: &str) {
         let feed = Feed::signed(
             platform,
-            CHANNEL,
+            channel,
             "EV Nova",
             &id(build),
             "0.1.0",
@@ -681,15 +721,19 @@ mod tests {
             &test_signer(),
         );
         read.0.insert(
-            paths().current.join(feed_name(platform, CHANNEL)),
+            paths().current.join(feed_name(platform, channel)),
             render(&feed).into_bytes(),
         );
     }
 
     fn feeds_listed() -> Vec<String> {
+        feeds_listed_of(CHANNEL)
+    }
+
+    fn feeds_listed_of(channel: Channel) -> Vec<String> {
         Platform::ALL
             .into_iter()
-            .map(|p| feed_name(p, CHANNEL))
+            .map(|p| feed_name(p, channel))
             .collect()
     }
 
@@ -715,12 +759,22 @@ mod tests {
     }
 
     fn publish_with<S: Signer>(read: &FakeRead, signing: &FeedSigning<S>, build: &str) -> Outcome {
+        publish_on(read, CHANNEL, signing, build)
+    }
+
+    fn publish_on<S: Signer>(
+        read: &FakeRead,
+        channel: Channel,
+        signing: &FeedSigning<S>,
+        build: &str,
+    ) -> Outcome {
         let log = Log::default();
         let result = publish(
             read,
             &mut files(&log),
             &spec(),
             &id(build),
+            channel,
             signing,
             &paths(),
         );
@@ -729,9 +783,19 @@ mod tests {
     }
 
     fn feed_bytes(platform: Platform, build: &str, bytes: &[u8], signer: &impl Signer) -> Vec<u8> {
+        feed_bytes_of(CHANNEL, platform, build, bytes, signer)
+    }
+
+    fn feed_bytes_of(
+        channel: Channel,
+        platform: Platform,
+        build: &str,
+        bytes: &[u8],
+        signer: &impl Signer,
+    ) -> Vec<u8> {
         render(&Feed::signed(
             platform,
-            CHANNEL,
+            channel,
             "EV Nova",
             &id(build),
             &spec().version,
@@ -863,6 +927,103 @@ mod tests {
         assert!(
             out.events
                 .contains(&Event::Write(paths().prune_list, Vec::new()))
+        );
+    }
+
+    #[test]
+    fn a_beta_publish_writes_the_beta_feeds_with_beta_urls() {
+        let mut read = FakeRead::default();
+        dist_files(&mut read);
+        listed(&mut read, &stable());
+        let out = publish_on(&read, Channel::Beta, &FeedSigning::Sign(test_signer()), NEW);
+        let published = out.result.expect("published");
+        let p = paths();
+        let mac_feed = p.feeds.join("appcast-macos-beta.xml");
+        let win_feed = p.feeds.join("appcast-windows-beta.xml");
+        assert_eq!(published.feeds, vec![mac_feed.clone(), win_feed.clone()]);
+        for (path, platform, bytes) in [
+            (&mac_feed, Platform::Macos, DMG),
+            (&win_feed, Platform::Windows, MSI),
+        ] {
+            let expected = feed_bytes_of(Channel::Beta, platform, NEW, bytes, &test_signer());
+            assert!(
+                out.events
+                    .contains(&Event::Write(path.clone(), expected.clone())),
+                "{platform:?}: {:?}",
+                out.events
+            );
+            let text = String::from_utf8(expected).expect("utf-8");
+            assert!(
+                text.contains("https://github.com/edpaget/ev-nova/releases/download/beta/"),
+                "{text}"
+            );
+        }
+        assert!(out.events.contains(&Event::Copy(
+            p.dist.join(Platform::Macos.stable_asset()),
+            p.dist.join(update_asset(Platform::Macos, &id(NEW))),
+        )));
+    }
+
+    #[test]
+    fn a_publish_compares_only_against_its_own_channel_s_feeds() {
+        let newer = "20261029000000";
+        for (channel, other) in [
+            (Channel::Beta, Channel::Nightly),
+            (Channel::Nightly, Channel::Beta),
+        ] {
+            // The other channel's feeds offer a newer build, and are ignored.
+            let mut read = FakeRead::default();
+            dist_files(&mut read);
+            let mut assets = stable();
+            assets.extend(feeds_listed_of(other));
+            listed(&mut read, &assets);
+            for platform in Platform::ALL {
+                current_feed_of(&mut read, other, platform, newer);
+            }
+            let (signer, _) = recording();
+            let out = publish_on(&read, channel, &FeedSigning::Sign(signer), NEW);
+            assert_eq!(out.result.expect("published").feeds.len(), 2, "{channel:?}");
+
+            // Its own feeds offering the newer build refuse it.
+            let mut read = FakeRead::default();
+            dist_files(&mut read);
+            let mut assets = stable();
+            assets.extend(feeds_listed_of(channel));
+            listed(&mut read, &assets);
+            for platform in Platform::ALL {
+                current_feed_of(&mut read, channel, platform, newer);
+            }
+            let (signer, _) = recording();
+            let out = publish_on(&read, channel, &FeedSigning::Sign(signer), NEW);
+            let error = out.result.expect_err("not newer");
+            assert!(
+                matches!(&error, AppcastError::NotNewer { feed, current, new }
+                    if *feed == feed_name(Platform::Macos, channel)
+                        && *current == id(newer) && *new == id(NEW)),
+                "{channel:?}: {error:?}"
+            );
+            assert_eq!(out.events, [], "{channel:?}");
+        }
+    }
+
+    #[test]
+    fn a_beta_re_run_of_the_same_build_is_already_published() {
+        let mut read = FakeRead::default();
+        dist_files(&mut read);
+        let mut assets = stable();
+        assets.extend(feeds_listed_of(Channel::Beta));
+        listed(&mut read, &assets);
+        for platform in Platform::ALL {
+            current_feed_of(&mut read, Channel::Beta, platform, NEW);
+        }
+        let (signer, _) = recording();
+        let error = publish_on(&read, Channel::Beta, &FeedSigning::Sign(signer), NEW)
+            .result
+            .expect_err("refused");
+        assert!(error.is_already_published(), "{error:?}");
+        assert!(
+            error.to_string().contains("appcast-macos-beta.xml"),
+            "{error}"
         );
     }
 
@@ -1100,6 +1261,7 @@ mod tests {
             &mut files,
             &spec(),
             &id(NEW),
+            CHANNEL,
             &FeedSigning::Sign(signer),
             &paths(),
         )
@@ -1130,6 +1292,7 @@ mod tests {
                 &mut files,
                 &spec(),
                 &id(NEW),
+                CHANNEL,
                 &FeedSigning::Sign(signer),
                 &paths(),
             )
@@ -1149,6 +1312,7 @@ mod tests {
             &mut files,
             &spec(),
             &id(NEW),
+            CHANNEL,
             &FeedSigning::Skip(SkipReason::Neither),
             &paths(),
         )
@@ -1225,6 +1389,49 @@ mod tests {
     }
 
     #[test]
+    fn run_without_a_channel_fails_naming_the_variable_and_writes_nothing() {
+        for value in [None, Some("")] {
+            let mut env = env_with_seed(&seed_base64());
+            match value {
+                None => env.0.remove(channel::VAR),
+                Some(v) => env.0.insert(channel::VAR, v.into()),
+            };
+            let key = test_signer().public_key();
+            let (result, events) = run_with(&env, metadata_with_key(&key));
+            let error = result.expect_err("no channel");
+            assert!(matches!(error, AppcastError::NoChannel), "{error:?}");
+            assert!(error.to_string().contains("NOVA_CHANNEL"), "{error}");
+            assert_eq!(events, [], "{value:?}");
+        }
+    }
+
+    #[test]
+    fn run_with_an_unknown_channel_fails_naming_it() {
+        let mut env = env_with_seed(&seed_base64());
+        env.0.insert(channel::VAR, "stable".into());
+        let (result, events) = run_with(&env, sample_metadata());
+        let error = result.expect_err("unknown");
+        assert!(matches!(error, AppcastError::Channel(_)), "{error:?}");
+        assert!(error.to_string().contains("`stable`"), "{error}");
+        assert_eq!(events, []);
+    }
+
+    #[test]
+    fn run_publishes_the_channel_the_environment_names() {
+        let mut env = env_with_seed(&seed_base64());
+        env.0.insert(channel::VAR, "beta".into());
+        let key = test_signer().public_key();
+        let (result, _) = run_with(&env, metadata_with_key(&key));
+        assert_eq!(
+            result.expect("published").feeds,
+            vec![
+                paths().feeds.join("appcast-macos-beta.xml"),
+                paths().feeds.join("appcast-windows-beta.xml"),
+            ]
+        );
+    }
+
+    #[test]
     fn run_without_a_committed_key_skips() {
         let (result, _) = run_with(&env_with_seed(&seed_base64()), sample_metadata());
         assert_eq!(
@@ -1255,6 +1462,7 @@ mod tests {
     fn run_without_a_build_id_or_a_spec_fails() {
         let mut env = FakeEnv::default();
         env.0.insert(SEED_VAR, seed_base64().into());
+        env.0.insert(channel::VAR, "nightly".into());
         let (result, _) = run_with(&env, sample_metadata());
         assert!(
             matches!(result, Err(AppcastError::BuildId(_))),

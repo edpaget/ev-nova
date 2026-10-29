@@ -525,6 +525,63 @@ mod tests {
         assert_eq!(run_ok(&host(None)).feed, Some(FeedStatus::Development));
     }
 
+    fn beta(mut host: Host) -> Host {
+        host.channel = Some(Channel::Beta);
+        host
+    }
+
+    #[test]
+    fn a_beta_host_keeps_the_pinned_build_id_and_runs_no_git() {
+        // git would answer another time (2001): the pinned nightly's ID wins.
+        let respond = |i: &Invocation| (i.program == "git").then(|| Ok(b"981173106\n".to_vec()));
+        let run =
+            test_support::run_in(&build_env(), &beta(host(None)), b"arm64\n", respond, |_| {
+                false
+            });
+        assert!(run.result.is_ok(), "{:?}", run.result);
+        assert!(
+            run.runs().iter().all(|i| i.program != "git"),
+            "{:?}",
+            run.runs()
+        );
+        let plist = run
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::Write(path, bytes) if path.ends_with("Info.plist") => Some(bytes.clone()),
+                _ => None,
+            })
+            .expect("a plist");
+        assert_eq!(plist, info_plist(&spec(), &build(), "13.0", None));
+        assert_eq!(run.feed, Some(FeedStatus::NoKey(Channel::Beta)));
+        assert_eq!(
+            FeedStatus::NoKey(Channel::Beta).describe(),
+            "no update feed: NOVA_CHANNEL is beta but the nova package commits no \
+             update_public_key"
+        );
+    }
+
+    #[test]
+    fn a_beta_host_with_a_committed_key_writes_the_beta_feed_into_the_plist() {
+        let key = PublicKey([9; 32]);
+        let spec = BundleSpec {
+            update_public_key: Some(key),
+            ..spec()
+        };
+        let feed = UpdateFeed {
+            url: channel::feed_url(Platform::Macos, Channel::Beta),
+            public_key: key,
+        };
+        assert!(
+            feed.url
+                .ends_with("/releases/download/beta/appcast-macos-beta.xml")
+        );
+        assert_eq!(
+            planned_plist(&spec, &beta(host(None))),
+            info_plist(&spec, &build(), "13.0", Some(&feed))
+        );
+    }
+
     fn run_with(
         host: &Host,
         archs: &[u8],
