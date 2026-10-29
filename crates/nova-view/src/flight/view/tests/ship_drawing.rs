@@ -758,6 +758,47 @@ fn an_ionized_npc_draws_its_hull_and_layers_colorized_in_its_ion_colour_at_its_u
 }
 
 #[test]
+fn an_ionized_npcs_glow_is_held_below_its_ion_level() {
+    let view = murky_ionizing(None);
+    let (list, _) = npc_drawn_ionized(
+        &view,
+        |npc| npc.glow = 24,
+        Some(ION),
+        nova_sim::Vec2::new(100.0, -100.0),
+    );
+    let level = glow_level(24, now(&view), &npc_glow_rolls(NPC_0)).expect("lit");
+    assert!(level > npc_glow_level(level, 16), "the hold is exercised");
+    assert_eq!(
+        colorized_of(&list, 2101),
+        [(
+            lights_tint(npc_glow_level(level, 16)),
+            true,
+            crate::Colorize::toward(16, 0x0034_c2ff)
+        )]
+    );
+}
+
+#[test]
+fn an_ionized_npcs_weapon_glow_takes_the_hulls_colorize_held_below_it() {
+    let mut view = murky_with(ShipSheet {
+        weapon: Some(layer(2301, 72)),
+        ..ionized_sheet()
+    });
+    lit_at_28(&mut view, NPC_0);
+    let (list, _) = npc_drawn_ionized(&view, |_| {}, Some(ION), nova_sim::Vec2::new(100.0, -100.0));
+    assert!(28 > npc_glow_level(28, 16), "the hold is exercised");
+    assert_eq!(
+        colorized_of(&list, 2301),
+        [(
+            lights_tint(npc_glow_level(28, 16)),
+            true,
+            crate::Colorize::toward(16, 0x0034_c2ff)
+        )]
+    );
+    assert_eq!(plain_of(&list, 2301), []);
+}
+
+#[test]
 fn an_npc_below_a_third_ionized_draws_as_before() {
     let mut view = murky_ionizing(None);
     let shield = flashing(&mut view, ShipRef::Npc(NPC_0));
@@ -915,9 +956,11 @@ fn an_ionized_player_draws_its_hull_colorized_and_its_glow_plainly() {
     catalog.sheet = Ok(ShipSheet {
         glow: Some(layer(2100, 36)),
         shield: Some(layer(2300, 36)),
+        weapon: Some(layer(2310, 36)),
         ..sheet()
     });
     let mut view = flying_with(catalog, 0.0);
+    lit_at_28_ship(&mut view, ShipRef::Player);
     let tint = nova_sim::combat::ion_tint::IonTint {
         level: 16,
         colour: 0x0000_80ff,
@@ -932,6 +975,23 @@ fn an_ionized_player_draws_its_hull_colorized_and_its_glow_plainly() {
     assert_eq!(hull[0].2, crate::Colorize::toward(tint.level, 0x0000_80ff));
     assert_eq!(hull[0].0, Color::WHITE, "never murked");
     assert!(colorized_of(&list, 2100).is_empty(), "its glow plain");
+    // Its glow and weapon glow at full strength, unmurked by the ion level,
+    // as the original keeps the player's light layers at level 0.
+    let level = glow_level(24, now(&view), &view.glow_rolls).expect("lit");
+    assert_eq!(
+        plain_of(&list, 2100),
+        [(lights_tint(level), true)],
+        "its glow unmurked"
+    );
+    assert!(
+        colorized_of(&list, 2310).is_empty(),
+        "its weapon glow plain"
+    );
+    assert_eq!(
+        plain_of(&list, 2310),
+        [(lights_tint(28), true)],
+        "its weapon glow unmurked"
+    );
     let shield = flashing(&mut view, ShipRef::Player);
     let list = super::faked_world::world_list(&view);
     assert_eq!(
@@ -1000,7 +1060,11 @@ fn commands_of(
 /// Lights the NPC's weapon glow in `view`, falling 4 a step for 2 steps:
 /// drawn at 28.
 fn lit_at_28(view: &mut Faked, id: NpcId) {
-    let ship = ShipRef::Npc(id);
+    lit_at_28_ship(view, ShipRef::Npc(id));
+}
+
+/// Lights `ship`'s weapon glow in `view`: drawn at 28.
+fn lit_at_28_ship(view: &mut Faked, ship: ShipRef) {
     view.glows.step(&[(ship, false)], |_| Some(4.0));
     view.glows.step(&[], |_| Some(4.0));
     assert_eq!(view.glows.drawn(ship), Some(28));
