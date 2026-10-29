@@ -20,7 +20,10 @@
 //! view's first take of each emptied the inbox too, but only when that
 //! take was reached: a step for the comm, a pass for the quotes. Both are
 //! then relayed together after the steps
-//! ([`FlightView::relay_comm_and_quotes`]).
+//! ([`FlightView::relay_comm_and_quotes`]), by kind, and the messages
+//! after them; then the line the steps raised last, whatever its kind
+//! ([`StepRun::last_line`], [`FlightView::relay_last_line`]), so the
+//! line shows it, as `_DisplayComm` replaces its slot with each line.
 //!
 //! **The presentation rules** the effects, stars, world, HUD and wording
 //! read ([`Presentation`]) are the view's own, held from the rulebook the
@@ -262,8 +265,9 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// the frame the steps left it on, and a pass whose ship tick brought
     /// the escape pod's rescue, which ends the stepping there, has the
     /// view laid out afresh where the rescue put the ship. Then the
-    /// messages the steps raised are said, and the sheets of a system the
-    /// session populated afresh are read. Flight and the jump's warp both
+    /// messages the steps raised are said, then the line they raised last
+    /// again, whatever its kind ([`FlightView::relay_last_line`]), and the
+    /// sheets of a system the session populated afresh are read. Flight and the jump's warp both
     /// step this way.
     ///
     /// The comm notes and quotes are said before the gates' frames are
@@ -283,6 +287,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             self.map.recentre();
         }
         self.relay_messages();
+        self.relay_last_line();
         // The session may have populated its system afresh.
         self.read_npc_sheets();
     }

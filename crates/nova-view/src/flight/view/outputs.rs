@@ -16,7 +16,7 @@ use super::{
     FlightView, MESSAGE_TICKS, Message, SCRIPT_MESSAGE_TICKS, Said, Wording, comm_message,
     message_text, pay_said,
 };
-use nova_sim::flight_frame::FlightCommand;
+use nova_sim::flight_frame::{FlightCommand, RaisedLine};
 
 /// The mission texts taken over flight ([`FlightView::flight_texts`]),
 /// with what their redraw needs.
@@ -264,9 +264,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Shows `text`, a line the session raised and has already set its
     /// message line to, for `ticks`, leaving the session's line alone: a
-    /// relay comes after the frame's steps have counted it down, and in a
-    /// fixed order (the comm notes, the quotes, the messages), so setting
-    /// it again would undo the session's count.
+    /// relay comes after the frame's steps have counted it down, so
+    /// setting it again would undo the session's count. The frame's lines
+    /// are relayed by kind (the comm notes, the quotes, the messages),
+    /// then the line the steps raised last again
+    /// ([`FlightView::relay_last_line`]), so the line shows that one.
     pub(super) fn relay(&mut self, text: impl Into<String>, ticks: u16) {
         self.message = Some(Message {
             text: text.into(),
@@ -278,7 +280,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Relays the comm notes, then the quotes, that a frame's steps took
     /// ([`FlightView::relay`]): the session set its line as it raised
     /// each, and the steps have counted it down since, so they are
-    /// relayed, not set again; the last stays.
+    /// relayed, not set again. The line the steps raised last is relayed
+    /// again after the messages ([`FlightView::relay_last_line`]).
     pub(super) fn relay_comm_and_quotes(&mut self, notes: &[CommNote], quotes: Vec<PersonQuote>) {
         for note in notes {
             self.relay(comm_message(note), note.ticks());
@@ -286,6 +289,36 @@ impl<C, S: FlightSim> FlightView<C, S> {
         for quote in quotes {
             let ticks = quote.ticks();
             self.relay(quote.text, ticks);
+        }
+    }
+
+    /// Relays the line the frame's steps raised last
+    /// ([`StepRun::last_line`] of the last step that raised one), after
+    /// the comm notes, quotes and messages are relayed: `_DisplayComm`
+    /// replaces its one slot with each line (@0x90251-0x90265), so the
+    /// line shows the last raised, whatever its kind, for its own ticks.
+    /// A message raised last needs nothing: the messages are relayed
+    /// last already, and wording it again would roll the dock request's
+    /// picks a second time.
+    ///
+    /// The match is exhaustive on purpose: the view words every kind of
+    /// line, so a new kind must not compile until it is handled here.
+    ///
+    /// [`StepRun::last_line`]: nova_sim::flight_frame::StepRun::last_line
+    pub(super) fn relay_last_line(&mut self) {
+        let last = self
+            .step_report
+            .steps
+            .iter()
+            .rev()
+            .find_map(|run| run.last_line.clone());
+        match last {
+            Some(RaisedLine::Comm(note)) => self.relay(comm_message(&note), note.ticks()),
+            Some(RaisedLine::Quote(quote)) => {
+                let ticks = quote.ticks();
+                self.relay(quote.text, ticks);
+            }
+            Some(RaisedLine::Message(_)) | None => {}
         }
     }
 

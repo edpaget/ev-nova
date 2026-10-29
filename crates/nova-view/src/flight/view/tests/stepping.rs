@@ -9,9 +9,11 @@ use nova_sim::catalog::Explosion;
 use nova_sim::combat::projectile::ShotId;
 use nova_sim::flight_frame::ShipPlace;
 use nova_sim::flight_frame::{
-    FlightEvent, FrameShip, FrameShot, PassReport, StepInput, StepReport, StepRun,
+    FlightEvent, FrameShip, FrameShot, PassReport, RaisedLine, StepInput, StepReport, StepRun,
 };
 use nova_sim::{CommNote, FireSound, Gauge, PersonQuote};
+
+use super::faked_travel::{faked_lasts, shown_to_flight};
 
 use crate::flight::stars::Star;
 use crate::system::camera::Anchor;
@@ -895,6 +897,119 @@ fn the_inbox_comm_and_quotes_go_with_the_first_step_and_pass_that_ran() {
     frame(&mut view, one_step(vec![fight(vec![])]));
     assert_eq!(line(&view), Some("Halt!"));
     assert_eq!(view.inbox.take_quotes(), []);
+}
+
+// The frame's last-raised line: `_DisplayComm` replaces its slot with
+// each line (@0x90251-0x90265), so the line shows the last raised.
+
+/// A hail quote of NPC 0's.
+fn halt() -> PersonQuote {
+    PersonQuote {
+        npc: NpcId(0),
+        text: "Halt!".to_owned(),
+    }
+}
+
+/// A fleet's arrival quote, said by the frame's steps.
+fn fleet_hail() -> SimMessage {
+    SimMessage::FleetArrivalQuote("Hail".to_owned())
+}
+
+/// Runs `view`'s steps over one frame whose flight raised `messages` and
+/// reports `report`.
+fn raised(view: &mut Faked, messages: Vec<SimMessage>, report: StepReport) {
+    for message in messages {
+        view.sim.queue_event(FlightEvent::Message(message));
+    }
+    let steps = u32::try_from(report.steps.len()).expect("a frame's steps");
+    view.sim.queue_report(report);
+    view.run_steps(steps);
+}
+
+#[test]
+fn a_hail_quote_raised_after_a_fleets_arrival_quote_shows_for_its_ticks() {
+    let mut view = stepping(catalog());
+    let quote = halt();
+    let report = StepReport {
+        steps: vec![StepRun {
+            last_line: Some(RaisedLine::Quote(quote.clone())),
+            ..step(vec![PassReport {
+                quotes: vec![quote.clone()],
+                ..fight(vec![])
+            }])
+        }],
+        stopped: false,
+    };
+    raised(&mut view, vec![fleet_hail()], report);
+    assert_eq!(
+        shown_to_flight(&view),
+        Vec::<u16>::new(),
+        "the flight set its own line"
+    );
+    faked_lasts(&mut view, &quote.text, quote.ticks());
+}
+
+#[test]
+fn a_note_raised_after_a_quote_in_one_step_shows() {
+    let mut view = stepping(catalog());
+    let quote = halt();
+    let report = StepReport {
+        steps: vec![StepRun {
+            comm: vec![repaired()],
+            last_line: Some(RaisedLine::Comm(repaired())),
+            ..step(vec![PassReport {
+                quotes: vec![quote],
+                ..fight(vec![])
+            }])
+        }],
+        stopped: false,
+    };
+    raised(&mut view, vec![], report);
+    faked_lasts(&mut view, &comm_message(&repaired()), repaired().ticks());
+}
+
+#[test]
+fn a_message_raised_last_shows_over_the_quote() {
+    let mut view = stepping(catalog());
+    let quote = halt();
+    let report = StepReport {
+        steps: vec![StepRun {
+            last_line: Some(RaisedLine::Message(fleet_hail())),
+            ..step(vec![PassReport {
+                quotes: vec![quote],
+                ..fight(vec![])
+            }])
+        }],
+        stopped: false,
+    };
+    raised(&mut view, vec![fleet_hail()], report);
+    faked_lasts(&mut view, "Hail", fleet_hail().ticks());
+}
+
+#[test]
+fn the_last_steps_line_wins_over_an_earlier_steps() {
+    let mut view = stepping(catalog());
+    let quote = halt();
+    let report = StepReport {
+        steps: vec![
+            StepRun {
+                last_line: Some(RaisedLine::Quote(quote.clone())),
+                ..step(vec![PassReport {
+                    quotes: vec![quote],
+                    ..fight(vec![])
+                }])
+            },
+            StepRun {
+                comm: vec![repaired()],
+                last_line: Some(RaisedLine::Comm(repaired())),
+                ..step(vec![fight(vec![])])
+            },
+            step(vec![fight(vec![])]),
+        ],
+        stopped: false,
+    };
+    raised(&mut view, vec![fleet_hail()], report);
+    faked_lasts(&mut view, &comm_message(&repaired()), repaired().ticks());
 }
 
 // The ships kept for the drawing, and the rescue.
