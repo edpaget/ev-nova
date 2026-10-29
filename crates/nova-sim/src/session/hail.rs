@@ -53,7 +53,9 @@
 //! once it is set (`_CommDialogUpdate` @0x90694). Hanging up releases the
 //! ship hailed while it is set and leaves it set, so the next escort
 //! dialog's close releases its escort too (see the `escort_dialog`
-//! module). Hanging up also marks a person hailed quoted (+0xbc,
+//! module). The run carries the flag to the next flight
+//! ([`CarryOver::release_comm_escort`](super::CarryOver::release_comm_escort)),
+//! as the original's outlives a pilot load; it is never saved. Hanging up also marks a person hailed quoted (+0xbc,
 //! @0x9691d).
 //!
 //! The deeds:
@@ -982,7 +984,7 @@ pub(super) mod tests {
     }
 
     /// The draws placing the ship at (`x`, `y`), facing up.
-    fn placed(x: i32, y: i32) -> Draws {
+    pub(in crate::session) fn placed(x: i32, y: i32) -> Draws {
         Draws::of(&[6, 6, 0, 0, (x + 750) as u32, (y + 750) as u32, 0, 0])
     }
 

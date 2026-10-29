@@ -158,8 +158,10 @@ pub(super) struct Escorts {
     /// dialog: the comm dialog's close releases its ship while it is set
     /// (@0x96848), and so does every escort dialog's close until the next
     /// comm dialog opens (`_DoEscortDialog` @0x95601; see the `hail` and
-    /// `escort_dialog` modules). It outlives a landing and a jump too, but
-    /// not the session: the original's outlives a pilot load as well.
+    /// `escort_dialog` modules). It outlives a landing and a jump too,
+    /// and the session: the run carries it to the next flight
+    /// (`CarryOver::release_comm_escort`), as the original's outlives a
+    /// pilot load; it is never saved.
     pub(super) release_comm_escort: bool,
     /// Each escort of the fleet's NPC in the system, lined up with the
     /// pilot's escorts while in flight; none for one not placed.

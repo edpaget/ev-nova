@@ -60,6 +60,7 @@ impl AppScreen {
             stellar_sprites: StellarSpritePool::default(),
             kept_berths: KeptBerths::default(),
             last_refresh: None,
+            release_comm_escort: false,
             course_map_zoom: None,
             map_borders: true,
             dialogs: None,
@@ -372,6 +373,7 @@ impl AppScreen {
                 stellar_sprite_pool: Some(self.stellar_sprites.clone()),
                 kept_berths: Some(self.kept_berths.clone()),
                 last_refresh,
+                release_comm_escort: Some(self.release_comm_escort),
             },
         }
     }

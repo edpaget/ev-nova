@@ -671,6 +671,74 @@ fn a_game_held_in_place_of_another_hands_on_its_berths() {
     assert_eq!(carried(game).kept_berths, Some(ace_at_berth_1()));
 }
 
+/// Gives the flight shown the comm dialog's release flag set, as a
+/// comm-dialog Release would.
+fn release_by_comm(screen: &mut AppScreen) {
+    carry_on(
+        screen,
+        nova_sim::CarryOver {
+            release_comm_escort: Some(true),
+            ..nova_sim::CarryOver::default()
+        },
+    );
+}
+
+#[test]
+fn a_new_pilot_after_another_carries_the_release_flag_it_left() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    assert!(
+        !AppScreen::new(data()).release_comm_escort,
+        "a run starts clear, as BSS reads 0"
+    );
+    create(&mut screen, "Ada");
+    assert_eq!(carried(flight(&screen)).release_comm_escort, Some(false));
+    release_by_comm(&mut screen);
+    escape_to_menu(&mut screen);
+    create(&mut screen, "Bea");
+    assert_eq!(pilot(&screen).name(), "Bea");
+    assert_eq!(carried(flight(&screen)).release_comm_escort, Some(true));
+}
+
+#[test]
+fn a_pilot_opened_after_another_carries_the_release_flag_it_left() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    release_by_comm(&mut screen);
+    escape_to_menu(&mut screen);
+    let bea = nova_sim::Pilot::new(screen.data.as_ref(), "Bea").expect("a pilot");
+    let opened = screen.pilot_flight(bea, true, None);
+    assert_eq!(carried(&opened).release_comm_escort, Some(true));
+}
+
+#[test]
+fn a_game_held_in_place_of_another_carries_the_release_flag() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    release_by_comm(&mut screen);
+    escape_to_menu(&mut screen);
+    let bea = nova_sim::Pilot::new(screen.data.as_ref(), "Bea").expect("a pilot");
+    let held = screen.pilot_flight(bea, false, None);
+    screen.hold_game(held);
+    let game = screen.game.as_ref().expect("Bea's game held");
+    assert_eq!(carried(game).release_comm_escort, Some(true));
+}
+
+#[test]
+fn the_developers_flight_after_a_pilot_carries_the_release_flag() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    release_by_comm(&mut screen);
+    escape_to_menu(&mut screen);
+    screen.input(&key(Key::Tab, true));
+    screen.input(&key(Key::Char('f'), true));
+    assert_eq!(screen.showing(), Showing::Flight);
+    assert_eq!(carried(flight(&screen)).release_comm_escort, Some(true));
+}
+
 /// A router over [`hiding_beta_data`], its pilots kept in `store`.
 fn hiding_beta(store: &MemoryPilots) -> AppScreen {
     AppScreen::new(hiding_beta_data())

@@ -37,7 +37,12 @@
 //! it, the engine could not reach it before the comm dialog listed
 //! Release for a captured mission ship, no plan reads it otherwise, and it
 //! breaks no stock mission, cron or storyline, so it is no bug to set
-//! right either.
+//! right either. The run carries the flag to the next flight
+//! ([`CarryOver::release_comm_escort`](super::CarryOver::release_comm_escort)),
+//! as the original's outlives a pilot load (no pilot load, reset, new
+//! pilot or launch routine touches 0x31b250), and it is never saved.
+//! Carrying it across a pilot changes only whose escort the stale
+//! release takes, so none of this reasoning changes and no key is added.
 //!
 //! Left out, as frame-timing and redraw bookkeeping the engine has no
 //! use for: `_gSpeedMult` zeroed (@0x95693), `FlushEvents`,
@@ -189,6 +194,39 @@ impl Session {
             }
             super::hail::make_leave(npc);
         }
+    }
+}
+
+impl Session {
+    /// Whether the comm dialog's release flag is set (see the module
+    /// docs), to hand on to the next flight of the run
+    /// ([`Session::with_release_comm_escort`]): the original's
+    /// `_releaseCommEscort` (0x31b250, behind 0xdef2c) outlives a pilot
+    /// load, though it is never saved.
+    #[must_use]
+    pub(crate) fn release_comm_escort(&self) -> bool {
+        self.space.release_comm_escort()
+    }
+
+    /// This session with the comm dialog's release flag `set`, as the
+    /// last flight of the run left it ([`Session::release_comm_escort`]),
+    /// in place of a launch's clear one.
+    #[must_use]
+    pub(crate) fn with_release_comm_escort(mut self, set: bool) -> Self {
+        self.space.set_release_comm_escort(set);
+        self
+    }
+}
+
+impl super::space::Space {
+    /// Whether the comm dialog's release flag is set.
+    fn release_comm_escort(&self) -> bool {
+        self.escorts.release_comm_escort
+    }
+
+    /// Sets the comm dialog's release flag to `set`.
+    fn set_release_comm_escort(&mut self, set: bool) {
+        self.escorts.release_comm_escort = set;
     }
 }
 
@@ -529,6 +567,108 @@ pub(super) mod tests {
         assert!(session.is_escort(NpcId(0)), "kept");
         assert_eq!(session.pilot().held(Good::Commodity(0)), held);
         assert_eq!(npc(&mut session).goal, Goal::Formation { guard: None });
+    }
+
+    #[test]
+    fn a_fresh_session_has_no_release_flag_and_the_builder_sets_it() {
+        let catalog = upgradable();
+        let fresh = Session::start(&catalog).expect("starts");
+        assert!(!fresh.release_comm_escort(), "BSS reads 0");
+        let set = fresh.clone().with_release_comm_escort(true);
+        assert!(set.release_comm_escort());
+        assert!(!set.with_release_comm_escort(false).release_comm_escort());
+    }
+
+    /// Another pilot, Bea, flown and set up with `carry`, its first
+    /// ship (NPC 0) captured into the fleet and targeted, holding 30 tons
+    /// of food: the session and the food.
+    fn next_pilot_escorting(
+        catalog: &FakePilotCatalog,
+        carry: crate::session::CarryOver,
+    ) -> (Session, u32) {
+        use crate::market::Good;
+        let pilot = crate::pilot::Pilot::new(catalog, "Bea").expect("a pilot");
+        let mut session =
+            Session::fly(catalog, pilot)
+                .expect("flies")
+                .set_up(crate::session::SessionSetup {
+                    carry,
+                    ..Default::default()
+                });
+        session.populate(catalog, &mut crate::session::hail::tests::placed(0, -300));
+        npc(&mut session).state.velocity = crate::geometry::Vec2::ZERO;
+        session.pilot.cash = 100_000;
+        session.join_fleet(NpcId(0), &mut NeverFires);
+        session.chart.target = Some(NpcId(0));
+        session.pilot.cargo = std::iter::once((Good::Commodity(0), 30)).collect();
+        session.take_save_due();
+        session.take_sounds();
+        let held = session.pilot().held(Good::Commodity(0));
+        (session, held)
+    }
+
+    /// The next pilot's escort dialog opened and closed by Close.
+    fn close_the_next_pilots_dialog(session: &mut Session, catalog: &FakePilotCatalog) {
+        opened(session, catalog);
+        session.take_sounds();
+        assert_eq!(session.press_escort(EscortButton::Close), None);
+        assert_eq!(session.take_sounds(), [SimSound::EscortDialogClosed]);
+    }
+
+    #[test]
+    fn a_comm_release_carried_to_the_next_pilot_releases_its_first_escort_dialogs_escort() {
+        use crate::market::Good;
+        let catalog = upgradable();
+        let (first, _) = after_a_comm_release(&catalog);
+        let (mut session, held) = next_pilot_escorting(&catalog, first.carry_over());
+        assert!(session.release_comm_escort(), "carried");
+        close_the_next_pilots_dialog(&mut session, &catalog);
+        assert!(!session.is_escort(NpcId(0)), "+0x9a -1 (@0x95633)");
+        assert!(session.pilot.escorts.is_empty());
+        assert!(
+            session.pilot().held(Good::Commodity(0)) < held,
+            "_DestroyPartialFleetCargo (@0x9561d)"
+        );
+        let released = npc(&mut session).clone();
+        assert_eq!(
+            released.ai_type,
+            AiType::WimpyTrader,
+            "its class's InherentAI (@0x95640)"
+        );
+        assert_eq!(released.goal, Goal::JumpOut, "_AIMakeShipLeave (@0x95652)");
+        assert!(session.take_save_due());
+        assert!(session.release_comm_escort(), "kept set");
+    }
+
+    #[test]
+    fn a_comm_dialog_before_the_carry_leaves_the_next_pilots_escort_kept() {
+        use crate::market::Good;
+        let catalog = upgradable();
+        let (mut first, _) = after_a_comm_release(&catalog);
+        let stranger = first
+            .npcs()
+            .iter()
+            .find(|npc| npc.id != NpcId(0))
+            .expect("the released ship, leaving")
+            .id;
+        first.chart.target = Some(stranger);
+        crate::session::hail::tests::hail(&mut first, &catalog);
+        first.hang_up();
+        let carry = first.carry_over();
+        assert_eq!(carry.release_comm_escort, Some(false), "@0x9576a");
+        let (mut session, held) = next_pilot_escorting(&catalog, carry);
+        close_the_next_pilots_dialog(&mut session, &catalog);
+        assert!(session.is_escort(NpcId(0)), "kept");
+        assert_eq!(session.pilot().held(Good::Commodity(0)), held);
+    }
+
+    #[test]
+    fn a_launchs_carry_leaves_the_next_pilots_escort_kept() {
+        let catalog = upgradable();
+        let (mut session, _) = next_pilot_escorting(&catalog, crate::session::CarryOver::default());
+        assert!(!session.release_comm_escort());
+        close_the_next_pilots_dialog(&mut session, &catalog);
+        assert!(session.is_escort(NpcId(0)), "kept");
     }
 
     #[test]

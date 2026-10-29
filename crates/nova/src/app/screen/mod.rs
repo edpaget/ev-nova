@@ -535,6 +535,13 @@ pub struct AppScreen {
     /// held ([`AppScreen::run_refresh`]); `None` at launch, when the
     /// launch's own refresh is read.
     last_refresh: Option<LastRefresh>,
+    /// The comm dialog's release flag the last flight put away left,
+    /// which each new flight starts from: the original's
+    /// `_releaseCommEscort` (the byte at 0x31b250, behind 0xdef2c) is an
+    /// app-wide global no pilot load touches (see
+    /// [`nova_sim::CarryOver::release_comm_escort`]). Clear at launch, as
+    /// its BSS reads 0; it is never saved, so a quit drops it.
+    release_comm_escort: bool,
     /// The course map's zoom the last flight put away left, which each
     /// new flight's map opens at: the original's `_mapZoom` is set once,
     /// by its data, and never reset by a new or loaded pilot.

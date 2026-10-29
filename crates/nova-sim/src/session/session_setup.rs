@@ -86,7 +86,8 @@ impl fmt::Debug for SessionSetup {
 /// ([`Session::carry_stellar_sprite_pool`]), what the traffic's berths
 /// keep ([`Session::with_kept_berths`]), and what the last galaxy refresh
 /// left hidden, for a new pilot's neighbour pass
-/// ([`Session::with_last_refresh`]). Each is handed on only when given:
+/// ([`Session::with_last_refresh`]), and the comm dialog's release flag
+/// ([`Session::with_release_comm_escort`]). Each is handed on only when given:
 /// `None` leaves the session's own, and the default carries nothing. A
 /// session's [`Session::carry_over`] gives every one.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -100,13 +101,22 @@ pub struct CarryOver {
     /// What the last galaxy refresh left hidden: handed only to a new
     /// pilot's session.
     pub last_refresh: Option<LastRefresh>,
+    /// The comm dialog's release flag, the original's app-wide
+    /// `_releaseCommEscort` (the byte at 0x31b250, behind the pointer at
+    /// 0xdef2c). Its five references are `_CommDialogUpdate` @0x90694
+    /// (the status line), `_DoEscortDialog` @0x95601 (the stale release),
+    /// and `_DoCommDialog` @0x95760 (cleared @0x9576a), @0x96065 (set
+    /// @0x9606a) and @0x96848 (the close's release); no pilot load,
+    /// reset, new pilot or launch touches it, so it outlives a pilot. It
+    /// is never saved, so a quit drops it.
+    pub release_comm_escort: Option<bool>,
 }
 
 impl Session {
     /// This session set up with `setup`, as the builders set it up in the
     /// order the app's edge chained them: the disable rule, the rule set,
-    /// the slot sprites, the stellar sprite pool and the kept berths when
-    /// carried, the hire terms, the control bits, the persons, the string
+    /// the slot sprites, the stellar sprite pool, the kept berths and the
+    /// comm dialog's release flag when carried, the hire terms, the control bits, the persons, the string
     /// lists when given, and a new pilot's last refresh when carried.
     #[must_use]
     pub fn set_up(self, setup: SessionSetup) -> Self {
@@ -129,6 +139,9 @@ impl Session {
         if let Some(kept) = carry.kept_berths {
             session = session.with_kept_berths(kept);
         }
+        if let Some(set) = carry.release_comm_escort {
+            session = session.with_release_comm_escort(set);
+        }
         session = session
             .with_hire_terms(hire_terms)
             .with_control_bits(control_bits)
@@ -146,8 +159,9 @@ impl Session {
     /// ([`CarryOver`]), every part of it: its slot sprites
     /// ([`Session::slot_sprites`]), its stellar sprite pool
     /// ([`Session::stellar_sprite_pool`]), its kept berths
-    /// ([`Session::kept_berths`]) and its last refresh
-    /// ([`Session::last_refresh`]).
+    /// ([`Session::kept_berths`]), its last refresh
+    /// ([`Session::last_refresh`]) and its release flag
+    /// ([`Session::release_comm_escort`]).
     #[must_use]
     pub fn carry_over(&self) -> CarryOver {
         CarryOver {
@@ -155,6 +169,7 @@ impl Session {
             stellar_sprite_pool: Some(self.stellar_sprite_pool().clone()),
             kept_berths: Some(self.kept_berths()),
             last_refresh: Some(self.last_refresh()),
+            release_comm_escort: Some(self.release_comm_escort()),
         }
     }
 }
@@ -211,6 +226,7 @@ mod tests {
                 stellar_sprite_pool: Some(stellar_sprite_pool),
                 kept_berths: Some(traffic.kept_berths()),
                 last_refresh: Some(LastRefresh::hiding([SystemId(131)])),
+                release_comm_escort: Some(true),
             },
         }
     }
@@ -226,6 +242,7 @@ mod tests {
         session.carry_stellar_sprite_pool(carry.stellar_sprite_pool.expect("a pool"));
         let session = session
             .with_kept_berths(carry.kept_berths.expect("kept berths"))
+            .with_release_comm_escort(carry.release_comm_escort.expect("a flag"))
             .with_hire_terms(setup.hire_terms)
             .with_control_bits(setup.control_bits)
             .with_person_rules(setup.person_rules)
@@ -299,5 +316,10 @@ mod tests {
         assert_eq!(over.kept_berths, Some(session.kept_berths()));
         assert_eq!(over.kept_berths, carried.kept_berths);
         assert_eq!(over.last_refresh, Some(session.last_refresh()));
+        assert_eq!(
+            over.release_comm_escort,
+            Some(session.release_comm_escort())
+        );
+        assert_eq!(over.release_comm_escort, carried.release_comm_escort);
     }
 }
