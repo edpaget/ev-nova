@@ -633,6 +633,21 @@ impl Dialog {
         })
     }
 
+    /// The first scrolling text, if any, to scroll: the one
+    /// [`Self::scroll_text`] shows and Up and Down move.
+    pub(crate) fn scroll_text_mut(&mut self) -> Option<&mut ScrollText> {
+        self.items
+            .iter_mut()
+            .find_map(|item| match &mut item.widget {
+                Widget::Text {
+                    text,
+                    scrolls: true,
+                    ..
+                } => Some(text),
+                _ => None,
+            })
+    }
+
     fn item(&self, item: usize) -> Option<&Item> {
         self.items.get(item.checked_sub(1)?)
     }
@@ -688,18 +703,7 @@ impl Dialog {
     fn key(&mut self, key: Key, repeat: bool) -> Option<DialogEvent> {
         match key {
             Key::Up | Key::Down => {
-                let scroll = self
-                    .items
-                    .iter_mut()
-                    .find_map(|item| match &mut item.widget {
-                        Widget::Text {
-                            text,
-                            scrolls: true,
-                            ..
-                        } => Some(text),
-                        _ => None,
-                    });
-                if let Some(text) = scroll {
+                if let Some(text) = self.scroll_text_mut() {
                     text.input(&Input::Key {
                         key,
                         pressed: true,
