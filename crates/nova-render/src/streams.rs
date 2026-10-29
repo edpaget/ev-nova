@@ -318,6 +318,19 @@ mod tests {
             &mut gpu,
         );
 
+        let Batch::Sprites { quads, .. } = &last_frame(&gpu).batches[0] else {
+            panic!("a sprite batch");
+        };
+        assert_eq!(
+            quads[0].uv,
+            Uv {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 0.75,
+                v1: 0.5
+            },
+            "the 3x2 frame measured against the 4x4 page"
+        );
         assert_eq!(
             uploads(&mut gpu),
             [GpuCall::upload(TOP, rect(3, 2), second.image())]
@@ -505,6 +518,19 @@ mod tests {
             &mut gpu,
         );
 
+        let Batch::Sprites { quads, .. } = &last_frame(&gpu).batches[0] else {
+            panic!("a sprite batch");
+        };
+        assert_eq!(
+            quads[0].uv,
+            Uv {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 5.0 / 6.0,
+                v1: 5.0 / 6.0
+            },
+            "the 5x5 frame measured against the 6x6 page"
+        );
         assert_eq!(
             uploads(&mut gpu),
             [GpuCall::upload(SECOND, rect(5, 5), next.image())],
