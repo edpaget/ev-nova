@@ -819,6 +819,15 @@ pub struct PersonWeapon {
     pub ammo: i16,
 }
 
+/// The `përs` of the bounty hunter `_SpawnBountyHunter` sends
+/// (@0x446f2, +0xc8d0 0x3fe): boarded uncharged, with no person or
+/// own-ship path (`nova_sim::board::boards_uncharged`), and never bribed
+/// (`_DoCommDialog` @0x96156).
+pub const BOUNTY_HUNTER: PersonId = PersonId(1150);
+/// The `përs` of the nag ship `_SpawnNagShip` sends (@0x61b5, +0xc8d0
+/// 0x3ff): it can't be boarded (`nova_sim::board::BoardTarget::nag_ship`).
+pub const NAG_SHIP: PersonId = PersonId(1151);
+
 /// A person, raw from its `përs`: the `nova_sim::person` rules
 /// decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]

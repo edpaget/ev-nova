@@ -230,13 +230,11 @@ impl BoardRefusal {
     }
 }
 
-/// The `përs` of the bounty hunter `_SpawnBountyHunter` sends
-/// (@0x446f2, +0xc8d0 0x3fe): boarded uncharged, with no person or
-/// own-ship path ([`boards_uncharged`]).
-pub const BOUNTY_HUNTER: PersonId = PersonId(1150);
-/// The `përs` of the nag ship `_SpawnNagShip` sends (@0x61b5, +0xc8d0
-/// 0x3ff): it can't be boarded ([`BoardTarget::nag_ship`]).
-pub const NAG_SHIP: PersonId = PersonId(1151);
+/// The bounty hunter's and the nag ship's `përs`, defined beside
+/// [`PersonId`]: the bounty hunter is boarded uncharged
+/// ([`boards_uncharged`]), and the nag ship can't be boarded
+/// ([`BoardTarget::nag_ship`]).
+pub use crate::catalog::{BOUNTY_HUNTER, NAG_SHIP};
 
 /// Whether a ship `person` flies is boarded with no crime, no offer and
 /// no own-ship path, straight to the Good Samaritans, the airlock and the
