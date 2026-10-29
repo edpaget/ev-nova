@@ -99,9 +99,8 @@
 //!    government, or its system's when it has none, [`landing_record`])
 //!    is at least `MinStatus`, or `MinStatus` is [`ANY_RECORD`]; never
 //!    when `MinStatus` is [`NEVER_BY_RECORD`] (@0x67903-0x67921).
-//! 2. Domination: the stellar is dominated (@0x6792d). The original's
-//!    byte (+0x46) is set by Demand Tribute; the engine knows only the
-//!    always-dominated `Flags2` [`DOMINATED`](crate::market::DOMINATED).
+//! 2. Domination: the stellar is dominated (@0x6792d), by its `Flags2`
+//!    or by Demand Tribute ([`domination::dominated`](crate::domination::dominated)).
 //! 3. A request already granted (@0x67934-0x6793d): the dock request's
 //!    counter at [`CLEARED`] or more ([`Standing::granted`]), whichever
 //!    stellar it is for. The approach sets it ([`clearance`]).
@@ -131,8 +130,8 @@
 //!   @0x97112-0x97125), is the planet comm dialog's (`nova_sim::Session`'s
 //!   `planet_comm` module), which reads the blessing as [`cleared`] does
 //!   (@0x96c15). Domination by Demand Tribute (+0x46 written @0x978fa,
-//!   cleared @0x9740f) is on the galaxy overlay; the landing's reading of
-//!   it is rdm:phase/play-feel-4/phase-3-domination-readers's.
+//!   cleared @0x9740f) is on the galaxy overlay, which stamps it on the
+//!   site the press reads.
 //! - The cloak refusal (@0x66a85-0x66ae9) and the silent press of a
 //!   disabled or dying ship (@0x66aee-0x66b14) are the
 //!   `nova_sim::Session`'s, which refuses them after the press's
@@ -725,15 +724,11 @@ pub fn land_or_select(
 /// `_HandlePlayerDockApproach` for the greeting's fee line
 /// (@0x64d87-0x64d96).
 ///
-/// It reads only the always-dominated `Flags2`
-/// [`DOMINATED`](crate::market::DOMINATED); domination by Demand Tribute
-/// (the runtime byte) is kept on the galaxy overlay
-/// (`nova_sim::story::OverlaidGalaxy::dominated`), and
-/// rdm:phase/play-feel-4/phase-3-domination-readers switches this reader
-/// to it.
+/// Dominated is [`domination::dominated`](crate::domination::dominated):
+/// by its `Flags2` or at run time, as the overlay stamps `site`.
 #[must_use]
 pub fn fee_due(site: &LandingSite) -> Option<i64> {
-    (site.fee > 0 && site.flags2 & crate::market::DOMINATED == 0).then_some(i64::from(site.fee))
+    (site.fee > 0 && !crate::domination::dominated(site)).then_some(i64::from(site.fee))
 }
 
 /// The cash a pilot holding `cash` has left after paying `fee`: their
@@ -995,7 +990,7 @@ pub fn open_by_record(min_status: i16, record: i16) -> bool {
 #[must_use]
 pub fn cleared(site: &LandingSite, standing: Standing, blessing: RuleSource) -> bool {
     let by_record = open_by_record(site.min_status, standing.record);
-    let dominated = site.flags2 & crate::market::DOMINATED != 0;
+    let dominated = crate::domination::dominated(site);
     let governed = site.govt.is_some();
     let require_ok = !governed || standing.meets_require;
     let blessed = governed && standing.blessed;
@@ -1117,6 +1112,7 @@ mod tests {
             govt: None,
             flags2: 0,
             destroyed: false,
+            dominated_at_run_time: false,
             graphic: 0,
             dead_graphic: None,
             dead_frame_size: None,
@@ -3051,8 +3047,16 @@ mod tests {
             flags2: crate::market::DOMINATED,
             ..governed(32767)
         };
+        let by_tribute = LandingSite {
+            dominated_at_run_time: true,
+            ..governed(32767)
+        };
         for source in RuleSource::ALL {
             assert!(cleared(&dominated, standing(-32768), source), "@0x6792d");
+            assert!(
+                cleared(&by_tribute, standing(-32768), source),
+                "dominated at run time"
+            );
         }
     }
 
@@ -3266,6 +3270,11 @@ mod tests {
             ..charging(100, planet)
         };
         assert_eq!(fee_due(&dominated), None);
+        let by_tribute = LandingSite {
+            dominated_at_run_time: true,
+            ..charging(100, planet)
+        };
+        assert_eq!(fee_due(&by_tribute), None, "dominated at run time");
     }
 
     #[test]

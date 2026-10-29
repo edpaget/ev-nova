@@ -127,7 +127,7 @@ pub fn near(offset: Vec2) -> bool {
 pub fn approach_clears(site: &LandingSite, standing: Standing, permission: i16) -> bool {
     site.govt.is_none()
         || open_by_record(site.min_status, standing.record)
-        || site.flags2 & crate::market::DOMINATED != 0
+        || crate::domination::dominated(site)
         || permission > REQUESTED_NEAR
         || standing.mission_stellar
         || standing.blessed
@@ -242,6 +242,7 @@ mod tests {
             govt: Some(GovtId(140)),
             flags2: 0,
             destroyed: false,
+            dominated_at_run_time: false,
             graphic: 0,
             dead_graphic: None,
             dead_frame_size: None,
@@ -281,6 +282,14 @@ mod tests {
             ..planet()
         };
         assert!(approach_clears(&dominated, nobody(), 0), "dominated");
+        let by_tribute = LandingSite {
+            dominated_at_run_time: true,
+            ..planet()
+        };
+        assert!(
+            approach_clears(&by_tribute, nobody(), 0),
+            "dominated at run time (@0x64845)"
+        );
         assert!(approach_clears(&planet(), nobody(), 0x2ee), "the counter");
         let mission = Standing {
             mission_stellar: true,

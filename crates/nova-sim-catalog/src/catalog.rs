@@ -108,6 +108,8 @@ pub struct StarSystem {
 
 /// A stellar the player might land on, raw from its `spöb`; the
 /// `nova_sim::landing` rules decide what the values mean.
+// Each flag is its own `spöb` field or runtime byte, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LandingSite {
     /// The `spöb`'s ID.
@@ -141,6 +143,12 @@ pub struct LandingSite {
     /// the galaxy overlay stamps it
     /// (`nova_sim::story::OverlaidGalaxy::site`).
     pub destroyed: bool,
+    /// Whether the player dominated it at run time (the planet comm
+    /// dialog's Demand Tribute, until a Release): never in the catalog,
+    /// which gives `false`; the galaxy overlay stamps it
+    /// (`nova_sim::story::OverlaidGalaxy::site`). Whether it is dominated
+    /// reads this with its `Flags2` (`nova_sim::domination::dominated`).
+    pub dominated_at_run_time: bool,
     /// Its `Type`, raw: the graphic type whose master the original's
     /// landing distance reads (see `nova_sim::landing`).
     pub graphic: i16,
@@ -2755,6 +2763,7 @@ mod tests {
                 govt: None,
                 flags2: 0,
                 destroyed: false,
+                dominated_at_run_time: false,
                 graphic: 4,
                 dead_graphic: Some(5),
                 dead_frame_size: Some((60, 60)),
