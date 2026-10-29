@@ -63,14 +63,18 @@
 //! 1. A quiet ship, by the engine: nothing happens, and the reply stays.
 //! 2. An unfriendly ship, a plunderer or a xenophobe: "In your dreams,
 //!    pal."
-//! 3. A busy one (`_AIIsShipBusy` @0x82fac): "Okay, I'm on my way." when
-//!    it is already assisting the player, its target the player and not
-//!    disabled (`_IsRefuellingPlayer` @0x820fd, `_IsRepairingPlayer`
-//!    @0x8213a, so not one a hit turned on an NPC); "Sorry sir, I'm just an
+//! 3. A busy one (`_AIIsShipBusy` @0x82fac, [`Hail::busy`]), or under
+//!    [`RuleKey::HailBusyUnderAttack`](crate::RuleKey::HailBusyUnderAttack)'s
+//!    other reading one another NPC attacks ([`Hail::attacked`]; by the
+//!    engine `_IsShipThreatened` @0x96295 never holds): "Okay, I'm on my
+//!    way." when it is already assisting the player, its target the player
+//!    and not disabled (`_IsRefuellingPlayer` @0x820fd,
+//!    `_IsRepairingPlayer` @0x8213a, so not one a hit turned on an NPC);
+//!    "Sorry sir, I'm just an
 //!    escort." for a ship of the original's AI type above 4
 //!    ([`Hail::escort_ai`]: a mission escort, an NPC fleet escort or an
 //!    NPC's carried fighter, @0x962ee-0x96304), which is busy whenever it
-//!    keeps formation or fights; else "I'm busy.".
+//!    keeps formation, follows its lead or fights; else "I'm busy.".
 //! 4. While any NPC threatens the player (`_IsPlayerThreatened`
 //!    @0x96310), as the [`battle`](super::battle) module answers:
 //!    - unless an NPC of a government that is an enemy of the ship's
@@ -322,13 +326,17 @@ pub struct RequestAssistance {
     pub brave_trader_help: RuleSource,
     /// Whether a helper's pick counts the vacated berths' last ships.
     pub battle_help_gone: RuleSource,
+    /// Whether a ship another NPC attacks ([`Hail::attacked`]) answers
+    /// busy: never by the engine, as `_IsShipThreatened` never holds.
+    pub busy_under_attack: RuleSource,
 }
 
 impl RequestAssistance {
     /// Request Assistance as `rulebook` chooses: its
     /// [`RuleKey::QuietHails`], [`RuleKey::BattleHelpTarget`],
-    /// [`RuleKey::BraveTraderBattleHelp`] and
-    /// [`RuleKey::BattleHelpGoneSlots`] entries.
+    /// [`RuleKey::BraveTraderBattleHelp`],
+    /// [`RuleKey::BattleHelpGoneSlots`] and
+    /// [`RuleKey::HailBusyUnderAttack`] entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
@@ -336,6 +344,7 @@ impl RequestAssistance {
             battle_help_target: rulebook.source_for(RuleKey::BattleHelpTarget),
             brave_trader_help: rulebook.source_for(RuleKey::BraveTraderBattleHelp),
             battle_help_gone: rulebook.source_for(RuleKey::BattleHelpGoneSlots),
+            busy_under_attack: rulebook.source_for(RuleKey::HailBusyUnderAttack),
         }
     }
 }
@@ -361,7 +370,7 @@ impl HailOption for RequestAssistance {
         if hail.attitude != Attitude::Friendly || dispositions.plunderer || dispositions.xenophobe {
             return Answer::say(Reply::Comm(IN_YOUR_DREAMS));
         }
-        if hail.busy {
+        if hail.busy || (self.busy_under_attack == RuleSource::Bible && hail.attacked) {
             let group = if hail.assisting_player {
                 ON_MY_WAY
             } else if hail.escort_ai() {
@@ -1145,6 +1154,41 @@ mod tests {
             ..busy
         };
         assert_eq!(press(&request, &assisting), says(ON_MY_WAY));
+    }
+
+    #[test]
+    fn a_ship_another_attacks_is_not_busy_for_it_by_the_engine_and_is_by_the_other_reading() {
+        let npc = ship();
+        let attacked = Hail {
+            attacked: true,
+            ..needy(&npc)
+        };
+        let engine = RequestAssistance::default();
+        assert_ne!(
+            press(&engine, &attacked),
+            says(BUSY),
+            "`_IsShipThreatened` never holds, @0x8209e-0x820a9"
+        );
+        assert_eq!(press(&engine, &attacked), press(&engine, &needy(&npc)));
+        let bible = RequestAssistance {
+            busy_under_attack: RuleSource::Bible,
+            ..engine
+        };
+        assert_eq!(press(&bible, &attacked), says(BUSY));
+        assert_eq!(press(&bible, &needy(&npc)), press(&engine, &needy(&npc)));
+    }
+
+    #[test]
+    fn request_assistance_reads_the_hail_busy_under_attack_key_from_the_rulebook() {
+        assert_eq!(
+            RequestAssistance::from_rulebook(&Rulebook::default()).busy_under_attack,
+            RuleSource::Engine
+        );
+        let rulebook =
+            Rulebook::default().with_override(RuleKey::HailBusyUnderAttack, RuleSource::Bible);
+        let request = RequestAssistance::from_rulebook(&rulebook);
+        assert_eq!(request.busy_under_attack, RuleSource::Bible);
+        assert_eq!(request.quiet_hails, RuleSource::Engine);
     }
 
     #[test]
