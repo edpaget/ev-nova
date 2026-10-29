@@ -407,6 +407,7 @@ pub use nova_sim_port::auto_refuel;
 pub use nova_sim_port::board;
 pub use nova_sim_port::board_repair;
 pub use nova_sim_port::capture_naming;
+pub use nova_sim_port::captured_loadout;
 pub use nova_sim_port::christening;
 pub use nova_sim_state::clearance;
 pub mod course;
