@@ -1,8 +1,10 @@
-//! QuickDraw rectangles and `PixMap` headers.
+//! QuickDraw rectangles, `PixMap` headers and the `BitMap`s some `PICT`
+//! opcodes hold instead.
 //!
 //! Source: *Inside Macintosh: Imaging With QuickDraw* (1994) ch. 4, "Color
-//! QuickDraw": the `PixMap` record. Rectangles are `top, left, bottom,
-//! right` as signed 16-bit coordinates.
+//! QuickDraw": the `PixMap` record; ch. 1, the `BitMap` record, which in a
+//! picture is only `rowBytes` (bit 15 clear) and bounds. Rectangles are
+//! `top, left, bottom, right` as signed 16-bit coordinates.
 
 use super::GraphicsError;
 use super::reader::Reader;
@@ -103,6 +105,49 @@ impl PixMap {
             cmp_count,
             cmp_size,
             pm_table,
+        })
+    }
+
+    /// The `PixMap` a 1-bit `BitMap` reads as: one bit per pixel, one
+    /// component, unpacked.
+    pub(crate) fn bitmap(row_bytes: u16, bounds: QdRect) -> Self {
+        Self {
+            row_bytes,
+            bounds,
+            pack_type: 0,
+            pixel_size: 1,
+            cmp_count: 1,
+            cmp_size: 1,
+            pm_table: 0,
+        }
+    }
+}
+
+/// The map a `PICT` pixel opcode copies from: a 1-bit `BitMap` (bit 15 of
+/// `rowBytes` clear), which is only `rowBytes` and bounds, or a `PixMap`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PixelMap {
+    /// A 1-bit `BitMap`: set bits draw black, clear bits white.
+    BitMap {
+        /// `rowBytes`.
+        row_bytes: u16,
+        bounds: QdRect,
+    },
+    /// A `PixMap`.
+    PixMap(PixMap),
+}
+
+impl PixelMap {
+    /// Reads a `BitMap` or a `PixMap`, as bit 15 of `rowBytes` says.
+    pub(crate) fn read(r: &mut Reader<'_>) -> Result<Self, GraphicsError> {
+        let row_bytes = r.clone().u16()?;
+        if row_bytes & PIXMAP_FLAG != 0 {
+            return PixMap::read(r).map(Self::PixMap);
+        }
+        r.skip(2)?;
+        Ok(Self::BitMap {
+            row_bytes,
+            bounds: QdRect::read(r)?,
         })
     }
 }
@@ -226,6 +271,34 @@ mod tests {
         assert_eq!(
             PixMap::read(&mut r),
             Err(GraphicsError::NotAPixMap { offset: 2 })
+        );
+    }
+
+    #[test]
+    fn a_map_with_the_flag_is_a_pixmap() {
+        let mut r = Reader::new(&PIXMAP);
+        let PixelMap::PixMap(pm) = PixelMap::read(&mut r).unwrap() else {
+            panic!("not a PixMap");
+        };
+        assert_eq!(pm.pixel_size, 16);
+        assert_eq!(r.pos(), 46);
+    }
+
+    #[test]
+    fn a_map_without_the_flag_is_a_bitmap_of_row_bytes_and_bounds() {
+        let bytes = [0x00, 0x4C, 0, 1, 0, 2, 0, 4, 0, 8, 0xEE];
+        let mut r = Reader::new(&bytes);
+        assert_eq!(
+            PixelMap::read(&mut r),
+            Ok(PixelMap::BitMap {
+                row_bytes: 76,
+                bounds: rect(1, 2, 4, 8)
+            })
+        );
+        assert_eq!(r.pos(), 10);
+        assert_eq!(
+            PixelMap::read(&mut Reader::new(&bytes[..9])),
+            Err(GraphicsError::UnexpectedEnd { offset: 8 })
         );
     }
 

@@ -64,6 +64,16 @@ impl ColorTable {
         Ok(Self { colours })
     }
 
+    /// The colours of a 1-bit `BitMap` copied in srcCopy with picture
+    /// playback's default pen: a clear bit (0) is the white background, a
+    /// set bit (1) the black foreground.
+    pub(crate) fn black_on_white() -> Self {
+        let mut colours = [None; 256];
+        colours[0] = Some([255; 3]);
+        colours[1] = Some([0; 3]);
+        Self { colours }
+    }
+
     /// The opaque colour for pixel value `index`.
     pub(crate) fn rgba(&self, index: u8) -> Result<[u8; 4], GraphicsError> {
         let [r, g, b] =
@@ -153,6 +163,14 @@ mod tests {
         assert_eq!(ctab.rgba(2), Ok([0x00, 0x12, 0xAB, 255]));
         assert_eq!(ctab.rgba(0), Err(GraphicsError::MissingColour { index: 0 }));
         assert_eq!(ctab.rgba(1), Err(GraphicsError::MissingColour { index: 1 }));
+    }
+
+    #[test]
+    fn a_bitmap_draws_clear_bits_white_and_set_bits_black() {
+        let ctab = ColorTable::black_on_white();
+        assert_eq!(ctab.rgba(0), Ok([255, 255, 255, 255]));
+        assert_eq!(ctab.rgba(1), Ok([0, 0, 0, 255]));
+        assert_eq!(ctab.rgba(2), Err(GraphicsError::MissingColour { index: 2 }));
     }
 
     #[test]
