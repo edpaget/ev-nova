@@ -49,6 +49,7 @@ impl Session {
     /// - To [`ScreenAsk::ShipNaming`], [`Session::ship_naming`].
     /// - To [`ScreenAsk::News`], [`Session::news`] over
     ///   [`Session::news_picture`].
+    /// - To [`ScreenAsk::Gamble`], [`Session::gamble_opening`].
     /// - To [`ScreenAsk::MissionInfo`], [`Session::mission_info`].
     /// - To [`ScreenAsk::RefusableOffer`],
     ///   [`Session::refusable_offer_dialog`].
@@ -135,6 +136,7 @@ impl Session {
             ScreenAsk::HireList => self.hire_list_screen(collab.chance),
             ScreenAsk::ShipNaming(ship) => self.ship_naming_screen(ship, catalog, collab.chance),
             ScreenAsk::News => self.news_screen(),
+            ScreenAsk::Gamble => self.gamble_screen(),
             ScreenAsk::MissionInfo => self.mission_info_screen(),
             ScreenAsk::RefusableOffer(mission) => self.refusable_offer_screen(mission),
             ScreenAsk::OfferText { mission, raw } => self.offer_text_screen(mission, &raw),

@@ -174,6 +174,8 @@
 //!   ([`Ask`]); the [`Help`] a ship gives the player once asked; and what
 //!   the comm dialog shows of a ship the player leads ([`EscortStatus`]),
 //!   a hired escort's daily pay among it.
+//! - [`gamble`]: the bar's Gamble, the Galactic Racing Network race:
+//!   what Gamble opens, the bets, the winner's draw and the result text.
 //! - [`glow`]: how bright a ship's engine glow is: its base level, which
 //!   thrust ramps up and coasting down ([`ramp_glow`]), and the level
 //!   drawn at a tick, flickering on the [`BlinkChance`] port
@@ -445,6 +447,7 @@ pub use nova_sim_base::inertialess;
 pub use nova_sim_base::player_turn;
 pub use nova_sim_combat::message;
 pub use nova_sim_combat::player_fate;
+pub use nova_sim_port::gamble;
 pub use nova_sim_port::grant;
 pub use nova_sim_port::hire;
 pub use nova_sim_port::iff;

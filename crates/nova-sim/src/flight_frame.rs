@@ -43,6 +43,7 @@ use crate::combat::{CombatEvent, ShipRef};
 use crate::escort::{ClassRow, Commanded, EscortClass, EscortCommand, EscortGroup};
 use crate::escort_dialog::{EscortButton, EscortDialogView};
 use crate::flight::{Controls, ShipState};
+use crate::gamble::{Bet, RaceRun};
 use crate::gate::{GateKind, GateRefusal};
 use crate::geometry::Vec2;
 use crate::grant::Granted;
@@ -920,6 +921,17 @@ pub enum FlightCommand {
     /// The bar's hire screen closes
     /// ([`Session::close_hire`](crate::Session::close_hire)).
     CloseHire,
+    /// Bet `bet` on the bar race's `racer`, 0 to 3, drawing its winner
+    /// ([`Session::race`](crate::Session::race)).
+    Race {
+        /// The racer bet on.
+        racer: u8,
+        /// The stake.
+        bet: Bet,
+    },
+    /// The race's result text has closed: credit the winnings due
+    /// ([`Session::collect_winnings`](crate::Session::collect_winnings)).
+    CollectWinnings,
     /// The mission computer opens
     /// ([`Session::open_mission_computer`](crate::Session::open_mission_computer)).
     OpenMissionComputer,
@@ -1111,6 +1123,8 @@ impl FlightCommand {
             | Self::OpenBar
             | Self::Hire(_)
             | Self::CloseHire
+            | Self::Race { .. }
+            | Self::CollectWinnings
             | Self::OpenMissionComputer
             | Self::ShowComputerRow(_)
             | Self::ShowInfoRow(_)
@@ -1295,6 +1309,8 @@ pub enum Answer {
     ShipBought(Result<ShipPurchase, ShipRefusal>),
     /// What a [`FlightCommand::Hire`] hired, or why it was refused.
     Hired(Result<Hired, HireRefusal>),
+    /// The race a [`FlightCommand::Race`] ran.
+    Raced(RaceRun),
     /// The mission computer a [`FlightCommand::OpenMissionComputer`]
     /// opened, or why it has nothing.
     MissionComputer(Result<MissionComputer, ComputerRefusal>),

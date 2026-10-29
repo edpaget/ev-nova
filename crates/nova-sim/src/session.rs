@@ -409,7 +409,8 @@
 //! - `port: port::Port` (`port` module; phase 7, done): the landing,
 //!   take-off and spaceport visit under way (the dock request and land
 //!   key, the take-off grace and touchdown, the stay, the bar's news, the
-//!   outfitter visit, the day's rolls and the ranks' port prices); landing
+//!   outfitter visit, the day's rolls, the ranks' port prices and the
+//!   bar's race); landing
 //!   and take-off themselves (`land`, `dock`, `take_off`) coordinate and
 //!   stay on `Session`.
 //! - `run: mission_run::MissionRun` (`mission_run` module; phase 7, done):
@@ -502,6 +503,7 @@ mod fixture_setters;
 mod flight_events;
 mod frame;
 mod free_cargo;
+mod gamble;
 mod game_work;
 mod gate_escorts;
 mod gate_follow;

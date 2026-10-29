@@ -38,7 +38,7 @@
 //!   and Find; the floating map's show; the entry's coming traffic; a
 //!   text's fill; and the port's, the comm's and the pilot's screens: the
 //!   spaceport's shops, the outfitter alone, the hire list, a ship's name
-//!   prompt, the bar's news, the mission info, an offer's refuse button
+//!   prompt, the bar's news, what the bar's Gamble opens, the mission info, an offer's refuse button
 //!   and its filled text, the hail, the boarding and the pilot panel. The
 //!   asks one screen always makes together are one answer (the course
 //!   map's opening, [`MapOpen`](nova_sim::flight_frame::MapOpen); its

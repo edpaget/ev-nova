@@ -26,6 +26,7 @@
 use super::port_screens::{BarNews, PortShops};
 use crate::catalog::{ShipId, SystemId};
 use crate::galaxy_map::{GalaxyShown, MapDrawing, MapMarks};
+use crate::gamble::GambleOpening;
 use crate::hail::HailView;
 use crate::map_borders::BorderSources;
 use crate::map_panel::MapPanel;
@@ -128,6 +129,9 @@ pub enum ScreenAsk {
     /// ([`ScreenAnswer::News`]). Answered nothing with no bar visit under
     /// way.
     News,
+    /// What the bar's Gamble opens, asked as it is pressed
+    /// ([`ScreenAnswer::Gamble`]). Answered nothing where there is no bar.
+    Gamble,
     /// What the mission info screen lists, asked as it opens and after
     /// an abort ([`ScreenAnswer::MissionInfo`]).
     MissionInfo,
@@ -293,6 +297,8 @@ pub enum ScreenAnswer {
     ShipNaming(Result<ShipNaming, ShipRefusal>),
     /// [`ScreenAsk::News`]'s.
     News(BarNews),
+    /// [`ScreenAsk::Gamble`]'s.
+    Gamble(GambleOpening),
     /// [`ScreenAsk::MissionInfo`]'s.
     MissionInfo(MissionInfo),
     /// [`ScreenAsk::RefusableOffer`]'s.
@@ -331,6 +337,7 @@ impl ScreenAnswer {
             ScreenAsk::HireList => matches!(self, Self::HireList(_)),
             ScreenAsk::ShipNaming(_) => matches!(self, Self::ShipNaming(_)),
             ScreenAsk::News => matches!(self, Self::News(_)),
+            ScreenAsk::Gamble => matches!(self, Self::Gamble(_)),
             ScreenAsk::MissionInfo => matches!(self, Self::MissionInfo(_)),
             ScreenAsk::RefusableOffer(_) => matches!(self, Self::RefusableOffer(_)),
             ScreenAsk::OfferText { .. } => matches!(self, Self::OfferText(_)),
@@ -373,6 +380,7 @@ mod tests {
             ScreenAsk::HireList,
             ScreenAsk::ShipNaming(ShipId(129)),
             ScreenAsk::News,
+            ScreenAsk::Gamble,
             ScreenAsk::MissionInfo,
             ScreenAsk::RefusableOffer(MissionId(128)),
             ScreenAsk::OfferText {
@@ -448,6 +456,7 @@ mod tests {
             })),
             ScreenAnswer::ShipNaming(Err(ShipRefusal::NoShipyard)),
             ScreenAnswer::News(BarNews::default()),
+            ScreenAnswer::Gamble(GambleOpening::NoCash),
             ScreenAnswer::MissionInfo(MissionInfo::default()),
             ScreenAnswer::RefusableOffer(false),
             ScreenAnswer::OfferText(String::new()),

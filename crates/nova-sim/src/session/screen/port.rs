@@ -88,6 +88,13 @@ impl Session {
         }
     }
 
+    /// What the bar's Gamble opens ([`Session::gamble_opening`]); nothing
+    /// where there is no bar.
+    pub(super) fn gamble_screen(&self) -> ScreenAnswer {
+        self.gamble_opening()
+            .map_or(ScreenAnswer::Nothing, ScreenAnswer::Gamble)
+    }
+
     /// What the mission info screen lists ([`Session::mission_info`]).
     pub(super) fn mission_info_screen(&self) -> ScreenAnswer {
         ScreenAnswer::MissionInfo(self.mission_info())
@@ -290,6 +297,25 @@ pub(in crate::session) mod tests {
         );
         assert_eq!(own, chance, "the same draws");
         assert_eq!(session, by_hand, "the same rolls kept");
+    }
+
+    #[test]
+    fn gamble_opens_as_the_session_says_and_nothing_away_from_a_bar() {
+        let catalog = port();
+        let mut session = docked(&catalog);
+        for cash in [0, 700] {
+            session.pilot.cash = cash;
+            let expected = session.gamble_opening().expect("a bar");
+            assert_eq!(
+                asked(&mut session, None, &mut NeverFires, ScreenAsk::Gamble),
+                ScreenAnswer::Gamble(expected)
+            );
+        }
+        let mut flying = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            asked(&mut flying, None, &mut NeverFires, ScreenAsk::Gamble),
+            ScreenAnswer::Nothing
+        );
     }
 
     #[test]

@@ -232,6 +232,8 @@ impl Session {
             | FlightCommand::OpenBar
             | FlightCommand::Hire(_)
             | FlightCommand::CloseHire
+            | FlightCommand::Race { .. }
+            | FlightCommand::CollectWinnings
             | FlightCommand::Jettison { .. }
             | FlightCommand::Assign(_)
             | FlightCommand::MarkIntroSeen => self.apply_port(command, collab),
