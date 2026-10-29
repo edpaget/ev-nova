@@ -634,6 +634,21 @@ mod tests {
     }
 
     #[test]
+    fn the_fake_gives_its_stellar_scripts() {
+        let scripts = crate::catalog::StellarScripts {
+            id: StellarId(128),
+            on_dominate: crate::control::Script::parse("b100"),
+            on_release: crate::control::Script::parse("!b100"),
+        };
+        let fake = FakePilotCatalog {
+            scripts: vec![scripts.clone()],
+            ..catalog()
+        };
+        assert_eq!(fake.stellar_scripts(), [scripts]);
+        assert_eq!(catalog().stellar_scripts(), [], "none, by default");
+    }
+
+    #[test]
     fn living_adds_its_lives_to_the_catalogs() {
         let life = |id| StellarLife {
             id: StellarId(id),

@@ -563,6 +563,13 @@ mod tests {
     }
 
     #[test]
+    fn its_debug_names_it_and_its_view() {
+        let shown = format!("{:?}", dialog(&greeting()));
+        assert!(shown.starts_with("PlanetCommDialog"), "{shown}");
+        assert!(shown.contains("Earth"), "the view: {shown}");
+    }
+
+    #[test]
     fn its_items_stand_where_ditl_1009_puts_them() {
         let dialog = dialog(&greeting());
         let laid = dialog.dialog();
@@ -753,6 +760,30 @@ mod tests {
     #[test]
     fn a_click_presses_its_button() {
         let mut shown = dialog(&greeting());
+        for (item, press) in [
+            (CLOSE_ITEM, PlanetCommItem::Close),
+            (SECOND_ITEM, PlanetCommItem::Second),
+            (THIRD_ITEM, PlanetCommItem::Third),
+        ] {
+            click(&mut shown, item);
+            assert_eq!(shown.take_press(), Some(press), "item {item}");
+        }
+    }
+
+    #[test]
+    fn its_buttons_take_clicks_though_the_template_disables_them() {
+        let mut disabled = stock();
+        for item in &mut disabled.items {
+            item.enabled = false;
+        }
+        let mut shown = PlanetCommDialog::new(
+            &disabled,
+            &greeting(),
+            None,
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
         for (item, press) in [
             (CLOSE_ITEM, PlanetCommItem::Close),
             (SECOND_ITEM, PlanetCommItem::Second),
