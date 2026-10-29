@@ -33,7 +33,7 @@
 //!
 //! Nothing here plays a sound.
 
-use super::{Chart, Outbox, Session, SessionEvent, Statics};
+use super::{Chart, Outbox, SessionEvent, Statics};
 use crate::catalog::{ListedStellar, StellarId, SystemId};
 use crate::chance::Chance;
 use crate::pilot::Pilot;
@@ -115,7 +115,7 @@ impl Chart {
 
 /// The fixture's reach into domination (`crate::fixture::dominate`).
 #[cfg(any(test, feature = "fixture"))]
-impl Session {
+impl super::Session {
     /// Sets whether the player dominates `stellar`
     /// ([`Chart::set_dominated`]).
     pub(crate) fn dominate(&mut self, stellar: StellarId, dominated: bool) {
@@ -126,6 +126,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use super::super::Session;
     use super::*;
     use crate::chance::NeverFires;
     use crate::domination;
