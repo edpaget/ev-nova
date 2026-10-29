@@ -38,16 +38,20 @@ pub(crate) fn read(bytes: &[u8]) -> Result<Option<Container>, ParseError> {
     }
     let data_len = u32_at(header, 83);
     let resource_len = u32_at(header, 87);
-    let stored = u16_at(header, CRC_FIELD);
-    let computed = crc16_xmodem(&header[..CRC_FIELD]);
-    if stored != computed {
-        if signed(header) {
-            return Err(ParseError::MacBinaryCrcMismatch { stored, computed });
+    // Apple's tool judges a header with bytes 101 to 125 zero by the
+    // version I rules even when its CRC (then 0) matches, so a zero-filled
+    // file is not MacBinary.
+    if header[101..=125].iter().all(|&b| b == 0) {
+        if header[1] > 63 || (data_len, resource_len) == (0, 0) {
+            return Ok(None);
         }
-        let version_i = header[101..=125].iter().all(|&b| b == 0)
-            && header[1] <= 63
-            && (data_len, resource_len) != (0, 0);
-        if !version_i {
+    } else {
+        let stored = u16_at(header, CRC_FIELD);
+        let computed = crc16_xmodem(&header[..CRC_FIELD]);
+        if stored != computed {
+            if signed(header) {
+                return Err(ParseError::MacBinaryCrcMismatch { stored, computed });
+            }
             return Ok(None);
         }
     }
@@ -241,6 +245,46 @@ mod tests {
         assert!(read(&data_only.bytes).expect("ok").is_some());
         let resource_only = MacBinaryBuilder::new(vec![1]).version(I).build();
         assert!(read(&resource_only.bytes).expect("ok").is_some());
+    }
+
+    /// A version I shaped header (bytes 101 to 125 zero) whose CRC still
+    /// matches: bytes 99 and 100 take the CRC of bytes 0 to 98, which
+    /// zeroes the CRC of bytes 0 to 100, and the zeros after keep it zero.
+    fn crc_matched_version_i(name_len: u8, data_len: u32) -> Vec<u8> {
+        let mut header = vec![0; 128];
+        header[MACBINARY_NAME_LEN_FIELD] = name_len;
+        header[MACBINARY_DATA_LEN_FIELD..MACBINARY_DATA_LEN_FIELD + 4]
+            .copy_from_slice(&data_len.to_be_bytes());
+        let fix = crc16_xmodem(&header[..99]).to_be_bytes();
+        header[99..=100].copy_from_slice(&fix);
+        assert_eq!(crc16_xmodem(&header[..MACBINARY_CRC_FIELD]), 0);
+        header.resize(128 + data_len.next_multiple_of(128) as usize, 0);
+        header
+    }
+
+    #[test]
+    fn a_zero_filled_buffer_is_not_macbinary() {
+        // Its CRC (0) matches the zero stored at byte 124, but Apple's tool
+        // judges a header with bytes 101 to 125 zero by the version I rules,
+        // which reject two empty forks.
+        assert!(matches!(read(&[0; 200]), Ok(None)));
+        assert!(matches!(read(&[0; 128]), Ok(None)));
+    }
+
+    #[test]
+    fn a_crc_matched_version_i_header_keeps_the_version_i_rules() {
+        assert!(read(&crc_matched_version_i(63, 1)).expect("ok").is_some());
+        assert!(matches!(read(&crc_matched_version_i(64, 1)), Ok(None)));
+        assert!(matches!(read(&crc_matched_version_i(1, 0)), Ok(None)));
+    }
+
+    #[test]
+    fn a_crc_checked_header_may_have_both_forks_empty() {
+        for version in [II, III] {
+            let built = MacBinaryBuilder::new(Vec::new()).version(version).build();
+            let found = container(&built);
+            assert!(found.data.is_empty() && found.resource.is_empty());
+        }
     }
 
     #[test]

@@ -71,6 +71,23 @@ fn macbinary_ii_and_iii_plug_ins_read_like_the_bare_fork() {
 }
 
 #[test]
+fn a_zero_filled_file_keeps_its_fork_error() {
+    // An interrupted copy: its zero CRC matches, but it was never MacBinary.
+    let error = ResourceFile::from_bytes(vec![0; 200]).expect_err("not a fork");
+    assert!(
+        !matches!(
+            error,
+            ParseError::MacBinaryHeaderTruncated { .. }
+                | ParseError::MacBinaryCrcMismatch { .. }
+                | ParseError::MacBinaryForkOutOfBounds { .. }
+                | ParseError::MacBinaryNoResourceFork
+                | ParseError::MacBinaryResourceFork { .. }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn a_malformed_fork_inside_macbinary_names_both_layers_when_loaded() {
     let path = Path::new("Plug-Ins/Broken.bin");
     let mut inner = fork();

@@ -51,12 +51,16 @@
 //! A header is accepted as Apple's tool accepts it:
 //!
 //! - It is at least 128 bytes long and bytes 0, 74 and 82 are zero.
-//! - If the CRC-16/XMODEM of bytes 0 to 123 equals the `u16` at byte 124,
-//!   it is MacBinary II, or III when bytes 102 to 105 are `mBIN`. The
-//!   version bytes 122 and 123 are ignored.
-//! - Otherwise it is MacBinary I when bytes 101 to 125 are all zero, the
-//!   name length (byte 1) is 63 or less, and the two forks are not both
+//! - When bytes 101 to 125 are all zero it is MacBinary I, accepted when
+//!   the name length (byte 1) is 63 or less and the two forks are not both
 //!   empty. A name length of 0 is accepted, and fork lengths have no cap.
+//!   These rules apply even when the header's CRC matches its zero CRC
+//!   field, as a zero-filled file's does: Apple's tool rejects that file
+//!   as a "false-positive MacBinary-I", so it keeps its fork error.
+//! - Otherwise it is MacBinary II if the CRC-16/XMODEM of bytes 0 to 123
+//!   equals the `u16` at byte 124, or III when bytes 102 to 105 are also
+//!   `mBIN`. The version bytes 122 and 123 are ignored, and both forks may
+//!   be empty.
 //!
 //! Only the fork with the resources is kept; the Finder metadata is not
 //! read. As the original's `_EVOpenResourceFile` (0xa5287) opens the
