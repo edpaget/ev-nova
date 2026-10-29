@@ -1,6 +1,6 @@
 //! What the session fills and the view takes: the sounds, messages,
-//! events and notes raised since they were last taken, and the flags the
-//! view asks after, each taken with its `take_*` method, and all of them
+//! events and notes raised since they were last taken, the line raised
+//! last ([`Outbox::raise`]), and the flags the view asks after, each taken with its `take_*` method, and all of them
 //! drained as one stream of `FlightEvent`s by
 //! [`Session::drain_events`](super::Session::drain_events)
 //! (see the `flight_events` module). Nothing in the session reads them
@@ -10,6 +10,7 @@ use crate::bay::FighterNote;
 use crate::board::MissionBoardLine;
 use crate::combat::report::Reports;
 use crate::control::ScriptNote;
+use crate::flight_frame::RaisedLine;
 use crate::grant::Granted;
 use crate::hail::CommNote;
 use crate::hire::PayNote;
@@ -82,4 +83,22 @@ pub(super) struct Outbox {
     /// ([`Session::take_takeoff_nav`](super::Session::take_takeoff_nav));
     /// never saved.
     pub(super) takeoff_nav: Option<NavMode>,
+    /// The line raised last, what `_DisplayComm`'s one slot holds
+    /// (@0x90251), until a step takes it (see the `step` module); never
+    /// saved.
+    pub(super) last_line: Option<RaisedLine>,
+}
+
+impl Outbox {
+    /// Raises `line`: puts it on its kind's list (the messages, the comm
+    /// notes or the quotes) and records it as the line raised last, as
+    /// `_DisplayComm` replaces its slot with each line (@0x90251-0x90265).
+    pub(super) fn raise(&mut self, line: RaisedLine) {
+        match &line {
+            RaisedLine::Message(message) => self.messages.push(message.clone()),
+            RaisedLine::Comm(note) => self.comm.push(note.clone()),
+            RaisedLine::Quote(quote) => self.quotes.push(quote.clone()),
+        }
+        self.last_line = Some(line);
+    }
 }

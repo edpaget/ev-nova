@@ -86,6 +86,7 @@ use crate::catalog::{CommCatalog, MissionId, PersonId, StringPatch, SystemId};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
+use crate::flight_frame::RaisedLine;
 use crate::hail::likes_player;
 use crate::person::{
     ESCAPE_POD, Eligible, GRUDGE, HAIL_QUOTES, PersonRules, QUOTE_GAP_TICKS, QUOTE_IF_MISSION,
@@ -353,7 +354,8 @@ impl Session {
     /// ([`hail_quote_text`]); with `_beepSnd[4]`
     /// ([`SimSound::HailQuote`](crate::SimSound::HailQuote), @0x44586-0x445ad),
     /// shown for [`QUOTE_SHOWN_TICKS`] (@0x4464d), in which no random
-    /// quote is said. It is quoted (+0xbc); the time of its last quote is
+    /// quote is said, raised on the line as `_DisplayComm` takes it
+    /// ([`Space::raise_line`]). It is quoted (+0xbc); the time of its last quote is
     /// its caller's to keep. An NPC gone, or flying no person, says
     /// nothing. Every hail quote, on attack, due now or at random, is said
     /// here, as every one goes through `_ShowPersonHailQuote`. Its line is
@@ -381,7 +383,6 @@ impl Session {
         };
         person.quoted = true;
         let (person, hail_quote) = (person.id, person.hail_quote);
-        self.space.comm_line.show(QUOTE_SHOWN_TICKS);
         let patch = hail_quote_patch_id(hail_quote)
             .map_or(StringPatch::Absent, |patch| catalog.plugin_string(patch));
         let line = hail_quote_text(hail_quote, patch, lines);
@@ -402,7 +403,12 @@ impl Session {
             rules: TagRules::from_rulebook(&self.setup.rules),
         };
         let text = expand_tags(&line, &tags);
-        self.out.quotes.push(PersonQuote { npc: id, text });
+        // The line's count (@0x4464d) is set as it is raised: nothing
+        // between the two sites reads it.
+        self.space.raise_line(
+            &mut self.out,
+            RaisedLine::Quote(PersonQuote { npc: id, text }),
+        );
         self.out.sounds.push(SimSound::HailQuote);
         self.run.offering_ship = None;
     }
@@ -2346,6 +2352,31 @@ mod tests {
         // Tick 1351: more.
         let (said, _) = quote_tick(&catalog, &mut session, &[0, 1]);
         assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
+    }
+
+    #[test]
+    fn a_due_quote_said_after_a_fleets_arrival_quote_replaces_its_line_and_count() {
+        // `_ShowPersonHailQuote` shows its line through `_DisplayComm`,
+        // which replaces the slot and the count (@0x9024b, @0x90251).
+        let (catalog, mut session) = quoting([0, QUOTE_ON_ATTACK]);
+        session.space.say(
+            &mut session.out,
+            crate::SimMessage::FleetArrivalQuote("Hail".to_owned()),
+        );
+        session.space.traffic.npcs_mut()[1].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        let (said, _) = quote_tick(&catalog, &mut session, &[0, 77]);
+        assert_eq!(
+            said,
+            ["Bee: Prepare to die, Stock!"],
+            "Ace waits, Bee is due"
+        );
+        let mut line = crate::comm_line::CommLine::default();
+        line.show(QUOTE_SHOWN_TICKS);
+        assert_eq!(session.comm_line(), line, "the quote's 420");
+        let Some(crate::flight_frame::RaisedLine::Quote(quote)) = &session.out.last_line else {
+            panic!("the quote raised last: {:?}", session.out.last_line);
+        };
+        assert_eq!(quote.text, "Bee: Prepare to die, Stock!");
     }
 
     #[test]

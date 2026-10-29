@@ -1473,6 +1473,33 @@ pub struct StepRun {
     pub rescued: Option<ShipPlace>,
 }
 
+/// One line on the message line as `_DisplayComm` (@0x90201) takes it:
+/// each call overwrites the count (@0x9024b) and the one slot
+/// (@0x90251-0x90265), so the line a frame ends on is the last raised,
+/// whatever its kind.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RaisedLine {
+    /// A message, in the session's terms.
+    Message(SimMessage),
+    /// What an NPC assisting the player did.
+    Comm(CommNote),
+    /// A hail quote said.
+    Quote(PersonQuote),
+}
+
+impl RaisedLine {
+    /// How long the line shows: its own kind's ticks
+    /// ([`SimMessage::ticks`], [`CommNote::ticks`], [`PersonQuote::ticks`]).
+    #[must_use]
+    pub fn ticks(&self) -> u16 {
+        match self {
+            Self::Message(message) => message.ticks(),
+            Self::Comm(note) => note.ticks(),
+            Self::Quote(quote) => quote.ticks(),
+        }
+    }
+}
+
 /// One pass of a step as it stood at the pass's end, after the NPCs
 /// answered its strikes and the persons said their quotes: what the view
 /// steps its effects, flashes, glows, shot looks and stars from.

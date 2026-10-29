@@ -774,7 +774,8 @@ impl PlayerShip {
 impl Space {
     /// NPC `from`, of ship type `ship`, says it has `done` its help
     /// ("`CommName`:  `done`, `ship name`.", a [`CommNote`]), holding the
-    /// message line for the note's ticks, with `sound`.
+    /// message line for the note's ticks ([`Space::raise_line`]), with
+    /// `sound`.
     #[allow(clippy::too_many_arguments)] // what it reads outside Space, then its own four
     pub(super) fn say_help_done(
         &mut self,
@@ -795,8 +796,7 @@ impl Space {
             ship_name: pilot.ship_name().unwrap_or_default().to_owned(),
             done,
         };
-        self.comm_line.show(note.ticks());
-        out.comm.push(note);
+        self.raise_line(out, crate::flight_frame::RaisedLine::Comm(note));
         out.sounds.push(sound);
     }
 }
