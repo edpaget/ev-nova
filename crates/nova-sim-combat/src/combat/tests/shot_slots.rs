@@ -402,7 +402,7 @@ fn one_sub() -> (WeaponRecord, Arsenal) {
 }
 
 /// A shell of `record` whose last move, its third, spent it, at (0, 300).
-fn spent_shell(record: WeaponRecord) -> Shot {
+pub(super) fn spent_shell(record: WeaponRecord) -> Shot {
     let at = Vec2::new(0.0, 300.0);
     Shot {
         position: at,
@@ -554,7 +554,7 @@ fn a_sub_munition_after_a_shot_of_no_roll_or_in_a_slot_never_used_carries_none()
 
 /// A shell whose `count` sub-munitions of `sub` (weapon 148) seek the
 /// nearest ship (`Flags2` 0x0010) unspread, and the arsenal with them.
-fn seeking_shell(count: i16, sub: WeaponRecord) -> (WeaponRecord, Arsenal) {
+pub(super) fn seeking_shell(count: i16, sub: WeaponRecord) -> (WeaponRecord, Arsenal) {
     let (shell, _) = one_sub();
     let shell = WeaponRecord {
         sub_count: count,
@@ -566,7 +566,7 @@ fn seeking_shell(count: i16, sub: WeaponRecord) -> (WeaponRecord, Arsenal) {
 }
 
 /// An unguided sub-munition, 148.
-fn unguided_sub() -> WeaponRecord {
+pub(super) fn unguided_sub() -> WeaponRecord {
     WeaponRecord {
         guidance: -1,
         count: 50,
@@ -722,7 +722,7 @@ fn handle_among(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
 
 /// `_HandleShot`'s pass among `ships` in `field`, sub-munitions read from
 /// `arsenal`.
-fn handle_in(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal, field: Field) {
+pub(super) fn handle_in(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal, field: Field) {
     let govts = Governments::default();
     let arena = Arena {
         pass: GamePass::Advance { double_time: false },

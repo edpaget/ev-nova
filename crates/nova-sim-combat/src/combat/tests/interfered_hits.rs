@@ -4,7 +4,9 @@
 //! `_CheckShotProximities` (@0x375b2) tests the jam itself.
 
 use super::collision_walk::{BESIDE_C, INTO_C, fused, walk};
+use super::shot_slots::{handle_in, seeking_shell, spent_shell, unguided_sub};
 use super::*;
+use crate::combat::weapon::PROXIMITY_BY_OTHERS;
 
 /// A's interfered `Seeker` 0x0008 missile of `record`, fired at C in a
 /// field of `Interference` 100, its last move from `from` to `to`, among
@@ -61,4 +63,43 @@ fn an_interfered_missile_passes_through_a_ship_it_is_not_aimed_at() {
     // Through B at (0, -40) and on: homing, it may hit only C.
     let through_b = (Vec2::new(0.0, -20.0), Vec2::new(0.0, -45.0));
     assert_eq!(interfered_into_c(missile(), through_b), []);
+}
+
+#[test]
+fn an_interfered_seeking_sub_munition_finds_and_hits_a_ship() {
+    // A homing `Seeker` 0x0008 sub-munition, released in a field of
+    // `Interference` 100, rolls jam 999 as `_SpawnShot` seats it
+    // (@0x3eb43), seeks the nearest ship, B, and strikes it on contact:
+    // `_ShotCanHitShip` rejects only jam 998 (@0x447f7).
+    let homing = WeaponRecord {
+        guidance: 1,
+        seeker: SENSOR_INTERFERENCE,
+        flags2: PROXIMITY_BY_OTHERS,
+        ..unguided_sub()
+    };
+    let (shell, arsenal) = seeking_shell(1, homing);
+    let near = Ship {
+        hull: HullSpec {
+            miss_class: 100,
+            ..HullSpec::default()
+        },
+        ..Ship::at(2, 0.0, 350.0)
+    };
+    let mut ships = [Ship::at(1, -5000.0, 0.0), near];
+    let mut combat = Combat::default();
+    combat.put_in_flight(Shot {
+        aimed_at: Some(B),
+        ..spent_shell(shell)
+    });
+    let field = Field {
+        interference: 100,
+        ..Field::default()
+    };
+    handle_in(&mut combat, &mut ships, &arsenal, field);
+    let sub = &mut combat.shots_mut()[0];
+    assert_eq!((sub.jam, sub.target), (Jam::Interfered, Some(B)));
+    sub.age = 1;
+    sub.moved_from = Some(Vec2::new(0.0, 330.0));
+    sub.position = Vec2::new(0.0, 348.0);
+    assert_eq!(walk(&mut combat, &mut ships), [(B, Some(A))]);
 }
