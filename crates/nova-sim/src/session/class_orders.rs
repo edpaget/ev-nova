@@ -261,6 +261,18 @@ mod tests {
     }
 
     #[test]
+    fn a_mission_escort_given_the_order_it_holds_is_not_marked() {
+        use crate::session::mission_escorts::tests::{escorting, flying};
+        use crate::session::mission_ships::tests::ships_catalog;
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = flying(&catalog);
+        command(&mut session, EscortGroup::All, EscortCommand::Defend);
+        session.space.escorts.commanded.clear();
+        command(&mut session, EscortGroup::All, EscortCommand::Defend);
+        assert_eq!(marked(&session), BTreeSet::new());
+    }
+
+    #[test]
     fn an_escort_placed_again_on_entering_a_system_starts_unmarked() {
         let catalog = carrying();
         let mut session = flying(&catalog, vec![warship(None)], RuleSource::Engine);
