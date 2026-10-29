@@ -89,9 +89,10 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::font::Font;
+    use crate::image::ImageKey;
     use crate::input::{Key, MouseButton};
     use crate::ui::dialog::outline;
-    use crate::ui::volume::{COLOR, TEXT_SIZE, draw_arrow};
+    use crate::ui::volume::{COLOR, TEXT_SIZE};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -164,10 +165,15 @@ mod tests {
         list.iter().cloned().collect()
     }
 
-    fn arrow(rect: Bounds, arrow: Arrow, filled: bool) -> Vec<DrawCommand> {
-        let mut list = DrawList::new();
-        draw_arrow(&mut list, rect, arrow, filled, COLOR);
-        list.iter().cloned().collect()
+    /// The interface file's `PICT` `id` stretched over `rect`: 134 and
+    /// 135 are the arrows at rest, 136 and 137 held.
+    fn picture(id: i16, rect: Bounds) -> DrawCommand {
+        DrawCommand::StretchedPicture {
+            image: ImageKey::interface_picture(id),
+            top_left: rect.min,
+            width: rect.width(),
+            height: rect.height(),
+        }
     }
 
     fn text(text: &str, origin: Point) -> DrawCommand {
@@ -310,13 +316,11 @@ mod tests {
         let mut picker = picker(exclusive(modes()[1]));
         let rects = picker.rects();
         let mut expected = vec![text("1920 x 1080, 60 Hz", rects.value.min)];
-        expected.extend(arrow(rects.up, Arrow::Up, false));
-        expected.extend(arrow(rects.down, Arrow::Down, false));
+        expected.extend([picture(134, rects.up), picture(135, rects.down)]);
         assert_eq!(drawn(&picker, false), expected);
         picker.input(&button(true, rects.up.center()));
         let mut pressed = vec![text("1920 x 1080, 60 Hz", rects.value.min)];
-        pressed.extend(arrow(rects.up, Arrow::Up, true));
-        pressed.extend(arrow(rects.down, Arrow::Down, false));
+        pressed.extend([picture(136, rects.up), picture(135, rects.down)]);
         assert_eq!(drawn(&picker, false), pressed);
         let borderless = ModePicker::new(row());
         assert_eq!(

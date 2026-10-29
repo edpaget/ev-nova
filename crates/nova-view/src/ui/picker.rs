@@ -4,7 +4,8 @@
 //! and the Preferences dialog's Scaling list are pickers.
 //!
 //! Its arrows are drawn and tracked as the volume control's are
-//! ([`draw_arrow`], [`ButtonTracker`]), and its label is set as the
+//! ([`draw_arrow`], [`ButtonTracker`]): the interface file's `PICT`s 134
+//! (up) and 135 (down), 136 and 137 while held. Its label is set as the
 //! volume's number is.
 
 use crate::draw::DrawList;
@@ -236,8 +237,9 @@ impl<T: PickerEntry> Picker<T> {
     }
 
     /// Draws the chosen entry's label in Geneva at its rectangle's corner,
-    /// then the two arrows (each filled while pressed), and, when
-    /// `focused`, an outline round every part.
+    /// then the two arrows (the interface file's `PICT`s 134 and 135, or
+    /// 136 and 137 while pressed), and, when `focused`, an outline round
+    /// every part.
     pub fn draw(&self, focused: bool, list: &mut DrawList) {
         list.text_in(
             Font::Geneva,
@@ -248,8 +250,7 @@ impl<T: PickerEntry> Picker<T> {
             COLOR,
         );
         for arrow in [Arrow::Up, Arrow::Down] {
-            let filled = self.pressed(arrow);
-            draw_arrow(list, self.arrow_rect(arrow), arrow, filled, COLOR);
+            draw_arrow(list, self.arrow_rect(arrow), arrow, self.pressed(arrow));
         }
         if focused {
             outline(list, self.rects.bounds(), COLOR);

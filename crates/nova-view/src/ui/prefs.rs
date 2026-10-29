@@ -999,7 +999,6 @@ mod tests {
     use crate::ui::mode_picker::PickerRects;
     use crate::ui::scroll_text::ScrollText;
     use crate::ui::toggle::Toggle;
-    use crate::ui::volume::{Arrow, draw_arrow};
     use crate::video_mode::{FullscreenKind, VideoMode};
 
     fn at(x: f32, y: f32) -> Point {
@@ -1923,15 +1922,15 @@ mod tests {
     fn a_held_arrow_is_drawn_pressed() {
         let mut dialog = prefs();
         let up = dialog.music_volume().rects().up;
+        let pressed = DrawCommand::StretchedPicture {
+            image: crate::ImageKey::interface_picture(136),
+            top_left: up.min,
+            width: up.width(),
+            height: up.height(),
+        };
+        assert!(!drawn(&dialog).contains(&pressed), "at rest");
         dialog.input(&button(true, up.center()));
-        let mut filled = DrawList::new();
-        draw_arrow(&mut filled, up, Arrow::Up, true, crate::ui::volume::COLOR);
-        let filled: Vec<DrawCommand> = filled.iter().cloned().collect();
-        assert!(
-            drawn(&dialog)
-                .windows(filled.len())
-                .any(|window| window == filled)
-        );
+        assert!(drawn(&dialog).contains(&pressed));
     }
 
     fn mode(width: u32, height: u32, hz: u32) -> VideoMode {
