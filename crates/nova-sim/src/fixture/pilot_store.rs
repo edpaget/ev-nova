@@ -161,7 +161,9 @@ mod tests {
         HasALastPilot,
         ForgetsWrites,
         MangledText,
+        ListsTheFirstWriteLate,
         KeepsTheFirstWrite,
+        ListsARewriteTwice,
         ListsOneKey,
         ListsTheRecord,
         IgnoresTheLastPilot,
@@ -169,6 +171,7 @@ mod tests {
         KeepsDeletes,
         FailsASecondDelete,
         DeletesTheRecord,
+        ListsDeletedKeys,
         HasNoLocation,
     }
 
@@ -182,9 +185,26 @@ mod tests {
             let mut keys = self.inner.list()?;
             match self.flaw {
                 Flaw::ListsAGhost => keys.push("Ghost".to_owned()),
+                Flaw::ListsTheFirstWriteLate if self.inner.writes() == 1 => keys.clear(),
+                Flaw::ListsARewriteTwice => {
+                    let written = self.inner.written();
+                    let rewritten: Vec<String> = keys
+                        .iter()
+                        .filter(|key| written.iter().filter(|(k, _)| k == *key).count() > 1)
+                        .cloned()
+                        .collect();
+                    keys.extend(rewritten);
+                }
                 Flaw::ListsOneKey => keys.truncate(1),
                 Flaw::ListsTheRecord if self.inner.last().is_some() => {
                     keys.push("Last Pilot".to_owned());
+                }
+                Flaw::ListsDeletedKeys => {
+                    for key in self.inner.deleted() {
+                        if !keys.contains(&key) {
+                            keys.push(key);
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -264,7 +284,12 @@ mod tests {
             (Flaw::HasALastPilot, "an empty store's last pilot"),
             (Flaw::ForgetsWrites, "after a write, the read"),
             (Flaw::MangledText, "after a write, the read"),
+            (
+                Flaw::ListsTheFirstWriteLate,
+                "after a write, the store lists",
+            ),
             (Flaw::KeepsTheFirstWrite, "doesn't replace"),
+            (Flaw::ListsARewriteTwice, "a second write lists"),
             (Flaw::ListsOneKey, "two keys list"),
             (Flaw::ListsTheRecord, "with a last-pilot record"),
             (Flaw::IgnoresTheLastPilot, "the last pilot is"),
@@ -272,6 +297,10 @@ mod tests {
             (Flaw::KeepsDeletes, "a deleted save"),
             (Flaw::FailsASecondDelete, "deleting again failed"),
             (Flaw::DeletesTheRecord, "changed the last-pilot record"),
+            (
+                Flaw::ListsDeletedKeys,
+                "after deleting both, the store lists",
+            ),
             (Flaw::HasNoLocation, "the location is empty"),
         ] {
             let error = broken(flaw);
