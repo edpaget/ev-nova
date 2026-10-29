@@ -1084,23 +1084,27 @@ fn an_exploded_player_takes_no_command() {
     assert!(!view.escort_menu().is_open());
 }
 
-/// Home (`Key::Other` on this platform) has no binding, so it does
-/// nothing in every state, including the dead one the original reads it
-/// in (0x6884c, `_ResetPlayer(1)`, left out). This pins the unbound key,
-/// not the dead-state lockout, which `an_exploded_player_takes_no_command`
-/// and `a_click_picks_no_stellar_once_the_player_has_exploded` cover.
+/// Home ([`Key::Home`], which only text dialogs take) has no flight
+/// binding, so it does nothing in every state, including the dead one the
+/// original reads it in (0x6884c, `_ResetPlayer(1)`, left out). End, the
+/// text dialogs' other new key, has none either. This pins the unbound
+/// keys, not the dead-state lockout, which
+/// `an_exploded_player_takes_no_command` and
+/// `a_click_picks_no_stellar_once_the_player_has_exploded` cover.
 #[test]
-fn home_is_unbound_whether_flying_or_exploded() {
+fn home_and_end_are_unbound_whether_flying_or_exploded() {
     for build in [in_flight, || refusing(&EXPLODED)] {
-        let mut view = build();
-        assert_eq!(view.input(&key(Key::Other, true)), ScreenAction::None);
-        assert_eq!(view.input(&key(Key::Other, false)), ScreenAction::None);
-        view.tick(TICK);
-        assert_eq!(sent_since(&view, 0), []);
-        assert!(view.take_mission_info_request().is_none());
-        assert_eq!(view.take_landing(), None);
-        assert!(view.take_hail().is_none());
-        assert!(view.take_boarding().is_none());
+        for k in [Key::Home, Key::End] {
+            let mut view = build();
+            assert_eq!(view.input(&key(k, true)), ScreenAction::None, "{k:?}");
+            assert_eq!(view.input(&key(k, false)), ScreenAction::None, "{k:?}");
+            view.tick(TICK);
+            assert_eq!(sent_since(&view, 0), [], "{k:?}");
+            assert!(view.take_mission_info_request().is_none(), "{k:?}");
+            assert_eq!(view.take_landing(), None, "{k:?}");
+            assert!(view.take_hail().is_none(), "{k:?}");
+            assert!(view.take_boarding().is_none(), "{k:?}");
+        }
     }
 }
 
