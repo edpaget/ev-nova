@@ -379,12 +379,25 @@ The `beta` tag moves only in `publish`, after every check and build leg, so
 a refused or failed promotion leaves the beta as it was. The nightly's
 release, feeds and Flatpak branch are never written.
 
-Nightlies and promotions on `main` share one concurrency group,
-`release-main`, which never cancels a running run: they run one at a time.
-A push while a promotion is pending replaces it, and it shows as cancelled:
-dispatch it again. To finish a promotion that failed after `check` (a flaky
-leg, say), use "Re-run failed jobs", which keeps `check`'s result;
-`publish` exits 3 for feeds that already went up and carries on.
+Only the publishing is serialized. The job that calls `release.yml` in
+`ci.yml` (`release`) and in `promote-beta.yml` (`release`) shares one
+job-level concurrency group, `release-main`, which never cancels a running
+release: a nightly and a promotion publish one at a time, since each
+mirrors the live Flatpak repo from Pages and then replaces the whole site.
+Before staging, `flatpak-repo` waits until the last Pages deploy is eleven
+minutes old, past the CDN's cache, so a release queued behind another never
+mirrors a stale repo. A promotion's `check` and `build`, and a push's tests
+and builds, run outside the group: a promotion never waits on or cancels a
+push's tests or builds, and at most a running one delays a nightly's
+release (and the next push's run on `main`, which queues behind that run).
+GitHub keeps one pending job per group, so a promotion can displace only
+another pending release: a nightly's, which the next push to `main`
+publishes, or an earlier promotion's. A nightly's pending release can
+displace a pending promotion's in the same way, and the promotion's run
+shows as cancelled: dispatch it again. To finish a promotion that failed
+after `check` (a flaky leg, say), use "Re-run failed jobs", which keeps
+`check`'s result; `publish` exits 3 for feeds that already went up and
+carries on.
 
 **Rotating the Flatpak key.** Only after a compromise. Every
 `.flatpakref` install trusts the old key and stops updating, and the next

@@ -20,18 +20,20 @@ on:
         options: [nightly, beta]
         default: nightly
 
-# On main, ci.yml and promote-beta.yml share the one `release-main` group,
-# never cancelled in progress: both read the live Flatpak repo from Pages
-# and then replace the whole site (release.yml), so a nightly and a
-# promotion must run one at a time, or the later deploy would drop the
-# other's new commit, or the whole beta branch. GitHub keeps at most one
-# pending run per group and cancels an older pending one when a newer one
-# queues, so a burst of pushes queues one nightly behind the running one
-# rather than many; a pending promotion a push replaces shows as cancelled,
-# and the operator dispatches it again. Pull requests and other branches
-# keep their own groups, where a newer push cancels the older run.
+# Each ref's runs share a group of this workflow alone. GitHub keeps at most
+# one pending run per group and cancels an older pending one when a newer
+# one queues, so a newer push always supersedes an older push's pending
+# run. Pull requests and other branches also cancel the older run in
+# progress. On main a running run is never cancelled, because its `release`
+# job may be publishing and must never be cut off: a burst of pushes queues
+# one run behind the running one rather than many, and main's newest commit
+# always gets its tests and its nightly. promote-beta.yml is never in this
+# group, so a promotion can never cancel a push's tests or builds; the two
+# meet only in `release`'s job-level group, below, where a running
+# promotion can at most delay a nightly's release (and the next push's
+# run, queued behind it).
 concurrency:
-  group: ${{ github.ref == 'refs/heads/main' && 'release-main' || format('{0}-{1}', github.workflow, github.ref) }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -233,13 +235,29 @@ jobs:
   # publishes nothing. The job grants the most any release job needs; each
   # job there narrows it, and its gates (update-signing, github-pages) are
   # in release.yml.
+  #
+  # Only this job is serialized with promotions: it shares the
+  # `release-main` group with promote-beta.yml's `release`, never cancelled
+  # in progress, because both read the live Flatpak repo from Pages and then
+  # replace the whole site, so two releases at once would let the later
+  # deploy drop the other's new commit, or the whole beta branch. The group
+  # holds for the whole of release.yml. A pending release here and a pending
+  # promotion's release can displace each other (one pending job per group):
+  # a displaced nightly is published by the next push, and a displaced
+  # promotion is dispatched again. Neither ever touches the other's tests
+  # or builds, which run outside the group. deployments: read is for
+  # release.yml's wait on the last Pages deploy.
   release:
     needs: [ci, build-id, build, flatpak]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
     permissions:
       contents: write
       pages: write
       id-token: write
+      deployments: read
     uses: ./.github/workflows/release.yml
     with:
       channel: nightly

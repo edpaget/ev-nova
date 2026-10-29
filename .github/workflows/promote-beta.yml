@@ -45,15 +45,6 @@ on:
         required: true
         type: string
 
-# The one group ci.yml uses on main, never cancelled in progress: a
-# promotion and a nightly read the live Flatpak repo from Pages and then
-# replace the whole site, so they run one at a time. A push that queues
-# behind a pending promotion replaces it, which then shows as cancelled:
-# dispatch it again. Off main, check refuses at once.
-concurrency:
-  group: ${{ github.ref == 'refs/heads/main' && 'release-main' || format('promote-beta-{0}', github.ref) }}
-  cancel-in-progress: false
-
 jobs:
   # No secrets and no environment: the release data it reads is public.
   check:
@@ -127,12 +118,30 @@ jobs:
       ref: ${{ needs.check.outputs.commit }}
     secrets: inherit
 
+  # Only this job is serialized with the nightly: it shares the
+  # `release-main` group with ci.yml's `release`, never cancelled in
+  # progress, because both read the live Flatpak repo from Pages and then
+  # replace the whole site, so they publish one at a time. `check` and
+  # `build` write nothing shared and run outside it, so a promotion never
+  # waits on or cancels a push's tests or builds; at most a running one
+  # delays a nightly's release, and the push run queued behind that on main
+  # (ci.yml's workflow-level group). GitHub keeps one pending job per group,
+  # so a promotion can displace only another pending release (a nightly's,
+  # which the next push publishes, or another promotion's), and a nightly's
+  # pending release can displace this one, which then shows as cancelled:
+  # dispatch the promotion again. Off main `check` refuses, so this job
+  # never runs there; the per-ref group only keeps such a run out of main's.
+  # deployments: read is for release.yml's wait on the last Pages deploy.
   release:
     needs: [check, build]
+    concurrency:
+      group: ${{ github.ref == 'refs/heads/main' && 'release-main' || format('promote-beta-{0}', github.ref) }}
+      cancel-in-progress: false
     permissions:
       contents: write
       pages: write
       id-token: write
+      deployments: read
     uses: ./.github/workflows/release.yml
     with:
       channel: beta
