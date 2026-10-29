@@ -1462,8 +1462,9 @@ pub struct StepRun {
     /// Each ship's place before the step: the player's first, then each
     /// NPC's in the system's order.
     pub before: Vec<(ShipRef, ShipPlace)>,
-    /// The comm notes taken at the advance pass's end: what the step
-    /// before raised after its own take, then this step's.
+    /// The comm notes taken at the advance pass's end, and again at
+    /// double time's second's: what was raised before the step's first
+    /// take, then this step's.
     pub comm: Vec<CommNote>,
     /// Each pass that ran to its end: the advance pass, then double
     /// time's second; none when the rescue settled on the advance pass.
@@ -1471,6 +1472,10 @@ pub struct StepRun {
     /// The player's ship where the escape pod's rescue put it, when the
     /// rescue settled on this step and ended the stepping.
     pub rescued: Option<ShipPlace>,
+    /// The line the step raised last, whatever its kind: what
+    /// `_DisplayComm`'s slot holds at the step's end (@0x90251); `None`
+    /// when it raised none.
+    pub last_line: Option<RaisedLine>,
 }
 
 /// One line on the message line as `_DisplayComm` (@0x90201) takes it:

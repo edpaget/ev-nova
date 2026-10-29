@@ -5,20 +5,25 @@
 //!
 //! **The line.** The session keeps the one count every reader asks:
 //!
-//! - Each message it raises sets it as it is raised ([`Space::say`],
-//!   [`SimMessage::ticks`]); so do the hail quotes (420, see the
-//!   `persons` module) and the assisting ships' comm notes
-//!   ([`CommNote::ticks`](crate::hail::CommNote::ticks)). The flight
-//!   relays each for the ticks the session set, [`SimMessage::ticks`],
-//!   [`PersonQuote::ticks`](super::PersonQuote::ticks) and
-//!   [`CommNote::ticks`](crate::hail::CommNote::ticks).
+//! - Each line it raises sets it as it is raised, through one raiser
+//!   ([`Space::raise_line`]): the messages ([`Space::say`],
+//!   [`SimMessage::ticks`]), the hail quotes (420, see the `persons`
+//!   module) and the assisting ships' comm notes
+//!   ([`CommNote::ticks`](crate::hail::CommNote::ticks)). The raiser
+//!   records each as the line raised last, as `_DisplayComm` replaces its
+//!   one slot (@0x90251), and each step reports the last it raised
+//!   ([`StepRun::last_line`](crate::flight_frame::StepRun::last_line)).
+//!   The flight relays each line for the ticks the session set,
+//!   [`SimMessage::ticks`], [`PersonQuote::ticks`](super::PersonQuote::ticks)
+//!   and [`CommNote::ticks`](crate::hail::CommNote::ticks), and the
+//!   frame's last-raised line last, so the line shows what the
+//!   original's does.
 //! - The flight's own lines, the ones the view raises and words itself
 //!   (a refused jump, a boarding's line, an escort command, a line it
 //!   composes at an arrival or a take-off), set it through
 //!   [`Session::comm_shown`]. The view relays the session's own lines
 //!   without setting it again: a relay comes after the steps of a frame
-//!   have run, and in a fixed order, so setting it then would undo the
-//!   countdown and the order the session raised them in.
+//!   have run, so setting it then would undo the countdown.
 //! - Return clears the line for a tick while one shows
 //!   ([`Session::comm_acknowledged`], `_HandlePlayer` @0x6dd22-0x6dd65);
 //!   a clear by name shows an empty line for a tick

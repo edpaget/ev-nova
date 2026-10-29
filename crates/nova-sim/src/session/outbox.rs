@@ -46,8 +46,8 @@ pub(super) struct Outbox {
     /// What the NPCs assisting the player have done since this was last
     /// taken.
     pub(super) comm: Vec<CommNote>,
-    /// What a test raises as double time's second pass would, said onto
-    /// [`Outbox::comm`] as that pass ends (see the `step` module).
+    /// What a test raises as double time's second pass would, raised
+    /// onto [`Outbox::comm`] as that pass ends (see the `step` module).
     #[cfg(test)]
     pub(super) second_pass_comm: Vec<CommNote>,
     /// What the player's fighters met as it left systems since this was
