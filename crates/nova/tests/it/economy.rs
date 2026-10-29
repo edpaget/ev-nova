@@ -1026,6 +1026,10 @@ fn buy_the_ship(game: &mut Harness, store: &MemoryPilots) {
     game.press(KeyCode::Enter);
     assert_eq!(game.pilot().cash(), 2150);
     assert_eq!(store.writes(), writes + 1, "saved");
+    assert!(
+        game.spaceport().open_shipyard().is_none(),
+        "the purchase closes the shipyard"
+    );
 
     // 7. The new ship, with the licence and its own booster; the tank went
     //    with the old ship. The food fits in its 30 tons, and its fuel is
@@ -1051,8 +1055,9 @@ fn a_pilot_trades_at_a_profit_buys_an_outfit_and_a_ship_and_is_restored_by_open_
     outfit_for_the_ship(&mut game, &store);
     buy_the_ship(&mut game, &store);
 
-    // 8. Done, Leave: it flies at the new ship's top speed.
-    game.leave();
+    // 8. Leave: it flies at the new ship's top speed.
+    game.press(KeyCode::Escape);
+    assert_eq!(game.showing(), Showing::Flight);
     assert!(
         (game.top_speed() - 4.5).abs() < 1e-6,
         "{}",

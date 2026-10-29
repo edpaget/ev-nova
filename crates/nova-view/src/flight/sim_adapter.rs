@@ -736,6 +736,7 @@ mod tests {
             FlightCommand::CloseOutfitter,
             FlightCommand::Outfit { order, count: 1 },
             FlightCommand::OutfitCounted { order, count: 1 },
+            FlightCommand::OpenShipyard,
             FlightCommand::BuyShip {
                 ship: ShipId(129),
                 name: "Kestrel".to_owned(),

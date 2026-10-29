@@ -446,6 +446,13 @@ fn opening_and_closing_the_outfitter_send_their_commands() {
 }
 
 #[test]
+fn opening_the_shipyard_sends_its_command() {
+    let mut view = docked();
+    view.open_shipyard();
+    assert_eq!(sent(&view), [FlightCommand::OpenShipyard]);
+}
+
+#[test]
 fn an_outfitter_order_sends_its_count_and_hands_back_the_flights_run() {
     let mut view = docked();
     view.sim.queue_answer(Answer::Outfitted(run(3, true, None)));

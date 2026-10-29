@@ -893,6 +893,9 @@ pub enum FlightCommand {
         /// How many to buy or sell.
         count: u32,
     },
+    /// The shipyard opens, its list built and kept for the visit
+    /// ([`Session::open_shipyard`](crate::Session::open_shipyard)).
+    OpenShipyard,
     /// The name prompt's OK: buy a ship of class `ship` named `name`
     /// ([`Session::buy_ship`](crate::Session::buy_ship)).
     BuyShip {
@@ -1100,6 +1103,7 @@ impl FlightCommand {
             | Self::CloseOutfitter
             | Self::Outfit { .. }
             | Self::OutfitCounted { .. }
+            | Self::OpenShipyard
             | Self::BuyShip { .. }
             | Self::DeclineShip(_)
             | Self::OpenBar
@@ -2046,6 +2050,7 @@ mod tests {
             C::CloseOutfitter,
             C::Outfit { order, count: 1 },
             C::OutfitCounted { order, count: 1 },
+            C::OpenShipyard,
             C::BuyShip {
                 ship: ShipId(129),
                 name: "Kestrel".to_owned(),

@@ -604,6 +604,7 @@ mod setup;
 mod ship_change;
 mod ship_display;
 mod ship_loop;
+mod shipyard_listing;
 mod shot_slots;
 #[cfg(test)]
 mod slot_search;
@@ -3834,6 +3835,7 @@ impl Session {
         self.space.escorts.dialog = None;
         self.leave_with_fighters(true);
         self.port.land_day_rolls(&self.setup);
+        self.port.forget_shipyard_listing();
         self.port.open_outfit_visit(&self.pilot);
         self.port.stay = Stay::default();
         self.out.save_due = true;
@@ -3973,6 +3975,7 @@ impl Session {
         self.run.depart();
         let stay = std::mem::take(&mut self.port.stay);
         self.port.bar_news = None;
+        self.port.forget_shipyard_listing();
         self.chart.bar_nav = None;
         let stay_days = self.setup.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
         if stay_days {
@@ -4668,25 +4671,22 @@ impl Session {
 
     /// The shipyard of the stellar the ship is docked at, if it has landed
     /// at one, drawing on `chance` each class's roll for the day not drawn
-    /// yet (see [`shipyard`]). This builds its list
-    /// afresh: the roll of each class bought or declined since it was last
-    /// built is drawn again first.
+    /// yet (see [`shipyard`]). While the classes its last opening listed
+    /// are kept ([`Session::open_shipyard`]), it relists exactly those,
+    /// every other value read now; otherwise it builds its list afresh.
+    /// Either way each class bought or declined keeps its roll until the
+    /// next opening or landing (see the `shipyard_listing` module).
     pub fn shipyard(&mut self, chance: &mut dyn Chance) -> Option<Shipyard> {
-        for ship in std::mem::take(&mut self.port.ship_redraws) {
-            self.port.ship_rolls.redraw(&ship);
-        }
         self.listed_shipyard(chance)
     }
 
-    /// The shipyard as its list was last built, each class bought or
-    /// declined since keeping its roll, the rolls not drawn yet drawn on
-    /// `chance`.
+    /// The shipyard as [`shipyard`](Self::shipyard) gives it.
     fn listed_shipyard(&mut self, chance: &mut dyn Chance) -> Option<Shipyard> {
         let stellar = self.mode.landed()?;
         let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
         // Out of the session while the gate reads it.
         let mut rolls = std::mem::take(&mut self.port.ship_rolls);
-        let shipyard = Yard {
+        let yard = Yard {
             ships: &self.statics.ships,
             outfits: &self.statics.outfits,
             crons: &self.statics.crons,
@@ -4697,8 +4697,11 @@ impl Session {
             mults: self.price_mults(),
             rules: self.setup.rules,
             gate: self.gate(),
-        }
-        .shipyard(&self.pilot, &mut rolls, chance);
+        };
+        let shipyard = match self.port.shipyard_listing() {
+            Some(listing) => yard.relisted(&self.pilot, listing),
+            None => yard.shipyard(&self.pilot, &mut rolls, chance),
+        };
         self.port.ship_rolls = rolls;
         shipyard
     }
@@ -4744,9 +4747,9 @@ impl Session {
     /// Declines to buy a ship of class `ship`, as cancelling its name
     /// prompt does: nothing is bought, but the class's roll is drawn
     /// again, as the original does (`_DoShipyardDialog` @0x5ebc2 to
-    /// @0x5f0d5-0x5f0f8), the next time the shipyard's list is built
-    /// ([`shipyard`](Self::shipyard)); until then it can be named and
-    /// bought again. Nothing about the pilot changes, so no save is due.
+    /// @0x5f0d5-0x5f0f8), the next time the shipyard opens
+    /// ([`open_shipyard`](Self::open_shipyard)) or the ship lands; until
+    /// then it can be named and bought again. Nothing about the pilot changes, so no save is due.
     pub(crate) fn decline_ship(&mut self, ship: ShipId) {
         self.port.decline_ship(ship);
     }
@@ -4768,7 +4771,8 @@ impl Session {
     /// drawn yet are drawn on
     /// `chance`, and a purchase draws the class's roll again, as the
     /// original does (`_DoShipyardDialog` @0x5f0d5-0x5f0f8), the next time
-    /// the shipyard's list is built ([`shipyard`](Self::shipyard)). A
+    /// the shipyard opens ([`open_shipyard`](Self::open_shipyard)) or the
+    /// ship lands. A
     /// purchase tells [`SessionEvent::ShipChanged`] before `OnPurchase`
     /// runs, which may tell it again; a refused one tells nothing.
     pub fn buy_ship(
@@ -6798,15 +6802,13 @@ impl Port {
     /// What a landing, or a relocation, does to the day rolls, as
     /// [`RuleKey::DayRolls`] reads. By the engine, it keeps them, as no
     /// landing path in the original writes one, and only the classes
-    /// bought or declined since the shipyard was last listed are
+    /// bought or declined since the shipyard last opened are
     /// forgotten, to be drawn again when next asked: the original draws
     /// them again at once (`_DoShipyardDialog` @0x5f0f8). By the other
     /// reading, it forgets every roll.
     fn land_day_rolls(&mut self, setup: &Setup) {
         if setup.rules.source_for(RuleKey::DayRolls) == RuleSource::Engine {
-            for ship in std::mem::take(&mut self.ship_redraws) {
-                self.ship_rolls.redraw(&ship);
-            }
+            self.redraw_ships();
         } else {
             self.hire_rolls.clear();
             self.outfit_rolls.clear();
@@ -6829,9 +6831,10 @@ impl Port {
     /// Declines to buy a ship of class `ship`, as cancelling its name
     /// prompt does: nothing is bought, but the class's roll is drawn
     /// again, as the original does (`_DoShipyardDialog` @0x5ebc2 to
-    /// @0x5f0d5-0x5f0f8), the next time the shipyard's list is built
-    /// ([`shipyard`](Session::shipyard)); until then it can be named and
-    /// bought again. Nothing about the pilot changes, so no save is due.
+    /// @0x5f0d5-0x5f0f8), the next time the shipyard opens
+    /// ([`open_shipyard`](Session::open_shipyard)) or the ship lands; until
+    /// then it can be named and bought again. Nothing about the pilot
+    /// changes, so no save is due.
     fn decline_ship(&mut self, ship: ShipId) {
         self.ship_redraws.insert(ship);
     }
@@ -15885,7 +15888,7 @@ pub(super) mod tests {
 
     /// [`shipbuying`], with the speed booster for sale on a `BuyRandom` of
     /// `outfit_random` and ship 129 on one of `ship_random`.
-    fn rolling(outfit_random: i16, ship_random: i16) -> FakePilotCatalog {
+    pub(super) fn rolling(outfit_random: i16, ship_random: i16) -> FakePilotCatalog {
         let mut catalog = shipbuying();
         catalog.outfits[0].buy_random = outfit_random;
         catalog.ship_records[1].buy_random = ship_random;
@@ -16092,7 +16095,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn buying_a_ship_draws_its_class_roll_again() {
+    fn buying_a_ship_draws_its_class_roll_again_at_the_next_opening() {
         let mut session = outfitted(&rolling(100, 50));
         let mut firing = Scripted::answering(&[true]);
         session
@@ -16100,12 +16103,13 @@ pub(super) mod tests {
             .expect("bought");
         assert_eq!(firing.asked, [50]);
         let mut missing = Scripted::answering(&[false]);
-        assert!(!lists_new(&mut session, &mut missing), "drawn again");
+        let shipyard = session.open_shipyard(&mut missing).expect("a shipyard");
+        assert_eq!(shipyard.row(NEW), None, "drawn again");
         assert_eq!(missing.asked, [50]);
     }
 
     #[test]
-    fn declining_draws_the_classs_roll_again_and_changes_nothing() {
+    fn declining_draws_the_classs_roll_again_at_the_next_opening_and_changes_nothing() {
         let mut session = outfitted(&rolling(100, 50));
         let mut firing = Scripted::answering(&[true]);
         assert!(lists_new(&mut session, &mut firing));
@@ -16114,30 +16118,34 @@ pub(super) mod tests {
         assert_eq!(session.pilot(), &before);
         assert!(!session.take_save_due());
         let mut missing = Scripted::answering(&[false]);
-        assert!(!lists_new(&mut session, &mut missing), "drawn again");
+        let shipyard = session.open_shipyard(&mut missing).expect("a shipyard");
+        assert_eq!(shipyard.row(NEW), None, "drawn again");
         assert_eq!(missing.asked, [50]);
     }
 
     #[test]
-    fn a_declined_class_keeps_its_roll_until_the_shipyard_is_listed_again() {
+    fn a_declined_class_keeps_its_roll_until_the_shipyard_is_opened_again() {
         let mut session = outfitted(&rolling(100, 50));
         let mut firing = Scripted::answering(&[true]);
-        assert!(lists_new(&mut session, &mut firing));
+        assert!(session.open_shipyard(&mut firing).is_some());
         session.decline_ship(NEW);
         let mut missing = Scripted::answering(&[false]);
         assert!(
             session.ship_naming(NEW, &NameLists, &mut missing).is_ok(),
             "named again"
         );
+        assert!(lists_new(&mut session, &mut missing), "still listed");
         assert!(missing.asked.is_empty(), "the list's roll is kept");
-        assert!(!lists_new(&mut session, &mut missing), "drawn again");
+        let shipyard = session.open_shipyard(&mut missing).expect("a shipyard");
+        assert_eq!(shipyard.row(NEW), None, "drawn again");
         assert_eq!(missing.asked, [50]);
     }
 
     #[test]
-    fn a_bought_class_keeps_its_roll_until_the_shipyard_is_listed_again() {
+    fn a_bought_class_keeps_its_roll_until_the_shipyard_is_opened_again() {
         let mut session = outfitted(&rolling(100, 50));
         let mut firing = Scripted::answering(&[true]);
+        assert!(session.open_shipyard(&mut firing).is_some());
         session
             .buy_ship(NEW, "Kestrel", &mut firing)
             .expect("bought");
@@ -29289,7 +29297,7 @@ pub(super) mod tests {
 
     /// The session's string lists for the ship name prompt: `STR#` 2002
     /// with #120, and no other.
-    struct NameLists;
+    pub(super) struct NameLists;
 
     impl CommCatalog for NameLists {
         fn string_list(&self, id: i16) -> Vec<String> {

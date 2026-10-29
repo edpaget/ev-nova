@@ -33,6 +33,22 @@ pub(super) fn open_outfitter(spaceport: &mut SpaceportView, flight: &mut FlightV
     }
 }
 
+/// Shows `spaceport`'s shipyard as `flight` lists it as it opens, once it
+/// has opened ([`SpaceportView::take_shipyard_opened`]): `flight` builds
+/// the list and keeps it for the visit first ([`FlightView::open_shipyard`]).
+/// Listing nothing, the shipyard says so and never opens
+/// ([`SpaceportView::set_opened_shipyard`]), before any port dialog's
+/// opening is told.
+pub(super) fn open_shipyard(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if !spaceport.take_shipyard_opened() {
+        return;
+    }
+    flight.open_shipyard();
+    if let Some(shipyard) = flight.shops().shipyard {
+        spaceport.set_opened_shipyard(shipyard);
+    }
+}
+
 /// Opens `flight`'s course map over `spaceport` when a map key there asked
 /// for it ([`SpaceportView::take_map_request`]): the bar's (`_BarFilter`
 /// item 8, `_DoSystemMap` @0x492b2), a port screen's, the spaceport's, a
@@ -82,8 +98,9 @@ pub(super) fn open_port_dialogs(
 /// ([`FlightView::close_port_dialog`]): its `_RefreshSAT`, then the nav's
 /// restore, as each of the original's dialogs closes, the bar's hire
 /// screen among them; after the input's last order, and before any frame
-/// is drawn. A mission computer that closed under mission texts is told
-/// once they have closed.
+/// is drawn. A mission computer that closed under mission texts, or a
+/// shipyard that closes after its purchase's texts, is told once they
+/// have closed.
 pub(super) fn close_port_dialogs(
     spaceport: &mut SpaceportView,
     flight: &mut FlightView<Rc<GameData>>,

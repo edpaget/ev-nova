@@ -882,7 +882,15 @@ fn buy_the_heavy_shuttle(game: &mut Harness, store: &MemoryPilots) {
     // new ship with its tank, named, and the pilot saved.
     game.type_name("The Kestrel");
     game.press(KeyCode::Enter);
-    assert!(game.shipyard().naming().is_none(), "closed");
+    assert!(
+        game.app
+            .screen()
+            .spaceport_view()
+            .expect("landed")
+            .open_shipyard()
+            .is_none(),
+        "the purchase closes the shipyard"
+    );
     assert_eq!(game.pilot().ship(), HEAVY);
     assert_eq!(game.pilot().ship_name(), Some("Kestrel"));
     assert_eq!(game.pilot().cash(), 25_000 - 17_500 + 2500);
@@ -892,18 +900,27 @@ fn buy_the_heavy_shuttle(game: &mut Harness, store: &MemoryPilots) {
     assert_eq!(store.writes(), writes + 1);
     assert_eq!(saved(store, "Ada").ship(), HEAVY);
     assert_eq!(saved(store, "Ada").ship_name(), Some("Kestrel"));
-    // Held, B buys nothing more, and opens no prompt.
+    // Held, B buys nothing more, and opens nothing.
     for _ in 0..5 {
         game.key(KeyCode::KeyB, true, true);
     }
     game.key(KeyCode::KeyB, false, false);
-    assert!(game.shipyard().naming().is_none());
     assert_eq!(game.pilot().cash(), 10_000);
     assert_eq!(store.writes(), writes + 1, "nothing more to save");
-    // The Heavy Shuttle, now flown and still selected, shows no price
-    // lines; the Shuttle shows the new trade-in: the Heavy Shuttle's
-    // quarter and its tank's half, 5375, rounded down to ten by the
-    // shipyard's flux.
+    // Opened again, the Heavy Shuttle, now flown, shows no price lines;
+    // the Shuttle shows the new trade-in: the Heavy Shuttle's quarter and
+    // its tank's half, 5375, rounded down to ten by the shipyard's flux.
+    game.open_shipyard();
+    assert_eq!(game.shipyard().shipyard().current, HEAVY);
+    let heavy = game
+        .shipyard()
+        .shipyard()
+        .rows
+        .iter()
+        .position(|row| row.id == HEAVY)
+        .expect("listed");
+    let cell = game.shipyard().cell_bounds(heavy).expect("a cell").center();
+    game.click(cell);
     let shown = texts(&game.frame());
     assert!(!shown.contains(&"Trade-In:".to_owned()), "{shown:?}");
     let cell = game.shipyard().cell_bounds(0).expect("a cell").center();

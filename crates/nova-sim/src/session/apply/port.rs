@@ -22,6 +22,8 @@ impl Session {
     /// - [`FlightCommand::Outfit`] and [`FlightCommand::OutfitCounted`] run
     ///   [`Session::outfit_order`] and [`Session::outfit_counted_run`]:
     ///   [`Answer::Outfitted`], the whole run.
+    /// - [`FlightCommand::OpenShipyard`] runs [`Session::open_shipyard`]:
+    ///   done, with no shipyard to open too, keeping nothing.
     /// - [`FlightCommand::BuyShip`] runs [`Session::buy_ship`]:
     ///   [`Answer::ShipBought`].
     /// - [`FlightCommand::Hire`] runs [`Session::hire`]: [`Answer::Hired`].
@@ -63,6 +65,10 @@ impl Session {
             }
             FlightCommand::OutfitCounted { order, count } => {
                 Answer::Outfitted(self.outfit_counted_run(order, count, chance))
+            }
+            FlightCommand::OpenShipyard => {
+                self.open_shipyard(chance);
+                Answer::Done
             }
             FlightCommand::BuyShip { ship, name } => {
                 Answer::ShipBought(self.buy_ship(ship, &name, chance))
@@ -223,6 +229,22 @@ mod tests {
             session.close_outfitter();
             Answer::Done
         });
+    }
+
+    #[test]
+    fn the_shipyards_opening_runs_open_shipyard() {
+        let mut session = docked(&port());
+        runs(&mut session, FlightCommand::OpenShipyard, |session| {
+            assert!(session.open_shipyard(&mut NeverFires).is_some());
+            Answer::Done
+        });
+        assert!(session.port.shipyard_listing().is_some(), "kept");
+        let mut flying = Session::start(&port()).expect("starts");
+        assert_eq!(
+            apply(&mut flying, FlightCommand::OpenShipyard),
+            Answer::Done
+        );
+        assert_eq!(flying.port.shipyard_listing(), None);
     }
 
     #[test]

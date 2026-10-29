@@ -119,6 +119,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.send(FlightCommand::CloseOutfitter);
     }
 
+    /// The shipyard opens ([`FlightCommand::OpenShipyard`],
+    /// `nova_sim::Session::open_shipyard`): its list is built and kept for
+    /// the visit, so the shops asked after relist it.
+    pub fn open_shipyard(&mut self) {
+        self.send(FlightCommand::OpenShipyard);
+    }
+
     /// The prompt for naming a ship of class `ship` before it is bought,
     /// its words read from the flight's catalog, its default name drawn
     /// afresh on the flight's chance ([`ScreenAsk::ShipNaming`]), asked

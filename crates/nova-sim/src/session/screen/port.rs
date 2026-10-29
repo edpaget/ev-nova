@@ -8,9 +8,11 @@
 //! chance, only the day's rolls not drawn yet, and keep them in the port
 //! (`Port::outfit_rolls`, `ship_rolls`, `hire_rolls`), as the original
 //! keeps each day's (`_IncrementGameTime` @0xb7c4-0xb833 draws them all):
-//! asked again, each answers from the rolls kept. The shops' shipyard is
-//! built afresh, applying the redraws of the classes bought or declined
-//! since its last build, at the points it was built before. A ship's name
+//! asked again, each answers from the rolls kept. The shops' shipyard
+//! relists the classes its last opening listed while they are kept, and is
+//! otherwise built afresh; the redraws of the classes bought or declined
+//! wait for the next opening or landing (`Session::open_shipyard`; see the
+//! `shipyard_listing` module). A ship's name
 //! prompt ([`ScreenAsk::ShipNaming`]) and a captured ship's rename
 //! ([`ScreenAsk::CaptureNaming`]) draw their default's digits afresh at
 //! each ask and keep nothing ([`ScreenAsk::draws_afresh`]).
@@ -674,17 +676,20 @@ pub(in crate::session) mod tests {
         let _ = asked(&mut session, None, &mut chance, ScreenAsk::Shops);
         session.decline_ship(ROLLED);
         let drawn = chance.draws;
-        let first = asked(&mut session, None, &mut chance, ScreenAsk::Shops);
-        assert!(chance.draws > drawn, "precondition: the decline's redraw");
+        let _ = asked(&mut session, None, &mut chance, ScreenAsk::Shops);
+        assert_eq!(chance.draws, drawn, "the decline's redraw waits");
+        let _ = session.open_shipyard(&mut chance);
+        assert!(chance.draws > drawn, "precondition: the opening's redraw");
         // `FirstFires` decides every draw after its first the same way, so
         // a second redraw would answer the same: count the draws instead.
         let redrawn = chance.draws;
+        let first = asked(&mut session, None, &mut chance, ScreenAsk::Shops);
         assert_eq!(
             asked(&mut session, None, &mut chance, ScreenAsk::Shops),
             first,
             "the redraw applied once"
         );
-        assert_eq!(chance.draws, redrawn, "the third ask drew nothing");
+        assert_eq!(chance.draws, redrawn, "the asks after drew nothing");
     }
 
     #[test]

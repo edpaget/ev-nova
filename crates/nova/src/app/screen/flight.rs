@@ -28,7 +28,7 @@ use nova_view::ui::quantity::QUANTITY_DIALOG;
 use nova_view::ui::text_input::TEXT_INPUT_DIALOG;
 use nova_view::ui::{DescriptionSource, DialogResources};
 
-use super::port_dialogs::close_mission_texts;
+use super::port_dialogs::{close_mission_texts, close_port_dialogs};
 use super::{AppScreen, NO_INTERFACE, Side};
 
 impl AppScreen {
@@ -502,6 +502,10 @@ impl AppScreen {
             close_mission_texts(spaceport, flight);
             spaceport.show_mission_texts(flight.take_mission_texts());
             close_mission_texts(spaceport, flight);
+            // A shipyard whose purchase's texts have all closed closes
+            // here (`SpaceportView::show_mission_texts`), and is told at
+            // once, before the next frame.
+            close_port_dialogs(spaceport, flight);
             return;
         }
         if self.side != Side::Flight {

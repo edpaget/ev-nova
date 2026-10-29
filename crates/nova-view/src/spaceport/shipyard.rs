@@ -59,13 +59,8 @@
 //! @0x4f6f5-0x4f6fc; the original has no words for why). B with no ship
 //! selected, or one that cannot be bought, beeps
 //! ([`UiSound::BuyRefused`], `_beepSnd[3]`, @0x5f22a-0x5f256). B acts
-//! on a press only, never a key repeat, unlike the Outfitter's. A held B
-//! no longer re-buys the class just bought, which is now the class flown
-//! and refused ([`ShipRefusal::AlreadyFlown`](nova_sim::shipyard::ShipRefusal::AlreadyFlown)),
-//! but the purchase draws that class's roll again, and when the shipyard
-//! given back no longer lists it, the selection falls on another class,
-//! which a held B would otherwise trade the new ship and its outfits
-//! for. The screen only records the request
+//! on a press only, never a key repeat, unlike the Outfitter's, so a held
+//! B never re-buys. The screen only records the request
 //! ([`ShipyardScreen::take_request`]): whoever holds the session asks for
 //! the new ship's name ([`ShipNaming`]) and opens the "Text Input" prompt
 //! with it ([`ShipyardScreen::open_naming`], [`TextInputDialog`]), as the
@@ -73,10 +68,19 @@
 //! prompt takes every input while it is open; when B asked, the B typed
 //! is dropped, as the original flushes it. OK records the order, the ship
 //! and the name confirmed ([`ShipyardScreen::take_order`]): whoever holds
-//! the session makes it and gives back the shipyard as it now is
-//! ([`ShipyardScreen::set_shipyard`]). Cancel records the ship declined
-//! ([`ShipyardScreen::take_declined`]), whose roll the session draws
-//! again. Without the "Text Input" dialog, the prompt is laid out by
+//! the session makes it, and the spaceport then closes the shipyard, as
+//! `_DoShipyardDialog` leaves its loop after a purchase (@0x5f0ce,
+//! @0x5f6bd-0x5f6cf), once the texts the purchase's hooks show have
+//! closed (`SpaceportView::take_ship`). Cancel records the ship declined
+//! ([`ShipyardScreen::take_declined`]), and the shipyard stays open over
+//! the same list (@0x5ebc2 → @0x5f0d5 skips @0x5f0ce): the list built as
+//! it opened is kept while it stays open, its prices, trade-in, cash,
+//! class flown and Buy Ship's greying given back afresh after each
+//! refresh ([`ShipyardScreen::set_shipyard`]), and the class's roll the
+//! session draws again shows only the next time it opens
+//! (`nova_sim::Session::open_shipyard`). It asks for no offer until that
+//! list is shown (`SpaceportView::set_opened_shipyard`). Without the
+//! "Text Input" dialog, the prompt is laid out by
 //! [`TextInputDialog::fallback`].
 //!
 //! Info, clicked or with Space ([`INFO_KEY`]), opens the "Shipyard Info" panel (`DLOG`/`DITL`
