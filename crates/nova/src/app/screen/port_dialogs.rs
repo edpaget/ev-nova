@@ -104,14 +104,19 @@ pub(super) fn run_gamble(spaceport: &mut SpaceportView, flight: &mut FlightView<
 
 /// Credits the race's winnings through `flight` once `spaceport`'s result
 /// text has closed ([`SpaceportView::take_winnings_due`],
-/// [`FlightView::collect_winnings`]): after the spaceport's input, and
-/// after its tick, where a text closed by its movie's end closes.
+/// [`FlightView::collect_winnings`]), and hands the race the most an
+/// asked bet can stake of the cash credited
+/// ([`SpaceportView::race_winnings_collected`]): after the spaceport's
+/// input, and after its tick, where a text closed by its movie's end
+/// closes.
 pub(super) fn collect_race_winnings(
     spaceport: &mut SpaceportView,
     flight: &mut FlightView<Rc<GameData>>,
 ) {
-    if spaceport.take_winnings_due() {
-        flight.collect_winnings();
+    if spaceport.take_winnings_due()
+        && let Some(asked_max) = flight.collect_winnings()
+    {
+        spaceport.race_winnings_collected(asked_max);
     }
 }
 

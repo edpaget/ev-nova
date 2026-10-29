@@ -484,6 +484,14 @@ impl BarScreen {
         }
     }
 
+    /// The race's winnings were credited
+    /// ([`RaceScreen::winnings_collected`]).
+    pub fn race_winnings_collected(&mut self, asked_max: i64) {
+        if let Some(race) = &mut self.race {
+            race.winnings_collected(asked_max);
+        }
+    }
+
     /// Whether the race has a winner waiting to show
     /// ([`RaceScreen::revealing`]).
     #[must_use]

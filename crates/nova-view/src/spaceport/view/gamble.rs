@@ -18,7 +18,9 @@
 //!   only once that movie is over, as the original's invalidated race
 //!   redraws only once the text dialog's loop runs. Once the text has
 //!   closed, the winnings are due ([`SpaceportView::take_winnings_due`]),
-//!   as the original credits them only then (@0x48e03-0x48e30).
+//!   as the original credits them only then (@0x48e03-0x48e30); once
+//!   credited, the most an asked bet stakes is the cash credited's
+//!   ([`SpaceportView::race_winnings_collected`]).
 //! - Help's text ([`SpaceportView::take_race_help_request`],
 //!   [`SpaceportView::show_race_help`]) shows over the race with no
 //!   picture and no movie before it (`_ShowTextDialog(0, 0, 0)` @0x48bbf),
@@ -176,6 +178,15 @@ impl SpaceportView {
     /// (`nova_view::flight::FlightView::collect_winnings`).
     pub fn take_winnings_due(&mut self) -> bool {
         std::mem::take(&mut self.gambling.winnings_due)
+    }
+
+    /// The race's winnings were credited, and an asked bet can now stake
+    /// at most `asked_max`, the cash credited's
+    /// ([`BarScreen::race_winnings_collected`]).
+    pub fn race_winnings_collected(&mut self, asked_max: i64) {
+        if let Some(bar) = self.open_bar_mut() {
+            bar.race_winnings_collected(asked_max);
+        }
     }
 
     /// Settles what waits on the texts over the spaceport (see the module
@@ -403,6 +414,30 @@ mod tests {
             Some(RacerLook::Loser),
             "shown once the movie is over"
         );
+    }
+
+    #[test]
+    fn the_winnings_collected_raise_the_races_asked_most() {
+        let mut view = in_the_bar();
+        view.open_gamble(GambleOpening::Race { asked_max: 1_000 });
+        let racer = race_item(&view, FIRST_RACER_ITEM + 1);
+        click(&mut view, racer);
+        let _ = view.take_race_bet();
+        view.show_race(Some(RaceShown {
+            asked_max: 0,
+            ..won(None)
+        }));
+        view.input(&key(Key::Enter));
+        assert!(view.take_winnings_due());
+        view.race_winnings_collected(4_000);
+        click(&mut view, racer);
+        view.input(&key(Key::Alt));
+        click(&mut view, racer);
+        let field = race_open(&view)
+            .and_then(RaceScreen::quantity)
+            .and_then(|ask| ask.dialog())
+            .map(|dialog| dialog.field().text().to_owned());
+        assert_eq!(field.as_deref(), Some("4000"));
     }
 
     #[test]

@@ -1311,6 +1311,12 @@ pub enum Answer {
     Hired(Result<Hired, HireRefusal>),
     /// The race a [`FlightCommand::Race`] ran.
     Raced(RaceRun),
+    /// The winnings a [`FlightCommand::CollectWinnings`] credited: the
+    /// most the next asked bet can stake of the cash credited.
+    WinningsCollected {
+        /// [`asked_max`](crate::gamble::asked_max) of the cash credited.
+        asked_max: i64,
+    },
     /// The mission computer a [`FlightCommand::OpenMissionComputer`]
     /// opened, or why it has nothing.
     MissionComputer(Result<MissionComputer, ComputerRefusal>),

@@ -73,9 +73,13 @@ impl<C: DescriptionSource + DescriptionGraphics, S: FlightSim> FlightView<C, S> 
 
     /// Credits the race's winnings due once its result text has closed
     /// ([`FlightCommand::CollectWinnings`],
-    /// `nova_sim::Session::collect_winnings`): whether there were any.
-    pub fn collect_winnings(&mut self) -> bool {
-        self.send(FlightCommand::CollectWinnings) == Answer::Done
+    /// `nova_sim::Session::collect_winnings`): the most the next asked bet
+    /// can stake of the cash credited, or none when none were due.
+    pub fn collect_winnings(&mut self) -> Option<i64> {
+        match self.send(FlightCommand::CollectWinnings) {
+            Answer::WinningsCollected { asked_max } => Some(asked_max),
+            _ => None,
+        }
     }
 
     /// The race's Help text: `dësc` 32764 loaded ([`RACE_HELP_DESC`],

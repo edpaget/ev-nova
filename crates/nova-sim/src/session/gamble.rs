@@ -10,7 +10,8 @@
 //! @0x48f61-0x48f6c) and every race sets (@0x48cd5). A win's
 //! [`PAYOUT`](crate::gamble::PAYOUT) times the bet is held as winnings
 //! due, and credited only by [`Session::collect_winnings`], which the view
-//! sends once the result text has closed (@0x48e03-0x48e30); so the status
+//! sends once the result text has closed (@0x48e03-0x48e30), answering
+//! the most the next asked bet can stake of the cash credited; so the status
 //! bar shows the cash less the bet while the text is up, as the original's
 //! `_DrawStatus` after the bet (@0x48c92) and after the text (@0x48e30)
 //! show it. Neither change makes a save due: the original saves nothing
@@ -61,10 +62,14 @@ impl Session {
     }
 
     /// Credits the race winnings due, once the result text has closed
-    /// (see the module docs): true when there were any, and false,
-    /// changing nothing, when none are due.
-    pub fn collect_winnings(&mut self) -> bool {
-        self.port.collect_winnings(&mut self.pilot)
+    /// (see the module docs): the most the next asked bet can stake
+    /// ([`gamble::asked_max`]) of the cash credited, as the original asks
+    /// each Option click's quantity dialog of the cash then
+    /// (@0x48bf9-0x48c1f); or `None`, changing nothing, when none are due.
+    pub fn collect_winnings(&mut self) -> Option<i64> {
+        self.port
+            .collect_winnings(&mut self.pilot)
+            .then(|| gamble::asked_max(self.pilot.cash))
     }
 }
 
@@ -179,9 +184,13 @@ mod tests {
             session.pilot.cash, 4000,
             "the bet taken while the text is up"
         );
-        assert!(session.collect_winnings());
+        assert_eq!(
+            session.collect_winnings(),
+            Some(8000),
+            "the asked most of the cash credited"
+        );
         assert_eq!(session.pilot.cash, 8000, "4 x 1000 credited");
-        assert!(!session.collect_winnings(), "only once");
+        assert_eq!(session.collect_winnings(), None, "only once");
         assert_eq!(session.pilot.cash, 8000);
     }
 
@@ -193,8 +202,25 @@ mod tests {
             .expect("a race");
         assert_eq!((run.winner, run.bet, run.winnings_line), (3, 300, None));
         assert_eq!(session.pilot.cash, 200);
-        assert!(!session.collect_winnings());
+        assert_eq!(session.collect_winnings(), None);
         assert_eq!(session.pilot.cash, 200);
+    }
+
+    #[test]
+    fn the_collect_answers_the_asked_most_of_the_cash_after_the_credit() {
+        // All 1,000 staked: the race leaves 0, the credit 4,000.
+        let mut session = at_bar(1_000);
+        let run = session
+            .race(0, Bet::House, &mut Scripted::rolling(&[0]))
+            .expect("a race");
+        assert_eq!(run.asked_max, 0, "the cash less the bet");
+        assert_eq!(session.collect_winnings(), Some(4_000));
+        // Past 10,000 the asked most holds there.
+        let mut session = at_bar(20_000);
+        session
+            .race(0, Bet::House, &mut Scripted::rolling(&[0]))
+            .expect("a race");
+        assert_eq!(session.collect_winnings(), Some(MAX_ASKED_BET));
     }
 
     #[test]

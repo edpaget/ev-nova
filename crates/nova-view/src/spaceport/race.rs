@@ -281,6 +281,13 @@ impl RaceScreen {
         self.relabel();
     }
 
+    /// The race's winnings were credited, and an asked bet can now stake
+    /// at most `asked_max`, as the original asks each Option click's bet
+    /// of the cash then, winnings and all (@0x48bf9-0x48c1f).
+    pub fn winnings_collected(&mut self, asked_max: i64) {
+        self.asked_max = asked_max;
+    }
+
     /// Shows the winner waiting, if any: the result text's movie is over.
     pub fn reveal(&mut self) {
         if let Some(winner) = self.pending.take() {
@@ -857,6 +864,24 @@ mod tests {
             .and_then(QuantityAsk::dialog)
             .map(|dialog| dialog.field().text().to_owned());
         assert_eq!(field.as_deref(), Some("70"));
+    }
+
+    #[test]
+    fn the_winnings_collected_raise_the_asked_most_to_the_cash_credited() {
+        let mut screen = open();
+        click(&mut screen, racer_item(0));
+        let _ = screen.take_bet();
+        screen.show_result(0, 0);
+        screen.reveal();
+        screen.winnings_collected(4_000);
+        click(&mut screen, racer_item(0));
+        screen.input(&key(Key::Alt, true, false));
+        click(&mut screen, racer_item(0));
+        let field = screen
+            .quantity()
+            .and_then(QuantityAsk::dialog)
+            .map(|dialog| dialog.field().text().to_owned());
+        assert_eq!(field.as_deref(), Some("4000"));
     }
 
     #[test]

@@ -99,12 +99,13 @@ fn a_lost_race_shows_the_desc_alone_and_none_run_loads_nothing() {
 }
 
 #[test]
-fn the_collect_sends_its_command_and_says_whether_any_were_due() {
+fn the_collect_sends_its_command_and_hands_back_the_asked_most_credited() {
     let mut view = racing();
-    view.sim.queue_answer(Answer::Done);
-    assert!(view.collect_winnings());
+    view.sim
+        .queue_answer(Answer::WinningsCollected { asked_max: 4_000 });
+    assert_eq!(view.collect_winnings(), Some(4_000));
     view.sim.queue_answer(Answer::Refused);
-    assert!(!view.collect_winnings());
+    assert_eq!(view.collect_winnings(), None);
     let sent = view
         .sim
         .applied()

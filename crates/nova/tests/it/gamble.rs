@@ -11,7 +11,8 @@
 //! its close returns to it; with cash, G opens the race, a racer's click
 //! bets, the result text shows with the cash less the bet, and the
 //! winnings are credited once it and the movie after it are done, on the
-//! tick that ends the movie. Which keys press Gamble, how the race draws and
+//! tick that ends the movie, after which an Option click asks the bet up
+//! to the cash credited. Which keys press Gamble, how the race draws and
 //! tracks, the draw and the payout are nova-view's and nova-sim's,
 //! pinned there.
 
@@ -529,6 +530,18 @@ impl Game {
             .and_then(|spaceport| spaceport.open_bar())
     }
 
+    /// The centre of the open race's `racer`, 0 to 3.
+    fn racer(&self, racer: usize) -> Point {
+        self.bar()
+            .and_then(|bar| bar.race_screen())
+            .and_then(|race| race.dialog())
+            .and_then(|dialog| {
+                dialog.item_bounds(nova_view::spaceport::race::FIRST_RACER_ITEM + racer)
+            })
+            .expect("the race over the bar")
+            .center()
+    }
+
     /// The text shown over the spaceport, its lines joined.
     fn text_shown(&self) -> Option<String> {
         self.app
@@ -613,6 +626,39 @@ fn with_cash_gamble_opens_the_race_and_a_bet_pays_once_its_text_closes() {
         game.bar().is_some_and(|bar| bar.race_screen().is_none()),
         "back in the bar"
     );
+}
+
+#[test]
+fn after_a_win_an_option_click_asks_the_bet_up_to_the_cash_credited() {
+    // All 1,000 staked: the race leaves 0, and the win credits 4,000.
+    let mut game = Game::flying_with(1_000);
+    game.land();
+    game.open_bar();
+    game.dial.set(0);
+    game.tap(Key::Char('g'));
+    let racer = game.racer(0);
+    game.click(racer);
+    assert_eq!(game.cash(), 0, "the bet taken");
+    game.tap(Key::Enter);
+    for _ in 0..10 {
+        game.frame();
+    }
+    assert_eq!(game.cash(), 4_000, "credited");
+    // A click lets the winner shown go; Option held, the next asks.
+    game.click(racer);
+    game.send(WindowEvent::Key {
+        key: Key::Alt,
+        pressed: true,
+        repeat: false,
+    });
+    game.click(racer);
+    let field = game
+        .bar()
+        .and_then(|bar| bar.race_screen())
+        .and_then(|race| race.quantity())
+        .and_then(|ask| ask.dialog())
+        .map(|dialog| dialog.field().text().to_owned());
+    assert_eq!(field.as_deref(), Some("4000"), "min(4,000, 10,000)");
 }
 
 crate::common::entry_harness!(Game, click, frame);

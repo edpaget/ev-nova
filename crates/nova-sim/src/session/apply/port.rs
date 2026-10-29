@@ -30,7 +30,8 @@ impl Session {
     /// - [`FlightCommand::Race`] runs [`Session::race`]: [`Answer::Raced`],
     ///   or refused when no race runs, changing nothing.
     /// - [`FlightCommand::CollectWinnings`] runs
-    ///   [`Session::collect_winnings`]: done, or refused with none due.
+    ///   [`Session::collect_winnings`]: [`Answer::WinningsCollected`], or
+    ///   refused with none due.
     /// - [`FlightCommand::Assign`] runs [`Session::assign`]:
     ///   [`Answer::Assigned`], or refused with no capture awaiting its
     ///   assignment, changing nothing.
@@ -87,7 +88,11 @@ impl Session {
             FlightCommand::Race { racer, bet } => self
                 .race(racer, bet, chance)
                 .map_or(Answer::Refused, Answer::Raced),
-            FlightCommand::CollectWinnings => super::done_if(self.collect_winnings()),
+            FlightCommand::CollectWinnings => self
+                .collect_winnings()
+                .map_or(Answer::Refused, |asked_max| Answer::WinningsCollected {
+                    asked_max,
+                }),
             FlightCommand::Jettison { all } => {
                 self.jettison_cargo(all, chance);
                 Answer::Done
@@ -290,8 +295,10 @@ mod tests {
             )
         });
         runs(&mut session, FlightCommand::CollectWinnings, |session| {
-            assert!(session.collect_winnings(), "racer 0 won on a roll of 0");
-            Answer::Done
+            let asked_max = session
+                .collect_winnings()
+                .expect("racer 0 won on a roll of 0");
+            Answer::WinningsCollected { asked_max }
         });
         let before = session.clone();
         assert_eq!(
