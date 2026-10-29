@@ -9,13 +9,12 @@
 //! button may thus lag one input behind a change the input made, which no
 //! frame shows.
 //!
-//! The refill reads the landed stellar's domination from `Flags2` 0x0020
-//! ([`market::DOMINATED`]), the start state of the original's +0x46 byte
-//! (`_ResetPlayerRecord` @0x1dbcf-0x1dbef). Domination at run time is
-//! not modelled yet (rdm:task/planet-domination).
+//! The refill reads the landed stellar's domination through
+//! [`crate::domination::dominated`], the one rule for the original's +0x46
+//! byte: `Flags2` 0x0020 at the start, and Demand Tribute (@0x978fa) and
+//! Release (@0x9740f) at run time. The button never reads it.
 
 use super::Session;
-use crate::market;
 use crate::recharge::{self, RechargeRefusal};
 use crate::rulebook::RuleKey;
 
@@ -39,7 +38,7 @@ impl Session {
         let fill = recharge::fill(
             self.pilot.reserves.fuel,
             self.pilot.cash,
-            site.flags2 & market::DOMINATED != 0,
+            crate::domination::dominated(site),
             self.setup.rules.source_for(RuleKey::RechargeDebt),
         );
         let mut after = self.pilot.clone();
@@ -120,7 +119,7 @@ mod tests {
     /// (`Flags2` 0x0020), with half a tank and `cash`.
     fn dominated(cash: i64) -> Session {
         let mut catalog = exchange();
-        catalog.sites[0].1[0].flags2 |= market::DOMINATED;
+        catalog.sites[0].1[0].flags2 |= crate::market::DOMINATED;
         let mut session = Session::start(&catalog).expect("starts");
         land_now(&mut session).expect("lands");
         session.pilot.reserves.fuel.now = 150.0;
@@ -133,6 +132,38 @@ mod tests {
     fn a_dominated_stellar_fills_the_whole_tank_free() {
         recharged(dominated(0), 0, 300.0, 0, true);
         recharged(dominated(-50), 0, 300.0, -50, true);
+    }
+
+    /// A session landed at planet 128 with half a tank and `cash`, the
+    /// planet dominated at run time (Demand Tribute's write) though not
+    /// from the start.
+    fn dominated_at_run_time(cash: i64) -> Session {
+        let mut session = half_empty_at_port();
+        session.pilot.cash = cash;
+        session.dominate(StellarId(128), true);
+        session.take_save_due();
+        session
+    }
+
+    #[test]
+    fn a_stellar_dominated_at_run_time_fills_the_whole_tank_free() {
+        recharged(dominated_at_run_time(1000), 0, 300.0, 1000, true);
+        recharged(dominated_at_run_time(-50), 0, 300.0, -50, true);
+    }
+
+    #[test]
+    fn a_released_stellar_charges_again() {
+        let mut session = dominated_at_run_time(1000);
+        session.dominate(StellarId(128), false);
+        session.take_save_due();
+        recharged(session, 150, 300.0, 850, true);
+    }
+
+    #[test]
+    fn dominated_at_run_time_with_no_cash_recharge_is_greyed_yet_fills_free() {
+        assert!(!dominated_at_run_time(0).recharge_enabled());
+        assert!(dominated_at_run_time(1).recharge_enabled());
+        recharged(dominated_at_run_time(0), 0, 300.0, 0, true);
     }
 
     fn in_debt(rules: Rulebook) -> Session {

@@ -41,10 +41,9 @@
 //!   session `stellar_defence` module;
 //! - the planet comm dialog (`_DoPlanetCommDialog`, `_PlanetCommFilter`,
 //!   `_PlanetCommDialogUpdate`, `_DrawPlanetCommDialogButtons`):
-//!   `nova_sim`'s session `planet_comm` module.
-//!
-//! Recharge's free fill (`_DoPortDialog` @0x5fdb9) is
-//! rdm:phase/play-feel-4/phase-4-run-time-domination-free-refuel's.
+//!   `nova_sim`'s session `planet_comm` module;
+//! - the Recharge's free fill (`_DoPortDialog` @0x5fdb9): `nova_sim`'s
+//!   session `recharge` module.
 
 use crate::catalog::LandingSite;
 

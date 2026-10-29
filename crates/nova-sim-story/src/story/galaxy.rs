@@ -70,7 +70,7 @@
 //!   ([`GalaxyOverlay::set_dominated`]), and [`OverlaidGalaxy::site`]
 //!   stamps the run-time domination on each site, so every reader goes
 //!   through the one rule ([`domination`](crate::domination)); the save
-//!   keeps it. Recharge is rdm:phase/play-feel-4/phase-4-run-time-domination-free-refuel's;
+//!   keeps it, and Recharge's free fill reads it too;
 //! - +0x47, a defence ship of the stellar in the system, set and
 //!   cleared each frame (`_DoPlayGameWork` @0x443d4-0x4444f) and cleared
 //!   for every stellar here (@0x32d5d), which `_IsThreatToStellar` reads
