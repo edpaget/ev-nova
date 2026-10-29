@@ -8,18 +8,23 @@
 //! in-memory store. The app draws on a [`Dial`] the test turns, so each
 //! draw gives the outcome the dial is set to.
 //!
-//! The pilot lands and opens the bar, whose News button (Holovid), or N,
-//! shows the commercial and the story over the bar, `<PN>` left as
-//! written; Escape closes it back to the bar, and News again shows the
-//! same two strings though the dial has turned. Leaving the bar and
-//! opening it again draws the other two.
+//! The pilot lands and opens the bar, whose N opens the news over it,
+//! drawn by the router's chance (the dial), and Escape closes it back to
+//! the bar. The news picture the game data holds reaches the Gpu, stretched
+//! over the news dialog.
+//!
+//! Which news is drawn, when it is drawn again, which picture shows and
+//! how the news screen takes input are nova-sim's and nova-view's, pinned
+//! there.
+
+use crate::bracket_art;
 
 use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::common::EntryHarness;
+use crate::common::{EntryHarness, Frames};
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
@@ -55,7 +60,7 @@ const COMMERCIALS: [&str; 2] = [
     "Bibble: the drink of champions.",
     "Fizz: the drink of runners-up.",
 ];
-/// The stories, `STR#` 8101, each with a tag the news leaves as written.
+/// The stories, `STR#` 8101.
 const STORIES: [&str; 2] = ["<PN> wins the Nova Cup.", "<PN> loses the Nova Cup."];
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
@@ -264,7 +269,7 @@ fn game_data(govt_id: i16) -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    Rc::new(one_file(fork.build().bytes).load())
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// One `DITL` user item at (left, top, width, height), enabled or not.
@@ -457,29 +462,22 @@ impl Game {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request. The nav brackets' corners (`cicn`
-    /// 10000-10003), which the press's selection draws, may be missing
-    /// from the fixture, so the frames' image failures are not checked.
-    fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frames += 1;
-            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        let _ = self.app.take_failures();
-    }
-
     fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
 
-    /// Lands at the pad: L requests clearance, a few frames let the dock
-    /// approach clear it, and a second L lands.
+    /// Lands at the pad: L requests clearance, the dock approach clears
+    /// it, and a second L lands.
     fn land(&mut self) {
-        self.frame();
         self.tap(Key::Char('l'));
-        self.approach();
+        self.settle();
+        self.settle_until("the dock approach's clearance", |game| {
+            game.app
+                .screen()
+                .flight_view()
+                .and_then(|flight| flight.session().ok())
+                .is_some_and(nova_sim::Session::dock_cleared)
+        });
         self.tap(Key::Char('l'));
         assert_eq!(self.showing(), Showing::Spaceport);
     }
@@ -506,20 +504,6 @@ impl Game {
         assert_eq!(bar.problem(), None);
     }
 
-    /// Clicks the bar's News button, Holovid (item 3).
-    fn click_news(&mut self) {
-        let at = self
-            .app
-            .screen()
-            .spaceport_view()
-            .and_then(|spaceport| spaceport.open_bar())
-            .and_then(|bar| bar.dialog())
-            .and_then(|dialog| dialog.item_bounds(3))
-            .expect("News")
-            .center();
-        self.click(at);
-    }
-
     /// Whether the news is open over the bar.
     fn reading(&self) -> bool {
         self.app
@@ -541,102 +525,34 @@ fn texts(frame: &Frame) -> Vec<String> {
         .collect()
 }
 
-/// Whether `frame` shows commercial `n` and story `n` and not the
-/// others, `<PN>` as written, wrapped to the news dialog's lines.
-fn shows_the_news(frame: &Frame, n: usize) -> bool {
-    let shown = texts(frame).join(" ");
-    let other = 1 - n;
-    shown.contains(COMMERCIALS[n])
-        && shown.contains(STORIES[n])
-        && !shown.contains(COMMERCIALS[other])
-        && !shown.contains(STORIES[other])
-}
-
-/// Whether `frame` shows any of the news.
-fn shows_any_news(frame: &Frame) -> bool {
-    let shown = texts(frame).join(" ");
-    COMMERCIALS
-        .iter()
-        .chain(&STORIES)
-        .any(|text| shown.contains(text))
-}
-
 #[test]
-fn the_bars_news_shows_the_commercial_and_the_story_as_written() {
+fn n_in_the_bar_opens_the_news_drawn_by_the_routers_chance_and_escape_closes_it() {
     let mut game = Game::flying();
     game.land();
-    game.open_bar();
-    let shown = texts(&game.frame());
-    assert!(!shows_any_news(&game.frame()), "not before News: {shown:?}");
     game.dial.set(1);
+    game.open_bar();
     game.tap(Key::Char('n'));
     assert!(game.reading());
-    let frame = game.frame();
-    assert!(
-        shows_the_news(&frame, 0),
-        "drawn as the bar opened: {:?}",
-        texts(&frame)
-    );
-    assert!(
-        !texts(&frame).contains(&"Smoke and quiet talk.".to_owned()),
-        "the news covers the bar"
-    );
+    let shown = texts(&game.frame()).join(" ");
+    assert!(shown.contains(COMMERCIALS[1]), "the dial's draw: {shown}");
+    assert!(shown.contains(STORIES[1]), "the dial's draw: {shown}");
 
-    // Escape closes it back to the bar, and News again shows the same
-    // two strings, though the dial has turned.
     game.tap(Key::Escape);
     assert!(!game.reading());
-    assert_eq!(game.showing(), Showing::Spaceport);
-    let shown = texts(&game.frame());
-    assert!(
-        shown.contains(&"Smoke and quiet talk.".to_owned()),
-        "{shown:?}"
-    );
-    game.click_news();
-    assert!(game.reading());
-    let frame = game.frame();
-    assert!(
-        shows_the_news(&frame, 0),
-        "the same visit: {:?}",
-        texts(&frame)
-    );
-}
-
-#[test]
-fn opening_the_bar_again_draws_the_news_afresh() {
-    let mut game = Game::flying();
-    game.land();
-    game.open_bar();
-    game.tap(Key::Char('n'));
-    let frame = game.frame();
-    assert!(shows_the_news(&frame, 0), "{:?}", texts(&frame));
-
-    // Closing the news and then the bar, and opening the bar again with
-    // the dial turned, draws the other two.
-    game.tap(Key::Escape);
-    game.tap(Key::Escape);
     assert!(
         game.app
             .screen()
             .spaceport_view()
             .and_then(|spaceport| spaceport.open_bar())
-            .is_none(),
-        "left the bar"
+            .is_some(),
+        "back in the bar"
     );
-    game.dial.set(1);
-    game.open_bar();
-    game.click_news();
-    assert!(game.reading());
-    let frame = game.frame();
-    assert!(
-        shows_the_news(&frame, 1),
-        "a new visit: {:?}",
-        texts(&frame)
-    );
+    assert_eq!(game.showing(), Showing::Spaceport);
 }
 
-/// The size of the picture stretched over the 300 x 230 news dialog in
-/// `frame`, told apart by the uploads `game` has made.
+/// The size of the news picture stretched over the 300 x 230 news dialog
+/// in `frame`, either of the game data's, told apart by the uploads `game`
+/// has made.
 fn news_backdrop(game: &Game, frame: &Frame) -> Option<(u32, u32)> {
     let stretched = frame.batches.iter().any(|batch| match batch {
         Batch::Sprites { quads, .. } => quads
@@ -661,23 +577,13 @@ fn news_backdrop(game: &Game, frame: &Frame) -> Option<(u32, u32)> {
 }
 
 #[test]
-fn the_news_shows_over_the_stellar_governments_picture() {
+fn the_news_picture_the_game_data_holds_reaches_the_gpu() {
     let mut game = Game::flying_at(128);
     game.land();
     game.open_bar();
     game.tap(Key::Char('n'));
     let frame = game.frame();
-    assert_eq!(news_backdrop(&game, &frame), Some(FEDERATION_NEWS));
-}
-
-#[test]
-fn an_independent_stellars_news_shows_over_the_default_picture() {
-    let mut game = Game::flying();
-    game.land();
-    game.open_bar();
-    game.tap(Key::Char('n'));
-    let frame = game.frame();
-    assert_eq!(news_backdrop(&game, &frame), Some(DEFAULT_NEWS));
+    assert!(news_backdrop(&game, &frame).is_some());
 }
 
 crate::common::entry_harness!(Game, click, frame);
