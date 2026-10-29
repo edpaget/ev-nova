@@ -4929,4 +4929,33 @@ mod tests {
             assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
         }
     }
+
+    /// The outfitter's buttons take Tab then Space only with the focus
+    /// ring, and its sale alert inherits the ring.
+    #[test]
+    fn tab_then_space_presses_the_focused_button_only_with_the_focus_ring() {
+        let mut ringed = screen();
+        press(&mut ringed, Key::Tab);
+        press(&mut ringed, Key::Space);
+        assert!(ringed.closed(), "by default");
+        let mut off = screen().with_focus_ring(FocusRing::Off);
+        press(&mut off, Key::Tab);
+        press(&mut off, Key::Space);
+        assert!(!off.closed());
+        assert_eq!(off.take_order(), None);
+        assert_eq!(off.dialog().and_then(Dialog::focus), None);
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let [(row, _), ..] = refused_in_the_loop();
+            let mut screen =
+                screen_of(loop_refusing(row, RuleSource::Engine)).with_focus_ring(ring);
+            screen.alert(&rack_alert(OutfitRefusal::NegativeFreeMass, false));
+            press(&mut screen, Key::Tab);
+            press(&mut screen, Key::Space);
+            assert_eq!(
+                screen.alert_dialog().is_none(),
+                ring == FocusRing::Tab,
+                "the alert's Done, {ring:?}"
+            );
+        }
+    }
 }

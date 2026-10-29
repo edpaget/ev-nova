@@ -2343,4 +2343,41 @@ mod tests {
             assert_eq!(screen.take_sounds(), [], "{k:?}");
         }
     }
+
+    /// The bar's buttons take Tab then Space only with the focus ring, and
+    /// the hire screen it opens inherits the ring.
+    #[test]
+    fn tab_then_space_presses_the_focused_button_only_with_the_focus_ring() {
+        let mut ringed = bar();
+        ringed.input(&key(Key::Tab, false));
+        ringed.input(&key(Key::Space, false));
+        assert!(ringed.closed(), "by default");
+        let mut off = bar().with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab, false));
+        off.input(&key(Key::Space, false));
+        assert!(!off.closed());
+        assert_eq!(off.dialog().and_then(Dialog::focus), None);
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = laid_hire_bar().with_focus_ring(ring);
+            screen.open_hire(list(2));
+            assert_eq!(
+                screen
+                    .hire_screen()
+                    .and_then(HireScreen::dialog)
+                    .map(Dialog::focus_ring),
+                Some(ring)
+            );
+            screen.input(&key(Key::Tab, false));
+            let focus = screen
+                .hire_screen()
+                .and_then(HireScreen::dialog)
+                .and_then(Dialog::focus);
+            assert_eq!(focus.is_some(), ring == FocusRing::Tab, "{ring:?}");
+            if ring == FocusRing::Off {
+                screen.input(&key(Key::Space, false));
+                assert!(screen.hire_screen().is_some(), "Space presses nothing");
+                assert_eq!(screen.take_hire(), None);
+            }
+        }
+    }
 }

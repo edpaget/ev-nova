@@ -2037,4 +2037,32 @@ mod tests {
             assert_eq!(screen.take_sounds(), [CLOSED], "{k:?}");
         }
     }
+
+    /// The computer's and the info screen's buttons take Tab then Space
+    /// only with the focus ring; by the original's reading they press
+    /// nothing.
+    #[test]
+    fn tab_then_space_presses_the_focused_button_only_with_the_focus_ring() {
+        let mut ringed = screen();
+        ringed.input(&key(Key::Tab));
+        assert_eq!(ringed.dialog().and_then(Dialog::focus), Some(ACCEPT_ITEM));
+        ringed.input(&key(Key::Space));
+        assert!(ringed.take_accept().is_some(), "Accept, by default");
+        let mut off = screen().with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert!(!off.closed(), "the computer");
+        assert_eq!(off.take_accept(), None);
+        assert_eq!(off.dialog().and_then(Dialog::focus), None);
+        let mut ringed = info_screen();
+        ringed.input(&key(Key::Tab));
+        ringed.input(&key(Key::Space));
+        assert!(ringed.closed(), "the info screen, by default");
+        let mut off = info_screen().with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert!(!off.closed(), "the info screen");
+        assert_eq!(off.take_abort(), None);
+        assert_eq!(off.dialog().and_then(Dialog::focus), None);
+    }
 }

@@ -1204,14 +1204,16 @@ mod tests {
     /// too, maps Space to Done on a keyDown only.
     #[test]
     fn space_closes_the_hire_panel_but_not_its_repeats() {
-        let mut screen = screen();
-        screen.input(&key(INFO_KEY, false));
-        assert!(screen.info_panel().is_some(), "the press that opened it");
-        screen.input(&key(Key::Space, true));
-        assert!(screen.info_panel().is_some(), "a repeat");
-        screen.input(&key(Key::Space, false));
-        assert!(screen.info_panel().is_none());
-        assert!(!screen.closed());
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = screen().with_focus_ring(ring);
+            screen.input(&key(INFO_KEY, false));
+            assert!(screen.info_panel().is_some(), "the press that opened it");
+            screen.input(&key(Key::Space, true));
+            assert!(screen.info_panel().is_some(), "a repeat, {ring:?}");
+            screen.input(&key(Key::Space, false));
+            assert!(screen.info_panel().is_none(), "{ring:?}");
+            assert!(!screen.closed());
+        }
     }
 
     #[test]
@@ -1880,5 +1882,21 @@ mod tests {
         };
         assert_eq!(arrowed(clamped(), 3, &[Key::Down]), (Some(5), true));
         assert_eq!(arrowed(clamped(), 5, &[Key::Up, Key::Up]), (Some(0), true));
+    }
+
+    /// The hire screen's buttons take Tab's focus only with the focus
+    /// ring. Space is its Info key ([`INFO_KEY`]) under both readings, so
+    /// what the ring changes here is Tab's focus.
+    #[test]
+    fn tab_focuses_hire_escort_only_with_the_focus_ring() {
+        let mut ringed = screen();
+        ringed.input(&key(Key::Tab, false));
+        assert_eq!(ringed.dialog().and_then(Dialog::focus), Some(HIRE_ITEM));
+        let mut off = screen().with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab, false));
+        assert_eq!(off.dialog().and_then(Dialog::focus), None);
+        assert!(!off.closed());
+        assert_eq!(off.take_order(), None);
+        assert_eq!(off.take_sounds(), [], "nothing pressed");
     }
 }

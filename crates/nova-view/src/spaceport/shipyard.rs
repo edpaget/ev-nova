@@ -3867,17 +3867,19 @@ mod tests {
     /// on a keyDown only (@0x510f4), so a held Space's repeats do nothing.
     #[test]
     fn space_closes_the_panel_but_not_the_press_that_opened_it_nor_its_repeats() {
-        let mut screen = screen();
-        press(&mut screen, INFO_KEY);
-        assert!(screen.info_panel().is_some(), "the press that opened it");
-        screen.input(&key(Key::Space, true, true));
-        assert!(screen.info_panel().is_some(), "a repeat");
-        screen.input(&key(Key::Space, false, false));
-        assert!(screen.info_panel().is_some(), "a release");
-        press(&mut screen, Key::Space);
-        assert!(screen.info_panel().is_none(), "Space is Done");
-        assert!(!screen.closed());
-        assert_eq!(screen.take_sounds(), [], "silent");
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = screen().with_focus_ring(ring);
+            press(&mut screen, INFO_KEY);
+            assert!(screen.info_panel().is_some(), "the press that opened it");
+            screen.input(&key(Key::Space, true, true));
+            assert!(screen.info_panel().is_some(), "a repeat, {ring:?}");
+            screen.input(&key(Key::Space, false, false));
+            assert!(screen.info_panel().is_some(), "a release, {ring:?}");
+            press(&mut screen, Key::Space);
+            assert!(screen.info_panel().is_none(), "Space is Done, {ring:?}");
+            assert!(!screen.closed());
+            assert_eq!(screen.take_sounds(), [], "silent");
+        }
     }
 
     #[test]

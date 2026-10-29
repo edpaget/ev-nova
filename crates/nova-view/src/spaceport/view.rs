@@ -6446,6 +6446,43 @@ pub(in crate::spaceport) mod tests {
         assert!(broken.player_info().is_none(), "no spaceport, no screen");
     }
 
+    /// The spaceport passes its focus ring to the mission computer and
+    /// the player info screen it opens, down to its Jettison question
+    /// (whose keys `ui::player_info`'s own tests drive).
+    #[test]
+    fn the_computer_and_the_player_info_opened_take_the_spaceports_focus_ring() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut view = informed(missioned()).with_focus_ring(ring);
+            click_item(&mut view, 10);
+            view.open_mission_computer(Ok(offers()));
+            assert_eq!(
+                view.mission_computer()
+                    .and_then(MissionComputerScreen::dialog)
+                    .map(Dialog::focus_ring),
+                Some(ring),
+                "the computer"
+            );
+            view.open_player_info(pilot_info());
+            let at = |view: &SpaceportView, button| {
+                view.player_info()
+                    .and_then(|screen| screen.button_bounds(button))
+                    .expect("laid out")
+                    .center()
+            };
+            let cargo = at(&view, PlayerInfoButton::Tab(Tab::Cargo));
+            click(&mut view, cargo);
+            let jettison = at(&view, PlayerInfoButton::Jettison);
+            click(&mut view, jettison);
+            assert_eq!(
+                view.player_info()
+                    .and_then(InfoScreen::confirm)
+                    .map(Dialog::focus_ring),
+                Some(ring),
+                "the Jettison question"
+            );
+        }
+    }
+
     #[test]
     fn its_jettison_is_taken_through_the_spaceport_once() {
         let mut view = informed(missioned());
