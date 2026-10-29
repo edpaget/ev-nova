@@ -20,7 +20,7 @@
 //! 2. installs from the served `.flatpakref`, and checks the remote's URL
 //!    and the installed commit;
 //! 3. publishes the same bundle again, mirroring the live repo over HTTP,
-//!    GPG-verified, and reports whether the head moved;
+//!    GPG-verified, and checks the head didn't move;
 //! 4. publishes three changed builds (a marker file added to the app), and
 //!    checks `flatpak update` follows the first, and that the branch keeps
 //!    `KEPT_COMMITS` commits after the last;
@@ -467,6 +467,23 @@ fn the_bundle_follows_the_repo(
     }
 }
 
+/// Checks that publishing the same build again left the head at `first`
+/// (`again` is the head after it), pushing a new commit onto `problems`
+/// (I3).
+fn the_identical_build_commits_nothing(first: &str, again: &str, problems: &mut Vec<String>) {
+    eprintln!(
+        "finding: I3: build-commit-from with the head's content {}",
+        if again == first {
+            "commits nothing"
+        } else {
+            "makes a new commit"
+        }
+    );
+    if again != first {
+        problems.push("an identical build made a new commit (I3)".to_owned());
+    }
+}
+
 #[test]
 fn publishes_a_signed_repo_that_installs_updates_and_prunes() {
     let Some(bundle) = env::var_os(VARIABLE)
@@ -530,15 +547,7 @@ fn publishes_a_signed_repo_that_installs_updates_and_prunes() {
     // 3. The same bundle again: mirrored over HTTP, GPG-verified.
     let (live, _) = publisher.publish(&plain, "20261028000002");
     assert_eq!(live, Live::Present, "the second publish mirrors");
-    let again = head(&publisher.repo(), &app);
-    eprintln!(
-        "finding: I3: build-commit-from with the head's content {}",
-        if again == first {
-            "commits nothing"
-        } else {
-            "makes a new commit"
-        }
-    );
+    the_identical_build_commits_nothing(&first, &head(&publisher.repo(), &app), &mut problems);
 
     // 4. Three changed builds.
     let mut bundles = Vec::new();
