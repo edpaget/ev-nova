@@ -54,9 +54,11 @@
 //! clears the next request at another stellar
 //! ([`Standing::granted`](crate::Standing::granted)).
 //!
-//! Left out: the bribe's counter and the domination writes
-//! (`_DoPlanetCommDialog` @0x97112-0x97125, @0x973e1-0x973fe,
-//! @0x978be-0x978d3), rdm:task/planet-domination's.
+//! The planet comm dialog writes the request too (see the `planet_comm`
+//! module): a bribe paid grants it at
+//! [`BRIBE_PERMISSION`](crate::planet_comm::BRIBE_PERMISSION) for the
+//! stellar (`_DoPlanetCommDialog` @0x97112-0x97125), and a Release or a
+//! domination drops it (@0x973e1-0x973fe, @0x978be-0x978d3).
 //!
 //! [`gate_sprite::held_open`](crate::gate_sprite::held_open) reads the
 //! counter for the player's dock hypergate (@0x2e867-0x2e87e).

@@ -128,9 +128,11 @@
 //! Left out of the press:
 //!
 //! - An accepted planet bribe's counter, 0x2ef (`_DoPlanetCommDialog`
-//!   @0x97112-0x97125), domination by Demand Tribute (+0x46 written
-//!   @0x978fa, cleared @0x9740f) and `_DoPlanetCommDialog`'s blessing
-//!   (@0x96c15): rdm:task/planet-domination.
+//!   @0x97112-0x97125), is the planet comm dialog's (`nova_sim::Session`'s
+//!   `planet_comm` module), which reads the blessing as [`cleared`] does
+//!   (@0x96c15). Domination by Demand Tribute (+0x46 written @0x978fa,
+//!   cleared @0x9740f) is on the galaxy overlay; the landing's reading of
+//!   it is rdm:phase/play-feel-4/phase-3-domination-readers's.
 //! - The cloak refusal (@0x66a85-0x66ae9) and the silent press of a
 //!   disabled or dying ship (@0x66aee-0x66b14) are the
 //!   `nova_sim::Session`'s, which refuses them after the press's
@@ -723,10 +725,12 @@ pub fn land_or_select(
 /// `_HandlePlayerDockApproach` for the greeting's fee line
 /// (@0x64d87-0x64d96).
 ///
-/// The engine knows only the always-dominated `Flags2`
+/// It reads only the always-dominated `Flags2`
 /// [`DOMINATED`](crate::market::DOMINATED); domination by Demand Tribute
-/// (the runtime byte) is rdm:task/planet-domination's, and this is the one
-/// reader to switch when it lands.
+/// (the runtime byte) is kept on the galaxy overlay
+/// (`nova_sim::story::OverlaidGalaxy::dominated`), and
+/// rdm:phase/play-feel-4/phase-3-domination-readers switches this reader
+/// to it.
 #[must_use]
 pub fn fee_due(site: &LandingSite) -> Option<i64> {
     (site.fee > 0 && site.flags2 & crate::market::DOMINATED == 0).then_some(i64::from(site.fee))
