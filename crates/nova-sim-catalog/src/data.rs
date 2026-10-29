@@ -44,8 +44,8 @@ use crate::catalog::{
     MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
     Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
     ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
-    SystemReinforcements, SystemTraffic, SystemVisibility, TextGraphics, TextMovies,
+    StartError, StellarId, StellarLife, StellarMark, StellarScripts, StockWeapon, StringPatch,
+    SystemId, SystemReinforcements, SystemTraffic, SystemVisibility, TextGraphics, TextMovies,
     TrafficCatalog, WeaponId, WeaponRecord, explosion_sound, loaded_mod_val,
 };
 use crate::geometry::Vec2;
@@ -446,6 +446,19 @@ impl PilotCatalog for GameData {
                     explosion: Explosion::decode(stellar.explod_type),
                     on_destroy: self.set_expr(stellar.on_destroy.as_str()).into(),
                     on_regen: self.set_expr(stellar.on_regen.as_str()).into(),
+                })
+            })
+            .collect()
+    }
+
+    fn stellar_scripts(&self) -> Vec<StellarScripts> {
+        self.records::<Stellar>()
+            .filter_map(|(id, stellar)| {
+                let stellar = stellar.ok()?.record;
+                Some(StellarScripts {
+                    id: StellarId(id),
+                    on_dominate: self.set_expr(stellar.on_dominate.as_str()).into(),
+                    on_release: self.set_expr(stellar.on_release.as_str()).into(),
                 })
             })
             .collect()
@@ -3963,6 +3976,44 @@ mod tests {
             "parsed once"
         );
         assert_eq!(store(&[]).stellar_lives(), []);
+    }
+
+    #[test]
+    fn stellar_scripts_list_every_readable_spöbs_on_dominate_and_on_release() {
+        let mut ruled = stellar(0, 0, 0, 0, 0);
+        ruled[0x36..0x3A].copy_from_slice(b"b100");
+        ruled[0x135..0x13A].copy_from_slice(b"!b100");
+        let data = store(&[
+            (Stellar::TYPE, 130, stellar(0, 0, 0, 0, 0)),
+            (Stellar::TYPE, 128, ruled),
+            (Stellar::TYPE, 129, short(stellar(0, 0, 0, 1, 0))),
+        ]);
+        let scripts = data.stellar_scripts();
+        assert_eq!(
+            scripts.iter().map(|script| script.id).collect::<Vec<_>>(),
+            [StellarId(128), StellarId(130)],
+            "the unreadable 129 left out"
+        );
+        assert_eq!(
+            scripts[0].on_dominate.tree().map(|expr| expr.ops.len()),
+            Some(1),
+            "b100"
+        );
+        assert_eq!(
+            scripts[0].on_release.tree().map(|expr| expr.ops.len()),
+            Some(1),
+            "!b100"
+        );
+        assert_eq!(scripts[1].on_dominate, Script::default(), "blank");
+        assert_eq!(scripts[1].on_release, Script::default(), "blank");
+        assert!(
+            shared_script(
+                &scripts[0].on_dominate,
+                &data.stellar_scripts()[0].on_dominate
+            ),
+            "parsed once"
+        );
+        assert_eq!(store(&[]).stellar_scripts(), []);
     }
 
     #[test]

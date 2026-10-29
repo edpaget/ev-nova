@@ -372,6 +372,19 @@ pub struct StellarLife {
     pub on_regen: Script,
 }
 
+/// What the planet comm dialog runs of a stellar's `spöb` as Demand
+/// Tribute dominates it and Release releases it (`_DoPlanetCommDialog`
+/// @0x97966, @0x97527 in the `EV Nova` executable).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StellarScripts {
+    /// The `spöb`'s ID.
+    pub id: StellarId,
+    /// Its `OnDominate` (stellar +0x68).
+    pub on_dominate: Script,
+    /// Its `OnRelease` (stellar +0x167).
+    pub on_release: Script,
+}
+
 /// An outfit, raw from its `oütf`: the `nova_sim::outfitter`
 /// rules decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2032,6 +2045,12 @@ pub trait PilotCatalog {
     /// Every `spöb` that can be read, by ascending ID, with what its
     /// destruction and regeneration read.
     fn stellar_lives(&self) -> Vec<StellarLife>;
+    /// Every `spöb` that can be read, by ascending ID, with the scripts the
+    /// planet comm dialog runs as it dominates and releases it (see the
+    /// `nova_sim::planet_comm` module). None unless overridden.
+    fn stellar_scripts(&self) -> Vec<StellarScripts> {
+        Vec::new()
+    }
     /// The frame width and height of graphic type 0's sheet (`spïn`
     /// 1000), or `None` when it cannot be read: the frames the original's
     /// rebuild gives a sprite slot it left empty.
