@@ -1131,13 +1131,13 @@ impl Npc {
     /// waiting in its gate never, see [`cloak::visible`](crate::cloak::visible)).
     ///
     /// It is no threat when it is not intact (inactive, @0x81b82, or
-    /// `_IsDisabled`, @0x81b92), when the player leads it (+0x9a == 0,
+    /// `_IsDisabled`, @0x81b92, which a stellar's defence ship breaking up
+    /// is not, @0x2d6f), when the player leads it (+0x9a == 0,
     /// @0x81b9f), when it has no target (+0x70 == -1, @0x81bad), or when it
     /// is unseen. Otherwise it is a threat for any of:
     ///
-    /// - **A stellar defender** (+0x8c != -1, @0x81bd3): not modelled, as
-    ///   the engine has no defence ships; rdm:task/planet-domination owns
-    ///   them.
+    /// - **A stellar defender** ([`Npc::defends`], +0x8c != -1, @0x81bd3):
+    ///   always, whatever its target and goal.
     /// - **The target clause**: it [threatens the player or a ship the
     ///   player leads](Npc::threatens_player_or_led) by [`Npc::fought`],
     ///   or its target ([`Npc::target`], the hit's, which
@@ -1184,7 +1184,6 @@ impl Npc {
     ///   lead's own (`_AIFightThreatToParent` @0x81e83-0x81e9d,
     ///   [`escort::fight_threats`](crate::escort::fight_threats)).
     ///
-    /// The stellar-defender clause above is planet-domination's.
     #[must_use]
     pub fn threatens_player_extended(&self, npcs: &[Npc], seen: bool) -> bool {
         let led = |id: NpcId| npcs.iter().any(|n| n.id == id && n.escorts_player());
@@ -1194,8 +1193,16 @@ impl Npc {
             None => false,
         };
         let has_target = self.target.is_some() || self.goal.quarry().is_some();
-        if !seen || self.condition != Condition::Intact || self.escorts_player() || !has_target {
+        let disabled = match self.condition {
+            Condition::Intact => false,
+            Condition::Dying { .. } => self.defends.is_none(),
+            Condition::Disabled | Condition::Destroyed => true,
+        };
+        if !seen || disabled || self.escorts_player() || !has_target {
             return false;
+        }
+        if self.defends.is_some() {
+            return true;
         }
         let in_threat_goal = !self.goal.spares_player_threat();
         let by_target = self.threatens_player_or_led(led)
@@ -2535,6 +2542,43 @@ mod tests {
             ..plain(1)
         };
         assert!(!elsewhere.threatens_player_extended(&[], true));
+    }
+
+    #[test]
+    fn a_seen_stellar_defender_with_a_target_threatens_the_player_whatever_it_fights() {
+        let guard = Npc {
+            defends: Some(StellarId(128)),
+            target: Some(ShipRef::Npc(NpcId(5))),
+            goal: Goal::Land(StellarId(128)),
+            ..plain(1)
+        };
+        assert!(guard.threatens_player_extended(&[], true), "@0x81bd3");
+        assert!(!guard.threatens_player_extended(&[], false), "unseen");
+        let idle = Npc {
+            target: None,
+            goal: Goal::Idle,
+            ..guard.clone()
+        };
+        assert!(
+            !idle.threatens_player_extended(&[], true),
+            "no target (@0x81bad)"
+        );
+        let breaking_up = Npc {
+            condition: Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+            ..guard.clone()
+        };
+        assert!(
+            breaking_up.threatens_player_extended(&[], true),
+            "`_IsDisabled` never holds for a defender by its armour"
+        );
+        let held = Npc {
+            condition: Condition::Disabled,
+            ..guard
+        };
+        assert!(!held.threatens_player_extended(&[], true));
     }
 
     #[test]

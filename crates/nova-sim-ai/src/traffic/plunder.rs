@@ -412,6 +412,8 @@ fn plunder_npc(
     ship.former = None;
     ship.escort = None;
     ship.leader = Some(pirate);
+    // It defends no stellar now (+0x8c = -1, @0x8c791).
+    ship.defends = None;
     ship.goal = Goal::Idle;
     ship.pursuit = crate::ai::pursuit::Pursuit::default();
     ship.docking = None;
@@ -693,6 +695,24 @@ mod tests {
             },
         });
         ship
+    }
+
+    #[test]
+    fn a_defence_ship_a_pirate_takes_into_its_fleet_defends_no_stellar() {
+        let mut taken = former();
+        taken.defends = Some(crate::catalog::StellarId(128));
+        let mut docked = pirate(1000);
+        docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
+        docked.target = Some(ShipRef::Npc(VICTIM));
+        docked.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        taken.boarded = true;
+        let mut traffic = traffic_of(vec![docked, taken]);
+        tick(&mut traffic, 0);
+        assert_eq!(ship(&traffic, VICTIM).leader, Some(PIRATE));
+        assert_eq!(ship(&traffic, VICTIM).defends, None, "@0x8c791");
     }
 
     /// The traffic once a docked pirate has taken a former escort into

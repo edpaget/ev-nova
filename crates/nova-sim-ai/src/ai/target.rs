@@ -81,7 +81,8 @@
 //!    @0x8a140 for the player). The player is one unless
 //!    `Flags` 0x0040 (@0x8a123), S is G and L is above none
 //!    (@0x8a189-0x8a19a), or G blesses it (@0x8a1ae); `Flags` 0x0004 isn't
-//!    read. An NPC is one when it is not one the ship leads (@0x8a204), not
+//!    read. An NPC is one when it is not one the ship leads (@0x8a204), no
+//!    stellar's defence ship ([`Npc::defends`], @0x8a21e), not
 //!    allied with it (@0x8a250), and an enemy (`_IsShipMyEnemy`
 //!    @0x8a270, [`Governments::npc_enemies`](crate::govt::Governments::npc_enemies)).
 //!    A pick of the player turns the ship on it (@0x8a40e). The step
@@ -168,8 +169,7 @@
 //! own-fleet sparing is also wider than the original's fleet drops
 //! (@0x8e2e9-0x8e399), which need the attacker to have a leader.
 //!
-//! **Left out.** Stellar defenders (+0x8c,
-//! @0x8a21e) are rdm:task/planet-domination's, and the nag ship
+//! **Left out.** The nag ship
 //! (+0xc8d0 = 0x3ff, @0x8a228) has no engine counterpart. The same-system
 //! test (@0x8a214) and the +0x88 ≤ 4 gate of step 6 (@0x8a41e) always
 //! hold here. The original's 16-bit strengths and 32-bit distances are
@@ -247,6 +247,19 @@ pub fn hostile_to_player(npc: &Npc, around: &Surroundings) -> bool {
     } else {
         govts.flag(own, NOSY) && record < -NOSY_TOLERANCE * tolerance
     }
+}
+
+/// Whether a xenophobic `npc` takes `other` as an NPC candidate in step 5
+/// (see the module docs, @0x8a1c4-0x8a270): intact, not one it leads,
+/// no stellar's defence ship (@0x8a21e), not the escape pod, not allied
+/// with it, and an enemy.
+fn xenophobes_enemy(npc: &Npc, other: &Npc, govts: &crate::govt::Governments) -> bool {
+    other.condition == Condition::Intact
+        && other.leader != Some(npc.id)
+        && other.defends.is_none()
+        && other.ship != ESCAPE_POD_SHIP
+        && !govts.allies(npc.govt, other.govt)
+        && govts.npc_enemies(npc.govt, other.govt)
 }
 
 /// Whether a xenophobic `npc` takes the player as a candidate among
@@ -472,13 +485,7 @@ fn pick_by_steps(
     let player = ShipRef::Player;
     let (mut player_candidate, xenophobe_pick) = if govts.xenophobic(npc.govt) {
         let enemies = others()
-            .filter(|other| {
-                other.condition == Condition::Intact
-                    && other.leader != Some(npc.id)
-                    && other.ship != ESCAPE_POD_SHIP
-                    && !govts.allies(npc.govt, other.govt)
-                    && govts.npc_enemies(npc.govt, other.govt)
-            })
+            .filter(|other| xenophobes_enemy(npc, other, govts))
             .map(|other| ShipRef::Npc(other.id));
         let hunts = xenophobe_hunts_player(npc, around) && !npc.spared;
         let candidates = within_odds(
@@ -2460,6 +2467,22 @@ mod tests {
             xenophobe_among(&more, far, |p| p, none).map(|pick| pick.ship),
             Some(n(5))
         );
+    }
+
+    #[test]
+    fn a_xenophobes_step_5_never_takes_a_stellars_defence_ship() {
+        let none = &unmarked();
+        let mut guard = ship(2, ENEMY, 50.0, 0.0);
+        guard.defends = Some(crate::catalog::StellarId(128));
+        let pick = xenophobe_among(&[guard.clone()], (0.0, -2000.0), |p| p, none).expect("a pick");
+        assert_eq!(pick.ship, n(2), "step 7's nearest, which reads no +0x8c");
+        assert!(
+            pick.turns_on_player,
+            "step 5 passed the defender over (@0x8a21e) and took the player"
+        );
+        guard.defends = None;
+        let pick = xenophobe_among(&[guard], (0.0, -2000.0), |p| p, none).expect("a pick");
+        assert!(!pick.turns_on_player, "step 5 took the nearer enemy");
     }
 
     #[test]

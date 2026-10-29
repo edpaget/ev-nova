@@ -16,7 +16,8 @@
 //! defended stellar +0x8c = -1, its provocation +0x96 = 0, goal and
 //! substate 0. Here:
 //!
-//! - [`Npc::target`] none, [`Npc::travel_set`] cleared, [`Npc::provoked`]
+//! - [`Npc::target`] none, [`Npc::travel_set`] cleared, [`Npc::defends`]
+//!   none (a defence ship held disabled stops defending), [`Npc::provoked`]
 //!   none, [`Goal::Idle`], and its substate's state, [`Npc::pursuit`] and
 //!   [`Npc::docking`], none;
 //! - by the engine's reading of
@@ -30,8 +31,7 @@
 //!   think, as the engine has no AI type 6 for it to keep meanwhile (rdm:phase/escort-fleet-fidelity-followups/phase-4-led-ships-read-as-ai-type-6);
 //! - by the other reading it keeps its leader, as the port had it.
 //!
-//! +0x8c isn't modelled: the engine has no defence ships
-//! (rdm:task/planet-domination). The reset precedes goal 0x15's skip
+//! The reset precedes goal 0x15's skip
 //! (@0x8ff18), so a ship disabled in its gate is reset too; which of its
 //! goals that ship keeps is
 //! rdm:phase/escort-fleet-fidelity-followups/phase-9-left-out-of-leader-succession's.
@@ -92,6 +92,7 @@ fn resets(npc: &Npc) -> bool {
 fn reset(npc: &mut Npc, reading: RuleSource) {
     npc.target = None;
     npc.travel_set = false;
+    npc.defends = None;
     npc.provoked = 0.0;
     npc.goal = Goal::Idle;
     npc.pursuit = Pursuit::default();
@@ -196,6 +197,17 @@ mod tests {
             && npc.goal == Goal::Idle
             && npc.pursuit == Pursuit::default()
             && npc.docking.is_none()
+    }
+
+    #[test]
+    fn a_disabled_defence_ship_stops_defending_its_stellar() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut guard = npc(0, ShipStats::new(FAST, &[]));
+        guard.condition = Condition::Disabled;
+        guard.defends = Some(crate::catalog::StellarId(128));
+        let id = traffic.add_npc(guard);
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        assert_eq!(of(&traffic, id).defends, None, "+0x8c = -1 (@0x8fef8)");
     }
 
     #[test]

@@ -102,9 +102,9 @@
 //! **Left out**, owned elsewhere (see the phase bodies of
 //! rdm:phase/combat-ai-fidelity/phase-9-pirates-disable-and-board,
 //! rdm:phase/combat-ai-fidelity/phase-12-idle-block-and-patrols and
-//! rdm:phase/combat-ai-fidelity/phase-20-left-out-of-phase-12): the
-//! plunder's +0x8c write (-1, @0x8c791) is the defence ships', which
-//! rdm:task/planet-domination owns.
+//! rdm:phase/combat-ai-fidelity/phase-20-left-out-of-phase-12): none. The
+//! plunder's +0x8c write (-1, @0x8c791), the ship it takes into its fleet
+//! defending no stellar, is the take's ([`plunder`](crate::traffic::plunder)).
 
 use crate::ai::fire::{AmmoLeft, DOGFIGHT_BOX, FireRules, ammo_left};
 use crate::ai::odds::{hopeless_chase, state4_attack};
