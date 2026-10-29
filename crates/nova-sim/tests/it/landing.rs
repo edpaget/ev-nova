@@ -219,6 +219,8 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         gravity: 0,
         fee: 0,
         animation: nova_sim::catalog::SiteAnimation::default(),
+        defense_dude: None,
+        def_count: 0,
     }
 }
 

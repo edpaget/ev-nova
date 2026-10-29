@@ -183,6 +183,15 @@ pub struct LandingSite {
     /// Its animation fields and frame counts, which a hypergate's sprite
     /// reads (`nova_sim::gate_sprite`).
     pub animation: SiteAnimation,
+    /// Its `DefenseDude`: the `düde` its defence ships are drawn from, or
+    /// `None` for an ID below 128, as `_LoadObjectData` keeps runtime
+    /// +0x464 at -1 then (@0x77603, @0x7770c-0x77725). See
+    /// `nova_sim_ai::traffic::stellar_defence`.
+    pub defense_dude: Option<DudeId>,
+    /// Its `DefCount`, raw (record +0x1e into runtime +0x468, @0x775eb):
+    /// the wave size and the count of defence ships it starts with, as
+    /// `nova_sim_ai::traffic::stellar_defence` decodes them.
+    pub def_count: i16,
 }
 
 /// A stellar's animation fields, raw from its `spöb`, and the frame counts
@@ -2731,6 +2740,8 @@ mod tests {
                 gravity: 0,
                 fee: 0,
                 animation: crate::catalog::SiteAnimation::default(),
+                defense_dude: None,
+                def_count: 0,
             }]
         }
 

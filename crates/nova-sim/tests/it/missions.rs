@@ -80,6 +80,8 @@ fn planet(id: i16, x: f32) -> LandingSite {
         gravity: 0,
         fee: 0,
         animation: nova_sim::catalog::SiteAnimation::default(),
+        defense_dude: None,
+        def_count: 0,
     }
 }
 

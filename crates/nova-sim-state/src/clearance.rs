@@ -252,6 +252,8 @@ mod tests {
             gravity: 0,
             fee: 0,
             animation: crate::catalog::SiteAnimation::default(),
+            defense_dude: None,
+            def_count: 0,
         }
     }
 

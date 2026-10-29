@@ -426,6 +426,8 @@ pub(in crate::flight) fn site(id: i16, (x, y): (f32, f32), flags: u32) -> Landin
         gravity: 0,
         fee: 0,
         animation: nova_sim::catalog::SiteAnimation::default(),
+        defense_dude: None,
+        def_count: 0,
     }
 }
 

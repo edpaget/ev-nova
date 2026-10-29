@@ -287,6 +287,8 @@ impl PilotCatalog for GameData {
                         dead_frames: dead_frame_size
                             .map_or(0, |_| frame_count(self, stellar.dead_type)),
                     },
+                    defense_dude: stellar.defense_dude.filter(|dude| dude.0 >= 128),
+                    def_count: stellar.def_count,
                 })
             })
             .collect()
@@ -2711,6 +2713,8 @@ mod tests {
                         dead_frames: 1,
                         ..SiteAnimation::default()
                     },
+                    defense_dude: None,
+                    def_count: 0,
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -2736,8 +2740,47 @@ mod tests {
                         dead_frames: 1,
                         ..SiteAnimation::default()
                     },
+                    defense_dude: None,
+                    def_count: 0,
                 },
             ]
+        );
+    }
+
+    /// `bytes`, a `spöb`, with this `DefenseDude` and `DefCount`.
+    fn defended(mut bytes: Vec<u8>, dude: i16, count: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x1C, &[dude, count]);
+        bytes
+    }
+
+    #[test]
+    fn a_landing_site_reads_its_defence_dude_and_its_raw_def_count() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128, 129, 130])),
+            (
+                Stellar::TYPE,
+                128,
+                defended(stellar(0, 0, 0, 1, 0), 140, 1082),
+            ),
+            (Stellar::TYPE, 129, defended(stellar(0, 0, 0, 1, 0), -1, 5)),
+            (
+                Stellar::TYPE,
+                130,
+                defended(stellar(0, 0, 0, 1, 0), 127, -3),
+            ),
+        ]);
+        assert_eq!(
+            data.landing_sites(SystemId(130))
+                .iter()
+                .map(|site| (site.id.0, site.defense_dude, site.def_count))
+                .collect::<Vec<_>>(),
+            [
+                (128, Some(DudeId(140)), 1082),
+                (129, None, 5),
+                (130, None, -3),
+            ],
+            "a `DefenseDude` below 128 is none, as `_LoadObjectData` keeps -1 \
+             (@0x7770c-0x77725); `DefCount` raw"
         );
     }
 
