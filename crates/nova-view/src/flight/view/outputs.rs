@@ -114,9 +114,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::relay`]).
     ///
     /// Every write to the message slot goes through this, `relay`,
-    /// [`FlightView::clear_message`], [`FlightView::acknowledge_message`]
-    /// or [`FlightView::blank_message`], so the flight's line stays in
-    /// step with the slot.
+    /// [`FlightView::clear_message`], [`FlightView::cut_message`],
+    /// [`FlightView::acknowledge_message`] or
+    /// [`FlightView::blank_message`], so the flight's line stays in step
+    /// with the slot.
     pub(super) fn say_for(&mut self, text: impl Into<String>, ticks: u16) {
         self.relay(text, ticks);
         self.send(FlightCommand::CommShown(ticks));
@@ -135,6 +136,24 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.message = None;
             self.send(FlightCommand::CommShown(1));
         }
+    }
+
+    /// Cuts what the message line shows to `ticks` from now, the
+    /// flight's line too ([`FlightCommand::CommShown`]): the frame-rate
+    /// key's writes of `_commCount` (`_HandlePlayer` @0x6e473-0x6e4b3),
+    /// 0 as it turns the readout on, which empties the line at once, and
+    /// 1 as it turns it off, which keeps the text for that tick.
+    pub(super) fn cut_message(&mut self, ticks: u16) {
+        let now = crate::time::ticks(self.elapsed);
+        match &mut self.message {
+            // A line already run out stays gone.
+            Some(message) if ticks > 0 && now - message.said_at < u128::from(message.ticks) => {
+                message.said_at = now;
+                message.ticks = ticks;
+            }
+            _ => self.message = None,
+        }
+        self.send(FlightCommand::CommShown(ticks));
     }
 
     /// Return (`ackComm`): clears the message line, and the flight's for

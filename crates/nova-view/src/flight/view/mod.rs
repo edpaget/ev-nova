@@ -512,6 +512,18 @@
 //!   [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
 //!   take-off or a gate's exit (`_frameCounter`, @0x7045e). A disabled
 //!   ship takes it.
+//! - F12 ([`FRAME_RATE_KEY`], a press, not its repeats) toggles the
+//!   frame-rate readout ([`frame_rate`](crate::flight::frame_rate)), as
+//!   `_HandlePlayer` does (@0x6e454-0x6e4bd), silently, during a jump
+//!   too and while the ship is disabled or breaks up; once it has
+//!   exploded, and in the escape pod, it does nothing. Turned on, the
+//!   message line is freed at once; turned off, it shows an empty line
+//!   on the next tick. Each frame drawn outside the map and the port is
+//!   counted, the death's frames included, and while it is shown the
+//!   message line says "Calculating FPS..." on the next frame, then the
+//!   frames a second every 2 s, as `_PlayGame` says them
+//!   (@0x45bcd-0x45d57). The app coming back to the front says
+//!   "Calculating FPS..." again ([`Screen::focus_gained`](crate::Screen::focus_gained)).
 //! - The player's escorts fly beside it (see [`Session`]), their ship
 //!   types' sprite sheets read with the traffic's. F, D, V and C (presses)
 //!   command them ([`Session::command_escorts`]): attack the player's
@@ -685,6 +697,7 @@ mod departure;
 mod dialog_map;
 mod docked;
 mod drawing;
+mod frame_rate;
 mod gates;
 mod hail;
 mod hyperspace;
@@ -867,6 +880,13 @@ pub const SELF_DESTRUCT_KEY: Key = Key::Char('-');
 /// it cloaks or uncloaks once a hold, with no Command
 /// (`_HandlePlayer` @0x705b7; see the session's `player_cloak`).
 pub const CLOAK_KEY: Key = Key::Char('u');
+/// The frame-rate key: the original's default for key-preference slot
+/// 0x68 (`framerateKey`), F12, Mac keycode 0x6f, which `_loadKeys` falls
+/// back to when the preferences hold none (@0xce6a1-0xce6c4). A press, no
+/// modifier read, toggles the frame-rate readout (`_HandlePlayer`
+/// @0x6e454-0x6e4bd), during a jump too; see
+/// [`frame_rate`](crate::flight::frame_rate).
+pub const FRAME_RATE_KEY: Key = Key::Function(12);
 /// The escorts' attack key: the original's default (`Keys.nib`'s
 /// `escortCmdKey0`, "Attack Target").
 pub const ESCORT_ATTACK_KEY: Key = Key::Char('f');
@@ -1433,6 +1453,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// each session it flies before its steps. Never let go with the
     /// flight keys.
     double_time: bool,
+    /// The frame-rate readout's meter: whether it is shown, which
+    /// outlives the flight as double time does, and its count and clock.
+    frame_rate: crate::flight::frame_rate::FrameRate,
     /// What the player's engine glow's flicker rolls on: seed 1.
     glow_rolls: HashedRolls,
     /// Each NPC ship type's sheet, or why it cannot be shown, read once.

@@ -435,8 +435,9 @@ fn pixel(list: &mut DrawList, x: i32, y: i32, color: Color) {
 }
 
 /// The face flight messages are drawn in. `_DisplayComm` (@0x90201) is
-/// passed font 0, the system font, by every flight caller but the FPS
-/// readout; the game bundles `Fonts/Charcoal.ttf` to stand in for the
+/// passed font 0, the system font, by every flight caller, the FPS
+/// readout's included (font 0, 12 pt, white, @0x45cfa-0x45d23); the game
+/// bundles `Fonts/Charcoal.ttf` to stand in for the
 /// classic Mac OS system font, and the renderer has no Lucida Grande, so
 /// Charcoal it is.
 pub const MESSAGE_FONT: Font = Font::Charcoal;

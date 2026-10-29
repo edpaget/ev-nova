@@ -468,6 +468,18 @@ fn the_self_destructs_lines_read_their_stock_strings() {
     );
 }
 
+/// The frame-rate readout's lines are built from `STR#` 2002 #282 and
+/// #283, as the stock strings read.
+#[test]
+fn the_frame_rate_readouts_lines_read_their_stock_strings() {
+    use nova_view::flight::frame_rate::{CALCULATING_FPS, FPS};
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!([&strings[281], &strings[282]], [CALCULATING_FPS, FPS]);
+}
+
 /// A disabled player's jump collapse says `STR#` 2002 #35, as the stock
 /// string reads.
 #[test]

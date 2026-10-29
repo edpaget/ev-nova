@@ -95,6 +95,7 @@ mod faked_travel;
 mod faked_wording;
 mod faked_world;
 mod flying;
+mod frame_rate;
 mod frames;
 mod hyperspace;
 mod kept_frame;

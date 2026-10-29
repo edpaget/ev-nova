@@ -17,9 +17,9 @@ use crate::{
 };
 
 use super::{
-    BOARD_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
-    LAND_KEY, MAP_KEY, NEAREST_KEY, SELECT_KEY, TARGET_KEY, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY,
-    ZOOM_OUT_KEY,
+    BOARD_KEY, FRAME_RATE_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY,
+    JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, NEAREST_KEY, SELECT_KEY, TARGET_KEY, ZOOM_IN_KEY,
+    ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY,
 };
 
 impl<
@@ -119,6 +119,13 @@ impl<
         self.map_key_held = false;
     }
 
+    /// The frame-rate readout starts afresh, "Calculating FPS..." on the
+    /// next frame while it is shown, as `_SwitchedIn` zeroes its counters
+    /// (@0x513cc-0x513dc).
+    fn focus_gained(&mut self) {
+        self.switched_in();
+    }
+
     /// The session's sounds (thrust, landing, taking off and jumping),
     /// then the interface's (the escort menu's, the floating map's zooms,
     /// the player info refused, the course map's beeps), then the fight's.
@@ -162,6 +169,7 @@ impl<
     /// the catch-up, the steps and each command fill it where they change
     /// the flight.
     fn tick_then(&mut self, dt: Duration) {
+        self.elapse_frame_rate(dt);
         self.catch_up();
         self.fade_frame(dt);
         if self.map_open {
@@ -170,6 +178,9 @@ impl<
             return;
         }
         if self.death_frame(dt) {
+            // `_PlayGame` goes on counting and showing while the player
+            // is dead, the fade to black included.
+            self.frame_rate_frame();
             return;
         }
         self.step_stellars(dt);
@@ -177,6 +188,9 @@ impl<
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
         self.run_steps(steps);
+        // After the lines the steps relayed, as `_PlayGame`'s readout
+        // comes after `_DoPlayGameWork`.
+        self.frame_rate_frame();
         self.update_escort_menu(steps);
         self.alpha = alpha;
         self.step_cursor(steps);
@@ -262,6 +276,7 @@ impl<
             }
             Some(JETTISON_KEY) => self.jettison(),
             Some(MISSION_INFO_KEY) => self.ask_mission_info(),
+            Some(FRAME_RATE_KEY) => self.toggle_frame_rate(),
             Some(PLAYER_INFO_KEY) => return self.ask_player_info(),
             Some(key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY)) => self.hyperspace_key(key),
             Some(key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY)) => {
