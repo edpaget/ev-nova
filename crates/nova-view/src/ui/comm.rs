@@ -6,9 +6,14 @@
 //! the `EV Nova` executable).
 //!
 //! **The comm dialog** shows a [`HailView`]: the ship's reply in item 10,
-//! its picture (`PICT` 5000 + its ID - 128) in item 11, and in item 12
-//! "Class: <ship> (<government>)" (`STR#` 2002 #195), all in Geneva 9
-//! ([`TEXT_SIZE`]). Below the class, on the baseline 40 pixels under
+//! its picture (`PICT` 5000 + its ID - 128) in item 11, all in Geneva 9
+//! ([`TEXT_SIZE`]). Item 12's class line (`_CommDialogUpdate`
+//! @0x90505-0x905f0) is unwrapped runs: "Class:" (`STR#` 2002 #195) in
+//! grey at the item's left, on the baseline 12 pixels under its top, the
+//! ship's name in white 35 pixels right of the left on the same baseline,
+//! and, when its government has a name, "(<government>)" in white below
+//! the name, on the baseline 25 pixels under the top. Below the class, on
+//! the baseline 40 pixels under
 //! item 12's top, the status line (`_CommDialogUpdate` @0x905f5-0x90704)
 //! is two runs: "Status:" (#196) in grey at the item's left, then the
 //! value. For a ship the player leads it is "Hired Escort" (#166) or
@@ -103,15 +108,21 @@ pub const HOSTILE_COLOR: Color = Color::rgba(0xFF, 0x00, 0x00, 255);
 /// (0, 0xFFFF, 0), which `_CommDialogUpdate` sets with `RGBForeColor`
 /// (@0x906ce).
 pub const ESCORT_COLOR: Color = Color::rgba(0x00, 0xFF, 0x00, 255);
-/// The colour of the "Status:" label: `_rgbMedGrey` (0x8000 in each
-/// channel), which `_CommDialogUpdate` sets with `RGBForeColor`
-/// (@0x9060d).
+/// The colour of the "Class:" and "Status:" labels: `_rgbMedGrey`
+/// (0x8000 in each channel), which `_CommDialogUpdate` sets with
+/// `RGBForeColor` (@0x90532 and @0x9060d).
 pub const LABEL_COLOR: Color = Color::rgba(128, 128, 128, 255);
+/// How far below item 12's top the class line's baseline stands: 0x0c
+/// (@0x90532-0x905a9).
+pub const CLASS_BASELINE: f32 = 12.0;
+/// How far below item 12's top the government's baseline stands: 0x19
+/// (@0x905ae-0x905f0).
+pub const GOVT_BASELINE: f32 = 25.0;
 /// How far below item 12's top the status line's baseline stands: 0x28
 /// (@0x905f9).
 pub const STATUS_BASELINE: f32 = 40.0;
-/// How far right of item 12's left an escort's status stands: 0x23
-/// (@0x906be).
+/// How far right of item 12's left the ship's name, its government and an
+/// escort's status stand: 0x23 (@0x9055e and @0x906be).
 pub const VALUE_COLUMN: f32 = 35.0;
 /// What `_CommDialogUpdate` draws between "Status:" and "Hostile": the
 /// Pascal string at 0xd97c7, two spaces (@0x90642), in the label's grey,
@@ -187,14 +198,17 @@ pub fn price_text(price: i64, pay_me: bool) -> String {
     format!("{who} {} credits.", grouped(price))
 }
 
-/// Item 12's class line for `view`: "Class: <ship> (<government>)", or
-/// the ship alone for an independent.
+/// The government line under item 12's class for `view`: "(<government>)",
+/// or `None` for an independent or a government with an empty name (the
+/// original tests the name's length, @0x905ae). The original draws "(",
+/// the name and ")" as three runs on; one run is the same, as text
+/// advances are whole pixels and the pen runs on.
 #[must_use]
-pub fn class_text(view: &HailView) -> String {
-    match &view.govt_name {
-        Some(govt) => format!("{CLASS_LABEL} {} ({govt})", view.comm_name),
-        None => format!("{CLASS_LABEL} {}", view.comm_name),
-    }
+pub fn government_text(view: &HailView) -> Option<String> {
+    view.govt_name
+        .as_deref()
+        .filter(|govt| !govt.is_empty())
+        .map(|govt| format!("({govt})"))
 }
 
 /// Where a status line's value stands on its baseline.
@@ -493,7 +507,6 @@ fn layout(
     let mut roles = vec![
         (CLOSE_ITEM, Role::Button(CLOSE_CHANNEL.to_owned())),
         (REPLY_ITEM, reply_role(view.reply.clone())),
-        (CLASS_ITEM, text_role(class_text(view))),
     ];
     let mut buttons = [CLOSE_ITEM].to_vec();
     for (place, option) in view.options.iter().enumerate() {
@@ -552,6 +565,35 @@ fn comm_template() -> DialogTemplate {
 }
 
 impl CommDialog {
+    /// The class line in item 12 at `at`, as `_CommDialogUpdate` draws it
+    /// (@0x90505-0x905f0): "Class:" in grey at its left and the ship's
+    /// name in white at [`VALUE_COLUMN`], on the baseline
+    /// [`CLASS_BASELINE`] below its top, then its government
+    /// ([`government_text`]) in white at [`VALUE_COLUMN`] on the baseline
+    /// [`GOVT_BASELINE`], all unwrapped.
+    fn draw_class(&self, list: &mut DrawList, at: Bounds) {
+        let top = at.min.y + CLASS_BASELINE - TEXT_SIZE;
+        let value = at.min.x + VALUE_COLUMN;
+        list.text(
+            CLASS_LABEL,
+            Point::new(at.min.x, top),
+            TEXT_SIZE,
+            None,
+            LABEL_COLOR,
+        );
+        list.text(
+            &self.view.comm_name,
+            Point::new(value, top),
+            TEXT_SIZE,
+            None,
+            TEXT_COLOR,
+        );
+        if let Some(govt) = government_text(&self.view) {
+            let top = at.min.y + GOVT_BASELINE - TEXT_SIZE;
+            list.text(&govt, Point::new(value, top), TEXT_SIZE, None, TEXT_COLOR);
+        }
+    }
+
     /// The status line ([`status_line`]) in item 12 at `at`, as
     /// `_CommDialogUpdate` draws it (@0x905f5-0x90704): on the baseline
     /// [`STATUS_BASELINE`] below the item's top, "Status:" (`STR#` 2002
@@ -633,8 +675,9 @@ impl Screen for CommDialog {
     fn tick(&mut self, _dt: Duration) {}
 
     /// The picture (or the backdrop), the ship's picture (a person's
-    /// `HailPict` in its place), then the dialog and the ship's status
-    /// line ([`CommDialog::draw_status`]).
+    /// `HailPict` in its place), then the dialog, the ship's class line
+    /// ([`CommDialog::draw_class`]) and its status line
+    /// ([`CommDialog::draw_status`]).
     fn draw(&self, list: &mut DrawList) {
         backdrop(list, self.dialog.bounds(), self.picture);
         if let Some(at) = self.dialog.item_bounds(PICTURE_ITEM) {
@@ -646,6 +689,7 @@ impl Screen for CommDialog {
         }
         self.dialog.draw(list);
         if let Some(at) = self.dialog.item_bounds(CLASS_ITEM) {
+            self.draw_class(list, at);
             self.draw_status(list, at);
         }
     }
@@ -1180,11 +1224,9 @@ mod tests {
         let dialog = dialog(&view());
         let shown = texts(&dialog);
         assert!(shown.contains(&"Channel open.".to_owned()), "{shown:?}");
-        assert_eq!(class_text(&view()), "Class: Cruiser (Federation)");
-        assert!(
-            shown.contains(&"Class: Cruiser (Federation)".to_owned()),
-            "on one line at 9 points: {shown:?}"
-        );
+        for run in [CLASS_LABEL, "Cruiser", "(Federation)"] {
+            assert!(shown.contains(&run.to_owned()), "{run}: {shown:?}");
+        }
         assert!(
             !shown.iter().any(|text| text.contains(HOSTILE)),
             "{shown:?}"
@@ -1217,7 +1259,8 @@ mod tests {
             govt_name: None,
             ..view()
         };
-        assert_eq!(class_text(&independent), "Class: Cruiser");
+        assert_eq!(government_text(&independent), None);
+        assert_eq!(government_text(&view()).as_deref(), Some("(Federation)"));
     }
 
     #[test]
@@ -1270,13 +1313,17 @@ mod tests {
                 } => Some((text, font, size)),
                 _ => None,
             })
-            .filter(|(text, ..)| text == "Channel open." || text.starts_with(CLASS_LABEL))
+            .filter(|(text, ..)| {
+                ["Channel open.", CLASS_LABEL, "Cruiser", "(Federation)"].contains(&text.as_str())
+            })
             .collect();
         assert_eq!(
             sizes,
             [
                 ("Channel open.".to_owned(), Font::Geneva, 9.0),
-                ("Class: Cruiser (Federation)".to_owned(), Font::Geneva, 9.0),
+                (CLASS_LABEL.to_owned(), Font::Geneva, 9.0),
+                ("Cruiser".to_owned(), Font::Geneva, 9.0),
+                ("(Federation)".to_owned(), Font::Geneva, 9.0),
             ],
             "the reply and the class line"
         );
@@ -1385,6 +1432,80 @@ mod tests {
             [
                 run(STATUS_LABEL, 60.0, 121.0, LABEL_COLOR),
                 run(ESCORT, 95.0, 121.0, ESCORT_COLOR),
+            ]
+        );
+    }
+
+    /// The class runs `dialog` draws in item 12: "Class:", the ship's
+    /// name and its government in parentheses.
+    fn class_runs(dialog: &CommDialog) -> Vec<Run> {
+        let name = dialog.view.comm_name.clone();
+        drawn(dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    color,
+                    size,
+                    wrap_width,
+                    ..
+                } if text == CLASS_LABEL || text == name || text.starts_with('(') => {
+                    Some((text, origin, color, size, wrap_width))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_class_line_is_a_grey_label_then_the_name_and_the_government_below_it() {
+        // Item 12 at (40, 73): baselines 85 and 98, so tops 76 and 89.
+        assert_eq!(
+            class_runs(&dialog(&view())),
+            [
+                run(CLASS_LABEL, 40.0, 76.0, LABEL_COLOR),
+                run("Cruiser", 75.0, 76.0, TEXT_COLOR),
+                run("(Federation)", 75.0, 89.0, TEXT_COLOR),
+            ]
+        );
+        let shown = texts(&dialog(&view()));
+        assert!(
+            !shown.iter().any(|text| text.contains("Class: Cruiser")),
+            "no wrapped class line: {shown:?}"
+        );
+    }
+
+    #[test]
+    fn an_independent_ship_draws_no_government_line() {
+        for govt_name in [None, Some(String::new())] {
+            let independent = HailView {
+                govt_name: govt_name.clone(),
+                ..view()
+            };
+            assert_eq!(
+                class_runs(&dialog(&independent)),
+                [
+                    run(CLASS_LABEL, 40.0, 76.0, LABEL_COLOR),
+                    run("Cruiser", 75.0, 76.0, TEXT_COLOR),
+                ],
+                "{govt_name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_class_line_follows_item_12_where_it_stands() {
+        let mut moved = stock();
+        moved.items[CLASS_ITEM - 1].bounds = Bounds::at(Point::new(60.0, 90.0), 134.0, 46.0);
+        let dialog = CommDialog::new(&moved, &view(), ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        assert_eq!(
+            class_runs(&dialog),
+            [
+                run(CLASS_LABEL, 60.0, 93.0, LABEL_COLOR),
+                run("Cruiser", 95.0, 93.0, TEXT_COLOR),
+                run("(Federation)", 95.0, 106.0, TEXT_COLOR),
             ]
         );
     }
