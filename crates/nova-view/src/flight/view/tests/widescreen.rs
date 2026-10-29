@@ -306,7 +306,10 @@ fn a_classic_size_draws_flight_exactly_as_before() {
     let before = drawn(&build());
     assert!(texts(&before).contains(&"Hello".to_owned()), "the message");
     assert!(
-        texts(&before).contains(&"Escort Commands".to_owned()),
+        before.iter().any(|command| matches!(
+            unclipped(command),
+            DrawCommand::Text { text, .. } if text == "Escort Commands"
+        )),
         "the menu"
     );
     assert!(!floating_border(&before).is_empty(), "the floating map");

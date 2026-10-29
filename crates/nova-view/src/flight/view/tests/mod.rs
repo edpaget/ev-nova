@@ -677,6 +677,15 @@ fn sprite_of(id: i16) -> impl Fn(&DrawCommand) -> bool {
     move |command| matches!(unclipped(command), DrawCommand::Sprite { image, .. } if image.id == id)
 }
 
+/// Whether `command` is the escort menu's border's top edge, the first
+/// thing the menu draws: its black inside ORs in nothing, so none is
+/// drawn.
+fn escort_menu_top(command: &DrawCommand) -> bool {
+    use crate::flight::escorts::{MENU_AT, MENU_WIDTH};
+    matches!(command, DrawCommand::Line { from, to, .. }
+        if *from == MENU_AT && *to == Point::new(MENU_AT.x + MENU_WIDTH, MENU_AT.y))
+}
+
 /// `command`, or what it draws when it is [`DrawCommand::Clipped`]: the
 /// cursor is clipped to the play area.
 fn unclipped(command: &DrawCommand) -> &DrawCommand {

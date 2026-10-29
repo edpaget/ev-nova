@@ -2,22 +2,37 @@
 //! how the menu is drawn over the flight (`_ShowEscortMenu` @0x5664a and
 //! `_DrawEscortMenuInFrame` @0x56268 in the `EV Nova` executable).
 //!
-//! - E ([`MENU_KEY`]) opens the menu, selecting All Ships; with no escorts
-//!   it stays shut and the flight says so ([`NO_ESCORTS`]). E again, or
-//!   Return, closes it.
-//! - While it is open, keys 1-5 ([`GROUP_KEYS`]) select All Ships,
-//!   Fighters, Medium Ships, Warships or Freighters; a class the player
-//!   has no escort of is not selected, though its press, silent, still
-//!   restarts the timeout (@0x6e14e-0x6e159). No modifier is read, so
-//!   Command-5 picks Freighters too. While the menu shows, the original's
+//! - E ([`MENU_KEY`]) opens the menu in full ([`FULL_LEVEL`]), selecting
+//!   All Ships; with no escorts it stays shut and the flight says so
+//!   ([`NO_ESCORTS`]). E again, or Return, closes it at once, fading or
+//!   not. E's close beeps; Return's, and the fade's end, beep only while E
+//!   is held, as the close block reads the key live (@0x6e01e-0x6e04d).
+//! - While it shows, fading too, keys 1-5 ([`GROUP_KEYS`]) select All
+//!   Ships, Fighters, Medium Ships, Warships or Freighters and show it in
+//!   full again; a class the player has no escort of is not selected,
+//!   though its press, silent, still restarts the timeout, holding a fade
+//!   where it is (@0x6e14e-0x6e159). No modifier is read, so Command-5
+//!   picks Freighters too. While the menu shows, the original's
 //!   `_QuickKeyCheck` hides 1-5 from every other key block
 //!   (@0xa106-0xa124), so they never reach the stellar slot keys or
-//!   Command-5; while it is shut, 1-4 are the flight's stellar slot keys
-//!   and Command-5 its second nearest-stellar key.
-//! - It closes [`MENU_TIMEOUT`] after it opened, or after the last
-//!   press or command it took ([`EscortMenu::touch`]), and as soon as
-//!   the fleet is empty. The original then fades it out over 32 frames;
-//!   here it closes at once.
+//!   Command-5; once it has faded out or closed, 1-4 are the flight's
+//!   stellar slot keys and Command-5 its second nearest-stellar key.
+//! - Once more than [`MENU_TIMEOUT`] has passed since it was last shown in
+//!   full or a press stamped it ([`EscortMenu::touch`] for a command that
+//!   changed something), it fades out a level each flight step, the
+//!   original's 32-frame fade (`*0x3b51a0`, @0x6dfd5-0x6dff9), and shuts
+//!   at 0 ([`EscortMenu::update`]). On a frame no escort is flying, and
+//!   one was on the last, or on its first frame shown, the group becomes
+//!   All Ships and the fade starts at once (@0x6dfb3-0x6dfcb).
+//! - A jump's arrival, a gate's exit and a take-off shut it at once and
+//!   silently (`_HandlePlayer` @0x6c50e, `_HandlePlayerDockRequest`
+//!   @0x6705a), as play entered from the main screen does (@0x1a3a3).
+//! - A left click in its frame while it shows is the menu's
+//!   ([`EscortMenu::click`], `PtInRect`, half-open), during a jump too: on
+//!   a row other than the one selected it selects that row's group, with
+//!   no test that the player has a ship of it, and no sound
+//!   (@0x6a000-0x6a12b). The menu is asked before the floating map, as
+//!   the original's branch runs first (@0x6a130).
 //! - A command goes to the group selected, or to every escort while the
 //!   menu is shut ([`EscortMenu::group`]), and the flight says what it
 //!   changed ([`escort_command_message`]): Return to Hangar
@@ -29,13 +44,23 @@
 //!   ([`fighters_abandoned_message`]).
 //!
 //! **Drawing** ([`EscortMenu::draw`]): a [`MENU_WIDTH`] x [`MENU_HEIGHT`]
-//! frame at [`MENU_AT`], black inside, bordered in `cölr` `FloatingMap`,
-//! titled "Escort Commands" (`STR#` 2002 #133) centred at the top; five
-//! rows [`ROW_GAP`] apart, "1) All Ships" to "5) Freighters", white, or
-//! dark grey for a class the player has no escort of; each class it has
-//! shows its order right-aligned ("Formation" for none); and the selected
-//! row sits on a bar of `cölr` `EscortHilite`. The colours come through
-//! the [`EscortMenuLooks`] port, with the stock ones as a fallback.
+//! frame at [`MENU_AT`], bordered in `cölr` `FloatingMap`, titled "Escort
+//! Commands" (`STR#` 2002 #133) centred at the top; five rows
+//! [`ROW_GAP`] apart, "1) All Ships" to "5) Freighters", white, or dark
+//! grey for a class the player has no escort of; each class it has shows
+//! its order right-aligned ("Formation" for none); and the selected row
+//! sits on a bar of `cölr` `EscortHilite`. The colours come through the
+//! [`EscortMenuLooks`] port, with the stock ones as a fallback. The
+//! original blits the menu's frame image, black inside, by the floating
+//! map's proc at its level (`_FloaterDrawCallback` @0x38c0f-0x38c5b,
+//! `_BlitPixieFloatingRectDrawProc`), which ORs it in at level/32, so its
+//! black ORs in nothing at any level: ours draws it as the floating map is
+//! drawn ([`floating::draw`]), the border faded, the rest clipped to the
+//! frame and faded to alpha level/32, no black drawn. As there, each
+//! command fades on its own, so while it fades the bar shows through the
+//! selected row's text. The original's erase bookkeeping (the counter's
+//! 0 to -1, `_FloaterEraseCallback` @0x38e41-0x38ef6) has no counterpart,
+//! as the view draws every frame afresh.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -46,10 +71,12 @@ use nova_sim::{ClassRow, Commanded, EscortCommand, EscortGroup};
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
+use crate::flight::floating;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::Key;
 use crate::text::TextMetrics;
+use crate::time::sixtieths;
 
 pub use nova_sim::escort::NO_ESCORTS;
 
@@ -142,13 +169,58 @@ pub enum Toggled {
     NoEscorts,
 }
 
-/// The escort menu: shut, or open with a group selected (see the module
-/// docs).
+/// The level the escort menu shows at in full: its counter (`*0x3b51a0`)
+/// is 32 while it shows, and steps down to 0 as it fades out.
+pub const FULL_LEVEL: u8 = 32;
+
+/// [`MENU_TIMEOUT`] in the sixtieths `_TickCount` counts: 0x1e0.
+const TIMEOUT_TICKS: u128 = 480;
+
+/// The escort menu: shut, or showing at a level with a group selected
+/// (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EscortMenu {
-    /// While open: the group selected, and when the menu last took a
-    /// selection or command.
-    open: Option<(EscortGroup, Duration)>,
+    /// While it shows: its state.
+    open: Option<Shown>,
+}
+
+/// The escort menu while it shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Shown {
+    /// The group selected (`0xdee40`).
+    group: EscortGroup,
+    /// When it was last shown in full or a press stamped it (`*0x3b5658`):
+    /// `None` for the stamp of 0 the fleet's emptying writes, which the
+    /// flight's clock has always passed (`_TickCount` counts from boot,
+    /// where the flight's clock starts at 0).
+    since: Option<Duration>,
+    /// Its level, 1 to [`FULL_LEVEL`] (the counter).
+    level: u8,
+    /// Whether an escort was flying on the last frame it showed (the count
+    /// in `0xdee60`): `None` before its first frame, as the count is -1
+    /// while the menu is shut (@0x6e188).
+    flying: Option<bool>,
+}
+
+impl Shown {
+    /// Shown in full, stamped at `now`: `_ShowEscortMenu` (@0x5664a) and
+    /// the stamp after it.
+    fn show(&mut self, now: Duration) {
+        self.level = FULL_LEVEL;
+        self.stamp(now);
+    }
+
+    /// Stamped at `now`, its level kept.
+    fn stamp(&mut self, now: Duration) {
+        self.since = Some(now);
+    }
+
+    /// Whether its timeout has passed at `now`: `_TickCount` above the
+    /// stamp + 480, strictly (@0x6dfd5-0x6dfea).
+    fn timed_out(&self, now: Duration) -> bool {
+        self.since
+            .is_none_or(|since| sixtieths(now) > sixtieths(since) + TIMEOUT_TICKS)
+    }
 }
 
 /// Whether `rows` show any escort.
@@ -156,31 +228,69 @@ fn any_escort(rows: &[ClassRow; 4]) -> bool {
     rows.iter().any(|row| row.present)
 }
 
+/// The menu's frame.
+fn frame() -> Bounds {
+    Bounds::at(MENU_AT, MENU_WIDTH, MENU_HEIGHT)
+}
+
+/// Row `n`'s rect, from 0: the bar's (@0x6a09f-0x6a125).
+fn row_rect(n: usize) -> Bounds {
+    let frame = frame();
+    let step = ROW_GAP * n as f32;
+    Bounds {
+        min: Point::new(frame.min.x + BAR_INSET, frame.min.y + BAR_TOP + step),
+        max: Point::new(frame.max.x - BAR_INSET, frame.min.y + BAR_BOTTOM + step),
+    }
+}
+
 impl EscortMenu {
-    /// Whether the menu is open.
+    /// Whether the menu shows: open, or fading out (its level above 0).
     #[must_use]
     pub fn is_open(&self) -> bool {
         self.open.is_some()
     }
 
-    /// Whether a click at screen point `at` lands in the menu: it is open
-    /// and its frame holds the point, edges included. The original tests
-    /// its frame (`0x3b52ac`) while the menu shows (`0x3b51a0` > 0,
-    /// `_HandlePlayer` @0x6a060-0x6a092) and ends the click there.
+    /// The level the menu shows at, 1 to [`FULL_LEVEL`]; none while it is
+    /// shut.
     #[must_use]
-    pub fn holds_click(&self, at: Point) -> bool {
-        self.is_open() && Bounds::at(MENU_AT, MENU_WIDTH, MENU_HEIGHT).contains(at)
+    pub fn level(&self) -> Option<u8> {
+        self.open.map(|shown| shown.level)
+    }
+
+    /// A left click at screen point `at`, at `now`, once a press
+    /// (`_HandlePlayer` @0x6a000-0x6a12b): whether the menu took it, as it
+    /// takes every click in its frame while it shows (`PtInRect`, the right
+    /// and bottom edges out, @0x6a075-0x6a08c). A click on a row (its bar's
+    /// rect, half-open too) selects that row's group, whether the player
+    /// has a ship of it or not, and shows the menu in full, stamped
+    /// (@0x6a0fc-0x6a119); one on the row selected, or on no row, changes
+    /// nothing (@0x6a0e8-0x6a0f6, @0x6a12b). It plays no sound.
+    pub fn click(&mut self, at: Point, now: Duration) -> bool {
+        let Some(shown) = &mut self.open else {
+            return false;
+        };
+        if !frame().contains_half_open(at) {
+            return false;
+        }
+        let hit = (0..EscortGroup::ALL.len()).find(|&n| row_rect(n).contains_half_open(at));
+        if let Some(group) = hit.map(|n| EscortGroup::ALL[n])
+            && group != shown.group
+        {
+            shown.group = group;
+            shown.show(now);
+        }
+        true
     }
 
     /// The group a command goes to: the one selected, or every escort
     /// while the menu is shut.
     #[must_use]
     pub fn group(&self) -> EscortGroup {
-        self.open.map_or(EscortGroup::All, |(group, _)| group)
+        self.open.map_or(EscortGroup::All, |shown| shown.group)
     }
 
     /// E, at `now`, the fleet's classes `rows`: opens the menu on All
-    /// Ships, or closes it.
+    /// Ships, in full, or closes it while it shows, fading too.
     pub fn toggle(&mut self, now: Duration, rows: &[ClassRow; 4]) -> Toggled {
         if self.open.take().is_some() {
             return Toggled::Closed;
@@ -188,17 +298,22 @@ impl EscortMenu {
         if !any_escort(rows) {
             return Toggled::NoEscorts;
         }
-        self.open = Some((EscortGroup::All, now));
+        self.open = Some(Shown {
+            group: EscortGroup::All,
+            since: Some(now),
+            level: FULL_LEVEL,
+            flying: None,
+        });
         Toggled::Opened
     }
 
-    /// Key `n` of [`GROUP_KEYS`] (from 0), at `now`: while the menu is
-    /// open, selects its group when the player has an escort of it (All
-    /// Ships always), and says whether it did. A press of a class the
-    /// player has none of selects nothing but still restarts the
-    /// [`MENU_TIMEOUT`] from `now`, as `_HandlePlayer` stamps the open time
-    /// on every press the menu takes (`_TickCount` into *0x3b5658,
-    /// @0x6e14e-0x6e159).
+    /// Key `n` of [`GROUP_KEYS`] (from 0), at `now`: while the menu shows,
+    /// selects its group when the player has an escort of it (All Ships
+    /// always), shows the menu in full and says it did. A press of a class
+    /// the player has none of selects nothing and keeps the level, but
+    /// still restarts the [`MENU_TIMEOUT`] from `now`, as `_HandlePlayer`
+    /// stamps the time on every press the menu takes (`_TickCount` into
+    /// *0x3b5658, @0x6e14e-0x6e159), so a fade holds where it is.
     pub fn select(&mut self, n: usize, now: Duration, rows: &[ClassRow; 4]) -> bool {
         let Some(group) = EscortGroup::ALL.get(n).copied() else {
             return false;
@@ -207,46 +322,69 @@ impl EscortMenu {
             EscortGroup::All => true,
             EscortGroup::Class(class) => rows.iter().any(|row| row.class == class && row.present),
         };
-        let Some(open) = &mut self.open else {
+        let Some(shown) = &mut self.open else {
             return false;
         };
-        open.1 = now;
         if present {
-            open.0 = group;
+            shown.group = group;
+            shown.show(now);
+        } else {
+            shown.stamp(now);
         }
         present
     }
 
-    /// A command the menu took at `now`: it stays open
-    /// [`MENU_TIMEOUT`] from now.
+    /// A command that changed something, taken at `now`: the menu, if it
+    /// shows, shows in full again, [`MENU_TIMEOUT`] from now
+    /// (@0x6e299-0x6e2b4).
     pub fn touch(&mut self, now: Duration) {
-        if let Some((_, since)) = &mut self.open {
-            *since = now;
+        if let Some(shown) = &mut self.open {
+            shown.show(now);
         }
     }
 
-    /// Closes the menu.
+    /// Closes the menu at once.
     pub fn close(&mut self) {
         self.open = None;
     }
 
-    /// Closes the menu at `now` once [`MENU_TIMEOUT`] has passed since it
-    /// last took a selection or command, when `rows` show no escort, or
-    /// when no escort is `flying` (`_HandlePlayer` @0x6df59-0x6dfd0: a
-    /// row stays for a disabled ship, but the menu closes once none is
-    /// intact).
-    pub fn update(&mut self, now: Duration, rows: &[ClassRow; 4], flying: bool) {
-        if let Some((_, since)) = self.open
-            && (now >= since + MENU_TIMEOUT || !any_escort(rows) || !flying)
-        {
-            self.open = None;
+    /// The menu's frame at `now`, after `steps` flight steps, with an
+    /// escort `flying` or not (`_HandlePlayer` @0x6df4a-0x6e052): whether
+    /// it closed. On a frame whose `flying` differs from the last frame's
+    /// (its first frame shown included) and none is flying, the group
+    /// becomes All Ships and the stamp 0, so the fade starts at once
+    /// (@0x6dfb3-0x6dfcb). Then, past its timeout, it drops a level for
+    /// each step, one a `_HandlePlayer` frame (@0x6dfec-0x6dff9), and
+    /// closes once it reaches 0 (@0x6e007).
+    pub fn update(&mut self, now: Duration, steps: u32, flying: bool) -> bool {
+        let Some(shown) = &mut self.open else {
+            return false;
+        };
+        if shown.flying != Some(flying) {
+            shown.flying = Some(flying);
+            if !flying {
+                shown.since = None;
+                shown.group = EscortGroup::All;
+            }
         }
+        if steps == 0 || !shown.timed_out(now) {
+            return false;
+        }
+        let drop = u8::try_from(steps).unwrap_or(u8::MAX);
+        shown.level = shown.level.saturating_sub(drop);
+        if shown.level > 0 {
+            return false;
+        }
+        self.open = None;
+        true
     }
 
-    /// Draws the open menu (see the module docs) with the fleet's classes
-    /// `rows`, in `colors`, its text measured by `metrics` (without them,
-    /// the title starts at the frame's left and an order at the right
-    /// inset).
+    /// Draws the menu while it shows (see the module docs) with the
+    /// fleet's classes `rows`, in `colors`, at its level, its text measured
+    /// by `metrics` (without them, the title starts at the frame's left and
+    /// an order at the right inset): as the floating map is drawn
+    /// ([`floating::draw`]), the border faded and the rest clipped to the
+    /// frame and faded, so its black inside ORs in nothing.
     pub fn draw(
         &self,
         list: &mut DrawList,
@@ -254,71 +392,72 @@ impl EscortMenu {
         colors: EscortMenuColors,
         metrics: Option<&dyn TextMetrics>,
     ) {
-        let Some((selected, _)) = self.open else {
+        let Some(shown) = self.open else {
             return;
         };
-        let frame = Bounds::at(MENU_AT, MENU_WIDTH, MENU_HEIGHT);
-        let (left, top, right, bottom) = (frame.min.x, frame.min.y, frame.max.x, frame.max.y);
-        fill_rect(list, frame, Color::BLACK);
-        let corners = [
-            Point::new(left, top),
-            Point::new(right, top),
-            Point::new(right, bottom),
-            Point::new(left, bottom),
-        ];
-        for (at, &from) in corners.iter().enumerate() {
-            list.line(from, corners[(at + 1) % 4], 1.0, colors.border);
+        floating::draw(list, frame(), shown.level, colors.border, |list| {
+            draw_inside(list, shown.group, rows, colors, metrics);
+        });
+    }
+}
+
+/// The menu's inside with `selected` selected (see the module docs): its
+/// title, rows, orders and bar, black where the original's frame image
+/// is.
+fn draw_inside(
+    list: &mut DrawList,
+    selected: EscortGroup,
+    rows: &[ClassRow; 4],
+    colors: EscortMenuColors,
+    metrics: Option<&dyn TextMetrics>,
+) {
+    let frame = frame();
+    let (left, top, right) = (frame.min.x, frame.min.y, frame.max.x);
+    let width = |text: &str| {
+        metrics.map_or(0.0, |metrics| {
+            metrics.width(Font::Geneva, MENU_TEXT_SIZE, text)
+        })
+    };
+    let title_x = if metrics.is_some() {
+        left + (MENU_WIDTH - width(ESCORT_COMMANDS)) / 2.0
+    } else {
+        left
+    };
+    list.text(
+        ESCORT_COMMANDS,
+        Point::new(title_x, top + TITLE_BASELINE - MENU_TEXT_SIZE),
+        MENU_TEXT_SIZE,
+        None,
+        Color::WHITE,
+    );
+    for (n, group) in EscortGroup::ALL.into_iter().enumerate() {
+        let step = ROW_GAP * n as f32;
+        if group == selected {
+            fill_rect(list, row_rect(n), colors.hilite);
         }
-        let width = |text: &str| {
-            metrics.map_or(0.0, |metrics| {
-                metrics.width(Font::Geneva, MENU_TEXT_SIZE, text)
-            })
+        let row = match group {
+            EscortGroup::All => None,
+            EscortGroup::Class(class) => rows.iter().find(|row| row.class == class),
         };
-        let title_x = if metrics.is_some() {
-            left + (MENU_WIDTH - width(ESCORT_COMMANDS)) / 2.0
-        } else {
-            left
-        };
+        let present = row.is_none_or(|row| row.present);
+        let color = if present { Color::WHITE } else { ABSENT_ROW };
+        let text_top = top + ROW_BASELINE + step - MENU_TEXT_SIZE;
         list.text(
-            ESCORT_COMMANDS,
-            Point::new(title_x, top + TITLE_BASELINE - MENU_TEXT_SIZE),
+            format!("{}) {}", n + 1, group.menu_label()),
+            Point::new(left + TEXT_INSET, text_top),
             MENU_TEXT_SIZE,
             None,
-            Color::WHITE,
+            color,
         );
-        for (n, group) in EscortGroup::ALL.into_iter().enumerate() {
-            let step = ROW_GAP * n as f32;
-            if group == selected {
-                let bar = Bounds {
-                    min: Point::new(left + BAR_INSET, top + BAR_TOP + step),
-                    max: Point::new(right - BAR_INSET, top + BAR_BOTTOM + step),
-                };
-                fill_rect(list, bar, colors.hilite);
-            }
-            let row = match group {
-                EscortGroup::All => None,
-                EscortGroup::Class(class) => rows.iter().find(|row| row.class == class),
-            };
-            let present = row.is_none_or(|row| row.present);
-            let color = if present { Color::WHITE } else { ABSENT_ROW };
-            let text_top = top + ROW_BASELINE + step - MENU_TEXT_SIZE;
+        if let Some(row) = row.filter(|row| row.present) {
+            let label = order_label(row.order);
             list.text(
-                format!("{}) {}", n + 1, group.menu_label()),
-                Point::new(left + TEXT_INSET, text_top),
+                label,
+                Point::new(right - TEXT_INSET - width(label), text_top),
                 MENU_TEXT_SIZE,
                 None,
-                color,
+                Color::WHITE,
             );
-            if let Some(row) = row.filter(|row| row.present) {
-                let label = order_label(row.order);
-                list.text(
-                    label,
-                    Point::new(right - TEXT_INSET - width(label), text_top),
-                    MENU_TEXT_SIZE,
-                    None,
-                    Color::WHITE,
-                );
-            }
         }
     }
 }
@@ -417,16 +556,153 @@ mod tests {
 
     const AT: Duration = Duration::from_secs(100);
 
-    #[test]
-    fn only_the_open_menus_frame_holds_a_click() {
-        let inside = Point::new(MENU_AT.x + 1.0, MENU_AT.y + MENU_HEIGHT);
-        let outside = Point::new(MENU_AT.x + MENU_WIDTH + 1.0, MENU_AT.y + 1.0);
+    /// `ticks` sixtieths after `at`.
+    fn after(at: Duration, ticks: u32) -> Duration {
+        at + nova_sim::mission::screens::mac_ticks(ticks)
+    }
+
+    /// A menu opened at [`AT`] with an escort flying, its first frame run.
+    fn opened() -> EscortMenu {
         let mut menu = EscortMenu::default();
-        assert!(!menu.holds_click(inside), "shut");
+        assert_eq!(menu.toggle(AT, &rows()), Toggled::Opened);
+        assert!(!menu.update(AT, 1, true));
+        menu
+    }
+
+    #[test]
+    fn opening_shows_it_in_full() {
+        let menu = opened();
+        assert_eq!(menu.level(), Some(FULL_LEVEL));
+        assert_eq!(FULL_LEVEL, 32);
+        assert_eq!(EscortMenu::default().level(), None, "shut");
+    }
+
+    #[test]
+    fn its_timeout_passes_only_once_more_than_480_ticks_have() {
+        // `_TickCount > stamp + 0x1e0` (@0x6dfd5-0x6dfea).
+        let mut menu = opened();
+        assert!(!menu.update(after(AT, 480), 1, true));
+        assert_eq!(menu.level(), Some(32), "480 ticks: not yet");
+        assert!(!menu.update(after(AT, 481), 1, true));
+        assert_eq!(menu.level(), Some(31), "481: the fade's first step");
+        assert_eq!(MENU_TIMEOUT, Duration::from_secs(8), "480 ticks");
+    }
+
+    #[test]
+    fn past_its_timeout_it_drops_a_level_a_step_and_closes_at_0() {
+        let mut menu = opened();
+        let late = after(AT, 600);
+        assert!(!menu.update(late, 0, true), "no step, no drop");
+        assert_eq!(menu.level(), Some(32));
+        for level in (1..32).rev() {
+            assert!(!menu.update(late, 1, true));
+            assert_eq!(menu.level(), Some(level));
+            assert!(menu.is_open(), "it shows while it fades");
+        }
+        assert!(menu.update(late, 1, true), "the 32nd step closes it");
+        assert!(!menu.is_open());
+        assert_eq!(menu.group(), EscortGroup::All);
+        assert!(!menu.update(late, 1, true), "closed once");
+    }
+
+    #[test]
+    fn a_frame_of_several_steps_drops_a_level_for_each() {
+        let mut menu = opened();
+        let late = after(AT, 600);
+        assert!(!menu.update(late, 3, true));
+        assert_eq!(menu.level(), Some(29));
+        assert!(menu.update(late, 40, true), "past 0: closed");
+    }
+
+    #[test]
+    fn a_present_groups_key_during_a_fade_shows_it_in_full_again() {
+        let mut menu = opened();
+        let late = after(AT, 600);
+        menu.update(late, 10, true);
+        assert_eq!(menu.level(), Some(22));
+        assert!(menu.select(3, late, &rows()), "4: warships");
+        assert_eq!(menu.level(), Some(32));
+        assert_eq!(menu.group(), EscortGroup::Class(EscortClass::Warship));
+        menu.update(after(late, 480), 1, true);
+        assert_eq!(menu.level(), Some(32), "restamped");
+        menu.update(after(late, 481), 1, true);
+        assert_eq!(menu.level(), Some(31));
+    }
+
+    #[test]
+    fn an_absent_classs_key_restamps_and_keeps_the_level() {
+        let mut menu = opened();
+        let late = after(AT, 600);
+        menu.update(late, 10, true);
+        assert!(!menu.select(1, late, &rows()), "2: no fighters");
+        assert_eq!(menu.level(), Some(22), "held where it was");
+        assert_eq!(menu.group(), EscortGroup::All, "the group kept");
+        menu.update(after(late, 480), 5, true);
+        assert_eq!(menu.level(), Some(22), "until another timeout");
+        menu.update(after(late, 481), 1, true);
+        assert_eq!(menu.level(), Some(21), "then it resumes");
+    }
+
+    #[test]
+    fn a_command_during_a_fade_shows_it_in_full_again() {
+        let mut menu = opened();
+        let late = after(AT, 600);
+        menu.update(late, 10, true);
+        menu.touch(late);
+        assert_eq!(menu.level(), Some(32));
+        menu.update(after(late, 480), 1, true);
+        assert_eq!(menu.level(), Some(32), "restamped");
+        let mut shut = EscortMenu::default();
+        shut.touch(AT);
+        assert!(!shut.is_open(), "a command does not open it");
+    }
+
+    #[test]
+    fn e_during_a_fade_closes_it_at_once() {
+        let mut menu = opened();
+        menu.update(after(AT, 600), 10, true);
+        assert_eq!(menu.toggle(after(AT, 600), &rows()), Toggled::Closed);
+        assert!(!menu.is_open());
+    }
+
+    #[test]
+    fn with_none_flying_the_group_becomes_all_and_the_fade_starts_at_once() {
+        // @0x6dfb3-0x6dfcb: the stamp 0 and the group -1.
+        let mut menu = opened();
+        menu.select(3, AT, &rows());
+        assert!(!menu.update(after(AT, 1), 1, false));
+        assert_eq!(menu.group(), EscortGroup::All);
+        assert_eq!(menu.level(), Some(31), "no wait");
+    }
+
+    #[test]
+    fn with_none_flying_on_its_first_frame_it_fades_from_that_step() {
+        let mut menu = EscortMenu::default();
         menu.toggle(AT, &rows());
-        assert!(menu.holds_click(inside));
-        assert!(menu.holds_click(MENU_AT), "its corner");
-        assert!(!menu.holds_click(outside));
+        assert!(!menu.update(AT, 1, false));
+        assert_eq!(menu.level(), Some(31));
+    }
+
+    #[test]
+    fn the_fade_does_not_restart_while_none_stays_flying() {
+        let mut menu = opened();
+        menu.update(after(AT, 1), 1, false);
+        menu.update(after(AT, 2), 1, false);
+        assert_eq!(menu.level(), Some(30));
+        assert!(menu.select(0, after(AT, 2), &rows()), "1: all ships");
+        assert_eq!(menu.level(), Some(32), "shown again with none flying");
+        menu.update(after(AT, 3), 1, false);
+        assert_eq!(menu.level(), Some(32), "stamped by the press");
+        menu.update(after(AT, 483), 1, false);
+        assert_eq!(menu.level(), Some(31), "fading again once timed out");
+    }
+
+    #[test]
+    fn a_ship_flying_again_does_not_stop_a_fade() {
+        let mut menu = opened();
+        menu.update(after(AT, 1), 1, false);
+        menu.update(after(AT, 2), 1, true);
+        assert_eq!(menu.level(), Some(30), "the stamp stays 0");
     }
 
     #[test]
@@ -493,70 +769,82 @@ mod tests {
         assert_eq!(menu.group(), EscortGroup::All);
     }
 
+    // The row clicks.
+
+    /// Row `n`'s top-left corner, from 0.
+    fn row_corner(n: usize) -> Point {
+        Point::new(
+            MENU_AT.x + BAR_INSET,
+            MENU_AT.y + BAR_TOP + ROW_GAP * n as f32,
+        )
+    }
+
     #[test]
-    fn it_closes_8_seconds_after_the_last_selection_or_command() {
-        let mut menu = EscortMenu::default();
-        menu.toggle(AT, &rows());
-        let just_before = AT + MENU_TIMEOUT.saturating_sub(Duration::from_millis(1));
-        menu.update(just_before, &rows(), true);
-        assert!(menu.is_open());
-        menu.select(3, just_before, &rows());
-        menu.update(AT + MENU_TIMEOUT, &rows(), true);
-        assert!(menu.is_open(), "the selection restarted it");
-        menu.touch(just_before + Duration::from_secs(5));
-        menu.update(just_before + MENU_TIMEOUT, &rows(), true);
-        assert!(menu.is_open(), "so did the command");
-        menu.update(
-            just_before + Duration::from_secs(5) + MENU_TIMEOUT,
-            &rows(),
-            true,
-        );
-        assert!(!menu.is_open());
-        assert_eq!(MENU_TIMEOUT, Duration::from_secs(8));
+    fn a_click_on_a_rows_top_left_selects_it_and_its_right_and_bottom_edges_dont() {
+        for (n, group) in EscortGroup::ALL.into_iter().enumerate().skip(1) {
+            let corner = row_corner(n);
+            let mut menu = opened();
+            assert!(menu.click(corner, AT), "row {n}'s corner");
+            assert_eq!(menu.group(), group, "row {n}");
+            let right = Point::new(MENU_AT.x + MENU_WIDTH - BAR_INSET, corner.y);
+            let bottom = Point::new(corner.x, MENU_AT.y + BAR_BOTTOM + ROW_GAP * n as f32);
+            for edge in [right, bottom] {
+                let mut menu = opened();
+                assert!(menu.click(edge, AT), "in the frame: taken");
+                assert_eq!(menu.group(), EscortGroup::All, "row {n}: {edge:?} is out");
+            }
+        }
+    }
+
+    #[test]
+    fn a_click_between_rows_is_taken_and_selects_nothing() {
+        let mut menu = opened();
+        let between = Point::new(row_corner(1).x + 10.0, MENU_AT.y + BAR_BOTTOM + 1.0);
+        assert!(menu.click(between, AT));
+        assert_eq!(menu.group(), EscortGroup::All);
+    }
+
+    #[test]
+    fn a_click_on_the_frames_right_or_bottom_edge_is_not_taken() {
+        let mut menu = opened();
+        let right = Point::new(MENU_AT.x + MENU_WIDTH, MENU_AT.y + 50.0);
+        let bottom = Point::new(MENU_AT.x + 50.0, MENU_AT.y + MENU_HEIGHT);
+        assert!(!menu.click(right, AT));
+        assert!(!menu.click(bottom, AT));
+        assert!(menu.click(MENU_AT, AT), "its top-left corner is in");
         let mut shut = EscortMenu::default();
-        shut.touch(AT);
-        assert!(!shut.is_open(), "a command does not open it");
+        assert!(!shut.click(MENU_AT, AT), "shut, it takes none");
     }
 
     #[test]
-    fn a_press_of_an_absent_class_restarts_the_timeout_from_it() {
-        let mut menu = EscortMenu::default();
-        menu.toggle(AT, &rows());
-        let press = AT + Duration::from_secs(5);
-        assert!(!menu.select(1, press, &rows()), "2: no fighters");
-        assert_eq!(menu.group(), EscortGroup::All, "the group kept");
-        let just_before = MENU_TIMEOUT.saturating_sub(Duration::from_millis(1));
-        menu.update(press + just_before, &rows(), true);
-        assert!(menu.is_open(), "restarted by the press");
-        menu.update(press + MENU_TIMEOUT, &rows(), true);
-        assert!(!menu.is_open());
+    fn a_click_on_an_absent_classs_row_selects_it() {
+        // No test of the player's ships (@0x6a0fc-0x6a119).
+        let mut menu = opened();
+        assert!(menu.click(row_corner(1), AT), "2: no fighters");
+        assert_eq!(menu.group(), EscortGroup::Class(EscortClass::Fighter));
     }
 
     #[test]
-    fn an_absent_class_keeps_its_selection_until_it_closes() {
-        let mut menu = EscortMenu::default();
-        menu.toggle(AT, &rows());
-        assert!(!menu.select(1, AT, &rows()));
-        menu.update(AT, &rows(), true);
-        assert!(menu.is_open());
+    fn a_click_on_the_selected_row_leaves_the_stamp() {
+        let mut menu = opened();
+        let late = after(AT, 600);
+        menu.update(late, 2, true);
+        assert!(menu.click(row_corner(0), late), "all ships, selected");
+        assert_eq!(menu.level(), Some(30), "nothing changed");
+        menu.update(late, 1, true);
+        assert_eq!(menu.level(), Some(29), "still timed out");
     }
 
     #[test]
-    fn it_closes_when_no_escort_is_flying_though_rows_remain() {
-        let mut menu = EscortMenu::default();
-        menu.toggle(AT, &rows());
-        menu.update(AT, &rows(), true);
-        assert!(menu.is_open());
-        menu.update(AT, &rows(), false);
-        assert!(!menu.is_open());
-    }
-
-    #[test]
-    fn it_closes_when_the_fleet_empties() {
-        let mut menu = EscortMenu::default();
-        menu.toggle(AT, &rows());
-        menu.update(AT, &none(), true);
-        assert!(!menu.is_open());
+    fn a_click_on_another_row_during_a_fade_shows_it_in_full() {
+        let mut menu = opened();
+        let late = after(AT, 600);
+        menu.update(late, 10, true);
+        assert!(menu.click(row_corner(4), late));
+        assert_eq!(menu.group(), EscortGroup::Class(EscortClass::Freighter));
+        assert_eq!(menu.level(), Some(32));
+        menu.update(after(late, 480), 1, true);
+        assert_eq!(menu.level(), Some(32), "stamped");
     }
 
     /// Five units wide a character.
@@ -577,14 +865,19 @@ mod tests {
         hilite: Color::from_rgb24(0x0044_5566),
     };
 
+    /// Text drawn clipped to the menu's frame, as the floating map's
+    /// pass draws it ([`floating::clip_and_fade`]).
     fn text(text: &str, x: f32, y: f32, color: Color) -> DrawCommand {
-        DrawCommand::Text {
-            text: text.to_owned(),
-            font: Font::Geneva,
-            origin: Point::new(x, y),
-            size: MENU_TEXT_SIZE,
-            wrap_width: None,
-            color,
+        DrawCommand::Clipped {
+            clip: frame(),
+            command: Box::new(DrawCommand::Text {
+                text: text.to_owned(),
+                font: Font::Geneva,
+                origin: Point::new(x, y),
+                size: MENU_TEXT_SIZE,
+                wrap_width: None,
+                color,
+            }),
         }
     }
 
@@ -597,16 +890,30 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_open_menu_draws_its_frame_title_rows_orders_and_bar() {
-        let mut menu = EscortMenu::default();
-        menu.toggle(AT, &rows());
+    /// What the menu of [`rows`], warships selected, draws at `level`.
+    fn drawn_at(level: u8) -> Vec<DrawCommand> {
+        let mut menu = opened();
         menu.select(3, AT, &rows());
+        let late = after(AT, 600);
+        menu.update(late, u32::from(FULL_LEVEL - level), true);
+        assert_eq!(menu.level(), Some(level));
         let mut list = DrawList::new();
         menu.draw(&mut list, &rows(), COLORS, Some(&Fixed));
+        list.iter().cloned().collect()
+    }
+
+    /// `color` at alpha `alpha`.
+    fn alpha(color: Color, alpha: u8) -> Color {
+        Color { a: alpha, ..color }
+    }
+
+    #[test]
+    fn the_menu_in_full_draws_its_frame_title_rows_orders_and_bar_and_no_black() {
+        // `_BlitPixieFloatingRectDrawProc` ORs the frame's image in: its
+        // black inside ORs in nothing (`_FloaterDrawCallback`
+        // @0x38c0f-0x38c5b).
         let white = Color::WHITE;
         let expected = vec![
-            line((15.0, 210.0), (175.0, 210.0), 120.0, Color::BLACK),
             line((15.0, 150.0), (175.0, 150.0), 1.0, COLORS.border),
             line((175.0, 150.0), (175.0, 270.0), 1.0, COLORS.border),
             line((175.0, 270.0), (15.0, 270.0), 1.0, COLORS.border),
@@ -621,7 +928,7 @@ mod tests {
             text("5) Freighters", 22.0, 252.0, white),
             text("Formation", 123.0, 252.0, white),
         ];
-        assert_eq!(list.iter().cloned().collect::<Vec<_>>(), expected);
+        assert_eq!(drawn_at(FULL_LEVEL), expected);
         assert_eq!(
             (MENU_AT, MENU_WIDTH, MENU_HEIGHT, ROW_GAP),
             (Point::new(15.0, 150.0), 160.0, 120.0, 18.0)
@@ -629,15 +936,74 @@ mod tests {
     }
 
     #[test]
+    fn at_level_16_every_colours_alpha_is_half_rounded() {
+        let half = 128;
+        let white = alpha(Color::WHITE, half);
+        let expected = vec![
+            line(
+                (15.0, 150.0),
+                (175.0, 150.0),
+                1.0,
+                alpha(COLORS.border, half),
+            ),
+            line(
+                (175.0, 150.0),
+                (175.0, 270.0),
+                1.0,
+                alpha(COLORS.border, half),
+            ),
+            line(
+                (175.0, 270.0),
+                (15.0, 270.0),
+                1.0,
+                alpha(COLORS.border, half),
+            ),
+            line(
+                (15.0, 270.0),
+                (15.0, 150.0),
+                1.0,
+                alpha(COLORS.border, half),
+            ),
+            text("Escort Commands", 57.5, 155.0, white),
+            text("1) All Ships", 22.0, 180.0, white),
+            text("2) Fighters", 22.0, 198.0, alpha(ABSENT_ROW, half)),
+            text("3) Medium Ships", 22.0, 216.0, alpha(ABSENT_ROW, half)),
+            line(
+                (19.0, 240.5),
+                (171.0, 240.5),
+                13.0,
+                alpha(COLORS.hilite, half),
+            ),
+            text("4) Warships", 22.0, 234.0, white),
+            text("Hold Position", 103.0, 234.0, white),
+            text("5) Freighters", 22.0, 252.0, white),
+            text("Formation", 123.0, 252.0, white),
+        ];
+        assert_eq!(drawn_at(16), expected);
+        let level_1 = drawn_at(1);
+        assert!(
+            level_1.iter().all(|command| match command {
+                DrawCommand::Line { color, .. } => color.a == 8,
+                DrawCommand::Clipped { command, .. } =>
+                    matches!(**command, DrawCommand::Text { color, .. } if color.a == 8),
+                _ => false,
+            }),
+            "255 × 1/32, rounded: {level_1:?}"
+        );
+    }
+
+    #[test]
     fn without_metrics_the_title_starts_at_the_left_and_the_orders_at_the_inset() {
-        let mut menu = EscortMenu::default();
-        menu.toggle(AT, &rows());
+        let menu = opened();
         let mut list = DrawList::new();
         menu.draw(&mut list, &rows(), COLORS, None);
         let texts: Vec<_> = list
             .iter()
             .filter_map(|command| match command {
-                DrawCommand::Text { text, origin, .. } => Some((text.clone(), origin.x)),
+                DrawCommand::Clipped { command, .. } => match &**command {
+                    DrawCommand::Text { text, origin, .. } => Some((text.clone(), origin.x)),
+                    _ => None,
+                },
                 _ => None,
             })
             .collect();
@@ -657,6 +1023,10 @@ mod tests {
         let mut list = DrawList::new();
         EscortMenu::default().draw(&mut list, &rows(), COLORS, Some(&Fixed));
         assert!(list.is_empty());
+        let mut faded = opened();
+        assert!(faded.update(after(AT, 600), 32, true), "faded out");
+        faded.draw(&mut list, &rows(), COLORS, Some(&Fixed));
+        assert!(list.is_empty(), "at level 0");
     }
 
     #[test]

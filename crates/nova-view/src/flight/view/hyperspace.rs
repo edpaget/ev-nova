@@ -217,9 +217,12 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// many fighters were abandoned and how many hired escorts defected
     /// unpaid, if any, the fighters first. A buoy's arrival carries no
     /// fighter notes: the flight drops them, as the buoy replaces the
-    /// arrival line's suffix too.
+    /// arrival line's suffix too. The escort menu shuts at once and
+    /// silently, at a jump's arrival (`_HandlePlayer` @0x6c50e) and a
+    /// gate's exit (`_HandlePlayerDockRequest` @0x6705a) alike.
     pub(super) fn arrived(&mut self, combat: &[CombatEvent]) {
         self.catch_up();
+        self.shut_escort_menu();
         self.show_arrival_explosions(combat);
         // Every arrival sets `_mapScroll` to the system arrived in: a
         // jump's (`_HandlePlayer` @0x6c073), a hypergate's

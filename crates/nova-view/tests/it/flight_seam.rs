@@ -291,15 +291,33 @@ fn a_real_session_meets_the_contract_in_each_state() {
         person: None,
         mark: None,
     };
-    let escorted = SessionFlight::<Rc<GameData>>::from(
+    let unplaced = SessionFlight::<Rc<GameData>>::from(
         SessionBuilder::flying(&data)
             .with_escorts(vec![escort])
             .build(),
     );
-    let frame = frame_of(&escorted);
-    assert!(frame.hud.escorts_flying, "the hired escort");
+    assert!(
+        !frame_of(&unplaced).hud.escorts_flying,
+        "not in the system before the first traffic tick"
+    );
+    let sim = SessionFlight::from(
+        SessionBuilder::flying(&data)
+            .with_escorts(vec![escort])
+            .build(),
+    )
+    .with_collaborators(Collaborators {
+        chance: drawing(&TRADER_ABOVE),
+        behaviour: Rc::new(Idle),
+        ..Collaborators::default()
+    });
+    let mut view = FlightView::from_session(Rc::clone(&data), sim, &Rulebook::default());
+    // The first step sets the system up, the escort placed in it.
+    view.tick(TICK);
+    let escorted = view.sim();
+    let frame = frame_of(escorted);
+    assert!(frame.hud.escorts_flying, "the hired escort, placed");
     assert!(frame.hud.escort_rows.iter().any(|row| row.present));
-    meets_the_contract(&escorted, "with an escort flying");
+    meets_the_contract(escorted, "with an escort flying");
     let session = SessionBuilder::flying(&data).build();
     let mut view = fighting(data, session);
     tap(&mut view, Key::Tab);

@@ -286,9 +286,7 @@ fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
     floating_up(&mut view);
     let list = world_list_with(&mut view, &hud);
     let floating = first(&list, floating_border_line);
-    let menu = first(&list, |command| {
-        *command == fill_command(escort_menu_frame(), Color::BLACK)
-    });
+    let menu = first(&list, escort_menu_top);
     let particle = first(&list, orange_dot);
     // `_PostDrawCallback`: `_FloaterDrawCallback` draws the floating map
     // (@0x38b95-0x38c0a), then the escort menu (@0x38c0f-0x38c5b), both
@@ -299,12 +297,6 @@ fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
         list.layered().nth(menu).map(|(layer, _)| layer),
         Some(crate::DrawLayer::World)
     );
-}
-
-/// The escort menu's frame.
-fn escort_menu_frame() -> Bounds {
-    use crate::flight::escorts::{MENU_AT, MENU_HEIGHT, MENU_WIDTH};
-    Bounds::at(MENU_AT, MENU_WIDTH, MENU_HEIGHT)
 }
 
 #[test]
