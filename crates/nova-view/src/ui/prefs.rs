@@ -729,7 +729,6 @@ impl PrefsDialog {
     pub fn with_focus_ring(self, ring: FocusRing) -> Self {
         Self {
             focus_ring: ring,
-            focus: None,
             ..self
         }
     }

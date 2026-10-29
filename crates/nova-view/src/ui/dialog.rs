@@ -700,9 +700,9 @@ impl Dialog {
                 self.focus_next();
                 None
             }
-            Key::Space if self.focus_ring == FocusRing::Tab => {
-                self.activate(self.focus.map(|index| index + 1))
-            }
+            // Under `FocusRing::Off` nothing is ever focused, so Space
+            // activates nothing.
+            Key::Space => self.activate(self.focus.map(|index| index + 1)),
             _ => None,
         }
     }
