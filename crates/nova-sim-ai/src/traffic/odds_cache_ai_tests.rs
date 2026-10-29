@@ -1,6 +1,6 @@
 //! The odds cache through the traffic and the AI (`_DoPlayGameWork`'s
 //! odds pass @0x442b0-0x44336 over +0xc914; see
-//! `nova_sim::traffic::odds_cache`): an outnumbered warship of a
+//! [`odds_cache`](crate::traffic::odds_cache)): an outnumbered warship of a
 //! retreating government holds while its slot reads -1 from its spawn,
 //! and flees on the first think after the pass reaches its berth, one
 //! berth a tick; by the other reading of `odds_cache` every warship flees
@@ -8,16 +8,18 @@
 
 use std::collections::BTreeSet;
 
-use nova_sim::catalog::{GovtId, GovtRecord};
-use nova_sim::combat::ShipRef;
-use nova_sim::combat::armament::Armament;
-use nova_sim::combat::weapon::WeaponSpec;
-use nova_sim::govt::WARSHIPS_RETREAT;
-use nova_sim::stats::ShipStats;
-use nova_sim::traffic::npc::AiType;
-use nova_sim::{
-    Goal, Governments, NovaAi, Npc, NpcId, RuleKey, RuleSource, Rulebook, Traffic, World,
-};
+use crate::ai::{Goal, NovaAi};
+use crate::catalog::{GovtId, GovtRecord};
+use crate::combat::ShipRef;
+use crate::combat::armament::Armament;
+use crate::combat::weapon::WeaponSpec;
+use crate::govt::Governments;
+use crate::govt::WARSHIPS_RETREAT;
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+use crate::stats::ShipStats;
+use crate::traffic::npc::AiType;
+use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::{Traffic, World};
 use nova_sim_base::fixture::{Draws, FAST};
 use nova_sim_catalog::fixture::{govt, weapon};
 
@@ -42,7 +44,7 @@ fn govts() -> Governments {
 /// A ship of `govt` and `strength`, attacking `quarry`, armed with a
 /// harmless gun of unlimited ammunition.
 fn ship(govt: i16, strength: f32, quarry: u32) -> Npc {
-    let mut npc = nova_sim::traffic::fixture::npc(0, ShipStats::new(FAST, &[]));
+    let mut npc = crate::traffic::fixture::npc(0, ShipStats::new(FAST, &[]));
     npc.ai_type = AiType::Warship;
     npc.govt = Some(GovtId(govt));
     npc.hull.strength = strength;

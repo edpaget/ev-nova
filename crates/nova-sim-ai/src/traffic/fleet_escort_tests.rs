@@ -1,7 +1,7 @@
 //! A fleet's escort through the traffic and Nova's AI
-//! (`nova_sim::ai::fleet_escort`, `_EscortAI` @0x838d2-0x83f5d under an
+//! ([`fleet_escort`](crate::ai::fleet_escort), `_EscortAI` @0x838d2-0x83f5d under an
 //! NPC parent), flying the order its lead issues on its order frame
-//! (`nova_sim::ai::escort_orders`, `_AIIssueEscortOrders`
+//! ([`escort_orders`](crate::ai::escort_orders), `_AIIssueEscortOrders`
 //! @0x8986d-0x89b8d): until the first, it keeps formation; a lead
 //! attacking with its shield full orders a medium escort to Attack, and
 //! it attacks a ship attacking the lead; an idle lead orders Return, and
@@ -21,22 +21,25 @@
 
 use std::collections::BTreeSet;
 
-use nova_sim::ai::regroup::Kept;
-use nova_sim::ai::{Behaviour, Decision, FleetEscortAi, Surroundings};
-use nova_sim::catalog::{EscortClass, GovtId, GovtRecord, WeaponId, WeaponRecord};
-use nova_sim::chance::Chance;
-use nova_sim::combat::ShipRef;
-use nova_sim::combat::armament::Armament;
-use nova_sim::combat::weapon::WeaponSpec;
-use nova_sim::escort::{FORMATION_NUDGE, FORMATION_SLACK};
-use nova_sim::fleet::OrderWord;
-use nova_sim::flight::{FlightRules, NpcFormation};
-use nova_sim::geometry::Vec2;
-use nova_sim::stats::ShipStats;
-use nova_sim::traffic::autopilot::FOLLOW_DISTANCE;
-use nova_sim::traffic::npc::AiType;
-use nova_sim::traffic::regroup::RELEASE_DRAW;
-use nova_sim::{Goal, Governments, NovaAi, Npc, NpcId, Traffic, World};
+use crate::ai::regroup::Kept;
+use crate::ai::{Behaviour, Decision, FleetEscortAi, Surroundings};
+use crate::ai::{Goal, NovaAi};
+use crate::catalog::{EscortClass, GovtId, GovtRecord, WeaponId, WeaponRecord};
+use crate::chance::Chance;
+use crate::combat::ShipRef;
+use crate::combat::armament::Armament;
+use crate::combat::weapon::WeaponSpec;
+use crate::escort::{FORMATION_NUDGE, FORMATION_SLACK};
+use crate::fleet::OrderWord;
+use crate::flight::{FlightRules, NpcFormation};
+use crate::geometry::Vec2;
+use crate::govt::Governments;
+use crate::stats::ShipStats;
+use crate::traffic::autopilot::FOLLOW_DISTANCE;
+use crate::traffic::npc::AiType;
+use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::regroup::RELEASE_DRAW;
+use crate::traffic::{Traffic, World};
 use nova_sim_base::fixture::{Draws, FAST};
 use nova_sim_catalog::fixture::{govt, weapon};
 
@@ -69,7 +72,7 @@ fn govts() -> Governments {
 
 /// A ship of `govt` and `ai_type` at (`x`, `y`) with `goal`.
 fn ship(govt: i16, ai_type: AiType, (x, y): (f32, f32), goal: Goal) -> Npc {
-    let mut npc = nova_sim::traffic::fixture::npc(0, ShipStats::new(FAST, &[]));
+    let mut npc = crate::traffic::fixture::npc(0, ShipStats::new(FAST, &[]));
     npc.govt = Some(GovtId(govt));
     npc.ai_type = ai_type;
     npc.state.position = Vec2::new(x, y);
@@ -344,7 +347,7 @@ fn a_disabled_leads_heaviest_escort_leads_and_one_that_gave_its_stage_up_pauses_
         .iter_mut()
         .find(|npc| npc.id == LEAD)
         .expect("there")
-        .condition = nova_sim::combat::hull::Condition::Disabled;
+        .condition = crate::combat::hull::Condition::Disabled;
     // The pause takes a follower whose +0x50 is below 0 (@0x8949d-0x894a4),
     // as a follow of its lead's jump that gave its stage up leaves it; one
     // at rest forms on its new lead at once.
@@ -459,8 +462,8 @@ fn jump_tick(traffic: &mut Traffic) {
 
 #[test]
 fn a_fleet_escort_follows_its_leads_jump_takes_its_own_leave_once_under_way_and_both_depart() {
-    use nova_sim::traffic::autopilot::Outcome;
-    use nova_sim::traffic::warp_out::WarpGoal;
+    use crate::traffic::autopilot::Outcome;
+    use crate::traffic::warp_out::WarpGoal;
     let mut traffic = leaving_fleet(false);
     let mut entered = None;
     let mut started = None;
@@ -512,7 +515,7 @@ fn a_fleet_escort_follows_its_leads_jump_takes_its_own_leave_once_under_way_and_
 
 #[test]
 fn a_lead_turning_to_attack_cancels_its_escorts_early_follow() {
-    use nova_sim::traffic::warp_out::WarpGoal;
+    use crate::traffic::warp_out::WarpGoal;
     let mut traffic = leaving_fleet(false);
     jump_tick(&mut traffic);
     assert_eq!(
@@ -540,7 +543,7 @@ fn a_lead_turning_to_attack_cancels_its_escorts_early_follow() {
 
 #[test]
 fn an_inertialess_fleet_escort_leaves_its_fleet_to_jump_on_its_own() {
-    use nova_sim::traffic::warp_out::WarpGoal;
+    use crate::traffic::warp_out::WarpGoal;
     let mut traffic = leaving_fleet(true);
     // Out of close formation, which no ship flies inertialess.
     traffic

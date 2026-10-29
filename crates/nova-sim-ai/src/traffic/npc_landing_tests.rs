@@ -1,19 +1,20 @@
 //! An NPC's landing through the traffic, as `_HighLevelAIHandler` state 1
 //! lands it and its wait ends (@0x8d8b8-0x8db5a, the countdown
-//! `_HandleShip` @0x35025-0x35048; see `nova_sim::traffic::land_flight`):
+//! `_HandleShip` @0x35025-0x35048; see [`land_flight`](crate::traffic::land_flight)):
 //! a wimpy trader flies to the system's planet and lands inside its box,
 //! stays in the system, still, for its wait of 300 to 499 ticks, then
 //! takes a new goal from the idle block, which finds it has visited a
-//! stellar here (`nova_sim::ai::idle_block`): it leaves by hyperspace
+//! stellar here ([`idle_block`](crate::ai::idle_block)): it leaves by hyperspace
 //! with a fuel tank, and stops and waits (state 6) with none.
 
-use nova_sim::catalog::{LandingSite, StellarId};
-use nova_sim::geometry::Vec2;
-use nova_sim::rulebook::RuleSource;
-use nova_sim::stats::ShipStats;
-use nova_sim::traffic::Traffic;
-use nova_sim::traffic::npc::{AiType, Npc};
-use nova_sim::{Goal, NovaAi, Rulebook};
+use crate::Rulebook;
+use crate::ai::{Goal, NovaAi};
+use crate::catalog::{LandingSite, StellarId};
+use crate::geometry::Vec2;
+use crate::rulebook::RuleSource;
+use crate::stats::ShipStats;
+use crate::traffic::Traffic;
+use crate::traffic::npc::{AiType, Npc};
 use nova_sim_base::fixture::{Draws, FAST};
 use nova_sim_catalog::fixture::planet;
 
@@ -38,7 +39,7 @@ struct Landing {
 
 fn land(fuel: i16, stay: u32) -> Landing {
     let sites = [site()];
-    let mut npc = nova_sim::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
+    let mut npc = crate::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
     npc.ai_type = AiType::WimpyTrader;
     npc.class_fuel = fuel;
     npc.reserves.fuel.max = f32::from(fuel);
@@ -93,7 +94,7 @@ fn a_trader_lands_in_its_box_stays_still_for_its_wait_then_jumps_out() {
         assert_eq!(at.velocity, Vec2::ZERO, "stopped");
         let turn = landing.landed.turn_rate();
         assert!(
-            nova_sim::landing::npc_over(&site(), at.position, turn, RuleSource::Engine),
+            crate::landing::npc_over(&site(), at.position, turn, RuleSource::Engine),
             "in its box: {at:?}"
         );
         assert_eq!(landing.landed.visited, Some(StellarId(128)));

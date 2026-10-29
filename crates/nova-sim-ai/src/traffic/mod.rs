@@ -193,6 +193,8 @@ mod escort_wait_tests;
 pub mod fighter_capacity;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+#[cfg(test)]
+mod fleet_escort_tests;
 pub mod fleet_formation;
 pub mod fly_pass;
 pub mod formation_flight;
@@ -205,6 +207,8 @@ pub mod held_burst;
 mod held_burst_tests;
 #[cfg(test)]
 mod hit_goal_tests;
+#[cfg(test)]
+mod idle_block_tests;
 pub mod in_turn;
 pub mod inertialess;
 pub mod ionization;
@@ -217,10 +221,16 @@ mod launch_room;
 mod launch_think;
 pub mod leave_flight;
 #[cfg(test)]
+mod lost_sight_ai_tests;
+#[cfg(test)]
 mod lost_sight_tests;
 pub mod mine_flight;
 pub mod npc;
+#[cfg(test)]
+mod npc_landing_tests;
 pub mod odds_cache;
+#[cfg(test)]
+mod odds_cache_ai_tests;
 #[cfg(test)]
 mod odds_cache_tests;
 pub mod on_line;
@@ -253,6 +263,8 @@ pub mod stellar_attack;
 mod stop_tests;
 pub mod strength;
 pub mod succession;
+#[cfg(test)]
+mod swarm_tests;
 pub mod table;
 pub mod tractor_hold;
 pub mod vacated;

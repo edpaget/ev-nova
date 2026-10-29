@@ -1,25 +1,29 @@
 //! The lost-sight search through the traffic (`_HighLevelAIHandler`
-//! @0x8d6ef-0x8d8ae; see `nova_sim::ai::lost_sight`): a warship whose
+//! @0x8d6ef-0x8d8ae; see [`lost_sight`](crate::ai::lost_sight)): a warship whose
 //! target cloaks stops and holds its attack for its search, 100-199
 //! ticks, then drops the target, and takes the fight up again if the
 //! target reappears first; a trader whose target cloaks leaves, or stops
 //! when it can't jump. A warship takes its berth's last search timer
-//! (`nova_sim::traffic::berth_search`): a fresh berth's 0 drops a lost
+//! ([`berth_search`](crate::traffic::berth_search)): a fresh berth's 0 drops a lost
 //! target at once, and a search its last ship broke off goes on.
 
 use std::collections::BTreeSet;
 
-use nova_sim::ai::lost_sight::SearchTimer;
-use nova_sim::catalog::{GovtId, GovtRecord};
-use nova_sim::cloak::{CLOAK_RETREATING, Cloak, FADE_FULL};
-use nova_sim::combat::ShipRef;
-use nova_sim::combat::armament::Armament;
-use nova_sim::combat::weapon::WeaponSpec;
-use nova_sim::geometry::Vec2;
-use nova_sim::rulebook::RuleSource;
-use nova_sim::stats::ShipStats;
-use nova_sim::traffic::npc::AiType;
-use nova_sim::{Goal, Governments, NovaAi, Npc, NpcId, Rulebook, Traffic, World};
+use crate::Rulebook;
+use crate::ai::lost_sight::SearchTimer;
+use crate::ai::{Goal, NovaAi};
+use crate::catalog::{GovtId, GovtRecord};
+use crate::cloak::{CLOAK_RETREATING, Cloak, FADE_FULL};
+use crate::combat::ShipRef;
+use crate::combat::armament::Armament;
+use crate::combat::weapon::WeaponSpec;
+use crate::geometry::Vec2;
+use crate::govt::Governments;
+use crate::rulebook::RuleSource;
+use crate::stats::ShipStats;
+use crate::traffic::npc::AiType;
+use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::{Traffic, World};
 use nova_sim_base::fixture::{Draws, FAST};
 use nova_sim_catalog::fixture::{govt, weapon};
 
@@ -46,7 +50,7 @@ fn govts() -> Governments {
 
 /// A hunter of `ai_type` at the centre, attacking NPC 2.
 fn hunter_of(ai_type: AiType) -> Npc {
-    let mut hunter = nova_sim::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
+    let mut hunter = crate::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
     hunter.ai_type = ai_type;
     hunter.govt = Some(GovtId(128));
     hunter.goal = Goal::Attack(QUARRY);
@@ -62,10 +66,10 @@ fn hunter_of(ai_type: AiType) -> Npc {
 /// quarry, 400 above, fleeing it cloaked: it has a cloak that its ship
 /// type turns on while it retreats, fully faded in. Each is new to its
 /// berth, read by `reading`
-/// ([`RuleKey::ReusedSlotSearch`](nova_sim::RuleKey::ReusedSlotSearch)).
+/// ([`RuleKey::ReusedSlotSearch`](crate::RuleKey::ReusedSlotSearch)).
 fn traffic_reading(ai_type: AiType, reading: RuleSource) -> Traffic {
     let hunter = hunter_of(ai_type);
-    let mut quarry = nova_sim::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
+    let mut quarry = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
     quarry.govt = Some(GovtId(129));
     quarry.hull.strength = 100.0;
     quarry.state.position = Vec2::new(0.0, -400.0);

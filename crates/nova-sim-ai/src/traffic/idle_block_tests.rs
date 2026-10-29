@@ -1,17 +1,18 @@
 //! The idle block's visit through the traffic (`_AIMakeShipEmergeFromHyperGate`
 //! @0x8955e-0x89574 and the idle block @0x8b0a3-0x8b0c8; see
-//! `nova_sim::ai::idle_block`): a ship with a fuel tank that comes out of a
+//! [`idle_block`](crate::ai::idle_block)): a ship with a fuel tank that comes out of a
 //! gate has visited it, so once its burst is over and it thinks, it jumps
 //! out rather than heading for a stellar. One with no tank has visited
 //! nothing, and heads for one.
 
-use nova_sim::catalog::{LandingSite, StellarId};
-use nova_sim::gate::HYPERGATE;
-use nova_sim::geometry::Vec2;
-use nova_sim::stats::ShipStats;
-use nova_sim::traffic::Traffic;
-use nova_sim::traffic::npc::{AiType, Mode};
-use nova_sim::{Goal, NovaAi, Rulebook};
+use crate::Rulebook;
+use crate::ai::{Goal, NovaAi};
+use crate::catalog::{LandingSite, StellarId};
+use crate::gate::HYPERGATE;
+use crate::geometry::Vec2;
+use crate::stats::ShipStats;
+use crate::traffic::Traffic;
+use crate::traffic::npc::{AiType, Mode};
 use nova_sim_base::fixture::{Draws, FAST};
 use nova_sim_catalog::fixture::planet;
 
@@ -32,7 +33,7 @@ fn sites() -> [LandingSite; 2] {
 /// first think after it comes out of the gate.
 fn first_goal_out_of_the_gate(fuel_capacity: f32) -> Goal {
     let sites = sites();
-    let mut npc = nova_sim::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
+    let mut npc = crate::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
     npc.ai_type = AiType::WimpyTrader;
     npc.reserves.fuel.max = fuel_capacity;
     npc.reserves.fuel.now = fuel_capacity;

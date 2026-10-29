@@ -1,22 +1,26 @@
 //! Swarming through the traffic (`_AIFindSwarmLeader` and
-//! `_LowLevelAIHandler`'s substate 0x12; see `nova_sim::ai::swarm`):
+//! `_LowLevelAIHandler`'s substate 0x12; see [`swarm`](crate::ai::swarm)):
 //! three warships of one swarming class and one government attack the
 //! player, the lowest berth leads, and outside 165 the other two fly at a
 //! point ahead of it, firing their missiles whatever their facing.
 
-use nova_sim::ai::PlayerSide;
-use nova_sim::ai::fire::Manoeuvre;
-use nova_sim::ai::swarm::SWARM_AHEAD;
-use nova_sim::catalog::{GovtId, WeaponId, WeaponRecord};
-use nova_sim::combat::ShipRef;
-use nova_sim::combat::armament::Armament;
-use nova_sim::combat::weapon::WeaponSpec;
-use nova_sim::flight::ShipState;
-use nova_sim::geometry::Vec2;
-use nova_sim::stats::ShipStats;
-use nova_sim::traffic::npc::AiType;
-use nova_sim::trig;
-use nova_sim::{Goal, NovaAi, Npc, Rulebook, ShipId, Traffic, World};
+use crate::Rulebook;
+use crate::ai::PlayerSide;
+use crate::ai::fire::Manoeuvre;
+use crate::ai::swarm::SWARM_AHEAD;
+use crate::ai::{Goal, NovaAi};
+use crate::catalog::ShipId;
+use crate::catalog::{GovtId, WeaponId, WeaponRecord};
+use crate::combat::ShipRef;
+use crate::combat::armament::Armament;
+use crate::combat::weapon::WeaponSpec;
+use crate::flight::ShipState;
+use crate::geometry::Vec2;
+use crate::stats::ShipStats;
+use crate::traffic::npc::AiType;
+use crate::traffic::npc::Npc;
+use crate::traffic::{Traffic, World};
+use crate::trig;
 use nova_sim_base::fixture::{Draws, FAST};
 use nova_sim_catalog::fixture::weapon;
 
@@ -26,7 +30,7 @@ const MISSILE: i16 = 131;
 /// A warship of a swarming class of government 128 at `at`, facing
 /// `heading`, attacking the player with a homing missile.
 fn swarmer(at: Vec2, heading: f32) -> Npc {
-    let mut npc = nova_sim::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
+    let mut npc = crate::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
     npc.ai_type = AiType::Warship;
     npc.govt = Some(GovtId(128));
     npc.hull.swarms = true;
@@ -63,21 +67,21 @@ fn traffic() -> Traffic {
 fn player() -> PlayerSide {
     PlayerSide {
         state: ShipState::default(),
-        condition: nova_sim::combat::hull::Condition::Intact,
-        reserves: nova_sim::Reserves::full(100.0, 100.0, 100.0),
-        hull: nova_sim::combat::hull::HullSpec::default(),
+        condition: crate::combat::hull::Condition::Intact,
+        reserves: crate::reserves::Reserves::full(100.0, 100.0, 100.0),
+        hull: crate::combat::hull::HullSpec::default(),
         handling: ShipStats::default().handling,
         rating: 0,
         yardstick: 2,
         untargetable: false,
-        blessing: nova_sim::rank::Blessing::NONE,
+        blessing: crate::ai::Blessing::NONE,
         ship: ShipId(128),
         combat_govt: None,
         target: None,
-        class: nova_sim::escort::EscortClass::Freighter,
+        class: crate::escort::EscortClass::Freighter,
         boarded: false,
         speed: 0.0,
-        cloak: nova_sim::cloak::Cloak::default(),
+        cloak: crate::cloak::Cloak::default(),
         area_cloak: false,
     }
 }
