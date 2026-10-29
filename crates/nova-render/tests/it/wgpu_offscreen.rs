@@ -276,6 +276,54 @@ fn a_movie_frame_draws_its_pixels_and_a_new_frame_replaces_them() {
     }
 }
 
+/// The colour of texel (`x`, `y`) of a frame too big for [`PALETTE`]:
+/// a different opaque colour at every texel of a frame up to 6x6.
+fn graded(x: u32, y: u32) -> [u8; 4] {
+    [40 * x as u8 + 20, 40 * y as u8 + 20, 200, 255]
+}
+
+#[test]
+fn a_bigger_movie_frame_replaces_its_page_and_draws_from_the_new_one() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let viewport = Viewport::new(LOGICAL, (SIZE, SIZE), 2.0);
+    let mut screen = MovieScreen::new();
+    let mut renderer = Renderer::new(Images);
+    let draw = |screen: &MovieScreen, w: f32, h: f32| {
+        let mut list = DrawList::new();
+        let area = Bounds::at(Point::new(2.0, 2.0), w, h);
+        list.movie_frame(screen.frame().expect("shown"), area);
+        list
+    };
+    assert!(screen.show(4, 2, patterned(4, 2).into_pixels()));
+    renderer.render(&draw(&screen, 4.0, 2.0), &viewport, &mut gpu);
+
+    // A 6x5 frame on the same screen outgrows the 4-texel page, so the
+    // stream's page is created again, 6 texels a side, under its id.
+    let (w, h) = (6, 5);
+    let bigger: Vec<u8> = (0..h)
+        .flat_map(|y| (0..w).map(move |x| graded(x, y)))
+        .flatten()
+        .collect();
+    assert!(screen.show(w, h, bigger));
+    renderer.render(&draw(&screen, 6.0, 5.0), &viewport, &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    // Logical (2..8, 2..7) is pixels (4..16, 12..22), every texel a 2x2
+    // block from the new page, none from the old one.
+    for y in 0..h {
+        for x in 0..w {
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let at = (4 + 2 * x + dx, 12 + 2 * y + dy);
+                assert_near(&pixels, at, graded(x, y), 0);
+            }
+        }
+    }
+    assert_near(&pixels, (16, 13), BLACK, 0);
+    assert_near(&pixels, (5, 22), BLACK, 0);
+}
+
 #[test]
 fn batches_on_two_pages_draw_their_own_quads_in_order() {
     let Some(mut gpu) = gpu() else {
