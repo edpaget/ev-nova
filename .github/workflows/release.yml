@@ -94,7 +94,7 @@ jobs:
   # overwrite: true, so the bundle `publish` ships is the channel's one that
   # follows the repo, built from the signed repo.
   flatpak-repo:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       deployments: read
@@ -110,7 +110,7 @@ jobs:
       # The branch it publishes.
       NOVA_CHANNEL: ${{ inputs.channel }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       # gpg and curl are on the runner.
@@ -133,7 +133,7 @@ jobs:
       # The plain bundle ci.yml's `flatpak` job built and tested: the
       # nightly's alone. A promotion builds no Flatpak.
       - if: inputs.channel == 'nightly'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dist-x86_64-unknown-linux-gnu-flatpak
           path: ${{ runner.temp }}/plain
@@ -196,7 +196,7 @@ jobs:
           fi
       # /flatpak/ on the site: the repo and every channel's .flatpakref.
       - if: steps.sign.outputs.published == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pages-flatpak
           path: ${{ runner.temp }}/fr-pages
@@ -205,7 +205,7 @@ jobs:
       # The channel's repo-following bundle: for the nightly it replaces
       # the `flatpak` job's plain bundle, so `publish` ships this one.
       - if: steps.sign.outputs.published == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-x86_64-unknown-linux-gnu-flatpak
           path: ${{ runner.temp }}/fr-dist/*
@@ -249,7 +249,7 @@ jobs:
   # asset as they are. A build older than the current feeds' fails the job.
   publish:
     needs: flatpak-repo
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     environment: ${{ vars.UPDATE_SIGNING_ENVIRONMENT == 'update-signing' && 'update-signing' || '' }}
@@ -268,7 +268,7 @@ jobs:
       # records.
       NOVA_COMMIT: ${{ inputs.sha }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Rust for nova-appcast; nova-bundle needs no system libraries.
       - uses: jdx/mise-action@v5
         with:
@@ -285,7 +285,7 @@ jobs:
       - name: Build nova-appcast
         shell: bash
         run: mise exec -- cargo build -q -p nova-bundle --locked --bin nova-appcast
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true
@@ -407,7 +407,7 @@ jobs:
   # doesn't list to none.
   pages:
     needs: [publish, flatpak-repo]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pages: write
@@ -427,7 +427,7 @@ jobs:
       # As in ci.yml's `ci`: install only the Rust toolchain.
       MISE_AUTO_INSTALL: "false"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       # Rust for `mise run site`; nova-bundle needs no system libraries.
@@ -443,7 +443,7 @@ jobs:
       # Without merge-multiple, each matching artifact lands in its own
       # `<path>/<artifact name>/`. With no match it downloads nothing and
       # succeeds, and the assembly step deploys the root page alone.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: pages-*
           path: ${{ runner.temp }}/pages
@@ -487,8 +487,8 @@ jobs:
               mv "$dir" "_site/$sub"
             done
           fi
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

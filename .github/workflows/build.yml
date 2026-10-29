@@ -35,11 +35,11 @@ on:
 
 jobs:
   # Release builds of `nova` and `nova-dump` for the rolling prerelease of
-  # `channel`. The caller runs it after its `ci` gate. ci.yml's Windows
-  # `ci` leg is continue-on-error (rdm task windows-path-portable-tests),
-  # so a red Windows test leg doesn't stop this job: the Windows archive
-  # ships as long as its own release build succeeds. Revisit once Windows
-  # CI is a hard gate.
+  # `channel`. The caller runs it after its `ci` gate, and every `ci` leg,
+  # Windows included, is a hard gate: a red test leg on any platform stops
+  # all three build legs, so nothing publishes. Gating stays on all three
+  # because `needs:` names a job, not a matrix leg, and `release` waits on
+  # every build leg anyway.
   build:
     strategy:
       # So every platform's build failure is reported in one run.
@@ -51,7 +51,7 @@ jobs:
           # records. The image outlives GitHub's
           # ubuntu-22.04 runner. The Flatpak is built in ci.yml's `flatpak` job.
           - name: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04
             container: ubuntu:22.04
             target: x86_64-unknown-linux-gnu
           # Nova.app for Apple silicon, in a .dmg: `mise run bundle` builds
@@ -59,22 +59,23 @@ jobs:
           # It signs with Developer ID and notarizes when the signing
           # secrets are set, ad-hoc otherwise. Intel Macs are not supported.
           - name: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-26
             target: aarch64-apple-darwin
           - name: x86_64-pc-windows-msvc
-            os: windows-latest
+            os: windows-2025
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     # Only the Linux leg names one; empty, a leg runs on the runner itself.
     container: ${{ matrix.container }}
     # The signing secrets live in the macos-signing environment, whose
     # deployment-branch policy allows only main (infra/github/signing.tf).
-    # Only main's macOS leg enters it. Every other leg, and every other
+    # Only main's macOS leg enters it, picked by target rather than runner
+    # image so a runner bump can't silently drop signing. Every other leg, and every other
     # branch, names no environment and so still runs: a job that names an
     # environment its branch can't deploy to never starts. The expression must
     # never name anything but macos-signing, because naming an environment
     # that doesn't exist creates it, with no protection rules.
-    environment: ${{ github.ref == 'refs/heads/main' && matrix.os == 'macos-latest' && 'macos-signing' || '' }}
+    environment: ${{ github.ref == 'refs/heads/main' && matrix.name == 'aarch64-apple-darwin' && 'macos-signing' || '' }}
     env:
       # As in ci.yml's `ci`: install only the Rust toolchain.
       MISE_AUTO_INSTALL: "false"
@@ -101,7 +102,7 @@ jobs:
             build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils
       # The commit to build: the pushed one for the nightly, the nightly's
       # own commit for a promotion.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
       - uses: jdx/mise-action@v5
@@ -261,7 +262,7 @@ jobs:
           NOVA_TARBALL="$PWD/dist/$file" \
             cargo test --locked -p nova-bundle --test it linux_tarball -- --nocapture
       # Only a hand-off to release.yml's `publish`.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.name }}
           path: dist/*

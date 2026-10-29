@@ -45,12 +45,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Runner images are pinned by name in every workflow, so an image
+        # change is a reviewed diff. Ubuntu stays on 24.04 until a run on
+        # ubuntu-26.04 passes.
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             task: ci
-          - os: macos-latest
+          - os: macos-26
             task: ci-platform
-          - os: windows-latest
+          - os: windows-2025
             task: ci-platform
     runs-on: ${{ matrix.os }}
     env:
@@ -60,7 +63,7 @@ jobs:
       # Report every failing test, not just the first (.config/nextest.toml).
       NEXTEST_PROFILE: ci
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # nova-audio plays through cpal, which builds against ALSA on Linux.
       # desktop-file-utils and appstream are the validators the Linux
       # desktop file and metainfo test runs (NOVA_LINUX_VALIDATORS below).
@@ -99,14 +102,14 @@ jobs:
   # task itself; no state exists here, so it protects nothing. Nothing
   # `needs` this job, and the live plan/apply never runs in CI.
   infra:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
       MISE_AUTO_INSTALL: "false"
     steps:
       # Don't leave the job's token in .git/config: nothing here pushes.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: jdx/mise-action@v5
@@ -125,13 +128,13 @@ jobs:
   build-id:
     needs: ci
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       MISE_AUTO_INSTALL: "false"
     outputs:
       id: ${{ steps.build-id.outputs.id }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
         with:
           install: false
@@ -171,7 +174,7 @@ jobs:
   flatpak:
     needs: [ci, build-id]
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       MISE_AUTO_INSTALL: "false"
       # As in `build`; the manifest passes it into the sandboxed build.
@@ -185,7 +188,7 @@ jobs:
       # the build main would make, and is never published.
       NOVA_CHANNEL: nightly
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # xvfb gives the installed app's zenity a display for the test.
       # ostree is for the Flatpak repo test, which publishes this bundle
       # into a repo of its own.
@@ -231,7 +234,7 @@ jobs:
       # The hand-off to release.yml's `publish`, which ships this plain
       # bundle unless its `flatpak-repo` replaces it with the
       # repo-following one.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-x86_64-unknown-linux-gnu-flatpak
           path: dist/*

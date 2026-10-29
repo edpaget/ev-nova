@@ -92,11 +92,11 @@ change together.
 
 The environment's deployment-branch policy is custom and allows `main`
 only, with no required reviewers and no wait timer, since `main`'s nightly
-runs unattended. `ci.yml`'s `build` job names the environment only on
+runs unattended. `build.yml`'s `build` job names the environment only on
 `main`'s macOS leg:
 
 ```yaml
-environment: ${{ github.ref == 'refs/heads/main' && matrix.os == 'macos-latest' && 'macos-signing' || '' }}
+environment: ${{ github.ref == 'refs/heads/main' && matrix.name == 'aarch64-apple-darwin' && 'macos-signing' || '' }}
 ```
 
 Every other leg and every other branch names no environment, so it still
