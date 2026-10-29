@@ -1,7 +1,7 @@
-# The update-signing environment, its seed secret and the Actions variable
-# that tells ci.yml the environment exists, against mocked providers. The
-# password below is an obvious placeholder: no real key is ever in the
-# repository. Run by `mise run infra-check`.
+# The update-signing environment, its seed and Flatpak key secrets, and the
+# Actions variable that tells ci.yml the environment exists, against mocked
+# providers. The passwords below are obvious placeholders: no real key is
+# ever in the repository. Run by `mise run infra-check`.
 
 variables {
   state_passphrase = "test-only-not-a-secret"
@@ -23,6 +23,13 @@ override_data {
   target = data.onepassword_item.update_signing
   values = {
     password = "bW9jay11cGRhdGUta2V5"
+  }
+}
+
+override_data {
+  target = data.onepassword_item.flatpak_signing
+  values = {
+    password = "bW9jay1mbGF0cGFrLWtleQ=="
   }
 }
 
@@ -94,6 +101,29 @@ run "the_secret_is_the_items_password" {
   assert {
     condition     = nonsensitive(github_actions_environment_secret.update_signing_key.value == "bW9jay11cGRhdGUta2V5")
     error_message = "UPDATE_SIGNING_KEY must be the update-signing-key item's password."
+  }
+}
+
+run "the_flatpak_secret_is_the_items_password" {
+  command = plan
+
+  assert {
+    condition     = data.onepassword_item.flatpak_signing.title == "flatpak-signing-key"
+    error_message = "The Flatpak repo's key must come from the flatpak-signing-key item."
+  }
+
+  assert {
+    condition = (
+      github_actions_environment_secret.flatpak_signing_key.secret_name == "FLATPAK_SIGNING_KEY" &&
+      github_actions_environment_secret.flatpak_signing_key.environment == github_repository_environment.update_signing.environment &&
+      github_actions_environment_secret.flatpak_signing_key.repository == github_repository.ev_nova.name
+    )
+    error_message = "FLATPAK_SIGNING_KEY, the name nova-flatpak-repo reads, must live in the update-signing environment."
+  }
+
+  assert {
+    condition     = nonsensitive(github_actions_environment_secret.flatpak_signing_key.value == "bW9jay1mbGF0cGFrLWtleQ==")
+    error_message = "FLATPAK_SIGNING_KEY must be the flatpak-signing-key item's password."
   }
 }
 

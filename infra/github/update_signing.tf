@@ -1,10 +1,11 @@
 # The update-signing environment: the Ed25519 seed nova-appcast signs the
-# Sparkle update feeds with, readable only by jobs that deploy to it, and
-# only `main` may deploy (README.md, "The update-signing environment").
-# ci.yml's publish job, the one job that signs, selects it once the
+# Sparkle update feeds with, and the GPG secret key nova-flatpak-repo signs
+# the Flatpak repo with, readable only by jobs that deploy to it, and only
+# `main` may deploy (README.md, "The update-signing environment"). ci.yml's
+# publish and flatpak-repo jobs, the two that sign, select it once the
 # UPDATE_SIGNING_ENVIRONMENT variable below exists.
 #
-# The seed comes from the ev-nova-ci vault. Nothing here outputs it or calls
+# Both secrets come from the ev-nova-ci vault. Nothing here outputs it or calls
 # nonsensitive(), so plan and apply print "(sensitive value)". It does land
 # in state, which versions.tf's enforced encryption covers.
 
@@ -46,11 +47,27 @@ resource "github_actions_environment_secret" "update_signing_key" {
   value       = data.onepassword_item.update_signing.password
 }
 
-# ci.yml's publish job names the environment only when this variable holds
-# its name. Naming an environment that doesn't exist creates it with no
-# protection rules, so the variable is created last, once the environment,
-# its main-only policy and its secret are all in place. Until the apply, the
-# job names no environment and skips the feeds.
+# A Password item holding the base64, on one line, of the Flatpak repo's
+# exported GPG secret key (README.md, "The Flatpak repository key"). Every
+# plan fails until the item exists.
+data "onepassword_item" "flatpak_signing" {
+  vault = local.ci_vault_uuid
+  title = "flatpak-signing-key"
+}
+
+resource "github_actions_environment_secret" "flatpak_signing_key" {
+  repository  = github_repository.ev_nova.name
+  environment = github_repository_environment.update_signing.environment
+  secret_name = "FLATPAK_SIGNING_KEY"
+  value       = data.onepassword_item.flatpak_signing.password
+}
+
+# ci.yml's publish and flatpak-repo jobs name the environment only when this
+# variable holds its name. Naming an environment that doesn't exist creates
+# it with no protection rules, so the variable is created last, once the
+# environment, its main-only policy and its secrets are all in place. Until
+# the apply, the jobs name no environment, and skip the feeds and the
+# Flatpak repo.
 resource "github_actions_variable" "update_signing_environment" {
   repository    = github_repository.ev_nova.name
   variable_name = "UPDATE_SIGNING_ENVIRONMENT"
@@ -59,5 +76,6 @@ resource "github_actions_variable" "update_signing_environment" {
   depends_on = [
     github_repository_environment_deployment_policy.update_signing_main,
     github_actions_environment_secret.update_signing_key,
+    github_actions_environment_secret.flatpak_signing_key,
   ]
 }

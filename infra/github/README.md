@@ -39,6 +39,7 @@ in CI.
    | `app-store-connect-api-key` | Secure Note | `key id`: text, `issuer id`: text | `AuthKey_<KEYID>.p8` | `APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` |
    | `opentofu-state-encryption` | Password | `password`: concealed, random, at least 16 characters (`pbkdf2`'s minimum) | none | the state passphrase, through `op.env` |
    | `update-signing-key` | Password | `password`: concealed, standard base64 of 32 random bytes (`openssl rand -base64 32`) | none | `UPDATE_SIGNING_KEY` |
+   | `flatpak-signing-key` | Password | `password`: concealed, standard base64 on one line of the Flatpak repo's exported GPG secret key (`gpg --export-secret-keys --export-options export-minimal <fpr> \| base64 \| tr -d '\n'`) | none | `FLATPAK_SIGNING_KEY` |
 
    Create the vault in the app (New Vault, `ev-nova-ci`), then each item with
    exactly the title, field labels and attachment name above: the config
@@ -154,12 +155,13 @@ re-add it from the 1Password item `ev-nova-ci`, not by following them.
 
 ## The update-signing environment
 
-`update_signing.tf` manages the `update-signing` environment, its one
-secret, and a repository variable:
+`update_signing.tf` manages the `update-signing` environment, its two
+secrets, and a repository variable:
 
 | Name | Kind | From |
 |---|---|---|
 | `UPDATE_SIGNING_KEY` | environment secret | `update-signing-key`, field `password` |
+| `FLATPAK_SIGNING_KEY` | environment secret | `flatpak-signing-key`, field `password` (see "The Flatpak repository key" below) |
 | `UPDATE_SIGNING_ENVIRONMENT` | repository Actions variable | the environment's name, `update-signing` |
 
 `UPDATE_SIGNING_KEY` is the Ed25519 seed `nova-appcast` signs the Sparkle
@@ -170,17 +172,17 @@ builds read it to embed it.
 
 The environment's deployment-branch policy is custom and allows `main`
 only, with no required reviewers and no wait timer, as for
-`macos-signing`. `ci.yml`'s `publish` job, which runs only on pushes to
-`main`, is the only job that enters it:
+`macos-signing`. `ci.yml`'s `publish` and `flatpak-repo` jobs, which run
+only on pushes to `main`, are the only jobs that enter it:
 
 ```yaml
 environment: ${{ vars.UPDATE_SIGNING_ENVIRONMENT == 'update-signing' && 'update-signing' || '' }}
 ```
 
-The variable is created after the environment, its policy and its secret
-(`depends_on`), so the job names the environment only once it exists with
-its main-only policy. Before that apply the job names no environment, which
-never creates one, and runs with an empty `UPDATE_SIGNING_KEY`.
+The variable is created after the environment, its policy and its secrets
+(`depends_on`), so the jobs name the environment only once it exists with
+its main-only policy. Before that apply the jobs name no environment, which
+never creates one, and run with empty secrets.
 
 `publish` signs only when both halves are in place, so the steps below can
 happen in any order:
@@ -199,9 +201,10 @@ up) exits 3, which the job reports as a notice and carries on from, leaving
 the feeds as they are.
 
 `mise run infra-plan` and `infra-apply` fail until the
-`update-signing-key` item exists, because its data source can't find it.
-Create the item first. `mise run infra-check` mocks 1Password and passes
-without it.
+`update-signing-key` and `flatpak-signing-key` items both exist, because
+their data sources can't find them, even for an operator who only wants
+the Sparkle side. Create both items first. `mise run infra-check` mocks
+1Password and passes without them.
 
 ### Setting up the key
 
@@ -227,13 +230,16 @@ this once, on their own machine:
    Optionally record it in the item as a text field `public key`.
 3. Set `update_public_key = "<printed value>"` in `crates/nova/Cargo.toml`'s
    `[package.metadata.bundle]`, in a `chore(nova): ...` commit, and land it.
-4. `mise run infra-plan`: expect 4 to add,
+4. Make the Flatpak repo's key too (steps 1 to 4 of "The Flatpak
+   repository key" below), since the plan needs its item.
+5. `mise run infra-plan`: expect 5 to add,
    `github_repository_environment.update_signing`,
    `github_repository_environment_deployment_policy.update_signing_main`,
-   `github_actions_environment_secret.update_signing_key` and
+   `github_actions_environment_secret.update_signing_key`,
+   `github_actions_environment_secret.flatpak_signing_key` and
    `github_actions_variable.update_signing_environment`. Then
    `mise run infra-apply`.
-5. The first `main` nightly after steps 1 to 4 deploys `publish` to
+6. The first `main` nightly after steps 1 to 5 deploys `publish` to
    `update-signing`, prints both feed paths and no "Update feeds not
    published" warning, and serves
    `releases/download/nightly/appcast-macos-nightly.xml` and
@@ -244,10 +250,93 @@ this once, on their own machine:
 Only after a compromise. Every installed copy embeds the old public key,
 so it rejects feeds signed with a new one and stops updating until the
 player reinstalls from the download page. To rotate, replace the item's
-password, then repeat steps 2 to 4 above: commit the new public key and
+password, then repeat steps 2, 3 and 5 above: commit the new public key and
 apply, which updates `github_actions_environment_secret.update_signing_key`
 in place. Until both land, `publish` fails on the mismatch rather than sign
 feeds no install accepts.
+
+### The Flatpak repository key
+
+`FLATPAK_SIGNING_KEY` is the GPG secret key `nova-flatpak-repo`
+(`crates/nova-bundle/src/linux/flatpak/repo`) signs the Flatpak repo on
+Pages with: the commits on each channel's branch and the summary. Its
+public key is committed as `packaging/linux/flatpak/repo-key.asc`, which
+the `.flatpakref` and the repo-following bundle carry, so every install
+trusts it. The key has no passphrase, because pinentry can't run in CI:
+the environment's main-only policy is its protection.
+
+`ci.yml`'s `flatpak-repo` job runs `stage` with no secret (it only learns
+whether the secret is set), then `sign` in a step that holds the key alone,
+with no token and no network. It publishes only when the channel, the
+committed key and the secret are all in place:
+
+| `repo-key.asc` | `FLATPAK_SIGNING_KEY` | `flatpak-repo` |
+|---|---|---|
+| not committed | any | skips with one "Flatpak repo not published" warning; the nightly publishes as before, with the plain bundle and no `.flatpakref` link |
+| holds a secret key, or no public key | any | fails, and with it `pages`; a committed secret key must be loud |
+| committed | empty | skips with the warning |
+| committed | another key's | fails, naming both fingerprints |
+| committed | its secret key | signs, and `pages` serves `/flatpak/` with the `.flatpakref` linked |
+
+No agent or CI job makes, prints or stores the secret key. The operator
+does this once, on their own machine, with `gnupg` from Homebrew:
+
+1. Make the key in a throwaway keyring:
+
+   ```sh
+   export GNUPGHOME="$(mktemp -d)"
+   gpg --batch --pinentry-mode loopback --passphrase '' \
+     --quick-gen-key 'ev-nova Flatpak repository' rsa4096 sign never
+   fpr=$(gpg --with-colons --list-secret-keys | awk -F: '/^fpr/ {print $10; exit}')
+   ```
+
+2. Store the secret key in 1Password, before any `infra-plan`:
+
+   ```sh
+   op item create --vault ev-nova-ci --category password --title flatpak-signing-key \
+     "password=$(gpg --export-secret-keys --export-options export-minimal "$fpr" | base64 | tr -d '\n')"
+   ```
+
+3. Commit the public key. In a worktree branch:
+
+   ```sh
+   mkdir -p packaging/linux/flatpak
+   gpg --armor --export-options export-minimal --export "$fpr" > packaging/linux/flatpak/repo-key.asc
+   gpg --show-keys packaging/linux/flatpak/repo-key.asc
+   ```
+
+   Commit it as `chore(packaging): commit the Flatpak repo's public key`,
+   and land it.
+4. Destroy the local keyring:
+   `gpgconf --kill gpg-agent && rm -rf "$GNUPGHOME"; unset GNUPGHOME`. The
+   secret key now lives only in 1Password.
+5. `mise run infra-plan` adds `github_actions_environment_secret.flatpak_signing_key`
+   (and the update-signing resources, if they aren't applied yet). Then
+   `mise run infra-apply`.
+6. The first `main` nightly after steps 1 to 5: `flatpak-repo` deploys to
+   `update-signing` with no "Flatpak repo not published" warning and a
+   "First Flatpak publish" notice;
+   `https://edpaget.github.io/ev-nova/flatpak/ev-nova-nightly.flatpakref`
+   downloads; the download page's Linux row leads with `flatpakref`; and
+   the nightly's `.flatpak` asset installs with an origin remote at
+   `https://edpaget.github.io/ev-nova/flatpak/repo/`.
+
+Each `main` run rebuilds the whole `/flatpak/` tree from the live one,
+because a Pages deploy replaces the site: `stage` mirrors the live repo,
+GPG-verified against the committed key. A `404` for the live repo starts a
+fresh, empty repo; any other failure fails the job, so an outage is never
+taken for "no repo".
+
+If the key or the secret is removed once the repo is live, a run skips and
+its deploy drops `/flatpak/`: installs can't update until it returns, and
+the next publish sees a `404` and starts fresh, which drops every other
+channel's branch.
+
+**Rotating the Flatpak key.** Only after a compromise. Every
+`.flatpakref` install trusts the old key and stops updating, and the next
+`stage` refuses the live repo the old key signed, failing the job, until
+the repo is deliberately started fresh. That procedure isn't written yet:
+rdm task `flatpak-repo-key-rotation`.
 
 ## Actions and security settings
 
@@ -366,10 +455,11 @@ There is no `fallback` block, so an unencrypted state is refused, not read.
     (`gh api -X DELETE repos/edpaget/ev-nova/environments/macos-signing`)
     and apply, which recreates it. Nothing is lost: every value is in
     1Password.
-- **The `update-signing` environment**, its policy, its secret and the
+- **The `update-signing` environment**, its policy, its two secrets
+  (`UPDATE_SIGNING_KEY` and `FLATPAK_SIGNING_KEY`) and the
   `UPDATE_SIGNING_ENVIRONMENT` variable have no `import` blocks either
   (they were created by this config). Import the environment, its policy
-  and the variable, and let the apply rewrite the secret:
+  and the variable, and let the apply rewrite the secrets:
 
   ```sh
   gh api repos/edpaget/ev-nova/environments/update-signing/deployment-branch-policies \
