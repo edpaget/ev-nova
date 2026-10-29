@@ -160,6 +160,10 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // 0x79, fn+Up and fn+Down on a Mac laptop.
         PhysicalKey::Code(KeyCode::PageUp) => Key::PageUp,
         PhysicalKey::Code(KeyCode::PageDown) => Key::PageDown,
+        // A text dialog's Home and End, Mac key codes 0x73 and 0x77,
+        // fn+Left and fn+Right on a Mac laptop.
+        PhysicalKey::Code(KeyCode::Home) => Key::Home,
+        PhysicalKey::Code(KeyCode::End) => Key::End,
         PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => Key::Enter,
         PhysicalKey::Code(KeyCode::Escape) => Key::Escape,
         PhysicalKey::Code(KeyCode::Space) => Key::Space,
@@ -325,6 +329,8 @@ mod tests {
             (KeyCode::ArrowDown, Key::Down),
             (KeyCode::PageUp, Key::PageUp),
             (KeyCode::PageDown, Key::PageDown),
+            (KeyCode::Home, Key::Home),
+            (KeyCode::End, Key::End),
             (KeyCode::Enter, Key::Enter),
             (KeyCode::NumpadEnter, Key::Enter),
             (KeyCode::Escape, Key::Escape),
