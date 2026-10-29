@@ -264,6 +264,11 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::F5) => Key::Function(5),
         // The fullscreen shortcut off a Mac.
         PhysicalKey::Code(KeyCode::F11) => Key::Function(11),
+        // Flight's frame-rate key. macOS keeps F12 for itself unless "Use
+        // F1, F2, etc. keys as standard function keys" is set; fn-F12
+        // reaches the game otherwise. The key-bindings roadmap makes it
+        // rebindable.
+        PhysicalKey::Code(KeyCode::F12) => Key::Function(12),
         _ => Key::Other,
     }
 }
@@ -372,6 +377,7 @@ mod tests {
             (KeyCode::F4, Key::Function(4)),
             (KeyCode::F5, Key::Function(5)),
             (KeyCode::F11, Key::Function(11)),
+            (KeyCode::F12, Key::Function(12)),
             (KeyCode::KeyQ, Key::Other),
             (KeyCode::Digit6, Key::Other),
             (KeyCode::F6, Key::Other),
@@ -487,7 +493,7 @@ mod tests {
     /// Every key other than a character's that a screen reacts to, where
     /// the screen names it with a constant, and the physical key that
     /// sends it.
-    const GAME_NAMED_KEYS: [(Key, KeyCode); 17] = [
+    const GAME_NAMED_KEYS: [(Key, KeyCode); 18] = [
         (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
         (nova_view::spaceport::shipyard::INFO_KEY, KeyCode::Space),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltLeft),
@@ -515,6 +521,8 @@ mod tests {
             KeyCode::F4,
         ),
         (nova_view::flight::view::NEAREST_STELLAR_KEY, KeyCode::F5),
+        // Flight's frame-rate key.
+        (nova_view::flight::view::FRAME_RATE_KEY, KeyCode::F12),
         // Flight's jettison key's modifier.
         (Key::Command, KeyCode::SuperLeft),
         (Key::Command, KeyCode::SuperRight),
