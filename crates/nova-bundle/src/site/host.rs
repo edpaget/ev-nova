@@ -137,7 +137,8 @@ mod tests {
         for bad in [
             &["--flatpakref", "a", "b"][..],
             &["--flatpakref", "--flatpakref"],
-            &["--flatpakref", "--archive", "x"],
+            &["--flatpakref", "--archive", installer::TARGET],
+            &["--flatpakref", "--archive-dir", linux::TARGET],
             &["_site", "--flatpakref"],
         ] {
             assert_eq!(command(args(bad), &cwd()), Err(UsageError), "{bad:?}");
