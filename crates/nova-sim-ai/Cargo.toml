@@ -35,10 +35,12 @@ nova-sim-catalog = { workspace = true, features = ["fixture"] }
 nova-sim-combat = { workspace = true, features = ["fixture"] }
 
 [features]
-# Test support for other crates' tests: `traffic::fixture::npc`, and the
-# four `Traffic` setters nova-sim's session tests call,
-# `Traffic::strength_armed`, `Traffic::berths_taken`,
-# `Traffic::set_berth_person` and `Traffic::queue_pirate_event`.
+# Test support for other crates' tests, each item's doc saying who keeps
+# it: `traffic::fixture::npc`, and the `Traffic` setters and accessors
+# nova-sim's tests call, `strength_armed`, `berths_taken`,
+# `queue_pirate_event`, `set_berth_person` (nova-view's and nova's tests
+# too), `write_berth_search`, `cache_odds` and `take_pirate_events` (with
+# `OnLine::take_pirate_events`).
 fixture = []
 
 [lints]

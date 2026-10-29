@@ -56,8 +56,10 @@ nova-sim-catalog = { workspace = true, features = ["fixture"] }
 # `SabotageClock::set_counter` and `Combat::shots_mut`.
 nova-sim-combat = { workspace = true, features = ["fixture"] }
 # The ai and traffic layer's test support: `traffic::fixture::npc`, which
-# `testkit` re-exports, and the `Traffic` setters the session tests call:
-# `strength_armed`, `berths_taken` and `set_berth_person`.
+# `testkit` re-exports, and the `Traffic` setters and accessors the session
+# and stock tests call: `strength_armed`, `berths_taken`,
+# `queue_pirate_event`, `set_berth_person`, `write_berth_search`,
+# `cache_odds` and `take_pirate_events`.
 nova-sim-ai = { workspace = true, features = ["fixture"] }
 # The story layer's test support: `mission::fixture::carrying`, which
 # `testkit` re-exports.
