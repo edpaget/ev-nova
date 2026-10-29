@@ -1,6 +1,6 @@
 [package]
 name = "nova-winres"
-description = "What nova's build script makes, on any platform: the Windows resources nova.exe embeds (its icon, version information and resource script), and the app id read from nova's Cargo.toml"
+description = "What nova's build script makes, on any platform: the Windows resources nova.exe embeds (its icon, version information and resource script), the update feed it compiles in, and the app id read from nova's Cargo.toml"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Checks the committed update_public_key is 32 bytes of standard base64.
+base64.workspace = true
 # The errors' messages.
 thiserror.workspace = true
 # nova's Cargo.toml, read for its `[package.metadata.bundle] identifier`.

@@ -5,6 +5,11 @@
 //! <target>/installer/staging/
 //!   nova.ico   the icon of the shortcut and of Apps & features
 //!   nova.wxs   the WiX source
+//! <target>/installer/downloads/
+//!   WinSparkle-0.9.4.zip   the release archive, checked
+//!   WinSparkle.dll         its x64 DLL, checked, which wix packs
+//!   COPYING                its licence
+//!   COPYING.expat          Expat's licence
 //! <target>/installer/out/
 //!   ev-nova-x86_64-pc-windows-msvc.msi
 //! ```
@@ -12,17 +17,21 @@
 //! The executables are read from `<target>/x86_64-pc-windows-msvc/release`
 //! unless another directory is given, and the `.msi` goes to
 //! `<target>/installer/out` unless another is. The output directory never
-//! overlaps staging: CI uploads everything in its output directory.
+//! overlaps staging or the downloads: CI uploads everything in its output
+//! directory.
 
 use std::path::{Path, PathBuf};
 
+use super::winsparkle::{ARCHIVE, DLL};
 use super::{MSI, TARGET};
 
-/// The staging, executables and output directories.
+/// The staging, downloads, executables and output directories.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallerLayout {
     /// Where the icon and the WiX source are written.
     pub staging: PathBuf,
+    /// Where WinSparkle is downloaded and unpacked.
+    pub downloads: PathBuf,
     /// Where `nova.exe` and `nova-dump.exe` are read from.
     pub exes: PathBuf,
     /// Where the `.msi` is written.
@@ -44,6 +53,18 @@ pub enum InstallerLayoutError {
         /// The output directory asked for.
         out: PathBuf,
     },
+    /// It is or lies in the downloads directory.
+    #[error(
+        "the output directory {} overlaps the downloads directory {}: choose another",
+        out.display(),
+        downloads.display()
+    )]
+    OutputOverlapsDownloads {
+        /// The downloads directory.
+        downloads: PathBuf,
+        /// The output directory asked for.
+        out: PathBuf,
+    },
 }
 
 impl InstallerLayout {
@@ -61,8 +82,37 @@ impl InstallerLayout {
         if staging.starts_with(&out) || out.starts_with(&staging) {
             return Err(InstallerLayoutError::OutputOverlapsStaging { staging, out });
         }
+        // A directory holding the downloads holds staging too, refused above.
+        let downloads = installer.join("downloads");
+        if out.starts_with(&downloads) {
+            return Err(InstallerLayoutError::OutputOverlapsDownloads { downloads, out });
+        }
         let exes = exes.unwrap_or_else(|| target_dir.join(TARGET).join("release"));
-        Ok(Self { staging, exes, out })
+        Ok(Self {
+            staging,
+            downloads,
+            exes,
+            out,
+        })
+    }
+
+    /// WinSparkle's release archive, downloaded.
+    #[must_use]
+    pub fn winsparkle_archive(&self) -> PathBuf {
+        self.downloads.join(ARCHIVE)
+    }
+
+    /// WinSparkle's x64 DLL, unpacked: the file `wix` packs.
+    #[must_use]
+    pub fn winsparkle_dll(&self) -> PathBuf {
+        self.downloads.join(DLL)
+    }
+
+    /// The licence file `member` of WinSparkle's archive (its name at the
+    /// archive's top level), unpacked.
+    #[must_use]
+    pub fn winsparkle_licence(&self, member: &str) -> PathBuf {
+        self.downloads.join(member)
     }
 
     /// The icon, made from the macOS `.icns`.
@@ -106,6 +156,7 @@ mod tests {
             layout,
             InstallerLayout {
                 staging: installer.join("staging"),
+                downloads: installer.join("downloads"),
                 exes: target().join("x86_64-pc-windows-msvc").join("release"),
                 out: installer.join("out"),
             }
@@ -125,6 +176,37 @@ mod tests {
                 .join("release")
                 .join("nova.exe")
         );
+    }
+
+    #[test]
+    fn names_the_winsparkle_downloads_beside_staging() {
+        let layout = InstallerLayout::new(&target(), None, None).expect("layout");
+        let downloads = target().join("installer").join("downloads");
+        assert_eq!(
+            layout.winsparkle_archive(),
+            downloads.join("WinSparkle-0.9.4.zip")
+        );
+        assert_eq!(layout.winsparkle_dll(), downloads.join("WinSparkle.dll"));
+        assert_eq!(
+            layout.winsparkle_licence("COPYING.expat"),
+            downloads.join("COPYING.expat")
+        );
+    }
+
+    #[test]
+    fn an_output_dir_in_or_at_the_downloads_dir_is_refused() {
+        let downloads = target().join("installer").join("downloads");
+        for out in [downloads.clone(), downloads.join("out")] {
+            assert_eq!(
+                InstallerLayout::new(&target(), Some(out.clone()), None),
+                Err(InstallerLayoutError::OutputOverlapsDownloads {
+                    downloads: downloads.clone(),
+                    out: out.clone(),
+                }),
+                "{}",
+                out.display()
+            );
+        }
     }
 
     #[test]

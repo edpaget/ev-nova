@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use super::layout::FlatpakLayout;
 use super::{FINISH_ARGS, MODULE, RUNTIME, RUNTIME_VERSION, RUST_BIN, RUST_EXTENSION, SDK};
+use crate::build_id::{self, BuildId};
 use crate::linux::EXECUTABLE;
 use crate::spec::{BundleSpec, GAME_PACKAGE};
 
@@ -78,9 +79,11 @@ fn text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-/// The manifest for `spec` under `layout`.
+/// The manifest for `spec`'s build `build` under `layout`. The sandboxed
+/// build sees none of the host's environment, so the module's build
+/// options pass it `NOVA_BUILD_ID`, which `nova` compiles in.
 #[must_use]
-pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout) -> Value {
+pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> Value {
     json!({
         "id": spec.identifier,
         "runtime": RUNTIME,
@@ -94,7 +97,10 @@ pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout) -> Value {
             "buildsystem": "simple",
             "build-options": {
                 "append-path": RUST_BIN,
-                "env": { "CARGO_HOME": format!("/run/build/{MODULE}/cargo") },
+                "env": {
+                    "CARGO_HOME": format!("/run/build/{MODULE}/cargo"),
+                    build_id::VAR: build.as_str(),
+                },
             },
             "build-commands": build_commands(),
             "sources": [
@@ -126,8 +132,8 @@ pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout) -> Value {
 
 /// [`manifest`] as the JSON file's text.
 #[must_use]
-pub fn render(spec: &BundleSpec, layout: &FlatpakLayout) -> String {
-    let mut text = serde_json::to_string_pretty(&manifest(spec, layout))
+pub fn render(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> String {
+    let mut text = serde_json::to_string_pretty(&manifest(spec, layout, build))
         .unwrap_or_else(|e| unreachable!("a JSON value always renders: {e}"));
     text.push('\n');
     text
@@ -139,6 +145,7 @@ mod tests {
 
     use super::*;
     use crate::spec::tests::sample_metadata;
+    use crate::test_support::{BUILD, build};
 
     fn spec() -> BundleSpec {
         BundleSpec::from_metadata(&sample_metadata()).expect("spec")
@@ -150,7 +157,7 @@ mod tests {
 
     /// The rendered manifest, read back.
     fn read() -> Value {
-        serde_json::from_str(&render(&spec(), &layout())).expect("JSON")
+        serde_json::from_str(&render(&spec(), &layout(), &build())).expect("JSON")
     }
 
     fn strings(value: &Value) -> Vec<&str> {
@@ -265,6 +272,13 @@ mod tests {
     }
 
     #[test]
+    fn the_build_gets_the_build_id() {
+        let env = &module()["build-options"]["env"];
+        assert_eq!(env["NOVA_BUILD_ID"], BUILD);
+        assert_eq!(env.as_object().expect("an object").len(), 2, "{env}");
+    }
+
+    #[test]
     fn its_sources_are_the_workspace_the_vendor_tree_the_config_and_the_share_tree() {
         let layout = layout();
         let spec = spec();
@@ -329,6 +343,6 @@ mod tests {
 
     #[test]
     fn the_file_ends_with_a_newline() {
-        assert!(render(&spec(), &layout()).ends_with("}\n"));
+        assert!(render(&spec(), &layout(), &build()).ends_with("}\n"));
     }
 }

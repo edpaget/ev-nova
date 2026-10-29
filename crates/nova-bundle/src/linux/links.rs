@@ -1,5 +1,5 @@
-//! The glibc floor and the allowed libraries, checked on the built
-//! binary from what `objdump -p` shows of it, as macOS's
+//! The glibc floor and the allowed libraries, checked on the Linux
+//! release binary the tarball ships from what `objdump -p` shows of it, as macOS's
 //! [`check_archs`](crate::bundle::check_archs) checks `lipo -archs`.
 //!
 //! [`Links::parse`] reads the two things that matter from `objdump -p`'s
@@ -11,9 +11,28 @@
 use std::fmt;
 use std::path::Path;
 
-use super::{ALLOWED_LIBRARIES, GLIBC_FLOOR};
 use crate::bundle::{BundleError, run};
 use crate::ports::{Invocation, Process};
+
+/// The newest glibc the binary may need: 2.35, Ubuntu 22.04's, which
+/// covers Ubuntu 22.04 and 24.04, Debian 12 and 13, and current Fedora and
+/// openSUSE. `packaging/README.txt` records it.
+pub const GLIBC_FLOOR: [u32; 2] = [2, 35];
+
+/// The libraries the binary may link: glibc's (`libc`, `libm`, the
+/// loader, and `libdl`, `libpthread` and `librt`, which glibc 2.34 folded
+/// into `libc` but a build may still name), GCC's unwinder, and ALSA,
+/// which must be the host's. Any other is a portability regression.
+pub const ALLOWED_LIBRARIES: [&str; 8] = [
+    "libc.so.6",
+    "libm.so.6",
+    "ld-linux-x86-64.so.2",
+    "libdl.so.2",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libgcc_s.so.1",
+    "libasound.so.2",
+];
 
 /// A glibc symbol version, `GLIBC_<major>.<minor>[.<patch>]`, compared
 /// part by part.
@@ -176,7 +195,7 @@ pub fn check_links(process: &mut impl Process, binary: &Path) -> Result<(), Bund
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use std::cell::RefCell;
     use std::fmt::Write as _;
     use std::path::PathBuf;
@@ -401,7 +420,7 @@ pub(crate) mod tests {
         assert_eq!(
             result.expect_err("refused").to_string(),
             format!(
-                "`{command}` shows a binary that won't run on every Linux the AppImage is for: \
+                "`{command}` shows a binary that won't run on every Linux the tarball is for: \
                  it needs GLIBC_2.39, above the floor GLIBC_2.35; \
                  it links libfoo.so.1, which is not an allowed library"
             )

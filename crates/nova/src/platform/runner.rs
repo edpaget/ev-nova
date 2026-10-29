@@ -5,11 +5,25 @@
 //! bar (`nova_appkit::MenuBar`) and its Apple event handlers
 //! (`nova_appkit::AppleEvents`) once the window opens: each pick, and the
 //! quit and Preferences events the system sends (the Dock's Quit, logout,
-//! restart, shutdown, `osascript`'s `quit app`), comes back through the
-//! event loop as a [`MenuCommand`] user event, which the app takes as
-//! [`WindowEvent::Menu`], and after every event the menu bar is told what
-//! the screen now offers (`MenuSync`). The quit event is the menu's Quit,
-//! so it quits as Command-Q does, saving the pilot flying.
+//! restart, shutdown, `osascript`'s `quit app`, and Sparkle's quit to
+//! install an update), comes back through the event loop as a
+//! [`LoopEvent::Menu`] user event, which the app takes as
+//! [`WindowEvent::Menu`] or [`WindowEvent::CheckForUpdates`], and after
+//! every event the menu bar is told what the app now offers (`MenuSync`).
+//! The quit event is the menu's Quit, so it quits as Command-Q does,
+//! saving the pilot flying.
+//!
+//! With [`Runner::with_updater_source`] (on macOS, Sparkle's; on Windows,
+//! WinSparkle's), the app it opens takes the updater the source gives
+//! ([`choose`]) as the window opens, once `NSApplication` has finished
+//! launching, and starts its background checks; a bundle that names a
+//! feed but can't load its updater says so in the startup report. Without
+//! one, the app has no updater. It needs the OS, so no test runs it.
+//!
+//! WinSparkle asks the game to quit, before its installer replaces
+//! `nova.exe`, from a thread of its own: the request comes back through
+//! the event loop's proxy as [`LoopEvent::UpdaterQuit`], which the app
+//! takes on the main thread as the Quit command.
 //!
 //! The event loop's end (`ApplicationHandler::exiting`) is the backstop
 //! for a quit that never reached the game: on macOS a `terminate:` sent
@@ -54,7 +68,6 @@ use nova_view::devtools::DevOverlay;
 use nova_audio::{Audio, AudioCore};
 use nova_render::wgpu::{InitError, SurfaceGpu};
 use nova_render::{FontFaces, ImageSource, Upscaler};
-use nova_view::MenuCommand;
 use winit::application::ApplicationHandler;
 use winit::error::EventLoopError;
 use winit::event::WindowEvent as WinitEvent;
@@ -67,7 +80,7 @@ use super::window::WinitWindow;
 use super::{dialogs, text_event, window_events};
 #[cfg(target_os = "macos")]
 use crate::app::MenuSync;
-use crate::app::{App, AppScreen, Control, Handled, WindowEvent};
+use crate::app::{App, AppScreen, Control, Handled, LoopEvent, UpdaterSource, WindowEvent, choose};
 #[cfg(feature = "dev-tools")]
 use crate::devtools::DevTools;
 use crate::exit::OpenFailure;
@@ -108,7 +121,9 @@ pub struct Runner<S> {
     diagnostics: Option<Box<dyn Write>>,
     /// Where the menu bar sends its picks, until it is installed.
     #[cfg(target_os = "macos")]
-    menu_proxy: Option<EventLoopProxy<MenuCommand>>,
+    menu_proxy: Option<EventLoopProxy<LoopEvent>>,
+    /// What the platform offers to update with, until the app is opened.
+    updates: Option<Box<dyn UpdaterSource>>,
     /// The startup report, shared with `main`, which reports the run's
     /// end through it.
     report: Option<Rc<RefCell<Report>>>,
@@ -130,6 +145,7 @@ impl<S: ImageSource> Runner<S> {
             diagnostics: None,
             #[cfg(target_os = "macos")]
             menu_proxy: None,
+            updates: None,
             report: None,
         }
     }
@@ -147,8 +163,18 @@ impl<S: ImageSource> Runner<S> {
     /// installs it, sending each pick through `proxy` as a user event.
     #[cfg(target_os = "macos")]
     #[must_use]
-    pub fn with_menu_proxy(mut self, proxy: EventLoopProxy<MenuCommand>) -> Self {
+    pub fn with_menu_proxy(mut self, proxy: EventLoopProxy<LoopEvent>) -> Self {
         self.menu_proxy = Some(proxy);
+        self
+    }
+
+    /// The runner with the platform's updates: once the window opens, the
+    /// app takes the updater `source` gives ([`choose`]), which starts its
+    /// background checks, and a bundle whose updater won't load says so at
+    /// startup. Without one, the app has no updater.
+    #[must_use]
+    pub fn with_updater_source(mut self, source: Box<dyn UpdaterSource>) -> Self {
+        self.updates = Some(source);
         self
     }
 
@@ -270,8 +296,8 @@ fn open(
 /// (`nova::platform::dialogs`): a quit there cancels the panel and ends
 /// the launch, and they are dropped before the loop launches the app. It
 /// needs the OS, so no test runs it.
-pub fn event_loop() -> Result<EventLoop<MenuCommand>, EventLoopError> {
-    let mut builder = EventLoop::<MenuCommand>::with_user_event();
+pub fn event_loop() -> Result<EventLoop<LoopEvent>, EventLoopError> {
+    let mut builder = EventLoop::<LoopEvent>::with_user_event();
     #[cfg(target_os = "macos")]
     {
         use winit::platform::macos::EventLoopBuilderExtMacOS;
@@ -280,7 +306,7 @@ pub fn event_loop() -> Result<EventLoop<MenuCommand>, EventLoopError> {
     builder.build()
 }
 
-impl<S: ImageSource> ApplicationHandler<MenuCommand> for Runner<S> {
+impl<S: ImageSource> ApplicationHandler<LoopEvent> for Runner<S> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let Some((images, screen, fonts)) = self.pending.take() else {
             return;
@@ -296,8 +322,20 @@ impl<S: ImageSource> ApplicationHandler<MenuCommand> for Runner<S> {
                     Some(core) => app.with_audio(core),
                     None => app,
                 };
-                let mut app = match self.settings.take() {
+                let app = match self.settings.take() {
                     Some(keeper) => app.with_settings(keeper),
+                    None => app,
+                };
+                // Once NSApplication has finished launching, where Sparkle
+                // expects to be started.
+                let mut app = match self.updates.take() {
+                    Some(source) => {
+                        let chosen = choose(&*source);
+                        if let Some(warning) = &chosen.warning {
+                            startup_warning(self.report.as_ref(), warning);
+                        }
+                        app.with_updater(chosen.updater)
+                    }
                     None => app,
                 };
                 // Fullscreen if the player quit fullscreen; a saved mode
@@ -394,12 +432,14 @@ impl<S: ImageSource> ApplicationHandler<MenuCommand> for Runner<S> {
         }
     }
 
-    /// A menu bar pick: the app takes it as [`WindowEvent::Menu`].
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, command: MenuCommand) {
+    /// A menu bar pick or the updater's quit: the app takes it as its
+    /// window event ([`WindowEvent::Menu`] or
+    /// [`WindowEvent::CheckForUpdates`]).
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: LoopEvent) {
         let Some(running) = &mut self.running else {
             return;
         };
-        let exit = running.handle(WindowEvent::Menu(command)).control == Control::Exit;
+        let exit = running.handle(event.into()).control == Control::Exit;
         running.after_events(event_loop, exit);
     }
 
@@ -446,11 +486,11 @@ impl<S: ImageSource> Running<S> {
     /// events sent through `proxy`. One that can't be installed is a
     /// warning, given back, and the game runs without it.
     #[cfg(target_os = "macos")]
-    fn install_menu(&mut self, proxy: &EventLoopProxy<MenuCommand>) -> Vec<String> {
-        // A closed loop drops the command: the app is exiting.
-        let send = |proxy: EventLoopProxy<MenuCommand>| {
+    fn install_menu(&mut self, proxy: &EventLoopProxy<LoopEvent>) -> Vec<String> {
+        // A closed loop drops the pick: the app is exiting.
+        let send = |proxy: EventLoopProxy<LoopEvent>| {
             move |command| {
-                let _ = proxy.send_event(super::menu_bar::menu_command(command));
+                let _ = proxy.send_event(LoopEvent::Menu(super::menu_bar::pick(command)));
             }
         };
         let mut warnings = Vec::new();
@@ -465,12 +505,12 @@ impl<S: ImageSource> Running<S> {
         warnings
     }
 
-    /// Tells the menu bar, if any, what the screen now offers.
+    /// Tells the menu bar, if any, what the app now offers.
     #[cfg_attr(not(target_os = "macos"), allow(clippy::unused_self))]
     fn sync_menu(&mut self) {
         #[cfg(target_os = "macos")]
         if let Some((bar, sync)) = &mut self.menu {
-            sync.sync(self.app.screen(), bar);
+            sync.sync(&self.app, bar);
         }
     }
 

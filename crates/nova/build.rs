@@ -2,11 +2,27 @@
 //! to `[package.metadata.bundle] identifier` in this package's
 //! `Cargo.toml`, for every target.
 //!
+//! Reruns when `NOVA_BUILD_ID` changes, the build ID `nova::build_id`
+//! compiles in. It doesn't check the value: `nova_bundle::build_id`
+//! makes and checks it, and a build without one is a development build.
+//!
 //! Embeds `nova.exe`'s Windows resources: its icon (made from the macOS
 //! `.icns`), its version information and its application manifest
 //! (`packaging/windows/nova.exe.manifest`). For any other target it does
 //! no more. Every decision is `nova_winres`'s; this only reads and writes
 //! the files and runs the resource compiler.
+//!
+//! For Windows targets it also compiles in the update feed WinSparkle
+//! checks (`nova::winsparkle::FEED` and `PUBLIC_KEY`): with `NOVA_CHANNEL`
+//! set to a channel and `[package.metadata.bundle] update_public_key`
+//! committed, it sets `NOVA_UPDATE_FEED` to the channel's Windows appcast
+//! and `NOVA_UPDATE_PUBLIC_KEY` to the key. Without either it sets
+//! neither, and the build doesn't update. An unknown channel fails the
+//! build, as the bundler refuses it. The decision is
+//! `nova_winres::windows_update_feed`'s; the key is public. With
+//! `NOVA_BUILD_ID` set it also sets `NOVA_UPDATE_BUILD_VERSION`
+//! (`nova::winsparkle::BUILD_VERSION`), the form of the ID WinSparkle
+//! compares, `nova_winres::windows_build_version`'s.
 //!
 //! On a Windows host the resources must compile, so a Windows build
 //! always carries them. Cross-checking from another host (`mise run
@@ -16,7 +32,10 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
-use nova_winres::{Resources, bundle_identifier, ico_from_icns, link_args, resource_script};
+use nova_winres::{
+    CHANNEL_VAR, Resources, bundle_identifier, ico_from_icns, link_args, resource_script,
+    windows_build_version, windows_update_feed,
+};
 
 /// The product's name, as `[package.metadata.bundle] name` gives it to
 /// the macOS bundle.
@@ -26,11 +45,12 @@ fn main() {
     let crate_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let cargo_toml = crate_dir.join("Cargo.toml");
     println!("cargo:rerun-if-changed={}", cargo_toml.display());
-    let manifest = fs::read_to_string(&cargo_toml)
+    let manifest_text = fs::read_to_string(&cargo_toml)
         .unwrap_or_else(|error| panic!("{}: {error}", cargo_toml.display()));
-    let app_id = bundle_identifier(&manifest)
+    let app_id = bundle_identifier(&manifest_text)
         .unwrap_or_else(|error| panic!("{}: {error}", cargo_toml.display()));
     println!("cargo:rustc-env=NOVA_APP_ID={app_id}");
+    println!("cargo:rerun-if-env-changed=NOVA_BUILD_ID");
     let packaging = crate_dir.join("..").join("..").join("packaging");
     let icns = packaging.join("macos").join("Nova.icns");
     let manifest = packaging.join("windows").join("nova.exe.manifest");
@@ -40,6 +60,18 @@ fn main() {
     // The target's, not `cfg!(windows)`: the script runs on the host.
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
+    }
+    println!("cargo:rerun-if-env-changed={CHANNEL_VAR}");
+    let channel = env::var(CHANNEL_VAR).ok();
+    let feed = windows_update_feed(&manifest_text, channel.as_deref())
+        .unwrap_or_else(|error| panic!("{}: {error}", cargo_toml.display()));
+    if let Some(feed) = feed {
+        println!("cargo:rustc-env=NOVA_UPDATE_FEED={}", feed.url);
+        println!("cargo:rustc-env=NOVA_UPDATE_PUBLIC_KEY={}", feed.public_key);
+    }
+    let build_version = env::var("NOVA_BUILD_ID").ok();
+    if let Some(version) = build_version.as_deref().and_then(windows_build_version) {
+        println!("cargo:rustc-env=NOVA_UPDATE_BUILD_VERSION={version}");
     }
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     let ico = out.join("nova.ico");

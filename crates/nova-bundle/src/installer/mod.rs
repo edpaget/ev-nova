@@ -1,7 +1,14 @@
 //! The Windows installer: a per-user MSI holding `nova.exe`,
-//! `nova-dump.exe`, `README.txt` and `LICENSE`, with a Start menu
-//! shortcut and an Apps & features entry, built by WiX's `wix` from
-//! executables that are already built.
+//! `nova-dump.exe`, `README.txt` and `LICENSE`, and WinSparkle's DLL and
+//! licences ([`winsparkle`]), with a Start menu shortcut and an Apps &
+//! features entry, built by WiX's `wix` from executables that are already
+//! built.
+//!
+//! An update's install relaunches the game: WinSparkle runs the new
+//! `.msi` with the feed's `sparkle:installerArguments`, which set
+//! [`RELAUNCH_PROPERTY`] to `1`, and the [`RELAUNCH_ACTION`] custom action
+//! starts `nova.exe` once the install is done. An install from Explorer
+//! doesn't set it, so it doesn't relaunch.
 //!
 //! Packing never builds: [`plan::pack`] takes `nova.exe` and
 //! `nova-dump.exe` as they are from the directory it is given
@@ -20,6 +27,7 @@
 pub mod host;
 pub mod layout;
 pub mod plan;
+pub mod winsparkle;
 pub mod wxs;
 
 use std::path::PathBuf;
@@ -54,6 +62,11 @@ pub const EXES: [&str; 2] = [GAME_EXE, DUMP_EXE];
 /// The `HKCU` key whose values are the installed components' key paths,
 /// as Windows Installer requires of files under the user's profile.
 pub const REGISTRY_KEY: &str = r"Software\ev-nova\Nova";
+/// The public property that, set to `1`, relaunches the game after the
+/// install: the Windows feed's installer arguments set it.
+pub const RELAUNCH_PROPERTY: &str = "NOVA_RELAUNCH";
+/// The custom action that relaunches the game.
+pub const RELAUNCH_ACTION: &str = "RelaunchNova";
 
 /// The largest major or minor version an MSI's `ProductVersion` holds.
 pub const MAX_MAJOR_MINOR: u16 = 255;

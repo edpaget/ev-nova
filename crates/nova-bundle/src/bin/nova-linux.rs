@@ -13,7 +13,7 @@ use std::process::ExitCode;
 
 use nova_bundle::linux::host::linux_host;
 use nova_bundle::linux::share::write_share;
-use nova_bundle::system::{StdFiles, StdProcess};
+use nova_bundle::system::{StdEnv, StdFiles, StdProcess};
 
 fn main() -> ExitCode {
     let cwd = match env::current_dir() {
@@ -30,7 +30,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match write_share(&mut StdProcess, &mut StdFiles, &host) {
+    match write_share(&mut StdProcess, &mut StdFiles, &StdEnv, &host) {
         Ok(out) => {
             println!("{}", out.display());
             ExitCode::SUCCESS

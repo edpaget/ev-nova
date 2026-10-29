@@ -16,6 +16,9 @@ pub enum Command {
     About,
     /// Preferences….
     Preferences,
+    /// Check for Updates…: the updater checks now. The game greys it when
+    /// the build has no updater.
+    CheckForUpdates,
     /// Quit: the game's own quit, never `AppKit`'s `terminate:`, which would
     /// end the process with no chance to save.
     Quit,
@@ -23,7 +26,12 @@ pub enum Command {
 
 impl Command {
     /// Every command, in the app menu's order.
-    pub const ALL: [Self; 3] = [Self::About, Self::Preferences, Self::Quit];
+    pub const ALL: [Self; 4] = [
+        Self::About,
+        Self::Preferences,
+        Self::CheckForUpdates,
+        Self::Quit,
+    ];
 
     /// The item's tag, which says which command a pick of it is. Never 0,
     /// every other item's tag.
@@ -33,6 +41,7 @@ impl Command {
             Self::About => 1,
             Self::Preferences => 2,
             Self::Quit => 3,
+            Self::CheckForUpdates => 4,
         }
     }
 
@@ -212,13 +221,21 @@ const fn system(title: &'static str, shortcut: Option<Shortcut>, action: &'stati
     Item::new(Title::Fixed(title), shortcut, Action::System(action))
 }
 
-const APP_ITEMS: [Item; 11] = [
+const APP_ITEMS: [Item; 13] = [
     command(Title::Named("About"), None, Command::About),
     Item::SEPARATOR,
     command(
         Title::Fixed("Preferences…"),
         Some(Shortcut::new(',', Modifiers::COMMAND)),
         Command::Preferences,
+    ),
+    Item::SEPARATOR,
+    // The original's `aUpd` slot and title (main.nib item 237), with no key
+    // equivalent as there; Sparkle's check, not Ambrosia's.
+    command(
+        Title::Fixed("Check for Updates…"),
+        None,
+        Command::CheckForUpdates,
     ),
     Item::SEPARATOR,
     Item::new(Title::Fixed("Services"), None, Action::Services),
@@ -268,8 +285,8 @@ const WINDOW_ITEMS: [Item; 5] = [
 ];
 
 /// The menu bar: the app menu, View and Window, as the original's Carbon
-/// nib (`main.nib`) has them, but its Edit menu and its shareware items
-/// (see the crate docs).
+/// nib (`main.nib`) has them, but its Edit menu and Register (see the
+/// crate docs).
 pub const MENUS: [Menu; 3] = [
     Menu {
         role: Role::App,
@@ -354,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn the_app_menu_lists_about_preferences_services_hide_and_quit() {
+    fn the_app_menu_lists_about_preferences_check_for_updates_services_hide_and_quit() {
         let separator = (String::new(), None, Action::Separator);
         assert_eq!(
             listed(&MENUS[0]),
@@ -369,6 +386,12 @@ mod tests {
                     "Preferences…".into(),
                     cmd(','),
                     Action::Command(Command::Preferences)
+                ),
+                separator.clone(),
+                (
+                    "Check for Updates…".into(),
+                    None,
+                    Action::Command(Command::CheckForUpdates)
                 ),
                 separator.clone(),
                 ("Services".into(), None, Action::Services),
@@ -409,6 +432,23 @@ mod tests {
                 .flat_map(|menu| menu.items)
                 .all(|item| item.action != Action::System(c"terminate:")),
             "no item terminates"
+        );
+    }
+
+    #[test]
+    fn check_for_updates_sends_its_command_with_no_key_equivalent() {
+        let item = MENUS[0]
+            .items
+            .iter()
+            .find(|item| item.action == Action::Command(Command::CheckForUpdates))
+            .expect("Check for Updates…");
+        assert_eq!(item.title, Title::Fixed("Check for Updates…"));
+        assert_eq!(item.shortcut, None);
+        assert!(!item.alternate);
+        assert_ne!(Command::CheckForUpdates.tag(), 0);
+        assert_eq!(
+            Command::from_tag(Command::CheckForUpdates.tag()),
+            Some(Command::CheckForUpdates)
         );
     }
 
@@ -467,7 +507,17 @@ mod tests {
             assert_eq!(Command::from_tag(command.tag()), Some(command));
         }
         assert_eq!(Command::from_tag(0), None);
-        assert_eq!(Command::from_tag(4), None);
+        assert_eq!(Command::from_tag(5), None);
+        assert_eq!(
+            Command::ALL,
+            [
+                Command::About,
+                Command::Preferences,
+                Command::CheckForUpdates,
+                Command::Quit
+            ],
+            "in the app menu's order"
+        );
         assert_eq!(Command::from_tag(-1), None);
     }
 

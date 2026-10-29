@@ -17,10 +17,16 @@ pub mod dialogs;
 #[cfg(target_os = "macos")]
 mod menu_bar;
 mod runner;
+#[cfg(any(target_os = "macos", windows))]
+mod updater;
 mod window;
 
 pub use dialogs::Dialogs;
 pub use runner::{Runner, event_loop};
+#[cfg(target_os = "macos")]
+pub use updater::SparkleSource;
+#[cfg(windows)]
+pub use updater::{DllLoader, winsparkle_source};
 pub use window::WinitWindow;
 
 /// The game's app id: `[package.metadata.bundle] identifier` in nova's

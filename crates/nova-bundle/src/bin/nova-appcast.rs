@@ -1,0 +1,115 @@
+//! `nova-appcast publish --dist <DIR> --assets <FILE> --current <DIR>
+//! --feeds <DIR> --prune-list <FILE>`: CI's `publish` job's update-feed
+//! logic. It signs the stable installers in `--dist`, copies each to its
+//! build-ID name beside it, records the commit `NOVA_COMMIT` names in
+//! `ev-nova-<id>-commit.txt` there too, and writes the two nightly feeds
+//! into `--feeds`, when the public key is committed and
+//! `UPDATE_SIGNING_KEY` holds its seed; otherwise it prints a
+//! `::warning::` and writes none.
+//! Either way it writes the release assets to delete into `--prune-list`.
+//! Run it through cargo, as `mise run appcast -- publish ...`, or run the
+//! built binary with cargo on `PATH`, as CI's signing step does so that
+//! nothing compiles beside the seed: it reads the spec with `$CARGO
+//! metadata` (else `cargo metadata`), and the build ID from
+//! `NOVA_BUILD_ID` (else HEAD's committer time). See `nova_bundle::appcast`.
+//!
+//! It writes the feeds of the channel `NOVA_CHANNEL` names (`nightly` or
+//! `beta`), which it requires, against that channel's current feeds. It
+//! requires `NOVA_COMMIT`, the full SHA of the commit built.
+//!
+//! `nova-appcast check-promotion`, with `--build <ID>`, `--repo <DIR>`,
+//! `--nightly-assets <FILE>`, `--nightly-commits <DIR>`, `--beta-assets
+//! <FILE>` and `--beta-current <DIR>`: `promote-beta`'s `check` job. It
+//! refuses a run whose `GITHUB_REF` isn't `main`, a malformed ID, a build
+//! the nightly release's asset list doesn't hold both update files of, or
+//! one not newer than the beta feeds in `--beta-current`; then it reads the
+//! build's recorded commit from its `ev-nova-<id>-commit.txt`, downloaded
+//! into `--nightly-commits`, refusing a build that has none or a file that
+//! holds no commit, and checks it against `--repo`'s history: it must be
+//! on `main`, with the build ID as its committer time. It prints
+//! `build=<id>` and `commit=<sha>` lines for `$GITHUB_OUTPUT`. See
+//! `nova_bundle::appcast::promote`.
+//!
+//! `nova-appcast public-key` prints the public key of the seed in
+//! `UPDATE_SIGNING_KEY`, as base64, for the operator to commit.
+//!
+//! Exits 2 on a usage error, 3 when the current feeds already offer this
+//! very build (a re-run whose feeds went up; nothing is written), and 1
+//! on any other failure, a build older than the current feeds' and every
+//! refused promotion included.
+
+use std::env;
+use std::ffi::OsString;
+use std::process::ExitCode;
+
+use nova_bundle::appcast::host::{Command, FAILURE_STATUS, USAGE_STATUS, command, exit_status};
+use nova_bundle::appcast::promote::check_promotion;
+use nova_bundle::appcast::publish::{public_key, run};
+use nova_bundle::system::{Ed25519Signer, StdEnv, StdFiles, StdProcess};
+
+fn main() -> ExitCode {
+    let cwd = match env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => {
+            eprintln!("nova-appcast: the working directory: {e}");
+            return ExitCode::from(USAGE_STATUS);
+        }
+    };
+    let command = match command(env::args_os().skip(1).collect(), &cwd) {
+        Ok(command) => command,
+        Err(e) => {
+            eprintln!("nova-appcast: {e}");
+            return ExitCode::from(USAGE_STATUS);
+        }
+    };
+    let result = match command {
+        Command::CheckPromotion { build, paths } => {
+            return match check_promotion(&StdEnv, &StdFiles, &mut StdProcess, &build, &paths) {
+                Ok(promotion) => {
+                    print!("{}", promotion.output());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("nova-appcast: {e}");
+                    // Every refusal, a malformed --build included, is a failure; only
+                    // a usage error exits 2.
+                    ExitCode::from(FAILURE_STATUS)
+                }
+            };
+        }
+        Command::PublicKey => {
+            public_key(&StdEnv, Ed25519Signer::from_base64_seed).map(|key| println!("{key}"))
+        }
+        Command::Publish(paths) => {
+            let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+            run(
+                &mut StdProcess,
+                &StdEnv,
+                &StdFiles,
+                &mut StdFiles,
+                &cargo,
+                &cwd,
+                &paths,
+                Ed25519Signer::from_base64_seed,
+            )
+            .map(|published| {
+                if let Some(reason) = published.skipped {
+                    println!(
+                        "::warning title=Update feeds not published::{}",
+                        reason.message()
+                    );
+                }
+                for feed in &published.feeds {
+                    println!("{}", feed.display());
+                }
+            })
+        }
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("nova-appcast: {e}");
+            ExitCode::from(exit_status(&e))
+        }
+    }
+}

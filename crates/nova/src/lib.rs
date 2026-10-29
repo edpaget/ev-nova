@@ -6,6 +6,8 @@
 //!   frame's draw list to `nova-render`. No winit or wgpu types.
 //! - [`audio`]: the audio core over the device that opened, and the
 //!   music that loaded, each with a warning when it did not.
+//! - [`build_id`]: the build ID `nova` was compiled with, or none for a
+//!   development build.
 //! - [`chance`]: the real source of chance, a seeded `SplitMix64`
 //!   generator.
 //! - [`cli`]: where the game data is, from the arguments or `NOVA_DATA`.
@@ -32,12 +34,15 @@
 //!   the startup log and, without a terminal, an alert).
 //! - [`platform`]: the thin winit adapter: event translation, the window
 //!   port over a real window, the event-loop runner and the dialogs.
+//! - [`winsparkle`]: the Windows updater in the core's terms: WinSparkle's
+//!   calls as a port, its startup sequence, and when there is no updater.
 //!
 //! With the `dev-tools` feature (`mise run dev`), `devtools` draws the
 //! developer tools overlay with egui. Without it, egui is not linked.
 
 pub mod app;
 pub mod audio;
+pub mod build_id;
 pub mod chance;
 pub mod cli;
 pub mod config;
@@ -54,3 +59,4 @@ pub mod rulebook;
 pub mod saves;
 pub mod settings;
 pub mod startup;
+pub mod winsparkle;

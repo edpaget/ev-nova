@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::path::Path;
 
+use crate::appcast::Channel;
 use crate::bundle::Host;
 use crate::signing::Signing;
 
@@ -30,7 +31,8 @@ pub enum HostError {
 /// The host from the arguments after the program name, `$CARGO`,
 /// `$MACOSX_DEPLOYMENT_TARGET` and the working directory, which a relative
 /// output directory is taken against, on the host `os`
-/// (`std::env::consts::OS`), signing as `signing` says.
+/// (`std::env::consts::OS`), signing as `signing` says, for the release
+/// `channel` (`None` for a development bundle).
 pub fn host(
     args: Vec<OsString>,
     cargo: Option<OsString>,
@@ -38,6 +40,7 @@ pub fn host(
     cwd: &Path,
     os: &str,
     signing: Signing,
+    channel: Option<Channel>,
 ) -> Result<Host, HostError> {
     if os != "macos" {
         return Err(HostError::NotMacOs(os.to_owned()));
@@ -59,6 +62,7 @@ pub fn host(
         min_system,
         out: out.map(|out| cwd.join(out)),
         signing,
+        channel,
     })
 }
 
@@ -67,6 +71,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::appcast::Channel;
     use crate::test_support::credentials;
 
     fn cwd() -> PathBuf {
@@ -86,6 +91,7 @@ mod tests {
             &cwd(),
             "macos",
             Signing::AdHoc,
+            None,
         )
         .expect("host");
         assert_eq!(
@@ -95,6 +101,7 @@ mod tests {
                 min_system: "13.0".into(),
                 out: None,
                 signing: Signing::AdHoc,
+                channel: None,
             }
         );
     }
@@ -108,6 +115,7 @@ mod tests {
             &cwd(),
             "macos",
             Signing::AdHoc,
+            None,
         )
         .expect("host");
         assert_eq!(host.out, Some(cwd().join("dist")));
@@ -123,6 +131,7 @@ mod tests {
             &cwd(),
             "macos",
             Signing::AdHoc,
+            None,
         )
         .expect("host");
         assert_eq!(host.out, Some(out));
@@ -137,6 +146,7 @@ mod tests {
             &cwd(),
             "macos",
             Signing::AdHoc,
+            None,
         )
         .expect("host");
         assert_eq!(host.cargo, "cargo");
@@ -152,7 +162,8 @@ mod tests {
                     Some("13.0".into()),
                     &cwd(),
                     "macos",
-                    Signing::AdHoc
+                    Signing::AdHoc,
+                    None
                 ),
                 Err(HostError::Usage),
                 "{args:?}"
@@ -164,7 +175,7 @@ mod tests {
     fn an_unset_or_empty_deployment_target_is_an_error() {
         for target in [None, Some(String::new())] {
             assert_eq!(
-                host(vec![], None, target, &cwd(), "macos", Signing::AdHoc),
+                host(vec![], None, target, &cwd(), "macos", Signing::AdHoc, None),
                 Err(HostError::NoDeploymentTarget)
             );
         }
@@ -180,7 +191,8 @@ mod tests {
                     Some("13.0".into()),
                     &cwd(),
                     os,
-                    Signing::AdHoc
+                    Signing::AdHoc,
+                    None
                 ),
                 Err(HostError::NotMacOs(os.to_owned()))
             );
@@ -197,8 +209,26 @@ mod tests {
             &cwd(),
             "macos",
             signing.clone(),
+            None,
         )
         .expect("host");
         assert_eq!(host.signing, signing);
+    }
+
+    #[test]
+    fn the_channel_is_carried_through() {
+        for channel in [None, Some(Channel::Nightly)] {
+            let host = host(
+                vec![],
+                None,
+                Some("13.0".into()),
+                &cwd(),
+                "macos",
+                Signing::AdHoc,
+                channel,
+            )
+            .expect("host");
+            assert_eq!(host.channel, channel);
+        }
     }
 }

@@ -18,6 +18,7 @@ use crate::bundle::{BundleError, Step, make_dmg, run, verify};
 use crate::layout::Layout;
 use crate::notary::Notarization;
 use crate::ports::{Env, Invocation, Process};
+use crate::sparkle;
 
 /// The base64 of the Developer ID Application `.p12` (certificate and
 /// private key).
@@ -195,14 +196,27 @@ fn sign(credentials: &Credentials, layout: &Layout, runtime: bool, path: PathBuf
     Step::Run(invocation.arg("--timestamp").arg(path))
 }
 
+/// `spctl --assess` with these words on `path`: Gatekeeper's verdict, which
+/// fails the run when it rejects it.
+fn assess(words: &[&str], path: PathBuf) -> Step {
+    Step::Run(
+        Invocation::new("spctl")
+            .arg("--assess")
+            .args(words)
+            .arg("--verbose=2")
+            .arg(path),
+    )
+}
+
 /// `xcrun stapler <action>` on a notarized file.
 fn stapler(action: &str, path: PathBuf) -> Step {
     Step::Run(Invocation::new("xcrun").args(["stapler", action]).arg(path))
 }
 
-/// The Developer ID steps after staging: the keychain, the signatures,
-/// notarization and stapling of the app, then the `.dmg` made from the
-/// stapled app, signed, notarized and stapled.
+/// The Developer ID steps after staging: the keychain, the signatures
+/// (Sparkle's inside out, then `nova-dump`, then the app), notarization,
+/// stapling and Gatekeeper's assessment of the app, then the `.dmg` made
+/// from the stapled app, signed, notarized, stapled and assessed.
 ///
 /// The keychain's password is the certificate's: the keychain lives in the
 /// signing directory, which the run removes, so its password guards
@@ -227,7 +241,7 @@ pub fn developer_id(credentials: &Credentials, layout: &Layout) -> Vec<Step> {
             auth: auth.clone(),
         })
     };
-    vec![
+    let mut steps = vec![
         Step::RemoveDir(layout.signing()),
         Step::CreateDir(layout.signing()),
         Step::WriteSecret {
@@ -273,6 +287,15 @@ pub fn developer_id(credentials: &Credentials, layout: &Layout) -> Vec<Step> {
             .captured(),
         ),
         Step::AddToSearchList(keychain),
+    ];
+    // Sparkle's code inside out, each with the hardened runtime and the
+    // app's Team ID, so library validation lets `nova` load it.
+    steps.extend(
+        sparkle::nested_code(&layout.sparkle_framework())
+            .into_iter()
+            .map(|path| sign(credentials, layout, true, path)),
+    );
+    steps.extend([
         // nova-dump too: the .dmg's notarization fails on any code in it
         // not signed with the hardened runtime.
         sign(credentials, layout, true, layout.dump()),
@@ -290,6 +313,8 @@ pub fn developer_id(credentials: &Credentials, layout: &Layout) -> Vec<Step> {
         notarize(layout.app_zip()),
         stapler("staple", layout.app()),
         stapler("validate", layout.app()),
+        // Gatekeeper's verdict on the stapled app, offline from its ticket.
+        assess(&["--type", "execute"], layout.app()),
         verify(layout.app()),
         Step::CreateDir(layout.out.clone()),
         make_dmg(layout),
@@ -305,7 +330,13 @@ pub fn developer_id(credentials: &Credentials, layout: &Layout) -> Vec<Step> {
         notarize(layout.dmg()),
         stapler("staple", layout.dmg()),
         stapler("validate", layout.dmg()),
-    ]
+        // A disk image is assessed as a file opened, by its own signature.
+        assess(
+            &["--type", "open", "--context", "context:primary-signature"],
+            layout.dmg(),
+        ),
+    ]);
+    steps
 }
 
 /// What runs after the Developer ID steps whatever they did: the keychain
@@ -363,23 +394,13 @@ mod tests {
     use crate::spec::BundleSpec;
     use crate::spec::tests::sample_metadata;
     use crate::test_support::{
-        self, Event, KEYCHAIN_PATHS, P8, P12, ad_hoc_host, credentials, developer_id_host, failing,
-        is, paths, run_ok_with, starts,
+        self, Event, FakeEnv, KEYCHAIN_PATHS, P8, P12, ad_hoc_host, credentials, developer_id_host,
+        failing, is, paths, run_ok_with, starts,
     };
 
-    /// The environment as a map.
-    #[derive(Default)]
-    struct MapEnv(HashMap<&'static str, OsString>);
-
-    impl Env for MapEnv {
-        fn var(&self, name: &str) -> Option<OsString> {
-            self.0.get(name).cloned()
-        }
-    }
-
     /// Every variable set, to values none of which holds another.
-    fn full() -> MapEnv {
-        MapEnv(HashMap::from([
+    fn full() -> FakeEnv {
+        FakeEnv(HashMap::from([
             (CERT_P12, STANDARD.encode(P12).into()),
             (CERT_PASSWORD, "pw-secret-value".into()),
             (IDENTITY, "Developer ID Application: Ed (TEAM123456)".into()),
@@ -403,12 +424,12 @@ mod tests {
 
     #[test]
     fn no_variables_sign_ad_hoc() {
-        assert_eq!(Signing::from_env(&MapEnv::default()), Ok(Signing::AdHoc));
+        assert_eq!(Signing::from_env(&FakeEnv::default()), Ok(Signing::AdHoc));
     }
 
     #[test]
     fn six_empty_variables_sign_ad_hoc() {
-        let env = MapEnv(VARS.iter().map(|v| (*v, OsString::new())).collect());
+        let env = FakeEnv(VARS.iter().map(|v| (*v, OsString::new())).collect());
         assert_eq!(Signing::from_env(&env), Ok(Signing::AdHoc));
     }
 
@@ -536,6 +557,48 @@ mod tests {
         ]
     }
 
+    /// `spctl --assess <words> --verbose=2 <path>`.
+    fn spctl(words: &str, path: &Path) -> Invocation {
+        Invocation::new("spctl")
+            .arg("--assess")
+            .args(words.split_whitespace())
+            .arg("--verbose=2")
+            .arg(path)
+    }
+
+    #[test]
+    fn a_rejected_assessment_of_the_app_makes_no_dmg_and_cleans_up() {
+        let app = paths().app;
+        let run = test_support::run(
+            &developer_id_host(),
+            b"arm64",
+            failing(move |i| starts(i, "spctl", &[]) && i.args.last() == Some(&app.clone().into())),
+            |_| false,
+        );
+        let error = run.result.as_ref().expect_err("fails").to_string();
+        assert!(
+            error.starts_with("`spctl --assess --type execute"),
+            "{error}"
+        );
+        assert!(!run.ran("hdiutil"));
+        assert!(ends_with_cleanup(&run));
+    }
+
+    #[test]
+    fn a_rejected_assessment_of_the_dmg_fails_the_bundle_and_cleans_up() {
+        let dmg = paths().dmg;
+        let run = test_support::run(
+            &developer_id_host(),
+            b"arm64",
+            failing(move |i| starts(i, "spctl", &[]) && i.args.last() == Some(&dmg.clone().into())),
+            |_| false,
+        );
+        let error = run.result.as_ref().expect_err("fails").to_string();
+        assert!(error.starts_with("`spctl --assess --type open"), "{error}");
+        assert!(run.ran("hdiutil"));
+        assert!(ends_with_cleanup(&run));
+    }
+
     fn stapler(action: &str, path: &Path) -> Event {
         Event::Run(Invocation::new("xcrun").args(["stapler", action]).arg(path))
     }
@@ -567,6 +630,7 @@ mod tests {
     fn signs_notarizes_and_staples_the_app_then_the_dmg() {
         let p = paths();
         let kc = &p.keychain;
+        let sparkle_b = p.framework.join("Versions").join("B");
         let run = run_ok_with(&developer_id_host());
         assert_eq!(run.result.as_ref().expect("bundled"), &p.dmg);
 
@@ -600,6 +664,9 @@ mod tests {
                     .arg(kc)
                     .args(KEYCHAIN_PATHS),
             ),
+            Event::Run(sign("--options runtime", &sparkle_b.join("Autoupdate"))),
+            Event::Run(sign("--options runtime", &sparkle_b.join("Updater.app"))),
+            Event::Run(sign("--options runtime", &p.framework)),
             Event::Run(sign("--options runtime", &p.dump)),
             Event::Run(sign("--options runtime", &p.app)),
             Event::Run(codesign("--verify --deep --strict --verbose=2", &p.app)),
@@ -615,6 +682,7 @@ mod tests {
         expected.extend([
             stapler("staple", &p.app),
             stapler("validate", &p.app),
+            Event::Run(spctl("--type execute", &p.app)),
             Event::Run(codesign("--verify --deep --strict --verbose=2", &p.app)),
             Event::CreateDir(p.out.clone()),
             Event::Run(
@@ -628,7 +696,14 @@ mod tests {
             Event::Run(codesign("--verify --strict --verbose=2", &p.dmg)),
         ]);
         expected.extend(notarized(&p.dmg));
-        expected.extend([stapler("staple", &p.dmg), stapler("validate", &p.dmg)]);
+        expected.extend([
+            stapler("staple", &p.dmg),
+            stapler("validate", &p.dmg),
+            Event::Run(spctl(
+                "--type open --context context:primary-signature",
+                &p.dmg,
+            )),
+        ]);
         expected.extend(cleanup());
         assert_eq!(run.events, expected);
     }
@@ -641,7 +716,11 @@ mod tests {
             .into_iter()
             .filter(|i| starts(i, "codesign", &["--force"]))
             .collect();
-        assert_eq!(signs.len(), 3);
+        assert_eq!(
+            signs.len(),
+            6,
+            "Sparkle's three, nova-dump, the app and the dmg"
+        );
         for sign in signs {
             assert!(!sign.args.iter().any(|a| a == "--entitlements"), "{sign}");
         }
@@ -856,7 +935,7 @@ mod tests {
         let spec = BundleSpec::from_metadata(&sample_metadata()).expect("spec");
         let layout = Layout::new(&spec.target_dir, None).expect("layout");
         assert_eq!(
-            plan(&spec, &layout, &developer_id_host()).cleanup,
+            plan(&spec, &layout, &developer_id_host(), &test_support::build()).cleanup,
             teardown(&layout)
         );
         assert_eq!(
