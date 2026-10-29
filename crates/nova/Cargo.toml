@@ -95,8 +95,9 @@ dev-tools = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit", "dep:wgpu"]
 # Exposes the test support this crate's integration tests reach the app
 # through: the current screen to change (`App::screen_mut`) and the
 # flight screen to ask (`AppScreen::flight_view_mut`), as a screen's ask
-# of the flight takes `&mut`.
-fixture = []
+# of the flight takes `&mut`, and whether flight holds queued input
+# (`AppScreen::input_queued`, over nova-view's `FlightView::input_queued`).
+fixture = ["nova-view/fixture"]
 
 [lints]
 workspace = true

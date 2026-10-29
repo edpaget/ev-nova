@@ -695,20 +695,22 @@ fn a_flights_diagnostics_are_written_out_once_as_lines() {
     );
 }
 
-/// Its entry frames leave the stand-in main menu's missing button
-/// pictures, which this data has none of, unasserted: the menu shows
-/// through the entry's fade out.
 impl crate::common::EntryHarness for Harness {
-    fn router(&self) -> &nova::app::screen::AppScreen {
-        self.app.screen()
-    }
-
     fn send_event(&mut self, event: WindowEvent) {
         self.send(event);
     }
 
     fn click_point(&mut self, at: Point) {
         self.click(at);
+    }
+}
+
+/// Its entry frames leave the stand-in main menu's missing button
+/// pictures, which this data has none of, unasserted: the menu shows
+/// through the entry's fade out.
+impl crate::common::Frames for Harness {
+    fn router(&self) -> &nova::app::screen::AppScreen {
+        self.app.screen()
     }
 
     fn next_frame(&mut self) {

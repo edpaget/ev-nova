@@ -18,6 +18,7 @@
 //!   the original's words (`STR#` 2002 #72, #68) and the ship flies on.
 
 use crate::bracket_art;
+use crate::common::Frames;
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -241,13 +242,6 @@ impl Harness {
         self.key(code, false);
     }
 
-    /// Presses a stellar slot key and draws the frame whose slot block
-    /// takes it.
-    fn press_slot(&mut self, code: KeyCode) {
-        self.press(code);
-        self.frame();
-    }
-
     fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
@@ -282,12 +276,11 @@ impl Harness {
         frame
     }
 
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request.
+    /// Draws frames until the dock approach has cleared the request.
     fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frame();
-        }
+        self.settle_until("the dock approach's clearance", |game| {
+            game.session().dock_cleared()
+        });
     }
 
     /// Holds Up until the ship is moving faster than `speed`, then lets go.
@@ -356,7 +349,8 @@ fn with_no_target_l_requests_clearance_at_the_nearest_and_a_second_l_lands_there
 #[test]
 fn with_alpha_minor_chosen_by_its_slot_key_l_lands_there() {
     let mut game = Harness::flying();
-    game.press_slot(KeyCode::Digit1);
+    game.press(KeyCode::Digit1);
+    game.settle();
     assert_eq!(game.session().nav_target(), Some(StellarId(131)));
     game.press(KeyCode::KeyL);
     assert_eq!(game.showing(), Showing::Flight, "requested");
@@ -371,11 +365,14 @@ fn after_l_selected_the_nearest_a_slot_key_switches_the_target() {
     let mut game = Harness::flying();
     game.press(KeyCode::KeyL);
     assert_eq!(game.session().nav_target(), Some(StellarId(128)));
-    game.press_slot(KeyCode::Digit1);
+    game.press(KeyCode::Digit1);
+    game.settle();
     assert_eq!(game.session().nav_target(), Some(StellarId(131)));
-    game.press_slot(KeyCode::F2);
+    game.press(KeyCode::F2);
+    game.settle();
     assert_eq!(game.session().nav_target(), Some(StellarId(128)));
-    game.press_slot(KeyCode::Digit1);
+    game.press(KeyCode::Digit1);
+    game.settle();
     game.press(KeyCode::KeyL);
     game.approach();
     game.press(KeyCode::KeyL);
@@ -424,3 +421,5 @@ fn far_from_every_stellar_the_second_l_says_so_and_the_ship_flies_on() {
         "{texts:?}"
     );
 }
+
+crate::common::frames!(Harness, frame);
