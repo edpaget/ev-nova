@@ -174,8 +174,14 @@ fn a_slot_key_is_queued_input_until_flight_ticks_and_never_under_a_dialog() {
     assert!(!screen.input_queued(), "nothing pressed");
     tap_slot_key(&mut screen);
     assert!(screen.input_queued(), "pressed");
-    screen.tick(TICK);
-    screen.tick(TICK);
+    // However many ticks flight takes to act on it: that count is
+    // nova-view's, pinned there.
+    for _ in 0..8 {
+        if !screen.input_queued() {
+            break;
+        }
+        screen.tick(TICK);
+    }
     assert!(!screen.input_queued(), "taken");
     tap_slot_key(&mut screen);
     open_prefs(&mut screen);
