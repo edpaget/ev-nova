@@ -45,6 +45,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.scene.as_ref()
     }
 
+    /// The frame the flight shows of `stellar` and its size, while the
+    /// system laid out shows it: what the planet comm dialog draws of it
+    /// (`_PlanetCommDialogUpdate` @0x90cc6-0x90e26).
+    #[must_use]
+    pub fn stellar_frame(
+        &self,
+        stellar: nova_sim::StellarId,
+    ) -> Option<crate::ui::planet_comm::StellarFrame> {
+        self.scene.as_ref()?.shown_frame(stellar)
+    }
+
     /// How far the display is between the last two steps, in `[0, 1)`.
     #[must_use]
     pub fn alpha(&self) -> f32 {

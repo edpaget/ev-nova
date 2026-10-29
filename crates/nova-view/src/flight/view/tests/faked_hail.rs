@@ -170,6 +170,16 @@ fn y_on_a_stellar_that_answers_holds_its_planet_comm_dialog_once_letting_go_of_t
 }
 
 #[test]
+fn the_planet_comm_dialog_draws_the_frame_the_flight_shows_of_its_stellar() {
+    let view = sol();
+    let scene = view.scene().expect("laid out");
+    let first = scene.stellars().first().expect("a stellar").id;
+    assert_eq!(view.stellar_frame(first), scene.shown_frame(first));
+    assert!(view.stellar_frame(first).is_some(), "drawn");
+    assert_eq!(view.stellar_frame(StellarId(999)), None, "not shown");
+}
+
+#[test]
 fn the_planet_comm_dialogs_presses_and_haggle_send_their_commands() {
     use nova_sim::planet_comm::PlanetCommItem;
     let mut view = sol();

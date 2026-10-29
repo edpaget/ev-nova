@@ -23,6 +23,7 @@ use super::catalog::{
 };
 use crate::draw::crossed_box;
 use crate::geometry::Bounds;
+use crate::image::ImageKey;
 use crate::{Color, DrawList, Point};
 
 /// The side of the box drawn where a stellar's sprite cannot be shown.
@@ -140,6 +141,21 @@ impl SceneStellar {
     #[must_use]
     pub fn drawn(&self) -> Option<&Result<StellarSheet, String>> {
         self.sheet(self.drawn)
+    }
+
+    /// The frame it shows, keyed, and that frame's width and height: at
+    /// the frame its animation shows, or a hypergate's on the frame its
+    /// session gave it, modulo its sheet's frames. None with no sheet to
+    /// draw, or a slot showing no frame.
+    #[must_use]
+    pub fn shown_image(&self) -> Option<(ImageKey, (f32, f32))> {
+        let sheet = self.drawn()?.as_ref().ok()?;
+        let frame = match self.gate_frame {
+            Some(frame) if !self.frozen => frame % sheet.frames.get(),
+            _ => self.frames.shown(),
+        };
+        let size = (sheet.frame_width as f32, sheet.frame_height as f32);
+        Some((sheet.image.frame(frame), size))
     }
 
     /// The sheet `which` names (see [`drawn`](Self::drawn)).
@@ -419,6 +435,18 @@ impl SystemScene {
         }
     }
 
+    /// The frame stellar `id` shows and its size
+    /// ([`SceneStellar::shown_image`]): what the planet comm dialog draws
+    /// of it (`_PlanetCommDialogUpdate` @0x90cc6-0x90e26). None for a
+    /// stellar not in it or showing nothing.
+    #[must_use]
+    pub fn shown_frame(&self, id: StellarId) -> Option<(ImageKey, (f32, f32))> {
+        self.stellars
+            .iter()
+            .find(|stellar| stellar.id == id)?
+            .shown_image()
+    }
+
     /// Where the camera may go: the box round the system's centre and every
     /// stellar, grown by [`CAMERA_MARGIN`].
     #[must_use]
@@ -449,19 +477,14 @@ pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) 
     let mut labels = Vec::new();
     for stellar in by_id {
         let centre = camera.world_to_screen(stellar.position);
-        let (at, (width, height)) = match stellar.drawn() {
-            None => (centre, (0.0, 0.0)),
-            Some(Ok(sheet)) => {
-                let frame = match stellar.gate_frame {
-                    Some(frame) if !stellar.frozen => frame % sheet.frames.get(),
-                    _ => stellar.frames.shown(),
-                };
-                let size = (sheet.frame_width as f32, sheet.frame_height as f32);
+        let (at, (width, height)) = match (stellar.drawn(), stellar.shown_image()) {
+            (None | Some(Ok(_)), None) => (centre, (0.0, 0.0)),
+            (_, Some((image, size))) => {
                 let at = stellar.sprite_centre(centre, size);
-                list.sprite(sheet.image.frame(frame), at, Color::WHITE);
+                list.sprite(image, at, Color::WHITE);
                 (at, size)
             }
-            Some(Err(message)) => {
+            (Some(Err(message)), None) => {
                 crossed_box(list, centre, PLACEHOLDER_SIZE, PLACEHOLDER);
                 let below = Point::new(
                     centre.x - PLACEHOLDER_SIZE / 2.0,
@@ -885,6 +908,29 @@ mod tests {
             assert_eq!(drawn(&scene), lower_on_bottom);
             assert_eq!(names_drawn(&scene), ["Stellar 200", "Stellar 300"]);
         }
+    }
+
+    #[test]
+    fn a_stellars_shown_frame_is_the_one_drawn_with_its_frame_size() {
+        let mut scene = SystemScene::load(&catalog(), SystemId(130));
+        scene.step(3, &mut NeverFires);
+        let shown = scene.shown_frame(StellarId(129)).expect("drawn");
+        assert_eq!(shown.0, drawn(&scene)[1], "as drawn");
+        let sheet = scene.stellars()[1]
+            .drawn()
+            .and_then(|sheet| sheet.as_ref().ok())
+            .copied()
+            .expect("a sheet");
+        assert_eq!(
+            shown.1,
+            (sheet.frame_width as f32, sheet.frame_height as f32)
+        );
+        scene.set_gate_frames(|id| (id == StellarId(129)).then_some(2));
+        assert_eq!(
+            scene.shown_frame(StellarId(129)).map(|shown| shown.0),
+            Some(ImageKey::sprite(1001, 2))
+        );
+        assert_eq!(scene.shown_frame(StellarId(999)), None, "not in it");
     }
 
     #[test]
