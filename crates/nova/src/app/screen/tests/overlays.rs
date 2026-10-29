@@ -64,12 +64,7 @@ fn start_up_text_only(id: i16, text: &str) -> Rc<GameData> {
     loaded(
         &ForkBuilder::new()
             .resource(Desc::TYPE, id, None, &desc_of(text))
-            .resource(
-                Ship::TYPE,
-                128,
-                Some(b"First"),
-                &vec![0; Ship::SIZE.expect("fixed")],
-            ),
+            .resource(Ship::TYPE, 128, Some(b"First"), &ShipBuilder::new().build()),
     )
 }
 
@@ -182,8 +177,7 @@ fn a_missing_dialog_or_text_opens_nothing() {
     screen.input(&key(Key::Char('i'), true));
     assert_eq!(screen.showing(), Showing::ShipBrowser);
 
-    let file = OneFile(ForkBuilder::new().build().bytes);
-    let empty = Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"));
+    let empty = Rc::new(one_file(ForkBuilder::new().build().bytes).load());
     let mut screen = with_dialogs(empty);
     screen.input(&key(Key::Char('i'), true));
     assert!(screen.about().is_none());

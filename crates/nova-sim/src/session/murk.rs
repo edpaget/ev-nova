@@ -15,7 +15,7 @@ impl Session {
     /// (@0x6f8f-0x704b) sums them.
     ///
     /// It is worked out afresh at every call, as
-    /// [`Session::interference`] is. The original caches it in
+    /// the interference is (`Chart::interference`). The original caches it in
     /// `_playerEffectiveMurk`; when that goes stale is
     /// rdm:task/reset-player-precalced-left-out-branches's question.
     #[must_use]
@@ -31,7 +31,7 @@ impl Session {
     /// clears the starfield (`_RandomizeStars` @0x0b168-0x0b18d), and
     /// otherwise 0..=100, which dims it (`_HandleStars` @0x2f8cc-0x2f913).
     #[must_use]
-    pub fn system_murk(&self) -> i16 {
+    pub(crate) fn system_murk(&self) -> i16 {
         self.chart.system_murk(&self.pilot, &self.setup)
     }
 }
@@ -44,7 +44,7 @@ impl Chart {
     /// (@0x6f8f-0x704b) sums them.
     ///
     /// It is worked out afresh at every call, as
-    /// [`Session::interference`] is. The original caches it in
+    /// the interference is (`Chart::interference`). The original caches it in
     /// `_playerEffectiveMurk`; when that goes stale is
     /// rdm:task/reset-player-precalced-left-out-branches's question.
     #[must_use]

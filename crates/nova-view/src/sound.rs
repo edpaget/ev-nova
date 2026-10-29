@@ -1,13 +1,18 @@
-//! The sounds screens make, as events: what happened, not what to play.
-//! The audio side decides which `snd ` each one plays, if any.
+//! The sounds screens make, as events: what happened. Each says what it
+//! plays, if anything, as a [`SoundCue`] ([`UiSound::cue`],
+//! [`SimSound::cue`]): the `snd ` and the priority of the original's
+//! `PlaySound` call that makes it, decided where the call is ported. The
+//! audio side plays the cue, and keeps only what needs its own state.
 //!
-//! - [`UiSound`]: the interface's own, a main-menu button pressed and
+//! - [`UiSound`]: the interface's own, each with the [`SoundCue`] it plays
+//!   ([`UiSound::cue`]): a main-menu button pressed and
 //!   released, the main screen's rows sliding in, its sounds halted as
 //!   play is entered, an intro picture's sound, the alert as something is refused, the news dialog's
 //!   beeps, the course map's beeps (opening, closing, Space and Find),
 //!   and the beep of the player info
 //!   refused.
-//! - [`SimSound`]: the flight session's, re-exported from `nova_sim`.
+//! - [`SimSound`]: the flight session's, re-exported from `nova_sim`, each
+//!   with the [`SoundCue`] it plays ([`SimSound::cue`]).
 //! - [`CombatSound`]: a fight's, a `snd ` heard from where it happened.
 //! - [`Sound`]: any of them, as a screen reports it through
 //!   [`Screen::take_sounds`](crate::Screen::take_sounds).
@@ -53,7 +58,9 @@
 //! and `_TrackSingleMissionButtons` @0x28188. Open Pilot is Navigation
 //! Services (`_MyOpenDocument` @0x731c5), which plays nothing either.
 
-pub use nova_sim::{SimSound, SoundId};
+pub use nova_sim::{SimSound, SoundCue, SoundId};
+
+pub use crate::ui_sound_cue::MAIN_SCREEN_SOUNDS;
 
 /// A sound the interface makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,5 +1,6 @@
 //! Tests of the reinforcement fleet in a session.
 
+use crate::testkit::work_with;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -22,16 +23,16 @@ use crate::traffic::npc::{AiType, Npc};
 use crate::traffic::odds_cache::STALE;
 
 /// The Federation (class 1), whose fleet is system 130's reinforcements.
-const FED: GovtId = GovtId(128);
+pub(in crate::session) const FED: GovtId = GovtId(128);
 /// Pirates (class 2), at war with the Federation.
 const PIRATES: GovtId = GovtId(129);
 /// The Federation's allies (class 3), of another government.
 const ALLIES: GovtId = GovtId(130);
 /// System 130's reinforcement fleet.
 const FLEET: FleetId = FleetId(140);
-/// Its `ReinfTime`: announced on the call's 31st tick (the timer 9 < 10),
-/// arriving on its 40th.
-const TIME: i16 = 40;
+/// Its `ReinfTime`: the fleet arrives on the call's 40th tick, and is
+/// announced on the tick [`announcing`] finds.
+pub(in crate::session) const TIME: i16 = 40;
 /// The arriving fleet's quote list.
 const QUOTE: i16 = 7600;
 /// A global inhibitor (`ModVal` -1).
@@ -81,7 +82,7 @@ impl CommCatalog for Empty {
 /// quote, for [`TIME`] ticks every 2 days. The Federation's warships
 /// retreat outnumbered (`Flags` 0x0010) and its `MediumName` is
 /// "Federation"; the jammers inhibit as their names say.
-fn reinforced() -> FakePilotCatalog {
+pub(in crate::session) fn reinforced() -> FakePilotCatalog {
     let quiet = SystemTraffic {
         dude_types: [(-1, 0); 8],
         avg_ships: 0,
@@ -139,7 +140,7 @@ fn reinforced() -> FakePilotCatalog {
 
 /// A flight of `catalog` with the lines, its system set up and nothing
 /// raised yet.
-fn flying(catalog: &FakePilotCatalog) -> Session {
+pub(in crate::session) fn flying(catalog: &FakePilotCatalog) -> Session {
     flown(catalog, Pilot::new(catalog, "Ada").expect("a pilot"))
 }
 
@@ -148,7 +149,14 @@ fn flown(catalog: &FakePilotCatalog, pilot: Pilot) -> Session {
     let mut session = Session::fly(catalog, pilot)
         .expect("flies")
         .with_strings(Rc::new(Lines));
-    session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+    work_with(
+        &mut session,
+        catalog,
+        Controls::default(),
+        &Peaceful,
+        Rules::default(),
+        &mut NeverFires,
+    );
     let _ = (session.take_messages(), session.take_sounds());
     session
 }
@@ -167,7 +175,7 @@ fn add(session: &mut Session, govt: GovtId, strength: f32, goal: Goal) -> NpcId 
 /// A warship of `govt` and strength 100 fighting a pirate of strength
 /// `foe`, which attacks it: the odds against it `foe` / 100, and cached
 /// so, as the odds pass would have them.
-fn fight(session: &mut Session, govt: GovtId, foe: f32) -> NpcId {
+pub(in crate::session) fn fight(session: &mut Session, govt: GovtId, foe: f32) -> NpcId {
     let warship = add(session, govt, 100.0, Goal::Idle);
     let pirate = add(session, PIRATES, foe, Goal::Attack(ShipRef::Npc(warship)));
     if let Some(npc) = npc_mut(session, warship) {
@@ -291,14 +299,21 @@ fn npc_mut(session: &mut Session, id: NpcId) -> Option<&mut Npc> {
         .find(|npc| npc.id == id)
 }
 
-/// A traffic tick of `catalog` in which nobody decides anything new: the
+/// A pass of `catalog` in which nobody decides anything new: the
 /// messages and sounds it raised.
 fn ticked(session: &mut Session, catalog: &FakePilotCatalog) -> (Vec<SimMessage>, Vec<SimSound>) {
-    session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+    work_with(
+        session,
+        catalog,
+        Controls::default(),
+        &Keeping,
+        Rules::default(),
+        &mut NeverFires,
+    );
     (session.take_messages(), session.take_sounds())
 }
 
-/// The messages of `ticks` traffic ticks of `catalog`.
+/// The messages of `ticks` passes of `catalog`.
 fn heard(session: &mut Session, catalog: &FakePilotCatalog, ticks: i16) -> Vec<SimMessage> {
     (0..ticks)
         .flat_map(|_| ticked(session, catalog).0)
@@ -334,20 +349,47 @@ impl Behaviour for Calling {
 }
 
 /// The player's system's timer.
-fn timer(session: &Session) -> i32 {
+pub(in crate::session) fn timer(session: &Session) -> i32 {
     session.clock_here().timer
 }
 
-/// A traffic tick as `calls` decide, then the combat tick of the same
-/// step, which settles the calls (see the `comm_calls` module).
+/// A pass as `calls` decide, which settles the calls (see the
+/// `comm_calls` module).
 fn step(session: &mut Session, catalog: &FakePilotCatalog, calls: &Calling) {
-    session.tick_traffic(catalog, calls, &mut NeverFires);
-    session.tick_combat(Rules::default(), &mut NeverFires);
+    work_with(
+        session,
+        catalog,
+        Controls::default(),
+        calls,
+        Rules::default(),
+        &mut NeverFires,
+    );
 }
 
 /// The player's system's countdown.
 fn countdown(session: &Session) -> u16 {
     session.clock_here().countdown
+}
+
+/// The tick of a call of [`TIME`] on which nova-sim-ai's clock
+/// ([`reinforcements::tick`]) announces the fleet, and the timer it leaves.
+/// When it announces is that crate's (`ANNOUNCE_SHARE`, pinned by its
+/// tests); the session's part is to run the clock each frame and say
+/// what it brings.
+fn announcing() -> (i16, i32) {
+    let fleet = reinforcements::Fleet {
+        govt: Some(FED),
+        time: TIME,
+        interval: 2,
+    };
+    let mut clock = Clock {
+        timer: i32::from(TIME),
+        countdown: 0,
+    };
+    let tick = (1..TIME)
+        .find(|_| reinforcements::tick(&mut clock, Some(fleet), true) == Some(Event::Announce))
+        .expect("announced before it arrives");
+    (tick, clock.timer)
 }
 
 /// The announcement of the Federation's fleet.
@@ -379,15 +421,20 @@ fn an_outnumbered_allied_warships_fleet_is_announced_at_three_quarters_and_arriv
     let warship = fight(&mut session, FED, 100.0);
     session.call_for_reinforcements(warship, false, None);
     assert_eq!(timer(&session), i32::from(TIME));
-    for tick in 1..31 {
+    let (announcing, left) = announcing();
+    for tick in 1..announcing {
         assert_eq!(ticked(&mut session, &catalog), (vec![], vec![]), "{tick}");
     }
     let (messages, sounds) = ticked(&mut session, &catalog);
-    assert_eq!(messages, announced(), "on the 31st tick, the timer 9");
+    assert_eq!(
+        messages,
+        announced(),
+        "on tick {announcing}, the timer {left}"
+    );
     assert_eq!(sounds, [SimSound::ReinforcementsApproaching]);
     assert_eq!(countdown(&session), 2, "ReinfIntrval");
     let before = session.npcs().len();
-    for tick in 32..40 {
+    for tick in announcing + 1..TIME {
         assert_eq!(ticked(&mut session, &catalog), (vec![], vec![]), "{tick}");
     }
     assert_eq!(session.npcs().len(), before, "not yet");
@@ -663,17 +710,30 @@ fn leaving_the_system_freezes_its_timer_and_returning_resumes_it() {
     session.call_for_reinforcements(warship, false, None);
     heard(&mut session, &catalog, 5);
     assert_eq!(timer(&session), i32::from(TIME) - 5);
-    jump(&mut session, &catalog, 131);
+    let left = into_jump(&mut session, &catalog);
+    assert!(left > 0, "still counting as the jump began");
+    session.arrive(&catalog, &mut NeverFires).expect("arrives");
     heard(&mut session, &catalog, 50);
     assert_eq!(timer(&session), 0, "no fleet called here");
     assert_eq!(
         session.space.reinforcements.timers.get(&SystemId(130)),
-        Some(&(i32::from(TIME) - 5)),
+        Some(&left),
         "frozen"
     );
     jump(&mut session, &catalog, 130);
     ticked(&mut session, &catalog);
-    assert_eq!(timer(&session), i32::from(TIME) - 6, "resumed");
+    assert_eq!(timer(&session), left - 1, "resumed");
+}
+
+/// Plots a course to 131 from past the jump distance, so no flight out
+/// counts the clock down, and works passes until the jump begins: the
+/// clock here as it began.
+fn into_jump(session: &mut Session, catalog: &FakePilotCatalog) -> i32 {
+    session.plot_course(SystemId(131)).expect("a route");
+    session.ship.player.position =
+        crate::geometry::Vec2::new(0.0, -crate::hyperspace::MIN_JUMP_DISTANCE);
+    crate::testkit::begin_jump_now(session, catalog).expect("jumps");
+    timer(session)
 }
 
 #[test]
@@ -682,12 +742,11 @@ fn the_clock_counts_down_through_a_jumps_frames_too() {
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
     session.call_for_reinforcements(warship, false, None);
-    session.plot_course(SystemId(131)).expect("a route");
-    crate::testkit::fly_out(&mut session);
-    crate::testkit::begin_jump_now(&mut session).expect("jumps");
+    let left = into_jump(&mut session, &catalog);
     assert!(session.jumping().is_some());
+    assert!(left > 1, "still counting as the jump began");
     ticked(&mut session, &catalog);
-    assert_eq!(timer(&session), i32::from(TIME) - 1);
+    assert_eq!(timer(&session), left - 1);
 }
 
 #[test]
@@ -896,9 +955,14 @@ fn a_call_held_behind_a_scan_still_starts_the_timer_the_clock_ticks_on_that_fram
     };
     for _ in 0..20 {
         inspect_again(&mut session, scanner);
-        session.tick_traffic(&catalog, &behaviour, &mut NeverFires);
-        assert_eq!(timer(&session), 0, "held behind the scan, no tick yet");
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &behaviour,
+            Rules::default(),
+            &mut NeverFires,
+        );
         if timer(&session) > 0 {
             break;
         }
@@ -949,9 +1013,14 @@ fn a_later_slots_call_is_still_made_after_an_earlier_slots_scan_puts_its_find_on
     for _ in 0..20 {
         inspect_again(&mut session, scanner);
         let mut chance = Draws::of(&[0]);
-        session.tick_traffic(&catalog, &behaviour, &mut chance);
-        assert_eq!(timer(&session), 0, "held behind the scan, no tick yet");
-        session.tick_combat(Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &behaviour,
+            Rules::default(),
+            &mut chance,
+        );
         let (messages, sounds) = (session.take_messages(), session.take_sounds());
         if timer(&session) > 0 {
             assert!(
@@ -979,10 +1048,11 @@ fn a_frames_announcement_comes_after_its_held_distress_call() {
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
     session.call_for_reinforcements(warship, false, None);
-    for _ in 1..31 {
+    let (announcing, left) = announcing();
+    for _ in 1..announcing {
         ticked(&mut session, &catalog);
     }
-    assert_eq!(timer(&session), 10, "one tick from announcing");
+    assert_eq!(timer(&session), left + 1, "one tick from announcing");
     let scanner = scanner(&mut session);
     let pirate = add(&mut session, PIRATES, 100.0, Goal::Idle);
     let trader = add(&mut session, FED, 100.0, Goal::Idle);
@@ -991,10 +1061,14 @@ fn a_frames_announcement_comes_after_its_held_distress_call() {
         calls: Vec::new(),
         flees: vec![(trader, pirate)],
     };
-    session.tick_traffic(&catalog, &behaviour, &mut NeverFires);
-    assert_eq!(session.take_messages(), [], "the call and the clock held");
-    assert_eq!(timer(&session), 10);
-    session.tick_combat(Rules::default(), &mut NeverFires);
+    work_with(
+        &mut session,
+        &catalog,
+        Controls::default(),
+        &behaviour,
+        Rules::default(),
+        &mut NeverFires,
+    );
     let messages = session.take_messages();
     assert!(
         matches!(messages.as_slice(), [SimMessage::CallForHelp(_), announcement] if *announcement == announced()[0]),
@@ -1004,33 +1078,5 @@ fn a_frames_announcement_comes_after_its_held_distress_call() {
         session.take_sounds(),
         [SimSound::CallForHelp, SimSound::ReinforcementsApproaching]
     );
-    assert_eq!(timer(&session), 9);
-}
-
-#[test]
-fn a_held_clock_tick_is_not_lost_when_no_combat_tick_follows() {
-    let catalog = reinforced();
-    let mut session = flying(&catalog);
-    let warship = fight(&mut session, FED, 100.0);
-    session.call_for_reinforcements(warship, false, None);
-    let scanner = scanner(&mut session);
-    let behaviour = ScanFirst {
-        scanner,
-        calls: Vec::new(),
-        flees: Vec::new(),
-    };
-    session.tick_traffic(&catalog, &behaviour, &mut NeverFires);
-    assert_eq!(timer(&session), i32::from(TIME), "held");
-    session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
-    assert_eq!(timer(&session), i32::from(TIME) - 1, "the held tick ran");
-    session.tick_combat(Rules::default(), &mut NeverFires);
-    assert_eq!(
-        timer(&session),
-        i32::from(TIME) - 2,
-        "held again behind the scan still queued, then settled"
-    );
-    session.tick_combat(Rules::default(), &mut NeverFires);
-    assert_eq!(timer(&session), i32::from(TIME) - 2, "once only");
-    session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
-    assert_eq!(timer(&session), i32::from(TIME) - 3, "back in place");
+    assert_eq!(timer(&session), left);
 }

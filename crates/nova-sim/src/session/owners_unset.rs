@@ -163,8 +163,8 @@ mod tests {
     /// `session` jumped from 130 to 131.
     fn jump_to_131(session: &mut Session, catalog: &FakePilotCatalog) {
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(session);
-        assert_eq!(begin_jump_now(session), Ok(SystemId(131)));
+        fly_out(session, &catalog);
+        assert_eq!(begin_jump_now(session, &catalog), Ok(SystemId(131)));
         assert_eq!(
             session.arrive(catalog, &mut NeverFires),
             Some(SystemId(131))

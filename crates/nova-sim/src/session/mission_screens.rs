@@ -257,8 +257,10 @@ pub struct InfoRow {
     pub abortable: bool,
 }
 
-/// The mission info screen, as the player sees it (`DLOG` 1012).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The mission info screen, as the player sees it (`DLOG` 1012). The
+/// default lists nothing and names no day: what a flight with nothing to
+/// list shows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MissionInfo {
     /// The active missions shown, in slot order.
     pub rows: Vec<InfoRow>,
@@ -309,7 +311,7 @@ impl Session {
     /// missions.", `STR#` 2002 #354
     /// ([`SimMessage::NoActiveMissions`](crate::SimMessage::NoActiveMissions),
     /// @0x7055c-0x705a8).
-    pub fn press_mission_info(&mut self) -> MissionInfoPress {
+    pub(crate) fn press_mission_info(&mut self) -> MissionInfoPress {
         if self.mode.jump().is_some() || !self.takes(PlayerCommand::MissionInfo) {
             return MissionInfoPress::Refused;
         }
@@ -326,14 +328,14 @@ impl Session {
     /// What the screens show of mission `id`, as the session read it as
     /// it started: `None` for a `mïsn` it has no texts of.
     #[must_use]
-    pub fn mission_texts(&self, id: MissionId) -> Option<&MissionTexts> {
+    pub(crate) fn mission_texts(&self, id: MissionId) -> Option<&MissionTexts> {
         self.statics.mission_texts(id)
     }
 
     /// The mission texts and offer movies to show since they were last
     /// taken, in the order they came. Taking them lets go of the bars
     /// noted with them ([`Session::text_bars`]).
-    pub fn take_mission_texts(&mut self) -> Vec<MissionShown> {
+    pub(crate) fn take_mission_texts(&mut self) -> Vec<MissionShown> {
         self.out.take_mission_texts()
     }
 
@@ -354,7 +356,7 @@ impl Session {
     /// offer dialog closes (@0xa335c): the movie and the governments it
     /// leaves are the offer's again. The text is drawn already, so it is
     /// not filled.
-    pub fn reload_offer_desc(&mut self, mission: MissionId, chance: &mut dyn Chance) {
+    pub(crate) fn reload_offer_desc(&mut self, mission: MissionId, chance: &mut dyn Chance) {
         let texts = self.mission_texts(mission);
         let raw = texts.and_then(|texts| texts.offer.clone());
         let movie = texts.and_then(|texts| texts.movies.offer.clone());
@@ -387,7 +389,7 @@ impl Session {
     /// never reset: a view that notes it at each of its redraws can tell
     /// whether the last text was queued after its last redraw.
     #[must_use]
-    pub fn texts_queued(&self) -> u64 {
+    pub(crate) fn texts_queued(&self) -> u64 {
         self.out.texts_queued()
     }
 
@@ -398,15 +400,18 @@ impl Session {
     /// (@0xa048c, @0xa0491, then @0xa04f8), has written the bar since.
     /// Taking the texts lets go of them.
     #[must_use]
-    pub fn text_bars(&self) -> &[TextBar] {
+    pub(crate) fn text_bars(&self) -> &[TextBar] {
         self.out.text_bars()
     }
 
     /// The nav mode ([`Session::nav_mode`]) as the last text since they
     /// were last taken was queued, `None` with none: the last of
-    /// [`Session::text_bars`]'s.
+    /// [`Session::text_bars`]'s. The view answers it over the texts it
+    /// drained (see the `flight_events` module); kept for this module's
+    /// tests.
+    #[cfg(test)]
     #[must_use]
-    pub fn text_nav(&self) -> Option<NavMode> {
+    pub(crate) fn text_nav(&self) -> Option<NavMode> {
         self.out.text_nav()
     }
 
@@ -585,7 +590,7 @@ impl Session {
     /// then its name filled, as `_MissionDialogUpdate` munges the
     /// selected name after (@0x9f40c), drawing on `chance`. `None` when
     /// it is not offered.
-    pub fn show_computer_row(
+    pub(crate) fn show_computer_row(
         &mut self,
         mission: MissionId,
         chance: &mut dyn Chance,
@@ -609,7 +614,7 @@ impl Session {
     /// one empty, keeping the governments) and filled for the slot, as
     /// `_MissionInfoFilter` loads a selected row's (@0x9d89f-0x9d8bc),
     /// drawing on `chance`. `None` for a free slot.
-    pub fn show_info_row(&mut self, slot: u8, chance: &mut dyn Chance) -> Option<String> {
+    pub(crate) fn show_info_row(&mut self, slot: u8, chance: &mut dyn Chance) -> Option<String> {
         let active = self.pilot.missions.get(slot)?;
         let texts = self.mission_texts(active.mission);
         let raw = texts.and_then(|texts| texts.quick_brief.clone());
@@ -636,7 +641,7 @@ impl Session {
     /// accept from the dialog drops the next outside offer too.
     pub fn next_offer(&mut self, loc: i16, chance: &mut dyn Chance) -> Option<VenueOffer> {
         // A new run of docked scripts (see [`Session::take_interface_loads`]).
-        self.out.interface_loads.clear();
+        self.out.begin_docked_run();
         self.enter_offer_venue(loc);
         let candidates: Vec<Offer> = self
             .mission_offers(Venue::Outside)
@@ -669,7 +674,7 @@ impl Session {
     /// # Errors
     ///
     /// As [`Session::mission_computer`].
-    pub fn open_mission_computer(&mut self) -> Result<MissionComputer, ComputerRefusal> {
+    pub(crate) fn open_mission_computer(&mut self) -> Result<MissionComputer, ComputerRefusal> {
         if self
             .ship
             .accept_refusal(&self.pilot, &self.statics, &self.setup, 0, &mut NeverFires)
@@ -740,7 +745,7 @@ impl Session {
     /// Enters venue `loc` for its offers (`_OfferMissionFromPort`
     /// @0xa36a7-0xa36d7): entering one other than the last forgets the
     /// suppressed offers, unless it is the spaceport ([`SPACEPORT`]).
-    pub fn enter_offer_venue(&mut self, loc: i16) {
+    pub(crate) fn enter_offer_venue(&mut self, loc: i16) {
         self.run.enter_offer_venue(loc);
     }
 
@@ -815,6 +820,7 @@ impl Outbox {
     /// The nav mode ([`Session::nav_mode`]) as the last text since they
     /// were last taken was queued, `None` with none: the last of
     /// [`Session::text_bars`]'s.
+    #[cfg(test)]
     #[must_use]
     fn text_nav(&self) -> Option<NavMode> {
         self.text_bars.last().map(|bar| bar.nav)

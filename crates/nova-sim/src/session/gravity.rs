@@ -178,6 +178,7 @@ mod tests {
     use crate::gravity::{GRAVITY_RESISTANCE, pull};
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::tests::{armed, facing_an_npc};
+    use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, outfit, planet};
     use crate::traffic::npc::NpcId;
 
@@ -223,7 +224,7 @@ mod tests {
     }
 
     fn fight(session: &mut Session) {
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &crate::testkit::catalog(), Controls::default());
     }
 
     fn npc(session: &Session) -> &Npc {
@@ -387,7 +388,10 @@ mod tests {
             escort.stats.inertialess_hull = true;
             escort.state.position = slot;
             fight(&mut session);
-            let pulled = pull(slot, Vec2::new(2000.0, 0.0), 40, 1.0);
+            // Pulled where its flight in the ship loop (@0x4445c-0x444c4)
+            // left it, before `_HandleGravity` (@0x44509).
+            let at = npc(&session).state.position;
+            let pulled = pull(at, Vec2::new(2000.0, 0.0), 40, 1.0);
             assert!(
                 near(npc(&session).state.velocity, pulled),
                 "not inertialess there"
@@ -430,7 +434,10 @@ mod tests {
                 fight(&mut session);
                 let velocity = npc(&session).state.velocity;
                 if scanner {
-                    let pulled = pull(slot, Vec2::new(2000.0, 0.0), 40, 1.0);
+                    // Pulled where its flight left it (see
+                    // `an_inertialess_escort_in_close_formation_with_the_player_is_pulled`).
+                    let at = npc(&session).state.position;
+                    let pulled = pull(at, Vec2::new(2000.0, 0.0), 40, 1.0);
                     assert!(near(velocity, pulled), "{case}: {velocity:?}");
                 } else {
                     assert_eq!(velocity, Vec2::ZERO, "{case}: inertialess");
@@ -441,8 +448,8 @@ mod tests {
 
     /// `catalog`'s session under `rules` with NPC 0 an inertialess fleet
     /// escort in close formation 50 left of a lead of its own, which is
-    /// cloaked when `cloaked`: the escort's velocity after the fight, and
-    /// the pull it would take.
+    /// cloaked when `cloaked`: the escort's velocity after a pass, and the
+    /// pull it would take where the pass's flight left it.
     fn fleet_escort_after_the_fight(rules: Rulebook, cloaked: bool) -> (Vec2, Vec2) {
         use crate::ai::Goal;
         use crate::escort::FormationSlot;
@@ -467,8 +474,10 @@ mod tests {
             spacing: 30.0,
         });
         escort.stats.inertialess_hull = true;
-        let at = escort.state.position;
         fight(&mut session);
+        // Where its flight in the ship loop left it, before
+        // `_HandleGravity` (@0x44509).
+        let at = npc(&session).state.position;
         (
             npc(&session).state.velocity,
             pull(at, Vec2::new(2000.0, 0.0), 40, 1.0),

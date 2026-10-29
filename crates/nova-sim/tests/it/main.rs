@@ -5,17 +5,12 @@
 //! every `tests/*.rs` file is a separate binary to link.
 
 mod common;
+mod passes;
 
 mod asteroids;
-mod fleet_escorts;
 mod frame_rate;
-mod headless;
-mod idle_block;
 mod landing;
-mod lost_sight;
 mod missions;
-mod npc_landing;
-mod odds_cache;
 mod plugin_strings;
 mod stellar_hazards;
 mod stock;
@@ -77,4 +72,3 @@ mod stock_turning;
 mod stock_voices;
 mod stock_warp_end;
 mod story;
-mod swarm;

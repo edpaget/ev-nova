@@ -72,7 +72,7 @@ impl Session {
     /// Holds the cloak key, `cloakKey`, down or lets it go: what the next
     /// pass's key reads. The session takes it only while the player's
     /// fate takes [`PlayerCommand::Cloak`](crate::PlayerCommand::Cloak).
-    pub fn hold_cloak(&mut self, held: bool) {
+    pub(crate) fn hold_cloak(&mut self, held: bool) {
         self.ship.cloak.held = held;
     }
 
@@ -85,7 +85,7 @@ impl Session {
     /// How the player's cloak lets the screen show its ship (see the
     /// module docs).
     #[must_use]
-    pub fn player_cloak_shown(&self) -> CloakShown {
+    pub(crate) fn player_cloak_shown(&self) -> CloakShown {
         cloak::shown(self.ship.cloak.cloak, SEEN_AT_FULL_FADE)
     }
 
@@ -211,6 +211,7 @@ mod tests {
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::tests::{armed, facing_an_npc};
     use crate::testkit::FakePilotCatalog;
+    use crate::testkit::{work, work_with};
     use crate::traffic::npc::NpcId;
     use nova_sim_catalog::fixture::outfit;
 
@@ -245,7 +246,7 @@ mod tests {
     fn tick(session: &mut Session, held: bool) -> Vec<SimSound> {
         session.take_sounds();
         session.hold_cloak(held);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &crate::testkit::catalog(), Controls::default());
         session.take_sounds()
     }
 
@@ -457,17 +458,17 @@ mod tests {
             let npc = &mut session.space.traffic.npcs_mut()[0];
             npc.trigger = crate::session::tests::FIRE;
             npc.target = Some(ShipRef::Player);
+            let full = session.reserves();
             let mut sounds = Vec::new();
             for _ in 0..30 {
                 sounds.extend(cloak_sounds(&tick(&mut session, false)));
             }
             let what = format!("{mod_val:#x}");
+            // The passes answer their strikes: the hits show in the
+            // player's reserves.
+            let now = session.reserves();
             assert!(
-                session
-                    .space
-                    .strikes
-                    .iter()
-                    .any(|strike| strike.direct && strike.ship == ShipRef::Player),
+                now.shield.now < full.shield.now || now.armor.now < full.armor.now,
                 "{what}: the NPC's shot struck the player"
             );
             if uncloaks {
@@ -705,12 +706,33 @@ mod tests {
         let attacks =
             |session: &Session| session.npcs()[0].goal == crate::ai::Goal::Attack(ShipRef::Player);
         for tick in 0..30 {
-            session.tick_traffic(&catalog, &ai, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &ai,
+                Rules::default(),
+                &mut NeverFires,
+            );
             assert!(!attacks(&session), "cloaked out of its sight: tick {tick}");
         }
         session.ship.cloak.cloak = Cloak::default();
-        session.tick_traffic(&catalog, &ai, &mut NeverFires);
-        session.tick_traffic(&catalog, &ai, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &ai,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &ai,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert!(attacks(&session), "uncloaked");
     }
 }

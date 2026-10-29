@@ -1,7 +1,9 @@
 //! The program edge shared by the test modules: the stock data's
 //! directory, the router past its start-up appear ([`appeared`]), where
 //! the main menu's Enter Ship is ([`enter_ship_at`]), and a click on it
-//! with the way into play stepped through ([`EntryHarness::enter_ship`]).
+//! with the way into play stepped through ([`EntryHarness::enter_ship`]),
+//! and the frames drawn until the screen has settled ([`Frames::settle`],
+//! [`Frames::settle_until`]).
 //!
 //! This module is the only place `NOVA_DATA` is read. The game data is
 //! copyrighted and never committed, so each stock test asks [`nova_data`] for
@@ -73,20 +75,86 @@ pub fn enter_ship_at(screen: &nova::app::screen::AppScreen) -> nova_view::Point 
         .press_point(nova_view::menu::MenuChoice::EnterShip)
 }
 
-/// A harness driving the whole app, which [`through_entry`] can step: its
-/// router, an event sent, a click and a frame.
-pub trait EntryHarness {
+/// The most frames [`Frames::settle`] draws: a slot key settles in two
+/// (its pick, then its latch clearing), so eight leaves room for a block
+/// a frame or two slower and still catches a queue that never empties.
+pub const SETTLE_FRAMES: usize = 8;
+
+/// The most frames [`Frames::settle_until`] draws: ten seconds at 60 a
+/// second.
+pub const UNTIL_FRAMES: usize = 600;
+
+/// A harness that draws the app's frames: its router and a frame sent.
+/// Its tests assert after [`Frames::settle`] or [`Frames::settle_until`],
+/// never on a particular frame, so a screen that takes a frame more or
+/// less to act fails in the crate that owns it, not here.
+pub trait Frames {
     /// The app's router.
     fn router(&self) -> &nova::app::screen::AppScreen;
 
+    /// Sends a frame.
+    fn next_frame(&mut self);
+
+    /// Draws frames until the screen has taken the input sent: at least
+    /// one, as a press is polled at the next frame's tick, then until the
+    /// router holds no queued input
+    /// ([`AppScreen::input_queued`](nova::app::screen::AppScreen::input_queued)).
+    /// Bounded by [`SETTLE_FRAMES`], so a queue that never empties fails.
+    fn settle(&mut self) {
+        for _ in 0..SETTLE_FRAMES {
+            self.next_frame();
+            if !self.router().input_queued() {
+                return;
+            }
+        }
+        panic!("the screen still holds queued input after {SETTLE_FRAMES} frames");
+    }
+
+    /// Draws frames until `done` holds, checked before each: for a wait
+    /// whose length is the game's time, not input (the dock approach's
+    /// clearance, a jump's arrival, a fade). `done` reads a routing fact or
+    /// a read of the flight or session naming the state waited for, never
+    /// wording or a frame number. Bounded by [`UNTIL_FRAMES`], panicking
+    /// with `what` never came.
+    fn settle_until(&mut self, what: &str, mut done: impl FnMut(&mut Self) -> bool)
+    where
+        Self: Sized,
+    {
+        for _ in 0..UNTIL_FRAMES {
+            if done(self) {
+                return;
+            }
+            self.next_frame();
+        }
+        assert!(done(self), "{what} never came in {UNTIL_FRAMES} frames");
+    }
+}
+
+/// Implements [`Frames`] for a harness `$harness` whose `app` is the
+/// [`App`](nova::app::App) and whose `$frame` sends a frame.
+macro_rules! frames {
+    ($harness:ty, $frame:ident) => {
+        impl crate::common::Frames for $harness {
+            fn router(&self) -> &nova::app::screen::AppScreen {
+                self.app.screen()
+            }
+
+            fn next_frame(&mut self) {
+                let _ = self.$frame();
+            }
+        }
+    };
+}
+pub(crate) use frames;
+
+/// A harness driving the whole app, which [`through_entry`] can step: its
+/// frames, an event sent and a click.
+pub trait EntryHarness: Frames {
     /// Sends `event` to the app.
     fn send_event(&mut self, event: nova::app::WindowEvent);
 
     /// Clicks the primary button at `at`, in the classic frame.
     fn click_point(&mut self, at: nova_view::Point);
-
-    /// Sends a frame.
-    fn next_frame(&mut self);
 
     /// Clicks the main menu's Enter Ship and steps the way into play
     /// through ([`through_entry`]).
@@ -129,26 +197,20 @@ pub fn through_entry(harness: &mut impl EntryHarness) {
     panic!("play is still being entered");
 }
 
-/// Implements [`EntryHarness`] for a harness `$harness` whose `app` is the
-/// [`App`](nova::app::App), whose `send` sends an event, `$click` clicks
-/// a point and `$frame` sends a frame.
+/// Implements [`EntryHarness`] and [`Frames`] for a harness `$harness`
+/// whose `app` is the [`App`](nova::app::App), whose `send` sends an
+/// event, `$click` clicks a point and `$frame` sends a frame.
 macro_rules! entry_harness {
     ($harness:ty, $click:ident, $frame:ident) => {
-        impl crate::common::EntryHarness for $harness {
-            fn router(&self) -> &nova::app::screen::AppScreen {
-                self.app.screen()
-            }
+        crate::common::frames!($harness, $frame);
 
+        impl crate::common::EntryHarness for $harness {
             fn send_event(&mut self, event: nova::app::WindowEvent) {
                 self.send(event);
             }
 
             fn click_point(&mut self, at: nova_view::Point) {
                 self.$click(at);
-            }
-
-            fn next_frame(&mut self) {
-                let _ = self.$frame();
             }
         }
     };

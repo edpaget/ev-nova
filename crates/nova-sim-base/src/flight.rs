@@ -259,7 +259,7 @@ pub enum Turn {
 
 /// The face-target key (the original's `autopilot`, keyPrefs +0xe), as
 /// held this tick, and whether with Option: what the player's ship turns
-/// to face (see `nova_sim::Session::tick`).
+/// to face (see `nova_sim::Session::game_work`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Face {
     /// Not held.

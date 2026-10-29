@@ -40,11 +40,18 @@ jobs:
   ci:
     # macOS covers the resource-fork (`..namedfork/rsrc`) adapter tests,
     # which are compiled only on that target; Windows covers the non-unix
-    # paths.
+    # paths. Linux runs the whole gate. The other two run `ci-platform`,
+    # just the steps that build their own `cfg` code (mise.toml says why).
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            task: ci
+          - os: macos-latest
+            task: ci-platform
+          - os: windows-latest
+            task: ci-platform
     runs-on: ${{ matrix.os }}
     env:
       # Never auto-install the other mise.toml tools: shims would build them
@@ -62,13 +69,12 @@ jobs:
       - uses: jdx/mise-action@v5
         with:
           install: false
-      # cargo-binstall on PATH lets mise install the cargo-backed tools as
-      # prebuilt binaries. It's installed outside mise because on Windows the
-      # mise shim for it re-enters mise, which installs every mise.toml tool
-      # and deadlocks on the outer install's lock.
-      - uses: cargo-bins/cargo-binstall@main
-      # Only what `mise run ci` needs.
-      - run: mise install rust cargo:cargo-nextest cargo:cargo-deny
+      # Only what `mise run ci` needs. nextest and cargo-deny come from
+      # mise's aqua backend as prebuilt binaries (mise.toml). The cargo
+      # backend's cargo-binstall timed out probing GitHub releases and fell
+      # back to building both from source, which once cost the macOS leg 8
+      # minutes.
+      - run: mise install rust aqua:nextest-rs/nextest/cargo-nextest aqua:EmbarkStudios/cargo-deny
         shell: bash
       # Save even when tests fail, so a red leg still moves the cache to the
       # current Cargo.lock. Save only from main: caches saved under a PR's
@@ -81,7 +87,7 @@ jobs:
       # The Linux leg runs the desktop file and metainfo through the
       # validators it installed (crates/nova-bundle/tests/it/linux_desktop.rs);
       # elsewhere the value is empty and that test skips.
-      - run: mise run ci
+      - run: mise run ${{ matrix.task }}
         shell: bash
         env:
           NOVA_LINUX_VALIDATORS: ${{ runner.os == 'Linux' && '1' || '' }}
@@ -130,9 +136,11 @@ jobs:
         with:
           install: false
       - run: mise install rust
+      # Saved from main only, as in `ci`.
       - uses: Swatinem/rust-cache@v2
         with:
           key: build-id
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - id: build-id
         run: |
           set -euo pipefail
@@ -198,9 +206,11 @@ jobs:
         with:
           install: false
       - run: mise install rust
+      # Saved from main only, as in `ci`.
       - uses: Swatinem/rust-cache@v2
         with:
           key: flatpak
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Package (Flatpak)
         run: mise run flatpak -- dist
       # Installs the bundle with --user into a home the test owns, checks

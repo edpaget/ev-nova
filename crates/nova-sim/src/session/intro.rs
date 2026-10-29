@@ -10,14 +10,14 @@ use crate::pilot::Pilot;
 impl Session {
     /// Whether the pilot flying has seen the intro screen.
     #[must_use]
-    pub fn seen_intro(&self) -> bool {
+    pub(crate) fn seen_intro(&self) -> bool {
         self.pilot.seen_intro
     }
 
     /// Marks the pilot as having seen the intro screen. It asks for no
     /// save: the original saves nothing at entry, so the flag reaches disk
     /// with the next save.
-    pub fn mark_intro_seen(&mut self) {
+    pub(crate) fn mark_intro_seen(&mut self) {
         self.pilot.seen_intro = true;
     }
 }

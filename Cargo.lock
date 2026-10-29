@@ -1612,6 +1612,7 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "embed-resource",
+ "nova",
  "nova-appkit",
  "nova-audio",
  "nova-data",

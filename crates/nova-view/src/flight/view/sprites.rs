@@ -9,7 +9,7 @@
 //! `_SWAddSpriteLayer` @0xb71b0) and `_SpawnShot` fills them
 //! (@0x3f0a9-0x3f143). Each layer keeps the order it is given in: the
 //! ships the session's draw order, the shots the session's
-//! ([`nova_sim::Session::shots_drawn`], each layer in the order its shot
+//! ([`FlightFrame::shots`](nova_sim::flight_frame::FlightFrame::shots), each layer in the order its shot
 //! slots entered it). Each sprite keeps its [`SpriteLayer`], so the world
 //! draws each layer in its place among the others
 //! ([`nova_sim::sprite_layer::WORLD_PASSES`]). The view only draws what the

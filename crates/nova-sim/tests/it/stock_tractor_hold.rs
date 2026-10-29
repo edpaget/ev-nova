@@ -29,7 +29,7 @@ fn data() -> Option<GameData> {
 /// The stock first `chär`'s session, its first tick flown.
 fn flying(data: &GameData) -> Session {
     let mut session = Session::start(data).expect("the stock first chär starts");
-    session.tick(Controls::default());
+    crate::passes::work(&mut session, data, nova_sim::Controls::default());
     session
 }
 
@@ -116,7 +116,7 @@ fn held(data: &GameData, holder: ShipRef) -> Session {
     let next: SystemId = system.con.into_iter().flatten().next().expect("a link");
     session.plot_course(next).expect("a route");
     nova_sim::fixture::set_player_tractor(&mut session, Some(TractorLock::by(holder)));
-    session.take_sounds();
+    let _ = common::drained(&mut session);
     session
 }
 
@@ -127,7 +127,7 @@ fn a_held_stock_player_is_refused_its_jump_with_the_refusal_beep() {
     };
     let mut session = held(&data, ShipRef::Npc(NpcId(u32::MAX)));
     assert_eq!(session.begin_jump(), Err(JumpRefusal::Tractored));
-    assert_eq!(session.take_sounds(), [SimSound::Refused]);
+    assert_eq!(common::drained_sounds(&mut session), [SimSound::Refused]);
     assert_eq!(session.preparing_jump(), None);
 }
 
@@ -142,17 +142,17 @@ fn a_stock_player_holding_itself_brakes_by_a_quarter_of_its_thrust_and_lapses_af
         ..Controls::default()
     };
     for _ in 0..3 {
-        session.tick(thrust);
+        crate::passes::work(&mut session, &data, thrust);
     }
     let lock = session.tractor().expect("held");
     assert_eq!(lock.ticks_since_touch, 3);
     let before = session.player().velocity;
     assert!(before.length() > 0.0, "it gained speed against the brake");
     for _ in 4..15 {
-        session.tick(Controls::default());
+        crate::passes::work(&mut session, &data, nova_sim::Controls::default());
     }
     assert!(session.tractor().is_some(), "held for 14 ticks");
-    session.tick(Controls::default());
+    crate::passes::work(&mut session, &data, nova_sim::Controls::default());
     assert_eq!(session.tractor(), None, "lapsed on the 15th");
     assert!(session.player().velocity.length() < before.length());
 }

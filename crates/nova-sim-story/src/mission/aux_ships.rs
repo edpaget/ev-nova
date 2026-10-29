@@ -90,7 +90,7 @@ impl AuxShips {
 
     /// The restart of the enter-system hook (@0x99fb5-0x99ff4), of the
     /// take-off (@0x634df-0x6353c) and of `_OpenLastPilotFile`'s loop at
-    /// launch (@0x765d4-0x76637, `nova_sim::Session::open_at_launch`), for
+    /// launch (@0x765d4-0x76637, `nova_sim::Session::open_saved` at launch), for
     /// a mission of `Flags` `flags`:
     /// with [`AUX_EVERY_VISIT`] its count ([`aux_count`]) left to come
     /// again; the countdown `Rand(70) + 70`, drawn on `chance`; none

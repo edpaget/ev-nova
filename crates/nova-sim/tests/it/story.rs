@@ -4,7 +4,6 @@
 //! dispatch sees.
 
 use nova_sim::catalog::{DudeId, DudeRecord, FleetRecord, PersonRecord, SystemTraffic};
-use nova_sim::combat::Rules;
 use nova_sim::combat::armament::{MOD_WEAPON, Trigger};
 use nova_sim::landing::StellarFlags;
 use nova_sim::story::{Consumer, EventFilter, Subscription, SubscriptionId};
@@ -295,7 +294,8 @@ impl TrafficCatalog for Home {
 
 #[test]
 fn a_registered_subscription_runs_its_script_as_the_landing_settles() {
-    let mut session = Session::start(&Home::default()).expect("starts");
+    let catalog = Home::default();
+    let mut session = Session::start(&catalog).expect("starts");
     let on_landing = Subscription::new(
         SubscriptionId {
             consumer: Consumer::Fixture,
@@ -308,7 +308,7 @@ fn a_registered_subscription_runs_its_script_as_the_landing_settles() {
     session.register_story(on_landing).expect("registers");
     let bit = Bit::new(42).expect("a bit");
     session.land().expect("selects");
-    session.tick(nova_sim::Controls::default());
+    crate::passes::work(&mut session, &catalog, nova_sim::Controls::default());
     assert_eq!(
         session.land(),
         Ok(LandPress::Outcome(LandOutcome::Landed(StellarId(128))))
@@ -357,11 +357,11 @@ fn a_stellar_shot_down_runs_its_on_destroy_whose_bit_its_moves_hook_sees() {
         keep: None,
     });
     for _ in 0..2 {
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        crate::passes::work(&mut session, &home, nova_sim::Controls::default());
     }
     // The second shot's first move is tested in the next tick's hit pass.
     session.hold_trigger(Trigger::default());
-    session.tick_combat(Rules::default(), &mut NeverFires);
+    crate::passes::work(&mut session, &home, nova_sim::Controls::default());
     assert!(
         session.galaxy().destroyed(StellarId(128)),
         "60 twice: shot down"

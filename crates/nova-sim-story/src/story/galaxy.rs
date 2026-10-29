@@ -590,6 +590,18 @@ impl OverlaidGalaxy {
         self.nebula_active(nebula) && self.nebula_explored(nebula)
     }
 
+    /// Every nebula the map draws ([`OverlaidGalaxy::nebula_shown`]), by
+    /// ascending ID: the overlay's explored ones that are active, as only
+    /// the overlay records exploration.
+    pub fn shown_nebulae(&self) -> impl Iterator<Item = NebulaId> + '_ {
+        self.overlay
+            .nebulae
+            .iter()
+            .filter(|(_, change)| change.explored)
+            .map(|(&id, _)| id)
+            .filter(|&id| self.nebula_active(id))
+    }
+
     /// The visible system that stands for `system`: the lowest-ID visible
     /// system at its exact map position, if any, or by
     /// [`CoLocated::Itself`] itself when it is visible
@@ -2251,6 +2263,30 @@ mod tests {
         assert!(!galaxy.nebula_explored(NebulaId(130)));
         assert!(!galaxy.nebula_shown(NebulaId(130)), "neither");
         assert!(!galaxy.nebula_shown(NebulaId(131)), "unexplored");
+    }
+
+    #[test]
+    fn the_nebulae_shown_are_the_active_explored_ones_by_ascending_id() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_nebula_explored(NebulaId(131), true);
+        overlay.set_nebula_explored(NebulaId(128), true);
+        overlay.set_nebula_active(NebulaId(129), Some(false));
+        overlay.set_nebula_explored(NebulaId(129), true);
+        overlay.set_nebula_active(NebulaId(130), Some(false));
+        overlay.set_nebula_active(NebulaId(132), Some(true));
+        let galaxy = OverlaidGalaxy::new(systems(), overlay);
+        assert_eq!(
+            galaxy.shown_nebulae().collect::<Vec<_>>(),
+            [NebulaId(128), NebulaId(131)],
+            "129 inactive, 130 and 132 unexplored"
+        );
+        assert_eq!(
+            OverlaidGalaxy::new(systems(), GalaxyOverlay::default())
+                .shown_nebulae()
+                .count(),
+            0,
+            "none explored"
+        );
     }
 
     /// [`systems`] with 2 hidden and 1 governed by 7.

@@ -545,12 +545,11 @@ mod tests {
     use nova_view::ImageKind;
 
     use std::io;
-    use std::path::Path;
+
     use std::rc::Rc;
 
     use nova_data::GameData;
-    use nova_data::store::fs::{DirLister, Listing};
-    use nova_rsrc::{Fork, ForkReader};
+    use nova_data::store::fixture::{DATA_DIR, FakeTree};
 
     use nova_audio::recording::{MemorySettings, RecordingAudio};
     use nova_audio::{AudioCommand, AudioSettings, SettingsStore};
@@ -571,22 +570,8 @@ mod tests {
     }
 
     /// A data directory with no files in it.
-    struct NoFiles;
-
-    impl DirLister for NoFiles {
-        fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-            Ok(Vec::new())
-        }
-    }
-
-    impl ForkReader for NoFiles {
-        fn read_fork(&self, _path: &Path, _fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            Ok(None)
-        }
-    }
-
     fn no_data() -> Rc<GameData> {
-        Rc::new(GameData::load(&NoFiles, &NoFiles, Path::new("/data"), None).expect("opens"))
+        Rc::new(FakeTree::new().dir(DATA_DIR, &[]).load())
     }
 
     #[test]

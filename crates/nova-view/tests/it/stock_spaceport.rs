@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use nova_data::graphics::{PICT, decode_pict};
 use nova_data::{GameData, InterfaceData};
+use nova_sim::fixture::SessionBuilder;
 use nova_sim::{Chance, Pilot, Service, Session};
 use nova_view::geometry::{Bounds, Point};
 use nova_view::image::ImageKey;
@@ -180,14 +181,16 @@ fn stock_spaceports_draw_every_button_greying_what_they_lack() {
     }
 }
 
-/// A new stock pilot, resumed over Port Kane (`spöb` 137 in Kania, where
-/// it starts) through a save that says so, and landed there.
+/// A new stock pilot landed at Port Kane (`spöb` 137 in Kania, where it
+/// starts).
 fn at_port_kane(data: &GameData) -> Session {
-    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
-    save["stellar"] = serde_json::json!(137);
-    fly(data, &save)
+    let kania = Pilot::new(data, "Stock")
+        .expect("the stock first chär starts")
+        .system();
+    SessionBuilder::flying(data)
+        .named("Stock")
+        .landed_at(kania, StellarId(137))
+        .build()
 }
 
 /// Port Kane's Trade Center: its exchange in the 426 x 252 "Trade"
@@ -280,28 +283,10 @@ fn the_stock_list_colours_are_colr_128s() {
 
 /// A new stock pilot landed at Viking (`spöb` 157 in Tichel, `sÿst` 129).
 fn at_viking(data: &GameData) -> Session {
-    fly(data, &viking_save(data))
-}
-
-/// A new stock pilot's save, last landed at Viking.
-fn viking_save(data: &GameData) -> serde_json::Value {
-    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
-    save["system"] = serde_json::json!(129);
-    save["stellar"] = serde_json::json!(157);
-    save
-}
-
-/// A session flying the pilot of `save`, landed on the stellar it
-/// resumed over.
-fn fly(data: &GameData, save: &serde_json::Value) -> Session {
-    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(data, saved).expect("flies");
-    let stellar = session.pilot().stellar().expect("resumed over a stellar");
-    let system = session.pilot().system();
-    session.land_at(data, system, stellar).expect("lands");
-    session
+    SessionBuilder::flying(data)
+        .named("Stock")
+        .landed_at(nova_sim::SystemId(129), StellarId(157))
+        .build()
 }
 
 /// A chance that fires every roll and draws 0: every ship's `BuyRandom`
@@ -563,9 +548,11 @@ fn the_shuttles_name_is_asked_in_the_stock_text_input_dialog() {
         let ui = InterfaceData::open(&ui).expect("the interface file opens");
         let template = ui.dialog_template(TEXT_INPUT_DIALOG).expect("Text Input");
         // Flying the Heavy Shuttle, as the Shuttle flown is not for sale.
-        let mut save = viking_save(&data);
-        save["ship"] = serde_json::json!(129);
-        let mut session = fly(&data, &save);
+        let mut session = SessionBuilder::flying(&data)
+            .named("Stock")
+            .in_ship(nova_sim::ShipId(129))
+            .landed_at(nova_sim::SystemId(129), StellarId(157))
+            .build();
         session.shipyard(&mut Fires).expect("a shipyard");
         let naming = session
             .ship_naming(nova_sim::ShipId(128), &data, &mut Highest)

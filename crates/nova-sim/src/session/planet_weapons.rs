@@ -2,15 +2,14 @@
 //! (stellar-fidelity phase 2; see `nova_sim::combat::planet_type`).
 
 use crate::catalog::{HullRecord, StellarId, StellarLife, StockWeapon, WeaponId, WeaponRecord};
-use crate::chance::NeverFires;
-use crate::combat::Rules;
 use crate::combat::armament::{MOD_WEAPON, Trigger};
 use crate::combat::weapon::{DETONATES, PLANET_TYPE};
 use crate::control::{Bit, Script};
+use crate::flight::Controls;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::session::Session;
 use crate::session::tests::{FIRE, armed, facing_an_npc};
-use crate::testkit::{FakePilotCatalog, catalog, hull, life, outfit, weapon};
+use crate::testkit::{FakePilotCatalog, catalog, hull, life, outfit, weapon, work};
 
 /// `catalog`'s session by `rules`, its NPC 100 pixels above the player
 /// and planet-type, at rest.
@@ -46,10 +45,10 @@ fn fired_on(catalog: &crate::testkit::FakePilotCatalog, key: RuleKey, source: Ru
     let rules = Rulebook::default().with_override(key, source);
     let mut session = with_a_planet_type_npc(catalog, rules);
     session.hold_trigger(FIRE);
-    session.tick_combat(Rules::default(), &mut NeverFires);
+    work(&mut session, catalog, Controls::default());
     session.hold_trigger(Trigger::default());
     for _ in 0..8 {
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, catalog, Controls::default());
     }
     !unhurt(&session)
 }
@@ -111,10 +110,10 @@ fn beamed_down(source: RuleSource) -> (bool, bool) {
     let rules = Rulebook::default().with_override(RuleKey::BeamStellars, source);
     let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
     session.hold_trigger(FIRE);
-    session.tick_combat(Rules::default(), &mut NeverFires);
+    work(&mut session, &catalog, Controls::default());
     session.hold_trigger(Trigger::default());
     for _ in 0..8 {
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
     }
     let destroyed = session
         .galaxy()

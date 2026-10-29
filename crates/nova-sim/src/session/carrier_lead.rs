@@ -14,8 +14,8 @@ use std::rc::Rc;
 
 use super::Session;
 use super::fighters::tests::{
-    BAY, VIPER, carrying, fight, fleet_npcs, flying_by, launch, pilot, pirate, raided, raiding_ai,
-    vipers,
+    BAY, VIPER, carrier_npc, carrying, fight, fleet_npcs, flying_by, launch, pilot, pirate, raided,
+    raiding_ai, vipers,
 };
 use crate::ai::{Behaviour, Goal, NovaAi, Surroundings};
 use crate::chance::Chance;
@@ -24,7 +24,7 @@ use crate::combat::{ShipRef, Sortie};
 use crate::escort::{EscortCommand, EscortGroup};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
-use crate::rulebook::Rulebook;
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::testkit::FakePilotCatalog;
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -157,15 +157,31 @@ fn shots_between_the_fighter_and_its_carriers_leads_other_escort_still_miss() {
     );
 }
 
-/// The fighter of [`raided`]'s carrier launched by a fight's tick of
+/// [`raided`], its carrier in berth 5: its fighter launches into a free
+/// berth below the carrier's, which its launch frame's AI loop has passed,
+/// so it thinks first in the next frame (see the `launch_frame` module).
+fn raided_below(catalog: &FakePilotCatalog) -> (Session, NpcId, NpcId) {
+    let rules = Rulebook::default().with_override(RuleKey::FighterLaunch, RuleSource::Engine);
+    let mut session = flying_by(catalog, pilot(catalog, 0, Vec::new()), rules);
+    let lead = pirate(&mut session, 2000.0, 2000.0);
+    let npc = session.space.npc_mut(lead).expect("there");
+    npc.goal = Goal::Attack(ShipRef::Player);
+    npc.target = Some(ShipRef::Player);
+    let raider = session.space.traffic.add_npc_at(carrier_npc(lead, 2), 5);
+    (session, raider, lead)
+}
+
+/// The fighter of [`raided_below`]'s carrier launched by a pass of
 /// [`raiding_ai`]: the session, the fighter, the carrier and its lead.
 fn npc_launched(catalog: &FakePilotCatalog) -> (Session, NpcId, NpcId, NpcId) {
-    let (mut session, raider, lead) = raided(catalog);
+    let (mut session, raider, lead) = raided_below(catalog);
     fight(&mut session, catalog, &raiding_ai());
     let launched = vipers(&session);
     assert_eq!(launched.len(), 1, "one launched");
     let fighter = &launched[0];
-    assert_eq!((fighter.goal, fighter.ai_wait), (Goal::Idle, GLIDE));
+    // It moves in its launch frame's ship loop (@0x4445c-0x444c4), which
+    // counts its glide down once.
+    assert_eq!((fighter.goal, fighter.ai_wait), (Goal::Idle, GLIDE - 1));
     // `_AISetup` @0x7f40c.
     assert_eq!(fighter.order_word, crate::fleet::OrderWord::NONE);
     (session, fighter.id, raider, lead)
@@ -233,7 +249,8 @@ fn an_npcs_fighter_told_to_return_coasts_its_glide_out() {
     }
     session.space.npc_mut(id).expect("there").order_word = crate::fleet::OrderWord(3);
     let ai = raiding_ai();
-    let (held, left) = coasts(&mut session, &catalog, &ai, id, GLIDE - 1);
+    // The launch frame counted one (see `npc_launched`).
+    let (held, left) = coasts(&mut session, &catalog, &ai, id, GLIDE - 2);
     assert!(held, "no turn or thrust while it glides");
     assert_eq!(left, 1);
     assert_eq!(
@@ -253,9 +270,12 @@ fn players_launched(catalog: &FakePilotCatalog, order: Option<EscortCommand>) ->
     if let Some(order) = order {
         session.command_escorts(EscortGroup::All, order, &mut crate::chance::NeverFires);
     }
-    launch(&mut session);
+    launch(&mut session, catalog);
     let fighter = &fleet_npcs(&session)[0];
-    assert_eq!(fighter.ai_wait, GLIDE, "{order:?}");
+    // Launched in `_HandlePlayer` (@0x62c61), it moves in its launch
+    // frame's ship loop (@0x4445c-0x444c4), which counts its glide down
+    // once.
+    assert_eq!(fighter.ai_wait, GLIDE - 1, "{order:?}");
     (session, fighter.id)
 }
 
@@ -282,7 +302,8 @@ fn the_players_fighter_told_to_hold_coasts_its_glide_out() {
     let catalog = carrying();
     let (mut session, id) = players_launched(&catalog, Some(EscortCommand::Hold));
     let ai = NovaAi::default();
-    let (held, left) = coasts(&mut session, &catalog, &ai, id, GLIDE - 1);
+    // The launch frame counted one (see `players_launched`).
+    let (held, left) = coasts(&mut session, &catalog, &ai, id, GLIDE - 2);
     assert!(held, "no turn or thrust while it glides");
     assert_eq!(left, 1);
     assert_eq!(session.space.npc(id).expect("there").goal, Goal::Wait);

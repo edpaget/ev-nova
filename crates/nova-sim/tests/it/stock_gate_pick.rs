@@ -47,6 +47,11 @@ fn wormhole_spot(data: &GameData) -> Vec2 {
         .position
 }
 
+/// The sounds `session` raised since it was last drained, in order.
+fn sounds(session: &mut Session) -> Vec<SimSound> {
+    common::sounds(&common::drained(session))
+}
+
 fn refused() -> LandingRefusal {
     LandingRefusal::NotLandable {
         stellar: WORMHOLE,
@@ -64,7 +69,7 @@ fn in_k005_from_the_centre_l_passes_the_far_wormhole_over() {
     let mut session = in_k005(&data, Rulebook::default());
     assert_eq!(session.land(), Err(LandingRefusal::NothingLandable));
     assert_eq!(session.nav_target(), None);
-    assert_eq!(session.take_sounds(), [], "silent");
+    assert_eq!(sounds(&mut session), [], "silent");
 }
 
 #[test]
@@ -86,18 +91,18 @@ fn in_k005_within_500_of_the_wormhole_l_selects_it_and_is_refused_and_f5_does_no
     };
     let mut ticks = 0;
     while (session.player().position - spot).length() > 300.0 {
-        session.tick(towards);
+        crate::passes::work(&mut session, &data, towards);
         ticks += 1;
         assert!(ticks < 20_000, "reaches the wormhole");
     }
     assert!(session.nav_off());
     let mut session = session.with_rules(Rulebook::default());
     assert!((session.player().position - spot).length() < 500.0);
-    session.take_sounds();
+    sounds(&mut session);
 
     assert_eq!(session.select_stellar(StellarPick::Nearest), None, "F5");
     assert_eq!(session.nav_target(), None);
-    assert_eq!(session.take_sounds(), [], "F5 is silent");
+    assert_eq!(sounds(&mut session), [], "F5 is silent");
 
     assert_eq!(session.land(), Err(refused()));
     assert_eq!(
@@ -105,5 +110,5 @@ fn in_k005_within_500_of_the_wormhole_l_selects_it_and_is_refused_and_f5_does_no
         Some(WORMHOLE),
         "selected all the same"
     );
-    assert_eq!(session.take_sounds(), [SimSound::Refused]);
+    assert_eq!(sounds(&mut session), [SimSound::Refused]);
 }

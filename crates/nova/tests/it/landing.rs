@@ -5,16 +5,21 @@
 //! "Bar" and "Desc Dialog" dialogs, laid out by the real glyphon metrics,
 //! drawn through the renderer into the recording Gpu and driven only by
 //! window events, with every key made by the platform's own translation of
-//! a physical key: L requests clearance, a second L lands and shows the
-//! spaceport, and Leave takes off back into flight. The Bar opens the
-//! bar's own dialog, with its Hire Escort button, and the Mission BBS,
-//! with nothing offered, says so in "Desc Dialog". With a recording audio
-//! port, landing and Leave play their sounds and the music follows the
-//! screen.
+//! a physical key: L, then L once the dock approach has cleared, opens the
+//! spaceport, whose frame reaches the Gpu, and Leave takes off back into
+//! flight. The Bar opens the bar's own dialog over the spaceport, and the
+//! Mission BBS, with nothing offered, shows its refusal over the
+//! spaceport. With a recording audio port, the spaceport's ambient sound
+//! plays and taking off halts it. After take-off the cursor comes back
+//! under the pointer.
+//!
+//! What the spaceport draws, its buttons, the refusals' words, the
+//! landing's outcome and its sounds' order are nova-view's, nova-sim's
+//! and nova-audio's, pinned there.
 
 use crate::bracket_art;
+use crate::common::Frames;
 
-use std::io;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -22,31 +27,31 @@ use std::time::Duration;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_audio::recording::{AudioLog, RecordingAudio};
-use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings};
+use nova_audio::{Audio, AudioCommand, AudioCore};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
-use nova_render::{Batch, FontFaces, Frame, Rect};
+use nova_render::{Batch, FontFaces, Frame};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
-use nova_sim::{ShipState, StellarId, Vec2};
+use nova_sim::{Session, StellarId};
 use nova_view::MouseButton;
-use nova_view::flight::FlightOverlays;
 use nova_view::geometry::{Bounds, Point};
 use nova_view::spaceport::SpaceportView;
-use nova_view::spaceport::layout::{LANDSCAPE_ITEM, LEAVE_ITEM};
+use nova_view::spaceport::layout::LEAVE_ITEM;
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -63,24 +68,6 @@ impl WindowPort for FakeWindow {
     }
 
     fn request_redraw(&mut self) {}
-}
-
-/// One file, holding a fork, wherever it is looked for.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
 }
 
 fn be(values: &[i16]) -> Vec<u8> {
@@ -112,17 +99,22 @@ fn character() -> Vec<u8> {
 
 /// An average `shïp`: 3 pixels a tick at most, 0.1 more a tick, 3° a tick.
 fn ship() -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 300, 300, 30, 300]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .build()
 }
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
 fn ship_anim() -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// An `rlëD` of `frames` frames of `size` x `size`.
@@ -225,8 +217,7 @@ fn game_data(y: i16) -> Rc<GameData> {
         .fold(ForkBuilder::new(), |fork, (ty, id, name, data)| {
             fork.resource(*ty, *id, *name, data)
         });
-    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// One `DITL` user item: (left, top, width, height), enabled or not.
@@ -315,11 +306,9 @@ fn interface() -> InterfaceData {
     })
     .build()
     .bytes;
-    InterfaceData::load(&OneFile(bytes), Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, bytes), path).expect("loads")
 }
-
-/// Where the dialog is: (1024 - 618) / 2, (768 - 517) / 2, floored.
-const ORIGIN: Point = Point::new(203.0, 125.0);
 
 struct Harness {
     app: App<Rc<GameData>>,
@@ -329,20 +318,13 @@ struct Harness {
 
 impl Harness {
     /// The app on the ship browser over a planet at (0, `y`), before any
-    /// frame, its flights drawing the developer's help line, which tells
-    /// these tests flight is drawn.
+    /// frame.
     fn browsing(y: i16) -> Self {
         let data = game_data(y);
-        let screen = start_screen(Rc::clone(&data))
-            .with_dialogs(
-                Rc::new(interface()),
-                Rc::new(GlyphonMetrics::new(&FontFaces::bundled())),
-            )
-            .with_flight_overlays(FlightOverlays {
-                title: true,
-                help: true,
-                cheats: false,
-            });
+        let screen = start_screen(Rc::clone(&data)).with_dialogs(
+            Rc::new(interface()),
+            Rc::new(GlyphonMetrics::new(&FontFaces::bundled())),
+        );
         Self {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
@@ -384,7 +366,7 @@ impl Harness {
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
-    /// a few frames let the dock approach clear it, and the second lands.
+    /// the dock approach clears it, and the second lands.
     fn land(&mut self) {
         self.press_physical(KeyCode::KeyL);
         self.approach();
@@ -407,15 +389,13 @@ impl Harness {
         self.app.screen().showing()
     }
 
-    fn ship(&self) -> ShipState {
-        *self
-            .app
+    fn session(&self) -> &Session {
+        self.app
             .screen()
             .flight_view()
             .expect("flight entered")
             .session()
             .expect("flying")
-            .player()
     }
 
     /// Where item `item` of the spaceport dialog is.
@@ -439,17 +419,11 @@ impl Harness {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request. The nav brackets' corners (`cicn`
-    /// 10000-10003), which the press's selection draws, may be missing
-    /// from the fixture, so the frames' image failures are not checked.
+    /// Draws frames until the dock approach has cleared the request.
     fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frames += 1;
-            let elapsed = Duration::from_millis(16 * self.frames);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        let _ = self.app.take_failures();
+        self.settle_until("the dock approach's clearance", |game| {
+            game.session().dock_cleared()
+        });
     }
 }
 
@@ -464,159 +438,81 @@ fn texts(frame: &Frame) -> Vec<String> {
         .collect()
 }
 
-fn quads(frame: &Frame) -> Vec<Rect> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Sprites { quads, .. } => quads.iter().map(|quad| quad.dest).collect(),
-            _ => Vec::new(),
-        })
-        .collect()
-}
-
-fn rect(bounds: Bounds) -> Rect {
-    Rect {
-        x: bounds.min.x,
-        y: bounds.min.y,
-        w: bounds.width(),
-        h: bounds.height(),
-    }
-}
-
 #[test]
-fn l_over_the_planet_shows_its_spaceport_with_every_button() {
+fn l_then_l_after_the_approach_opens_the_spaceport_whose_frame_reaches_the_gpu() {
     let mut harness = Harness::flying(0);
     harness.frame();
-    harness.press_physical(KeyCode::KeyL);
-    assert_eq!(
-        harness.showing(),
-        Showing::Flight,
-        "requested, not yet landed"
-    );
-    harness.approach();
-    harness.press_physical(KeyCode::KeyL);
+    harness.land();
     assert_eq!(harness.showing(), Showing::Spaceport);
     let frame = harness.frame();
-
-    let quads = quads(&frame);
-    let landscape = harness.item(LANDSCAPE_ITEM);
-    assert_eq!(
-        landscape,
-        Bounds::at(Point::new(206.0, 128.0), 612.0, 285.0)
-    );
-    assert!(quads.contains(&rect(landscape)), "{quads:?}");
+    let pictures = frame
+        .batches
+        .iter()
+        .any(|batch| matches!(batch, Batch::Sprites { quads, .. } if !quads.is_empty()));
+    assert!(pictures, "the spaceport's pictures");
     assert!(
-        quads.contains(&Rect {
-            x: ORIGIN.x,
-            y: ORIGIN.y,
-            w: 6.0,
-            h: 5.0,
-        }),
-        "the background, unscaled: {quads:?}"
+        texts(&frame).iter().any(|t| t == "Alpha Prime"),
+        "the stellar's name from the data: {:?}",
+        texts(&frame)
     );
-
-    let texts = texts(&frame);
-    for shown in [
-        "Alpha Prime",
-        DESCRIPTION,
-        "Trade Center",
-        "Bar",
-        "Mission BBS",
-        "Leave",
-        // Not offered, so drawn disabled.
-        "Shipyard",
-        "Outfitter",
-    ] {
-        assert!(texts.iter().any(|t| t == shown), "{shown}: {texts:?}");
-    }
 }
 
 #[test]
-fn the_bar_opens_over_the_spaceport_with_its_hire_escort_button() {
+fn the_bar_opens_over_the_spaceport_and_escape_closes_it() {
     let mut harness = Harness::flying(0);
     harness.land();
     let bar = harness.item(11).center();
     harness.click(bar);
-    let frame = harness.frame();
-    let texts = texts(&frame);
-    for shown in ["Hire Escort", "Gamble", "Holovid", "Leave", "Alpha Prime"] {
-        assert!(texts.iter().any(|t| t == shown), "{shown}: {texts:?}");
-    }
-    assert!(!texts.iter().any(|t| t == "Not available yet"), "{texts:?}");
-    harness.press_physical(KeyCode::Escape);
-    assert_eq!(harness.showing(), Showing::Spaceport);
-    assert!(
+    let open = |harness: &Harness| {
         harness
             .app
             .screen()
             .spaceport_view()
             .expect("landed")
             .open_bar()
-            .is_none(),
-        "Escape leaves the bar alone"
-    );
+            .is_some()
+    };
+    assert!(open(&harness), "the bar open");
+    harness.frame();
+    harness.press_physical(KeyCode::Escape);
+    assert_eq!(harness.showing(), Showing::Spaceport);
+    assert!(!open(&harness), "the bar closed");
 }
 
 #[test]
-fn mission_bbs_with_nothing_offered_says_so_and_done_returns() {
+fn mission_bbs_with_nothing_offered_shows_its_refusal_over_the_spaceport_and_enter_closes_it() {
     let mut harness = Harness::flying(0);
     harness.land();
+    let port = texts(&harness.frame());
     let bbs = harness.item(10).center();
     harness.click(bbs);
-    let frame = harness.frame();
-    let texts = texts(&frame);
+    let refused = texts(&harness.frame());
+    assert_ne!(refused, port, "the refusal drawn");
     assert!(
-        texts
-            .iter()
-            .any(|t| t == "There are no missions available here."),
-        "{texts:?}"
+        port.iter().all(|text| refused.contains(text)),
+        "over the spaceport: {refused:?}"
     );
-    assert!(texts.iter().any(|t| t == "Done"), "{texts:?}");
-    assert!(texts.iter().any(|t| t == "Leave"), "over the spaceport");
 
     harness.press_physical(KeyCode::Enter);
     assert_eq!(harness.showing(), Showing::Spaceport);
-    let frame = harness.frame();
-    let texts = self::texts(&frame);
-    assert!(!texts.iter().any(|t| t == "Done"), "{texts:?}");
+    assert_eq!(texts(&harness.frame()), port, "closed");
 }
 
-/// Where the planet is in the take-off test: off the ship's start, but
-/// within the planet's landing radius of 4.
+/// Where the planet is in the take-off and cursor tests: off the ship's
+/// start, but within the planet's landing radius of 4.
 const OFF_START: i16 = -3;
 
 #[test]
-fn leave_takes_off_back_into_flight_at_the_planet() {
+fn leave_takes_off_back_into_flight_and_it_lands_again() {
     let mut harness = Harness::flying(OFF_START);
-    assert_eq!(harness.ship().position, Vec2::ZERO, "starts off the planet");
     harness.land();
     assert_eq!(harness.showing(), Showing::Spaceport);
     let leave = harness.item(LEAVE_ITEM).center();
     harness.click(leave);
     assert_eq!(harness.showing(), Showing::Flight);
     assert!(harness.app.screen().spaceport_view().is_none());
-    let ship = harness.ship();
-    assert_eq!(
-        (ship.position, ship.velocity),
-        (Vec2::new(0.0, f32::from(OFF_START)), Vec2::ZERO),
-        "at the planet's centre, at rest"
-    );
-    let session = harness
-        .app
-        .screen()
-        .flight_view()
-        .expect("flight")
-        .session()
-        .expect("flying");
-    assert_eq!(session.landed(), None);
-    let frame = harness.frame();
-    assert!(
-        texts(&frame)
-            .iter()
-            .any(|t| t == nova_view::flight::view::HELP),
-        "flight is drawn"
-    );
+    assert_eq!(harness.session().landed(), None);
+    harness.frame();
     // And it can land again.
     harness.land();
     assert_eq!(harness.showing(), Showing::Spaceport);
@@ -630,90 +526,38 @@ fn leave_takes_off_back_into_flight_at_the_planet() {
     );
 }
 
-#[test]
-fn far_from_the_planet_l_says_so_and_stays_in_flight() {
-    let mut harness = Harness::flying(-600);
-    harness.frame();
-    harness.land();
-    assert_eq!(harness.showing(), Showing::Flight);
-    let frame = harness.frame();
-    assert!(
-        texts(&frame)
-            .iter()
-            .any(|t| t == "You're too far away to land on this planet."),
-        "{:?}",
-        texts(&frame)
-    );
-}
-
 /// The commands logged since the last call.
 fn drain(log: &AudioLog) -> Vec<AudioCommand> {
     std::mem::take(&mut *log.borrow_mut())
 }
 
-fn play(id: i16, priority: nova_audio::Priority) -> AudioCommand {
-    AudioCommand::Play {
-        sound: nova_data::SoundId(id),
-        volume: AudioSettings::default().effects_volume,
-        priority,
-    }
-}
-
 #[test]
-fn landing_and_leaving_play_their_sounds_and_space_has_no_music() {
+fn the_spaceports_ambient_sound_reaches_the_audio_port_and_take_off_halts_it() {
     let (mut harness, log) = Harness::sounding(0);
     harness.frame();
-    assert_eq!(drain(&log), [], "the ship browser is silent");
-
     harness.press_physical(KeyCode::KeyF);
     assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(drain(&log), [], "no music in space");
     harness.frame();
-
-    // Requesting clearance over the planet is silent; the approach's
-    // greeting sounds traffic control's beep.
-    harness.press_physical(KeyCode::KeyL);
-    assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(drain(&log), []);
-    harness.approach();
-    assert_eq!(
-        drain(&log),
-        [play(151, nova_audio::priority::TRAFFIC_CONTROL)],
-        "traffic control"
-    );
-    // An inhabited planet's touchdown is silent (`_PlayerLandOnStellar`
-    // beeps only at an uninhabited stellar, @0x632be-0x632ef); on the
-    // spaceport's first frame, the planet's own ambient sound.
-    harness.press_physical(KeyCode::KeyL);
+    harness.land();
     assert_eq!(harness.showing(), Showing::Spaceport);
-    assert_eq!(drain(&log), [], "the touchdown is silent");
     harness.frame();
-    assert_eq!(
-        drain(&log),
-        [play(LANDING_SOUND, nova_audio::priority::PORT_AMBIENT)]
+    let ambient = nova_data::SoundId(LANDING_SOUND);
+    let landed = drain(&log);
+    assert!(
+        landed.iter().any(
+            |command| matches!(*command, AudioCommand::Play { sound, .. } if sound == ambient)
+        ),
+        "the planet's ambient sound: {landed:?}"
     );
-    harness.frame();
-    assert_eq!(drain(&log), [], "not again until its wait is out");
 
-    // Leave is silent under the pointer, as `_TrackPlanetButtons`
-    // @0x2996f plays nothing; taking off is silent too, but halts the
-    // planet's sound.
     let leave = harness.item(LEAVE_ITEM).center();
     harness.click(leave);
     assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(
-        drain(&log),
-        [AudioCommand::Halt {
-            sound: nova_data::SoundId(LANDING_SOUND)
-        }]
+    let left = drain(&log);
+    assert!(
+        left.contains(&AudioCommand::Halt { sound: ambient }),
+        "halted on take-off: {left:?}"
     );
-    harness.frame();
-    assert_eq!(drain(&log), []);
-
-    // Back to the ship browser flight was entered from: still silent.
-    harness.press_physical(KeyCode::Escape);
-    assert_eq!(harness.showing(), Showing::ShipBrowser);
-    assert_eq!(drain(&log), []);
 }
 
 /// Where flight draws its hover cursor.
@@ -745,3 +589,5 @@ fn the_cursor_comes_back_under_the_pointer_after_take_off() {
     harness.frame();
     assert_eq!(cursor(&harness), Some(leave), "under the pointer");
 }
+
+crate::common::frames!(Harness, frame);

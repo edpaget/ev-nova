@@ -6,7 +6,7 @@
 //!   once slide 2 has finished).
 //! - With a held game that isn't dying, the alive panel
 //!   ([`FlightView::pilot_panel`]); with a dying one
-//!   ([`FlightView::is_dying`], `_IsDying`), the killed message.
+//!   ([`SessionFlight::is_dying`](nova_view::flight::SessionFlight::is_dying), `_IsDying`), the killed message.
 //! - A held game whose session failed draws no panel and no message: that
 //!   state is the engine's alone, as the original has no game in progress
 //!   without its player globals.
@@ -37,7 +37,7 @@ impl AppScreen {
         let Some(menu) = &mut self.menu else {
             return;
         };
-        let pilot = match &self.game {
+        let pilot = match &mut self.game {
             _ if self.note_hides_game => PanelPilot::None,
             None => PanelPilot::None,
             Some(game) => shown(game),
@@ -46,10 +46,12 @@ impl AppScreen {
     }
 }
 
-/// What the panel shows of the held `game`.
-fn shown(game: &FlightView<Rc<GameData>>) -> PanelPilot {
-    if game.is_dying() {
-        return game.pilot().map_or(PanelPilot::Blank, |pilot| {
+/// What the panel shows of the held `game`: its pilot panel is asked of
+/// the flight once per change of it, and read from what the view kept
+/// until then ([`FlightView::pilot_panel`]).
+fn shown(game: &mut FlightView<Rc<GameData>>) -> PanelPilot {
+    if game.sim().is_dying() {
+        return game.sim().pilot().map_or(PanelPilot::Blank, |pilot| {
             PanelPilot::Dying(pilot.name().to_owned())
         });
     }

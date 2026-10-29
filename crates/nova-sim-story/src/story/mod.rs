@@ -431,7 +431,7 @@
 //! systems, the launch's load of the last pilot too (main-screen phase 4,
 //! `nova_sim::PilotKeeper::open_last`); the launch then explores the
 //! player's system once, as `_DoMainScreen` does
-//! (`nova_sim::Session::open_at_launch`); and the Rulebook keys
+//! (`nova_sim::Session::open_saved` at launch); and the Rulebook keys
 //! [`nebula_explore_once`](crate::RuleKey::NebulaExploreOnce) and
 //! [`nebula_new_pilot`](crate::RuleKey::NebulaNewPilot) offer the other
 //! readings (see the session's `nebulae` module).
@@ -1449,8 +1449,8 @@
 //!   nothing. A rebuild point that changes the set tells
 //!   `SessionEvent::StellarsRebuilt`, and the flight view draws the
 //!   stellars shown again.
-//! - **The frame** that finds a stellar whole is the end of
-//!   `Session::tick_combat` in flight, after the shots, as the original's
+//! - **The frame** that finds a stellar whole is the end of a pass's
+//!   fight in flight (`Session::fight_tail`), after the shots, as the original's
 //!   sprite tick (@0x444d2) follows `_CheckShotProximities` (@0x44015): a
 //!   stellar shot down in a frame is destroyed at that frame's look. So
 //!   `Y`, `U`, `Y` with no frame between keeps graphic type 0, and with a

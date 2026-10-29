@@ -24,7 +24,8 @@
 //!   builders for the catalog's records and mocks of the [`ControlBits`]
 //!   port, for the tests of this crate and the nova-sim crates above.
 //! - [`sound`]: the [`SimSound`] events a session emits as it thrusts,
-//!   lands, takes off and jumps; the audio side decides what they play.
+//!   lands, takes off and jumps, and the [`SoundCue`] each one plays
+//!   ([`SimSound::cue`]): its `snd ` and the original's priority.
 //! - [`strings`]: the string lists built once at start-up, each entry
 //!   from a plug-in's `'STR '` patch when one exists, else from its
 //!   `STR#`.
@@ -53,6 +54,7 @@ pub mod fixture;
 mod pict_sheet_sites;
 pub mod resource_name;
 pub mod sound;
+mod sound_cue;
 pub mod strings;
 #[cfg(test)]
 mod test_store;
@@ -75,4 +77,4 @@ pub use control::{
     SetExpr, SetOp, SetOpKind, Test, TestExpr,
 };
 pub use resource_name::trim_resource_name;
-pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound};
+pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound, SoundCue};

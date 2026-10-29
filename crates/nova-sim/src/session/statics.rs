@@ -16,7 +16,6 @@ use crate::market::Goods;
 use crate::mission::StellarMarks;
 use crate::traffic::table::SpawnDude;
 
-#[cfg(test)]
 use super::Session;
 
 /// The catalog data a session reads as it starts, in `Session`'s former
@@ -137,6 +136,15 @@ impl Statics {
     }
 }
 
+impl Session {
+    /// Every weapon the session read as it started, by ascending ID: the
+    /// `wëap`s its arsenal holds, whose looks a view reads as it opens.
+    #[must_use]
+    pub fn weapon_ids(&self) -> Vec<WeaponId> {
+        self.statics.arsenal.weapons().map(|spec| spec.id).collect()
+    }
+}
+
 #[cfg(test)]
 impl Session {
     /// The session's catalog data, to change in a test: unshared from
@@ -170,6 +178,17 @@ mod tests {
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(session.statics.class_speed(ShipId(200)), 3.5);
         assert_eq!(session.statics.class_speed(ShipId(999)), 0.0, "no record");
+    }
+
+    #[test]
+    fn a_session_lists_the_weapons_it_read_by_ascending_id() {
+        use crate::testkit::weapon;
+        let mut catalog = crate::testkit::catalog();
+        catalog.weapons = vec![weapon(130), weapon(128)];
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.weapon_ids(), [WeaponId(128), WeaponId(130)]);
+        let unarmed = Session::start(&crate::testkit::catalog()).expect("starts");
+        assert_eq!(unarmed.weapon_ids(), [], "an unarmed catalog lists none");
     }
 
     #[test]

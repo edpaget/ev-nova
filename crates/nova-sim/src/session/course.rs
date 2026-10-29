@@ -257,7 +257,7 @@ mod tests {
         for source in RuleSource::ALL {
             let mut session =
                 bound_for_134(&catalog, MultiJumpRule::default()).with_rules(rules(source));
-            assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+            assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
             session.plot_course(SystemId(133)).expect("a route");
             assert_eq!(session.course(), ids(&[133]));
             assert_eq!(
@@ -278,7 +278,7 @@ mod tests {
         for source in RuleSource::ALL {
             let mut session =
                 bound_for_134(&catalog, MultiJumpRule::default()).with_rules(rules(source));
-            assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+            assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),
                 Some(SystemId(131))
@@ -405,7 +405,7 @@ mod tests {
     fn an_arrival_along_the_course_starts_it_at_the_last_hop_made() {
         let catalog = chained(catalog(), 1);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
         session.arrive(&catalog, &mut NeverFires);
         assert_eq!(session.pilot.course_start(), Some(SystemId(131)));
     }

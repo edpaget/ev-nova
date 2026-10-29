@@ -85,7 +85,7 @@ impl Session {
     /// pilot made later in the same run ([`Session::with_last_refresh`];
     /// see the module docs).
     #[must_use]
-    pub fn last_refresh(&self) -> LastRefresh {
+    pub(crate) fn last_refresh(&self) -> LastRefresh {
         self.chart.last_refresh.clone()
     }
 
@@ -94,7 +94,7 @@ impl Session {
     /// in place of the launch's refresh, by the engine's reading of
     /// [`RuleKey::NewPilotVisibility`].
     #[must_use]
-    pub fn with_last_refresh(mut self, carried: LastRefresh) -> Self {
+    pub(crate) fn with_last_refresh(mut self, carried: LastRefresh) -> Self {
         self.chart.carried_refresh = Some(carried);
         self
     }

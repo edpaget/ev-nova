@@ -35,7 +35,7 @@ use crate::Key;
 use crate::flight::escorts::GROUP_KEYS;
 
 /// The block's latch (0xdede0) and the presses since its last frame.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct SlotBlock {
     latch: bool,
     presses: Vec<Key>,
@@ -82,6 +82,23 @@ impl SlotBlock {
         } else {
             Some(picked)
         }
+    }
+
+    /// Whether the block holds input a later frame will act on, with the
+    /// keys `held`, the escort menu open or not and `polled` as
+    /// [`SlotBlock::frame`] takes them: whether one more frame would
+    /// change it. So a press is queued until the frame that picks or drops
+    /// it, and a pick's latch until the frame that clears it; a key held
+    /// down after its pick is not. A pick always sets the latch, so a frame
+    /// that would pick changes the block too.
+    ///
+    /// It asks the block's fixed point, not which field holds the presses,
+    /// so it stays true for as many frames as the block takes to act.
+    #[cfg(any(test, feature = "fixture"))]
+    pub(super) fn queued(&self, held: &HashSet<Key>, menu_open: bool, polled: bool) -> bool {
+        let mut next = self.clone();
+        next.frame(held, menu_open, polled);
+        next != *self
     }
 }
 
@@ -305,6 +322,38 @@ mod tests {
         );
         assert_eq!(block.frame(&none, false, false), None, "let go in a jump");
         assert_eq!(block.frame(&two, false, true), None, "still latched");
+    }
+
+    #[test]
+    fn a_press_is_queued_until_its_pick_then_while_the_latch_clears() {
+        let mut block = SlotBlock::default();
+        let none = set(&[]);
+        assert!(!block.queued(&none, false, true), "nothing pressed");
+        block.press(TWO, &none, false);
+        assert!(block.queued(&none, false, true), "pressed");
+        assert_eq!(block.frame(&none, false, true), Some(StellarPick::Slot(1)));
+        assert!(block.queued(&none, false, true), "the latch to clear");
+        assert_eq!(block.frame(&none, false, true), None);
+        assert!(!block.queued(&none, false, true), "settled");
+    }
+
+    #[test]
+    fn a_held_key_is_not_queued() {
+        let mut block = SlotBlock::default();
+        let two = set(&[TWO]);
+        block.press(TWO, &set(&[]), false);
+        assert_eq!(block.frame(&two, false, true), Some(StellarPick::Slot(1)));
+        assert!(!block.queued(&two, false, true));
+    }
+
+    #[test]
+    fn a_press_in_a_jump_is_queued_until_the_frame_that_drops_it() {
+        let mut block = SlotBlock::default();
+        let none = set(&[]);
+        block.press(TWO, &none, false);
+        assert!(block.queued(&none, false, false));
+        assert_eq!(block.frame(&none, false, false), None);
+        assert!(!block.queued(&none, false, false), "dropped");
     }
 
     #[test]

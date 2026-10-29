@@ -18,7 +18,7 @@ impl Session {
     /// the negative counts after a take-off qualify by the same rule (see
     /// the module docs).
     #[must_use]
-    pub fn smoke_frame(&self) -> bool {
+    pub(crate) fn smoke_frame(&self) -> bool {
         self.space.smoke_frame()
     }
 }
@@ -40,6 +40,7 @@ mod tests {
     use crate::combat::Rules;
     use crate::flight::Controls;
     use crate::session::Session;
+    use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, catalog};
 
     fn session(catalog: &FakePilotCatalog) -> Session {
@@ -49,7 +50,7 @@ mod tests {
     /// The smoke frame after an advance pass run on `frame`.
     fn after_pass_on(session: &mut Session, frame: i16) -> bool {
         session.space.frame = frame;
-        session.tick(Controls::default());
+        work(session, &crate::testkit::catalog(), Controls::default());
         session.smoke_frame()
     }
 
@@ -82,7 +83,7 @@ mod tests {
         session.space.frame = 1023;
         let mut seen = Vec::new();
         for _ in 0..3 {
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
             seen.push(session.smoke_frame());
         }
         assert_eq!(seen, [true, false, true], "1023, 1024, then 0");

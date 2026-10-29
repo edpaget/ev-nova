@@ -416,9 +416,16 @@ impl MovieStage {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod fixture {
-    //! A movie player for tests.
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture {
+    //! A movie player for tests, and the [`MoviePlayer`] port's contract.
+    //!
+    //! [`MockMoviePlayer`] plays movies of a set size for a set number of
+    //! advances, or refuses to start one, and logs every call.
+    //! [`check_contract`] runs against it here and against `nova`'s
+    //! `NoMoviePlayer`, the one real adapter. That adapter plays nothing,
+    //! so the contract is thin: it says how a player that can't start
+    //! behaves, and how one that can plays out, without decoding anything.
 
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -427,11 +434,17 @@ pub(crate) mod fixture {
     use super::MoviePlayer;
     use crate::color::Color;
     use crate::draw::{DrawList, fill_rect};
-    use crate::geometry::Bounds;
+    use crate::geometry::{Bounds, Point};
+
+    /// How long each advance the contract makes is.
+    pub const STEP: Duration = Duration::from_millis(100);
+
+    /// How many advances a playing movie may take to end.
+    pub const MAX_ADVANCES: u32 = 10_000;
 
     /// What a [`MockMoviePlayer`] was asked.
     #[derive(Clone, Debug, PartialEq)]
-    pub(crate) enum Call {
+    pub enum Call {
         /// `start(file)`.
         Start(String),
         /// `advance`.
@@ -443,21 +456,22 @@ pub(crate) mod fixture {
     }
 
     /// The colour a [`MockMoviePlayer`] draws its frame in.
-    pub(crate) const FRAME: Color = Color::rgba(1, 2, 3, 255);
+    pub const FRAME: Color = Color::rgba(1, 2, 3, 255);
 
     /// A player whose movies are `size` and play for `advances` advances,
     /// or, with no size, cannot start; it logs every call.
-    pub(crate) struct MockMoviePlayer {
+    pub struct MockMoviePlayer {
         size: Option<(u32, u32)>,
         advances: u32,
         advanced: RefCell<u32>,
-        pub(crate) log: RefCell<Vec<Call>>,
+        pub log: RefCell<Vec<Call>>,
     }
 
     impl MockMoviePlayer {
         /// A player whose movies are `size` and end on their `advances`th
         /// advance.
-        pub(crate) fn playing(size: (u32, u32), advances: u32) -> Rc<Self> {
+        #[must_use]
+        pub fn playing(size: (u32, u32), advances: u32) -> Rc<Self> {
             Rc::new(Self {
                 size: Some(size),
                 advances,
@@ -467,7 +481,8 @@ pub(crate) mod fixture {
         }
 
         /// A player that cannot start any movie.
-        pub(crate) fn refusing() -> Rc<Self> {
+        #[must_use]
+        pub fn refusing() -> Rc<Self> {
             Rc::new(Self {
                 size: None,
                 advances: 0,
@@ -477,7 +492,8 @@ pub(crate) mod fixture {
         }
 
         /// The calls, `Draw`s left out.
-        pub(crate) fn calls(&self) -> Vec<Call> {
+        #[must_use]
+        pub fn calls(&self) -> Vec<Call> {
             self.log
                 .borrow()
                 .iter()
@@ -487,7 +503,8 @@ pub(crate) mod fixture {
         }
 
         /// The rects of the frames drawn.
-        pub(crate) fn drawn(&self) -> Vec<Bounds> {
+        #[must_use]
+        pub fn drawn(&self) -> Vec<Bounds> {
             self.log
                 .borrow()
                 .iter()
@@ -517,9 +534,187 @@ pub(crate) mod fixture {
             self.log.borrow_mut().push(Call::Stop);
         }
 
+        /// Fills `rect` with [`FRAME`], unless the player refuses every
+        /// movie and so has no frame to draw.
         fn draw_frame(&self, rect: Bounds, list: &mut DrawList) {
             self.log.borrow_mut().push(Call::Draw(rect));
-            fill_rect(list, rect, FRAME);
+            if self.size.is_some() {
+                fill_rect(list, rect, FRAME);
+            }
+        }
+    }
+
+    /// Checks the port's contract against `player`, starting `file`:
+    ///
+    /// 1. Stopping before anything started does nothing harmful.
+    /// 2. If `file` can't start, advancing says it isn't playing, and
+    ///    drawing a frame draws nothing.
+    /// 3. If it starts, its size is not zero either way; advancing says
+    ///    it's playing until, within [`MAX_ADVANCES`], it says it isn't,
+    ///    and it stays that way; stopping it then is harmless; and
+    ///    starting it again plays it as long again.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the first clause `player` breaks.
+    pub fn check_contract(player: &impl MoviePlayer, file: &str) -> Result<(), String> {
+        player.stop();
+        let rect = Bounds::at(Point::new(0.0, 0.0), 64.0, 48.0);
+        let Some((width, height)) = player.start(file) else {
+            if player.advance(STEP) {
+                return Err(format!("{file} didn't start, but advancing says it plays"));
+            }
+            let mut list = DrawList::new();
+            player.draw_frame(rect, &mut list);
+            if !list.is_empty() {
+                return Err(format!("{file} didn't start, but a frame was drawn"));
+            }
+            player.stop();
+            return Ok(());
+        };
+        if width == 0 || height == 0 {
+            return Err(format!("{file} started at a size of {width} x {height}"));
+        }
+        let length = played(player, file)?;
+        for _ in 0..3 {
+            if player.advance(STEP) {
+                return Err(format!("{file} played again after it ended"));
+            }
+        }
+        player.stop();
+        if player.start(file).is_none() {
+            return Err(format!("{file} didn't start a second time"));
+        }
+        let again = played(player, file)?;
+        if again != length {
+            return Err(format!(
+                "a second start of {file} played {again} advances, not {length}"
+            ));
+        }
+        player.stop();
+        Ok(())
+    }
+
+    /// How many advances the started movie plays for, the last included.
+    fn played(player: &impl MoviePlayer, file: &str) -> Result<u32, String> {
+        for advances in 1..=MAX_ADVANCES {
+            if !player.advance(STEP) {
+                return Ok(advances);
+            }
+        }
+        Err(format!("{file} never ended within {MAX_ADVANCES} advances"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::cell::Cell;
+
+        use super::*;
+
+        #[test]
+        fn the_mock_meets_the_contract_playing_and_refusing() {
+            assert_eq!(
+                check_contract(&*MockMoviePlayer::playing((640, 480), 5), "Race.mov"),
+                Ok(())
+            );
+            assert_eq!(
+                check_contract(&*MockMoviePlayer::playing((1, 1), 0), "Race.mov"),
+                Ok(())
+            );
+            assert_eq!(
+                check_contract(&*MockMoviePlayer::refusing(), "Race.mov"),
+                Ok(())
+            );
+        }
+
+        /// One way to break a [`MockMoviePlayer`].
+        #[derive(Clone, Copy)]
+        enum Flaw {
+            PlaysWithoutStarting,
+            DrawsWithoutStarting,
+            HasNoSize,
+            NeverEnds,
+            Resumes,
+            RefusesASecondStart,
+            ShortensTheSecondPlay,
+        }
+
+        struct Broken {
+            inner: Rc<MockMoviePlayer>,
+            flaw: Flaw,
+            starts: Cell<u32>,
+            ended: Cell<u32>,
+        }
+
+        impl MoviePlayer for Broken {
+            fn start(&self, file: &str) -> Option<(u32, u32)> {
+                self.starts.set(self.starts.get() + 1);
+                let size = self.inner.start(file);
+                match self.flaw {
+                    Flaw::HasNoSize => size.map(|(width, _)| (width, 0)),
+                    Flaw::RefusesASecondStart if self.starts.get() > 1 => None,
+                    _ => size,
+                }
+            }
+
+            fn advance(&self, dt: Duration) -> bool {
+                let playing = self.inner.advance(dt);
+                if !playing {
+                    self.ended.set(self.ended.get() + 1);
+                }
+                match self.flaw {
+                    Flaw::PlaysWithoutStarting | Flaw::NeverEnds => true,
+                    Flaw::Resumes => playing || self.ended.get() == 2,
+                    Flaw::ShortensTheSecondPlay if self.starts.get() > 1 => false,
+                    _ => playing,
+                }
+            }
+
+            fn stop(&self) {
+                self.inner.stop();
+            }
+
+            fn draw_frame(&self, rect: Bounds, list: &mut DrawList) {
+                match self.flaw {
+                    Flaw::DrawsWithoutStarting => fill_rect(list, rect, FRAME),
+                    _ => self.inner.draw_frame(rect, list),
+                }
+            }
+        }
+
+        fn broken(inner: Rc<MockMoviePlayer>, flaw: Flaw) -> String {
+            let player = Broken {
+                inner,
+                flaw,
+                starts: Cell::new(0),
+                ended: Cell::new(0),
+            };
+            check_contract(&player, "Race.mov").expect_err("the broken player fails the contract")
+        }
+
+        #[test]
+        fn rejects_each_flaw_naming_its_clause() {
+            let playing = || MockMoviePlayer::playing((640, 480), 5);
+            for (inner, flaw, clause) in [
+                (
+                    MockMoviePlayer::refusing(),
+                    Flaw::PlaysWithoutStarting,
+                    "advancing says it plays",
+                ),
+                (
+                    MockMoviePlayer::refusing(),
+                    Flaw::DrawsWithoutStarting,
+                    "a frame was drawn",
+                ),
+                (playing(), Flaw::HasNoSize, "a size of"),
+                (playing(), Flaw::NeverEnds, "never ended"),
+                (playing(), Flaw::Resumes, "played again"),
+                (playing(), Flaw::RefusesASecondStart, "a second time"),
+                (playing(), Flaw::ShortensTheSecondPlay, "a second start"),
+            ] {
+                let error = broken(inner, flaw);
+                assert!(error.contains(clause), "{clause}: {error}");
+            }
         }
     }
 }

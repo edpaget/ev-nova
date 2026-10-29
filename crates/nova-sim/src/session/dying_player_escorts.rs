@@ -82,11 +82,13 @@ mod tests {
     use crate::combat::hull::Condition;
     use crate::combat::{Rules, ShipRef};
     use crate::escort::{EscortDuty, FormationSlot};
+    use crate::flight::Controls;
     use crate::mission::ships::ShipBehav;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::Reserves;
     use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
+    use crate::testkit::work_with;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, npc};
     use crate::traffic::npc::{AiType, MissionMark, Npc};
 
@@ -207,7 +209,14 @@ mod tests {
 
     /// A traffic tick, its work before the AI among it.
     fn traffic_tick(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// An advance pass.
@@ -227,7 +236,14 @@ mod tests {
 
     /// A traffic tick by Nova's AI.
     fn nova_traffic_tick(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.tick_traffic(catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// An advance pass by Nova's AI.

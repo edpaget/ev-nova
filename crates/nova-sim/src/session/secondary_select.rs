@@ -49,8 +49,7 @@
 //! jump's pre-jump and warp: the jump state +0x50 gates only the fire
 //! keys (@0x6aaf0, @0x6ab75) and the disabled flag only the fire. Landed,
 //! no pass runs. It runs on both passes of a double-time frame, as
-//! `_HandlePlayer` does ([`Session::player_fires`] on either, and
-//! [`Session::tick_combat`]'s fight).
+//! `_HandlePlayer` does ([`Session::player_fires`] on either).
 //!
 //! The original runs the block before the reloads' countdown (@0x6ae25),
 //! which the engine counts inside the fire: they share no state, so the
@@ -98,21 +97,21 @@ impl Session {
     /// read at the press, where the original reads it at the pass
     /// (`QuickKeyCheck(0x3a)` @0x6acf6): the press is taken on the next
     /// pass, before any frame is drawn, so the difference is never seen.
-    pub fn press_weapon_select(&mut self, backwards: bool) {
+    pub(crate) fn press_weapon_select(&mut self, backwards: bool) {
         self.ship.weapon_keys.select_press = Some(backwards);
     }
 
     /// Holds the Weapon Safety key down or lets it go: what each pass's
     /// secondary block reads (see the module docs).
-    pub fn hold_weapon_safety(&mut self, held: bool) {
+    pub(crate) fn hold_weapon_safety(&mut self, held: bool) {
         self.ship.weapon_keys.safety_held = held;
     }
 
     /// Selects the next secondary weapon, or the one before it when
     /// `backwards`, at once, with its sound, as a Weapon Select press does
-    /// on the next pass: for tests and fixtures.
-    #[cfg(any(test, feature = "fixture"))]
-    pub fn select_secondary(&mut self, backwards: bool) {
+    /// on the next pass: for the tests, as no production code calls it.
+    #[cfg(test)]
+    pub(crate) fn select_secondary(&mut self, backwards: bool) {
         self.ship
             .select_secondary(&mut self.pilot, &self.statics, &mut self.out, backwards);
     }
@@ -273,6 +272,7 @@ mod tests {
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::tests::{MISSILE, ROCKET, TORCH, fired_by_the_player, with_secondaries};
     use crate::session::{Jump, Mode};
+    use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, catalog};
     use nova_sim_catalog::fixture::outfit;
 
@@ -311,7 +311,7 @@ mod tests {
 
     /// A fight tick: what the player fired.
     fn tick(session: &mut Session) -> Vec<WeaponId> {
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &crate::testkit::catalog(), Controls::default());
         fired_by_the_player(&session.take_combat_events())
     }
 

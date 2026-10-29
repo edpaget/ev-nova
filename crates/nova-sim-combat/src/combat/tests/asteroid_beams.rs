@@ -8,8 +8,8 @@ use super::*;
 use crate::asteroid::{Asteroid, AsteroidType, Asteroids, KINDS};
 use crate::combat::asteroid_walk::AsteroidField;
 
-/// The fire of every ship among `ships`, then `_HandleBeams` on `pass`
-/// with `field` lent, of `types`: the events.
+/// The ship loop's fire of every NPC among `ships`, then `_HandleBeams`
+/// on `pass` with `field` lent, of `types`: the events.
 fn beams_amid(
     combat: &mut Combat,
     ships: &mut [Ship],
@@ -26,7 +26,6 @@ fn beams_amid(
         field: Field::default(),
     };
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.fire_player(&mut fighters, arena, &mut NeverFires);
     combat.handle_npcs(&mut fighters, arena, &mut NeverFires);
     let field = AsteroidField {
         asteroids: field,

@@ -489,12 +489,36 @@ fn led_berth_1() -> SlotSprites {
     sprites
 }
 
+/// Hands the flight shown's session `carry`, as its ticks would leave it:
+/// set up again by the router's rules and Nova's ports, so only the
+/// history changes.
+fn carry_on(screen: &mut AppScreen, carry: nova_sim::CarryOver) {
+    let rules = screen.rules;
+    if let Some(flight) = screen.flight.as_mut() {
+        flight.change_sim(|sim| {
+            sim.set_up(nova_sim::SessionSetup {
+                rules,
+                carry,
+                ..nova_sim::SessionSetup::default()
+            });
+        });
+    }
+}
+
+/// What `flight` hands on to the next flight of the run, as it stands.
+fn carried(flight: &FlightView<Rc<GameData>>) -> nova_sim::CarryOver {
+    flight.sim().carry_over().unwrap_or_default()
+}
+
 /// Gives the flight shown `sprites` as its history, as its ticks would.
 fn lay_out(screen: &mut AppScreen, sprites: SlotSprites) {
-    screen.flight = screen
-        .flight
-        .take()
-        .map(|flight| flight.with_slot_sprites(sprites));
+    carry_on(
+        screen,
+        nova_sim::CarryOver {
+            slot_sprites: Some(sprites),
+            ..nova_sim::CarryOver::default()
+        },
+    );
 }
 
 #[test]
@@ -513,7 +537,7 @@ fn a_pilot_loaded_after_another_starts_from_the_layers_it_left() {
     assert!(screen.flight_view().is_none(), "put away");
     create(&mut screen, "Bea");
     assert_eq!(pilot(&screen).name(), "Bea");
-    assert_eq!(flight(&screen).slot_sprites(), Some(&led_berth_1()));
+    assert_eq!(carried(flight(&screen)).slot_sprites, Some(led_berth_1()));
 }
 
 #[test]
@@ -546,7 +570,7 @@ fn the_developers_flight_after_a_pilot_starts_from_the_layers_it_left() {
     screen.input(&key(Key::Tab, true));
     screen.input(&key(Key::Char('f'), true));
     assert_eq!(screen.showing(), Showing::Flight);
-    assert_eq!(flight(&screen).slot_sprites(), Some(&led_berth_1()));
+    assert_eq!(carried(flight(&screen)).slot_sprites, Some(led_berth_1()));
 }
 
 /// A stellar sprite pool whose last slot, 15, was last taken by stellar
@@ -564,15 +588,20 @@ fn a_pilot_created_after_another_carries_on_the_stellar_sprites_it_left() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     create(&mut screen, "Ada");
-    screen.flight = screen
-        .flight
-        .take()
-        .map(|flight| flight.with_stellar_sprite_pool(ghost_in_slot_15()));
+    carry_on(
+        &mut screen,
+        nova_sim::CarryOver {
+            stellar_sprite_pool: Some(ghost_in_slot_15()),
+            ..nova_sim::CarryOver::default()
+        },
+    );
     escape_to_menu(&mut screen);
     assert!(screen.flight_view().is_none(), "put away");
     create(&mut screen, "Bea");
     assert_eq!(pilot(&screen).name(), "Bea");
-    let pool = flight(&screen).stellar_sprite_pool().expect("a session");
+    let pool = carried(flight(&screen))
+        .stellar_sprite_pool
+        .expect("a session");
     assert_eq!(
         pool.sprite_of(nova_sim::StellarId(2015), false),
         nova_sim::story::sprite_pool::SlotSprite::Ghost { top_left: (-7, 9) },
@@ -590,10 +619,13 @@ fn ace_at_berth_1() -> nova_sim::KeptBerths {
 
 /// Gives the flight shown `kept` as its berths, as its ticks would.
 fn keep_berths(screen: &mut AppScreen, kept: nova_sim::KeptBerths) {
-    screen.flight = screen
-        .flight
-        .take()
-        .map(|flight| flight.with_kept_berths(kept));
+    carry_on(
+        screen,
+        nova_sim::CarryOver {
+            kept_berths: Some(kept),
+            ..nova_sim::CarryOver::default()
+        },
+    );
 }
 
 #[test]
@@ -610,7 +642,7 @@ fn a_new_pilot_after_another_starts_from_the_berths_it_left() {
     escape_to_menu(&mut screen);
     create(&mut screen, "Bea");
     assert_eq!(pilot(&screen).name(), "Bea");
-    assert_eq!(flight(&screen).kept_berths(), Some(ace_at_berth_1()));
+    assert_eq!(carried(flight(&screen)).kept_berths, Some(ace_at_berth_1()));
 }
 
 #[test]
@@ -621,8 +653,8 @@ fn a_pilot_opened_after_another_starts_from_the_berths_it_left() {
     keep_berths(&mut screen, ace_at_berth_1());
     escape_to_menu(&mut screen);
     let bea = nova_sim::Pilot::new(screen.data.as_ref(), "Bea").expect("a pilot");
-    let opened = screen.pilot_flight(bea, true);
-    assert_eq!(opened.kept_berths(), Some(ace_at_berth_1()));
+    let opened = screen.pilot_flight(bea, true, None);
+    assert_eq!(carried(&opened).kept_berths, Some(ace_at_berth_1()));
 }
 
 #[test]
@@ -633,10 +665,10 @@ fn a_game_held_in_place_of_another_hands_on_its_berths() {
     keep_berths(&mut screen, ace_at_berth_1());
     escape_to_menu(&mut screen);
     let bea = nova_sim::Pilot::new(screen.data.as_ref(), "Bea").expect("a pilot");
-    let held = screen.pilot_flight(bea, false);
+    let held = screen.pilot_flight(bea, false, None);
     screen.hold_game(held);
     let game = screen.game.as_ref().expect("Bea's game held");
-    assert_eq!(game.kept_berths(), Some(ace_at_berth_1()));
+    assert_eq!(carried(game).kept_berths, Some(ace_at_berth_1()));
 }
 
 /// A router over [`hiding_beta_data`], its pilots kept in `store`.
@@ -692,7 +724,7 @@ fn a_new_pilot_with_no_game_held_reads_the_refresh_the_last_flight_left() {
     escape_to_menu(&mut screen);
     let ada = screen.game.take().expect("Ada's game held");
     screen.remember_flight(&ada);
-    assert_eq!(screen.last_refresh, ada.last_refresh());
+    assert_eq!(screen.last_refresh, carried(&ada).last_refresh);
     create_held(&mut screen, "Bea");
     let bea = screen.game.as_ref().expect("Bea's game held");
     assert!(!explored_beta(bea), "Ada's play left Beta hidden");
@@ -704,17 +736,9 @@ fn a_new_pilot_reads_the_game_helds_refresh_before_the_last_flights() {
     let mut screen = hiding_beta(&store);
     create(&mut screen, "Ada");
     escape_to_menu(&mut screen);
-    let ada = screen
-        .game
-        .as_ref()
-        .expect("Ada's game held")
-        .last_refresh();
+    let ada = carried(screen.game.as_ref().expect("Ada's game held")).last_refresh;
     create_held(&mut screen, "Bea");
-    let bea = screen
-        .game
-        .as_ref()
-        .expect("Bea's game held")
-        .last_refresh();
+    let bea = carried(screen.game.as_ref().expect("Bea's game held")).last_refresh;
     assert_eq!(screen.last_refresh, ada, "Ada's play put away: Beta hidden");
     assert_ne!(bea, ada, "Bea's @0x1925e, before her OnStart: Beta visible");
     create_held(&mut screen, "Cea");

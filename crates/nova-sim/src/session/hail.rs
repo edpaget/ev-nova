@@ -673,7 +673,7 @@ impl Session {
 
     /// What the NPCs assisting the player have done since this was last
     /// taken, in order; taking it empties the list.
-    pub fn take_comm(&mut self) -> Vec<CommNote> {
+    pub(crate) fn take_comm(&mut self) -> Vec<CommNote> {
         self.out.take_comm()
     }
 }
@@ -772,6 +772,9 @@ pub(super) fn make_leave(npc: &mut Npc) {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 pub(super) mod tests {
+    use crate::combat::Rules;
+    use crate::flight::Controls;
+    use crate::testkit::work_with;
     use std::rc::Rc;
 
     use super::*;
@@ -1779,7 +1782,14 @@ pub(super) mod tests {
             crate::combat::weapon::WeaponSpec::new(&crate::testkit::weapon(127)),
             1,
         )]);
-        session.tick_traffic(catalog, &NovaAi::default(), &mut crate::NeverFires);
+        work_with(
+            &mut session,
+            catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut crate::NeverFires,
+        );
         assert_eq!(session.npcs()[0].goal, Goal::Attack(ShipRef::Player));
         session
     }
@@ -1807,7 +1817,14 @@ pub(super) mod tests {
     /// each.
     fn decide(session: &mut Session, catalog: &FakePilotCatalog, ticks: u32, check: impl Fn(&Npc)) {
         for _ in 0..ticks {
-            session.tick_traffic(catalog, &NovaAi::default(), &mut crate::NeverFires);
+            work_with(
+                session,
+                catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut crate::NeverFires,
+            );
             check(&session.npcs()[0]);
         }
     }
@@ -1884,8 +1901,15 @@ pub(super) mod tests {
         });
     }
 
-    /// Whether NPC 0's distress call is on the line.
-    fn calls_for_help(session: &mut Session) -> bool {
+    /// The traffic's think alone, Nova's, answering the strikes left for
+    /// it, as a pass's AI runs it (`Traffic::think_holding`): whether NPC
+    /// 0's distress call went on the line. The pass settles its line work
+    /// right after, so only the think shows what it queued.
+    fn thinks_a_call(session: &mut Session) -> bool {
+        let strikes = std::mem::take(&mut session.space.strikes);
+        session.step_traffic(|traffic, world| {
+            traffic.think_holding(&NovaAi::default(), world, &strikes, &mut crate::NeverFires);
+        });
         session.space.traffic.take_on_line().iter().any(|work| {
             matches!(
                 work,
@@ -1906,13 +1930,11 @@ pub(super) mod tests {
             assert_eq!((npc.goal, npc.target), (Goal::JumpOut, None));
             assert_eq!(npc.provoked, 5.0, "kept through the leave");
         });
-        assert!(!calls_for_help(&mut session));
         hit_for_nothing(&mut session, attacker);
-        decide(&mut session, &catalog, 1, |npc| {
-            assert_eq!(npc.goal, Goal::Flee(ShipRef::Npc(attacker)));
-            assert_eq!(npc.provoked, 5.0);
-        });
-        assert!(calls_for_help(&mut session), "its distress call");
+        assert!(thinks_a_call(&mut session), "its distress call");
+        let npc = &session.npcs()[0];
+        assert_eq!(npc.goal, Goal::Flee(ShipRef::Npc(attacker)));
+        assert_eq!(npc.provoked, 5.0);
     }
 
     #[test]
@@ -1921,10 +1943,9 @@ pub(super) mod tests {
         let (mut session, attacker) = bribed_beside_another(&catalog, 0.0);
         decide(&mut session, &catalog, 3, |_| {});
         hit_for_nothing(&mut session, attacker);
-        decide(&mut session, &catalog, 1, |npc| {
-            assert_eq!((npc.goal, npc.provoked), (Goal::JumpOut, 0.0));
-        });
-        assert!(!calls_for_help(&mut session));
+        assert!(!thinks_a_call(&mut session));
+        let npc = &session.npcs()[0];
+        assert_eq!((npc.goal, npc.provoked), (Goal::JumpOut, 0.0));
     }
 
     #[test]
@@ -2175,7 +2196,12 @@ pub(super) mod tests {
         npc(&mut session).provoked = 5.0;
         match help {
             Help::Refuel => session.pilot.reserves.fuel.now = 40.0,
-            Help::Repair => session.ship.condition = Condition::Disabled,
+            Help::Repair => {
+                // Its armour down to a disabled ship's, so a pass's display
+                // keeps it disabled.
+                session.pilot.reserves.armor.now = 1.0;
+                session.ship.condition = Condition::Disabled;
+            }
         }
         hail(&mut session, catalog);
         press(&mut session, catalog, 1, 99);
@@ -2703,7 +2729,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_pirate_taunted_in_its_count_wait_attacks_once_its_wait_is_out() {
+    fn a_pirate_taunted_in_its_count_wait_attacks_and_keeps_its_wait() {
         // `_DoCommDialog`'s attack (`_AIMakeShipAttackPlayer` @0x9621f)
         // writes no +0x4c, and nor does its bribe (`_AIMakeShipLeave`
         // @0x961eb, @0x7e2b0-0x7e2e7): every deed's goal keeps the wait,
@@ -2719,7 +2745,9 @@ pub(super) mod tests {
             crate::combat::weapon::WeaponSpec::new(&crate::testkit::weapon(127)),
             1,
         )]);
-        crate::testkit::count_waiting(npc(&mut session), 50);
+        let pirate = npc(&mut session);
+        pirate.goal = Goal::CountWait;
+        pirate.ai_wait = 50;
         let mut chance = Draws::of(&opening(0));
         let view = session
             .hail(&catalog, &options, &mut chance)
@@ -2735,27 +2763,14 @@ pub(super) mod tests {
         assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player));
         assert_eq!(pirate.ai_wait, 50, "the wait outlives goal 0x16");
         assert!(pirate.wait_running());
-        // Through the session's traffic, it holds still through the wait,
-        // its fire gated (`_HandleShip` @0x34a54-0x34a72)...
+        // Through the session's traffic, the wait it kept holds it still
+        // (`_HandleShip` @0x34a54-0x34a72). The whole hold and the turn
+        // after are nova-sim-ai's, pinned by
+        // `traffic::count_wait_turn_tests::a_pirate_a_good_samaritans_call_turns_in_its_count_wait_holds_still_for_its_whole_count`.
         let at = pirate.state;
-        for tick in 1..50 {
-            decide(&mut session, &catalog, 1, |pirate| {
-                assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player), "tick {tick}");
-                assert_eq!(pirate.state, at, "still on tick {tick}");
-                assert!(
-                    !crate::ai::fire::gated(pirate).primary,
-                    "it fires nothing on tick {tick}"
-                );
-            });
-        }
-        decide(&mut session, &catalog, 1, |pirate| {
-            assert_eq!(pirate.state, at, "still on the wait's last tick");
-            assert_eq!(pirate.ai_wait, 0, "the wait is out");
-        });
-        // ...then, the next tick, turns to its fight with the player below.
         decide(&mut session, &catalog, 1, |pirate| {
             assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player));
-            assert_ne!(pirate.state.heading, at.heading, "it turns to fight");
+            assert_eq!(pirate.state, at, "still");
         });
     }
 

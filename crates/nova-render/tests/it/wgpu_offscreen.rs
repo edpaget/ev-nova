@@ -12,9 +12,10 @@ use nova_render::wgpu::{
 use nova_render::{
     Frame, Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Viewport, WorldSpace,
 };
-use nova_view::draw::{fill_rect, lights_tint};
 use nova_view::geometry::Bounds;
 use nova_view::{Blend, Color, Colorize, DrawCommand, DrawList, Font, ImageKey, ImageKind, Point};
+
+use super::common::fill;
 
 /// Logical 32x24 in a 64x64 target: scale 2, content (0, 8, 64, 48).
 const LOGICAL: LogicalSize = LogicalSize { w: 32, h: 24 };
@@ -449,15 +450,19 @@ fn a_partial_level_light_composites_like_the_originals_translucent_blit() {
     // Hull squares at logical (4..8, 4..8) and (14..18, 4..8), with the OR
     // sheet over the first at level 16 and over the second at level 10
     // (the stock triangle blink's lowest), and over the black clear at
-    // level 16, (24..28, 4..8).
+    // level 16, (24..28, 4..8). Level n is white at n 32nds of full alpha.
+    let (level_16, level_10) = (
+        Color::rgba(255, 255, 255, 128),
+        Color::rgba(255, 255, 255, 80),
+    );
     let hull = w555(HULL_555);
     let spots = [6.0, 16.0, 26.0].map(|x| Point::new(x, 6.0));
     let mut list = DrawList::new();
     list.sprite(ImageKey::sprite(2, 0), spots[0], tint(hull))
         .sprite(ImageKey::sprite(2, 0), spots[1], tint(hull))
-        .or_sprite(ImageKey::sprite(7, 0), spots[0], lights_tint(16))
-        .or_sprite(ImageKey::sprite(7, 0), spots[1], lights_tint(10))
-        .or_sprite(ImageKey::sprite(7, 0), spots[2], lights_tint(16));
+        .or_sprite(ImageKey::sprite(7, 0), spots[0], level_16)
+        .or_sprite(ImageKey::sprite(7, 0), spots[1], level_10)
+        .or_sprite(ImageKey::sprite(7, 0), spots[2], level_16);
     let mut renderer = Renderer::new(Images);
 
     let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
@@ -506,8 +511,14 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
     // clear, (14..18, 14..18) then (16..20, 14..18), the second over half
     // the first. Beside them, a hull square at (24..28, 14..18) with the
     // sheet crossfaded over it by 8 at a murk of 16, its colour halved.
-    let see_through = nova_view::flight::weapons::see_through;
-    let murk_tint = nova_view::flight::murk::murk_tint;
+    // White at (32 - t) 32nds of full alpha: a shot translucent by t.
+    let translucent_by = |t: u8| match t {
+        8 => Color::rgba(255, 255, 255, 191),
+        16 => Color::rgba(255, 255, 255, 128),
+        24 => Color::rgba(255, 255, 255, 64),
+        32 => Color::rgba(255, 255, 255, 0),
+        _ => unreachable!("translucent by {t}"),
+    };
     let hull = w555(HULL_555);
     let spots = [6.0, 16.0, 26.0].map(|x| Point::new(x, 6.0));
     let mut list = DrawList::new();
@@ -515,28 +526,29 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
         .sprite(ImageKey::sprite(2, 0), spots[1], tint(hull))
         .sprite(ImageKey::sprite(2, 0), Point::new(6.0, 16.0), tint(hull))
         .sprite(ImageKey::sprite(2, 0), Point::new(26.0, 16.0), tint(hull))
-        .crossfade_sprite(ImageKey::sprite(7, 0), spots[0], see_through(8))
-        .crossfade_sprite(ImageKey::sprite(7, 0), spots[1], see_through(24))
-        .crossfade_sprite(ImageKey::sprite(7, 0), spots[2], see_through(8))
+        .crossfade_sprite(ImageKey::sprite(7, 0), spots[0], translucent_by(8))
+        .crossfade_sprite(ImageKey::sprite(7, 0), spots[1], translucent_by(24))
+        .crossfade_sprite(ImageKey::sprite(7, 0), spots[2], translucent_by(8))
         .crossfade_sprite(
             ImageKey::sprite(7, 0),
             Point::new(6.0, 16.0),
-            see_through(32),
+            translucent_by(32),
         )
         .crossfade_sprite(
             ImageKey::sprite(7, 0),
             Point::new(26.0, 16.0),
-            murk_tint(see_through(8), 16),
+            // Translucent by 8, its colour halved by a murk of 16.
+            Color::rgba(127, 127, 127, 191),
         )
         .crossfade_sprite(
             ImageKey::sprite(9, 0),
             Point::new(16.0, 16.0),
-            see_through(16),
+            translucent_by(16),
         )
         .crossfade_sprite(
             ImageKey::sprite(9, 0),
             Point::new(18.0, 16.0),
-            see_through(16),
+            translucent_by(16),
         );
     let mut renderer = Renderer::new(Images);
 
@@ -607,16 +619,18 @@ fn a_translucent_sprite_draws_like_the_originals_translucent_copy_with_its_facto
     // Hull squares at logical (4..8, 4..8) and (14..18, 4..8), with the OR
     // sheet drawn over the first at n = 4, m = 30 (a fully cloaked hull)
     // and over the second at n = 16, m = 8, and over the clear at n = 4,
-    // m = 30, (24..28, 4..8).
-    let translucent_tint = nova_view::draw::translucent_tint;
+    // m = 30, (24..28, 4..8). Each factor is its 32nds of full: n in the
+    // colour, m in the alpha.
+    let cloaked = Color::rgba(32, 32, 32, 239);
+    let half = Color::rgba(128, 128, 128, 64);
     let hull = w555(HULL_555);
     let spots = [6.0, 16.0, 26.0].map(|x| Point::new(x, 6.0));
     let mut list = DrawList::new();
     list.sprite(ImageKey::sprite(2, 0), spots[0], tint(hull))
         .sprite(ImageKey::sprite(2, 0), spots[1], tint(hull))
-        .translucent_sprite(ImageKey::sprite(7, 0), spots[0], translucent_tint(4, 30))
-        .translucent_sprite(ImageKey::sprite(7, 0), spots[1], translucent_tint(16, 8))
-        .translucent_sprite(ImageKey::sprite(7, 0), spots[2], translucent_tint(4, 30));
+        .translucent_sprite(ImageKey::sprite(7, 0), spots[0], cloaked)
+        .translucent_sprite(ImageKey::sprite(7, 0), spots[1], half)
+        .translucent_sprite(ImageKey::sprite(7, 0), spots[2], cloaked);
     let mut renderer = Renderer::new(Images);
 
     let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
@@ -784,11 +798,11 @@ fn render_max(list: &DrawList) -> Option<Vec<u8>> {
 
 #[test]
 fn a_max_picture_takes_the_brighter_of_each_channel_over_a_solid_rect() {
-    // A border cell, painted as `fill_rect` paints, at logical (4..20,
+    // A border cell, painted as a filled rectangle is, at logical (4..20,
     // 4..12); a teal max picture over its right half and on past it, at
     // (12..28, 4..12); a transparent max picture over its left quarter.
     let mut list = DrawList::new();
-    fill_rect(&mut list, bounds(4.0, 4.0, 20.0, 12.0), tint(BORDER));
+    fill(&mut list, bounds(4.0, 4.0, 20.0, 12.0), tint(BORDER));
     max_picture(&mut list, 10, bounds(12.0, 4.0, 28.0, 12.0));
     max_picture(&mut list, 13, bounds(4.0, 4.0, 8.0, 12.0));
     let Some(pixels) = render_max(&list) else {
@@ -815,7 +829,7 @@ fn two_overlapping_max_pictures_take_the_brighter_of_each_channel() {
     let mut list = DrawList::new();
     max_picture(&mut list, 10, bounds(4.0, 4.0, 12.0, 12.0));
     max_picture(&mut list, 11, bounds(8.0, 8.0, 16.0, 16.0));
-    fill_rect(&mut list, bounds(18.0, 2.0, 30.0, 22.0), tint(BORDER));
+    fill(&mut list, bounds(18.0, 2.0, 30.0, 22.0), tint(BORDER));
     max_picture(&mut list, 10, bounds(18.0, 4.0, 26.0, 12.0));
     max_picture(&mut list, 11, bounds(22.0, 8.0, 30.0, 16.0));
     let Some(pixels) = render_max(&list) else {
@@ -860,7 +874,7 @@ fn a_clipped_max_picture_draws_only_inside_its_clip() {
     // A border cell at logical (4..20, 4..12), and violet max over all of
     // it, clipped to (8..14, 6..10).
     let mut list = DrawList::new();
-    fill_rect(&mut list, bounds(4.0, 4.0, 20.0, 12.0), tint(BORDER));
+    fill(&mut list, bounds(4.0, 4.0, 20.0, 12.0), tint(BORDER));
     list.clipped(
         bounds(8.0, 6.0, 14.0, 10.0),
         DrawCommand::BlendedPicture {
@@ -1241,7 +1255,7 @@ fn text_keeps_its_place_against_a_box_at_any_fraction_of_a_pixel() {
                 return;
             };
             let mut list = DrawList::new();
-            fill_rect(&mut list, bounds(60.0, y, 100.0, y + 10.0), green);
+            fill(&mut list, bounds(60.0, y, 100.0, y + 10.0), green);
             list.text_in(Font::Geneva, "llll", Point::new(2.0, y), 12.0, None, red);
             Renderer::new(Images).render(&list, &Viewport::new(LINE, (w, h), factor), &mut gpu);
             let pixels = gpu.read_pixels().expect("read back");

@@ -73,7 +73,7 @@ fn the_stock_raven_flown_by_the_player_turns_a_quarter_and_flies_along_its_headi
         ..Controls::default()
     };
     for _ in 0..300 {
-        session.tick(thrust);
+        crate::passes::work(&mut session, &data, thrust);
     }
     let top = session.top_speed();
     assert!((session.player_speed() - top).abs() < 1e-3, "at full speed");
@@ -83,15 +83,15 @@ fn the_stock_raven_flown_by_the_player_turns_a_quarter_and_flies_along_its_headi
         ..Controls::default()
     };
     while shortest_turn(session.player().heading, from) < 90.0 {
-        session.tick(left);
+        crate::passes::work(&mut session, &data, left);
     }
     for _ in 0..100 {
-        session.tick(Controls::default());
+        crate::passes::work(&mut session, &data, nova_sim::Controls::default());
     }
     let ship = *session.player();
     let along = facing(whole_degree(ship.heading)) * session.player_speed();
     assert!(near(ship.velocity, along), "{ship:?}");
-    session.tick(Controls::default());
+    crate::passes::work(&mut session, &data, nova_sim::Controls::default());
     assert!(
         near(session.player().position - ship.position, along),
         "no drift: {:?}",

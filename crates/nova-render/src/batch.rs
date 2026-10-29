@@ -762,7 +762,6 @@ mod tests {
     use std::rc::Rc;
 
     use nova_data::graphics::Image;
-    use nova_view::draw::lights_tint;
     use nova_view::{Blend, Color, DrawList, Font, ImageKey, ImageKind, Point};
 
     use super::*;
@@ -1379,11 +1378,25 @@ mod tests {
             .collect()
     }
 
+    /// `n` 32nds of full as an 8-bit value, rounded half up: the port's
+    /// "levels in 32nds" encoding that [`Blend::Or`],
+    /// [`Blend::OrCrossfade`] and [`Blend::OrTranslucent`] document,
+    /// written out here rather than taken from the view.
+    fn factor(n: u8) -> u8 {
+        ((u16::from(n) * 255 + 16) / 32) as u8
+    }
+
+    /// White at `n` 32nds of full alpha: an OR sprite's tint at level `n`.
+    fn level_tint(n: u8) -> Color {
+        Color::rgba(255, 255, 255, factor(n))
+    }
+
     #[test]
     fn or_tints_become_exact_levels() {
         let sprite = ImageKey::sprite(200, 0);
         let mut list = DrawList::new();
-        list.or_sprite(sprite, at(10.0, 10.0), lights_tint(10))
+        // Level 10.
+        list.or_sprite(sprite, at(10.0, 10.0), Color::rgba(255, 255, 255, 80))
             .or_sprite(sprite, at(20.0, 10.0), Color::WHITE)
             .or_sprite(sprite, at(30.0, 10.0), Color::rgba(255, 0, 0, 128))
             .sprite(sprite, at(40.0, 10.0), Color::rgba(255, 0, 0, 128));
@@ -1403,9 +1416,9 @@ mod tests {
     }
 
     #[test]
-    fn lights_tint_levels_round_trip() {
+    fn every_or_level_reads_back_as_itself() {
         for n in 0..=32 {
-            assert_eq!(or_levels(lights_tint(n)), [n; 3], "level {n}");
+            assert_eq!(or_levels(level_tint(n)), [n; 3], "level {n}");
         }
         assert_eq!(or_levels(Color::rgba(128, 64, 0, 255)), [16, 8, 0]);
     }
@@ -1459,14 +1472,13 @@ mod tests {
 
     #[test]
     fn a_crossfade_quads_alpha_is_its_opacity_in_exact_32nds() {
-        // The alphas a fade gives: `see_through(t)` and `Pod::tint` are
-        // round(k × 255 / 32), as `lights_tint(k)` is.
+        // The alphas a fade gives are k 32nds of full, rounded half up.
         let sprite = ImageKey::sprite(200, 0);
         for k in 0..=32_u8 {
             let mut list = DrawList::new();
             let tint = Color {
                 r: 200,
-                ..lights_tint(k)
+                ..level_tint(k)
             };
             list.crossfade_sprite(sprite, at(10.0, 10.0), tint);
             let frame = render_one(&list, &viewport());
@@ -1481,7 +1493,8 @@ mod tests {
     #[test]
     fn a_translucent_quads_tint_is_its_source_and_destination_factors_in_exact_32nds() {
         for (source, destination) in [(4, 30), (0, 32), (32, 0), (17, 9)] {
-            let tint = nova_view::draw::translucent_tint(source, destination);
+            let n = factor(source);
+            let tint = Color::rgba(n, n, n, factor(destination));
             assert_eq!(
                 translucent_factors(tint),
                 [source, source, source, destination]
@@ -2058,15 +2071,8 @@ mod tests {
     }
 
     #[test]
-    fn the_player_infos_middle_picture_is_cropped_not_squashed() {
-        use nova_view::ui::player_info::{BackgroundSizes, PictureSize, draw_background};
+    fn a_clipped_picture_taller_than_its_clip_is_cropped_not_squashed() {
         let page = 512.0;
-        let sized = |width, height| Some(PictureSize { width, height });
-        let stock = BackgroundSizes {
-            upper: sized(413.0, 40.0),
-            middle: sized(413.0, 215.0),
-            lower: sized(413.0, 40.0),
-        };
         let images = FakeImages::default()
             .with(
                 ImageKind::Pict,
@@ -2086,7 +2092,26 @@ mod tests {
         let mut renderer = Renderer::with_page_size(images, 512);
         let mut gpu = RecordingGpu::new();
         let mut list = DrawList::new();
-        draw_background(&mut list, Bounds::at(at(0.0, 0.0), 413.0, 227.0), &stock);
+        // The stock player info's background in its 413 x 227 window: a
+        // black fill, the 215-row middle at its own size below the 40-row
+        // upper cap, then both caps.
+        let window = Bounds::at(at(0.0, 0.0), 413.0, 227.0);
+        let cap = |id, top_left| DrawCommand::StretchedPicture {
+            image: ImageKey::picture(id),
+            top_left,
+            width: 413.0,
+            height: 40.0,
+        };
+        list.line(at(0.0, 113.5), at(413.0, 113.5), 227.0, Color::BLACK)
+            .clipped(
+                window,
+                DrawCommand::Picture {
+                    image: ImageKey::picture(8519),
+                    top_left: at(0.0, 40.0),
+                },
+            )
+            .clipped(window, cap(8518, at(0.0, 0.0)))
+            .clipped(window, cap(8520, at(0.0, 187.0)));
         let viewport = Viewport::new(LogicalSize { w: 512, h: 384 }, (512, 384), 1.0);
 
         assert_eq!(

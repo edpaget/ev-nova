@@ -3,6 +3,7 @@
 //! weapon's shots, blasts and beams against planet-type and ordinary
 //! ships.
 
+use super::rock_blasts::shot_into_rock;
 use super::*;
 use crate::combat::planet_type::{BeamPlanetFlag, PlanetBlasts};
 use crate::combat::weapon::DETONATES;
@@ -19,33 +20,53 @@ fn hurt(ship: &Ship) -> bool {
     left(ship) != (10.0, 30.0)
 }
 
-/// A fires `record` once to the right at B, 100 pixels off, with D 50
-/// pixels behind B; then the fight goes on for 12 ticks. Whether B and D
-/// were hurt.
+/// The collision passes alone among `ships` and `stellars`, with
+/// `arsenal`.
+fn hits_amid(
+    combat: &mut Combat,
+    ships: &mut [Ship],
+    arsenal: &Arsenal,
+    stellars: &mut [StellarTarget],
+) {
+    let govts = Governments::default();
+    let arena = phase::arena(arsenal, &govts, Rules::default());
+    phase::run_in(
+        combat,
+        ships,
+        arena,
+        &mut NeverFires,
+        |combat, fighters, arena, chance| {
+            let scenery = Scenery {
+                stellars,
+                ..Scenery::default()
+            };
+            combat.test_hits(fighters, arena, scenery, chance);
+        },
+    );
+}
+
+/// A's shot of `record`, whose last move ran from (90, 0) to (160, 0),
+/// across B, 100 pixels right of A, and D 50 pixels behind B, meets them
+/// in the collision passes. Whether B and D were hurt.
 fn through(
     record: WeaponRecord,
     b: impl Fn(Ship) -> Ship,
     d: impl Fn(Ship) -> Ship,
 ) -> (bool, bool) {
-    through_in(Combat::default(), record, b, d)
-}
-
-/// As [`through`], in `combat`.
-fn through_in(
-    mut combat: Combat,
-    record: WeaponRecord,
-    b: impl Fn(Ship) -> Ship,
-    d: impl Fn(Ship) -> Ship,
-) -> (bool, bool) {
+    let mut combat = Combat::default();
     let mut ships = [
-        Ship::at(1, 0.0, 0.0).armed(record),
+        Ship::at(1, 0.0, 0.0),
         b(Ship::at(2, 100.0, 0.0)),
         d(Ship::at(4, 150.0, 0.0)),
     ];
-    for _ in 0..12 {
-        tick(&mut combat, &mut ships, &NovaDisable);
-        ships[0].trigger = QUIET;
-    }
+    put(
+        &mut combat,
+        record,
+        A,
+        Vec2::new(90.0, 0.0),
+        Vec2::new(70.0, 0.0),
+    );
+    phase::test_hits(&mut combat, &mut ships, &NovaDisable);
     (hurt(&ships[1]), hurt(&ships[2]))
 }
 
@@ -65,16 +86,21 @@ fn a_planet_type_shot_passes_through_an_ordinary_ship_unspent_and_hits_a_planet_
 
 #[test]
 fn a_planet_type_shot_passes_an_ordinary_ship_to_strike_the_stellar_behind_it() {
+    // Its last move, from (60, 0) to (90, 0), crosses B and the
+    // stellar's edge at (80, 0).
     let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
-    let (_, ships, _, strikes) = shoot_once(
+    let mut combat = Combat::default();
+    let mut ships = [Ship::at(1, 0.0, 0.0), Ship::at(2, 70.0, 0.0)];
+    put(
+        &mut combat,
         planet_gun(),
-        vec![Ship::at(2, 70.0, 0.0)],
-        &mut stellars,
-        &Arsenal::default(),
-        8,
+        A,
+        Vec2::new(60.0, 0.0),
+        Vec2::new(30.0, 0.0),
     );
+    hits_amid(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
     assert!(!hurt(&ships[1]), "passed through");
-    assert_eq!(strikes, [strike(14, false)]);
+    assert_eq!(combat.take_stellar_strikes(), [strike(14, false)]);
 }
 
 #[test]
@@ -85,7 +111,8 @@ fn an_ordinary_shot_passes_through_a_planet_type_ship_unspent() {
 
 #[test]
 fn an_ordinary_shot_passes_through_the_player_when_its_class_is_planet_type() {
-    // B fires at the player in its path, C behind it.
+    // B's shot's last move, from (90, 0) to (160, 0), crosses the player
+    // in its path and C behind it.
     let mut combat = Combat::default();
     let player = Ship {
         id: ShipRef::Player,
@@ -95,13 +122,17 @@ fn an_ordinary_shot_passes_through_the_player_when_its_class_is_planet_type() {
     };
     let mut ships = [
         planet(player),
-        Ship::at(2, 0.0, 0.0).armed(blaster()),
+        Ship::at(2, 0.0, 0.0),
         Ship::at(3, 150.0, 0.0),
     ];
-    for _ in 0..12 {
-        tick(&mut combat, &mut ships, &NovaDisable);
-        ships[1].trigger = QUIET;
-    }
+    put(
+        &mut combat,
+        blaster(),
+        B,
+        Vec2::new(90.0, 0.0),
+        Vec2::new(70.0, 0.0),
+    );
+    phase::test_hits(&mut combat, &mut ships, &NovaDisable);
     assert!(!hurt(&ships[0]), "the player, planet-type, passed");
     assert!(hurt(&ships[2]), "C behind it");
 }
@@ -109,7 +140,8 @@ fn an_ordinary_shot_passes_through_the_player_when_its_class_is_planet_type() {
 #[test]
 fn an_ordinary_ship_does_not_set_off_a_planet_type_shots_proximity_fuse() {
     // As `a_proximity_hit_releases_its_submunitions_at_the_ship_hit`: B
-    // sits within the fuse's reach of the shell's second move.
+    // sits within the fuse's reach of the shell's second move, from
+    // (10, 0) to (20, 0).
     let fuse_struck = |b: fn(Ship) -> Ship| {
         let (shell, arsenal) = cluster(0x0020 | PLANET_TYPE);
         let fused = WeaponRecord {
@@ -117,14 +149,15 @@ fn an_ordinary_ship_does_not_set_off_a_planet_type_shots_proximity_fuse() {
             ..shell
         };
         let mut combat = Combat::default();
-        let mut ships = [
-            Ship::at(1, 0.0, 0.0).armed(fused),
-            b(Ship::at(2, 40.0, 20.0)),
-        ];
-        for _ in 0..4 {
-            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
-            ships[0].trigger = QUIET;
-        }
+        let mut ships = [Ship::at(1, 0.0, 0.0), b(Ship::at(2, 40.0, 20.0))];
+        put(
+            &mut combat,
+            fused,
+            A,
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 0.0),
+        );
+        hits_amid(&mut combat, &mut ships, &arsenal, &mut []);
         hurt(&ships[1])
     };
     assert!(!fuse_struck(|ship| ship), "an ordinary ship");
@@ -140,11 +173,10 @@ fn a_planet_type_shot_turned_on_its_ordinary_firer_passes_through_it() {
             source: Source::Other,
             target: Some(C),
             aimed_at: Some(C),
-            ..flown_by_c(planet_gun(), Vec2::new(15.0, 0.0))
+            ..flown_by_c(planet_gun(), Vec2::new(35.0, 0.0))
         });
-        for _ in 0..3 {
-            tick(&mut combat, &mut ships, &NovaDisable);
-        }
+        // Its last move, from (20, 0) to (35, 0), crosses C.
+        phase::test_hits(&mut combat, &mut ships, &NovaDisable);
         hurt(&ships[0])
     };
     assert!(
@@ -170,33 +202,34 @@ fn flak(flags2: u16) -> WeaponRecord {
     }
 }
 
-/// A fires `record` once to the right among `others`, by `reading` of
-/// [`PlanetBlasts`], for `ticks` ticks. The ships, and the events.
-fn fired_among(
-    record: WeaponRecord,
-    others: Vec<Ship>,
-    reading: RuleSource,
-    ticks: u32,
-) -> (Vec<Ship>, Vec<CombatEvent>) {
+/// A fight whose blasts reach the ships as `reading` of [`PlanetBlasts`]
+/// says.
+fn blasting_by(reading: RuleSource) -> Combat {
     let mut combat = Combat::default();
     combat.set_planet_blasts(PlanetBlasts::from(reading));
-    let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(record)];
-    ships.extend(others);
-    let mut events = Vec::new();
-    for _ in 0..ticks {
-        tick(&mut combat, &mut ships, &NovaDisable);
-        events.extend(combat.take_events());
-        ships[0].trigger = QUIET;
-    }
-    (ships, events)
+    combat
 }
 
 /// Whether the expiry of [`flak`] of `flags2`, by `reading`, blasts an
 /// ordinary ship and a planet-type one beside where it ends: each
-/// whether it was hurt and whether it was ionized.
+/// whether it was hurt and whether it was ionized. A fires it in the ship
+/// loop, and `_HandleShot` flies it to its end of life.
 fn expiry_blasts(flags2: u16, reading: RuleSource) -> [(bool, bool); 2] {
-    let others = vec![Ship::at(3, 30.0, 35.0), planet(Ship::at(4, 30.0, -35.0))];
-    let (ships, events) = fired_among(flak(flags2), others, reading, 6);
+    let mut combat = blasting_by(reading);
+    let mut ships = [
+        Ship::at(1, 0.0, 0.0).armed(flak(flags2)),
+        Ship::at(3, 30.0, 35.0),
+        planet(Ship::at(4, 30.0, -35.0)),
+    ];
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    ships[0].trigger = QUIET;
+    let mut events = combat.take_events();
+    // Its third move ends at (30, 0), and the visit after ends its life.
+    for _ in 0..4 {
+        phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
+        events.extend(combat.take_events());
+    }
+    assert_eq!(combat.shots(), [], "spent");
     assert_eq!(explosions(&events).len(), 1, "it explodes: {events:?}");
     [
         (hurt(&ships[1]), ships[1].ion.charge > 0.0),
@@ -232,12 +265,22 @@ fn on_hit_blasts(flags2: u16, b: fn(Ship) -> Ship, reading: RuleSource) -> (bool
         flags2,
         ..blaster()
     };
-    let others = vec![
+    let mut ships = [
+        Ship::at(1, 0.0, 0.0),
         b(Ship::at(2, 100.0, 0.0)),
         Ship::at(3, 100.0, 25.0),
         planet(Ship::at(4, 100.0, -25.0)),
     ];
-    let (ships, _) = fired_among(shell, others, reading, 8);
+    let mut combat = blasting_by(reading);
+    // Its last move, from (90, 0) to (105, 0), crosses B.
+    put(
+        &mut combat,
+        shell,
+        A,
+        Vec2::new(90.0, 0.0),
+        Vec2::new(15.0, 0.0),
+    );
+    phase::test_hits(&mut combat, &mut ships, &NovaDisable);
     (hurt(&ships[1]), hurt(&ships[2]), hurt(&ships[3]))
 }
 
@@ -264,16 +307,8 @@ fn an_ordinary_shots_hit_blast_reaches_a_planet_type_ship_beside_its_victim() {
 fn asteroid_blasts(flags2: u16, reading: RuleSource) -> Vec<ShipRef> {
     let mut combat = Combat::default();
     combat.set_planet_blasts(PlanetBlasts::from(reading));
-    let mut rocks = Rocks::of([rock(0, 100.0, 0.0)]);
     let others = vec![Ship::at(2, 110.0, 20.0), planet(Ship::at(4, 100.0, -25.0))];
-    shoot_rocks(
-        &mut combat,
-        ShipRef::Player,
-        blasting(0, flags2),
-        others,
-        &mut rocks,
-        8,
-    );
+    shot_into_rock(&mut combat, ShipRef::Player, blasting(0, flags2), others);
     combat
         .take_strikes()
         .iter()
@@ -325,8 +360,9 @@ fn beam_of(flags: u16, flags2: u16) -> WeaponRecord {
     }
 }
 
-/// [`through`] for a beam of `flags` and `flags2`, by `reading` of
-/// [`BeamPlanetFlag`].
+/// Whether A's beam of `flags` and `flags2`, by `reading` of
+/// [`BeamPlanetFlag`], fired to the right in the ship loop, hurts B, 100
+/// pixels off, and D, 50 pixels behind B, at the beams' step.
 fn beam_through(
     (flags, flags2): (u16, u16),
     reading: RuleSource,
@@ -335,7 +371,15 @@ fn beam_through(
 ) -> (bool, bool) {
     let mut combat = Combat::default();
     combat.set_beam_planet_flag(BeamPlanetFlag::from(reading));
-    through_in(combat, beam_of(flags, flags2), b, d)
+    let mut ships = [
+        Ship::at(1, 0.0, 0.0).armed(beam_of(flags, flags2)),
+        b(Ship::at(2, 100.0, 0.0)),
+        d(Ship::at(4, 150.0, 0.0)),
+    ];
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(combat.beams().len(), 1, "fired");
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
+    (hurt(&ships[1]), hurt(&ships[2]))
 }
 
 /// Each of a beam of `bits` by `reading`: whether it hits an ordinary B
@@ -393,20 +437,35 @@ fn planet_cluster() -> (WeaponRecord, Arsenal) {
     })
 }
 
-/// The strikes on stellar 128, at (20, 0) and 60 across, on each of
-/// `ticks` ticks among `ships`, of the shots in flight.
-fn strikes_each_tick(
-    combat: &mut Combat,
-    ships: &mut [Ship],
-    arsenal: &Arsenal,
-    ticks: usize,
-) -> Vec<usize> {
+/// The strikes on stellar 128, at (20, 0) and 60 across, of the shots in
+/// flight in a collision pass among `ships`.
+fn stellar_strikes(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) -> usize {
     let mut stellars = [stellar_at(20.0, 0.0, 60.0, 1000)];
-    (0..ticks)
-        .map(|_| {
-            tick_by(combat, ships, arsenal, &mut stellars);
-            combat.take_stellar_strikes().len()
-        })
+    hits_amid(combat, ships, arsenal, &mut stellars);
+    combat.take_stellar_strikes().len()
+}
+
+/// `_HandleShot` among `ships`, each sub-munition read from `arsenal`.
+fn fly_with(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
+    let govts = Governments::default();
+    let arena = phase::arena(arsenal, &govts, Rules::default());
+    phase::run_in(
+        combat,
+        ships,
+        arena,
+        &mut NeverFires,
+        |combat, fighters, arena, chance| {
+            combat.fly_shots(fighters, arena, chance);
+        },
+    );
+}
+
+/// Whether each shot in flight has moved since it was put in flight.
+fn moved(combat: &Combat) -> Vec<(usize, bool)> {
+    combat
+        .shots()
+        .iter()
+        .map(|shot| (shot.slot, shot.moved_from.is_some()))
         .collect()
 }
 
@@ -429,12 +488,21 @@ fn a_planet_type_sub_munition_a_fuse_releases_over_a_stellar_strikes_it_the_tick
         ..flown_by_c(fused, Vec2::new(20.0, 0.0))
     });
     let mut ships = [Ship::at(2, 40.0, 20.0)];
-    let strikes = strikes_each_tick(&mut combat, &mut ships, &arsenal, 3);
     assert_eq!(
-        strikes,
-        [0, 2, 0],
-        "none on the release tick, both the next"
+        stellar_strikes(&mut combat, &mut ships, &arsenal),
+        0,
+        "none in the pass that releases them"
     );
+    assert_eq!(moved(&combat), [(1, false), (2, false)], "released unmoved");
+    fly_with(&mut combat, &mut ships, &arsenal);
+    assert_eq!(moved(&combat), [(1, true), (2, true)]);
+    assert_eq!(
+        stellar_strikes(&mut combat, &mut ships, &arsenal),
+        2,
+        "both, once moved"
+    );
+    fly_with(&mut combat, &mut ships, &arsenal);
+    assert_eq!(combat.shots(), [], "spent on it");
 }
 
 /// A shot of C's of `record`, at `at`, whose last move spent it.
@@ -452,9 +520,10 @@ fn a_sub_munition_an_expiry_seats_in_an_earlier_slot_strikes_a_tick_later_than_o
     // Slot 0 holds a shot of no life, which `_HandleShot` drops at its
     // visit; slot 1 the planet-type shell, spent over the stellar, whose
     // end of life seats its first sub-munition in slot 0, already visited,
-    // and its second in slot 2. Only the second moves that tick, so it
-    // strikes the tick after; the first moves the tick after and strikes
-    // the one after that: the original's frame order.
+    // and its second in slot 2. Only the second moves in that visit, so
+    // only it strikes in the next collision pass; the first moves in the
+    // next `_HandleShot` and strikes in the pass after that: the
+    // original's frame order.
     let (shell, arsenal) = planet_cluster();
     let shell = WeaponRecord {
         flags2: PLANET_TYPE,
@@ -467,8 +536,15 @@ fn a_sub_munition_an_expiry_seats_in_an_earlier_slot_strikes_a_tick_later_than_o
     let mut combat = Combat::default();
     combat.put_in_flight(flown_by_c(lifeless, Vec2::new(500.0, 500.0)));
     combat.put_in_flight(spent_by_c(shell, Vec2::new(20.0, 0.0)));
-    let strikes = strikes_each_tick(&mut combat, &mut [], &arsenal, 4);
-    assert_eq!(strikes, [0, 1, 1, 0]);
+    assert_eq!(stellar_strikes(&mut combat, &mut [], &arsenal), 0, "spent");
+    fly_with(&mut combat, &mut [], &arsenal);
+    assert_eq!(moved(&combat), [(0, false), (2, true)], "slot 0 visited");
+    assert_eq!(stellar_strikes(&mut combat, &mut [], &arsenal), 1);
+    fly_with(&mut combat, &mut [], &arsenal);
+    assert_eq!(moved(&combat), [(0, true)], "slot 2's spent on it");
+    assert_eq!(stellar_strikes(&mut combat, &mut [], &arsenal), 1);
+    fly_with(&mut combat, &mut [], &arsenal);
+    assert_eq!(combat.shots(), [], "both spent on it");
 }
 
 // Beams on stellars.
@@ -519,9 +595,10 @@ fn the_fight_reads_its_planet_type_rules_from_the_rulebook() {
     }
 }
 
-/// A fires `record` once to the right among `others` and `stellars`, by
-/// `reading` of [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars),
-/// for 5 ticks. The ships, the events, and the strikes on stellars.
+/// A fires `record` once to the right among `others` in the ship loop;
+/// then the beams' step runs 5 times among `stellars`, by `reading` of
+/// [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars). The ships,
+/// the events of the beams' steps, and the strikes on stellars.
 fn beamed(
     record: WeaponRecord,
     others: Vec<Ship>,
@@ -532,10 +609,20 @@ fn beamed(
     combat.set_beam_stellars(reading);
     let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(record)];
     ships.extend(others);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    ships[0].trigger = QUIET;
+    assert_eq!(combat.beams().len(), 1, "fired");
+    combat.take_events();
     let (mut events, mut strikes) = (Vec::new(), Vec::new());
     for _ in 0..5 {
-        tick_by(&mut combat, &mut ships, &Arsenal::default(), stellars);
-        ships[0].trigger = QUIET;
+        phase::run(
+            &mut combat,
+            &mut ships,
+            &NovaDisable,
+            |combat, fighters, arena, chance| {
+                combat.close_tick_in(fighters, arena, stellars, None, chance);
+            },
+        );
         events.extend(combat.take_events());
         strikes.extend(combat.take_stellar_strikes());
     }

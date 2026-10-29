@@ -53,7 +53,7 @@
 //!
 //! A pilot with a name is saved through the [`PilotKeeper`] on creation,
 //! on landing, on taking off, after each change made in the spaceport
-//! ([`AppScreen::transact`]), on going back to the menu and when the app
+//! (`AppScreen::transact`), on going back to the menu and when the app
 //! quits in play ([`Screen::quit`](nova_view::Screen::quit)); never on an
 //! open, nor when the app quits with the game only held; each failure is a warning
 //! ([`Screen::take_warnings`](nova_view::Screen::take_warnings)). Tab on the menu goes to the developer's
@@ -63,13 +63,13 @@
 //! the top quits.
 //!
 //! A pilot whose ship is breaking up or destroyed is never saved
-//! ([`FlightView::may_save`]): not on going back to the menu, not when the
+//! ([`SessionFlight::may_save`](nova_view::flight::SessionFlight::may_save)): not on going back to the menu, not when the
 //! app quits, and not when a save comes due, which is dropped. The
 //! original saves only on creation, landing and pod rescue
 //! (`_SavePilotFile` @0x76876), so a dead pilot reopens as it was at its
 //! last landing. A Strict Play pilot whose ship is breaking up or
 //! destroyed, outside the escape pod, is deleted instead as play ends
-//! ([`FlightView::deletes_pilot_on_ending_play`]): on the death's return
+//! ([`SessionFlight::deletes_pilot_on_ending_play`](nova_view::flight::SessionFlight::deletes_pilot_on_ending_play)): on the death's return
 //! to the menu, on Escape's put-away and when the app quits, as
 //! `_EnterGameFromMainScreen` deletes it (@0x1a4ab-0x1a4e1); a failed
 //! delete is a warning. Once the player's ship has exploded, the scene runs on

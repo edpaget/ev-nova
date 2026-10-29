@@ -747,6 +747,16 @@ pub(crate) fn fill_command(area: Bounds, color: Color) -> DrawCommand {
     list.iter().next().cloned().expect("a fill is one command")
 }
 
+/// The 8-bit value of `n` 32nds of full, rounded half up, for `n` in
+/// 0..=32, written out: what [`lights_tint`], [`translucent_tint`] and
+/// `see_through` must give, and what nova-render's tests write as
+/// literals.
+#[cfg(test)]
+pub(crate) const THIRTY_SECONDS: [u8; 33] = [
+    0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 135, 143, 151, 159, 167,
+    175, 183, 191, 199, 207, 215, 223, 231, 239, 247, 255,
+];
+
 impl<'a> IntoIterator for &'a DrawList {
     type Item = &'a DrawCommand;
     type IntoIter = std::slice::Iter<'a, DrawCommand>;
@@ -816,6 +826,39 @@ mod tests {
         assert_eq!(lights_tint(16), Color::rgba(255, 255, 255, 128));
         assert_eq!(lights_tint(33), Color::WHITE, "past full is full");
         assert_eq!(lights_tint(u8::MAX), Color::WHITE);
+    }
+
+    #[test]
+    fn every_lights_level_is_white_at_exactly_its_32nds_alpha() {
+        for (level, &alpha) in (0..=32).zip(&THIRTY_SECONDS) {
+            assert_eq!(
+                lights_tint(level),
+                Color::rgba(255, 255, 255, alpha),
+                "level {level}"
+            );
+            let back = (u16::from(alpha) * 32 + 127) / 255;
+            assert_eq!(back, u16::from(level), "level {level} reads back in 32nds");
+        }
+        assert_eq!(lights_tint(10).a, 80);
+        assert_eq!(lights_tint(20).a, 159);
+        assert_eq!(lights_tint(24).a, 191);
+    }
+
+    #[test]
+    fn every_translucent_factor_pair_is_exactly_its_32nds() {
+        for (source, &n) in (0..=32).zip(&THIRTY_SECONDS) {
+            for (destination, &m) in (0..=32).zip(&THIRTY_SECONDS) {
+                assert_eq!(
+                    translucent_tint(source, destination),
+                    Color::rgba(n, n, n, m),
+                    "({source}, {destination})"
+                );
+            }
+        }
+        assert_eq!(translucent_tint(16, 8), Color::rgba(128, 128, 128, 64));
+        assert_eq!(translucent_tint(17, 9), Color::rgba(135, 135, 135, 72));
+        assert_eq!(translucent_tint(0, 32), Color::rgba(0, 0, 0, 255));
+        assert_eq!(translucent_tint(32, 0), Color::rgba(255, 255, 255, 0));
     }
 
     #[test]

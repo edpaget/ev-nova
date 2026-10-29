@@ -22,7 +22,7 @@ mod tests {
     use crate::mission::FailedBy;
     use crate::session::mission_ships::tests::{in_flight, shipping, ships_catalog};
     use crate::session::{Session, SessionEvent};
-    use crate::testkit::{FakePilotCatalog, govt, hull, life, weapon};
+    use crate::testkit::{FakePilotCatalog, govt, hull, life, weapon, work_with};
     use crate::traffic::npc::NpcId;
 
     /// A gun of `flags2`, `wëap` 130: 10 pixels a tick for 40 ticks, every
@@ -70,12 +70,17 @@ mod tests {
         catalog
     }
 
-    /// One whole tick: the player's flight, the traffic by Nova's AI, then
-    /// the fight. The session events it raised.
+    /// One whole pass ([`Session::game_work`]), the traffic by Nova's AI.
+    /// The session events it raised.
     fn full_tick(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<SessionEvent> {
-        session.tick(Controls::default());
-        session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         session.take_events()
     }
 

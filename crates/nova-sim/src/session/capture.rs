@@ -261,10 +261,13 @@ mod tests {
     use super::*;
     use crate::board::{Assigned, Assignment, Boarding, PlunderView, Take, Taken};
     use crate::catalog::OutfitId;
+    use crate::combat::Rules;
+    use crate::flight::Controls;
     use crate::legal::NovaLaw;
     use crate::reserves::Reserves;
     use crate::session::tests::{ON_BOARD, aboard, alongside, board_by, boardable, take};
     use crate::testkit::{Draws, FakePilotCatalog};
+    use crate::testkit::{work, work_with};
     use crate::traffic::npc::MissionMark;
 
     /// An escort of ship `ship`, a fighter out when `carried`.
@@ -571,7 +574,7 @@ mod tests {
         let catalog = boardable();
         let mut session = alongside(&catalog);
         assert!(!session.ship.fuel_cap_cached);
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert!(session.ship.fuel_cap_cached, "the flight tick");
         session.reset_precalced();
         assert!(!session.ship.fuel_cap_cached, "a reset");
@@ -893,7 +896,14 @@ mod tests {
         let before = gap(&session);
         assert!(before > 50.0, "not on its slot: {before}");
         for _ in 0..60 {
-            session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         assert!(
             gap(&session) < before,

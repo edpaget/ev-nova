@@ -19,8 +19,12 @@ impl Session {
     /// `_SystemInfoToShipStats` @0x5c305 / @0x5cffb) resets the cache
     /// through `_ResetPlayerPrecalcedValues` (@0xc357) before the next
     /// read, so the two match.
+    ///
+    /// For the tests: the frame fills its HUD from the sub-state's own
+    /// (`Session::fill_hud`).
+    #[cfg(test)]
     #[must_use]
-    pub fn radar_gear(&self) -> RadarGear {
+    pub(crate) fn radar_gear(&self) -> RadarGear {
         radar_gear(&self.pilot, &self.statics)
     }
 
@@ -29,7 +33,7 @@ impl Session {
     /// for a fighter of the player's escort, whose parent's parent is the
     /// player.
     #[must_use]
-    pub fn ship_iff(&self, npc: &Npc) -> ShipIff {
+    pub(crate) fn ship_iff(&self, npc: &Npc) -> ShipIff {
         self.space.ship_iff(npc)
     }
 
@@ -53,7 +57,7 @@ impl Session {
     ///   draw; this reads the table at each call, which the radar
     ///   snapshot makes at the same refresh.
     #[must_use]
-    pub fn stellar_iff(&self, stellar: StellarId) -> Option<StellarIff> {
+    pub(crate) fn stellar_iff(&self, stellar: StellarId) -> Option<StellarIff> {
         let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
         let standing = Standing {
             dominated: Self::iff_dominated(site),
@@ -86,8 +90,12 @@ impl Session {
     /// The interference in the player's system ([`iff::interference`]):
     /// its `sÿst` `Interference` less the player's anti-interference,
     /// 0..=100.
+    ///
+    /// For the tests: the frame fills its HUD from the sub-state's own
+    /// (`Session::fill_hud`).
+    #[cfg(test)]
     #[must_use]
-    pub fn interference(&self) -> u8 {
+    pub(crate) fn interference(&self) -> u8 {
         self.chart.interference(&self.pilot, &self.statics)
     }
 }
@@ -108,7 +116,7 @@ impl Chart {
     /// its `sÿst` `Interference` less the player's anti-interference,
     /// 0..=100.
     #[must_use]
-    fn interference(&self, pilot: &Pilot, statics: &Statics) -> u8 {
+    pub(super) fn interference(&self, pilot: &Pilot, statics: &Statics) -> u8 {
         let system = self.galaxy.map().interference(pilot.system);
         iff::interference(system, radar_gear(pilot, statics).anti_interference)
     }
@@ -123,7 +131,7 @@ impl Chart {
 /// through `_ResetPlayerPrecalcedValues` (@0xc357) before the next
 /// read, so the two match.
 #[must_use]
-fn radar_gear(pilot: &Pilot, statics: &Statics) -> RadarGear {
+pub(super) fn radar_gear(pilot: &Pilot, statics: &Statics) -> RadarGear {
     RadarGear::of(&pilot.outfits, &statics.outfits)
 }
 

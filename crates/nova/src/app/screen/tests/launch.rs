@@ -179,7 +179,7 @@ fn a_pilot_held_at_launch_is_swept_its_aux_restarted_unguarded_and_its_system_ex
     let held = game(&screen);
     assert!(nebula_explored(held));
     assert!(
-        held.pilot().expect("a pilot").control_bit(bit(10)),
+        held.sim().pilot().expect("a pilot").control_bit(bit(10)),
         "OnExplore ran"
     );
     let aux = held_aux(&screen);

@@ -531,7 +531,7 @@ impl Combat {
         let mut hits = vec![direct];
         // A blast on a hit weighs nothing (`_HandleShipHit` @0x36e80).
         let planet = (BlastKind::OnHit, self.planet_blasts);
-        hits.extend(blasted(shot, &blast, (hit, 0.0), &lineup.stood, planet));
+        hits.extend(blasted(shot, &blast, (hit, 0.0), &lineup.world, planet));
         let hit: Vec<ShipRef> = hits.iter().map(|landed| landed.ship).collect();
         self.land(fighters, hits, rule);
         lineup.refresh(fighters, &hit, rule);

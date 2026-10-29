@@ -13,8 +13,12 @@ use crate::status_cargo::{
 impl Session {
     /// What the status bar's cargo area lists (see
     /// [`status_cargo::status_cargo`]).
+    ///
+    /// For the tests: the frame fills its HUD from the sub-state's own
+    /// (`Session::fill_hud`).
+    #[cfg(test)]
     #[must_use]
-    pub fn status_cargo(&self) -> StatusCargo {
+    pub(crate) fn status_cargo(&self) -> StatusCargo {
         self.ship
             .status_cargo(&self.pilot, &self.statics, &self.setup)
     }
@@ -24,7 +28,12 @@ impl PlayerShip {
     /// What the status bar's cargo area lists (see
     /// [`status_cargo::status_cargo`]).
     #[must_use]
-    fn status_cargo(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> StatusCargo {
+    pub(super) fn status_cargo(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+    ) -> StatusCargo {
         let mut commodity_tons = [0; COMMODITY_ROWS];
         let mut junk = Vec::new();
         for (good, tons) in pilot.cargo() {

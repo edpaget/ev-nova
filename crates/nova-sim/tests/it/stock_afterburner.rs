@@ -76,7 +76,7 @@ fn the_stock_first_ship_with_an_afterburner_reaches_1_8_times_its_top_speed() {
     // Up the screen, as it starts. The first tick's box of none holds the
     // ship at rest.
     assert!(session.player().heading.abs() < f32::EPSILON);
-    session.tick(Controls::default());
+    crate::passes::work(&mut session, &data, nova_sim::Controls::default());
     let burn = Controls {
         thrust: true,
         afterburner: true,
@@ -84,16 +84,16 @@ fn the_stock_first_ship_with_an_afterburner_reaches_1_8_times_its_top_speed() {
     };
     let fuel = session.reserves().fuel.now;
     assert!(fuel > 160.0 * usage, "{fuel}");
-    session.tick(burn);
+    crate::passes::work(&mut session, &data, burn);
     assert!(session.afterburner_on());
     let spent = fuel - session.reserves().fuel.now;
     assert!((spent - usage).abs() < 1e-4, "{spent} of {usage}");
     for _ in 0..150 {
-        session.tick(burn);
+        crate::passes::work(&mut session, &data, burn);
     }
     assert!(session.afterburner_on(), "fuel left");
     let at = session.player().position;
-    session.tick(burn);
+    crate::passes::work(&mut session, &data, burn);
     let step = session.player().position - at;
     let burnt = afterburner_top(top);
     assert!((step.y + burnt).abs() < 1e-2, "{step:?} at {burnt}");

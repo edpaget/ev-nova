@@ -47,10 +47,13 @@ mod tests {
     use crate::ai::{Behaviour, Goal, Peaceful, Surroundings};
     use crate::catalog::{HullRecord, ShipId, ShipRecord};
     use crate::chance::{Chance, NeverFires};
+    use crate::combat::Rules;
     use crate::combat::ShipRef;
     use crate::escort::FormationSlot;
+    use crate::flight::Controls;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::Reserves;
+    use crate::testkit::work_with;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, hull, ship};
     use crate::traffic::npc::NpcId;
 
@@ -99,7 +102,14 @@ mod tests {
             3
         ];
         let mut session = Session::fly(catalog, pilot).expect("flies");
-        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         session
     }
 
@@ -229,7 +239,14 @@ mod tests {
         // AI runs, as `_DoPlayGameWork` marks the parents before
         // `_AIDispatch`.
         for _ in 0..3 {
-            session.tick_traffic(&catalog, &TwoAttack, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &TwoAttack,
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         let named: Vec<Option<u32>> = escorts(&session)
             .iter()

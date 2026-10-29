@@ -338,8 +338,8 @@ pub(super) mod tests {
         let catalog = galaxy(stars, vec![around(128, (600, 0), "b5", "N133 G300")], 1, 1);
         let mut session = flown(&catalog, &[]);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         run(&mut session, "b5");
         let _ = session.settle_script(&catalog, &mut NeverFires);
         let (mut session, seen) = watching_explored(session, &[131, 132, 133]);

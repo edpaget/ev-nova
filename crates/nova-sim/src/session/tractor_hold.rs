@@ -40,7 +40,7 @@ impl Session {
     /// Whether a ship other than the player holds it in a tractor beam
     /// ([`held_by_other`]): its jump is refused.
     #[must_use]
-    pub fn held_by_other(&self) -> bool {
+    pub(crate) fn held_by_other(&self) -> bool {
         self.ship.held_by_other()
     }
 
@@ -118,6 +118,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::session::tests::{OUT, armed, bound_for_131, facing_an_npc, knocking, tractor_beam};
     use crate::testkit::catalog;
+    use crate::testkit::{work, work_with};
     use crate::traffic::npc::NpcId;
     use nova_sim_base::NeverFires;
 
@@ -150,7 +151,11 @@ mod tests {
                 * 0.25
         );
         assert!(step > 0.0);
-        session.tick(Controls::default());
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.player().velocity, Vec2::new(-step, step));
         assert_eq!(
             session.tractor().map(|lock| lock.ticks_since_touch),
@@ -185,16 +190,25 @@ mod tests {
         // What the NPCs see of the player's thrust skips the divisor.
         let seen = session.player_side().handling.accel * 0.25;
         assert!(step > seen * 1.5, "{step} against {seen}");
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.player().velocity, Vec2::new(-step, 0.0));
         // NPC 0, held by the player, disabled so it drifts.
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.tractor = Some(TractorLock::by(ShipRef::Player));
         npc.condition = Condition::Disabled;
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
+        // The step as the pass's ion block (`_HandlePlayer` @0x6d7fd) left
+        // the charge, before the ship loop (@0x4445c-0x444c4) moves NPC 0.
         let step = session
             .ship
             .tractor_step(&session.pilot, &session.setup, session.mode.jump());
-        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         assert_eq!(
             session.npcs()[0].state.velocity,
             Vec2::new(-5.0 + step, 0.0) * DISABLED_DRAG
@@ -228,7 +242,11 @@ mod tests {
         let step = session
             .ship
             .tractor_step(&session.pilot, &session.setup, session.mode.jump());
-        session.tick(Controls::default());
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.player().velocity, Vec2::new(1.0 - step, step - 1.0));
         assert!(!session.held_by_other());
     }
@@ -240,7 +258,11 @@ mod tests {
         let step = session
             .ship
             .tractor_step(&session.pilot, &session.setup, session.mode.jump());
-        session.tick(Controls::default());
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.pod, Some(99), "the pod flew");
         assert_eq!(session.player().velocity.x, -step);
     }
@@ -273,13 +295,17 @@ mod tests {
         for condition in [Condition::Disabled, dying] {
             let mut session = held(Vec2::new(-2.0, 2.0));
             session.space.traffic.npcs_mut()[0].condition = condition;
-            session.tick(Controls::default());
+            work(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+            );
             assert_eq!(session.tractor(), None, "{condition:?}");
             assert_eq!(session.player().velocity, Vec2::ZERO, "{condition:?}");
         }
         let mut gone = held(Vec2::new(-2.0, 2.0));
         gone.ship.tractor = Some(TractorLock::by(ShipRef::Npc(NpcId(7))));
-        gone.tick(Controls::default());
+        work(&mut gone, &crate::testkit::catalog(), Controls::default());
         assert_eq!(gone.tractor(), None);
         assert_eq!(gone.player().velocity, Vec2::ZERO);
     }
@@ -296,24 +322,25 @@ mod tests {
             if tick == 5 {
                 session.space.traffic.npcs_mut()[0].trigger = Trigger::default();
             }
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             if session
                 .tractor()
                 .is_some_and(|lock| lock.ticks_since_touch == 0)
             {
                 last_touch = Some(tick);
             }
-            session.tick(Controls::default());
             if last_touch.is_some() && session.tractor().is_none() {
                 lapsed = Some(tick);
                 break;
             }
         }
         let last_touch = last_touch.expect("touched");
+        // `_HandlePlayer`'s top lets the hold go on the 15th pass after
+        // the touch's.
         assert_eq!(
             lapsed,
-            Some(last_touch + 14),
-            "the 15th tick from the touch's"
+            Some(last_touch + 15),
+            "the 15th pass after the touch's"
         );
     }
 
@@ -331,7 +358,7 @@ mod tests {
         session.ship.tractor = Some(TractorLock::by(ShipRef::Player));
         session.begin_jump().expect("jumps");
         while session.jumping().is_none() {
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
         }
         session.ship.tractor = Some(TractorLock::by(ShipRef::Player));
         assert_eq!(
@@ -391,7 +418,7 @@ mod tests {
         let mut session = bound(&catalog, None);
         session.begin_jump().expect("jumps");
         while session.jumping().is_none() {
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
         }
         session.ship.tractor = Some(TractorLock::by(NPC));
         session.take_sounds();

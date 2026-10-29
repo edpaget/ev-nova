@@ -1450,7 +1450,7 @@ impl SpaceportView {
     /// `after`, the movie a `STR#` text plays once it closes: the last
     /// `dësc` loaded's after-movie, as `_ShowTextDialog`'s after-check
     /// reads it (@0xa3956, then @0x5b40b-0x5b44f; see
-    /// [`FlightView::loaded_after_movie`](crate::flight::FlightView::loaded_after_movie)).
+    /// [`SessionFlight::loaded_after_movie`](crate::flight::SessionFlight::loaded_after_movie)).
     pub fn open_mission_computer_after(
         &mut self,
         computer: Result<MissionComputer, ComputerRefusal>,
@@ -1506,7 +1506,7 @@ impl SpaceportView {
     /// Shows `row`, loaded, in the mission computer open while its offer
     /// is selected, its cut name filled by `names`
     /// ([`MissionComputerScreen::show_row`]).
-    pub fn show_computer_row(&mut self, row: &ComputerRow, names: &impl OfferNames) {
+    pub fn show_computer_row(&mut self, row: &ComputerRow, names: &mut impl OfferNames) {
         if let Some(Open::Computer(screen)) = &mut self.open {
             screen.show_row(row, names);
         }
@@ -5713,7 +5713,7 @@ pub(in crate::spaceport) mod tests {
     struct AsStored;
 
     impl OfferNames for AsStored {
-        fn munged(&self, _: MissionId, raw: &str) -> Option<String> {
+        fn munged(&mut self, _: MissionId, raw: &str) -> Option<String> {
             Some(raw.to_owned())
         }
     }
@@ -5734,7 +5734,7 @@ pub(in crate::spaceport) mod tests {
                 raw_name: "Run <DST>".to_owned(),
                 text: "Go, loaded.".to_owned(),
             },
-            &AsStored,
+            &mut AsStored,
         );
         let computer = view.mission_computer().expect("open");
         let item = |item| {

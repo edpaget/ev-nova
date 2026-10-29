@@ -193,6 +193,8 @@ mod escort_wait_tests;
 pub mod fighter_capacity;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+#[cfg(test)]
+mod fleet_escort_tests;
 pub mod fleet_formation;
 pub mod fly_pass;
 pub mod formation_flight;
@@ -205,6 +207,8 @@ pub mod held_burst;
 mod held_burst_tests;
 #[cfg(test)]
 mod hit_goal_tests;
+#[cfg(test)]
+mod idle_block_tests;
 pub mod in_turn;
 pub mod inertialess;
 pub mod ionization;
@@ -217,10 +221,16 @@ mod launch_room;
 mod launch_think;
 pub mod leave_flight;
 #[cfg(test)]
+mod lost_sight_ai_tests;
+#[cfg(test)]
 mod lost_sight_tests;
 pub mod mine_flight;
 pub mod npc;
+#[cfg(test)]
+mod npc_landing_tests;
 pub mod odds_cache;
+#[cfg(test)]
+mod odds_cache_ai_tests;
 #[cfg(test)]
 mod odds_cache_tests;
 pub mod on_line;
@@ -253,6 +263,8 @@ pub mod stellar_attack;
 mod stop_tests;
 pub mod strength;
 pub mod succession;
+#[cfg(test)]
+mod swarm_tests;
 pub mod table;
 pub mod tractor_hold;
 pub mod vacated;
@@ -1034,6 +1046,9 @@ impl Traffic {
     }
 
     /// Whether the escort-strength timer is armed.
+    ///
+    /// Kept for nova-sim's relocation, take-off and landing test of the timer
+    /// (`session::edit`), as no flight shows the timer.
     #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     pub fn strength_armed(&self) -> bool {
@@ -1237,7 +1252,8 @@ impl Traffic {
 
     /// Advances the traffic one tick as [`Traffic::tick_in`] does, but for
     /// the NPCs in `still`, which decide, aim and cloak as the others do
-    /// and keep their place: none of them moves, lands or jumps out. It
+    /// and keep their place: none of them moves but by a drift in its
+    /// think ([`plunder::drift`]), lands or jumps out. It
     /// is its think half ([`Traffic::think_holding`]) then its fly half
     /// ([`Traffic::fly_holding`]).
     pub fn tick_holding(
@@ -1265,7 +1281,10 @@ impl Traffic {
     /// gate waits, each flying NPC's cloak think and each escape pod's
     /// wait, as `_AIDispatch` runs them (@0x4429d: `_AIHandleCloaking`
     /// @0x8fcaa, the pod's wait in [`pod_flight::count_down`]). No NPC
-    /// moves.
+    /// moves but a drifting one, 0.7 along its heading in its think, as
+    /// `_HighLevelAIHandler`'s goal 0xe moves it (@0x8eb6b-0x8ebd4,
+    /// [`plunder::drift`]), before the fight's `_HandleShot` (@0x44385)
+    /// meets it.
     pub fn think_holding(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
@@ -1703,6 +1722,9 @@ impl Traffic {
     /// plundered, with its line and capture (see [`plunder`]). Taking them
     /// leaves the rest of the line's work queued, for the tests of the
     /// traffic alone.
+    ///
+    /// Kept for nova-sim's stock dock and plunder tests (`stock_repair_dock`,
+    /// `stock_plunder`).
     #[cfg(any(test, feature = "fixture"))]
     pub fn take_pirate_events(&mut self) -> Vec<PirateEvent> {
         self.on_line.take_pirate_events()
@@ -1989,22 +2011,16 @@ impl Traffic {
     /// player's also queues, in the same turn, the grudge its victim's
     /// person may hold ([`Traffic::take_grudges`], [`in_turn::grudge`]).
     ///
-    /// The strikes a caller leaves for the traffic tick (one that never
+    /// The strikes a caller leaves for the traffic's think (one that never
     /// calls [`Traffic::answer`]) are answered in turn too, but at the
-    /// start of the next traffic tick ([`Traffic::think_holding`]): after
-    /// that tick's arrivals (the session's mission-ship arrivals, then
-    /// `_EnterMoreShips`), before its think, against the NPCs as the
-    /// previous tick's motion left them, where the original answered them
-    /// as they landed. A strike that lands after its frame's traffic tick
-    /// (the separate parts run `nova_sim::Session::tick_combat` after
-    /// `nova_sim::Session::tick_traffic`) is then answered only after that
-    /// frame is drawn, and the pilot may be saved in between: the frame
-    /// shows the struck ship unanswered (a ship hit in its gate neither
-    /// held nor seen). Only a caller that skips
-    /// `nova_sim::Session::answer_strikes` meets this: `Session::game_work`
-    /// and `Session::tick_again` answer after their collision passes and
-    /// after `_HandleShot`, and a flight answers what each pass's close
-    /// struck, so nothing is left for the traffic tick. A hit on it that
+    /// start of the next think ([`Traffic::think_holding`]): after its
+    /// arrivals (the session's mission-ship arrivals, then
+    /// `_EnterMoreShips`), against the NPCs as the previous pass's motion
+    /// left them, where the original answered them as they landed. Only a
+    /// caller that skips `nova_sim::Session::answer_strikes` meets this:
+    /// `Session::game_work` and `Session::tick_again` answer after their
+    /// collision passes and after `_HandleShot`, and a flight answers what
+    /// each pass's close struck, so nothing is left for the think. A hit on it that
     /// it answers (taking a target) cuts its wait, in its gate, held at it
     /// or holding its course ([`autopilot::cut_wait`], `_DamageShip`
     /// @0x3be6e-0x3be7c).
@@ -2270,6 +2286,9 @@ impl Traffic {
     /// stay active in the ship table until the display pass frees them.
     /// The ship-table caps take the same ships slot by slot, as the
     /// original does, not as a total ([`Traffic::free_berth`]).
+    ///
+    /// Kept for nova-sim's tests of the berths a script's move and the setup
+    /// hold and drop (`session::aux_ships`, `session::script_effects`).
     #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     pub fn berths_taken(&self) -> usize {
@@ -2344,6 +2363,9 @@ impl Traffic {
     /// Queues `event` as if a pirate made it this tick, at its actor's
     /// berth in the frame now being queued, for the session's tests of its
     /// answer ([`Traffic::take_on_line`]).
+    ///
+    /// Kept for nova-sim's tests of the session's answer to each pirate
+    /// event, and its `game_work` test seam, without flying a dock.
     #[cfg(any(test, feature = "fixture"))]
     pub fn queue_pirate_event(&mut self, event: PirateEvent) {
         self.queue_pirate(event);
@@ -2351,6 +2373,9 @@ impl Traffic {
 
     /// Writes `name` as the person of the ship last brought in at `berth`,
     /// for the session's tests of a slot no ship holds.
+    ///
+    /// Kept for nova-sim's, nova-view's and nova's tests of a slot whose
+    /// ship has gone but whose person is still named.
     #[cfg(any(test, feature = "fixture"))]
     pub fn set_berth_person(&mut self, berth: u32, name: &str) {
         self.write_berth_person(berth, Some(name.to_owned()));
@@ -5969,7 +5994,7 @@ mod tests {
         assert_eq!(alone.take_on_line(), [], "no player");
     }
 
-    /// The scans wait for the session's combat tick; a system left first
+    /// The scans wait for the session's line work to settle; a system left first
     /// takes them with it, as the original scans at once.
     #[test]
     fn entering_or_leaving_for_another_system_drops_the_scans_not_taken() {

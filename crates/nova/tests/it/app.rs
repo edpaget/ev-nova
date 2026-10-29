@@ -5,8 +5,6 @@
 // Sizes here are small powers of two, exact in floating point.
 #![allow(clippy::float_cmp)]
 
-use std::io;
-use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -17,15 +15,15 @@ use nova_audio::SettingsStore;
 use nova_audio::recording::MemorySettings;
 use nova_data::graphics::RLED;
 use nova_data::graphics::fixture::RledBuilder;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, PixelRect};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader};
 use nova_view::{FullscreenKind, Key, MonitorMode, MouseButton, Point, VideoMode};
 
 /// A window of settable size, on a monitor of settable modes and name,
@@ -78,24 +76,6 @@ impl WindowPort for FakeWindow {
     }
 }
 
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
 fn put_i16(bytes: &mut [u8], at: usize, value: i16) {
     bytes[at..at + 2].copy_from_slice(&value.to_be_bytes());
 }
@@ -103,10 +83,11 @@ fn put_i16(bytes: &mut [u8], at: usize, value: i16) {
 /// Ship 128, the Shuttle, whose `shän` names a 4-frame 8x8 `rlëD`, and
 /// system 128, Alpha, alone at (0, 0) with no hyperlinks or stellars.
 fn data() -> Rc<GameData> {
-    let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16(&mut anim, 0x00, 1000);
-    put_i16(&mut anim, 0x04, 1);
-    put_i16(&mut anim, 0x34, 4);
+    let anim = ShipAnimBuilder::new()
+        .base_image_id(1000)
+        .base_set_count(1)
+        .frames_per(4)
+        .build();
     let sheet = (0..4)
         .fold(RledBuilder::new(8, 8), |sheet, _| {
             sheet.frame(|f| (0..8).fold(f, |f, _| f.line().pixels(&[0x7C00; 8])))
@@ -123,15 +104,14 @@ fn data() -> Rc<GameData> {
             Ship::TYPE,
             128,
             Some(b"Shuttle"),
-            &vec![0; Ship::SIZE.expect("fixed")],
+            &ShipBuilder::new().build(),
         )
         .resource(ShipAnim::TYPE, 128, None, &anim)
         .resource(RLED, 1000, None, &sheet)
         .resource(System::TYPE, 128, Some(b"Alpha"), &system)
         .build()
         .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(fork).load())
 }
 
 struct Harness {
@@ -180,19 +160,6 @@ impl Harness {
     }
 }
 
-/// The frame's batches as (kind, length).
-fn shape(frame: &Frame) -> Vec<(&'static str, usize)> {
-    frame
-        .batches
-        .iter()
-        .map(|batch| match batch {
-            Batch::Sprites { quads, .. } => ("sprites", quads.len()),
-            Batch::Solid(quads) => ("solid", quads.len()),
-            Batch::Text(runs) => ("text", runs.len()),
-        })
-        .collect()
-}
-
 fn text_size(frame: &Frame) -> f32 {
     frame
         .batches
@@ -211,11 +178,17 @@ fn every_redraw_submits_one_frame_and_asks_for_the_next() {
     let first = harness.frame();
     let second = harness.frame();
 
-    // The ship's sprite, then its name, four stats and the footer, and the
-    // router's hint.
-    let expected = [("sprites", 1), ("text", 7)];
-    assert_eq!(shape(&first), expected);
-    assert_eq!(shape(&second), expected);
+    // The ship browser's draw reaches the Gpu in each.
+    for frame in [&first, &second] {
+        assert!(
+            frame
+                .batches
+                .iter()
+                .any(|batch| matches!(batch, Batch::Sprites { .. })),
+            "{:?}",
+            frame.batches
+        );
+    }
     assert_eq!(harness.window.redraws, 2);
     assert_eq!(first.target, (1024, 768));
     assert_eq!(

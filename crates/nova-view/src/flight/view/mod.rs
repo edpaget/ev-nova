@@ -3,15 +3,19 @@
 //! camera following the ship, and jumping through hyperspace along the
 //! course plotted on the galaxy map.
 //!
-//! The screen owns a [`nova_sim::Session`], flying a new pilot
-//! ([`FlightView::new`]) or a given one ([`FlightView::with_pilot`]), and
-//! its catalog. It reads, once
-//! when it is built: the session's system, through the [`SystemCatalog`]
+//! The screen shows a flight it is handed built (by default a
+//! [`SessionFlight`] over a [`nova_sim::Session`], which the edge builds,
+//! [`open_flight`](crate::flight::open_flight)), flying a new pilot
+//! ([`FlightStart::New`](crate::flight::FlightStart::New)) or a given one
+//! ([`FlightStart::Pilot`](crate::flight::FlightStart::Pilot)), and holds
+//! its catalog ([`FlightView::over`]). It reads, once when it is built: the session's system, through the [`SystemCatalog`]
 //! port, the ship's sprite sheet, through the [`ShipSprites`](super::catalog::ShipSprites) port, the
 //! HUD's status bar for the player's government, through the
 //! [`StatusBars`](super::catalog::StatusBars) port, the galaxy for its course map, through the
-//! [`GalaxyCatalog`](crate::galaxy::GalaxyCatalog) port, and the look of every weapon and explosion type,
-//! through the [`CombatLooks`](super::catalog::CombatLooks) port. After that it reads only when the
+//! [`GalaxyCatalog`](crate::galaxy::GalaxyCatalog) port, and the look of every weapon the flight lists
+//! ([`FlightOpening::weapons`](nova_sim::flight_frame::FlightOpening::weapons))
+//! and of every explosion type, through the
+//! [`CombatLooks`](super::catalog::CombatLooks) port. After that it reads only when the
 //! session tells it entered a system afresh: that system, and when the
 //! player's ship changes class: its sprite sheet, and when the system's NPC
 //! traffic is populated: its traffic, through the [`TrafficCatalog`](nova_sim::TrafficCatalog)
@@ -25,17 +29,17 @@
 //! read, once per type for the life of the screen. Each step runs an
 //! advance pass in the original's order ([`Session::game_work`]): the
 //! player's fire and move, the fight's collision passes, the traffic's AI,
-//! its NPCs deciding as the screen's [`Behaviour`] says
-//! ([`FlightView::with_behaviour`]; [`NovaAi`](nova_sim::NovaAi) by default), the shots,
+//! its NPCs deciding as the screen's [`Behaviour`](nova_sim::Behaviour) says
+//! ([`Collaborators::behaviour`](crate::flight::Collaborators::behaviour); [`NovaAi`](nova_sim::NovaAi) by default), the shots,
 //! the traffic's motion, the NPCs' fire and the beams, the fight's ships
 //! disabled as the screen's
-//! [`DisableRule`] says ([`FlightView::with_disable_rule`];
+//! [`DisableRule`](nova_sim::DisableRule) says ([`SessionSetup::disable_rule`](nova_sim::SessionSetup::disable_rule);
 //! [`NovaDisable`](nova_sim::NovaDisable) by default), their point defence engaging every
 //! missile fired at them, or by the other reading of the `pd_hostility`
-//! rule those its [`PointDefenceRule`] calls hostile
-//! ([`FlightView::with_point_defence_rule`]; [`Allegiance`](nova_sim::Allegiance) by default),
-//! and the player's crimes judged by its [`LegalCode`]
-//! ([`FlightView::with_law`]; [`NovaLaw`](nova_sim::NovaLaw) by default). What could not be read of the looks
+//! rule those its [`PointDefenceRule`](nova_sim::PointDefenceRule) calls hostile
+//! ([`Collaborators::defence_rule`](crate::flight::Collaborators::defence_rule); [`Allegiance`](nova_sim::Allegiance) by default),
+//! and the player's crimes judged by its [`LegalCode`](nova_sim::LegalCode)
+//! ([`Collaborators::law`](crate::flight::Collaborators::law); [`NovaLaw`](nova_sim::NovaLaw) by default). What could not be read of the looks
 //! (each once, when the screen is built), then the session's diagnostics
 //! about game data it does not handle yet, pass through
 //! [`Screen::take_diagnostics`](crate::Screen::take_diagnostics) for the app to write out. Each NPC is
@@ -52,8 +56,8 @@
 //! drains the fight's events after it as after the advance pass
 //! (`_HandleExplods` runs on both, @0x444e1). The second pass answers
 //! its hits as they land and what its close struck after it
-//! ([`Session::answer_strikes`]), and says the attack quotes they
-//! raise, then rolls the hail quotes ([`Session::tick_quotes_again`]),
+//! (`nova_sim::Session::answer_strikes`), and says the attack quotes they
+//! raise, then rolls the hail quotes (`nova_sim::Session::tick_quotes_again`),
 //! as `_HandleShot` (@0x44385) and `_HandleShip` (@0x44483) run on both
 //! passes; it gives no help and tells no comm. The mode is the screen's own
 //! and outlives the hails, the map, the jumps and the sessions it flies;
@@ -121,12 +125,13 @@
 //! Landing and arriving clear the effects.
 //!
 //! Each day a jump takes rolls the planetary events on the screen's
-//! [`SharedChance`] ([`FlightView::with_chance`]); without one, nothing
+//! [`SharedChance`] ([`Collaborators::chance`](crate::flight::Collaborators::chance)); without one, nothing
 //! random happens. Landed at a trade center, the session's exchange can be
-//! read ([`FlightView::market`]) and traded on ([`FlightView::trade`]);
-//! landed at an outfitter, so can its outfitter ([`FlightView::outfitter`],
-//! [`FlightView::outfit`]); and landed at a shipyard, a new ship can be
-//! bought ([`FlightView::shipyard`], [`FlightView::buy_ship`]), whose
+//! read ([`FlightView::shops`]) and traded on ([`FlightView::trade`]);
+//! landed at an outfitter, so can its outfitter ([`FlightView::shops`],
+//! [`FlightView::outfitter`] alone, [`FlightView::outfit`]); and landed
+//! at a shipyard, a new ship can be bought ([`FlightView::shops`],
+//! [`FlightView::buy_ship`]), whose
 //! sprite sheet is read then.
 //!
 //! The screen redraws from what the session tells it
@@ -170,9 +175,9 @@
 //! at once ([`retake_target`](super::cadence::retake_target)). Its target blinks bright on the
 //! same 8 ticks either way, and it shows no stellars or ships while the
 //! ship is landed. The player's outfits give it IFF colours and a density
-//! scanner ([`Session::radar_gear`]); far from the system's centre an
+//! scanner ([`FrameHud::radar_gear`](nova_sim::flight_frame::FrameHud::radar_gear)); far from the system's centre an
 //! arrow points back to it; and each tick the interference in the system
-//! ([`Session::interference`]) may fill it with static, rolled on the
+//! ([`FrameHud::interference`](nova_sim::flight_frame::FrameHud::interference)) may fill it with static, rolled on the
 //! effects' chance.
 //!
 //! In port the app draws the status bar alone under the spaceport
@@ -214,11 +219,11 @@
 //! then, at the same centre and on the same frame (modulo the layer's
 //! frame count), its engine glow and its running lights. The glow is
 //! drawn at the level [`nova_sim::glow_level`] gives for the session's
-//! glow base ([`Session::engine_glow`]) at the flight's time in ticks: it
+//! glow base (`nova_sim::Session::engine_glow`) at the flight's time in ticks: it
 //! fades in over 24 ticks of thrust, flickers, and fades out over 24
 //! ticks after Up is released, and landing and beginning a jump put it
 //! out. The lights are drawn at the level the session's display drew
-//! them ([`Session::player_drawn`]'s, and each NPC's `drawn`), its
+//! them (`nova_sim::Session::player_drawn`'s, and each NPC's `drawn`), its
 //! ported lights state stepped each display (`nova_sim::combat::ship_lights`,
 //! random lights rolling on the flight's chance). Each is
 //! drawn at [`lights_tint`](crate::draw::lights_tint) of its level, or not at all while it is hidden
@@ -250,7 +255,7 @@
 //!   249 pixels it says nothing. On the ticks after, the dock approach
 //!   greets the pilot ([`approach_greeting`]) as its own message, and a
 //!   second L lands. While L is held the approach waits
-//!   ([`Session::set_land_key`]), as the original's does. An uninhabited
+//!   (`nova_sim::Session::set_land_key`), as the original's does. An uninhabited
 //!   stellar answers every press "No response." ([`NO_RESPONSE`]) and
 //!   lands in that press when it can; a refusal in the same press
 //!   replaces it on the message line. The router takes the landing
@@ -284,19 +289,19 @@
 //!   ([`Session::cycle_map_selection`]): the map draws the new selected
 //!   link and selects its system, and the nav area is redrawn at once; on
 //!   the hypergate map it steps the pick through the gate's destinations,
-//!   Shift stepping back ([`Session::hypergate_cycle`]); docked, it does
+//!   Shift stepping back (`nova_sim::Session::hypergate_cycle`); docked, it does
 //!   nothing. It beeps as M opens it ([`UiSound::MapOpened`],
 //!   `_beepSnd[2]`, `_HandlePlayer` @0x6a809) and as it closes
 //!   ([`UiSound::MapClosed`], `_beepSnd[0]`, @0x6a85a); a refused M says
 //!   nothing, and the hypergate map neither opens nor closes with a beep.
 //!   As it opens it selects the system the original's
-//!   `_DoSystemMap` does ([`Session::map_preselection`]): the one
+//!   `_DoSystemMap` does (`Session::map_preselection`): the one
 //!   selected in nav mode 3, or the current system in any other mode,
 //!   and its panel shows that system. It draws the session's drawing
 //!   ([`Session::map_drawing`], [`GalaxyMap::show_drawing`]): what
 //!   `_DrawMap` draws of the known and explored systems, coloured by
 //!   `_ColorCodeSystem`, with the mission systems taken as it opens
-//!   ([`Session::map_mission_systems`]), taken again on the frame after
+//!   (`Session::map_mission_systems`), taken again on the frame after
 //!   the galaxy, the explored, charted or known systems, the course or
 //!   the nav change, and after a plot, a Tab or a hypergate map click. A
 //!   system clicked on the map becomes the destination: the session plots
@@ -336,7 +341,7 @@
 //!   does with none. They share one latch and are polled once a frame, as
 //!   the original's block is (the `slot_block` module): one pick a frame, by
 //!   the block's order, and none while another of them is held. A left click in space
-//!   ([`Session::click_in_space`]) picks a ship first: one under it
+//!   (`nova_sim::Session::click_in_space`) picks a ship first: one under it
 //!   becomes the target, a click on the player's own ship lets go of the
 //!   target, and only a click that leaves the target as it was selects
 //!   the stellar under it. Neither the status panel, the right
@@ -427,8 +432,8 @@
 //!   of the target; Space and Control fire nothing then (@0x6aaf0,
 //!   @0x6ab75).
 //! - B (a press) boards the target when the session allows it
-//!   ([`Session::board`]), by the screen's [`BoardingRule`]
-//!   ([`FlightView::with_boarding_rule`]; [`NovaBoarding`](nova_sim::NovaBoarding) by default),
+//!   ([`Session::board`]), by the screen's [`BoardingRule`](nova_sim::BoardingRule)
+//!   ([`Collaborators::boarding_rule`](crate::flight::Collaborators::boarding_rule); [`NovaBoarding`](nova_sim::NovaBoarding) by default),
 //!   and otherwise says why in the original's words (`STR#` 2002
 //!   #130-132), or nothing when there is no target or the player does not
 //!   face it. A boarding lets go of the flight keys and is held for the
@@ -456,8 +461,8 @@
 //!   [`FlightView::accept_mission`] or [`FlightView::refuse_mission`]; a
 //!   mission that cannot be refused, with no offer text, is accepted at
 //!   once and shows nothing. Any other hail opens the comm dialog,
-//!   listing the screen's [`HailOptions`]
-//!   ([`FlightView::with_hail_options`]; Nova's by default), its replies
+//!   listing the screen's [`HailOptions`](nova_sim::HailOptions)
+//!   ([`Collaborators::hail_options`](crate::flight::Collaborators::hail_options); Nova's by default), its replies
 //!   read through the [`CommCatalog`](nova_sim::CommCatalog) port, and otherwise says why in the
 //!   original's words (`STR#` 2002 #53-54), or nothing with no target. A
 //!   hail answered lets go of the flight keys and is held for the router
@@ -466,22 +471,23 @@
 //!   each haggle through [`FlightView::haggle`], and closing the channel
 //!   through [`FlightView::hang_up`]. Each step, the NPCs refuelling the
 //!   player give their help in the traffic's tick (a repair is the
-//!   traffic's, by the screen's [`DisableRule`]), and each that is done
+//!   traffic's, by the screen's [`DisableRule`](nova_sim::DisableRule)), and each that is done
 //!   says so, as a message ([`comm_message`]), taken after the step's
-//!   combat tick, which settles the notes in slot order with the frame's
-//!   other lines ([`Session::take_comm`]). During a jump, its pre-jump stage included, Y is
+//!   advance pass, which settles the notes in slot order with the frame's
+//!   other lines ([`FlightEvent::Comm`](nova_sim::flight_frame::FlightEvent::Comm)). During a jump, its pre-jump stage included, Y is
 //!   taken and the session refuses the hail, silently, as
 //!   `_HandlePlayerCommunication` refuses while the jump state is set
 //!   (@0x61f87; its beep is player-death phase 16's).
 //! - P ([`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), a press), outside the map, asks the router
 //!   for the player info screen over the paused flight
 //!   ([`FlightView::take_player_info_request`], with
-//!   [`FlightView::player_info`]), letting go of the flight keys, as
+//!   [`FlightView::open_player_info`]), letting go of the flight keys, as
 //!   `_HandlePlayer` does (@0x702bf-0x703c9). During a jump, its pre-jump
 //!   stage included, while the ship breaks up, and for
 //!   [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
 //!   take-off or a gate's exit, the session refuses it with the shared
-//!   refusal beep ([`Session::press_player_info`],
+//!   refusal beep (`Session::press_player_info`, sent as
+//!   [`FlightCommand::PressPlayerInfo`](nova_sim::flight_frame::FlightCommand::PressPlayerInfo),
 //!   [`SimSound::Refused`](nova_sim::SimSound::Refused), @0x7039a-0x703bd);
 //!   once the ship has exploded, and in the escape pod, it does nothing
 //!   and says nothing, as no key handler runs there. Its Jettison
@@ -497,7 +503,8 @@
 //!   none it says "You have no active missions." (`STR#` 2002 #354) after
 //!   the shared refusal beep
 //!   ([`SimSound::Refused`](nova_sim::SimSound::Refused), @0x70557). The
-//!   session decides ([`Session::press_mission_info`]), and refuses it in
+//!   session decides (`nova_sim::Session::press_mission_info`, through
+//!   [`FlightCommand::PressMissionInfo`](nova_sim::flight_frame::FlightCommand::PressMissionInfo)), and refuses it in
 //!   silence during a jump, its pre-jump stage included (+0x50,
 //!   @0x70424), in the escape pod (+0xc908, @0x7042e), while the ship
 //!   breaks up (`_IsDying` @0x70439, +0x3c @0x7044b), once it has
@@ -522,7 +529,7 @@
 //!   ([`TargetPick::NextEscort`](nova_sim::TargetPick::NextEscort)), and Shift-Option-Tab the one before
 //!   ([`TargetPick::PreviousEscort`](nova_sim::TargetPick::PreviousEscort)), as for a hail. The escorts' standing
 //!   orders reset, or not, on entering a system as the session's rule
-//!   set says ([`FlightView::with_rules`]). While a jump is under way,
+//!   set says ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)). While a jump is under way,
 //!   the ship braking and turning for it or warping, the
 //!   escort menu's keys are taken, among the few that are (see J above),
 //!   as the original runs its escort block on every frame of a jump but
@@ -534,45 +541,45 @@
 //!   the system launches have their sheets read with the traffic's. What
 //!   a fighter launched does first, and what becomes of the fighters out
 //!   as the player leaves a system, follow the session's rule set
-//!   ([`FlightView::with_rules`]); fighters abandoned in a jump
+//!   ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)); fighters abandoned in a jump
 //!   are told on arrival ([`fighters_abandoned_message`](super::escorts::fighters_abandoned_message)).
 //! - Landed at an outfitter or a shipyard, the router asks the flight
-//!   for its list ([`FlightView::outfitter`], [`FlightView::shipyard`])
+//!   for its list ([`FlightView::shops`], [`FlightView::outfitter`])
 //!   and trades through it ([`FlightView::outfit`],
 //!   [`FlightView::outfit_counted`], [`FlightView::buy_ship`]), each item's roll for the day drawn on the
 //!   flight's chance; the router tells the flight each time the
 //!   outfitter opens ([`FlightView::open_outfitter`]). Where the shops,
 //!   the exchange and the tribbles and perishables in flight follow a
 //!   disputed rule, they read it from the session's rule set
-//!   ([`FlightView::with_rules`]).
+//!   ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
 //!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance,
 //!   and has it draw the visit's news as the bar opens
 //!   ([`FlightView::open_bar`], [`FlightView::news`]);
 //!   the session's hire terms and control bits are set on the screen
-//!   ([`FlightView::with_hire_terms`], [`FlightView::with_control_bits`]),
+//!   ([`SessionSetup::hire_terms`](nova_sim::SessionSetup::hire_terms), [`SessionSetup::control_bits`](nova_sim::SessionSetup::control_bits)),
 //!   and its disputed hiring rules come from its rule set
-//!   ([`FlightView::with_rules`]). Hired escorts who defect unpaid
+//!   ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)). Hired escorts who defect unpaid
 //!   on arrival or at take-off are told ([`defection_message`]).
 //! - Persons appear as the session's rules say
-//!   ([`FlightView::with_person_rules`]); the target panel shows a
+//!   ([`SessionSetup::person_rules`](nova_sim::SessionSetup::person_rules)); the target panel shows a
 //!   person's own name and subtitle, a person hailed says its comm quote
-//!   as the session's rule set says ([`FlightView::with_rules`]), and
+//!   as the session's rule set says ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)), and
 //!   each step a person may
-//!   say its hail quote ([`Session::tick_quotes`], right after the
-//!   fight and the answer to its hits, [`Session::answer_strikes`]),
+//!   say its hail quote (`nova_sim::Session::tick_quotes`, right after the
+//!   fight and the answer to its hits, `nova_sim::Session::answer_strikes`),
 //!   shown in the message line for
 //!   the session's count ([`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)),
 //!   the last one said winning.
 //! - Each step ends with the asteroid field's work
-//!   ([`Session::tick_asteroids`], which [`Session::game_work`] runs
+//!   (`nova_sim::Session::tick_asteroids`, which [`Session::game_work`] runs
 //!   after the fight): a spawn at the field's edge and the field stepped,
 //!   on the flight's chance, so the next step's shots meet the asteroids
 //!   where they are drawn. Before any step, and so
 //!   before the first frame is drawn, a session started or loaded in
 //!   flight places its field as its rules say
-//!   ([`Session::settle_asteroid_field`]).
+//!   (`nova_sim::Session::settle_asteroid_field`).
 //! - Return ([`MENU_CLOSE_KEY`], the original's `ackComm`) clears the
 //!   message line, closes the escort menu and hides the floating map.
 //! - While the player's ship breaks up, M, L and I do nothing, saying
@@ -630,17 +637,18 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::DrawnBox;
+#[cfg(doc)]
+use nova_sim::Session;
+use nova_sim::flight_frame::{FlightFrame, FrameShip, GateFade, Names, ShipPlace, StepReport};
 use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::gate_entry::enter_level;
-use nova_sim::traffic::npc::Mode;
 use nova_sim::{
-    Behaviour, BoardingRule, Chance, CombatEvent, Condition, DisableRule, FixedStep, GovtId,
-    HailOptions, HailView, HashedRolls, LegalCode, NavMode, NeverFires, Npc, NpcId, OutfitRefusal,
-    OutfitRun, PointDefenceRule, Reselection, Reserves, Session, ShipId, ShipRef, ShipState,
-    SimMessage, StellarId, SystemId, Vec2, flight::normalized, flight::shortest_turn,
+    Chance, CombatEvent, Condition, FixedStep, GovtId, HailView, HashedRolls, NavMode, NeverFires,
+    NpcId, OutfitRefusal, OutfitRun, Reselection, Reserves, ShipId, ShipRef, SimMessage, StellarId,
+    SystemId, Vec2, flight::normalized, flight::shortest_turn,
 };
-use nova_sim::{DrawnBox, DrawnShips, HoverPlace};
 use nova_sim::{InterfaceLoad, MissionInfo, OfferPrompt, TextBar};
 
 use super::cadence::{Drawn, HudCadence};
@@ -653,6 +661,8 @@ use super::floating::FloatingMap;
 use super::hud::{NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::JumpEffect;
 use super::radar::{RadarScene, RadarShip};
+use super::sim_adapter::SessionFlight;
+use super::sim_port::FlightSim;
 use super::stars::Starfield;
 use super::target::TargetPanel;
 use super::weapon_glow::WeaponGlows;
@@ -667,19 +677,33 @@ use crate::text::TextMetrics;
 use crate::{Color, Diagnostic, Key, Point, SoundPrefs, UiSound};
 use dialog_map::MapOpened;
 
+mod board;
 mod build;
 mod cockpit;
+mod death;
+mod departure;
 mod dialog_map;
 mod docked;
+mod drawing;
+mod gates;
+mod hail;
+mod hyperspace;
+mod inbox;
 mod interface;
 mod messages;
+mod missions;
+mod outputs;
+mod player;
 mod port_screen_map;
 mod readouts;
 mod screen;
+mod shops;
 mod shots;
 mod slot_block;
 mod sprites;
 mod stars;
+mod stellar_looks;
+mod stepping;
 mod travel;
 mod world;
 
@@ -794,7 +818,7 @@ pub const SELECT_KEY: Key = Key::Char('w');
 /// `_loadKeys` falls back to when the defaults hold none
 /// (@0xcdde9-0xcde0c). Held, it lets go of the secondary selected, on
 /// every pass with one selected (`_HandlePlayer` @0x6adc2-0x6ae1b; see
-/// [`Session::hold_weapon_safety`](nova_sim::Session::hold_weapon_safety)).
+/// `nova_sim::Session::hold_weapon_safety`).
 pub const DESELECT_KEY: Key = Key::Char('s');
 /// The target select key: the original's default (`targSel`), which
 /// picks the next ship in turn.
@@ -911,7 +935,7 @@ pub const NAV_OFF_KEY: Key = Key::Char('`');
 pub const HYPER_SELECT_KEY: Key = Key::Char('\\');
 
 /// The Hyperspace Mode key, which puts the nav system in hyperspace mode
-/// and selects the course's next hop ([`Session::hyperspace_mode`]): the
+/// and selects the course's next hop (`nova_sim::Session::hyperspace_mode`): the
 /// original's default, H (`_loadKeys` @0xcd5f8 `hyperMode`, keycode
 /// 0x04, handled in `_HandlePlayer` @0x69b76-0x69b89). Held outside a
 /// jump, it shows the floating map (@0x69b8e-0x69ba8; see the
@@ -930,7 +954,7 @@ pub const ZOOM_IN_KEY: Key = Key::Char('=');
 pub const ZOOM_IN_KEYPAD_KEY: Key = Key::Char('+');
 
 /// Where a ship is drawn `alpha` of the way from `from` to `to`.
-fn shown_position(from: &ShipState, to: &ShipState, alpha: f32) -> Point {
+fn shown_position(from: ShipPlace, to: ShipPlace, alpha: f32) -> Point {
     let (from, to) = (from.position, to.position);
     Point::new(
         (to.x - from.x).mul_add(alpha, from.x),
@@ -940,11 +964,11 @@ fn shown_position(from: &ShipState, to: &ShipState, alpha: f32) -> Point {
 
 /// Which way a ship is drawn facing `alpha` of the way, the short way
 /// round, from `from` to `to`.
-fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
+fn shown_heading(from: ShipPlace, to: ShipPlace, alpha: f32) -> f32 {
     normalized(shortest_turn(from.heading, to.heading).mul_add(alpha, from.heading))
 }
 
-/// How `npc`'s sprite is tinted: `None` while it waits hidden at the gate
+/// How an NPC at `gate` is tinted: `None` while it waits hidden at the gate
 /// it comes out of; white with the alpha of its [`emerge_level`] over
 /// its last [`FADE_TICKS`](nova_sim::traffic::emerge::FADE_TICKS) there;
 /// white with the alpha of its [`enter_level`] while it enters a gate to
@@ -959,11 +983,11 @@ fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
 /// crossfaded at (32 − t)/32, which this alpha draws. An NPC gets no
 /// screen flash, as the player's own gate arrival does (see
 /// [`jump`](super::jump)).
-fn npc_tint(npc: &Npc) -> Option<Color> {
-    let level = match npc.mode {
-        Mode::Emerging { ticks_left } => emerge_level(ticks_left)?,
-        Mode::EnteringGate { ticks_left, .. } => enter_level(ticks_left),
-        _ => return Some(Color::WHITE),
+fn npc_tint(gate: GateFade) -> Option<Color> {
+    let level = match gate {
+        GateFade::Emerging { ticks_left } => emerge_level(ticks_left)?,
+        GateFade::Entering { ticks_left } => enter_level(ticks_left),
+        GateFade::None => return Some(Color::WHITE),
     };
     let level = u16::from(level);
     let full = u16::from(FULL_LEVEL);
@@ -1011,6 +1035,62 @@ impl Chance for SharedChance {
     }
 }
 
+#[cfg(test)]
+mod shared_chance_tests {
+    use nova_sim::fixture::chance::check_contract;
+
+    use super::*;
+
+    #[test]
+    fn a_default_shared_chance_meets_the_chance_contract() {
+        assert_eq!(check_contract(&mut SharedChance::default()), Ok(()));
+    }
+
+    /// Fires every time, draws 0 and records each `n`, and rolls the last
+    /// outcome.
+    #[derive(Default)]
+    struct Always {
+        drawn: Vec<u32>,
+    }
+
+    impl Chance for Always {
+        fn fires(&mut self, _percent: u8) -> bool {
+            true
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.drawn.push(n);
+            0
+        }
+
+        fn roll(&mut self, sides: u16) -> u16 {
+            sides.saturating_sub(1)
+        }
+    }
+
+    #[test]
+    fn a_shared_chance_draws_from_its_source() {
+        let always = Rc::new(RefCell::new(Always::default()));
+        let shared: Rc<RefCell<dyn Chance>> = always.clone();
+        let mut chance = SharedChance::new(shared);
+        assert_eq!(chance.below(7), 0);
+        assert_eq!(chance.below(500), 0);
+        assert!(chance.fires(1));
+        assert_eq!(always.borrow().drawn, [7, 500]);
+        assert_eq!(SharedChance::default().below(256), 255, "never fires");
+        assert_eq!(format!("{:?}", SharedChance::default()), "Chance");
+    }
+
+    #[test]
+    fn a_shared_chance_rolls_on_its_source() {
+        let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
+        assert_eq!(SharedChance::new(shared).roll(360), 359);
+        let mut never = SharedChance::default();
+        assert!(!never.fires(100), "the default never fires");
+        assert_eq!(never.roll(8), 0, "and rolls the first outcome");
+    }
+}
+
 /// How long the take-off's held nav lasts ([`FlightView::took_off`]): it
 /// shows in the first frame drawn after the take-off, and on to the end of
 /// the tick that frame lands in, so about one tick and never less than a
@@ -1041,41 +1121,169 @@ impl NavFlash {
     }
 }
 
-/// What the course map's drawing is taken from
-/// ([`Session::map_drawing`]): while the map is open, a change to any of
-/// it takes the drawing again (see `FlightView::catch_up`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct MapSeen {
-    system: SystemId,
-    explored: Vec<SystemId>,
-    charted: Vec<SystemId>,
-    known: BTreeSet<SystemId>,
-    course: Vec<SystemId>,
-    nav: NavMode,
-}
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// The flight's frame as it stands now ([`FlightSim::frame`]), filled
+    /// afresh, for this crate's tests: [`FlightView::check_frame_kept`]
+    /// compares the kept frame with it, and the tests' helpers read it.
+    /// View code reads the kept frame
+    /// ([`FlightView::frame`](FlightView#structfield.frame)).
+    #[cfg(test)]
+    pub(super) fn frame_now(&self) -> FlightFrame {
+        let mut frame = FlightFrame::default();
+        self.sim.frame(&mut frame);
+        frame
+    }
 
-impl MapSeen {
-    /// What `session` would draw the map from now.
-    fn of(session: &Session) -> Self {
-        Self {
-            system: session.system(),
-            explored: session.pilot().explored().collect(),
-            charted: session.pilot().charted().collect(),
-            known: session.known().clone(),
-            course: session.course().to_vec(),
-            nav: session.nav_mode(),
+    /// Fills the frame the view keeps afresh from the flight
+    /// ([`FlightSim::frame`]), into its own buffers, wherever the flight
+    /// changes: after each frame's steps, after each command
+    /// ([`FlightView::send`]), as the flight is caught up with (after the
+    /// drain) and after each change behind the port
+    /// ([`FlightView::change_sim`]), so whatever is drawn or read next
+    /// reads the flight as it stands. A quiet tick fills it twice: the
+    /// catch-up and the steps. The pilot panel kept is forgotten with it
+    /// ([`player::KeptPanel`]), so the next read asks the flight afresh.
+    pub(super) fn refresh_frame(&mut self) {
+        self.sim.frame(&mut self.frame);
+        self.kept_panel = player::KeptPanel::Unasked;
+    }
+
+    /// Checks, in this crate's tests, that the kept frame is the flight's
+    /// as it stands: every point that changes the flight before a draw
+    /// refreshes it ([`FlightView::refresh_frame`]). A test that changes
+    /// the flight behind the view's back does it through
+    /// [`FlightView::change_sim`], as the view's own callers do.
+    #[cfg(test)]
+    pub(super) fn check_frame_kept(&self) {
+        let fresh = self.frame_now();
+        if self.frame != fresh {
+            let differs = frame_fields_differing(&self.frame, &fresh);
+            panic!("the kept frame is stale in {differs:?}");
         }
+    }
+
+    /// The player's ship's place in the kept frame: for the code that
+    /// changes the flight and then draws the ship where it is
+    /// ([`FlightView::place_ship`], `FlightView::lay_out`,
+    /// [`FlightView::assign`]), whose change filled the frame afresh.
+    pub(super) fn player_place(&self) -> ShipPlace {
+        self.frame.player().place()
+    }
+
+    /// Sends `command` to the flight ([`FlightSim::apply`]) and gives its
+    /// answer, the kept frame filled afresh after it
+    /// ([`FlightView::refresh_frame`]), so a key read later in the same
+    /// input reads the frame the command left: the gates, the nav mode,
+    /// whether a jump is under way. The view reads no fresh fill; this
+    /// refill, the step's, the catch-up's and [`FlightView::change_sim`]'s
+    /// are what keep the frame the flight's. An ask
+    /// ([`FlightCommand::is_ask`](nova_sim::flight_frame::FlightCommand::is_ask):
+    /// the hover, the coming traffic, a description's load) changes
+    /// nothing the frame shows, so none is filled after it, and a shown
+    /// cursor's hover each step adds no fill to the tick.
+    ///
+    /// Ordering against the original: a read of the kept frame differs
+    /// from a fresh fill only if the flight changed since the last fill,
+    /// and each change refills where it is made, so no read sees a value
+    /// the original wouldn't at that point, and no boundary the player
+    /// sees (a frame drawn, a dialog opened, a landing or jump completed,
+    /// the pilot saved) is crossed with a stale frame.
+    pub(super) fn send(
+        &mut self,
+        command: nova_sim::flight_frame::FlightCommand,
+    ) -> nova_sim::flight_frame::Answer {
+        let ask = command.is_ask();
+        let answer = self.sim.apply(command);
+        if !ask {
+            self.refresh_frame();
+        }
+        answer
+    }
+
+    /// Whether the flight takes `command` now: the player's command it is
+    /// taken under ([`FlightCommand::gate`]) taken by the kept frame's
+    /// gates (`FlightView::takes`), or none to ask. The one mapping from a
+    /// command to its gate: the travel, comm and escort commands ask it
+    /// here, before they are sent ([`FlightView::send_gated`]) or before a
+    /// key's latch moves (`FlightView::jump_frame`,
+    /// `FlightView::board_frame`). The keys that ask a gate mid-input
+    /// before any command exists ask it by the key (`Screen::input`'s
+    /// filter, `FlightView::command_of`), and so do the polls that hold
+    /// no command of their own yet: the nav block and Hyper Select
+    /// (`FlightView::nav_held_frame`) and the step's holds
+    /// (`FlightView::step_input`).
+    ///
+    /// [`FlightCommand::gate`]: nova_sim::flight_frame::FlightCommand::gate
+    pub(super) fn takes_command(&self, command: &nova_sim::flight_frame::FlightCommand) -> bool {
+        command.gate().is_none_or(|gate| self.takes(gate))
+    }
+
+    /// Sends `command` as [`FlightView::send`] does once the flight takes
+    /// it ([`FlightView::takes_command`]); refused, sends nothing and
+    /// answers [`Answer::Refused`](nova_sim::flight_frame::Answer::Refused).
+    pub(super) fn send_gated(
+        &mut self,
+        command: nova_sim::flight_frame::FlightCommand,
+    ) -> nova_sim::flight_frame::Answer {
+        if !self.takes_command(&command) {
+            return nova_sim::flight_frame::Answer::Refused;
+        }
+        self.send(command)
+    }
+
+    /// Drains the flight into the inbox ([`FlightSim::drain`]) and gives
+    /// it, for the caller to take its own kind from at its own place (see
+    /// the `inbox` module).
+    fn drain(&mut self) -> &mut inbox::Inbox {
+        self.inbox.drain(&mut self.sim);
+        &mut self.inbox
     }
 }
 
-/// The player's ship in flight, reading the game data from `C`.
+/// The player's ship in flight, reading the game data from `C`, the
+/// flight itself through the [`FlightSim`] port `S`: by default the
+/// [`SessionFlight`] adapter over a real session.
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // each is one fact the screen keeps
-pub struct FlightView<C> {
-    /// What the screen reads: when it is built, and on each arrival.
-    catalog: C,
-    /// The flight, or why it could not start.
-    session: Result<Session, String>,
+pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
+    /// What the screen reads: when it is built, and on each arrival. The
+    /// flight holds the same handle for its answers that read the catalog
+    /// ([`SessionFlight`]'s, shared as the view is read).
+    catalog: Rc<C>,
+    /// The flight, with the collaborators its calls are handed.
+    sim: S,
+    /// What was drained from the flight and not yet taken, by kind (see
+    /// the `inbox` module).
+    inbox: inbox::Inbox,
+    /// What the flight's steps reported on the last frame, kept to fill
+    /// again ([`FlightSim::step`]).
+    step_report: StepReport,
+    /// The rules the steps' effects and stars are shown by, held from the
+    /// flight's rulebook ([`stepping::Presentation`]).
+    presentation: stepping::Presentation,
+    /// The flight's frame as last filled ([`FlightView::refresh_frame`]):
+    /// what the world is drawn from, its ships, shots, beams, boxes,
+    /// asteroids, stellars, murk and flags, and what every read of the
+    /// flight's state mid-input or mid-tick reads: the gates, the nav
+    /// mode, docked, the jump, the texts queued, the map's key. It is
+    /// filled afresh after each command ([`FlightView::send`]), each
+    /// frame's steps, each catch-up, and each change behind the port
+    /// ([`FlightView::change_sim`], [`FlightView::begin`],
+    /// [`FlightView::enter_game`]), so it is never stale at a read; an ask
+    /// ([`FlightCommand::is_ask`](nova_sim::flight_frame::FlightCommand::is_ask))
+    /// changes nothing it shows.
+    frame: FlightFrame,
+    /// Why the flight could not start, if it could not, as it opened
+    /// ([`FlightOpening::failure`](nova_sim::flight_frame::FlightOpening::failure)):
+    /// fixed for the flight's life, so no frame field. Such a flight
+    /// shows only the reason.
+    failure: Option<String>,
+    /// The names fixed for the flight's life, as it opened
+    /// ([`FlightOpening::names`](nova_sim::flight_frame::FlightOpening::names)):
+    /// the ships', outfits', goods', `jünk`s' and stellars' names the
+    /// messages are worded with. Behind an `Rc`, as a clone of the view
+    /// shares the one table.
+    names: Rc<Names>,
     /// The session's system, laid out; `None` when the session failed.
     scene: Option<SystemScene>,
     /// Each stellar's animation state as the scene that last showed it
@@ -1097,8 +1305,8 @@ pub struct FlightView<C> {
     bar_government: Option<BarFor>,
     /// Turns frame times into simulation steps.
     clock: FixedStep,
-    /// The player's ship as it was a step before the session's.
-    previous: ShipState,
+    /// The player's ship's place a step before the frame's.
+    previous: ShipPlace,
     /// How far the display is from `previous` to the session's ship.
     alpha: f32,
     /// Time since the view opened, which drives the stellars' animations
@@ -1154,16 +1362,15 @@ pub struct FlightView<C> {
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen, for
     /// the router.
     pending_player_info: bool,
+    /// The main screen's pilot panel as last answered, until the frame
+    /// is next refilled ([`player::KeptPanel`]).
+    kept_panel: player::KeptPanel,
     /// The mission a person hailed or boarded just offered, for the
     /// router.
     pending_offer: Option<OfferPrompt>,
     /// The session's arrival messages taken before their arrival is
     /// caught up with, which leads them.
     pending_leads: Vec<SimMessage>,
-    /// The options the comm dialog lists.
-    hail_options: HailOptions,
-    /// Who repels boarders, the capture odds and the capture roll.
-    boarding_rule: Rc<dyn BoardingRule>,
     /// The course map, shown or not.
     map: GalaxyMap,
     /// Whether the course map is shown.
@@ -1182,12 +1389,12 @@ pub struct FlightView<C> {
     map_borders_save: Option<bool>,
     /// The mission systems the course map's red arrows mark, taken as it
     /// opens, as `_DoSystemMap` runs `_RecalcMissionSystsForMap` then
-    /// (@0x124a0; [`Session::map_mission_systems`]).
+    /// (@0x124a0; `Session::map_mission_systems`).
     map_missions: Vec<SystemId>,
     /// What the course map's drawing was last taken from
     /// ([`FlightView::redraw_map`]): while the map is open, a change to
-    /// any of it takes the drawing again.
-    map_seen: Option<MapSeen>,
+    /// any of it takes the drawing again (see `FlightView::catch_up`).
+    map_seen: Option<nova_sim::flight_frame::MapKey>,
     /// What the floating map draws, taken at its last show
     /// ([`FlightView::show_floating_map`]).
     floating_picture: Option<MapPicture>,
@@ -1226,22 +1433,13 @@ pub struct FlightView<C> {
     /// each session it flies before its steps. Never let go with the
     /// flight keys.
     double_time: bool,
-    /// What each day's events and the traffic are rolled on.
-    chance: SharedChance,
     /// What the player's engine glow's flicker rolls on: seed 1.
     glow_rolls: HashedRolls,
-    /// How the NPCs decide.
-    behaviour: Rc<dyn Behaviour>,
-    /// When a ship in the fight is disabled.
-    disable_rule: Rc<dyn DisableRule>,
-    /// Which missiles the ships' point defence engages.
-    defence_rule: Rc<dyn PointDefenceRule>,
-    /// What the player's crimes do to its legal record.
-    law: Rc<dyn LegalCode>,
     /// Each NPC ship type's sheet, or why it cannot be shown, read once.
     npc_sheets: BTreeMap<ShipId, Result<ShipSheet, String>>,
-    /// Each NPC as it was a step before the session's.
-    npc_previous: BTreeMap<NpcId, ShipState>,
+    /// Each NPC's place a step before the frame's, in the system's order
+    /// as the step reported them ([`StepRun::before`](nova_sim::flight_frame::StepRun::before)).
+    npc_previous: Vec<(NpcId, ShipPlace)>,
     /// The weapons' and explosions' looks, read once.
     looks: Looks,
     /// What could not be read of the looks, until it is taken.
@@ -1254,6 +1452,15 @@ pub struct FlightView<C> {
     effects: Effects,
     /// What the effects are rolled on.
     effects_chance: SharedChance,
+    /// What the wording's picks are rolled on (the dock request's line
+    /// and the approach greeting, [`FlightView::text_of`]): the flight's
+    /// own chance, the same handle, shared as the view is built
+    /// ([`Collaborators::chance`](crate::flight::Collaborators::chance) gives both), as the catalog is. It is a
+    /// collaborator handed in at construction, like the catalog, so the
+    /// picks draw on the flight's chance in the order they always have,
+    /// with no pick type of the view's on the port. The view's own
+    /// effects keep their own chance ([`FlightView::with_effects_chance`]).
+    words_chance: SharedChance,
     /// The original's starfield (see the `stars` module), rolled on the
     /// effects' chance.
     stars: Starfield,
@@ -1305,7 +1512,7 @@ pub struct FlightView<C> {
     /// (`_statusRedraw[0]` @0x5f8fe; see [`FlightView::close_port_dialog`]).
     nav_marked: bool,
     /// How many mission texts the session had queued when the nav area
-    /// was last taken ([`Session::texts_queued`]): a text queued since is
+    /// was last taken (`nova_sim::Session::texts_queued`): a text queued since is
     /// newer than that redraw ([`FlightView::take_mission_texts`]).
     nav_texts: u64,
     /// What the target panel showed at its last redraw, and what it drew
@@ -1321,7 +1528,7 @@ pub struct FlightView<C> {
     /// The bar's redraws held for the docked mission texts shown, one for
     /// each, made as each closes ([`FlightView::close_mission_text`]).
     bar_steps: VecDeque<BarStep>,
-    /// The last of [`Session::text_bars`] staged into
+    /// The last of the texts' bars ([`FlightEvent::MissionShown`](nova_sim::flight_frame::FlightEvent::MissionShown)) staged into
     /// [`FlightView::bar_steps`], by its [`TextBar::texts`].
     bars_staged: u64,
     /// The radar's static this tick, a `ppat` ID, rolled on the effects'
@@ -1422,60 +1629,143 @@ struct Redrawn {
     stars: bool,
 }
 
-/// How `session` holds stellar `id`: destroyed as its galaxy holds it,
-/// with the sheet the session says it draws ([`Session::drawn_sheet`]:
-/// its `DeadType` sheet, graphic type 0's or its `Type` sheet,
-/// story-runtime phases 7 and 9, stellar-fidelity phase 1), which the
-/// click box reads too, and animating over the frame count the session
-/// says ([`Session::counted_sheet`], stellar-fidelity phase 1), or over
-/// none ([`Session::counts_no_frames`]), its frame frozen when the session
-/// says ([`Session::frame_frozen`], stellar-fidelity phase 8).
-fn look(session: &Session, id: StellarId) -> StellarLook {
-    StellarLook {
-        destroyed: session.galaxy().destroyed(id),
-        drawn: session.drawn_sheet(id),
-        counted: session.counted_sheet(id),
-        frozen: session.frame_frozen(id),
-        counts_none: session.counts_no_frames(id),
-    }
+/// How the flight holds stellar `id` as `frame` records it
+/// ([`FrameStellar`](nova_sim::flight_frame::FrameStellar)): destroyed as
+/// its galaxy holds it, with the sheet the session says it draws
+/// (`nova_sim::Session::drawn_sheet`: its `DeadType` sheet, graphic type
+/// 0's or its `Type` sheet, story-runtime phases 7 and 9, stellar-fidelity
+/// phase 1), which the click box reads too, and animating over the frame
+/// count the session says (`nova_sim::Session::counted_sheet`,
+/// stellar-fidelity phase 1), or over none
+/// (`nova_sim::Session::counts_no_frames`), its frame frozen when the
+/// session says (`nova_sim::Session::frame_frozen`, stellar-fidelity phase
+/// 8). A stellar the frame doesn't record, one its system doesn't list,
+/// looks whole, on its `Type` sheet, never frozen, as the session holds a
+/// stellar it doesn't show.
+fn look(frame: &FlightFrame, id: StellarId) -> StellarLook {
+    frame.stellar(id).map_or(
+        StellarLook {
+            destroyed: false,
+            drawn: nova_sim::DrawnSheet::Type,
+            counted: nova_sim::DrawnSheet::Type,
+            frozen: false,
+            counts_none: false,
+        },
+        |stellar| StellarLook {
+            destroyed: stellar.destroyed,
+            drawn: stellar.drawn,
+            counted: stellar.counted,
+            frozen: stellar.frozen,
+            counts_none: stellar.counts_none,
+        },
+    )
 }
 
-/// Draws each stellar of `scene` as `session` holds it ([`look`]), as the
+/// Draws each stellar of `scene` as `frame` holds it ([`look`]), as the
 /// original's per-frame sprite tick swaps its sheet.
-fn show_destroyed(scene: &mut SystemScene, session: &Session) {
-    scene.set_destroyed(|id| look(session, id));
+fn show_destroyed(scene: &mut SystemScene, frame: &FlightFrame) {
+    scene.set_destroyed(|id| look(frame, id));
 }
 
-/// Marks each stellar of `scene` frozen as `session` holds it
-/// ([`Session::frame_frozen`]): after the steps of each tick, as a flight
-/// frame freezes or thaws a slot with no event (stellar-fidelity phase 8).
-fn show_frozen_frames(scene: &mut SystemScene, session: &Session) {
-    scene.set_frozen(|id| session.frame_frozen(id));
+/// Marks each stellar of `scene` frozen as `frame` holds it
+/// ([`FrameStellar::frozen`](nova_sim::flight_frame::FrameStellar::frozen)):
+/// after the steps of each tick, as a flight frame freezes or thaws a slot
+/// with no event (stellar-fidelity phase 8).
+fn show_frozen_frames(scene: &mut SystemScene, frame: &FlightFrame) {
+    scene.set_frozen(|id| look(frame, id).frozen);
 }
 
-/// Draws each hypergate of `scene` on the frame `session` gives it
-/// (`Session::gate_frame`), opening while an NPC comes out of it: after
-/// each tick of the traffic, and as the system is laid out.
-fn show_gate_frames(scene: &mut SystemScene, session: &Session) {
-    scene.set_gate_frames(|id| session.gate_frame(id));
+/// Draws each hypergate of `scene` on the frame `frame` gives it
+/// ([`FrameStellar::gate_frame`](nova_sim::flight_frame::FrameStellar::gate_frame)),
+/// opening while an NPC comes out of it: after each tick of the traffic,
+/// and as the system is laid out.
+fn show_gate_frames(scene: &mut SystemScene, frame: &FlightFrame) {
+    scene.set_gate_frames(|id| frame.stellar(id).and_then(|stellar| stellar.gate_frame));
 }
 
-/// The system `session`'s player is in, read from `catalog`, with only the
-/// stellars the session shows ([`Session::stellars_shown`]), in navigation
-/// order.
-fn shown_scene(catalog: &impl SystemCatalog, session: &Session) -> SystemScene {
-    let shown: BTreeSet<StellarId> = session.stellars_shown().collect();
-    SystemScene::load_shown(catalog, session.system(), &shown)
+/// The system `frame`'s player is in, read from `catalog`, with only the
+/// stellars the frame shows
+/// ([`FlightFrame::stellars_shown`](nova_sim::flight_frame::FlightFrame::stellars_shown)),
+/// in navigation order.
+fn shown_scene(catalog: &impl SystemCatalog, frame: &FlightFrame) -> SystemScene {
+    let shown: BTreeSet<StellarId> = frame.stellars_shown().collect();
+    SystemScene::load_shown(catalog, frame.system, &shown)
 }
 
-/// The scene a flight opens on: the stellars `session` shows, each
+/// The scene a flight opens on: the stellars `frame` shows, each
 /// destroyed one as it looks destroyed and each hypergate on the frame
 /// the session stepped it to.
-fn opening_scene(catalog: &impl SystemCatalog, session: &Session) -> SystemScene {
-    let mut scene = shown_scene(catalog, session);
-    show_destroyed(&mut scene, session);
-    show_gate_frames(&mut scene, session);
+fn opening_scene(catalog: &impl SystemCatalog, frame: &FlightFrame) -> SystemScene {
+    let mut scene = shown_scene(catalog, frame);
+    show_destroyed(&mut scene, frame);
+    show_gate_frames(&mut scene, frame);
     scene
+}
+
+/// The names of the fields `kept` and `fresh` differ in.
+#[cfg(test)]
+fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'static str> {
+    let mut differs = Vec::new();
+    let mut check = |name, same: bool| {
+        if !same {
+            differs.push(name);
+        }
+    };
+    check("nav_mode", kept.nav_mode == fresh.nav_mode);
+    check("system", kept.system == fresh.system);
+    check("course_shown", kept.course_shown == fresh.course_shown);
+    check(
+        "course_plotted",
+        kept.course_plotted == fresh.course_plotted,
+    );
+    check("landed", kept.landed == fresh.landed);
+    check(
+        "jump_under_way",
+        kept.jump_under_way == fresh.jump_under_way,
+    );
+    check("warping", kept.warping == fresh.warping);
+    check("warp_end_due", kept.warp_end_due == fresh.warp_end_due);
+    check("fate", kept.fate == fresh.fate);
+    check("hold_expired", kept.hold_expired == fresh.hold_expired);
+    check("leave_due", kept.leave_due == fresh.leave_due);
+    check(
+        "recharge_enabled",
+        kept.recharge_enabled == fresh.recharge_enabled,
+    );
+    check("seen_intro", kept.seen_intro == fresh.seen_intro);
+    check(
+        "jump_readiness",
+        kept.jump_readiness == fresh.jump_readiness,
+    );
+    check("texts_queued", kept.texts_queued == fresh.texts_queued);
+    check("gates", kept.gates == fresh.gates);
+    check("map_key", kept.map_key == fresh.map_key);
+    check("ships", kept.ships == fresh.ships);
+    check("drawn", kept.drawn == fresh.drawn);
+    check("shots", kept.shots == fresh.shots);
+    check("beams", kept.beams == fresh.beams);
+    check("cargo_boxes", kept.cargo_boxes == fresh.cargo_boxes);
+    check("asteroids", kept.asteroids == fresh.asteroids);
+    check("stellars", kept.stellars == fresh.stellars);
+    check(
+        "effective_murk",
+        kept.effective_murk == fresh.effective_murk,
+    );
+    check("system_murk", kept.system_murk == fresh.system_murk);
+    check(
+        "system_background",
+        kept.system_background == fresh.system_background,
+    );
+    check("double_time", kept.double_time == fresh.double_time);
+    check(
+        "hyper_gamma",
+        kept.hyper_gamma.to_bits() == fresh.hyper_gamma.to_bits(),
+    );
+    check("traffic_ships", kept.traffic_ships == fresh.traffic_ships);
+    check("hud", kept.hud == fresh.hud);
+    check("target", kept.target == fresh.target);
+    check("death_descs", kept.death_descs == fresh.death_descs);
+    differs
 }
 
 /// Text metrics, shared.
@@ -1485,94 +1775,6 @@ struct Metrics(Rc<dyn TextMetrics>);
 impl std::fmt::Debug for Metrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Metrics")
-    }
-}
-
-/// The ships where the flight draws them, for the hover test: the
-/// session's [`DrawnShips`] port. Every NPC is drawn, by its sheet or as
-/// its crossed box, so each has a box, even one its cloak hides from the
-/// player: [`Session::hover`] asks the cloak itself. Each box is the size
-/// of a frame of the sheet its slot's sprite holds
-/// ([`Session::framed_by`]): a shown ship's own type's. A hidden ship
-/// ([`Session::is_hidden`]: its type's `Cost` is -1) is boxed where it
-/// would be drawn, as the original still positions its hidden sprite
-/// (`_HandleShipDisplay` @0x2cd17) and `_HandleMouse` skips only a slot
-/// with no sprite (@0x38171), by the frames its slot last cloned, as
-/// `_SWCloneFramesFromMaster` (@0x2b824) is skipped for it: often the
-/// previous ship's at that slot ([`nova_sim::RuleKey::HiddenShipHoverBox`]
-/// chooses). A ship its slot has not displayed yet is boxed where its
-/// slot was last laid out, at that offset from where the player is drawn,
-/// in its slot's last frames, or has no box in a slot never laid out
-/// ([`Session::hover_place`]; [`nova_sim::RuleKey::UndisplayedShips`]
-/// chooses).
-struct ViewShips<'a, C> {
-    /// The flight, which says where each ship is drawn.
-    view: &'a FlightView<C>,
-    /// The flight's session.
-    session: &'a Session,
-}
-
-impl<C> DrawnShips for ViewShips<'_, C> {
-    fn npc(&self, id: NpcId) -> Option<DrawnBox> {
-        let npc = self.session.npcs().iter().find(|npc| npc.id == id)?;
-        let at = match self.session.hover_place(ShipRef::Npc(id)) {
-            HoverPlace::Own => self.view.shown_npc(npc).0,
-            HoverPlace::Stale(offset) => {
-                let player = self.view.shown_position();
-                Point::new(player.x + offset.x, player.y + offset.y)
-            }
-            HoverPlace::Unplaced => return None,
-        };
-        let framed = self.session.framed_by(ShipRef::Npc(id))?;
-        let sheet = self.view.npc_sheets.get(&framed);
-        Some(drawn_box(at, drawn_size(sheet)))
-    }
-
-    fn player(&self) -> Option<DrawnBox> {
-        let framed = self.session.framed_by(ShipRef::Player);
-        let size = if framed == Some(self.session.ship()) {
-            match &self.view.sheet {
-                Ok(sheet) => (sheet.frame_width, sheet.frame_height),
-                Err(_) => placeholder_size(),
-            }
-        } else {
-            drawn_size(framed.and_then(|ship| self.view.npc_sheets.get(&ship)))
-        };
-        Some(drawn_box(self.view.shown_position(), size))
-    }
-}
-
-/// [`ViewShips`]' boxes as they stand, taken so the session can be
-/// changed by what they decide: a click in space.
-struct DrawnNow {
-    /// Each NPC's box, by id.
-    npcs: BTreeMap<NpcId, DrawnBox>,
-    /// The player's box.
-    player: Option<DrawnBox>,
-}
-
-impl DrawnNow {
-    /// The boxes `ships` gives now, for every NPC of its session.
-    fn of<C>(ships: &ViewShips<'_, C>) -> Self {
-        Self {
-            npcs: ships
-                .session
-                .npcs()
-                .iter()
-                .filter_map(|npc| Some((npc.id, ships.npc(npc.id)?)))
-                .collect(),
-            player: ships.player(),
-        }
-    }
-}
-
-impl DrawnShips for DrawnNow {
-    fn npc(&self, id: NpcId) -> Option<DrawnBox> {
-        self.npcs.get(&id).copied()
-    }
-
-    fn player(&self) -> Option<DrawnBox> {
-        self.player
     }
 }
 
@@ -1606,16 +1808,16 @@ fn point(v: Vec2) -> Point {
     Point::new(v.x, v.y)
 }
 
-/// Shows the fight's events `session` raised this pass in `scene`: each on
+/// Shows the fight's events a pass raised, `combat`, in `scene`: each on
 /// `effects`, as `looks` says, drawing on `chance`, and each hit on its
-/// ship's flash among `flashes`, which then step a frame
-/// ([`step_flashes`]). An NPC's shot hits land before its
+/// ship's flash among `flashes`, which then step a frame by the pass's
+/// `ships` ([`step_flashes`]). An NPC's shot hits land before its
 /// `_HandleShipDisplay`, so they show this frame; a hit the original lands
 /// after its ship's display ([`CombatEvent::Hit`]'s `late`) is shown on the
 /// next. Gives the weapon glows the fight lit, each ship's and whether it
 /// is late ([`CombatEvent::WeaponGlow`]), for [`WeaponGlows::step`].
 fn show_combat(
-    session: &mut Session,
+    (combat, ships): (&[CombatEvent], &[FrameShip]),
     scene: &Scene,
     (effects, flashes): (&mut Effects, &mut BTreeMap<ShipRef, ShieldFlash>),
     (looks, sheets): (&Looks, Sheets<'_>),
@@ -1623,8 +1825,8 @@ fn show_combat(
 ) -> Vec<(ShipRef, bool)> {
     let mut late = Vec::new();
     let mut glows = Vec::new();
-    for event in session.take_combat_events() {
-        if let CombatEvent::WeaponGlow { ship, late } = event {
+    for event in combat {
+        if let CombatEvent::WeaponGlow { ship, late } = *event {
             glows.push((ship, late));
         }
         if let CombatEvent::Hit {
@@ -1632,7 +1834,7 @@ fn show_combat(
             passes_shields,
             late: shown_late,
             ..
-        } = event
+        } = *event
         {
             if shown_late {
                 late.push((ship, passes_shields));
@@ -1640,30 +1842,30 @@ fn show_combat(
                 flashes.entry(ship).or_default().hit(passes_shields);
             }
         }
-        effects.apply(&event, scene, looks, chance);
+        effects.apply(event, scene, looks, chance);
     }
-    step_flashes(flashes, session, sheets);
+    step_flashes(flashes, ships, sheets);
     for (ship, passes_shields) in late {
         flashes.entry(ship).or_default().hit(passes_shields);
     }
     glows
 }
 
-/// How fast `ship`'s weapon glow falls a frame in `session`, out of 32
-/// ([`ShipSheet::weapon_decay`]): its class's, from `player`'s sheet or
-/// the NPCs' `sheets`, none for a sheet not read; `None` for a ship no
-/// longer in the system.
+/// How fast `ship`'s weapon glow falls a frame, out of 32
+/// ([`ShipSheet::weapon_decay`]): its class's, from `player`'s sheet or,
+/// for an NPC among a pass's `ships`, the NPCs' `sheets`, none for a sheet
+/// not read; `None` for an NPC no longer in the system.
 fn glow_decay(
-    session: &Session,
+    ships: &[FrameShip],
     player: &Result<ShipSheet, String>,
     sheets: &BTreeMap<ShipId, Result<ShipSheet, String>>,
     ship: ShipRef,
 ) -> Option<f32> {
     let sheet = match ship {
         ShipRef::Player => player.as_ref().ok(),
-        ShipRef::Npc(id) => {
-            let npc = session.npcs().iter().find(|npc| npc.id == id)?;
-            sheets.get(&npc.ship).and_then(|sheet| sheet.as_ref().ok())
+        ShipRef::Npc(_) => {
+            let npc = ships.iter().find(|shown| shown.ship == ship)?;
+            sheets.get(&npc.class).and_then(|sheet| sheet.as_ref().ok())
         }
     };
     Some(sheet.map_or(0.0, ShipSheet::weapon_decay))
@@ -1677,41 +1879,37 @@ type Sheets<'a> = (
 );
 
 /// Steps each ship's shield flash among `flashes` a frame by its shield
-/// in `session` ([`ShieldFlash::step`]), whether its class's sheet among
-/// `sheets` has a shield layer, and its class's own loaded `Shield`
-/// (class +0x5c @0x2c8aa, [`Session::class_shield`]), dropping the
-/// flashes of ships no longer in the system and those run out.
+/// among a pass's `ships` ([`ShieldFlash::step`]), whether its class's
+/// sheet among `sheets` has a shield layer, and its class's own loaded
+/// `Shield` (class +0x5c @0x2c8aa, [`FrameShip::class_shield`]), dropping
+/// the flashes of ships no longer in the system and those run out.
 fn step_flashes(
     flashes: &mut BTreeMap<ShipRef, ShieldFlash>,
-    session: &Session,
+    ships: &[FrameShip],
     (player, sheets): Sheets<'_>,
 ) {
-    let of = |ship: ShipRef| match ship {
-        ShipRef::Player => Some((
-            session.reserves().shield,
-            session.ship(),
-            player.as_ref().ok(),
-        )),
-        ShipRef::Npc(id) => session.npcs().iter().find(|npc| npc.id == id).map(|npc| {
-            let sheet = sheets.get(&npc.ship).and_then(|sheet| sheet.as_ref().ok());
-            (npc.reserves.shield, npc.ship, sheet)
-        }),
-    };
     flashes.retain(|&ship, flash| {
-        let Some((gauge, class, sheet)) = of(ship) else {
+        let Some(shown) = ships.iter().find(|shown| shown.ship == ship) else {
             return false;
         };
+        let sheet = match ship {
+            ShipRef::Player => player.as_ref().ok(),
+            ShipRef::Npc(_) => sheets
+                .get(&shown.class)
+                .and_then(|sheet| sheet.as_ref().ok()),
+        };
         let has_layer = sheet.is_some_and(|sheet| sheet.shield.is_some());
-        let base = session.class_shield(class).unwrap_or(gauge.max);
-        flash.step(gauge.now, base, has_layer);
+        let base = shown.class_shield.unwrap_or(shown.shield.max);
+        flash.step(shown.shield.now, base, has_layer);
         flash.shown() > 0.0
     });
 }
 
-/// The ships in `session` breaking up, each with its sprite's width from
-/// `player`'s sheet or the NPCs' `sheets` (a placeholder's without one).
+/// The ships among a pass's `ships` breaking up, each with its sprite's
+/// width from `player`'s sheet or the NPCs' `sheets` (a placeholder's
+/// without one).
 fn dying(
-    session: &Session,
+    ships: &[FrameShip],
     player: &Result<ShipSheet, String>,
     sheets: &BTreeMap<ShipId, Result<ShipSheet, String>>,
 ) -> Vec<Dying> {
@@ -1719,50 +1917,42 @@ fn dying(
         Some(Ok(sheet)) => sheet.frame_width as f32,
         _ => PLACEHOLDER_SIZE,
     };
-    let breaking = |condition, at: Vec2, sprite_width, explosion| match condition {
-        Condition::Dying {
-            ticks_left,
-            starting,
-        } => Some(Dying {
-            at: point(at),
-            sprite_width,
-            explosion,
-            ticks_left,
-            starting,
-        }),
-        _ => None,
-    };
-    let me = breaking(
-        session.player_condition(),
-        session.player().position,
-        width(Some(player)),
-        session.hull().breakup,
-    );
-    let npcs = session.npcs().iter().filter_map(|npc| {
-        breaking(
-            npc.condition,
-            npc.state.position,
-            width(sheets.get(&npc.ship)),
-            npc.hull.breakup,
-        )
-    });
-    me.into_iter().chain(npcs).collect()
+    ships
+        .iter()
+        .filter_map(|ship| match ship.condition {
+            Condition::Dying {
+                ticks_left,
+                starting,
+            } => Some(Dying {
+                at: point(ship.position),
+                sprite_width: width(match ship.ship {
+                    ShipRef::Player => Some(player),
+                    ShipRef::Npc(_) => sheets.get(&ship.class),
+                }),
+                explosion: ship.breakup,
+                ticks_left,
+                starting,
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Each of `shown` the radar shows, where it is drawn, whether it is the
-/// player's target, its IFF code and whether it is heavy: those
-/// [`Session::on_radar`] says, a cloaked ship only when its cloak shows
-/// there or the player scans for cloaked ships.
-fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<RadarShip> {
-    let target = session.target().map(|npc| npc.id);
+/// player's `target`, its IFF code and whether it is heavy: those its
+/// record says are on the radar
+/// ([`FrameShip::on_radar`], `nova_sim::Session::on_radar`), a cloaked
+/// ship only when its cloak shows there or the player scans for cloaked
+/// ships.
+fn radar_ships(target: Option<NpcId>, shown: &[(&FrameShip, Point, f32)]) -> Vec<RadarShip> {
     shown
         .iter()
-        .filter(|(npc, _, _)| session.on_radar(npc))
+        .filter(|(npc, _, _)| npc.on_radar)
         .map(|&(npc, at, _)| RadarShip {
             position: at,
-            targeted: target == Some(npc.id),
-            iff: session.ship_iff(npc),
-            heavy: npc.hull.mass > HEAVY_MASS,
+            targeted: target.is_some_and(|id| npc.ship == ShipRef::Npc(id)),
+            iff: npc.iff,
+            heavy: npc.mass > HEAVY_MASS,
         })
         .collect()
 }

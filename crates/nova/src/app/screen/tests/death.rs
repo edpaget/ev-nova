@@ -87,31 +87,34 @@ fn deadly_fork(items: &[(i16, [i16; 3])]) -> ForkBuilder {
         }
     };
     let ship = |armor, weapon| {
-        let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-        put(&mut bytes, 0x00, &[0, 0, 300, 300, 10, 300, 0, armor]);
-        put(&mut bytes, 0x12, &[weapon, -1, -1, -1]);
-        put(&mut bytes, 0x1A, &[1, 0, 0, 0]);
-        put(&mut bytes, 0x42, &[1, 10]);
-        put(&mut bytes, 0x4E, &[-1; 4]);
-        put(&mut bytes, 0x370, &[-1; 4]);
-        put(&mut bytes, 0x6CE, &[-1; 4]);
-        bytes
+        ShipBuilder::new()
+            .accel(300)
+            .speed(300)
+            .maneuver(10)
+            .fuel(300)
+            .armor(armor)
+            .weap_types(&[weapon, -1, -1, -1, -1, -1, -1, -1])
+            .weap_counts(&[1])
+            .inherent_ai(1)
+            .crew(10)
+            .default_items(&[-1; 8])
     };
-    let mut player = ship(10, -1);
-    put(&mut player, 0x34, &[30]);
-    for (slot, &(outfit, _)) in items.iter().enumerate() {
-        put(&mut player, 0x4E + 2 * slot, &[outfit]);
-        put(&mut player, 0x56 + 2 * slot, &[1]);
-    }
-    let mut killer = ship(100, 128);
-    put(&mut killer, 0x06, &[0]);
+    let outfits: Vec<i16> = items.iter().map(|&(outfit, _)| outfit).collect();
+    let player = ship(10, -1)
+        .death_delay(30)
+        .default_items(&outfits)
+        .item_counts(&vec![1; outfits.len()])
+        .build();
+    let killer = ship(100, 128).speed(0).build();
     let mut weapon = vec![0; Weapon::SIZE.expect("fixed")];
     put(&mut weapon, 0x00, &[5, 30, 1000, 0, -1, 2000, -1, 0, 0, -1]);
     put(&mut weapon, 0x16, &[-1]);
     put(&mut weapon, 0x1C, &[0x0020]);
-    let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put(&mut anim, 0x00, &[1000, 0, 1]);
-    put(&mut anim, 0x34, &[4]);
+    let anim = ShipAnimBuilder::new()
+        .base_image_id(1000)
+        .base_set_count(1)
+        .frames_per(4)
+        .build();
     let sheet = (0..4)
         .fold(RledBuilder::new(1, 1), |sheet, _| {
             sheet.frame(|f| f.line().pixels(&[0x7C00]))
@@ -177,17 +180,15 @@ fn escape_pod_data(desc: Option<&str>) -> Rc<GameData> {
 
 /// [`escape_pod_data`]'s fork, with no rescue `dësc`.
 fn escape_pod_fork() -> ForkBuilder {
-    let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
-        for (i, value) in values.iter().enumerate() {
-            bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
-        }
-    };
-    let mut pod = vec![0; Ship::SIZE.expect("fixed")];
-    put(&mut pod, 0x00, &[0, 0, 300, 300, 10, 300, 0, 10]);
-    put(&mut pod, 0x12, &[-1; 4]);
-    put(&mut pod, 0x4E, &[-1; 4]);
-    put(&mut pod, 0x370, &[-1; 4]);
-    put(&mut pod, 0x6CE, &[-1; 4]);
+    let pod = ShipBuilder::new()
+        .accel(300)
+        .speed(300)
+        .maneuver(10)
+        .fuel(300)
+        .armor(10)
+        .weap_types(&[-1; 8])
+        .default_items(&[-1; 8])
+        .build();
     deadly_fork(&[(200, [11, 0, 1]), (201, [20, 0, 1])]).resource(
         Ship::TYPE,
         895,
@@ -281,7 +282,7 @@ fn the_rescues_desc_plays_its_movie_over_flight() {
         None,
         &filmed_desc_of(RESCUE_TEXT, "Rescue.mov", 0),
     ));
-    let reel = Rc::new(Reel::default());
+    let reel = MockMoviePlayer::playing((160, 120), 2);
     let screen = with_dialogs(data).with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
     let mut screen = ejected_from(&store, screen, create);
     assert!(reeled(&reel).is_empty());
@@ -289,12 +290,15 @@ fn the_rescues_desc_plays_its_movie_over_flight() {
         screen.showing() != Showing::Flight
     });
     assert_eq!(screen.showing(), Showing::Movie, "before its text");
-    assert_eq!(reeled(&reel), ["start Rescue.mov"]);
+    assert_eq!(reeled(&reel), [Call::Start("Rescue.mov".into())]);
     assert_eq!(fate(&screen), nova_sim::PlayerFate::Flying);
     tick_until(&mut screen, 10, |screen| {
         screen.showing() == Showing::MissionText
     });
-    assert_eq!(reeled(&reel), ["start Rescue.mov", "stop"]);
+    assert_eq!(
+        reeled(&reel),
+        [Call::Start("Rescue.mov".into()), Call::Stop]
+    );
     assert_eq!(shown_text(&screen).as_deref(), Some(RESCUE_TEXT));
     screen.input(&key(Key::Enter, true));
     assert_eq!(screen.showing(), Showing::Flight, "flying on");
@@ -509,7 +513,9 @@ fn a_pilot_that_landed_took_off_and_died_is_saved_by_the_landing_and_take_off_on
     let mut screen = deadly_menu(&store);
     open_held(&mut screen);
     assert_eq!(
-        screen.game_in_progress().and_then(FlightView::pilot),
+        screen
+            .game_in_progress()
+            .and_then(|game| game.sim().pilot()),
         Some(&last),
         "reopened as at the take-off"
     );
@@ -633,8 +639,8 @@ fn after_the_ships_destruction_the_menu_holds_the_dead_pilot() {
     assert!(screen.flight_view().is_none(), "no flight shown");
     assert!(screen.spaceport_view().is_none());
     let held = screen.game_in_progress().expect("the dead pilot held");
-    assert_eq!(held.pilot().expect("a pilot").name(), "Ada");
-    assert!(held.is_dying());
+    assert_eq!(held.sim().pilot().expect("a pilot").name(), "Ada");
+    assert!(held.sim().is_dying());
     returned(&mut screen);
     screen.take_sounds();
     choose(&mut screen, MenuChoice::EnterShip);
@@ -699,7 +705,11 @@ fn escape_during_the_breakup_writes_no_save_and_holds_the_dying_pilot() {
     assert_eq!(store.writes(), writes, "no save");
     assert!(screen.flight_view().is_none(), "no flight shown");
     assert!(screen.spaceport_view().is_none());
-    assert!(screen.game_in_progress().is_some_and(FlightView::is_dying));
+    assert!(
+        screen
+            .game_in_progress()
+            .is_some_and(|game| game.sim().is_dying())
+    );
 }
 
 #[test]
@@ -764,7 +774,7 @@ fn a_strict_pilot_destroyed_is_deleted_before_the_main_menu_shows() {
     assert!(
         screen
             .game_in_progress()
-            .and_then(FlightView::pilot)
+            .and_then(|game| game.sim().pilot())
             .is_some_and(|pilot| pilot.name() == "Ada"),
         "deleted and still held"
     );
@@ -1042,9 +1052,9 @@ fn with_no_sabotage_desc_to_read_the_fade_begins_on_the_expirys_tick() {
 
 /// The router sabotaged by one outfit, 128, whose `dësc` 5000,
 /// "Sabotaged.", names the movie "Sabotage.mov" of `Flags` `flags`,
-/// its movies played through a new [`Reel`], taken off and ticked
+/// its movies played through a new [`MockMoviePlayer`], taken off and ticked
 /// until the player's ship has exploded.
-fn filmed_sabotage(store: &MemoryPilots, flags: u16) -> (AppScreen, Rc<Reel>) {
+fn filmed_sabotage(store: &MemoryPilots, flags: u16) -> (AppScreen, Rc<MockMoviePlayer>) {
     let data = loaded(
         &deadly_fork(&[(128, [nova_sim::SABOTAGE_KILL, 5000, 1])]).resource(
             Desc::TYPE,
@@ -1053,7 +1063,7 @@ fn filmed_sabotage(store: &MemoryPilots, flags: u16) -> (AppScreen, Rc<Reel>) {
             &filmed_desc_of("Sabotaged.", "Sabotage.mov", flags),
         ),
     );
-    let reel = Rc::new(Reel::default());
+    let reel = MockMoviePlayer::playing((160, 120), 2);
     let screen = with_dialogs(data).with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
     let mut screen = took_off_over(store, screen);
     until_exploded(&mut screen);
@@ -1071,7 +1081,7 @@ fn a_sabotage_descs_movie_starts_as_the_hold_expires_and_the_fade_waits_for_it_a
     screen.tick(TICK);
     assert_eq!(
         reeled(&reel),
-        ["start Sabotage.mov"],
+        [Call::Start("Sabotage.mov".into())],
         "on the expiry's tick"
     );
     assert_eq!(screen.showing(), Showing::Movie, "before its text");
@@ -1080,7 +1090,10 @@ fn a_sabotage_descs_movie_starts_as_the_hold_expires_and_the_fade_waits_for_it_a
     tick_until(&mut screen, 10, |screen| {
         screen.showing() == Showing::MissionText
     });
-    assert_eq!(reeled(&reel), ["start Sabotage.mov", "stop"]);
+    assert_eq!(
+        reeled(&reel),
+        [Call::Start("Sabotage.mov".into()), Call::Stop]
+    );
     assert_eq!(shown_text(&screen).as_deref(), Some("Sabotaged."));
     assert_eq!(fate(&screen), held, "nor under the text");
     screen.input(&key(Key::Enter, true));
@@ -1102,7 +1115,7 @@ fn a_sabotage_descs_after_movie_holds_the_fade_until_the_tick_it_ends() {
     assert_eq!(shown_text(&screen).as_deref(), Some("Sabotaged."));
     assert!(reeled(&reel).is_empty(), "after its text");
     screen.input(&key(Key::Enter, true));
-    assert_eq!(reeled(&reel), ["start Sabotage.mov"]);
+    assert_eq!(reeled(&reel), [Call::Start("Sabotage.mov".into())]);
     assert_eq!(screen.showing(), Showing::Movie);
     let held = nova_sim::PlayerFate::Holding { ticks_left: 0 };
     for _ in 0..10 {
@@ -1112,7 +1125,10 @@ fn a_sabotage_descs_after_movie_holds_the_fade_until_the_tick_it_ends() {
         assert_eq!(fate(&screen), held, "not while it plays");
         screen.tick(TICK);
     }
-    assert_eq!(reeled(&reel), ["start Sabotage.mov", "stop"]);
+    assert_eq!(
+        reeled(&reel),
+        [Call::Start("Sabotage.mov".into()), Call::Stop]
+    );
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(
         fate(&screen),

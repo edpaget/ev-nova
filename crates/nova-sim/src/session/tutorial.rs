@@ -18,12 +18,16 @@ use crate::message::SimMessage;
 use crate::navigation::NavMode;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
+#[cfg(test)]
 use crate::tutorial::Tutorial;
 
 impl Session {
     /// How far through the first-flight tutorial the pilot is.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn tutorial(&self) -> Tutorial {
+    pub(crate) fn tutorial(&self) -> Tutorial {
         self.tutorial
     }
 
@@ -46,7 +50,7 @@ impl Session {
     ///   (@0x6b995-0x6b9a3), and told as any pilot by the other reading of
     ///   [`RuleKey::NewbieFuelRefusal`].
     #[must_use]
-    pub fn jump_refusal_told(&self, refusal: &JumpRefusal) -> bool {
+    pub(crate) fn jump_refusal_told(&self, refusal: JumpRefusal) -> bool {
         let newbie = self.tutorial.is_newbie();
         match refusal {
             JumpRefusal::Landed | JumpRefusal::TooClose { .. } | JumpRefusal::Tractored => true,
@@ -91,9 +95,11 @@ mod tests {
     use super::*;
     use crate::catalog::{StellarId, SystemId};
     use crate::chance::{Chance, NeverFires};
+
     use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::rulebook::Rulebook;
+    use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, Scripted, begin_jump_now, catalog, fly_out, land_now};
     use crate::tutorial::TutorialHint;
 
@@ -111,7 +117,7 @@ mod tests {
 
     /// Ticks once, giving the messages and sounds the tick raised.
     fn tick(session: &mut Session) -> (Vec<SimMessage>, Vec<SimSound>) {
-        session.tick(Controls::default());
+        work(session, &crate::testkit::catalog(), Controls::default());
         (session.take_messages(), session.take_sounds())
     }
 
@@ -277,11 +283,11 @@ mod tests {
         let catalog = catalog();
         let mut session = new_pilot(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog);
         assert!(session.tutorial().is_newbie(), "until the jump begins");
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(session.tutorial(), Tutorial::SEASONED);
-        assert!(!session.jump_refusal_told(&JumpRefusal::NoDestination));
+        assert!(!session.jump_refusal_told(JumpRefusal::NoDestination));
     }
 
     #[test]
@@ -289,8 +295,8 @@ mod tests {
         let catalog = catalog();
         let mut session = seasoned(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.tutorial = Tutorial::NEW_PILOT;
         session.arrive(&catalog, &mut NeverFires);
         assert_eq!(session.tutorial(), Tutorial::SEASONED);
@@ -332,7 +338,7 @@ mod tests {
                 assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
             }
             let case = format!("{newbie} {selected} {rule:?} {refusal:?}");
-            assert_eq!(session.jump_refusal_told(&refusal), told, "{case}");
+            assert_eq!(session.jump_refusal_told(refusal), told, "{case}");
         }
         // A disabled or dying player's J is refused as disabled, untold.
         for condition in [
@@ -347,7 +353,7 @@ mod tests {
             session.ship.condition = condition;
             let refusal = session.begin_jump().expect_err("refused");
             assert_eq!(refusal, JumpRefusal::Disabled, "{condition:?}");
-            assert!(!session.jump_refusal_told(&refusal), "{condition:?}");
+            assert!(!session.jump_refusal_told(refusal), "{condition:?}");
         }
     }
 

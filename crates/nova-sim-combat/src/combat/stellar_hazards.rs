@@ -3,7 +3,8 @@
 //! (`_HandleDeadlyStellars` @0x39ccd-0x39e47), which `_DoPlayGameWork`
 //! calls after the shots and the ships (@0x44509, @0x4450e) and before it
 //! jumps to `_HandleBeams` (@0x4453d). So both land between step 6's shots
-//! and the beams ([`Combat::tick_on`]), on either pass:
+//! and the beams ([`Combat::hazards`], before [`Combat::close_tick_in`]), on
+//! either pass:
 //!
 //! - **The pull** ([`pull`]) is added to the velocity of each fighter not
 //!   destroyed that does not resist gravity ([`HazardResistance::gravity`]),

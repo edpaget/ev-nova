@@ -89,8 +89,10 @@ impl Session {
 mod tests {
     use crate::ai::{Goal, NovaAi};
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::combat::hull::Condition;
     use crate::escort::EscortOrder;
+    use crate::flight::Controls;
     use crate::mission::FailedBy;
     use crate::mission::ships::ShipBehav;
     use crate::pilot::Escort;
@@ -100,6 +102,7 @@ mod tests {
         accepted, destroy, goal_catalog, in_flight, jump_to, marked, settle, ships_of, take_off,
     };
     use crate::testkit::FakePilotCatalog;
+    use crate::testkit::work_with;
     use crate::traffic::npc::{AiType, NpcId};
 
     /// Fails slot 0's mission, as only a failed mission's ship reaches
@@ -373,7 +376,14 @@ mod tests {
         );
         let ai = NovaAi::default();
         for _ in 0..40 {
-            session.tick_traffic(&catalog, &ai, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &ai,
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         let npc = session.space.npc(id).expect("here");
         assert_eq!(

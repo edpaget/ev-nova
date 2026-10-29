@@ -2,7 +2,7 @@
 //! which stellar and which ship are bracketed, how far out, and in which
 //! frames.
 //!
-//! - **Each flight tick** ([`Session::tick`]), the jump's and a destroyed
+//! - **Each flight pass** ([`Session::game_work`]), the jump's and a destroyed
 //!   player's too, steps each fly-in while there is a target and settles
 //!   it while there is none, as `_HandleNavTargetSprites` (@0x2fcaf) and
 //!   `_HandleWeapTargetSprites` (@0x2ff1a) do on every pass. A landed
@@ -37,8 +37,12 @@ impl Session {
     /// (after a take-off) nor any other mode shows them. A dominated stellar takes the green frames: the same
     /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76), which
     /// `Session::iff_dominated` models.
+    ///
+    /// For the tests: the frame fills its HUD from the sub-state's own
+    /// (`Session::fill_hud`).
+    #[cfg(test)]
     #[must_use]
-    pub fn nav_brackets(&self) -> Option<NavBrackets> {
+    pub(crate) fn nav_brackets(&self) -> Option<NavBrackets> {
         self.chart.nav_brackets()
     }
 
@@ -91,7 +95,7 @@ impl Chart {
     /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76), which
     /// `Session::iff_dominated` models.
     #[must_use]
-    fn nav_brackets(&self) -> Option<NavBrackets> {
+    pub(super) fn nav_brackets(&self) -> Option<NavBrackets> {
         let stellar = self.nav_target()?;
         let site = self.listed.iter().find(|site| site.id == stellar);
         Some(NavBrackets {
@@ -125,6 +129,7 @@ mod tests {
     use crate::brackets::{FlyIn, Standing};
     use crate::catalog::StellarId;
     use crate::cloak::Area;
+
     use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
     use crate::escort::{EscortDuty, FormationSlot};
@@ -136,19 +141,23 @@ mod tests {
     use crate::session::{LandPress, StellarPick};
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
+    use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, npc};
 
     const FLIGHT: [f32; 5] = [196.0, 136.0, 76.0, 16.0, 0.0];
 
     fn session(catalog: &FakePilotCatalog) -> Session {
-        Session::start(catalog).expect("starts")
+        let mut session = Session::start(catalog).expect("starts");
+        // Set up, so a pass keeps the NPCs a test adds.
+        session.populate(catalog, &mut crate::chance::NeverFires);
+        session
     }
 
     /// The nav brackets' expand after each of `ticks` ticks.
     fn nav_over(session: &mut Session, ticks: usize) -> Vec<f32> {
         (0..ticks)
             .map(|_| {
-                session.tick(Controls::default());
+                work(session, &crate::testkit::catalog(), Controls::default());
                 session.nav_brackets().expect("bracketed").expand
             })
             .collect()
@@ -158,7 +167,7 @@ mod tests {
     fn target_over(session: &mut Session, ticks: usize) -> Vec<f32> {
         (0..ticks)
             .map(|_| {
-                session.tick(Controls::default());
+                work(session, &crate::testkit::catalog(), Controls::default());
                 session.target_brackets().expect("bracketed").expand
             })
             .collect()
@@ -245,12 +254,13 @@ mod tests {
 
     #[test]
     fn nav_off_and_hyper_select_hide_the_brackets_and_a_later_pick_flies_in_again() {
-        let mut session = session(&hub());
+        let catalog = hub();
+        let mut session = session(&catalog);
         session.select_stellar(StellarPick::Slot(0));
         nav_over(&mut session, 1);
         assert!(session.nav_off());
         assert_eq!(session.nav_brackets(), None);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.chart.nav_fly_in, FlyIn::default(), "settled");
         session.select_stellar(StellarPick::Slot(0));
         assert_eq!(nav_over(&mut session, 5), FLIGHT);
@@ -271,7 +281,7 @@ mod tests {
             crate::navigation::NavMode::Stellar(None)
         );
         assert_eq!(session.nav_brackets(), None);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.nav_brackets(), None);
         session.select_stellar(StellarPick::Slot(1));
         assert_eq!(nav_expand(&session), 196.0, "128 again, flown in");
@@ -385,23 +395,25 @@ mod tests {
 
     #[test]
     fn losing_the_target_settles_the_fly_in() {
-        let mut session = session(&three_stellars());
+        let catalog = three_stellars();
+        let mut session = session(&catalog);
         let ship = ship_at(&mut session, Vec2::new(50.0, 0.0));
         session.select_target(TargetPick::Next);
         target_over(&mut session, 1);
         session.space.traffic.remove(ship);
         session.chart.target = None;
         assert_eq!(session.target_brackets(), None);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.chart.target_fly_in, FlyIn::default());
     }
 
     #[test]
     fn a_landed_tick_moves_no_brackets() {
-        let mut session = session(&three_stellars());
+        let catalog = three_stellars();
+        let mut session = session(&catalog);
         session.select_stellar(StellarPick::Slot(0));
         session.mode = crate::session::Mode::Landed(StellarId(131));
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(nav_expand(&session), 196.0);
     }
 

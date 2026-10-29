@@ -28,7 +28,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use nova_sim::story::OverlaidGalaxy;
+use nova_sim::galaxy_map::GalaxyShown;
 use nova_sim::{Governments, StarMap, StarSystem, Vec2};
 
 use super::catalog::{Galaxy, GovtId, NebulaEntry, SystemEntry, SystemId};
@@ -170,12 +170,13 @@ impl GalaxyModel {
         }
     }
 
-    /// Draws the session's `galaxy` over the catalog's geometry: only its
-    /// visible systems, each coloured by its government there, its
-    /// hyperlinks, and only the nebulae it shows, each active and
-    /// explored, as `_MapDialogUpdate` draws them (@0xf951-0xf95f). The
-    /// problems are the catalog's, as built.
-    pub fn apply(&mut self, galaxy: &OverlaidGalaxy) {
+    /// Draws what the session's galaxy shows (`galaxy`,
+    /// [`GalaxyShown`]) over the catalog's geometry: only its visible
+    /// systems, each coloured by its government there, its hyperlinks,
+    /// and only the nebulae it shows, each active and explored, as
+    /// `_MapDialogUpdate` draws them (@0xf951-0xf95f). The problems are
+    /// the catalog's, as built.
+    pub fn apply(&mut self, galaxy: &GalaxyShown) {
         self.systems = self
             .catalog
             .iter()
@@ -185,7 +186,7 @@ impl GalaxyModel {
                 color: system_color(galaxy.govt(system.entry.id), &self.govt_colors),
             })
             .collect();
-        self.links = galaxy.map().links();
+        self.links.clone_from(&galaxy.links);
         self.nebulae = self
             .catalog_nebulae
             .iter()
@@ -344,7 +345,7 @@ mod tests {
     use super::*;
     use crate::galaxy::catalog::{NebulaId, NebulaPicture};
     use crate::galaxy::view::{MAP_CENTER, MapView, SCALES};
-    use nova_sim::story::GalaxyOverlay;
+    use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -812,11 +813,15 @@ mod tests {
         }
     }
 
-    /// The session's galaxy over `galaxy`'s systems, with `change` made.
-    fn overlaid(galaxy: &Galaxy, change: impl FnOnce(&mut GalaxyOverlay)) -> OverlaidGalaxy {
+    /// What the session's galaxy over `galaxy`'s systems shows, with
+    /// `change` made.
+    fn overlaid(galaxy: &Galaxy, change: impl FnOnce(&mut GalaxyOverlay)) -> GalaxyShown {
         let mut overlay = GalaxyOverlay::default();
         change(&mut overlay);
-        OverlaidGalaxy::new(galaxy.systems.iter().map(star_system).collect(), overlay)
+        GalaxyShown::of(&OverlaidGalaxy::new(
+            galaxy.systems.iter().map(star_system).collect(),
+            overlay,
+        ))
     }
 
     fn system_ids(model: &GalaxyModel) -> Vec<SystemId> {

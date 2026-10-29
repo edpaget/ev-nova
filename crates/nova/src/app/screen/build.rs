@@ -8,13 +8,16 @@ use nova_sim::KeptBerths;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::story::sprite_pool::StellarSpritePool;
 use nova_sim::{
-    Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
-    HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
-    NovaPersons, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule, RuleKey,
-    RuleSource, Rulebook, Session,
+    Allegiance, Behaviour, BoardingRule, CarryOver, CommCatalog, ControlBits, DisableRule,
+    HailOptions, HireTerms, LastRefresh, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable,
+    NovaHire, NovaLaw, NovaPersons, PersonRules, PilotKeeper, PilotStore, PointDefenceRule,
+    RuleKey, RuleSource, Rulebook, SessionSetup,
 };
-use nova_view::devtools::SessionDesk;
-use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
+use nova_view::devtools::FlightDesk;
+use nova_view::flight::{
+    Collaborators, FlightOverlays, FlightStart, FlightView, SessionFlight, SharedChance,
+    open_flight,
+};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::find::FIND_DIALOG;
 use nova_view::menu::appear::Appear;
@@ -196,8 +199,8 @@ impl AppScreen {
     }
 
     /// The router with `terms` giving the fee and wage of a hire in each
-    /// flight ([`FlightView::with_hire_terms`]); Nova's until others are
-    /// given.
+    /// flight (`nova_sim::Session::with_hire_terms`); Nova's until others
+    /// are given.
     #[must_use]
     pub fn with_hire_terms(self, hire_terms: Rc<dyn HireTerms>) -> Self {
         Self { hire_terms, ..self }
@@ -205,7 +208,7 @@ impl AppScreen {
 
     /// The router with `bits` testing a ship for hire's `Availability` and
     /// a person's `ActiveOn` against the pilot in each flight
-    /// ([`FlightView::with_control_bits`]); Nova's
+    /// (`nova_sim::Session::with_control_bits`); Nova's
     /// ([`NovaBits`](nova_sim::NovaBits)) until others are given.
     #[must_use]
     pub fn with_control_bits(self, control_bits: Rc<dyn ControlBits>) -> Self {
@@ -216,7 +219,8 @@ impl AppScreen {
     }
 
     /// The router with `rules` deciding how persons appear in each flight
-    /// ([`FlightView::with_person_rules`]); Nova's until others are given.
+    /// (`nova_sim::Session::with_person_rules`); Nova's until others are
+    /// given.
     #[must_use]
     pub fn with_person_rules(self, person_rules: Rc<dyn PersonRules>) -> Self {
         Self {
@@ -226,7 +230,8 @@ impl AppScreen {
     }
 
     /// The router with each flight's disputed rules reading as `rules`
-    /// says ([`FlightView::with_rules`]): every rule the engine's until
+    /// says (`nova_sim::Session::with_rules`, and the view's presentation
+    /// rules, [`FlightView::over`]): every rule the engine's until
     /// others are given. Only the rule set changes: the strategies the
     /// router hands each flight (its behaviour, law, boarding, hail
     /// options, hire terms and persons) stay as they are, so a rule one
@@ -322,54 +327,82 @@ impl AppScreen {
         self.assignment.as_ref()
     }
 
-    /// A flight over the game data, `new` from it, rolling on the router's
-    /// chance, its effects on the router's effects chance, deciding as its
-    /// behaviour says, disabling ships, engaging missiles and judging
-    /// crimes as its rules say, naming its ship from the game data's
-    /// string lists, laying out its HUD's text with the router's
+    /// The flight `start` says over the game data, built at the edge
+    /// ([`open_flight`]): rolling on the router's chance, deciding as its
+    /// behaviour says, engaging missiles and judging crimes and boardings
+    /// as its rules say, the session set up by the router's rulebook, its
+    /// disable rule, hire terms, control bits and persons, naming its ship
+    /// from the game data's string lists, and carrying on from the flights
+    /// before it in the run, `last_refresh` a new pilot's neighbour pass's
+    /// (see [`AppScreen::run_refresh`]); its effects on the router's
+    /// effects chance, laying out its HUD's text with the router's
     /// metrics, if it has any, and in the widened size the router was last
     /// told ([`Screen::set_widened_size`]), so its first tick already
     /// uses it.
     pub(super) fn flight(
         &self,
-        new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
+        start: FlightStart,
+        last_refresh: Option<LastRefresh>,
     ) -> FlightView<Rc<GameData>> {
-        let mut flight = self.configured_flight(new);
+        let mut flight = self.configured_flight(start, last_refresh);
         flight.set_view_size(self.widened);
         flight
+    }
+
+    /// The setup the router hands each flight's session
+    /// ([`AppScreen::flight`]).
+    fn session_setup(&self, last_refresh: Option<LastRefresh>) -> SessionSetup {
+        SessionSetup {
+            rules: self.rules,
+            disable_rule: Rc::clone(&self.disable_rule),
+            hire_terms: Rc::clone(&self.hire_terms),
+            control_bits: Rc::clone(&self.control_bits),
+            person_rules: Rc::clone(&self.person_rules),
+            strings: Some(Rc::clone(&self.data) as Rc<dyn CommCatalog>),
+            carry: CarryOver {
+                slot_sprites: Some(self.slot_sprites.clone()),
+                stellar_sprite_pool: Some(self.stellar_sprites.clone()),
+                kept_berths: Some(self.kept_berths.clone()),
+                last_refresh,
+            },
+        }
+    }
+
+    /// The collaborators the router hands each flight's calls
+    /// ([`AppScreen::flight`]).
+    fn collaborators(&self) -> Collaborators {
+        Collaborators {
+            chance: self.chance.clone(),
+            behaviour: Rc::clone(&self.behaviour),
+            defence_rule: Rc::clone(&self.defence_rule),
+            law: Rc::clone(&self.law),
+            boarding_rule: Rc::clone(&self.boarding_rule),
+            hail_options: self.hail_options.clone(),
+        }
     }
 
     /// [`AppScreen::flight`]'s flight, before it is sized.
     fn configured_flight(
         &self,
-        new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
+        start: FlightStart,
+        last_refresh: Option<LastRefresh>,
     ) -> FlightView<Rc<GameData>> {
-        let flight = new(Rc::clone(&self.data))
-            .with_chance(self.chance.clone())
-            .with_effects_chance(self.effects_chance.clone())
-            .with_behaviour(Rc::clone(&self.behaviour))
-            .with_disable_rule(Rc::clone(&self.disable_rule))
-            .with_point_defence_rule(Rc::clone(&self.defence_rule))
-            .with_law(Rc::clone(&self.law))
-            .with_boarding_rule(Rc::clone(&self.boarding_rule))
-            .with_hail_options(self.hail_options.clone())
-            .with_rules(self.rules)
-            .with_slot_sprites(self.slot_sprites.clone())
-            .with_stellar_sprite_pool(self.stellar_sprites.clone())
-            .with_kept_berths(self.kept_berths.clone())
-            .with_overlays(self.flight_overlays)
-            .with_hire_terms(Rc::clone(&self.hire_terms))
-            .with_control_bits(Rc::clone(&self.control_bits))
-            .with_person_rules(Rc::clone(&self.person_rules))
-            .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
-            .with_hyperspace_effects(self.prefs.hyperspace_effects)
-            .with_smoke_trails(self.prefs.smoke_trails)
-            .with_parallax_starfield(self.prefs.parallax_starfield)
-            .with_weapon_effects(self.flight_weapon_effects())
-            .with_sound_prefs(self.prefs.sound)
-            .with_double_time(self.double_time)
-            .with_find(self.find_template(), self.data.button_style())
-            .with_map_borders(self.map_borders);
+        let flight = open_flight(
+            Rc::clone(&self.data),
+            start,
+            self.session_setup(last_refresh),
+            self.collaborators(),
+        )
+        .with_effects_chance(self.effects_chance.clone())
+        .with_overlays(self.flight_overlays)
+        .with_hyperspace_effects(self.prefs.hyperspace_effects)
+        .with_smoke_trails(self.prefs.smoke_trails)
+        .with_parallax_starfield(self.prefs.parallax_starfield)
+        .with_weapon_effects(self.flight_weapon_effects())
+        .with_sound_prefs(self.prefs.sound)
+        .with_double_time(self.double_time)
+        .with_find(self.find_template(), self.data.button_style())
+        .with_map_borders(self.map_borders);
         let flight = match self.course_map_zoom {
             Some(zoom) => flight.with_course_map_zoom(zoom),
             None => flight,
@@ -479,16 +512,17 @@ impl AppScreen {
 
     /// Changes the pilot with `change` while the ship is landed, as a
     /// spaceport screen does, and says whether it did; the pilot is saved
-    /// after the next input or tick.
-    pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
+    /// after the next input or tick. For tests.
+    #[cfg(test)]
+    pub fn transact(&mut self, change: impl FnOnce(&mut nova_sim::Pilot)) -> bool {
         self.flight
             .as_mut()
-            .is_some_and(|flight| flight.transact(change))
+            .is_some_and(|flight| flight.change_sim(|sim| sim.transact(change)))
     }
 
     /// The pilot flying, as the developer tools' desk; `None` before
     /// flight is entered and when the flight could not start.
-    pub fn pilot_desk(&mut self) -> Option<SessionDesk<'_, Rc<GameData>>> {
+    pub fn pilot_desk(&mut self) -> Option<FlightDesk<'_, SessionFlight<Rc<GameData>>>> {
         self.flight.as_mut()?.pilot_desk()
     }
 
@@ -507,7 +541,7 @@ impl AppScreen {
             return;
         };
         flight.resync();
-        let landed = flight.session().ok().and_then(Session::landed);
+        let landed = flight.landed();
         if let Some(spaceport) = &mut self.spaceport {
             match landed {
                 Some(stellar) if stellar != spaceport.stellar() => {
@@ -781,6 +815,29 @@ impl AppScreen {
     #[must_use]
     pub fn flight_view(&self) -> Option<&FlightView<Rc<GameData>>> {
         self.flight.as_ref()
+    }
+
+    /// The flight screen to ask, shown or not, once flight has been
+    /// entered: for the integration tests' harnesses, as a screen's ask of
+    /// the flight takes `&mut` ([`FlightView::hailing`]).
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn flight_view_mut(&mut self) -> Option<&mut FlightView<Rc<GameData>>> {
+        self.flight.as_mut()
+    }
+
+    /// Whether flight holds input its next frames will act on
+    /// ([`FlightView::input_queued`]): for the integration tests'
+    /// harnesses, to draw frames until the screen has taken its input
+    /// rather than count them. Only while flight is what the router ticks,
+    /// shown with nothing over it: a flight hidden, or paused under a
+    /// dialog or its map, can't act on its presses until it ticks again,
+    /// so it reports none.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn input_queued(&self) -> bool {
+        self.showing() == Showing::Flight
+            && self.flight.as_ref().is_some_and(FlightView::input_queued)
     }
 
     /// The game in progress the main menu holds, not flying, if any: a

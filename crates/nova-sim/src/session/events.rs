@@ -30,7 +30,7 @@
 //!   shoot a stellar down (story-runtime phase 8).
 //! - [`SessionEvent::StellarsRebuilt`]: a rebuild point changed which
 //!   stellars shown are dead since the last rebuild
-//!   ([`Session::dead_since_rebuild`]; see the `stellars` module). It is
+//!   (`Session::dead_since_rebuild`; see the `stellars` module). It is
 //!   told only on a change, as `GalaxyChanged` is, after the transition's
 //!   own events: the flight view draws each stellar of the scene shown
 //!   again, with no new layout (story-runtime phase 9).
@@ -41,9 +41,11 @@
 //!   afresh about the ship. An `M` or `N` move, a developer tools' move
 //!   and a take-off keep them.
 //!
-//! The session's other outboxes (its sounds, messages, script notes, pay
-//! notes, fighter notes and the rest, each with its own `take_*`) are not
-//! folded into this one; doing so is a possible follow-up.
+//! The session's other one-shot outputs (its sounds, messages, pay notes,
+//! fighter notes and the rest, each with its own `take_*`) are drained
+//! with these in one stream of `FlightEvent`s
+//! ([`Session::drain_events`]; see the `flight_events` module), each
+//! event as [`FlightEvent::Session`](crate::flight_frame::FlightEvent::Session).
 
 use super::{Outbox, Session};
 
@@ -70,7 +72,7 @@ pub enum SessionEvent {
 impl Session {
     /// The events since they were last taken, in order; taking them
     /// empties the list.
-    pub fn take_events(&mut self) -> Vec<SessionEvent> {
+    pub(crate) fn take_events(&mut self) -> Vec<SessionEvent> {
         self.out.take_events()
     }
 }

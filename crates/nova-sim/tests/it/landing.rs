@@ -231,6 +231,15 @@ fn session_with(sites: Vec<LandingSite>, cash: i32) -> Session {
     Session::start(&Pilot { sites, cash }).expect("starts")
 }
 
+/// A pass of a [`session`], its traffic [`Pilot`]'s, which is none.
+fn pass(session: &mut Session) {
+    let traffic = Pilot {
+        sites: Vec::new(),
+        cash: 0,
+    };
+    crate::passes::work(session, &traffic, Controls::default());
+}
+
 const STATION: u32 = StellarFlags::CAN_LAND | StellarFlags::STATION;
 
 #[test]
@@ -266,7 +275,7 @@ fn the_first_l_requests_clearance_and_the_second_lands_after_a_tick() {
     assert_eq!(session.land(), Ok(requested(false)));
     assert_eq!(session.nav_target(), Some(StellarId(128)));
     assert_eq!(session.landed(), None);
-    session.tick(Controls::default());
+    pass(&mut session);
     assert_eq!(
         session.land(),
         Ok(LandOutcome::Landed(StellarId(128)).into())
@@ -283,7 +292,7 @@ fn a_ship_over_no_stellar_is_too_far() {
     };
     let mut session = session(vec![far]);
     assert_eq!(session.land(), Ok(requested(true)));
-    session.tick(Controls::default());
+    pass(&mut session);
     let too_far = Err(LandingRefusal::TooFar {
         stellar: StellarId(128),
         station: true,
@@ -311,7 +320,7 @@ fn a_new_pilot_is_denied_where_a_record_is_needed() {
         min_status: 32767,
     });
     assert_eq!(session.land(), denied);
-    session.tick(Controls::default());
+    pass(&mut session);
     assert_eq!(session.land(), denied, "asked again");
 }
 
@@ -329,10 +338,10 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     // 25 ticks of `Accel` / 5000: the speed 15 of the port's former
     // `Accel` / 3000 gave.
     for _ in 0..25 {
-        session.tick(thrust);
+        crate::passes::work(&mut session, &catalog, thrust);
     }
     assert_eq!(session.land(), Ok(requested(false)));
-    session.tick(thrust);
+    crate::passes::work(&mut session, &catalog, thrust);
     let Err(LandingRefusal::TooFast {
         stellar,
         station,
@@ -350,11 +359,11 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
         ..Controls::default()
     };
     for _ in 0..40 {
-        session.tick(reverse);
+        crate::passes::work(&mut session, &catalog, reverse);
     }
     // Under 0.75 on each axis, the original's per-axis gate.
     while session.player().velocity.length() > 0.75 {
-        session.tick(thrust);
+        crate::passes::work(&mut session, &catalog, thrust);
     }
     assert_eq!(
         session.land(),
@@ -377,7 +386,7 @@ fn landing_on_a_stellar_with_a_fee_pays_it_and_one_short_of_it_is_refused() {
     };
     let mut session = session_with(vec![site], 500);
     assert_eq!(session.land(), Ok(requested(false)));
-    session.tick(Controls::default());
+    pass(&mut session);
     assert_eq!(
         session.land(),
         Ok(LandOutcome::Landed(StellarId(128)).into())

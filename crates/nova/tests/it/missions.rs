@@ -14,98 +14,53 @@
 //! "Desc Dialog" (3003, and 3004 with a picture), driven
 //! only by window events, with pilots kept in the in-memory store.
 //!
-//! The mission computer: the pilot lands, and Mission BBS lists "Run to
-//! Pad" and "Errand", the first one's text filled. Accept shows its
-//! `BriefText`, filled, over the computer, which lists the Errand alone;
-//! accepting that too closes the computer silently, nothing being left.
-//! Both are active and saved. Taking off and landing again completes the
-//! run, at its destination, and its `CompText` shows over the spaceport.
+//! The mission computer: Mission BBS opens the session's computer, its
+//! selected text loaded through flight; Accept reaches the session, which
+//! saves it, its `BriefText` shows over the computer, handed back once
+//! the text closes, and the `CompText` shows over the spaceport on
+//! landing again.
 //!
-//! A run whose `OnSuccess` moves the player (`M129`, to Beta and its
-//! Dock) with no `Q`: under its `CompText` the port's status bar names
-//! the Pad, landed on, and once the Trade Center has opened and closed
-//! it names the Dock.
-//! Closing the mission computer afterwards redraws the nav too: the
-//! Dock. A run whose `OnAccept` moves the player instead: under its
-//! `BriefText` the bar names the Dock, and the computer's close restores
-//! the nav it opened with, naming the Pad.
-//! At a Pad with an outfitter and a shipyard, buying the "Racer", whose
-//! `OnPurchase` moves the player, names the Dock; the shipyard's close
-//! restores the Pad but leaves the bar naming the Dock, until a Cancel
-//! of an Option-Buy in the outfitter draws it: the Pad. So does the
-//! shipyard's Info panel closing, the name prompt's Cancel for the
-//! "Scout", and the bar's hire screen closing, each from that Dock.
-//! With the Dock held after the run's `CompText`, the bar's Leave,
-//! News's close, player info's and mission info's each redraw it.
+//! The port's status bar: the computer's close reaches flight, whose
+//! restore of the nav reaches the session (a run whose `OnAccept` moves
+//! the player); the bar's Leave reaches flight's status refresh (a run
+//! whose `OnSuccess` moved the player, the bar held); and the shipyard's
+//! name prompt's Cancel reaches flight's decline, which redraws the bar.
 //!
-//! The bar: a quarter second after the bar opens, the offer dialog shows
-//! the bar job's text, filled, and "I'm in". Return accepts it, and its
-//! `BriefText` shows. After the gap, the second is offered, and N refuses
-//! it: its `RefuseText` shows, and its `OnRefuse` set bit 7, which the
-//! saved pilot carries. Nothing more is offered.
+//! The bar: its offers are the session's, and N's refusal goes through
+//! the session, whose `RefuseText` shows and whose `OnRefuse` is saved.
+//! An offer at the spaceport shows as the ship lands; one that cannot be
+//! refused, with no text, is accepted with no dialog; and the offer and
+//! text dialogs' picture variants come from the interface file.
 //!
-//! A full pilot at the bar: with all 16 slots taken by errands, accepting
-//! the bar job is refused, and the second is offered in its place;
-//! accepting that is refused too, and nothing more is offered. Leaving
-//! the bar for the spaceport and coming back offers nothing, as nothing
-//! was offered at in between; taking off, landing again and opening the
-//! bar offers the bar job again, the spaceport offered at as it landed.
+//! Mission info: in the spaceport and over flight its selected
+//! `QuickBrief` is loaded through flight, for the slot selected; Abort
+//! reaches the session and the screen is handed the info back; over
+//! flight it pauses flight, and Done goes back into flight. The texts a
+//! take-off queues show over the paused flight until Done.
 //!
-//! The spaceport: with the bar job offered at the spaceport (`AvailLoc`
-//! 3), landing shows it in the offer dialog over the spaceport; Return
-//! accepts it, and its `BriefText` shows.
-//!
-//! An offer that cannot be refused: with the bar job unrefusable
-//! (`Flags` 0x0004) and its offer text empty, opening the bar accepts it
-//! with no offer dialog, and its `BriefText` shows. After the gap, the
-//! second is offered.
-//!
-//! Mission info: with the run and the errand accepted, I in the spaceport
-//! lists both, the run's `QuickBrief` showing its deadline. Abort does
-//! nothing on the errand; on the run it frees its slot, which the saved
-//! pilot shows, and the screen lists the errand alone.
-//!
-//! A deadline missed in flight: with the run's deadline due and its
-//! `OnFailure` `S130`, leaving the spaceport takes off, the run fails,
-//! the message line says "Time limit exceeded - mission failed.", and
-//! the bar job its `S` accepted shows its `BriefText` over the paused
-//! flight until Done.
-//!
-//! Pictures: with the bar job's offer `dësc` and `BriefText` showing
-//! `PICT` 5008, the bar's offer opens in the offer dialog's picture
-//! variant (`DLOG` 1020), and the `BriefText` in "Desc Dialog"'s (3004).
-//!
-//! I in flight: with no mission, the message line says "You have no
-//! active missions."; with the run and the errand held, it opens the
-//! mission info screen over the paused flight, Abort there frees the
-//! run's slot, and Done goes back into flight.
-//!
-//! A `Q` that ends a landing: with the run's `OnSuccess` a `Q` of `STR#`
-//! 25048 ("Off you go."), landing at the Pad completes it, and its
-//! `CompText` shows over the spaceport while the ship stays landed; Done
-//! leaves, as the port's Leave does, the `Q`'s message the take-off line.
-//! The run's cargo dropped off there shows its `DumpCargoText` first; a
-//! failed bar job in a later slot shows its `FailText` after the
-//! `CompText`; a job offered at the spaceport shows after the texts, and
-//! refusing it leaves, or accepting it shows its `BriefText`, then
-//! leaves. An accept in the mission computer whose `OnAccept` is the `Q`
-//! shows its `BriefText`, then leaves. Without dialogs the landing
-//! leaves at once. A bar job whose deadline the take-off misses has the
-//! `BriefText` its `OnFailure` queues show over flight in the Done that
-//! leaves, before a frame.
+//! A `Q` that ends a landing: the `CompText` shows over the spaceport
+//! while the ship stays landed, and the input closing the last text or
+//! offer leaves, after the take-off's deadline and save in that input.
+//! Without dialogs the landing leaves at once.
 //!
 //! Screen-loaded `dësc`s: the Pad's and the bar's conditional text shows
-//! resolved on their first frame; the Pad's `<PRKnnn>`/`<SRKnnn>` cross
-//! the governments the computer's names read, until the bar's load
-//! resets them.
+//! resolved on their first frame.
+//!
+//! The map key: the computer's opens flight's map with its offer's marks
+//! and closes back to it; mission info's over flight opens its map, and
+//! Escape returns to it.
+//!
+//! What the screens list, the texts' wording, offer order and
+//! suppression, the land check's order and the nav-hold rules are
+//! nova-sim's and nova-view's, pinned there.
 
 use std::cell::RefCell;
-use std::io;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::common::EntryHarness;
+use crate::bracket_art;
+use crate::common::{EntryHarness, Frames};
 use nova::app::{App, AppScreen, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
@@ -113,24 +68,22 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::interface::Interface;
 use nova_data::records::mission::Mission;
-use nova_data::records::outfit::Outfit;
-use nova_data::records::rank::Rank;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
-use nova_sim::mission::SLOTS;
 use nova_sim::{Chance, MissionId, Pilot, PilotKeeper, PilotStore, Session};
 use nova_view::Key;
 use nova_view::flight::SharedChance;
@@ -138,11 +91,10 @@ use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::spaceport::missions::{
     ABORT_ITEM, ACCEPT_ITEM, INFO_TEXT_ITEM, MissionComputerScreen, MissionInfoScreen,
-    NAME_ITEM as COMPUTER_NAME_ITEM, TEXT_ITEM as COMPUTER_TEXT_ITEM,
+    TEXT_ITEM as COMPUTER_TEXT_ITEM,
 };
 use nova_view::spaceport::{OfferDialog, SpaceportView};
 use nova_view::text::fixture::MonoMetrics;
-use nova_view::ui::quantity::CANCEL_ITEM;
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -157,24 +109,6 @@ impl WindowPort for FakeWindow {
     }
 
     fn request_redraw(&mut self) {}
-}
-
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
 }
 
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
@@ -200,26 +134,29 @@ fn character() -> Vec<u8> {
 
 /// A `shïp` of 30 shield and 45 armour, slow and steady, unarmed.
 fn ship() -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 300, 300, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[45]);
-    put_i16s(&mut bytes, 0x12, &[-1; 4]);
-    put_i16s(&mut bytes, 0x1A, &[1; 4]);
-    put_i16s(&mut bytes, 0x2E, &[1]);
-    put_i16s(&mut bytes, 0x38, &[-1, 0]);
-    put_i16s(&mut bytes, 0x42, &[1]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    put_i16s(&mut bytes, 0x6CE, &[-1; 4]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .armor(45)
+        .weap_types(&[-1; 8])
+        .weap_counts(&[1; 4])
+        .tech_level(1)
+        .explode1(-1)
+        .inherent_ai(1)
+        .default_items(&[-1; 8])
+        .build()
 }
 
 /// A `shän` whose base image is `rlëD` `image`, one set of 36 rotations.
 fn ship_anim(image: i16) -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[image, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(image)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// A `spïn` naming `rlëD` `image`, one frame across.
@@ -262,13 +199,6 @@ fn listing(stellar: i16) -> Vec<u8> {
     put_i16s(&mut bytes, 0x24, &[stellar]);
     put_i16s(&mut bytes, 0x44, &[-1; 8]);
     put_i16s(&mut bytes, 0x64, &[0, -1]);
-    bytes
-}
-
-/// [`pad`] with a commodity exchange too (`Flags` 0x43).
-fn trading_pad() -> Vec<u8> {
-    let mut bytes = pad();
-    bytes[0x06..0x0A].copy_from_slice(&0x43_u32.to_be_bytes());
     bytes
 }
 
@@ -572,8 +502,7 @@ fn game_data_named(
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(fork.build().bytes);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// One `DITL` user item at (left, top, width, height), enabled or not.
@@ -873,7 +802,8 @@ fn interface() -> InterfaceData {
     })
     .build()
     .bytes;
-    InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, fork), path).expect("loads")
 }
 
 /// Never fires; every draw is the last outcome.
@@ -995,17 +925,11 @@ impl Game {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request. The nav brackets' corners (`cicn`
-    /// 10000-10003), which the press's selection draws, may be missing
-    /// from the fixture, so the frames' image failures are not checked.
+    /// Draws frames until the dock approach has cleared the request.
     fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frames += 1;
-            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        let _ = self.app.take_failures();
+        self.settle_until("the dock approach's clearance", |game| {
+            game.session().dock_cleared()
+        });
     }
 
     fn showing(&self) -> Showing {
@@ -1041,7 +965,7 @@ impl Game {
             .collect()
     }
 
-    /// L requests clearance, a few frames let the dock approach clear it,
+    /// L requests clearance, frames until the dock approach clears it,
     /// and a second L lands.
     fn land(&mut self) {
         self.tap(Key::Char('l'));
@@ -1081,28 +1005,20 @@ impl Game {
             .and_then(nova_view::spaceport::BarScreen::offer_dialog)
     }
 
-    /// Sends redraws until an offer opens over the bar, at most two
-    /// seconds', and gives its mission; `None` when none opens.
-    fn await_offer(&mut self) -> Option<MissionId> {
-        for _ in 0..120 {
-            self.frame();
-            if let Some(offer) = self.offer() {
-                return Some(offer.prompt().mission);
-            }
-        }
-        None
+    /// Draws frames until an offer opens over the bar, and gives its
+    /// mission.
+    fn await_offer(&mut self) -> MissionId {
+        self.settle_until("an offer over the bar", |game| game.offer().is_some());
+        self.offer().expect("open").prompt().mission
     }
 
-    /// Sends redraws until a mission text shows, at most two seconds',
-    /// and gives it; `None` when none shows.
-    fn await_text(&mut self) -> Option<String> {
-        for _ in 0..120 {
-            self.frame();
-            if let Some(text) = self.shown_text() {
-                return Some(text);
-            }
-        }
-        None
+    /// Draws frames until a mission text shows over the spaceport, and
+    /// gives it.
+    fn await_text(&mut self) -> String {
+        self.settle_until("a mission text over the spaceport", |game| {
+            game.shown_text().is_some()
+        });
+        self.shown_text().expect("shown")
     }
 
     /// Accepts both of the mission computer's offers, closing the run's
@@ -1218,13 +1134,6 @@ fn holding(pilot: &Pilot, held: &[(usize, i16, Option<i16>, Option<i16>)]) -> Pi
     nova_sim::save::decode(&save.to_string()).expect("a pilot")
 }
 
-/// `pilot` with every mission slot taken by the errand, mission 129, as
-/// its save lists them.
-fn busy(pilot: &Pilot) -> Pilot {
-    let held: Vec<_> = (0..SLOTS).map(|slot| (slot, 129, None, None)).collect();
-    holding(pilot, &held)
-}
-
 /// `pilot` holding the run, mission 128, in slot 0, its deadline due:
 /// no days left.
 fn due(pilot: &Pilot) -> Pilot {
@@ -1264,45 +1173,6 @@ fn the_mission_computers_selected_text_is_loaded_through_flight() {
         .lines()
         .concat();
     assert_eq!(shown, "4".repeat(24), "loaded, its letters drawn");
-}
-
-#[test]
-fn the_mission_computer_shows_the_offers_name_cut_then_filled_on_its_first_frame() {
-    // Item 5 is 269 wide: the stored name is cut to 268 in Times 18
-    // (9.9 a character in `MonoMetrics`), 26 characters and the
-    // ellipsis, before its tags are filled.
-    let data = game_data_named(
-        Named {
-            run: b"Run to <DST> by the long road home;courier",
-            bar: "Smoke and quiet talk.",
-        },
-        &timed(mission(128, 200, 201)),
-        bar_job(),
-        "Take this to <DST>.",
-        -1,
-        &pad(),
-        ForkBuilder::new(),
-        |fork| fork,
-    );
-    let store = MemoryPilots::new();
-    let mut game = Game::with_data(&store, &ada(), data);
-    game.frame();
-    game.land();
-    game.click_port(MISSION_BBS);
-    let computer = game.spaceport().mission_computer().expect("open");
-    let name = computer
-        .dialog()
-        .and_then(|dialog| dialog.text(COMPUTER_NAME_ITEM))
-        .expect("the name item")
-        .lines()
-        .join(" ");
-    assert_eq!(name, "Run to Pad by the long r…", "cut, then filled");
-    let frame = game.frame();
-    assert!(
-        texts(&frame).contains(&"Run to Pad by the long r…".to_owned()),
-        "drawn on the first frame: {:?}",
-        texts(&frame)
-    );
 }
 
 /// Whether the frame drew `text`, and drew no conditional text left
@@ -1368,146 +1238,46 @@ fn the_bars_desc_shows_its_conditional_text_resolved_on_its_first_frame() {
     );
 }
 
-/// A `ränk` affiliated with `govt`, its names `name`.
-fn rank(govt: i16, name: &str) -> Vec<u8> {
-    let mut bytes = vec![0; Rank::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[govt]);
-    for at in [0x18, 0x58] {
-        bytes[at..at + name.len()].copy_from_slice(name.as_bytes());
-    }
-    bytes
-}
-
-/// The run's row name in the mission computer, opened and then closed.
-fn computer_run_name(game: &mut Game) -> String {
-    game.click_port(MISSION_BBS);
-    let name = game
-        .spaceport()
-        .mission_computer()
-        .expect("open")
-        .computer()
-        .rows[0]
-        .name
-        .clone();
-    game.tap(Key::Escape);
-    assert!(game.spaceport().mission_computer().is_none(), "closed");
-    name
-}
-
 #[test]
-fn a_spaceport_desc_naming_srk_resets_the_governments_a_later_computer_row_reads() {
-    // Ranks 200 ("Cdr", of gövt 128) and 201 ("Ad", of 129), both held.
-    // The Pad's dësc and the run's offer text cross the governments the
-    // way the session's tests do; the bar's names no rank.
-    let crossed = "Earlier: <PRK128> <SRK129>.";
-    let data = game_data_named(
-        Named {
-            run: b"Run <PRK128>",
-            bar: "Smoke.",
-        },
-        &timed(mission(128, 200, 201)),
-        bar_job(),
-        crossed,
-        -1,
-        &pad(),
-        ForkBuilder::new(),
-        |fork| {
-            fork.resource(Desc::TYPE, 128, None, &desc(crossed))
-                .resource(Rank::TYPE, 200, None, &rank(128, "Cdr"))
-                .resource(Rank::TYPE, 201, None, &rank(129, "Ad"))
-        },
-    );
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(&ada())).expect("a save");
-    save["ranks"] = serde_json::json!([200, 201]);
-    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let store = MemoryPilots::new();
-    let mut game = Game::with_data(&store, &pilot, data);
-    game.frame();
-    game.land();
-
-    // The landing loaded the Pad's dësc, so the computer's names, munged
-    // before its text loads (@0xa0947), read the governments it left.
-    assert_eq!(computer_run_name(&mut game), "Run Ad");
-    assert_eq!(
-        computer_run_name(&mut game),
-        "Run Ad",
-        "the run's own text left them the same"
-    );
-
-    // The bar's screen load resets them (@0x71926-0x71930), and with no
-    // government remembered the tag is left as written (@0x9d53d-0x9d5a5).
-    game.click_port(BAR);
-    assert!(game.spaceport().open_bar().is_some(), "in the bar");
-    game.tap(Key::Escape);
-    assert!(game.spaceport().open_bar().is_none(), "left");
-    assert_eq!(computer_run_name(&mut game), "Run <PRK128>");
-}
-
-#[test]
-fn the_mission_computer_lists_offers_accepts_them_and_their_texts_show() {
+fn mission_bbs_opens_the_computer_whose_accept_reaches_the_session_and_whose_texts_show() {
     let store = MemoryPilots::new();
     let mut game = Game::with_pilot(&store, &ada());
     game.frame();
     game.land();
 
-    // Mission BBS lists both offers, the first one's text filled.
+    // Mission BBS opens the session's computer.
     game.click_port(MISSION_BBS);
     let computer = game.spaceport().mission_computer().expect("open");
     assert_eq!(computer.problem(), None);
-    let shown = texts(&game.frame());
-    for text in [
-        "The following missions are available here:",
-        "Run to Pad",
-        "Errand",
-        "Take this to Pad.",
-        "Accept",
-        "Leave",
-    ] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
 
-    // Accept shows its BriefText, filled, over the computer, which lists
-    // the errand alone.
+    // Accept reaches the session, which saves it, and its BriefText shows
+    // over the computer, handed back once the text closes.
     game.accept();
-    assert_eq!(game.active(), [(0, MissionId(128))]);
-    assert_eq!(game.shown_text().as_deref(), Some("Off you go to Pad."));
-    let shown = texts(&game.frame());
-    assert!(
-        shown.contains(&"Off you go to Pad.".to_owned()),
-        "{shown:?}"
-    );
-    game.tap(Key::Enter);
-    assert_eq!(game.shown_text(), None);
-    let computer = game.spaceport().mission_computer().expect("open again");
-    let names: Vec<_> = computer
-        .computer()
-        .rows
-        .iter()
-        .map(|row| row.name.as_str())
-        .collect();
-    assert_eq!(names, ["Errand"]);
-
-    // Accepting the errand, which has no text, leaves nothing: the
-    // computer closes with nothing said.
-    game.accept();
-    assert!(game.spaceport().mission_computer().is_none());
-    assert_eq!(game.shown_text(), None);
-    assert_eq!(game.active(), [(0, MissionId(128)), (1, MissionId(129))]);
-    let missions: Vec<_> = saved(&store)
+    let holds_the_run =
+        |missions: Vec<(u8, MissionId)>| missions.iter().any(|&(_, m)| m == MissionId(128));
+    assert!(holds_the_run(game.active()), "accepted");
+    let saved_missions: Vec<_> = saved(&store)
         .missions()
         .iter()
         .map(|(slot, active)| (slot, active.mission))
         .collect();
-    assert_eq!(missions, game.active(), "saved");
+    assert!(holds_the_run(saved_missions), "saved");
+    assert!(game.shown_text().is_some(), "the BriefText");
+    game.tap(Key::Enter);
+    assert_eq!(game.shown_text(), None);
+    assert!(
+        game.spaceport().mission_computer().is_some(),
+        "the computer again"
+    );
 
-    // Taking off and landing again completes the run: its CompText shows
-    // over the spaceport.
+    // Taking off and landing again shows the CompText over the spaceport,
+    // and Escape goes to the text.
+    game.tap(Key::Escape);
+    assert!(game.spaceport().mission_computer().is_none(), "closed");
     game.tap(Key::Escape);
     assert_eq!(game.showing(), Showing::Flight);
     game.land();
-    assert_eq!(game.active(), [(1, MissionId(129))]);
-    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
+    assert!(game.shown_text().is_some(), "the CompText");
     game.tap(Key::Escape);
     assert_eq!(game.shown_text(), None);
     assert_eq!(
@@ -1518,17 +1288,10 @@ fn the_mission_computer_lists_offers_accepts_them_and_their_texts_show() {
 }
 
 /// [`game_data`] where the run's `OnSuccess` moves the player to Beta
-/// (`M129`), with no `Q` after it, Beta listing the Dock (129) alone, the
-/// Pad has a trade center too (`Flags` 0x43), and the bar's news has a
-/// commercial (`STR#` 8100) and a story (8101).
+/// (`M129`), with no `Q` after it, Beta listing the Dock (129) alone.
 fn moving_run_data() -> Rc<GameData> {
-    let mut run = timed(mission(128, 200, 201));
-    let on_success = b"M129\0";
-    run[0x359..0x359 + on_success.len()].copy_from_slice(on_success);
-    let news = beta()
-        .resource(StrList::TYPE, 8100, None, &str_list(&["Buy Bibble"]))
-        .resource(StrList::TYPE, 8101, None, &str_list(&["Nothing new"]));
-    game_data_around(&run, bar_job(), &flagged_pad(0x43), news)
+    let run = succeeds_into(timed(mission(128, 200, 201)), b"M129\0");
+    game_data_around(&run, bar_job(), &pad(), beta())
 }
 
 /// `STR#` of `strings`.
@@ -1578,90 +1341,29 @@ fn port_bar_texts(game: &Game) -> Vec<String> {
 }
 
 #[test]
-fn a_comp_text_shows_the_stellar_landed_on_and_a_shop_closing_on_successs_move() {
-    let store = MemoryPilots::new();
-    let mut game = Game::with_data(&store, &ada(), moving_run_data());
-    game.frame();
-    game.land();
-    game.click_port(MISSION_BBS);
-    game.accept();
-    game.tap(Key::Enter);
-    for _ in 0..3 {
-        if game.showing() == Showing::Spaceport {
-            game.tap(Key::Escape);
-        }
-    }
-    assert_eq!(game.showing(), Showing::Flight);
-
-    // Landing at the run's return completes it: OnSuccess's M129 selects
-    // the Dock, but under the CompText the port's bar names the Pad.
-    game.land();
-    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
-    assert_eq!(
-        game.session().nav_mode(),
-        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(129)))
-    );
-    let bar = port_bar_texts(&game);
-    assert!(bar.contains(&"Pad".to_owned()), "{bar:?}");
-    assert!(!texts(&game.frame()).contains(&"Dock".to_owned()));
-    game.tap(Key::Escape);
-    assert_eq!(game.shown_text(), None);
-    assert!(!texts(&game.frame()).contains(&"Dock".to_owned()), "held");
-
-    // The Trade Center's close redraws it: the Dock.
-    game.click_port(7);
-    assert!(game.spaceport().open_trade().is_some(), "trading");
-    game.tap(Key::Escape);
-    assert!(game.spaceport().open_trade().is_none(), "closed");
-    let bar = port_bar_texts(&game);
-    assert!(bar.contains(&"Dock".to_owned()), "{bar:?}");
-    assert!(texts(&game.frame()).contains(&"Dock".to_owned()));
-}
-
-#[test]
-fn a_landed_m_in_on_accept_is_undone_as_the_mission_computer_closes() {
+fn the_mission_computers_close_reaches_flight_whose_restore_reaches_the_session() {
     let store = MemoryPilots::new();
     let mut game = Game::with_data(&store, &ada(), moving_accept_data());
     game.frame();
     game.land();
     game.click_port(MISSION_BBS);
     game.accept();
+    let pad = nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128)));
+    assert_ne!(game.session().nav_mode(), pad, "the accept's M moved it");
 
-    // Under the BriefText the bar is still the one held before the accept,
-    // naming the Pad: the computer redraws nothing before it
-    // (`_DoMissionDialog` @0xa3b37-0xa3bb4), and `OnAccept`'s `M` marks
-    // nothing. The brief's close redraws it.
-    assert_eq!(game.shown_text().as_deref(), Some("Off you go to Pad."));
-    assert_eq!(
-        game.session().nav_mode(),
-        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(129)))
-    );
-    let bar = port_bar_texts(&game);
-    assert!(bar.contains(&"Pad".to_owned()), "{bar:?}");
-    assert!(!bar.contains(&"Dock".to_owned()), "{bar:?}");
-
-    // The computer's close restores the Pad and draws it.
+    // The computer's close restores the nav it opened with.
     game.tap(Key::Enter);
     if game.spaceport().mission_computer().is_some() {
         game.tap(Key::Escape);
     }
     assert!(game.spaceport().mission_computer().is_none(), "closed");
     assert_eq!(game.showing(), Showing::Spaceport);
-    assert_eq!(
-        game.session().nav_mode(),
-        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128)))
-    );
-    let bar = port_bar_texts(&game);
-    assert!(bar.contains(&"Pad".to_owned()), "{bar:?}");
-    let shown = texts(&game.frame());
-    assert!(shown.contains(&"Pad".to_owned()), "{shown:?}");
-    assert!(!shown.contains(&"Dock".to_owned()), "{shown:?}");
+    assert_eq!(game.session().nav_mode(), pad, "restored");
 }
 
 /// Over [`moving_run_data`]: the run and the errand accepted, the run
 /// completed on landing again, its `OnSuccess` selecting the Dock, and
-/// its `CompText` closed, the port's bar still naming the Pad, held, and
-/// the errand left active.
+/// its `CompText` closed, the port's bar still naming the Pad, held.
 fn docked_with_the_dock_held(store: &MemoryPilots) -> Game {
     let mut game = Game::with_data(store, &ada(), moving_run_data());
     game.frame();
@@ -1680,101 +1382,21 @@ fn docked_with_the_dock_held(store: &MemoryPilots) -> Game {
     game.land();
     game.tap(Key::Escape);
     assert_eq!(game.shown_text(), None, "the CompText closed");
-    assert_eq!(game.active(), [(1, MissionId(129))], "the errand");
-    assert_eq!(
-        game.session().nav_mode(),
-        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(129)))
-    );
     let bar = port_bar_texts(&game);
     assert!(bar.contains(&"Pad".to_owned()), "held: {bar:?}");
     game
 }
 
 #[test]
-fn the_mission_computers_close_redraws_the_port_bars_nav() {
+fn the_bars_leave_reaches_flights_status_refresh() {
     let store = MemoryPilots::new();
     let mut game = docked_with_the_dock_held(&store);
-
-    // Mission BBS, then its close, which redraws the nav: the Dock.
-    game.click_port(MISSION_BBS);
-    if game.spaceport().mission_computer().is_some() {
-        game.tap(Key::Escape);
-    } else {
-        game.tap(Key::Enter);
-    }
-    assert!(game.spaceport().mission_computer().is_none());
-    assert_eq!(game.shown_text(), None);
+    game.click_port(BAR);
+    assert!(game.spaceport().open_bar().is_some(), "in the bar");
+    game.tap(Key::Escape);
+    assert!(game.spaceport().open_bar().is_none(), "left");
     let bar = port_bar_texts(&game);
-    assert!(bar.contains(&"Dock".to_owned()), "{bar:?}");
-    assert!(texts(&game.frame()).contains(&"Dock".to_owned()));
-}
-
-#[test]
-fn each_bar_side_closing_redraws_the_port_bars_nav() {
-    type Step = fn(&mut Game);
-    let rows: [(&str, Step, Step); 4] = [
-        (
-            "the bar's Leave (@0x4945e)",
-            |game| {
-                game.click_port(BAR);
-                assert!(game.spaceport().open_bar().is_some(), "in the bar");
-            },
-            |game| {
-                game.tap(Key::Escape);
-                assert!(game.spaceport().open_bar().is_none(), "left");
-            },
-        ),
-        (
-            "News's close (@0x48153)",
-            |game| {
-                game.click_port(BAR);
-                game.tap(Key::Char('n'));
-                let bar = game.spaceport().open_bar().expect("in the bar");
-                let news = bar.news_screen().expect("the news");
-                assert_eq!(news.problem(), None, "laid out");
-            },
-            |game| {
-                game.tap(Key::Escape);
-                let bar = game.spaceport().open_bar().expect("back in the bar");
-                assert!(bar.news_screen().is_none());
-            },
-        ),
-        (
-            "player info's close (@0x5a725)",
-            |game| {
-                game.tap(Key::Char('p'));
-                let open = game.spaceport().player_info().expect("player info");
-                assert_eq!(open.problem(), None, "laid out");
-            },
-            |game| {
-                game.tap(Key::Escape);
-                assert!(game.spaceport().player_info().is_none());
-            },
-        ),
-        (
-            "mission info's close (@0x9e769)",
-            |game| {
-                game.tap(Key::Char('i'));
-                let open = game.spaceport().mission_info().expect("mission info");
-                assert_eq!(open.problem(), None, "laid out");
-            },
-            |game| {
-                game.tap(Key::Escape);
-                assert!(game.spaceport().mission_info().is_none());
-            },
-        ),
-    ];
-    for (what, open, close) in rows {
-        let store = MemoryPilots::new();
-        let mut game = docked_with_the_dock_held(&store);
-        open(&mut game);
-        let bar = port_bar_texts(&game);
-        assert!(bar.contains(&"Pad".to_owned()), "{what}: held: {bar:?}");
-        close(&mut game);
-        let bar = port_bar_texts(&game);
-        assert!(bar.contains(&"Dock".to_owned()), "{what}: {bar:?}");
-        assert!(texts(&game.frame()).contains(&"Dock".to_owned()), "{what}");
-    }
+    assert!(bar.contains(&"Dock".to_owned()), "refreshed: {bar:?}");
 }
 
 /// The Pad with an outfitter and a shipyard too (`Flags` 0x4D), of tech
@@ -1785,28 +1407,17 @@ fn shopping_pad() -> Vec<u8> {
     bytes
 }
 
-/// The "Racer" (129), for sale and for hire every day at 1,000 credits,
-/// whose `OnPurchase` moves the player to Beta (`M129`); the "Scout"
-/// (130), for sale every day at 1,000 credits; and a fuel pod (128),
-/// massless, at 100 credits, up to 10.
+/// The "Racer" (129), for sale every day at 1,000 credits, whose
+/// `OnPurchase` moves the player to Beta (`M129`), and the "Scout" (130),
+/// for sale every day at 1,000 credits.
 fn shop_goods() -> ForkBuilder {
-    let mut racer = ship();
-    racer[0x30..0x34].copy_from_slice(&1000_i32.to_be_bytes());
-    put_i16s(&mut racer, 0x388, &[100, 100]);
-    let on_purchase = b"M129\0";
-    let mut scout = racer.clone();
-    put_i16s(&mut scout, 0x388, &[100, 0]);
-    racer[0x26A..0x26A + on_purchase.len()].copy_from_slice(on_purchase);
-    let mut pod = vec![0; Outfit::SIZE.expect("fixed")];
-    put_i16s(&mut pod, 0x00, &[10, 0, 1, 0, 0, 10]);
-    pod[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());
-    put_i16s(&mut pod, 0x3F0, &[100, -1]);
+    let scout = ShipBuilder::from_bytes(ship()).cost(1000).buy_random(100);
+    let racer = scout.clone().on_purchase("M129").build();
     beta()
         .resource(Ship::TYPE, 129, Some(b"Racer"), &racer)
         .resource(ShipAnim::TYPE, 129, None, &ship_anim(2000))
-        .resource(Ship::TYPE, 130, Some(b"Scout"), &scout)
+        .resource(Ship::TYPE, 130, Some(b"Scout"), &scout.build())
         .resource(ShipAnim::TYPE, 130, None, &ship_anim(2000))
-        .resource(Outfit::TYPE, 128, Some(b"Fuel Pod"), &pod)
 }
 
 /// [`game_data`] at the [`shopping_pad`], with the [`shop_goods`].
@@ -1819,8 +1430,6 @@ fn shopping_data() -> Rc<GameData> {
     )
 }
 
-/// The Outfitter's item.
-const OUTFITTER: usize = 8;
 /// The Shipyard's item.
 const SHIPYARD: usize = 9;
 
@@ -1846,10 +1455,6 @@ fn bought_the_racer(store: &MemoryPilots) -> Game {
     assert_eq!(game.session().ship(), nova_sim::ShipId(129), "bought");
     game.tap(Key::Escape);
     assert!(game.spaceport().open_shipyard().is_none(), "closed");
-    assert_eq!(
-        game.session().nav_mode(),
-        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128)))
-    );
     let bar = port_bar_texts(&game);
     assert!(bar.contains(&"Dock".to_owned()), "the close's: {bar:?}");
     game
@@ -1873,34 +1478,13 @@ fn select_cell(game: &mut Game, cell: usize) {
 }
 
 #[test]
-fn the_shipyards_info_panels_close_redraws_the_port_bar() {
-    let store = MemoryPilots::new();
-    let mut game = bought_the_racer(&store);
-    game.click_port(SHIPYARD);
-    select_the_racer(&mut game);
-    game.tap(Key::Space);
-    let shipyard = game.spaceport().open_shipyard().expect("shipbuying");
-    assert!(shipyard.info_panel().is_some(), "the Info panel");
-    let bar = port_bar_texts(&game);
-    assert!(bar.contains(&"Dock".to_owned()), "held: {bar:?}");
-    game.tap(Key::Escape);
-    let shipyard = game.spaceport().open_shipyard().expect("still open");
-    assert!(shipyard.info_panel().is_none(), "closed");
-    let bar = port_bar_texts(&game);
-    assert!(bar.contains(&"Pad".to_owned()), "@0x5bac2: {bar:?}");
-}
-
-#[test]
-fn the_shipyards_name_prompts_cancel_redraws_the_port_bar() {
+fn the_shipyards_name_prompts_cancel_reaches_flights_decline() {
+    // The bar held naming the Dock: flight's decline redraws it whole.
     let store = MemoryPilots::new();
     let mut game = bought_the_racer(&store);
     game.click_port(SHIPYARD);
     select_cell(&mut game, 1);
     game.tap(Key::Char('b'));
-    let shipyard = game.spaceport().open_shipyard().expect("shipbuying");
-    assert!(shipyard.naming().is_some(), "the name prompt");
-    let bar = port_bar_texts(&game);
-    assert!(bar.contains(&"Dock".to_owned()), "held: {bar:?}");
     let cancel = game
         .spaceport()
         .open_shipyard()
@@ -1911,99 +1495,12 @@ fn the_shipyards_name_prompts_cancel_redraws_the_port_bar() {
     game.click(cancel);
     let shipyard = game.spaceport().open_shipyard().expect("still open");
     assert!(shipyard.naming().is_none(), "cancelled");
-    assert_eq!(game.session().ship(), nova_sim::ShipId(129), "not bought");
     let bar = port_bar_texts(&game);
-    assert!(bar.contains(&"Pad".to_owned()), "@0x5eb73: {bar:?}");
+    assert!(bar.contains(&"Pad".to_owned()), "redrawn: {bar:?}");
 }
 
 #[test]
-fn the_hire_screens_close_redraws_the_port_bar() {
-    let store = MemoryPilots::new();
-    let mut game = bought_the_racer(&store);
-    game.click_port(BAR);
-    game.tap(Key::Char('h'));
-    let bar = game.spaceport().open_bar().expect("in the bar");
-    assert!(bar.hire_screen().is_some(), "the hire screen");
-    let shown = port_bar_texts(&game);
-    assert!(shown.contains(&"Dock".to_owned()), "held: {shown:?}");
-    game.tap(Key::Escape);
-    let bar = game.spaceport().open_bar().expect("back in the bar");
-    assert!(bar.hire_screen().is_none(), "cancelled");
-    let shown = port_bar_texts(&game);
-    assert!(shown.contains(&"Pad".to_owned()), "@0x5f8d4: {shown:?}");
-    assert_eq!(
-        game.session().nav_mode(),
-        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128))),
-        "restored"
-    );
-}
-
-#[test]
-fn the_hire_screens_info_panels_close_redraws_the_port_bar() {
-    let store = MemoryPilots::new();
-    let mut game = bought_the_racer(&store);
-    game.click_port(BAR);
-    game.tap(Key::Char('h'));
-    // It opens with nothing selected: Right picks the first ship.
-    game.tap(Key::Right);
-    game.tap(Key::Space);
-    let hire = game
-        .spaceport()
-        .open_bar()
-        .and_then(|bar| bar.hire_screen())
-        .expect("the hire screen");
-    assert!(hire.info_panel().is_some(), "the Info panel");
-    let shown = port_bar_texts(&game);
-    assert!(shown.contains(&"Dock".to_owned()), "held: {shown:?}");
-    game.tap(Key::Escape);
-    let hire = game
-        .spaceport()
-        .open_bar()
-        .and_then(|bar| bar.hire_screen())
-        .expect("the hire screen still open");
-    assert!(hire.info_panel().is_none(), "closed");
-    let shown = port_bar_texts(&game);
-    assert!(shown.contains(&"Pad".to_owned()), "@0x5bac2: {shown:?}");
-}
-
-#[test]
-fn an_outfitter_cancel_draws_the_nav_the_shipyards_close_restored() {
-    let store = MemoryPilots::new();
-    let mut game = bought_the_racer(&store);
-
-    // Option-B asks how many fuel pods; Cancel buys none, and the buy's
-    // draw shows the Pad.
-    game.click_port(OUTFITTER);
-    let cell = game
-        .spaceport()
-        .open_outfitter()
-        .and_then(|outfitter| outfitter.cell_bounds(0))
-        .expect("the pod's cell")
-        .center();
-    game.click(cell);
-    let cash = game.session().pilot().cash();
-    game.key(Key::Alt, true);
-    game.tap(Key::Char('b'));
-    game.key(Key::Alt, false);
-    let cancel = game
-        .spaceport()
-        .open_outfitter()
-        .and_then(|outfitter| outfitter.quantity())
-        .and_then(|asking| asking.dialog().item_bounds(CANCEL_ITEM))
-        .expect("the quantity dialog's Cancel")
-        .center();
-    game.click(cancel);
-    let outfitter = game.spaceport().open_outfitter().expect("still open");
-    assert!(outfitter.quantity().is_none(), "cancelled");
-    assert_eq!(game.session().pilot().owned(nova_sim::OutfitId(128)), 0);
-    assert_eq!(game.session().pilot().cash(), cash, "nothing bought");
-    let bar = port_bar_texts(&game);
-    assert!(bar.contains(&"Pad".to_owned()), "{bar:?}");
-    assert!(!bar.contains(&"Dock".to_owned()), "{bar:?}");
-}
-
-#[test]
-fn the_bar_offers_its_missions_one_after_another_and_a_refusal_runs_on_refuse() {
+fn the_bars_offers_reach_the_session_and_ns_refusal_goes_through_it() {
     let store = MemoryPilots::new();
     let mut game = Game::with_pilot(&store, &ada());
     game.frame();
@@ -2011,103 +1508,20 @@ fn the_bar_offers_its_missions_one_after_another_and_a_refusal_runs_on_refuse() 
     game.click_port(BAR);
     assert!(game.spaceport().open_bar().is_some(), "in the bar");
 
-    // A quarter second on, the bar job is offered.
-    assert_eq!(game.await_offer(), Some(MissionId(130)));
-    let shown = texts(&game.frame());
-    for text in ["Ada, join us.", "I'm in", "No"] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
-    // N refuses it; it has no RefuseText. An accept would drop the
-    // second offer too (`offer_shift`), so this one is refused.
+    // The bar's ask is answered with the session's offer; N refuses it.
+    game.await_offer();
     game.tap(Key::Char('n'));
     assert!(game.offer().is_none());
-    assert_eq!(game.shown_text(), None);
 
-    // After the gap, the second; N refuses it, its RefuseText shows and
-    // its OnRefuse sets bit 7.
-    assert_eq!(game.await_offer(), Some(MissionId(131)));
-    let shown = texts(&game.frame());
-    for text in ["One more job.", "Yes", "No"] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
+    // Offered again: N's refusal runs through the session, whose
+    // RefuseText shows and whose OnRefuse is saved.
+    game.await_offer();
     game.tap(Key::Char('n'));
     assert!(game.offer().is_none());
-    assert_eq!(game.shown_text().as_deref(), Some("Suit yourself."));
-    assert_eq!(game.active(), [], "refused");
+    assert!(game.shown_text().is_some(), "the RefuseText");
     let bit = nova_sim::control::Bit::new(7).expect("in range");
     assert!(game.session().control_bit(bit));
     assert!(saved(&store).control_bit(bit), "saved");
-    game.tap(Key::Enter);
-
-    // Nothing more is offered.
-    assert_eq!(game.await_offer(), None);
-    assert!(game.spaceport().open_bar().is_some(), "still in the bar");
-}
-
-#[test]
-fn accepting_the_bar_job_drops_the_second_offer_with_it() {
-    let store = MemoryPilots::new();
-    let mut game = Game::with_pilot(&store, &ada());
-    game.frame();
-    game.land();
-    game.click_port(BAR);
-
-    // Return accepts the bar job, and its BriefText shows.
-    assert_eq!(game.await_offer(), Some(MissionId(130)));
-    game.tap(Key::Enter);
-    assert!(game.offer().is_none());
-    assert_eq!(game.active(), [(0, MissionId(130))]);
-    assert_eq!(game.shown_text().as_deref(), Some("Welcome aboard."));
-    game.tap(Key::Enter);
-    assert_eq!(game.shown_text(), None);
-
-    // The list shifts from where the bar job was found, so the second
-    // offer goes with it (`_OfferMissionFromPort` @0xa377d-0xa37a1).
-    assert_eq!(game.await_offer(), None);
-    assert!(game.spaceport().open_bar().is_some(), "still in the bar");
-}
-
-#[test]
-fn an_offer_refused_for_want_of_a_slot_stays_suppressed_until_the_ship_lands_again() {
-    let store = MemoryPilots::new();
-    let mut game = Game::with_pilot(&store, &busy(&ada()));
-    game.frame();
-    game.land();
-    game.click_port(BAR);
-    let full: Vec<_> = (0..SLOTS)
-        .map(|slot| (u8::try_from(slot).expect("a slot"), MissionId(129)))
-        .collect();
-
-    // Every slot is taken: accepting the bar job is refused, and the
-    // second is offered in its place.
-    assert_eq!(game.await_offer(), Some(MissionId(130)));
-    game.tap(Key::Enter);
-    assert!(game.offer().is_none());
-    assert_eq!(game.active(), full, "refused");
-    assert_eq!(game.await_offer(), Some(MissionId(131)), "not the bar job");
-    game.tap(Key::Enter);
-    assert_eq!(game.active(), full, "refused");
-
-    // Nothing more is offered in this visit.
-    assert_eq!(game.await_offer(), None);
-
-    // Leaving the bar and coming back offers nothing: nothing was offered
-    // at in between.
-    game.tap(Key::Escape);
-    assert!(game.spaceport().open_bar().is_none(), "left the bar");
-    game.frame();
-    game.click_port(BAR);
-    assert!(game.spaceport().open_bar().is_some(), "back in the bar");
-    assert_eq!(game.await_offer(), None, "still suppressed");
-
-    // Taking off, landing again and opening the bar offers the bar job
-    // again.
-    game.tap(Key::Escape);
-    game.tap(Key::Escape);
-    assert_eq!(game.showing(), Showing::Flight);
-    game.land();
-    game.click_port(BAR);
-    assert_eq!(game.await_offer(), Some(MissionId(130)));
 }
 
 #[test]
@@ -2126,7 +1540,7 @@ fn a_bar_job_whose_dëscs_have_a_picture_shows_the_picture_variants() {
     game.click_port(BAR);
 
     // The offer opens in DLOG 1020, 651 wide, its picture PICT 5008.
-    assert_eq!(game.await_offer(), Some(MissionId(130)));
+    assert_eq!(game.await_offer(), MissionId(130));
     let offer = game.offer().expect("open");
     assert_eq!(offer.prompt().graphic, Some(5008));
     assert_eq!(
@@ -2186,14 +1600,14 @@ fn an_offer_that_cannot_be_refused_with_no_text_is_accepted_without_a_dialog() {
 
     // A quarter second on, the bar job is accepted with no offer dialog,
     // and its BriefText shows.
-    assert_eq!(game.await_text().as_deref(), Some("Welcome aboard."));
+    assert_eq!(game.await_text(), "Welcome aboard.");
     assert!(game.offer().is_none(), "no offer dialog");
     assert_eq!(game.active(), [(0, MissionId(130))]);
     game.tap(Key::Enter);
     assert_eq!(game.shown_text(), None);
 
     // After the gap, the second is offered.
-    assert_eq!(game.await_offer(), Some(MissionId(131)));
+    assert_eq!(game.await_offer(), MissionId(131));
 }
 
 #[test]
@@ -2253,95 +1667,44 @@ fn the_spaceports_mission_info_loads_the_quick_brief_of_the_slot_selected() {
 }
 
 #[test]
-fn the_trade_centers_i_opens_mission_info_over_it_and_loads_the_quick_brief_through_flight() {
-    // A l33t resource turns the leet mode on, and the chance replaces
-    // every letter drawn: only a loaded text draws.
-    let mut run = mission(128, 200, 201);
-    put_i16s(&mut run, 0x36, &[205]);
-    let data = game_data_landing(
-        &run,
-        bar_job(),
-        "Take this to <DST>.",
-        -1,
-        &trading_pad(),
-        |fork| {
-            fork.resource(ResType::new(*b"l33t"), 128, None, &[])
-                .resource(Desc::TYPE, 205, None, &desc(&"a".repeat(24)))
-        },
-    );
-    let store = MemoryPilots::new();
-    let pilot = holding(&ada(), &[(0, 128, None, None)]);
-    let mut game = Game::with_chance(&store, &pilot, data, Rc::new(RefCell::new(Leetest)));
-    game.frame();
-    game.land();
-    game.click_port(7);
-    assert!(game.spaceport().open_trade().is_some(), "trading");
-    game.tap(Key::Char('i'));
-    let info = game.spaceport().mission_info().expect("open over it");
-    let shown = info
-        .dialog()
-        .and_then(|dialog| dialog.text(INFO_TEXT_ITEM))
-        .expect("the text item")
-        .lines()
-        .concat();
-    assert_eq!(shown, "4".repeat(24), "loaded, its letters drawn");
-    game.tap(Key::Enter);
-    assert!(
-        game.spaceport().mission_info().is_none(),
-        "Return closed it"
-    );
-    assert!(game.spaceport().open_trade().is_some(), "still trading");
-}
-
-#[test]
-fn mission_info_lists_the_active_missions_and_aborts_only_where_allowed() {
+fn i_opens_mission_info_whose_abort_reaches_the_session_and_the_info_comes_back() {
     let store = MemoryPilots::new();
     let mut game = Game::with_pilot(&store, &ada());
     game.frame();
     game.land();
     game.accept_both();
 
-    // I lists both, the run's QuickBrief showing its deadline.
+    // I opens the info the session gives.
     game.tap(Key::Char('i'));
     let info = game.spaceport().mission_info().expect("open");
-    let slots: Vec<_> = info.info().rows.iter().map(|row| row.slot).collect();
-    assert_eq!(slots, [0, 1]);
-    let shown = texts(&game.frame());
-    for text in [
-        "Currently active missions:",
-        "Run to Pad",
-        "Errand",
-        "Back to Pad by January 8th, 0.",
-        "Abort",
-        "Done",
-    ] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
+    assert_eq!(info.problem(), None, "laid out");
 
-    // Abort does nothing on the errand, which cannot be aborted.
-    game.tap(Key::Down);
+    // Abort on the run, selected, reaches the session, which saves it,
+    // and the screen is handed the info back, still open.
     game.click_info(ABORT_ITEM);
-    assert_eq!(game.active(), [(0, MissionId(128)), (1, MissionId(129))]);
-
-    // On the run it frees its slot; the screen lists the errand alone.
-    game.tap(Key::Up);
-    game.click_info(ABORT_ITEM);
-    assert_eq!(game.active(), [(1, MissionId(129))]);
-    let missions: Vec<_> = saved(&store)
+    let holds_the_run =
+        |missions: Vec<(u8, MissionId)>| missions.iter().any(|&(_, m)| m == MissionId(128));
+    assert!(!holds_the_run(game.active()), "aborted");
+    let saved_missions: Vec<_> = saved(&store)
         .missions()
         .iter()
         .map(|(slot, active)| (slot, active.mission))
         .collect();
-    assert_eq!(missions, [(1, MissionId(129))], "saved");
+    assert!(!holds_the_run(saved_missions), "saved");
     let info = game.spaceport().mission_info().expect("still open");
-    assert_eq!(info.info().rows.len(), 1);
+    assert!(
+        info.info().rows.iter().all(|row| row.slot != 0),
+        "the info handed back"
+    );
     game.tap(Key::Escape);
     assert!(game.spaceport().mission_info().is_none());
     assert_eq!(game.showing(), Showing::Spaceport);
 }
 
 #[test]
-fn a_missed_deadline_says_so_and_the_text_its_on_failure_queues_shows_over_flight() {
+fn the_texts_a_take_off_queues_show_over_paused_flight_and_done_returns_to_it() {
+    // The run's deadline fails on the take-off, and its OnFailure's S130
+    // queues the bar job's BriefText.
     let store = MemoryPilots::new();
     let run = fails_into(timed(mission(128, 200, 201)), b"S130\0");
     let data = game_data_from(&run, bar_job());
@@ -2349,21 +1712,12 @@ fn a_missed_deadline_says_so_and_the_text_its_on_failure_queues_shows_over_fligh
     game.frame();
     game.land();
 
-    // Leave takes off: the deadline fails the run, says so, and its
-    // OnFailure's S130 accepts the bar job, whose BriefText shows over
-    // the paused flight.
+    // Leave takes off: the text shows over the paused flight, and the
+    // message reaches flight's line.
     game.tap(Key::Escape);
     assert_eq!(game.showing(), Showing::MissionText);
-    assert_eq!(game.flight_text().as_deref(), Some("Welcome aboard."));
-    assert_eq!(
-        game.flight_message().as_deref(),
-        Some("Time limit exceeded - mission failed.")
-    );
-    assert_eq!(
-        game.active(),
-        [(1, MissionId(130))],
-        "the run's slot freed after its OnFailure took the next"
-    );
+    assert!(game.flight_text().is_some(), "the BriefText");
+    assert!(game.flight_message().is_some(), "the message");
     // The first frame after take-off only sets flight's clock, so the
     // second is the one a running flight would step on.
     let alpha = game.alpha();
@@ -2373,32 +1727,10 @@ fn a_missed_deadline_says_so_and_the_text_its_on_failure_queues_shows_over_fligh
         assert_eq!(game.alpha().to_bits(), alpha.to_bits(), "flight is paused");
     }
 
-    // Done closes it, back into flight, the message still shown.
+    // Done closes it, back into flight.
     game.tap(Key::Enter);
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.flight_text(), None);
-    assert_eq!(
-        game.flight_message().as_deref(),
-        Some("Time limit exceeded - mission failed.")
-    );
-}
-
-#[test]
-fn in_flight_i_says_there_are_no_active_missions() {
-    let store = MemoryPilots::new();
-    let mut game = Game::with_pilot(&store, &ada());
-    game.frame();
-    game.tap(Key::Char('i'));
-    assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(
-        game.flight_message().as_deref(),
-        Some("You have no active missions.")
-    );
-    let shown = texts(&game.frame());
-    assert!(
-        shown.contains(&"You have no active missions.".to_owned()),
-        "{shown:?}"
-    );
 }
 
 #[test]
@@ -2504,61 +1836,20 @@ fn accepts_into(mut mission: Vec<u8>, on_accept: &[u8]) -> Vec<u8> {
     mission
 }
 
-/// `mission` with the `DumpCargoText` `dësc` 205.
-fn dumping(mut mission: Vec<u8>) -> Vec<u8> {
-    put_i16s(&mut mission, 0x3A, &[205]);
-    mission
-}
-
-/// `mission` with the `FailText` `dësc` 206.
-fn failing(mut mission: Vec<u8>) -> Vec<u8> {
-    put_i16s(&mut mission, 0x3E, &[206]);
-    mission
-}
-
-/// `mission` with the `ShipDoneText` `dësc` 207.
-fn ship_done(mut mission: Vec<u8>) -> Vec<u8> {
-    put_i16s(&mut mission, 0x44, &[207]);
-    mission
-}
-
-/// `mission` picking its cargo up at its destination (`PickupMode` 1)
-/// and dropping it off at its return (`DropOffMode` 1), with the
-/// `LoadCargText` `dësc` 208.
-fn picking_up(mut mission: Vec<u8>) -> Vec<u8> {
-    put_i16s(&mut mission, 0x14, &[1, 1]);
-    put_i16s(&mut mission, 0x38, &[208]);
-    mission
-}
-
 /// The run's `Q`: `STR#` 25048.
 const LEAVE: &[u8] = b"Q25048\0";
 
-/// The game data with this run and bar job, `STR#` 25048 holding "Off
-/// you go.", and the `dësc`s 205 ("Unloaded at <DST>."), 206
-/// ("Failed."), 207 ("Ships seen off.") and 208 ("Loaded at <DST>.").
+/// The game data with this run and bar job, and `STR#` 25048 holding
+/// "Off you go.".
 fn leaving_data(run: &[u8], bar_job: (Vec<u8>, &str)) -> Rc<GameData> {
     game_data_built(run, bar_job, "Take this to <DST>.", |fork| {
         fork.resource(StrList::TYPE, 25048, None, &str_list(&["Off you go."]))
-            .resource(Desc::TYPE, 205, None, &desc("Unloaded at <DST>."))
-            .resource(Desc::TYPE, 206, None, &desc("Failed."))
-            .resource(Desc::TYPE, 207, None, &desc("Ships seen off."))
-            .resource(Desc::TYPE, 208, None, &desc("Loaded at <DST>."))
     })
 }
 
 /// The run, going to the Pad and back, its `OnSuccess` the `Q`.
 fn leaving_run() -> Vec<u8> {
     succeeds_into(mission(128, 200, 201), LEAVE)
-}
-
-/// `pilot` with `field` of the mission it lists `at` set to `value`, as
-/// its save lists them.
-fn with_mission_field(pilot: &Pilot, at: usize, field: &str, value: serde_json::Value) -> Pilot {
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(pilot)).expect("a save");
-    save["missions"][at][field] = value;
-    nova_sim::save::decode(&save.to_string()).expect("a pilot")
 }
 
 /// Ada holding the run in slot 0, at the Pad and back.
@@ -2654,117 +1945,6 @@ fn a_q_leaves_take_off_shows_the_text_its_deadline_queues_over_flight_before_a_f
     assert_eq!(game.session().landed(), None, "left");
     assert_eq!(game.showing(), Showing::MissionText);
     assert_eq!(game.flight_text().as_deref(), Some("Welcome aboard."));
-}
-
-#[test]
-fn a_landing_shows_the_cargo_dropped_off_then_the_comp_text_before_a_q_leaves() {
-    let store = MemoryPilots::new();
-    let data = leaving_data(&dumping(leaving_run()), bar_job());
-    let pilot = with_mission_field(&running(), 0, "aboard", true.into());
-    let pilot = with_mission_field(&pilot, 0, "cargo_tons", 1.into());
-    let mut game = Game::with_data(&store, &pilot, data);
-    game.frame();
-    game.land();
-    assert_eq!(game.shown_text().as_deref(), Some("Unloaded at Pad."));
-    game.tap(Key::Enter);
-    assert_eq!(game.showing(), Showing::Spaceport);
-    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
-    game.tap(Key::Enter);
-    assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
-}
-
-#[test]
-fn a_later_slots_fail_text_shows_after_a_qs_comp_text_before_the_leave() {
-    let store = MemoryPilots::new();
-    let (job, offer) = bar_job();
-    let data = leaving_data(&leaving_run(), (failing(job), offer));
-    let pilot = holding(
-        &ada(),
-        &[(0, 128, None, Some(128)), (1, 130, None, Some(128))],
-    );
-    let pilot = with_mission_field(&pilot, 1, "failed", "operator".into());
-    let mut game = Game::with_data(&store, &pilot, data);
-    game.frame();
-    game.land();
-    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
-    game.tap(Key::Enter);
-    assert_eq!(game.showing(), Showing::Spaceport);
-    assert_eq!(game.shown_text().as_deref(), Some("Failed."));
-    assert_eq!(game.active(), []);
-    game.tap(Key::Enter);
-    assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
-}
-
-#[test]
-fn a_landing_shows_the_ship_done_text_then_the_comp_text_before_a_q_leaves() {
-    let store = MemoryPilots::new();
-    let data = leaving_data(&ship_done(leaving_run()), bar_job());
-    let mut game = Game::with_data(&store, &running(), data);
-    game.frame();
-    game.land();
-    assert_eq!(game.shown_text().as_deref(), Some("Ships seen off."));
-    assert!(leave_due(&game));
-    game.tap(Key::Enter);
-    assert_eq!(game.showing(), Showing::Spaceport);
-    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
-    assert!(leave_due(&game));
-    game.tap(Key::Enter);
-    assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
-}
-
-/// Ada holding the run in slot 0 and, in slot 1, the bar job picking up
-/// `tons` of cargo at the Pad, with no return. Her ship has no holds, so
-/// none fits and more is refused.
-fn picking_up_at_the_pad(tons: i32) -> Pilot {
-    let pilot = holding(
-        &ada(),
-        &[(0, 128, None, Some(128)), (1, 130, None, Some(128))],
-    );
-    let pilot = with_mission_field(&pilot, 1, "return", serde_json::Value::Null);
-    with_mission_field(&pilot, 1, "cargo_tons", tons.into())
-}
-
-#[test]
-fn a_later_slots_pickup_shows_its_load_carg_text_after_a_qs_comp_text_before_the_leave() {
-    let store = MemoryPilots::new();
-    let (job, offer) = bar_job();
-    let data = leaving_data(&leaving_run(), (picking_up(job), offer));
-    let mut game = Game::with_data(&store, &picking_up_at_the_pad(0), data);
-    game.frame();
-    game.land();
-    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
-    game.tap(Key::Enter);
-    assert_eq!(game.showing(), Showing::Spaceport);
-    assert_eq!(game.shown_text().as_deref(), Some("Loaded at Pad."));
-    assert!(leave_due(&game));
-    game.tap(Key::Enter);
-    assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(game.active(), [(1, MissionId(130))], "carrying it on");
-    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
-}
-
-#[test]
-fn a_later_slots_pickup_refused_for_room_says_so_after_a_qs_comp_text_before_the_leave() {
-    let store = MemoryPilots::new();
-    let (job, offer) = bar_job();
-    let data = leaving_data(&leaving_run(), (picking_up(job), offer));
-    let mut game = Game::with_data(&store, &picking_up_at_the_pad(1), data);
-    game.frame();
-    game.land();
-    assert_eq!(game.shown_text().as_deref(), Some("Thanks from Pad."));
-    game.tap(Key::Enter);
-    assert_eq!(game.showing(), Showing::Spaceport);
-    assert_eq!(
-        game.shown_text().as_deref(),
-        Some("Your ship doesn't have enough cargo space to load this cargo.")
-    );
-    assert!(leave_due(&game));
-    game.tap(Key::Enter);
-    assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
 }
 
 /// Lands Ada, holding the run, where `job`, as mission 130, is offered
@@ -2883,8 +2063,8 @@ fn without_dialogs_a_landing_q_leaves_in_the_landings_input() {
     assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
 }
 
-// The map key on the mission dialogs: each opens flight's course map over
-// itself, marked for its mission, and closes back to it.
+// The map key on the mission dialogs: it opens flight's course map over
+// the dialog, marked for its mission, and closes back to it.
 
 /// `mission` marking its destination green on its dialogs' maps: `Flags`
 /// 0x0100.
@@ -2912,7 +2092,7 @@ impl Game {
 }
 
 #[test]
-fn m_on_the_mission_computer_opens_its_offers_map_and_closes_back_to_it() {
+fn m_on_the_mission_computer_opens_flights_map_with_its_offers_marks_and_closes_back_to_it() {
     let store = MemoryPilots::new();
     let mut game = Game::with_data(&store, &ada(), marked_data());
     game.frame();
@@ -2920,60 +2100,27 @@ fn m_on_the_mission_computer_opens_its_offers_map_and_closes_back_to_it() {
     game.click_port(MISSION_BBS);
     game.tap(Key::Char('m'));
     assert_eq!(game.showing(), Showing::FlightMap);
-    assert_eq!(game.dialog_map(), (true, true), "the Pad's system green");
+    assert_eq!(
+        game.dialog_map(),
+        (true, true),
+        "the offer's marks reached it"
+    );
     game.tap(Key::Char('m'));
     assert_eq!(game.showing(), Showing::Spaceport);
     assert!(game.spaceport().mission_computer().is_some(), "back to it");
 }
 
 #[test]
-fn m_on_the_briefing_after_an_accept_opens_its_map_and_closes_back_to_the_text() {
-    let store = MemoryPilots::new();
-    let mut game = Game::with_data(&store, &ada(), marked_data());
-    game.frame();
-    game.land();
-    game.click_port(MISSION_BBS);
-    game.accept();
-    assert_eq!(game.shown_text().as_deref(), Some("Off you go to Pad."));
-    game.tap(Key::Char('m'));
-    assert_eq!(game.showing(), Showing::FlightMap);
-    assert_eq!(game.dialog_map(), (true, true));
-    game.tap(Key::Char('m'));
-    assert_eq!(game.showing(), Showing::Spaceport);
-    assert_eq!(
-        game.shown_text().as_deref(),
-        Some("Off you go to Pad."),
-        "the briefing still open"
-    );
-}
-
-#[test]
-fn m_on_the_bars_offer_opens_its_map_and_closes_back_to_the_offer() {
-    let store = MemoryPilots::new();
-    let mut game = Game::with_pilot(&store, &ada());
-    game.frame();
-    game.land();
-    game.click_port(BAR);
-    assert_eq!(game.await_offer(), Some(MissionId(130)));
-    game.tap(Key::Char('m'));
-    assert_eq!(game.showing(), Showing::FlightMap);
-    assert_eq!(game.dialog_map(), (true, false), "the offer's, unmarked");
-    game.tap(Key::Escape);
-    assert_eq!(game.showing(), Showing::Spaceport);
-    assert!(game.offer().is_some(), "the offer still open");
-}
-
-#[test]
 fn over_flight_m_on_mission_info_opens_its_map_and_escape_returns_to_it() {
     let store = MemoryPilots::new();
     let pilot = holding(&ada(), &[(0, 128, None, Some(128))]);
-    let mut game = Game::with_data(&store, &pilot, marked_data());
+    let mut game = Game::with_pilot(&store, &pilot);
     game.frame();
     game.tap(Key::Char('i'));
     assert_eq!(game.showing(), Showing::MissionInfo);
     game.tap(Key::Char('m'));
     assert_eq!(game.showing(), Showing::FlightMap);
-    assert_eq!(game.dialog_map(), (true, true), "the run's system green");
+    assert!(game.dialog_map().0, "mission info's map");
     game.tap(Key::Escape);
     assert_eq!(game.showing(), Showing::MissionInfo, "back to it");
     assert!(game.app.screen().flight_mission_info().is_some());

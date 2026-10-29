@@ -17,7 +17,9 @@ nova-rsrc = { workspace = true, features = ["fixture"] }
 tempfile.workspace = true
 
 [features]
-# Exposes the synthetic resource-fork and .rez builders to other crates' tests.
+# Exposes to other crates' tests the synthetic resource-fork and .rez
+# builders, the shared in-memory `ForkReader` fake (`fixture::forks::MemForks`)
+# and the port's `check_contract`.
 fixture = []
 
 [lints]

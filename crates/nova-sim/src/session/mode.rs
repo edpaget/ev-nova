@@ -155,7 +155,7 @@ mod tests {
     /// A session in hyperspace, bound for 131.
     fn in_hyperspace(catalog: &FakePilotCatalog) -> Session {
         let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 0.0);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
         assert!(
             matches!(session.mode.jump(), Some(Jump::Hyperspace { .. })),
             "{:?}",

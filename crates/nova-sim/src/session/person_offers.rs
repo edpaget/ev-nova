@@ -209,7 +209,7 @@ impl Session {
     /// [`HailRefusal::NoResponse`] for a navigation stellar that does not
     /// answer, or one not shown; and [`Session::hail`]'s refusals of the
     /// ship target.
-    pub fn hail_key(
+    pub(crate) fn hail_key(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
         options: &HailOptions,
@@ -443,7 +443,10 @@ pub(super) mod tests {
     use crate::ai::NovaAi;
     use crate::catalog::{MissionRecord, PersonId, PersonRecord, SystemId, SystemTraffic};
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
+    use crate::flight::Controls;
     use crate::rulebook::Rulebook;
+    use crate::testkit::work_with;
     use crate::testkit::{Draws, FAST, FakePilotCatalog, catalog, mission, person, ship};
 
     /// System 130 (stellars 128 and 129) holds `avg_ships` of no traffic
@@ -607,7 +610,14 @@ pub(super) mod tests {
         let (catalog, mut session) = awaiting_arrivals();
         assert_eq!(offered_to(&session), None, "Ace's");
         session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
-        session.tick_traffic(&catalog, &NovaAi::default(), &mut Draws::of(&[0, 0, 473]));
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut Draws::of(&[0, 0, 473]),
+        );
         let names: Vec<Option<i16>> = session
             .npcs()
             .iter()
@@ -616,7 +626,14 @@ pub(super) mod tests {
         assert_eq!(names, [Some(600), Some(601)], "Bee jumps in");
         assert_eq!(offered_to(&session), Some(StellarId(129)), "Bee's");
         session.chart.nav = crate::navigation::NavMode::Off;
-        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(
             offered_to(&session),
             Some(StellarId(129)),

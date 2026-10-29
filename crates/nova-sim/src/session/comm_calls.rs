@@ -78,8 +78,7 @@
 //! [`Session::game_work`] after `_AIDispatch`'s loop
 //! (`Session::dispatch_npcs`), the fighters launched and thinking in it
 //! among the slots, and again after the ship loop for the docks and
-//! repairs the fly half made; in the separate parts in
-//! [`Session::tick_combat`], after the player's display step:
+//! repairs the fly half made:
 //!
 //! - an earlier slot's scan line, stolen line, refuel or repair note
 //!   keeps a later slot's distress call and pre-scan hail off, and their
@@ -107,6 +106,7 @@ use crate::ai::CommCall;
 use crate::ai::call_for_help::{DistressFacts, calls_for_help, threatens_player};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
+#[cfg(any(test, doc))]
 use crate::comm_line::CommLine;
 use crate::hail::{Help, QUIET, likes_player};
 use crate::legal::LegalCode;
@@ -139,19 +139,22 @@ impl Session {
     /// The flight shows a line of its own for `ticks`: one the view
     /// raises and words itself, or composes from the session's (see the
     /// module docs). A line the session raised is not shown again here.
-    pub fn comm_shown(&mut self, ticks: u16) {
+    pub(crate) fn comm_shown(&mut self, ticks: u16) {
         self.space.comm_shown(ticks);
     }
 
     /// Return (`ackComm`) clears the message line: for a tick, while a
     /// line shows (`_HandlePlayer` @0x6dd22-0x6dd65).
-    pub fn comm_acknowledged(&mut self) {
+    pub(crate) fn comm_acknowledged(&mut self) {
         self.space.comm_acknowledged();
     }
 
     /// The message line's countdown, as the calls read it.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn comm_line(&self) -> CommLine {
+    pub(crate) fn comm_line(&self) -> CommLine {
         self.space.comm_line()
     }
 
@@ -160,7 +163,7 @@ impl Session {
     /// (@0x949a1) comes after a take's line, which the flight words and
     /// shows ([`Session::comm_shown`]) after the session's own pass (see
     /// the session's `plunder_loop` module).
-    pub fn comm_ticked(&mut self) {
+    pub(crate) fn comm_ticked(&mut self) {
         self.space.comm_ticked();
     }
 
@@ -195,23 +198,21 @@ impl Session {
     /// `chance`, so an earlier slot's line keeps a later slot's call off
     /// as the original's does (see the module docs). Then the
     /// reinforcement clock's tick held behind them runs, if one was (see
-    /// [`Session::tick_traffic`]). Nothing settles while the player is
+    /// the `reinforcements` module). Nothing settles while the player is
     /// landed.
     ///
     /// *Ordering against the original.* The plunder's cargo, credits and
-    /// mission failures and the repair's armour settle here, after
-    /// `before_fight`, where the original carries them out inside the
-    /// loop; the loop follows `_HandlePlayer` there too. All of it is
-    /// later in the step than the loop, but before the fight, the frame's
+    /// mission failures and the repair's armour settle here, after the
+    /// loop, where the original carries them out inside it. All of it is
+    /// later in the pass than the loop, but before the shots, the frame's
     /// drawing and any dialog, landing, jump or save, so no boundary is
     /// crossed.
     ///
-    /// `Session::tick_combat` settles it first, jumping or not, after
-    /// `before_fight`; each scan is held past the warp's lead-in by
-    /// `_ScanPlayer`'s jump-timing check (@0x7e562-0x7e633; see
-    /// [`Session::scanned_by`]). The work waits from the traffic tick that
-    /// queued it to the combat tick of the same step, so it settles before
-    /// the frame is drawn. In the warp the view steps the session only
+    /// The pass settles it jumping or not; each scan is held past the
+    /// warp's lead-in by `_ScanPlayer`'s jump-timing check
+    /// (@0x7e562-0x7e633; see [`Session::scanned_by`]). The work waits from
+    /// the think that queued it to its pass's settling, so it settles
+    /// before the frame is drawn. In the warp the view steps the session only
     /// while its lead-in lasts, and the arrival comes after its last step,
     /// so work queued in the lead-in settles before the arrival too. Work
     /// the arrival would cut off is dropped with the system's traffic, as
@@ -317,6 +318,9 @@ impl Space {
     }
 
     /// The message line's countdown, as the calls read it.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     fn comm_line(&self) -> CommLine {
         self.comm_line
@@ -380,6 +384,9 @@ impl Space {
 
 #[cfg(test)]
 mod tests {
+    use crate::combat::Rules;
+    use crate::flight::Controls;
+    use crate::testkit::work_with;
     use std::collections::{BTreeMap, BTreeSet};
     use std::rc::Rc;
 
@@ -518,7 +525,14 @@ mod tests {
         let mut session = Session::fly(catalog, pilot)
             .expect("flies")
             .with_strings(Rc::new(Lines));
-        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let _ = (session.take_messages(), session.take_sounds());
         session.space.comm_line = CommLine::default();
         session
@@ -549,9 +563,9 @@ mod tests {
         Calling(BTreeMap::from(calls), BTreeSet::new())
     }
 
-    /// A traffic tick of `catalog` as `behaviour` decides, then the combat
-    /// tick of the same step, which settles the calls, drawing `draws`:
-    /// the messages and sounds they raised, and the bounds asked.
+    /// A pass of `catalog` as `behaviour` decides, which settles the
+    /// calls, drawing `draws`: the messages and sounds it raised, and the
+    /// bounds asked.
     fn ticked(
         session: &mut Session,
         catalog: &FakePilotCatalog,
@@ -634,7 +648,7 @@ mod tests {
             setup(&mut session, trader);
             let (messages, sounds, asked) = ticked(&mut session, &catalog, &calls, &[0]);
             assert_eq!((messages, asked), (vec![], vec![]), "{why}");
-            // A breakup's klaxon is the combat tick's.
+            // A breakup's klaxon is the pass's.
             assert!(!sounds.contains(&SimSound::CallForHelp), "{why}");
         };
         let nothing = |_: &mut Session, _| {};
@@ -967,9 +981,8 @@ mod tests {
         police
     }
 
-    /// A traffic tick, then the combat tick of the same step, as
-    /// `behaviour` decides, drawing `draws`: the messages and sounds they
-    /// raised, and the bounds asked.
+    /// A pass as `behaviour` decides, drawing `draws`: the messages and
+    /// sounds it raised, and the bounds asked.
     fn stepped(
         session: &mut Session,
         catalog: &FakePilotCatalog,
@@ -977,8 +990,14 @@ mod tests {
         draws: &[u32],
     ) -> (Vec<SimMessage>, Vec<SimSound>, Vec<u32>) {
         let mut chance = Draws::of(draws);
-        session.tick_traffic(catalog, behaviour, &mut chance);
-        session.tick_combat(crate::Rules::default(), &mut chance);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            behaviour,
+            crate::Rules::default(),
+            &mut chance,
+        );
         (session.take_messages(), session.take_sounds(), chance.asked)
     }
 
@@ -1042,17 +1061,20 @@ mod tests {
     }
 
     #[test]
-    fn a_call_held_behind_a_scan_that_finds_nothing_is_still_made_in_the_combat_tick() {
+    fn a_call_held_behind_a_scan_that_finds_nothing_is_still_made_in_the_pass() {
         let catalog = calling_catalog();
         let mut session = flying(&catalog);
         scanner(&mut session);
         let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
         let mut chance = Draws::of(&[0, 2]);
-        session.tick_traffic(&catalog, &calls, &mut chance);
-        assert_eq!(session.take_messages(), [], "held");
-        assert_eq!(session.take_sounds(), []);
-        assert!(chance.asked.is_empty(), "nothing drawn yet");
-        session.tick_combat(crate::Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &calls,
+            Rules::default(),
+            &mut chance,
+        );
         assert_eq!(session.take_messages(), help("Ship 129:  Help 3"));
         assert_eq!(session.take_sounds(), [SimSound::CallForHelp]);
         assert_eq!(chance.asked, [100, DISTRESS_LINE_COUNT], "scan, then call");
@@ -1074,9 +1096,14 @@ mod tests {
         scanner(&mut session);
         let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
         let mut chance = Draws::of(&[0, 0]);
-        session.tick_traffic(&catalog, &calls, &mut chance);
-        assert_eq!(session.take_messages(), [], "held");
-        session.tick_combat(crate::Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &calls,
+            Rules::default(),
+            &mut chance,
+        );
         assert!(session.jumping().is_some(), "still jumping");
         assert_eq!(session.take_messages(), help("Ship 129:  Help 1"));
         assert_eq!(session.take_sounds(), [SimSound::CallForHelp]);
@@ -1085,20 +1112,26 @@ mod tests {
     // The frame's other lines in slot order with the calls (see the
     // module docs).
 
-    /// A traffic tick, `between` run, then the combat tick of the same
-    /// step, as `behaviour` decides, drawing `draws`: the messages, comm
-    /// notes and sounds they raised.
+    /// A pass as `behaviour` decides, drawing `draws`, `queued` on the line
+    /// with its thinks' calls, each at its actor's berth: the messages,
+    /// comm notes and sounds it raised.
     fn stepped_with(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         behaviour: &Calling,
         draws: &[u32],
-        between: impl FnOnce(&mut Session),
+        queued: &[PirateEvent],
     ) -> (Vec<SimMessage>, Vec<crate::hail::CommNote>, Vec<SimSound>) {
         let mut chance = Draws::of(draws);
-        session.tick_traffic(catalog, behaviour, &mut chance);
-        between(session);
-        session.tick_combat(crate::Rules::default(), &mut chance);
+        session.space.queued_in_frame.extend_from_slice(queued);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            behaviour,
+            Rules::default(),
+            &mut chance,
+        );
         (
             session.take_messages(),
             session.take_comm(),
@@ -1200,12 +1233,13 @@ mod tests {
         let mut session = flying(&catalog);
         let pirate = add(&mut session, None, ShipId(128));
         let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
-        let (messages, _, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], |session| {
-            session
-                .space
-                .traffic
-                .queue_pirate_event(escort_stolen(pirate));
-        });
+        let (messages, _, sounds) = stepped_with(
+            &mut session,
+            &catalog,
+            &calls,
+            &[0],
+            &[escort_stolen(pirate)],
+        );
         assert_eq!(messages, [SimMessage::ShipStolen { fighter: false }]);
         assert_eq!(sounds, [SimSound::ShipStolen]);
     }
@@ -1216,12 +1250,13 @@ mod tests {
         let mut session = flying(&catalog);
         let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
         let pirate = add(&mut session, None, ShipId(128));
-        let (messages, _, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], |session| {
-            session
-                .space
-                .traffic
-                .queue_pirate_event(escort_stolen(pirate));
-        });
+        let (messages, _, sounds) = stepped_with(
+            &mut session,
+            &catalog,
+            &calls,
+            &[0],
+            &[escort_stolen(pirate)],
+        );
         assert_eq!(
             messages,
             [
@@ -1250,7 +1285,7 @@ mod tests {
         let mut session = flying(&catalog);
         let helper = refueller(&mut session);
         let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
-        let (messages, notes, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], |_| {});
+        let (messages, notes, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], &[]);
         assert_eq!(messages, [], "no call for help");
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].from, helper);
@@ -1263,7 +1298,7 @@ mod tests {
         let mut session = flying(&catalog);
         let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
         refueller(&mut session);
-        let (messages, notes, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], |_| {});
+        let (messages, notes, sounds) = stepped_with(&mut session, &catalog, &calls, &[0], &[]);
         assert_eq!(messages, help("Ship 129:  Help 1"));
         assert_eq!(notes.len(), 1);
         assert_eq!(
@@ -1283,9 +1318,7 @@ mod tests {
             ship: ShipId(128),
         };
         let (messages, notes, sounds) =
-            stepped_with(&mut session, &catalog, &calls, &[0], |session| {
-                session.space.traffic.queue_pirate_event(repaired);
-            });
+            stepped_with(&mut session, &catalog, &calls, &[0], &[repaired]);
         assert_eq!(messages, [], "no call for help");
         assert_eq!(notes.len(), 1);
         assert_eq!(sounds, [SimSound::RepairsComplete]);
@@ -1302,9 +1335,7 @@ mod tests {
             ship: ShipId(128),
         };
         let (messages, notes, sounds) =
-            stepped_with(&mut session, &catalog, &calls, &[0], |session| {
-                session.space.traffic.queue_pirate_event(repaired);
-            });
+            stepped_with(&mut session, &catalog, &calls, &[0], &[repaired]);
         assert_eq!(messages, help("Ship 129:  Help 1"));
         assert_eq!(notes.len(), 1);
         assert_eq!(sounds, [SimSound::CallForHelp, SimSound::RepairsComplete]);
@@ -1318,7 +1349,7 @@ mod tests {
     }
 
     /// Has `session`'s player own the bomb, its clock seeded and at the
-    /// fuse, so it goes off on the next combat tick.
+    /// fuse, so it goes off on the next pass.
     fn light_the_bomb(session: &mut Session) {
         session
             .pilot

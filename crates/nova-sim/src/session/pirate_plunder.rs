@@ -2,18 +2,16 @@
 //! @0x83fab-0x84a2d), which the traffic queues as [`PirateEvent`]s on the
 //! line at the pirate's berth, and this answers one by one
 //! ([`Session::answer_pirate`]) as the frame's work on the line settles in
-//! slot order in the combat tick (see the `comm_calls` module).
+//! slot order in the pass (see the `comm_calls` module).
 //!
 //! - **A dock with the player** ([`PirateEvent::PlayerDockedWith`]): the
-//!   player is boarded ([`Session::player_boarded`], its slot's +0xb9,
+//!   player is boarded (`Session::player_boarded`, its slot's +0xb9,
 //!   `_LowLevelAIHandler` @0x86fc7), so pirates pass it over or wait on it
 //!   ([`PlayerSide::boarded`](crate::ai::PlayerSide::boarded)). It is
-//!   cleared at the head of each combat tick the player isn't disabled
+//!   cleared at the head of each pass the player isn't disabled
 //!   ([`PlayerShip::unboard_unless_disabled`]), as `_HandlePlayer` clears it
 //!   each frame before the ships think (@0x68b02), and kept only in
-//!   flight: a ship slot field, it is never saved. The frame's traffic
-//!   tick reads the flag the last frame left, as it runs before the
-//!   combat tick: a frame's lag crossing no boundary the player sees.
+//!   flight: a ship slot field, it is never saved.
 //! - **A repair of the player** ([`PirateEvent::PlayerRepaired`]): see the
 //!   `repair_dock` module. A ship docking to repair the player boards it
 //!   as a pirate does ([`PirateEvent::PlayerDockedWith`]).
@@ -95,8 +93,11 @@ impl Session {
 
     /// Whether a pirate has docked with the player's ship (+0xb9), while it
     /// is disabled (see the module docs).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn player_boarded(&self) -> bool {
+    pub(crate) fn player_boarded(&self) -> bool {
         self.ship.player_boarded()
     }
 
@@ -189,6 +190,9 @@ impl PlayerShip {
 
     /// Whether a pirate has docked with the player's ship (+0xb9), while it
     /// is disabled (see the module docs).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     fn player_boarded(&self) -> bool {
         self.fate.player_boarded
@@ -209,10 +213,13 @@ mod tests {
     use crate::ai::pirate::PirateWarship;
     use crate::ai::plunder_contents::{CargoLine, ClassMarines};
     use crate::catalog::{JunkId, MARINES, MissionRecord, OutfitId, ShipRecord};
+
     use crate::combat::ShipRef;
     use crate::control::{Bit, Script};
+    use crate::flight::Controls;
     use crate::session::tests::{armed, facing_an_npc};
     use crate::testkit::{Draws, FAST, FakePilotCatalog, carrying, mission, outfit, ship};
+    use crate::testkit::{Passive, work_with};
     use crate::traffic::plunder_dock::{DockSub, Docking};
 
     fn bit(n: u16) -> Bit {
@@ -307,13 +314,36 @@ mod tests {
         assert_eq!(hold.tons(1) + hold.tons(3), capacity, "_ShipTotalHolds");
     }
 
+    /// The credits `plunder_contents` takes from [`plundering`]'s 10,000
+    /// for the sides the session must gather: its pirate (`Strength` 1, no
+    /// marines) against a player of class `Strength` `strength` owning
+    /// `marines`, the odds jittered by `jitter`. The odds and the share are
+    /// nova-sim-ai's (`ai::plunder_contents`'s tests pin them); these tests
+    /// pin what the session passes.
+    fn taken_from(strength: i32, marines: Marines, jitter: u16) -> i64 {
+        let pirate = Side {
+            strength: 1,
+            marines: Marines::default(),
+        };
+        let player = Side { strength, marines };
+        credits_taken(
+            10_000,
+            crate::ai::plunder_contents::odds(pirate, player, jitter),
+        )
+    }
+
     #[test]
     fn a_plundered_player_loses_the_odds_share_of_its_credits_and_is_told() {
-        // Strengths 1 and none: a ratio of 50, odds of 60 less the jitter.
         let catalog = catalog_of(vec![]);
-        for (jitter, cash) in [(0, 10_000 - 1800), (20, 10_000 - 1200)] {
+        assert_ne!(
+            taken_from(0, Marines::default(), 0),
+            taken_from(0, Marines::default(), 20),
+            "the jitter is an input"
+        );
+        for jitter in [0, 20] {
             let (mut session, pirate) = plundering(&catalog, 0);
-            answer(&mut session, pirate, jitter);
+            answer(&mut session, pirate, u32::from(jitter));
+            let cash = 10_000 - taken_from(0, Marines::default(), jitter);
             assert_eq!(session.pilot.cash, cash, "jitter {jitter}");
             assert_eq!(
                 session.take_messages(),
@@ -340,41 +370,46 @@ mod tests {
 
     #[test]
     fn the_players_class_strength_lowers_the_odds_and_so_the_credits_taken() {
-        // The pirate's Strength 1 against the player's class's 2: a ratio
-        // of 25, odds of 35. The pirate's own class (129) has none.
+        // The pirate's Strength 1 against the player's class's 2. The
+        // pirate's own class (129) has none.
         let mut catalog = catalog_of(vec![]);
         catalog.ship_records.push(ShipRecord {
             strength: 2,
             ..ship(128, FAST)
         });
-        assert_ne!(credits_taken(10_000, 35), 1800, "not the odds of 60");
-        assert_eq!(
-            cash_after(&catalog, &[]),
-            10_000 - credits_taken(10_000, 35)
-        );
+        let none = Marines::default();
+        assert_ne!(taken_from(2, none, 0), taken_from(0, none, 0), "an input");
+        assert_eq!(cash_after(&catalog, &[]), 10_000 - taken_from(2, none, 0));
     }
 
     #[test]
     fn the_players_own_marines_crew_lowers_the_odds_and_so_the_credits_taken() {
-        // Three marines of ModVal 1: a crew of 3 beside no Strength, a
-        // ratio of 16, odds of 26.
+        // Three marines of ModVal 1 beside no Strength.
         let mut catalog = catalog_of(vec![]);
         catalog.outfits.push(outfit(260, &[(MARINES, 1)]));
+        let crew = Marines::owned([(MARINES, 1, 3)]);
+        assert_ne!(crew, Marines::default());
+        assert_ne!(taken_from(0, crew, 0), taken_from(0, Marines::default(), 0));
         assert_eq!(
             cash_after(&catalog, &[(260, 3)]),
-            10_000 - credits_taken(10_000, 26)
+            10_000 - taken_from(0, crew, 0)
         );
     }
 
     #[test]
     fn the_players_own_marines_defence_lowers_the_odds_and_so_the_credits_taken() {
-        // Four of ModVal -5: a defence of -20, so a ratio of 50 less 20,
-        // odds of 40.
+        // Four of ModVal -5.
         let mut catalog = catalog_of(vec![]);
         catalog.outfits.push(outfit(261, &[(MARINES, -5)]));
+        let defence = Marines::owned([(MARINES, -5, 4)]);
+        assert_ne!(defence, Marines::default());
+        assert_ne!(
+            taken_from(0, defence, 0),
+            taken_from(0, Marines::default(), 0)
+        );
         assert_eq!(
             cash_after(&catalog, &[(261, 4)]),
-            10_000 - credits_taken(10_000, 40)
+            10_000 - taken_from(0, defence, 0)
         );
     }
 
@@ -416,7 +451,7 @@ mod tests {
             session.take_messages().first(),
             Some(&SimMessage::CargoStolen {
                 tons: 20,
-                credits: 1800
+                credits: taken_from(0, Marines::default(), 0)
             }),
             "the line first"
         );
@@ -443,10 +478,24 @@ mod tests {
         settle(&mut session, &mut Draws::of(&[]));
         assert!(session.player_boarded());
         assert!(session.player_side().boarded);
-        session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 8]));
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            crate::Rules::default(),
+            &mut Draws::of(&[0; 8]),
+        );
         assert!(session.player_boarded(), "still disabled");
         session.ship.condition = Condition::Intact;
-        session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 8]));
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            crate::Rules::default(),
+            &mut Draws::of(&[0; 8]),
+        );
         assert!(!session.player_boarded(), "@0x68b02");
         assert!(!session.player_side().boarded);
     }
@@ -499,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn a_docked_pirates_plunder_reaches_the_player_in_its_steps_combat_tick() {
+    fn a_docked_pirates_plunder_reaches_the_player_in_its_pass() {
         let catalog = catalog_of(vec![plunderable(140, 0x8000)]);
         let (mut session, pirate) = plundering(&catalog, 20);
         assert!(session.pilot.missions.put(0, carrying(140, 0)));
@@ -513,13 +562,15 @@ mod tests {
             sub: DockSub::Dock,
         });
         npc.ai_wait = 0;
-        session.tick_traffic(
+        // Queued by its think and settled with the pass's line work.
+        work_with(
+            &mut session,
             &catalog,
+            Controls::default(),
             &PirateWarship::default(),
+            crate::Rules::default(),
             &mut Draws::of(&[0; 64]),
         );
-        assert_eq!(session.pilot.cash, 10_000, "held for the combat tick");
-        session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 64]));
         assert_eq!(
             session.space.npc(pirate).map(|npc| npc.goal),
             Some(crate::ai::Goal::Drift)

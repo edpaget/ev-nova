@@ -109,9 +109,14 @@ jobs:
           install: false
       - run: mise install rust
         shell: bash
+      # Save only from main, as in ci.yml's `ci`. A branch dispatch still
+      # restores main's cache, but the caches it saved never reached main,
+      # and their size pushed the repository past its 10 GB of Actions
+      # cache, which evicts main's own. A promotion runs on main, so it saves.
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Default features only: never --features dev-tools or --all-features,
       # so egui stays out of published builds. The release build must stay on
       # the same default feature set that `mise run deny` checks in `ci`.

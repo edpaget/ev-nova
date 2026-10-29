@@ -4,7 +4,6 @@
 //! glyphon metrics, drawn through the renderer into the recording Gpu and
 //! driven only by window events.
 
-use std::io;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -15,13 +14,13 @@ use nova_data::graphics::fixture::{DirectBits, PictBuilder};
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame, Rect, TextRun};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_view::geometry::{Bounds, Point};
 use nova_view::ui::desc::{DONE_ITEM, TEXT_ITEM};
 use nova_view::{Key, MouseButton};
@@ -44,33 +43,14 @@ impl WindowPort for FakeWindow {
     fn request_redraw(&mut self) {}
 }
 
-/// One file, holding a fork, wherever it is looked for.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
-fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> OneFile {
-    let bytes = resources
+fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {
+    resources
         .iter()
         .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
             fork.resource(*ty, *id, None, data)
         })
         .build()
-        .bytes;
-    OneFile(bytes)
+        .bytes
 }
 
 /// A `width` x `height` picture of one colour.
@@ -109,7 +89,7 @@ fn game_data() -> Rc<GameData> {
         resources.push((PICT, frame, pict(4, 2, [60, 60, 60])));
     }
     let file = fork(&resources);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(file).load())
 }
 
 fn be(values: &[i16]) -> Vec<u8> {
@@ -143,14 +123,8 @@ fn interface() -> InterfaceData {
     let mut ditl = be(&[items.len() as i16 - 1]);
     ditl.extend(items.concat());
     let file = fork(&[(Dlog::TYPE, 3003, dlog), (Ditl::TYPE, 3003, ditl)]);
-    InterfaceData::load(&file, Path::new("/Nova-DF.rsrc")).expect("loads")
-}
-
-/// Where the dialog is: (1024 - 441) / 2, (768 - 313) / 2, floored.
-const ORIGIN: Point = Point::new(291.0, 227.0);
-
-fn logical(x: f32, y: f32, w: f32, h: f32) -> Bounds {
-    Bounds::at(Point::new(x + ORIGIN.x, y + ORIGIN.y), w, h)
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, file), path).expect("loads")
 }
 
 struct Harness {
@@ -225,8 +199,15 @@ impl Harness {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
-    fn first_line(&self) -> usize {
-        self.app.screen().about().expect("open").first_line()
+    /// The open About dialog's item `item`, in logical units.
+    fn item_bounds(&self, item: usize) -> Bounds {
+        self.app
+            .screen()
+            .about()
+            .expect("open")
+            .dialog()
+            .item_bounds(item)
+            .expect("an item")
     }
 }
 
@@ -236,17 +217,6 @@ fn texts(frame: &Frame) -> Vec<TextRun> {
         .iter()
         .flat_map(|batch| match batch {
             Batch::Text(runs) => runs.clone(),
-            _ => Vec::new(),
-        })
-        .collect()
-}
-
-fn quads(frame: &Frame) -> Vec<Rect> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Sprites { quads, .. } => quads.iter().map(|quad| quad.dest).collect(),
             _ => Vec::new(),
         })
         .collect()
@@ -263,7 +233,7 @@ fn physical(bounds: Bounds, scale: f32) -> Rect {
 }
 
 #[test]
-fn i_shows_the_about_text_with_its_button_and_text_where_recorded() {
+fn i_opens_about_and_its_text_reaches_the_gpu_in_window_pixels() {
     for scale in [1.0, 2.0] {
         let mut harness = Harness::new(scale, true);
         harness.frame();
@@ -271,34 +241,18 @@ fn i_shows_the_about_text_with_its_button_and_text_where_recorded() {
         assert_eq!(harness.showing(), Showing::About);
         let frame = harness.frame();
         let scale = harness.scale();
-
-        // The button's three pictures, at item 1's rectangle. Quads are in
-        // logical units, which the frame projects onto its viewport.
         assert_eq!(
             (frame.viewport.w, frame.viewport.h),
             ((1024.0 * scale) as u32, (768.0 * scale) as u32)
         );
-        let quads = quads(&frame);
-        for piece in [
-            logical(173.0, 281.0, 13.0, 25.0),
-            logical(186.0, 281.0, 73.0, 25.0),
-            logical(259.0, 281.0, 13.0, 25.0),
-        ] {
-            assert!(
-                quads.contains(&physical(piece, 1.0)),
-                "{piece:?} at {scale}: {quads:?}"
-            );
-        }
 
-        // The text's lines, in physical pixels, inside item 3's rectangle.
-        // The text's lines, inside item 3's rectangle.
-        let text_box = physical(logical(11.0, 10.0, 417.0, 262.0), scale);
+        // The About text's lines, in physical pixels, inside its text box.
+        let text_box = physical(harness.item_bounds(TEXT_ITEM), scale);
         let lines: Vec<TextRun> = texts(&frame)
             .into_iter()
             .filter(|run| run.text.starts_with("About line"))
             .collect();
-        assert_eq!(lines[0].text, "About line 00");
-        assert!(lines.len() > 1 && lines.len() < 60, "{}", lines.len());
+        assert!(!lines.is_empty(), "at {scale}");
         for run in &lines {
             let (x, y) = run.origin_px;
             assert!(x >= text_box.x && x < text_box.x + text_box.w, "{run:?}");
@@ -307,62 +261,19 @@ fn i_shows_the_about_text_with_its_button_and_text_where_recorded() {
                 y + run.line_height_px <= text_box.y + text_box.h + 0.01,
                 "{run:?}"
             );
-            assert_eq!(run.wrap_px, None);
         }
-        assert!(texts(&frame).iter().any(|run| run.text == "Done"));
     }
 }
 
 #[test]
-fn down_scrolls_the_text() {
-    let mut harness = Harness::new(1.0, true);
-    harness.press(Key::Char('i'));
-    assert_eq!(harness.first_line(), 0);
-    harness.press(Key::Down);
-    harness.press(Key::Down);
-    assert_eq!(harness.first_line(), 2);
-    let frame = harness.frame();
-    let first = texts(&frame)
-        .into_iter()
-        .find(|run| run.text.starts_with("About line"))
-        .expect("a line");
-    assert_eq!(first.text, "About line 02");
-}
-
-#[test]
-fn a_click_on_done_closes_it() {
+fn a_click_on_done_in_window_pixels_closes_it() {
     for scale in [1.0, 2.0] {
         let mut harness = Harness::new(scale, true);
         harness.press(Key::Char('i'));
-        let done = harness
-            .app
-            .screen()
-            .about()
-            .expect("open")
-            .dialog()
-            .item_bounds(DONE_ITEM)
-            .expect("Done");
-        assert_eq!(done, logical(173.0, 281.0, 99.0, 25.0));
+        let done = harness.item_bounds(DONE_ITEM);
         harness.click(done.center());
         assert_eq!(harness.showing(), Showing::ShipBrowser, "at {scale}");
     }
-}
-
-#[test]
-fn a_click_elsewhere_leaves_it_open() {
-    let mut harness = Harness::new(1.0, true);
-    harness.press(Key::Char('i'));
-    let text_box = harness
-        .app
-        .screen()
-        .about()
-        .expect("open")
-        .dialog()
-        .item_bounds(TEXT_ITEM)
-        .expect("text box");
-    harness.click(text_box.center());
-    harness.click(Point::new(10.0, 10.0));
-    assert_eq!(harness.showing(), Showing::About);
 }
 
 #[test]

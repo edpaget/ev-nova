@@ -87,9 +87,11 @@ fn a_locked_missile_passes_through_the_ship_it_was_fired_at() {
             .find(|shot| shot.id == id)
             .expect("in flight")
             .jam = jam;
-        for _ in 0..12 {
-            tick(&mut combat, &mut ships, &NovaDisable);
-        }
+        // Its last move, from (0, -50) to (0, -70), crosses B.
+        let shot = combat.shots_mut().first_mut().expect("in flight");
+        shot.moved_from = Some(Vec2::new(0.0, -50.0));
+        shot.position = Vec2::new(0.0, -70.0);
+        phase::test_hits(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(
             ships[1].reserves.shield.now < 10.0,
             hits,

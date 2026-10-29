@@ -147,8 +147,8 @@ fn first_link(data: &GameData, system: SystemId) -> SystemId {
 }
 
 /// One advance pass, and double time's second pass while it is on.
-fn pass(session: &mut Session, controls: Controls) {
-    session.tick(controls);
+fn pass(session: &mut Session, data: &GameData, controls: Controls) {
+    crate::passes::work(session, data, controls);
     if session.double_time() {
         session.tick_again(
             controls,
@@ -161,7 +161,7 @@ fn pass(session: &mut Session, controls: Controls) {
 
 /// Plots a course to `next`, flies out past the jump distance in single
 /// time, then begins the jump, in double time if `double`.
-fn out_and_jump(session: &mut Session, next: SystemId, double: bool) {
+fn out_and_jump(session: &mut Session, data: &GameData, next: SystemId, double: bool) {
     session.set_double_time_key(false);
     session.plot_course(next).expect("a route");
     let thrust = Controls {
@@ -170,7 +170,7 @@ fn out_and_jump(session: &mut Session, next: SystemId, double: bool) {
     };
     let mut tries = 0;
     while session.player().position.length() < session.stats().jump_distance {
-        session.tick(thrust);
+        crate::passes::work(session, data, thrust);
         tries += 1;
         assert!(tries < 10_000, "never got out");
     }
@@ -192,10 +192,10 @@ struct Warp {
 
 /// Passes `session` until its warp-up sounds, then counts the advance
 /// passes until the warp is due to end, keeping the sounds of each.
-fn passes_to_end(session: &mut Session, double: bool) -> Warp {
+fn passes_to_end(session: &mut Session, data: &GameData, double: bool) -> Warp {
     let mut rate = None;
     for _ in 0..10_000 {
-        let sounds = session.take_sounds();
+        let sounds = common::drained_sounds(session);
         if let Some(raised) = sounds.iter().find_map(|sound| match (sound, double) {
             (SimSound::JumpBegan { rate }, false)
             | (SimSound::JumpBeganInDoubleTime { rate }, true) => Some(*rate),
@@ -204,13 +204,13 @@ fn passes_to_end(session: &mut Session, double: bool) -> Warp {
             rate = Some(raised);
             break;
         }
-        pass(session, Controls::default());
+        pass(session, data, Controls::default());
     }
     let rate = rate.expect("the warp-up sounds");
     let mut sounds = Vec::new();
     for passes in 1..10_000 {
-        pass(session, Controls::default());
-        sounds.push(session.take_sounds());
+        pass(session, data, Controls::default());
+        sounds.push(common::drained_sounds(session));
         if session.warp_end_due() {
             return Warp {
                 rate,
@@ -257,12 +257,12 @@ fn the_stock_warp_up_lasts_its_pitched_length_against_the_warp_end() {
         let label = format!("{:?} double {}", expected.ship, expected.double);
         let mut session = flying_in(&data, expected.ship);
         let next = first_link(&data, session.system());
-        out_and_jump(&mut session, next, expected.double);
+        out_and_jump(&mut session, &data, next, expected.double);
         let Warp {
             rate,
             passes,
             sounds: raised,
-        } = passes_to_end(&mut session, expected.double);
+        } = passes_to_end(&mut session, &data, expected.double);
         let flags = data
             .get::<Ship>(expected.ship.0)
             .expect("present")
@@ -295,7 +295,7 @@ fn the_stock_warp_up_lasts_its_pitched_length_against_the_warp_end() {
             }
         }
         assert!(session.arrive(&data, &mut NeverFires).is_some(), "{label}");
-        let sounds = session.take_sounds();
+        let sounds = common::drained_sounds(&mut session);
         if expected.natural {
             assert!(sounds.contains(&SimSound::Arrived), "{label}: {sounds:?}");
         } else {
@@ -316,28 +316,28 @@ fn back_to_back_stock_jumps_never_skip_the_warp_out() {
     for double in [false, true] {
         let mut session = flying_in(&data, ENTERPRISE);
         let start = session.system();
-        out_and_jump(&mut session, first_link(&data, start), double);
-        let _ = passes_to_end(&mut session, double);
+        out_and_jump(&mut session, &data, first_link(&data, start), double);
+        let _ = passes_to_end(&mut session, &data, double);
         assert!(session.arrive(&data, &mut NeverFires).is_some());
         assert!(
-            session.take_sounds().contains(&SimSound::Arrived),
+            common::drained_sounds(&mut session).contains(&SimSound::Arrived),
             "{double}"
         );
 
         // The next jump, back where it came from, begins on the arrival's
         // tick.
-        out_and_jump(&mut session, start, double);
+        out_and_jump(&mut session, &data, start, double);
         let mut since = 0;
         while !session.warp_end_due() {
-            pass(&mut session, Controls::default());
+            pass(&mut session, &data, Controls::default());
             since += 1;
             assert!(since < 10_000, "the warp never ended");
         }
         assert!(since * 2 > 151, "{double}: {since} passes");
-        let _ = session.take_sounds();
+        let _ = common::drained(&mut session);
         assert!(session.arrive(&data, &mut NeverFires).is_some());
         assert!(
-            session.take_sounds().contains(&SimSound::Arrived),
+            common::drained_sounds(&mut session).contains(&SimSound::Arrived),
             "{double}"
         );
     }

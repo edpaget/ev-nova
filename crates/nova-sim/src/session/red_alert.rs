@@ -23,7 +23,7 @@
 
 use super::{Session, Space};
 use crate::combat::hull::Condition;
-use crate::red_alert::{AlertIcon, alert_check_due};
+use crate::red_alert::alert_check_due;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
 
@@ -36,13 +36,17 @@ impl Session {
     ///
     /// [`Npc::threatens_player_among`]: crate::traffic::npc::Npc::threatens_player_among
     #[must_use]
-    pub fn player_threatened(&self) -> bool {
+    pub(crate) fn player_threatened(&self) -> bool {
         self.space.player_threatened()
     }
 
     /// The Red Alert icon frame shown, if any.
+    ///
+    /// For the tests: the frame fills its HUD from the Red Alert's own
+    /// (`Session::fill_hud`).
+    #[cfg(test)]
     #[must_use]
-    pub fn red_alert_icon(&self) -> Option<AlertIcon> {
+    pub(crate) fn red_alert_icon(&self) -> Option<crate::red_alert::AlertIcon> {
         self.red_alert.icon()
     }
 
@@ -50,7 +54,7 @@ impl Session {
     /// level 1 or less, which by [`RuleKey::AlertBlink`]'s engine reading
     /// is when a Red Alert blinks its icon. Not quiet until it says, as
     /// the default preferences play sound at full level.
-    pub fn set_sound_quiet(&mut self, quiet: bool) {
+    pub(crate) fn set_sound_quiet(&mut self, quiet: bool) {
         self.setup.sound_quiet = quiet;
     }
 
@@ -87,6 +91,8 @@ impl Space {
 
 #[cfg(test)]
 mod tests {
+    use crate::testkit::work;
+
     use super::*;
     use crate::ai::Goal;
     use crate::chance::NeverFires;
@@ -100,7 +106,10 @@ mod tests {
     use crate::{AlertIcon, catalog::SystemId};
 
     fn session(catalog: &FakePilotCatalog) -> Session {
-        Session::start(catalog).expect("starts")
+        let mut session = Session::start(catalog).expect("starts");
+        // Set up, so a pass keeps the NPCs a test adds.
+        session.populate(catalog, &mut NeverFires);
+        session
     }
 
     /// Adds an NPC attacking the player and gives its number.
@@ -123,7 +132,7 @@ mod tests {
 
     /// Ticks once, giving the Red Alerts it sounded.
     fn alerts(session: &mut Session) -> usize {
-        session.tick(Controls::default());
+        work(session, &crate::testkit::catalog(), Controls::default());
         session
             .take_sounds()
             .iter()
@@ -140,7 +149,7 @@ mod tests {
     fn icons(session: &mut Session, ticks: usize) -> Vec<Option<AlertIcon>> {
         (0..ticks)
             .map(|_| {
-                session.tick(Controls::default());
+                work(session, &crate::testkit::catalog(), Controls::default());
                 session.red_alert_icon()
             })
             .collect()
@@ -209,10 +218,11 @@ mod tests {
 
     #[test]
     fn a_threat_sounds_the_red_alert_on_the_next_check_frame_only() {
-        let mut session = threatened(&catalog());
+        let catalog = catalog();
+        let mut session = threatened(&catalog);
         session.take_sounds();
         assert_eq!(alerts_over(&mut session, 59), 0, "frames 1 to 59");
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.take_sounds(), [SimSound::RedAlert], "frame 60");
         assert_eq!(alerts_over(&mut session, 60), 0, "frames 61 to 120");
     }
@@ -329,7 +339,7 @@ mod tests {
     fn doubled_icons(session: &mut Session, ticks: usize) -> Vec<Option<AlertIcon>> {
         (0..ticks)
             .map(|_| {
-                session.tick(Controls::default());
+                work(session, &crate::testkit::catalog(), Controls::default());
                 again(session);
                 session.red_alert_icon()
             })
@@ -390,9 +400,10 @@ mod tests {
 
     #[test]
     fn the_second_pass_never_steps_the_blink() {
-        let mut session = threatened(&catalog());
+        let catalog = catalog();
+        let mut session = threatened(&catalog);
         assert_eq!(alerts_over(&mut session, 64), 1, "to frame 64");
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.space.pass_frame, 65, "a step frame");
         let blink = session.red_alert;
         again(&mut session);
@@ -452,8 +463,8 @@ mod tests {
         let catalog = catalog();
         let mut session = session(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         let mut session = alerted(session);
         assert!(session.red_alert_icon().is_some(), "in hyperspace");
         assert_eq!(

@@ -4,23 +4,21 @@
 //! it shows, and redraws feed its frame times. Runs in the default build;
 //! egui never appears here.
 
-use std::io;
-use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::RLED;
 use nova_data::graphics::fixture::RledBuilder;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record, SystemId};
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader};
 use nova_view::{Key, MouseButton, Point};
 
 /// A 1024x768 window at scale 1: window pixels are logical units.
@@ -38,24 +36,6 @@ impl WindowPort for FakeWindow {
     fn request_redraw(&mut self) {}
 }
 
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
 fn put_i16(bytes: &mut [u8], at: usize, value: i16) {
     bytes[at..at + 2].copy_from_slice(&value.to_be_bytes());
 }
@@ -63,10 +43,11 @@ fn put_i16(bytes: &mut [u8], at: usize, value: i16) {
 /// Ship 128, the Shuttle, whose `shän` names a 4-frame 8x8 `rlëD`, and
 /// system 128, Alpha, alone at (0, 0) with no hyperlinks or stellars.
 fn data() -> Rc<GameData> {
-    let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16(&mut anim, 0x00, 1000);
-    put_i16(&mut anim, 0x04, 1);
-    put_i16(&mut anim, 0x34, 4);
+    let anim = ShipAnimBuilder::new()
+        .base_image_id(1000)
+        .base_set_count(1)
+        .frames_per(4)
+        .build();
     let sheet = (0..4)
         .fold(RledBuilder::new(8, 8), |sheet, _| {
             sheet.frame(|f| (0..8).fold(f, |f, _| f.line().pixels(&[0x7C00; 8])))
@@ -83,15 +64,14 @@ fn data() -> Rc<GameData> {
             Ship::TYPE,
             128,
             Some(b"Shuttle"),
-            &vec![0; Ship::SIZE.expect("fixed")],
+            &ShipBuilder::new().build(),
         )
         .resource(ShipAnim::TYPE, 128, None, &anim)
         .resource(RLED, 1000, None, &sheet)
         .resource(System::TYPE, 128, Some(b"Alpha"), &system)
         .build()
         .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(fork).load())
 }
 
 struct Harness {

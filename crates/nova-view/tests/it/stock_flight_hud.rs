@@ -15,15 +15,19 @@
 
 use crate::common;
 
+use std::rc::Rc;
+
 use nova_data::records::interface::Interface;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
 use nova_data::{GameData, Record};
-use nova_sim::{BoomId, Pilot, ShipId, SoundId, WeaponId};
+use nova_sim::Rulebook;
+use nova_sim::fixture::SessionBuilder;
+use nova_sim::{BoomId, ShipId, SoundId, WeaponId};
 use nova_view::flight::hud::{Background, bar_origin, interface_id};
 use nova_view::flight::{
-    CombatLooks, FlightView, LayerSheet, Looks, ShipSheet, ShipSprites, StatusBars,
+    CombatLooks, FlightView, LayerSheet, Looks, ShipSheet, ShipSprites, StatusBars, test_flight,
 };
 use nova_view::geometry::Bounds;
 use nova_view::system::catalog::{SystemCatalog, SystemId};
@@ -46,7 +50,7 @@ fn a_new_pilot_flies_under_the_default_status_bar() {
     let Some(data) = open() else {
         return;
     };
-    let view = FlightView::new(&data);
+    let view = test_flight::new(Rc::new(data));
     let bar = view.status_bar().expect("the stock status bar reads");
     assert_eq!(
         bar.background,
@@ -558,7 +562,7 @@ fn the_cargo_area_reads_its_stock_strings_and_area() {
             "Passengers"
         ]
     );
-    let view = FlightView::new(&data);
+    let view = test_flight::new(Rc::new(data));
     let bar = view.status_bar().expect("the stock status bar reads");
     assert_eq!(bar.layout.cargo, rect(8.0, 458.0, 184.0, 552.0));
 }
@@ -570,13 +574,13 @@ fn a_fed_destroyer_flies_under_the_federation_status_bar() {
     };
     // shïp 141, the Fed Destroyer, is of gövt 128, the Federation, whose
     // Interface is ïntf 130, over PICT 702.
-    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
-    save["ship"] = serde_json::json!(141);
-    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    assert_eq!(pilot.ship(), ShipId(141));
-    let view = FlightView::with_pilot(&data, pilot);
+    let session = SessionBuilder::flying(&data)
+        .named("Stock")
+        .in_ship(ShipId(141))
+        .build();
+    assert_eq!(session.ship(), ShipId(141));
+    let data = Rc::new(data);
+    let view = FlightView::from_session(Rc::clone(&data), session.into(), &Rulebook::default());
     let bar = view.status_bar().expect("the Federation status bar reads");
     assert_eq!(bar.layout, data.status_bar(130).expect("reads"));
     assert_eq!(

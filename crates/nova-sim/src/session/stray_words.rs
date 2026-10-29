@@ -125,10 +125,12 @@ mod tests {
     use crate::catalog::WeaponRecord;
     use crate::chance::NeverFires;
     use crate::combat::Rules;
+    use crate::flight::Controls;
     use crate::player_fate::PlayerFate;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::tests::{FIRE, armed, blaster, facing_an_npc};
     use crate::testkit::FakePilotCatalog;
+    use crate::testkit::{Passive, work_with};
     use nova_sim_base::fixture::{Draws, Ranged};
 
     #[test]
@@ -200,7 +202,14 @@ mod tests {
     /// The player fires one tick of its beam on `chance` and lets go.
     fn fire(session: &mut Session, chance: &mut dyn Chance) {
         session.hold_trigger(FIRE);
-        session.tick_combat(Rules::default(), chance);
+        work_with(
+            session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            chance,
+        );
         session.hold_trigger(crate::combat::armament::Trigger::default());
     }
 
@@ -211,9 +220,15 @@ mod tests {
         fire(&mut session, &mut Ranged::of(&[(4, 0)]));
         assert_eq!(session.pod, Some(1), "-1 drawn to 0, then on to 1");
         assert!(matches!(session.player_fate(), PlayerFate::Ejected { .. }));
-        session.tick(crate::flight::Controls::default());
-        assert!(session.ship.fate.rescue_due, "the pod flew its last tick");
-        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        // The pod flies its last tick, and the rescue settles in that pass
+        // and ends it (`_HandlePlayer` @0x68ddd).
+        assert!(session.game_work(
+            crate::flight::Controls::default(),
+            &catalog,
+            &crate::testkit::Passive,
+            Rules::default(),
+            &mut NeverFires
+        ));
         assert!(session.take_rescue_desc().is_some(), "the rescue ran");
     }
 
@@ -305,8 +320,14 @@ mod tests {
             if let Some(npc) = session.space.npc_mut(id) {
                 npc.pods_left = held;
             }
-            session.tick_traffic(&catalog, &super::super::tests::Firing, &mut NeverFires);
-            session.tick_combat(Rules::default(), &mut Ranged::of(&[(4, draw)]));
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &super::super::tests::Firing,
+                Rules::default(),
+                &mut Ranged::of(&[(4, draw)]),
+            );
             assert_eq!(
                 session.space.npc(id).map(|npc| npc.pods_left),
                 Some(stepped),
@@ -332,8 +353,8 @@ mod tests {
     }
 
     /// The order word of `catalog`'s NPC holding `held` and set up by
-    /// `setup`, after it fires a tick of its beam by `reading`, drawing on
-    /// `chance`; and the bounds of the draws asked.
+    /// `setup`, after a pass of its beam's fire by `reading`, drawing on
+    /// `draws`; and the bounds of the draws asked.
     fn stepped_order(
         catalog: &FakePilotCatalog,
         reading: RuleSource,
@@ -347,13 +368,22 @@ mod tests {
             npc.order_word = crate::fleet::OrderWord(held);
             setup(npc);
         }
-        session.tick_traffic(catalog, &super::super::tests::Firing, &mut NeverFires);
         let mut chance = Ranged::of(draws);
-        session.tick_combat(Rules::default(), &mut chance);
-        (
-            session.space.npc(id).map(|npc| npc.order_word.0),
-            chance.asked,
-        )
+        work_with(
+            &mut session,
+            catalog,
+            Controls::default(),
+            &super::super::tests::Firing,
+            Rules::default(),
+            &mut chance,
+        );
+        // The pass's arrivals roll (`_EnterMoreShips` @0x44237) aside.
+        let asked = chance
+            .asked
+            .into_iter()
+            .filter(|&bound| bound != crate::traffic::spawn::ARRIVAL_ODDS)
+            .collect();
+        (session.space.npc(id).map(|npc| npc.order_word.0), asked)
     }
 
     #[test]

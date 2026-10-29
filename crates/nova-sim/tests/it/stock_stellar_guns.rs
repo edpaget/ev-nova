@@ -9,10 +9,9 @@ use std::collections::BTreeMap;
 use crate::common;
 
 use nova_data::GameData;
-use nova_sim::chance::NeverFires;
 use nova_sim::combat::stellar_guns::GUARDED_BY_DEFENDERS;
 use nova_sim::pilot::Pilot;
-use nova_sim::{CombatEvent, PilotCatalog, Rules, Session, ShipRef, StellarId, SystemId, WeaponId};
+use nova_sim::{CombatEvent, PilotCatalog, Session, ShipRef, StellarId, SystemId, WeaponId};
 
 /// A new stock pilot flying in `system` from `stellar`, its record there
 /// `record`: at rest on the stellar's centre, as a load puts it
@@ -35,10 +34,13 @@ fn beside(data: &GameData, system: i16, stellar: i16, record: i16) -> Session {
     session
 }
 
-/// The stellars that fire on a tick of the fight, and the guns' shots
+/// The stellars that fire on a pass of `data`'s session, and the shots
 /// then in flight, each with the ship it is aimed at.
-fn a_tick(session: &mut Session) -> (Vec<StellarId>, Vec<(WeaponId, Option<ShipRef>)>) {
-    session.tick_combat(Rules::default(), &mut NeverFires);
+fn a_tick(
+    session: &mut Session,
+    data: &GameData,
+) -> (Vec<StellarId>, Vec<(WeaponId, Option<ShipRef>)>) {
+    crate::passes::work(session, data, nova_sim::Controls::default());
     let fired = session
         .take_combat_events()
         .into_iter()
@@ -109,14 +111,14 @@ fn spacedock_i_fires_at_a_criminal_beside_it_and_holds_fire_at_a_clean_record() 
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let mut criminal = beside(&data, 159, 184, -7);
     assert_eq!(
-        a_tick(&mut criminal),
+        a_tick(&mut criminal, &data),
         (
             vec![StellarId(184)],
             vec![(WeaponId(196), Some(ShipRef::Player))]
         )
     );
     let mut clean = beside(&data, 159, 184, -6);
-    assert_eq!(a_tick(&mut clean), (vec![], vec![]), "at -CrimeTol");
+    assert_eq!(a_tick(&mut clean, &data), (vec![], vec![]), "at -CrimeTol");
 }
 
 #[test]
@@ -142,5 +144,5 @@ fn earth_waits_for_its_defence_ships_and_never_fires() {
         .expect("a system lists Earth")
         .id;
     let mut wanted = beside(&data, sol.0, 128, -1000);
-    assert_eq!(a_tick(&mut wanted).0, []);
+    assert_eq!(a_tick(&mut wanted, &data).0, []);
 }

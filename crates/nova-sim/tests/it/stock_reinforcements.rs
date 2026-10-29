@@ -166,7 +166,14 @@ fn in_kania(data: &Rc<GameData>, chance: &mut Seeded) -> Option<Session> {
     let mut session = Session::fly(data.as_ref(), pilot)
         .expect("flies")
         .with_strings(Rc::clone(data) as Rc<dyn CommCatalog>);
-    session.tick_traffic(data.as_ref(), &Peaceful, chance);
+    crate::passes::work_with(
+        &mut session,
+        data.as_ref(),
+        nova_sim::Controls::default(),
+        &Peaceful,
+        nova_sim::Rules::default(),
+        chance,
+    );
     let federal = session
         .npcs()
         .iter()
@@ -185,7 +192,7 @@ fn a_federation_ship_outnumbered_in_kania_calls_its_fleet_which_comes_after_its_
             in_kania(&data, &mut chance).map(|session| (session, chance))
         })
         .expect("a seed brings a Federation ship to Kania");
-    let _ = (session.take_messages(), session.take_sounds());
+    let _ = common::drained(&mut session);
     let carrier = |session: &Session| {
         session
             .npcs()
@@ -198,12 +205,18 @@ fn a_federation_ship_outnumbered_in_kania_calls_its_fleet_which_comes_after_its_
     let mut announced = None;
     let mut arrived = None;
     for tick in 0..2000_u32 {
-        session.tick_traffic(data.as_ref(), &Outnumbered, &mut chance);
-        // The combat tick settles the frame's calls (see the session's
+        // The pass settles its frame's calls (see the session's
         // `comm_calls` module).
-        session.tick_combat(nova_sim::Rules::default(), &mut chance);
-        let messages = session.take_messages();
-        let sounds = session.take_sounds();
+        crate::passes::work_with(
+            &mut session,
+            data.as_ref(),
+            nova_sim::Controls::default(),
+            &Outnumbered,
+            nova_sim::Rules::default(),
+            &mut chance,
+        );
+        let events = common::drained(&mut session);
+        let (messages, sounds) = (common::messages(&events), common::sounds(&events));
         if messages.contains(&line) {
             assert_eq!(announced, None, "announced once");
             assert!(sounds.contains(&SimSound::ReinforcementsApproaching));

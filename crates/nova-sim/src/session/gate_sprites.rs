@@ -4,8 +4,8 @@
 //! `_DoPlayGameWork` calls `_HandleShip` (@0x44483), then
 //! `_HandleShipDisplay` (@0x444ad), then `_HandleStellarSprites`
 //! (@0x444d2), so each gate steps after the ships have moved, reading them
-//! as this frame left them: at the end of [`Session::tick_traffic`], before
-//! the frame is drawn. It steps whenever the ship is not docked, while a
+//! as this frame left them: at the end of the pass's ship loop
+//! ([`Session::ship_loop`]), before the frame is drawn. It steps whenever the ship is not docked, while a
 //! jump plays too, as the original's stellars animate then.
 //!
 //! The gates are those of the stellars shown. A gate keeps its sprite
@@ -32,7 +32,7 @@ impl Session {
     /// The frame hypergate `gate` draws, or `None` for a stellar shown
     /// that is not a hypergate, or one not shown.
     #[must_use]
-    pub fn gate_frame(&self, gate: StellarId) -> Option<u16> {
+    pub(crate) fn gate_frame(&self, gate: StellarId) -> Option<u16> {
         let site = self.chart.gate_site(gate)?;
         let anim = GateAnimation::of(site);
         Some(
@@ -45,8 +45,11 @@ impl Session {
 
     /// Whether hypergate `gate` is open: on its open frame or past it
     /// ([`GateSprite::is_open`](crate::gate_sprite::GateSprite::is_open)).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn gate_open(&self, gate: StellarId) -> bool {
+    pub(crate) fn gate_open(&self, gate: StellarId) -> bool {
         self.chart.gate_site(gate).is_some_and(|site| {
             self.space
                 .gate_sprites
@@ -68,7 +71,7 @@ impl Session {
 
     /// One tick of every hypergate shown, held open by the NPCs as they
     /// are now or by the player's dock request ([`held_open`]), read after
-    /// this tick's approach ran in `fly_player`, as `_HandleStellarSprites`
+    /// this pass's approach ran in `player_move`, as `_HandleStellarSprites`
     /// runs after `_HandlePlayer`; its random picks drawn on `chance`. A ship
     /// heading in holds it within [`approach_reach`] of the width of the
     /// its slot ([`Space::slot_sprite_size`], [`NO_SPRITE_SIDE`] with no
@@ -131,11 +134,14 @@ mod tests {
     use crate::ai::NovaAi;
     use crate::catalog::SiteAnimation;
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
+    use crate::flight::Controls;
     use crate::flight::ShipState;
     use crate::gate::WORMHOLE;
     use crate::geometry::Vec2;
     use crate::rulebook::RuleSource;
     use crate::story::rebuild::Fallback;
+    use crate::testkit::work_with;
     use crate::testkit::{FAST, FakePilotCatalog, begin_jump_now, catalog, fly_out, planet};
     use crate::traffic::npc::{Mode, Npc};
 
@@ -175,7 +181,14 @@ mod tests {
     }
 
     fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// Adds a ship of FAST coming out of hypergate 300, waiting `wait`
@@ -576,8 +589,8 @@ mod tests {
         session
             .plot_course(crate::catalog::SystemId(131))
             .expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         let before = session.gate_frame(StellarId(300));
         tick(&mut session, &catalog);
         assert!(session.jumping().is_some());

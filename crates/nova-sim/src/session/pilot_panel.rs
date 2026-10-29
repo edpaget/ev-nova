@@ -13,7 +13,7 @@ impl Session {
     /// [`pilot_panel`](crate::pilot_panel)), the stellars the legal status
     /// reads taken from `catalog`. Reading it changes nothing.
     #[must_use]
-    pub fn pilot_panel(&self, catalog: &impl PilotCatalog) -> PilotPanel {
+    pub fn pilot_panel(&self, catalog: &(impl PilotCatalog + ?Sized)) -> PilotPanel {
         self.chart
             .pilot_panel(&self.pilot, &self.statics, &self.setup, catalog)
     }
@@ -29,7 +29,7 @@ impl Chart {
         pilot: &Pilot,
         statics: &Statics,
         setup: &Setup,
-        catalog: &impl PilotCatalog,
+        catalog: &(impl PilotCatalog + ?Sized),
     ) -> PilotPanel {
         let words = setup.player_info_words();
         PilotPanel {

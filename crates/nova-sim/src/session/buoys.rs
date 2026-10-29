@@ -211,7 +211,7 @@ mod tests {
     fn a_multi_jump_shows_only_the_last_systems_buoy() {
         let passing = buoyed(chained(catalog(), 10), 131, 2);
         let mut session = bound_for_134(&passing, MultiJumpRule::default());
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &passing).expect("jumps");
         session.arrive(&passing, &mut NeverFires);
         assert_eq!(
             session.take_messages(),
@@ -220,7 +220,7 @@ mod tests {
         );
         let ending = buoyed(chained(catalog(), 10), 134, 3);
         let mut session = bound_for_134(&ending, MultiJumpRule::default());
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &ending).expect("jumps");
         session.arrive(&ending, &mut NeverFires);
         assert_eq!(session.take_messages(), [buoy("three")]);
     }

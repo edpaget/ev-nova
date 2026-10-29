@@ -485,7 +485,7 @@ pub struct HailButton {
 
 /// The comm dialog's contents: the ship hailed, its reply, and the
 /// options that apply.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HailView {
     /// The NPC hailed.
     pub npc: NpcId,

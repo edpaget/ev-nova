@@ -104,7 +104,7 @@ impl Session {
     /// the module docs): Nova's ([`NovaHire`](crate::NovaHire)) by
     /// default.
     #[must_use]
-    pub fn with_hire_terms(mut self, terms: Rc<dyn HireTerms>) -> Self {
+    pub(crate) fn with_hire_terms(mut self, terms: Rc<dyn HireTerms>) -> Self {
         self.setup.hire_terms = Shared(terms);
         self
     }
@@ -113,14 +113,14 @@ impl Session {
     /// and a person's `ActiveOn` against the pilot: Nova's
     /// ([`NovaBits`](crate::NovaBits)) by default.
     #[must_use]
-    pub fn with_control_bits(mut self, bits: Rc<dyn ControlBits>) -> Self {
+    pub(crate) fn with_control_bits(mut self, bits: Rc<dyn ControlBits>) -> Self {
         self.setup.control_bits = Shared(bits);
         self
     }
 
     /// What paying the escorts did since this was last taken, in order;
     /// taking it empties the list.
-    pub fn take_pay_notes(&mut self) -> Vec<PayNote> {
+    pub(crate) fn take_pay_notes(&mut self) -> Vec<PayNote> {
         self.out.take_pay_notes()
     }
 
@@ -206,7 +206,11 @@ impl Session {
     /// [`HireRefusal::NoBar`] when not landed at a stellar with a bar,
     /// and, by the other reading of [`RuleKey::HireNoSlot`],
     /// [`HireRefusal::NoSlot`] when the system has no slot for it.
-    pub fn hire(&mut self, ship: ShipId, chance: &mut dyn Chance) -> Result<Hired, HireRefusal> {
+    pub(crate) fn hire(
+        &mut self,
+        ship: ShipId,
+        chance: &mut dyn Chance,
+    ) -> Result<Hired, HireRefusal> {
         let list = self.escorts_for_hire(chance).ok_or(HireRefusal::NoBar)?;
         list.check(ship)?;
         let record = self
@@ -341,9 +345,11 @@ mod tests {
     use crate::board::MAX_ESCORTS;
     use crate::catalog::{LandingSite, ShipRecord, StellarId, SystemId};
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::combat::ShipRef;
     use crate::control::{PilotFacts, Test, TestExpr};
     use crate::escort::{EscortCommand, EscortDuty, EscortGroup, slot_position};
+    use crate::flight::Controls;
     use crate::hail::{CreditUnit, HailOptions, ShownWage};
     use crate::hire::{HireRow, NovaHire, PayNote};
     use crate::reserves::Reserves;
@@ -355,6 +361,7 @@ mod tests {
     use crate::testkit::{
         Draws, FAST, FakePilotCatalog, Scripted, bar, catalog, jump, land_now, planet, ship,
     };
+    use crate::testkit::{Passive, work_with};
     use crate::traffic::npc::AiType;
 
     /// The bar's stellar, 128, at the centre, under the ship as it
@@ -1247,16 +1254,28 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot)
             .expect("flies")
             .with_rules(Rulebook::default().with_override(RuleKey::TakeOffPay, rule));
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.stats().jump_days, u32::from(days));
         session.take_save_due();
         session
     }
 
     fn ships(session: &Session) -> Vec<(i16, Option<i64>, bool)> {
-        session
-            .pilot()
-            .escorts()
+        kinds(session.pilot().escorts())
+    }
+
+    /// Each of `escorts`' ship, wage and whether it is carried: what a
+    /// jump's pay keeps of them, as the passes on the way give a carried
+    /// fighter in flight its fighter's capacities (see the `bay` module).
+    fn kinds(escorts: &[Escort]) -> Vec<(i16, Option<i64>, bool)> {
+        escorts
             .iter()
             .map(|escort| (escort.ship.0, escort.wage, escort.carried))
             .collect()
@@ -1280,7 +1299,7 @@ mod tests {
         let mut session = payer(1000, payroll(), 1, RuleSource::Engine);
         jump(&mut session, &paying(), 131).expect("arrives");
         assert_eq!(session.pilot().cash(), 600);
-        assert_eq!(session.pilot().escorts(), payroll(), "all stay");
+        assert_eq!(ships(&session), kinds(&payroll()), "all stay");
         assert_eq!(session.take_pay_notes(), []);
         assert!(!session.take_save_due(), "paying alone makes none");
 
@@ -1294,14 +1313,26 @@ mod tests {
     fn kill_by_a_deadly_stellar(session: &mut Session, index: usize) -> crate::traffic::npc::NpcId {
         let id = session.space.escorts.fleet[index].expect("placed");
         let at = session.space.npc(id).expect("there").state.position;
+        let sites = session.chart.sites.clone();
+        let listed = session.chart.listed.clone();
         session.chart.sites = vec![LandingSite {
             flags2: crate::deadly_stellar::DEADLY_STELLAR,
             frame_size: Some((2, 2)),
             ..crate::testkit::planet(160, at.x, at.y)
         }];
         session.chart.listed = session.chart.sites.clone();
-        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        work_with(
+            session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
         assert!(session.space.npc(id).is_none(), "killed");
+        // Gone again, so the passes after strike no other escort.
+        session.chart.sites = sites;
+        session.chart.listed = listed;
         id
     }
 
@@ -1503,7 +1534,7 @@ mod tests {
         let mut session = payer(10, unpaid.clone(), 1, RuleSource::Engine);
         jump(&mut session, &paying(), 131).expect("arrives");
         assert_eq!(session.pilot().cash(), 10);
-        assert_eq!(session.pilot().escorts(), unpaid);
+        assert_eq!(ships(&session), kinds(&unpaid));
         assert_eq!(session.take_pay_notes(), []);
         assert!(!session.take_save_due());
     }
@@ -1563,7 +1594,14 @@ mod tests {
         assert_eq!(session.pilot().cash(), 250);
         assert_eq!(session.pilot().escorts().len(), 3);
         assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
-        session.tick_traffic(&paying(), &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &paying(),
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(placed_ships(&session), [129, 129, 129]);
     }
 
@@ -1578,7 +1616,14 @@ mod tests {
             .take_off(&catalog(), &mut NeverFires)
             .expect("takes off");
         assert_eq!(session.pilot().cash(), 1000);
-        session.tick_traffic(&paying(), &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &paying(),
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         jump(&mut session, &paying(), 131).expect("arrives");
         assert_eq!(session.pilot().cash(), 600);
     }
@@ -1599,7 +1644,14 @@ mod tests {
             .expect("flies")
             .with_rules(Rulebook::default().with_override(RuleKey::EscortWage, rule));
         assert_eq!(session.rules().source_for(RuleKey::EscortWage), rule);
-        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let id = session.space.escorts.fleet[0];
         (session, id)
     }

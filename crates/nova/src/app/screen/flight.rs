@@ -48,13 +48,20 @@ impl AppScreen {
         };
         let mut spaceport =
             SpaceportView::new(self.data.as_ref(), stellar, template(SPACEPORT_DIALOG));
-        if let Some(market) = self.flight.as_ref().and_then(FlightView::market) {
+        // The exchange, the outfitter, the shipyard and the room to hire,
+        // read together as the spaceport opens.
+        let shops = self
+            .flight
+            .as_mut()
+            .map(FlightView::shops)
+            .unwrap_or_default();
+        if let Some(market) = shops.market {
             let trade = template(TRADE_DIALOG).map(|(template, _)| template);
             let quantity = template(QUANTITY_DIALOG).map(|(template, _)| template);
             let colors = self.data.list_colors();
             spaceport = spaceport.with_trade(trade, quantity, market, colors);
         }
-        if let Some(outfitter) = self.flight.as_mut().and_then(FlightView::outfitter) {
+        if let Some(outfitter) = shops.outfitter {
             let outfit = template(OUTFIT_DIALOG).map(|(template, _)| template);
             let quantity = template(QUANTITY_DIALOG).map(|(template, _)| template);
             let art: Rc<dyn OutfitterCatalog> = Rc::clone(&self.data) as Rc<dyn OutfitterCatalog>;
@@ -66,7 +73,7 @@ impl AppScreen {
             plain: template_of(SHIP_INFO_DIALOG),
             picture: template_of(SHIP_PICTURE_INFO_DIALOG),
         };
-        if let Some(shipyard) = self.flight.as_mut().and_then(FlightView::shipyard) {
+        if let Some(shipyard) = shops.shipyard {
             let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
             spaceport = spaceport.with_shipyard(
                 template_of(SHIPYARD_DIALOG),
@@ -76,10 +83,10 @@ impl AppScreen {
                 art,
             );
         }
-        if let Some(session) = self
+        if self
             .flight
             .as_ref()
-            .and_then(|flight| flight.session().ok())
+            .is_some_and(|flight| flight.failure().is_none())
         {
             let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
             spaceport = spaceport
@@ -93,7 +100,7 @@ impl AppScreen {
                     info_templates(),
                     art,
                     // `_CanHireEscorts`, as the hire itself reads it.
-                    session.can_hire_escorts(),
+                    shops.can_hire_escorts,
                 )
                 .with_missions(
                     template_of(COMPUTER_DIALOG),
@@ -289,17 +296,19 @@ impl AppScreen {
     /// refresh left hidden, its course map's zoom and whether the map
     /// shows the borders, for the next flight in this run.
     pub(super) fn remember_flight(&mut self, flight: &FlightView<Rc<GameData>>) {
-        if let Some(slot_sprites) = flight.slot_sprites() {
-            self.slot_sprites = slot_sprites.clone();
-        }
-        if let Some(last_refresh) = flight.last_refresh() {
-            self.last_refresh = Some(last_refresh);
-        }
-        if let Some(pool) = flight.stellar_sprite_pool() {
-            self.stellar_sprites = pool.clone();
-        }
-        if let Some(kept_berths) = flight.kept_berths() {
-            self.kept_berths = kept_berths;
+        if let Some(carry) = flight.sim().carry_over() {
+            if let Some(slot_sprites) = carry.slot_sprites {
+                self.slot_sprites = slot_sprites;
+            }
+            if let Some(last_refresh) = carry.last_refresh {
+                self.last_refresh = Some(last_refresh);
+            }
+            if let Some(pool) = carry.stellar_sprite_pool {
+                self.stellar_sprites = pool;
+            }
+            if let Some(kept_berths) = carry.kept_berths {
+                self.kept_berths = kept_berths;
+            }
         }
         if let Some(zoom) = flight.course_map_zoom() {
             self.course_map_zoom = Some(zoom);
@@ -314,7 +323,7 @@ impl AppScreen {
 
     /// Puts the pilot flying away as play ends: deletes it, when there
     /// is somewhere it is kept and it is a strict pilot dying outside the
-    /// escape pod ([`FlightView::deletes_pilot_on_ending_play`]), as
+    /// escape pod ([`SessionFlight::deletes_pilot_on_ending_play`](nova_view::flight::SessionFlight::deletes_pilot_on_ending_play)), as
     /// `_EnterGameFromMainScreen` does once `_PlayGame` returns
     /// (@0x1a4ab-0x1a4e1), and otherwise saves it
     /// ([`AppScreen::save_pilot`]). A failed delete becomes a warning.
@@ -324,11 +333,11 @@ impl AppScreen {
         let (Some(flight), Some(keeper)) = (&self.flight, self.keeper()) else {
             return;
         };
-        if !flight.deletes_pilot_on_ending_play() {
+        if !flight.sim().deletes_pilot_on_ending_play() {
             self.save_pilot();
             return;
         }
-        let Some(pilot) = flight.pilot() else {
+        let Some(pilot) = flight.sim().pilot() else {
             return;
         };
         if let Err(warning) = keeper.delete(pilot.name()) {
@@ -337,7 +346,7 @@ impl AppScreen {
     }
 
     /// Saves the pilot flying, when it has a name, there is somewhere to
-    /// keep it and it may be saved ([`FlightView::may_save`]: not while its
+    /// keep it and it may be saved ([`SessionFlight::may_save`](nova_view::flight::SessionFlight::may_save): not while its
     /// ship breaks up or after it is destroyed); a failure becomes a
     /// warning. Pilots without a name, which the developer's F flies, are
     /// never saved.
@@ -361,10 +370,10 @@ impl AppScreen {
         replaces: Option<&str>,
     ) -> Option<String> {
         let keeper = self.keeper()?;
-        if !flight.may_save() {
+        if !flight.sim().may_save() {
             return None;
         }
-        let pilot = flight.pilot()?;
+        let pilot = flight.sim().pilot()?;
         pilot_key(pilot.name())?;
         match replaces {
             Some(replaces) => keeper.save_replacing(pilot, replaces).err(),

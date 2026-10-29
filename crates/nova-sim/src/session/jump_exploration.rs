@@ -260,8 +260,8 @@ pub(super) mod tests {
     /// refresh until the jump's.
     fn bound(session: &mut Session, catalog: &FakePilotCatalog, to: i16, script: &str) {
         session.plot_course(SystemId(to)).expect("a route");
-        fly_out(session);
-        begin_jump_now(session).expect("jumps");
+        fly_out(session, &catalog);
+        begin_jump_now(session, &catalog).expect("jumps");
         run(session, script);
         settle(session, catalog);
     }
@@ -468,8 +468,8 @@ pub(super) mod tests {
         catalog.crons.push(scripted(128, 1, "X132", ""));
         let mut session = flown(&catalog, &[], MultiJumpRule::Engine);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        fly_out(&mut session, &catalog);
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
         session.pilot.bits_mut().set(hiding_bit(131));
         let seen = Rc::new(Systems::default());
         let mut session = session.with_set_op_observer(seen.clone());
@@ -521,8 +521,8 @@ pub(super) mod tests {
         let catalog = alternates();
         let mut session = flown(&catalog, &[], MultiJumpRule::Engine);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        fly_out(&mut session, &catalog);
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
         session.pilot.bits_mut().set(hiding_bit(131));
         let session = aborting_on(session, 601, EventFilter::EnteredSystem(SystemId(134)));
         let session = aborting_on(session, 602, EventFilter::EnteredSystem(SystemId(131)));
@@ -577,8 +577,8 @@ pub(super) mod tests {
     fn jumped_from_130(catalog: &FakePilotCatalog, source: RuleSource, to: i16) -> Session {
         let mut session = rescued_in_130(catalog, source);
         session.plot_course(SystemId(to)).expect("a route");
-        fly_out(&mut session);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        fly_out(&mut session, &catalog);
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
         assert_eq!(
             session.arrive(catalog, &mut NeverFires),
             Some(SystemId(to)),

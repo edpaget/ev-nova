@@ -193,22 +193,15 @@ impl Session {
     /// The sets the player's ship was last drawn on: its hull's, and its
     /// alt layer's while it is drawn (see `nova_sim::combat::ship_frames`).
     #[must_use]
-    pub fn player_drawn(&self) -> Drawn {
+    pub(crate) fn player_drawn(&self) -> Drawn {
         self.ship.player_drawn()
     }
 
     /// The player's ion tint as its last display left it, if it glows
     /// (see `nova_sim::combat::ion_tint`).
     #[must_use]
-    pub fn player_ion_tint(&self) -> Option<IonTint> {
+    pub(crate) fn player_ion_tint(&self) -> Option<IonTint> {
         self.ship.player_ion_tint()
-    }
-
-    /// How a murk-colorized ionized ship's tint takes its colour
-    /// ([`RuleKey::IonTintMurkColour`]), which the view reads.
-    #[must_use]
-    pub fn ion_tint_murk_colour(&self) -> RuleSource {
-        self.setup.ion_tint_murk_colour()
     }
 
     /// Ship class `ship`'s own `Shield` as the original loads it (class
@@ -218,7 +211,7 @@ impl Session {
     /// (`_HandleShipDisplay` @0x2c8aa); none for a class the session has
     /// no record of.
     #[must_use]
-    pub fn class_shield(&self, ship: crate::catalog::ShipId) -> Option<f32> {
+    pub(crate) fn class_shield(&self, ship: crate::catalog::ShipId) -> Option<f32> {
         self.statics.class_shield(ship)
     }
 }
@@ -232,13 +225,6 @@ impl Setup {
             alt_held: self.rules.source_for(RuleKey::DisabledAltHeld),
             lights_zeroed: self.rules.source_for(RuleKey::LightsOutZeroesBlink),
         }
-    }
-
-    /// How a murk-colorized ionized ship's tint takes its colour
-    /// ([`RuleKey::IonTintMurkColour`]), which the view reads.
-    #[must_use]
-    fn ion_tint_murk_colour(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::IonTintMurkColour)
     }
 }
 
@@ -420,6 +406,7 @@ mod tests {
     use crate::session::ship_change::ClassChange;
     use crate::session::tests::{OUT, bound_for_131};
     use crate::testkit::{FAST, FakePilotCatalog, catalog, hull, land_now, ship};
+    use crate::testkit::{Passive, work, work_with};
 
     /// The test catalog, the player's ship 128 of `shän` `Flags` `flags`
     /// and `sets` base sets, `AnimDelay` 5, 36 frames a turn; ship 129 of
@@ -455,8 +442,7 @@ mod tests {
     /// One step of the session under `controls`: the player's tick, then
     /// the fight and the display.
     fn step(session: &mut Session, controls: Controls) {
-        session.tick(controls);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &crate::testkit::catalog(), controls);
     }
 
     fn banking() -> FrameSpec {
@@ -612,7 +598,7 @@ mod tests {
         for _ in 0..400 {
             let stage = session.ship.warp_stage(session.mode.jump());
             session.ship.ship_display.frames.bank = 14.0;
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
             if session.ship.warp_stage(session.mode.jump()) > JUMP_LEVEL_STAGE {
                 assert_eq!(session.ship.ship_display.frames.bank, 0.0, "past 30");
                 return;
@@ -697,7 +683,7 @@ mod tests {
             session.ship.fit.armament.fold_mut().dir = 0;
             assert_eq!(session.begin_jump(), Ok(SystemId(131)));
             for _ in 0..200 {
-                session.tick(Controls::default());
+                work(&mut session, &catalog, Controls::default());
                 if session.ship.warp_stage(session.mode.jump()) > 1.0 {
                     break;
                 }
@@ -744,7 +730,7 @@ mod tests {
         let catalog = displaying(0, 1);
         let mut session = Session::start(&catalog).expect("starts");
         session.ship.fit.armament.stamp_fire();
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.ship.fit.armament.fold().since_fire, 2);
         session.tick_again(
             Controls::default(),
@@ -843,8 +829,14 @@ mod tests {
         };
         (0..n)
             .map(|_| {
-                session.tick(Controls::default());
-                session.tick_combat(rules, &mut NeverFires);
+                work_with(
+                    session,
+                    &crate::testkit::catalog(),
+                    Controls::default(),
+                    &Passive,
+                    rules,
+                    &mut NeverFires,
+                );
                 session.player_drawn().lights
             })
             .collect()
@@ -897,8 +889,13 @@ mod tests {
         land_now(&mut session).expect("lands");
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.ship.ship_display.frames.lights, lights, "a landing");
+        // The passes flying out step the lights on; the arrival keeps them.
+        session.plot_course(SystemId(131)).expect("a route");
+        crate::testkit::fly_out(&mut session, &catalog);
+        crate::testkit::begin_jump_now(&mut session, &catalog).expect("jumps");
+        let lights = session.ship.ship_display.frames.lights;
         assert_eq!(
-            crate::testkit::jump(&mut session, &catalog, 131),
+            session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
         );
         assert_eq!(session.ship.ship_display.frames.lights, lights, "a jump");

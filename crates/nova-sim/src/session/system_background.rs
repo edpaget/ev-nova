@@ -12,7 +12,7 @@ impl Session {
     /// system, uses black (`BackColor` 33 @0x6e1c). The view narrows it
     /// to the display's RGB555.
     #[must_use]
-    pub fn system_background(&self) -> Option<u32> {
+    pub(crate) fn system_background(&self) -> Option<u32> {
         self.chart.system_background(&self.pilot)
     }
 }

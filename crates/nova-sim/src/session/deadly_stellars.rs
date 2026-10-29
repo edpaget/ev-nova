@@ -215,6 +215,7 @@ pub(super) mod tests {
     use crate::sound::SimSound;
     use crate::story::{Fate, StoryEvent};
     use crate::testkit::{FakePilotCatalog, outfit, person, planet};
+    use crate::testkit::{work, work_with};
     use crate::traffic::npc::{Npc, NpcPerson};
 
     /// A deadly stellar `id` at (`x`, `y`), 100 x 100 (radius 50).
@@ -249,7 +250,7 @@ pub(super) mod tests {
     }
 
     fn fight(session: &mut Session) {
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &crate::testkit::catalog(), Controls::default());
     }
 
     fn npc_mut(session: &mut Session) -> &mut Npc {
@@ -568,7 +569,7 @@ pub(super) mod tests {
             fight(&mut session);
             assert_eq!(session.ship.condition, Condition::Destroyed);
             let mut events = session.take_combat_events();
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
             fight(&mut session);
             session.tick_again(
                 Controls::default(),
@@ -609,7 +610,7 @@ pub(super) mod tests {
             assert_eq!(session.player_fate(), crate::PlayerFate::Exploded);
             assert!(matches!(session.player_end, Some(Ending::Holding { .. })));
             for _ in 0..400 {
-                session.tick(Controls::default());
+                work(&mut session, &catalog, Controls::default());
                 fight(&mut session);
                 assert!(!session.ship.fate.rescue_due, "never rescued");
             }
@@ -645,9 +646,18 @@ pub(super) mod tests {
                 matches!(session.player_end, Some(Ending::Holding { .. })),
                 "{jump:?}"
             );
+            // The pass's move ran the jump's frame, its warp clock on a
+            // tick, before `_HandleDeadlyStellars` (@0x4450e) killed it.
+            let jump = match jump {
+                Jump::PreJump { to, bearing, .. } => Jump::PreJump {
+                    to,
+                    bearing,
+                    warp: Some(4),
+                },
+                Jump::Hyperspace { to, .. } => Jump::Hyperspace { to, warp: 4 },
+            };
             assert_eq!(session.mode.jump(), Some(jump), "the jump stays");
             for tick in 0..5 {
-                session.tick(Controls::default());
                 fight(&mut session);
                 assert!(
                     matches!(session.player_end, Some(Ending::Holding { .. })),
@@ -660,9 +670,8 @@ pub(super) mod tests {
 
     /// The pod's countdown runs out on the tick a deadly stellar covers
     /// it: `_HandlePlayer` rescues it (@0x68de3) before
-    /// `_HandleDeadlyStellars` runs that pass, so it is never killed. The
-    /// view rescues ([`Session::rescue_if_due`]) after the tick and before
-    /// the fight.
+    /// `_HandleDeadlyStellars` runs that pass, so it is never killed: the
+    /// rescue ends the pass ([`Session::game_work`]).
     #[test]
     fn a_pod_rescued_on_the_tick_a_deadly_stellar_covers_it_is_not_killed() {
         for rules in readings() {
@@ -671,10 +680,15 @@ pub(super) mod tests {
             let mut session = among(&catalog, &[on_the_player], 1, rules);
             session.pilot.ship = crate::combat::hull::ESCAPE_POD_SHIP;
             session.pod = Some(1);
-            session.tick(Controls::default());
-            assert!(session.ship.fate.rescue_due, "its countdown ran out");
-            assert!(session.rescue_if_due(&catalog, &mut NeverFires));
-            fight(&mut session);
+            // Its countdown runs out, and the rescue ends the pass
+            // (`_HandlePlayer` @0x68ddd) before `_HandleDeadlyStellars`.
+            assert!(session.game_work(
+                Controls::default(),
+                &catalog,
+                &crate::testkit::Passive,
+                Rules::default(),
+                &mut NeverFires
+            ));
             assert_ne!(session.ship.condition, Condition::Destroyed);
             assert_eq!(session.player_end, None);
             assert_eq!(exploded(&session.take_combat_events()), []);
@@ -776,24 +790,24 @@ pub(super) mod tests {
         ready: impl Fn(&mut Session),
     ) -> Session {
         let mut session = among(catalog, &[planet(140, 3000.0, 0.0)], 1, Rulebook::default());
-        let struck = |session: &Session| {
-            session
-                .space
-                .strikes
-                .iter()
-                .any(|strike| strike.ship == ShipRef::Player)
+        // The pass answers its strikes: a hit shows in the player's
+        // reserves.
+        let struck = |before: &Session, after: &Session| {
+            let (was, now) = (before.reserves(), after.reserves());
+            now.shield.now < was.shield.now || now.armor.now < was.armor.now
         };
         for _ in 0..60 {
             ready(&mut session);
             let mut trial = session.clone();
             fire_at_the_player(&mut trial, catalog);
-            if struck(&trial) {
+            if struck(&session, &trial) {
                 session.take_messages();
                 session.take_sounds();
                 session.chart.sites = vec![deadly_at(140, 0.0, 40.0)];
                 session.chart.listed = session.chart.sites.clone();
+                let before = session.clone();
                 fire_at_the_player(&mut session, catalog);
-                assert!(struck(&session), "hit that tick");
+                assert!(struck(&before, &session), "hit that tick");
                 return session;
             }
             session = trial;
@@ -802,8 +816,14 @@ pub(super) mod tests {
     }
 
     fn fire_at_the_player(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.tick_traffic(catalog, &crate::session::tests::Firing, &mut NeverFires);
-        fight(session);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &crate::session::tests::Firing,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// Which of the lines and sounds of a downed player `session` raised.
@@ -948,13 +968,13 @@ pub(super) mod tests {
             let now = trial.space.npc(target).map(|npc| npc.condition);
             if now != Some(Condition::Intact) {
                 assert_eq!(now, Some(Condition::Disabled), "the hit disables it");
+                // The pass answers its strikes; the fight's own event says
+                // a hit downed it.
                 assert!(
-                    trial
-                        .space
-                        .strikes
-                        .iter()
-                        .any(|strike| strike.ship == ShipRef::Npc(target)),
-                    "by a strike"
+                    trial.take_combat_events().contains(&CombatEvent::Disabled {
+                        ship: ShipRef::Npc(target)
+                    }),
+                    "by a hit"
                 );
                 let at = session.space.npc(target).expect("there").state.position;
                 session.chart.sites = vec![LandingSite {

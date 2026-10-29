@@ -59,7 +59,7 @@
 //! **Drawn.** `_HandleShipDisplay` treats a ship the player leads apart
 //! in three branches. It draws it in the escorts' layer, under the other
 //! ships and the player and over the disabled ones (@0x2bd24-0x2bd47,
-//! [`Session::draw_order`]; see [`ship_layer`](crate::ship_layer)), in
+//! `Session::draw_order`; see [`ship_layer`](crate::ship_layer)), in
 //! the order each ship entered it, so a ship that stops being led goes
 //! on top of the other ships and the player, as `_PutSpriteInLayer`
 //! leaves it (@0x766c; [`RuleKey::ShipOverlap`] chooses). At a
@@ -81,7 +81,7 @@ use crate::traffic::npc::Npc;
 impl Session {
     /// The ships the player leads, in ship-table order (see the module
     /// docs).
-    pub fn player_led(&self) -> impl Iterator<Item = &Npc> + '_ {
+    pub(crate) fn player_led(&self) -> impl Iterator<Item = &Npc> + '_ {
         self.space.player_led()
     }
 
@@ -102,19 +102,22 @@ impl Session {
     /// sprites are hidden until then, unless [`RuleKey::UndisplayedShips`]
     /// reads otherwise (`Space::is_displayed`; see the
     /// `slot_visibility` module).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn draw_order(&self) -> Vec<ShipRef> {
+    pub(crate) fn draw_order(&self) -> Vec<ShipRef> {
         self.draw_layers()
             .into_iter()
             .map(|(ship, _)| ship)
             .collect()
     }
 
-    /// The ships in [`Session::draw_order`], each with the layer it is
+    /// The ships in `Session::draw_order`, each with the layer it is
     /// drawn in, which the view stacks the shots among
     /// ([`sprite_layer`](crate::sprite_layer)).
     #[must_use]
-    pub fn draw_layers(&self) -> Vec<(ShipRef, ShipLayer)> {
+    pub(crate) fn draw_layers(&self) -> Vec<(ShipRef, ShipLayer)> {
         let (order, layers): (Vec<ShipRef>, Vec<(ShipRef, ShipLayer)>) =
             match self.setup.rules.source_for(RuleKey::ShipOverlap) {
                 RuleSource::Engine => {
@@ -166,7 +169,7 @@ impl Session {
     /// of the frames its slot last cloned ([`Session::framed_by`]). A
     /// ship that is not here is not hidden.
     #[must_use]
-    pub fn is_hidden(&self, ship: ShipRef) -> bool {
+    pub(crate) fn is_hidden(&self, ship: ShipRef) -> bool {
         let hull = match ship {
             ShipRef::Player => Some(self.ship.fit.hull),
             ShipRef::Npc(id) => self.space.npc(id).map(|npc| npc.hull),
@@ -188,7 +191,7 @@ impl Session {
     /// whatever its slot last cloned, as the frames are cloned only at a
     /// display (@0x2b824; see [`Session::hover_place`]).
     #[must_use]
-    pub fn framed_by(&self, ship: ShipRef) -> Option<ShipId> {
+    pub(crate) fn framed_by(&self, ship: ShipRef) -> Option<ShipId> {
         let (slot, own, hull) = match ship {
             ShipRef::Player => (Slot::Player, self.pilot.ship, self.ship.fit.hull),
             ShipRef::Npc(id) => {
@@ -206,28 +209,13 @@ impl Session {
         })
     }
 
-    /// Every ship type [`Session::framed_by`] gives for a ship here now
-    /// other than the player's own type for the player, whose sheet is
-    /// read with its ship: the sheets the view must read to box them,
-    /// the player's slot first when it holds another type's frames.
-    pub fn framed_types(&self) -> impl Iterator<Item = ShipId> + '_ {
-        let player = self
-            .framed_by(ShipRef::Player)
-            .filter(|&ship| ship != self.pilot.ship);
-        let npcs = self
-            .npcs()
-            .iter()
-            .filter_map(|npc| self.framed_by(ShipRef::Npc(npc.id)));
-        player.into_iter().chain(npcs)
-    }
-
     /// Each ship slot's draw layer and when it entered it, as the last
-    /// flight tick laid them out ([`Session::draw_order`]), and the frames
+    /// flight tick laid them out (`Session::draw_order`), and the frames
     /// it last cloned ([`Session::framed_by`]): the history to hand a
     /// session loaded later in the same run
     /// ([`Session::with_slot_sprites`]).
     #[must_use]
-    pub fn slot_sprites(&self) -> &SlotSprites {
+    pub(crate) fn slot_sprites(&self) -> &SlotSprites {
         self.space.slot_sprites()
     }
 
@@ -240,7 +228,7 @@ impl Session {
     /// and nothing between pilots re-lays or rebuilds a slot's sprites
     /// (see [`ship_layer`](crate::ship_layer)).
     #[must_use]
-    pub fn with_slot_sprites(mut self, slot_sprites: SlotSprites) -> Self {
+    pub(crate) fn with_slot_sprites(mut self, slot_sprites: SlotSprites) -> Self {
         self.space.combat.set_shot_slots(slot_sprites.shots.clone());
         self.space.slot_sprites = slot_sprites;
         self
@@ -352,7 +340,7 @@ impl Space {
     }
 
     /// Each ship slot's draw layer and when it entered it, as the last
-    /// flight tick laid them out ([`Session::draw_order`]), and the frames
+    /// flight tick laid them out (`Session::draw_order`), and the frames
     /// it last cloned ([`Session::framed_by`]): the history to hand a
     /// session loaded later in the same run
     /// ([`Session::with_slot_sprites`]).
@@ -371,13 +359,16 @@ pub(super) fn slot_of(npc: &Npc) -> Slot {
 mod tests {
     use super::*;
     use crate::catalog::{MissionShip, ShipId};
+
     use crate::combat::hull::Condition;
+    use crate::flight::Controls;
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
     use crate::rulebook::Rulebook;
     use crate::session::mission_ships::tests::{
         accepted, jump_to, shipping, ships_catalog, take_off, ticks,
     };
+    use crate::testkit::work;
     use crate::traffic::npc::NpcId;
     use crate::traffic::warp_out::WarpGoal;
     use crate::warp;
@@ -449,7 +440,7 @@ mod tests {
         let mut player: f32 = 0.0;
         let mut npcs = std::collections::BTreeMap::new();
         for _ in 0..n {
-            session.tick(thrust);
+            work(session, &catalog, thrust);
             ticks(session, catalog, 1);
             player = player.max(session.player().velocity.length());
             for npc in session.npcs() {
@@ -818,7 +809,6 @@ mod tests {
                 session.space.traffic.departed()
             );
             let before: Vec<_> = led.iter().map(|&id| state(&session, id)).collect();
-            session.tick(crate::flight::Controls::default());
             ticks(&mut session, &catalog, 1);
             let clock = session.warp_clock().expect("in the warp");
             let v = warp::npc_warp_out_speed(
@@ -941,10 +931,11 @@ mod tests {
         assert_eq!(drawn(&session), expected);
     }
 
-    /// Advances the fight a tick, with nothing firing: the ships are laid
-    /// out in their layers at its end.
+    /// A pass, with nothing firing: the ships are laid out in their layers
+    /// at its end. The system is set up and no mission ship is due, so the
+    /// pass reads nothing of the catalog the session flies.
     fn combat_tick(session: &mut Session) {
-        session.tick_combat(crate::Rules::default(), &mut crate::chance::NeverFires);
+        work(session, &crate::testkit::catalog(), Controls::default());
     }
 
     /// [`with_traffic`] with the ships laid out once: the session, the
@@ -1292,6 +1283,14 @@ mod tests {
     /// A hidden ship's type, not one any fixture ship flies.
     const HIDDEN: ShipId = ShipId(300);
 
+    /// The ship types `session`'s frame says a ship here is boxed by
+    /// ([`FlightFrame::framed_types`](crate::flight_frame::FlightFrame::framed_types)).
+    fn framed_types(session: &Session) -> Vec<ShipId> {
+        let mut frame = crate::flight_frame::FlightFrame::default();
+        session.fill_frame(&mut frame);
+        frame.framed_types().collect()
+    }
+
     #[test]
     fn a_hidden_ship_is_framed_by_its_berths_last_shown_type() {
         let (mut session, mission, hired) = flying(1);
@@ -1307,8 +1306,8 @@ mod tests {
         assert_eq!(session.framed_by(ShipRef::Player), Some(session.ship()));
         assert_eq!(session.framed_by(ShipRef::Npc(hired)), None, "gone");
         assert_eq!(
-            session
-                .framed_types()
+            framed_types(&session)
+                .into_iter()
                 .collect::<std::collections::BTreeSet<_>>(),
             [ShipId(200), shown].into_iter().collect(),
             "not the player's own type"
@@ -1325,8 +1324,16 @@ mod tests {
             session.framed_by(ShipRef::Npc(hidden)),
             Some(crate::ship_layer::INIT_FRAMES)
         );
-        assert!(session.framed_types().any(|ship| ship == ShipId(128)));
-        assert!(!session.framed_types().any(|ship| ship == HIDDEN));
+        assert!(
+            framed_types(&session)
+                .into_iter()
+                .any(|ship| ship == ShipId(128))
+        );
+        assert!(
+            !framed_types(&session)
+                .into_iter()
+                .any(|ship| ship == HIDDEN)
+        );
     }
 
     #[test]
@@ -1355,7 +1362,7 @@ mod tests {
         assert_eq!(session.framed_by(ShipRef::Player), Some(flown));
         assert_eq!(session.slot_sprites().frames.of(Slot::Player), flown);
         assert_eq!(
-            session.framed_types().next(),
+            framed_types(&session).into_iter().next(),
             Some(flown),
             "the player's slot first"
         );
@@ -1376,7 +1383,11 @@ mod tests {
         // out is framed by its slot's frames whatever its hiding).
         combat_tick(&mut session);
         assert_eq!(session.framed_by(ShipRef::Npc(hidden)), Some(HIDDEN));
-        assert!(session.framed_types().any(|ship| ship == HIDDEN));
+        assert!(
+            framed_types(&session)
+                .into_iter()
+                .any(|ship| ship == HIDDEN)
+        );
         assert_eq!(
             session.slot_sprites().frames.of(Slot::Berth(berth)),
             ShipId(200),

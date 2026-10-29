@@ -193,7 +193,7 @@ impl Session {
     /// out, reading `catalog` and drawing on `chance` (see the module
     /// docs); whether it did. The flight view asks after each tick and
     /// stops stepping when it did, so the dësc opens before the next.
-    pub fn rescue_if_due(
+    pub(crate) fn rescue_if_due(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
@@ -269,7 +269,7 @@ impl Session {
     }
 
     /// The rescue's dësc, once: [`RESCUE_DESC`] after a rescue, then none.
-    pub fn take_rescue_desc(&mut self) -> Option<i16> {
+    pub(crate) fn take_rescue_desc(&mut self) -> Option<i16> {
         self.ship.take_rescue_desc()
     }
 
@@ -421,8 +421,10 @@ impl Chart {
 mod tests {
     use super::*;
     use crate::catalog::LandingSite;
+    use crate::flight::Controls;
     use crate::landing::StellarFlags;
     use crate::testkit::{FakePilotCatalog, catalog, planet, star};
+    use crate::testkit::{Passive, work, work_with};
 
     /// A shipyard `id` at the system's centre.
     fn yard(id: i16) -> LandingSite {
@@ -655,7 +657,7 @@ mod tests {
         GovtId, GovtRecord, HullRecord, MissionRecord, OutfitId, StockWeapon, WeaponId,
     };
     use crate::chance::NeverFires;
-    use crate::combat::Rules;
+
     use crate::combat::armament::MOD_WEAPON;
     use crate::combat::hull::ESCAPE_POD_SHIP;
     use crate::control::{Bit, Script};
@@ -810,7 +812,14 @@ mod tests {
         session.pilot.reserves.fuel.now = 0.0;
         session.hold_cloak(true);
         let _ = session.take_sounds();
-        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.player_cloak(), full, "kept in the pod");
         assert!(
             !session.take_sounds().iter().any(|sound| matches!(
@@ -974,7 +983,7 @@ mod tests {
             );
             assert_eq!(reserves.armor.max, 45.0);
             for _ in 0..30 {
-                session.tick_combat(Rules::default(), &mut NeverFires);
+                work(&mut session, &catalog, Controls::default());
             }
             assert_eq!(session.pilot.reserves.armor.now, armor, "{source:?}: kept");
         }

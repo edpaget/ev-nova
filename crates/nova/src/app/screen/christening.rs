@@ -122,7 +122,10 @@ impl AppScreen {
         } = self.christening.take().expect("open");
         self.sounds.extend(dialog.take_sounds());
         if let TextInputOutcome::Confirm(typed) = outcome {
-            let flight = self.pilot_flight(christen(pilot, &typed), false);
+            // The run's last refresh, read before the new game is held in
+            // place of the one it may come from.
+            let carried = self.run_refresh();
+            let flight = self.pilot_flight(christen(pilot, &typed), false, carried);
             self.hold_new_pilot(flight, replaces.as_deref());
         }
         ScreenAction::None

@@ -33,12 +33,12 @@ fn an_idle_npcs_bay_is_held_at_its_reload_and_counts_down_once_it_has_a_target()
     let mut combat = Combat::default();
     let mut ships = [carrying(Ship::at(1, 0.0, 0.0)), Ship::at(2, 500.0, 0.0)];
     for _ in 0..3 {
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(reload(&ships, 0), 60.0, "held");
     }
     ships[0].target = Some(ShipRef::Npc(NpcId(2)));
     for left in [59.0, 58.0, 57.0] {
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(reload(&ships, 0), left, "counting down");
     }
 }
@@ -49,10 +49,10 @@ fn an_npc_whose_target_is_gone_from_the_fight_is_held_as_idle() {
     // (@0x33865-0x33888).
     let mut combat = Combat::default();
     let mut ships = [carrying(Ship::at(1, 0.0, 0.0)).targeting(ShipRef::Npc(NpcId(9)))];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(reload(&ships, 0), 60.0);
     let mut ships = [carrying(Ship::at(1, 0.0, 0.0)).targeting(ShipRef::Player)];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(reload(&ships, 0), 60.0, "the player out of the fight too");
 }
 
@@ -64,6 +64,6 @@ fn the_players_bays_are_never_held() {
         target: None,
         ..player_with(bay())
     }];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::fire_player(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(reload(&ships, 0), 0.0, "`_HandlePlayer` has no hold");
 }

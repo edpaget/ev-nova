@@ -334,9 +334,9 @@ impl Session {
     /// This session with `rule` saying when the player's ship is
     /// disabled after a change of ship (see the module docs):
     /// [`NovaDisable`] by default. The fight's own rule is given each
-    /// tick ([`Session::tick_combat`]).
+    /// pass ([`Session::game_work`]).
     #[must_use]
-    pub fn with_disable_rule(mut self, rule: Rc<dyn DisableRule>) -> Self {
+    pub(crate) fn with_disable_rule(mut self, rule: Rc<dyn DisableRule>) -> Self {
         self.setup.disable_rule = Shared(rule);
         self
     }
@@ -493,7 +493,7 @@ impl Session {
     /// a landing's mission checks among what it settles) and a jettison
     /// ([`Session::jettison_cargo`], its failures' `OnFailure`). An order
     /// or a purchase that is refused before it begins clears nothing.
-    pub fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
+    pub(crate) fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
         self.out.take_interface_loads()
     }
 

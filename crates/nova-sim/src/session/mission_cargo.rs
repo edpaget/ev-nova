@@ -105,7 +105,7 @@ impl Session {
     /// pickup's checks: whether it is aboard now. False for a free slot,
     /// or a mission of another `PickupMode`. [`Session::board`] calls it
     /// as it boards the mission's special ship.
-    pub fn pick_up_boarded_cargo(&mut self, slot: u8) -> bool {
+    pub(crate) fn pick_up_boarded_cargo(&mut self, slot: u8) -> bool {
         let Some(mission) = self.pilot.missions.get(slot).map(|active| active.mission) else {
             return false;
         };
@@ -148,10 +148,10 @@ impl Session {
     /// (@0x3e2fe-0x3e33d), a mission failed or not, and drops the cargo
     /// boxes behind the player and its trader escorts, drawing on
     /// `chance` (see the `cargo_boxes` module); landed, neither.
-    pub fn jettison_cargo(&mut self, all: bool, chance: &mut dyn Chance) {
+    pub(crate) fn jettison_cargo(&mut self, all: bool, chance: &mut dyn Chance) {
         // A new run of docked scripts, its failures' `OnFailure` (see
         // [`Session::take_interface_loads`]).
-        self.out.interface_loads.clear();
+        self.out.begin_docked_run();
         let goods = self.pilot.goods_held();
         let decided = jettison(
             &self.pilot.missions,
@@ -447,6 +447,9 @@ fn smuggling_ship_name(
 
 #[cfg(test)]
 mod tests {
+    use crate::combat::Rules;
+    use crate::flight::Controls;
+    use crate::testkit::{work, work_with};
     use std::rc::Rc;
 
     use super::*;
@@ -1355,7 +1358,14 @@ mod tests {
     fn inspected(catalog: &FakePilotCatalog, missions: &[i16], govt: Option<GovtId>) -> Session {
         let mut session = loaded(catalog, missions);
         in_flight(&mut session, catalog);
-        session.tick_traffic(catalog, &LookedOver, &mut NeverFires);
+        work_with(
+            &mut session,
+            catalog,
+            Controls::default(),
+            &LookedOver,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let mut police = npc(0, session.stats());
         police.govt = govt;
         police.ai_type = AiType::Interceptor;
@@ -1367,12 +1377,18 @@ mod tests {
         session
     }
 
-    /// The interceptor gives the inspection up in a traffic tick, and the
-    /// combat tick after it takes the scan, drawing `draw`.
+    /// The interceptor gives the inspection up in a pass's think, and the
+    /// pass's line work takes the scan, drawing `draw`.
     fn looked_over(session: &mut Session, catalog: &FakePilotCatalog, draw: u32) -> Vec<u32> {
         let mut chance = Draws::of(&[draw]);
-        session.tick_traffic(catalog, &LookedOver, &mut chance);
-        session.tick_combat(crate::Rules::default(), &mut chance);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &LookedOver,
+            crate::Rules::default(),
+            &mut chance,
+        );
         chance.asked
     }
 
@@ -1380,17 +1396,26 @@ mod tests {
     fn a_scan_waits_for_the_advance_pass_in_double_time() {
         let catalog = policed(vec![masked(140, 0x0006, 0x0020)], 500);
         let mut session = inspected(&catalog, &[140], Some(GovtId(128)));
+        // The second pass runs no AI (`_DoPlayGameWork(0)` @0x4402a), so
+        // no think queues the scan on it.
         let mut chance = Draws::of(&[75]);
-        session.tick_traffic(&catalog, &LookedOver, &mut chance);
+        session.set_double_time_key(true);
         session.tick_again(
             crate::flight::Controls::default(),
-            &crate::ai::NovaAi::default(),
+            &LookedOver,
             crate::Rules::default(),
             &mut chance,
         );
         assert!(chance.asked.is_empty(), "not scanned on the second pass");
         assert_eq!(held_missions(&session), [(0, 140)]);
-        session.tick_combat(crate::Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &LookedOver,
+            Rules::default(),
+            &mut chance,
+        );
         assert_eq!(chance.asked, [100], "scanned on the next advance pass");
         assert_eq!(held_missions(&session), [], "ended");
     }
@@ -1663,10 +1688,16 @@ mod tests {
     fn the_session_names_a_junk_and_an_outfit_by_their_records() {
         let catalog = contraband_catalog(0);
         let session = Session::start(&catalog).expect("starts");
-        assert_eq!(session.junk_lc_name(BIO_WEAPONS), Some("bio-weapons"));
-        assert_eq!(session.junk_lc_name(JunkId(151)), None);
-        assert_eq!(session.outfit_names(BLASTER), Some(("blaster", "blasters")));
-        assert_eq!(session.outfit_names(OutfitId(151)), None);
+        assert_eq!(
+            session.statics.junk_lc_name(BIO_WEAPONS),
+            Some("bio-weapons")
+        );
+        assert_eq!(session.statics.junk_lc_name(JunkId(151)), None);
+        assert_eq!(
+            session.statics.outfit_names(BLASTER),
+            Some(("blaster", "blasters"))
+        );
+        assert_eq!(session.statics.outfit_names(OutfitId(151)), None);
     }
 
     #[test]
@@ -1873,7 +1904,14 @@ mod tests {
         catalog.ship_records = vec![crate::testkit::ship(129, crate::testkit::FAST)];
         let mut session = loaded(&catalog, &[]);
         in_flight(&mut session, &catalog);
-        session.tick_traffic(&catalog, &LookedOver, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &LookedOver,
+            Rules::default(),
+            &mut NeverFires,
+        );
         session.pilot.cargo.insert(Good::Junk(BIO_WEAPONS), 1);
         let at = session.ship.player.position;
         let ace = session
@@ -1929,18 +1967,6 @@ mod tests {
         assert_eq!(session.take_messages(), []);
     }
 
-    #[test]
-    fn a_scanner_gone_out_of_reach_by_the_combat_tick_scans_nothing() {
-        let catalog = contraband_catalog(500);
-        let mut session = smuggler(&catalog, 1, 0, 1200);
-        let mut chance = Draws::of(&[0]);
-        session.tick_traffic(&catalog, &LookedOver, &mut chance);
-        police(&mut session).state.position.x += 101.0;
-        session.tick_combat(crate::Rules::default(), &mut chance);
-        assert!(chance.asked.is_empty());
-        assert_eq!(session.take_messages(), []);
-    }
-
     // The warp's lead-in (`_ScanPlayer` @0x7e562-0x7e633; see the
     // `warp` module). With no `snd ` 128 the warp sound runs 350 Mac
     // ticks, and with no jump-speed bit the warp factor is 1.3, so the
@@ -1966,9 +1992,14 @@ mod tests {
     /// traffic's, which queues the scans, and the fight's, which takes
     /// them.
     fn step(session: &mut Session, catalog: &FakePilotCatalog, chance: &mut dyn Chance) {
-        session.tick(crate::flight::Controls::default());
-        session.tick_traffic(catalog, &LookedOver, &mut &mut *chance);
-        session.tick_combat(crate::Rules::default(), &mut &mut *chance);
+        work_with(
+            session,
+            catalog,
+            crate::flight::Controls::default(),
+            &LookedOver,
+            crate::Rules::default(),
+            &mut &mut *chance,
+        );
     }
 
     /// Steps quietly until the warp's clock reads `ticks`.
@@ -2041,18 +2072,25 @@ mod tests {
 
     #[test]
     fn a_scan_queued_before_the_warp_and_taken_as_it_begins_convicts() {
-        // Queued in a traffic tick, then J begins the warp before the
-        // fight's tick takes it: t = 0, in the lead-in.
+        // J begins the warp, then the pass's think queues the scan and its
+        // line work takes it: in the lead-in.
         let catalog = contraband_catalog(500);
         let mut session = smuggler(&catalog, 1, 0, 1200);
         bound_east(&mut session, 90.0);
         inspect_again(&mut session);
         let mut chance = Draws::of(&[0]);
-        session.tick_traffic(&catalog, &LookedOver, &mut chance);
         session.begin_jump().expect("jumps");
         assert_eq!(session.warp_clock(), Some(0));
         let _ = session.take_sounds();
-        session.tick_combat(crate::Rules::default(), &mut chance);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &LookedOver,
+            Rules::default(),
+            &mut chance,
+        );
+        assert!(session.in_warp_lead_in());
         assert_eq!(chance.asked, [100]);
         convicted(&mut session);
     }
@@ -2154,7 +2192,7 @@ mod tests {
             &session.statics,
             session.mode.jump()
         ));
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.jumping(), None, "the warp collapsed");
         assert_eq!(session.take_messages(), [SimMessage::JumpCollapsed]);
     }

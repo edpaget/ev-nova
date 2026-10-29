@@ -132,13 +132,16 @@ mod tests {
     use crate::bay::{Carrier, dock_window};
     use crate::catalog::{HullRecord, OutfitId, ShipId, ShipRecord, SystemId};
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::combat::ShipRef;
     use crate::escort::EscortOrder;
+    use crate::flight::Controls;
     use crate::message::SimMessage;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::{Gauge, Reserves};
     use crate::self_repair::{FormerKind, MOD_REPAIR};
     use crate::testkit::{Draws, FAST, FakePilotCatalog, catalog, hull, jump, outfit, ship};
+    use crate::testkit::{Passive, work, work_with};
 
     /// The warship escort's type, carrying Repair Droids, 50 pixels
     /// across, of maneuver 30.
@@ -231,7 +234,14 @@ mod tests {
         let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
         pilot.escorts = fleet();
         let mut session = Session::fly(catalog, pilot).expect("flies");
-        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         session.pilot.escorts[0].order = Some(EscortOrder::Defend);
         let _ = (session.take_messages(), session.take_sounds());
         session.take_save_due();
@@ -254,7 +264,7 @@ mod tests {
     /// the fight ticks, drawing nothing: it leaves the fleet.
     fn disable(session: &mut Session, id: NpcId) {
         session.space.npc_mut(id).expect("there").reserves.armor.now = 3.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &crate::testkit::catalog(), Controls::default());
         assert!(!session.is_escort(id));
         let _ = (session.take_messages(), session.take_sounds());
         session.take_save_due();
@@ -263,7 +273,14 @@ mod tests {
     /// The fight ticks on `draws`; what it asked.
     fn fight(session: &mut Session, draws: &[u32]) -> Vec<u32> {
         let mut chance = Draws::of(draws);
-        session.tick_combat(Rules::default(), &mut chance);
+        work_with(
+            session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
         chance.asked
     }
 
@@ -564,10 +581,24 @@ mod tests {
             .fuel
             .now = 298.0;
         let fuel = |session: &Session| session.space.npc(bare).expect("there").reserves.fuel;
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(fuel(&session).now, 298.5);
         for _ in 0..10 {
-            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Peaceful,
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         assert_eq!(fuel(&session).now, 300.0, "up to its capacity");
         assert_eq!(fuel(&session).max, 300.0);

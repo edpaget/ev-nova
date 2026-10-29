@@ -10,13 +10,16 @@ mod tests {
     use crate::ai::{Goal, NovaAi};
     use crate::catalog::MissionId;
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::combat::ShipRef;
+    use crate::flight::Controls;
     use crate::hail::HailOptions;
     use crate::person::{LEAVES_ON_ACCEPT, REPLACED_BY_MISSION_SHIP};
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::Session;
     use crate::session::hail::tests::{hail, reinforced};
     use crate::session::mission_ships::tests::{hailing_ace, settle, swapping};
+    use crate::testkit::work_with;
     use crate::testkit::{Draws, FakePilotCatalog};
     use crate::traffic::npc::{Npc, NpcId};
 
@@ -124,7 +127,14 @@ mod tests {
         assert_eq!(asked, [2], "the live pirate and the gone one");
         assert_eq!(helper(&session).goal, Goal::Attack(ShipRef::Npc(gone)));
         assert_eq!(helper(&session).target, Some(ShipRef::Npc(gone)));
-        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_ne!(helper(&session).goal.attacking(), Some(ShipRef::Npc(gone)));
         assert_ne!(helper(&session).target, Some(ShipRef::Npc(gone)));
         // No ship in the system answers to the one it was sent at, where

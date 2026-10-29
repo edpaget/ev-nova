@@ -81,7 +81,7 @@ impl Session {
     /// A disabled ship is taken. In the dead branch (0x6870d-0x6888c) no
     /// key handler runs, so an exploded player's key is silent too: its
     /// fate's row refuses the press before it gets here.
-    pub fn press_player_info(&mut self) -> bool {
+    pub(crate) fn press_player_info(&mut self) -> bool {
         if self.mode.jump().is_some()
             || self.port.in_takeoff_grace()
             || matches!(self.ship.condition, Condition::Dying { .. })
@@ -102,7 +102,10 @@ impl Session {
     /// screen faded out (`_screenFaded`, @0x5a013) and a fade pending
     /// (`_fadePending`, @0x5a052-0x5a064), are the screens' state, which
     /// the session does not hold.
-    pub fn open_player_info(&mut self, catalog: &impl PilotCatalog) -> Option<PlayerInfo> {
+    pub(crate) fn open_player_info(
+        &mut self,
+        catalog: &(impl PilotCatalog + ?Sized),
+    ) -> Option<PlayerInfo> {
         if self.mode.jump().is_some() || matches!(self.ship.condition, Condition::Dying { .. }) {
             return None;
         }
@@ -116,7 +119,7 @@ impl Session {
     /// changes nothing: an opening of the dialog is
     /// [`Session::open_player_info`].
     #[must_use]
-    pub fn player_info(&self, catalog: &impl PilotCatalog) -> PlayerInfo {
+    pub fn player_info(&self, catalog: &(impl PilotCatalog + ?Sized)) -> PlayerInfo {
         let words = self.setup.player_info_words();
         let cargo_names = self.strings().string_list(CARGO_NAMES);
         let cargo = self
@@ -301,7 +304,12 @@ impl Chart {
     /// The day's tribute (@0x5352c-0x53583): each stellar some system
     /// lists that is dominated and active, its tribute read from its
     /// holder's stellars in `catalog`.
-    fn tribute(&self, pilot: &Pilot, statics: &Statics, catalog: &impl PilotCatalog) -> i64 {
+    fn tribute(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        catalog: &(impl PilotCatalog + ?Sized),
+    ) -> i64 {
         statics
             .listed_stellars
             .iter()
@@ -325,7 +333,7 @@ impl Chart {
         pilot: &Pilot,
         statics: &Statics,
         setup: &Setup,
-        catalog: &impl PilotCatalog,
+        catalog: &(impl PilotCatalog + ?Sized),
         words: &Words,
     ) -> String {
         if !self.inhabited(catalog, pilot.system) {
@@ -341,7 +349,7 @@ impl Chart {
         &self,
         pilot: &Pilot,
         setup: &Setup,
-        catalog: &impl PilotCatalog,
+        catalog: &(impl PilotCatalog + ?Sized),
     ) -> Option<i16> {
         self.inhabited(catalog, pilot.system)
             .then(|| self.record_in(pilot, setup, pilot.system, None))
@@ -349,7 +357,7 @@ impl Chart {
 
     /// Whether `system` is inhabited (`_SystemIsInhabited` 0x4c4a), its
     /// stellars read from `catalog`.
-    fn inhabited(&self, catalog: &impl PilotCatalog, system: SystemId) -> bool {
+    fn inhabited(&self, catalog: &(impl PilotCatalog + ?Sized), system: SystemId) -> bool {
         let sites = overlaid_sites(&self.galaxy, catalog, system);
         player_info::system_is_inhabited(sites.iter().map(|site| (uninhabited(site), gate(site))))
     }
@@ -368,7 +376,7 @@ impl Chart {
         pilot: &Pilot,
         statics: &Statics,
         setup: &Setup,
-        catalog: &impl PilotCatalog,
+        catalog: &(impl PilotCatalog + ?Sized),
         system: SystemId,
         words: &Words,
     ) -> String {

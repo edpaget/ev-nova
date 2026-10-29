@@ -3,8 +3,10 @@
 //! trigger and its regeneration, the collision passes, the NPCs' point
 //! defence and launches, `_HandleShot`, each NPC's `_HandleShip` by slot,
 //! then `_HandleBeams` and the late steps
-//! (see the [`combat`](super) module docs' steps). [`Combat::tick_on`]
-//! runs them in that order with nothing between them.
+//! (see the [`combat`](super) module docs' steps). The session runs them
+//! in that order, its own work between them
+//! (`nova_sim::Session::pass_after_move`); the fight keeps no copy of the
+//! order.
 
 use super::asteroid_walk::AsteroidField;
 use super::ion::IonLockout;
@@ -326,7 +328,7 @@ impl Combat {
     /// `chance`, each live beam stamping its firer's last shot on the
     /// advance pass, point-defence beams hit their missiles, the beams'
     /// hits land, each ship they struck settles its condition (truncated
-    /// first for a newly downed player), and where each ship stands is
+    /// first for a newly downed player), and where the player stands is
     /// kept for the next tick's collision passes. As the fight's tick
     /// ends, what each ship's ion block shed is cleared
     /// ([`Ion::shed`](super::ion::Ion::shed)). Every ship has regenerated and
@@ -338,22 +340,9 @@ impl Combat {
     /// ([`beam_stellar`](super::beam_stellar)); their strikes are taken
     /// with [`Combat::take_stellar_strikes`].
     ///
-    /// It lends the beams no asteroid field: it is [`Combat::close_tick_in`]
-    /// with none.
-    pub fn close_tick(
-        &mut self,
-        fighters: &mut [Fighter],
-        arena: Arena<'_>,
-        stellars: &mut [StellarTarget],
-        chance: &mut (impl Chance + ?Sized),
-    ) {
-        self.close_tick_in(fighters, arena, stellars, None, chance);
-    }
-
-    /// [`Combat::close_tick`] with `field` lent to the beams: each beam
-    /// whose ship pass hit nothing runs `_HandleBeams`' asteroid pass on
-    /// it as its turn comes, before the next beam is tested
-    /// ([`asteroid_beam`](super::asteroid_beam)), so a later beam meets
+    /// Each beam whose ship pass hit nothing runs `_HandleBeams`' asteroid
+    /// pass on `field`, when one is lent (`None` lends none), as its turn
+    /// comes, before the next beam is tested ([`asteroid_beam`](super::asteroid_beam)), so a later beam meets
     /// what an earlier one left, its fragments included. A beam a stellar
     /// stopped (the Bible's reading of
     /// [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)) hit no ship,
@@ -413,10 +402,10 @@ impl Combat {
         // the ship's next display step.
         self.settle_struck(fighters, first_strike, rule);
         self.ended_beams = beams_held.saturating_sub(self.beams.len());
-        self.stood = fighters
+        self.player_stood = fighters
             .iter()
-            .map(|fighter| (fighter.ship, fighter.state.position))
-            .collect();
+            .find(|fighter| fighter.ship == ShipRef::Player)
+            .map(|fighter| fighter.state.position);
         IonLockout::clear_shed(fighters);
     }
 
@@ -424,7 +413,7 @@ impl Combat {
     /// deadly stellars' kills (`_HandleGravity` @0x44509,
     /// `_HandleDeadlyStellars` @0x4450e; see [`stellar_hazards`]), which
     /// `_DoPlayGameWork` runs after the ship loop and before
-    /// `_HandleBeams` (@0x4453d, [`Combat::close_tick`]), on either pass.
+    /// `_HandleBeams` (@0x4453d, [`Combat::close_tick_in`]), on either pass.
     /// So a ship a deadly stellar kills is out of the beams.
     ///
     /// [`stellar_hazards`]: super::stellar_hazards

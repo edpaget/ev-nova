@@ -94,7 +94,7 @@ impl Screen for AppScreen {
     /// After every input, what the set expressions it ran queued is
     /// settled ([`FlightView::settle_script`](nova_view::flight::FlightView::settle_script)), and then a pilot with a
     /// name is saved when flight says a save is due: on landing, on taking
-    /// off, after a change in the spaceport ([`AppScreen::transact`]) and
+    /// off, after a change in the spaceport (`AppScreen::transact`) and
     /// after a move by set operator.
     fn input(&mut self, input: &Input) -> ScreenAction {
         // The original is inside Quit's `Delay`, then exits.

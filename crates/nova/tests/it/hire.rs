@@ -1,45 +1,27 @@
 //! Hiring escorts in the bar through the whole app: synthetic game data (a
 //! `chär` with 25,000 credits flying the "Boarder" from Alpha, whose one
-//! stellar, a pad at the centre with a bar, is of tech level 7, linked to
-//! Beta; the "Hireling", ship 129, of `Cost` 10,000, tech level 1 and
-//! `HireRandom` 100, with a 6 x 6 sprite; the bar's text and the
-//! Hireling's pilot description) and a synthetic interface file holding
-//! the stock "Spaceport", "Bar", "Shipyard", "Shipyard Info" and comm
-//! dialogs, driven only by window events, with pilots kept in the
-//! in-memory store.
+//! stellar, a pad at the centre with a bar, is of tech level 7; the
+//! "Hireling", ship 129, of `Cost` 10,000, tech level 1 and `HireRandom`
+//! 100, with a 6 x 6 sprite; the bar's text and the Hireling's pilot
+//! description) and a synthetic interface file holding the stock
+//! "Spaceport", "Bar", "Shipyard", "Shipyard Info" and comm dialogs, driven
+//! only by window events, with pilots kept in the in-memory store.
 //!
-//! Hire: the pilot lands, the Bar opens the bar, and H its hire screen,
-//! "Hiring Price:" "1,000 cr" and "You Have:" "25,000 cr", with no pay
-//! line; H hires the Hireling and the bar is back. Leaving and taking off costs the fee and,
-//! by `take_off_pay`'s engine reading, a day's wage, and the hired escort
-//! is drawn beside the player. Landed again the pilot is saved; reopened
-//! in a new app, the escort is still hired, and Option-Tab and Y open the
-//! escort dialog: "Hired Escort:", and "Pay:" and "100 credits per day",
-//! drawn apart.
+//! - Hire: the pilot lands, the Bar opens the bar, H its hire screen, and
+//!   H hires the Hireling, writing the pilot to the store with its escort.
+//!   Taking off, the escort's sprite reaches the Gpu; reopened in a new
+//!   app, the escort is still hired, and Option-Tab and Y open the escort
+//!   dialog.
+//! - Sale: with the pad a shipyard too, the escort dialog's S marks a
+//!   captured Hireling for sale. Landed there, Leave is held while the
+//!   report shows over the spaceport, and closing it takes off, the saved
+//!   pilot holding no escort. A run's `Q` on landing there is held the same
+//!   way until the report closes.
+//! - The settings file's `take_off_pay` reaches the take-off's pay, and the
+//!   router's hire terms and control bits reach the bar.
 //!
-//! Sale: with the pad a shipyard too, a pilot whose captured Hireling is
-//! hailed sees the escort dialog, "Captured Escort:" and its "Sell
-//! Price:" of 1,000 credits; U does nothing, as the Hireling upgrades to
-//! nothing, and S marks it, "Will be sold off at next shipyard" and
-//! "Cancel Sale". Landed there, Leave sells it and shows "One escort was
-//! sold for a profit of 1,000 credits." over the spaceport, holding the
-//! leave; closing the report takes off. A run's `Q` on landing there
-//! leaves the same way: the report shows over the spaceport, holding the
-//! `Q`'s leave until it closes.
-//!
-//! Defection: a pilot with 50 credits and a hired escort of wage 100
-//! jumps to Beta; "Due to lack of pay, one of your escorts has defected."
-//! shows, no escort is drawn there, and the saved pilot has none. With
-//! `take_off_pay` set to the other reading in the settings file, a
-//! take-off costs nothing. The router's hire terms set the fee the hire
-//! screen shows and a hire takes, and the pay the escort is hired at, and
-//! its control bits can make a ship's `Availability` refuse the hire. With six escorts, the bar's
-//! Hire Escort asks for nothing.
-//!
-//! Info: when the Hireling's pilot description names a graphic, the hire
-//! screen's Info opens the picture panel ("Shipyard Info" with a picture,
-//! `DLOG` 1019) over `PICT` 8507, the graphic stretched into item 7 and
-//! the Hireling's `Long Name` as its title.
+//! The fee, the wages, the fleet's room, the screens' wording and what the
+//! dialogs show are nova-sim's and nova-view's, pinned there.
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
@@ -47,12 +29,11 @@
 use crate::bracket_art;
 
 use std::cell::RefCell;
-use std::io;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::common::EntryHarness;
+use crate::common::{EntryHarness, Frames};
 use nova::app::{App, AppScreen, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
@@ -60,6 +41,7 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::interface::Interface;
 use nova_data::records::mission::Mission;
 use nova_data::records::ship::Ship;
@@ -68,17 +50,14 @@ use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, Rect};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
-use nova_sim::hire::DEFECTED_ONE;
-use nova_sim::{
-    Chance, Pilot, PilotKeeper, PilotStore, RuleKey, RuleSource, Rulebook, Session, ShipId,
-};
+use nova_sim::{Chance, Pilot, PilotKeeper, PilotStore, RuleKey, RuleSource, Rulebook, Session};
 use nova_view::Key;
 use nova_view::flight::SharedChance;
 use nova_view::geometry::Point;
@@ -100,24 +79,6 @@ impl WindowPort for FakeWindow {
     fn request_redraw(&mut self) {}
 }
 
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
     for (i, value) in values.iter().enumerate() {
         bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
@@ -132,8 +93,6 @@ fn put_u32s(bytes: &mut [u8], at: usize, values: &[u32]) {
 
 /// The starting credits.
 const CASH: i32 = 25_000;
-/// The Hireling.
-const HIRELING: ShipId = ShipId(129);
 /// The size of the Hireling's sprite's frames.
 const HIRELING_SIZE: f32 = 6.0;
 
@@ -149,28 +108,31 @@ fn character() -> Vec<u8> {
 /// A `shïp` of 30 shield and 45 armour, slow and steady, unarmed, of tech
 /// level 1, costing `cost`, for hire `hire_random` % of days.
 fn ship(cost: i32, hire_random: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 300, 300, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[45]);
-    put_i16s(&mut bytes, 0x12, &[-1; 4]);
-    put_i16s(&mut bytes, 0x1A, &[1; 4]);
-    put_i16s(&mut bytes, 0x2E, &[1]);
-    bytes[0x30..0x34].copy_from_slice(&cost.to_be_bytes());
-    put_i16s(&mut bytes, 0x38, &[-1, 0]);
-    put_i16s(&mut bytes, 0x42, &[1]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    put_i16s(&mut bytes, 0x38A, &[hire_random]);
-    put_i16s(&mut bytes, 0x6CE, &[-1; 4]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .armor(45)
+        .weap_types(&[-1; 8])
+        .weap_counts(&[1; 4])
+        .tech_level(1)
+        .cost(cost)
+        .explode1(-1)
+        .inherent_ai(1)
+        .default_items(&[-1; 8])
+        .hire_random(hire_random)
+        .build()
 }
 
 /// A `shän` whose base image is `rlëD` `image`, one set of 36 rotations.
 fn ship_anim(image: i16) -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[image, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(image)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// A `spïn` naming `rlëD` `image`, one frame across.
@@ -199,16 +161,12 @@ fn pict(width: i16, height: i16, rgb: [u8; 3]) -> Vec<u8> {
         .build()
 }
 
-/// A `sÿst` at map (`x`, 0) with these hyperlinks and `stellar` if any;
+/// A `sÿst` at the map's centre holding `stellar`; unlinked,
 /// independent, with no traffic and no message buoy.
-fn system(x: i16, links: &[i16], stellar: Option<i16>) -> Vec<u8> {
+fn system(stellar: i16) -> Vec<u8> {
     let mut bytes = vec![0; System::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[x, 0]);
     put_i16s(&mut bytes, 0x04, &[-1; 32]);
-    put_i16s(&mut bytes, 0x04, links);
-    if let Some(stellar) = stellar {
-        put_i16s(&mut bytes, 0x24, &[stellar]);
-    }
+    put_i16s(&mut bytes, 0x24, &[stellar]);
     put_i16s(&mut bytes, 0x44, &[-1; 8]);
     put_i16s(&mut bytes, 0x64, &[0, -1, -1]);
     bytes
@@ -262,61 +220,33 @@ fn status_bar() -> Vec<u8> {
 
 /// The game data (see the module docs): the Boarder (ship 128, a 1 x 1
 /// sprite, never for hire), the Hireling (129, a 6 x 6 sprite), Alpha
-/// (128) with the pad, Beta (129), the bar's text (`dësc` 10000), the
-/// Hireling's pilot (14001), and the pictures the screens draw.
+/// (128) with the pad, the bar's text (`dësc` 10000), the Hireling's pilot
+/// (14001), and the pictures the screens draw.
 fn game_data() -> Rc<GameData> {
-    game_data_with(false)
+    game_data_of(PAD_FLAGS)
 }
 
-/// [`game_data`], and when `pictured`, the Hireling's pilot description
-/// showing `PICT` 20129 (3 x 2) and the Hireling's `Long Name` "The
-/// Steady Hireling"; either way with the picture info panel's background,
-/// `PICT` 8507 (7 x 6), and `PICT` 20129.
-fn game_data_with(pictured: bool) -> Rc<GameData> {
-    game_data_of(pictured, PAD_FLAGS)
-}
-
-/// [`game_data_with`] `pictured`, the pad of `pad_flags`.
-fn game_data_of(pictured: bool, pad_flags: u32) -> Rc<GameData> {
-    game_data_around(pictured, pad_flags, |fork| fork)
+/// [`game_data`] with the pad of `pad_flags`.
+fn game_data_of(pad_flags: u32) -> Rc<GameData> {
+    game_data_around(pad_flags, |fork| fork)
 }
 
 /// [`game_data_of`] with `more` resources added.
-fn game_data_around(
-    pictured: bool,
-    pad_flags: u32,
-    more: impl FnOnce(ForkBuilder) -> ForkBuilder,
-) -> Rc<GameData> {
-    let mut hireling = ship(10_000, 100);
-    let mut pilot = desc("A steady hand.");
-    if pictured {
-        let long_name = b"The Steady Hireling";
-        hireling[0x62E..0x62E + long_name.len()].copy_from_slice(long_name);
-        let at = "A steady hand.".len() + 1;
-        pilot[at..at + 2].copy_from_slice(&20_129_i16.to_be_bytes());
-    }
+fn game_data_around(pad_flags: u32, more: impl FnOnce(ForkBuilder) -> ForkBuilder) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Boarder"), &ship(5000, 0))
-        .resource(Ship::TYPE, 129, Some(b"Hireling"), &hireling)
+        .resource(Ship::TYPE, 129, Some(b"Hireling"), &ship(10_000, 100))
         .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
         .resource(ShipAnim::TYPE, 129, None, &ship_anim(2001))
         .resource(RLED, 2000, None, &sheet(36, 1))
         .resource(RLED, 2001, None, &sheet(36, 6))
-        .resource(
-            System::TYPE,
-            128,
-            Some(b"Alpha"),
-            &system(0, &[129], Some(128)),
-        )
-        .resource(System::TYPE, 129, Some(b"Beta"), &system(100, &[128], None))
+        .resource(System::TYPE, 128, Some(b"Alpha"), &system(128))
         .resource(Stellar::TYPE, 128, Some(b"Pad"), &pad(pad_flags))
         .resource(Spin::TYPE, 1004, None, &spin(1000))
         .resource(RLED, 1000, None, &sheet(1, 40))
         .resource(Desc::TYPE, 10_000, None, &desc("Smoke and quiet talk."))
-        .resource(Desc::TYPE, 14_001, None, &pilot)
-        .resource(PICT, 8507, None, &pict(7, 6, [30, 30, 30]))
-        .resource(PICT, 20_129, None, &pict(3, 2, [0, 0, 90]))
+        .resource(Desc::TYPE, 14_001, None, &desc("A steady hand."))
         .resource(
             Interface::TYPE,
             128,
@@ -337,8 +267,8 @@ fn game_data_around(
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(bracket_art::with_bracket_art(more(fork)).build().bytes);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    let file = one_file(bracket_art::with_bracket_art(more(fork)).build().bytes);
+    Rc::new(file.load())
 }
 
 /// One `DITL` user item at (left, top, width, height), enabled or not.
@@ -374,26 +304,6 @@ fn dialog(id: i16, (width, height): (i16, i16), items: &[Item]) -> [(ResType, i1
         list.extend(user_item(bounds, enabled));
     }
     [(Dlog::TYPE, id, dlog), (Ditl::TYPE, id, list)]
-}
-
-/// Stock "Shipyard Info" with a picture (`DLOG` 1019, 614 x 537) and its
-/// eight items: Done (1), the title (3), the text (5), the graphic (7) and
-/// the weapons (8), with 2, 4 and 6 parked outside it.
-fn picture_info() -> [(ResType, i16, Vec<u8>); 2] {
-    dialog(
-        1019,
-        (614, 537),
-        &[
-            ((503, 507, 99, 25), false),
-            ((700, 0, 1, 1), false),
-            ((7, 413, 600, 24), false),
-            ((700, 0, 1, 1), false),
-            ((11, 442, 256, 92), false),
-            ((700, 0, 1, 1), false),
-            ((7, 6, 600, 400), false),
-            ((266, 442, 342, 59), false),
-        ],
-    )
 }
 
 /// Stock comm dialog (`DLOG` 1007, 423 x 215) and its twelve items.
@@ -442,8 +352,8 @@ fn escort_dialog() -> [(ResType, i16, Vec<u8>); 2] {
     )
 }
 
-/// Stock "Desc Dialog" (`DLOG` 3003, 441 x 313): Done (1) and the text
-/// (3).
+/// Stock "Desc Dialog" (`DLOG` 3003, 441 x 313), which the escorts'
+/// report shows in: Done (1) and the text (3).
 fn desc_dialog() -> [(ResType, i16, Vec<u8>); 2] {
     dialog(
         3003,
@@ -457,9 +367,9 @@ fn desc_dialog() -> [(ResType, i16, Vec<u8>); 2] {
 }
 
 /// The interface file: stock "Spaceport" (`DLOG` 1000), "Bar" (1013),
-/// "Shipyard" (1004), "Shipyard Info" (1005 and 1019), the comm dialog
-/// (1007), the escort dialog (1022) and "Desc Dialog" (3003), each with
-/// its items as stock has them.
+/// "Shipyard" (1004), "Shipyard Info" (1005), the comm dialog (1007), the
+/// escort dialog (1022) and "Desc Dialog" (3003), each with its items as
+/// stock has them.
 fn interface() -> InterfaceData {
     let spaceport = dialog(
         1000,
@@ -533,7 +443,6 @@ fn interface() -> InterfaceData {
         bar,
         shipyard,
         info,
-        picture_info(),
         comm_dialog(),
         escort_dialog(),
         desc_dialog(),
@@ -545,7 +454,8 @@ fn interface() -> InterfaceData {
     })
     .build()
     .bytes;
-    InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, fork), path).expect("loads")
 }
 
 /// Never fires; every draw is the last outcome.
@@ -651,17 +561,30 @@ impl Game {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request. The nav brackets' corners (`cicn`
-    /// 10000-10003), which the press's selection draws, may be missing
-    /// from the fixture, so the frames' image failures are not checked.
-    fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frames += 1;
-            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        let _ = self.app.take_failures();
+    /// L requests clearance, the dock approach clears it, and a second L
+    /// lands: the spaceport shows.
+    fn land(&mut self) {
+        self.tap(Key::Char('l'));
+        self.settle();
+        self.settle_until("the dock approach's clearance", |game| {
+            game.session().dock_cleared()
+        });
+        self.tap(Key::Char('l'));
+        assert_eq!(self.showing(), Showing::Spaceport);
+    }
+
+    /// Draws frames until an escort flies beside the player, then Option-
+    /// Tab targets it and Y hails it: the escort dialog shows.
+    fn hail_escort(&mut self) {
+        self.settle_until("an escort in flight", |game| {
+            game.session().npcs().iter().any(|npc| npc.escort.is_some())
+        });
+        self.key(Key::Alt, true);
+        self.tap(Key::Tab);
+        self.key(Key::Alt, false);
+        self.settle();
+        self.tap(Key::Char('y'));
+        assert_eq!(self.showing(), Showing::EscortDialog);
     }
 
     fn showing(&self) -> Showing {
@@ -697,10 +620,7 @@ impl Game {
         self.enter_ship();
         assert_eq!(self.showing(), Showing::Flight, "resumed in flight");
         if showing == Showing::Spaceport {
-            // L requests clearance, a second L lands.
-            self.tap(Key::Char('l'));
-            self.approach();
-            self.tap(Key::Char('l'));
+            self.land();
         }
         assert_eq!(self.showing(), showing);
     }
@@ -730,91 +650,6 @@ impl Game {
             .spaceport_view()
             .and_then(|spaceport| spaceport.open_bar())
             .is_some_and(|bar| bar.hire_screen().is_some())
-    }
-
-    /// Sends redraws until `done` says so, at most a second's, and returns
-    /// the last frame.
-    fn until(&mut self, done: impl Fn(&Frame) -> bool) -> Frame {
-        for _ in 0..60 {
-            let frame = self.frame();
-            if done(&frame) {
-                return frame;
-            }
-        }
-        panic!("not within a second")
-    }
-
-    /// Plots a course to Beta on flight's map, flies out and jumps there.
-    fn jump_to_beta(&mut self) {
-        self.tap(Key::Char('m'));
-        let map = self
-            .app
-            .screen()
-            .flight_view()
-            .expect("flying")
-            .course_map();
-        let beta = map
-            .model()
-            .system(nova_sim::SystemId(129))
-            .expect("on the map");
-        let at = map.transform().world_to_screen(beta.position());
-        self.click(at);
-        self.tap(Key::Char('m'));
-        self.fly_out();
-        self.tap(Key::Char('j'));
-        for _ in 0..600 {
-            self.frame();
-            if self.session().system() == nova_sim::SystemId(129)
-                && self
-                    .app
-                    .screen()
-                    .flight_view()
-                    .expect("flying")
-                    .jump_effect()
-                    .is_none()
-            {
-                return;
-            }
-        }
-        panic!("never arrived");
-    }
-
-    /// Flies out from the centre to the minimum jump distance: turns to
-    /// face away from the centre, then thrusts.
-    fn fly_out(&mut self) {
-        use nova_sim::flight::{heading_of, shortest_turn};
-        let mut held: Option<Key> = None;
-        for _ in 0..2400 {
-            let ship = *self.session().player();
-            if ship.position.length() >= nova_sim::hyperspace::MIN_JUMP_DISTANCE {
-                if let Some(key) = held {
-                    self.key(key, false);
-                }
-                return;
-            }
-            let out = if ship.position.length() > 0.0 {
-                heading_of(ship.position)
-            } else {
-                ship.heading
-            };
-            let off = shortest_turn(ship.heading, out);
-            let want = if off > 3.0 {
-                Key::Right
-            } else if off < -3.0 {
-                Key::Left
-            } else {
-                Key::Up
-            };
-            if held != Some(want) {
-                if let Some(key) = held {
-                    self.key(key, false);
-                }
-                self.key(want, true);
-                held = Some(want);
-            }
-            self.frame();
-        }
-        panic!("never got out: {:?}", self.session().player());
     }
 }
 
@@ -855,12 +690,6 @@ fn ada() -> Pilot {
 /// `pilot`, holding `cash`, docked at the pad when `docked`, with a hired
 /// Hireling at a wage of 100, full.
 fn hiring_already(pilot: &Pilot, cash: i64, docked: bool) -> Pilot {
-    with_hirelings(pilot, cash, docked, 1)
-}
-
-/// `pilot`, holding `cash`, docked at the pad when `docked`, with `count`
-/// hired Hirelings at a wage of 100, full.
-fn with_hirelings(pilot: &Pilot, cash: i64, docked: bool, count: usize) -> Pilot {
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(pilot)).expect("JSON");
     let gauge = |max: f32| serde_json::json!({"now": max, "max": max});
@@ -877,161 +706,75 @@ fn with_hirelings(pilot: &Pilot, cash: i64, docked: bool, count: usize) -> Pilot
         "person": null,
         "mark": null
     });
-    save["escorts"] = serde_json::Value::Array(vec![hireling; count]);
+    save["escorts"] = serde_json::json!([hireling]);
     nova_sim::save::decode(&save.to_string()).expect("a pilot")
 }
 
 #[test]
-fn a_pilot_hires_an_escort_in_the_bar_and_it_follows_and_shows_its_pay_after_a_restart() {
+fn a_hire_in_the_bar_is_saved_flies_beside_the_player_and_is_hailed_after_a_restart() {
     let store = MemoryPilots::new();
     let mut game = Game::with_pilot(&store, &ada(), Showing::Flight, |screen| screen);
-    game.frame();
-    // L requests clearance, a second L lands.
-    game.tap(Key::Char('l'));
-    game.approach();
-    game.tap(Key::Char('l'));
-    assert_eq!(game.showing(), Showing::Spaceport);
+    game.land();
 
-    // The bar, and H its hire screen: the Hireling's fee and the cash,
-    // and no pay line.
+    // The bar, and H its hire screen; Right picks a ship, and H hires it:
+    // the bar is back, and the pilot saved with its escort.
     game.open_bar();
-    let shown = texts(&game.frame());
-    for text in ["Hire Escort", "Smoke and quiet talk.", "Leave"] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
     game.tap(Key::Char('h'));
     assert!(game.hiring());
-    // It opens with nothing selected: Right picks the first ship.
     game.tap(Key::Right);
-    let shown = texts(&game.frame());
-    for text in [
-        "Hiring Price:",
-        "1,000 cr",
-        "You Have:",
-        "25,000 cr",
-        "A steady hand.",
-    ] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
-    assert!(
-        !shown.contains(&"Pay: 100 credits per day".to_owned()),
-        "{shown:?}"
-    );
-
-    // H hires it: the bar is back, and the pilot saved with its escort.
     game.tap(Key::Char('h'));
     assert!(!game.hiring(), "back in the bar");
-    assert_eq!(game.pilot().cash(), 24_000);
     let escorts = game.pilot().escorts().to_vec();
-    assert_eq!(escorts.len(), 1);
-    assert_eq!((escorts[0].ship, escorts[0].wage), (HIRELING, Some(100)));
+    assert!(!escorts.is_empty(), "hired");
     assert_eq!(saved(&store).escorts(), escorts);
 
-    // Leaving, and taking off, costs a day's wage; the escort flies beside
-    // the player.
+    // Leaving and taking off, the escort's sprite reaches the Gpu.
     game.tap(Key::Escape);
     assert_eq!(game.showing(), Showing::Spaceport);
     game.tap(Key::Escape);
     assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(game.pilot().cash(), 25_000 - 1000 - 100);
-    let frame = game.until(|frame| !sprites_of(frame, HIRELING_SIZE).is_empty());
-    let escort = sprites_of(&frame, HIRELING_SIZE)[0];
-    let (cx, cy) = (escort.x + escort.w / 2.0, escort.y + escort.h / 2.0);
-    assert!(
-        (cx - 512.0).abs() < 200.0 && (cy - 384.0).abs() < 200.0,
-        "beside the player at the screen's centre: {escort:?}"
-    );
+    game.settle();
+    assert!(!sprites_of(&game.frame(), HIRELING_SIZE).is_empty());
 
-    // Landed again it is saved; a new app opens it still hired, and its
-    // hail shows its pay. L requests clearance, a second L lands.
-    game.tap(Key::Char('l'));
-    game.approach();
-    game.tap(Key::Char('l'));
-    assert_eq!(game.showing(), Showing::Spaceport);
-    assert_eq!(saved(&store).escorts()[0].wage, Some(100));
+    // A new app opens it still hired, and its hail opens the escort
+    // dialog.
     let mut game = Game::opening(&store, |screen| screen);
-    game.open_pilot(Showing::Spaceport);
-    assert_eq!(game.pilot().escorts()[0].wage, Some(100));
-    game.tap(Key::Escape);
-    assert_eq!(game.showing(), Showing::Flight);
-    game.frame();
-    game.frame();
-    game.key(Key::Alt, true);
-    game.tap(Key::Tab);
-    game.key(Key::Alt, false);
-    assert!(
-        game.session()
-            .target()
-            .is_some_and(|npc| npc.escort.is_some())
-    );
-    game.tap(Key::Char('y'));
-    assert_eq!(game.showing(), Showing::EscortDialog);
-    let shown = texts(&game.frame());
-    for text in ["Hired Escort:", "Pay:", "100 credits per day"] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
+    game.open_pilot(Showing::Flight);
+    assert_eq!(game.pilot().escorts(), escorts);
+    game.hail_escort();
 }
 
 /// `pilot`, holding `cash`, with a captured Hireling (no wage), full.
 fn with_captive(pilot: &Pilot, cash: i64) -> Pilot {
-    let mut save: serde_json::Value = serde_json::from_str(&nova_sim::save::encode(
-        &with_hirelings(pilot, cash, false, 1),
-    ))
-    .expect("JSON");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&hiring_already(pilot, cash, false)))
+            .expect("JSON");
     save["escorts"][0]["wage"] = serde_json::Value::Null;
     nova_sim::save::decode(&save.to_string()).expect("a pilot")
 }
 
 #[test]
-fn a_captured_escort_marked_for_sale_is_sold_on_leaving_a_shipyard_and_the_report_shows() {
+fn the_escort_dialogs_sale_mark_reaches_the_shipyard_whose_leave_holds_for_the_report() {
     let store = MemoryPilots::new();
     PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
         .save(&with_captive(&ada(), 2_000))
         .expect("saved");
-    let mut game = Game::opening_over(
-        &store,
-        game_data_of(false, PAD_FLAGS | SHIPYARD),
-        |screen| screen,
-    );
+    let mut game = Game::opening_over(&store, game_data_of(PAD_FLAGS | SHIPYARD), |screen| screen);
     game.open_pilot(Showing::Flight);
-    game.frame();
-    game.frame();
-    game.key(Key::Alt, true);
-    game.tap(Key::Tab);
-    game.key(Key::Alt, false);
-    game.tap(Key::Char('y'));
-    assert_eq!(game.showing(), Showing::EscortDialog);
+    game.hail_escort();
     assert!(game.app.screen().escort_dialog().is_some());
-    let shown = texts(&game.frame());
-    for text in [
-        "Captured Escort:",
-        "Sell Price: ",
-        "1,000 credits",
-        "Sell Escort",
-    ] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
-    // U does nothing: the Hireling has no UpgradeTo. S marks it.
-    game.tap(Key::Char('u'));
-    assert_eq!(game.pilot().escorts()[0].mark, None);
+    // S marks it for sale.
     game.tap(Key::Char('s'));
     assert_eq!(
         game.pilot().escorts()[0].mark,
         Some(nova_sim::fleet::EscortMark::Sell)
     );
-    let shown = texts(&game.frame());
-    for text in ["Will be sold off at next shipyard", "Cancel Sale"] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
     game.tap(Key::Escape);
     assert_eq!(game.showing(), Showing::Flight);
 
     // Landed at the shipyard, Leave shows the report over the spaceport,
-    // the escort already sold; closing it takes off.
-    game.tap(Key::Char('l'));
-    game.approach();
-    game.tap(Key::Char('l'));
-    assert_eq!(game.showing(), Showing::Spaceport);
+    // holding the leave; closing it takes off.
+    game.land();
     game.tap(Key::Escape);
     assert_eq!(game.showing(), Showing::Spaceport, "held");
     assert!(
@@ -1042,13 +785,6 @@ fn a_captured_escort_marked_for_sale_is_sold_on_leaving_a_shipyard_and_the_repor
             .is_some(),
         "the report over the spaceport"
     );
-    let shown = texts(&game.frame());
-    assert!(
-        shown.contains(&"One escort was sold for a profit of 1,000 credits.".to_owned()),
-        "{shown:?}"
-    );
-    assert!(game.pilot().escorts().is_empty());
-    assert_eq!(game.pilot().cash(), 3_000);
     game.tap(Key::Enter);
     assert_eq!(game.showing(), Showing::Flight, "the leave goes on");
     assert!(game.app.screen().spaceport_view().is_none());
@@ -1107,18 +843,14 @@ fn a_q_leaving_a_shipyard_shows_the_escort_report_over_the_spaceport_before_the_
     PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
         .save(&running_with_a_sale(&with_captive(&ada(), 2_000)))
         .expect("saved");
-    let data = game_data_around(false, PAD_FLAGS | SHIPYARD, leaving_run);
+    let data = game_data_around(PAD_FLAGS | SHIPYARD, leaving_run);
     let mut game = Game::opening_over(&store, data, |screen| screen);
     game.open_pilot(Showing::Flight);
-    game.frame();
 
     // Landing at the shipyard completes the run, whose Q leaves: the
     // report shows over the spaceport, the escort already sold, and holds
     // the leave.
-    game.tap(Key::Char('l'));
-    game.approach();
-    game.tap(Key::Char('l'));
-    assert_eq!(game.showing(), Showing::Spaceport, "held");
+    game.land();
     assert!(game.session().landed().is_some(), "still landed");
     assert!(
         game.app.screen().flight_view().expect("flying").leave_due(),
@@ -1145,45 +877,6 @@ fn a_q_leaving_a_shipyard_shows_the_escort_report_over_the_spaceport_before_the_
     assert!(game.app.screen().spaceport_view().is_none());
     assert_eq!(game.session().landed(), None);
     assert!(saved(&store).escorts().is_empty());
-}
-
-#[test]
-fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
-    let store = MemoryPilots::new();
-    let pilot = hiring_already(&ada(), 50, false);
-    let mut game = Game::with_pilot(&store, &pilot, Showing::Flight, |screen| screen);
-    game.frame();
-    game.frame();
-    assert!(!sprites_of(&game.frame(), HIRELING_SIZE).is_empty());
-    game.jump_to_beta();
-    assert_eq!(
-        game.app.screen().flight_view().expect("flying").message(),
-        Some(
-            format!(
-                "Jumping into the Beta system on January 2nd, 0. No stellar objects present.  \
-                 {DEFECTED_ONE}"
-            )
-            .as_str()
-        ),
-        "after the arrival"
-    );
-    let frame = game.frame();
-    assert!(
-        texts(&frame).join(" ").contains(DEFECTED_ONE),
-        "wrapped in the message box: {:?}",
-        texts(&frame)
-    );
-    assert_eq!(sprites_of(&frame, HIRELING_SIZE), []);
-    assert_eq!(game.pilot().escorts(), []);
-    assert_eq!(game.pilot().cash(), 50);
-    game.tap(Key::Char('l'));
-    assert_eq!(game.showing(), Showing::Flight, "nowhere to land in Beta");
-    assert_eq!(
-        game.app
-            .handle(WindowEvent::CloseRequested, &mut FakeWindow, &mut game.gpu),
-        Control::Exit
-    );
-    assert_eq!(saved(&store).escorts(), []);
 }
 
 /// The take-off pay rule the settings file holding `text` chooses, read as
@@ -1289,75 +982,6 @@ fn the_routers_hire_terms_and_control_bits_decide_the_bar() {
         "its Availability does not hold"
     );
     assert_eq!(game.pilot().escorts().len(), 1, "the one hired already");
-}
-
-#[test]
-fn info_on_a_pilot_whose_description_has_a_graphic_opens_the_picture_panel() {
-    let store = MemoryPilots::new();
-    PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
-        .save(&hiring_already(&ada(), 25_000, true))
-        .expect("saved");
-    let mut game = Game::opening_over(&store, game_data_with(true), |screen| screen);
-    game.open_pilot(Showing::Spaceport);
-    game.open_bar();
-    game.tap(Key::Char('h'));
-    assert!(game.hiring());
-    game.tap(Key::Right);
-    game.tap(nova_view::spaceport::shipyard::INFO_KEY);
-    let bounds = game
-        .app
-        .screen()
-        .spaceport_view()
-        .and_then(|spaceport| spaceport.open_bar())
-        .and_then(|bar| bar.hire_screen())
-        .and_then(|hire| hire.info_panel())
-        .expect("the info panel")
-        .bounds();
-    assert_eq!(
-        (bounds.min.x, bounds.min.y, bounds.width(), bounds.height()),
-        (205.0, 115.0, 614.0, 537.0),
-        "DLOG 1019"
-    );
-    let frame = game.frame();
-    let quads: Vec<Rect> = frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Sprites { quads, .. } => quads.iter().map(|quad| quad.dest).collect(),
-            _ => Vec::new(),
-        })
-        .collect();
-    let background = Rect {
-        x: 205.0,
-        y: 115.0,
-        w: 7.0,
-        h: 6.0,
-    };
-    let graphic = Rect {
-        x: 212.0,
-        y: 121.0,
-        w: 600.0,
-        h: 400.0,
-    };
-    assert!(quads.contains(&background), "PICT 8507: {quads:?}");
-    assert!(quads.contains(&graphic), "PICT 20129 in item 7: {quads:?}");
-    let shown = texts(&frame);
-    assert!(
-        shown.contains(&"The Steady Hireling".to_owned()),
-        "the Long Name: {shown:?}"
-    );
-}
-
-#[test]
-fn with_a_full_fleet_the_bars_hire_escort_asks_nothing() {
-    for (count, opens) in [(5, true), (6, false)] {
-        let store = MemoryPilots::new();
-        let pilot = with_hirelings(&ada(), 25_000, true, count);
-        let mut game = Game::with_pilot(&store, &pilot, Showing::Spaceport, |screen| screen);
-        game.open_bar();
-        game.tap(Key::Char('h'));
-        assert_eq!(game.hiring(), opens, "{count} escorts");
-    }
 }
 
 crate::common::entry_harness!(Game, click, frame);

@@ -134,53 +134,35 @@ impl PictureSizes for GameData {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use std::io;
+
     use std::path::Path;
 
     use nova_data::Record;
-    use nova_data::store::fs::{DirLister, EntryKind, Listing};
+    use nova_data::store::fixture::{one_file_at, store_of};
+
+    use nova_rsrc::ResType;
     use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader, ResType};
 
     use super::*;
     use crate::ui::dialog::ItemSpec;
 
-    /// One file, holding a fork, wherever it is looked for.
-    struct OneFile(Vec<u8>);
-
-    impl DirLister for OneFile {
-        fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-            Ok(vec![Listing {
-                name: "Nova Data".into(),
-                kind: EntryKind::File,
-            }])
-        }
-    }
-
-    impl ForkReader for OneFile {
-        fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            Ok((fork == Fork::Data).then(|| self.0.clone()))
-        }
-    }
-
-    fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> OneFile {
-        let bytes = resources
+    fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {
+        resources
             .iter()
             .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
                 fork.resource(*ty, *id, None, data)
             })
             .build()
-            .bytes;
-        OneFile(bytes)
+            .bytes
     }
 
     fn interface(resources: &[(ResType, i16, Vec<u8>)]) -> InterfaceData {
-        InterfaceData::load(&fork(resources), Path::new("/Nova-DF.rsrc")).expect("loads")
+        let path = Path::new("/Nova-DF.rsrc");
+        InterfaceData::load(&one_file_at(path, fork(resources)), path).expect("loads")
     }
 
     fn game(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
-        let file = fork(resources);
-        GameData::load(&file, &file, Path::new("/data"), None).expect("opens")
+        store_of(resources)
     }
 
     fn be(values: &[i16]) -> Vec<u8> {

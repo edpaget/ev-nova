@@ -9,16 +9,20 @@
 //! - A new pilot's course map, opened and ticked once, shades the cells
 //!   around the start system in the Federation's `Color`, halved at a full
 //!   value.
+//!
+//! That a new pilot's sources hold no government of no influence is
+//! nova-sim's (`stock_galaxy_map`).
 
 use crate::common;
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
 use nova_sim::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
-use nova_sim::{CombatCatalog, Governments, GovtId, Pilot, Session};
-use nova_view::flight::FlightView;
+use nova_sim::{CombatCatalog, Governments, GovtId};
 use nova_view::flight::radar::IRect;
+use nova_view::flight::test_flight;
 use nova_view::galaxy::borders::{draw_cells, shade};
 use nova_view::galaxy::dialog::map_area;
 use nova_view::galaxy::{GalaxyCatalog, GalaxyMap};
@@ -58,36 +62,13 @@ fn the_stock_governments_hold_the_borders_flags2_bits() {
 }
 
 #[test]
-fn a_new_pilots_sources_hold_no_government_of_no_influence() {
-    let Some(data) = open() else {
-        return;
-    };
-    let pilot = Pilot::new(&data, "").expect("the stock first chär starts");
-    let session = Session::fly(&data, pilot).expect("flies");
-    let sources = session.map_border_sources();
-    assert!(!sources.coarse.is_empty());
-    let govts = Governments::read(&data);
-    for source in sources
-        .coarse
-        .iter()
-        .chain(sources.walk.iter().map(|(_, source)| source))
-    {
-        assert!(!govts.flag2(Some(source.govt), NO_INFLUENCE), "{source:?}");
-    }
-    let start = session.system();
-    assert!(
-        sources.coarse.iter().any(|source| source.system == start),
-        "the start system adds"
-    );
-}
-
-#[test]
 fn a_new_pilots_course_map_shades_the_start_in_the_federations_colour() {
     let Some(data) = open() else {
         return;
     };
     let fed = federation(&data);
-    let mut view = FlightView::new(&data);
+    let data = Rc::new(data);
+    let mut view = test_flight::new(Rc::clone(&data));
     let map_key = Input::Key {
         key: Key::Char('m'),
         pressed: true,

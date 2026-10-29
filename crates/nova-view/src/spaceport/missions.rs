@@ -101,7 +101,8 @@ pub const NAME_SIZE: f32 = 18.0;
 pub trait OfferNames {
     /// `raw` with its tags filled for `mission`'s offer, or `None` when
     /// it can't be (no session, or the mission no longer offered).
-    fn munged(&self, mission: MissionId, raw: &str) -> Option<String>;
+    /// It takes `&mut self`, as the fill is a screen's ask of the flight.
+    fn munged(&mut self, mission: MissionId, raw: &str) -> Option<String>;
 }
 
 /// Where the list goes when the template has no item 2: nowhere.
@@ -368,7 +369,7 @@ impl MissionComputerScreen {
     /// `names`, as `_MissionDialogUpdate` cuts the stored name with
     /// `TruncString` before `_MungeBriefing` (@0x9f37d-0x9f40c). A name
     /// `names` can't fill stays blank: an empty black box.
-    pub fn show_row(&mut self, row: &ComputerRow, names: &impl OfferNames) {
+    pub fn show_row(&mut self, row: &ComputerRow, names: &mut impl OfferNames) {
         if self.selected_mission() != Some(row.mission) {
             return;
         }
@@ -876,7 +877,7 @@ mod tests {
     }
 
     impl OfferNames for FakeNames {
-        fn munged(&self, mission: MissionId, raw: &str) -> Option<String> {
+        fn munged(&mut self, mission: MissionId, raw: &str) -> Option<String> {
             self.asked.borrow_mut().push((mission, raw.to_owned()));
             (!self.refuse).then(|| raw.replace("<DST>", "Mars"))
         }
@@ -1033,15 +1034,15 @@ mod tests {
         // The name is filled only by `show_row`: never the list's munged
         // name, nor the stored one uncut.
         let mut screen = screen();
-        let names = FakeNames::default();
+        let mut names = FakeNames::default();
         let _ = screen.take_text_request();
-        screen.show_row(&row(130, "Run to Mars", "Take this to Mars."), &names);
+        screen.show_row(&row(130, "Run to Mars", "Take this to Mars."), &mut names);
         assert_eq!(item_text(&screen, NAME_ITEM), "Run to Mars");
         screen.input(&key(Key::Down));
         assert_eq!(item_text(&screen, NAME_ITEM), "", "by key");
         screen.input(&key(Key::Up));
         assert_eq!(item_text(&screen, NAME_ITEM), "", "back by key");
-        screen.show_row(&row(130, "Run to Mars", "Take this to Mars."), &names);
+        screen.show_row(&row(130, "Run to Mars", "Take this to Mars."), &mut names);
         let second = screen
             .rows()
             .and_then(|rows| rows.row_bounds(1))
@@ -1049,7 +1050,7 @@ mod tests {
             .center();
         click_at(&mut screen, second);
         assert_eq!(item_text(&screen, NAME_ITEM), "", "by a click");
-        screen.show_row(&row(131, "Walk", "Go on foot."), &names);
+        screen.show_row(&row(131, "Walk", "Go on foot."), &mut names);
         screen.set_computer(computer());
         assert_eq!(item_text(&screen, NAME_ITEM), "", "by a new computer");
         assert_eq!(
@@ -1071,10 +1072,10 @@ mod tests {
             }],
             ..computer()
         });
-        let names = FakeNames::default();
+        let mut names = FakeNames::default();
         let _ = screen.take_text_request();
         let loaded = screen.computer().rows[0].clone();
-        screen.show_row(&loaded, &names);
+        screen.show_row(&loaded, &mut names);
         assert_eq!(
             *names.asked.borrow(),
             [(MissionId(130), "Passengers for <DST> and o…".to_owned())],
@@ -1126,9 +1127,9 @@ mod tests {
             },
             ButtonStyle::STOCK,
         );
-        let names = FakeNames::default();
+        let mut names = FakeNames::default();
         let _ = screen.take_text_request();
-        screen.show_row(&row(130, raw, "Go."), &names);
+        screen.show_row(&row(130, raw, "Go."), &mut names);
         assert_eq!(
             *names.asked.borrow(),
             [(MissionId(130), "abcdefghijklmnopqrstuvwxy…".to_owned())]
@@ -1138,12 +1139,12 @@ mod tests {
     #[test]
     fn a_name_the_session_cannot_fill_stays_blank() {
         let mut screen = screen();
-        let names = FakeNames {
+        let mut names = FakeNames {
             refuse: true,
             ..FakeNames::default()
         };
         let _ = screen.take_text_request();
-        screen.show_row(&row(130, "Run to Mars", "Loaded."), &names);
+        screen.show_row(&row(130, "Run to Mars", "Loaded."), &mut names);
         assert_eq!(item_text(&screen, NAME_ITEM), "");
         assert_eq!(
             item_text(&screen, TEXT_ITEM),
@@ -1171,15 +1172,15 @@ mod tests {
     fn a_loaded_row_shows_its_name_and_text_while_it_is_selected() {
         let mut screen = screen();
         let _ = screen.take_text_request();
-        let names = FakeNames::default();
-        screen.show_row(&row(131, "Walk loaded", "Not now."), &names);
+        let mut names = FakeNames::default();
+        screen.show_row(&row(131, "Walk loaded", "Not now."), &mut names);
         assert_eq!(
             item_text(&screen, TEXT_ITEM),
             "Take this to Mars.",
             "131 is not selected"
         );
         assert!(names.asked.borrow().is_empty(), "nothing filled for 131");
-        screen.show_row(&row(130, "Run, loaded", "Loaded text."), &names);
+        screen.show_row(&row(130, "Run, loaded", "Loaded text."), &mut names);
         assert_eq!(item_text(&screen, NAME_ITEM), "Run, loaded");
         assert_eq!(item_text(&screen, TEXT_ITEM), "Loaded text.");
         assert_eq!(screen.take_text_request(), None, "showing asks nothing");
@@ -1382,7 +1383,7 @@ mod tests {
         let _ = screen.take_text_request();
         screen.show_row(
             &row(130, "Run to Mars", "Take this to Mars."),
-            &FakeNames::default(),
+            &mut FakeNames::default(),
         );
         let commands = drawn(&screen);
         let dialog = screen.dialog().expect("laid out");

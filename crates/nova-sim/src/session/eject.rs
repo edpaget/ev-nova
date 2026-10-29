@@ -21,7 +21,7 @@
 //! or explodes a ship at the end of its countdown. The engine runs one
 //! check a pass in the same place, the player's display step after its
 //! move ([`Session::eject_check`], see the `display_step` module), on
-//! both passes and in [`Session::tick_combat`]:
+//! both passes:
 //!
 //! - It reads the player as `_IsDying` (@0x253d) does, its armour live,
 //!   so a sabotage kill this pass is seen dying though no display has
@@ -205,7 +205,7 @@ impl Session {
     /// lets it go: what the next fight tick's eject check reads. The
     /// session takes it only while the player's fate takes
     /// [`PlayerCommand::Eject`].
-    pub fn hold_eject(&mut self, held: bool) {
+    pub(crate) fn hold_eject(&mut self, held: bool) {
         self.ship.hold_eject(held);
     }
 
@@ -628,6 +628,7 @@ mod tests {
     use crate::control::{Bit, Script};
     use crate::escape::{MOD_AUTO_EJECT, MOD_ESCAPE_POD};
     use crate::escort::{EscortDuty, FormationSlot};
+    use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
     use crate::mission::ships::ShipBehav;
@@ -637,6 +638,7 @@ mod tests {
     use crate::session::tests::{DISABLING, Firing, deadly_in, facing_an_npc};
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, FakePilotCatalog, hull, npc, outfit, ship};
+    use crate::testkit::{Passive, work_with};
     use crate::traffic::npc::MissionMark;
 
     const POD: i16 = 188;
@@ -710,13 +712,19 @@ mod tests {
         session
     }
 
-    /// One tick under fire from `catalog`'s NPC, the chord held or not:
-    /// the session's sounds from the fight.
+    /// One pass under fire from `catalog`'s NPC, the chord held or not:
+    /// the pass's sounds.
     fn tick(session: &mut Session, catalog: &FakePilotCatalog, chord: bool) -> Vec<SimSound> {
-        session.tick_traffic(catalog, &Firing, &mut NeverFires);
         session.take_sounds();
         session.hold_eject(chord);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Firing,
+            Rules::default(),
+            &mut NeverFires,
+        );
         session.take_sounds()
     }
 
@@ -764,14 +772,36 @@ mod tests {
         (breakup, tick(session, catalog, chord))
     }
 
-    /// A fight tick with no traffic tick, the chord held or not: its
-    /// sounds and fight events.
-    fn fight(session: &mut Session, chord: bool) -> (Vec<SimSound>, Vec<CombatEvent>) {
+    /// A pass of `catalog`'s session with no NPC firing, the chord held
+    /// or not: its sounds and fight events.
+    fn fight(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        chord: bool,
+    ) -> (Vec<SimSound>, Vec<CombatEvent>) {
         session.take_sounds();
         session.take_combat_events();
         session.hold_eject(chord);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        crate::testkit::work(session, catalog, Controls::default());
         (session.take_sounds(), session.take_combat_events())
+    }
+
+    /// The player's display step alone, the chord held or not, which runs
+    /// the eject check (@0x6f22c; see the `display_step` module): the hulk
+    /// and the pod as the eject leaves them, before the pass's ship loop
+    /// handles the hulk, and the player as it stood, before a pass's move
+    /// under the speed box its first pass holds it to. Its sounds.
+    fn eject_check(session: &mut Session, chord: bool) -> Vec<SimSound> {
+        session.take_sounds();
+        session.hold_eject(chord);
+        let head = super::super::game_work::PassStart::of(session).player_head();
+        session.player_display_step(
+            crate::combat::GamePass::Advance { double_time: false },
+            Rules::default(),
+            head,
+            &mut NeverFires,
+        );
+        session.take_sounds()
     }
 
     const EJECTED: [SimSound; 2] = [SimSound::Ejected, SimSound::Halt(&WARP_UP_HALTS)];
@@ -824,10 +854,17 @@ mod tests {
             colour: 0x00ff_0000,
             ..Ion::default()
         };
+        to_the_breakup(&mut session, &catalog, false);
         session.ship.ion = ionized;
-        to_the_first_check(&mut session, &catalog, false);
+        tick(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
-        assert_eq!(session.ion(), ionized);
+        // The frame's ion block (@0x6d7fd-0x6d96d) sheds one before the
+        // eject check (@0x6f22c), and the pod keeps what it left.
+        let shed = Ion {
+            charge: 39.0,
+            ..ionized
+        };
+        assert_eq!(session.ion(), shed);
         assert_eq!(hulk(&session).ion, Ion::default());
     }
 
@@ -937,9 +974,11 @@ mod tests {
         let hulk = hulk(&session);
         let fold = hulk.armament.fold();
         assert_eq!((fold.set, fold.dir), (3, 0), "BaseSets - 1");
+        // `_GenericRandomShipSpawn`'s, stepped once by its display in the
+        // ship loop (@0x444ad), after the eject check (@0x6f22c).
         assert_eq!(
             hulk.display.glow,
-            crate::traffic::ship_display::GLOW_SPAWN,
+            crate::traffic::ship_display::GLOW_SPAWN - 1,
             "`_GenericRandomShipSpawn`'s"
         );
         assert_eq!(
@@ -962,7 +1001,7 @@ mod tests {
         let left = hulk(&session).id;
         let mut pods = 0;
         for _ in 0..400 {
-            let (_, events) = fight(&mut session, false);
+            let (_, events) = fight(&mut session, &catalog, false);
             pods += events
                 .iter()
                 .filter(|event| {
@@ -1079,7 +1118,7 @@ mod tests {
         let mut ticks = 0;
         loop {
             ticks += 1;
-            let (_, events) = fight(&mut session, false);
+            let (_, events) = fight(&mut session, &catalog, false);
             if hulk_destroyed(&events) {
                 break;
             }
@@ -1087,6 +1126,40 @@ mod tests {
         }
         assert_eq!(ticks, 98);
         assert!(in_the_pod(&session), "the pod lives on");
+    }
+
+    #[test]
+    fn a_first_tick_ejects_frame_fills_the_hulk_breaking_up_from_its_start_and_the_player_as_the_pod()
+     {
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_first_check(&mut session, &catalog, false);
+        let left = hulk(&session).id;
+        let mut frame = crate::flight_frame::FlightFrame::default();
+        session.fill_frame(&mut frame);
+        let player = frame
+            .ships
+            .iter()
+            .find(|ship| ship.ship == ShipRef::Player)
+            .expect("the player's record");
+        assert_eq!(
+            (player.class, player.condition),
+            (ESCAPE_POD_SHIP, Condition::Intact),
+            "the pod, intact"
+        );
+        let hulk = frame
+            .ships
+            .iter()
+            .find(|ship| ship.ship == ShipRef::Npc(left))
+            .expect("the hulk's record");
+        assert_eq!(hulk.class, ShipId(128), "the old class");
+        assert_eq!(
+            hulk.condition,
+            Condition::Dying {
+                ticks_left: 100,
+                starting: true
+            }
+        );
     }
 
     #[test]
@@ -1126,7 +1199,7 @@ mod tests {
         session.space.traffic.remove(extra);
         let mut last = three;
         loop {
-            let (sounds, _) = fight(&mut session, false);
+            let (sounds, _) = fight(&mut session, &catalog, false);
             if in_the_pod(&session) {
                 assert_eq!(
                     sounds,
@@ -1169,7 +1242,7 @@ mod tests {
             ticks_left: 3,
             starting: false,
         };
-        let (sounds, events) = fight(&mut session, true);
+        let (sounds, events) = fight(&mut session, &catalog, true);
         assert!(in_the_pod(&session));
         assert_eq!(session.ship.condition, Condition::Intact);
         assert!(hulk_destroyed(&events), "{events:?}");
@@ -1183,13 +1256,20 @@ mod tests {
         session.ship.condition = Condition::Disabled;
         for _ in 0..50 {
             session.hold_eject(false);
-            session.tick_combat(DISABLING, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                DISABLING,
+                &mut NeverFires,
+            );
         }
         assert_eq!(session.ship.condition, Condition::Disabled, "no auto-eject");
         assert_eq!(session.pilot.ship, ShipId(128));
         session.take_sounds();
         session.hold_eject(true);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        crate::testkit::work(&mut session, &catalog, Controls::default());
         assert!(in_the_pod(&session));
         assert_eq!(session.take_sounds(), EJECTED, "no klaxon");
     }
@@ -1203,7 +1283,7 @@ mod tests {
         // The timer of 30 is set on the tick after the breakup's
         // (@0x43e29), then ticks 10 times (@0x6d7e6).
         for _ in 0..11 {
-            sounds.extend(fight(&mut session, true).0);
+            sounds.extend(fight(&mut session, &catalog, true).0);
         }
         assert!(!sounds.contains(&SimSound::Ejected));
         assert_eq!(session.pilot.ship, ShipId(128));
@@ -1236,8 +1316,7 @@ mod tests {
         let fuel = session.pilot.reserves.fuel.now;
         let (shield, armor) = (session.pilot.reserves.shield, session.pilot.reserves.armor);
         session.ship.condition = Condition::Disabled;
-        let (sounds, _) = fight(&mut session, true);
-        assert_eq!(sounds, EJECTED);
+        assert_eq!(eject_check(&mut session, true), EJECTED);
         let hulk = hulk(&session).clone();
         assert_eq!(hulk.ship, ShipId(128));
         assert_eq!(hulk.state, state);
@@ -1306,10 +1385,17 @@ mod tests {
                 heading: 90.0,
             };
             session.ship.condition = Condition::Disabled;
-            assert_eq!(fight(&mut session, true).0, EJECTED);
+            assert_eq!(eject_check(&mut session, true), EJECTED);
             let immobile = hulk(&session).immobile;
             for _ in 0..3 {
-                session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+                work_with(
+                    &mut session,
+                    &catalog,
+                    Controls::default(),
+                    &crate::ai::Peaceful,
+                    Rules::default(),
+                    &mut NeverFires,
+                );
             }
             (immobile, at, hulk(&session).state)
         };
@@ -1344,11 +1430,18 @@ mod tests {
         session.ship.player_speed = 4.0;
         session.ship.condition = Condition::Disabled;
         session.pilot.reserves.armor.now = 1.0;
-        assert_eq!(fight(&mut session, true).0, EJECTED);
+        assert_eq!(eject_check(&mut session, true), EJECTED);
         let id = hulk(&session).id;
         assert_eq!(hulk(&session).speed, 4.0, "the player's speed");
         for _ in 0..3 {
-            session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &crate::ai::Peaceful,
+                Rules::default(),
+                &mut NeverFires,
+            );
             let hulk = session.space.npc(id).expect("still here");
             assert_eq!(hulk.condition, Condition::Disabled, "a derelict");
             let along = crate::flight::facing(hulk.state.heading) * hulk.speed;
@@ -1413,12 +1506,17 @@ mod tests {
         assert!(speed > 0.0, "{speed}");
         let heading = session.ship.player.heading;
         let collapsed = collapsed_velocity(Vec2::ZERO, heading, speed, session.top_speed());
+        // The hulk keeps it: the collapse comes in the player's move, whose
+        // drift drags it once before the eject check (@0x6f22c), and the
+        // hulk's `_HandleShip` in the ship loop (@0x4445c-0x444c4), after
+        // the check, drags it again.
+        let drag = crate::flight::DISABLED_DRAG;
         assert_eq!(
             hulk(&session).state.velocity,
-            collapsed,
+            collapsed * drag * drag,
             "the hulk keeps it"
         );
-        session.tick(Controls::default());
+        crate::testkit::work(&mut session, &catalog, Controls::default());
         assert_eq!(session.take_messages(), [], "collapsed once");
 
         // An escape ship's notice follows the collapse's.
@@ -1489,16 +1587,16 @@ mod tests {
         let mut session = flying(&catalog, &[POD, AUTO]);
         to_the_first_check(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
-        let exploded = (0..20).any(|_| hulk_destroyed(&fight(&mut session, false).1));
+        let exploded = (0..20).any(|_| hulk_destroyed(&fight(&mut session, &catalog, false).1));
         assert!(exploded, "the dying player's hulk explodes");
         let mut session = flying(&catalog, &[POD]);
         session.ship.condition = Condition::Disabled;
         session.pilot.reserves.armor.now = 1.0;
-        fight(&mut session, true);
+        fight(&mut session, &catalog, true);
         assert!(in_the_pod(&session));
         let id = hulk(&session).id;
         for _ in 0..200 {
-            let (_, events) = fight(&mut session, false);
+            let (_, events) = fight(&mut session, &catalog, false);
             assert!(!hulk_destroyed(&events));
         }
         let derelict = session.space.npc(id).expect("still here");
@@ -1582,7 +1680,7 @@ mod tests {
         session.space.escorts.fleet.push(None);
         let fuel = session.pilot.reserves.fuel.now;
         session.ship.condition = Condition::Disabled;
-        fight(&mut session, true);
+        fight(&mut session, &catalog, true);
         assert_eq!(session.pilot.ship, ESCAPE_POD_SHIP);
         assert_eq!(
             session.player_fate(),
@@ -1645,7 +1743,7 @@ mod tests {
         ship.ai_type = AiType::Interceptor;
         ship.hull.inherent_ai = 3;
         session.ship.condition = Condition::Disabled;
-        fight(&mut session, true);
+        fight(&mut session, &catalog, true);
         assert!(in_the_pod(&session));
         let released = session.space.npc(captured).expect("here");
         assert!(!released.escorts_player());
@@ -1684,7 +1782,7 @@ mod tests {
             });
             session.space.escorts.fleet.push(Some(id));
             session.ship.condition = Condition::Disabled;
-            fight(&mut session, true);
+            fight(&mut session, &catalog, true);
             assert!(in_the_pod(&session), "{reading:?}");
             let fighter = session.space.npc(id).expect("here");
             assert_eq!(fighter.carrier, None, "{reading:?}");
@@ -1705,7 +1803,7 @@ mod tests {
         let mut session = flying(&catalog, &[POD]);
         session.take_save_due();
         session.ship.condition = Condition::Disabled;
-        fight(&mut session, true);
+        fight(&mut session, &catalog, true);
         assert!(in_the_pod(&session));
         assert!(!session.take_save_due());
     }
@@ -1734,7 +1832,11 @@ mod tests {
         session.take_sounds();
         session.take_messages();
         session.hold_eject(true);
-        session.tick_combat(
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
             Rules::default(),
             &mut crate::testkit::Scripted::rolling(rolls),
         );
@@ -1768,9 +1870,9 @@ mod tests {
         catalog.outfits.push(outfit(KILLER, &[(SABOTAGE_KILL, 0)]));
         let mut session = flying(&catalog, &[POD, AUTO, KILLER]);
         session.reset_precalced();
-        fight(&mut session, false);
+        fight(&mut session, &catalog, false);
         session.ship.latches.sabotage.set_counter(FUSE);
-        let (sounds, _) = fight(&mut session, false);
+        let (sounds, _) = fight(&mut session, &catalog, false);
         assert!(in_the_pod(&session), "{:?}", session.ship.condition);
         assert_eq!(
             sounds,
@@ -1825,7 +1927,14 @@ mod tests {
                     "left as `OnRetire`'s reset left it"
                 );
             }
-            session.tick_combat(Rules::default(), &mut Draws::of(&[7]));
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut Draws::of(&[7]),
+            );
             let counter = if kept { 8.0 } else { 0.0 };
             assert_eq!(session.ship.latches.sabotage.counter(), counter, "{id}");
         }
@@ -1842,10 +1951,10 @@ mod tests {
             }]
         );
         assert_eq!(
-            session.ship_long_name(ShipId(VIPER)),
+            session.statics.ship_long_name(ShipId(VIPER)),
             Some("Federation Viper")
         );
-        assert_eq!(session.ship_long_name(ShipId(999)), None);
+        assert_eq!(session.statics.ship_long_name(ShipId(999)), None);
     }
 
     #[test]
@@ -1883,17 +1992,11 @@ mod tests {
             (npc(fleeing).target, npc(fleeing).goal),
             (None, Goal::Flee(hulk))
         );
-        assert_eq!(
-            (npc(pirate).target, npc(pirate).goal),
-            (
-                Some(hulk),
-                Goal::Plunder {
-                    ship: hulk,
-                    hopeless: true
-                }
-            ),
-            "goal 0xd kept, +0x70 the hulk"
-        );
+        // Goal 0xd is kept and +0x70 set to the hulk, but the AI loop
+        // (@0x44223-0x442ae) follows the eject check (@0x6f22c) in the
+        // same frame, and the traffic's think there lets the hopeless
+        // plunder of the boarded hulk go.
+        assert_eq!((npc(pirate).target, npc(pirate).goal), (None, Goal::Idle));
         assert!(
             session.space.npc(hired).expect("here").escorts_player(),
             "kept"
@@ -1920,7 +2023,7 @@ mod tests {
             session.ship.player.velocity = Vec2::new(3.0, 4.0);
             session.ship.player.heading = 90.0;
             session.ship.condition = Condition::Disabled;
-            fight(&mut session, true);
+            eject_check(&mut session, true);
             let push = session.top_speed();
             assert!(
                 (session.ship.player.velocity - Vec2::new(x + push, 4.0)).length() < 1e-4,
@@ -1938,7 +2041,7 @@ mod tests {
         session.ship.player.velocity = Vec2::ZERO;
         session.ship.condition = Condition::Disabled;
         session.pilot.reserves.armor.now = 1.0;
-        fight(&mut session, true);
+        fight(&mut session, catalog, true);
         assert!(in_the_pod(&session));
         session.ship.player.velocity = Vec2::ZERO;
         session.take_sounds();
@@ -1962,7 +2065,7 @@ mod tests {
             ..crate::flight::Controls::default()
         };
         let at = session.ship.player.position;
-        session.tick(controls);
+        crate::testkit::work(&mut session, &catalog, controls);
         assert_eq!(session.ship.player.heading, 90.0, "no turning");
         assert!(
             (session.ship.player.velocity - Vec2::new(handling.accel, 0.0)).length() < 1e-6,
@@ -1976,8 +2079,7 @@ mod tests {
         let mut events = Vec::new();
         for _ in 0..60 {
             session.hold_fire(true, true);
-            session.tick(controls);
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            crate::testkit::work(&mut session, &catalog, controls);
             events.extend(session.take_combat_events());
         }
         let speed = session.ship.player.velocity;
@@ -2007,14 +2109,21 @@ mod tests {
         let catalog = ejecting(100);
         let mut session = in_a_pod(&catalog, 0.0);
         for tick in 1..POD_TICKS {
-            session.tick(crate::flight::Controls::default());
+            crate::testkit::work(&mut session, &catalog, crate::flight::Controls::default());
             assert_eq!(session.pod, Some(POD_TICKS - tick));
             assert!(!session.ship.fate.rescue_due, "tick {tick}");
         }
-        session.tick(crate::flight::Controls::default());
-        assert_eq!(session.pod, Some(0));
-        assert!(session.ship.fate.rescue_due);
-        assert_eq!(session.player_fate(), PlayerFate::Ejected { ticks_left: 0 });
+        // Due on the 350th pass, whose rescue settles at once and ends it
+        // (`_HandlePlayer` @0x68ddd; see `Session::rescue_if_due`).
+        assert!(session.game_work(
+            crate::flight::Controls::default(),
+            &catalog,
+            &Passive,
+            Rules::default(),
+            &mut NeverFires
+        ));
+        assert_eq!(session.pod, None);
+        assert_eq!(session.player_fate(), PlayerFate::Flying);
     }
 
     #[test]
@@ -2022,10 +2131,9 @@ mod tests {
         let catalog = ejecting(100);
         let mut session = in_a_pod(&catalog, 0.0);
         session.pilot.reserves.armor.now = 0.0;
-        for _ in 0..POD_TICKS {
+        for _ in 1..POD_TICKS {
             assert!(!session.ship.fate.rescue_due);
-            session.tick(crate::flight::Controls::default());
-            let (_, events) = fight(&mut session, false);
+            let (_, events) = fight(&mut session, &catalog, false);
             assert_eq!(session.ship.condition, Condition::Intact, "no breakup");
             assert!(!events.iter().any(|event| matches!(
                 event,
@@ -2038,7 +2146,14 @@ mod tests {
                 }
             )));
         }
-        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        // The last pass's rescue ends it (`_HandlePlayer` @0x68ddd).
+        assert!(session.game_work(
+            crate::flight::Controls::default(),
+            &catalog,
+            &Passive,
+            Rules::default(),
+            &mut NeverFires
+        ));
         assert_eq!(session.pilot.ship, ShipId(128));
         assert!(session.pilot.reserves.armor.now > 0.0);
         assert_eq!(session.player_fate(), PlayerFate::Flying);
@@ -2054,7 +2169,7 @@ mod tests {
                 ticks_left,
                 starting: false,
             };
-            let (sounds, _) = fight(&mut session, true);
+            let (sounds, _) = fight(&mut session, &catalog, true);
             assert!(in_the_pod(&session));
             assert_eq!(
                 sounds.first() == Some(&SimSound::Klaxon),
@@ -2089,7 +2204,7 @@ mod tests {
         session.ship.condition = Condition::Disabled;
         prepare(&mut session);
         session.hold_eject(true);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        crate::testkit::work(&mut session, &catalog, Controls::default());
         assert!(in_the_pod(&session));
         session
     }

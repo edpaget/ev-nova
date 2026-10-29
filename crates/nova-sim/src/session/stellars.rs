@@ -29,7 +29,7 @@
 //! whole stellar first (@0xb700): nothing damages one within a day, so
 //! forgetting all the damage at once is the original's pass by index.
 //!
-//! **Shots.** The fight's tick ([`Session::tick_combat`]) hands the
+//! **Shots.** Each pass's fight (see the `game_work` module) hands the
 //! combat the stellars shown that shots can hit (whole, of `Strength`
 //! above 0, drawing a sheet that can be read, as big as the disc of its
 //! frame, see [`Session::drawn_sheet`]), each with its current
@@ -57,7 +57,7 @@
 //! player's system (`_HandleStellarSystemVisibility` @0x32aa5) at its
 //! rebuild points, and the session keeps which stellars shown that rebuild
 //! found destroyed until a flight frame finds them whole
-//! ([`Session::dead_since_rebuild`]; see the `story` module's "Built by
+//! (`Session::dead_since_rebuild`; see the `story` module's "Built by
 //! phase 9" and `story::rebuild`), with the stellar masters loaded and
 //! the sprite slots left with no frame, which the player's landing
 //! distance reads ([`Session::land`], by
@@ -125,9 +125,9 @@
 //! rescue rebuilds too (@0x69135): the engine has none, and whoever builds
 //! it calls the rebuild. Its debug key that explores every system
 //! (@0x6dad1) has no counterpart. The flight frame that drops a stellar
-//! seen whole is the end of [`Session::tick_combat`] in flight, after the
-//! shots, as the original's sprite tick (@0x444d2) follows
-//! `_CheckShotProximities` (@0x44015).
+//! seen whole is the end of the pass's fight in flight
+//! ([`Session::fight_tail`]), after the shots, as the original's sprite
+//! tick (@0x444d2) follows `_CheckShotProximities` (@0x44015).
 
 use super::{Chart, Outbox, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
@@ -164,8 +164,11 @@ impl Session {
     /// module docs). A stellar with no `DeadType` sheet draws graphic type
     /// 0 while this holds, by
     /// [`RuleKey::DeadTypeFallback`]'s engine reading.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
-    pub fn dead_since_rebuild(&self, stellar: StellarId) -> bool {
+    pub(crate) fn dead_since_rebuild(&self, stellar: StellarId) -> bool {
         self.space.dead_since_rebuild(stellar)
     }
 
@@ -230,7 +233,7 @@ impl Session {
     /// click box ([`Session::select_stellar`]), the shots and the views
     /// read this one answer.
     #[must_use]
-    pub fn drawn_sheet(&self, stellar: StellarId) -> DrawnSheet {
+    pub(crate) fn drawn_sheet(&self, stellar: StellarId) -> DrawnSheet {
         self.chart
             .sites
             .iter()
@@ -248,7 +251,7 @@ impl Session {
     /// centre less 16 on each axis (see the `story` module's "Built by
     /// stellar-fidelity phase 8").
     #[must_use]
-    pub fn frame_frozen(&self, stellar: StellarId) -> bool {
+    pub(crate) fn frame_frozen(&self, stellar: StellarId) -> bool {
         self.space.frame_frozen(&self.setup, stellar)
     }
 
@@ -259,7 +262,7 @@ impl Session {
     /// animates (`_HandleStellarSprites` @0x2e802), even when a later
     /// clone brings counting frames into the slot.
     #[must_use]
-    pub fn counts_no_frames(&self, stellar: StellarId) -> bool {
+    pub(crate) fn counts_no_frames(&self, stellar: StellarId) -> bool {
         self.space.counts_no_frames(&self.setup, stellar)
     }
 
@@ -273,7 +276,7 @@ impl Session {
     /// sheet); by the Bible, the sheet it draws
     /// ([`Session::drawn_sheet`]). Its `Type` for a stellar not shown.
     #[must_use]
-    pub fn counted_sheet(&self, stellar: StellarId) -> DrawnSheet {
+    pub(crate) fn counted_sheet(&self, stellar: StellarId) -> DrawnSheet {
         if self.setup.rules.source_for(RuleKey::StellarFrameCount) == RuleSource::Bible {
             return self.drawn_sheet(stellar);
         }
@@ -544,6 +547,9 @@ impl Space {
     /// module docs). A stellar with no `DeadType` sheet draws graphic type
     /// 0 while this holds, by
     /// [`RuleKey::DeadTypeFallback`]'s engine reading.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     fn dead_since_rebuild(&self, stellar: StellarId) -> bool {
         self.rebuilt.dead(stellar)
@@ -805,11 +811,13 @@ mod tests {
     use crate::catalog::{StellarLife, SystemId};
     use crate::chance::NeverFires;
     use crate::control::{Bit, Script, SetExpr, SetOp};
+    use crate::flight::Controls;
     use crate::landing::{LandingRefusal, StellarFlags};
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::{SessionEvent, StellarPick};
     use crate::story::Countdown;
     use crate::testkit::{FakePilotCatalog, Scripted, catalog, land_now, life};
+    use crate::testkit::{Passive, work, work_with};
 
     /// [`catalog`] with 128 back after 2 days, 129 after 5, and 140
     /// never.
@@ -1328,7 +1336,14 @@ mod tests {
         for npc in session.space.traffic.npcs_mut() {
             npc.goal = Goal::Land(StellarId(128));
         }
-        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         session.npcs().iter().map(|npc| npc.goal).collect()
     }
 
@@ -1336,7 +1351,14 @@ mod tests {
     fn an_npc_never_heads_for_a_stellar_y_destroyed() {
         let catalog = trafficked();
         let mut session = quiet(&catalog);
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert!(!session.npcs().is_empty(), "populated");
         assert!(
             goals_bound_for_128(&mut session, &catalog)
@@ -1598,7 +1620,14 @@ mod tests {
                 law,
                 ..Rules::default()
             };
-            session.tick_combat(rules, &mut NeverFires);
+            work_with(
+                session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &Passive,
+                rules,
+                &mut NeverFires,
+            );
             events.extend(session.take_combat_events());
         }
         events
@@ -1931,12 +1960,26 @@ mod tests {
             law: &fine,
             ..Rules::default()
         };
-        session.tick_combat(rules, &mut NeverFires);
+        work_with(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            rules,
+            &mut NeverFires,
+        );
         session.hold_trigger(Trigger::default());
         // The player moves off, and the hit pass meets it where it stood a
         // tick later, before the shot can turn on it.
         session.ship.player.position.y += 1000.0;
-        session.tick_combat(rules, &mut NeverFires);
+        work_with(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            rules,
+            &mut NeverFires,
+        );
         assert_eq!(destroyed(&session, 128), None, "still in flight");
         if turned {
             for shot in session.space.combat.shots_mut() {
@@ -1950,7 +1993,14 @@ mod tests {
                 law: &fine,
                 ..Rules::default()
             };
-            session.tick_combat(rules, &mut NeverFires);
+            work_with(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &Passive,
+                rules,
+                &mut NeverFires,
+            );
         }
         assert_eq!(destroyed(&session, 128), Some(left(2)), "shot down");
         session
@@ -2038,7 +2088,7 @@ mod tests {
         };
         let mut events = fire(&mut session, 1);
         for _ in 0..20 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             events.extend(session.take_combat_events());
         }
         events
@@ -2530,10 +2580,10 @@ mod tests {
         settle(&mut session, &catalog, "M130");
         run(&mut session, "U128");
         assert_eq!(rebuilt(&session, &[128, 129]), [true, true], "no frame yet");
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(rebuilt(&session, &[128, 129]), [false, true]);
         run(&mut session, "Y128");
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(rebuilt(&session, &[128, 129]), [false, true], "not back");
     }
 
@@ -2544,7 +2594,7 @@ mod tests {
         run(&mut session, "Y129");
         land_now(&mut session).expect("lands");
         run(&mut session, "U129");
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert!(session.dead_since_rebuild(StellarId(129)));
     }
 
@@ -2578,14 +2628,14 @@ mod tests {
         settle(&mut session, &catalog, "M130");
         // A shot fired while it lies dead, which a frame samples dead.
         session.hold_trigger(FIRE);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         session.hold_trigger(Trigger::default());
         assert!(session.dead_since_rebuild(StellarId(128)));
         run(&mut session, "U128");
         session.space.strength.insert(StellarId(128), 0);
         // The next frame's hit pass shoots it down before the frame
         // samples it.
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(destroyed(&session, 128), Some(left(2)), "shot down");
         assert!(session.dead_since_rebuild(StellarId(128)));
     }
@@ -2647,7 +2697,7 @@ mod tests {
 
     /// A flight frame.
     fn frame(session: &mut Session) {
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &crate::testkit::catalog(), Controls::default());
     }
 
     /// The land key pressed in a session of `catalog` with `rules`, after
@@ -2921,13 +2971,27 @@ mod tests {
             if rebuilt {
                 rebuild(&mut session, &catalog);
             }
-            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Peaceful,
+                Rules::default(),
+                &mut NeverFires,
+            );
             let mut npc =
                 crate::testkit::npc(0, crate::stats::ShipStats::new(crate::testkit::FAST, &[]));
             npc.goal = Goal::EnterGate(StellarId(128));
             npc.state.position = Vec2::new(30.0, 0.0);
             let id = session.space.traffic.add_npc(npc);
-            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Peaceful,
+                Rules::default(),
+                &mut NeverFires,
+            );
             session.space.npc(id).expect("there").entering_gate()
         };
         assert!(!entering(false), "30 out of 25");
@@ -3608,7 +3672,14 @@ mod tests {
         };
         let mut events = fire(&mut session, 1);
         for _ in 0..30 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut NeverFires,
+            );
             events.extend(session.take_combat_events());
         }
         booms(&events, 2)

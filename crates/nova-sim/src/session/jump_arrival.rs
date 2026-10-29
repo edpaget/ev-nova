@@ -112,6 +112,7 @@ impl Session {
 mod tests {
     use crate::catalog::{ShipId, SystemId};
     use crate::chance::NeverFires;
+
     use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
@@ -119,6 +120,7 @@ mod tests {
     use crate::session::Session;
     use crate::session::tests::{bound_for_134, chained};
     use crate::stats::INERTIALESS_HULL;
+    use crate::testkit::work;
     use crate::testkit::{FAST, FakePilotCatalog, begin_jump_now, catalog, fly_out, nebula, ship};
     use crate::trig::{accel, whole};
     use crate::{RuleKey, RuleSource, Rulebook};
@@ -133,8 +135,8 @@ mod tests {
     fn jumping(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
         let mut session = Session::start(catalog).expect("starts").with_rules(rules);
         session.plot_course(SystemId(132)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session
     }
 
@@ -200,7 +202,7 @@ mod tests {
         let top = session.top_speed();
         assert!(top > 0.0);
         assert_eq!(session.player_speed(), top);
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         let moved = session.player().velocity;
         assert!(moved.length() > 0.0, "{moved:?}");
         let along = crate::flight::facing(session.player().heading);
@@ -214,7 +216,7 @@ mod tests {
     fn a_multi_jump_arrives_on_the_first_hops_side() {
         let catalog = chained(catalog(), 2);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(132))
@@ -243,7 +245,7 @@ mod tests {
         }
         let catalog = chained(catalog(), 2);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default()).with_rules(at_rest());
-        begin_jump_now(&mut session).expect("jumps");
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(
             session.player().position,
@@ -304,7 +306,7 @@ mod tests {
             let catalog = catalog();
             let mut session = jumping(&catalog, rules);
             session.arrive(&catalog, &mut NeverFires).expect("arrives");
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
             assert_eq!(
                 session.begin_jump(),
                 Ok(SystemId(132)),

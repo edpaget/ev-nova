@@ -39,6 +39,12 @@ impl MoviePlayer for NoMoviePlayer {
 mod tests {
     use super::*;
     use nova_view::geometry::Point;
+    use nova_view::movie::fixture::check_contract;
+
+    #[test]
+    fn no_movie_player_meets_the_movie_player_contract() {
+        assert_eq!(check_contract(&NoMoviePlayer, "Race 1.mov"), Ok(()));
+    }
 
     #[test]
     fn no_movie_starts_and_nothing_is_drawn() {

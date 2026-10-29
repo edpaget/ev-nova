@@ -20,7 +20,7 @@ impl Session {
     /// What its traffic's berths keep, to hand on to a session started
     /// later in the same run ([`Session::with_kept_berths`]).
     #[must_use]
-    pub fn kept_berths(&self) -> KeptBerths {
+    pub(crate) fn kept_berths(&self) -> KeptBerths {
         self.space.kept_berths()
     }
 
@@ -29,7 +29,7 @@ impl Session {
     /// ([`Session::kept_berths`]), in place of a launch's empty table.
     /// The traffic keeps the session's readings.
     #[must_use]
-    pub fn with_kept_berths(mut self, kept: KeptBerths) -> Self {
+    pub(crate) fn with_kept_berths(mut self, kept: KeptBerths) -> Self {
         self.space.traffic.keep_berths(kept);
         self
     }

@@ -9,7 +9,7 @@
 //! self-repair for 300 ticks (`_playerRepairInhibit` = 300.0
 //! @0x3b186-0x3b18d; see the `player_repair` module). Its armour is
 //! truncated toward zero (@0x3b193-0x3b1a1) by the fight itself, before
-//! it decides the breakup (`Combat::tick_on`), as the original's dying
+//! it decides the breakup (`Combat::settle_condition`), as the original's dying
 //! test after the truncation (`_IsDying` @0x3b1e5) reads the truncated
 //! armour: an intact player hit down to 0.4 armour is truncated to none
 //! and starts to break up in the same tick.
@@ -129,10 +129,12 @@ mod tests {
     use crate::combat::hull::{DisableRule, HullSpec};
     use crate::combat::{CombatEvent, Rules, ShipRef};
     use crate::control::{Bit, Script};
+    use crate::flight::Controls;
     use crate::mission::FailedBy;
     use crate::reserves::Gauge;
     use crate::session::tests::{DISABLING, FIRE, Firing, armed, facing_an_npc};
     use crate::testkit::{FakePilotCatalog, carrying, mission};
+    use crate::testkit::{Passive, work_with};
     use crate::traffic::npc::NpcId;
 
     fn bit(n: u16) -> Bit {
@@ -205,8 +207,11 @@ mod tests {
         below: f32,
     ) -> (Vec<SimSound>, Vec<SimMessage>) {
         let below = Below(below);
-        session.tick_traffic(catalog, &Firing, &mut NeverFires);
-        session.tick_combat(
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Firing,
             Rules {
                 disable: &below,
                 ..Rules::default()
@@ -337,6 +342,19 @@ mod tests {
     }
 
     #[test]
+    fn the_players_breakup_and_explosion_leave_the_nav_mode() {
+        let mut catalog = shooting(vec![], 1);
+        catalog.hulls[0].death_delay = 0;
+        let mut session = under_fire(&catalog, 0.5, Condition::Disabled);
+        let mode_3 = crate::NavMode::Hyperspace(Some(crate::SystemId(131)));
+        session.chart.nav = mode_3;
+        hit(&mut session, &catalog, 10.0);
+        tick(&mut session, &catalog, 10.0);
+        assert_eq!(session.ship.condition, Condition::Destroyed);
+        assert_eq!(session.chart.nav, mode_3);
+    }
+
+    #[test]
     fn the_newly_disabled_players_armour_is_truncated_toward_zero() {
         let catalog = shooting(vec![], 1);
         let mut session = under_fire(&catalog, 10.6, Condition::Intact);
@@ -427,17 +445,38 @@ mod tests {
         let full = session.npcs()[0].reserves.armor.now;
         let ticks = (1..30)
             .find(|_| {
-                session.tick_combat(rules, &mut NeverFires);
+                work_with(
+                    &mut session,
+                    &catalog,
+                    Controls::default(),
+                    &Passive,
+                    rules,
+                    &mut NeverFires,
+                );
                 session.npcs()[0].reserves.armor.now != full
             })
             .expect("the NPC is hit");
         let mut session = firing_at_the_npc(&catalog);
         hold(&mut session, 0, 140, false);
         for _ in 1..ticks {
-            session.tick_combat(rules, &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                rules,
+                &mut NeverFires,
+            );
         }
         session.pilot.reserves.armor.now = 4.6;
-        session.tick_combat(rules, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            rules,
+            &mut NeverFires,
+        );
         assert_ne!(session.npcs()[0].reserves.armor.now, full, "hit then");
         assert_eq!(session.ship.condition, Condition::Disabled);
         assert_eq!(
@@ -459,10 +498,24 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         hold(&mut session, 0, 140, false);
         session.pilot.reserves.armor.now = 7.6;
-        session.tick_combat(DISABLING, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            DISABLING,
+            &mut NeverFires,
+        );
         assert_eq!(session.ship.condition, Condition::Disabled);
         session.pilot.reserves.armor.now = 0.0;
-        session.tick_combat(DISABLING, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            DISABLING,
+            &mut NeverFires,
+        );
         assert!(matches!(session.ship.condition, Condition::Dying { .. }));
         assert_eq!(
             (session.take_sounds(), session.take_messages()),
@@ -471,7 +524,14 @@ mod tests {
         assert_eq!(failed_in(&session, 0), None);
         let mut session = Session::start(&catalog).expect("starts");
         session.pilot.reserves.armor.now = 7.6;
-        session.tick_combat(DISABLING, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            DISABLING,
+            &mut NeverFires,
+        );
         assert_eq!(armor(&session), 7.6, "not truncated");
     }
 
@@ -494,7 +554,14 @@ mod tests {
             };
             let mut heard = (Vec::new(), Vec::new());
             for _ in 0..30 {
-                session.tick_combat(rules, &mut NeverFires);
+                work_with(
+                    &mut session,
+                    &catalog,
+                    Controls::default(),
+                    &Passive,
+                    rules,
+                    &mut NeverFires,
+                );
                 heard.0.extend(session.take_sounds());
                 heard.1.extend(session.take_messages());
                 if session.npcs()[0].condition != Condition::Intact {

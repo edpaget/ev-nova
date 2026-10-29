@@ -1,24 +1,16 @@
-//! [`FlightView`]'s construction: reading the session and catalog, the
-//! builders, the hail, player and mission info requests, and the
-//! preferences.
+//! [`FlightView`]'s construction: the generic read of a flight as it
+//! opens, the view's halves of the edge's setup and of entering play, the
+//! view's own builders and settings, and a test's view over a session it
+//! built.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::PlayerCommand;
-use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
-use nova_sim::{
-    ALERT_CICN, Allegiance, AsteroidCatalog, Behaviour, BoardingRule, CombatCatalog, CommCatalog,
-    DisableRule, FixedStep, Haggle, HailOptions, HailView, HashedRolls, LegalCode, NovaAi,
-    NovaBoarding, NovaDisable, NovaLaw, Pilot, PilotCatalog, PointDefenceRule, Rulebook, Session,
-    StartError, TrafficCatalog,
-};
-use nova_sim::{
-    ControlBits, Hailed, HireTerms, KeptBerths, LastRefresh, MissionInfo, MissionInfoPress,
-    OfferPrompt, PersonRules, PlayerInfo, pilot_panel::PilotPanel, ship_layer::SlotSprites,
-    story::sprite_pool::StellarSpritePool,
-};
+#[cfg(any(test, feature = "fixture"))]
+use nova_sim::SimCatalog;
+use nova_sim::flight_frame::{FlightCommand, FlightOpening, ScreenAnswer, ScreenAsk};
+use nova_sim::{ALERT_CICN, FixedStep, HashedRolls, Rulebook};
 
 use crate::flight::cadence::HudCadence;
 use crate::flight::catalog::{CombatLooks, Looks, ShipSprites, StatusBars};
@@ -27,6 +19,9 @@ use crate::flight::effects::Effects;
 use crate::flight::escorts::{EscortMenu, EscortMenuLooks};
 use crate::flight::floating::FloatingMap;
 use crate::flight::hud::{self};
+#[cfg(any(test, feature = "fixture"))]
+use crate::flight::sim_adapter::SessionFlight;
+use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::camera::VIEW_SIZE;
 use crate::system::catalog::SystemCatalog;
@@ -34,165 +29,93 @@ use crate::system::kept_frames::KeptFrames;
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::DialogTemplate;
-use crate::{Diagnostic, Key, ScreenAction, SoundPrefs};
+use crate::{Diagnostic, SoundPrefs};
 
 use super::{
-    BarFor, FlightOverlays, FlightView, MESSAGE_TICKS, Metrics, SharedChance, Then,
-    hail_refusal_message, opening_scene, window_width,
+    BarFor, FlightOverlays, FlightView, Metrics, SharedChance, opening_scene, window_width,
 };
 
+/// The view's construction over any flight: [`FlightView::over`] reads it
+/// as it opens, through the [`FlightSim`] port and the opening the edge
+/// hands it ([`FlightOpening`]), and the edge builds the flight it is
+/// handed (`crate::flight::open_flight`). Only the view's own catalogs are
+/// asked for: the weapons whose looks are read are the opening's list
+/// ([`FlightOpening::weapons`]), not a catalog's.
 impl<
-    C: PilotCatalog
-        + TrafficCatalog
-        + CombatCatalog
-        + AsteroidCatalog
-        + CommCatalog
-        + CombatLooks
-        + SystemCatalog
-        + ShipSprites
-        + StatusBars
-        + GalaxyCatalog
-        + EscortMenuLooks,
-> FlightView<C>
+    C: CombatLooks + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog + EscortMenuLooks,
+    S: FlightSim,
+> FlightView<C, S>
 {
-    /// A new, unnamed pilot's flight, read from `catalog`, which the
-    /// screen keeps.
-    pub fn new(catalog: C) -> Self {
-        let session = Session::start(&catalog);
-        Self::flying(catalog, session)
-    }
-
-    /// `pilot`'s flight, read from `catalog`, which the screen keeps. A
-    /// pilot last landed on a stellar resumes in flight over it, at rest,
-    /// as [`Session::fly`] places it: nothing lands, so no landing is
-    /// reported ([`FlightView::take_landing`]) and nothing sounds.
-    pub fn with_pilot(catalog: C, pilot: Pilot) -> Self {
-        let session = Session::fly(&catalog, pilot);
-        Self::flying(catalog, session)
-    }
-
-    /// `pilot`'s flight as [`FlightView::with_pilot`] builds it, its load's
-    /// fallbacks reading `rules` ([`Session::load`]): for a pilot opened
-    /// from a save, whose repair [`FlightView::load_repaired`] reports.
-    pub fn loaded(catalog: C, pilot: Pilot, rules: Rulebook) -> Self {
-        let session = Session::load(&catalog, pilot, &rules);
-        Self::flying(catalog, session)
-    }
-
-    /// Begins a new pilot's game as [`Session::begin`] does, on the
-    /// flight's chance: for a pilot just created, before its first save.
-    /// The
-    /// ship, which the beginning puts at (50, 50), is drawn there from the
-    /// first frame, not on its way from where the view was read, and the
-    /// stars are scattered afresh about it when the flight is next caught
-    /// up with, as `_ResetGameData` scatters them (@0x1df5e). A session
-    /// that failed begins nothing.
-    pub fn begin(&mut self) {
-        if let Ok(session) = &mut self.session {
-            session.begin(&self.catalog, &mut self.chance);
-            self.place_ship();
-            self.stars_due = true;
-        }
-    }
-
-    /// Enters play from the main screen as [`Session::enter_game`] does:
-    /// the refresh a later new pilot reads is taken afresh, and the stars
-    /// are scattered afresh when the flight is next caught up with, as
-    /// `_EnterGameFromMainScreen` scatters them (@0x19f7c). A session that
-    /// failed enters nothing.
-    pub fn enter_game(&mut self) {
-        if let Ok(session) = &mut self.session {
-            session.enter_game();
-            self.stars_due = true;
-        }
-    }
-
-    /// Resumes a pilot opened from a save as [`Session::resume`] does, on
-    /// the flight's chance: its ship faces a drawn heading, as
-    /// `_LoadPilotData` faces every pilot it loads (@0x7535b-0x75372), and
-    /// the offers' roll table is drawn, as the load's `_ResetPlayer` draws
-    /// it (@0x76502, @0x7673e). A session that failed resumes nothing.
-    pub fn resume(&mut self) {
-        if let Ok(session) = &mut self.session {
-            session.resume(&mut self.chance);
-        }
-    }
-
-    /// Opens a pilot just loaded on the main screen, as Open Pilot's
-    /// `_MainScreenChoice(1)` does once it is loaded: every active
-    /// mission's auxiliary ships restart
-    /// ([`Session::restart_aux_from_main_screen`], @0x1a918-0x1a982) on
-    /// the flight's chance. A session that failed opens nothing.
-    pub fn open_on_main_screen(&mut self) {
-        if let Ok(session) = &mut self.session {
-            session.restart_aux_from_main_screen(&mut self.chance);
-        }
-    }
-
-    /// Opens the last pilot at launch, once it is loaded, as
-    /// `_OpenLastPilotFile` and `_DoMainScreen`'s once-a-launch setup do
-    /// ([`Session::open_at_launch`]) on the flight's chance: every active
-    /// mission's auxiliary ships restart in the unguarded form
-    /// (@0x765d4-0x76637), and the player's system is explored (@0x1affe).
-    /// A session that failed opens nothing.
-    pub fn open_at_launch(&mut self) {
-        if let Ok(session) = &mut self.session {
-            session.open_at_launch(&mut self.chance);
-        }
-    }
-
-    /// The flight of `session`, or why it could not start. No session
-    /// starts landed, so flight's first frame redraws the bar, as
-    /// `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
-    fn flying(catalog: C, session: Result<Session, StartError>) -> Self {
-        Self::read(catalog, session)
-    }
-
-    /// The flight of `session` as [`FlightView::flying`] reads it.
+    /// The view of `sim`, a flight built at the edge, over `catalog`, the
+    /// handle the flight shares, opening as `opening` says (its weapons,
+    /// its names and its failure, fixed for the flight's life, which the
+    /// edge reads off the adapter, `SessionFlight::opening`), shown by `rules` and
+    /// wording its picks on `words_chance`, which the edge hands the
+    /// flight too, so the wording's picks draw on the flight's own
+    /// sequence.
+    ///
+    /// It tells the flight the view's width first
+    /// ([`FlightCommand::SetWindowWidth`]), before any frame is read. Then
+    /// it reads the flight's first frame: the scene the frame opens on,
+    /// the player's sheet and the status bar for the frame's interface
+    /// government, and the course map: its nebulae and borders as `rules`
+    /// say, what the flight's galaxy shows, asked as the view opens
+    /// ([`ScreenAsk::Galaxy`]), the
+    /// course shown and the current system, centred. The looks of every
+    /// weapon the opening lists ([`FlightOpening::weapons`]) are read, and what
+    /// of them, or of the Red Alert's icon, could not be. A flight that failed to start
+    /// ([`FlightOpening::failure`]) shows only why: no scene, sheet, bar,
+    /// galaxy or looks. No flight starts landed, so flight's first frame
+    /// redraws the bar, as `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
     #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
-    fn read(catalog: C, session: Result<Session, StartError>) -> Self {
-        let mut session = session.map_err(|err| err.to_string());
-        if let Ok(session) = &mut session {
-            // Sized as the view starts, before anything reads its field.
-            session.set_window_width(window_width(VIEW_SIZE));
-        }
-        let (scene, sheet, sheet_ship, status_bar) = match &session {
-            Ok(session) => (
-                Some(opening_scene(&catalog, session)),
-                catalog.ship_sheet(session.ship()),
-                Some(session.ship()),
-                hud::choose_status_bar(&catalog, session.interface_government()),
+    pub fn over(
+        catalog: Rc<C>,
+        mut sim: S,
+        opening: FlightOpening,
+        rules: &Rulebook,
+        words_chance: SharedChance,
+    ) -> Self {
+        // Sized as the view starts, before anything reads its field.
+        sim.apply(FlightCommand::SetWindowWidth(window_width(VIEW_SIZE)));
+        let mut frame = nova_sim::flight_frame::FlightFrame::default();
+        sim.frame(&mut frame);
+        let FlightOpening {
+            weapons,
+            names,
+            failure,
+        } = opening;
+        let (scene, sheet, sheet_ship, status_bar) = match &failure {
+            None => (
+                Some(opening_scene(&*catalog, &frame)),
+                catalog.ship_sheet(frame.player().class),
+                Some(frame.player().class),
+                hud::choose_status_bar(&*catalog, frame.hud.interface_government),
             ),
-            Err(reason) => (None, Err(reason.clone()), None, Err(reason.clone())),
+            Some(reason) => (None, Err(reason.clone()), None, Err(reason.clone())),
         };
-        let bar_government = session
-            .as_ref()
-            .ok()
-            .map(|session| BarFor(session.interface_government()));
-        let previous = session
-            .as_ref()
-            .map(|session| *session.player())
-            .unwrap_or_default();
-        let mut map = GalaxyMap::course(&catalog);
-        if let Ok(session) = &session {
-            map.set_nebula_pick(session.rules().source_for(nova_sim::RuleKey::NebulaPicture));
-            map.set_border_rules(
-                session.rules().source_for(nova_sim::RuleKey::MapBorderPace),
-                session
-                    .rules()
-                    .source_for(nova_sim::RuleKey::MapFindBorders),
-            );
-            map.show_galaxy(session.galaxy());
-            map.show_course(session.system(), &session.course_shown());
+        let bar_government = failure
+            .is_none()
+            .then_some(BarFor(frame.hud.interface_government));
+        let mut map = GalaxyMap::course(&*catalog);
+        map.set_nebula_pick(rules.source_for(nova_sim::RuleKey::NebulaPicture));
+        map.set_border_rules(
+            rules.source_for(nova_sim::RuleKey::MapBorderPace),
+            rules.source_for(nova_sim::RuleKey::MapFindBorders),
+        );
+        // A flight that failed to start shows no galaxy: it answers
+        // nothing.
+        if let ScreenAnswer::Galaxy(galaxy) = sim.screen(ScreenAsk::Galaxy) {
+            map.show_galaxy(&galaxy);
+            map.show_course(frame.system, &frame.course_shown);
             // Entering the game draws the floating map, and a new or
             // loaded pilot sets `_mapScroll`, to the current system
             // (`_EnterGameFromMainScreen` @0x19faa, `_DoNewPilot`
             // @0x19054, `_LoadPilotData` @0x7537b).
             map.recentre();
         }
-        let looks = match &session {
-            Ok(_) => Looks::read(&catalog, catalog.weapons().iter().map(|weapon| weapon.id)),
-            Err(_) => Looks::default(),
+        let looks = match &failure {
+            None => Looks::read(&*catalog, weapons),
+            Some(_) => Looks::default(),
         };
         let escort_colors = catalog.escort_menu_colors();
         let alert_width = catalog.icon_size(ALERT_CICN).map(|(width, _)| width);
@@ -201,255 +124,103 @@ impl<
             .into_iter()
             .map(Diagnostic::Unreadable)
             .collect();
-        if session.is_ok() && alert_width.is_none() {
+        if failure.is_none() && alert_width.is_none() {
             unread_looks.push(Diagnostic::Unreadable(format!(
                 "no cïcn {ALERT_CICN}: the Red Alert icon is not drawn"
             )));
         }
-        Self {
+        Self::assembled(
             catalog,
-            map,
-            map_open: false,
-            map_key_held: false,
-            map_opened: None,
-            map_missions: Vec::new(),
-            map_borders_save: None,
-            map_seen: None,
-            floating_picture: None,
-            jump: None,
-            fade_in: None,
-            death_fade: None,
-            hyperspace_effects: true,
-            smoke_trails: true,
-            parallax_starfield: true,
-            weapon_effects: true,
-            sound_prefs: SoundPrefs::default(),
-            alert_width,
-            view: VIEW_SIZE,
-            double_time: false,
-            session,
-            scene,
-            kept_frames: KeptFrames::new(),
-            sheet,
-            sheet_ship,
-            bar_government,
-            status_bar,
-            clock: FixedStep::new(),
-            previous,
-            alpha: 0.0,
-            elapsed: Duration::ZERO,
-            held: HashSet::new(),
-            nav_latch: false,
-            select_latch: false,
-            slot_block: super::slot_block::SlotBlock::default(),
-            jump_latch: false,
-            board_latch: false,
-            pending_landing: None,
-            message: None,
-            overlays: FlightOverlays::default(),
-            pending_boarding: false,
-            pending_hail: None,
-            pending_escort_dialog: None,
-            pending_mission_info: None,
-            pending_player_info: false,
-            pending_offer: None,
-            pending_leads: Vec::new(),
-            hail_options: HailOptions::default(),
-            boarding_rule: Rc::new(NovaBoarding::default()),
-            chance: SharedChance::default(),
-            glow_rolls: HashedRolls::new(1),
-            behaviour: Rc::new(NovaAi::default()),
-            disable_rule: Rc::new(NovaDisable),
-            defence_rule: Rc::new(Allegiance),
-            law: Rc::new(NovaLaw::default()),
-            npc_sheets: BTreeMap::new(),
-            npc_previous: BTreeMap::new(),
-            unread_looks,
-            looks,
-            cards: BTreeMap::new(),
-            codes: BTreeMap::new(),
-            effects: Effects::default(),
-            effects_chance: SharedChance::default(),
-            stars: crate::flight::stars::Starfield::new(),
-            stars_due: true,
-            flashes: BTreeMap::new(),
-            held_alts: std::cell::RefCell::default(),
-            glows: crate::flight::weapon_glow::WeaponGlows::default(),
-            shot_looks: super::shots::ShotLooks::default(),
-            metrics: None,
-            escort_menu: EscortMenu::default(),
-            ui_sounds: Vec::new(),
-            floating: FloatingMap::new(),
-            escort_colors,
-            hud_cadence: HudCadence::default(),
-            radar_scene: None,
-            nav_scene: None,
-            nav_flash: None,
-            nav_marked: false,
-            nav_texts: 0,
-            target_scene: None,
-            reserves_scene: None,
-            bar_steps: VecDeque::new(),
-            bars_staged: 0,
-            radar_static: None,
-            cursor: HoverCursor::default(),
+            sim,
+            Opening {
+                map,
+                scene,
+                sheet,
+                sheet_ship,
+                status_bar,
+                bar_government,
+                frame,
+                looks,
+                unread_looks,
+                escort_colors,
+                alert_width,
+                presentation: super::stepping::Presentation::of(rules),
+                words_chance,
+                failure,
+                names,
+            },
+        )
+    }
+}
+
+/// The view's halves of the edge's setup and of entering play, and its
+/// own settings and builders, over any flight.
+impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
+    /// Shows the flight as the edge left it once it set the session up
+    /// after the view's opening read, as the builders' follow-ups did: the
+    /// scene's stellars drawn again by the session's rules, which say how
+    /// a destroyed stellar with no `DeadType` sheet draws, but not laid
+    /// out again (`with_rules`'), and, when the run's slot sprites were
+    /// carried over (`slots_carried`), the NPC sheets their frames ask for
+    /// (`with_slot_sprites`'). The kept frame is filled afresh, the cargo
+    /// area's labels with it (`with_strings`').
+    pub fn show_set_up(&mut self, slots_carried: bool) {
+        self.show_destroyed();
+        if slots_carried {
+            self.read_npc_sheets();
         }
     }
 
-    /// The flight with every disputed rule reading as `rules` says
-    /// ([`Session::with_rules`]). The stellars of the scene shown are
-    /// drawn again by the new rules, which say how a destroyed stellar
-    /// with no `DeadType` sheet draws, but not laid out again; the course
-    /// map's nebulae take their picture by the new
-    /// [`RuleKey::NebulaPicture`](nova_sim::RuleKey::NebulaPicture), and
-    /// its borders their pace and Find's pass by
-    /// [`RuleKey::MapBorderPace`](nova_sim::RuleKey::MapBorderPace) and
-    /// [`RuleKey::MapFindBorders`](nova_sim::RuleKey::MapFindBorders).
-    #[must_use]
-    pub fn with_rules(self, rules: Rulebook) -> Self {
-        let pick = rules.source_for(nova_sim::RuleKey::NebulaPicture);
-        let pace = rules.source_for(nova_sim::RuleKey::MapBorderPace);
-        let find = rules.source_for(nova_sim::RuleKey::MapFindBorders);
-        let mut view = Self {
-            session: self.session.map(|session| session.with_rules(rules)),
-            ..self
-        };
-        view.map.set_nebula_pick(pick);
-        view.map.set_border_rules(pace, find);
-        view.show_destroyed();
-        view
-    }
-
-    /// The flight with its ship slots' draw layers and cloned frames
-    /// starting from `slot_sprites`, the history an earlier flight of the
-    /// same run left ([`Session::with_slot_sprites`]).
-    #[must_use]
-    pub fn with_slot_sprites(self, slot_sprites: SlotSprites) -> Self {
-        let mut view = Self {
-            session: self
-                .session
-                .map(|session| session.with_slot_sprites(slot_sprites)),
-            ..self
-        };
-        view.read_npc_sheets();
-        view
-    }
-
-    /// The ship slots' draw-layer and cloned-frame history as the flight
-    /// leaves it ([`Session::slot_sprites`]), or `None` when its session
-    /// never started.
-    #[must_use]
-    pub fn slot_sprites(&self) -> Option<&SlotSprites> {
-        self.session.as_ref().ok().map(Session::slot_sprites)
-    }
-
-    /// The flight with its stellar sprite pool carried from `pool`, the
-    /// one an earlier flight of the same run left
-    /// ([`Session::carry_stellar_sprite_pool`]): the original never clears
-    /// a stellar's sprite pointer between pilots.
-    #[must_use]
-    pub fn with_stellar_sprite_pool(mut self, pool: StellarSpritePool) -> Self {
-        if let Ok(session) = &mut self.session {
-            session.carry_stellar_sprite_pool(pool);
-        }
-        self
-    }
-
-    /// The stellar sprite pool as the flight leaves it
-    /// ([`Session::stellar_sprite_pool`]), or `None` when its session never
-    /// started.
-    #[must_use]
-    pub fn stellar_sprite_pool(&self) -> Option<&StellarSpritePool> {
-        self.session.as_ref().ok().map(Session::stellar_sprite_pool)
-    }
-
-    /// The flight with its traffic's berths starting from `kept`, what an
-    /// earlier flight of the same run left ([`Session::with_kept_berths`]).
-    #[must_use]
-    pub fn with_kept_berths(self, kept: KeptBerths) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_kept_berths(kept)),
-            ..self
+    /// Begins a new pilot's game, `begin` the flight's half (a
+    /// `SessionFlight`'s `begin`, on the flight's chance), which says
+    /// whether it began: for a pilot just created, before its first save.
+    /// The ship, which the beginning puts at (50, 50), is drawn there from
+    /// the first frame, not on its way from where the view was read, and
+    /// the stars are scattered afresh about it when the flight is next
+    /// caught up with, as `_ResetGameData` scatters them (@0x1df5e). The
+    /// kept frame is filled afresh after `begin`, as after any change
+    /// behind the port ([`FlightView::change_sim`]). A flight that begins
+    /// nothing changes nothing else here.
+    pub fn begin(&mut self, begin: impl FnOnce(&mut S) -> bool) {
+        if self.change_sim(begin) {
+            self.place_ship();
+            self.stars_due = true;
         }
     }
 
-    /// What the flight's traffic's berths keep for the next flight
-    /// ([`Session::kept_berths`]), or `None` when its session never
-    /// started.
-    #[must_use]
-    pub fn kept_berths(&self) -> Option<KeptBerths> {
-        self.session.as_ref().ok().map(Session::kept_berths)
-    }
-
-    /// The flight with a new pilot's neighbour pass reading `carried`,
-    /// what an earlier flight of the same run left
-    /// ([`Session::with_last_refresh`]).
-    #[must_use]
-    pub fn with_last_refresh(self, carried: LastRefresh) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_last_refresh(carried)),
-            ..self
+    /// Enters play from the main screen, `enter` the flight's half (a
+    /// `SessionFlight`'s `enter_game`), which says whether it entered: the
+    /// stars are scattered afresh when the flight is next caught up with,
+    /// as `_EnterGameFromMainScreen` scatters them (@0x19f7c). The kept
+    /// frame is filled afresh after `enter` ([`FlightView::change_sim`]).
+    /// A flight that enters nothing changes nothing else here.
+    pub fn enter_game(&mut self, enter: impl FnOnce(&mut S) -> bool) {
+        if self.change_sim(enter) {
+            self.stars_due = true;
         }
     }
+}
 
-    /// What the flight's last galaxy refresh left hidden, for a new pilot
-    /// made later in the run ([`Session::last_refresh`]), or `None` when
-    /// its session never started.
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// The flight the view shows: the edge's way to the adapter's own API
+    /// (a `SessionFlight`'s saving and entering play, the pilot it saves),
+    /// which the view keeps off the port.
     #[must_use]
-    pub fn last_refresh(&self) -> Option<LastRefresh> {
-        self.session.as_ref().ok().map(Session::last_refresh)
+    pub fn sim(&self) -> &S {
+        &self.sim
     }
 
-    /// The flight with `terms` giving the fee and wage of a hire
-    /// ([`Session::with_hire_terms`]).
-    #[must_use]
-    pub fn with_hire_terms(self, terms: Rc<dyn HireTerms>) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_hire_terms(terms)),
-            ..self
-        }
-    }
-
-    /// The flight with `rules` deciding how persons appear
-    /// ([`Session::with_person_rules`]).
-    #[must_use]
-    pub fn with_person_rules(self, rules: Rc<dyn PersonRules>) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_person_rules(rules)),
-            ..self
-        }
-    }
-
-    /// The flight with the `T` set operator naming the ship from
-    /// `strings`' string lists ([`Session::with_strings`]).
-    #[must_use]
-    pub fn with_strings(self, strings: Rc<dyn CommCatalog>) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_strings(strings)),
-            ..self
-        }
-    }
-
-    /// The flight with `bits` testing a ship's `Availability` for hire
-    /// ([`Session::with_control_bits`]).
-    #[must_use]
-    pub fn with_control_bits(self, bits: Rc<dyn ControlBits>) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_control_bits(bits)),
-            ..self
-        }
-    }
-
-    /// The flight with its explosions and debris rolled on `chance`, apart
-    /// from the simulation's.
-    #[must_use]
-    pub fn with_effects_chance(self, effects_chance: SharedChance) -> Self {
-        Self {
-            effects_chance,
-            ..self
-        }
+    /// Changes the flight the view shows with `change`, through the
+    /// adapter's own API ([`FlightView::sim`]): the edge's setup, a
+    /// pilot's resume and openings, and a test's change behind the port.
+    /// Gives what `change` gives. The kept frame is filled afresh after
+    /// it, as after a command ([`FlightView::send`]) or a step, so no read
+    /// of the view's finds it stale; what the change raised the view
+    /// takes at its next catch-up ([`FlightView::resync`]).
+    pub fn change_sim<T>(&mut self, change: impl FnOnce(&mut S) -> T) -> T {
+        let changed = change(&mut self.sim);
+        self.refresh_frame();
+        changed
     }
 
     /// The flight with the HUD's text, and the course map's panels',
@@ -492,413 +263,6 @@ impl<
             map: self.map.with_find(template, style),
             ..self
         }
-    }
-
-    /// The flight with its NPCs deciding as `behaviour` says.
-    #[must_use]
-    pub fn with_behaviour(self, behaviour: Rc<dyn Behaviour>) -> Self {
-        Self { behaviour, ..self }
-    }
-
-    /// The flight with its ships disabled as `rule` says: in the fight,
-    /// and in its session's changes of ship
-    /// ([`Session::with_disable_rule`]).
-    #[must_use]
-    pub fn with_disable_rule(self, disable_rule: Rc<dyn DisableRule>) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_disable_rule(Rc::clone(&disable_rule))),
-            disable_rule,
-            ..self
-        }
-    }
-
-    /// The flight with its ships' point defence engaging the missiles
-    /// `rule` calls hostile.
-    #[must_use]
-    pub fn with_point_defence_rule(self, defence_rule: Rc<dyn PointDefenceRule>) -> Self {
-        Self {
-            defence_rule,
-            ..self
-        }
-    }
-
-    /// The flight with the player's crimes judged by `law`.
-    #[must_use]
-    pub fn with_law(self, law: Rc<dyn LegalCode>) -> Self {
-        Self { law, ..self }
-    }
-
-    /// The flight with its boardings by `rule`: who repels boarders, the
-    /// capture odds and the capture roll.
-    #[must_use]
-    pub fn with_boarding_rule(self, boarding_rule: Rc<dyn BoardingRule>) -> Self {
-        Self {
-            boarding_rule,
-            ..self
-        }
-    }
-
-    /// The flight drawing the port's own `overlays`, the title and the
-    /// help line, which are off by default.
-    #[must_use]
-    pub fn with_overlays(self, overlays: FlightOverlays) -> Self {
-        Self { overlays, ..self }
-    }
-
-    /// The port's own overlays the flight draws.
-    #[must_use]
-    pub fn overlays(&self) -> FlightOverlays {
-        self.overlays
-    }
-
-    /// The flight with the comm dialog listing `hail_options`.
-    #[must_use]
-    pub fn with_hail_options(self, hail_options: HailOptions) -> Self {
-        Self {
-            hail_options,
-            ..self
-        }
-    }
-
-    /// Hails the target ([`Session::hail_key`]), Option held as Alt is,
-    /// or says why not: a hail answered is held for the router
-    /// ([`FlightView::take_hail`]), the escort dialog a fleet escort opens
-    /// in its place ([`FlightView::take_escort_dialog`]) and a mission
-    /// offered in its place ([`FlightView::take_offer`]), each letting go
-    /// of the flight
-    /// keys; one accepted at once shows nothing, and so does a navigation
-    /// stellar that answers, as its comm dialog is not built.
-    pub(super) fn hail(&mut self) {
-        let Ok(session) = &mut self.session else {
-            return;
-        };
-        let option = self.held.contains(&Key::Alt);
-        match session.hail_key(&self.catalog, &self.hail_options, option, &mut self.chance) {
-            Ok(Hailed::Comm(view)) => {
-                self.pending_hail = Some(view);
-                self.held.clear();
-            }
-            Ok(Hailed::Escort(view)) => {
-                self.pending_escort_dialog = Some(view);
-                self.held.clear();
-            }
-            Ok(Hailed::Offer(offer)) => self.hold_offer(offer),
-            // The planet comm dialog (`_DoPlanetCommDialog`) is not built
-            // yet: rdm:task/planet-domination opens it here.
-            Ok(Hailed::Stellar(_)) => {}
-            Err(refusal) => {
-                if let Some(text) = hail_refusal_message(refusal) {
-                    self.say_for(text, MESSAGE_TICKS);
-                }
-            }
-        }
-    }
-
-    /// The hail just answered, once: the router takes it to open the comm
-    /// dialog.
-    pub fn take_hail(&mut self) -> Option<HailView> {
-        self.pending_hail.take()
-    }
-
-    /// The escort dialog just opened, once: the router takes it to show
-    /// the dialog.
-    pub fn take_escort_dialog(&mut self) -> Option<nova_sim::escort_dialog::EscortDialogView> {
-        self.pending_escort_dialog.take()
-    }
-
-    /// Presses `button` in the escort dialog, through the session
-    /// ([`Session::press_escort`]): what it shows after, or none once it
-    /// closes. A close refreshes the HUD, as a hail's does
-    /// ([`FlightView::hang_up`]).
-    pub fn press_escort(
-        &mut self,
-        button: nova_sim::escort_dialog::EscortButton,
-    ) -> Option<nova_sim::escort_dialog::EscortDialogView> {
-        let session = self.session.as_mut().ok()?;
-        let view = session.press_escort(button);
-        if view.is_none() {
-            self.redraw_status();
-        }
-        view
-    }
-
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen since
-    /// this was last taken, once: the router opens it on
-    /// [`FlightView::player_info`] over the paused flight.
-    pub fn take_player_info_request(&mut self) -> bool {
-        std::mem::take(&mut self.pending_player_info)
-    }
-
-    /// What the player info screen shows, as [`Session::player_info`]
-    /// gives it from the screen's catalog, marked with the cheats setting,
-    /// changing nothing; `None` for a session that failed. An opening of
-    /// the screen is
-    /// [`FlightView::open_player_info`].
-    #[must_use]
-    pub fn player_info(&self) -> Option<PlayerInfo> {
-        let session = self.session.as_ref().ok()?;
-        Some(self.marked(session.player_info(&self.catalog)))
-    }
-
-    /// What the main screen's pilot panel says about the pilot, as
-    /// [`Session::pilot_panel`] gives it from the screen's catalog,
-    /// changing nothing; `None` for a session that failed.
-    #[must_use]
-    pub fn pilot_panel(&self) -> Option<PilotPanel> {
-        let session = self.session.as_ref().ok()?;
-        Some(session.pilot_panel(&self.catalog))
-    }
-
-    /// The player info dialog opens, as [`Session::open_player_info`] has
-    /// it: the session resets first, so the screen it gives shows the
-    /// cargo trimmed; none in a jump or while the ship breaks up, when
-    /// nothing opens, or for a session that failed. It is marked with the
-    /// cheats setting. The router opens the screen on it, from flight and
-    /// from the spaceport alike.
-    pub fn open_player_info(&mut self) -> Option<PlayerInfo> {
-        let session = self.session.as_mut().ok()?;
-        let info = session.open_player_info(&self.catalog)?;
-        Some(self.marked(info))
-    }
-
-    /// `info` marked with the cheats setting ([`FlightOverlays::cheats`]),
-    /// which the session leaves off.
-    fn marked(&self, info: PlayerInfo) -> PlayerInfo {
-        PlayerInfo {
-            cheats: self.overlays.cheats,
-            ..info
-        }
-    }
-
-    /// Presses [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) outside a jump, its [`PlayerCommand`]
-    /// taken: when the session takes the press too
-    /// ([`Session::press_player_info`]), asks the router for the player
-    /// info screen, letting go of the flight keys (`_HandlePlayer`
-    /// @0x702bf-0x703c9); when it refuses, with its beep, nothing more.
-    pub(super) fn ask_player_info(&mut self) -> ScreenAction {
-        if self.press_player_info() {
-            self.pending_player_info = true;
-            self.held.clear();
-        }
-        ScreenAction::None
-    }
-
-    /// Whether the session takes a press of [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
-    /// ([`Session::press_player_info`], which beeps a refusal); a failed
-    /// session takes it, and the router opens nothing for it.
-    fn press_player_info(&mut self) -> bool {
-        match &mut self.session {
-            Ok(session) => session.press_player_info(),
-            Err(_) => true,
-        }
-    }
-
-    /// A press of [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) during a jump: outside the map, the
-    /// session refuses it with its beep ([`Session::press_player_info`],
-    /// @0x702f7, @0x7039a-0x703bd), when the player's fate takes it.
-    pub(super) fn refuse_player_info(&mut self) -> ScreenAction {
-        if !self.map_open && self.takes(PlayerCommand::PlayerInfo) {
-            let _ = self.press_player_info();
-        }
-        ScreenAction::None
-    }
-
-    /// Jettisons everything, mission cargo included, as the player info's
-    /// Jettison does (`_JettisonCargo(1)` @0x5a66d), saying what went.
-    /// Docked, an `OnFailure` `C`, `E` or `H` of a mission it fails
-    /// (`_QuickMissionFailure` @0x99d83) that changes the `ïntf` redraws
-    /// the whole bar at its operator; the player info's close redraws
-    /// after it (@0x5a725).
-    pub fn jettison_all(&mut self) {
-        self.run_docked(Then::Nothing, |view| {
-            if let Ok(session) = &mut view.session {
-                session.jettison_cargo(true, &mut view.chance);
-            }
-        });
-        self.say_messages();
-    }
-
-    /// The mission info [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asked for the mission info
-    /// screen on, once: the router opens the screen on it over the paused
-    /// flight.
-    pub fn take_mission_info_request(&mut self) -> Option<MissionInfo> {
-        self.pending_mission_info.take()
-    }
-
-    /// Presses [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), as `_HandlePlayer` does
-    /// (@0x70405-0x705a8), the session deciding
-    /// ([`Session::press_mission_info`]): with an active mission shown,
-    /// asks the router for the mission info screen, letting go of the
-    /// flight keys; with none, says the session's #354 on the message
-    /// line after its refusal beep; refused, nothing. A flight whose
-    /// session never started says #354 alone, with no session to beep.
-    pub(super) fn ask_mission_info(&mut self) {
-        let Ok(session) = self.session.as_mut() else {
-            self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS);
-            return;
-        };
-        match session.press_mission_info() {
-            MissionInfoPress::Refused => {}
-            MissionInfoPress::NoActiveMissions => self.say_messages(),
-            MissionInfoPress::Opens(info) => {
-                self.pending_mission_info = Some(info);
-                self.held.clear();
-            }
-        }
-    }
-
-    /// The mission a person hailed or boarded just offered, once: the
-    /// router takes it to open the offer dialog over the paused flight,
-    /// and answers it through [`FlightView::accept_mission`] or
-    /// [`FlightView::refuse_mission`].
-    pub fn take_offer(&mut self) -> Option<OfferPrompt> {
-        self.pending_offer.take()
-    }
-
-    /// The comm dialog's contents while a hail is under way
-    /// ([`Session::hailing`]).
-    #[must_use]
-    pub fn hailing(&self) -> Option<HailView> {
-        self.session
-            .as_ref()
-            .ok()?
-            .hailing(&self.catalog, &self.hail_options)
-    }
-
-    /// Presses the `pick`th option listed, through the session
-    /// ([`Session::answer`]).
-    pub fn answer(&mut self, pick: usize) -> Option<HailView> {
-        let session = self.session.as_mut().ok()?;
-        session.answer(pick, &self.catalog, &self.hail_options, &mut self.chance)
-    }
-
-    /// Makes `choice` in the haggle dialog, through the session
-    /// ([`Session::haggle`]).
-    pub fn haggle(&mut self, choice: Haggle) -> Option<HailView> {
-        let session = self.session.as_mut().ok()?;
-        session.haggle(choice, &self.catalog, &self.hail_options)
-    }
-
-    /// Reads the sheet of each ship type the traffic can spawn that has
-    /// not been read yet, and of each type a ship here is boxed by
-    /// ([`Session::framed_types`]), such as the stale frames of a hidden
-    /// ship's slot.
-    ///
-    /// The traffic types' target cards not read yet are asked for in one
-    /// batch ([`CombatLooks::target_cards`]), and none when all are read.
-    pub(super) fn read_npc_sheets(&mut self) {
-        let Ok(session) = &self.session else {
-            return;
-        };
-        let traffic = session.traffic_ships();
-        let framed: Vec<_> = session.framed_types().collect();
-        let govts: Vec<_> = session.npcs().iter().filter_map(|npc| npc.govt).collect();
-        self.read_traffic_sheets(traffic);
-        for ship in framed {
-            self.npc_sheets
-                .entry(ship)
-                .or_insert_with(|| self.catalog.ship_sheet(ship));
-        }
-        for govt in govts {
-            self.codes
-                .entry(govt)
-                .or_insert_with(|| self.catalog.target_code(govt));
-        }
-    }
-
-    /// Reads, in the warm-up frame of entering play, the sheets and target
-    /// cards of the ship types the system's traffic will bring
-    /// ([`Session::coming_traffic_ships`]), so the first step, which fills
-    /// the system, reads none: their reading is the one-time cost of a
-    /// run's first stepped frame, and the warm-up frame is drawn under
-    /// black. A session that failed reads nothing.
-    pub fn warm_up_traffic(&mut self) {
-        let Ok(session) = &self.session else {
-            return;
-        };
-        let coming = session.coming_traffic_ships(&self.catalog);
-        self.read_traffic_sheets(coming);
-    }
-
-    /// Whether the sheet and the target card of ship type `ship` are read
-    /// already, so a step that brings one reads neither.
-    #[must_use]
-    pub fn has_read_traffic(&self, ship: nova_sim::ShipId) -> bool {
-        self.npc_sheets.contains_key(&ship) && self.cards.contains_key(&ship)
-    }
-
-    /// Reads the sheet of each of `traffic` not read yet, and their target
-    /// cards not read yet in one batch ([`CombatLooks::target_cards`]),
-    /// none when all are read.
-    fn read_traffic_sheets(&mut self, traffic: Vec<nova_sim::ShipId>) {
-        for &ship in &traffic {
-            self.npc_sheets
-                .entry(ship)
-                .or_insert_with(|| self.catalog.ship_sheet(ship));
-        }
-        let unread: Vec<_> = traffic
-            .into_iter()
-            .filter(|ship| !self.cards.contains_key(ship))
-            .collect();
-        if !unread.is_empty() {
-            let cards = self.catalog.target_cards(&unread);
-            self.cards.extend(unread.into_iter().zip(cards));
-        }
-    }
-
-    /// The flight with each day's events and the traffic rolled on
-    /// `chance`.
-    #[must_use]
-    pub fn with_chance(self, chance: SharedChance) -> Self {
-        Self { chance, ..self }
-    }
-
-    /// The flight with jumps playing their white fades or not, as the
-    /// Hyperspace Effects preference is on (the default) or off.
-    #[must_use]
-    pub fn with_hyperspace_effects(self, hyperspace_effects: bool) -> Self {
-        Self {
-            hyperspace_effects,
-            ..self
-        }
-    }
-
-    /// Sets whether the next jump plays its white fades; a jump already
-    /// playing keeps its own.
-    pub fn set_hyperspace_effects(&mut self, hyperspace_effects: bool) {
-        self.hyperspace_effects = hyperspace_effects;
-    }
-
-    /// Whether jumps play their white fades.
-    #[must_use]
-    pub fn hyperspace_effects(&self) -> bool {
-        self.hyperspace_effects
-    }
-
-    /// The flight with each scattering of the stars giving them their own
-    /// parallax factors or not, as the Parallax Starfield preference is on
-    /// (the default) or off.
-    #[must_use]
-    pub fn with_parallax_starfield(self, parallax_starfield: bool) -> Self {
-        Self {
-            parallax_starfield,
-            ..self
-        }
-    }
-
-    /// Sets whether the stars get their own parallax factors. It takes
-    /// effect at the next scattering; the stars already scattered keep
-    /// their factors.
-    pub fn set_parallax_starfield(&mut self, parallax_starfield: bool) {
-        self.parallax_starfield = parallax_starfield;
-    }
-
-    /// Whether the stars' scatterings give them their own parallax factors.
-    #[must_use]
-    pub fn parallax_starfield(&self) -> bool {
-        self.parallax_starfield
     }
 
     /// The flight with shots leaving their particle trails and smoke or
@@ -948,7 +312,7 @@ impl<
 
     /// The flight with the player's sound preferences `prefs`, which say
     /// whether the Red Alert blinks its icon ([`SoundPrefs::alert_quiet`],
-    /// [`Session::set_sound_quiet`]).
+    /// [`FlightCommand::SetSoundQuiet`]).
     #[must_use]
     pub fn with_sound_prefs(mut self, prefs: SoundPrefs) -> Self {
         self.set_sound_prefs(prefs);
@@ -956,12 +320,14 @@ impl<
     }
 
     /// Sets the player's sound preferences, as
-    /// [`FlightView::with_sound_prefs`] does.
+    /// [`FlightView::with_sound_prefs`] does: the view keeps them, and the
+    /// flight is told whether the sound is quiet
+    /// ([`FlightCommand::SetSoundQuiet`]), which the Red Alert's blink in
+    /// the HUD reads, so it is sent as any command is
+    /// ([`FlightView::send`]), the kept frame filled afresh after it.
     pub fn set_sound_prefs(&mut self, prefs: SoundPrefs) {
         self.sound_prefs = prefs;
-        if let Ok(session) = &mut self.session {
-            session.set_sound_quiet(prefs.alert_quiet());
-        }
+        self.send(FlightCommand::SetSoundQuiet(prefs.alert_quiet()));
     }
 
     /// The flight with double time on or off, as `on` says (see the
@@ -972,13 +338,14 @@ impl<
         self
     }
 
-    /// Turns double time on or off, as `on` says, for the session flown
-    /// now and every one after it.
+    /// Turns double time on or off, as `on` says, for the flight flown
+    /// now and every one after it: the view keeps it, and the flight is
+    /// told the key's state ([`FlightCommand::SetDoubleTimeKey`]), which
+    /// it latches at once, sent as any command is ([`FlightView::send`]),
+    /// the kept frame filled afresh after it.
     pub fn set_double_time(&mut self, on: bool) {
         self.double_time = on;
-        if let Ok(session) = &mut self.session {
-            session.set_double_time_key(on);
-        }
+        self.send(FlightCommand::SetDoubleTimeKey(on));
     }
 
     /// Whether double time is on, as the screen was last told.
@@ -993,10 +360,370 @@ impl<
     pub fn alert_quiet(&self) -> bool {
         self.sound_prefs.alert_quiet()
     }
+}
+
+/// The view of a [`SessionFlight`] that a test built itself, for the
+/// tests whose session a builder put into the state they need.
+#[cfg(any(test, feature = "fixture"))]
+impl<
+    C: SimCatalog
+        + CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks
+        + 'static,
+> FlightView<C, SessionFlight<C>>
+{
+    /// The view of `sim` over `catalog`, read as the edge reads a flight
+    /// ([`FlightView::over`]) and shown by `rules`, the rulebook its
+    /// session was built with (`nova_sim::fixture::SessionBuilder`), so
+    /// the view and the session read one: for a test whose session a
+    /// builder put into the state it needs, passed as
+    /// `builder.build().into()` for Nova's collaborators
+    /// ([`SessionFlight::new`]). The catalog is shared with the flight
+    /// first, and the wording picks on the flight's chance.
+    ///
+    /// Wiring-only: for the integration tests that wire a real session
+    /// behind the port (`flight_seam`, the stock tests, the edge's
+    /// checks). View code and component tests never call it; they open
+    /// the view over `FakeFlight`.
+    pub fn from_session(catalog: C, mut sim: SessionFlight<C>, rules: &Rulebook) -> Self {
+        let catalog = Rc::new(catalog);
+        sim.share_catalog(Rc::clone(&catalog) as Rc<dyn SimCatalog>);
+        let chance = sim.chance.clone();
+        let opening = sim.opening();
+        Self::over(catalog, sim, opening, rules, chance)
+    }
+}
+
+/// What reading a flight gives the view as it opens, besides the catalog
+/// and the flight: the course map, the scene, the player's sheet and bar,
+/// the flight's first frame, the looks and what of them could not be read,
+/// the escort menu's colours, the alert icon's width, the presentation
+/// rules, the wording's chance, why the flight could not start and the
+/// names its messages are worded with.
+struct Opening {
+    map: GalaxyMap,
+    scene: Option<crate::system::SystemScene>,
+    sheet: Result<crate::flight::ShipSheet, String>,
+    sheet_ship: Option<nova_sim::ShipId>,
+    status_bar: Result<hud::StatusBar, String>,
+    bar_government: Option<BarFor>,
+    frame: nova_sim::flight_frame::FlightFrame,
+    looks: Looks,
+    unread_looks: Vec<Diagnostic>,
+    escort_colors: crate::flight::escorts::EscortMenuColors,
+    alert_width: Option<u32>,
+    presentation: super::stepping::Presentation,
+    words_chance: SharedChance,
+    failure: Option<String>,
+    names: nova_sim::flight_frame::Names,
+}
+
+impl<C, S: FlightSim> FlightView<C, S> {
+    /// The flight with its explosions and debris rolled on `chance`, apart
+    /// from the simulation's.
+    #[must_use]
+    pub fn with_effects_chance(self, effects_chance: SharedChance) -> Self {
+        Self {
+            effects_chance,
+            ..self
+        }
+    }
+
+    /// The flight with each scattering of the stars giving them their own
+    /// parallax factors or not, as the Parallax Starfield preference is on
+    /// (the default) or off.
+    #[must_use]
+    pub fn with_parallax_starfield(self, parallax_starfield: bool) -> Self {
+        Self {
+            parallax_starfield,
+            ..self
+        }
+    }
+
+    /// Sets whether the stars get their own parallax factors. It takes
+    /// effect at the next scattering; the stars already scattered keep
+    /// their factors.
+    pub fn set_parallax_starfield(&mut self, parallax_starfield: bool) {
+        self.parallax_starfield = parallax_starfield;
+    }
+
+    /// Whether the stars' scatterings give them their own parallax factors.
+    #[must_use]
+    pub fn parallax_starfield(&self) -> bool {
+        self.parallax_starfield
+    }
+
+    /// The flight with jumps playing their white fades or not, as the
+    /// Hyperspace Effects preference is on (the default) or off.
+    #[must_use]
+    pub fn with_hyperspace_effects(self, hyperspace_effects: bool) -> Self {
+        Self {
+            hyperspace_effects,
+            ..self
+        }
+    }
+
+    /// Sets whether the next jump plays its white fades; a jump already
+    /// playing keeps its own.
+    pub fn set_hyperspace_effects(&mut self, hyperspace_effects: bool) {
+        self.hyperspace_effects = hyperspace_effects;
+    }
+
+    /// Whether jumps play their white fades.
+    #[must_use]
+    pub fn hyperspace_effects(&self) -> bool {
+        self.hyperspace_effects
+    }
+
+    /// The flight drawing the port's own `overlays`, the title and the
+    /// help line, which are off by default.
+    #[must_use]
+    pub fn with_overlays(self, overlays: FlightOverlays) -> Self {
+        Self { overlays, ..self }
+    }
+
+    /// The port's own overlays the flight draws.
+    #[must_use]
+    pub fn overlays(&self) -> FlightOverlays {
+        self.overlays
+    }
 
     /// The catalog the screen reads.
     #[must_use]
     pub fn catalog(&self) -> &C {
         &self.catalog
     }
+
+    /// The view of `sim` over `catalog`, as `opening` read them, every
+    /// other field as a view starts.
+    #[allow(clippy::too_many_lines)] // one line for each of the screen's fields
+    fn assembled(catalog: Rc<C>, sim: S, opening: Opening) -> Self {
+        Self {
+            catalog,
+            map: opening.map,
+            map_open: false,
+            map_key_held: false,
+            map_opened: None,
+            map_missions: Vec::new(),
+            map_borders_save: None,
+            map_seen: None,
+            floating_picture: None,
+            jump: None,
+            fade_in: None,
+            death_fade: None,
+            hyperspace_effects: true,
+            smoke_trails: true,
+            parallax_starfield: true,
+            weapon_effects: true,
+            sound_prefs: SoundPrefs::default(),
+            alert_width: opening.alert_width,
+            view: VIEW_SIZE,
+            double_time: false,
+            sim,
+            scene: opening.scene,
+            kept_frames: KeptFrames::new(),
+            sheet: opening.sheet,
+            sheet_ship: opening.sheet_ship,
+            bar_government: opening.bar_government,
+            status_bar: opening.status_bar,
+            clock: FixedStep::new(),
+            previous: opening.frame.player().place(),
+            alpha: 0.0,
+            elapsed: Duration::ZERO,
+            held: HashSet::new(),
+            nav_latch: false,
+            select_latch: false,
+            slot_block: super::slot_block::SlotBlock::default(),
+            jump_latch: false,
+            board_latch: false,
+            pending_landing: None,
+            message: None,
+            overlays: FlightOverlays::default(),
+            pending_boarding: false,
+            pending_hail: None,
+            pending_escort_dialog: None,
+            pending_mission_info: None,
+            pending_player_info: false,
+            kept_panel: super::player::KeptPanel::Unasked,
+            pending_offer: None,
+            pending_leads: Vec::new(),
+            glow_rolls: HashedRolls::new(1),
+            npc_sheets: BTreeMap::new(),
+            npc_previous: Vec::new(),
+            unread_looks: opening.unread_looks,
+            looks: opening.looks,
+            cards: BTreeMap::new(),
+            codes: BTreeMap::new(),
+            effects: Effects::default(),
+            effects_chance: SharedChance::default(),
+            words_chance: opening.words_chance,
+            stars: crate::flight::stars::Starfield::new(),
+            stars_due: true,
+            flashes: BTreeMap::new(),
+            held_alts: std::cell::RefCell::default(),
+            glows: crate::flight::weapon_glow::WeaponGlows::default(),
+            shot_looks: super::shots::ShotLooks::default(),
+            metrics: None,
+            escort_menu: EscortMenu::default(),
+            ui_sounds: Vec::new(),
+            floating: FloatingMap::new(),
+            escort_colors: opening.escort_colors,
+            hud_cadence: HudCadence::default(),
+            radar_scene: None,
+            nav_scene: None,
+            nav_flash: None,
+            nav_marked: false,
+            nav_texts: 0,
+            target_scene: None,
+            reserves_scene: None,
+            bar_steps: VecDeque::new(),
+            bars_staged: 0,
+            inbox: super::inbox::Inbox::default(),
+            step_report: nova_sim::flight_frame::StepReport::default(),
+            presentation: opening.presentation,
+            frame: opening.frame,
+            failure: opening.failure,
+            names: Rc::new(opening.names),
+            radar_static: None,
+            cursor: HoverCursor::default(),
+        }
+    }
+
+    /// A view of `sim`, a scripted flight, over `catalog`, for a component
+    /// test: the course map read from the catalog, its nebulae and borders
+    /// as `rules` say, showing the frame's course; the scene the frame
+    /// opens on, read from the catalog with the stellars it shows, each as
+    /// it holds it ([`opening_scene`]); with no sheet or status bar, as the
+    /// port gives none yet, nor looks; the messages worded with `names`,
+    /// as an opening hands them (a `FakeFlight`'s opening's); the
+    /// wording's picks rolled on a chance that never fires.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn scripted(
+        catalog: C,
+        sim: S,
+        names: nova_sim::flight_frame::Names,
+        rules: &Rulebook,
+    ) -> Self
+    where
+        C: GalaxyCatalog + EscortMenuLooks + SystemCatalog,
+    {
+        const NO_FLIGHT: &str = "a scripted flight has none";
+        let mut map = GalaxyMap::course(&catalog);
+        map.set_nebula_pick(rules.source_for(nova_sim::RuleKey::NebulaPicture));
+        map.set_border_rules(
+            rules.source_for(nova_sim::RuleKey::MapBorderPace),
+            rules.source_for(nova_sim::RuleKey::MapFindBorders),
+        );
+        let mut frame = nova_sim::flight_frame::FlightFrame::default();
+        sim.frame(&mut frame);
+        map.show_course(frame.system, &frame.course_shown);
+        map.recentre();
+        let escort_colors = catalog.escort_menu_colors();
+        let scene = Some(opening_scene(&catalog, &frame));
+        Self::assembled(
+            Rc::new(catalog),
+            sim,
+            Opening {
+                map,
+                scene,
+                sheet: Err(NO_FLIGHT.to_owned()),
+                sheet_ship: None,
+                status_bar: Err(NO_FLIGHT.to_owned()),
+                bar_government: None,
+                frame,
+                looks: Looks::default(),
+                unread_looks: Vec::new(),
+                escort_colors,
+                alert_width: None,
+                presentation: super::stepping::Presentation::of(rules),
+                words_chance: SharedChance::default(),
+                failure: None,
+                names,
+            },
+        )
+    }
 }
+
+/// The NPCs' sheets, over the [`FlightSim`] port: read from the catalog as
+/// the frame's ships and traffic ask for them, so any flight drives them,
+/// a scripted one in the component tests.
+impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
+    /// Reads the sheet of each ship type the traffic can spawn
+    /// ([`FlightFrame::traffic_ships`](nova_sim::flight_frame::FlightFrame::traffic_ships))
+    /// that has not been read yet, of each type a ship here is boxed by
+    /// ([`FlightFrame::framed_types`](nova_sim::flight_frame::FlightFrame::framed_types)),
+    /// such as the stale frames of a hidden ship's slot, and each NPC's
+    /// government's target code, from the kept frame. The
+    /// player's own type is read with its ship, so it is left out while
+    /// its slot holds its own frames.
+    ///
+    /// The traffic types' target cards not read yet are asked for in one
+    /// batch ([`CombatLooks::target_cards`]), and none when all are read.
+    pub(super) fn read_npc_sheets(&mut self) {
+        let traffic = self.frame.traffic_ships.clone();
+        let framed: Vec<_> = self.frame.framed_types().collect();
+        let govts: Vec<_> = self.frame.npcs().filter_map(|npc| npc.govt).collect();
+        self.read_traffic_sheets(traffic);
+        for ship in framed {
+            self.npc_sheets
+                .entry(ship)
+                .or_insert_with(|| self.catalog.ship_sheet(ship));
+        }
+        for govt in govts {
+            self.codes
+                .entry(govt)
+                .or_insert_with(|| self.catalog.target_code(govt));
+        }
+    }
+
+    /// Reads, in the warm-up frame of entering play, the sheets and target
+    /// cards of the ship types the system's traffic will bring, asked of
+    /// the flight once ([`ScreenAsk::ComingTraffic`],
+    /// `nova_sim::Session::coming_traffic_ships`), so the first step,
+    /// which fills the system, reads none: their reading is the one-time
+    /// cost of a run's first stepped frame, and the warm-up frame is drawn
+    /// under black. Any answer but
+    /// [`ScreenAnswer::ComingTraffic`], a failed flight's nothing among
+    /// them, brings none.
+    pub fn warm_up_traffic(&mut self) {
+        let coming = match self.sim.screen(ScreenAsk::ComingTraffic) {
+            ScreenAnswer::ComingTraffic(ships) => ships,
+            _ => Vec::new(),
+        };
+        self.read_traffic_sheets(coming);
+    }
+
+    /// Whether the sheet and the target card of ship type `ship` are read
+    /// already, so a step that brings one reads neither.
+    #[must_use]
+    pub fn has_read_traffic(&self, ship: nova_sim::ShipId) -> bool {
+        self.npc_sheets.contains_key(&ship) && self.cards.contains_key(&ship)
+    }
+
+    /// Reads the sheet of each of `traffic` not read yet, and their target
+    /// cards not read yet in one batch ([`CombatLooks::target_cards`]),
+    /// none when all are read.
+    fn read_traffic_sheets(&mut self, traffic: Vec<nova_sim::ShipId>) {
+        for &ship in &traffic {
+            self.npc_sheets
+                .entry(ship)
+                .or_insert_with(|| self.catalog.ship_sheet(ship));
+        }
+        let unread: Vec<_> = traffic
+            .into_iter()
+            .filter(|ship| !self.cards.contains_key(ship))
+            .collect();
+        if !unread.is_empty() {
+            let cards = self.catalog.target_cards(&unread);
+            self.cards.extend(unread.into_iter().zip(cards));
+        }
+    }
+}
+
+#[cfg(test)]
+mod edge_checks;

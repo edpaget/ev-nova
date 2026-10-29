@@ -24,7 +24,12 @@ pub(super) fn game(screen: &AppScreen) -> &FlightView<Rc<GameData>> {
 
 /// The held game's pilot's name.
 pub(super) fn held_name(screen: &AppScreen) -> String {
-    game(screen).pilot().expect("a pilot").name().to_owned()
+    game(screen)
+        .sim()
+        .pilot()
+        .expect("a pilot")
+        .name()
+        .to_owned()
 }
 
 pub(super) fn bit(n: u16) -> nova_sim::Bit {
@@ -194,7 +199,7 @@ fn a_new_pilot_returns_to_the_main_menu_loaded_and_not_flying() {
     assert_eq!(store.writes(), 1, "once: settling made no save due");
     assert_eq!(
         saved(&store, "Ada"),
-        *game(&screen).pilot().expect("a pilot")
+        *game(&screen).sim().pilot().expect("a pilot")
     );
     for _ in 0..30 {
         screen.tick(TICK);
@@ -255,7 +260,11 @@ pub(super) fn save_explorer(store: &MemoryPilots) {
     let mut screen = nebula_menu(store);
     create_held(&mut screen, "Ada");
     assert!(
-        !game(&screen).pilot().expect("a pilot").control_bit(bit(10)),
+        !game(&screen)
+            .sim()
+            .pilot()
+            .expect("a pilot")
+            .control_bit(bit(10)),
         "a new pilot explores no nebula"
     );
     screen.quit();
@@ -287,6 +296,7 @@ pub(super) fn save_explorer(store: &MemoryPilots) {
 /// The held game's mission 130's auxiliary ships.
 pub(super) fn held_aux(screen: &AppScreen) -> AuxShips {
     game(screen)
+        .sim()
         .pilot()
         .expect("a pilot")
         .missions()
@@ -316,7 +326,7 @@ fn an_opened_pilot_returns_to_the_main_menu_loaded_with_its_nebulae_swept_and_au
     assert_eq!(held_name(&screen), "Ada");
     let held = game(&screen);
     assert!(
-        held.pilot().expect("a pilot").control_bit(bit(10)),
+        held.sim().pilot().expect("a pilot").control_bit(bit(10)),
         "OnExplore ran"
     );
     assert!(nebula_explored(held));
@@ -449,7 +459,7 @@ fn with_no_pilot_or_a_dying_one_enter_ship_plays_153_and_stays() {
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::MainMenu);
     returned(&mut screen);
-    assert!(game(&screen).is_dying());
+    assert!(game(&screen).sim().is_dying());
     ui_sounds(&mut screen);
     choose(&mut screen, MenuChoice::EnterShip);
     assert_eq!(screen.showing(), Showing::MainMenu, "refused");
@@ -595,7 +605,13 @@ fn a_return_and_enter_runs_no_on_explore_and_keeps_the_nebula_explored() {
     edit(&mut screen, PilotEdit::Bit(bit(10), false));
     assert!(!pilot(&screen).control_bit(bit(10)));
     escape_to_menu(&mut screen);
-    assert!(!game(&screen).pilot().expect("a pilot").control_bit(bit(10)));
+    assert!(
+        !game(&screen)
+            .sim()
+            .pilot()
+            .expect("a pilot")
+            .control_bit(bit(10))
+    );
     assert!(nebula_explored(game(&screen)));
     enter_ship(&mut screen);
     screen.tick(TICK);

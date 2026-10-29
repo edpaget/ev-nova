@@ -11,12 +11,16 @@ local ci = new Mapping<String, Step> {
 
 // Every crate under crates/, each directory named after its package. hk's
 // built-in Pkl evaluator has no `read*`, so a new crate is added here by hand.
+// The `unlisted-crate` step fails the pre-commit hook when a staged file lies
+// under a crates/ directory missing from this list, naming hk.pkl.
 local crates = List(
     "nova",
+    "nova-appkit",
     "nova-audio",
     "nova-bundle",
     "nova-data",
     "nova-dump",
+    "nova-metalfx",
     "nova-render",
     "nova-rsrc",
     "nova-sim",
@@ -28,6 +32,8 @@ local crates = List(
     "nova-sim-state",
     "nova-sim-story",
     "nova-view",
+    "nova-win32",
+    "nova-winres",
 )
 
 // The pre-commit gate: fmt, then clippy and nextest over each crate with
@@ -49,6 +55,14 @@ local changed = new Mapping<String, Step> {
             check = "cargo clippy -p \(c) --all-targets --locked -- -D warnings && cargo nextest run -p \(c) --locked --no-tests=pass"
             exclusive = true
         }
+    }
+    // Fails when a staged file sits in a crate this list doesn't name, so a
+    // new crate can't silently get fmt only.
+    ["unlisted-crate"] {
+        glob = List("crates/**")
+        exclude = crates.map((c) -> "crates/\(c)/**")
+        check = "echo 'error: {{files}} is in a crate missing from the crates list in hk.pkl; add the crate there' >&2; exit 1"
+        exclusive = true
     }
     // Files that can change every crate's build or tests.
     ["workspace"] {

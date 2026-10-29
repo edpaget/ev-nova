@@ -32,9 +32,12 @@ nova-data = { workspace = true, features = ["fixture"] }
 tempfile.workspace = true
 
 [features]
-# Exposes the synthetic picture, sprite and sound builders to other crates'
-# tests.
-fixture = []
+# Exposes to other crates' tests the synthetic picture, sprite and sound
+# builders; the store's shared fake (`store::fixture::FakeTree`, over
+# nova-rsrc's `MemForks`) with the `DirLister` port's `check_contract` and
+# the one-file stores (`one_file`, `store_of`); and the `shän`/`shïp` byte
+# builders (`records::fixture`).
+fixture = ["nova-rsrc/fixture"]
 
 [lints]
 workspace = true

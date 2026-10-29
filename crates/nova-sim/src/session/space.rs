@@ -3,7 +3,7 @@
 //! stellars' damage and the sprites shown, the message line, the
 //! escorts' and encounters' state ([`Escorts`]), and the escorts' voice
 //! channel (see the `voices` module). The coordinators that
-//! read other state too (`step_traffic`, `tick_combat`, `ship_loop`,
+//! read other state too (`step_traffic`, `game_work`, `ship_loop`,
 //! `populate`, `reform`, `world` and `settle_line_queue`) stay on
 //! `Session`.
 
@@ -36,21 +36,27 @@ pub(super) struct Space {
     /// `reinforcements` module); never saved, as the original saves
     /// neither.
     pub(super) reinforcements: reinforcements::Reinforcements,
-    /// Whether the reinforcement clock's tick of the last traffic tick is
-    /// held behind the frame's work on the line, for `settle_line_queue`
-    /// to run (see [`Session::tick_traffic`](super::Session::tick_traffic)).
+    /// Whether the reinforcement clock's tick of the last pass's traffic
+    /// is held behind the frame's work on the line, for
+    /// `settle_line_queue` to run (see the `reinforcements` and
+    /// `comm_calls` modules).
     pub(super) reinforcements_held: bool,
     /// The governments an IFF scrambler has marked (see the
     /// `iff_scramblers` module); never saved, as the original saves none.
     pub(super) iff_marked: BTreeSet<GovtId>,
     /// The NPCs in the system.
     pub(super) traffic: Traffic,
+    /// What a test puts on the line as the next advance pass's thinks
+    /// queue theirs, each at its actor's berth (see
+    /// `Session::pass_after_move`).
+    #[cfg(test)]
+    pub(super) queued_in_frame: Vec<crate::traffic::plunder::PirateEvent>,
     /// Whether the system is to be populated on the next traffic tick in
     /// flight: from the session's start, and after a relocation that
     /// resets the traffic while landed. A take-off populates at once.
     pub(super) traffic_due: bool,
     /// The heading each ship in the fight was drawn at after the last
-    /// [`Session::tick_combat`](super::Session::tick_combat): its heading as that tick ended, which the
+    /// pass ([`Session::game_work`](super::Session::game_work)): its heading as that pass ended, which the
     /// view draws before the next. Each ship's shots leave from the exit
     /// points of that frame (see [`Fighter::drawn_heading`](crate::combat::Fighter::drawn_heading)); a ship not
     /// in it, new to the fight, fires from its own heading's. Dropped while
@@ -95,7 +101,7 @@ pub(super) struct Space {
     /// which the fight's interfered shots circle by ([`Field::frame`](crate::combat::Field::frame)).
     pub(super) pass_frame: i16,
     /// Each ship slot's draw layer and when it entered it (see
-    /// [`Session::draw_order`](super::Session::draw_order)), and the frames it last cloned (see
+    /// `Session::draw_order`), and the frames it last cloned (see
     /// [`Session::framed_by`](super::Session::framed_by)): kept from the session's start, across
     /// every system entry and every ship leaving; never saved.
     pub(super) slot_sprites: crate::ship_layer::SlotSprites,
@@ -175,6 +181,8 @@ impl Space {
             reinforcements_held: false,
             iff_marked: BTreeSet::new(),
             traffic: Traffic::new(),
+            #[cfg(test)]
+            queued_in_frame: Vec::new(),
             traffic_due: true,
             drawn: BTreeMap::new(),
             combat: Combat::default(),

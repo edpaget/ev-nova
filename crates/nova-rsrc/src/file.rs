@@ -188,11 +188,10 @@ impl<'a> Resource<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixture::forks::{MemForks, UNREADABLE};
     use crate::fixture::{ForkBuilder, RezBuilder};
-    use crate::{Fork, ForkReader, LoadError};
-    use std::cell::RefCell;
-    use std::io;
-    use std::path::{Path, PathBuf};
+    use crate::{Fork, LoadError};
+    use std::path::Path;
 
     const PICT: ResType = ResType(*b"PICT");
     const SHIP: ResType = ResType([b's', b'h', 0x95, b'p']);
@@ -417,48 +416,6 @@ mod tests {
         );
     }
 
-    /// What the mock returns for one fork.
-    enum Canned {
-        Bytes(Vec<u8>),
-        Missing,
-        Fails,
-    }
-
-    /// Canned forks; records every `(path, fork)` it is asked for.
-    struct MockForkReader {
-        data: Canned,
-        resource: Canned,
-        calls: RefCell<Vec<(PathBuf, Fork)>>,
-    }
-
-    impl MockForkReader {
-        fn new(data: Canned, resource: Canned) -> Self {
-            Self {
-                data,
-                resource,
-                calls: RefCell::new(Vec::new()),
-            }
-        }
-
-        fn forks_read(&self) -> Vec<Fork> {
-            self.calls.borrow().iter().map(|(_, fork)| *fork).collect()
-        }
-    }
-
-    impl ForkReader for MockForkReader {
-        fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            self.calls.borrow_mut().push((path.to_path_buf(), fork));
-            match match fork {
-                Fork::Data => &self.data,
-                Fork::Resource => &self.resource,
-            } {
-                Canned::Bytes(bytes) => Ok(Some(bytes.clone())),
-                Canned::Missing => Ok(None),
-                Canned::Fails => Err(io::Error::other("disk on fire")),
-            }
-        }
-    }
-
     fn fork_with(id: i16) -> Vec<u8> {
         ForkBuilder::new()
             .resource(PICT, id, None, b"x")
@@ -472,40 +429,48 @@ mod tests {
 
     #[test]
     fn load_parses_a_flattened_data_fork_without_reading_the_resource_fork() {
-        let reader = MockForkReader::new(Canned::Bytes(fork_with(1)), Canned::Fails);
+        let reader = MemForks::new()
+            .unreadable(path())
+            .file(path(), fork_with(1));
         let file = ResourceFile::load(&reader, path()).expect("loads");
         assert!(file.get(PICT, 1).is_some());
-        assert_eq!(
-            *reader.calls.borrow(),
-            vec![(path().to_path_buf(), Fork::Data)]
-        );
+        assert_eq!(reader.reads(), vec![(path().to_path_buf(), Fork::Data)]);
     }
 
     #[test]
     fn load_falls_back_to_the_resource_fork_when_the_data_fork_is_empty() {
-        let reader = MockForkReader::new(Canned::Bytes(Vec::new()), Canned::Bytes(fork_with(2)));
+        let reader = MemForks::new()
+            .file(path(), Vec::new())
+            .resource(path(), fork_with(2));
         let file = ResourceFile::load(&reader, path()).expect("loads");
         assert!(file.get(PICT, 2).is_some());
-        assert_eq!(reader.forks_read(), vec![Fork::Data, Fork::Resource]);
-        assert!(reader.calls.borrow().iter().all(|(p, _)| p == path()));
+        assert_eq!(
+            reader.reads(),
+            [Fork::Data, Fork::Resource].map(|fork| (path().to_path_buf(), fork))
+        );
     }
 
     #[test]
     fn load_falls_back_to_the_resource_fork_when_the_data_fork_is_missing() {
-        let reader = MockForkReader::new(Canned::Missing, Canned::Bytes(fork_with(3)));
+        let reader = MemForks::new()
+            .no_data_fork(path())
+            .resource(path(), fork_with(3));
         let file = ResourceFile::load(&reader, path()).expect("loads");
         assert!(file.get(PICT, 3).is_some());
     }
 
     #[test]
     fn load_reports_no_resource_fork_when_both_are_empty_or_missing() {
-        for (data, resource) in [
-            (Canned::Missing, Canned::Missing),
-            (Canned::Bytes(Vec::new()), Canned::Bytes(Vec::new())),
-            (Canned::Missing, Canned::Bytes(Vec::new())),
-            (Canned::Bytes(Vec::new()), Canned::Missing),
+        for reader in [
+            MemForks::new().no_data_fork(path()),
+            MemForks::new()
+                .file(path(), Vec::new())
+                .resource(path(), Vec::new()),
+            MemForks::new()
+                .no_data_fork(path())
+                .resource(path(), Vec::new()),
+            MemForks::new().file(path(), Vec::new()),
         ] {
-            let reader = MockForkReader::new(data, resource);
             match ResourceFile::load(&reader, path()) {
                 Err(LoadError::NoResourceFork { path: p }) => assert_eq!(p, path()),
                 other => panic!("expected NoResourceFork, got {other:?}"),
@@ -516,13 +481,14 @@ mod tests {
     #[test]
     fn load_wraps_io_errors_with_the_path() {
         for reader in [
-            MockForkReader::new(Canned::Fails, Canned::Missing),
-            MockForkReader::new(Canned::Missing, Canned::Fails),
+            MemForks::new().unreadable(path()),
+            MemForks::new().unreadable(path()).no_data_fork(path()),
         ] {
             match ResourceFile::load(&reader, path()) {
                 Err(LoadError::Io { path: p, source }) => {
                     assert_eq!(p, path());
-                    assert_eq!(source.to_string(), "disk on fire");
+                    assert_eq!(source.kind(), std::io::ErrorKind::Other);
+                    assert_eq!(source.to_string(), UNREADABLE);
                 }
                 other => panic!("expected Io, got {other:?}"),
             }
@@ -531,7 +497,7 @@ mod tests {
 
     #[test]
     fn load_wraps_parse_errors_with_the_path() {
-        let reader = MockForkReader::new(Canned::Bytes(vec![1, 2, 3]), Canned::Missing);
+        let reader = MemForks::new().file(path(), vec![1, 2, 3]);
         match ResourceFile::load(&reader, path()) {
             Err(LoadError::Parse { path: p, source }) => {
                 assert_eq!(p, path());

@@ -1,6 +1,6 @@
 //! The flight view's starfield: the original's ([`Starfield`]) by the
 //! engine's reading of
-//! [`RuleKey::FlightStarfield`],
+//! [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield),
 //! the port's procedural dots ([`starfield::draw`]) by the other.
 //!
 //! The view drives the original's as `_PlayGame` does:
@@ -33,7 +33,8 @@
 //!
 //! [`SessionEvent::StarfieldReset`]: nova_sim::SessionEvent::StarfieldReset
 
-use nova_sim::{Chance, RuleKey, RuleSource, Session, Vec2};
+use nova_sim::flight_frame::{FlightFrame, PassReport};
+use nova_sim::{Chance, RuleSource, Vec2};
 
 use crate::DrawList;
 use crate::flight::catalog::Looks;
@@ -41,21 +42,34 @@ use crate::flight::stars::{StarLook, Starfield, Surroundings};
 use crate::system::camera::{Anchor, Camera, STATUS_BAR_WIDTH};
 use crate::system::starfield;
 
-/// Whether `session` draws the original's starfield, by its rules'
-/// reading of [`RuleKey::FlightStarfield`], with the stars' sheet read
+/// Whether the view draws the original's starfield, by `source`, its
+/// reading of [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield), with the stars' sheet read
 /// into `looks`: without it no star is drawn, so none is scattered or
 /// stepped, and the effects' chance draws nothing for them.
-pub(super) fn original(session: &Session, looks: &Looks) -> bool {
-    session.rules().source_for(RuleKey::FlightStarfield) == RuleSource::Engine
-        && looks.star_sheet().is_some()
+pub(super) fn original(source: RuleSource, looks: &Looks) -> bool {
+    source == RuleSource::Engine && looks.star_sheet().is_some()
 }
 
-/// Where `session`'s stars are handled in a view `view` logical units in
-/// size drawn about `anchor`: the play area left of the status bar, the
-/// player's ship, the anchor in whole pixels, the system's murk as loaded
-/// and the stars' look from `looks`.
+/// Where the stars are handled about `frame`'s ship in a view `view`
+/// logical units in size drawn about `anchor`: the play area left of the
+/// status bar, the player's ship, the anchor in whole pixels, the system's
+/// murk as loaded and the stars' look from `looks`.
 pub(super) fn surroundings(
-    session: &Session,
+    frame: &FlightFrame,
+    view: (f32, f32),
+    anchor: Anchor,
+    looks: &Looks,
+) -> Surroundings {
+    let ship = (frame.player().position, frame.system_murk);
+    surroundings_at(ship, view, anchor, looks)
+}
+
+/// Where the stars are handled in a view `view` logical units in size
+/// drawn about `anchor`, the player's ship at `ship.0` in a system of
+/// murk `ship.1` as loaded, the stars' look from `looks`
+/// ([`surroundings`]).
+pub(super) fn surroundings_at(
+    (ship, murk): (Vec2, i16),
     view: (f32, f32),
     anchor: Anchor,
     looks: &Looks,
@@ -66,9 +80,9 @@ pub(super) fn surroundings(
     let point = anchor.point(view);
     Surroundings {
         area: (whole(view.0 - STATUS_BAR_WIDTH), whole(view.1)),
-        ship: session.player().position,
+        ship,
         anchor: (whole(point.x), whole(point.y)),
-        murk: session.system_murk(),
+        murk,
         look: StarLook::of(looks.star_sheet()),
     }
 }
@@ -87,34 +101,37 @@ pub(super) fn reset(
     stars.snapshot();
 }
 
-/// Steps `stars` after a pass of `session`, in a view `view` logical
-/// units in size drawn about `anchor`, the stars' look from `looks`, when
-/// it draws the original's starfield (see the module docs): wraps and
+/// Steps `stars` after a `pass`, in a view `view` logical units in size
+/// drawn about `anchor`, the stars' look from `looks`, when `source`, the
+/// view's reading of [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield), draws the original's
+/// starfield ([`original`]; see the module docs): wraps and
 /// places them, drawing on `chance`; and after the first pass, `first`
 /// the ship's position before it, snapshots them for the frame and
 /// scrolls them by the ship's move over the pass, twice over in double
 /// time.
 pub(super) fn step(
     stars: &mut Starfield,
-    session: &Session,
-    (view, anchor, looks): ((f32, f32), Anchor, &Looks),
+    pass: &PassReport,
+    (source, looks): (RuleSource, &Looks),
+    (view, anchor): ((f32, f32), Anchor),
     first: Option<Vec2>,
     chance: &mut dyn Chance,
 ) {
-    if !original(session, looks) {
+    if !original(source, looks) {
         return;
     }
-    let at = surroundings(session, view, anchor, looks);
+    let ship = (pass.player_position, pass.system_murk);
+    let at = surroundings_at(ship, view, anchor, looks);
     stars.handle(&at, chance);
     if let Some(from) = first {
         stars.snapshot();
-        let times = if session.double_time() { 2.0 } else { 1.0 };
+        let times = if pass.double_time { 2.0 } else { 1.0 };
         stars.scroll((from.x - at.ship.x) * times, (from.y - at.ship.y) * times);
     }
 }
 
 /// Draws the starfield by `source`'s reading of
-/// [`RuleKey::FlightStarfield`]: `stars` from `looks`' sheet, `alpha` of
+/// [`RuleKey::FlightStarfield`](nova_sim::RuleKey::FlightStarfield): `stars` from `looks`' sheet, `alpha` of
 /// the way between their last two snapshots, by the engine's; the
 /// procedural dots through `camera` by the other.
 pub(super) fn draw(

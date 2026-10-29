@@ -8,6 +8,9 @@ use crate::mission::{ActiveMission, SpecialShips};
 
 /// Mission `id` active, going nowhere, with `tons` of cargo 0 (food)
 /// aboard.
+///
+/// Kept for nova-sim's tests, through its `testkit`: an active mission
+/// built from public fields, pinning no rule.
 #[must_use]
 pub fn carrying(id: i16, tons: i64) -> ActiveMission {
     ActiveMission {

@@ -79,6 +79,7 @@ mod tests {
     use crate::session::tests::{FIRE, armed, arming, blaster, facing_an_npc};
     use crate::targeting::TargetPick;
     use crate::testkit::FakePilotCatalog;
+    use crate::testkit::work;
     use crate::traffic::npc::{Npc, NpcId};
 
     /// Every NPC idles.
@@ -139,7 +140,7 @@ mod tests {
         let brackets = session.target_brackets().expect("bracketed");
         assert_eq!(brackets.standing, Standing::Disabled);
         // The head of the next pass, before its trigger and its move.
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.chart.target, None);
     }
 
@@ -161,7 +162,7 @@ mod tests {
             Some(NpcId(0)),
             "held through the pass"
         );
-        session.tick(Controls::default());
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.chart.target, None);
     }
 

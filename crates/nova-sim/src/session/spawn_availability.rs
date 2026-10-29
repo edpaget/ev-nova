@@ -159,8 +159,11 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::combat::Rules;
+    use crate::flight::Controls;
     use crate::pilot::Pilot;
     use crate::testkit::catalog;
+    use crate::testkit::work_with;
 
     fn bit(n: u16) -> Bit {
         Bit::new(n).expect("in range")
@@ -369,14 +372,28 @@ mod tests {
             session.populate(&catalog, &mut NeverFires);
             empty_the_system(&mut session);
             session.set_control_bit(bit(7), true);
-            session.tick_traffic(&catalog, &NovaAi::default(), &mut arrival());
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut arrival(),
+            );
             assert_eq!(fleet_ships(&session), at_once, "{source:?}");
             if at_once == 0 {
                 assert!(session.npcs().is_empty(), "nothing came");
                 // The galaxy refresh's own step, as a landing or an
                 // arrival runs it.
                 session.propagate_cached_tests();
-                session.tick_traffic(&catalog, &NovaAi::default(), &mut arrival());
+                work_with(
+                    &mut session,
+                    &catalog,
+                    Controls::default(),
+                    &NovaAi::default(),
+                    Rules::default(),
+                    &mut arrival(),
+                );
                 assert_eq!(fleet_ships(&session), 4, "{source:?}: refreshed");
             }
         }
@@ -647,7 +664,14 @@ mod tests {
                 .expect("takes off");
             assert!(marked(&session).is_empty(), "{source:?}: none at setup");
             for _ in 0..199 {
-                session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+                work_with(
+                    &mut session,
+                    &catalog,
+                    Controls::default(),
+                    &NovaAi::default(),
+                    Rules::default(),
+                    &mut NeverFires,
+                );
             }
             assert_eq!(marked_types(&session), [ShipId(drawn); 3], "{source:?}");
         }

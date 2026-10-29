@@ -245,12 +245,12 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::Vec2;
+use nova_sim::galaxy_map::GalaxyShown;
 use nova_sim::galaxy_map::{MapDrawing, MapLink, arrow_head};
 use nova_sim::iff::SystemColorCode;
 use nova_sim::map_borders::{BorderPasses, BorderSources, PaintedCell};
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::{self, SearchOutcome};
-use nova_sim::story::OverlaidGalaxy;
 
 use super::borders::MapBorders;
 use super::buttons::MapButton;
@@ -931,12 +931,13 @@ impl GalaxyMap {
         self.clicked = false;
     }
 
-    /// Takes the session's `galaxy` over the catalog's geometry
-    /// ([`GalaxyModel::apply`]): its visible systems are the ones a click
+    /// Takes what the session's galaxy shows (`galaxy`, [`GalaxyShown`])
+    /// over the catalog's geometry ([`GalaxyModel::apply`]): its visible
+    /// systems are the ones a click
     /// selects, and the nebulae it shows, active and explored, are drawn.
     /// A selected system it hides is let go of. What the map draws over
     /// the nebulae is its picture ([`GalaxyMap::show_drawing`]).
-    pub fn show_galaxy(&mut self, galaxy: &OverlaidGalaxy) {
+    pub fn show_galaxy(&mut self, galaxy: &GalaxyShown) {
         self.model.apply(galaxy);
         self.selected = self.selected.filter(|&id| self.model.system(id).is_some());
     }
@@ -1184,6 +1185,13 @@ impl GalaxyMap {
     #[must_use]
     pub fn border_passes(&self) -> &BorderPasses {
         self.borders.passes()
+    }
+
+    /// What an in-flight map's borders add from now on, as last shown
+    /// ([`GalaxyMap::show_border_sources`]).
+    #[must_use]
+    pub fn border_sources(&self) -> &BorderSources {
+        self.borders.sources()
     }
 
     /// The border cells a full update draws, as last taken.
@@ -3413,12 +3421,13 @@ mod tests {
 
     // The session's galaxy.
 
-    /// The session's galaxy over [`galaxy`]'s systems, with `change` made.
-    fn session_galaxy(change: impl FnOnce(&mut GalaxyOverlay)) -> OverlaidGalaxy {
+    /// What the session's galaxy over [`galaxy`]'s systems shows, with
+    /// `change` made.
+    fn session_galaxy(change: impl FnOnce(&mut GalaxyOverlay)) -> GalaxyShown {
         let mut overlay = GalaxyOverlay::default();
         change(&mut overlay);
         let systems = galaxy().systems.iter().map(star_system).collect();
-        OverlaidGalaxy::new(systems, overlay)
+        GalaxyShown::of(&OverlaidGalaxy::new(systems, overlay))
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! `nova-sim-port`. Each of their modules is re-exported here at its old
 //! path, so a `nova_sim::…` path doesn't depend on which crate holds the
 //! code. The crate's own modules are the session layer's: [`session`],
-//! [`save`], [`saves`], [`course`], [`galaxy_map`], [`glow`],
+//! [`save`], [`saves`], [`course`], [`flight_frame`], [`galaxy_map`], [`glow`],
 //! [`map_borders`], [`map_panel`], [`map_route`], [`map_search`], [`pre_jump`], [`rating`],
 //! [`red_alert`], [`status_cargo`], [`target_panel`] and [`top_speed`],
 //! with the test support in `fixture`.
@@ -140,6 +140,12 @@
 //!   [`Escort`], and the [`EscortOrder`] it follows.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
 //!   the player's [`Controls`].
+//! - [`flight_frame`]: the values the flight view's `FlightSim` port
+//!   carries: the [`FlightFrame`](flight_frame::FlightFrame) a session
+//!   fills, the [`FlightCommand`](flight_frame::FlightCommand) it answers
+//!   with an [`Answer`](flight_frame::Answer), the
+//!   [`FlightEvent`](flight_frame::FlightEvent)s it raises, and a step's
+//!   input and report.
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
 //!   `shïp` and its outfits' fuel scoops.
 //! - [`galaxy_map`]: what the galaxy map draws, as `_DrawMap` decides
@@ -331,7 +337,8 @@
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
 //!   cargo kept and the default items fitted.
 //! - [`sound`]: the [`SimSound`] events a session emits as it thrusts,
-//!   lands, takes off and jumps; the audio side decides what they play.
+//!   lands, takes off and jumps, and the [`SoundCue`] each one plays
+//!   ([`SimSound::cue`]): its `snd ` and the original's priority.
 //! - [`stats`]: a ship's computed [`ShipStats`], from its `shïp`'s fields
 //!   and the outfits it carries: the one place its handling, reserve
 //!   capacities, fuel, shield and armour regeneration and cargo space come
@@ -414,6 +421,7 @@ pub use nova_sim_story::map_walk;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub use nova_sim_base::flight;
+pub mod flight_frame;
 pub use nova_sim_base::fuel;
 pub use nova_sim_combat::fleet;
 pub mod galaxy_map;
@@ -595,11 +603,12 @@ pub use save::SaveError;
 pub use saves::{OpenError, PilotKeeper, PilotStore, pilot_key};
 pub use self_destruct::SelfDestruct;
 pub use session::{
-    AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
-    HookRules, HoverPlace, InfoRow, InterfaceLoad, LandPress, LastRefresh, MapClicked, MapPress,
-    MissionComputer, MissionInfo, MissionInfoPress, MissionShown, MissionText, MissionTextKind,
-    NotOffered, OfferPrompt, PersonQuote, RefuseShown, RelocateRefusal, SavedNav,
-    ScriptEffectRules, Session, SessionEvent, Settled, ShipChangeRules, StellarPick,
+    AbortError, AcceptError, ApplyCollaborators, CarryOver, ComputerRefusal, ComputerRow,
+    Departure, DeskReading, ESCAPE_POD_SHIP, Hailed, HookRules, HoverPlace, InfoRow, InterfaceLoad,
+    LandPress, LastRefresh, MapClicked, MapPress, MissionComputer, MissionInfo, MissionInfoPress,
+    MissionShown, MissionText, MissionTextKind, NotOffered, OfferPrompt, PersonQuote, RefuseShown,
+    RelocateRefusal, SavedNav, SavedOpening, ScriptEffectRules, Session, SessionEvent,
+    SessionSetup, Settled, ShipChangeRules, SimCatalog, StellarPick, StepCollaborators,
     TAKEOFF_GRACE_TICKS, TextBar, VenueOffer,
 };
 pub use ship_layer::ShipLayer;
@@ -607,7 +616,7 @@ pub use shipyard::{
     Rating, ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard,
     StockLine,
 };
-pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound};
+pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound, SoundCue};
 pub use stats::ShipStats;
 pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCargo};
 pub use story::DrawnSheet;

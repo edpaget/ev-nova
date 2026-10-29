@@ -26,13 +26,15 @@ mod tests {
     use crate::ai::Goal;
     use crate::ai::NovaAi;
     use crate::catalog::{EscortClass, GovtId, GovtRecord, ShipId, SystemId};
-    use crate::chance::NeverFires;
+
+    use crate::combat::ShipRef;
     use crate::combat::armament::Trigger;
-    use crate::combat::{Rules, ShipRef};
+    use crate::flight::Controls;
     use crate::handling::ShipFields;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::Session;
     use crate::session::tests::{FIRE, armed, facing_an_npc};
+    use crate::testkit::work;
     use crate::traffic::npc::{AiType, NpcId};
     use nova_sim_base::fixture::FAST;
     use nova_sim_catalog::fixture::FakePilotCatalog;
@@ -77,22 +79,35 @@ mod tests {
         session.space.traffic.add_npc(police)
     }
 
+    /// A pass of `session`, its NPCs deciding and answering hits as
+    /// Nova's do, in the pass a hit lands in.
+    fn nova_pass(session: &mut Session) {
+        crate::testkit::work_with(
+            session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &NovaAi::default(),
+            crate::combat::Rules::default(),
+            &mut crate::chance::NeverFires,
+        );
+    }
+
     /// Fires one shot at NPC 0, the player's target, then lets the target
-    /// go and ticks the fight until the shot lands; then the NPCs answer.
+    /// go and works passes until the shot lands, the NPCs answering it in
+    /// that pass.
     fn shot_after_letting_go(session: &mut Session) {
         session.chart.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        nova_pass(session);
         session.hold_trigger(Trigger::default());
         session.chart.target = None;
         for _ in 0..60 {
             if session.npcs()[0].reserves.shield.now < 30.0 {
                 break;
             }
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            nova_pass(session);
         }
         assert!(session.npcs()[0].reserves.shield.now < 30.0, "never hit");
-        session.answer_strikes(&NovaAi::default());
     }
 
     #[test]
@@ -124,7 +139,8 @@ mod tests {
 
     /// Makes NPC 0 the escort of a new idle lead of its government, of
     /// `ai_type`, 3000 off; then fires at NPC 0, the player's target, until
-    /// the shot lands, and the NPCs answer. Gives the lead as it is then.
+    /// the shot lands, the NPCs answering it in that pass. Gives the lead
+    /// as it is then.
     fn lead_of_the_escort_shot(ai_type: AiType) -> crate::traffic::npc::Npc {
         let catalog = lawful();
         let mut session = facing_an_npc(&catalog, 180);
@@ -138,14 +154,13 @@ mod tests {
         session.chart.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
         for _ in 0..60 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            nova_pass(&mut session);
             session.hold_trigger(Trigger::default());
             if session.npcs()[0].reserves.shield.now < 30.0 {
                 break;
             }
         }
         assert!(session.npcs()[0].reserves.shield.now < 30.0, "never hit");
-        session.answer_strikes(&NovaAi::default());
         session
             .npcs()
             .iter()
@@ -177,7 +192,7 @@ mod tests {
         session.hold_trigger(FIRE);
         let mut ticks = 0;
         while session.npcs()[0].reserves.shield.now >= 30.0 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             session.hold_trigger(Trigger::default());
             ticks += 1;
             assert!(ticks < 60, "never hit");
@@ -186,7 +201,7 @@ mod tests {
         assert_eq!(session.npcs()[0].stray, 3.0);
         session.answer_strikes(&NovaAi::default());
         assert_eq!(session.npcs()[0].target, None, "forgiven: below 50");
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.npcs()[0].stray, 2.5);
     }
 

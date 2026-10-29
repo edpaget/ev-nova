@@ -21,11 +21,12 @@ fn beam_exits() -> HullSpec {
     exits_at(3, [(30, 0), (-30, 0), (30, 0), (-30, 0)])
 }
 
-/// The beam `ship`, facing up at the centre, fires in a tick of `combat`,
-/// and the ship after it.
+/// The beam `ship`, facing up at the centre, fires in its own phase of
+/// `combat` ([`phase::fire`]), and the ship after it.
 fn fired(combat: &mut Combat, ship: Ship) -> (Beam, Ship) {
     let mut ships = [ship, Ship::at(2, 0.0, -100.0)];
-    tick(combat, &mut ships, &NovaDisable);
+    let firer = ships[0].id;
+    phase::fire(combat, &mut ships, firer, &NovaDisable);
     let beam = *combat
         .beams()
         .iter()
@@ -107,7 +108,7 @@ fn a_fold_set_steps_round_from_3_to_0_beam_by_beam() {
         .facing(0.0)];
     let mut seen = Vec::new();
     for _ in 0..4 {
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         seen.push(ships[0].armament.fold_set());
     }
     assert_eq!(seen, [1, 2, 3, 0]);
@@ -134,8 +135,15 @@ fn a_stray_beam_the_caps_refuse_steps_nothing() {
     };
     combat.set_combat_caps(RuleSource::Engine);
     let mut ships = [Ship::at(1, 0.0, 0.0).armed(stray_beam()).facing(0.0)];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(ships[0].armament.fold_set(), 0);
+}
+
+/// Where the NPC `ships[0]`'s newest shot left from, after it fires in
+/// the ship loop: it waits there until `_HandleShot` next moves it.
+fn fired_from(combat: &mut Combat, ships: &mut [Ship]) -> Vec2 {
+    phase::handle_npcs(combat, ships, &NovaDisable);
+    start(combat.shots().last().expect("a shot"))
 }
 
 #[test]
@@ -143,7 +151,7 @@ fn a_gun_from_a_hull_with_no_exits_fires_from_the_centre_and_steps_its_cursor() 
     let mut combat = Combat::default();
     let mut ships = [Ship::at(1, 50.0, 50.0).armed(gun()).facing(0.0)];
     for next in [1, 2] {
-        let from = next_start(&mut combat, &mut ships);
+        let from = fired_from(&mut combat, &mut ships);
         assert!(close_to(from, Vec2::new(50.0, 50.0)), "{from:?}");
         assert_eq!(ships[0].armament.exit_cursors().next(ExitKind::Gun), next);
     }
@@ -179,7 +187,7 @@ fn nearest_exit_point_defence_fires_from_the_exit_nearest_its_missile() {
         combat.set_pd_exit_step(source);
         let mut ships = defended_nearest();
         missile_in_flight(&mut combat, &mut ships);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         let fired = defence_shots(&combat);
         assert_eq!(fired.len(), 1, "{source:?}: {:?}", combat.shots());
         let (at, heading) = fired[0];
@@ -284,7 +292,7 @@ fn a_beam_of_exit_type_5_the_caps_refuse_raises_no_pod_step() {
     };
     combat.set_combat_caps(RuleSource::Engine);
     let mut ships = [Ship::at(1, 0.0, 0.0).armed(pod_beam()).facing(0.0)];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(combat.take_stray_steps(), []);
 }
 

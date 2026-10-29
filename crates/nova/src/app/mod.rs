@@ -641,6 +641,14 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         &self.screen
     }
 
+    /// The current screen, to change: for this crate's integration tests,
+    /// whose harnesses ask the flight's screens through the view, as a
+    /// screen's ask takes `&mut` (`FlightView::hailing`).
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn screen_mut(&mut self) -> &mut C {
+        &mut self.screen
+    }
+
     /// The image source.
     pub fn images(&self) -> &S {
         self.renderer.images()
@@ -2391,6 +2399,30 @@ mod tests {
         }
     }
 
+    /// The cue `sound` plays, by its own say.
+    fn cue_of(sound: Sound) -> nova_view::sound::SoundCue {
+        match sound {
+            Sound::Sim(sim) => sim.cue(),
+            Sound::Ui(ui) => ui.cue(),
+            Sound::Combat(_) => None,
+        }
+        .unwrap_or_else(|| panic!("{sound:?} plays a cue"))
+    }
+
+    /// What `sound` plays at the default effects volume: its cue's `snd `
+    /// at its priority.
+    fn cued(sound: Sound) -> AudioCommand {
+        let cue = cue_of(sound);
+        play(cue.sound.0, nova_audio::Priority::new(cue.priority))
+    }
+
+    /// A main-menu button's click, its two halves.
+    const DOWN: Sound = Sound::Ui(UiSound::ButtonDown);
+    const UP: Sound = Sound::Ui(UiSound::ButtonUp);
+
+    /// The warp-up the sounding screen raises.
+    const JUMPED: Sound = Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 });
+
     /// The music started at its default volume.
     fn music() -> AudioCommand {
         AudioCommand::StartMusic {
@@ -2402,7 +2434,7 @@ mod tests {
     fn sounding(window: &FakeWindow) -> (App<NoImages, SoundingScreen>, AudioLog) {
         let screen = SoundingScreen {
             showing: Showing::MainMenu,
-            sounds: vec![Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 })],
+            sounds: vec![JUMPED],
         };
         let audio = RecordingAudio::new();
         let log = audio.log();
@@ -2414,10 +2446,7 @@ mod tests {
     fn attaching_audio_takes_in_the_screen_and_its_sounds_at_once() {
         let window = FakeWindow::new((1024, 768), 1.0);
         let (app, log) = sounding(&window);
-        assert_eq!(
-            *log.borrow(),
-            [music(), play(128, nova_audio::priority::JUMP)]
-        );
+        assert_eq!(*log.borrow(), [music(), cued(JUMPED)]);
         assert_eq!(app.screen().sounds, [], "taken");
     }
 
@@ -2428,7 +2457,7 @@ mod tests {
         log.borrow_mut().clear();
         let mut gpu = RecordingGpu::new();
         app.handle(key(Key::Up, true), &mut window, &mut gpu);
-        assert_eq!(*log.borrow(), [play(600, nova_audio::priority::BUTTON)]);
+        assert_eq!(*log.borrow(), [cued(DOWN)]);
         app.handle(
             WindowEvent::Redraw {
                 elapsed: Duration::from_millis(16),
@@ -2436,13 +2465,7 @@ mod tests {
             &mut window,
             &mut gpu,
         );
-        assert_eq!(
-            *log.borrow(),
-            [
-                play(600, nova_audio::priority::BUTTON),
-                play(601, nova_audio::priority::BUTTON)
-            ]
-        );
+        assert_eq!(*log.borrow(), [cued(DOWN), cued(UP)]);
         app.handle(
             WindowEvent::PointerMoved { px: (5.0, 5.0) },
             &mut window,
@@ -2456,7 +2479,7 @@ mod tests {
                 AudioCommand::FadeOutMusic(nova_audio::music_fade(
                     AudioSettings::default().music_volume
                 )),
-                play(600, nova_audio::priority::BUTTON)
+                cued(DOWN)
             ],
             "the screen shown, then its sounds"
         );
@@ -2508,8 +2531,7 @@ mod tests {
             if std::mem::take(&mut self.held) {
                 self.ran += 1;
                 self.logged_when_run = self.log.borrow().clone();
-                self.sounds
-                    .push(Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 }));
+                self.sounds.push(JUMPED);
             }
         }
 
@@ -2548,9 +2570,9 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let (mut app, log, audio) = keyed(&window);
         let mut gpu = RecordingGpu::new();
-        audio.set_playing(nova_data::SoundId(600), true);
+        audio.set_playing(cue_of(DOWN).sound, true);
         app.handle(key(Key::Up, true), &mut window, &mut gpu);
-        assert_eq!(*log.borrow(), [play(600, nova_audio::priority::BUTTON)]);
+        assert_eq!(*log.borrow(), [cued(DOWN)]);
         assert_eq!(app.screen().ran, 0, "600 playing");
         let redraw = |ms| WindowEvent::Redraw {
             elapsed: Duration::from_millis(ms),
@@ -2558,24 +2580,17 @@ mod tests {
         app.handle(redraw(16), &mut window, &mut gpu);
         app.handle(key(Key::Up, false), &mut window, &mut gpu);
         assert_eq!(app.screen().ran, 0, "still playing");
-        audio.set_playing(nova_data::SoundId(600), false);
+        audio.set_playing(cue_of(DOWN).sound, false);
         app.handle(redraw(32), &mut window, &mut gpu);
         assert_eq!(app.screen().ran, 1, "600 has stopped");
         assert_eq!(
             app.screen().logged_when_run,
-            [
-                play(600, nova_audio::priority::BUTTON),
-                play(601, nova_audio::priority::BUTTON)
-            ],
+            [cued(DOWN), cued(UP)],
             "after 601 has started"
         );
         assert_eq!(
             *log.borrow(),
-            [
-                play(600, nova_audio::priority::BUTTON),
-                play(601, nova_audio::priority::BUTTON),
-                play(128, nova_audio::priority::JUMP)
-            ],
+            [cued(DOWN), cued(UP), cued(JUMPED)],
             "what it ran sounded in the same pass"
         );
         app.handle(redraw(48), &mut window, &mut gpu);
@@ -2587,7 +2602,7 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut gpu = RecordingGpu::new();
         let (mut app, log, audio) = keyed(&window);
-        audio.set_playing(nova_data::SoundId(600), true);
+        audio.set_playing(cue_of(DOWN).sound, true);
         app.audio.as_mut().expect("audio").set_sound(false);
         app.handle(key(Key::Up, true), &mut window, &mut gpu);
         assert_eq!(app.screen().ran, 1, "sound off");
@@ -2814,9 +2829,9 @@ mod tests {
                 AudioCommand::SetMusicVolume(nova_audio::settings::music_level_volume(7)),
                 AudioCommand::StopMusic,
                 AudioCommand::Play {
-                    sound: nova_data::SoundId(600),
+                    sound: cue_of(DOWN).sound,
                     volume: nova_audio::settings::effects_level_volume(7),
-                    priority: nova_audio::priority::BUTTON,
+                    priority: nova_audio::Priority::new(cue_of(DOWN).priority),
                 },
             ],
             "the change, then the sounds"
@@ -2856,9 +2871,9 @@ mod tests {
                 AudioCommand::SetMusicVolume(nova_audio::settings::music_level_volume(7)),
                 AudioCommand::StopMusic,
                 AudioCommand::Play {
-                    sound: nova_data::SoundId(600),
+                    sound: cue_of(DOWN).sound,
                     volume: between,
-                    priority: nova_audio::priority::BUTTON,
+                    priority: nova_audio::Priority::new(cue_of(DOWN).priority),
                 },
             ],
             "effects level 4 already: the effects volume is kept"

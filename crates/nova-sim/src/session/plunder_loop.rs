@@ -29,7 +29,7 @@
 //! **The loop's pass.** Each press that leaves the dialog open (a take, a
 //! miss, a full fleet) ends at @0x9499c: `_PlunderDialogUpdate`, then
 //! `_HandleComm` (@0x949a1), which counts the message line down one tick
-//! ([`Session::comm_line`]) and hides the floating map once it has been
+//! (`Session::comm_line`) and hides the floating map once it has been
 //! up 500 ticks (the flight view's). So the line loses a tick a press,
 //! not a frame. Abort, a self-destruct, a failed capture and a capture
 //! close the dialog first and count nothing.
@@ -43,7 +43,7 @@ impl Session {
     /// (the session resets, @0x94a0b), but silently and taking nothing:
     /// the flight's way out when it has no dialog to show it in. A capture
     /// awaiting its assignment is let go too.
-    pub fn let_go_of_boarding(&mut self) {
+    pub(crate) fn let_go_of_boarding(&mut self) {
         if self.space.escorts.aboard.is_some() {
             self.close_plunder();
         }
@@ -76,7 +76,9 @@ mod tests {
     use crate::board::{Assigned, Assignment, Boarding, MAX_ESCORTS, NovaBoarding, Take};
     use crate::catalog::{OutfitId, ShipId};
     use crate::chance::NeverFires;
+
     use crate::comm_line::CommLine;
+    use crate::flight::Controls;
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
     use crate::session::tests::{
@@ -85,6 +87,7 @@ mod tests {
     };
     use crate::testkit::Draws;
     use crate::testkit::FakePilotCatalog;
+    use crate::testkit::{Passive, work_with};
 
     /// The sounds raised since they were last taken.
     fn sounds(session: &mut Session) -> Vec<SimSound> {
@@ -468,7 +471,14 @@ mod tests {
                 take(&mut session, press, draws);
             }
             assert_eq!(session.npcs()[0].condition, Condition::Disabled, "{why}");
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
             assert_eq!(
                 session.npcs()[0].condition,
                 Condition::Dying {

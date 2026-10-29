@@ -121,7 +121,8 @@ fn the_radar_static_patterns_decode_as_64_pixel_squares() {
         return;
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
-    for id in nova_view::flight::radar::STATIC_PATTERNS {
+    // nova-view's `flight::radar::STATIC_PATTERNS`.
+    for id in 128..=137 {
         let frames = data
             .frames(ImageKind::Pattern, id)
             .unwrap_or_else(|error| panic!("ppat {id}: {error:?}"));
@@ -158,7 +159,8 @@ fn the_target_bracket_icons_decode_as_16_pixel_squares() {
         return;
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
-    let first = nova_view::flight::brackets::NAV_CICN;
+    // nova-view's `flight::brackets::NAV_CICN`.
+    let first = 10000;
     for id in first..first + 24 {
         let frames = data
             .frames(ImageKind::Icon, id)
@@ -174,50 +176,12 @@ fn the_map_arrow_icons_decode_as_16_pixel_squares() {
         return;
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
-    for id in [
-        nova_view::galaxy::map::RED_ARROW,
-        nova_view::galaxy::map::GREEN_ARROW,
-    ] {
+    // nova-view's `galaxy::map::RED_ARROW` and `GREEN_ARROW`.
+    for id in [15000, 15001] {
         let frames = data
             .frames(ImageKind::Icon, id)
             .unwrap_or_else(|error| panic!("cicn {id}: {error:?}"));
         let sizes: Vec<(u32, u32)> = frames.iter().map(|f| (f.width(), f.height())).collect();
         assert_eq!(sizes, [(16, 16)], "cicn {id}");
     }
-}
-
-/// The stock main screen renders whole: `PICT` 8000, the logo's
-/// 654 x 1463 strip of frames cut by its clip, the six buttons and the
-/// rollover each decode and pack.
-#[test]
-fn the_stock_main_screen_renders_with_every_image_packed() {
-    use std::rc::Rc;
-
-    use nova_view::Screen;
-    use nova_view::menu::{MainMenu, MainScreenSource};
-    use nova_view::text::fixture::MonoMetrics;
-    use nova_view::ui::DescriptionSource;
-
-    let Some(dir) = common::nova_data() else {
-        return;
-    };
-    let data = GameData::open(&dir, None).expect("the stock data opens");
-    let art = data.main_screen_art().expect("the stock art");
-    let logo = data
-        .frames(ImageKind::Pict, art.logo.picture)
-        .expect("the logo decodes");
-    assert_eq!((logo[0].width(), logo[0].height()), (654, 1463));
-    let mut menu = MainMenu::new(Some(art), data.button_style(), Rc::new(MonoMetrics));
-    // The rollover shown over New Pilot.
-    menu.input(&nova_view::Input::PointerMoved(
-        menu.press_point(nova_view::menu::MenuChoice::NewPilot),
-    ));
-    menu.tick(std::time::Duration::from_secs(1));
-    let mut list = DrawList::new();
-    menu.draw(&mut list);
-    let mut renderer = Renderer::new(&data);
-    let mut gpu = RecordingGpu::new();
-    let report = renderer.render(&list, &Viewport::new(LOGICAL, (1024, 768), 1.0), &mut gpu);
-    assert_eq!(report.new_failures, vec![]);
-    assert!(matches!(gpu.calls.last(), Some(GpuCall::Submit(_))));
 }

@@ -133,15 +133,28 @@ pub fn date_text(date: GameDate, affixes: &DateAffixes) -> String {
 /// (`STR#` 137 #25-28), for example "June 23rd, 1177 NC".
 #[must_use]
 pub fn long_date_text(date: GameDate, affixes: &DateAffixes) -> String {
+    let mut text = String::new();
+    write_long_date_text(&mut text, date, affixes);
+    text
+}
+
+/// [`long_date_text`], written into `into` in place of what it held, so a
+/// kept buffer is reused rather than a fresh one allocated: what a frame's
+/// fill writes the date with.
+pub fn write_long_date_text(into: &mut String, date: GameDate, affixes: &DateAffixes) {
+    use std::fmt::Write as _;
+    into.clear();
     let month = MONTH_NAMES[usize::from(date.month - 1)];
-    format!(
+    // Writing to a `String` never fails.
+    let _ = write!(
+        into,
         "{}{month} {}{}, {}{}",
         affixes.prefix,
         date.day,
         ordinal(date.day),
         date.year,
         affixes.suffix
-    )
+    );
 }
 
 /// The months' short names (`STR#` 137 #13-24), January first.
@@ -388,6 +401,15 @@ mod tests {
         ] {
             assert_eq!(read(n), format!("July {ordinal}, 1177"), "day {n}");
         }
+    }
+
+    #[test]
+    fn the_long_date_written_into_a_buffer_replaces_what_it_held() {
+        let mut into = "a stale date, longer than the new one".to_owned();
+        let affixes = affixes("", " NC");
+        write_long_date_text(&mut into, date(23, 6, 1177), &affixes);
+        assert_eq!(into, long_date_text(date(23, 6, 1177), &affixes));
+        assert_eq!(into, "June 23rd, 1177 NC");
     }
 
     #[test]

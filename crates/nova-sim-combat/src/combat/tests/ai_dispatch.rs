@@ -1,7 +1,9 @@
 //! The fight's tests of `_AIDispatch`'s slot loop (rdm weapons-fidelity
 //! phase 36): each NPC's goal-4 launch (@0x8e6fa), point defence
 //! (`_AIFireTurret` @0x80b0d) and the snipe's launch (@0x8732f), slot by
-//! slot (@0x44270-0x442ae), before `_HandleShot` and every pick.
+//! slot (@0x44270-0x442ae), before `_HandleShot` and every pick. That
+//! every launch comes before every pick is the session's order
+//! (`nova_sim::Session::pass_after_move`), which its fighters' tests pin.
 
 use super::*;
 
@@ -44,15 +46,15 @@ fn missile_firer(id: u32) -> Ship {
         .targeting(A)
 }
 
-/// Ticks `ships` once with every trigger but the missile firer's held
-/// back, so its missile is in flight; then gives each its own again, the
-/// firer's none.
+/// Runs the ship loop once with every trigger but the missile firer's
+/// held back, so its missile is in flight; then gives each its own again,
+/// the firer's none.
 fn missile_flying(combat: &mut Combat, ships: &mut [Ship], firer: ShipRef) {
     let held: Vec<Trigger> = ships.iter().map(|ship| ship.trigger).collect();
     for ship in ships.iter_mut().filter(|ship| ship.id != firer) {
         ship.trigger = Trigger::default();
     }
-    tick(combat, ships, &NovaDisable);
+    phase::handle_npcs(combat, ships, &NovaDisable);
     for (ship, trigger) in ships.iter_mut().zip(held) {
         ship.trigger = if ship.id == firer {
             Trigger::default()
@@ -103,7 +105,7 @@ fn an_npcs_launch_comes_after_a_lower_slots_point_defence_and_before_a_higher_sl
     ];
     let mut combat = Combat::default();
     missile_flying(&mut combat, &mut ships, D);
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(
         fired(&combat.take_events()),
         [(A, QUAD, Some(3)), (B, BAY, Some(5)), (C, QUAD, Some(3))]
@@ -128,7 +130,7 @@ fn a_goal_four_launch_comes_before_its_own_point_defence_and_the_snipes_after_it
         ];
         let mut combat = Combat::default();
         missile_flying(&mut combat, &mut ships, B);
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
         fired(&combat.take_events())
     };
     let high = heard(Trigger {
@@ -176,6 +178,11 @@ fn the_npcs_launch_in_their_point_defence_phase_and_never_with_their_picks() {
     assert_eq!(ships[0].rounds.slot(BAY), 1);
 }
 
+/// The NPCs' whole step-4 loop, on `arena`'s pass.
+fn defend(combat: &mut Combat, fighters: &mut [Fighter], arena: Arena, chance: &mut dyn Chance) {
+    combat.defend_npcs(fighters, arena, None, false, chance);
+}
+
 #[test]
 fn on_double_times_second_pass_no_npc_launches() {
     // `_AIDispatch` runs on the advance pass alone (@0x44026-0x4402a).
@@ -185,36 +192,12 @@ fn on_double_times_second_pass_no_npc_launches() {
     };
     let mut ships = [carrying(1, 0.0, launching)];
     let mut combat = Combat::default();
-    tick_on(&mut combat, &mut ships, GamePass::Again);
+    phase::run_on(&mut combat, &mut ships, GamePass::Again, defend);
     assert_eq!(combat.take_sorties(), []);
     assert_eq!(ships[0].rounds.slot(BAY), 2);
-    tick_on(
-        &mut combat,
-        &mut ships,
-        GamePass::Advance { double_time: true },
-    );
+    let pass = GamePass::Advance { double_time: true };
+    phase::run_on(&mut combat, &mut ships, pass, defend);
     assert_eq!(combat.take_sorties().len(), 1);
-}
-
-#[test]
-fn within_a_tick_every_launch_is_heard_before_every_pick() {
-    // Every `_AILaunchFighter` comes in `_AIDispatch`, before
-    // `_HandleShot` (@0x44385) and `_HandleShip`'s picks (@0x44483),
-    // whatever the slots.
-    let launching = Trigger {
-        bays: true,
-        ..Trigger::default()
-    };
-    let mut ships = [
-        carrying(2, 0.0, launching),
-        Ship::at(1, 0.0, 100.0).armed(blaster()).picking(128),
-    ];
-    let mut combat = Combat::default();
-    tick(&mut combat, &mut ships, &NovaDisable);
-    assert_eq!(
-        fired(&combat.take_events()),
-        [(B, BAY, Some(5)), (A, WeaponId(128), Some(4))]
-    );
 }
 
 #[test]
@@ -239,7 +222,7 @@ fn a_reload_zero_bay_launches_on_both_calls_of_one_tick() {
     )]);
     let mut ships = [zero];
     let mut combat = Combat::default();
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(
         fired(&combat.take_events()),
         [(A, BAY, Some(5)), (A, BAY, Some(5))]
@@ -248,7 +231,7 @@ fn a_reload_zero_bay_launches_on_both_calls_of_one_tick() {
     assert_eq!(ships[0].rounds.slot(BAY), 0, "two rounds spent");
     let mut ships = [carrying(1, 0.0, launching)];
     let mut combat = Combat::default();
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(combat.take_sorties().len(), 1, "the stock bay then reloads");
     assert_eq!(ships[0].rounds.slot(BAY), 1);
 }

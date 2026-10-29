@@ -386,7 +386,7 @@ impl Session {
     /// ship no longer in the system is forgotten, and populating the
     /// system or resetting its traffic forgets every one, its ships
     /// replaced (see the `story` module's findings).
-    pub fn watch_ship(&mut self, ship: NpcId) {
+    pub(crate) fn watch_ship(&mut self, ship: NpcId) {
         self.run.watch_ship(ship);
     }
 
@@ -429,7 +429,10 @@ impl Session {
     /// Unregisters the subscription `id`, and clears its once-fired entry,
     /// so one registered under the same id again starts fresh: whether one
     /// was registered. Clearing a fired entry makes a save due.
-    pub fn unregister_story(&mut self, id: SubscriptionId) -> bool {
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
+    pub(crate) fn unregister_story(&mut self, id: SubscriptionId) -> bool {
         self.run
             .unregister_story(&mut self.pilot, &mut self.out, id)
     }
@@ -565,7 +568,11 @@ impl Session {
     /// systems' `Visibility` ([`GalaxyOverlay::refresh_visibility`]), at
     /// a landing, a jump's arrival, a new pilot's start or a load, which
     /// overwrites every system's.
-    pub fn change_galaxy<C>(&mut self, catalog: &C, change: impl FnOnce(&mut GalaxyOverlay)) -> bool
+    pub(crate) fn change_galaxy<C>(
+        &mut self,
+        catalog: &C,
+        change: impl FnOnce(&mut GalaxyOverlay),
+    ) -> bool
     where
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
@@ -751,7 +758,7 @@ impl Session {
     /// [`RuleKey::RouteRewrite`]'s other reading it keeps them for good
     /// (see the session's `course` module).
     #[must_use]
-    pub fn course_shown(&self) -> Vec<SystemId> {
+    pub(crate) fn course_shown(&self) -> Vec<SystemId> {
         self.chart.course_shown(&self.pilot)
     }
 
@@ -992,6 +999,8 @@ impl MissionRun {
 
 #[cfg(test)]
 mod tests {
+
+    use crate::testkit::work;
     use std::rc::Rc;
 
     use super::*;
@@ -1308,7 +1317,7 @@ mod tests {
         let mut session = quiet(Session::start(&catalog).expect("starts"));
         session.land().expect("selects");
         assert_eq!(session.story_raised(), [], "the first L only selects");
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(session.story_raised(), [], "nor the approach");
         session.land().expect("lands");
         assert_eq!(session.story_raised(), [LANDED_128]);
@@ -1579,7 +1588,7 @@ mod tests {
         {
             let catalog = chained(testkit::catalog(), mod_val);
             let mut session = bound_for_134(&catalog, rule);
-            testkit::begin_jump_now(&mut session).expect("jumps");
+            testkit::begin_jump_now(&mut session, &catalog).expect("jumps");
             let (session, seen) = watching_explored(quiet(session), &[131, 132]);
             let mut session = watching_entered(session, 132);
             let left = session.date();
@@ -1603,7 +1612,7 @@ mod tests {
         use crate::session::tests::{bound_for_134, chained};
         let catalog = chained(testkit::catalog(), 10);
         let mut session = bound_for_134(&catalog, MultiJumpRule::Engine);
-        testkit::begin_jump_now(&mut session).expect("jumps");
+        testkit::begin_jump_now(&mut session, &catalog).expect("jumps");
         session.plot_course(SystemId(133)).expect("a route");
         let (session, seen) = watching_explored(quiet(session), &[131, 133]);
         let mut session = watching_entered(session, 131);

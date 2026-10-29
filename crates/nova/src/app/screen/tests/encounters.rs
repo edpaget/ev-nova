@@ -106,21 +106,24 @@ fn boarding_data_with(cash: i32) -> Rc<GameData> {
         }
     };
     let ship = |holds, armor, crew| {
-        let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-        put(&mut bytes, 0x00, &[holds, 0, 300, 300, 10, 300, 0, armor]);
-        put(&mut bytes, 0x12, &[-1; 4]);
-        put(&mut bytes, 0x42, &[1, crew]);
-        put(&mut bytes, 0x4E, &[-1; 4]);
-        put(&mut bytes, 0x370, &[-1; 4]);
-        put(&mut bytes, 0x6CE, &[-1; 4]);
-        bytes
+        ShipBuilder::new()
+            .holds(holds)
+            .accel(300)
+            .speed(300)
+            .maneuver(10)
+            .fuel(300)
+            .armor(armor)
+            .weap_types(&[-1; 8])
+            .inherent_ai(1)
+            .crew(crew)
+            .default_items(&[-1; 8])
     };
-    let mut trader = ship(20, 100, 3);
-    put(&mut trader, 0x06, &[0]);
-    trader[0x30..0x34].copy_from_slice(&150_000_i32.to_be_bytes());
-    let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put(&mut anim, 0x00, &[1000, 0, 1]);
-    put(&mut anim, 0x34, &[4]);
+    let trader = ship(20, 100, 3).speed(0).cost(150_000).build();
+    let anim = ShipAnimBuilder::new()
+        .base_image_id(1000)
+        .base_set_count(1)
+        .frames_per(4)
+        .build();
     let sheet = (0..4)
         .fold(RledBuilder::new(1, 1), |sheet, _| {
             sheet.frame(|f| f.line().pixels(&[0x7C00]))
@@ -141,7 +144,7 @@ fn boarding_data_with(cash: i32) -> Rc<GameData> {
     put(&mut dude, 0x08, &[129]);
     put(&mut dude, 0x28, &[100]);
     let fork = ForkBuilder::new()
-        .resource(Ship::TYPE, 128, Some(b"First"), &ship(0, 0, 10))
+        .resource(Ship::TYPE, 128, Some(b"First"), &ship(0, 0, 10).build())
         .resource(Ship::TYPE, 129, Some(b"Trader"), &trader)
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
         .resource(ShipAnim::TYPE, 128, None, &anim)
@@ -166,8 +169,7 @@ fn boarding_data_with(cash: i32) -> Rc<GameData> {
         )
         .build()
         .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(fork).load())
 }
 
 /// The ship comm strings: "Channel open." in every variant of the
@@ -326,7 +328,7 @@ fn b_held_before_a_target_is_taken_opens_the_plunder_dialog_on_the_next_frame() 
 #[test]
 fn each_take_goes_through_the_flight_and_refreshes_the_dialog() {
     let mut screen = boarded();
-    let cash = flight(&screen).pilot().expect("a pilot").cash();
+    let cash = flight(&screen).sim().pilot().expect("a pilot").cash();
     let sounds = plunder_click(&mut screen, 3);
     assert_eq!(
         sounds,
@@ -334,7 +336,7 @@ fn each_take_goes_through_the_flight_and_refreshes_the_dialog() {
         "the take's beep, the click itself silent"
     );
     assert_eq!(
-        flight(&screen).pilot().expect("a pilot").cash(),
+        flight(&screen).sim().pilot().expect("a pilot").cash(),
         cash + 5750
     );
     assert_eq!(
@@ -344,7 +346,7 @@ fn each_take_goes_through_the_flight_and_refreshes_the_dialog() {
     assert_eq!(screen.showing(), Showing::Plunder, "still open");
     let sounds = plunder_click(&mut screen, 3);
     assert_eq!(
-        flight(&screen).pilot().expect("a pilot").cash(),
+        flight(&screen).sim().pilot().expect("a pilot").cash(),
         cash + 5750,
         "greyed: taken once"
     );
@@ -363,7 +365,7 @@ fn a_miss_keeps_the_plunder_dialog_open() {
     let sounds = plunder_click(&mut screen, 5);
     assert_eq!(sounds, []);
     assert_eq!(screen.showing(), Showing::Plunder, "the text");
-    assert!(flight(&screen).boarding().is_some());
+    assert!(flight_mut(&mut screen).boarding().is_some());
     for pressed in [true, false] {
         screen.input(&Input::PointerButton {
             button: MouseButton::Left,
@@ -372,7 +374,7 @@ fn a_miss_keeps_the_plunder_dialog_open() {
         });
     }
     assert_eq!(screen.showing(), Showing::Plunder, "outside its frame");
-    assert!(flight(&screen).boarding().is_some());
+    assert!(flight_mut(&mut screen).boarding().is_some());
 }
 
 #[test]
@@ -381,7 +383,7 @@ fn abort_closes_the_dialog_back_into_flight() {
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::Flight);
     assert!(screen.plunder().is_none());
-    assert_eq!(flight(&screen).boarding(), None);
+    assert_eq!(flight_mut(&mut screen).boarding(), None);
     screen.input(&key(Key::Escape, false));
     assert_eq!(
         screen.showing(),
@@ -447,7 +449,7 @@ fn without_any_metrics_a_boarding_is_let_go() {
     fly(&mut screen);
     board(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
-    assert_eq!(flight(&screen).boarding(), None, "aborted");
+    assert_eq!(flight_mut(&mut screen).boarding(), None, "aborted");
     assert!(
         !screen
             .take_sounds()
@@ -560,7 +562,7 @@ fn the_overlays_take_the_pointer_cancels_and_the_key_releases() {
         at,
     });
     assert_eq!(
-        flight(&screen).boarding().map(|view| view.credits),
+        flight_mut(&mut screen).boarding().map(|view| view.credits),
         Some(5750),
         "abandoned"
     );
@@ -623,8 +625,8 @@ fn tap(screen: &mut AppScreen, k: Key) {
     screen.input(&key(k, false));
 }
 
-fn reply(screen: &AppScreen) -> String {
-    flight(screen).hailing().expect("hailing").reply
+fn reply(screen: &mut AppScreen) -> String {
+    flight_mut(screen).hailing().expect("hailing").reply
 }
 
 #[test]
@@ -777,7 +779,7 @@ fn close_channel_hangs_up_and_resumes_flight() {
     assert_eq!(sounds, []);
     assert_eq!(screen.showing(), Showing::Flight);
     assert!(screen.comm().is_none());
-    assert_eq!(flight(screen).hailing(), None, "hung up");
+    assert_eq!(flight_mut(screen).hailing(), None, "hung up");
     let alpha = flight(screen).alpha();
     screen.tick(TICK / 2);
     assert_ne!(flight(screen).alpha().to_bits(), alpha.to_bits(), "resumed");
@@ -876,7 +878,7 @@ fn without_any_metrics_a_hail_is_hung_up() {
     fly(&mut screen);
     hail(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
-    assert_eq!(flight(&screen).hailing(), None, "hung up");
+    assert_eq!(flight_mut(&mut screen).hailing(), None, "hung up");
     assert_eq!(
         screen.take_warnings(),
         ["nova: cannot show the comm dialog: no metrics to lay it out"]
@@ -1042,5 +1044,8 @@ fn the_routers_hail_options_reach_every_flight() {
         .with_hail_options(HailOptions::empty());
     fly(&mut screen);
     hail(&mut screen);
-    assert_eq!(flight(&screen).hailing().expect("hailing").options, []);
+    assert_eq!(
+        flight_mut(&mut screen).hailing().expect("hailing").options,
+        []
+    );
 }

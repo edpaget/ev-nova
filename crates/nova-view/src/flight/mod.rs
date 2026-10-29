@@ -38,6 +38,11 @@
 //!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
 //! - [`shot_fade`]: how a shot fades in and out, and how a translucent
 //!   one is added to what is under it ([`ShotShade`](shot_fade::ShotShade)).
+//! - [`sim_adapter`]: [`SessionFlight`], the [`FlightSim`] adapter over a
+//!   real session, with the collaborators its calls are handed.
+//! - [`sim_port`]: the [`FlightSim`] port, what the flight view needs of
+//!   the flight it shows: a frame, a step, the player's commands and the
+//!   events to drain.
 //! - `slot_pool`: the original's fixed sprite tables, a new item taking
 //!   the first free slot and each drawn in slot order.
 //! - [`smoke`]: the puffs a smoking shot leaves.
@@ -63,8 +68,11 @@ pub mod catalog;
 pub mod cloak_fade;
 pub mod cursor;
 pub mod data;
+pub mod edge;
 pub mod effects;
 pub mod escorts;
+#[cfg(test)]
+mod fake_catalog;
 pub mod flash;
 pub mod floating;
 pub mod gate_colorize;
@@ -79,6 +87,8 @@ pub mod pods;
 pub mod radar;
 pub mod ship_layers;
 pub mod shot_fade;
+pub mod sim_adapter;
+pub mod sim_port;
 pub(crate) mod slot_pool;
 pub mod smoke;
 pub mod solid_runs;
@@ -95,7 +105,12 @@ pub use catalog::{
     BoomLook, CombatLooks, EffectSheet, LayerSheet, Looks, ShipSheet, ShipSprites, StarSheet,
     StatusBarLayout, StatusBars, TargetCard, WeaponLook,
 };
+#[cfg(any(test, feature = "fixture"))]
+pub use edge::test_flight;
+pub use edge::{EdgeCatalog, FlightStart, begin_game, enter_game, open_flight};
 pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
+pub use sim_adapter::{Collaborators, SessionFlight};
+pub use sim_port::FlightSim;
 pub use sprite::rotation_frame;
 pub use view::{FlightOverlays, FlightView, MapOpener, PortScreen, SharedChance};

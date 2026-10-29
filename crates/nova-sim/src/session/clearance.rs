@@ -78,15 +78,30 @@ impl Session {
     /// Takes the land key's state: `on` while it is held, which holds the
     /// dock approach back (the original's `_dockTryFlag`, see the
     /// `clearance` module). Up until it says otherwise.
-    pub fn set_land_key(&mut self, on: bool) {
+    pub(crate) fn set_land_key(&mut self, on: bool) {
         self.port.set_land_key(on);
     }
 
     /// The dock request, if any: the stellar requested and its counter
     /// (see the `clearance` module).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(any(test, feature = "fixture"))]
     #[must_use]
-    pub fn dock_request(&self) -> Option<crate::clearance::DockRequest> {
+    pub(crate) fn dock_request(&self) -> Option<crate::clearance::DockRequest> {
         self.port.dock_request()
+    }
+
+    /// Whether the player's dock request is cleared: its counter past
+    /// [`REQUESTED_NEAR`](crate::clearance::REQUESTED_NEAR), where the
+    /// land key lands (@0x66c13). For the app's integration harnesses,
+    /// which draw frames until the dock approach has cleared a request
+    /// rather than count them.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn dock_cleared(&self) -> bool {
+        self.dock_request()
+            .is_some_and(|request| request.permission > crate::clearance::REQUESTED_NEAR)
     }
 
     /// Applies the land key's `press`: the stellar it selected, in mode
@@ -233,6 +248,9 @@ impl Port {
 
     /// The dock request, if any: the stellar requested and its counter
     /// (see the `clearance` module).
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     fn dock_request(&self) -> Option<crate::clearance::DockRequest> {
         self.dock
@@ -253,6 +271,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::landing::StellarFlags;
     use crate::session::LandPress;
+    use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, catalog, jump, land_now, planet};
 
     /// Planet 128 at (30, −40), under the ship, and planet 129 far off at
@@ -269,7 +288,7 @@ mod tests {
     }
 
     fn tick(session: &mut Session) {
-        session.tick(Controls::default());
+        work(session, &crate::testkit::catalog(), Controls::default());
     }
 
     // Wrapped to compare with what a press gives.
@@ -400,6 +419,16 @@ mod tests {
         assert_eq!(session.dock_request(), request(128, CLEARED));
     }
 
+    #[test]
+    fn the_request_reads_cleared_once_the_approach_clears_it() {
+        let mut session = session();
+        assert!(!session.dock_cleared(), "none requested");
+        assert_eq!(session.land(), requested(128));
+        assert!(!session.dock_cleared(), "requested");
+        tick(&mut session);
+        assert!(session.dock_cleared(), "greeted");
+    }
+
     /// [`catalog`] whose planet 128 needs a record no pilot has.
     fn strict() -> FakePilotCatalog {
         let mut catalog = catalog();
@@ -528,7 +557,11 @@ mod tests {
         let mut session = session();
         session.land().expect("requests");
         session.set_double_time_key(true);
-        session.tick(Controls::default());
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.dock_request(), request(128, CLEARED));
         session.tick_again(
             Controls::default(),
@@ -543,7 +576,11 @@ mod tests {
             "greeted once"
         );
         for _ in 0..648 {
-            session.tick(Controls::default());
+            work(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+            );
             session.tick_again(
                 Controls::default(),
                 &crate::ai::NovaAi::default(),
@@ -552,7 +589,11 @@ mod tests {
             );
         }
         assert_eq!(session.dock_request(), request(128, 0x7ff));
-        session.tick(Controls::default());
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
         assert_eq!(session.dock_request(), None, "half the frames");
     }
 
@@ -636,8 +677,8 @@ mod tests {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        crate::testkit::fly_out(&mut session);
-        crate::testkit::begin_jump_now(&mut session).expect("jumps");
+        crate::testkit::fly_out(&mut session, &catalog);
+        crate::testkit::begin_jump_now(&mut session, &catalog).expect("jumps");
         session.port.dock = request(140, CLEARED);
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),

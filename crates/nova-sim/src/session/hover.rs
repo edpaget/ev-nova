@@ -19,7 +19,7 @@ impl Session {
     /// under way, the pre-jump stage included (the player's +0x50 > 0,
     /// @0x381f2), the stellar a click there would pick ([`stellar_under`]).
     #[must_use]
-    pub fn hover(&self, at: Vec2, drawn: &impl DrawnShips) -> Option<Hover> {
+    pub(crate) fn hover(&self, at: Vec2, drawn: &impl DrawnShips) -> Option<Hover> {
         ship_under(
             self.npcs(),
             self.scanner(),
@@ -92,7 +92,7 @@ impl Session {
     /// Left out: the floating map's clicks (@0x6a130-0x6a342,
     /// @0x6a719-0x6a762, hud-fidelity phase 24, as the engine draws no
     /// floating map).
-    pub fn click_in_space(&mut self, at: Vec2, drawn: &impl DrawnShips) -> Option<Hover> {
+    pub(crate) fn click_in_space(&mut self, at: Vec2, drawn: &impl DrawnShips) -> Option<Hover> {
         if self.mode.landed().is_some() {
             return None;
         }

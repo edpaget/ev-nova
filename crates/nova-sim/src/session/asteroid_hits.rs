@@ -27,13 +27,15 @@ use super::{Session, Space};
 mod tests {
     use crate::asteroid::Asteroid;
     use crate::catalog::{AsteroidTypeRecord, WeaponRecord};
-    use crate::chance::NeverFires;
+
+    use crate::combat::CombatEvent;
     use crate::combat::weapon::Explosion;
-    use crate::combat::{CombatEvent, Rules};
+    use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::session::Session;
     use crate::session::tests::{arming, blaster};
     use crate::testkit::FakePilotCatalog;
+    use crate::testkit::work;
 
     /// Kind 0, 20 across, breaking into one fragment of kind 1, dropping
     /// 2 boxes of commodity 2 on average, 12 particles and `bööm` 131;
@@ -96,7 +98,7 @@ mod tests {
             if session.shots().len() >= moves.len() {
                 break;
             }
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
         }
         assert_eq!(session.shots().len(), moves.len(), "fired");
         session.hold_fire(false, false);
@@ -136,7 +138,7 @@ mod tests {
         let beside = (Vec2::new(25.0, -130.0), Vec2::new(25.0, -112.0));
         let mut session = shots_set(&catalog, &[INTO_THE_ROCK, beside]);
         frail_rock(&mut session);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.shots(), [], "both spent");
         let left: Vec<(usize, Asteroid)> = session
             .space
@@ -163,7 +165,7 @@ mod tests {
             shot.weapon.prox_radius = 0.0;
         }
         frail_rock(&mut session);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.shots().len(), 1, "the second flies on");
         let fragment = session.space.asteroids.get(1).expect("the fragment");
         assert_eq!(fragment.strength, 50, "untouched");
@@ -175,7 +177,7 @@ mod tests {
         let catalog = armed();
         let mut session = shots_set(&catalog, &[INTO_THE_ROCK]);
         frail_rock(&mut session);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         // 4 × (Rand(101) + 50) %: 2 boxes of commodity 2.
         let boxes = session.cargo_boxes();
         assert_eq!(boxes.len(), 2, "{boxes:?}");

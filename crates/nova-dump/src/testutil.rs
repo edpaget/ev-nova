@@ -6,17 +6,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{DATA_DIR, FakeTree};
 use nova_data::store::{GameData, OpenError};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 
 use crate::ports::{DataSource, Sink};
-
-/// The data directory every [`MemFs`] store opens.
-pub const DATA: &str = "/data";
-/// The plug-ins directory a [`MemFs`] store opens when it has plug-ins.
-pub const PLUGINS: &str = "/plugins";
 
 /// `path`, written with `/` in a test, as the program displays it: rebuilt
 /// with [`Path::join`] one segment at a time, so it carries the platform's
@@ -32,11 +27,20 @@ pub fn native(path: &str) -> String {
         .to_string()
 }
 
-/// An in-memory file tree: each file's flattened fork is its data fork.
-/// Directories are implied by the files under them; `/data` always exists.
-#[derive(Default)]
+/// An in-memory file tree over nova-data's shared `FakeTree`: each file's
+/// flattened fork is its data fork, and directories are implied by the
+/// files under them. Unlike a bare `FakeTree`, `/data` always exists, if
+/// empty.
 pub struct MemFs {
-    files: BTreeMap<PathBuf, Vec<u8>>,
+    tree: FakeTree,
+}
+
+impl Default for MemFs {
+    fn default() -> Self {
+        Self {
+            tree: FakeTree::new().dir(DATA_DIR, &[]),
+        }
+    }
 }
 
 impl MemFs {
@@ -47,62 +51,19 @@ impl MemFs {
     /// Adds the file at `path` holding `bytes`.
     #[must_use]
     pub fn file(mut self, path: &str, bytes: Vec<u8>) -> Self {
-        self.files.insert(PathBuf::from(path), bytes);
+        self.tree = std::mem::take(&mut self.tree).file(path, bytes);
         self
     }
 
     /// Opens `/data` and, if any file is under it, `/plugins`.
     pub fn open(&self) -> GameData {
-        let plugins = Path::new(PLUGINS);
-        let has_plugins = self.files.keys().any(|path| path.starts_with(plugins));
-        GameData::load(self, self, Path::new(DATA), has_plugins.then_some(plugins))
-            .expect("in-memory directories list")
+        self.tree.load()
     }
 }
 
 impl DataSource for MemFs {
     fn open(&self, data: &Path, plugins: Option<&Path>) -> Result<GameData, OpenError> {
-        GameData::load(self, self, data, plugins)
-    }
-}
-
-impl DirLister for MemFs {
-    fn list(&self, dir: &Path) -> io::Result<Vec<Listing>> {
-        let mut listings: Vec<Listing> = Vec::new();
-        for path in self.files.keys() {
-            let Ok(rest) = path.strip_prefix(dir) else {
-                continue;
-            };
-            let mut parts = rest.components();
-            let name = parts
-                .next()
-                .expect("a file below dir")
-                .as_os_str()
-                .to_owned();
-            let kind = if parts.next().is_some() {
-                EntryKind::Dir
-            } else {
-                EntryKind::File
-            };
-            if !listings.iter().any(|l| l.name == name) {
-                listings.push(Listing { name, kind });
-            }
-        }
-        Ok(listings)
-    }
-}
-
-impl ForkReader for MemFs {
-    fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        match fork {
-            Fork::Data => self
-                .files
-                .get(path)
-                .cloned()
-                .map(Some)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file")),
-            Fork::Resource => Ok(None),
-        }
+        self.tree.load_from(data, plugins)
     }
 }
 

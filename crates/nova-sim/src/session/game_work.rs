@@ -64,8 +64,11 @@
 //!    ([`Session::beams_phase`], see the `asteroid_beams` module), then
 //!    what the pass leaves ([`Session::fight_tail`]).
 //!
-//! Landed, the pass runs the separate parts instead, as the fight stands
-//! still. Through a jump the world runs on, in this order (see the
+//! Landed, the fight and the traffic stand still, and the pass runs its
+//! landed work instead (`Session::landed_work`). Any pass ends a gate's
+//! pending entry first: the original's hypergate map is modal, so no pass
+//! runs between the land key and the pick. Through a jump the world runs
+//! on, in this order (see the
 //! `warp_stage` module). Double time's second pass
 //! ([`Session::tick_again`]) runs the same order without the AI: from the
 //! eject check on, both passes run one routine
@@ -102,14 +105,6 @@
 //!   after `_HandleShot`'s phase ([`Session::settle_landed`]), where
 //!   `_DamageShip` settles it at the landing; the fight clears its leader
 //!   at the landing, which is all the later visits read.
-//! - The separate parts ([`Session::tick`], [`Session::tick_traffic`],
-//!   [`Session::tick_combat`]) keep the old order between the player, the
-//!   traffic and the fight, the fight's own phases in its new order, an
-//!   NPC's fighters put in the system and every dying NPC's escape pods
-//!   and escape-ship roll run at the tick's end; they
-//!   are no game path, and the tests that step through them are to step
-//!   through [`Session::game_work`] (rdm task
-//!   `retire-the-sessions-separate-pass-parts`).
 //!
 //! **Filed.** An existing NPC in a slot above a carrier thinks before
 //! the loop, blind to the fighter launched that frame, and a launched
@@ -180,11 +175,6 @@ impl PassStart {
         self.player
     }
 
-    /// Every NPC as the pass's fight began.
-    pub(super) fn npcs(&self) -> &[NpcBefore] {
-        &self.npcs
-    }
-
     /// NPC `id`'s condition as the pass's fight began, if it was there.
     pub(super) fn condition_of(&self, id: NpcId) -> Option<Condition> {
         self.npcs
@@ -202,11 +192,10 @@ impl Session {
     /// settled on it, which ends the pass there (`_HandlePlayer` @0x68ddd;
     /// see [`Session::rescue_if_due`]).
     ///
-    /// Landed, it runs the separate parts instead ([`Session::tick`],
-    /// [`Session::rescue_if_due`], [`Session::tick_traffic`] and
-    /// [`Session::tick_combat`]), as the fight stands still then. Through
-    /// a jump it runs on in its own order, as the world does (see the
-    /// `warp_stage` module).
+    /// Landed, it runs its landed work instead (`Session::landed_work`),
+    /// as the fight and the traffic stand still then, the rescue among it.
+    /// Through a jump it runs on in its own order, as the world does (see
+    /// the `warp_stage` module).
     pub fn game_work(
         &mut self,
         controls: Controls,
@@ -216,13 +205,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> bool {
         if self.mode.landed().is_some() {
-            self.tick(controls);
-            if self.rescue_if_due(catalog, chance) {
-                return true;
-            }
-            self.tick_traffic(catalog, behaviour, chance);
-            self.tick_combat(rules, chance);
-            return false;
+            return self.landed_work(catalog, chance);
         }
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
@@ -243,6 +226,43 @@ impl Session {
             return true;
         }
         self.pass_after_move(&start, pass, Some(catalog), behaviour, rules, chance);
+        false
+    }
+
+    /// A pass of the game's work while landed, the traffic drawn from
+    /// `catalog`, drawing on `chance`: the fight and the traffic stand still,
+    /// and the player neither moves nor fires. What runs, in order: a gate's
+    /// pending entry ends, as on any pass; the escape pod's rescue, which ends
+    /// the pass when it settles ([`Session::rescue_if_due`]); `_HandlePlayer`'s
+    /// warning on a new jump (see the `wait_for_me` module); the reinforcement
+    /// clock's tick held behind the last pass's work on the line spent with no
+    /// effect, as the clock stands while landed (`_HandleReinforcements`
+    /// @0x44504 runs in `_DoPlayGameWork`, which a landed player's spaceport
+    /// never runs; see [`Session::tick_reinforcements`]), then the traffic's
+    /// tail, the clock's own tick held again while work waits on the line (see
+    /// the `reinforcements` and `comm_calls` modules); the player's explosion
+    /// of the last pass forgotten; the headings the ships were drawn at
+    /// dropped; and the pass's asteroid work ([`Session::tick_asteroids`], see
+    /// the `asteroids` module). Whether the rescue settled on it. Nothing
+    /// queued on the line settles while landed
+    /// ([`Session::settle_line_queue`]).
+    fn landed_work(
+        &mut self,
+        catalog: &(impl PilotCatalog + TrafficCatalog),
+        chance: &mut (impl Chance + ?Sized),
+    ) -> bool {
+        let mut source = &mut *chance;
+        let chance: &mut dyn Chance = &mut source;
+        self.ship.warp.gate = None;
+        if self.rescue_if_due(catalog, chance) {
+            return true;
+        }
+        self.warn_fighters_left_behind(chance);
+        self.space.reinforcements_held = false;
+        self.traffic_tail(chance);
+        self.ship.fate.player_exploded_this_tick = false;
+        self.space.drawn.clear();
+        self.tick_asteroids(chance);
         false
     }
 
@@ -296,6 +316,10 @@ impl Session {
             self.dispatch_npcs(pass, behaviour, rules, chance);
             // `_EscortAI`'s variants and target calls, in berth order.
             self.space.answer_voice_cues(&self.statics, &mut *chance);
+            #[cfg(test)]
+            for event in std::mem::take(&mut self.space.queued_in_frame) {
+                self.space.traffic.queue_pirate_event(event);
+            }
             // Every think's work on the line, the launched fighters'
             // among it, in slot order (see `Session::dispatch_npcs`).
             self.settle_line_queue(rules.law, chance);
@@ -371,31 +395,6 @@ impl Session {
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, _| {
             combat.regenerate_player(fighters, arena);
         });
-    }
-
-    /// `_HandleShip`'s fight and `_HandleShipDisplay` for each NPC on
-    /// `pass` by `rules`, drawing on `chance`, for the separate parts
-    /// ([`Session::tick_combat`]), whose traffic has flown already (the
-    /// game's passes run [`Session::ship_loop`]): every NPC's stray
-    /// provocation eases
-    /// (@0x35374-0x353b2), after the collision passes and the shots and
-    /// before the beams; then, slot by slot, each NPC's reloads count
-    /// down, it regenerates, it fires its pick, its death timer ticks and
-    /// it is displayed ([`Combat::handle_npcs`]), a final explosion's
-    /// shockwave striking at once, its strikes settled
-    /// ([`Session::land_phase`]), and laid out
-    /// ([`Session::lay_out_displayed`]); every NPC's cloak fade steps
-    /// ([`Traffic::step_fades`](crate::traffic::Traffic::step_fades)); and
-    /// the pick fired is cleared or kept
-    /// ([`Traffic::after_firing`](crate::traffic::Traffic::after_firing)).
-    pub(super) fn handle_npcs(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
-        self.space.traffic.ease_stray();
-        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.handle_npcs(fighters, arena, chance);
-        });
-        self.lay_out_displayed();
-        self.space.traffic.step_fades();
-        self.space.traffic.after_firing(&self.statics.arsenal);
     }
 
     /// The advance pass's AI, reading `catalog`, deciding as `behaviour`
@@ -595,7 +594,7 @@ impl Session {
     /// `rules`, drawing on `chance`: gravity pulls and the deadly stellars
     /// kill (`_HandleGravity` @0x44509, `_HandleDeadlyStellars` @0x4450e;
     /// [`Combat::hazards`]), then the beams' step and the late steps
-    /// ([`Combat::close_tick`]), among one set of fighters, so a ship a
+    /// ([`Combat::close_tick_in`]), among one set of fighters, so a ship a
     /// deadly stellar kills is out of the beams. The kills' hold starts
     /// before the beams' hits settle (see the `deadly_stellars` module),
     /// as a phase that lands hits settles ([`Session::settle_landed`]).
@@ -680,8 +679,7 @@ impl Session {
     /// module); and the heading each ship is drawn at noted, which its
     /// next tick's shots leave from.
     /// Each dying NPC's escape pods and escape-ship roll ran before it, in
-    /// its own turn of the ship loop ([`Session::ship_loop`]) or, in the
-    /// separate parts, after the beams (`Session::fight`; see the
+    /// its own turn of the ship loop ([`Session::ship_loop`]; see the
     /// `npc_escape` module).
     pub(super) fn fight_tail(&mut self, rules: Rules, chance: &mut dyn Chance) {
         self.space.traffic.keep_berth_exits();
@@ -722,6 +720,7 @@ impl Space {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::testkit::work;
     use std::cell::RefCell;
 
     use crate::ai::{Behaviour, Decision, Goal, NovaAi, Reaction, Surroundings};
@@ -1012,32 +1011,28 @@ mod tests {
             .collect()
     }
 
-    /// Asserts three passes of `session` match the separate parts.
-    fn runs_the_parts(mut session: Session, catalog: &FakePilotCatalog) {
-        let mut by_parts = session.clone();
-        for _ in 0..3 {
-            pass(
-                &mut session,
-                catalog,
-                Controls::default(),
-                &NovaAi::default(),
-            );
-            by_parts.tick(Controls::default());
-            assert!(!by_parts.rescue_if_due(catalog, &mut NeverFires));
-            by_parts.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
-            by_parts.tick_combat(Rules::default(), &mut NeverFires);
-            assert_eq!(session, by_parts);
-        }
-    }
-
     #[test]
-    fn a_landed_pass_runs_the_parts_as_before() {
+    fn a_landed_pass_stands_the_fight_and_the_traffic_still() {
         // Landed, the fight stands still; through a jump the world runs
         // on in the pass's own order (see the `warp_stage` module).
         let catalog = armed();
-        let mut landed = facing_an_npc(&catalog, 180);
-        crate::testkit::land_now(&mut landed).expect("lands");
-        runs_the_parts(landed, &catalog);
+        let mut session = facing_an_npc(&catalog, 180);
+        crate::testkit::land_now(&mut session).expect("lands");
+        session.hold_trigger(crate::session::tests::FIRE);
+        session.take_combat_events();
+        let (player, npcs) = (*session.player(), session.npcs().to_vec());
+        for _ in 0..3 {
+            pass(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &NovaAi::default(),
+            );
+        }
+        assert_eq!(*session.player(), player, "the player stands");
+        assert_eq!(session.npcs(), npcs, "and the traffic");
+        assert_eq!(session.take_combat_events(), [], "nothing fires");
+        assert_eq!(session.shots(), []);
     }
 
     /// [`armed`] with weapon 128 a 200-pixel beam lasting 3 ticks, firing
@@ -1130,7 +1125,7 @@ mod tests {
             direction: 1,
         };
         let id = session.space.traffic.add_npc(npc);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.space.npc(id).expect("there").cloak.fade, 4.0);
     }
 
@@ -1153,7 +1148,7 @@ mod tests {
         let id = session.space.traffic.add_npc(npc);
         session.begin_jump().expect("jumps");
         assert!(session.in_warp_lead_in());
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(session.space.npc(id).expect("there").cloak.fade, 4.75);
     }
 
@@ -1169,7 +1164,7 @@ mod tests {
         session.hold_trigger(FIRE);
         let mut ticks = 0;
         while session.npcs()[0].condition == Condition::Intact {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             session.hold_trigger(Trigger::default());
             ticks += 1;
             assert!(ticks < 20, "never disabled");
@@ -1179,7 +1174,7 @@ mod tests {
             fate: Fate::Disabled,
         };
         assert_eq!(fates(&session), [disabled]);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(fates(&session), [disabled], "once");
     }
 

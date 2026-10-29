@@ -16,9 +16,11 @@ use crate::bay::fighter_capacity;
 use crate::chance::NeverFires;
 use crate::combat::Rules;
 use crate::combat::hull::Condition;
+use crate::flight::Controls;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::stats::ShipStats;
+use crate::testkit::work;
 use crate::testkit::{Draws, FakePilotCatalog};
 use crate::traffic::npc::Npc;
 
@@ -46,7 +48,7 @@ fn full((shield, armor): (f32, f32)) -> [(f32, f32); 2] {
 /// The player's session by `capacity`, two Vipers aboard, one launched.
 fn players_launched(catalog: &FakePilotCatalog, capacity: RuleSource) -> Session {
     let mut session = flying_by(catalog, pilot(catalog, 2, Vec::new()), by(capacity));
-    launch(&mut session);
+    launch(&mut session, catalog);
     session
 }
 
@@ -114,7 +116,7 @@ fn a_fighters_shield_recharges_1_333_times_as_fast_and_its_armour_at_its_classs_
         let fighter = session.space.npc_mut(id).expect("out");
         fighter.reserves.shield.now = 0.0;
         fighter.reserves.armor.now = 40.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         let fighter = session.space.npc(id).expect("out");
         assert_eq!(fighter.reserves.shield.now, shield, "{capacity:?}");
         assert_eq!(fighter.reserves.armor.now, 40.02, "{capacity:?}");
@@ -131,7 +133,7 @@ fn a_fighters_disable_threshold_reads_its_scaled_armour() {
         let mut session = players_launched(&catalog, capacity);
         let id = fleet_npcs(&session)[0].id;
         session.space.npc_mut(id).expect("out").reserves.armor.now = 17.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         let condition = session.space.npc(id).expect("there").condition;
         assert_eq!(condition == Condition::Disabled, disabled, "{capacity:?}");
         assert_eq!(
@@ -180,7 +182,7 @@ fn a_lost_fighter_repairing_itself_reaches_its_share_of_its_scaled_armour() {
         let id = fleet_npcs(&session)[0].id;
         assert!(session.space.npc(id).expect("out").self_repair);
         session.space.npc_mut(id).expect("out").reserves.armor.now = 1.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert!(session.pilot().escorts().is_empty(), "lost");
         session.self_repair(Rules::default(), &mut Draws::of(&[0]));
         let npc = session.space.npc(id).expect("there");
@@ -208,7 +210,7 @@ fn a_fighter_rejoining_with_no_carrier_holds_its_scaled_capacities_again() {
         let mut session = players_launched(&catalog, capacity);
         let id = fleet_npcs(&session)[0].id;
         session.space.npc_mut(id).expect("out").reserves.armor.now = 1.0;
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert!(session.pilot().escorts().is_empty(), "lost");
         session.space.npc_mut(id).expect("out").leave_carrier();
         session.self_repair(Rules::default(), &mut Draws::of(&[0]));

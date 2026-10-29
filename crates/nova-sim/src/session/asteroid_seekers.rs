@@ -21,6 +21,7 @@ use crate::geometry::Vec2;
 use crate::session::Session;
 use crate::session::tests::{FIRE, arming, blaster, homing_missile, with_an_npc_at};
 use crate::testkit::{FakePilotCatalog, Ranged};
+use crate::testkit::{Passive, work_with};
 
 /// A homing missile, 10 pixels a tick and turning 7 degrees, of
 /// `Seeker` `seeker`.
@@ -74,7 +75,14 @@ fn missile_of(session: &Session) -> Shot {
 fn fly(session: &mut Session, ticks: u32, chance: &mut dyn Chance) {
     for _ in 0..ticks {
         session.hold_trigger(FIRE);
-        session.tick_combat(Rules::default(), &mut *chance);
+        work_with(
+            session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut *chance,
+        );
         session.hold_trigger(crate::combat::armament::Trigger::default());
     }
 }

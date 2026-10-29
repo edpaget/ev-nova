@@ -1556,6 +1556,9 @@ impl Arsenal {
     /// The arsenal holding `specs` as its weapons' records, as they are,
     /// and no ship type: test support for readers of the global weapon
     /// records, such as an NPC's lead.
+    ///
+    /// Kept for nova-sim-ai's tests of the readers of the global weapon
+    /// records.
     #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     pub fn of_specs(specs: impl IntoIterator<Item = WeaponSpec>) -> Self {

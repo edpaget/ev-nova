@@ -92,9 +92,11 @@ mod tests {
     use super::*;
     use crate::catalog::SystemId;
     use crate::chance::NeverFires;
+
     use crate::flight::Controls;
     use crate::session::tests::{at_gate, at_wormhole, gated, wormholes};
     use crate::sound::SimSound;
+    use crate::testkit::work;
     use crate::testkit::{catalog, jump, land_now};
 
     /// A session that has landed and taken off, its sounds taken.
@@ -160,7 +162,11 @@ mod tests {
         let mut session = taken_off();
         for tick in 0..15 {
             assert_eq!(keys(&mut session), refused(), "after {tick} ticks");
-            session.tick(Controls::default());
+            work(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+            );
         }
         assert_eq!(keys(&mut session), taken(), "after 15 ticks");
         assert!(session.takes(PlayerCommand::Jump), "J is not behind it");
@@ -209,7 +215,7 @@ mod tests {
         let _ = session.take_sounds();
         assert_eq!(keys(&mut session), refused(), "out of the gate");
         for _ in 0..15 {
-            session.tick(Controls::default());
+            work(&mut session, &catalog, Controls::default());
         }
         assert_eq!(keys(&mut session), taken(), "after 15 ticks");
         let mut session = at_gate(&catalog);

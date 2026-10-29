@@ -77,7 +77,7 @@ impl Session {
     /// and the green system's red arrow cleared whether or not there is
     /// one.
     #[must_use]
-    pub fn mission_info_map_marks(&self, slot: Option<u8>) -> MapMarks {
+    pub(crate) fn mission_info_map_marks(&self, slot: Option<u8>) -> MapMarks {
         self.chart
             .mission_info_map_marks(&self.pilot, &self.statics, slot)
     }
@@ -153,7 +153,7 @@ impl Chart {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::session) mod tests {
     use super::*;
     use crate::catalog::MissionRecord;
     use crate::catalog::MissionTexts;
@@ -169,7 +169,7 @@ mod tests {
     /// the computer: 300 to 140 (in 131) and back at 150 (in 132), of
     /// `Flags` 0x0100; 301 to 140 without it; 302 back at 150 alone and
     /// 303 going nowhere, both with it.
-    fn marking() -> FakePilotCatalog {
+    pub(in crate::session) fn marking() -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.systems.push(SystemId(132));
         catalog
@@ -191,7 +191,7 @@ mod tests {
     }
 
     /// A session of `catalog` landed on 128, its offers rolled.
-    fn landed(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn landed(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         assert_eq!(land_now(&mut session).map(|stellar| stellar.0), Ok(128));
         let _ = session.settle_script(catalog, &mut NeverFires);
@@ -213,7 +213,12 @@ mod tests {
     }
 
     /// `session` holding `mission` to `to`, back at `back`: its slot.
-    fn holding(session: &mut Session, mission: i16, to: Option<i16>, back: Option<i16>) -> u8 {
+    pub(in crate::session) fn holding(
+        session: &mut Session,
+        mission: i16,
+        to: Option<i16>,
+        back: Option<i16>,
+    ) -> u8 {
         let offer = Offer {
             mission: MissionId(mission),
             venue: Venue::Computer,

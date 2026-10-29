@@ -80,7 +80,7 @@ impl Session {
 
     /// What the escort dialog shows, while it is open.
     #[must_use]
-    pub fn escort_dialog(&self) -> Option<EscortDialogView> {
+    pub(crate) fn escort_dialog(&self) -> Option<EscortDialogView> {
         let dialog = self.space.escorts.dialog?;
         let escort = self
             .pilot
@@ -101,7 +101,7 @@ impl Session {
     /// Presses `button` in the escort dialog (see the module docs), and
     /// gives what it shows after; none once it closes, or when it is not
     /// open.
-    pub fn press_escort(&mut self, button: EscortButton) -> Option<EscortDialogView> {
+    pub(crate) fn press_escort(&mut self, button: EscortButton) -> Option<EscortDialogView> {
         let dialog = self.space.escorts.dialog?;
         let pressed = match button {
             EscortButton::Close => {

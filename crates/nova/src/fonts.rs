@@ -31,7 +31,7 @@ mod tests {
     use nova_data::fonts::fixture::{SfntBuilder, block_font, block_sfnt};
     use nova_data::fonts::{SfntError, charcoal_path, load_charcoal};
     use nova_render::FALLBACK_FONT;
-    use nova_rsrc::{Fork, ForkReader};
+    use nova_rsrc::fixture::forks::MemForks;
 
     use super::*;
 
@@ -74,14 +74,10 @@ mod tests {
         );
     }
 
-    /// A game folder whose one file, Charcoal, holds `bytes`.
-    struct CharcoalFile(Vec<u8>);
-
-    impl ForkReader for CharcoalFile {
-        fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            assert_eq!((path, fork), (path_buf().as_path(), Fork::Data));
-            Ok(Some(self.0.clone()))
-        }
+    /// A game folder whose one file, Charcoal, holds `bytes`: any other
+    /// path is missing.
+    fn charcoal_file(bytes: Vec<u8>) -> MemForks {
+        MemForks::new().file(path_buf(), bytes)
     }
 
     fn path_buf() -> PathBuf {
@@ -92,7 +88,7 @@ mod tests {
     fn a_charcoal_whose_tables_do_not_parse_falls_back_with_a_warning() {
         // Every table in place and inside the file, but each four zero
         // bytes: the directory checks pass, the font reader cannot use it.
-        let corrupt = CharcoalFile(SfntBuilder::truetype().build());
+        let corrupt = charcoal_file(SfntBuilder::truetype().build());
         let (faces, warning) = game_fonts(load_charcoal(&corrupt, Path::new("/Nova Files")));
         assert_eq!(faces, FontFaces::bundled());
         assert_eq!(
@@ -110,7 +106,7 @@ mod tests {
 
     #[test]
     fn a_charcoal_with_no_name_falls_back_with_a_warning() {
-        let unnamed = CharcoalFile(block_sfnt("Charcoal").table(b"name", [0; 4]).build());
+        let unnamed = charcoal_file(block_sfnt("Charcoal").table(b"name", [0; 4]).build());
         let (faces, warning) = game_fonts(load_charcoal(&unnamed, Path::new("/Nova Files")));
         assert_eq!(faces, FontFaces::bundled());
         assert_eq!(

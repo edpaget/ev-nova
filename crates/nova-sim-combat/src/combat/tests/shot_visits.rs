@@ -213,15 +213,18 @@ fn a_release_is_heard_before_its_shells_explosion() {
 }
 
 #[test]
-fn every_visits_blast_meets_a_struck_ship_where_it_stood() {
-    // `_HandleShot`'s blasts read each ship where its last `_HandleShip`
-    // left it (@0x35fd5-0x36141): N stood at (300, -100) as the last tick
-    // ran and has since moved to (0, -100). Slot 0's blast strikes it
-    // where it stood, and so does slot 1's, after N is read again.
+fn every_visits_blast_meets_a_struck_ship_where_it_is() {
+    // `_HandleShot`'s blasts (@0x35fd5-0x36141) read each ship's position
+    // as it is (its record's +0x18 and +0x1c, @0x3603c-0x3605b), which
+    // `_HandleShip`'s position step writes (@0x3428f-0x342aa): N stood at
+    // (0, -100) as the last tick closed and has since moved to (300, -100).
+    // Slot 0's blast strikes it where it is, and so does slot 1's, after N
+    // is read again.
     let mut combat = Combat::default();
     let n = ShipRef::Npc(NpcId(3));
-    combat.stood.insert(n, Vec2::new(300.0, -100.0));
     let mut ships = [player_at(&mut combat, 0.0, 300.0), Ship::at(3, 0.0, -100.0)];
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
+    ships[1].state.position = Vec2::new(300.0, -100.0);
     combat.put_in_flight(spent(flak(), Vec2::new(270.0, -100.0)));
     combat.put_in_flight(spent(flak(), Vec2::new(330.0, -100.0)));
     let struck = handle(&mut combat, &mut ships, &Arsenal::default());

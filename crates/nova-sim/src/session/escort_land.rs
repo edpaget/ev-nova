@@ -53,7 +53,7 @@ impl Session {
     /// nothing changed, away from a shipyard or when nothing was sold or
     /// upgraded. A second call settles only what a first left: marks the
     /// cash didn't cover, which it still doesn't.
-    pub fn land_escorts(&mut self, chance: &mut dyn Chance) -> Option<String> {
+    pub(crate) fn land_escorts(&mut self, chance: &mut dyn Chance) -> Option<String> {
         let stellar = self.mode.landed()?;
         let shipyard = self
             .chart
@@ -139,10 +139,13 @@ mod tests {
     use super::*;
     use crate::catalog::{LandingSite, ShipId, ShipRecord, SystemId};
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::fleet::EscortMark;
+    use crate::flight::Controls;
     use crate::handling::ShipFields;
     use crate::market::Good;
     use crate::rulebook::{RuleSource, Rulebook};
+    use crate::testkit::work_with;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, land_now, planet, ship};
     use crate::traffic::npc::NpcId;
 
@@ -384,7 +387,14 @@ mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
-        session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &crate::ai::Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let id = ids(&session)[0].expect("placed");
         let npc = session.space.npc(id).expect("in the system");
         let record = session.statics.ship_record(ShipId(130)).expect("a record");

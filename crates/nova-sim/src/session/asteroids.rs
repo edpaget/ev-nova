@@ -21,9 +21,7 @@
 //! has just moved it (see the `asteroid_beams` module). The spawn comes
 //! before the AI and the ships' fire in the original and after them
 //! here; a new asteroid is met by no shot until the next pass either way,
-//! so that crosses no boundary the player sees. The separate parts'
-//! [`Session::tick_combat`], no game path, runs it after the whole fight
-//! (see the `game_work` module).
+//! so that crosses no boundary the player sees.
 //!
 //! *The refill against the spawn.* The collision passes
 //! (@0x43e70-0x44015, `_CheckShotProximities` @0x44015) break asteroids
@@ -132,7 +130,7 @@ impl Session {
     /// module), and every asteroid stepped and culled in the play area
     /// (see the module docs). Nothing while
     /// landed; on a frame a kill holds through, the field is emptied.
-    pub fn tick_asteroids(&mut self, chance: &mut (impl Chance + ?Sized)) {
+    pub(crate) fn tick_asteroids(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.asteroid_pass(
             GamePass::Advance {
                 double_time: self.ship.warp.double_time,
@@ -185,7 +183,7 @@ impl Session {
     /// [`RuleKey::AsteroidEntryField`]; by the engine, and once docked,
     /// it places none (see the module docs). The view runs it before it
     /// draws a frame; [`Session::tick_asteroids`] runs it too.
-    pub fn settle_asteroid_field(&mut self, chance: &mut (impl Chance + ?Sized)) {
+    pub(crate) fn settle_asteroid_field(&mut self, chance: &mut (impl Chance + ?Sized)) {
         if !std::mem::take(&mut self.space.asteroid_field_due) || self.mode.landed().is_some() {
             return;
         }
@@ -264,7 +262,7 @@ impl Setup {
 impl Space {
     /// The asteroids in the field about the player, in slot order (see
     /// [`asteroid`](crate::asteroid)).
-    fn asteroids(&self) -> impl Iterator<Item = &Asteroid> {
+    pub(super) fn asteroids(&self) -> impl Iterator<Item = &Asteroid> {
         self.asteroids.iter()
     }
 
@@ -303,6 +301,7 @@ mod tests {
     use crate::rulebook::Rulebook;
     use crate::session::tests::{at_gate, at_wormhole, gated, wormholes};
     use crate::testkit::{FakePilotCatalog, Scripted, begin_jump_now, catalog, fly_out, land_now};
+    use crate::testkit::{Passive, work, work_with};
 
     /// Every roll its last outcome.
     struct Last;
@@ -372,10 +371,21 @@ mod tests {
         session
     }
 
-    /// One advance pass: the player's tick, then the asteroids'.
-    fn pass(session: &mut Session, chance: &mut (impl Chance + ?Sized)) {
-        session.tick(Controls::default());
-        session.tick_asteroids(chance);
+    /// One advance pass of `catalog`'s session, its asteroid work drawing
+    /// on `chance`.
+    fn pass(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            chance,
+        );
     }
 
     /// Grows `session`'s field to at least `count` asteroids, on the
@@ -401,7 +411,7 @@ mod tests {
     /// past any count.
     fn filled(session: &mut Session) -> usize {
         for _ in 0..2 * SLOTS {
-            pass(session, &mut NeverFires);
+            pass(session, &crate::testkit::catalog(), &mut NeverFires);
         }
         session.asteroids().count()
     }
@@ -456,7 +466,7 @@ mod tests {
         let mut session = sized(&catalog, Rulebook::default(), 640);
         assert_eq!(filled(&mut session), 4);
         session.set_window_width(1024);
-        pass(&mut session, &mut NeverFires);
+        pass(&mut session, &catalog, &mut NeverFires);
         assert_eq!(session.asteroids().count(), 5, "one more spawned");
         assert_eq!(filled(&mut session), 6);
     }
@@ -467,7 +477,7 @@ mod tests {
         let mut session = flying(&catalog);
         assert_eq!(session.asteroids().count(), 0, "none to start with");
         for count in [1, 2, 3, 4, 4, 4] {
-            pass(&mut session, &mut NeverFires);
+            pass(&mut session, &catalog, &mut NeverFires);
             assert_eq!(session.asteroids().count(), count);
         }
         assert_eq!(kinds(&session), [0; 4]);
@@ -485,7 +495,7 @@ mod tests {
                 ..rocky(catalog())
             };
             let mut session = flying(&catalog);
-            pass(&mut session, &mut NeverFires);
+            pass(&mut session, &catalog, &mut NeverFires);
             assert_eq!(session.asteroids().count(), 0, "{spec:?}");
         }
         let unlisted = FakePilotCatalog {
@@ -493,7 +503,7 @@ mod tests {
             ..rocky(catalog())
         };
         let mut session = flying(&unlisted);
-        pass(&mut session, &mut NeverFires);
+        pass(&mut session, &unlisted, &mut NeverFires);
         assert_eq!(session.asteroids().count(), 0, "a system not listed");
     }
 
@@ -505,7 +515,7 @@ mod tests {
         };
         let mut session = flying(&catalog);
         for _ in 0..20 {
-            pass(&mut session, &mut NeverFires);
+            pass(&mut session, &catalog, &mut NeverFires);
         }
         assert_eq!(session.asteroids().count(), SLOTS);
     }
@@ -526,7 +536,7 @@ mod tests {
             ([1, 0, 0, 0, 0, 0, 0, 35, 40, 1], (1, 60, 0.32, 1.1 * 1.2)),
         ] {
             let mut session = flying(&catalog);
-            pass(&mut session, &mut Scripted::rolling(&rolls));
+            pass(&mut session, &catalog, &mut Scripted::rolling(&rolls));
             let made = *session.asteroids().next().expect("spawned");
             assert_eq!((made.kind, made.strength), (expected.0, expected.1));
             // Its frame as drawn, stepped once by its spin: wrapped once.
@@ -540,7 +550,7 @@ mod tests {
         let catalog = rocky(catalog());
         for chance in [&mut NeverFires as &mut dyn Chance, &mut near()] {
             let mut session = flying(&catalog);
-            pass(&mut session, chance);
+            pass(&mut session, &catalog, chance);
             let made = *session.asteroids().next().expect("spawned");
             let off = made.position - made.velocity - session.player().position;
             assert!(off.x.abs() >= R && off.y.abs() >= R, "{off:?}");
@@ -548,7 +558,7 @@ mod tests {
             assert!(made.velocity.y * off.y <= 0.0, "{made:?}");
         }
         let mut session = flying(&catalog);
-        pass(&mut session, &mut near());
+        pass(&mut session, &catalog, &mut near());
         let made = *session.asteroids().next().expect("spawned");
         assert_eq!(
             made.velocity,
@@ -564,12 +574,12 @@ mod tests {
             ..rocky(catalog())
         };
         let mut session = flying(&catalog);
-        pass(&mut session, &mut near());
+        pass(&mut session, &catalog, &mut near());
         let first = *session.asteroids().next().expect("spawned");
         assert!((first.spin - 1.2).abs() < 1e-6, "{first:?}");
         // The spawn's own pass stepped it: 35 + 1.2 wrapped once.
         assert!((first.frame - 0.2).abs() < 1e-5, "{first:?}");
-        pass(&mut session, &mut Last);
+        pass(&mut session, &catalog, &mut Last);
         let second = *session.asteroids().next().expect("still there");
         assert_eq!(second.position, first.position + first.velocity);
         assert!((second.frame - 1.4).abs() < 1e-5, "{second:?}");
@@ -582,12 +592,12 @@ mod tests {
             ..rocky(catalog())
         };
         let mut session = flying(&catalog);
-        pass(&mut session, &mut NeverFires);
+        pass(&mut session, &catalog, &mut NeverFires);
         let first = *session.asteroids().next().expect("spawned");
         session.ship.player.position = session.ship.player.position + Vec2::new(1000.0, 0.0);
-        pass(&mut session, &mut NeverFires);
+        pass(&mut session, &catalog, &mut NeverFires);
         assert_eq!(session.asteroids().count(), 0, "culled, none spawned");
-        pass(&mut session, &mut NeverFires);
+        pass(&mut session, &catalog, &mut NeverFires);
         let refilled = *session.asteroids().next().expect("refilled");
         let off = refilled.position - session.player().position;
         assert!(
@@ -602,7 +612,7 @@ mod tests {
         let mut session = flying(&catalog);
         land_now(&mut session).expect("lands");
         for _ in 0..3 {
-            pass(&mut session, &mut NeverFires);
+            pass(&mut session, &catalog, &mut NeverFires);
         }
         assert_eq!(session.asteroids().count(), 0);
     }
@@ -612,7 +622,7 @@ mod tests {
         let catalog = rocky(catalog());
         let mut session = flying(&catalog);
         session.set_double_time_key(true);
-        pass(&mut session, &mut NeverFires);
+        pass(&mut session, &catalog, &mut NeverFires);
         let first = *session.asteroids().next().expect("spawned");
         session.tick_again(
             Controls::default(),
@@ -623,7 +633,7 @@ mod tests {
         let stepped: Vec<_> = session.asteroids().copied().collect();
         assert_eq!(stepped.len(), 1, "`_DoPlayGameWork(0)` spawns none");
         assert_eq!(stepped[0].position, first.position + first.velocity);
-        pass(&mut session, &mut NeverFires);
+        pass(&mut session, &catalog, &mut NeverFires);
         assert_eq!(session.asteroids().count(), 2, "the next advance pass's");
     }
 
@@ -632,15 +642,15 @@ mod tests {
         let catalog = rocky(catalog());
         let mut session = flying(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         grown(&mut session, 3);
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
         );
         assert_eq!(session.asteroids().count(), 0);
-        pass(&mut session, &mut NeverFires);
+        pass(&mut session, &catalog, &mut NeverFires);
         assert_eq!(kinds(&session), [1], "131's type, one a pass");
     }
 
@@ -681,7 +691,7 @@ mod tests {
         for expr in ["M131", "N131"] {
             let catalog = rocky(catalog());
             let mut session = flying(&catalog);
-            pass(&mut session, &mut NeverFires);
+            pass(&mut session, &catalog, &mut NeverFires);
             grown(&mut session, 3);
             session.run_set(&SetExpr::parse(expr).expect("parses"), &mut NeverFires);
             let _ = session.settle_script(&catalog, &mut NeverFires);
@@ -689,7 +699,7 @@ mod tests {
             assert_eq!(session.asteroids().count(), 0, "{expr}");
             session.tick_asteroids(&mut NeverFires);
             assert_eq!(session.asteroids().count(), 0, "{expr}: the same frame");
-            pass(&mut session, &mut NeverFires);
+            pass(&mut session, &catalog, &mut NeverFires);
             assert_eq!(kinds(&session), [1], "{expr}: the next frame");
         }
     }
@@ -701,7 +711,14 @@ mod tests {
         let catalog = rocky(catalog());
         let mut session = flying(&catalog);
         // The first pass populates the system.
-        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         let mut zephyr = crate::traffic::fixture::npc(
             1,
             crate::stats::ShipStats::new(nova_sim_base::fixture::FAST, &[]),
@@ -709,16 +726,27 @@ mod tests {
         zephyr.miner = MINES;
         zephyr.state.position = Vec2::new(600.0, 600.0);
         let id = session.space.traffic.add_npc(zephyr);
-        let think = |session: &mut Session| {
+        // Each pass spawns from the field: kept empty, slot 0 holds none.
+        let think = |session: &mut Session, empty: bool| {
             for _ in 0..4 {
-                session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+                if empty {
+                    session.space.asteroids.clear();
+                }
+                work_with(
+                    session,
+                    &catalog,
+                    Controls::default(),
+                    &NovaAi::default(),
+                    Rules::default(),
+                    &mut NeverFires,
+                );
             }
             session.space.npc(id).expect("here").goal
         };
-        assert_eq!(think(&mut session), Goal::Wait, "state 6");
+        assert_eq!(think(&mut session, true), Goal::Wait, "state 6");
         grown(&mut session, 1);
         assert!(session.space.asteroids.get(0).is_some(), "slot 0");
-        assert_eq!(think(&mut session), Goal::Mine, "state 16");
+        assert_eq!(think(&mut session, false), Goal::Mine, "state 16");
     }
 
     #[test]
@@ -746,8 +774,8 @@ mod tests {
         let mut session = flying(catalog).with_rules(rules);
         session.settle_asteroid_field(&mut NeverFires);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         session.space.asteroids.clear();
         grown(&mut session, 4);
         assert_eq!(kinds(&session), [0; 4]);
@@ -762,7 +790,7 @@ mod tests {
         let mut session = arrived(&catalog, Rulebook::default());
         assert_eq!(session.asteroids().count(), 0);
         for count in 1..=3 {
-            pass(&mut session, &mut NeverFires);
+            pass(&mut session, &catalog, &mut NeverFires);
             assert_eq!(session.asteroids().count(), count);
         }
     }
@@ -829,7 +857,7 @@ mod tests {
     fn a_session_starting_in_flight_places_its_field_by_its_first_pass_too() {
         let catalog = rocky(catalog());
         let mut session = flying(&catalog).with_rules(other(RuleKey::AsteroidEntryField));
-        pass(&mut session, &mut NeverFires);
+        pass(&mut session, &catalog, &mut NeverFires);
         assert_eq!(session.asteroids().count(), 4);
     }
 
@@ -851,11 +879,11 @@ mod tests {
     fn the_respawn_ring_reads_its_rule() {
         let catalog = rocky(catalog());
         let mut engine = flying(&catalog);
-        pass(&mut engine, &mut NeverFires);
+        pass(&mut engine, &catalog, &mut NeverFires);
         let off = engine.asteroids().next().expect("spawned").position;
         assert!((off.x - R).abs() < 1e-3, "{off:?}: r out");
         let mut outside = flying(&catalog).with_rules(other(RuleKey::AsteroidRespawnRing));
-        pass(&mut outside, &mut NeverFires);
+        pass(&mut outside, &catalog, &mut NeverFires);
         let off = outside.asteroids().next().expect("spawned").position;
         // ceil(303 + 20) and ceil(300 + 15): just off screen.
         assert_eq!(off, Vec2::new(323.0, 315.0));
@@ -939,7 +967,7 @@ mod tests {
         let mut events = Vec::new();
         session.hold_fire(true, false);
         for tick in 0..ticks {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(session, &catalog(), Controls::default());
             if tick == 0 {
                 session.hold_fire(false, false);
             }
@@ -1167,8 +1195,14 @@ mod tests {
         let at = put(&mut session, 0, 100, 0.0, -50.0);
         let mut events = Vec::new();
         for _ in 0..15 {
-            session.tick_traffic(&catalog, &Attacking, &mut NeverFires);
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Attacking,
+                Rules::default(),
+                &mut NeverFires,
+            );
             events.extend(session.take_combat_events());
         }
         assert!(
@@ -1221,8 +1255,14 @@ mod tests {
         let mut session = with_an_npc_at(&catalog, 750, 550, 180);
         let at = put(&mut session, 0, 100, 0.0, -25.0);
         for _ in 0..12 {
-            session.tick_traffic(&catalog, &Attacking, &mut NeverFires);
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Attacking,
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         assert!(slot(&session, at).strength < 100, "the NPC's shots met it");
         assert_eq!(session.reserves(), Reserves::full(30.0, 45.0, 300.0));
@@ -1389,7 +1429,7 @@ mod tests {
         let mut session = flying(&catalog);
         let at = drifting_in(&mut session);
         session.hold_fire(true, false);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         session.hold_fire(false, false);
         let rock = slot(&session, at);
         assert_eq!(
@@ -1398,7 +1438,7 @@ mod tests {
             "stepped after the shots"
         );
         assert_eq!(rock.strength, 100, "the shot's move not yet tested");
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         let rock = slot(&session, at);
         assert_eq!(rock.strength, 95, "met where the last pass left it");
         assert_eq!(rock.position, Vec2::new(20.0, 0.0), "then stepped on");
@@ -1409,7 +1449,7 @@ mod tests {
         let catalog = rocky_arming(still_gun(), npc_gun(), vec![rock_type(0, 100, 20)]);
         let mut session = flying(&catalog);
         session.hold_fire(true, false);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         session.hold_fire(false, false);
         assert_eq!(session.shots().len(), 1, "one still shot");
         let at = drifting_in(&mut session);
@@ -1423,7 +1463,7 @@ mod tests {
         let rock = slot(&session, at);
         assert_eq!(rock.strength, 100, "30 off as the pass's shots met it");
         assert_eq!(rock.position, Vec2::new(-5.0, 0.0), "then stepped");
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         assert_eq!(
             slot(&session, at).strength,
             95,
@@ -1443,7 +1483,7 @@ mod tests {
         };
         let mut session = flying(&catalog);
         session.hold_fire(true, false);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog, Controls::default());
         session.hold_fire(false, false);
         assert_eq!(session.shots().len(), 1, "one still shot");
         session.space.asteroids.clear();
@@ -1466,7 +1506,7 @@ mod tests {
         // `_SpawnAsteroid` (@0x44243) fills the first free slot, so
         // `_HandleAsteroids`' refill (@0x361b5) finds slot 0 live.
         let (mut session, other) = mining_a_full_field();
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(&mut session, &catalog(), Controls::default());
         let spawned = slot(&session, 0);
         let off = spawned.position - session.player().position;
         assert!(off.x.abs() >= R - 2.0 && off.y.abs() >= R - 2.0, "{off:?}");
@@ -1496,7 +1536,7 @@ mod tests {
         let mut session = flying(&catalog);
         land_now(&mut session).expect("lands");
         for _ in 0..3 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
         }
         assert_eq!(session.asteroids().count(), 0);
     }
@@ -1506,11 +1546,14 @@ mod tests {
         let catalog = rocky(catalog());
         let mut session = flying(&catalog);
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
-        begin_jump_now(&mut session).expect("jumps");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
         assert!(session.jumping().is_some());
+        // The passes flying out filled the field; the lead-in's spawns
+        // count from none.
+        session.space.asteroids.clear();
         for count in 1..=3 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            crate::testkit::work(&mut session, &catalog, Controls::default());
             assert_eq!(session.asteroids().count(), count);
         }
     }

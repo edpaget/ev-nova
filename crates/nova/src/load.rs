@@ -18,42 +18,22 @@ pub fn data_warnings(data: &GameData) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
     use std::path::Path;
 
     use nova_data::Record;
     use nova_data::records::mission::Mission;
-    use nova_data::store::fs::{DirLister, EntryKind, Listing};
+    use nova_data::store::fixture::{DATA_DIR, FakeTree, one_file};
     use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader};
 
     use super::*;
 
     /// `/data` holds `Broken`, which has no forks, and `Nova Data`, a fork
     /// holding mïsn 128 and 129.
-    struct Files;
-
-    impl DirLister for Files {
-        fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-            Ok(["Broken", "Nova Data"]
-                .map(|name| Listing {
-                    name: name.into(),
-                    kind: EntryKind::File,
-                })
-                .into())
-        }
-    }
-
-    impl ForkReader for Files {
-        fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            if fork == Fork::Resource || path.ends_with("Broken") {
-                return Ok(None);
-            }
-            let file = ForkBuilder::new()
-                .resource(Mission::TYPE, 128, None, &mission("b1 Z2"))
-                .resource(Mission::TYPE, 129, None, &mission("b3"));
-            Ok(Some(file.build().bytes))
-        }
+    fn files() -> FakeTree {
+        let file = ForkBuilder::new()
+            .resource(Mission::TYPE, 128, None, &mission("b1 Z2"))
+            .resource(Mission::TYPE, 129, None, &mission("b3"));
+        one_file(file.build().bytes).no_data_fork(Path::new(DATA_DIR).join("Broken"))
     }
 
     /// A mïsn whose `on_accept` (offset 0x15B) holds `on_accept`.
@@ -65,7 +45,7 @@ mod tests {
 
     #[test]
     fn warns_of_each_skipped_file_then_each_malformed_expression() {
-        let data = GameData::load(&Files, &Files, Path::new("/data"), None).expect("opens");
+        let data = files().load();
         let [failed] = data.failed() else {
             panic!("one failed file: {:?}", data.failed());
         };

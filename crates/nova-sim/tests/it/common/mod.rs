@@ -4,7 +4,12 @@
 //! copyrighted and never committed, so each stock test asks [`nova_data`] for
 //! the `Nova Files` directory and skips, passing, when it is unset. The
 //! data opened ([`opened`]), a stock ship as the traffic builds it
-//! ([`stock_npc`]) and the player beside it ([`player`]) are shared too.
+//! ([`stock_npc`]) and the player beside it ([`player`]) are shared too,
+//! and what a session raised, drained ([`drained`], [`sounds`],
+//! [`messages`], [`drained_sounds`]).
+
+use nova_sim::flight_frame::FlightEvent;
+use nova_sim::{Session, SimMessage, SimSound};
 
 use std::path::PathBuf;
 
@@ -88,4 +93,40 @@ pub fn player(condition: Condition) -> PlayerSide {
         cloak: nova_sim::cloak::Cloak::default(),
         area_cloak: false,
     }
+}
+
+/// What `session` raised since it was last drained, in its order
+/// (`Session::drain_events`).
+pub fn drained(session: &mut Session) -> Vec<FlightEvent> {
+    let mut events = Vec::new();
+    session.drain_events(&mut events);
+    events
+}
+
+/// The sounds among `events`, in order.
+pub fn sounds(events: &[FlightEvent]) -> Vec<SimSound> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            FlightEvent::Sound(sound) => Some(*sound),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The messages among `events`, in order.
+pub fn messages(events: &[FlightEvent]) -> Vec<SimMessage> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            FlightEvent::Message(message) => Some(message.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The sounds `session` raised since it was last drained, what else it
+/// raised let go.
+pub fn drained_sounds(session: &mut Session) -> Vec<SimSound> {
+    sounds(&drained(session))
 }

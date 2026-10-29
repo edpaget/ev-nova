@@ -146,6 +146,7 @@ impl InterfaceData {
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use nova_rsrc::fixture::forks::MemForks;
     use nova_rsrc::fixture::{ForkBuilder, RezBuilder};
     use nova_rsrc::{LoadError, ResType};
 
@@ -157,7 +158,7 @@ mod tests {
     use crate::records::dialog_items::tests::{ditl, item};
     use crate::records::dialog_items::{Ditl, ItemKind};
     use crate::store::GameData;
-    use crate::store::fake::{FakeForks, FakeTree};
+    use crate::store::fixture::FakeTree;
     use crate::store::fs::EntryKind::File;
     use crate::wire::id::{DitlId, PictId};
 
@@ -212,7 +213,7 @@ mod tests {
     }
 
     fn load(bytes: Vec<u8>) -> InterfaceData {
-        let forks = FakeForks::new().file(PATH, bytes);
+        let forks = MemForks::new().file(PATH, bytes);
         InterfaceData::load(&forks, Path::new(PATH)).expect("loads")
     }
 
@@ -292,19 +293,19 @@ mod tests {
 
     #[test]
     fn an_unreadable_or_missing_file_is_an_io_error() {
-        let forks = FakeForks::new().unreadable(PATH);
+        let forks = MemForks::new().unreadable(PATH);
         let err = InterfaceData::load(&forks, Path::new(PATH)).expect_err("fails");
         assert!(matches!(err, LoadError::Io { .. }), "{err:?}");
-        let err = InterfaceData::load(&FakeForks::new(), Path::new(PATH)).expect_err("fails");
+        let err = InterfaceData::load(&MemForks::new(), Path::new(PATH)).expect_err("fails");
         assert!(matches!(err, LoadError::Io { .. }), "{err:?}");
     }
 
     #[test]
     fn garbage_is_a_parse_error_and_nothing_is_no_fork() {
-        let forks = FakeForks::new().file(PATH, b"not a resource fork".to_vec());
+        let forks = MemForks::new().file(PATH, b"not a resource fork".to_vec());
         let err = InterfaceData::load(&forks, Path::new(PATH)).expect_err("fails");
         assert!(matches!(err, LoadError::Parse { .. }), "{err:?}");
-        let forks = FakeForks::new().file(PATH, Vec::new());
+        let forks = MemForks::new().file(PATH, Vec::new());
         let err = InterfaceData::load(&forks, Path::new(PATH)).expect_err("fails");
         assert!(matches!(err, LoadError::NoResourceFork { .. }), "{err:?}");
     }
@@ -312,7 +313,7 @@ mod tests {
     #[test]
     fn interface_pictures_are_separate_from_the_game_data() {
         let tree = FakeTree::new().dir("/d", &[("Nova Graphics", File)]);
-        let forks = FakeForks::new()
+        let forks = MemForks::new()
             .file(PATH, fork(&resources()))
             .file("/d/Nova Graphics", fork(&[(PICT, 128, pict(7, 2))]));
         let data = GameData::load(&tree, &forks, Path::new("/d"), None).expect("opens");
@@ -341,7 +342,7 @@ mod tests {
 
     #[test]
     fn the_mac_file_is_preferred() {
-        let forks = FakeForks::new()
+        let forks = MemForks::new()
             .file(MAC, fork(&resources()))
             .file(WINDOWS, rez(&[(PICT, 128, pict(7, 2))]));
         let ui = load_interface(&forks, Path::new("/game/Nova Files")).expect("loads");
@@ -352,9 +353,9 @@ mod tests {
     #[test]
     fn the_windows_file_is_the_fallback() {
         for forks in [
-            FakeForks::new(),
-            FakeForks::new().unreadable(MAC),
-            FakeForks::new().file(MAC, b"garbage".to_vec()),
+            MemForks::new(),
+            MemForks::new().unreadable(MAC),
+            MemForks::new().file(MAC, b"garbage".to_vec()),
         ] {
             let forks = forks.file(WINDOWS, rez(&resources()));
             let ui = load_interface(&forks, Path::new("/game/Nova Files")).expect("loads");
@@ -364,7 +365,7 @@ mod tests {
 
     #[test]
     fn with_neither_file_the_error_names_both() {
-        let forks = FakeForks::new().unreadable(WINDOWS);
+        let forks = MemForks::new().unreadable(WINDOWS);
         let err = load_interface(&forks, Path::new("/game/Nova Files")).expect_err("fails");
         assert_eq!(err.tried[0].0, PathBuf::from(MAC));
         assert_eq!(err.tried[1].0, PathBuf::from(WINDOWS));
@@ -376,7 +377,10 @@ mod tests {
             "{message}"
         );
         assert!(message.contains(&format!("); {windows} (")), "{message}");
-        assert!(message.contains("disk on fire"), "{message}");
+        assert!(
+            message.contains(nova_rsrc::fixture::forks::UNREADABLE),
+            "{message}"
+        );
     }
 
     #[test]

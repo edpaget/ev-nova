@@ -20,13 +20,16 @@ fn entering_play_takes_the_refresh_a_later_new_pilot_reads_afresh() {
     create_held(&mut screen, "Ada");
     let held = screen.game.as_ref().expect("Ada's game held");
     assert_eq!(
-        held.last_refresh(),
+        held.sim().carry_over().and_then(|carry| carry.last_refresh),
         Some(nova_sim::LastRefresh::default()),
         "before her OnStart hid Beta"
     );
     enter_ship(&mut screen);
     assert_eq!(
-        flight(&screen).last_refresh(),
+        flight(&screen)
+            .sim()
+            .carry_over()
+            .and_then(|carry| carry.last_refresh),
         Some(nova_sim::LastRefresh::hiding([nova_sim::SystemId(129)])),
         "_EnterGameFromMainScreen @0x19f81"
     );
@@ -753,6 +756,7 @@ fn a_new_pilot_made_earlier_in_the_run_gives_a_reopened_pilot_its_intro_by_eithe
             screen
                 .game_in_progress()
                 .expect("held")
+                .sim()
                 .pilot()
                 .expect("a pilot")
                 .name(),

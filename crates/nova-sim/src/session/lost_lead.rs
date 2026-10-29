@@ -62,17 +62,23 @@ mod tests {
     use crate::chance::{Chance, NeverFires};
     use crate::combat::hull::Condition;
     use crate::combat::{Rules, ShipRef};
+
     use crate::pilot::Pilot;
     use crate::rulebook::{RuleKey, Rulebook};
     use crate::session::Session;
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, npc};
+
     use crate::traffic::npc::{AiType, Npc, NpcId};
 
     /// A session flying in an empty system.
     fn session() -> Session {
         let catalog = catalog();
-        Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies")
+        let mut session =
+            Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies");
+        // Set up, so a pass keeps the NPCs a test adds.
+        session.populate(&catalog, &mut crate::chance::NeverFires);
+        session
     }
 
     /// A pirate warship, its class's `InherentAI` a warship's (3).
@@ -231,15 +237,6 @@ mod tests {
         }
     }
 
-    /// A tick of the session, reading the catalog given.
-    type Tick = fn(&mut Session, &FakePilotCatalog);
-
-    /// A traffic tick, its think half and its work after the motion
-    /// (`Session::after_traffic_motion`) among it.
-    fn traffic_tick(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.tick_traffic(catalog, &Keeping, &mut NeverFires);
-    }
-
     /// An advance pass, its AI and its fight's tail among it.
     fn advance_pass(session: &mut Session, catalog: &FakePilotCatalog) {
         session.game_work(
@@ -251,20 +248,15 @@ mod tests {
         );
     }
 
-    /// A fight's tick alone, its tail (`Session::fight_tail`) among it.
-    fn fight_tick(session: &mut Session, _catalog: &FakePilotCatalog) {
-        session.tick_combat(Rules::default(), &mut NeverFires);
-    }
-
     /// A pirate lead disabled, a heavy escort and a light one, as the
-    /// escorts are after a `tick` of a session by `rules`, its first
-    /// traffic tick done before they arrive: (lead, heavy, light).
-    fn fleet_after(rules: Rulebook, tick: Tick) -> (NpcId, Npc, Npc) {
+    /// escorts are after an advance pass of a session by `rules`, its
+    /// system set up before they arrive: (lead, heavy, light).
+    fn fleet_after(rules: Rulebook) -> (NpcId, Npc, Npc) {
         let catalog = catalog();
         let mut session = Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts"))
             .expect("flies")
             .with_rules(rules);
-        traffic_tick(&mut session, &catalog);
+        session.populate(&catalog, &mut NeverFires);
         let lead = session.space.traffic.add_npc(pirate());
         let mut heavy = escort_of(lead);
         heavy.hull.signed_mass = 300;
@@ -277,7 +269,7 @@ mod tests {
         let disabled = session.space.npc_mut(lead).expect("there");
         disabled.condition = Condition::Disabled;
         disabled.reserves.armor.now = 1.0;
-        tick(&mut session, &catalog);
+        advance_pass(&mut session, &catalog);
         (
             lead,
             ship(&session, heavy).clone(),
@@ -287,54 +279,28 @@ mod tests {
 
     #[test]
     fn by_the_default_rules_a_think_makes_the_heaviest_escort_lead_and_the_other_follow_it() {
-        for (name, tick) in [
-            ("traffic", traffic_tick as Tick),
-            ("advance", advance_pass as Tick),
-        ] {
-            let (_, heavy, light) = fleet_after(Rulebook::default(), tick);
-            assert_eq!(
-                (heavy.leader, heavy.ai_type),
-                (None, AiType::Warship),
-                "{name}"
-            );
-            assert_eq!(light.leader, Some(heavy.id), "{name}");
-            // An escort rests at +0x50 0, so it takes no regroup pause
-            // (@0x8949d-0x894a4) and forms on its new lead at once.
-            assert_eq!(
-                light.goal,
-                Goal::Follow {
-                    lead: heavy.id,
-                    guard: None
-                },
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_fight_alone_changes_nothing_until_the_next_think() {
-        let (lead, heavy, light) = fleet_after(Rulebook::default(), fight_tick);
-        for escort in [heavy, light] {
-            assert_eq!(escort.leader, Some(lead));
-            assert!(matches!(escort.goal, Goal::Follow { .. }));
-            assert_eq!(escort.ai_type, AiType::WimpyTrader);
-        }
+        let (_, heavy, light) = fleet_after(Rulebook::default());
+        assert_eq!((heavy.leader, heavy.ai_type), (None, AiType::Warship));
+        assert_eq!(light.leader, Some(heavy.id));
+        // An escort rests at +0x50 0, so it takes no regroup pause
+        // (@0x8949d-0x894a4) and forms on its new lead at once.
+        assert_eq!(
+            light.goal,
+            Goal::Follow {
+                lead: heavy.id,
+                guard: None
+            }
+        );
     }
 
     #[test]
     fn by_the_other_reading_no_tick_takes_an_escort_whose_lead_is_disabled_out() {
         let rules = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
-        for (name, tick) in [
-            ("traffic", traffic_tick as Tick),
-            ("advance", advance_pass as Tick),
-            ("fight", fight_tick as Tick),
-        ] {
-            let (lead, heavy, light) = fleet_after(rules, tick);
-            for escort in [heavy, light] {
-                assert_eq!(escort.leader, Some(lead), "{name}: {escort:?}");
-                assert_eq!(escort.ai_type, AiType::WimpyTrader, "{name}");
-                assert!(matches!(escort.goal, Goal::Follow { .. }), "{name}");
-            }
+        let (lead, heavy, light) = fleet_after(rules);
+        for escort in [heavy, light] {
+            assert_eq!(escort.leader, Some(lead), "{escort:?}");
+            assert_eq!(escort.ai_type, AiType::WimpyTrader);
+            assert!(matches!(escort.goal, Goal::Follow { .. }));
         }
     }
 }

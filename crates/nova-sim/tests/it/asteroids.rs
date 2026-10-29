@@ -4,16 +4,15 @@
 //! sets, the player's gun breaks them into boxes and fragments, and the
 //! player's scoop takes a box into the hold.
 
-use nova_sim::combat::Rules;
 use nova_sim::combat::armament::{MOD_WEAPON, Trigger};
 use nova_sim::market::Good;
 use nova_sim::scoop::MOD_ASTEROID_SCOOP;
 use nova_sim::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, CharacterStart, CombatCatalog,
     CombatEvent, CommodityStrings, Controls, DateAffixes, DisasterRecord, GovtRecord, HullRecord,
-    JunkRecord, LandingSite, NeverFires, OutfitId, OutfitRecord, PilotCatalog, Script, Session,
-    ShipFields, ShipId, StarSystem, StartDate, StartError, StellarId, SystemId, Test, Turn,
-    WeaponId, WeaponRecord,
+    JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, Script, Session, ShipFields,
+    ShipId, StarSystem, StartDate, StartError, StellarId, SystemId, Test, Turn, WeaponId,
+    WeaponRecord,
 };
 
 /// One `chär` flying an average ship from system 130, which has no
@@ -125,6 +124,25 @@ impl AsteroidCatalog for Pilot {
 
     fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
         [None, Some((22, 22)), None, None, None]
+    }
+}
+
+/// No traffic: the system is empty.
+impl nova_sim::TrafficCatalog for Pilot {
+    fn system_traffic(&self, _id: SystemId) -> Option<nova_sim::SystemTraffic> {
+        None
+    }
+
+    fn dude(&self, _id: nova_sim::DudeId) -> Option<nova_sim::DudeRecord> {
+        None
+    }
+
+    fn fleets(&self) -> Vec<nova_sim::FleetRecord> {
+        Vec::new()
+    }
+
+    fn persons(&self) -> Vec<nova_sim::PersonRecord> {
+        Vec::new()
     }
 }
 
@@ -292,25 +310,22 @@ fn outfit(id: i16, name: &str, modifier: (i16, i16)) -> OutfitRecord {
 
 #[test]
 fn a_system_holding_asteroids_fills_one_a_pass_from_the_edge() {
-    let mut session = Session::start(&Pilot {
+    let catalog = Pilot {
         armed: false,
         scoop: false,
-    })
-    .expect("starts");
+    };
+    let mut session = Session::start(&catalog).expect("starts");
     // A window 640 wide stores the system's 4 unscaled.
     session.set_window_width(640);
     assert_eq!(session.landed(), None);
     assert_eq!(session.asteroids().count(), 0);
-    let mut chance = NeverFires;
-    session.tick(Controls::default());
-    session.tick_asteroids(&mut chance);
+    crate::passes::work(&mut session, &catalog, Controls::default());
     let made: Vec<_> = session.asteroids().copied().collect();
     assert_eq!(made.len(), 1);
     assert_eq!(made[0].kind, 0);
     assert_eq!(made[0].strength, 40);
     for _ in 0..10 {
-        session.tick(Controls::default());
-        session.tick_asteroids(&mut chance);
+        crate::passes::work(&mut session, &catalog, Controls::default());
     }
     assert!(session.asteroids().count() <= 4);
     assert!(session.asteroids().all(|asteroid| asteroid.kind == 0));
@@ -329,9 +344,10 @@ fn trigger(primary: bool) -> Trigger {
     }
 }
 
-/// Turns `session`'s ship to face the field's first asteroid and fires
-/// until it breaks, for 40 combat ticks at most: the combat events seen.
-fn break_an_asteroid(session: &mut Session) -> Vec<CombatEvent> {
+/// Turns `catalog`'s `session`'s ship to face the field's first asteroid
+/// and fires until it breaks, for 40 passes at most: the combat events
+/// seen.
+fn break_an_asteroid(session: &mut Session, catalog: &Pilot) -> Vec<CombatEvent> {
     // An edge spawn drawing nothing lies 0.7 × 431 out on both axes,
     // down and to the right, at rest: turn to face it, within the 6
     // degrees its 48-pixel radius spans 426 pixels off.
@@ -342,9 +358,9 @@ fn break_an_asteroid(session: &mut Session) -> Vec<CombatEvent> {
     for _ in 0..200 {
         let heading = session.player().heading;
         if heading < 132.0 {
-            session.tick(turning(Turn::Right));
+            crate::passes::work(session, catalog, turning(Turn::Right));
         } else if heading > 138.0 {
-            session.tick(turning(Turn::Left));
+            crate::passes::work(session, catalog, turning(Turn::Left));
         } else {
             break;
         }
@@ -354,7 +370,7 @@ fn break_an_asteroid(session: &mut Session) -> Vec<CombatEvent> {
     session.hold_trigger(trigger(true));
     let mut events = Vec::new();
     for _ in 0..40 {
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        crate::passes::work(session, catalog, Controls::default());
         events.extend(session.take_combat_events());
         if !session.cargo_boxes().is_empty() {
             break;
@@ -365,12 +381,12 @@ fn break_an_asteroid(session: &mut Session) -> Vec<CombatEvent> {
 
 #[test]
 fn the_players_gun_breaks_an_asteroid_into_scoopable_boxes_a_fragment_and_its_explosion() {
-    let mut session = Session::start(&Pilot {
+    let catalog = Pilot {
         armed: true,
         scoop: false,
-    })
-    .expect("starts");
-    let events = break_an_asteroid(&mut session);
+    };
+    let mut session = Session::start(&catalog).expect("starts");
+    let events = break_an_asteroid(&mut session, &catalog);
     let boxes = session.cargo_boxes();
     assert!(!boxes.is_empty(), "an asteroid broke: {events:?}");
     assert!(
@@ -423,12 +439,12 @@ fn scoopable(session: &Session) -> usize {
 
 #[test]
 fn the_players_gun_breaks_an_asteroid_and_the_scoop_takes_its_box_into_the_hold() {
-    let mut session = Session::start(&Pilot {
+    let catalog = Pilot {
         armed: true,
         scoop: true,
-    })
-    .expect("starts");
-    let events = break_an_asteroid(&mut session);
+    };
+    let mut session = Session::start(&catalog).expect("starts");
+    let events = break_an_asteroid(&mut session, &catalog);
     assert!(scoopable(&session) > 0, "an asteroid broke: {events:?}");
     assert_eq!(session.pilot().held(Good::Commodity(2)), 0);
     session.hold_trigger(trigger(false));
@@ -446,11 +462,10 @@ fn the_players_gun_breaks_an_asteroid_and_the_scoop_takes_its_box_into_the_hold(
         };
         let controls = steer_for(session.player(), target);
         before = scoopable(&session);
-        session.tick(controls);
+        crate::passes::work(&mut session, &catalog, controls);
         if session.pilot().held(Good::Commodity(2)) > 0 {
             break;
         }
-        session.tick_combat(Rules::default(), &mut NeverFires);
     }
     // The ship may reach two boxes dropped together in the same tick.
     let scooped = before - scoopable(&session);

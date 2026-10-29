@@ -43,9 +43,11 @@ impl Default for Volume {
 /// matches or beats on both (see [`crate::voices`]).
 ///
 /// The original's callers use 1 (most beeps) to 32000 (the warp-up and
-/// the spaceport ambient's param blocks); [`crate::priority`] holds each
-/// event's. A priority of 0 is 1, as `ST_PlaySoundParam` makes it
-/// (@0xe3df1-0xe3df8).
+/// the spaceport ambient's param blocks); each sound carries its own
+/// ([`SimSound::cue`](nova_view::sound::SimSound::cue),
+/// [`UiSound::cue`](nova_view::sound::UiSound::cue), a fight's
+/// [`CombatSound`](nova_view::sound::CombatSound)). A priority of 0 is 1,
+/// as `ST_PlaySoundParam` makes it (@0xe3df1-0xe3df8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Priority(u16);
 

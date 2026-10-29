@@ -35,6 +35,20 @@ When building a component:
 3. Wire real adapters together at the edge of the program (`main`, or a
    top-level constructor).
 
+When a UI drives core logic, it reaches it through a port the UI defines,
+small enough to fake by hand:
+
+- Grow the port with data, not methods: a new readout is a field of the frame
+  the port fills, a new action a command variant, a new one-shot output an
+  event variant, and a question a screen asks a variant of the screen's ask.
+  Don't add a method per question.
+- Keep each adapter forward to one call into the core. The decisions live in
+  the core and are pinned by the core's tests.
+- Test the UI's components on the hand-written fake. Run the few integration
+  tests over the real core only where the port's module docs say.
+- The port's module docs say where each kind of addition goes and where it is
+  pinned.
+
 ## Porting the original's behaviour
 
 Work that reads `EV Nova.app` to match the original follows these rules, so a
@@ -149,8 +163,31 @@ that depend on it.
 - Test each component on its own, with mocks standing in for its collaborators.
   When a component is hard to test this way, add a port at that boundary.
 - Test each real adapter on its own against the behaviour that the port's mocks
-  assume.
+  assume. The crate that owns a port publishes its fake and a contract check,
+  and every real adapter runs that check; don't write another crate's fake.
 - Cover wiring with a small number of integration tests under `tests/`.
+
+## Crate coupling
+
+The pre-commit hook tests only the crates with staged changes (see
+"Verification runs through cargo"), and it stays that way: don't widen it to
+dependents. Instead, keep crates loose enough that a change to one breaks no
+other crate's tests.
+
+- A test asserts only its own crate's rules. Don't pin a rule, constant,
+  default or timing an upstream crate owns; that crate's tests pin it.
+- Reach upstream state through the builders and fakes the upstream crate
+  publishes for tests, not by driving its real behaviour until it gets there.
+- Don't match exhaustively on an upstream enum that grows. Have the owning
+  crate supply what each variant needs, as data on the enum. Keep an
+  exhaustive match only where the downstream crate must act on every
+  variant, and say so in its doc comment.
+- A test that runs a real upstream crate covers wiring only. It lives in the
+  crate that wires the program together, or where a port's module docs place
+  it (see "Architecture: ports and adapters"). The full gate runs it, not the
+  hook of the crates it reaches.
+- Each edge between workspace crates is a `bans` rule in `deny.toml` (see
+  "Test behaviour, never text"). A new edge adds its rule.
 
 ## Test behaviour, never text
 

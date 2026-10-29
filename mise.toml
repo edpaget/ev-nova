@@ -1,9 +1,13 @@
 [tools]
 rust = { version = "1.98.1", components = "rustfmt,clippy" }
 "cargo:cargo-workspaces" = "0.4.2"
-"cargo:cargo-nextest" = "0.9.146"
+# nextest and cargo-deny are prebuilt release binaries that aqua's registry
+# names with their checksums, so installing them never compiles (CI installs
+# these two). The cargo backend went through cargo-binstall, whose probing
+# of GitHub releases can time out and fall back to building from source.
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.146"
 "cargo:cargo-mutants" = "27.1.0"
-"cargo:cargo-deny" = "0.19.9"
+"aqua:EmbarkStudios/cargo-deny" = "0.19.9"
 hk = "2.4.0"
 pkl = "0.32.1"
 # infra/github's config (the infra-* tasks); CI installs it only in the infra job.
@@ -26,8 +30,8 @@ description = "Clippy over every crate and target, warnings are errors"
 run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
 
 [tasks.deny]
-description = "cargo-deny's bans over the default build's dependency graph (deny.toml)"
-run = "cargo deny --locked check bans"
+description = "cargo-deny's bans over the default build's dependency graph (deny.toml); stale `wrappers` are errors"
+run = "cargo deny --locked check -D unused-wrapper bans"
 
 [tasks.doc]
 description = "Rustdoc over every crate, private items included, with broken intra-doc links denied"
@@ -116,6 +120,17 @@ run = "cargo mutants --workspace"
 [tasks.ci]
 description = "Everything CI would run; `hk check` runs this, and it gates review and landing"
 depends = ["fmt", "lint", "lint-lib", "deny", "doc", "test", "lint-dev-tools", "test-dev-tools"]
+
+# CI's macOS and Windows legs run this, and only the Linux leg runs all of
+# `ci`. These steps build each target's own `cfg` code (the resource-fork
+# adapter, AppKit, MetalFX, Win32). fmt and deny read the same files on
+# every host, and lint-lib and the dev-tools legs repeat a whole build for
+# code that has no platform-specific branch of its own. On a 3-core runner
+# those extra builds made macOS the slowest leg. Locally, `ci` still runs
+# everything.
+[tasks.ci-platform]
+description = "The gate steps whose result depends on the target (lint, doc, test); CI's macOS and Windows legs run it"
+depends = ["lint", "doc", "test"]
 
 # OpenTofu over infra/github, the repository's GitHub settings (README.md
 # there). infra-plan and infra-apply act on the live repository with the

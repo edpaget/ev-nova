@@ -91,8 +91,6 @@ impl ImageSource for GameData {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::path::Path;
 
     use nova_data::Record;
     use nova_data::graphics::GraphicsError;
@@ -100,40 +98,14 @@ mod tests {
         Cicn, Ctab, DirectBits, PictBuilder, Ppat, RledBuilder, rgb888_pict,
     };
     use nova_data::records::spin::Spin;
-    use nova_data::store::fs::{DirLister, EntryKind, Listing};
-    use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader, ResType};
+    use nova_data::store::fixture::store_of;
+
+    use nova_rsrc::ResType;
 
     use super::*;
 
-    /// One data file, `/data/Nova Data`, holding a fork of `resources`.
-    struct OneFile(Vec<u8>);
-
-    impl DirLister for OneFile {
-        fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-            Ok(vec![Listing {
-                name: "Nova Data".into(),
-                kind: EntryKind::File,
-            }])
-        }
-    }
-
-    impl ForkReader for OneFile {
-        fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            Ok((fork == Fork::Data).then(|| self.0.clone()))
-        }
-    }
-
     fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
-        let fork = resources
-            .iter()
-            .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
-                fork.resource(*ty, *id, None, data)
-            })
-            .build()
-            .bytes;
-        let file = OneFile(fork);
-        GameData::load(&file, &file, Path::new("/data"), None).unwrap()
+        store_of(resources)
     }
 
     /// A 3x2 picture: red, green, blue over white, black, grey.
@@ -152,9 +124,11 @@ mod tests {
             .build()
     }
 
-    /// Two 1x1 frames: red, then blue.
+    /// Two 1x1 frames: red, then blue. The depth is set because the pixels
+    /// are 16-bit words, rather than left to the builder's default.
     fn sheet() -> Vec<u8> {
         RledBuilder::new(1, 1)
+            .depth(16)
             .frame(|f| f.line().pixels(&[0x7C00]))
             .frame(|f| f.line().pixels(&[0x001F]))
             .build()
@@ -182,6 +156,7 @@ mod tests {
     #[test]
     fn a_sprite_sheets_solid_runs_are_its_run_frames_or_missing() {
         let runs = RledBuilder::new(2, 1)
+            .depth(16)
             .frame(|f| f.line().pixels(&[0x7C00]).run(1, 0x7FFF, 0x7FFF))
             .frame(|f| f.line().pixels(&[0x001F]))
             .build();

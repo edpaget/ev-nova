@@ -7,7 +7,6 @@
 use nova_render::fonts::FontFaces;
 use nova_render::recording::RecordingGpu;
 use nova_render::{LogicalSize, Renderer, Viewport};
-use nova_view::draw::lights_tint;
 use nova_view::geometry::Bounds;
 use nova_view::{Color, DrawCommand, DrawLayer, DrawList, ImageKey, Point};
 
@@ -28,10 +27,12 @@ fn at(x: f32, y: f32) -> Point {
 /// overlay's OR sprite to read, a line and a dot, a text run and a clipped
 /// picture.
 fn world(list: &mut DrawList) {
+    // White at 20 32nds of full alpha: lights at level 20.
+    const LEVEL_20: Color = Color::rgba(255, 255, 255, 159);
     list.picture(ImageKey::picture(1), at(2.0, 2.0))
         .sprite(ImageKey::sprite(2, 0), at(10.0, 6.0), Color::WHITE)
         .additive_sprite(ImageKey::sprite(5, 0), at(16.0, 6.0), Color::WHITE)
-        .or_sprite(ImageKey::sprite(7, 0), at(10.0, 6.0), lights_tint(20))
+        .or_sprite(ImageKey::sprite(7, 0), at(10.0, 6.0), LEVEL_20)
         .sprite(ImageKey::sprite(8, 0), at(22.0, 6.0), Color::WHITE)
         .line(
             at(2.0, 14.0),

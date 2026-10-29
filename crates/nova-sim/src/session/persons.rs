@@ -9,7 +9,7 @@
 //! system's person slot now alone (see the `spawn_availability` module).
 //! A person NPC is named by
 //! its record, with its subtitle ([`Session::npc_name`],
-//! [`Session::npc_subtitle`]).
+//! `Space::npc_subtitle`).
 //!
 //! **Hailed.** A person's comm quote (`STR#` 7100 #`CommQuote`, when it
 //! is above 0) is said as the rule set reads
@@ -184,8 +184,12 @@ impl Session {
     /// marked mission ship, the mission's drawn subtitle unless that is
     /// empty, its person's never (@0x4b80f-0x4b86f); otherwise its
     /// person's, unless it has none or it is empty (@0x4b880).
+    ///
+    /// For the tests: the frame fills its HUD from the sub-state's own
+    /// (`Session::fill_hud`).
+    #[cfg(test)]
     #[must_use]
-    pub fn npc_subtitle(&self, npc: &Npc) -> Option<&str> {
+    pub(crate) fn npc_subtitle(&self, npc: &Npc) -> Option<&str> {
         self.space.npc_subtitle(&self.pilot, npc)
     }
 
@@ -204,7 +208,11 @@ impl Session {
     /// tick: ours moves it once a frame in place of `TickCount`, and
     /// double time's second pass reads it unmoved
     /// ([`Session::tick_quotes_again`]).
-    pub fn tick_quotes(&mut self, catalog: &(impl CommCatalog + ?Sized), chance: &mut dyn Chance) {
+    pub(crate) fn tick_quotes(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        chance: &mut dyn Chance,
+    ) {
         if self.mode.landed().is_some() {
             return;
         }
@@ -225,7 +233,7 @@ impl Session {
     /// move on a tick or two between the passes, which only shifts the
     /// personal gap ([`QUOTE_GAP_TICKS`]) by less than a frame, so no
     /// player can see it. While the ship is landed nothing happens.
-    pub fn tick_quotes_again(
+    pub(crate) fn tick_quotes_again(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
         chance: &mut dyn Chance,
@@ -401,7 +409,7 @@ impl Session {
 
     /// The hail quotes said since they were last taken, in order; taking
     /// them empties the list.
-    pub fn take_quotes(&mut self) -> Vec<PersonQuote> {
+    pub(crate) fn take_quotes(&mut self) -> Vec<PersonQuote> {
         self.out.take_quotes()
     }
 
@@ -457,7 +465,7 @@ impl Space {
     /// that is not empty (`_DrawStatusTarg` @0x4b6c8-0x4b6e7), else its
     /// person's, or its ship type's, if the session has either.
     #[must_use]
-    fn npc_name<'a>(
+    pub(super) fn npc_name<'a>(
         &'a self,
         pilot: &'a Pilot,
         statics: &'a Statics,
@@ -479,7 +487,7 @@ impl Space {
     /// empty, its person's never (@0x4b80f-0x4b86f); otherwise its
     /// person's, unless it has none or it is empty (@0x4b880).
     #[must_use]
-    fn npc_subtitle<'a>(&'a self, pilot: &'a Pilot, npc: &Npc) -> Option<&'a str> {
+    pub(super) fn npc_subtitle<'a>(&'a self, pilot: &'a Pilot, npc: &Npc) -> Option<&'a str> {
         if npc.mission.is_some() {
             return super::mission_ships::mission_ship_text(pilot, npc.mission, |ships| {
                 &ships.subtitle
@@ -589,6 +597,8 @@ fn go(pilot: &mut Pilot, id: PersonId) {
 
 #[cfg(test)]
 mod tests {
+    use crate::flight::Controls;
+    use crate::testkit::{work, work_with};
     use std::rc::Rc;
 
     use super::*;
@@ -617,8 +627,14 @@ mod tests {
         let catalog = crate::testkit::catalog();
         let mut session = Session::start(&catalog).expect("starts");
         let ai = crate::ai::NovaAi::default();
-        session.tick(Controls::default());
-        session.tick_traffic(&catalog, &ai, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &ai,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let mut attacker = crate::traffic::fixture::npc(0, ShipStats::default());
         attacker.ai_type = AiType::Warship;
         attacker.state.position = crate::geometry::Vec2::new(300.0, 0.0);
@@ -631,8 +647,14 @@ mod tests {
         let trader = session.space.traffic.add_npc_at(trader, 1);
         session.space.npc_mut(attacker).expect("there").condition = Condition::Destroyed;
         session.take_out_the_destroyed(&mut NeverFires);
-        session.tick(Controls::default());
-        session.tick_traffic(&catalog, &ai, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &ai,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let after = session.space.npc(trader).expect("stays");
         assert_eq!((after.goal, after.target), (Goal::Idle, None));
         assert!((after.provoked - 10.0).abs() < f32::EPSILON, "kept");
@@ -887,6 +909,11 @@ mod tests {
         session.populate(catalog, &mut Draws::of(&ACE_ABOVE));
         assert_eq!(persons(&session), [Some(600)]);
         assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
+        // Held there at rest, so the passes' flight leaves it in the
+        // player's fire.
+        let ace = &mut session.space.traffic.npcs_mut()[0];
+        ace.goal = crate::ai::Goal::Hold;
+        ace.state.velocity = Vec2::ZERO;
         session.chart.target = Some(session.npcs()[0].id);
         session.hold_trigger(Trigger {
             primary: true,
@@ -899,7 +926,7 @@ mod tests {
     /// Fires on Ace until it is out of the system, at most 300 ticks.
     fn shoot_down(session: &mut Session) {
         for _ in 0..300 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(session, &crate::testkit::catalog(), Controls::default());
             if session.npcs().is_empty() {
                 return;
             }
@@ -1059,7 +1086,7 @@ mod tests {
         let catalog = duel(GRUDGE | ESCAPE_POD, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
         for _ in 0..8 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             session.answer_strikes(&crate::ai::NovaAi::default());
         }
         assert!(session.npcs()[0].reserves.shield.now < 30.0, "hit");
@@ -1069,7 +1096,7 @@ mod tests {
         let catalog = duel(ESCAPE_POD, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
         for _ in 0..8 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
             session.answer_strikes(&crate::ai::NovaAi::default());
         }
         assert!(!session.npcs()[0].person.expect("Ace").grudge, "no 0x0001");
@@ -1081,7 +1108,14 @@ mod tests {
     fn hit_ace(session: &mut Session) {
         for _ in 0..60 {
             let shield = session.npcs()[0].reserves.shield.now;
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            crate::testkit::work_with(
+                session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &crate::testkit::Answering::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
             if session.npcs()[0].reserves.shield.now < shield {
                 return;
             }
@@ -1096,7 +1130,14 @@ mod tests {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
         hit_ace(&mut session);
-        session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert!(session.pilot().grudge(PersonId(600)));
         assert!(session.npcs()[0].person.expect("Ace").grudge);
     }
@@ -1108,7 +1149,20 @@ mod tests {
         // their grudges.
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
-        hit_ace(&mut session);
+        // A pass answers its own hits; one its close leaves, a beam's or a
+        // shockwave's, waits for the caller (`Session::answer_strikes`).
+        session.space.strikes.push(crate::combat::Strike {
+            ship: ShipRef::Npc(session.npcs()[0].id),
+            by: Some(ShipRef::Player),
+            damage: 1.0,
+            downed: None,
+            direct: true,
+            intended: true,
+            lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
+        });
         session.mode = crate::session::Mode::Jumping(crate::session::Jump::Hyperspace {
             to: SystemId(131),
             warp: 0,
@@ -1289,7 +1343,14 @@ mod tests {
         ace.pursuit.frame = None;
         for _ in 0..60 {
             let shield = session.npcs()[0].reserves.shield.now;
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            crate::testkit::work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &crate::testkit::Answering::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
             session.answer_strikes(&crate::ai::NovaAi::default());
             if session.npcs()[0].reserves.shield.now < shield {
                 return (session, quarry);
@@ -1438,32 +1499,84 @@ mod tests {
         );
     }
 
+    /// Every NPC keeps its goal, target and trigger ([`Passive`]), and
+    /// counts the hits on NPC 0 that do damage as it answers them, and
+    /// whether any downed it.
+    ///
+    /// [`Passive`]: crate::testkit::Passive
+    #[derive(Debug, Default)]
+    struct CountingHits {
+        hits: std::cell::Cell<usize>,
+        downed: std::cell::Cell<bool>,
+    }
+
+    impl crate::ai::Behaviour for CountingHits {
+        fn decide(
+            &self,
+            npc: &crate::traffic::npc::Npc,
+            around: &crate::ai::Surroundings,
+            chance: &mut dyn crate::chance::Chance,
+        ) -> crate::ai::Goal {
+            crate::ai::Behaviour::decide(&crate::testkit::Passive, npc, around, chance)
+        }
+
+        fn trigger(
+            &self,
+            npc: &crate::traffic::npc::Npc,
+            around: &crate::ai::Surroundings,
+        ) -> Trigger {
+            crate::ai::Behaviour::trigger(&crate::testkit::Passive, npc, around)
+        }
+
+        fn target(
+            &self,
+            npc: &crate::traffic::npc::Npc,
+            around: &crate::ai::Surroundings,
+        ) -> Option<ShipRef> {
+            crate::ai::Behaviour::target(&crate::testkit::Passive, npc, around)
+        }
+
+        fn react(
+            &self,
+            npc: &crate::traffic::npc::Npc,
+            strike: &crate::combat::Strike,
+            _around: &crate::ai::Surroundings,
+        ) -> crate::ai::Reaction {
+            if npc.id == NpcId(0) && strike.ship == ShipRef::Npc(NpcId(0)) {
+                if strike.damage > 0.0 {
+                    self.hits.set(self.hits.get() + 1);
+                }
+                if strike.downed.is_some() {
+                    self.downed.set(true);
+                }
+            }
+            crate::ai::Reaction::default()
+        }
+    }
+
     #[test]
     fn an_invincible_person_ends_each_fight_tick_whole_and_is_never_disabled() {
         let catalog = duel(0, -1);
         let mut session = facing_ace(&catalog, ada(&catalog));
         let full = session.npcs()[0].reserves;
+        // The passes answer their hits: the traffic's answers count them.
+        let counting = CountingHits::default();
         for _ in 0..300 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
+            crate::testkit::work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &counting,
+                Rules::default(),
+                &mut NeverFires,
+            );
             let ace = &session.npcs()[0];
             assert_eq!(ace.reserves, full);
             assert_eq!(ace.condition, Condition::Intact);
         }
-        let hits = session
-            .space
-            .strikes
-            .iter()
-            .filter(|strike| strike.ship == ShipRef::Npc(NpcId(0)) && strike.damage > 0.0)
-            .count();
+        let hits = counting.hits.get();
         assert!(hits > 100, "the blaster hit it: {hits}");
-        assert!(
-            session
-                .space
-                .strikes
-                .iter()
-                .all(|strike| strike.downed.is_none()),
-            "never downed"
-        );
+        assert!(!counting.downed.get(), "never downed");
         assert!(!session.pilot().gone(PersonId(600)));
     }
 
@@ -2446,7 +2559,14 @@ mod tests {
         let flags = QUOTE_ON_ATTACK | QUOTE_ONCE | NOT_TO_WARSHIP | QUOTE_IF_GRUDGE;
         for ai_type in [3, 4] {
             let (catalog, mut session) = hunted_by_ace(flags, ai_type);
-            session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
             assert_eq!(
                 session.npcs()[0].goal,
                 crate::ai::Goal::Attack(ShipRef::Player),
@@ -2471,7 +2591,14 @@ mod tests {
             formation: None,
             order: None,
         });
-        session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert!(session.npcs()[0].mission.is_some(), "still marked");
         assert_eq!(
             session.npcs()[0].goal,

@@ -764,6 +764,19 @@ mod tests {
     }
 
     #[test]
+    fn a_ships_on_purchase_draws_on_the_chance_buy_ship_is_given() {
+        let catalog = hooked_ships("", "R(b3 b4)");
+        let mut session = outfitted(&catalog);
+        let mut chance = Scripted::rolling(&[1]);
+        session
+            .buy_ship(NEW, "Kestrel", &mut chance)
+            .expect("bought");
+        assert_eq!(chance.sides_asked, [2]);
+        assert!(session.control_bit(bit(3)));
+        assert!(!session.control_bit(bit(4)));
+    }
+
+    #[test]
     fn a_refused_ship_purchase_runs_no_hook() {
         let catalog = hooked_ships("S210", "S211");
         let (mut session, probe) = probed(outfitted(&catalog));

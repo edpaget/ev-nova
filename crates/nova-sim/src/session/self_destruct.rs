@@ -62,7 +62,7 @@ impl Session {
     /// lets it go: what the next pass's countdown reads. The session takes
     /// it only while the player's fate takes
     /// [`PlayerCommand::SelfDestruct`](crate::PlayerCommand::SelfDestruct).
-    pub fn hold_self_destruct(&mut self, held: bool) {
+    pub(crate) fn hold_self_destruct(&mut self, held: bool) {
         self.ship.hold_self_destruct(held);
     }
 
@@ -140,6 +140,7 @@ mod tests {
     use crate::rulebook::Rulebook;
     use crate::self_destruct::SelfDestruct;
     use crate::session::tests::{armed, facing_an_npc};
+    use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, land_now};
     use crate::traffic::npc::NpcId;
     use crate::traffic::plunder_dock::{DockSub, Docking};
@@ -149,7 +150,7 @@ mod tests {
         session.take_sounds();
         session.take_messages();
         session.hold_self_destruct(held);
-        session.tick_combat(Rules::default(), &mut NeverFires);
+        work(session, &crate::testkit::catalog(), Controls::default());
         (session.take_sounds(), session.take_messages())
     }
 
@@ -269,6 +270,18 @@ mod tests {
         let beside_shield = shield(&session, beside);
         hold(&mut session, 148);
         session.take_combat_events();
+        // Both beside the player again for the last pass: the passes'
+        // flight has carried them off.
+        let (at, velocity) = (session.player().position, session.player().velocity);
+        for id in [docked, beside] {
+            let npc = session.space.npc_mut(id).expect("there");
+            npc.state.position = at + Vec2::new(10.0, -10.0);
+            npc.state.velocity = velocity;
+        }
+        session.space.npc_mut(docked).expect("there").docking = Some(Docking {
+            ship: ShipRef::Player,
+            sub: DockSub::Dock,
+        });
         hold(&mut session, 1);
         let docked_npc = session.npcs().iter().find(|npc| npc.id == docked);
         let docked_npc = docked_npc.expect("breaking up");

@@ -358,7 +358,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<u8, AcceptError> {
         // A new run of docked scripts (see [`Session::take_interface_loads`]).
-        self.out.interface_loads.clear();
+        self.out.begin_docked_run();
         let venue = self
             .run
             .offer_of(self.mode.landed(), mission)
@@ -435,12 +435,12 @@ impl Session {
     ///
     /// [`NotOffered`] for a mission not offered: in flight, any but the
     /// offer from a ship the dialog shows.
-    pub fn refuse_mission(
+    pub(crate) fn refuse_mission(
         &mut self,
         mission: MissionId,
         chance: &mut dyn Chance,
     ) -> Result<RefuseShown, NotOffered> {
-        self.out.interface_loads.clear();
+        self.out.begin_docked_run();
         let offer = self
             .run
             .offer_of(self.mode.landed(), mission)
@@ -511,8 +511,12 @@ impl Session {
     ///
     /// [`AbortError::NotActive`] for a free slot; [`AbortError::Refused`]
     /// when a check refuses, and then nothing runs.
-    pub fn abort_mission(&mut self, slot: u8, chance: &mut dyn Chance) -> Result<(), AbortError> {
-        self.out.interface_loads.clear();
+    pub(crate) fn abort_mission(
+        &mut self,
+        slot: u8,
+        chance: &mut dyn Chance,
+    ) -> Result<(), AbortError> {
+        self.out.begin_docked_run();
         let mission = self
             .pilot
             .missions
@@ -1313,6 +1317,8 @@ impl Session {
     /// (@0x71926-0x71930), the parse (@0x71936) or the `l33t` letters, so
     /// the governments the last text left are kept. The `Flags` it leaves
     /// stale are never read, as every movie check tests the name first.
+    /// A flight with no session loads one as [`Session::fresh_description`]
+    /// resolves it.
     pub fn load_description(
         &mut self,
         raw: Option<&str>,
@@ -1391,7 +1397,7 @@ impl Session {
     /// reading the remembered rank governments: a free slot's mission
     /// tags read [`UNSET`](text_tags::UNSET).
     #[must_use]
-    pub fn mission_text(&self, slot: u8, text: &str) -> String {
+    pub(crate) fn mission_text(&self, slot: u8, text: &str) -> String {
         self.mission_text_reading(slot, text, self.run.rank_govts)
     }
 
@@ -1576,7 +1582,7 @@ impl MissionRun {
 
     /// Registers `slot`'s hooks: its landing hooks, and, with a deadline,
     /// its deadline checks, each with a blank guard and no script.
-    fn register_slot(&mut self, pilot: &Pilot, slot: u8) {
+    pub(super) fn register_slot(&mut self, pilot: &Pilot, slot: u8) {
         let Some(active) = pilot.missions.get(slot) else {
             return;
         };
@@ -4745,6 +4751,20 @@ mod tests {
                 .map(|(id, name)| (SystemId(id), name))
                 .collect(),
         }
+    }
+
+    #[test]
+    fn the_session_names_a_stellar_by_the_names_it_read() {
+        let catalog = FakePilotCatalog {
+            place_names: place_names(),
+            ..catalog()
+        };
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            TagNames::stellar_name(&session, StellarId(140)).as_deref(),
+            Some("Mars")
+        );
+        assert_eq!(TagNames::stellar_name(&session, StellarId(141)), None);
     }
 
     /// Stock's session of `catalog`, told [`Told`]'s strings, landed on

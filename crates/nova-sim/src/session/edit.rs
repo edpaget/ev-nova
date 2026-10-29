@@ -54,9 +54,10 @@ use super::Session;
 use super::entry::{Arrival, Entry, NoTraffic, Placement, ShipPlacement};
 use crate::catalog::{PilotCatalog, StellarId, SystemId};
 use crate::chance::NeverFires;
+use crate::control::Bit;
 use crate::date::GameDate;
 use crate::landing::is_dockable;
-use crate::reserves::Reserve;
+use crate::reserves::{Reserve, Reserves};
 
 /// Why [`Session::relocate`] refused to move the pilot, or
 /// [`Session::land_at`] to land it.
@@ -75,6 +76,28 @@ pub enum RelocateRefusal {
     /// The stellar is a hypergate or wormhole, or cannot be landed on.
     #[error("that stellar cannot be landed on")]
     NotLandable,
+}
+
+/// The pilot flying as the developer tools' desk reads it
+/// ([`Session::desk_reading`]): plain values, which the desk names.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeskReading {
+    /// The pilot's name.
+    pub name: String,
+    /// Its cash.
+    pub credits: i64,
+    /// The ship's shield, armour and fuel.
+    pub reserves: Reserves,
+    /// The date.
+    pub date: GameDate,
+    /// The date as the game writes it ([`Session::date_text`]).
+    pub date_text: String,
+    /// The system the pilot is in.
+    pub system: SystemId,
+    /// The stellar it is landed on; none in flight.
+    pub landed: Option<StellarId>,
+    /// The control bits set, ascending.
+    pub bits: Vec<Bit>,
 }
 
 impl Session {
@@ -184,6 +207,24 @@ impl Session {
         Ok(())
     }
 
+    /// What the developer tools' desk reads of the pilot flying, in one
+    /// value ([`DeskReading`]): its name and cash, the ship's reserves, the
+    /// date and its text, its system and the stellar it is landed on, and
+    /// the control bits set.
+    #[must_use]
+    pub fn desk_reading(&self) -> DeskReading {
+        DeskReading {
+            name: self.pilot.name().to_owned(),
+            credits: self.pilot.cash(),
+            reserves: self.reserves(),
+            date: self.date(),
+            date_text: self.date_text(),
+            system: self.system(),
+            landed: self.landed(),
+            bits: self.pilot.control_bits().iter().collect(),
+        }
+    }
+
     /// Sets the ship's `reserve` to `amount`, held within its gauge (none
     /// for NaN), landed or in flight, and gives what it holds; a save is
     /// due.
@@ -205,8 +246,10 @@ mod tests {
         SystemTraffic,
     };
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::combat::hull::Condition;
     use crate::date::GameDate;
+    use crate::flight::Controls;
     use crate::gate::{GateKind, HYPERGATE, WORMHOLE};
     use crate::geometry::Vec2;
     use crate::hyperspace::{JUMP_FUEL, JumpRefusal};
@@ -220,10 +263,38 @@ mod tests {
     use crate::testkit::{
         FAST, FakePilotCatalog, begin_jump_now, catalog, fly_out, land_now, outfit, planet, ship,
     };
+    use crate::testkit::{Passive, work, work_with};
 
     fn session() -> Session {
         let catalog = catalog();
         Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies")
+    }
+
+    #[test]
+    fn the_desks_reading_is_the_pilots_reserves_date_place_and_bits() {
+        assert_eq!(session().desk_reading().landed, None, "in flight");
+        let catalog = atlas();
+        let mut session = landed(&catalog);
+        session.set_credits(77);
+        session.set_reserve(Reserve::Fuel, 120.0);
+        let bit = |n| crate::control::Bit::new(n).expect("in range");
+        session.set_control_bit(bit(42), true);
+        session.set_control_bit(bit(7), true);
+        let reading = session.desk_reading();
+        assert_eq!(
+            reading,
+            DeskReading {
+                name: "Ada".to_owned(),
+                credits: 77,
+                reserves: session.reserves(),
+                date: session.date(),
+                date_text: session.date_text(),
+                system: SystemId(130),
+                landed: Some(StellarId(128)),
+                bits: vec![bit(7), bit(42)],
+            }
+        );
+        assert_eq!(reading.reserves.fuel.now, 120.0);
     }
 
     #[test]
@@ -303,7 +374,7 @@ mod tests {
     fn the_fuel_set_decides_whether_the_ship_can_jump() {
         let mut session = session();
         session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        fly_out(&mut session, &catalog());
         session.set_reserve(Reserve::Fuel, 0.0);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoFuel { fuel: 0.0 }));
         session.set_reserve(Reserve::Fuel, JUMP_FUEL);
@@ -462,15 +533,15 @@ mod tests {
         );
         let mut preparing = session.clone();
         preparing.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut preparing);
+        fly_out(&mut preparing, &catalog);
         preparing.ship.player.velocity = Vec2::new(5.0, 0.0);
         preparing.begin_jump().expect("accepted");
         assert!(preparing.preparing_jump().is_some());
         assert_refused(preparing, &catalog, (131, 140), RelocateRefusal::InFlight);
         let mut jumping = session;
         jumping.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut jumping);
-        begin_jump_now(&mut jumping).expect("jumps");
+        fly_out(&mut jumping, &catalog);
+        begin_jump_now(&mut jumping, &catalog).expect("jumps");
         assert_refused(jumping, &catalog, (131, 140), RelocateRefusal::InFlight);
     }
 
@@ -684,6 +755,19 @@ mod tests {
     }
 
     #[test]
+    fn a_move_within_the_system_clears_the_course_and_its_start() {
+        let catalog = atlas();
+        let mut session = landed(&catalog);
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.pilot().course_start(), Some(SystemId(130)));
+        session
+            .relocate(&catalog, SystemId(130), StellarId(129))
+            .expect("moves");
+        assert_eq!(session.course(), []);
+        assert_eq!(session.pilot().course_start(), None, "the start cleared");
+    }
+
+    #[test]
     fn a_move_tells_whether_the_system_or_only_the_stellar_changed() {
         let catalog = atlas();
         for ((system, stellar), told) in [
@@ -737,7 +821,14 @@ mod tests {
             .chart
             .assert_docked_among_shown(session.mode.landed());
         session.take_off(&catalog, &mut NeverFires);
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.npcs().len(), 3);
     }
 
@@ -1077,15 +1168,15 @@ mod tests {
             Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies");
         let mut preparing = session.clone();
         preparing.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut preparing);
+        fly_out(&mut preparing, &catalog);
         preparing.ship.player.velocity = Vec2::new(5.0, 0.0);
         preparing.begin_jump().expect("accepted");
         assert!(preparing.preparing_jump().is_some());
         assert_landing_refused(preparing, &catalog, (131, 140), RelocateRefusal::InFlight);
         let mut jumping = session;
         jumping.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut jumping);
-        begin_jump_now(&mut jumping).expect("jumps");
+        fly_out(&mut jumping, &catalog);
+        begin_jump_now(&mut jumping, &catalog).expect("jumps");
         assert_landing_refused(jumping, &catalog, (131, 140), RelocateRefusal::InFlight);
     }
 
@@ -1144,7 +1235,14 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         session.populate(&catalog, &mut NeverFires);
         session.hold_fire(true, false);
-        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
         session.hold_fire(false, false);
         let combat = session.space.combat.clone();
         assert_eq!(combat.shots().len(), 1);
@@ -1176,7 +1274,7 @@ mod tests {
         assert_eq!(session.take_fighter_notes(), []);
         session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.take_sounds(), [crate::sound::SimSound::TookOff]);
-        session.tick(crate::flight::Controls::default());
+        work(&mut session, &catalog, crate::flight::Controls::default());
         assert_eq!(
             session.take_sounds(),
             [crate::sound::SimSound::Script {

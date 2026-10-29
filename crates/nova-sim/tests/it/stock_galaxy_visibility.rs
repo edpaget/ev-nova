@@ -317,14 +317,14 @@ fn jump(session: &mut Session, data: &GameData) -> Option<SystemId> {
         if session.player().position.length() >= session.stats().jump_distance {
             break;
         }
-        session.tick(thrust);
+        crate::passes::work(session, data, thrust);
     }
     session.begin_jump().expect("jumps");
     for _ in 0..10_000 {
         if session.warp_end_due() {
             break;
         }
-        session.tick(Controls::default());
+        crate::passes::work(session, data, nova_sim::Controls::default());
     }
     assert!(session.warp_end_due(), "the warp ends");
     session.arrive(data, &mut NeverFires)

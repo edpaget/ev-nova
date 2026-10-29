@@ -3,15 +3,14 @@
 //! adapter, its `'STR '` 1000 and up the message buoys, and its `'STR '`
 //! 5000 and up the persons' hail quotes.
 
-use std::io;
 use std::path::Path;
 
 use nova_data::records::string::StrResource;
 use nova_data::records::string_list::StrList;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{PLUGINS_DIR, one_file};
 use nova_data::{GameData, Record};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::buoy::{buoy_text, patch_id};
 use nova_sim::catalog::StringPatch;
 use nova_sim::market::{Commodity, commodities};
@@ -20,36 +19,15 @@ use nova_sim::{CommCatalog, PilotCatalog};
 
 type Resources<'a> = &'a [(ResType, i16, Vec<u8>)];
 
-/// A data file, `/data/Nova Data`, and, when given, a plug-in,
-/// `/plugins/Patch.npif`, each holding a fork.
-struct Files {
-    data: Vec<u8>,
-    plugin: Vec<u8>,
-}
-
-impl DirLister for Files {
-    fn list(&self, dir: &Path) -> io::Result<Vec<Listing>> {
-        let name = if dir == Path::new("/data") {
-            "Nova Data"
-        } else {
-            "Patch.npif"
-        };
-        Ok(vec![Listing {
-            name: name.into(),
-            kind: EntryKind::File,
-        }])
+/// The store of a data file, `/data/Nova Data`, holding `data` and, when
+/// given, a plug-in, `/plugins/Patch.npif`, holding `plugin`.
+fn store(data: Resources<'_>, plugin: Option<Resources<'_>>) -> GameData {
+    let tree = one_file(fork(data));
+    match plugin {
+        Some(plugin) => tree.file(Path::new(PLUGINS_DIR).join("Patch.npif"), fork(plugin)),
+        None => tree,
     }
-}
-
-impl ForkReader for Files {
-    fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        let bytes = if path.starts_with("/data") {
-            &self.data
-        } else {
-            &self.plugin
-        };
-        Ok((fork == Fork::Data).then(|| bytes.clone()))
-    }
+    .load()
 }
 
 fn fork(resources: Resources<'_>) -> Vec<u8> {
@@ -113,12 +91,7 @@ fn stock() -> Vec<(ResType, i16, Vec<u8>)> {
 /// Each commodity, from stock data and, when given, a plug-in holding
 /// `plugin`.
 fn goods(plugin: Option<Resources<'_>>) -> Vec<Commodity> {
-    let files = Files {
-        data: fork(&stock()),
-        plugin: fork(plugin.unwrap_or_default()),
-    };
-    let plugins = plugin.map(|_| Path::new("/plugins"));
-    let data = GameData::load(&files, &files, Path::new("/data"), plugins).expect("opens");
+    let data = store(&stock(), plugin);
     commodities(&data.commodity_strings())
         .into_iter()
         .map(|(_, commodity)| commodity)
@@ -266,12 +239,7 @@ fn a_plugins_short_str_4004_prices_the_slots_it_lacks_at_0() {
 /// buoy." and, when given, a plug-in holding `plugin`, read through
 /// `GameData`.
 fn buoy(index: i16, plugin: Option<Resources<'_>>) -> Option<String> {
-    let files = Files {
-        data: fork(&[(StrList::TYPE, 1000, str_list(&["Base buoy."]))]),
-        plugin: fork(plugin.unwrap_or_default()),
-    };
-    let plugins = plugin.map(|_| Path::new("/plugins"));
-    let data = GameData::load(&files, &files, Path::new("/data"), plugins).expect("opens");
+    let data = store(&[(StrList::TYPE, 1000, str_list(&["Base buoy."]))], plugin);
     let patch = patch_id(index).map_or(StringPatch::Absent, |id| data.string_patch(id));
     buoy_text(index, patch, &data.buoy_strings())
 }
@@ -288,12 +256,10 @@ fn a_plugins_str_1000_wins_buoy_1_over_the_base_datas_str_list_1000() {
 /// 7101 "Base quote." and, when given, a plug-in holding `plugin`, read
 /// through `GameData`.
 fn hail_quote(hail_quote: i16, plugin: Option<Resources<'_>>) -> String {
-    let files = Files {
-        data: fork(&[(StrList::TYPE, HAIL_QUOTES, str_list(&["Base quote."]))]),
-        plugin: fork(plugin.unwrap_or_default()),
-    };
-    let plugins = plugin.map(|_| Path::new("/plugins"));
-    let data = GameData::load(&files, &files, Path::new("/data"), plugins).expect("opens");
+    let data = store(
+        &[(StrList::TYPE, HAIL_QUOTES, str_list(&["Base quote."]))],
+        plugin,
+    );
     let patch = hail_quote_patch_id(hail_quote).map_or(StringPatch::Absent, |id| {
         CommCatalog::plugin_string(&data, id)
     });

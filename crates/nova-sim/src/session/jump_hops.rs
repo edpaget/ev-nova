@@ -147,7 +147,7 @@ mod tests {
             let catalog = chained(catalog(), 2);
             let mut session = bound_for_134(&catalog, rule);
             let (fuel, mut date) = (session.reserves().fuel.now, session.date());
-            begin_jump_now(&mut session).expect("jumps");
+            begin_jump_now(&mut session, &catalog).expect("jumps");
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),
                 Some(SystemId(to)),

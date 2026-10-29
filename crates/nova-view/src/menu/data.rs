@@ -192,6 +192,7 @@ fn picture(data: &GameData, id: i16) -> Result<Image, String> {
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_data::Record;
+    use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::string_list::StrList;
     use nova_rsrc::ResType;
@@ -511,16 +512,12 @@ mod tests {
 
     /// A `shïp` subtitled `subtitle`.
     fn ship_record(subtitle: &str) -> Vec<u8> {
-        let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-        bytes[0x6E6..0x6E6 + subtitle.len()].copy_from_slice(subtitle.as_bytes());
-        bytes
+        ShipBuilder::new().subtitle(subtitle).build()
     }
 
     /// A `shän` whose `BaseImage` is `base`.
     fn anim(base: i16) -> Vec<u8> {
-        let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-        bytes[0..2].copy_from_slice(&base.to_be_bytes());
-        bytes
+        ShipAnimBuilder::new().base_image_id(base).build()
     }
 
     /// A blank `PICT` `width` x `height`.

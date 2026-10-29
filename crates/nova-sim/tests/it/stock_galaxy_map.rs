@@ -1,7 +1,8 @@
 //! The galaxy map's drawing over the stock data: a new pilot knows its
 //! start system's neighbours and nothing far off, its start system is
-//! framed blue (the player may land), and the map draws only what is
-//! known or explored. Skips, passing, when `NOVA_DATA` is unset.
+//! framed blue (the player may land), the map draws only what is known or
+//! explored, and the borders' sources hold no government of no influence
+//! (`gövt` `Flags2` 0x0004). Skips, passing, when `NOVA_DATA` is unset.
 
 use crate::common;
 
@@ -80,4 +81,31 @@ fn the_stock_start_system_is_framed_blue() {
         .find(|system| system.id == session.system())
         .expect("the start system drawn");
     assert_eq!(start.code, SystemColorCode::Cleared);
+}
+
+#[test]
+fn a_new_pilots_sources_hold_no_government_of_no_influence() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let session = nova_sim::fixture::SessionBuilder::flying(&data).build();
+    let sources = session.map_border_sources();
+    assert!(!sources.coarse.is_empty());
+    let govts = nova_sim::Governments::read(&data);
+    for source in sources
+        .coarse
+        .iter()
+        .chain(sources.walk.iter().map(|(_, source)| source))
+    {
+        assert!(
+            !govts.flag2(Some(source.govt), nova_sim::govt::NO_INFLUENCE),
+            "{source:?}"
+        );
+    }
+    let start = session.system();
+    assert!(
+        sources.coarse.iter().any(|source| source.system == start),
+        "the start system adds"
+    );
 }

@@ -258,7 +258,7 @@
 //! | [`CrewlessMissionShip`](RuleKey::CrewlessMissionShip) | `crewless_mission_ship` | a mission's special ship is boarded whatever its `Crew`; only a ship with no mission mark and `Crew` 0 or less is refused (#130), after the speed, reach and facing checks (`_HandlePlayerBoardAttempt` @0x652bd → @0x65768-0x65789; see `nova_sim::board::check_board`) | every ship of `Crew` 0 or less is refused up front; the Bible says nothing of it, and this is the port's earlier reading |
 //! | [`SpeedCap`](RuleKey::SpeedCap) | `speed_cap` | per axis: thrust adds on an axis only while it is short of the top speed's share there (`_AdjustedAccel` @0x2ae4b-0x2af43), the player is clamped to ±`_ShipMaxSpeed` on each axis (@0x6d43f-0x6d4aa) and an NPC not at all, and knockback, the shockwave and a tractor's self-pull clamp each axis (`_SpeedLimit` @0x2af91; see [`speed_cap`](crate::speed_cap) and `nova_sim::combat::Combat`) | the circle: every ship's speed rescaled to its top speed each tick, and the pushes clamped to it\* |
 //! | [`PlayerTurn`](RuleKey::PlayerTurn) | `player_turn` | the player turns its turn rate truncated to whole degrees a tick (`cvttss2si` @0x6c8b1), and an auto-turn (reverse, the face-target key, the pre-jump) stops within a turn of its aim, without snapping onto it (@0x6c8c2-0x6c8ff; see [`player_turn`](crate::player_turn)) | the full rate ("10 is about 30°/s"), and an auto-turn lands exactly on its aim |
-//! | [`FaceNavSlot`](RuleKey::FaceNavSlot) | `face_nav_slot` | in nav mode 3 the face-target key faces stellar record [the selected system's link slot], `spöb` 128 + slot, as it reads +0x6c as a stellar index whatever the mode (@0x6af2a-0x6af65, @0x6afa4-0x6afea; see `nova_sim::Session::tick`) | mode 3 has no stellar to face\* |
+//! | [`FaceNavSlot`](RuleKey::FaceNavSlot) | `face_nav_slot` | in nav mode 3 the face-target key faces stellar record [the selected system's link slot], `spöb` 128 + slot, as it reads +0x6c as a stellar index whatever the mode (@0x6af2a-0x6af65, @0x6afa4-0x6afea; see the session's `steering` module) | mode 3 has no stellar to face\* |
 //! | [`InertialDampener`](RuleKey::InertialDampener) | `inertial_dampener` | an `oütf` of `ModType` 38 makes only the player's ship inertialess; an NPC is inertialess only by its hull's `Flags2` 0x0040 (`_ShipIsInertialess` @0x7a10-0x7a26; see [`inertialess`](crate::inertialess)) | any ship carrying one is inertialess, an NPC's default items included ("makes ship inertialess") |
 //! | [`EscapeShipCut`](RuleKey::EscapeShipCut) | `escape_ship_cut` | the shield roll and velocity halving of a dying NPC's last launch land on the ship in slot 1, or on the player when no fighter launched (`_HandleShip` @0x354ea-0x35553; see `nova_sim::npc_escape`) | on the fighter launched; nothing when none is\* |
 //! | [`WeaponEffectsNextLaunch`](RuleKey::WeaponEffectsNextLaunch) | `weapon_effects_next_launch` | a change of the Weapon Effects preference takes effect at the next launch, the Preferences dialog drawing "(Changes will take effect the next time you run Nova)" while the box differs from the launch value (`_LoadPrefs` @0xceeda-0xcef11, `_LoadExtendedShipSprites` @0x2343c-0x2344b, `settingsChange:` @0xd0b01; see `nova::app::screen`) | at once, with no notice\* |
@@ -3477,8 +3477,8 @@ rule_keys! {
     /// exactly on its aim, as the port did before. NPCs turn the full rate
     /// under both, as `_HandleShip` does.
     PlayerTurn => "player_turn",
-    /// What the face-target key faces in nav mode 3 (see
-    /// `nova_sim::Session::tick`). By the engine, as `_HandlePlayer`
+    /// What the face-target key faces in nav mode 3 (see the session's
+    /// `steering` module). By the engine, as `_HandlePlayer`
     /// reads the selection +0x6c as a stellar record's index whatever the
     /// mode (@0x6af2a-0x6af65, @0x6afa4-0x6afea): the stellar whose index
     /// is the selected system's link slot, `spöb` 128 + slot, wherever it

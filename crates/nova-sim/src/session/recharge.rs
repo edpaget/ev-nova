@@ -55,7 +55,7 @@ impl Session {
     /// ([`recharge::enabled`]). See the module docs for when the view is
     /// told.
     #[must_use]
-    pub fn recharge_enabled(&self) -> bool {
+    pub(crate) fn recharge_enabled(&self) -> bool {
         self.mode
             .landed()
             .and_then(|stellar| self.chart.sites.iter().find(|site| site.id == stellar))
@@ -98,6 +98,14 @@ mod tests {
         let mut session = half_empty_at_port();
         session.pilot.cash = 100;
         recharged(session, 100, 250.0, 0, true);
+    }
+
+    #[test]
+    fn with_no_cash_a_recharge_fills_nothing_and_makes_no_save_due() {
+        let mut session = half_empty_at_port();
+        session.pilot.cash = 0;
+        session.pilot.reserves.fuel.now = 150.0;
+        recharged(session, 0, 150.0, 0, false);
     }
 
     #[test]

@@ -146,7 +146,7 @@ impl Session {
         catalog: &C,
         chance: &mut (impl Chance + ?Sized),
     ) where
-        C: PilotCatalog + TrafficCatalog,
+        C: PilotCatalog + TrafficCatalog + ?Sized,
     {
         let system = self.pilot.system;
         let placed = self.chart.jump_window.is_some_and(|window| window.placed);
@@ -454,8 +454,8 @@ pub(super) mod tests {
         let catalog = chained(moving(vec![over_131("M133")], Vec::new()), 2);
         let (mut session, seen) = watching_entries(flown(&catalog, Rulebook::default()), 601, 133);
         session.plot_course(SystemId(132)).expect("a route");
-        fly_out(&mut session);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        fly_out(&mut session, &catalog);
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(132))
@@ -558,8 +558,8 @@ pub(super) mod tests {
             let rules = Rulebook::default().with_override(RuleKey::MoveArrival, source);
             let mut session = flown(&catalog, rules);
             session.plot_course(SystemId(134)).expect("a route");
-            fly_out(&mut session);
-            begin_jump_now(&mut session).expect("jumps");
+            fly_out(&mut session, &catalog);
+            begin_jump_now(&mut session, &catalog).expect("jumps");
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),
                 Some(SystemId(133))
@@ -595,8 +595,8 @@ pub(super) mod tests {
             let rules = Rulebook::default().with_override(RuleKey::RouteRewrite, source);
             let mut session = flown(&catalog, rules);
             session.plot_course(SystemId(132)).expect("a route");
-            fly_out(&mut session);
-            begin_jump_now(&mut session).expect("jumps");
+            fly_out(&mut session, &catalog);
+            begin_jump_now(&mut session, &catalog).expect("jumps");
             session.arrive(&catalog, &mut NeverFires).expect("arrives");
             assert_eq!(
                 session.course(),
@@ -611,8 +611,8 @@ pub(super) mod tests {
             let rules = Rulebook::default().with_override(RuleKey::RouteRewrite, source);
             let mut session = flown(&catalog, rules);
             session.plot_course(SystemId(134)).expect("a route");
-            fly_out(&mut session);
-            begin_jump_now(&mut session).expect("jumps");
+            fly_out(&mut session, &catalog);
+            begin_jump_now(&mut session, &catalog).expect("jumps");
             assert_eq!(
                 session.arrive(&catalog, &mut NeverFires),
                 Some(SystemId(133))

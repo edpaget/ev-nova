@@ -87,7 +87,7 @@ impl Session {
     /// resolved it ([`ShipSystem`]): one that follows the player (−6) or
     /// is nowhere (−1) is below 0 and pushes nothing (@0xe28c-0xe28f).
     #[must_use]
-    pub fn map_mission_systems(&self) -> Vec<SystemId> {
+    pub(crate) fn map_mission_systems(&self) -> Vec<SystemId> {
         self.chart.map_mission_systems(&self.pilot, &self.statics)
     }
 
@@ -99,7 +99,7 @@ impl Session {
     /// floating map's names read it above a zoom of 1.1 (`_DrawMap`
     /// @0xf52b-0xf533).
     #[must_use]
-    pub fn floating_preselection(&self) -> Option<SystemId> {
+    pub(crate) fn floating_preselection(&self) -> Option<SystemId> {
         self.chart.floating_preselection(&self.pilot)
     }
 

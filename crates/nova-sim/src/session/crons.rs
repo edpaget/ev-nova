@@ -34,7 +34,10 @@ use crate::catalog::{CronId, CronRecord};
 use crate::chance::Chance;
 use crate::combat::report::SimDiagnostic;
 use crate::control::Script;
-use crate::cron::{self, CronDay, CronFacts, CronHook, CronRefusal, CronState};
+#[cfg(any(test, feature = "fixture"))]
+use crate::cron::CronRefusal;
+use crate::cron::{self, CronDay, CronFacts, CronHook, CronState};
+#[cfg(any(test, feature = "fixture"))]
 use crate::rules::Verdict;
 use crate::session::Session;
 use crate::story::SubscriptionId;
@@ -117,9 +120,15 @@ impl Session {
     /// crön's state is not read: this answers whether the pass would start
     /// it today were it inactive. `None` when the data has no such crön.
     ///
+    /// For the tests and the fixture's walker: no production code calls it.
+    ///
     /// [`Checks::all_refusals`]: crate::rules::Checks::all_refusals
+    #[cfg(any(test, feature = "fixture"))]
     #[must_use]
-    pub fn cron_refusals(&self, cron: CronId) -> Option<Vec<(&'static str, Verdict<CronRefusal>)>> {
+    pub(crate) fn cron_refusals(
+        &self,
+        cron: CronId,
+    ) -> Option<Vec<(&'static str, Verdict<CronRefusal>)>> {
         let record = self.statics.crons.iter().find(|record| record.id == cron)?;
         let facts = self.cron_facts(record);
         Some(

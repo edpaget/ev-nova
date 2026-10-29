@@ -127,7 +127,7 @@ impl Session {
     /// Sets the Hyperspace Effects preference: off, the move-off lights
     /// no white (`_settings`+0x14, see the module docs). On as a session
     /// starts.
-    pub fn set_hyperspace_effects(&mut self, on: bool) {
+    pub(crate) fn set_hyperspace_effects(&mut self, on: bool) {
         self.ship.set_hyperspace_effects(on);
     }
 
@@ -135,7 +135,7 @@ impl Session {
     /// white, which the view fades to; −1.0 out of a jump (see the module
     /// docs).
     #[must_use]
-    pub fn hyper_gamma(&self) -> f32 {
+    pub(crate) fn hyper_gamma(&self) -> f32 {
         self.ship.hyper_gamma()
     }
 
@@ -402,7 +402,7 @@ impl PlayerShip {
     /// ([`Session::arrive`]): its natural end, or a pass after its
     /// fallback (see the module docs).
     #[must_use]
-    fn warp_end_due(&self, jump: Option<Jump>) -> bool {
+    pub(super) fn warp_end_due(&self, jump: Option<Jump>) -> bool {
         self.warp.warp.end_due && super::jumping(jump).is_some()
     }
 
@@ -539,6 +539,8 @@ fn grown(stage: f32) -> f32 {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::testkit::work;
+
     use super::*;
     use crate::catalog::{ShipId, SystemId};
     use crate::chance::NeverFires;
@@ -570,7 +572,7 @@ mod tests {
     }
 
     fn tick(session: &mut Session) {
-        session.tick(Controls::default());
+        work(session, &crate::testkit::catalog(), Controls::default());
     }
 
     // The stage.

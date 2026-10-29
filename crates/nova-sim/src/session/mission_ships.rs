@@ -1070,7 +1070,8 @@ impl Session {
     /// the pickup path (@0x652ee-0x65570): its cargo is picked up
     /// ([`Session::pick_up_boarded_cargo`]), and once aboard its slot
     /// counts the ship boarded, whatever its goal (@0x653a7), and the
-    /// comm line names the cargo; a pickup refused refuses the board
+    /// comm line names the cargo, its `STR#` 4001 name resolved here, as
+    /// the session holds the string lists; a pickup refused refuses the board
     /// ([`BoardRefusal::CantBoard`], @0x65fdb), its dialog shown and
     /// nothing else changed. Any other takes the assist path
     /// ([`assists`]), on which its slot counts it boarded, the comm line
@@ -1103,6 +1104,9 @@ impl Session {
                 if !self.pick_up_boarded_cargo(mark.slot) {
                     return Some(Err(BoardRefusal::CantBoard));
                 }
+                let cargo = cargo
+                    .and_then(|cargo| u8::try_from(cargo).ok())
+                    .and_then(|cargo| crate::text_tags::TagNames::cargo_name(self, cargo));
                 line = Some(MissionBoardLine::Retrieved { cargo });
                 true
             } else {
@@ -1558,6 +1562,9 @@ pub(super) fn mission_ship_text(
 
 #[cfg(test)]
 pub(super) mod tests {
+    use crate::combat::Rules;
+    use crate::flight::Controls;
+    use crate::testkit::{Passive, work, work_with};
     use std::rc::Rc;
 
     use super::*;
@@ -1716,7 +1723,14 @@ pub(super) mod tests {
     }
 
     pub(in crate::session) fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// The slots of the mission ships in the system, in order.
@@ -2829,7 +2843,14 @@ pub(super) mod tests {
                 ..crate::testkit::planet(160, at.x, at.y)
             }];
             session.chart.listed = session.chart.sites.clone();
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
             assert!(session.space.npc(id).is_none(), "{reading:?}: killed");
             assert_eq!(session.npcs().len(), 1, "{reading:?}");
             let ships = ships_of(&session);
@@ -3413,7 +3434,14 @@ pub(super) mod tests {
     /// end of its warp out, on one traffic tick.
     fn jump_out(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
         warped(session, index);
-        session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// Lands the NPC at `index` on the system's first stellar, from rest
@@ -3424,7 +3452,14 @@ pub(super) mod tests {
         npc.goal = Goal::Land(site.id);
         npc.state.position = site.position;
         npc.state.velocity = Vec2::ZERO;
-        session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// Takes the NPC at `index` out of the system through gate 300, its
@@ -3436,7 +3471,14 @@ pub(super) mod tests {
             gate: StellarId(300),
             ticks_left: 1,
         };
-        session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// Whether a [`Fate::Departed`] is raised for `ship`, not yet settled.
@@ -3475,7 +3517,14 @@ pub(super) mod tests {
         );
         assert!(session.npcs().iter().any(|npc| npc.id == id), "still here");
         assert!(!departed(&session, id));
-        session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Keeping,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert!(session.npcs().iter().all(|npc| npc.id != id), "gone");
         assert!(departed(&session, id));
         assert_eq!(chased_and_left(&session), (1, 1));
@@ -4093,7 +4142,6 @@ pub(super) mod tests {
             tick(&mut session, &catalog);
             settle(&mut session, &catalog);
             assert_eq!(!goals_met(&session), cloaked, "met only once seen");
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
             ticks += 1;
         }
         assert_eq!(
@@ -4589,6 +4637,25 @@ pub(super) mod tests {
             .collect()
     }
 
+    #[test]
+    fn a_mission_of_no_ship_goal_landed_home_unmet_shows_its_ship_done_text_then_its_comp_text() {
+        // Held unmet, as a pilot saved before its goal check holds it: the
+        // landing's own check meets it, then completes it.
+        let (catalog, mut session) = launched(
+            vec![back_home(140, 0, "")],
+            vec![texts(140, Some("140 met."), Some("140 paid."))],
+            &[140],
+        );
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.goals_met = false;
+        }
+        land_home(&mut session, &catalog);
+        assert_eq!(
+            shown(&mut session),
+            [ship_done("140 met."), comp("140 paid.")]
+        );
+    }
+
     /// Slot 0's 140 completes at 128 with `OnSuccess` `S141 S142`: 141
     /// fills the slot just freed, 142 slot 1.
     fn two_started() -> (FakePilotCatalog, Session) {
@@ -5063,7 +5130,7 @@ pub(super) mod tests {
             assert_eq!(
                 boarding,
                 Ok(crate::board::Boarding::MissionShip(Some(
-                    MissionBoardLine::Retrieved { cargo: Some(1) }
+                    MissionBoardLine::Retrieved { cargo: None }
                 ))),
                 "{goal}"
             );
@@ -5093,12 +5160,87 @@ pub(super) mod tests {
             assert_eq!(
                 boarding,
                 Ok(crate::board::Boarding::MissionShip(Some(
-                    MissionBoardLine::Retrieved { cargo: Some(1) }
+                    MissionBoardLine::Retrieved { cargo: None }
                 ))),
                 "{goal} {flags:#x}"
             );
             assert_eq!(ships_of(&session).boarded, 1, "{goal} {flags:#x}");
             assert!(cargo_aboard(&session), "{goal} {flags:#x}");
+        }
+    }
+
+    /// `STR#` 4001, the cargo names, holding `names`.
+    #[derive(Debug)]
+    struct CargoNames(&'static [&'static str]);
+
+    impl crate::catalog::CommCatalog for CargoNames {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            match id {
+                crate::news::CARGO_NAMES => self.0.iter().map(|&s| s.to_owned()).collect(),
+                _ => Vec::new(),
+            }
+        }
+    }
+
+    /// The pickup's line names its cargo as the session resolves it where
+    /// the line is raised, by `STR#` 4001 (@0x653fb-0x65543), its `*`
+    /// kept: the cargo type 1's entry, or none when the list has no entry
+    /// for it.
+    #[test]
+    fn a_pickup_ships_line_names_its_cargo_by_str_4001_or_none_for_a_missing_entry() {
+        let catalog = picking_up(2, 1, 0);
+        for (names, cargo) in [
+            (&["Food", "*Passengers"][..], Some("*Passengers")),
+            (&["Food"][..], None),
+        ] {
+            let mut session =
+                in_flight_with(&catalog, 1).with_strings(std::rc::Rc::new(CargoNames(names)));
+            let (boarding, _) = board_first(&mut session);
+            assert_eq!(
+                boarding,
+                Ok(crate::board::Boarding::MissionShip(Some(
+                    MissionBoardLine::Retrieved {
+                        cargo: cargo.map(str::to_owned)
+                    }
+                ))),
+                "{names:?}"
+            );
+        }
+    }
+
+    /// `STR#` 4001 of 300 cargoes, "Cargo 0" to "Cargo 299": long enough
+    /// that a cargo type wrapped into a byte would find an entry.
+    #[derive(Debug)]
+    struct ManyCargoNames;
+
+    impl crate::catalog::CommCatalog for ManyCargoNames {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            match id {
+                crate::news::CARGO_NAMES => (0..300).map(|n| format!("Cargo {n}")).collect(),
+                _ => Vec::new(),
+            }
+        }
+    }
+
+    /// A pickup's line names no cargo for a cargo type no byte holds,
+    /// however long `STR#` 4001 is: types 256 and 999, which the offer
+    /// keeps (0 to 999), and whose low bytes would read entries 0 and 231;
+    /// nor for a mission of no cargo type (-1, which the offer drops).
+    #[test]
+    fn a_pickup_ships_line_names_no_cargo_for_a_type_no_byte_holds_or_none() {
+        for cargo_type in [256, 999, -1] {
+            let mut catalog = picking_up(2, 1, 0);
+            catalog.missions[0].cargo_type = cargo_type;
+            let mut session =
+                in_flight_with(&catalog, 1).with_strings(std::rc::Rc::new(ManyCargoNames));
+            let (boarding, _) = board_first(&mut session);
+            assert_eq!(
+                boarding,
+                Ok(crate::board::Boarding::MissionShip(Some(
+                    MissionBoardLine::Retrieved { cargo: None }
+                ))),
+                "cargo type {cargo_type}"
+            );
         }
     }
 
@@ -5115,7 +5257,7 @@ pub(super) mod tests {
         assert_eq!(
             second,
             Ok(crate::board::Boarding::MissionShip(Some(
-                MissionBoardLine::Retrieved { cargo: Some(1) }
+                MissionBoardLine::Retrieved { cargo: None }
             )))
         );
         assert_eq!(ships_of(&session).boarded, 2);
@@ -5244,7 +5386,14 @@ pub(super) mod tests {
     /// `ticks` of the fight, by Nova's rules.
     fn fight(session: &mut Session, ticks: usize) {
         for _ in 0..ticks {
-            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            work_with(
+                session,
+                &catalog(),
+                Controls::default(),
+                &Passive,
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
         }
     }
 
@@ -5974,7 +6123,14 @@ pub(super) mod tests {
         assert_eq!(session.npcs()[0].goal, Goal::Hold);
         let ticks = 120;
         for _ in 0..ticks {
-            session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         let ship = session
             .npcs()
@@ -5998,7 +6154,14 @@ pub(super) mod tests {
         let id = session.npcs()[0].id;
         assert_eq!(session.npcs()[0].goal, Goal::Idle);
         for _ in 0..120 {
-            session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         let goal = session
             .npcs()
@@ -6121,7 +6284,14 @@ pub(super) mod tests {
         session.take_off(&catalog, &mut chance).expect("takes off");
         assert!(marked(&session).is_empty(), "none at setup");
         for _ in 0..199 {
-            session.tick_traffic(&catalog, &NovaAi::default(), &mut chance);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut chance,
+            );
         }
         assert_eq!(marked_types(&session), [ShipId(200); 3]);
     }
@@ -6209,7 +6379,14 @@ pub(super) mod tests {
         assert!(marked(&session).is_empty(), "none at setup");
         forget_uniform_type(&mut session);
         for _ in 0..199 {
-            session.tick_traffic(&catalog, &NovaAi::default(), &mut chance);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut chance,
+            );
         }
         let types = marked_types(&session);
         assert_eq!(types.len(), 3);
@@ -6485,7 +6662,7 @@ pub(super) mod tests {
             "on screen"
         );
         assert_eq!(session.target_brackets().expect("bracketed").expand, 0.0);
-        session.tick(crate::Controls::default());
+        work(&mut session, &catalog, crate::Controls::default());
         assert_eq!(session.target_brackets().expect("bracketed").expand, 0.0);
     }
 

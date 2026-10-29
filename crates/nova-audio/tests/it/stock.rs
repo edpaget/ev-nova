@@ -1,5 +1,6 @@
-//! The original sound table and the soundtrack over the stock data: every
-//! `snd ` the table names is the one its source names, and decodes; every
+//! The original's sounds and the soundtrack over the stock data: every
+//! `snd ` a sim or interface sound's cue names is the one its source
+//! names, and decodes; every
 //! stellar ambient sound is there; and the music decodes, on kira's
 //! device-free backend. Skips, passing, when `NOVA_DATA` is unset.
 
@@ -13,11 +14,12 @@ use kira::backend::mock::MockBackend;
 use kira::sound::PlaybackState;
 use kira::{AudioManager, AudioManagerSettings};
 use nova_audio::kira::SoundCache;
-use nova_audio::{Audio, AudioCommand, KiraAudio, SoundBank, SoundTable, Volume};
+use nova_audio::{Audio, AudioCommand, KiraAudio, SoundBank, Volume};
 use nova_data::music::open_music;
 use nova_data::records::stellar::Stellar;
 use nova_data::{GameData, SoundId};
 use nova_rsrc::ResType;
+use nova_view::sound::{SimSound, UiSound};
 
 /// A shared buffer the warnings go to.
 #[derive(Clone, Default)]
@@ -41,31 +43,35 @@ impl Write for Warnings {
 }
 
 #[test]
-fn the_original_tables_sounds_are_the_named_stock_sounds_and_decode() {
+fn the_cued_sounds_are_the_named_stock_sounds_and_decode() {
     let Some(dir) = common::nova_data() else {
         return;
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
-    let table = SoundTable::ORIGINAL;
+    let sim = |sound: SimSound| sound.cue().map(|cue| cue.sound);
+    let ui = |sound: UiSound| sound.cue().map(|cue| cue.sound);
     let named = [
-        (table.landing, "Beep2"),
-        (table.traffic_control, "Beep2"),
-        (table.jump, "Warp up"),
-        (table.jump_double_time, "Warp up.x2"),
-        (table.arrival, "Warp out"),
-        (table.button_down, "Menu button down"),
-        (table.button_up, "Menu button up"),
-        (table.map_open, "Beep3"),
-        (table.map_close, "Beep1"),
-        (table.map_centre, "Beep5"),
-        (table.map_found, "Beep5"),
-        (table.map_not_found, "Beep4"),
-        (table.mission_ship_lost, "Beep2"),
-        (table.mission_ship_boarded, "Beep5"),
+        (sim(SimSound::Landed), "Beep2"),
+        (sim(SimSound::TrafficControl), "Beep2"),
+        (sim(SimSound::JumpBegan { rate: 0x1_0000 }), "Warp up"),
+        (
+            sim(SimSound::JumpBeganInDoubleTime { rate: 0x1_0000 }),
+            "Warp up.x2",
+        ),
+        (sim(SimSound::Arrived), "Warp out"),
+        (ui(UiSound::ButtonDown), "Menu button down"),
+        (ui(UiSound::ButtonUp), "Menu button up"),
+        (ui(UiSound::MapOpened), "Beep3"),
+        (ui(UiSound::MapClosed), "Beep1"),
+        (ui(UiSound::MapCentred), "Beep5"),
+        (ui(UiSound::MapSystemFound), "Beep5"),
+        (ui(UiSound::MapSystemNotFound), "Beep4"),
+        (sim(SimSound::MissionShipLost), "Beep2"),
+        (sim(SimSound::MissionShipBoarded), "Beep5"),
     ];
     let (mut cache, mut warnings) = (SoundCache::default(), Warnings::default());
     for (sound, name) in named {
-        let id = sound.expect("the table names a sound");
+        let id = sound.expect("the cue names a sound");
         let resource = data
             .resource(ResType::new(*b"snd "), id.0)
             .expect("in the stock data");

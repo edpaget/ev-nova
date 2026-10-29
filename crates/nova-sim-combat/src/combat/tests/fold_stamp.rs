@@ -25,21 +25,21 @@ fn a_live_beam_stamps_its_firers_last_shot_each_advance_pass() {
     let mut combat = Combat::default();
     let mut ships = [beaming()];
     ships[0].armament = ships[0].armament.clone().with_fold(Fold::default());
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(combat.beams().len(), 1, "a beam");
     assert_eq!(ships[0].armament.fold().since_fire, 0, "the pick stamps");
     ships[0].trigger = QUIET;
     ships[0].armament.tick_fire_clock();
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(combat.beams().len(), 1, "still lit");
     assert_eq!(ships[0].armament.fold().since_fire, 0, "the beam stamps");
-    for _ in 0..12 {
+    for _ in 0..13 {
         ships[0].armament.tick_fire_clock();
-        tick(&mut combat, &mut ships, &NovaDisable);
+        phase::close_tick(&mut combat, &mut ships, &NovaDisable);
     }
     assert_eq!(combat.beams(), [], "out");
     ships[0].armament.tick_fire_clock();
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::close_tick(&mut combat, &mut ships, &NovaDisable);
     assert_ne!(ships[0].armament.fold().since_fire, 0, "no beam, no stamp");
     assert_ne!(ships[0].armament.fold().since_fire, NEVER_FIRED);
 }
@@ -52,11 +52,11 @@ fn a_folded_npc_that_unfolds_to_fire_holds_its_pick() {
     ship.hull.frames.base_sets = 6;
     ship.armament = ship.armament.clone().with_fold_set(5);
     let mut ships = [ship];
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(combat.beams(), [], "folded: no beam");
     let fold = ships[0].armament.fold();
     assert_eq!((fold.set, fold.dir, fold.since_fire), (5, -1, 0));
     ships[0].armament.fold_mut().set = 0;
-    tick(&mut combat, &mut ships, &NovaDisable);
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(combat.beams().len(), 1, "unfolded: it fires");
 }
