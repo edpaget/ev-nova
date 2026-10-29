@@ -110,19 +110,19 @@ jobs:
       # The branch it publishes.
       NOVA_CHANNEL: ${{ inputs.channel }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # gpg and curl are on the runner.
       - run: |
           sudo apt-get update
           sudo apt-get install -y flatpak ostree
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       - run: mise install rust
         shell: bash
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: flatpak-repo
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -133,7 +133,7 @@ jobs:
       # The plain bundle ci.yml's `flatpak` job built and tested: the
       # nightly's alone. A promotion builds no Flatpak.
       - if: inputs.channel == 'nightly'
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist-x86_64-unknown-linux-gnu-flatpak
           path: ${{ runner.temp }}/plain
@@ -196,7 +196,7 @@ jobs:
           fi
       # /flatpak/ on the site: the repo and every channel's .flatpakref.
       - if: steps.sign.outputs.published == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pages-flatpak
           path: ${{ runner.temp }}/fr-pages
@@ -205,7 +205,7 @@ jobs:
       # The channel's repo-following bundle: for the nightly it replaces
       # the `flatpak` job's plain bundle, so `publish` ships this one.
       - if: steps.sign.outputs.published == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-x86_64-unknown-linux-gnu-flatpak
           path: ${{ runner.temp }}/fr-dist/*
@@ -271,16 +271,16 @@ jobs:
       # The job holds contents: write, so the checkout persists no
       # credentials: the build and signing steps run with no token on disk,
       # and the push step sets up its own.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Rust for nova-appcast; nova-bundle needs no system libraries.
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       - run: mise install rust
         shell: bash
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: publish
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -290,7 +290,7 @@ jobs:
       - name: Build nova-appcast
         shell: bash
         run: mise exec -- cargo build -q -p nova-bundle --locked --bin nova-appcast
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: dist-*
           merge-multiple: true
@@ -435,23 +435,23 @@ jobs:
       # As in ci.yml's `ci`: install only the Rust toolchain.
       MISE_AUTO_INSTALL: "false"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Rust for `mise run site`; nova-bundle needs no system libraries.
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       - run: mise install rust
         shell: bash
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: pages
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # Without merge-multiple, each matching artifact lands in its own
       # `<path>/<artifact name>/`. With no match it downloads nothing and
       # succeeds, and the assembly step deploys the root page alone.
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: pages-*
           path: ${{ runner.temp }}/pages
@@ -495,8 +495,8 @@ jobs:
               mv "$dir" "_site/$sub"
             done
           fi
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

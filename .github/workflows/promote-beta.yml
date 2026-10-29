@@ -59,16 +59,16 @@ jobs:
     steps:
       # main's whole history, to check the nightly's recorded commit is on
       # main with the build ID as its committer time.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       - run: mise install rust
         shell: bash
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: promote-beta
           save-if: ${{ github.ref == 'refs/heads/main' }}

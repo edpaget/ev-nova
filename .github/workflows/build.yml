@@ -104,10 +104,10 @@ jobs:
             build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils
       # The commit to build: the pushed one for the nightly, the nightly's
       # own commit for a promotion.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       - run: mise install rust
@@ -116,7 +116,7 @@ jobs:
       # restores main's cache, but the caches it saved never reached main,
       # and their size pushed the repository past its 10 GB of Actions
       # cache, which evicts main's own. A promotion runs on main, so it saves.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -269,7 +269,7 @@ jobs:
           NOVA_TARBALL="$PWD/dist/$file" \
             cargo test --locked -p nova-bundle --test it linux_tarball -- --nocapture
       # Only a hand-off to release.yml's `publish`.
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-${{ matrix.name }}
           path: dist/*
