@@ -336,8 +336,10 @@ impl Screen for DescDialog {
     /// while it can scroll down (@0x52095), End and Page Down the same
     /// toward its end. A key that can't scroll its way goes on to the
     /// dialog, which ignores it, as the filter falls through to "not
-    /// handled" (@0x523fc). They play no sound, as the original's arms
-    /// play none.
+    /// handled" (@0x523fc). That leaves the text's state untouched, a
+    /// wheel's sub-line leftover included, where scrolling toward the end
+    /// the text sits at would drop it. They play no sound, as the
+    /// original's arms play none.
     ///
     /// They act on the press alone. The original's filter also takes
     /// autoKey (event 5, @0x51f83-0x51f96) and so repeats them while held;
@@ -1007,6 +1009,46 @@ mod tests {
             desc.first_line(),
             LAST - 20,
             "nothing left over past the end"
+        );
+    }
+
+    /// A wheel scroll of `units` over [`template`]'s text box.
+    fn wheel_units(units: f32) -> Input {
+        Input::Scroll {
+            delta: crate::input::ScrollDelta::Units(units),
+            at: Point::new(30.0, 20.0),
+        }
+    }
+
+    /// The filter's not-handled fall-through (@0x523fc) leaves the text as
+    /// it was, a wheel's leftover included: scrolling up from the top
+    /// would drop it.
+    #[test]
+    fn at_the_top_home_and_page_up_keep_the_wheels_leftover() {
+        let mut desc = long_desc();
+        desc.input(&wheel_units(5.0));
+        assert_eq!(desc.first_line(), 0);
+        desc.input(&key(Key::Home));
+        desc.input(&key(Key::PageUp));
+        desc.input(&wheel_units(7.0));
+        assert_eq!(desc.first_line(), 1, "the 5 left over and 7 are a line");
+    }
+
+    /// The mirror of
+    /// [`at_the_top_home_and_page_up_keep_the_wheels_leftover`].
+    #[test]
+    fn at_the_end_end_and_page_down_keep_the_wheels_leftover() {
+        let mut desc = long_desc();
+        desc.input(&key(Key::End));
+        desc.input(&wheel_units(-5.0));
+        assert_eq!(desc.first_line(), LAST);
+        desc.input(&key(Key::End));
+        desc.input(&key(Key::PageDown));
+        desc.input(&wheel_units(-7.0));
+        assert_eq!(
+            desc.first_line(),
+            LAST - 1,
+            "the 5 left over and 7 are a line"
         );
     }
 

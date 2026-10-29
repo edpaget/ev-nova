@@ -677,11 +677,4 @@ exclude_re = [
     # contour as closed whether or not the path closes it, so dropping the
     # close changes no coverage.
     "nova-render/src/glyph_raster\\.rs:[0-9]+:[0-9]+: replace <impl OutlinePen for Path>::close with \\(\\)$",
-    # "Desc Dialog"'s Home/End/Page Up/Page Down gates mirror
-    # `_TextDialogFilter`'s branches. Dropping one scrolls toward an end
-    # the text already sits at, which `ScrollText::scroll_units` clamps and
-    # whose leftover it drops there, and returns what the dialog would
-    # (nothing): the same first line, pending amount and result. The
-    # predicates themselves are pinned in `ui::scroll_text`'s tests.
-    "nova-view/src/ui/desc\\.rs:[0-9]+:[0-9]+: replace match guard text\\.can_scroll_(up|down)\\(\\) with true in <impl Screen for DescDialog>::input$",
 ]
