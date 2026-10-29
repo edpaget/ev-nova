@@ -326,10 +326,10 @@ operator does this once, on their own machine, with `gnupg` from Homebrew:
 6. The first `main` nightly after steps 1 to 5: `flatpak-repo` deploys to
    `update-signing` with no "Flatpak repo not published" warning and a
    "First Flatpak publish" notice;
-   `https://edpaget.github.io/ev-nova/flatpak/ev-nova-nightly.flatpakref`
+   `https://carcdr.net/ev-nova/flatpak/ev-nova-nightly.flatpakref`
    downloads; the download page's Linux row leads with `flatpakref`; and
    the nightly's `.flatpak` asset installs with an origin remote at
-   `https://edpaget.github.io/ev-nova/flatpak/repo/`.
+   `https://carcdr.net/ev-nova/flatpak/repo/`.
 
 Each `main` run rebuilds the whole `/flatpak/` tree from the live one,
 because a Pages deploy replaces the site: `stage` mirrors the live repo,
@@ -449,6 +449,19 @@ own, not a `pages` block on `github_repository`, because provider 6.13.0
 deprecates that block. `ci.yml`'s `pages` job is the only deployer; its
 comment is the contract for jobs that add a subtree (an artifact named
 `pages-<path>`).
+
+The site is served at `https://carcdr.net/ev-nova` through the
+`edpaget.github.io` user site's custom domain, with Cloudflare in front. The
+build addresses it there (`nova_bundle::site::PAGES`) because GitHub's
+redirect from `https://edpaget.github.io/ev-nova/` goes to
+`http://carcdr.net/...` before Cloudflare upgrades it to HTTPS, a plain-HTTP
+hop in front of the first install's `.flatpakref`. Installs made from a
+`.flatpakref` fetched before the change keep
+`https://edpaget.github.io/ev-nova/flatpak/repo/` as their remote URL. It
+still works through the redirects, and updates are GPG-verified against the
+installed key, but those remotes keep the HTTP hop until the player
+reinstalls from the new `.flatpakref`. Turning on HSTS for `carcdr.net` in
+Cloudflare is left to the operator; it isn't in this config.
 
 Enabling Pages makes GitHub create the `github-pages` environment. This
 config doesn't manage it: GitHub gives it a default branch policy, and the

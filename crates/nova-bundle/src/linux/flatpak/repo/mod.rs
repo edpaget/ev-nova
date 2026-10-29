@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn the_repo_is_under_the_pages_site_at_flatpak_repo() {
         assert_eq!(url(), format!("{PAGES}/flatpak/repo/"));
-        assert_eq!(url(), "https://edpaget.github.io/ev-nova/flatpak/repo/");
+        assert_eq!(url(), "https://carcdr.net/ev-nova/flatpak/repo/");
     }
 
     #[test]
@@ -359,7 +359,7 @@ mod tests {
         );
         assert_eq!(
             flatpakref_url(Channel::Nightly),
-            "https://edpaget.github.io/ev-nova/flatpak/ev-nova-nightly.flatpakref"
+            "https://carcdr.net/ev-nova/flatpak/ev-nova-nightly.flatpakref"
         );
     }
 
@@ -381,7 +381,7 @@ mod tests {
         assert_eq!(flatpakref_name(Channel::Beta), "ev-nova-beta.flatpakref");
         assert_eq!(
             flatpakref_url(Channel::Beta),
-            "https://edpaget.github.io/ev-nova/flatpak/ev-nova-beta.flatpakref"
+            "https://carcdr.net/ev-nova/flatpak/ev-nova-beta.flatpakref"
         );
     }
 

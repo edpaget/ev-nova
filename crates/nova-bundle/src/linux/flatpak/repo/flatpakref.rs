@@ -88,13 +88,25 @@ mod tests {
         .collect();
         assert_eq!(keys, want);
         assert_eq!(keys["GPGKey"], "mDMEZf8=");
+        assert!(
+            text.lines()
+                .any(|line| line == "Url=https://carcdr.net/ev-nova/flatpak/repo/"),
+            "{text}"
+        );
         assert_eq!(text.lines().count(), 10, "no key twice: {text}");
     }
 
     #[test]
     fn the_beta_ref_names_the_beta_branch_and_shares_the_nightly_s_remote_and_key() {
         let spec = spec();
-        let (_, beta) = parse(&render(&spec, Channel::Beta, &url(), &key()));
+        let beta_text = render(&spec, Channel::Beta, &url(), &key());
+        assert!(
+            beta_text
+                .lines()
+                .any(|line| line == "Url=https://carcdr.net/ev-nova/flatpak/repo/"),
+            "{beta_text}"
+        );
+        let (_, beta) = parse(&beta_text);
         let (_, nightly) = parse(&render(&spec, Channel::Nightly, &url(), &key()));
         assert_eq!(beta["Branch"], "beta");
         assert_eq!(beta["Title"], format!("{} (beta)", spec.name));

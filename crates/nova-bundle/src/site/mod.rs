@@ -33,10 +33,15 @@ use crate::xml::escape;
 /// The repository the releases are published from.
 pub const REPO: &str = "https://github.com/edpaget/ev-nova";
 
-/// The Pages site's root: the repository's project site
-/// (`infra/github/pages.tf` sets no custom domain). The download page is
-/// served at it, and the Flatpak repo under it.
-pub const PAGES: &str = "https://edpaget.github.io/ev-nova";
+/// The Pages site's root: the repository's project site, served on the
+/// custom domain `carcdr.net` that the `edpaget.github.io` user site sets
+/// (outside this repository; `infra/github/pages.tf` sets no `cname`). The
+/// download page is served at it, and the Flatpak repo under it.
+///
+/// It is addressed by that domain directly because GitHub's redirect from
+/// the `github.io` address names `http://`: a plain-HTTP hop in front of the
+/// first install's `.flatpakref`, which carries the repo's GPG key.
+pub const PAGES: &str = "https://carcdr.net/ev-nova";
 
 /// The rolling prerelease's tag.
 pub const NIGHTLY: &str = "nightly";
@@ -489,7 +494,7 @@ mod tests {
         );
         assert_eq!(
             href,
-            "https://edpaget.github.io/ev-nova/flatpak/ev-nova-nightly.flatpakref"
+            "https://carcdr.net/ev-nova/flatpak/ev-nova-nightly.flatpakref"
         );
         assert_eq!(
             linux_row(&published()),
@@ -623,7 +628,7 @@ mod tests {
                 platform: "Linux".into(),
                 primary: Link::new(
                     "flatpakref",
-                    "https://edpaget.github.io/ev-nova/flatpak/ev-nova-beta.flatpakref"
+                    "https://carcdr.net/ev-nova/flatpak/ev-nova-beta.flatpakref"
                 ),
                 extras: vec![
                     Link::new("flatpak", beta(flatpak::ASSET)),
@@ -799,7 +804,7 @@ mod tests {
 
     #[test]
     fn any_channel_and_link_the_data_holds_is_rendered() {
-        let flatpakref = "https://edpaget.github.io/ev-nova/flatpak/ev-nova-nightly.flatpakref";
+        let flatpakref = "https://carcdr.net/ev-nova/flatpak/ev-nova-nightly.flatpakref";
         let row = |tag: &str| Download {
             platform: "Linux".into(),
             primary: Link::new("flatpak", release_asset(REPO, tag, "x.flatpak")),
