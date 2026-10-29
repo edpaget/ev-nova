@@ -45,7 +45,12 @@
 //!   not in the system brakes it.
 //! - [`Goal::EnterGate`]: outside the gate's box
 //!   ([`gate_entry::inside`], a quarter of its `Type` width on each axis,
-//!   inclusive) it heads for the gate as for a landing, with no wait.
+//!   inclusive) it flies sub 2 by the engine's reading of
+//!   [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding), as state 20 sets
+//!   it (@0x8dc42-0x8dc55, `gate_entry::approach`,
+//!   [`approach_flight`](crate::traffic::approach_flight)): it never
+//!   brakes. By the other reading it heads for the gate as the port's
+//!   earlier landing does, braking by its stopping distance. It has no wait.
 //!   Inside it stops dead and starts entering the gate
 //!   ([`Mode::EnteringGate`], its wait at [`ENTRY_TICKS`], counted down
 //!   that tick); a gate not shown, it brakes (see
@@ -348,7 +353,10 @@ pub struct Readings {
     /// How a landing ship lands: in `_HighLevelAIHandler` state 1's box by
     /// the engine ([`land_flight`]), within
     /// [`landing_radius`](landing::landing_radius) by the other reading
-    /// ([`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)).
+    /// ([`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)); and how a
+    /// ship entering a gate approaches it: by sub 2 by the engine
+    /// (`gate_entry::approach`), braking by its stopping distance by the
+    /// other.
     pub npc_landing: RuleSource,
 }
 
@@ -551,7 +559,8 @@ fn fly_mobile(
             }
         }
         Goal::EnterGate(gate) => {
-            match enter_box(npc, sites, type_widths, gate, &handling, inertia) {
+            let by = (inertia, readings.npc_landing);
+            match enter_box(npc, sites, type_widths, gate, &handling, by) {
                 Ok(controls) => controls,
                 Err(outcome) => return outcome,
             }
@@ -726,23 +735,29 @@ fn hand_off(npc: &mut Npc, sites: &[LandingSite]) {
 }
 
 /// How `npc` flies into `gate` among `sites`, of the widths
-/// `type_widths` gives (see the module docs): outside its box, the
-/// controls of the approach, or braking with no gate there; inside it,
-/// stopped and entering it.
+/// `type_widths` gives, as its inertia says, by a reading of
+/// [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding) (`by`; see the
+/// module docs): outside its box, sub 2 by the engine's
+/// ([`gate_entry::approach`]) or the port's earlier [`approach`] by the
+/// other, or braking with no gate there; inside it, stopped and entering
+/// it.
 fn enter_box(
     npc: &mut Npc,
     sites: &[LandingSite],
     type_widths: &BTreeMap<StellarId, TypeWidth>,
     gate: StellarId,
     handling: &Handling,
-    inertia: Inertia,
+    (inertia, reading): (Inertia, RuleSource),
 ) -> Result<Flight, Outcome> {
     let Some(site) = sites.iter().find(|site| site.id == gate) else {
         return Ok(braking(&mut npc.state, handling, inertia));
     };
     let reach = gate_entry::gate_reach(site, type_widths);
     if !gate_entry::inside(site.position, npc.state.position, reach) {
-        return Ok(approach(&mut npc.state, handling, site.position, inertia).into());
+        return Ok(match reading {
+            RuleSource::Engine => gate_entry::approach(&mut npc.state, site.position, handling),
+            RuleSource::Bible => approach(&mut npc.state, handling, site.position, inertia).into(),
+        });
     }
     npc.state.velocity = Vec2::ZERO;
     npc.mode = Mode::EnteringGate {
@@ -1421,9 +1436,10 @@ fn stopping_distance(state: &ShipState, handling: &Handling, inertia: Inertia) -
 }
 
 /// The approach's brake ([`approach`]), the engine's own planner for the
-/// landing (`_HighLevelAIHandler` state 1's, which
-/// stellar-fidelity phase-5-npc-landing-reach ports with its own × 0.98)
-/// and the gate approach, not sub 1: it turns to face against the ship at
+/// landing and the gate approach by the other reading of
+/// [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding) (the engine's
+/// flies sub 2, which never brakes, and brakes inside the landing box by
+/// sub 1 × 0.98, [`land_flight`]), not sub 1: it turns to face against the ship at
 /// `state`'s motion and thrusts once it does, until thrust would only push
 /// it the other way; nothing at or below [`AT_REST_SPEED`] (see
 /// [`stopping_distance`]). Between the two it creeps, which is harmless

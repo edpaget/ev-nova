@@ -198,6 +198,8 @@ mod fleet_escort_tests;
 pub mod fleet_formation;
 pub mod fly_pass;
 pub mod formation_flight;
+#[cfg(test)]
+mod gate_approach_tests;
 pub mod gate_entry;
 pub mod gone;
 #[cfg(test)]

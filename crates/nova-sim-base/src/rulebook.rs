@@ -39,7 +39,7 @@
 //! | [`TypeSheetFallback`](RuleKey::TypeSheetFallback) | `type_sheet_fallback` | from the first rebuild point that shows it, a whole stellar whose `Type` has no readable sheet draws, is clicked by and is shot by what its sprite slot holds: graphic type 0, `spïn` 1000, the sheet the rebuild means an empty slot to get (its fill @0x33231-0x332d0; its own code faults first, @0x33096), or a `DeadType` sheet a flight frame cloned in since (`_HandleStellarSprites` @0x2e7c7-0x2e7e5; see `nova_sim::story`) | the engine's placeholder box and the reason, which shows the broken data\* |
 //! | [`EightBitSheet`](RuleKey::EightBitSheet) | `eight_bit_sheet` | an 8-bit `rlëD` draws as its bytes fall into the 16-bit world: each pair of bytes one little-endian RGB555 pixel, filling the left half of the frame (`_SWCreateSpriteFromRLEResource` @0xa9990, `_BlitPixieRLESwap` @0xbe3f0-0xbe3f7, `_BlitPixieRLE` @0xbddd0; see `nova_render::GameImages` and `nova_sim::story`) | each byte a colour of the Mac's standard 256-colour table, at full width\* |
 //! | [`UncountedSheet`](RuleKey::UncountedSheet) | `uncounted_sheet` | a sprite slot cloning a graphic whose `spïn`'s `xTiles` × `yTiles` is 0 or less keeps the frame it showed: none from a rebuild point (nothing drawn, the landing reach 75), and between rebuild points the frame it had, frozen and placed as a 32-pixel sprite; the stellar does not animate until the next rebuild point (`_SWCloneFramesFromMaster` @0xac4ec, `_SWSetCurrentFrameIndex` @0xa90e7-0xa90ee, `_HandleStellarSystemVisibility` @0x32e7a, @0x331c6; `_HandleStellarSprites` @0x2e7e5, @0x2ee20-0x2ef1a; see `nova_sim::story`) | the sheet's own decoded frames, drawn and animated\* |
-//! | [`NpcLanding`](RuleKey::NpcLanding) | `npc_landing` | an NPC lands when its whole-pixel offset from the stellar's centre is at most 40 on each axis (trunc((9 − turn) × 8 + 32) below a turn rate of 8) and it moves below 0.35 a tick on each axis; inside the box but faster it brakes by sub 1, its velocity and speed × 0.98 a tick; outside it flies sub 2's approach, and a folding ship unfolds inside the box (`_HighLevelAIHandler` @0x8d903-0x8db5a; see `nova_sim_ai::traffic::land_flight`) | within `landing_radius` (half the larger side of the `Type` frame, or 32 with no sprite), as a circle, at or below 1.0 a tick, flying the port's earlier approach\* |
+//! | [`NpcLanding`](RuleKey::NpcLanding) | `npc_landing` | an NPC lands when its whole-pixel offset from the stellar's centre is at most 40 on each axis (trunc((9 − turn) × 8 + 32) below a turn rate of 8) and it moves below 0.35 a tick on each axis; inside the box but faster it brakes by sub 1, its velocity and speed × 0.98 a tick; outside it flies sub 2's approach, and a folding ship unfolds inside the box (`_HighLevelAIHandler` @0x8d903-0x8db5a; see `nova_sim_ai::traffic::land_flight`); and state 20's approach to a hypergate or wormhole outside its box flies sub 2 too, never braking (@0x8dc42-0x8dc55; see `nova_sim_ai::traffic::gate_entry`) | within `landing_radius` (half the larger side of the `Type` frame, or 32 with no sprite), as a circle, at or below 1.0 a tick, flying the port's earlier approach, which brakes by its stopping distance, for the gate approach too\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction (`nova_sim::NovaHire`) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now, and its pay line shows a hundredth of that `Cost` unclamped, "credit" only at exactly 1.0 (`_EscortDialogUpdate` @0x94f9c-0x9500d; `nova_sim::Session`) | the wage kept on its record when hired, shown as itself\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear (`nova_sim::NovaPersons`) | 5 %, one of those who may appear picked evenly |
@@ -1009,10 +1009,14 @@ rule_keys! {
     /// (`landing::npc_box`), and it moves below 0.35 a tick on each axis;
     /// inside the box but faster it brakes by sub 1, its velocity and
     /// speed × 0.98 a tick; outside it flies sub 2's approach, and a
-    /// folding ship unfolds inside the box. By the other reading, the
-    /// port's earlier landing: within `landing_radius` (half the larger
-    /// side of the `Type` frame, or 32 with no sprite), as a circle, at or
-    /// below 1.0 a tick, flying the port's earlier approach. The Bible
+    /// folding ship unfolds inside the box. State 20's approach to a
+    /// hypergate or wormhole outside its box flies sub 2 too, never braking
+    /// (@0x8dc42-0x8dc55, `nova_sim_ai::traffic::gate_entry`). By the
+    /// other reading, the port's earlier landing: within `landing_radius`
+    /// (half the larger side of the `Type` frame, or 32 with no sprite), as
+    /// a circle, at or below 1.0 a tick, flying the port's earlier
+    /// approach, which brakes by its stopping distance, for the gate
+    /// approach too. The Bible
     /// says nothing of how an NPC lands, so the other reading is the
     /// intended alternative, not anything the Bible says (see
     /// `nova_sim_ai::traffic::land_flight` and the `nova_sim::story`
