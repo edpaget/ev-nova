@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use super::promote::{PromoteError, PromotionPaths};
+use super::promote::PromotionPaths;
 use super::publish::{AppcastError, PublishPaths};
 
 /// The tool's usage line.
@@ -141,18 +141,10 @@ pub fn exit_status(error: &AppcastError) -> u8 {
     }
 }
 
-/// The exit status of a refused promotion: every refusal, a malformed
-/// `--build` included, is a [`FAILURE_STATUS`]. Only a usage error is
-/// [`USAGE_STATUS`].
-#[must_use]
-pub fn promotion_exit_status(_error: &PromoteError) -> u8 {
-    FAILURE_STATUS
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build_id::{BuildId, BuildIdError};
+    use crate::build_id::BuildId;
 
     fn cwd() -> PathBuf {
         Path::new("/work").join("ev-nova")
@@ -325,12 +317,6 @@ mod tests {
         given[2] = "not-an-id";
         assert!(
             matches!(command(args(&given), &cwd()), Ok(Command::CheckPromotion { build, .. }) if build == "not-an-id")
-        );
-        let refused = PromoteError::Malformed(BuildIdError::Malformed("not-an-id".into()));
-        assert_eq!(promotion_exit_status(&refused), FAILURE_STATUS);
-        assert_eq!(
-            promotion_exit_status(&PromoteError::NotOnMain("refs/heads/x".into())),
-            FAILURE_STATUS
         );
     }
 

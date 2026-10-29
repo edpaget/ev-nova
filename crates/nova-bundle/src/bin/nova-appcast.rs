@@ -36,9 +36,7 @@ use std::env;
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-use nova_bundle::appcast::host::{
-    Command, USAGE_STATUS, command, exit_status, promotion_exit_status,
-};
+use nova_bundle::appcast::host::{Command, FAILURE_STATUS, USAGE_STATUS, command, exit_status};
 use nova_bundle::appcast::promote::check_promotion;
 use nova_bundle::appcast::publish::{public_key, run};
 use nova_bundle::system::{Ed25519Signer, StdEnv, StdFiles, StdProcess};
@@ -67,7 +65,9 @@ fn main() -> ExitCode {
                 }
                 Err(e) => {
                     eprintln!("nova-appcast: {e}");
-                    ExitCode::from(promotion_exit_status(&e))
+                    // Every refusal, a malformed --build included, is a failure; only
+                    // a usage error exits 2.
+                    ExitCode::from(FAILURE_STATUS)
                 }
             };
         }
