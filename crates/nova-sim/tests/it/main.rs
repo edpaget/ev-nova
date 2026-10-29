@@ -31,6 +31,7 @@ mod stock_escape_pod;
 mod stock_escort_dialog;
 mod stock_galaxy_map;
 mod stock_galaxy_visibility;
+mod stock_gamble;
 mod stock_gate_pick;
 mod stock_hail_advice;
 mod stock_inertialess;
