@@ -1,7 +1,8 @@
 //! `nova-appcast publish`'s decision: whether to sign the feeds
 //! ([`FeedSigning::decide`]), then, when signing, the build-ID copies of
-//! the installers and the two feeds; and always the list of release
-//! assets to delete ([`super::prune`]).
+//! the installers, the build's commit file ([`super::commit`]) and the
+//! two feeds; and always the list of release assets to delete
+//! ([`super::prune`]).
 //!
 //! It reads only local files, through the [`ReadFiles`] port: CI lists
 //! the release's assets and downloads its current feeds first, so nothing
@@ -13,6 +14,7 @@ use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::commit::{self, Commit, CommitError, commit_asset};
 use super::key::{KeyError, PublicKey};
 use super::prune::{KEEP_BUILDS, LiveFeed, prune};
 use super::{Channel, CurrentFeed, Feed, FeedError, Platform, feed_name, read_feed, render};
@@ -89,6 +91,16 @@ pub enum AppcastError {
     /// `NOVA_CHANNEL` names no channel.
     #[error(transparent)]
     Channel(#[from] ChannelError),
+    /// `NOVA_COMMIT` is unset or empty: a publish records the commit it
+    /// built.
+    #[error(
+        "{} is unset or empty: set it to the full SHA of the commit the build legs built",
+        commit::VAR
+    )]
+    NoCommit,
+    /// `NOVA_COMMIT` isn't a commit's full SHA.
+    #[error("{var}: {0}", var = commit::VAR)]
+    Commit(CommitError),
     /// A program failed.
     #[error("`{command}` failed: {source}")]
     Run {
@@ -255,19 +267,23 @@ pub struct Published {
     pub prune: Vec<String>,
 }
 
-/// Publishes `build` of `spec` on `channel` as `signing` says, over
-/// `paths`: `channel`'s feeds are the ones compared against and written.
+/// Publishes `build` of `spec`, made from `commit`, on `channel` as
+/// `signing` says, over `paths`: `channel`'s feeds are the ones compared
+/// against and written. When signing, the commit file goes into `dist`
+/// beside the build-ID copies.
 ///
 /// # Errors
 ///
 /// A listed feed that wasn't downloaded or can't be read, a build that
 /// isn't newer than a current feed's (when signing), an installer
 /// missing from `dist`, or a failed read or write.
+#[allow(clippy::too_many_arguments)]
 pub fn publish<S: Signer>(
     read: &impl ReadFiles,
     files: &mut impl Files,
     spec: &BundleSpec,
     build: &BuildId,
+    commit: &Commit,
     channel: Channel,
     signing: &FeedSigning<S>,
     paths: &PublishPaths,
@@ -310,6 +326,12 @@ pub fn publish<S: Signer>(
                 uploads.insert(feed.asset.clone());
                 feeds.push(feed);
             }
+            let name = commit_asset(build);
+            let path = paths.dist.join(&name);
+            files
+                .write(&path, commit.file().as_bytes())
+                .map_err(|source| file_error("write", &path, source))?;
+            uploads.insert(name);
             files
                 .create_dir_all(&paths.feeds)
                 .map_err(|source| file_error("create", &paths.feeds, source))?;
@@ -441,12 +463,14 @@ fn refuse_unless_newer(
 
 /// The whole of `nova-appcast publish`: the channel (from
 /// [`channel::VAR`], which must name one), the build ID (from
-/// [`build_id::VAR`], else HEAD in `cwd`), the spec from `cargo metadata`,
+/// [`build_id::VAR`], else HEAD in `cwd`), the commit (from
+/// [`commit::VAR`], which must name one), the spec from `cargo metadata`,
 /// the signing decision from [`SEED_VAR`], then [`publish`].
 ///
 /// # Errors
 ///
-/// As [`publish`], or no channel, no build ID, no spec, or a bad seed.
+/// As [`publish`], or no channel, no build ID, no commit, no spec, or a
+/// bad seed.
 #[allow(clippy::too_many_arguments)]
 pub fn run<S: Signer>(
     process: &mut impl Process,
@@ -460,6 +484,11 @@ pub fn run<S: Signer>(
 ) -> Result<Published, AppcastError> {
     let channel = channel::from_env(env)?.ok_or(AppcastError::NoChannel)?;
     let build = build_id::resolve(env, process, cwd)?;
+    let commit = env
+        .var(commit::VAR)
+        .filter(|value| !value.is_empty())
+        .ok_or(AppcastError::NoCommit)?;
+    let commit = Commit::parse(&commit.to_string_lossy()).map_err(AppcastError::Commit)?;
     let invocation = metadata(cargo);
     let json = process
         .run(&invocation)
@@ -470,7 +499,9 @@ pub fn run<S: Signer>(
     let spec = BundleSpec::from_metadata(&json)?;
     let seed = env.var(SEED_VAR);
     let signing = FeedSigning::decide(spec.update_public_key.as_ref(), seed.as_deref(), make)?;
-    publish(read, files, &spec, &build, channel, &signing, paths)
+    publish(
+        read, files, &spec, &build, &commit, channel, &signing, paths,
+    )
 }
 
 /// `nova-appcast public-key`: the public key of the seed in
@@ -499,6 +530,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::appcast::commit::{CommitError, commit_asset};
     use crate::appcast::tests::{seed_base64, test_signer, verifies};
     use crate::appcast::{SPARKLE_NS, update_asset};
     use crate::archive;
@@ -511,11 +543,20 @@ mod tests {
     /// The channel most tests publish.
     const CHANNEL: Channel = Channel::Nightly;
 
-    /// An environment pinning the build ID and naming the nightly channel.
+    /// An environment pinning the build ID and the commit, and naming the
+    /// nightly channel.
     fn build_env() -> FakeEnv {
         let mut env = crate::test_support::build_env();
         env.0.insert(channel::VAR, "nightly".into());
+        env.0.insert(commit::VAR, SHA.into());
         env
+    }
+
+    /// The commit every test publishes.
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn sha() -> Commit {
+        Commit::parse(SHA).expect("a commit")
     }
 
     /// A public key no test seed derives.
@@ -768,6 +809,7 @@ mod tests {
             &mut files(&log),
             &spec(),
             &id(build),
+            &sha(),
             channel,
             signing,
             &paths(),
@@ -836,6 +878,10 @@ mod tests {
                 Event::Copy(
                     p.dist.join(Platform::Windows.stable_asset()),
                     p.dist.join(update_asset(Platform::Windows, &id(NEW))),
+                ),
+                Event::Write(
+                    p.dist.join("ev-nova-20261028123456-commit.txt"),
+                    format!("{SHA}\n").into_bytes(),
                 ),
                 Event::CreateDir(p.feeds.clone()),
                 Event::Write(mac_feed.clone(), expected_feeds[0].clone()),
@@ -1239,6 +1285,37 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_feed_write_is_an_error_naming_the_feed() {
+        let mut read = FakeRead::default();
+        dist_files(&mut read);
+        listed(&mut read, &stable());
+        let mut files = FakeFiles {
+            log: Log::default(),
+            fails: Box::new(
+                |e| matches!(e, Event::Write(path, _) if path.starts_with(paths().feeds)),
+            ),
+            absent: Box::new(|_| false),
+        };
+        let (signer, _) = recording();
+        let error = publish(
+            &read,
+            &mut files,
+            &spec(),
+            &id(NEW),
+            &sha(),
+            CHANNEL,
+            &FeedSigning::Sign(signer),
+            &paths(),
+        )
+        .expect_err("fails");
+        let feed = paths().feeds.join("appcast-macos-nightly.xml");
+        assert!(
+            matches!(&error, AppcastError::File { action: "write", path, .. } if *path == feed),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn a_failed_write_is_an_error_naming_the_file() {
         let mut read = FakeRead::default();
         dist_files(&mut read);
@@ -1255,14 +1332,15 @@ mod tests {
             &mut files,
             &spec(),
             &id(NEW),
+            &sha(),
             CHANNEL,
             &FeedSigning::Sign(signer),
             &paths(),
         )
         .expect_err("fails");
-        let feed = paths().feeds.join("appcast-macos-nightly.xml");
+        let commit_file = paths().dist.join(commit_asset(&id(NEW)));
         assert!(
-            matches!(&error, AppcastError::File { action: "write", path, .. } if *path == feed),
+            matches!(&error, AppcastError::File { action: "write", path, .. } if *path == commit_file),
             "{error:?}"
         );
         for (action, fails) in [
@@ -1286,6 +1364,7 @@ mod tests {
                 &mut files,
                 &spec(),
                 &id(NEW),
+                &sha(),
                 CHANNEL,
                 &FeedSigning::Sign(signer),
                 &paths(),
@@ -1306,6 +1385,7 @@ mod tests {
             &mut files,
             &spec(),
             &id(NEW),
+            &sha(),
             CHANNEL,
             &FeedSigning::Skip(SkipReason::Neither),
             &paths(),
@@ -1397,6 +1477,56 @@ mod tests {
             assert!(error.to_string().contains("NOVA_CHANNEL"), "{error}");
             assert_eq!(events, [], "{value:?}");
         }
+    }
+
+    #[test]
+    fn run_without_a_commit_fails_naming_the_variable_and_writes_nothing() {
+        for value in [None, Some("")] {
+            let mut env = env_with_seed(&seed_base64());
+            match value {
+                None => env.0.remove(commit::VAR),
+                Some(v) => env.0.insert(commit::VAR, v.into()),
+            };
+            let key = test_signer().public_key();
+            let (result, events) = run_with(&env, metadata_with_key(&key));
+            let error = result.expect_err("no commit");
+            assert!(matches!(error, AppcastError::NoCommit), "{error:?}");
+            assert!(error.to_string().contains("NOVA_COMMIT"), "{error}");
+            assert_eq!(events, [], "{value:?}");
+        }
+    }
+
+    #[test]
+    fn run_with_a_malformed_commit_fails_naming_the_variable_and_the_value() {
+        let mut env = env_with_seed(&seed_base64());
+        env.0.insert(commit::VAR, "HEAD".into());
+        let key = test_signer().public_key();
+        let (result, events) = run_with(&env, metadata_with_key(&key));
+        let error = result.expect_err("malformed");
+        assert!(
+            matches!(&error, AppcastError::Commit(CommitError(text)) if text == "HEAD"),
+            "{error:?}"
+        );
+        let text = error.to_string();
+        assert!(
+            text.starts_with("NOVA_COMMIT: ") && text.contains("`HEAD`"),
+            "{text}"
+        );
+        assert_eq!(events, []);
+    }
+
+    #[test]
+    fn run_records_the_variable_s_commit() {
+        let key = test_signer().public_key();
+        let (result, events) = run_with(&env_with_seed(&seed_base64()), metadata_with_key(&key));
+        result.expect("published");
+        assert!(
+            events.contains(&Event::Write(
+                paths().dist.join(commit_asset(&id(NEW))),
+                format!("{SHA}\n").into_bytes()
+            )),
+            "{events:?}"
+        );
     }
 
     #[test]

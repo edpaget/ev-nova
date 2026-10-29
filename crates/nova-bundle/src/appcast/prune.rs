@@ -1,9 +1,12 @@
 //! Which of the nightly release's assets a publish deletes: anything that
 //! is neither uploaded by this run, nor a live feed or a file a feed
-//! names, nor one of the newest few update files of its platform.
+//! names, nor one of the newest few update files of its platform, nor
+//! the commit file ([`super::commit::commit_asset`]) of a build one of
+//! whose update files is kept.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::commit::parse_commit_asset;
 use super::{Platform, parse_update_asset};
 use crate::build_id::BuildId;
 
@@ -24,7 +27,8 @@ pub struct LiveFeed {
 /// delete, sorted. An asset is kept if `uploads` (this run's files and
 /// feeds) holds it, if it is a feed in `feeds` or a file one names, or if
 /// it is among the `keep` newest update files of its platform, counted
-/// over `current` and `uploads` together.
+/// over `current` and `uploads` together. A build's commit file is kept
+/// while any update file of that build is, by any of those rules.
 #[must_use]
 pub fn prune(
     current: &[String],
@@ -46,9 +50,18 @@ pub fn prune(
     for newest in builds.values() {
         kept.extend(newest.iter().rev().take(keep).map(|&(_, name)| name));
     }
+    let kept_builds: BTreeSet<BuildId> = kept
+        .iter()
+        .filter_map(|name| parse_update_asset(name))
+        .map(|(_, build)| build)
+        .collect();
     let deleted: BTreeSet<&String> = current
         .iter()
-        .filter(|name| !kept.contains(name.as_str()))
+        .filter(|name| {
+            let with_its_build =
+                parse_commit_asset(name).is_some_and(|build| kept_builds.contains(&build));
+            !kept.contains(name.as_str()) && !with_its_build
+        })
         .collect();
     deleted.into_iter().cloned().collect()
 }
@@ -56,6 +69,7 @@ pub fn prune(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::appcast::commit::commit_asset;
     use crate::appcast::{Channel, feed_name, update_asset};
     use crate::archive;
     use crate::linux::flatpak;
@@ -192,6 +206,53 @@ mod tests {
                 feed_name(Platform::Macos, Channel::Nightly),
                 mac("20260101000000")
             ]
+        );
+    }
+
+    fn commit(build: &str) -> String {
+        commit_asset(&id(build))
+    }
+
+    #[test]
+    fn a_build_s_commit_file_goes_with_its_update_files() {
+        let (oldest, old, mid, new) = (
+            "20260101000000",
+            "20260102000000",
+            "20260103000000",
+            "20260104000000",
+        );
+        let current = vec![
+            mac(oldest),
+            win(oldest),
+            commit(oldest),
+            mac(old),
+            win(old),
+            commit(old),
+            mac(mid),
+            win(mid),
+            commit(mid),
+            // No update file of this build is left: an orphan.
+            commit("20251231000000"),
+        ];
+        let uploads = vec![mac(new), win(new), commit(new)];
+        // Keeping 2, `oldest` and `old` fall out; a feed still names
+        // `old`'s Windows file, which keeps its commit file.
+        let feeds = [feed(Platform::Windows, win(old))];
+        let mut want = vec![
+            mac(oldest),
+            win(oldest),
+            commit(oldest),
+            mac(old),
+            commit("20251231000000"),
+        ];
+        want.sort();
+        assert_eq!(prune(&current, &uploads, &feeds, 2), want);
+        // With no update file of its build, a commit file goes.
+        assert_eq!(prune(&[commit(mid)], &[], &[], 3), vec![commit(mid)]);
+        // An uploaded commit file is kept whatever else is.
+        assert_eq!(
+            prune(&[commit(mid)], &[commit(mid)], &[], 0),
+            Vec::<String>::new()
         );
     }
 

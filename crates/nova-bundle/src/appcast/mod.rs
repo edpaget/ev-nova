@@ -5,7 +5,8 @@
 //! are assets of its own rolling prerelease ([`Channel::tag`]). The beta
 //! channel is promoted from the nightly ([`Channel::promoted_from`]):
 //! [`promote`] is `nova-appcast check-promotion`'s decision, which build may
-//! be promoted and which commit of `main` it was built from.
+//! be promoted and which commit of `main` it was built from, as the
+//! build's commit file records it ([`commit`]).
 //!
 //! Each feed's item names its update file by the build ID
 //! ([`update_asset`], `ev-nova-<id>-<target>.<ext>`), a copy of the
@@ -29,6 +30,7 @@
 //! seed reaches CI as [`publish::SEED_VAR`], from the `update-signing`
 //! environment.
 
+pub mod commit;
 pub mod host;
 pub mod key;
 pub mod promote;

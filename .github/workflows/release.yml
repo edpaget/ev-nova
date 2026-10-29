@@ -208,9 +208,13 @@ jobs:
   #
   # The order matters. nova-appcast checks the build against the channel's
   # current feeds before the tag moves, so a refusal leaves the release
-  # untouched. The installers and their build-ID copies go up before the
-  # feeds that name them, so a feed never names a file that isn't up, and
-  # the deletes come last.
+  # untouched. The installers, their build-ID copies and the build's commit
+  # file go up before the feeds that name them, so a feed never names a
+  # file that isn't up, and the deletes come last.
+  #
+  # The commit file, ev-nova-<id>-commit.txt, records `sha` (NOVA_COMMIT):
+  # a promotion reads the nightly's to know which commit it built, since
+  # landing's rebase can give several commits the build ID's second.
   #
   # Re-running a run whose feeds already went up is fine: nova-appcast exits 3
   # (the feeds already offer this build) and writes nothing, so the job
@@ -233,7 +237,9 @@ jobs:
       # The build the feeds offer, and the channel whose feeds they are.
       NOVA_BUILD_ID: ${{ inputs.build-id }}
       NOVA_CHANNEL: ${{ inputs.channel }}
-      SHA: ${{ inputs.sha }}
+      # The commit built, which the tag moves to and the commit file
+      # records.
+      NOVA_COMMIT: ${{ inputs.sha }}
     steps:
       - uses: actions/checkout@v5
       # Rust for nova-appcast; nova-bundle needs no system libraries.
@@ -279,10 +285,11 @@ jobs:
           fi
       # Every leg's dist/ is merged into dist/ above. When signing,
       # nova-appcast copies the .dmg and .msi to their build-ID names in
-      # dist/ and writes the channel's feeds to feeds/. It always writes
-      # prune.txt, the assets to delete. The signing secret reaches this step
-      # alone, which has no GH_TOKEN and compiles nothing: it runs the binary
-      # built above, which spawns only `cargo metadata` (no build scripts).
+      # dist/, writes the build's commit file beside them, and writes the
+      # channel's feeds to feeds/. It always writes prune.txt, the assets to
+      # delete. The signing secret reaches this step alone, which has no
+      # GH_TOKEN and compiles nothing: it runs the binary built above, which
+      # spawns only `cargo metadata` (no build scripts).
       # mise exec puts that cargo on PATH.
       - name: Sign the update feeds
         shell: bash
@@ -299,25 +306,26 @@ jobs:
           elif [ "$status" -ne 0 ]; then
             exit "$status"
           fi
-      # The tag moves to `sha`, which the checkout (main's HEAD) may not
-      # hold, so it is fetched first. --clobber replaces each asset in place.
-      # The feeds go up only after the files they name, then the assets
-      # nova-appcast listed (renamed or dropped ones, and build-ID copies past
-      # the newest few that no feed names) are deleted. Uploading first means
-      # the release is never without an asset this run makes.
+      # The tag moves to `sha` (NOVA_COMMIT), which the checkout (main's
+      # HEAD) may not hold, so it is fetched first. --clobber replaces each
+      # asset in place. The feeds go up only after the files they name, then
+      # the assets nova-appcast listed (renamed or dropped ones, and build-ID
+      # copies past the newest few that no feed names, with their builds'
+      # commit files) are deleted. Uploading first means the release is
+      # never without an asset this run makes.
       - name: Publish the prerelease
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "$SHA"
-          git tag -f "$NOVA_CHANNEL" "$SHA"
+          git fetch --no-tags --depth=1 origin "$NOVA_COMMIT"
+          git tag -f "$NOVA_CHANNEL" "$NOVA_COMMIT"
           git push -f origin "refs/tags/$NOVA_CHANNEL"
-          commit_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$SHA"
+          commit_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$NOVA_COMMIT"
           case "$NOVA_CHANNEL" in
-            nightly) about="Tester build of \`main\` at $SHA ($commit_url)." ;;
-            *) about="Nightly build $NOVA_BUILD_ID of \`main\` at $SHA ($commit_url), promoted to $NOVA_CHANNEL." ;;
+            nightly) about="Tester build of \`main\` at $NOVA_COMMIT ($commit_url)." ;;
+            *) about="Nightly build $NOVA_BUILD_ID of \`main\` at $NOVA_COMMIT ($commit_url), promoted to $NOVA_CHANNEL." ;;
           esac
           notes="$about
 

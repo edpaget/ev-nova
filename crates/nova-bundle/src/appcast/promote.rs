@@ -11,19 +11,25 @@
 //!    are the ones phase 3's pruning keeps ([`super::prune::KEEP_BUILDS`]);
 //! 4. a build not newer than every current beta feed's
 //!    ([`refuse_unless_newer_than_beta`]), the same build included;
-//! 5. a build no commit of `main` has the committer time of, or more than
-//!    one has ([`find_commit`]).
+//! 5. a build whose commit the nightly release doesn't record, or records
+//!    malformed ([`recorded_commit`]);
+//! 6. a recorded commit that isn't on `main`, or whose committer time on
+//!    `main` isn't the build ID ([`verify_commit`]).
 //!
-//! The build ID *is* HEAD's committer time at the nightly's run
-//! ([`crate::build_id`]), so `main`'s history is the record of which
-//! commit each nightly built: [`commit_times`] reads it with `git log`,
-//! through the [`Process`] port. Like `publish`, it reads release data
-//! only from local files CI fetched first, through [`ReadFiles`].
+//! The nightly's publish records the commit it built in the build's commit
+//! file ([`super::commit::commit_asset`]), so the commit is read, never
+//! guessed: the build ID is HEAD's committer time ([`crate::build_id`]),
+//! but landing's rebase gives a run of commits the same committer second,
+//! so the time alone can't name one. `main`'s history then confirms the
+//! record: [`commit_times`] reads it with `git log`, through the
+//! [`Process`] port. Like `publish`, it reads release data only from
+//! local files CI fetched first, through [`ReadFiles`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use super::publish::{AppcastError, current_feeds, read_asset_list};
+use super::commit::{Commit, CommitError, commit_asset};
+use super::publish::{AppcastError, current_feeds, read_asset_list, read_at};
 use super::{Channel, CurrentFeed, Platform, parse_update_asset};
 use crate::build_id::{BuildId, BuildIdError};
 use crate::ports::{Env, Invocation, Process, ReadFiles, RunError};
@@ -41,6 +47,8 @@ pub struct PromotionPaths {
     pub repo: PathBuf,
     /// The nightly release's assets, one name per line.
     pub nightly_assets: PathBuf,
+    /// The nightly release's commit files, downloaded.
+    pub nightly_commits: PathBuf,
     /// The beta release's assets, one name per line: empty before the
     /// first promotion.
     pub beta_assets: PathBuf,
@@ -53,8 +61,8 @@ pub struct PromotionPaths {
 pub struct Promotion {
     /// The nightly's build ID.
     pub build: BuildId,
-    /// The commit of `main` whose committer time it is.
-    pub commit: String,
+    /// The commit of `main` the nightly recorded building.
+    pub commit: Commit,
 }
 
 impl Promotion {
@@ -101,25 +109,47 @@ pub enum PromoteError {
         /// The newest build a current beta feed offers.
         beta: BuildId,
     },
-    /// No commit of `main` has the build's committer time.
-    #[error("no commit on main has the committer time of build {build}")]
-    NoCommit {
+    /// The nightly release holds no commit file for the build.
+    #[error(
+        "build {build} has no recorded commit: the nightly release holds no {}, so it was \
+         built before commits were recorded, and can't be promoted",
+        commit_asset(build)
+    )]
+    NoRecordedCommit {
         /// The build asked for.
         build: BuildId,
     },
-    /// More than one commit of `main` has the build's committer time, so
-    /// which was built can't be told.
+    /// The build's commit file doesn't hold a commit.
     #[error(
-        "{} commits on main have the committer time of build {build} ({}): refusing to \
-         guess which one the nightly built",
-        commits.len(),
-        commits.join(", ")
+        "build {build}'s {} on the nightly release is malformed: {source}",
+        commit_asset(build)
     )]
-    SeveralCommits {
+    MalformedCommit {
         /// The build asked for.
         build: BuildId,
-        /// Every matching commit, in log order.
-        commits: Vec<String>,
+        /// What it holds instead.
+        source: CommitError,
+    },
+    /// The recorded commit isn't in `main`'s history.
+    #[error("build {build}'s recorded commit {commit} is not on main")]
+    CommitNotOnMain {
+        /// The build asked for.
+        build: BuildId,
+        /// The commit its file records.
+        commit: Commit,
+    },
+    /// The recorded commit's committer time on `main` isn't the build ID.
+    #[error(
+        "build {build}'s recorded commit {commit} has committer time {} on main, not {build}",
+        committed_as_text(*committed)
+    )]
+    CommitTimeMismatch {
+        /// The build asked for.
+        build: BuildId,
+        /// The commit its file records.
+        commit: Commit,
+        /// Its committer time, in Unix seconds.
+        committed: i64,
     },
     /// `git log` failed.
     #[error("`{command}` failed: {source}")]
@@ -132,7 +162,7 @@ pub enum PromoteError {
     /// `git log` printed a line that isn't a commit and a time.
     #[error("`git log` printed `{0}`, not a commit and a committer time")]
     GitOutput(String),
-    /// The asset lists or the beta feeds can't be read.
+    /// The asset lists, the commit file or the beta feeds can't be read.
     #[error(transparent)]
     Release(#[from] AppcastError),
 }
@@ -144,6 +174,12 @@ fn holds(held: &[BuildId]) -> String {
         [one] => format!("holds build {one}"),
         _ => format!("holds builds {}", and_list(held)),
     }
+}
+
+/// A committer time as the build ID it is, or as Unix seconds when it
+/// names none.
+fn committed_as_text(secs: i64) -> String {
+    BuildId::from_unix(secs).map_or_else(|_| format!("{secs} (Unix seconds)"), |b| b.to_string())
 }
 
 /// `builds` as prose: "A", "A and B", "A, B and C"; empty for none.
@@ -209,6 +245,35 @@ pub fn refuse_unless_newer_than_beta(
     }
 }
 
+/// The commit `build`'s commit file records: `assets` (the nightly
+/// release's) must list the file, which CI downloaded into `dir`.
+///
+/// # Errors
+///
+/// [`PromoteError::NoRecordedCommit`] when `assets` doesn't list it,
+/// [`PromoteError::Release`] when it wasn't downloaded or can't be read,
+/// and [`PromoteError::MalformedCommit`] when it holds no commit.
+pub fn recorded_commit(
+    read: &impl ReadFiles,
+    assets: &[String],
+    dir: &Path,
+    build: &BuildId,
+) -> Result<Commit, PromoteError> {
+    let name = commit_asset(build);
+    if !assets.contains(&name) {
+        return Err(PromoteError::NoRecordedCommit {
+            build: build.clone(),
+        });
+    }
+    let bytes = read_at(read, &dir.join(&name))?;
+    Commit::parse(&String::from_utf8_lossy(&bytes)).map_err(|source| {
+        PromoteError::MalformedCommit {
+            build: build.clone(),
+            source,
+        }
+    })
+}
+
 /// `git log` printing every commit reachable from HEAD in the checkout at
 /// `repo`, newest first, as `<sha> <committer time>` lines.
 #[must_use]
@@ -220,42 +285,41 @@ pub fn commit_times(repo: &Path) -> Invocation {
         .captured()
 }
 
-/// The one commit in `log` ([`commit_times`]'s output) whose committer
-/// time is `build`.
+/// Checks `commit`, `build`'s recorded commit, against `log`
+/// ([`commit_times`]'s output, `main`'s history): it must be there, with
+/// `build` as its committer time.
 ///
 /// # Errors
 ///
 /// [`PromoteError::GitOutput`] for a line that isn't a commit and a time,
-/// [`PromoteError::NoCommit`] when none matches and
-/// [`PromoteError::SeveralCommits`] when more than one does.
-pub fn find_commit(log: &str, build: &BuildId) -> Result<String, PromoteError> {
-    let mut commits = Vec::new();
+/// [`PromoteError::CommitNotOnMain`] when `commit` isn't in `log`, and
+/// [`PromoteError::CommitTimeMismatch`] when its time isn't `build`.
+pub fn verify_commit(log: &str, build: &BuildId, commit: &Commit) -> Result<(), PromoteError> {
+    let mut committed = None;
     for line in log.lines().map(str::trim).filter(|l| !l.is_empty()) {
         let garbage = || PromoteError::GitOutput(line.to_owned());
         let (sha, time) = line.split_once(' ').ok_or_else(garbage)?;
-        if !is_commit(sha) {
-            return Err(garbage());
-        }
+        let sha = Commit::parse(sha).map_err(|_| garbage())?;
         let secs: i64 = time.parse().map_err(|_| garbage())?;
-        if BuildId::from_unix(secs).ok().as_ref() == Some(build) {
-            commits.push(sha.to_owned());
+        if sha == *commit {
+            committed = Some(secs);
         }
     }
-    match commits.len() {
-        0 => Err(PromoteError::NoCommit {
+    let Some(secs) = committed else {
+        return Err(PromoteError::CommitNotOnMain {
             build: build.clone(),
-        }),
-        1 => Ok(commits.remove(0)),
-        _ => Err(PromoteError::SeveralCommits {
+            commit: commit.clone(),
+        });
+    };
+    if BuildId::from_unix(secs).ok().as_ref() == Some(build) {
+        Ok(())
+    } else {
+        Err(PromoteError::CommitTimeMismatch {
             build: build.clone(),
-            commits,
-        }),
+            commit: commit.clone(),
+            committed: secs,
+        })
     }
-}
-
-/// Whether `text` is a commit's full hex name (SHA-1 or SHA-256).
-fn is_commit(text: &str) -> bool {
-    matches!(text.len(), 40 | 64) && text.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// The whole of `nova-appcast check-promotion --build <build>`: the
@@ -263,8 +327,8 @@ fn is_commit(text: &str) -> bool {
 ///
 /// # Errors
 ///
-/// Each refusal in the module docs, or an asset list, a beta feed or
-/// `git log` that can't be read.
+/// Each refusal in the module docs, or an asset list, a commit file, a
+/// beta feed or `git log` that can't be read.
 pub fn check_promotion(
     env: &impl Env,
     read: &impl ReadFiles,
@@ -275,7 +339,8 @@ pub fn check_promotion(
     let git_ref = env.var(REF_VAR).map(|r| r.to_string_lossy().into_owned());
     refuse_off_main(git_ref.as_deref())?;
     let build = BuildId::parse(build).map_err(PromoteError::Malformed)?;
-    let held = held_builds(&read_asset_list(read, &paths.nightly_assets)?);
+    let nightly = read_asset_list(read, &paths.nightly_assets)?;
+    let held = held_builds(&nightly);
     if !held.contains(&build) {
         return Err(PromoteError::NotOnNightly { build, held });
     }
@@ -286,6 +351,7 @@ pub fn check_promotion(
             .map(|(_, feed)| feed)
             .collect();
     refuse_unless_newer_than_beta(&build, &beta)?;
+    let commit = recorded_commit(read, &nightly, &paths.nightly_commits, &build)?;
     let invocation = commit_times(&paths.repo);
     let log = process
         .run(&invocation)
@@ -293,7 +359,7 @@ pub fn check_promotion(
             command: invocation.to_string(),
             source,
         })?;
-    let commit = find_commit(&String::from_utf8_lossy(&log), &build)?;
+    verify_commit(&String::from_utf8_lossy(&log), &build, &commit)?;
     Ok(Promotion { build, commit })
 }
 
@@ -322,6 +388,11 @@ mod tests {
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const SHA_C: &str = "cccccccccccccccccccccccccccccccccccccccc";
+    const SHA_D: &str = "dddddddddddddddddddddddddddddddddddddddd";
+
+    fn sha(text: &str) -> Commit {
+        Commit::parse(text).expect("a commit")
+    }
 
     fn root() -> PathBuf {
         Path::new("/work").join("run")
@@ -331,6 +402,7 @@ mod tests {
         PromotionPaths {
             repo: root().join("main"),
             nightly_assets: root().join("nightly-assets.txt"),
+            nightly_commits: root().join("nightly-commits"),
             beta_assets: root().join("beta-assets.txt"),
             beta_current: root().join("beta-current"),
         }
@@ -347,8 +419,10 @@ mod tests {
         FakeEnv(HashMap::from([(REF_VAR, MAIN_REF.into())]))
     }
 
-    /// The nightly holding `OLD`, `MID` and `NEW`, no beta yet, and `git
-    /// log` answering `log`.
+    /// The nightly holding `OLD`, `MID` and `NEW`, with `NEW`'s commit
+    /// file recording `SHA_B`; no beta yet; and `git log` answering `log`,
+    /// where `SHA_B` and `SHA_C` share `NEW`'s second, as a landing's
+    /// rebase leaves them.
     struct World {
         env: FakeEnv,
         read: FakeRead,
@@ -362,14 +436,45 @@ mod tests {
             for build in [OLD, MID, NEW] {
                 nightly.extend(both(build));
             }
+            nightly.push(commit_asset(&id(NEW)));
             read.0
                 .insert(paths().nightly_assets, one_per_line(&nightly).into_bytes());
             read.0.insert(paths().beta_assets, Vec::new());
-            Self {
+            let mut world = Self {
                 env: main_env(),
                 read,
-                log: format!("{SHA_A} {}\n{SHA_B} {}\n", NEW_SECS + 60, NEW_SECS),
-            }
+                log: format!(
+                    "{SHA_A} {}\n{SHA_C} {NEW_SECS}\n{SHA_B} {NEW_SECS}\n",
+                    NEW_SECS + 60
+                ),
+            };
+            world.record(NEW, SHA_B);
+            world
+        }
+
+        /// `build`'s downloaded commit file holding `text` and a newline.
+        fn record(&mut self, build: &str, text: &str) {
+            self.read.0.insert(
+                paths().nightly_commits.join(commit_asset(&id(build))),
+                format!("{text}\n").into_bytes(),
+            );
+        }
+
+        /// The nightly release without `NEW`'s commit file.
+        fn unrecorded(mut self) -> Self {
+            let listed = paths().nightly_assets;
+            let text = String::from_utf8(self.read.0[&listed].clone()).expect("utf-8");
+            let without: Vec<&str> = text
+                .lines()
+                .filter(|l| *l != commit_asset(&id(NEW)))
+                .collect();
+            self.read
+                .0
+                .insert(listed, one_per_line(&without).into_bytes());
+            self.read
+                .0
+                .remove(&paths().nightly_commits.join(commit_asset(&id(NEW))));
+            self
         }
 
         /// The beta release offering `build` on both feeds.
@@ -449,6 +554,7 @@ mod tests {
         assets.extend(both(NEW));
         assets.push("ev-nova-aarch64-apple-darwin.dmg".to_owned());
         assets.push("appcast-macos-nightly.xml".to_owned());
+        assets.push(commit_asset(&id(MID)));
         assert_eq!(held_builds(&assets), vec![id(OLD), id(NEW)]);
         assert_eq!(held_builds(&[]), Vec::<BuildId>::new());
     }
@@ -520,54 +626,149 @@ mod tests {
         );
     }
 
-    // The commit.
+    // The recorded commit.
 
     #[test]
-    fn the_commit_whose_time_is_the_build_is_found() {
-        let log = format!(
-            "{SHA_A} {}\n{SHA_B} {NEW_SECS}\n\n{SHA_C} {}\n",
-            NEW_SECS + 1,
-            NEW_SECS - 1
-        );
-        assert_eq!(find_commit(&log, &id(NEW)).expect("found"), SHA_B);
-        assert_eq!(BuildId::from_unix(NEW_SECS).expect("an ID"), id(NEW));
-        let sha256 = "d".repeat(64);
+    fn the_recorded_commit_is_read_from_its_downloaded_file() {
+        let world = World::new();
+        let nightly = read_asset_list(&world.read, &paths().nightly_assets).expect("a list");
         assert_eq!(
-            find_commit(&format!("{sha256} {NEW_SECS}\n"), &id(NEW)).expect("found"),
-            sha256
+            recorded_commit(&world.read, &nightly, &paths().nightly_commits, &id(NEW))
+                .expect("recorded"),
+            sha(SHA_B)
         );
     }
 
     #[test]
-    fn several_commits_at_the_build_s_time_are_refused_naming_them_all() {
-        let log = format!("{SHA_A} {NEW_SECS}\n{SHA_C} 1\n{SHA_B} {NEW_SECS}\n");
-        let error = find_commit(&log, &id(NEW)).expect_err("ambiguous");
+    fn a_build_without_a_listed_commit_file_was_built_before_commits_were_recorded() {
+        // MID's file is downloaded but not listed: the list decides.
+        let mut world = World::new();
+        world.record(MID, SHA_A);
+        let nightly = read_asset_list(&world.read, &paths().nightly_assets).expect("a list");
+        let error = recorded_commit(&world.read, &nightly, &paths().nightly_commits, &id(MID))
+            .expect_err("unrecorded");
         assert!(
-            matches!(&error, PromoteError::SeveralCommits { build, commits }
-                if *build == id(NEW) && *commits == [SHA_A, SHA_B]),
+            matches!(&error, PromoteError::NoRecordedCommit { build } if *build == id(MID)),
             "{error:?}"
         );
-        let text = error.to_string();
-        assert!(
-            text.contains(NEW) && text.contains(SHA_A) && text.contains(SHA_B),
-            "{text}"
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "build {MID} has no recorded commit: the nightly release holds no \
+                 ev-nova-{MID}-commit.txt, so it was built before commits were recorded, and \
+                 can't be promoted"
+            )
         );
-        assert!(text.starts_with("2 commits on main"), "{text}");
     }
 
     #[test]
-    fn no_matching_commit_is_no_commit_naming_the_build() {
-        for log in [String::new(), format!("{SHA_A} {}\n", NEW_SECS + 1)] {
-            let error = find_commit(&log, &id(NEW)).expect_err("none");
+    fn a_listed_commit_file_that_wasnt_downloaded_is_an_error_naming_it() {
+        let mut world = World::new();
+        let file = paths().nightly_commits.join(commit_asset(&id(NEW)));
+        world.read.0.remove(&file);
+        let nightly = read_asset_list(&world.read, &paths().nightly_assets).expect("a list");
+        let error = recorded_commit(&world.read, &nightly, &paths().nightly_commits, &id(NEW))
+            .expect_err("missing");
+        assert!(
+            matches!(&error, PromoteError::Release(AppcastError::Read { path, .. }) if *path == file),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_commit_file_is_refused_naming_the_build_and_its_text() {
+        for text in ["HEAD", &SHA_B[1..], "", "\u{fffd}"] {
+            let mut world = World::new();
+            world.record(NEW, text);
+            let (result, events) = world.check(NEW);
+            let error = result.expect_err("malformed");
             assert!(
-                matches!(&error, PromoteError::NoCommit { build } if *build == id(NEW)),
+                matches!(&error, PromoteError::MalformedCommit { build, source: CommitError(t) }
+                    if *build == id(NEW) && t == text),
+                "{text}: {error:?}"
+            );
+            let message = error.to_string();
+            assert!(
+                message.starts_with(&format!(
+                    "build {NEW}'s ev-nova-{NEW}-commit.txt on the nightly release is malformed: "
+                )) && message.contains(&format!("`{text}`")),
+                "{message}"
+            );
+            assert_eq!(events, [], "{text}");
+        }
+        // Bytes that aren't UTF-8 are no commit either.
+        let mut world = World::new();
+        world.read.0.insert(
+            paths().nightly_commits.join(commit_asset(&id(NEW))),
+            vec![0xff; 40],
+        );
+        let (result, _) = world.check(NEW);
+        assert!(
+            matches!(&result, Err(PromoteError::MalformedCommit { .. })),
+            "{result:?}"
+        );
+    }
+
+    // The commit against main.
+
+    #[test]
+    fn the_recorded_commit_is_taken_though_others_share_its_second() {
+        let log = format!(
+            "{SHA_A} {}\n{SHA_B} {NEW_SECS}\n\n{SHA_C} {NEW_SECS}\n{SHA_D} {NEW_SECS}\n",
+            NEW_SECS + 1,
+        );
+        assert_eq!(BuildId::from_unix(NEW_SECS).expect("an ID"), id(NEW));
+        for recorded in [SHA_B, SHA_C, SHA_D] {
+            assert!(
+                verify_commit(&log, &id(NEW), &sha(recorded)).is_ok(),
+                "{recorded}"
+            );
+        }
+        let sha256 = "e".repeat(64);
+        assert!(verify_commit(&format!("{sha256} {NEW_SECS}\n"), &id(NEW), &sha(&sha256)).is_ok());
+    }
+
+    #[test]
+    fn a_recorded_commit_not_in_main_s_history_is_refused_naming_both() {
+        for log in [String::new(), format!("{SHA_A} {NEW_SECS}\n")] {
+            let error = verify_commit(&log, &id(NEW), &sha(SHA_B)).expect_err("not on main");
+            assert!(
+                matches!(&error, PromoteError::CommitNotOnMain { build, commit }
+                    if *build == id(NEW) && *commit == sha(SHA_B)),
                 "{error:?}"
             );
             assert_eq!(
                 error.to_string(),
-                format!("no commit on main has the committer time of build {NEW}")
+                format!("build {NEW}'s recorded commit {SHA_B} is not on main")
             );
         }
+    }
+
+    #[test]
+    fn a_recorded_commit_at_another_time_is_refused_naming_both_times() {
+        let log = format!("{SHA_A} {NEW_SECS}\n{SHA_B} {}\n", NEW_SECS + 60);
+        let error = verify_commit(&log, &id(NEW), &sha(SHA_B)).expect_err("mismatch");
+        assert!(
+            matches!(&error, PromoteError::CommitTimeMismatch { build, commit, committed }
+                if *build == id(NEW) && *commit == sha(SHA_B) && *committed == NEW_SECS + 60),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "build {NEW}'s recorded commit {SHA_B} has committer time 20261028123556 on \
+                 main, not {NEW}"
+            )
+        );
+        // A time no build ID can name is shown as seconds.
+        let error =
+            verify_commit(&format!("{SHA_B} -5\n"), &id(NEW), &sha(SHA_B)).expect_err("mismatch");
+        assert!(
+            error
+                .to_string()
+                .contains("has committer time -5 (Unix seconds) on main"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -581,18 +782,19 @@ mod tests {
             format!("{} {NEW_SECS}", "e".repeat(41)),
             format!("{SHA_A} {NEW_SECS} extra"),
         ] {
-            let error = find_commit(&format!("{line}\n"), &id(NEW)).expect_err("garbage");
-            assert!(
-                matches!(&error, PromoteError::GitOutput(l) if *l == line),
-                "{line}: {error:?}"
-            );
-            assert!(error.to_string().contains(&line), "{error}");
+            // Before or after the recorded commit's line.
+            for log in [
+                format!("{line}\n{SHA_B} {NEW_SECS}\n"),
+                format!("{SHA_B} {NEW_SECS}\n{line}\n"),
+            ] {
+                let error = verify_commit(&log, &id(NEW), &sha(SHA_B)).expect_err("garbage");
+                assert!(
+                    matches!(&error, PromoteError::GitOutput(l) if *l == line),
+                    "{line}: {error:?}"
+                );
+                assert!(error.to_string().contains(&line), "{error}");
+            }
         }
-        // A time outside the years a build ID can name matches nothing.
-        assert!(matches!(
-            find_commit(&format!("{SHA_A} -5\n"), &id(NEW)),
-            Err(PromoteError::NoCommit { .. })
-        ));
     }
 
     #[test]
@@ -612,7 +814,7 @@ mod tests {
     fn the_output_is_the_build_and_commit_lines() {
         let promotion = Promotion {
             build: id(NEW),
-            commit: SHA_B.to_owned(),
+            commit: sha(SHA_B),
         };
         assert_eq!(promotion.output(), format!("build={NEW}\ncommit={SHA_B}\n"));
     }
@@ -620,22 +822,26 @@ mod tests {
     // The whole check.
 
     #[test]
-    fn a_held_newer_build_on_main_resolves_to_its_commit() {
+    fn a_held_newer_build_on_main_resolves_to_its_recorded_commit() {
         let (result, events) = World::new().beta(MID).check(NEW);
         assert_eq!(
             result.expect("promotable"),
             Promotion {
                 build: id(NEW),
-                commit: SHA_B.to_owned(),
+                commit: sha(SHA_B),
             }
         );
         assert_eq!(events, [Event::Run(commit_times(&paths().repo))]);
+        // SHA_C shares the second; recorded, it is the one taken.
+        let mut world = World::new();
+        world.record(NEW, SHA_C);
+        assert_eq!(world.check(NEW).0.expect("promotable").commit, sha(SHA_C));
     }
 
     #[test]
     fn a_first_promotion_has_no_beta_to_compare_with() {
         let (result, _) = World::new().check(NEW);
-        assert_eq!(result.expect("promotable").commit, SHA_B);
+        assert_eq!(result.expect("promotable").commit, sha(SHA_B));
     }
 
     #[test]
@@ -672,8 +878,9 @@ mod tests {
         );
         assert_eq!(events, []);
 
-        // A held build not newer than the beta, though no commit matches.
-        let mut world = World::new().beta(NEW);
+        // A held build not newer than the beta, though it records no
+        // commit and none is on main.
+        let mut world = World::new().unrecorded().beta(NEW);
         world.log = String::new();
         let (result, events) = world.check(MID);
         assert!(
@@ -688,15 +895,35 @@ mod tests {
             "{result:?}"
         );
 
-        // Then the commit.
+        // Then the recorded commit, before git runs, though none is on
+        // main.
+        let mut world = World::new().unrecorded();
+        world.log = String::new();
+        let (result, events) = world.check(NEW);
+        assert!(
+            matches!(&result, Err(PromoteError::NoRecordedCommit { build }) if *build == id(NEW)),
+            "{result:?}"
+        );
+        assert_eq!(events, []);
+
+        // Then main's history.
         let mut world = World::new();
         world.log = String::new();
         let (result, events) = world.check(NEW);
         assert!(
-            matches!(&result, Err(PromoteError::NoCommit { build }) if *build == id(NEW)),
+            matches!(&result, Err(PromoteError::CommitNotOnMain { build, commit })
+                if *build == id(NEW) && *commit == sha(SHA_B)),
             "{result:?}"
         );
         assert_eq!(events, [Event::Run(commit_times(&paths().repo))]);
+        let mut world = World::new();
+        world.log = format!("{SHA_B} {}\n", NEW_SECS - 1);
+        let (result, _) = world.check(NEW);
+        assert!(
+            matches!(&result, Err(PromoteError::CommitTimeMismatch { committed, .. })
+                if *committed == NEW_SECS - 1),
+            "{result:?}"
+        );
     }
 
     #[test]

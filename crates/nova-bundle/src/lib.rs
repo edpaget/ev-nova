@@ -201,9 +201,11 @@
 //! `--current`. When the game package's `[package.metadata.bundle]` sets
 //! `update_public_key` and `UPDATE_SIGNING_KEY` holds its seed (32 bytes,
 //! standard base64), it copies each installer to its build-ID name in
-//! `--dist` (`ev-nova-<id>-<target>.<ext>`), signs it with Ed25519, and
-//! writes `appcast-macos-<channel>.xml` and `appcast-windows-<channel>.xml`
-//! into `--feeds`. When either half is missing it skips the feeds and
+//! `--dist` (`ev-nova-<id>-<target>.<ext>`), signs it with Ed25519,
+//! records the commit built (`NOVA_COMMIT`, which it requires) in
+//! `ev-nova-<id>-commit.txt` beside them, and writes
+//! `appcast-macos-<channel>.xml` and `appcast-windows-<channel>.xml` into
+//! `--feeds`. When either half is missing it skips the feeds and
 //! prints a `::warning::`, and the nightly publishes without them; a seed
 //! that is malformed or doesn't match the key fails. Either way it writes
 //! the release assets to delete into `--prune-list`, one per line.
@@ -219,7 +221,8 @@
 //!
 //! ```text
 //! mise run appcast -- check-promotion --build <ID> --repo <DIR> \
-//!     --nightly-assets <FILE> --beta-assets <FILE> --beta-current <DIR>
+//!     --nightly-assets <FILE> --nightly-commits <DIR> --beta-assets <FILE> \
+//!     --beta-current <DIR>
 //! ```
 //!
 //! A beta is a nightly promoted by hand (`promote-beta.yml`): the
@@ -228,11 +231,14 @@
 //! is the workflow's first job. It refuses a run whose `GITHUB_REF` isn't
 //! `main`, a malformed ID, a build the nightly release's asset list doesn't
 //! hold both update files of, or one not newer than the beta feeds in
-//! `--beta-current`, naming the IDs (exit 1); then it finds the one commit
-//! in `--repo`'s history whose committer time is the build ID and prints
-//! `build=<id>` and `commit=<sha>` ([`appcast::promote`]). The Flatpak is
-//! not rebuilt: `nova-flatpak-repo` copies the nightly branch's commit onto
-//! `beta` ([`linux::flatpak::repo::promote`]).
+//! `--beta-current`, naming the IDs (exit 1); then it reads the commit the
+//! nightly recorded building, from the build's `ev-nova-<id>-commit.txt`
+//! downloaded into `--nightly-commits`, refuses a build with none (built
+//! before commits were recorded) or a malformed one, checks that the
+//! commit is on `main` in `--repo` with the build ID as its committer
+//! time, and prints `build=<id>` and `commit=<sha>` ([`appcast::promote`]).
+//! The Flatpak is not rebuilt: `nova-flatpak-repo` copies the nightly
+//! branch's commit onto `beta` ([`linux::flatpak::repo::promote`]).
 
 pub mod appcast;
 pub mod archive;

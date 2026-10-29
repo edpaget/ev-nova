@@ -193,7 +193,7 @@ happen in any order:
 | not committed | any | skips the feeds with a warning; the nightly publishes as before |
 | committed | empty | skips the feeds with a warning |
 | committed | malformed, or another key's seed | fails before the tag moves |
-| committed | its seed | signs and uploads both feeds and the build-ID update files |
+| committed | its seed | signs and uploads both feeds, the build-ID update files and the build's commit file |
 
 `nova-appcast` also refuses a build that isn't newer than the one the
 current feeds offer. An older build fails the job and leaves the release
@@ -355,14 +355,23 @@ published, a run off `main`, a malformed ID, a build the `nightly` release
 no longer holds (both its `.dmg` and `.msi` update files), or one not newer
 than the current beta, each naming the IDs.
 
+The commit it rebuilds is the one the nightly recorded: each signed publish
+uploads `ev-nova-<id>-commit.txt`, holding the full SHA of the commit
+built, beside the build's update files, and prunes it with them. The build
+ID alone can't name the commit, because landing's rebase gives a run of
+commits the same committer second. `check` downloads the nightly's commit
+files and refuses a build with none ("built before commits were
+recorded"), a file that holds no SHA, a SHA that isn't on `main`, or one
+whose committer time on `main` isn't the build ID, naming both.
+
 Preconditions:
 
 - The update-signing setup above is in place: without it no nightly holds
   update files, and every promotion is refused as "isn't on the nightly
   release". The Flatpak repository key is needed for a beta Flatpak; without
   it the beta publishes macOS and Windows only, as the nightly does.
-- The nightly was built after promotion support landed, and is still among
-  the newest three the nightly release keeps. An older commit's own code
+- The nightly was built after promotion support landed (so it recorded its
+  commit), and is still among the newest three the nightly release keeps. An older commit's own code
   refuses `NOVA_CHANNEL=beta`, which fails its build legs before anything is
   published.
 

@@ -12,6 +12,7 @@ use std::process::{Command, Output};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
+use nova_bundle::appcast::commit::{Commit, commit_asset};
 use nova_bundle::appcast::host::{ALREADY_PUBLISHED, FAILURE_STATUS, exit_status};
 use nova_bundle::appcast::publish::{
     AppcastError, FeedSigning, PublishPaths, Published, SEED_VAR, publish,
@@ -95,6 +96,7 @@ fn publish_real(root: &Path, paths: &PublishPaths, build: &str) -> Result<Publis
         &mut StdFiles,
         &spec(root),
         &id(build),
+        &Commit::parse(SHA).expect("a commit"),
         Channel::Nightly,
         &FeedSigning::Sign(signer()),
         paths,
@@ -102,6 +104,9 @@ fn publish_real(root: &Path, paths: &PublishPaths, build: &str) -> Result<Publis
 }
 
 const BUILD: &str = "20261028123456";
+
+/// The commit the publish tests record.
+const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
 #[test]
 fn publish_over_real_files_writes_feeds_whose_signatures_verify() {
@@ -144,6 +149,10 @@ fn publish_over_real_files_writes_feeds_whose_signatures_verify() {
             .verify(bytes, &signature)
             .expect("the signature verifies");
     }
+    assert_eq!(
+        fs::read_to_string(paths.dist.join(commit_asset(&id(BUILD)))).expect("the commit file"),
+        format!("{SHA}\n")
+    );
     assert_eq!(published.prune, std::slice::from_ref(&dropped));
     assert_eq!(
         fs::read_to_string(&paths.prune_list).expect("the prune list"),
@@ -212,6 +221,7 @@ fn nova_appcast(args: &[&std::ffi::OsStr], seed: Option<&str>) -> Output {
         .env("CARGO", env!("CARGO"))
         .env("NOVA_BUILD_ID", BUILD)
         .env("NOVA_CHANNEL", "nightly")
+        .env("NOVA_COMMIT", SHA)
         .env_remove(SEED_VAR);
     if let Some(seed) = seed {
         command.env(SEED_VAR, seed);
@@ -365,14 +375,22 @@ fn main_repo(dir: &Path, times: &[i64]) -> Vec<String> {
 }
 
 /// The nightly release holding both update files of each of `builds`,
-/// and no beta release yet: the four `check-promotion` arguments after
-/// `--build <ID>`.
-fn releases(dir: &Path, builds: &[&str]) -> Vec<std::ffi::OsString> {
+/// and the commit file of each build in `recorded`, downloaded, holding
+/// its text; and no beta release yet: the `check-promotion` arguments
+/// after `--build <ID>`.
+fn releases(dir: &Path, builds: &[&str], recorded: &[(&str, &str)]) -> Vec<std::ffi::OsString> {
     let mut nightly = vec![Platform::Macos.stable_asset().to_owned()];
     for build in builds {
         for platform in Platform::ALL {
             nightly.push(update_asset(platform, &id(build)));
         }
+    }
+    let commits = dir.join("nightly-commits");
+    fs::create_dir_all(&commits).expect("nightly commits");
+    for (build, text) in recorded {
+        let name = commit_asset(&id(build));
+        fs::write(commits.join(&name), format!("{text}\n")).expect("a commit file");
+        nightly.push(name);
     }
     let nightly_list = dir.join("nightly.txt");
     fs::write(&nightly_list, nightly.join("\n") + "\n").expect("nightly list");
@@ -385,6 +403,8 @@ fn releases(dir: &Path, builds: &[&str]) -> Vec<std::ffi::OsString> {
         dir.join("main").into(),
         "--nightly-assets".into(),
         nightly_list.into(),
+        "--nightly-commits".into(),
+        commits.into(),
         "--beta-assets".into(),
         beta_list.into(),
         "--beta-current".into(),
@@ -410,25 +430,37 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
-fn check_promotion_prints_a_held_newer_build_and_its_commit() {
+fn check_promotion_prints_a_held_newer_build_and_its_recorded_commit() {
     assert_eq!(BuildId::from_unix(MID_SECS).expect("an ID"), id(MID));
     assert_eq!(BuildId::from_unix(BUILD_SECS).expect("an ID"), id(BUILD));
     let dir = tempfile::tempdir().expect("temp dir");
-    let shas = main_repo(dir.path(), &[MID_SECS, BUILD_SECS, BUILD_SECS + 60]);
-    let rest = releases(dir.path(), &[MID, BUILD]);
-    let output = check_promotion(BUILD, &rest, "refs/heads/main");
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(
-        String::from_utf8(output.stdout).expect("utf-8"),
-        format!("build={BUILD}\ncommit={}\n", shas[1])
+    // A landing's rebase: three commits in the build's second.
+    let shas = main_repo(
+        dir.path(),
+        &[
+            MID_SECS,
+            BUILD_SECS,
+            BUILD_SECS,
+            BUILD_SECS,
+            BUILD_SECS + 60,
+        ],
     );
+    for built in &shas[1..4] {
+        let rest = releases(dir.path(), &[MID, BUILD], &[(BUILD, built)]);
+        let output = check_promotion(BUILD, &rest, "refs/heads/main");
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout).expect("utf-8"),
+            format!("build={BUILD}\ncommit={built}\n")
+        );
+    }
 }
 
 #[test]
 fn check_promotion_refuses_a_build_the_nightly_doesnt_hold_naming_the_ids() {
     let dir = tempfile::tempdir().expect("temp dir");
-    main_repo(dir.path(), &[MID_SECS, BUILD_SECS]);
-    let rest = releases(dir.path(), &[MID]);
+    let shas = main_repo(dir.path(), &[MID_SECS, BUILD_SECS]);
+    let rest = releases(dir.path(), &[MID], &[(MID, &shas[0])]);
     let output = check_promotion(BUILD, &rest, "refs/heads/main");
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
@@ -443,8 +475,8 @@ fn check_promotion_refuses_a_build_the_nightly_doesnt_hold_naming_the_ids() {
 #[test]
 fn check_promotion_refuses_a_run_off_main_and_a_malformed_build_with_exit_1() {
     let dir = tempfile::tempdir().expect("temp dir");
-    main_repo(dir.path(), &[BUILD_SECS]);
-    let rest = releases(dir.path(), &[BUILD]);
+    let shas = main_repo(dir.path(), &[BUILD_SECS]);
+    let rest = releases(dir.path(), &[BUILD], &[(BUILD, &shas[0])]);
     for (build, git_ref, says) in [
         (
             BUILD,
@@ -465,16 +497,75 @@ fn check_promotion_refuses_a_run_off_main_and_a_malformed_build_with_exit_1() {
     }
 }
 
-#[test]
-fn check_promotion_refuses_two_commits_at_the_build_s_time_naming_both() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let shas = main_repo(dir.path(), &[MID_SECS, BUILD_SECS, BUILD_SECS]);
-    let rest = releases(dir.path(), &[BUILD]);
-    let output = check_promotion(BUILD, &rest, "refs/heads/main");
+/// `check-promotion` of `BUILD` refused with exit 1 and nothing on
+/// stdout; its stderr.
+fn refused(rest: &[std::ffi::OsString]) -> String {
+    let output = check_promotion(BUILD, rest, "refs/heads/main");
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    let text = stderr(&output);
+    assert!(output.stdout.is_empty(), "{output:?}");
+    stderr(&output)
+}
+
+#[test]
+fn check_promotion_refuses_a_build_with_no_recorded_commit() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let shas = main_repo(dir.path(), &[MID_SECS, BUILD_SECS]);
+    // Only the other build records its commit.
+    let rest = releases(dir.path(), &[MID, BUILD], &[(MID, &shas[0])]);
+    let text = refused(&rest);
     assert!(
-        text.contains(&shas[1]) && text.contains(&shas[2]) && text.contains(BUILD),
+        text.contains(&format!("build {BUILD} has no recorded commit"))
+            && text.contains("built before commits were recorded"),
+        "{text}"
+    );
+}
+
+#[test]
+fn check_promotion_refuses_a_malformed_recorded_commit_naming_it() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let shas = main_repo(dir.path(), &[BUILD_SECS]);
+    let short = &shas[0][..12];
+    let rest = releases(dir.path(), &[BUILD], &[(BUILD, short)]);
+    let text = refused(&rest);
+    assert!(
+        text.contains(&format!("ev-nova-{BUILD}-commit.txt"))
+            && text.contains("malformed")
+            && text.contains(&format!("`{short}`")),
+        "{text}"
+    );
+}
+
+#[test]
+fn check_promotion_refuses_a_recorded_commit_not_on_main_naming_both() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    main_repo(dir.path(), &[MID_SECS, BUILD_SECS]);
+    // A commit in the build's second that main's history doesn't reach.
+    let side = git(
+        dir.path(),
+        &["commit-tree", "HEAD^{tree}", "-m", "side"],
+        BUILD_SECS,
+    );
+    let rest = releases(dir.path(), &[BUILD], &[(BUILD, &side)]);
+    let text = refused(&rest);
+    assert!(
+        text.contains(&format!(
+            "build {BUILD}'s recorded commit {side} is not on main"
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn check_promotion_refuses_a_recorded_commit_at_another_time_naming_both() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let shas = main_repo(dir.path(), &[MID_SECS, BUILD_SECS]);
+    let rest = releases(dir.path(), &[BUILD], &[(BUILD, &shas[0])]);
+    let text = refused(&rest);
+    assert!(
+        text.contains(&format!(
+            "build {BUILD}'s recorded commit {} has committer time {MID} on main, not {BUILD}",
+            shas[0]
+        )),
         "{text}"
     );
 }

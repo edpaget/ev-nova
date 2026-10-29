@@ -10,8 +10,8 @@ use super::publish::{AppcastError, PublishPaths};
 /// The tool's usage line.
 pub const USAGE: &str = "usage: nova-appcast publish --dist <DIR> --assets <FILE> \
      --current <DIR> --feeds <DIR> --prune-list <FILE> | nova-appcast check-promotion \
-     --build <ID> --repo <DIR> --nightly-assets <FILE> --beta-assets <FILE> \
-     --beta-current <DIR> | nova-appcast public-key   (run it as `mise run appcast -- ...`)";
+     --build <ID> --repo <DIR> --nightly-assets <FILE> --nightly-commits <DIR> \
+     --beta-assets <FILE> --beta-current <DIR> | nova-appcast public-key   (run it as `mise run appcast -- ...`)";
 
 /// The exit status of a usage error.
 pub const USAGE_STATUS: u8 = 2;
@@ -102,18 +102,26 @@ fn publish(args: impl Iterator<Item = OsString>, cwd: &Path) -> Result<PublishPa
     })
 }
 
-/// `check-promotion`'s five options, each exactly once, in any order. The
+/// `check-promotion`'s six options, each exactly once, in any order. The
 /// build stays text; the paths are taken against `cwd`.
 fn check_promotion(
     args: impl Iterator<Item = OsString>,
     cwd: &Path,
 ) -> Result<Command, UsageError> {
-    let [build, repo, nightly_assets, beta_assets, beta_current] = options(
+    let [
+        build,
+        repo,
+        nightly_assets,
+        nightly_commits,
+        beta_assets,
+        beta_current,
+    ] = options(
         args,
         [
             "--build",
             "--repo",
             "--nightly-assets",
+            "--nightly-commits",
             "--beta-assets",
             "--beta-current",
         ],
@@ -124,6 +132,7 @@ fn check_promotion(
         paths: PromotionPaths {
             repo: path(repo),
             nightly_assets: path(nightly_assets),
+            nightly_commits: path(nightly_commits),
             beta_assets: path(beta_assets),
             beta_current: path(beta_current),
         },
@@ -276,6 +285,8 @@ mod tests {
             ".",
             "--nightly-assets",
             "nightly.txt",
+            "--nightly-commits",
+            "nightly-commits",
             "--beta-assets",
             "beta.txt",
             "--beta-current",
@@ -290,6 +301,7 @@ mod tests {
             paths: PromotionPaths {
                 repo: cwd().join("."),
                 nightly_assets: cwd().join("nightly.txt"),
+                nightly_commits: cwd().join("nightly-commits"),
                 beta_assets: cwd().join("beta.txt"),
                 beta_current: cwd().join("beta-current"),
             },

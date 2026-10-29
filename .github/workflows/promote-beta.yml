@@ -12,14 +12,18 @@ name: Promote to beta
 #
 # 1. `check` refuses a run off main, a malformed build ID, a build the
 #    nightly release no longer holds (both update files), or one not newer
-#    than the current beta, and finds the build's commit on main
-#    (nova-appcast check-promotion, crates/nova-bundle/src/appcast/promote.rs);
+#    than the current beta; then it reads the commit the nightly recorded
+#    building (its ev-nova-<id>-commit.txt asset), refusing a build with
+#    none or a malformed one, and checks that commit is on main with the
+#    build ID as its committer time (nova-appcast check-promotion,
+#    crates/nova-bundle/src/appcast/promote.rs);
 # 2. `build` runs the nightly's build legs (build.yml) on that commit, with
 #    the macOS leg entering macos-signing and notarizing;
 # 3. `release` (release.yml) copies the Flatpak commit onto beta, checks the
 #    build against the beta feeds again, then moves the `beta` tag to the
-#    commit, uploads the installers, their build-ID copies and the signed
-#    beta feeds to the rolling `beta` prerelease, and deploys Pages.
+#    commit, uploads the installers, their build-ID copies, the build's
+#    commit file and the signed beta feeds to the rolling `beta`
+#    prerelease, and deploys Pages.
 #
 # The beta tag moves only in release.yml's `publish`, after every refusal
 # and every build leg, so a refused check or a failed leg leaves beta
@@ -62,8 +66,8 @@ jobs:
     env:
       MISE_AUTO_INSTALL: "false"
     steps:
-      # main's whole history: the build ID is the committer time of the
-      # commit the nightly built.
+      # main's whole history, to check the nightly's recorded commit is on
+      # main with the build ID as its committer time.
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -77,9 +81,11 @@ jobs:
         with:
           key: promote-beta
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The nightly's asset list, and the beta's asset list and current
-      # feeds when the beta release exists (an empty list before the first
-      # promotion).
+      # The nightly's asset list and commit files, and the beta's asset
+      # list and current feeds when the beta release exists (an empty list
+      # before the first promotion). Every commit file is downloaded (the
+      # nightly keeps a few), so the unvalidated input never reaches a
+      # pattern; check-promotion picks the build's.
       - name: Fetch the releases
         shell: bash
         env:
@@ -87,7 +93,10 @@ jobs:
         run: |
           set -euo pipefail
           gh release view nightly --json assets --jq '.assets[].name' > "$RUNNER_TEMP/nightly-assets.txt"
-          mkdir -p "$RUNNER_TEMP/beta-current"
+          mkdir -p "$RUNNER_TEMP/nightly-commits" "$RUNNER_TEMP/beta-current"
+          if grep -qx 'ev-nova-.*-commit\.txt' "$RUNNER_TEMP/nightly-assets.txt"; then
+            gh release download nightly --pattern 'ev-nova-*-commit.txt' --dir "$RUNNER_TEMP/nightly-commits"
+          fi
           : > "$RUNNER_TEMP/beta-assets.txt"
           if gh release view beta >/dev/null 2>&1; then
             gh release view beta --json assets --jq '.assets[].name' > "$RUNNER_TEMP/beta-assets.txt"
@@ -105,6 +114,7 @@ jobs:
           set -euo pipefail
           mise run appcast -- check-promotion --build "$BUILD_ID" --repo . \
             --nightly-assets "$RUNNER_TEMP/nightly-assets.txt" \
+            --nightly-commits "$RUNNER_TEMP/nightly-commits" \
             --beta-assets "$RUNNER_TEMP/beta-assets.txt" \
             --beta-current "$RUNNER_TEMP/beta-current" >> "$GITHUB_OUTPUT"
 

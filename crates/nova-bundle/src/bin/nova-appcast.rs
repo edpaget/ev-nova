@@ -1,9 +1,11 @@
 //! `nova-appcast publish --dist <DIR> --assets <FILE> --current <DIR>
 //! --feeds <DIR> --prune-list <FILE>`: CI's `publish` job's update-feed
 //! logic. It signs the stable installers in `--dist`, copies each to its
-//! build-ID name beside it, and writes the two nightly feeds into
-//! `--feeds`, when the public key is committed and `UPDATE_SIGNING_KEY`
-//! holds its seed; otherwise it prints a `::warning::` and writes none.
+//! build-ID name beside it, records the commit `NOVA_COMMIT` names in
+//! `ev-nova-<id>-commit.txt` there too, and writes the two nightly feeds
+//! into `--feeds`, when the public key is committed and
+//! `UPDATE_SIGNING_KEY` holds its seed; otherwise it prints a
+//! `::warning::` and writes none.
 //! Either way it writes the release assets to delete into `--prune-list`.
 //! Run it through cargo, as `mise run appcast -- publish ...`, or run the
 //! built binary with cargo on `PATH`, as CI's signing step does so that
@@ -12,16 +14,20 @@
 //! `NOVA_BUILD_ID` (else HEAD's committer time). See `nova_bundle::appcast`.
 //!
 //! It writes the feeds of the channel `NOVA_CHANNEL` names (`nightly` or
-//! `beta`), which it requires, against that channel's current feeds.
+//! `beta`), which it requires, against that channel's current feeds. It
+//! requires `NOVA_COMMIT`, the full SHA of the commit built.
 //!
-//! `nova-appcast check-promotion --build <ID> --repo <DIR> --nightly-assets
-//! <FILE> --beta-assets <FILE> --beta-current <DIR>`: `promote-beta`'s
-//! `check` job. It refuses a run whose `GITHUB_REF` isn't `main`, a
-//! malformed ID, a build the nightly release's asset list doesn't hold
-//! both update files of, or one not newer than the beta feeds in
-//! `--beta-current`; then it finds the one commit in `--repo`'s history
-//! whose committer time is the build ID, and prints `build=<id>` and
-//! `commit=<sha>` lines for `$GITHUB_OUTPUT`. See
+//! `nova-appcast check-promotion`, with `--build <ID>`, `--repo <DIR>`,
+//! `--nightly-assets <FILE>`, `--nightly-commits <DIR>`, `--beta-assets
+//! <FILE>` and `--beta-current <DIR>`: `promote-beta`'s `check` job. It
+//! refuses a run whose `GITHUB_REF` isn't `main`, a malformed ID, a build
+//! the nightly release's asset list doesn't hold both update files of, or
+//! one not newer than the beta feeds in `--beta-current`; then it reads the
+//! build's recorded commit from its `ev-nova-<id>-commit.txt`, downloaded
+//! into `--nightly-commits`, refusing a build that has none or a file that
+//! holds no commit, and checks it against `--repo`'s history: it must be
+//! on `main`, with the build ID as its committer time. It prints
+//! `build=<id>` and `commit=<sha>` lines for `$GITHUB_OUTPUT`. See
 //! `nova_bundle::appcast::promote`.
 //!
 //! `nova-appcast public-key` prints the public key of the seed in
