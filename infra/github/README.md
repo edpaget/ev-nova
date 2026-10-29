@@ -209,6 +209,14 @@ the Sparkle side. Create both items first. `mise run infra-check` mocks
 
 ### Setting up the key
 
+`infra/github/setup-update-keys.sh` does the first-time setup of both
+keys, this one and the Flatpak repository key below. Signed in to
+1Password, run it from a worktree branch. It refuses if either item already
+exists, makes both keys, stores their secret halves in `ev-nova-ci`, writes
+`update_public_key` and `packaging/linux/flatpak/repo-key.asc`, and deletes
+its temporary GPG keyring. Then commit and land the two public keys, and run
+step 5. The manual steps it follows are below.
+
 No agent or CI job makes, prints or stores the seed. The operator does
 this once, on their own machine:
 
@@ -279,8 +287,9 @@ committed key and the secret are all in place:
 | committed | another key's | fails, naming both fingerprints |
 | committed | its secret key | signs, and `pages` serves `/flatpak/` with the `.flatpakref` linked |
 
-No agent or CI job makes, prints or stores the secret key. The operator
-does this once, on their own machine, with `gnupg` from Homebrew:
+`setup-update-keys.sh` (see "Setting up the key" above) does steps 1 to 4
+for you. No agent or CI job makes, prints or stores the secret key. The
+operator does this once, on their own machine, with `gnupg` from Homebrew:
 
 1. Make the key in a throwaway keyring:
 
