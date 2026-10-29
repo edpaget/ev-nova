@@ -281,6 +281,14 @@ impl WgpuRenderer {
         }
     }
 
+    /// Starts its glyphs over with ID generations of `ids` rather than
+    /// 8,192: the seam that lets a test make the IDs start over, and the
+    /// text atlas be rebuilt, in a few frames.
+    #[cfg(test)]
+    pub(super) fn set_glyph_generation(&mut self, ids: usize) {
+        self.glyphs = HintedGlyphs::with_generation(&self.families, ids);
+    }
+
     /// The warnings its frames raised since it was last asked, oldest
     /// first, each once.
     pub fn take_warnings(&mut self) -> Vec<String> {
@@ -1855,5 +1863,43 @@ mod tests {
         assert!(!reuse_canvas(Some((64, 64)), (32, 64)));
         assert!(!reuse_canvas(Some((64, 64)), (64, 32)));
         assert!(!reuse_canvas(None, (64, 64)));
+    }
+
+    /// A 64 x 64 frame of `text` alone, in the bundled fallback at 8pt and
+    /// `scale`.
+    fn text_frame(text: &str, scale: f32) -> Frame {
+        frame_of(vec![Batch::Text(vec![TextRun { scale, ..run(text) }])])
+    }
+
+    /// `frames` drawn in turn by an offscreen renderer whose glyph IDs come
+    /// in generations of `ids`, and the last one's pixels; `None` with no
+    /// GPU adapter.
+    fn last_drawn(ids: usize, frames: &[Frame]) -> Option<Vec<u8>> {
+        use crate::gpu::Gpu;
+        let mut gpu = crate::wgpu::OffscreenGpu::new(64, 64, &FontFaces::bundled()).ok()?;
+        gpu.set_glyph_generation(ids);
+        for frame in frames {
+            gpu.submit(frame);
+        }
+        Some(gpu.read_pixels().expect("read back"))
+    }
+
+    #[test]
+    fn text_drawn_after_the_glyph_ids_start_over_draws_as_on_a_fresh_renderer() {
+        // Two IDs a generation: "ac" at 2x takes both, "ac" at 3x starts
+        // them over, and "ca" at 2x starts them over again, giving `c` the
+        // ID `a` had at 2x. glyphon caches a custom glyph by its ID and
+        // size, and `a` and `c` both rasterise 8 x 10 at 2x, so an atlas
+        // kept across the restart would draw `a` where `c` goes.
+        let last = text_frame("ca", 2.0);
+        let frames = [text_frame("ac", 2.0), text_frame("ac", 3.0), last.clone()];
+        let (Some(after), Some(fresh)) = (last_drawn(2, &frames), last_drawn(2, &[last])) else {
+            return;
+        };
+        assert!(fresh.as_chunks::<4>().0.iter().any(|p| p[0] > 0), "no ink");
+        assert!(
+            after == fresh,
+            "the last frame draws unlike a fresh renderer's"
+        );
     }
 }

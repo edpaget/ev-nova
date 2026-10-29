@@ -212,6 +212,14 @@ impl HintedGlyphs {
         Self::with_ids(faces, GlyphIds::new())
     }
 
+    /// [`HintedGlyphs::of`], its IDs starting over in generations of `ids`
+    /// rather than [`IDS_PER_GENERATION`]: the seam that lets a test run a
+    /// generation out in a few frames.
+    #[cfg(test)]
+    pub(super) fn with_generation(families: &Families, ids: usize) -> Self {
+        Self::with_ids(hinted_faces(families), GlyphIds::with_capacity(ids))
+    }
+
     fn with_ids(faces: Vec<(ID, HintedFace)>, ids: GlyphIds) -> Self {
         Self {
             faces,
@@ -617,18 +625,13 @@ mod tests {
         assert_eq!(draw(&mut glyphs, &buffer, (0.0, 0.0), 1.0, ALL_ROWS), []);
     }
 
-    /// Glyphs from the bundled faces with a generation of `capacity` IDs.
-    fn with_capacity(families: &Families, capacity: usize) -> HintedGlyphs {
-        HintedGlyphs::with_ids(hinted_faces(families), GlyphIds::with_capacity(capacity))
-    }
-
     #[test]
     fn a_frame_needing_more_ids_than_a_generation_has_leaves_the_rest_out_without_starting_over() {
         // Every ID is the frame's own, so starting over would free none: the
         // glyph past the last ID is left out, frame after frame, and never
         // drawn as another.
         let (mut system, families, _) = bundled();
-        let mut glyphs = with_capacity(&families, 1);
+        let mut glyphs = HintedGlyphs::with_generation(&families, 1);
         let buffer =
             lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "ab").expect("laid");
         let run = GlyphRun {
@@ -681,7 +684,7 @@ mod tests {
         // "ab" takes two IDs at each scale, so a generation of four holds
         // two scales: each third scale starts the IDs over.
         let (mut system, families, _) = bundled();
-        let mut glyphs = with_capacity(&families, 4);
+        let mut glyphs = HintedGlyphs::with_generation(&families, 4);
         let buffer =
             lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "ab").expect("laid");
         for step in 0..20u8 {
@@ -712,7 +715,7 @@ mod tests {
     #[test]
     fn a_reused_id_hands_glyphon_its_new_keys_raster_never_the_old_one() {
         let (mut system, families, _) = bundled();
-        let mut glyphs = with_capacity(&families, 1);
+        let mut glyphs = HintedGlyphs::with_generation(&families, 1);
         let l = lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "l").expect("laid");
         let small = draw(&mut glyphs, &l, (0.0, 0.0), 1.0, ALL_ROWS)[0];
         let run = GlyphRun {
@@ -735,7 +738,7 @@ mod tests {
     #[test]
     fn a_frame_that_starts_over_builds_every_run_again_from_the_first_id() {
         let (mut system, families, _) = bundled();
-        let mut glyphs = with_capacity(&families, 3);
+        let mut glyphs = HintedGlyphs::with_generation(&families, 3);
         let ab =
             lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "ab").expect("laid");
         let at = |scale| GlyphRun {
@@ -765,7 +768,7 @@ mod tests {
     #[test]
     fn starting_over_drops_every_faces_hinting_sizes() {
         let (mut system, families, _) = bundled();
-        let mut glyphs = with_capacity(&families, 1);
+        let mut glyphs = HintedGlyphs::with_generation(&families, 1);
         let l = lay_out_text(&mut system, &families, Font::Geneva, 12.0, None, "l").expect("laid");
         draw(&mut glyphs, &l, (0.0, 0.0), 1.0, ALL_ROWS);
         let sizes = |glyphs: &HintedGlyphs| -> usize {
