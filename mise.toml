@@ -101,6 +101,10 @@ run = "cargo run -p nova-bundle --locked --bin nova-flatpak --"
 description = "Print the build ID: NOVA_BUILD_ID when it is set, else HEAD's committer time in UTC as YYYYMMDDHHMMSS"
 run = "cargo run -q -p nova-bundle --locked --bin nova-build-id"
 
+[tasks.flatpak-repo]
+description = "What CI's flatpak-repo job runs, prebuilt (x86_64 Linux, needs gpg, ostree, flatpak and curl): mirror the live Pages repo and import the plain bundle (stage --bundle-dir <DIR> --work <DIR> --pages <DIR>), then sign it onto NOVA_CHANNEL's branch with FLATPAK_SIGNING_KEY and write the .flatpakref and the repo-following bundle (sign --work <DIR> --pages <DIR> --dist <DIR>)"
+run = "cargo run -q -p nova-bundle --locked --bin nova-flatpak-repo --"
+
 [tasks.appcast]
 description = "What CI's publish job runs, prebuilt: sign the nightly's installers and write the Sparkle update feeds and the prune list (publish --dist <DIR> --assets <FILE> --current <DIR> --feeds <DIR> --prune-list <FILE>), or print UPDATE_SIGNING_KEY's public key (public-key)"
 run = "cargo run -q -p nova-bundle --locked --bin nova-appcast --"

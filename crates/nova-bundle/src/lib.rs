@@ -129,7 +129,26 @@
 //! `flatpak-builder` manifest, builds it offline on the freedesktop
 //! runtime and packs `ev-nova-x86_64-unknown-linux-gnu.flatpak` in
 //! `OUT_DIR` (by default `target/flatpak/out`); it needs `flatpak`,
-//! `flatpak-builder` and the Flathub remote added with `--user`.
+//! `flatpak-builder` and the Flathub remote added with `--user`. It
+//! exports onto `NOVA_CHANNEL`'s branch (`nightly` in CI), or `master` for
+//! a development build ([`linux::flatpak::branch`]).
+//!
+//! # The Flatpak repository
+//!
+//! ```text
+//! mise run flatpak-repo -- stage --bundle-dir <DIR> --work <DIR> --pages <DIR>
+//! mise run flatpak-repo -- sign --work <DIR> --pages <DIR> --dist <DIR>
+//! ```
+//!
+//! On x86-64 Linux, and in CI's main-only `flatpak-repo` job, which runs
+//! the built binary. `stage` mirrors the live repo from the Pages site,
+//! GPG-verified against the committed
+//! `packaging/linux/flatpak/repo-key.asc`, and imports the plain bundle;
+//! `sign`, which alone holds `FLATPAK_SIGNING_KEY`, commits it onto the
+//! channel's branch, signs, prunes and makes static deltas, and writes
+//! `ev-nova-nightly.flatpakref` and a bundle that follows the repo. Without
+//! the channel, the committed key or the secret, `stage` warns and exits 4,
+//! and the nightly publishes as before. See [`linux::flatpak::repo`].
 //!
 //! # The build ID
 //!

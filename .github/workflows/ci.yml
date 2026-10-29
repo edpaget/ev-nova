@@ -358,12 +358,19 @@ jobs:
       MISE_AUTO_INSTALL: "false"
       # As in `build`; the manifest passes it into the sandboxed build.
       NOVA_BUILD_ID: ${{ needs.build-id.outputs.id }}
+      # As in `build`: the channel whose branch flatpak-builder exports onto
+      # (crates/nova-bundle/src/linux/flatpak), and which the bundle and the
+      # tests name. A dispatched branch build is the build main would make,
+      # and is never published. The beta promotion (phase 7) sets beta.
+      NOVA_CHANNEL: nightly
     steps:
       - uses: actions/checkout@v5
       # xvfb gives the installed app's zenity a display for the test.
+      # ostree is for the Flatpak repo test, which publishes this bundle
+      # into a repo of its own.
       - run: |
           sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder desktop-file-utils xvfb
+          sudo apt-get install -y flatpak flatpak-builder desktop-file-utils xvfb ostree
       # Ubuntu 24.04 restricts unprivileged user namespaces through
       # AppArmor, which bubblewrap needs for every build and run sandbox.
       - name: Allow bubblewrap's user namespaces
@@ -384,14 +391,20 @@ jobs:
       - name: Package (Flatpak)
         run: mise run flatpak -- dist
       # Installs the bundle with --user into a home the test owns, checks
-      # its permissions, zenity and exports
-      # (crates/nova-bundle/tests/it/linux_flatpak.rs); without NOVA_FLATPAK
-      # that test skips.
+      # its branch, permissions, zenity and exports
+      # (crates/nova-bundle/tests/it/linux_flatpak.rs). The repo test
+      # (linux_flatpak_repo.rs) publishes it with nova-flatpak-repo's stage
+      # and sign into a repo the test owns, signed with a throwaway key and
+      # served from 127.0.0.1, then installs, updates and prunes it, and
+      # installs the bundle sign builds; gpg_repo_key.rs checks the key
+      # checks against the real gpg. Without NOVA_FLATPAK and NOVA_GPG
+      # those tests skip.
       - name: Test the Flatpak
         run: |
-          NOVA_FLATPAK="$PWD/dist/ev-nova-x86_64-unknown-linux-gnu.flatpak" \
-            xvfb-run -a cargo test --locked -p nova-bundle --test it linux_flatpak -- --nocapture
-      # Only a hand-off to `publish`.
+          NOVA_FLATPAK="$PWD/dist/ev-nova-x86_64-unknown-linux-gnu.flatpak" NOVA_GPG=1 \
+            xvfb-run -a cargo test --locked -p nova-bundle --test it -- --nocapture linux_flatpak gpg_repo_key
+      # The hand-off to `publish`, which ships this plain bundle unless
+      # `flatpak-repo` replaces it with the repo-following one.
       - uses: actions/upload-artifact@v4
         with:
           name: dist-x86_64-unknown-linux-gnu-flatpak
@@ -399,12 +412,149 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Publishes the GPG-signed Flatpak repository the Pages site serves at
+  # /flatpak/, on pushes to main only (nova-flatpak-repo,
+  # crates/nova-bundle/src/linux/flatpak/repo): the nightly's branch of the
+  # repo, the ev-nova-nightly.flatpakref beside it, and a .flatpak bundle
+  # that follows the repo once installed.
+  #
+  # It is its own job, apart from `flatpak` (which compiles the whole game,
+  # runs every build script under flatpak-builder, and runs on branches),
+  # so the signing key never shares a job with a build. It holds no write
+  # token at all: contents: read is for checkout. Its one hand-off to Pages
+  # is the pages-flatpak artifact, which `pages` deploys.
+  #
+  # The key lives in the update-signing environment, which allows only main
+  # (infra/github/update_signing.tf), named only once the repository
+  # variable UPDATE_SIGNING_ENVIRONMENT holds its name, exactly as for
+  # `publish`. The expression must never name anything but update-signing,
+  # because naming an environment that doesn't exist creates it, with no
+  # protection rules.
+  #
+  # Stage holds no secret and does all the network I/O: it mirrors the live
+  # repo from Pages, GPG-verified against the committed
+  # packaging/linux/flatpak/repo-key.asc, because a Pages deploy replaces
+  # the whole site. A 404 for the live repo is the first publish; any other
+  # answer fails the job, so an outage never drops the other branches. It
+  # learns only whether the secret is set. Sign holds the key alone, with
+  # no token and no network, and compiles nothing: it runs the binary built
+  # above, which spawns only `cargo metadata`, gpg, ostree and flatpak.
+  #
+  # Without NOVA_CHANNEL, the committed key or the secret, stage prints one
+  # "Flatpak repo not published" warning and exits 4, which the step turns
+  # into staged=false, and no later step runs: the job succeeds, `pages`
+  # deploys the page without the .flatpakref link, and `publish` ships the
+  # plain bundle, exactly as before. Sign's own exit 4 is a guard that maps
+  # to published=false without a second warning. A committed key holding a
+  # secret key, or a secret that isn't the committed key's, fails the job.
+  #
+  # When it publishes, it uploads dist-x86_64-unknown-linux-gnu-flatpak
+  # again with overwrite: true, so the bundle `publish` ships is the one
+  # that follows the repo, built from the signed repo.
+  flatpak-repo:
+    needs: [build-id, flatpak]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment: ${{ vars.UPDATE_SIGNING_ENVIRONMENT == 'update-signing' && 'update-signing' || '' }}
+    outputs:
+      published: ${{ steps.sign.outputs.published }}
+    env:
+      # As in `ci`: install only the Rust toolchain.
+      MISE_AUTO_INSTALL: "false"
+      # The run's one build ID, which the commit's subject names.
+      NOVA_BUILD_ID: ${{ needs.build-id.outputs.id }}
+      # The branch it publishes, as the `flatpak` job built it.
+      NOVA_CHANNEL: nightly
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # gpg and curl are on the runner.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak ostree
+      - uses: jdx/mise-action@v5
+        with:
+          install: false
+      - run: mise install rust
+        shell: bash
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: flatpak-repo
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Built here, with no secret in the environment.
+      - name: Build nova-flatpak-repo
+        shell: bash
+        run: mise exec -- cargo build -q -p nova-bundle --locked --bin nova-flatpak-repo
+      # The plain bundle the `flatpak` job built and tested.
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-x86_64-unknown-linux-gnu-flatpak
+          path: ${{ runner.temp }}/plain
+      - name: Stage the Flatpak repo
+        id: stage
+        shell: bash
+        env:
+          # Whether sign will hold the key; never the key itself.
+          FLATPAK_SIGNING_KEY_SET: ${{ secrets.FLATPAK_SIGNING_KEY != '' }}
+        run: |
+          set -euo pipefail
+          status=0
+          mise exec -- target/debug/nova-flatpak-repo stage --bundle-dir "$RUNNER_TEMP/plain" \
+            --work "$RUNNER_TEMP/fr-work" --pages "$RUNNER_TEMP/fr-pages" || status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "staged=true" >> "$GITHUB_OUTPUT"
+          elif [ "$status" -eq 4 ]; then
+            echo "staged=false" >> "$GITHUB_OUTPUT"
+          else
+            exit "$status"
+          fi
+      - name: Sign the Flatpak repo
+        id: sign
+        if: steps.stage.outputs.staged == 'true'
+        shell: bash
+        env:
+          FLATPAK_SIGNING_KEY: ${{ secrets.FLATPAK_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          status=0
+          mise exec -- target/debug/nova-flatpak-repo sign --work "$RUNNER_TEMP/fr-work" \
+            --pages "$RUNNER_TEMP/fr-pages" --dist "$RUNNER_TEMP/fr-dist" || status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          elif [ "$status" -eq 4 ]; then
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          else
+            exit "$status"
+          fi
+      # /flatpak/ on the site: the repo and the .flatpakref.
+      - if: steps.sign.outputs.published == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pages-flatpak
+          path: ${{ runner.temp }}/fr-pages
+          if-no-files-found: error
+          retention-days: 1
+      # Replaces the `flatpak` job's plain bundle, so `publish` ships this one.
+      - if: steps.sign.outputs.published == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-x86_64-unknown-linux-gnu-flatpak
+          path: ${{ runner.temp }}/fr-dist/*
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
   # Moves the `nightly` tag to this commit and replaces the prerelease's
   # assets, and publishes the signed Sparkle update feeds the apps read
   # (nova-appcast, crates/nova-bundle/src/appcast), on pushes to main
-  # only. All or nothing: it needs every `build` leg and the Flatpak, so a
-  # failed leg on any platform skips publishing and leaves the previous
-  # nightly untouched.
+  # only. All or nothing: it needs every `build` leg, the Flatpak and the
+  # Flatpak repo, so a failed leg on any platform skips publishing and
+  # leaves the previous nightly untouched. Its dist-* download picks up the
+  # repo-following Flatpak bundle when `flatpak-repo` published one, and
+  # the `flatpak` job's plain bundle otherwise.
   #
   # The update-signing seed lives in the update-signing environment, whose
   # deployment-branch policy allows only main (infra/github/update_signing.tf).
@@ -427,7 +577,7 @@ jobs:
   # re-uploads the stable installers and leaves the feeds and every other
   # asset as they are. A build older than the current feeds' fails the job.
   publish:
-    needs: [build-id, build, flatpak]
+    needs: [build-id, build, flatpak, flatpak-repo]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -544,6 +694,9 @@ jobs:
   # after the nightly assets it links have been uploaded. If `publish`
   # fails or is skipped, so is this job, and the previous site stays up.
   #
+  # With the Flatpak repo published, the page's Linux row leads with the
+  # .flatpakref (nova-site --flatpakref).
+  #
   # Another job adds a subtree by uploading an artifact named `pages-<path>`
   # whose root is the tree served at `/<path>/` (`pages-flatpak` becomes
   # `/flatpak/`), and adding itself to this job's `needs`. `<path>` must not
@@ -553,14 +706,18 @@ jobs:
   #
   # Because a deploy replaces everything, a producer uploads its full tree on
   # every main run. One that rebuilds incrementally fetches its previous tree
-  # from the live site first (rdm:phase/auto-updates/phase-6-flatpak-repo-on-pages
-  # does). A subtree no artifact provides on a run disappears from the site.
+  # from the live site first. A subtree no artifact provides on a run
+  # disappears from the site.
+  #
+  # The one producer is `flatpak-repo`, whose pages-flatpak is /flatpak/:
+  # it mirrors the live repo before committing onto it. It always runs on
+  # main and succeeds when it skips, so this job isn't skipped with it.
   #
   # This is the only job granted the pages and id-token write scopes, which
   # deploy-pages needs. contents: read is for checkout, since a job-level
   # permissions block sets every scope it doesn't list to none.
   pages:
-    needs: [ci, publish]
+    needs: [ci, publish, flatpak-repo]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -608,7 +765,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mise run site -- _site
+          mise run site -- ${{ needs.flatpak-repo.outputs.published == 'true' && '--flatpakref' || '' }} _site
           if [ -d "$RUNNER_TEMP/pages" ]; then
             for dir in "$RUNNER_TEMP/pages"/pages-*/; do
               [ -d "$dir" ] || continue

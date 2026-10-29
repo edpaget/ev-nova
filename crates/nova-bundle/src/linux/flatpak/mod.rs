@@ -9,11 +9,17 @@
 //!   staging/vendor/             `cargo vendor`'s tree
 //!   staging/share/...           the share/ tree (crate::linux::share)
 //!   build/                      flatpak-builder's build directory
-//!   repo/                       the OSTree repository it exports to
+//!   repo/                       the OSTree repository it exports to, on the
+//!                               channel's branch ([`branch`])
 //!   state/                      its cache (.flatpak-builder)
 //! <target>/flatpak/out/
-//!   ev-nova-x86_64-unknown-linux-gnu.flatpak
+//!   ev-nova-x86_64-unknown-linux-gnu.flatpak   the plain bundle: no repo
 //! ```
+//!
+//! That bundle names no repository, so it can't update. On `main`, the
+//! [`repo`] publisher imports it into the GPG-signed repository the Pages
+//! site serves, with its own work, pages and dist trees, and builds the
+//! bundle the nightly ships, which follows the repo.
 //!
 //! The manifest is rendered here, not committed, so its app id and
 //! command come from the spec and can't drift from the desktop file's
@@ -29,7 +35,7 @@
 //!
 //! [`plan::plan`] is the sequence as data and [`plan::build_flatpak`]
 //! runs it; [`host`] reads the edge's arguments and refuses any host but
-//! x86-64 Linux.
+//! x86-64 Linux. `NOVA_CHANNEL` names the branch it builds onto.
 
 pub mod host;
 pub mod layout;

@@ -164,6 +164,10 @@ start "EV Nova" from your applications, or run
 `flatpak run io.github.edpaget.ev-nova`. Uninstall it with
 `flatpak uninstall --user io.github.edpaget.ev-nova`.
 
+Installed from the download page's ev-nova-nightly.flatpakref instead
+(`flatpak install --user --from <it>`, or open it in Discover or GNOME
+Software), it updates to each new nightly with `flatpak update`.
+
 The sandbox lets it show its window (Wayland, or X11 where there is no
 Wayland) and use your GPU and sound. It can read, and not change, three
 folders where the game data may be: ~/.wine, ~/Games/ev-nova (Lutris)
