@@ -52,7 +52,8 @@ nova-sim-base = { workspace = true, features = ["fixture"] }
 # The catalog's record builders and control-bit mocks, which `testkit`
 # re-exports.
 nova-sim-catalog = { workspace = true, features = ["fixture"] }
-# The combat layer's test setters the session tests call:
+# The combat layer's test support the session and stock tests call: the
+# plain answered strike (`combat::fixture::strike`), and the setters
 # `SabotageClock::set_counter` and `Combat::shots_mut`.
 nova-sim-combat = { workspace = true, features = ["fixture"] }
 # The ai and traffic layer's test support: `traffic::fixture::npc`, which

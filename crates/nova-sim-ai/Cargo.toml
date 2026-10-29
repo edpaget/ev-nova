@@ -31,7 +31,8 @@ nova-sim-base = { workspace = true, features = ["fixture"] }
 # from.
 nova-sim-catalog = { workspace = true, features = ["fixture"] }
 # The plain answered strike (`combat::fixture::strike`) the reaction and
-# answer-flag tests build on.
+# answer-flag tests build on, and the arsenal of weapon records
+# (`Arsenal::of_specs`) the lead and fire tests read.
 nova-sim-combat = { workspace = true, features = ["fixture"] }
 
 [features]

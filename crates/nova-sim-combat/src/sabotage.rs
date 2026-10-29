@@ -232,6 +232,9 @@ impl SabotageClock {
 
     /// Sets the count, as nothing in play does: for the branch that
     /// seeds a negative one.
+    ///
+    /// Kept for nova-sim's tests of what the session does when the clock goes
+    /// off, started one tick short of the fuse instead of running the count.
     #[cfg(any(test, feature = "fixture"))]
     pub fn set_counter(&mut self, counter: f32) {
         self.counter = counter;
