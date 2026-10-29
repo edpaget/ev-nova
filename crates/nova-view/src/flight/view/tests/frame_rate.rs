@@ -9,6 +9,7 @@ use super::faked_screen::sent_count;
 use super::faked_travel::shown_to_flight;
 use super::*;
 use crate::flight::frame_rate::CALCULATING_FPS;
+use nova_sim::flight_frame::FlightEvent;
 
 /// One Mac tick, 1/60 s.
 fn sixtieth() -> Duration {
@@ -131,6 +132,24 @@ fn the_next_frame_says_calculating_in_the_message_box() {
             .any(|command| *command == message_drawn(CALCULATING_FPS)),
         "drawn as every flight line is"
     );
+}
+
+#[test]
+fn the_readout_is_said_after_the_lines_the_steps_relay() {
+    // `_PlayGame` says it after `_DoPlayGameWork`, so a line the frame's
+    // steps raised is written over, Calculating and then the number.
+    let mut view = shown();
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::NoActiveMissions));
+    view.tick(sixtieth());
+    assert_eq!(view.message(), Some(CALCULATING_FPS));
+    assert_eq!(shown_to_flight(&view).last(), Some(&100));
+    tick_sixtieths(&mut view, 120);
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::NoActiveMissions));
+    view.tick(sixtieth());
+    assert_eq!(view.message(), Some("60 fps"));
+    assert_eq!(shown_to_flight(&view).last(), Some(&999));
 }
 
 #[test]
