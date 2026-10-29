@@ -207,7 +207,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog, DescTemplates};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, TextBacking};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
 use crate::ui::mission_dialogs::{DescShown, MissionDialogs};
 use crate::ui::mission_info::is_mission_info_press;
 #[cfg(doc)]
@@ -234,6 +234,9 @@ struct Port {
     description_problem: Option<String>,
     style: ButtonStyle,
     metrics: MetricsHandle,
+    /// Whether its dialogs' buttons take the keyboard focus, and each
+    /// screen's opened over it.
+    focus_ring: FocusRing,
 }
 
 /// The metrics, shared, with a `Debug` that shows nothing of them.
@@ -585,6 +588,7 @@ impl SpaceportView {
                 description_problem,
                 style,
                 metrics: MetricsHandle(metrics),
+                focus_ring: FocusRing::default(),
             })
         });
         let description_request = port
@@ -1279,8 +1283,13 @@ impl SpaceportView {
         let dialogs = self.port.as_ref().ok().map(|port| {
             MissionDialogs::new(text, info, Rc::clone(&port.metrics.0), port.style)
                 .with_movies(self.movies.clone())
+                .with_focus_ring(port.focus_ring)
         });
-        let mut landing = VenueOffers::asking(offer.clone());
+        let ring = self
+            .port
+            .as_ref()
+            .map_or(FocusRing::default(), |port| port.focus_ring);
+        let mut landing = VenueOffers::asking(offer.clone()).with_focus_ring(ring);
         landing.set_movies(self.movies.clone());
         Self {
             missioning: Some(Missioning {
@@ -1324,6 +1333,22 @@ impl SpaceportView {
             offer_clock: clock,
             ..self
         }
+    }
+
+    /// The spaceport with its dialogs' buttons taking the keyboard focus
+    /// as `ring` says (the `dialog_focus_ring` rule): its own, its
+    /// mission texts and offers, and each screen opened after it.
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        if let Ok(port) = &mut self.port {
+            port.focus_ring = ring;
+            port.dialog.set_focus_ring(ring);
+        }
+        self.dialogs = self.dialogs.map(|dialogs| dialogs.with_focus_ring(ring));
+        if let Some(missioning) = &mut self.missioning {
+            missioning.landing = missioning.landing.clone().with_focus_ring(ring);
+        }
+        self
     }
 
     /// Whether the venue open restarted its offer timer since this was
@@ -1478,9 +1503,10 @@ impl SpaceportView {
             .computer
             .clone()
             .map(|template| (template, Rc::clone(&port.metrics.0)));
-        self.open = Some(Open::Computer(Box::new(MissionComputerScreen::new(
-            layout, computer, port.style,
-        ))));
+        self.open = Some(Open::Computer(Box::new(
+            MissionComputerScreen::new(layout, computer, port.style)
+                .with_focus_ring(port.focus_ring),
+        )));
         self.port_dialog_opened = Some(PortDialog::MissionComputer);
     }
 
@@ -1682,13 +1708,16 @@ impl SpaceportView {
         let layout = dialogs
             .template
             .map(|template| (template, Rc::clone(&port.metrics.0)));
-        self.player_info = Some(PlayerInfoScreen::new(
-            layout,
-            dialogs.confirm,
-            info,
-            port.style,
-            dialogs.background,
-        ));
+        self.player_info = Some(
+            PlayerInfoScreen::new(
+                layout,
+                dialogs.confirm,
+                info,
+                port.style,
+                dialogs.background,
+            )
+            .with_focus_ring(port.focus_ring),
+        );
     }
 
     /// The player info screen open, if it is.
@@ -1957,7 +1986,12 @@ impl SpaceportView {
     /// Anything else does nothing.
     /// Opens the bar, laid out with `metrics` and its buttons in `style`,
     /// when it is given, and true; false, opening nothing, without it.
-    fn open_bar_screen(&mut self, metrics: Rc<dyn TextMetrics>, style: ButtonStyle) -> bool {
+    fn open_bar_screen(
+        &mut self,
+        metrics: Rc<dyn TextMetrics>,
+        style: ButtonStyle,
+        ring: FocusRing,
+    ) -> bool {
         let Some(barkeeping) = &mut self.barkeeping else {
             return false;
         };
@@ -1969,7 +2003,7 @@ impl SpaceportView {
             style,
             barkeeping.room,
         );
-        bar = bar.with_news(barkeeping.news.clone());
+        bar = bar.with_news(barkeeping.news.clone()).with_focus_ring(ring);
         if let Some(missioning) = &self.missioning {
             bar = bar
                 .with_offers(missioning.offer.clone())
@@ -2002,7 +2036,8 @@ impl SpaceportView {
         }
         let style = port.style;
         let metrics = Rc::clone(&port.metrics.0);
-        if service == Service::Bar && self.open_bar_screen(Rc::clone(&metrics), style) {
+        let ring = port.focus_ring;
+        if service == Service::Bar && self.open_bar_screen(Rc::clone(&metrics), style, ring) {
             return;
         }
         if lists_no_ships(self.shipbuying.as_ref(), service) {
@@ -2019,7 +2054,8 @@ impl SpaceportView {
                 (Some((template, quantity, market, colors)), _, _, Service::TradeCenter) => {
                     let layout = template.clone().map(|template| (template, metrics));
                     let screen = TradeScreen::new(layout, quantity.clone(), market.clone(), style)
-                        .with_colors(*colors);
+                        .with_colors(*colors)
+                        .with_focus_ring(ring);
                     Open::Trade(Box::new(match offer {
                         Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
@@ -2037,7 +2073,8 @@ impl SpaceportView {
                         shipbuying.shipyard.clone(),
                         Rc::clone(&shipbuying.catalog),
                         style,
-                    );
+                    )
+                    .with_focus_ring(ring);
                     Open::Shipyard(Box::new(match offer {
                         Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
@@ -2057,7 +2094,8 @@ impl SpaceportView {
                         outfitting.outfitter.clone(),
                         Rc::clone(&outfitting.catalog),
                         style,
-                    );
+                    )
+                    .with_focus_ring(ring);
                     Open::Outfitter(Box::new(match offer {
                         Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
@@ -3379,6 +3417,26 @@ pub(in crate::spaceport) mod tests {
             Some(Service::Bar)
         );
         assert!(view.open_trade().is_none());
+    }
+
+    #[test]
+    fn the_focus_ring_reaches_the_spaceport_and_each_screen_opened_over_it() {
+        let ringed = trading(Ok(trade_template()));
+        assert_eq!(
+            ringed.dialog().map(Dialog::focus_ring),
+            Some(FocusRing::Tab),
+            "by default"
+        );
+        let mut off = trading(Ok(trade_template())).with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        assert_eq!(off.dialog().and_then(Dialog::focus), None);
+        click_item(&mut off, 7);
+        assert_eq!(
+            off.open_trade()
+                .and_then(TradeScreen::dialog)
+                .map(Dialog::focus_ring),
+            Some(FocusRing::Off)
+        );
     }
 
     #[test]

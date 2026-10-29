@@ -6,8 +6,24 @@
 //! buttons and static text work as they are, and the caller gives each
 //! application-drawn (user) item its meaning with a [`Role`]. Items are
 //! numbered from 1, as the Dialog Manager numbers them.
+//!
+//! # Keyboard focus
+//!
+//! The original's in-game dialogs have no keyboard focus: `_MyModalDialog`
+//! (@0x59954) draws none, and each dialog's filter maps only its own keys
+//! (`_TextDialogFilter` @0x51f77 Return, Enter and Escape to item 1;
+//! `_CommFilter` @0x908ed, `_PlanetCommFilter` @0x911a9, `_HaggleFilter`
+//! @0x91d9d, `_PlunderFilter` @0x92f20, `_CapturedAssignmentFilter`
+//! @0x51782 and `_EscortFilter` @0x950e9 their letters), none of them Tab
+//! or Space. A [`Dialog`] keeps a focus ring anyway by default
+//! ([`FocusRing::Tab`]): Tab moves an outlined focus through the enabled
+//! buttons and Space presses the focused one, kept for accessibility by
+//! the user's decision of 2026-10-28. The `dialog_focus_ring` rule's engine
+//! reading ([`FocusRing::Off`]) gives the original's dialogs.
 
 use std::rc::Rc;
+
+use nova_sim::{RuleKey, RuleSource, Rulebook};
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -321,6 +337,39 @@ impl Item {
     }
 }
 
+/// Whether a dialog's buttons take a keyboard focus: the `dialog_focus_ring`
+/// rule's two readings ([`RuleKey::DialogFocusRing`]).
+///
+/// The original has none in any in-game dialog: `_MyModalDialog`
+/// (@0x59954) draws no focus, and no filter (`_TextDialogFilter` @0x51f77,
+/// `_CommFilter` @0x908ed, `_PlanetCommFilter` @0x911a9, `_HaggleFilter`
+/// @0x91d9d, `_PlunderFilter` @0x92f20, `_CapturedAssignmentFilter`
+/// @0x51782, `_EscortFilter` @0x950e9, nor the Toolbox's standard filter)
+/// maps Tab or Space to a button. The focus ring is kept on by default
+/// for accessibility, by the user's decision of 2026-10-28.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FocusRing {
+    /// Tab moves an outlined focus through the enabled buttons, and Space
+    /// activates the focused one: the default.
+    #[default]
+    Tab,
+    /// No focus: Tab and Space do nothing unless the dialog's own filter
+    /// maps them, as the original's dialogs have it.
+    Off,
+}
+
+impl FocusRing {
+    /// The reading `rules` gives `dialog_focus_ring`: the other reading's
+    /// [`FocusRing::Tab`] (the default), or the engine's [`FocusRing::Off`].
+    #[must_use]
+    pub fn from_rulebook(rules: &Rulebook) -> Self {
+        match rules.source_for(RuleKey::DialogFocusRing) {
+            RuleSource::Bible => Self::Tab,
+            RuleSource::Engine => Self::Off,
+        }
+    }
+}
+
 /// A modal dialog: placed on the screen, drawn over whatever is below, and
 /// taking every input event while it is open.
 #[derive(Clone)]
@@ -335,6 +384,8 @@ pub struct Dialog {
     cancel_item: Option<usize>,
     /// The focused button's index in `items`.
     focus: Option<usize>,
+    /// Whether Tab and Space move and press a focus.
+    focus_ring: FocusRing,
     /// The item a press is held on, by index, and its tracking.
     tracked: Option<usize>,
     tracker: ButtonTracker,
@@ -410,6 +461,7 @@ impl Dialog {
             default_item: Some(1),
             cancel_item: None,
             focus: None,
+            focus_ring: FocusRing::default(),
             tracked: None,
             tracker: ButtonTracker::default(),
         }
@@ -440,6 +492,29 @@ impl Dialog {
             cancel_item: item,
             ..self
         }
+    }
+
+    /// The dialog with its buttons taking the keyboard focus as `ring`
+    /// says.
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.set_focus_ring(ring);
+        self
+    }
+
+    /// Makes the buttons take the keyboard focus as `ring` says. Turning
+    /// the ring off drops any focus.
+    pub fn set_focus_ring(&mut self, ring: FocusRing) {
+        self.focus_ring = ring;
+        if ring == FocusRing::Off {
+            self.focus = None;
+        }
+    }
+
+    /// Whether the buttons take the keyboard focus.
+    #[must_use]
+    pub fn focus_ring(&self) -> FocusRing {
+        self.focus_ring
     }
 
     /// The dialog with buttons drawn in `skin` and labelled in `style`.
@@ -561,8 +636,9 @@ impl Dialog {
     /// - A click (press and release, tracked as a button tracks it) on an
     ///   enabled, shown item activates it.
     /// - Return activates the default item, and Escape the cancel item.
-    /// - Tab moves the focus to the next enabled button, and Space
-    ///   activates the focused one.
+    /// - Under [`FocusRing::Tab`], the default, Tab moves the focus to the
+    ///   next enabled button, and Space activates the focused one. Under
+    ///   [`FocusRing::Off`], the original's reading, they do nothing.
     /// - Up and Down, repeats included, scroll the first scrolling text.
     /// - A wheel or trackpad scroll inside the dialog scrolls the scrolling
     ///   text under the pointer, if any; static text ignores it, and a
@@ -620,11 +696,13 @@ impl Dialog {
             _ if repeat => None,
             Key::Enter => self.activate(self.default_item),
             Key::Escape => self.activate(self.cancel_item),
-            Key::Tab => {
+            Key::Tab if self.focus_ring == FocusRing::Tab => {
                 self.focus_next();
                 None
             }
-            Key::Space => self.activate(self.focus.map(|index| index + 1)),
+            Key::Space if self.focus_ring == FocusRing::Tab => {
+                self.activate(self.focus.map(|index| index + 1))
+            }
             _ => None,
         }
     }
@@ -1955,6 +2033,62 @@ mod tests {
         assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(1)));
         assert_eq!(dialog.input(&key(Key::Escape)), Some(DialogEvent::Item(5)));
         assert_eq!(dialog.input(&key(Key::Tab)), None);
+        assert_eq!(dialog.input(&key(Key::Space)), Some(DialogEvent::Item(1)));
+    }
+
+    #[test]
+    fn the_focus_ring_is_tab_by_default_and_follows_the_rulebook() {
+        assert_eq!(FocusRing::default(), FocusRing::Tab);
+        assert_eq!(
+            FocusRing::from_rulebook(&Rulebook::default()),
+            FocusRing::Tab
+        );
+        assert_eq!(
+            FocusRing::from_rulebook(&Rulebook::new(RuleSource::Bible)),
+            FocusRing::Tab
+        );
+        assert_eq!(
+            FocusRing::from_rulebook(&Rulebook::new(RuleSource::Engine)),
+            FocusRing::Off
+        );
+        assert_eq!(
+            FocusRing::from_rulebook(
+                &Rulebook::default().with_override(RuleKey::DialogFocusRing, RuleSource::Engine)
+            ),
+            FocusRing::Off
+        );
+        assert_eq!(dialog(&yes_no(), &[]).focus_ring(), FocusRing::Tab);
+    }
+
+    /// The original's reading: `_MyModalDialog` @0x59954 draws no focus,
+    /// and no in-game filter maps Tab or Space.
+    #[test]
+    fn with_the_focus_ring_off_tab_and_space_do_nothing() {
+        let mut dialog = dialog(&yes_no(), &[])
+            .with_cancel(Some(5))
+            .with_focus_ring(FocusRing::Off);
+        assert_eq!(dialog.focus_ring(), FocusRing::Off);
+        let before = drawn(&dialog);
+        for _ in 0..3 {
+            assert_eq!(dialog.input(&key(Key::Tab)), None);
+            assert_eq!(dialog.focus(), None);
+            assert_eq!(dialog.input(&key(Key::Space)), None);
+        }
+        assert_eq!(drawn(&dialog), before, "nothing is outlined");
+        assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(1)));
+        assert_eq!(dialog.input(&key(Key::Escape)), Some(DialogEvent::Item(5)));
+    }
+
+    #[test]
+    fn turning_the_focus_ring_off_drops_the_focus_and_back_on_tabs_again() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        dialog.input(&key(Key::Tab));
+        assert_eq!(dialog.focus(), Some(1));
+        dialog.set_focus_ring(FocusRing::Off);
+        assert_eq!(dialog.focus(), None);
+        assert_eq!(dialog.input(&key(Key::Space)), None);
+        dialog.set_focus_ring(FocusRing::Tab);
+        dialog.input(&key(Key::Tab));
         assert_eq!(dialog.input(&key(Key::Space)), Some(DialogEvent::Item(1)));
     }
 }

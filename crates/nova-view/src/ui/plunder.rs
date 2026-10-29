@@ -23,7 +23,10 @@
 //!
 //! The assignment dialog asks `STR#` 2002 #118's question in item 3, with
 //! "Use As My Ship" (item 1, `STR#` 150 #47) and "Use As Escort" (item 2,
-//! #46); a click gives its [`Assignment`].
+//! #46); a click gives its [`Assignment`], and so does a press of M or E
+//! (`_CapturedAssignmentFilter` @0x51782: M is item 1 @0x51799 and
+//! @0x517e4, E item 2 @0x5179f-0x517ac). The filter maps no Return, Enter
+//! or Escape, so they choose nothing.
 //!
 //! Without the interface file, [`PlunderDialog::fallback`] and
 //! [`AssignmentDialog::fallback`] lay out the same items themselves, over
@@ -39,14 +42,14 @@ use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, MouseButton};
+use crate::input::{Input, Key, MouseButton};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, STOCK_WORD,
-    TextBacking, outline,
+    Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, ItemTemplate, Placement, Role,
+    STOCK_WORD, TextBacking, outline,
 };
 use super::prefs::{BACKDROP, BORDER};
 
@@ -269,6 +272,14 @@ impl PlunderDialog {
         self.held
     }
 
+    /// The plunder dialog with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.dialog.set_focus_ring(ring);
+        self
+    }
+
     /// The dialog itself, for its layout.
     #[must_use]
     pub fn dialog(&self) -> &Dialog {
@@ -430,6 +441,14 @@ impl AssignmentDialog {
         self.choice.take()
     }
 
+    /// The assignment dialog with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.dialog.set_focus_ring(ring);
+        self
+    }
+
     /// The dialog itself, for its layout.
     #[must_use]
     pub fn dialog(&self) -> &Dialog {
@@ -458,9 +477,29 @@ fn assignment_template() -> DialogTemplate {
 }
 
 impl Screen for AssignmentDialog {
-    /// Every event goes to the dialog; a button activated is its choice.
-    /// It never quits.
+    /// A press (not a repeat) of M, either case, is Use As My Ship, and of
+    /// E Use As Escort, as `_CapturedAssignmentFilter` has them; every
+    /// other event goes to the dialog, and a button activated is its
+    /// choice. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Key {
+            key: Key::Char(letter),
+            pressed: true,
+            repeat,
+        } = *input
+        {
+            let choice = match letter.to_ascii_lowercase() {
+                'm' => Some(Assignment::MyShip),
+                'e' => Some(Assignment::Escort),
+                _ => None,
+            };
+            if let Some(choice) = choice {
+                if !repeat {
+                    self.choice = Some(choice);
+                }
+                return ScreenAction::None;
+            }
+        }
         match self.dialog.input(input) {
             Some(DialogEvent::Item(MY_SHIP_ITEM)) => self.choice = Some(Assignment::MyShip),
             Some(DialogEvent::Item(ESCORT_ITEM)) => self.choice = Some(Assignment::Escort),
@@ -1069,5 +1108,58 @@ mod tests {
             template.placement.origin(template.bounds),
             crate::geometry::Point::new(384.0, 327.0)
         );
+    }
+
+    /// `_PlunderFilter` @0x92f20 and `_CapturedAssignmentFilter` @0x51782
+    /// map no Tab or Space.
+    #[test]
+    fn tab_then_space_presses_the_focused_button_only_with_the_focus_ring() {
+        let mut ringed = dialog(loaded());
+        ringed.input(&key(Key::Tab));
+        ringed.input(&key(Key::Space));
+        assert!(ringed.take_take().is_some(), "plunder by default");
+        let mut off = dialog(loaded()).with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert_eq!(off.take_take(), None);
+        assert_eq!(off.dialog().focus(), None);
+        let mut ringed = assignment();
+        ringed.input(&key(Key::Tab));
+        ringed.input(&key(Key::Space));
+        assert!(ringed.take_choice().is_some(), "assignment by default");
+        let mut off = assignment().with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert_eq!(off.take_choice(), None);
+        assert_eq!(off.dialog().focus(), None);
+    }
+
+    /// `_CapturedAssignmentFilter` @0x51782: M is Use As My Ship
+    /// (@0x51799, @0x517e4), E Use As Escort (@0x5179f-0x517ac), on a
+    /// keyDown only, and Return, Enter and Escape are nothing.
+    #[test]
+    fn m_and_e_choose_and_return_and_escape_do_not() {
+        for (pressed, choice) in [
+            (Key::Char('m'), Assignment::MyShip),
+            (Key::Char('M'), Assignment::MyShip),
+            (Key::Char('e'), Assignment::Escort),
+            (Key::Char('E'), Assignment::Escort),
+        ] {
+            let mut dialog = assignment();
+            dialog.input(&Input::Key {
+                key: pressed,
+                pressed: true,
+                repeat: true,
+            });
+            assert_eq!(dialog.take_choice(), None, "{pressed:?} repeating");
+            dialog.input(&key(pressed));
+            assert_eq!(dialog.take_choice(), Some(choice), "{pressed:?}");
+            assert_eq!(dialog.take_sounds(), [], "{pressed:?}");
+        }
+        let mut dialog = assignment();
+        for pressed in [Key::Enter, Key::Escape, Key::Char('x')] {
+            dialog.input(&key(pressed));
+            assert_eq!(dialog.take_choice(), None, "{pressed:?}");
+        }
     }
 }

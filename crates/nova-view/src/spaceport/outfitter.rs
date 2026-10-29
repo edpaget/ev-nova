@@ -192,7 +192,7 @@ use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::comm::grouped;
 use crate::ui::desc::DescDialog;
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::quantity::QuantityDialog;
 
@@ -517,6 +517,8 @@ pub struct OutfitterScreen {
     /// The mission offers, once given.
     offering: Option<VenueOffers>,
     style: ButtonStyle,
+    /// Whether its dialogs' buttons take the keyboard focus.
+    focus_ring: FocusRing,
     closed: bool,
     /// What its keys asked for, until each is taken.
     asks: KeyAsks,
@@ -603,6 +605,7 @@ impl OutfitterScreen {
             alert_template: alert.ok(),
             offering: None,
             style,
+            focus_ring: FocusRing::default(),
             closed: false,
             asks: KeyAsks::default(),
             unhighlighted_outfit: None,
@@ -620,6 +623,19 @@ impl OutfitterScreen {
         screen
     }
 
+    /// The outfitter with its dialogs' buttons taking the keyboard focus
+    /// as `ring` says (the `dialog_focus_ring` rule), its own and each it
+    /// opens after it.
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.focus_ring = ring;
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self.offering = self.offering.map(|offering| offering.with_focus_ring(ring));
+        self
+    }
+
     /// The outfitter with mission offers, each shown in the offer dialog of
     /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed ([`OutfitterScreen::rearm`]), as
@@ -627,7 +643,7 @@ impl OutfitterScreen {
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(templates)),
+            offering: Some(VenueOffers::asking(templates).with_focus_ring(self.focus_ring)),
             ..self
         }
     }
@@ -873,7 +889,8 @@ impl OutfitterScreen {
             &sale_alert_text(alert),
             self.style,
             Rc::clone(&laid.metrics.0),
-        );
+        )
+        .with_focus_ring(self.focus_ring);
         self.alert.open((), dialog);
     }
 

@@ -63,6 +63,20 @@
 //!
 //! The dialog has no stock frame: it is drawn over a dark backdrop with a
 //! 1-unit outline.
+//!
+//! # Keyboard focus
+//!
+//! The original's Preferences is Cocoa (`EVPrefsDialogController`), so its
+//! keyboard focus is `AppKit`'s: with the player's full keyboard access on
+//! (`-[NSApplication isFullKeyboardAccessEnabled]`), Tab moves the focus
+//! through every control and Space presses the focused one; with it off,
+//! only text fields and lists take the focus. This dialog has neither: its
+//! display picker and Scaling list are one-row pickers stepped by their
+//! arrows, as a pop-up button or a stepper is, not a list of rows. So
+//! under [`FocusRing::Off`] (full keyboard access off) nothing is in the
+//! loop, and under [`FocusRing::Tab`] (on, and where the platform has no
+//! such setting) every part is. Whoever opens the dialog reads the setting
+//! ([`PrefsDialog::with_focus_ring`]); the dialog only follows it.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -82,8 +96,8 @@ use crate::video_mode::{FullscreenKind, VideoMode};
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, Role, STATIC_TEXT_COLOR, STATIC_TEXT_SIZE,
-    outline,
+    Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, Role, STATIC_TEXT_COLOR,
+    STATIC_TEXT_SIZE, outline,
 };
 use super::mode_picker::ModePicker;
 use super::picker::Picker;
@@ -382,6 +396,8 @@ pub struct PrefsDialog {
     style: ButtonStyle,
     metrics: Rc<dyn TextMetrics>,
     focus: Option<Focus>,
+    /// Whether Tab moves a focus through its parts.
+    focus_ring: FocusRing,
     target: Option<Target>,
     changed: bool,
     closed: bool,
@@ -501,6 +517,7 @@ impl PrefsDialog {
             style,
             metrics,
             focus: None,
+            focus_ring: FocusRing::default(),
             target: None,
             changed: false,
             closed: false,
@@ -589,7 +606,7 @@ impl PrefsDialog {
     fn key(&mut self, key: Key, repeat: bool, input: &Input) {
         match (key, self.focus) {
             (Key::Tab, _) => {
-                if !repeat {
+                if !repeat && self.focus_ring == FocusRing::Tab {
                     self.focus = Some(self.focus.map_or(Focus::Music, Focus::next));
                 }
             }
@@ -704,6 +721,25 @@ impl PrefsDialog {
         self.focus
     }
 
+    /// The dialog with its parts taking the keyboard focus as `ring`
+    /// says: [`FocusRing::Tab`] with macOS full keyboard access on (and
+    /// where there is no such setting), [`FocusRing::Off`] with it off
+    /// (see the module docs).
+    #[must_use]
+    pub fn with_focus_ring(self, ring: FocusRing) -> Self {
+        Self {
+            focus_ring: ring,
+            focus: None,
+            ..self
+        }
+    }
+
+    /// Whether its parts take the keyboard focus.
+    #[must_use]
+    pub fn focus_ring(&self) -> FocusRing {
+        self.focus_ring
+    }
+
     /// The dialog itself, for its layout and its buttons.
     #[must_use]
     pub fn dialog(&self) -> &Dialog {
@@ -789,11 +825,14 @@ impl Screen for PrefsDialog {
     ///   and Key Settings do nothing.
     /// - A click on the display picker's or the Scaling list's arrows
     ///   steps it.
-    /// - Tab moves the focus (music, sound, Hyperspace Effects, QuickTime
-    ///   Movies, Weapon Effects, Smoke Trails, Parallax Starfield, the display picker, the Scaling list, the sound volume,
-    ///   the music volume, OK, and round). Space flips a focused toggle or
-    ///   activates OK; the arrow keys step a focused volume, and Up and
-    ///   Down the focused picker, repeats included.
+    /// - Under [`FocusRing::Tab`], Tab moves the focus (music, sound,
+    ///   Hyperspace Effects, QuickTime Movies, Weapon Effects, Smoke
+    ///   Trails, Parallax Starfield, the display picker, the Scaling list,
+    ///   the sound volume, the music volume, OK, and round). Space flips a
+    ///   focused toggle or activates OK; the arrow keys step a focused
+    ///   volume, and Up and Down the focused picker, repeats included.
+    ///   Under [`FocusRing::Off`] nothing takes the focus, so Tab, Space
+    ///   and the arrows do nothing.
     /// - Return and Escape close it. Closing, whichever way, reports each
     ///   picker's choice if it differs from the one the dialog opened on.
     ///
@@ -2665,5 +2704,37 @@ mod tests {
         assert!(debug.starts_with("PrefsDialog { prefs: Prefs"), "{debug}");
         assert!(debug.contains("focus: None"), "{debug}");
         assert!(debug.contains("closed: false"), "{debug}");
+    }
+
+    #[test]
+    fn the_focus_ring_is_on_by_default() {
+        assert_eq!(prefs().focus_ring(), FocusRing::Tab);
+        let mut dialog = prefs().with_focus_ring(FocusRing::Tab);
+        dialog.input(&key(Key::Tab));
+        assert_eq!(dialog.focus(), Some(Focus::Music));
+    }
+
+    /// `AppKit` with full keyboard access off: no part of the dialog is in
+    /// the key loop, so Tab, Space and the arrows reach nothing.
+    #[test]
+    fn without_the_focus_ring_tab_space_and_the_arrows_do_nothing() {
+        let mut dialog = prefs().with_focus_ring(FocusRing::Off);
+        assert_eq!(dialog.focus_ring(), FocusRing::Off);
+        let before = drawn(&dialog);
+        for _ in 0..13 {
+            dialog.input(&key(Key::Tab));
+            assert_eq!(dialog.focus(), None);
+            for k in [Key::Space, Key::Up, Key::Down, Key::Left, Key::Right] {
+                dialog.input(&key(k));
+            }
+        }
+        assert_eq!(dialog.prefs(), start(), "every toggle as it was");
+        assert!(!dialog.closed());
+        assert_eq!(drawn(&dialog), before, "nothing is outlined");
+        dialog.input(&key(Key::Enter));
+        assert!(dialog.closed(), "Return still closes it");
+        let mut dialog = prefs().with_focus_ring(FocusRing::Off);
+        dialog.input(&key(Key::Escape));
+        assert!(dialog.closed(), "and Escape");
     }
 }

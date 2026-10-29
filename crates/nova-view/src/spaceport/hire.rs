@@ -72,7 +72,7 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
 
 /// Hire Escort's item: the shipyard's Buy Ship.
 pub const HIRE_ITEM: usize = BUY_ITEM;
@@ -150,6 +150,8 @@ pub struct HireScreen {
     /// Each listed ship's cell picture, read once when there is a dialog.
     pictures: Vec<Option<i16>>,
     style: ButtonStyle,
+    /// Whether its dialogs' buttons take the keyboard focus.
+    focus_ring: FocusRing,
     /// The grid, its selection as `_ShipyardFilter` keeps it.
     grid: ShipyardGrid,
     /// The info panel, while it is open.
@@ -226,6 +228,7 @@ impl HireScreen {
             catalog: CatalogHandle(catalog),
             pictures,
             style,
+            focus_ring: FocusRing::default(),
             grid,
             panel: None,
             order: None,
@@ -235,6 +238,18 @@ impl HireScreen {
         };
         screen.selected_changed();
         screen
+    }
+
+    /// The hire screen with its dialogs' buttons taking the keyboard focus
+    /// as `ring` says (the `dialog_focus_ring` rule), its own and each it
+    /// opens after it.
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.focus_ring = ring;
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self
     }
 
     /// The ships shown.
@@ -398,7 +413,8 @@ impl HireScreen {
             &row.specs,
             &laid.metrics.0,
             self.style,
-        );
+        )
+        .map(|panel| panel.with_focus_ring(self.focus_ring));
     }
 
     /// Activates dialog item `item`: Done closes, Hire Escort asks, Info
@@ -1182,6 +1198,20 @@ mod tests {
             click(&mut bare, info);
             assert!(bare.info_panel().is_none());
         }
+    }
+
+    /// `_ShipDescFilter` @0x510e5, which the hire screen's panel runs
+    /// too, maps Space to Done on a keyDown only.
+    #[test]
+    fn space_closes_the_hire_panel_but_not_its_repeats() {
+        let mut screen = screen();
+        screen.input(&key(INFO_KEY, false));
+        assert!(screen.info_panel().is_some(), "the press that opened it");
+        screen.input(&key(Key::Space, true));
+        assert!(screen.info_panel().is_some(), "a repeat");
+        screen.input(&key(Key::Space, false));
+        assert!(screen.info_panel().is_none());
+        assert!(!screen.closed());
     }
 
     #[test]

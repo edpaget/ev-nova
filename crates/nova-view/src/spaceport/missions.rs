@@ -66,7 +66,7 @@ use crate::sound::{Sound, UiSound};
 use crate::text::{TextMetrics, truncate_end};
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DONE_LABEL};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, TextBacking};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
 use crate::ui::row_list::RowList;
@@ -242,6 +242,16 @@ impl MissionComputerScreen {
         };
         screen.set_computer(computer);
         screen
+    }
+
+    /// The mission computer with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self
     }
 
     /// The dialog, if it could be laid out.
@@ -577,6 +587,16 @@ impl MissionInfoScreen {
         };
         screen.set_info(info);
         screen
+    }
+
+    /// The mission info screen with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self
     }
 
     /// The dialog, if it could be laid out.

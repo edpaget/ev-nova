@@ -65,8 +65,8 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, STOCK_WORD,
-    TextBacking, outline,
+    Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, ItemTemplate, Placement, Role,
+    STOCK_WORD, TextBacking, outline,
 };
 use super::prefs::{BACKDROP, BORDER};
 
@@ -390,7 +390,8 @@ impl CommDialog {
     /// Shows `view`: the reply, the class and status, and the column of
     /// buttons rebuilt for its options.
     pub fn set_hail(&mut self, view: &HailView) {
-        self.dialog = layout(&self.template, view, self.style, &self.metrics);
+        let ring = self.dialog.focus_ring();
+        self.dialog = layout(&self.template, view, self.style, &self.metrics).with_focus_ring(ring);
         self.keys = view.options.iter().map(|option| option.key).collect();
         self.view = view.clone();
     }
@@ -398,6 +399,14 @@ impl CommDialog {
     /// The press the player made, once.
     pub fn take_press(&mut self) -> Option<CommPress> {
         self.press.take()
+    }
+
+    /// The comm dialog with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.dialog.set_focus_ring(ring);
+        self
     }
 
     /// The dialog itself, for its layout.
@@ -787,6 +796,14 @@ impl HaggleDialog {
     /// What the player chose, once.
     pub fn take_choice(&mut self) -> Option<Haggle> {
         self.choice.take()
+    }
+
+    /// The haggle dialog with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.dialog.set_focus_ring(ring);
+        self
     }
 
     /// The dialog itself, for its layout.
@@ -1888,5 +1905,30 @@ mod tests {
             template.placement.origin(template.bounds),
             crate::geometry::Point::new(381.0, 331.0)
         );
+    }
+
+    /// `_CommFilter` @0x908ed and `_HaggleFilter` @0x91d9d map no Tab or
+    /// Space: under the original's reading they press nothing.
+    #[test]
+    fn tab_then_space_presses_the_focused_button_only_with_the_focus_ring() {
+        let mut ringed = dialog(&view());
+        ringed.input(&key(Key::Tab));
+        ringed.input(&key(Key::Space));
+        assert!(ringed.take_press().is_some(), "by default");
+        let mut off = dialog(&view()).with_focus_ring(FocusRing::Off);
+        off.set_hail(&view());
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert_eq!(off.take_press(), None, "kept over set_hail");
+        assert_eq!(off.dialog().focus(), None);
+        let mut ringed = haggle(3000);
+        ringed.input(&key(Key::Tab));
+        ringed.input(&key(Key::Space));
+        assert!(ringed.take_choice().is_some(), "haggle by default");
+        let mut off = haggle(3000).with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert_eq!(off.take_choice(), None);
+        assert_eq!(off.dialog().focus(), None);
     }
 }

@@ -79,7 +79,7 @@ use nova_sim::player_info::{EnergyShown, IncomeLine, Reach, Words, cheat_suffix}
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::catalog::PictureSizes;
 use super::desc::DONE_LABEL;
-use super::dialog::{Dialog, DialogEvent, DialogTemplate};
+use super::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing};
 use super::text_box::TextBox;
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList, fill_rect};
@@ -561,6 +561,8 @@ pub struct PlayerInfoScreen {
     confirm_template: Result<DialogTemplate, String>,
     /// The Yes/No dialog, while it asks.
     confirm: Option<Dialog>,
+    /// Whether the Yes/No dialog's buttons take the keyboard focus.
+    focus_ring: FocusRing,
     info: PlayerInfo,
     style: ButtonStyle,
     /// The background pictures' own sizes.
@@ -594,6 +596,7 @@ impl PlayerInfoScreen {
             laid,
             confirm_template: confirm,
             confirm: None,
+            focus_ring: FocusRing::default(),
             info,
             style,
             background,
@@ -603,6 +606,17 @@ impl PlayerInfoScreen {
             backwards: false,
             jettison: false,
             closed: false,
+        }
+    }
+
+    /// The screen with its Jettison question's buttons taking the
+    /// keyboard focus as `ring` says (the `dialog_focus_ring` rule). The
+    /// screen's own Tab steps the pages whatever it says.
+    #[must_use]
+    pub fn with_focus_ring(self, ring: FocusRing) -> Self {
+        Self {
+            focus_ring: ring,
+            ..self
         }
     }
 
@@ -694,7 +708,8 @@ impl PlayerInfoScreen {
         let mut dialog = Dialog::new(template, &[], Rc::clone(&laid.metrics.0))
             .with_buttons(ButtonSkin::NOVA, self.style)
             .with_default(Some(YES_ITEM))
-            .with_cancel(None);
+            .with_cancel(None)
+            .with_focus_ring(self.focus_ring);
         dialog.set_text(QUESTION_ITEM, &self.info.words.jettison_question);
         self.confirm = Some(dialog);
     }
@@ -2171,5 +2186,27 @@ mod tests {
             stock(),
         );
         assert_eq!(screen.problem(), Some("its dialog has no item 7"));
+    }
+
+    /// `_EVYesNoDialog` @0x5558c, the Jettison question, runs the
+    /// Toolbox's standard filter, which maps no Tab or Space; Tab still
+    /// steps the pages (`_PlayerInfoFilter` @0x53b14-0x53b80) under both
+    /// readings.
+    #[test]
+    fn the_jettison_question_takes_tab_then_space_only_with_the_focus_ring() {
+        let mut ringed = asking();
+        ringed.input(&press(Key::Tab));
+        ringed.input(&press(Key::Space));
+        assert!(!ringed.confirm_open(), "by default");
+        let mut off = screen().with_focus_ring(FocusRing::Off);
+        off.input(&press(Key::Tab));
+        assert_eq!(off.tab(), Tab::Cargo, "Tab steps the pages");
+        click_button(&mut off, PlayerInfoButton::Jettison);
+        assert!(off.confirm_open());
+        off.input(&press(Key::Tab));
+        off.input(&press(Key::Space));
+        assert!(off.confirm_open(), "Space presses nothing");
+        assert_eq!(off.confirm().and_then(Dialog::focus), None);
+        assert!(!off.take_jettison());
     }
 }

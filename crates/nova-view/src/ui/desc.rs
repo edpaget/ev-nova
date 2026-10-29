@@ -25,7 +25,7 @@ use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
-use super::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, Role};
+use super::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, Role};
 use super::picture_variant::VariantTemplates;
 use super::scroll_text::ScrollText;
 
@@ -254,6 +254,14 @@ impl DescDialog {
     #[must_use]
     pub fn lines(&self) -> &[String] {
         self.dialog.scroll_text().map_or(&[], ScrollText::lines)
+    }
+
+    /// The description with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.dialog.set_focus_ring(ring);
+        self
     }
 
     /// The dialog itself, for its layout.
@@ -694,5 +702,19 @@ mod tests {
         desc.input(&key(Key::Space));
         assert!(desc.closed(), "Space on Done");
         assert_eq!(desc.take_sounds(), [], "Space");
+    }
+
+    /// `_TextDialogFilter` @0x51f77 maps no Tab or Space.
+    #[test]
+    fn tab_then_space_closes_it_only_with_the_focus_ring() {
+        let mut ringed = desc();
+        ringed.input(&key(Key::Tab));
+        ringed.input(&key(Key::Space));
+        assert!(ringed.closed(), "by default");
+        let mut off = desc().with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert!(!off.closed());
+        assert_eq!(off.dialog().focus(), None);
     }
 }

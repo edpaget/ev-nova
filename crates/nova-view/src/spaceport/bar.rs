@@ -97,7 +97,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, TextBacking};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::VariantTemplates;
 use crate::ui::player_info::is_player_info_press;
@@ -241,6 +241,8 @@ pub struct BarScreen {
     laid: Result<Laid, String>,
     hiring: Hiring,
     style: ButtonStyle,
+    /// Whether its dialogs' buttons take the keyboard focus.
+    focus_ring: FocusRing,
     /// Whether the fleet has room for another escort.
     room: bool,
     /// The hire screen, while it is open.
@@ -331,6 +333,7 @@ impl BarScreen {
             laid,
             hiring,
             style,
+            focus_ring: FocusRing::default(),
             room,
             desc,
             description_request,
@@ -385,13 +388,28 @@ impl BarScreen {
         self.news.as_ref()
     }
 
+    /// The bar with its dialogs' buttons taking the keyboard focus
+    /// as `ring` says (the `dialog_focus_ring` rule), its own and each it
+    /// opens after it.
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.focus_ring = ring;
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self.offering = self.offering.map(|offering| offering.with_focus_ring(ring));
+        self
+    }
+
     /// The bar with mission offers, each shown in the offer dialog of
     /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first [`FIRST_OFFER_DELAY`] after it opens.
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::waiting(templates, FIRST_OFFER_DELAY)),
+            offering: Some(
+                VenueOffers::waiting(templates, FIRST_OFFER_DELAY).with_focus_ring(self.focus_ring),
+            ),
             ..self
         }
     }
@@ -597,13 +615,16 @@ impl BarScreen {
         if let Some(offering) = &mut self.offering {
             offering.restart();
         }
-        self.hire = Some(HireScreen::new(
-            layout,
-            self.hiring.info.clone(),
-            list,
-            Rc::clone(&self.hiring.catalog),
-            self.style,
-        ));
+        self.hire = Some(
+            HireScreen::new(
+                layout,
+                self.hiring.info.clone(),
+                list,
+                Rc::clone(&self.hiring.catalog),
+                self.style,
+            )
+            .with_focus_ring(self.focus_ring),
+        );
     }
 
     /// The ship the hire screen asked for since it was last taken, once.
