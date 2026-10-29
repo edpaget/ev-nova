@@ -1,6 +1,7 @@
 //! The `.dmg` as built, mounted and read back (macOS only, opt-in): the
-//! trimmed, thinned, signed Sparkle inside `Nova.app`, and the app's
-//! `Info.plist` as the core renders it for this build and channel.
+//! trimmed, thinned, signed Sparkle inside `Nova.app`, the font licences
+//! ([`font_licences`]) in the app's `Resources` and at the volume root, and
+//! the app's `Info.plist` as the core renders it for this build and channel.
 //!
 //! It skips, passing, unless `NOVA_DMG` names a built `.dmg`, so neither
 //! `mise run ci` nor a developer's test run mounts anything. CI's macOS
@@ -17,6 +18,7 @@ use nova_bundle::appcast::Platform;
 use nova_bundle::build_id;
 use nova_bundle::bundle::{check_archs, metadata};
 use nova_bundle::channel::{self, feed_status};
+use nova_bundle::fonts::font_licences;
 use nova_bundle::info_plist::info_plist;
 use nova_bundle::layout::APP;
 use nova_bundle::ports::{Invocation, Process};
@@ -106,6 +108,13 @@ fn the_dmg_holds_a_trimmed_signed_sparkle_and_the_channel_s_plist() {
             .join("Sparkle-LICENSE.txt")
             .is_file()
     );
+    for name in font_licences(Path::new("")).map(|(_, name)| name) {
+        assert!(
+            contents.join("Resources").join(name).is_file(),
+            "{name} is in the app's Resources"
+        );
+        assert!(mount.join(name).is_file(), "{name} is at the volume root");
+    }
 
     let json = StdProcess
         .run(&metadata(&OsString::from(env!("CARGO"))))
