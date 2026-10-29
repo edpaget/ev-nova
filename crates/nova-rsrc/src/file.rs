@@ -117,6 +117,14 @@ impl ResourceFile {
     /// real resource fork is read instead; when that is missing or empty
     /// too, the data fork's parse error stands. The bytes, not the
     /// extension, pick the parser; see [`ResourceFile::from_bytes`].
+    ///
+    /// When the retry itself fails, its error is reported: an unreadable
+    /// resource fork's [`LoadError::Io`], or its own parse error. The
+    /// original surfaces no error to pick between. `_EVOpenResourceFile`
+    /// @0xa5287 drops both `FSOpenResourceFile` results (@0xa52f6,
+    /// @0xa532e) and returns only the reference number, still -1 when both
+    /// opens fail (@0xa5333); `_OpenEVPluginx` logs and skips the file
+    /// (@0xa41a6). So the retry's outcome stands, as the last thing tried.
     pub fn load(reader: &impl ForkReader, path: &Path) -> Result<Self, LoadError> {
         let read = |fork| {
             reader
@@ -725,6 +733,26 @@ mod tests {
             }
             other => panic!("expected Parse, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn load_reports_the_resource_forks_io_error_after_falling_back() {
+        // The data fork alone would fail to parse; the unreadable resource
+        // fork's I/O error replaces that, as the retry's outcome stands.
+        let reader = MemForks::new()
+            .unreadable(path())
+            .file(path(), not_a_fork());
+        match ResourceFile::load(&reader, path()) {
+            Err(LoadError::Io { path: p, source }) => {
+                assert_eq!(p, path());
+                assert_eq!(source.to_string(), UNREADABLE);
+            }
+            other => panic!("expected the resource fork's Io, got {other:?}"),
+        }
+        assert_eq!(
+            reader.reads(),
+            [Fork::Data, Fork::Resource].map(|fork| (path().to_path_buf(), fork))
+        );
     }
 
     #[test]
