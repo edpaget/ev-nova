@@ -531,6 +531,9 @@ impl PilotCatalog for GameData {
                     flags2: stellar.flags2.bits(),
                     govt: stellar.govt,
                     min_status: stellar.min_status,
+                    tribute: stellar.tribute,
+                    tech_level: stellar.tech_level,
+                    def_count: stellar.def_count,
                 })
             })
             .collect()
@@ -2547,6 +2550,9 @@ mod tests {
                     flags2: 0,
                     govt: Some(GovtId(140)),
                     min_status: 25,
+                    tribute: 0,
+                    def_count: 0,
+                    tech_level: 0,
                 },
                 ListedStellar {
                     id: StellarId(129),
@@ -2555,6 +2561,9 @@ mod tests {
                     flags2: 0x2000,
                     govt: None,
                     min_status: 0,
+                    tribute: 0,
+                    def_count: 0,
+                    tech_level: 0,
                 },
             ],
             "by ID, each system once by ID; unlisted 130, missing 999, and 133 listed only \
@@ -2767,6 +2776,29 @@ mod tests {
     fn defended(mut bytes: Vec<u8>, dude: i16, count: i16) -> Vec<u8> {
         put_i16s(&mut bytes, 0x1C, &[dude, count]);
         bytes
+    }
+
+    #[test]
+    fn a_listed_stellar_reads_its_tribute_tech_level_and_def_count_raw() {
+        let mut paid = paying(defended(stellar(0, 0, 0, 1, 0), 140, 7006), 250);
+        put_i16s(&mut paid, 0x0C, &[4]);
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128, 129])),
+            (Stellar::TYPE, 128, paid),
+            (Stellar::TYPE, 129, stellar(0, 0, 0, 1, 0)),
+        ]);
+        assert_eq!(
+            data.listed_stellars()
+                .iter()
+                .map(|stellar| (
+                    stellar.id.0,
+                    stellar.tribute,
+                    stellar.tech_level,
+                    stellar.def_count
+                ))
+                .collect::<Vec<_>>(),
+            [(128, 250, 4, 7006), (129, 0, 0, 0)]
+        );
     }
 
     #[test]

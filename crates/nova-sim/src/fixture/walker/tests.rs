@@ -112,6 +112,9 @@ fn listed(id: i16, systems: &[i16]) -> ListedStellar {
         flags2: 0,
         govt: None,
         min_status: 0,
+        def_count: 0,
+        tech_level: 0,
+        tribute: 0,
     }
 }
 

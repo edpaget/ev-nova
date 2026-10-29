@@ -444,6 +444,9 @@ pub fn listed_stellars<'a>(
                 flags2: site.flags2,
                 govt: site.govt,
                 min_status: site.min_status,
+                tribute: site.tribute,
+                tech_level: site.tech_level,
+                def_count: site.def_count,
             });
             if !stellar.systems.contains(&system) {
                 stellar.systems.push(system);
@@ -475,6 +478,9 @@ pub fn list_also(
                         flags2: 0,
                         govt: None,
                         min_status: 0,
+                        tribute: 0,
+                        def_count: 0,
+                        tech_level: 0,
                     },
                 );
                 at
@@ -588,6 +594,9 @@ mod tests {
                     flags2: 0,
                     govt: None,
                     min_status: 0,
+                    tribute: 0,
+                    def_count: 0,
+                    tech_level: 0,
                 },
                 ListedStellar {
                     id: StellarId(129),
@@ -596,6 +605,9 @@ mod tests {
                     flags2: 0x2000,
                     govt: None,
                     min_status: 0,
+                    tribute: 0,
+                    def_count: 0,
+                    tech_level: 0,
                 },
             ],
             "by ascending ID, each system once and in order, the first site's flags"
@@ -623,6 +635,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            tribute: 0,
+            def_count: 0,
+            tech_level: 0,
         };
         assert_eq!(
             listed,

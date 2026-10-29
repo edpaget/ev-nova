@@ -369,8 +369,9 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
             // Each visible system's reinforcement countdown (see the
             // `reinforcements` module).
             Participant::Reinforcements => session.chart.reinforcements_day(&mut session.pilot),
-            // Filled by its own phase: rdm task planet-domination.
-            Participant::Tribute => {}
+            // The dominated stellars' tribute (see the
+            // `dominated_stellars` module).
+            Participant::Tribute => session.tribute_day(),
         }
     }
 }

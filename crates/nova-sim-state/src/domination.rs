@@ -36,7 +36,7 @@
 //!   @0x53547): `nova_sim`'s session `player_info` module;
 //! - the daily tribute (`_DoStellarTimePassage` @0x40880) and the defence
 //!   fleet's regrowth (`_IncrementGameTime` @0xb5f6): `nova_sim`'s session
-//!   `domination` module;
+//!   `dominated_stellars` module;
 //! - the load's defence ships left (`_LoadPilotData` @0x75d76): `nova_sim`'s
 //!   session `stellar_defence` module;
 //! - the planet comm dialog (`_DoPlanetCommDialog`, `_PlanetCommFilter`,

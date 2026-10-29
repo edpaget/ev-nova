@@ -1449,6 +1449,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         };
         let stellars = stellars_of(
             &galaxy,
@@ -1483,6 +1486,9 @@ mod tests {
             flags2,
             govt: None,
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         };
         let dominated: Vec<(i16, bool)> = stellars_of(
             &galaxy,
@@ -1513,6 +1519,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         };
         let listed = [
             listed(140, &[130, 131]),
@@ -1571,6 +1580,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         };
         let listed = [
             landable(140, &[130, 131]),
@@ -1628,6 +1640,9 @@ mod tests {
             flags2: 0x0010,
             govt: Some(FED),
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         };
         let stellars = stellars_of(
             &galaxy,
@@ -1684,6 +1699,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         }
     }
 

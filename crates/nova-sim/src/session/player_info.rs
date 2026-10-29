@@ -20,16 +20,17 @@
 //! is `Chart::legal_status_in`, which the galaxy map's panel reads for
 //! the system it selects; there a stellar counts only while active, as
 //! another system's stellars may not be. The
-//! tribute counts each stellar some system lists, held as
-//! [`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder) gives
-//! it, when the stellar is dominated ([`DOMINATED`]); the tribute itself
-//! is read from the holder's stellars in `catalog`.
+//! tribute row (@0x5352c-0x53583) is the daily step's own sum,
+//! `Chart::daily_tribute` (see the `dominated_stellars` module): its
+//! test of the holder's visible (+0x1eb) and loaded (+0x1ed) bytes
+//! (@0x53560-0x53570) is the active test, as every system the catalog has
+//! is loaded.
 
 use super::{Chart, PlayerShip, Session, Setup, Statics, overlaid_sites};
 use crate::catalog::{GovtId, LandingSite, PilotCatalog, SystemId};
 use crate::combat::hull::Condition;
 use crate::landing::{StellarFlags, is_landable};
-use crate::market::{DOMINATED, Good};
+use crate::market::Good;
 use crate::news::{CARGO_NAMES, MISC_STRINGS};
 use crate::outfitter::outfit_mods;
 use crate::pilot::Pilot;
@@ -165,7 +166,7 @@ impl Session {
             .collect();
         let day = player_info::daily_income(
             costs,
-            self.chart.tribute(&self.pilot, &self.statics, catalog),
+            self.chart.daily_tribute(&self.pilot, &self.statics),
             ranks.salary,
         );
         PlayerInfo {
@@ -301,30 +302,6 @@ impl PlayerShip {
 }
 
 impl Chart {
-    /// The day's tribute (@0x5352c-0x53583): each stellar some system
-    /// lists that is dominated and active, its tribute read from its
-    /// holder's stellars in `catalog`.
-    fn tribute(
-        &self,
-        pilot: &Pilot,
-        statics: &Statics,
-        catalog: &(impl PilotCatalog + ?Sized),
-    ) -> i64 {
-        statics
-            .listed_stellars
-            .iter()
-            .filter(|listed| listed.flags2 & DOMINATED != 0)
-            .filter_map(|listed| {
-                let holder = self
-                    .galaxy
-                    .holder(listed.id, &listed.systems, pilot.system)?;
-                let sites = catalog.landing_sites(holder);
-                let site = sites.iter().find(|site| site.id == listed.id)?;
-                Some(player_info::tribute_of(site))
-            })
-            .sum()
-    }
-
     /// The Legal Status row (`_SystemIsInhabited` 0x4c4a, then
     /// [`Chart::legal_status_in`]): the player's system's stellars read
     /// from `catalog`; "N/A" in an uninhabited system.
@@ -474,7 +451,7 @@ mod tests {
     /// Planet `id`, dominated (`Flags2` 0x0020), paying `tribute`.
     fn dominated(id: i16, tribute: i16) -> LandingSite {
         LandingSite {
-            flags2: DOMINATED,
+            flags2: crate::market::DOMINATED,
             tribute,
             tech_level: 5,
             ..planet(id, 0.0, 0.0)

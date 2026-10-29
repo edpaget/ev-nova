@@ -268,6 +268,17 @@ pub struct ListedStellar {
     /// player's record against (see `nova_sim::iff`'s "Systems on the
     /// galaxy map").
     pub min_status: i16,
+    /// Its `Tribute`, raw, and its `TechLevel`: what it pays a day while
+    /// dominated (`nova_sim::player_info::tribute_of` reads them, as
+    /// `_LoadObjectData` decodes +0x46a, @0x775a3-0x775ce), which the
+    /// daily step and the player info's tribute row add up.
+    pub tribute: i16,
+    /// Its `TechLevel` (see [`tribute`](Self::tribute)).
+    pub tech_level: i16,
+    /// Its `DefCount`, raw (+0x468): its defence ships' decode, which a
+    /// load and the daily regrowth read
+    /// (`nova_sim_ai::traffic::stellar_defence`).
+    pub def_count: i16,
 }
 
 /// A system's `Visibility`, raw from its `sÿst`: the galaxy refresh
@@ -2921,6 +2932,9 @@ mod tests {
                 flags2: 0,
                 govt: None,
                 min_status: 0,
+                tribute: 0,
+                def_count: 0,
+                tech_level: 0,
             }]
         }
 
