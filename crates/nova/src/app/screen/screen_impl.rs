@@ -151,6 +151,7 @@ impl Screen for AppScreen {
         } else if !self.appear_holds_menu() && !self.entry_holds() {
             self.tell_menu_pointer();
             self.shown_mut().tick(dt);
+            self.collect_race_winnings();
         }
         self.settle_offer();
         self.drop_closed_missions();
