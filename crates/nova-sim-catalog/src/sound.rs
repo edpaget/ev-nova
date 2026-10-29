@@ -158,6 +158,21 @@ pub enum SimSound {
     /// `_beepSnd[2]`, `snd ` 152, at priority 1 (`_DoEscortDialog`
     /// @0x955d9-0x955fc).
     EscortDialogClosed,
+    /// The planet comm dialog opened for a stellar hailed: `_beepSnd[4]`,
+    /// `snd ` 154, at priority 1 (`_DoPlanetCommDialog` @0x96b3c-0x96b5f).
+    PlanetCommOpened,
+    /// Item 2 or 3 of the planet comm dialog was pressed: `_beepSnd[1]`,
+    /// `snd ` 151, at priority 1 (`_DoPlanetCommDialog`
+    /// @0x96ffc-0x97021).
+    PlanetCommPressed,
+    /// The planet comm dialog's bribe haggle ended, by any choice but a
+    /// won Lower Price: `_beepSnd[1]`, `snd ` 151, at priority 1
+    /// (`_DoPlanetCommDialog` @0x970c2-0x970e9).
+    PlanetCommHaggled,
+    /// The planet comm dialog closed, by Close Channel or a bribe paid:
+    /// `_beepSnd[2]`, `snd ` 152, at priority 1 (`_DoPlanetCommDialog`
+    /// @0x97a81-0x97aa4).
+    PlanetCommClosed,
     /// A person's hail quote was said in flight, by its own filters
     /// (`_HandleShip` @0x33f9e) or as it turned on the player
     /// (`_AIMakeShipAttackPlayer` @0x89ce1): `_beepSnd[4]`, `snd ` 154
