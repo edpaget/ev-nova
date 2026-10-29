@@ -4,8 +4,9 @@
 //! files, so [`NoMoviePlayer`] cannot start any movie: each ends at once,
 //! as the original's `_PlayQTMovie` returns when its file is not found or
 //! does not open (@0x559d2-0x55a5f), and whatever comes after it shows.
-//! Decoding is rdm:phase/shop-fidelity-followups/phase-3-shipyard-looping-ship-movie's,
-//! which replaces this player.
+//! rdm:phase/movies/phase-2-ffmpeg-decoder's `nova-movie` replaces this
+//! player: it decodes each frame onto a [`nova_view::MovieScreen`] and
+//! draws it through [`nova_view::DrawCommand::MovieFrame`].
 
 use std::time::Duration;
 

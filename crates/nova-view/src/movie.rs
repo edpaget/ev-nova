@@ -38,8 +38,13 @@
 //!
 //! Opening and decoding the file, and finding it (by its bare name in the
 //! Plug-Ins folder, then the Nova Files folder, @0x559d2 and @0x559ff), are
-//! the [`MoviePlayer`]'s: the engine has no QuickTime decoder, and wires a
-//! player that plays nothing.
+//! the [`MoviePlayer`]'s. A player shows each decoded frame on a
+//! [`MovieScreen`](crate::MovieScreen) it owns and draws the current one through
+//! [`DrawCommand::MovieFrame`](crate::DrawCommand::MovieFrame), whose
+//! pixels the renderer uploads again only when the frame changes
+//! ([`movie_frame`](crate::movie_frame)). The real player is
+//! rdm:phase/movies/phase-2-ffmpeg-decoder's `nova-movie`; until it lands
+//! the engine wires a player that plays nothing.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -66,7 +71,9 @@ pub trait MoviePlayer {
     fn advance(&self, dt: Duration) -> bool;
     /// Stops the movie and lets it go (`StopMovie`, `DisposeMovie`).
     fn stop(&self);
-    /// Draws the current frame stretched into `rect`.
+    /// Draws the current frame stretched into `rect`, through
+    /// [`DrawCommand::MovieFrame`](crate::DrawCommand::MovieFrame); nothing
+    /// when no movie has started.
     fn draw_frame(&self, rect: Bounds, list: &mut DrawList);
 }
 
@@ -421,11 +428,15 @@ pub mod fixture {
     //! A movie player for tests, and the [`MoviePlayer`] port's contract.
     //!
     //! [`MockMoviePlayer`] plays movies of a set size for a set number of
-    //! advances, or refuses to start one, and logs every call.
-    //! [`check_contract`] runs against it here and against `nova`'s
-    //! `NoMoviePlayer`, the one real adapter. That adapter plays nothing,
-    //! so the contract is thin: it says how a player that can't start
-    //! behaves, and how one that can plays out, without decoding anything.
+    //! advances, or refuses to start one, and logs every call. It draws
+    //! through [`DrawCommand::MovieFrame`] as a real player does, from a
+    //! [`MovieScreen`] of its own: a 1x1 frame of [`FRAME`], a new one each
+    //! advance. [`check_contract`] runs against it here and against
+    //! `nova`'s `NoMoviePlayer`, which plays nothing, and the decoder's
+    //! player. The contract decodes nothing: it says how a player that
+    //! can't start behaves, that one that starts draws its frame through
+    //! the movie-frame command inside the rect it is given, and how it
+    //! plays out.
 
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -433,8 +444,9 @@ pub mod fixture {
 
     use super::MoviePlayer;
     use crate::color::Color;
-    use crate::draw::{DrawList, fill_rect};
+    use crate::draw::{DrawCommand, DrawList};
     use crate::geometry::{Bounds, Point};
+    use crate::movie_frame::MovieScreen;
 
     /// How long each advance the contract makes is.
     pub const STEP: Duration = Duration::from_millis(100);
@@ -455,7 +467,7 @@ pub mod fixture {
         Draw(Bounds),
     }
 
-    /// The colour a [`MockMoviePlayer`] draws its frame in.
+    /// The colour of a [`MockMoviePlayer`]'s frame, one pixel.
     pub const FRAME: Color = Color::rgba(1, 2, 3, 255);
 
     /// A player whose movies are `size` and play for `advances` advances,
@@ -464,6 +476,7 @@ pub mod fixture {
         size: Option<(u32, u32)>,
         advances: u32,
         advanced: RefCell<u32>,
+        screen: RefCell<MovieScreen>,
         pub log: RefCell<Vec<Call>>,
     }
 
@@ -476,6 +489,7 @@ pub mod fixture {
                 size: Some(size),
                 advances,
                 advanced: RefCell::new(0),
+                screen: RefCell::new(MovieScreen::new()),
                 log: RefCell::new(Vec::new()),
             })
         }
@@ -487,6 +501,7 @@ pub mod fixture {
                 size: None,
                 advances: 0,
                 advanced: RefCell::new(0),
+                screen: RefCell::new(MovieScreen::new()),
                 log: RefCell::new(Vec::new()),
             })
         }
@@ -514,17 +529,31 @@ pub mod fixture {
                 })
                 .collect()
         }
+
+        /// Shows the next frame: one pixel of [`FRAME`], whatever the
+        /// movie's size, so a huge movie costs nothing.
+        fn show_next(&self) {
+            let pixel = vec![FRAME.r, FRAME.g, FRAME.b, FRAME.a];
+            let shown = self.screen.borrow_mut().show(1, 1, pixel);
+            debug_assert!(shown, "one pixel is four bytes");
+        }
     }
 
     impl MoviePlayer for MockMoviePlayer {
         fn start(&self, file: &str) -> Option<(u32, u32)> {
             self.log.borrow_mut().push(Call::Start(file.to_owned()));
             *self.advanced.borrow_mut() = 0;
+            if self.size.is_some() {
+                self.show_next();
+            }
             self.size
         }
 
         fn advance(&self, _dt: Duration) -> bool {
             self.log.borrow_mut().push(Call::Advance);
+            if self.size.is_some() {
+                self.show_next();
+            }
             let mut advanced = self.advanced.borrow_mut();
             *advanced += 1;
             *advanced < self.advances
@@ -534,12 +563,13 @@ pub mod fixture {
             self.log.borrow_mut().push(Call::Stop);
         }
 
-        /// Fills `rect` with [`FRAME`], unless the player refuses every
-        /// movie and so has no frame to draw.
+        /// Draws the frame shown last stretched into `rect`
+        /// ([`DrawCommand::MovieFrame`]); nothing before a movie starts, or
+        /// when the player refuses every movie.
         fn draw_frame(&self, rect: Bounds, list: &mut DrawList) {
             self.log.borrow_mut().push(Call::Draw(rect));
-            if self.size.is_some() {
-                fill_rect(list, rect, FRAME);
+            if let Some(frame) = self.screen.borrow().frame() {
+                list.movie_frame(frame, rect);
             }
         }
     }
@@ -549,7 +579,9 @@ pub mod fixture {
     /// 1. Stopping before anything started does nothing harmful.
     /// 2. If `file` can't start, advancing says it isn't playing, and
     ///    drawing a frame draws nothing.
-    /// 3. If it starts, its size is not zero either way; advancing says
+    /// 3. If it starts, its size is not zero either way; drawing a frame
+    ///    then draws at least one [`DrawCommand::MovieFrame`], each inside
+    ///    the rect given; advancing says
     ///    it's playing until, within [`MAX_ADVANCES`], it says it isn't,
     ///    and it stays that way; stopping it then is harmless; and
     ///    starting it again plays it as long again.
@@ -575,6 +607,7 @@ pub mod fixture {
         if width == 0 || height == 0 {
             return Err(format!("{file} started at a size of {width} x {height}"));
         }
+        drew_a_frame(player, file, rect)?;
         let length = played(player, file)?;
         for _ in 0..3 {
             if player.advance(STEP) {
@@ -595,6 +628,34 @@ pub mod fixture {
         Ok(())
     }
 
+    /// Whether the started movie draws a frame inside `rect`.
+    fn drew_a_frame(player: &impl MoviePlayer, file: &str, rect: Bounds) -> Result<(), String> {
+        let mut list = DrawList::new();
+        player.draw_frame(rect, &mut list);
+        let mut areas = list.iter().filter_map(|command| match command {
+            DrawCommand::MovieFrame { area, .. } => Some(*area),
+            _ => None,
+        });
+        let inside = |area: Bounds| {
+            area.min.x >= rect.min.x
+                && area.min.y >= rect.min.y
+                && area.max.x <= rect.max.x
+                && area.max.y <= rect.max.y
+        };
+        let Some(first) = areas.next() else {
+            return Err(format!("{file} started, but drew no frame"));
+        };
+        match std::iter::once(first)
+            .chain(areas)
+            .find(|&area| !inside(area))
+        {
+            Some(area) => Err(format!(
+                "{file} drew a frame at {area:?}, outside its rect {rect:?}"
+            )),
+            None => Ok(()),
+        }
+    }
+
     /// How many advances the started movie plays for, the last included.
     fn played(player: &impl MoviePlayer, file: &str) -> Result<u32, String> {
         for advances in 1..=MAX_ADVANCES {
@@ -610,6 +671,39 @@ pub mod fixture {
         use std::cell::Cell;
 
         use super::*;
+        use crate::draw::fill_rect;
+        use crate::movie_frame::MovieFrame;
+
+        /// The frames `player` draws into `rect`.
+        fn frames(player: &MockMoviePlayer, rect: Bounds) -> Vec<(MovieFrame, Bounds)> {
+            let mut list = DrawList::new();
+            player.draw_frame(rect, &mut list);
+            list.iter()
+                .filter_map(|command| match command {
+                    DrawCommand::MovieFrame { frame, area } => Some((frame.clone(), *area)),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        #[test]
+        fn the_mocks_frame_moves_on_with_each_advance() {
+            let player = MockMoviePlayer::playing((640, 480), 5);
+            let rect = Bounds::at(Point::new(1.0, 2.0), 64.0, 48.0);
+            assert_eq!(frames(&player, rect), [], "nothing before it starts");
+            player.start("Race.mov");
+            let [(first, area)] = frames(&player, rect).try_into().expect("one frame");
+            assert_eq!(area, rect);
+            assert_eq!(first.image().pixels(), [FRAME.r, FRAME.g, FRAME.b, FRAME.a]);
+            player.advance(STEP);
+            let [(second, _)] = frames(&player, rect).try_into().expect("one frame");
+            assert_eq!(second.stream(), first.stream());
+            assert_ne!(second.generation(), first.generation());
+            player.stop();
+            let [(stopped, _)] = frames(&player, rect).try_into().expect("one frame");
+            assert_eq!(stopped, second, "the stopped movie's last frame stays");
+            assert_eq!(player.drawn(), [rect; 4], "every draw logged, drawn or not");
+        }
 
         #[test]
         fn the_mock_meets_the_contract_playing_and_refusing() {
@@ -637,6 +731,8 @@ pub mod fixture {
             Resumes,
             RefusesASecondStart,
             ShortensTheSecondPlay,
+            DrawsNoFrame,
+            DrawsOutsideRect,
         }
 
         struct Broken {
@@ -677,6 +773,20 @@ pub mod fixture {
             fn draw_frame(&self, rect: Bounds, list: &mut DrawList) {
                 match self.flaw {
                     Flaw::DrawsWithoutStarting => fill_rect(list, rect, FRAME),
+                    Flaw::DrawsNoFrame => {}
+                    Flaw::DrawsOutsideRect => {
+                        let mut drawn = DrawList::new();
+                        self.inner.draw_frame(rect, &mut drawn);
+                        for command in &drawn {
+                            if let DrawCommand::MovieFrame { frame, area } = command {
+                                let grown = Bounds {
+                                    min: area.min,
+                                    max: Point::new(area.max.x + 1.0, area.max.y),
+                                };
+                                list.movie_frame(frame.clone(), grown);
+                            }
+                        }
+                    }
                     _ => self.inner.draw_frame(rect, list),
                 }
             }
@@ -711,6 +821,8 @@ pub mod fixture {
                 (playing(), Flaw::Resumes, "played again"),
                 (playing(), Flaw::RefusesASecondStart, "a second time"),
                 (playing(), Flaw::ShortensTheSecondPlay, "a second start"),
+                (playing(), Flaw::DrawsNoFrame, "drew no frame"),
+                (playing(), Flaw::DrawsOutsideRect, "outside its rect"),
             ] {
                 let error = broken(inner, flaw);
                 assert!(error.contains(clause), "{clause}: {error}");
@@ -722,7 +834,7 @@ pub mod fixture {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use super::fixture::{Call, FRAME, MockMoviePlayer};
+    use super::fixture::{Call, MockMoviePlayer};
     use super::*;
     use crate::draw::DrawCommand;
 
@@ -760,6 +872,18 @@ mod tests {
                     ),
                     color,
                 )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The areas of the movie frames drawn.
+    fn frames(stage: &MovieStage) -> Vec<Bounds> {
+        let mut list = DrawList::new();
+        stage.draw(&mut list);
+        list.iter()
+            .filter_map(|command| match *command {
+                DrawCommand::MovieFrame { area, .. } => Some(area),
                 _ => None,
             })
             .collect()
@@ -874,10 +998,11 @@ mod tests {
         let box_at = rect(432.0, 324.0, 160.0, 120.0);
         assert_eq!(
             fills(&stage),
-            [(box_at, Color::BLACK), (box_at, FRAME)],
+            [(box_at, Color::BLACK)],
             "the movie's own box, centred on the screen (_CenterWindow @0x55ba2)"
         );
-        assert_eq!(player.drawn(), [box_at]);
+        assert_eq!(frames(&stage), [box_at], "the frame fills it");
+        assert_eq!(player.drawn(), [box_at; 2], "asked once a draw");
     }
 
     #[test]
@@ -888,9 +1013,10 @@ mod tests {
         let doubled = rect(352.0, 264.0, 321.0, 241.0);
         assert_eq!(
             fills(&stage),
-            [(doubled, Color::BLACK), (doubled, FRAME)],
+            [(doubled, Color::BLACK)],
             "(2w + 1) x (2h + 1) (@0x55ad8-0x55adc), the halves truncated"
         );
+        assert_eq!(frames(&stage), [doubled]);
     }
 
     #[test]
@@ -993,9 +1119,10 @@ mod tests {
         let frame = rect(432.0, 324.0, 160.0, 120.0);
         assert_eq!(
             fills(&stage),
-            [(screen(), Color::BLACK), (frame, FRAME)],
-            "the frame centred in the black window over the whole screen"
+            [(screen(), Color::BLACK)],
+            "the black window over the whole screen"
         );
+        assert_eq!(frames(&stage), [frame], "the frame centred in it");
         stage.tick(TICK);
         assert_eq!(player.calls().last(), Some(&Call::Advance));
     }
@@ -1012,14 +1139,22 @@ mod tests {
         assert!(stage.hides_cursor());
         run(&mut stage, Duration::from_millis(500));
         let frame = rect(432.0, 324.0, 160.0, 120.0);
+        let mut list = DrawList::new();
+        stage.draw(&mut list);
+        assert!(
+            matches!(
+                list.iter().nth(1),
+                Some(DrawCommand::MovieFrame { area, .. }) if *area == frame
+            ),
+            "the stopped frame over the black window: {list:?}"
+        );
         assert_eq!(
             fills(&stage),
             [
                 (screen(), Color::BLACK),
-                (frame, FRAME),
                 (screen(), Color::rgba(0, 0, 0, 128))
             ],
-            "the stopped frame fading to black"
+            "fading to black"
         );
         run(&mut stage, Duration::from_millis(500));
         assert!(!stage.hides_cursor(), "_ShowTheCursor @0x55ebd");

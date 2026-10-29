@@ -517,7 +517,7 @@ mod tests {
     use crate::flight::MapOpener;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
-    use crate::movie::fixture::{Call, FRAME, MockMoviePlayer};
+    use crate::movie::fixture::{Call, MockMoviePlayer};
     use crate::movie::{MOVIE_FADE_FOR, MoviePlayer};
     use crate::sound::UiSound;
     use crate::spaceport::missions::ABORT_ITEM;
@@ -1319,9 +1319,7 @@ mod tests {
             .expect("the info screen");
         let frame = commands
             .iter()
-            .position(
-                |command| matches!(command, DrawCommand::Line { color, .. } if *color == FRAME),
-            )
+            .position(|command| matches!(command, DrawCommand::MovieFrame { .. }))
             .expect("the frame");
         assert!(run < frame);
         dialogs.cancel_pointer();
