@@ -650,6 +650,35 @@ mod tests {
     }
 
     #[test]
+    fn a_line_raised_on_the_advance_pass_before_its_rescue_comes_with_its_step() {
+        // A fighter of no fuel out of its bay as a new jump is accepted:
+        // the pass's player part warns before the rescue settles.
+        use crate::session::wait_for_me::tests::{DART, catalog, fighter};
+        let catalog = catalog();
+        let mut session = crate::session::fighters::tests::fleet(&catalog, 0, vec![fighter(DART)]);
+        session.pilot.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+        session.pod = Some(1);
+        session.ship.warp.jump_accepted = true;
+        let mut hand = session.clone();
+        let input = StepInput::default();
+        let report = steps(&mut session, &catalog, &input, 3);
+        assert_eq!(took(&report), by_hand(&mut hand, &catalog, &input, 3));
+        assert_eq!(session, hand);
+        assert!(report.stopped);
+        let run = &report.steps[0];
+        assert!(run.rescued.is_some(), "rescued on the advance pass");
+        assert!(
+            matches!(
+                run.last_line,
+                Some(RaisedLine::Message(crate::SimMessage::WaitForMe(_)))
+            ),
+            "the warning raised last: {:?}",
+            run.last_line
+        );
+        assert_eq!(session.out.last_line, None, "taken with its step");
+    }
+
+    #[test]
     fn a_rescue_on_the_second_pass_ends_the_stepping_with_its_comm_taken() {
         let catalog = catalog();
         let mut session = in_the_pod(&catalog, 2);
