@@ -93,9 +93,11 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{DudeId, DudeRecord, LandingSite, ShipId};
+    use crate::catalog::{DudeId, DudeRecord, LandingSite, ShipId, SystemId};
     use crate::chance::NeverFires;
+    use crate::control::SetExpr;
     use crate::flight::Controls;
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::testkit::{FAST, FakePilotCatalog, catalog, jump, land_now, ship, work};
 
     const EARTH: StellarId = StellarId(128);
@@ -225,6 +227,60 @@ mod tests {
             2,
             "1 + 2, capped at DefCount 2"
         );
+    }
+
+    #[test]
+    fn a_relocation_gives_back_the_defenders_and_hands_the_counts_on() {
+        // The developer move's traffic Reset drops every ship as
+        // `_DeleteAllComputerShips` does, refunding before the counts pass
+        // to the fresh traffic.
+        let catalog = defended(3);
+        let mut session = flying(&catalog);
+        let site = earth(&session);
+        session.space.traffic.defences_mut().set_left(&site, 0);
+        session
+            .spawn_stellar_defender(EARTH, &mut NeverFires)
+            .expect("up");
+        let here = session.system();
+        session.land_at(&catalog, here, EARTH).expect("lands");
+        assert_eq!(up(&session, EARTH), 0, "a fresh traffic");
+        assert_eq!(
+            session.space.traffic.defences().left(&site),
+            1,
+            "0 + 1, kept across the Reset, not DefCount 3 decoded afresh"
+        );
+    }
+
+    /// The rules with `MoveLeftBehind` read as `reading`.
+    fn moving(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::MoveLeftBehind, reading)
+    }
+
+    #[test]
+    fn a_move_that_drops_the_ships_left_behind_gives_back_their_defenders() {
+        // By the engine the ships stay in the table until the display pass
+        // frees them, nothing given back; by the other reading the move
+        // drops them, refunding each defender.
+        for (reading, left) in [(RuleSource::Bible, 1), (RuleSource::Engine, 0)] {
+            let catalog = defended(3);
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(moving(reading));
+            work(&mut session, &catalog, Controls::default());
+            let site = earth(&session);
+            session.space.traffic.defences_mut().set_left(&site, 0);
+            session
+                .spawn_stellar_defender(EARTH, &mut NeverFires)
+                .expect("up");
+            session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert_eq!(session.system(), SystemId(131), "{reading:?}");
+            assert_eq!(
+                session.space.traffic.defences().left(&site),
+                left,
+                "{reading:?}"
+            );
+        }
     }
 
     #[test]
