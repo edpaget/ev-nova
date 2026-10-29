@@ -18,7 +18,9 @@ pub const SELECTED: Color = Color::rgba(48, 64, 112, 255);
 /// Rows of text a line high each, from the top of a box, as many shown
 /// as fit it whole, from a first row that follows the selection. A click
 /// on a row selects it, and Up and Down move the selection a row,
-/// stopping at the ends. Nothing is drawn outside the box.
+/// stopping at the ends ([`RowList::input`]); [`RowList::step_wrapping`]
+/// steps it wrapping round the ends instead. Nothing is drawn outside the
+/// box.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowList {
     rows: Vec<String>,
