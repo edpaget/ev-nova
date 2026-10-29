@@ -243,7 +243,7 @@ fn data() -> Rc<GameData> {
             .resource(PICT, state + 100, None, &button_picture(13))
             .resource(PICT, state + 102, None, &button_picture(13));
     }
-    Rc::new(one_file(fork.build().bytes).load())
+    Rc::new(one_file(crate::bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 struct Harness {
@@ -506,21 +506,11 @@ impl Harness {
         assert_eq!(self.app.take_failures(), []);
         frame
     }
-    /// Draws frames until the dock approach has cleared the request. The
-    /// nav brackets' corners (`cicn` 10000-10003), which the press's
-    /// selection draws, may be missing from the fixture, so the frames'
-    /// image failures are not checked.
+    /// Draws frames until the dock approach has cleared the request.
     fn approach(&mut self) {
-        for _ in 0..crate::common::UNTIL_FRAMES {
-            if self.session().dock_cleared() {
-                let _ = self.app.take_failures();
-                return;
-            }
-            self.frames += 1;
-            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        panic!("the dock approach never cleared the request");
+        self.settle_until("the dock approach's clearance", |game| {
+            game.session().dock_cleared()
+        });
     }
 
     /// Flies out from the centre until the ship is at least the minimum
@@ -804,10 +794,8 @@ fn gate_data() -> Rc<GameData> {
             Some(b"Default status bar"),
             &interface(),
         )
-        .resource(PICT, 700, Some(b"Status Bar"), &status_picture())
-        .build()
-        .bytes;
-    Rc::new(one_file(fork).load())
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
+    Rc::new(one_file(crate::bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 impl Harness {

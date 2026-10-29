@@ -18,7 +18,7 @@
 //! and nova-audio's, pinned there.
 
 use crate::bracket_art;
-use crate::common::UNTIL_FRAMES;
+use crate::common::Frames;
 
 use std::path::Path;
 use std::rc::Rc;
@@ -419,23 +419,11 @@ impl Harness {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
-    /// Sends redraws until the dock approach has cleared the request. The
-    /// nav brackets' corners (`cicn` 10000-10003), which the press's
-    /// selection draws, may be missing from the fixture, so the frames'
-    /// image failures are not checked, and the wait is not
-    /// [`Frames::settle_until`](crate::common::Frames::settle_until),
-    /// whose frames check them.
+    /// Draws frames until the dock approach has cleared the request.
     fn approach(&mut self) {
-        for _ in 0..UNTIL_FRAMES {
-            if self.session().dock_cleared() {
-                let _ = self.app.take_failures();
-                return;
-            }
-            self.frames += 1;
-            let elapsed = Duration::from_millis(16 * self.frames);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        panic!("the dock approach never cleared the request");
+        self.settle_until("the dock approach's clearance", |game| {
+            game.session().dock_cleared()
+        });
     }
 }
 
@@ -601,3 +589,5 @@ fn the_cursor_comes_back_under_the_pointer_after_take_off() {
     harness.frame();
     assert_eq!(cursor(&harness), Some(leave), "under the pointer");
 }
+
+crate::common::frames!(Harness, frame);
