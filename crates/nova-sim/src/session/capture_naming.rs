@@ -29,7 +29,10 @@
 //! `*`. A `_DoShipCapture` that finds no slot for the old ship (#305,
 //! @0x41136) has already had the name written, so the player's old ship
 //! keeps the typed name: the original's behaviour, which breaks no stock
-//! mission. The swap makes a save due; the abandoned one makes none.
+//! mission. The swap makes a save due; the abandoned one makes none. A
+//! captured ship gone by the time of either Use As My Ship or OK closes the
+//! dialog with no name written: defensive, as the ship can't leave under
+//! the original's modal dialogs and our flight is paused under them.
 //!
 //! **Cancel** ([`Session::name_capture`] with none). `_DisplayComm` says
 //! #122 for 240 ticks (@0x9453c-0x9458f; the view says it) and the code
@@ -76,6 +79,12 @@ impl Session {
     /// the old ship), the hooks drawing on `chance`; with none (Cancel),
     /// the plunder dialog closes and nothing else changes
     /// ([`Assigned::Declined`]). None unless a name is awaited.
+    ///
+    /// None too, with the plunder dialog closed, when the captured ship
+    /// has gone, and then the name is not written. In the original the
+    /// ship can't leave while the modal rename is up, and our flight is
+    /// paused under it, so this is defensive: no name is written for a
+    /// capture that didn't happen.
     pub fn name_capture(
         &mut self,
         typed: Option<&str>,
@@ -90,6 +99,10 @@ impl Session {
             self.close_plunder();
             return Some(Assigned::Declined);
         };
+        if !self.npcs().iter().any(|npc| npc.id == aboard.npc) {
+            self.close_plunder();
+            return None;
+        }
         // `_pstrcpy` alone, before `_DoShipCapture` (@0x944ce-0x944df).
         self.pilot.ship_name = Some(name.to_owned());
         self.take_over_captured(aboard, chance)
@@ -371,6 +384,48 @@ pub(crate) mod tests {
         let mut session = aboard(&catalog);
         assert_eq!(session.name_capture(None, &mut Draws::of(&[])), None);
         assert!(session.boarding().is_some(), "the plunder still open");
+    }
+
+    /// The captured NPC, gone from the system.
+    fn remove_captured(session: &mut Session) {
+        let npc = session.space.escorts.aboard.expect("a capture").npc;
+        session.space.traffic.remove(npc);
+    }
+
+    #[test]
+    fn use_as_my_ship_with_the_ship_gone_beeps_and_closes_with_no_rename() {
+        let catalog = prompted();
+        let mut session = captured(&catalog);
+        session.take_sounds();
+        session.take_save_due();
+        remove_captured(&mut session);
+        assert_eq!(
+            session.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            None
+        );
+        assert_eq!(session.space.escorts.aboard, None, "the dialog closed");
+        assert_eq!(session.take_sounds(), [SimSound::CaptureAssigned]);
+        assert!(!session.take_save_due());
+        assert_eq!(
+            session.capture_naming(&catalog, &mut Scripted::default()),
+            None,
+            "no rename"
+        );
+    }
+
+    #[test]
+    fn ok_with_the_ship_gone_writes_no_name_and_takes_nothing_over() {
+        let catalog = boardable();
+        let mut session = naming(&catalog);
+        remove_captured(&mut session);
+        let pilot = session.pilot().clone();
+        let ship = session.ship.player;
+        assert_eq!(session.name_capture(Some("X"), &mut Draws::of(&[])), None);
+        assert_eq!(session.pilot(), &pilot, "no name, ship or fleet");
+        assert_eq!(session.ship.player, ship);
+        assert_eq!(session.space.escorts.aboard, None, "the dialog closed");
+        assert!(!session.take_save_due());
+        assert_eq!(session.take_sounds(), [], "silent");
     }
 
     #[test]

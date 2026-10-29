@@ -354,4 +354,26 @@ mod tests {
             assert_eq!(session, before);
         }
     }
+
+    #[test]
+    fn a_rename_with_the_captured_ship_gone_is_refused_and_writes_no_name() {
+        let catalog = boardable();
+        let mut session = captured(&catalog);
+        assert_eq!(
+            apply(&mut session, FlightCommand::Assign(Assignment::MyShip)),
+            Answer::Assigned(Assigned::Naming)
+        );
+        let npc = session.space.escorts.aboard.expect("a capture").npc;
+        session.space.traffic.remove(npc);
+        let name = session.pilot().ship_name().map(str::to_owned);
+        assert_eq!(
+            apply(
+                &mut session,
+                FlightCommand::NameCapture(Some("X".to_owned()))
+            ),
+            Answer::Refused
+        );
+        assert_eq!(session.pilot().ship_name(), name.as_deref());
+        assert_eq!(session.space.escorts.aboard, None);
+    }
 }
