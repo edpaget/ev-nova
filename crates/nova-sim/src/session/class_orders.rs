@@ -50,6 +50,16 @@
 //! after the command shows the row in formation already, as the row reads
 //! the escort's own order, which the command set to formation, so nothing
 //! crosses a drawn frame.
+//!
+//! **Filed.**
+//! - A ship `_GenericRandomShipSpawn` places keeps its berth's last mark
+//!   (rdm:phase/play-feel-5-followups/phase-5-berth-keeps-command-mark).
+//! - The menu's rows show the class's first escort's order where
+//!   `_DrawEscortMenuInFrame` shows the class's kept order
+//!   (rdm:phase/play-feel-5-followups/phase-6-menu-rows-show-class-orders).
+//! - A jump's arrival frame skips the bookkeeping, and the menu fades on
+//!   both of double time's passes
+//!   (rdm:phase/play-feel-5-followups/phase-7-handle-player-double-fade-and-arrival-orders).
 
 use super::{Space, Statics};
 use crate::escort::{EscortClass, EscortOrder};

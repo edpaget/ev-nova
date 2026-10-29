@@ -259,6 +259,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// bookkeeping (@0x6e2e8) shows it again. A fade that reached 0 on that
     /// step has shut the menu already, which the bookkeeping leaves shut
     /// (`jle` @0x6e386, @0x6e444).
+    ///
+    /// In double time the original fades a level on each pass:
+    /// `_DoPlayGameWork` calls `_HandlePlayer` on both (@0x43e19) with no
+    /// pass argument, and nothing gates the fade (@0x6df4a-0x6e052) on the
+    /// pass. Ours drops one a step, the re-show after the step's drop:
+    /// rdm:phase/play-feel-5-followups/phase-7-handle-player-double-fade-and-arrival-orders.
     pub(super) fn update_escort_menu(&mut self, steps: u32) {
         let flying = self.frame.hud.escorts_flying;
         let cleared = self
