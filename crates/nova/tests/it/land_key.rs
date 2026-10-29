@@ -1,21 +1,18 @@
-//! The land key through the whole app: synthetic game data, wired to the
-//! renderer and the recording Gpu and driven only by window events, with
-//! every key made by the platform's own translation of a physical key.
+//! The land key and a stellar slot key through the whole app: synthetic
+//! game data, wired to the renderer and the recording Gpu and driven only
+//! by window events, with every key made by the platform's own
+//! translation of a physical key.
 //!
-//! Alpha holds two planets the ship starts over, both 64 x 64: Alpha
-//! Prime (128) at the centre and Alpha Minor (131) just below it. Its
-//! navigation defaults are Alpha Minor, then Alpha Prime, so 1 selects
-//! Alpha Minor and 2 Alpha Prime, though Alpha Prime is nearer.
+//! Alpha holds two planets the ship starts over, Alpha Prime (128) and
+//! Alpha Minor (131), its navigation defaults Alpha Minor then Alpha
+//! Prime.
 //!
-//! - With no target, L requests clearance at the nearest, Alpha Prime, in
-//!   silence over it: the HUD's nav area shows it, and the ship stays in
-//!   flight. On the next frame traffic control's greeting shows, and a
-//!   second L lands there.
-//! - With Alpha Minor chosen by 1, L requests it, and after a frame a
-//!   second L lands there, not on Alpha Prime; after L selected Alpha
-//!   Prime, 1 switches the target to Alpha Minor.
-//! - Moving too fast, or far from every stellar, the second L says so in
-//!   the original's words (`STR#` 2002 #72, #68) and the ship flies on.
+//! - L reaches flight, and a second L once the dock approach has cleared
+//!   the request opens the spaceport of the stellar the session landed on.
+//! - The slot key 1 reaches the session, and L lands where it chose.
+//!
+//! What L selects, the approach, the refusals and their words are
+//! nova-sim's and nova-view's, pinned there.
 
 use crate::bracket_art;
 use crate::common::Frames;
@@ -37,12 +34,11 @@ use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
+use nova_render::Frame;
 use nova_render::recording::RecordingGpu;
-use nova_render::{Batch, Frame};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_sim::{Session, ShipState, StellarId};
+use nova_sim::{Session, StellarId};
 use nova_view::flight::FlightView;
-use nova_view::flight::hud::{NAV_OFF, NAV_STELLAR};
 use nova_view::spaceport::SpaceportView;
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -191,10 +187,6 @@ fn data() -> Rc<GameData> {
     Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
-/// What every form of the dock approach's greeting at a planet says,
-/// whichever its picks (`STR#` 2002 #97-#99).
-const CLEARED: &str = "leared to land";
-
 struct Harness {
     app: App<Rc<GameData>>,
     gpu: RecordingGpu,
@@ -254,10 +246,6 @@ impl Harness {
         self.flight().session().expect("flying")
     }
 
-    fn ship(&self) -> ShipState {
-        *self.session().player()
-    }
-
     /// The stellar whose spaceport is showing, if any.
     fn spaceport(&self) -> Option<StellarId> {
         self.app
@@ -282,144 +270,34 @@ impl Harness {
             game.session().dock_cleared()
         });
     }
-
-    /// Holds Up until the ship is moving faster than `speed`, then lets go.
-    fn thrust_past(&mut self, speed: f32) {
-        self.key(KeyCode::ArrowUp, true);
-        for _ in 0..600 {
-            if self.ship().velocity.length() > speed {
-                self.key(KeyCode::ArrowUp, false);
-                return;
-            }
-            self.frame();
-        }
-        panic!("never got faster than {speed}: {:?}", self.ship());
-    }
-
-    /// Every text the next frame draws.
-    fn texts(&mut self) -> Vec<String> {
-        self.frame()
-            .batches
-            .iter()
-            .flat_map(|batch| match batch {
-                Batch::Text(runs) => runs.iter().map(|run| run.text.clone()).collect(),
-                _ => Vec::new(),
-            })
-            .collect()
-    }
-
-    /// The texts the next frame draws in the nav area: stock `ïntf` 128's
-    /// (8, 254)-(184, 286), on the bar against the right edge of the
-    /// 1024-wide window, 194 wide.
-    fn nav(&mut self) -> Vec<String> {
-        self.frame()
-            .batches
-            .iter()
-            .flat_map(|batch| match batch {
-                Batch::Text(runs) => runs.clone(),
-                _ => Vec::new(),
-            })
-            .filter(|run| {
-                let (x, y) = run.origin_px;
-                (838.0..=1014.0).contains(&x) && (254.0..=286.0).contains(&y)
-            })
-            .map(|run| run.text)
-            .collect()
-    }
 }
 
 #[test]
-fn with_no_target_l_requests_clearance_at_the_nearest_and_a_second_l_lands_there() {
+fn l_reaches_flight_and_a_second_l_after_the_approach_opens_the_spaceport_landed_at() {
     let mut game = Harness::flying();
-    assert_eq!(game.nav(), [NAV_OFF]);
-
     game.press(KeyCode::KeyL);
+    game.settle();
     assert_eq!(game.showing(), Showing::Flight, "requested, not landed");
-    assert_eq!(game.session().nav_target(), Some(StellarId(128)));
-    game.approach();
-    let texts = game.texts();
-    assert!(texts.iter().any(|text| text.contains(CLEARED)), "{texts:?}");
-    assert_eq!(game.nav(), [NAV_STELLAR, "Alpha Prime"]);
-
-    game.press(KeyCode::KeyL);
-    assert_eq!(game.showing(), Showing::Spaceport);
-    assert_eq!(game.spaceport(), Some(StellarId(128)));
-}
-
-#[test]
-fn with_alpha_minor_chosen_by_its_slot_key_l_lands_there() {
-    let mut game = Harness::flying();
-    game.press(KeyCode::Digit1);
-    game.settle();
-    assert_eq!(game.session().nav_target(), Some(StellarId(131)));
-    game.press(KeyCode::KeyL);
-    assert_eq!(game.showing(), Showing::Flight, "requested");
     game.approach();
     game.press(KeyCode::KeyL);
     assert_eq!(game.showing(), Showing::Spaceport);
-    assert_eq!(game.spaceport(), Some(StellarId(131)));
+    let landed = game.session().landed();
+    assert!(landed.is_some());
+    assert_eq!(game.spaceport(), landed);
 }
 
 #[test]
-fn after_l_selected_the_nearest_a_slot_key_switches_the_target() {
+fn a_slot_key_reaches_the_session_and_l_lands_where_it_chose() {
     let mut game = Harness::flying();
-    game.press(KeyCode::KeyL);
-    assert_eq!(game.session().nav_target(), Some(StellarId(128)));
     game.press(KeyCode::Digit1);
     game.settle();
-    assert_eq!(game.session().nav_target(), Some(StellarId(131)));
-    game.press(KeyCode::F2);
-    game.settle();
-    assert_eq!(game.session().nav_target(), Some(StellarId(128)));
-    game.press(KeyCode::Digit1);
-    game.settle();
+    let chosen = game.session().nav_target();
+    assert!(chosen.is_some(), "the slot key chose a stellar");
     game.press(KeyCode::KeyL);
     game.approach();
     game.press(KeyCode::KeyL);
-    assert_eq!(game.spaceport(), Some(StellarId(131)));
-}
-
-#[test]
-fn moving_too_fast_the_second_l_says_so_and_the_ship_flies_on() {
-    let mut game = Harness::flying();
-    game.thrust_past(1.5);
-    game.press(KeyCode::KeyL);
-    assert_eq!(game.session().nav_target(), Some(StellarId(128)));
-    game.approach();
-    game.press(KeyCode::KeyL);
-    assert_eq!(game.showing(), Showing::Flight);
-    let texts = game.texts();
-    assert!(
-        texts
-            .iter()
-            .any(|text| text == "You're moving too fast to land on this planet."),
-        "{texts:?}"
-    );
-    assert_eq!(
-        game.session().nav_target(),
-        Some(StellarId(128)),
-        "kept: try again"
-    );
-}
-
-#[test]
-fn far_from_every_stellar_the_second_l_says_so_and_the_ship_flies_on() {
-    let mut game = Harness::flying();
-    game.thrust_past(2.9);
-    while game.ship().position.length() < 200.0 {
-        game.frame();
-    }
-    game.press(KeyCode::KeyL);
-    game.approach();
-    game.press(KeyCode::KeyL);
-    assert_eq!(game.showing(), Showing::Flight);
-    let texts = game.texts();
-    assert!(
-        texts
-            .iter()
-            .any(|text| text == "You're too far away to land on this planet."),
-        "{texts:?}"
-    );
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(game.spaceport(), chosen);
 }
 
 crate::common::frames!(Harness, frame);
