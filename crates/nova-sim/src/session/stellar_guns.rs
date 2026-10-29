@@ -16,8 +16,8 @@
 //!
 //! **What each reads** ([`StellarGun`]):
 //!
-//! - dominated: its `Flags2` [`DOMINATED`] bit, the only domination the
-//!   engine has (hail domination is task `planet-domination`'s);
+//! - dominated (+0x46, @0x9f0c): by its `Flags2` [`DOMINATED`] bit or
+//!   by Demand Tribute ([`crate::domination::dominated`]);
 //! - defended (+0x47): whether it is under attack, as this frame's +0x47
 //!   pass left it, just before the guns: one of its defence ships is in
 //!   the system (see the `stellar_defence` module). A `Flags2` 0x0200
@@ -46,7 +46,6 @@ use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::combat::stellar_guns::{GunTimer, Standing, StellarGun};
 use crate::combat::{GamePass, Rules};
-use crate::market::DOMINATED;
 use crate::story::listers_of;
 
 impl Session {
@@ -96,7 +95,7 @@ impl Session {
                     weapon,
                     govt: site.govt,
                     flags2: site.flags2,
-                    dominated: site.flags2 & DOMINATED != 0,
+                    dominated: crate::domination::dominated(&site),
                     defended: self.space.traffic.defences().under_attack(site.id),
                     standing: Standing {
                         govt: judge,
@@ -167,6 +166,7 @@ mod tests {
     use crate::control::SetExpr;
     use crate::flight::Controls;
     use crate::geometry::Vec2;
+    use crate::market::DOMINATED;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::tests::{armed, facing_an_npc};
     use crate::testkit::{
@@ -545,6 +545,17 @@ mod tests {
         let mut dominated = armed_128();
         dominated.sites[0].1[0].flags2 = DOMINATED;
         assert!(!fires_at(&dominated, -7, |_| {}));
+        assert!(
+            !fires_at(&catalog, -7, |session| {
+                session.chart.set_dominated(
+                    &mut session.pilot,
+                    &mut session.out,
+                    StellarId(128),
+                    true,
+                );
+            }),
+            "dominated at run time (@0x9f0c)"
+        );
     }
 
     #[test]

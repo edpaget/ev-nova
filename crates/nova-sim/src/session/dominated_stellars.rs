@@ -44,7 +44,7 @@ mod tests {
     use super::*;
     use crate::domination;
     use crate::session::Session;
-    use crate::testkit::catalog;
+    use crate::testkit::{catalog, land_now, mission};
 
     const EARTH: StellarId = StellarId(128);
 
@@ -87,5 +87,59 @@ mod tests {
         );
         assert_eq!(earth_dominated(&session), (false, false), "released");
         assert_eq!(session.take_events(), [SessionEvent::GalaxyChanged]);
+    }
+
+    /// Dominates `stellar` in `session` at run time.
+    fn dominate(session: &mut Session, stellar: StellarId) {
+        session
+            .chart
+            .set_dominated(&mut session.pilot, &mut session.out, stellar, true);
+    }
+
+    #[test]
+    fn missions_needing_a_domination_read_the_ones_made_at_run_time() {
+        use crate::catalog::{MissionId, MissionRecord};
+        let mut catalog = catalog();
+        catalog.missions = vec![
+            MissionRecord {
+                avail_record: -32000,
+                ..mission(140)
+            },
+            MissionRecord {
+                avail_record: -32001,
+                ..mission(141)
+            },
+        ];
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        let offered = |session: &Session, id| {
+            session
+                .offer_refusals(MissionId(id))
+                .expect("docked")
+                .is_empty()
+        };
+        assert!(!offered(&session, 140), "none dominated");
+        assert!(!offered(&session, 141), "none dominated");
+        dominate(&mut session, StellarId(140));
+        assert!(!offered(&session, 140), "not the stellar docked at");
+        assert!(offered(&session, 141), "system 131's 140 (@0x9b578)");
+        dominate(&mut session, EARTH);
+        assert!(offered(&session, 140), "the stellar docked at (@0x9b559)");
+    }
+
+    #[test]
+    fn a_stellar_dominated_at_run_time_marks_its_prices_up_by_1_5() {
+        use crate::market::Good;
+        let catalog = crate::session::tests::exchange();
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        let prices = |session: &Session| {
+            let market = session.market().expect("an exchange");
+            [Good::Commodity(0), Good::Commodity(4)]
+                .map(|good| market.row(good).expect("traded").price)
+        };
+        let standard = prices(&session);
+        dominate(&mut session, EARTH);
+        assert_ne!(prices(&session), standard, "1.5 (@0x5dc3a)");
     }
 }

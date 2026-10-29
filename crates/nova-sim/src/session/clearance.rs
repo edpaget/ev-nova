@@ -455,6 +455,30 @@ mod tests {
         assert_eq!(session.take_sounds(), [SimSound::TrafficControl]);
     }
 
+    #[test]
+    fn a_stellar_dominated_at_run_time_clears_whatever_the_record_and_greets_with_no_fee() {
+        let mut catalog = strict();
+        catalog.sites[0].1[0].fee = 100;
+        catalog.sites[0].1[0].govt = Some(crate::catalog::GovtId(128));
+        let mut session = quiet(Session::start(&catalog).expect("starts"));
+        session.pilot.cash = 1000;
+        assert!(
+            matches!(session.land(), Err(LandingRefusal::Denied { .. })),
+            "undominated"
+        );
+        quiet_in_place(&mut session);
+        session
+            .chart
+            .set_dominated(&mut session.pilot, &mut session.out, StellarId(128), true);
+        assert_eq!(session.land(), requested(128), "cleared (@0x6792d)");
+        tick(&mut session);
+        assert_eq!(
+            session.take_messages(),
+            [cleared_at(128, DockKind::Planet)],
+            "the approach clears (@0x64845) and states no fee (@0x64d92)"
+        );
+    }
+
     // The approach.
 
     #[test]

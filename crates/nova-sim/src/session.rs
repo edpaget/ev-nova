@@ -465,7 +465,7 @@ mod deadly_stellars;
 mod derelicts;
 mod description;
 mod display_step;
-mod domination;
+mod dominated_stellars;
 mod double_time;
 #[cfg(test)]
 mod drift_blast;
@@ -6735,18 +6735,13 @@ impl Chart {
     /// The markup at `site`, one of the system's: by whether it has a
     /// government, the player's legal record in the system (with the
     /// system's government, 0 in an independent system), and whether it
-    /// is dominated ([`Markup::of`]).
-    ///
-    /// The port has no domination state yet (task `planet-domination`):
-    /// the only dominated stellars are those whose `Flags2` has
-    /// [`DOMINATED`](market::DOMINATED), so a stellar the player dominates
-    /// by hailing is not yet priced at 1.5. That task feeds its dominated
-    /// state in here.
+    /// is dominated ([`Markup::of`]; [`crate::domination::dominated`], by its
+    /// `Flags2` or at run time, @0x5dc3a).
     fn markup(&self, pilot: &Pilot, setup: &Setup, site: &LandingSite) -> Markup {
         Markup::of(
             site.govt.is_some(),
             self.system_record(pilot, setup),
-            site.flags2 & market::DOMINATED != 0,
+            crate::domination::dominated(site),
         )
     }
 

@@ -394,7 +394,7 @@ impl Chart {
             i64::from(self.record_in(pilot, setup, system, None)),
             i64::from(statics.govts.crime_tol(govt.or(Some(FIRST_GOVT)))),
             statics.govts.xenophobic(govt),
-            Domination::of(counting.map(|site| site.flags2 & DOMINATED != 0)),
+            Domination::of(counting.map(crate::domination::dominated)),
         );
         match index {
             Some(index) => setup
@@ -968,6 +968,30 @@ mod tests {
             .expect("starts")
             .with_strings(Rc::new(Lists));
         assert_eq!(legal(&session, &catalog), "status 18", "unlandable");
+    }
+
+    #[test]
+    fn a_counting_stellar_dominated_at_run_time_counts_as_dominated() {
+        let mut catalog = governed();
+        catalog.sites[1] = (
+            SystemId(131),
+            vec![dominated(140, 0), planet(142, 0.0, 0.0)],
+        );
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_strings(Rc::new(Lists));
+        assert_eq!(legal(&session, &catalog), "status 17", "some: index 16");
+        session.chart.set_dominated(
+            &mut session.pilot,
+            &mut session.out,
+            crate::catalog::StellarId(142),
+            true,
+        );
+        assert_eq!(
+            legal(&session, &catalog),
+            "status 18",
+            "all, 142 at run time (@0xd5e6)"
+        );
     }
 
     #[test]

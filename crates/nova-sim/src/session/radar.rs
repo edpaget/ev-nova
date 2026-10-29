@@ -3,9 +3,9 @@
 //! the interference in the player's system.
 
 use super::{Chart, Session, Space, Statics};
-use crate::catalog::{LandingSite, StellarId};
+use crate::catalog::StellarId;
+use crate::domination;
 use crate::iff::{self, RadarGear, ShipIff, Standing, StellarIff};
-use crate::market;
 use crate::pilot::Pilot;
 use crate::rank::Blessed;
 use crate::traffic::npc::Npc;
@@ -46,7 +46,8 @@ impl Session {
     ///
     /// The standing is:
     ///
-    /// - **Dominated:** the stellar's +0x46 byte (`Session::iff_dominated`).
+    /// - **Dominated:** the stellar's +0x46 byte (@0xaa8c), by its
+    ///   `Flags2` or at run time ([`domination::dominated`]).
     /// - **Blessed:** whether the stellar's own government (not its
     ///   system's) blesses landing (`gövt` +0x85, read @0xaab9), in the
     ///   same [`Session::blessing`] table landing reads, so the
@@ -60,7 +61,7 @@ impl Session {
     pub(crate) fn stellar_iff(&self, stellar: StellarId) -> Option<StellarIff> {
         let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
         let standing = Standing {
-            dominated: Self::iff_dominated(site),
+            dominated: domination::dominated(site),
             blessed: self.blessing().blesses(site.govt, Blessed::Landing),
         };
         Some(iff::stellar_iff(
@@ -68,23 +69,6 @@ impl Session {
             self.chart.landing_record(&self.pilot, &self.setup, site),
             standing,
         ))
-    }
-
-    /// Whether `site` is dominated, the +0x46 byte `_ColorCodeStellar`
-    /// and the nav brackets read: only the always-dominated bit
-    /// ([`DOMINATED`](market::DOMINATED)), as [`Chart::markup`] reads
-    /// it. Domination by tribute (`_DoPlanetCommDialog` @0x978fa, cleared
-    /// @0x9740f) has no state yet: rdm:task/planet-domination feeds it in
-    /// here.
-    pub(super) fn iff_dominated(site: &LandingSite) -> bool {
-        Self::dominated_by(site.flags2)
-    }
-
-    /// Whether a stellar of `Flags2` `flags2` is dominated, as
-    /// [`Session::iff_dominated`] reads it: the galaxy map's colour code
-    /// reads it too (see the `map` module).
-    pub(super) fn dominated_by(flags2: u16) -> bool {
-        flags2 & market::DOMINATED != 0
     }
 
     /// The interference in the player's system ([`iff::interference`]):
@@ -138,6 +122,7 @@ pub(super) fn radar_gear(pilot: &Pilot, statics: &Statics) -> RadarGear {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::LandingSite;
     use crate::catalog::{GovtId, OutfitId, RankId, RankRecord, StarSystem, SystemId};
     use crate::iff::{MOD_ANTI_INTERFERENCE, MOD_DENSITY_SCANNER, MOD_IFF};
     use crate::landing::StellarFlags;
@@ -181,7 +166,7 @@ mod tests {
                     },
                     LandingSite {
                         min_status: 10,
-                        flags2: market::DOMINATED,
+                        flags2: crate::market::DOMINATED,
                         ..planet(129, 2000.0, 0.0)
                     },
                     LandingSite {
@@ -355,6 +340,20 @@ mod tests {
         assert_eq!(
             session.stellar_iff(StellarId(129)),
             Some(StellarIff::Dominated)
+        );
+    }
+
+    #[test]
+    fn a_stellar_dominated_at_run_time_is_dominated() {
+        let mut session = session(&radar_catalog());
+        session.pilot.set_system_record(SystemId(130), -1);
+        session
+            .chart
+            .set_dominated(&mut session.pilot, &mut session.out, StellarId(128), true);
+        assert_eq!(
+            session.stellar_iff(StellarId(128)),
+            Some(StellarIff::Dominated),
+            "@0xaa8c"
         );
     }
 

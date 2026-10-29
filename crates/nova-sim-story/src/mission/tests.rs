@@ -48,6 +48,7 @@ fn at(system: i16, id: i16, govt: Option<GovtId>) -> Stellar {
         flags2: 0,
         govt,
         destroyed: false,
+        dominated: false,
         listed_at_place: true,
         index_govt: None,
     }
@@ -758,10 +759,12 @@ fn dominion(
     refusals(&visit, &with(|m| m.avail_record = avail_record))
 }
 
-/// Gives stellar `id` of the galaxy the always-dominated bit.
+/// Makes stellar `id` of the galaxy dominated, as
+/// [`select::stellars_of`](crate::mission::select::stellars_of) reads it
+/// from the overlay and its `Flags2`.
 fn dominate(stellars: &mut [Stellar], id: i16) {
     for stellar in stellars.iter_mut().filter(|s| s.id == StellarId(id)) {
-        stellar.flags2 |= DOMINATED;
+        stellar.dominated = true;
     }
 }
 
@@ -770,6 +773,47 @@ fn dominate_docked(visit: &mut Visit) {
     if let Some(site) = visit.docked.as_mut() {
         site.flags2 |= DOMINATED;
     }
+}
+
+/// Stamps the docked stellar's site dominated at run time, as the galaxy
+/// overlay does.
+fn dominate_docked_at_run_time(visit: &mut Visit) {
+    if let Some(site) = visit.docked.as_mut() {
+        site.dominated_at_run_time = true;
+    }
+}
+
+#[test]
+fn avail_record_minus_32000_reads_the_docked_site_dominated_at_run_time() {
+    assert_eq!(
+        dominion(
+            |_| {},
+            |visit| {
+                visit.player.record = i16::MIN;
+                dominate_docked_at_run_time(visit);
+            },
+            -32000
+        ),
+        [],
+        "@0x9b559"
+    );
+}
+
+#[test]
+fn avail_record_minus_32001_reads_each_stellars_domination_not_its_bits() {
+    assert_eq!(
+        dominion(
+            |stellars| {
+                for stellar in stellars.iter_mut() {
+                    stellar.flags2 |= DOMINATED;
+                }
+            },
+            |_| {},
+            -32001
+        ),
+        [Refusal::AvailRecord],
+        "the bits alone are stellars_of's to read"
+    );
 }
 
 #[test]
@@ -857,7 +901,7 @@ fn avail_record_below_minus_32001_refuses_at_a_stellar() {
             dominion(
                 |stellars| {
                     for stellar in stellars.iter_mut() {
-                        stellar.flags2 |= DOMINATED;
+                        stellar.dominated = true;
                     }
                 },
                 |visit| {
