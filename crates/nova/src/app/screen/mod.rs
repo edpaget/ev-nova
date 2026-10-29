@@ -197,6 +197,12 @@
 //! pauses under it; with no mission shown there, flight says "You have
 //! no active missions." on its message line, as it says "Time limit
 //! exceeded - mission failed." when a deadline runs out in flight.
+//! I on a person's offer over flight opens it over the offer, as
+//! `_OfferOneMission`'s item 7 does whoever offers (@0xa32b6): with no
+//! map (`_DoMissionInfoDialog` @0x9e3c6), the keys let go first
+//! (@0xa32f4-0xa3344), and the offer's `dësc` loaded again as it closes
+//! (@0xa335c). With no mission shown (the count @0xa32c1-0xa32ee) it
+//! does nothing, and says nothing.
 //!
 //! Missions are offered at five venues as the original's
 //! `_OfferMissionFromPort` offers them: the spaceport asks once, as it

@@ -417,6 +417,18 @@ impl AppScreen {
             for _ in 0..missions.take_texts_closed() {
                 flight.close_mission_text();
             }
+            // The mission info's close over a person's offer loads the
+            // offer's `dësc` again (`_OfferOneMission` @0xa335c), as the
+            // port's does; the port-only `PortDialogUpdate`
+            // (@0xa3377-0xa33d1) has nothing to do over flight. Taken
+            // whatever opened it, so a close of flight's own I never
+            // reaches a later offer.
+            if missions.take_info_closed()
+                && let Some(offer) = self.offer.as_ref().filter(|offer| !offer.answered())
+            {
+                flight.reload_offer_desc(offer.prompt().mission);
+                self.release_keys();
+            }
         }
         if let Some(missions) = &mut self.missions
             && !missions.is_open()
@@ -566,7 +578,9 @@ impl AppScreen {
 
     /// Acts on what the offer dialog over flight asked for, after an input
     /// or a tick (the keys pressed under its movie reach it as the movie
-    /// ends, on a tick): the player info screen opens over it; or the
+    /// ends, on a tick): the player info screen opens over it; the
+    /// mission info screen opens over it, with no map, when a mission is
+    /// shown there ([`AppScreen::open_offer_mission_info`]); or the
     /// choice goes through flight, and the dialog closes, keeping its
     /// sounds, and flight resumes. The texts the answer queued show over
     /// flight at once, the offer's after-movie among them where the
@@ -585,6 +599,10 @@ impl AppScreen {
         };
         if dialog.take_player_info_request() {
             self.open_flight_player_info();
+            return;
+        }
+        if dialog.take_info_request() {
+            self.open_offer_mission_info();
             return;
         }
         if dialog.take_map_request() {
@@ -616,6 +634,31 @@ impl AppScreen {
         if self.missions.is_none() {
             self.offer = None;
         }
+    }
+
+    /// Opens the mission info screen over the person's offer open over
+    /// flight, as `_OfferOneMission`'s item 7 does whoever offers
+    /// (@0xa32b6, no test of `_offeringFromShip` or `_playerIsLanded`).
+    /// With no active mission that is not hidden (the count
+    /// @0xa32c1-0xa32ee), nothing happens: no flush, no sound, and the
+    /// offer takes the next event. Otherwise the held keys and the
+    /// pointer are let go (the four `FlushEvents` @0xa32f4-0xa333f) and
+    /// the screen opens (@0xa3344) with no map, as `_missionDialog`
+    /// holds the offer (`_DoMissionInfoDialog` @0x9e3c6-0x9e3cd). Its
+    /// close reloads the offer's `dësc` ([`AppScreen::drop_closed_missions`]).
+    fn open_offer_mission_info(&mut self) {
+        let info = self.flight.as_mut().expect(ENTERED).mission_info();
+        if info.rows.is_empty() {
+            return;
+        }
+        if let Some(dialog) = &mut self.offer {
+            dialog.cancel_pointer();
+        }
+        self.release_keys();
+        if let Some(missions) = self.flight_missions() {
+            missions.open_info_with_map(info, false);
+        }
+        self.load_flight_info_text();
     }
 
     /// Opens flight's course map for `opener`, a mission dialog over
