@@ -68,6 +68,7 @@ use crate::board::BOUNTY_HUNTER;
 use crate::catalog::{CommCatalog, LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::clearance::DockRequest;
+use crate::domination;
 use crate::hail::deal::Settled;
 use crate::hail::{GREEDY, Haggle};
 use crate::landing::StellarFlags;
@@ -106,7 +107,7 @@ impl Chart {
     /// there read as `setup` says.
     fn planet_standing(&self, pilot: &Pilot, setup: &Setup, site: &LandingSite) -> Standing {
         Standing {
-            dominated: self.galaxy.dominated(site),
+            dominated: domination::dominated(site),
             always_dominated: site.flags2 & ALWAYS_DOMINATED != 0,
             station: site.flags & StellarFlags::STATION != 0,
             record: self.landing_record(pilot, setup, site),
@@ -157,7 +158,7 @@ impl Session {
                 .is_some_and(|govt| self.space.iff_marked.contains(&govt)),
             cash: self.pilot.cash,
         };
-        let dominated = self.chart.galaxy.dominated(&site);
+        let dominated = domination::dominated(&site);
         let comm = PlanetComm::open(
             stellar,
             dominated,
@@ -280,9 +281,7 @@ impl Session {
     fn release_stellar(&mut self, site: &LandingSite, chance: &mut dyn Chance) {
         self.port.dock = None;
         self.chart
-            .write_galaxy(&mut self.pilot, &mut self.out, |overlay| {
-                overlay.set_dominated(site.id, false);
-            });
+            .set_dominated(&mut self.pilot, &mut self.out, site.id, false);
         self.space.traffic.defences_mut().reset(site);
         self.chart.write_offence_record(&mut self.pilot, site);
         if let Some(scripts) = self.statics.stellar_scripts.get(&site.id).cloned() {
@@ -325,9 +324,7 @@ impl Session {
                 self.port.dock = None;
                 self.pilot.gone_persons.remove(&BOUNTY_HUNTER);
                 self.chart
-                    .write_galaxy(&mut self.pilot, &mut self.out, |overlay| {
-                        overlay.set_dominated(site.id, true);
-                    });
+                    .set_dominated(&mut self.pilot, &mut self.out, site.id, true);
                 if let Some(scripts) = self.statics.stellar_scripts.get(&site.id).cloned() {
                     self.run_script(&scripts.on_dominate, chance);
                 }
@@ -526,9 +523,7 @@ pub(in crate::session) mod tests {
         let mut session = at_earth(&catalog, 1_000_000, 0);
         session
             .chart
-            .write_galaxy(&mut session.pilot, &mut session.out, |overlay| {
-                overlay.set_dominated(EARTH, true);
-            });
+            .set_dominated(&mut session.pilot, &mut session.out, EARTH, true);
         let (view, _, _) = hail(&mut session, &catalog, 0, 0);
         assert_eq!(
             view.third,
@@ -680,9 +675,7 @@ pub(in crate::session) mod tests {
         let mut session = at_earth(&catalog, 1_000_000, 1);
         session
             .chart
-            .write_galaxy(&mut session.pilot, &mut session.out, |overlay| {
-                overlay.set_dominated(EARTH, true);
-            });
+            .set_dominated(&mut session.pilot, &mut session.out, EARTH, true);
         hail(&mut session, &catalog, 0, 31);
         let (view, _) = press(&mut session, &catalog, PlanetCommItem::Second, 0);
         assert_eq!(view.expect("open").reply, "s21", "dominated");
@@ -923,10 +916,8 @@ pub(in crate::session) mod tests {
         );
         assert_eq!(session.pilot.legal_record(FED), 4, "both stores");
         assert!(
-            session
-                .chart
-                .galaxy
-                .dominated(&session.chart.planet_site(EARTH).expect("shown"))
+            domination::dominated(&session.chart.planet_site(EARTH).expect("shown")),
+            "the site shown stamped"
         );
         assert_eq!(session.port.dock, None, "the dock request dropped");
         assert!(!session.pilot.gone(BOUNTY_HUNTER), "person 1150 alive");
@@ -1016,9 +1007,7 @@ pub(in crate::session) mod tests {
         );
         session
             .chart
-            .write_galaxy(&mut session.pilot, &mut session.out, |overlay| {
-                overlay.set_dominated(EARTH, true);
-            });
+            .set_dominated(&mut session.pilot, &mut session.out, EARTH, true);
         let site = LandingSite {
             flags: earth.flags | StellarFlags::STATION,
             flags2: ALWAYS_DOMINATED,
@@ -1073,10 +1062,8 @@ pub(in crate::session) mod tests {
             "OnRelease"
         );
         assert!(
-            !session
-                .chart
-                .galaxy
-                .dominated(&session.chart.planet_site(EARTH).expect("shown"))
+            !domination::dominated(&session.chart.planet_site(EARTH).expect("shown")),
+            "the site shown stamped"
         );
         assert_eq!(session.defence_ships_left(EARTH), Some(8), "the decode");
         assert_eq!(session.pilot.system_record(system), 4, "the record write");

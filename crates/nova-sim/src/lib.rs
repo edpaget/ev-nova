@@ -415,6 +415,7 @@ pub use nova_sim_port::escort_dialog;
 pub use nova_sim_port::npc_escape;
 pub use nova_sim_state::cron;
 pub use nova_sim_state::date;
+pub use nova_sim_state::domination;
 pub use nova_sim_story::exchange_events;
 pub use nova_sim_story::exploration;
 pub use nova_sim_story::map_walk;
