@@ -40,18 +40,18 @@
 //! `TargetCode` ([`TargetTag::Code`]). A ship with none shows
 //! [`TargetTag::Escort`] or [`TargetTag::Fighter`] while the player leads
 //! it (+0x9a is 0: an escort hired or captured, the player's launched
-//! fighters, a mission escort), else nothing (@0x4bdf7-0x4bece). It is a
-//! fighter when it is one the player launched (AI type 5,
-//! `_LaunchFighter` @0x3d771) and its ship type's `Mass` is
-//! [`FIGHTER_MASS`] or less (@0x4be0f-0x4be3e).
-//!
-//! The original also shows "Escort" or "Fighter" for a former escort
-//! disabled and dropped from the fleet, by the kind it remembers (+0xc8de,
-//! @0x4be01-0x4be21). The engine does not remember it yet: see the
-//! `player-led-ships` roadmap's jump clock and self-repair rejoin phase.
+//! fighters, a mission escort) **or** it is a former escort, disabled and
+//! dropped from the fleet, that remembers what it was (+0xc8de 0 or more,
+//! [`FormerKind`]), else nothing (@0x4bdf7-0x4be09, skipping to
+//! @0x4bf26). It is a fighter when it is one the player launched (AI type
+//! 5, `_LaunchFighter` @0x3d771) or a former fighter (+0xc8de 0,
+//! [`FormerKind::Fighter`]) (@0x4be0f-0x4be21), and its ship type's
+//! `Mass` is [`FIGHTER_MASS`] or less (@0x4be23-0x4be3e). Either way it
+//! is drawn in the same colour and place (@0x4be80-0x4bece).
 
 use crate::catalog::GovtId;
 use crate::reserves::Reserves;
+use crate::self_repair::FormerKind;
 
 /// The heaviest ship type, in tons, a fighter the player launched is
 /// labelled "Fighter" at (`cmpw $0x63` @0x4be35); a heavier one is an
@@ -170,6 +170,9 @@ pub struct TagFacts {
     pub players_fighter: bool,
     /// Its ship type's `Mass`, raw.
     pub type_mass: i16,
+    /// What it was, if it is a former escort out of the fleet (+0xc8de 0
+    /// or more, tested @0x4be01; 0 is a fighter, @0x4be19).
+    pub former: Option<FormerKind>,
 }
 
 /// What the label shows of a target with `facts`, if anything (see the
@@ -178,9 +181,11 @@ pub struct TagFacts {
 pub fn tag(facts: &TagFacts) -> Option<TargetTag> {
     if let Some(govt) = facts.govt {
         Some(TargetTag::Code(govt))
-    } else if !facts.led_by_player {
+    } else if !facts.led_by_player && facts.former.is_none() {
         None
-    } else if facts.players_fighter && facts.type_mass <= FIGHTER_MASS {
+    } else if (facts.players_fighter || facts.former == Some(FormerKind::Fighter))
+        && facts.type_mass <= FIGHTER_MASS
+    {
         Some(TargetTag::Fighter)
     } else {
         Some(TargetTag::Escort)
@@ -389,6 +394,7 @@ mod tests {
             led_by_player: true,
             players_fighter: true,
             type_mass: 10,
+            former: None,
         };
         assert_eq!(tag(&facts), Some(TargetTag::Code(GovtId(128))));
     }
@@ -427,5 +433,47 @@ mod tests {
             ..TagFacts::default()
         };
         assert_eq!(tag(&escorts_fighter), None);
+        let forgot = TagFacts {
+            players_fighter: true,
+            type_mass: 10,
+            former: None,
+            ..TagFacts::default()
+        };
+        assert_eq!(tag(&forgot), None);
+    }
+
+    #[test]
+    fn a_former_hired_or_captured_escort_with_no_government_is_an_escort() {
+        for kind in [FormerKind::Hired, FormerKind::Captured] {
+            let facts = TagFacts {
+                former: Some(kind),
+                type_mass: 10,
+                ..TagFacts::default()
+            };
+            assert_eq!(tag(&facts), Some(TargetTag::Escort), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_former_fighter_up_to_ninety_nine_tons_is_a_fighter() {
+        let former = |type_mass| TagFacts {
+            former: Some(FormerKind::Fighter),
+            type_mass,
+            ..TagFacts::default()
+        };
+        assert_eq!(tag(&former(99)), Some(TargetTag::Fighter));
+        assert_eq!(tag(&former(-1)), Some(TargetTag::Fighter));
+        assert_eq!(tag(&former(100)), Some(TargetTag::Escort));
+    }
+
+    #[test]
+    fn a_former_escort_with_a_government_shows_its_code() {
+        let facts = TagFacts {
+            govt: Some(GovtId(130)),
+            former: Some(FormerKind::Fighter),
+            type_mass: 10,
+            ..TagFacts::default()
+        };
+        assert_eq!(tag(&facts), Some(TargetTag::Code(GovtId(130))));
     }
 }
