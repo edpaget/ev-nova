@@ -17,7 +17,7 @@ use base64::engine::general_purpose::STANDARD;
 pub const CHANNEL_VAR: &str = "NOVA_CHANNEL";
 
 /// The channels a build can name, by their names.
-const CHANNELS: [&str; 1] = ["nightly"];
+const CHANNELS: [&str; 2] = ["nightly", "beta"];
 
 /// The repository whose releases carry the feeds.
 const REPO: &str = "edpaget/ev-nova";
@@ -159,15 +159,40 @@ mod tests {
     }
 
     #[test]
+    fn beta_with_a_key_is_the_beta_windows_appcast_and_the_key() {
+        let key = STANDARD.encode([3_u8; 32]);
+        assert_eq!(
+            windows_update_feed(&manifest(Some(&format!("\"{key}\""))), Some("beta")),
+            Ok(Some(UpdateFeed {
+                url: "https://github.com/edpaget/ev-nova/releases/download/beta/\
+                      appcast-windows-beta.xml"
+                    .to_owned(),
+                public_key: key,
+            }))
+        );
+    }
+
+    #[test]
+    fn beta_without_a_committed_key_has_no_feed() {
+        for manifest in [manifest(None), manifest(Some("\"\""))] {
+            assert_eq!(
+                windows_update_feed(&manifest, Some("beta")),
+                Ok(None),
+                "{manifest}"
+            );
+        }
+    }
+
+    #[test]
     fn an_unknown_channel_is_an_error_naming_it() {
-        for value in ["Nightly", "stable"] {
+        for value in ["Nightly", "stable", "Beta"] {
             let error = windows_update_feed(&manifest(None), Some(value)).expect_err("unknown");
             assert_eq!(error, FeedError::UnknownChannel(value.to_owned()));
             assert_eq!(
                 error.to_string(),
                 format!(
-                    "NOVA_CHANNEL is `{value}`: set it to nightly, or leave it unset for a \
-                     development bundle"
+                    "NOVA_CHANNEL is `{value}`: set it to nightly or beta, or leave it unset \
+                     for a development bundle"
                 )
             );
         }
