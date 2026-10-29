@@ -404,9 +404,10 @@ fn self_destruct_text(line: SelfDestructLine) -> String {
 /// millions as `millions` reads
 /// ([`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)): none for an
 /// arrival's, which [`arrival_lead`] leads the arrival message with, and
-/// for the take-off greeting, the land hint, the dock request's line and
-/// the dock approach's greeting, which [`message_text`] words with the
-/// stellar's name.
+/// for the take-off greeting, the land hint, the dock request's line,
+/// the dock approach's greeting and a bribe's clearance, which
+/// [`message_text`] words with the stellar's or the ship's name.
+#[allow(clippy::too_many_lines)] // one arm for each of the session's messages
 pub(super) fn sim_message_text(
     message: &SimMessage,
     words: Wording<'_>,
@@ -420,6 +421,7 @@ pub(super) fn sim_message_text(
         | SimMessage::TookOff { .. }
         | SimMessage::DockRequested { .. }
         | SimMessage::DockCleared { .. }
+        | SimMessage::BribeCleared { .. }
         | SimMessage::Tutorial(TutorialHint::Land { .. }) => {
             return None;
         }
@@ -756,6 +758,7 @@ pub(super) fn message_text(
         SimMessage::TookOff { stellar, lead } => {
             Some(take_off_greeting(*lead, &named(*stellar), words.date))
         }
+        SimMessage::BribeCleared { station } => Some(bribe_cleared(*station, ship())),
         SimMessage::Tutorial(TutorialHint::Land { stellar, station }) => Some(land_hint(
             *station,
             &named(*stellar),
@@ -849,6 +852,7 @@ pub(super) fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::DockRequested { .. }
         | SimMessage::NoResponse
         | SimMessage::DockCleared { .. }
+        | SimMessage::BribeCleared { .. }
         | SimMessage::Tutorial(_) => None,
     }
 }
@@ -1045,6 +1049,20 @@ pub fn request_line(kind: DockKind, stellar: &str, ship: &str, picks: RequestPic
         String::new()
     };
     format!("{opening}{named}. {BEGIN_APPROACH}")
+}
+
+/// What the message line says as a planet comm dialog's bribe is paid
+/// (`_DoPlanetCommDialog` @0x97128-0x97229): the player's `ship` name,
+/// ", ", [`CLEARED_TO_DOCK`] at a `station` or [`CLEARED_TO_LAND`], " " and
+/// [`COMMENCE_FINAL_APPROACH`], with no pick.
+#[must_use]
+pub fn bribe_cleared(station: bool, ship: &str) -> String {
+    let cleared = if station {
+        CLEARED_TO_DOCK
+    } else {
+        CLEARED_TO_LAND
+    };
+    format!("{ship}, {cleared} {COMMENCE_FINAL_APPROACH}")
 }
 
 /// The dock approach's greeting at the stellar named `stellar`, of `kind`,

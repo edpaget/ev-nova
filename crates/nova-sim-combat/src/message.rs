@@ -149,6 +149,13 @@ pub enum SimMessage {
     /// The land key found the stellar uninhabited: "No response.", `STR#`
     /// 2002 #53 (`_HandlePlayerDockRequest` @0x66b51-0x66bcd).
     NoResponse,
+    /// A planet comm dialog's bribe was paid: "<ship name>, you're cleared
+    /// to land. Commence final approach." (`STR#` 2002 #98 and #100), or
+    /// to dock (#95) at a station (`_DoPlanetCommDialog` @0x97128-0x97229).
+    BribeCleared {
+        /// Whether the stellar is a station (`Flags` 0x10).
+        station: bool,
+    },
     /// The dock approach cleared the pilot: its greeting, "… cleared to
     /// land." (`_HandlePlayerDockApproach` @0x64975-0x64e8e; see
     /// [`clearance`](crate::clearance)).
@@ -317,6 +324,8 @@ impl SimMessage {
     ///   @0x67c46, @0x66bcd).
     /// - [`DockCleared`](Self::DockCleared): 250
     ///   (`_HandlePlayerDockApproach` @0x64e8e).
+    /// - [`BribeCleared`](Self::BribeCleared): 250 (`_DoPlanetCommDialog`
+    ///   @0x97229, 0xfa pushed @0x9721e).
     /// - [`EscapingIn`](Self::EscapingIn): 512 (`_HandlePlayer`
     ///   @0x6f62a).
     /// - [`Sabotaged`](Self::Sabotaged) and [`BombSetUp`](Self::BombSetUp):
@@ -379,6 +388,7 @@ impl SimMessage {
             | Self::WaitForMe(_)
             | Self::DockRequested { .. }
             | Self::NoResponse
+            | Self::BribeCleared { .. }
             | Self::DockCleared { .. } => 250,
             Self::Buoy(_) => 480,
             Self::SelfDestruct(SelfDestructLine::In { .. }) => 70,
@@ -442,6 +452,14 @@ mod tests {
             SimMessage::WaitForMe("Viper:  Wait for me!".to_owned()).ticks(),
             250
         );
+    }
+
+    #[test]
+    fn a_planet_bribes_line_lasts_250_ticks() {
+        // 0xfa pushed for `_DisplayComm` (@0x9721e).
+        for station in [false, true] {
+            assert_eq!(SimMessage::BribeCleared { station }.ticks(), 250);
+        }
     }
 
     #[test]
