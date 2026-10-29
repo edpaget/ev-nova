@@ -706,7 +706,7 @@ fn a_price_asked_opens_the_haggle_dialog_whose_choice_settles_it() {
     assert_eq!(screen.showing(), Showing::Haggle);
     assert_eq!(reply(screen), "Pay up.");
     let dialog = screen.haggle().expect("open");
-    assert_eq!(dialog.lines(), ["Pay me 1,000 credits."]);
+    assert_eq!(dialog.asking(), "Pay me 1,000 credits.");
     tap(screen, Key::Escape);
     assert_eq!(screen.showing(), Showing::Haggle, "Escape does nothing");
     tap(screen, Key::Enter);
@@ -729,7 +729,7 @@ fn haggling(roll: u32) -> AppScreen {
     tap(&mut screen, Key::Char('s'));
     assert_eq!(screen.showing(), Showing::Haggle);
     let dialog = screen.haggle().expect("open");
-    assert_eq!(dialog.lines(), ["Pay me 3,000 credits."]);
+    assert_eq!(dialog.asking(), "Pay me 3,000 credits.");
     screen
 }
 
@@ -740,8 +740,8 @@ fn a_won_haggle_keeps_the_haggle_dialog_open_at_the_lowered_price() {
     assert_eq!(screen.showing(), Showing::Haggle, "still haggling");
     let dialog = screen.haggle().expect("open");
     assert_eq!(
-        dialog.lines(),
-        ["Pay me 2,200 credits."],
+        dialog.asking(),
+        "Pay me 2,200 credits.",
         "0.75 of 3,000, in hundreds, of the ship"
     );
     assert_eq!(reply(screen), "Pay up.", "unchanged");
@@ -779,7 +779,7 @@ fn a_lost_haggle_declines_and_the_comm_dialog_takes_the_next_press() {
     tap(screen, Key::Char('s'));
     assert_eq!(screen.showing(), Showing::Haggle);
     let dialog = screen.haggle().expect("open");
-    assert_eq!(dialog.lines(), ["Pay me 4,000 credits."], "raised");
+    assert_eq!(dialog.asking(), "Pay me 4,000 credits.", "raised");
 }
 
 #[test]

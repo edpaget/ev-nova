@@ -38,11 +38,31 @@
 //! the first such option. The router passes each press to the flight and
 //! shows what came of it ([`CommDialog::set_hail`]).
 //!
-//! **The haggle dialog** asks "Pay me <price> credits." in item 3 (`STR#`
-//! 2002 #187, or "Pay us", #188, for a planet), with "Accept Price"
-//! (item 1, `STR#` 150 #30) and "Lower Price" (item 2, #31). Return,
-//! Enter and A accept, and L lowers; Escape does nothing, as in the
-//! original (`_HaggleFilter`).
+//! **The haggle dialog** asks its price ([`price_text`]) in item 3, with
+//! "Accept Price" (item 1, `STR#` 150 #30) and "Lower Price" (item 2,
+//! #31). `_HaggleDialogUpdate` draws the price in white (`ForeColor(30)`
+//! @0x91c0a) from [`PRICE_INDENT`] right of item 3's left, on the
+//! baseline [`PRICE_BASELINE`] below its top (`MoveTo` @0x91c16-0x91c2d),
+//! unwrapped. It draws the opening, the price, " ", the unit and "." as
+//! separate `DrawString` runs from the pen; the dialog draws them as one
+//! run, which lands the same, as text advances are whole pixels.
+//!
+//! The opening hangs on the haggle's kind, `_haggleMode` (0x31b234,
+//! behind 0xdef60), which `_DoHaggleDialog` sets to 1 when its first
+//! argument is non-zero and to 2 otherwise (@0x91e74-0x91e8b). Both of
+//! its callers, `_DoShipCommPayment` (@0x92117) and `_DoPlanetCommDialog`
+//! (@0x970ae), pass 0, so the kind is always 2:
+//! - kind 2 (@0x91c5e-0x91c7e) opens "Pay me" (`STR#` 2002 #187), or
+//!   "Pay us" (#188) when the player's ship's target (its word at +0x70)
+//!   is -1 (@0x91c65). The engine haggles only with a ship the player
+//!   hailed, and so targeted; `pay_me` stands in for that test.
+//! - kind 0 (@0x91c3f, "The pay for having completed this mission is ",
+//!   the Pascal string at 0xdade0) and kind 1 (@0x91c4e, "I'll pay you",
+//!   #189) are dead in the original: nothing writes 0, and no caller
+//!   passes a non-zero argument. They are not built.
+//!
+//! Return, Enter and A accept, and L lowers; Escape does nothing, as in
+//! the original (`_HaggleFilter`).
 //!
 //! Without the interface file, [`CommDialog::fallback`] and
 //! [`HaggleDialog::fallback`] lay out the same items themselves, over a
@@ -51,6 +71,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::escort_dialog::{CREDIT, CREDITS};
 use nova_sim::hire::{ESCORT, HIRED_ESCORT};
 use nova_sim::{Haggle, HailView, ShipId};
 
@@ -151,6 +172,11 @@ pub const ACCEPT_ITEM: usize = 1;
 pub const LOWER_ITEM: usize = 2;
 /// The price asked.
 pub const PRICE_ITEM: usize = 3;
+/// How far right of item 3's left the price starts: 4 (@0x91c26).
+pub const PRICE_INDENT: f32 = 4.0;
+/// How far below item 3's top the price's baseline stands: 0x0c
+/// (@0x91c1a).
+pub const PRICE_BASELINE: f32 = 12.0;
 /// `STR#` 150 #30.
 pub const ACCEPT_PRICE: &str = "Accept Price";
 /// `STR#` 150 #31.
@@ -190,12 +216,16 @@ pub fn grouped(credits: i64) -> String {
     out
 }
 
-/// What the haggle dialog asks: "Pay me <price> credits." for a ship, or
-/// "Pay us …" for a planet.
+/// What the haggle dialog asks: "Pay me <price> credits." when `pay_me`,
+/// or "Pay us …" (kind 2's openings, see the module docs), the price
+/// grouped by thousands. The unit is "credits" ([`CREDITS`], `STR#` 2002
+/// #33) for a price above 1 and "credit" ([`CREDIT`], #32) for 1, 0 or
+/// less: `_HaggleDialogUpdate` tests the price signed (@0x91cb2).
 #[must_use]
 pub fn price_text(price: i64, pay_me: bool) -> String {
     let who = if pay_me { PAY_ME } else { PAY_US };
-    format!("{who} {} credits.", grouped(price))
+    let unit = if price > 1 { CREDITS } else { CREDIT };
+    format!("{who} {} {unit}.", grouped(price))
 }
 
 /// The government line under item 12's class for `view`: "(<government>)",
@@ -277,17 +307,6 @@ pub(super) fn backdrop(list: &mut DrawList, bounds: Bounds, picture: Option<Imag
     } else {
         fill_rect(list, bounds, BACKDROP);
         outline(list, bounds, BORDER);
-    }
-}
-
-/// The scrolling text role of `text`, straight on the dialog.
-fn text_role(text: String) -> Role {
-    Role::ScrollText {
-        text,
-        font: Font::Geneva,
-        size: TEXT_SIZE,
-        color: TEXT_COLOR,
-        backing: None,
     }
 }
 
@@ -714,6 +733,10 @@ pub struct HaggleDialog {
     dialog: Dialog,
     picture: Option<ImageKey>,
     choice: Option<Haggle>,
+    /// The price asked.
+    price: i64,
+    /// Whether a ship asks it ("Pay me"), not "Pay us".
+    pay_me: bool,
 }
 
 impl HaggleDialog {
@@ -771,7 +794,6 @@ impl HaggleDialog {
         let roles = [
             (ACCEPT_ITEM, Role::Button(ACCEPT_PRICE.to_owned())),
             (LOWER_ITEM, Role::Button(LOWER_PRICE.to_owned())),
-            (PRICE_ITEM, text_role(price_text(price, pay_me))),
         ];
         let mut enabled = template.clone();
         for item in [ACCEPT_ITEM, LOWER_ITEM] {
@@ -785,12 +807,32 @@ impl HaggleDialog {
             dialog,
             picture,
             choice: None,
+            price,
+            pay_me,
         })
     }
 
     /// Shows `price` asked, of a ship when `pay_me`.
     pub fn set_asking(&mut self, price: i64, pay_me: bool) {
-        self.dialog.set_text(PRICE_ITEM, &price_text(price, pay_me));
+        self.price = price;
+        self.pay_me = pay_me;
+    }
+
+    /// The price ([`HaggleDialog::asking`]) in item 3 at `at`, as
+    /// `_HaggleDialogUpdate` draws it (@0x91c0a-0x91ccb): one white run,
+    /// unwrapped, from [`PRICE_INDENT`] right of the item's left on the
+    /// baseline [`PRICE_BASELINE`] below its top.
+    fn draw_price(&self, list: &mut DrawList, at: Bounds) {
+        list.text(
+            self.asking(),
+            Point::new(
+                at.min.x + PRICE_INDENT,
+                at.min.y + PRICE_BASELINE - TEXT_SIZE,
+            ),
+            TEXT_SIZE,
+            None,
+            TEXT_COLOR,
+        );
     }
 
     /// What the player chose, once.
@@ -812,12 +854,10 @@ impl HaggleDialog {
         &self.dialog
     }
 
-    /// The text shown, a line each.
+    /// The line asked ([`price_text`]).
     #[must_use]
-    pub fn lines(&self) -> &[String] {
-        self.dialog
-            .scroll_text()
-            .map_or(&[], super::scroll_text::ScrollText::lines)
+    pub fn asking(&self) -> String {
+        price_text(self.price, self.pay_me)
     }
 }
 
@@ -874,10 +914,14 @@ impl Screen for HaggleDialog {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
-    /// The picture (or the backdrop), then the dialog.
+    /// The picture (or the backdrop), the dialog, then the price
+    /// ([`HaggleDialog::draw_price`]).
     fn draw(&self, list: &mut DrawList) {
         backdrop(list, self.dialog.bounds(), self.picture);
         self.dialog.draw(list);
+        if let Some(at) = self.dialog.item_bounds(PRICE_ITEM) {
+            self.draw_price(list, at);
+        }
     }
 
     fn cancel_pointer(&mut self) {
@@ -1665,6 +1709,18 @@ mod tests {
         assert_eq!(price_text(2200, false), "Pay us 2,200 credits.");
     }
 
+    /// `_HaggleDialogUpdate` @0x91cb2 tests the price signed: "credits"
+    /// above 1, "credit" for 1, 0 or less.
+    #[test]
+    fn a_price_of_one_or_less_is_in_credit() {
+        assert_eq!(price_text(1, true), "Pay me 1 credit.");
+        assert_eq!(price_text(0, true), "Pay me 0 credit.");
+        assert_eq!(price_text(-5, true), "Pay me -5 credit.");
+        assert_eq!(price_text(2, true), "Pay me 2 credits.");
+        assert_eq!(price_text(2200, false), "Pay us 2,200 credits.");
+        assert_eq!((CREDIT, CREDITS), ("credit", "credits"));
+    }
+
     #[test]
     fn a_ships_picture_is_5000_on_from_ship_128() {
         assert_eq!(ship_picture(ShipId(128)), ImageKey::picture(5000));
@@ -1688,10 +1744,75 @@ mod tests {
         .expect("builds")
     }
 
+    /// The price runs `dialog` draws: every text that opens with "Pay me"
+    /// or "Pay us".
+    fn price_runs(dialog: &HaggleDialog) -> Vec<Run> {
+        drawn(dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    color,
+                    size,
+                    wrap_width,
+                    ..
+                } if text.starts_with(PAY_ME) || text.starts_with(PAY_US) => {
+                    Some((text, origin, color, size, wrap_width))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Stock item 3 is (7, 6, 248, 25): the pen starts 4 in, on the
+    /// baseline 12 under the top, so the run's top is 6 + 12 - 9.
+    #[test]
+    fn the_price_is_one_white_unwrapped_run_at_item_3_plus_4_12() {
+        assert_eq!(
+            price_runs(&haggle(3000)),
+            [run("Pay me 3,000 credits.", 11.0, 9.0, Color::WHITE)],
+            "once, not as a ScrollText"
+        );
+        assert_eq!((PRICE_INDENT, PRICE_BASELINE), (4.0, 12.0));
+    }
+
+    #[test]
+    fn the_price_follows_item_3_where_it_stands() {
+        let mut moved = DialogTemplate {
+            placement: Placement::Fixed,
+            ..haggle_template()
+        };
+        moved.items[PRICE_ITEM - 1].bounds = Bounds::at(Point::new(30.0, 50.0), 200.0, 25.0);
+        let dialog =
+            HaggleDialog::new(&moved, 3000, true, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+                .expect("builds");
+        assert_eq!(
+            price_runs(&dialog),
+            [run("Pay me 3,000 credits.", 34.0, 53.0, Color::WHITE)]
+        );
+    }
+
+    #[test]
+    fn a_lowered_price_redraws_the_run() {
+        let mut dialog = haggle(3000);
+        dialog.set_asking(2200, true);
+        assert_eq!(
+            price_runs(&dialog),
+            [run("Pay me 2,200 credits.", 11.0, 9.0, Color::WHITE)]
+        );
+        dialog.set_asking(1, false);
+        assert_eq!(
+            price_runs(&dialog),
+            [run("Pay us 1 credit.", 11.0, 9.0, Color::WHITE)]
+        );
+        assert_eq!(dialog.asking(), "Pay us 1 credit.");
+    }
+
     #[test]
     fn the_haggle_dialog_asks_the_price_with_its_two_buttons() {
         let dialog = haggle(3000);
-        assert_eq!(dialog.lines(), ["Pay me 3,000 credits."]);
+        assert_eq!(dialog.asking(), "Pay me 3,000 credits.");
         let sizes: Vec<(Font, f32)> = drawn(&dialog)
             .into_iter()
             .filter_map(|command| match command {
@@ -1715,7 +1836,7 @@ mod tests {
         );
         let mut lowered = haggle(3000);
         lowered.set_asking(2200, true);
-        assert_eq!(lowered.lines(), ["Pay me 2,200 credits."]);
+        assert_eq!(lowered.asking(), "Pay me 2,200 credits.");
     }
 
     #[test]
@@ -1855,7 +1976,18 @@ mod tests {
     fn the_haggle_fallback_is_built_in() {
         let fallback =
             HaggleDialog::fallback(3000, false, ButtonStyle::STOCK, Rc::new(MonoMetrics));
-        assert_eq!(fallback.lines(), ["Pay us 3,000 credits."]);
+        assert_eq!(fallback.asking(), "Pay us 3,000 credits.");
+        let item = fallback.dialog().item_bounds(PRICE_ITEM).expect("item 3");
+        assert_eq!(
+            price_runs(&fallback),
+            [run(
+                "Pay us 3,000 credits.",
+                item.min.x + 4.0,
+                item.min.y + 3.0,
+                Color::WHITE
+            )],
+            "kind 2's other opening, at the fallback's item 3"
+        );
         let short = DialogTemplate {
             items: haggle_template().items[..2].to_vec(),
             ..haggle_template()
