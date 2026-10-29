@@ -23,7 +23,7 @@
 //! | `shïp` `OnRetire` | [`Session::buy_ship`], the ship traded in (`_DoShipyardDialog` @0x5ecff) | first, the old class still flown and its outfits still owned |
 //! | `shïp` `OnPurchase` | [`Session::buy_ship`], the ship bought (@0x5f00d) | last: the new class, cash and outfits in place, the reserves not yet filled. By the engine the paint is cleared after it (@0x5f022), so a paint it grants is lost; by the other reading of [`RuleKey::PurchasePaintOrder`](crate::RuleKey::PurchasePaintOrder) the paint is cleared before it. Either way the shield, armour and fuel are then filled, to the class and outfits it leaves (@0x5f051-0x5f07b) |
 //! | `shïp` `OnCapture` | [`Session::plunder`]'s capture taken as an escort straight away, and [`Session::assign`]'s Use As Escort (`_DoPlunderDialog` @0x9460e) | before the ship joins the fleet |
-//! | `shïp` `OnRetire`, then `OnCapture` | [`Session::assign`]'s Use As My Ship (`_DoShipCapture` @0x41662, @0x416c9) | the old class's `OnRetire`, then the captured class's `OnCapture`, the old class still flown. By the engine both run before the outfit swap, which strips a non-persistent outfit either grants, and before the fuel draw; by the other reading of [`RuleKey::CaptureHookOrder`](crate::RuleKey::CaptureHookOrder) they run after the swap (still before the class changes and the fuel draw). No hook runs when the prize is abandoned |
+//! | `shïp` `OnRetire`, then `OnCapture` | [`Session::assign`]'s Use As My Ship (`_DoShipCapture` @0x41662, @0x416c9) | the old class's `OnRetire`, then the captured class's `OnCapture`, the old class still flown. By the engine both run before the outfit swap, which strips a non-persistent outfit either grants, before the player takes the captured ship's paint, which overwrites a paint either grants (@0x41759), and before the fuel draw; by the other reading of [`RuleKey::CaptureHookOrder`](crate::RuleKey::CaptureHookOrder) they run after the swap and the paint (still before the class changes and the fuel draw). No hook runs when the prize is abandoned |
 //!
 //! A refused order, purchase or capture runs nothing; a ship class with
 //! no record runs nothing.
@@ -57,7 +57,8 @@ pub struct HookRules {
     /// `OnPurchase` or before it ([`RuleKey::PurchasePaintOrder`]).
     pub purchase_paint_order: RuleSource,
     /// Whether Use As My Ship runs `OnRetire` and `OnCapture` before the
-    /// outfit swap or after it ([`RuleKey::CaptureHookOrder`]).
+    /// outfit swap and the paint copy or after them
+    /// ([`RuleKey::CaptureHookOrder`]).
     pub capture_hook_order: RuleSource,
     /// Whether a new pilot's starting ship runs its `OnPurchase`
     /// ([`RuleKey::StartShipPurchase`]).

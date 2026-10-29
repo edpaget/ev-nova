@@ -5675,7 +5675,8 @@ impl Session {
     /// [`Session::become_class`], with the reserves held.
     ///
     /// "Use As My Ship" takes the captured ship's place, velocity and
-    /// heading (`_DoShipCapture` @0x416e3-0x41722) and lets go of the nav
+    /// heading (`_DoShipCapture` @0x416e3-0x41722) and its paint, or none
+    /// (@0x41728-0x4175e; see the `capture` module), and lets go of the nav
     /// selection, the ship target and the secondary (@0x4172e-0x4173e);
     /// "Use As Escort" leaves them as they are. Its fuel is drawn on
     /// `chance` below the old ship's capacity while the cache holds it,
@@ -5771,6 +5772,10 @@ impl Session {
             outfits,
             reserves: ReservePolicy::Hold,
         };
+        // The player takes the captured ship's paint, or none
+        // (`_DoShipCapture` @0x41728-0x4175e): after `OnRetire` and
+        // `OnCapture` by the engine, before them by the other reading.
+        self.pilot.paint = self.space.npc_paint(&npc, &self.statics);
         self.become_class(&record, takeover, |session| {
             if !hooks_first {
                 session.retire_for_capture(record.id, chance);

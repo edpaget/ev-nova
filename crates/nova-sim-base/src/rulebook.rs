@@ -58,7 +58,7 @@
 //! | [`RemoveRefund`](RuleKey::RemoveRefund) | `remove_refund` | `D` removes an outfit and pays nothing (`nova_sim::OutfitRules`) | it pays what selling the outfit would\* |
 //! | [`RefitReserves`](RuleKey::RefitReserves) | `refit_reserves` | a refit by `G`, `D` or boarding keeps a shield or armour above the new most until damage, the outfitter or a reload takes it (`nova_sim::OutfitRules`) | each is held to its most\* |
 //! | [`PurchasePaintOrder`](RuleKey::PurchasePaintOrder) | `purchase_paint_order` | buying a ship clears the paint after the new ship's `OnPurchase`, so a paint it grants is lost (`nova_sim::HookRules`) | the paint is cleared before the hook, so a paint it grants stays\* |
-//! | [`CaptureHookOrder`](RuleKey::CaptureHookOrder) | `capture_hook_order` | on Use As My Ship, `OnRetire` and `OnCapture` run before the outfit swap, which strips a non-persistent outfit either grants (`nova_sim::HookRules`) | they run after the swap, so it stays\* |
+//! | [`CaptureHookOrder`](RuleKey::CaptureHookOrder) | `capture_hook_order` | on Use As My Ship, `OnRetire` and `OnCapture` run before the outfit swap, which strips a non-persistent outfit either grants, and before the player takes the captured ship's paint, which overwrites a paint either grants (`nova_sim::HookRules`) | they run after the swap and the paint, so both stay\* |
 //! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` (`nova_sim::HookRules`) | it runs once, right before the `chär`'s `OnStart`\* |
 //! | [`ShipChangePersistence`](RuleKey::ShipChangePersistence) | `ship_change_persistence` | `H` keeps an outfit flagged 0x0004 or 0x0020 (`nova_sim::ShipChangeRules`) | only one flagged 0x0020 |
 //! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its limit (ammunition cap, raised `Max`, gun and turret slots) after adding the new class's default items (`nova_sim::ShipChangeRules`) | nothing is held: every outfit is kept |
@@ -1190,10 +1190,12 @@ rule_keys! {
     /// When "Use As My Ship" runs the old ship's `OnRetire` and the
     /// captured ship's `OnCapture`: by the engine, before the outfit swap
     /// (`_DoShipCapture` @0x41662 and @0x416c9, then @0x419dd), so a
-    /// non-persistent outfit either grants is stripped; otherwise after
-    /// it, so the outfit stays. The Bible is silent here, so the other
-    /// reading is the obvious alternative, not anything the Bible says
-    /// (see `nova_sim::HookRules`).
+    /// non-persistent outfit either grants is stripped, and before the
+    /// player takes the captured ship's paint (@0x41759), so a paint
+    /// either grants is overwritten; otherwise after both, so the outfit
+    /// and the paint stay. The Bible is silent here, so the other reading
+    /// is the obvious alternative, not anything the Bible says (see
+    /// `nova_sim::HookRules`).
     CaptureHookOrder => "capture_hook_order",
     /// Whether a new pilot's starting ship runs its `OnPurchase`: by the
     /// engine, it does not (`_DoNewPilot` runs only the `chär`'s

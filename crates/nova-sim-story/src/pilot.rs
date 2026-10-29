@@ -39,10 +39,13 @@
 //!
 //! It keeps its ship's paint, which a paint outfit (`ModType` 43) gives
 //! (see [`outfit_effects`](crate::outfit_effects)): a new pilot's ship is
-//! unpainted (the original's (32, 32, 32), `_ResetPlayer` @0x1db4e), and
-//! buying a ship unpaints it again (`_DoShipyardDialog` @0x5f022). The
-//! paint is saved, as the original's pilot file keeps it
-//! (`_WritePilotData` @0x727f2); drawing it is not done yet.
+//! unpainted (the original's (32, 32, 32), `_ResetPlayer` @0x1db4e),
+//! buying a ship unpaints it again (`_DoShipyardDialog` @0x5f022), and
+//! capturing a ship takes the captured ship's paint, or none
+//! (`_DoShipCapture` @0x41728-0x4175e; see `nova_sim::Session::assign`).
+//! The paint is saved, as the original's pilot file keeps it
+//! (`_WritePilotData` @0x727f2), and the flight view draws the ship's hull
+//! in it (`_HandleShipDisplay` @0x2be41-0x2beb2).
 //!
 //! It keeps its nickname, the original's `_playerNickname` (0x3b5290),
 //! which the New Pilot dialog sets (`_DoNewPilot` @0x191ca-0x191dc) and the
