@@ -45,6 +45,7 @@ pub mod call_for_help;
 pub mod candidates;
 pub mod carried;
 pub mod death_star;
+pub mod defence_ship;
 pub mod dispatch_gate;
 pub mod escort;
 pub mod escort_orders;

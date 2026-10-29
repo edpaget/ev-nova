@@ -801,4 +801,36 @@ mod tests {
         next.keep_defences(taken);
         assert_eq!(next.defences().left(&earth(3)), 4);
     }
+
+    #[test]
+    fn a_defender_in_the_traffic_with_no_candidate_heads_back_to_land() {
+        let sites = [earth(3)];
+        let mut traffic = traffic_of(defence_table("", false));
+        let world = super::super::World::new(&sites);
+        let id = traffic
+            .spawn_defender(&sites[0], &world, &mut Ranged::of(&[]))
+            .expect("a slot");
+        // Its spawn's target, the player, reads as seen while no player is
+        // in the system (`_ShipVisibleToShip` tests no presence): dropped.
+        let npc = traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.id == id)
+            .expect("in");
+        npc.target = None;
+        npc.goal = Goal::Idle;
+        traffic.tick_in(
+            &crate::ai::NovaAi::default(),
+            world,
+            &[],
+            &mut Ranged::of(&[]),
+        );
+        let npc = traffic.npcs().iter().find(|npc| npc.id == id).expect("in");
+        assert_eq!(
+            npc.goal,
+            Goal::Land(StellarId(128)),
+            "no player in the system"
+        );
+        assert_eq!(npc.target, None);
+    }
 }
