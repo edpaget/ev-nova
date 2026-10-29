@@ -23,7 +23,7 @@
 //! | `shïp` `OnRetire` | [`Session::buy_ship`], the ship traded in (`_DoShipyardDialog` @0x5ecff) | first, the old class still flown and its outfits still owned |
 //! | `shïp` `OnPurchase` | [`Session::buy_ship`], the ship bought (@0x5f00d) | last: the new class, cash and outfits in place, the reserves not yet filled. By the engine the paint is cleared after it (@0x5f022), so a paint it grants is lost; by the other reading of [`RuleKey::PurchasePaintOrder`](crate::RuleKey::PurchasePaintOrder) the paint is cleared before it. Either way the shield, armour and fuel are then filled, to the class and outfits it leaves (@0x5f051-0x5f07b) |
 //! | `shïp` `OnCapture` | [`Session::plunder`]'s capture taken as an escort straight away, and [`Session::assign`]'s Use As Escort (`_DoPlunderDialog` @0x9460e) | before the ship joins the fleet |
-//! | `shïp` `OnRetire`, then `OnCapture` | [`Session::assign`]'s Use As My Ship (`_DoShipCapture` @0x41662, @0x416c9) | the old class's `OnRetire`, then the captured class's `OnCapture`, the old class still flown. By the engine both run before the outfit swap, which strips a non-persistent outfit either grants, and before the fuel draw; by the other reading of [`RuleKey::CaptureHookOrder`](crate::RuleKey::CaptureHookOrder) they run after the swap (still before the class changes and the fuel draw). No hook runs when the prize is abandoned |
+//! | `shïp` `OnRetire`, then `OnCapture` | [`Session::assign`]'s Use As My Ship (`_DoShipCapture` @0x41662, @0x416c9) | the old class's `OnRetire`, then the captured class's `OnCapture`, the old class still flown. By the engine both run before the outfit swap, `_DoShipCapture`'s weapons merge, which strips a non-persistent outfit either grants (a weapon outfit's count kept where a persistent outfit names its weapon), and before the fuel draw; by the other reading of [`RuleKey::CaptureHookOrder`](crate::RuleKey::CaptureHookOrder) they run after the swap (still before the class changes and the fuel draw). No hook runs when the prize is abandoned |
 //!
 //! A refused order, purchase or capture runs nothing; a ship class with
 //! no record runs nothing.
@@ -57,7 +57,11 @@ pub struct HookRules {
     /// `OnPurchase` or before it ([`RuleKey::PurchasePaintOrder`]).
     pub purchase_paint_order: RuleSource,
     /// Whether Use As My Ship runs `OnRetire` and `OnCapture` before the
-    /// outfit swap or after it ([`RuleKey::CaptureHookOrder`]).
+    /// outfit swap, `_DoShipCapture`'s weapons merge (@0x41849-0x41a3e,
+    /// [`captured_outfits`](crate::captured_loadout::captured_outfits)),
+    /// or after it ([`RuleKey::CaptureHookOrder`]). Before it, a
+    /// non-persistent outfit a hook grants is stripped, a weapon outfit's
+    /// count kept only where a persistent outfit names its weapon.
     pub capture_hook_order: RuleSource,
     /// Whether a new pilot's starting ship runs its `OnPurchase`
     /// ([`RuleKey::StartShipPurchase`]).
@@ -1093,6 +1097,40 @@ mod tests {
                 session.pilot().owned(OutfitId(400)),
                 1,
                 "persistent: {source:?}"
+            );
+        }
+    }
+
+    /// `OnCapture` grants a blaster (250, not persistent). By the engine
+    /// the merge strips the outfit, but its count stays in the weapon
+    /// array where a persistent outfit (here 405, not owned, in its
+    /// second mod) names the blaster, and the fold lands it back on 250
+    /// (`_DoShipCapture` @0x41849-0x419fd); the unarmed trader has none to
+    /// give otherwise. By the other reading the hook runs after the swap
+    /// and the blaster stays either way.
+    #[test]
+    fn a_weapon_on_capture_grants_is_kept_by_the_merge_only_where_a_persistent_outfit_names_it() {
+        use crate::combat::armament::MOD_WEAPON;
+        for (source, protected, kept) in [
+            (RuleSource::Engine, false, 0),
+            (RuleSource::Engine, true, 1),
+            (RuleSource::Bible, false, 1),
+            (RuleSource::Bible, true, 1),
+        ] {
+            let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, source);
+            let (mut session, _) = captured_kitted("", "G250", rules);
+            if protected {
+                session.statics_mut().outfits.push(OutfitRecord {
+                    flags: OutfitFlags::PERSISTENT,
+                    ..outfit(405, &[(17, 5), (MOD_WEAPON, 128)])
+                });
+            }
+            session.pilot.outfits.clear();
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[]));
+            assert_eq!(
+                session.pilot().owned(OutfitId(250)),
+                kept,
+                "{source:?}, protected: {protected}"
             );
         }
     }

@@ -446,6 +446,8 @@ mod brackets;
 mod buoys;
 mod capture;
 mod capture_naming;
+#[cfg(test)]
+mod captured_loadout;
 mod captured_mission_ship;
 mod cargo_boxes;
 #[cfg(test)]
@@ -690,6 +692,7 @@ use crate::board::{
     HeldRounds, MARINES, Plunder, PlunderView, Prize, SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE,
     TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken, check_board,
 };
+use crate::captured_loadout::{Captured, captured_outfits};
 use crate::catalog::{
     AsteroidCatalog, CombatCatalog, CronRecord, EscortClass, GateSite, GovtId, JunkId, LandingSite,
     ListedStellar, OutfitId, OutfitRecord, PersonId, PilotCatalog, RankRecord, ShipId, ShipRecord,
@@ -697,7 +700,7 @@ use crate::catalog::{
 };
 use crate::chance::Chance;
 use crate::combat::ai_fire::PlayerRating;
-use crate::combat::armament::{Armament, Arsenal, Trigger, fit_stock, outfit_rounds};
+use crate::combat::armament::{Armament, Arsenal, Trigger, outfit_rounds};
 use crate::combat::asteroid_hit::AsteroidFuse;
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Breakup, Condition, HullSpec};
@@ -751,7 +754,6 @@ use crate::rating;
 use crate::red_alert::RedAlert;
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::shipyard::{
     self, Purchase, Quote, Sale, ShipNaming, ShipPurchase, ShipRefusal, Shipyard, Yard,
 };
@@ -5688,9 +5690,12 @@ impl Session {
     /// ship has gone. The old ship joins the fleet and the captured
     /// ship's person is gone for good, unless no ship slot is free in the
     /// system for the old ship, when the prize is lost and nothing else
-    /// changes. The player keeps its persistent outfits and
-    /// gets the captured class's default items, then its stock weapons and
-    /// their `AmmoLoad`, topped up as after a purchase. The swap makes a
+    /// changes. The player keeps its persistent outfits and the weapon
+    /// slots they name, takes the captured ship's live weapons and rounds
+    /// into the slots left empty, and gets the captured class's default
+    /// items on top, with no stock top-up
+    /// ([`captured_outfits`](crate::captured_loadout::captured_outfits)).
+    /// The swap makes a
     /// save due. The old class's `OnRetire` and then the captured class's
     /// `OnCapture` run on `chance`, both before the fuel draw and, as
     /// [`HookRules::capture_hook_order`] says, before or after the outfit
@@ -5759,22 +5764,19 @@ impl Session {
         // ship's) or the one worked out afresh from the old outfits, read
         // before they change (@0x41786).
         let fuel = self.ship.capture_fuel(&self.pilot, &self.statics, &record);
-        let records = &self.statics.outfits;
         // Capture keeps by 0x0004 alone and holds nothing to its `Max`,
-        // whatever the ship-change rules say, and tops the stock weapons
-        // up rather than adding them.
-        let mut outfits = carried_outfits(
+        // whatever the ship-change rules say, and merges the captured
+        // ship's live weapons and rounds rather than its class's stock.
+        let outfits = captured_outfits(
             &self.pilot.outfits,
-            OutfitCarry::Persistent {
-                mask: OutfitFlags::PERSISTENT,
+            Captured {
+                armament: &npc.armament,
+                rounds: &npc.rounds,
             },
             &defaults,
-            None,
-            None,
-            records,
+            &self.statics.arsenal,
+            &self.statics.outfits,
         );
-        let fits = self.statics.arsenal.stock_fits(record.id, records);
-        fit_stock(&mut outfits, &fits, records);
         let share = if self.statics.arsenal.hull(record.id).tough {
             TOUGH_TAKEOVER_ARMOR_SHARE
         } else {
@@ -26926,7 +26928,7 @@ pub(super) mod tests {
     #[test]
     fn a_captured_ship_keeps_its_stock_weapons() {
         // The trader stocks two blasters (held by 250) and a homing
-        // missile (252) with 6 rounds of its own (403).
+        // missile (252) with 6 rounds (403).
         let mut catalog = kitted();
         for hull in &mut catalog.hulls {
             if hull.id == ShipId(129) {
@@ -26954,13 +26956,9 @@ pub(super) mod tests {
         assert_eq!(mounted(&session), [(128, 2), (134, 1)]);
         assert_eq!(
             session.pilot().outfits().collect::<Vec<_>>(),
-            [
-                (OutfitId(250), 2),
-                (OutfitId(252), 1),
-                (OutfitId(402), 1),
-                (OutfitId(403), 6)
-            ],
-            "its default item, then its stock weapons and rounds"
+            [(OutfitId(250), 2), (OutfitId(252), 1), (OutfitId(402), 1)],
+            "its weapons, then its default item; 134 being of `AmmoType` -1, \
+             its rounds go nowhere (_DoShipCapture @0x41983)"
         );
         assert_eq!(
             session.ship.fit.stock,
@@ -27234,8 +27232,8 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_capture_tops_the_stock_weapons_up_rather_than_adding_them() {
-        // The trader stocks two blasters (held by 250, here persistent)
+    fn a_capture_keeps_a_persistent_weapons_slot_and_adds_the_defaults_after_the_merge() {
+        // The trader carries two blasters (held by 250, here persistent)
         // and a homing missile (252) with 6 rounds (403); the player owns
         // a blaster, and the trader's default items hold 4 rounds.
         let mut catalog = kitted();
@@ -27271,8 +27269,11 @@ pub(super) mod tests {
         use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0]));
         assert_eq!(
             owned_ids(&session),
-            [(250, 2), (252, 1), (402, 1), (403, 6)],
-            "what is held already counts: no blaster or round doubled"
+            [(250, 1), (252, 1), (402, 1), (403, 4)],
+            "250 names slot 128, which keeps the player's 1 over the captured \
+             2; the missile is taken, but its 6 rounds go nowhere, 134 being \
+             of `AmmoType` -1 (@0x41983); the 4 default rounds come after the \
+             fold, and nothing tops the stock up (_DoShipCapture @0x41849-0x41a3e)"
         );
     }
 

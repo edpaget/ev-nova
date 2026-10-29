@@ -97,8 +97,10 @@
 //! or the weapon itself for a fighter bay or any other `AmmoType`
 //! (`_DoShipyardDialog` @0x5ef3e-0x5ef56), the largest load where two
 //! weapons share one. A new pilot owns them before its default items
-//! (`_DoNewPilot` @0x18f48, @0x18f4d); a ship bought or captured tops
-//! them up after its default items (`fit_stock`). The `E` and `H` set
+//! (`_DoNewPilot` @0x18f48, @0x18f4d); a ship bought, or the escape
+//! pod's, tops them up after its default items (`fit_stock`). A ship
+//! captured takes the captured ship's live weapons and rounds instead
+//! (`nova_sim::captured_loadout`). The `E` and `H` set
 //! operators add them to the weapon and rounds arrays instead
 //! ([`Arsenal::stock_added`], `_EvalSetExp` @0x1551c-0x155de), which
 //! `nova_sim::ship_change`'s fold then puts on the outfits
