@@ -12,14 +12,14 @@
 //! `Flags` 0x1000-0x4000) or to beams (0, 3 and 10: `Flags2` 0x2000). A
 //! weapon a bit does not apply to is [`Status::NotApplicable`] for it.
 //!
-//! [`unimplemented`](fn@unimplemented) lists the bits a weapon sets that apply to it and
-//! that the simulation does not do yet, so a session can report each once
-//! while the weapon fires with them ignored. Undocumented bits are never
-//! reported.
+//! The table is the record of every documented bit and what the simulation
+//! does with it: each bit that applies to a weapon is
+//! [`Status::Implemented`] or [`Status::Presentation`], so no weapon fires
+//! with a documented flag ignored. Undocumented bits have no status.
 
 use std::fmt;
 
-use super::weapon::{Guidance, WeaponSpec};
+use super::weapon::Guidance;
 
 /// Which of a `wëap`'s flag words a bit is in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -54,8 +54,6 @@ pub enum Status {
     Presentation,
     /// It does not apply to the weapon's guidance.
     NotApplicable,
-    /// Not done yet: reported, and ignored.
-    Unimplemented,
 }
 
 /// Which weapons a bit applies to.
@@ -98,7 +96,7 @@ impl Scope {
 
 use FlagField::{Flags, Flags2, Flags3, Seeker};
 use Scope::{Any, Beam, Guided, Shots, Turret};
-use Status::{Implemented, Presentation, Unimplemented};
+use Status::{Implemented, Presentation};
 
 /// Every documented bit: its field, the bit, which weapons it applies to,
 /// and what the simulation does with it.
@@ -218,34 +216,9 @@ pub fn status(field: FlagField, bit: u16, guidance: Guidance) -> Option<Status> 
         })
 }
 
-/// The bits `spec` sets that apply to it and are not done yet, in the
-/// table's order.
-#[must_use]
-pub fn unimplemented(spec: &WeaponSpec) -> Vec<(FlagField, u16)> {
-    TABLE
-        .iter()
-        .filter(|&&(field, bit, scope, status)| {
-            status == Unimplemented && scope.covers(spec.guidance) && word(spec, field) & bit != 0
-        })
-        .map(|&(field, bit, _, _)| (field, bit))
-        .collect()
-}
-
-/// `spec`'s `field`.
-fn word(spec: &WeaponSpec, field: FlagField) -> u16 {
-    match field {
-        Flags => spec.flags,
-        Seeker => spec.seeker,
-        Flags2 => spec.flags2,
-        Flags3 => spec.flags3,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::WeaponRecord;
-    use nova_sim_catalog::fixture::weapon;
 
     const NA: Status = Status::NotApplicable;
 
@@ -381,72 +354,93 @@ mod tests {
         }
     }
 
-    fn spec(guidance: i16, flags: u16, flags2: u16, flags3: u16) -> WeaponSpec {
-        WeaponSpec::new(&WeaponRecord {
-            guidance,
-            flags,
-            flags2,
-            flags3,
-            ..weapon(128)
+    /// The bits a weapon of `guidance` with these flag words sets that the
+    /// simulation does nothing with: those that don't apply to its
+    /// guidance, and any undocumented, by field and then lowest bit first.
+    fn unacted(
+        guidance: i16,
+        flags: u16,
+        seeker: u16,
+        flags2: u16,
+        flags3: u16,
+    ) -> Vec<(FlagField, u16)> {
+        let guidance = Guidance::decode(guidance);
+        [
+            (Flags, flags),
+            (Seeker, seeker),
+            (Flags2, flags2),
+            (Flags3, flags3),
+        ]
+        .into_iter()
+        .flat_map(|(field, word)| {
+            (0..16)
+                .map(|n| 1_u16 << n)
+                .filter(move |bit| word & bit != 0)
+                .map(move |bit| (field, bit))
         })
+        .filter(|&(field, bit)| {
+            !matches!(
+                status(field, bit, guidance),
+                Some(Implemented | Presentation)
+            )
+        })
+        .collect()
     }
 
     #[test]
-    fn stock_shaped_unguided_weapons_and_beams_report_nothing() {
+    fn stock_shaped_unguided_weapons_and_beams_act_on_every_bit_that_applies() {
         // The Light Blaster, Medium Blaster and Light Cannon: blast spares
         // the player, blind spots that do not apply, translucent shots.
-        assert_eq!(unimplemented(&spec(-1, 0x6100, 0, 0x0002)), []);
-        assert_eq!(unimplemented(&spec(-1, 0x0100, 0, 0x0002)), []);
+        assert_eq!(
+            unacted(-1, 0x6100, 0, 0, 0x0002),
+            [(Flags, 0x2000), (Flags, 0x4000)]
+        );
+        assert_eq!(unacted(-1, 0x0100, 0, 0, 0x0002), []);
         // The Mining Blaster: secondary, and x10 against asteroids.
-        assert_eq!(unimplemented(&spec(-1, 0x0102, 0x8000, 0x0002)), []);
+        assert_eq!(unacted(-1, 0x0102, 0, 0x8000, 0x0002), []);
         // The Raven Rocket and the Stellar Grenade.
-        assert_eq!(unimplemented(&spec(6, 0x8002, 0, 0)), []);
-        assert_eq!(unimplemented(&spec(6, 0x8003, 0, 0)), []);
+        assert_eq!(unacted(6, 0x8002, 0, 0, 0), []);
+        assert_eq!(unacted(6, 0x8003, 0, 0, 0), []);
         // The Polaron Cannon, the Pulse Laser and the BioRelay Laser.
-        assert_eq!(unimplemented(&spec(0, 0x0012, 0, 0x0001)), []);
-        assert_eq!(unimplemented(&spec(0, 0x4010, 0x2200, 0)), []);
-        assert_eq!(unimplemented(&spec(0, 0x6010, 0, 0)), []);
+        assert_eq!(unacted(0, 0x0012, 0, 0, 0x0001), []);
+        assert_eq!(unacted(0, 0x4010, 0, 0x2200, 0), [(Flags, 0x4000)]);
+        assert_eq!(
+            unacted(0, 0x6010, 0, 0, 0),
+            [(Flags, 0x2000), (Flags, 0x4000)]
+        );
         // A Wraith Graviton Beam, and the Winter Tempest.
-        assert_eq!(unimplemented(&spec(0, 0x0010, 0x8200, 0)), []);
-        assert_eq!(unimplemented(&spec(0, 0x0032, 0x0200, 0)), []);
+        assert_eq!(unacted(0, 0x0010, 0, 0x8200, 0), []);
+        assert_eq!(unacted(0, 0x0032, 0, 0x0200, 0), []);
     }
 
     #[test]
-    fn a_turrets_blind_spots_are_implemented() {
-        assert_eq!(unimplemented(&spec(-1, 0x7000, 0, 0)), []);
-        assert_eq!(unimplemented(&spec(4, 0x7000, 0, 0)), []);
-    }
-
-    /// A weapon of `guidance` with these flag words.
-    fn guided(guidance: i16, flags: u16, seeker: u16, flags2: u16, flags3: u16) -> WeaponSpec {
-        WeaponSpec::new(&WeaponRecord {
-            guidance,
-            flags,
-            seeker,
-            flags2,
-            flags3,
-            ..weapon(128)
-        })
-    }
-
-    #[test]
-    fn stock_shaped_guided_weapons_and_turrets_report_their_rows() {
+    fn stock_shaped_guided_weapons_and_turrets_act_on_every_bit_that_applies() {
         // The IR Missile: secondary, detonates, seeks asteroids.
-        assert_eq!(unimplemented(&guided(1, 0x8002, 0x0002, 0, 0)), []);
+        assert_eq!(unacted(1, 0x8002, 0x0002, 0, 0), []);
         // The Ion Cannon: a looped, rear-blind turreted beam that disables
         // and fires from the exit point nearest the target.
-        assert_eq!(unimplemented(&guided(3, 0x4010, 0, 0x1200, 0x0011)), []);
+        assert_eq!(unacted(3, 0x4010, 0, 0x1200, 0x0011), []);
         // The Polaron Multi-Torp: point defence can't target it, and its
         // sub-munitions seek the nearest; it fires while cloaked and passes
         // through asteroids.
-        assert_eq!(
-            unimplemented(&guided(1, 0x0182, 0x0001, 0x4010, 0x0002)),
-            []
-        );
+        assert_eq!(unacted(1, 0x0182, 0x0001, 0x4010, 0x0002), []);
         // A rear-blind Fusion Pulse Turret that disables.
-        assert_eq!(unimplemented(&guided(4, 0x4001, 0, 0x1200, 0x0002)), []);
-        // The Nanites turret's Seeker bit does not apply to it.
-        assert_eq!(unimplemented(&guided(4, 0x0021, 0x0001, 0x0010, 0)), []);
+        assert_eq!(unacted(4, 0x4001, 0, 0x1200, 0x0002), []);
+        // The Nanites turret passes through asteroids, on any guidance.
+        assert_eq!(unacted(4, 0x0021, 0x0001, 0x0010, 0), []);
+    }
+
+    #[test]
+    fn an_undocumented_bit_set_is_never_acted_on() {
+        assert_eq!(
+            unacted(-1, 0, 0x0104, 0, 0x8008),
+            [
+                (Seeker, 0x0004),
+                (Seeker, 0x0100),
+                (Flags3, 0x0008),
+                (Flags3, 0x8000)
+            ]
+        );
     }
 
     #[test]

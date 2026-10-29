@@ -165,7 +165,6 @@ mod tests {
     use crate::combat::aim::bearing;
     use crate::combat::armament::{Armament, Arsenal, LauncherRounds, Shooter};
     use crate::combat::hull::Condition;
-    use crate::combat::report::Reports;
     use crate::combat::weapon::WeaponSpec;
     use crate::flight::{Turn, heading_of};
     use crate::stats::ShipStats;
@@ -218,7 +217,6 @@ mod tests {
             &mut LauncherRounds::default(),
             &mut fuel,
             &mut crate::chance::NeverFires,
-            &mut Reports::default(),
             RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
             None,

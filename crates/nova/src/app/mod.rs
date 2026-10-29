@@ -1338,12 +1338,17 @@ mod tests {
         }
     }
 
-    fn flag(weapon: i16) -> Diagnostic {
-        Diagnostic::Sim(nova_sim::SimDiagnostic::UnimplementedWeaponFlag {
+    /// A sim diagnostic about `weapon`; its text is the sim's own.
+    fn unflown(weapon: i16) -> nova_sim::SimDiagnostic {
+        nova_sim::SimDiagnostic::UnimplementedGuidance {
             weapon: nova_sim::WeaponId(weapon),
-            field: nova_sim::combat::flags::FlagField::Flags2,
-            bit: 0x8000,
-        })
+            guidance: 99,
+        }
+    }
+
+    /// The line `unflown(weapon)` is written as.
+    fn unflown_line(weapon: i16) -> String {
+        format!("nova: {}\n", unflown(weapon))
     }
 
     #[test]
@@ -1352,23 +1357,29 @@ mod tests {
         let written = Written::default();
         let mut app = app(&window).with_diagnostics(Box::new(written.clone()));
         let unreadable = Diagnostic::Unreadable("wëap 140: no spïn 3005".to_owned());
-        app.screen.diagnostics = vec![flag(181), unreadable, flag(165)];
+        app.screen.diagnostics = vec![
+            Diagnostic::Sim(unflown(181)),
+            unreadable,
+            Diagnostic::Sim(unflown(165)),
+        ];
         let redraw = WindowEvent::Redraw {
             elapsed: Duration::from_millis(16),
         };
         handle(&mut app, &mut window, redraw);
         assert_eq!(
             written.text(),
-            "nova: wëap 181 Flags2 0x8000 not implemented\n\
-             nova: wëap 140: no spïn 3005\n\
-             nova: wëap 165 Flags2 0x8000 not implemented\n"
+            format!(
+                "{}nova: wëap 140: no spïn 3005\n{}",
+                unflown_line(181),
+                unflown_line(165)
+            )
         );
-        app.screen.diagnostics = vec![flag(167)];
+        app.screen.diagnostics = vec![Diagnostic::Sim(unflown(167))];
         handle(&mut app, &mut window, key(Key::Up, true));
         assert!(
             written
                 .text()
-                .ends_with("\nnova: wëap 167 Flags2 0x8000 not implemented\n"),
+                .ends_with(&format!("\n{}", unflown_line(167))),
             "{}",
             written.text()
         );
@@ -1379,11 +1390,11 @@ mod tests {
     fn without_a_writer_or_with_a_broken_one_diagnostics_are_let_go() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
-        app.screen.diagnostics = vec![flag(181)];
+        app.screen.diagnostics = vec![Diagnostic::Sim(unflown(181))];
         handle(&mut app, &mut window, key(Key::Up, true));
         assert_eq!(app.screen.diagnostics, [], "taken all the same");
         let mut broken = self::app(&window).with_diagnostics(Box::new(Broken));
-        broken.screen.diagnostics = vec![flag(181)];
+        broken.screen.diagnostics = vec![Diagnostic::Sim(unflown(181))];
         handle(&mut broken, &mut window, key(Key::Up, true));
         assert_eq!(broken.screen.diagnostics, []);
         assert_eq!(broken.take_warnings(), Vec::<String>::new());

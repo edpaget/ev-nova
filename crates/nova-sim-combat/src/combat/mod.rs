@@ -2187,7 +2187,6 @@ impl Combat {
             fighter.rounds,
             &mut fighter.reserves.fuel,
             chance,
-            &mut self.reports,
             self.ai_spend,
             &mut |spec| ai_fire::spawn(spec, &state, &hull, target, arc),
             // Only a ship whose target is slot 0, the player, is stretched
@@ -2407,7 +2406,6 @@ impl Combat {
             fighter.rounds,
             &mut fighter.reserves.fuel,
             chance,
-            &mut self.reports,
             room,
             &mut |spec| {
                 if let Some(missile) =
@@ -2914,9 +2912,8 @@ impl Combat {
 
     /// Puts in flight the sub-munitions `parent` releases at `target`
     /// among `targets`, their weapon read from `arsenal` (none when it
-    /// cannot be read), heard from where the parent is. Released, they
-    /// report their weapon's unimplemented flags as a weapon fired does;
-    /// of a guidance not flown yet, they report it and none fly. Under the
+    /// cannot be read), heard from where the parent is. Of a guidance not
+    /// flown yet, they report it and none fly. Under the
     /// caps the release ends at the first that finds no free slot, the
     /// shots ended this tick, the parent among them, still holding theirs
     /// (`_SpawnShotSubmunitions` @0x3f32d-0x3f331): those already placed
@@ -2957,7 +2954,6 @@ impl Combat {
             });
             return;
         }
-        self.reports.fired(sub);
         self.events.push(CombatEvent::Fired {
             ship: parent.firer,
             weapon: sub.id,

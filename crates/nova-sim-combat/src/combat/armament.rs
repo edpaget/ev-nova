@@ -59,8 +59,7 @@
 //! - Nothing fires unless the ship is [`Condition::Intact`].
 //! - A weapon of a guidance the simulation does not fly (99 without a
 //!   ship to carry, anything undocumented) does not fire; firing one is
-//!   reported once ([`SimDiagnostic::UnimplementedGuidance`]), and so is
-//!   each flag a weapon that does fire sets and the simulation ignores.
+//!   reported once ([`SimDiagnostic::UnimplementedGuidance`]).
 //! - A fighter bay ([`Guidance::FighterBay`]) fires on the secondary
 //!   trigger, never on the primary, or as an NPC's pick. An NPC attacking
 //!   launches as `_AILaunchFighter` does ([`Armament::launch_bay`],
@@ -579,18 +578,10 @@ impl Mount {
         }
     }
 
-    /// Fires a shot on a trigger: reports the flags it ignores to
-    /// `reports`, counts it in the burst, pays for it from `rounds` and
-    /// `fuel` when it spends, the ship an `npc` or the player, and sets the
-    /// reload (see the module docs).
-    fn discharge(
-        &mut self,
-        rounds: &mut dyn Rounds,
-        fuel: &mut Gauge,
-        reports: &mut Reports,
-        npc: bool,
-    ) {
-        reports.fired(&self.spec);
+    /// Fires a shot on a trigger: counts it in the burst, pays for it from
+    /// `rounds` and `fuel` when it spends, the ship an `npc` or the player,
+    /// and sets the reload (see the module docs).
+    fn discharge(&mut self, rounds: &mut dyn Rounds, fuel: &mut Gauge, npc: bool) {
         if self.spec.burst_count > 0 {
             self.burst += 1;
         }
@@ -605,8 +596,8 @@ impl Mount {
     }
 
     /// Fires a point-defence shot or beam, as `_HandleShipPointDefense`'s
-    /// tail does (@0x39931-0x39bb3): reports the flags it ignores to
-    /// `reports`; adds `Reload / count` to its timer, whatever is left of
+    /// tail does (@0x39931-0x39bb3): adds `Reload / count` to its timer,
+    /// whatever is left of
     /// it (`+=`, @0x39959, so a timer counted past none carries); pays for
     /// it from `rounds` and `fuel`, the ship an `npc` or the player, unless
     /// it spends only at the end of a burst (`Flags3` 0x0001) on rounds,
@@ -617,14 +608,7 @@ impl Mount {
     /// The original's round at the end of a burst is unfloored; the burst's
     /// last shot fires only with a round to pay, so the floor here never
     /// shows.
-    fn defend(
-        &mut self,
-        rounds: &mut dyn Rounds,
-        fuel: &mut Gauge,
-        reports: &mut Reports,
-        npc: bool,
-    ) {
-        reports.fired(&self.spec);
+    fn defend(&mut self, rounds: &mut dyn Rounds, fuel: &mut Gauge, npc: bool) {
         self.reload += self.spec.reload / self.count as f32;
         let at_burst_end = self.spec.ammo_at_burst_end();
         let on_rounds = (0..=MAX_AMMO_SLOT).contains(&self.spec.ammo_type);
@@ -860,7 +844,7 @@ impl Armament {
                 continue;
             }
             let inaccuracy = inaccuracy(mount.spec.inaccuracy, chance);
-            mount.discharge(rounds, fuel, reports, shooter.npc);
+            mount.discharge(rounds, fuel, shooter.npc);
             launches.push(Launch {
                 weapon: mount.spec,
                 pointing: aimed.pointing,
@@ -873,8 +857,8 @@ impl Armament {
 
     /// Fires `pick`, an NPC's pick, on a ship in `condition`, as
     /// `_FireAIShipWeapon` does (@0x8873d-0x89269), paying from `rounds`
-    /// and `fuel`, each copy's inaccuracy drawn on `chance`; what it
-    /// reports goes to `reports`. None when nothing spawned.
+    /// and `fuel`, each copy's inaccuracy drawn on `chance`. None when
+    /// nothing spawned.
     ///
     /// 1. Nothing fires unless the ship is [`Condition::Intact`] (the
     ///    engine's form of `_LowLevelAIHandler` clearing the fire flag of
@@ -916,7 +900,6 @@ impl Armament {
         rounds: &mut dyn Rounds,
         fuel: &mut Gauge,
         chance: &mut dyn Chance,
-        reports: &mut Reports,
         spend: RuleSource,
         spawn: &mut dyn FnMut(&WeaponSpec) -> Option<Aim>,
         at_player: Option<ai_fire::PlayerRating>,
@@ -945,7 +928,6 @@ impl Armament {
             }
             let aimed = spawn(&spec);
             if let Some(aimed) = aimed {
-                reports.fired(&spec);
                 launches.push(Launch {
                     weapon: spec,
                     pointing: aimed.pointing,
@@ -1088,7 +1070,6 @@ impl Armament {
             let Some(aimed) = spawn(&spec) else {
                 continue;
             };
-            reports.fired(&spec);
             launches.push(Launch {
                 weapon: spec,
                 pointing: aimed.pointing,
@@ -1298,8 +1279,7 @@ impl Armament {
     /// no shot ([`WeaponSpec::spawns_shot`]): `_SpawnShot` failing
     /// returns before the reload, the ammunition, the sound and the burst
     /// (@0x396ea-0x396ee). A beam (10) never asks (`_SpawnBeam` @0x3992c
-    /// is unchecked), so its tail runs whether or not it spawns. What it
-    /// reports goes to `reports`.
+    /// is unchecked), so its tail runs whether or not it spawns.
     // Each is a separate borrow the fight holds, as for `fire`.
     #[allow(clippy::too_many_arguments)]
     pub fn fire_point_defence<Q>(
@@ -1309,7 +1289,6 @@ impl Armament {
         rounds: &mut dyn Rounds,
         fuel: &mut Gauge,
         chance: &mut dyn Chance,
-        reports: &mut Reports,
         room: bool,
         pick: &mut dyn FnMut(&WeaponSpec) -> Option<(Pointing, Q)>,
     ) -> Option<(Launch, Q)> {
@@ -1339,7 +1318,7 @@ impl Armament {
         } else {
             inaccuracy(mount.spec.inaccuracy, chance)
         };
-        mount.defend(rounds, fuel, reports, shooter.npc);
+        mount.defend(rounds, fuel, shooter.npc);
         let launch = Launch {
             weapon: mount.spec,
             pointing,
@@ -2043,7 +2022,6 @@ mod tests {
                 Condition::Intact,
                 &mut self.rounds,
                 &mut NeverFires,
-                &mut self.reports,
                 &mut ahead,
             );
             armament.reload();
@@ -2426,7 +2404,6 @@ mod tests {
                 &mut LauncherRounds::default(),
                 &mut Gauge::default(),
                 &mut Draws::of(&[17]),
-                &mut Reports::default(),
                 RuleSource::Engine,
                 &mut at_seven,
                 None,
@@ -2488,7 +2465,6 @@ mod tests {
                 &mut self.rounds,
                 &mut self.fuel,
                 &mut NeverFires,
-                &mut self.reports,
                 spend,
                 spawn,
                 None,
@@ -2614,7 +2590,6 @@ mod tests {
             &mut supplies.rounds,
             &mut supplies.fuel,
             &mut NeverFires,
-            &mut supplies.reports,
             RuleSource::Engine,
             &mut ahead,
             None,
@@ -3026,7 +3001,6 @@ mod tests {
             &mut supplies.rounds,
             &mut supplies.fuel,
             &mut NeverFires,
-            &mut supplies.reports,
             RuleSource::Engine,
             &mut ahead,
             None,
@@ -3485,7 +3459,6 @@ mod tests {
             &mut supplies.rounds,
             &mut supplies.fuel,
             chance,
-            &mut supplies.reports,
             true,
             &mut |spec: &WeaponSpec| {
                 asked.push(spec.id);
@@ -3647,7 +3620,6 @@ mod tests {
                 &mut supplies.rounds,
                 &mut supplies.fuel,
                 &mut NeverFires,
-                &mut supplies.reports,
                 true,
                 &mut |_: &WeaponSpec| Some((Pointing::Along(0.0), ShotId(0))),
             );
@@ -3878,7 +3850,6 @@ mod tests {
             &mut supplies.rounds,
             &mut supplies.fuel,
             &mut NeverFires,
-            &mut supplies.reports,
             true,
             &mut |spec: &WeaponSpec| {
                 asked.push(spec.id);

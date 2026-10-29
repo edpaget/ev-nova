@@ -5,8 +5,6 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use super::flags::{self, FlagField};
-use super::weapon::WeaponSpec;
 use crate::catalog::{CronId, WeaponId};
 use crate::cron::{CronHook, RUN_CAP};
 
@@ -14,15 +12,6 @@ use crate::cron::{CronHook, RUN_CAP};
 /// runs away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SimDiagnostic {
-    /// A weapon fired with a flag bit the simulation ignores.
-    UnimplementedWeaponFlag {
-        /// The weapon.
-        weapon: WeaponId,
-        /// Which of its flag words.
-        field: FlagField,
-        /// The bit.
-        bit: u16,
-    },
     /// A weapon of a guidance the simulation does not fly (99 with no ship
     /// to carry, or a fighter bay as a sub-munition, reported as 99) or
     /// that is undocumented was fired, and did not fire.
@@ -46,9 +35,6 @@ pub enum SimDiagnostic {
 impl fmt::Display for SimDiagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Self::UnimplementedWeaponFlag { weapon, field, bit } => {
-                write!(f, "wëap {} {field} {bit:#06x} not implemented", weapon.0)
-            }
             Self::UnimplementedGuidance { weapon, guidance } => {
                 write!(f, "wëap {} Guidance {guidance} not implemented", weapon.0)
             }
@@ -77,17 +63,6 @@ impl Reports {
         }
     }
 
-    /// Reports each flag `weapon` sets that is not done yet, as it fires.
-    pub fn fired(&mut self, weapon: &WeaponSpec) {
-        for (field, bit) in flags::unimplemented(weapon) {
-            self.report(SimDiagnostic::UnimplementedWeaponFlag {
-                weapon: weapon.id,
-                field,
-                bit,
-            });
-        }
-    }
-
     /// The diagnostics made since they were last taken, in order; taking
     /// them empties the list.
     pub fn take(&mut self) -> Vec<SimDiagnostic> {
@@ -99,31 +74,22 @@ impl Reports {
 mod tests {
     use super::*;
 
-    fn flag(weapon: i16, field: FlagField, bit: u16) -> SimDiagnostic {
-        SimDiagnostic::UnimplementedWeaponFlag {
+    fn guidance(weapon: i16, guidance: i16) -> SimDiagnostic {
+        SimDiagnostic::UnimplementedGuidance {
             weapon: WeaponId(weapon),
-            field,
-            bit,
+            guidance,
         }
     }
 
     #[test]
     fn each_diagnostic_reads_as_a_line() {
         assert_eq!(
-            flag(181, FlagField::Flags2, 0x8000).to_string(),
-            "wëap 181 Flags2 0x8000 not implemented"
-        );
-        assert_eq!(
-            flag(128, FlagField::Flags, 0x40).to_string(),
-            "wëap 128 Flags 0x0040 not implemented"
-        );
-        assert_eq!(
-            SimDiagnostic::UnimplementedGuidance {
-                weapon: WeaponId(131),
-                guidance: 1
-            }
-            .to_string(),
+            guidance(131, 1).to_string(),
             "wëap 131 Guidance 1 not implemented"
+        );
+        assert_eq!(
+            guidance(148, 99).to_string(),
+            "wëap 148 Guidance 99 not implemented"
         );
         for (hook, line) in [
             (CronHook::OnEnd, "crön 128 OnEnd stopped after 10001 runs"),
@@ -146,18 +112,12 @@ mod tests {
     #[test]
     fn a_diagnostic_is_reported_once_and_taken_once() {
         let mut reports = Reports::default();
-        reports.report(flag(181, FlagField::Flags2, 0x8000));
-        reports.report(flag(165, FlagField::Flags2, 0x8000));
-        reports.report(flag(181, FlagField::Flags2, 0x8000));
-        assert_eq!(
-            reports.take(),
-            [
-                flag(181, FlagField::Flags2, 0x8000),
-                flag(165, FlagField::Flags2, 0x8000)
-            ]
-        );
+        reports.report(guidance(181, 99));
+        reports.report(guidance(165, 99));
+        reports.report(guidance(181, 99));
+        assert_eq!(reports.take(), [guidance(181, 99), guidance(165, 99)]);
         assert_eq!(reports.take(), [], "taken");
-        reports.report(flag(181, FlagField::Flags2, 0x8000));
+        reports.report(guidance(181, 99));
         assert_eq!(reports.take(), [], "made before");
     }
 }

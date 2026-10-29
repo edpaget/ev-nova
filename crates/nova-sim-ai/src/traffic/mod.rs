@@ -4572,7 +4572,6 @@ mod tests {
             &mut LauncherRounds::default(),
             &mut fuel,
             &mut crate::chance::NeverFires,
-            &mut crate::combat::report::Reports::default(),
             RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
             None,
