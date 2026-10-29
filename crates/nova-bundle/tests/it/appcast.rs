@@ -58,6 +58,7 @@ fn spec(root: &Path) -> BundleSpec {
                 "description": "A space trading and combat game.",
                 "homepage": "https://example.com/nova",
                 "developer": "the nova authors",
+                "developer_id": "io.example",
                 "update_public_key": public,
             }},
         }],

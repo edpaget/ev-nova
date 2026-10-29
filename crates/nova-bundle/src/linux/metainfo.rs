@@ -19,7 +19,8 @@ pub fn metainfo_file_name(spec: &BundleSpec) -> String {
 
 /// Renders the metainfo XML: a desktop application with the spec's
 /// identifier, licence, name, summary, description (one paragraph),
-/// developer and homepage, launched by the desktop file, providing the
+/// developer (its `name`, and its reverse-DNS `id` attribute) and
+/// homepage, launched by the desktop file, providing the
 /// [`EXECUTABLE`] binary, with one `<release>` for `build`.
 ///
 /// Its OARS rating is mild fantasy violence: ships fight and explode in
@@ -35,6 +36,7 @@ pub fn metainfo(spec: &BundleSpec, build: &BuildId) -> String {
     let description = escape(&spec.description);
     let launchable = escape(&desktop_file_name(spec));
     let developer = escape(&spec.developer);
+    let developer_id = escape(&spec.developer_id);
     let homepage = escape(&spec.homepage);
     let binary = escape(EXECUTABLE);
     let version = build.as_str();
@@ -51,7 +53,7 @@ pub fn metainfo(spec: &BundleSpec, build: &BuildId) -> String {
     <p>{description}</p>
   </description>
   <launchable type="desktop-id">{launchable}</launchable>
-  <developer>
+  <developer id="{developer_id}">
     <name>{developer}</name>
   </developer>
   <url type="homepage">{homepage}</url>
@@ -125,6 +127,10 @@ mod tests {
             text(child(component, "developer"), "name"),
             "the nova authors"
         );
+        assert_eq!(
+            child(component, "developer").attribute("id"),
+            Some("io.example")
+        );
         assert_eq!(text(child(component, "provides"), "binary"), "nova");
     }
 
@@ -177,6 +183,18 @@ mod tests {
             "<p>not a paragraph</p>"
         );
         assert_eq!(text(child(component, "developer"), "name"), "A & B");
+    }
+
+    #[test]
+    fn escapes_markup_in_the_developer_id() {
+        let mut spec = spec();
+        spec.developer_id = "a\"b<c&d".into();
+        let xml = metainfo(&spec, &build());
+        let doc = Document::parse(&xml).expect("xml");
+        assert_eq!(
+            child(doc.root_element(), "developer").attribute("id"),
+            Some("a\"b<c&d")
+        );
     }
 
     #[test]
