@@ -1037,15 +1037,15 @@ impl Space {
         EscortClass::ALL.map(|class| self.class_row(pilot, statics, class))
     }
 
-    /// Whether the player has an escort flying, for the escort menu to
-    /// stay open (`_HandlePlayer` @0x6df59-0x6dfd0): any of `pilot`'s
-    /// hired escorts, or a mission escort neither disabled nor breaking up
-    /// (@0x6df73).
-    pub(super) fn escorts_flying(&self, pilot: &Pilot) -> bool {
-        !pilot.escorts.is_empty()
-            || self
-                .player_led()
-                .any(|npc| npc.mission_escort() && npc.condition == Condition::Intact)
+    /// Whether the player has an escort flying, which the escort menu
+    /// counts each frame it shows (`_HandlePlayer` @0x6df59-0x6dfa7): a
+    /// ship the player leads ([`Space::player_led`]) that is neither
+    /// disabled nor breaking up. A hired or captured escort, a mission
+    /// escort and a launched fighter all count; a hired escort disabled or
+    /// breaking up does not.
+    pub(super) fn escorts_flying(&self) -> bool {
+        self.player_led()
+            .any(|npc| npc.condition == Condition::Intact)
     }
 
     /// `class`'s row in the escort menu: whether the player leads a ship

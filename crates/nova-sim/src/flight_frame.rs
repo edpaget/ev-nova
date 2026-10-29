@@ -642,9 +642,10 @@ pub struct FrameHud {
     /// The escort menu's class rows, in [`EscortClass::ALL`]'s order
     /// (`Space::escort_rows`).
     pub escort_rows: [ClassRow; 4],
-    /// Whether the player has an escort flying, for the escort menu to
-    /// stay open (`_HandlePlayer` @0x6df59-0x6dfd0): any hired escort, or
-    /// a mission escort neither disabled nor breaking up (@0x6df73)
+    /// Whether the player has an escort flying, which the escort menu
+    /// counts each frame it shows (`_HandlePlayer` @0x6df59-0x6dfa7): a
+    /// ship the player leads, hired, captured, a mission escort or a
+    /// launched fighter, neither disabled nor breaking up
     /// (`Space::escorts_flying`).
     pub escorts_flying: bool,
 }
