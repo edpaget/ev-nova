@@ -39,8 +39,8 @@ nova-sim-catalog = { workspace = true, features = ["fixture"] }
 nova-sim-ai = { workspace = true, features = ["fixture"] }
 
 [features]
-# Test support for other crates' tests: `mission::fixture::carrying`, an
-# active mission carrying cargo.
+# Test support for other crates' tests, its doc saying who keeps it:
+# `mission::fixture::carrying`, an active mission carrying cargo.
 fixture = []
 
 [lints]
