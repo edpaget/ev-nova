@@ -8,6 +8,7 @@ use nova_render::{Batch, Frame, LogicalSize, PixelRect};
 use nova_sim::fixture::MemoryPilots;
 use nova_view::{DrawCommand, DrawList, Key, Screen};
 
+use crate::common::Frames;
 use crate::persons::{BOTH, Game, idle};
 
 /// A 16:9 window.
@@ -50,9 +51,10 @@ fn flight_in_a_16_by_9_window_fills_it_768_high() {
 fn a_hail_opens_the_comm_dialog_centred_over_widened_flight() {
     let store = MemoryPilots::new();
     let mut game = Game::opened_in(WINDOW, &store, &BOTH, Showing::Flight, idle);
-    game.tap(Key::Tab);
-    game.tap(Key::Tab);
-    game.tap(Key::Char('y'));
+    for key in [Key::Tab, Key::Tab, Key::Char('y')] {
+        game.tap(key);
+        game.settle();
+    }
     assert_eq!(game.showing(), Showing::Comm);
     let frame = game.frame();
     assert_eq!(frame.logical, LogicalSize { w: 1365, h: 768 });
@@ -84,7 +86,9 @@ fn landing_in_a_16_by_9_window_shows_the_spaceport_pillarboxed() {
     let store = MemoryPilots::new();
     let mut game = Game::opened_in(WINDOW, &store, &BOTH, Showing::Flight, idle);
     game.tap(Key::Char('l'));
-    game.approach();
+    game.settle_until("the dock approach's clearance", |game| {
+        game.session().dock_cleared()
+    });
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport);
     let frame = game.frame();
