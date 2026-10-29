@@ -9,8 +9,9 @@
 //!
 //! Wiring only: with no cash, G shows `STR#` 2002 #361 over the bar and
 //! its close returns to it; with cash, G opens the race, a racer's click
-//! bets, the result text shows with the cash less the bet, and its close
-//! credits the winnings. Which keys press Gamble, how the race draws and
+//! bets, the result text shows with the cash less the bet, and the
+//! winnings are credited once it and the movie after it are done, on the
+//! tick that ends the movie. Which keys press Gamble, how the race draws and
 //! tracks, the draw and the payout are nova-view's and nova-sim's,
 //! pinned there.
 
@@ -48,6 +49,8 @@ use nova_view::Key;
 use nova_view::flight::SharedChance;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
+use nova_view::movie::MoviePlayer;
+use nova_view::movie::fixture::{Call, MockMoviePlayer};
 use nova_view::text::fixture::MonoMetrics;
 
 /// The race's result texts, `dësc` 32760 to 32763, by winner.
@@ -181,6 +184,19 @@ fn desc(text: &str) -> Vec<u8> {
     bytes
 }
 
+/// A `dësc` of `text` naming movie `file`, played after it (`Flags`
+/// 0x0001).
+fn desc_with_after_movie(text: &str, file: &str) -> Vec<u8> {
+    let mut bytes = text.as_bytes().to_vec();
+    bytes.push(0);
+    bytes.extend([0xFF; 2]);
+    let mut name = file.as_bytes().to_vec();
+    name.resize(32, 0);
+    bytes.extend(name);
+    bytes.extend(1_u16.to_be_bytes());
+    bytes
+}
+
 /// Stock `ïntf` 128's areas and font, over background `PICT` 700.
 fn status_bar() -> Vec<u8> {
     let mut bytes = vec![0; Interface::SIZE.expect("fixed")];
@@ -221,8 +237,23 @@ fn game_data(cash: i32) -> Rc<GameData> {
             &status_bar(),
         )
         .resource(PICT, 700, Some(b"Status Bar"), &pict(194, 16, [66, 66, 66]));
-    for (id, text) in (32_760..).zip(RESULTS) {
+    // Racer 1's result plays its movie after its text, so the winnings
+    // are credited only once that movie is over.
+    fork = fork.resource(
+        Desc::TYPE,
+        32_760,
+        None,
+        &desc_with_after_movie(RESULTS[0], "Race 1.mov"),
+    );
+    for (id, text) in (32_761..).zip(&RESULTS[1..]) {
         fork = fork.resource(Desc::TYPE, id, None, &desc(text));
+    }
+    // The race's background and its racers' pictures.
+    let racers = [8530, 8540, 8550, 8560]
+        .into_iter()
+        .flat_map(|first| first..first + 4);
+    for id in std::iter::once(8529).chain(racers) {
+        fork = fork.resource(PICT, id, None, &pict(4, 4, [90, 90, 90]));
     }
     for id in [8500, 8501, 8503, 10_004] {
         fork = fork.resource(PICT, id, None, &pict(6, 5, [40, 40, 40]));
@@ -367,6 +398,8 @@ struct Game {
     frames: u64,
     /// The outcome the app's draws give.
     dial: Rc<Cell<u32>>,
+    /// The movie player, whose movies end on their third advance.
+    player: Rc<MockMoviePlayer>,
 }
 
 impl Game {
@@ -380,16 +413,19 @@ impl Game {
             .save(&Pilot::new(data.as_ref(), "Ada").expect("a pilot"))
             .expect("saved");
         let dial = Rc::new(Cell::new(0));
+        let player = MockMoviePlayer::playing((160, 120), 3);
         let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Dial(Rc::clone(&dial))));
         let screen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), Rc::new(MonoMetrics))
             .with_dialogs(Rc::new(interface()), Rc::new(MonoMetrics))
-            .with_chance(SharedChance::new(chance));
+            .with_chance(SharedChance::new(chance))
+            .with_movie_player(Rc::clone(&player) as Rc<dyn MoviePlayer>);
         let mut game = Self {
             app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
             dial,
+            player,
         };
         let at = game
             .app
@@ -549,8 +585,29 @@ fn with_cash_gamble_opens_the_race_and_a_bet_pays_once_its_text_closes() {
     assert!(shown.starts_with(RESULTS[0]), "{shown}");
     assert!(shown.contains("Your winnings:  4,000 credits."), "{shown}");
     assert_eq!(game.cash(), 24_000, "the bet taken while the text is up");
-    game.tap(Key::Enter);
-    assert_eq!(game.cash(), 28_000, "4 x 1,000 credited as it closes");
+    // Return pressed and held: its release would skip the movie.
+    game.send(WindowEvent::Key {
+        key: Key::Enter,
+        pressed: true,
+        repeat: false,
+    });
+    assert_eq!(game.text_shown(), None, "closed");
+    assert!(
+        game.player
+            .calls()
+            .contains(&Call::Start("Race 1.mov".to_owned())),
+        "its after-movie playing"
+    );
+    assert_eq!(game.cash(), 24_000, "not while its after-movie plays");
+    for _ in 0..10 {
+        game.frame();
+    }
+    assert!(game.player.calls().ends_with(&[Call::Stop]), "it ended");
+    assert_eq!(
+        game.cash(),
+        28_000,
+        "4 x 1,000 credited once the movie is over"
+    );
     game.tap(Key::Escape);
     assert!(
         game.bar().is_some_and(|bar| bar.race_screen().is_none()),

@@ -1458,9 +1458,11 @@ mod tests {
             screen.take_race_bet(),
             Some((1, nova_sim::gamble::Bet::House))
         );
+        assert!(!screen.race_revealing(), "nothing run yet");
         screen.show_race_result(1, 3_000);
         assert!(screen.race_revealing());
         screen.reveal_race();
+        assert!(!screen.race_revealing(), "shown");
         assert_eq!(
             screen.race_screen().map(|race| race.racer_look(1)),
             Some(super::super::race::RacerLook::Winner)
@@ -1496,6 +1498,32 @@ mod tests {
         assert!(!screen.take_race_help_request(), "once");
         screen.race_no_race();
         assert!(screen.race_screen().is_some());
+    }
+
+    #[test]
+    fn the_bar_lets_go_of_the_races_alt() {
+        let mut screen = racing();
+        screen.open_race(4_000);
+        screen.input(&key(Key::Alt, false));
+        screen.release_keys();
+        let racer = screen
+            .race_screen()
+            .and_then(RaceScreen::dialog)
+            .and_then(|dialog| dialog.item_bounds(super::super::race::FIRST_RACER_ITEM))
+            .expect("a racer")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: racer,
+            });
+        }
+        assert_eq!(
+            screen.take_race_bet(),
+            Some((0, nova_sim::gamble::Bet::House)),
+            "Alt let go: no ask"
+        );
     }
 
     #[test]

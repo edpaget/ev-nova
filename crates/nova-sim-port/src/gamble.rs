@@ -263,6 +263,28 @@ mod tests {
         assert_eq!(chance.sides_asked, [4; 5]);
     }
 
+    /// A chance whose rolls run past the sides asked.
+    struct Wild;
+
+    impl Chance for Wild {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, _n: u32) -> u32 {
+            0
+        }
+
+        fn roll(&mut self, _sides: u16) -> u16 {
+            300
+        }
+    }
+
+    #[test]
+    fn a_roll_past_a_racers_number_is_the_last_racer() {
+        assert_eq!(draw_winner(None, 0, &mut Wild), RACERS - 1);
+    }
+
     #[test]
     fn a_win_pays_four_times_the_bet() {
         assert_eq!(winnings(250), 1000);

@@ -437,6 +437,41 @@ mod tests {
     }
 
     #[test]
+    fn the_races_asked_bet_is_laid_out_by_the_quantity_dialog_given() {
+        let item = |x, y, w, h, kind| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind,
+        };
+        let quantity = DialogTemplate {
+            bounds: Bounds::at(Point::new(10.0, 20.0), 172.0, 72.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(92.0, 42.0, 70.0, 20.0, ItemSpec::Button("OK".into())),
+                item(6.0, 8.0, 102.0, 16.0, ItemSpec::StaticText("^0".into())),
+                item(112.0, 8.0, 51.0, 16.0, ItemSpec::EditText("1".into())),
+                item(10.0, 42.0, 70.0, 20.0, ItemSpec::Button("Cancel".into())),
+            ],
+        };
+        let mut view = venues().with_race(Ok(race_template()), Some(quantity));
+        let _ = view.take_offer_request();
+        click_item(&mut view, 11);
+        view.open_gamble(GambleOpening::Race { asked_max: 5_000 });
+        view.input(&key(Key::Alt));
+        let racer = race_item(&view, FIRST_RACER_ITEM);
+        click(&mut view, racer);
+        let at = race_open(&view)
+            .and_then(RaceScreen::quantity)
+            .and_then(|ask| ask.dialog())
+            .map(|dialog| dialog.dialog().bounds().min);
+        assert_eq!(
+            at,
+            Some(Point::new(10.0, 20.0)),
+            "its template, not the fallback"
+        );
+    }
+
+    #[test]
     fn the_race_holds_a_leave() {
         let mut view = in_the_bar();
         assert!(!view.holds_leave());

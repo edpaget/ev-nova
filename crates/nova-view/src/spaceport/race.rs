@@ -772,6 +772,52 @@ mod tests {
     }
 
     #[test]
+    fn an_asked_count_over_the_most_beeps_through_the_race() {
+        let mut screen = RaceScreen::new(
+            Ok((template(), Rc::new(MonoMetrics))),
+            Some(quantity_template()),
+            ButtonStyle::STOCK,
+            5,
+        );
+        screen.input(&key(Key::Alt, true, false));
+        click(&mut screen, racer_item(0));
+        let _ = screen.take_sounds();
+        screen.input(&Input::Text('9'));
+        screen.input(&key(Key::Enter, true, false));
+        assert_eq!(
+            screen.take_sounds(),
+            [Sound::Ui(crate::sound::UiSound::Alert)]
+        );
+        assert!(screen.quantity().is_some(), "stays open");
+    }
+
+    #[test]
+    fn letting_go_of_the_keys_lets_go_of_alt() {
+        let mut screen = open();
+        screen.input(&key(Key::Alt, true, false));
+        screen.release_keys();
+        click(&mut screen, racer_item(0));
+        assert!(screen.quantity().is_none(), "no ask");
+        assert_eq!(screen.take_bet(), Some((0, Bet::House)));
+    }
+
+    #[test]
+    fn a_click_cancelled_chooses_nothing() {
+        let mut screen = open();
+        let at = centre(&screen, racer_item(1));
+        screen.input(&pointer(true, at));
+        screen.cancel_pointer();
+        screen.input(&pointer(false, at));
+        assert_eq!(screen.take_bet(), None);
+        assert_eq!(screen.racer_look(1), RacerLook::Normal);
+    }
+
+    #[test]
+    fn its_debug_names_its_metrics_without_showing_them() {
+        assert!(format!("{:?}", open()).contains("TextMetrics"));
+    }
+
+    #[test]
     fn an_asked_cancel_bets_nothing_and_lets_the_racer_go() {
         let mut screen = open();
         screen.input(&key(Key::Alt, true, false));
