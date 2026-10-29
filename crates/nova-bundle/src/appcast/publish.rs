@@ -378,13 +378,7 @@ pub(crate) fn read_asset_list(
     read: &impl ReadFiles,
     path: &Path,
 ) -> Result<Vec<String>, AppcastError> {
-    let listed = read_at(read, path)?;
-    Ok(String::from_utf8_lossy(&listed)
-        .lines()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .collect())
+    Ok(crate::site::asset_names(&read_at(read, path)?))
 }
 
 /// Each of `channel`'s feeds the release lists, by its asset name, read

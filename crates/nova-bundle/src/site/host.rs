@@ -1,17 +1,18 @@
 //! What `nova-site` reads from its arguments, turned into a [`Command`]:
-//! write the page (with the `.flatpakref` link when `--flatpakref` says
-//! the deploy serves the Flatpak repo), or print one portable archive's
-//! name for `ci.yml`.
+//! write the page (linking each `.flatpakref` the `pages-flatpak` tree
+//! given with `--pages-flatpak` serves, and a Beta row from the beta
+//! release's asset list given with `--beta-assets`), or print one portable
+//! archive's name for `ci.yml`.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use super::FlatpakRepo;
 use crate::archive::{self, Archive};
 
 /// The tool's usage line.
-pub const USAGE: &str = "usage: nova-site [--flatpakref] [OUT_DIR] | --archive <TARGET> | \
-     --archive-dir <TARGET>   (run it as `mise run site -- [OUT_DIR]`)";
+pub const USAGE: &str = "usage: nova-site [--pages-flatpak <DIR>] [--beta-assets <FILE>] \
+     [OUT_DIR] | --archive <TARGET> | --archive-dir <TARGET>   (run it as `mise run site -- \
+     [OUT_DIR]`)";
 
 /// What `nova-site` is asked to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,8 +21,12 @@ pub enum Command {
     Write {
         /// The output directory.
         out: PathBuf,
-        /// Whether the deploy serves the Flatpak repo (`--flatpakref`).
-        flatpak_repo: FlatpakRepo,
+        /// The `pages-flatpak` tree this deploy serves at `/flatpak/`, if
+        /// any (`--pages-flatpak`).
+        pages_flatpak: Option<PathBuf>,
+        /// The beta release's asset list, if there is a beta release
+        /// (`--beta-assets`).
+        beta_assets: Option<PathBuf>,
     },
     /// Print this archive's file name.
     ArchiveFile(Archive),
@@ -35,43 +40,44 @@ pub enum Command {
 pub struct UsageError;
 
 /// The command from the arguments after the program name and the working
-/// directory, which a relative output directory, and the default
-/// `target/site`, are taken against.
+/// directory, which relative paths, and the default `target/site`, are
+/// taken against.
 pub fn command(args: Vec<OsString>, cwd: &Path) -> Result<Command, UsageError> {
-    let mut args = args.into_iter().peekable();
-    let flatpak_repo = if args.next_if(|a| a == "--flatpakref").is_some() {
-        FlatpakRepo::Published
-    } else {
-        FlatpakRepo::Absent
-    };
-    let Some(first) = args.next() else {
-        return Ok(Command::Write {
-            out: cwd.join("target").join("site"),
-            flatpak_repo,
-        });
-    };
-    let archive_of = |target: Option<OsString>| {
+    let archive = |target: Option<&OsString>| {
         target
             .and_then(|t| t.to_str().and_then(archive::for_target))
             .ok_or(UsageError)
     };
-    let command = match first.to_str() {
-        Some("--archive") if flatpak_repo == FlatpakRepo::Absent => {
-            Command::ArchiveFile(archive_of(args.next())?)
+    match args.first().and_then(|a| a.to_str()) {
+        Some("--archive") if args.len() <= 2 => {
+            return archive(args.get(1)).map(Command::ArchiveFile);
         }
-        Some("--archive-dir") if flatpak_repo == FlatpakRepo::Absent => {
-            Command::ArchiveDir(archive_of(args.next())?)
+        Some("--archive-dir") if args.len() <= 2 => {
+            return archive(args.get(1)).map(Command::ArchiveDir);
         }
-        _ if first.to_string_lossy().starts_with('-') => return Err(UsageError),
-        _ => Command::Write {
-            out: cwd.join(first),
-            flatpak_repo,
-        },
-    };
-    if args.next().is_some() {
-        return Err(UsageError);
+        _ => {}
     }
-    Ok(command)
+    let mut args = args.into_iter();
+    let mut pages_flatpak = None;
+    let mut beta_assets = None;
+    let mut out = None;
+    while let Some(arg) = args.next() {
+        let name = arg.to_str().map(str::to_owned);
+        let (slot, value) = match name.as_deref() {
+            Some("--pages-flatpak") => (&mut pages_flatpak, args.next().ok_or(UsageError)?),
+            Some("--beta-assets") => (&mut beta_assets, args.next().ok_or(UsageError)?),
+            _ if arg.to_string_lossy().starts_with('-') => return Err(UsageError),
+            _ => (&mut out, arg),
+        };
+        if slot.replace(cwd.join(value)).is_some() {
+            return Err(UsageError);
+        }
+    }
+    Ok(Command::Write {
+        out: out.unwrap_or_else(|| cwd.join("target").join("site")),
+        pages_flatpak,
+        beta_assets,
+    })
 }
 
 #[cfg(test)]
@@ -88,14 +94,19 @@ mod tests {
         args.iter().map(OsString::from).collect()
     }
 
+    fn write(out: PathBuf) -> Command {
+        Command::Write {
+            out,
+            pages_flatpak: None,
+            beta_assets: None,
+        }
+    }
+
     #[test]
     fn with_no_arguments_it_writes_to_target_site() {
         assert_eq!(
             command(Vec::new(), &cwd()),
-            Ok(Command::Write {
-                out: cwd().join("target").join("site"),
-                flatpak_repo: FlatpakRepo::Absent,
-            })
+            Ok(write(cwd().join("target").join("site")))
         );
     }
 
@@ -103,43 +114,77 @@ mod tests {
     fn an_output_directory_is_taken_against_the_working_directory() {
         assert_eq!(
             command(args(&["_site"]), &cwd()),
-            Ok(Command::Write {
-                out: cwd().join("_site"),
-                flatpak_repo: FlatpakRepo::Absent,
-            })
+            Ok(write(cwd().join("_site")))
         );
         let absolute = cwd().join("abs");
         assert_eq!(
             command(vec![absolute.clone().into()], &cwd()),
+            Ok(write(absolute))
+        );
+    }
+
+    #[test]
+    fn the_pages_tree_and_the_beta_list_come_in_any_order_with_or_without_an_output_dir() {
+        let full = Command::Write {
+            out: cwd().join("_site"),
+            pages_flatpak: Some(cwd().join("pf")),
+            beta_assets: Some(cwd().join("beta.txt")),
+        };
+        for given in [
+            &[
+                "--pages-flatpak",
+                "pf",
+                "--beta-assets",
+                "beta.txt",
+                "_site",
+            ][..],
+            &[
+                "--beta-assets",
+                "beta.txt",
+                "--pages-flatpak",
+                "pf",
+                "_site",
+            ],
+            &[
+                "_site",
+                "--pages-flatpak",
+                "pf",
+                "--beta-assets",
+                "beta.txt",
+            ],
+        ] {
+            assert_eq!(command(args(given), &cwd()), Ok(full.clone()), "{given:?}");
+        }
+        assert_eq!(
+            command(args(&["--beta-assets", "beta.txt"]), &cwd()),
             Ok(Command::Write {
-                out: absolute,
-                flatpak_repo: FlatpakRepo::Absent,
+                out: cwd().join("target").join("site"),
+                pages_flatpak: None,
+                beta_assets: Some(cwd().join("beta.txt")),
+            })
+        );
+        assert_eq!(
+            command(args(&["--pages-flatpak", "pf"]), &cwd()),
+            Ok(Command::Write {
+                out: cwd().join("target").join("site"),
+                pages_flatpak: Some(cwd().join("pf")),
+                beta_assets: None,
             })
         );
     }
 
     #[test]
-    fn flatpakref_links_the_published_repo_with_or_without_an_output_dir() {
-        assert_eq!(
-            command(args(&["--flatpakref", "_site"]), &cwd()),
-            Ok(Command::Write {
-                out: cwd().join("_site"),
-                flatpak_repo: FlatpakRepo::Published,
-            })
-        );
-        assert_eq!(
-            command(args(&["--flatpakref"]), &cwd()),
-            Ok(Command::Write {
-                out: cwd().join("target").join("site"),
-                flatpak_repo: FlatpakRepo::Published,
-            })
-        );
+    fn a_repeated_valueless_or_misplaced_option_is_a_usage_error() {
         for bad in [
-            &["--flatpakref", "a", "b"][..],
-            &["--flatpakref", "--flatpakref"],
-            &["--flatpakref", "--archive", installer::TARGET],
-            &["--flatpakref", "--archive-dir", linux::TARGET],
-            &["_site", "--flatpakref"],
+            &["--pages-flatpak"][..],
+            &["--beta-assets"],
+            &["--pages-flatpak", "a", "--pages-flatpak", "b"],
+            &["--beta-assets", "a", "--beta-assets", "b"],
+            &["--pages-flatpak", "a", "x", "y"],
+            &["--pages-flatpak", "a", "--archive", installer::TARGET],
+            &["--beta-assets", "a", "--archive-dir", linux::TARGET],
+            &["_site", "--archive", installer::TARGET],
+            &["--flatpakref", "_site"],
         ] {
             assert_eq!(command(args(bad), &cwd()), Err(UsageError), "{bad:?}");
         }
@@ -185,5 +230,7 @@ mod tests {
     #[test]
     fn the_usage_error_shows_the_usage() {
         assert_eq!(UsageError.to_string(), USAGE);
+        assert!(USAGE.contains("--pages-flatpak <DIR>"), "{USAGE}");
+        assert!(USAGE.contains("--beta-assets <FILE>"), "{USAGE}");
     }
 }

@@ -1,7 +1,11 @@
-//! `nova-site [--flatpakref] [OUT_DIR]`: writes the download page,
-//! `index.html`, into `OUT_DIR` (by default `target/site`). With
-//! `--flatpakref`, which `ci.yml` passes when the deploy serves the signed
-//! Flatpak repo, the Linux row leads with the nightly's `.flatpakref`.
+//! `nova-site [--pages-flatpak <DIR>] [--beta-assets <FILE>] [OUT_DIR]`:
+//! writes the download page, `index.html`, into `OUT_DIR` (by default
+//! `target/site`). With `--pages-flatpak`, the `pages-flatpak` tree the
+//! deploy serves at `/flatpak/`, each channel whose
+//! `ev-nova-<channel>.flatpakref` is at its root leads its Linux row with
+//! it. With `--beta-assets`, the beta release's asset list (one name per
+//! line), a Beta row after the Nightly links each stable asset it holds;
+//! an empty list shows none.
 //! Run it through cargo, as `mise run site -- [OUT_DIR]`. It runs on any
 //! host. See `nova_bundle::site`.
 //!
@@ -10,13 +14,13 @@
 //! instead, for `ci.yml`'s packaging. See `nova_bundle::archive`.
 //!
 //! Prints the page's path or the name. Exits 2 on a usage error and 1
-//! when the write fails.
+//! when the tree or the list can't be read or the write fails.
 
 use std::env;
 use std::process::ExitCode;
 
 use nova_bundle::site::host::{Command, command};
-use nova_bundle::site::{stock, write_site};
+use nova_bundle::site::{deploy, stock, write_site};
 use nova_bundle::system::StdFiles;
 
 fn main() -> ExitCode {
@@ -37,8 +41,19 @@ fn main() -> ExitCode {
     match command {
         Command::ArchiveFile(archive) => println!("{}", archive.file),
         Command::ArchiveDir(archive) => println!("{}", archive.dir),
-        Command::Write { out, flatpak_repo } => {
-            match write_site(&mut StdFiles, &out, &stock(flatpak_repo)) {
+        Command::Write {
+            out,
+            pages_flatpak,
+            beta_assets,
+        } => {
+            let deploy = match deploy(&StdFiles, pages_flatpak.as_deref(), beta_assets.as_deref()) {
+                Ok(deploy) => deploy,
+                Err(e) => {
+                    eprintln!("nova-site: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match write_site(&mut StdFiles, &out, &stock(&deploy)) {
                 Ok(page) => println!("{}", page.display()),
                 Err(e) => {
                     eprintln!("nova-site: {}: {e}", out.display());
