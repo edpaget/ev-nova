@@ -687,6 +687,7 @@ mod departure;
 mod dialog_map;
 mod docked;
 mod drawing;
+mod gamble;
 mod gates;
 mod hail;
 mod hyperspace;
@@ -711,6 +712,7 @@ mod world;
 
 pub use dialog_map::MapOpener;
 pub(crate) use dialog_map::is_map_press;
+pub use gamble::RaceShown;
 pub use messages::*;
 pub use port_screen_map::PortScreen;
 

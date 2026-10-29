@@ -82,6 +82,7 @@ mod faked_desk;
 mod faked_docked;
 mod faked_escorts;
 mod faked_flight;
+mod faked_gamble;
 mod faked_hail;
 mod faked_hud;
 mod faked_keys;
