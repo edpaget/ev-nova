@@ -812,6 +812,8 @@ pub(in crate::session) mod tests {
         assert_eq!(up, 2, "the wave sent up");
         assert!(session.space.traffic.defences().under_attack(EARTH));
         assert_eq!(session.pilot.system_record(session.pilot.system), 4);
+        assert_eq!(session.pilot.legal_record(FED), 4, "both stores");
+        assert!(session.pilot.ranks.is_empty(), "the rank lost to the crime");
         let (view, _) = demand(&mut session, &catalog, &slaps);
         assert_eq!(view.expect("open").reply, "s11");
         slapped(&slaps, 1);
@@ -836,6 +838,12 @@ pub(in crate::session) mod tests {
             Some(crate::planet_comm::PlanetCommButton::Release)
         );
         slapped(&slaps, 6);
+        assert_eq!(
+            session.pilot.system_record(session.pilot.system),
+            4,
+            "MinStatus - 1"
+        );
+        assert_eq!(session.pilot.legal_record(FED), 4, "both stores");
         assert!(
             session
                 .chart
@@ -848,7 +856,7 @@ pub(in crate::session) mod tests {
             session.control_bit(Bit::new(100).expect("a bit")),
             "OnDominate"
         );
-        assert!(session.pilot.ranks.is_empty());
+        assert!(session.pilot.ranks.is_empty(), "the rank lost to the crime");
     }
 
     #[test]
