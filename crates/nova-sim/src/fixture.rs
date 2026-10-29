@@ -164,6 +164,14 @@ pub fn defence_ships_left(session: &Session, stellar: crate::catalog::StellarId)
     session.defence_ships_left(stellar)
 }
 
+/// Sets whether the player dominates `stellar` in `session`, as the planet
+/// comm dialog's Demand Tribute and Release do
+/// (rdm:phase/play-feel-4/phase-3-domination-readers): for a test that
+/// needs a stellar dominated without fighting its fleet first.
+pub fn dominate(session: &mut Session, stellar: crate::catalog::StellarId, dominated: bool) {
+    session.dominate(stellar, dominated);
+}
+
 /// Sets off a sabotage kill outfit on the player in `session` at once, as
 /// its sabotage clock does when it runs out: for a test that needs the
 /// player's jump given up and its ship breaking up without waiting on the

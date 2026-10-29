@@ -26,6 +26,7 @@ mod stock_combat_rating;
 mod stock_comm_calls;
 mod stock_conditional_text;
 mod stock_crons;
+mod stock_domination;
 mod stock_escape_pod;
 mod stock_escort_dialog;
 mod stock_galaxy_map;

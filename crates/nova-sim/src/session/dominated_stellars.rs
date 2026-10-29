@@ -113,6 +113,17 @@ impl Session {
     }
 }
 
+/// The fixture's reach into domination (`crate::fixture::dominate`).
+#[cfg(any(test, feature = "fixture"))]
+impl Session {
+    /// Sets whether the player dominates `stellar`
+    /// ([`Chart::set_dominated`]).
+    pub(crate) fn dominate(&mut self, stellar: StellarId, dominated: bool) {
+        self.chart
+            .set_dominated(&mut self.pilot, &mut self.out, stellar, dominated);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +335,16 @@ mod tests {
         session
             .chart
             .set_dominated(&mut session.pilot, &mut session.out, stellar, true);
+    }
+
+    #[test]
+    fn the_fixture_dominates_and_releases_a_stellar() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        crate::fixture::dominate(&mut session, EARTH, true);
+        assert_eq!(earth_dominated(&session), (true, true));
+        crate::fixture::dominate(&mut session, EARTH, false);
+        assert_eq!(earth_dominated(&session), (false, false));
     }
 
     #[test]
