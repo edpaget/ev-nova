@@ -11,18 +11,35 @@
 //! metadata` (else `cargo metadata`), and the build ID from
 //! `NOVA_BUILD_ID` (else HEAD's committer time). See `nova_bundle::appcast`.
 //!
+//! It writes the feeds of the channel `NOVA_CHANNEL` names (`nightly` or
+//! `beta`), which it requires, against that channel's current feeds.
+//!
+//! `nova-appcast check-promotion --build <ID> --repo <DIR> --nightly-assets
+//! <FILE> --beta-assets <FILE> --beta-current <DIR>`: `promote-beta`'s
+//! `check` job. It refuses a run whose `GITHUB_REF` isn't `main`, a
+//! malformed ID, a build the nightly release's asset list doesn't hold
+//! both update files of, or one not newer than the beta feeds in
+//! `--beta-current`; then it finds the one commit in `--repo`'s history
+//! whose committer time is the build ID, and prints `build=<id>` and
+//! `commit=<sha>` lines for `$GITHUB_OUTPUT`. See
+//! `nova_bundle::appcast::promote`.
+//!
 //! `nova-appcast public-key` prints the public key of the seed in
 //! `UPDATE_SIGNING_KEY`, as base64, for the operator to commit.
 //!
 //! Exits 2 on a usage error, 3 when the current feeds already offer this
 //! very build (a re-run whose feeds went up; nothing is written), and 1
-//! on any other failure, a build older than the current feeds' included.
+//! on any other failure, a build older than the current feeds' and every
+//! refused promotion included.
 
 use std::env;
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-use nova_bundle::appcast::host::{Command, USAGE_STATUS, command, exit_status};
+use nova_bundle::appcast::host::{
+    Command, USAGE_STATUS, command, exit_status, promotion_exit_status,
+};
+use nova_bundle::appcast::promote::check_promotion;
 use nova_bundle::appcast::publish::{public_key, run};
 use nova_bundle::system::{Ed25519Signer, StdEnv, StdFiles, StdProcess};
 
@@ -42,6 +59,18 @@ fn main() -> ExitCode {
         }
     };
     let result = match command {
+        Command::CheckPromotion { build, paths } => {
+            return match check_promotion(&StdEnv, &StdFiles, &mut StdProcess, &build, &paths) {
+                Ok(promotion) => {
+                    print!("{}", promotion.output());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("nova-appcast: {e}");
+                    ExitCode::from(promotion_exit_status(&e))
+                }
+            };
+        }
         Command::PublicKey => {
             public_key(&StdEnv, Ed25519Signer::from_base64_seed).map(|key| println!("{key}"))
         }

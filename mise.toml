@@ -106,7 +106,7 @@ description = "What CI's flatpak-repo job runs, prebuilt (x86_64 Linux, needs gp
 run = "cargo run -q -p nova-bundle --locked --bin nova-flatpak-repo --"
 
 [tasks.appcast]
-description = "What CI's publish job runs, prebuilt: sign the nightly's installers and write the Sparkle update feeds and the prune list (publish --dist <DIR> --assets <FILE> --current <DIR> --feeds <DIR> --prune-list <FILE>), or print UPDATE_SIGNING_KEY's public key (public-key)"
+description = "What CI's publish job runs, prebuilt: sign NOVA_CHANNEL's installers and write its Sparkle update feeds and the prune list (publish --dist <DIR> --assets <FILE> --current <DIR> --feeds <DIR> --prune-list <FILE>); what promote-beta's check job runs: refuse a build off main, not held by the nightly or not newer than the beta, else print build= and commit= (check-promotion --build <ID> --repo <DIR> --nightly-assets <FILE> --beta-assets <FILE> --beta-current <DIR>); or print UPDATE_SIGNING_KEY's public key (public-key)"
 run = "cargo run -q -p nova-bundle --locked --bin nova-appcast --"
 
 [tasks.mutants]

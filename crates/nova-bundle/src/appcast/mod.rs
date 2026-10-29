@@ -26,6 +26,7 @@
 
 pub mod host;
 pub mod key;
+pub mod promote;
 pub mod prune;
 pub mod publish;
 

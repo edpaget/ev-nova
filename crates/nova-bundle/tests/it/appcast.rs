@@ -1,7 +1,9 @@
 //! `nova-appcast`'s publish over real files in a temporary directory each
 //! test owns, its re-run and rollback refusals and their exit statuses,
-//! and the binary itself, with every variable it reads set on its own
-//! process only. The one seed is a fixed test value, never a real key.
+//! the binary itself, and its `check-promotion` over a git repository and
+//! release files the test makes, with every variable it reads (and every
+//! git setting) set on its own child process only. The one seed is a
+//! fixed test value, never a real key.
 
 use std::fs;
 use std::path::Path;
@@ -282,4 +284,207 @@ fn the_binary_without_a_key_publishes_no_feeds_warns_and_writes_the_prune_list()
         .map(|e| e.expect("entry").file_name())
         .collect();
     assert_eq!(copies.len(), 2, "{copies:?}");
+}
+
+// check-promotion, over a git repository and release files in a
+// temporary directory each test owns.
+
+/// `command` with every `GIT_*` variable this test process inherited
+/// removed from its environment. A git hook runs the tests with
+/// `GIT_DIR`, `GIT_INDEX_FILE` and the like naming the project's own
+/// repository; a child git that inherited them would act on it instead
+/// of the test's.
+fn without_git_env(command: &mut Command) -> &mut Command {
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(name);
+        }
+    }
+    command
+}
+
+/// `git` in `dir`'s repository, with every setting on the child only: no
+/// inherited `GIT_*` variable, no system or global config, and fixed
+/// names and times.
+fn git(dir: &Path, args: &[&str], secs: i64) -> String {
+    let config = dir.join("gitconfig");
+    if !config.exists() {
+        fs::write(&config, "").expect("an empty git config");
+    }
+    let date = format!("@{secs} +0000");
+    let output = without_git_env(&mut Command::new("git"))
+        .arg("-C")
+        .arg(dir.join("main"))
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", &config)
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .env("GIT_AUTHOR_DATE", &date)
+        .env("GIT_COMMITTER_DATE", &date)
+        .output()
+        .expect("git runs");
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout)
+        .expect("utf-8")
+        .trim()
+        .to_owned()
+}
+
+/// `20261027000000` and `20261028123456` as Unix times.
+const MID_SECS: i64 = 1_793_059_200;
+const BUILD_SECS: i64 = 1_793_190_896;
+const MID: &str = "20261027000000";
+
+/// A `main` with one commit at each of `times`, oldest first, returning
+/// each commit's SHA.
+fn main_repo(dir: &Path, times: &[i64]) -> Vec<String> {
+    fs::create_dir_all(dir.join("main")).expect("the repo dir");
+    git(dir, &["init", "-q", "-b", "main"], 0);
+    times
+        .iter()
+        .map(|&secs| {
+            git(
+                dir,
+                &[
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "--no-gpg-sign",
+                    "--no-verify",
+                    "-m",
+                    "c",
+                ],
+                secs,
+            );
+            git(dir, &["rev-parse", "HEAD"], secs)
+        })
+        .collect()
+}
+
+/// The nightly release holding both update files of each of `builds`,
+/// and no beta release yet: the four `check-promotion` arguments after
+/// `--build <ID>`.
+fn releases(dir: &Path, builds: &[&str]) -> Vec<std::ffi::OsString> {
+    let mut nightly = vec![Platform::Macos.stable_asset().to_owned()];
+    for build in builds {
+        for platform in Platform::ALL {
+            nightly.push(update_asset(platform, &id(build)));
+        }
+    }
+    let nightly_list = dir.join("nightly.txt");
+    fs::write(&nightly_list, nightly.join("\n") + "\n").expect("nightly list");
+    let beta_list = dir.join("beta.txt");
+    fs::write(&beta_list, "").expect("beta list");
+    let beta_current = dir.join("beta-current");
+    fs::create_dir_all(&beta_current).expect("beta current");
+    vec![
+        "--repo".into(),
+        dir.join("main").into(),
+        "--nightly-assets".into(),
+        nightly_list.into(),
+        "--beta-assets".into(),
+        beta_list.into(),
+        "--beta-current".into(),
+        beta_current.into(),
+    ]
+}
+
+fn check_promotion(build: &str, rest: &[std::ffi::OsString], git_ref: &str) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_nova-appcast"));
+    // Its `git log` must read the test's repository, never the project's.
+    without_git_env(&mut command)
+        .arg("check-promotion")
+        .arg("--build")
+        .arg(build)
+        .args(rest)
+        .env("GITHUB_REF", git_ref)
+        .env_remove(SEED_VAR);
+    command.output().expect("nova-appcast runs")
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8(output.stderr.clone()).expect("utf-8")
+}
+
+#[test]
+fn check_promotion_prints_a_held_newer_build_and_its_commit() {
+    assert_eq!(BuildId::from_unix(MID_SECS).expect("an ID"), id(MID));
+    assert_eq!(BuildId::from_unix(BUILD_SECS).expect("an ID"), id(BUILD));
+    let dir = tempfile::tempdir().expect("temp dir");
+    let shas = main_repo(dir.path(), &[MID_SECS, BUILD_SECS, BUILD_SECS + 60]);
+    let rest = releases(dir.path(), &[MID, BUILD]);
+    let output = check_promotion(BUILD, &rest, "refs/heads/main");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("utf-8"),
+        format!("build={BUILD}\ncommit={}\n", shas[1])
+    );
+}
+
+#[test]
+fn check_promotion_refuses_a_build_the_nightly_doesnt_hold_naming_the_ids() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    main_repo(dir.path(), &[MID_SECS, BUILD_SECS]);
+    let rest = releases(dir.path(), &[MID]);
+    let output = check_promotion(BUILD, &rest, "refs/heads/main");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        stderr(&output).contains(&format!(
+            "build {BUILD} isn't on the nightly release, which holds build {MID}"
+        )),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn check_promotion_refuses_a_run_off_main_and_a_malformed_build_with_exit_1() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    main_repo(dir.path(), &[BUILD_SECS]);
+    let rest = releases(dir.path(), &[BUILD]);
+    for (build, git_ref, says) in [
+        (
+            BUILD,
+            "refs/heads/roadmap/auto-updates",
+            "promote-beta runs only on main; this run is on refs/heads/roadmap/auto-updates",
+        ),
+        (
+            "not-an-id",
+            "refs/heads/x",
+            "promote-beta runs only on main; this run is on refs/heads/x",
+        ),
+        ("not-an-id", "refs/heads/main", "--build: `not-an-id`"),
+    ] {
+        let output = check_promotion(build, &rest, git_ref);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(stderr(&output).contains(says), "{says}: {output:?}");
+    }
+}
+
+#[test]
+fn check_promotion_refuses_two_commits_at_the_build_s_time_naming_both() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let shas = main_repo(dir.path(), &[MID_SECS, BUILD_SECS, BUILD_SECS]);
+    let rest = releases(dir.path(), &[BUILD]);
+    let output = check_promotion(BUILD, &rest, "refs/heads/main");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let text = stderr(&output);
+    assert!(
+        text.contains(&shas[1]) && text.contains(&shas[2]) && text.contains(BUILD),
+        "{text}"
+    );
+}
+
+#[test]
+fn check_promotion_without_an_option_exits_2_with_the_usage() {
+    let output = check_promotion(BUILD, &[], "refs/heads/main");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(
+        stderr(&output).contains("usage: nova-appcast"),
+        "{output:?}"
+    );
 }
