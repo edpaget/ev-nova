@@ -7,18 +7,16 @@
 //! variable is unset or the file is absent, and collects every failure
 //! before asserting.
 //!
-//! Every `DLOG` and `DITL` must decode, using every byte. Some interface pictures use what the
-//! `PICT` decoder does not support yet (version 1 pictures, and the
-//! `PackBitsRgn` opcode `0x0099`), so a picture may fail only with
-//! [`GraphicsError::UnsupportedVersion`] or
-//! [`GraphicsError::UnsupportedOpcode`], and the number that decode is
-//! pinned.
+//! Every `DLOG` and `DITL` must decode, using every byte, and every
+//! `PICT` must decode: the version 1 pictures (133-137) and `PICT` 139's
+//! `PackBitsRgn` included. The volume arrows, 134-137, are pinned to their
+//! size and to the pressed look of 136 and 137.
 
 use crate::common;
 
 use std::path::Path;
 
-use nova_data::graphics::{GraphicsError, PICT};
+use nova_data::graphics::{Image, PICT};
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
 use nova_data::{DitlId, InterfaceData, PictId, Record};
@@ -31,13 +29,10 @@ struct Counts {
     dialogs: usize,
     item_lists: usize,
     pictures: usize,
-    /// Pictures that decoded; the rest use unsupported `PICT` features.
-    pictures_decoded: usize,
 }
 
 /// Decodes every `DLOG`, `DITL` and `PICT` in the interface file at `path`,
-/// asserting no dialog or item list fails or has trailing bytes, and no picture fails except for
-/// an unsupported `PICT` feature.
+/// asserting none fails, and no dialog or item list has trailing bytes.
 fn decode_everything(path: &Path) -> Counts {
     let ui = InterfaceData::open(path).expect("the interface file opens");
     let mut failures = Vec::new();
@@ -60,13 +55,9 @@ fn decode_everything(path: &Path) -> Counts {
         }
     }
     let pictures = ui.ids(PICT);
-    let mut pictures_decoded = 0;
     for &id in &pictures {
         match ui.picture(PictId(id)) {
-            Some(Ok(_)) => pictures_decoded += 1,
-            Some(Err(
-                GraphicsError::UnsupportedVersion { .. } | GraphicsError::UnsupportedOpcode { .. },
-            )) => {}
+            Some(Ok(_)) => {}
             Some(Err(err)) => failures.push(format!("PICT {id}: {err}")),
             None => failures.push(format!("PICT {id}: listed but absent")),
         }
@@ -76,7 +67,6 @@ fn decode_everything(path: &Path) -> Counts {
         dialogs: dialogs.len(),
         item_lists: item_lists.len(),
         pictures: pictures.len(),
-        pictures_decoded,
     };
     assert!(counts.dialogs > 0, "{counts:?}");
     assert!(counts.item_lists > 0, "{counts:?}");
@@ -89,7 +79,9 @@ fn every_mac_interface_resource_decodes() {
     let Some(path) = interface_file(&dir) else {
         return;
     };
-    decode_everything(&path);
+    let counts = decode_everything(&path);
+    assert_eq!(counts.pictures, 10, "{counts:?}");
+    check_volume_arrows(&path);
 }
 
 #[test]
@@ -105,7 +97,29 @@ fn every_windows_interface_resource_decodes() {
             dialogs: 41,
             item_lists: 40,
             pictures: 11,
-            pictures_decoded: 5,
         }
     );
+    check_volume_arrows(&path);
+}
+
+/// The interface `PICT` `id`, decoded.
+fn picture(ui: &InterfaceData, id: i16) -> Image {
+    ui.picture(PictId(id))
+        .expect("the picture is present")
+        .expect("the picture decodes")
+}
+
+/// `PICT`s 134-137 are the 11x9 volume arrows. 136 and 137 are 134 and
+/// 135 pressed: the box filled, the arrow cut out of it, so the pixel at
+/// (5, 2), on the up arrow's tip, is black at rest and white pressed.
+fn check_volume_arrows(path: &Path) {
+    const BLACK: [u8; 4] = [0, 0, 0, 255];
+    const WHITE: [u8; 4] = [255, 255, 255, 255];
+    let ui = InterfaceData::open(path).expect("the interface file opens");
+    for id in 134..=137 {
+        let arrow = picture(&ui, id);
+        assert_eq!((arrow.width(), arrow.height()), (11, 9), "PICT {id}");
+    }
+    assert_eq!(picture(&ui, 134).pixel(5, 2), Some(BLACK));
+    assert_eq!(picture(&ui, 136).pixel(5, 2), Some(WHITE));
 }
