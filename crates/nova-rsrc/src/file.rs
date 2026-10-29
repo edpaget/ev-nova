@@ -4,44 +4,119 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use crate::parse::{self, Entry, TypeEntry};
-use crate::rez;
 use crate::{Fork, ForkReader, LoadError, ParseError, ResType, StdForkReader};
+use crate::{macbin, rez};
+
+/// What a [`ResourceFile`]'s bytes were read as.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Format {
+    /// A flattened resource fork.
+    Fork,
+    /// A Windows `.rez` file.
+    Rez,
+    /// A MacBinary file; `fork` says which of its forks held the resources.
+    MacBinary {
+        /// The fork read: the data fork when it is itself a resource fork,
+        /// otherwise the resource fork.
+        fork: Fork,
+    },
+}
 
 /// A resource file held in memory: the raw bytes plus a validated index.
 ///
 /// The bytes are a flattened resource fork or a Windows `.rez` file; both
-/// are served through the same view. Resources borrow their data straight from the owned bytes, so reading
-/// them is zero-copy.
+/// are served through the same view. A MacBinary file keeps only the fork
+/// it was read from. Resources borrow their data straight from the owned
+/// bytes, so reading them is zero-copy.
 #[derive(Debug)]
 pub struct ResourceFile {
     bytes: Vec<u8>,
     types: Vec<TypeEntry>,
+    format: Format,
 }
 
 impl ResourceFile {
-    /// Parses and validates a flattened resource fork or a `.rez` file.
+    /// Parses and validates a flattened resource fork, a `.rez` file or a
+    /// MacBinary file.
     ///
-    /// The format is chosen by content: bytes starting with the `.rez`
-    /// magic `BRGR` are read as `.rez`, anything else as a resource fork.
+    /// The format is chosen by content, in this order:
+    ///
+    /// 1. Bytes starting with the `.rez` magic `BRGR` are read as `.rez`.
+    /// 2. Bytes that parse as a flattened fork are a fork.
+    /// 3. Only if the fork parse fails are the bytes checked for a MacBinary
+    ///    header. If they are not MacBinary, the fork's error is returned.
+    ///
+    /// Inside MacBinary, a data fork that parses as a flattened fork wins,
+    /// as the original's `_EVOpenResourceFile` opens the data fork first;
+    /// otherwise the resource fork is read. Either is read only as a
+    /// flattened fork.
+    ///
     /// Fails on any structural problem; never returns a partial file.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, ParseError> {
-        let index = if bytes.starts_with(rez::MAGIC) {
-            rez::parse(&bytes)?
-        } else {
-            parse::parse(&bytes)?
-        };
-        Ok(Self {
+        if bytes.starts_with(rez::MAGIC) {
+            let index = rez::parse(&bytes)?;
+            return Ok(Self::new(bytes, index, Format::Rez));
+        }
+        match parse::parse(&bytes) {
+            Ok(index) => Ok(Self::new(bytes, index, Format::Fork)),
+            Err(fork_error) => match macbin::read(&bytes)? {
+                Some(container) => Self::from_mac_binary(bytes, &container),
+                None => Err(fork_error),
+            },
+        }
+    }
+
+    fn new(bytes: Vec<u8>, index: parse::Index, format: Format) -> Self {
+        Self {
             bytes,
             types: index.types,
-        })
+            format,
+        }
+    }
+
+    /// Reads the fork `container` picks out of `bytes`, keeping only its
+    /// bytes: the index is built over the fork's own slice, so its ranges
+    /// stay valid once the rest is cut away.
+    fn from_mac_binary(
+        mut bytes: Vec<u8>,
+        container: &macbin::Container,
+    ) -> Result<Self, ParseError> {
+        let (fork, range, index) = match parse::parse(&bytes[container.data.clone()]) {
+            Ok(index) => (Fork::Data, container.data.clone(), index),
+            Err(_) if container.resource.is_empty() => {
+                return Err(ParseError::MacBinaryNoResourceFork);
+            }
+            Err(_) => {
+                let range = container.resource.clone();
+                let index = parse::parse(&bytes[range.clone()]).map_err(|source| {
+                    ParseError::MacBinaryResourceFork {
+                        offset: range.start,
+                        source: Box::new(source),
+                    }
+                })?;
+                (Fork::Resource, range, index)
+            }
+        };
+        bytes.truncate(range.end);
+        bytes.drain(..range.start);
+        Ok(Self::new(bytes, index, Format::MacBinary { fork }))
+    }
+
+    /// What the bytes were read as.
+    #[must_use]
+    pub fn format(&self) -> Format {
+        self.format
     }
 
     /// Loads a resource file through `reader`.
     ///
-    /// A flattened fork or `.rez` file in the data fork (an `.ndat` or
-    /// `.rez` file) wins; if the data fork is missing or empty, the file's
-    /// real resource fork is read instead. The bytes, not the extension,
-    /// pick the parser; see [`ResourceFile::from_bytes`].
+    /// A data fork that parses (an `.ndat`, `.rez` or MacBinary file) wins,
+    /// as in the original's `_EVOpenResourceFile`, which opens the data
+    /// fork first and retries on the resource fork on any failure. So if
+    /// the data fork is missing or empty, or does not parse, the file's
+    /// real resource fork is read instead; when that is missing or empty
+    /// too, the data fork's parse error stands. The bytes, not the
+    /// extension, pick the parser; see [`ResourceFile::from_bytes`].
     pub fn load(reader: &impl ForkReader, path: &Path) -> Result<Self, LoadError> {
         let read = |fork| {
             reader
@@ -52,16 +127,23 @@ impl ResourceFile {
                     source,
                 })
         };
-        let bytes = match read(Fork::Data)? {
-            Some(bytes) => bytes,
-            None => read(Fork::Resource)?.ok_or_else(|| LoadError::NoResourceFork {
+        let parse = |bytes| {
+            Self::from_bytes(bytes).map_err(|source| LoadError::Parse {
                 path: path.to_path_buf(),
-            })?,
+                source,
+            })
         };
-        Self::from_bytes(bytes).map_err(|source| LoadError::Parse {
-            path: path.to_path_buf(),
-            source,
-        })
+        match read(Fork::Data)? {
+            Some(bytes) => match parse(bytes) {
+                Ok(file) => Ok(file),
+                Err(data_error) => read(Fork::Resource)?.map_or(Err(data_error), parse),
+            },
+            None => parse(
+                read(Fork::Resource)?.ok_or_else(|| LoadError::NoResourceFork {
+                    path: path.to_path_buf(),
+                })?,
+            ),
+        }
     }
 
     /// Loads a resource file from disk; see [`ResourceFile::load`].
@@ -189,7 +271,10 @@ impl<'a> Resource<'a> {
 mod tests {
     use super::*;
     use crate::fixture::forks::{MemForks, UNREADABLE};
-    use crate::fixture::{ForkBuilder, RezBuilder};
+    use crate::fixture::{
+        ForkBuilder, MACBINARY_SIGNATURE, MACBINARY_SIGNATURE_FIELD, MacBinaryBuilder,
+        MacBinaryVersion, RezBuilder,
+    };
     use crate::{Fork, LoadError};
     use std::path::Path;
 
@@ -416,6 +501,120 @@ mod tests {
         );
     }
 
+    #[test]
+    fn format_says_what_the_bytes_were_read_as() {
+        assert_eq!(parse(&ForkBuilder::new()).format(), Format::Fork);
+        assert_eq!(rez(&RezBuilder::new()).format(), Format::Rez);
+    }
+
+    fn mac_binary(builder: &MacBinaryBuilder) -> Result<ResourceFile, ParseError> {
+        ResourceFile::from_bytes(builder.build().bytes)
+    }
+
+    #[test]
+    fn from_bytes_reads_the_resource_fork_of_a_macbinary_file() {
+        for version in [
+            MacBinaryVersion::I,
+            MacBinaryVersion::II,
+            MacBinaryVersion::III,
+        ] {
+            let file =
+                mac_binary(&MacBinaryBuilder::new(fork_with(7)).version(version)).expect("loads");
+            assert_eq!(
+                file.format(),
+                Format::MacBinary {
+                    fork: Fork::Resource
+                }
+            );
+            assert_eq!(file.get(PICT, 7).expect("present").data(), b"x");
+            assert_eq!(file.bytes, fork_with(7), "only the fork is kept");
+        }
+    }
+
+    #[test]
+    fn a_macbinary_data_fork_that_is_a_fork_wins() {
+        let file = mac_binary(&MacBinaryBuilder::new(fork_with(1)).data_fork(fork_with(2)))
+            .expect("loads");
+        assert_eq!(file.format(), Format::MacBinary { fork: Fork::Data });
+        assert!(file.get(PICT, 2).is_some());
+        assert!(file.get(PICT, 1).is_none());
+        assert_eq!(file.bytes, fork_with(2));
+    }
+
+    #[test]
+    fn a_macbinary_data_fork_that_is_not_a_fork_falls_back_to_the_resource_fork() {
+        let file = mac_binary(&MacBinaryBuilder::new(fork_with(1)).data_fork(b"notes".to_vec()))
+            .expect("loads");
+        assert_eq!(
+            file.format(),
+            Format::MacBinary {
+                fork: Fork::Resource
+            }
+        );
+        assert!(file.get(PICT, 1).is_some());
+    }
+
+    #[test]
+    fn a_macbinary_file_without_a_resource_fork_is_an_error() {
+        for builder in [
+            MacBinaryBuilder::new(Vec::new()),
+            MacBinaryBuilder::new(Vec::new()).data_fork(b"notes".to_vec()),
+        ] {
+            assert_eq!(
+                mac_binary(&builder).err(),
+                Some(ParseError::MacBinaryNoResourceFork)
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_macbinary_resource_fork_names_both_layers() {
+        let mut fork = fork_with(1);
+        fork.truncate(20);
+        let inner = ResourceFile::from_bytes(fork.clone()).expect_err("bad fork");
+        assert_eq!(
+            mac_binary(&MacBinaryBuilder::new(fork)).err(),
+            Some(ParseError::MacBinaryResourceFork {
+                offset: 128,
+                source: Box::new(inner),
+            })
+        );
+    }
+
+    #[test]
+    fn a_macbinary_container_error_is_reported() {
+        let mut built = MacBinaryBuilder::new(fork_with(1)).build();
+        built.truncate(built.layout.resource_end - 1);
+        assert!(matches!(
+            ResourceFile::from_bytes(built.bytes),
+            Err(ParseError::MacBinaryForkOutOfBounds {
+                fork: Fork::Resource,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_fork_with_the_macbinary_signature_is_still_a_fork() {
+        let mut built = ForkBuilder::new()
+            .resource(PICT, 1, None, &[0; 200])
+            .build();
+        assert_eq!(built.bytes[0], 0, "as a MacBinary header's first byte");
+        built.bytes[MACBINARY_SIGNATURE_FIELD..][..4].copy_from_slice(MACBINARY_SIGNATURE);
+        let file = ResourceFile::from_bytes(built.bytes).expect("still a fork");
+        assert_eq!(file.format(), Format::Fork);
+    }
+
+    #[test]
+    fn bytes_that_are_neither_keep_the_fork_error() {
+        let mut built = MacBinaryBuilder::new(fork_with(1)).build();
+        built.put_u8(74, 1);
+        assert!(matches!(
+            ResourceFile::from_bytes(built.bytes),
+            Err(ParseError::SectionOutOfBounds { .. })
+        ));
+    }
+
     fn fork_with(id: i16) -> Vec<u8> {
         ForkBuilder::new()
             .resource(PICT, id, None, b"x")
@@ -491,6 +690,60 @@ mod tests {
                     assert_eq!(source.to_string(), UNREADABLE);
                 }
                 other => panic!("expected Io, got {other:?}"),
+            }
+        }
+    }
+
+    /// A data fork whose header points past its end.
+    fn not_a_fork() -> Vec<u8> {
+        (1..=17).collect()
+    }
+
+    #[test]
+    fn load_falls_back_to_the_resource_fork_when_the_data_fork_does_not_parse() {
+        let reader = MemForks::new()
+            .file(path(), b"notes".to_vec())
+            .resource(path(), fork_with(4));
+        let file = ResourceFile::load(&reader, path()).expect("loads");
+        assert!(file.get(PICT, 4).is_some());
+        assert_eq!(
+            reader.reads(),
+            [Fork::Data, Fork::Resource].map(|fork| (path().to_path_buf(), fork))
+        );
+    }
+
+    #[test]
+    fn load_reports_the_resource_forks_error_after_falling_back() {
+        // The data fork alone would fail differently: SectionOutOfBounds.
+        let reader = MemForks::new()
+            .file(path(), not_a_fork())
+            .resource(path(), vec![9; 3]);
+        match ResourceFile::load(&reader, path()) {
+            Err(LoadError::Parse { path: p, source }) => {
+                assert_eq!(p, path());
+                assert_eq!(source, ParseError::HeaderTruncated);
+            }
+            other => panic!("expected Parse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_keeps_the_data_forks_error_without_a_resource_fork() {
+        for reader in [
+            MemForks::new().file(path(), not_a_fork()),
+            MemForks::new()
+                .file(path(), not_a_fork())
+                .resource(path(), Vec::new()),
+        ] {
+            match ResourceFile::load(&reader, path()) {
+                Err(LoadError::Parse { path: p, source }) => {
+                    assert_eq!(p, path());
+                    assert!(
+                        matches!(source, ParseError::SectionOutOfBounds { .. }),
+                        "{source:?}"
+                    );
+                }
+                other => panic!("expected the data fork's Parse, got {other:?}"),
             }
         }
     }

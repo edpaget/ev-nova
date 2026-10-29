@@ -7,6 +7,6 @@ doc-valid-idents = [
     "ColorTable", "HeaderOp", "DefHilite", "ShortComment", "LongComment",
     "EndPic", "DirectBitsRect", "PackBitsRect", "BitsRect", "CompressedQuickTime",
     "BitsRgn", "PackBitsRgn", "DirectBitsRgn",
-    "MetalFX", "WiX", "AppStream", "WinSparkle",
+    "MetalFX", "WiX", "AppStream", "WinSparkle", "MacBinary",
     "..",
 ]

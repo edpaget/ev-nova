@@ -146,12 +146,13 @@
 mod error;
 mod file;
 mod fs;
+mod macbin;
 mod parse;
 mod res_type;
 mod rez;
 
 pub use error::{LoadError, ParseError, Section};
-pub use file::{Resource, ResourceFile};
+pub use file::{Format, Resource, ResourceFile};
 pub use fs::{Fork, ForkReader, StdForkReader};
 pub use res_type::ResType;
 

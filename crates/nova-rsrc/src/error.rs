@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::{fmt, io};
 
-use crate::ResType;
+use crate::{Fork, ResType};
 
 /// A section of a fork named by its header.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -176,6 +176,42 @@ pub enum ParseError {
         /// The resource's ID.
         id: i16,
     },
+    /// The buffer holds the MacBinary III signature but is shorter than the
+    /// 128-byte MacBinary header.
+    MacBinaryHeaderTruncated {
+        /// The length of the whole file.
+        file_len: usize,
+    },
+    /// A MacBinary III header (it holds the `mBIN` signature) whose CRC does
+    /// not match its first 124 bytes.
+    MacBinaryCrcMismatch {
+        /// The CRC stored in the header.
+        stored: u16,
+        /// The CRC of the header's first 124 bytes.
+        computed: u16,
+    },
+    /// A MacBinary header places a fork past the end of the file; a
+    /// secondary header that pushes the forks out shows up here too.
+    MacBinaryForkOutOfBounds {
+        /// Which fork.
+        fork: Fork,
+        /// Where the fork starts.
+        offset: u64,
+        /// The fork's length, from the header.
+        len: u32,
+        /// The length of the whole file.
+        file_len: usize,
+    },
+    /// A MacBinary file's resource fork is empty, and its data fork is empty
+    /// or not a resource fork.
+    MacBinaryNoResourceFork,
+    /// A MacBinary file's resource fork is not a valid resource fork.
+    MacBinaryResourceFork {
+        /// Where the resource fork starts in the MacBinary file.
+        offset: usize,
+        /// What is wrong with the fork.
+        source: Box<ParseError>,
+    },
 }
 
 impl fmt::Display for Section {
@@ -188,6 +224,7 @@ impl fmt::Display for Section {
 }
 
 impl fmt::Display for ParseError {
+    #[allow(clippy::too_many_lines)] // one arm for each variant
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::HeaderTruncated => {
@@ -281,11 +318,47 @@ impl fmt::Display for ParseError {
                 f,
                 "resource '{ty}' {id}: .rez name field has no terminating NUL"
             ),
+            Self::MacBinaryHeaderTruncated { file_len } => write!(
+                f,
+                "MacBinary header is truncated (needs 128 bytes, file has {file_len})"
+            ),
+            Self::MacBinaryCrcMismatch { stored, computed } => write!(
+                f,
+                "MacBinary header CRC is {stored:#06x}, but the header's bytes give {computed:#06x}"
+            ),
+            Self::MacBinaryForkOutOfBounds {
+                fork,
+                offset,
+                len,
+                file_len,
+            } => {
+                let fork = match fork {
+                    Fork::Data => "data",
+                    Fork::Resource => "resource",
+                };
+                write!(
+                    f,
+                    "MacBinary {fork} fork (offset {offset}, length {len}) extends past the end of the {file_len}-byte file"
+                )
+            }
+            Self::MacBinaryNoResourceFork => f.write_str(
+                "MacBinary file has no resource fork (it is empty, and the data fork is not a resource fork)",
+            ),
+            Self::MacBinaryResourceFork { offset, source } => {
+                write!(f, "in the MacBinary resource fork at byte {offset}: {source}")
+            }
         }
     }
 }
 
-impl std::error::Error for ParseError {}
+impl std::error::Error for ParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::MacBinaryResourceFork { source, .. } => Some(source.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 /// Why a resource file could not be loaded from disk.
 #[derive(Debug)]
@@ -501,9 +574,74 @@ mod tests {
     }
 
     #[test]
+    fn macbinary_parse_errors_describe_the_problem() {
+        let cases = [
+            (
+                ParseError::MacBinaryHeaderTruncated { file_len: 110 },
+                "MacBinary header is truncated (needs 128 bytes, file has 110)",
+            ),
+            (
+                ParseError::MacBinaryCrcMismatch {
+                    stored: 0x1234,
+                    computed: 0xABCD,
+                },
+                "MacBinary header CRC is 0x1234, but the header's bytes give 0xabcd",
+            ),
+            (
+                ParseError::MacBinaryForkOutOfBounds {
+                    fork: crate::Fork::Resource,
+                    offset: 256,
+                    len: 4_294_967_295,
+                    file_len: 300,
+                },
+                "MacBinary resource fork (offset 256, length 4294967295) extends past the end of the 300-byte file",
+            ),
+            (
+                ParseError::MacBinaryForkOutOfBounds {
+                    fork: crate::Fork::Data,
+                    offset: 384,
+                    len: 0,
+                    file_len: 200,
+                },
+                "MacBinary data fork (offset 384, length 0) extends past the end of the 200-byte file",
+            ),
+            (
+                ParseError::MacBinaryNoResourceFork,
+                "MacBinary file has no resource fork (it is empty, and the data fork is not a resource fork)",
+            ),
+            (
+                ParseError::MacBinaryResourceFork {
+                    offset: 128,
+                    source: Box::new(ParseError::MapTruncated),
+                },
+                "in the MacBinary resource fork at byte 128: resource map is shorter than its header",
+            ),
+        ];
+        for (error, message) in cases {
+            assert_eq!(error.to_string(), message);
+        }
+    }
+
+    #[test]
     fn parse_error_is_a_std_error() {
         let error: Box<dyn std::error::Error> = Box::new(ParseError::MapTruncated);
         assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn a_macbinary_fork_error_chains_the_inner_error() {
+        use std::error::Error as _;
+        let error = ParseError::MacBinaryResourceFork {
+            offset: 128,
+            source: Box::new(ParseError::MapTruncated),
+        };
+        let source = error.source().expect("has source");
+        assert_eq!(
+            source.downcast_ref::<ParseError>(),
+            Some(&ParseError::MapTruncated)
+        );
+        assert!(source.source().is_none());
+        assert!(ParseError::MacBinaryNoResourceFork.source().is_none());
     }
 
     #[test]
