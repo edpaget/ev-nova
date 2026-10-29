@@ -9,6 +9,16 @@
 //! (`_TextDialogUpdate` @0x51b7a, @0x51dc7-0x51e28). The choice reads the
 //! ID alone; a graphic whose `PICT` is missing leaves item 2 empty, as
 //! `GetPicture` finds nothing to draw.
+//!
+//! The plain dialog is shrunk to its text before it is placed
+//! ([`DescDialog::new`]), as `_ShowTextDialog` shrinks 3003
+//! (@0x5aac9-0x5adee, the rule in [`text_shrink`](super::text_shrink)),
+//! so `_CenterWindow` @0x5ae16 centres the shrunk window. It always takes
+//! the shrink; the picture variant never does, since the plain path alone
+//! leaves `*0x3b52a0` at −1 (@0x5a8eb, tested @0x5aad4). The shrink's own
+//! `MoveWindow` down by `trunc(0.3 × d)` (@0x5ab68-0x5abbe) is left out:
+//! `_CenterWindow` moves the window again before it shows, so nothing of it
+//! is seen.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -22,12 +32,13 @@ use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::Input;
 use crate::screen::{Screen, ScreenAction};
-use crate::text::TextMetrics;
+use crate::text::{TextMetrics, wrap};
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, Role};
 use super::picture_variant::VariantTemplates;
 use super::scroll_text::ScrollText;
+use super::text_shrink::shrink_to_text;
 
 /// The dialog's `DLOG` (and `DITL`) ID.
 pub const DESC_DIALOG: i16 = 3003;
@@ -38,7 +49,17 @@ pub const DONE_ITEM: usize = 1;
 /// The text box's item.
 pub const TEXT_ITEM: usize = 3;
 
-/// The description's size, in Geneva: near the original's 9 to 10.
+/// The scroll-up arrow's item, which the shrink moves with Done.
+pub const SCROLL_UP_ITEM: usize = 5;
+
+/// The scroll-down arrow's item, which the shrink moves with Done.
+pub const SCROLL_DOWN_ITEM: usize = 6;
+
+/// The description's font, which both lays it out and measures it for
+/// the shrink.
+pub const BODY_FONT: Font = Font::Geneva;
+
+/// The description's size, in [`BODY_FONT`]: near the original's 9 to 10.
 pub const BODY_SIZE: f32 = 10.0;
 
 /// The description's colour.
@@ -136,6 +157,13 @@ pub struct DescDialog {
 impl DescDialog {
     /// The dialog `template` (stock `DLOG` 3003) showing `text`, its button
     /// labelled in `style`, its text measured by `metrics`.
+    ///
+    /// Before it is placed, `template` is shrunk to `text` as
+    /// `_ShowTextDialog` shrinks it (@0x5aac9-0x5adee): the text's height
+    /// wrapped to item 3's width sets how far the bottom edge, Done, the
+    /// scroll arrows (items 5 and 6) and the text box's bottom come up
+    /// (see [`text_shrink`](super::text_shrink)). A text that fills the box
+    /// keeps the template's size. A template with no item 3 is not shrunk.
     #[must_use]
     pub fn new(
         template: &DialogTemplate,
@@ -143,7 +171,17 @@ impl DescDialog {
         style: ButtonStyle,
         metrics: Rc<dyn TextMetrics>,
     ) -> Self {
-        let mut desc = Self::laid(template, text, style, metrics);
+        let text_height = template.items.get(TEXT_ITEM - 1).map_or(0.0, |item| {
+            let lines = wrap(&metrics, BODY_FONT, BODY_SIZE, text, item.bounds.width());
+            lines.len() as f32 * metrics.line_height(BODY_FONT, BODY_SIZE)
+        });
+        let template = shrink_to_text(
+            template,
+            TEXT_ITEM,
+            &[DONE_ITEM, SCROLL_UP_ITEM, SCROLL_DOWN_ITEM],
+            text_height,
+        );
+        let mut desc = Self::laid(&template, text, style, metrics);
         desc.dialog = desc.dialog.with_frame(FRAME);
         desc
     }
@@ -178,7 +216,7 @@ impl DescDialog {
                 TEXT_ITEM,
                 Role::ScrollText {
                     text: text.to_owned(),
-                    font: Font::Geneva,
+                    font: BODY_FONT,
                     size: BODY_SIZE,
                     color: BODY_COLOR,
                     backing: None,
@@ -311,6 +349,7 @@ impl Screen for DescDialog {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
@@ -713,6 +752,130 @@ mod tests {
         desc.input(&key(Key::Space));
         assert!(desc.closed(), "Space on Done");
         assert_eq!(desc.take_sounds(), [], "Space");
+    }
+
+    // The shrink to the text, `_ShowTextDialog` @0x5aabe-0x5adee.
+
+    /// Stock `DLOG` 3003 and its `DITL`, placed by `_CenterWindow`: 441 x
+    /// 313, Done (1), the parked picture (2), the 417 x 262 text box (3),
+    /// the parked map item (4) and the scroll arrows (5, 6).
+    fn stock_template() -> DialogTemplate {
+        let item = |bounds| ItemTemplate {
+            bounds,
+            enabled: true,
+            kind: ItemSpec::User,
+        };
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 441.0, 313.0),
+            placement: Placement::CenterWindow,
+            items: vec![
+                item(rect(173.0, 281.0, 99.0, 25.0)),
+                item(rect(221.0, 329.0, 68.0, 30.0)),
+                item(rect(11.0, 10.0, 417.0, 262.0)),
+                item(rect(70.0, 345.0, 78.0, 25.0)),
+                item(rect(330.0, SCROLL_ARROW_Y, 23.0, 23.0)),
+                item(rect(363.0, SCROLL_ARROW_Y, 23.0, 23.0)),
+            ],
+        }
+    }
+
+    const SCROLL_ARROW_Y: f32 = 282.0;
+
+    fn stock_desc(text: &str) -> DescDialog {
+        DescDialog::new(
+            &stock_template(),
+            text,
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+    }
+
+    fn centred(width: f32, height: f32) -> Bounds {
+        Bounds::at(
+            crate::ui::dialog::center_window(crate::ui::dialog::SCREEN, (width, height)),
+            width,
+            height,
+        )
+    }
+
+    #[test]
+    fn a_one_line_text_shrinks_3003_to_441_by_115_centred_on_the_window() {
+        let desc = stock_desc("A short text.");
+        let bounds = desc.dialog().bounds();
+        assert_eq!(bounds, centred(441.0, 115.0));
+        assert_eq!(bounds.min, Point::new(292.0, 327.0));
+        let local = |item| {
+            let at = desc.dialog().item_bounds(item).expect("item");
+            at.offset(Point::new(-bounds.min.x, -bounds.min.y))
+        };
+        assert_eq!(local(DONE_ITEM), rect(173.0, 83.0, 99.0, 25.0));
+        assert_eq!(local(SCROLL_UP_ITEM).min.y, SCROLL_ARROW_Y - 198.0);
+        assert_eq!(local(SCROLL_DOWN_ITEM).min.y, SCROLL_ARROW_Y - 198.0);
+        assert_eq!(local(TEXT_ITEM), rect(11.0, 10.0, 417.0, 64.0));
+        let text = desc.dialog().scroll_text().expect("text");
+        assert_eq!(text.rect().height(), 64.0);
+        assert_eq!(local(DESC_PICTURE_ITEM).min.y, 329.0, "parked");
+    }
+
+    #[test]
+    fn a_text_that_fills_the_box_keeps_3003_at_441_by_313() {
+        let long = "line\r".repeat(21) + "line";
+        let desc = stock_desc(&long);
+        assert_eq!(desc.lines().len(), 22, "264 high, over the 262 box");
+        let bounds = desc.dialog().bounds();
+        assert_eq!(bounds, centred(441.0, 313.0));
+        assert_eq!(bounds.min, Point::new(292.0, 228.0));
+        let done = desc.dialog().item_bounds(DONE_ITEM).expect("Done");
+        assert_eq!(done.min.y - bounds.min.y, 281.0);
+    }
+
+    #[test]
+    fn the_text_is_measured_wrapped_to_the_text_boxs_width() {
+        // 85 characters wrap to two lines in the 417 wide box (83 a line
+        // at 5 each): 24 high, still under the 48 floor.
+        let wrapped = stock_desc(&("x ".repeat(42) + "x"));
+        assert_eq!(wrapped.lines().len(), 2);
+        assert_eq!(wrapped.dialog().bounds().height(), 115.0);
+        // Ten lines, 120 high: the dialog is 120 + 16 + 51 tall.
+        let ten = stock_desc(&("word\r".repeat(9) + "word"));
+        assert_eq!(ten.dialog().bounds().height(), 187.0);
+    }
+
+    #[test]
+    fn the_frame_spans_the_shrunk_dialog() {
+        let desc = stock_desc("A short text.");
+        let bounds = desc.dialog().bounds();
+        let commands = drawn(&desc);
+        assert!(
+            commands.contains(&DrawCommand::StretchedPicture {
+                image: FRAME.bottom,
+                top_left: Point::new(bounds.min.x, bounds.max.y - FRAME.bottom_height),
+                width: 441.0,
+                height: FRAME.bottom_height,
+            }),
+            "the bottom cap at the shrunk bottom: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn the_picture_variant_never_shrinks() {
+        let one_line = templates()
+            .open("one", Some(5008), ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("shown");
+        assert_eq!(one_line.dialog().bounds(), rect(0.0, 0.0, 300.0, 120.0));
+        let pictured = DescDialog::pictured(
+            &stock_template(),
+            "one",
+            5008,
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        );
+        assert_eq!(pictured.dialog().bounds(), centred(441.0, 313.0));
+    }
+
+    #[test]
+    fn the_scroll_arrows_are_items_5_and_6() {
+        assert_eq!((SCROLL_UP_ITEM, SCROLL_DOWN_ITEM), (5, 6));
     }
 
     /// `_TextDialogFilter` @0x51f77 maps no Tab or Space.

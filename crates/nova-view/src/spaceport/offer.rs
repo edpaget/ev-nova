@@ -14,7 +14,13 @@
 //! The original shrinks `DLOG` 1016 to its text's height, at least 48,
 //! moving the buttons up (@0xa2548-0xa2816), and widens the buttons to the
 //! wider label + 40, at least 100 (@0xa2a29-0xa2b46); this dialog keeps
-//! the template's height and widths.
+//! the template's height and widths. The shrink is the rule
+//! [`text_shrink`](crate::ui::text_shrink) ports for "Desc Dialog"
+//! (`d = boxH − max(h, 48) − 16`, `SizeWindow` @0xa25d1), but it runs
+//! after `_CenterWindow` has centred 1016 (@0xa23fd), so the window is then
+//! moved down by `trunc(0.3 × d)` (`MoveWindow` @0xa2640, the factor the
+//! double at 0xdd8d0 holds), not by half, and 1016's own items move up by
+//! `d`.
 //!
 //! An offer whose `dësc` `Graphic` is above 127 shows in the picture
 //! variant, `DLOG` 1020 ([`OfferTemplates::layout`], @0xa2344-0xa2373),

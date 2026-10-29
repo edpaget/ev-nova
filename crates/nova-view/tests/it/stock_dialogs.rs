@@ -238,6 +238,35 @@ fn the_about_text_scrolls_in_desc_dialog_and_return_closes_it() {
     }
 }
 
+/// `_ShowTextDialog` shrinks stock 3003 to a one-line text before
+/// `_CenterWindow` centres it (@0x5aac9-0x5ae16): 441 x 115, at
+/// 512 - trunc(441 / 2), 384 - trunc(115 / 2), Done 198 higher.
+#[test]
+fn a_one_line_text_shrinks_desc_dialog_to_441_by_115() {
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(DESC_DIALOG)
+            .expect("converts");
+        let desc = DescDialog::new(
+            &template,
+            "A one-line text.",
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        );
+        let origin = Point::new(292.0, 327.0);
+        let dialog = desc.dialog();
+        assert_eq!(dialog.bounds(), Bounds::at(origin, 441.0, 115.0));
+        assert_eq!(
+            dialog.item_bounds(DONE_ITEM),
+            Some(rect(173.0, 83.0, 99.0, 25.0).offset(origin))
+        );
+        assert_eq!(
+            dialog.item_bounds(TEXT_ITEM),
+            Some(rect(11.0, 10.0, 417.0, 64.0).offset(origin))
+        );
+    }
+}
+
 #[test]
 fn yes_no_draws_ok_and_cancel_where_recorded_and_answers_clicks_and_return() {
     for (_, path) in builds() {
