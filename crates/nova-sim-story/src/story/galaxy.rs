@@ -65,9 +65,13 @@
 //!   `explored` module, at the rebuild points
 //!   ([`known_from`](crate::exploration::known_from));
 //! - the dominated byte +0x46, set for an active stellar with `Flags2`
-//!   0x0020 (@0x32ce5-0x32ceb): the engine reads the bit directly
-//!   (`landing::cleared`, `mission::dominated`, `Chart::markup`), and
-//!   the stored byte is task planet-domination's;
+//!   0x0020 (@0x32ce5-0x32ceb): [`OverlaidGalaxy::dominated`] reads the
+//!   bit with the domination the planet comm dialog writes
+//!   ([`GalaxyOverlay::set_dominated`]). The dialog reads it; the other
+//!   readers still read the bit directly (`landing::cleared`,
+//!   `mission::dominated`, `Chart::markup`) until
+//!   rdm:phase/play-feel-4/phase-3-domination-readers switches them and
+//!   saves it, and phase 4 switches Recharge;
 //! - +0x47, a defence ship of the stellar in the system, set and
 //!   cleared each frame (`_DoPlayGameWork` @0x443d4-0x4444f) and cleared
 //!   for every stellar here (@0x32d5d), which `_IsThreatToStellar` reads
@@ -126,6 +130,11 @@ pub struct StellarOverride {
     /// Its regeneration countdown while it is destroyed; `None` while it is
     /// not.
     pub destroyed: Option<Countdown>,
+    /// Whether the player dominated it by Demand Tribute, until a Release
+    /// (+0x46, `_DoPlanetCommDialog` @0x978fa, cleared @0x9740f). Not
+    /// saved yet: rdm:phase/play-feel-4/phase-3-domination-readers saves
+    /// it.
+    pub dominated: bool,
 }
 
 /// What the overlay changes of one nebula. The default changes nothing.
@@ -282,6 +291,14 @@ impl GalaxyOverlay {
     pub fn set_destroyed(&mut self, stellar: StellarId, destroyed: Option<Countdown>) -> bool {
         edit(&mut self.stellars, stellar, |change| {
             change.destroyed = destroyed;
+        })
+    }
+
+    /// Sets whether the player dominated `stellar`, and says whether that
+    /// changed anything.
+    pub fn set_dominated(&mut self, stellar: StellarId, dominated: bool) -> bool {
+        edit(&mut self.stellars, stellar, |change| {
+            change.dominated = dominated;
         })
     }
 
@@ -559,6 +576,16 @@ impl OverlaidGalaxy {
     #[must_use]
     pub fn destroyed(&self, stellar: StellarId) -> bool {
         self.overlay.stellar(stellar).destroyed.is_some()
+    }
+
+    /// Whether `site` is dominated (+0x46): the player dominated it, or its
+    /// `Flags2` has [`DOMINATED`](crate::market::DOMINATED), as
+    /// `_HandleStellarSystemVisibility` sets the byte for such a stellar
+    /// at every rebuild point (@0x32ce5-0x32ceb), and nothing writes it
+    /// for one there.
+    #[must_use]
+    pub fn dominated(&self, site: &LandingSite) -> bool {
+        self.overlay.stellar(site.id).dominated || site.flags2 & crate::market::DOMINATED != 0
     }
 
     /// `site` with the overlay's government for its stellar, if any, and
@@ -1121,6 +1148,7 @@ mod tests {
             StellarOverride {
                 govt: Some(Some(GovtId(141))),
                 destroyed: Some(Countdown { days_left: 0 }),
+                dominated: false,
             }
         );
         assert!(overlay.set_destroyed(p, None));
@@ -1283,6 +1311,35 @@ mod tests {
         overlay.set_destroyed(StellarId(128), None);
         galaxy.set_overlay(overlay);
         assert!(!galaxy.destroyed(StellarId(128)), "regenerated");
+    }
+
+    #[test]
+    fn a_stellar_is_dominated_once_dominated_until_released() {
+        let mut overlay = GalaxyOverlay::default();
+        let earth = planet(128, 0.0, 0.0);
+        assert!(overlay.set_dominated(earth.id, true));
+        assert!(!overlay.set_dominated(earth.id, true), "no change");
+        let mut galaxy = OverlaidGalaxy::new(systems(), overlay.clone());
+        assert!(galaxy.dominated(&earth));
+        assert!(!galaxy.dominated(&planet(129, 0.0, 0.0)));
+        assert!(overlay.set_dominated(earth.id, false));
+        assert!(overlay.is_empty(), "released, nothing changed");
+        galaxy.set_overlay(overlay);
+        assert!(!galaxy.dominated(&earth));
+    }
+
+    #[test]
+    fn an_always_dominated_stellar_is_dominated_with_nothing_written() {
+        let owned = LandingSite {
+            flags2: crate::market::DOMINATED,
+            ..planet(128, 0.0, 0.0)
+        };
+        let mut overlay = GalaxyOverlay::default();
+        let galaxy = OverlaidGalaxy::new(systems(), overlay.clone());
+        assert!(galaxy.dominated(&owned));
+        overlay.set_dominated(owned.id, false);
+        let galaxy = OverlaidGalaxy::new(systems(), overlay);
+        assert!(galaxy.dominated(&owned), "a release leaves it so");
     }
 
     #[test]
