@@ -131,11 +131,13 @@ mod tests {
         assert_eq!(flown(500.0, 0.0), HANDLING, "strictly");
         assert_eq!(flown(0.0, -500.0), HANDLING);
         assert_eq!(flown(600.0, 10.0), HANDLING);
-        assert_eq!(
-            toward(&mut at(f32::NAN, 0.0, 0.0), Vec2::ZERO, &HANDLING).1,
-            HANDLING,
-            "not a number reads as far"
-        );
+        // Facing its bearing it thrusts, and the other axis is near, so
+        // only the NaN comparison decides the cap (`jae`/`jp` @0x8574f-0x85751).
+        for (x, y) in [(f32::NAN, 0.0), (0.0, f32::NAN)] {
+            let (controls, nan) = toward(&mut at(x, y, bearing(x, y)), Vec2::ZERO, &HANDLING);
+            assert!(controls.thrust, "({x}, {y}) faces its bearing");
+            assert_eq!(nan, HANDLING, "({x}, {y}): not a number reads as far");
+        }
         assert_eq!((TURN_SLACK, NEAR, NEAR_CAP), (5.0, 500.0, 0.25));
     }
 
