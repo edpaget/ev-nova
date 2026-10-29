@@ -310,10 +310,7 @@ pub(super) fn an_escorts_shot_into_the_bystander(
     shot.fleet = ShipRef::Player;
     shot.source = Source::Ship(Ties {
         leader: Some(ShipRef::Player),
-        govt: None,
-        booty: None,
-        planet_type: false,
-        mining: false,
+        ..Ties::default()
     });
     shot.aimed_at = Some(ShipRef::Npc(NpcId(1)));
     shot.target = Some(ShipRef::Npc(NpcId(1)));

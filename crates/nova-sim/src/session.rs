@@ -890,6 +890,7 @@ impl FightTerms {
             sprite: self.sprite,
             slot,
             resists: self.resists,
+            defends: npc.defends,
         }
     }
 }

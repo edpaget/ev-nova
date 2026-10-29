@@ -617,6 +617,16 @@ impl Condition {
     }
 }
 
+/// `_IsDisabled` (@0x2ce6-0x2e0d) of a ship in `condition`: `held`
+/// disabled at any armour (a Derelict government's or a mission's hold,
+/// branches 1 and 2, @0x2cf1-0x2d69), or else, for a ship that `defends`
+/// no stellar, anything but intact; a stellar's defence ship is never
+/// disabled by its armour, 0 or below included (branch 3, @0x2d6f-0x2d77).
+#[must_use]
+pub fn is_disabled(condition: Condition, held: bool, defends: bool) -> bool {
+    held || (!defends && condition != Condition::Intact)
+}
+
 /// Whether `armor` is gone: at or below none, on a ship that holds any.
 #[must_use]
 pub fn armour_gone(armor: Gauge) -> bool {

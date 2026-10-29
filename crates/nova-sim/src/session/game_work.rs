@@ -517,6 +517,7 @@ impl Session {
             resists: player_terms.resists,
             sprite: player_terms.sprite,
             slot: crate::ship_layer::Slot::Player,
+            defends: None,
         }];
         let npcs = self.space.traffic.npcs_mut().iter_mut().zip(terms);
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));

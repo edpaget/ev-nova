@@ -1466,6 +1466,7 @@ impl Combatant {
                 ShipRef::Npc(id) => nova_sim::ship_layer::Slot::Berth(id.0),
             },
             resists: nova_sim::combat::stellar_hazards::HazardResistance::default(),
+            defends: None,
         }
     }
 }

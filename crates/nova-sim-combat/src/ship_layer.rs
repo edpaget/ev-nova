@@ -21,9 +21,10 @@
 //!   [`ShipLayer::Ships`].
 //!
 //! `_IsDisabled` is true at armour 0 or less (@0x2dd2-0x2e02), so a ship
-//! breaking up is in the bottom layer too ([`disabled`]). Its defence-ship
-//! exception (+0x8c not -1) never applies, as the engine has no defence
-//! ships. None of these branches plays a sound.
+//! breaking up is in the bottom layer too ([`disabled`]), but for a
+//! stellar's defence ship, which it never calls disabled by its armour
+//! (+0x8c not -1, @0x2d6f; the fight's display reads it). None of these
+//! branches plays a sound.
 //!
 //! **Within a layer** the order is history, not a sort. `_InitSprites`,
 //! run once at launch (`_InitEVNova` @0x47382), adds every slot's sprites
