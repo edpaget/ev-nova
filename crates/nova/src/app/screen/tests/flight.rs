@@ -523,3 +523,16 @@ fn closing_the_about_text_by_done_is_silent() {
     assert_eq!(press_and_release(&mut screen, done), [vec![], vec![]]);
     assert!(screen.about().is_none(), "closed");
 }
+
+/// The About text takes the rulebook's `dialog_focus_ring` as it opens.
+#[test]
+fn the_about_text_opens_with_the_rulebooks_focus_ring() {
+    for (rules, ring) in focus_ring_readings() {
+        let mut screen = with_dialogs(data()).with_rules(rules);
+        screen.open_about();
+        assert_eq!(
+            screen.about().map(|about| about.dialog().focus_ring()),
+            Some(ring)
+        );
+    }
+}

@@ -2796,6 +2796,36 @@ fn the_escort_menu_holds_the_warships_alone_and_c_recalls_them() {
     );
 }
 
+/// The escort dialog takes the rulebook's `dialog_focus_ring` as it
+/// opens: on by default, off under the engine's reading.
+#[test]
+fn the_escort_dialog_opens_with_the_rulebooks_focus_ring() {
+    use nova_view::ui::FocusRing;
+    for (rules, ring) in [
+        (nova_sim::Rulebook::default(), FocusRing::Tab),
+        (
+            nova_sim::Rulebook::default()
+                .with_override(nova_sim::RuleKey::DialogFocusRing, RuleSource::Engine),
+            FocusRing::Off,
+        ),
+    ] {
+        let store = MemoryPilots::new();
+        let mut game = escorted(&store, &[], &[129], |screen| screen.with_rules(rules));
+        game.key(Key::Alt, true);
+        game.tap(Key::Tab);
+        game.key(Key::Alt, false);
+        game.tap(Key::Char('y'));
+        assert_eq!(game.showing(), Showing::EscortDialog);
+        assert_eq!(
+            game.app
+                .screen()
+                .escort_dialog()
+                .map(|dialog| dialog.dialog().focus_ring()),
+            Some(ring)
+        );
+    }
+}
+
 #[test]
 fn hailing_an_escort_opens_the_escort_dialog_whose_release_removes_it_from_the_saved_fleet() {
     let store = MemoryPilots::new();

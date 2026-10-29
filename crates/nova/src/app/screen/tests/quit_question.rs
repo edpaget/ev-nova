@@ -310,3 +310,23 @@ fn the_question_stops_the_menu_moving_as_any_overlay_does() {
         "frozen"
     );
 }
+
+/// The quit question takes the rulebook's `dialog_focus_ring` as it
+/// opens.
+#[test]
+fn the_quit_question_opens_with_the_rulebooks_focus_ring() {
+    for (rules, ring) in focus_ring_readings() {
+        let store = MemoryPilots::new();
+        let mut screen = with_dialogs(data())
+            .with_rules(rules)
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+            .appeared();
+        assert!(!screen.close_requested());
+        assert_eq!(
+            screen
+                .question()
+                .map(|question| question.dialog().focus_ring()),
+            Some(ring)
+        );
+    }
+}

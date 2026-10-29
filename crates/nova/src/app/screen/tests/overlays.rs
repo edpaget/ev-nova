@@ -1246,3 +1246,35 @@ fn full_keyboard_access_is_read_each_time_the_preferences_open() {
     screen.input(&key(Key::Enter, true));
     assert_ne!(screen.showing(), Showing::Preferences, "Return closes it");
 }
+
+/// Player info over flight takes the rulebook's `dialog_focus_ring`, down
+/// to its Jettison question.
+#[test]
+fn the_flight_player_infos_question_opens_with_the_rulebooks_focus_ring() {
+    for (rules, ring) in focus_ring_readings() {
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(trading_data())
+            .with_rules(rules)
+            .with_dialogs(Rc::new(TradeDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+            .appeared();
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        click_port_item(&mut screen, 7);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight, "taken off");
+        past_the_takeoff_grace(&mut screen);
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        click_player_info(&mut screen, PlayerInfoButton::Tab(Tab::Cargo));
+        click_player_info(&mut screen, PlayerInfoButton::Jettison);
+        assert_eq!(
+            screen
+                .flight_player_info()
+                .and_then(PlayerInfoScreen::confirm)
+                .map(nova_view::ui::Dialog::focus_ring),
+            Some(ring)
+        );
+    }
+}

@@ -1040,3 +1040,40 @@ fn a_bar_desc_whose_graphic_is_above_127_and_whose_pict_exists_opens_in_1021() {
         "laid out by DLOG 1021"
     );
 }
+
+/// A person's offer and a mission text over flight take the rulebook's
+/// `dialog_focus_ring` as they open.
+#[test]
+fn an_offer_and_a_mission_text_open_with_the_rulebooks_focus_ring() {
+    for (rules, ring) in focus_ring_readings() {
+        let mut screen = AppScreen::new(person_offer_data())
+            .with_dialogs(Rc::new(PictureDialogs), Rc::new(MonoMetrics))
+            .with_behaviour(Rc::new(Idle))
+            .with_rules(rules);
+        fly(&mut screen);
+        hail(&mut screen);
+        assert_eq!(
+            screen
+                .offer()
+                .and_then(OfferDialog::dialog)
+                .map(nova_view::ui::Dialog::focus_ring),
+            Some(ring),
+            "the offer"
+        );
+        let (screen, _) = filmed(0, "Job.", 0, Prefs::default());
+        let mut screen = screen.with_rules(rules);
+        create(&mut screen, "Ada");
+        screen.show_over_flight(vec![DescShown {
+            text: "Well done.".to_owned(),
+            graphic: None,
+            movie: None,
+        }]);
+        assert_eq!(
+            screen
+                .flight_mission_text()
+                .map(|text| text.dialog().focus_ring()),
+            Some(ring),
+            "the mission text"
+        );
+    }
+}

@@ -464,8 +464,14 @@ fn without_any_metrics_a_boarding_is_let_go() {
 /// `store`, capturing surely, flying the new pilot "Ada", boarded and
 /// captured.
 fn captured(store: &MemoryPilots) -> AppScreen {
+    captured_by(store, Rulebook::default())
+}
+
+/// [`captured`], the router's rule set `rules`.
+fn captured_by(store: &MemoryPilots, rules: Rulebook) -> AppScreen {
     let mut screen = boardable(
         with_dialogs(boarding_data())
+            .with_rules(rules)
             .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
             .appeared(),
     )
@@ -1072,4 +1078,38 @@ fn the_routers_hail_options_reach_every_flight() {
         flight_mut(&mut screen).hailing().expect("hailing").options,
         []
     );
+}
+
+/// The haggle, plunder and assignment dialogs take the rulebook's
+/// `dialog_focus_ring` as they open.
+#[test]
+fn haggle_plunder_and_assignment_open_with_the_rulebooks_focus_ring() {
+    for (rules, ring) in focus_ring_readings() {
+        let mut screen = hailable(with_dialogs(boarding_data()).with_rules(rules));
+        fly(&mut screen);
+        hail(&mut screen);
+        tap(&mut screen, Key::Char('s'));
+        assert_eq!(
+            screen.haggle().map(|dialog| dialog.dialog().focus_ring()),
+            Some(ring),
+            "haggle"
+        );
+        let mut screen = boardable(with_dialogs(boarding_data()).with_rules(rules));
+        fly(&mut screen);
+        board(&mut screen);
+        assert_eq!(
+            screen.plunder().map(|dialog| dialog.dialog().focus_ring()),
+            Some(ring),
+            "plunder"
+        );
+        let store = MemoryPilots::new();
+        let screen = captured_by(&store, rules);
+        assert_eq!(
+            screen
+                .assignment()
+                .map(|dialog| dialog.dialog().focus_ring()),
+            Some(ring),
+            "assignment"
+        );
+    }
 }

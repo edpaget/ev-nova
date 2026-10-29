@@ -749,3 +749,25 @@ fn held_p_a_and_x_repeat_once_their_dialog_closes() {
         screen.input(&key(k, false));
     }
 }
+
+/// The load note takes the rulebook's `dialog_focus_ring` as it opens.
+#[test]
+fn the_load_note_opens_with_the_rulebooks_focus_ring() {
+    for (rules, ring) in focus_ring_readings() {
+        let store = MemoryPilots::new();
+        let mut screen = with_dialogs(data())
+            .with_rules(rules)
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+            .appeared();
+        create_held(&mut screen, "Ada");
+        let newer = nova_sim::save::CURRENT + 1;
+        store.put("Bea", &format!(r#"{{"version": {newer}}}"#));
+        choose(&mut screen, MenuChoice::OpenPilot);
+        screen.input(&key(Key::Down, true));
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(
+            screen.load_note().map(|note| note.dialog().focus_ring()),
+            Some(ring)
+        );
+    }
+}
