@@ -8,7 +8,9 @@
 //! both passes:
 //!
 //! 1. The death timer ticks (@0x6d7e6-0x6d7f8,
-//!    [`Condition::count_down`]).
+//!    [`Condition::count_down`]); then the escort classes' kept orders
+//!    are settled (@0x6e2e8-0x6e452, see the `class_orders` module), each
+//!    clear reported to the step.
 //! 2. The klaxon (@0x6f1e4-0x6f227): [`SimSound::Klaxon`] while the
 //!    timer, after its tick, is above 1.0. A timer the display set on the
 //!    last pass has ticked, so the klaxon sounds from the pass after the
@@ -57,6 +59,12 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         self.ship.condition.count_down();
+        if self
+            .space
+            .settle_class_orders(&mut self.pilot, &self.statics)
+        {
+            self.out.class_orders_cleared = true;
+        }
         if matches!(
             self.ship.condition,
             Condition::Dying {

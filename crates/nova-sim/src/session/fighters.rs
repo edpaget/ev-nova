@@ -216,12 +216,23 @@ impl Session {
 
     /// The player's fighter `npc` joins the fleet, launched while the
     /// player targets `target` (see the module docs): its number.
+    ///
+    /// A lone launch's clear of a kept Return to Hangar
+    /// ([`Space::clear_lone_return`]) is reported as the class-order
+    /// bookkeeping's clears are: `_LaunchFighter` writes -1 (@0x3db4d), and
+    /// the bookkeeping later in the same `_HandlePlayer` clears -1 to 0
+    /// (@0x6e42d-0x6e446), as the new fighter is unmarked and no other
+    /// ship is the player's, showing the escort menu again while it shows
+    /// (see the `class_orders` module). The engine has no -1, so the launch
+    /// reports it.
     fn join_as_fighter(&mut self, mut npc: Npc, target: Option<ShipRef>) -> NpcId {
         let escort_type = self
             .statics
             .ship_record(npc.ship)
             .map(|record| record.escort_type);
-        self.space.clear_lone_return(escort_type);
+        if self.space.clear_lone_return(escort_type) {
+            self.out.class_orders_cleared = true;
+        }
         let target = target
             .filter(|_| self.setup.rules.source_for(RuleKey::FighterLaunch) == RuleSource::Bible)
             .filter(|&ship| match ship {
@@ -579,13 +590,15 @@ impl Space {
     /// in the system, a kept Return to Hangar for the fighters' class is
     /// none (`_LaunchFighter` @0x3db0f-0x3db4d: the fighters' order,
     /// `0x3b5394[0]`, becomes -1 when it is 3 and no other active slot has
-    /// the player as its parent).
-    fn clear_lone_return(&mut self, escort_type: Option<i16>) {
+    /// the player as its parent). Whether it cleared it.
+    fn clear_lone_return(&mut self, escort_type: Option<i16>) -> bool {
         let alone = self.player_led().next().is_none();
         let fighters = &mut self.escorts.class_orders[0];
-        if escort_type == Some(0) && alone && *fighters == Some(EscortOrder::Dock) {
+        let clears = escort_type == Some(0) && alone && *fighters == Some(EscortOrder::Dock);
+        if clears {
             *fighters = None;
         }
+        clears
     }
 
     /// NPC `carrier`'s fighter `npc` joins it (see the module docs): led
@@ -1393,10 +1406,29 @@ pub(super) mod tests {
             None,
             "no escort to change"
         );
-        assert_eq!(
-            launched_order(&mut session, &catalog),
-            Some(EscortOrder::Hold)
-        );
+        let id = launch_now(&mut session).expect("launched");
+        let duty = session.space.npc(id).and_then(|npc| npc.escort);
+        assert_eq!(duty.and_then(|duty| duty.order), Some(EscortOrder::Hold));
+        assert_eq!(session.pilot().escorts()[0].order, Some(EscortOrder::Hold));
+        // No ship of its class took the command, so the pass's class-order
+        // bookkeeping sends the class to formation (see the `class_orders`
+        // module).
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(session.pilot().escorts()[0].order, None);
+    }
+
+    /// One Viper launched from the player's bay at once, outside a pass
+    /// ([`Session::launch_fighter`]): its number.
+    fn launch_now(session: &mut Session) -> Option<NpcId> {
+        let sortie = Sortie {
+            carrier: ShipRef::Player,
+            bay: BAY,
+            ship: VIPER,
+            from: *session.player(),
+            heading: 0.0,
+            target: None,
+        };
+        session.launch_fighter(&sortie, &mut NeverFires)
     }
 
     #[test]
@@ -1408,14 +1440,17 @@ pub(super) mod tests {
     }
 
     /// The fighters' kept class order after a launch from `session`, with
-    /// Return to Hangar given every class first.
-    fn kept_after_launch(session: &mut Session, catalog: &FakePilotCatalog) -> Option<EscortOrder> {
+    /// Return to Hangar given every class first: the launch's own, made
+    /// outside a pass, as the pass's class-order bookkeeping that follows
+    /// it clears a Return no marked fighter holds anyway (see the
+    /// `class_orders` module).
+    fn kept_after_launch(session: &mut Session) -> Option<EscortOrder> {
         session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         assert_eq!(
             session.space.escorts.class_orders[0],
             Some(EscortOrder::Dock)
         );
-        launch(session, catalog);
+        launch_now(session).expect("launched");
         session.space.escorts.class_orders[0]
     }
 
@@ -1425,14 +1460,10 @@ pub(super) mod tests {
         // fighter of `EscortType` 0, no other active ship of parent 0, and
         // the fighters' order (0x3b5394[0]) Return becomes -1.
         let catalog = carrying();
-        assert_eq!(
-            kept_after_launch(&mut alone(&catalog), &catalog),
-            None,
-            "alone"
-        );
+        assert_eq!(kept_after_launch(&mut alone(&catalog)), None, "alone");
         let mut escorted = fleet(&catalog, 2, vec![warship(None)]);
         assert_eq!(
-            kept_after_launch(&mut escorted, &catalog),
+            kept_after_launch(&mut escorted),
             Some(EscortOrder::Dock),
             "an escort out"
         );
@@ -1442,7 +1473,7 @@ pub(super) mod tests {
             work(&mut session, &catalog, Controls::default());
         }
         assert_eq!(
-            kept_after_launch(&mut session, &catalog),
+            kept_after_launch(&mut session),
             Some(EscortOrder::Dock),
             "a fighter out"
         );
@@ -1450,7 +1481,7 @@ pub(super) mod tests {
         catalog.ship_records[1].escort_type = 2;
         let mut session = alone(&catalog);
         assert_eq!(
-            kept_after_launch(&mut session, &catalog),
+            kept_after_launch(&mut session),
             Some(EscortOrder::Dock),
             "not of EscortType 0"
         );
@@ -1459,6 +1490,26 @@ pub(super) mod tests {
             Some(EscortOrder::Dock),
             "its own class's kept too"
         );
+    }
+
+    #[test]
+    fn a_lone_fighter_launched_under_a_kept_return_reports_the_clear_on_its_pass() {
+        // `_LaunchFighter`'s -1 (@0x3db4d) is cleared to 0 later in the same
+        // `_HandlePlayer` (@0x6e42d-0x6e446), which shows the escort menu
+        // again while it shows.
+        let catalog = carrying();
+        let mut session = alone(&catalog);
+        session.command_escorts(
+            EscortGroup::Class(EscortClass::Fighter),
+            EscortCommand::Dock,
+            &mut NeverFires,
+        );
+        launch(&mut session, &catalog);
+        assert_eq!(session.space.escorts.class_orders, [None; 4]);
+        assert!(session.out.class_orders_cleared, "reported");
+        let mut session = alone(&catalog);
+        launch(&mut session, &catalog);
+        assert!(!session.out.class_orders_cleared, "none kept: none cleared");
     }
 
     #[test]

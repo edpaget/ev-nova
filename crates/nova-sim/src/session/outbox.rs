@@ -23,6 +23,7 @@ use super::{InterfaceLoad, MissionShown, PersonQuote, SessionEvent, TextBar};
 /// What the session fills for the view to take, in `Session`'s former
 /// field order.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // independent flags, each taken on its own
 pub(super) struct Outbox {
     /// The sounds emitted since they were last taken.
     pub(super) sounds: Vec<SimSound>,
@@ -87,6 +88,10 @@ pub(super) struct Outbox {
     /// (@0x90251), until a step takes it (see the `step` module); never
     /// saved.
     pub(super) last_line: Option<RaisedLine>,
+    /// Whether a pass cleared an escort class's kept order since a step
+    /// last took it (see the `class_orders` and `step` modules); never
+    /// saved.
+    pub(super) class_orders_cleared: bool,
 }
 
 impl Outbox {

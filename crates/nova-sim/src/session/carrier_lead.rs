@@ -263,20 +263,27 @@ fn an_npcs_fighter_told_to_return_coasts_its_glide_out() {
     assert!(!held, "it flies home once its glide is out");
 }
 
-/// The player's session of [`carrying`], two Vipers aboard, its fighters'
-/// kept order `order`, one launched.
+/// The player's session of [`carrying`], two Vipers aboard, one launched
+/// and then given `order`. Given before the launch, with no ship of the
+/// player's out to take it, the order would not stand past the launch's
+/// pass (see the `class_orders` module).
 fn players_launched(catalog: &FakePilotCatalog, order: Option<EscortCommand>) -> (Session, NpcId) {
     let mut session = flying_by(catalog, pilot(catalog, 2, Vec::new()), Rulebook::default());
-    if let Some(order) = order {
-        session.command_escorts(EscortGroup::All, order, &mut crate::chance::NeverFires);
-    }
     launch(&mut session, catalog);
     let fighter = &fleet_npcs(&session)[0];
     // Launched in `_HandlePlayer` (@0x62c61), it moves in its launch
     // frame's ship loop (@0x4445c-0x444c4), which counts its glide down
     // once.
     assert_eq!(fighter.ai_wait, GLIDE - 1, "{order:?}");
-    (session, fighter.id)
+    let id = fighter.id;
+    if let Some(order) = order {
+        session.command_escorts(EscortGroup::All, order, &mut crate::chance::NeverFires);
+        assert_eq!(
+            session.space.npc(id).and_then(Npc::escort_order),
+            order.order()
+        );
+    }
+    (session, id)
 }
 
 #[test]

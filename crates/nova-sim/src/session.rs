@@ -456,6 +456,7 @@ mod cargo_names;
 mod carrier_lead;
 mod chart;
 mod chart_ownership;
+mod class_orders;
 mod clearance;
 mod cloaks;
 mod collision_order;

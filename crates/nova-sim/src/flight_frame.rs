@@ -1476,6 +1476,12 @@ pub struct StepRun {
     /// `_DisplayComm`'s slot holds at the step's end (@0x90251); `None`
     /// when it raised none.
     pub last_line: Option<RaisedLine>,
+    /// Whether `_HandlePlayer`'s class-order bookkeeping cleared an escort
+    /// class's kept order on this step's passes (@0x6e37d, @0x6e43f), each
+    /// clear showing the escort menu in full again, unstamped, while it
+    /// shows (`_ShowEscortMenu` @0x5664a, called @0x6e388 and @0x6e446).
+    /// It plays no sound.
+    pub class_orders_cleared: bool,
 }
 
 /// One line on the message line as `_DisplayComm` (@0x90201) takes it:
