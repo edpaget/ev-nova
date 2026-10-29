@@ -294,7 +294,10 @@ fn defender(npc: &Npc, stellar: StellarId, strike: &Strike, around: &Surrounding
     let off = home.position - npc.state.position;
     let from_home = off.x * off.x + off.y * off.y;
     // `jbe` (@0x3be17): nothing unless the share is strictly above.
-    if DEFENCE_SHARE * from_home <= attacker || from_home.is_nan() || attacker.is_nan() {
+    if !matches!(
+        (DEFENCE_SHARE * from_home).partial_cmp(&attacker),
+        Some(std::cmp::Ordering::Greater)
+    ) {
         return Reaction::default();
     }
     let positive = |damage: f32| DEFENCE_PROVOCATION * damage.max(0.0);
@@ -741,6 +744,30 @@ mod tests {
             Reaction::default(),
             "no ship (`si` above 63, @0x3bd90): not even provoked"
         );
+    }
+
+    #[test]
+    fn a_defender_measures_from_where_it_is_on_both_axes() {
+        // The defender at (300, 400), its stellar at (900, 1200): 1000 off,
+        // half of 1000² 500,000. The attacker at (300 + 420, 400 + 560),
+        // 700 off (490,000): answered; at 710 off (504,100): let go.
+        let at = |dx: f32, dy: f32| {
+            let govts = relations(0, 0);
+            let mut guard = ship(1, Some(POLICE), AiType::Warship, 300.0);
+            guard.state.position.y = 400.0;
+            guard.defends = Some(StellarId(128));
+            let mut attacker = ship(2, Some(PIRATES), AiType::Warship, 300.0 + dx);
+            attacker.state.position.y = 400.0 + dy;
+            let npcs = [guard, attacker];
+            let sites = [nova_sim_catalog::fixture::planet(128, 900.0, 1200.0)];
+            let around = Surroundings {
+                govts: &govts,
+                ..Surroundings::new(&sites, &npcs)
+            };
+            victim(&npcs[0], &strike(n(1), n(2)), &around).target
+        };
+        assert_eq!(at(420.0, 560.0), Some(n(2)));
+        assert_eq!(at(426.0, 568.0), None);
     }
 
     #[test]

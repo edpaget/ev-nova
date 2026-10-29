@@ -252,17 +252,15 @@ pub fn defender(
         || specific_dude_ship(table, dude, None, Fallback::AllShips, gate, &mut *chance),
     )?;
     let heading = chance.below(crate::traffic::spawn::DEGREES) as f32;
+    // `_SpecificDudeSpawn`'s ship already has no lead, mission or aux mark.
     Some(NewShip {
         govt: site.govt,
         ai_type: AiType::Warship,
-        lead: None,
         state: crate::flight::ShipState {
             position: site.position,
             velocity: crate::geometry::Vec2::ZERO,
             heading,
         },
-        mission: None,
-        aux: None,
         boarded: true,
         ..ship
     })
@@ -809,6 +807,34 @@ mod tests {
             3,
             "capped at the raw DefCount"
         );
+    }
+
+    #[test]
+    fn a_defender_sent_up_unspent_keeps_its_stellars_count_for_the_refund() {
+        // `DefCount` 1005 decodes to 0 left, capped at 1005: a refund of a
+        // defender the dialog sent up, never spent, gives 1 back.
+        let listed = [earth(1005)];
+        let world = super::super::World::new(&listed);
+        let mut traffic = traffic_of(defence_table("", false));
+        traffic.spawn_defender(&listed[0], &world, &mut Ranged::of(&[]));
+        assert_eq!(traffic.defences().left(&listed[0]), 0);
+        traffic.refund_defenders(&BTreeSet::new());
+        assert_eq!(traffic.defences().left(&listed[0]), 1);
+    }
+
+    #[test]
+    fn the_frame_pass_reads_the_traffics_defenders() {
+        let listed = [earth(3)];
+        let world = super::super::World::new(&listed);
+        let mut traffic = traffic_of(defence_table("", false));
+        traffic.spawn_defender(&listed[0], &world, &mut Ranged::of(&[]));
+        traffic.defences_mut().clear();
+        traffic.recompute_defence_alarms(&listed);
+        assert!(traffic.defences().under_attack(StellarId(128)));
+        let id = traffic.npcs()[0].id;
+        traffic.remove(id);
+        traffic.recompute_defence_alarms(&listed);
+        assert!(!traffic.defences().under_attack(StellarId(128)));
     }
 
     #[test]

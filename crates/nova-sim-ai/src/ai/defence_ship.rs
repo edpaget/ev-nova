@@ -273,6 +273,27 @@ mod tests {
     }
 
     #[test]
+    fn the_first_pass_takes_one_exactly_6000_off_on_both_axes_and_none_past() {
+        // From (3000, 4000): (3600, 4800) off is 6000 exactly; 4801 is past.
+        let at = Vec2::new(3000.0, 4000.0);
+        let within = [(n(2), Vec2::new(6600.0, 8800.0))];
+        let past = [(n(2), Vec2::new(6600.0, 8801.0))];
+        assert_eq!(nearest(at, &within, Some(DEFENCE_RADIUS_SQ)), Some(n(2)));
+        assert_eq!(nearest(at, &past, Some(DEFENCE_RADIUS_SQ)), None);
+        assert_eq!(nearest(at, &past, None), Some(n(2)), "the second pass");
+    }
+
+    #[test]
+    fn decide_is_the_decisions_goal() {
+        let npcs = [defender(1)];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            DefenceShipAi.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Land(EARTH)
+        );
+    }
+
+    #[test]
     fn a_tie_keeps_the_lower_slot() {
         let npcs = [defender(1), escort(4, 100.0), escort(3, -100.0)];
         let (goal, _, _) = thinks(&npcs, Some(100.0));

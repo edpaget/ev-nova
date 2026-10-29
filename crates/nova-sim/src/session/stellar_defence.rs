@@ -228,6 +228,27 @@ mod tests {
     }
 
     #[test]
+    fn the_fixture_alarms_a_stellar_and_reads_its_ships_left() {
+        let catalog = defended(3);
+        let mut session = flying(&catalog);
+        assert_eq!(crate::fixture::defence_ships_left(&session, EARTH), Some(3));
+        assert_eq!(
+            crate::fixture::defence_ships_left(&session, StellarId(129)),
+            Some(0),
+            "129's own count, none"
+        );
+        assert_eq!(
+            crate::fixture::defence_ships_left(&session, StellarId(140)),
+            None,
+            "not listed"
+        );
+        crate::fixture::alarm_stellar(&mut session, EARTH);
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(up(&session, EARTH), 1);
+        assert_eq!(crate::fixture::defence_ships_left(&session, EARTH), Some(2));
+    }
+
+    #[test]
     fn a_captured_defender_defends_no_stellar() {
         let catalog = defended(3);
         let mut session = flying(&catalog);
