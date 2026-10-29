@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::layout::FlatpakLayout;
 use super::{FINISH_ARGS, MODULE, RUNTIME, RUNTIME_VERSION, RUST_BIN, RUST_EXTENSION, SDK};
 use crate::build_id::{self, BuildId};
+use crate::fonts::{FONT_DIR, FONT_LICENCES};
 use crate::linux::EXECUTABLE;
 use crate::spec::{BundleSpec, GAME_PACKAGE};
 
@@ -37,15 +38,28 @@ pub fn cargo_config() -> String {
 }
 
 /// The commands that build `nova` offline and install it, with the share
-/// tree, into `/app`.
+/// tree, into `/app`, and `LICENSE` and the fonts' licences
+/// ([`crate::fonts`]) into `/app/share/licenses/<app id>/`, Flathub's
+/// place for them. The sources are relative to the module's build
+/// directory, spelled with `/`: they are shell text run in the Linux
+/// sandbox, not host paths.
 #[must_use]
-pub fn build_commands() -> Vec<String> {
-    vec![
+pub fn build_commands(app_id: &str) -> Vec<String> {
+    let licenses = format!("/app/share/licenses/{app_id}");
+    let font_dir = FONT_DIR.join("/");
+    let mut commands = vec![
         format!("cargo --offline build --release --locked -p {GAME_PACKAGE}"),
         format!("install -Dm755 target/release/{EXECUTABLE} /app/bin/{EXECUTABLE}"),
         "mkdir -p /app/share".to_owned(),
         format!("cp -r {SHARE_DEST}/. /app/share/"),
-    ]
+        format!("install -Dm644 LICENSE {licenses}/LICENSE"),
+    ];
+    commands.extend(
+        FONT_LICENCES
+            .iter()
+            .map(|(source, name)| format!("install -Dm644 {font_dir}/{source} {licenses}/{name}")),
+    );
+    commands
 }
 
 /// The workspace source's skips: [`SKIP`], and Cargo's target directory
@@ -102,7 +116,7 @@ pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> V
                     build_id::VAR: build.as_str(),
                 },
             },
-            "build-commands": build_commands(),
+            "build-commands": build_commands(&spec.identifier),
             "sources": [
                 {
                     "type": "dir",
@@ -267,6 +281,9 @@ mod tests {
                 "install -Dm755 target/release/nova /app/bin/nova",
                 "mkdir -p /app/share",
                 "cp -r linux-share/. /app/share/",
+                "install -Dm644 LICENSE /app/share/licenses/io.example.nova/LICENSE",
+                "install -Dm644 crates/nova-render/fonts/OFL.txt /app/share/licenses/io.example.nova/NotoSans-OFL.txt",
+                "install -Dm644 crates/nova-render/fonts/NotoSerif-OFL.txt /app/share/licenses/io.example.nova/NotoSerif-OFL.txt",
             ]
         );
     }

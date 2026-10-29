@@ -134,7 +134,9 @@ jobs:
         run: cargo build --release --locked -p nova -p nova-dump --target "${{ matrix.target }}"
       # ev-nova-aarch64-apple-darwin.dmg, holding Nova.app (with Sparkle,
       # downloaded at its pinned version and checked, in
-      # Contents/Frameworks), nova-dump, README.txt, LICENSE and an
+      # Contents/Frameworks, and the Noto fonts' licences, NotoSans-OFL.txt
+      # and NotoSerif-OFL.txt, in Contents/Resources), nova-dump,
+      # README.txt, LICENSE, the two font licences again and an
       # Applications link. The bundler stages under target/, so dist/ holds
       # only the .dmg. No game data. It signs with Developer ID, notarizes
       # and has Gatekeeper assess (spctl) the app and the .dmg when the
@@ -217,8 +219,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:NOVA_WINSPARKLE_DLL = (Resolve-Path target\installer\downloads\WinSparkle.dll).Path
           cargo test --locked -p nova-win32 --test it winsparkle -- --nocapture
-      # One top-level directory holding the two binaries, README.txt and
-      # LICENSE, and on Linux the share/ tree (the desktop file, the
+      # One top-level directory holding the two binaries, README.txt,
+      # LICENSE and the fonts' licences (NotoSans-OFL.txt and
+      # NotoSerif-OFL.txt, crates/nova-render/fonts), and on Linux the share/ tree (the desktop file, the
       # AppStream metainfo and the hicolor icons) to copy into
       # ~/.local/share. No game data. The directory's and the
       # archive's names come from nova-bundle (crates/nova-bundle/src/archive.rs),
@@ -246,6 +249,8 @@ jobs:
             mise run linux-desktop -- "dist/$dir"
           fi
           cp packaging/README.txt LICENSE "dist/$dir/"
+          cp crates/nova-render/fonts/OFL.txt "dist/$dir/NotoSans-OFL.txt"
+          cp crates/nova-render/fonts/NotoSerif-OFL.txt "dist/$dir/NotoSerif-OFL.txt"
           cd dist
           case "${{ matrix.os }}" in
             windows-*) 7z a "$file" "$dir" ;;

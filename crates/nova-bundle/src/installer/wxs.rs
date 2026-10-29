@@ -48,11 +48,13 @@ pub const ICON_ID: &str = "nova.ico";
 /// can't have a GUID WiX makes up, so each has its own. Like
 /// [`UPGRADE_CODE`], they must never change: a component's GUID is how
 /// Windows Installer knows it across versions.
-pub const COMPONENT_GUIDS: [(&str, &str); 8] = [
+pub const COMPONENT_GUIDS: [(&str, &str); 10] = [
     ("nova.exe", "C72B1397-18B3-4216-A8ED-CE17FB130C5F"),
     ("nova_dump.exe", "1F8BF91A-11C9-47BA-B395-32D28D0B8DF4"),
     ("README.txt", "72F3A3EA-9071-4305-B670-727C0221BEEF"),
     ("LICENSE", "A7B9C55E-A439-40CF-9DCE-76D7D9D57843"),
+    ("NotoSans_OFL.txt", "5E21D2F4-35F0-4908-9951-47AFA8BCF32D"),
+    ("NotoSerif_OFL.txt", "23C7CEE9-DEEE-42DB-B041-C6C2C06320F7"),
     ("WinSparkle.dll", "E6787A31-D9EB-4D8D-851B-0AF4EA6F30CB"),
     (
         "WinSparkle_LICENSE.txt",
@@ -113,8 +115,8 @@ fn file_component(doc: &mut String, name: &str, source: &Path) {
 }
 
 /// The WiX source for `spec`'s installer, packing the executables in
-/// `layout.exes`, `README.txt` from `packaging/` and `LICENSE` from the
-/// workspace root.
+/// `layout.exes`, `README.txt` from `packaging/`, `LICENSE` from the
+/// workspace root and the fonts' licences ([`crate::fonts::font_licences`]).
 pub fn wxs(spec: &BundleSpec, layout: &InstallerLayout) -> Result<String, InstallerError> {
     let version = msi_version(&spec.version)?;
     let mut doc = String::new();
@@ -148,6 +150,9 @@ pub fn wxs(spec: &BundleSpec, layout: &InstallerLayout) -> Result<String, Instal
         &spec.workspace_root.join("packaging").join("README.txt"),
     );
     file_component(&mut doc, "LICENSE", &spec.workspace_root.join("LICENSE"));
+    for (source, name) in crate::fonts::font_licences(&spec.workspace_root) {
+        file_component(&mut doc, name, &source);
+    }
     file_component(&mut doc, winsparkle::DLL, &layout.winsparkle_dll());
     for (member, installed) in winsparkle::LICENCES {
         file_component(&mut doc, installed, &layout.winsparkle_licence(member));
@@ -296,11 +301,14 @@ mod tests {
             .collect();
         // Text built from the same bases the generator joins onto.
         let downloads = spec.target_dir.join("installer").join("downloads");
+        let fonts = crate::fonts::font_licences(&spec.workspace_root);
         let expected = [
             exes.join("nova.exe"),
             exes.join("nova-dump.exe"),
             spec.workspace_root.join("packaging").join("README.txt"),
             spec.workspace_root.join("LICENSE"),
+            fonts[0].0.clone(),
+            fonts[1].0.clone(),
             downloads.join("WinSparkle.dll"),
             downloads.join("COPYING"),
             downloads.join("COPYING.expat"),
@@ -326,6 +334,8 @@ mod tests {
                 "nova-dump.exe",
                 "README.txt",
                 "LICENSE",
+                "NotoSans-OFL.txt",
+                "NotoSerif-OFL.txt",
                 "WinSparkle.dll",
                 "WinSparkle-LICENSE.txt",
                 "WinSparkle-expat-LICENSE.txt"
@@ -457,7 +467,7 @@ mod tests {
         let text = source();
         let doc = Document::parse(&text).expect("xml");
         let components = all(&doc, "Component");
-        assert_eq!(components.len(), 8);
+        assert_eq!(components.len(), COMPONENT_GUIDS.len());
         for component in components {
             let key_paths: Vec<_> = component
                 .descendants()

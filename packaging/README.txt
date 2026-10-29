@@ -10,6 +10,9 @@ been tried. Each download holds:
   nova-dump   writes the game data out as JSON, PNG and WAV files
   README.txt  this file
   LICENSE     GPL-3.0-or-later; covers the code, not the game data
+  NotoSans-OFL.txt, NotoSerif-OFL.txt
+              the licences of the two fonts built into nova (see
+              "Licences" below)
   share/      Linux only: the desktop entry, AppStream metadata and icons
 
 The downloads are:
@@ -52,8 +55,8 @@ macOS
 -----
 
 The macOS download is a disk image (.dmg) holding Nova.app, nova-dump,
-README.txt and LICENSE. It is for Apple silicon Macs and needs macOS 13
-(Ventura) or later.
+README.txt, LICENSE and the two font licences. It is for Apple silicon
+Macs and needs macOS 13 (Ventura) or later.
 
 Open the .dmg and drag Nova.app onto the Applications folder beside it.
 It is named Nova.app, not EV Nova.app, so it never replaces the original
@@ -123,7 +126,7 @@ runtime, so any distribution with Flatpak runs it, and keeps its own
 settings and pilots (see below).
 
 The tarball (.tar.gz) holds one folder with nova, nova-dump, README.txt,
-LICENSE and a share/ folder:
+LICENSE, the two font licences and a share/ folder:
 
   share/applications/io.github.edpaget.ev-nova.desktop
       the menu entry: what launchers, docks and app grids show
@@ -208,6 +211,29 @@ start "EV Nova" from the applications list, and check that the dock (or
 the top bar's app menu) and the Alt+Tab switcher show the game's icon, a
 gold star in a ring on dark blue, and the name "EV Nova", not a generic
 icon or "nova".
+
+Licences
+--------
+
+ev-nova is free software under the GNU General Public License, version 3
+or later (GPL-3.0-or-later); LICENSE holds its text. It covers the code,
+not EV Nova's game data.
+
+nova has two fonts built in, unmodified, each under the SIL Open Font
+License, version 1.1 (OFL-1.1):
+
+  Noto Sans Regular    Copyright 2012 Google Inc.
+                       stands in for Geneva, and for Charcoal when your
+                       game data has none; licence in NotoSans-OFL.txt
+  Noto Serif Regular   Copyright 2022 The Noto Project Authors
+                       (https://github.com/notofonts/latin-greek-cyrillic)
+                       stands in for Times; licence in NotoSerif-OFL.txt
+
+Both licence files sit beside LICENSE in every download. Nova.app also
+carries them as Contents/Resources/NotoSans-OFL.txt and
+NotoSerif-OFL.txt; the Windows installer installs them beside nova.exe;
+the Flatpak keeps them, with LICENSE, in
+/app/share/licenses/io.github.edpaget.ev-nova/.
 
 More detail: the "Using your own data" section of the README,
 https://github.com/edpaget/ev-nova#using-your-own-data

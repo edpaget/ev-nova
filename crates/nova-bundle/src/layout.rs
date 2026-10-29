@@ -9,9 +9,13 @@
 //!   Nova.app/Contents/Frameworks/Sparkle.framework
 //!   Nova.app/Contents/Resources/Nova.icns
 //!   Nova.app/Contents/Resources/Sparkle-LICENSE.txt
+//!   Nova.app/Contents/Resources/NotoSans-OFL.txt
+//!   Nova.app/Contents/Resources/NotoSerif-OFL.txt
 //!   nova-dump
 //!   README.txt
 //!   LICENSE
+//!   NotoSans-OFL.txt
+//!   NotoSerif-OFL.txt
 //!   Applications -> /Applications
 //! ```
 //!
@@ -250,6 +254,13 @@ impl Layout {
         self.resources().join("Sparkle-LICENSE.txt")
     }
 
+    /// The font licence shipped as `name` ([`crate::fonts`]), in
+    /// `Contents/Resources`.
+    #[must_use]
+    pub fn font_licence(&self, name: &str) -> PathBuf {
+        self.resources().join(name)
+    }
+
     /// `nova-dump`, at the volume's root.
     #[must_use]
     pub fn dump(&self) -> PathBuf {
@@ -393,6 +404,10 @@ mod tests {
         assert_eq!(
             layout.sparkle_license(),
             contents.join("Resources").join("Sparkle-LICENSE.txt")
+        );
+        assert_eq!(
+            layout.font_licence("NotoSans-OFL.txt"),
+            contents.join("Resources").join("NotoSans-OFL.txt")
         );
     }
 }
