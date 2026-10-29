@@ -19,6 +19,20 @@ impl Chance for Last {
     }
 }
 
+/// Every percent draw a 35, otherwise as [`Last`]: a bribe roll of 35,
+/// which takes the bribe, and a haggle roll of 35, which wins.
+struct Haggles;
+
+impl Chance for Haggles {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        if n == 100 { 35 } else { n - 1 }
+    }
+}
+
 /// The first `chär` holds 1,000,000 credits and flies ship 128 in system
 /// 128, which holds Alpha Prime (128), independent and of `MinStatus`
 /// `min_status`; `STR#` 3002 holds "s<n>" for each n up to 60.
@@ -87,7 +101,12 @@ fn hail_alpha(screen: &mut AppScreen) {
 /// The router over [`planet_data`] with dialogs, in flight, Alpha Prime
 /// selected and hailed, its sounds taken.
 fn hailing(min_status: i16) -> AppScreen {
-    let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Last));
+    hailing_by(min_status, Last)
+}
+
+/// [`hailing`], drawing on `chance`.
+fn hailing_by(min_status: i16, chance: impl Chance + 'static) -> AppScreen {
+    let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(chance));
     let mut screen = with_dialogs(planet_data(min_status)).with_chance(SharedChance::new(shared));
     hail_alpha(&mut screen);
     screen
@@ -161,6 +180,32 @@ fn a_lost_bribe_haggle_returns_to_the_planet_comm_dialog() {
         "STR# 3002 #(4 + 31)"
     );
     assert_eq!(cash(screen), 1_000_000, "nothing paid");
+}
+
+#[test]
+fn a_won_lower_price_keeps_the_haggle_dialog_open_on_the_lowered_price() {
+    let screen = &mut hailing_by(1, Haggles);
+    tap(screen, Key::Char('o'));
+    assert_eq!(
+        screen.haggle().expect("open").lines(),
+        ["Pay us 3,000 credits."]
+    );
+    tap(screen, Key::Char('l'));
+    assert_eq!(screen.showing(), Showing::Haggle, "the haggle goes on");
+    assert_eq!(
+        screen.haggle().expect("still open").lines(),
+        ["Pay us 2,200 credits."],
+        "3,000 * 0.75 rounded down to 100"
+    );
+    assert!(screen.planet_comm().is_some());
+    assert_eq!(cash(screen), 1_000_000, "nothing paid yet");
+    tap(screen, Key::Enter);
+    assert_eq!(
+        screen.showing(),
+        Showing::Flight,
+        "a bribe paid closes both"
+    );
+    assert_eq!(cash(screen), 1_000_000 - 2200);
 }
 
 #[test]
