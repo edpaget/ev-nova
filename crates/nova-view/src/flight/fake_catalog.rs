@@ -1887,6 +1887,7 @@ pub(in crate::flight) fn damaging() -> FakeCatalog {
             require: 0,
             inh_jam: [0; 4],
             skill_mult: 0,
+            ship_color: 0,
         }],
         ..catalog
     }

@@ -324,8 +324,8 @@ pub fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
 /// `gövt` `id`: no flags, no classes, allies or enemies, no tolerance
 /// for crime, no initial record, no penalties, and `MaxOdds` 100 (even odds), hailed as
 /// "Govt `id`" and named so on the reinforcement line, scanning for
-/// nothing, fining nothing, requiring nothing, jamming nothing and with no
-/// `SkillMult`.
+/// nothing, fining nothing, requiring nothing, jamming nothing, with no
+/// `SkillMult` and painting nothing.
 #[must_use]
 pub fn govt(id: i16) -> GovtRecord {
     GovtRecord {
@@ -348,13 +348,14 @@ pub fn govt(id: i16) -> GovtRecord {
         require: 0,
         inh_jam: [0; 4],
         skill_mult: 0,
+        ship_color: 0,
     }
 }
 
 /// `përs` `id`, "Person `id`", flying ship `ship`: a warship of no
 /// government and `Aggress` 2 that may appear anywhere (`LinkSyst` -1),
 /// with no `Coward`, extra weapons, credits, `ShieldMod`, quotes,
-/// picture, mission, flags, `ActiveOn` or grant.
+/// picture, mission, flags, `ActiveOn`, grant or paint.
 #[must_use]
 pub fn person(id: i16, ship: i16) -> PersonRecord {
     PersonRecord {
@@ -380,6 +381,7 @@ pub fn person(id: i16, ship: i16) -> PersonRecord {
         grant_class: 0,
         grant_count: 0,
         grant_prob: 0,
+        color: 0,
         mission_ship: None,
     }
 }

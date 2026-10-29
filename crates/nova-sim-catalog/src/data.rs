@@ -978,6 +978,7 @@ impl TrafficCatalog for GameData {
                     grant_class: record.grant_class,
                     grant_count: record.grant_count,
                     grant_prob: record.grant_prob,
+                    color: record.color,
                     mission_ship: record
                         .link_mission
                         .and_then(|mission| self.get::<Mission>(mission.0)?.ok())
@@ -1188,6 +1189,7 @@ impl CombatCatalog for GameData {
                     require: record.require.bits(),
                     inh_jam: record.inh_jam,
                     skill_mult: record.skill_mult,
+                    ship_color: record.ship_color,
                 })
             })
             .collect()
@@ -4551,6 +4553,7 @@ mod tests {
             require: 0x8000_0000_0000_0021,
             inh_jam: [25, 0, -3, 0],
             skill_mult: 150,
+            ship_color: 0,
         };
         assert_eq!(
             data.governments(),
@@ -4909,6 +4912,7 @@ mod tests {
                 grant_class: 0,
                 grant_count: 0,
                 grant_prob: 0,
+                color: 0,
                 mission_ship: None,
             },
             "the -1 and 127 weapon slots left out, HailPict 127 none"
@@ -4944,6 +4948,19 @@ mod tests {
             assert_eq!(person_name(resource), name, "{resource}");
         }
         assert_eq!(PERSON_NAME_CHARS, 29);
+    }
+
+    #[test]
+    fn a_persons_color_and_a_govts_ship_color_reach_their_records_raw() {
+        // `përs` +0x17A and `gövt` +0xA8, `00RRGGBB`, which
+        // `_LoadObjectData` unpacks (@0x7c2a4-0x7c2e4, @0x7bcf9-0x7bd33).
+        let mut painted = person(-1, -1, 140, [(-1, 0, 0); 4], -1);
+        painted[0x17A..0x17E].copy_from_slice(&0x00F8_1008_u32.to_be_bytes());
+        let mut ruling = govt_bytes();
+        ruling[0xA8..0xAC].copy_from_slice(&0x0007_0707_u32.to_be_bytes());
+        let data = store(&[(Person::TYPE, 128, painted), (Govt::TYPE, 128, ruling)]);
+        assert_eq!(data.persons()[0].color, 0x00F8_1008);
+        assert_eq!(data.governments()[0].ship_color, 0x0007_0707);
     }
 
     #[test]

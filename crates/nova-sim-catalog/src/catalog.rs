@@ -912,6 +912,10 @@ pub struct PersonRecord {
     pub grant_count: i16,
     /// Its `GrantProb`, raw: the percent chance of a grant.
     pub grant_prob: i16,
+    /// Its `Color` (`përs` +0x17A), raw `00RRGGBB`: its ship's paint,
+    /// which `_LoadObjectData` unpacks to 5-bit channels
+    /// (@0x7c2a4-0x7c2e4; see `nova_sim::Rgb15::of_rgb`).
+    pub color: u32,
     /// Its `LinkMission`'s special ships: none without a `LinkMission`,
     /// or when the mission cannot be read.
     pub mission_ship: Option<MissionShip>,
@@ -1759,6 +1763,10 @@ pub struct GovtRecord {
     /// +0x64, `_LoadObjectData` @0x7bb69-0x7bb9b; see
     /// `nova_sim::skill`).
     pub skill_mult: i16,
+    /// Its `ShipColor` (`gövt` +0xA8), raw `00RRGGBB`: the paint of its
+    /// ships that carry no person, which `_LoadObjectData` unpacks to
+    /// 5-bit channels (@0x7bcf9-0x7bd33; see `nova_sim::Rgb15::of_rgb`).
+    pub ship_color: u32,
 }
 
 /// The game data a session's ships fight with: the `wëap`s, each
