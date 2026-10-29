@@ -122,6 +122,7 @@ impl AppScreen {
                 BackgroundSizes::read(&self.data),
             )
             .with_offer_clock(self.rules.source_for(RuleKey::OfferClock))
+            .with_focus_ring(self.dialog_focus_ring())
             .with_movies(self.movies.clone())
             .with_chance(self.chance.clone());
         // Recharge is enabled by the cash and the tank, which only flight

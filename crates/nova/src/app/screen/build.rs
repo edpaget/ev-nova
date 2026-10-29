@@ -106,6 +106,7 @@ impl AppScreen {
                 Rc::new(crate::movie::NoMoviePlayer),
                 Prefs::default().quicktime_movies,
             ),
+            keyboard_access: Rc::new(crate::app::NoKeyboardAccessSetting),
             fade_in: None,
             appear: None,
             entry: None,
@@ -627,6 +628,17 @@ impl AppScreen {
     pub fn with_movie_player(self, player: Rc<dyn MoviePlayer>) -> Self {
         let movies = Movies::new(player, self.prefs.quicktime_movies);
         Self { movies, ..self }
+    }
+
+    /// The router asking `access`, each time Preferences opens, whether
+    /// the player has turned on keyboard access to every control, which
+    /// Preferences' focus ring follows.
+    #[must_use]
+    pub fn with_keyboard_access(self, access: Rc<dyn crate::app::KeyboardAccess>) -> Self {
+        Self {
+            keyboard_access: access,
+            ..self
+        }
     }
 
     /// The player's preferences, as last chosen.

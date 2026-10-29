@@ -228,6 +228,21 @@ mod tests {
     }
 
     #[test]
+    fn an_engine_override_turns_the_dialog_focus_ring_off() {
+        let (rulebook, warnings) =
+            rulebook_of(r#"{"rule_overrides": {"dialog_focus_ring": "engine"}}"#);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook.source_for(RuleKey::DialogFocusRing),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            by_default().source_for(RuleKey::DialogFocusRing),
+            RuleSource::Bible
+        );
+    }
+
+    #[test]
     fn an_override_sets_one_cron_holdoff_rule() {
         let (rulebook, warnings) =
             rulebook_of(r#"{"rule_overrides": {"cron_post_holdoff": "engine"}}"#);

@@ -455,12 +455,15 @@ impl AppScreen {
     fn note_dialog(&self, text: &str) -> Option<NoteDialog> {
         let dialogs = self.dialogs.as_ref()?;
         let template = dialogs.resources.dialog_template(NOTE_DIALOG).ok()?;
-        Some(NoteDialog::new(
-            &template,
-            text,
-            self.data.button_style(),
-            Rc::clone(&dialogs.metrics),
-        ))
+        Some(
+            NoteDialog::new(
+                &template,
+                text,
+                self.data.button_style(),
+                Rc::clone(&dialogs.metrics),
+            )
+            .with_focus_ring(self.dialog_focus_ring()),
+        )
     }
 
     /// The note's input, all of it: once OK is activated, the note

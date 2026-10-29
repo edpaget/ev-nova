@@ -149,11 +149,13 @@ use nova_view::{
 };
 
 mod fullscreen;
+pub mod keyboard_access;
 mod menu;
 mod scaling;
 pub mod screen;
 mod wheel;
 
+pub use keyboard_access::{KeyboardAccess, NoKeyboardAccessSetting};
 pub use menu::{MenuPort, MenuSync};
 pub use screen::{AppScreen, Showing, start_screen};
 pub use wheel::WheelDelta;

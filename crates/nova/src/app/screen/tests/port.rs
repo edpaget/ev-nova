@@ -499,6 +499,36 @@ fn landed_shipyard_by(store: &MemoryPilots, rulebook: &Rulebook) -> AppScreen {
     screen
 }
 
+/// The rulebook's `dialog_focus_ring` reaches the spaceport and the
+/// shops opened over it.
+#[test]
+fn the_dialog_focus_ring_reaches_the_spaceport_and_its_shipyard() {
+    use nova_view::ui::{Dialog, FocusRing};
+    for (rulebook, ring) in [
+        (Rulebook::default(), FocusRing::Tab),
+        (
+            Rulebook::default().with_override(RuleKey::DialogFocusRing, RuleSource::Engine),
+            FocusRing::Off,
+        ),
+    ] {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard_by(&store, &rulebook);
+        assert_eq!(
+            spaceport(&screen).dialog().map(Dialog::focus_ring),
+            Some(ring)
+        );
+        click_port_item(&mut screen, 9);
+        assert_eq!(
+            spaceport(&screen)
+                .open_shipyard()
+                .and_then(|open| open.dialog())
+                .map(Dialog::focus_ring),
+            Some(ring),
+            "{ring:?}"
+        );
+    }
+}
+
 #[test]
 fn an_empty_shipyard_cell_clicked_follows_the_grid_selection_rule() {
     let other = Rulebook::default().with_override(RuleKey::GridSelection, RuleSource::Bible);

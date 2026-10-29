@@ -19,15 +19,22 @@ use nova_view::ui::player_info::{
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
 use nova_view::ui::{
-    AssignmentDialog, CommDialog, CommPress, DescriptionSource, DialogResources, HaggleDialog,
-    PlunderDialog, PlunderShown, PrefsDialog,
+    AssignmentDialog, CommDialog, CommPress, DescriptionSource, DialogResources, FocusRing,
+    HaggleDialog, PlunderDialog, PlunderShown, PrefsDialog,
 };
 use nova_view::{FullscreenKind, Input, Key, Screen, ScreenAction, VideoMode};
 
 use super::port_dialogs::{abort_and_refresh, desc_dialog, start_up_words};
 use super::{ABOUT_TEXT, AppScreen, ENTERED, MENU_X_TEXT, NO_INTERFACE, Side};
+use crate::app::keyboard_access::prefs_focus_ring;
 
 impl AppScreen {
+    /// Whether the in-game dialogs' buttons take the keyboard focus, as
+    /// the rulebook reads `dialog_focus_ring`: by default they do.
+    pub(super) fn dialog_focus_ring(&self) -> FocusRing {
+        FocusRing::from_rulebook(&self.rules)
+    }
+
     /// Hides the side shown, first cancelling its pointer gesture and
     /// letting go of its keys (their releases will go elsewhere), and shows
     /// `side`.
@@ -73,7 +80,8 @@ impl AppScreen {
         let Some(dialogs) = &self.dialogs else {
             return;
         };
-        let dialog = text.and_then(|text| desc_dialog(dialogs, &self.data, &text));
+        let ring = self.dialog_focus_ring();
+        let dialog = text.and_then(|text| desc_dialog(dialogs, &self.data, &text, ring));
         match dialog {
             Ok(dialog) => {
                 let below = self.shown_mut();
@@ -108,7 +116,8 @@ impl AppScreen {
 
     /// Opens the Preferences dialog over the side shown, on the player's
     /// preferences, listing the Scaling offered (native and Super-xBR
-    /// before an offer), first cancelling the side's pointer gesture and
+    /// before an offer), its focus ring as the keyboard access port
+    /// answers now ([`prefs_focus_ring`]), first cancelling the side's pointer gesture and
     /// letting go of its keys. With no dialogs, nothing opens; when the
     /// dialog cannot be built, nothing opens and the reason goes to stderr.
     pub(super) fn open_preferences(&mut self) {
@@ -126,7 +135,12 @@ impl AppScreen {
                     Rc::clone(&dialogs.metrics),
                 )
             })
-            .map(|dialog| dialog.with_scaling(&self.scaling))
+            .map(|dialog| {
+                let access = self.keyboard_access.full_keyboard_access();
+                dialog
+                    .with_scaling(&self.scaling)
+                    .with_focus_ring(prefs_focus_ring(access))
+            })
             .map(|dialog| {
                 if self.weapon_effects_wait() {
                     dialog.with_launch_weapon_effects(self.launch_weapon_effects)
@@ -377,7 +391,8 @@ impl AppScreen {
                     Rc::clone(&dialogs.metrics),
                     self.data.button_style(),
                 )
-                .with_movies(self.movies.clone()),
+                .with_movies(self.movies.clone())
+                .with_focus_ring(self.dialog_focus_ring()),
             );
         }
         self.missions.as_mut()
@@ -464,13 +479,16 @@ impl AppScreen {
         let confirm = dialogs.resources.dialog_template(YES_NO_DIALOG);
         self.cancel_pointer();
         self.release_keys();
-        self.player_info = Some(PlayerInfoScreen::new(
-            layout,
-            confirm,
-            info,
-            self.data.button_style(),
-            BackgroundSizes::read(&self.data),
-        ));
+        self.player_info = Some(
+            PlayerInfoScreen::new(
+                layout,
+                confirm,
+                info,
+                self.data.button_style(),
+                BackgroundSizes::read(&self.data),
+            )
+            .with_focus_ring(self.dialog_focus_ring()),
+        );
     }
 
     /// The player info screen's input over flight: a confirmed Jettison
@@ -526,7 +544,9 @@ impl AppScreen {
             _ => Err(NO_INTERFACE.to_owned()),
         };
         self.offer = Some(
-            OfferDialog::new(layout, prompt, self.data.button_style()).with_movies(&self.movies),
+            OfferDialog::new(layout, prompt, self.data.button_style())
+                .with_focus_ring(self.dialog_focus_ring())
+                .with_movies(&self.movies),
         );
     }
 
@@ -636,7 +656,7 @@ impl AppScreen {
                 CommDialog::fallback(view, style, metrics)
             }
         };
-        self.comm = Some(dialog);
+        self.comm = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
     }
 
     /// The comm dialog's input: each option pressed goes through flight,
@@ -696,7 +716,7 @@ impl AppScreen {
                 HaggleDialog::fallback(price, pay_me, style, metrics)
             }
         };
-        self.haggle = Some(dialog);
+        self.haggle = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
     }
 
     /// The haggle dialog's input: the choice goes through flight; a price
@@ -765,7 +785,7 @@ impl AppScreen {
                 PlunderDialog::fallback(shown, style, metrics)
             }
         };
-        self.plunder = Some(dialog);
+        self.plunder = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
     }
 
     /// The plunder dialog's input: each press goes through flight, a
@@ -826,7 +846,7 @@ impl AppScreen {
                 AssignmentDialog::fallback(style, metrics)
             }
         };
-        self.assignment = Some(dialog);
+        self.assignment = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
     }
 
     /// The assignment dialog's input: the choice goes through flight, and

@@ -62,8 +62,9 @@
 //! original engine disagree, which one the game follows: `"rules"`,
 //! `"engine"` (the default) or `"bible"`, for all of them, and
 //! `"rule_overrides"`, an object, for any one by its key, such as
-//! `{"crime_gains": "bible"}`. Every key, and what each reading does, is
-//! listed in `nova_sim::rulebook`'s table. They are set by editing the
+//! `{"crime_gains": "bible"}`, or `{"dialog_focus_ring": "engine"}` for
+//! the original's dialogs, with no keyboard focus ring. Every key, and
+//! what each reading does, is listed in `nova_sim::rulebook`'s table. They are set by editing the
 //! file; a sound change in the Preferences dialog keeps them.
 //!
 //! The same file turns on the developer's flight overlays, which the
@@ -131,7 +132,7 @@ use nova::config::{Os, legacy_pilots_dir, log_path, pilots_dir, settings_path};
 use nova::fonts::game_fonts;
 use nova::load::data_warnings;
 use nova::pilot_move::{DiskFiles, move_pilots, report_lines};
-use nova::platform::{Dialogs, Runner, event_loop};
+use nova::platform::{Dialogs, Runner, event_loop, system_keyboard_access};
 use nova::rulebook::eight_bit_reading;
 use nova::saves::FilePilots;
 use nova::startup::{
@@ -288,6 +289,8 @@ fn main() -> ExitCode {
         .with_chance(SharedChance::new(chance))
         .with_effects_chance(SharedChance::new(effects))
         .with_flight_overlays(overlays)
+        // Preferences' focus ring follows the system's full keyboard access.
+        .with_keyboard_access(system_keyboard_access())
         // Every disputed rule as the settings' rulebook chooses.
         .with_rulebook(&rulebook);
     match open_interface(&dir) {

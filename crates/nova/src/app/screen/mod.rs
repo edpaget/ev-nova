@@ -637,6 +637,11 @@ pub struct AppScreen {
     /// another is given ([`AppScreen::with_movie_player`]), on as the
     /// preferences say.
     movies: Movies,
+    /// Whether the player has asked the system for keyboard access to
+    /// every control, asked each time Preferences opens:
+    /// [`NoKeyboardAccessSetting`](crate::app::NoKeyboardAccessSetting)'s
+    /// unless another is given ([`AppScreen::with_keyboard_access`]).
+    keyboard_access: Rc<dyn crate::app::KeyboardAccess>,
     /// The fade back from black over the developer's side shown after a
     /// death without a main menu, while it plays.
     fade_in: Option<ScreenFade>,

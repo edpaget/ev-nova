@@ -1,4 +1,6 @@
 use super::*;
+use crate::app::KeyboardAccess;
+use nova_view::ui::FocusRing;
 
 // The About dialog.
 
@@ -1163,4 +1165,84 @@ fn confirming_jettison_empties_the_hold_and_closes_it_landed_or_flying() {
 fn the_flight_help_offers_p_and_command_comma() {
     assert!(nova_view::flight::view::HELP.contains("P: player info"));
     assert!(nova_view::flight::view::HELP.contains("Cmd-,: preferences"));
+}
+
+/// A [`KeyboardAccess`] answering what it holds, counting its asks.
+#[derive(Debug)]
+struct FakeKeyboardAccess {
+    answer: std::cell::Cell<Option<bool>>,
+    asks: std::cell::Cell<usize>,
+}
+
+impl FakeKeyboardAccess {
+    fn answering(answer: Option<bool>) -> Rc<Self> {
+        Rc::new(Self {
+            answer: std::cell::Cell::new(answer),
+            asks: std::cell::Cell::new(0),
+        })
+    }
+}
+
+impl KeyboardAccess for FakeKeyboardAccess {
+    fn full_keyboard_access(&self) -> Option<bool> {
+        self.asks.set(self.asks.get() + 1);
+        self.answer.get()
+    }
+}
+
+/// Tab then Space in the open Preferences: whether they flipped the
+/// music toggle, the first in its focus ring.
+fn tab_space_flips_music(screen: &mut AppScreen) -> bool {
+    let before = prefs_dialog(screen).prefs().sound.music;
+    screen.input(&key(Key::Tab, true));
+    screen.input(&key(Key::Tab, false));
+    screen.input(&key(Key::Space, true));
+    screen.input(&key(Key::Space, false));
+    prefs_dialog(screen).prefs().sound.music != before
+}
+
+#[test]
+fn the_preferences_focus_ring_follows_full_keyboard_access() {
+    for (answer, ring) in [
+        (Some(true), FocusRing::Tab),
+        (None, FocusRing::Tab),
+        (Some(false), FocusRing::Off),
+    ] {
+        let access = FakeKeyboardAccess::answering(answer);
+        let mut screen = with_dialogs(data()).with_keyboard_access(access.clone());
+        open_prefs(&mut screen);
+        assert_eq!(access.asks.get(), 1, "{answer:?}");
+        assert_eq!(prefs_dialog(&screen).focus_ring(), ring, "{answer:?}");
+        assert_eq!(
+            tab_space_flips_music(&mut screen),
+            ring == FocusRing::Tab,
+            "{answer:?}"
+        );
+        screen.input(&key(Key::Escape, true));
+        assert_ne!(screen.showing(), Showing::Preferences, "Escape closes it");
+    }
+    let mut screen = with_dialogs(data());
+    open_prefs(&mut screen);
+    assert_eq!(
+        prefs_dialog(&screen).focus_ring(),
+        FocusRing::Tab,
+        "no port"
+    );
+    assert!(tab_space_flips_music(&mut screen));
+}
+
+#[test]
+fn full_keyboard_access_is_read_each_time_the_preferences_open() {
+    let access = FakeKeyboardAccess::answering(Some(true));
+    let mut screen = with_dialogs(data()).with_keyboard_access(access.clone());
+    open_prefs(&mut screen);
+    assert_eq!(prefs_dialog(&screen).focus_ring(), FocusRing::Tab);
+    screen.input(&key(Key::Escape, true));
+    access.answer.set(Some(false));
+    open_prefs(&mut screen);
+    assert_eq!(access.asks.get(), 2);
+    assert_eq!(prefs_dialog(&screen).focus_ring(), FocusRing::Off);
+    assert!(!tab_space_flips_music(&mut screen));
+    screen.input(&key(Key::Enter, true));
+    assert_ne!(screen.showing(), Showing::Preferences, "Return closes it");
 }

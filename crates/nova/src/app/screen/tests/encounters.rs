@@ -656,6 +656,27 @@ fn y_opens_the_comm_dialog_over_paused_flight() {
     assert!(screen.comm().is_some());
 }
 
+/// The rulebook reaches the comm dialog: by default Tab then Space
+/// presses its first enabled button, Close Channel (item 1); under the
+/// original's `dialog_focus_ring` they press nothing, as `_CommFilter`
+/// @0x908ed maps neither.
+#[test]
+fn tab_then_space_closes_the_channel_only_with_the_focus_ring() {
+    let screen = &mut hailing();
+    tap(screen, Key::Tab);
+    tap(screen, Key::Space);
+    assert!(screen.comm().is_none(), "by default");
+    let original = nova_sim::Rulebook::default()
+        .with_override(RuleKey::DialogFocusRing, nova_sim::RuleSource::Engine);
+    let mut screen = hailable(with_dialogs(boarding_data()).with_rulebook(&original));
+    fly(&mut screen);
+    hail(&mut screen);
+    tap(&mut screen, Key::Tab);
+    tap(&mut screen, Key::Space);
+    assert_eq!(screen.showing(), Showing::Comm, "still open");
+    assert_eq!(reply(&mut screen), "Channel open.", "nothing pressed");
+}
+
 #[test]
 fn each_press_goes_through_the_flight_and_refreshes_the_dialog() {
     let screen = &mut hailing();

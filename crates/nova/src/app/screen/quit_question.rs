@@ -165,12 +165,15 @@ impl AppScreen {
     fn question_dialog(&self, question: &Question) -> Option<YesNoDialog> {
         let dialogs = self.dialogs.as_ref()?;
         let template = dialogs.resources.dialog_template(YES_NO_DIALOG).ok()?;
-        Some(YesNoDialog::new(
-            &template,
-            question.text(),
-            self.data.button_style(),
-            Rc::clone(&dialogs.metrics),
-        ))
+        Some(
+            YesNoDialog::new(
+                &template,
+                question.text(),
+                self.data.button_style(),
+                Rc::clone(&dialogs.metrics),
+            )
+            .with_focus_ring(self.dialog_focus_ring()),
+        )
     }
 
     /// The question's input, all of it: No closes it, back to the main

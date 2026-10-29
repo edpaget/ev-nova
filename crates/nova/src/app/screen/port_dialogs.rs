@@ -9,7 +9,7 @@ use nova_view::flight::FlightView;
 use nova_view::spaceport::{PortMap, SpaceportView};
 use nova_view::ui::desc::DESC_DIALOG;
 use nova_view::ui::mission_dialogs::MissionDialogs;
-use nova_view::ui::{DescDialog, DescriptionSource};
+use nova_view::ui::{DescDialog, DescriptionSource, FocusRing};
 
 use super::{Dialogs, ENTERED};
 
@@ -228,11 +228,12 @@ pub(super) fn load_info_text(
 }
 
 /// "Desc Dialog" showing `text`, from the dialogs, in the game data's
-/// button style.
+/// button style, its Done taking the keyboard focus as `ring` says.
 pub(super) fn desc_dialog(
     dialogs: &Dialogs,
     data: &GameData,
     text: &str,
+    ring: FocusRing,
 ) -> Result<DescDialog, String> {
     let template = dialogs.resources.dialog_template(DESC_DIALOG)?;
     Ok(DescDialog::new(
@@ -240,7 +241,8 @@ pub(super) fn desc_dialog(
         text,
         data.button_style(),
         Rc::clone(&dialogs.metrics),
-    ))
+    )
+    .with_focus_ring(ring))
 }
 
 /// The about text or the main menu's X text `raw` as the original loads
