@@ -519,19 +519,21 @@ impl WgpuRenderer {
             };
             let mut render = begin_pass(encoder, &target.canvas.view, load);
             let draws = &layout.draws[pass.draws.clone()];
-            self.encode(&mut render, frame, draws, buffers, target);
+            let scissors = &layout.scissors[pass.draws.clone()];
+            self.encode(&mut render, frame, (draws, scissors), buffers, target);
         }
     }
 
-    /// Encodes `draws` into `pass`, reading sprite instances and solid
-    /// vertices from `buffers`, sprites and solids projected onto the
-    /// target's content rectangle and an OR batch's backdrop read from its
-    /// canvas. Text is drawn in target pixels.
+    /// Encodes `draws` into `pass`, each cut to its scissor (index for
+    /// index), reading sprite instances and solid vertices from `buffers`,
+    /// sprites and solids projected onto the target's content rectangle
+    /// and an OR batch's backdrop read from its canvas. Text is drawn in
+    /// target pixels.
     fn encode(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         frame: &Frame,
-        draws: &[Draw],
+        (draws, scissors): (&[Draw], &[PixelRect]),
         (instance_buffer, vertex_buffer): (&wgpu::Buffer, &wgpu::Buffer),
         target: &PassTarget<'_>,
     ) {
@@ -542,7 +544,8 @@ impl WgpuRenderer {
             w: frame.target.0,
             h: frame.target.1,
         };
-        for draw in draws {
+        for (draw, scissor) in draws.iter().zip(scissors) {
+            pass.set_scissor_rect(scissor.x, scissor.y, scissor.w, scissor.h);
             match draw {
                 Draw::Sprites {
                     page,
@@ -970,6 +973,10 @@ struct Layout<'a> {
     text: Vec<&'a [TextRun]>,
     /// What to draw for each batch, in order.
     draws: Vec<Draw>,
+    /// The scissor each of `draws` is encoded with, index for index, in
+    /// its canvas's pixels: [`Frame::world_scissor`] for a world draw of a
+    /// clipped world, and the whole canvas for every other draw.
+    scissors: Vec<PixelRect>,
     /// For a world drawn into a texture of its own, the render passes its
     /// draws are split into, in order: the first clears the texture, and
     /// each OR batch opens another. None for a world drawn into the
@@ -983,10 +990,18 @@ struct Layout<'a> {
 
 impl<'a> Layout<'a> {
     /// Lays out the batch at `index` of `frame` at the end of `passes`,
-    /// opening a pass for an OR batch, which is left out when it covers
-    /// no pixel in its layer.
-    fn push(&mut self, frame: &'a Frame, index: usize, passes: &mut Vec<Pass>) {
+    /// scissored to `scissors`' rect for its layer, opening a pass for an
+    /// OR batch. It is left out when its scissor is empty, and an OR batch
+    /// is when it covers no pixel in its layer.
+    fn push(&mut self, frame: &'a Frame, index: usize, scissors: Scissors, passes: &mut Vec<Pass>) {
         let batch = &frame.batches[index];
+        let scissor = match frame.layer(index) {
+            DrawLayer::World => scissors.world,
+            DrawLayer::Overlay => scissors.overlay,
+        };
+        if scissor.w == 0 || scissor.h == 0 {
+            return;
+        }
         if let Batch::Sprites { blend, quads, .. } = batch
             && blend.reads_backdrop()
         {
@@ -1024,6 +1039,7 @@ impl<'a> Layout<'a> {
             }
         };
         self.draws.push(draw);
+        self.scissors.push(scissor);
         if let Some(pass) = passes.last_mut() {
             pass.draws.end = self.draws.len();
         }
@@ -1034,6 +1050,40 @@ impl<'a> Layout<'a> {
         Pass {
             backdrop: None,
             draws: self.draws.len()..self.draws.len(),
+        }
+    }
+}
+
+/// The scissors a frame's draws are encoded with, in their canvas's
+/// pixels.
+#[derive(Clone, Copy)]
+struct Scissors {
+    /// A world draw's: [`Frame::world_scissor`] when the world is clipped,
+    /// and otherwise the whole canvas it is drawn into (the target, or the
+    /// world's texture).
+    world: PixelRect,
+    /// An overlay draw's: the whole target, as the overlay is never
+    /// clipped.
+    overlay: PixelRect,
+}
+
+impl Scissors {
+    /// `frame`'s.
+    fn of(frame: &Frame) -> Self {
+        let target = PixelRect {
+            x: 0,
+            y: 0,
+            w: frame.target.0,
+            h: frame.target.1,
+        };
+        let world = match (frame.world_clip, frame.world_space) {
+            (Some(_), _) => frame.world_scissor(),
+            (None, WorldSpace::Texture { size: (w, h) }) => PixelRect { x: 0, y: 0, w, h },
+            (None, WorldSpace::Target) => target,
+        };
+        Self {
+            world,
+            overlay: target,
         }
     }
 }
@@ -1063,8 +1113,16 @@ impl<'a> Layout<'a> {
 /// tracks it). Text is never world (the batcher keeps it in the overlay),
 /// so it is always laid out with the overlay; no rule here singles it
 /// out.
+///
+/// Each world draw of a clipped world (`nova_view::DrawList::world_in`)
+/// is scissored to [`Frame::world_scissor`], in target pixels or texels
+/// as the world is drawn, and one whose scissor is empty is left out, its
+/// OR pass with it. Every other draw, the overlay's text included, has the
+/// whole canvas it is drawn into, which also resets a world draw's
+/// scissor before the overlay over it.
 fn lay_out(frame: &Frame) -> Layout<'_> {
     let mut layout = Layout::default();
+    let scissors = Scissors::of(frame);
     let indices = 0..frame.batches.len();
     let textured = matches!(frame.world_space, WorldSpace::Texture { .. });
     let in_world = |&index: &usize| textured && frame.layer(index) == DrawLayer::World;
@@ -1072,12 +1130,12 @@ fn lay_out(frame: &Frame) -> Layout<'_> {
     if indices.clone().any(|index| in_world(&index)) {
         world.push(layout.fresh_pass());
         for index in indices.clone().filter(in_world) {
-            layout.push(frame, index, &mut world);
+            layout.push(frame, index, scissors, &mut world);
         }
     }
     let mut passes = vec![layout.fresh_pass()];
     for index in indices.filter(|index| !in_world(index)) {
-        layout.push(frame, index, &mut passes);
+        layout.push(frame, index, scissors, &mut passes);
     }
     layout.world = world;
     layout.passes = passes;
@@ -1291,6 +1349,7 @@ mod tests {
             clear: Color::BLACK,
             world_space: WorldSpace::Target,
             world: Vec::new(),
+            world_clip: None,
             batches: vec![
                 Batch::Sprites {
                     page: PageId(0),
@@ -1523,6 +1582,7 @@ mod tests {
             world_space: WorldSpace::Target,
             batches,
             world: Vec::new(),
+            world_clip: None,
         }
     }
 
@@ -1534,6 +1594,7 @@ mod tests {
         assert_eq!(a.vertices, b.vertices);
         assert_eq!(a.text, b.text);
         assert_eq!(a.draws, b.draws);
+        assert_eq!(a.scissors, b.scissors);
         assert_eq!(a.world, b.world);
         assert_eq!(a.passes, b.passes);
     }
@@ -1748,6 +1809,171 @@ mod tests {
                 },
             ]
         );
+    }
+
+    fn pixels(x: u32, y: u32, w: u32, h: u32) -> PixelRect {
+        PixelRect { x, y, w, h }
+    }
+
+    /// `frame` with its world clipped to the logical (`x`, 0)-(`x` + `w`,
+    /// 32).
+    fn clipped_to(frame: Frame, x: f32, w: f32) -> Frame {
+        Frame {
+            world_clip: Some(Rect {
+                x,
+                y: 0.0,
+                w,
+                h: 32.0,
+            }),
+            ..frame
+        }
+    }
+
+    /// The scissor each draw of `passes` is encoded with, in order.
+    fn scissored(layout: &Layout<'_>, passes: &[Pass]) -> Vec<PixelRect> {
+        passes
+            .iter()
+            .flat_map(|pass| layout.scissors[pass.draws.clone()].iter().copied())
+            .collect()
+    }
+
+    /// The 64x64 target, the scene's whole canvas.
+    const WHOLE_TARGET: PixelRect = PixelRect {
+        x: 0,
+        y: 0,
+        w: 64,
+        h: 64,
+    };
+
+    #[test]
+    fn a_clipped_native_worlds_draws_are_scissored_and_the_overlays_have_the_whole_target() {
+        for frame in layered_frames() {
+            let frame = clipped_to(frame, 0.0, 24.0);
+            assert_eq!(frame.world_scissor(), pixels(0, 0, 48, 64));
+            let layout = lay_out(&frame);
+            // Laid out in the frame's order, none left out.
+            assert_eq!(layout.draws.len(), frame.batches.len());
+            assert_eq!(layout.scissors.len(), frame.batches.len());
+            let expected: Vec<PixelRect> = (0..frame.batches.len())
+                .map(|at| match frame.layer(at) {
+                    DrawLayer::World => frame.world_scissor(),
+                    DrawLayer::Overlay => WHOLE_TARGET,
+                })
+                .collect();
+            assert_eq!(
+                scissored(&layout, &layout.passes),
+                expected,
+                "{:?}",
+                frame.world
+            );
+        }
+    }
+
+    #[test]
+    fn a_clipped_textured_worlds_draws_are_scissored_to_texels_and_the_overlays_have_the_whole_target()
+     {
+        for frame in layered_frames() {
+            let frame = textured(clipped_to(frame, 0.0, 24.0));
+            assert_eq!(frame.world_scissor(), pixels(0, 0, 24, 32));
+            let layout = lay_out(&frame);
+            let world = frame.world.len();
+            assert_eq!(
+                scissored(&layout, &layout.world),
+                vec![frame.world_scissor(); world]
+            );
+            assert_eq!(
+                scissored(&layout, &layout.passes),
+                vec![WHOLE_TARGET; frame.batches.len() - world]
+            );
+        }
+    }
+
+    #[test]
+    fn a_world_clipped_to_nothing_lays_out_none_of_its_draws_nor_their_or_passes() {
+        for frame in layered_frames() {
+            let overlay = frame.batches.len() - frame.world.len();
+            let ors = |passes: &[Pass]| passes.iter().filter(|p| p.backdrop.is_some()).count();
+            let overlay_ors = frame
+                .batches
+                .iter()
+                .enumerate()
+                .filter(|&(at, batch)| {
+                    frame.layer(at) == DrawLayer::Overlay
+                        && matches!(
+                            batch,
+                            Batch::Sprites {
+                                blend: Blend::Or,
+                                ..
+                            }
+                        )
+                })
+                .count();
+
+            // Right of the logical space, and below it.
+            let nowhere = [
+                Rect {
+                    x: 40.0,
+                    y: 0.0,
+                    w: 8.0,
+                    h: 32.0,
+                },
+                Rect {
+                    x: 0.0,
+                    y: 40.0,
+                    w: 32.0,
+                    h: 8.0,
+                },
+            ];
+            for clip in nowhere {
+                let native = Frame {
+                    world_clip: Some(clip),
+                    ..frame.clone()
+                };
+                let layout = lay_out(&native);
+                assert_eq!(layout.draws.len(), overlay, "{:?} {clip:?}", frame.world);
+                assert_eq!(
+                    scissored(&layout, &layout.passes),
+                    vec![WHOLE_TARGET; overlay]
+                );
+                assert_eq!(ors(&layout.passes), overlay_ors, "{:?}", frame.world);
+
+                let texture = textured(native);
+                let layout = lay_out(&texture);
+                assert_eq!(drawn(&layout, &layout.world), Vec::<&Draw>::new());
+                assert_eq!(ors(&layout.world), 0, "{:?} {clip:?}", frame.world);
+                assert_eq!(layout.draws.len(), overlay);
+            }
+        }
+    }
+
+    #[test]
+    fn an_unclipped_world_lays_out_every_draw_with_its_whole_canvas() {
+        for frame in layered_frames() {
+            // Letterboxed, so the viewport isn't the whole target.
+            let frame = Frame {
+                viewport: pixels(0, 16, 64, 32),
+                logical: LogicalSize { w: 64, h: 32 },
+                ..frame
+            };
+            let native = lay_out(&frame);
+            assert_eq!(
+                scissored(&native, &native.passes),
+                vec![WHOLE_TARGET; native.draws.len()]
+            );
+            let texture = Frame {
+                world_space: WorldSpace::Texture { size: (64, 32) },
+                ..frame.clone()
+            };
+            let layout = lay_out(&texture);
+            assert_eq!(
+                scissored(&layout, &layout.world),
+                vec![pixels(0, 0, 64, 32); frame.world.len()]
+            );
+            assert_eq!(
+                scissored(&layout, &layout.passes),
+                vec![WHOLE_TARGET; frame.batches.len() - frame.world.len()]
+            );
+        }
     }
 
     #[test]

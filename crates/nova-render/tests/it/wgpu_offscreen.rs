@@ -1444,6 +1444,7 @@ fn the_clear_colour_fills_the_target() {
         world_space: WorldSpace::Target,
         batches: Vec::new(),
         world: Vec::new(),
+        world_clip: None,
     };
 
     gpu.submit(&frame);
@@ -1573,6 +1574,7 @@ fn the_painter_runs_once_per_frame_on_the_offscreen_target() {
         world_space: WorldSpace::Target,
         batches: Vec::new(),
         world: Vec::new(),
+        world_clip: None,
     };
     gpu.submit_with(&frame, &mut painter);
     let target = ((SIZE, SIZE), wgpu::TextureFormat::Rgba8Unorm);

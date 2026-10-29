@@ -126,7 +126,10 @@ impl<S: ImageSource> Renderer<S> {
     /// overlay's around it, so no batch holds both, and its batches are
     /// marked world ([`Frame::world`]). The world is drawn where `gpu`'s
     /// resolution for it says ([`world_space`]). Text is never world, so
-    /// every text run is in target pixels.
+    /// every text run is in target pixels. The list's world clip
+    /// ([`DrawList::world_in`]) is the frame's ([`Frame::world_clip`]): the
+    /// batches are the same with it or without, and the GPU cuts the
+    /// world's draws to it ([`Frame::world_scissor`]).
     ///
     /// A frame drawn after [`Renderer::set_enlarger`] first starts the
     /// atlas afresh; a zero-area viewport leaves that to the next frame.
@@ -156,6 +159,12 @@ impl<S: ImageSource> Renderer<S> {
             world_space: world_space(gpu.world_resolution(), viewport),
             batches,
             world,
+            world_clip: list.world_clip().map(|clip| Rect {
+                x: clip.min.x,
+                y: clip.min.y,
+                w: clip.width(),
+                h: clip.height(),
+            }),
         });
         report
     }
@@ -950,6 +959,7 @@ mod tests {
                         quads: expected_quads,
                     }],
                     world: Vec::new(),
+                    world_clip: None,
                 }),
             ]
         );
@@ -2646,6 +2656,89 @@ mod tests {
                 ("text", 1, OVERLAY),
             ]
         );
+    }
+
+    /// The world's clip in the clip tests: the 64x48 logical space less a
+    /// 16-unit column at the right, as flight's play area leaves the
+    /// status bar's.
+    fn play_area() -> Bounds {
+        Bounds {
+            min: at(0.0, 0.0),
+            max: at(48.0, 48.0),
+        }
+    }
+
+    /// A world of a sprite, a line and a dot, all inside [`play_area`],
+    /// clipped to it when `clipped`, under an overlay "bar" (the red
+    /// picture) in the column.
+    fn world_under_a_bar(clipped: bool) -> DrawList {
+        let world = |list: &mut DrawList| {
+            list.sprite(sprite(0), at(10.0, 10.0), Color::WHITE)
+                .line(at(2.0, 2.0), at(8.0, 2.0), 1.0, Color::WHITE)
+                .dot(at(3.0, 3.0), 1.0, Color::WHITE);
+        };
+        let mut list = DrawList::new();
+        if clipped {
+            list.world_in(play_area(), world);
+        } else {
+            list.world(world);
+        }
+        list.picture(ImageKey::picture(128), at(50.0, 0.0));
+        list
+    }
+
+    #[test]
+    fn a_clipped_world_submits_its_clip_and_scissor_in_each_world_space() {
+        let clip = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 48.0,
+            h: 48.0,
+        });
+        let target = render_through(&world_under_a_bar(true), &mut RecordingGpu::new());
+        assert_eq!(target.world_space, WorldSpace::Target);
+        assert_eq!(target.world_clip, clip);
+        // Twice the clip, on the 128x96 viewport.
+        assert_eq!(target.world_scissor(), rect(0, 0, 96, 96));
+        let mut logical = RecordingGpu::answering(WorldResolution::Logical);
+        let texture = render_through(&world_under_a_bar(true), &mut logical);
+        assert_eq!(texture.world_space, WorldSpace::Texture { size: (64, 48) });
+        assert_eq!(texture.world_clip, clip);
+        // The clip's texels, one a unit.
+        assert_eq!(texture.world_scissor(), rect(0, 0, 48, 48));
+    }
+
+    #[test]
+    fn an_unclipped_world_submits_no_clip() {
+        let frame = render_through(&world_under_a_bar(false), &mut RecordingGpu::new());
+        assert_eq!(frame.world_clip, None);
+        assert_eq!(frame.world_scissor(), frame.viewport);
+    }
+
+    #[test]
+    fn a_clip_no_world_command_crosses_changes_nothing_but_the_frames_clip() {
+        let resolutions = [WorldResolution::Native, WorldResolution::Logical];
+        for resolution in resolutions {
+            let clipped = render_through(
+                &world_under_a_bar(true),
+                &mut RecordingGpu::answering(resolution),
+            );
+            let unclipped = render_through(
+                &world_under_a_bar(false),
+                &mut RecordingGpu::answering(resolution),
+            );
+            assert!(clipped.world_clip.is_some(), "{resolution:?}");
+            assert_eq!(clipped.batches, unclipped.batches, "{resolution:?}");
+            assert_eq!(clipped.world, unclipped.world, "{resolution:?}");
+            assert_eq!(
+                Frame {
+                    world_clip: None,
+                    ..clipped
+                },
+                unclipped,
+                "{resolution:?}"
+            );
+        }
     }
 
     /// An OR sprite (5x6, so at (7.5, 7)) in the world, and the same in
