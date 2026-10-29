@@ -3,9 +3,8 @@
 
 /// An active mission carrying cargo, from the mission's test support.
 pub(crate) use crate::mission::fixture::carrying;
-/// The default NPC and the count-waiting one, from the traffic's test
-/// support.
-pub(crate) use crate::traffic::fixture::{count_waiting, npc};
+/// The default NPC, from the traffic's test support.
+pub(crate) use crate::traffic::fixture::npc;
 /// The [`Chance`] mocks and the fast ship class, from the foundation
 /// crate's test support.
 pub(crate) use nova_sim_base::fixture::{Draws, FAST, Ranged, Scripted};

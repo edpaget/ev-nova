@@ -2729,7 +2729,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_pirate_taunted_in_its_count_wait_attacks_once_its_wait_is_out() {
+    fn a_pirate_taunted_in_its_count_wait_attacks_and_keeps_its_wait() {
         // `_DoCommDialog`'s attack (`_AIMakeShipAttackPlayer` @0x9621f)
         // writes no +0x4c, and nor does its bribe (`_AIMakeShipLeave`
         // @0x961eb, @0x7e2b0-0x7e2e7): every deed's goal keeps the wait,
@@ -2745,7 +2745,9 @@ pub(super) mod tests {
             crate::combat::weapon::WeaponSpec::new(&crate::testkit::weapon(127)),
             1,
         )]);
-        crate::testkit::count_waiting(npc(&mut session), 50);
+        let pirate = npc(&mut session);
+        pirate.goal = Goal::CountWait;
+        pirate.ai_wait = 50;
         let mut chance = Draws::of(&opening(0));
         let view = session
             .hail(&catalog, &options, &mut chance)
@@ -2761,27 +2763,14 @@ pub(super) mod tests {
         assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player));
         assert_eq!(pirate.ai_wait, 50, "the wait outlives goal 0x16");
         assert!(pirate.wait_running());
-        // Through the session's traffic, it holds still through the wait,
-        // its fire gated (`_HandleShip` @0x34a54-0x34a72)...
+        // Through the session's traffic, the wait it kept holds it still
+        // (`_HandleShip` @0x34a54-0x34a72). The whole hold and the turn
+        // after are nova-sim-ai's, pinned by
+        // `traffic::count_wait_turn_tests::a_pirate_a_good_samaritans_call_turns_in_its_count_wait_holds_still_for_its_whole_count`.
         let at = pirate.state;
-        for tick in 1..50 {
-            decide(&mut session, &catalog, 1, |pirate| {
-                assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player), "tick {tick}");
-                assert_eq!(pirate.state, at, "still on tick {tick}");
-                assert!(
-                    !crate::ai::fire::gated(pirate).primary,
-                    "it fires nothing on tick {tick}"
-                );
-            });
-        }
-        decide(&mut session, &catalog, 1, |pirate| {
-            assert_eq!(pirate.state, at, "still on the wait's last tick");
-            assert_eq!(pirate.ai_wait, 0, "the wait is out");
-        });
-        // ...then, the next tick, turns to its fight with the player below.
         decide(&mut session, &catalog, 1, |pirate| {
             assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player));
-            assert_ne!(pirate.state.heading, at.heading, "it turns to fight");
+            assert_eq!(pirate.state, at, "still");
         });
     }
 
