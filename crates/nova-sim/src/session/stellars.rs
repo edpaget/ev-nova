@@ -511,7 +511,8 @@ impl Session {
     pub(super) fn stellars_day(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.space.strength.clear();
         self.reset_gun_timers();
-        self.regrow_defences(chance);
+        self.chart
+            .regrow_defences(&mut self.pilot, &self.statics, chance);
         let mut after = None;
         while let Some((stellar, countdown)) = self.next_destroyed(after) {
             after = Some(stellar);

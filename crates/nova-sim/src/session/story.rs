@@ -371,7 +371,11 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
             Participant::Reinforcements => session.chart.reinforcements_day(&mut session.pilot),
             // The dominated stellars' tribute (see the
             // `dominated_stellars` module).
-            Participant::Tribute => session.tribute_day(),
+            Participant::Tribute => {
+                session
+                    .chart
+                    .tribute_day(&mut session.pilot, &session.statics);
+            }
         }
     }
 }

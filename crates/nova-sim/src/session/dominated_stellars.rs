@@ -6,7 +6,7 @@
 //!   (@0x9740f) write the galaxy overlay through it, which stamps the
 //!   stellars shown, listed and waiting for the take-off afresh, so every
 //!   reader of a site sees the change at once.
-//! - **The tribute** ([`Session::tribute_day`], the daily step's fourth
+//! - **The tribute** ([`Chart::tribute_day`], the daily step's fourth
 //!   participant; `_DoStellarTimePassage` @0x40867-0x408d4, called
 //!   @0xb5b8): each stellar some system lists that is active (+0x44,
 //!   @0x4087a: its holder visible) and dominated (+0x46, @0x40880) adds
@@ -17,7 +17,7 @@
 //!   nothing reads them: the stellar's +0x2a, which the loop increments
 //!   behind a test of the nav stellar's `Flags2` (@0x40886-0x408a3), and
 //!   `_statusRedraw[2]` (@0x408be).
-//! - **The regrowth** ([`Session::regrow_defences`], in the daily step's
+//! - **The regrowth** ([`Chart::regrow_defences`], in the daily step's
 //!   stellars, sixth; `_IncrementGameTime` @0xb5c4-0xb653): each active
 //!   (+0x44 @0xb5d5) dominated (+0x46 @0xb5f6) stellar's defence fleet
 //!   regrows a ship on `Rand(450)`'s 0 while below its cap
@@ -73,6 +73,28 @@ impl Chart {
             .sum()
     }
 
+    /// The daily step's fourth participant (`_DoStellarTimePassage`,
+    /// called @0xb5b8): the day's tribute ([`Chart::daily_tribute`]) added
+    /// to `pilot`'s cash. It plays no sound and draws nothing.
+    pub(super) fn tribute_day(&self, pilot: &mut Pilot, statics: &Statics) {
+        pilot.cash += self.daily_tribute(pilot, statics);
+    }
+
+    /// The daily step's regrowth (`_IncrementGameTime` @0xb5f6-0xb64c;
+    /// see the module docs): each active dominated stellar's fleet in
+    /// `pilot` regrows on `chance` ([`DefenceShips::regrow`](crate::traffic::stellar_defence::DefenceShips::regrow)).
+    pub(super) fn regrow_defences(
+        &self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let ships = &mut pilot.defence_ships;
+        for listed in self.dominated_active(pilot.system, statics) {
+            ships.regrow(listed.id, listed.def_count, &mut *chance);
+        }
+    }
+
     /// Every stellar some system lists that is active (+0x44: its holder,
     /// with the player in `player`, visible) and dominated (+0x46), in ID
     /// order: what the daily step's tribute and regrowth walk.
@@ -88,28 +110,6 @@ impl Chart {
                     .active_holder(listed.id, &listed.systems, player)
                     .is_some()
         })
-    }
-}
-
-impl Session {
-    /// The daily step's fourth participant (`_DoStellarTimePassage`,
-    /// called @0xb5b8): the day's tribute ([`Chart::daily_tribute`]) added
-    /// to the cash. It plays no sound and draws nothing.
-    pub(super) fn tribute_day(&mut self) {
-        self.pilot.cash += self.chart.daily_tribute(&self.pilot, &self.statics);
-    }
-
-    /// The daily step's regrowth (`_IncrementGameTime` @0xb5f6-0xb64c;
-    /// see the module docs): each active dominated stellar's fleet regrows
-    /// on `chance` ([`DefenceShips::regrow`](crate::traffic::stellar_defence::DefenceShips::regrow)).
-    pub(super) fn regrow_defences(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        let ships = &mut self.pilot.defence_ships;
-        for listed in self
-            .chart
-            .dominated_active(self.pilot.system, &self.statics)
-        {
-            ships.regrow(listed.id, listed.def_count, &mut *chance);
-        }
     }
 }
 
