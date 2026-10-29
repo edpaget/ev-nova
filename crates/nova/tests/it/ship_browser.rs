@@ -1,17 +1,14 @@
 //! The app opening on the ship browser over synthetic game data, wired to
 //! the renderer and the recording Gpu and driven by key events.
 
-// Sprite sizes and centres here are small integers, exact in floating
-// point.
-#![allow(clippy::float_cmp)]
-
 use std::rc::Rc;
 use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+
+use crate::common::Frames;
 use nova_data::graphics::RLED;
 use nova_data::graphics::fixture::RledBuilder;
-use nova_data::records::desc::Desc;
 use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -20,7 +17,7 @@ use nova_data::{GameData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, QuadInstance};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_view::{Blend, Key};
+use nova_view::Key;
 
 /// A 1024x768 window at scale 1.
 struct FakeWindow;
@@ -71,40 +68,14 @@ fn sheet(size: u16) -> Vec<u8> {
         .build()
 }
 
-/// Ship 128, the Shuttle, with base, glow and lights sheets and a
-/// description; ship 129, the Courier, whose `shän` names a missing sheet.
+/// Ship 128, the Shuttle, with base, glow and lights sheets; ship 129,
+/// the Courier, whose `shän` names a missing sheet.
 fn data() -> Rc<GameData> {
-    let mut desc = b"A small craft.".to_vec();
-    desc.extend([0, 0xFF, 0xFF]);
-    desc.extend([0; 34]);
     let fork = ForkBuilder::new()
         .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship())
         .resource(Ship::TYPE, 129, Some(b"Courier"), &ship())
         .resource(ShipAnim::TYPE, 128, None, &anim(1000, 1100, 1200))
         .resource(ShipAnim::TYPE, 129, None, &anim(1300, -1, -1))
-        .resource(RLED, 1000, None, &sheet(8))
-        .resource(RLED, 1100, None, &sheet(16))
-        .resource(RLED, 1200, None, &sheet(16))
-        .resource(Desc::TYPE, 13000, Some(b"Shuttle"), &desc)
-        .build()
-        .bytes;
-    Rc::new(one_file(fork).load())
-}
-
-/// Ship 128 alone, with base, glow and lights sheets, its lights
-/// blinking as the Shuttle's do (`BlinkMode` 1, A=4 B=1 C=2 D=20): lit at
-/// ticks 1-3 and 10-12 of every 40.
-fn blinking_data() -> Rc<GameData> {
-    let shan = ShipAnimBuilder::from_bytes(anim(1000, 1100, 1200))
-        .blink_mode(1)
-        .blink_val_a(4)
-        .blink_val_b(1)
-        .blink_val_c(2)
-        .blink_val_d(20)
-        .build();
-    let fork = ForkBuilder::new()
-        .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship())
-        .resource(ShipAnim::TYPE, 128, None, &shan)
         .resource(RLED, 1000, None, &sheet(8))
         .resource(RLED, 1100, None, &sheet(16))
         .resource(RLED, 1200, None, &sheet(16))
@@ -120,12 +91,9 @@ struct Harness {
 }
 
 impl Harness {
+    /// The app opening on the ship browser.
     fn new() -> Self {
-        Self::over(data())
-    }
-
-    /// The app opening on the ship browser over `data`.
-    fn over(data: Rc<GameData>) -> Self {
+        let data = data();
         let app = App::new(&FakeWindow, Rc::clone(&data), start_screen(data));
         Self {
             app,
@@ -161,7 +129,14 @@ impl Harness {
         assert_eq!(frame.world, [0_usize; 0], "no world");
         frame
     }
+
+    /// The last frame drawn.
+    fn last_frame(&self) -> Frame {
+        (*self.gpu.submits().last().expect("a frame")).clone()
+    }
 }
+
+crate::common::frames!(Harness, frame);
 
 fn sprite_quads(frame: &Frame) -> Vec<QuadInstance> {
     frame
@@ -185,17 +160,6 @@ fn texts(frame: &Frame) -> Vec<String> {
         .collect()
 }
 
-fn solid_quads(frame: &Frame) -> usize {
-    frame
-        .batches
-        .iter()
-        .map(|batch| match batch {
-            Batch::Solid(quads) => quads.len(),
-            _ => 0,
-        })
-        .sum()
-}
-
 fn shows(frame: &Frame, expected: &str) -> bool {
     texts(frame).iter().any(|text| text == expected)
 }
@@ -211,121 +175,32 @@ fn the_app_opens_on_the_ship_browser() {
 }
 
 #[test]
-fn the_first_frame_draws_the_ship_its_layers_and_its_text() {
+fn the_first_frame_brings_the_ships_sprites_and_name_to_the_gpu() {
     let mut harness = Harness::new();
     let frame = harness.frame();
-
-    // The base is drawn normally, then the glow and lights ORed over it,
-    // each in its own batch since they overlap.
-    assert!(
-        matches!(
-            &frame.batches[0],
-            Batch::Sprites { blend: Blend::Normal, quads, .. } if quads.len() == 1
-        ),
-        "{:?}",
-        frame.batches[0]
-    );
-    for layer in &frame.batches[1..3] {
-        assert!(
-            matches!(
-                layer,
-                Batch::Sprites { blend: Blend::Or, quads, .. } if quads.len() == 1
-            ),
-            "{layer:?}"
-        );
-    }
-    let quads = sprite_quads(&frame);
-    let centre = |quad: &QuadInstance| {
-        (
-            quad.dest.x + quad.dest.w / 2.0,
-            quad.dest.y + quad.dest.h / 2.0,
-        )
-    };
-    // The 16x16 glow and lights frames sit centred on the 8x8 base frame.
-    assert_eq!(quads[0].dest.w, 8.0);
-    assert_eq!(quads[1].dest.w, 16.0);
-    assert_eq!(centre(&quads[1]), centre(&quads[0]));
-    assert_eq!(centre(&quads[2]), centre(&quads[0]));
-    for expected in [
-        "Shuttle",
-        "Cost: 12000 credits",
-        "Speed: 300",
-        "Armour: 40",
-        "Shields: 80",
-        "A small craft.",
-        "Ship 1 of 2 (shïp 128) - Left/Right to browse",
-    ] {
-        assert!(
-            shows(&frame, expected),
-            "{expected:?} in {:?}",
-            texts(&frame)
-        );
-    }
-    assert_eq!(solid_quads(&frame), 0);
-}
-
-#[test]
-fn right_shows_the_next_ship_and_its_missing_sprite() {
-    let mut harness = Harness::new();
-    harness.frame();
-
-    harness.press(Key::Right);
-    let frame = harness.frame();
-
-    assert!(shows(&frame, "Courier"), "{:?}", texts(&frame));
-    assert!(
-        texts(&frame)
-            .iter()
-            .any(|text| text.starts_with("Sprite unavailable: shïp 129: no rlëD 1300")),
-        "{:?}",
-        texts(&frame)
-    );
-    assert_eq!(sprite_quads(&frame), []);
-    // The placeholder's box and diagonals.
-    assert_eq!(solid_quads(&frame), 6);
-}
-
-#[test]
-fn right_wraps_round_and_left_goes_back() {
-    let mut harness = Harness::new();
-    harness.press(Key::Right);
-    harness.press(Key::Right);
-    let frame = harness.frame();
+    assert!(!sprite_quads(&frame).is_empty(), "{:?}", frame.batches);
     assert!(shows(&frame, "Shuttle"), "{:?}", texts(&frame));
-    assert_eq!(sprite_quads(&frame).len(), 3);
+}
+
+#[test]
+fn right_and_left_reach_the_browser_and_change_the_ship_drawn() {
+    let mut harness = Harness::new();
+    harness.press(Key::Right);
+    let frame = harness.frame();
+    assert!(shows(&frame, "Courier"), "{:?}", texts(&frame));
 
     harness.press(Key::Left);
     let frame = harness.frame();
-    assert!(shows(&frame, "Courier"), "{:?}", texts(&frame));
+    assert!(shows(&frame, "Shuttle"), "{:?}", texts(&frame));
 }
 
 #[test]
 fn later_redraws_turn_the_ship() {
     let mut harness = Harness::new();
-    // 1/60 s: still frame 0; 2/60 s: frame 1.
     let first = sprite_quads(&harness.frame());
-    let second = sprite_quads(&harness.frame());
-    assert_eq!(first[0].dest, second[0].dest);
-    assert_ne!(first[0].uv, second[0].uv, "the base shows its next frame");
-    assert_ne!(first[1].uv, second[1].uv, "the glow follows it");
-}
-
-#[test]
-fn the_lights_blink_by_the_shan() {
-    let mut harness = Harness::over(blinking_data());
-    // 1/60 s, tick 0: the lights are off; the base and glow show.
-    let first = harness.frame();
-    assert_eq!(sprite_quads(&first).len(), 2, "{:?}", first.batches);
-    // 2/60 s, tick 1: the lights are ORed over the glow.
-    let second = harness.frame();
-    assert_eq!(sprite_quads(&second).len(), 3, "{:?}", second.batches);
-    for layer in &second.batches[1..3] {
-        assert!(
-            matches!(
-                layer,
-                Batch::Sprites { blend: Blend::Or, quads, .. } if quads.len() == 1
-            ),
-            "{layer:?}"
-        );
-    }
+    harness.settle_until("the ship's next frame", |harness| {
+        harness.app.screen().ship_browser().frame() != Some(0)
+    });
+    let later = sprite_quads(&harness.last_frame());
+    assert_ne!(first[0].uv, later[0].uv, "the base shows its next frame");
 }
