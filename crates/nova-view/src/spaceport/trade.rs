@@ -39,7 +39,13 @@
 //! One row is selected, by a click on its slot or with Up and Down (key
 //! repeats too), which step over empty slots and wrap round at the ends,
 //! as `_TradeDialogTabKey` @0x4cd81 does for `_TradeFilter`'s arrows
-//! (@0x4e19c, @0x4e1ba). The original has one row a
+//! (@0x4e19c, @0x4e1ba). Under the engine reading of the
+//! `dialog_focus_ring` rule ([`FocusRing::Off`]), Tab steps as Down does
+//! and Shift+Tab as Up (`_TradeFilter` @0x4e184), on a press only (the
+//! original steps on autoKey too; dialog keys are press-only by the
+//! user's decision of 2026-10-23). By default ([`FocusRing::Tab`]) Tab
+//! moves the dialog's button focus instead and the selection stays.
+//! The original has one row a
 //! slot; the engine can list more than one `jünk` a side, whose extra rows
 //! follow their slot, and the list then scrolls with the selection. Buy and Sell, clicked or with B and S (key repeats too, so
 //! holding a key keeps trading), ask for a plain trade of the selected
@@ -286,6 +292,9 @@ pub struct TradeScreen {
     style: ButtonStyle,
     /// Whether its dialogs' buttons take the keyboard focus.
     focus_ring: FocusRing,
+    /// Whether Shift is held, so that Tab steps back under
+    /// [`FocusRing::Off`] (`_TradeFilter` @0x4e18a).
+    backwards: bool,
     sounds: Vec<Sound>,
 }
 
@@ -331,6 +340,7 @@ impl TradeScreen {
             closed: false,
             style,
             focus_ring: FocusRing::default(),
+            backwards: false,
             sounds: Vec::new(),
         };
         let first = positions(&screen.market).into_iter().flatten().next();
@@ -775,6 +785,16 @@ impl Screen for TradeScreen {
     /// Every input goes to the exchange, or to the quantity dialog while
     /// it is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        // Shift is followed under the offer and the quantity dialog too,
+        // so a release there is not lost.
+        if let Input::Key {
+            key: Key::Shift,
+            pressed,
+            ..
+        } = *input
+        {
+            self.backwards = pressed;
+        }
         if let Some(offering) = &mut self.offering
             && offering.input(input, &mut self.sounds)
         {
@@ -818,6 +838,14 @@ impl Screen for TradeScreen {
             Input::Key {
                 key: MAX_LOT_KEY, ..
             } => self.quantity.follow_alt(input),
+            // Tab steps the selection only under the engine reading; the
+            // focus ring keeps it otherwise. Press-only, though the
+            // original steps on autoKey too (@0x4e0c3).
+            Input::Key {
+                key: Key::Tab,
+                pressed: true,
+                repeat: false,
+            } if self.focus_ring == FocusRing::Off => self.step(!self.backwards),
             Input::Key {
                 key: Key::Up,
                 pressed: true,
@@ -900,8 +928,10 @@ impl Screen for TradeScreen {
         }
     }
 
-    /// Lets go of Alt, and of the keys held in the quantity dialog.
+    /// Lets go of Alt and Shift, and of the keys held in the quantity
+    /// dialog.
     fn release_keys(&mut self) {
+        self.backwards = false;
         self.quantity.release_keys();
     }
 
@@ -1674,11 +1704,11 @@ mod tests {
         assert_eq!(screen.selected(), Some(1));
     }
 
-    #[test]
-    fn up_and_down_skip_empty_slots() {
-        // Food (slot 0) and metal (slot 4), with slots 1 to 3 empty, and
-        // a sold jünk (slot 7) listed before a bought one (slot 6).
-        let mut screen = screen_of(Market {
+    /// Food (slot 0) and metal (slot 4), with slots 1 to 3 empty, and a
+    /// sold jünk (slot 7) listed before a bought one (slot 6): the list
+    /// order is rows 0, 1, 3, 2.
+    fn gappy() -> Market {
+        Market {
             rows: vec![
                 row(FOOD, "Food", 93, 0),
                 row(METAL, "Metal", 200, 0),
@@ -1689,7 +1719,12 @@ mod tests {
                 row(OPALS, "Opals", 1500, 0),
             ],
             ..market()
-        });
+        }
+    }
+
+    #[test]
+    fn up_and_down_skip_empty_slots() {
+        let mut screen = screen_of(gappy());
         let mut visited = vec![screen.selected()];
         for _ in 0..4 {
             press(&mut screen, Key::Down);
@@ -1700,6 +1735,96 @@ mod tests {
         assert_eq!(screen.selected(), Some(2), "back round to slot 7");
         press(&mut screen, Key::Up);
         assert_eq!(screen.selected(), Some(3), "back to slot 6");
+    }
+
+    #[test]
+    fn tab_steps_the_selection_like_down_under_the_engine_reading() {
+        let mut screen = screen_of(gappy()).with_focus_ring(FocusRing::Off);
+        let mut visited = vec![screen.selected()];
+        for _ in 0..4 {
+            press(&mut screen, Key::Tab);
+            visited.push(screen.selected());
+        }
+        assert_eq!(visited, [Some(0), Some(1), Some(3), Some(2), Some(0)]);
+        assert_eq!(screen.dialog().and_then(Dialog::focus), None, "no ring");
+        assert!(!screen.closed());
+        assert_eq!(screen.take_order(), None);
+    }
+
+    #[test]
+    fn shift_tab_steps_back_under_the_engine_reading() {
+        let mut screen = screen_of(gappy()).with_focus_ring(FocusRing::Off);
+        press(&mut screen, Key::Shift);
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(2), "round to the last filled slot");
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(3));
+        screen.input(&key(Key::Shift, false, false));
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(2), "forward again");
+        press(&mut screen, Key::Shift);
+        screen.release_keys();
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(0), "Shift let go with the keys");
+    }
+
+    /// The original steps on autoKey too (`_TradeFilter` @0x4e0c3), but
+    /// dialog keys are press-only by the user's decision of 2026-10-23.
+    #[test]
+    fn a_tab_repeat_or_release_steps_nothing() {
+        let mut screen = screen().with_focus_ring(FocusRing::Off);
+        screen.input(&key(Key::Tab, true, true));
+        screen.input(&key(Key::Tab, false, false));
+        assert_eq!(screen.selected(), Some(0));
+    }
+
+    #[test]
+    fn tab_with_no_rows_steps_nothing() {
+        let mut screen = screen_of(long(0)).with_focus_ring(FocusRing::Off);
+        for shift in [false, true] {
+            screen.input(&key(Key::Shift, shift, false));
+            press(&mut screen, Key::Tab);
+            assert_eq!(screen.selected(), None);
+        }
+    }
+
+    #[test]
+    fn under_the_focus_ring_tab_moves_the_button_focus_not_the_selection() {
+        let mut screen = screen();
+        press(&mut screen, Key::Down);
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(1));
+        assert!(screen.dialog().and_then(Dialog::focus).is_some(), "focused");
+        press(&mut screen, Key::Shift);
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(1), "Shift+Tab too");
+        let mut done = screen_of(gappy());
+        press(&mut done, Key::Tab);
+        press(&mut done, Key::Space);
+        assert!(done.closed(), "Done is the first button the ring reaches");
+        assert_eq!(done.selected(), Some(0));
+    }
+
+    #[test]
+    fn shift_let_go_in_the_quantity_dialog_is_let_go_after_it() {
+        let mut screen = screen_of(gappy()).with_focus_ring(FocusRing::Off);
+        press(&mut screen, Key::Shift);
+        alt_click(&mut screen, BUY_ITEM);
+        screen.input(&key(Key::Shift, false, false));
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        assert!(screen.quantity().is_none(), "closed");
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(1), "forward");
+    }
+
+    #[test]
+    fn under_the_engine_reading_tab_in_the_quantity_dialog_steps_no_row() {
+        let mut screen = screen().with_focus_ring(FocusRing::Off);
+        alt_click(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_some(), "open");
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(0));
     }
 
     #[test]
@@ -2709,25 +2834,27 @@ mod tests {
     /// The original's `_TradeFilter` @0x4e092 maps Tab to `_TradeDialogTabKey`, Up/Down to the selection and Return/Escape to item 1 (@0x4e0dc-0x4e1cf), none with a click sound.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
-        for k in [
-            Key::Tab,
-            Key::Down,
-            Key::Up,
-            BUY_KEY,
-            SELL_KEY,
-            crate::ui::player_info::PLAYER_INFO_KEY,
-            Key::Enter,
-            Key::Escape,
-        ] {
-            let mut screen = screen();
-            for pressed in [true, false] {
-                screen.input(&Input::Key {
-                    key: k,
-                    pressed,
-                    repeat: false,
-                });
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            for k in [
+                Key::Tab,
+                Key::Down,
+                Key::Up,
+                BUY_KEY,
+                SELL_KEY,
+                crate::ui::player_info::PLAYER_INFO_KEY,
+                Key::Enter,
+                Key::Escape,
+            ] {
+                let mut screen = screen().with_focus_ring(ring);
+                for pressed in [true, false] {
+                    screen.input(&Input::Key {
+                        key: k,
+                        pressed,
+                        repeat: false,
+                    });
+                }
+                assert_eq!(screen.take_sounds(), [], "{k:?} makes no click ({ring:?})");
             }
-            assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
         }
     }
 
