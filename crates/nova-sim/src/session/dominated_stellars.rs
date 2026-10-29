@@ -17,11 +17,25 @@
 //!   nothing reads them: the stellar's +0x2a, which the loop increments
 //!   behind a test of the nav stellar's `Flags2` (@0x40886-0x408a3), and
 //!   `_statusRedraw[2]` (@0x408be).
+//! - **The regrowth** ([`Session::regrow_defences`], in the daily step's
+//!   stellars, sixth; `_IncrementGameTime` @0xb5c4-0xb653): each active
+//!   (+0x44 @0xb5d5) dominated (+0x46 @0xb5f6) stellar's defence fleet
+//!   regrows a ship on `Rand(450)`'s 0 while below its cap
+//!   ([`regrowth_cap`](crate::traffic::stellar_defence::regrowth_cap)).
+//!   The original interleaves it per stellar with that stellar's
+//!   regeneration countdown; here it is one pass before the regeneration
+//!   loop. Nothing sees the difference: an `OnRegen` can't change
+//!   domination, activity or the counts before the next rebuild point.
+//!   The regrown count is never seen in play either (a Release resets it,
+//!   @0x97422; a load zeroes a dominated stellar's, @0x75da7; and a
+//!   dominated stellar never launches), so the cap is built as the
+//!   original computes it, with no rulebook key.
 //!
 //! Nothing here plays a sound.
 
 use super::{Chart, Outbox, Session, SessionEvent, Statics};
-use crate::catalog::StellarId;
+use crate::catalog::{ListedStellar, StellarId, SystemId};
+use crate::chance::Chance;
 use crate::pilot::Pilot;
 use crate::player_info;
 
@@ -54,18 +68,26 @@ impl Chart {
     /// tribute of every stellar some system lists that is active and
     /// dominated, in ID order.
     pub(super) fn daily_tribute(&self, pilot: &Pilot, statics: &Statics) -> i64 {
-        statics
-            .listed_stellars
-            .iter()
-            .filter(|listed| {
-                self.galaxy.dominated(listed.id, listed.flags2)
-                    && self
-                        .galaxy
-                        .active_holder(listed.id, &listed.systems, pilot.system)
-                        .is_some()
-            })
+        self.dominated_active(pilot.system, statics)
             .map(player_info::tribute_of)
             .sum()
+    }
+
+    /// Every stellar some system lists that is active (+0x44: its holder,
+    /// with the player in `player`, visible) and dominated (+0x46), in ID
+    /// order: what the daily step's tribute and regrowth walk.
+    fn dominated_active<'a>(
+        &'a self,
+        player: SystemId,
+        statics: &'a Statics,
+    ) -> impl Iterator<Item = &'a ListedStellar> {
+        statics.listed_stellars.iter().filter(move |listed| {
+            self.galaxy.dominated(listed.id, listed.flags2)
+                && self
+                    .galaxy
+                    .active_holder(listed.id, &listed.systems, player)
+                    .is_some()
+        })
     }
 }
 
@@ -75,6 +97,19 @@ impl Session {
     /// to the cash. It plays no sound and draws nothing.
     pub(super) fn tribute_day(&mut self) {
         self.pilot.cash += self.chart.daily_tribute(&self.pilot, &self.statics);
+    }
+
+    /// The daily step's regrowth (`_IncrementGameTime` @0xb5f6-0xb64c;
+    /// see the module docs): each active dominated stellar's fleet regrows
+    /// on `chance` ([`DefenceShips::regrow`](crate::traffic::stellar_defence::DefenceShips::regrow)).
+    pub(super) fn regrow_defences(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        let ships = &mut self.pilot.defence_ships;
+        for listed in self
+            .chart
+            .dominated_active(self.pilot.system, &self.statics)
+        {
+            ships.regrow(listed.id, listed.def_count, &mut *chance);
+        }
     }
 }
 
@@ -212,6 +247,75 @@ mod tests {
                 .daily_tribute(&session.pilot, &session.statics),
             paid_over(&mut session, 1),
             "@0x53547"
+        );
+    }
+
+    /// The catalog with Earth of `DefCount` 5 and 140 of 7006.
+    fn defended() -> crate::testkit::FakePilotCatalog {
+        let mut catalog = catalog();
+        for (_, sites) in &mut catalog.sites {
+            for site in sites.iter_mut() {
+                site.def_count = match site.id.0 {
+                    128 => 5,
+                    140 => 7006,
+                    _ => 0,
+                };
+            }
+        }
+        catalog
+    }
+
+    /// Earth's ships left in `session`'s pilot.
+    fn earth_left(session: &Session) -> i16 {
+        session.pilot().defence_ships.left_of(EARTH, 5)
+    }
+
+    #[test]
+    fn a_dominated_active_stellars_fleet_regrows_on_the_days_0_draw_up_to_its_cap() {
+        use nova_sim_base::fixture::Ranged;
+        let catalog = defended();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.pilot.defence_ships.set_left_of(EARTH, 5, 2);
+        let mut chance = Ranged::of(&[(450, 0)]);
+        session.pass_days(1, &mut chance);
+        assert_eq!(earth_left(&session), 2, "undominated");
+        assert!(!chance.was_asked(450));
+        dominate(&mut session, EARTH);
+        session.pass_days(1, &mut chance);
+        assert_eq!(earth_left(&session), 3, "@0xb64c");
+        let mut chance = Ranged::of(&[(450, 7)]);
+        session.pass_days(1, &mut chance);
+        assert_eq!(earth_left(&session), 3, "a draw of 7");
+        assert_eq!(chance.asked.iter().filter(|&&n| n == 450).count(), 1);
+        let mut chance = Ranged::of(&[(450, 0)]);
+        session.pass_days(4, &mut chance);
+        assert_eq!(earth_left(&session), 5, "up to the cap, 5");
+        assert_eq!(
+            chance.asked.iter().filter(|&&n| n == 450).count(),
+            2,
+            "no draw at the cap"
+        );
+    }
+
+    #[test]
+    fn an_inactive_dominated_stellar_draws_nothing() {
+        use nova_sim_base::fixture::Ranged;
+        let catalog = defended();
+        let mut session = Session::start(&catalog).expect("starts");
+        session
+            .pilot
+            .defence_ships
+            .set_left_of(StellarId(140), 7006, 0);
+        dominate(&mut session, StellarId(140));
+        let mut overlay = session.chart.galaxy.overlay().clone();
+        overlay.set_visible(crate::catalog::SystemId(131), Some(false));
+        session.chart.galaxy.set_overlay(overlay);
+        let mut chance = Ranged::of(&[(450, 0)]);
+        session.pass_days(1, &mut chance);
+        assert!(!chance.was_asked(450), "+0x44 @0xb5d5");
+        assert_eq!(
+            session.pilot().defence_ships.left_of(StellarId(140), 7006),
+            0
         );
     }
 

@@ -107,6 +107,23 @@ pub const fn initial_left(def_count: i16) -> i16 {
     }
 }
 
+/// The range of the daily regrowth's draw, `Rand(450)` (@0xb637): a
+/// dominated stellar's fleet regrows a ship on its 0.
+pub const REGROWTH_ODDS: u32 = 450;
+
+/// The count a dominated stellar of `DefCount` `def_count` regrows its
+/// defence ships up to (`_IncrementGameTime` @0xb5fc-0xb62b): the count
+/// itself up to 1000, else `DefCount % 1000`. Earth's 7006 caps at 6,
+/// though it decodes to 600 ([`initial_left`]).
+#[must_use]
+pub const fn regrowth_cap(def_count: i16) -> i16 {
+    if def_count <= 1000 {
+        def_count
+    } else {
+        def_count % 1000
+    }
+}
+
 /// How many defence ships a stellar of `DefCount` `def_count` keeps up
 /// at once: `DefCount % 10`, signed, as C's remainder (@0x43cd3-0x43cfe).
 #[must_use]
@@ -142,14 +159,23 @@ pub fn defenders_of(stellar: StellarId, npcs: &[Npc]) -> usize {
         .count()
 }
 
-/// The stellars' defence ships left and which are under attack (see the
-/// module docs).
+/// The stellars' defence ships left (+0x466; see the module docs' "Where
+/// the state lives"): the pilot holds them, and lends them to the traffic
+/// for a step ([`Traffic::swap_defence_ships`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct StellarDefences {
+pub struct DefenceShips {
     /// The ships left of each stellar whose count has been read or
     /// changed (+0x466), with its raw `DefCount` (+0x468), which a refund
     /// is capped at once its system's stellars are no longer at hand.
     left: BTreeMap<StellarId, Count>,
+}
+
+/// The stellars' defence ships left and which are under attack (see the
+/// module docs).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StellarDefences {
+    /// The ships left, lent by the pilot for a step.
+    ships: DefenceShips,
     /// The stellars under attack (+0x47).
     under_attack: BTreeSet<StellarId>,
 }
@@ -163,27 +189,43 @@ struct Count {
     def_count: i16,
 }
 
-impl StellarDefences {
+impl DefenceShips {
     /// The defence ships `site` has left: its decoded `DefCount`
     /// ([`initial_left`]) until one is spent or given back.
     #[must_use]
     pub fn left(&self, site: &LandingSite) -> i16 {
+        self.left_of(site.id, site.def_count)
+    }
+
+    /// The defence ships `stellar`, of raw `DefCount` `def_count`, has
+    /// left, as [`left`](Self::left) reads them.
+    #[must_use]
+    pub fn left_of(&self, stellar: StellarId, def_count: i16) -> i16 {
         self.left
-            .get(&site.id)
-            .map_or_else(|| initial_left(site.def_count), |count| count.left)
+            .get(&stellar)
+            .map_or_else(|| initial_left(def_count), |count| count.left)
     }
 
     /// Sets `site`'s defence ships left to `left`: the planet comm
-    /// dialog's arithmetic and the saved counts write it
-    /// (rdm:phase/play-feel-4/phase-2-planet-comm-dialog, phase 3).
+    /// dialog's arithmetic writes it
+    /// (rdm:phase/play-feel-4/phase-2-planet-comm-dialog).
     pub fn set_left(&mut self, site: &LandingSite, left: i16) {
-        self.left.insert(
-            site.id,
-            Count {
-                left,
-                def_count: site.def_count,
-            },
-        );
+        self.set_left_of(site.id, site.def_count, left);
+    }
+
+    /// Sets the defence ships left of `stellar`, of raw `DefCount`
+    /// `def_count`, to `left`: what a load writes.
+    pub fn set_left_of(&mut self, stellar: StellarId, def_count: i16, left: i16) {
+        self.left.insert(stellar, Count { left, def_count });
+    }
+
+    /// Each stellar's ships left whose count has been read or changed, by
+    /// ascending ID: what a save writes. A stellar not here has its
+    /// decode.
+    pub fn counts(&self) -> impl Iterator<Item = (StellarId, i16)> + '_ {
+        self.left
+            .iter()
+            .map(|(&stellar, count)| (stellar, count.left))
     }
 
     /// Restores `site`'s count to its decoded `DefCount`
@@ -209,11 +251,42 @@ impl StellarDefences {
     /// Gives one of `stellar`'s defence ships back, capped at its raw
     /// `DefCount` (`_DeleteAllComputerShips` @0x3c046-0x3c06f); nothing
     /// for a stellar whose count was never kept
-    /// ([`StellarDefences::know`]), which has sent up no defender.
+    /// ([`DefenceShips::know`]), which has sent up no defender.
     pub fn refund(&mut self, stellar: StellarId) {
         if let Some(count) = self.left.get_mut(&stellar) {
             count.left = count.left.saturating_add(1).min(count.def_count);
         }
+    }
+}
+
+impl DefenceShips {
+    /// The daily regrowth of a dominated stellar's fleet
+    /// (`_IncrementGameTime` @0xb62e-0xb64c): `stellar`, of raw `DefCount`
+    /// `def_count`, below its [`regrowth_cap`] draws `Rand(450)` on
+    /// `chance` and regrows one ship on a 0; at or above it, no draw.
+    pub fn regrow(
+        &mut self,
+        stellar: StellarId,
+        def_count: i16,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let left = self.left_of(stellar, def_count);
+        if regrowth_cap(def_count) > left && chance.below(REGROWTH_ODDS) == 0 {
+            self.set_left_of(stellar, def_count, left.saturating_add(1));
+        }
+    }
+}
+
+impl StellarDefences {
+    /// The defence ships left, while the pilot lends them.
+    #[must_use]
+    pub fn ships(&self) -> &DefenceShips {
+        &self.ships
+    }
+
+    /// The defence ships left, to change while the pilot lends them.
+    pub fn ships_mut(&mut self) -> &mut DefenceShips {
+        &mut self.ships
     }
 
     /// Whether `stellar` is under attack (+0x47).
@@ -254,7 +327,7 @@ impl StellarDefences {
         nav.iter()
             .find(|site| {
                 self.under_attack(site.id)
-                    && self.left(site) > 0
+                    && self.ships.left(site) > 0
                     && i64::try_from(defenders_of(site.id, npcs)).unwrap_or(i64::MAX)
                         < i64::from(wave(site.def_count))
             })
@@ -318,6 +391,13 @@ impl Traffic {
         self.defences = defences;
     }
 
+    /// Swaps the defence ships the traffic holds with `ships`: the session
+    /// lends the pilot's in for a step and takes them back after (see the
+    /// module docs' "Where the state lives").
+    pub fn swap_defence_ships(&mut self, ships: &mut DefenceShips) {
+        std::mem::swap(&mut self.defences.ships, ships);
+    }
+
     /// The frame's +0x47 pass over `nav`, the system's listed stellars
     /// ([`StellarDefences::recompute`], `_DoPlayGameWork` @0x443d4).
     pub fn recompute_defence_alarms(&mut self, nav: &[LandingSite]) {
@@ -338,7 +418,7 @@ impl Traffic {
             .filter_map(|npc| npc.defends)
             .collect();
         for stellar in refunds {
-            self.defences.refund(stellar);
+            self.defences.ships.refund(stellar);
         }
     }
 
@@ -371,7 +451,7 @@ impl Traffic {
         gate: Gate,
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<NpcId> {
-        self.defences.know(site);
+        self.defences.ships.know(site);
         let ship = defender(&self.table, site, gate, &mut *chance)?;
         // `_SpecificDudeSpawn` rolls no afterburner and places no fleet.
         let came = self.add(
@@ -415,7 +495,7 @@ impl Traffic {
             return;
         };
         self.spawn_defender_gated(&site, world, gate, chance);
-        self.defences.spend(&site);
+        self.defences.ships.spend(&site);
     }
 }
 
@@ -489,8 +569,59 @@ mod tests {
     }
 
     #[test]
+    fn the_regrowth_cap_is_the_def_count_up_to_1000_else_its_last_three_digits() {
+        // @0xb5fc-0xb62b.
+        for (def_count, cap) in [
+            (0, 0),
+            (6, 6),
+            (1000, 1000),
+            (1001, 1),
+            (2206, 206),
+            (7006, 6),
+            (-1, -1),
+            (i16::MIN, i16::MIN),
+            (i16::MAX, 767),
+        ] {
+            assert_eq!(regrowth_cap(def_count), cap, "{def_count}");
+        }
+    }
+
+    #[test]
+    fn a_fleet_regrows_one_on_a_0_in_450_below_its_cap() {
+        use nova_sim_base::fixture::Ranged;
+        let earth = site(128, 7006);
+        let mut ships = DefenceShips::default();
+        ships.set_left(&earth, 4);
+        let mut chance = Ranged::of(&[(450, 0)]);
+        ships.regrow(earth.id, earth.def_count, &mut chance);
+        assert_eq!(ships.left(&earth), 5, "@0xb64c");
+        assert_eq!(chance.asked, [450], "Rand(450) @0xb637");
+        let mut chance = Ranged::of(&[(450, 1)]);
+        ships.regrow(earth.id, earth.def_count, &mut chance);
+        assert_eq!(ships.left(&earth), 5, "a draw of 1 grows none");
+        ships.set_left(&earth, 6);
+        let mut chance = Ranged::of(&[]);
+        ships.regrow(earth.id, earth.def_count, &mut chance);
+        assert_eq!(chance.asked, [] as [u32; 0], "at the cap: no draw");
+        assert_eq!(ships.left(&earth), 6);
+        let decoded = DefenceShips::default();
+        let mut ships = decoded.clone();
+        ships.regrow(earth.id, earth.def_count, &mut Ranged::of(&[]));
+        assert_eq!(ships, decoded, "the decode, 600, is above the cap 6");
+        let small = site(129, 3);
+        let mut ships = DefenceShips::default();
+        ships.set_left(&small, 0);
+        ships.regrow(small.id, small.def_count, &mut Ranged::of(&[(450, 0)]));
+        assert_eq!(ships.left(&small), 1, "a count kept with its DefCount");
+        ships.refund(small.id);
+        ships.refund(small.id);
+        ships.refund(small.id);
+        assert_eq!(ships.left(&small), 3, "the refund's cap kept");
+    }
+
+    #[test]
     fn a_release_restores_the_decoded_count() {
-        let mut defences = StellarDefences::default();
+        let mut defences = DefenceShips::default();
         let earth = site(128, 1082);
         defences.set_left(&earth, 0);
         defences.reset(&earth);
@@ -501,7 +632,7 @@ mod tests {
 
     #[test]
     fn the_ships_left_read_the_decode_until_spent_or_given_back() {
-        let mut defences = StellarDefences::default();
+        let mut defences = DefenceShips::default();
         let earth = site(128, 1082);
         assert_eq!(defences.left(&earth), 8);
         defences.spend(&earth);
@@ -563,7 +694,7 @@ mod tests {
             "128's wave is up"
         );
         for _ in 0..3 {
-            defences.spend(&nav[1]);
+            defences.ships_mut().spend(&nav[1]);
         }
         assert_eq!(
             defences.due(&nav, &up),
@@ -750,12 +881,15 @@ mod tests {
     fn a_stellar_under_attack_sends_up_one_defender_a_pass_to_its_wave_while_it_has_ships() {
         let listed = [earth(3)];
         let mut traffic = traffic_of(defence_table("", false));
-        traffic.defences_mut().set_left(&listed[0], 5);
+        traffic.defences_mut().ships_mut().set_left(&listed[0], 5);
         traffic.defences_mut().alarm(StellarId(128));
         for (pass_no, (count, left)) in [(1, 4), (2, 3), (3, 2), (3, 2)].into_iter().enumerate() {
             pass(&mut traffic, &listed);
             assert_eq!(
-                (up(&traffic, 128), traffic.defences().left(&listed[0])),
+                (
+                    up(&traffic, 128),
+                    traffic.defences().ships().left(&listed[0])
+                ),
                 (count, left),
                 "pass {pass_no}"
             );
@@ -765,7 +899,10 @@ mod tests {
         traffic.remove(gone);
         pass(&mut traffic, &listed);
         assert_eq!(
-            (up(&traffic, 128), traffic.defences().left(&listed[0])),
+            (
+                up(&traffic, 128),
+                traffic.defences().ships().left(&listed[0])
+            ),
             (3, 1)
         );
         pass(&mut traffic, &listed);
@@ -779,10 +916,14 @@ mod tests {
         pass(&mut traffic, &listed);
         assert_eq!(up(&traffic, 128), 0, "not under attack");
         traffic.defences_mut().alarm(StellarId(128));
-        traffic.defences_mut().set_left(&listed[0], 0);
+        traffic.defences_mut().ships_mut().set_left(&listed[0], 0);
         pass(&mut traffic, &listed);
         assert_eq!(up(&traffic, 128), 0, "none left");
-        assert_eq!(traffic.defences().left(&listed[0]), 0, "nothing spent");
+        assert_eq!(
+            traffic.defences().ships().left(&listed[0]),
+            0,
+            "nothing spent"
+        );
     }
 
     #[test]
@@ -815,7 +956,11 @@ mod tests {
         traffic.defences_mut().alarm(StellarId(128));
         pass(&mut traffic, &listed);
         assert_eq!(up(&traffic, 128), 0);
-        assert_eq!(traffic.defences().left(&listed[0]), 2, "@0x43c39 spends it");
+        assert_eq!(
+            traffic.defences().ships().left(&listed[0]),
+            2,
+            "@0x43c39 spends it"
+        );
     }
 
     #[test]
@@ -825,7 +970,7 @@ mod tests {
         traffic.defences_mut().alarm(StellarId(128));
         pass(&mut traffic, &listed);
         assert_eq!(up(&traffic, 128), 0, "a wave of 0");
-        assert_eq!(traffic.defences().left(&listed[0]), 20);
+        assert_eq!(traffic.defences().ships().left(&listed[0]), 20);
     }
 
     #[test]
@@ -849,19 +994,19 @@ mod tests {
         for _ in 0..3 {
             pass(&mut traffic, &listed);
         }
-        assert_eq!(traffic.defences().left(&listed[0]), 0);
+        assert_eq!(traffic.defences().ships().left(&listed[0]), 0);
         let ids: Vec<NpcId> = traffic.npcs().iter().map(|npc| npc.id).collect();
         traffic.npcs_mut()[2].aux = Some(1);
         traffic.refund_defenders(&BTreeSet::from([ids[1]]));
         assert_eq!(
-            traffic.defences().left(&listed[0]),
+            traffic.defences().ships().left(&listed[0]),
             1,
             "one dropped, one kept, one aux"
         );
         traffic.npcs_mut()[2].aux = None;
         traffic.refund_defenders(&BTreeSet::new());
         assert_eq!(
-            traffic.defences().left(&listed[0]),
+            traffic.defences().ships().left(&listed[0]),
             3,
             "capped at the raw DefCount"
         );
@@ -875,9 +1020,9 @@ mod tests {
         let world = super::super::World::new(&listed);
         let mut traffic = traffic_of(defence_table("", false));
         traffic.spawn_defender(&listed[0], &world, &mut Ranged::of(&[]));
-        assert_eq!(traffic.defences().left(&listed[0]), 0);
+        assert_eq!(traffic.defences().ships().left(&listed[0]), 0);
         traffic.refund_defenders(&BTreeSet::new());
-        assert_eq!(traffic.defences().left(&listed[0]), 1);
+        assert_eq!(traffic.defences().ships().left(&listed[0]), 1);
     }
 
     #[test]
@@ -898,12 +1043,12 @@ mod tests {
     #[test]
     fn the_defences_are_handed_on_across_a_reset() {
         let mut traffic = traffic_of(defence_table("", false));
-        traffic.defences_mut().set_left(&earth(3), 4);
+        traffic.defences_mut().ships_mut().set_left(&earth(3), 4);
         let taken = traffic.take_defences();
         assert_eq!(traffic.defences(), &StellarDefences::default());
         let mut next = traffic_of(defence_table("", false));
         next.keep_defences(taken);
-        assert_eq!(next.defences().left(&earth(3)), 4);
+        assert_eq!(next.defences().ships().left(&earth(3)), 4);
     }
 
     #[test]

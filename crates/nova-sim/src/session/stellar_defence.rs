@@ -44,7 +44,18 @@ impl Session {
     /// give their stellars one back each, as the ships are dropped (see the
     /// module docs).
     pub(super) fn refund_defenders(&mut self, kept: &BTreeSet<NpcId>) {
+        self.lend_defence_ships();
         self.space.traffic.refund_defenders(kept);
+        self.lend_defence_ships();
+    }
+
+    /// Swaps the pilot's defence ships left with the traffic's: called in
+    /// pairs, it lends them to the traffic for one step and takes them
+    /// back (see the module docs).
+    pub(super) fn lend_defence_ships(&mut self) {
+        self.space
+            .traffic
+            .swap_defence_ships(&mut self.pilot.defence_ships);
     }
 
     /// Sends up one of `stellar`'s defence ships at once, drawing on
@@ -77,7 +88,7 @@ impl Session {
             .listed
             .iter()
             .find(|site| site.id == stellar)
-            .map(|site| self.space.traffic.defences().left(site))
+            .map(|site| self.pilot.defence_ships.left(site))
     }
 }
 
@@ -210,11 +221,11 @@ mod tests {
             session.spawn_stellar_defender(EARTH, &mut NeverFires);
         }
         let site = earth(&session);
-        session.space.traffic.defences_mut().set_left(&site, 1);
+        session.pilot.defence_ships.set_left(&site, 1);
         jump(&mut session, &catalog, 131);
         assert_eq!(up(&session, EARTH), 0);
         assert_eq!(
-            session.space.traffic.defences().left(&site),
+            session.pilot.defence_ships.left(&site),
             2,
             "1 + 2, capped at DefCount 2"
         );
@@ -228,7 +239,7 @@ mod tests {
         let catalog = defended(3);
         let mut session = flying(&catalog);
         let site = earth(&session);
-        session.space.traffic.defences_mut().set_left(&site, 0);
+        session.pilot.defence_ships.set_left(&site, 0);
         session
             .spawn_stellar_defender(EARTH, &mut NeverFires)
             .expect("up");
@@ -236,7 +247,7 @@ mod tests {
         session.land_at(&catalog, here, EARTH).expect("lands");
         assert_eq!(up(&session, EARTH), 0, "a fresh traffic");
         assert_eq!(
-            session.space.traffic.defences().left(&site),
+            session.pilot.defence_ships.left(&site),
             1,
             "0 + 1, kept across the Reset, not DefCount 3 decoded afresh"
         );
@@ -259,18 +270,14 @@ mod tests {
                 .with_rules(moving(reading));
             work(&mut session, &catalog, Controls::default());
             let site = earth(&session);
-            session.space.traffic.defences_mut().set_left(&site, 0);
+            session.pilot.defence_ships.set_left(&site, 0);
             session
                 .spawn_stellar_defender(EARTH, &mut NeverFires)
                 .expect("up");
             session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
             let _ = session.settle_script(&catalog, &mut NeverFires);
             assert_eq!(session.system(), SystemId(131), "{reading:?}");
-            assert_eq!(
-                session.space.traffic.defences().left(&site),
-                left,
-                "{reading:?}"
-            );
+            assert_eq!(session.pilot.defence_ships.left(&site), left, "{reading:?}");
         }
     }
 
@@ -293,6 +300,28 @@ mod tests {
         work(&mut session, &catalog, Controls::default());
         assert_eq!(up(&session, EARTH), 1);
         assert_eq!(crate::fixture::defence_ships_left(&session, EARTH), Some(2));
+    }
+
+    #[test]
+    fn the_counts_rest_on_the_pilot_between_steps() {
+        let catalog = defended(3);
+        let mut session = flying(&catalog);
+        let site = earth(&session);
+        crate::fixture::alarm_stellar(&mut session, EARTH);
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(up(&session, EARTH), 1, "the respawn's");
+        assert_eq!(session.pilot().defence_ships.left(&site), 2, "spent");
+        assert_eq!(
+            session.space.traffic.defences().ships(),
+            &crate::traffic::stellar_defence::DefenceShips::default(),
+            "lent back"
+        );
+        jump(&mut session, &catalog, 131);
+        assert_eq!(session.pilot().defence_ships.left(&site), 3, "refunded");
+        assert_eq!(
+            session.space.traffic.defences().ships(),
+            &crate::traffic::stellar_defence::DefenceShips::default()
+        );
     }
 
     #[test]

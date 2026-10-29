@@ -350,8 +350,8 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
                 );
                 session.pilot.events = events;
             }
-            // The destroyed stellars' regeneration; the dominated ones'
-            // defence regrowing joins it with rdm task planet-domination.
+            // The dominated stellars' defence regrowing and the destroyed
+            // ones' regeneration.
             Participant::Stellars => session.stellars_day(&mut *self.chance),
             Participant::DayRolls => {
                 session

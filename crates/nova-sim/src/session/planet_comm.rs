@@ -208,13 +208,12 @@ impl Session {
     ) -> Option<PlanetCommView> {
         let mut comm = self.chart.planet_comm?;
         let site = self.chart.planet_site(comm.stellar())?;
-        let defences = self.space.traffic.defences();
         let facts = DemandFacts {
             rating: self.pilot.combat_rating(),
             cheats: false,
             demanded: comm.demanded(),
-            defenders_left: defences.left(&site),
-            under_attack: defences.under_attack(site.id),
+            defenders_left: self.pilot.defence_ships.left(&site),
+            under_attack: self.space.traffic.defences().under_attack(site.id),
         };
         let pressed = comm.press(
             item,
@@ -282,7 +281,7 @@ impl Session {
         self.port.dock = None;
         self.chart
             .set_dominated(&mut self.pilot, &mut self.out, site.id, false);
-        self.space.traffic.defences_mut().reset(site);
+        self.pilot.defence_ships.reset(site);
         self.chart.write_offence_record(&mut self.pilot, site);
         if let Some(scripts) = self.statics.stellar_scripts.get(&site.id).cloned() {
             self.run_script(&scripts.on_release, chance);
@@ -313,9 +312,9 @@ impl Session {
         match demand {
             Demand::Laugh | Demand::Fight { send_wave: false } => {}
             Demand::Fight { send_wave: true } => {
-                let defences = self.space.traffic.defences_mut();
-                let (sent, left) = wave_on_demand(site.def_count, defences.left(site));
-                defences.set_left(site, left);
+                let ships = &mut self.pilot.defence_ships;
+                let (sent, left) = wave_on_demand(site.def_count, ships.left(site));
+                ships.set_left(site, left);
                 for _ in 0..sent {
                     self.spawn_stellar_defender(site.id, chance);
                 }
@@ -1035,7 +1034,7 @@ pub(in crate::session) mod tests {
         }
         let mut session = demanding(&catalog, 12_800);
         let earth = session.chart.planet_site(EARTH).expect("shown");
-        session.space.traffic.defences_mut().set_left(&earth, 0);
+        session.pilot.defence_ships.set_left(&earth, 0);
         demand(&mut session, &catalog, &Slaps::default());
         assert!(
             session.control_bit(Bit::new(100).expect("a bit")),

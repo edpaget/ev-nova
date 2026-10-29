@@ -2052,8 +2052,10 @@ impl Session {
     /// advance pass's think and flight ([`Session::game_work`]), the gate
     /// exit's arrivals pass ([`Session::gate_exit_pass`]) and double
     /// time's second pass (see the `double_time` module) step the traffic
-    /// in it.
+    /// in it. The pilot's defence ships left are lent to the traffic for
+    /// the step (see the `stellar_defence` module).
     fn step_traffic<R>(&mut self, f: impl FnOnce(&mut Traffic, World<'_>) -> R) -> R {
+        self.lend_defence_ships();
         let system_govt = self.chart.galaxy.govt(self.pilot.system);
         let facts = control::Facts {
             pilot: &self.pilot,
@@ -2129,6 +2131,7 @@ impl Session {
             destroyable: &self.statics.destroyable,
         };
         let stepped = f(&mut self.space.traffic, world);
+        self.lend_defence_ships();
         // The grudges the traffic decided as it answered strikes, in turn
         // (`Traffic::take_grudges`). The original sets each inside
         // `_DamageShip` as its hit lands; here it lands right after the

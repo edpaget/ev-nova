@@ -1626,6 +1626,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         crons: crons_of(saved.crons),
         ranks: saved.ranks.into_iter().map(RankId).collect(),
         seen_intro: saved.seen_intro,
+        defence_ships: crate::traffic::stellar_defence::DefenceShips::default(),
     })
 }
 
@@ -1788,6 +1789,7 @@ mod tests {
             ranks: BTreeSet::from([RankId(140), RankId(128)]),
             seen_intro: true,
             nickname: String::new(),
+            defence_ships: crate::traffic::stellar_defence::DefenceShips::default(),
         }
     }
 

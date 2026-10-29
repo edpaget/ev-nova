@@ -107,6 +107,7 @@ use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 use crate::story::{GalaxyOverlay, SubscriptionId};
 use crate::trade_dialog::MissionLoad;
+use crate::traffic::stellar_defence::DefenceShips;
 
 /// How far a system is explored: the original's `sÿst` +0x90, which
 /// takes 0, 1 or 2 and is only ever raised.
@@ -235,6 +236,15 @@ pub struct Pilot {
     /// Whether the pilot has seen the intro screen (the original's
     /// `seenIntroScreen`): false for a new pilot.
     pub seen_intro: bool,
+    /// Each stellar's defence ships left (+0x466) once one is spent, given
+    /// back, regrown or set; any other has its decode
+    /// ([`DefenceShips`]). The pilot holds them, as the original's pilot
+    /// file keeps them (`_WritePilotData` @0x7282d, @0x7285e), and lends
+    /// them to the traffic for a step (see
+    /// [`stellar_defence`](crate::traffic::stellar_defence)). A new pilot
+    /// starts from the decoded counts, as `_DoNewPilot` reloads the
+    /// records (@0x190f0).
+    pub defence_ships: DefenceShips,
 }
 
 impl Pilot {
@@ -300,6 +310,7 @@ impl Pilot {
             crons: BTreeMap::new(),
             ranks: BTreeSet::new(),
             seen_intro: false,
+            defence_ships: DefenceShips::default(),
         })
     }
 

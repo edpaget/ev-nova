@@ -499,7 +499,9 @@ impl Session {
 
     /// The daily step's stellars (see the module docs): every damaged
     /// stellar's strength restored, every active stellar's gun timer
-    /// zeroed (see the `stellar_guns` module), then each destroyed
+    /// zeroed (see the `stellar_guns` module), every active dominated
+    /// stellar's defence fleet regrown (see the `dominated_stellars`
+    /// module), then each destroyed
     /// stellar in turn, by ascending ID, counts a day down, or regenerates
     /// and runs its `OnRegen` at once, through [`Session::run_set`],
     /// drawing on `chance`. The overlay is read again after each, so a
@@ -509,6 +511,7 @@ impl Session {
     pub(super) fn stellars_day(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.space.strength.clear();
         self.reset_gun_timers();
+        self.regrow_defences(chance);
         let mut after = None;
         while let Some((stellar, countdown)) = self.next_destroyed(after) {
             after = Some(stellar);
