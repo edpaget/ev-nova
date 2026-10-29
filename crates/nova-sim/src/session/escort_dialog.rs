@@ -21,6 +21,24 @@
 //! Channel closes it. Every close beeps [`SimSound::EscortDialogClosed`]
 //! (`_beepSnd[2]` @0x955d9).
 //!
+//! **The stale release** (@0x95601-0x95672). The comm dialog's Release
+//! sets `_releaseCommEscort` and nothing but a comm dialog opening clears
+//! it (see the `hail` module), so after a comm-dialog Release every escort
+//! dialog closed before the next comm dialog releases its escort too, by
+//! any closing button ([`Session::release_stale`]): a cargo share by its
+//! class's `Holds`, out of the fleet, its class's `InherentAI`, and the
+//! leave, with none of Release's other resets. After the dialog's own
+//! Release it takes a second share, as `_DestroyPartialFleetCargo`
+//! (@0xcd32) reads only the class's and the fleet's holds. The
+//! `_statusRedraw[2]` after it (@0x95669) is left out with the rest below.
+//!
+//! It is the original's reading and no `Rulebook` key offers another: a
+//! key needs a reason, and none applies. The Nova Bible says nothing of
+//! it, the engine could not reach it before the comm dialog listed
+//! Release for a captured mission ship, no plan reads it otherwise, and it
+//! breaks no stock mission, cron or storyline, so it is no bug to set
+//! right either.
+//!
 //! Left out, as frame-timing and redraw bookkeeping the engine has no
 //! use for: `_gSpeedMult` zeroed (@0x95693), `FlushEvents`,
 //! `_ShowTheCursor`, `_commDialogMode` 2, `_statusRedraw` and
@@ -33,7 +51,7 @@ use crate::SimSound;
 use crate::control::Gate;
 use crate::escort_dialog::{self, EscortButton, EscortDialogView};
 use crate::fleet::EscortMark;
-use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::npc::{AiType, Npc, NpcId};
 
 /// The escort dialog open: the escort hailed, and whether it can be
 /// upgraded, worked out as the dialog opened.
@@ -126,10 +144,51 @@ impl Session {
         self.escort_dialog()
     }
 
-    /// The escort dialog closes, beeping.
+    /// The escort dialog closes, beeping; then, while the comm dialog's
+    /// release flag is set, its escort is released again
+    /// ([`Session::release_stale`]; see the module docs).
     fn close_escort_dialog(&mut self) {
-        self.space.escorts.dialog = None;
+        let dialog = self.space.escorts.dialog.take();
         self.out.sounds.push(SimSound::EscortDialogClosed);
+        if let Some(dialog) = dialog
+            && self.space.escorts.release_comm_escort
+        {
+            self.release_stale(dialog.npc);
+        }
+    }
+
+    /// Escort NPC `id` is released as `_DoEscortDialog`'s close releases
+    /// it under a stale `_releaseCommEscort` (@0x95601-0x95672): it takes
+    /// its share of the cargo by its ship class's `Holds`
+    /// (`_DestroyPartialFleetCargo(+0x86)` @0x9561d), the fleet's holds
+    /// as they stand, whether or not it is still in the fleet, so a second
+    /// share after the dialog's own Release; it leaves the fleet (+0x9a
+    /// -1), a save due when it was in it; its AI type is its class's
+    /// `InherentAI` (+0x88); and it leaves (`_AIMakeShipLeave` @0x95652).
+    /// None of Release's other resets is made: no +0xb9, +0xc8de or
+    /// `_AISetup`.
+    ///
+    /// `_AIDispatch(ship, 1)` (@0x95664) thinks for it at once; the
+    /// engine's next think does, a tick later, which crosses no boundary
+    /// the player sees: no frame is drawn between the two.
+    fn release_stale(&mut self, id: NpcId) {
+        let Some(ship) = self.space.npc(id).map(|npc| npc.ship) else {
+            return;
+        };
+        if let Some(holds) = self.statics.released_holds(&self.setup, ship) {
+            self.destroy_cargo_share(holds, false, Some(id));
+        }
+        self.dismiss(id);
+        let inherent = self
+            .statics
+            .ship_record(ship)
+            .map(|record| AiType::from_raw(record.inherent_ai));
+        if let Some(npc) = self.space.npc_mut(id) {
+            if let Some(ai_type) = inherent {
+                npc.ai_type = ai_type;
+            }
+            super::hail::make_leave(npc);
+        }
     }
 }
 
@@ -351,6 +410,125 @@ pub(super) mod tests {
         assert!(released.boarded);
         assert_eq!(released.former, None);
         assert_eq!(released.order_word, OrderWord::NONE);
+    }
+
+    // The stale release flag (`_releaseCommEscort`, @0x95601-0x95672).
+
+    /// [`escorting`] holding 30 tons of food, with a second escort, a copy
+    /// of the first (NPC 1), released by the comm dialog's Release and
+    /// hang-up, its share of the food taken: the session and the food
+    /// left. The first escort is targeted again, its AI type a warship's
+    /// (its class's `InherentAI` is not), its order word 2 and its former
+    /// record set, so a reset shows.
+    fn after_a_comm_release(catalog: &FakePilotCatalog) -> (Session, u32) {
+        use crate::market::Good;
+        let mut session = escorting(catalog);
+        let copy = crate::traffic::npc::Npc {
+            escort: None,
+            ..session.npcs()[0].clone()
+        };
+        let second = session.space.traffic.add_npc(copy);
+        session.join_fleet(second, &mut NeverFires);
+        session.pilot.cargo = std::iter::once((Good::Commodity(0), 30)).collect();
+        session.chart.target = Some(second);
+        crate::session::hail::tests::hail(&mut session, catalog);
+        session
+            .answer(1, catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("open");
+        session.hang_up();
+        assert!(!session.is_escort(second), "released by the comm dialog");
+        assert!(session.space.escorts.release_comm_escort);
+        session.chart.target = Some(NpcId(0));
+        let record = session.pilot.escorts[0];
+        let first = npc(&mut session);
+        first.ai_type = crate::traffic::npc::AiType::Warship;
+        first.order_word = OrderWord(2);
+        first.former = Some(FormerEscort { record });
+        session.take_save_due();
+        session.take_sounds();
+        let held = session.pilot().held(Good::Commodity(0));
+        (session, held)
+    }
+
+    #[test]
+    fn after_a_comm_release_closing_an_escort_dialog_releases_its_escort_too() {
+        use crate::market::Good;
+        let catalog = upgradable();
+        let (mut session, held) = after_a_comm_release(&catalog);
+        assert!(held < 30, "the comm release took its share: {held}");
+        opened(&mut session, &catalog);
+        session.take_sounds();
+        assert_eq!(session.press_escort(EscortButton::Close), None);
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::EscortDialogClosed],
+            "the beep first (@0x955fc)"
+        );
+        assert!(!session.is_escort(NpcId(0)), "+0x9a -1 (@0x95633)");
+        assert!(session.pilot.escorts.is_empty());
+        assert!(
+            session.pilot().held(Good::Commodity(0)) < held,
+            "_DestroyPartialFleetCargo (@0x9561d)"
+        );
+        let released = npc(&mut session).clone();
+        assert_eq!(
+            released.ai_type,
+            crate::traffic::npc::AiType::WimpyTrader,
+            "its class's InherentAI (@0x95640)"
+        );
+        assert_eq!(released.goal, Goal::JumpOut, "_AIMakeShipLeave (@0x95652)");
+        assert!(!released.boarded, "no +0xb9");
+        assert_eq!(released.order_word, OrderWord(2), "no _AISetup");
+        assert!(released.former.is_some(), "no +0xc8de");
+        assert!(session.take_save_due());
+        assert!(session.space.escorts.release_comm_escort, "kept set");
+    }
+
+    #[test]
+    fn a_stale_flag_takes_a_second_share_after_the_escort_dialogs_own_release() {
+        use crate::market::Good;
+        let catalog = upgradable();
+        let held_after_release = |stale: bool| {
+            let mut session = escorting(&catalog);
+            session.pilot.cargo = std::iter::once((Good::Commodity(0), 30)).collect();
+            session.space.escorts.release_comm_escort = stale;
+            opened(&mut session, &catalog);
+            session.take_sounds();
+            assert_eq!(session.press_escort(EscortButton::Release), None);
+            assert_eq!(session.take_sounds(), [SimSound::EscortDialogClosed]);
+            assert!(!session.is_escort(NpcId(0)));
+            session.pilot().held(Good::Commodity(0))
+        };
+        let once = held_after_release(false);
+        let twice = held_after_release(true);
+        assert!(once < 30, "the dialog's own release takes a share: {once}");
+        assert!(
+            twice < once,
+            "a stale flag takes another, the escort out of the fleet (@0xcd32): {twice}"
+        );
+    }
+
+    #[test]
+    fn a_comm_dialog_in_between_clears_the_flag_and_the_escort_dialog_releases_nothing() {
+        use crate::market::Good;
+        let catalog = upgradable();
+        let (mut session, held) = after_a_comm_release(&catalog);
+        let stranger = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id != NpcId(0))
+            .expect("the released ship, leaving")
+            .id;
+        session.chart.target = Some(stranger);
+        crate::session::hail::tests::hail(&mut session, &catalog);
+        session.hang_up();
+        assert!(!session.space.escorts.release_comm_escort, "@0x9576a");
+        session.chart.target = Some(NpcId(0));
+        opened(&mut session, &catalog);
+        session.press_escort(EscortButton::Close);
+        assert!(session.is_escort(NpcId(0)), "kept");
+        assert_eq!(session.pilot().held(Good::Commodity(0)), held);
+        assert_eq!(npc(&mut session).goal, Goal::Formation { guard: None });
     }
 
     #[test]

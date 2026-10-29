@@ -5,9 +5,9 @@
 //! the ship answers with a ship comm string ([`reply`]) chosen by its
 //! [`Attitude`] ([`like`]), and a [`Conversation`] rolls its variant,
 //! mood, price and advice once ([`deal`]). The dialog lists the
-//! [`HailOption`]s that apply, Nova's four by default ([`nova`]:
-//! Greetings, Request Assistance and Beg For Mercy, and Release for the
-//! player's escort). Each option sees the
+//! [`HailOption`]s that apply, Nova's by default ([`nova`]: Greetings,
+//! then one of Request Assistance, Beg For Mercy and Release, the last
+//! for a ship [`Hail::releasable`] says the player may release). Each option sees the
 //! conversation as a read-only [`Hail`] and answers a press with an
 //! [`Answer`]: the [`Reply`] the ship says, a [`Deed`] it does, and a
 //! price it asks ([`Ask`]), which the player may haggle over. The session
@@ -69,7 +69,7 @@ pub use crate::ai::Help;
 pub use deal::{Conversation, Haggle, Mood, Settled};
 pub use like::{Attitude, attitude, likes_player};
 pub use nova::{BegForMercy, Greetings, JoinFleet, Release, RequestAssistance};
-pub use reply::{MissionHail, Reply};
+pub use reply::{Led, MissionHail, Reply};
 
 /// `Flags`: its ships answer no hail.
 pub const MUTE: u16 = 0x0400;
@@ -255,6 +255,26 @@ impl Hail<'_> {
     pub fn carried(&self) -> bool {
         self.npc.carrier.is_some()
     }
+
+    /// Whether the ship hailed is one the comm dialog's Release releases:
+    /// led by the player (+0x9a 0), of AI type 6 and not a `ShipBehav` 1
+    /// escort of an active slot (`-0x16a`), as `_DrawCommDialogButtons`
+    /// lists it (@0x28cee-0x28d26, @0x28d6b-0x28d90) and item 2 answers it
+    /// (`_DoCommDialog` @0x9603c-0x96063). So a ship that
+    /// [escorts the player](Npc::escorts_player), not the player's
+    /// launched fighter (AI type 5) and not a mission's `ShipBehav` 1
+    /// escort: a fleet escort, or a mission ship captured for an escort
+    /// whatever its other `ShipBehav`. [`Hail::mission`] reads an inactive
+    /// slot's mark as [`ShipBehav::Own`](crate::traffic::ShipBehav::Own),
+    /// so a `ShipBehav` 1 escort whose mission has gone is releasable too.
+    #[must_use]
+    pub fn releasable(&self) -> bool {
+        self.npc.escorts_player()
+            && !self.carried()
+            && !self
+                .mission
+                .is_some_and(|mission| mission.behav == crate::traffic::ShipBehav::EscortPlayer)
+    }
 }
 
 impl<'a> Hail<'a> {
@@ -385,8 +405,8 @@ pub enum Deed {
     Attack,
     /// It flies over to help the player.
     Help(Help),
-    /// The player's escort leaves the fleet, and the system, once the
-    /// channel closes.
+    /// The ship the player leads is released, leaving it and the system,
+    /// once the channel closes (see [`Hail::releasable`]).
     Release,
     /// The person hailed joins the player's fleet, as itself, at once.
     Join,
@@ -1443,7 +1463,7 @@ mod tests {
     }
 
     #[test]
-    fn nova_lists_greetings_then_the_middle_option_that_applies_and_release_for_an_escort() {
+    fn nova_lists_greetings_then_the_middle_option_that_applies_release_for_an_escort() {
         let options = HailOptions::nova(&Rulebook::default());
         let npc = ship();
         let friendly = hail(&npc);
@@ -1475,10 +1495,13 @@ mod tests {
         });
         assert_eq!(
             labels(&options, &hail(&escort)),
-            ["Release"],
-            "the escort's"
+            ["Greetings", "Release"],
+            "the escort's (@0x28c43-0x28d90)"
         );
-        assert_eq!(labels(&HailOptions::default(), &hail(&escort)), ["Release"]);
+        assert_eq!(
+            labels(&HailOptions::default(), &hail(&escort)),
+            ["Greetings", "Release"]
+        );
     }
 
     #[test]

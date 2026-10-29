@@ -765,6 +765,7 @@ fn close_channel_hangs_up_and_resumes_flight() {
         .item_bounds(CLOSE_ITEM)
         .expect("an item")
         .center();
+    screen.take_sounds();
     let mut sounds = Vec::new();
     for pressed in [true, false] {
         screen.input(&Input::PointerButton {
@@ -774,7 +775,11 @@ fn close_channel_hangs_up_and_resumes_flight() {
         });
         sounds.extend(screen.take_sounds());
     }
-    assert_eq!(sounds, []);
+    assert_eq!(
+        sounds,
+        [Sound::Sim(SimSound::CommDialogClosed)],
+        "the session's close beep, once (_DoCommDialog @0x96843)"
+    );
     assert_eq!(screen.showing(), Showing::Flight);
     assert!(screen.comm().is_none());
     assert_eq!(flight_mut(screen).hailing(), None, "hung up");

@@ -1025,7 +1025,7 @@ fn by_the_settings_other_reading_merchant_joins_and_flies_again_after_a_save() {
     game.tap(Key::Char('u'));
     let (options, reply) = game.hailing();
     assert_eq!(reply, "Okay, I'm on my way.");
-    assert_eq!(options, ["Release"]);
+    assert_eq!(options, ["Greetings", "Release"]);
     game.tap(Key::Escape);
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.session().pilot().escorts().len(), 1);

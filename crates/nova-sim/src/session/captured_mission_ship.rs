@@ -31,6 +31,14 @@
 //! - the next system entry deletes it with no count given back
 //!   (`_DeleteAllComputerShips` @0x3bf7e-0x3bfb6, @0x3c076-0x3c082);
 //! - an abort in flight releases it (`_AbortMission` @0x99ab5-0x99b24);
+//! - hailed, it gets the comm dialog, not the escort dialog, which lists
+//!   Greetings and Release, or Beg For Mercy while it threatens the
+//!   player, unless it is a `ShipBehav` 1 escort of an active slot
+//!   (`_DrawCommDialogButtons` @0x28cee-0x28d90); Release, as the dialog
+//!   closes (@0x96852-0x968c1), takes its cargo share by its class's
+//!   `Holds`, takes it out of the formation keeping its mark, gives it its
+//!   class's `InherentAI` and the release's resets, and sends it off
+//!   ([`Session::release_mission_escort`]);
 //! - a `ShipBehav` 0 one still hunts the player
 //!   (`_HighLevelAIHandler` @0x8d628-0x8d6ea, after `_EscortAI`
 //!   @0x901e5).
@@ -81,6 +89,40 @@ impl Session {
         }
         self.reform();
         self.out.save_due = true;
+    }
+
+    /// Mission escort NPC `id` is released by the comm dialog's close (see
+    /// the module docs): it takes its share of the cargo by its ship
+    /// class's `Holds` ([`Statics::released_holds`](super::Statics::released_holds), not
+    /// counted among the fleet's, `_DestroyPartialFleetCargo(+0x86)`
+    /// @0x96864); it leaves the formation (+0x9a -1, @0x96871), keeping its
+    /// mark; its AI type is its class's `InherentAI` (+0x88, @0x9688d); and
+    /// it takes the release's resets and leaves
+    /// ([`super::escorts::reset_released`]). The rest re-form. No save is
+    /// due, as mission escorts are never saved.
+    pub(super) fn release_mission_escort(&mut self, id: NpcId) {
+        let Some(ship) = self.space.npc(id).map(|npc| npc.ship) else {
+            return;
+        };
+        if let Some(holds) = self.statics.released_holds(&self.setup, ship) {
+            self.destroy_cargo_share(holds, false, Some(id));
+        }
+        let inherent = self
+            .statics
+            .ship_record(ship)
+            .map(|record| AiType::from_raw(record.inherent_ai));
+        let Some(npc) = self.space.npc_mut(id) else {
+            return;
+        };
+        if let Some(mark) = &mut npc.mission {
+            mark.formation = None;
+            mark.order = None;
+        }
+        if let Some(ai_type) = inherent {
+            npc.ai_type = ai_type;
+        }
+        super::escorts::reset_released(npc);
+        self.reform();
     }
 }
 
@@ -391,6 +433,133 @@ mod tests {
             Goal::Attack(crate::combat::ShipRef::Player),
             "_HighLevelAIHandler @0x8d628-0x8d6ea"
         );
+    }
+
+    /// Mission 140, in flight and failed, both its ships captured for
+    /// escorts: the session, the first ship (targeted) and the other.
+    fn both_captured(catalog: &FakePilotCatalog) -> (Session, NpcId, NpcId) {
+        let (mut session, id) = captured(catalog);
+        let other = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.mission.is_some() && npc.id != id)
+            .expect("the other ship")
+            .id;
+        session.join_fleet(other, &mut NeverFires);
+        session.chart.target = Some(id);
+        session.take_save_due();
+        (session, id, other)
+    }
+
+    /// The comm dialog's labels, hailing the target.
+    fn hailed_labels(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<String> {
+        crate::session::hail::tests::hail(session, catalog)
+            .options
+            .into_iter()
+            .map(|button| button.label)
+            .collect()
+    }
+
+    /// Hails the target, presses Release and hangs up.
+    fn release_by_hail(session: &mut Session, catalog: &FakePilotCatalog) {
+        assert_eq!(hailed_labels(session, catalog), ["Greetings", "Release"]);
+        let view = session
+            .answer(
+                1,
+                catalog,
+                &crate::hail::HailOptions::default(),
+                &mut NeverFires,
+            )
+            .expect("open");
+        assert!(session.space.escorts.release_comm_escort, "{view:?}");
+        session.hang_up();
+    }
+
+    #[test]
+    fn a_captured_mission_ship_hailed_lists_greetings_and_release() {
+        let catalog = goal_catalog(0, 0);
+        let (mut session, id, _) = both_captured(&catalog);
+        assert_eq!(
+            session
+                .space
+                .npc(id)
+                .and_then(|npc| npc.mission)
+                .map(|mark| mark.behav),
+            Some(ShipBehav::Own),
+            "ShipBehav -1"
+        );
+        assert_eq!(
+            hailed_labels(&mut session, &catalog),
+            ["Greetings", "Release"]
+        );
+    }
+
+    #[test]
+    fn a_released_captured_mission_ship_leaves_keeping_its_mark() {
+        let catalog = goal_catalog(0, 0);
+        let (mut session, id, other) = both_captured(&catalog);
+        let before = session
+            .space
+            .npc(id)
+            .and_then(|npc| npc.mission)
+            .expect("marked");
+        {
+            let npc = session.space.npc_mut(id).expect("here");
+            npc.ai_type = AiType::Warship;
+            npc.order_word = crate::fleet::OrderWord(2);
+            npc.former = Some(crate::self_repair::FormerEscort { record: hired() });
+        }
+        release_by_hail(&mut session, &catalog);
+        let npc = session.space.npc(id).expect("still here, leaving");
+        let mark = npc.mission.expect("keeps its mark (+0xc8d2 unwritten)");
+        assert_eq!((mark.slot, mark.behav), (before.slot, before.behav));
+        assert_eq!((mark.formation, mark.order), (None, None), "+0x9a -1");
+        assert!(!npc.escorts_player());
+        assert!(npc.boarded, "+0xb9 (@0x96896)");
+        assert_eq!(npc.former, None, "+0xc8de (@0x9689f)");
+        assert_eq!(npc.order_word, crate::fleet::OrderWord::NONE, "_AISetup");
+        assert_eq!(npc.ai_type, AiType::WimpyTrader, "ship 200's InherentAI");
+        assert_eq!(npc.goal, Goal::JumpOut, "_AIMakeShipLeave (@0x968b7)");
+        let slot = session
+            .space
+            .npc(other)
+            .and_then(crate::traffic::npc::Npc::formation)
+            .expect("still in formation");
+        assert_eq!((slot.slot, slot.ships), (2, 2), "re-formed alone");
+        assert!(!session.take_save_due(), "mission escorts are never saved");
+        assert_eq!(marked(&session), [0, 0], "no count changed");
+    }
+
+    #[test]
+    fn its_release_takes_its_share_of_the_cargo() {
+        use crate::market::Good;
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        // `_DestroyPartialFleetCargo(+0x86)` @0x96864 reads the ship's
+        // class `Holds`; they are not among the fleet's.
+        let held_after = |inherent_ai: i16, source: RuleSource| {
+            let mut catalog = goal_catalog(0, 0);
+            catalog.ship_records[1].inherent_ai = inherent_ai;
+            let (session, id, _) = both_captured(&catalog);
+            let mut session = session
+                .with_rules(Rulebook::default().with_override(RuleKey::ReleaseCargoShare, source));
+            session.pilot.cargo = std::iter::once((Good::Commodity(0), 30)).collect();
+            release_by_hail(&mut session, &catalog);
+            let held = session.pilot().held(Good::Commodity(0));
+            let lost = session.space.npc(id).expect("here").cargo;
+            (held, lost)
+        };
+        for source in RuleSource::ALL {
+            let (held, lost) = held_after(1, source);
+            assert!(held < 30, "{source:?}: a trader takes its share");
+            assert_eq!(
+                lost,
+                crate::traffic::npc::NpcHold::from_words([30 - held, 0, 0, 0, 0, 0]),
+                "{source:?}: it holds what it destroyed"
+            );
+        }
+        let (by_engine, _) = held_after(3, RuleSource::Engine);
+        assert_eq!(by_engine, held_after(1, RuleSource::Engine).0, "any type");
+        assert_eq!(held_after(3, RuleSource::Bible).0, 30, "a trader alone");
     }
 
     #[test]

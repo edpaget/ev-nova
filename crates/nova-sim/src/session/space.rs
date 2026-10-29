@@ -151,6 +151,16 @@ pub(super) struct Escorts {
     pub(super) talk: Option<hail::Talk>,
     /// The escort dialog open, if any (see the `escort_dialog` module).
     pub(super) dialog: Option<super::escort_dialog::EscortDialog>,
+    /// Whether the comm dialog's Release was pressed: the original's
+    /// app-wide `_releaseCommEscort` (the byte behind 0xdef2c). Release
+    /// sets it (`_DoCommDialog` @0x9606a) and only a comm dialog opening
+    /// clears it (@0x9576a), so, as the original's does, it outlives the
+    /// dialog: the comm dialog's close releases its ship while it is set
+    /// (@0x96848), and so does every escort dialog's close until the next
+    /// comm dialog opens (`_DoEscortDialog` @0x95601; see the `hail` and
+    /// `escort_dialog` modules). It outlives a landing and a jump too, but
+    /// not the session: the original's outlives a pilot load as well.
+    pub(super) release_comm_escort: bool,
     /// Each escort of the fleet's NPC in the system, lined up with the
     /// pilot's escorts while in flight; none for one not placed.
     pub(super) fleet: Vec<Option<NpcId>>,
@@ -211,6 +221,7 @@ impl Space {
                 aboard: None,
                 talk: None,
                 dialog: None,
+                release_comm_escort: false,
                 fleet: Vec::new(),
                 restock_persons: false,
                 class_orders: [None; 4],

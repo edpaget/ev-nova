@@ -689,7 +689,16 @@ impl Session {
     /// sub 0 and its goal targets +0x90 and +0x92 (-2) give way to the
     /// leave's goal and its target cleared, which follow at once; the
     /// engine has no field for its +0xc906 or +0xc92e.
+    ///
+    /// A mission escort, which only the comm dialog's Release reaches (a
+    /// mission ship captured for an escort, see the
+    /// `captured_mission_ship` module), is released by
+    /// [`Session::release_mission_escort`].
     pub(super) fn release(&mut self, id: NpcId) {
+        if self.space.npc(id).is_some_and(Npc::mission_escort) {
+            self.release_mission_escort(id);
+            return;
+        }
         if !self.is_escort(id) {
             return;
         }
@@ -701,10 +710,7 @@ impl Session {
         }
         self.dismiss(id);
         if let Some(npc) = self.space.npc_mut(id) {
-            npc.boarded = true;
-            npc.former = None;
-            npc.order_word = crate::fleet::OrderWord::NONE;
-            super::hail::make_leave(npc);
+            reset_released(npc);
         }
     }
 
@@ -832,6 +838,19 @@ impl Statics {
             .filter(|record| record.inherent_ai <= escort::FREIGHTER_AI)
             .map(|record| record.fields.holds)
     }
+
+    /// The `Holds` a ship of class `ship` takes its share of the cargo by
+    /// as it is released (`_DestroyPartialFleetCargo(+0x86)`, the ship's
+    /// class, @0x96864, @0x9549d, @0x9561d), as
+    /// [`RuleKey::ReleaseCargoShare`] reads in `setup`: none when the
+    /// class has no record, or by the other reading when it is not a
+    /// trader.
+    pub(super) fn released_holds(&self, setup: &Setup, ship: ShipId) -> Option<i16> {
+        match setup.rules.source_for(RuleKey::ReleaseCargoShare) {
+            RuleSource::Engine => self.ship_record(ship).map(|record| record.fields.holds),
+            RuleSource::Bible => self.trader_holds(ship),
+        }
+    }
 }
 
 impl Space {
@@ -955,9 +974,8 @@ impl Space {
     }
 
     /// The `Holds` escort NPC `id` takes its share of the cargo by as it
-    /// is released, as [`RuleKey::ReleaseCargoShare`] reads: none when
-    /// its ship class has no record, or by the other reading when it is
-    /// not a trader.
+    /// is released, by its escort record's ship class
+    /// ([`Statics::released_holds`]); none when it is not in the fleet.
     fn released_holds(
         &self,
         pilot: &Pilot,
@@ -967,10 +985,7 @@ impl Space {
     ) -> Option<i16> {
         let index = self.fleet_index(id)?;
         let ship = pilot.escorts.get(index)?.ship;
-        match setup.rules.source_for(RuleKey::ReleaseCargoShare) {
-            RuleSource::Engine => statics.ship_record(ship).map(|record| record.fields.holds),
-            RuleSource::Bible => statics.trader_holds(ship),
-        }
+        statics.released_holds(setup, ship)
     }
 
     /// Whether NPC `id` is one of the player's escorts.
@@ -1070,6 +1085,18 @@ impl Space {
         let row = self.class_row(pilot, statics, class);
         if row.present { row.order } else { kept }.filter(|&order| order != EscortOrder::Dock)
     }
+}
+
+/// The resets a ship released by hail takes as it goes (`_DoCommDialog`
+/// @0x96896-0x968b7, `_DoEscortDialog` @0x954bb-0x954f2): it can never be
+/// boarded (+0xb9 1), it is no former escort (+0xc8de -1), `_AISetup`
+/// clears its order word (+0xc90a), and it leaves the system
+/// (`_AIMakeShipLeave`, [`super::hail::make_leave`]).
+pub(super) fn reset_released(npc: &mut Npc) {
+    npc.boarded = true;
+    npc.former = None;
+    npc.order_word = crate::fleet::OrderWord::NONE;
+    super::hail::make_leave(npc);
 }
 
 /// `npc` falls in with the player, as a hired escort joining

@@ -1821,6 +1821,35 @@ mod tests {
     }
 
     #[test]
+    fn hanging_up_a_persons_hail_marks_it_quoted() {
+        // `_DoCommDialog` sets the hailed ship's +0xbc as it closes
+        // (@0x9691d), which the attack quote reads as said (@0x33d38).
+        let said_after_a_hail = |hung_up: bool| {
+            let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
+            session.space.traffic.npcs_mut()[1].person = None;
+            session.chart.target = Some(session.npcs()[0].id);
+            session
+                .hail(
+                    &catalog,
+                    &crate::hail::HailOptions::default(),
+                    &mut NeverFires,
+                )
+                .expect("answered");
+            if hung_up {
+                session.hang_up();
+            }
+            session.space.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+            quote_tick(&catalog, &mut session, &[77]).0
+        };
+        assert_eq!(said_after_a_hail(true), Vec::<String>::new());
+        assert_eq!(
+            said_after_a_hail(false),
+            ["Ace: Prepare to die, Stock!"],
+            "the control: the hail still open"
+        );
+    }
+
+    #[test]
     fn a_quote_names_the_players_ship_by_the_name_it_was_given() {
         let mut catalog = quoters([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
         catalog.strings = vec![(7101, vec!["Nice <PST>, the <PSN>.".to_owned()])];
