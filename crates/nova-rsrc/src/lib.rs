@@ -79,9 +79,9 @@
 //!    header. Bytes that are not MacBinary keep the fork's error.
 //!
 //! The order means no fork can be misread as MacBinary, whatever its byte
-//! 102 holds. Nor can a MacBinary file parse as a fork: its name length
-//! (byte 1) puts the fork's data offset at 64 KiB or more, and the
-//! zero-padded name makes the map length 0. The stock `.ndat` files all
+//! 102 holds. Nor does a real MacBinary file parse as a fork: a name length
+//! (byte 1) of 1 or more puts the fork's data offset at 64 KiB or more,
+//! and a short zero-padded name makes the map length 0. The stock `.ndat` files all
 //! start `00 00 01 00`, which fails the MacBinary header checks anyway.
 //!
 //! A buffer shorter than 128 bytes is recognised as a truncated MacBinary

@@ -361,6 +361,21 @@ mod tests {
     }
 
     #[test]
+    fn fork_lengths_read_all_four_bytes() {
+        for (field, fork) in [
+            (MACBINARY_DATA_LEN_FIELD, Fork::Data),
+            (MACBINARY_RESOURCE_LEN_FIELD, Fork::Resource),
+        ] {
+            for len in [0x0100_0000, 0x0001_0000, 0x0000_0100] {
+                let mut built = build(II);
+                built.put_u32(field, len).recompute_crc();
+                let (found, _, found_len) = out_of_bounds(&built).expect("out of bounds");
+                assert_eq!((found, found_len), (fork, len));
+            }
+        }
+    }
+
+    #[test]
     fn a_data_fork_past_the_end_is_out_of_bounds() {
         let mut built = build(II);
         built
