@@ -71,6 +71,25 @@ impl Session {
     }
 }
 
+/// The fixture's reach into the defences (`crate::fixture::alarm_stellar`,
+/// `crate::fixture::defence_ships_left`).
+#[cfg(any(test, feature = "fixture"))]
+impl Session {
+    /// Marks `stellar` under attack.
+    pub(crate) fn alarm_stellar(&mut self, stellar: StellarId) {
+        self.space.traffic.defences_mut().alarm(stellar);
+    }
+
+    /// The defence ships `stellar`, one the system lists, has left.
+    pub(crate) fn defence_ships_left(&self, stellar: StellarId) -> Option<i16> {
+        self.chart
+            .listed
+            .iter()
+            .find(|site| site.id == stellar)
+            .map(|site| self.space.traffic.defences().left(site))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

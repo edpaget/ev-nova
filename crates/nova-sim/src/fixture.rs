@@ -12,7 +12,8 @@
 //! player's cloak directly; [`hide`], for
 //! making a ship's type one whose `Cost` is -1; [`place`], for putting a
 //! ship somewhere directly; [`sabotage_kill`], for setting off the
-//! player's kill outfit directly; and
+//! player's kill outfit directly; [`alarm_stellar`] and
+//! [`defence_ships_left`], for a stellar's defence fleet;
 //! [`listed_stellars`], a fake catalog's listed stellars derived from its
 //! landing sites; and [`SessionBuilder`], a session in a given state
 //! reached without the load's rules (see the `builder` module).
@@ -147,6 +148,20 @@ pub fn place(session: &mut Session, id: NpcId, at: crate::geometry::Vec2) {
 /// where the slot's last ship was ([`Session::hover_place`]).
 pub fn refill(session: &mut Session, id: NpcId, at: crate::geometry::Vec2) -> Option<NpcId> {
     session.refill_berth(id, at)
+}
+
+/// Marks `stellar` under attack in `session` (+0x47), as the planet comm
+/// dialog's Demand Tribute will (rdm:phase/play-feel-4/phase-2-planet-comm-dialog):
+/// for a test that needs a stellar sending up its defence ships.
+pub fn alarm_stellar(session: &mut Session, stellar: crate::catalog::StellarId) {
+    session.alarm_stellar(stellar);
+}
+
+/// The defence ships `stellar`, one the player's system lists, has left
+/// in `session` (+0x466); none for a stellar the system doesn't list.
+#[must_use]
+pub fn defence_ships_left(session: &Session, stellar: crate::catalog::StellarId) -> Option<i16> {
+    session.defence_ships_left(stellar)
 }
 
 /// Sets off a sabotage kill outfit on the player in `session` at once, as
