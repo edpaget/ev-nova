@@ -11,12 +11,17 @@
 //!   draws it ([`ShipDraw::live_alt`]), or as it was last drawn while the
 //!   session holds it ([`held_alt`](super::held_alt)).
 //! - **The hull's translucency** ([`base_alpha`]): `BaseTransp` t
-//!   (@0x2bdb2-0x2bdce), its channel factors 0 unpainted, draws as
-//!   `(src × (32 − t)) >> 5 | (dst × t) >> 5`
+//!   (@0x2bdb2-0x2bdce), its channel factors `paint_c − 32`, 0 unpainted,
+//!   draws as `(src × (32 − t)) >> 5 | (dst × t) >> 5` unpainted
 //!   (`_BlitPixieRLETranslucent` @0xc1568, `_BlitPixieTranslucentCopy`
 //!   @0xc1110), a crossfade the view draws as a normal blend at
 //!   (32 − t)/32, as it draws an escape pod's fade. A gate's fade and a
 //!   cloak write the hull's translucency after it, and win.
+//! - **The paint** ([`paint`](super::paint)): a painted hull, and its alt
+//!   layer, draw `(src_c × (paint_c − t)) >> 5 | (dst_c × t) >> 5` in
+//!   each channel, [`Blend::OrTranslucent`] at the paint's tint, its murk
+//!   or colorize applied as to an unpainted one's. The other layers are
+//!   never painted (@0x2be41-0x2beb2, @0x2caa1-0x2cb0a).
 //! - **Murk**: an NPC's hull takes its sprite murk m
 //!   ([`sprite_murk`](super::murk::sprite_murk), @0x2be21-0x2be3a), and so
 //!   do its glow, weapon glow, alt and shield layers; its lights take
@@ -50,18 +55,19 @@
 //!
 //! Each layer is added, [`Blend::Or`](crate::draw::Blend::Or) at
 //! [`lights_tint`] of its level; the hull and the alt layer are drawn
-//! plainly. Each one whose sheet holds solid runs draws them raw right
+//! plainly, or in their paint. Each one whose sheet holds solid runs draws them raw right
 //! after itself ([`solid_runs`](super::solid_runs)), as the original's
 //! blits fill a run over every blend and colorize.
 
-use nova_sim::HashedRolls;
 use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
 use nova_sim::traffic::npc::NpcId;
+use nova_sim::{HashedRolls, Rgb15};
 
 use super::catalog::{LayerSheet, ShipSheet};
 use super::cloak_fade::CloakDraw;
 use super::held_alt::AltLayer;
 use super::murk::murk_tint;
+use super::paint::{painted_hull, translucency};
 use super::solid_runs::solid_overlay;
 use super::weapon_glow::npc_glow_level;
 use crate::draw::lights_tint;
@@ -117,6 +123,10 @@ pub struct ShipDraw<'a> {
     /// Its hull's tint before its murk: white, at the alpha its fade,
     /// cloak or `BaseTransp` leaves.
     pub tint: Color,
+    /// Its paint, `None` unpainted: the hull and alt layer are drawn in it
+    /// at the translucency [`tint`](Self::tint)'s alpha gives
+    /// ([`painted_hull`]), unless a cloak writes their factors.
+    pub paint: Option<Rgb15>,
     /// How its cloak changes its drawing, if it does: its hull's tint and
     /// blend, its jitter, and its layers' caps
     /// ([`CloakDraw`], see [`cloak_fade`](super::cloak_fade)).
@@ -180,16 +190,21 @@ impl ShipDraw<'_> {
     }
 
     /// The hull's tint, colorize and blend: its unmurked tint colorized by
-    /// its ion tint, or its murk, drawn plainly; or, cloaked, its cloak's
+    /// its ion tint, or its murk, drawn plainly, or, painted, in its paint
+    /// at its translucency ([`painted_hull`]); or, cloaked, its cloak's
     /// tint and blend in place of its tint and murk, as the cloak writes
     /// the channel factors after them.
     fn hull_tint(&self) -> (Color, Option<Colorize>, Blend) {
         if let Some((tint, blend)) = self.cloak.and_then(|cloak| cloak.hull) {
             return (tint, self.colorize, blend);
         }
+        let (tint, blend) = match painted_hull(self.paint, translucency(self.tint.a)) {
+            Some(painted) => (painted, Blend::OrTranslucent),
+            None => (self.tint, Blend::Normal),
+        };
         match self.colorize {
-            Some(colorize) => (self.tint, Some(colorize), Blend::Normal),
-            None => (murk_tint(self.tint, self.murk), None, Blend::Normal),
+            Some(colorize) => (tint, Some(colorize), blend),
+            None => (murk_tint(tint, self.murk), None, blend),
         }
     }
 

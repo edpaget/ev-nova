@@ -136,6 +136,7 @@ mod tests {
             },
             heading: 0.0,
             tint: Color::WHITE,
+            paint: None,
             cloak: None,
             hull: true,
             murk: 0,

@@ -82,6 +82,7 @@ pub mod ion_tint;
 pub mod jump;
 pub mod lightning;
 pub mod murk;
+pub mod paint;
 pub(crate) mod pen;
 pub mod pods;
 pub mod radar;
