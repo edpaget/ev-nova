@@ -540,7 +540,7 @@ pub(in crate::session) mod tests {
     }
 
     #[test]
-    fn the_bribe_roll_is_drawn_once_a_system_and_again_after_an_arrival() {
+    fn the_bribe_roll_is_drawn_once_and_again_once_forgotten() {
         let catalog = planet_catalog();
         let mut session = at_earth(&catalog, 1_000_000, 0);
         let (_, asked, _) = hail(&mut session, &catalog, 0, 31);
@@ -643,6 +643,22 @@ pub(in crate::session) mod tests {
         let (view, _) = press(&mut session, &catalog, PlanetCommItem::Second, 0);
         assert_eq!(view.expect("open").reply, "s46", "Yeah, right.");
         assert_eq!(session.port.dock, None);
+    }
+
+    #[test]
+    fn a_jumps_arrival_forgets_a_declined_bribes_roll() {
+        let catalog = planet_catalog();
+        let mut session = bribable(&catalog);
+        press(&mut session, &catalog, PlanetCommItem::Second, 99);
+        session.haggle_bribe(Haggle::LowerPrice, &catalog);
+        assert_eq!(session.chart.bribe_roll, Some(0), "declined");
+        press(&mut session, &catalog, PlanetCommItem::Close, 0);
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        session.chart.target = None;
+        session.chart.nav = NavMode::Stellar(Some(StellarId(140)));
+        let (view, asked, _) = hail(&mut session, &catalog, 0, 31);
+        assert_eq!(view.stellar, StellarId(140));
+        assert_eq!(asked, [5, 1, 100], "drawn again (@0x6bfd3)");
     }
 
     #[test]

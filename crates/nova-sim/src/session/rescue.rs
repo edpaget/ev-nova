@@ -1169,6 +1169,7 @@ mod tests {
         session.chart.target = Some(NpcId(5));
         session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
         session.pilot.ranks.insert(RankId(141));
+        session.chart.bribe_roll = Some(0);
         session.ship.latches.blessing_ranks.clear();
         session.ship.latches.scan_latches = Latches {
             junk: false,
@@ -1197,6 +1198,10 @@ mod tests {
             "taken again"
         );
         assert_eq!(session.ship.latches.scan_latches, Latches::ARMED);
+        assert_eq!(
+            session.chart.bribe_roll, None,
+            "forgotten, the next hail draws it (@0x1d7ae)"
+        );
     }
 
     #[test]
