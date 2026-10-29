@@ -1,10 +1,11 @@
 //! The bar's Gamble through the whole app: synthetic game data (a `chär`
 //! flying the "Boarder" from Alpha, whose one stellar, a pad at the
-//! centre with a bar, `spöb` flags 0x41; the bar's text; the race's
-//! result `dësc`s 32760-32763 and its Help, 32764, which names an
-//! after-movie) and a synthetic interface file holding the stock
-//! "Spaceport", "Bar", "Race" (`DLOG` 1023) and "Desc Dialog" dialogs,
-//! driven only by window events, with pilots kept in the in-memory store.
+//! centre with a bar and a trade center, `spöb` flags 0x1043; the bar's
+//! text; the race's result `dësc`s 32760-32763 and its Help, 32764,
+//! which names an after-movie) and a synthetic interface file holding
+//! the stock "Spaceport", "Trade", "Bar", "Race" (`DLOG` 1023) and "Desc
+//! Dialog" dialogs, driven only by window events, with pilots kept in the
+//! in-memory store.
 //! The app draws on a [`Dial`] the test turns, so each draw gives the
 //! outcome the dial is set to.
 //!
@@ -14,8 +15,10 @@
 //! winnings are credited once it and the movie after it are done, on the
 //! tick that ends the movie, after which an Option click asks the bet up
 //! to the cash credited; and Help shows `dësc` 32764 over the race with
-//! the after-movie its load left. Which keys press Gamble, how the race
-//! draws and tracks, the draw and the payout are nova-view's and
+//! the after-movie its load left. After a lost bet, and after winnings
+//! credited as the text closes or as its movie ends, the Trade Center
+//! opens on the cash the session holds. Which keys press Gamble, how the
+//! race draws and tracks, the draw and the payout are nova-view's and
 //! nova-sim's, pinned there.
 
 use crate::bracket_art;
@@ -166,12 +169,12 @@ fn system() -> Vec<u8> {
 }
 
 /// The pad: a `spöb` at the centre that can be landed on, with a bar
-/// (`Flags` 0x41), drawn from `spïn` 1004, held by `gövt` `govt` (-1 for
-/// independent).
+/// and a trade center trading food at medium (`Flags` 0x1043),
+/// drawn from `spïn` 1004, held by `gövt` `govt` (-1 for independent).
 fn pad(govt: i16) -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[0, 0, 4]);
-    bytes[0x06..0x0A].copy_from_slice(&0x41_u32.to_be_bytes());
+    bytes[0x06..0x0A].copy_from_slice(&0x1043_u32.to_be_bytes());
     put_i16s(&mut bytes, 0x0C, &[7]);
     put_i16s(&mut bytes, 0x14, &[govt]);
     put_i16s(&mut bytes, 0x18, &[-1, -1]);
@@ -314,9 +317,9 @@ fn dialog(id: i16, (width, height): (i16, i16), items: &[Item]) -> [(ResType, i1
     [(Dlog::TYPE, id, dlog), (Ditl::TYPE, id, list)]
 }
 
-/// The interface file: stock "Spaceport" (`DLOG` 1000), "Bar" (1013),
-/// "Race" (1023) and "Desc Dialog" (3003), each with its items as stock
-/// has them.
+/// The interface file: stock "Spaceport" (`DLOG` 1000), "Trade" (1001),
+/// "Bar" (1013), "Race" (1023) and "Desc Dialog" (3003), each with its
+/// items as stock has them.
 fn interface() -> InterfaceData {
     let spaceport = dialog(
         1000,
@@ -337,6 +340,29 @@ fn interface() -> InterfaceData {
             ((3, 456, 145, 25), true),
             ((524, 550, 68, 30), false),
             ((605, 548, 32, 32), false),
+        ],
+    );
+    let trade = dialog(
+        1001,
+        (426, 252),
+        &[
+            ((272, 221, 99, 25), true),
+            ((129, 299, 68, 30), false),
+            ((38, 9, 352, 17), false),
+            ((38, 25, 352, 13), true),
+            ((38, 37, 352, 13), true),
+            ((38, 49, 352, 13), true),
+            ((38, 61, 352, 13), true),
+            ((38, 73, 352, 13), true),
+            ((38, 85, 352, 14), true),
+            ((38, 98, 352, 14), true),
+            ((38, 111, 352, 14), true),
+            ((38, 124, 352, 60), false),
+            ((60, 221, 99, 25), true),
+            ((166, 221, 99, 25), true),
+            ((41, 190, 346, 24), false),
+            ((212, 304, 68, 30), false),
+            ((178, 339, 68, 30), false),
         ],
     );
     let bar = dialog(
@@ -376,7 +402,7 @@ fn interface() -> InterfaceData {
             ((11, 10, 417, 262), false),
         ],
     );
-    let fork = [spaceport, bar, race, text]
+    let fork = [spaceport, trade, bar, race, text]
         .into_iter()
         .flatten()
         .fold(ForkBuilder::new(), |fork, (ty, id, bytes)| {
@@ -560,6 +586,36 @@ impl Game {
             .map(|text| text.lines().join(" "))
     }
 
+    /// Leaves the race and the bar for the spaceport, and clicks its
+    /// Trade Center (item 7), giving the cash its exchange shows.
+    fn trade_center_cash(&mut self) -> i64 {
+        self.tap(Key::Escape);
+        assert!(
+            self.bar().is_some_and(|bar| bar.race_screen().is_none()),
+            "back in the bar"
+        );
+        self.tap(Key::Escape);
+        assert!(self.bar().is_none(), "out of the bar");
+        let trade_center = self
+            .app
+            .screen()
+            .spaceport_view()
+            .expect("landed")
+            .dialog()
+            .expect("laid out")
+            .item_bounds(7)
+            .expect("the Trade Center")
+            .center();
+        self.click(trade_center);
+        self.app
+            .screen()
+            .spaceport_view()
+            .and_then(|spaceport| spaceport.open_trade())
+            .expect("trading")
+            .market()
+            .cash
+    }
+
     /// The pilot's cash, as the flight has it.
     fn cash(&self) -> i64 {
         self.app
@@ -705,6 +761,56 @@ fn help_shows_its_text_over_the_race_with_its_after_movie_and_the_race_stays() {
         "the race stays open"
     );
     assert_eq!(game.cash(), 25_000, "no bet");
+}
+
+#[test]
+fn after_a_lost_bet_the_trade_center_shows_the_cash_less_the_bet() {
+    let mut game = Game::flying_with(25_000);
+    game.land();
+    game.open_bar();
+    // Racer 2 wins; the bet is on racer 1.
+    game.dial.set(1);
+    game.tap(Key::Char('g'));
+    let racer = game.racer(0);
+    game.click(racer);
+    let shown = game.text_shown().expect("the result");
+    assert!(shown.starts_with(RESULTS[1]), "{shown}");
+    game.tap(Key::Enter);
+    assert_eq!(game.text_shown(), None, "closed");
+    assert_eq!(game.cash(), 24_000, "the bet lost");
+    assert_eq!(game.trade_center_cash(), 24_000);
+}
+
+#[test]
+fn after_a_win_is_credited_the_trade_center_shows_the_winnings() {
+    let mut game = Game::flying_with(25_000);
+    game.land();
+    game.open_bar();
+    game.dial.set(0);
+    game.tap(Key::Char('g'));
+    let racer = game.racer(0);
+    game.click(racer);
+    game.tap(Key::Enter);
+    for _ in 0..10 {
+        game.frame();
+    }
+    assert_eq!(game.cash(), 28_000, "credited once the movie is over");
+    assert_eq!(game.trade_center_cash(), 28_000);
+}
+
+#[test]
+fn after_a_win_credited_as_its_text_closes_the_trade_center_shows_the_winnings() {
+    let mut game = Game::flying_with(25_000);
+    game.land();
+    game.open_bar();
+    // Racer 2 wins, and its result plays no movie after it.
+    game.dial.set(1);
+    game.tap(Key::Char('g'));
+    let racer = game.racer(1);
+    game.click(racer);
+    game.tap(Key::Enter);
+    assert_eq!(game.cash(), 28_000, "credited as the text closes");
+    assert_eq!(game.trade_center_cash(), 28_000);
 }
 
 crate::common::entry_harness!(Game, click, frame);
