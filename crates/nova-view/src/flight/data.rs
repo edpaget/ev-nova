@@ -270,6 +270,7 @@ impl CombatLooks for GameData {
             image: SheetImage::Rled(sheet.image_id),
             frames: sheet.rotations,
             frame_width: sheet.frame_width,
+            frame_height: sheet.frame_height,
         })
     }
 
@@ -322,6 +323,7 @@ fn effect_sheet(data: &GameData, id: i16) -> Result<EffectSheet, String> {
         image: SheetImage::of(spin.kind, spin.spin_id, spin.image_id),
         frames,
         frame_width: spin.sheet.frame_width(),
+        frame_height: spin.sheet.frame_height(),
     })
 }
 
@@ -882,6 +884,7 @@ mod tests {
             image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 3,
+            frame_height: 2,
         }
     }
 
@@ -1101,6 +1104,28 @@ mod tests {
     }
 
     #[test]
+    fn the_escape_pods_sheet_is_its_ships_with_its_frame_width_and_height() {
+        let data = store(&[
+            (Ship::TYPE, nova_sim::ESCAPE_POD_SHIP.0, ship()),
+            (
+                ShipAnim::TYPE,
+                nova_sim::ESCAPE_POD_SHIP.0,
+                anim(1000, 1, 8),
+            ),
+            (RLED, 1000, sheet(8)),
+        ]);
+        assert_eq!(
+            data.pod_sheet(),
+            Ok(EffectSheet {
+                image: crate::SheetImage::Rled(1000),
+                frames: NonZeroU16::new(8).expect("non-zero"),
+                frame_width: 3,
+                frame_height: 2,
+            })
+        );
+    }
+
+    #[test]
     fn the_cursors_sheet_is_spin_650() {
         let data = named_store(&[
             (Spin::TYPE, 650, None, spin(651)),
@@ -1238,6 +1263,7 @@ mod tests {
                 image: crate::SheetImage::Spin(402),
                 frames: NonZeroU16::new(2).expect("non-zero"),
                 frame_width: 4,
+                frame_height: 4,
             })
         );
     }

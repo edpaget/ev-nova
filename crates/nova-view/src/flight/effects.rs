@@ -820,6 +820,7 @@ mod tests {
         BoomLook {
             sheet: Ok(EffectSheet {
                 frame_width: 0,
+                frame_height: 0,
                 image: crate::SheetImage::Rled(image_id),
                 frames: NonZeroU16::new(frames).expect("non-zero"),
             }),
@@ -920,6 +921,7 @@ mod tests {
                 image: crate::SheetImage::Rled(1095),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
+                frame_height: 0,
             })),
             ..looks()
         }

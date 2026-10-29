@@ -225,6 +225,9 @@ pub struct EffectSheet {
     /// Each frame's width in pixels (`_GetSpriteXSize`): a shot's trail
     /// leaves half of it behind the shot.
     pub frame_width: u32,
+    /// Each frame's height in pixels (`_GetSpriteYSize` @0x2703-0x2731):
+    /// an explosion is placed by half of it.
+    pub frame_height: u32,
 }
 
 /// The starfield's sprite sheet ([`CombatLooks::star_sheet`]): its
@@ -770,6 +773,7 @@ mod tests {
             (id.0 <= 150).then_some(Ok(BoomLook {
                 sheet: Ok(EffectSheet {
                     frame_width: 0,
+                    frame_height: 0,
                     image: crate::SheetImage::Rled(id.0),
                     frames: NonZeroU16::MIN,
                 }),
@@ -792,6 +796,7 @@ mod tests {
         fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
             Ok(EffectSheet {
                 frame_width: 0,
+                frame_height: 0,
                 image: crate::SheetImage::Rled(500 + graphic.cast_signed()),
                 frames: NonZeroU16::MIN,
             })
@@ -800,6 +805,7 @@ mod tests {
         fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
             Ok(EffectSheet {
                 frame_width: 0,
+                frame_height: 0,
                 image: crate::SheetImage::Rled(800 + i16::from(kind)),
                 frames: NonZeroU16::MIN,
             })
@@ -808,6 +814,7 @@ mod tests {
         fn cursor_sheet(&self) -> Result<EffectSheet, String> {
             Ok(EffectSheet {
                 frame_width: 0,
+                frame_height: 0,
                 image: crate::SheetImage::Rled(650),
                 frames: NonZeroU16::MIN,
             })
@@ -818,6 +825,7 @@ mod tests {
                 image: crate::SheetImage::Rled(895),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
+                frame_height: 0,
             })
         }
 
@@ -876,6 +884,7 @@ mod tests {
             looks.boom(BoomId(150)).map(|look| look.sheet.clone()),
             Some(Ok(EffectSheet {
                 frame_width: 0,
+                frame_height: 0,
                 image: crate::SheetImage::Rled(150),
                 frames: NonZeroU16::MIN
             }))
@@ -885,6 +894,7 @@ mod tests {
             looks.box_sheet(0),
             Some(&EffectSheet {
                 frame_width: 0,
+                frame_height: 0,
                 image: crate::SheetImage::Rled(500),
                 frames: NonZeroU16::MIN
             }),
@@ -896,6 +906,7 @@ mod tests {
             looks.box_sheet(4),
             Some(&EffectSheet {
                 frame_width: 0,
+                frame_height: 0,
                 image: crate::SheetImage::Rled(504),
                 frames: NonZeroU16::MIN
             })
@@ -905,6 +916,7 @@ mod tests {
             looks.cursor_sheet(),
             Some(&EffectSheet {
                 frame_width: 0,
+                frame_height: 0,
                 image: crate::SheetImage::Rled(650),
                 frames: NonZeroU16::MIN
             }),
@@ -916,6 +928,7 @@ mod tests {
             looks.asteroid_sheet(15),
             Some(&EffectSheet {
                 frame_width: 0,
+                frame_height: 0,
                 image: crate::SheetImage::Rled(815),
                 frames: NonZeroU16::MIN
             })
@@ -927,6 +940,7 @@ mod tests {
                 image: crate::SheetImage::Rled(895),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
+                frame_height: 0,
             }),
             "the escape pods'"
         );

@@ -782,6 +782,7 @@ mod tests {
     fn sheet(image_id: i16, frames: u16) -> EffectSheet {
         EffectSheet {
             frame_width: 0,
+            frame_height: 0,
             image: crate::SheetImage::Rled(image_id),
             frames: n(frames),
         }
