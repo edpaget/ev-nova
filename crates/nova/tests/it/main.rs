@@ -19,7 +19,6 @@ mod entering;
 mod flight;
 mod galaxy_map;
 mod hire;
-mod hyper_select;
 mod hyperspace;
 mod hyperspace_outfits;
 mod land_key;
