@@ -2721,6 +2721,73 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_fleet_escort_following_its_lead_is_just_an_escort() {
+        // Goal 0xa with a leader, busy to `_AIIsShipBusy` (@0x82fac-0x82fe4).
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        in_a_fleet(&mut session);
+        npc(&mut session).goal = Goal::Follow {
+            lead: NpcId(9),
+            guard: None,
+        };
+        hail(&mut session, &catalog);
+        assert_eq!(
+            press(&mut session, &catalog, 1, 99).reply,
+            said(reply::JUST_AN_ESCORT)
+        );
+    }
+
+    #[test]
+    fn a_mining_ship_is_busy() {
+        // Goal 0x10, busy to `_AIIsShipBusy` (@0x82fac-0x82fe4).
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        npc(&mut session).goal = Goal::Mine;
+        hail(&mut session, &catalog);
+        assert_eq!(press(&mut session, &catalog, 1, 99).reply, "I'm busy.");
+    }
+
+    /// Request Assistance pressed on NPC 0 of `targeting`'s session, idle,
+    /// while another NPC attacks it, with Nova's options as `rules`
+    /// chooses.
+    fn asked_while_attacked(rules: &Rulebook) -> HailView {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        let hailed = session.npcs()[0].id;
+        let attacker = Npc {
+            goal: Goal::Attack(ShipRef::Npc(hailed)),
+            ..session.npcs()[0].clone()
+        };
+        session.space.traffic.add_npc(attacker);
+        hail(&mut session, &catalog);
+        session
+            .answer(
+                1,
+                &catalog,
+                &HailOptions::nova(rules),
+                &mut Draws::of(&[99]),
+            )
+            .expect("open")
+    }
+
+    #[test]
+    fn a_ship_another_attacks_is_not_busy_by_the_engine_and_is_by_the_other_reading() {
+        // `_IsShipThreatened` compares the hailed ship's own +0x70 with
+        // its own slot (@0x8209e-0x820a9), so never holds.
+        assert_eq!(
+            asked_while_attacked(&Rulebook::default()).reply,
+            "You're not in any trouble."
+        );
+        assert_eq!(
+            asked_while_attacked(
+                &Rulebook::default().with_override(RuleKey::HailBusyUnderAttack, RuleSource::Bible)
+            )
+            .reply,
+            "I'm busy."
+        );
+    }
+
+    #[test]
     fn a_fleet_escort_asked_for_fuel_cannot_do_that() {
         let catalog = hailable();
         let mut session = targeting(&catalog);

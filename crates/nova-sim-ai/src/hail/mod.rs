@@ -662,8 +662,9 @@ impl HailOptions {
     /// [`RuleKey::QuietHails`](crate::RuleKey::QuietHails), Greetings'
     /// [`RuleKey::LongAdvice`](crate::RuleKey::LongAdvice), Request
     /// Assistance's [`RuleKey::BattleHelpTarget`](crate::RuleKey::BattleHelpTarget),
-    /// [`RuleKey::BraveTraderBattleHelp`](crate::RuleKey::BraveTraderBattleHelp)
-    /// and [`RuleKey::BattleHelpGoneSlots`](crate::RuleKey::BattleHelpGoneSlots),
+    /// [`RuleKey::BraveTraderBattleHelp`](crate::RuleKey::BraveTraderBattleHelp),
+    /// [`RuleKey::BattleHelpGoneSlots`](crate::RuleKey::BattleHelpGoneSlots)
+    /// and [`RuleKey::HailBusyUnderAttack`](crate::RuleKey::HailBusyUnderAttack),
     /// and Use As Escort's [`RuleKey::PersonJoin`](crate::RuleKey::PersonJoin)
     /// entries. Release is for the player's escorts and Use As Escort for
     /// the rest, so the two are never listed together.
