@@ -688,6 +688,66 @@ pub(in crate::session) mod tests {
         assert_eq!(view.expect("open").reply, "s21", "dominated");
     }
 
+    /// Whether `view` treats the player as cleared to land: Greetings
+    /// offered, no record line.
+    fn cleared(view: &PlanetCommView) -> bool {
+        view.second == crate::planet_comm::PlanetCommButton::Greetings && view.status.is_none()
+    }
+
+    #[test]
+    fn the_iff_scramblers_mark_of_the_stellars_government_clears_a_refusing_stellar() {
+        let catalog = planet_catalog();
+        let mut session = at_earth(&catalog, 1_000_000, 1);
+        session.space.iff_marked.insert(GovtId(129));
+        let (view, _, _) = hail(&mut session, &catalog, 0, 0);
+        assert!(!cleared(&view), "another government's mark: {view:?}");
+        let mut session = at_earth(&catalog, 1_000_000, 1);
+        session.space.iff_marked.insert(FED);
+        let (view, _, _) = hail(&mut session, &catalog, 0, 0);
+        assert!(cleared(&view), "govt +0x83 @0x96c4d: {view:?}");
+    }
+
+    #[test]
+    fn a_landing_blessing_of_the_stellars_government_clears_a_refusing_stellar() {
+        let mut catalog = planet_catalog();
+        catalog.ranks = vec![crate::catalog::RankRecord {
+            affil_govt: Some(FED),
+            flags: crate::rank::BLESSES_LANDING,
+            ..crate::testkit::rank(200)
+        }];
+        let mut session = at_earth(&catalog, 1_000_000, 1);
+        let (view, _, _) = hail(&mut session, &catalog, 0, 0);
+        assert!(!cleared(&view), "no rank held: {view:?}");
+        press(&mut session, &catalog, PlanetCommItem::Close, 0);
+        session.pilot.ranks.insert(crate::catalog::RankId(200));
+        session
+            .ship
+            .latches
+            .blessing_ranks
+            .insert(crate::catalog::RankId(200));
+        let (view, _, _) = hail(&mut session, &catalog, 0, 0);
+        assert!(
+            cleared(&view),
+            "_PlayerBlessedByGovt(govt, 1) @0x96c15: {view:?}"
+        );
+    }
+
+    #[test]
+    fn a_greedy_governments_stellar_takes_a_bribe_whatever_the_roll_at_half_as_much_again() {
+        let mut catalog = planet_catalog();
+        for (_, sites) in &mut catalog.sites {
+            for site in sites.iter_mut().filter(|site| site.id == EARTH) {
+                site.govt = Some(GovtId(129));
+            }
+        }
+        let mut session = at_earth(&catalog, 1_000_000, 1);
+        hail(&mut session, &catalog, 0, 0);
+        let (view, _) = press(&mut session, &catalog, PlanetCommItem::Second, 0);
+        let view = view.expect("open");
+        assert_eq!(view.reply, "s41", "asked, though the roll is 0");
+        assert_eq!(view.asking, Some(4000), "3,000 * 1.5 rounded down");
+    }
+
     /// Records each crime it is asked about with the victim's government,
     /// and fines government 140 one point a crime.
     #[derive(Debug, Default)]
