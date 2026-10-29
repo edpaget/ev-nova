@@ -3042,6 +3042,9 @@ impl Combat {
     /// The shots in flight, to change as nothing in play does at will:
     /// for a session test that needs a shot in a state only a rare draw
     /// reaches.
+    ///
+    /// Kept for nova-sim's collision-pass and frame-order tests and one stock
+    /// test.
     #[cfg(any(test, feature = "fixture"))]
     pub fn shots_mut(&mut self) -> &mut [Shot] {
         &mut self.shots

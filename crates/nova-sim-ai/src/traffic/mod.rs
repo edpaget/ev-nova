@@ -193,6 +193,8 @@ mod escort_wait_tests;
 pub mod fighter_capacity;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+#[cfg(test)]
+mod fleet_escort_tests;
 pub mod fleet_formation;
 pub mod fly_pass;
 pub mod formation_flight;
@@ -205,6 +207,8 @@ pub mod held_burst;
 mod held_burst_tests;
 #[cfg(test)]
 mod hit_goal_tests;
+#[cfg(test)]
+mod idle_block_tests;
 pub mod in_turn;
 pub mod inertialess;
 pub mod ionization;
@@ -217,10 +221,16 @@ mod launch_room;
 mod launch_think;
 pub mod leave_flight;
 #[cfg(test)]
+mod lost_sight_ai_tests;
+#[cfg(test)]
 mod lost_sight_tests;
 pub mod mine_flight;
 pub mod npc;
+#[cfg(test)]
+mod npc_landing_tests;
 pub mod odds_cache;
+#[cfg(test)]
+mod odds_cache_ai_tests;
 #[cfg(test)]
 mod odds_cache_tests;
 pub mod on_line;
@@ -253,6 +263,8 @@ pub mod stellar_attack;
 mod stop_tests;
 pub mod strength;
 pub mod succession;
+#[cfg(test)]
+mod swarm_tests;
 pub mod table;
 pub mod tractor_hold;
 pub mod vacated;
@@ -1034,6 +1046,9 @@ impl Traffic {
     }
 
     /// Whether the escort-strength timer is armed.
+    ///
+    /// Kept for nova-sim's relocation, take-off and landing test of the timer
+    /// (`session::edit`), as no flight shows the timer.
     #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     pub fn strength_armed(&self) -> bool {
@@ -1707,6 +1722,9 @@ impl Traffic {
     /// plundered, with its line and capture (see [`plunder`]). Taking them
     /// leaves the rest of the line's work queued, for the tests of the
     /// traffic alone.
+    ///
+    /// Kept for nova-sim's stock dock and plunder tests (`stock_repair_dock`,
+    /// `stock_plunder`).
     #[cfg(any(test, feature = "fixture"))]
     pub fn take_pirate_events(&mut self) -> Vec<PirateEvent> {
         self.on_line.take_pirate_events()
@@ -2268,6 +2286,9 @@ impl Traffic {
     /// stay active in the ship table until the display pass frees them.
     /// The ship-table caps take the same ships slot by slot, as the
     /// original does, not as a total ([`Traffic::free_berth`]).
+    ///
+    /// Kept for nova-sim's tests of the berths a script's move and the setup
+    /// hold and drop (`session::aux_ships`, `session::script_effects`).
     #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     pub fn berths_taken(&self) -> usize {
@@ -2342,6 +2363,9 @@ impl Traffic {
     /// Queues `event` as if a pirate made it this tick, at its actor's
     /// berth in the frame now being queued, for the session's tests of its
     /// answer ([`Traffic::take_on_line`]).
+    ///
+    /// Kept for nova-sim's tests of the session's answer to each pirate
+    /// event, and its `game_work` test seam, without flying a dock.
     #[cfg(any(test, feature = "fixture"))]
     pub fn queue_pirate_event(&mut self, event: PirateEvent) {
         self.queue_pirate(event);
@@ -2349,6 +2373,9 @@ impl Traffic {
 
     /// Writes `name` as the person of the ship last brought in at `berth`,
     /// for the session's tests of a slot no ship holds.
+    ///
+    /// Kept for nova-sim's, nova-view's and nova's tests of a slot whose
+    /// ship has gone but whose person is still named.
     #[cfg(any(test, feature = "fixture"))]
     pub fn set_berth_person(&mut self, berth: u32, name: &str) {
         self.write_berth_person(berth, Some(name.to_owned()));

@@ -4,7 +4,8 @@
 //! the one chosen where it was; Quit (or Escape) quits, and so does
 //! Command-Q, at once. Closing the window on the main menu asks whether
 //! to quit first. On macOS the menu bar has the app menu (About,
-//! Preferences…, Hide, Quit), View (Enter Full Screen) and Window. In flight, Escape
+//! Preferences…, Check for Updates…, Hide, Quit), View (Enter Full Screen)
+//! and Window. In flight, Escape
 //! goes back to the menu. I shows the About text in the game's own dialog,
 //! and P the Preferences dialog, which turns sound and music on or off and
 //! sets their volumes.
@@ -92,13 +93,33 @@
 //! line on standard error and in the startup log, but with no alert.
 //!
 //! Every startup error and warning goes to standard error and to the
-//! startup log, rewritten each launch: `~/Library/Logs/nova/nova.log` on
+//! startup log, which starts with the version and the build ID `nova` was
+//! compiled with (`NOVA_BUILD_ID`), or "development build" without one.
+//! It is rewritten each launch: `~/Library/Logs/nova/nova.log` on
 //! macOS, `%LOCALAPPDATA%\nova\logs\nova.log` on Windows, and
 //! `$XDG_STATE_HOME/nova/nova.log` (or `~/.local/state/nova/nova.log`)
 //! elsewhere. When standard error is not a terminal (a double-clicked app), a
 //! fatal startup error is shown in an alert too, and the startup warnings
 //! are listed in one sheet over the game window once it opens. The
 //! simulation's diagnostics while the game runs stay on standard error.
+//!
+//! On macOS a nightly `Nova.app` updates itself with Sparkle, from the
+//! bundle's `Contents/Frameworks`: it checks its channel's feed (the
+//! `SUFeedURL` its `Info.plist` names) in the background once a day, and
+//! Check for Updates… checks at once. Installing quits the game as the
+//! Dock's Quit does, saving the pilot flying, and relaunches the new build.
+//! A development build, `cargo run` or a bundle without a feed, has no
+//! updater and greys the item; a bundle that names a feed but can't load
+//! Sparkle says so in the startup report.
+//!
+//! On Windows an installed nightly updates itself with WinSparkle, from
+//! the `WinSparkle.dll` the installer puts beside `nova.exe`: it checks
+//! its channel's feed (compiled in from `NOVA_CHANNEL`,
+//! [`nova::winsparkle::FEED`]) in the background once a day. Installing
+//! an update quits the game as the Quit command does, saving the pilot
+//! flying, runs the new installer, and relaunches the game. The portable
+//! zip (no DLL) and a development build don't update; a DLL that is there
+//! but won't load says so in the startup report.
 //!
 //! On Windows `nova.exe` is a Windows-subsystem program, so Explorer opens
 //! no console for it. Started from `cmd`, PowerShell or Windows Terminal,
@@ -125,6 +146,7 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use nova::app::LoopEvent;
 use nova::app::start_screen;
 use nova::audio::{game_audio, music_warning, voice_limit};
 use nova::chance::SplitMix;
@@ -145,7 +167,6 @@ use nova_data::{GameData, open_interface};
 use nova_render::GameImages;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_sim::{Chance, PilotKeeper, PilotStore, Rulebook};
-use nova_view::MenuCommand;
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
@@ -186,17 +207,27 @@ fn run_seed() -> u64 {
 }
 
 /// Runs `runner` on `event_loop` until it exits, the menu bar's picks sent
-/// back through the loop on macOS; gives the runner back.
+/// back through the loop and Sparkle offered as the updater on macOS, and
+/// WinSparkle on Windows, its quit sent back through the loop; gives the
+/// runner back.
 fn run(
     mut runner: Runner<GameImages<Rc<GameData>>>,
-    event_loop: EventLoop<MenuCommand>,
+    event_loop: EventLoop<LoopEvent>,
 ) -> (
     Runner<GameImages<Rc<GameData>>>,
     Result<(), winit::error::EventLoopError>,
 ) {
     #[cfg(target_os = "macos")]
     {
-        runner = runner.with_menu_proxy(event_loop.create_proxy());
+        runner = runner
+            .with_menu_proxy(event_loop.create_proxy())
+            .with_updater_source(Box::new(nova::platform::SparkleSource));
+    }
+    #[cfg(windows)]
+    {
+        runner = runner.with_updater_source(Box::new(nova::platform::winsparkle_source(
+            event_loop.create_proxy(),
+        )));
     }
     let result = event_loop.run_app(&mut runner);
     (runner, result)

@@ -80,6 +80,16 @@ mod tests {
     }
 
     #[test]
+    fn std_dir_lister_meets_the_contract() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        crate::store::fixture::write_contract_tree(tmp.path()).expect("write the contract tree");
+        assert_eq!(
+            crate::store::fixture::check_contract(&StdDirLister, tmp.path()),
+            Ok(())
+        );
+    }
+
+    #[test]
     fn lists_files_and_folders_with_their_kinds() {
         let tmp = tempfile::tempdir().expect("temp dir");
         std::fs::write(tmp.path().join("plug.npif"), b"x").expect("write");

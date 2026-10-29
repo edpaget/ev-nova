@@ -86,10 +86,22 @@ impl Session {
     /// (see the `clearance` module).
     ///
     /// For the tests: no production code calls it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     pub(crate) fn dock_request(&self) -> Option<crate::clearance::DockRequest> {
         self.port.dock_request()
+    }
+
+    /// Whether the player's dock request is cleared: its counter past
+    /// [`REQUESTED_NEAR`](crate::clearance::REQUESTED_NEAR), where the
+    /// land key lands (@0x66c13). For the app's integration harnesses,
+    /// which draw frames until the dock approach has cleared a request
+    /// rather than count them.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn dock_cleared(&self) -> bool {
+        self.dock_request()
+            .is_some_and(|request| request.permission > crate::clearance::REQUESTED_NEAR)
     }
 
     /// Applies the land key's `press`: the stellar it selected, in mode
@@ -238,7 +250,7 @@ impl Port {
     /// (see the `clearance` module).
     ///
     /// For the tests: no production code calls it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "fixture"))]
     #[must_use]
     fn dock_request(&self) -> Option<crate::clearance::DockRequest> {
         self.dock
@@ -405,6 +417,16 @@ mod tests {
         assert_eq!(session.take_messages(), [cleared_at(128, DockKind::Planet)]);
         assert_eq!(session.take_sounds(), [SimSound::TrafficControl]);
         assert_eq!(session.dock_request(), request(128, CLEARED));
+    }
+
+    #[test]
+    fn the_request_reads_cleared_once_the_approach_clears_it() {
+        let mut session = session();
+        assert!(!session.dock_cleared(), "none requested");
+        assert_eq!(session.land(), requested(128));
+        assert!(!session.dock_cleared(), "requested");
+        tick(&mut session);
+        assert!(session.dock_cleared(), "greeted");
     }
 
     /// [`catalog`] whose planet 128 needs a record no pilot has.

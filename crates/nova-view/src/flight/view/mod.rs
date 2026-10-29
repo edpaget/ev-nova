@@ -1037,7 +1037,14 @@ impl Chance for SharedChance {
 
 #[cfg(test)]
 mod shared_chance_tests {
+    use nova_sim::fixture::chance::check_contract;
+
     use super::*;
+
+    #[test]
+    fn a_default_shared_chance_meets_the_chance_contract() {
+        assert_eq!(check_contract(&mut SharedChance::default()), Ok(()));
+    }
 
     /// Fires every time, draws 0 and records each `n`, and rolls the last
     /// outcome.

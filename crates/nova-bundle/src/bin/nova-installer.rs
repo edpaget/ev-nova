@@ -6,17 +6,23 @@
 //!
 //! `$NOVA_WIX` names the `wix` to run, else the one on `PATH`. Not `$WIX`:
 //! WiX v3's installer sets that to its own folder, which is not a program.
-//! It never builds the executables.
+//! It never builds the executables. It downloads WinSparkle, so it needs
+//! the network.
 //!
-//! Exits 2 on a usage error or a non-Windows host, and 1 when a step
-//! fails.
+//! `$NOVA_CHANNEL` is the channel the executables were built for, as
+//! nova's build script read it: the packer prints on stderr which update
+//! feed that build names (`nova_bundle::channel::FeedStatus`).
+//!
+//! Exits 2 on a usage error, a non-Windows host or an unknown channel, and
+//! 1 when a step fails.
 
 use std::env;
 use std::process::ExitCode;
 
+use nova_bundle::channel;
 use nova_bundle::installer::host::installer_host;
 use nova_bundle::installer::plan::pack;
-use nova_bundle::system::{StdFiles, StdProcess};
+use nova_bundle::system::{StdEnv, StdFiles, StdProcess};
 
 fn main() -> ExitCode {
     let cwd = match env::current_dir() {
@@ -39,9 +45,17 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let host = match channel::from_env(&StdEnv) {
+        Ok(channel) => host.for_channel(channel),
+        Err(e) => {
+            eprintln!("nova-installer: {e}");
+            return ExitCode::from(2);
+        }
+    };
     match pack(&mut StdProcess, &mut StdFiles, &host) {
-        Ok(msi) => {
-            println!("{}", msi.display());
+        Ok(packed) => {
+            eprintln!("nova-installer: {}", packed.feed.describe());
+            println!("{}", packed.msi.display());
             ExitCode::SUCCESS
         }
         Err(e) => {

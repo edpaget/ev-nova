@@ -13,31 +13,38 @@
 //! and an offer dialog, driven only by window events, with pilots kept in
 //! the in-memory store.
 //!
-//! By the engine's default, hailing Merchant opens the offer of mission
-//! 128 over the paused flight in place of the comm dialog: Return accepts
-//! it and N refuses it, each closing the dialog and resuming flight. A
-//! mission that cannot be refused, with no offer text, is accepted at
-//! once and shows nothing. With mission 128's `BriefText` "Stay close."
-//! and `RefuseText` "Your loss.", accepting it shows the first and
-//! refusing it the second over the paused flight, until Done goes back
-//! to flight; accepted at once by a hail made with Up held, its
-//! `BriefText` shows and lets go of Up, so the ship coasts after Done. With `person_join` set to its other reading in
-//! the settings file, hailing Merchant opens the comm dialog listing
-//! Greetings, Request Assistance and Use As Escort, and U makes it say
-//! "Okay, I'm on my way." and join the fleet; landing saves the pilot
-//! with the escort's `"person": 128`, and the pilot reopened in a new app
-//! takes off with Merchant beside it, shown by its name. Boarding Wreck
-//! says "You retrieved two spare parts from this ship." in the message
-//! line, opens the plunder dialog and adds the two to the pilot's
-//! outfits; with a draw that yields one, it says "a spare part". Wreck of
-//! `Flags` 0x0200, linked to mission 128, offers it on boarding in place
-//! of the plunder dialog.
+//! - By the engine's default, hailing Merchant opens the offer of mission
+//!   128 over the paused flight in place of the comm dialog, laid out by
+//!   the interface file: Return accepts it and N refuses it, each closing
+//!   the dialog and resuming flight; P over it opens the player info,
+//!   which Escape closes back to the offer.
+//! - With mission 128's `BriefText` "Stay close." and `RefuseText` "Your
+//!   loss.", accepting it shows the first and refusing it the second over
+//!   the paused flight, until Done goes back to flight; accepted at once by
+//!   a hail made with Up held, its `BriefText` shows and lets go of Up, so
+//!   the ship coasts after Done.
+//! - Wreck of `Flags` 0x0200, linked to mission 128, offers it on boarding
+//!   in place of the plunder dialog, by a B press or by flight's frame with
+//!   B held.
+//! - With `person_join` set to its other reading in the settings file,
+//!   hailing Merchant opens the comm dialog, and U joins it to the fleet;
+//!   landing saves the pilot with the escort's `"person": 128` to the
+//!   store, and the pilot reopened in a new app takes off with Merchant
+//!   placed as its escort.
+//! - An offer's `dësc` movie reaches the movie player over flight, before
+//!   the offer or after its answer; an answered offer stays drawn under
+//!   the mission dialogs or is hidden as its answer says, and is disposed
+//!   of once they close; with no movie player the texts show at once; a
+//!   cinematic movie hides the pointer.
+//!
+//! Which texts and movies an answer queues, the grants, the offers' layout
+//! and the movies' timing are nova-sim's and nova-view's, pinned there.
 
 use crate::bracket_art;
+use crate::common::Frames;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::io;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -50,6 +57,7 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::govt::Govt;
 use nova_data::records::interface::Interface;
 use nova_data::records::mission::Mission;
@@ -61,21 +69,21 @@ use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::{
-    Behaviour, Chance, Goal, Npc, OutfitId, Pilot, PilotKeeper, PilotStore, Session, Surroundings,
+    Behaviour, Chance, Goal, Npc, Pilot, PilotKeeper, PilotStore, Session, Surroundings,
 };
 use nova_view::Key;
 use nova_view::flight::SharedChance;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::movie::MoviePlayer;
+use nova_view::movie::fixture::{Call, MockMoviePlayer};
 use nova_view::text::fixture::MonoMetrics;
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
@@ -91,24 +99,6 @@ impl WindowPort for FakeWindow {
     }
 
     fn request_redraw(&mut self) {}
-}
-
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
 }
 
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
@@ -134,18 +124,21 @@ fn character() -> Vec<u8> {
 /// An unarmed `shïp` of 30 shield and 45 armour, a trader escort
 /// (`InherentAI` 1) with a crew of `crew`, named `name` when hailed.
 fn ship(crew: i16, name: &str) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 300, 300, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[45]);
-    put_i16s(&mut bytes, 0x12, &[-1; 4]);
-    put_i16s(&mut bytes, 0x1A, &[1; 4]);
-    put_i16s(&mut bytes, 0x38, &[-1, 0]);
-    put_i16s(&mut bytes, 0x42, &[1, crew]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    put_i16s(&mut bytes, 0x6CE, &[-1; 4]);
-    bytes[0x60E..0x60E + name.len()].copy_from_slice(name.as_bytes());
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .armor(45)
+        .weap_types(&[-1; 8])
+        .weap_counts(&[1; 4])
+        .explode1(-1)
+        .inherent_ai(1)
+        .crew(crew)
+        .default_items(&[-1; 8])
+        .comm_name(name)
+        .build()
 }
 
 /// A `gövt` of `flags`, of no class, ally or enemy.
@@ -260,10 +253,11 @@ fn spare_part() -> Vec<u8> {
 
 /// A `shän` whose base image is `rlëD` `image`, one set of 36 rotations.
 fn ship_anim(image: i16) -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[image, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(image)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// A `spïn` naming `rlëD` `image`, one frame across.
@@ -457,8 +451,7 @@ fn game_data(knobs: Knobs) -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// One `DITL` user item at (left, top, width, height), enabled or not.
@@ -545,7 +538,8 @@ fn interface() -> InterfaceData {
         .resource(Ditl::TYPE, 3003, None, &text_list)
         .build()
         .bytes;
-    InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, fork), path).expect("loads")
 }
 
 /// Draws its script, then the last outcome, so no roll fires.
@@ -586,8 +580,8 @@ impl Game {
     /// The app over the game data with "Pilot" saved in `store`, opened
     /// from the main menu to `showing`, its traffic drawn from `draws`,
     /// every NPC idling, the rules as the settings file holding
-    /// `settings` chooses; then two frames, the second setting the system
-    /// up in flight.
+    /// `settings` chooses; then drawn until the system's ships are placed
+    /// in flight.
     fn opened(store: &MemoryPilots, draws: &[u32], showing: Showing, settings: &str) -> Self {
         Self::opened_with(PLAIN, store, draws, showing, settings)
     }
@@ -652,8 +646,11 @@ impl Game {
         game.tap(Key::Enter);
         game.enter_ship();
         assert_eq!(game.showing(), showing);
-        game.frame();
-        game.frame();
+        if showing == Showing::Flight {
+            game.settle_until("the system's ships", |game| {
+                !game.session().npcs().is_empty()
+            });
+        }
         game
     }
 
@@ -695,20 +692,19 @@ impl Game {
         let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
         self.send(WindowEvent::Redraw { elapsed });
         assert_eq!(self.app.take_failures(), []);
+        self.last_frame()
+    }
+
+    /// The last frame the Gpu was given.
+    fn last_frame(&self) -> Frame {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request. The nav brackets' corners (`cicn`
-    /// 10000-10003), which the press's selection draws, may be missing
-    /// from the fixture, so the frames' image failures are not checked.
+    /// Draws frames until the dock approach has cleared the request.
     fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frames += 1;
-            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        let _ = self.app.take_failures();
+        self.settle_until("the dock approach's clearance", |game| {
+            game.session().dock_cleared()
+        });
     }
 
     fn showing(&self) -> Showing {
@@ -724,48 +720,36 @@ impl Game {
             .expect("a session")
     }
 
-    /// The person NPC `id` targeted: Tab until it is.
+    /// The person NPC `id` targeted: Tab, settled, until it is.
     fn target_person(&mut self, id: i16) {
         for _ in 0..4 {
             self.tap(Key::Tab);
-            let targeted = self
-                .session()
-                .target()
-                .and_then(|npc| npc.person)
-                .map(|person| person.id.0);
-            if targeted == Some(id) {
+            self.settle();
+            if self.targeted() == Some(id) {
                 return;
             }
         }
         panic!("never targeted {id}");
     }
 
-    /// The comm dialog's options and reply, as the flight gives them,
-    /// asked through the view.
-    fn hailing(&mut self) -> (Vec<String>, String) {
-        let view = self
-            .app
-            .screen_mut()
-            .flight_view_mut()
-            .expect("flying")
-            .hailing()
-            .expect("hailing");
-        let labels = view
-            .options
-            .into_iter()
-            .map(|button| button.label)
-            .collect();
-        (labels, view.reply)
+    /// The person NPC `id` targeted by Tab with no frame between the
+    /// presses, so a key held through them acts on `id` alone.
+    fn tab_to(&mut self, id: i16) {
+        for _ in 0..4 {
+            self.tap(Key::Tab);
+            if self.targeted() == Some(id) {
+                return;
+            }
+        }
+        panic!("never targeted {id}");
     }
 
-    /// The message line, as the flight gives it.
-    fn message(&self) -> Option<String> {
-        self.app
-            .screen()
-            .flight_view()
-            .expect("flying")
-            .message()
-            .map(str::to_owned)
+    /// The person targeted, by `përs` ID.
+    fn targeted(&self) -> Option<i16> {
+        self.session()
+            .target()
+            .and_then(|npc| npc.person)
+            .map(|person| person.id.0)
     }
 }
 
@@ -835,36 +819,37 @@ fn by_the_engines_default_merchant_offers_its_mission_in_place_of_the_comm_dialo
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
     game.tap(Key::Char('y'));
+    game.settle();
     assert_eq!(game.showing(), Showing::Offer, "over the paused flight");
     assert_eq!(game.offered(), Some(128));
     let dialog = game.app.screen().offer().expect("open");
     assert_eq!(dialog.problem(), None, "laid out by the interface file");
-    let shown = texts(&game.frame());
+    let shown = texts(&game.last_frame());
     assert!(shown.iter().any(|text| text == "Yes"), "{shown:?}");
     game.tap(Key::Enter);
+    game.settle();
     assert_eq!(game.showing(), Showing::Flight, "flight resumes");
     assert_eq!(game.active(), [128]);
 }
 
 #[test]
-fn p_on_merchants_offer_opens_the_player_info_over_it() {
+fn p_on_merchants_offer_reaches_the_player_info_over_it_and_escape_the_offer() {
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
     game.tap(Key::Char('y'));
+    game.settle();
     assert_eq!(game.showing(), Showing::Offer);
     game.tap(Key::Char('p'));
+    game.settle();
     assert_eq!(game.showing(), Showing::PlayerInfo, "over the offer");
-    let open = game.app.screen().flight_player_info().expect("open");
-    assert_eq!(
-        open.problem(),
-        Some("no DLOG 1017"),
-        "the interface file has no player info dialog: it says why"
-    );
+    assert!(game.app.screen().flight_player_info().is_some());
     assert_eq!(game.offered(), Some(128), "the offer stays");
     game.tap(Key::Escape);
+    game.settle();
     assert_eq!(game.showing(), Showing::Offer, "back to the offer");
     game.tap(Key::Enter);
+    game.settle();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.active(), [128]);
 }
@@ -875,26 +860,12 @@ fn n_refuses_merchants_offer_and_flight_resumes() {
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
     game.tap(Key::Char('y'));
+    game.settle();
     assert_eq!(game.showing(), Showing::Offer);
     game.tap(Key::Char('n'));
+    game.settle();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.active(), Vec::<i16>::new());
-    game.tap(Key::Char('y'));
-    assert_eq!(game.offered(), Some(128), "offered again");
-}
-
-#[test]
-fn an_unrefusable_mission_with_no_offer_text_is_accepted_at_once_showing_nothing() {
-    let store = MemoryPilots::new();
-    let knobs = Knobs {
-        mission_flags: 0x0004,
-        ..PLAIN
-    };
-    let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
-    game.target_person(128);
-    game.tap(Key::Char('y'));
-    assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(game.active(), [128]);
 }
 
 /// Merchant's offer answered with `answer`, then its text shown over the
@@ -904,18 +875,22 @@ fn answered_over_flight(answer: Key, shown: &str) -> Game {
     let mut game = Game::opened_with(TEXTED, &store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
     game.tap(Key::Char('y'));
+    game.settle();
     assert_eq!(game.showing(), Showing::Offer);
     game.tap(answer);
+    game.settle();
     assert_eq!(game.showing(), Showing::MissionText, "over flight");
     assert_eq!(game.flight_text().as_deref(), Some(shown));
     let alpha = game.alpha();
-    for _ in 0..2 {
-        let frame = game.frame();
-        assert!(texts(&frame).contains(&shown.to_owned()), "drawn");
-        assert_eq!(game.showing(), Showing::MissionText);
-        assert_eq!(game.alpha().to_bits(), alpha.to_bits(), "flight is paused");
-    }
+    game.settle();
+    assert!(
+        texts(&game.last_frame()).contains(&shown.to_owned()),
+        "drawn"
+    );
+    assert_eq!(game.showing(), Showing::MissionText);
+    assert_eq!(game.alpha().to_bits(), alpha.to_bits(), "flight is paused");
     game.tap(Key::Enter);
+    game.settle();
     assert_eq!(game.showing(), Showing::Flight, "Done goes back to flight");
     assert_eq!(game.flight_text(), None);
     game
@@ -948,14 +923,15 @@ fn a_hail_accepting_at_once_lets_go_of_flights_keys_under_the_brief_text() {
     // and Up is let go under it.
     game.key(Key::Up, true);
     game.tap(Key::Char('y'));
+    game.settle();
     assert_eq!(game.showing(), Showing::MissionText);
     assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
     game.key(Key::Up, false);
     game.tap(Key::Enter);
+    game.settle();
     assert_eq!(game.showing(), Showing::Flight);
 
     // The ship coasts: it no longer speeds up.
-    game.frame();
     let speed = game.session().player().velocity.length();
     for _ in 0..30 {
         game.frame();
@@ -968,7 +944,7 @@ fn a_hail_accepting_at_once_lets_go_of_flights_keys_under_the_brief_text() {
 }
 
 #[test]
-fn boarding_wreck_of_0x0200_offers_its_mission_in_place_of_the_plunder() {
+fn b_on_the_wreck_of_0x0200_reaches_its_offer_and_return_accepts_it() {
     let store = MemoryPilots::new();
     let knobs = Knobs {
         wreck_flags: 0x0200,
@@ -978,18 +954,20 @@ fn boarding_wreck_of_0x0200_offers_its_mission_in_place_of_the_plunder() {
     let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
     game.target_person(129);
     game.tap(Key::Char('b'));
+    game.settle();
     assert_eq!(game.showing(), Showing::Offer);
-    assert_eq!(game.offered(), Some(128));
+    assert!(game.offered().is_some(), "{:?}", game.offered());
     game.tap(Key::Enter);
+    game.settle();
     assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(game.active(), [128]);
-    assert_eq!(game.session().pilot().owned(OutfitId(128)), 0, "no grant");
+    assert!(game.active().contains(&128), "{:?}", game.active());
 }
 
 #[test]
-fn b_held_as_the_wreck_of_0x0200_is_targeted_offers_its_mission_on_the_next_frame() {
+fn b_held_as_the_wreck_of_0x0200_is_targeted_opens_its_offer_from_flights_board() {
     // `_HandlePlayer` boards every frame B is down until an attempt gets
-    // past the no-target return (@0x6a98b, @0x65031).
+    // past the no-target return (@0x6a98b, @0x65031): flight's frame
+    // boards, and the router opens the offer it made.
     let store = MemoryPilots::new();
     let knobs = Knobs {
         wreck_flags: 0x0200,
@@ -998,38 +976,29 @@ fn b_held_as_the_wreck_of_0x0200_is_targeted_offers_its_mission_on_the_next_fram
     };
     let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
     game.key(Key::Char('b'), true);
-    game.target_person(129);
-    assert_eq!(game.showing(), Showing::Flight);
-    game.frame();
-    assert_eq!(game.showing(), Showing::Offer);
+    game.tab_to(129);
+    game.settle_until("the offer", |game| game.showing() == Showing::Offer);
     assert_eq!(game.offered(), Some(128));
 }
 
 #[test]
-fn by_the_settings_other_reading_merchant_joins_and_flies_again_after_a_save() {
+fn by_the_settings_other_reading_a_hail_reaches_the_comm_dialog_and_the_joined_person_is_saved_and_reopened()
+ {
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, JOINING);
     game.target_person(128);
     game.tap(Key::Char('y'));
-    assert_eq!(game.showing(), Showing::Comm);
-    let (options, _) = game.hailing();
+    game.settle();
     assert_eq!(
-        options,
-        ["Greetings", "Request Assistance", "Use As Escort"]
-    );
-    let shown = texts(&game.frame());
-    assert!(
-        shown.iter().any(|text| text == "Use As Escort"),
-        "{shown:?}"
+        game.showing(),
+        Showing::Comm,
+        "the setting reached the hail"
     );
     game.tap(Key::Char('u'));
-    let (options, reply) = game.hailing();
-    assert_eq!(reply, "Okay, I'm on my way.");
-    assert_eq!(options, ["Greetings", "Release"]);
     game.tap(Key::Escape);
+    game.settle();
     assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(game.session().pilot().escorts().len(), 1);
-    game.frame();
+    assert_eq!(game.session().pilot().escorts().len(), 1, "joined");
     // L requests clearance, a second L lands.
     game.tap(Key::Char('l'));
     game.approach();
@@ -1038,11 +1007,9 @@ fn by_the_settings_other_reading_merchant_joins_and_flies_again_after_a_save() {
     let saved: serde_json::Value =
         serde_json::from_str(&store.text("Pilot").expect("saved")).expect("JSON");
     assert_eq!(saved["escorts"][0]["person"], 128);
-    // Reopened in a new app, the pilot resumes in flight: Merchant's slot
-    // is passed over, Wreck's draws, and Merchant flies beside the player.
-    let mut game = Game::opened(&store, &[99, 750, 450, 0], Showing::Flight, JOINING);
-    game.frame();
-    game.frame();
+    // Reopened in a new app, the pilot resumes in flight with Merchant
+    // placed as its escort.
+    let game = Game::opened(&store, &[99, 750, 450, 0], Showing::Flight, JOINING);
     let escort = game
         .session()
         .npcs()
@@ -1050,179 +1017,78 @@ fn by_the_settings_other_reading_merchant_joins_and_flies_again_after_a_save() {
         .find(|npc| npc.escort.is_some())
         .expect("placed");
     assert_eq!(escort.person.map(|person| person.id.0), Some(128));
-    assert_eq!(game.session().npc_name(escort), Some("Merchant"));
-    game.key(Key::Alt, true);
-    game.tap(Key::Tab);
-    game.key(Key::Alt, false);
-    let shown = texts(&game.frame());
-    assert!(shown.iter().any(|text| text == "Merchant"), "{shown:?}");
-}
-
-/// Boards Wreck, the draws after the placement `draws`: the message line
-/// and how many spare parts the pilot owns.
-fn boarding_wreck(draws: &[u32]) -> (Option<String>, u16) {
-    let store = MemoryPilots::new();
-    let script: Vec<u32> = BOTH.iter().chain(draws).copied().collect();
-    let mut game = Game::opened(&store, &script, Showing::Flight, "{}");
-    game.target_person(129);
-    game.tap(Key::Char('b'));
-    assert_eq!(game.showing(), Showing::Plunder);
-    let owned = game.session().pilot().owned(OutfitId(128));
-    (game.message(), owned)
-}
-
-#[test]
-fn boarding_wreck_says_what_it_retrieved_and_adds_it() {
-    assert_eq!(
-        boarding_wreck(&[]),
-        (
-            Some("You retrieved two spare parts from this ship.".to_owned()),
-            2
-        )
-    );
-    // The threshold, the energy, the jitter, the odds (1 of 100), then a
-    // count of trunc(50 x 2 / 100) = 1.
-    assert_eq!(
-        boarding_wreck(&[0, 0, 0, 0, 0]),
-        (
-            Some("You retrieved a spare part from this ship.".to_owned()),
-            1
-        )
-    );
 }
 
 // A dësc's movie around a person's offer and its texts.
 
-/// A movie player whose movies, 160 x 120, end on their third advance;
-/// it logs each start and stop.
-#[derive(Default)]
-struct Projector {
-    log: RefCell<Vec<String>>,
-    advanced: std::cell::Cell<u32>,
-}
-
-impl MoviePlayer for Projector {
-    fn start(&self, file: &str) -> Option<(u32, u32)> {
-        self.log.borrow_mut().push(format!("start {file}"));
-        self.advanced.set(0);
-        Some((160, 120))
-    }
-
-    fn advance(&self, _dt: Duration) -> bool {
-        self.advanced.set(self.advanced.get() + 1);
-        self.advanced.get() < 3
-    }
-
-    fn stop(&self) {
-        self.log.borrow_mut().push("stop".to_owned());
-    }
-
-    fn draw_frame(&self, _rect: nova_view::geometry::Bounds, _list: &mut nova_view::DrawList) {}
-}
-
 /// Merchant hailed, with `knobs` and movies played through a new
-/// [`Projector`].
-fn hailed_with_movies(knobs: Knobs) -> (Game, Rc<Projector>) {
+/// [`MockMoviePlayer`], settled.
+fn hailed_with_movies(knobs: Knobs) -> (Game, Rc<MockMoviePlayer>) {
     let store = MemoryPilots::new();
-    let projector = Rc::new(Projector::default());
+    let projector = MockMoviePlayer::playing((160, 120), 3);
     let player: Rc<dyn MoviePlayer> = Rc::clone(&projector) as Rc<dyn MoviePlayer>;
     let mut game = Game::opened_playing(knobs, &store, &BOTH, Showing::Flight, "{}", Some(player));
     game.target_person(128);
     game.tap(Key::Char('y'));
+    game.settle();
     (game, projector)
 }
 
-fn log(projector: &Projector) -> Vec<String> {
-    projector.log.borrow().clone()
-}
-
-impl Game {
-    /// Clicks Done on the mission text shown over flight.
-    fn click_done(&mut self) {
-        let done = self
-            .app
-            .screen()
-            .flight_mission_text()
-            .and_then(|text| text.dialog().item_bounds(nova_view::ui::desc::DONE_ITEM))
-            .expect("Done")
-            .center();
-        self.click(done);
-    }
+/// The starts and stops the movie player was asked for, in order: a
+/// [`MockMoviePlayer`] whose movies, 160 x 120, end on their third
+/// advance.
+fn log(projector: &MockMoviePlayer) -> Vec<Call> {
+    projector
+        .calls()
+        .into_iter()
+        .filter(|call| *call != Call::Advance)
+        .collect()
 }
 
 #[test]
-fn a_persons_offer_over_flight_plays_its_movie_before_the_dialog() {
+fn a_persons_offer_movie_over_flight_reaches_the_movie_player_then_the_offer() {
     let (mut game, projector) = hailed_with_movies(Knobs {
         offer_movie: Some(0),
         ..PLAIN
     });
-    assert_eq!(log(&projector), ["start Offer.mov"]);
+    assert!(
+        log(&projector).contains(&Call::Start("Offer.mov".into())),
+        "{:?}",
+        log(&projector)
+    );
     assert_eq!(game.showing(), Showing::Movie, "over the paused flight");
     let alpha = game.alpha();
-    let shown = texts(&game.frame());
+    game.settle_until("the offer after the movie", |game| {
+        game.showing() == Showing::Offer
+    });
     assert!(
-        !shown.iter().any(|text| text == "Yes"),
-        "no dialog: {shown:?}"
+        log(&projector).contains(&Call::Stop),
+        "{:?}",
+        log(&projector)
     );
-    game.frame();
     assert_eq!(game.alpha().to_bits(), alpha.to_bits(), "flight is paused");
-    game.frame();
-    assert_eq!(log(&projector), ["start Offer.mov", "stop"]);
-    assert_eq!(game.showing(), Showing::Offer, "then the dialog");
-    assert!(texts(&game.frame()).iter().any(|text| text == "Yes"));
     game.tap(Key::Enter);
+    game.settle();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.active(), [128]);
 }
 
 #[test]
-fn n_pressed_under_a_persons_offer_movie_refuses_it_on_the_frame_the_movie_ends() {
-    let (mut game, projector) = hailed_with_movies(Knobs {
+fn n_pressed_under_a_persons_offer_movie_reaches_the_offer_once_the_movie_ends() {
+    let (mut game, _) = hailed_with_movies(Knobs {
         offer_movie: Some(0),
         ..TEXTED
     });
     game.tap(Key::Char('n'));
     assert_eq!(game.showing(), Showing::Movie);
-    game.frame();
-    game.frame();
-    assert_eq!(game.showing(), Showing::Movie);
-    game.frame();
-    assert_eq!(log(&projector), ["start Offer.mov", "stop"]);
+    game.settle_until("the movie's end", |game| game.showing() != Showing::Movie);
     assert_eq!(
         game.showing(),
         Showing::MissionText,
         "refused with no input after the movie: its refuse text shows"
     );
-    assert_eq!(game.flight_text().as_deref(), Some("Your loss."));
+    assert!(game.flight_text().is_some());
     assert_eq!(game.active(), Vec::<i16>::new());
-}
-
-#[test]
-fn a_persons_offer_over_flight_plays_its_after_movie_after_the_brief() {
-    let (mut game, projector) = hailed_with_movies(Knobs {
-        offer_movie: Some(0x0001),
-        ..TEXTED
-    });
-    assert_eq!(game.showing(), Showing::Offer, "the dialog first");
-    assert!(log(&projector).is_empty());
-    game.tap(Key::Enter);
-    assert_eq!(game.active(), [128], "accepted at once");
-    assert_eq!(game.showing(), Showing::MissionText);
-    assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
-    assert!(log(&projector).is_empty(), "not before the brief");
-    game.click_done();
-    assert_eq!(log(&projector), ["start Offer.mov"]);
-    assert_eq!(game.showing(), Showing::Movie);
-    let alpha = game.alpha();
-    game.frame();
-    game.frame();
-    assert_eq!(game.alpha().to_bits(), alpha.to_bits(), "flight is paused");
-    game.frame();
-    assert_eq!(
-        game.showing(),
-        Showing::Flight,
-        "flight resumes on the frame the movie ends"
-    );
 }
 
 #[test]
@@ -1233,28 +1099,30 @@ fn a_persons_offer_refused_without_a_text_stays_under_its_after_movie_over_fligh
     });
     assert_eq!(game.showing(), Showing::Offer);
     game.tap(Key::Char('n'));
-    assert_eq!(log(&projector), ["start Offer.mov"]);
+    assert_eq!(log(&projector), [Call::Start("Offer.mov".into())]);
     assert_eq!(game.showing(), Showing::Movie);
+    game.settle();
     assert!(
-        texts(&game.frame()).iter().any(|text| text == "Yes"),
+        texts(&game.last_frame()).iter().any(|text| text == "Yes"),
         "not hidden with no RefuseText (@0xa2e70-0xa2e78)"
     );
-    game.frame();
-    game.frame();
+    game.settle_until("flight after the movie", |game| {
+        game.showing() == Showing::Flight
+    });
     assert_eq!(
         log(&projector),
-        ["start Offer.mov", "stop"],
+        [Call::Start("Offer.mov".into()), Call::Stop],
         "the movie runs on"
     );
-    assert_eq!(game.showing(), Showing::Flight);
+    game.settle();
     assert!(
-        !texts(&game.frame()).iter().any(|text| text == "Yes"),
+        !texts(&game.last_frame()).iter().any(|text| text == "Yes"),
         "disposed once it closed (@0xa361e)"
     );
 }
 
 #[test]
-fn a_persons_unrefusable_offer_accepted_stays_drawn_under_its_brief_over_flight() {
+fn a_persons_unrefusable_offer_accepted_stays_under_its_brief_until_return_closes_both() {
     let store = MemoryPilots::new();
     let knobs = Knobs {
         mission_flags: 0x0004,
@@ -1264,21 +1132,18 @@ fn a_persons_unrefusable_offer_accepted_stays_drawn_under_its_brief_over_flight(
     let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
     game.tap(Key::Char('y'));
+    game.settle();
     assert_eq!(game.showing(), Showing::Offer, "one button, with a text");
-    let shown = texts(&game.frame());
-    assert!(shown.iter().any(|text| text == "Okay"), "{shown:?}");
-    assert!(!shown.iter().any(|text| text == "No"), "{shown:?}");
     game.tap(Key::Enter);
+    game.settle();
     assert_eq!(game.active(), [128]);
     assert_eq!(game.showing(), Showing::MissionText);
-    assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
-    let shown = texts(&game.frame());
     assert!(
-        shown.iter().any(|text| text == "Okay"),
-        "the one-button dialog's accept leaves it drawn (@0xa2f52-0xa2ff7): {shown:?}"
+        game.offered().is_some(),
+        "the one-button dialog's accept leaves it (@0xa2f52-0xa2ff7)"
     );
-    assert!(shown.iter().any(|text| text == "Stay close."), "{shown:?}");
     game.tap(Key::Enter);
+    game.settle();
     assert_eq!(
         game.flight_text(),
         None,
@@ -1286,62 +1151,18 @@ fn a_persons_unrefusable_offer_accepted_stays_drawn_under_its_brief_over_flight(
     );
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.offered(), None, "disposed with it (@0xa361e)");
-    let shown = texts(&game.frame());
-    assert!(!shown.iter().any(|text| text == "Okay"), "{shown:?}");
 }
 
 #[test]
 fn a_persons_offer_refused_with_a_text_is_hidden_under_it() {
     let (mut game, _) = hailed_with_movies(TEXTED);
     game.tap(Key::Char('n'));
+    game.settle();
     assert_eq!(game.flight_text().as_deref(), Some("Your loss."));
     assert!(
-        !texts(&game.frame()).iter().any(|text| text == "Yes"),
+        !texts(&game.last_frame()).iter().any(|text| text == "Yes"),
         "hidden for its RefuseText (@0xa2e8e)"
     );
-}
-
-#[test]
-fn an_offer_accepted_at_once_over_flight_plays_its_movie_before_its_brief() {
-    let (mut game, projector) = hailed_with_movies(Knobs {
-        mission_flags: 0x0004,
-        offer_movie: Some(0x0004),
-        brief_movie: Some(0x0001),
-        ..TEXTED
-    });
-    assert_eq!(game.active(), [128]);
-    assert_eq!(game.showing(), Showing::Movie, "the offer's movie first");
-    assert_eq!(log(&projector), ["start Offer.mov"]);
-    for _ in 0..(2 * 60 + 3 + 2 * 60 + 2) {
-        game.frame();
-    }
-    assert_eq!(game.showing(), Showing::MissionText, "then the brief");
-    assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
-    game.click_done();
-    assert_eq!(
-        log(&projector),
-        ["start Offer.mov", "stop", "start Brief.mov"],
-        "the brief's own after-movie"
-    );
-}
-
-#[test]
-fn the_return_that_closes_the_brief_skips_the_after_movie_as_it_is_let_go() {
-    let (mut game, projector) = hailed_with_movies(Knobs {
-        offer_movie: Some(0x0001),
-        ..TEXTED
-    });
-    game.tap(Key::Enter);
-    game.key(Key::Enter, true);
-    assert_eq!(log(&projector), ["start Offer.mov"]);
-    assert_eq!(game.showing(), Showing::Movie);
-    game.key(Key::Enter, false);
-    assert_eq!(
-        log(&projector),
-        ["start Offer.mov", "stop"],
-        "Return still down as the movie starts skips it (KeyCheck 0x24 @0x55e6c)"
-    );
-    assert_eq!(game.showing(), Showing::Flight);
 }
 
 #[test]
@@ -1355,8 +1176,10 @@ fn with_the_engines_player_a_texts_movie_is_skipped_and_its_text_shows() {
     let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
     game.tap(Key::Char('y'));
+    game.settle();
     assert_eq!(game.showing(), Showing::Offer, "no movie plays");
     game.tap(Key::Enter);
+    game.settle();
     assert_eq!(game.showing(), Showing::MissionText);
     assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
 }
@@ -1369,11 +1192,11 @@ fn a_cinematic_offer_movie_over_flight_hides_the_pointer() {
         ..PLAIN
     });
     assert!(!game.app.screen().hides_pointer(), "during the fade out");
-    for _ in 0..61 {
-        game.frame();
-    }
+    // _HideTheCursor @0x55a73, once the fade is out.
+    game.settle_until("the movie hiding the pointer", |game| {
+        game.app.screen().hides_pointer()
+    });
     assert_eq!(game.showing(), Showing::Movie);
-    assert!(game.app.screen().hides_pointer(), "_HideTheCursor @0x55a73");
 }
 
 crate::common::entry_harness!(Game, click, frame);

@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::appcast::key::PublicKey;
+
 /// The package whose binary is the app's executable.
 pub const GAME_PACKAGE: &str = "nova";
 
@@ -18,8 +20,8 @@ pub struct BundleSpec {
     pub workspace_root: PathBuf,
     /// Cargo's target directory.
     pub target_dir: PathBuf,
-    /// The game package's version (`CFBundleShortVersionString` and
-    /// `CFBundleVersion`).
+    /// The game package's version (`CFBundleShortVersionString`; the
+    /// build ID is `CFBundleVersion`).
     pub version: String,
     /// The game package's SPDX licence expression.
     pub license: String,
@@ -38,6 +40,11 @@ pub struct BundleSpec {
     pub homepage: String,
     /// Who makes it: the AppStream `developer`.
     pub developer: String,
+    /// The update-signing public key the apps check update feeds with,
+    /// from the optional `update_public_key` (standard base64). `None`
+    /// while the operator hasn't committed one (it is missing or empty):
+    /// then the nightly publishes no update feeds.
+    pub update_public_key: Option<PublicKey>,
 }
 
 /// Why `cargo metadata`'s output gave no spec.
@@ -58,6 +65,9 @@ pub enum SpecError {
     /// The game package has no `license`.
     #[error("`{GAME_PACKAGE}`'s Cargo.toml has no `license`")]
     NoLicense,
+    /// `update_public_key` is set, but not to a key.
+    #[error("`{GAME_PACKAGE}`'s update_public_key in [package.metadata.bundle]: {0}")]
+    UpdateKey(String),
 }
 
 #[derive(Deserialize)]
@@ -90,6 +100,7 @@ struct BundleTable {
     description: Option<String>,
     homepage: Option<String>,
     developer: Option<String>,
+    update_public_key: Option<String>,
 }
 
 impl BundleSpec {
@@ -122,7 +133,18 @@ impl BundleSpec {
                 .ok_or(SpecError::MissingKey("description"))?,
             homepage: table.homepage.ok_or(SpecError::MissingKey("homepage"))?,
             developer: table.developer.ok_or(SpecError::MissingKey("developer"))?,
+            update_public_key: update_public_key(table.update_public_key.as_deref())?,
         })
+    }
+}
+
+/// The optional key: `None` when missing or empty.
+fn update_public_key(text: Option<&str>) -> Result<Option<PublicKey>, SpecError> {
+    match text {
+        None | Some("") => Ok(None),
+        Some(text) => PublicKey::from_base64(text)
+            .map(Some)
+            .map_err(|e| SpecError::UpdateKey(e.to_string())),
     }
 }
 
@@ -192,8 +214,39 @@ pub(crate) mod tests {
                 description: "A space trading and combat game.".into(),
                 homepage: "https://example.com/nova".into(),
                 developer: "the nova authors".into(),
+                update_public_key: None,
             }
         );
+    }
+
+    #[test]
+    fn the_update_public_key_is_optional_and_empty_means_none() {
+        let key = PublicKey([7; 32]);
+        for (value, want) in [
+            (None, None),
+            (Some(json!("")), None),
+            (Some(json!(key.to_base64())), Some(key)),
+        ] {
+            let mut bundle = full_bundle();
+            if let Some(value) = value {
+                bundle["update_public_key"] = value;
+            }
+            assert_eq!(
+                parse(&metadata_with(&bundle)).map(|s| s.update_public_key),
+                Ok(want)
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_update_public_key_is_an_error() {
+        for bad in ["not base64!", "AAAA"] {
+            let mut bundle = full_bundle();
+            bundle["update_public_key"] = json!(bad);
+            let error = parse(&metadata_with(&bundle)).expect_err("malformed");
+            assert!(matches!(error, SpecError::UpdateKey(_)), "{error:?}");
+            assert!(error.to_string().contains("update_public_key"), "{error}");
+        }
     }
 
     #[test]

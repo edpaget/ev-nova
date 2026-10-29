@@ -28,9 +28,10 @@ nova-sim-base = { workspace = true, features = ["fixture"] }
 nova-sim-catalog = { workspace = true, features = ["fixture"] }
 
 [features]
-# Test support for other crates' tests: `combat::fixture::among`, and the
-# two setters nova-sim's session tests call, `SabotageClock::set_counter`
-# and `Combat::shots_mut`.
+# Test support for other crates' tests, each item's doc saying who keeps
+# it: `combat::fixture::strike` and `Arsenal::of_specs` (nova-sim-ai's
+# tests), and the two setters nova-sim's tests call,
+# `SabotageClock::set_counter` and `Combat::shots_mut`.
 fixture = []
 
 [lints]

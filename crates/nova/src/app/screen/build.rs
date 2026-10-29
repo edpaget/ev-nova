@@ -850,6 +850,20 @@ impl AppScreen {
         self.flight.as_mut()
     }
 
+    /// Whether flight holds input its next frames will act on
+    /// ([`FlightView::input_queued`]): for the integration tests'
+    /// harnesses, to draw frames until the screen has taken its input
+    /// rather than count them. Only while flight is what the router ticks,
+    /// shown with nothing over it: a flight hidden, or paused under a
+    /// dialog or its map, can't act on its presses until it ticks again,
+    /// so it reports none.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn input_queued(&self) -> bool {
+        self.showing() == Showing::Flight
+            && self.flight.as_ref().is_some_and(FlightView::input_queued)
+    }
+
     /// The game in progress the main menu holds, not flying, if any: a
     /// pilot created or opened there, or back from play.
     #[must_use]

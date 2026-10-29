@@ -54,14 +54,13 @@ fn source_info(file: &SourceFile) -> SourceInfo {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
     use std::path::{Path, PathBuf};
 
     use nova_data::records::spin::Spin;
-    use nova_data::store::fs::{DirLister, EntryKind, Listing};
+    use nova_data::store::fixture::{DATA_DIR, one_file};
     use nova_data::{GameData, Record};
+    use nova_rsrc::ResType;
     use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader, ResType};
 
     use crate::devtools::catalog::{
         Origin, RecordView, ResourceCatalog, ResourceSummary, SourceInfo,
@@ -73,38 +72,6 @@ mod tests {
     /// A resource: type, ID, name (Mac Roman) and bytes.
     type Res = (ResType, i16, Option<&'static [u8]>, Vec<u8>);
 
-    /// Two files: `/data/Nova Data` and the plug-in `/plug/Over`, which
-    /// loads after it.
-    struct TwoFiles {
-        data: Vec<u8>,
-        plug: Vec<u8>,
-    }
-
-    impl DirLister for TwoFiles {
-        fn list(&self, dir: &Path) -> io::Result<Vec<Listing>> {
-            let name = if dir == Path::new("/data") {
-                "Nova Data"
-            } else {
-                "Over"
-            };
-            Ok(vec![Listing {
-                name: name.into(),
-                kind: EntryKind::File,
-            }])
-        }
-    }
-
-    impl ForkReader for TwoFiles {
-        fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            let bytes = if path.starts_with("/data") {
-                &self.data
-            } else {
-                &self.plug
-            };
-            Ok((fork == Fork::Data).then(|| bytes.clone()))
-        }
-    }
-
     fn fork(resources: &[Res]) -> Vec<u8> {
         resources
             .iter()
@@ -115,12 +82,13 @@ mod tests {
             .bytes
     }
 
+    /// The store of two files: `/data/Nova Data` holding `data`, and the
+    /// plug-in `/plug/Over` holding `plug`, which loads after it.
     fn store(data: &[Res], plug: &[Res]) -> GameData {
-        let files = TwoFiles {
-            data: fork(data),
-            plug: fork(plug),
-        };
-        GameData::load(&files, &files, Path::new("/data"), Some(Path::new("/plug"))).expect("opens")
+        one_file(fork(data))
+            .file("/plug/Over", fork(plug))
+            .load_from(Path::new(DATA_DIR), Some(Path::new("/plug")))
+            .expect("opens")
     }
 
     /// A 12-byte `spïn`: sprites `sprites`, masks 1001, 48 × 48, 6 × 6.

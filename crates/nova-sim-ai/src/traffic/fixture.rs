@@ -1,15 +1,14 @@
 //! Test support for the ai and traffic layer's tests and the tests above
-//! it, behind the `fixture` feature: a default NPC ([`npc`]), one put
-//! in a pirate's count wait ([`count_waiting`]), the calls among the
-//! line's work ([`calls_on_line`]), and, for this crate's tests, a
-//! behaviour logging the ships it decides for and the player in a
-//! condition in a world of its own (`assisting`).
+//! it. Behind the `fixture` feature, for other crates' tests: a default
+//! NPC ([`npc`]). For this crate's tests alone: one put in a pirate's
+//! count wait (`count_waiting`), the calls among the line's work
+//! (`calls_on_line`), and a behaviour logging the ships it decides for
+//! and the player in a condition in a world of its own (`assisting`).
 
 use super::npc::{AiType, Mode, Npc, NpcHold, NpcId};
-use super::on_line::OnLine;
+use crate::ai::Goal;
 use crate::ai::plunder_contents::ClassMarines;
 use crate::ai::pursuit::Pursuit;
-use crate::ai::{CommCall, Goal};
 use crate::catalog::{EscortClass, ShipId};
 use crate::cloak::{Cloak, CloakGear};
 use crate::combat::armament::{Armament, LauncherRounds, Trigger};
@@ -22,6 +21,9 @@ use crate::stats::ShipStats;
 /// reserves full, at rest at the centre facing up, flying and idle,
 /// intact and unarmed, of skill 1.0 and no government's factor, its
 /// class's `Fuel` its `stats`' tank.
+///
+/// Kept for the facade's, story's and port's tests: a default NPC built
+/// from public fields, pinning no rule.
 #[must_use]
 pub fn npc(id: u32, stats: ShipStats) -> Npc {
     Npc {
@@ -99,6 +101,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
 
 /// `npc` put in goal 0x16, a pirate's count wait ([`Goal::CountWait`]),
 /// with `ticks` of its wait left.
+#[cfg(test)]
 pub fn count_waiting(npc: &mut Npc, ticks: u32) {
     npc.goal = Goal::CountWait;
     npc.ai_wait = ticks;
@@ -112,11 +115,12 @@ fn class_fuel(stats: &ShipStats) -> i16 {
 
 /// The calls among the line's `work`, in order, each with the odds its
 /// think read.
+#[cfg(test)]
 #[must_use]
-pub fn calls_on_line(work: &[OnLine]) -> Vec<(NpcId, CommCall, f32)> {
+pub fn calls_on_line(work: &[super::on_line::OnLine]) -> Vec<(NpcId, crate::ai::CommCall, f32)> {
     work.iter()
         .filter_map(|work| match *work {
-            OnLine::Call(id, call, odds) => Some((id, call, odds)),
+            super::on_line::OnLine::Call(id, call, odds) => Some((id, call, odds)),
             _ => None,
         })
         .collect()

@@ -363,11 +363,17 @@ impl<G: Gpu> Driver<G> {
     }
 }
 
-impl<G: Gpu> EntryHarness for Driver<G> {
+impl<G: Gpu> crate::common::Frames for Driver<G> {
     fn router(&self) -> &nova::app::screen::AppScreen {
         self.app.screen()
     }
 
+    fn next_frame(&mut self) {
+        self.redraw();
+    }
+}
+
+impl<G: Gpu> EntryHarness for Driver<G> {
     fn send_event(&mut self, event: WindowEvent) {
         self.send(event);
     }
@@ -382,10 +388,6 @@ impl<G: Gpu> EntryHarness for Driver<G> {
                 pressed,
             });
         }
-    }
-
-    fn next_frame(&mut self) {
-        self.redraw();
     }
 }
 

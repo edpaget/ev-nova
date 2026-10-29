@@ -12,6 +12,13 @@
 //!   `HKCU` value, and each folder the package makes has a `RemoveFolder`,
 //!   as Windows Installer's checks (ICE38, ICE43, ICE64) require of
 //!   per-user files.
+//! - WinSparkle's DLL and its two licences install beside `nova.exe`, from
+//!   the downloads directory the packer checked them into.
+//! - [`RELAUNCH_ACTION`] starts `nova.exe` after `InstallFinalize`, without
+//!   waiting, when [`RELAUNCH_PROPERTY`] is `1` and the run isn't an
+//!   uninstall: an update's install, run by WinSparkle with the feed's
+//!   arguments. The property is secure, so it reaches the install's
+//!   server side.
 //! - Nothing refers to `%APPDATA%`, where the game keeps settings and
 //!   pilots.
 
@@ -20,8 +27,8 @@ use std::path::Path;
 
 use super::layout::InstallerLayout;
 use super::{
-    DUMP_EXE, GAME_EXE, INSTALL_DIR, InstallerError, MANUFACTURER, REGISTRY_KEY, SHORTCUT,
-    UPGRADE_CODE, msi_version,
+    DUMP_EXE, GAME_EXE, INSTALL_DIR, InstallerError, MANUFACTURER, REGISTRY_KEY, RELAUNCH_ACTION,
+    RELAUNCH_PROPERTY, SHORTCUT, UPGRADE_CODE, msi_version, winsparkle,
 };
 use crate::spec::BundleSpec;
 use crate::xml::escape;
@@ -41,11 +48,20 @@ pub const ICON_ID: &str = "nova.ico";
 /// can't have a GUID WiX makes up, so each has its own. Like
 /// [`UPGRADE_CODE`], they must never change: a component's GUID is how
 /// Windows Installer knows it across versions.
-pub const COMPONENT_GUIDS: [(&str, &str); 5] = [
+pub const COMPONENT_GUIDS: [(&str, &str); 8] = [
     ("nova.exe", "C72B1397-18B3-4216-A8ED-CE17FB130C5F"),
     ("nova_dump.exe", "1F8BF91A-11C9-47BA-B395-32D28D0B8DF4"),
     ("README.txt", "72F3A3EA-9071-4305-B670-727C0221BEEF"),
     ("LICENSE", "A7B9C55E-A439-40CF-9DCE-76D7D9D57843"),
+    ("WinSparkle.dll", "E6787A31-D9EB-4D8D-851B-0AF4EA6F30CB"),
+    (
+        "WinSparkle_LICENSE.txt",
+        "3B124962-73B4-4025-BD06-A78788DF7262",
+    ),
+    (
+        "WinSparkle_expat_LICENSE.txt",
+        "78071152-6C1C-4306-8AB9-C4BB0E3AE36B",
+    ),
     ("Shortcut", "A50B207E-582B-46DA-A027-926158080927"),
 ];
 
@@ -132,6 +148,10 @@ pub fn wxs(spec: &BundleSpec, layout: &InstallerLayout) -> Result<String, Instal
         &spec.workspace_root.join("packaging").join("README.txt"),
     );
     file_component(&mut doc, "LICENSE", &spec.workspace_root.join("LICENSE"));
+    file_component(&mut doc, winsparkle::DLL, &layout.winsparkle_dll());
+    for (member, installed) in winsparkle::LICENCES {
+        file_component(&mut doc, installed, &layout.winsparkle_licence(member));
+    }
     let _ = write!(
         doc,
         r#"
@@ -142,12 +162,18 @@ pub fn wxs(spec: &BundleSpec, layout: &InstallerLayout) -> Result<String, Instal
         <RegistryValue Root="HKCU" Key="{key}" Name="Shortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </Feature>
+    <Property Id="{RELAUNCH_PROPERTY}" Secure="yes" />
+    <CustomAction Id="{RELAUNCH_ACTION}" FileRef="{game}" ExeCommand="" Execute="immediate" Return="asyncNoWait" />
+    <InstallExecuteSequence>
+      <Custom Action="{RELAUNCH_ACTION}" After="InstallFinalize" Condition="{RELAUNCH_PROPERTY} = &quot;1&quot; AND NOT REMOVE" />
+    </InstallExecuteSequence>
   </Package>
 </Wix>
 "#,
         shortcut = escape(SHORTCUT),
         shortcut_guid = guid("Shortcut"),
         key = escape(REGISTRY_KEY),
+        game = identifier(GAME_EXE),
     );
     Ok(doc)
 }
@@ -269,11 +295,15 @@ mod tests {
             .map(|f| PathBuf::from(f.attribute("Source").expect("source")))
             .collect();
         // Text built from the same bases the generator joins onto.
+        let downloads = spec.target_dir.join("installer").join("downloads");
         let expected = [
             exes.join("nova.exe"),
             exes.join("nova-dump.exe"),
             spec.workspace_root.join("packaging").join("README.txt"),
             spec.workspace_root.join("LICENSE"),
+            downloads.join("WinSparkle.dll"),
+            downloads.join("COPYING"),
+            downloads.join("COPYING.expat"),
         ];
         assert_eq!(
             sources
@@ -291,7 +321,15 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["nova.exe", "nova-dump.exe", "README.txt", "LICENSE"]
+            [
+                "nova.exe",
+                "nova-dump.exe",
+                "README.txt",
+                "LICENSE",
+                "WinSparkle.dll",
+                "WinSparkle-LICENSE.txt",
+                "WinSparkle-expat-LICENSE.txt"
+            ]
         );
         for file in all(&doc, "File") {
             assert_eq!(
@@ -299,6 +337,74 @@ mod tests {
                 Some(INSTALL_FOLDER)
             );
         }
+    }
+
+    #[test]
+    fn installs_winsparkle_and_its_licences_beside_nova_exe() {
+        let spec = spec();
+        let layout = layout(&spec);
+        let text = wxs(&spec, &layout).expect("wxs");
+        let doc = Document::parse(&text).expect("xml");
+        for (id, name, source, guid) in [
+            (
+                "WinSparkle.dll",
+                "WinSparkle.dll",
+                layout.winsparkle_dll(),
+                "E6787A31-D9EB-4D8D-851B-0AF4EA6F30CB",
+            ),
+            (
+                "WinSparkle_LICENSE.txt",
+                "WinSparkle-LICENSE.txt",
+                layout.winsparkle_licence("COPYING"),
+                "3B124962-73B4-4025-BD06-A78788DF7262",
+            ),
+            (
+                "WinSparkle_expat_LICENSE.txt",
+                "WinSparkle-expat-LICENSE.txt",
+                layout.winsparkle_licence("COPYING.expat"),
+                "78071152-6C1C-4306-8AB9-C4BB0E3AE36B",
+            ),
+        ] {
+            let file = by_id(&doc, "File", id);
+            assert_eq!(file.attribute("Name"), Some(name));
+            assert_eq!(
+                file.attribute("Source").map(PathBuf::from),
+                Some(source),
+                "{id}"
+            );
+            let component = component_of(file);
+            assert_eq!(component.attribute("Directory"), Some(INSTALL_FOLDER));
+            assert_eq!(component.attribute("Guid"), Some(guid), "{id}");
+        }
+    }
+
+    #[test]
+    fn an_update_relaunches_the_game_and_a_manual_install_doesn_t() {
+        let text = source();
+        let doc = Document::parse(&text).expect("xml");
+        let game = by_id(&doc, "File", "nova.exe");
+        let action = by_id(&doc, "CustomAction", RELAUNCH_ACTION);
+        assert_eq!(action.attribute("FileRef"), game.attribute("Id"));
+        assert_eq!(action.attribute("ExeCommand"), Some(""), "no arguments");
+        assert_eq!(action.attribute("Execute"), Some("immediate"));
+        assert_eq!(action.attribute("Return"), Some("asyncNoWait"));
+        let custom = one(&doc, "Custom");
+        assert_eq!(
+            custom
+                .parent_element()
+                .map(|sequence| sequence.tag_name().name()),
+            Some("InstallExecuteSequence")
+        );
+        assert_eq!(custom.attribute("Action"), Some(RELAUNCH_ACTION));
+        assert_eq!(custom.attribute("After"), Some("InstallFinalize"));
+        assert_eq!(
+            custom.attribute("Condition"),
+            Some("NOVA_RELAUNCH = \"1\" AND NOT REMOVE")
+        );
+        assert_eq!(RELAUNCH_PROPERTY, "NOVA_RELAUNCH");
+        let property = by_id(&doc, "Property", RELAUNCH_PROPERTY);
+        assert_eq!(property.attribute("Secure"), Some("yes"));
+        assert_eq!(property.attribute("Value"), None, "unset unless passed");
     }
 
     #[test]
@@ -351,7 +457,7 @@ mod tests {
         let text = source();
         let doc = Document::parse(&text).expect("xml");
         let components = all(&doc, "Component");
-        assert_eq!(components.len(), 5);
+        assert_eq!(components.len(), 8);
         for component in components {
             let key_paths: Vec<_> = component
                 .descendants()

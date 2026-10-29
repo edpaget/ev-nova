@@ -6,10 +6,10 @@
 use nova_data::graphics::Image;
 use nova_render::fonts::FontFaces;
 use nova_render::{Gpu, ImageError, ImageSource, LogicalSize, Renderer, Upscaler, Viewport};
-use nova_view::draw::{fill_rect, lights_tint};
 use nova_view::geometry::Bounds;
 use nova_view::{Color, DrawList, ImageKey, ImageKind, Point};
 
+use super::common::fill;
 use super::wgpu_offscreen::{Images, gpu_with};
 
 /// Logical 32x24, as the other offscreen tests draw.
@@ -54,10 +54,12 @@ pub(crate) fn at(x: f32, y: f32) -> Point {
 /// sprite, lights drawn with the OR blend over the soft sprite, a line
 /// and a dot.
 pub(crate) fn world(list: &mut DrawList) {
+    // White at 20 32nds of full alpha: lights at level 20.
+    const LEVEL_20: Color = Color::rgba(255, 255, 255, 159);
     list.picture(ImageKey::picture(1), at(2.0, 2.0))
         .sprite(ImageKey::sprite(SOFT, 0), at(10.0, 6.0), Color::WHITE)
         .additive_sprite(ImageKey::sprite(5, 0), at(16.0, 6.0), Color::WHITE)
-        .or_sprite(ImageKey::sprite(7, 0), at(10.0, 6.0), lights_tint(20))
+        .or_sprite(ImageKey::sprite(7, 0), at(10.0, 6.0), LEVEL_20)
         .line(
             at(2.0, 14.0),
             at(14.0, 14.0),
@@ -111,7 +113,7 @@ pub(crate) fn hud_over_white(logical: LogicalSize) -> DrawList {
         min: at(0.0, 0.0),
         max: at(logical.w as f32, logical.h as f32),
     };
-    fill_rect(&mut list, all, Color::WHITE);
+    fill(&mut list, all, Color::WHITE);
     hud(&mut list);
     list
 }

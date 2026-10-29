@@ -1,6 +1,6 @@
 [package]
 name = "nova-appkit"
-description = "The macOS menu bar, Apple event handlers and full keyboard access setting, built with AppKit behind a safe API, for macOS only"
+description = "The macOS menu bar, Apple event handlers, full keyboard access setting and Sparkle updater, built with AppKit behind a safe API, for macOS only"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,9 +13,15 @@ publish.workspace = true
 # 0.5: nothing crosses between the two, as this crate takes
 # NSApplication from `sharedApplication` itself.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSObject", "NSString"] }
+# NSBundle and NSError load Sparkle.framework at run time (`updater`).
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSBundle", "NSError", "NSObject", "NSString"] }
 # The menus alone.
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSWindow"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# Folders with no framework, one that won't load, and bundles that name a
+# feed or not, for the updater's tests.
+tempfile.workspace = true
 
 # Builds the real menu bar on the process's main thread: `harness = false`,
 # so the test binary's own `main` runs there (see `tests/it/main.rs`).

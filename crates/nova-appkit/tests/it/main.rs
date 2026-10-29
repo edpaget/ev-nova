@@ -17,6 +17,8 @@ mod apple_events;
 mod menu_bar;
 #[cfg(target_os = "macos")]
 mod modal;
+#[cfg(target_os = "macos")]
+mod updater;
 
 /// Every test, by name. Each panics on failure.
 #[cfg(target_os = "macos")]
@@ -36,6 +38,22 @@ const TESTS: &[(&str, fn())] = &[
     (
         "modal::it_aborts_a_running_modal_session",
         modal::it_aborts_a_running_modal_session,
+    ),
+    (
+        "updater::a_folder_without_the_framework_loads_no_updater",
+        updater::a_folder_without_the_framework_loads_no_updater,
+    ),
+    (
+        "updater::a_framework_that_wont_load_is_a_load_error",
+        updater::a_framework_that_wont_load_is_a_load_error,
+    ),
+    (
+        "updater::the_test_binary_s_bundle_has_no_feed",
+        updater::the_test_binary_s_bundle_has_no_feed,
+    ),
+    (
+        "updater::the_real_framework_makes_a_controller_that_isn_t_started",
+        updater::the_real_framework_makes_a_controller_that_isn_t_started,
     ),
 ];
 

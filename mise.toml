@@ -77,11 +77,11 @@ description = "macOS only: build Nova.app (Apple silicon) into ev-nova-aarch64-a
 run = "cargo run -p nova-bundle --locked --"
 
 [tasks.build-windows]
-description = "Windows only: build nova.exe and nova-dump.exe in release for x86_64-pc-windows-msvc, the executables the installer packs"
+description = "Windows only: build nova.exe and nova-dump.exe in release for x86_64-pc-windows-msvc, the executables the installer packs; with NOVA_CHANNEL set (nightly), nova.exe compiles in that channel's update feed once update_public_key is committed"
 run = "cargo build --release --locked -p nova -p nova-dump --target x86_64-pc-windows-msvc"
 
 [tasks.pack-installer]
-description = "Windows only, needs WiX v5 (dotnet tool install --global wix --version 5.0.2): pack already-built executables into ev-nova-x86_64-pc-windows-msvc.msi; pass `--exes <DIR> [OUT_DIR]` after -- (defaults target/x86_64-pc-windows-msvc/release and target/installer/out)"
+description = "Windows only, needs WiX v5 (dotnet tool install --global wix --version 5.0.2) and GitHub (it downloads WinSparkle 0.9.4): pack already-built executables into ev-nova-x86_64-pc-windows-msvc.msi; pass `--exes <DIR> [OUT_DIR]` after -- (defaults target/x86_64-pc-windows-msvc/release and target/installer/out)"
 run = "cargo run -p nova-bundle --locked --bin nova-installer --"
 
 [tasks.installer]
@@ -94,16 +94,24 @@ description = "Any host: write the Linux desktop file, AppStream metainfo and hi
 run = "cargo run -p nova-bundle --locked --bin nova-linux --"
 
 [tasks.site]
-description = "Any host: render the download page into index.html; pass an output dir after -- (default target/site)"
+description = "Any host: render the download page into index.html; pass an output dir after -- (default target/site), and --pages-flatpak <DIR> and --beta-assets <FILE> for the served .flatpakrefs and the Beta row"
 run = "cargo run -p nova-bundle --locked --bin nova-site --"
-
-[tasks.appimage]
-description = "Linux x86_64 only, needs appimagetool (or NOVA_APPIMAGETOOL) and NOVA_APPIMAGE_RUNTIME naming a downloaded AppImage type2 runtime: build nova and pack it into ev-nova-x86_64-unknown-linux-gnu.AppImage; pass an output dir after -- (default target/appimage/out)"
-run = "cargo run -p nova-bundle --locked --bin nova-appimage --"
 
 [tasks.flatpak]
 description = "Linux x86_64 only, needs flatpak, flatpak-builder and the flathub remote added with --user: build the game from vendored sources on the freedesktop runtime into ev-nova-x86_64-unknown-linux-gnu.flatpak; pass an output dir after -- (default target/flatpak/out)"
 run = "cargo run -p nova-bundle --locked --bin nova-flatpak --"
+
+[tasks.build-id]
+description = "Print the build ID: NOVA_BUILD_ID when it is set, else HEAD's committer time in UTC as YYYYMMDDHHMMSS"
+run = "cargo run -q -p nova-bundle --locked --bin nova-build-id"
+
+[tasks.flatpak-repo]
+description = "What CI's flatpak-repo job runs, prebuilt (x86_64 Linux, needs gpg, ostree, flatpak and curl): mirror the live Pages repo and, for the nightly, import the plain bundle (stage [--bundle-dir <DIR>] --work <DIR> --pages <DIR>), then sign it onto NOVA_CHANNEL's branch with FLATPAK_SIGNING_KEY (for beta, copy the nightly branch's commit of NOVA_BUILD_ID) and write every served channel's .flatpakref and the repo-following bundle (sign --work <DIR> --pages <DIR> --dist <DIR>)"
+run = "cargo run -q -p nova-bundle --locked --bin nova-flatpak-repo --"
+
+[tasks.appcast]
+description = "What CI's publish job runs, prebuilt: sign NOVA_CHANNEL's installers and write its Sparkle update feeds and the prune list (publish --dist <DIR> --assets <FILE> --current <DIR> --feeds <DIR> --prune-list <FILE>); what promote-beta's check job runs: refuse a build off main, not held by the nightly, not newer than the beta, or whose recorded commit is missing, not on main or not at its time, else print build= and commit= (check-promotion --build <ID> --repo <DIR> --nightly-assets <FILE> --nightly-commits <DIR> --beta-assets <FILE> --beta-current <DIR>); or print UPDATE_SIGNING_KEY's public key (public-key)"
+run = "cargo run -q -p nova-bundle --locked --bin nova-appcast --"
 
 [tasks.mutants]
 description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g. -- --file <path>"

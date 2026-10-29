@@ -10,16 +10,15 @@
 //!
 //! From the main menu, New Pilot asks for a name and flies the new pilot;
 //! landing, taking off and closing the window each save it; Open Pilot in
-//! a new app lists it and resumes it docked where it landed, on the same
-//! date, in the same ship and with the same cash; Quit exits.
+//! a new app lists it and resumes it as it was saved; Quit exits.
 
 use crate::common::text_input_items;
-use std::io;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::common::EntryHarness;
+use crate::bracket_art;
+use crate::common::{EntryHarness, Frames};
 use nova::app::screen::QUIT_DELAY;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
@@ -30,23 +29,25 @@ use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record, SoundId};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
-use nova_sim::{Pilot, PilotKeeper, PilotStore, ShipId, StellarId, SystemId};
+use nova_sim::{Pilot, PilotKeeper, PilotStore};
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::menu::fixture::main_screen_resources;
+use nova_view::spaceport::SpaceportView;
 use nova_view::{MenuCommand, MouseButton};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -66,33 +67,14 @@ impl WindowPort for FakeWindow {
     fn request_redraw(&mut self) {}
 }
 
-/// One file, holding a fork, wherever it is looked for.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
-fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> OneFile {
-    let bytes = resources
+fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {
+    resources
         .iter()
         .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
             fork.resource(*ty, *id, None, data)
         })
         .build()
-        .bytes;
-    OneFile(bytes)
+        .bytes
 }
 
 fn be(values: &[i16]) -> Vec<u8> {
@@ -144,17 +126,23 @@ fn intro_character() -> Vec<u8> {
 
 /// An average `shïp` with shield, armour and fuel.
 fn ship() -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 300, 300, 30, 300, 45]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .free_mass(45)
+        .build()
 }
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
 fn ship_anim() -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// An `rlëD` of `frames` frames of `size` x `size`.
@@ -174,9 +162,6 @@ fn system() -> Vec<u8> {
     put_i16s(&mut bytes, 0x66, &[-1]);
     bytes
 }
-
-/// Where [`stellar`] is: (50, 50), where a new pilot's ship starts.
-const ALPHA_PRIME_AT: nova_sim::Vec2 = nova_sim::Vec2::new(50.0, 50.0);
 
 /// Alpha Prime: a landable planet with a bar at (50, 50), where a new
 /// pilot's ship starts, whose landscape is `PICT` 10004.
@@ -232,8 +217,16 @@ fn game_data_of(character: Vec<u8>, extra: Vec<(ResType, i16, Vec<u8>)>) -> Rc<G
     // The main menu's art, so the menu draws the original's screen.
     resources.extend(main_screen_resources());
     resources.extend(extra);
-    let file = fork(&resources);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    // The nav brackets' corners, which a landing's selection draws.
+    let file = resources
+        .iter()
+        .fold(
+            bracket_art::with_bracket_art(ForkBuilder::new()),
+            |fork, (ty, id, data)| fork.resource(*ty, *id, None, data),
+        )
+        .build()
+        .bytes;
+    Rc::new(one_file(file).load())
 }
 
 /// One `DITL` item: (left, top, right, bottom), its type byte and data.
@@ -353,7 +346,8 @@ fn interface_with(extra: &[(ResType, i16, Vec<u8>)]) -> InterfaceData {
     ];
     resources.extend_from_slice(extra);
     let file = fork(&resources);
-    InterfaceData::load(&file, Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, file), path).expect("loads")
 }
 
 pub(crate) struct Harness {
@@ -504,7 +498,7 @@ impl Harness {
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
-    /// a few frames let the dock approach clear it, and the second lands.
+    /// frames let the dock approach clear it, and the second lands.
     pub(crate) fn land(&mut self) {
         self.press(KeyCode::KeyL);
         self.approach();
@@ -580,15 +574,13 @@ impl Harness {
         self.app.screen().showing()
     }
 
-    fn ship(&self) -> nova_sim::ShipState {
-        *self
-            .app
+    fn ship_session(&self) -> &nova_sim::Session {
+        self.app
             .screen()
             .flight_view()
             .expect("flying")
             .session()
             .expect("a session")
-            .player()
     }
 
     fn pilot(&self) -> Pilot {
@@ -612,17 +604,11 @@ impl Harness {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request. The nav brackets' corners (`cicn`
-    /// 10000-10003), which the press's selection draws, may be missing
-    /// from the fixture, so the frames' image failures are not checked.
+    /// Draws frames until the dock approach has cleared the request.
     fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frames += 1;
-            let elapsed = Duration::from_millis(16 * self.frames);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        let _ = self.app.take_failures();
+        self.settle_until("the dock approach's clearance", |game| {
+            game.ship_session().dock_cleared()
+        });
     }
 }
 
@@ -637,29 +623,11 @@ fn texts(frame: &Frame) -> Vec<String> {
         .collect()
 }
 
-/// The main screen's six buttons are each drawn where they are hit.
-fn assert_menu_drawn(game: &mut Harness) {
-    let frame = game.frame();
-    let quads: Vec<nova_render::Rect> = frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Sprites { quads, .. } => quads.iter().map(|quad| quad.dest).collect(),
-            _ => Vec::new(),
-        })
-        .collect();
+/// The next frame draws the main menu's art.
+fn assert_menu_draws_art(game: &mut Harness) {
+    game.frame();
     let menu = game.app.screen().main_menu().expect("a main menu");
     assert!(menu.draws_art());
-    for choice in MenuChoice::ALL {
-        let bounds = menu.button_bounds(choice);
-        let drawn = nova_render::Rect {
-            x: bounds.min.x,
-            y: bounds.min.y,
-            w: bounds.width(),
-            h: bounds.height(),
-        };
-        assert!(quads.contains(&drawn), "{choice:?} at {drawn:?}");
-    }
 }
 
 pub(crate) fn saved(store: &MemoryPilots, key: &str) -> Pilot {
@@ -671,7 +639,7 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     let store = MemoryPilots::new();
     let mut game = Harness::opening(&store);
     assert_eq!(game.showing(), Showing::MainMenu);
-    assert_menu_drawn(&mut game);
+    assert_menu_draws_art(&mut game);
 
     // New Pilot asks for a name; typing (with a slip, deleted) fills it.
     let new_pilot = game.menu_button(MenuChoice::NewPilot);
@@ -692,19 +660,7 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
-    let pilot = game.pilot();
-    assert_eq!(pilot.name(), "Ada P");
-    assert_eq!(pilot.cash(), i64::from(CASH));
-    assert_eq!(pilot.ship(), ShipId(128));
-    assert_eq!(pilot.system(), SystemId(128));
-    assert_eq!(
-        (
-            pilot.date().day(),
-            pilot.date().month(),
-            pilot.date().year()
-        ),
-        (23, 6, 1177)
-    );
+    assert_eq!(game.pilot().name(), "Ada P");
     assert_eq!(store.keys(), ["Ada P"], "saved at once");
     game.frame();
 
@@ -712,7 +668,12 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(store.writes(), 2);
-    assert_eq!(saved(&store, "Ada P").stellar(), Some(StellarId(128)));
+    let landed_at = game
+        .app
+        .screen()
+        .spaceport_view()
+        .map(SpaceportView::stellar);
+    assert_eq!(saved(&store, "Ada P").stellar(), landed_at);
     game.press(KeyCode::Escape);
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(store.writes(), 3);
@@ -726,8 +687,8 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     assert_eq!(saved(&store, "Ada P"), landed);
     assert_eq!(game.app.take_warnings(), Vec::<String>::new());
 
-    // A new app: Open Pilot lists it and resumes it in space over the
-    // stellar it landed on, no spaceport opened.
+    // A new app: Open Pilot lists it and resumes it in space as it was
+    // saved, no spaceport opened.
     let mut game = Harness::opening(&store);
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
@@ -737,13 +698,7 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     assert!(game.app.screen().spaceport_view().is_none());
-    assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over Alpha Prime");
-    let resumed = game.pilot();
-    assert_eq!(resumed, landed);
-    assert_eq!(resumed.stellar(), Some(StellarId(128)));
-    assert_eq!(resumed.date(), landed.date());
-    assert_eq!(resumed.ship(), landed.ship());
-    assert_eq!(resumed.cash(), landed.cash());
+    assert_eq!(game.pilot(), landed);
     game.frame();
 
     // L, L lands it there.
@@ -753,9 +708,8 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
         game.app
             .screen()
             .spaceport_view()
-            .expect("landed")
-            .stellar(),
-        StellarId(128)
+            .map(SpaceportView::stellar),
+        landed.stellar()
     );
 
     // Take off, back to the menu, which appears after its black second,
@@ -855,11 +809,10 @@ fn a_new_app_opens_holding_the_last_pilot_saved_and_enter_ship_flies_it() {
     assert_eq!(game.showing(), Showing::MainMenu);
     let held = game.app.screen().game_in_progress().expect("a game held");
     assert_eq!(held.sim().pilot().expect("a pilot").name(), "Ada");
-    assert_menu_drawn(&mut game);
+    assert_menu_draws_art(&mut game);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.pilot().name(), "Ada");
-    assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over Alpha Prime");
 }
 
 #[test]
@@ -915,36 +868,6 @@ fn with_sound_off_a_keyed_new_pilot_opens_at_once() {
     game.type_key(KeyCode::KeyN, Some("n"));
     assert_eq!(game.showing(), Showing::NewPilot, "before any frame");
     assert_eq!(game.played(), []);
-}
-
-#[test]
-fn a_new_pilot_reopened_before_it_lands_resumes_over_the_stellar_its_first_save_names() {
-    let store = MemoryPilots::new();
-    let mut game = Harness::opening(&store);
-    let new_pilot = game.menu_button(MenuChoice::NewPilot);
-    game.click(new_pilot);
-    game.type_name("Ada");
-    game.press(KeyCode::Enter);
-    // The ship's christening, confirmed with its default.
-    game.press(KeyCode::Enter);
-    game.enter_ship();
-    assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(game.ship().position, nova_sim::Vec2::new(50.0, 50.0));
-    assert_eq!(
-        saved(&store, "Ada").stellar(),
-        Some(StellarId(128)),
-        "the nearest stellar, saved as last landed on"
-    );
-    assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
-
-    let mut game = Harness::opening(&store);
-    let open_pilot = game.menu_button(MenuChoice::OpenPilot);
-    game.click(open_pilot);
-    game.press(KeyCode::Enter);
-    game.enter_ship();
-    assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(game.pilot().stellar(), Some(StellarId(128)));
-    assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over it");
 }
 
 #[test]

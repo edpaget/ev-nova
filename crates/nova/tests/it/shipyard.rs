@@ -1,34 +1,31 @@
 //! Buying a ship through the whole app: synthetic game data (a `chär`
 //! with 25,000 credits flying a Shuttle from a system whose one planet, a
 //! shipyard, it starts over; the shipyard sells the Shuttle and a Heavy
-//! Shuttle, twice as fast and carrying a fuel tank) and a synthetic
-//! interface file holding the stock "Create a new pilot:", "Spaceport",
-//! "Shipyard", "Shipyard Info" and "Text Input" dialogs, laid out by the
-//! real glyphon
-//! metrics, drawn through the renderer into the recording Gpu and driven
-//! only by window events, keys and typed text made by the platform's own
-//! translation. Pilots are kept in the in-memory store, so the test sees
-//! what is saved, and "restarts" with a new app over the same store.
+//! Shuttle) and a synthetic interface file holding the stock "Create a new
+//! pilot:", "Spaceport", "Shipyard", "Shipyard Info" and "Text Input"
+//! dialogs, laid out by the real glyphon metrics, drawn through the
+//! renderer into the recording Gpu and driven only by window events, keys
+//! and typed text made by the platform's own translation. Pilots are kept
+//! in the in-memory store, so the test sees what is saved, and "restarts"
+//! with a new app over the same store.
 //!
-//! A new pilot lands and opens the Shipyard, whose info box shows each
-//! ship's price, the Shuttle's trade-in and the final price, and whose
-//! Info panel shows the Heavy Shuttle's stats. B asks the Heavy Shuttle's
-//! name, in a prompt naming its Long Name over a default the B does not
-//! type into; the name typed and Return buy it: the pilot pays the price
-//! less the trade-in, flies the new ship, named, with its fuel tank, and
-//! is saved; a held B buys nothing more. It takes off at the new ship's
-//! top speed, and in a new app the pilot still flies it, by its name.
+//! A new pilot lands and opens the Shipyard; with the Heavy Shuttle
+//! selected by its cell, B opens its name prompt, and the name typed and
+//! Return buy it, writing the pilot to the store. It takes off in the new
+//! ship, closing the window saves, and in a new app the pilot still flies
+//! it.
 //!
-//! When the Heavy Shuttle's description names a graphic, its Info opens
-//! the picture panel ("Shipyard Info" with a picture, `DLOG` 1019) over
-//! `PICT` 8507, the graphic stretched into item 7.
+//! What the Shipyard lists, its prices and trade-ins, the info panels, the
+//! prompt's wording and default, and how the name is kept are nova-sim's
+//! and nova-view's, pinned there.
 
-use std::io;
+use crate::bracket_art;
+
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::common::EntryHarness;
+use crate::common::{EntryHarness, Frames};
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
@@ -37,22 +34,22 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
-use nova_data::records::outfit::Outfit;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
-use nova_render::{Batch, FontFaces, Frame, Rect};
+use nova_render::{FontFaces, Frame};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
-use nova_sim::{OutfitId, Pilot, PilotKeeper, PilotStore, ShipId};
+use nova_sim::{Pilot, PilotKeeper, PilotStore, ShipId};
 use nova_view::MouseButton;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
@@ -76,33 +73,14 @@ impl WindowPort for FakeWindow {
     fn request_redraw(&mut self) {}
 }
 
-/// One file, holding a fork, wherever it is looked for.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
-fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> OneFile {
-    let bytes = resources
+fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {
+    resources
         .iter()
         .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
             fork.resource(*ty, *id, None, data)
         })
         .build()
-        .bytes;
-    OneFile(bytes)
+        .bytes
 }
 
 fn be(values: &[i16]) -> Vec<u8> {
@@ -142,74 +120,51 @@ fn character() -> Vec<u8> {
 /// A `shïp` of tech level 1, for sale every day, with `holds` tons of
 /// cargo space, shield 30, accel 300, `speed`, maneuver 30, fuel 300,
 /// `free_mass` tons free, armour 45, of `mass`, at `cost`, named
-/// `short_name`, carrying these default items.
-fn ship(
-    holds: i16,
-    speed: i16,
-    free_mass: i16,
-    mass: i16,
-    cost: i32,
-    short_name: &str,
-    defaults: &[(i16, i16)],
-) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(
-        &mut bytes,
-        0x00,
-        &[holds, 30, 300, speed, 30, 300, free_mass, 45],
-    );
-    put_i16s(&mut bytes, 0x2E, &[1]);
-    bytes[0x30..0x34].copy_from_slice(&cost.to_be_bytes());
-    put_i16s(&mut bytes, 0x3E, &[mass]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    for (slot, &(id, count)) in defaults.iter().enumerate() {
-        put_i16s(&mut bytes, 0x4E + 2 * slot, &[id]);
-        put_i16s(&mut bytes, 0x56 + 2 * slot, &[count]);
-    }
-    put_i16s(&mut bytes, 0x388, &[100]);
-    bytes[0x5CE..0x5CE + short_name.len()].copy_from_slice(short_name.as_bytes());
-    bytes
+/// `short_name`, carrying no default items.
+fn ship(holds: i16, speed: i16, free_mass: i16, mass: i16, cost: i32, short_name: &str) -> Vec<u8> {
+    ShipBuilder::new()
+        .holds(holds)
+        .shield(30)
+        .accel(300)
+        .speed(speed)
+        .maneuver(30)
+        .fuel(300)
+        .free_mass(free_mass)
+        .armor(45)
+        .tech_level(1)
+        .cost(cost)
+        .mass(mass)
+        .default_items(&[-1; 8])
+        .buy_random(100)
+        .short_name(short_name)
+        .build()
 }
 
 /// The Shuttle: 10 tons of cargo space, speed 300, 8 tons free, mass 15,
 /// 10,000 credits.
 fn shuttle() -> Vec<u8> {
-    ship(10, 300, 8, 15, 10_000, "Shuttle", &[])
+    ship(10, 300, 8, 15, 10_000, "Shuttle")
 }
 
 /// The Heavy Shuttle: 15 tons of cargo space, speed 600, 12 tons free,
-/// mass 25, 17,500 credits, carrying a fuel tank, whose Long Name is
-/// "Heavy Shuttle".
+/// mass 25, 17,500 credits, whose Long Name is "Heavy Shuttle".
 fn heavy_shuttle() -> Vec<u8> {
-    let mut bytes = ship(15, 600, 12, 25, 17_500, "Heavy\\nShuttle", &[(128, 1)]);
-    bytes[0x62E..0x62E + 13].copy_from_slice(b"Heavy Shuttle");
-    bytes
+    let bytes = ship(15, 600, 12, 25, 17_500, "Heavy\\nShuttle");
+    ShipBuilder::from_bytes(bytes)
+        .long_name("Heavy Shuttle")
+        .build()
 }
 
-/// The Shuttle and the Heavy Shuttle.
-const SHUTTLE: ShipId = ShipId(128);
+/// The Heavy Shuttle.
 const HEAVY: ShipId = ShipId(129);
-/// The Heavy Shuttle's fuel tank: `oütf` 128, +100 fuel, a ton.
-const TANK: OutfitId = OutfitId(128);
-
-/// A fuel tank: +100 fuel, a ton, 2000 credits.
-fn tank() -> Vec<u8> {
-    let mut bytes = vec![0; Outfit::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[0, 1, 1, 12, 100, 5]);
-    bytes[0x0E..0x12].copy_from_slice(&2000_i32.to_be_bytes());
-    put_i16s(&mut bytes, 0x12, &[0; 6]);
-    // For sale every day (`BuyRandom` 100), requiring nothing anywhere.
-    put_i16s(&mut bytes, 0x3F0, &[100, -1]);
-    bytes
-}
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
 fn ship_anim() -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// An `rlëD` of `frames` frames of `size` x `size`.
@@ -251,14 +206,6 @@ fn desc(text: &str) -> Vec<u8> {
     bytes
 }
 
-/// A `dësc` of `text` showing `PICT` `graphic`.
-fn pictured_desc(text: &str, graphic: i16) -> Vec<u8> {
-    let mut bytes = desc(text);
-    let at = text.len() + 1;
-    bytes[at..at + 2].copy_from_slice(&graphic.to_be_bytes());
-    bytes
-}
-
 /// A `spïn` naming `rlëD` 1000, one frame across.
 fn spin() -> Vec<u8> {
     let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
@@ -266,14 +213,9 @@ fn spin() -> Vec<u8> {
     bytes
 }
 
+/// The game data (see the module docs), with the Heavy Shuttle's
+/// description, `dësc` 13001.
 fn game_data() -> Rc<GameData> {
-    game_data_with(desc("Room for more."))
-}
-
-/// The game data with the Heavy Shuttle's `dësc` 13001 `heavy_desc`, the
-/// picture info panel's background (`PICT` 8507, 7 x 6) and a ship
-/// graphic (`PICT` 20129, 3 x 2).
-fn game_data_with(heavy_desc: Vec<u8>) -> Rc<GameData> {
     let mut resources = vec![
         (Character::TYPE, 128, character()),
         (Ship::TYPE, 128, shuttle()),
@@ -285,15 +227,12 @@ fn game_data_with(heavy_desc: Vec<u8>) -> Rc<GameData> {
         (Stellar::TYPE, 128, stellar()),
         (Spin::TYPE, 1004, spin()),
         (RLED, 1000, sheet(1, 8)),
-        (Outfit::TYPE, 128, tank()),
         (PICT, 8500, pict(6, 5, [40, 40, 40])),
         (PICT, 8501, pict(6, 5, [10, 10, 10])),
         (PICT, 8506, pict(6, 5, [20, 20, 20])),
         (PICT, 5000, pict(4, 4, [200, 200, 0])),
         (PICT, 10_004, pict(6, 3, [0, 90, 0])),
-        (Desc::TYPE, 13_001, heavy_desc),
-        (PICT, 8507, pict(7, 6, [30, 30, 30])),
-        (PICT, 20_129, pict(3, 2, [0, 0, 90])),
+        (Desc::TYPE, 13_001, desc("Room for more.")),
     ];
     // `STR#` 2002 #120, the name prompt's opening words.
     let mut prompts = vec![0; 119];
@@ -313,8 +252,12 @@ fn game_data_with(heavy_desc: Vec<u8>) -> Rc<GameData> {
     }
     // The main menu's art, so the menu draws the original's screen.
     resources.extend(main_screen_resources());
-    let file = fork(&resources);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    let fork = resources
+        .iter()
+        .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
+            fork.resource(*ty, *id, None, data)
+        });
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// One `DITL` item: (left, top, right, bottom), its type byte and data.
@@ -398,16 +341,6 @@ fn shipyard_dialogs() -> Vec<(ResType, i16, Vec<u8>)> {
         ((300, 0, 1, 1), false),
         ((9, 32, 234, 214), false),
     ]);
-    let picture_info = user_items(&[
-        ((503, 507, 99, 25), true),
-        ((700, 0, 1, 1), false),
-        ((7, 413, 600, 24), false),
-        ((700, 0, 1, 1), false),
-        ((11, 442, 256, 92), false),
-        ((700, 0, 1, 1), false),
-        ((7, 6, 600, 400), false),
-        ((266, 442, 342, 59), false),
-    ]);
     let text_input = vec![
         ditl_item((252, 106, 322, 126), BUTTON, b"OK"),
         ditl_item((7, 147, 39, 179), PICTURE | DISABLED, &be(&[129])),
@@ -423,8 +356,6 @@ fn shipyard_dialogs() -> Vec<(ResType, i16, Vec<u8>)> {
         (Ditl::TYPE, 1004, ditl(&shipyard)),
         (Dlog::TYPE, 1005, dlog((100, 100, 385, 350), 1005)),
         (Ditl::TYPE, 1005, ditl(&info)),
-        (Dlog::TYPE, 1019, dlog((100, 100, 637, 714), 1019)),
-        (Ditl::TYPE, 1019, ditl(&picture_info)),
     ]
 }
 
@@ -481,7 +412,8 @@ fn interface() -> InterfaceData {
     ];
     resources.extend(shipyard_dialogs());
     let file = fork(&resources);
-    InterfaceData::load(&file, Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, file), path).expect("loads")
 }
 
 struct Harness {
@@ -494,12 +426,7 @@ impl Harness {
     /// The app on the main menu, keeping pilots in `store`, before any
     /// frame.
     fn opening(store: &MemoryPilots) -> Self {
-        Self::opening_with(store, game_data())
-    }
-
-    /// The app on the main menu over `data`, keeping pilots in `store`,
-    /// before any frame.
-    fn opening_with(store: &MemoryPilots, data: Rc<GameData>) -> Self {
+        let data = game_data();
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let screen = start_screen(Rc::clone(&data))
@@ -559,10 +486,17 @@ impl Harness {
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
-    /// a few frames let the dock approach clear it, and the second lands.
+    /// the dock approach clears it, and the second lands.
     fn land(&mut self) {
         self.press(KeyCode::KeyL);
-        self.approach();
+        self.settle();
+        self.settle_until("the dock approach's clearance", |game| {
+            game.app
+                .screen()
+                .flight_view()
+                .and_then(|flight| flight.session().ok())
+                .is_some_and(nova_sim::Session::dock_cleared)
+        });
         self.press(KeyCode::KeyL);
     }
 
@@ -611,30 +545,6 @@ impl Harness {
         assert_eq!(self.app.take_warnings(), Vec::<String>::new());
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
-
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request. The nav brackets' corners (`cicn`
-    /// 10000-10003), which the press's selection draws, may be missing
-    /// from the fixture, so the frames' image failures are not checked.
-    fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frames += 1;
-            let elapsed = Duration::from_millis(16 * self.frames);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        let _ = self.app.take_failures();
-    }
-}
-
-fn texts(frame: &Frame) -> Vec<String> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Text(runs) => runs.iter().map(|run| run.text.clone()).collect(),
-            _ => Vec::new(),
-        })
-        .collect()
 }
 
 fn saved(store: &MemoryPilots, key: &str) -> Pilot {
@@ -642,17 +552,6 @@ fn saved(store: &MemoryPilots, key: &str) -> Pilot {
 }
 
 impl Harness {
-    /// Sends the physical key `code` going down (a repeat when `repeat`)
-    /// or, when not `pressed`, up.
-    fn key(&mut self, code: KeyCode, pressed: bool, repeat: bool) {
-        let state = if pressed {
-            ElementState::Pressed
-        } else {
-            ElementState::Released
-        };
-        self.send(platform::key_event(PhysicalKey::Code(code), state, repeat));
-    }
-
     /// Where spaceport item `number` is.
     fn spaceport_item(&self, number: usize) -> Point {
         self.app
@@ -683,22 +582,10 @@ impl Harness {
         assert!(self.shipyard().problem().is_none());
         assert_eq!(self.showing(), Showing::Spaceport);
     }
-
-    /// The flight session's top speed, in pixels a tick.
-    fn top_speed(&self) -> f32 {
-        self.app
-            .screen()
-            .flight_view()
-            .expect("flying")
-            .session()
-            .expect("a session")
-            .handling()
-            .max_speed
-    }
 }
 
 #[test]
-fn a_pilot_buys_a_heavy_shuttle_trading_in_its_shuttle_and_flies_it_after_a_restart() {
+fn a_ship_bought_and_named_in_the_shipyard_is_saved_flown_and_restored_after_a_restart() {
     let store = MemoryPilots::new();
     let mut game = Harness::opening(&store);
     let new_pilot = game.menu_button(MenuChoice::NewPilot);
@@ -709,178 +596,22 @@ fn a_pilot_buys_a_heavy_shuttle_trading_in_its_shuttle_and_flies_it_after_a_rest
     game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
-    game.frame();
-    assert!((game.top_speed() - 3.0).abs() < 1e-6);
     game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
 
-    // The Shipyard lists both ships, the Shuttle marked as flown.
-    game.open_shipyard();
-    let ids: Vec<_> = game
-        .shipyard()
-        .shipyard()
-        .rows
-        .iter()
-        .map(|row| row.id)
-        .collect();
-    assert_eq!(ids, [SHUTTLE, HEAVY]);
-    let shown = texts(&game.frame());
-    for text in ["Shuttle", "Heavy", "(current)", "Buy Ship", "Info", "Done"] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
-    // The Shuttle, flown and selected, shows no price lines.
-    for label in ["Ship Price:", "Trade-In:", "Final Price:", "You Have:"] {
-        assert!(!shown.contains(&label.to_owned()), "{label}: {shown:?}");
-    }
-
-    // The Heavy Shuttle, by its cell: its price, description and stats.
-    let cell = game.shipyard().cell_bounds(1).expect("a cell").center();
-    game.click(cell);
-    let shown = texts(&game.frame());
-    for text in [
-        "Ship Price:",
-        "17,500 cr",
-        "Trade-In:",
-        "2,500 cr",
-        "Final Price:",
-        "15,000 cr",
-        "You Have:",
-        "25,000 cr",
-        "Room for more.",
-    ] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
-    game.press(KeyCode::Space);
-    assert!(game.shipyard().info_panel().is_some());
-    let shown = texts(&game.frame());
-    for text in [
-        "Heavy Shuttle",
-        "Speed:",
-        "600",
-        "Energy:",
-        "3 jumps",
-        "No standard weapons",
-    ] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
-    game.press(KeyCode::Escape);
-    assert!(game.shipyard().info_panel().is_none(), "the panel alone");
-
-    buy_the_heavy_shuttle(&mut game, &store);
-
-    // Done, then Leave: the ship takes off at the new top speed.
-    game.press(KeyCode::Escape);
-    game.press(KeyCode::Escape);
-    assert_eq!(game.showing(), Showing::Flight);
-    assert!(
-        (game.top_speed() - 6.0).abs() < 1e-6,
-        "{}",
-        game.top_speed()
-    );
-    game.frame();
-
-    // Closing the window saves; a new app opens the pilot in its new ship.
-    let flown: Pilot = game.pilot();
-    assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
-    assert_eq!(saved(&store, "Ada"), flown);
-    let mut game = Harness::opening(&store);
-    let open_pilot = game.menu_button(MenuChoice::OpenPilot);
-    game.click(open_pilot);
-    game.press(KeyCode::Enter);
-    game.enter_ship();
-    assert_eq!(game.pilot(), flown);
-    assert_eq!(game.pilot().ship_name(), Some("Kestrel"));
-    assert!((game.top_speed() - 6.0).abs() < 1e-6);
-}
-
-fn quads(frame: &Frame) -> Vec<Rect> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Sprites { quads, .. } => quads.iter().map(|quad| quad.dest).collect(),
-            _ => Vec::new(),
-        })
-        .collect()
-}
-
-#[test]
-fn info_on_a_class_whose_description_has_a_graphic_opens_the_picture_panel() {
-    let store = MemoryPilots::new();
-    let data = game_data_with(pictured_desc("Room for more.", 20_129));
-    let mut game = Harness::opening_with(&store, data);
-    let new_pilot = game.menu_button(MenuChoice::NewPilot);
-    game.click(new_pilot);
-    game.type_name("Ada");
-    game.press(KeyCode::Enter);
-    // The ship's christening, confirmed with its default.
-    game.press(KeyCode::Enter);
-    game.enter_ship();
-    game.frame();
-    game.land();
+    // The Heavy Shuttle, by its cell; B asks its name, and nothing is
+    // bought yet.
     game.open_shipyard();
     let cell = game.shipyard().cell_bounds(1).expect("a cell").center();
     game.click(cell);
-    game.press(KeyCode::Space);
-    let panel = game.shipyard().info_panel().expect("the info panel");
-    let bounds = panel.bounds();
-    assert_eq!(
-        (bounds.min.x, bounds.min.y, bounds.width(), bounds.height()),
-        (205.0, 116.0, 614.0, 537.0),
-        "DLOG 1019"
-    );
-    let frame = game.frame();
-    let quads = quads(&frame);
-    let background = Rect {
-        x: 205.0,
-        y: 116.0,
-        w: 7.0,
-        h: 6.0,
-    };
-    let graphic = Rect {
-        x: 212.0,
-        y: 122.0,
-        w: 600.0,
-        h: 400.0,
-    };
-    assert!(quads.contains(&background), "PICT 8507: {quads:?}");
-    assert!(quads.contains(&graphic), "PICT 20129 in item 7: {quads:?}");
-    let shown = texts(&frame);
-    assert!(
-        shown.contains(&"Heavy Shuttle".to_owned()),
-        "the Long Name: {shown:?}"
-    );
-}
-
-/// Buys the Heavy Shuttle, selected in the open shipyard, naming it "The
-/// Kestrel" at its prompt, from 25,000 credits and a Shuttle.
-fn buy_the_heavy_shuttle(game: &mut Harness, store: &MemoryPilots) {
-    // B asks its name: the prompt names its Long Name, over a default the
-    // B does not type into. Nothing is bought yet.
     let writes = store.writes();
     game.type_key(KeyCode::KeyB, Some("b"));
-    let prompt = game.shipyard().naming().expect("the name prompt");
-    let default = prompt.field().text().to_owned();
-    assert!(prompt.field().selected(), "{default}");
-    let digits = &default[default.len() - 3..];
-    assert!(
-        digits.chars().all(|digit| ('1'..='9').contains(&digit)),
-        "{default}"
-    );
-    let shown = texts(&game.frame());
-    assert!(
-        shown
-            .iter()
-            .any(|text| text.contains("Please name your new Heavy Shuttle:")),
-        "{shown:?}"
-    );
-    assert!(shown.contains(&default), "{default}: {shown:?}");
-    assert_eq!(game.pilot().ship(), SHUTTLE);
+    assert!(game.shipyard().naming().is_some(), "the name prompt");
     assert_eq!(store.writes(), writes);
 
-    // The name typed and Return buy it: the price less the trade-in, the
-    // new ship with its tank, named, and the pilot saved.
-    game.type_name("The Kestrel");
+    // The name typed and Return buy it, closing the shipyard, and the
+    // pilot is saved.
+    game.type_name("Kestrel");
     game.press(KeyCode::Enter);
     assert!(
         game.app
@@ -892,44 +623,32 @@ fn buy_the_heavy_shuttle(game: &mut Harness, store: &MemoryPilots) {
         "the purchase closes the shipyard"
     );
     assert_eq!(game.pilot().ship(), HEAVY);
-    assert_eq!(game.pilot().ship_name(), Some("Kestrel"));
-    assert_eq!(game.pilot().cash(), 25_000 - 17_500 + 2500);
-    assert_eq!(game.pilot().owned(TANK), 1);
-    let fuel = game.pilot().reserves().fuel;
-    assert!((fuel.max - 400.0).abs() < 1e-3 && (fuel.now - 400.0).abs() < 1e-3);
     assert_eq!(store.writes(), writes + 1);
-    assert_eq!(saved(store, "Ada").ship(), HEAVY);
-    assert_eq!(saved(store, "Ada").ship_name(), Some("Kestrel"));
-    // Held, B buys nothing more, and opens nothing.
-    for _ in 0..5 {
-        game.key(KeyCode::KeyB, true, true);
-    }
-    game.key(KeyCode::KeyB, false, false);
-    assert_eq!(game.pilot().cash(), 10_000);
-    assert_eq!(store.writes(), writes + 1, "nothing more to save");
-    // Opened again, the Heavy Shuttle, now flown, shows no price lines;
-    // the Shuttle shows the new trade-in: the Heavy Shuttle's quarter and
-    // its tank's half, 5375, rounded down to ten by the shipyard's flux.
-    game.open_shipyard();
-    assert_eq!(game.shipyard().shipyard().current, HEAVY);
-    let heavy = game
-        .shipyard()
-        .shipyard()
-        .rows
-        .iter()
-        .position(|row| row.id == HEAVY)
-        .expect("listed");
-    let cell = game.shipyard().cell_bounds(heavy).expect("a cell").center();
-    game.click(cell);
-    let shown = texts(&game.frame());
-    assert!(!shown.contains(&"Trade-In:".to_owned()), "{shown:?}");
-    let cell = game.shipyard().cell_bounds(0).expect("a cell").center();
-    game.click(cell);
-    let shown = texts(&game.frame());
+    let named = saved(&store, "Ada");
+    assert_eq!(named.ship(), HEAVY);
     assert!(
-        shown.contains(&"Trade-In:".to_owned()) && shown.contains(&"5,370 cr".to_owned()),
-        "the Heavy Shuttle's quarter and its tank's half: {shown:?}"
+        named
+            .ship_name()
+            .is_some_and(|name| name.contains("Kestrel")),
+        "{:?}",
+        named.ship_name()
     );
+
+    // Leave: the new ship takes off.
+    game.press(KeyCode::Escape);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.pilot().ship(), HEAVY);
+
+    // Closing the window saves; a new app opens the pilot in its new ship.
+    let flown: Pilot = game.pilot();
+    assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
+    assert_eq!(saved(&store, "Ada"), flown);
+    let mut game = Harness::opening(&store);
+    let open_pilot = game.menu_button(MenuChoice::OpenPilot);
+    game.click(open_pilot);
+    game.press(KeyCode::Enter);
+    game.enter_ship();
+    assert_eq!(game.pilot(), flown);
 }
 
 crate::common::entry_harness!(Harness, click, frame);

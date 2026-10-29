@@ -163,8 +163,31 @@ that depend on it.
 - Test each component on its own, with mocks standing in for its collaborators.
   When a component is hard to test this way, add a port at that boundary.
 - Test each real adapter on its own against the behaviour that the port's mocks
-  assume.
+  assume. The crate that owns a port publishes its fake and a contract check,
+  and every real adapter runs that check; don't write another crate's fake.
 - Cover wiring with a small number of integration tests under `tests/`.
+
+## Crate coupling
+
+The pre-commit hook tests only the crates with staged changes (see
+"Verification runs through cargo"), and it stays that way: don't widen it to
+dependents. Instead, keep crates loose enough that a change to one breaks no
+other crate's tests.
+
+- A test asserts only its own crate's rules. Don't pin a rule, constant,
+  default or timing an upstream crate owns; that crate's tests pin it.
+- Reach upstream state through the builders and fakes the upstream crate
+  publishes for tests, not by driving its real behaviour until it gets there.
+- Don't match exhaustively on an upstream enum that grows. Have the owning
+  crate supply what each variant needs, as data on the enum. Keep an
+  exhaustive match only where the downstream crate must act on every
+  variant, and say so in its doc comment.
+- A test that runs a real upstream crate covers wiring only. It lives in the
+  crate that wires the program together, or where a port's module docs place
+  it (see "Architecture: ports and adapters"). The full gate runs it, not the
+  hook of the crates it reaches.
+- Each edge between workspace crates is a `bans` rule in `deny.toml` (see
+  "Test behaviour, never text"). A new edge adds its rule.
 
 ## Test behaviour, never text
 

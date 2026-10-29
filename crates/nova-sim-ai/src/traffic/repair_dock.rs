@@ -23,7 +23,7 @@
 //! - **The completion** ([`complete`]): docked, with its wait above none and
 //!   at most [`DOCK_WAIT`](plunder_dock::DOCK_WAIT) (@0x86d54-0x86d6d), the
 //!   ship is unboarded (@0x86d92), its armour raised [`REPAIR_STEP`] at a
-//!   time while it is disabled (@0x86d9c-0x86dcf), and, for the player
+//!   time while it is disabled ([`raise_armor`], @0x86d9c-0x86dcf), and, for the player
 //!   alone (@0x86dd4), "`CommName`:  Repairs complete, `ship name`." said
 //!   for 240 ticks with `snd ` 151 (@0x86ddf-0x86ef4): the session's, from
 //!   [`PirateEvent::PlayerRepaired`](crate::traffic::plunder::PirateEvent::PlayerRepaired),
@@ -51,12 +51,13 @@
 //! strike's maker whatever its state, so a shot from a ship since disabled
 //! turns the repairer on a disabled NPC. The `_statusRedraw` writes and
 //! +0x8c -1 are recorded only. The original's armour loop has
-//! no cap; the session's stops at the armour's most, so a disable rule
+//! no cap; [`raise_armor`] stops at the armour's most, so a disable rule
 //! that never lets the ship fly still ends.
 
 use crate::ai::{Goal, Surroundings};
-use crate::combat::hull::Condition;
+use crate::combat::hull::{Condition, HullSpec};
 use crate::hail::Help;
+use crate::reserves::Gauge;
 use crate::traffic::npc::Npc;
 #[cfg(doc)]
 use crate::traffic::plunder_dock;
@@ -119,6 +120,32 @@ pub fn complete(npc: &mut Npc) {
     npc.target = None;
     npc.docking = None;
     npc.travel_set = false;
+}
+
+/// A repaired ship's armour raised (`_LowLevelAIHandler`'s loop
+/// @0x86d9c-0x86dcf): while `disabled` has a ship of `hull` disabled at
+/// `armor`, it rises [`REPAIR_STEP`], the rule asked again after each
+/// step. The session calls it for the player and for an NPC, with its own
+/// rule (`nova_sim::Session`'s `repair_dock` module).
+///
+/// The original's loop has no cap. This one stops at the armour's most,
+/// after as many steps as the points it is short (a step is a point), so a
+/// rule that never lets the ship fly, such as `_IsDisabled` holding a
+/// mission's rescue ship disabled at any armour, still ends.
+pub fn raise_armor(
+    armor: &mut Gauge,
+    hull: &HullSpec,
+    disabled: impl Fn(Gauge, &HullSpec) -> bool,
+) {
+    // At most the steps up to its most, so a rule that never lets it fly
+    // still ends.
+    let steps = (armor.max - armor.now).ceil().max(0.0) as u32;
+    for _ in 0..steps {
+        if !disabled(*armor, hull) {
+            return;
+        }
+        armor.now = (armor.now + REPAIR_STEP).min(armor.max);
+    }
 }
 
 #[cfg(test)]
@@ -319,6 +346,51 @@ mod tests {
         assert_eq!(ship.ai_wait, REPAIR_HOLD);
         assert_eq!((ship.target, ship.docking), (None, None));
         assert!(!ship.travel_set, "nav -1, @0x86f31");
+    }
+
+    /// The armour `raise_armor` leaves a gauge of `now` of `max` with,
+    /// and the armour it asked the rule about, in order, the rule calling
+    /// a ship disabled while `disabled` says so.
+    fn raised(now: f32, max: f32, disabled: impl Fn(f32) -> bool) -> (f32, Vec<f32>) {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let mut armor = Gauge { now, max };
+        raise_armor(&mut armor, &HullSpec::default(), |armor, _hull| {
+            asked.borrow_mut().push(armor.now);
+            disabled(armor.now)
+        });
+        (armor.now, asked.into_inner())
+    }
+
+    #[test]
+    fn a_repair_raises_the_armour_a_step_at_a_time_asking_after_each_until_it_flies() {
+        let (now, asked) = raised(10.0, 45.0, |now| now < 20.0);
+        assert_eq!(now, 20.0);
+        let steps: Vec<f32> = (10..=20u8).map(f32::from).collect();
+        assert_eq!(asked, steps, "a point at a time (@0x86d9c-0x86dcf)");
+    }
+
+    #[test]
+    fn a_repair_raises_the_armour_no_further_than_its_most_under_a_rule_that_never_lets_it_fly() {
+        let (now, asked) = raised(10.0, 45.0, |_| true);
+        assert_eq!(now, 45.0);
+        assert_eq!(asked.last(), Some(&44.0), "no step past the most");
+    }
+
+    #[test]
+    fn a_repair_of_a_ship_the_rule_lets_fly_raises_nothing() {
+        assert_eq!(raised(10.0, 45.0, |_| false), (10.0, vec![10.0]));
+    }
+
+    #[test]
+    fn a_full_armour_takes_no_step() {
+        let (now, asked) = raised(45.0, 45.0, |_| true);
+        assert_eq!(now, 45.0);
+        assert!(asked.is_empty(), "{asked:?}");
+    }
+
+    #[test]
+    fn a_part_point_short_of_the_most_takes_one_step_to_it() {
+        assert_eq!(raised(44.5, 45.0, |_| true), (45.0, vec![44.5]));
     }
 
     #[test]

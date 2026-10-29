@@ -7,22 +7,21 @@
 //! Pilots are kept in the in-memory store, and the test "restarts" with a
 //! new app over the same store.
 //!
-//! A new pilot buys food where it is cheap, in Alpha, jumps to Beta and
-//! sells half of it there at a profit. Beta's shipyard lists the ship it
-//! sells but cannot sell it yet: the ship requires a licence. The pilot
-//! buys a fuel tank and the licence in Beta's outfitter, and then the ship,
-//! trading in the old one with the tank; the licence, persistent, comes
-//! along. It takes off in the new ship, faster, lands again and quits. In
-//! a new app, Open Pilot restores its ship, cash, cargo, outfits, location
-//! and date.
+//! A new pilot buys food in Alpha's trade center, jumps to Beta, sells it
+//! there, and buys a fuel tank in Beta's outfitter and a ship in its
+//! shipyard; each order writes the pilot to the store. It takes off in the
+//! new ship and quits. In a new app, Open Pilot restores the pilot flown.
+//!
+//! The prices, what a trade moves, what a shipyard lists and refuses, the
+//! trade-ins and the days that pass are nova-sim's, pinned there.
 
+use crate::bracket_art;
 use crate::common::text_input_items;
-use std::io;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::common::EntryHarness;
+use crate::common::{EntryHarness, Frames};
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
@@ -30,6 +29,7 @@ use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -37,25 +37,24 @@ use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
-use nova_render::{Batch, FontFaces, Frame};
+use nova_render::{FontFaces, Frame};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::flight::{heading_of, shortest_turn};
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
 use nova_sim::{
-    Good, OutfitId, Pilot, PilotKeeper, PilotStore, Session, ShipId, ShipRefusal, ShipState,
-    StellarId, SystemId,
+    Good, OutfitId, Pilot, PilotKeeper, PilotStore, Session, ShipId, ShipState, SystemId,
 };
 use nova_view::MouseButton;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::menu::fixture::main_screen_resources;
-use nova_view::spaceport::{OutfitterScreen, ShipyardScreen, TradeScreen};
+use nova_view::spaceport::{OutfitterScreen, ShipyardScreen};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -74,33 +73,14 @@ impl WindowPort for FakeWindow {
     fn request_redraw(&mut self) {}
 }
 
-/// One file, holding a fork, wherever it is looked for.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
-fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> OneFile {
-    let bytes = resources
+fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {
+    resources
         .iter()
         .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
             fork.resource(*ty, *id, None, data)
         })
         .build()
-        .bytes;
-    OneFile(bytes)
+        .bytes
 }
 
 fn be(values: &[i16]) -> Vec<u8> {
@@ -140,83 +120,50 @@ fn character() -> Vec<u8> {
 /// A `shïp` of tech level 1 with `holds` tons of cargo space, shield 30,
 /// accel 3000 (a pixel a tick, a tick), `speed`, maneuver 300 (30° a
 /// tick), fuel 300, `free_mass` tons free, armour 45, of `mass`, at
-/// `cost`, for sale `buy_random` % of days, requiring `require`, carrying
-/// these default items.
-#[allow(clippy::too_many_arguments)]
-fn ship(
-    holds: i16,
-    speed: i16,
-    free_mass: i16,
-    mass: i16,
-    cost: i32,
-    buy_random: i16,
-    require: u64,
-    defaults: &[(i16, i16)],
-) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(
-        &mut bytes,
-        0x00,
-        &[holds, 30, 3000, speed, 300, 300, free_mass, 45],
-    );
-    put_i16s(&mut bytes, 0x2E, &[1]);
-    bytes[0x30..0x34].copy_from_slice(&cost.to_be_bytes());
-    put_i16s(&mut bytes, 0x3E, &[mass]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    for (slot, &(id, count)) in defaults.iter().enumerate() {
-        put_i16s(&mut bytes, 0x4E + 2 * slot, &[id]);
-        put_i16s(&mut bytes, 0x56 + 2 * slot, &[count]);
-    }
-    bytes[0x380..0x388].copy_from_slice(&require.to_be_bytes());
-    put_i16s(&mut bytes, 0x388, &[buy_random]);
-    bytes
+/// `cost`, for sale `buy_random` % of days, with no default items.
+fn ship(holds: i16, speed: i16, free_mass: i16, mass: i16, cost: i32, buy_random: i16) -> Vec<u8> {
+    ShipBuilder::new()
+        .holds(holds)
+        .shield(30)
+        .accel(3000)
+        .speed(speed)
+        .maneuver(300)
+        .fuel(300)
+        .free_mass(free_mass)
+        .armor(45)
+        .tech_level(1)
+        .cost(cost)
+        .mass(mass)
+        .default_items(&[-1; 8])
+        .buy_random(buy_random)
+        .build()
 }
 
-/// The ship flown first: 20 tons of cargo space, speed 300, 10 tons free,
-/// mass 20, 10,000 credits, never for sale.
-const OLD: ShipId = ShipId(128);
 /// The ship bought: 30 tons of cargo space, speed 450, 15 tons free, mass
-/// 30, 8,000 credits, for sale every day to a pilot with the licence's
-/// bit 0x2, carrying a shield booster.
+/// 30, 8,000 credits, for sale every day.
 const NEW: ShipId = ShipId(129);
 
-/// A fuel tank: +100 fuel, 2 tons, 2,000 credits.
+/// The fuel tank, `oütf` 128.
 const TANK: OutfitId = OutfitId(128);
-/// A licence: no mass, 1,000 credits, one at most, persistent,
-/// contributing bit 0x2.
-const LICENCE: OutfitId = OutfitId(129);
-/// The new ship's shield booster: +50 shield, a ton, 500 credits.
-const BOOSTER: OutfitId = OutfitId(130);
 
-/// An `oütf` of tech level 1 shown `weight`-high, of `mass`, with one mod,
-/// up to `max`, with `flags`, at `cost`, contributing `contribute`.
-fn outfit(
-    weight: i16,
-    mass: i16,
-    (mod_type, mod_val): (i16, i16),
-    max: i16,
-    flags: u16,
-    cost: i32,
-    contribute: u64,
-) -> Vec<u8> {
+/// A fuel tank: tech level 1, +100 fuel, 2 tons, up to 5, 2,000 credits,
+/// for sale every day (`BuyRandom` 100) and requiring nothing anywhere.
+fn tank() -> Vec<u8> {
     let mut bytes = vec![0; Outfit::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[weight, mass, 1, mod_type, mod_val, max]);
-    bytes[0x0C..0x0E].copy_from_slice(&flags.to_be_bytes());
-    bytes[0x0E..0x12].copy_from_slice(&cost.to_be_bytes());
+    put_i16s(&mut bytes, 0x00, &[30, 2, 1, 12, 100, 5]);
+    bytes[0x0E..0x12].copy_from_slice(&2000_i32.to_be_bytes());
     put_i16s(&mut bytes, 0x12, &[0; 6]);
-    bytes[0x1E..0x26].copy_from_slice(&contribute.to_be_bytes());
-    // For sale every day (`BuyRandom` 100), requiring nothing anywhere.
     put_i16s(&mut bytes, 0x3F0, &[100, -1]);
     bytes
 }
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
 fn ship_anim() -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// An `rlëD` of `frames` frames of `size` x `size`.
@@ -280,17 +227,14 @@ fn str_list(strings: &[&str]) -> Vec<u8> {
 
 /// Alpha (128) and Beta (129), linked, 100 apart on the map: Alpha
 /// Prime, small, at (50, 50), and Beta Prime, 200 pixels across,
-/// near where a ship from Alpha arrives. Food's base price is 100. The two
-/// ships, the three outfits, and the pictures the screens draw.
+/// near where a ship from Alpha arrives. Food's base price is 100. The
+/// ship flown first, never for sale, the ship bought, the fuel tank, and
+/// the pictures the screens draw.
 fn game_data() -> Rc<GameData> {
     let mut resources = vec![
         (Character::TYPE, 128, character()),
-        (Ship::TYPE, 128, ship(20, 300, 10, 20, 10_000, 0, 0, &[])),
-        (
-            Ship::TYPE,
-            129,
-            ship(30, 450, 15, 30, 8000, 100, 0x2, &[(130, 1)]),
-        ),
+        (Ship::TYPE, 128, ship(20, 300, 10, 20, 10_000, 0)),
+        (Ship::TYPE, 129, ship(30, 450, 15, 30, 8000, 100)),
         (ShipAnim::TYPE, 128, ship_anim()),
         (ShipAnim::TYPE, 129, ship_anim()),
         (RLED, 2000, sheet(36, 1)),
@@ -306,13 +250,7 @@ fn game_data() -> Rc<GameData> {
         (Spin::TYPE, 1005, spin(1001)),
         (RLED, 1000, sheet(1, 8)),
         (RLED, 1001, sheet(1, 200)),
-        (Outfit::TYPE, 128, outfit(30, 2, (12, 100), 5, 0, 2000, 0)),
-        (
-            Outfit::TYPE,
-            129,
-            outfit(20, 0, (0, 0), 1, 0x0004, 1000, 0x2),
-        ),
-        (Outfit::TYPE, 130, outfit(10, 1, (4, 50), 1, 0, 500, 0)),
+        (Outfit::TYPE, 128, tank()),
         (StrList::TYPE, 4000, str_list(&["Food"])),
         (StrList::TYPE, 4004, str_list(&["100"])),
         (PICT, 10_004, pict(6, 3, [0, 90, 0])),
@@ -330,8 +268,12 @@ fn game_data() -> Rc<GameData> {
     }
     // The main menu's art, so the menu draws the original's screen.
     resources.extend(main_screen_resources());
-    let file = fork(&resources);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    let fork = resources
+        .iter()
+        .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
+            fork.resource(*ty, *id, None, data)
+        });
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// One `DITL` item: (left, top, right, bottom), its type byte and data.
@@ -526,8 +468,8 @@ fn interface() -> InterfaceData {
         (Ditl::TYPE, 1002, ditl(&outfit)),
     ];
     resources.extend(shipyard_dialogs());
-    let file = fork(&resources);
-    InterfaceData::load(&file, Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, fork(&resources)), path).expect("loads")
 }
 
 struct Harness {
@@ -594,10 +536,13 @@ impl Harness {
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
-    /// a few frames let the dock approach clear it, and the second lands.
+    /// the dock approach clears it, and the second lands.
     fn land(&mut self) {
         self.press(KeyCode::KeyL);
-        self.approach();
+        self.settle();
+        self.settle_until("the dock approach's clearance", |game| {
+            game.session().dock_cleared()
+        });
         self.press(KeyCode::KeyL);
     }
 
@@ -646,30 +591,6 @@ impl Harness {
         assert_eq!(self.app.take_warnings(), Vec::<String>::new());
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
-
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request. The nav brackets' corners (`cicn`
-    /// 10000-10003), which the press's selection draws, may be missing
-    /// from the fixture, so the frames' image failures are not checked.
-    fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frames += 1;
-            let elapsed = Duration::from_millis(16 * self.frames);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        let _ = self.app.take_failures();
-    }
-}
-
-fn texts(frame: &Frame) -> Vec<String> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Text(runs) => runs.iter().map(|run| run.text.clone()).collect(),
-            _ => Vec::new(),
-        })
-        .collect()
 }
 
 fn saved(store: &MemoryPilots, key: &str) -> Pilot {
@@ -704,11 +625,6 @@ impl Harness {
     /// The spaceport's screen open, if any.
     fn spaceport(&self) -> &nova_view::spaceport::SpaceportView {
         self.app.screen().spaceport_view().expect("landed")
-    }
-
-    /// The Trade Center, open.
-    fn trade(&self) -> &TradeScreen {
-        self.spaceport().open_trade().expect("trading")
     }
 
     /// The Outfitter, open.
@@ -746,11 +662,6 @@ impl Harness {
 
     fn ship(&self) -> ShipState {
         *self.session().player()
-    }
-
-    /// The flight session's top speed, in pixels a tick.
-    fn top_speed(&self) -> f32 {
-        self.session().handling().max_speed
     }
 
     /// Holds exactly the arrow keys `codes` of the flight keys held, each
@@ -833,20 +744,16 @@ impl Harness {
         map.transform().world_to_screen(system.position())
     }
 
-    /// Runs frames until the map key is taken: a take-off refuses it for
+    /// Draws frames until the map key is taken: a take-off refuses it for
     /// [`nova_sim::TAKEOFF_GRACE_TICKS`].
     fn past_the_takeoff_grace(&mut self) {
-        for _ in 0..100 {
-            if self.session().takes(nova_sim::PlayerCommand::Map) {
-                return;
-            }
-            self.frame();
-        }
-        panic!("the map was never taken");
+        self.settle_until("the map key taken", |game| {
+            game.session().takes(nova_sim::PlayerCommand::Map)
+        });
     }
 
     /// Plots a course to Beta on flight's map (M, a Shift-click, M), once
-    /// the take-off grace is over, flies out and jumps (J), and runs frames
+    /// the take-off grace is over, flies out and jumps (J), and draws frames
     /// until the jump is over.
     fn jump_to_beta(&mut self) {
         self.past_the_takeoff_grace();
@@ -859,16 +766,14 @@ impl Harness {
         assert_eq!(self.session().course(), [SystemId(129)]);
         self.fly_out();
         self.press(KeyCode::KeyJ);
-        for _ in 0..1200 {
-            self.frame();
-            let flight = self.app.screen().flight_view().expect("flying");
-            let arrived = self.session().system() == SystemId(129);
-            if arrived && flight.jump_effect().is_none() {
-                assert_eq!(self.session().system(), SystemId(129));
-                return;
-            }
-        }
-        panic!("the jump never ended");
+        self.settle_until("the jump's arrival in Beta", |game| {
+            game.session().system() == SystemId(129)
+                && game
+                    .app
+                    .screen()
+                    .flight_view()
+                    .is_some_and(|flight| flight.jump_effect().is_none())
+        });
     }
 }
 
@@ -885,36 +790,34 @@ fn new_pilot(store: &MemoryPilots) -> Harness {
     game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
-    game.frame();
-    assert_eq!(game.pilot().ship(), OLD);
-    assert!((game.top_speed() - 3.0).abs() < 1e-6);
     game
 }
 
-/// Steps 1-3: food bought low in Alpha, ten tons of it sold high in Beta.
-fn trade_at_a_profit(game: &mut Harness) {
-    // 1. Alpha Prime sells food low, at 80: Alt-B asks how many, and
-    //    Return takes the most offered, filling the 20-ton hold.
+impl Harness {
+    /// Sends `order` to the screen open over the spaceport, and asserts
+    /// it wrote the pilot to the store.
+    fn order(&mut self, store: &MemoryPilots, order: impl FnOnce(&mut Self)) {
+        let writes = store.writes();
+        order(self);
+        assert_eq!(store.writes(), writes + 1, "saved");
+        assert_eq!(saved(store, "Ada"), self.pilot());
+    }
+}
+
+#[test]
+fn orders_in_the_trade_center_outfitter_and_shipyard_across_a_jump_are_restored_by_open_pilot() {
+    let store = MemoryPilots::new();
+    let mut game = new_pilot(&store);
+
+    // Alpha Prime's trade center: B buys food.
     game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
     game.open(7);
-    assert_eq!(
-        game.trade().market().row(FOOD).map(|row| row.price),
-        Some(80)
-    );
-    game.key(KeyCode::AltLeft, true, false);
-    game.press(KeyCode::KeyB);
-    game.key(KeyCode::AltLeft, false, false);
-    assert_eq!(
-        game.trade().quantity().map(|asking| asking.field().text()),
-        Some("20")
-    );
-    game.press(KeyCode::Enter);
-    assert!(game.trade().quantity().is_none());
-    assert_eq!(game.pilot().held(FOOD), 20);
-    assert_eq!(game.pilot().cash(), 8400);
+    game.order(&store, |game| game.press(KeyCode::KeyB));
+    let held = game.pilot().held(FOOD);
+    assert!(held > 0, "bought");
 
-    // 2. To Beta, a jump and a day away, and down on Beta Prime.
+    // To Beta, and down on Beta Prime.
     game.leave();
     game.jump_to_beta();
     game.brake();
@@ -925,180 +828,49 @@ fn trade_at_a_profit(game: &mut Harness) {
         "landed: {:?}",
         game.ship()
     );
-    assert_eq!(game.pilot().stellar(), Some(StellarId(129)));
 
-    // 3. Beta Prime buys food high, at 125: S sells ten tons, as a plain
-    //    sale moves up to ten, bought for 800, earn 1,250, a profit of
-    //    450; ten stay in the hold.
+    // Beta Prime's trade center: S sells food.
     game.open(7);
-    assert_eq!(
-        game.trade().market().row(FOOD).map(|row| row.price),
-        Some(125)
-    );
-    game.press(KeyCode::KeyS);
-    assert_eq!(game.pilot().held(FOOD), 10);
-    assert_eq!(game.pilot().cash(), 9650);
-    game.press(KeyCode::Escape);
-}
-
-/// Steps 4 and 5: the ship refused for want of a licence, then the tank
-/// and the licence bought.
-fn outfit_for_the_ship(game: &mut Harness, store: &MemoryPilots) {
-    // 4. The shipyard lists the new ship, greyed: its licence is missing.
-    //    The old one, never for sale, is not listed.
-    game.open(9);
-    // It opens with nothing selected: Right picks the first ship.
-    game.press(KeyCode::ArrowRight);
-    let ids: Vec<_> = game
-        .shipyard()
-        .shipyard()
-        .rows
-        .iter()
-        .map(|row| row.id)
-        .collect();
-    assert_eq!(ids, [NEW]);
-    assert!(game.shipyard().shipyard().row(OLD).is_none());
-    assert_eq!(
-        game.shipyard().shipyard().check(NEW),
-        Err(ShipRefusal::NotForSale)
-    );
-    let shown = texts(&game.frame());
-    for text in [
-        "Ship Price:",
-        "8,000 cr",
-        "Trade-In:",
-        "2,500 cr",
-        "Final Price:",
-        "5,500 cr",
-        "You Have:",
-        "9,650 cr",
-    ] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
-    let writes = store.writes();
-    let before = game.pilot();
-    game.press(KeyCode::KeyB);
-    assert_eq!(game.pilot(), before, "Buy Ship is greyed");
-    assert_eq!(store.writes(), writes, "nothing to save");
+    game.order(&store, |game| game.press(KeyCode::KeyS));
+    assert!(game.pilot().held(FOOD) < held, "sold");
     game.press(KeyCode::Escape);
 
-    // 5. The outfitter: the fuel tank, then the licence beside it.
+    // The outfitter: the fuel tank, by its cell and B.
     game.open(8);
     let cell = game.outfitter().cell_bounds(0).expect("a cell").center();
     game.click(cell);
-    game.press(KeyCode::KeyB);
-    assert_eq!(game.pilot().owned(TANK), 1);
-    assert_eq!(game.pilot().cash(), 7650);
-    game.press(KeyCode::ArrowRight);
-    game.press(KeyCode::KeyB);
-    assert_eq!(game.pilot().owned(LICENCE), 1);
-    assert_eq!(game.pilot().cash(), 6650);
+    game.order(&store, |game| game.press(KeyCode::KeyB));
+    assert!(game.pilot().owned(TANK) > 0, "bought");
     game.press(KeyCode::Escape);
-}
 
-/// Steps 6 and 7: the ship bought, trading in the old one.
-fn buy_the_ship(game: &mut Harness, store: &MemoryPilots) {
-    // 6. The shipyard again: the licence meets the ship's Require, and the
-    //    tank adds half its price to the trade-in; the licence, persistent,
-    //    adds nothing. B asks the ship's name, in the built-in prompt
-    //    without the interface file's "Text Input", and Return takes the
-    //    default and buys the ship: 6,650 - 8,000 + 3,500.
+    // The shipyard: Right picks the ship, B asks its name, and Return
+    // takes the default and buys it.
     game.open(9);
     game.press(KeyCode::ArrowRight);
-    assert_eq!(game.shipyard().shipyard().check(NEW), Ok(()));
-    let shown = texts(&game.frame());
-    for text in [
-        "Ship Price:",
-        "8,000 cr",
-        "Trade-In:",
-        "3,500 cr",
-        "Final Price:",
-        "4,500 cr",
-        "You Have:",
-        "6,650 cr",
-    ] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
-    let writes = store.writes();
     game.type_key(KeyCode::KeyB, Some("b"));
     assert!(game.shipyard().naming().is_some(), "the name prompt");
-    assert_eq!(store.writes(), writes, "nothing bought yet");
-    game.press(KeyCode::Enter);
-    assert_eq!(game.pilot().cash(), 2150);
-    assert_eq!(store.writes(), writes + 1, "saved");
+    game.order(&store, |game| game.press(KeyCode::Enter));
+    assert_eq!(game.pilot().ship(), NEW);
     assert!(
         game.spaceport().open_shipyard().is_none(),
         "the purchase closes the shipyard"
     );
 
-    // 7. The new ship, with the licence and its own booster; the tank went
-    //    with the old ship. The food fits in its 30 tons, and its fuel is
-    //    full.
-    let pilot = game.pilot();
-    assert_eq!(pilot.ship(), NEW);
-    assert_eq!(
-        pilot.outfits().collect::<Vec<_>>(),
-        [(LICENCE, 1), (BOOSTER, 1)]
-    );
-    assert_eq!(pilot.cargo().collect::<Vec<_>>(), [(FOOD, 10)]);
-    let fuel = pilot.reserves().fuel;
-    assert!((fuel.max - 300.0).abs() < 1e-3 && (fuel.now - 300.0).abs() < 1e-3);
-    assert!((pilot.reserves().shield.max - 80.0).abs() < 1e-3);
-}
-
-#[test]
-fn a_pilot_trades_at_a_profit_buys_an_outfit_and_a_ship_and_is_restored_by_open_pilot() {
-    let store = MemoryPilots::new();
-    let mut game = new_pilot(&store);
-    let start = game.pilot().date();
-    trade_at_a_profit(&mut game);
-    outfit_for_the_ship(&mut game, &store);
-    buy_the_ship(&mut game, &store);
-
-    // 8. Leave: it flies at the new ship's top speed.
+    // Leave, and close the window, which saves.
     game.press(KeyCode::Escape);
     assert_eq!(game.showing(), Showing::Flight);
-    assert!(
-        (game.top_speed() - 4.5).abs() < 1e-6,
-        "{}",
-        game.top_speed()
-    );
-    game.frame();
-    let stats = game.session().stats();
-
-    // 9. Land again, and close the window, which saves.
-    game.land();
-    assert_eq!(game.showing(), Showing::Spaceport);
     let flown = game.pilot();
     assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
     assert_eq!(saved(&store, "Ada"), flown);
 
-    // 10. A new app opens the pilot, in space over Beta Prime:
-    //     everything restored.
+    // A new app opens the pilot: everything restored.
     let mut game = Harness::opening(&store);
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
-    let restored = game.pilot();
-    assert_eq!(restored, flown);
-    assert_eq!(restored.ship(), NEW);
-    assert_eq!(restored.cash(), 2150);
-    assert_eq!(restored.cargo().collect::<Vec<_>>(), [(FOOD, 10)]);
-    assert_eq!(
-        restored.outfits().collect::<Vec<_>>(),
-        [(LICENCE, 1), (BOOSTER, 1)]
-    );
-    assert_eq!(restored.system(), SystemId(129));
-    assert_eq!(restored.stellar(), Some(StellarId(129)));
-    // Eight days have passed: the take-off from Alpha's (1,
-    // `_PlayerLandOnStellar` @0x63440), the jump's (1), and leaving Beta
-    // Prime (6): the outfits' (`_DoPortDialog` @0x601fa), the ship's four
-    // (@0x6020e) and the take-off's (@0x63440).
-    let mut days = std::iter::successors(Some(start), |date| Some(date.next_day()));
-    assert_eq!(Some(restored.date()), days.nth(8));
-    assert_eq!(game.session().stats(), stats);
+    assert_eq!(game.pilot(), flown);
 }
 
 crate::common::entry_harness!(Harness, click, frame);

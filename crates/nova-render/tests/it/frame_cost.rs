@@ -20,7 +20,6 @@ use nova_data::graphics::Image;
 use nova_render::fonts::FontFaces;
 use nova_render::wgpu::{InitError, OffscreenGpu};
 use nova_render::{ImageError, ImageSource, LOGICAL, Renderer, Viewport};
-use nova_view::draw::lights_tint;
 use nova_view::{Color, DrawList, ImageKey, ImageKind, Point};
 
 /// A full Retina window.
@@ -93,8 +92,10 @@ fn scene(layer: Layer) -> DrawList {
     }
     let centre = Point::new(LOGICAL.w as f32 / 2.0, LOGICAL.h as f32 / 2.0);
     list.sprite(ImageKey::sprite(1, 0), centre, Color::WHITE);
-    layer(&mut list, ImageKey::sprite(2, 0), centre, lights_tint(24));
-    layer(&mut list, ImageKey::sprite(3, 0), centre, lights_tint(32));
+    // Lights at level 24 (white at 24 32nds of full alpha), then at 32.
+    let level_24 = Color::rgba(255, 255, 255, 191);
+    layer(&mut list, ImageKey::sprite(2, 0), centre, level_24);
+    layer(&mut list, ImageKey::sprite(3, 0), centre, Color::WHITE);
     list
 }
 

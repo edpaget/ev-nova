@@ -4,34 +4,12 @@
 //! `StarMap` built from `PilotCatalog::star_map`, and each link to a
 //! system that is missing or does not decode is a problem.
 
-use std::io;
-use std::path::Path;
-
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader};
 use nova_sim::{PilotCatalog, StarMap};
 use nova_view::galaxy::{GalaxyCatalog, GalaxyModel, SystemId};
-
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
 
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
     for (i, value) in values.iter().enumerate() {
@@ -73,8 +51,7 @@ fn data() -> GameData {
     })
     .build()
     .bytes;
-    let file = OneFile(fork);
-    GameData::load(&file, &file, Path::new("/data"), None).expect("opens")
+    one_file(fork).load()
 }
 
 #[test]

@@ -108,6 +108,9 @@ impl LineQueue {
     }
 
     /// The pirate events queued, in order, taken; the rest stays queued.
+    ///
+    /// Kept for nova-sim's stock dock and plunder tests, through
+    /// [`Traffic::take_pirate_events`](crate::traffic::Traffic::take_pirate_events).
     #[cfg(any(test, feature = "fixture"))]
     pub fn take_pirate_events(&mut self) -> Vec<PirateEvent> {
         let mut events = Vec::new();

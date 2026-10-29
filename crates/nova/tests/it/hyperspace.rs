@@ -1,72 +1,60 @@
 //! The app jumping through hyperspace over synthetic game data, wired to
 //! the renderer and the recording Gpu and driven only by key and mouse
-//! events and redraws, as the window sends them: flight's map, opened with
-//! M, plots a course two jumps long, and J jumps along it, pressed again as
-//! soon as the new system fades in from white. Each day a jump
-//! takes rolls the planetary events on the app's source of chance, whether
-//! flight was entered with the developer's F or a pilot flies it, new from
-//! New Pilot or resumed from Open Pilot.
+//! events and redraws, as the window sends them.
 //!
-//! With the Hyperspace Effects preference turned off in the Preferences
-//! dialog, a jump streaks and arrives without its white fades; turned back
-//! on, they return.
+//! - M opens flight's map and Escape closes it, then leaves flight.
+//! - Each day a jump takes rolls the planetary events on the app's source
+//!   of chance, whether flight was entered with the developer's F or a
+//!   pilot flies it, new from New Pilot or resumed from Open Pilot.
+//! - A jump's warp sounds reach the Audio port.
+//! - A pilot opened after a jump resumes where the jump left it, with the
+//!   fuel it had.
+//! - The Preferences dialog's Hyperspace Effects reaches flight, off and
+//!   on again.
+//! - L, L over a hypergate opens flight's map as the hypergate map, and a
+//!   pick on it and M bring the ship into the linked system.
 //!
-//! L, L over a hypergate opens flight's map as the hypergate map; a click
-//! on a linked system and M, or Escape, bring the ship out of the gate
-//! there.
-//!
-//! Play plots courses on the map opened from flight, which has no "Enter
-//! system" button; the Tab side's map keeps it as the developer's viewer
-//! (`galaxy_map.rs` and `system_view.rs` test that path).
-
-// Positions here are compared after the same arithmetic on both sides.
-#![allow(clippy::float_cmp)]
+//! How a course is plotted, when a jump is allowed, its fuel, its fades,
+//! its messages and its sounds' order are nova-sim's and nova-view's,
+//! pinned there. Play plots courses on the map opened from flight, which
+//! has no "Enter system" button; the Tab side's map keeps it as the
+//! developer's viewer (`galaxy_map.rs` and `system_view.rs` test that
+//! path).
 
 use crate::prefs_fixture;
 
 use std::cell::RefCell;
-use std::io;
-use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::common::EntryHarness;
+use crate::common::{EntryHarness, Frames};
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_audio::recording::RecordingAudio;
-use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings};
+use nova_audio::{Audio, AudioCommand, AudioCore};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
 use nova_data::records::disaster::Disaster;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::interface::Interface;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
-use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
-use nova_render::{Batch, FontFaces, Frame, QuadInstance, Rect, SolidQuad};
+use nova_render::{FontFaces, Frame};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::flight::shortest_turn;
-use nova_sim::hyperspace::{HyperlinkRule, JUMP_FUEL, MIN_JUMP_DISTANCE};
-use nova_sim::{
-    Chance, DisasterId, PilotKeeper, PilotStore, RuleKey, RuleSource, Rulebook, Session, ShipState,
-    SystemId, TICKS_PER_SECOND,
-};
-use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_UNEXPLORED};
-use nova_view::flight::jump::ARRIVAL_FLASH_FOR;
-use nova_view::flight::view::TOO_CLOSE;
-use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
+use nova_sim::hyperspace::{HyperlinkRule, MIN_JUMP_DISTANCE};
+use nova_sim::{Chance, DisasterId, PilotKeeper, PilotStore, Session, ShipState, SystemId};
+use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::MapMode;
-use nova_view::galaxy::buttons::DONE_LABEL;
 use nova_view::galaxy::dialog::map_area;
-use nova_view::galaxy::map::{BRIGHT_GREEN, ENTER_LABEL};
 use nova_view::menu::MenuChoice;
 use nova_view::sound::SimSound;
 use nova_view::text::fixture::MonoMetrics;
@@ -85,24 +73,6 @@ impl WindowPort for FakeWindow {
     }
 
     fn request_redraw(&mut self) {}
-}
-
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
 }
 
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
@@ -127,27 +97,16 @@ fn character() -> Vec<u8> {
 
 /// A fast `shïp`: `Accel` 1500, `Speed` 1000 and `Maneuver` 30, so 10
 /// pixels a tick at most, 0.5 more a tick and 3° a tick. Its `Shield` is
-/// 30, `Fuel` 300 (three jumps) and `Armor` 45, and it regenerates no fuel.
+/// 30, `Fuel` 300 (three jumps) and `Armor` 45.
 fn ship() -> Vec<u8> {
-    ship_with_regen(0)
-}
-
-/// [`ship`], with a `FuelRegen` of `regen`: a unit of fuel every `regen`
-/// ticks, its `Flags` 0x0008 letting the player's hull regenerate.
-fn ship_with_regen(regen: i16) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 1500, 1000, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[45]);
-    put_i16s(&mut bytes, 0x4A, &[0x0008]);
-    put_i16s(&mut bytes, 0x5E, &[regen]);
-    bytes
-}
-
-/// [`ship`], with a `Fuel` of `fuel`.
-fn ship_with_fuel(fuel: i16) -> Vec<u8> {
-    let mut bytes = ship();
-    put_i16s(&mut bytes, 0x02, &[30, 1500, 1000, 30, fuel]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(1500)
+        .speed(1000)
+        .maneuver(30)
+        .fuel(300)
+        .armor(45)
+        .build()
 }
 
 /// Stock `ïntf` 128's areas and font, over background `PICT` 700.
@@ -191,10 +150,11 @@ fn button_picture(width: i16) -> Vec<u8> {
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
 fn ship_anim() -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// An independent `sÿst` at map (`x`, 0) with these hyperlinks and one
@@ -246,43 +206,13 @@ fn food_surplus() -> Vec<u8> {
 /// Alpha. The status bar is `ïntf` 128, over a 194 x 16 `PICT` 700. A
 /// food surplus can break out at Beta Prime.
 fn data() -> Rc<GameData> {
-    data_with(&ship())
-}
-
-/// [`data`], with `ship` as `shïp` 128.
-fn data_with(ship: &[u8]) -> Rc<GameData> {
-    data_of(ship, &system(100, &[130], 129), None)
-}
-
-/// The buoy Beta shows in [`buoyed_data`].
-const HELLO: &str = "Message Buoy: hello.";
-
-/// [`data`], with Beta's `Message` 1 and `STR#` 1000 holding [`HELLO`].
-fn buoyed_data() -> Rc<GameData> {
-    buoyed_beta(1, 129)
-}
-
-/// [`data`], with Beta's `Message` `message`, its one stellar `stellar`
-/// (-1 for none), and `STR#` 1000 holding [`HELLO`].
-fn buoyed_beta(message: i16, stellar: i16) -> Rc<GameData> {
-    let mut beta = system(100, &[130], stellar);
-    put_i16s(&mut beta, 0x68, &[message]);
-    let mut list = 1u16.to_be_bytes().to_vec();
-    list.push(u8::try_from(HELLO.len()).expect("short"));
-    list.extend(HELLO.as_bytes());
-    data_of(&ship(), &beta, Some(&list))
-}
-
-/// [`data`], with `ship` as `shïp` 128, `beta` as Beta's `sÿst`, and
-/// `buoys`, if any, as `STR#` 1000.
-fn data_of(ship: &[u8], beta: &[u8], buoys: Option<&[u8]>) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
-        .resource(Ship::TYPE, 128, Some(b"Courier"), ship)
+        .resource(Ship::TYPE, 128, Some(b"Courier"), &ship())
         .resource(ShipAnim::TYPE, 128, None, &ship_anim())
         .resource(RLED, 2000, None, &sheet(36, 1))
         .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[129], 128))
-        .resource(System::TYPE, 129, Some(b"Beta"), beta)
+        .resource(System::TYPE, 129, Some(b"Beta"), &system(100, &[130], 129))
         .resource(System::TYPE, 130, Some(b"Gamma"), &system(200, &[], 130))
         .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar())
         .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &stellar())
@@ -302,9 +232,6 @@ fn data_of(ship: &[u8], beta: &[u8], buoys: Option<&[u8]>) -> Rc<GameData> {
             Some(b"A food surplus"),
             &food_surplus(),
         );
-    if let Some(list) = buoys {
-        fork = fork.resource(StrList::TYPE, 1000, Some(b"Message Buoy Strings"), list);
-    }
     // The map's background: any picture, stretched over the dialog.
     fork = fork.resource(PICT, 8509, Some(b"Map"), &button_picture(13));
     // The buttons' pictures, each state's caps masked.
@@ -316,8 +243,7 @@ fn data_of(ship: &[u8], beta: &[u8], buoys: Option<&[u8]>) -> Rc<GameData> {
             .resource(PICT, state + 100, None, &button_picture(13))
             .resource(PICT, state + 102, None, &button_picture(13));
     }
-    let file = OneFile(fork.build().bytes);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(crate::bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 struct Harness {
@@ -340,49 +266,10 @@ impl Harness {
     fn flying_with(chance: SharedChance) -> Self {
         Self::flying_over(data(), chance)
     }
-
     /// The app over `data`, rolling chances on `chance`, in flight, entered
-    /// from the ship browser with F, drawing the developer's title, which
-    /// these tests read the system shown by.
+    /// from the ship browser with F.
     fn flying_over(data: Rc<GameData>, chance: SharedChance) -> Self {
-        Self::flying_by(data, chance, Rulebook::default())
-    }
-
-    /// The app in flight reading [`RuleKey::MapPlotting`]'s other reading,
-    /// the planner: a click on the map plots the shortest course there.
-    /// Beta is unexplored and Gamma unknown, so the engine's Shift-click
-    /// can't add Gamma after Beta.
-    fn planning() -> Self {
-        Self::flying_by(
-            data(),
-            SharedChance::default(),
-            Rulebook::default().with_override(RuleKey::MapPlotting, RuleSource::Bible),
-        )
-    }
-
-    /// [`Harness::planning`], its jumps arriving at rest just outside the
-    /// no-jump zone, [`RuleKey::JumpArrival`]'s other reading, so the ship
-    /// can jump on from where it arrives.
-    fn planning_at_rest() -> Self {
-        Self::flying_by(
-            data(),
-            SharedChance::default(),
-            Rulebook::default()
-                .with_override(RuleKey::MapPlotting, RuleSource::Bible)
-                .with_override(RuleKey::JumpArrival, RuleSource::Bible),
-        )
-    }
-
-    /// [`Harness::flying_over`], its rules read as `rules` says.
-    fn flying_by(data: Rc<GameData>, chance: SharedChance, rules: Rulebook) -> Self {
-        let screen = start_screen(Rc::clone(&data))
-            .with_rules(rules)
-            .with_chance(chance)
-            .with_flight_overlays(FlightOverlays {
-                title: true,
-                help: true,
-                cheats: false,
-            });
+        let screen = start_screen(Rc::clone(&data)).with_chance(chance);
         let mut harness = Self {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
@@ -471,13 +358,7 @@ impl Harness {
     /// Plots a course to Beta on flight's map and flies out far enough to
     /// jump.
     fn out_towards_beta(&mut self) {
-        self.out_towards(129);
-    }
-
-    /// Plots a course to system `id` on flight's map and flies out far
-    /// enough to jump.
-    fn out_towards(&mut self, id: i16) {
-        self.plot(id);
+        self.plot(129);
         self.fly_out();
     }
 
@@ -509,37 +390,13 @@ impl Harness {
         assert_eq!(self.session().system(), SystemId(129));
     }
 
-    /// Presses J and sends redraws while the ship turns and slows to jump,
-    /// jumps and arrives in system `id`, until the jump's effect is over,
-    /// and returns the last frame.
-    fn jump_into(&mut self, id: i16) -> Frame {
+    /// Presses J and draws frames until the ship has arrived in system `id`
+    /// and the jump's effect is over.
+    fn jump_into(&mut self, id: i16) {
         self.press(Key::Char('j'));
-        for _ in 0..1200 {
-            let frame = self.frame();
-            if self.session().system() == SystemId(id) && self.flight().jump_effect().is_none() {
-                return frame;
-            }
-        }
-        panic!("never arrived in {id}: {:?}", self.ship());
-    }
-
-    /// Presses J and sends redraws until the ship is in Beta, and returns
-    /// the first frame drawn there.
-    fn arrive_in_beta(&mut self) -> Frame {
-        self.arrive_in(129)
-    }
-
-    /// Presses J and sends redraws until the ship is in system `id`, and
-    /// returns the first frame drawn there.
-    fn arrive_in(&mut self, id: i16) -> Frame {
-        self.press(Key::Char('j'));
-        for _ in 0..600 {
-            let frame = self.frame();
-            if self.session().system() == SystemId(id) {
-                return frame;
-            }
-        }
-        panic!("never arrived: {:?}", self.session().system());
+        self.settle_until("the jump's arrival", |harness| {
+            harness.session().system() == SystemId(id) && harness.flight().jump_effect().is_none()
+        });
     }
 
     fn send(&mut self, event: WindowEvent) {
@@ -649,27 +506,11 @@ impl Harness {
         assert_eq!(self.app.take_failures(), []);
         frame
     }
-
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request. The nav brackets' corners (`cicn`
-    /// 10000-10003), which the press's selection draws, may be missing
-    /// from the fixture, so the frames' image failures are not checked.
+    /// Draws frames until the dock approach has cleared the request.
     fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frames += 1;
-            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        let _ = self.app.take_failures();
-    }
-
-    /// Sends `seconds` of redraws and returns the last frame.
-    fn run(&mut self, seconds: u64) -> Frame {
-        let mut last = None;
-        for _ in 0..seconds * 60 {
-            last = Some(self.frame());
-        }
-        last.expect("at least one frame")
+        self.settle_until("the dock approach's clearance", |game| {
+            game.session().dock_cleared()
+        });
     }
 
     /// Flies out from the centre until the ship is at least the minimum
@@ -686,21 +527,6 @@ impl Harness {
             self.frame();
         }
         panic!("never got out: {:?}", self.ship());
-    }
-
-    /// Flies back in towards the centre until the ship is nearer it than
-    /// the minimum jump distance, then lets go: first Down, to face the
-    /// centre while drifting out, then Up.
-    fn fly_in(&mut self) {
-        for _ in 0..600 {
-            if self.ship().position.length() < MIN_JUMP_DISTANCE {
-                self.hold(&[]);
-                return;
-            }
-            self.steer(false);
-            self.frame();
-        }
-        panic!("never got in: {:?}", self.ship());
     }
 
     /// Holds the keys for the next frame of flying `out` from the centre,
@@ -728,294 +554,6 @@ impl Harness {
             self.hold(&[Key::Up]);
         }
     }
-
-    /// The texts the next frame draws in the nav area, stock `ïntf` 128's
-    /// (8, 254)-(184, 286) on the bar, each with its colour.
-    fn nav_runs(&mut self) -> Vec<(String, nova_view::Color)> {
-        let frame = self.frame();
-        frame
-            .batches
-            .iter()
-            .flat_map(|batch| match batch {
-                Batch::Text(runs) => runs.clone(),
-                _ => Vec::new(),
-            })
-            .filter(|run| {
-                let (x, y) = run.origin_px;
-                (838.0..=1014.0).contains(&x) && (254.0..=286.0).contains(&y)
-            })
-            .map(|run| (run.text, run.color))
-            .collect()
-    }
-
-    /// The colour the next frame draws the nav area's destination in.
-    fn destination_color(&mut self) -> nova_view::Color {
-        let runs = self.nav_runs();
-        assert_eq!(runs.len(), 2, "{runs:?}");
-        assert_eq!(runs[0].0, NAV_HYPERSPACE, "{runs:?}");
-        assert_eq!(runs[1].0, NAV_UNEXPLORED, "{runs:?}");
-        runs[1].1
-    }
-}
-
-fn texts(frame: &Frame) -> Vec<String> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Text(runs) => runs.iter().map(|run| run.text.clone()).collect(),
-            _ => Vec::new(),
-        })
-        .collect()
-}
-
-fn shows(frame: &Frame, expected: &str) -> bool {
-    texts(frame).iter().any(|text| text == expected)
-}
-
-/// The solid quads in `color`.
-fn solids(frame: &Frame, color: nova_view::Color) -> Vec<SolidQuad> {
-    let rgba = [color.r, color.g, color.b, color.a].map(|c| f32::from(c) / 255.0);
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Solid(quads) => quads.clone(),
-            _ => Vec::new(),
-        })
-        .filter(|quad| quad.color == rgba)
-        .collect()
-}
-
-/// How many solid quads of `color` `frame` draws inside the course map's
-/// item 3, the paused scene behind its dialog left out.
-fn solids_on_map(frame: &Frame, color: nova_view::Color) -> usize {
-    let area = map_area().grown(0.01);
-    solids(frame, color)
-        .iter()
-        .filter(|quad| {
-            quad.corners
-                .iter()
-                .all(|corner| area.contains(Point::new(corner.x, corner.y)))
-        })
-        .count()
-}
-
-/// The status bar's whole-jumps fuel colour, the fixture `ïntf`'s
-/// `FuelFull`.
-const FUEL_FULL: nova_view::Color = nova_view::Color::from_rgb24(0x00FF_FF00);
-
-/// How wide the status bar's whole-jumps fuel bar is drawn: from the
-/// leftmost to the rightmost corner of its quads, 0 when there are none.
-fn fuel_bar(frame: &Frame) -> f32 {
-    let xs: Vec<f32> = solids(frame, FUEL_FULL)
-        .iter()
-        .flat_map(|quad| quad.corners.map(|corner| corner.x))
-        .collect();
-    let min = xs.iter().copied().fold(f32::INFINITY, f32::min);
-    let max = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    if xs.is_empty() { 0.0 } else { max - min }
-}
-
-/// Whether `a` and `b` are within a thousandth of each other.
-fn close(a: f32, b: f32) -> bool {
-    (a - b).abs() < 1e-3
-}
-
-fn quads(frame: &Frame) -> Vec<QuadInstance> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Sprites { quads, .. } => quads.clone(),
-            _ => Vec::new(),
-        })
-        .collect()
-}
-
-/// A `w` x `h` rectangle centred on (`x`, `y`).
-fn centred(x: f32, y: f32, w: f32, h: f32) -> Rect {
-    Rect {
-        x: x - w / 2.0,
-        y: y - h / 2.0,
-        w,
-        h,
-    }
-}
-
-/// Where the stellar at (0, -300) is drawn with the camera on the ship as
-/// drawn, at the play area's centre, (415, 384).
-fn stellar_drawn(harness: &Harness) -> Rect {
-    let shown = harness.flight().shown_position();
-    centred(415.0 - shown.x, 384.0 - 300.0 - shown.y, 8.0, 8.0)
-}
-
-fn date(harness: &Harness) -> (u8, u8, i32) {
-    let date = harness.session().date();
-    (date.day(), date.month(), date.year())
-}
-
-#[test]
-fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
-    // The planner: Gamma is unknown past unexplored Beta, so the engine's
-    // Shift-click can't add it after Beta. The jump arrives at rest, so the
-    // ship can jump on from where it arrives.
-    let mut harness = Harness::planning_at_rest();
-    harness.frame();
-    assert_eq!(date(&harness), (23, 6, 1177));
-
-    // M opens flight's map: no Enter button, and Return enters nothing
-    // but closes the map, as the original's `_MapFilter` does.
-    harness.press(Key::Char('m'));
-    assert_eq!(harness.showing(), Showing::FlightMap);
-    let map = harness.frame();
-    assert!(shows(&map, DONE_LABEL), "the dialog: {:?}", texts(&map));
-    assert!(!shows(&map, ENTER_LABEL), "{:?}", texts(&map));
-    assert_eq!(ENTER_LABEL, "Enter system (Return)");
-    harness.press(Key::Enter);
-    assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(harness.session().system(), SystemId(128));
-    harness.press(Key::Char('m'));
-    assert_eq!(harness.showing(), Showing::FlightMap);
-
-    // Gamma, unknown, is accepted only from Beta's link, with Shift and a
-    // course to Beta: Shift-clicking Beta then Gamma plots the course
-    // through Beta, drawn on the map.
-    let beta = harness.on_map(129);
-    harness.key(Key::Shift, true);
-    harness.click(beta);
-    assert_eq!(harness.session().course(), [SystemId(129)]);
-    let gamma = harness.on_map(130);
-    harness.click(gamma);
-    harness.key(Key::Shift, false);
-    assert_eq!(harness.session().course(), [SystemId(129), SystemId(130)]);
-    let map = harness.frame();
-    assert_eq!(
-        solids_on_map(&map, BRIGHT_GREEN),
-        2 + 8,
-        "a line for each jump, and the brackets' eight ticks round Gamma"
-    );
-
-    // Back in flight, J at the centre is too close.
-    harness.press(Key::Char('m'));
-    assert_eq!(harness.showing(), Showing::Flight);
-    harness.press(Key::Char('j'));
-    let refused = harness.frame();
-    assert!(shows(&refused, TOO_CLOSE), "{:?}", texts(&refused));
-    assert_eq!(harness.session().system(), SystemId(128));
-
-    // Out past the minimum distance, J jumps to Beta.
-    harness.fly_out();
-    let fuel = harness.session().reserves().fuel.now;
-    assert_eq!(fuel, 300.0);
-    let arrived = harness.jump_into(129);
-    assert!(
-        harness.flight().jump_effect().is_none(),
-        "the effect is over"
-    );
-    let session = harness.session();
-    assert_eq!(session.system(), SystemId(129));
-    assert_eq!(session.course(), [SystemId(130)]);
-    assert_eq!(session.reserves().fuel.now, 200.0);
-    assert_eq!(date(&harness), (24, 6, 1177));
-    assert_eq!(harness.ship().position, nova_sim::Vec2::new(-1001.0, 0.0));
-    assert_eq!(
-        harness.session().pilot().events().count(),
-        0,
-        "the app's chance never fires unless it is given one"
-    );
-    assert!(shows(&arrived, "Beta (sÿst 129)"), "{:?}", texts(&arrived));
-    assert_eq!(quads(&arrived)[0].dest, stellar_drawn(&harness));
-
-    // It rests at the edge, so J goes straight on to Gamma, the
-    // destination.
-    harness.run(1);
-    assert_eq!(harness.ship().position, nova_sim::Vec2::new(-1001.0, 0.0));
-    harness.press(Key::Char('j'));
-    // The warp's end on its clock: about 4.5 s for the fixture's ship.
-    let last = harness.run(6);
-    let session = harness.session();
-    assert_eq!(session.system(), SystemId(130));
-    assert_eq!(session.course(), []);
-    assert_eq!(session.reserves().fuel.now, 100.0);
-    assert_eq!(date(&harness), (25, 6, 1177));
-    assert!(shows(&last, "Gamma (sÿst 130)"), "{:?}", texts(&last));
-    assert_eq!(quads(&last)[0].dest, stellar_drawn(&harness));
-}
-
-#[test]
-fn a_jump_into_a_system_with_a_message_buoy_shows_the_buoy_in_place_of_the_arrival() {
-    let mut harness = Harness::flying_over(buoyed_data(), SharedChance::default());
-    harness.jump_to_beta();
-    assert_eq!(harness.flight().message(), Some(HELLO));
-    let mut plain = Harness::flying();
-    plain.jump_to_beta();
-    assert_eq!(
-        plain.flight().message(),
-        Some("Jumping into the Beta system on June 24th, 1177."),
-        "no buoy at -1"
-    );
-}
-
-#[test]
-fn a_buoy_into_a_system_with_no_stellars_replaces_the_no_stellars_suffix_too() {
-    let mut harness = Harness::flying_over(buoyed_beta(1, -1), SharedChance::default());
-    harness.jump_to_beta();
-    assert_eq!(harness.flight().message(), Some(HELLO), "the buoy alone");
-    let mut plain = Harness::flying_over(buoyed_beta(-1, -1), SharedChance::default());
-    plain.jump_to_beta();
-    assert_eq!(
-        plain.flight().message(),
-        Some("Jumping into the Beta system on June 24th, 1177. No stellar objects present."),
-        "no buoy at -1: the suffix shows"
-    );
-}
-
-#[test]
-fn j_straight_after_arriving_jumps_on_to_the_next_system() {
-    // At rest just outside the zone, by the other reading of the arrival.
-    let mut harness = Harness::planning_at_rest();
-    harness.out_towards(130);
-    harness.arrive_in(129);
-    // Once the jump effect is over, and a second later, J still goes on.
-    let mut frames = 0;
-    while harness.flight().jump_effect().is_some() {
-        frames += 1;
-        assert!(frames <= 120, "the jump effect never ended");
-        harness.frame();
-    }
-    harness.run(1);
-    harness.press(Key::Char('j'));
-    let pressed = harness.frame();
-    assert!(!shows(&pressed, TOO_CLOSE), "{:?}", texts(&pressed));
-    assert!(harness.flight().jump_effect().is_some(), "jumping on");
-    harness.run(6);
-    let session = harness.session();
-    assert_eq!(session.system(), SystemId(130));
-    assert_eq!(session.reserves().fuel.now, 100.0);
-}
-
-#[test]
-fn j_as_the_new_system_fades_in_jumps_on_to_the_next_system() {
-    let mut harness = Harness::planning();
-    harness.out_towards(130);
-    let first = harness.arrive_in(129);
-    assert!(white(&first) || fading(&first), "fading in from white");
-    harness.press(Key::Char('j'));
-    let pressed = harness.frame();
-    assert!(fading(&pressed), "still fading in");
-    assert!(!shows(&pressed, TOO_CLOSE), "{:?}", texts(&pressed));
-    let session = harness.session();
-    assert!(
-        session.preparing_jump() == Some(SystemId(130)) || session.jumping() == Some(SystemId(130)),
-        "jumping on: {:?} {:?}",
-        session.preparing_jump(),
-        session.jumping()
-    );
-    harness.run(8);
-    let session = harness.session();
-    assert_eq!(session.system(), SystemId(130));
-    assert_eq!(session.reserves().fuel.now, 100.0);
 }
 
 #[test]
@@ -1029,13 +567,8 @@ fn escape_closes_flights_map_and_then_leaves_flight() {
     assert_eq!(harness.showing(), Showing::ShipBrowser);
 }
 
-/// The fixture has no `snd `s, so the warp ends by its fallback, which
-/// plays the warp-out on its own pass, and the arrival a pass later, the
-/// natural end, plays it again: a missing 130 never counts as playing
-/// (`_HandlePlayer` @0x6bbe1), so the original's second `PlaySound` is as
-/// silent as its first.
 #[test]
-fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
+fn a_jumps_warp_sounds_reach_the_audio_port() {
     let audio = RecordingAudio::new();
     let log = audio.log();
     let mut harness = Harness::flying();
@@ -1046,84 +579,27 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
     harness.fly_out();
     log.borrow_mut().clear();
     harness.jump_into(129);
-    assert_eq!(harness.session().system(), SystemId(129));
-    let plays: Vec<AudioCommand> = log
-        .borrow()
-        .iter()
-        .copied()
-        .filter(|command| {
-            matches!(
-                command,
-                AudioCommand::Play { .. } | AudioCommand::PlayAtRate { .. }
-            )
-        })
-        .collect();
-    assert_eq!(plays, [warp_up(), warp_out(), warp_out()]);
-}
-
-/// The warp-up's cue, pitched by the fixture ship's warp factor, 1.3: at
-/// 65536 / 1.3 (`_AdjustWarpSoundSpeed` @0x5ecc).
-fn warp_up() -> AudioCommand {
-    let cue = SimSound::JumpBegan { rate: 50_412 }
+    let up = SimSound::JumpBegan { rate: 50_412 }
         .cue()
-        .expect("the warp-up plays");
-    AudioCommand::PlayAtRate {
-        sound: cue.sound,
-        volume: AudioSettings::default().effects_volume,
-        priority: nova_audio::Priority::new(cue.priority),
-        rate: nova_audio::port::PlaybackRate::from_fixed(cue.rate),
-    }
-}
-
-/// The warp-out's cue.
-fn warp_out() -> AudioCommand {
-    let cue = SimSound::Arrived.cue().expect("the warp-out plays");
-    AudioCommand::Play {
-        sound: cue.sound,
-        volume: AudioSettings::default().effects_volume,
-        priority: nova_audio::Priority::new(cue.priority),
-    }
-}
-
-/// The fixture has no `snd `s, so the warp-up's length is the engine's
-/// stand-in, 350 Mac ticks, pitched by w 1.3 to 455, past the fallback
-/// end's d / w = 269: it still plays as the fallback fires, as stock 128
-/// does for a w of 1.3. The fallback's pass halts it, 128 then 129, before
-/// the warp-out, as `_HandlePlayer`'s fallback end does (@0x6c6b7,
-/// @0x6c6d2, then 130 @0x6c706). The arrival a pass later is the natural
-/// end: it halts nothing, and finds the missing 130 not playing
-/// (@0x6bbe1), so plays it again.
-#[test]
-fn a_jump_through_the_app_halts_the_warp_up_before_the_warp_out() {
-    let audio = RecordingAudio::new();
-    let log = audio.log();
-    let mut harness = Harness::flying();
-    harness.app = harness
-        .app
-        .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
-    harness.plot(129);
-    harness.fly_out();
-    log.borrow_mut().clear();
-    harness.jump_into(129);
-    assert_eq!(harness.session().system(), SystemId(129));
-    let warp = |sound: nova_data::SoundId| (128..=130).contains(&sound.0);
-    let commands: Vec<AudioCommand> = log
-        .borrow()
-        .iter()
-        .copied()
-        .filter(|command| match *command {
-            AudioCommand::Play { sound, .. }
-            | AudioCommand::PlayAtRate { sound, .. }
-            | AudioCommand::Halt { sound } => warp(sound),
-            _ => false,
-        })
-        .collect();
-    let halt = |id| AudioCommand::Halt {
-        sound: nova_data::SoundId(id),
-    };
-    assert_eq!(
-        commands,
-        [warp_up(), halt(128), halt(129), warp_out(), warp_out()]
+        .expect("the warp-up plays")
+        .sound;
+    let out = SimSound::Arrived.cue().expect("the warp-out plays").sound;
+    let log = log.borrow();
+    assert!(
+        log.iter().any(
+            |command| matches!(*command, AudioCommand::PlayAtRate { sound, .. } if sound == up)
+        ),
+        "the warp-up: {log:?}"
+    );
+    assert!(
+        log.iter()
+            .any(|command| matches!(*command, AudioCommand::Play { sound, .. } if sound == out)),
+        "the warp-out: {log:?}"
+    );
+    assert!(
+        log.iter()
+            .any(|command| matches!(*command, AudioCommand::Halt { sound } if sound == up)),
+        "the warp-up halted: {log:?}"
     );
 }
 
@@ -1207,81 +683,15 @@ fn an_opened_pilots_jump_rolls_the_events_on_the_apps_chance() {
     );
 }
 
+// The fuel is compared with the very value saved.
 #[test]
-fn a_jump_takes_a_jumps_fuel_off_the_gauge_and_the_hud_bar_and_it_stays_off() {
-    let mut harness = Harness::flying();
-    harness.out_towards_beta();
-    let before = harness.session().reserves().fuel;
-    assert_eq!(before.now, 300.0);
-    let bar_before = fuel_bar(&harness.frame());
-    assert!(close(bar_before, 149.0), "the whole bar: {bar_before}");
-
-    let arrived = harness.arrive_in_beta();
-    let after = before.now - JUMP_FUEL;
-    assert_eq!(harness.session().reserves().fuel.now, after);
-    let bar = fuel_bar(&arrived);
-    // Its right edge truncated, as `_DrawStatusFuel` draws it.
-    assert!(
-        close(bar, (bar_before * after / before.max).trunc()),
-        "{bar}"
-    );
-
-    let later = harness.run(5);
-    assert_eq!(harness.session().reserves().fuel.now, after);
-    assert!(close(fuel_bar(&later), bar), "{}", fuel_bar(&later));
-}
-
-#[test]
-fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
-    // A unit every 30 ticks: a unit a second.
-    const REGEN_TICKS: i16 = 30;
-    let data = data_with(&ship_with_regen(REGEN_TICKS));
-    // Arriving at rest, by the other reading, so the second jump starts
-    // from where the first arrives.
-    let at_rest = Rulebook::default().with_override(RuleKey::JumpArrival, RuleSource::Bible);
-    let mut harness = Harness::flying_by(data, SharedChance::default(), at_rest);
-    // A first jump drains the tank below full, so the second jump's
-    // `before` sits where regen is free to show, not clamped at the top.
-    harness.jump_to_beta();
-    // It rests at the edge, so plotting on to Gamma needs no flying out.
-    harness.run(1);
-    harness.out_towards(130);
-    let bar_before = fuel_bar(&harness.frame());
-    let before = harness.session().reserves().fuel.now;
-    assert!(before < 300.0, "below full, so regen could show: {before}");
-
-    let arrived = harness.arrive_in(130);
-    // `_HandlePlayer` regenerates through the warp stage too
-    // (@0x6d96d-0x6d9c3): at its normal rate, a unit a second, over a warp
-    // shorter than 6 seconds, and no lump on arrival.
-    let landed_with = harness.session().reserves().fuel.now;
-    assert!(
-        before - JUMP_FUEL < landed_with && landed_with < before - JUMP_FUEL + 6.0,
-        "regained through the warp at its rate alone: {landed_with}"
-    );
-    assert!(fuel_bar(&arrived) < bar_before, "{}", fuel_bar(&arrived));
-
-    let seconds: u16 = 5;
-    harness.run(u64::from(seconds));
-    // The normal rate over the time flown, plus a unit for the frame
-    // boundaries the fixed step may fall either side of.
-    let ticks = f32::from(seconds) * TICKS_PER_SECOND as f32;
-    let regen_over_the_run = ticks / f32::from(REGEN_TICKS);
-    let at_most = landed_with + regen_over_the_run + 1.0;
-    let fuel = harness.session().reserves().fuel.now;
-    assert!(
-        landed_with < fuel && fuel <= at_most,
-        "creeping back at its normal rate, at most {at_most}: {fuel}"
-    );
-}
-
-#[test]
-fn an_opened_pilot_resumes_with_the_fuel_its_saved_jump_left() {
+#[allow(clippy::float_cmp)]
+fn an_opened_pilot_resumes_where_its_saved_jump_left_it_with_its_fuel() {
     let store = MemoryPilots::new();
     let mut first = Harness::on_the_menu(SharedChance::default(), &store);
     first.new_pilot("Ada");
     first.jump_to_beta();
-    assert_eq!(first.session().reserves().fuel.now, 300.0 - JUMP_FUEL);
+    let fuel = first.session().reserves().fuel.now;
     first.press(Key::Escape);
     assert_ne!(first.showing(), Showing::Flight, "left flight, saving");
 
@@ -1292,170 +702,24 @@ fn an_opened_pilot_resumes_with_the_fuel_its_saved_jump_left() {
     assert_eq!(harness.showing(), Showing::Flight);
     let session = harness.session();
     assert_eq!(session.system(), SystemId(129));
-    assert_eq!(session.reserves().fuel.now, 300.0 - JUMP_FUEL);
-    let bar = fuel_bar(&harness.frame());
-    assert!(close(bar, (149.0_f32 * 2.0 / 3.0).trunc()), "{bar}");
-}
-
-/// `ïntf` 128's bright text colour.
-const BRIGHT: nova_view::Color = nova_view::Color::from_rgb24(0x00FF_FFFF);
-/// `ïntf` 128's dim text colour.
-const DIM: nova_view::Color = nova_view::Color::from_rgb24(0x0080_8080);
-
-#[test]
-fn the_hyperspace_destination_brightens_once_the_ship_is_out_far_enough_to_jump() {
-    let mut game = Harness::flying();
-    game.plot(129);
-    assert_eq!(game.destination_color(), DIM, "plotted at the centre");
-    // The nav area refreshes every 15 engine ticks (0.5 s), so the
-    // colour may lag the ship by up to that.
-    let mut dim_frames = 0;
-    let mut late_frames = 0;
-    loop {
-        game.steer(true);
-        let color = game.destination_color();
-        let out = game.ship().position.length() >= MIN_JUMP_DISTANCE;
-        if color == BRIGHT {
-            assert!(out, "bright only once out: {:?}", game.ship());
-            break;
-        }
-        assert_eq!(color, DIM);
-        if out {
-            late_frames += 1;
-            assert!(late_frames < 60, "never brightened: {:?}", game.ship());
-        }
-        dim_frames += 1;
-        assert!(dim_frames < 600, "never got out: {:?}", game.ship());
-    }
-    assert!(dim_frames > 0, "it was dim on the way out");
-    game.hold(&[]);
-    assert_eq!(game.destination_color(), BRIGHT, "still out");
-    game.fly_in();
-    let mut late_frames = 0;
-    while game.destination_color() != DIM {
-        late_frames += 1;
-        assert!(late_frames < 60, "never dimmed: {:?}", game.ship());
-    }
-    assert!(
-        game.ship().position.length() < MIN_JUMP_DISTANCE,
-        "back inside"
-    );
+    assert_eq!(session.reserves().fuel.now, fuel);
 }
 
 #[test]
-fn a_ship_without_a_jumps_fuel_keeps_the_destination_dim_out_past_the_jump_distance() {
-    let mut game = Harness::flying_over(data_with(&ship_with_fuel(99)), SharedChance::default());
-    game.out_towards(129);
-    assert_eq!(game.destination_color(), DIM);
-    assert!(game.ship().position.length() >= MIN_JUMP_DISTANCE);
-}
-
-/// The alphas of the white quads covering the whole screen: a jump's fade.
-fn screen_whites(frame: &Frame) -> Vec<f32> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Solid(quads) => quads.clone(),
-            _ => Vec::new(),
-        })
-        .filter(|quad| {
-            let xs = quad.corners.map(|corner| corner.x);
-            let ys = quad.corners.map(|corner| corner.y);
-            let spans = |values: [f32; 4], to: f32| {
-                values.iter().copied().fold(f32::INFINITY, f32::min) <= 0.0
-                    && values.iter().copied().fold(f32::NEG_INFINITY, f32::max) >= to
-            };
-            quad.color[..3] == [1.0, 1.0, 1.0] && spans(xs, 1024.0) && spans(ys, 768.0)
-        })
-        .map(|quad| quad.color[3])
-        .collect()
-}
-
-/// Whether `frame` is partway through a fade: a translucent white over the
-/// whole screen.
-fn fading(frame: &Frame) -> bool {
-    screen_whites(frame).iter().any(|&alpha| alpha < 1.0)
-}
-
-/// Whether `frame` is covered in solid white.
-fn white(frame: &Frame) -> bool {
-    screen_whites(frame).contains(&1.0)
-}
-
-#[test]
-fn with_hyperspace_effects_off_a_jump_arrives_without_fading() {
+fn the_hyperspace_effects_preference_reaches_flight_off_and_on_again() {
     let mut harness = Harness::on_the_menu_with_prefs(&MemoryPilots::new());
     harness.new_pilot("Ada");
-
-    // Command+comma, a click on Hyperspace Effects, and Return turn the
-    // effects off.
-    harness.command_comma();
-    assert_eq!(harness.showing(), Showing::Preferences);
-    let at = harness.hyperspace_effects_box();
-    harness.click(at);
-    harness.press(Key::Enter);
-    assert_eq!(harness.showing(), Showing::Flight);
-    assert!(!harness.flight().hyperspace_effects());
-
-    // J: the ship warps away with no fade, arrives when the session ends
-    // the warp, the arrival shows solid white once, and the jump is over.
-    harness.out_towards_beta();
-    harness.press(Key::Char('j'));
-    let mut warping = None;
-    let mut arrived = None;
-    let mut whites = 0;
-    for n in 0..1200_u64 {
-        let frame = harness.frame();
-        assert!(!fading(&frame), "frame {n} fades");
-        whites += usize::from(white(&frame));
-        if warping.is_none() && harness.flight().jump_effect().is_some() {
-            warping = Some(n);
-        }
-        if arrived.is_none() && harness.session().system() == SystemId(129) {
-            arrived = Some(n);
-            assert!(white(&frame), "the arrival frame is white");
-        }
-        if let Some(at) = arrived
-            && harness.flight().jump_effect().is_none()
-        {
-            let over = n - at;
-            let flash_frames = ARRIVAL_FLASH_FOR.as_millis() as u64 * 60 / 1000 + 1;
-            assert!(over <= flash_frames, "over {over} frames after arriving");
-            break;
-        }
+    let was = harness.flight().hyperspace_effects();
+    for on in [!was, was] {
+        // Command+comma, a click on Hyperspace Effects, and Return.
+        harness.command_comma();
+        assert_eq!(harness.showing(), Showing::Preferences);
+        let at = harness.hyperspace_effects_box();
+        harness.click(at);
+        harness.press(Key::Enter);
+        assert_eq!(harness.showing(), Showing::Flight);
+        assert_eq!(harness.flight().hyperspace_effects(), on);
     }
-    let warping = warping.expect("warped");
-    let arrived = arrived.expect("arrived in Beta");
-    assert!(arrived > warping, "arrived {arrived}, warping {warping}");
-    assert!(whites >= 1, "a white arrival frame");
-    assert!(harness.flight().jump_effect().is_none(), "the jump is over");
-
-    // Command+comma, Tab to the box, Space and Return turn them back on:
-    // the next jump fades out and in again.
-    harness.command_comma();
-    for _ in 0..3 {
-        harness.press(Key::Tab);
-    }
-    harness.press(Key::Space);
-    harness.press(Key::Enter);
-    assert_eq!(harness.showing(), Showing::Flight);
-    assert!(harness.flight().hyperspace_effects());
-    harness.run(1);
-    harness.out_towards(130);
-    harness.press(Key::Char('j'));
-    let mut faded_out = false;
-    let mut faded_in = false;
-    for _ in 0..1200 {
-        let frame = harness.frame();
-        let gamma = harness.session().system() == SystemId(130);
-        faded_out |= !gamma && fading(&frame);
-        faded_in |= gamma && fading(&frame);
-        if gamma && harness.flight().jump_effect().is_none() {
-            break;
-        }
-    }
-    assert!(faded_out && faded_in, "out {faded_out}, in {faded_in}");
 }
 
 /// An independent `sÿst` at map (`x`, 0) with these hyperlinks and
@@ -1530,11 +794,8 @@ fn gate_data() -> Rc<GameData> {
             Some(b"Default status bar"),
             &interface(),
         )
-        .resource(PICT, 700, Some(b"Status Bar"), &status_picture())
-        .build()
-        .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
+    Rc::new(one_file(crate::bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 impl Harness {
@@ -1553,47 +814,14 @@ impl Harness {
         assert_eq!(harness.session().system(), SystemId(128), "not yet");
         harness
     }
-
-    /// Sends redraws until the gate's effect is over, and returns the
-    /// last frame.
-    fn come_out(&mut self) -> Frame {
-        for _ in 0..600 {
-            let frame = self.frame();
-            if self.flight().jump_effect().is_none() {
-                return frame;
-            }
-        }
-        panic!("the gate's effect never ended");
-    }
 }
 
 #[test]
-fn a_hypergate_picked_on_the_map_brings_the_ship_out_of_its_linked_gate() {
+fn a_hypergate_picked_on_the_map_brings_the_ship_into_its_system() {
     let mut harness = Harness::gamma_picked();
     harness.press(Key::Char('m'));
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(harness.session().system(), SystemId(130));
-    assert_eq!(harness.ship().position, nova_sim::Vec2::new(50.0, 60.0));
-    assert_eq!(harness.ship().heading, 90.0);
-    assert_eq!(harness.session().reserves().fuel.now, 300.0, "no fuel");
-    let frame = harness.come_out();
-    assert!(
-        shows(
-            &frame,
-            "Exiting hypergate in the Gamma system on June 23rd, 1177."
-        ),
-        "{:?}",
-        texts(&frame)
-    );
-}
-
-#[test]
-fn escape_on_the_hypergate_map_enters_the_gate_too() {
-    let mut harness = Harness::gamma_picked();
-    harness.press(Key::Escape);
-    assert_eq!(harness.showing(), Showing::Flight);
-    assert_eq!(harness.session().system(), SystemId(130));
-    assert_eq!(harness.ship().position, nova_sim::Vec2::new(50.0, 60.0));
 }
 
 crate::common::entry_harness!(Harness, click, frame);

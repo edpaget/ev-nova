@@ -24,20 +24,18 @@
 //! The catalog is built here, in code, so the tests need no `NOVA_DATA`.
 //! `stock_flight_seam` is the stock variant.
 
-use std::io;
-use std::path::Path;
 use std::rc::Rc;
 
 use nova_data::records::character::Character;
+use nova_data::records::fixture::ShipBuilder;
 use nova_data::records::mission::Mission;
 use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader};
 use nova_sim::Rulebook;
 use nova_sim::fixture::SessionBuilder;
 use nova_sim::flight_frame::{Answer, FlightCommand, FlightFrame};
@@ -355,24 +353,6 @@ fn a_stellar_key_reaches_the_session_and_its_frame_shows_the_selection() {
 // The course map and the nav keys, through a whole `FlightView` over a
 // real session.
 
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
     for (i, value) in values.iter().enumerate() {
         bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
@@ -389,9 +369,13 @@ fn character() -> Vec<u8> {
 
 /// A ship that flies.
 fn ship() -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[30, 300, 300, 30, 300]);
-    bytes
+    ShipBuilder::new()
+        .shield(30)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .build()
 }
 
 /// A `sÿst` at map (`x`, 0) with these `Con` links and `NavDefs`.
@@ -446,8 +430,7 @@ fn data() -> Rc<GameData> {
         .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &planet())
         .build()
         .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(fork).load())
 }
 
 /// A whole flight view over a real session of [`data`], flying in Alpha.
@@ -776,22 +759,23 @@ impl nova_sim::Behaviour for Idle {
 /// each) and `items` (each with its count), destroyed at once in
 /// explosion type 0, `bööm` 128.
 fn armed_ship(shield: i16, armor: i16, weapons: &[i16], items: &[(i16, i16)]) -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x02, &[shield, 300, 300, 30, 300]);
-    put_i16s(&mut bytes, 0x0E, &[armor]);
-    put_i16s(&mut bytes, 0x12, &[-1; 4]);
-    put_i16s(&mut bytes, 0x12, weapons);
-    put_i16s(&mut bytes, 0x1A, &[1; 4]);
-    put_i16s(&mut bytes, 0x38, &[-1, 0]);
-    put_i16s(&mut bytes, 0x42, &[1]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    put_i16s(&mut bytes, 0x6CE, &[-1; 4]);
-    for (slot, &(item, count)) in items.iter().enumerate() {
-        put_i16s(&mut bytes, 0x4E + 2 * slot, &[item]);
-        put_i16s(&mut bytes, 0x56 + 2 * slot, &[count]);
-    }
-    bytes
+    let (ids, counts): (Vec<i16>, Vec<i16>) = items.iter().copied().unzip();
+    ShipBuilder::new()
+        .shield(shield)
+        .accel(300)
+        .speed(300)
+        .maneuver(30)
+        .fuel(300)
+        .armor(armor)
+        .weap_types(&[-1; 8])
+        .weap_types(weapons)
+        .weap_counts(&[1; 4])
+        .explode1(-1)
+        .inherent_ai(1)
+        .default_items(&[-1; 8])
+        .default_items(&ids)
+        .item_counts(&counts)
+        .build()
 }
 
 /// The blaster, `wëap` 128: unguided, firing every tick, 20 pixels a
@@ -932,8 +916,7 @@ fn fighting_data(items: &[(i16, i16)]) -> Rc<GameData> {
         .resource(nova_data::graphics::RLED, CURSOR, None, &cursor())
         .build()
         .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(fork).load())
 }
 
 /// The mouse cursor's `rlëD`.
@@ -1545,8 +1528,7 @@ fn port_data() -> Rc<GameData> {
         )
         .build()
         .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(fork).load())
 }
 
 /// A whole flight view over a real session of [`port_data`], landed on

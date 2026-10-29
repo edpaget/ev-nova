@@ -54,10 +54,6 @@ pub const ICONS: [Icon; 8] = [
     icon!(512),
 ];
 
-/// The 256 px icon, which the AppImage's root carries beside its desktop
-/// file (as `<identifier>.png` and `.DirIcon`).
-pub const ICON_256: Icon = icon!(256);
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,11 +87,5 @@ mod tests {
     fn the_icons_are_the_standard_hicolor_sizes() {
         let sizes: Vec<u32> = ICONS.iter().map(|icon| icon.size).collect();
         assert_eq!(sizes, [16, 24, 32, 48, 64, 128, 256, 512]);
-    }
-
-    #[test]
-    fn the_256_icon_is_the_hicolor_one() {
-        assert_eq!(ICON_256.size, 256);
-        assert!(ICONS.contains(&ICON_256));
     }
 }

@@ -208,13 +208,14 @@ mod tests {
 
     use nova_rsrc::ResType;
     use nova_rsrc::fixture::ForkBuilder;
+    use nova_rsrc::fixture::forks::MemForks;
 
     use super::*;
     use crate::decode::Record;
     use crate::graphics::fixture::{RledBuilder, rgb888_pict};
     use crate::graphics::{PICT, RLED};
     use crate::records::spin::Spin;
-    use crate::store::fake::{FakeForks, FakeTree};
+    use crate::store::fixture::FakeTree;
     use crate::store::fs::EntryKind::File;
     use crate::testutil::buf;
 
@@ -266,7 +267,7 @@ mod tests {
                 &[("stellars", File), ("spins", File), ("sprites", File)],
             )
             .dir("/p", &plugins);
-        let mut forks = FakeForks::new()
+        let mut forks = MemForks::new()
             .file("/d/stellars", fork(&[(Stellar::TYPE, 128, stellar(3))]))
             .file(
                 "/d/spins",
@@ -274,7 +275,7 @@ mod tests {
             )
             .file("/d/sprites", fork(&[(RLED, 2000, sheet(8, 0x7C00))]));
         for (name, bytes) in extra {
-            forks = forks.file(&format!("/p/{name}"), bytes.clone());
+            forks = forks.file(format!("/p/{name}"), bytes.clone());
         }
         GameData::load(&tree, &forks, Path::new("/d"), Some(Path::new("/p"))).expect("opens")
     }

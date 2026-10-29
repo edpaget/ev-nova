@@ -24,12 +24,21 @@ exclude_re = [
     "nova-appkit/src/keyboard\\.rs:[0-9]+:[0-9]+: replace full_keyboard_access ",
     # The highest glibc version in `objdump -p`'s output: replacing the
     # highest so far with an equal one (`>=`) keeps the same version.
-    "nova-bundle/src/linux/appimage/links\\.rs:[0-9]+:[0-9]+: replace > with >= in Links::parse$",
+    "nova-bundle/src/linux/links\\.rs:[0-9]+:[0-9]+: replace > with >= in Links::parse$",
     # Windows-only code (`cfg(windows)`): off Windows it is never compiled,
     # so no mutant of it can fail a build or a test here. The windows-latest
     # CI leg runs its tests (`nova-win32/tests/it`, `nova/tests/it/windows_exe.rs`).
     "nova-win32/src/console\\.rs:",
+    "nova-win32/src/winsparkle\\.rs:",
     "nova/src/platform/console\\.rs:[0-9]+:[0-9]+: replace <impl StdConsole for Win32Console>",
+    # WinSparkle's Windows forwards, each one call into nova-win32: the
+    # windows-latest legs run `a_test_binary_has_no_dll_beside_it` and
+    # nova-win32's real-DLL test (`NOVA_WINSPARKLE_DLL`); the decisions are
+    # `nova::winsparkle`'s, tested on every host.
+    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace windows::<impl WinSparkleApi for WinSparkleDll>",
+    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace windows::<impl WinSparkleLoader for DllLoader>",
+    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace windows::DllLoader::beside_exe ",
+    "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace windows::winsparkle_source ",
     "nova/src/platform/window\\.rs:[0-9]+:[0-9]+: replace with_exe_icon ",
     # Linux- and BSD-only code: the window's app id (`with_app_id`), which
     # winit gives no way to read back, so no test can see it even there.
@@ -282,11 +291,11 @@ exclude_re = [
     # warnings' sheet once the loop waits. It needs a real window, display
     # and, for the menu bar, the handlers and the sheet, `NSApplication` on
     # the main thread. The decisions it forwards to (`translate`,
-    # `App::handle`, `App::exiting`, `MenuSync`, `gpu_failure`,
+    # `App::handle`, `App::exiting`, `MenuSync`, `choose`, `gpu_failure`,
     # `exit::exit`, `Report::take_alert`) are mutated and tested, and
     # `MenuBar::install` / `set_enabled` and `AppleEvents::install` run on
     # the main thread in nova-appkit's `tests/it`.
-    "impl ApplicationHandler<MenuCommand> for Runner<S>>::(resumed|window_event|user_event|about_to_wait|exiting)",
+    "impl ApplicationHandler<LoopEvent> for Runner<S>>::(resumed|window_event|user_event|about_to_wait|exiting)",
     "nova/src/platform/runner\\.rs:.*replace Running<S>::(after_events|sync_menu|install_menu|print_reports) with \\(\\)$",
     "nova/src/platform/runner\\.rs:.*replace Running<S>::install_menu -> Vec<String> with ",
     # `AppleEvents`'s drop removes its handlers from `NSAppleEventManager`.
@@ -308,6 +317,21 @@ exclude_re = [
     # with both answers.
     "nova/src/startup/report\\.rs:.*replace <impl Terminal for StdTerminal>::stderr_is_terminal -> bool with ",
     "nova/src/platform/menu_bar\\.rs:.*replace <impl MenuPort for MenuBar>::set_enabled with \\(\\)$",
+    # Sparkle's updater started and asked to check: each one message to its
+    # controller, which starts Sparkle's network checks and windows, so no
+    # hermetic test sends it. The decisions (when to start, when to check,
+    # which updater) are `nova::app`'s, tested over a recording updater;
+    # the real controller is made in nova-appkit's opt-in `updater` test,
+    # and the phase's After-landing check installs an update. Its `Debug`
+    # needs that real controller too.
+    "nova-appkit/src/updater\\.rs:.*replace SparkleUpdater::(start|check_now) with \\(\\)$",
+    "nova-appkit/src/updater\\.rs:.*replace <impl fmt::Debug for SparkleUpdater>::fmt ",
+    "nova/src/platform/updater\\.rs:.*replace (macos::)?<impl Updater for SparkleUpdater>::(start|check_now) with \\(\\)$",
+    # A test binary has no bundle, so it names no feed: `false` is what it
+    # answers. nova-appkit's tests read a bundle that names one through
+    # `names_feed`, which `feed_configured` asks of the app's bundle.
+    "nova-appkit/src/updater\\.rs:.*replace feed_configured -> bool with false$",
+    "nova/src/platform/updater\\.rs:.*replace (macos::)?<impl UpdaterSource for SparkleSource>::feed_configured -> bool with false$",
     # The developer tools' window glue (the `dev-tools` feature): egui-winit's
     # input state over a real winit window, which tests cannot build. Each
     # forwards to tested parts: the panel (`DevPanel`), the painter

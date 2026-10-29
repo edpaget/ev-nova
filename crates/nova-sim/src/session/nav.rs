@@ -1134,16 +1134,18 @@ mod tests {
 
     #[test]
     fn a_pilot_loaded_with_a_course_flies_with_none_by_the_engine() {
+        // The engine's reading named, not the default: nova-sim-base's
+        // `rulebook::tests::the_loaded_course_rule_is_found_by_its_key_and_reads_the_engine`
+        // pins which reading is the default.
         let catalog = catalog();
-        let mut session =
-            Session::load(&catalog, coursed_pilot(&catalog), &Rulebook::default()).expect("flies");
+        let rules = Rulebook::default().with_override(RuleKey::LoadedCourse, RuleSource::Engine);
+        let mut session = Session::load(&catalog, coursed_pilot(&catalog), &rules).expect("flies");
         assert_eq!(session.nav_mode(), NavMode::Off);
         assert_eq!(session.course(), ids(&[]), "the course cleared");
         assert_eq!(session.pilot().course_start(), None, "the start cleared");
         session.hyperspace_mode();
         assert_ne!(session.nav_mode(), hyperspace(131), "no course hop cued");
-        let mut session =
-            Session::load(&catalog, coursed_pilot(&catalog), &Rulebook::default()).expect("flies");
+        let mut session = Session::load(&catalog, coursed_pilot(&catalog), &rules).expect("flies");
         fly_out(&mut session, &catalog);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
     }
@@ -1328,7 +1330,9 @@ mod tests {
         let mut session = Session::start(&hub()).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         session.chart.nav = hyperspace(135);
+        let course = session.course().to_vec();
         assert_eq!(session.select_next_system(), Some(SystemId(134)), "wraps");
+        assert_eq!(session.course(), course, "the course kept");
     }
 
     #[test]

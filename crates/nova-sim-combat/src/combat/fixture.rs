@@ -1,25 +1,24 @@
-//! Test support for the combat layer's tests and the tests above it,
-//! behind the `fixture` feature: a fight's sides with no governments
-//! ([`among`]), and a plain strike ([`strike`]).
+//! Test support for the combat layer's tests and the tests above it.
+//! Behind the `fixture` feature, for other crates' tests: a plain strike
+//! ([`strike`]). For this crate's tests alone: a fight's sides with no
+//! governments (`among`).
 
-use super::planet_type::BeamPlanetFlag;
-use super::projectile::Target;
-use super::sides::{PassThrough, Sides};
 use super::{Nominal, ShipRef, Strike};
-use crate::govt::Governments;
 
-/// No governments at all, for [`among`].
-static NO_GOVERNMENTS: Governments = Governments::empty();
+/// No governments at all, for `among`.
+#[cfg(test)]
+static NO_GOVERNMENTS: crate::govt::Governments = crate::govt::Governments::empty();
 
 /// The fight's sides as `targets` alone make them: no governments, and
 /// the original's pass-through and beam planet-type bit.
+#[cfg(test)]
 #[must_use]
-pub fn among(targets: &[Target]) -> Sides<'_> {
-    Sides {
+pub fn among(targets: &[super::projectile::Target]) -> super::sides::Sides<'_> {
+    super::sides::Sides {
         targets,
         govts: &NO_GOVERNMENTS,
-        pass_through: PassThrough::default(),
-        beam_planet_flag: BeamPlanetFlag::default(),
+        pass_through: super::sides::PassThrough::default(),
+        beam_planet_flag: super::planet_type::BeamPlanetFlag::default(),
     }
 }
 
@@ -27,6 +26,9 @@ pub fn among(targets: &[Target]) -> Sides<'_> {
 /// damage taken and 12 passed both ways, weighing nothing and downing
 /// nothing: what a test that only needs some answered hit builds on
 /// (`..strike(ship, by)`).
+///
+/// Kept for nova-sim-ai's and nova-sim's tests: a plain answered strike,
+/// built from public fields, pinning no rule.
 #[must_use]
 pub fn strike(ship: ShipRef, by: ShipRef) -> Strike {
     Strike {

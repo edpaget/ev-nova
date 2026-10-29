@@ -95,8 +95,9 @@ dev-tools = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit", "dep:wgpu"]
 # Exposes the test support this crate's integration tests reach the app
 # through: the current screen to change (`App::screen_mut`) and the
 # flight screen to ask (`AppScreen::flight_view_mut`), as a screen's ask
-# of the flight takes `&mut`.
-fixture = []
+# of the flight takes `&mut`, and whether flight holds queued input
+# (`AppScreen::input_queued`, over nova-view's `FlightView::input_queued`).
+fixture = ["nova-view/fixture"]
 
 [lints]
 workspace = true
@@ -118,3 +119,4 @@ summary = "Play EV Nova from your own copy of its data"
 description = "A new engine for the space trading and combat game EV Nova. It plays the game from your own copy of its data files, which are not included."
 homepage = "https://github.com/edpaget/ev-nova"
 developer = "ev-nova contributors"
+update_public_key = "TGg6/LdNG0Z0jRp+lif1okIbpGrcSdQ7vH1bnmBxko0="

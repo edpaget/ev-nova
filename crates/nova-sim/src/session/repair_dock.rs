@@ -8,13 +8,11 @@
 //! `comm_calls` module).
 //!
 //! - The player is unboarded (+0xb9 = 0, @0x86d92).
-//! - While the player's ship is disabled, its armour rises
-//!   [`REPAIR_STEP`] at a time (@0x86d9c-0x86dcf), by the session's
-//!   [`DisableRule`], and its condition
-//!   is decided again at once. The original's loop has no cap; this one
-//!   stops at the armour's most, so a rule that never lets the ship fly
-//!   still ends. A player no longer disabled gains nothing, as the test
-//!   comes before the first step.
+//! - While the player's ship is disabled, its armour is raised by
+//!   [`raise_armor`] (@0x86d9c-0x86dcf) under the session's
+//!   [`DisableRule`], and its condition is decided again at once on the
+//!   armour the repair left. A player no longer disabled gains nothing,
+//!   as the test comes before the first step.
 //! - "`CommName`:  Repairs complete, `ship name`." is said
 //!   ([`CommNote`], `STR#` 2002 #384, the player's ship's name from
 //!   `*0x3b5210`), holding the message line for 240 ticks (`_DisplayComm`
@@ -24,10 +22,10 @@
 //! A ship whose target is a disabled NPC (a hit's retarget at a ship
 //! since disabled) repairs that ship instead, which the traffic queues as
 //! [`PirateEvent::NpcRepaired`] ([`Space::npc_repaired`]): the NPC is
-//! unboarded (@0x86d92), and while disabled its armour rises
-//! [`REPAIR_STEP`] at a time by the same rule, a mission's rescue ship
-//! that `_IsDisabled` holds disabled at any armour rising to its most
-//! (the original's loop never ends for one). Its condition is decided
+//! unboarded (@0x86d92), and while disabled its armour is raised by
+//! [`raise_armor`] under the same rule, a mission's rescue ship that
+//! `_IsDisabled` holds disabled at any armour rising to its most (the
+//! original's loop never ends for one). Its condition is decided
 //! again at once. Nothing is said and no sound plays: the line and
 //! `snd ` 151 are for the player's nav alone (@0x86dd4).
 //!
@@ -53,7 +51,7 @@ use crate::sound::SimSound;
 use crate::traffic::npc::NpcId;
 #[cfg(doc)]
 use crate::traffic::plunder::PirateEvent;
-use crate::traffic::repair_dock::REPAIR_STEP;
+use crate::traffic::repair_dock::raise_armor;
 
 impl Session {
     /// NPC `helper`, of ship type `ship`, has repaired the player (see the
@@ -63,7 +61,7 @@ impl Session {
         if self.ship.condition == Condition::Disabled {
             let rule = std::rc::Rc::clone(&self.setup.disable_rule.0);
             let armor = &mut self.pilot.reserves.armor;
-            repair(armor, &self.ship.fit.hull, |armor, hull| {
+            raise_armor(armor, &self.ship.fit.hull, |armor, hull| {
                 rule.disabled(armor, hull)
             });
             if !rule.disabled(*armor, &self.ship.fit.hull) {
@@ -109,24 +107,10 @@ impl Space {
             return;
         };
         let disabled = |armor: Gauge, hull: &HullSpec| held || rule.disabled(armor, hull);
-        repair(&mut npc.reserves.armor, &npc.hull, disabled);
+        raise_armor(&mut npc.reserves.armor, &npc.hull, disabled);
         if !disabled(npc.reserves.armor, &npc.hull) {
             npc.condition = Condition::Intact;
         }
-    }
-}
-
-/// Raises `armor` a step at a time, no further than its most, until
-/// `disabled` no longer has a ship of `hull` disabled.
-fn repair(armor: &mut Gauge, hull: &HullSpec, disabled: impl Fn(Gauge, &HullSpec) -> bool) {
-    // At most the steps up to its most (a step is a point), so a rule
-    // that never lets it fly still ends.
-    let steps = (armor.max - armor.now).ceil().max(0.0) as u32;
-    for _ in 0..steps {
-        if !disabled(*armor, hull) {
-            return;
-        }
-        armor.now = (armor.now + REPAIR_STEP).min(armor.max);
     }
 }
 
@@ -214,14 +198,13 @@ mod tests {
         let rule = Rc::new(Below20::default());
         let (mut session, helper) = downed(&catalog, rule.clone());
         answer(&mut session, helper);
-        assert_eq!(session.reserves().armor.now, 20.0);
+        // How far each step goes is `raise_armor`'s, pinned in nova-sim-ai.
+        let armor = session.reserves().armor.now;
+        assert!(armor >= 20.0, "raised until the rule lets it fly: {armor}");
         assert_eq!(
-            *rule.asked.borrow(),
-            (10..=20)
-                .map(|a| a as f32)
-                .chain([20.0])
-                .collect::<Vec<_>>(),
-            "a point at a time, then the condition"
+            rule.asked.borrow().last(),
+            Some(&armor),
+            "the condition decided again on the armour the repair left"
         );
         assert_eq!(session.player_condition(), Condition::Intact);
         assert!(!session.player_boarded());
@@ -274,7 +257,8 @@ mod tests {
         let (mut session, helper) = downed(&catalog, rule.clone());
         let ship = npc_repaired(&mut session, helper);
         let repaired = session.space.npc(ship).expect("here");
-        assert_eq!(repaired.reserves.armor.now, 20.0);
+        let armor = repaired.reserves.armor.now;
+        assert!(armor >= 20.0, "raised until the rule lets it fly: {armor}");
         assert_eq!(repaired.condition, Condition::Intact);
         assert!(!repaired.boarded, "@0x86d92");
         assert_eq!(session.take_comm(), [], "no line, @0x86dd4");
@@ -413,7 +397,8 @@ mod tests {
         }
         assert!(boarded, "the dock boarded the player");
         assert_eq!(notes.len(), 1, "{notes:?}");
-        assert_eq!(session.reserves().armor.now, 20.0);
+        let armor = session.reserves().armor.now;
+        assert!(armor >= 20.0, "raised until the rule lets it fly: {armor}");
         assert_eq!(session.player_condition(), Condition::Intact);
         assert!(!session.player_boarded());
         assert!(session.take_sounds().contains(&SimSound::RepairsComplete));

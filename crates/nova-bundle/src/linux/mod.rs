@@ -21,21 +21,25 @@
 //! port. Nothing here needs a Linux host: the `nova-linux` binary runs
 //! anywhere.
 //!
-//! [`appimage`] and [`flatpak`] pack the game with that tree into the
-//! nightly's two other Linux downloads. Their tools run on x86-64 Linux
-//! alone.
+//! [`flatpak`] packs the game with that tree into the nightly's other
+//! Linux download; its tools run on x86-64 Linux alone. [`links`] checks
+//! the tarball's binary against the glibc floor.
 
-pub mod appimage;
 pub mod desktop;
 pub mod flatpak;
 pub mod host;
 pub mod icons;
+pub mod links;
 pub mod metainfo;
 pub mod share;
 
 use std::path::{Path, PathBuf};
 
 use crate::spec::GAME_PACKAGE;
+
+/// The one Linux target built and packed: the tarball's and the
+/// Flatpak's asset names say `x86_64`.
+pub const TARGET: &str = "x86_64-unknown-linux-gnu";
 
 /// The command the desktop file starts and the metainfo says the game
 /// provides: the game package's binary, found on `PATH`.

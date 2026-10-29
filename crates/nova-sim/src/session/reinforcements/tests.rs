@@ -30,8 +30,8 @@ const PIRATES: GovtId = GovtId(129);
 const ALLIES: GovtId = GovtId(130);
 /// System 130's reinforcement fleet.
 const FLEET: FleetId = FleetId(140);
-/// Its `ReinfTime`: announced on the call's 31st tick (the timer 9 < 10),
-/// arriving on its 40th.
+/// Its `ReinfTime`: the fleet arrives on the call's 40th tick, and is
+/// announced on the tick [`announcing`] finds.
 pub(in crate::session) const TIME: i16 = 40;
 /// The arriving fleet's quote list.
 const QUOTE: i16 = 7600;
@@ -371,6 +371,27 @@ fn countdown(session: &Session) -> u16 {
     session.clock_here().countdown
 }
 
+/// The tick of a call of [`TIME`] on which nova-sim-ai's clock
+/// ([`reinforcements::tick`]) announces the fleet, and the timer it leaves.
+/// When it announces is that crate's (`ANNOUNCE_SHARE`, pinned by its
+/// tests); the session's part is to run the clock each frame and say
+/// what it brings.
+fn announcing() -> (i16, i32) {
+    let fleet = reinforcements::Fleet {
+        govt: Some(FED),
+        time: TIME,
+        interval: 2,
+    };
+    let mut clock = Clock {
+        timer: i32::from(TIME),
+        countdown: 0,
+    };
+    let tick = (1..TIME)
+        .find(|_| reinforcements::tick(&mut clock, Some(fleet), true) == Some(Event::Announce))
+        .expect("announced before it arrives");
+    (tick, clock.timer)
+}
+
 /// The announcement of the Federation's fleet.
 fn announced() -> Vec<SimMessage> {
     vec![SimMessage::ReinforcementsApproaching(
@@ -400,15 +421,20 @@ fn an_outnumbered_allied_warships_fleet_is_announced_at_three_quarters_and_arriv
     let warship = fight(&mut session, FED, 100.0);
     session.call_for_reinforcements(warship, false, None);
     assert_eq!(timer(&session), i32::from(TIME));
-    for tick in 1..31 {
+    let (announcing, left) = announcing();
+    for tick in 1..announcing {
         assert_eq!(ticked(&mut session, &catalog), (vec![], vec![]), "{tick}");
     }
     let (messages, sounds) = ticked(&mut session, &catalog);
-    assert_eq!(messages, announced(), "on the 31st tick, the timer 9");
+    assert_eq!(
+        messages,
+        announced(),
+        "on tick {announcing}, the timer {left}"
+    );
     assert_eq!(sounds, [SimSound::ReinforcementsApproaching]);
     assert_eq!(countdown(&session), 2, "ReinfIntrval");
     let before = session.npcs().len();
-    for tick in 32..40 {
+    for tick in announcing + 1..TIME {
         assert_eq!(ticked(&mut session, &catalog), (vec![], vec![]), "{tick}");
     }
     assert_eq!(session.npcs().len(), before, "not yet");
@@ -1022,10 +1048,11 @@ fn a_frames_announcement_comes_after_its_held_distress_call() {
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
     session.call_for_reinforcements(warship, false, None);
-    for _ in 1..31 {
+    let (announcing, left) = announcing();
+    for _ in 1..announcing {
         ticked(&mut session, &catalog);
     }
-    assert_eq!(timer(&session), 10, "one tick from announcing");
+    assert_eq!(timer(&session), left + 1, "one tick from announcing");
     let scanner = scanner(&mut session);
     let pirate = add(&mut session, PIRATES, 100.0, Goal::Idle);
     let trader = add(&mut session, FED, 100.0, Goal::Idle);
@@ -1051,5 +1078,5 @@ fn a_frames_announcement_comes_after_its_held_distress_call() {
         session.take_sounds(),
         [SimSound::CallForHelp, SimSound::ReinforcementsApproaching]
     );
-    assert_eq!(timer(&session), 9);
+    assert_eq!(timer(&session), left);
 }

@@ -926,6 +926,20 @@ mod tests {
     }
 
     #[test]
+    fn every_translucency_is_white_at_exactly_its_complements_32nds_alpha() {
+        for t in 0..=32 {
+            let alpha = crate::draw::THIRTY_SECONDS[usize::from(32 - t)];
+            assert_eq!(see_through(t), Color::rgba(255, 255, 255, alpha), "t {t}");
+        }
+        assert_eq!(see_through(8), Color::rgba(255, 255, 255, 191));
+        assert_eq!(see_through(16), Color::rgba(255, 255, 255, 128));
+        assert_eq!(see_through(22), Color::rgba(255, 255, 255, 80));
+        assert_eq!(see_through(24), Color::rgba(255, 255, 255, 64));
+        assert_eq!(see_through(32), Color::rgba(255, 255, 255, 0));
+        assert_eq!(see_through(40), Color::rgba(255, 255, 255, 0));
+    }
+
+    #[test]
     fn a_murky_shot_is_darkened_by_its_murk() {
         let plain = WeaponLook::default();
         let engine = RuleSource::Engine;

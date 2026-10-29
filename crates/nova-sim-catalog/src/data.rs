@@ -1498,21 +1498,21 @@ fn strings(data: &GameData, id: i16) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
     use std::path::Path;
 
     use nova_data::graphics::RLED;
     use nova_data::graphics::fixture::RledBuilder;
     use nova_data::records::disaster::Disaster;
+    use nova_data::records::fixture::ShipAnimBuilder;
     use nova_data::records::junk::Junk;
     use nova_data::records::roid::Roid;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
     use nova_data::records::string_list::StrList;
     use nova_data::records::weapon::Weapon;
-    use nova_data::store::fs::{DirLister, EntryKind, Listing};
+    use nova_data::store::fixture::{PLUGINS_DIR, one_file};
+    use nova_rsrc::ResType;
     use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader, ResType};
 
     use super::*;
     use crate::catalog::{
@@ -3473,38 +3473,6 @@ mod tests {
         );
     }
 
-    /// A data file, `/data/Nova Data`, and a plug-in,
-    /// `/plugins/Price Patch.npif`, each holding a fork.
-    struct Layered {
-        data: Vec<u8>,
-        plugin: Vec<u8>,
-    }
-
-    impl DirLister for Layered {
-        fn list(&self, dir: &Path) -> io::Result<Vec<Listing>> {
-            let name = if dir == Path::new("/data") {
-                "Nova Data"
-            } else {
-                "Price Patch.npif"
-            };
-            Ok(vec![Listing {
-                name: name.into(),
-                kind: EntryKind::File,
-            }])
-        }
-    }
-
-    impl ForkReader for Layered {
-        fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-            let bytes = if path.starts_with("/data") {
-                &self.data
-            } else {
-                &self.plugin
-            };
-            Ok((fork == Fork::Data).then(|| bytes.clone()))
-        }
-    }
-
     fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {
         resources
             .iter()
@@ -3515,19 +3483,15 @@ mod tests {
             .bytes
     }
 
-    /// The store of a data file and a plug-in holding these resources.
+    /// The store of a data file, `/data/Nova Data`, and a plug-in,
+    /// `/plugins/Price Patch.npif`, holding these resources.
     fn layered(data: &[(ResType, i16, Vec<u8>)], plugin: &[(ResType, i16, Vec<u8>)]) -> GameData {
-        let files = Layered {
-            data: fork(data),
-            plugin: fork(plugin),
-        };
-        GameData::load(
-            &files,
-            &files,
-            Path::new("/data"),
-            Some(Path::new("/plugins")),
-        )
-        .expect("opens")
+        one_file(fork(data))
+            .file(
+                Path::new(PLUGINS_DIR).join("Price Patch.npif"),
+                fork(plugin),
+            )
+            .load()
     }
 
     /// A `'STR '` of `text`: its length byte, then the text.
@@ -4158,9 +4122,10 @@ mod tests {
 
     /// A `shän` whose `BaseXSize` is `size`.
     fn anim(width: i16, height: i16) -> Vec<u8> {
-        let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-        put_i16s(&mut bytes, 0x06, &[width, height]);
-        bytes
+        ShipAnimBuilder::new()
+            .base_x_size(width)
+            .base_y_size(height)
+            .build()
     }
 
     #[test]
@@ -5608,10 +5573,20 @@ mod tests {
         assert_eq!(reinforcements(135), None, "missing");
     }
 
+    /// A `shän` with this `BlinkMode` and `BlinkValA` to `BlinkValD`.
+    fn blinking(mode: i16, a: i16, b: i16, c: i16, d: i16) -> Vec<u8> {
+        ShipAnimBuilder::new()
+            .blink_mode(mode)
+            .blink_val_a(a)
+            .blink_val_b(b)
+            .blink_val_c(c)
+            .blink_val_d(d)
+            .build()
+    }
+
     #[test]
     fn a_blink_is_its_shäns_blink_fields() {
-        let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-        put_i16s(&mut bytes, 0x36, &[2, -3, 75, 31, 85]);
+        let bytes = blinking(2, -3, 75, 31, 85);
         let shan = nova_data::decode_bytes::<ShipAnim>(&bytes)
             .expect("decodes")
             .record;
@@ -5629,8 +5604,7 @@ mod tests {
 
     #[test]
     fn a_ships_blink_is_its_shäns_and_steady_without_a_readable_one() {
-        let mut shan = vec![0; ShipAnim::SIZE.expect("fixed")];
-        put_i16s(&mut shan, 0x36, &[1, 4, 1, 2, 20]);
+        let shan = blinking(1, 4, 1, 2, 20);
         let data = store(&[
             (ShipAnim::TYPE, 128, shan.clone()),
             (ShipAnim::TYPE, 129, short(shan)),

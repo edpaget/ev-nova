@@ -5,7 +5,11 @@
 //! [`Layout`] records where every field landed so corruption tests can poke
 //! exact bytes with the [`BuiltFork`] helpers. [`RezBuilder`] takes the same
 //! calls and writes a Windows `.rez` file instead, with [`RezLayout`] and
-//! [`BuiltRez`] playing the same roles.
+//! [`BuiltRez`] playing the same roles. [`forks`] holds the shared
+//! in-memory [`ForkReader`](crate::ForkReader) fake and the port's
+//! contract.
+
+pub mod forks;
 
 use crate::ResType;
 

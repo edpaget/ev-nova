@@ -1,51 +1,48 @@
 //! Recharging through the whole app: synthetic game data (a `chär` flying
-//! a ship with 300 fuel and no regeneration from Alpha, linked to Beta,
-//! each with one inhabited planet) and a synthetic interface file holding
-//! the stock "Create a new pilot:" and "Spaceport" dialogs, laid out by the
-//! real glyphon metrics, drawn through the renderer into the recording Gpu
-//! and driven only by window events, keys and typed text made by the
-//! platform's own translation. Pilots are kept in the in-memory store, so
-//! the test sees what is saved.
+//! a ship with 300 fuel and no regeneration from Alpha, whose one
+//! inhabited planet it starts over) and a synthetic interface file holding
+//! the stock "Spaceport" dialog, laid out by the real glyphon metrics,
+//! drawn through the renderer into the recording Gpu and driven only by
+//! window events, keys made by the platform's own translation. Pilots are
+//! kept in the in-memory store, so the test sees what is saved.
 //!
-//! A new pilot jumps to Beta, a jump's fuel (100) gone, lands on Beta
-//! Prime and clicks Recharge: the tank fills for 100 credits, the pilot
-//! is saved, and Recharge greys, the tank being full, so a click on it
-//! does nothing. It takes off with the tank full. A pilot with no credits
-//! lands to a greyed Recharge, and its R key fills nothing; one with too
-//! few fills as many units as they buy. Nothing is ever said of it, as
-//! `_DoPortDialog` says nothing.
+//! A pilot saved a jump's fuel short is opened from the main menu, lands,
+//! and clicks Recharge: the click reaches the session, filling the tank
+//! and taking credits, and the pilot is written to the store. Leave takes
+//! off.
+//!
+//! What a recharge costs and fills, when Recharge greys and what R does
+//! are nova-sim's and nova-view's, pinned there.
 
-use crate::common::text_input_items;
-use std::io;
+use crate::bracket_art;
+
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::common::EntryHarness;
+use crate::common::{EntryHarness, Frames};
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
-use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
-use nova_render::{Batch, FontFaces, Frame};
+use nova_render::{FontFaces, Frame};
+use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
-use nova_sim::flight::{heading_of, shortest_turn};
-use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
-use nova_sim::{Gauge, Pilot, PilotKeeper, PilotStore, Session, ShipState, StellarId, SystemId};
+use nova_sim::{Gauge, Pilot, PilotKeeper, PilotStore, Session};
 use nova_view::MouseButton;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
@@ -69,33 +66,14 @@ impl WindowPort for FakeWindow {
     fn request_redraw(&mut self) {}
 }
 
-/// One file, holding a fork, wherever it is looked for.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
-
-fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> OneFile {
-    let bytes = resources
+fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {
+    resources
         .iter()
         .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
             fork.resource(*ty, *id, None, data)
         })
         .build()
-        .bytes;
-    OneFile(bytes)
+        .bytes
 }
 
 fn be(values: &[i16]) -> Vec<u8> {
@@ -133,21 +111,28 @@ fn character(cash: i32) -> Vec<u8> {
 /// tick, a tick), speed 300, maneuver 300 (30° a tick), 300 fuel and no
 /// fuel regeneration, armour 45.
 fn ship() -> Vec<u8> {
-    let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[20, 30, 3000, 300, 300, 300, 10, 45]);
-    put_i16s(&mut bytes, 0x2E, &[1]);
-    put_i16s(&mut bytes, 0x3E, &[20]);
-    put_i16s(&mut bytes, 0x4E, &[-1; 4]);
-    put_i16s(&mut bytes, 0x370, &[-1; 4]);
-    bytes
+    ShipBuilder::new()
+        .holds(20)
+        .shield(30)
+        .accel(3000)
+        .speed(300)
+        .maneuver(300)
+        .fuel(300)
+        .free_mass(10)
+        .armor(45)
+        .tech_level(1)
+        .mass(20)
+        .default_items(&[-1; 8])
+        .build()
 }
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
 fn ship_anim() -> Vec<u8> {
-    let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
-    put_i16s(&mut bytes, 0x34, &[36]);
-    bytes
+    ShipAnimBuilder::new()
+        .base_image_id(2000)
+        .base_set_count(1)
+        .frames_per(36)
+        .build()
 }
 
 /// An `rlëD` of `frames` frames of `size` x `size`.
@@ -159,32 +144,27 @@ fn sheet(frames: u16, size: u16) -> Vec<u8> {
         .build()
 }
 
-/// An independent `sÿst` at map (`x`, 0), linked to `link`, holding
-/// `stellar` alone.
-fn system(x: i16, link: i16, stellar: i16) -> Vec<u8> {
+/// An independent `sÿst` at the map's centre, unlinked, holding stellar
+/// 128 alone.
+fn system() -> Vec<u8> {
     let mut bytes = vec![0; System::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[x, 0]);
     put_i16s(&mut bytes, 0x04, &[-1; 32]);
-    put_i16s(&mut bytes, 0x04, &[link]);
-    put_i16s(&mut bytes, 0x24, &[stellar]);
+    put_i16s(&mut bytes, 0x24, &[128]);
     put_i16s(&mut bytes, 0x66, &[-1]);
     bytes
 }
 
-/// An inhabited planet that can be landed on (flags `0x01`, no services),
-/// at (`x`, 0), of graphic type `graphic_type`.
-fn stellar(x: i16, graphic_type: i16) -> Vec<u8> {
+/// Alpha Prime: an inhabited planet at the centre that can be landed on
+/// (flags `0x01`, no services), of graphic type 4.
+fn stellar() -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x00, &[x, 0, graphic_type]);
+    put_i16s(&mut bytes, 0x00, &[0, 0, 4]);
     bytes[0x06..0x0A].copy_from_slice(&0x01_u32.to_be_bytes());
     put_i16s(&mut bytes, 0x0C, &[1]);
     put_i16s(&mut bytes, 0x14, &[-1]);
     put_i16s(&mut bytes, 0x18, &[-1, -1]);
     bytes
 }
-
-/// Beta Prime's place: where a ship arriving from Alpha comes to rest.
-const BETA_PRIME_X: i16 = -960;
 
 /// A `spïn` naming `rlëD` `image`, one frame across.
 fn spin(image: i16) -> Vec<u8> {
@@ -193,20 +173,7 @@ fn spin(image: i16) -> Vec<u8> {
     bytes
 }
 
-/// Beta Prime's description.
-const DESCRIPTION: &str = "A quiet world of farms.";
-
-fn description() -> Vec<u8> {
-    let mut bytes = DESCRIPTION.as_bytes().to_vec();
-    bytes.push(0);
-    bytes.extend([0xFF; 2]);
-    bytes.extend([0; 34]);
-    bytes
-}
-
-/// Alpha (128) and Beta (129), linked, 100 apart on the map: Alpha Prime,
-/// small, at Alpha's centre, and Beta Prime, 200 pixels across, near where
-/// a ship from Alpha arrives, with its description. The `chär` holds
+/// Alpha (128) and Alpha Prime, small, at its centre. The `chär` holds
 /// `cash`.
 fn game_data(cash: i32) -> Rc<GameData> {
     let mut resources = vec![
@@ -214,18 +181,12 @@ fn game_data(cash: i32) -> Rc<GameData> {
         (Ship::TYPE, 128, ship()),
         (ShipAnim::TYPE, 128, ship_anim()),
         (RLED, 2000, sheet(36, 1)),
-        (System::TYPE, 128, system(0, 129, 128)),
-        (System::TYPE, 129, system(100, 128, 129)),
-        (Stellar::TYPE, 128, stellar(0, 4)),
-        (Stellar::TYPE, 129, stellar(BETA_PRIME_X, 5)),
-        (Desc::TYPE, 129, description()),
+        (System::TYPE, 128, system()),
+        (Stellar::TYPE, 128, stellar()),
         (Spin::TYPE, 1004, spin(1000)),
-        (Spin::TYPE, 1005, spin(1001)),
         (RLED, 1000, sheet(1, 8)),
-        (RLED, 1001, sheet(1, 200)),
         (PICT, 8500, pict(6, 5, [40, 40, 40])),
         (PICT, 10_004, pict(6, 3, [0, 90, 0])),
-        (PICT, 10_005, pict(6, 3, [0, 0, 90])),
     ];
     for state in [7500, 7503, 7506] {
         resources.push((PICT, state, pict(13, 25, [200, 0, 0])));
@@ -236,8 +197,12 @@ fn game_data(cash: i32) -> Rc<GameData> {
     }
     // The main menu's art, so the menu draws the original's screen.
     resources.extend(main_screen_resources());
-    let file = fork(&resources);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    let fork = resources
+        .iter()
+        .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
+            fork.resource(*ty, *id, None, data)
+        });
+    Rc::new(one_file(bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
 /// One `DITL` item: (left, top, right, bottom), its type byte and data.
@@ -254,12 +219,6 @@ fn ditl_item((l, t, r, b): (i16, i16, i16, i16), type_byte: u8, data: &[u8]) -> 
 }
 
 const USER: u8 = 0;
-const BUTTON: u8 = 4;
-const CHECK_BOX: u8 = 5;
-const CONTROL: u8 = 7;
-const STATIC_TEXT: u8 = 8;
-const EDIT_TEXT: u8 = 16;
-const PICTURE: u8 = 64;
 const DISABLED: u8 = 0x80;
 
 /// A `DLOG` of `bounds` (top, left, bottom, right), centred, naming its
@@ -278,29 +237,8 @@ fn ditl(items: &[Vec<u8>]) -> Vec<u8> {
     bytes
 }
 
-/// Stock "Create a new pilot:" (`DLOG` 3102) and "Spaceport" (`DLOG`
-/// 1000), whose item 4 is Recharge's.
-///
-/// With stock "Text Input" (`DLOG` 3001) too, for the ship's christening.
+/// Stock "Spaceport" (`DLOG` 1000), whose item 4 is Recharge's.
 fn interface() -> InterfaceData {
-    let text = |bounds, s: &str| ditl_item(bounds, STATIC_TEXT | DISABLED, s.as_bytes());
-    let field = |bounds| ditl_item(bounds, EDIT_TEXT, b"Edit Text");
-    let new_pilot = [
-        ditl_item((238, 183, 308, 203), BUTTON, b"OK"),
-        ditl_item((156, 183, 226, 203), BUTTON, b"Cancel"),
-        ditl_item((79, 141, 261, 163), PICTURE | DISABLED, &be(&[129])),
-        ditl_item((59, 122, 154, 139), CHECK_BOX, b"Strict Play"),
-        text((54, 36, 138, 52), "Full Name:"),
-        text((54, 59, 133, 75), "Nickname:"),
-        text((49, 357, 127, 373), "name3:"),
-        field((149, 36, 319, 52)),
-        field((149, 59, 319, 75)),
-        field((144, 357, 314, 373)),
-        ditl_item((51, 92, 251, 112), CONTROL, &be(&[500])),
-        text((53, 6, 181, 22), "Create a new pilot:"),
-        ditl_item((85, 277, 356, 297), CONTROL, &be(&[501])),
-        ditl_item((7, 5, 39, 37), PICTURE | DISABLED, &be(&[130])),
-    ];
     let spaceport: Vec<Vec<u8>> = [
         ((242, 551, 200, 25), true),
         ((452, 549, 68, 30), false),
@@ -325,14 +263,11 @@ fn interface() -> InterfaceData {
     })
     .collect();
     let file = fork(&[
-        (Dlog::TYPE, 3102, dlog((78, 175, 291, 501), 3102)),
-        (Ditl::TYPE, 3102, ditl(&new_pilot)),
-        (Dlog::TYPE, 3001, dlog((100, 100, 238, 460), 3001)),
-        (Ditl::TYPE, 3001, ditl(&text_input_items(ditl_item))),
         (Dlog::TYPE, 1000, dlog((-201, 60, 316, 678), 1000)),
         (Ditl::TYPE, 1000, ditl(&spaceport)),
     ]);
-    InterfaceData::load(&file, Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, file), path).expect("loads")
 }
 
 struct Harness {
@@ -383,21 +318,14 @@ impl Harness {
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
-    /// a few frames let the dock approach clear it, and the second lands.
+    /// the dock approach clears it, and the second lands.
     fn land(&mut self) {
         self.press(KeyCode::KeyL);
-        self.approach();
+        self.settle();
+        self.settle_until("the dock approach's clearance", |game| {
+            game.session().dock_cleared()
+        });
         self.press(KeyCode::KeyL);
-    }
-
-    /// Sends the physical key `code` going down or, when not `pressed`, up.
-    fn key(&mut self, code: KeyCode, pressed: bool) {
-        let state = if pressed {
-            ElementState::Pressed
-        } else {
-            ElementState::Released
-        };
-        self.send(platform::key_event(PhysicalKey::Code(code), state, false));
     }
 
     fn click(&mut self, at: Point) {
@@ -441,19 +369,6 @@ impl Harness {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request. The nav brackets' corners (`cicn`
-    /// 10000-10003), which the press's selection draws, may be missing
-    /// from the fixture, so the frames' image failures are not checked.
-    fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frames += 1;
-            let elapsed = Duration::from_millis(16 * self.frames);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        let _ = self.app.take_failures();
-    }
-
     /// Clicks Recharge, item 4 of the spaceport as laid out.
     fn recharge(&mut self) {
         let at = self
@@ -478,271 +393,57 @@ impl Harness {
             .session()
             .expect("a session")
     }
-
-    fn ship(&self) -> ShipState {
-        *self.session().player()
-    }
-
-    /// Holds exactly the arrow keys `codes` of the flight keys held, each
-    /// pressed or released through the platform as it changes.
-    fn hold(&mut self, held: &mut Vec<KeyCode>, codes: &[KeyCode]) {
-        for code in held.clone() {
-            if !codes.contains(&code) {
-                self.key(code, false);
-            }
-        }
-        for &code in codes {
-            if !held.contains(&code) {
-                self.key(code, true);
-            }
-        }
-        *held = codes.to_vec();
-    }
-
-    /// Flies out from the centre until the ship is at least the minimum
-    /// jump distance from it, then lets go: Down, to face away from the
-    /// centre while drifting in, then Up.
-    fn fly_out(&mut self) {
-        let mut held = Vec::new();
-        for _ in 0..3000 {
-            let ship = self.ship();
-            if ship.position.length() >= MIN_JUMP_DISTANCE {
-                self.hold(&mut held, &[]);
-                return;
-            }
-            // Drifting in at a crawl, as a ship at rest off the centre
-            // can, isn't moving in: Down would hold it there.
-            let moving_in =
-                ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y < -1e-3;
-            let facing_out = ship.position.length() == 0.0
-                || shortest_turn(ship.heading, heading_of(ship.position)).abs() < 1e-3;
-            let codes = if moving_in && !facing_out {
-                [KeyCode::ArrowDown]
-            } else {
-                [KeyCode::ArrowUp]
-            };
-            self.hold(&mut held, &codes);
-            self.frame();
-        }
-        panic!("never got out: {:?}", self.ship());
-    }
-
-    /// Brings the ship to rest: Down turns it to face against its motion,
-    /// within a turn of where reverse aims, where it stops turning, then Up
-    /// thrusts until it has all but stopped, and both let go.
-    fn brake(&mut self) {
-        let mut held = Vec::new();
-        let turn = self.session().handling().turn_rate;
-        for _ in 0..600 {
-            let ship = self.ship();
-            let aim = nova_sim::player_turn::reverse_aim(ship.velocity);
-            let Some(against) = aim.filter(|_| ship.velocity.length() >= 0.5) else {
-                self.hold(&mut held, &[]);
-                return;
-            };
-            let codes = if shortest_turn(ship.heading, f32::from(against)).abs() <= turn {
-                [KeyCode::ArrowUp]
-            } else {
-                [KeyCode::ArrowDown]
-            };
-            self.hold(&mut held, &codes);
-            self.frame();
-        }
-        panic!("never stopped: {:?}", self.ship());
-    }
-
-    /// Where system `id` is on flight's course map.
-    fn on_map(&self, id: i16) -> Point {
-        let map = self
-            .app
-            .screen()
-            .flight_view()
-            .expect("flying")
-            .course_map();
-        let system = map.model().system(SystemId(id)).expect("on the map");
-        map.transform().world_to_screen(system.position())
-    }
-
-    /// Plots a course to Beta on flight's map (M, a Shift-click, M), flies
-    /// out and jumps (J), runs frames until the jump is over, brakes and
-    /// lands on Beta Prime (L).
-    fn land_on_beta_prime(&mut self) {
-        self.press(KeyCode::KeyM);
-        let beta = self.on_map(129);
-        self.key(KeyCode::ShiftLeft, true);
-        self.click(beta);
-        self.key(KeyCode::ShiftLeft, false);
-        self.press(KeyCode::KeyM);
-        assert_eq!(self.session().course(), [SystemId(129)]);
-        self.fly_out();
-        self.press(KeyCode::KeyJ);
-        for _ in 0..1200 {
-            self.frame();
-            let flight = self.app.screen().flight_view().expect("flying");
-            let arrived = self.session().system() == SystemId(129);
-            if arrived && flight.jump_effect().is_none() {
-                break;
-            }
-        }
-        assert_eq!(self.session().system(), SystemId(129), "the jump ended");
-        self.brake();
-        self.land();
-        assert_eq!(
-            self.showing(),
-            Showing::Spaceport,
-            "landed: {:?}",
-            self.ship()
-        );
-        assert_eq!(self.pilot().stellar(), Some(StellarId(129)));
-    }
 }
 
-fn texts(frame: &Frame) -> Vec<String> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Text(runs) => runs.iter().map(|run| run.text.clone()).collect(),
-            _ => Vec::new(),
-        })
-        .collect()
+/// The pilot saved as Ada in `store`.
+fn saved(store: &MemoryPilots) -> Pilot {
+    nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot")
 }
 
-/// A new pilot named Ada, its `chär` holding `cash`, landed on Beta Prime
-/// with a jump's fuel gone.
-fn at_beta_prime(store: &MemoryPilots, cash: i32) -> Harness {
+/// A new pilot named Ada saved in `store`, a jump's fuel (100) short, its
+/// `chär` holding `cash`, opened from the main menu and landed on Alpha
+/// Prime.
+fn landed_short_of_fuel(store: &MemoryPilots, cash: i32) -> Harness {
+    let pilot = Pilot::new(game_data(cash).as_ref(), "Ada").expect("a pilot");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["reserves"]["fuel"]["now"] = serde_json::json!(200.0);
+    PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
+        .save(&nova_sim::save::decode(&save.to_string()).expect("a pilot"))
+        .expect("saved");
     let mut game = Harness::opening(store, cash);
-    let new_pilot = game
+    let open_pilot = game
         .app
         .screen()
         .main_menu()
         .expect("a main menu")
-        .press_point(MenuChoice::NewPilot);
-    game.click(new_pilot);
-    for (code, letter) in [
-        (KeyCode::KeyA, "A"),
-        (KeyCode::KeyD, "d"),
-        (KeyCode::KeyA, "a"),
-    ] {
-        game.type_key(code, Some(letter));
-    }
-    game.press(KeyCode::Enter);
-    // The ship's christening, confirmed with its default.
+        .press_point(MenuChoice::OpenPilot);
+    game.click(open_pilot);
+    assert_eq!(game.showing(), Showing::OpenPilot);
     game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
-    game.frame();
-    assert_eq!(game.fuel(), Gauge::full(300.0));
-    game.land_on_beta_prime();
-    assert_eq!(
-        game.fuel(),
-        Gauge {
-            now: 200.0,
-            max: 300.0
-        },
-        "a jump"
-    );
-    assert_eq!(game.pilot().cash(), i64::from(cash));
-    let shown = texts(&game.frame());
-    for text in ["Recharge", DESCRIPTION] {
-        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
-    }
+    game.land();
+    assert_eq!(game.showing(), Showing::Spaceport);
     game
 }
 
-/// The colour of the label `label` in `frame`.
-fn label_color(frame: &Frame, label: &str) -> nova_view::Color {
-    frame
-        .batches
-        .iter()
-        .find_map(|batch| match batch {
-            Batch::Text(runs) => runs
-                .iter()
-                .find(|run| run.text == label)
-                .map(|run| run.color),
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("{label} drawn"))
-}
-
-/// Whether Recharge is drawn enabled in `frame`: in Leave's colour, as
-/// every enabled button's label is, and not the disabled grey.
-fn recharge_enabled(frame: &Frame) -> bool {
-    label_color(frame, "Recharge") == label_color(frame, "Leave")
-}
-
 #[test]
-fn recharge_fills_the_tank_for_a_credit_a_unit_then_greys() {
+fn a_click_on_recharge_reaches_the_session_and_saves_the_pilot_and_leave_takes_off() {
     let store = MemoryPilots::new();
-    let mut game = at_beta_prime(&store, 10_000);
-    assert!(recharge_enabled(&game.frame()), "fuel missing and cash");
+    let mut game = landed_short_of_fuel(&store, 10_000);
+    let before = game.fuel();
+    assert!(before.now < before.max, "short of fuel");
 
-    // Recharge: 100 units missing, 100 credits, and the pilot saved.
     let writes = store.writes();
     game.recharge();
-    assert_eq!(game.fuel(), Gauge::full(300.0));
-    assert_eq!(game.pilot().cash(), 10_000 - 100);
+    assert!(game.fuel().now > before.now, "filled");
+    assert!(game.pilot().cash() < 10_000, "paid");
     assert_eq!(store.writes(), writes + 1, "saved");
-    let frame = game.frame();
-    assert!(!recharge_enabled(&frame), "the tank full");
-    assert!(
-        texts(&frame).contains(&DESCRIPTION.to_owned()),
-        "nothing said"
-    );
+    assert_eq!(saved(&store), game.pilot());
 
-    // A click on it now does nothing.
-    let before = game.pilot();
-    game.recharge();
-    assert_eq!(game.pilot(), before, "nothing changes");
-    assert_eq!(store.writes(), writes + 1, "nothing saved");
-
-    // Leave: it takes off with the tank full and the credits paid.
     game.press(KeyCode::Escape);
     assert_eq!(game.showing(), Showing::Flight);
-    game.frame();
-    assert_eq!(game.fuel(), Gauge::full(300.0));
-    assert_eq!(game.pilot().cash(), 10_000 - 100);
-}
-
-#[test]
-fn with_no_credits_recharge_lands_greyed_and_its_key_fills_nothing() {
-    let store = MemoryPilots::new();
-    let mut game = at_beta_prime(&store, 0);
-    assert!(!recharge_enabled(&game.frame()), "no cash");
-    let before = game.pilot();
-    let writes = store.writes();
-    game.recharge();
-    game.press(KeyCode::KeyR);
-    assert_eq!(game.showing(), Showing::Spaceport);
-    assert_eq!(game.pilot(), before, "nothing changes");
-    assert_eq!(store.writes(), writes, "nothing saved");
-    assert!(
-        texts(&game.frame()).contains(&DESCRIPTION.to_owned()),
-        "nothing said"
-    );
-}
-
-#[test]
-fn a_pilot_short_of_credits_fills_as_far_as_they_go() {
-    let store = MemoryPilots::new();
-    let mut game = at_beta_prime(&store, 99);
-    let writes = store.writes();
-    game.recharge();
-    assert_eq!(
-        game.fuel(),
-        Gauge {
-            now: 299.0,
-            max: 300.0
-        }
-    );
-    assert_eq!(game.pilot().cash(), 0);
-    assert_eq!(store.writes(), writes + 1, "saved");
-    let frame = game.frame();
-    assert!(!recharge_enabled(&frame), "no cash left");
-    assert!(
-        texts(&frame).contains(&DESCRIPTION.to_owned()),
-        "nothing said"
-    );
 }
 
 crate::common::entry_harness!(Harness, click, frame);

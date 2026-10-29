@@ -153,6 +153,9 @@ impl Traffic {
 
     /// Caches `odds` for NPC `id` and its berth, for tests that set a
     /// ship's odds up.
+    ///
+    /// Kept for nova-sim's reinforcement and battle-help tests, which set the
+    /// odds the pass would cache.
     #[cfg(any(test, feature = "fixture"))]
     pub fn cache_odds(&mut self, id: crate::traffic::npc::NpcId, odds: f32) {
         if let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) {

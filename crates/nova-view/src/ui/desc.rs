@@ -495,6 +495,17 @@ mod tests {
             desc.input(&input);
         }
         assert!(!desc.closed());
+        let text = desc.dialog().item_bounds(TEXT_ITEM).expect("text").center();
+        for at in [text, Point::new(1.0, 1.0)] {
+            for pressed in [true, false] {
+                desc.input(&Input::PointerButton {
+                    button: MouseButton::Left,
+                    pressed,
+                    at,
+                });
+            }
+            assert!(!desc.closed(), "a click at {at:?}");
+        }
         desc.tick(Duration::from_secs(1));
         assert!(!desc.closed());
     }

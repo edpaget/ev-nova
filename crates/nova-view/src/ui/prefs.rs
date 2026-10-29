@@ -917,44 +917,32 @@ impl Screen for PrefsDialog {
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::float_cmp)]
-mod tests {
-    use super::*;
-    use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
-    use crate::text::fixture::MonoMetrics;
-    use crate::ui::dialog::{ItemTemplate, Placement, STATIC_TEXT_COLOR, STATIC_TEXT_SIZE};
-    use crate::ui::mode_picker::PickerRects;
-    use crate::ui::scroll_text::ScrollText;
-    use crate::ui::toggle::Toggle;
-    use crate::ui::volume::{Arrow, draw_arrow};
-    use crate::video_mode::{FullscreenKind, VideoMode};
+/// The stock "new prefs dialog" for this crate's tests and other crates'
+/// (nova-render's, which measure its labels with real glyphs).
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture {
+    use crate::geometry::{Bounds, Point};
+    use crate::ui::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
 
-    fn at(x: f32, y: f32) -> Point {
-        Point::new(x, y)
-    }
-
-    /// Bounds from (left, top) to (right, bottom).
-    fn ltrb(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
-        Bounds {
-            min: at(left, top),
-            max: at(right, bottom),
-        }
-    }
-
-    /// The Mac "new prefs dialog" (`DITL` 4003), item by item: 336 x 278,
-    /// centred.
-    fn template() -> DialogTemplate {
+    /// The Mac "new prefs dialog" (`DLOG` and `DITL` 4003), item by item:
+    /// 336 x 278, centred, with its twenty-two items.
+    #[must_use]
+    pub fn stock_template() -> DialogTemplate {
         let item = |enabled, (l, t, r, b), kind| ItemTemplate {
-            bounds: ltrb(l, t, r, b),
+            bounds: Bounds {
+                min: Point::new(l, t),
+                max: Point::new(r, b),
+            },
             enabled,
             kind,
         };
         let check =
             |(l, t, r, b), title: &str| item(true, (l, t, r, b), ItemSpec::CheckBox(title.into()));
         DialogTemplate {
-            bounds: ltrb(37.0, 54.0, 373.0, 332.0),
+            bounds: Bounds {
+                min: Point::new(37.0, 54.0),
+                max: Point::new(373.0, 332.0),
+            },
             placement: Placement::Center,
             items: vec![
                 item(
@@ -995,10 +983,48 @@ mod tests {
                 check((171.0, 121.0, 307.0, 139.0), "Ambient Sounds"),
                 check((171.0, 143.0, 316.0, 161.0), "Hyperspace Effects"),
                 check((11.0, 165.0, 156.0, 183.0), "Check For Updates"),
-                // Parked outside, as the Windows build parks nothing here.
-                check((400.0, 10.0, 420.0, 20.0), "Outside"),
             ],
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use super::*;
+    use crate::draw::DrawCommand;
+    use crate::input::MouseButton;
+    use crate::text::fixture::MonoMetrics;
+    use crate::ui::dialog::{ItemTemplate, STATIC_TEXT_COLOR, STATIC_TEXT_SIZE};
+    use crate::ui::mode_picker::PickerRects;
+    use crate::ui::scroll_text::ScrollText;
+    use crate::ui::toggle::Toggle;
+    use crate::ui::volume::{Arrow, draw_arrow};
+    use crate::video_mode::{FullscreenKind, VideoMode};
+
+    fn at(x: f32, y: f32) -> Point {
+        Point::new(x, y)
+    }
+
+    /// Bounds from (left, top) to (right, bottom).
+    fn ltrb(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
+        Bounds {
+            min: at(left, top),
+            max: at(right, bottom),
+        }
+    }
+
+    /// The stock "new prefs dialog" ([`fixture::stock_template`]), with
+    /// one more check box parked outside it, as the Windows build parks
+    /// nothing here.
+    fn template() -> DialogTemplate {
+        let mut template = fixture::stock_template();
+        template.items.push(ItemTemplate {
+            bounds: ltrb(400.0, 10.0, 420.0, 20.0),
+            enabled: true,
+            kind: ItemSpec::CheckBox("Outside".into()),
+        });
+        template
     }
 
     /// Where the dialog goes: ((1024 - 336) / 2, (768 - 278) / 2).

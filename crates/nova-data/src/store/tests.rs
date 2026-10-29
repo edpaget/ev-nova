@@ -2,10 +2,11 @@
 
 use std::path::Path;
 
+use nova_rsrc::fixture::forks::MemForks;
 use nova_rsrc::fixture::{ForkBuilder, MAP_OFFSET_FIELD, RezBuilder};
 use nova_rsrc::{LoadError, ResType};
 
-use super::fake::{FakeForks, FakeTree};
+use super::fixture::FakeTree;
 use super::fs::EntryKind::{Dir, File};
 use super::*;
 use crate::decode::Record;
@@ -40,7 +41,7 @@ fn rez_ships(tag: &str, ships: &[(i16, i16)]) -> Vec<u8> {
     builder.build().bytes
 }
 
-fn open(tree: &FakeTree, forks: &FakeForks, plugins: bool) -> GameData {
+fn open(tree: &FakeTree, forks: &MemForks, plugins: bool) -> GameData {
     GameData::load(
         tree,
         forks,
@@ -65,7 +66,7 @@ fn a_plugin_redefining_one_ship_replaces_only_that_ship() {
     let tree = FakeTree::new()
         .dir("/d", &[("Nova Data 1.ndat", File)])
         .dir("/p", &[("Better 129.npif", File)]);
-    let forks = FakeForks::new()
+    let forks = MemForks::new()
         .file(
             "/d/Nova Data 1.ndat",
             ships("data", &[(128, 1), (129, 2), (130, 3)]),
@@ -101,7 +102,7 @@ fn ships_with_override(file: &str, plugin: ShipWriter) -> Vec<ResolvedShip> {
     let tree = FakeTree::new()
         .dir("/d", &[("Nova Data 1.ndat", File)])
         .dir("/p", &[(file, File), ("Zed.npif", File)]);
-    let forks = FakeForks::new()
+    let forks = MemForks::new()
         .file(
             "/d/Nova Data 1.ndat",
             ships("data", &[(128, 1), (129, 2), (130, 3)]),
@@ -158,7 +159,7 @@ fn of_two_plugins_the_one_sorting_later_case_insensitively_wins() {
     let tree = FakeTree::new()
         .dir("/d", &[("Data", File)])
         .dir("/p", &[("B.npif", File), ("a.npif", File)]);
-    let forks = FakeForks::new()
+    let forks = MemForks::new()
         .file("/d/Data", ships("data", &[(128, 1)]))
         .file("/p/a.npif", ships("a", &[(128, 2)]))
         .file("/p/B.npif", ships("B", &[(128, 3)]));
@@ -180,7 +181,7 @@ fn plugin_order_folds_case_beyond_ascii() {
     let tree = FakeTree::new()
         .dir("/d", &[])
         .dir("/p", &[("Éz.npif", File), ("éa.npif", File)]);
-    let forks = FakeForks::new()
+    let forks = MemForks::new()
         .file("/p/éa.npif", ships("éa", &[(128, 2)]))
         .file("/p/Éz.npif", ships("Éz", &[(128, 3)]));
     let data = open(&tree, &forks, true);
@@ -193,7 +194,7 @@ fn a_plugin_in_a_sub_folder_loads_at_its_folders_position() {
         .dir("/d", &[])
         .dir("/p", &[("Charlie", File), ("beta", Dir), ("Alpha", File)])
         .dir("/p/beta", &[("inner", File)]);
-    let forks = FakeForks::new()
+    let forks = MemForks::new()
         .file("/p/Alpha", ships("Alpha", &[(128, 1)]))
         .file("/p/beta/inner", ships("inner", &[(128, 2), (129, 2)]))
         .file("/p/Charlie", ships("Charlie", &[(129, 3)]));
@@ -217,7 +218,7 @@ fn every_resource_reports_its_file() {
     let tree = FakeTree::new()
         .dir("/d", &[("one", File), ("two", File)])
         .dir("/p", &[("plug", File)]);
-    let forks = FakeForks::new()
+    let forks = MemForks::new()
         .file(
             "/d/one",
             ForkBuilder::new()
@@ -290,7 +291,7 @@ fn unreadable_files_are_listed_as_failed_and_skipped() {
             ("io", File),
         ],
     );
-    let forks = FakeForks::new()
+    let forks = MemForks::new()
         .file("/d/good", ships("good", &[(128, 1)]))
         .file("/d/corrupt", corrupt.bytes)
         .file("/d/empty", Vec::new())
@@ -333,7 +334,7 @@ fn walk_results_are_kept() {
     let tree = FakeTree::new()
         .dir("/d", &[("Music.mp3", File), ("a", File)])
         .dir("/p", &[("gone", Dir)]);
-    let forks = FakeForks::new().file("/d/a", ships("a", &[(128, 1)]));
+    let forks = MemForks::new().file("/d/a", ships("a", &[(128, 1)]));
     let data = open(&tree, &forks, true);
     assert_eq!(
         data.ignored(),
@@ -350,7 +351,7 @@ fn walk_results_are_kept() {
 
 #[test]
 fn opening_fails_only_when_a_root_cannot_be_listed() {
-    let forks = FakeForks::new();
+    let forks = MemForks::new();
     let err = GameData::load(&FakeTree::new(), &forks, Path::new("/d"), None).expect_err("fails");
     assert!(matches!(err, OpenError::DataDir { .. }), "{err:?}");
 }
@@ -360,7 +361,7 @@ fn ids_ascend_and_types_cover_everything_present() {
     let tree = FakeTree::new()
         .dir("/d", &[("one", File)])
         .dir("/p", &[("plug", File)]);
-    let forks = FakeForks::new()
+    let forks = MemForks::new()
         .file(
             "/d/one",
             ForkBuilder::new()
@@ -399,7 +400,7 @@ fn mixed_ships() -> GameData {
     let mut long = ship_bytes(3);
     long.extend([0, 0]);
     let tree = FakeTree::new().dir("/d", &[("one", File)]);
-    let forks = FakeForks::new().file(
+    let forks = MemForks::new().file(
         "/d/one",
         ForkBuilder::new()
             .resource(Ship::TYPE, 130, None, &long)

@@ -52,12 +52,15 @@ nova-sim-base = { workspace = true, features = ["fixture"] }
 # The catalog's record builders and control-bit mocks, which `testkit`
 # re-exports.
 nova-sim-catalog = { workspace = true, features = ["fixture"] }
-# The combat layer's test setters the session tests call:
+# The combat layer's test support the session and stock tests call: the
+# plain answered strike (`combat::fixture::strike`), and the setters
 # `SabotageClock::set_counter` and `Combat::shots_mut`.
 nova-sim-combat = { workspace = true, features = ["fixture"] }
 # The ai and traffic layer's test support: `traffic::fixture::npc`, which
-# `testkit` re-exports, and the `Traffic` setters the session tests call:
-# `strength_armed`, `berths_taken` and `set_berth_person`.
+# `testkit` re-exports, and the `Traffic` setters and accessors the session
+# and stock tests call: `strength_armed`, `berths_taken`,
+# `queue_pirate_event`, `set_berth_person`, `write_berth_search`,
+# `cache_odds` and `take_pirate_events`.
 nova-sim-ai = { workspace = true, features = ["fixture"] }
 # The story layer's test support: `mission::fixture::carrying`, which
 # `testkit` re-exports.
@@ -68,12 +71,14 @@ nova-sim-story = { workspace = true, features = ["fixture"] }
 nova-sim = { workspace = true, features = ["fixture"] }
 
 [features]
-# Exposes the test support in `fixture` (the in-memory pilot store and the
-# storyline walker) to other crates' tests and this crate's `tests/`. It
-# re-exports the catalog's `listed_stellars`, `list_also` and
-# `bits_allowing`, so it turns on the catalog's `fixture` too, and the
-# AI's, whose `Traffic` setters build the berths a traffic hands on.
-fixture = ["nova-sim-catalog/fixture", "nova-sim-ai/fixture"]
+# Exposes the test support in `fixture` (the in-memory pilot store, the
+# pilot store's `check_contract` and the storyline walker) to other crates'
+# tests and this crate's `tests/`. It re-exports the catalog's
+# `listed_stellars`, `list_also` and `bits_allowing`, so it turns on the
+# catalog's `fixture` too; the AI's, whose `Traffic` setters build the
+# berths a traffic hands on; and nova-sim-base's, whose `Chance` contract
+# it re-exports as `fixture::chance`.
+fixture = ["nova-sim-base/fixture", "nova-sim-catalog/fixture", "nova-sim-ai/fixture"]
 
 [lints]
 workspace = true

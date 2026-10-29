@@ -160,6 +160,47 @@ fn only_flight_ticks_while_it_is_shown() {
     assert_eq!(screen.ship_browser().frame(), Some(3));
 }
 
+/// Taps the stellar slot key 1, which flight acts on at its next frame.
+fn tap_slot_key(screen: &mut AppScreen) {
+    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Char('1'), false));
+}
+
+#[test]
+fn a_slot_key_is_queued_input_until_flight_ticks_and_never_under_a_dialog() {
+    let mut screen = with_dialogs(data());
+    assert!(!screen.input_queued(), "no flight");
+    fly(&mut screen);
+    assert!(!screen.input_queued(), "nothing pressed");
+    tap_slot_key(&mut screen);
+    assert!(screen.input_queued(), "pressed");
+    // However many ticks flight takes to act on it: that count is
+    // nova-view's, pinned there.
+    for _ in 0..8 {
+        if !screen.input_queued() {
+            break;
+        }
+        screen.tick(TICK);
+    }
+    assert!(!screen.input_queued(), "taken");
+    tap_slot_key(&mut screen);
+    open_prefs(&mut screen);
+    assert!(
+        !screen.input_queued(),
+        "flight paused under the preferences"
+    );
+}
+
+#[test]
+fn a_slot_key_left_in_a_hidden_flight_is_not_queued_input() {
+    let mut screen = AppScreen::new(data());
+    fly(&mut screen);
+    tap_slot_key(&mut screen);
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::ShipBrowser);
+    assert!(!screen.input_queued());
+}
+
 #[test]
 fn releasing_the_keys_reaches_flight() {
     let mut screen = AppScreen::new(data());

@@ -1,5 +1,5 @@
 //! What `nova-linux` reads from its environment, turned into a
-//! [`LinuxHost`], and what the AppImage and Flatpak tools share of theirs:
+//! [`LinuxHost`], and what the Flatpak tool takes of its own:
 //! one optional output directory, and an x86-64 Linux host
 //! ([`check_platform`]).
 
@@ -53,7 +53,7 @@ pub fn out_dir(args: Vec<OsString>, cwd: &Path) -> Result<Option<PathBuf>, Usage
     Ok(out)
 }
 
-/// The one host the AppImage and Flatpak tools run on.
+/// The one host the Flatpak tool runs on.
 pub const OS: &str = "linux";
 /// The one architecture they build for: the asset names say `x86_64`.
 pub const ARCH: &str = "x86_64";
@@ -166,10 +166,10 @@ mod tests {
 
     #[test]
     fn the_refusals_name_the_tool_and_the_host() {
-        let error = check_platform("the AppImage builder", "macos", "aarch64").expect_err("no");
+        let error = check_platform("the Flatpak builder", "macos", "aarch64").expect_err("no");
         assert_eq!(
             error.to_string(),
-            "the AppImage builder runs on Linux; this host is macos"
+            "the Flatpak builder runs on Linux; this host is macos"
         );
         let error = check_platform("the Flatpak builder", "linux", "aarch64").expect_err("no");
         assert_eq!(

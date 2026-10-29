@@ -4,6 +4,7 @@
 use std::io;
 
 use nova_rsrc::fixture::ForkBuilder;
+use nova_rsrc::fixture::forks::{check_contract, write_contract_files};
 use nova_rsrc::{Fork, ForkReader, LoadError, ResType, ResourceFile, StdForkReader};
 
 const PICT: ResType = ResType(*b"PICT");
@@ -13,6 +14,13 @@ fn fixture_bytes() -> Vec<u8> {
         .resource(PICT, 128, Some(b"Splash"), b"pixels")
         .build()
         .bytes
+}
+
+#[test]
+fn std_fork_reader_meets_the_contract() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    write_contract_files(dir.path()).expect("write the contract files");
+    assert_eq!(check_contract(&StdForkReader, dir.path()), Ok(()));
 }
 
 #[test]

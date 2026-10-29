@@ -106,21 +106,24 @@ fn boarding_data_with(cash: i32) -> Rc<GameData> {
         }
     };
     let ship = |holds, armor, crew| {
-        let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-        put(&mut bytes, 0x00, &[holds, 0, 300, 300, 10, 300, 0, armor]);
-        put(&mut bytes, 0x12, &[-1; 4]);
-        put(&mut bytes, 0x42, &[1, crew]);
-        put(&mut bytes, 0x4E, &[-1; 4]);
-        put(&mut bytes, 0x370, &[-1; 4]);
-        put(&mut bytes, 0x6CE, &[-1; 4]);
-        bytes
+        ShipBuilder::new()
+            .holds(holds)
+            .accel(300)
+            .speed(300)
+            .maneuver(10)
+            .fuel(300)
+            .armor(armor)
+            .weap_types(&[-1; 8])
+            .inherent_ai(1)
+            .crew(crew)
+            .default_items(&[-1; 8])
     };
-    let mut trader = ship(20, 100, 3);
-    put(&mut trader, 0x06, &[0]);
-    trader[0x30..0x34].copy_from_slice(&150_000_i32.to_be_bytes());
-    let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
-    put(&mut anim, 0x00, &[1000, 0, 1]);
-    put(&mut anim, 0x34, &[4]);
+    let trader = ship(20, 100, 3).speed(0).cost(150_000).build();
+    let anim = ShipAnimBuilder::new()
+        .base_image_id(1000)
+        .base_set_count(1)
+        .frames_per(4)
+        .build();
     let sheet = (0..4)
         .fold(RledBuilder::new(1, 1), |sheet, _| {
             sheet.frame(|f| f.line().pixels(&[0x7C00]))
@@ -141,7 +144,7 @@ fn boarding_data_with(cash: i32) -> Rc<GameData> {
     put(&mut dude, 0x08, &[129]);
     put(&mut dude, 0x28, &[100]);
     let fork = ForkBuilder::new()
-        .resource(Ship::TYPE, 128, Some(b"First"), &ship(0, 0, 10))
+        .resource(Ship::TYPE, 128, Some(b"First"), &ship(0, 0, 10).build())
         .resource(Ship::TYPE, 129, Some(b"Trader"), &trader)
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
         .resource(ShipAnim::TYPE, 128, None, &anim)
@@ -166,8 +169,7 @@ fn boarding_data_with(cash: i32) -> Rc<GameData> {
         )
         .build()
         .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(fork).load())
 }
 
 /// The ship comm strings: "Channel open." in every variant of the

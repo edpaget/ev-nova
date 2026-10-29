@@ -2,23 +2,13 @@
 //! (`DLOG` and `DITL` 4003), item for item, for the tests that open the
 //! Preferences dialog through the app.
 
-use std::io;
 use std::path::Path;
 
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::store::fixture::one_file_at;
 use nova_data::{InterfaceData, Record};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader};
-
-/// The interface file's bytes, as its data fork, wherever it is read.
-struct InterfaceFork(Vec<u8>);
-
-impl ForkReader for InterfaceFork {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
-}
 
 fn be(values: &[i16]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_be_bytes()).collect()
@@ -87,5 +77,6 @@ pub fn interface() -> InterfaceData {
         .resource(Ditl::TYPE, 4003, None, &ditl)
         .build()
         .bytes;
-    InterfaceData::load(&InterfaceFork(bytes), Path::new("/Nova-DF.rsrc")).expect("loads")
+    let path = Path::new("/Nova-DF.rsrc");
+    InterfaceData::load(&one_file_at(path, bytes), path).expect("loads")
 }

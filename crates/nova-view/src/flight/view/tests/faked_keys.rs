@@ -167,6 +167,22 @@ fn with_the_escort_menu_open_1_to_4_pick_groups_not_stellars() {
 }
 
 #[test]
+fn a_slot_keys_press_is_queued_input_until_the_frames_after_its_pick() {
+    let mut view = fleet(&[EscortClass::Warship]);
+    assert!(!view.input_queued(), "nothing pressed");
+    tap(&mut view, Key::Char('1'));
+    assert!(view.input_queued(), "pressed");
+    view.tick(TICK);
+    assert_eq!(
+        picks_since(&view, 0),
+        [FlightCommand::SelectStellar(StellarPick::Slot(0))]
+    );
+    assert!(view.input_queued(), "the latch to clear");
+    view.tick(TICK);
+    assert!(!view.input_queued(), "settled");
+}
+
+#[test]
 fn with_the_escort_menu_open_command_5_picks_freighters_not_a_stellar() {
     let mut view = fleet(&[EscortClass::Freighter]);
     tap(&mut view, MENU_KEY);

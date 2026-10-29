@@ -5,13 +5,13 @@
 //! This is the developer path: the viewer map Tab reaches enters systems
 //! with Return. In play, the map opened from flight plots a course instead
 //! (`hyperspace.rs`).
+//!
+//! Where the stellars and stars are drawn, how fast the camera moves, the
+//! stations' animation and the map's selection kept are nova-view's,
+//! pinned there.
 
-// Positions here are whole numbers and quarter-second moves, exact in
-// floating point.
-#![allow(clippy::float_cmp)]
+use crate::common::Frames;
 
-use std::io;
-use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -21,12 +21,11 @@ use nova_data::graphics::fixture::RledBuilder;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record, SystemId};
 use nova_render::recording::RecordingGpu;
-use nova_render::{Batch, Frame, QuadInstance, Rect, SolidQuad};
+use nova_render::{Batch, Frame};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader};
 use nova_view::galaxy::map::ENTER_BUTTON;
 use nova_view::{Key, MouseButton, Point};
 
@@ -43,24 +42,6 @@ impl WindowPort for FakeWindow {
     }
 
     fn request_redraw(&mut self) {}
-}
-
-/// One data file, `/data/Nova Data`, holding a fork.
-struct OneFile(Vec<u8>);
-
-impl DirLister for OneFile {
-    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
-        Ok(vec![Listing {
-            name: "Nova Data".into(),
-            kind: EntryKind::File,
-        }])
-    }
-}
-
-impl ForkReader for OneFile {
-    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
-    }
 }
 
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
@@ -133,8 +114,7 @@ fn data() -> Rc<GameData> {
         .resource(RLED, 1001, None, &sheet(4, 6))
         .build()
         .bytes;
-    let file = OneFile(fork);
-    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    Rc::new(one_file(fork).load())
 }
 
 struct Harness {
@@ -154,7 +134,7 @@ impl Harness {
             clock: Duration::ZERO,
         };
         harness.press(Key::Tab);
-        harness.frame_after(Duration::from_millis(16));
+        harness.frame();
         assert_eq!(harness.showing(), Showing::GalaxyMap);
         harness
     }
@@ -219,6 +199,11 @@ impl Harness {
         frame
     }
 
+    /// Sends a redraw a frame (16 ms) after the last and returns its frame.
+    fn frame(&mut self) -> Frame {
+        self.frame_after(FRAME)
+    }
+
     fn camera(&self) -> Point {
         self.app
             .screen()
@@ -227,45 +212,6 @@ impl Harness {
             .camera()
             .center()
     }
-}
-
-fn shape(frame: &Frame) -> Vec<(&'static str, usize)> {
-    frame
-        .batches
-        .iter()
-        .map(|batch| match batch {
-            Batch::Sprites { quads, .. } => ("sprites", quads.len()),
-            Batch::Solid(quads) => ("solid", quads.len()),
-            Batch::Text(runs) => ("text", runs.len()),
-        })
-        .collect()
-}
-
-fn quads(frame: &Frame) -> Vec<QuadInstance> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Sprites { quads, .. } => quads.clone(),
-            _ => Vec::new(),
-        })
-        .collect()
-}
-
-/// The stars' centres.
-fn stars(frame: &Frame) -> Vec<Point> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Solid(quads) => quads.clone(),
-            _ => Vec::new(),
-        })
-        .map(|quad: SolidQuad| {
-            let [a, _, c, _] = quad.corners;
-            Point::new(f32::midpoint(a.x, c.x), f32::midpoint(a.y, c.y))
-        })
-        .collect()
 }
 
 fn texts(frame: &Frame) -> Vec<String> {
@@ -283,93 +229,39 @@ fn shows(frame: &Frame, expected: &str) -> bool {
     texts(frame).iter().any(|text| text == expected)
 }
 
-/// A `w` x `h` rectangle centred on (`x`, `y`).
-fn centred(x: f32, y: f32, w: f32, h: f32) -> Rect {
-    Rect {
-        x: x - w / 2.0,
-        y: y - h / 2.0,
-        w,
-        h,
-    }
-}
+/// A frame's time at 60 a second, as near as whole milliseconds go.
+const FRAME: Duration = Duration::from_millis(16);
 
-/// Whether some star of `before` is at `after`'s height and `dx` to its
-/// right.
-fn moved_by(before: &[Point], after: Point, dx: f32) -> bool {
-    before
-        .iter()
-        .any(|b| b.y == after.y && (b.x - dx - after.x).abs() < 1e-3)
-}
-
+/// A quarter of a second of redraws.
 const QUARTER: Duration = Duration::from_millis(250);
 
 #[test]
-fn return_enters_a_system_whose_stellars_and_stars_reach_the_gpu_and_escape_goes_back() {
+fn return_enters_a_system_whose_frame_reaches_the_gpu_and_escape_goes_back() {
     let mut harness = Harness::on_the_map();
     harness.select(128);
     harness.press(Key::Enter);
     assert_eq!(harness.showing(), Showing::System);
 
-    let first = harness.frame_after(Duration::from_millis(16));
-    let shape = shape(&first);
-    assert_eq!(shape.len(), 3, "{shape:?}");
-    assert_eq!(shape[0].0, "solid");
-    assert!(shape[0].1 > 0, "stars");
-    // The two stellars; then their names, the title, the camera and help
-    // lines, and the router's hint.
-    assert_eq!(&shape[1..], [("sprites", 2), ("text", 6)]);
-    let start = quads(&first);
-    assert_eq!(start[0].dest, centred(512.0, 384.0, 8.0, 8.0));
-    assert_eq!(start[1].dest, centred(812.0, 184.0, 6.0, 6.0));
-    for expected in ["Alpha (sÿst 128)", "Alpha Prime", "Alpha Station"] {
-        assert!(
-            shows(&first, expected),
-            "{expected:?} in {:?}",
-            texts(&first)
-        );
-    }
-
-    // Holding Right for a quarter of a second moves the stellars 240 left,
-    // and each layer of stars by its share of that.
-    harness.key(Key::Right, true);
-    let moved = harness.frame_after(QUARTER);
-    let now = quads(&moved);
-    assert_eq!(now[0].dest, centred(272.0, 384.0, 8.0, 8.0));
-    assert_eq!(now[1].dest, centred(572.0, 184.0, 6.0, 6.0));
-    let (before, after) = (stars(&first), stars(&moved));
-    for dx in [60.0, 120.0, 180.0] {
-        let count = after.iter().filter(|&&p| moved_by(&before, p, dx)).count();
-        assert!(count > 0, "no star moved {dx} left");
-    }
-
-    // Releasing it stops the camera.
-    harness.key(Key::Right, false);
-    let stopped = harness.frame_after(QUARTER);
-    assert_eq!(quads(&stopped)[0].dest, now[0].dest);
-    assert_eq!(stars(&stopped), after);
-
-    // The station animates; the planet, with one frame, does not.
-    let later = harness.frame_after(Duration::from_secs(1) / 10);
-    let (station, planet) = (quads(&later)[1], quads(&later)[0]);
-    assert_ne!(station.uv, start[1].uv, "the station's frame changed");
-    assert_ne!(station.uv, quads(&stopped)[1].uv);
-    assert_eq!(planet.uv, start[0].uv);
-
-    // Escape goes back to the map, with Alpha still selected.
-    harness.key(Key::Escape, true);
-    harness.key(Key::Escape, false);
-    assert_eq!(harness.showing(), Showing::GalaxyMap);
-    assert_eq!(
-        harness.app.screen().galaxy_map().selected(),
-        Some(SystemId(128))
+    let first = harness.frame();
+    let stars = first
+        .batches
+        .iter()
+        .any(|batch| matches!(batch, Batch::Solid(quads) if !quads.is_empty()));
+    let stellars = first
+        .batches
+        .iter()
+        .any(|batch| matches!(batch, Batch::Sprites { quads, .. } if !quads.is_empty()));
+    assert!(stars && stellars, "the stars and the stellars");
+    assert!(
+        shows(&first, "Alpha Prime"),
+        "a stellar's name from the data: {:?}",
+        texts(&first)
     );
-    let map = harness.frame_after(Duration::from_millis(16));
-    for expected in ["Alpha (sÿst 128)", "Enter system (Return)"] {
-        assert!(shows(&map, expected), "{expected:?} in {:?}", texts(&map));
-    }
-    assert!(!shows(&map, "Camera (240, 0)"));
 
-    // And a second Escape quits.
+    // Escape goes back to the map, and a second Escape quits.
+    harness.press(Key::Escape);
+    assert_eq!(harness.showing(), Showing::GalaxyMap);
+    harness.frame();
     assert_eq!(
         harness.handle(WindowEvent::Key {
             key: Key::Escape,
@@ -386,21 +278,24 @@ fn the_enter_button_enters_and_the_system_survives_a_tab_round_trip() {
     harness.select(128);
     harness.click(ENTER_BUTTON.center());
     assert_eq!(harness.showing(), Showing::System);
-    harness.frame_after(Duration::from_millis(16));
+    harness.frame();
+    let start = harness.camera();
 
     harness.key(Key::Down, true);
-    harness.frame_after(QUARTER);
+    harness.settle_until("the camera moving under Down", |harness| {
+        harness.camera() != start
+    });
     harness.key(Key::Down, false);
-    assert_eq!(harness.camera(), Point::new(0.0, 240.0));
+    harness.frame();
+    let moved = harness.camera();
 
     harness.press(Key::Tab);
     assert_eq!(harness.showing(), Showing::ShipBrowser);
     harness.frame_after(QUARTER);
     harness.press(Key::Tab);
     assert_eq!(harness.showing(), Showing::System);
-    let frame = harness.frame_after(Duration::from_millis(16));
-    assert_eq!(harness.camera(), Point::new(0.0, 240.0));
-    assert!(shows(&frame, "Camera (0, 240)"), "{:?}", texts(&frame));
+    harness.frame();
+    assert_eq!(harness.camera(), moved, "the same system, as it was left");
 }
 
 #[test]
@@ -408,13 +303,18 @@ fn losing_focus_while_holding_a_key_stops_the_camera() {
     let mut harness = Harness::on_the_map();
     harness.select(128);
     harness.press(Key::Enter);
-    harness.frame_after(Duration::from_millis(16));
+    harness.frame();
+    let start = harness.camera();
 
     harness.key(Key::Right, true);
-    harness.frame_after(QUARTER);
-    assert_eq!(harness.camera(), Point::new(240.0, 0.0));
+    harness.settle_until("the camera moving under Right", |harness| {
+        harness.camera() != start
+    });
     harness.send(WindowEvent::FocusLost);
     // Right's release went to another window.
+    let stopped = harness.camera();
     harness.frame_after(QUARTER);
-    assert_eq!(harness.camera(), Point::new(240.0, 0.0));
+    assert_eq!(harness.camera(), stopped);
 }
+
+crate::common::frames!(Harness, frame);
