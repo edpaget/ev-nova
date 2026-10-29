@@ -19,6 +19,13 @@
 //! `MoveWindow` down by `trunc(0.3 × d)` (@0x5ab68-0x5abbe) is left out:
 //! `_CenterWindow` moves the window again before it shows, so nothing of it
 //! is seen.
+//!
+//! Its keys are `_TextDialogFilter`'s (@0x51f77): Return, Enter and Escape
+//! close it, and Home, End, Page Up and Page Down scroll the text by the
+//! original's pixel amounts, each only while the text can scroll its way,
+//! on the press alone (the user's standing press-only decision). Up and
+//! Down scroll a whole line, where the original's items 5 and 6 move 10 px.
+//! See [`DescDialog`]'s `Screen::input`.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -30,7 +37,7 @@ use crate::draw::DrawList;
 use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::image::ImageKey;
-use crate::input::Input;
+use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::{TextMetrics, wrap};
 
@@ -54,6 +61,15 @@ pub const SCROLL_UP_ITEM: usize = 5;
 
 /// The scroll-down arrow's item, which the shrink moves with Done.
 pub const SCROLL_DOWN_ITEM: usize = 6;
+
+/// How far Home and End scroll the text, in the original's pixels (the
+/// engine's logical units): `_TextDialogFilter` passes `_ScrollDialogText`
+/// 9999 (@0x52026, @0x520ca), past either end of any stock text.
+pub const HOME_END_UNITS: f32 = 9999.0;
+
+/// How far Page Up and Page Down scroll the text, in the original's pixels
+/// (the engine's logical units): 250 (@0x5206b, @0x52112).
+pub const PAGE_UNITS: f32 = 250.0;
 
 /// The description's font, which both lays it out and measures it for
 /// the shrink.
@@ -311,13 +327,54 @@ impl DescDialog {
 
 impl Screen for DescDialog {
     /// A press of [`MAP_KEY`](crate::flight::view::MAP_KEY) asks for the
-    /// map when it opens one ([`DescDialog::take_map_request`]); every
-    /// other event goes to the dialog, and activating Done closes it. It
-    /// never quits.
+    /// map when it opens one ([`DescDialog::take_map_request`]).
+    ///
+    /// Home, End, Page Up and Page Down scroll the text as
+    /// `_TextDialogFilter` @0x51f77 does, through `_ScrollDialogText`
+    /// @0x51839: while the text can scroll up (@0x51ff4), Home jumps
+    /// [`HOME_END_UNITS`] and Page Up [`PAGE_UNITS`] toward its start;
+    /// while it can scroll down (@0x52095), End and Page Down the same
+    /// toward its end. A key that can't scroll its way goes on to the
+    /// dialog, which ignores it, as the filter falls through to "not
+    /// handled" (@0x523fc). They play no sound, as the original's arms
+    /// play none.
+    ///
+    /// They act on the press alone. The original's filter also takes
+    /// autoKey (event 5, @0x51f83-0x51f96) and so repeats them while held;
+    /// by the user's standing decision of 2026-10-23, dialog keys here
+    /// stay press-only, so repeats and releases do nothing.
+    ///
+    /// Up and Down stay with the dialog, a whole line each, repeats
+    /// included. The original turns them into items 5 and 6, which
+    /// `_ShowTextDialog` scrolls 10 px a press or repeat
+    /// (@0x5b0af-0x5b130); the engine's text box shows whole lines only
+    /// (one Geneva 10 line is about 12).
+    ///
+    /// Every other event goes to the dialog, and activating Done closes
+    /// it. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if is_map_press(input) {
             self.map_requested = self.map.is_some();
             return ScreenAction::None;
+        }
+        if let Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        } = *input
+            && let Some(text) = self.dialog.scroll_text_mut()
+        {
+            let units = match key {
+                Key::Home if text.can_scroll_up() => Some(-HOME_END_UNITS),
+                Key::PageUp if text.can_scroll_up() => Some(-PAGE_UNITS),
+                Key::End if text.can_scroll_down() => Some(HOME_END_UNITS),
+                Key::PageDown if text.can_scroll_down() => Some(PAGE_UNITS),
+                _ => None,
+            };
+            if let Some(units) = units {
+                text.scroll_units(units);
+                return ScreenAction::None;
+            }
         }
         if self.dialog.input(input) == Some(DialogEvent::Item(DONE_ITEM)) {
             self.closed = true;
@@ -354,7 +411,7 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
-    use crate::input::{Key, MouseButton};
+    use crate::input::MouseButton;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -876,6 +933,156 @@ mod tests {
     #[test]
     fn the_scroll_arrows_are_items_5_and_6() {
         assert_eq!((SCROLL_UP_ITEM, SCROLL_DOWN_ITEM), (5, 6));
+    }
+
+    // Home, End, Page Up and Page Down, `_TextDialogFilter`
+    // @0x51ff4-0x52137.
+
+    /// Forty lines, "l0" to "l39", in [`template`]'s 3-line box (12 units
+    /// a line): the last first line is 37.
+    fn long_desc() -> DescDialog {
+        DescDialog::new(
+            &template(),
+            &forty_lines(),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+    }
+
+    fn forty_lines() -> String {
+        (0..40)
+            .map(|n| format!("l{n}"))
+            .collect::<Vec<_>>()
+            .join("\r")
+    }
+
+    const LAST: usize = 37;
+
+    #[test]
+    fn page_down_scrolls_250_units_and_pages_average_250() {
+        let mut desc = long_desc();
+        assert_eq!(desc.lines().len(), 40);
+        assert_eq!(desc.input(&key(Key::PageDown)), ScreenAction::None);
+        assert_eq!(desc.first_line(), 20, "250 / 12, 10 over");
+        desc.input(&key(Key::PageDown));
+        assert_eq!(desc.first_line(), LAST, "260 / 12 is 21, clamped");
+    }
+
+    #[test]
+    fn page_up_scrolls_back_250_units() {
+        let mut desc = long_desc();
+        desc.input(&key(Key::End));
+        desc.input(&key(Key::PageUp));
+        assert_eq!(desc.first_line(), LAST - 20);
+    }
+
+    #[test]
+    fn end_reaches_the_last_line_and_home_the_first() {
+        let mut desc = long_desc();
+        desc.input(&key(Key::End));
+        assert_eq!(desc.first_line(), LAST);
+        desc.input(&key(Key::Home));
+        assert_eq!(desc.first_line(), 0);
+    }
+
+    #[test]
+    fn at_the_top_home_and_page_up_do_nothing() {
+        let mut desc = long_desc();
+        desc.input(&key(Key::Home));
+        desc.input(&key(Key::PageUp));
+        assert_eq!(desc.first_line(), 0);
+        desc.input(&key(Key::PageDown));
+        assert_eq!(desc.first_line(), 20, "nothing left over past the top");
+    }
+
+    #[test]
+    fn at_the_end_end_and_page_down_do_nothing() {
+        let mut desc = long_desc();
+        desc.input(&key(Key::End));
+        desc.input(&key(Key::End));
+        desc.input(&key(Key::PageDown));
+        assert_eq!(desc.first_line(), LAST);
+        desc.input(&key(Key::PageUp));
+        assert_eq!(
+            desc.first_line(),
+            LAST - 20,
+            "nothing left over past the end"
+        );
+    }
+
+    #[test]
+    fn scroll_keys_are_press_only() {
+        for scroll in [Key::Home, Key::End, Key::PageUp, Key::PageDown] {
+            let mut desc = long_desc();
+            desc.input(&key(Key::PageDown));
+            for input in [
+                Input::Key {
+                    key: scroll,
+                    pressed: true,
+                    repeat: true,
+                },
+                Input::Key {
+                    key: scroll,
+                    pressed: false,
+                    repeat: false,
+                },
+            ] {
+                desc.input(&input);
+                assert_eq!(desc.first_line(), 20, "{input:?}");
+                assert!(!desc.closed(), "{input:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn scroll_keys_never_close_it_or_ask_for_the_map() {
+        let marks = MapMarks {
+            green: Some(nova_sim::SystemId(131)),
+            multi_arrows: false,
+        };
+        let mut desc = long_desc().with_map(Some(marks));
+        for scroll in [Key::End, Key::PageUp, Key::Home, Key::PageDown] {
+            assert_eq!(desc.input(&key(scroll)), ScreenAction::None);
+            assert!(!desc.closed(), "{scroll:?}");
+            assert_eq!(desc.take_map_request(), None, "{scroll:?}");
+            assert_eq!(desc.take_sounds(), [], "{scroll:?}");
+        }
+    }
+
+    #[test]
+    fn a_short_text_ends_at_its_last_first_line_and_one_line_never_moves() {
+        let mut five = desc();
+        five.input(&key(Key::End));
+        assert_eq!(five.first_line(), 2);
+        five.input(&key(Key::Home));
+        assert_eq!(five.first_line(), 0);
+        five.input(&key(Key::PageDown));
+        assert_eq!(five.first_line(), 2);
+        let mut one = DescDialog::new(&template(), "one", ButtonStyle::STOCK, Rc::new(MonoMetrics));
+        for scroll in [Key::End, Key::PageDown] {
+            one.input(&key(scroll));
+            assert_eq!(one.first_line(), 0, "{scroll:?}");
+            assert!(!one.closed());
+        }
+    }
+
+    #[test]
+    fn the_picture_variant_takes_the_scroll_keys_too() {
+        let mut desc = templates()
+            .open(
+                &forty_lines(),
+                Some(5008),
+                ButtonStyle::STOCK,
+                Rc::new(MonoMetrics),
+            )
+            .expect("shown");
+        assert_eq!(desc.picture(), Some(5008));
+        desc.input(&key(Key::End));
+        assert_eq!(desc.first_line(), LAST);
+        desc.input(&key(Key::PageUp));
+        assert_eq!(desc.first_line(), LAST - 20);
+        desc.input(&key(Key::Home));
+        assert_eq!(desc.first_line(), 0);
     }
 
     /// `_TextDialogFilter` @0x51f77 maps no Tab or Space.
