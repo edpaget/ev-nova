@@ -170,12 +170,14 @@ fn the_games_charcoal_draws_whole_stems_at_9_and_12pt_at_1x_and_2x() {
             };
             let case = format!("Charcoal {size}pt at {scale}x");
             let stems = picture.stems();
+            // A blank picture has no partly covered pixels either, so the
+            // stems are counted first: with full hints every `l` stands
+            // apart at both sizes and scales.
+            assert_eq!(stems.len(), STEMS.len(), "{case}: {stems:?}");
             assert_eq!(picture.row_partials(), 0, "{case}: {stems:?}");
-            if stems.len() == STEMS.len() {
-                let mut widths: Vec<usize> = stems.iter().map(Vec::len).collect();
-                widths.dedup();
-                assert_eq!(widths.len(), 1, "{case}: {stems:?}");
-            }
+            let mut widths: Vec<usize> = stems.iter().map(Vec::len).collect();
+            widths.dedup();
+            assert_eq!(widths.len(), 1, "{case}: {stems:?}");
         }
     }
 }

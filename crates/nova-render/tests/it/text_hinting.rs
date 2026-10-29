@@ -26,9 +26,12 @@ fn the_fallbacks_stems_are_no_softer_than_before() {
         );
     }
     // At 9pt and 1x the stems run together into one run, so the whole
-    // row's partly covered pixels are counted: 24 before.
+    // row's partly covered pixels are counted: 24 before. A blank picture
+    // has none, so the row must first light a column for every `l`.
     let Some(picture) = draw_text(&faces, Font::Geneva, STEMS, at, 9.0, 1) else {
         return;
     };
+    let lit: usize = picture.stems().iter().map(Vec::len).sum();
+    assert!(lit >= STEMS.len(), "{lit} lit: {:?}", picture.stems());
     assert!(picture.row_partials() <= 24, "{:?}", picture.stems());
 }
