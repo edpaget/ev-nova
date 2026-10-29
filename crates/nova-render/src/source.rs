@@ -124,9 +124,11 @@ mod tests {
             .build()
     }
 
-    /// Two 1x1 frames: red, then blue.
+    /// Two 1x1 frames: red, then blue. The depth is set because the pixels
+    /// are 16-bit words, rather than left to the builder's default.
     fn sheet() -> Vec<u8> {
         RledBuilder::new(1, 1)
+            .depth(16)
             .frame(|f| f.line().pixels(&[0x7C00]))
             .frame(|f| f.line().pixels(&[0x001F]))
             .build()
@@ -154,6 +156,7 @@ mod tests {
     #[test]
     fn a_sprite_sheets_solid_runs_are_its_run_frames_or_missing() {
         let runs = RledBuilder::new(2, 1)
+            .depth(16)
             .frame(|f| f.line().pixels(&[0x7C00]).run(1, 0x7FFF, 0x7FFF))
             .frame(|f| f.line().pixels(&[0x001F]))
             .build();
