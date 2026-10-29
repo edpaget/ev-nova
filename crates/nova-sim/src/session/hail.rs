@@ -3218,15 +3218,7 @@ pub(super) mod tests {
     #[test]
     fn the_players_launched_fighter_opens_what_can_i_do_for_you_sir() {
         let catalog = hailable();
-        let mut session = escorting(&catalog);
-        session.pilot.escorts[0].carried = true;
-        if let Some(npc) = session.space.npc_mut(NpcId(0)) {
-            npc.carrier = Some(crate::bay::Carrier {
-                ship: ShipRef::Player,
-                window: 100.0,
-                reach: 40.0,
-            });
-        }
+        let mut session = launched_fighter(&catalog);
         let view = hail(&mut session, &catalog);
         assert_eq!(
             view.reply, "What can I do for you, sir?",
@@ -3243,9 +3235,8 @@ pub(super) mod tests {
         );
     }
 
-    /// [`escorting`]'s ship made the player's launched fighter (AI type 5),
-    /// as `the_players_launched_fighter_opens_what_can_i_do_for_you_sir`
-    /// sets it up.
+    /// [`escorting`]'s ship made the player's launched fighter (AI type 5):
+    /// a carried escort whose carrier is the player.
     fn launched_fighter(catalog: &FakePilotCatalog) -> Session {
         let mut session = escorting(catalog);
         session.pilot.escorts[0].carried = true;

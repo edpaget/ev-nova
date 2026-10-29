@@ -17,7 +17,9 @@
 //! standing order. Its record follows its reserves as it fights. Every
 //! escort follows the player through a jump with no check of its own
 //! (`_MakeEscortsHyperWithParent` @0x3fd54) and arrives with its shield
-//! and armour as they were; taking off, and flying a pilot, restock them
+//! and armour as they were, the slowest of them setting the jump's days
+//! and wages if it is slower than the player (see
+//! [`trip_days`](super::trip_days)); taking off, and flying a pilot, restock them
 //! full (`_RespawnEscort` @0x3d4b8, restock 1 @0x674c2), the fuel as
 //! recorded. Each enters with no ionization: `_RespawnEscort` clears its
 //! charge (+0x5c @0x3d543) and leaves its colour (+0xb0), but

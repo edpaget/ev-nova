@@ -627,6 +627,7 @@ mod target_panel;
 mod thrust;
 mod tractor_hold;
 mod trade_dialog;
+mod trip_days;
 mod tutorial;
 #[cfg(test)]
 mod vacated_berths;
@@ -3250,12 +3251,19 @@ impl Session {
         Some(self.pilot.system)
     }
 
-    /// Lets the days the stats give a jump go by through the daily step
+    /// Lets a jump's days go by through the daily step
     /// ([`Session::pass_days`]), the events rolled on `chance`, then pays
-    /// the hired escorts their wages for them, once.
+    /// the hired escorts their wages for them, once: the trip of the
+    /// slowest of the player and the ships that follow it
+    /// ([`Session::trip_days`], `_IncrementGameTime` @0x6c140-0x6c151 and
+    /// `_DoEscortPayment(trip)` @0x6c620; see the `trip_days` module).
+    /// A gate's exit taking a jump's days by
+    /// [`GateArrivalRule::LikeJump`] takes the same trip, as the escorts
+    /// come along there as on a jump.
     fn pass_jump_days(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.pass_days(self.ship.fit.stats.jump_days, chance);
-        self.pay_escorts(self.ship.fit.stats.jump_days);
+        let trip = self.trip_days();
+        self.pass_days(trip, chance);
+        self.pay_escorts(trip);
     }
 
     /// The sounds emitted since they were last taken, in order; taking
