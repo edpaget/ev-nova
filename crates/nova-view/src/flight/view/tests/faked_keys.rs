@@ -1,4 +1,4 @@
-//! `Screen::input`'s routing of the escort, board, mission, player and
+//! `Screen::input`'s routing of the target, escort, board, mission, player and
 //! map keys, and `Screen::tick`'s menu and map work, on `FakeFlight`,
 //! now that the `Screen` impl is generic
 //! (rdm:phase/view-sim-seam/phase-13-lifecycle-at-the-edge): the tests
@@ -14,7 +14,7 @@ use crate::flight::floating;
 use crate::time::sixtieths;
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::navigation::NavMode;
-use nova_sim::{EscortCommand, EscortGroup, StellarPick};
+use nova_sim::{EscortCommand, EscortGroup, StellarPick, TargetPick};
 
 /// A view of a flight whose fleet holds escorts of `present`'s classes,
 /// the course map's opening answered and its first redraw drawing Sol
@@ -74,6 +74,32 @@ fn ui_heard(view: &mut Faked) -> Vec<UiSound> {
             _ => None,
         })
         .collect()
+}
+
+// Target Select.
+
+#[test]
+fn shift_tab_in_flight_selects_the_previous_ship() {
+    // `_HandlePlayer` @0x69f74 reads Shift at the Tab press and walks
+    // back (`_FindPrevShipInSystem`, which reads Option itself).
+    let mut view = fleet(&[EscortClass::Fighter]);
+    assert!(!view.jump_under_way(), "ordinary flight");
+    let from = sent_count(&view);
+    view.input(&key(Key::Shift, true));
+    tap(&mut view, TARGET_KEY);
+    view.input(&key(Key::Alt, true));
+    tap(&mut view, TARGET_KEY);
+    view.input(&key(Key::Alt, false));
+    view.input(&key(Key::Shift, false));
+    tap(&mut view, TARGET_KEY);
+    assert_eq!(
+        sent_since(&view, from),
+        [
+            FlightCommand::SelectTarget(TargetPick::Previous),
+            FlightCommand::SelectTarget(TargetPick::PreviousEscort),
+            FlightCommand::SelectTarget(TargetPick::Next),
+        ]
+    );
 }
 
 // The escort keys.
